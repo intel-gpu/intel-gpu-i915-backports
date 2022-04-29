@@ -1,0 +1,164 @@
+intel-gpgpu-dkms-ubuntu-5.14-oem (5606.220414.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5606_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Thu, 14 Apr 22 20:29:35 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5539.220330.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5539_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Wed, 30 Mar 22 13:53:03 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5505.220325.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5505_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Fri, 25 Mar 22 19:20:11 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5505.220324.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5505_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Thu, 24 Mar 22 17:08:11 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5468.220318.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5468_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Fri, 18 Mar 22 15:20:07 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5465.220314.1) UNRELEASED; urgency=low
+
+  New driver source to DII_5465_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Tue, 15 Mar 22 13:08:15 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5465.220314.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5465_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Mon, 14 Mar 22 14:35:54 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5445.220309.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5445_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Wed, 09 Mar 22 18:09:26 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5434.220308.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5434_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com> Tue, 08 Mar 22 10:57:16 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5364.220224.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5364_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 24 Feb 22 19:55:22 +0530
+intel-gpgpu-dkms-ubuntu-5.14-oem (5350.220218.1) UNRELEASED; urgency=low
+  
+  To resolve misalignment of PCI IDs in DII and backport header,
+  Updated the copy-list to take updated PCI IDs in i915_pciids.h.
+
+  New driver source to DII_5350_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Tue, 22 Feb 22 10:46:29 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5350.220218.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5350_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 18 Feb 22 19:55:22 +0530
+intel-gpgpu-dkms-ubuntu-5.14-oem (5294.220210.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5294_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 10 Feb 22 19:19:22 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5265.220204.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5265_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 04 Feb 22 16:04:01 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5232.220125.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5232_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Tue, 25 Jan 22 21:42:21 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (5209.220120.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5209_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 20 Jan 22 19:42:50 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (220113.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5184_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 13 Jan 22 11:36:07 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (220105.0) UNRELEASED; urgency=low
+
+  New driver source to DII_5163_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Wed, 05 Jan 22 10:47:00 +0530 
+intel-gpgpu-dkms-ubuntu-5.14-oem (211224.0) UNRELEASED; urgency=low
+
+  * New driver source to 5143_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 24 Dec 2021 05:21:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211216.0) UNRELEASED; urgency=low
+
+  * New driver source to 5102_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 16 Dec 2021 09:21:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211209.0) UNRELEASED; urgency=low
+
+  * New driver source to 5074_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 09 Dec 2021 05:21:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211203.0) UNRELEASED; urgency=low
+
+  * New driver source to 5044_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 03 Dec 2021 05:21:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211124.0) UNRELEASED; urgency=low
+
+  * New driver source to 5018_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Wed, 24 Nov 2021 05:21:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211112.0) UNRELEASED; urgency=low
+
+  * New driver source to 4954_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 12 Nov 2021 03:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211102.0) UNRELEASED; urgency=low
+
+  * New driver source to 4933_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Tue, 02 Nov 2021 02:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211028.0) UNRELEASED; urgency=low
+
+  * New driver source to 4899_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 28 Oct 2021 06:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211022.0) UNRELEASED; urgency=low
+
+  * New driver source to 4860_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Fri, 22 Oct 2021 04:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211014.0) UNRELEASED; urgency=low
+
+  * New driver source to 4826_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Thu, 14 Oct 2021 05:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (211007.0) UNRELEASED; urgency=low
+
+  * New driver source to 4806_prerelease against 5.14-OEM
+
+ -- Muqthyar Ahmed S A <syed.abdul.muqthyar.ahmed@intel.com>  Thu, 7 Oct 2021 05:40:33 +0800
+
+intel-gpgpu-dkms-ubuntu-5.14-oem (210930.2) UNRELEASED; urgency=low
+
+  * New driver source to 4678_prerelease against 5.14-OEM
+
+ -- Sagar Chormale <sagar.chormale@intel.com>  Mon, 4 Oct 2021 05:40:33 +0800

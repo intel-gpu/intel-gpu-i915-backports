@@ -1,0 +1,5 @@
+# this has the configuration for the backport code
+source "$BACKPORT_DIR/compat/Kconfig"
+
+# these are copied from the kernel
+source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"

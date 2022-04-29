@@ -1,0 +1,14 @@
+Intel Accelerated Fabric (done)
+M: Michael J. Ruhl <michael.j.ruhl@intel.com>
+D: Gary Leshner <Gary.S.Leshner@intel.com>
+D: Gerald S. Williams <Gerald.S.Williams@intel.com>
+D: Michael Brooks <michael.brooks@intel.com>
+T: drm/i915/iaf
+
+The iaf driver is based on code derived from the
+
+https://gitlab.devtools.intel.com/pvc-cd/oot-driver
+
+This code drop is based on oot-driver tag:
+
+dii_checkpoint_03_25_2022
