@@ -1,0 +1,30 @@
+ccflags-y += -I$(src)
+
+ifeq (y,$(filter y,$(CPTCFG_ONLY_I915) $(CPTCFG_BOTH_DMABUF_I915)))
+ifeq ($(CONFIG_BACKPORT_INTEGRATE),)
+obj-m += i915-compat.o
+else
+obj-y += i915-compat.o
+endif
+endif
+
+CPTCFG_MODULE_SIG=n
+i915-compat-y += main.o
+
+i915-compat-$(CPTCFG_KERNEL_3_11) += backport-3.10.o backport-3.11.o
+i915-compat-$(CPTCFG_KERNEL_3_12) += backport-3.12.o
+i915-compat-$(CPTCFG_KERNEL_3_13) += backport-3.13.o
+i915-compat-$(CPTCFG_KERNEL_3_14) += backport-3.14.o drm_mipi_dsi.o
+i915-compat-$(CPTCFG_KERNEL_3_15) += backport-3.15.o
+i915-compat-$(CPTCFG_KERNEL_3_16) += backport-3.16.o
+i915-compat-$(CPTCFG_KERNEL_3_17) += backport-3.17.o
+i915-compat-$(CPTCFG_KERNEL_4_19) += vmscan.o
+i915-compat-$(CPTCFG_KERNEL_5_4)  += backport-5.4.o ptrace.o
+i915-compat-$(CPTCFG_KERNEL_5_7)  += backport-5.7.o
+i915-compat-$(CPTCFG_KERNEL_5_8)  += hdmi.o
+i915-compat-$(CPTCFG_KERNEL_5_5)  += nvmem-core.o
+i915-compat-$(CPTCFG_KERNEL_5_10) += slub.o slab.o
+
+# Enable shims for the RHEL DRM backport
+ccflags-y += -DRH_DRM_BACKPORT
+i915-compat-y += rh_drm_backport.o

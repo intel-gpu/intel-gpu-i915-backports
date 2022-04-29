@@ -1,0 +1,103 @@
+From 40f5938ed1911afda47cd251638ce1776b162d82 Mon Sep 17 00:00:00 2001
+From: Hai Lan <hai.lan@intel.com>
+Date: Wed, 26 Sep 2018 04:35:19 -0400
+Subject: [PATCH] for centos 7.5
+
+Signed-off-by: Hai Lan <hai.lan@intel.com>
+---
+ drivers/gpu/drm/drm_connector.c    | 3 ++-
+ drivers/gpu/drm/drm_drv.c          | 9 ++++++---
+ drivers/gpu/drm/drm_file.c         | 1 +
+ drivers/gpu/drm/drm_modeset_lock.c | 3 ++-
+ drivers/gpu/drm/drm_sysfs.c        | 1 +
+ 5 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/drm_connector.c b/drivers/gpu/drm/drm_connector.c
+index cd1ff4c..bb718f1 100644
+--- a/drivers/gpu/drm/drm_connector.c
++++ b/drivers/gpu/drm/drm_connector.c
+@@ -67,7 +67,7 @@ struct drm_conn_prop_enum_list {
+ /*
+  * Connector and encoder types.
+  */
+-static struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
++struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
+ 	{ DRM_MODE_CONNECTOR_Unknown, "Unknown" },
+ 	{ DRM_MODE_CONNECTOR_VGA, "VGA" },
+ 	{ DRM_MODE_CONNECTOR_DVII, "DVI-I" },
+@@ -87,6 +87,7 @@ static struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
+ 	{ DRM_MODE_CONNECTOR_DSI, "DSI" },
+ 	{ DRM_MODE_CONNECTOR_DPI, "DPI" },
+ };
++EXPORT_SYMBOL(drm_connector_enum_list);
+ 
+ void drm_connector_ida_init(void)
+ {
+diff --git a/drivers/gpu/drm/drm_drv.c b/drivers/gpu/drm/drm_drv.c
+index be38ac7..998d5f4 100644
+--- a/drivers/gpu/drm/drm_drv.c
++++ b/drivers/gpu/drm/drm_drv.c
+@@ -60,8 +60,10 @@ MODULE_PARM_DESC(debug, "Enable debug output, where each bit enables a debug cat
+ "\t\tBit 5 (0x20) will enable VBL messages (vblank code)");
+ module_param_named(debug, drm_debug, int, 0600);
+ 
+-static DEFINE_SPINLOCK(drm_minor_lock);
+-static struct idr drm_minors_idr;
++DEFINE_SPINLOCK(drm_minor_lock);
++EXPORT_SYMBOL(drm_minor_lock);
++struct idr drm_minors_idr;
++EXPORT_SYMBOL(drm_minors_idr);
+ 
+ /*
+  * If the drm core fails to init for whatever reason,
+@@ -72,7 +74,8 @@ static struct idr drm_minors_idr;
+  */
+ static bool drm_core_init_complete = false;
+ 
+-static struct dentry *drm_debugfs_root;
++struct dentry *drm_debugfs_root;
++EXPORT_SYMBOL(drm_debugfs_root);
+ 
+ #define DRM_PRINTK_FMT "[" DRM_NAME ":%s]%s %pV"
+ 
+diff --git a/drivers/gpu/drm/drm_file.c b/drivers/gpu/drm/drm_file.c
+index b3c6e99..80d236a 100644
+--- a/drivers/gpu/drm/drm_file.c
++++ b/drivers/gpu/drm/drm_file.c
+@@ -44,6 +44,7 @@
+ 
+ /* from BKL pushdown */
+ DEFINE_MUTEX(drm_global_mutex);
++EXPORT_SYMBOL(drm_global_mutex);
+ 
+ /**
+  * DOC: file operations
+diff --git a/drivers/gpu/drm/drm_modeset_lock.c b/drivers/gpu/drm/drm_modeset_lock.c
+index af4e906..c042b6d 100644
+--- a/drivers/gpu/drm/drm_modeset_lock.c
++++ b/drivers/gpu/drm/drm_modeset_lock.c
+@@ -65,7 +65,8 @@
+  * lists and lookup data structures.
+  */
+ 
+-static DEFINE_WW_CLASS(crtc_ww_class);
++DEFINE_WW_CLASS(crtc_ww_class);
++EXPORT_SYMBOL(crtc_ww_class);
+ 
+ /**
+  * drm_modeset_lock_all - take all modeset locks
+diff --git a/drivers/gpu/drm/drm_sysfs.c b/drivers/gpu/drm/drm_sysfs.c
+index 1c5b5ce..ec3fb86 100644
+--- a/drivers/gpu/drm/drm_sysfs.c
++++ b/drivers/gpu/drm/drm_sysfs.c
+@@ -44,6 +44,7 @@ static struct device_type drm_sysfs_device_minor = {
+ };
+ 
+ struct class *drm_class;
++EXPORT_SYMBOL(drm_class);
+ 
+ static char *drm_devnode(struct device *dev, umode_t *mode)
+ {
+-- 
+1.8.3.1
+

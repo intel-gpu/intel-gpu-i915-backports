@@ -1,0 +1,13 @@
+STALLED COMMITS (done)
+
+These are commits that were in the 'pending upstream' section of the pile, but
+now seem to be stalled due to one of the following:
+ - never actually got sent upstream
+ - sent upstream a long time ago, but never landed either due to lack of
+   follow-up, or due to rejection during upstream code review
+ - original author is gone; need a new owner to carry forward
+
+Please don't add new patches to this section.  We should try to eliminate the
+patches that are here by either moving them back to 'pending upstream' once the
+upstreaming effort resumes, or move them to a more appropriate section farther
+down the pile.

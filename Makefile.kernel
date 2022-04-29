@@ -1,0 +1,48 @@
+ifeq ($(CONFIG_BACKPORT_INTEGRATE),)
+# Since 2.6.21, try-run is available, but cc-disable-warning
+# was only added later, so we add it here ourselves:
+backport-cc-disable-warning = $(call try-run,\
+	$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_CFLAGS) -W$(strip $(1)) -c -x c /dev/null -o "$$TMP",-Wno-$(strip $(1)))
+
+NOSTDINC_FLAGS := \
+	-I$(M)/backport-include/ \
+	-I$(M)/backport-include/uapi \
+	-I$(M)/include/ \
+	-I$(M)/include/drm \
+	-I$(M)/include/uapi \
+	-include $(M)/backport-include/backport/backport.h \
+	$(call backport-cc-disable-warning, unused-but-set-variable) \
+	-DCPTCFG_BACKPORTS_RELEASE_TAG=\"$(BACKPORTS_RELEASE_TAG)\" \
+	-DCPTCFG_DII_KERNEL_HEAD=\"$(DII_KERNEL_HEAD)\" \
+	-DCPTCFG_BASE_KERNEL_NAME=\"$(BASE_KERNEL_NAME)\" \
+	-DCPTCFG_DII_KERNEL_TAG=\"$(DII_KERNEL_TAG)\" \
+	$(BACKPORTS_GIT_TRACKER_DEF) \
+	$(CFLAGS)
+
+export backport_srctree = $(M)
+else
+export BACKPORT_DIR = backports/
+export backport_srctree = $(BACKPORT_DIR)
+NOSTDINC_FLAGS := \
+	-I$(BACKPORT_DIR)/backport-include/ \
+	-I$(BACKPORT_DIR)/backport-include/uapi \
+	-I$(BACKPORT_DIR)/include/ \
+	-I$(BACKPORT_DIR)/include/drm \
+	-I$(BACKPORT_DIR)/include/uapi \
+	-include $(BACKPORT_DIR)/backport-include/backport/backport.h \
+	$(CFLAGS)
+endif
+
+
+obj-y += compat/
+
+ifeq (y,$(filter y,$(CPTCFG_ONLY_DMABUF) $(CPTCFG_BOTH_DMABUF_I915)))
+obj-y += drivers/dma-buf/
+endif
+
+
+ifeq (y,$(filter y,$(CPTCFG_ONLY_I915) $(CPTCFG_BOTH_DMABUF_I915)))
+obj-y += drivers/gpu/drm/
+
+obj-y += drivers/char/agp/
+endif

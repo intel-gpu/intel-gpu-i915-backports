@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config DRM_I915_INTEL_FABRIC
+	tristate "Intel Fabric Connectivity driver support"
+	depends on BOTH_DMABUF_I915 || ONLY_I915
+	depends on m
+	depends on 64BIT
+	depends on NET
+	depends on LIBCRC32C
+	default m
+	help
+	  This kernel driver provides support for the Intel glueless
+	  fabric adapter. The Intel fabric adapter allows GPUs to share
+	  device memory space in a device specific address space.
+
+config IAF_DEBUG_ENABLE
+	bool "Enable Intel Accelerator Fabric debug configurations"
+	depends on DRM_I915_INTEL_FABRIC
+	default y
+	help
+	  Support Intel Accelerator Fabric debug Kconfig options
+
+config IAF_DEBUG_ALTERNATE_FW_LOAD
+	bool "Enable Intel Accelerator Fabric load of alternative FW images"
+	depends on IAF_DEBUG_ENABLE
+	default y
+	help
+	  Allow fw_image to specify alternate firmware and psc_file_override
+	  to load PSC binaries using the FW API instead of SPI flash
+
+config IAF_DEBUG_SELFTESTS
+	bool "Enable Intel Accelerator Fabric tests"
+	depends on IAF_DEBUG_ENABLE
+	default n
+	help
+	  Enable Intel Accelerator Fabric driver self-tests to be triggered
+	  by the 'selftests' module parameter
+
+config IAF_DEBUG_FIRMWARE_ROPTION
+	bool "Enable Intel Accelerator Fabric firmware roptions"
+	depends on IAF_DEBUG_ENABLE
+	default y
+	help
+	  DO NOT UPSTREAM:
+	  Allow firmware_roption to specify the value of the firmware roption
+	  debug register
+
+config IAF_DEBUG_MBOX_ACCESS
+	bool "Enable Intel Accelerator Fabric mbox access interface"
+	depends on IAF_DEBUG_ENABLE
+	default y
+	help
+	  DO NOT UPSTREAM:
+	  The mbox interface is an external debug mechanism
+	  for supporting debugging of the fabric device firmware
+
+config IAF_DEBUG_STARTUP
+	bool "Enable Intel Accelerator Fabric debug startup mode"
+	depends on IAF_DEBUG_ENABLE
+	default y
+	help
+	  DO NOT UPSTREAM:
+	  Allow startup_mode parameter to boot devices into debug modes
+
+config IAF_ANTI_ROLLBACK
+	bool "Enable Intel Accelerator Fabric anti-rollback support"
+	depends on DRM_I915_INTEL_FABRIC
+	depends on INTEL_MEI_IAF
+	default y
+	help
+	  DO NOT UPSTREAM:
+	  Build Intel Accelerator Fabric driver for preproduction environment
