@@ -1,0 +1,25 @@
+From 1a7e85539754878690fe2374d45e0f4fbd8e70a6 Mon Sep 17 00:00:00 2001
+From: knayana <kanaka.raju.nayana@intel.com>
+Date: Mon, 5 Jul 2021 10:39:51 +0000
+Subject: [PATCH 1/1] disable_drm
+
+---
+ Kconfig.sources | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Kconfig.sources b/Kconfig.sources
+index 7878451..a143af6 100644
+--- a/Kconfig.sources
++++ b/Kconfig.sources
+@@ -5,7 +5,7 @@ source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
+ 
+ # these are copied from the kernel
+ 
+-source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
++#source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
+ # source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
+ 
+ # source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
+-- 
+2.25.0
+

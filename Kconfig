@@ -1,0 +1,28 @@
+mainmenu "Backports from $BASE_KERNEL_NAME $DII_KERNEL_HEAD (backports $BACKPORTS_RELEASE_TAG)"
+
+config BACKPORT_DIR
+	string
+	option env="BACKPORT_DIR"
+config BACKPORTS_RELEASE_TAG
+	string
+	option env="BACKPORTS_RELEASE_TAG"
+config DII_KERNEL_HEAD
+	string
+	option env="DII_KERNEL_HEAD"
+config BASE_KERNEL_NAME
+	string
+	option env="BASE_KERNEL_NAME"
+config DII_KERNEL_TAG
+	string
+	option env="DII_KERNEL_TAG"
+
+# Packaging hacks
+source "$BACKPORT_DIR/Kconfig.package.hacks"
+
+# Code we backport
+source "$BACKPORT_DIR/Kconfig.sources"
+
+# these will be generated
+source "$BACKPORT_DIR/Kconfig.kernel"
+source "$BACKPORT_DIR/Kconfig.versions"
+source "$BACKPORT_DIR/Kconfig.local"
