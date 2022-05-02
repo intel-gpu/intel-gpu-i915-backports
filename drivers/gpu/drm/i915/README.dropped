@@ -1,0 +1,5 @@
+DROPPED COMMITS FROM UPSTREAM (done)
+
+These commits were once part of upstream, but were dropped. As noted by Daniel
+Vetter, they are not _rejected_ from upstream, but they need to go through
+proper review in upstream.

@@ -1,0 +1,75 @@
+diff -ruN a/drivers/gpu/drm/drm_connector.c linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_connector.c
+--- a/drivers/gpu/drm/drm_connector.c	2017-12-28 13:59:43.000000000 -0500
++++ linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_connector.c	2018-01-15 02:07:14.034224015 -0500
+@@ -67,7 +67,7 @@
+ /*
+  * Connector and encoder types.
+  */
+-static struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
++struct drm_conn_prop_enum_list drm_connector_enum_list[] = {
+ 	{ DRM_MODE_CONNECTOR_Unknown, "Unknown" },
+ 	{ DRM_MODE_CONNECTOR_VGA, "VGA" },
+ 	{ DRM_MODE_CONNECTOR_DVII, "DVI-I" },
+@@ -87,6 +87,7 @@
+ 	{ DRM_MODE_CONNECTOR_DSI, "DSI" },
+ 	{ DRM_MODE_CONNECTOR_DPI, "DPI" },
+ };
++EXPORT_SYMBOL(drm_connector_enum_list);
+ 
+ void drm_connector_ida_init(void)
+ {
+diff -ruN a/drivers/gpu/drm/drm_drv.c linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_drv.c
+--- a/drivers/gpu/drm/drm_drv.c	2018-01-15 01:58:57.532202834 -0500
++++ linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_drv.c	2018-01-15 02:06:04.767221060 -0500
+@@ -60,10 +60,13 @@
+ "\t\tBit 5 (0x20) will enable VBL messages (vblank code)");
+ module_param_named(debug, drm_debug, int, 0600);
+ 
+-static DEFINE_SPINLOCK(drm_minor_lock);
+-static struct idr drm_minors_idr;
++DEFINE_SPINLOCK(drm_minor_lock);
++EXPORT_SYMBOL(drm_minor_lock);
++struct idr drm_minors_idr;
++EXPORT_SYMBOL(drm_minors_idr);
+ 
+-static struct dentry *drm_debugfs_root;
++struct dentry *drm_debugfs_root;
++EXPORT_SYMBOL(drm_debugfs_root);
+ 
+ #define DRM_PRINTK_FMT "[" DRM_NAME ":%s]%s %pV"
+ 
+diff -ruN a/drivers/gpu/drm/drm_fops.c linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_fops.c
+--- a/drivers/gpu/drm/drm_fops.c	2018-01-15 01:59:00.374202955 -0500
++++ linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_fops.c	2018-01-15 02:06:04.768221060 -0500
+@@ -44,6 +44,7 @@
+ 
+ /* from BKL pushdown */
+ DEFINE_MUTEX(drm_global_mutex);
++EXPORT_SYMBOL(drm_global_mutex);
+ 
+ /**
+  * DOC: file operations
+diff -ruN a/drivers/gpu/drm/drm_modeset_lock.c linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_modeset_lock.c
+--- a/drivers/gpu/drm/drm_modeset_lock.c	2017-12-28 13:59:43.000000000 -0500
++++ linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_modeset_lock.c	2018-01-15 02:08:03.397226121 -0500
+@@ -60,7 +60,8 @@
+  * lists and lookup data structures.
+  */
+ 
+-static DEFINE_WW_CLASS(crtc_ww_class);
++DEFINE_WW_CLASS(crtc_ww_class);
++EXPORT_SYMBOL(crtc_ww_class);
+ 
+ /**
+  * drm_modeset_lock_all - take all modeset locks
+diff -ruN a/drivers/gpu/drm/drm_sysfs.c linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_sysfs.c
+--- a/drivers/gpu/drm/drm_sysfs.c	2018-01-15 01:59:02.041203027 -0500
++++ linux-3.10.0-693.11.6.el7.x86_64/drivers/gpu/drm/drm_sysfs.c	2018-01-15 02:06:04.770221060 -0500
+@@ -30,6 +30,7 @@
+ };
+ 
+ struct class *drm_class;
++EXPORT_SYMBOL(drm_class);
+ 
+ static char *drm_devnode(struct device *dev, umode_t *mode)
+ {

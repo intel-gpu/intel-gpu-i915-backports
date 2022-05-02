@@ -1,0 +1,97 @@
+#!/bin/sh
+#
+#	Output a RPM spec file to generate intel-dmabuf dkms source
+#
+
+PKG_NAME="intel-dmabuf-dkms-prerelease"
+PKG_VER="1.0"
+REL_NAME="1"
+REL_TYPE=""
+
+helpFunction()
+{
+	echo ""
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource"
+	echo -e "\t-n packagename"
+	echo -e "\t-v packageversion"
+	echo -e "\t-r releaseversion"
+	echo -e "\t-p Release type  prerelease/opensource"
+	exit 1
+}
+
+while getopts "n:v:r:p:" opt
+do
+case "$opt" in
+	n ) PKG_NAME="$OPTARG" ;;
+	v ) PKG_VER="$OPTARG" ;;
+	r ) REL_NAME="$OPTARG" ;;
+	p ) REL_TYPE="$OPTARG" ;;
+	? ) helpFunction ;; # Print helpFunction
+esac
+done
+
+sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
+	%define module $PKG_NAME
+	%define version $PKG_VER
+	%define release $REL_NAME
+	%define _build_id_links none
+	
+	Summary: DMA-BUF Backports Module DKMS Package
+	Name: %{module}
+	Version: %{version}
+	Release: %{release}
+	License: GPL
+	Group: System Environment/Base
+	BuildArch: x86_64
+	Vendor: Intel
+	Provides: %{module}
+	Packager: linux-graphics@intel.com
+	Requires: dkms gcc bash sed
+	# There is no Source# line for dkms.conf since it has been placed
+	# into the source tarball of SOURCE0
+	Source0: %{module}-%{version}-src.tar.gz
+	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
+
+	%description
+	Out of tree i915 driver for SLES15SP3 kernel Version 5.3.18.
+	Installed as dkms module.
+
+	%prep
+	rm -rf %{module}-%{version}
+	mkdir %{module}-%{version}
+	cd %{module}-%{version}
+	tar xvzf \$RPM_SOURCE_DIR/%{module}-%{version}-src.tar.gz
+
+	%install
+	if [ "%{buildroot}" != "/" ]; then
+		rm -rf %{buildroot}
+	fi
+	mkdir -p %{buildroot}/usr/src/%{module}-%{version}/
+	cp -rf %{module}-%{version}/* %{buildroot}/usr/src/%{module}-%{version}
+
+	#TBD : install headers for other package to use
+
+	%clean
+	if [ "%{buildroot}" != "/" ]; then
+		rm -rf %{buildroot}
+	fi
+
+	%files
+	%defattr (-, root, root)
+	/usr/src/%{module}-%{version}/
+
+	%pre
+
+	%post
+	/usr/sbin/dkms add -m %module -v %version --rpm_safe_upgrade
+	/usr/sbin/dkms build --force -m %module -v %version
+	/usr/sbin/dkms install --force -m %module -v %version
+	exit 0
+
+	%preun
+	echo -e
+	echo -e "Uninstall of %{module} module (version %{version}) beginning:"
+	/usr/sbin/dkms remove -m %{module} -v %{version} --all --rpm_safe_upgrade
+	exit 0
+EOF
+

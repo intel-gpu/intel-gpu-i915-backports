@@ -1,0 +1,101 @@
+#!/bin/sh
+#
+#	Output a RPM spec file to generate intel-gpgpu dkms source
+#
+
+if [ "$1"="" ]; then
+	PKG_NAME="$1"
+else
+	PKG_NAME="intel-gpgpu-dkms-prerelease"
+fi
+
+if [ "$2"="" ]; then
+	PKG_VER="$2"
+else
+	PKG_VER="1.0"
+fi
+
+if [ "$3"="" ]; then
+	REL_NAME="$3"
+else
+	REL_NAME="1"
+fi
+
+sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
+	%define module $PKG_NAME
+	%define version $PKG_VER
+	%define release $REL_NAME
+	%define _build_id_links none
+	
+	Summary: Backports Module DKMS Package
+	Name: %{module}
+	Version: %{version}
+	Release: %{release}
+	License: GPL
+	Group: System Environment/Base
+	BuildArch: x86_64
+	Vendor: Intel
+	Provides: %{module}
+	Packager: linux-graphics@intel.com
+	Requires: dkms gcc bash sed intel-platform-cse-dkms
+	# There is no Source# line for dkms.conf since it has been placed
+	# into the source tarball of SOURCE0
+	Source0: %{module}-%{version}-src.tar.gz
+	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
+
+	%description
+	This RPM contains gentree output of backported modules which is needed for building
+	.ko files. Platforms Supported : DG1, DG2, ATS, PVC
+
+	%prep
+	rm -rf %{module}-%{version}
+	mkdir %{module}-%{version}
+	cd %{module}-%{version}
+	tar xvzf \$RPM_SOURCE_DIR/%{module}-%{version}-src.tar.gz
+
+	%install
+	if [ "%{buildroot}" != "/" ]; then
+		rm -rf %{buildroot}
+	fi
+	mkdir -p %{buildroot}/usr/src/%{module}-%{version}/
+	cp -rf %{module}-%{version}/* %{buildroot}/usr/src/%{module}-%{version}
+
+	%clean
+	if [ "%{buildroot}" != "/" ]; then
+		rm -rf %{buildroot}
+	fi
+
+	%files
+	%defattr (-, root, root)
+	/usr/src/%{module}-%{version}/
+
+	%pre
+
+	%post
+	/usr/sbin/dkms add -m %module -v %version --rpm_safe_upgrade
+	/usr/sbin/dkms build --force -m %module -v %version
+	/usr/sbin/dkms install --force -m %module -v %version
+	echo -e
+	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ] && [ -x %{_bindir}/dracut ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		%{_bindir}/dracut -f --kver "\$(uname -r)"
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
+	exit 0
+
+	%preun
+	echo -e
+	echo -e "Uninstall of %{module} module (version %{version}) beginning:"
+	/usr/sbin/dkms remove -m %{module} -v %{version} --all --rpm_safe_upgrade
+	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ] && [ -x %{_bindir}/dracut ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		%{_bindir}/dracut -f --kver "\$(uname -r)"
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
+	exit 0
+EOF
+

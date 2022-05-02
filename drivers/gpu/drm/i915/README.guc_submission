@@ -1,0 +1,7 @@
+GUC SUBMISSION AND SLPC (done)
+D:	Matthew Brost <matthew.brost@intel.com>
+D:	John Harrison <John.C.Harrison@Intel.com>
+D:	Michal Wajdeczko <michal.wajdeczko@intel.com>
+D:	Daniele Ceraolo Spurio <daniele.ceraolospurio@intel.com>
+T:	drm/i915/guc
+T:	drm/i915/uc

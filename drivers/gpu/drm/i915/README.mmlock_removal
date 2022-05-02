@@ -1,0 +1,4 @@
+OBJ_MM_LOCK REMOVAL (done)
+
+Removal of the drm_i915_gem_object::mm::lock, replacing it when
+necessary with the  drm_i915_gem_object::resv::lock

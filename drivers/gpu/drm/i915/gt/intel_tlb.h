@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright © 2020 Intel Corporation
+ */
+
+#ifndef INTEL_TLB_H
+#define INTEL_TLB_H
+
+#include <linux/types.h>
+#include "intel_gt.h"
+
+struct i915_address_space;
+struct intel_gt;
+
+void intel_invalidate_tlb_full(struct intel_gt *gt);
+void intel_invalidate_tlb_full_flush(struct intel_gt *gt);
+void intel_invalidate_tlb_full_sync(struct intel_gt *gt);
+
+void intel_invalidate_tlb_range(struct intel_gt *gt,
+				struct i915_address_space *vm,
+				u64 start, u64 length);
+#endif /* INTEL_TLB_H */
