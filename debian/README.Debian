@@ -1,0 +1,7 @@
+intel-gpgpu-dkms-linux for Debian/Ubuntu
+----------------------------------------
+
+This package is based on the Linux Backports[1] hosted on git.kernel.org
+and is packaged in deb format for Debian/Ubuntu users.
+
+[1]: git://git.kernel.org/pub/scm/linux/kernel/git/backports/backports.git

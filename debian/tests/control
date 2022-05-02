@@ -1,0 +1,7 @@
+Tests: dkms-autopkgtest
+Restrictions:
+ needs-root,
+ allow-stderr,
+Depends:
+ gcc,
+ linux-headers-686-pae | linux-headers-amd64 | linux-headers-generic | linux-headers,

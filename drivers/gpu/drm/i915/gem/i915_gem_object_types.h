@@ -1,0 +1,597 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * Copyright © 2016 Intel Corporation
+ */
+
+#ifndef __I915_GEM_OBJECT_TYPES_H__
+#define __I915_GEM_OBJECT_TYPES_H__
+
+#include <linux/mmu_notifier.h>
+
+#include <drm/drm_gem.h>
+#include <uapi/drm/i915_drm.h>
+
+#include "i915_active.h"
+#include "i915_selftest.h"
+
+struct drm_i915_gem_object;
+struct intel_fronbuffer;
+
+/*
+ * struct i915_lut_handle tracks the fast lookups from handle to vma used
+ * for execbuf. Although we use a radixtree for that mapping, in order to
+ * remove them as the object or context is closed, we need a secondary list
+ * and a translation entry (i915_lut_handle).
+ */
+struct i915_lut_handle {
+	struct list_head obj_link;
+	struct i915_gem_context *ctx;
+	u32 handle;
+};
+
+struct drm_i915_gem_object_ops {
+	unsigned int flags;
+#define I915_GEM_OBJECT_HAS_IOMEM	BIT(1)
+#define I915_GEM_OBJECT_IS_SHRINKABLE	BIT(2)
+#define I915_GEM_OBJECT_IS_PROXY	BIT(3)
+#define I915_GEM_OBJECT_NO_MMAP		BIT(4)
+
+	/* Interface between the GEM object and its backing storage.
+	 * get_pages() is called once prior to the use of the associated set
+	 * of pages before to binding them into the GTT, and put_pages() is
+	 * called after we no longer need them. As we expect there to be
+	 * associated cost with migrating pages between the backing storage
+	 * and making them available for the GPU (e.g. clflush), we may hold
+	 * onto the pages after they are no longer referenced by the GPU
+	 * in case they may be used again shortly (for example migrating the
+	 * pages to a different memory domain within the GTT). put_pages()
+	 * will therefore most likely be called when the object itself is
+	 * being released or under memory pressure (where we attempt to
+	 * reap pages for the shrinker).
+	 */
+	int (*get_pages)(struct drm_i915_gem_object *obj);
+	int (*put_pages)(struct drm_i915_gem_object *obj,
+			 struct sg_table *pages);
+	void (*truncate)(struct drm_i915_gem_object *obj);
+	void (*writeback)(struct drm_i915_gem_object *obj);
+
+	int (*pread)(struct drm_i915_gem_object *obj,
+		     const struct drm_i915_gem_pread *arg);
+	int (*pwrite)(struct drm_i915_gem_object *obj,
+		      const struct drm_i915_gem_pwrite *arg);
+
+	int (*dmabuf_export)(struct drm_i915_gem_object *obj);
+	void (*release)(struct drm_i915_gem_object *obj);
+
+	const char *name; /* friendly name for debug, e.g. lockdep classes */
+};
+
+/**
+ * enum i915_cache_level - The supported GTT caching values for system memory
+ * pages.
+ *
+ * These translate to some special GTT PTE bits when binding pages into some
+ * address space. It also determines whether an object, or rather its pages are
+ * coherent with the GPU, when also reading or writing through the CPU cache
+ * with those pages.
+ *
+ * Userspace can also control this through struct drm_i915_gem_caching.
+ */
+enum i915_cache_level {
+	/**
+	 * @I915_CACHE_NONE:
+	 *
+	 * GPU access is not coherent with the CPU cache. If the cache is dirty
+	 * and we need the underlying pages to be coherent with some later GPU
+	 * access then we need to manually flush the pages.
+	 *
+	 * On shared LLC platforms reads and writes through the CPU cache are
+	 * still coherent even with this setting. See also
+	 * &drm_i915_gem_object.cache_coherent for more details. Due to this we
+	 * should only ever use uncached for scanout surfaces, otherwise we end
+	 * up over-flushing in some places.
+	 *
+	 * This is the default on non-LLC platforms.
+	 */
+	I915_CACHE_NONE = 0,
+	/**
+	 * @I915_CACHE_LLC:
+	 *
+	 * GPU access is coherent with the CPU cache. If the cache is dirty,
+	 * then the GPU will ensure that access remains coherent, when both
+	 * reading and writing through the CPU cache. GPU writes can dirty the
+	 * CPU cache.
+	 *
+	 * Not used for scanout surfaces.
+	 *
+	 * Applies to both platforms with shared LLC(HAS_LLC), and snooping
+	 * based platforms(HAS_SNOOP).
+	 *
+	 * This is the default on shared LLC platforms.  The only exception is
+	 * scanout objects, where the display engine is not coherent with the
+	 * CPU cache. For such objects I915_CACHE_NONE or I915_CACHE_WT is
+	 * automatically applied by the kernel in pin_for_display, if userspace
+	 * has not done so already.
+	 */
+	I915_CACHE_LLC,
+	/**
+	 * @I915_CACHE_L3_LLC:
+	 *
+	 * Explicitly enable the Gfx L3 cache, with coherent LLC.
+	 *
+	 * The Gfx L3 sits between the domain specific caches, e.g
+	 * sampler/render caches, and the larger LLC. LLC is coherent with the
+	 * GPU, but L3 is only visible to the GPU, so likely needs to be flushed
+	 * when the workload completes.
+	 *
+	 * Not used for scanout surfaces.
+	 *
+	 * Only exposed on some gen7 + GGTT. More recent hardware has dropped
+	 * this explicit setting, where it should now be enabled by default.
+	 */
+	I915_CACHE_L3_LLC,
+	/**
+	 * @I915_CACHE_WT:
+	 *
+	 * Write-through. Used for scanout surfaces.
+	 *
+	 * The GPU can utilise the caches, while still having the display engine
+	 * be coherent with GPU writes, as a result we don't need to flush the
+	 * CPU caches when moving out of the render domain. This is the default
+	 * setting chosen by the kernel, if supported by the HW, otherwise we
+	 * fallback to I915_CACHE_NONE. On the CPU side writes through the CPU
+	 * cache still need to be flushed, to remain coherent with the display
+	 * engine.
+	 */
+	I915_CACHE_WT,
+};
+
+enum i915_map_type {
+	I915_MAP_WB = 0,
+	I915_MAP_WC,
+#define I915_MAP_OVERRIDE BIT(31)
+	I915_MAP_FORCE_WB = I915_MAP_WB | I915_MAP_OVERRIDE,
+	I915_MAP_FORCE_WC = I915_MAP_WC | I915_MAP_OVERRIDE,
+};
+
+enum i915_mmap_type {
+	I915_MMAP_TYPE_GTT = 0,
+	I915_MMAP_TYPE_WC,
+	I915_MMAP_TYPE_WB,
+	I915_MMAP_TYPE_UC,
+};
+
+struct i915_mmap_offset {
+	struct drm_vma_offset_node vma_node;
+	struct drm_i915_gem_object *obj;
+	enum i915_mmap_type mmap_type;
+
+	struct rb_node offset;
+};
+
+struct i915_gem_object_page_iter {
+	struct scatterlist *sg_pos;
+	unsigned int sg_idx; /* in pages, but 32bit eek! */
+
+	struct radix_tree_root radix;
+	struct mutex lock; /* protects this cache */
+};
+
+struct drm_i915_gem_object {
+	struct drm_gem_object base;
+
+	const struct drm_i915_gem_object_ops *ops;
+
+	/* VM pointer if the object is private to a VM; NULL otherwise */
+	struct i915_address_space *vm;
+/* Invalid VM pointer value if VM is released */
+#define I915_BO_INVALID_PRIV_VM		((void *)0xffffffff)
+	struct list_head priv_obj_link;
+
+	struct {
+		/**
+		 * @vma.lock: protect the list/tree of vmas
+		 */
+		spinlock_t lock;
+
+		/**
+		 * @vma.list: List of VMAs backed by this object
+		 *
+		 * The VMA on this list are ordered by type, all GGTT vma are
+		 * placed at the head and all ppGTT vma are placed at the tail.
+		 * The different types of GGTT vma are unordered between
+		 * themselves, use the @vma.tree (which has a defined order
+		 * between all VMA) to quickly find an exact match.
+		 */
+		struct list_head list;
+
+		/**
+		 * @vma.tree: Ordered tree of VMAs backed by this object
+		 *
+		 * All VMA created for this object are placed in the @vma.tree
+		 * for fast retrieval via a binary search in
+		 * i915_vma_instance(). They are also added to @vma.list for
+		 * easy iteration.
+		 */
+		struct rb_root tree;
+	} vma;
+
+	/**
+	 * @lut_list: List of vma lookup entries in use for this object.
+	 *
+	 * If this object is closed, we need to remove all of its VMA from
+	 * the fast lookup index in associated contexts; @lut_list provides
+	 * this translation from object to context->handles_vma.
+	 */
+	struct list_head lut_list;
+	spinlock_t lut_lock; /* guards lut_list */
+
+	/**
+	 * @obj_link: Link into @i915_gem_ww_ctx.obj_list
+	 *
+	 * When we lock this object through i915_gem_object_lock() with a
+	 * context, we add it to the list to ensure we can unlock everything
+	 * when i915_gem_ww_ctx_backoff() or i915_gem_ww_ctx_fini() are called.
+	 */
+	struct list_head obj_link;
+	/**
+	 * @shared_resv_from: The object shares the resv from this vm.
+	 */
+	struct i915_address_space *shares_resv_from;
+
+	/**
+	 * @evict_locked: Whether @obj_link sits on the eviction_list
+	 */
+	bool evict_locked;
+
+	union {
+		struct rcu_head rcu;
+		struct llist_node freed;
+	};
+
+	/**
+	 * Whether the object is currently in the GGTT mmap.
+	 */
+	unsigned int userfault_count;
+	struct list_head userfault_link;
+
+	struct {
+		spinlock_t lock; /* Protects access to mmo offsets */
+		struct rb_root offsets;
+	} mmo;
+
+	I915_SELFTEST_DECLARE(struct list_head st_link);
+
+	unsigned long flags;
+#define I915_BO_ALLOC_CONTIGUOUS BIT(0)
+#define I915_BO_ALLOC_VOLATILE   BIT(1)
+#define I915_BO_ALLOC_STRUCT_PAGE BIT(2)
+#define I915_BO_ALLOC_CPU_CLEAR  BIT(3)
+#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE	BIT(4)
+#define I915_BO_ALLOC_CHUNK_64K  BIT(5)
+#define I915_BO_ALLOC_CHUNK_2M   BIT(6)
+#define I915_BO_ALLOC_CHUNK_4K   BIT(9)
+#define I915_BO_ALLOC_CHUNK_1G   BIT(10)
+#define I915_BO_ALLOC_FLAGS (I915_BO_ALLOC_CONTIGUOUS | \
+			     I915_BO_ALLOC_VOLATILE | \
+			     I915_BO_ALLOC_STRUCT_PAGE | \
+			     I915_BO_ALLOC_CPU_CLEAR | \
+			     I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE | \
+			     I915_BO_ALLOC_CHUNK_4K | \
+			     I915_BO_ALLOC_CHUNK_64K | \
+			     I915_BO_ALLOC_CHUNK_2M | \
+			     I915_BO_ALLOC_CHUNK_1G)
+#define I915_BO_READONLY         BIT(7)
+#define I915_TILING_QUIRK_BIT    8 /* unknown swizzling; do not release! */
+#define I915_BO_FABRIC           BIT(11)
+#define I915_BO_WAS_BOUND_BIT    12
+
+	/**
+	 * @cache_level: The desired GTT caching level.
+	 *
+	 * See enum i915_cache_level for possible values, along with what
+	 * each does.
+	 */
+	unsigned int cache_level:3;
+	/**
+	 * @cache_coherent:
+	 *
+	 * Track whether the pages are coherent with the GPU if reading or
+	 * writing through the CPU caches. The largely depends on the
+	 * @cache_level setting.
+	 *
+	 * On platforms which don't have the shared LLC(HAS_SNOOP), like on Atom
+	 * platforms, coherency must be explicitly requested with some special
+	 * GTT caching bits(see enum i915_cache_level). When enabling coherency
+	 * it does come at a performance and power cost on such platforms. On
+	 * the flip side the kernel does not need to manually flush any buffers
+	 * which need to be coherent with the GPU, if the object is not coherent
+	 * i.e @cache_coherent is zero.
+	 *
+	 * On platforms that share the LLC with the CPU(HAS_LLC), all GT memory
+	 * access will automatically snoop the CPU caches(even with CACHE_NONE).
+	 * The one exception is when dealing with the display engine, like with
+	 * scanout surfaces. To handle this the kernel will always flush the
+	 * surface out of the CPU caches when preparing it for scanout.  Also
+	 * note that since scanout surfaces are only ever read by the display
+	 * engine we only need to care about flushing any writes through the CPU
+	 * cache, reads on the other hand will always be coherent.
+	 *
+	 * Something strange here is why @cache_coherent is not a simple
+	 * boolean, i.e coherent vs non-coherent. The reasoning for this is back
+	 * to the display engine not being fully coherent. As a result scanout
+	 * surfaces will either be marked as I915_CACHE_NONE or I915_CACHE_WT.
+	 * In the case of seeing I915_CACHE_NONE the kernel makes the assumption
+	 * that this is likely a scanout surface, and will set @cache_coherent
+	 * as only I915_BO_CACHE_COHERENT_FOR_READ, on platforms with the shared
+	 * LLC. The kernel uses this to always flush writes through the CPU
+	 * cache as early as possible, where it can, in effect keeping
+	 * @cache_dirty clean, so we can potentially avoid stalling when
+	 * flushing the surface just before doing the scanout.  This does mean
+	 * we might unnecessarily flush non-scanout objects in some places, but
+	 * the default assumption is that all normal objects should be using
+	 * I915_CACHE_LLC, at least on platforms with the shared LLC.
+	 *
+	 * Supported values:
+	 *
+	 * I915_BO_CACHE_COHERENT_FOR_READ:
+	 *
+	 * On shared LLC platforms, we use this for special scanout surfaces,
+	 * where the display engine is not coherent with the CPU cache. As such
+	 * we need to ensure we flush any writes before doing the scanout. As an
+	 * optimisation we try to flush any writes as early as possible to avoid
+	 * stalling later.
+	 *
+	 * Thus for scanout surfaces using I915_CACHE_NONE, on shared LLC
+	 * platforms, we use:
+	 *
+	 *	cache_coherent = I915_BO_CACHE_COHERENT_FOR_READ
+	 *
+	 * While for normal objects that are fully coherent, including special
+	 * scanout surfaces marked as I915_CACHE_WT, we use:
+	 *
+	 *	cache_coherent = I915_BO_CACHE_COHERENT_FOR_READ |
+	 *			 I915_BO_CACHE_COHERENT_FOR_WRITE
+	 *
+	 * And then for objects that are not coherent at all we use:
+	 *
+	 *	cache_coherent = 0
+	 *
+	 * I915_BO_CACHE_COHERENT_FOR_WRITE:
+	 *
+	 * When writing through the CPU cache, the GPU is still coherent. Note
+	 * that this also implies I915_BO_CACHE_COHERENT_FOR_READ.
+	 */
+#define I915_BO_CACHE_COHERENT_FOR_READ BIT(0)
+#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(1)
+	unsigned int cache_coherent:2;
+
+	/**
+	 * @cache_dirty:
+	 *
+	 * Track if we are we dirty with writes through the CPU cache for this
+	 * object. As a result reading directly from main memory might yield
+	 * stale data.
+	 *
+	 * This also ties into whether the kernel is tracking the object as
+	 * coherent with the GPU, as per @cache_coherent, as it determines if
+	 * flushing might be needed at various points.
+	 *
+	 * Another part of @cache_dirty is managing flushing when first
+	 * acquiring the pages for system memory, at this point the pages are
+	 * considered foreign, so the default assumption is that the cache is
+	 * dirty, for example the page zeroing done by the kernel might leave
+	 * writes though the CPU cache, or swapping-in, while the actual data in
+	 * main memory is potentially stale.  Note that this is a potential
+	 * security issue when dealing with userspace objects and zeroing. Now,
+	 * whether we actually need apply the big sledgehammer of flushing all
+	 * the pages on acquire depends on if @cache_coherent is marked as
+	 * I915_BO_CACHE_COHERENT_FOR_WRITE, i.e that the GPU will be coherent
+	 * for both reads and writes though the CPU cache.
+	 *
+	 * Note that on shared LLC platforms we still apply the heavy flush for
+	 * I915_CACHE_NONE objects, under the assumption that this is going to
+	 * be used for scanout.
+	 */
+	unsigned int cache_dirty:1;
+
+	/**
+	 * @read_domains: Read memory domains.
+	 *
+	 * These monitor which caches contain read/write data related to the
+	 * object. When transitioning from one set of domains to another,
+	 * the driver is called to ensure that caches are suitably flushed and
+	 * invalidated.
+	 */
+	u16 read_domains;
+
+	/**
+	 * @write_domain: Corresponding unique write memory domain.
+	 */
+	u16 write_domain;
+
+	struct intel_frontbuffer __rcu *frontbuffer;
+
+	/** Current tiling stride for the object, if it's tiled. */
+	unsigned int tiling_and_stride;
+#define FENCE_MINIMUM_STRIDE 128 /* See i915_tiling_ok() */
+#define TILING_MASK (FENCE_MINIMUM_STRIDE - 1)
+#define STRIDE_MASK (~TILING_MASK)
+
+	struct {
+		/*
+		 * Protects the pages and their use. Do not use directly, but
+		 * instead go through the pin/unpin interfaces.
+		 */
+		atomic_t pages_pin_count;
+
+		/**
+		 * @shrink_pin: Prevents the pages from being made visible to
+		 * the shrinker, while the shrink_pin is non-zero. Most users
+		 * should pretty much never have to care about this, outside of
+		 * some special use cases.
+		 *
+		 * By default most objects will start out as visible to the
+		 * shrinker(if I915_GEM_OBJECT_IS_SHRINKABLE) as soon as the
+		 * backing pages are attached to the object, like in
+		 * __i915_gem_object_set_pages(). They will then be removed the
+		 * shrinker list once the pages are released.
+		 *
+		 * The @shrink_pin is incremented by calling
+		 * i915_gem_object_make_unshrinkable(), which will also remove
+		 * the object from the shrinker list, if the pin count was zero.
+		 *
+		 * Callers will then typically call
+		 * i915_gem_object_make_shrinkable() or
+		 * i915_gem_object_make_purgeable() to decrement the pin count,
+		 * and make the pages visible again.
+		 */
+		atomic_t shrink_pin;
+
+		/**
+		 * Priority list of potential placements for this object.
+		 */
+		struct intel_memory_region **placements;
+		struct intel_memory_region *preferred_region;
+		int n_placements;
+
+		/* XXX: Nasty hack, see gem_create */
+		int gem_create_posted_err;
+
+		/**
+		 * Memory region for this object.
+		 */
+		struct intel_memory_region *region;
+		/**
+		 * List of memory region blocks allocated for this object.
+		 */
+		struct list_head blocks;
+		/**
+		 * Element within memory_region->objects or region->purgeable
+		 * if the object is marked as DONTNEED. Access is protected by
+		 * region->obj_lock.
+		 */
+		struct list_head region_link;
+
+		struct sg_table *pages;
+		void *mapping;
+
+		struct i915_page_sizes {
+			/**
+			 * The sg mask of the pages sg_table. i.e the mask of
+			 * of the lengths for each sg entry.
+			 */
+			unsigned int phys;
+
+			/**
+			 * The gtt page sizes we are allowed to use given the
+			 * sg mask and the supported page sizes. This will
+			 * express the smallest unit we can use for the whole
+			 * object, as well as the larger sizes we may be able
+			 * to use opportunistically.
+			 */
+			unsigned int sg;
+
+			/**
+			 * The actual gtt page size usage. Since we can have
+			 * multiple vma associated with this object we need to
+			 * prevent any trampling of state, hence a copy of this
+			 * struct also lives in each vma, therefore the gtt
+			 * value here should only be read/write through the vma.
+			 */
+			unsigned int gtt;
+		} page_sizes;
+
+		I915_SELFTEST_DECLARE(unsigned int page_mask);
+
+		struct i915_gem_object_page_iter get_page;
+		struct i915_gem_object_page_iter get_dma_page;
+
+		/**
+		 * Element within i915->mm.shrink_list or i915->mm.purge_list,
+		 * locked by i915->mm.obj_lock.
+		 */
+		struct list_head link;
+
+		/**
+		 * Advice: are the backing pages purgeable, atomics enabled?
+		 */
+		unsigned int madv:2;
+		unsigned int madv_atomic:2;
+#define I915_BO_ATOMIC_NONE	0
+#define I915_BO_ATOMIC_SYSTEM	1
+#define I915_BO_ATOMIC_DEVICE	2
+
+		/**
+		 * This is set if the object has been written to since the
+		 * pages were last acquired.
+		 */
+		bool dirty:1;
+	} mm;
+
+	/** Record of address bit 17 of each page at last unbind. */
+	unsigned long *bit_17;
+
+	union {
+#ifdef CONFIG_MMU_NOTIFIER
+		struct i915_gem_userptr {
+			uintptr_t ptr;
+			unsigned long notifier_seq;
+
+			struct mmu_interval_notifier notifier;
+			struct page **pvec;
+			int page_ref;
+			/**
+			 * Worker used to unbind object from faultable VM,
+			 * triggered by mmu notifier callback. We can't
+			 * unbind in the mmu notifier callback directly because
+			 * unbind takes object resv lock, and the mmu notifier
+			 * callback can be triggered by memory allocation,
+			 * direct_reclaim holding the same object resv lock, thus
+			 * it is a deadlock. Thus use a worker to unbind object.
+			 */
+			struct work_struct invalidate_work;
+		} userptr;
+#endif
+
+		struct drm_mm_node *stolen;
+
+		unsigned long scratch;
+		u64 fault_encode[2];
+		u64 encode;
+
+		void *gvt_info;
+	};
+
+	/**
+	 * object to swap-to if non-null.
+	 */
+
+	bool do_swapping;
+
+	struct drm_i915_gem_object *swapto;
+
+	/** mark evicted object during suspend */
+	bool evicted;
+
+	/* list of Client ids which allocated/imported this obj */
+	struct list_head client_list;
+
+	/*
+	 * To store the memory mask which represents the user preference about
+	 * which memory region the object should reside in
+	 */
+	u32 memory_mask;
+};
+
+static inline struct drm_i915_gem_object *
+to_intel_bo(struct drm_gem_object *gem)
+{
+	/* Assert that to_intel_bo(NULL) == NULL */
+	BUILD_BUG_ON(offsetof(struct drm_i915_gem_object, base));
+
+	return container_of(gem, struct drm_i915_gem_object, base);
+}
+
+#endif
