@@ -1,0 +1,7 @@
+TEMPORARY UPSTREAM REVERTS (done)
+
+Temporary reverts from upstream commits while internal branch is adjusted
+to work with it. Commits here need to be justified and have a short lifespan.
+
+D:	Lucas De Marchi <lucas.demarchi@intel.com>
+T:	Revert

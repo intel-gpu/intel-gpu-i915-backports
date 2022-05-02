@@ -1,0 +1,17 @@
+Miscellaneous patches on their way to upstream.
+
+Rules for patches in this section:
+
+1) Patches need to be *sent* to the upstream mailing list. It's ok to merge it
+first in internal, but send it to the upstream mailing list ASAP (~3 days at
+the most).
+
+2) When patches are applied upstream the copy on the internal tree should move
+below the "INTEL DRM INTERNAL BRANCH STARTING POINT" commit so they can be
+"collected" by the next move of dii-baseline. Use
+`git cherry-pick -x <commit-in-upstream>` when moving the patch out of this
+section and into dii-baseline branch.
+
+B: dii-auto-chop/pending-upstream
+
+END

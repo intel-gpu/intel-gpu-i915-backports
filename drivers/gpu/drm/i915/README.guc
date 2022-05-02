@@ -1,0 +1,10 @@
+GUC FEATURES (done)
+D:	Michal Wajdeczko <michal.wajdeczko@intel.com>
+D:	Daniele Ceraolo Spurio <daniele.ceraolospurio@intel.com>
+D:	Piotr Piórkowski <piotr.piorkowski@intel.com>
+D:	Matthew Brost <matthew.brost@intel.com>
+T:	drm/i915/tgl
+T:	drm/i915/guc
+T:	drm/i915/sriov
+T:	drm/i915/pf
+T:	drm/i915/vf
