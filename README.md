@@ -4,7 +4,9 @@
 This branch provides i915 driver source code backported for Ubuntu® to enable intel discrete GPUs support.
 
 We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out of tree i915 kernel module source codes.
- 
+
+This repo is a code snapshot of particular version of backports and does not contain individual git change history.
+
 # Branches
  ubuntu/main will point to the currently supported version of Ubuntu®.
  
@@ -17,8 +19,12 @@ We are using [backport project](https://backports.wiki.kernel.org/index.php/Main
 
   In case of an issue with the latest kernel, please install the kernel version pointed by BASE_KERNEL_NAME.
 
-    sudo apt install linux-headers-5.14.0-1033-oem \
-    linux-image-5.14.0-1033
+    sudo apt install linux-headers-<BASE_KERNEL_NAME>-oem \
+    linux-image-unsigned-<BASE_KERNEL_NAME>-oem
+    
+    example: 
+        sudo apt install linux-headers-5.14.0-1033-oem\
+        linux-image-unsigned-5.14.0-1033-oem
 
 Please note that dkms installation will skip if the kernel header is not installed.
 
@@ -38,7 +44,7 @@ This driver is part of a collection of kernel-mode drivers that enable support f
 - [Intel® Graphics Driver Backports for Linux](https://github.com/intel-gpu/intel-gpu-i915-backports) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
 - [Intel® Converged Security Engine Backports](https://github.com/intel-gpu/intel-gpu-cse-backports) - Converged Security Engine
 - [Intel® Platform Monitoring Technology Backports](https://github.com/intel-gpu/intel-gpu-pmt-backports/) - Intel Platform Telemetry
-- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-i915-backports) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
@@ -53,7 +59,7 @@ above cmd will create debain package in parent folder. **intel-gpgpu-dkms-ubuntu
 # Installation
 
      sudo dpkg -i intel-gpgpu-dkms-ubuntu-5.14-oem_5606.220414.0_all.deb
-     # Reboot the device after installtion of all packages.
+     # Reboot the device after installation of all packages.
      sudo reboot
   
 ## Installation varification
