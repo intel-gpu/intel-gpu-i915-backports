@@ -18,7 +18,7 @@ This driver is part of a collection of kernel-mode drivers that enable support f
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag. 
 
-# Support OS Distributions
+# Supported OS Distributions
 
 
 |   OSV |Branch   	| installation instructions | 
