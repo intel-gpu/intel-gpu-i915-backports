@@ -93,6 +93,8 @@ backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kern
 		echo " * Changes will be overwritten"			;\
 		echo " */"						;\
 		echo ""							;\
+		echo "/* hack around predefined gcc/cpp "linux=1" */"	;\
+		echo "#undef linux"					;\
 		echo "#define BACKPORT_PATH $(shell pwd)"		;\
 		echo ""							;\
 		echo "#endif /* BACKPORTED_PATH_INCLUDED */"		;\
