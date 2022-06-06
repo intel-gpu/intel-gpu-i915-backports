@@ -31,5 +31,5 @@ num_cpu_cores()
 }
 
 # Here is where we could specify use of the defconfig. Right now it uses the kernel configuration from /usr/src/
-MAKE="cp defconfigs/i915 .config; 'make' -j$(num_cpu_cores) KLIB=/lib/modules/$kernelver olddefconfig; 'make' -j$(num_cpu_cores) KLIB=/lib/modules/$kernelver"
-CLEAN="'make' clean"
+MAKE="cp defconfigs/i915 .config; 'make' -j$(num_cpu_cores) KLIB=/lib/modules/$kernelver KLIB_BUILD=$kernel_source_dir olddefconfig; 'make' -j$(num_cpu_cores) KLIB=/lib/modules/$kernelver KLIB_BUILD=$kernel_source_dir"
+CLEAN="'make' KLIB=/lib/modules/$kernelver KLIB_BUILD=$kernel_source_dir clean"
