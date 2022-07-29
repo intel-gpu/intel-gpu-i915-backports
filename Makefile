@@ -7,7 +7,6 @@ ifeq ($(KERNELRELEASE),)
 MAKEFLAGS += --no-print-directory
 SHELL := /bin/bash
 BACKPORT_DIR := $(shell pwd)
-MKSPEC := $(BACKPORT_DIR)/scripts/bp-mkspec
 
 KMODDIR ?= updates
 ifneq ($(origin KLIB), undefined)
@@ -31,18 +30,6 @@ export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG version_h
 default: $(version_h)
 	@$(MAKE) modules
 
-# dkmsrpm-pkg
-# Creates Backports dkms package
-# command: make BUILD_VERSION=<build version> dkmsrpm-pkg
-# Rpm generated can be copied to client machine and install
-# will trigger source build and install on modules
-#----------------------------------------------------------------------------
-export KBUILD_ALLDIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) arch drivers include scripts)
-TAR_CONTENT := $(KBUILD_ALLDIRS) .config Makefile* local-symbols MAINTAINERS \
-               Kconfig* COPYING versions kernel-defconfigs defconfigs backport-include kconf compat
-DKMSMKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdkmsspec
-DKMSMKCONF := $(BACKPORT_DIR)/scripts/backport-mkdkmsconf
-MODULE_NAME ?= intel-gpgpu-dkms-prerelease
 ARCH := x86_64
 
 # BKPT_VER is extracted from BACKPORTS_RELEASE_TAG, which is auto genereated from backport description.Tagging is needed
@@ -56,7 +43,17 @@ BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | c
 # for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_DG1_200828.0"
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
 
-KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 2-|sed "s/-/./g" 2>/dev/null || echo 1)
+BASE_KER_VER_COUNT=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "\"" -f 2 | cut -d "-" -f 2 | awk -F "." '{print NF-1}' 2> /dev/null || echo 1)
+
+ifeq ($(BASE_KER_VER_COUNT),2)
+	BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '.' -f 1-3 2> /dev/null || echo 1)
+else
+	BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '.' -f 1-5 2> /dev/null || echo 1)
+endif
+RHEL_KERN_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 1 2> /dev/null || echo 1)
+
+KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
+
 RHEL_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
 RHEL_BACKPORT_MINOR_XX = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 | cut -c -2 2> /dev/null)
 RHEL_BACKPORT_MINOR_YY = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 3 | cut -c -2 2> /dev/null)
@@ -114,6 +111,10 @@ define filechk_osv_version.h
 endef
 
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
+ifeq ($(RHEL_KERN_VER), 4.18.0)
+	@gawk -i inplace '!/BASE_KERNEL_NAME/' versions
+	@echo 'BASE_KERNEL_NAME="$(BASE_KER_VER)"' >> versions
+endif
 	$(call filechk,osv_version.h)
 
 VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
@@ -125,41 +126,34 @@ else
 RELEASE := el8_5
 endif
 
-RELEASE_TYPE ?= prerelease
+RELEASE_TYPE ?= opensource
 
-.PHONY: dkmsrpm-pkg
-dkmsrpm-pkg:
-	$(CONFIG_SHELL) $(DKMSMKCONF) $(MODULE_NAME) $(VERSION) $(RELEASE) > $(BACKPORT_DIR)/dkms.conf
-	$(CONFIG_SHELL) $(DKMSMKSPEC) $(MODULE_NAME) $(VERSION) $(RELEASE) > $(BACKPORT_DIR)/$(MODULE_NAME).spec
-	tar -cz $(RCS_TAR_IGNORE) -f $(MODULE_NAME)-$(VERSION)-src.tar.gz \
-		$(TAR_CONTENT) $(MODULE_NAME).spec dkms.conf;
-	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(MODULE_NAME)-$(VERSION)-src.tar.gz \
-	--define='_smp_mflags %{nil}'
+ifeq ($(RELEASE_TYPE), opensource)
+PKG_SUFFIX=
+else
+PKG_SUFFIX=-$(RELEASE_TYPE)
+endif
 
 # dmadkmsrpm-pkg
 # Creates Backports dmabuf dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease> dmadkmsrpm-pkg
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> dmadkmsrpm-pkg
 # Rpm generated can be copied to client machine and install
 # BUILD_VERSION : pass build version to be added to package name
 # RELEASE_TYPE: <opensource/prerelease> package need to be created
 # will trigger source build and install on modules
 #------------------------------------------------------------------------------
-
 export KBUILD_ONLYDMADIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf include scripts)
 DMA_TAR_CONTENT := $(KBUILD_ONLYDMADIRS) .config Makefile* local-symbols MAINTAINERS \
                Kconfig* COPYING versions defconfigs backport-include kconf compat
 DMADKMSMKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsspec
 DMADKMSMKCONF := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsconf
-ifeq ($(RELEASE_TYPE), opensource)
-DMAMODULE_NAME := intel-dmabuf-dkms
-else
-DMAMODULE_NAME := intel-dmabuf-dkms-prerelease
-endif
+DMAMODULE_NAME := intel-dmabuf-dkms$(PKG_SUFFIX)
 DMAVERSION := $(VERSION)
 DMARELEASE := $(RELEASE)
 
 .PHONY: dmadkmsrpm-pkg
 dmadkmsrpm-pkg:
+	cp $(BACKPORT_DIR)/defconfigs/dmabuf .config
 	$(CONFIG_SHELL) $(DMADKMSMKCONF) -n $(DMAMODULE_NAME) -v $(DMAVERSION) -r $(DMARELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
 	$(CONFIG_SHELL) $(DMADKMSMKSPEC) -n $(DMAMODULE_NAME) -v $(DMAVERSION) -r $(DMARELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(DMAMODULE_NAME).spec
 	patch -p1 < $(BACKPORT_DIR)/scripts/disable_drm.patch ;
@@ -171,7 +165,7 @@ dmadkmsrpm-pkg:
 
 # i915dkmsrpm-pkg
 # Creates Backports i915 alone dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease> i915dkmsrpm-pkg
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsrpm-pkg
 # BUILD_VERSION : pass build version to be added to package name
 # RELEASE_TYPE : <opensource/prerelease> package need to be created
 # Depends on package generated by dmadkmsrpm-pkg
@@ -181,17 +175,13 @@ I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINT
                Kconfig* COPYING versions defconfigs backport-include kconf compat
 I915DKMSMKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
 I915DKMSMKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
-ifeq ($(RELEASE_TYPE), opensource)
-I915MODULE_NAME := intel-i915-dkms
-else
-I915MODULE_NAME := intel-i915-dkms-prerelease
-endif
-
+I915MODULE_NAME := intel-i915-dkms$(PKG_SUFFIX)
 I915VERSION := $(VERSION)
 I915RELEASE := $(RELEASE)
 
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
+	cp $(BACKPORT_DIR)/defconfigs/i915 .config
 	$(CONFIG_SHELL) $(I915DKMSMKCONF) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
 	$(CONFIG_SHELL) $(I915DKMSMKSPEC) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(I915MODULE_NAME).spec
 	patch -p1 < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
@@ -201,24 +191,29 @@ i915dkmsrpm-pkg:
 	--define='_smp_mflags %{nil}'
 	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
 
-#binrpm-pkg
-#----------------------------------------------------------------------------
-
-.PHONY: binrpm-pkg
-binrpm-pkg:
-	$(MAKE) -f $(BACKPORT_DIR)/Makefile KLIB=$(KLIB) KLIB_BUILD=$(KLIB_BUILD)
-	$(CONFIG_SHELL) $(MKSPEC) prebuilt > $(BACKPORT_DIR)/backport-modules.spec
-	+rpmbuild --build-in-place -bb $(BACKPORT_DIR)/backport-modules.spec
-
+# dkmsrpm-pkg
+# Creates Backports both dmabuf and i915 dkms packages
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/"custom"> dkmsrpm-pkg
+# RELEASE_TYPE=<custom> is used to create custome package.
+# Example: RELEASE_TYPE=test
+#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
+# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
+# already installed before you intalling current one.
+.PHONY: dkmsrpm-pkg
+dkmsrpm-pkg: i915dkmsrpm-pkg dmadkmsrpm-pkg
 
 .PHONY: mrproper
 mrproper:
 	@test -f .config && $(MAKE) clean || true
-	@rm -f $(BACKPORT_DIR)/backportkernel.spec
-	@rm -f $(BACKPORT_DIR)/backport-modules.spec
-	@rm -f $(BACKPORT_DIR)/$(MODULE_NAME).spec
+	@rm -f .config
+	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
+	@rm -f backport-include/backport/autoconf.h
+	@rm -f $(BACKPORT_DIR)/$(DMAMODULE_NAME).spec
+	@rm -f $(BACKPORT_DIR)/$(I915MODULE_NAME).spec
 	@rm -f $(BACKPORT_DIR)/dkms.conf
-	@rm -f $(BACKPORT_DIR)/$(MODULE_NAME)-*-src.tar.gz
+	@rm -f $(BACKPORT_DIR)/$(DMAMODULE_NAME)-*-src.tar.gz
+	@rm -f $(BACKPORT_DIR)/$(I915MODULE_NAME)-*-src.tar.gz
+	@rm -f backport-include/backport/backport_path.h
 
 
 .DEFAULT:

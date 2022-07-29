@@ -6,12 +6,15 @@
 
 #include <drm/drm_cache.h>
 
+#include "gt/intel_gt.h"
+#include "gt/intel_tlb.h"
+
 #include "i915_drv.h"
+#include "i915_debugger.h"
 #include "i915_gem_object.h"
 #include "i915_scatterlist.h"
 #include "i915_gem_lmem.h"
 #include "i915_gem_mman.h"
-#include "gt/intel_tlb.h"
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages,
@@ -226,6 +229,21 @@ static void unmap_object(struct drm_i915_gem_object *obj, void *ptr)
 		vunmap(ptr);
 }
 
+static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct intel_gt *gt;
+	int id;
+
+	for_each_gt(i915, id, gt) {
+		if (!obj->mm.tlb[id])
+			continue;
+
+		intel_gt_invalidate_tlb_full(gt, obj->mm.tlb[id]);
+		obj->mm.tlb[id] = 0;
+	}
+}
+
 struct sg_table *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 {
@@ -234,6 +252,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	assert_object_held_shared(obj);
 
+	i915_debugger_revoke_object_ptes(obj);
 	pages = fetch_and_zero(&obj->mm.pages);
 	if (IS_ERR_OR_NULL(pages))
 		return pages;
@@ -256,21 +275,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	__i915_gem_object_reset_page_iter(obj);
 
-	if (test_and_clear_bit(I915_BO_WAS_BOUND_BIT, &obj->flags)) {
-		struct drm_i915_private *i915 = to_i915(obj->base.dev);
-		struct intel_gt *gt;
-		unsigned int i;
-
-		for_each_gt(i915, i, gt) {
-			intel_wakeref_t wakeref;
-
-			with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-				mutex_lock(&gt->mutex);
-				intel_invalidate_tlb_full_sync(gt);
-				mutex_unlock(&gt->mutex);
-			}
-		}
-	}
+	flush_tlb_invalidate(obj);
 
 	return pages;
 }
@@ -356,58 +361,59 @@ static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
 		 * So if the page is beyond the 32b boundary, make an explicit
 		 * vmap.
 		 */
-		if (!PageHighMem(page))
-			return page_address(page);
-	}
+                if (!PageHighMem(page))
+                        return page_address(page);
+        }
 
-	mem = stack;
-	if (n_pte > ARRAY_SIZE(stack)) {
-		 /* Too big for stack -- allocate temporary array instead */
-		mem = kvmalloc_array(n_pte, sizeof(*mem), GFP_KERNEL);
-		if (!mem)
-			return NULL;
-	}
+        mem = stack;
+        if (n_pte > ARRAY_SIZE(stack)) {
+                 /* Too big for stack -- allocate temporary array instead */
+                mem = kvmalloc_array(n_pte, sizeof(*mem), GFP_KERNEL);
+                if (!mem)
+                        return NULL;
+        }
 
-	area = alloc_vm_area(obj->base.size, mem);
-	if (!area) {
-		if (mem != stack)
-			kvfree(mem);
-		return NULL;
-	}
+        area = alloc_vm_area(obj->base.size, mem);
+        if (!area) {
+                if (mem != stack)
+                        kvfree(mem);
+                return NULL;
+        }
 
-	switch (type) {
-	default:
-		MISSING_CASE(type);
-		fallthrough;    /* to use PAGE_KERNEL anyway */
-	case I915_MAP_WB:
+        switch (type) {
+        default:
+                MISSING_CASE(type);
+                fallthrough;    /* to use PAGE_KERNEL anyway */
+        case I915_MAP_WB:
 		pgprot = PAGE_KERNEL;
 		break;
 	case I915_MAP_WC:
-		pgprot = pgprot_writecombine(PAGE_KERNEL);
+		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
 		break;
 	}
+
 	if (i915_gem_object_has_struct_page(obj)) {
-		struct sgt_iter iter;
-		struct page *page;
-		pte_t **ptes = mem;
-		for_each_sgt_page(page, iter, sgt)
-			**ptes++ = mk_pte(page, pgprot);
-	} else {
-		resource_size_t iomap;
-		struct sgt_iter iter;
-		pte_t **ptes = mem;
-		dma_addr_t addr;
-		iomap = obj->mm.region->iomap.base;
-		iomap -= obj->mm.region->region.start;
-		for_each_sgt_daddr(addr, iter, sgt)
-			**ptes++ = iomap_pte(iomap, addr, pgprot);
+                struct sgt_iter iter;
+                struct page *page;
+                pte_t **ptes = mem;
+                for_each_sgt_page(page, iter, sgt)
+                        **ptes++ = mk_pte(page, pgprot);
+        } else {
+                resource_size_t iomap;
+                struct sgt_iter iter;
+                pte_t **ptes = mem;
+                dma_addr_t addr;
+                iomap = obj->mm.region->iomap.base;
+                iomap -= obj->mm.region->region.start;
+                for_each_sgt_daddr(addr, iter, sgt)
+                        **ptes++ = iomap_pte(iomap, addr, pgprot);
+
 	}
 
 	if (mem != stack)
 		kvfree(mem);
 
 	return area->addr;
-
 }
 
 /* get, pin, and map the pages of the object into kernel space */

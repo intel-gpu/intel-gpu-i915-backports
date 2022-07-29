@@ -33,6 +33,9 @@ static inline bool i915_gem_object_size_2big(u64 size)
 void i915_gem_init__objects(struct drm_i915_private *i915);
 u32 i915_gem_object_max_page_size(struct drm_i915_gem_object *obj);
 
+void i915_objects_module_exit(void);
+int i915_objects_module_init(void);
+
 struct drm_i915_gem_object *i915_gem_object_alloc(void);
 void i915_gem_object_free(struct drm_i915_gem_object *obj);
 
@@ -220,8 +223,8 @@ static inline int __i915_gem_object_lock(struct drm_i915_gem_object *obj,
 		ret = dma_resv_lock(obj->base.resv, ww ? &ww->ctx : NULL);
 
 	if (!ret && ww) {
-		list_add_tail(&obj->obj_link, &ww->obj_list);
 		i915_gem_object_get(obj);
+		list_add_tail(&obj->obj_link, &ww->obj_list);
 		obj->evict_locked = false;
 	}
 
@@ -236,7 +239,8 @@ static inline int __i915_gem_object_lock(struct drm_i915_gem_object *obj,
 
 	if (ret == -EDEADLK) {
 		ww->contended_evict = false;
-		ww->contended = i915_gem_object_get(obj);
+		i915_gem_object_get(obj);
+		ww->contended = obj;
 	}
 
 	return ret;

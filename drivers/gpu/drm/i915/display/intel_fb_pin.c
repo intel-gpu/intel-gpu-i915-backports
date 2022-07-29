@@ -7,13 +7,13 @@
  * DOC: display pinning helpers
  */
 
-#include "intel_display_types.h"
-#include "intel_fb_pin.h"
-#include "intel_fb.h"
-
-#include "intel_dpt.h"
-
 #include "gem/i915_gem_object.h"
+
+#include "i915_drv.h"
+#include "intel_display_types.h"
+#include "intel_dpt.h"
+#include "intel_fb.h"
+#include "intel_fb_pin.h"
 
 static struct i915_vma *
 intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
@@ -36,7 +36,11 @@ intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
 
 	atomic_inc(&dev_priv->gpu_error.pending_fb_pin);
 
-	ret = i915_gem_object_set_cache_level(obj, NULL, I915_CACHE_NONE);
+	ret = i915_gem_object_lock_interruptible(obj, NULL);
+	if (!ret) {
+		ret = i915_gem_object_set_cache_level(obj, NULL, I915_CACHE_NONE);
+		i915_gem_object_unlock(obj);
+	}
 	if (ret) {
 		vma = ERR_PTR(ret);
 		goto err;

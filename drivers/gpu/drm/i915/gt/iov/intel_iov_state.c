@@ -142,19 +142,6 @@ static int pf_trigger_vf_flr_finish(struct intel_iov *iov, u32 vfid)
 	return err;
 }
 
-static bool pf_test_vf_flr_in_progress(struct intel_iov *iov, u32 vfid)
-{
-	return test_bit(IOV_VF_FLR_IN_PROGRESS, &iov->pf.state.data[vfid].state);
-}
-
-static int pf_process_vf_flr_start(struct intel_iov *iov, u32 vfid)
-{
-	if (pf_test_vf_flr_in_progress(iov, vfid))
-		return 0;
-
-	return pf_trigger_vf_flr_start(iov, vfid);
-}
-
 static void pf_clear_vf_ggtt_entries(struct intel_iov *iov, u32 vfid)
 {
 	struct intel_iov_config *config = &iov->pf.provisioning.configs[vfid];
@@ -213,26 +200,44 @@ skip:
 	return pf_trigger_vf_flr_finish(iov, vfid);
 }
 
+/* Return: true if more processing is needed */
 static bool pf_process_vf(struct intel_iov *iov, u32 vfid)
 {
 	unsigned long *state = &iov->pf.state.data[vfid].state;
 	int err;
 
-	if (test_and_clear_bit(IOV_VF_NEEDS_FLR_FINISH, state)) {
-		err = pf_process_vf_flr_finish(iov, vfid);
-		if (err)
-			set_bit(err == -EBUSY ? IOV_VF_NEEDS_FLR_FINISH :
-				IOV_VF_FLR_FAILED, state);
-		else
+	if (test_and_clear_bit(IOV_VF_NEEDS_FLR_START, state)) {
+		err = pf_trigger_vf_flr_start(iov, vfid);
+		if (err == -EBUSY) {
+			set_bit(IOV_VF_NEEDS_FLR_START, state);
+			return true;
+		}
+		if (err) {
+			set_bit(IOV_VF_FLR_FAILED, state);
 			clear_bit(IOV_VF_FLR_IN_PROGRESS, state);
-		return err;
+			return false;
+		}
+		return true;
 	}
 
-	if (test_and_clear_bit(IOV_VF_NEEDS_FLR_START, state)) {
-		err = pf_process_vf_flr_start(iov, vfid);
-		set_bit(err == -EBUSY ? IOV_VF_NEEDS_FLR_START :
-			err ? IOV_VF_FLR_FAILED : IOV_VF_FLR_IN_PROGRESS, state);
-		return err;
+	if (test_and_clear_bit(IOV_VF_FLR_DONE_RECEIVED, state)) {
+		set_bit(IOV_VF_NEEDS_FLR_FINISH, state);
+		return true;
+	}
+
+	if (test_and_clear_bit(IOV_VF_NEEDS_FLR_FINISH, state)) {
+		err = pf_process_vf_flr_finish(iov, vfid);
+		if (err == -EBUSY) {
+			set_bit(IOV_VF_NEEDS_FLR_FINISH, state);
+			return true;
+		}
+		if (err) {
+			set_bit(IOV_VF_FLR_FAILED, state);
+			clear_bit(IOV_VF_FLR_IN_PROGRESS, state);
+			return false;
+		}
+		clear_bit(IOV_VF_FLR_IN_PROGRESS, state);
+		return false;
 	}
 
 	return false;
@@ -264,11 +269,47 @@ static void pf_state_worker_func(struct work_struct *w)
 	pf_process_all_vfs(iov);
 }
 
-static void pf_mark_vf_needs_flr(struct intel_iov *iov, u32 vfid)
+/**
+ * DOC: VF FLR Flow
+ *
+ *          PF                        GUC             PCI
+ * ========================================================
+ *          |                          |               |
+ * (1)      |                          |<------- FLR --|
+ *          |                          |               :
+ * (2)      |<----------- NOTIFY FLR --|
+ *         [ ]                         |
+ * (3)     [ ]                         |
+ *         [ ]                         |
+ *          |-- START FLR ------------>|
+ *          |                         [ ]
+ * (4)      |                         [ ]
+ *          |                         [ ]
+ *          |<------------- FLR DONE --|
+ *         [ ]                         |
+ * (5)     [ ]                         |
+ *         [ ]                         |
+ *          |-- FINISH FLR ----------->|
+ *          |                          |
+ *
+ * Step 1: PCI HW generates interrupt to GuC about VF FLR
+ * Step 2: GuC FW sends G2H notification to PF about VF FLR
+ * Step 3: PF sends H2G request to GuC to start VF FLR sequence
+ * Step 4: GuC FW performs VF FLR cleanups and notifies PF when done
+ * Step 5: PF performs VF FLR cleanups and notifies GuC FW when finished
+ */
+
+static void pf_init_vf_flr(struct intel_iov *iov, u32 vfid)
 {
-	if (!test_and_set_bit(IOV_VF_NEEDS_FLR_START,
-			      &iov->pf.state.data[vfid].state))
-		pf_queue_worker(iov);
+	unsigned long *state = &iov->pf.state.data[vfid].state;
+
+	if (test_and_set_bit(IOV_VF_FLR_IN_PROGRESS, state)) {
+		IOV_DEBUG(iov, "VF%u FLR is already in progress\n", vfid);
+		return;
+	}
+
+	set_bit(IOV_VF_NEEDS_FLR_START, state);
+	pf_queue_worker(iov);
 }
 
 static void pf_handle_vf_flr(struct intel_iov *iov, u32 vfid)
@@ -285,19 +326,15 @@ static void pf_handle_vf_flr(struct intel_iov *iov, u32 vfid)
 	dev_info(dev, "VF%u FLR\n", vfid);
 
 	for_each_gt(iov_to_i915(iov), gtid, gt)
-		pf_mark_vf_needs_flr(&gt->iov, vfid);
-}
-
-static void pf_mark_vf_needs_flr_finish(struct intel_iov *iov, u32 vfid)
-{
-	if (!test_and_set_bit(IOV_VF_NEEDS_FLR_FINISH,
-			     &iov->pf.state.data[vfid].state))
-		pf_queue_worker(iov);
+		pf_init_vf_flr(&gt->iov, vfid);
 }
 
 static void pf_handle_vf_flr_done(struct intel_iov *iov, u32 vfid)
 {
-	pf_mark_vf_needs_flr_finish(iov, vfid);
+	unsigned long *state = &iov->pf.state.data[vfid].state;
+
+	set_bit(IOV_VF_FLR_DONE_RECEIVED, state);
+	pf_queue_worker(iov);
 }
 
 static void pf_handle_vf_pause_done(struct intel_iov *iov, u32 vfid)
@@ -386,6 +423,40 @@ int intel_iov_state_process_guc2pf(struct intel_iov *iov,
 		return -EINVAL;
 
 	return vfid ? pf_handle_vf_event(iov, vfid, eventid) : pf_handle_pf_event(iov, eventid);
+}
+
+/**
+ * intel_iov_state_start_flr - Start VF FLR sequence.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ *
+ * This function is for PF only.
+ */
+void intel_iov_state_start_flr(struct intel_iov *iov, u32 vfid)
+{
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
+	GEM_BUG_ON(!vfid);
+
+	pf_init_vf_flr(iov, vfid);
+}
+
+/**
+ * intel_iov_state_no_flr - Test if VF FLR is not in progress.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ *
+ * This function is for PF only.
+ *
+ * Return: true if FLR is not pending or in progress.
+ */
+bool intel_iov_state_no_flr(struct intel_iov *iov, u32 vfid)
+{
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
+	GEM_BUG_ON(!vfid);
+
+	return !test_bit(IOV_VF_FLR_IN_PROGRESS, &iov->pf.state.data[vfid].state);
 }
 
 /**

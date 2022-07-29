@@ -2309,7 +2309,7 @@ int disable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 	for_each_masked_port(p, lpn, sd->port, lpnmask, max_ports) {
 		cur = test_and_clear_bit(PORT_CONTROL_ENABLED, p->controls);
 		if (cur && test_bit(PORT_CONTROL_ROUTABLE, p->controls) &&
-		    list_is_singular(&p->unroute_link))
+		    list_empty(&p->unroute_link))
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
 		changed |= cur;
 	}
@@ -2348,7 +2348,7 @@ int disable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_port
 
 	for_each_masked_port(p, lpn, sd->port, lpnmask, max_ports) {
 		cur = test_and_clear_bit(PORT_CONTROL_ROUTABLE, p->controls);
-		if (cur && list_is_singular(&p->unroute_link))
+		if (cur && list_empty(&p->unroute_link))
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
 		changed |= cur;
 	}

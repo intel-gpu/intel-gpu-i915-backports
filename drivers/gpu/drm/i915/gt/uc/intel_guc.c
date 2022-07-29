@@ -10,10 +10,12 @@
 #include "gt/intel_gt_pm_irq.h"
 #include "gt/intel_gt_regs.h"
 #include "intel_guc.h"
-#include "intel_guc_slpc.h"
 #include "intel_guc_ads.h"
+#include "intel_guc_capture.h"
+#include "intel_guc_slpc.h"
 #include "intel_guc_submission.h"
 #include "i915_drv.h"
+#include "i915_irq.h"
 
 #ifdef CPTCFG_DRM_I915_DEBUG_GUC
 #define GUC_DEBUG(_guc, _fmt, ...) \
@@ -365,7 +367,7 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	/* Wa_16011759253:dg2_g10:a0 */
 	/* Wa_22011383443:pvc - Also needed for PVC BD A0 */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_B0) ||
-	    (IS_PVC_BD_REVID(gt->i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)))
+	    (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)))
 		flags |= GUC_WA_GAM_CREDITS;
 
 	/* Wa_14014475959:dg2 */
@@ -410,11 +412,13 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	 * Wa_1509372804: PVC, Apply WA in render force wake step by
 	 * GUC FW before any work submission to CCS engines
 	 */
-	if (IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_B0, PVC_CT_XT_REVID_C0) &&
+	if (IS_PVC_CT_STEP(gt->i915, STEP_B0, STEP_C0) &&
 	    gt->i915->params.enable_rc6)
 		flags |= GUC_WA_RENDER_RST_RC6_EXIT;
 
-	if (IS_PVC_BD_REVID(gt->i915, PVC_BD_REVID_B0, STEP_FOREVER))
+	/* Wa_15010861061:pvc || Wa_18020744125 */
+	if (IS_PVC_BD_STEP(gt->i915, STEP_B0, STEP_FOREVER) ||
+	    !RCS_MASK(gt))
 		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
 
 	return flags;
@@ -554,7 +558,7 @@ static int guc_g2g_create(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 	int err;
 
-	BUILD_BUG_ON(I915_MAX_TILES * (I915_MAX_TILES - 1) *
+	BUILD_BUG_ON(I915_MAX_GT * (I915_MAX_GT - 1) *
 		     G2G_DESC_SIZE > G2G_DESC_AREA_SIZE);
 
 	if (!gt->i915->remote_tiles)
@@ -686,9 +690,14 @@ static int __guc_init(struct intel_guc *guc)
 	if (ret)
 		goto err_fw;
 
-	ret = intel_guc_ads_create(guc);
+	ret = intel_guc_capture_init(guc);
 	if (ret)
 		goto err_log;
+
+	ret = intel_guc_ads_create(guc);
+	if (ret)
+		goto err_capture;
+
 	GEM_BUG_ON(!guc->ads_vma);
 
 	ret = intel_guc_ct_init(&guc->ct);
@@ -734,6 +743,8 @@ err_ct:
 	intel_guc_ct_fini(&guc->ct);
 err_ads:
 	intel_guc_ads_destroy(guc);
+err_capture:
+	intel_guc_capture_destroy(guc);
 err_log:
 	intel_guc_log_destroy(&guc->log);
 err_fw:
@@ -763,6 +774,7 @@ static void __guc_fini(struct intel_guc *guc)
 	intel_guc_ct_fini(&guc->ct);
 
 	intel_guc_ads_destroy(guc);
+	intel_guc_capture_destroy(guc);
 	intel_guc_log_destroy(&guc->log);
 	intel_uc_fw_fini(&guc->fw);
 }
@@ -1024,6 +1036,9 @@ int intel_guc_suspend(struct intel_guc *guc)
 	};
 
 	if (!intel_guc_is_ready(guc))
+		return 0;
+
+	if (gt->i915->quiesce_gpu)
 		return 0;
 
 	/* Wa:16014207253 */
@@ -1563,35 +1578,6 @@ void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p)
 		intel_guc_submission_print_info(guc, p);
 		intel_guc_ads_print_policy_info(guc, p);
 		intel_guc_submission_print_context_info(guc, p);
-	}
-}
-
-void intel_guc_write_barrier(struct intel_guc *guc)
-{
-	struct intel_gt *gt = guc_to_gt(guc);
-
-	if (i915_gem_object_is_lmem(guc->ct.vma->obj)) {
-		/*
-		 * Ensure intel_uncore_write_fw can be used rather than
-		 * intel_uncore_write.
-		 */
-		GEM_BUG_ON(guc->send_regs.fw_domains);
-
-		/*
-		 * This register is used by the i915 and GuC for MMIO based
-		 * communication. Once we are in this code CTBs are the only
-		 * method the i915 uses to communicate with the GuC so it is
-		 * safe to write to this register (a value of 0 is NOP for MMIO
-		 * communication). If we ever start mixing CTBs and MMIOs a new
-		 * register will have to be chosen. This function is also used
-		 * to enforce ordering of a work queue item write and an update
-		 * to the process descriptor. When a work queue is being used,
-		 * CTBs are also the only mechanism of communication.
-		 */
-		intel_uncore_write_fw(gt->uncore, GEN11_SOFT_SCRATCH(0), 0);
-	} else {
-		/* wmb() sufficient for a barrier if in smem */
-		wmb();
 	}
 }
 

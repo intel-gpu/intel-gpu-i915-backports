@@ -56,8 +56,8 @@ static int __intel_gt_debugfs_reset_store(void *data, u64 val)
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(reset_fops, __intel_gt_debugfs_reset_show,
-			__intel_gt_debugfs_reset_store, "%llu\n");
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(reset_fops, __intel_gt_debugfs_reset_show,
+				__intel_gt_debugfs_reset_store, "%llu\n");
 
 static int steering_show(struct seq_file *m, void *data)
 {
@@ -93,7 +93,8 @@ static int fake_int_slow_set(void *data, u64 val)
 
 	return 0;
 }
-DEFINE_SIMPLE_ATTRIBUTE(fake_int_slow_fops, fake_int_slow_get, fake_int_slow_set, "%llu\n");
+
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(fake_int_slow_fops, fake_int_slow_get, fake_int_slow_set, "%llu\n");
 
 static int fake_int_fast_get(void *data, u64 *val)
 {
@@ -118,7 +119,8 @@ static int fake_int_fast_set(void *data, u64 val)
 
 	return 0;
 }
-DEFINE_SIMPLE_ATTRIBUTE(fake_int_fast_fops, fake_int_fast_get, fake_int_fast_set, "%llu\n");
+
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(fake_int_fast_fops, fake_int_fast_get, fake_int_fast_set, "%llu\n");
 
 static int debug_pages_show(struct seq_file *m, void *data)
 {
@@ -148,6 +150,102 @@ static int debug_pages_show(struct seq_file *m, void *data)
 	return 0;
 }
 DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(debug_pages);
+
+int i915_gt_debugfs_single_open(struct file *file, int (*show)(struct seq_file *, void *),
+				void *data)
+{
+	struct intel_gt *gt = data;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret;
+
+	ret = single_open(file, show, data);
+	if (!ret)
+		pvc_wa_disallow_rc6(i915);
+
+	return ret;
+}
+
+int i915_gt_debugfs_single_open_size(struct file *file, int (*show)(struct seq_file *, void *),
+				     void *data, size_t size)
+{
+	struct intel_gt *gt = data;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret;
+
+	ret = single_open_size(file, show, data, size);
+	if (!ret)
+		pvc_wa_disallow_rc6(i915);
+
+	return ret;
+}
+
+int i915_gt_debugfs_single_release(struct inode *inode, struct file *file)
+{
+	struct intel_gt *gt = inode->i_private;
+	struct drm_i915_private *i915 = gt->i915;
+
+	pvc_wa_allow_rc6(i915);
+	return single_release(inode, file);
+}
+
+int i915_gt_debugfs_raw_attr_open(struct inode *inode, struct file *file,
+				  int (*open)(struct inode*, struct file*))
+{
+	struct intel_gt *gt = inode->i_private;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret = 0;
+
+	pvc_wa_disallow_rc6(i915);
+	if (open)
+		ret = open(inode, file);
+
+	if (ret)
+		pvc_wa_allow_rc6(i915);
+
+	return ret;
+}
+
+int i915_gt_debugfs_raw_attr_close(struct inode *inode, struct file *file,
+				   int (*close)(struct inode*, struct file*))
+{
+	struct intel_gt *gt = inode->i_private;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret = 0;
+
+	if (close)
+		ret = close(inode, file);
+
+	pvc_wa_allow_rc6(i915);
+
+	return ret;
+}
+
+int i915_gt_debugfs_simple_attr_open(struct inode *inode, struct file *file,
+				     int (*get)(void *, u64 *), int (*set)(void *, u64),
+				     const char *fmt)
+{
+	struct intel_gt *gt = inode->i_private;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret;
+
+	ret = simple_attr_open(inode, file, get, set, fmt);
+	if (!ret)
+		pvc_wa_disallow_rc6(i915);
+
+	return ret;
+}
+
+int i915_gt_debugfs_simple_attr_release(struct inode *inode, struct file *file)
+{
+	struct intel_gt *gt = inode->i_private;
+	struct drm_i915_private *i915 = gt->i915;
+	int ret = 0;
+
+	ret = simple_attr_release(inode, file);
+	pvc_wa_allow_rc6(i915);
+
+	return ret;
+}
 
 static void gt_debugfs_register(struct intel_gt *gt, struct dentry *root)
 {

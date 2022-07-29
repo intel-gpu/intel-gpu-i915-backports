@@ -97,7 +97,7 @@ enum intel_platform {
  * it is fine for the same bit to be used on multiple parent platforms.
  */
 
-#define INTEL_SUBPLATFORM_BITS (3)
+#define INTEL_SUBPLATFORM_BITS (4)
 #define INTEL_SUBPLATFORM_MASK (BIT(INTEL_SUBPLATFORM_BITS) - 1)
 
 /* HSW/BDW/SKL/KBL/CFL */
@@ -114,12 +114,18 @@ enum intel_platform {
 #define INTEL_SUBPLATFORM_G10	0
 #define INTEL_SUBPLATFORM_G11	1
 #define INTEL_SUBPLATFORM_G12	2
+#define INTEL_SUBPLATFORM_ATSM	3
 
-/* ADL-S */
-#define INTEL_SUBPLATFORM_RPL_S	0
+/* ADL */
+#define INTEL_SUBPLATFORM_RPL	0
 
 /* ADL-P */
-#define INTEL_SUBPLATFORM_N    0
+/*
+ * As #define INTEL_SUBPLATFORM_RPL 0 will apply
+ * here too, SUBPLATFORM_N will have different
+ * bit set
+ */
+#define INTEL_SUBPLATFORM_N    1
 
 enum intel_ppgtt_type {
 	INTEL_PPGTT_NONE = I915_GEM_PPGTT_NONE,
@@ -142,8 +148,9 @@ enum intel_ppgtt_type {
 	func(has_coherent_ggtt); \
 	func(gpu_reset_clobbers_display); \
 	func(has_reset_engine); \
-	func(has_eu_stall_sampling); \
+	func(has_3d_pipeline); \
 	func(has_4tile); \
+	func(has_eu_stall_sampling); \
 	func(has_flat_ccs); \
 	func(has_full_ps64); \
 	func(has_global_mocs); \
@@ -155,9 +162,11 @@ enum intel_ppgtt_type {
 	func(has_heci_gscfi); \
 	func(has_iaf); \
 	func(has_iov_memirq); \
+	func(has_l3_ccs_read); \
 	func(has_l3_dpf); \
 	func(has_link_copy_engines); \
 	func(has_llc); \
+	func(has_lmem_sr); \
 	func(has_lmtt_lvl2); \
 	func(has_logical_ring_contexts); \
 	func(has_logical_ring_elsq); \
@@ -189,7 +198,6 @@ enum intel_ppgtt_type {
 	func(has_um_queues); \
 	func(unfenced_needs_alignment); \
 	func(hws_needs_physical); \
-	func(lacks_3d_pipeline); \
 	func(oam_uses_vdbox0_channel);
 
 #define DEV_INFO_DISPLAY_FOR_EACH_FLAG(func) \

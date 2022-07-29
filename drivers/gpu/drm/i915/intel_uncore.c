@@ -187,7 +187,7 @@ fw_domain_wait_ack_with_fallback(const struct intel_uncore_forcewake_domain *d,
 	unsigned int pass;
 	bool ack_detected;
 
-	if (i915_is_pci_faulted(d->uncore->i915))
+	if (d->uncore->i915->quiesce_gpu || i915_is_pci_faulted(d->uncore->i915))
 		return 0;
 
 	/*
@@ -278,6 +278,9 @@ fw_domains_get_normal(struct intel_uncore *uncore, enum forcewake_domains fw_dom
 
 	GEM_BUG_ON(fw_domains & ~uncore->fw_domains);
 
+	if (uncore->gt->i915->quiesce_gpu)
+		return;
+
 	for_each_fw_domain_masked(d, fw_domains, uncore, tmp) {
 		fw_domain_wait_ack_clear(d);
 		fw_domain_get(d);
@@ -297,6 +300,9 @@ fw_domains_get_with_fallback(struct intel_uncore *uncore,
 	unsigned int tmp;
 
 	GEM_BUG_ON(fw_domains & ~uncore->fw_domains);
+
+	if (uncore->gt->i915->quiesce_gpu)
+		return;
 
 	for_each_fw_domain_masked(d, fw_domains, uncore, tmp) {
 		fw_domain_wait_ack_clear_fallback(d);
@@ -434,6 +440,9 @@ intel_uncore_forcewake_reset(struct intel_uncore *uncore)
 	struct intel_uncore_forcewake_domain *domain;
 	int retry_count = 100;
 	enum forcewake_domains fw, active_domains;
+
+	if (uncore->i915->quiesce_gpu)
+		return 0;
 
 	iosf_mbi_assert_punit_acquired();
 
@@ -742,7 +751,8 @@ void intel_uncore_forcewake_get__locked(struct intel_uncore *uncore,
 }
 
 static void __intel_uncore_forcewake_put(struct intel_uncore *uncore,
-					 enum forcewake_domains fw_domains)
+					 enum forcewake_domains fw_domains,
+					 bool delayed)
 {
 	struct intel_uncore_forcewake_domain *domain;
 	unsigned int tmp;
@@ -757,7 +767,11 @@ static void __intel_uncore_forcewake_put(struct intel_uncore *uncore,
 			continue;
 		}
 
-		fw_domains_put(uncore, domain->mask);
+		if (delayed &&
+		    !(domain->uncore->fw_domains_timer & domain->mask))
+			fw_domain_arm_timer(domain);
+		else
+			fw_domains_put(uncore, domain->mask);
 	}
 }
 
@@ -778,7 +792,20 @@ void intel_uncore_forcewake_put(struct intel_uncore *uncore,
 		return;
 
 	spin_lock_irqsave(&uncore->lock, irqflags);
-	__intel_uncore_forcewake_put(uncore, fw_domains);
+	__intel_uncore_forcewake_put(uncore, fw_domains, false);
+	spin_unlock_irqrestore(&uncore->lock, irqflags);
+}
+
+void intel_uncore_forcewake_put_delayed(struct intel_uncore *uncore,
+					enum forcewake_domains fw_domains)
+{
+	unsigned long irqflags;
+
+	if (!uncore->fw_get_funcs)
+		return;
+
+	spin_lock_irqsave(&uncore->lock, irqflags);
+	__intel_uncore_forcewake_put(uncore, fw_domains, true);
 	spin_unlock_irqrestore(&uncore->lock, irqflags);
 }
 
@@ -821,7 +848,7 @@ void intel_uncore_forcewake_put__locked(struct intel_uncore *uncore,
 	if (!uncore->fw_get_funcs)
 		return;
 
-	__intel_uncore_forcewake_put(uncore, fw_domains);
+	__intel_uncore_forcewake_put(uncore, fw_domains, false);
 }
 
 void assert_forcewakes_inactive(struct intel_uncore *uncore)
@@ -946,36 +973,32 @@ find_fw_domain(struct intel_uncore *uncore, u32 offset)
 	return domains;
 }
 
-#define GEN_FW_RANGE(s, e, d) \
-	{ .start = (s), .end = (e), .domains = (d) }
+/*
+ * Shadowed register tables describe special register ranges that i915 is
+ * allowed to write to without acquiring forcewake.  If these registers' power
+ * wells are down, the hardware will save values written by i915 to a shadow
+ * copy and automatically transfer them into the real register the next time
+ * the power well is woken up.  Shadowing only applies to writes; forcewake
+ * must still be acquired when reading from registers in these ranges.
+ *
+ * The documentation for shadowed registers is somewhat spotty on older
+ * platforms.  However missing registers from these lists is non-fatal; it just
+ * means we'll wake up the hardware for some register accesses where we didn't
+ * really need to.
+ *
+ * The ranges listed in these tables must be sorted by offset.
+ *
+ * When adding new tables here, please also add them to
+ * intel_shadow_table_check() in selftests/intel_uncore.c so that they will be
+ * scanned for obvious mistakes or typos by the selftests.
+ */
 
-/* *Must* be sorted by offset ranges! See intel_fw_table_check(). */
-static const struct intel_forcewake_range __vlv_fw_ranges[] = {
-	GEN_FW_RANGE(0x2000, 0x3fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x5000, 0x7fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0xb000, 0x11fff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x12000, 0x13fff, FORCEWAKE_MEDIA),
-	GEN_FW_RANGE(0x22000, 0x23fff, FORCEWAKE_MEDIA),
-	GEN_FW_RANGE(0x2e000, 0x2ffff, FORCEWAKE_RENDER),
-	GEN_FW_RANGE(0x30000, 0x3ffff, FORCEWAKE_MEDIA),
-};
-
-#define __fwtable_reg_read_fw_domains(uncore, offset) \
-({ \
-	enum forcewake_domains __fwd = 0; \
-	if (NEEDS_FORCE_WAKE((offset))) \
-		__fwd = find_fw_domain(uncore, offset); \
-	__fwd; \
-})
-
-/* *Must* be sorted by offset! See intel_shadow_table_check(). */
 static const struct i915_range gen8_shadowed_regs[] = {
 	{ .start =  0x2030, .end =  0x2030 },
 	{ .start =  0xA008, .end =  0xA00C },
 	{ .start = 0x12030, .end = 0x12030 },
 	{ .start = 0x1a030, .end = 0x1a030 },
 	{ .start = 0x22030, .end = 0x22030 },
-	/* TODO: Other registers are not yet used */
 };
 
 static const struct i915_range gen11_shadowed_regs[] = {
@@ -1154,11 +1177,70 @@ gen6_reg_write_fw_domains(struct intel_uncore *uncore, i915_reg_t reg)
 	return FORCEWAKE_RENDER;
 }
 
+#define __fwtable_reg_read_fw_domains(uncore, offset) \
+({ \
+	enum forcewake_domains __fwd = 0; \
+	if (NEEDS_FORCE_WAKE((offset))) \
+		__fwd = find_fw_domain(uncore, offset); \
+	__fwd; \
+})
+
+#define __fwtable_reg_write_fw_domains(uncore, offset) \
+({ \
+	enum forcewake_domains __fwd = 0; \
+	const u32 __offset = (offset); \
+	if (NEEDS_FORCE_WAKE((__offset)) && !is_shadowed(uncore, __offset)) \
+		__fwd = find_fw_domain(uncore, __offset); \
+	__fwd; \
+})
+
+#define GEN_FW_RANGE(s, e, d) \
+	{ .start = (s), .end = (e), .domains = (d) }
+
+/*
+ * All platforms' forcewake tables below must be sorted by offset ranges.
+ * Furthermore, new forcewake tables added should be "watertight" and have
+ * no gaps between ranges.
+ *
+ * When there are multiple consecutive ranges listed in the bspec with
+ * the same forcewake domain, it is customary to combine them into a single
+ * row in the tables below to keep the tables small and lookups fast.
+ * Likewise, reserved/unused ranges may be combined with the preceding and/or
+ * following ranges since the driver will never be making MMIO accesses in
+ * those ranges.
+ *
+ * For example, if the bspec were to list:
+ *
+ *    ...
+ *    0x1000 - 0x1fff:  GT
+ *    0x2000 - 0x2cff:  GT
+ *    0x2d00 - 0x2fff:  unused/reserved
+ *    0x3000 - 0xffff:  GT
+ *    ...
+ *
+ * these could all be represented by a single line in the code:
+ *
+ *   GEN_FW_RANGE(0x1000, 0xffff, FORCEWAKE_GT)
+ *
+ * When adding new forcewake tables here, please also add them to
+ * intel_uncore_mock_selftests in selftests/intel_uncore.c so that they will be
+ * scanned for obvious mistakes or typos by the selftests.
+ */
+
 static const struct intel_forcewake_range __gen6_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0x3ffff, FORCEWAKE_RENDER),
 };
 
-/* *Must* be sorted by offset ranges! See intel_fw_table_check(). */
+static const struct intel_forcewake_range __vlv_fw_ranges[] = {
+	GEN_FW_RANGE(0x2000, 0x3fff, FORCEWAKE_RENDER),
+	GEN_FW_RANGE(0x5000, 0x7fff, FORCEWAKE_RENDER),
+	GEN_FW_RANGE(0xb000, 0x11fff, FORCEWAKE_RENDER),
+	GEN_FW_RANGE(0x12000, 0x13fff, FORCEWAKE_MEDIA),
+	GEN_FW_RANGE(0x22000, 0x23fff, FORCEWAKE_MEDIA),
+	GEN_FW_RANGE(0x2e000, 0x2ffff, FORCEWAKE_RENDER),
+	GEN_FW_RANGE(0x30000, 0x3ffff, FORCEWAKE_MEDIA),
+};
+
 static const struct intel_forcewake_range __chv_fw_ranges[] = {
 	GEN_FW_RANGE(0x2000, 0x3fff, FORCEWAKE_RENDER),
 	GEN_FW_RANGE(0x4000, 0x4fff, FORCEWAKE_RENDER | FORCEWAKE_MEDIA),
@@ -1178,16 +1260,6 @@ static const struct intel_forcewake_range __chv_fw_ranges[] = {
 	GEN_FW_RANGE(0x30000, 0x37fff, FORCEWAKE_MEDIA),
 };
 
-#define __fwtable_reg_write_fw_domains(uncore, offset) \
-({ \
-	enum forcewake_domains __fwd = 0; \
-	const u32 __offset = (offset); \
-	if (NEEDS_FORCE_WAKE((__offset)) && !is_shadowed(uncore, __offset)) \
-		__fwd = find_fw_domain(uncore, __offset); \
-	__fwd; \
-})
-
-/* *Must* be sorted by offset ranges! See intel_fw_table_check(). */
 static const struct intel_forcewake_range __gen9_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0xaff, FORCEWAKE_GT),
 	GEN_FW_RANGE(0xb00, 0x1fff, 0), /* uncore range */
@@ -1223,7 +1295,6 @@ static const struct intel_forcewake_range __gen9_fw_ranges[] = {
 	GEN_FW_RANGE(0x30000, 0x3ffff, FORCEWAKE_MEDIA),
 };
 
-/* *Must* be sorted by offset ranges! See intel_fw_table_check(). */
 static const struct intel_forcewake_range __gen11_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0x1fff, 0), /* uncore range */
 	GEN_FW_RANGE(0x2000, 0x26ff, FORCEWAKE_RENDER),
@@ -1262,14 +1333,6 @@ static const struct intel_forcewake_range __gen11_fw_ranges[] = {
 	GEN_FW_RANGE(0x1d4000, 0x1dbfff, 0)
 };
 
-/*
- * *Must* be sorted by offset ranges! See intel_fw_table_check().
- *
- * Note that the spec lists several reserved/unused ranges that don't
- * actually contain any registers.  In the table below we'll combine those
- * reserved ranges with either the preceding or following range to keep the
- * table small and lookups fast.
- */
 static const struct intel_forcewake_range __gen12_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0x1fff, 0), /*
 		0x0   -  0xaff: reserved
@@ -1374,8 +1437,6 @@ static const struct intel_forcewake_range __gen12_fw_ranges[] = {
 /*
  * Graphics IP version 12.55 brings a slight change to the 0xd800 range,
  * switching it from the GT domain to the render domain.
- *
- * *Must* be sorted by offset ranges! See intel_fw_table_check().
  */
 #define XEHP_FWRANGES(FW_RANGE_D800)					\
 	GEN_FW_RANGE(0x0, 0x1fff, 0), /*					\
@@ -1537,14 +1598,6 @@ static const struct intel_forcewake_range __dg2_fw_ranges[] = {
 	XEHP_FWRANGES(FORCEWAKE_RENDER)
 };
 
-/*
- * *Must* be sorted by offset ranges! See intel_fw_table_check().
- *
- * Note that the spec lists several reserved/unused ranges that don't actually
- * contain any registers.  In the table below we'll combine those reserved
- * ranges with either the preceding or following range to keep the table small
- * and lookups fast.
- */
 static const struct intel_forcewake_range __pvc_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0xaff, 0),
 	GEN_FW_RANGE(0xb00, 0xbff, FORCEWAKE_GT),
@@ -1654,16 +1707,27 @@ ilk_dummy_write(struct intel_uncore *uncore)
 static void
 __unclaimed_reg_debug(struct intel_uncore *uncore,
 		      const i915_reg_t reg,
-		      const bool read,
-		      const bool before)
+		      const bool read)
 {
 	if (drm_WARN(&uncore->i915->drm,
-		     check_for_unclaimed_mmio(uncore) && !before,
+		     check_for_unclaimed_mmio(uncore),
 		     "Unclaimed %s register 0x%x\n",
 		     read ? "read from" : "write to",
 		     i915_mmio_reg_offset(reg)))
 		/* Only report the first N failures */
 		uncore->i915->params.mmio_debug--;
+}
+
+static void
+__unclaimed_previous_reg_debug(struct intel_uncore *uncore,
+			       const i915_reg_t reg,
+			       const bool read)
+{
+	if (check_for_unclaimed_mmio(uncore))
+		drm_dbg(&uncore->i915->drm,
+			"Unclaimed access detected before %s register 0x%x\n",
+			read ? "read from" : "write to",
+			i915_mmio_reg_offset(reg));
 }
 
 static inline void
@@ -1678,13 +1742,13 @@ unclaimed_reg_debug(struct intel_uncore *uncore,
 	/* interrupts are disabled and re-enabled around uncore->lock usage */
 	lockdep_assert_held(&uncore->lock);
 
-	if (before)
+	if (before) {
 		spin_lock(&uncore->debug->lock);
-
-	__unclaimed_reg_debug(uncore, reg, read, before);
-
-	if (!before)
+		__unclaimed_previous_reg_debug(uncore, reg, read);
+	} else {
+		__unclaimed_reg_debug(uncore, reg, read);
 		spin_unlock(&uncore->debug->lock);
+	}
 }
 
 #define __vgpu_read(x) \
@@ -2057,7 +2121,7 @@ static void fw_domain_fini(struct intel_uncore *uncore,
 		return;
 
 	uncore->fw_domains &= ~BIT(domain_id);
-	drm_WARN_ON(&uncore->i915->drm, d->wake_count);
+	drm_WARN_ON(&uncore->i915->drm, (d->wake_count && !uncore->i915->quiesce_gpu));
 	drm_WARN_ON(&uncore->i915->drm, hrtimer_cancel(&d->timer));
 	kfree(d);
 }
@@ -2581,7 +2645,7 @@ int __intel_wait_for_register_fw(struct intel_uncore *uncore,
 	GEM_BUG_ON(fast_timeout_us > 20000);
 	GEM_BUG_ON(!fast_timeout_us && !slow_timeout_ms);
 
-	if (i915_is_pci_faulted(uncore->i915))
+	if (uncore->i915->quiesce_gpu || i915_is_pci_faulted(uncore->i915))
 		return 0;
 
 	ret = -ETIMEDOUT;

@@ -1,0 +1,6 @@
+INTERNAL ADJUSTMENTS (done)
+
+General adjustements to i915 to be used internally. Examples:
+debug kernel configuration, URL changes, preliminary UAPI infra, etc.
+
+T:      drm/i915
