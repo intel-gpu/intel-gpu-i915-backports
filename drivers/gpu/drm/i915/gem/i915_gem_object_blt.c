@@ -80,6 +80,8 @@ static u32 *_i915_ctrl_surf_copy_blt(u32 *cmd, u64 src_addr, u64 dst_addr,
 				     int src_mocs, int dst_mocs,
 				     u16 num_ccs_blocks)
 {
+	u32 src_mocs_field = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, src_mocs);
+	u32 dst_mocs_field = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, dst_mocs);
 	int i = num_ccs_blocks;
 
 	/*
@@ -110,11 +112,9 @@ static u32 *_i915_ctrl_surf_copy_blt(u32 *cmd, u64 src_addr, u64 dst_addr,
 			  (dst_mem_access << DST_ACCESS_TYPE_SHIFT) |
 			  (((i - 1) & 1023) << CCS_SIZE_SHIFT));
 		*cmd++ = lower_32_bits(src_addr);
-		*cmd++ = ((upper_32_bits(src_addr) & 0xFFFF) |
-			  (src_mocs << XY_CTRL_SURF_MOCS_SHIFT));
+		*cmd++ = ((upper_32_bits(src_addr) & 0xFFFF) | src_mocs_field);
 		*cmd++ = lower_32_bits(dst_addr);
-		*cmd++ = ((upper_32_bits(dst_addr) & 0xFFFF) |
-			  (dst_mocs << XY_CTRL_SURF_MOCS_SHIFT));
+		*cmd++ = ((upper_32_bits(dst_addr) & 0xFFFF) | dst_mocs_field);
 
 		src_addr += SZ_64M;
 		dst_addr += SZ_64M;
@@ -142,8 +142,6 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	u32 *cmd;
 	u16 num_ccs_blks = (ccs_size + NUM_CCS_BYTES_PER_BLOCK - 1) >> 8;
 	int err;
-	u8 src_mocs = gt->mocs.uc_index << 1;
-	u8 dst_mocs = gt->mocs.uc_index << 1;
 
 	GEM_BUG_ON(HAS_LINK_COPY_ENGINES(i915) && value > 255);
 	GEM_BUG_ON(intel_engine_is_virtual(ce->engine));
@@ -224,6 +222,9 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 		GEM_BUG_ON(size >> PAGE_SHIFT > S16_MAX);
 
 		if (HAS_LINK_COPY_ENGINES(i915)) {
+			u32 mocs = FIELD_PREP(MS_MOCS_INDEX_MASK,
+					      gt->mocs.uc_index);
+
 			*cmd++ = PVC_MEM_SET_CMD | stateless_comp | (7 - 2);
 			*cmd++ = size - 1;
 			*cmd++ = 0;
@@ -231,8 +232,10 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 			*cmd++ = lower_32_bits(offset);
 			*cmd++ = upper_32_bits(offset);
 			/* Value is Bit 31:24 */
-			*cmd++ = value << 24 | dst_mocs;
+			*cmd++ = value << 24 | mocs;
 		} else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
+			u32 mocs = FIELD_PREP(XY_FCB_MOCS_INDEX_MASK,
+					      gt->mocs.uc_index);
 			u8 mem_type;
 
 			/* Wa to set the target memory region as system */
@@ -243,7 +246,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 					MEM_TYPE_LOCAL : MEM_TYPE_SYS;
 
 			*cmd++ = XY_FAST_COLOR_BLT | BLT_COLOR_DEPTH_32 | (16 - 2);
-			*cmd++ = (dst_mocs << BLT_MOCS_SHIFT) | (PAGE_SIZE - 1);
+			*cmd++ = mocs | (PAGE_SIZE - 1);
 			*cmd++ = 0;
 			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
 			*cmd++ = lower_32_bits(offset);
@@ -320,7 +323,8 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 					       i915_vma_offset(vma),
 					       i915_vma_offset(vma),
 					       DIRECT_ACCESS, INDIRECT_ACCESS,
-					       src_mocs, dst_mocs,
+					       gt->mocs.uc_index,
+					       gt->mocs.uc_index,
 					       num_ccs_blks);
 		cmd = i915_flush_dw(cmd, vma, MI_FLUSH_LLC | MI_FLUSH_CCS);
 	}
@@ -498,7 +502,6 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 	u32 block_size;
 	u32 size, *cmd;
 	int err;
-	u8 mocs = gt->mocs.uc_index << 1;
 
 	GEM_BUG_ON(src->size > dst->size);
 
@@ -562,6 +565,7 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 
 		if (IS_XEHPSDV(i915)) {
 			u8 src_mem_type, dst_mem_type;
+			u32 mocs = FIELD_PREP(XY_BCB_MOCS_INDEX_MASK, gt->mocs.uc_index);
 
 			/* Wa_14010828422:xehpsdv set target memory region to smem */
 			if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0)) {
@@ -575,7 +579,7 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 			}
 
 			*cmd++ = XY_BLOCK_COPY_BLT_CMD | (22 - 2);
-			*cmd++ = mocs << BLT_MOCS_SHIFT | (size - 1);
+			*cmd++ = mocs | (size - 1);
 			*cmd++ = 0;
 			/* BG3 */
 			*cmd++ = (1 << 16) | (size);
@@ -585,7 +589,7 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 			*cmd++ = dst_mem_type << DEST_MEM_TYPE_SHIFT;
 			*cmd++ = 0;
 			/* BG8 */
-			*cmd++ = mocs << BLT_MOCS_SHIFT | (size - 1);
+			*cmd++ = mocs | (size - 1);
 			*cmd++ = lower_32_bits(src_offset);
 			*cmd++ = upper_32_bits(src_offset);
 			 /* BG 11 */
@@ -597,6 +601,10 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 			*cmd++ = 0;
 			*cmd++ = 0;
 		} else if (HAS_LINK_COPY_ENGINES(i915)) {
+			u32 src_mocs = FIELD_PREP(MC_SRC_MOCS_INDEX_MASK,
+						  gt->mocs.uc_index);
+			u32 dst_mocs = FIELD_PREP(MC_DST_MOCS_INDEX_MASK,
+						  gt->mocs.uc_index);
 			u32 comp_bits = 0;
 
 			/* for stateless compression we mark compressible if LMEM */
@@ -616,8 +624,7 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 			*cmd++ = upper_32_bits(src_offset);
 			*cmd++ = lower_32_bits(dst_offset);
 			*cmd++ = upper_32_bits(dst_offset);
-			*cmd++ = mocs << PVC_MEM_COPY_SRC_MOCS_SHIFT |
-				 mocs << PVC_MEM_COPY_DST_MOCS_SHIFT;
+			*cmd++ = src_mocs | dst_mocs;
 		} else if (GRAPHICS_VER(i915) >= 9 &&
 			   !wa_1209644611_applies(i915, size)) {
 			*cmd++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
@@ -695,8 +702,8 @@ prepare_compressed_copy_cmd_buf(struct intel_context *ce,
 	int err;
 	u8 src_mem_type, dst_mem_type;
 	u32 src_compression, dst_compression;
-	u8 src_mocs = gt->mocs.uc_index << 1;
-	u8 dst_mocs = gt->mocs.uc_index << 1;
+	u32 src_mocs = FIELD_PREP(XY_BCB_MOCS_INDEX_MASK, gt->mocs.uc_index);
+	u32 dst_mocs = FIELD_PREP(XY_BCB_MOCS_INDEX_MASK, gt->mocs.uc_index);
 	bool dst_is_lmem = i915_gem_object_is_lmem(dst->obj);
 
 	count = (src->size + SZ_64K - 1)/SZ_64K;
@@ -750,8 +757,8 @@ prepare_compressed_copy_cmd_buf(struct intel_context *ce,
 	do {
 		int block_size = min_t(u64, rem, SZ_64K);
 		*cmd++ = XY_BLOCK_COPY_BLT_CMD | 0x14;
-		*cmd++ = (dst_mocs << BLT_MOCS_SHIFT) | dst_compression
-		    | TILE_4_FORMAT | TILE_4_WIDTH_DWORD;
+		*cmd++ = dst_mocs | dst_compression | TILE_4_FORMAT
+				| TILE_4_WIDTH_DWORD;
 		*cmd++ = 0;
 		/* BG3 */
 		*cmd++ = TILE_4_WIDTH | (block_size >> 7) << 16;
@@ -761,8 +768,7 @@ prepare_compressed_copy_cmd_buf(struct intel_context *ce,
 		*cmd++ = dst_mem_type << DEST_MEM_TYPE_SHIFT;
 		*cmd++ = 0;
 		/* BG8 */
-		*cmd++ = (src_mocs << BLT_MOCS_SHIFT) | src_compression
-		    | TILE_4_WIDTH_DWORD | TILE_4_FORMAT;
+		*cmd++ = src_mocs | src_compression | TILE_4_WIDTH_DWORD | TILE_4_FORMAT;
 		*cmd++ = lower_32_bits(src_offset);
 		*cmd++ = upper_32_bits(src_offset);
 		/* BG 11 */

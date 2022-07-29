@@ -674,6 +674,16 @@ static inline void execlists_schedule_out(struct i915_request *rq)
 	i915_request_put(rq);
 }
 
+static u32 map_i915_prio_to_lrc_desc_prio(int prio)
+{
+	if (prio > I915_PRIORITY_NORMAL)
+		return GEN12_CTX_PRIORITY_HIGH;
+	else if (prio < I915_PRIORITY_NORMAL)
+		return GEN12_CTX_PRIORITY_LOW;
+	else
+		return GEN12_CTX_PRIORITY_NORMAL;
+}
+
 static u64 execlists_update_context(struct i915_request *rq)
 {
 	struct intel_context *ce = rq->context;
@@ -682,7 +692,7 @@ static u64 execlists_update_context(struct i915_request *rq)
 
 	desc = ce->lrc.desc;
 	if (rq->engine->flags & I915_ENGINE_HAS_EU_PRIORITY)
-		desc |= lrc_desc_priority(rq_prio(rq));
+		desc |= map_i915_prio_to_lrc_desc_prio(rq_prio(rq));
 
 	/*
 	 * WaIdleLiteRestore:bdw,skl
@@ -1663,12 +1673,6 @@ cancel_port_requests(struct intel_engine_execlists * const execlists,
 	return inactive;
 }
 
-static void invalidate_csb_entries(const u64 *first, const u64 *last)
-{
-	clflush((void *)first);
-	clflush((void *)last);
-}
-
 /*
  * Starting with Gen12, the status has a new format:
  *
@@ -2016,7 +2020,7 @@ process_csb(struct intel_engine_cs *engine, struct i915_request **inactive)
 	 * the wash as hardware, working or not, will need to do the
 	 * invalidation before.
 	 */
-	invalidate_csb_entries(&buf[0], &buf[num_entries - 1]);
+	drm_clflush_virt_range(&buf[0], num_entries * sizeof(buf[0]));
 
 	/*
 	 * We assume that any event reflects a change in context flow
@@ -2264,11 +2268,11 @@ static struct execlists_capture *capture_regs(struct intel_engine_cs *engine)
 	if (!cap->error)
 		goto err_cap;
 
-	cap->error->gt = intel_gt_coredump_alloc(engine->gt, gfp);
+	cap->error->gt = intel_gt_coredump_alloc(engine->gt, gfp, CORE_DUMP_FLAG_NONE);
 	if (!cap->error->gt)
 		goto err_gpu;
 
-	cap->error->gt->engine = intel_engine_coredump_alloc(engine, gfp);
+	cap->error->gt->engine = intel_engine_coredump_alloc(engine, gfp, CORE_DUMP_FLAG_NONE);
 	if (!cap->error->gt->engine)
 		goto err_gt;
 
@@ -2626,7 +2630,7 @@ __execlists_context_pre_pin(struct intel_context *ce,
 	if (!__test_and_set_bit(CONTEXT_INIT_BIT, &ce->flags)) {
 		lrc_init_state(ce, engine, *vaddr);
 
-		 __i915_gem_object_flush_map(ce->state->obj, 0, engine->context_size);
+		__i915_gem_object_flush_map(ce->state->obj, 0, engine->context_size);
 	}
 
 	return 0;
@@ -2844,8 +2848,9 @@ static void reset_csb_pointers(struct intel_engine_cs *engine)
 
 	/* Check that the GPU does indeed update the CSB entries! */
 	memset(execlists->csb_status, -1, (reset_value + 1) * sizeof(u64));
-	invalidate_csb_entries(&execlists->csb_status[0],
-			       &execlists->csb_status[reset_value]);
+	drm_clflush_virt_range(execlists->csb_status,
+			       execlists->csb_size *
+			       sizeof(execlists->csb_status));
 
 	/* Once more for luck and our trusty paranoia */
 	ENGINE_WRITE(engine, RING_CONTEXT_STATUS_PTR,
@@ -2889,7 +2894,9 @@ static void execlists_sanitize(struct intel_engine_cs *engine)
 	sanitize_hwsp(engine);
 
 	/* And scrub the dirty cachelines for the HWSP */
-	clflush_cache_range(engine->status_page.addr, PAGE_SIZE);
+	drm_clflush_virt_range(engine->status_page.addr, PAGE_SIZE);
+
+	intel_engine_reset_pinned_contexts(engine);
 }
 
 static void enable_error_interrupt(struct intel_engine_cs *engine)
@@ -3015,9 +3022,8 @@ reset_csb(struct intel_engine_cs *engine, struct i915_request **inactive)
 {
 	struct intel_engine_execlists * const execlists = &engine->execlists;
 
-	mb(); /* paranoia: read the CSB pointers from after the reset */
-	clflush(execlists->csb_write);
-	mb();
+	drm_clflush_virt_range(execlists->csb_write,
+			       sizeof(execlists->csb_write[0]));
 
 	inactive = process_csb(engine, inactive); /* drain preemption events */
 
@@ -3473,10 +3479,17 @@ logical_ring_default_vfuncs(struct intel_engine_cs *engine)
 		}
 	}
 
-	if (intel_engine_has_preemption(engine))
-		engine->emit_bb_start = gen8_emit_bb_start;
-	else
-		engine->emit_bb_start = gen8_emit_bb_start_noarb;
+	if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 50)) {
+		if (intel_engine_has_preemption(engine))
+			engine->emit_bb_start = gen125_emit_bb_start;
+		else
+			engine->emit_bb_start = gen125_emit_bb_start_noarb;
+	} else {
+		if (intel_engine_has_preemption(engine))
+			engine->emit_bb_start = gen8_emit_bb_start;
+		else
+			engine->emit_bb_start = gen8_emit_bb_start_noarb;
+	}
 
 	engine->busyness = execlists_engine_busyness;
 }
@@ -3558,7 +3571,7 @@ int intel_execlists_submission_setup(struct intel_engine_cs *engine)
 		(u64 *)&engine->status_page.addr[I915_HWS_CSB_BUF0_INDEX];
 
 	execlists->csb_write =
-		&engine->status_page.addr[intel_hws_csb_write_index(i915)];
+		&engine->status_page.addr[INTEL_HWS_CSB_WRITE_INDEX(i915)];
 
 	if (GRAPHICS_VER(i915) < 11)
 		execlists->csb_size = GEN8_CSB_ENTRIES;

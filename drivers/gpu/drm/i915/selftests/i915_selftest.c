@@ -24,6 +24,7 @@
 #include <linux/random.h>
 
 #include "gt/intel_gt_pm.h"
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_selftest.h"
 
@@ -187,7 +188,7 @@ int i915_mock_selftests(void)
 	err = run_selftests(mock, NULL);
 	if (err) {
 		i915_selftest.mock = err;
-		return err;
+		return 1;
 	}
 
 	if (i915_selftest.mock < 0) {
@@ -430,7 +431,7 @@ module_param_named(st_timeout, i915_selftest.timeout_ms, uint, 0400);
 module_param_named(st_filter, i915_selftest.filter, charp, 0400);
 
 module_param_named_unsafe(mock_selftests, i915_selftest.mock, int, 0400);
-MODULE_PARM_DESC(mock_selftests, "Run selftests before loading, using mock hardware (0:disabled [default], 1:run tests then load driver, -1:run tests then exit module)");
+MODULE_PARM_DESC(mock_selftests, "Run selftests before loading, using mock hardware (0:disabled [default], 1:run tests then load driver, -1:run tests then leave dummy module)");
 
 module_param_named_unsafe(live_selftests, i915_selftest.live, int, 0400);
 MODULE_PARM_DESC(live_selftests, "Run selftests after driver initialisation on the live system (0:disabled [default], 1:run tests then continue, -1:run tests then exit module)");

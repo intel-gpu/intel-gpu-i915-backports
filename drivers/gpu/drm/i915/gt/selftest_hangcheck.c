@@ -6,6 +6,7 @@
 #include <linux/kthread.h>
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 
 #include "i915_gem_evict.h"
 #include "intel_gt.h"
@@ -986,10 +987,10 @@ static int __igt_reset_engines(struct intel_gt *gt,
 {
 	struct i915_gpu_error *global = &gt->i915->gpu_error;
 	struct intel_engine_cs *engine, *other;
+	struct active_engine *threads;
 	enum intel_engine_id id, tmp;
 	struct hang h;
 	int err = 0;
-	struct active_engine *threads;
 
 	/* Check that issuing a reset on one engine does not interfere
 	 * with any other engine.
@@ -1007,7 +1008,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 			h.ctx->sched.priority = 1024;
 	}
 
-	threads = kzalloc(sizeof(*threads) * I915_NUM_ENGINES, GFP_KERNEL);
+	threads = kmalloc_array(I915_NUM_ENGINES, sizeof(*threads), GFP_KERNEL);
 	if (!threads)
 		return -ENOMEM;
 

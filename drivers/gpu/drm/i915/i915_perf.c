@@ -198,6 +198,7 @@
 #include <linux/uuid.h>
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_mman.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
@@ -208,6 +209,7 @@
 #include "gt/intel_gt_clock_utils.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_lrc.h"
+#include "gt/intel_lrc_reg.h"
 #include "gt/intel_ring.h"
 #include "gt/uc/intel_guc_slpc.h"
 
@@ -1924,7 +1926,7 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	    intel_uc_uses_guc_rc(&gt->uc) &&
 	    (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	     IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0) ||
-	     IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_C0)))
+	     IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_C0)))
 		drm_WARN_ON(&gt->i915->drm,
 			    intel_guc_slpc_unset_gucrc_mode(&gt->uc.guc.slpc));
 
@@ -3241,7 +3243,6 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	struct drm_i915_private *i915 = stream->perf->i915;
 	struct intel_uncore *uncore = stream->uncore;
 	struct i915_oa_config *oa_config = stream->oa_config;
-	struct intel_gt *gt = stream->engine->gt;
 	bool periodic = stream->periodic;
 	u32 period_exponent = stream->period_exponent;
 	u32 sqcnt1;
@@ -3252,7 +3253,7 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	 * EU NOA signals behave incorrectly if EU clock gating is enabled.
 	 * Disable thread stall DOP gating and EU DOP gating.
 	 */
-	if (IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0) ||
+	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
 	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
 		intel_uncore_write(uncore, GEN8_ROW_CHICKEN,
 				_MASKED_BIT_ENABLE(STALL_DOP_GATING_DISABLE));
@@ -3343,14 +3344,13 @@ static void gen12_disable_metric_set(struct i915_perf_stream *stream)
 {
 	struct intel_uncore *uncore = stream->uncore;
 	struct drm_i915_private *i915 = stream->perf->i915;
-	struct intel_gt *gt = stream->engine->gt;
 	u32 sqcnt1;
 
 	/*
 	 * Wa_1508761755:xehpsdv, dg2, pvc
 	 * Enable thread stall DOP gating and EU DOP gating.
 	 */
-	if (IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0) ||
+	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
 	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
 		intel_uncore_write(uncore, GEN8_ROW_CHICKEN,
 				_MASKED_BIT_DISABLE(STALL_DOP_GATING_DISABLE));
@@ -3776,7 +3776,7 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	    intel_uc_uses_guc_rc(&gt->uc) &&
 	    (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	     IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0) ||
-	     IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_C0))) {
+	     IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_C0))) {
 		ret = intel_guc_slpc_override_gucrc_mode(&gt->uc.guc.slpc,
 							 SLPC_GUCRC_MODE_GUCRC_NO_RC6);
 		if (ret) {
@@ -5992,9 +5992,10 @@ static int destroy_config(int id, void *p, void *data)
 	return 0;
 }
 
-void i915_perf_sysctl_register(void)
+int i915_perf_sysctl_register(void)
 {
 	sysctl_header = register_sysctl_table(dev_root);
+	return 0;
 }
 
 void i915_perf_sysctl_unregister(void)

@@ -3,6 +3,7 @@
  * Copyright © 2020 Intel Corporation
  */
 
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_object.h"
 
 #include "i915_drv.h"

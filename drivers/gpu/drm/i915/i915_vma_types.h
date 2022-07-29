@@ -308,8 +308,12 @@ struct i915_vma {
 	/** This object's place on the active/inactive lists */
 	struct list_head vm_link;
 
-	/* Link in vm debugger fence list */
 	struct i915_vma_debugger {
+		/* For revoking debugger ptes */
+		struct mutex revoke_mutex;
+		bool faulted;
+
+		/* Link in vm debugger fence list */
 		struct dma_fence __rcu *fence;
 		struct list_head link;
 	} debugger;

@@ -50,8 +50,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 We need to create dmabuf and i915 dkms packages using the below command.
 
-    cp defconfigs/dmabuf .config && make dmadkmsrpm-pkg
-    cp defconfigs/i915 .config && make i915dkmsrpm-pkg
+    make dkmsrpm-pkg
 
   Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 

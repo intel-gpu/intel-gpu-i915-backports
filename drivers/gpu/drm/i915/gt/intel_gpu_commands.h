@@ -39,6 +39,8 @@
 #define  MI_GLOBAL_GTT    (1<<22)
 
 #define MI_NOOP			MI_INSTR(0, 0)
+#define MI_SET_PREDICATE	MI_INSTR(0x01, 0)
+#define   MI_SET_PREDICATE_DISABLE	(0 << 0)
 #define MI_USER_INTERRUPT	MI_INSTR(0x02, 0)
 #define MI_WAIT_FOR_EVENT       MI_INSTR(0x03, 0)
 #define   MI_WAIT_FOR_OVERLAY_FLIP	(1<<16)
@@ -56,6 +58,8 @@
 #define MI_ARB_ON_OFF		MI_INSTR(0x08, 0)
 #define   MI_ARB_ENABLE			(1<<0)
 #define   MI_ARB_DISABLE		(0<<0)
+#define MI_MEM_FENCE		MI_INSTR(0x09, 0)
+#define MI_ACQUIRE_ENABLE	(1 << 0)
 #define MI_BATCH_BUFFER_END	MI_INSTR(0x0a, 0)
 #define MI_SUSPEND_FLUSH	MI_INSTR(0x0b, 0)
 #define   MI_SUSPEND_FLUSH_EN	(1<<0)
@@ -218,7 +222,8 @@
 #define   SRC_ACCESS_TYPE_SHIFT		21
 #define   DST_ACCESS_TYPE_SHIFT		20
 #define   CCS_SIZE_SHIFT		8
-#define   XY_CTRL_SURF_MOCS_SHIFT	25
+/* Bspec lists field as [31:25], but index alone is at [31:26] */
+#define   XY_CSC_BLT_MOCS_INDEX_MASK	GENMASK(31, 26)
 #define   NUM_CCS_BYTES_PER_BLOCK	256
 #define   NUM_CCS_BLKS_PER_XFER	1024
 #define   INDIRECT_ACCESS		0
@@ -240,7 +245,8 @@
 #define   SURFACE_TYPE_2D		(1 << 29)
 #define   DEST_SURF_WIDTH_SHIFT		(14)
 #define   SRC_SURF_WIDTH_SHIFT		(14)
-#define   BLT_MOCS_SHIFT		21
+/* Bspec lists this field as 27:21, but the index alone is in 27:22 */
+#define   XY_BCB_MOCS_INDEX_MASK	GENMASK(27, 22)
 #define GEN9_XY_FAST_COPY_BLT_CMD	(2 << 29 | 0x42 << 22)
 #define   XY_FAST_COPY_BLT_D0_SRC_TILING_MASK     REG_GENMASK(21, 20)
 #define   XY_FAST_COPY_BLT_D0_DST_TILING_MASK     REG_GENMASK(14, 13)
@@ -267,6 +273,8 @@
 #define XY_FAST_COLOR_BLT		(2 << 29 | 0x44 << 22)
 #define   BLT_COLOR_DEPTH_32		(2 << 19)
 #define   BLT_COLOR_DEPTH_64		(3 << 19)
+/* Bspec lists field as [27:21], but index resides in [27:22] */
+#define   XY_FCB_MOCS_INDEX_MASK	GENMASK(27, 22)
 #define XY_COLOR_BLT_CMD		(2 << 29 | 0x50 << 22)
 #define XY_SRC_COPY_BLT_CMD		(2 << 29 | 0x53 << 22)
 #define XY_MONO_SRC_COPY_IMM_BLT	(2 << 29 | 0x71 << 22 | 5)
@@ -283,10 +291,16 @@
 #define PVC_MEM_COPY_CMD		(2 << 29 | 0x5a << 22)
 #define   PVC_MEM_COPY_SRC_COMPRESSIBLE (1 << 16 | CMF_LINEAR_16 << 8)
 #define   PVC_MEM_COPY_DST_COMPRESSIBLE (1 << 15 | 1 << 13 | CMF_LINEAR_16 << 8)
-#define   PVC_MEM_COPY_SRC_MOCS_SHIFT	25
-#define   PVC_MEM_COPY_DST_MOCS_SHIFT	0
+/*
+ * Bspec lists MOCS fields as [31:25] and [6:0], but the actual indices are
+ * in [31:26] and [6:1].
+ */
+#define   MC_SRC_MOCS_INDEX_MASK	GENMASK(31, 26)
+#define   MC_DST_MOCS_INDEX_MASK	GENMASK(6, 1)
 #define PVC_MEM_SET_CMD			(2 << 29 | 0x5b << 22)
 #define   PVC_MEM_SET_DST_COMPRESSIBLE (1 << 15 | 1 << 13 | CMF_LINEAR_16 << 8)
+/* Bspec lists field as [6:0], but index alone is from [6:1] */
+#define   MS_MOCS_INDEX_MASK		GENMASK(6, 1)
 #define XY_SRC_COPY_BLT_SRC_TILED	(1<<15) /* 965+ only */
 #define XY_SRC_COPY_BLT_DST_TILED	(1<<11) /* 965+ only */
 #define CMD_OP_DISPLAYBUFFER_INFO ((0x0<<29)|(0x14<<23)|2)
@@ -326,7 +340,10 @@
 #define   PIPE_CONTROL_DEPTH_CACHE_FLUSH		(1<<0)
 #define   PIPE_CONTROL_GLOBAL_GTT (1<<2) /* in addr dword */
 
-/* 3D-related flags that can't be set on _engines_ that lack a 3D pipeline */
+/*
+ * 3D-related flags that can't be set on _engines_ that lack access to the 3D
+ * pipeline (i.e., CCS engines).
+ */
 #define PIPE_CONTROL_3D_ENGINE_FLAGS (\
 		PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | \
 		PIPE_CONTROL_DEPTH_CACHE_FLUSH | \
@@ -403,6 +420,8 @@
 #define MI_STORE_URB_MEM        MI_INSTR(0x2D, 0)
 #define MI_CONDITIONAL_BATCH_BUFFER_END MI_INSTR(0x36, 0)
 
+#define STATE_SYSTEM_MEM_FENCE_ADDRESS \
+	((0x3 << 29) | (0x0 << 27) | (0x1 << 24) | (0x9 << 16) | 0x1)
 #define STATE_BASE_ADDRESS \
 	((0x3 << 29) | (0x0 << 27) | (0x1 << 24) | (0x1 << 16))
 #define BASE_ADDRESS_MODIFY		REG_BIT(0)

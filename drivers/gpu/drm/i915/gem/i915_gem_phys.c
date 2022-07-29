@@ -19,6 +19,7 @@
 static int i915_gem_object_get_pages_phys(struct drm_i915_gem_object *obj)
 {
 	struct address_space *mapping = obj->base.filp->f_mapping;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct scatterlist *sg;
 	struct sg_table *st;
 	dma_addr_t dma;
@@ -77,7 +78,7 @@ static int i915_gem_object_get_pages_phys(struct drm_i915_gem_object *obj)
 		dst += PAGE_SIZE;
 	}
 
-	intel_gt_chipset_flush(to_gt(to_i915(obj->base.dev)));
+	intel_gt_chipset_flush(to_gt(i915));
 
 	/* We're no longer struct page backed */
 	obj->flags &= ~I915_BO_ALLOC_STRUCT_PAGE;
@@ -144,6 +145,7 @@ int i915_gem_object_pwrite_phys(struct drm_i915_gem_object *obj,
 {
 	void *vaddr = sg_page(obj->mm.pages->sgl) + args->offset;
 	char __user *user_data = u64_to_user_ptr(args->data_ptr);
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	int err;
 
 	err = i915_gem_object_wait(obj,
@@ -163,7 +165,7 @@ int i915_gem_object_pwrite_phys(struct drm_i915_gem_object *obj,
 		return -EFAULT;
 
 	drm_clflush_virt_range(vaddr, args->size);
-	intel_gt_chipset_flush(to_gt(to_i915(obj->base.dev)));
+	intel_gt_chipset_flush(to_gt(i915));
 
 	i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
 	return 0;

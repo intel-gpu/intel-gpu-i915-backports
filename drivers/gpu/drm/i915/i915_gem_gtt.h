@@ -57,6 +57,9 @@ static inline int i915_vm_move_to_active(struct i915_address_space *vm,
 					 struct intel_context *ce,
 					 struct i915_request *rq)
 {
+	if (i915_vm_page_fault_enabled(vm))
+		return 0;
+
 	return i915_active_add_suspend_fence(&vm->active, ce, rq);
 }
 

@@ -3,6 +3,8 @@
  * Copyright © 2020 Intel Corporation
  */
 
+
+#include <linux/sched/mm.h>
 #include <linux/slab.h> /* fault-inject.h is not standalone! */
 
 #include <linux/fault-inject.h>
@@ -10,15 +12,28 @@
 
 #include <drm/drm_cache.h>
 
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_vm_bind.h"
 
 #include "i915_svm.h"
 #include "i915_trace.h"
+#include "i915_utils.h"
 #include "intel_gt.h"
 #include "intel_gt_regs.h"
 #include "intel_gtt.h"
+
+
+static bool intel_ggtt_update_needs_vtd_wa(struct drm_i915_private *i915)
+{
+	return IS_BROXTON(i915) && i915_vtd_active(i915);
+}
+
+bool intel_vm_no_concurrent_access_wa(struct drm_i915_private *i915)
+{
+	return IS_CHERRYVIEW(i915) || intel_ggtt_update_needs_vtd_wa(i915);
+}
 
 struct drm_i915_gem_object *alloc_pt_lmem(struct i915_address_space *vm, int sz)
 {
@@ -125,6 +140,12 @@ static void __i915_vm_close(struct i915_address_space *vm)
 		__i915_vma_put(vma);
 		i915_gem_object_put(obj);
 	}
+
+	if (vm->mfence.obj) {
+		i915_gem_object_put(vm->mfence.obj);
+		vm->mfence.vma = NULL;
+		vm->mfence.obj = NULL;
+	}
 }
 
 /* lock the vm into the current ww, if we lock one, we lock all */
@@ -199,7 +220,7 @@ void i915_vm_release(struct kref *kref)
 	GEM_BUG_ON(i915_is_ggtt(vm));
 	trace_i915_ppgtt_release(vm);
 
-	queue_rcu_work(vm->i915->wq, &vm->rcu);
+	queue_rcu_work(system_unbound_wq, &vm->rcu);
 }
 
 static void i915_vm_close_work(struct work_struct *wrk)
@@ -215,7 +236,7 @@ void i915_vm_close(struct i915_address_space *vm)
 {
 	GEM_BUG_ON(atomic_read(&vm->open) <= 0);
 	if (atomic_dec_and_test(&vm->open))
-		queue_work(vm->i915->wq, &vm->close_work);
+		queue_work(system_unbound_wq, &vm->close_work);
 	else
 		i915_vm_put(vm);
 }
@@ -238,7 +259,6 @@ static void __i915_vm_retire(struct i915_active *ref)
 int i915_address_space_init(struct i915_address_space *vm, int subclass)
 {
 	u64 min_alignment;
-	int i;
 
 	GEM_BUG_ON(!vm->total);
 
@@ -263,7 +283,22 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	mutex_init(&vm->mutex);
 	mutex_init(&vm->svm_mutex);
 	lockdep_set_subclass(&vm->mutex, subclass);
-	fs_reclaim_taints_mutex(&vm->mutex);
+
+	if (!intel_vm_no_concurrent_access_wa(vm->i915)) {
+		fs_reclaim_taints_mutex(&vm->mutex);
+	} else {
+		/*
+		 * CHV + BXT VTD workaround use stop_machine(),
+		 * which is allowed to allocate memory. This means &vm->mutex
+		 * is the outer lock, and in theory we can allocate memory inside
+		 * it through stop_machine().
+		 *
+		 * Add the annotation for this, we use trylock in shrinker.
+		 */
+		mutex_acquire(&vm->mutex.dep_map, 0, 0, _THIS_IP_);
+		might_alloc(GFP_KERNEL);
+		mutex_release(&vm->mutex.dep_map, _THIS_IP_);
+	}
 	dma_resv_init(&vm->_resv);
 
 	vm->inode = alloc_anon_inode(vm->i915->drm.anon_inode->i_sb);
@@ -315,9 +350,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	init_llist_head(&vm->vm_bind_free_list);
 	i915_gem_vm_bind_init(vm);
-
-	for (i = 0; i < I915_MAX_TILES; i++)
-		atomic_set(&vm->active_contexts_gt[i], 0);
 
 	if (HAS_UM_QUEUES(vm->i915) && subclass == VM_CLASS_PPGTT) {
 		u32 asid;
@@ -398,7 +430,7 @@ fill_page_dma(struct drm_i915_gem_object *p, const u64 val, unsigned int count)
 	vaddr = __px_vaddr(p, &needs_flush);
 	memset64(vaddr, val, count);
 	if (needs_flush)
-		clflush_cache_range(vaddr, PAGE_SIZE);
+		drm_clflush_virt_range(vaddr, PAGE_SIZE);
 }
 
 static u32 poison_scratch_page(struct drm_i915_gem_object *scratch)

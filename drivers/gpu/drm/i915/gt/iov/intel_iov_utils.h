@@ -82,7 +82,7 @@ static inline struct mutex *pf_provisioning_mutex(struct intel_iov *iov)
 {
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 	/* always use mutex from the root tile */
-	return &iov_to_i915(iov)->gt.iov.pf.provisioning.lock;
+	return &to_gt(iov_to_i915(iov))->iov.pf.provisioning.lock;
 }
 
 #define IOV_ERROR(_iov, _fmt, ...) \
@@ -130,5 +130,16 @@ static inline int __intel_iov_live_teardown(int err, void *data)
 	return __intel_gt_live_teardown(err, iov_to_gt(data));
 }
 #endif /* IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) */
+
+static inline const char *intel_iov_threshold_to_string(enum intel_iov_threshold threshold)
+{
+	switch (threshold) {
+#define __iov_threshold_to_string(K, N, ...) \
+	case IOV_THRESHOLD_##K: return #N;
+	IOV_THRESHOLDS(__iov_threshold_to_string)
+	}
+#undef __iov_threshold_to_string
+	return "<invalid>";
+}
 
 #endif /* __INTEL_IOV_UTILS_H__ */

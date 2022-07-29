@@ -13,7 +13,7 @@
 #include "i915_reg.h"
 
 /* For definition of max number of GTs */
-#include "intel_memory_region.h"
+#include "gt/intel_gt_defines.h"
 
 struct drm_i915_private;
 
@@ -23,6 +23,7 @@ struct i915_hwmon_reg {
 	i915_reg_t pkg_rapl_limit;
 	i915_reg_t energy_status_all;
 	i915_reg_t energy_status_tile;
+	i915_reg_t gt_perf_status;
 };
 
 struct i915_energy_info {
@@ -42,7 +43,7 @@ struct i915_hwmon_drvdata {
 struct i915_hwmon {
 	struct i915_hwmon_drvdata ddat;
 
-	struct i915_hwmon_drvdata ddat_gt[I915_MAX_TILES];
+	struct i915_hwmon_drvdata ddat_gt[I915_MAX_GT];
 
 	struct mutex hwmon_lock;	/* counter overflow logic and rmw */
 

@@ -8,8 +8,9 @@
 #include "gem/i915_gem_lmem.h"
 
 #include "i915_trace.h"
-#include "intel_tlb.h"
+#include "intel_gt.h"
 #include "intel_gtt.h"
+#include "intel_tlb.h"
 #include "gen6_ppgtt.h"
 #include "gen8_ppgtt.h"
 
@@ -94,7 +95,7 @@ write_dma_entry(struct drm_i915_gem_object * const pdma,
 
 	vaddr[idx] = encoded_entry;
 	if (needs_flush)
-		clflush_cache_range(&vaddr[idx], sizeof(u64));
+		drm_clflush_virt_range(&vaddr[idx], sizeof(u64));
 }
 
 void
@@ -205,7 +206,8 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
 	vm->insert_entries(vm, vma, cache_level, pte_flags);
-	wmb();
+	/* Flush the PTE writes to memory */
+	i915_write_barrier(vm->i915, i915_gem_object_is_lmem(px_base(i915_vm_to_ppgtt(vm)->pd)));
 }
 
 static void ppgtt_bind_vma_wa(struct i915_address_space *vm,
@@ -221,37 +223,45 @@ static void ppgtt_bind_vma_wa(struct i915_address_space *vm,
 	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
 }
 
-void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
+static void vma_invalidate_tlb(struct i915_vma *vma)
 {
+	struct i915_address_space *vm = vma->vm;
+	struct drm_i915_gem_object *obj;
 	struct intel_gt *gt;
-	unsigned int i;
+	int id;
 
-	if (test_and_clear_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma)))
-		vm->clear_range(vm, i915_vma_offset(vma), vma->size);
-
-	if (!i915_vm_page_fault_enabled(vm) &&
-	    (!i915_vma_is_purged(vma) || !i915_vm_is_active(vm)))
+	obj = vma->obj;
+	if (!obj)
 		return;
 
-	for_each_gt(vm->i915, i, gt) {
-		intel_wakeref_t wakeref;
-
-		if (!atomic_read(&vm->active_contexts_gt[i]))
+	/*
+	 * Before we release the pages that were bound by this vma, we
+	 * must invalidate all the TLBs that may still have a reference
+	 * back to our physical address. It only needs to be done once,
+	 * so after updating the PTE to point away from the pages, record
+	 * the most recent TLB invalidation seqno, and if we have not yet
+	 * flushed the TLBs upon release, perform a full invalidation.
+	 */
+	for_each_gt(vm->i915, id, gt) {
+		WRITE_ONCE(obj->mm.tlb[id], 0);
+		if (!atomic_read(&vm->active_contexts_gt[id]))
 			continue;
 
-		with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-			if (HAS_SELECTIVE_TLB_INVALIDATION(vm->i915)) {
-				intel_invalidate_tlb_range(gt, vm,
-							   i915_vma_offset(vma),
-							   vma->size);
-			} else {
-				/* XXX: Optimize later by batching flushes */
-				mutex_lock(&gt->mutex);
-				intel_invalidate_tlb_full_sync(gt);
-				mutex_unlock(&gt->mutex);
-			}
-		}
+		if (!intel_gt_invalidate_tlb_range(gt, vm,
+						   i915_vma_offset(vma),
+						   i915_vma_size(vma)))
+			WRITE_ONCE(obj->mm.tlb[id],
+				   intel_gt_next_invalidate_tlb_full(vm->gt));
 	}
+}
+
+void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
+{
+	if (!test_and_clear_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma)))
+		return;
+
+	vm->clear_range(vm, i915_vma_offset(vma), vma->size);
+	vma_invalidate_tlb(vma);
 }
 
 static void ppgtt_unbind_vma_wa(struct i915_address_space *vm,

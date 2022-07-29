@@ -3,10 +3,10 @@
  * Copyright © 2020 Intel Corporation
  */
 
-#include "linux/types.h"
-
 #ifndef INTEL_CLOS_H
 #define INTEL_CLOS_H
+
+#include <linux/types.h>
 
 struct drm_i915_private;
 struct drm_i915_file_private;

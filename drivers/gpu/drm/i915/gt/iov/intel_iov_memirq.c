@@ -48,6 +48,7 @@
 
 static int vf_create_memirq_data(struct intel_iov *iov)
 {
+	struct intel_gt *gt = iov_to_gt(iov);
 	struct drm_i915_gem_object *obj;
 	void *vaddr;
 	int err;
@@ -73,8 +74,15 @@ static int vf_create_memirq_data(struct intel_iov *iov)
 	iov->vf.irq.vaddr = vaddr;
 
 	enable_vector = (u32*)(vaddr + I915_VF_IRQ_ENABLE);
-	/*XXX: we should start with all irqs disabled: 0xffff0000 */
-	*enable_vector = 0xffff;
+
+	/* Wa:16014207253 */
+	if (gt->fake_int.enabled) {
+		drm_info(&gt->i915->drm, "Using fake interrupt w/a, gt = %d\n", gt->info.id);
+		*enable_vector = 0x0;
+	} else {
+		/*XXX: we should start with all irqs disabled: 0xffff0000 */
+		*enable_vector = 0xffff;
+	}
 
 	return 0;
 

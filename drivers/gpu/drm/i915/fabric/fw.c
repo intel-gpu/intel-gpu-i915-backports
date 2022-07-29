@@ -122,6 +122,7 @@ enum {
 #define PSC_REGION_QUALIFIER	".PSC"
 
 #define PVC_FW_IMAGE  "i915/pvc_iaf_ver1.bin"
+#define PVC_FW_IMAGE_DEBUG_SIGNED  "i915/pvc_iaf_ver1d.bin"
 /*
  * FW image
  */
@@ -1412,7 +1413,7 @@ end:
 static int init_fw(struct fsubdev *sd)
 {
 	struct fdev *dev = sd->fdev;
-	const struct psc_data *psc = (const struct psc_data *)dev->psc.data;
+	const struct psc_data *psc;
 	struct mbdb_op_fw_version_rsp *fw_version = &sd->fw_version;
 	u8 socket = sd->fdev->pd->socket_id;
 	u8 sd_idx = sd_index(sd);
@@ -1429,6 +1430,9 @@ static int init_fw(struct fsubdev *sd)
 
 	if (dev->psc.err)
 		return dev->psc.err;
+
+	/* psc is only valid after the completion and if no error occurred */
+	psc = (const struct psc_data *)READ_ONCE(dev->psc.data);
 
 	if (full_pscbin_in_memory(dev, psc->identifier.psc_format_version)) {
 		size = psc->ini_bin[socket * IAF_MAX_SUB_DEVS + sd_idx].size;
@@ -1795,6 +1799,13 @@ static const char *get_fw_image(struct fdev *dev)
 
 	switch (dev->pd->product) {
 	case IAF_PONTEVECCHIO:
+		/* WA: HSD-16011092478 */
+		if (IS_ANR_STEP(&dev->sd[0], ANR_ARI_STEP_A0,
+				ANR_ARI_STEP_A_LAST)) {
+			dev_info(fdev_dev(dev), "A0 firmware\n");
+			return PVC_FW_IMAGE_DEBUG_SIGNED;
+		}
+
 		return PVC_FW_IMAGE;
 	default:
 		break;

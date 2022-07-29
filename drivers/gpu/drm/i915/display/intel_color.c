@@ -2660,36 +2660,36 @@ static void xelpd_program_plane_degamma_lut(const struct drm_plane_state *state,
 	if (icl_is_hdr_plane(dev_priv, plane)) {
 		lut_size = 128;
 
-		intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_INDEX_ENH(pipe, plane, 0),
-			       PLANE_PAL_PREC_AUTO_INCREMENT);
+		intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_INDEX_ENH(pipe, plane, 0),
+				  PLANE_PAL_PREC_AUTO_INCREMENT);
 
 		if (degamma_lut) {
 			for (i = 0; i < lut_size; i++) {
 				u64 word = drm_color_lut_extract_ext(degamma_lut[i].green, 24);
 				u32 lut_val = (word & 0xffffff);
 
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       lut_val);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  lut_val);
 			}
 
 			/* Program the max register to clamp values > 1.0. */
 			while (i < 131)
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       degamma_lut[i++].green);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  degamma_lut[i++].green);
 		} else {
 			for (i = 0; i < lut_size; i++) {
 				u32 v = (i * ((1 << 24) - 1)) / (lut_size - 1);
 
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0), v);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0), v);
 			}
 
 			do {
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       1 << 24);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  1 << 24);
 			} while (i++ < 130);
 		}
 
-		intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_INDEX_ENH(pipe, plane, 0), 0);
+		intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_INDEX_ENH(pipe, plane, 0), 0);
 	} else {
 		lut_size = 32;
 
@@ -2699,31 +2699,31 @@ static void xelpd_program_plane_degamma_lut(const struct drm_plane_state *state,
 		 */
 		plane = plane - 3;
 
-		intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_INDEX(pipe, plane, 0),
-			       PLANE_PAL_PREC_AUTO_INCREMENT);
+		intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_INDEX(pipe, plane, 0),
+				  PLANE_PAL_PREC_AUTO_INCREMENT);
 
 		if (degamma_lut) {
 			for (i = 0; i < lut_size; i++)
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
-					       degamma_lut[i].green);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
+						  degamma_lut[i].green);
 			/* Program the max register to clamp values > 1.0. */
 			while (i < 35)
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
-					       degamma_lut[i++].green);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
+						  degamma_lut[i++].green);
 		} else {
 			for (i = 0; i < lut_size; i++) {
 				u32 v = (i * ((1 << 16) - 1)) / (lut_size - 1);
 
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0), v);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0), v);
 			}
 
 			do {
-				intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
-					       1 << 16);
+				intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_DATA(pipe, plane, 0),
+						  1 << 16);
 			} while (i++ < 34);
 		}
 
-		intel_de_write(dev_priv, PLANE_PRE_CSC_GAMC_INDEX(pipe, plane, 0), 0);
+		intel_de_write_fw(dev_priv, PLANE_PRE_CSC_GAMC_INDEX(pipe, plane, 0), 0);
 	}
 }
 
@@ -2737,38 +2737,38 @@ static void xelpd_program_plane_gamma_lut(const struct drm_plane_state *state,
 	u32 i, lut_size;
 
 	if (icl_is_hdr_plane(dev_priv, plane)) {
-		intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_INDEX_ENH(pipe, plane, 0),
-			       offset | PLANE_PAL_PREC_AUTO_INCREMENT);
+		intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_INDEX_ENH(pipe, plane, 0),
+				  offset | PLANE_PAL_PREC_AUTO_INCREMENT);
 		if (gamma_lut) {
 			lut_size = 32;
 			for (i = 0; i < lut_size; i++) {
 				u64 word = drm_color_lut_extract_ext(gamma_lut[i].green, 24);
 				u32 lut_val = (word & 0xffffff);
 
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       lut_val);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  lut_val);
 			}
 
 			do {
 				/* Program the max register to clamp values > 1.0. */
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       gamma_lut[i].green);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  gamma_lut[i].green);
 			} while (i++ < 34);
 		} else {
 			lut_size = 32;
 			for (i = 0; i < lut_size; i++) {
 				u32 v = (i * ((1 << 24) - 1)) / (lut_size - 1);
 
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0), v);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0), v);
 			}
 
 			do {
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
-					       1 << 24);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA_ENH(pipe, plane, 0),
+						  1 << 24);
 			} while (i++ < 34);
 		}
 
-		intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_INDEX_ENH(pipe, plane, 0), 0);
+		intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_INDEX_ENH(pipe, plane, 0), 0);
 	} else {
 		lut_size = 32;
 		/*
@@ -2777,31 +2777,31 @@ static void xelpd_program_plane_gamma_lut(const struct drm_plane_state *state,
 		 */
 		plane = plane - 3;
 
-		intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_INDEX(pipe, plane, 0),
-			       offset | PLANE_PAL_PREC_AUTO_INCREMENT);
+		intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_INDEX(pipe, plane, 0),
+				  offset | PLANE_PAL_PREC_AUTO_INCREMENT);
 
 		if (gamma_lut) {
 			for (i = 0; i < lut_size; i++)
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
-					       gamma_lut[i].green & 0xffff);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
+						  gamma_lut[i].green & 0xffff);
 			/* Program the max register to clamp values > 1.0. */
 			while (i < 35)
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
-					       gamma_lut[i++].green & 0x3ffff);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
+						  gamma_lut[i++].green & 0x3ffff);
 		} else {
 			for (i = 0; i < lut_size; i++) {
 				u32 v = (i * ((1 << 16) - 1)) / (lut_size - 1);
 
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0), v);
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0), v);
 			}
 
 			do {
-				intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
-					       (1 << 16));
+				intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_DATA(pipe, plane, 0),
+						  (1 << 16));
 			} while (i++ < 34);
 		}
 
-		intel_de_write(dev_priv, PLANE_POST_CSC_GAMC_INDEX(pipe, plane, 0), 0);
+		intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_INDEX(pipe, plane, 0), 0);
 	}
 }
 
@@ -2877,28 +2877,28 @@ static void xelpd_load_plane_csc_matrix(const struct drm_plane_state *state)
 				ILK_CSC_COEFF_FP(abs_coeff, 7);
 	}
 
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 0),
-		       coeffs[0] << 16 | coeffs[1]);
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 1),
-		       coeffs[2] << 16);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 0),
+			  coeffs[0] << 16 | coeffs[1]);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 1),
+			  coeffs[2] << 16);
 
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 2),
-		       coeffs[3] << 16 | coeffs[4]);
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 3),
-		       coeffs[5] << 16);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 2),
+			  coeffs[3] << 16 | coeffs[4]);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 3),
+			  coeffs[5] << 16);
 
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 4),
-		       coeffs[6] << 16 | coeffs[7]);
-	intel_de_write(dev_priv, PLANE_CSC_COEFF(pipe, plane, 5),
-		       coeffs[8] << 16);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 4),
+			  coeffs[6] << 16 | coeffs[7]);
+	intel_de_write_fw(dev_priv, PLANE_CSC_COEFF(pipe, plane, 5),
+			  coeffs[8] << 16);
 
-	intel_de_write(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 0), 0);
-	intel_de_write(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 1), 0);
-	intel_de_write(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 2), 0);
+	intel_de_write_fw(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 0), 0);
+	intel_de_write_fw(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 1), 0);
+	intel_de_write_fw(dev_priv, PLANE_CSC_PREOFF(pipe, plane, 2), 0);
 
-	intel_de_write(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 0), postoff);
-	intel_de_write(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 1), postoff);
-	intel_de_write(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 2), postoff);
+	intel_de_write_fw(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 0), postoff);
+	intel_de_write_fw(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 1), postoff);
+	intel_de_write_fw(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 2), postoff);
 }
 
 static const struct intel_color_funcs chv_color_funcs = {

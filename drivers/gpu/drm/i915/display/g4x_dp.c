@@ -11,7 +11,9 @@
 #include "intel_audio.h"
 #include "intel_backlight.h"
 #include "intel_connector.h"
+#include "intel_crtc.h"
 #include "intel_de.h"
+#include "intel_display_power.h"
 #include "intel_display_types.h"
 #include "intel_dp.h"
 #include "intel_dp_link_training.h"
@@ -393,26 +395,8 @@ static void intel_dp_get_config(struct intel_encoder *encoder,
 		intel_dotclock_calculate(pipe_config->port_clock,
 					 &pipe_config->dp_m_n);
 
-	if (intel_dp_is_edp(intel_dp) && dev_priv->vbt.edp.bpp &&
-	    pipe_config->pipe_bpp > dev_priv->vbt.edp.bpp) {
-		/*
-		 * This is a big fat ugly hack.
-		 *
-		 * Some machines in UEFI boot mode provide us a VBT that has 18
-		 * bpp and 1.62 GHz link bandwidth for eDP, which for reasons
-		 * unknown we fail to light up. Yet the same BIOS boots up with
-		 * 24 bpp and 2.7 GHz link. Use the same bpp as the BIOS uses as
-		 * max, not what it tells us to use.
-		 *
-		 * Note: This will still be broken if the eDP panel is not lit
-		 * up by the BIOS, and thus we can't get the mode at module
-		 * load.
-		 */
-		drm_dbg_kms(&dev_priv->drm,
-			    "pipe has %d bpp for eDP panel, overriding BIOS-provided max %d bpp\n",
-			    pipe_config->pipe_bpp, dev_priv->vbt.edp.bpp);
-		dev_priv->vbt.edp.bpp = pipe_config->pipe_bpp;
-	}
+	if (intel_dp_is_edp(intel_dp))
+		intel_edp_fixup_vbt_bpp(encoder, pipe_config->pipe_bpp);
 }
 
 static void
@@ -494,9 +478,7 @@ static void intel_disable_dp(struct intel_atomic_state *state,
 
 	intel_dp->link_trained = false;
 
-	if (old_crtc_state->has_audio)
-		intel_audio_codec_disable(encoder,
-					  old_crtc_state, old_conn_state);
+	intel_audio_codec_disable(encoder, old_crtc_state, old_conn_state);
 
 	/*
 	 * Make sure the panel is off before trying to change the mode.
@@ -657,9 +639,7 @@ static void intel_enable_dp(struct intel_atomic_state *state,
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
-	struct intel_crtc *crtc = to_intel_crtc(pipe_config->uapi.crtc);
 	u32 dp_reg = intel_de_read(dev_priv, intel_dp->output_reg);
-	enum pipe pipe = crtc->pipe;
 	intel_wakeref_t wakeref;
 
 	if (drm_WARN_ON(&dev_priv->drm, dp_reg & DP_PORT_EN))
@@ -693,11 +673,7 @@ static void intel_enable_dp(struct intel_atomic_state *state,
 	intel_dp_start_link_train(intel_dp, pipe_config);
 	intel_dp_stop_link_train(intel_dp, pipe_config);
 
-	if (pipe_config->has_audio) {
-		drm_dbg(&dev_priv->drm, "Enabling DP audio on pipe %c\n",
-			pipe_name(pipe));
-		intel_audio_codec_enable(encoder, pipe_config, conn_state);
-	}
+	intel_audio_codec_enable(encoder, pipe_config, conn_state);
 }
 
 static void g4x_enable_dp(struct intel_atomic_state *state,
@@ -1382,7 +1358,7 @@ bool g4x_dp_init(struct drm_i915_private *dev_priv,
 	dig_port->max_lanes = 4;
 
 	intel_encoder->type = INTEL_OUTPUT_DP;
-	intel_encoder->power_domain = intel_port_to_power_domain(port);
+	intel_encoder->power_domain = intel_display_power_ddi_lanes_domain(dev_priv, port);
 	if (IS_CHERRYVIEW(dev_priv)) {
 		if (port == PORT_D)
 			intel_encoder->pipe_mask = BIT(PIPE_C);
