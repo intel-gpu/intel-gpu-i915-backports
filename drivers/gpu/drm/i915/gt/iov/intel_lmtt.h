@@ -47,7 +47,6 @@ struct intel_lmtt_ops {
 int intel_lmtt_init(struct intel_lmtt *lmtt);
 void intel_lmtt_fini(struct intel_lmtt *lmtt);
 void intel_lmtt_init_hw(struct intel_lmtt *lmtt);
-int intel_lmtt_create_entries(struct intel_lmtt *lmtt, unsigned int num);
-void intel_lmtt_destroy_entries(struct intel_lmtt *lmtt, unsigned int num);
+int intel_lmtt_update_entries(struct intel_lmtt *lmtt, unsigned int vf);
 
 #endif

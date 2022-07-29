@@ -38,17 +38,19 @@ static bool can_release_pages(struct drm_i915_gem_object *obj)
 	return swap_available() || obj->mm.madv == I915_MADV_DONTNEED;
 }
 
-static int unsafe_drop_pages(struct drm_i915_gem_object *obj,
-			     struct i915_gem_ww_ctx *ww,
-			     unsigned long shrink)
+static int drop_pages(struct drm_i915_gem_object *obj,
+		      struct i915_gem_ww_ctx *ww, unsigned long shrink,
+		      bool trylock_vm)
 {
 	unsigned long flags;
 
 	flags = 0;
 	if (shrink & I915_SHRINK_ACTIVE)
-		flags = I915_GEM_OBJECT_UNBIND_ACTIVE;
+		flags |= I915_GEM_OBJECT_UNBIND_ACTIVE;
 	if (!(shrink & I915_SHRINK_BOUND))
-		flags = I915_GEM_OBJECT_UNBIND_TEST;
+		flags |= I915_GEM_OBJECT_UNBIND_TEST;
+	if (trylock_vm)
+		flags |= I915_GEM_OBJECT_UNBIND_VM_TRYLOCK;
 	if (!ww)
 		flags |= I915_GEM_OBJECT_UNBIND_TRYLOCK;
 
@@ -119,6 +121,9 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 	unsigned long count = 0;
 	unsigned long scanned = 0;
 	int err = 0;
+
+	/* CHV + VTD workaround use stop_machine(); need to trylock vm->mutex */
+	bool trylock_vm = !ww && intel_vm_no_concurrent_access_wa(i915);
 
 	trace_i915_gem_shrink(i915, target, shrink);
 
@@ -217,7 +222,7 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 					goto skip;
 			}
 
-			err = unsafe_drop_pages(obj, ww, shrink);
+			err = drop_pages(obj, ww, shrink, trylock_vm);
 			if (!err) {
 				if (!__i915_gem_object_put_pages(obj)) {
 					try_to_writeback(obj, shrink);
@@ -229,11 +234,12 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 			if (err != -EDEADLK && err != -EINTR)
 				err = 0;
 
-			scanned += obj->base.size >> PAGE_SHIFT;
 			if (!ww)
 				i915_gem_object_unlock(obj);
 
 			dma_resv_prune(obj->base.resv);
+
+			scanned += obj->base.size >> PAGE_SHIFT;
 skip:
 			i915_gem_object_put(obj);
 

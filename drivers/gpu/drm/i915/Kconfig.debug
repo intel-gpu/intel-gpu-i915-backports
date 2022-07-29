@@ -21,7 +21,6 @@ config DRM_I915_DEBUG
 	depends on DRM_I915
 	depends on EXPERT # only for developers
 	depends on !COMPILE_TEST # never built by robots
-	depends on SLAB || SLUB
 	select PCI_MSI # ... for iommu enabled by default
 	depends on IOMMU_API
 	depends on IOMMU_IOVA
@@ -37,7 +36,6 @@ config DRM_I915_DEBUG
 	depends on STACKDEPOT
 	depends on STACKTRACE
 	depends on DRM_DP_AUX_CHARDEV
-	select SLUB_DEBUG if SLUB
 	select X86_MSR # used by igt/pm_rpm
 	select DRM_VGEM # used by igt/prime_vgem (dmabuf interop checks)
 	select DRM_DEBUG_MM if DRM=y
@@ -56,6 +54,10 @@ config DRM_I915_DEBUG
 	select INTEL_MEI_GSC if X86
 	select INTEL_MEI_PXP if X86
 	select INTEL_MEI_IAF if X86
+	select INTEL_VSEC if X86
+	select INTEL_PMT_TELEMETRY if X86
+	select INTEL_PMT_CRASHLOG if X86
+	select INTEL_PMT_WATCHER if X86
 	select BROKEN # for prototype uAPI
 	default n
 	help

@@ -288,7 +288,6 @@ int i915_vma_bind(struct i915_vma *vma,
 		  enum i915_cache_level cache_level,
 		  u32 flags,
 		  struct i915_vma_work *work);
-int i915_vma_map(struct i915_vma *vma);
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags);
@@ -572,12 +571,26 @@ static inline struct i915_vma *i915_find_vma(struct i915_address_space *vm,
 	node = i915_gem_gtt_lookup(vm, addr);
 	if (likely(node)) {
 		vma = container_of(node, struct i915_vma, node);
-		if (vma)
+		if (vma) {
 			vma = i915_vma_tryget(vma);
+			if (vma) {
+				struct i915_vma *vma_temp = __i915_vma_get(vma);
+
+				if (vma_temp)
+					vma = vma_temp;
+				else {
+					i915_vma_put(vma);
+					vma = NULL;
+				}
+			}
+		}
 	}
 	mutex_unlock(&vm->mutex);
 
 	return vma;
 }
+
+void i915_vma_module_exit(void);
+int i915_vma_module_init(void);
 
 #endif

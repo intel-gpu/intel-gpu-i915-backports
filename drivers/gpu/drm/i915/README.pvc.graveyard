@@ -1,0 +1,12 @@
+PONTE VECCHIO - Graveyard (done)
+
+Patches in this section of the pile are temporary patches that do not have an
+upstream future.  I.e.:
+
+ * Support for unsupported device IDs or steppings - these will be dropped once
+   we're sure the old devices are out of circulation.
+ * Support for deprecated UAPI - these will be dropped once we're sure there
+   are no remaining userspace consumers.
+ * Non-POR features where PVC is being used as a test vehicle for a future
+   platform - these will move to the future platform's pile section once that
+   platform becomes usable directly.

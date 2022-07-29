@@ -8,6 +8,7 @@
 #include <drm/drm_print.h>
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 #include "gt/intel_gt_regs.h"
 
 #include "i915_cmd_parser.h"
@@ -81,65 +82,65 @@ static const struct engine_info intel_engines[] = {
 	[BCS1] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 1,
-		.irq_offset = GEN12_BCS1,
+		.irq_offset = XEHPC_BCS1,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS1_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS1_RING_BASE }
 		},
 	},
 	[BCS2] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 2,
-		.irq_offset = GEN12_BCS2,
+		.irq_offset = XEHPC_BCS2,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS2_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS2_RING_BASE }
 		},
 	},
 	[BCS3] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 3,
-		.irq_offset = GEN12_BCS3,
+		.irq_offset = XEHPC_BCS3,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS3_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS3_RING_BASE }
 		},
 	},
 	[BCS4] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 4,
-		.irq_offset = GEN12_BCS4,
+		.irq_offset = XEHPC_BCS4,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS4_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS4_RING_BASE }
 		},
 	},
 	[BCS5] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 5,
-		.irq_offset = GEN12_BCS5,
+		.irq_offset = XEHPC_BCS5,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS5_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS5_RING_BASE }
 		},
 	},
 	[BCS6] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 6,
-		.irq_offset = GEN12_BCS6,
+		.irq_offset = XEHPC_BCS6,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS6_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS6_RING_BASE }
 		},
 	},
 	[BCS7] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 7,
-		.irq_offset = GEN12_BCS7,
+		.irq_offset = XEHPC_BCS7,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS7_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS7_RING_BASE }
 		},
 	},
 	[BCS8] = {
 		.class = COPY_ENGINE_CLASS,
 		.instance = 8,
-		.irq_offset = GEN12_BCS8,
+		.irq_offset = XEHPC_BCS8,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_BCS8_RING_BASE }
+			{ .graphics_ver = 12, .base = XEHPC_BCS8_RING_BASE }
 		},
 	},
 	[VCS0] = {
@@ -393,6 +394,9 @@ void intel_engine_set_hwsp_writemask(struct intel_engine_cs *engine, u32 mask)
 	if (IS_SRIOV_VF(engine->i915))
 		return;
 
+	if (engine->gt->i915->quiesce_gpu)
+		return;
+
 	/*
 	 * Though they added more rings on g4x/ilk, they did not add
 	 * per-engine HWSTAM until gen6.
@@ -425,14 +429,14 @@ static u32 get_reset_domain(u8 ver, enum intel_engine_id id)
 		static const u32 engine_reset_domains[] = {
 			[RCS0]  = GEN11_GRDOM_RENDER,
 			[BCS0]  = GEN11_GRDOM_BLT,
-			[BCS1]  = GEN12_GRDOM_BLT1,
-			[BCS2]  = GEN12_GRDOM_BLT2,
-			[BCS3]  = GEN12_GRDOM_BLT3,
-			[BCS4]  = GEN12_GRDOM_BLT4,
-			[BCS5]  = GEN12_GRDOM_BLT5,
-			[BCS6]  = GEN12_GRDOM_BLT6,
-			[BCS7]  = GEN12_GRDOM_BLT7,
-			[BCS8]  = GEN12_GRDOM_BLT8,
+			[BCS1]  = XEHPC_GRDOM_BLT1,
+			[BCS2]  = XEHPC_GRDOM_BLT2,
+			[BCS3]  = XEHPC_GRDOM_BLT3,
+			[BCS4]  = XEHPC_GRDOM_BLT4,
+			[BCS5]  = XEHPC_GRDOM_BLT5,
+			[BCS6]  = XEHPC_GRDOM_BLT6,
+			[BCS7]  = XEHPC_GRDOM_BLT7,
+			[BCS8]  = XEHPC_GRDOM_BLT8,
 			[VCS0]  = GEN11_GRDOM_MEDIA,
 			[VCS1]  = GEN11_GRDOM_MEDIA2,
 			[VCS2]  = GEN11_GRDOM_MEDIA3,
@@ -500,6 +504,7 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 
 	BUILD_BUG_ON(BITS_PER_TYPE(engine->mask) < I915_NUM_ENGINES);
 
+	INIT_LIST_HEAD(&engine->pinned_contexts_list);
 	engine->id = id;
 	engine->legacy_idx = INVALID_ENGINE;
 	engine->mask = BIT(id);
@@ -845,7 +850,7 @@ static void engine_mask_apply_copy_fuses(struct intel_gt *gt)
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_gt_info *info = &gt->info;
 	unsigned long meml3_mask;
-	u8 quad;
+	unsigned long quad;
 
 	meml3_mask = intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3);
 	meml3_mask = REG_FIELD_GET(GEN12_MEML3_EN_MASK, meml3_mask);
@@ -855,12 +860,13 @@ static void engine_mask_apply_copy_fuses(struct intel_gt *gt)
 	 * bit is a quad that houses 2 Link Copy and two Sub Copy engines.
 	 */
 	for_each_clear_bit(quad, &meml3_mask, GEN12_MAX_MSLICES) {
-		intel_engine_mask_t mask = GENMASK(BCS1 + quad * 2 + 1,
-						   BCS1 + quad * 2);
+		unsigned int instance = quad * 2 + 1;
+		intel_engine_mask_t mask = GENMASK(_BCS(instance + 1),
+						   _BCS(instance));
 
 		if (mask & info->engine_mask) {
-			drm_dbg(&i915->drm, "bcs%u fused off\n", quad * 2 + 1);
-			drm_dbg(&i915->drm, "bcs%u fused off\n", quad * 2 + 2);
+			drm_dbg(&i915->drm, "bcs%u fused off\n", instance);
+			drm_dbg(&i915->drm, "bcs%u fused off\n", instance + 1);
 
 			info->engine_mask &= ~mask;
 		}
@@ -1324,6 +1330,8 @@ intel_engine_create_pinned_context(struct intel_engine_cs *engine,
 		return ERR_PTR(err);
 	}
 
+	list_add_tail(&ce->pinned_contexts_link, &engine->pinned_contexts_list);
+
 	/*
 	 * Give our perma-pinned kernel timelines a separate lockdep class,
 	 * so that we can use them from within the normal user timelines
@@ -1346,6 +1354,7 @@ void intel_engine_destroy_pinned_context(struct intel_context *ce)
 	list_del(&ce->timeline->engine_link);
 	mutex_unlock(&hwsp->vm->mutex);
 
+	list_del(&ce->pinned_contexts_link);
 	intel_context_unpin(ce);
 	intel_context_put(ce);
 }
@@ -1945,18 +1954,8 @@ void intel_engines_reset_default_submission(struct intel_gt *gt)
 	enum intel_engine_id id;
 
 	for_each_engine(engine, gt, id) {
-		struct intel_context *ce = engine->kernel_context;
-
 		if (engine->status_page.sanitize)
 			engine->status_page.sanitize(engine);
-
-		/*
-		 * Reset the pinned context so that we do not replay any stale
-		 * register state from before the device recovery. In particular,
-		 * RING_HEAD may still be pointing to stale requests.
-		 */
-		if (ce)
-			ce->ops->reset(ce);
 
 		engine->set_default_submission(engine);
 	}
@@ -2131,9 +2130,7 @@ static void intel_engine_print_registers(struct intel_engine_cs *engine,
 		drm_printf(m, "\tIPEHR: 0x%08x\n", ENGINE_READ(engine, IPEHR));
 	}
 
-	if (intel_engine_uses_guc(engine)) {
-		/* nothing to print yet */
-	} else if (HAS_EXECLISTS(dev_priv)) {
+	if (HAS_EXECLISTS(dev_priv) && !intel_engine_uses_guc(engine)) {
 		struct i915_request * const *port, *rq;
 		const u32 *hws =
 			&engine->status_page.addr[I915_HWS_CSB_BUF0_INDEX];

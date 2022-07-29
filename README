@@ -1,25 +1,25 @@
-Releases for Ubuntu 20.04 (focal) targeting 5.14-OEM kernel.
+Releases for Ubuntu 22.04 (jammy) targeting 5.17-OEM kernel.
 
 # Tested configurations
-5.14-OEM kernel:
-    Repository: git://git.launchpad.net/~canonical-kernel/ubuntu/+source/linux-oem/+git/focal
-    Branch:     origin/oem-5.14-next
-    Commit:     e7a3b771077f
+5.17-OEM kernel:
+    Repository: https://git.launchpad.net/~canonical-kernel/ubuntu/+source/linux-oem/+git/jammy
+    Branch:     origin/oem-5.17-next
+    Commit:     b70ef9e9eb8cc
 
 # Prerequisites
-Ensure that 5.14-OEM headers are installed or are available.
-If you've already installed the 5.14-OEM kernel and headers,
+Ensure that 5.17-OEM headers are installed or are available.
+If you've already installed the 5.17-OEM kernel and headers,
 you can omit the KLIB and KLIB_BUILD environment variables from the build step.
-In the example, I'm working with a 5.14-OEM kernel located and built in `../focal`
+In the example, I'm working with a 5.17-OEM kernel located and built in `../jammy`
 
 # Building
-$ make -j`nproc` KLIB=../focal KLIB_BUILD=../focal defconfig-i915
-$ make -j`nproc` KLIB=../focal KLIB_BUILD=../focal
+$ make -j`nproc` KLIB=../jammy KLIB_BUILD=../jammy defconfig-i915
+$ make -j`nproc` KLIB=../jammy KLIB_BUILD=../jammy
 
 There are a couple warnings that are expected, but the build should complete.
 
 # Installing
-$ make KLIB=../focal KLIB_BUILD=../focal install
+$ make KLIB=../jammy KLIB_BUILD=../jammy install
 
 # Creating a Debian DKMS package
 $ dpkg-buildpackage

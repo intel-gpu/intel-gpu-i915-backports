@@ -37,6 +37,7 @@
 
 #include "display/icl_dsi_regs.h"
 #include "display/intel_de.h"
+#include "display/intel_display_trace.h"
 #include "display/intel_display_types.h"
 #include "display/intel_fifo_underrun.h"
 #include "display/intel_hotplug.h"
@@ -51,9 +52,9 @@
 #include "gt/intel_rps.h"
 #include "gt/iov/intel_iov_memirq.h"
 
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
-#include "i915_trace.h"
 #include "intel_pm.h"
 
 /**
@@ -4493,6 +4494,44 @@ static void gen11_irq_postinstall(struct drm_i915_private *dev_priv)
 	intel_uncore_posting_read(&dev_priv->uncore, GEN11_GFX_MSTR_IRQ);
 }
 
+static void clear_all_soc_errors(struct intel_gt *gt)
+{
+	void __iomem * const regs = gt->uncore->regs;
+	enum hardware_error hw_err;
+	u32 base = SOC_XEHPSDV_BASE;
+	u32 slave_base = SOC_XEHPSDV_SLAVE_BASE;
+	unsigned int i;
+
+	if (IS_XEHPSDV(gt->i915)) {
+		base = SOC_XEHPSDV_BASE;
+		slave_base = SOC_XEHPSDV_SLAVE_BASE;
+	} else if (IS_PONTEVECCHIO(gt->i915)) {
+		base = SOC_PVC_BASE;
+		slave_base = SOC_PVC_SLAVE_BASE;
+	}
+
+	hw_err = HARDWARE_ERROR_CORRECTABLE;
+	while (hw_err < HARDWARE_ERROR_MAX) {
+		for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
+			raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
+				      ~REG_BIT(hw_err));
+
+		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_MASTER_REG(base, hw_err),
+			      REG_GENMASK(31, 0));
+		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err),
+			      REG_GENMASK(31, 0));
+		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(base, hw_err),
+			      REG_GENMASK(31, 0));
+		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(base, hw_err),
+			      REG_GENMASK(31, 0));
+		hw_err++;
+	}
+
+	for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
+		raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
+			      (HARDWARE_ERROR_MAX < 1) + 1);
+}
+
 static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 {
 	u32 gu_misc_masked = GEN11_GU_MISC_GSE;
@@ -4500,10 +4539,18 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 	unsigned int i;
 
 	for_each_gt(dev_priv, i, gt) {
+		/*
+		 * All Soc error correctable, non fatal and fatal are reported
+		 * to IEH registers only. To be safe we are clearing these errors as well.
+		 */
+		if (IS_XEHPSDV(gt->i915) || IS_PONTEVECCHIO(gt->i915))
+			clear_all_soc_errors(gt);
+
 		gen11_gt_irq_postinstall(gt);
 
 		GEN3_IRQ_INIT(gt->uncore, GEN11_GU_MISC_, ~gu_misc_masked,
 			      gu_misc_masked);
+		intel_uncore_write(gt->uncore, GEN11_GFX_MSTR_IRQ, REG_GENMASK(30, 0));
 	}
 
 	if (HAS_DISPLAY(dev_priv)) {
@@ -4513,6 +4560,7 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 				   GEN11_DISPLAY_IRQ_ENABLE);
 	}
 
+	intel_uncore_write(&dev_priv->uncore, DG1_MSTR_TILE_INTR, REG_GENMASK(3, 0));
 	dg1_master_intr_enable(to_gt(dev_priv)->uncore->regs);
 	intel_uncore_posting_read(to_gt(dev_priv)->uncore, DG1_MSTR_TILE_INTR);
 }
@@ -5100,6 +5148,9 @@ static irq_handler_t intel_irq_handler(struct drm_i915_private *dev_priv)
 
 static void intel_irq_reset(struct drm_i915_private *dev_priv)
 {
+	if (dev_priv->quiesce_gpu)
+		return;
+
 	if (HAS_GMCH(dev_priv)) {
 		if (IS_CHERRYVIEW(dev_priv))
 			cherryview_irq_reset(dev_priv);
@@ -5174,9 +5225,6 @@ static void process_fatal_hw_errors(struct drm_i915_private *dev_priv)
 	for_each_gt(dev_priv, i, gt) {
 		void __iomem *const regs = gt->uncore->regs;
 
-		if ((dev_pcieerr_status & DEV_PCIEERR_TILE_STATUS(i)) == 0)
-			continue;
-
 		if (dev_pcieerr_status & DEV_PCIEERR_IS_FATAL(i))
 			gen12_hw_error_source_handler(gt, HARDWARE_ERROR_FATAL);
 		/*
@@ -5215,15 +5263,21 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 	 * special cases in our ordering checks.
 	 */
 	dev_priv->runtime_pm.irqs_enabled = true;
-
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	dev_priv->irq_enabled = true;
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	dev_priv->drm.irq_enabled = true;
-
+#endif /* LINUX_VERSION_IN_RANGE */
 	intel_irq_reset(dev_priv);
 
 	ret = request_irq(irq, intel_irq_handler(dev_priv),
 			  IRQF_SHARED, DRIVER_NAME, dev_priv);
 	if (ret < 0) {
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		dev_priv->irq_enabled = false;
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		dev_priv->drm.irq_enabled = false;
+#endif /* LINUX_VERSION_IN_RANGE */
 		return ret;
 	}
 
@@ -5249,10 +5303,18 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
 	 * intel_modeset_driver_remove() calling us out of sequence.
 	 * Would be nice if it didn't do that...
 	 */
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	if (!dev_priv->irq_enabled)
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	if (!dev_priv->drm.irq_enabled)
+#endif /* LINUX_VERSION_IN_RANGE */
 		return;
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	dev_priv->irq_enabled = false;
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	dev_priv->drm.irq_enabled = false;
+#endif /* LINUX_VERSION_IN_RANGE */
 
 	intel_irq_reset(dev_priv);
 
@@ -5271,6 +5333,9 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
  */
 void intel_runtime_pm_disable_interrupts(struct drm_i915_private *dev_priv)
 {
+	if (dev_priv->quiesce_gpu)
+		return;
+
 	intel_irq_reset(dev_priv);
 	dev_priv->runtime_pm.irqs_enabled = false;
 	intel_synchronize_irq(dev_priv);

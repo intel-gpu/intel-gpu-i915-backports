@@ -11,6 +11,7 @@
 #include <linux/llist.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/seqlock.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
@@ -21,7 +22,6 @@
 #include "uc/intel_uc.h"
 #include "intel_gsc.h"
 
-#include "i915_vma.h"
 #include "i915_perf_types.h"
 #include "intel_engine_types.h"
 #include "intel_flat_ppgtt_pool_types.h"
@@ -34,8 +34,11 @@
 #include "intel_wakeref.h"
 #include "pxp/intel_pxp_types.h"
 
+#include "intel_gt_defines.h"
+
 struct drm_i915_private;
 struct i915_ggtt;
+struct i915_vma;
 struct intel_engine_cs;
 struct intel_uncore;
 
@@ -148,6 +151,23 @@ struct intel_gt {
 	struct intel_gsc gsc;
 	struct intel_iov iov;
 	enum intel_engine_id rsvd_bcs;
+
+	struct {
+		/* Serialize global tlb invalidations */
+		struct mutex invalidate_lock;
+
+		/*
+		 * Batch TLB invalidations
+		 *
+		 * After unbinding the PTE, we need to ensure the TLB
+		 * are invalidated prior to releasing the physical pages.
+		 * But we only need one such invalidation for all unbinds,
+		 * so we track how many TLB invalidations have been
+		 * performed since unbind the PTE and only emit an extra
+		 * invalidate if no full barrier has been passed.
+		 */
+		seqcount_mutex_t seqno;
+	} tlb;
 
 	struct i915_wa_list wa_list;
 
@@ -276,9 +296,6 @@ struct intel_gt {
 		u8 instanceid;
 	} default_steering;
 
-	/* Serialize global tlb invalidations */
-	struct mutex mutex;
-
 	/*
 	 * Base of per-tile GTTMMADR where we can derive the MMIO and the GGTT.
 	 */
@@ -321,6 +338,7 @@ struct intel_gt {
 
 	struct {
 		u8 uc_index;
+		u8 wb_index; /* Only used on HAS_L3_CCS_READ() platforms */
 	} mocs;
 
 	struct intel_pxp pxp;

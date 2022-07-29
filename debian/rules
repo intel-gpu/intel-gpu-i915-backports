@@ -3,11 +3,11 @@
 # export DH_VERBOSE = 1
 include /usr/share/dpkg/pkg-info.mk
 
-DKMS_PACKAGE_NAME=intel-gpgpu-dkms-ubuntu-5.14-oem
+DKMS_PACKAGE_NAME=intel-gpgpu-dkms-ubuntu-5.17-oem
 DKMS_PACKAGE_VERSION=$(DEB_VERSION_UPSTREAM)
 GENERATED_DKMS_FILES= \
-    debian/intel-gpgpu-dkms-ubuntu-5.14-oem.install \
-    debian/intel-gpgpu-dkms-ubuntu-5.14-oem.dkms
+    debian/intel-gpgpu-dkms-ubuntu-5.17-oem.install \
+    debian/intel-gpgpu-dkms-ubuntu-5.17-oem.dkms
 
 %:
 	dh $@ --with dkms
@@ -23,10 +23,10 @@ override_dh_clean:
 	dh_clean
 
 # Be careful with these names, they must match the pkg name or you'll get an empty .deb
-override_dh_install: debian/intel-gpgpu-dkms-ubuntu-5.14-oem.install
+override_dh_install: debian/intel-gpgpu-dkms-ubuntu-5.17-oem.install
 	dh_install --exclude=.gitignore
 
-override_dh_dkms: debian/intel-gpgpu-dkms-ubuntu-5.14-oem.dkms
+override_dh_dkms: debian/intel-gpgpu-dkms-ubuntu-5.17-oem.dkms
 	dh_dkms -V $(DKMS_PACKAGE_VERSION)
 
 $(GENERATED_DKMS_FILES) : $(GENERATED_DKMS_FILES:=.in) debian/rules

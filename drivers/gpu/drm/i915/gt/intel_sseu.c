@@ -11,8 +11,6 @@
 #include "intel_gt_regs.h"
 #include "intel_sseu.h"
 
-#include "linux/string_helpers.h"
-
 void intel_sseu_set_info(struct sseu_dev_info *sseu, u8 max_slices,
 			 u8 max_subslices, u8 max_eus_per_subslice)
 {
@@ -213,7 +211,7 @@ static void gen12_sseu_info_init(struct intel_gt *gt)
 	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
 		c_dss_en = intel_uncore_read(uncore, GEN12_GT_COMPUTE_DSS_ENABLE);
 		if (sseu->max_subslices > 32)
-			c_dss_en |= (((u64)intel_uncore_read(uncore, GEN12_GT_COMPUTE_DSS_ENABLE_EXT)) << 32);
+			c_dss_en |= (((u64)intel_uncore_read(uncore, XEHPC_GT_COMPUTE_DSS_ENABLE_EXT)) << 32);
 	}
 
 	/*

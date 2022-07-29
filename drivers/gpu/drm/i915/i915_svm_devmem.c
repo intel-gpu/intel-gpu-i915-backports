@@ -393,8 +393,12 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 		}
 
 		cnt++;
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		args->dst[i] = migrate_pfn(page_to_pfn(page));
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		args->dst[i] = migrate_pfn(page_to_pfn(page)) |
 			       MIGRATE_PFN_LOCKED;
+#endif /* LINUX_VERSION_IN_RANGE */
 	}
 
 	if (!cnt) {
@@ -413,10 +417,12 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 migrate_out:
 	if (unlikely(ret)) {
 		for (i = 0; i < npages; i++) {
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 			if (args->dst[i] & MIGRATE_PFN_LOCKED) {
 				page = migrate_pfn_to_page(args->dst[i]);
 				i915_devmem_page_free_locked(i915, page);
 			}
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 			args->dst[i] = 0;
 		}
 	}
@@ -567,7 +573,11 @@ i915_devmem_fault_alloc_and_copy(struct i915_devmem_migrate *migrate)
 		}
 	}
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	args->dst[0] = migrate_pfn(page_to_pfn(dpage));
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	args->dst[0] = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
+#endif /* LINUX_VERSION_IN_RANGE */
 
 	/* Copy the pages */
 	migrate->npages = 1;

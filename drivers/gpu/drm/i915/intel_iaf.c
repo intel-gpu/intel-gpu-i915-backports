@@ -301,7 +301,7 @@ void intel_iaf_init_mmio(struct drm_i915_private *i915)
 		return;
 
 	i915->intel_iaf.power_enabled = true;
-	if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_B0, STEP_FOREVER)) {
+	if (IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER)) {
 		if (!iaf_power_enabled(i915)) {
 			i915->intel_iaf.power_enabled = false;
 			drm_warn(&i915->drm, "IAF: power disabled\n");

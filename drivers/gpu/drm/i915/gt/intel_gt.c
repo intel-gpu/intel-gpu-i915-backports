@@ -5,8 +5,7 @@
 
 #include <drm/intel-gtt.h>
 
-#include "intel_gt_debugfs.h"
-
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 
@@ -18,6 +17,7 @@
 #include "intel_gt.h"
 #include "intel_gt_buffer_pool.h"
 #include "intel_gt_clock_utils.h"
+#include "intel_gt_debugfs.h"
 #include "intel_gt_pm.h"
 #include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
@@ -26,6 +26,7 @@
 #include "intel_rc6.h"
 #include "intel_renderstate.h"
 #include "intel_rps.h"
+#include "intel_tlb.h"
 #include "intel_uncore.h"
 #include "intel_pagefault.h"
 #include "intel_pm.h"
@@ -80,8 +81,6 @@ __intel_gt_init_early(struct intel_gt *gt,
 
 	spin_lock_init(&gt->irq_lock);
 
-	mutex_init(&gt->mutex);
-
 	INIT_LIST_HEAD(&gt->closed_vma);
 	spin_lock_init(&gt->closed_lock);
 
@@ -97,6 +96,7 @@ __intel_gt_init_early(struct intel_gt *gt,
 	intel_gt_init_reset(gt);
 	intel_gt_init_requests(gt);
 	intel_gt_init_timelines(gt);
+	intel_gt_init_tlb(gt);
 	intel_gt_pm_init_early(gt);
 
 	intel_flat_ppgtt_pool_init_early(&gt->fpp);
@@ -217,11 +217,14 @@ int intel_gt_init_mmio(struct intel_gt *gt)
 	 * An mslice is unavailable only if both the meml3 for the slice is
 	 * disabled *and* all of the DSS in the slice (quadrant) are disabled.
 	 */
-	if (HAS_MSLICES(i915))
+	if (HAS_MSLICES(i915)) {
 		gt->info.mslice_mask =
 			slicemask(gt, GEN_DSS_PER_MSLICE) |
 			(intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3) &
 			 GEN12_MEML3_EN_MASK);
+		if (!gt->info.mslice_mask) /* should be impossible! */
+			drm_warn(&i915->drm, "mslice mask all zero!\n");
+	}
 
 	/*
 	 * There are 4 bslices which hold 16 DSS each.  Bslice 0 is
@@ -245,7 +248,13 @@ int intel_gt_init_mmio(struct intel_gt *gt)
 		gt->info.l3bank_mask =
 			~intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3) &
 			GEN10_L3BANK_MASK;
-	} else if (HAS_MSLICES(i915) || HAS_BSLICES(i915)) {
+		if (!gt->info.l3bank_mask) /* should be impossible! */
+			drm_warn(&i915->drm, "L3 bank mask is all zero!\n");
+	} else if (GRAPHICS_VER(i915) >= 11) {
+		/*
+		 * We expect all modern platforms to have at least some
+		 * type of steering that needs to be initialized.
+		 */
 		MISSING_CASE(INTEL_INFO(i915)->platform);
 	}
 
@@ -281,32 +290,15 @@ static void init_unused_rings(struct intel_gt *gt)
 	}
 }
 
-static void gen12_stateless_mc_set(struct intel_gt *gt, u32 val)
+static void xehpc_stateless_mc_set(struct intel_gt *gt, u32 val)
 {
-	struct drm_i915_private *i915 = gt->i915;
 	struct intel_uncore *uncore = gt->uncore;
 
-	if (intel_gt_has_eus(gt)) {
-		u32 misccpctl;
+	if (intel_gt_has_eus(gt))
+		intel_uncore_write(uncore, XEHPC_DSS_UM_COMPRESSION, val);
 
-		misccpctl = intel_uncore_read(uncore, GEN7_MISCCPCTL);
-
-		if ((misccpctl & GEN12_DOP_CLOCK_GATE_LOCK) != 0) {
-			drm_err(&i915->drm, "Clock gating control register locked for writing");
-			mkwrite_device_info(i915)->has_stateless_mc = 0;
-			return;
-		}
-
-		/* Wa_14015795083: Disable DOP clk gating for
-		 * programming GEN12_DSS_UM_COMPRESSION */
-		intel_uncore_write(uncore, GEN7_MISCCPCTL, misccpctl
-					& ~GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
-		intel_uncore_write(uncore, GEN12_DSS_UM_COMPRESSION, val);
-		intel_uncore_write(uncore, GEN7_MISCCPCTL, misccpctl);
-	}
-
-	intel_uncore_write(uncore, GEN12_UM_COMPRESSION, val);
-	intel_uncore_write(uncore, GEN12_LNI_UM_COMPRESSION, val);
+	intel_uncore_write(uncore, XEHPC_UM_COMPRESSION, val);
+	intel_uncore_write(uncore, XEHPC_LNI_UM_COMPRESSION, val);
 }
 
 /*
@@ -321,7 +313,7 @@ static void intel_stateless_mc_init(struct intel_gt *gt)
 	if (!HAS_STATELESS_MC(gt->i915))
 		return;
 
-	gen12_stateless_mc_set(gt, GEN12_COMPRESSION_ENABLE);
+	xehpc_stateless_mc_set(gt, XEHPC_COMPRESSION_ENABLE);
 }
 
 int intel_gt_init_hw(struct intel_gt *gt)
@@ -626,6 +618,9 @@ static void xehpsdv_check_faults(struct intel_gt *gt)
 void intel_gt_check_and_clear_faults(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
+
+	if (gt->i915->quiesce_gpu)
+		return;
 
 	if (IS_SRIOV_VF(i915))
 		return;
@@ -1001,8 +996,10 @@ static void __intel_gt_disable(struct intel_gt *gt)
 {
 	intel_gt_set_wedged_on_fini(gt);
 
-	intel_gt_suspend_prepare(gt);
-	intel_gt_suspend_late(gt);
+	if (!gt->i915->quiesce_gpu) {
+		intel_gt_suspend_prepare(gt);
+		intel_gt_suspend_late(gt);
+	}
 
 	GEM_BUG_ON(intel_gt_pm_is_awake(gt));
 }
@@ -1185,13 +1182,12 @@ void intel_gt_driver_late_release(struct intel_gt *gt)
 	/* We need to wait for inflight RCU frees to release their grip */
 	rcu_barrier();
 
-	mutex_destroy(&gt->mutex);
-
 	intel_iov_release(&gt->iov);
 	intel_uc_driver_late_release(&gt->uc);
 	intel_gt_fini_requests(gt);
 	intel_gt_fini_reset(gt);
 	intel_gt_fini_timelines(gt);
+	intel_gt_fini_tlb(gt);
 	intel_engines_free(gt);
 }
 
@@ -1248,24 +1244,20 @@ static void intel_gt_get_valid_steering(struct intel_gt *gt,
 {
 	switch (type) {
 	case L3BANK:
-		GEM_DEBUG_WARN_ON(!gt->info.l3bank_mask); /* should be impossible! */
-
 		*sliceid = 0;		/* unused */
 		*subsliceid = __ffs(gt->info.l3bank_mask);
 		break;
 	case MSLICE:
-		GEM_DEBUG_WARN_ON(!gt->info.mslice_mask); /* should be impossible! */
-
+		GEM_WARN_ON(!HAS_MSLICES(gt->i915));
 		*sliceid = __ffs(gt->info.mslice_mask);
 		*subsliceid = 0;	/* unused */
 		break;
 	case LNCF:
-		GEM_DEBUG_WARN_ON(!gt->info.mslice_mask); /* should be impossible! */
-
 		/*
 		 * An LNCF is always present if its mslice is present, so we
 		 * can safely just steer to LNCF 0 in all cases.
 		 */
+		GEM_WARN_ON(!HAS_MSLICES(gt->i915));
 		*sliceid = __ffs(gt->info.mslice_mask) << 1;
 		*subsliceid = 0;	/* unused */
 		break;
@@ -1541,7 +1533,7 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915)
 	tiles = tile_count(i915);
 	drm_info(&i915->drm, "Tile count: %u\n", tiles);
 
-	if (GEM_WARN_ON(tiles > I915_MAX_TILES))
+	if (GEM_WARN_ON(tiles > I915_MAX_GT))
 		return -EINVAL;
 
 	/* For Modern GENs size of GTTMMADR is 16MB (for each tile) */
@@ -1554,7 +1546,7 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915)
 	}
 
 	i = 1;
-	for_each_set_bit_from(i, &enabled_tiles_mask, I915_MAX_TILES) {
+	for_each_set_bit_from(i, &enabled_tiles_mask, I915_MAX_GT) {
 		gt = kzalloc(sizeof(*gt), GFP_KERNEL);
 		if (!gt) {
 			ret = -ENOMEM;

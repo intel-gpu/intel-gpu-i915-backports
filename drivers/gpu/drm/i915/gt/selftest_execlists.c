@@ -5,6 +5,7 @@
 
 #include <linux/prime_numbers.h>
 
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_pm.h"
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_reset.h"
@@ -551,6 +552,32 @@ static int live_pin_rewind(void *arg)
 	return err;
 }
 
+static int engine_lock_reset_tasklet(struct intel_engine_cs *engine)
+{
+	tasklet_disable(&engine->sched_engine->tasklet);
+	local_bh_disable();
+
+	if (test_and_set_bit(I915_RESET_ENGINE + engine->id,
+			     &engine->gt->reset.flags)) {
+		local_bh_enable();
+		tasklet_enable(&engine->sched_engine->tasklet);
+
+		intel_gt_set_wedged(engine->gt);
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+static void engine_unlock_reset_tasklet(struct intel_engine_cs *engine)
+{
+	clear_and_wake_up_bit(I915_RESET_ENGINE + engine->id,
+			      &engine->gt->reset.flags);
+
+	local_bh_enable();
+	tasklet_enable(&engine->sched_engine->tasklet);
+}
+
 static int live_hold_reset(void *arg)
 {
 	struct intel_gt *gt = arg;
@@ -598,15 +625,9 @@ static int live_hold_reset(void *arg)
 
 		/* We have our request executing, now remove it and reset */
 
-		local_bh_disable();
-		if (test_and_set_bit(I915_RESET_ENGINE + id,
-				     &gt->reset.flags)) {
-			local_bh_enable();
-			intel_gt_set_wedged(gt);
-			err = -EBUSY;
+		err = engine_lock_reset_tasklet(engine);
+		if (err)
 			goto out;
-		}
-		tasklet_disable(&engine->sched_engine->tasklet);
 
 		engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
 		GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
@@ -618,10 +639,7 @@ static int live_hold_reset(void *arg)
 		__intel_engine_reset_bh(engine, NULL);
 		GEM_BUG_ON(rq->fence.error != -EIO);
 
-		tasklet_enable(&engine->sched_engine->tasklet);
-		clear_and_wake_up_bit(I915_RESET_ENGINE + id,
-				      &gt->reset.flags);
-		local_bh_enable();
+		engine_unlock_reset_tasklet(engine);
 
 		/* Check that we do not resubmit the held request */
 		if (!i915_request_wait(rq, 0, HZ / 5)) {
@@ -4627,15 +4645,9 @@ static int reset_virtual_engine(struct intel_gt *gt,
 	GEM_BUG_ON(engine == ve->engine);
 
 	/* Take ownership of the reset and tasklet */
-	local_bh_disable();
-	if (test_and_set_bit(I915_RESET_ENGINE + engine->id,
-			     &gt->reset.flags)) {
-		local_bh_enable();
-		intel_gt_set_wedged(gt);
-		err = -EBUSY;
+	err = engine_lock_reset_tasklet(engine);
+	if (err)
 		goto out_heartbeat;
-	}
-	tasklet_disable(&engine->sched_engine->tasklet);
 
 	engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
 	GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
@@ -4654,9 +4666,7 @@ static int reset_virtual_engine(struct intel_gt *gt,
 	GEM_BUG_ON(rq->fence.error != -EIO);
 
 	/* Release our grasp on the engine, letting CS flow again */
-	tasklet_enable(&engine->sched_engine->tasklet);
-	clear_and_wake_up_bit(I915_RESET_ENGINE + engine->id, &gt->reset.flags);
-	local_bh_enable();
+	engine_unlock_reset_tasklet(engine);
 
 	/* Check that we do not resubmit the held request */
 	i915_request_get(rq);

@@ -3,6 +3,7 @@
 
 #include_next  <drm/drm_dp_helper.h>
 
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 #define drm_dp_get_adjust_tx_ffe_preset LINUX_I915_BACKPORT(drm_dp_get_adjust_tx_ffe_preset)
 u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 				   int lane);
@@ -49,6 +50,7 @@ struct drm_edp_backlight_info {
 
 		bool lsb_reg_used : 1;
 		bool aux_enable : 1;
+		bool aux_set : 1;
 };
 
 #define drm_edp_backlight_init LINUX_I915_BACKPORT(drm_edp_backlight_init)
@@ -79,4 +81,5 @@ int drm_hdmi_sink_max_frl_rate(struct drm_connector *connector);
 #define drm_hdmi_sink_dsc_max_frl_rate LINUX_I915_BACKPORT(drm_hdmi_sink_dsc_max_frl_rate)
 int drm_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector);
 
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 #endif /* _BACKPORT_DRM_DP_HELPER_H_ */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019-2022, Intel Corporation. All rights reserved.
+ * Copyright(c) 2019-2020, Intel Corporation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -12,8 +12,9 @@
 #include <linux/slab.h>
 #include <linux/sizes.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include <linux/platform_device.h>
 #include <linux/delay.h>
-#include "spi/intel_spi.h"
+#include <spi/intel_spi.h>
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
@@ -665,12 +666,12 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 	return ret;
 }
 
-static int i915_spi_probe(struct auxiliary_device *aux_dev,
-			  const struct auxiliary_device_id *aux_dev_id)
+static int i915_spi_probe(struct platform_device *platdev)
 {
-	struct intel_spi *ispi = auxiliary_dev_to_intel_spi_dev(aux_dev);
+	struct resource *bar;
 	struct device *device;
 	struct i915_spi *spi;
+	struct i915_spi_region *regions;
 	unsigned int nregions;
 	unsigned int i, n;
 	size_t size;
@@ -678,11 +679,17 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 	size_t name_size;
 	int ret;
 
-	device = &aux_dev->dev;
+	device = &platdev->dev;
+
+	regions = dev_get_platdata(&platdev->dev);
+	if (!regions) {
+		dev_err(device, "no regions defined\n");
+		return -ENODEV;
+	}
 
 	/* count available regions */
 	for (nregions = 0, i = 0; i < I915_SPI_REGIONS; i++) {
-		if (ispi->regions[i].name)
+		if (regions[i].name)
 			nregions++;
 	}
 
@@ -701,21 +708,27 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 
 	spi->nregions = nregions;
 	for (n = 0, i = 0; i < I915_SPI_REGIONS; i++) {
-		if (ispi->regions[i].name) {
-			name_size = strlen(dev_name(&aux_dev->dev)) +
-				    strlen(ispi->regions[i].name) + 2; /* for point */
+		if (regions[i].name) {
+			name_size = strlen(dev_name(&platdev->dev)) +
+				    strlen(regions[i].name) + 2; /* for point */
 			name = kzalloc(name_size, GFP_KERNEL);
 			if (!name)
 				continue;
 			snprintf(name, name_size, "%s.%s",
-				 dev_name(&aux_dev->dev), ispi->regions[i].name);
+				 dev_name(&platdev->dev), regions[i].name);
 			spi->regions[n].name = name;
 			spi->regions[n].id = i;
 			n++;
 		}
 	}
 
-	spi->base = devm_ioremap_resource(device, &ispi->bar);
+	bar = platform_get_resource(platdev, IORESOURCE_MEM, 0);
+	if (!bar) {
+		ret = -ENODEV;
+		goto err;
+	}
+
+	spi->base = devm_ioremap_resource(device, bar);
 	if (IS_ERR(spi->base)) {
 		dev_err(device, "mmio not mapped\n");
 		ret = PTR_ERR(spi->base);
@@ -735,7 +748,7 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 		goto err;
 	}
 
-	dev_set_drvdata(&aux_dev->dev, spi);
+	platform_set_drvdata(platdev, spi);
 
 	dev_dbg(device, "i915-spi is bound\n");
 
@@ -746,42 +759,32 @@ err:
 	return ret;
 }
 
-static void i915_spi_remove(struct auxiliary_device *aux_dev)
+static int i915_spi_remove(struct platform_device *platdev)
 {
-	struct i915_spi *spi = dev_get_drvdata(&aux_dev->dev);
+	struct i915_spi *spi = platform_get_drvdata(platdev);
 
 	if (!spi)
-		return;
+		return 0;
 
 	mtd_device_unregister(&spi->mtd);
 
-	dev_set_drvdata(&aux_dev->dev, NULL);
+	platform_set_drvdata(platdev, NULL);
 
 	kref_put(&spi->refcnt, i915_spi_release);
+	return 0;
 }
 
-static const struct auxiliary_device_id i915_spi_id_table[] = {
-	{
-		.name = "i915.spi",
-	},
-	{
-		/* sentinel */
-	}
-};
-MODULE_DEVICE_TABLE(auxiliary, i915_spi_id_table);
-
-static struct auxiliary_driver i915_spi_driver = {
+MODULE_ALIAS("platform:i915-spi");
+static struct platform_driver i915_spi_driver = {
 	.probe  = i915_spi_probe,
 	.remove = i915_spi_remove,
 	.driver = {
-		/* auxiliary_driver_register() sets .name to be the modname */
+		.name = "i915-spi",
 	},
-	.id_table = i915_spi_id_table
 };
 
-module_auxiliary_driver(i915_spi_driver);
+module_platform_driver(i915_spi_driver);
 
-MODULE_ALIAS("auxiliary:i915.spi");
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION("Intel DGFX SPI driver");

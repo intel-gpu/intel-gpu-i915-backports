@@ -301,10 +301,7 @@ static u64 __get_rc6(struct intel_gt *gt)
 	struct drm_i915_private *i915 = gt->i915;
 	u64 val;
 
-	val = intel_rc6_residency_ns(&gt->rc6,
-				     IS_VALLEYVIEW(i915) ?
-				     VLV_GT_RENDER_RC6 :
-				     GEN6_GT_GFX_RC6);
+	val = intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6);
 
 	if (HAS_RC6p(i915))
 		val += intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6p);
@@ -836,7 +833,7 @@ static unsigned int i915_driver_error_id(const u64 config)
 static int
 config_status(struct drm_i915_private *i915, u64 config)
 {
-	struct intel_gt *gt = &i915->gt;
+	struct intel_gt *gt = to_gt(i915);
 
 	unsigned int gt_id = config_gt_id(config);
 
@@ -1818,7 +1815,7 @@ static int i915_pmu_cpu_offline(unsigned int cpu, struct hlist_node *node)
 
 static enum cpuhp_state cpuhp_slot = CPUHP_INVALID;
 
-void i915_pmu_init(void)
+int i915_pmu_init(void)
 {
 	int ret;
 
@@ -1831,6 +1828,8 @@ void i915_pmu_init(void)
 			  ret);
 	else
 		cpuhp_slot = ret;
+
+	return 0;
 }
 
 void i915_pmu_exit(void)

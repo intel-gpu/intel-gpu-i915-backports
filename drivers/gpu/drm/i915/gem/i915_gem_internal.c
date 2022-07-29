@@ -10,6 +10,7 @@
 
 #include "i915_drv.h"
 #include "i915_gem.h"
+#include "i915_gem_internal.h"
 #include "i915_gem_object.h"
 #include "i915_scatterlist.h"
 #include "i915_utils.h"
@@ -45,7 +46,11 @@ static int i915_gem_object_get_pages_internal(struct drm_i915_gem_object *obj)
 
 	max_order = MAX_ORDER;
 #ifdef CONFIG_SWIOTLB
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	if (is_swiotlb_active(obj->base.dev->dev)) {
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	if (is_swiotlb_active()) {
+#endif /* LINUX_VERSION_IN_RANGE */
 		unsigned int max_segment;
 
 		max_segment = swiotlb_max_segment();

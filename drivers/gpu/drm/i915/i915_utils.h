@@ -31,6 +31,13 @@
 #include <linux/string_helpers.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#include <linux/sched/clock.h>
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+
+#ifdef CONFIG_X86
+#include <asm/hypervisor.h>
+#endif
 
 struct drm_i915_private;
 struct timer_list;
@@ -294,6 +301,14 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 }
 
 /**
+ * until_timeout_ns - Keep retrying (busy spin) until the duration has passed
+ */
+#define until_timeout_ns(end, timeout_ns) \
+	for ((end) = ktime_get() + (timeout_ns); \
+	     ktime_before(ktime_get(), (end)); \
+	     cpu_relax())
+
+/**
  * __wait_for - magic wait macro
  *
  * Macro to help avoid open coding check/wait/timeout patterns. Note that it's
@@ -425,6 +440,18 @@ static inline bool timer_expired(const struct timer_list *t)
 {
 	return timer_active(t) && !timer_pending(t);
 }
+
+static inline bool i915_run_as_guest(void)
+{
+#if IS_ENABLED(CONFIG_X86)
+	return !hypervisor_is_type(X86_HYPER_NATIVE);
+#else
+	/* Not supported yet */
+	return false;
+#endif
+}
+
+bool i915_vtd_active(struct drm_i915_private *i915);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 void __mark_lock_used_irq(struct lockdep_map *lock);

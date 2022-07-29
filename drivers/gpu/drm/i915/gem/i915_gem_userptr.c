@@ -251,7 +251,9 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	unsigned int max_segment = i915_sg_segment_size();
 	struct sg_table *st;
 	unsigned int sg_page_sizes;
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	struct scatterlist *sg;
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 	struct page **pvec;
 	int ret;
 
@@ -271,6 +273,13 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	pvec = obj->userptr.pvec;
 
 alloc_table:
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	ret = sg_alloc_table_from_pages_segment(st, pvec, num_pages, 0,
+						num_pages << PAGE_SHIFT,
+						max_segment, GFP_KERNEL);
+	if (ret)
+		goto err;
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
 					 num_pages << PAGE_SHIFT, max_segment,
 					 NULL, 0, GFP_KERNEL);
@@ -278,7 +287,7 @@ alloc_table:
 		ret = PTR_ERR(sg);
 		goto err;
 	}
-
+#endif /* LINUX_VERSION_IN_RANGE */
 	ret = i915_gem_gtt_prepare_pages(obj, st);
 	if (ret) {
 		sg_free_table(st);
@@ -424,7 +433,6 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		ret = i915_gem_object_lock_interruptible(obj, &ww);
 		if (ret)
 			continue;
-
 		/*
 		 * If pages are stale, make sure userptr is unbound for
 		 * next attempt.
@@ -433,6 +441,7 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		    !obj->userptr.pvec)
 			ret = i915_gem_object_userptr_unbind(obj, &ww);
 	}
+
 	if (ret)
 		return ret;
 
@@ -718,3 +727,15 @@ int i915_gem_init_userptr(struct drm_i915_private *dev_priv)
 void i915_gem_cleanup_userptr(struct drm_i915_private *dev_priv)
 {
 }
+
+#ifdef CONFIG_MMU_NOTIFIER
+void i915_gem_userptr_lock_mmu_notifier(struct drm_i915_private *i915)
+{
+	write_lock(&i915->mm.notifier_lock);
+}
+
+void i915_gem_userptr_unlock_mmu_notifier(struct drm_i915_private *i915)
+{
+	write_unlock(&i915->mm.notifier_lock);
+}
+#endif

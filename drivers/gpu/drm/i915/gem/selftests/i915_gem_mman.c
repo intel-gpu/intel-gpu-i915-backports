@@ -7,11 +7,13 @@
 #include <linux/prime_numbers.h>
 #include <linux/sched/mm.h>
 
+#include "gem/i915_gem_internal.h"
+#include "gem/i915_gem_region.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
-#include "gem/i915_gem_region.h"
+
 #include "huge_gem_object.h"
 #include "i915_selftest.h"
 #include "selftests/i915_random.h"
@@ -85,7 +87,8 @@ static int check_partial_mapping(struct drm_i915_gem_object *obj,
 				 struct rnd_state *prng)
 {
 	const unsigned long npages = obj->base.size / PAGE_SIZE;
-	struct i915_ggtt *ggtt = to_gt(to_i915(obj->base.dev))->ggtt;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	struct i915_ggtt_view view;
 	struct i915_vma *vma;
 	unsigned long offset;
@@ -142,7 +145,7 @@ static int check_partial_mapping(struct drm_i915_gem_object *obj,
 	iowrite32(page, io + n * PAGE_SIZE / sizeof(*io));
 	i915_vma_unpin_iomap(vma);
 
-	intel_gt_flush_ggtt_writes(to_gt(to_i915(obj->base.dev)));
+	intel_gt_flush_ggtt_writes(to_gt(i915));
 
 	p = i915_gem_object_get_page(obj, offset >> PAGE_SHIFT);
 	cpu = kmap(p) + offset_in_page(offset);
@@ -176,7 +179,8 @@ static int check_partial_mappings(struct drm_i915_gem_object *obj,
 {
 	const unsigned int nreal = obj->scratch / PAGE_SIZE;
 	const unsigned long npages = obj->base.size / PAGE_SIZE;
-	struct i915_ggtt *ggtt = to_gt(to_i915(obj->base.dev))->ggtt;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	struct i915_vma *vma;
 	unsigned long page;
 	int err;
@@ -236,7 +240,7 @@ static int check_partial_mappings(struct drm_i915_gem_object *obj,
 		if (offset >= obj->base.size)
 			continue;
 
-		intel_gt_flush_ggtt_writes(to_gt(to_i915(obj->base.dev)));
+		intel_gt_flush_ggtt_writes(to_gt(i915));
 
 		p = i915_gem_object_get_page(obj, offset >> PAGE_SHIFT);
 		cpu = kmap(p) + offset_in_page(offset);

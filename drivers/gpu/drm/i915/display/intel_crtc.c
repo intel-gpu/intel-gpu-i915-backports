@@ -12,8 +12,9 @@
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_vblank_work.h>
 
-#include "i915_trace.h"
+#include "i915_irq.h"
 #include "i915_vgpu.h"
+#include "i9xx_plane.h"
 #include "icl_dsi.h"
 #include "intel_atomic.h"
 #include "intel_atomic_plane.h"
@@ -21,6 +22,7 @@
 #include "intel_crtc.h"
 #include "intel_cursor.h"
 #include "intel_display_debugfs.h"
+#include "intel_display_trace.h"
 #include "intel_display_types.h"
 #include "intel_drrs.h"
 #include "intel_dsi.h"
@@ -28,7 +30,6 @@
 #include "intel_psr.h"
 #include "intel_sprite.h"
 #include "intel_vrr.h"
-#include "i9xx_plane.h"
 #include "skl_universal_plane.h"
 
 static void assert_vblank_disabled(struct drm_crtc *crtc)
@@ -486,6 +487,8 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 		intel_crtc_has_type(new_crtc_state, INTEL_OUTPUT_DSI);
 	DEFINE_WAIT(wait);
 
+	intel_psr_lock(new_crtc_state);
+
 	if (new_crtc_state->do_async_flip)
 		return;
 
@@ -517,7 +520,7 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 	 * VBL interrupts will start the PSR exit and prevent a PSR
 	 * re-entry as well.
 	 */
-	intel_psr_wait_for_idle(new_crtc_state);
+	intel_psr_wait_for_idle_locked(new_crtc_state);
 
 	local_irq_disable();
 
@@ -630,6 +633,8 @@ void intel_pipe_update_end(struct intel_crtc_state *new_crtc_state)
 	u32 end_vbl_count = intel_crtc_get_vblank_counter(crtc);
 	ktime_t end_vbl_time = ktime_get();
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
+
+	intel_psr_unlock(new_crtc_state);
 
 	if (new_crtc_state->do_async_flip)
 		return;

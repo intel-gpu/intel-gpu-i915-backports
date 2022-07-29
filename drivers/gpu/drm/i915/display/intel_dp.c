@@ -30,6 +30,7 @@
 #include <linux/notifier.h>
 #include <linux/slab.h>
 #include <linux/string_helpers.h>
+#include <linux/timekeeping.h>
 #include <linux/types.h>
 
 #include <asm/byteorder.h>
@@ -48,6 +49,7 @@
 #include "intel_backlight.h"
 #include "intel_combo_phy_regs.h"
 #include "intel_connector.h"
+#include "intel_crtc.h"
 #include "intel_ddi.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
@@ -384,23 +386,13 @@ static int dg2_max_source_rate(struct intel_dp *intel_dp)
 	return intel_dp_is_edp(intel_dp) ? 810000 : 1350000;
 }
 
-static bool is_low_voltage_sku(struct drm_i915_private *i915, enum phy phy)
-{
-	u32 voltage;
-
-	voltage = intel_de_read(i915, ICL_PORT_COMP_DW3(phy)) & VOLTAGE_INFO_MASK;
-
-	return voltage == VOLTAGE_INFO_0_85V;
-}
-
 static int icl_max_source_rate(struct intel_dp *intel_dp)
 {
 	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
 	struct drm_i915_private *dev_priv = to_i915(dig_port->base.base.dev);
 	enum phy phy = intel_port_to_phy(dev_priv, dig_port->base.port);
 
-	if (intel_phy_is_combo(dev_priv, phy) &&
-	    (is_low_voltage_sku(dev_priv, phy) || !intel_dp_is_edp(intel_dp)))
+	if (intel_phy_is_combo(dev_priv, phy) && !intel_dp_is_edp(intel_dp))
 		return 540000;
 
 	return 810000;
@@ -408,23 +400,7 @@ static int icl_max_source_rate(struct intel_dp *intel_dp)
 
 static int ehl_max_source_rate(struct intel_dp *intel_dp)
 {
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	struct drm_i915_private *dev_priv = to_i915(dig_port->base.base.dev);
-	enum phy phy = intel_port_to_phy(dev_priv, dig_port->base.port);
-
-	if (intel_dp_is_edp(intel_dp) || is_low_voltage_sku(dev_priv, phy))
-		return 540000;
-
-	return 810000;
-}
-
-static int dg1_max_source_rate(struct intel_dp *intel_dp)
-{
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
-	enum phy phy = intel_port_to_phy(i915, dig_port->base.port);
-
-	if (intel_phy_is_combo(i915, phy) && is_low_voltage_sku(i915, phy))
+	if (intel_dp_is_edp(intel_dp))
 		return 540000;
 
 	return 810000;
@@ -467,7 +443,7 @@ intel_dp_set_source_rates(struct intel_dp *intel_dp)
 			max_rate = dg2_max_source_rate(intel_dp);
 		else if (IS_ALDERLAKE_P(dev_priv) || IS_ALDERLAKE_S(dev_priv) ||
 			 IS_DG1(dev_priv) || IS_ROCKETLAKE(dev_priv))
-			max_rate = dg1_max_source_rate(intel_dp);
+			max_rate = 810000;
 		else if (IS_JSL_EHL(dev_priv))
 			max_rate = ehl_max_source_rate(intel_dp);
 		else
@@ -1243,11 +1219,12 @@ static int intel_dp_max_bpp(struct intel_dp *intel_dp,
 	if (intel_dp_is_edp(intel_dp)) {
 		/* Get bpp from vbt only for panels that dont have bpp in edid */
 		if (intel_connector->base.display_info.bpc == 0 &&
-		    dev_priv->vbt.edp.bpp && dev_priv->vbt.edp.bpp < bpp) {
+		    intel_connector->panel.vbt.edp.bpp &&
+		    intel_connector->panel.vbt.edp.bpp < bpp) {
 			drm_dbg_kms(&dev_priv->drm,
 				    "clamping bpp for eDP panel to BIOS-provided %i\n",
-				    dev_priv->vbt.edp.bpp);
-			bpp = dev_priv->vbt.edp.bpp;
+				    intel_connector->panel.vbt.edp.bpp);
+			bpp = intel_connector->panel.vbt.edp.bpp;
 		}
 	}
 
@@ -1680,6 +1657,7 @@ intel_dp_compute_link_config(struct intel_encoder *encoder,
 		&pipe_config->hw.adjusted_mode;
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 	struct link_config_limits limits;
+	bool joiner_needs_dsc = false;
 	int ret;
 
 	limits.min_rate = intel_dp_common_rate(intel_dp, 0);
@@ -1716,19 +1694,23 @@ intel_dp_compute_link_config(struct intel_encoder *encoder,
 		pipe_config->bigjoiner_pipes = GENMASK(crtc->pipe + 1, crtc->pipe);
 
 	/*
+	 * Pipe joiner needs compression up to display 12 due to bandwidth
+	 * limitation. DG2 onwards pipe joiner can be enabled without
+	 * compression.
+	 */
+	joiner_needs_dsc = DISPLAY_VER(i915) < 13 && pipe_config->bigjoiner_pipes;
+
+	/*
 	 * Optimize for slow and wide for everything, because there are some
 	 * eDP 1.3 and 1.4 panels don't work well with fast and narrow.
 	 */
 	ret = intel_dp_compute_link_config_wide(intel_dp, pipe_config, &limits);
 
-	/*
-	 * Pipe joiner needs compression upto display12 due to BW limitation. DG2
-	 * onwards pipe joiner can be enabled without compression.
-	 */
-	drm_dbg_kms(&i915->drm, "Force DSC en = %d\n Force DSC BPP = %d\n",
-		    intel_dp->force_dsc_en, intel_dp->force_dsc_bpp);
-	if (ret || intel_dp->force_dsc_en ||
-	    (DISPLAY_VER(i915) < 13 && pipe_config->bigjoiner_pipes)) {
+	if (ret || joiner_needs_dsc || intel_dp->force_dsc_en) {
+		drm_dbg_kms(&i915->drm, "Try DSC (fallback=%s, joiner=%s, force=%s, force bpp=%d)\n",
+			    str_yes_no(ret), str_yes_no(joiner_needs_dsc),
+			    str_yes_no(intel_dp->force_dsc_en),
+			    intel_dp->force_dsc_bpp);
 		ret = intel_dp_dsc_compute_config(intel_dp, pipe_config,
 						  conn_state, &limits);
 		if (ret < 0)
@@ -2019,7 +2001,7 @@ intel_dp_drrs_compute_config(struct intel_connector *connector,
 	}
 
 	if (IS_IRONLAKE(i915) || IS_SANDYBRIDGE(i915) || IS_IVYBRIDGE(i915))
-		pipe_config->msa_timing_delay = i915->vbt.edp.drrs_msa_timing_delay;
+		pipe_config->msa_timing_delay = connector->panel.vbt.edp.drrs_msa_timing_delay;
 
 	pipe_config->has_drrs = true;
 
@@ -2302,6 +2284,16 @@ intel_edp_init_source_oui(struct intel_dp *intel_dp, bool careful)
 
 	if (drm_dp_dpcd_write(&intel_dp->aux, DP_SOURCE_OUI, oui, sizeof(oui)) < 0)
 		drm_err(&i915->drm, "Failed to write source OUI\n");
+
+	intel_dp->last_oui_write = jiffies;
+}
+
+void intel_dp_wait_source_oui(struct intel_dp *intel_dp)
+{
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+
+	drm_dbg_kms(&i915->drm, "Performing OUI wait\n");
+	wait_remaining_ms_from_jiffies(intel_dp->last_oui_write, 30);
 }
 
 /* If the device supports it, try to set the power state appropriately */
@@ -2472,11 +2464,30 @@ static int intel_dp_hdmi_sink_max_frl(struct intel_dp *intel_dp)
 {
 	struct intel_connector *intel_connector = intel_dp->attached_connector;
 	struct drm_connector *connector = &intel_connector->base;
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	int max_frl_rate;
+	int max_lanes, rate_per_lane;
+	int max_dsc_lanes, dsc_rate_per_lane;
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	int max_frl_rate = drm_hdmi_sink_max_frl_rate(connector);
 	int dsc_max_frl_rate = drm_hdmi_sink_dsc_max_frl_rate(connector);
+#endif /* LINUX_VERSION_IN_RANGE */
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	max_lanes = connector->display_info.hdmi.max_lanes;
+	rate_per_lane = connector->display_info.hdmi.max_frl_rate_per_lane;
+	max_frl_rate = max_lanes * rate_per_lane;
+
+	if (connector->display_info.hdmi.dsc_cap.v_1p2) {
+		max_dsc_lanes = connector->display_info.hdmi.dsc_cap.max_lanes;
+		dsc_rate_per_lane = connector->display_info.hdmi.dsc_cap.max_frl_rate_per_lane;
+		if (max_dsc_lanes && dsc_rate_per_lane)
+			max_frl_rate = min(max_frl_rate, max_dsc_lanes * dsc_rate_per_lane);
+	}
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	if (dsc_max_frl_rate)
 		return min(max_frl_rate, dsc_max_frl_rate);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 	return max_frl_rate;
 }
@@ -2837,9 +2848,40 @@ static void intel_edp_mso_mode_fixup(struct intel_connector *connector,
 		    DRM_MODE_ARG(mode));
 }
 
+void intel_edp_fixup_vbt_bpp(struct intel_encoder *encoder, int pipe_bpp)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
+	struct intel_connector *connector = intel_dp->attached_connector;
+
+	if (connector->panel.vbt.edp.bpp && pipe_bpp > connector->panel.vbt.edp.bpp) {
+		/*
+		 * This is a big fat ugly hack.
+		 *
+		 * Some machines in UEFI boot mode provide us a VBT that has 18
+		 * bpp and 1.62 GHz link bandwidth for eDP, which for reasons
+		 * unknown we fail to light up. Yet the same BIOS boots up with
+		 * 24 bpp and 2.7 GHz link. Use the same bpp as the BIOS uses as
+		 * max, not what it tells us to use.
+		 *
+		 * Note: This will still be broken if the eDP panel is not lit
+		 * up by the BIOS, and thus we can't get the mode at module
+		 * load.
+		 */
+		drm_dbg_kms(&dev_priv->drm,
+			    "pipe has %d bpp for eDP panel, overriding BIOS-provided max %d bpp\n",
+			    pipe_bpp, connector->panel.vbt.edp.bpp);
+		connector->panel.vbt.edp.bpp = pipe_bpp;
+	}
+}
+
 static void intel_edp_mso_init(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	struct intel_connector *connector = intel_dp->attached_connector;
+	struct drm_display_info *info = &connector->base.display_info;
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 	u8 mso;
 
 	if (intel_dp->edp_dpcd[0] < DP_EDP_14)
@@ -2858,8 +2900,14 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	if (mso) {
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration\n",
 			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso);
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration, pixel overlap %u\n",
+			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso,
+			    info->mso_pixel_overlap);
+#endif /* LINUX_VERSION_IN_RANGE */
 		if (!HAS_MSO(i915)) {
 			drm_err(&i915->drm, "No source MSO support, disabling\n");
 			mso = 0;
@@ -2867,7 +2915,11 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	intel_dp->mso_link_count = mso;
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	intel_dp->mso_pixel_overlap = 0; /* FIXME: read from DisplayID v2.0 */
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	intel_dp->mso_pixel_overlap = mso ? info->mso_pixel_overlap : 0;
+#endif /* LINUX_VERSION_IN_RANGE */
 }
 
 static bool
@@ -4620,12 +4672,19 @@ intel_dp_update_420(struct intel_dp *intel_dp)
 static void
 intel_dp_set_edid(struct intel_dp *intel_dp)
 {
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
 	struct edid *edid;
+	bool vrr_capable;
 
 	intel_dp_unset_edid(intel_dp);
 	edid = intel_dp_get_edid(intel_dp);
 	connector->detect_edid = edid;
+
+	vrr_capable = intel_vrr_is_capable(connector);
+	drm_dbg_kms(&i915->drm, "[CONNECTOR:%d:%s] VRR capable: %s\n",
+		    connector->base.base.id, connector->base.name, str_yes_no(vrr_capable));
+	drm_connector_set_vrr_capable_property(&connector->base, vrr_capable);
 
 	intel_dp_update_dfp(intel_dp, edid);
 	intel_dp_update_420(intel_dp);
@@ -4659,6 +4718,9 @@ intel_dp_unset_edid(struct intel_dp *intel_dp)
 
 	intel_dp->dfp.ycbcr_444_to_420 = false;
 	connector->base.ycbcr_420_allowed = false;
+
+	drm_connector_set_vrr_capable_property(&connector->base,
+					       false);
 }
 
 static int
@@ -4809,13 +4871,8 @@ static int intel_dp_get_modes(struct drm_connector *connector)
 	int num_modes = 0;
 
 	edid = intel_connector->detect_edid;
-	if (edid) {
+	if (edid)
 		num_modes = intel_connector_update_modes(connector, edid);
-
-		if (intel_vrr_is_capable(connector))
-			drm_connector_set_vrr_capable_property(connector,
-							       true);
-	}
 
 	/* Also add fixed mode, which may or may not be present in EDID */
 	if (intel_dp_is_edp(intel_attached_dp(intel_connector)))
@@ -5265,8 +5322,11 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	}
 	intel_connector->edid = edid;
 
+	intel_bios_init_panel(dev_priv, &intel_connector->panel,
+			      IS_ERR(edid) ? NULL : edid);
+
 	intel_panel_add_edid_fixed_modes(intel_connector,
-					 dev_priv->vbt.drrs_type != DRRS_TYPE_NONE);
+					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE);
 
 	/* MSO requires information from the EDID */
 	intel_edp_mso_init(intel_dp);
@@ -5307,6 +5367,8 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	intel_backlight_setup(intel_connector, pipe);
 
 	intel_edp_add_properties(intel_dp);
+
+	intel_pps_init_late(intel_dp);
 
 	return true;
 

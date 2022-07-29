@@ -649,12 +649,13 @@ static int gen12_vf_reset(struct intel_gt *gt,
 			  unsigned int retry)
 {
 	struct intel_uncore *uncore = gt->uncore;
+	i915_reg_t notify_reg = gt->uc.guc.notify_reg;
+	i915_reg_t send_reg = _MMIO(gt->uc.guc.send_regs.base);
 	u32 request[VF2GUC_VF_RESET_REQUEST_MSG_LEN] = {
 		FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_HOST) |
 		FIELD_PREP(GUC_HXG_MSG_0_TYPE, GUC_HXG_TYPE_REQUEST) |
 		FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION, GUC_ACTION_VF2GUC_VF_RESET),
 	};
-	const i915_reg_t reg = GEN11_SOFT_SCRATCH(0);
 	u32 response;
 	int err;
 
@@ -669,10 +670,10 @@ static int gen12_vf_reset(struct intel_gt *gt,
 	 */
 	GEM_WARN_ON(mutex_is_locked(&gt->uc.guc.send_mutex));
 
-	intel_uncore_write_fw(uncore, reg, request[0]);
-	intel_uncore_write_fw(uncore, GEN11_GUC_HOST_INTERRUPT, 1);
+	intel_uncore_write_fw(uncore, send_reg, request[0]);
+	intel_uncore_write_fw(uncore, notify_reg, GUC_SEND_TRIGGER);
 
-	err = __intel_wait_for_register_fw(uncore, reg,
+	err = __intel_wait_for_register_fw(uncore, send_reg,
 					   GUC_HXG_MSG_0_ORIGIN,
 					   FIELD_PREP(GUC_HXG_MSG_0_ORIGIN,
 						      GUC_HXG_ORIGIN_GUC),
@@ -728,6 +729,9 @@ int __intel_gt_reset(struct intel_gt *gt, intel_engine_mask_t engine_mask)
 	reset_func reset;
 	int ret = -ETIMEDOUT;
 	int retry;
+
+	if (gt->i915->quiesce_gpu)
+		return 0;
 
 	reset = intel_get_gpu_reset(gt);
 	if (!reset)
@@ -871,7 +875,7 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 		__intel_engine_reset(engine, stalled_mask & engine->mask);
 	local_bh_enable();
 
-	intel_uc_reset(&gt->uc, stalled_mask);
+	intel_uc_reset(&gt->uc, ALL_ENGINES);
 
 	intel_ggtt_restore_fences(gt->ggtt);
 
@@ -1041,9 +1045,6 @@ static bool __intel_gt_unset_wedged(struct intel_gt *gt)
 	}
 	spin_unlock(&timelines->lock);
 
-	/* Ensure that all non-kernel contexts are unpinned as well */
-	intel_gt_retire_requests(gt);
-
 	/* We must reset pending GPU events before restoring our submission */
 	ok = !HAS_EXECLISTS(gt->i915); /* XXX better agnosticism desired */
 	if (!INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
@@ -1090,8 +1091,6 @@ bool intel_gt_unset_wedged(struct intel_gt *gt)
 static int do_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 {
 	int err, i;
-
-	gt_revoke(gt);
 
 	err = __intel_gt_reset(gt, ALL_ENGINES);
 	for (i = 0; err && i < RESET_MAX_RETRIES; i++) {
@@ -1172,6 +1171,13 @@ void intel_gt_reset(struct intel_gt *gt,
 
 	might_sleep();
 	GEM_BUG_ON(!test_bit(I915_RESET_BACKOFF, &gt->reset.flags));
+
+	/*
+	 * FIXME: Revoking cpu mmap ptes cannot be done from a dma_fence
+	 * critical section like gpu reset.
+	 */
+	gt_revoke(gt);
+
 	mutex_lock(&gt->reset.mutex);
 
 	/* Clear any previous failed attempts at recovery. Time to try again. */
@@ -1418,7 +1424,7 @@ void intel_gt_handle_error(struct intel_gt *gt,
 	engine_mask &= gt->info.engine_mask;
 
 	if (flags & I915_ERROR_CAPTURE) {
-		i915_capture_error_state(gt, engine_mask);
+		i915_capture_error_state(gt, engine_mask, CORE_DUMP_FLAG_NONE);
 		intel_gt_clear_error_registers(gt, engine_mask);
 	}
 

@@ -216,8 +216,8 @@ static int fused_l3_banks(struct drm_i915_private *i915)
 
 	meml3 = intel_uncore_read(&i915->uncore, GEN10_MIRROR_FUSE3);
 	fused_banks = hweight32(meml3 & GEN12_MEML3_EN_MASK) * 12;
-	rambo = meml3 & PVC_L3_MODE_FUSE_RAMBO;
-	fused_base = hweight32(meml3 & PVC_L3_MODE_FUSE_BASE_MASK);
+	rambo = meml3 & XEHPC_L3_MODE_FUSE_RAMBO;
+	fused_base = hweight32(meml3 & XEHPC_L3_MODE_FUSE_BASE_MASK);
 
 	switch (fused_banks) {
 	case 12:
@@ -278,7 +278,7 @@ static int intel_hwconf_apply_overrides(struct intel_guc_hwconfig *hwconfig)
 	int count;
 
 	/* For A0 validation only: 22011497615 */
-	if (IS_PVC_BD_REVID(gt->i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)) {
 		int ret = sanitize_l3_size(gt->i915);
 		if (ret)
 			return ret;

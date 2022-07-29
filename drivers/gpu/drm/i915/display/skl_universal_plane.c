@@ -421,9 +421,19 @@ static int icl_plane_min_width(const struct drm_framebuffer *fb,
 	}
 }
 
-static int icl_plane_max_width(const struct drm_framebuffer *fb,
-			       int color_plane,
-			       unsigned int rotation)
+static int icl_hdr_plane_max_width(const struct drm_framebuffer *fb,
+				   int color_plane,
+				   unsigned int rotation)
+{
+	if (intel_format_info_is_yuv_semiplanar(fb->format, fb->modifier))
+		return 4096;
+	else
+		return 5120;
+}
+
+static int icl_sdr_plane_max_width(const struct drm_framebuffer *fb,
+				   int color_plane,
+				   unsigned int rotation)
 {
 	return 5120;
 }
@@ -761,21 +771,21 @@ static u32 skl_plane_ctl_tiling(u64 fb_modifier)
 		return PLANE_CTL_TILED_X;
 	case I915_FORMAT_MOD_Y_TILED:
 		return PLANE_CTL_TILED_Y;
-	case I915_FORMAT_MOD_F_TILED:
-		return PLANE_CTL_TILED_F;
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-		return PLANE_CTL_TILED_F |
+	case I915_FORMAT_MOD_4_TILED:
+		return PLANE_CTL_TILED_4;
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+		return PLANE_CTL_TILED_4 |
 			PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
 			PLANE_CTL_CLEAR_COLOR_DISABLE;
-	case I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
-		return PLANE_CTL_TILED_F |
+	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+		return PLANE_CTL_TILED_4 |
 			PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE |
 			PLANE_CTL_CLEAR_COLOR_DISABLE;
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-		return PLANE_CTL_TILED_F | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+		return PLANE_CTL_TILED_4 | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Y_TILED_CCS:
 	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
 		return PLANE_CTL_TILED_Y | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
@@ -2190,8 +2200,8 @@ static u8 skl_get_plane_caps(struct drm_i915_private *i915,
 		caps |= INTEL_PLANE_CAP_TILING_Y;
 	if (DISPLAY_VER(i915) < 12)
 		caps |= INTEL_PLANE_CAP_TILING_Yf;
-	if (HAS_FTILE(i915))
-		caps |= INTEL_PLANE_CAP_TILING_F;
+	if (HAS_4TILE(i915))
+		caps |= INTEL_PLANE_CAP_TILING_4;
 
 	if (skl_plane_has_rc_ccs(i915, pipe, plane_id)) {
 		caps |= INTEL_PLANE_CAP_CCS_RC;
@@ -2231,7 +2241,10 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 
 	if (DISPLAY_VER(dev_priv) >= 11) {
 		plane->min_width = icl_plane_min_width;
-		plane->max_width = icl_plane_max_width;
+		if (icl_is_hdr_plane(dev_priv, plane_id))
+			plane->max_width = icl_hdr_plane_max_width;
+		else
+			plane->max_width = icl_sdr_plane_max_width;
 		plane->max_height = icl_plane_max_height;
 		plane->min_cdclk = icl_plane_min_cdclk;
 	} else if (DISPLAY_VER(dev_priv) >= 10) {
@@ -2367,6 +2380,7 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 	unsigned int aligned_height;
 	struct drm_framebuffer *fb;
 	struct intel_framebuffer *intel_fb;
+	static_assert(PLANE_CTL_TILED_YF == PLANE_CTL_TILED_4);
 
 	if (!plane->get_hw_state(plane, &pipe))
 		return;
@@ -2431,19 +2445,19 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 			fb->modifier = I915_FORMAT_MOD_Y_TILED;
 		}
 		break;
-	case PLANE_CTL_TILED_YF: /* aka PLANE_CTL_TILED_F on XE_LPD+ */
-		if (DISPLAY_VER(dev_priv) >= 13) {
+	case PLANE_CTL_TILED_YF: /* aka PLANE_CTL_TILED_4 on XE_LPD+ */
+		if (HAS_4TILE(dev_priv)) {
 			u32 rc_mask = PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
 				      PLANE_CTL_CLEAR_COLOR_DISABLE;
 
 			if ((val & rc_mask) == rc_mask)
-				fb->modifier = I915_FORMAT_MOD_F_TILED_DG2_RC_CCS;
+				fb->modifier = I915_FORMAT_MOD_4_TILED_DG2_RC_CCS;
 			else if (val & PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE)
-				fb->modifier = I915_FORMAT_MOD_F_TILED_DG2_MC_CCS;
+				fb->modifier = I915_FORMAT_MOD_4_TILED_DG2_MC_CCS;
 			else if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE)
-				fb->modifier = I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC;
+				fb->modifier = I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC;
 			else
-				fb->modifier = I915_FORMAT_MOD_F_TILED;
+				fb->modifier = I915_FORMAT_MOD_4_TILED;
 		} else {
 			if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE)
 				fb->modifier = I915_FORMAT_MOD_Yf_TILED_CCS;

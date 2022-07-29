@@ -5,6 +5,7 @@
 
 #include "i915_selftest.h"
 
+#include "gt/intel_context.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_engine_user.h"
 #include "gt/intel_gpu_commands.h"
@@ -18,7 +19,7 @@
 #include "huge_gem_object.h"
 #include "mock_context.h"
 
-#define I915_TILING_F	PRELIM_I915_TILING_F
+#define I915_TILING_4	PRELIM_I915_TILING_4
 #define OW_SIZE 16                      /* in bytes */
 #define F_SUBTILE_SIZE 64               /* in bytes */
 #define F_TILE_WIDTH 128                /* in bytes */
@@ -79,132 +80,11 @@ static int linear_x_y_to_ftiled_pos(int x, int y, u32 stride, int bpp)
 	return pos / pixel_size * 4;
 }
 
-static int __igt_client_fill(struct intel_engine_cs *engine)
-{
-	struct intel_context *ce = engine->kernel_context;
-	struct drm_i915_gem_object *obj;
-	I915_RND_STATE(prng);
-	IGT_TIMEOUT(end);
-	u32 *vaddr;
-	int err = 0;
-
-	intel_engine_pm_get(engine);
-	do {
-		const u32 max_block_size = S16_MAX * PAGE_SIZE;
-		u32 sz = min_t(u64, ce->vm->total >> 4, prandom_u32_state(&prng));
-		u32 phys_sz = sz % (max_block_size + 1);
-		u32 val = prandom_u32_state(&prng);
-		u32 i;
-
-		/* sending one byte of data as per PVC_MEM_SET_CMD in PVC */
-		if (HAS_LINK_COPY_ENGINES(engine->i915))
-			val = val & 0xff;
-
-		sz = round_up(sz, PAGE_SIZE);
-		phys_sz = round_up(phys_sz, PAGE_SIZE);
-
-		pr_debug("%s with phys_sz= %x, sz=%x, val=%x\n", __func__,
-			 phys_sz, sz, val);
-
-		obj = huge_gem_object(engine->i915, phys_sz, sz);
-		if (IS_ERR(obj)) {
-			err = PTR_ERR(obj);
-			goto err_flush;
-		}
-
-		vaddr = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
-		if (IS_ERR(vaddr)) {
-			err = PTR_ERR(vaddr);
-			goto err_put;
-		}
-
-		/*
-		 * XXX: The goal is move this to get_pages, so try to dirty the
-		 * CPU cache first to check that we do the required clflush
-		 * before scheduling the blt for !llc platforms. This matches
-		 * some version of reality where at get_pages the pages
-		 * themselves may not yet be coherent with the GPU(swap-in). If
-		 * we are missing the flush then we should see the stale cache
-		 * values after we do the set_to_cpu_domain and pick it up as a
-		 * test failure.
-		 */
-		memset32(vaddr, val ^ 0xdeadbeaf,
-			 huge_gem_object_phys_size(obj) / sizeof(u32));
-
-		if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
-			obj->cache_dirty = true;
-
-		err = i915_gem_schedule_fill_pages_blt(obj, ce, obj->mm.pages,
-						       &obj->mm.page_sizes,
-						       val);
-		if (err)
-			goto err_unpin;
-
-		i915_gem_object_lock(obj, NULL);
-		err = i915_gem_object_set_to_cpu_domain(obj, false);
-		i915_gem_object_unlock(obj);
-		if (err)
-			goto err_unpin;
-
-		for (i = 0; i < huge_gem_object_phys_size(obj) / sizeof(u32); ++i) {
-			if (HAS_LINK_COPY_ENGINES(engine->i915))
-				err = (vaddr[i] != (val << 24 | val << 16 | val << 8 | val));
-			else
-				err = (vaddr[i] != val);
-
-			if (err) {
-				pr_err("vaddr[%u]=%x, expected=%x\n", i,
-				       vaddr[i], val);
-				err = -EINVAL;
-				goto err_unpin;
-			}
-		}
-
-		i915_gem_object_unpin_map(obj);
-		i915_gem_object_put(obj);
-	} while (!time_after(jiffies, end));
-
-	goto err_flush;
-
-err_unpin:
-	i915_gem_object_unpin_map(obj);
-err_put:
-	i915_gem_object_put(obj);
-err_flush:
-	if (err == -ENOMEM)
-		err = 0;
-	intel_engine_pm_put(engine);
-
-	return err;
-}
-
-static int igt_client_fill(void *arg)
-{
-	int inst = 0;
-
-	do {
-		struct intel_engine_cs *engine;
-		int err;
-
-		engine = intel_engine_lookup_user(arg,
-						  I915_ENGINE_CLASS_COPY,
-						  inst++);
-		if (!engine)
-			return 0;
-
-		err = __igt_client_fill(engine);
-		if (err == -ENOMEM)
-			err = 0;
-		if (err)
-			return err;
-	} while (1);
-}
-
 enum client_tiling {
 	CLIENT_TILING_LINEAR,
 	CLIENT_TILING_X,
 	CLIENT_TILING_Y,
-	CLIENT_TILING_F,
+	CLIENT_TILING_4,
 	CLIENT_NUM_TILING_TYPES
 };
 
@@ -273,7 +153,7 @@ static int prepare_blit(const struct tiled_blits *t,
 			 BLIT_CCTL_DST_MOCS(gt->mocs.uc_index));
 
 		src_pitch = t->width; /* in dwords */
-		if (src->tiling == CLIENT_TILING_F) {
+		if (src->tiling == CLIENT_TILING_4) {
 			src_tiles = XY_FAST_COPY_BLT_D0_SRC_TILE_MODE(YMAJOR);
 			src_4t = XY_FAST_COPY_BLT_D1_SRC_TILE4;
 		} else if (src->tiling == CLIENT_TILING_Y) {
@@ -285,7 +165,7 @@ static int prepare_blit(const struct tiled_blits *t,
 		}
 
 		dst_pitch = t->width; /* in dwords */
-		if (dst->tiling == CLIENT_TILING_F) {
+		if (dst->tiling == CLIENT_TILING_4) {
 			dst_tiles = XY_FAST_COPY_BLT_D0_DST_TILE_MODE(YMAJOR);
 			dst_4t = XY_FAST_COPY_BLT_D1_DST_TILE4;
 		} else if (dst->tiling == CLIENT_TILING_Y) {
@@ -435,14 +315,14 @@ static int tiled_blits_create_buffers(struct tiled_blits *t,
 			i915_prandom_u32_max_state(CLIENT_NUM_TILING_TYPES, prng);
 
 		/* Platforms support either TileY or Tile4, not both */
-		if (HAS_FTILE(i915) && t->buffers[i].tiling == CLIENT_TILING_Y)
-			t->buffers[i].tiling = CLIENT_TILING_F;
-		else if (!HAS_FTILE(i915) && t->buffers[i].tiling == CLIENT_TILING_F)
+		if (HAS_4TILE(i915) && t->buffers[i].tiling == CLIENT_TILING_Y)
+			t->buffers[i].tiling = CLIENT_TILING_4;
+		else if (!HAS_4TILE(i915) && t->buffers[i].tiling == CLIENT_TILING_4)
 			t->buffers[i].tiling = CLIENT_TILING_Y;
 
 		/* PVC also does not support X-tile */
 		if (IS_PONTEVECCHIO(i915) && t->buffers[i].tiling == CLIENT_TILING_X)
-			t->buffers[i].tiling = CLIENT_TILING_F;
+			t->buffers[i].tiling = CLIENT_TILING_4;
 	}
 
 	return 0;
@@ -478,7 +358,7 @@ static u64 tiled_offset(const struct intel_gt *gt,
 
 	y = div64_u64_rem(v, stride, &x);
 
-	if (tiling == CLIENT_TILING_F) {
+	if (tiling == CLIENT_TILING_4) {
 		v = linear_x_y_to_ftiled_pos(x_pos, y_pos, stride, 32);
 
 		/* no swizzling for f-tiling */
@@ -526,7 +406,7 @@ static const char *repr_tiling(enum client_tiling tiling)
 	case CLIENT_TILING_LINEAR: return "linear";
 	case CLIENT_TILING_X: return "X";
 	case CLIENT_TILING_Y: return "Y";
-	case CLIENT_TILING_F: return "F";
+	case CLIENT_TILING_4: return "F";
 	default: return "unknown";
 	}
 }
@@ -869,7 +749,6 @@ static int igt_client_tiled_blits(void *arg)
 int i915_gem_client_blt_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
-		SUBTEST(igt_client_fill),
 		SUBTEST(igt_client_tiled_blits),
 	};
 

@@ -428,28 +428,6 @@ void i915_sriov_print_info(struct drm_i915_private *i915, struct drm_printer *p)
 	drm_printf(p, "virtualization: %s\n", str_enabled_disabled(true));
 }
 
-static int pf_populate_lmtt(struct intel_iov *iov, u16 num_vfs)
-{
-	struct intel_gt * gt = iov_to_gt(iov);
-	int ret;
-
-	if (!HAS_LMEM(iov_to_i915(iov)))
-		return 0;
-
-	ret = intel_lmtt_create_entries(&iov->pf.lmtt, num_vfs);
-
-	intel_guc_invalidate_tlb_all(&gt->uc.guc);
-
-	return ret;
-}
-
-static void pf_reset_lmtt(struct intel_iov *iov, u16 num_vfs)
-{
-	if (!HAS_LMEM(iov_to_i915(iov)))
-		return;
-	intel_lmtt_destroy_entries(&iov->pf.lmtt, num_vfs);
-}
-
 static int pf_update_guc_clients(struct intel_iov *iov, unsigned int num_vfs)
 {
 	int err;
@@ -584,15 +562,9 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 	}
 
 	for_each_gt(i915, id, gt) {
-		err = pf_populate_lmtt(&gt->iov, num_vfs);
-		if (unlikely(err))
-			goto fail_pm;
-	}
-
-	for_each_gt(i915, id, gt) {
 		err = pf_update_guc_clients(&gt->iov, num_vfs);
 		if (unlikely(err < 0))
-			goto fail_lmtt;
+			goto fail_pm;
 	}
 
 	pf_apply_vf_rebar(i915, num_vfs);
@@ -611,9 +583,6 @@ fail_rebar:
 
 	for_each_gt(i915, id, gt)
 		pf_update_guc_clients(&gt->iov, 0);
-fail_lmtt:
-	for_each_gt(i915, id, gt)
-		pf_reset_lmtt(&gt->iov, num_vfs);
 fail_pm:
 	for_each_gt(i915, id, gt) {
 		intel_iov_provisioning_auto(&gt->iov, 0);
@@ -626,6 +595,34 @@ fail:
 	drm_err(&i915->drm, "Failed to enable %u VFs (%pe)\n",
 		num_vfs, ERR_PTR(err));
 	return err;
+}
+
+static void pf_start_vfs_flr(struct intel_iov *iov, unsigned int num_vfs)
+{
+	unsigned int n;
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+
+	for (n = 1; n <= num_vfs; n++)
+		intel_iov_state_start_flr(iov, n);
+}
+
+#define I915_VF_FLR_TIMEOUT_MS 500
+
+static void pf_wait_vfs_flr(struct intel_iov *iov, unsigned int num_vfs)
+{
+	unsigned int timeout_ms = I915_VF_FLR_TIMEOUT_MS;
+	unsigned int n;
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+
+	for (n = 1; n <= num_vfs; n++) {
+		if (wait_for(intel_iov_state_no_flr(iov, n), timeout_ms)) {
+			IOV_ERROR(iov, "VF%u FLR didn't complete within %u ms\n",
+				  n, timeout_ms);
+			timeout_ms /= 2;
+		}
+	}
 }
 
 /**
@@ -664,9 +661,13 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 
 	pf_restore_vf_rebar(i915);
 
+	for_each_gt(i915, id, gt)
+		pf_start_vfs_flr(&gt->iov, num_vfs);
+	for_each_gt(i915, id, gt)
+		pf_wait_vfs_flr(&gt->iov, num_vfs);
+
 	for_each_gt(i915, id, gt) {
 		pf_update_guc_clients(&gt->iov, 0);
-		pf_reset_lmtt(&gt->iov, num_vfs);
 		intel_iov_provisioning_auto(&gt->iov, 0);
 	}
 
@@ -806,6 +807,64 @@ int i915_sriov_pf_clear_vf(struct drm_i915_private *i915, unsigned int vfid)
 	}
 
 	return result;
+}
+
+/**
+ * i915_sriov_suspend_late - Suspend late SR-IOV.
+ * @i915: the i915 struct
+ *
+ * The function is called in a callback suspend_late.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int i915_sriov_suspend_late(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	if (IS_SRIOV_PF(i915)) {
+		/*
+		 * When we're enabling the VFs in i915_sriov_pf_enable_vfs(), we also get
+		 * a GT PM wakeref which we hold for the whole VFs life cycle.
+		 * However for the time of suspend this wakeref must be put back.
+		 * We'll get it back during the resume in i915_sriov_resume_early().
+		 */
+		if (pci_num_vf(to_pci_dev(i915->drm.dev)) != 0) {
+			for_each_gt(i915, id, gt)
+				intel_gt_pm_put_untracked(gt);
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * i915_sriov_resume_early - Resume early SR-IOV.
+ * @i915: the i915 struct
+ *
+ * The function is called in a callback resume_early.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int i915_sriov_resume_early(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	if (IS_SRIOV_PF(i915)) {
+		/*
+		 * When we're enabling the VFs in i915_sriov_pf_enable_vfs(), we also get
+		 * a GT PM wakeref which we hold for the whole VFs life cycle.
+		 * However for the time of suspend this wakeref must be put back.
+		 * If we have VFs enabled, now is the moment at which we get back this wakeref.
+		 */
+		if (pci_num_vf(to_pci_dev(i915->drm.dev)) != 0) {
+			for_each_gt(i915, id, gt)
+				intel_gt_pm_get_untracked(gt);
+		}
+	}
+
+	return 0;
 }
 
 static void vf_migration_recovery(struct drm_i915_private *i915)

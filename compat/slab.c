@@ -5,7 +5,7 @@
 #endif
 
 #ifdef CONFIG_SLUB
-#include <linux/slab_def.h>
+#include <linux/slub_def.h>
 #endif
 
 /*
