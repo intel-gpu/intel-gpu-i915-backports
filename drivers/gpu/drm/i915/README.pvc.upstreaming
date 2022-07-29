@@ -1,2 +1,5 @@
 PVC UPSTREAMING (done)
 T:      drm/i915/pvc
+
+Patches in this section are either on the upstream mailing list or will be sent
+there as soon as other pending pre-req series land upstream.

@@ -49,6 +49,7 @@ i915-y += i915_driver.o \
 	  i915_ioctl.o \
 	  i915_irq.o \
 	  i915_mitigations.o \
+	  i915_module.o \
 	  i915_params.o \
 	  i915_pci.o \
 	  i915_pci_err.o \
@@ -58,7 +59,6 @@ i915-y += i915_driver.o \
 	  i915_sysfs.o \
 	  i915_sysrq.o \
 	  i915_utils.o \
-	  i915_gem_ww.o \
 	  intel_device_info.o \
 	  intel_dram.o \
 	  intel_iaf.o \
@@ -161,7 +161,6 @@ i915-y += $(gt-y)
 gem-y += \
 	gem/i915_gem_busy.o \
 	gem/i915_gem_clflush.o \
-	gem/i915_gem_client_blt.o \
 	gem/i915_gem_context.o \
 	gem/i915_gem_create.o \
 	gem/i915_gem_dmabuf.o \
@@ -193,8 +192,8 @@ i915-y += \
 	  i915_cmd_parser.o \
 	  i915_gem_evict.o \
 	  i915_gem_gtt.o \
+	  i915_gem_ww.o \
 	  i915_gem.o \
-	  i915_globals.o \
 	  i915_query.o \
 	  i915_request.o \
 	  i915_scheduler.o \
@@ -215,6 +214,7 @@ i915-y += gt/uc/intel_uc.o \
 	  gt/uc/intel_uc_fw.o \
 	  gt/uc/intel_guc.o \
 	  gt/uc/intel_guc_ads.o \
+	  gt/uc/intel_guc_capture.o \
 	  gt/uc/intel_guc_ct.o \
 	  gt/uc/intel_guc_debugfs.o \
 	  gt/uc/intel_guc_fw.o \
@@ -274,6 +274,7 @@ i915-y += \
 	display/intel_cursor.o \
 	display/intel_display.o \
 	display/intel_display_power.o \
+	display/intel_display_power_map.o \
 	display/intel_display_power_well.o \
 	display/intel_dmc.o \
 	display/intel_dpio_phy.o \
@@ -325,6 +326,7 @@ i915-y += \
 	display/intel_crt.o \
 	display/intel_ddi.o \
 	display/intel_ddi_buf_trans.o \
+	display/intel_display_trace.o \
 	display/intel_dp.o \
 	display/intel_dp_aux.o \
 	display/intel_dp_aux_backlight.o \
@@ -366,6 +368,7 @@ i915-$(CPTCFG_DRM_I915_PXP) += \
 # Post-mortem debug and GPU hang state capture
 i915-$(CPTCFG_DRM_I915_CAPTURE_ERROR) += i915_gpu_error.o
 i915-$(CPTCFG_DRM_I915_SELFTEST) += \
+	gem/selftests/i915_gem_client_blt.o \
 	gem/selftests/igt_gem_utils.o \
 	selftests/intel_scheduler_helpers.o \
 	selftests/i915_random.o \
@@ -382,10 +385,9 @@ i915-$(CPTCFG_DRM_I915_SELFTEST) += \
 # virtual gpu code
 i915-y += i915_vgpu.o
 
-ifeq ($(CPTCFG_DRM_I915_GVT),y)
-i915-y += intel_gvt.o
+i915-$(CPTCFG_DRM_I915_GVT) += \
+	intel_gvt.o
 include $(src)/gvt/Makefile
-endif
 
 ifneq ($(CONFIG_X86),y)
 i915-y += arm64_missing/x86_hacks.o
@@ -403,7 +405,6 @@ i915_spi-y := spi/intel_spi_drv.o
 # exclude some broken headers from the test coverage
 no-header-test := \
 	arm64_missing/asm/cacheflush.h		\
-	arm64_missing/asm/hypervisor.h		\
 	arm64_missing/asm/atomic.h		\
 	arm64_missing/asm/cpufeature.h		\
 	arm64_missing/asm/iosf_mbi.h		\

@@ -58,11 +58,8 @@ static int forcewake_user_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct file_operations forcewake_user_fops = {
-	.owner = THIS_MODULE,
-	.open = forcewake_user_open,
-	.release = forcewake_user_release,
-};
+DEFINE_I915_GT_RAW_ATTRIBUTE(forcewake_user_fops, forcewake_user_open,
+			     forcewake_user_release, NULL, NULL, NULL);
 
 static int fw_domains_show(struct seq_file *m, void *data)
 {
@@ -113,7 +110,7 @@ static int vlv_drpc(struct seq_file *m)
 	seq_printf(m, "Media Power Well: %s\n",
 		   (pw_status & VLV_GTLC_PW_MEDIA_STATUS_MASK) ? "Up" : "Down");
 
-	print_rc6_res(m, "Render RC6 residency since boot:", VLV_GT_RENDER_RC6);
+	print_rc6_res(m, "Render RC6 residency since boot:", GEN6_GT_GFX_RC6);
 	print_rc6_res(m, "Media RC6 residency since boot:", VLV_GT_MEDIA_RC6);
 
 	return fw_domains_show(m, NULL);
@@ -660,8 +657,9 @@ static int perf_limit_reasons_clear(void *data, u64 val)
 
 	return 0;
 }
-DEFINE_SIMPLE_ATTRIBUTE(perf_limit_reasons_fops, perf_limit_reasons_get,
-			perf_limit_reasons_clear, "%llu\n");
+
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(perf_limit_reasons_fops, perf_limit_reasons_get,
+				perf_limit_reasons_clear, "%llu\n");
 
 void intel_gt_pm_debugfs_register(struct intel_gt *gt, struct dentry *root)
 {

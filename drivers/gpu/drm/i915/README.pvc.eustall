@@ -1,0 +1,5 @@
+PONTE VECCHIO - EU Stall Sampling (done)
+D:	Harish Chegondi <harish.chegondi@intel.com>
+
+The patches in this section expose EU Stall Sampling capability to userspace.
+Upstreaming will require a userspace consumer.

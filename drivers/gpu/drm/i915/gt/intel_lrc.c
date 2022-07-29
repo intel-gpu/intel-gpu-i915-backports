@@ -10,6 +10,8 @@
 #include "i915_drv.h"
 #include "i915_memcpy.h"
 #include "i915_perf.h"
+#include "i915_reg.h"
+#include "intel_context.h"
 #include "intel_engine.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
@@ -832,7 +834,6 @@ static void
 init_vf_irq_reg_state(u32 *regs, const struct intel_engine_cs *engine)
 {
 	struct i915_vma *vma = engine->gt->iov.vf.irq.vma;
-	u32 base = engine->mmio_base;
 
 	GEM_BUG_ON(!IS_SRIOV_VF(engine->i915));
 	GEM_BUG_ON(!vma);
@@ -841,22 +842,16 @@ init_vf_irq_reg_state(u32 *regs, const struct intel_engine_cs *engine)
 	BUILD_BUG_ON(!IS_ALIGNED(I915_VF_IRQ_SOURCE, SZ_64));
 
 	regs[GEN12_CTX_LRM_HEADER_0] =
-		MI_LOAD_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT;
-	regs[GEN12_CTX_INT_MASK_REG] =
-		i915_mmio_reg_offset(GEN12_RING_INT_MASK(base));
-	regs[GEN12_CTX_INT_MASK_PTR] =
-		i915_ggtt_offset(vma) + I915_VF_IRQ_ENABLE;
+		MI_LOAD_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT | MI_LRI_LRM_CS_MMIO;
+	regs[GEN12_CTX_INT_MASK_REG] = i915_mmio_reg_offset(GEN12_RING_INT_MASK(0));
+	regs[GEN12_CTX_INT_MASK_PTR] = i915_ggtt_offset(vma) + I915_VF_IRQ_ENABLE;
 
 	regs[GEN12_CTX_LRI_HEADER_4] =
-		MI_LOAD_REGISTER_IMM(2) | MI_LRI_FORCE_POSTED;
-	regs[GEN12_CTX_INT_STATUS_REPORT_PTR] =
-		i915_mmio_reg_offset(GEN12_RING_INT_STATUS(base));
-	regs[GEN12_CTX_INT_STATUS_REPORT_PTR + 1] =
-		i915_ggtt_offset(vma) + I915_VF_IRQ_STATUS;
-	regs[GEN12_CTX_INT_SRC_REPORT_PTR] =
-		i915_mmio_reg_offset(GEN12_RING_INT_SRC(base));
-	regs[GEN12_CTX_INT_SRC_REPORT_PTR + 1] =
-		i915_ggtt_offset(vma) + I915_VF_IRQ_SOURCE;
+		MI_LOAD_REGISTER_IMM(2) | MI_LRI_FORCE_POSTED | MI_LRI_LRM_CS_MMIO;
+	regs[GEN12_CTX_INT_STATUS_REPORT_PTR] = i915_mmio_reg_offset(GEN12_RING_INT_STATUS(0));
+	regs[GEN12_CTX_INT_STATUS_REPORT_PTR + 1] = i915_ggtt_offset(vma) + I915_VF_IRQ_STATUS;
+	regs[GEN12_CTX_INT_SRC_REPORT_PTR] = i915_mmio_reg_offset(GEN12_RING_INT_SRC(0));
+	regs[GEN12_CTX_INT_SRC_REPORT_PTR + 1] = i915_ggtt_offset(vma) + I915_VF_IRQ_SOURCE;
 }
 
 /*
@@ -967,6 +962,21 @@ static bool __check_red_cl(const void *vaddr)
 	return memchr_inv(s, CONTEXT_REDZONE, 64) == NULL;
 }
 
+static void hexdump(struct drm_printer *m, const void *buf, size_t len)
+{
+	const size_t rowsize = 8 * sizeof(u32);
+	size_t pos;
+
+	for (pos = 0; pos < len; pos += rowsize) {
+		char line[128];
+
+		hex_dump_to_buffer(buf + pos, len - pos, rowsize, sizeof(u32), line, sizeof(line),
+				   false);
+		drm_printf(m, "[%04zx] %s\n", pos, line);
+
+	}
+}
+
 static void
 check_redzone(const void *vaddr, const struct intel_engine_cs *engine)
 {
@@ -990,12 +1000,33 @@ check_redzone(const void *vaddr, const struct intel_engine_cs *engine)
 	 */
 	if (!__check_red_cl(vaddr) ||
 	    !__check_red_cl(vaddr + ALIGN_DOWN(lower_32_bits(now) % len, 64))) {
+		struct drm_printer p = drm_debug_printer(__func__);
+
 		drm_err_once(&engine->i915->drm,
 			     "%s context redzone overwritten @ %zu!\n",
 			     engine->name,
 			     memchr_inv(vaddr, CONTEXT_REDZONE, len) - vaddr);
+		hexdump(&p, vaddr, REDZONE_KTIME);
 		*last = KTIME_MAX; /* never check again */
 	}
+}
+
+static u32 context_wa_bb_offset(const struct intel_context *ce)
+{
+	return PAGE_SIZE * ce->wa_bb_page;
+}
+
+static u32 *context_indirect_bb(const struct intel_context *ce)
+{
+	void *ptr;
+
+	GEM_BUG_ON(!ce->wa_bb_page);
+
+	ptr = ce->lrc_reg_state;
+	ptr -= LRC_STATE_OFFSET; /* back to start of context image */
+	ptr += context_wa_bb_offset(ce);
+
+	return ptr;
 }
 
 void lrc_init_state(struct intel_context *ce,
@@ -1016,6 +1047,10 @@ void lrc_init_state(struct intel_context *ce,
 	/* Clear the ppHWSP (inc. per-context counters) */
 	memset(state, 0, PAGE_SIZE);
 
+	/* Clear the indirect wa and storage */
+	if (ce->wa_bb_page)
+		memset(state + context_wa_bb_offset(ce), 0, PAGE_SIZE);
+
 	/*
 	 * The second page of the context object contains some registers which
 	 * must be set up prior to the first execution.
@@ -1023,10 +1058,33 @@ void lrc_init_state(struct intel_context *ce,
 	__lrc_init_regs(state + LRC_STATE_OFFSET, ce, engine, inhibit);
 }
 
-static u32 context_wa_bb_offset(const struct intel_context *ce)
+u32 lrc_indirect_bb(const struct intel_context *ce)
 {
-	GEM_BUG_ON(!ce->wa_bb_page);
-	return (u32)ce->wa_bb_page << PAGE_SHIFT;
+	return i915_ggtt_offset(ce->state) + context_wa_bb_offset(ce);
+}
+
+static u32 *setup_predicate_disable_wa(const struct intel_context *ce, u32 *cs)
+{
+	/* If predication is active, this will be noop'ed */
+	*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
+	*cs++ = lrc_indirect_bb(ce) + DG2_PREDICATE_RESULT_WA;
+	*cs++ = 0;
+	*cs++ = 0; /* No predication */
+
+	/* predicated end, only terminates if SET_PREDICATE_RESULT:0 is clear */
+	*cs++ = MI_BATCH_BUFFER_END | BIT(15);
+	*cs++ = MI_SET_PREDICATE | MI_SET_PREDICATE_DISABLE;
+
+	/* Instructions are no longer predicated (disabled), we can proceed */
+	*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
+	*cs++ = lrc_indirect_bb(ce) + DG2_PREDICATE_RESULT_WA;
+	*cs++ = 0;
+	*cs++ = 1; /* enable predication before the next BB */
+
+	*cs++ = MI_BATCH_BUFFER_END;
+	GEM_BUG_ON(offset_in_page(cs) > DG2_PREDICATE_RESULT_WA);
+
+	return cs;
 }
 
 static struct i915_vma *
@@ -1318,11 +1376,33 @@ gen12_emit_indirect_ctx_rcs(const struct intel_context *ce, u32 *cs)
 	return cs;
 }
 
+/*
+ * Set memory fence address and call MI_MEM_FENCE as part of context
+ * restore to ensure that all the writes are flushed and the ring and
+ * batches in there are properly visible to the GPU.
+ */
+static u32 *gen12_emit_indirectctx_bb(const struct intel_context *ce, u32 *cs)
+{
+	u64 mfence_addr;
+
+	if (!HAS_MEM_FENCE_SUPPORT(ce->engine->i915) || !ce->vm->mfence.vma)
+		return cs;
+
+	mfence_addr = ce->vm->mfence.vma->node.start;
+	*cs++ = STATE_SYSTEM_MEM_FENCE_ADDRESS;
+	*cs++ = lower_32_bits(mfence_addr);
+	*cs++ = upper_32_bits(mfence_addr);
+	*cs++ = MI_MEM_FENCE | MI_ACQUIRE_ENABLE;
+
+	return cs;
+}
+
 static u32 *
 gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 {
 	cs = gen12_emit_timestamp_wa(ce, cs);
 	cs = gen12_emit_restore_scratch(ce, cs);
+	cs = gen12_emit_indirectctx_bb(ce, cs);
 
 	/* Wa_16013000631:dg2 */
 	if (IS_DG2_GRAPHICS_STEP(ce->engine->i915, G10, STEP_B0, STEP_C0) ||
@@ -1333,17 +1413,6 @@ gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 						    0);
 
 	return cs;
-}
-
-static u32 *context_indirect_bb(const struct intel_context *ce)
-{
-	void *ptr;
-
-	ptr = ce->lrc_reg_state;
-	ptr -= LRC_STATE_OFFSET; /* back to start of context image */
-	ptr += context_wa_bb_offset(ce);
-
-	return ptr;
 }
 
 static void
@@ -1359,9 +1428,11 @@ setup_indirect_ctx_bb(const struct intel_context *ce,
 	while ((unsigned long)cs % CACHELINE_BYTES)
 		*cs++ = MI_NOOP;
 
+	GEM_BUG_ON(cs - start > DG2_PREDICATE_RESULT_BB / sizeof(*start));
+	setup_predicate_disable_wa(ce, start + DG2_PREDICATE_RESULT_BB / sizeof(*start));
+
 	lrc_setup_indirect_ctx(ce->lrc_reg_state, engine,
-			       i915_ggtt_offset(ce->state) +
-			       context_wa_bb_offset(ce),
+			       lrc_indirect_bb(ce),
 			       (cs - start) * sizeof(*cs));
 }
 
@@ -1871,6 +1942,17 @@ static void st_runtime_underflow(struct intel_context_stats *stats, s32 dt)
 	stats->runtime.max_underflow =
 		max_t(u32, stats->runtime.max_underflow, -dt);
 #endif
+}
+
+static u32 lrc_get_runtime(const struct intel_context *ce)
+{
+	/*
+	 * We can use either ppHWSP[16] which is recorded before the context
+	 * switch (and so excludes the cost of context switches) or use the
+	 * value from the context image itself, which is saved/restored earlier
+	 * and so includes the cost of the save.
+	 */
+	return READ_ONCE(ce->lrc_reg_state[CTX_TIMESTAMP]);
 }
 
 void lrc_update_runtime(struct intel_context *ce)

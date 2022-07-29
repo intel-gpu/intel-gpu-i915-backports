@@ -69,11 +69,11 @@ int __must_check i915_gem_ww_ctx_backoff(struct i915_gem_ww_ctx *ww)
 		ret = dma_resv_lock_slow_interruptible(obj->base.resv, &ww->ctx);
 	else
 		dma_resv_lock_slow(obj->base.resv, &ww->ctx);
+
 	if (ret) {
 		i915_gem_object_put(obj);
 		goto out;
 	}
-
 	/*
 	 * Unlocking the contended lock again, if it was locked for eviction.
 	 * We will most likely not need it in the retried transaction.

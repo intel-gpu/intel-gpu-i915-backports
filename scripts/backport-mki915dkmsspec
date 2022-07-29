@@ -31,10 +31,10 @@ do
 	esac
 done
 
-if [ "$REL_TYPE" == "prerelease" ]; then
-	DEP_PKG_NAME="intel-dmabuf-dkms-prerelease"
-else
+if [ "$REL_TYPE" == "opensource" ]; then
 	DEP_PKG_NAME="intel-dmabuf-dkms"
+else
+	DEP_PKG_NAME="intel-dmabuf-dkms-$REL_TYPE"
 fi
 
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
@@ -53,7 +53,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	Vendor: Intel
 	Provides: %{module}
 	Packager: linux-graphics@intel.com
-	Requires: dkms gcc bash sed intel-platform-cse-dkms
+	Requires: dkms gcc bash sed intel-platform-cse-dkms lsb-release
 	Requires: %{deppkg}
 	# There is no Source# line for dkms.conf since it has been placed
 	# into the source tarball of SOURCE0

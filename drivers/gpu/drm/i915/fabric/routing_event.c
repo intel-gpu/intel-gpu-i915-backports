@@ -57,24 +57,33 @@ static void rem_schedule(void)
 	rem_state = REM_STATE_QUEUED;
 }
 
-static void rem_disable_change_callback(void)
+static int rem_disable_change_callback(void)
 {
+	int ret = 0;
+
 	mutex_lock(&rem_lock);
 
 	switch (rem_state) {
 	case REM_STATE_DISABLED:
-		if (!routing_disable)
+		if (!routing_disable) {
 			rem_state = REM_STATE_IDLE;
+			if (rem_pending_requests != rem_serviced_requests)
+				rem_schedule();
+		}
+
 		break;
 	case REM_STATE_IDLE:
 		if (routing_disable)
 			rem_state = REM_STATE_DISABLED;
 		break;
 	default:
+		ret = -EBUSY;
 		break;
 	}
 
 	mutex_unlock(&rem_lock);
+
+	return ret;
 }
 
 static void routing_work_fn(struct work_struct *work)
@@ -210,14 +219,18 @@ void rem_route_finish(void)
 static int rem_routing_disable_set(const char *val,
 				   const struct kernel_param *kp)
 {
-	int err = param_set_bool(val, kp);
+	bool cur = routing_disable;
+	int err;
 
+	err = param_set_bool(val, kp);
 	if (err)
 		return err;
 
-	rem_disable_change_callback();
+	err = rem_disable_change_callback();
+	if (err)
+		routing_disable = cur;
 
-	return 0;
+	return err;
 }
 
 static struct kernel_param_ops disable_ops = {

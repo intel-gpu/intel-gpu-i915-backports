@@ -63,70 +63,6 @@
 
 #include "intel_pm.h"
 
-int i915_gem_object_unmap(struct drm_i915_gem_object *obj)
-{
-	struct i915_vma *vma, *vn;
-	int ret = 0;
-
-	spin_lock(&obj->vma.lock);
-	list_for_each_entry_safe(vma, vn, &obj->vma.list, obj_link) {
-		if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
-			continue;
-
-		vma = __i915_vma_get(vma);
-		if (!vma) {
-			ret = -EBUSY;
-			break;
-		}
-		spin_unlock(&obj->vma.lock);
-
-		ret = mutex_lock_interruptible_nested(&vma->vm->mutex, true);
-		if (!ret) {
-			vma->ops->unbind_vma(vma->vm, vma);
-			mutex_unlock(&vma->vm->mutex);
-		}
-
-		__i915_vma_put(vma);
-		spin_lock(&obj->vma.lock);
-		list_safe_reset_next(vma, vn, obj_link);
-		if (ret)
-			break;
-	}
-	spin_unlock(&obj->vma.lock);
-	return ret;
-}
-
-/**
- * Restore the page table mappings to new backing storage
- * @obj: gem object pointer
- */
-int i915_gem_object_remap(struct drm_i915_gem_object *obj)
-{
-	struct i915_vma *vma, *vn;
-	int ret = 0;
-
-	spin_lock(&obj->vma.lock);
-	list_for_each_entry_safe(vma, vn, &obj->vma.list, obj_link) {
-
-		if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
-			continue;
-
-		vma = __i915_vma_get(vma);
-		GEM_BUG_ON(!vma);
-		spin_unlock(&obj->vma.lock);
-
-		ret = i915_vma_map(vma);
-		if (ret)
-			DRM_ERROR("Cannot map obj(%d)\n", ret);
-
-		spin_lock(&obj->vma.lock);
-		list_safe_reset_next(vma, vn, obj_link);
-		__i915_vma_put(vma);
-	}
-	spin_unlock(&obj->vma.lock);
-	return ret;
-}
-
 static int
 insert_mappable_node(struct i915_ggtt *ggtt, struct drm_mm_node *node, u32 size)
 {
@@ -189,7 +125,8 @@ static int i915_vma_unbind_persistent(struct i915_vma *vma,
 	/* VM already locked */
 	if (ww && ww == i915_gem_get_locking_ctx(vma->vm->root_obj)) {
 		/* locked for other than unbinding? */
-		if (!vma->vm->root_obj->evict_locked)
+		if ((!flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
+		    (!vma->vm->root_obj->evict_locked))
 			return -EBUSY;
 
 		/* locked for unbinding */
@@ -278,10 +215,18 @@ try_again:
 		}
 
 		if (i915_vma_is_persistent(vma) &&
-		    !i915->params.enable_non_private_objects)
+		    !i915->params.enable_non_private_objects) {
 			ret = i915_vma_unbind_persistent(vma, ww, flags);
-		else
+		} else if (flags & I915_GEM_OBJECT_UNBIND_VM_TRYLOCK) {
+			if (mutex_trylock(&vma->vm->mutex)) {
+				ret = __i915_vma_unbind(vma);
+				mutex_unlock(&vma->vm->mutex);
+			} else {
+				ret = -EBUSY;
+			}
+		} else {
 			ret = i915_vma_unbind(vma);
+		}
 put_vma:
 		__i915_vma_put(vma);
 close_vm:

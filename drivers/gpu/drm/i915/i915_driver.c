@@ -30,7 +30,9 @@
 #include <linux/aer.h>
 #include <linux/acpi.h>
 #include <linux/device.h>
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/mfd/core.h>
+#endif
 #include <linux/module.h>
 #include <linux/oom.h>
 #include <linux/pci.h>
@@ -92,12 +94,13 @@
 #include "i915_perf.h"
 #include "i915_perf_stall_cntr.h"
 #include "i915_query.h"
+#include "i915_sriov.h"
 #include "i915_suspend.h"
 #include "i915_svm.h"
 #include "i915_switcheroo.h"
 #include "i915_sysfs.h"
 #include "i915_sysrq.h"
-#include "i915_trace.h"
+#include "i915_utils.h"
 #include "i915_vgpu.h"
 #include "i915_debugger.h"
 #include "intel_dram.h"
@@ -640,7 +643,7 @@ static void i915_clear_pcie_errors(struct pci_dev *pdev)
 static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 {
 #ifdef CONFIG_PCI_ATS
-	if (IS_PVC_BD_REVID(dev_priv, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0)) {
 		struct pci_dev *pdev = dev_priv->drm.pdev;
 		u16 val;
 
@@ -672,7 +675,7 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 #endif /* CONFIG_PCI_ATS */
 
 	/* Wa_16014292289:pvc[bd_a0] */
-	if (IS_PVC_BD_REVID(dev_priv, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0)) {
 		struct pci_bus *bus = dev_priv->drm.pdev->bus;
 		struct pci_dev *pdev;
 
@@ -749,7 +752,7 @@ static void init_fake_interrupts(struct intel_gt *gt)
 		return;
 
 	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0 + 1) ||
-	    IS_PVC_BD_REVID(gt->i915, PVC_BD_REVID_A0, PVC_BD_REVID_B1)) {
+	    IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B1)) {
 		gt->fake_int.delay_slow = 1000 * 1000 * 100;	/* 100ms */
 		gt->fake_int.delay_fast = 1000 * 100;		/* 100us */
 
@@ -1028,6 +1031,8 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	if (ret)
 		goto err_msi;
 
+	intel_pm_vram_sr_setup(dev_priv);
+
 	/*
 	 * Fill the dram structure to get the system dram info. This will be
 	 * used for memory latency calculation.
@@ -1138,7 +1143,6 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
  */
 static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 {
-	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	struct intel_gt *gt;
 	unsigned int i;
 
@@ -1149,12 +1153,13 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 	intel_runtime_pm_disable(&dev_priv->runtime_pm);
 	intel_power_domains_disable(dev_priv);
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	/*
 	 * mfd devices may be registered individually either by gt or display,
 	 * but they are unregistered all at once from i915
 	 */
-	mfd_remove_devices(&pdev->dev);
-
+	mfd_remove_devices(dev_priv->drm.dev);
+#endif
 	intel_display_driver_unregister(dev_priv);
 
 	i915_hwmon_unregister(dev_priv);
@@ -1171,8 +1176,14 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 
 	i915_unregister_sysrq(dev_priv);
 
-	/* check if we already unplugged in handling a PCI error */
-	if (!dev_priv->drm.unplugged) {
+	/*
+	 * check if we already unplugged in handling a PCI error
+	 * check for quiesce_gpu as we are faking the drm unplug
+	 * in that path.
+	 * FIXME: This check is not needed when unbind is called
+	 * in error_detected callback
+	 */
+	if (!dev_priv->drm.unplugged || dev_priv->quiesce_gpu) {
 		i915_teardown_sysfs(dev_priv);
 		drm_dev_unplug(&dev_priv->drm);
 	}
@@ -1184,7 +1195,7 @@ void
 i915_print_iommu_status(struct drm_i915_private *i915, struct drm_printer *p)
 {
 	drm_printf(p, "iommu: %s\n",
-		   str_enabled_disabled(intel_vtd_active(i915)));
+		   str_enabled_disabled(i915_vtd_active(i915)));
 }
 
 static void i915_welcome_messages(struct drm_i915_private *dev_priv)
@@ -1316,7 +1327,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (i915->params.smem_access_control == I915_SMEM_ACCESS_CONTROL_DEFAULT) {
 		if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0,  STEP_B0) ||
-		    IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+		    IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) {
 			/* Wa_16012239583:pvc */
 			i915->bind_ctxt_ready = false;
 			i915->params.smem_access_control = 5;
@@ -1375,7 +1386,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	i915->do_release = true;
 
 	if ((IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) ||
-	     IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) &&
+	     IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) &&
 	    i915->params.smem_access_control == 5)
 		i915->bind_ctxt_ready = true;
 
@@ -1797,6 +1808,8 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 
 	disable_rpm_wakeref_asserts(rpm);
 
+	i915_sriov_suspend_late(dev_priv);
+
 	/* Must be called before GGTT is suspended. */
 	intel_dpt_suspend(dev_priv);
 	ret = i915_gem_suspend_late(dev_priv);
@@ -2033,6 +2046,8 @@ static int i915_drm_resume_early(struct drm_device *dev)
 	/* Must be called after GGTT is resumed. */
 	intel_dpt_resume(dev_priv);
 
+	i915_sriov_resume_early(dev_priv);
+
 out:
 	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
@@ -2189,6 +2204,31 @@ static int i915_pm_restore_early(struct device *kdev)
 static int i915_pm_restore(struct device *kdev)
 {
 	return i915_pm_resume(kdev);
+}
+
+static int intel_runtime_idle(struct device *kdev)
+{
+	struct drm_i915_private *dev_priv = kdev_to_i915(kdev);
+	int ret = 1;
+
+	if (!HAS_LMEM_SR(dev_priv)) {
+		/*TODO: Prepare for D3Cold-Off */
+		goto out;
+	}
+
+	disable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
+
+	ret = intel_pm_vram_sr(dev_priv, true);
+	if (!ret)
+		drm_dbg(&dev_priv->drm, "VRAM Self Refresh enabled\n");
+
+	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
+
+out:
+	pm_runtime_mark_last_busy(kdev);
+	pm_runtime_autosuspend(kdev);
+
+	return ret;
 }
 
 static int intel_runtime_suspend(struct device *kdev)
@@ -2386,6 +2426,7 @@ const struct dev_pm_ops i915_pm_ops = {
 	.restore = i915_pm_restore,
 
 	/* S0ix (via runtime suspend) event handlers */
+	.runtime_idle = intel_runtime_idle,
 	.runtime_suspend = intel_runtime_suspend,
 	.runtime_resume = intel_runtime_resume,
 };
@@ -2547,6 +2588,21 @@ static const struct drm_ioctl_desc i915_ioctls[] = {
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_CACHE_RESERVE, i915_gem_cache_reserve_ioctl, DRM_RENDER_ALLOW),
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_VM_PREFETCH, i915_gem_vm_prefetch_ioctl, DRM_RENDER_ALLOW),
 };
+
+/*
+ * Interface history:
+ *
+ * 1.1: Original.
+ * 1.2: Add Power Management
+ * 1.3: Add vblank support
+ * 1.4: Fix cmdbuffer path, add heap destroy
+ * 1.5: Add vblank pipe configuration
+ * 1.6: - New ioctl for scheduling buffer swaps on vertical blank
+ *      - Support vertical blank on secondary display pipe
+ */
+#define DRIVER_MAJOR		1
+#define DRIVER_MINOR		6
+#define DRIVER_PATCHLEVEL	0
 
 static const struct drm_driver i915_drm_driver = {
 	/* Don't use MTRRs here; the Xserver or userspace app should

@@ -36,6 +36,8 @@
 #include <linux/tracepoint.h>
 #include <asm/tsc.h>
 
+#include <backport/backport_path.h>
+
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM gvt
 
@@ -377,7 +379,7 @@ TRACE_EVENT(render_mmio,
 
 /* This part must be out of protection */
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
 #undef TRACE_INCLUDE_FILE
+#define TRACE_INCLUDE_PATH BACKPORT_PATH/drivers/gpu/drm/i915/gvt
 #define TRACE_INCLUDE_FILE trace
 #include <trace/define_trace.h>

@@ -5,6 +5,8 @@
 
 #include <linux/prime_numbers.h>
 
+#include "gem/i915_gem_internal.h"
+
 #include "i915_selftest.h"
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
@@ -951,6 +953,19 @@ create_user_vma(struct i915_address_space *vm, unsigned long size)
 	return vma;
 }
 
+static u32 safe_poison(u32 offset, u32 poison)
+{
+	/*
+	 * Do not enable predication as it will nop all subsequent commands,
+	 * not only disabling the tests (by preventing all the other SRM) but
+	 * also preventing the arbitration events at the end of the request.
+	 */
+	if (offset == i915_mmio_reg_offset(RING_PREDICATE_RESULT(0)))
+		poison &= ~REG_BIT(0);
+
+	return poison;
+}
+
 static struct i915_vma *
 store_context(struct intel_context *ce,
 	      struct intel_engine_cs *engine,
@@ -1189,21 +1204,6 @@ err_rq:
 	goto err_after;
 }
 
-static u32 safe_poison(u32 offset, u32 poison)
-{
-	/*
-	 * FIXME: Do we want to allow unprivileged access to this reg?
-	 *
-	 * Do not enable predication as it will nop all subsequent commands,
-	 * not only disabling the tests (by preventing all the other SRM) but
-	 * also preventing the arbitration events at the end of the request.
-	 */
-	if (offset == i915_mmio_reg_offset(RING_PREDICATE_RESULT(0)))
-		poison &= ~REG_BIT(0);
-
-	return poison;
-}
-
 static struct i915_vma *
 load_context(struct intel_context *ce,
 	     struct intel_engine_cs *engine,
@@ -1273,7 +1273,8 @@ load_context(struct intel_context *ce,
 		len = (len + 1) / 2;
 		while (len--) {
 			*cs++ = (hw[dw] & mask) + offset;
-			*cs++ = safe_poison(hw[dw] & get_lri_mask(engine, MI_LRI_LRM_CS_MMIO),
+			*cs++ = safe_poison(hw[dw] & get_lri_mask(ce->engine,
+								  MI_LRI_LRM_CS_MMIO),
 					    poison);
 			dw += 2;
 		}

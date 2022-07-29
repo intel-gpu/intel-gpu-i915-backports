@@ -7,7 +7,6 @@
 #include <linux/suspend.h>
 
 #include "i915_drv.h"
-#include "i915_globals.h"
 #include "i915_params.h"
 #include "intel_context.h"
 #include "intel_engine_pm.h"
@@ -66,8 +65,6 @@ static int __gt_unpark(struct intel_wakeref *wf)
 
 	GT_TRACE(gt, "\n");
 
-	i915_globals_unpark();
-
 	/*
 	 * It seems that the DMC likes to transition between the DC states a lot
 	 * when there are no connected displays (no active power domains) during
@@ -118,8 +115,6 @@ static int __gt_park(struct intel_wakeref *wf)
 	GEM_BUG_ON(!wakeref);
 	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ, wakeref);
 
-	i915_globals_park();
-
 	return 0;
 }
 
@@ -160,6 +155,9 @@ static void gt_sanitize(struct intel_gt *gt, bool force)
 	intel_wakeref_t wakeref;
 
 	if (is_mock_gt(gt))
+		return;
+
+	if (gt->i915->quiesce_gpu)
 		return;
 
 	GT_TRACE(gt, "force:%s", str_yes_no(force));
@@ -330,6 +328,9 @@ void intel_gt_suspend_late(struct intel_gt *gt)
 	intel_gt_pm_wait_for_idle(gt);
 
 	if (is_mock_gt(gt))
+		return;
+
+	if (gt->i915->quiesce_gpu)
 		return;
 
 	GEM_BUG_ON(gt->awake);
