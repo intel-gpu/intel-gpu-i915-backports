@@ -203,7 +203,7 @@ static void add_legacy_ring(struct legacy_ring *ring,
 
 void intel_engines_driver_register(struct drm_i915_private *i915)
 {
-	struct legacy_ring ring[I915_MAX_TILES] = { };
+	struct legacy_ring ring[I915_MAX_GT] = { };
 	u8 uabi_instances[PRELIM_I915_ENGINE_CLASS_COMPUTE + 1] = {};
 	struct list_head *it, *next;
 	struct rb_node **p, *prev;

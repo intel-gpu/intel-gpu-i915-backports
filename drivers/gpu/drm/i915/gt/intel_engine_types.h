@@ -102,8 +102,8 @@ struct i915_ctx_workarounds {
 #define I915_MAX_VECS	4
 #define I915_MAX_SFC	(I915_MAX_VCS / 2)
 #define I915_MAX_CCS	4
-#define I915_MAX_BCS	9
 #define I915_MAX_RCS	1
+#define I915_MAX_BCS	9
 
 /*
  * Engine IDs definitions.
@@ -120,6 +120,7 @@ enum intel_engine_id {
 	BCS6,
 	BCS7,
 	BCS8,
+#define _BCS(n) (BCS0 + (n))
 	VCS0,
 	VCS1,
 	VCS2,
@@ -385,8 +386,14 @@ struct intel_engine_cs {
 	struct intel_context *kernel_context; /* pinned */
 	struct intel_context *blitter_context; /* pinned; exists for BCS only */
 	struct intel_context *evict_context; /* pinned; exists for BCS only */
-
 	struct intel_context *bind_context; /* Only for bcs used for bind */
+
+	/**
+	 * pinned_contexts_list: List of pinned contexts. This list is only
+	 * assumed to be manipulated during driver load- or unload time and
+	 * does therefore not have any additional protection.
+	 */
+	struct list_head pinned_contexts_list;
 
 	intel_engine_mask_t saturated; /* submitting semaphores too late? */
 

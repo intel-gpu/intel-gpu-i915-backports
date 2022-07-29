@@ -24,6 +24,7 @@
 #include "intel_gt_regs.h"
 #include "i915_drv.h"
 #include "i915_scatterlist.h"
+#include "i915_utils.h"
 #include "i915_vgpu.h"
 
 #include "intel_flat_ppgtt_pool.h"
@@ -133,7 +134,7 @@ static bool needs_idle_maps(struct drm_i915_private *i915)
 	 * Query intel_iommu to see if we need the workaround. Presumably that
 	 * was loaded first.
 	 */
-	if (!intel_vtd_active(i915))
+	if (!i915_vtd_active(i915))
 		return false;
 
 	if (GRAPHICS_VER(i915) == 5 && IS_MOBILE(i915))
@@ -890,6 +891,13 @@ static void cleanup_init_ggtt(struct i915_ggtt *ggtt)
 	mutex_destroy(&ggtt->error_mutex);
 }
 
+static void ggtt_insert_scratch_page(struct i915_ggtt *ggtt, u64 offset)
+{
+	struct i915_address_space *vm = &ggtt->vm;
+
+	vm->insert_page(vm, px_dma(vm->scratch[0]), offset, I915_CACHE_NONE, 0);
+}
+
 static int init_ggtt(struct i915_ggtt *ggtt)
 {
 	/*
@@ -943,7 +951,7 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 		 * the only likely reason for failure to insert is a driver
 		 * bug, which we expect to cause other failures...
 		 */
-		ggtt->error_capture.size = I915_GTT_PAGE_SIZE;
+		ggtt->error_capture.size = 2 * I915_GTT_PAGE_SIZE;
 		ggtt->error_capture.color = I915_COLOR_UNEVICTABLE;
 		if (drm_mm_reserve_node(&ggtt->vm.mm, &ggtt->error_capture))
 			drm_mm_insert_node_in_range(&ggtt->vm.mm,
@@ -953,11 +961,21 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 						    0, ggtt->mappable_end,
 						    DRM_MM_INSERT_LOW);
 	}
-	if (drm_mm_node_allocated(&ggtt->error_capture))
+	if (drm_mm_node_allocated(&ggtt->error_capture)) {
+		u64 start = ggtt->error_capture.start;
+		u64 end = ggtt->error_capture.start + ggtt->error_capture.size;
+		u64 i;
+
+		/*
+		 * During error capture, memcpying from the GGTT is triggering a
+		 * prefetch of the following PTE, so fill it with a guard page.
+		 */
+		for (i = start + I915_GTT_PAGE_SIZE; i < end; i += I915_GTT_PAGE_SIZE)
+			ggtt_insert_scratch_page(ggtt, i);
 		drm_dbg(&ggtt->vm.i915->drm,
 			"Reserved GGTT:[%llx, %llx] for use by error capture\n",
-			ggtt->error_capture.start,
-			ggtt->error_capture.start + ggtt->error_capture.size);
+			start, end);
+	}
 
 	/*
 	 * The upper portion of the GuC address space has a sizeable hole
@@ -1352,9 +1370,11 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 		ggtt->vm.insert_page = gen8_ggtt_insert_page;
 	}
 
-	/* Serialize GTT updates with aperture access on BXT if VT-d is on. */
-	if (intel_ggtt_update_needs_vtd_wa(i915) ||
-	    IS_CHERRYVIEW(i915) /* fails with concurrent use/update */) {
+	/*
+	 * Serialize GTT updates with aperture access on BXT if VT-d is on,
+	 * and always on CHV.
+	 */
+	if (intel_vm_no_concurrent_access_wa(i915)) {
 		ggtt->vm.insert_entries = bxt_vtd_ggtt_insert_entries__BKL;
 		ggtt->vm.insert_page    = bxt_vtd_ggtt_insert_page__BKL;
 		ggtt->vm.bind_async_flags =
@@ -1693,13 +1713,16 @@ int i915_ggtt_probe_hw(struct drm_i915_private *i915)
 		}
 
 		ret = ggtt_probe_hw(ggtt, gt);
-		if (ret)
+		if (ret) {
+			if (ggtt != gt->ggtt)
+				kfree(ggtt);
 			goto err;
+		}
 
 		intel_gt_init_ggtt(gt, ggtt);
 	}
 
-	if (intel_vtd_active(i915))
+	if (i915_vtd_active(i915))
 		drm_info(&i915->drm, "VT-d active for gfx access\n");
 
 	return 0;

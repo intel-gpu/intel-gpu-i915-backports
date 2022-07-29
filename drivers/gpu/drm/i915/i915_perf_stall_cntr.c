@@ -550,20 +550,49 @@ err:
 	return ret;
 }
 
+static u32
+gen_eustall_base(struct i915_eu_stall_cntr_stream *stream, bool enable)
+{
+	u32 val = i915_ggtt_offset(stream->vma);
+	u32 sz = stream->per_dss_buf_size >> 18;
+
+	drm_WARN_ON(&stream->tile_gt->i915->drm, !IS_ALIGNED(val, 64));
+
+	switch (stream->per_dss_buf_size) {
+	case SZ_128K:
+		sz = 0;
+		break;
+	case SZ_256K:
+		sz = 1;
+		break;
+	case SZ_512K:
+		sz = 2;
+		break;
+	default:
+		MISSING_CASE(stream->per_dss_buf_size);
+		sz = 2;
+	}
+
+	val |= REG_FIELD_PREP(XEHPC_EUSTALL_BASE_DSS_BUF_SZ, sz);
+	if (enable)
+		val |= XEHPC_EUSTALL_BASE_ENABLE_SAMPLING;
+
+	return val;
+}
+
 static void
 i915_eu_stall_stream_enable(struct i915_eu_stall_cntr_stream *stream)
 {
 	struct intel_gt *gt = stream->tile_gt;
 	intel_wakeref_t wakeref;
-	u32 reg_value;
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-		/* Wa_22012878696:pvc[ct_xt_a0,ct_xt_b0) */
-		if (IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0))
+		/* Wa_22012878696:pvc */
+		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_RENDER);
-		reg_value = intel_uncore_read(gt->uncore, XEHPC_EUSTALL_BASE);
-		reg_value |= XEHPC_EUSTALL_BASE_ENABLE_SAMPLING;
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE, reg_value);
+
+		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
+				   gen_eustall_base(stream, true));
 	}
 }
 
@@ -596,11 +625,10 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 			if (reg_value & XEHPC_EUSTALL_REPORT_OVERFLOW_DROP)
 				clear_dropped_eviction_line_bit(gt->uncore, s, ss);
 		}
-		reg_value = intel_uncore_read(gt->uncore, XEHPC_EUSTALL_BASE);
-		reg_value &= ~XEHPC_EUSTALL_BASE_ENABLE_SAMPLING;
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE, reg_value);
-		/* Wa_22012878696:pvc[ct_xt_a0,ct_xt_b0) */
-		if (IS_PVC_CT_REVID(gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0))
+		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
+				   gen_eustall_base(stream, false));
+		/* Wa_22012878696:pvc */
+		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_RENDER);
 	}
 }
@@ -633,21 +661,13 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 				     struct eu_stall_open_properties *props)
 {
 	u32 write_ptr_reg, write_ptr, read_ptr_reg;
-	u32 base_addr, vaddr_offset;
+	u32 vaddr_offset;
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	intel_wakeref_t wakeref;
 	u64 subslice_mask;
 	int ret, iter;
 	u16 s, ss;
-	u8 sz;
-
-	if (props->eu_stall_buf_sz == SZ_128K)
-		sz = 0;
-	else if (props->eu_stall_buf_sz == SZ_256K)
-		sz = 1;
-	else
-		sz = 2;
 
 	init_waitqueue_head(&stream->poll_wq);
 	INIT_WORK(&stream->buf_check_work, eu_stall_buf_check_work_fn);
@@ -664,15 +684,11 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 	if (ret)
 		return ret;
 
-	base_addr = i915_ggtt_offset(stream->vma);
-	drm_WARN_ON(&gt->i915->drm, !IS_ALIGNED(base_addr, 64));
-
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
-				   REG_FIELD_PREP(XEHPC_EUSTALL_BASE_DSS_BUF_SZ, sz) |
-				   lower_32_bits(base_addr));
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE_UPPER,
-				   upper_32_bits(base_addr));
+				   gen_eustall_base(stream, false));
+		/* GGTT addresses can never be > 32 bits */
+		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE_UPPER, 0);
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_CTRL,
 				   REG_FIELD_PREP(EUSTALL_MOCS, gt->mocs.uc_index << 1) |
 				   REG_FIELD_PREP(EUSTALL_SAMPLE_RATE, props->eu_stall_sample_rate));

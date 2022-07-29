@@ -34,6 +34,7 @@
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_ring.h"
 
+#include "i915_debugger.h"
 #include "i915_drv.h"
 #include "i915_gem_clflush.h"
 #include "i915_gem_context.h"
@@ -43,15 +44,11 @@
 #include "i915_gem_object_blt.h"
 #include "i915_gem_region.h"
 #include "i915_gem_vm_bind.h"
-#include "i915_globals.h"
 #include "i915_memcpy.h"
 #include "i915_svm.h"
 #include "i915_trace.h"
 
-static struct i915_global_object {
-	struct i915_global base;
-	struct kmem_cache *slab_objects;
-} global;
+static struct kmem_cache *slab_objects;
 
 static const struct drm_gem_object_funcs i915_gem_object_funcs;
 
@@ -59,7 +56,7 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 {
 	struct drm_i915_gem_object *obj;
 
-	obj = kmem_cache_zalloc(global.slab_objects, GFP_KERNEL);
+	obj = kmem_cache_zalloc(slab_objects, GFP_KERNEL);
 	if (!obj)
 		return NULL;
 	obj->base.funcs = &i915_gem_object_funcs;
@@ -69,7 +66,7 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 
 void i915_gem_object_free(struct drm_i915_gem_object *obj)
 {
-	return kmem_cache_free(global.slab_objects, obj);
+	return kmem_cache_free(slab_objects, obj);
 }
 
 void i915_gem_object_init(struct drm_i915_gem_object *obj,
@@ -665,11 +662,10 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	intel_gt_retire_requests(to_gt(i915));
 
 	i915_gem_object_unbind(donor, ww, 0);
-	if (!nowait) {
-		err = i915_gem_object_unbind(obj, ww, 0);
-		if (err)
-			goto unlock_donor;
-	}
+	err = i915_gem_object_unbind(obj, ww, nowait ? I915_GEM_OBJECT_UNBIND_ACTIVE
+				     : 0);
+	if (err)
+		goto unlock_donor;
 
 	trace_i915_gem_object_migrate(obj, id);
 	pages = __i915_gem_object_unset_pages(obj);
@@ -961,35 +957,17 @@ void i915_gem_init__objects(struct drm_i915_private *i915)
 	INIT_WORK(&i915->mm.free_work, __i915_gem_free_work);
 }
 
-static void i915_global_objects_show(struct drm_printer *p)
+void i915_objects_module_exit(void)
 {
-	i915_globals_show_slab(global.slab_objects, "drm_i915_gem_object", p);
+	kmem_cache_destroy(slab_objects);
 }
 
-static void i915_global_objects_shrink(void)
+int __init i915_objects_module_init(void)
 {
-	kmem_cache_shrink(global.slab_objects);
-}
-
-static void i915_global_objects_exit(void)
-{
-	kmem_cache_destroy(global.slab_objects);
-}
-
-static struct i915_global_object global = { {
-	.show = i915_global_objects_show,
-	.shrink = i915_global_objects_shrink,
-	.exit = i915_global_objects_exit,
-} };
-
-int __init i915_global_objects_init(void)
-{
-	global.slab_objects =
-		KMEM_CACHE(drm_i915_gem_object, SLAB_HWCACHE_ALIGN);
-	if (!global.slab_objects)
+	slab_objects = KMEM_CACHE(drm_i915_gem_object, SLAB_HWCACHE_ALIGN);
+	if (!slab_objects)
 		return -ENOMEM;
 
-	i915_global_register(&global.base);
 	return 0;
 }
 
@@ -1374,7 +1352,7 @@ i915_ccs_batch_prepare(struct i915_request *rq,
 	int num_ccs_blocks, src_mem_access, dst_mem_access;
 	struct i915_vma *src, *dst;
 	struct intel_gt *gt = lmem->vm->gt;
-	u8 mocs = gt->mocs.uc_index << 1;
+	u32 mocs = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, gt->mocs.uc_index);
 
 	GEM_BUG_ON(size > BLT_WINDOW_SZ);
 	/*
@@ -1409,11 +1387,9 @@ i915_ccs_batch_prepare(struct i915_request *rq,
 		(((num_ccs_blocks - 1) & 1023) << CCS_SIZE_SHIFT);
 
 	*cmd++ = lower_32_bits(i915_vma_offset(src));
-	*cmd++ = upper_32_bits(i915_vma_offset(src)) |
-	    mocs << XY_CTRL_SURF_MOCS_SHIFT;
+	*cmd++ = upper_32_bits(i915_vma_offset(src)) | mocs;
 	*cmd++ = lower_32_bits(i915_vma_offset(dst));
-	*cmd++ = upper_32_bits(i915_vma_offset(dst)) |
-	    mocs << XY_CTRL_SURF_MOCS_SHIFT;
+	*cmd++ = upper_32_bits(i915_vma_offset(dst)) | mocs;
 	cmd = i915_flush_dw(cmd, dst, MI_FLUSH_LLC | MI_INVALIDATE_TLB);
 	cmd = i915_flush_dw(cmd, dst, MI_FLUSH_CCS);
 	*cmd++ = 0;

@@ -346,8 +346,23 @@ static const struct hwmon_channel_info i915_power = {
 	.config = i915_config_power,
 };
 
+/*
+ * HWMON SENSOR TYPE = hwmon_in
+ *  - Voltage Input value (in0_input)
+ */
+static const u32 i915_config_in[] = {
+	HWMON_I_INPUT,
+	0
+};
+
+static const struct hwmon_channel_info i915_in = {
+	.type = hwmon_in,
+	.config = i915_config_in,
+};
+
 static const struct hwmon_channel_info *i915_info[] = {
 	&i915_power,
+	&i915_in,
 	NULL
 };
 
@@ -438,6 +453,41 @@ i915_power_write(struct i915_hwmon_drvdata *ddat, u32 attr, int chan, long val)
 }
 
 static umode_t
+i915_in_is_visible(const struct i915_hwmon_drvdata *ddat, u32 attr)
+{
+	struct drm_i915_private *i915 = ddat->dd_uncore->i915;
+
+	switch (attr) {
+	case hwmon_in_input:
+		return (IS_DG1(i915) || IS_DG2(i915)) ? 0444 : 0;
+	default:
+		return 0;
+	}
+
+	return 0444;
+}
+
+static int
+i915_in_read(struct i915_hwmon_drvdata *ddat, u32 attr, long *val)
+{
+	struct i915_hwmon *hwmon = ddat->dd_hwmon;
+	intel_wakeref_t wakeref;
+	u32 reg_value;
+
+	switch (attr) {
+	case hwmon_in_input:
+		with_intel_runtime_pm(ddat->dd_uncore->rpm, wakeref)
+			reg_value = intel_uncore_read(ddat->dd_uncore, hwmon->rg.gt_perf_status);
+		*val = DIV_ROUND_CLOSEST(REG_FIELD_GET(GEN12_VOLTAGE_MASK, reg_value) * 25, 10);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static umode_t
 i915_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 		u32 attr, int channel)
 {
@@ -446,6 +496,8 @@ i915_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 	switch (type) {
 	case hwmon_power:
 		return i915_power_is_visible(ddat, attr, channel);
+	case hwmon_in:
+		return i915_in_is_visible(ddat, attr);
 	default:
 		return 0;
 	}
@@ -460,6 +512,8 @@ i915_read(struct device *dev, enum hwmon_sensor_types type, u32 attr,
 	switch (type) {
 	case hwmon_power:
 		return i915_power_read(ddat, attr, channel, val);
+	case hwmon_in:
+		return i915_in_read(ddat, attr, val);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -509,24 +563,28 @@ i915_hwmon_get_preregistration_info(struct drm_i915_private *i915)
 		hwmon->rg.pkg_rapl_limit = PCU_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = PCU_PACKAGE_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = INVALID_MMIO_REG;
+		hwmon->rg.gt_perf_status = GEN12_RPSTAT1;
 	} else if (IS_XEHPSDV(i915)) {
 		hwmon->rg.pkg_power_sku_unit = GT0_PACKAGE_POWER_SKU_UNIT;
 		hwmon->rg.pkg_power_sku = GT0_PACKAGE_POWER_SKU;
 		hwmon->rg.pkg_rapl_limit = GT0_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = GT0_PLATFORM_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = GT0_PACKAGE_ENERGY_STATUS;
+		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 	} else if (IS_PONTEVECCHIO(i915)) {
 		hwmon->rg.pkg_power_sku_unit = PVC_GT0_PACKAGE_POWER_SKU_UNIT;
 		hwmon->rg.pkg_power_sku = PVC_GT0_PACKAGE_POWER_SKU;
 		hwmon->rg.pkg_rapl_limit = PVC_GT0_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = PVC_GT0_PLATFORM_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = PVC_GT0_PACKAGE_ENERGY_STATUS;
+		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 	} else {
 		hwmon->rg.pkg_power_sku_unit = INVALID_MMIO_REG;
 		hwmon->rg.pkg_power_sku = INVALID_MMIO_REG;
 		hwmon->rg.pkg_rapl_limit = INVALID_MMIO_REG;
 		hwmon->rg.energy_status_all = INVALID_MMIO_REG;
 		hwmon->rg.energy_status_tile = INVALID_MMIO_REG;
+		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 	}
 
 	wakeref = intel_runtime_pm_get(uncore->rpm);

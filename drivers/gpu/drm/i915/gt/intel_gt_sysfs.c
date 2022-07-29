@@ -20,6 +20,31 @@
 #include "intel_gt_sysfs_pm.h"
 #include "sysfs_gt_errors.h"
 
+typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+
+
+struct i915_ext_attr {
+	struct kobj_attribute attr;
+	show i915_show;
+};
+
+static ssize_t
+i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+
+{
+	ssize_t value;
+	struct device *dev = kobj_to_dev(kobj);
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	pvc_wa_disallow_rc6(gt->i915);
+
+	value = ea->i915_show(kobj, attr, buf);
+
+	pvc_wa_allow_rc6(gt->i915);
+
+	return value;
+}
+
 struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 					    const char *name)
 {
@@ -48,14 +73,45 @@ struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 	return kobj_to_gt(kobj);
 }
 
+static ssize_t
+addr_range_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+
+	struct intel_gt *gt = kobj_to_gt(kobj);
+
+	return sysfs_emit(buf, "%pa\n", &gt->lmem->actual_physical_mem);
+}
+
+#define I915_DEVICE_ATTR_RO(_name, _show) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show}
+
+static I915_DEVICE_ATTR_RO(addr_range, addr_range_show);
+
+static const struct attribute *addr_range_attrs[] = {
+	/* TODO: Report any other HBM Sparing sysfs per gt? */
+	&dev_attr_addr_range.attr.attr,
+	NULL
+};
+
+void intel_gt_sysfs_register_mem(struct intel_gt *gt, struct kobject *parent)
+{
+	if (!HAS_MEM_SPARING_SUPPORT(gt->i915))
+		return;
+
+	if (sysfs_create_files(parent, addr_range_attrs))
+		drm_err(&gt->i915->drm, "Setting up sysfs to read total physical memory per tile failed\n");
+}
+
 static struct kobject *gt_get_parent_obj(struct intel_gt *gt)
 {
 	return &gt->i915->drm.primary->kdev->kobj;
 }
 
 static ssize_t id_show(struct kobject *kobj,
-		       struct kobj_attribute *attr,
-		       char *buf)
+		struct kobj_attribute *attr,
+		char *buf)
+
 {
 	struct device *dev = kobj_to_dev(kobj);
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -63,14 +119,7 @@ static ssize_t id_show(struct kobject *kobj,
 	return sysfs_emit(buf, "%u\n", gt->info.id);
 }
 
-#define INTEL_KOBJ_ATTR(_name, __mode, __show, __store) \
-       struct kobj_attribute dev_attr_##_name =        \
-                __ATTR(_name, __mode, __show, __store)
-
-#define INTEL_KOBJ_ATTR_RO(_name)                       \
-               INTEL_KOBJ_ATTR(_name, 0444, _name##_show, NULL)
-
-static INTEL_KOBJ_ATTR_RO(id);
+static I915_DEVICE_ATTR_RO(id, id_show);
 
 static void kobj_gt_release(struct kobject *kobj)
 {
@@ -134,7 +183,7 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 		return;
 	}
 
-	if (sysfs_create_file(dir, &dev_attr_id.attr))
+	if (sysfs_create_file(dir, &dev_attr_id.attr.attr))
 		drm_err(&gt->i915->drm,
 			"failed to create sysfs %s info files\n", name);
 

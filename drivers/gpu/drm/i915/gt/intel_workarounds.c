@@ -300,7 +300,7 @@ static void gen7_ctx_workarounds_init(struct intel_engine_cs *engine,
 
 static bool global_debug_enable_in_td_ctl(struct drm_i915_private *i915)
 {
-	return IS_XEHPSDV(i915) || IS_DG2(i915) || IS_PONTEVECCHIO(i915);
+	return GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50);
 }
 
 /* Returns true if global was enabled and nothing more needs to be done */
@@ -785,19 +785,15 @@ static void dg2_ctx_workarounds_init(struct intel_engine_cs *engine,
 		wa_masked_field_set(wal, VF_PREEMPTION, PREEMPTION_VERTEX_COUNT, 0x4000);
 }
 
-/*
- * Although this is gen12, the context WAs are not shared with previous
- * platforms, so we don't call the common function
- */
 static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
 				     struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
 
-	if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0) &&
+	if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0) &&
 	    engine->class == COPY_ENGINE_CLASS) {
 		/*
-		 * Wa_16011062782:pvc[bd_a0,bd_b0) - WA applies only to Link Copy
+		 * Wa_16011062782:pvc - WA applies only to Link Copy
 		 * engines, but setting it also on Main Copy engine doesn't have
 		 * any side-effect
 		 */
@@ -1055,7 +1051,7 @@ hsw_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 static void
 gen9_wa_init_mcr(struct drm_i915_private *i915, struct i915_wa_list *wal)
 {
-	const struct sseu_dev_info *sseu = &i915->gt.info.sseu;
+	const struct sseu_dev_info *sseu = &to_gt(i915)->info.sseu;
 	unsigned int slice, subslice;
 	u32 mcr, mcr_mask;
 
@@ -1693,8 +1689,8 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	pvc_init_mcr(gt, wal);
 
-	if (IS_PVC_BD_REVID(gt->i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
-		/* Wa_14011780169:pvc[bd_a0] */
+	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)) {
+		/* Wa_14011780169:pvc */
 		wa_write_or(wal, UNSLCGCTL9440, GAMTLBOACS_CLKGATE_DIS |
 			    GAMTLBVDBOX7_CLKGATE_DIS |
 			    GAMTLBVDBOX6_CLKGATE_DIS |
@@ -1723,27 +1719,37 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 			    GAMTLBVEBOX1_CLKGATE_DIS |
 			    GAMTLBVEBOX0_CLKGATE_DIS);
 
-		/* Wa_16011234808:pvc[bd_a0] */
-		wa_write_or(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
-
 		/*
-		 * Wa_1508060568:pvc[bd_a0]
-		 * Wa_16011235395:pvc[bd_a0]
-		 * Wa_14011776591:pvc[bd_a0] Note: Additional registers required for this Wa
+		 * Wa_1508060568:pvc
+		 * Wa_16011235395:pvc
+		 * Wa_14011776591:pvc Note: Additional registers required for this Wa
 		 */
 		wa_write_or(wal, UNSLCGCTL9430, UNSLCG_FTLUNIT_CLKGATE_DIS);
 
-		/* Wa_14011776591:pvc[bd_a0] Note: Additional register required for this Wa */
+		/* Wa_14011776591:pvc Note: Additional register required for this Wa */
 		wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE2, FTLUNIT_CLKGATE_DIS);
 		wa_write_or(wal, SUBSLICE_UNIT_LEVEL_CLKGATE2, SSMCG_FTLUNIT_CLKGATE_DIS);
 
-		/* Wa_16011254478:pvc[bd_a0] */
+		/* Wa_16011254478:pvc */
 		wa_write_or(wal, INF_UNIT_LEVEL_CLKGATE, MCR_CLKGATE_DIS);
 		wa_write_or(wal, SCCGCTL94D0, SCCG_SMCR_CLKGATE_DIS);
 		wa_write_or(wal, SSMCGCTL9520, SSMCG_SMCR_CLKGATE_DIS);
 		wa_write_or(wal, UNSLCGCTL9430, UNSLCG_MCRUNIT_CLKGATE_DIS);
 		wa_write_or(wal, UNSLCGCTL9444, SMCR_CLKGATE_DIS);
 	}
+
+	/*
+	 * Wa_16011234808:pvc
+	 * Wa_14015795083
+	 * Apply the Wa_14015795083 to all PVC but don't verify it on PVC A0 steps,
+	 * as this Wa is dependent on clearing GEN12_DOP_CLOCK_GATE_LOCK Lock bit
+	 * by respective firmware. PVC A0 steps may not have that firmware fix.
+	 */
+	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
+		wa_add(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE, 0, 0, false);
+	else
+		wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
+
 }
 
 static void
@@ -2321,7 +2327,7 @@ static void pvc_whitelist_build(struct intel_engine_cs *engine)
 {
 	allow_read_ctx_timestamp(engine);
 
-	/* Prevent user access to TRTT across all engines */
+	/* Wa_16014440446:pvc */
 	blacklist_trtt(engine);
 }
 
@@ -2377,7 +2383,9 @@ void intel_engine_apply_whitelist(struct intel_engine_cs *engine)
 	unsigned long flags;
 	unsigned int i;
 
-	fw = wal_get_fw(uncore, wal, FW_REG_WRITE);
+	fw = intel_uncore_forcewake_for_reg(uncore,
+					    RING_FORCE_TO_NONPRIV(base, 0),
+					    FW_REG_WRITE);
 
 	spin_lock_irqsave(&uncore->lock, flags);
 	intel_uncore_forcewake_get__locked(uncore, fw);
@@ -2407,19 +2415,37 @@ void intel_engine_apply_whitelist(struct intel_engine_cs *engine)
 static void
 engine_fake_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
-	u8 mocs;
+	u8 mocs_w, mocs_r;
 
 	/*
-	 * RING_CMD_CCTL are need to be programed to un-cached
-	 * for memory writes and reads outputted by Command
-	 * Streamers on Gen12 onward platforms.
+	 * RING_CMD_CCTL specifies the default MOCS entry that will be used
+	 * by the command streamer when executing commands that don't have
+	 * a way to explicitly specify a MOCS setting.  The default should
+	 * usually reference whichever MOCS entry corresponds to uncached
+	 * behavior, although use of a WB cached entry is recommended by the
+	 * spec in certain circumstances on specific platforms.
 	 */
 	if (GRAPHICS_VER(engine->i915) >= 12) {
-		mocs = engine->gt->mocs.uc_index;
+		mocs_r = engine->gt->mocs.uc_index;
+		mocs_w = engine->gt->mocs.uc_index;
+
+		if (HAS_L3_CCS_READ(engine->i915) &&
+		    engine->class == COMPUTE_CLASS) {
+			mocs_r = engine->gt->mocs.wb_index;
+
+			/*
+			 * Even on the few platforms where MOCS 0 is a
+			 * legitimate table entry, it's never the correct
+			 * setting to use here; we can assume the MOCS init
+			 * just forgot to initialize wb_index.
+			 */
+			drm_WARN_ON(&engine->i915->drm, mocs_r == 0);
+		}
+
 		wa_masked_field_set(wal,
 				    RING_CMD_CCTL(engine->mmio_base),
 				    CMD_CCTL_MOCS_MASK,
-				    CMD_CCTL_MOCS_OVERRIDE(mocs, mocs));
+				    CMD_CCTL_MOCS_OVERRIDE(mocs_w, mocs_r));
 	}
 }
 
@@ -2435,10 +2461,22 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
 
-	if (IS_DG2(i915)) {
-		/* Wa_14015227452:dg2 */
-		wa_masked_en(wal, GEN9_ROW_CHICKEN4, XEHP_DIS_BBL_SYSPIPE);
+	if (IS_SUBPLATFORM(i915, INTEL_DG2, INTEL_SUBPLATFORM_ATSM) &&
+	    i915_modparams.wa16012258806) {
+		/*
+		 * Wa_16012258806:atsm
+		 *
+		 * FIXME:  This workaround did not follow the usual processes
+		 * so the workaround number may change once finalized.  We've
+		 * also been asked to not enable this by default yet, but
+		 * rather to stick it behind a module parameter for the time
+		 * being.
+		 */
+		wa_masked_field_set(wal, GEN9_ROW_CHICKEN4, THREAD_EX_ARB_MODE,
+				    THREAD_EX_ARB_MODE_RR_AFTER_DEP);
+	}
 
+	if (IS_DG2(i915)) {
 		/* Wa_1509235366:dg2 */
 		wa_write_or(wal, GEN12_GAMCNTRL_CTRL, INVALIDATION_BROADCAST_MODE_DIS |
 			    GLOBAL_INVALIDATION_MODE);
@@ -2449,12 +2487,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		 * performance guide section.
 		 */
 		wa_write_or(wal, XEHP_L3SCQREG7, BLEND_FILL_CACHING_OPT_DIS);
-
-		/* Wa_18018781329:dg2 */
-		wa_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
-		wa_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
-		wa_write_or(wal, VDBX_MOD_CTRL, FORCE_MISS_FTLB);
-		wa_write_or(wal, VEBX_MOD_CTRL, FORCE_MISS_FTLB);
 	}
 
 	if (IS_DG2_GRAPHICS_STEP(i915, G11, STEP_A0, STEP_B0)) {
@@ -2581,6 +2613,15 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_write_or(wal, GEN12_MERT_MOD_CTRL, FORCE_MISS_FTLB);
 	}
 
+	if (IS_DG2_GRAPHICS_STEP(i915, G11, STEP_B0, STEP_FOREVER) ||
+	    IS_DG2_G10(i915)) {
+		/* Wa_22014600077:dg2 */
+		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
+		       _MASKED_BIT_ENABLE(ENABLE_EU_COUNT_FOR_TDL_FLUSH),
+		       0 /* write-only reg (Wa_14012342262) */,
+		       true);
+	}
+
 	if (IS_DG1_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) ||
 	    IS_TGL_UY_GRAPHICS_STEP(i915, STEP_A0, STEP_B0)) {
 		/*
@@ -2615,11 +2656,15 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		 */
 		wa_write_or(wal, GEN7_FF_THREAD_MODE,
 			    GEN12_FF_TESSELATION_DOP_GATE_DISABLE);
+	}
 
+	if (IS_ALDERLAKE_P(i915) || IS_DG2(i915) || IS_ALDERLAKE_S(i915) ||
+	    IS_DG1(i915) || IS_ROCKETLAKE(i915) || IS_TIGERLAKE(i915)) {
 		/*
 		 * Wa_1606700617:tgl,dg1,adl-p
 		 * Wa_22010271021:tgl,rkl,dg1,adl-s,adl-p
 		 * Wa_14010826681:tgl,dg1,rkl,adl-p
+		 * Wa_18019627453:dg2
 		 */
 		wa_masked_en(wal,
 			     GEN9_CS_DEBUG_MODE1,
@@ -3030,21 +3075,31 @@ xcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 				    GAB_MODE_THROTTLE_RATE_MASK,
 				    GAB_MODE_THROTTLE_RATE);
 
-	if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0))
+	if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0))
 		if (engine->class == COPY_ENGINE_CLASS)
-			/* Wa_16010961369:pvc[bd_a0,bd_b0) */
+			/* Wa_16010961369:pvc */
 			wa_masked_field_set(wal, ECOSKPD(engine->mmio_base),
-					    PVC_BLITTER_SCHEDULING_MODE_MASK,
-					    PVC_BLITTER_ROUND_ROBIN_MODE);
+					    XEHP_BLITTER_SCHEDULING_MODE_MASK,
+					    XEHP_BLITTER_ROUND_ROBIN_MODE);
 }
 
 static void
 ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
-	if (i915_modparams.debug_eu)
+	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_C0)) {
+		/* Wa_14014999345:pvc */
+		wa_masked_en(wal, GEN10_CACHE_MODE_SS, DISABLE_ECC);
+	}
+
+	if (i915_modparams.debug_eu) {
 		gen9_debug_td_ctl_init(engine, wal);
 
-	if (IS_PVC_CT_REVID(engine->gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0)) {
+		/* Wa_14015527279:pvc */
+		if (IS_PONTEVECCHIO(engine->i915))
+			wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+	}
+
+	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_18015335494:pvc */
 		wa_write_or(wal, GEN8_ROW_CHICKEN, FPU_RESIDUAL_DISABLE);
 
@@ -3054,26 +3109,21 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			    ENABLE_CREDIT_UNIFICATION);
 
 		/* Wa_16013172390:pvc */
-		wa_masked_en(wal, PVC_GADSS_CHICKEN, PVC_GADSS_128B_COMPRESSION_DISABLE);
+		wa_masked_en(wal, GADSS_CHICKEN, GADSS_128B_COMPRESSION_DISABLE_XEHPC);
 	}
 
-	if (IS_PVC_BD_REVID(engine->gt->i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+	if (IS_PVC_BD_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_16011062782:pvc */
-		wa_masked_field_set(wal, PVC_GADSS_CHICKEN,
-				    PVC_GADSS_COMPRESSION_MASK,
-				    PVC_GADSS_READ_COMPRESSION_DISABLE |
-				    PVC_GADSS_128B_COMPRESSION_DISABLE);
+		wa_masked_field_set(wal, GADSS_CHICKEN,
+				    GADSS_COMPRESSION_MASK,
+				    GADSS_READ_COMPRESSION_DISABLE |
+				    GADSS_128B_COMPRESSION_DISABLE_XEHPC);
 	}
 
-	if (IS_PVC_CT_REVID(engine->gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0)) {
+	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_16012607674:pvc */
-		wa_masked_en(wal, PVC_GADSS_CHICKEN,
-			     PVC_GADSS_LINK_LAYER_DUMMY_DISABLE);
-	}
-
-	if (IS_PVC_CT_REVID(engine->gt, PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_C0)) {
-		/* Wa_14015016146:pvc */
-		wa_masked_en(wal, GEN10_CACHE_MODE_SS, DISABLE_ECC);
+		wa_masked_en(wal, GADSS_CHICKEN,
+			     GADSS_LINK_LAYER_DUMMY_DISABLE);
 	}
 }
 
@@ -3124,29 +3174,49 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 	}
 
 	if (IS_DG2(i915) || IS_PONTEVECCHIO(i915)) {
-		/* Wa_22014226127:dg2, pvc */
+		/* Wa_14015227452:dg2,pvc */
+		wa_masked_en(wal, GEN9_ROW_CHICKEN4, XEHP_DIS_BBL_SYSPIPE);
+
+		/* Wa_22014226127:dg2,pvc */
 		wa_write_or(wal, LSC_CHICKEN_BIT_0, DISABLE_D8_D16_COASLESCE);
+
+		/* Wa_18018781329:dg2, pvc */
+		wa_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
+		wa_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
+		wa_write_or(wal, VDBX_MOD_CTRL, FORCE_MISS_FTLB);
+		wa_write_or(wal, VEBX_MOD_CTRL, FORCE_MISS_FTLB);
+
+	}
+
+	/* Wa_15010861061:pvc */
+	if (IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		wa_masked_en(wal, FF_SLICE_CS_CHICKEN2,
+			     GEN12_PERF_FIX_BALANCING_CFE_DISABLE);
+
+	if (!RCS_MASK(engine->gt)) {
+		/*
+		 * EUs on compute engines can generate hardware status page
+		 * updates to a fused off render engine. Avoid these by always
+		 * keeping full mask for the fused off part as the default
+		 * mask can let updates happen and that leads to write into
+		 * ggtt that is not backed up by a real hardware status page.
+		 *
+		 *  Wa_18020744125
+		 */
+		wa_write(wal, RING_HWSTAM(RENDER_RING_BASE), ~0);
 	}
 
 	if (IS_PONTEVECCHIO(i915)) {
 		wa_masked_en(wal, GEN9_ROW_CHICKEN4, XEHP_DIS_BBL_SYSPIPE);
 
-		if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
-			/* Wa_16011062782:pvc[bd_a0,bd_b0) */
-			wa_masked_en(wal, PVC_LNCFMISCCFGREG0, PVC_DIS256BREQGLB | PVC_DIS128BREQ);
+		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) {
+			/* Wa_16011062782:pvc */
+			wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0,
+				     XEHPC_DIS256BREQGLB | XEHPC_DIS128BREQ);
 
-			/* Wa_14010847520:pvc[bd_a0] */
+			/* Wa_14010847520:pvc */
 			wa_write_or(wal, GEN12_LTCDREG, SLPDIS);
 		}
-
-		/* Wa_16014617026:pvc */
-		wa_masked_en(wal, PVC_LNCFMISCCFGREG0, PVC_DIS_FATAL_ERROR_REPORTING_SGUNIT_FABRIC_ERROR);
-		wa_write_or(wal, PVC_SCRATCH3, PVC_SCRATCH3_CORRECTABLE_UNCORRECTABLE_ERROR_REPORTING_DIS);
-
-		/* Wa_15010861061:pvc */
-		if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_B0, STEP_FOREVER))
-			wa_masked_en(wal, FF_SLICE_CS_CHICKEN2,
-				     GEN12_PERF_FIX_BALANCING_CFE_DISABLE);
 	}
 }
 

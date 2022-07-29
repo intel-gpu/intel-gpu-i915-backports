@@ -8,6 +8,7 @@
 #include "intel_iov_sysfs.h"
 #include "intel_iov_types.h"
 #include "intel_iov_utils.h"
+#include "gt/intel_gt.h"
 
 /*
  * /sys/class/drm/card*
@@ -476,7 +477,10 @@ static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
 	if (off > 0 || count < SZ_4K)
 		return -EINVAL;
 
+	pvc_wa_disallow_rc6(iov_to_i915(iov));
 	err = intel_iov_state_save_vf(iov, id, buf);
+	pvc_wa_allow_rc6(iov_to_i915(iov));
+
 	if (unlikely(err))
 		return err;
 
@@ -494,7 +498,10 @@ static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
 	if (off > 0 || count < SZ_4K)
 		return -EINVAL;
 
+	pvc_wa_disallow_rc6(iov_to_i915(iov));
 	err = intel_iov_state_restore_vf(iov, id, buf);
+	pvc_wa_allow_rc6(iov_to_i915(iov));
+
 	if (unlikely(err))
 		return err;
 
@@ -549,8 +556,15 @@ static ssize_t iov_attr_show(struct kobject *kobj,
 	struct iov_attr *iov_attr = to_iov_attr(attr);
 	struct intel_iov *iov = kobj_to_iov(kobj);
 	unsigned int id = kobj_to_id(kobj);
+	int ret = -EIO;
 
-	return iov_attr->show ? iov_attr->show(iov, id, buf) : -EIO;
+	if (iov_attr->show) {
+		pvc_wa_disallow_rc6(iov_to_i915(iov));
+		ret = iov_attr->show(iov, id, buf);
+		pvc_wa_allow_rc6(iov_to_i915(iov));
+	}
+
+	return ret;
 }
 
 static ssize_t iov_attr_store(struct kobject *kobj,
@@ -560,8 +574,15 @@ static ssize_t iov_attr_store(struct kobject *kobj,
 	struct iov_attr *iov_attr = to_iov_attr(attr);
 	struct intel_iov *iov = kobj_to_iov(kobj);
 	unsigned int id = kobj_to_id(kobj);
+	int ret = -EIO;
 
-	return iov_attr->store ? iov_attr->store(iov, id, buf, count) : -EIO;
+	if (iov_attr->store) {
+		pvc_wa_disallow_rc6(iov_to_i915(iov));
+		ret = iov_attr->store(iov, id, buf, count);
+		pvc_wa_allow_rc6(iov_to_i915(iov));
+	}
+
+	return ret;
 }
 
 static const struct sysfs_ops iov_sysfs_ops = {

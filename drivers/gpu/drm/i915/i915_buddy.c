@@ -9,44 +9,9 @@
 #include "i915_buddy.h"
 
 #include "i915_gem.h"
-#include "i915_globals.h"
 #include "i915_utils.h"
 
-static struct i915_global_block {
-	struct i915_global base;
-	struct kmem_cache *slab_blocks;
-} global;
-
-static void i915_global_buddy_show(struct drm_printer *p)
-{
-	i915_globals_show_slab(global.slab_blocks, "i915_buddy_block", p);
-}
-
-static void i915_global_buddy_shrink(void)
-{
-	kmem_cache_shrink(global.slab_blocks);
-}
-
-static void i915_global_buddy_exit(void)
-{
-	kmem_cache_destroy(global.slab_blocks);
-}
-
-static struct i915_global_block global = { {
-	.show = i915_global_buddy_show,
-	.shrink = i915_global_buddy_shrink,
-	.exit = i915_global_buddy_exit,
-} };
-
-int __init i915_global_buddy_init(void)
-{
-	global.slab_blocks = KMEM_CACHE(i915_buddy_block, SLAB_HWCACHE_ALIGN);
-	if (!global.slab_blocks)
-		return -ENOMEM;
-
-	i915_global_register(&global.base);
-	return 0;
-}
+static struct kmem_cache *slab_blocks;
 
 static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_block *parent,
 						 unsigned int order,
@@ -56,7 +21,7 @@ static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_block *parent
 
 	GEM_BUG_ON(order > I915_BUDDY_MAX_ORDER);
 
-	block = kmem_cache_zalloc(global.slab_blocks, GFP_KERNEL);
+	block = kmem_cache_zalloc(slab_blocks, GFP_KERNEL);
 	if (!block)
 		return NULL;
 
@@ -70,7 +35,7 @@ static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_block *parent
 
 static void i915_block_free(struct i915_buddy_block *block)
 {
-	kmem_cache_free(global.slab_blocks, block);
+	kmem_cache_free(slab_blocks, block);
 }
 
 static void mark_allocated(struct i915_buddy_block *block)
@@ -385,7 +350,7 @@ int i915_buddy_alloc_range(struct i915_buddy_mm *mm,
 	for (i = 0; i < mm->n_roots; ++i)
 		list_add_tail(&mm->roots[i]->tmp_link, &dfs);
 
-	end = min(start + size, mm->size);
+	end = start + size;
 	start = round_down(start, mm->chunk_size);
 	end = round_up(end, mm->chunk_size);
 	end -= 1; /* inclusive bounds testing */
@@ -457,3 +422,17 @@ err_free:
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/i915_buddy.c"
 #endif
+
+void i915_buddy_module_exit(void)
+{
+	kmem_cache_destroy(slab_blocks);
+}
+
+int __init i915_buddy_module_init(void)
+{
+	slab_blocks = KMEM_CACHE(i915_buddy_block, 0);
+	if (!slab_blocks)
+		return -ENOMEM;
+
+	return 0;
+}

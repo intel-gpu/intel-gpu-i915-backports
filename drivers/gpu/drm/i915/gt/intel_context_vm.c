@@ -3,6 +3,7 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#include "gt/intel_lrc_reg.h"
 #include "gen6_ppgtt.h"
 #include "i915_drv.h"
 #include "intel_context.h"

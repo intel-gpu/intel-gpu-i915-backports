@@ -1,5 +1,5 @@
 /*
- * Copyright © 2015 Intel Corporation
+ * Copyright © 2022 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -68,15 +68,6 @@ long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
                             unsigned int gup_flags, struct page **pages,
                             struct vm_area_struct **vmas, int *locked);
 #endif
-
-#ifdef CONFIG_LOCKDEP
-extern void fs_reclaim_acquire(gfp_t gfp_mask);
-extern void fs_reclaim_release(gfp_t gfp_mask);
-#else
-static inline void fs_reclaim_acquire(gfp_t gfp_mask) { }
-static inline void fs_reclaim_release(gfp_t gfp_mask) { }
-#endif /* CONFIG_LOCKDEP */
-
 #endif /* (LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0))*/
 
 #if LINUX_VERSION_IS_LESS(5,10,0)

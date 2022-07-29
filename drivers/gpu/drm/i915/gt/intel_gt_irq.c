@@ -205,13 +205,13 @@ void gen11_gt_irq_reset(struct intel_gt *gt)
 	intel_uncore_write(uncore, GEN11_RCS0_RSVD_INTR_MASK,	~0);
 	intel_uncore_write(uncore, GEN11_BCS_RSVD_INTR_MASK,	~0);
 	if (HAS_ENGINE(gt, BCS1) || HAS_ENGINE(gt, BCS2))
-		intel_uncore_write(uncore, GEN12_BCS1_BCS2_INTR_MASK, ~0);
+		intel_uncore_write(uncore, XEHPC_BCS1_BCS2_INTR_MASK, ~0);
 	if (HAS_ENGINE(gt, BCS3) || HAS_ENGINE(gt, BCS4))
-		intel_uncore_write(uncore, GEN12_BCS3_BCS4_INTR_MASK, ~0);
+		intel_uncore_write(uncore, XEHPC_BCS3_BCS4_INTR_MASK, ~0);
 	if (HAS_ENGINE(gt, BCS5) || HAS_ENGINE(gt, BCS6))
-		intel_uncore_write(uncore, GEN12_BCS5_BCS6_INTR_MASK, ~0);
+		intel_uncore_write(uncore, XEHPC_BCS5_BCS6_INTR_MASK, ~0);
 	if (HAS_ENGINE(gt, BCS7) || HAS_ENGINE(gt, BCS8))
-		intel_uncore_write(uncore, GEN12_BCS7_BCS8_INTR_MASK, ~0);
+		intel_uncore_write(uncore, XEHPC_BCS7_BCS8_INTR_MASK, ~0);
 	intel_uncore_write(uncore, GEN11_VCS0_VCS1_INTR_MASK,	~0);
 	intel_uncore_write(uncore, GEN11_VCS2_VCS3_INTR_MASK,	~0);
 	if (HAS_ENGINE(gt, VCS4) || HAS_ENGINE(gt, VCS5))
@@ -279,13 +279,13 @@ void gen11_gt_irq_postinstall(struct intel_gt *gt)
 	intel_uncore_write(uncore, GEN11_RCS0_RSVD_INTR_MASK, ~smask);
 	intel_uncore_write(uncore, GEN11_BCS_RSVD_INTR_MASK, ~smask);
 	if (HAS_ENGINE(gt, BCS1) || HAS_ENGINE(gt, BCS2))
-		intel_uncore_write(uncore, GEN12_BCS1_BCS2_INTR_MASK, ~dmask);
+		intel_uncore_write(uncore, XEHPC_BCS1_BCS2_INTR_MASK, ~dmask);
 	if (HAS_ENGINE(gt, BCS3) || HAS_ENGINE(gt, BCS4))
-		intel_uncore_write(uncore, GEN12_BCS3_BCS4_INTR_MASK, ~dmask);
+		intel_uncore_write(uncore, XEHPC_BCS3_BCS4_INTR_MASK, ~dmask);
 	if (HAS_ENGINE(gt, BCS5) || HAS_ENGINE(gt, BCS6))
-		intel_uncore_write(uncore, GEN12_BCS5_BCS6_INTR_MASK, ~dmask);
+		intel_uncore_write(uncore, XEHPC_BCS5_BCS6_INTR_MASK, ~dmask);
 	if (HAS_ENGINE(gt, BCS7) || HAS_ENGINE(gt, BCS8))
-		intel_uncore_write(uncore, GEN12_BCS7_BCS8_INTR_MASK, ~dmask);
+		intel_uncore_write(uncore, XEHPC_BCS7_BCS8_INTR_MASK, ~dmask);
 	intel_uncore_write(uncore, GEN11_VCS0_VCS1_INTR_MASK, ~dmask);
 	intel_uncore_write(uncore, GEN11_VCS2_VCS3_INTR_MASK, ~dmask);
 	if (HAS_ENGINE(gt, VCS4) || HAS_ENGINE(gt, VCS5))

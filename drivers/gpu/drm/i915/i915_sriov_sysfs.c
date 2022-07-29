@@ -7,6 +7,7 @@
 #include "i915_sriov_sysfs.h"
 #include "i915_sriov_sysfs_types.h"
 #include "i915_sysfs.h"
+#include "gt/intel_gt.h"
 
 /*
  * /sys/class/drm/card*
@@ -190,8 +191,15 @@ static ssize_t sriov_attr_show(struct kobject *kobj, struct attribute *attr, cha
 {
 	struct drm_i915_private *i915 = sriov_kobj_to_i915(to_sriov_kobj(kobj));
 	struct i915_sriov_attr *sriov_attr = to_sriov_attr(attr);
+	int ret = -EIO;
 
-	return sriov_attr->show ? sriov_attr->show(i915, buf) : -EIO;
+	if (sriov_attr->show) {
+		pvc_wa_disallow_rc6(i915);
+		ret = sriov_attr->show(i915, buf);
+		pvc_wa_allow_rc6(i915);
+	}
+
+	return ret;
 }
 
 static ssize_t sriov_attr_store(struct kobject *kobj, struct attribute *attr,
@@ -199,8 +207,15 @@ static ssize_t sriov_attr_store(struct kobject *kobj, struct attribute *attr,
 {
 	struct drm_i915_private *i915 = sriov_kobj_to_i915(to_sriov_kobj(kobj));
 	struct i915_sriov_attr *sriov_attr = to_sriov_attr(attr);
+	int ret = -EIO;
 
-	return sriov_attr->store ? sriov_attr->store(i915, buf, count) : -EIO;
+	if (sriov_attr->store) {
+		pvc_wa_disallow_rc6(i915);
+		ret = sriov_attr->store(i915, buf, count);
+		pvc_wa_allow_rc6(i915);
+	}
+
+	return ret;
 }
 
 static const struct sysfs_ops sriov_sysfs_ops = {
@@ -228,8 +243,15 @@ static ssize_t sriov_ext_attr_show(struct kobject *kobj, struct attribute *attr,
 	struct i915_sriov_ext_attr *sriov_attr = to_sriov_ext_attr(attr);
 	struct drm_i915_private *i915 = sriov_ext_kobj_to_i915(sriov_kobj);
 	unsigned int id = sriov_kobj->id;
+	int ret = -EIO;
 
-	return sriov_attr->show ? sriov_attr->show(i915, id, buf) : -EIO;
+	if (sriov_attr->show) {
+		pvc_wa_disallow_rc6(i915);
+		ret = sriov_attr->show(i915, id, buf);
+		pvc_wa_allow_rc6(i915);
+	}
+
+	return ret;
 }
 
 static ssize_t sriov_ext_attr_store(struct kobject *kobj, struct attribute *attr,
@@ -239,8 +261,15 @@ static ssize_t sriov_ext_attr_store(struct kobject *kobj, struct attribute *attr
 	struct i915_sriov_ext_attr *sriov_attr = to_sriov_ext_attr(attr);
 	struct drm_i915_private *i915 = sriov_ext_kobj_to_i915(sriov_kobj);
 	unsigned int id = sriov_kobj->id;
+	int ret = -EIO;
 
-	return sriov_attr->store ? sriov_attr->store(i915, id, buf, count) : -EIO;
+	if (sriov_attr->store) {
+		pvc_wa_disallow_rc6(i915);
+		ret = sriov_attr->store(i915, id, buf, count);
+		pvc_wa_allow_rc6(i915);
+	}
+
+	return ret;
 }
 
 static const struct sysfs_ops sriov_ext_sysfs_ops = {

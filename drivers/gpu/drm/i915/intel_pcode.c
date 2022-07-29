@@ -135,7 +135,7 @@ static bool __gt_pcode_try_request(struct intel_gt *gt, u32 mbox,
 				   u32 request, u32 reply_mask, u32 reply,
 				   u32 *status)
 {
-	*status = __gt_pcode_rw(gt, mbox, &request, NULL, 500, 0, true);
+	*status = __gt_pcode_rw(gt, mbox, &request, NULL, 500, 20, true);
 
 	return *status || ((request & reply_mask) == reply);
 }
@@ -238,6 +238,32 @@ int intel_pcode_init(struct drm_i915_private *i915)
 	}
 
 	return 0;
+}
+
+/**
+ * intel_pcode_enable_vram_sr - Enable pcode vram_sr.
+ * @dev_priv: i915 device
+ *
+ * This function triggers the required pcode flow to enable vram_sr.
+ * This function stictly need to call from rpm handlers, as i915 is
+ * transitioning to rpm idle/suspend, it doesn't require to grab
+ * rpm wakeref.
+ */
+int intel_pcode_enable_vram_sr(struct drm_i915_private *i915)
+{
+	int ret = 0;
+
+	if (!HAS_LMEM_SR(i915))
+		return ret;
+
+	ret =
+	snb_pcode_write(i915,
+			REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND,
+			DG1_PCODE_D3_VRAM_SR) |
+			REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1,
+			DG1_ENABLE_SR), 0); /* no data needed for this cmd */
+
+	return ret;
 }
 
 int __intel_gt_pcode_read(struct intel_gt *gt, u32 mbcmd, u32 p1, u32 p2, u32 *val)

@@ -15,7 +15,8 @@
 
 static int pxp_info_show(struct seq_file *m, void *data)
 {
-	struct intel_pxp *pxp = m->private;
+	struct intel_gt *gt = m->private;
+	struct intel_pxp *pxp = &gt->pxp;
 	struct drm_printer p = drm_seq_file_printer(m);
 	bool enabled = intel_pxp_is_enabled(pxp);
 
@@ -39,8 +40,8 @@ static int pxp_terminate_get(void *data, u64 *val)
 
 static int pxp_terminate_set(void *data, u64 val)
 {
-	struct intel_pxp *pxp = data;
-	struct intel_gt *gt = pxp_to_gt(pxp);
+	struct intel_gt *gt = data;
+	struct intel_pxp *pxp = &gt->pxp;
 
 	if (!intel_pxp_is_active(pxp))
 		return -ENODEV;
@@ -57,7 +58,8 @@ static int pxp_terminate_set(void *data, u64 val)
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(pxp_terminate_fops, pxp_terminate_get, pxp_terminate_set, "%llx\n");
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(pxp_terminate_fops, pxp_terminate_get, pxp_terminate_set, "%llx\n");
+
 void intel_pxp_debugfs_register(struct intel_pxp *pxp, struct dentry *gt_root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
@@ -76,5 +78,5 @@ void intel_pxp_debugfs_register(struct intel_pxp *pxp, struct dentry *gt_root)
 	if (IS_ERR(root))
 		return;
 
-	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), pxp);
+	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), pxp_to_gt(pxp));
 }
