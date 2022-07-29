@@ -1,4 +1,4 @@
-Source: intel-gpgpu-dkms-ubuntu-5.14-oem
+Source: intel-gpgpu-dkms-ubuntu-5.17-oem
 Section: kernel
 Priority: optional
 Maintainer: Intel Linux Graphics Team <linux-graphics@intel.com>
@@ -10,7 +10,7 @@ Homepage: https://www.intel.com
 Vcs-Browser: https://www.intel.com
 Vcs-Git: https://www.intel.com
 
-Package: intel-gpgpu-dkms-ubuntu-5.14-oem
+Package: intel-gpgpu-dkms-ubuntu-5.17-oem
 Architecture: all
 Depends:
  dkms,
@@ -19,5 +19,5 @@ Depends:
  libc6-dev | libc-dev,
  ${misc:Depends},
 Provides: i915-modules
-Description: Out of tree i915 driver for Ubuntu oem kernel version 5.14. 
+Description: Out of tree i915 driver for Ubuntu oem kernel version 5.17. 
 	     Installed as dkms module.

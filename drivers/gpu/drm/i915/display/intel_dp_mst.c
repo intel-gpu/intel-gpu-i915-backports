@@ -329,6 +329,7 @@ intel_dp_mst_atomic_master_trans_check(struct intel_connector *connector,
 	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
 	struct drm_connector_list_iter connector_list_iter;
 	struct intel_connector *connector_iter;
+	int ret = 0;
 
 	if (DISPLAY_VER(dev_priv) < 12)
 		return  0;
@@ -341,7 +342,6 @@ intel_dp_mst_atomic_master_trans_check(struct intel_connector *connector,
 		struct intel_digital_connector_state *conn_iter_state;
 		struct intel_crtc_state *crtc_state;
 		struct intel_crtc *crtc;
-		int ret;
 
 		if (connector_iter->mst_port != connector->mst_port ||
 		    connector_iter == connector)
@@ -350,8 +350,8 @@ intel_dp_mst_atomic_master_trans_check(struct intel_connector *connector,
 		conn_iter_state = intel_atomic_get_digital_connector_state(state,
 									   connector_iter);
 		if (IS_ERR(conn_iter_state)) {
-			drm_connector_list_iter_end(&connector_list_iter);
-			return PTR_ERR(conn_iter_state);
+			ret = PTR_ERR(conn_iter_state);
+			break;
 		}
 
 		if (!conn_iter_state->base.crtc)
@@ -360,20 +360,18 @@ intel_dp_mst_atomic_master_trans_check(struct intel_connector *connector,
 		crtc = to_intel_crtc(conn_iter_state->base.crtc);
 		crtc_state = intel_atomic_get_crtc_state(&state->base, crtc);
 		if (IS_ERR(crtc_state)) {
-			drm_connector_list_iter_end(&connector_list_iter);
-			return PTR_ERR(crtc_state);
+			ret = PTR_ERR(crtc_state);
+			break;
 		}
 
 		ret = drm_atomic_add_affected_planes(&state->base, &crtc->base);
-		if (ret) {
-			drm_connector_list_iter_end(&connector_list_iter);
-			return ret;
-		}
+		if (ret)
+			break;
 		crtc_state->uapi.mode_changed = true;
 	}
 	drm_connector_list_iter_end(&connector_list_iter);
 
-	return 0;
+	return ret;
 }
 
 static int
@@ -406,9 +404,17 @@ intel_dp_mst_atomic_check(struct drm_connector *connector,
 	 * connector
 	 */
 	if (new_crtc) {
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		struct intel_crtc *intel_crtc = to_intel_crtc(new_crtc);
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		struct intel_crtc *crtc = to_intel_crtc(new_crtc);
+#endif /* LINUX_VERSION_IN_RANGE */
 		struct intel_crtc_state *crtc_state =
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 			intel_atomic_get_new_crtc_state(state, intel_crtc);
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+			intel_atomic_get_new_crtc_state(state, crtc);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 		if (!crtc_state ||
 		    !drm_atomic_crtc_needs_modeset(&crtc_state->uapi) ||
@@ -466,13 +472,16 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 
 	drm_dp_mst_reset_vcpi_slots(&intel_dp->mst_mgr, connector->port);
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, 1);
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
+#endif /* LINUX_VERSION_IN_RANGE */
 	if (ret) {
 		drm_dbg_kms(&i915->drm, "failed to update payload %d\n", ret);
 	}
-	if (old_crtc_state->has_audio)
-		intel_audio_codec_disable(encoder,
-					  old_crtc_state, old_conn_state);
+
+	intel_audio_codec_disable(encoder, old_crtc_state, old_conn_state);
 }
 
 static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
@@ -609,7 +618,11 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 
 	intel_dp->active_mst_links++;
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, 1);
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 	/*
 	 * Before Gen 12 this is not done as part of
@@ -670,8 +683,7 @@ static void intel_mst_enable_dp(struct intel_atomic_state *state,
 
 	intel_crtc_vblank_on(pipe_config);
 
-	if (pipe_config->has_audio)
-		intel_audio_codec_enable(encoder, pipe_config, conn_state);
+	intel_audio_codec_enable(encoder, pipe_config, conn_state);
 
 	/* Enable hdcp if it's desired */
 	if (conn_state->content_protection ==
@@ -945,6 +957,10 @@ static struct drm_connector *intel_dp_add_mst_connector(struct drm_dp_mst_topolo
 	struct drm_connector *connector;
 	enum pipe pipe;
 	int ret;
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+	int max_source_rate =
+        intel_dp->source_rates[intel_dp->num_source_rates - 1];
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 
 	intel_connector = intel_connector_alloc();
 	if (!intel_connector)

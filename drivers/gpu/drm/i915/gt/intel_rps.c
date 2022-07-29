@@ -8,6 +8,7 @@
 #include <drm/i915_drm.h>
 
 #include "i915_drv.h"
+#include "i915_irq.h"
 #include "intel_breadcrumbs.h"
 #include "intel_gt.h"
 #include "intel_gt_clock_utils.h"
@@ -119,11 +120,6 @@ static void rps_timer(struct timer_list *t)
 
 			busy += div_u64(max_busy[i], 1 << i);
 		}
-		GT_TRACE(rps_to_gt(rps),
-			 "busy:%lld [%d%%], max:[%lld, %lld, %lld], interval:%d\n",
-			 busy, (int)div64_u64(100 * busy, dt),
-			 max_busy[0], max_busy[1], max_busy[2],
-			 rps->pm_interval);
 
 		if (100 * busy > rps->power.up_threshold * dt &&
 		    rps->cur_freq < rps->max_freq_softlimit) {
@@ -137,6 +133,14 @@ static void rps_timer(struct timer_list *t)
 			schedule_work(&rps->work);
 		} else {
 			rps->last_adj = 0;
+		}
+
+		if (rps->pm_interval < BUSY_MAX_EI) {
+			GT_TRACE(rps_to_gt(rps),
+				 "busy:%lld [%d%%], max:[%lld, %lld, %lld], interval:%d\n",
+				 busy, (int)div64_u64(100 * busy, dt),
+				 max_busy[0], max_busy[1], max_busy[2],
+				 rps->pm_interval);
 		}
 
 		mod_timer(&rps->timer,
@@ -1084,7 +1088,14 @@ static u32 intel_rps_read_state_cap(struct intel_rps *rps)
 		return intel_uncore_read(uncore, GEN6_RP_STATE_CAP);
 }
 
-/* "Caps" frequencies should be converted to MHz using intel_gpu_freq() */
+/**
+ * gen6_rps_get_freq_caps - Get freq caps exposed by HW
+ * @rps: the intel_rps structure
+ * @caps: returned freq caps
+ *
+ * Returned "caps" frequencies should be converted to MHz using
+ * intel_gpu_freq()
+ */
 void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);

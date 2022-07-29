@@ -7,37 +7,22 @@
 extern "C" {
 #endif
 
-/* FIXME: ID #8 is reserved for TGL CCS_CC */
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+/**
+ * DRM_FORMAT_MAX_PLANES - maximum number of planes a DRM format can have
+ */
+#define DRM_FORMAT_MAX_PLANES   4u
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 /*
- * Intel color control surfaces (CCS) for DG2 render compression.
- *
- * DG2 uses a new compression format for render compression. The general
- * layout is the same as I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS,
- * but a new hashing/compression algorithm is used, so a fresh modifier must
- * be associated with buffers of this type. Render compression uses 128 byte
- * compression blocks.
+ * Intel modifiers for new platforms should be added using the PRELIM_ prefix
+ * and the intel_prelim_fourcc_mod_code macro, while the upstreaming of the
+ * platform should happen without the prefix using the fourcc_mod_code macro.
  */
-#define I915_FORMAT_MOD_F_TILED_DG2_RC_CCS fourcc_mod_code(INTEL, 9)
+#define INTEL_PRELIM_ID_FLAG         (1ULL << 55)
 
-/*
- * Intel color control surfaces (CCS) for DG2 media compression.
- *
- * DG2 uses a new compression format for media compression. The general
- * layout is the same as I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS,
- * but a new hashing/compression algorithm is used, so a fresh modifier must
- * be associated with buffers of this type. Media compression uses 256 byte
- * compression blocks.
- */
-#define I915_FORMAT_MOD_F_TILED_DG2_MC_CCS fourcc_mod_code(INTEL, 10)
-
-/*
- * Intel color control surfaces (CCS) for DG2 clear color render compression.
- *
- * DG2 uses a unified compression format for clear color render compression.
- * The general layout is a tiled layout using 4Kb tiles i.e. Tile4 layout.
- */
-#define I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC fourcc_mod_code(INTEL, 11)
+#define intel_prelim_fourcc_mod_code(val) \
+        (fourcc_mod_code(INTEL, (val)) | INTEL_PRELIM_ID_FLAG)
 
 /*
  * Intel Color Control Surface with Clear Color (CCS) for Gen-12 render
@@ -57,15 +42,17 @@ extern "C" {
  * pitch is required to be a multiple of 4 tile widths.
  */
 #define I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC fourcc_mod_code(INTEL, 8)
-/*
- * Intel F-tiling(aka Tile4) layout
- *
- * This is a tiled layout using 4Kb tiles in row-major layout.
- * Within the tile pixels are laid out in 64 byte units / sub-tiles in OWORD
- * (16 bytes) chunks column-major..
- */
-#define I915_FORMAT_MOD_F_TILED         fourcc_mod_code(INTEL, 12)
 
+/*
+ * Intel Tile 4 layout
+ *
+ * This is a tiled layout using 4KB tiles in a row-major layout. It has the same
+ * shape as Tile Y at two granularities: 4KB (128B x 32) and 64B (16B x 4). It
+ * only differs from Tile Y at the 256B granularity in between. At this
+ * granularity, Tile Y has a shape of 16B x 32 rows, but this tiling has a shape
+ * of 64B x 8 rows.
+ */
+#define I915_FORMAT_MOD_4_TILED         fourcc_mod_code(INTEL, 9)
 /*
  * Intel color control surfaces (CCS) for DG2 render compression.
  *
@@ -75,8 +62,9 @@ extern "C" {
  * be associated with buffers of this type. Render compression uses 128 byte
  * compression blocks.
  */
-#define I915_FORMAT_MOD_F_TILED_DG2_RC_CCS fourcc_mod_code(INTEL, 9)
-#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS fourcc_mod_code(INTEL, 13)
+
+#define I915_FORMAT_MOD_4_TILED_DG2_RC_CCS fourcc_mod_code(INTEL, 10)
+#define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS intel_prelim_fourcc_mod_code(13)
 
 /*
  * Intel color control surfaces (CCS) for DG2 media compression.
@@ -87,8 +75,9 @@ extern "C" {
  * be associated with buffers of this type. Media compression uses 256 byte
  * compression blocks.
  */
-#define I915_FORMAT_MOD_F_TILED_DG2_MC_CCS fourcc_mod_code(INTEL, 10)
-#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS fourcc_mod_code(INTEL, 14)
+
+#define I915_FORMAT_MOD_4_TILED_DG2_MC_CCS fourcc_mod_code(INTEL, 11)
+#define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS intel_prelim_fourcc_mod_code(14)
 
 /*
  * Intel color control surfaces (CCS) for DG2 clear color render compression.
@@ -96,8 +85,9 @@ extern "C" {
  * DG2 uses a unified compression format for clear color render compression.
  * The general layout is a tiled layout using 4Kb tiles i.e. Tile4 layout.
  */
-#define I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC fourcc_mod_code(INTEL, 11)
-#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC fourcc_mod_code(INTEL, 15)
+
+#define I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC fourcc_mod_code(INTEL, 12)
+#define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC intel_prelim_fourcc_mod_code(15)
 
 #if defined(__cplusplus)
 }

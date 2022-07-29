@@ -299,9 +299,14 @@ i915_param_named_unsafe(ulls_bcs0_pm_wa, bool, 0600,
 i915_param_named_unsafe(debug_pages, uint, 0400,
 			"Extra pages allocated for debug (default=0, Bit 31 indicates LMEM)");
 
+i915_param_named_unsafe(wa16012258806, bool, 0600,
+	"Apply workaround 16012258806 (default: false)");
+
 i915_param_named_unsafe(enable_stateless_mc, bool, 0400,
 	"Set default for PVC stateless memory compression (0=disabled [default],  1=enabled)");
 
+i915_param_named_unsafe(enable_mem_fence, bool, 0400,
+			"Set this true to enable MEM_FENCE workaround (default: false");
 /*
  * This module parameter is needed because SRIOV PF and IAF are mutually
  * exclusive (see HSDES #14014623804).  Until this is fixed, the driver
@@ -311,10 +316,6 @@ i915_param_named_unsafe(enable_stateless_mc, bool, 0400,
  * SRIOV PF is required.
  */
 i915_param_named(enable_iaf, bool, 0400, "Enable IAF feature (default: true)");
-
-i915_param_named_unsafe(max_freq_limit, uint, 0400,
-			"Set GT max frequency limit in MHz (default: 0 Uses Fused max freq) "
-			"For PVC, the default max freq is limited to 1000MHz as a workaround");
 
 static __always_inline void _print_param(struct drm_printer *p,
 					 const char *name,

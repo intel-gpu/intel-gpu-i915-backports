@@ -22,22 +22,16 @@
  *
  */
 
-#include <linux/console.h>
 #include <linux/vga_switcheroo.h>
 #include <drm/drm_drv.h>
 #include <drm/i915_pciids.h>
 
-#include "display/intel_fbdev.h"
+#include "gt/intel_gt.h"
 
 #include "i915_driver.h"
 #include "i915_drv.h"
-#include "i915_perf.h"
-#include "i915_globals.h"
-#include "i915_reg.h"
-#include "i915_selftest.h"
+#include "i915_pci.h"
 #include "intel_pci_config.h"
-
-#include <backport/bp_module_version.h>
 
 #define PLATFORM(x) .platform = (x)
 #define GEN(x) \
@@ -179,6 +173,7 @@
 	.display.overlay_needs_physical = 1, \
 	.display.has_gmch = 1, \
 	.gpu_reset_clobbers_display = true, \
+	.has_3d_pipeline = 1, \
 	.hws_needs_physical = 1, \
 	.unfenced_needs_alignment = 1, \
 	.platform_engine_mask = BIT(RCS0), \
@@ -198,6 +193,7 @@
 	.display.has_overlay = 1, \
 	.display.overlay_needs_physical = 1, \
 	.display.has_gmch = 1, \
+	.has_3d_pipeline = 1, \
 	.gpu_reset_clobbers_display = true, \
 	.hws_needs_physical = 1, \
 	.unfenced_needs_alignment = 1, \
@@ -240,6 +236,7 @@ static const struct intel_device_info i865g_info = {
 	.display.has_gmch = 1, \
 	.gpu_reset_clobbers_display = true, \
 	.platform_engine_mask = BIT(RCS0), \
+	.has_3d_pipeline = 1, \
 	.has_snoop = true, \
 	.has_coherent_ggtt = true, \
 	.dma_mask_size = 32, \
@@ -331,6 +328,7 @@ static const struct intel_device_info pnv_m_info = {
 	.display.has_gmch = 1, \
 	.gpu_reset_clobbers_display = true, \
 	.platform_engine_mask = BIT(RCS0), \
+	.has_3d_pipeline = 1, \
 	.has_snoop = true, \
 	.has_coherent_ggtt = true, \
 	.dma_mask_size = 36, \
@@ -382,6 +380,7 @@ static const struct intel_device_info gm45_info = {
 	.display.cpu_transcoder_mask = BIT(TRANSCODER_A) | BIT(TRANSCODER_B), \
 	.display.has_hotplug = 1, \
 	.platform_engine_mask = BIT(RCS0) | BIT(VCS0), \
+	.has_3d_pipeline = 1, \
 	.has_snoop = true, \
 	.has_coherent_ggtt = true, \
 	/* ilk does support rc6, but we do not implement [power] contexts */ \
@@ -413,6 +412,7 @@ static const struct intel_device_info ilk_m_info = {
 	.display.has_hotplug = 1, \
 	.display.fbc_mask = BIT(INTEL_FBC_A), \
 	.platform_engine_mask = BIT(RCS0) | BIT(VCS0) | BIT(BCS0), \
+	.has_3d_pipeline = 1, \
 	.has_coherent_ggtt = true, \
 	.has_llc = 1, \
 	.has_rc6 = 1, \
@@ -465,6 +465,7 @@ static const struct intel_device_info snb_m_gt2_info = {
 	.display.has_hotplug = 1, \
 	.display.fbc_mask = BIT(INTEL_FBC_A), \
 	.platform_engine_mask = BIT(RCS0) | BIT(VCS0) | BIT(BCS0), \
+	.has_3d_pipeline = 1, \
 	.has_coherent_ggtt = true, \
 	.has_llc = 1, \
 	.has_rc6 = 1, \
@@ -705,6 +706,7 @@ static const struct intel_device_info skl_gt4_info = {
 	.display.cpu_transcoder_mask = BIT(TRANSCODER_A) | BIT(TRANSCODER_B) | \
 		BIT(TRANSCODER_C) | BIT(TRANSCODER_EDP) | \
 		BIT(TRANSCODER_DSI_A) | BIT(TRANSCODER_DSI_C), \
+	.has_3d_pipeline = 1, \
 	.has_64bit_reloc = 1, \
 	.display.has_ddi = 1, \
 	.display.has_fpga_dbg = 1, \
@@ -923,6 +925,7 @@ static const struct intel_device_info dg1_info = {
 	DGFX_FEATURES,
 	.graphics.rel = 10,
 	PLATFORM(INTEL_DG1),
+	.has_lmem_sr = 0,
 	.display.pipe_mask = BIT(PIPE_A) | BIT(PIPE_B) | BIT(PIPE_C) | BIT(PIPE_D),
 	.platform_engine_mask =
 		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) |
@@ -1021,9 +1024,10 @@ static const struct intel_device_info adl_p_info = {
 	.graphics.rel = 50, \
 	XE_HP_PAGE_SIZES, \
 	.dma_mask_size = 46, \
+	.has_3d_pipeline = 1, \
 	.has_64bit_reloc = 1, \
 	.has_flat_ccs = 1, \
-	.has_ftile = 1, \
+	.has_4tile = 1, \
 	.has_global_mocs = 1, \
 	.has_gt_uc = 1, \
 	.has_llc = 1, \
@@ -1084,14 +1088,15 @@ static const struct intel_device_info xehpsdv_info = {
 	.graphics.rel = 55, \
 	.media.rel = 55, \
 	PLATFORM(INTEL_DG2), \
+	.has_4tile = 1, \
 	.has_64k_pages = 1, \
 	.has_guc_deprivilege = 1, \
 	.has_heci_pxp = 1, \
+	.has_iov_memirq = 1, \
 	.has_media_ratio_mode = 1, \
 	.has_mi_set_predicate = 1, \
 	.has_oac = 1, \
 	.has_sriov = 1, \
-	.has_iov_memirq = 1, \
 	.platform_engine_mask = \
 		BIT(RCS0) | BIT(BCS0) | \
 		BIT(VECS0) | BIT(VECS1) | \
@@ -1101,6 +1106,7 @@ static const struct intel_device_info xehpsdv_info = {
 static const struct intel_device_info dg2_info = {
 	DG2_FEATURES,
 	XE_LPD_FEATURES,
+	.has_lmem_sr = 1,
 	.display.cpu_transcoder_mask = BIT(TRANSCODER_A) | BIT(TRANSCODER_B) |
 			       BIT(TRANSCODER_C) | BIT(TRANSCODER_D),
 };
@@ -1113,6 +1119,7 @@ static const struct intel_device_info ats_m_info = {
 #define XE_HPC_FEATURES \
 	XE_HP_FEATURES, \
 	.dma_mask_size = 52, \
+	.has_3d_pipeline = 0, \
 	/* FIXME: remove as soon as PVC support for LMEM 4K pages is working */ \
 	.has_64k_pages = 1, \
 	.has_access_counter = 1, \
@@ -1124,6 +1131,7 @@ static const struct intel_device_info ats_m_info = {
 	.has_gt_error_vectors = 1, \
 	.has_guc_deprivilege = 1, \
 	.has_iaf = 1, \
+	.has_l3_ccs_read = 1, \
 	.has_lmtt_lvl2 = 1, \
 	.has_media_ratio_mode = 1, \
 	.has_mem_sparing = 1, \
@@ -1139,7 +1147,6 @@ static const struct intel_device_info ats_m_info = {
 	.has_iov_memirq = 1, \
 	.has_stateless_mc = 1, \
 	.has_um_queues = 1, \
-	.lacks_3d_pipeline = 1, \
 	.ppgtt_msb = 56, \
 	.ppgtt_size = 57
 
@@ -1241,9 +1248,10 @@ static const struct pci_device_id pciidlist[] = {
 	INTEL_ADLN_IDS(&adl_p_info),
 	INTEL_DG1_IDS(&dg1_info),
 	INTEL_RPLS_IDS(&adl_s_info),
-	INTEL_XEHPSDV_IDS(&xehpsdv_info),
+	INTEL_RPLP_IDS(&adl_p_info),
 	INTEL_DG2_IDS(&dg2_info),
 	INTEL_ATS_M_IDS(&ats_m_info),
+	INTEL_XEHPSDV_IDS(&xehpsdv_info),
 	INTEL_PVC_IDS(&pvc_info),
 	{0, 0, 0}
 };
@@ -1380,22 +1388,26 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return -ENODEV;
 	}
 
+	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
 	err = i915_live_selftests(pdev);
-	if (err) {
-		i915_pci_remove(pdev);
-		return err > 0 ? -ENOTTY : err;
-	}
+	if (err)
+		goto out_i915_selftests;
 
 	err = i915_perf_selftests(pdev);
-	if (err) {
-		i915_pci_remove(pdev);
-		return err > 0 ? -ENOTTY : err;
-	}
+	if (err)
+		goto out_i915_selftests;
+
+	pvc_wa_allow_rc6(pdev_to_i915(pdev));
 
 	if (i915_save_pci_state(pdev))
 		pci_restore_state(pdev);
 
 	return 0;
+
+out_i915_selftests:
+	pvc_wa_allow_rc6(pdev_to_i915(pdev));
+	i915_pci_remove(pdev);
+	return err > 0 ? -ENOTTY : err;
 }
 
 static void i915_pci_shutdown(struct pci_dev *pdev)
@@ -1464,66 +1476,12 @@ static struct pci_driver i915_pci_driver = {
 	.err_handler = &i915_pci_err_handlers,
 };
 
-static int __init i915_init(void)
+int i915_register_pci_driver(void)
 {
-	bool use_kms = true;
-	int err;
-
-	DRM_INFO("I915 BACKPORTED INIT \n");
-	err = i915_globals_init();
-	if (err)
-		return err;
-
-	err = i915_mock_selftests();
-	if (err)
-		return err > 0 ? 0 : err;
-
-	/*
-	 * Enable KMS by default, unless explicitly overriden by
-	 * either the i915.modeset prarameter or by the
-	 * vga_text_mode_force boot option.
-	 */
-
-	if (i915_modparams.modeset == 0)
-		use_kms = false;
-
-	if (vgacon_text_force() && i915_modparams.modeset == -1)
-		use_kms = false;
-
-	if (!use_kms) {
-		/* Silently fail loading to not upset userspace. */
-		DRM_DEBUG_DRIVER("KMS disabled.\n");
-		return 0;
-	}
-
-	i915_pmu_init();
-
-	err = pci_register_driver(&i915_pci_driver);
-	if (err) {
-		i915_pmu_exit();
-		return err;
-	}
-
-	i915_perf_sysctl_register();
-	return 0;
+	return pci_register_driver(&i915_pci_driver);
 }
 
-static void __exit i915_exit(void)
+void i915_unregister_pci_driver(void)
 {
-	if (!i915_pci_driver.driver.owner)
-		return;
-
-	i915_perf_sysctl_unregister();
 	pci_unregister_driver(&i915_pci_driver);
-	i915_globals_exit();
-	i915_pmu_exit();
 }
-
-module_init(i915_init);
-module_exit(i915_exit);
-
-MODULE_AUTHOR("Tungsten Graphics, Inc.");
-MODULE_AUTHOR("Intel Corporation");
-MODULE_VERSION(BACKPORT_MOD_VER);
-MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_LICENSE("GPL and additional rights");

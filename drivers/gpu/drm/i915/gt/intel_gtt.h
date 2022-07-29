@@ -342,6 +342,11 @@ struct i915_address_space {
 	struct list_head priv_obj_list;
 	atomic_t invalidations;
 
+	struct {
+		struct i915_vma *vma;
+		struct drm_i915_gem_object *obj;
+	} mfence;
+
 	/* EU debugger */
 	spinlock_t debugger_lock;
 	struct list_head debugger_fence_list;
@@ -422,7 +427,7 @@ struct i915_address_space {
 	struct work_struct vm_bind_free_work;
 
 	/* Per tile active users of this VM */
-	atomic_t active_contexts_gt[I915_MAX_TILES];
+	atomic_t active_contexts_gt[I915_MAX_GT];
 };
 
 /*
@@ -485,6 +490,8 @@ struct i915_ppgtt {
 #define i915_is_ggtt(vm) ((vm)->is_ggtt)
 #define i915_is_dpt(vm) ((vm)->is_dpt)
 #define i915_is_ggtt_or_dpt(vm) (i915_is_ggtt(vm) || i915_is_dpt(vm))
+
+bool intel_vm_no_concurrent_access_wa(struct drm_i915_private *i915);
 
 int __must_check
 i915_vm_lock_objects(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww);

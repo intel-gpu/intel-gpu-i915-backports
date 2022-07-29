@@ -45,20 +45,11 @@ struct prelim_i915_user_extension {
 #define PRELIM_I915_CONTEXT_ENGINES_EXT_PARALLEL2_SUBMIT (PRELIM_I915_USER_EXT | 3)
 };
 
-struct prelim_drm_i915_gem_context_create_ext_clone {
+/* This API has been removed.  On the off chance someone somewhere has
+ * attempted to use it, never re-use this extension number.
+ */
+
 #define PRELIM_I915_CONTEXT_CREATE_EXT_CLONE	(PRELIM_I915_USER_EXT | 1)
-	struct i915_user_extension base;
-	__u32 clone_id;
-	__u32 flags;
-#define PRELIM_I915_CONTEXT_CLONE_ENGINES	(1u << 0)
-#define PRELIM_I915_CONTEXT_CLONE_FLAGS		(1u << 1)
-#define PRELIM_I915_CONTEXT_CLONE_SCHEDATTR	(1u << 2)
-#define PRELIM_I915_CONTEXT_CLONE_SSEU		(1u << 3)
-#define PRELIM_I915_CONTEXT_CLONE_TIMELINE	(1u << 4)
-#define PRELIM_I915_CONTEXT_CLONE_VM		(1u << 5)
-#define PRELIM_I915_CONTEXT_CLONE_UNKNOWN	-(PRELIM_I915_CONTEXT_CLONE_VM << 1)
-	__u64 rsvd;
-};
 
 /*
  * PRELIM UAPI VERSION - /sys/<...>/drm/card<n>/prelim_uapi_version
@@ -72,7 +63,7 @@ struct prelim_drm_i915_gem_context_create_ext_clone {
  *         the pile that is changing this number.
  */
 #define PRELIM_UAPI_MAJOR	2
-#define PRELIM_UAPI_MINOR	0
+#define PRELIM_UAPI_MINOR	1
 
 /*
  * Top 8 bits of every non-engine counter are GT id.

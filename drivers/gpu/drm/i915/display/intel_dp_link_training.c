@@ -21,10 +21,10 @@
  * IN THE SOFTWARE.
  */
 
+#include "i915_drv.h"
 #include "intel_display_types.h"
 #include "intel_dp.h"
 #include "intel_dp_link_training.h"
-
 
 static void intel_dp_reset_lttpr_common_caps(struct intel_dp *intel_dp)
 {
@@ -686,14 +686,16 @@ intel_dp_prepare_link_train(struct intel_dp *intel_dp,
 	return true;
 }
 
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 static void intel_dp_link_training_clock_recovery_delay(struct intel_dp *intel_dp,
-							enum drm_dp_phy dp_phy)
+                                                        enum drm_dp_phy dp_phy)
 {
-	if (dp_phy == DP_PHY_DPRX)
-		drm_dp_link_train_clock_recovery_delay(&intel_dp->aux, intel_dp->dpcd);
-	else
-		drm_dp_lttpr_link_train_clock_recovery_delay();
+        if (dp_phy == DP_PHY_DPRX)
+                drm_dp_link_train_clock_recovery_delay(&intel_dp->aux, intel_dp->dpcd);
+        else
+                drm_dp_lttpr_link_train_clock_recovery_delay();
 }
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 
 static bool intel_dp_adjust_request_changed(const struct intel_crtc_state *crtc_state,
 					    const u8 old_link_status[DP_LINK_STATUS_SIZE],
@@ -753,6 +755,13 @@ intel_dp_link_training_clock_recovery(struct intel_dp *intel_dp,
 	u8 link_status[DP_LINK_STATUS_SIZE];
 	bool max_vswing_reached = false;
 	char phy_name[10];
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	int delay_us;
+
+	delay_us = drm_dp_read_clock_recovery_delay(&intel_dp->aux,
+						    intel_dp->dpcd, dp_phy,
+						    intel_dp_is_uhbr(crtc_state));
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 	intel_dp_phy_name(dp_phy, phy_name, sizeof(phy_name));
 
@@ -780,8 +789,11 @@ intel_dp_link_training_clock_recovery(struct intel_dp *intel_dp,
 
 	voltage_tries = 1;
 	for (cr_tries = 0; cr_tries < max_cr_tries; ++cr_tries) {
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		intel_dp_link_training_clock_recovery_delay(intel_dp, dp_phy);
-
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		usleep_range(delay_us, 2 * delay_us);
+#endif /* LINUX_VERSION_IN_RANGE */
 		if (drm_dp_dpcd_read_phy_link_status(&intel_dp->aux, dp_phy,
 						     link_status) < 0) {
 			drm_err(&i915->drm, "[ENCODER:%d:%s][%s] Failed to get link status\n",
@@ -898,18 +910,20 @@ static u32 intel_dp_training_pattern(struct intel_dp *intel_dp,
 	return DP_TRAINING_PATTERN_2;
 }
 
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 static void
 intel_dp_link_training_channel_equalization_delay(struct intel_dp *intel_dp,
-						  enum drm_dp_phy dp_phy)
+                                                 enum drm_dp_phy dp_phy)
 {
-	if (dp_phy == DP_PHY_DPRX) {
-		drm_dp_link_train_channel_eq_delay(&intel_dp->aux, intel_dp->dpcd);
-	} else {
-		const u8 *phy_caps = intel_dp_lttpr_phy_caps(intel_dp, dp_phy);
+       if (dp_phy == DP_PHY_DPRX) {
+               drm_dp_link_train_channel_eq_delay(&intel_dp->aux, intel_dp->dpcd);
+       } else {
+               const u8 *phy_caps = intel_dp_lttpr_phy_caps(intel_dp, dp_phy);
 
-		drm_dp_lttpr_link_train_channel_eq_delay(&intel_dp->aux, phy_caps);
-	}
+               drm_dp_lttpr_link_train_channel_eq_delay(&intel_dp->aux, phy_caps);
+       }
 }
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 
 /*
  * Perform the link training channel equalization phase on the given DP PHY
@@ -928,6 +942,13 @@ intel_dp_link_training_channel_equalization(struct intel_dp *intel_dp,
 	u8 link_status[DP_LINK_STATUS_SIZE];
 	bool channel_eq = false;
 	char phy_name[10];
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	int delay_us;
+
+	delay_us = drm_dp_read_channel_eq_delay(&intel_dp->aux,
+						intel_dp->dpcd, dp_phy,
+						intel_dp_is_uhbr(crtc_state));
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 	intel_dp_phy_name(dp_phy, phy_name, sizeof(phy_name));
 
@@ -947,8 +968,12 @@ intel_dp_link_training_channel_equalization(struct intel_dp *intel_dp,
 	}
 
 	for (tries = 0; tries < 5; tries++) {
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		intel_dp_link_training_channel_equalization_delay(intel_dp,
-								  dp_phy);
+                                                  dp_phy);
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		usleep_range(delay_us, 2 * delay_us);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 		if (drm_dp_dpcd_read_phy_link_status(&intel_dp->aux, dp_phy,
 						     link_status) < 0) {

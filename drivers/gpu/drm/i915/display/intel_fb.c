@@ -7,6 +7,7 @@
 #include <drm/drm_modeset_helper.h>
 
 #include "gem/i915_gem_lmem.h"
+#include "i915_drv.h"
 #include "intel_display.h"
 #include "intel_display_types.h"
 #include "intel_dpt.h"
@@ -151,46 +152,42 @@ struct intel_modifier_desc {
 #define INTEL_PLANE_CAP_TILING_MASK	(INTEL_PLANE_CAP_TILING_X | \
 					 INTEL_PLANE_CAP_TILING_Y | \
 					 INTEL_PLANE_CAP_TILING_Yf | \
-					 INTEL_PLANE_CAP_TILING_F)
+					 INTEL_PLANE_CAP_TILING_4)
 #define INTEL_PLANE_CAP_TILING_NONE	0
 
 static const struct intel_modifier_desc intel_modifiers[] = {
 	{
-		.modifier = I915_FORMAT_MOD_F_TILED_DG2_MC_CCS,
-		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_MC,
+		.modifier = I915_FORMAT_MOD_4_TILED,
+		.display_ver = { 13, 13 },
+		.plane_caps = INTEL_PLANE_CAP_TILING_4,
 	}, {
-		.modifier = PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS,
+		.modifier = I915_FORMAT_MOD_4_TILED_DG2_MC_CCS,
 		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_MC,
+		.plane_caps = INTEL_PLANE_CAP_TILING_4 | INTEL_PLANE_CAP_CCS_MC,
 	}, {
-		.modifier = I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC,
+		.modifier = I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC,
 		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_RC_CC,
+		.plane_caps = INTEL_PLANE_CAP_TILING_4 | INTEL_PLANE_CAP_CCS_RC_CC,
 
 		.ccs.cc_planes = BIT(1),
 
 		FORMAT_OVERRIDE(gen12_flat_ccs_cc_formats),
 	}, {
-		.modifier = PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC,
+		.modifier = PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC,
 		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_RC_CC,
+		.plane_caps = INTEL_PLANE_CAP_TILING_4 | INTEL_PLANE_CAP_CCS_RC_CC,
 
 		.ccs.cc_planes = BIT(1),
 
 		FORMAT_OVERRIDE(gen12_flat_ccs_cc_formats),
 	}, {
-		.modifier = I915_FORMAT_MOD_F_TILED_DG2_RC_CCS,
+		.modifier = I915_FORMAT_MOD_4_TILED_DG2_RC_CCS,
 		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_RC,
+		.plane_caps = INTEL_PLANE_CAP_TILING_4 | INTEL_PLANE_CAP_CCS_MC,
 	}, {
-		.modifier = PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS,
+		.modifier = PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS,
 		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F | INTEL_PLANE_CAP_CCS_RC,
-	}, {
-		.modifier = I915_FORMAT_MOD_F_TILED,
-		.display_ver = { 13, 14 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_F,
+		.plane_caps = INTEL_PLANE_CAP_TILING_4 | INTEL_PLANE_CAP_CCS_RC,
 	}, {
 		.modifier = I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS,
 		.display_ver = { 12, 13 },
@@ -594,13 +591,13 @@ intel_tile_width_bytes(const struct drm_framebuffer *fb, int color_plane)
 			return 128;
 		else
 			return 512;
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-	case I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
-	case I915_FORMAT_MOD_F_TILED:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case I915_FORMAT_MOD_4_TILED:
 		/*
 		 * Each 4K tile consists of 64B(8*8) subtiles, with
 		 * same shape as Y Tile(i.e 4*16B OWords)
@@ -711,7 +708,7 @@ static unsigned int intel_fb_modifier_to_tiling(u64 fb_modifier)
 		return I915_TILING_Y;
 	case INTEL_PLANE_CAP_TILING_X:
 		return I915_TILING_X;
-	case INTEL_PLANE_CAP_TILING_F:
+	case INTEL_PLANE_CAP_TILING_4:
 	case INTEL_PLANE_CAP_TILING_Yf:
 	case INTEL_PLANE_CAP_TILING_NONE:
 		return I915_TILING_NONE;
@@ -799,15 +796,15 @@ unsigned int intel_surf_alignment(const struct drm_framebuffer *fb,
 	case I915_FORMAT_MOD_Y_TILED_CCS:
 	case I915_FORMAT_MOD_Yf_TILED_CCS:
 	case I915_FORMAT_MOD_Y_TILED:
-	case I915_FORMAT_MOD_F_TILED:
+	case I915_FORMAT_MOD_4_TILED:
 	case I915_FORMAT_MOD_Yf_TILED:
 		return 1 * 1024 * 1024;
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS:
-	case I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC:
-	case I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
-	case PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
 		return 16 * 1024;
 	default:
 		MISSING_CASE(fb->modifier);

@@ -3,9 +3,9 @@
  * Copyright(c) 2020, Intel Corporation. All rights reserved.
  */
 
-#include "drm/i915_drm.h"
-#include "i915_drv.h"
+#include <drm/i915_drm.h>
 
+#include "i915_drv.h"
 #include "intel_pxp.h"
 #include "intel_pxp_cmd.h"
 #include "intel_pxp_session.h"

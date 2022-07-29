@@ -6,7 +6,7 @@
 #endif
 
 #ifdef CONFIG_SLAB
-#include <linux/slub_def.h>
+#include <linux/slab_def.h>
 #endif
 
 /*
@@ -44,10 +44,17 @@ static inline unsigned long node_nr_slabs(struct kmem_cache_node *n)
 #define count_free  LINUX_I915_BACKPORT(count_free)
 #define node_nr_objs  LINUX_I915_BACKPORT(node_nr_objs)
 
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 static int count_free(struct page *page)
 {
 	return page->objects - page->inuse;
 }
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+static int count_free(struct slab *slab)
+{
+	return slab->objects - slab->inuse;
+}
+#endif /* LINUX_VERSION_IN_RANGE */
 
 static inline unsigned long node_nr_objs(struct kmem_cache_node *n)
 {
@@ -55,6 +62,7 @@ static inline unsigned long node_nr_objs(struct kmem_cache_node *n)
 }
 #endif /* CONFIG_SLUB_DEBUG */
 
+#ifdef CONFIG_SLUB
 #define oo_order  LINUX_I915_BACKPORT(oo_order)
 static inline unsigned int oo_order(struct kmem_cache_order_objects x)
 {
@@ -69,8 +77,9 @@ static inline unsigned int oo_objects(struct kmem_cache_order_objects x)
 
 #define count_partial  LINUX_I915_BACKPORT(count_partial)
 
-#ifdef CONFIG_SLUB
 #if defined(CONFIG_SLUB_DEBUG) || defined(CONFIG_SYSFS)
+
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 static unsigned long count_partial(struct kmem_cache_node *n,
 					int (*get_count)(struct page *))
 {
@@ -84,6 +93,22 @@ static unsigned long count_partial(struct kmem_cache_node *n,
 	spin_unlock_irqrestore(&n->list_lock, flags);
 	return x;
 }
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+static unsigned long count_partial(struct kmem_cache_node *n,
+					int (*get_count)(struct slab *))
+{
+	unsigned long flags;
+	unsigned long x = 0;
+	struct slab *slab;
+
+	spin_lock_irqsave(&n->list_lock, flags);
+	list_for_each_entry(slab, &n->partial, slab_list)
+		x += get_count(slab);
+	spin_unlock_irqrestore(&n->list_lock, flags);
+	return x;
+}
+#endif /* LINUX_VERSION_IN_RANGE */
+
 #endif /* CONFIG_SLUB */
 #endif /* CONFIG_SLUB_DEBUG || CONFIG_SYSFS */
 

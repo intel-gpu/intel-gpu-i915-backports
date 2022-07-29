@@ -58,4 +58,25 @@ static inline void *kvcalloc(size_t n, size_t size, gfp_t flags)
 }
 #endif /* < 4.18 */
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+
+#if defined(HASHED_PAGE_VIRTUAL)
+void *page_address(const struct page *page);
+void set_page_address(struct page *page, void *virtual);
+void page_address_init(void);
+#endif
+
+#if !defined(HASHED_PAGE_VIRTUAL) && !defined(WANT_PAGE_VIRTUAL)
+#define page_address(page) lowmem_page_address(page)
+#define set_page_address(page, address)  do { } while(0)
+#define page_address_init()  do { } while(0)
+#endif
+
+#define folio_address LINUX_I915_BACKPORT(folio_address)
+static inline void *folio_address(const struct folio *folio)
+{
+	return page_address(&folio->page);
+}
+
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 #endif /* __BACKPORT_MM_H */

@@ -163,8 +163,8 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 		unsigned int count, i;
 		int ret;
 
-		ret = dma_resv_get_fences(obj->base.resv,
-					      &excl, &count, &shared);
+		ret = dma_resv_get_fences(obj->base.resv, &excl, &count,
+					  &shared);
 		if (ret)
 			return ret;
 

@@ -3,11 +3,12 @@
  * Copyright © 2021 Intel Corporation
  */
 
-#include "intel_display_types.h"
-#include "intel_plane_initial.h"
+#include "i915_drv.h"
 #include "intel_atomic_plane.h"
 #include "intel_display.h"
+#include "intel_display_types.h"
 #include "intel_fb.h"
+#include "intel_plane_initial.h"
 
 static bool
 intel_reuse_initial_plane_obj(struct drm_i915_private *i915,
@@ -130,7 +131,7 @@ intel_alloc_initial_plane_obj(struct intel_crtc *crtc,
 	case DRM_FORMAT_MOD_LINEAR:
 	case I915_FORMAT_MOD_X_TILED:
 	case I915_FORMAT_MOD_Y_TILED:
-	case I915_FORMAT_MOD_F_TILED:
+	case I915_FORMAT_MOD_4_TILED:
 		break;
 	default:
 		drm_dbg(&dev_priv->drm,

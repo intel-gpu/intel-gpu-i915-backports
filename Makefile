@@ -20,14 +20,154 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 
-export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG
+version_h := $(BACKPORT_DIR)/backport-include/linux/osv_version.h
+export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG version_h
 
 # disable built-in rules for this file
 .SUFFIXES:
 
 .PHONY: default
-default:
+default: $(version_h)
 	@$(MAKE) modules
+
+# BKPT_VER is extracted from BACKPORTS_RELEASE_TAG, which is auto genereated from backport description.Tagging is needed
+# for decoding this, Sample in the version file 'BACKPORTS_RELEASE_TAG="SUSE_SLES15SP2_DG1_200901.0-1-g1a26a874"'
+# Backports tagging is needed for this to work, for example "SUSE_SLES15SP2_DG1_200901.0" is the tag for 200901.0
+# release in backports branch
+
+BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 8 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
+
+BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f 2 | cut -d " " -f 2 | cut -d "-" -f 1,2 | cut -d '.' -f 1-3 2> /dev/null)
+
+KERN_VER = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f 2 | cut -d " " -f 2 | cut -d "-" -f 1 | cut -d '.' -f 1,2 2> /dev/null)
+
+# DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
+# for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_DG1_200828.0"
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+
+KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME_22.04 | cut -d "\"" -f 2 | cut -d "-" -f 2-|sed "s/-/./g" 2>/dev/null || echo 1)
+UBUNTU_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
+UBUNTU_BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | cut -d '.' -f 2 2> /dev/null)
+
+ifeq ($(UBUNTU_BACKPORT_MAJOR),)
+	UBUNTU_BACKPORT_MAJOR = 0;
+else ifeq ($(UBUNTU_BACKPORT_MINOR),)
+	UBUNTU_BACKPORT_MINOR = 0;
+endif
+
+ifeq ($(shell expr $(KERN_VER) \<= 5.16), 1)
+	OSV_VER = 20.04
+else ifeq ($(shell expr $(KERN_VER) \>= 5.17), 1)
+	OSV_VER = 22.04
+endif
+
+###
+# Easy method for doing a status message
+       kecho := :
+ quiet_kecho := echo
+silent_kecho := :
+kecho := $($(quiet)kecho)
+
+###
+# filechk is used to check if the content of a generated file is updated.
+# Sample usage:
+# define filechk_sample
+#       echo $KERNELRELEASE
+# endef
+# version.h : Makefile
+#       $(call filechk,sample)
+# The rule defined shall write to stdout the content of the new file.
+# The existing file will be compared with the new one.
+# - If no file exist it is created
+# - If the content differ the new file is used
+# - If they are equal no change, and no timestamp update
+# - stdin is piped in from the first prerequisite ($<) so one has
+#   to specify a valid file as first prerequisite (often the kbuild file)
+
+# VERSION is generated as 0.DII_TAG.BackportVersion
+define filechk
+        $(Q)set -e;                             \
+        mkdir -p $(dir $@);                     \
+        { $(filechk_$(1)); } > $@.tmp;          \
+        if [ -r $@ ] && cmp -s $@ $@.tmp; then  \
+                rm -f $@.tmp;                   \
+        else                                    \
+                $(kecho) '  UPD     $@';        \
+                mv -f $@.tmp $@;                \
+        fi
+endef
+
+define filechk_osv_version.h
+        echo '#define UBUNTU_BACKPORT_MAJOR $(UBUNTU_BACKPORT_MAJOR)'; \
+        echo '#define UBUNTU_BACKPORT_MINOR $(UBUNTU_BACKPORT_MINOR)'; \
+	echo '#define UBUNTU_BACKPORT_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define UBUNTU_BACKPORT_RELEASE_CODE $(shell \
+	expr $(UBUNTU_BACKPORT_MAJOR) \* 65536 + 0$(UBUNTU_BACKPORT_MINOR) \* 256)'
+endef
+
+$(version_h): $(BACKPORT_DIR)/Makefile FORCE
+ifeq ($(OSV_VER), 20.04)
+	@gawk -i inplace '!/BASE_KERNEL_NAME_$(OSV_VER)/' versions
+	@echo 'BASE_KERNEL_NAME_$(OSV_VER)="$(BASE_KER_VER)"' >> versions
+else ifeq ($(OSV_VER), 22.04)
+	@gawk -i inplace '!/BASE_KERNEL_NAME_$(OSV_VER)/' $(BACKPORT_DIR)/versions
+	@echo 'BASE_KERNEL_NAME_$(OSV_VER)="$(BASE_KER_VER)"' >> versions
+endif
+	$(call filechk,osv_version.h)
+
+# VERSION is generated as 1.DII_TAG.BackportVersion
+VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+
+ifneq ($(BUILD_VERSION), )
+RELEASE := $(BUILD_VERSION)
+else
+RELEASE := 1
+endif
+
+RELEASE_TYPE ?= opensource
+
+ifeq ($(RELEASE_TYPE), opensource)
+	PKG_SUFFIX=
+else
+	PKG_SUFFIX=-$(RELEASE_TYPE)
+endif
+
+# i915dkmsdeb-pkg
+# Creates Backports i915 alone dkms package
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsdeb-pkg
+# BUILD_VERSION : pass build version to be added to package name
+# RELEASE_TYPE : <opensource/prerelease> package need to be createdi
+# RELEASE_TYPE=<custom> is used to create custome package.
+# Example: RELEASE_TYPE=test
+#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
+# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
+# already installed before you intalling current one.
+# ------------------------------------------------------------------------------
+I915DKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
+I915DKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
+I915DKMSMK_INSTALL := $(BACKPORT_DIR)/scripts/backport-mkdebinstall
+I915DKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mkdebdkms
+I915DKMSMK_README := $(BACKPORT_DIR)/scripts/backport-mkdebreadme
+I915DKMSMK_COPYRIGHT := $(BACKPORT_DIR)/scripts/backport-mkdebcopyright
+
+I915MODULE_NAME := intel-i915-dkms$(PKG_SUFFIX)
+
+I915VERSION := $(VERSION)
+I915RELEASE := $(RELEASE)
+
+.PHONY: i915dkmsdeb-pkg
+i915dkmsdeb-pkg:
+	$(CONFIG_SHELL) $(I915DKMSMK_CONTROL) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/control
+	$(CONFIG_SHELL) $(I915DKMSMK_RULES) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/rules
+	cp $(BACKPORT_DIR)/debian/changelog.in $(BACKPORT_DIR)/debian/changelog
+	sed -i 's/pkg-name/$(I915MODULE_NAME)/g' $(BACKPORT_DIR)/debian/changelog
+	cp $(BACKPORT_DIR)/debian/package.install.in $(BACKPORT_DIR)/debian/$(I915MODULE_NAME).install.in
+	$(CONFIG_SHELL) $(I915DKMSMK_DKMS) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/$(I915MODULE_NAME).dkms.in
+	$(CONFIG_SHELL) $(I915DKMSMK_README) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/README.Debian
+	$(CONFIG_SHELL) $(I915DKMSMK_COPYRIGHT) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/copyright
+	+dch -l "+i${I915RELEASE}-" -m "build ${I915RELEASE}"
+	+dpkg-buildpackage -j`nproc --all` -us -uc -b -rfakeroot
+
 
 .PHONY: mrproper
 mrproper:
@@ -164,3 +304,6 @@ help: defconfig-help
 else
 include $(BACKPORT_DIR)/Makefile.kernel
 endif
+
+PHONY += FORCE
+FORCE:

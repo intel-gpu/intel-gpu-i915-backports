@@ -10,6 +10,7 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_requests.h"
 
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_gem_evict.h"
 
@@ -68,6 +69,9 @@ static int lmem_suspend(struct drm_i915_private *i915)
 	struct intel_memory_region *mem;
 	int id;
 
+	if (i915->quiesce_gpu)
+		return 0;
+
 	for_each_memory_region(mem, i915, id) {
 		struct drm_i915_gem_object *obj;
 
@@ -76,7 +80,7 @@ static int lmem_suspend(struct drm_i915_private *i915)
 
 		/* singlethreaded suspend; list immutable */
 		list_for_each_entry(obj, &mem->objects.list, mm.region_link) {
-			int err;
+			int err = 0;
 
 			if (obj->swapto ||
 			    !i915_gem_object_has_pinned_pages(obj))
@@ -86,7 +90,7 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			if (!kref_get_unless_zero(&obj->base.refcount))
 				continue;
 
-			i915_gem_object_lock(obj, NULL);
+                        i915_gem_object_lock(obj, NULL);
 			err = perma_pinned_swapout(obj);
 			i915_gem_object_unlock(obj);
 

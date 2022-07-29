@@ -1,6 +1,8 @@
 /*
  * Copyright (C) 2021 Intel Corporation
  */
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_atomic_helper.h>
@@ -334,3 +336,5 @@ int drm_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector)
         return max_dsc_lanes * dsc_rate_per_lane;
 }
 EXPORT_SYMBOL(drm_hdmi_sink_dsc_max_frl_rate);
+
+#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */

@@ -2255,7 +2255,7 @@ void intel_color_init(struct intel_crtc *crtc)
 				dev_priv->color_funcs = &hsw_color_funcs;
 			else
 				dev_priv->color_funcs = &ivb_color_funcs;
-		} else
+		} else 
 			dev_priv->color_funcs = &ilk_color_funcs;
 	}
 

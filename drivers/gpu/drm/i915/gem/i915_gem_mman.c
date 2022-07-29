@@ -69,7 +69,7 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 	 * mmap ioctl is disallowed for all discrete platforms,
 	 * and for all platforms with GRAPHICS_VER > 12.
 	 */
-	if (IS_DGFX(i915) || GRAPHICS_VER(i915) > 12)
+	if (IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0))
 		return -EOPNOTSUPP;
 
 	if (args->flags & ~(I915_MMAP_WC))
@@ -972,8 +972,14 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	 * requires avoiding extraneous references to their filp, hence why
 	 * we prefer to use an anonymous file for their mmaps.
 	 */
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	fput(vma->vm_file);
 	vma->vm_file = anon;
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	vma_set_file(vma, anon);
+	/* Drop the initial creation reference, the vma is now holding one. */
+	fput(anon);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 	switch (mmo->mmap_type) {
 	case I915_MMAP_TYPE_WC:

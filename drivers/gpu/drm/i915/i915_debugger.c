@@ -11,6 +11,7 @@
 #include <linux/ptrace.h>
 #include <linux/delay.h>
 
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_debugger.h"
 #include "i915_gpu_error.h"
@@ -1230,87 +1231,114 @@ static loff_t i915_debugger_vm_llseek(struct file *file,
 	return fixed_size_llseek(file, offset, whence, vm->total);
 }
 
-static struct page *__nth_page(struct scatterlist *sg, unsigned long offset)
+static void access_page_in_obj(struct drm_i915_gem_object * const obj,
+			       const unsigned long vma_offset,
+			       void * const buf,
+			       const size_t len,
+			       const bool write)
 {
-	return nth_page(sg_page(sg), offset >> PAGE_SHIFT);
-}
+	const pgoff_t pn = vma_offset >> PAGE_SHIFT;
+	const size_t offset = offset_in_page(vma_offset);
 
-/* returns the number of bytes that have not been read or written */
-static int __debugger_copy_from_to_user(struct i915_vma *vma,
-					struct scatterlist *sg,
-					loff_t k_offset,
-					size_t count, loff_t u_offset,
-					bool write,
-					void __user *r_buffer,
-					const void __user *w_buffer)
-{
-	unsigned int dma_len = sg_dma_len(sg);
-	size_t to_copy = count;
-	size_t copied = 0;
-	unsigned int len;
-	int ret = 0;
+	if (i915_gem_object_is_lmem(obj)) {
+		void __iomem *vaddr;
 
-	GEM_BUG_ON(k_offset + count > dma_len);
+		vaddr = i915_gem_object_lmem_io_map_page(obj, pn);
+		mb();
 
-	for (len = 0; len < dma_len; len += PAGE_SIZE) {
+		if (write)
+			memcpy_toio(vaddr + offset, buf, len);
+		else
+			memcpy_fromio(buf, vaddr + offset, len);
+
+		mb();
+		io_mapping_unmap(vaddr);
+	} else if (i915_gem_object_has_struct_page(obj)) {
+		struct page *page;
 		void *vaddr;
 
-		if (i915_gem_object_is_lmem(vma->obj)) {
-			struct intel_memory_region *mem = vma->obj->mm.region;
-			resource_size_t offset;
+		page = i915_gem_object_get_page(obj, pn);
+		vaddr = kmap(page);
 
-			offset = sg_dma_address(sg);
-			offset -= mem->region.start;
+		drm_clflush_virt_range(vaddr + offset, len);
 
-			vaddr = io_mapping_map_wc(&mem->iomap, offset, dma_len);
-			mb();
-		} else if (i915_gem_object_has_struct_page(vma->obj)) {
-			if (k_offset >= PAGE_SIZE) {
-				k_offset -= PAGE_SIZE;
-				continue;
-			}
-			to_copy = min_t(size_t, count - copied,
-					PAGE_SIZE - k_offset);
-			if (!to_copy)
-				break;
+		if (write)
+			memcpy(vaddr + offset, buf, len);
+		else
+			memcpy(buf, vaddr + offset, len);
 
-			vaddr = kmap(__nth_page(sg, len));
-			drm_clflush_virt_range(vaddr + k_offset, to_copy);
-		} else {
-			GEM_BUG_ON(copied);
-			return -EINVAL;
-		}
+		drm_clflush_virt_range(vaddr + offset, len);
 
-		ret = write ?
-		      copy_from_user(vaddr + k_offset,
-				     w_buffer + u_offset + copied, to_copy) :
-		      copy_to_user(r_buffer + u_offset + copied,
-				   vaddr + k_offset, to_copy);
+		mark_page_accessed(page);
+		if (write)
+			set_page_dirty(page);
 
-		if (i915_gem_object_is_lmem(vma->obj)) {
-			mb();
-			io_mapping_unmap(vaddr);
-			return ret;
-		} else {
-			struct page *p = __nth_page(sg, len);
+		kunmap(page);
+	} else {
+		GEM_WARN_ON(1);
+	}
+}
 
-			drm_clflush_virt_range(vaddr + k_offset, to_copy);
+static ssize_t access_page_in_vm(struct i915_address_space *vm,
+				 const u64 vm_offset,
+				 void *buf,
+				 ssize_t len,
+				 bool write)
+{
+	struct i915_vma *vma;
+	struct i915_gem_ww_ctx ww;
+	struct drm_i915_gem_object *obj;
+	u64 vma_offset;
+	ssize_t ret;
 
-			mark_page_accessed(p);
-			if (write)
-				set_page_dirty(p);
+	if (len == 0)
+		return 0;
 
-			kunmap(p);
-		}
+	if (len < 0)
+		return -EINVAL;
 
-		if (ret)
-			return count - copied - to_copy + ret;
+	if (range_overflows_t(u64, vm_offset, len, vm->total))
+		return 0;
 
-		copied += to_copy;
-		k_offset = 0;
+	ret = i915_gem_vm_bind_lock_interruptible(vm);
+	if (ret)
+		return ret;
+
+	vma = i915_gem_vm_bind_lookup_vma(vm, vm_offset);
+	if (!vma) {
+		i915_gem_vm_bind_unlock(vm);
+		return 0;
 	}
 
-	return 0;
+	obj = vma->obj;
+
+	for_i915_gem_ww(&ww, ret, true) {
+		ret = i915_gem_object_lock(obj, &ww);
+		if (ret)
+			continue;
+
+		if (!i915_gem_object_has_pages(obj)) {
+			ret = ____i915_gem_object_get_pages(obj);
+			if (ret)
+				continue;
+		}
+
+		vma_offset = vm_offset - vma->start;
+
+		len = min_t(ssize_t, len, PAGE_SIZE - offset_in_page(vma_offset));
+
+		access_page_in_obj(obj, vma_offset, buf, len, write);
+	}
+
+	i915_gem_vm_bind_unlock(vm);
+
+	if (GEM_WARN_ON(ret > 0))
+		return 0;
+
+	if (ret)
+		return ret;
+
+	return len;
 }
 
 static ssize_t __vm_read_write(struct i915_address_space *vm,
@@ -1318,121 +1346,66 @@ static ssize_t __vm_read_write(struct i915_address_space *vm,
 			       const char __user *w_buffer,
 			       size_t count, loff_t *__pos, bool write)
 {
-	struct drm_mm_node *node;
-	size_t to_copy = count;
-	struct i915_vma *vma;
-	loff_t pos = *__pos;
-	loff_t end = pos + count;
+	void *bounce_buf;
 	ssize_t copied = 0;
+	ssize_t bytes_left = count;
+	loff_t pos = *__pos;
+	ssize_t ret = 0;
 
-	if (range_overflows_t(u64, pos, count, vm->total))
-		return -EINVAL;
+	if (bytes_left <= 0)
+		return 0;
 
-	rcu_read_lock();
-	drm_mm_for_each_node_in_range(node, &vm->mm, pos, end) {
-		struct scatterlist *sg;
-		s64 offset;
-		u32 i;
+	bounce_buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!bounce_buf)
+		return -ENOMEM;
 
-		vma = container_of(node, typeof(*vma), node);
+	do {
+		ssize_t len = min_t(ssize_t, bytes_left, PAGE_SIZE);
 
-		if (node->color == I915_COLOR_UNEVICTABLE) {
-			rcu_read_unlock();
-			return copied ?: -EPERM;
-		}
+		if (write) {
+			ret = copy_from_user(bounce_buf, w_buffer + copied, len);
+			if (ret < 0)
+				break;
 
-		if (!i915_active_acquire_if_busy(&vma->active)) {
-			int err = -EAGAIN;
+			len = len - ret;
+			if (len > 0) {
+				ret = access_page_in_vm(vm, pos + copied, bounce_buf, len, true);
+				if (ret <= 0)
+					break;
 
-			vma = i915_vma_tryget(vma);
-			rcu_read_unlock();
-
-			if (vma) {
-				err = i915_vma_pin(vma, vma->node.size, 0,
-						   PIN_USER | PIN_OFFSET_FIXED |
-						   vma->node.start);
-				if (!err) {
-					err = i915_active_acquire(&vma->active);
-					i915_vma_unpin(vma);
-				}
-				i915_vma_put(vma);
+				len = ret;
 			}
-
-			if (err)
-				return copied ?: err;
 		} else {
-			rcu_read_unlock();
+			ret = access_page_in_vm(vm, pos + copied, bounce_buf, len, false);
+			if (ret <= 0)
+				break;
+
+			len = ret;
+
+			ret = copy_to_user(r_buffer + copied, bounce_buf, len);
+			if (ret < 0)
+				break;
+
+			len = len - ret;
 		}
 
-		offset = pos - node->start;
-		for_each_sg(vma->pages->sgl, sg, vma->pages->nents, i) {
-			unsigned int dma_len = sg_dma_len(sg);
-			unsigned long ret;
-			size_t c;
+		if (GEM_WARN_ON(len < 0))
+			break;
 
-			/*
-			 * Report an error if the user tries
-			 * to write into unpopulated space
-			 */
-			if (unlikely(offset < 0)) {
-				copied = copied ?: -EINVAL;
-				goto exit_release;
-			}
+		if (len == 0)
+			break;
 
-			if (offset > dma_len) {
-				offset -= dma_len;
-				continue;
-			}
+		bytes_left -= len;
+		copied += len;
+	} while(bytes_left >= 0);
 
-			c = min_t(unsigned int, to_copy, dma_len - offset);
+	kfree(bounce_buf);
 
-			ret = __debugger_copy_from_to_user(vma, sg, offset,
-							   c, copied, write,
-							   r_buffer, w_buffer);
-			if (ret > 0) {
-				/* it failed to copy/write everything */
-				copied += c - ret;
-				goto exit_release;
-			} else if (ret < 0) {
-				copied = copied ?: ret;
-				goto exit_release;
-			}
-
-			copied += c;
-
-			if (copied == count)
-				goto exit_release;
-
-			to_copy -= c;
-			/*
-			 * we haven't copied everything but we don't
-			 * have anymore gaps from the beginning of the
-			 * page
-			 */
-			offset = 0;
-		}
-		rcu_read_lock();
-		i915_active_release(&vma->active);
-	}
-	rcu_read_unlock();
-
-	ND_VERBOSE(vm->i915,
-		   "vm op=%s vm_address=%px, count = %zu, offset = %llu, copied=%zd",
-		   write ? "write" : "read", vm, count, *__pos, copied);
-	/*
-	 * if copied is '0' it means that we haven't found
-	 * any node in the VM's memory range
-	 */
-	goto exit;
-
-exit_release:
-	i915_active_release(&vma->active);
-
-exit:
 	/* pread/pwrite ignore this increment */
-	*__pos += copied;
+	if (copied > 0)
+		*__pos += copied;
 
-	return copied;
+	return copied ?: ret;
 }
 
 #define debugger_vm_write(pd, b, c, p)	\
@@ -1471,80 +1444,64 @@ static vm_fault_t vm_mmap_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *area = vmf->vma;
 	struct i915_address_space *vm = area->vm_private_data;
+	pgprot_t prot = pgprot_decrypted(area->vm_page_prot);
+	const u64 vm_offset = vmf->pgoff << PAGE_SHIFT;
+	struct i915_gem_ww_ctx ww;
+	struct drm_i915_gem_object *obj;
+	struct i915_vma *vma;
+	unsigned long pfn, n;
 	vm_fault_t ret = VM_FAULT_SIGBUS;
-	struct drm_mm_node *node;
+	int err;
 
-	rcu_read_lock();
-	drm_mm_for_each_node_in_range(node, &vm->mm,
-				      vmf->pgoff << PAGE_SHIFT,
-				      (vmf->pgoff + 1) << PAGE_SHIFT) {
-		struct i915_vma *vma = container_of(node, typeof(*vma), node);
-		struct scatterlist *sg;
-		u64 addr;
-		int i;
+	err = i915_gem_vm_bind_lock_interruptible(vm);
+	if (err)
+		return i915_error_to_vmf_fault(err);
 
-		if (node->color == I915_COLOR_UNEVICTABLE) {
-			rcu_read_unlock();
-			return VM_FAULT_SIGBUS;
-		}
-
-		/* grab the pages while we probe */
-		if (!i915_active_acquire_if_busy(&vma->active)) {
-			int err = -EAGAIN;
-
-			vma = i915_vma_tryget(vma);
-			rcu_read_unlock();
-			if (vma) {
-				err = i915_vma_pin(vma,
-						   vma->node.size, 0,
-						   PIN_USER |
-						   PIN_OFFSET_FIXED |
-						   vma->node.start);
-				if (err == 0) {
-					err = i915_active_acquire(&vma->active);
-					i915_vma_unpin(vma);
-				}
-				i915_vma_put(vma);
-			}
-			if (err)
-				return i915_error_to_vmf_fault(err);
-
-		} else {
-			rcu_read_unlock();
-		}
-
-		/* Having found the node, we need to find the start within it */
-		addr = node->start;
-		for_each_sg(vma->pages->sgl, sg, vma->pages->nents, i) {
-			if (addr + sg_dma_len(sg) > vmf->pgoff << PAGE_SHIFT) {
-				pgprot_t prot = pgprot_decrypted(area->vm_page_prot);
-
-				addr = (vmf->pgoff << PAGE_SHIFT) - addr;
-				if (i915_gem_object_has_struct_page(vma->obj)) {
-					addr >>= PAGE_SHIFT;
-					addr += page_to_pfn(sg_page(sg));
-				} else {
-					addr += sg_dma_address(sg);
-					addr += (vma->obj->mm.region->iomap.base -
-						 vma->obj->mm.region->region.start);
-					addr >>= PAGE_SHIFT;
-					prot = pgprot_writecombine(prot);
-				}
-
-				ret = vmf_insert_pfn_prot(area,
-							  vmf->address,
-							  addr,
-							  prot);
-				break;
-			}
-
-			addr += sg_dma_len(sg);
-		}
-
-		rcu_read_lock();
-		i915_active_release(&vma->active);
+	vma = i915_gem_vm_bind_lookup_vma(vm, vm_offset);
+	if (!vma) {
+		i915_gem_vm_bind_unlock(vm);
+		return VM_FAULT_SIGBUS;
 	}
-	rcu_read_unlock();
+
+	obj = vma->obj;
+	n = vmf->pgoff - (vma->node.start >> PAGE_SHIFT);
+
+	for_i915_gem_ww(&ww, err, true) {
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
+
+		if (!i915_gem_object_has_pages(obj)) {
+			err = ____i915_gem_object_get_pages(obj);
+			if (err)
+				continue;
+		}
+
+		if (i915_gem_object_has_struct_page(obj)) {
+			pfn = page_to_pfn(i915_gem_object_get_page(obj, n));
+		} else if (i915_gem_object_is_lmem(obj)) {
+			pfn = PHYS_PFN(i915_gem_object_get_dma_address(obj, n));
+			prot = pgprot_writecombine(prot);
+		} else {
+			err = -EFAULT;
+		}
+
+		GEM_WARN_ON(err);
+
+		if (!err) {
+			ret = vmf_insert_pfn_prot(area,
+						  vmf->address,
+						  pfn,
+						  prot);
+			if (ret == VM_FAULT_NOPAGE)
+				vma->debugger.faulted = true;
+		}
+	}
+
+	i915_gem_vm_bind_unlock(vm);
+
+	if (err)
+		ret = i915_error_to_vmf_fault(err);
 
 	return ret;
 }
@@ -1587,6 +1544,124 @@ static const struct file_operations vm_fops = {
 	.mmap    = i915_debugger_vm_mmap,
 	.release = i915_debugger_vm_release,
 };
+
+static bool context_runalone_is_active(struct intel_engine_cs *engine)
+{
+	u32 val, engine_status, engine_shift;
+	int id;
+
+	val = intel_uncore_read(engine->gt->uncore, GEN12_RCU_DEBUG_1);
+
+	if (engine->class == RENDER_CLASS)
+		id = 0;
+	else if (engine->class == COMPUTE_CLASS)
+		id = engine->instance + 1;
+	else
+		GEM_BUG_ON(engine->class);
+
+	if (GEM_WARN_ON(id > 4))
+		return false;
+
+	/* 3 status bits per engine, starting from bit 7 */
+	engine_shift = 3 * id + 7;
+	engine_status = val >> engine_shift & 0x7;
+
+	/*
+	 * On earlier gen12 the context status seems to be idle when
+	 * it has raised attention. We have to omit the active bit.
+	 */
+	if (IS_DGFX(engine->i915))
+		return (engine_status & GEN12_RCU_DEBUG_1_RUNALONE_ACTIVE) &&
+			(engine_status & GEN12_RCU_DEBUG_1_CONTEXT_ACTIVE);
+
+	return engine_status & GEN12_RCU_DEBUG_1_RUNALONE_ACTIVE;
+}
+
+static bool context_lrc_match(struct intel_engine_cs *engine,
+			      struct intel_context *ce)
+{
+	u32 lrc_ggtt, lrc_reg, lrc_hw;
+
+	lrc_ggtt = ce->lrc.lrca & GENMASK(31, 12);
+	lrc_reg = ENGINE_READ(engine, RING_CURRENT_LRCA);
+	lrc_hw = lrc_reg & GENMASK(31, 12);
+
+	if (lrc_reg & CURRENT_LRCA_VALID)
+		return lrc_ggtt == lrc_hw;
+
+	return false;
+}
+
+static bool context_verify_active(struct intel_engine_cs *engine,
+				  struct intel_context *ce)
+{
+	if (!ce)
+		return false;
+
+	/* We can't do better than this on older gens */
+	if (GRAPHICS_VER(engine->i915) < 11)
+		return true;
+
+	if (!context_lrc_match(engine, ce))
+		return false;
+
+	if (GRAPHICS_VER(engine->i915) < 12)
+		return true;
+
+	if (!context_runalone_is_active(engine))
+		return false;
+
+	return true;
+}
+
+static struct intel_context *execlists_active_context_get(struct intel_engine_cs *engine)
+{
+	struct intel_context *ce = NULL;
+	struct i915_request * const *port, *rq;
+
+	rcu_read_lock();
+	for (port = engine->execlists.active; (rq = *port); port++) {
+		if (!__i915_request_is_complete(rq)) {
+			ce = intel_context_get(rq->context);
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return ce;
+}
+
+static struct intel_context *engine_active_context_get(struct intel_engine_cs *engine)
+{
+	struct intel_context *ce, *active_ce = NULL;
+
+	if (!intel_engine_pm_get_if_awake(engine))
+		return NULL;
+
+	i915_sched_engine_active_lock_bh(engine->sched_engine);
+	spin_lock_irq(&engine->sched_engine->lock);
+
+	if (intel_uc_uses_guc_submission(&engine->gt->uc))
+		ce = intel_guc_active_context_get(engine);
+	else
+		ce = execlists_active_context_get(engine);
+
+	if (ce && context_verify_active(engine, ce))
+		active_ce = ce;
+
+	spin_unlock_irq(&engine->sched_engine->lock);
+	i915_sched_engine_active_unlock_bh(engine->sched_engine);
+
+	intel_engine_pm_put(engine);
+
+	if (active_ce)
+		return active_ce;
+
+	if (ce)
+		intel_context_put(ce);
+
+	return active_ce;
+}
 
 static bool client_has_vm(struct i915_drm_client *client,
 			  struct i915_address_space *vm)
@@ -1704,22 +1779,52 @@ err_fd:
 }
 
 static int eu_control_interrupt_all(struct i915_debugger *debugger,
+				    u64 client_handle,
 				    struct intel_engine_cs *engine,
 				    u8 *bits,
 				    unsigned int bitmask_size)
 {
 	struct intel_gt *gt = engine->gt;
 	struct intel_uncore *uncore = gt->uncore;
+	struct i915_drm_client *client;
+	struct intel_context *active_ctx;
+	u32 context_lrca, lrca;
+	u64 client_id;
 	u32 td_ctl;
 
 	/* Make sure we dont promise anything but interrupting all */
 	if (bitmask_size)
 		return -EINVAL;
 
-	if (IS_PONTEVECCHIO(gt->i915))
-		intel_uncore_write_with_mcr_broadcast(uncore,
-						      GEN7_ROW_CHICKEN2,
-						      _MASKED_BIT_ENABLE(PVC_DISABLE_BTB));
+	active_ctx = engine_active_context_get(engine);
+	if (!active_ctx)
+		return -ENOENT;
+
+	if (!active_ctx->client) {
+		intel_context_put(active_ctx);
+		return -ENOENT;
+	}
+
+	client = i915_drm_client_get(active_ctx->client);
+	client_id = client->id;
+	i915_drm_client_put(client);
+	context_lrca = active_ctx->lrc.lrca & GENMASK(31, 12);
+	intel_context_put(active_ctx);
+
+	if (client_id != client_handle)
+		return -EBUSY;
+
+	/* Additional check just before issuing MMIO writes */
+	lrca = ENGINE_READ(engine, RING_CURRENT_LRCA);
+
+	/* LRCA is not valid anymore */
+	if (!(lrca & 0x1))
+		return -ENOENT;
+
+	lrca &= GENMASK(31, 12);
+
+	if (context_lrca != lrca)
+		return -EBUSY;
 
 	td_ctl = intel_uncore_read(uncore, TD_CTL);
 
@@ -1745,10 +1850,14 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	intel_uncore_write_with_mcr_broadcast(uncore, TD_CTL, td_ctl &
 					      ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION));
 
-	if (IS_PONTEVECCHIO(gt->i915))
-		intel_uncore_write_with_mcr_broadcast(uncore,
-						      GEN7_ROW_CHICKEN2,
-						      _MASKED_BIT_DISABLE(PVC_DISABLE_BTB));
+	/*
+	 * In case of stopping wrong ctx emit warning.
+	 * Nothing else we can do for now.
+	 */
+	lrca = ENGINE_READ(engine, RING_CURRENT_LRCA);
+	if (!(lrca & 0x1) || context_lrca != (lrca & GENMASK(31, 12)))
+		dev_warn(gt->i915->drm.dev,
+			 "i915 debugger: interrupted wrong context.");
 
 	intel_engine_schedule_heartbeat(engine);
 
@@ -2021,7 +2130,8 @@ static int do_eu_control(struct i915_debugger * debugger,
 	mutex_lock(&debugger->lock);
 	switch (arg->cmd) {
 	case PRELIM_I915_DEBUG_EU_THREADS_CMD_INTERRUPT_ALL:
-		ret = eu_control_interrupt_all(debugger, engine, bits, attn_size);
+		ret = eu_control_interrupt_all(debugger, arg->client_handle,
+					       engine, bits, attn_size);
 		break;
 	case PRELIM_I915_DEBUG_EU_THREADS_CMD_STOPPED:
 		eu_control_stopped(debugger, engine, bits, attn_size);
@@ -2673,124 +2783,6 @@ out:
 	complete_all(&debugger->discovery);
 	i915_debugger_put(debugger);
 	return 0;
-}
-
-static bool context_runalone_is_active(struct intel_engine_cs *engine)
-{
-	u32 val, engine_status, engine_shift;
-	int id;
-
-	val = intel_uncore_read(engine->gt->uncore, GEN12_RCU_DEBUG_1);
-
-	if (engine->class == RENDER_CLASS)
-		id = 0;
-	else if (engine->class == COMPUTE_CLASS)
-		id = engine->instance + 1;
-	else
-		GEM_BUG_ON(engine->class);
-
-	if (GEM_WARN_ON(id > 4))
-		return false;
-
-	/* 3 status bits per engine, starting from bit 7 */
-	engine_shift = 3 * id + 7;
-	engine_status = val >> engine_shift & 0x7;
-
-	/*
-	 * On earlier gen12 the context status seems to be idle when
-	 * it has raised attention. We have to omit the active bit.
-	 */
-	if (IS_DGFX(engine->i915))
-		return (engine_status & GEN12_RCU_DEBUG_1_RUNALONE_ACTIVE) &&
-			(engine_status & GEN12_RCU_DEBUG_1_CONTEXT_ACTIVE);
-
-	return engine_status & GEN12_RCU_DEBUG_1_RUNALONE_ACTIVE;
-}
-
-static bool context_lrc_match(struct intel_engine_cs *engine,
-			      struct intel_context *ce)
-{
-	u32 lrc_ggtt, lrc_reg, lrc_hw;
-
-	lrc_ggtt = ce->lrc.lrca & GENMASK(31, 12);
-	lrc_reg = ENGINE_READ(engine, RING_CURRENT_LRCA);
-	lrc_hw = lrc_reg & GENMASK(31, 12);
-
-	if (lrc_reg & CURRENT_LRCA_VALID)
-		return lrc_ggtt == lrc_hw;
-
-	return false;
-}
-
-static bool context_verify_active(struct intel_engine_cs *engine,
-				  struct intel_context *ce)
-{
-	if (!ce)
-		return false;
-
-	/* We can't do better than this on older gens */
-	if (GRAPHICS_VER(engine->i915) < 11)
-		return true;
-
-	if (!context_lrc_match(engine, ce))
-		return false;
-
-	if (GRAPHICS_VER(engine->i915) < 12)
-		return true;
-
-	if (!context_runalone_is_active(engine))
-		return false;
-
-	return true;
-}
-
-static struct intel_context *execlists_active_context_get(struct intel_engine_cs *engine)
-{
-	struct intel_context *ce = NULL;
-	struct i915_request * const *port, *rq;
-
-	rcu_read_lock();
-	for (port = engine->execlists.active; (rq = *port); port++) {
-		if (!__i915_request_is_complete(rq)) {
-			ce = intel_context_get(rq->context);
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	return ce;
-}
-
-static struct intel_context *engine_active_context_get(struct intel_engine_cs *engine)
-{
-	struct intel_context *ce, *active_ce = NULL;
-
-	if (!intel_engine_pm_get_if_awake(engine))
-		return NULL;
-
-	i915_sched_engine_active_lock_bh(engine->sched_engine);
-	spin_lock_irq(&engine->sched_engine->lock);
-
-	if (intel_uc_uses_guc_submission(&engine->gt->uc))
-		ce = intel_guc_active_context_get(engine);
-	else
-		ce = execlists_active_context_get(engine);
-
-	if (ce && context_verify_active(engine, ce))
-		active_ce = ce;
-
-	spin_unlock_irq(&engine->sched_engine->lock);
-	i915_sched_engine_active_unlock_bh(engine->sched_engine);
-
-	intel_engine_pm_put(engine);
-
-	if (active_ce)
-		return active_ce;
-
-	if (ce)
-		intel_context_put(ce);
-
-	return active_ce;
 }
 
 static void __restore_guc_preempt_timeout(struct intel_engine_cs *engine)
@@ -3585,6 +3577,97 @@ void i915_debugger_context_param_vm(const struct i915_drm_client *client,
 
 	i915_debugger_ctx_vm_def(debugger, client, ctx->id, vm);
 	i915_debugger_put(debugger);
+}
+
+/**
+ * i915_debugger_revoke_ptes - Revoke debugger CPU PTEs of a vma
+ * @vma: The GPU vma bound to a region of a GPU vm address space.
+ *
+ * This functions revokes the CPU PTEs pointing to the storage of
+ * a vma bound to a region of a GPU vm address space, and previously
+ * set up by the debugger fault handler.
+ */
+void i915_debugger_revoke_ptes(struct i915_vma *vma)
+{
+	if (!vma->vm->i915->params.debug_eu)
+		return;
+
+	/* Don't race with other revokers revoking */
+	mutex_lock(&vma->debugger.revoke_mutex);
+	if (vma->debugger.faulted) {
+		unmap_mapping_range(vma->vm->inode->i_mapping,
+				    vma->node.start, vma->node.size, 1);
+		vma->debugger.faulted = false;
+	}
+	mutex_unlock(&vma->debugger.revoke_mutex);
+}
+
+/**
+ * i915_debugger_revoke_object_ptes - Revoke debugger CPU PTEs pointing to the
+ * storage space of an object
+ * @object: The object the vmas of which are bound to a region of a
+ * GPU vm address space.
+ *
+ * This functions revokes the CPU PTEs pointing to the storage of
+ * an object and that are set up by the debugger fault handler.
+ */
+void i915_debugger_revoke_object_ptes(struct drm_i915_gem_object *obj)
+{
+	struct i915_vma *vma;
+
+	if (!to_i915(obj->base.dev)->params.debug_eu)
+		return;
+
+	/* Need to restart until we have a clean loop without unlocking */
+restart:
+	spin_lock(&obj->vma.lock);
+	list_for_each_entry(vma, &obj->vma.list, obj_link) {
+		if (!i915_vma_is_persistent(vma))
+			continue;
+
+		/*
+		 * Could use READ_ONCE() and suitable barriers here.
+		 * We must not continue unless a racing revoker is
+		 * completely done.
+		 */
+		if (mutex_trylock(&vma->debugger.revoke_mutex)) {
+			bool faulted = vma->debugger.faulted;
+
+			mutex_unlock(&vma->debugger.revoke_mutex);
+			if (!faulted)
+				continue;
+		}
+
+		/*
+		 * While on the object list, the vma retains a vm reference.
+		 * FIXME: This must be reviewed and the reference
+		 * changed when removing the vm open-count, the vm
+		 * reference is needed to avoid the vm address space
+		 * "mapping" being freed before we are done.
+		 */
+		i915_vm_get(vma->vm);
+
+		if (!__i915_vma_get(vma)) {
+			/*
+			 * VMA is pending closing.
+			 * FIXME: Upstream changes when backported
+			 * replaces this with the object lock.
+			 */
+			i915_vm_put(vma->vm);
+			spin_unlock(&obj->vma.lock);
+			cond_resched();
+			goto restart;
+		}
+
+		spin_unlock(&obj->vma.lock);
+
+		i915_debugger_revoke_ptes(vma);
+
+		i915_vm_put(vma->vm);
+		__i915_vma_put(vma);
+		goto restart;
+	}
+	spin_unlock(&obj->vma.lock);
 }
 
 void i915_debugger_context_param_engines(struct i915_gem_context *ctx)

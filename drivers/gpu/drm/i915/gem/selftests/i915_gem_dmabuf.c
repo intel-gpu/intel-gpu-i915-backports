@@ -241,7 +241,7 @@ static int igt_dmabuf_import_same_driver(struct drm_i915_private *i915,
 		goto out_detach;
 	}
 
-	timeout = dma_resv_wait_timeout_rcu(dmabuf->resv, false, true, 5 * HZ);
+	timeout = dma_resv_wait_timeout(dmabuf->resv, false, true, 5 * HZ);
 	if (!timeout) {
 		pr_err("dmabuf wait for exclusive fence timed out.\n");
 		timeout = -ETIME;

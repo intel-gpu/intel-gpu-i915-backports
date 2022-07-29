@@ -135,3 +135,4 @@ uninstall:
 clean:
 	@$(MAKE) -f Makefile.build clean
 	@$(MAKE) -C kconf clean
+	@rm -f $(version_h)

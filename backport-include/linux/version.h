@@ -1,6 +1,7 @@
 #ifndef _BP_LINUX_VERSION_H
 #define _BP_LINUX_VERSION_H
 #include_next <linux/version.h>
+#include <linux/osv_version.h>
 
 #ifndef RHEL_RELEASE_VERSION
 #define RHEL_RELEASE_VERSION(a,b) (((a) << 8) + (b))

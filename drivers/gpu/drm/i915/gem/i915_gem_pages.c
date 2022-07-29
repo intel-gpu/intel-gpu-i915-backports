@@ -6,12 +6,15 @@
 
 #include <drm/drm_cache.h>
 
+#include "gt/intel_gt.h"
+#include "gt/intel_tlb.h"
+
 #include "i915_drv.h"
+#include "i915_debugger.h"
 #include "i915_gem_object.h"
 #include "i915_scatterlist.h"
 #include "i915_gem_lmem.h"
 #include "i915_gem_mman.h"
-#include "gt/intel_tlb.h"
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages,
@@ -226,6 +229,21 @@ static void unmap_object(struct drm_i915_gem_object *obj, void *ptr)
 		vunmap(ptr);
 }
 
+static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct intel_gt *gt;
+	int id;
+
+	for_each_gt(i915, id, gt) {
+		if (!obj->mm.tlb[id])
+			continue;
+
+		intel_gt_invalidate_tlb_full(gt, obj->mm.tlb[id]);
+		obj->mm.tlb[id] = 0;
+	}
+}
+
 struct sg_table *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 {
@@ -234,6 +252,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	assert_object_held_shared(obj);
 
+	i915_debugger_revoke_object_ptes(obj);
 	pages = fetch_and_zero(&obj->mm.pages);
 	if (IS_ERR_OR_NULL(pages))
 		return pages;
@@ -256,21 +275,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	__i915_gem_object_reset_page_iter(obj);
 
-	if (test_and_clear_bit(I915_BO_WAS_BOUND_BIT, &obj->flags)) {
-		struct drm_i915_private *i915 = to_i915(obj->base.dev);
-		struct intel_gt *gt;
-		unsigned int i;
-
-		for_each_gt(i915, i, gt) {
-			intel_wakeref_t wakeref;
-
-			with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-				mutex_lock(&gt->mutex);
-				intel_invalidate_tlb_full_sync(gt);
-				mutex_unlock(&gt->mutex);
-			}
-		}
-	}
+	flush_tlb_invalidate(obj);
 
 	return pages;
 }
@@ -348,7 +353,7 @@ static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 		pgprot = PAGE_KERNEL;
 		break;
 	case I915_MAP_WC:
-		pgprot = pgprot_writecombine(PAGE_KERNEL);
+		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
 		break;
 	}
 
@@ -397,7 +402,7 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 	i = 0;
 	for_each_sgt_daddr(addr, iter, obj->mm.pages)
 		pfns[i++] = (iomap + addr) >> PAGE_SHIFT;
-	vaddr = vmap_pfn(pfns, n_pfn, pgprot_writecombine(PAGE_KERNEL));
+	vaddr = vmap_pfn(pfns, n_pfn, pgprot_writecombine(PAGE_KERNEL_IO));
 	if (pfns != stack)
 		kvfree(pfns);
 

@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: intel-gpgpu-dkms-linux-5.14-oem
+Upstream-Name: intel-gpgpu-dkms-linux-5.17-oem
 Source: https://git.kernel.org/cgit/linux/kernel/git/backports/backports.git
 
 Files: *

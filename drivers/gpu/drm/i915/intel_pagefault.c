@@ -2,6 +2,9 @@
 /*
  * Copyright © 2020 Intel Corporation
  */
+
+#include "gem/i915_gem_userptr.h"
+
 #include "gt/gen8_ppgtt.h"
 #include "gt/intel_context.h"
 #include "gt/intel_gt.h"
@@ -16,6 +19,36 @@
 #include "gem/i915_gem_mman.h"
 #include "intel_pagefault.h"
 #include "intel_uncore.h"
+#include "gem/i915_gem_vm_bind.h"
+
+/**
+ * DOC: Recoverable page fault implications
+ *
+ * Modern GPU hardware support recoverable page fault. This has extensive
+ * implications to driver implementation.
+ *
+ * DMA fence is used extensively to track object activity for cross-device
+ * and cross-application synchronization. But if recoverable page fault is
+ * enabled, using of DMA fence can potentially induce deadlock: A pending
+ * page fault holds up the GPU work which holds up the dma fence signaling,
+ * and memory allocation is usually required to resolve a page fault, but
+ * memory allocation is not allowed to gate dma fence signaling.
+ *
+ * Non-long-run context usually uses DMA fence for GPU job/object completion
+ * tracking, thus faultable vm is not allowed for non-long-run context.
+ *
+ * Suspend fence is used to suspend long run context before we unbind
+ * BOs, in case of userptr invalidation, memory shrinking or eviction.
+ * For faultable vm, there is no need to use suspend fence: we directly
+ * unbind BOs w/o suspend context and BOs will be rebound during a recoverable
+ * page fault handling thereafter.
+ *
+ * DMA fences attached to vm's active are used to track vm's activity.
+ * i.e., driver wait on those dma fences for vm to be idle. This method
+ * is useful for non-faultable vm. For faultable vm, we don't support
+ * any DMA fence because of the deadlock described above. Thus, we can't attach
+ * any DMA fences, including suspend fence or request fence, to a faultable vm.
+ */
 
 struct page_fault_info {
 	u8 access_type;
@@ -189,10 +222,10 @@ static bool userptr_needs_rebind(struct drm_i915_gem_object *obj)
 
 	if (!i915_gem_object_is_userptr(obj))
 		return ret;
-	read_lock(&i915->mm.notifier_lock);
+	i915_gem_userptr_lock_mmu_notifier(i915);
 	if (i915_gem_object_userptr_submit_done(obj))
 		ret = true;
-	read_unlock(&i915->mm.notifier_lock);
+	i915_gem_userptr_unlock_mmu_notifier(i915);
 	return ret;
 }
 
@@ -225,17 +258,15 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	GEM_BUG_ON(obj->base.filp && mapping_mapped(obj->base.filp->f_mapping));
 
 	/* unmap to avoid further update to the page[s] */
-	ret = i915_gem_object_unmap(obj);
+	ret = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
 	if (ret) {
 		DRM_ERROR("Cannot unmap obj(%d)\n", ret);
 		return ret;
 	}
 
 	ret = i915_gem_object_migrate(obj, ww, ce, lmem_id, true);
-	if (i915_gem_object_is_lmem(obj)) {
+	if (i915_gem_object_is_lmem(obj))
 		DRM_DEBUG_DRIVER("Migrated object to LMEM\n");
-		i915_gem_object_remap(obj);
-	}
 
 	return ret;
 }
@@ -383,6 +414,7 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 		 */
 		if (err == -EDEADLK)
 			goto err_ww;
+
 	}
 
 	err = vma_get_pages(vma);
@@ -457,6 +489,7 @@ err_pages:
 	i915_gem_ww_ctx_fini(&ww);
 put_vma:
 	i915_vma_put(vma);
+	__i915_vma_put(vma);
 	/*
 	 * Intermediate levels of page tables could have been cached in the tlbs
 	 * which maps to scarcth entries. Make sure they are invalidated, so
@@ -468,9 +501,10 @@ put_vma:
 		for_each_gt(vm->i915, i, gt) {
 			if (!atomic_read(&vm->active_contexts_gt[i]))
 				continue;
-			intel_invalidate_tlb_range(gt, vm,
-						   i915_vma_offset(vma),
-						   vma->size);
+
+			intel_gt_invalidate_tlb_range(gt, vm,
+						      i915_vma_offset(vma),
+						      i915_vma_size(vma));
 		}
 		vm->invalidate_tlb_scratch = false;
 	}
@@ -573,7 +607,14 @@ static int acc_migrate_to_lmem(struct intel_gt *gt, struct i915_vma *vma)
 	struct i915_gem_ww_ctx ww;
 	int err = 0;
 
-	i915_gem_ww_ctx_init(&ww, true);
+	i915_gem_vm_bind_lock(vma->vm);
+
+	if (!i915_vma_is_bound(vma, PIN_USER)) {
+		i915_gem_vm_bind_unlock(vma->vm);
+		return 0;
+	}
+
+	i915_gem_ww_ctx_init(&ww, false);
 
 retry:
 	err = i915_gem_object_lock(vma->obj, &ww);
@@ -592,6 +633,7 @@ retry:
 	}
 
 	i915_gem_ww_ctx_fini(&ww);
+	i915_gem_vm_bind_unlock(vma->vm);
 
 	return err;
 }
@@ -623,6 +665,7 @@ static int handle_i915_acc(struct intel_guc *guc,
 		i915_gem_object_userptr_submit_done(vma->obj);
 put_vma:
 	i915_vma_put(vma);
+	__i915_vma_put(vma);
 
 	return 0;
 }
@@ -638,9 +681,8 @@ static void get_access_counter_info(struct access_counter_desc *desc,
 	info->asid =  FIELD_GET(ACCESS_COUNTER_ASID, desc->dw1);
 	info->vfid =  FIELD_GET(ACCESS_COUNTER_VFID, desc->dw2);
 	info->access_type = FIELD_GET(ACCESS_COUNTER_TYPE, desc->dw0);
-	info->va_range_base = FIELD_GET(ACCESS_COUNTER_VIRTUAL_ADDR_RANGE_HI, desc->dw3) << 32 |
-			      FIELD_GET(ACCESS_COUNTER_VIRTUAL_ADDR_RANGE_LO, desc->dw2) <<
-			      (ffs(ACCESS_COUNTER_VIRTUAL_ADDR_RANGE_LO) - 1);
+	info->va_range_base = make_u64(desc->dw3 & ACCESS_COUNTER_VIRTUAL_ADDR_RANGE_HI,
+			      desc->dw2 & ACCESS_COUNTER_VIRTUAL_ADDR_RANGE_LO);
 
 	GEM_BUG_ON(info->engine_class > MAX_ENGINE_CLASS ||
 		   info->engine_instance > MAX_ENGINE_INSTANCE);

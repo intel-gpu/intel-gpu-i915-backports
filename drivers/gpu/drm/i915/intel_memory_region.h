@@ -15,8 +15,6 @@
 
 #include "i915_buddy.h"
 
-#define I915_MAX_TILES 4
-
 struct i915_gem_ww_ctx;
 struct drm_i915_private;
 struct drm_i915_gem_object;
@@ -171,5 +169,7 @@ static inline void intel_memory_region_flush(struct intel_memory_region *mem)
 	/* Flush any pending work to free blocks region */
 	flush_work(&mem->pd_put.work);
 }
+
+const char *intel_memory_region_id2str(enum intel_region_id id);
 
 #endif

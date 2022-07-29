@@ -17,6 +17,8 @@
 	(FIELD_PREP(GUC_KLV_0_KEY, GUC_KLV_##__K##_KEY) | \
 	 FIELD_PREP(GUC_KLV_0_LEN, GUC_KLV_##__K##_LEN))
 
+static int pf_verify_config_klvs(struct intel_iov *iov, const u32 *cfg, u32 cfg_size);
+
 static void pf_init_reprovisioning_worker(struct intel_iov *iov);
 static void pf_start_reprovisioning_worker(struct intel_iov *iov);
 static void pf_fini_reprovisioning_worker(struct intel_iov *iov);
@@ -410,16 +412,18 @@ static int guc_update_vf_klv32(struct intel_guc *guc, u32 vfid, u16 key, u32 val
 	const u32 len = 1; /* 32bit value fits into 1 klv dword */
 	const u32 cfg_size = (GUC_KLV_LEN_MIN + len);
 	struct i915_vma *vma;
-	u32 *cfg;
+	u32 *blob, *cfg;
 	int ret;
 
-	ret = intel_guc_allocate_and_map_vma(guc, cfg_size * sizeof(u32), &vma, (void **)&cfg);
+	ret = intel_guc_allocate_and_map_vma(guc, cfg_size * sizeof(u32), &vma, (void **)&blob);
 	if (unlikely(ret))
 		return ret;
 
+	cfg = blob;
 	*cfg++ = FIELD_PREP(GUC_KLV_0_KEY, key) | FIELD_PREP(GUC_KLV_0_LEN, len);
 	*cfg++ = value;
 
+	GEM_WARN_ON(pf_verify_config_klvs(&guc_to_gt(guc)->iov, blob, cfg_size));
 	ret = guc_action_update_vf_cfg(guc, vfid, intel_guc_ggtt_offset(guc, vma), cfg_size);
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
@@ -439,17 +443,19 @@ static int guc_update_vf_klv64(struct intel_guc *guc, u32 vfid, u16 key, u64 val
 	const u32 len = 2; /* 64bit value fits into 2 klv dwords */
 	const u32 cfg_size = (GUC_KLV_LEN_MIN + len);
 	struct i915_vma *vma;
-	u32 *cfg;
+	u32 *blob, *cfg;
 	int ret;
 
-	ret = intel_guc_allocate_and_map_vma(guc, cfg_size * sizeof(u32), &vma, (void **)&cfg);
+	ret = intel_guc_allocate_and_map_vma(guc, cfg_size * sizeof(u32), &vma, (void **)&blob);
 	if (unlikely(ret))
 		return ret;
 
+	cfg = blob;
 	*cfg++ = FIELD_PREP(GUC_KLV_0_KEY, key) | FIELD_PREP(GUC_KLV_0_LEN, len);
 	*cfg++ = lower_32_bits(value);
 	*cfg++ = upper_32_bits(value);
 
+	GEM_WARN_ON(pf_verify_config_klvs(&guc_to_gt(guc)->iov, blob, cfg_size));
 	ret = guc_action_update_vf_cfg(guc, vfid, intel_guc_ggtt_offset(guc, vma), cfg_size);
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
@@ -900,8 +906,11 @@ static int pf_alloc_vf_ctxs_range(struct intel_iov *iov, unsigned int id, u16 nu
 		return -ENOMEM;
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
-
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
+#endif /* LINUX_VERSION_IN_RANGE */
 		u16 size_bits = re - rs;
 
 		/*
@@ -1065,7 +1074,11 @@ static u16 pf_get_ctxs_free(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
+#endif /* LINUX_VERSION_IN_RANGE */
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		sum += re - rs;
@@ -1103,7 +1116,11 @@ static u16 pf_get_ctxs_max_quota(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
+#endif /* LINUX_VERSION_IN_RANGE */
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		max = max_t(u16, max, re - rs);
@@ -1346,7 +1363,11 @@ static u16 pf_get_max_dbs(struct intel_iov *iov)
 	if (unlikely(!dbs_bitmap))
 		return 0;
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+	for_each_clear_bitrange_from(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
+#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 	bitmap_for_each_clear_region(dbs_bitmap, rs, re, 0, GUC_NUM_DOORBELLS) {
+#endif /* LINUX_VERSION_IN_RANGE */
 		IOV_DEBUG(iov, "dbs hole %u-%u (%u)\n", rs, re, re - rs);
 		limit = max_t(u16, limit, re - rs);
 	}
@@ -1588,10 +1609,16 @@ static int pf_push_config_lmem(struct intel_iov *iov, unsigned int id, u64 size)
 
 static int pf_update_lmtt(struct intel_iov *iov, unsigned int id)
 {
-	if (!pf_needs_push_config(iov, id))
-		return 0;
+	struct intel_gt *gt = iov_to_gt(iov);
+	struct intel_guc *guc = &gt->uc.guc;
+	int ret;
 
-	return -EOPNOTSUPP; /* FIXME */
+	ret = intel_lmtt_update_entries(&iov->pf.lmtt, id);
+
+	if (INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc))
+		intel_guc_invalidate_tlb_all(guc);
+
+	return ret;
 }
 
 static int pf_update_all_lmtt(struct drm_i915_private *i915, unsigned int vfid)
@@ -1810,17 +1837,6 @@ u64 intel_iov_provisioning_query_max_lmem(struct intel_iov *iov)
 	return pf_query_max_lmem(iov);
 }
 
-static inline const char *intel_iov_threshold_to_string(enum intel_iov_threshold threshold)
-{
-	switch (threshold) {
-#define __iov_threshold_to_string(K, N, ...) \
-	case IOV_THRESHOLD_##K: return #N;
-	IOV_THRESHOLDS(__iov_threshold_to_string)
-	}
-#undef __iov_threshold_to_string
-	return "<invalid>";
-}
-
 static u32 intel_iov_threshold_to_klv_key(enum intel_iov_threshold threshold)
 {
 	switch (threshold) {
@@ -1982,7 +1998,9 @@ static void pf_unprovision_config(struct intel_iov *iov, unsigned int id)
 	pf_provision_dbs(iov, id, 0);
 	pf_provision_exec_quantum(iov, id, 0);
 	pf_provision_preempt_timeout(iov, id, 0);
-	pf_provision_lmem(iov, id, 0);
+
+	if (HAS_LMEM(iov_to_i915(iov)))
+		pf_provision_lmem(iov, id, 0);
 
 	pf_unprovision_thresholds(iov, id);
 }

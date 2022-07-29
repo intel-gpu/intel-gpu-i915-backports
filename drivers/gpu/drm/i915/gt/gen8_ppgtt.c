@@ -88,7 +88,8 @@ pvc_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 		   u64 start, int idx, int count, u64 src_offset)
 {
 	u64 dst_offset = start + idx * sizeof(gen8_pte_t);
-	u8 mocs = gt->mocs.uc_index << 1;
+	u32 src_mocs = FIELD_PREP(MC_SRC_MOCS_INDEX_MASK, gt->mocs.uc_index);
+	u32 dst_mocs = FIELD_PREP(MC_DST_MOCS_INDEX_MASK, gt->mocs.uc_index);
 	size_t size = count << 3;
 	u32 comp_bits = 0;
 
@@ -112,8 +113,8 @@ pvc_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 	*cmd++ = upper_32_bits(src_offset);
 	*cmd++ = lower_32_bits(dst_offset);
 	*cmd++ = upper_32_bits(dst_offset);
-	*cmd++ = mocs << PVC_MEM_COPY_SRC_MOCS_SHIFT |
-		 mocs << PVC_MEM_COPY_DST_MOCS_SHIFT;
+	*cmd++ = src_mocs | dst_mocs;
+
 	/*
 	 * Add flush between MEM_COPY and MI_STORE to enforce ordering. Otherwise,
 	 * two commands modifying the same cacheline could complete in any order
@@ -128,9 +129,12 @@ static u32 *
 gen12_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 		     u64 offset, int idx, int count, u64 val)
 {
-	u8 mocs = gt->mocs.uc_index << 1;
+	u32 mocs = FIELD_PREP(XY_FCB_MOCS_INDEX_MASK, gt->mocs.uc_index);
 	u32 mem;
 	int len;
+
+	/* XY_FAST_COLOR_BLT was added in gen12 */
+	drm_WARN_ON(&gt->i915->drm, GRAPHICS_VER(gt->i915) < 12);
 
 	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0))
 		mem = MEM_TYPE_SYS << 31;
@@ -138,16 +142,13 @@ gen12_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 		mem = MEM_TYPE_LOCAL << 31;
 
 	len = 16;
-	if (GRAPHICS_VER(gt->i915) < 12 ||
-	    IS_TIGERLAKE(gt->i915) ||
-	    IS_DG1(gt->i915)) {
+	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50)) {
 		len = 11;
-		mocs = 0;
 		mem = 0;
 	}
 
 	*cmd++ = XY_FAST_COLOR_BLT | BLT_COLOR_DEPTH_64 | (len - 2);
-	*cmd++ = (mocs << BLT_MOCS_SHIFT) | (PAGE_SIZE - 1);
+	*cmd++ = mocs | (PAGE_SIZE - 1);
 	*cmd++ = idx;
 	*cmd++ = (1 << 16) | (idx + count);
 	*cmd++ = lower_32_bits(offset);
@@ -182,7 +183,7 @@ gen12_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 static u32 *fill_page_blt(struct intel_gt *gt, u32 *cmd, u64 offset,
 			  u64 val, u64 src_offset)
 {
-	if (IS_PONTEVECCHIO(gt->i915))
+	if (HAS_LINK_COPY_ENGINES(gt->i915))
 		return pvc_fill_value_blt(gt, cmd, offset, 0, PAGE_SIZE >> 3, src_offset);
 
 	return gen12_fill_value_blt(gt, cmd, offset, 0, PAGE_SIZE >> 3, val);
@@ -191,7 +192,7 @@ static u32 *fill_page_blt(struct intel_gt *gt, u32 *cmd, u64 offset,
 static u32 *fill_value_blt(struct intel_gt *gt, u32 *cmd, u64 offset,
 			   int idx, int num_ptes, u64 val, u64 src_offset)
 {
-	if (IS_PONTEVECCHIO(gt->i915))
+	if (HAS_LINK_COPY_ENGINES(gt->i915))
 		return pvc_fill_value_blt(gt, cmd, offset, idx, num_ptes, src_offset);
 
 	return gen12_fill_value_blt(gt, cmd, offset, idx, num_ptes, val);
@@ -442,10 +443,10 @@ gen8_pdp_for_page_index(struct i915_address_space * const vm, const u64 idx)
 	switch (vm->top) {
 	case 4:
 		pd = i915_pd_entry(pd, gen8_pd_index(idx, 4));
-		/* fall through */
+		fallthrough;
 	case 3:
 		pd = i915_pd_entry(pd, gen8_pd_index(idx, 3));
-		/* fall through */
+		fallthrough;
 	case 2:
 		break;
 	}
@@ -489,15 +490,6 @@ static void gen8_ppgtt_cleanup(struct i915_address_space *vm)
 				     gen8_pd_top_count(vm), vm->top);
 
 	free_scratch(vm);
-}
-
-static void gen8_ppgtt_cleanup_wa(struct i915_address_space *vm)
-{
-	GEM_WARN_ON(i915_gem_idle_engines(vm->i915));
-
-	gen8_ppgtt_cleanup(vm);
-
-	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
 }
 
 static u64 __gen8_ppgtt_clear(struct i915_address_space * const vm,
@@ -1066,13 +1058,13 @@ gen8_ppgtt_insert_pte(struct i915_ppgtt *ppgtt,
 			}
 
 			if (needs_flush)
-				clflush_cache_range(vaddr, PAGE_SIZE);
+				drm_clflush_virt_range(vaddr, PAGE_SIZE);
 			vaddr = px_vaddr(i915_pt_entry(pd, gen8_pd_index(idx, 1)),
 					 &needs_flush);
 		}
 	} while (1);
 	if (needs_flush)
-		clflush_cache_range(vaddr, PAGE_SIZE);
+		drm_clflush_virt_range(vaddr, PAGE_SIZE);
 
 	return idx;
 }
@@ -1471,7 +1463,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 		} while (rem >= page_size && index < I915_PDES);
 
 		if (needs_flush)
-			clflush_cache_range(vaddr, PAGE_SIZE);
+			drm_clflush_virt_range(vaddr, PAGE_SIZE);
 
 		/*
 		 * Is it safe to mark the 2M block as 64K? -- Either we have
@@ -1488,7 +1480,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 			vaddr = px_vaddr(pd, &needs_flush);
 			vaddr[maybe_64K] |= GEN8_PDE_IPS_64K;
 			if (needs_flush)
-				clflush_cache_range(vaddr, PAGE_SIZE);
+				drm_clflush_virt_range(vaddr, PAGE_SIZE);
 			page_size = I915_GTT_PAGE_SIZE_64K;
 
 			/*
@@ -1511,7 +1503,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 					memset64(vaddr + i, encode, 15);
 
 				if (needs_flush)
-					clflush_cache_range(vaddr, PAGE_SIZE);
+					drm_clflush_virt_range(vaddr, PAGE_SIZE);
 			}
 		}
 
@@ -2045,34 +2037,53 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	 */
 	ppgtt->vm.has_read_only = !IS_GRAPHICS_VER(gt->i915, 11, 12);
 
-	if (HAS_LMEM(gt->i915)) {
+	if (HAS_LMEM(gt->i915))
 		ppgtt->vm.alloc_pt_dma = alloc_pt_lmem;
-
-		/*
-		 * On some platforms the hw has dropped support for 4K GTT pages
-		 * when dealing with LMEM, and due to the design of 64K GTT
-		 * pages in the hw, we can only mark the *entire* page-table as
-		 * operating in 64K GTT mode, since the enable bit is still on
-		 * the pde, and not the pte. And since we still need to allow
-		 * 4K GTT pages for SMEM objects, we can't have a "normal" 4K
-		 * page-table with scratch pointing to LMEM, since that's
-		 * undefined from the hw pov. The simplest solution is to just
-		 * move the 64K scratch page to SMEM on such platforms and call
-		 * it a day, since that should work for all configurations.
-		 */
-		if (HAS_64K_PAGES(gt->i915) && !HAS_FULL_PS64(gt->i915))
-			ppgtt->vm.alloc_scratch_dma = alloc_pt_dma;
-		else
-			ppgtt->vm.alloc_scratch_dma = alloc_pt_lmem;
-	} else {
+	else
 		ppgtt->vm.alloc_pt_dma = alloc_pt_dma;
-		ppgtt->vm.alloc_scratch_dma = alloc_pt_dma;
-	}
+
+	/*
+	 * On some platforms the hw has dropped support for 4K GTT pages
+	 * when dealing with LMEM, and due to the design of 64K GTT
+	 * pages in the hw, we can only mark the *entire* page-table as
+	 * operating in 64K GTT mode, since the enable bit is still on
+	 * the pde, and not the pte. And since we still need to allow
+	 * 4K GTT pages for SMEM objects, we can't have a "normal" 4K
+	 * page-table with scratch pointing to LMEM, since that's
+	 * undefined from the hw pov. The simplest solution is to just
+	 * move the 64K scratch page to SMEM on all platforms and call
+	 * it a day, since that should work for all configurations.
+	 *
+	 * Using SMEM instead of LMEM has the additional advantage of
+	 * not reserving high performance memory for a "never" used
+	 * filler page. It also removes the device access that would
+	 * be required to initialise the scratch page, reducing pressure
+	 * on an even scarcer resource.
+	 */
+	ppgtt->vm.alloc_scratch_dma = alloc_pt_dma;
 
 	if (GRAPHICS_VER(gt->i915) >= 12)
 		ppgtt->vm.pte_encode = gen12_pte_encode;
 	else
 		ppgtt->vm.pte_encode = gen8_pte_encode;
+
+	ppgtt->vm.bind_async_flags = I915_VMA_LOCAL_BIND;
+	if (i915_is_mem_wa_enabled(gt->i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
+		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa_bcs;
+		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa_bcs;
+		ppgtt->vm.clear_range = gen8_ppgtt_clear_wa_bcs;
+		ppgtt->vm.bind_async_flags |= I915_VMA_ERROR;
+	} else if (i915_is_mem_wa_enabled(gt->i915, I915_WA_IDLE_GPU_BEFORE_UPDATE)) {
+		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa;
+		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa ;
+		ppgtt->vm.clear_range = gen8_ppgtt_clear_wa;
+	} else  {
+		ppgtt->vm.insert_entries = gen8_ppgtt_insert;
+		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc;
+		ppgtt->vm.clear_range = gen8_ppgtt_clear;
+	}
+	ppgtt->vm.cleanup = gen8_ppgtt_cleanup;
+	ppgtt->vm.dump_va_range = gen8_ppgtt_dump;
 
 	if (HAS_64K_PAGES(gt->i915) && !HAS_FULL_PS64(gt->i915))
 		ppgtt->vm.mm.color_adjust = xehpsdv_ppgtt_color_adjust;
@@ -2098,27 +2109,6 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 		if (err)
 			goto err_put;
 	}
-
-	ppgtt->vm.bind_async_flags = I915_VMA_LOCAL_BIND;
-
-	if (i915_is_mem_wa_enabled(gt->i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
-		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa_bcs;
-		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa_bcs;
-		ppgtt->vm.clear_range = gen8_ppgtt_clear_wa_bcs;
-		ppgtt->vm.cleanup = gen8_ppgtt_cleanup;
-		ppgtt->vm.bind_async_flags |= I915_VMA_ERROR;
-	} else if (i915_is_mem_wa_enabled(gt->i915, I915_WA_IDLE_GPU_BEFORE_UPDATE)) {
-		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa;
-		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa;
-		ppgtt->vm.clear_range = gen8_ppgtt_clear_wa;
-		ppgtt->vm.cleanup = gen8_ppgtt_cleanup_wa;
-	} else {
-		ppgtt->vm.insert_entries = gen8_ppgtt_insert;
-		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc;
-		ppgtt->vm.clear_range = gen8_ppgtt_clear;
-		ppgtt->vm.cleanup = gen8_ppgtt_cleanup;
-	}
-	ppgtt->vm.dump_va_range = gen8_ppgtt_dump;
 
 	if (intel_vgpu_active(gt->i915))
 		gen8_ppgtt_notify_vgt(ppgtt, true);

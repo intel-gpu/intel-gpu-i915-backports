@@ -8,6 +8,9 @@
 #include <linux/highmem.h>
 #include <linux/pci-p2pdma.h>
 #include <linux/scatterlist.h>
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#include <linux/module.h>
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 #include <drm/intel_iaf_platform.h>
 
 #include "gt/intel_gt.h"
@@ -20,6 +23,10 @@
 #include "i915_scatterlist.h"
 #include "i915_trace.h"
 #include "intel_iaf.h"
+
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+MODULE_IMPORT_NS(DMA_BUF);
+#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 I915_SELFTEST_DECLARE(static bool force_different_devices;)
 
@@ -236,8 +243,12 @@ static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
 		if (ret)
 			return ret;
 
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 		fput(vma->vm_file);
 		vma->vm_file = get_file(obj->base.filp);;
+#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+		vma_set_file(vma, obj->base.filp);
+#endif /* LINUX_VERSION_IN_RANGE */
 
 		return 0;
 	}
@@ -369,9 +380,7 @@ static void i915_gem_dmabuf_detach(struct dma_buf *dmabuf,
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
-	i915_gem_object_lock(obj, NULL);
 	i915_gem_object_unpin_pages(obj);
-	i915_gem_object_unlock(obj);
 	pvc_wa_allow_rc6(i915);
 }
 

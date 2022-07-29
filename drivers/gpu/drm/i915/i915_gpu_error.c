@@ -49,13 +49,16 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt_debug.h"
+#include "gt/uc/intel_guc_capture.h"
 
+#include "i915_debugger.h"
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_gpu_error.h"
 #include "i915_memcpy.h"
 #include "i915_scatterlist.h"
 #include "i915_user_extensions.h"
-#include "i915_debugger.h"
+#include "i915_utils.h"
 
 #define ALLOW_FAIL (GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN)
 #define ATOMIC_MAYFAIL (GFP_ATOMIC | __GFP_NOWARN)
@@ -579,8 +582,8 @@ __find_vma(struct i915_vma_coredump *vma, const char *name)
 	return NULL;
 }
 
-static struct i915_vma_coredump *
-find_batch(const struct intel_engine_coredump *ee)
+struct i915_vma_coredump *
+intel_gpu_error_find_batch(const struct intel_engine_coredump *ee)
 {
 	return __find_vma(ee->vma, "batch");
 }
@@ -609,7 +612,7 @@ static void error_print_engine(struct drm_i915_error_state_buf *m,
 
 	error_print_instdone(m, ee);
 
-	batch = find_batch(ee);
+	batch = intel_gpu_error_find_batch(ee);
 	if (batch) {
 		u64 start = batch->gtt_offset;
 		u64 end = start + batch->gtt_size;
@@ -659,9 +662,6 @@ static void error_print_engine(struct drm_i915_error_state_buf *m,
 	if (GRAPHICS_VER(m->i915) >= 8)
 		err_printf(m, "  CTXT_SR_CTL: 0x%08x\n", ee->ctxt_sr_ctl);
 
-	err_printf(m, "  hung: %u\n", ee->hung);
-	err_printf(m, "  engine reset count: %d\n", ee->reset_count);
-
 	for (n = 0; n < ee->num_ports; n++) {
 		err_printf(m, "  ELSP[%d]:", n);
 		error_print_request(m, " ", &ee->execlist[n]);
@@ -681,10 +681,6 @@ static void error_print_engine(struct drm_i915_error_state_buf *m,
 			   ktime_to_us(ktime_sub(ee->sip_timing.attention,
 						 ee->sip_timing.wait)));
 	}
-
-	err_printf(m, "\n");
-
-	error_print_context(m, "  Active context: ", &ee->context);
 }
 
 void i915_error_printf(struct drm_i915_error_state_buf *e, const char *f, ...)
@@ -713,9 +709,9 @@ static void i915_vma_metadata_coredump_print(
 	err_puts(m, "\n");
 }
 
-static void print_error_vma(struct drm_i915_error_state_buf *m,
-			    const struct intel_engine_cs *engine,
-			    const struct i915_vma_coredump *vma)
+void intel_gpu_error_print_vma(struct drm_i915_error_state_buf *m,
+			       const struct intel_engine_cs *engine,
+			       const struct i915_vma_coredump *vma)
 {
 	if (!vma)
 		return;
@@ -782,11 +778,11 @@ static void err_print_uc(struct drm_i915_error_state_buf *m,
 	intel_uc_fw_dump(&error_uc->guc_fw, &p);
 	intel_uc_fw_dump(&error_uc->huc_fw, &p);
 	err_printf(m, "GuC timestamp: 0x%08x\n", error_uc->guc.timestamp);
-	print_error_vma(m, NULL, error_uc->guc.vma_log);
+	intel_gpu_error_print_vma(m, NULL, error_uc->guc.vma_log);
 	err_printf(m, "GuC CTB fence: %d\n", error_uc->guc.last_fence);
 	err_print_guc_ctb(m, "Send", error_uc->guc.ctb + 0);
 	err_print_guc_ctb(m, "Recv", error_uc->guc.ctb + 1);
-	print_error_vma(m, NULL, error_uc->guc.vma_ctb);
+	intel_gpu_error_print_vma(m, NULL, error_uc->guc.vma_ctb);
 }
 
 static void err_free_sgl(struct scatterlist *sgl)
@@ -815,25 +811,32 @@ static void err_print_gt_info(struct drm_i915_error_state_buf *m,
 	intel_sseu_print_topology(gt->_gt->i915, &gt->info.sseu, &p);
 }
 
-static void err_print_gt(struct drm_i915_error_state_buf *m,
-			 struct intel_gt_coredump *gt)
+static void err_print_gt_display(struct drm_i915_error_state_buf *m,
+				 struct intel_gt_coredump *gt)
 {
-	const struct intel_engine_coredump *ee;
+	err_printf(m, "IER: 0x%08x\n", gt->ier);
+	err_printf(m, "DERRMR: 0x%08x\n", gt->derrmr);
+}
+
+static void err_print_gt_global_nonguc(struct drm_i915_error_state_buf *m,
+				       struct intel_gt_coredump *gt)
+{
 	int i;
 
 	err_printf(m, "GT awake: %s\n", str_yes_no(gt->awake));
 	err_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
 		   gt->clock_frequency, gt->clock_period_ns);
 	err_printf(m, "EIR: 0x%08x\n", gt->eir);
-	err_printf(m, "IER: 0x%08x\n", gt->ier);
+
 	for (i = 0; i < gt->ngtier; i++)
 		err_printf(m, "GTIER[%d]: 0x%08x\n", i, gt->gtier[i]);
-	err_printf(m, "FORCEWAKE: 0x%08x\n", gt->forcewake);
-	err_printf(m, "DERRMR: 0x%08x\n", gt->derrmr);
-	err_printf(m, "ROW_INSTDONE: 0x%08x\n", gt->row_instdone);
+}
 
-	for (i = 0; i < gt->nfence; i++)
-		err_printf(m, "  fence[%d] = %08llx\n", i, gt->fence[i]);
+static void err_print_gt_global(struct drm_i915_error_state_buf *m,
+				struct intel_gt_coredump *gt)
+{
+	err_printf(m, "FORCEWAKE: 0x%08x\n", gt->forcewake);
+	err_printf(m, "ROW_INSTDONE: 0x%08x\n", gt->row_instdone);
 
 	if (IS_GRAPHICS_VER(m->i915, 6, 11)) {
 		err_printf(m, "ERROR: 0x%08x\n", gt->error);
@@ -874,22 +877,40 @@ static void err_print_gt(struct drm_i915_error_state_buf *m,
 
 		err_printf(m, "  GAM_DONE: 0x%08x\n", gt->gam_done);
 	}
+}
+
+static void err_print_gt_fences(struct drm_i915_error_state_buf *m,
+				struct intel_gt_coredump *gt)
+{
+	int i;
+
+	for (i = 0; i < gt->nfence; i++)
+		err_printf(m, "  fence[%d] = %08llx\n", i, gt->fence[i]);
+}
+
+static void err_print_gt_engines(struct drm_i915_error_state_buf *m,
+				 struct intel_gt_coredump *gt)
+{
+	const struct intel_engine_coredump *ee;
 
 	for (ee = gt->engine; ee; ee = ee->next) {
 		const struct i915_vma_coredump *vma;
 
-		error_print_engine(m, ee);
-		for (vma = ee->vma; vma; vma = vma->next)
-			print_error_vma(m, ee->engine, vma);
-	}
+		if (ee->guc_capture_node)
+			intel_guc_capture_print_engine_node(m, ee);
+		else
+			error_print_engine(m, ee);
 
-	if (gt->uc)
-		err_print_uc(m, gt->uc);
+		err_printf(m, "  hung: %u\n", ee->hung);
+		err_printf(m, "  engine reset count: %d\n", ee->reset_count);
+		error_print_context(m, "  Active context: ", &ee->context);
+
+		for (vma = ee->vma; vma; vma = vma->next)
+			intel_gpu_error_print_vma(m, ee->engine, vma);
+	}
 
 	err_printf(m, "GT total engines reset count: %u\n",
 		   gt->engines_reset_count);
-
-	err_print_gt_info(m, gt);
 }
 
 static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
@@ -932,21 +953,35 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 
 	err_printf(m, "IOMMU enabled?: %d\n", error->iommu);
 
-	if (HAS_DMC(m->i915)) {
-		struct intel_dmc *dmc = &m->i915->dmc;
-
-		err_printf(m, "DMC loaded: %s\n",
-			   str_yes_no(intel_dmc_has_payload(m->i915) != 0));
-		err_printf(m, "DMC fw version: %d.%d\n",
-			   DMC_VERSION_MAJOR(dmc->version),
-			   DMC_VERSION_MINOR(dmc->version));
-	}
+	intel_dmc_print_error_state(m, m->i915);
 
 	err_printf(m, "RPM wakelock: %s\n", str_yes_no(error->wakelock));
 	err_printf(m, "PM suspended: %s\n", str_yes_no(error->suspended));
 
-	if (error->gt)
-		err_print_gt(m, error->gt);
+	if (error->gt) {
+		bool print_guc_capture = false;
+
+		if (error->gt->uc && error->gt->uc->guc.is_guc_capture)
+			print_guc_capture = true;
+
+		err_print_gt_display(m, error->gt);
+		err_print_gt_global_nonguc(m, error->gt);
+		err_print_gt_fences(m, error->gt);
+
+		/*
+		 * GuC dumped global, eng-class and eng-instance registers together
+		 * as part of engine state dump so we print in err_print_gt_engines
+		 */
+		if (!print_guc_capture)
+			err_print_gt_global(m, error->gt);
+
+		err_print_gt_engines(m, error->gt);
+
+		if (error->gt->uc)
+			err_print_uc(m, error->gt->uc);
+
+		err_print_gt_info(m, error->gt);
+	}
 
 	if (error->overlay)
 		intel_overlay_print_error_state(m, error->overlay);
@@ -1140,6 +1175,7 @@ static void cleanup_gt(struct intel_gt_coredump *gt)
 			i915_uuid_resource_coredump_free(ee->context.uuid_dump);
 
 		i915_vma_coredump_free(ee->vma);
+		intel_guc_capture_free_node(ee);
 		kfree(ee);
 	}
 
@@ -1820,7 +1856,7 @@ static void add_vma(struct intel_engine_coredump *ee,
 }
 
 struct intel_engine_coredump *
-intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp)
+intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_flags)
 {
 	struct intel_engine_coredump *ee;
 
@@ -1830,8 +1866,10 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp)
 
 	ee->engine = engine;
 
-	engine_record_registers(ee);
-	engine_record_execlists(ee);
+	if (!(dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)) {
+		engine_record_registers(ee);
+		engine_record_execlists(ee);
+	}
 
 	return ee;
 }
@@ -1903,7 +1941,8 @@ intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 
 static struct intel_engine_coredump *
 capture_engine(struct intel_engine_cs *engine,
-	       struct i915_page_compress *compress)
+	       struct i915_page_compress *compress,
+	       u32 dump_flags)
 {
 	struct intel_engine_capture_vma *capture = NULL;
 	struct intel_engine_coredump *ee;
@@ -1928,7 +1967,7 @@ capture_engine(struct intel_engine_cs *engine,
 		}
 	}
 
-	ee = intel_engine_coredump_alloc(engine, GFP_KERNEL);
+	ee = intel_engine_coredump_alloc(engine, ALLOW_FAIL, dump_flags);
 	if (!ee)
 		return NULL;
 
@@ -1961,6 +2000,8 @@ no_request_capture:
 		kfree(ee);
 		return NULL;
 	}
+	if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
+		intel_guc_capture_get_matching_node(engine->gt, ee, ce);
 
 	intel_engine_coredump_add_vma(ee, capture, compress);
 
@@ -1970,7 +2011,8 @@ no_request_capture:
 static void
 gt_record_engines(struct intel_gt_coredump *gt,
 		  intel_engine_mask_t engine_mask,
-		  struct i915_page_compress *compress)
+		  struct i915_page_compress *compress,
+		  u32 dump_flags)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
@@ -1984,7 +2026,7 @@ gt_record_engines(struct intel_gt_coredump *gt,
 		/* Refill our page pool before entering atomic section */
 		pool_refill(&compress->pool, ALLOW_FAIL);
 
-		ee = capture_engine(engine, compress);
+		ee = capture_engine(engine, compress, dump_flags);
 		if (!ee)
 			continue;
 
@@ -1992,6 +2034,8 @@ gt_record_engines(struct intel_gt_coredump *gt,
 
 		gt->simulated |= ee->simulated;
 		if (ee->simulated) {
+			if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
+				intel_guc_capture_free_node(ee);
 			kfree(ee);
 			continue;
 		}
@@ -2061,8 +2105,74 @@ gt_record_uc(struct intel_gt_coredump *gt,
 	return error_uc;
 }
 
-/* Capture all registers which don't fit into another category. */
-static void gt_record_regs(struct intel_gt_coredump *gt)
+/* Capture display registers. */
+static void gt_record_display_regs(struct intel_gt_coredump *gt)
+{
+	struct intel_uncore *uncore = gt->_gt->uncore;
+	struct drm_i915_private *i915 = uncore->i915;
+
+	if (GRAPHICS_VER(i915) >= 6)
+		gt->derrmr = intel_uncore_read(uncore, DERRMR);
+
+	if (GRAPHICS_VER(i915) >= 8)
+		gt->ier = intel_uncore_read(uncore, GEN8_DE_MISC_IER);
+	else if (IS_VALLEYVIEW(i915))
+		gt->ier = intel_uncore_read(uncore, VLV_IER);
+	else if (HAS_PCH_SPLIT(i915))
+		gt->ier = intel_uncore_read(uncore, DEIER);
+	else if (GRAPHICS_VER(i915) == 2)
+		gt->ier = intel_uncore_read16(uncore, GEN2_IER);
+	else
+		gt->ier = intel_uncore_read(uncore, GEN2_IER);
+}
+
+/* Capture all other registers that GuC doesn't capture. */
+static void gt_record_global_nonguc_regs(struct intel_gt_coredump *gt)
+{
+	struct intel_uncore *uncore = gt->_gt->uncore;
+	struct drm_i915_private *i915 = uncore->i915;
+	int i;
+
+	if (IS_VALLEYVIEW(i915)) {
+		gt->gtier[0] = intel_uncore_read(uncore, GTIER);
+		gt->ngtier = 1;
+	} else if (GRAPHICS_VER(i915) >= 11) {
+		gt->gtier[0] =
+			intel_uncore_read(uncore,
+					  GEN11_RENDER_COPY_INTR_ENABLE);
+		gt->gtier[1] =
+			intel_uncore_read(uncore, GEN11_VCS_VECS_INTR_ENABLE);
+		gt->gtier[2] =
+			intel_uncore_read(uncore, GEN11_GUC_SG_INTR_ENABLE);
+		gt->gtier[3] =
+			intel_uncore_read(uncore,
+					  GEN11_GPM_WGBOXPERF_INTR_ENABLE);
+		gt->gtier[4] =
+			intel_uncore_read(uncore,
+					  GEN11_CRYPTO_RSVD_INTR_ENABLE);
+		gt->gtier[5] =
+			intel_uncore_read(uncore,
+					  GEN11_GUNIT_CSME_INTR_ENABLE);
+		gt->ngtier = 6;
+	} else if (GRAPHICS_VER(i915) >= 8) {
+		for (i = 0; i < 4; i++)
+			gt->gtier[i] =
+				intel_uncore_read(uncore, GEN8_GT_IER(i));
+		gt->ngtier = 4;
+	} else if (HAS_PCH_SPLIT(i915)) {
+		gt->gtier[0] = intel_uncore_read(uncore, GTIER);
+		gt->ngtier = 1;
+	}
+
+	if (intel_gt_has_eus(gt->_gt))
+		gt->eir = intel_uncore_read(uncore, EIR);
+}
+
+/*
+ * Capture all registers that relate to workload submission.
+ * NOTE: In GuC submission, when GuC resets an engine, it can dump these for us
+ */
+static void gt_record_global_regs(struct intel_gt_coredump *gt)
 {
 	struct intel_uncore *uncore = gt->_gt->uncore;
 	struct drm_i915_private *i915 = uncore->i915;
@@ -2078,11 +2188,8 @@ static void gt_record_regs(struct intel_gt_coredump *gt)
 	 */
 
 	/* 1: Registers specific to a single generation */
-	if (IS_VALLEYVIEW(i915)) {
-		gt->gtier[0] = intel_uncore_read(uncore, GTIER);
-		gt->ier = intel_uncore_read(uncore, VLV_IER);
+	if (IS_VALLEYVIEW(i915))
 		gt->forcewake = intel_uncore_read_fw(uncore, FORCEWAKE_VLV);
-	}
 
 	if (GRAPHICS_VER(i915) == 7)
 		gt->err_int = intel_uncore_read(uncore, GEN7_ERR_INT);
@@ -2112,7 +2219,6 @@ static void gt_record_regs(struct intel_gt_coredump *gt)
 		gt->forcewake = intel_uncore_read_fw(uncore, FORCEWAKE_MT);
 
 	if (GRAPHICS_VER(i915) >= 6) {
-		gt->derrmr = intel_uncore_read(uncore, DERRMR);
 		if (GRAPHICS_VER(i915) < 12) {
 			gt->error = intel_uncore_read(uncore, ERROR_GEN6);
 			gt->done_reg = intel_uncore_read(uncore, DONE_REG);
@@ -2157,45 +2263,6 @@ static void gt_record_regs(struct intel_gt_coredump *gt)
 
 		gt->gam_done = intel_uncore_read(uncore, GEN12_GAM_DONE);
 	}
-
-	/* 4: Everything else */
-	if (GRAPHICS_VER(i915) >= 11) {
-		gt->ier = intel_uncore_read(uncore, GEN8_DE_MISC_IER);
-		gt->gtier[0] =
-			intel_uncore_read(uncore,
-					  GEN11_RENDER_COPY_INTR_ENABLE);
-		gt->gtier[1] =
-			intel_uncore_read(uncore, GEN11_VCS_VECS_INTR_ENABLE);
-		gt->gtier[2] =
-			intel_uncore_read(uncore, GEN11_GUC_SG_INTR_ENABLE);
-		gt->gtier[3] =
-			intel_uncore_read(uncore,
-					  GEN11_GPM_WGBOXPERF_INTR_ENABLE);
-		gt->gtier[4] =
-			intel_uncore_read(uncore,
-					  GEN11_CRYPTO_RSVD_INTR_ENABLE);
-		gt->gtier[5] =
-			intel_uncore_read(uncore,
-					  GEN11_GUNIT_CSME_INTR_ENABLE);
-		gt->ngtier = 6;
-	} else if (GRAPHICS_VER(i915) >= 8) {
-		gt->ier = intel_uncore_read(uncore, GEN8_DE_MISC_IER);
-		for (i = 0; i < 4; i++)
-			gt->gtier[i] =
-				intel_uncore_read(uncore, GEN8_GT_IER(i));
-		gt->ngtier = 4;
-	} else if (HAS_PCH_SPLIT(i915)) {
-		gt->ier = intel_uncore_read(uncore, DEIER);
-		gt->gtier[0] = intel_uncore_read(uncore, GTIER);
-		gt->ngtier = 1;
-	} else if (GRAPHICS_VER(i915) == 2) {
-		gt->ier = intel_uncore_read16(uncore, GEN2_IER);
-	} else if (!IS_VALLEYVIEW(i915)) {
-		gt->ier = intel_uncore_read(uncore, GEN2_IER);
-	}
-
-	if (intel_gt_has_eus(gt->_gt))
-		gt->eir = intel_uncore_read(uncore, EIR);
 }
 
 static void gt_record_info(struct intel_gt_coredump *gt)
@@ -2267,7 +2334,7 @@ static void capture_gen(struct i915_gpu_coredump *error)
 	error->wakelock = atomic_read(&i915->runtime_pm.wakeref_count);
 	error->suspended = i915->runtime_pm.suspended;
 
-	error->iommu = intel_vtd_active(i915);
+	error->iommu = i915_vtd_active(i915);
 	error->reset_count = i915_reset_count(&i915->gpu_error);
 	error->suspend_count = i915->suspend_count;
 
@@ -2309,7 +2376,7 @@ i915_gpu_coredump_alloc(struct drm_i915_private *i915, gfp_t gfp)
 #define DAY_AS_SECONDS(x) (24 * 60 * 60 * (x))
 
 struct intel_gt_coredump *
-intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp)
+intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp, u32 dump_flags)
 {
 	struct intel_gt_coredump *gc;
 
@@ -2320,7 +2387,21 @@ intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp)
 	gc->_gt = gt;
 	gc->awake = intel_gt_pm_is_awake(gt);
 
-	gt_record_regs(gc);
+	gt_record_display_regs(gc);
+	gt_record_global_nonguc_regs(gc);
+
+	/*
+	 * GuC dumps global, eng-class and eng-instance registers
+	 * (that can change as part of engine state during execution)
+	 * before an engine is reset due to a hung context.
+	 * GuC captures and reports all three groups of registers
+	 * together as a single set before the engine is reset.
+	 * Thus, if GuC triggered the context reset we retrieve
+	 * the register values as part of gt_record_engines.
+	 */
+	if (!(dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE))
+		gt_record_global_regs(gc);
+
 	gt_record_fences(gc);
 	gc->engines_reset_count = atomic_read(&gt->reset.engines_reset_count);
 
@@ -2355,7 +2436,7 @@ void i915_vma_capture_finish(struct intel_gt_coredump *gt,
 }
 
 struct i915_gpu_coredump *
-i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask)
+i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask, u32 dump_flags)
 {
 	struct drm_i915_private *i915 = gt->i915;
 	struct i915_gpu_coredump *error;
@@ -2369,7 +2450,7 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask)
 	if (!error)
 		return ERR_PTR(-ENOMEM);
 
-	error->gt = intel_gt_coredump_alloc(gt, ALLOW_FAIL);
+	error->gt = intel_gt_coredump_alloc(gt, ALLOW_FAIL, dump_flags);
 	if (error->gt) {
 		struct i915_page_compress *compress;
 
@@ -2380,11 +2461,19 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask)
 			return ERR_PTR(-ENOMEM);
 		}
 
-		gt_record_info(error->gt);
-		gt_record_engines(error->gt, engine_mask, compress);
-
-		if (INTEL_INFO(i915)->has_gt_uc)
+		if (INTEL_INFO(i915)->has_gt_uc) {
 			error->gt->uc = gt_record_uc(error->gt, compress);
+			if (error->gt->uc) {
+				if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
+					error->gt->uc->guc.is_guc_capture = true;
+				else
+					GEM_BUG_ON(error->gt->uc->guc.is_guc_capture);
+			}
+		}
+
+		gt_record_info(error->gt);
+		gt_record_engines(error->gt, engine_mask, compress, dump_flags);
+
 
 		i915_vma_capture_finish(error->gt, compress);
 
@@ -2440,11 +2529,11 @@ void i915_error_state_store(struct i915_gpu_coredump *error)
  * to pick up.
  */
 void i915_capture_error_state(struct intel_gt *gt,
-			      intel_engine_mask_t engine_mask)
+			      intel_engine_mask_t engine_mask, u32 dump_flags)
 {
 	struct i915_gpu_coredump *error;
 
-	error = i915_gpu_coredump(gt, engine_mask);
+	error = i915_gpu_coredump(gt, engine_mask, dump_flags);
 	if (IS_ERR(error)) {
 		cmpxchg(&gt->i915->gpu_error.first_error, NULL, error);
 		return;
@@ -2783,7 +2872,7 @@ void intel_klog_error_capture(struct intel_gt *gt,
 	}
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
-		error = i915_gpu_coredump(gt, engine_mask);
+		error = i915_gpu_coredump(gt, engine_mask, CORE_DUMP_FLAG_NONE);
 
 	if (IS_ERR(error)) {
 		drm_err(&i915->drm, "Failed to capture error capture: %ld!\n", PTR_ERR(error));
