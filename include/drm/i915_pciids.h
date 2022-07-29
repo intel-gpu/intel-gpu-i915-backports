@@ -679,34 +679,20 @@
 	INTEL_VGA_DEVICE(0xA782, info), \
 	INTEL_VGA_DEVICE(0xA783, info), \
 	INTEL_VGA_DEVICE(0xA788, info), \
-	INTEL_VGA_DEVICE(0xA789, info)
+	INTEL_VGA_DEVICE(0xA789, info), \
+	INTEL_VGA_DEVICE(0xA78A, info), \
+	INTEL_VGA_DEVICE(0xA78B, info)
 
-/* XEHPSDV */
-#define INTEL_XEHPSDV_IDS(info) \
-	INTEL_VGA_DEVICE(0x0201, info), \
-	INTEL_VGA_DEVICE(0x0202, info), \
-	INTEL_VGA_DEVICE(0x0203, info), \
-	INTEL_VGA_DEVICE(0x0204, info), \
-	INTEL_VGA_DEVICE(0x0205, info), \
-	INTEL_VGA_DEVICE(0x0206, info), \
-	INTEL_VGA_DEVICE(0x0207, info), \
-	INTEL_VGA_DEVICE(0x0208, info), \
-	INTEL_VGA_DEVICE(0x0209, info), \
-	INTEL_VGA_DEVICE(0x020A, info), \
-	INTEL_VGA_DEVICE(0x020B, info), \
-	INTEL_VGA_DEVICE(0x020C, info), \
-	INTEL_VGA_DEVICE(0x020D, info), \
-	INTEL_VGA_DEVICE(0x020E, info), \
-	INTEL_VGA_DEVICE(0x020F, info), \
-	INTEL_VGA_DEVICE(0x0210, info)
+/* RPL-P */
+#define INTEL_RPLP_IDS(info) \
+	INTEL_VGA_DEVICE(0xA720, info), \
+	INTEL_VGA_DEVICE(0xA721, info), \
+	INTEL_VGA_DEVICE(0xA7A0, info), \
+	INTEL_VGA_DEVICE(0xA7A1, info), \
+	INTEL_VGA_DEVICE(0xA7A8, info), \
+	INTEL_VGA_DEVICE(0xA7A9, info)
 
-/*
- * DG2
- *
- * The first five IDs here are "Super-SKU" validation IDs that will only be
- * used at poweron and very early post-PO.  We should remove them once bulk
- * hardware starts becoming available.
- */
+/* DG2 */
 #define INTEL_DG2_G10_IDS(info) \
 	INTEL_VGA_DEVICE(0x5690, info), \
 	INTEL_VGA_DEVICE(0x5691, info), \
@@ -747,6 +733,25 @@
 	INTEL_ATS_M150_IDS(info), \
 	INTEL_ATS_M75_IDS(info)
 
+/* XEHPSDV */
+#define INTEL_XEHPSDV_IDS(info) \
+	INTEL_VGA_DEVICE(0x0201, info), \
+	INTEL_VGA_DEVICE(0x0202, info), \
+	INTEL_VGA_DEVICE(0x0203, info), \
+	INTEL_VGA_DEVICE(0x0204, info), \
+	INTEL_VGA_DEVICE(0x0205, info), \
+	INTEL_VGA_DEVICE(0x0206, info), \
+	INTEL_VGA_DEVICE(0x0207, info), \
+	INTEL_VGA_DEVICE(0x0208, info), \
+	INTEL_VGA_DEVICE(0x0209, info), \
+	INTEL_VGA_DEVICE(0x020A, info), \
+	INTEL_VGA_DEVICE(0x020B, info), \
+	INTEL_VGA_DEVICE(0x020C, info), \
+	INTEL_VGA_DEVICE(0x020D, info), \
+	INTEL_VGA_DEVICE(0x020E, info), \
+	INTEL_VGA_DEVICE(0x020F, info), \
+	INTEL_VGA_DEVICE(0x0210, info)
+
 /* PVC */
 #define INTEL_PVC_IDS(info) \
 	INTEL_VGA_DEVICE(0x0BD0, info), \
@@ -755,6 +760,8 @@
 	INTEL_VGA_DEVICE(0x0BD7, info), \
 	INTEL_VGA_DEVICE(0x0BD8, info), \
 	INTEL_VGA_DEVICE(0x0BD9, info), \
+	INTEL_VGA_DEVICE(0x0BDA, info), \
+	INTEL_VGA_DEVICE(0x0BDB, info), \
 	INTEL_VGA_DEVICE(0x0BE0, info), \
 	INTEL_VGA_DEVICE(0x0BE1, info)
 

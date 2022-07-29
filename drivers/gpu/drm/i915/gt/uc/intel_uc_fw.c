@@ -52,24 +52,24 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  * firmware as TGL.
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_def) \
-	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 1, 1)) \
-	fw_def(DG2,          0, guc_def(dg2,  70, 1, 1)) \
-	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 1, 1)) \
-	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 1, 1)) \
-	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 1, 1)) \
-	fw_def(DG1,          0, guc_def(dg1,  70, 1, 1)) \
-	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 1, 1)) \
-	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 1, 1)) \
-	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 1, 1)) \
-	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 1, 1)) \
-	fw_def(ICELAKE,      0, guc_def(icl,  70, 1, 1)) \
-	fw_def(COMETLAKE,    5, guc_def(cml,  70, 1, 1)) \
-	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 1, 1)) \
-	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 1, 1)) \
-	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 1, 1)) \
-	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 1, 1)) \
-	fw_def(BROXTON,      0, guc_def(bxt,  70, 1, 1)) \
-	fw_def(SKYLAKE,      0, guc_def(skl,  70, 1, 1))
+	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 1, 2)) \
+	fw_def(DG2,          0, guc_def(dg2,  70, 1, 2)) \
+	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 1, 2)) \
+	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 1, 2)) \
+	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 1, 2)) \
+	fw_def(DG1,          0, guc_def(dg1,  70, 1, 2)) \
+	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 1, 2)) \
+	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 1, 2)) \
+	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 1, 2)) \
+	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 1, 2)) \
+	fw_def(ICELAKE,      0, guc_def(icl,  70, 1, 2)) \
+	fw_def(COMETLAKE,    5, guc_def(cml,  70, 1, 2)) \
+	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 1, 2)) \
+	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 1, 2)) \
+	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 1, 2)) \
+	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 1, 2)) \
+	fw_def(BROXTON,      0, guc_def(bxt,  70, 1, 2)) \
+	fw_def(SKYLAKE,      0, guc_def(skl,  70, 1, 2))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_dma_def, huc_gsc_def) \
 	fw_def(PONTEVECCHIO, 0, huc_dma_def(pvc,  7, 8, 7)) \
@@ -462,7 +462,7 @@ int intel_uc_fw_fetch(struct intel_uc_fw *uc_fw)
 		}
 	}
 
-	if (HAS_LMEM(i915) && !i915_is_mem_wa_enabled(i915, I915_WA_FORCE_SMEM_OBJECT) && !IS_DG2(i915))
+	if (HAS_LMEM(i915) && !i915_is_mem_wa_enabled(i915, I915_WA_FORCE_SMEM_OBJECT) && !(IS_DG2(i915) && (uc_fw->type == INTEL_UC_FW_TYPE_GUC)))
 		obj = i915_gem_object_create_lmem_from_data(gt->lmem, fw->data, fw->size);
 	else
 		obj = i915_gem_object_create_shmem_from_data(i915, fw->data, fw->size);

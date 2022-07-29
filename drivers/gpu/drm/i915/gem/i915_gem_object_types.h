@@ -15,6 +15,8 @@
 #include "../i915_active.h"
 #include "i915_selftest.h"
 
+#include "gt/intel_gt_defines.h"
+
 struct drm_i915_gem_object;
 struct intel_fronbuffer;
 
@@ -285,7 +287,6 @@ struct drm_i915_gem_object {
 #define I915_BO_READONLY         BIT(7)
 #define I915_TILING_QUIRK_BIT    8 /* unknown swizzling; do not release! */
 #define I915_BO_FABRIC           BIT(11)
-#define I915_BO_WAS_BOUND_BIT    12
 
 	/**
 	 * @cache_level: The desired GTT caching level.
@@ -528,6 +529,8 @@ struct drm_i915_gem_object {
 		 * pages were last acquired.
 		 */
 		bool dirty:1;
+
+		u32 tlb[I915_MAX_GT];
 	} mm;
 
 	/** Record of address bit 17 of each page at last unbind. */

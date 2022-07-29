@@ -252,7 +252,7 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 	GEM_BUG_ON(ct->vma);
 
 	blob_size = 2 * CTB_DESC_SIZE + CTB_H2G_BUFFER_SIZE + CTB_G2H_BUFFER_SIZE;
-	err = intel_guc_allocate_and_map_vma(guc, blob_size, &ct->vma, &blob);
+	err = __intel_guc_allocate_and_map_vma(guc, blob_size, true, &ct->vma, &blob);
 	if (unlikely(err)) {
 		CT_PROBE_ERROR(ct, "Failed to allocate %u for CTB data (%pe)\n",
 			       blob_size, ERR_PTR(err));
@@ -470,7 +470,7 @@ static int ct_write(struct intel_guc_ct *ct,
 	 * make sure H2G buffer update and LRC tail update (if this triggering a
 	 * submission) are visible before updating the descriptor tail
 	 */
-	intel_guc_write_barrier(ct_to_guc(ct));
+	i915_write_barrier(ct_to_i915(ct), i915_gem_object_is_lmem(ct->vma->obj));
 
 	/* update local copies */
 	ctb->tail = tail;
@@ -847,7 +847,7 @@ static struct ct_incoming_msg *ct_alloc_msg(u32 num_dwords)
 {
 	struct ct_incoming_msg *msg;
 
-	msg = kmalloc(sizeof(*msg) + sizeof(u32) * num_dwords, GFP_ATOMIC);
+	msg = kmalloc(struct_size(msg, msg, num_dwords), GFP_ATOMIC);
 	if (msg)
 		msg->size = num_dwords;
 	return msg;

@@ -1,4 +1,6 @@
-PONTE VECCHIO PLATFORM ENABLING (done)
-D:	Stuart Summers <stuart.summers@intel.com>
-M:	Sudeep Dutt <sudeep.dutt@intel.com>
+PONTE VECCHIO GENERAL SUPPORT (done)
 T:	drm/i915/pvc
+
+The patches in this section cover general PVC enablement (i.e., without major
+new features that aren't mandatory for platform use).  The subsections here
+further subdivide the contributions and responsibilities by team.

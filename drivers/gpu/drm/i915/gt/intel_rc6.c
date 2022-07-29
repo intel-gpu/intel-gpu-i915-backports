@@ -235,7 +235,7 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 			GEN6_RC_CTL_EI_MODE(1);
 
 	/* Wa_22012237902 - disable coarse PG for PVC BD A0 */
-	if (IS_PVC_BD_REVID(rc6_to_i915(rc6), PVC_BD_REVID_A0, PVC_BD_REVID_B0)) {
+	if (IS_PVC_BD_STEP(rc6_to_i915(rc6), STEP_A0, STEP_B0)) {
 		set(uncore, GEN9_PG_ENABLE, 0);
 		return;
 	}
@@ -637,24 +637,15 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	 * Wa_1509372804: pvc_ct[a*]
 	 */
 	if (!i915->params.rc6_ignore_steppings &&
-	    IS_PVC_CT_REVID(rc6_to_gt(rc6), PVC_CT_XT_REVID_A0, PVC_CT_XT_REVID_B0))
+	    IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0))
 		return false;
 
 	/*
 	 * Wa_1508652630
 	 */
 	if (!i915->params.rc6_ignore_steppings &&
-	    IS_PVC_BD_REVID(i915, PVC_BD_REVID_A0, PVC_BD_REVID_B0) &&
+	    IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0) &&
 	    i915->remote_tiles > 0)
-		return false;
-
-	/*
-	 * Wa_16015496043 & 16015476723 - FIXME when software Wa is finalized
-	 * Wa_16015295493 & Wa_16015350383 - FIXME when pcode Wa is merged
-	 */
-
-	if (!i915->params.rc6_ignore_steppings &&
-	    IS_PVC_BD_REVID(i915, PVC_BD_REVID_B0, STEP_FOREVER))
 		return false;
 
 	return true;
@@ -694,6 +685,9 @@ static void __intel_rc6_disable(struct intel_rc6 *rc6)
 	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
 	struct intel_gt *gt = rc6_to_gt(rc6);
+
+	if (i915->quiesce_gpu)
+		return;
 
 	/* Take control of RC6 back from GuC */
 	intel_guc_rc_disable(&gt->uc.guc);

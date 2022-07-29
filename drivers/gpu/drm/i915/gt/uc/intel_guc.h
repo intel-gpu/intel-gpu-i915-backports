@@ -10,20 +10,21 @@
 #include <linux/iosys-map.h>
 #include <linux/xarray.h>
 
-#include "intel_uncore.h"
+#include "intel_guc_ct.h"
 #include "intel_guc_fw.h"
 #include "intel_guc_fwif.h"
-#include "intel_guc_ct.h"
 #include "intel_guc_log.h"
 #include "intel_guc_reg.h"
 #include "intel_guc_slpc_types.h"
 #include "intel_guc_hwconfig.h"
 #include "intel_uc_fw.h"
+#include "intel_uncore.h"
 #include "i915_utils.h"
 #include "i915_vma.h"
 
 struct __guc_ads_blob;
 struct intel_guc;
+struct intel_guc_state_capture;
 
 struct intel_guc_ops {
 	int (*init)(struct intel_guc *guc);
@@ -47,6 +48,9 @@ struct intel_guc {
 	struct intel_guc_ct ct;
 	/** @slpc: sub-structure containing SLPC related data and objects */
 	struct intel_guc_slpc slpc;
+	/** @capture: the error-state-capture module's data and objects */
+	struct intel_guc_state_capture *capture;
+
 	struct intel_guc_hwconfig hwconfig;
 	struct dentry *dbgfs_node;
 
@@ -169,6 +173,8 @@ struct intel_guc {
 	struct guc_mmio_reg *ads_regset;
 	/** @ads_golden_ctxt_size: size of the golden contexts in the ADS */
 	u32 ads_golden_ctxt_size;
+	/** @ads_capture_size: size of register lists in the ADS used for error capture */
+	u32 ads_capture_size;
 	/** @ads_engine_usage_size: size of engine usage in the ADS */
 	u32 ads_engine_usage_size;
 
@@ -490,6 +496,9 @@ void intel_guc_tlb_invalidation_done(struct intel_guc *guc, u32 seqno);
 int intel_guc_engine_sched_done_process_msg(struct intel_guc *guc,
 					    const u32 *msg, u32 len);
 
+struct intel_engine_cs *
+intel_guc_lookup_engine(struct intel_guc *guc, u8 guc_class, u8 instance);
+
 struct intel_context *
 intel_guc_active_context_get(struct intel_engine_cs *engine);
 void intel_guc_find_hung_context(struct intel_engine_cs *engine);
@@ -521,7 +530,6 @@ intel_guc_send_pagefault_reply(struct intel_guc *guc,
 void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p);
 void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p);
 
-void intel_guc_write_barrier(struct intel_guc *guc);
 
 void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 

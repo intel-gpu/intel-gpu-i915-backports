@@ -23,6 +23,7 @@ struct drm_i915_mocs_table {
 	unsigned int n_entries;
 	const struct drm_i915_mocs_entry *table;
 	u8 uc_index;
+	u8 wb_index; /* Only used on HAS_L3_CCS_READ() platforms */
 	u8 unused_entries_index;
 };
 
@@ -440,6 +441,7 @@ static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 		table->table = pvc_mocs_table;
 		table->n_entries = PVC_NUM_MOCS_ENTRIES;
 		table->uc_index = 1;
+		table->wb_index = 2;
 		table->unused_entries_index = 2;
 	} else if (IS_DG2(i915)) {
 		if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_B0)) {
@@ -643,6 +645,8 @@ void intel_set_mocs_index(struct intel_gt *gt)
 
 	get_mocs_settings(gt->i915, &table);
 	gt->mocs.uc_index = table.uc_index;
+	if (HAS_L3_CCS_READ(gt->i915))
+		gt->mocs.wb_index = table.wb_index;
 }
 
 void intel_mocs_init(struct intel_gt *gt)

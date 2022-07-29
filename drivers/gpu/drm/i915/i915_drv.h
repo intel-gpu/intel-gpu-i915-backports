@@ -33,7 +33,6 @@
 #include <uapi/drm/i915_drm.h>
 #include <uapi/drm/drm_fourcc.h>
 
-#include <asm/hypervisor.h>
 #include <linux/compiler_attributes.h>
 #include <linux/io-mapping.h>
 #include <linux/i2c.h>
@@ -111,7 +110,6 @@
 #include "gt/intel_timeline.h"
 #include "i915_virtualization.h"
 #include "i915_vma.h"
-#include "i915_irq.h"
 
 struct dpll;
 struct drm_i915_clock_gating_funcs;
@@ -139,14 +137,6 @@ struct intel_limit;
 struct intel_overlay;
 struct intel_overlay_error_state;
 struct vlv_s0ix_state;
-
-/* General customization:
- */
-
-#define DRIVER_NAME		"i915"
-#define DRIVER_DESC		"Intel Graphics"
-#define DRIVER_DATE		"20201103"
-#define DRIVER_TIMESTAMP	1604406085
 
 enum i915_driver_errors {
 	I915_DRIVER_ERROR_OBJECT_MIGRATION = 0,
@@ -241,20 +231,6 @@ struct drm_i915_file_private {
 	} clos_resv;
 };
 
-/* Interface history:
- *
- * 1.1: Original.
- * 1.2: Add Power Management
- * 1.3: Add vblank support
- * 1.4: Fix cmdbuffer path, add heap destroy
- * 1.5: Add vblank pipe configuration
- * 1.6: - New ioctl for scheduling buffer swaps on vertical blank
- *      - Support vertical blank on secondary display pipe
- */
-#define DRIVER_MAJOR		1
-#define DRIVER_MINOR		6
-#define DRIVER_PATCHLEVEL	0
-
 struct sdvo_device_mapping {
 	u8 initialized;
 	u8 dvo_port;
@@ -297,12 +273,6 @@ struct drm_i915_display_funcs {
 
 
 #define I915_COLOR_UNEVICTABLE (-1) /* a non-vma sharing the address space */
-
-enum drrs_type {
-	DRRS_TYPE_NONE,
-	DRRS_TYPE_STATIC,
-	DRRS_TYPE_SEAMLESS,
-};
 
 #define QUIRK_LVDS_SSC_DISABLE (1<<1)
 #define QUIRK_INVERT_BRIGHTNESS (1<<2)
@@ -449,78 +419,23 @@ struct intel_vbt_data {
 	/* bdb version */
 	u16 version;
 
-	struct drm_display_mode *lfp_lvds_vbt_mode; /* if any */
-	struct drm_display_mode *sdvo_lvds_vbt_mode; /* if any */
-
 	/* Feature bits */
 	unsigned int int_tv_support:1;
-	unsigned int lvds_dither:1;
 	unsigned int int_crt_support:1;
 	unsigned int lvds_use_ssc:1;
 	unsigned int int_lvds_support:1;
 	unsigned int display_clock_mode:1;
 	unsigned int fdi_rx_polarity_inverted:1;
-	unsigned int panel_type:4;
 	int lvds_ssc_freq;
-	unsigned int bios_lvds_val; /* initial [PCH_]LVDS reg val in VBIOS */
 	enum drm_panel_orientation orientation;
 
 	bool override_afc_startup;
 	u8 override_afc_startup_val;
 
-	enum drrs_type drrs_type;
-
-	struct {
-		int rate;
-		int lanes;
-		int preemphasis;
-		int vswing;
-		int bpp;
-		struct edp_power_seq pps;
-		u8 drrs_msa_timing_delay;
-		bool low_vswing;
-		bool initialized;
-		bool hobl;
-	} edp;
-
-	struct {
-		bool enable;
-		bool full_link;
-		bool require_aux_wakeup;
-		int idle_frames;
-		int tp1_wakeup_time_us;
-		int tp2_tp3_wakeup_time_us;
-		int psr2_tp2_tp3_wakeup_time_us;
-	} psr;
-
-	struct {
-		u16 pwm_freq_hz;
-		u16 brightness_precision_bits;
-		bool present;
-		bool active_low_pwm;
-		u8 min_brightness;	/* min_brightness/255 of max */
-		u8 controller;		/* brightness controller number */
-		enum intel_backlight_type type;
-	} backlight;
-
-	/* MIPI DSI */
-	struct {
-		u16 panel_id;
-		struct mipi_config *config;
-		struct mipi_pps_data *pps;
-		u16 bl_ports;
-		u16 cabc_ports;
-		u8 seq_version;
-		u32 size;
-		u8 *data;
-		const u8 *sequence[MIPI_SEQ_MAX];
-		u8 *deassert_seq; /* Used by fixup_mipi_sequences() */
-		enum drm_panel_orientation orientation;
-	} dsi;
-
 	int crt_ddc_pin;
 
 	struct list_head display_devices;
+	struct list_head bdb_blocks;
 
 	struct intel_bios_encoder_data *ports[I915_MAX_PORTS]; /* Non-NULL if port present. */
 	struct sdvo_device_mapping sdvo_mappings[2];
@@ -835,6 +750,13 @@ struct drm_i915_private {
 	u32 bxt_phy_grc;
 
 	u32 suspend_count;
+
+	struct {
+		/* lock to protect vram_sr flags */
+		struct mutex lock;
+		bool supported;
+	} vram_sr;
+
 	struct i915_suspend_saved_registers regfile;
 	struct vlv_s0ix_state *vlv_s0ix_state;
 
@@ -921,12 +843,12 @@ struct drm_i915_private {
 	struct i915_hwmon *hwmon;
 
 	/* Abstract the submission mechanism (legacy ringbuffer or execlists) away */
-	struct intel_gt gt;
+	struct intel_gt gt0;
 
 	/*
 	 * i915->gts[0] == &i915->gt
 	 */
-	struct intel_gt *gts[I915_MAX_TILES];
+	struct intel_gt *gts[I915_MAX_GT];
 	struct kobject *sysfs_gt;
 
 	struct {
@@ -1170,14 +1092,13 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 	(DISPLAY_VER(i915) >= (from) && DISPLAY_VER(i915) <= (until))
 
 #define INTEL_REVID(dev_priv)	(to_pci_dev((dev_priv)->drm.dev)->revision)
-#define INTEL_SUB_REVID(p, s, e) \
-	((INTEL_REVID(p) & GENMASK((e), (s))) >> s)
 
 #define HAS_DSB(dev_priv)	(INTEL_INFO(dev_priv)->display.has_dsb)
 
 #define INTEL_DISPLAY_STEP(__i915) (RUNTIME_INFO(__i915)->step.display_step)
 #define INTEL_GRAPHICS_STEP(__i915) (RUNTIME_INFO(__i915)->step.graphics_step)
 #define INTEL_MEDIA_STEP(__i915) (RUNTIME_INFO(__i915)->step.media_step)
+#define INTEL_BASEDIE_STEP(__i915) (RUNTIME_INFO(__i915)->step.basedie_step)
 
 #define IS_DISPLAY_STEP(__i915, since, until) \
 	(drm_WARN_ON(&(__i915)->drm, INTEL_DISPLAY_STEP(__i915) == STEP_NONE), \
@@ -1190,6 +1111,10 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 #define IS_MEDIA_STEP(__i915, since, until) \
 	(drm_WARN_ON(&(__i915)->drm, INTEL_MEDIA_STEP(__i915) == STEP_NONE), \
 	 INTEL_MEDIA_STEP(__i915) >= (since) && INTEL_MEDIA_STEP(__i915) < (until))
+
+#define IS_BASEDIE_STEP(__i915, since, until) \
+	(drm_WARN_ON(&(__i915)->drm, INTEL_BASEDIE_STEP(__i915) == STEP_NONE), \
+	 INTEL_BASEDIE_STEP(__i915) >= (since) && INTEL_BASEDIE_STEP(__i915) < (until))
 
 static __always_inline unsigned int
 __platform_mask_index(const struct intel_runtime_info *info,
@@ -1298,17 +1223,29 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_ALDERLAKE_P(dev_priv) IS_PLATFORM(dev_priv, INTEL_ALDERLAKE_P)
 #define IS_XEHPSDV(dev_priv) IS_PLATFORM(dev_priv, INTEL_XEHPSDV)
 #define IS_DG2(dev_priv)	IS_PLATFORM(dev_priv, INTEL_DG2)
+#define IS_PONTEVECCHIO(dev_priv) IS_PLATFORM(dev_priv, INTEL_PONTEVECCHIO)
+
 #define IS_DG2_G10(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G10)
 #define IS_DG2_G11(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G11)
 #define IS_DG2_G12(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G12)
+/*
+ * FIXME: Need to define a new SUBPLATFORM INTEL_SUBPLATFORM_DG2_MBD
+ * for PCI id range 5690..5695, but G10, G11 SUBPLATFROM conflicts
+ * with those pci id range.
+ */
+#define DG2_MBD_CONFIG_MASK	GENMASK(7, 4)
+#define DG2_MBD_CONFIG_VAL	FIELD_PREP(DG2_MBD_CONFIG_MASK, 9)
+#define IS_DG2_MBD(dev_priv) (IS_DG2(dev_priv) && \
+			      (INTEL_DEVID(dev_priv) & DG2_MBD_CONFIG_MASK) == DG2_MBD_CONFIG_VAL)
 #define IS_ADLS_RPLS(dev_priv) \
-	IS_SUBPLATFORM(dev_priv, INTEL_ALDERLAKE_S, INTEL_SUBPLATFORM_RPL_S)
+	IS_SUBPLATFORM(dev_priv, INTEL_ALDERLAKE_S, INTEL_SUBPLATFORM_RPL)
 #define IS_ADLP_N(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_ALDERLAKE_P, INTEL_SUBPLATFORM_N)
-#define IS_PONTEVECCHIO(dev_priv) IS_PLATFORM(dev_priv, INTEL_PONTEVECCHIO)
+#define IS_ADLP_RPLP(dev_priv) \
+	IS_SUBPLATFORM(dev_priv, INTEL_ALDERLAKE_P, INTEL_SUBPLATFORM_RPL)
 #define IS_HSW_EARLY_SDV(dev_priv) (IS_HASWELL(dev_priv) && \
 				    (INTEL_DEVID(dev_priv) & 0xFF00) == 0x0C00)
 #define IS_BDW_ULT(dev_priv) \
@@ -1440,38 +1377,13 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	(IS_DG2(__i915) && \
 	 IS_DISPLAY_STEP(__i915, since, until))
 
-/**
- * Unlike many of our past platforms, PVC does not use the PCI revision ID as
- * a single monotonically increasing value for new platform releases.  Instead
- * bitfields inside the 8-bit PCI revision ID are used to represent the
- * steppings of the base die and compute tile, which may be mixed and matched
- * to form the final platform:
- *
- *  [5:3] Combination for Base Die(BD) and SRAM
- *  [2:0] Stepping for Compute Chiplet/Compute tile(CT)
- *
- * With this scheme, we can not use a simple (since <= revid < until)
- * check to apply logic to an overall revision ID.  Instead we need to match
- * against the stepping of the specific component that the logic applies to.
- */
-#define IS_SUB_REVID(p, s, e, since, until) \
-	(INTEL_SUB_REVID(p, s, e) >= (since) && INTEL_SUB_REVID(p, s, e) < (until))
+#define IS_PVC_BD_STEP(__i915, since, until) \
+	(IS_PONTEVECCHIO(__i915) && \
+	 IS_BASEDIE_STEP(__i915, since, until))
 
-#define IS_PVC_CT_REVID(gt, since, until) \
-	(CCS_MASK(gt) && \
-	 IS_PONTEVECCHIO((gt)->i915) && \
-	 IS_SUB_REVID((gt)->i915, 0, 2, since, until))
-#define IS_PVC_BD_REVID(p, since, until) \
-	(IS_PONTEVECCHIO(p) && IS_SUB_REVID(p, 3, 5, since, until))
-
-#define PVC_CT_XT_REVID_A0	0x3
-#define PVC_CT_XT_REVID_B0	0x5
-#define PVC_CT_XT_REVID_B1	0x6
-#define PVC_CT_XT_REVID_C0	0x7
-
-#define PVC_BD_REVID_A0		0x0
-#define PVC_BD_REVID_B0		0x3
-#define PVC_BD_REVID_B1		0x4
+#define IS_PVC_CT_STEP(__i915, since, until) \
+	(IS_PONTEVECCHIO(__i915) && \
+	 IS_GRAPHICS_STEP(__i915, since, until))
 
 #define IS_LP(dev_priv)		(INTEL_INFO(dev_priv)->is_lp)
 #define IS_GEN9_LP(dev_priv)	(GRAPHICS_VER(dev_priv) == 9 && IS_LP(dev_priv))
@@ -1636,6 +1548,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_REGION(i915, i) (INTEL_INFO(i915)->memory_regions & (i))
 #define HAS_LMEM(i915) HAS_REGION(i915, REGION_LMEM)
+#define HAS_LMEM_SR(i915) (INTEL_INFO(i915)->has_lmem_sr)
 #define HAS_REMOTE_TILES(dev_priv)   (INTEL_INFO(dev_priv)->has_remote_tiles)
 #define HAS_IAF(dev_priv)   (INTEL_INFO(dev_priv)->has_iaf)
 
@@ -1646,7 +1559,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_FLAT_CCS(dev_priv)   (INTEL_INFO(dev_priv)->has_flat_ccs)
 
 #define HAS_STATELESS_MC(dev_priv) (INTEL_INFO(dev_priv)->has_stateless_mc && \
-				    IS_PVC_BD_REVID(dev_priv, PVC_BD_REVID_B0, STEP_FOREVER) && \
+				    IS_PVC_BD_STEP(dev_priv, STEP_B0, STEP_FOREVER) && \
 				    (dev_priv)->params.enable_stateless_mc)
 
 #define HAS_UM_QUEUES(dev_priv) (INTEL_INFO(dev_priv)->has_um_queues)
@@ -1668,6 +1581,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_GMCH(dev_priv) (INTEL_INFO(dev_priv)->display.has_gmch)
 
 #define HAS_LSPCON(dev_priv) (IS_DISPLAY_VER(dev_priv, 9, 10))
+
+#define HAS_L3_CCS_READ(i915) (INTEL_INFO(i915)->has_l3_ccs_read)
 
 /* DPF == dynamic parity feature */
 #define HAS_L3_DPF(dev_priv) (INTEL_INFO(dev_priv)->has_l3_dpf)
@@ -1693,26 +1608,23 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define INTEL_DISPLAY_ENABLED(dev_priv) \
 	(drm_WARN_ON(&(dev_priv)->drm, !HAS_DISPLAY(dev_priv)), !(dev_priv)->params.disable_display)
 
-#define HAS_D12_PLANE_MINIMIZATION(dev_priv) (IS_ROCKETLAKE(dev_priv) || \
-					      IS_ALDERLAKE_S(dev_priv))
-
-#define HAS_MBUS_JOINING(i915) (IS_ALDERLAKE_P(i915))
-
-#define HAS_PERCTX_PREEMPT_CTRL(i915) \
-	((GRAPHICS_VER(i915) >= 9) &&  GRAPHICS_VER_FULL(i915) < IP_VER(12, 55))
-
-#define HAS_ONE_EU_PER_FUSE_BIT(i915) (INTEL_INFO(i915)->has_one_eu_per_fuse_bit)
-
-#define LACKS_3D_PIPELINE(i915)	(INTEL_INFO(i915)->lacks_3d_pipeline)
-
-#define HAS_MEM_SPARING_SUPPORT(dev_priv) \
-	(INTEL_INFO(dev_priv)->has_mem_sparing)
-
 #define HAS_GUC_DEPRIVILEGE(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_guc_deprivilege)
 
 #define HAS_PERCTX_PREEMPT_CTRL(i915) \
 	((GRAPHICS_VER(i915) >= 9) &&  GRAPHICS_VER_FULL(i915) < IP_VER(12, 55))
+
+#define HAS_D12_PLANE_MINIMIZATION(dev_priv) (IS_ROCKETLAKE(dev_priv) || \
+					      IS_ALDERLAKE_S(dev_priv))
+
+#define HAS_MBUS_JOINING(i915) (IS_ALDERLAKE_P(i915))
+
+#define HAS_3D_PIPELINE(i915)	(INTEL_INFO(i915)->has_3d_pipeline)
+
+#define HAS_ONE_EU_PER_FUSE_BIT(i915) (INTEL_INFO(i915)->has_one_eu_per_fuse_bit)
+
+#define HAS_MEM_SPARING_SUPPORT(dev_priv) \
+	(INTEL_INFO(dev_priv)->has_mem_sparing)
 
 #define HAS_ASID_TLB_INVALIDATION(i915) \
 	(INTEL_INFO(i915)->has_asid_tlb_invalidation)
@@ -1727,6 +1639,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_GT_ERROR_VECTORS(i915) (INTEL_INFO(i915)->has_gt_error_vectors)
 
+#define HAS_MEM_FENCE_SUPPORT(i915) ((i915)->params.enable_mem_fence && IS_PONTEVECCHIO((i915)))
+
 #define HAS_LMTT_LVL2(i915) (INTEL_INFO(i915)->has_lmtt_lvl2)
 
 static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
@@ -1740,7 +1654,7 @@ static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
 
 static inline struct intel_gt *to_root_gt(struct drm_i915_private *i915)
 {
-	return &i915->gt;
+	return &i915->gt0;
 }
 
 static inline struct intel_gt *to_gt(struct drm_i915_private *i915)
@@ -1748,35 +1662,7 @@ static inline struct intel_gt *to_gt(struct drm_i915_private *i915)
 	if (HAS_REMOTE_TILES(i915) && IOV_MODE(i915) == I915_IOV_MODE_SRIOV_VF)
 		return i915->gts[__ffs(to_root_gt(i915)->iov.vf.config.tile_mask)];
 
-	return &i915->gt;
-}
-
-static inline bool run_as_guest(void)
-{
-	return !hypervisor_is_type(X86_HYPER_NATIVE);
-}
-
-static inline bool intel_vtd_active(struct drm_i915_private *i915)
-{
-	if (device_iommu_mapped(i915->drm.dev))
-		return true;
-
-	/* Running as a guest, we assume the host is enforcing VT'd */
-	return run_as_guest();
-}
-
-void
-i915_print_iommu_status(struct drm_i915_private *i915, struct drm_printer *p);
-
-static inline bool intel_scanout_needs_vtd_wa(struct drm_i915_private *dev_priv)
-{
-	return DISPLAY_VER(dev_priv) >= 6 && intel_vtd_active(dev_priv);
-}
-
-static inline bool
-intel_ggtt_update_needs_vtd_wa(struct drm_i915_private *i915)
-{
-	return IS_BROXTON(i915) && intel_vtd_active(i915);
+	return &i915->gt0;
 }
 
 bool __pci_resource_valid(struct pci_dev *pdev, int bar);
@@ -1855,15 +1741,14 @@ i915_gem_object_ggtt_pin(struct drm_i915_gem_object *obj,
 					   size, alignment, flags);
 }
 
-int i915_gem_object_remap(struct drm_i915_gem_object *obj);
-int i915_gem_object_unmap(struct drm_i915_gem_object *obj);
 int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 			   struct i915_gem_ww_ctx *ww,
 			   unsigned long flags);
 #define I915_GEM_OBJECT_UNBIND_ACTIVE BIT(0)
 #define I915_GEM_OBJECT_UNBIND_BARRIER BIT(1)
 #define I915_GEM_OBJECT_UNBIND_TEST BIT(2)
-#define I915_GEM_OBJECT_UNBIND_TRYLOCK BIT(3)
+#define I915_GEM_OBJECT_UNBIND_VM_TRYLOCK BIT(3)
+#define I915_GEM_OBJECT_UNBIND_TRYLOCK BIT(4)
 
 void i915_gem_runtime_suspend(struct drm_i915_private *dev_priv);
 
@@ -1877,20 +1762,6 @@ i915_gem_object_create_user(struct drm_i915_private *i915, u64 size,
 			    unsigned int n_placements);
 
 int __must_check i915_gem_set_global_seqno(struct drm_device *dev, u32 seqno);
-
-static inline u32 i915_reset_count(struct i915_gpu_error *error)
-{
-	return atomic_read(&error->reset_count);
-}
-
-static inline int i915_reset_engine_count(const struct intel_engine_cs *engine)
-{
-	/* the present guc interface doesn't support per engine reset counts */
-	if (intel_engine_uses_guc(engine))
-		return -1;
-
-	return atomic_read(&engine->reset.count);
-}
 
 int __must_check i915_gem_init(struct drm_i915_private *dev_priv);
 void i915_gem_driver_register(struct drm_i915_private *i915);
@@ -1953,11 +1824,6 @@ i915_address_space_lookup(struct drm_i915_file_private *file_priv,
 	return vm;
 }
 
-/* i915_gem_internal.c */
-struct drm_i915_gem_object *
-i915_gem_object_create_internal(struct drm_i915_private *dev_priv,
-				phys_addr_t size);
-
 /* i915_gem_tiling.c */
 static inline bool i915_gem_object_needs_bit17_swizzle(struct drm_i915_gem_object *obj)
 {
@@ -1967,11 +1833,6 @@ static inline bool i915_gem_object_needs_bit17_swizzle(struct drm_i915_gem_objec
 		i915_gem_object_is_tiled(obj);
 }
 
-u32 i915_gem_fence_size(struct drm_i915_private *dev_priv, u32 size,
-			unsigned int tiling, unsigned int stride);
-u32 i915_gem_fence_alignment(struct drm_i915_private *dev_priv, u32 size,
-			     unsigned int tiling, unsigned int stride);
-
 const char *i915_cache_level_str(struct drm_i915_private *i915, int type);
 
 /* intel_device_info.c */
@@ -1979,14 +1840,6 @@ static inline struct intel_device_info *
 mkwrite_device_info(struct drm_i915_private *dev_priv)
 {
 	return (struct intel_device_info *)INTEL_INFO(dev_priv);
-}
-
-static inline int intel_hws_csb_write_index(struct drm_i915_private *i915)
-{
-	if (GRAPHICS_VER(i915) >= 11)
-		return ICL_HWS_CSB_WRITE_INDEX;
-	else
-		return I915_HWS_CSB_WRITE_INDEX;
 }
 
 static inline enum i915_map_type
@@ -1999,6 +1852,25 @@ i915_coherent_map_type(struct drm_i915_private *i915,
 		return I915_MAP_WB;
 	else
 		return I915_MAP_WC;
+}
+
+static inline void
+i915_write_barrier(struct drm_i915_private *i915, bool barrier_to_lmem)
+{
+	/* Ensure all previous writes are flushed out of store buffers */
+	wmb();
+
+	if (barrier_to_lmem) {
+		/*
+		 * We need a MMIO write as barrier to lmem. A following lmem write
+		 * will stall until all previous writes are pushed to lmem.
+		 *
+		 * We don't need to use a local uncore. A mmio write to a root
+		 * tile register also ensures remote tile lmem writes are
+		 * pushed.
+		 */
+		intel_uncore_write_fw(&i915->uncore, SOFTWARE_FLAGS_SPR33, 0);
+	}
 }
 
 __printf(3, 4)

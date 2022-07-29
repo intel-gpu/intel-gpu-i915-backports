@@ -37,6 +37,7 @@
 #include "display/intel_atomic_plane.h"
 #include "display/intel_bw.h"
 #include "display/intel_de.h"
+#include "display/intel_display_trace.h"
 #include "display/intel_display_types.h"
 #include "display/intel_fb.h"
 #include "display/intel_fbc.h"
@@ -50,7 +51,6 @@
 #include "i915_drv.h"
 #include "i915_fixed.h"
 #include "i915_irq.h"
-#include "i915_trace.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
 #include "intel_pm.h"
@@ -5478,6 +5478,25 @@ static void skl_compute_plane_wm(const struct intel_crtc_state *crtc_state,
 	}
 
 	blocks = fixed16_to_u32_round_up(selected_result) + 1;
+	/*
+	 * Lets have blocks at minimum equivalent to plane_blocks_per_line
+	 * as there will be at minimum one line for lines configuration. This
+	 * is a work around for FIFO underruns observed with resolutions like
+	 * 4k 60 Hz in single channel DRAM configurations.
+	 *
+	 * As per the Bspec 49325, if the ddb allocation can hold at least
+	 * one plane_blocks_per_line, we should have selected method2 in
+	 * the above logic. Assuming that modern versions have enough dbuf
+	 * and method2 guarantees blocks equivalent to at least 1 line,
+	 * select the blocks as plane_blocks_per_line.
+	 *
+	 * TODO: Revisit the logic when we have better understanding on DRAM
+	 * channels' impact on the level 0 memory latency and the relevant
+	 * wm calculations.
+	 */
+	if (skl_wm_has_lines(dev_priv, level))
+		blocks = max(blocks,
+			     fixed16_to_u32_round_up(wp->plane_blocks_per_line));
 	lines = div_round_up_fixed16(selected_result,
 				     wp->plane_blocks_per_line);
 
@@ -5826,7 +5845,7 @@ static void skl_write_wm_level(struct drm_i915_private *dev_priv,
 		val |= PLANE_WM_EN;
 	if (level->ignore_lines)
 		val |= PLANE_WM_IGNORE_LINES;
-	val |= level->blocks;
+	val |= REG_FIELD_PREP(PLANE_WM_BLOCKS_MASK, level->blocks);
 	val |= REG_FIELD_PREP(PLANE_WM_LINES_MASK, level->lines);
 
 	intel_de_write_fw(dev_priv, reg, val);
@@ -6468,7 +6487,7 @@ static void skl_wm_level_from_reg_val(u32 val, struct skl_wm_level *level)
 {
 	level->enable = val & PLANE_WM_EN;
 	level->ignore_lines = val & PLANE_WM_IGNORE_LINES;
-	level->blocks = val & PLANE_WM_BLOCKS_MASK;
+	level->blocks = REG_FIELD_GET(PLANE_WM_BLOCKS_MASK, val);
 	level->lines = REG_FIELD_GET(PLANE_WM_LINES_MASK, val);
 }
 
@@ -7473,6 +7492,9 @@ static void adlp_init_clock_gating(struct drm_i915_private *dev_priv)
 
 	/* Wa_22011091694:adlp */
 	intel_de_rmw(dev_priv, GEN9_CLKGATE_DIS_5, 0, DPCE_GATING_DIS);
+
+	/* Bspec/49189 Initialize Sequence */
+	intel_de_rmw(dev_priv, GEN8_CHICKEN_DCPR_1, DDI_CLOCK_REG_ACCESS, 0);
 }
 
 static void dg1_init_clock_gating(struct drm_i915_private *dev_priv)
@@ -7494,10 +7516,9 @@ static void xehpsdv_init_clock_gating(struct drm_i915_private *dev_priv)
 
 static void dg2_init_clock_gating(struct drm_i915_private *i915)
 {
-	/* Wa_22010954014:dg2_g10 */
-	if (IS_DG2_G10(i915))
-		intel_uncore_rmw(&i915->uncore, XEHP_CLOCK_GATE_DIS, 0,
-				 SGSI_SIDECLK_DIS);
+	/* Wa_22010954014:dg2 */
+	intel_uncore_rmw(&i915->uncore, XEHP_CLOCK_GATE_DIS, 0,
+			 SGSI_SIDECLK_DIS);
 
 	/*
 	 * Wa_14010733611:dg2_g10
@@ -7510,12 +7531,12 @@ static void dg2_init_clock_gating(struct drm_i915_private *i915)
 
 static void pvc_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	/* Wa_14012385139:pvc[bd_a0] */
-	if (IS_PVC_BD_REVID(dev_priv, PVC_BD_REVID_A0, PVC_BD_REVID_B0))
+	/* Wa_14012385139:pvc */
+	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0))
 		intel_uncore_rmw(&dev_priv->uncore, XEHP_CLOCK_GATE_DIS, 0, SGR_DIS);
 
-	/* Wa_22010954014:pvc[bd_a0] */
-	if (IS_PVC_BD_REVID(dev_priv, PVC_BD_REVID_A0, PVC_BD_REVID_B0))
+	/* Wa_22010954014:pvc */
+	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0))
 		intel_uncore_rmw(&dev_priv->uncore, XEHP_CLOCK_GATE_DIS, 0, SGSI_SIDECLK_DIS);
 }
 
@@ -8152,6 +8173,49 @@ void intel_pm_setup(struct drm_i915_private *dev_priv)
 {
 	dev_priv->runtime_pm.suspended = false;
 	atomic_set(&dev_priv->runtime_pm.wakeref_count, 0);
+}
+
+void intel_pm_vram_sr_setup(struct drm_i915_private *i915)
+{
+	if (!HAS_LMEM_SR(i915))
+		return;
+
+	mutex_init(&i915->vram_sr.lock);
+
+	i915->vram_sr.supported = intel_uncore_read(&i915->uncore,
+						    VRAM_CAPABILITY) & VRAM_SUPPORTED;
+	if (intel_opregion_vram_sr_required(i915))
+		i915->vram_sr.supported = i915->vram_sr.supported &&
+						intel_opregion_bios_supports_vram_sr(i915);
+}
+
+int intel_pm_vram_sr(struct drm_i915_private *i915, bool enable)
+{
+	int ret = 0;
+
+	if (!HAS_LMEM_SR(i915))
+		return -EOPNOTSUPP;
+
+	mutex_lock(&i915->vram_sr.lock);
+	if (!i915->vram_sr.supported) {
+		drm_dbg(&i915->drm, "VRAM Self Refresh is not supported\n");
+		ret = -EOPNOTSUPP;
+		goto unlock;
+	}
+
+	drm_dbg(&i915->drm, "VRAM Self Refresh supported\n");
+	if (enable)
+		ret = intel_pcode_enable_vram_sr(i915);
+
+	if (ret)
+		goto unlock;
+
+	intel_opregion_vram_sr(i915, enable);
+
+unlock:
+	mutex_unlock(&i915->vram_sr.lock);
+
+	return ret;
 }
 
 static struct intel_global_state *intel_dbuf_duplicate_state(struct intel_global_obj *obj)

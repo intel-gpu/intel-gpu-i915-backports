@@ -18,7 +18,7 @@
 #include "gt/intel_timeline.h"
 
 #include "i915_drv.h"
-#include "i915_globals.h"
+#include "i915_irq.h"
 #include "i915_request.h"
 #include "i915_sysrq.h"
 #include "intel_wakeref.h"
@@ -109,6 +109,7 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
+	intel_wakeref_t wakeref;
 
 	drm_printf(p, "GT%d awake? %s [%d], %llums\n",
 		   gt->info.id,
@@ -118,7 +119,8 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 	if (gt->awake)
 		intel_wakeref_show(&gt->wakeref, p);
 
-	intel_guc_print_info(&gt->uc.guc, p);
+	with_intel_gt_pm_if_awake(gt, wakeref)
+		intel_guc_print_info(&gt->uc.guc, p);
 
 	for_each_engine(engine, gt, id) {
 		if (intel_engine_is_idle(engine))
@@ -156,7 +158,6 @@ static void show_gpu(void *data)
 	show_rpm(i915, &p);
 	show_gts(i915, &p);
 	show_gpu_mem(i915, &p);
-	i915_globals_show(&p);
 }
 
 int i915_register_sysrq(struct drm_i915_private *i915)

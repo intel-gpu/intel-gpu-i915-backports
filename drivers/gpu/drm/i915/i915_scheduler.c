@@ -7,28 +7,13 @@
 #include <linux/mutex.h>
 
 #include "i915_drv.h"
-#include "i915_globals.h"
 #include "i915_request.h"
 #include "i915_scheduler.h"
 
-static struct i915_global_scheduler {
-	struct i915_global base;
-	struct kmem_cache *slab_dependencies;
-	struct kmem_cache *slab_priorities;
-} global;
+static struct kmem_cache *slab_dependencies;
+static struct kmem_cache *slab_priorities;
 
 static DEFINE_SPINLOCK(schedule_lock);
-
-static struct i915_sched_node *node_get(struct i915_sched_node *node)
-{
-	i915_request_get(container_of(node, struct i915_request, sched));
-	return node;
-}
-
-static void node_put(struct i915_sched_node *node)
-{
-	i915_request_put(container_of(node, struct i915_request, sched));
-}
 
 static const struct i915_request *
 node_to_request(const struct i915_sched_node *node)
@@ -104,7 +89,7 @@ find_priolist:
 	if (prio == I915_PRIORITY_NORMAL) {
 		p = &sched_engine->default_priolist;
 	} else {
-		p = kmem_cache_alloc(global.slab_priorities, GFP_ATOMIC);
+		p = kmem_cache_alloc(slab_priorities, GFP_ATOMIC);
 		/* Convert an allocation failure to a priority bump */
 		if (unlikely(!p)) {
 			prio = I915_PRIORITY_NORMAL; /* recurses just once */
@@ -133,7 +118,7 @@ find_priolist:
 
 void __i915_priolist_free(struct i915_priolist *p)
 {
-	kmem_cache_free(global.slab_priorities, p);
+	kmem_cache_free(slab_priorities, p);
 }
 
 struct sched_cache {
@@ -310,8 +295,6 @@ void i915_schedule(struct i915_request *rq, const struct i915_sched_attr *attr)
 
 void i915_sched_node_init(struct i915_sched_node *node)
 {
-	spin_lock_init(&node->lock);
-
 	INIT_LIST_HEAD(&node->signalers_list);
 	INIT_LIST_HEAD(&node->waiters_list);
 	INIT_LIST_HEAD(&node->link);
@@ -333,20 +316,13 @@ void i915_sched_node_reinit(struct i915_sched_node *node)
 static struct i915_dependency *
 i915_dependency_alloc(void)
 {
-	return kmem_cache_alloc(global.slab_dependencies, GFP_KERNEL);
-}
-
-static void
-rcu_dependency_free(struct rcu_head *rcu)
-{
-	kmem_cache_free(global.slab_dependencies,
-			container_of(rcu, typeof(struct i915_dependency), rcu));
+	return kmem_cache_alloc(slab_dependencies, GFP_KERNEL);
 }
 
 static void
 i915_dependency_free(struct i915_dependency *dep)
 {
-	call_rcu(&dep->rcu, rcu_dependency_free);
+	kmem_cache_free(slab_dependencies, dep);
 }
 
 bool __i915_sched_node_add_dependency(struct i915_sched_node *node,
@@ -356,27 +332,24 @@ bool __i915_sched_node_add_dependency(struct i915_sched_node *node,
 {
 	bool ret = false;
 
-	/* The signal->lock is always the outer lock in this double-lock. */
-	spin_lock(&signal->lock);
+	spin_lock_irq(&schedule_lock);
 
 	if (!node_signaled(signal)) {
 		INIT_LIST_HEAD(&dep->dfs_link);
 		dep->signaler = signal;
-		dep->waiter = node_get(node);
+		dep->waiter = node;
 		dep->flags = flags;
 
 		/* All set, now publish. Beware the lockless walkers. */
-		spin_lock_nested(&node->lock, SINGLE_DEPTH_NESTING);
 		list_add_rcu(&dep->signal_link, &node->signalers_list);
 		list_add_rcu(&dep->wait_link, &signal->waiters_list);
-		spin_unlock(&node->lock);
 
 		/* Propagate the chains */
 		node->flags |= signal->flags;
 		ret = true;
 	}
 
-	spin_unlock(&signal->lock);
+	spin_unlock_irq(&schedule_lock);
 
 	return ret;
 }
@@ -398,41 +371,39 @@ int i915_sched_node_add_dependency(struct i915_sched_node *node,
 	return 0;
 }
 
-void i915_sched_node_retire(struct i915_sched_node *node)
+void i915_sched_node_fini(struct i915_sched_node *node)
 {
 	struct i915_dependency *dep, *tmp;
-	LIST_HEAD(waiters);
+
+	spin_lock_irq(&schedule_lock);
 
 	/*
 	 * Everyone we depended upon (the fences we wait to be signaled)
 	 * should retire before us and remove themselves from our list.
 	 * However, retirement is run independently on each timeline and
-	 * so we may be called out-of-order. As we need to avoid taking
-	 * the signaler's lock, just mark up our completion and be wary
-	 * in traversing the signalers->waiters_list.
+	 * so we may be called out-of-order.
 	 */
+	list_for_each_entry_safe(dep, tmp, &node->signalers_list, signal_link) {
+		GEM_BUG_ON(!list_empty(&dep->dfs_link));
 
-	/* Remove ourselves from everyone who depends upon us */
-	spin_lock(&node->lock);
-	if (!list_empty(&node->waiters_list)) {
-		list_replace_rcu(&node->waiters_list, &waiters);
-		INIT_LIST_HEAD_RCU(&node->waiters_list);
-	}
-	spin_unlock(&node->lock);
-
-	list_for_each_entry_safe(dep, tmp, &waiters, wait_link) {
-		struct i915_sched_node *w = dep->waiter;
-
-		GEM_BUG_ON(dep->signaler != node);
-
-		spin_lock(&w->lock);
-		list_del_rcu(&dep->signal_link);
-		spin_unlock(&w->lock);
-		node_put(w);
-
+		list_del_rcu(&dep->wait_link);
 		if (dep->flags & I915_DEPENDENCY_ALLOC)
 			i915_dependency_free(dep);
 	}
+	INIT_LIST_HEAD(&node->signalers_list);
+
+	/* Remove ourselves from everyone who depends upon us */
+	list_for_each_entry_safe(dep, tmp, &node->waiters_list, wait_link) {
+		GEM_BUG_ON(dep->signaler != node);
+		GEM_BUG_ON(!list_empty(&dep->dfs_link));
+
+		list_del_rcu(&dep->signal_link);
+		if (dep->flags & I915_DEPENDENCY_ALLOC)
+			i915_dependency_free(dep);
+	}
+	INIT_LIST_HEAD(&node->waiters_list);
+
+	spin_unlock_irq(&schedule_lock);
 }
 
 void i915_request_show_with_schedule(struct drm_printer *m,
@@ -515,45 +486,27 @@ i915_sched_engine_create(unsigned int subclass)
 	return sched_engine;
 }
 
-static void i915_global_scheduler_show(struct drm_printer *p)
+void i915_scheduler_module_exit(void)
 {
-	i915_globals_show_slab(global.slab_dependencies, "i915_dependency", p);
-	i915_globals_show_slab(global.slab_priorities, "i915_priolist", p);
+	kmem_cache_destroy(slab_dependencies);
+	kmem_cache_destroy(slab_priorities);
 }
 
-static void i915_global_scheduler_shrink(void)
+int __init i915_scheduler_module_init(void)
 {
-	kmem_cache_shrink(global.slab_dependencies);
-	kmem_cache_shrink(global.slab_priorities);
-}
-
-static void i915_global_scheduler_exit(void)
-{
-	kmem_cache_destroy(global.slab_dependencies);
-	kmem_cache_destroy(global.slab_priorities);
-}
-
-static struct i915_global_scheduler global = { {
-	.show = i915_global_scheduler_show,
-	.shrink = i915_global_scheduler_shrink,
-	.exit = i915_global_scheduler_exit,
-} };
-
-int __init i915_global_scheduler_init(void)
-{
-	global.slab_dependencies = KMEM_CACHE(i915_dependency,
-					      SLAB_HWCACHE_ALIGN);
-	if (!global.slab_dependencies)
+	slab_dependencies = KMEM_CACHE(i915_dependency,
+					      SLAB_HWCACHE_ALIGN |
+					      SLAB_TYPESAFE_BY_RCU);
+	if (!slab_dependencies)
 		return -ENOMEM;
 
-	global.slab_priorities = KMEM_CACHE(i915_priolist, 0);
-	if (!global.slab_priorities)
+	slab_priorities = KMEM_CACHE(i915_priolist, 0);
+	if (!slab_priorities)
 		goto err_priorities;
 
-	i915_global_register(&global.base);
 	return 0;
 
 err_priorities:
-	kmem_cache_destroy(global.slab_priorities);
+	kmem_cache_destroy(slab_priorities);
 	return -ENOMEM;
 }

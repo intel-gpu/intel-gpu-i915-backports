@@ -368,9 +368,7 @@ static void i915_gem_dmabuf_detach(struct dma_buf *dmabuf,
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
-	i915_gem_object_lock(obj, NULL);
 	i915_gem_object_unpin_pages(obj);
-	i915_gem_object_unlock(obj);
 	pvc_wa_allow_rc6(i915);
 }
 

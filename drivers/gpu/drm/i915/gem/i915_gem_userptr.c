@@ -435,7 +435,6 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		ret = i915_gem_object_lock_interruptible(obj, &ww);
 		if (ret)
 			continue;
-
 		/*
 		 * If pages are stale, make sure userptr is unbound for
 		 * next attempt.
@@ -444,6 +443,7 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		    !obj->userptr.pvec)
 			ret = i915_gem_object_userptr_unbind(obj, &ww);
 	}
+
 	if (ret)
 		return ret;
 
@@ -730,3 +730,15 @@ int i915_gem_init_userptr(struct drm_i915_private *dev_priv)
 void i915_gem_cleanup_userptr(struct drm_i915_private *dev_priv)
 {
 }
+
+#ifdef CONFIG_MMU_NOTIFIER
+void i915_gem_userptr_lock_mmu_notifier(struct drm_i915_private *i915)
+{
+	write_lock(&i915->mm.notifier_lock);
+}
+
+void i915_gem_userptr_unlock_mmu_notifier(struct drm_i915_private *i915)
+{
+	write_unlock(&i915->mm.notifier_lock);
+}
+#endif

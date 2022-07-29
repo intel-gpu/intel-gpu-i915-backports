@@ -12,6 +12,23 @@
 #include "i915_sysfs.h"
 #include "intel_sysfs_mem_health.h"
 
+#include "gt/intel_gt.h"
+#include "gt/intel_gt_requests.h"
+
+static ssize_t
+i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
+
+typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char
+			*buf);
+typedef ssize_t (*store)(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count);
+
+struct i915_ext_attr {
+	struct device_attribute attr;
+	show i915_show;
+	store i915_store;
+};
+
 static const char *
 memory_error_to_str(const struct intel_mem_sparing_event *mem)
 {
@@ -30,6 +47,10 @@ memory_error_to_str(const struct intel_mem_sparing_event *mem)
 	}
 }
 
+#define I915_DEVICE_ATTR_RO(_name, _show) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show, NULL}
+
 static ssize_t
 device_memory_health_show(struct device *kdev, struct device_attribute *attr,
 			  char *buf)
@@ -41,43 +62,27 @@ device_memory_health_show(struct device *kdev, struct device_attribute *attr,
 	return sysfs_emit(buf, "%s\n", mem_status);
 }
 
-static const DEVICE_ATTR_RO(device_memory_health);
+static I915_DEVICE_ATTR_RO(device_memory_health, device_memory_health_show);
 
 static const struct attribute *mem_health_attrs[] = {
-	&dev_attr_device_memory_health.attr,
+	&dev_attr_device_memory_health.attr.attr,
 	NULL
 };
 
 static ssize_t
-addr_range_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct intel_gt *gt = kobj_to_gt(kobj);
+	ssize_t value;
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
 
-	return sysfs_emit(buf, "%pa\n", &gt->lmem->actual_physical_mem);
-}
+	pvc_wa_disallow_rc6(i915);
 
-#define INTEL_KOBJ_ATTR(_name, __mode, __show, __store) \
-	struct kobj_attribute dev_attr_##_name =   \
-	__ATTR(_name, __mode, __show, __store)
+	value = ea->i915_show(dev, attr, buf);
 
-#define INTEL_KOBJ_ATTR_RO(_name) \
-	INTEL_KOBJ_ATTR(_name, 0444, _name##_show, NULL)
+	pvc_wa_allow_rc6(i915);
 
-static INTEL_KOBJ_ATTR_RO(addr_range);
-
-static const struct attribute *addr_range_attrs[] = {
-	/* TODO: Report any other HBM Sparing sysfs per gt? */
-	&dev_attr_addr_range.attr,
-	NULL
-};
-
-void intel_gt_sysfs_register_mem(struct intel_gt *gt, struct kobject *parent)
-{
-	if (!HAS_MEM_SPARING_SUPPORT(gt->i915))
-		return;
-
-	if (sysfs_create_files(parent, addr_range_attrs))
-		drm_err(&gt->i915->drm, "Setting up sysfs to read total physical memory per tile failed\n");
+	return value;
 }
 
 void intel_mem_health_report_sysfs(struct drm_i915_private *i915)
