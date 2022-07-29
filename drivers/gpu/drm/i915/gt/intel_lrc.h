@@ -11,12 +11,14 @@
 #include <linux/bitfield.h>
 #include <linux/types.h>
 
-#include "intel_context.h"
-#include "intel_lrc_reg.h"
+#include "gt/intel_context.h"
 
 struct drm_i915_gem_object;
+struct i915_gem_ww_ctx;
+struct intel_context;
 struct intel_engine_cs;
 struct intel_ring;
+struct kref;
 
 /* At the start of the context image is its per-process HWS page */
 #define LRC_PPHWSP_PN	(0)
@@ -71,16 +73,6 @@ void lrc_check_regs(const struct intel_context *ce,
 		    const char *when);
 
 void lrc_update_runtime(struct intel_context *ce);
-static inline u32 lrc_get_runtime(const struct intel_context *ce)
-{
-	/*
-	 * We can use either ppHWSP[16] which is recorded before the context
-	 * switch (and so excludes the cost of context switches) or use the
-	 * value from the context image itself, which is saved/restored earlier
-	 * and so includes the cost of the save.
-	 */
-	return READ_ONCE(ce->lrc_reg_state[CTX_TIMESTAMP]);
-}
 
 static inline void lrc_runtime_start(struct intel_context *ce)
 {
@@ -149,14 +141,9 @@ enum {
 #define GEN12_GUC_SW_CTX_ID_SHIFT		39
 #define GEN12_GUC_SW_CTX_ID_WIDTH		16
 
-static inline u32 lrc_desc_priority(int prio)
-{
-	if (prio > I915_PRIORITY_NORMAL)
-		return GEN12_CTX_PRIORITY_HIGH;
-	else if (prio < I915_PRIORITY_NORMAL)
-		return GEN12_CTX_PRIORITY_LOW;
-	else
-		return GEN12_CTX_PRIORITY_NORMAL;
-}
+#define DG2_PREDICATE_RESULT_WA (PAGE_SIZE - sizeof(u64))
+#define DG2_PREDICATE_RESULT_BB (2048)
+
+u32 lrc_indirect_bb(const struct intel_context *ce);
 
 #endif /* __INTEL_LRC_H__ */

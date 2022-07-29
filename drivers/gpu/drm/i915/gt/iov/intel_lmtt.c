@@ -415,67 +415,62 @@ void intel_lmtt_fini(struct intel_lmtt *lmtt)
 	lmtt_pd_fini(lmtt);
 }
 
-/**
- * intel_lmtt_create_entries - Create LMTT entries.
- * @lmtt: the LMTT struct
- * @num_vfs: number of VFs
- *
- * This function fills LMTT entries for given number of VFs.
- * This function shall be called only on PF.
- *
- * Return: 0 on success or a negative error code on failure.
- */
-int intel_lmtt_create_entries(struct intel_lmtt *lmtt, unsigned int num_vfs)
+static int lmtt_create_entries(struct intel_lmtt *lmtt, unsigned int vf)
 {
 	struct intel_gt *gt = lmtt_to_gt(lmtt);
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_runtime_pm *rpm = &i915->runtime_pm;
 	intel_wakeref_t wakeref;
-	unsigned int i;
 	int err;
-
-	GEM_BUG_ON(!IS_SRIOV_PF(i915));
-	GEM_BUG_ON(!HAS_LMEM(i915));
 
 	wakeref = intel_runtime_pm_get(rpm);
 
-	for (i = 1; i <= num_vfs; i++) {
-		err = lmtt_alloc_range(lmtt, i,
-				       __lmtt_offset(lmtt, i),
-				       __lmtt_size(lmtt, i));
-		if (err)
-			goto unwind;
+	err = lmtt_alloc_range(lmtt, vf, __lmtt_offset(lmtt, vf), __lmtt_size(lmtt, vf));
+	if (err)
+		goto err;
 
-		err = lmtt_insert_entries(lmtt, i, __lmtt_offset(lmtt, i));
-		if (err)
-			goto unwind;
-	}
+	err = lmtt_insert_entries(lmtt, vf, __lmtt_offset(lmtt, vf));
+	if (err)
+		goto err;
 
 	intel_runtime_pm_put(rpm, wakeref);
 	return 0;
 
-unwind:
-	while (i--)
-		lmtt_clear(lmtt, i);
+err:
+	lmtt_clear(lmtt, vf);
 
 	intel_runtime_pm_put(rpm, wakeref);
 	return err;
 }
 
-/**
- * intel_lmtt_destroy_entries - Removed LMTT entries.
- * @lmtt: the LMTT struct
- * @num_vfs: number of VFs
- *
- * This function shall be called only on PF.
- */
-void intel_lmtt_destroy_entries(struct intel_lmtt *lmtt, unsigned int num_vfs)
+static void lmtt_destroy_entries(struct intel_lmtt *lmtt, unsigned int vf)
 {
-	unsigned int i;
+	lmtt_clear(lmtt, vf);
+}
+
+/**
+ * intel_lmtt_update_entries - Create LMTT entries.
+ * @lmtt: the LMTT struct
+ * @vf: VF id
+ *
+ * This function updates LMTT entries for a given VF.
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int intel_lmtt_update_entries(struct intel_lmtt *lmtt, unsigned int vf)
+{
+	int ret = 0;
 
 	GEM_BUG_ON(!IS_SRIOV_PF(lmtt_to_gt(lmtt)->i915));
 	GEM_BUG_ON(!HAS_LMEM(lmtt_to_gt(lmtt)->i915));
 
-	for (i = 1; i <= num_vfs; i++)
-		lmtt_clear(lmtt, i);
+	if (!lmtt->pd)
+		return 0;
+
+	lmtt_destroy_entries(lmtt, vf);
+	if (__lmtt_size(lmtt, vf) != 0)
+		ret = lmtt_create_entries(lmtt, vf);
+
+	return ret;
 }

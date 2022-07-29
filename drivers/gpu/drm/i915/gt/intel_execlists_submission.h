@@ -32,4 +32,8 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 							int indent),
 				   unsigned int max);
 
+struct intel_context *
+intel_execlists_create_virtual(struct intel_engine_cs **siblings,
+			       unsigned int count);
+
 #endif /* __INTEL_EXECLISTS_SUBMISSION_H__ */

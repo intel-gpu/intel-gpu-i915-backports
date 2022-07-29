@@ -138,6 +138,9 @@ long intel_gt_retire_requests_timeout(struct intel_gt *gt, long timeout,
 	unsigned long active_count = 0;
 	LIST_HEAD(free);
 
+	if (gt->i915->quiesce_gpu)
+		return 0;
+
 	flush_submission(gt, timeout); /* kick the ksoftirqd tasklets */
 	spin_lock(&timelines->lock);
 	list_for_each_entry_safe(tl, tn, &timelines->active_list, link) {

@@ -50,10 +50,10 @@ do
 	esac
 done
 
-if [ "$REL_TYPE" == "prerelease" ]; then
-	DEP_PKG_NAME="intel-dmabuf-dkms-prerelease"
-else
+if [ "$REL_TYPE" == "opensource" ]; then
 	DEP_PKG_NAME="intel-dmabuf-dkms"
+else
+	DEP_PKG_NAME="intel-dmabuf-dkms-$REL_TYPE"
 fi
 
 # We can label the here-doc lines for conditional output to the conf file

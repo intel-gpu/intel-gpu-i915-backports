@@ -6,10 +6,28 @@
 #include <linux/interval_tree_generic.h>
 #include <linux/sched/mm.h>
 
+#include "gem/i915_gem_userptr.h"
 #include "gem/i915_gem_vm_bind.h"
 #include "gt/gen8_engine_cs.h"
 #include "i915_debugger.h"
+#include "i915_driver.h"
 #include "i915_user_extensions.h"
+
+/**
+ * struct vm_bind_user_ext_arg - Temporary storage for extension data
+ * @vm: Pre-set pointer to the vm used for the current operation.
+ * @obj: Pre-set pointer to the underlying object.
+ * @bind_fence: User-fence or sync_fence extension data.
+ * @metadata_list: List of metadata items to be attached to the vma.
+ * @has_bind_fence: User-fence or sync fence extension was present.
+ */
+struct vm_bind_user_ext_arg {
+	struct i915_address_space *vm;
+	struct drm_i915_gem_object *obj;
+	struct vm_bind_user_fence bind_fence;
+	struct list_head metadata_list;
+	bool has_bind_fence;
+};
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 
@@ -99,15 +117,15 @@ static int vm_bind_sync_fence(struct i915_user_extension __user *base,
 			      void *data)
 {
 	struct prelim_drm_i915_vm_bind_ext_sync_fence ext;
-	struct i915_vma *vma = data;
+	struct vm_bind_user_ext_arg *arg = data;
 
 	if (copy_from_user(&ext, base, sizeof(ext)))
 		return -EFAULT;
 
-	vma->bind_fence.ptr = u64_to_user_ptr(ext.addr);
-	vma->bind_fence.val = ext.val;
-	vma->bind_fence.mm = current->mm;
-	mmgrab(current->mm);
+	arg->bind_fence.ptr = u64_to_user_ptr(ext.addr);
+	arg->bind_fence.val = ext.val;
+	arg->bind_fence.mm = current->mm;
+	arg->has_bind_fence = true;
 
 	return 0;
 }
@@ -116,37 +134,36 @@ static int vm_bind_user_fence(struct i915_user_extension __user *base,
 			      void *data)
 {
 	struct prelim_drm_i915_vm_bind_ext_user_fence ext;
-	struct i915_vma *vma = data;
+	struct vm_bind_user_ext_arg *arg = data;
 
 	if (copy_from_user(&ext, base, sizeof(ext)))
 		return -EFAULT;
 
-	vma->bind_fence.ptr = u64_to_user_ptr(ext.addr);
-	vma->bind_fence.val = ext.val;
-	vma->bind_fence.mm = current->mm;
-	mmgrab(current->mm);
+	arg->bind_fence.ptr = u64_to_user_ptr(ext.addr);
+	arg->bind_fence.val = ext.val;
+	arg->bind_fence.mm = current->mm;
+	arg->has_bind_fence = true;
 
 	return 0;
 }
 
-static int
-gem_vm_bind_ext_uuid(struct i915_user_extension __user *base,
-		     void *data)
+static int vm_bind_ext_uuid(struct i915_user_extension __user *base,
+			    void *data)
 {
 	struct prelim_drm_i915_vm_bind_ext_uuid __user *ext =
 		container_of_user(base, typeof(*ext), base);
-	struct i915_vma *vma = data;
-	struct i915_drm_client *client = vma->vm->client;
+	struct vm_bind_user_ext_arg *arg = data;
+	struct i915_drm_client *client = arg->vm->client;
 	struct i915_vma_metadata *metadata;
 	struct i915_uuid_resource *uuid;
 	u32 handle;
 
+	if (get_user(handle, &ext->uuid_handle))
+		return -EFAULT;
+
 	metadata  = kzalloc(sizeof(*metadata), GFP_KERNEL);
 	if (!metadata)
 		return -ENOMEM;
-
-	if (get_user(handle, &ext->uuid_handle))
-		return -EFAULT;
 
 	xa_lock(&client->uuids_xa);
 	uuid = xa_load(&client->uuids_xa, handle);
@@ -160,20 +177,23 @@ gem_vm_bind_ext_uuid(struct i915_user_extension __user *base,
 	atomic_inc(&uuid->bind_count);
 	xa_unlock(&client->uuids_xa);
 
-	spin_lock(&vma->metadata_lock);
-	list_add_tail(&metadata->vma_link, &vma->metadata_list);
-	spin_unlock(&vma->metadata_lock);
+	list_add_tail(&metadata->vma_link, &arg->metadata_list);
 	return 0;
 }
 
 static int vm_bind_set_pat(struct i915_user_extension __user *base,
-                              void *data)
+			   void *data)
 {
 	struct prelim_drm_i915_vm_bind_ext_set_pat ext;
-	struct i915_vma *vma = data;
+	struct vm_bind_user_ext_arg *arg = data;
 
 	if (copy_from_user(&ext, base, sizeof(ext)))
 		return -EFAULT;
+
+	/*
+	 * FIXME: Object should be locked here. And if the ioctl fails,
+	 * we probably should revert the change made here.
+	 */
 
 	/*
 	 * Convert pat index to cache type
@@ -186,48 +206,51 @@ static int vm_bind_set_pat(struct i915_user_extension __user *base,
 	 */
 	switch (ext.pat_index){
 		case 0:
-			vma->obj->cache_level = I915_CACHE_NONE;
+			arg->obj->cache_level = I915_CACHE_NONE;
 			break;
 		case 1:
-			vma->obj->cache_level = I915_CACHE_L3_LLC; /*TBD: WC type*/
+			arg->obj->cache_level = I915_CACHE_L3_LLC; /*TBD: WC type*/
 			break;
 		case 2:
-			vma->obj->cache_level = I915_CACHE_WT;
+			arg->obj->cache_level = I915_CACHE_WT;
 			break;
 		case 3:
-			vma->obj->cache_level = I915_CACHE_L3_LLC; /* WB */
+			arg->obj->cache_level = I915_CACHE_L3_LLC; /* WB */
 			break;
 		default:
-			vma->obj->cache_level = ext.pat_index;
+			arg->obj->cache_level = ext.pat_index;
 			break;
 	}
 	DRM_DEBUG("vm_bind_set_pat: pat_index = %lld cache = %d \n",
-			ext.pat_index,  vma->obj->cache_level);
+			ext.pat_index,  arg->obj->cache_level);
 	return 0;
 }
 
 static const i915_user_extension_fn vm_bind_extensions[] = {
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_VM_BIND_EXT_SYNC_FENCE)] = vm_bind_sync_fence,
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_VM_BIND_EXT_USER_FENCE)] = vm_bind_user_fence,
-	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_VM_BIND_EXT_UUID)] = gem_vm_bind_ext_uuid,
+	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_VM_BIND_EXT_UUID)] = vm_bind_ext_uuid,
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_VM_BIND_EXT_SET_PAT)] = vm_bind_set_pat,
 };
 
-void i915_vma_metadata_free(struct i915_vma *vma)
-{
-	struct list_head *list = &vma->metadata_list;
+static void metadata_list_free(struct list_head *list) {
 	struct i915_vma_metadata *metadata, *next;
 
-	if (!vma || list_empty(&vma->metadata_list))
-		return;
-
-	spin_lock(&vma->metadata_lock);
 	list_for_each_entry_safe(metadata, next, list, vma_link) {
 		list_del_init(&metadata->vma_link);
 		atomic_dec(&metadata->uuid->bind_count);
 		i915_uuid_put(metadata->uuid);
 		kfree(metadata);
 	}
+}
+
+void i915_vma_metadata_free(struct i915_vma *vma)
+{
+	if (!vma || list_empty(&vma->metadata_list))
+		return;
+
+	spin_lock(&vma->metadata_lock);
+	metadata_list_free(&vma->metadata_list);
 	INIT_LIST_HEAD(&vma->metadata_list);
 	spin_unlock(&vma->metadata_lock);
 }
@@ -249,6 +272,8 @@ i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va)
 void i915_gem_vm_bind_remove(struct i915_vma *vma, bool release_obj)
 {
 	assert_vm_bind_held(vma->vm);
+
+	i915_debugger_revoke_ptes(vma);
 
 	spin_lock(&vma->vm->vm_capture_lock);
 	if (!list_empty(&vma->vm_capture_link))
@@ -315,10 +340,10 @@ static void i915_gem_vm_unbind_vma(struct i915_vma *vma, bool enqueue,
 
 	assert_vm_bind_held(vm);
 
-	i915_gem_vm_bind_remove(vma, false);
-
 	if (debug_destroy)
 		i915_debugger_vm_bind_destroy(vm->client, vma);
+
+	i915_gem_vm_bind_remove(vma, false);
 
 	if (llist_add(&vma->freed, &vm->vm_bind_free_list) && enqueue)
 		queue_work(vm->i915->vm_bind_wq, &vm->vm_bind_free_work);
@@ -436,6 +461,10 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 			 struct prelim_drm_i915_gem_vm_bind *va,
 			 struct drm_file *file)
 {
+	struct vm_bind_user_ext_arg ext_arg = {
+		.vm = vm,
+		.metadata_list = LIST_HEAD_INIT(ext_arg.metadata_list),
+	};
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma = NULL;
 	struct i915_gem_ww_ctx ww;
@@ -466,6 +495,14 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 			goto put_obj;
 	}
 
+	ext_arg.obj = obj;
+	ret = i915_user_extensions(u64_to_user_ptr(va->extensions),
+				   vm_bind_extensions,
+				   ARRAY_SIZE(vm_bind_extensions),
+				   &ext_arg);
+	if (ret)
+		goto put_obj;
+
 	ret = i915_gem_vm_bind_lock_interruptible(vm);
 	if (ret)
 		goto put_obj;
@@ -477,12 +514,16 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		goto unlock_vm;
 	}
 
-	ret = i915_user_extensions(u64_to_user_ptr(va->extensions),
-				   vm_bind_extensions,
-				   ARRAY_SIZE(vm_bind_extensions),
-				   vma);
-	if (ret)
-		goto put_vma;
+	if (ext_arg.has_bind_fence) {
+		vma->bind_fence = ext_arg.bind_fence;
+		mmgrab(current->mm);
+	}
+
+	if (!list_empty(&ext_arg.metadata_list)) {
+		spin_lock(&vma->metadata_lock);
+		list_splice_tail_init(&ext_arg.metadata_list, &vma->metadata_list);
+		spin_unlock(&vma->metadata_lock);
+	}
 
 	i915_gem_ww_ctx_init(&ww, true);
 	set_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags);
@@ -519,9 +560,9 @@ retry:
 		}
 
 		if (i915_gem_object_is_userptr(obj)) {
-			read_lock(&vm->i915->mm.notifier_lock);
+			i915_gem_userptr_lock_mmu_notifier(vm->i915);
 			ret = i915_gem_object_userptr_submit_done(obj);
-			read_unlock(&vm->i915->mm.notifier_lock);
+			i915_gem_userptr_unlock_mmu_notifier(vm->i915);
 			if (ret)
 				goto out_ww;
 		}
@@ -557,16 +598,12 @@ out_ww:
 			goto retry;
 	}
 	i915_gem_ww_ctx_fini(&ww);
-
 	if (ret && vma->bind_fence.mm) {
 		mmdrop(vma->bind_fence.mm);
 		vma->bind_fence.mm = NULL;
 	}
-put_vma:
 	if (ret)
 		i915_vma_metadata_free(vma);
-	else
-		i915_debugger_vm_bind_create(vm->client, vma, va);
 unlock_vm:
 	i915_gem_vm_bind_unlock(vm);
 	if (ret && vma) {
@@ -574,7 +611,13 @@ unlock_vm:
 		i915_vma_set_purged(vma);
 		__i915_vma_put(vma);
 	}
+
+	if (!ret)
+		i915_debugger_vm_bind_create(vm->client, vma, va);
+
 put_obj:
 	i915_gem_object_put(obj);
+	metadata_list_free(&ext_arg.metadata_list);
+
 	return ret;
 }

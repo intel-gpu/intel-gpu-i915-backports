@@ -3,12 +3,12 @@
  * Copyright(c) 2021, Intel Corporation. All rights reserved.
  */
 
-#include "drm/i915_drm.h"
-#include "i915_drv.h"
+#include <drm/i915_drm.h>
 
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
 
+#include "i915_drv.h"
 #include "intel_pxp.h"
 #include "intel_pxp_huc.h"
 #include "intel_pxp_tee.h"

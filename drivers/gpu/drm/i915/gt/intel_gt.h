@@ -117,14 +117,19 @@ void intel_gt_tiles_cleanup(struct drm_i915_private *i915);
 
 #define for_each_gt(i915__, id__, gt__) \
 	for ((id__) = 0; \
-	     (id__) < I915_MAX_TILES; \
+	     (id__) < I915_MAX_GT; \
 	     (id__)++) \
 		for_each_if (((gt__) = (i915__)->gts[(id__)]))
 
-/*
- *  Wa_16015476723 & Wa_16015666671 Hold forcewake on GT0 & GT1
- *  to disallow rc6
- */
+static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
+{
+	if (!i915->params.enable_rc6)
+		return false;
+
+	return (IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER) && i915->remote_tiles > 0);
+}
+
+/* Wa_16015496043 Hold forcewake on GT0 & GT1 to disallow rc6 */
 static inline void _pvc_wa_disallow_rc6(struct drm_i915_private *i915, bool enable, bool rpm_awake)
 {
 	unsigned int id;
@@ -133,36 +138,19 @@ static inline void _pvc_wa_disallow_rc6(struct drm_i915_private *i915, bool enab
 	void (*intel_uncore_forcewake)(struct intel_uncore *uncore,
 				       enum forcewake_domains fw_domains);
 
-	if (!i915->params.enable_rc6)
+	if (!pvc_needs_rc6_wa(i915))
 		return;
 
-	if (!i915->params.rc6_ignore_steppings)
-		return;
-
-	/*
-	 * GUC RC disallow override is sufficient to disallow rc6, But
-	 * forcewake needs to be held till last active client disallows
-	 * rc6, else rc6 will be allowed at intermediate level
-	 */
-	if (IS_PVC_BD_REVID(i915, PVC_BD_REVID_B0, STEP_FOREVER) && i915->remote_tiles > 0) {
-		intel_uncore_forcewake = enable ? intel_uncore_forcewake_get :
+	intel_uncore_forcewake = enable ? intel_uncore_forcewake_get :
 						intel_uncore_forcewake_put;
 
-		for_each_gt(i915, id, gt) {
-			/* FIXME Remove static check and add dynamic check to avoid rpm helper */
-			if (!rpm_awake) {
-				/*
-				 * Notify GuC to drop frequency to RPe when idle
-				 * through GUC RC Disallow override event
-				 */
-				with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-					intel_guc_slpc_gucrc_disallow(gt, enable);
-					intel_uncore_forcewake(gt->uncore, FORCEWAKE_ALL);
-				}
-			} else {
-				intel_guc_slpc_gucrc_disallow(gt, enable);
+	for_each_gt(i915, id, gt) {
+		/* FIXME Remove static check and add dynamic check to avoid rpm helper */
+		if (!rpm_awake) {
+			with_intel_runtime_pm(gt->uncore->rpm, wakeref)
 				intel_uncore_forcewake(gt->uncore, FORCEWAKE_ALL);
-			}
+		} else {
+			intel_uncore_forcewake(gt->uncore, FORCEWAKE_ALL);
 		}
 	}
 }

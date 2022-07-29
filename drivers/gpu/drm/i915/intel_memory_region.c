@@ -242,18 +242,29 @@ static int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct list_head still_in_list;
 	struct drm_i915_gem_object *obj;
 	struct list_head *phases[] = {
+		/*
+		 * Purgeable objects are deemed to be free by userspace
+		 * and exist purely as a means to cache pages. They are
+		 * a resource that we can reallocate from as userspace
+		 * must revalidate the purgeable object prior to use,
+		 * and be prepared to recover if the content was lost.
+		 *
+		 * It is always preferrable to reuse the purgeable objects
+		 * as we we can immediately reallocate their pages without
+		 * swapping them out to shmemfs, even to prefer waiting
+		 * for those to complete prior to looking at inactive
+		 * objects, as those inactive objects will need to be swapped
+		 * out and so impose their own execution barrier, similar
+		 * to waiting for work completion on the purgeable lists.
+		 */
 		&mem->objects.purgeable,
-		&mem->objects.list, /* inactive objects */
-		&mem->objects.list, /* wait for active objects */
+		&mem->objects.list,
 		NULL,
 	};
 	unsigned long timeout = 0;
 	struct list_head **phase;
 	resource_size_t found;
 	int err = 0;
-
-	/* Try to release all stale kernel objects, pinned by activity */
-	intel_gt_retire_requests(mem->gt);
 
 	found = 0;
 	phase = phases;
@@ -263,9 +274,9 @@ next:
 	mutex_lock(&mem->objects.lock);
 
 	while (found < target &&
-		(obj = list_first_entry_or_null(*phase,
-						typeof(*obj),
-						mm.region_link))) {
+	       (obj = list_first_entry_or_null(*phase,
+					       typeof(*obj),
+					       mm.region_link))) {
 		unsigned long flags = 0;
 
 		list_move_tail(&obj->mm.region_link, &still_in_list);
@@ -339,12 +350,21 @@ put:
 	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 		return err;
 
-	if (found < target && mem->i915->params.enable_eviction) {
-		phase++;
-		if (!phase[1]) /* final pass, wait for active objects */
+	if (found < target) {
+		if (!timeout && !list_empty(&still_in_list)) {
+			/* Repeat, waiting for the active objects */
 			timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
-		if (*phase)
 			goto next;
+		}
+
+		if (mem->i915->params.enable_eviction) {
+			/* And try to release all stale kernel objects */
+			intel_gt_retire_requests(mem->gt);
+
+			timeout = 0;
+			if (*++phase)
+				goto next;
+		}
 	}
 
 	if (ww)
@@ -705,6 +725,25 @@ void intel_memory_regions_driver_release(struct drm_i915_private *i915)
 		if (region)
 			intel_memory_region_put(region);
 	}
+}
+
+const char *intel_memory_region_id2str(enum intel_region_id id)
+{
+	static const char * const regions[] = {
+		[INTEL_REGION_SMEM] = "smem",
+		[INTEL_REGION_LMEM] = "lmem",
+		[INTEL_REGION_LMEM1] = "lmem1",
+		[INTEL_REGION_LMEM2] = "lmem2",
+		[INTEL_REGION_LMEM3] = "lmem3",
+		[INTEL_REGION_STOLEN_SMEM] = "stolen smem",
+		[INTEL_REGION_STOLEN_LMEM] = "stolen lmem",
+		[INTEL_REGION_UNKNOWN] = "unknown",
+	};
+
+	if (id > INTEL_REGION_UNKNOWN || !regions[id])
+		return "invalid memory region";
+
+	return regions[id];
 }
 
 void intel_memory_regions_remove(struct drm_i915_private *i915)

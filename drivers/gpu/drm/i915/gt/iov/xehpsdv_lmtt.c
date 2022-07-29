@@ -100,7 +100,7 @@ xehpsdv_lmtt_pte_encode(unsigned long offset, u32 flags, unsigned int level)
 
 static void
 xehpsdv_lmtt_pte_write(void *pt_vaddr, u64 value,
-		   unsigned int n, unsigned int level)
+		       unsigned int n, unsigned int level)
 {
 	xehpsdv_lmtt_pte_t *pte = pt_vaddr;
 

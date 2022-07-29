@@ -4,9 +4,10 @@
  */
 
 #include <linux/sort.h>
+#include <drm/drm_cache.h>
 
-#include "drm/drm_cache.h"
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_engine_user.h"

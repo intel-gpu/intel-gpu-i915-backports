@@ -164,8 +164,6 @@ void __i915_active_init(struct i915_active *ref,
 	__i915_active_init(ref, active, retire, flags, &__mkey, &__wkey);	\
 } while (0)
 
-struct dma_fence *
-__i915_active_ref(struct i915_active *ref, u64 idx, struct dma_fence *fence);
 int i915_active_ref(struct i915_active *ref, u64 idx, struct dma_fence *fence);
 
 static inline int
@@ -182,11 +180,6 @@ int i915_active_add_suspend_fence(struct i915_active *ref,
 
 struct dma_fence *
 i915_active_set_exclusive(struct i915_active *ref, struct dma_fence *f);
-
-static inline bool i915_active_has_exclusive(struct i915_active *ref)
-{
-	return rcu_access_pointer(ref->excl.fence);
-}
 
 int __i915_active_wait(struct i915_active *ref, int state);
 static inline int i915_active_wait(struct i915_active *ref)
@@ -250,5 +243,8 @@ static inline int __i915_request_await_exclusive(struct i915_request *rq,
 
 	return err;
 }
+
+void i915_active_module_exit(void);
+int i915_active_module_init(void);
 
 #endif /* _I915_ACTIVE_H_ */

@@ -11,6 +11,7 @@
 
 #include <linux/string_helpers.h>
 #include <linux/types.h>
+#include <linux/string_helpers.h>
 #include <linux/tracepoint.h>
 
 #include "i915_drv.h"

@@ -7,7 +7,6 @@
 #include "gem/i915_gem_pm.h"
 
 #include "i915_drv.h"
-#include "i915_globals.h"
 #include "i915_trace.h"
 #include "i915_suspend_fence.h"
 
@@ -16,14 +15,11 @@
 #include "intel_engine_pm.h"
 #include "intel_ring.h"
 
-static struct i915_global_context {
-	struct i915_global base;
-	struct kmem_cache *slab_ce;
-} global;
+static struct kmem_cache *slab_ce;
 
 static struct intel_context *intel_context_alloc(void)
 {
-	return kmem_cache_zalloc(global.slab_ce, GFP_KERNEL);
+	return kmem_cache_zalloc(slab_ce, GFP_KERNEL);
 }
 
 static void rcu_context_free(struct rcu_head *rcu)
@@ -31,7 +27,7 @@ static void rcu_context_free(struct rcu_head *rcu)
 	struct intel_context *ce = container_of(rcu, typeof(*ce), rcu);
 
 	trace_intel_context_free(ce);
-	kmem_cache_free(global.slab_ce, ce);
+	kmem_cache_free(slab_ce, ce);
 }
 
 void intel_context_free(struct intel_context *ce)
@@ -462,46 +458,38 @@ void intel_context_fini(struct intel_context *ce)
 	i915_sw_fence_fini(&ce->guc_state.blocked);
 }
 
-static void i915_global_context_show(struct drm_printer *p)
+void i915_context_module_exit(void)
 {
-	i915_globals_show_slab(global.slab_ce, "intel_context", p);
+	kmem_cache_destroy(slab_ce);
 }
 
-static void i915_global_context_shrink(void)
+int __init i915_context_module_init(void)
 {
-	kmem_cache_shrink(global.slab_ce);
-}
-
-static void i915_global_context_exit(void)
-{
-	kmem_cache_destroy(global.slab_ce);
-}
-
-static struct i915_global_context global = { {
-	.show = i915_global_context_show,
-	.shrink = i915_global_context_shrink,
-	.exit = i915_global_context_exit,
-} };
-
-int __init i915_global_context_init(void)
-{
-	global.slab_ce = KMEM_CACHE(intel_context, SLAB_HWCACHE_ALIGN);
-	if (!global.slab_ce)
+	slab_ce = KMEM_CACHE(intel_context, SLAB_HWCACHE_ALIGN);
+	if (!slab_ce)
 		return -ENOMEM;
 
-	i915_global_register(&global.base);
 	return 0;
 }
 
 void intel_context_enter_engine(struct intel_context *ce)
 {
 	intel_engine_pm_get(ce->engine);
+	if (ce->vm->gt != ce->engine->gt) {
+		ce->vm_remote_gt_wakeref = intel_gt_pm_get(ce->vm->gt);
+		ce->vm_remote_gt = ce->vm->gt;
+	}
 	intel_timeline_enter(ce->timeline);
 }
 
 void intel_context_exit_engine(struct intel_context *ce)
 {
 	intel_timeline_exit(ce->timeline);
+	if (ce->vm_remote_gt) {
+		intel_gt_pm_put_async(ce->vm_remote_gt,
+				      ce->vm_remote_gt_wakeref);
+		ce->vm_remote_gt = NULL;
+	}
 	intel_engine_pm_put(ce->engine);
 }
 
@@ -554,18 +542,6 @@ retry:
 	}
 
 	i915_gem_ww_ctx_fini(&ww);
-
-	if (IS_ERR(rq))
-		return rq;
-
-	/*
-	 * timeline->mutex should be the inner lock, but is used as outer lock.
-	 * Hack around this to shut up lockdep in selftests..
-	 */
-	lockdep_unpin_lock(&ce->timeline->mutex, rq->cookie);
-	mutex_release(&ce->timeline->mutex.dep_map, _RET_IP_);
-	mutex_acquire(&ce->timeline->mutex.dep_map, SINGLE_DEPTH_NESTING, 0, _RET_IP_);
-	rq->cookie = lockdep_pin_lock(&ce->timeline->mutex);
 
 	if (IS_ERR(rq))
 		return rq;

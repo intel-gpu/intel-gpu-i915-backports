@@ -216,9 +216,7 @@ static void gsc_init_one(struct drm_i915_private *i915,
 	} else if (IS_PONTEVECCHIO(i915)) {
 		cells = intel_gsc_pvc_cell;
 		/* Use polling on PVC A-step HW bug Wa */
-		if (IS_PVC_BD_REVID(i915,
-				    PVC_BD_REVID_A0,
-				    PVC_BD_REVID_B0))
+		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0))
 			use_polling = true;
 	} else {
 		drm_warn_once(&i915->drm, "Unknown platform\n");

@@ -89,7 +89,6 @@ struct drm_printer;
 	param(unsigned int, page_sz_mask, 0, 0600) \
 	param(unsigned int, debug_pages, 0, 0400) \
 	param(int, l3_size_override, 0, 0400) \
-	param(unsigned int, max_freq_limit, 0, 0400) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, enable_fake_int_wa, true, 0400) \
 	param(bool, enable_pagefault, false, 0600) \
@@ -111,6 +110,8 @@ struct drm_printer;
 	param(bool, prelim_override_p2p_dist, true, 0400) \
 	param(bool, enable_gvt, false, IS_ENABLED(CPTCFG_DRM_I915_GVT) ? 0400 : 0) \
 	param(bool, enable_non_private_objects, false, 0400) \
+	param(bool, wa16012258806, false, 0600) \
+	param(bool, enable_mem_fence, false, 0400) \
 	param(bool, ulls_bcs0_pm_wa, true, 0600)
 
 #define MEMBER(T, member, ...) T member;

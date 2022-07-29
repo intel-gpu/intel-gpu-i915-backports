@@ -10,6 +10,7 @@
 
 struct drm_device;
 struct drm_file;
+struct drm_i915_gem_object;
 struct i915_drm_client;
 struct i915_gem_context;
 struct i915_uuid_resource;
@@ -57,6 +58,10 @@ void i915_debugger_vm_bind_destroy(struct i915_drm_client *client,
 void i915_debugger_context_param_vm(const struct i915_drm_client *client,
 				    struct i915_gem_context *ctx,
 				    struct i915_address_space *vm);
+
+void i915_debugger_revoke_ptes(struct i915_vma *vma);
+
+void i915_debugger_revoke_object_ptes(struct drm_i915_gem_object *obj);
 
 void i915_debugger_context_param_engines(struct i915_gem_context *ctx);
 
@@ -111,6 +116,10 @@ static inline void i915_debugger_vm_bind_destroy(struct i915_drm_client *client,
 static inline void i915_debugger_context_param_vm(const struct i915_drm_client *client,
 						  struct i915_gem_context *ctx,
 						  struct i915_address_space *vm) { }
+
+static inline void i915_debugger_revoke_ptes(struct i915_vma *vma) { }
+
+static inline void i915_debugger_revoke_object_ptes(struct drm_i915_gem_object *obj) { }
 
 static inline void i915_debugger_context_param_engines(struct i915_gem_context *ctx) { }
 

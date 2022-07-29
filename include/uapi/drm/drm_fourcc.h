@@ -579,6 +579,7 @@ extern "C" {
  */
 #define I915_FORMAT_MOD_4_TILED_DG2_RC_CCS fourcc_mod_code(INTEL, 10)
 #define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS intel_prelim_fourcc_mod_code(13)
+#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS
 
 /*
  * Intel color control surfaces (CCS) for DG2 media compression.
@@ -591,6 +592,7 @@ extern "C" {
  */
 #define I915_FORMAT_MOD_4_TILED_DG2_MC_CCS fourcc_mod_code(INTEL, 11)
 #define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS intel_prelim_fourcc_mod_code(14)
+#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_MC_CCS PRELIM_I915_FORMAT_MOD_4_TILED_DG2_MC_CCS
 
 /*
  * Intel color control surfaces (CCS) for DG2 clear color render compression.
@@ -600,6 +602,7 @@ extern "C" {
  */
 #define I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC fourcc_mod_code(INTEL, 12)
 #define PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC intel_prelim_fourcc_mod_code(15)
+#define PRELIM_I915_FORMAT_MOD_F_TILED_DG2_RC_CCS_CC PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC
 
 /*
  * Tiled, NV12MT, grouped in 64 (pixels) x 32 (lines) -sized macroblocks
