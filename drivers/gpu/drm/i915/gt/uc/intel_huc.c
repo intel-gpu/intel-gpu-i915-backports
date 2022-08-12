@@ -71,10 +71,9 @@ static int check_huc_loading_mode(struct intel_huc *huc)
 	 * The fuse for HuC load via GSC is only valid on platforms that have
 	 * GuC deprivilege.
 	 */
-	if (HAS_GUC_DEPRIVILEGE(gt->i915)) {
+	if (HAS_GUC_DEPRIVILEGE(gt->i915))
 		hw_uses_gsc = intel_uncore_read(gt->uncore, GUC_SHIM_CONTROL2) &
 			      GSC_LOADS_HUC;
-	}
 
 	if (fw_needs_gsc != hw_uses_gsc) {
 		drm_err(&gt->i915->drm,
@@ -107,7 +106,7 @@ int intel_huc_init(struct intel_huc *huc)
 	return 0;
 
 out:
-	i915_probe_error(i915, "failed with %d\n", err);
+	drm_info(&i915->drm, "HuC init failed with %d\n", err);
 	return err;
 }
 
@@ -159,6 +158,10 @@ int intel_huc_auth(struct intel_huc *huc)
 	if (!intel_uc_fw_is_loaded(&huc->fw))
 		return -ENOEXEC;
 
+	/* GSC will do the auth */
+	if (intel_huc_is_loaded_by_gsc(huc))
+		return -ENODEV;
+
 	ret = i915_inject_probe_error(gt->i915, -ENXIO);
 	if (ret)
 		goto fail;
@@ -167,7 +170,7 @@ int intel_huc_auth(struct intel_huc *huc)
 	if (intel_huc_is_loaded_by_gsc(huc))
 		return -ENODEV;
 
-	GEM_BUG_ON(intel_huc_is_authenticated(huc));
+	GEM_BUG_ON(intel_uc_fw_is_running(&huc->fw));
 
 	ret = intel_guc_auth_huc(guc, intel_guc_ggtt_offset(guc, huc->fw.rsa_data));
 	if (ret) {
@@ -188,6 +191,22 @@ fail:
 	return ret;
 }
 
+static bool huc_is_authenticated(struct intel_huc *huc)
+{
+	struct intel_gt *gt = huc_to_gt(huc);
+	intel_wakeref_t wakeref;
+	u32 status = 0;
+
+	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
+		status = intel_uncore_read(gt->uncore, huc->status.reg);
+
+	/* if status is suspicious, VFs must trust PF that HuC was loaded */
+	if ((!status || !~status) && IS_SRIOV_VF(gt->i915))
+		return true;
+
+	return (status & huc->status.mask) == huc->status.value;
+}
+
 /**
  * intel_huc_check_status() - check HuC status
  * @huc: intel_huc structure
@@ -205,10 +224,6 @@ fail:
  */
 int intel_huc_check_status(struct intel_huc *huc)
 {
-	struct intel_gt *gt = huc_to_gt(huc);
-	intel_wakeref_t wakeref;
-	u32 status = 0;
-
 	switch (__intel_uc_fw_status(&huc->fw)) {
 	case INTEL_UC_FIRMWARE_NOT_SUPPORTED:
 		return -ENODEV;
@@ -222,14 +237,7 @@ int intel_huc_check_status(struct intel_huc *huc)
 		break;
 	}
 
-	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		status = intel_uncore_read(gt->uncore, huc->status.reg);
-
-	/* if status is suspicious, VFs must trust PF that HuC was loaded */
-	if ((!status || !~status) && IS_SRIOV_VF(gt->i915))
-		return 1;
-
-	return (status & huc->status.mask) == huc->status.value;
+	return huc_is_authenticated(huc);
 }
 
 void intel_huc_update_auth_status(struct intel_huc *huc)
@@ -237,7 +245,7 @@ void intel_huc_update_auth_status(struct intel_huc *huc)
 	if (!intel_uc_fw_is_loadable(&huc->fw))
 		return;
 
-	if (intel_huc_check_status(huc) > 0)
+	if (huc_is_authenticated(huc))
 		intel_uc_fw_change_status(&huc->fw,
 					  INTEL_UC_FIRMWARE_RUNNING);
 }

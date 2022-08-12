@@ -23,11 +23,7 @@ void intel_gt_fini_tlb(struct intel_gt *gt);
 
 static inline u32 intel_gt_tlb_seqno(const struct intel_gt *gt)
 {
-#if LINUX_VERSION_IS_LESS(5,11,0)
-	return __seqcount_sequence(&gt->tlb.seqno);
-#else
 	return seqprop_sequence(&gt->tlb.seqno);
-#endif
 }
 
 static inline u32 intel_gt_next_invalidate_tlb_full(const struct intel_gt *gt)

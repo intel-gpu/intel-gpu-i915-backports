@@ -289,8 +289,10 @@
 #define   BLT_ROP_SRC_COPY		(0xcc<<16)
 #define   BLT_ROP_COLOR_COPY		(0xf0<<16)
 #define PVC_MEM_COPY_CMD		(2 << 29 | 0x5a << 22)
-#define   PVC_MEM_COPY_SRC_COMPRESSIBLE (1 << 16 | CMF_LINEAR_16 << 8)
-#define   PVC_MEM_COPY_DST_COMPRESSIBLE (1 << 15 | 1 << 13 | CMF_LINEAR_16 << 8)
+#define   PVC_MEM_COPY_SRC_COMPRESSIBLE	BIT(16)
+#define   PVC_MEM_COPY_DST_COMPRESSIBLE	BIT(15)
+#define   PVC_MEM_COPY_DST_COMPRESS_EN	BIT(13)
+#define   PVC_MEM_COPY_COMPRESSION_FMT	GENMASK(12, 8)
 /*
  * Bspec lists MOCS fields as [31:25] and [6:0], but the actual indices are
  * in [31:26] and [6:1].
@@ -298,7 +300,9 @@
 #define   MC_SRC_MOCS_INDEX_MASK	GENMASK(31, 26)
 #define   MC_DST_MOCS_INDEX_MASK	GENMASK(6, 1)
 #define PVC_MEM_SET_CMD			(2 << 29 | 0x5b << 22)
-#define   PVC_MEM_SET_DST_COMPRESSIBLE (1 << 15 | 1 << 13 | CMF_LINEAR_16 << 8)
+#define   PVC_MEM_SET_DST_COMPRESSIBLE	BIT(15)
+#define   PVC_MEM_SET_DST_COMPRESS_EN	BIT(13)
+#define   PVC_MEM_SET_COMPRESSION_FMT	GENMASK(12, 8)
 /* Bspec lists field as [6:0], but index alone is from [6:1] */
 #define   MS_MOCS_INDEX_MASK		GENMASK(6, 1)
 #define XY_SRC_COPY_BLT_SRC_TILED	(1<<15) /* 965+ only */

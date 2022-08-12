@@ -98,7 +98,7 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 
 	if (i915_gem_object_is_lmem(obj) &&
 	    i915_is_level4_wa_active(obj->mm.region->gt) &&
-	    !i915_gem_object_should_migrate(obj, INTEL_REGION_SMEM) &&
+	    !i915_gem_object_should_migrate_smem(obj) &&
 	    obj->mm.region->instance > 0) {
 		drm_dbg(dev, "Trying to mmap an lmem object when L4wa is enabled\n");
 	}
@@ -292,7 +292,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 			continue;
 
 		/* Implicitly migrate BO to SMEM if criteria met */
-		if (i915_gem_object_should_migrate(obj, INTEL_REGION_SMEM)) {
+		if (i915_gem_object_should_migrate_smem(obj)) {
 			err = i915_gem_object_migrate_to_smem(obj, &ww, false);
 			if (err)
 				continue;
@@ -417,7 +417,8 @@ retry:
 	}
 
 	/* Access to snoopable pages through the GTT is incoherent. */
-	if (obj->cache_level != I915_CACHE_NONE && !HAS_LLC(i915)) {
+	if (!(i915_gem_object_has_cache_level(obj, I915_CACHE_NONE) ||
+	      HAS_LLC(i915))) {
 		ret = -EFAULT;
 		goto err_unpin;
 	}
@@ -759,7 +760,7 @@ __assign_mmap_offset(struct drm_file *file,
 
 	if (i915_gem_object_is_lmem(obj) &&
 	    i915_is_level4_wa_active(obj->mm.region->gt) &&
-	    !i915_gem_object_should_migrate(obj, INTEL_REGION_SMEM) &&
+	    !i915_gem_object_should_migrate_smem(obj) &&
 	    obj->mm.region->instance > 0) {
 		drm_dbg(obj->base.dev,
 			"Trying to mmap an lmem object when L4wa is enabled\n");
@@ -784,11 +785,12 @@ i915_gem_dumb_mmap_offset(struct drm_file *file,
 			  u32 handle,
 			  u64 *offset)
 {
+	struct drm_i915_private *i915 = to_i915(dev);
 	enum i915_mmap_type mmap_type;
 
 	if (pat_enabled())
 		mmap_type = I915_MMAP_TYPE_WC;
-	else if (!i915_ggtt_has_aperture(to_gt(to_i915(dev))->ggtt))
+	else if (!i915_ggtt_has_aperture(to_gt(i915)->ggtt))
 		return -ENODEV;
 	else
 		mmap_type = I915_MMAP_TYPE_GTT;
@@ -972,14 +974,9 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	 * requires avoiding extraneous references to their filp, hence why
 	 * we prefer to use an anonymous file for their mmaps.
 	 */
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	fput(vma->vm_file);
-	vma->vm_file = anon;
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	vma_set_file(vma, anon);
 	/* Drop the initial creation reference, the vma is now holding one. */
 	fput(anon);
-#endif /* LINUX_VERSION_IN_RANGE */
 
 	switch (mmo->mmap_type) {
 	case I915_MMAP_TYPE_WC:

@@ -35,7 +35,6 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	PACKAGE_NAME="$PKG_NAME"
 	PACKAGE_VERSION="$PKG_VER"
 	AUTOINSTALL="yes"
-	REMAKE_INITRD="yes"
 
 	BUILT_MODULE_NAME[0]="compat"
 	BUILT_MODULE_LOCATION[0]="compat"

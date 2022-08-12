@@ -2,6 +2,7 @@
 #define __BACKPORT_SLAB_H
 #include_next <linux/slab.h>
 #include <linux/version.h>
+#include <linux/sched/mm.h>
 #if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 #include <linux/mm.h>
 #endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */

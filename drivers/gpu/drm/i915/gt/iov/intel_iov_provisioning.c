@@ -906,11 +906,11 @@ static int pf_alloc_vf_ctxs_range(struct intel_iov *iov, unsigned int id, u16 nu
 		return -ENOMEM;
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		u16 size_bits = re - rs;
 
 		/*
@@ -1074,11 +1074,11 @@ static u16 pf_get_ctxs_free(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		sum += re - rs;
@@ -1116,11 +1116,11 @@ static u16 pf_get_ctxs_max_quota(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		max = max_t(u16, max, re - rs);
@@ -1363,11 +1363,11 @@ static u16 pf_get_max_dbs(struct intel_iov *iov)
 	if (unlikely(!dbs_bitmap))
 		return 0;
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange_from(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	bitmap_for_each_clear_region(dbs_bitmap, rs, re, 0, GUC_NUM_DOORBELLS) {
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		IOV_DEBUG(iov, "dbs hole %u-%u (%u)\n", rs, re, re - rs);
 		limit = max_t(u16, limit, re - rs);
 	}

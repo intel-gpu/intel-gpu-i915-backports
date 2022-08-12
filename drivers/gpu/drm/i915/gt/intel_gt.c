@@ -3,6 +3,7 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <drm/drm_managed.h>
 #include <drm/intel-gtt.h>
 
 #include "gem/i915_gem_internal.h"
@@ -14,10 +15,12 @@
 #include "intel_context.h"
 #include "intel_engine_regs.h"
 #include "intel_flat_ppgtt_pool.h"
+#include "intel_ggtt_gmch.h"
 #include "intel_gt.h"
 #include "intel_gt_buffer_pool.h"
 #include "intel_gt_clock_utils.h"
 #include "intel_gt_debugfs.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
 #include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
@@ -161,102 +164,13 @@ void intel_gt_init_ggtt(struct intel_gt *gt, struct i915_ggtt *ggtt)
 	gt->ggtt = ggtt;
 }
 
-static const char * const intel_steering_types[] = {
-	"L3BANK",
-	"MSLICE",
-	"LNCF",
-	"BSLICE",
-};
-static const struct intel_mmio_range icl_l3bank_steering_table[] = {
-	{ 0x00B100, 0x00B3FF },
-	{},
-};
-
-static const struct intel_mmio_range xehpsdv_mslice_steering_table[] = {
-	{ 0x004000, 0x004AFF },
-	{ 0x00C800, 0x00CFFF },
-	{ 0x00DD00, 0x00DDFF },
-	{ 0x00E900, 0x00FFFF }, /* 0xEA00 - OxEFFF is unused */
-	{},
-};
-
-static const struct intel_mmio_range xehpsdv_lncf_steering_table[] = {
-	{ 0x00B000, 0x00B0FF },
-	{ 0x00D800, 0x00D8FF },
-	{},
-};
-
-static const struct intel_mmio_range dg2_lncf_steering_table[] = {
-	{ 0x00B000, 0x00B0FF },
-	{ 0x00D880, 0x00D8FF },
-	{},
-};
-
-static const struct intel_mmio_range pvc_bslice_steering_table[] = {
-	{ 0x00DD00, 0x00DDFF },
-	{},
-};
-
-static u16 slicemask(struct intel_gt *gt, int count)
-{
-	u64 dss_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
-
-	return intel_slicemask_from_dssmask(dss_mask, count);
-}
-
 int intel_gt_init_mmio(struct intel_gt *gt)
 {
-	struct drm_i915_private *i915 = gt->i915;
-
 	intel_gt_init_clock_frequency(gt);
 	intel_uc_init_mmio(&gt->uc);
 
 	intel_sseu_info_init(gt);
-
-	/*
-	 * An mslice is unavailable only if both the meml3 for the slice is
-	 * disabled *and* all of the DSS in the slice (quadrant) are disabled.
-	 */
-	if (HAS_MSLICES(i915)) {
-		gt->info.mslice_mask =
-			slicemask(gt, GEN_DSS_PER_MSLICE) |
-			(intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3) &
-			 GEN12_MEML3_EN_MASK);
-		if (!gt->info.mslice_mask) /* should be impossible! */
-			drm_warn(&i915->drm, "mslice mask all zero!\n");
-	}
-
-	/*
-	 * There are 4 bslices which hold 16 DSS each.  Bslice 0 is
-	 * always present.
-	 */
-	if (HAS_BSLICES(i915))
-		gt->info.bslice_mask =
-			slicemask(gt, GEN_DSS_PER_BSLICE) | BIT(0);
-
-	if (IS_PONTEVECCHIO(i915)) {
-		gt->steering_table[BSLICE] = pvc_bslice_steering_table;
-	} else if (IS_DG2(i915)) {
-		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
-		gt->steering_table[LNCF] = dg2_lncf_steering_table;
-	} else if (IS_XEHPSDV(i915)) {
-		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
-		gt->steering_table[LNCF] = xehpsdv_lncf_steering_table;
-	} else if (GRAPHICS_VER(i915) >= 11 &&
-		   GRAPHICS_VER_FULL(i915) < IP_VER(12, 50)) {
-		gt->steering_table[L3BANK] = icl_l3bank_steering_table;
-		gt->info.l3bank_mask =
-			~intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3) &
-			GEN10_L3BANK_MASK;
-		if (!gt->info.l3bank_mask) /* should be impossible! */
-			drm_warn(&i915->drm, "L3 bank mask is all zero!\n");
-	} else if (GRAPHICS_VER(i915) >= 11) {
-		/*
-		 * We expect all modern platforms to have at least some
-		 * type of steering that needs to be initialized.
-		 */
-		MISSING_CASE(INTEL_INFO(i915)->platform);
-	}
+	intel_gt_mcr_init(gt);
 
 	return intel_engines_init_mmio(gt);
 }
@@ -288,32 +202,6 @@ static void init_unused_rings(struct intel_gt *gt)
 		init_unused_ring(gt, PRB1_BASE);
 		init_unused_ring(gt, PRB2_BASE);
 	}
-}
-
-static void xehpc_stateless_mc_set(struct intel_gt *gt, u32 val)
-{
-	struct intel_uncore *uncore = gt->uncore;
-
-	if (intel_gt_has_eus(gt))
-		intel_uncore_write(uncore, XEHPC_DSS_UM_COMPRESSION, val);
-
-	intel_uncore_write(uncore, XEHPC_UM_COMPRESSION, val);
-	intel_uncore_write(uncore, XEHPC_LNI_UM_COMPRESSION, val);
-}
-
-/*
- * Unified memory allows access to any user virtual address from the
- * device.  Buffers allocated by system allocator are said to be without
- * any state.  To still support memory compression for these buffers,
- * the device has compression defaults for 'stateless access' and when
- * the buffer is backed by device memory.
- */
-static void intel_stateless_mc_init(struct intel_gt *gt)
-{
-	if (!HAS_STATELESS_MC(gt->i915))
-		return;
-
-	xehpc_stateless_mc_set(gt, XEHPC_COMPRESSION_ENABLE);
 }
 
 int intel_gt_init_hw(struct intel_gt *gt)
@@ -371,9 +259,6 @@ int intel_gt_init_hw(struct intel_gt *gt)
 		goto out;
 	}
 
-	/* Initialize stateless compression settings */
-	intel_stateless_mc_init(gt);
-
 	ret = intel_iov_init_hw(&gt->iov);
 	if (unlikely(ret)) {
 		i915_probe_error(i915, "Enabling IOV failed (%pe)\n",
@@ -412,7 +297,9 @@ bool intel_gt_has_eus(const struct intel_gt *gt)
 	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
 		return true;
 
-	return intel_sseu_get_subslices(&gt->info.sseu, 0) > 0;
+	/* find_first_bit returns #bits when bitmap is empty */
+	return intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0) <
+		XEHP_BITMAP_BITS(gt->info.sseu.subslice_mask);
 }
 
 void
@@ -445,38 +332,16 @@ intel_gt_clear_error_registers(struct intel_gt *gt,
 		}
 	}
 
-	if (HAS_MSLICES(i915)) {
-		enum forcewake_domains fw_domains;
-		u32 old_mcr;
+	if (HAS_MSLICE_STEERING(i915)) {
 		u8 mslice;
 
-		/* all the fault regs are in the same FW domain. MCR is not in FW */
-		fw_domains = intel_uncore_forcewake_for_reg(uncore, GEN12_RING_FAULT_REG,
-							    FW_REG_READ | FW_REG_WRITE);
-
-		fw_domains |= intel_uncore_forcewake_for_reg(uncore, GEN8_MCR_SELECTOR,
-							     FW_REG_READ | FW_REG_WRITE);
-
-		spin_lock_irq(&uncore->lock);
-		intel_uncore_forcewake_get__locked(uncore, fw_domains);
-
-		old_mcr = intel_uncore_read_fw(uncore, GEN8_MCR_SELECTOR);
-
-		for_each_set_bit(mslice, &gt->info.mslice_mask, GEN12_MAX_MSLICES) {
-			/* unicast access to selected mslice */
-			intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, GEN8_MCR_SLICE(mslice));
-
-			intel_uncore_rmw_fw(uncore, GEN12_RING_FAULT_REG,
-					    RING_FAULT_VALID, 0);
-		}
-
-		intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, old_mcr);
+		for_each_set_bit(mslice, &gt->info.mslice_mask, GEN12_MAX_MSLICES)
+			intel_gt_mcr_unicast_rmw(gt, GEN12_RING_FAULT_REG,
+						 RING_FAULT_VALID, 0,
+						 mslice, 0);
 
 		/* multicast post */
 		intel_uncore_posting_read_fw(uncore, GEN12_RING_FAULT_REG);
-
-		intel_uncore_forcewake_put__locked(uncore, fw_domains);
-		spin_unlock_irq(&uncore->lock);
 	} else if (GRAPHICS_VER(i915) >= 12) {
 		rmw_clear(uncore, GEN12_RING_FAULT_REG, RING_FAULT_VALID);
 		intel_uncore_posting_read(uncore, GEN12_RING_FAULT_REG);
@@ -561,33 +426,25 @@ static void xehpsdv_check_faults(struct intel_gt *gt)
 {
 	struct intel_uncore *uncore = gt->uncore;
 	enum forcewake_domains fw_domains;
-	u32 old_mcr;
 	u8 mslice;
 	u32 fault;
 
-	/* all the fault regs are in the same FW domain. MCR is not in FW */
+	/* all the fault regs are in the same FW domain. */
 	fw_domains = intel_uncore_forcewake_for_reg(uncore, GEN12_RING_FAULT_REG,
 						    FW_REG_READ | FW_REG_WRITE);
-
-	fw_domains |= intel_uncore_forcewake_for_reg(uncore, GEN8_MCR_SELECTOR,
-						     FW_REG_READ | FW_REG_WRITE);
 
 	spin_lock_irq(&uncore->lock);
 	intel_uncore_forcewake_get__locked(uncore, fw_domains);
 
-	old_mcr = intel_uncore_read_fw(uncore, GEN8_MCR_SELECTOR);
-
 	for_each_set_bit(mslice, &gt->info.mslice_mask, GEN12_MAX_MSLICES) {
-		/* unicast access to selected mslice */
-		intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, GEN8_MCR_SLICE(mslice));
+		fault = intel_gt_mcr_read_fw(gt, GEN12_RING_FAULT_REG, mslice, 0);
 
-		fault = intel_uncore_read_fw(uncore, GEN12_RING_FAULT_REG);
 		if (fault & RING_FAULT_VALID) {
 			u32 fault_data0, fault_data1;
 			u64 fault_addr;
 
-			fault_data0 = intel_uncore_read_fw(uncore, GEN12_FAULT_TLB_DATA0);
-			fault_data1 = intel_uncore_read_fw(uncore, GEN12_FAULT_TLB_DATA1);
+			fault_data0 = intel_gt_mcr_read_fw(gt, GEN12_FAULT_TLB_DATA0, mslice, 0);
+			fault_data1 = intel_gt_mcr_read_fw(gt, GEN12_FAULT_TLB_DATA1, mslice, 0);
 
 			fault_addr = ((u64)(fault_data1 & FAULT_VA_HIGH_BITS) << 44) |
 				     ((u64)fault_data0 << 12);
@@ -609,8 +466,6 @@ static void xehpsdv_check_faults(struct intel_gt *gt)
 		}
 	}
 
-	intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, old_mcr);
-
 	intel_uncore_forcewake_put__locked(uncore, fw_domains);
 	spin_unlock_irq(&uncore->lock);
 }
@@ -626,7 +481,7 @@ void intel_gt_check_and_clear_faults(struct intel_gt *gt)
 		return;
 
 	/* From GEN8 onwards we only have one 'All Engine Fault Register' */
-	if (HAS_MSLICES(i915))
+	if (HAS_MSLICE_STEERING(i915))
 		xehpsdv_check_faults(gt);
 	else if (GRAPHICS_VER(i915) >= 8)
 		gen8_check_faults(gt);
@@ -683,7 +538,7 @@ void intel_gt_chipset_flush(struct intel_gt *gt)
 {
 	wmb();
 	if (GRAPHICS_VER(gt->i915) < 6)
-		intel_gtt_chipset_flush();
+		intel_ggtt_gmch_flush();
 }
 
 void intel_gt_driver_register(struct intel_gt *gt)
@@ -1077,6 +932,11 @@ int intel_gt_init(struct intel_gt *gt)
 	if (err)
 		goto err_uc_init;
 
+	err = intel_gt_init_hwconfig(gt);
+	if (err)
+		i915_probe_error(gt->i915, "Failed to retrieve hwconfig table: %pe\n",
+				 ERR_PTR(err));
+
 	err = intel_iov_init_late(&gt->iov);
 	if (err)
 		goto err_gt;
@@ -1174,6 +1034,7 @@ void intel_gt_driver_release(struct intel_gt *gt)
 	intel_gt_fini_debug_pages(gt);
 	intel_gt_fini_scratch(gt);
 	intel_gt_fini_buffer_pool(gt);
+	intel_gt_fini_hwconfig(gt);
 	intel_iov_fini(&gt->iov);
 }
 
@@ -1194,202 +1055,6 @@ void intel_gt_driver_late_release(struct intel_gt *gt)
 void intel_gt_shutdown(struct intel_gt *gt)
 {
 	intel_iov_vf_put_wakeref_wa(&gt->iov);
-}
-
-/**
- * intel_gt_reg_needs_read_steering - determine whether a register read
- *     requires explicit steering
- * @gt: GT structure
- * @reg: the register to check steering requirements for
- * @type: type of multicast steering to check
- *
- * Determines whether @reg needs explicit steering of a specific type for
- * reads.
- *
- * Returns false if @reg does not belong to a register range of the given
- * steering type, or if the default (subslice-based) steering IDs are suitable
- * for @type steering too.
- */
-static bool intel_gt_reg_needs_read_steering(struct intel_gt *gt,
-					     i915_reg_t reg,
-					     enum intel_steering_type type)
-{
-	const u32 offset = i915_mmio_reg_offset(reg);
-	const struct intel_mmio_range *entry;
-
-	if (likely(!intel_gt_needs_read_steering(gt, type)))
-		return false;
-
-	for (entry = gt->steering_table[type]; entry->end; entry++) {
-		if (offset >= entry->start && offset <= entry->end)
-			return true;
-	}
-
-	return false;
-}
-
-/**
- * intel_gt_get_valid_steering - determines valid IDs for a class of MCR steering
- * @gt: GT structure
- * @type: multicast register type
- * @sliceid: Slice ID returned
- * @subsliceid: Subslice ID returned
- *
- * Determines sliceid and subsliceid values that will steer reads
- * of a specific multicast register class to a valid value.
- */
-static void intel_gt_get_valid_steering(struct intel_gt *gt,
-					enum intel_steering_type type,
-					u8 *sliceid, u8 *subsliceid)
-{
-	switch (type) {
-	case L3BANK:
-		*sliceid = 0;		/* unused */
-		*subsliceid = __ffs(gt->info.l3bank_mask);
-		break;
-	case MSLICE:
-		GEM_WARN_ON(!HAS_MSLICES(gt->i915));
-		*sliceid = __ffs(gt->info.mslice_mask);
-		*subsliceid = 0;	/* unused */
-		break;
-	case LNCF:
-		/*
-		 * An LNCF is always present if its mslice is present, so we
-		 * can safely just steer to LNCF 0 in all cases.
-		 */
-		GEM_WARN_ON(!HAS_MSLICES(gt->i915));
-		*sliceid = __ffs(gt->info.mslice_mask) << 1;
-		*subsliceid = 0;	/* unused */
-		break;
-	case BSLICE:
-		*sliceid = 0;		/* first (half-)bslice is always present */
-		*subsliceid = 0;	/* first instance is always present */
-		break;
-	default:
-		MISSING_CASE(type);
-		*sliceid = 0;
-		*subsliceid = 0;
-	}
-}
-
-/**
- * intel_gt_read_register_fw - reads a GT register with support for multicast
- * @gt: GT structure
- * @reg: register to read
- *
- * This function will read a GT register.  If the register is a multicast
- * register, the read will be steered to a valid instance (i.e., one that
- * isn't fused off or powered down by power gating).
- *
- * Returns the value from a valid instance of @reg.
- */
-u32 intel_gt_read_register_fw(struct intel_gt *gt, i915_reg_t reg)
-{
-	int type;
-	u8 sliceid, subsliceid;
-
-	for (type = 0; type < NUM_STEERING_TYPES; type++) {
-		if (intel_gt_reg_needs_read_steering(gt, reg, type)) {
-			intel_gt_get_valid_steering(gt, type, &sliceid,
-						    &subsliceid);
-			return intel_uncore_read_with_mcr_steering_fw(gt->uncore,
-								      reg,
-								      sliceid,
-								      subsliceid);
-		}
-	}
-
-	return intel_uncore_read_fw(gt->uncore, reg);
-}
-
-u32 intel_gt_read_register(struct intel_gt *gt, i915_reg_t reg)
-{
-	int type;
-	u8 sliceid, subsliceid;
-
-	for (type = 0; type < NUM_STEERING_TYPES; type++) {
-		if (intel_gt_reg_needs_read_steering(gt, reg, type)) {
-			intel_gt_get_valid_steering(gt, type, &sliceid,
-						    &subsliceid);
-			return intel_uncore_read_with_mcr_steering(gt->uncore,
-								   reg,
-								   sliceid,
-								   subsliceid);
-		}
-	}
-
-	return intel_uncore_read(gt->uncore, reg);
-}
-
-/**
- * intel_gt_get_valid_steering_for_reg - get a valid steering for a register
- * @gt: GT structure
- * @reg: register for which the steering is required
- * @sliceid: return variable for slice steering
- * @subsliceid: return variable for subslice steering
- *
- * This function returns a slice/subslice pair that is guaranteed to work for
- * read steering of the given register. Note that a value will be returned even
- * if the register is not replicated and therefore does not actually require
- * steering.
- */
-void intel_gt_get_valid_steering_for_reg(struct intel_gt *gt, i915_reg_t reg,
-					 u8 *sliceid, u8 *subsliceid)
-{
-	int type;
-
-	for (type = 0; type < NUM_STEERING_TYPES; type++) {
-		if (intel_gt_reg_needs_read_steering(gt, reg, type)) {
-			intel_gt_get_valid_steering(gt, type, sliceid,
-						    subsliceid);
-			return;
-		}
-	}
-
-	*sliceid = gt->default_steering.groupid;
-	*subsliceid = gt->default_steering.instanceid;
-}
-
-static void report_steering_type(struct drm_printer *p,
-				 struct intel_gt *gt,
-				 enum intel_steering_type type,
-				 bool dump_table)
-{
-	const struct intel_mmio_range *entry;
-	u8 slice, subslice;
-
-	BUILD_BUG_ON(ARRAY_SIZE(intel_steering_types) != NUM_STEERING_TYPES);
-
-	if (!gt->steering_table[type]) {
-		drm_printf(p, "%s steering: uses default steering\n",
-			   intel_steering_types[type]);
-		return;
-	}
-
-	intel_gt_get_valid_steering(gt, type, &slice, &subslice);
-	drm_printf(p, "%s steering: sliceid=0x%x, subsliceid=0x%x\n",
-		   intel_steering_types[type], slice, subslice);
-
-	if (!dump_table)
-		return;
-
-	for (entry = gt->steering_table[type]; entry->end; entry++)
-		drm_printf(p, "\t0x%06x - 0x%06x\n", entry->start, entry->end);
-}
-
-void intel_gt_report_steering(struct drm_printer *p, struct intel_gt *gt,
-			      bool dump_table)
-{
-	drm_printf(p, "Default steering: sliceid=0x%x, subsliceid=0x%x\n",
-		   gt->default_steering.groupid,
-		   gt->default_steering.instanceid);
-
-	if (HAS_MSLICES(gt->i915)) {
-		report_steering_type(p, gt, MSLICE, dump_table);
-		report_steering_type(p, gt, LNCF, dump_table);
-	} else if (HAS_BSLICES(gt->i915)) {
-		report_steering_type(p, gt, BSLICE, dump_table);
-	}
 }
 
 static int
@@ -1611,26 +1276,4 @@ void intel_gt_info_print(const struct intel_gt_info *info,
 	drm_printf(p, "available engines: %x\n", info->engine_mask);
 
 	intel_sseu_dump(&info->sseu, p);
-}
-
-int intel_gt_get_l3bank_count(struct intel_gt *gt)
-{
-	struct drm_i915_private *i915 = gt->i915;
-
-	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 60)) {
-		/* FIXME: Calculate this from fuse values */
-		return 64;
-	} else if (GRAPHICS_VER(i915) >= 12) {
-		intel_wakeref_t wakeref;
-		u32 fuse3 = 0;
-
-		with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-			fuse3 = intel_uncore_read(gt->uncore, GEN10_MIRROR_FUSE3);
-		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
-			return hweight32(REG_FIELD_GET(GEN12_MEML3_EN_MASK, fuse3)) * 8;
-		else
-			return hweight32(REG_FIELD_GET(GEN12_GT_L3_MODE_MASK, ~fuse3));
-	} else {
-		return -ENODEV;
-	}
 }

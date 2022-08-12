@@ -406,6 +406,26 @@ static int ehl_max_source_rate(struct intel_dp *intel_dp)
 	return 810000;
 }
 
+static int vbt_max_link_rate(struct intel_dp *intel_dp)
+{
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+	int max_rate;
+
+	max_rate = intel_bios_dp_max_link_rate(encoder);
+
+	if (intel_dp_is_edp(intel_dp)) {
+		struct intel_connector *connector = intel_dp->attached_connector;
+		int edp_max_rate = connector->panel.vbt.edp.max_link_rate;
+
+		if (max_rate && edp_max_rate)
+			max_rate = min(max_rate, edp_max_rate);
+		else if (edp_max_rate)
+			max_rate = edp_max_rate;
+	}
+
+	return max_rate;
+}
+
 static void
 intel_dp_set_source_rates(struct intel_dp *intel_dp)
 {
@@ -427,7 +447,6 @@ intel_dp_set_source_rates(struct intel_dp *intel_dp)
 		162000, 270000
 	};
 	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	struct intel_encoder *encoder = &dig_port->base;
 	struct drm_i915_private *dev_priv = to_i915(dig_port->base.base.dev);
 	const int *source_rates;
 	int size, max_rate = 0, vbt_max_rate;
@@ -463,7 +482,7 @@ intel_dp_set_source_rates(struct intel_dp *intel_dp)
 		size = ARRAY_SIZE(g4x_rates);
 	}
 
-	vbt_max_rate = intel_bios_dp_max_link_rate(encoder);
+	vbt_max_rate = vbt_max_link_rate(intel_dp);
 	if (max_rate && vbt_max_rate)
 		max_rate = min(max_rate, vbt_max_rate);
 	else if (vbt_max_rate)
@@ -2464,16 +2483,16 @@ static int intel_dp_hdmi_sink_max_frl(struct intel_dp *intel_dp)
 {
 	struct intel_connector *intel_connector = intel_dp->attached_connector;
 	struct drm_connector *connector = &intel_connector->base;
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef MAX_FLR_NOT_PRESENT
 	int max_frl_rate;
 	int max_lanes, rate_per_lane;
 	int max_dsc_lanes, dsc_rate_per_lane;
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	int max_frl_rate = drm_hdmi_sink_max_frl_rate(connector);
 	int dsc_max_frl_rate = drm_hdmi_sink_dsc_max_frl_rate(connector);
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef MAX_FLR_NOT_PRESENT
 	max_lanes = connector->display_info.hdmi.max_lanes;
 	rate_per_lane = connector->display_info.hdmi.max_frl_rate_per_lane;
 	max_frl_rate = max_lanes * rate_per_lane;
@@ -2484,10 +2503,10 @@ static int intel_dp_hdmi_sink_max_frl(struct intel_dp *intel_dp)
 		if (max_dsc_lanes && dsc_rate_per_lane)
 			max_frl_rate = min(max_frl_rate, max_dsc_lanes * dsc_rate_per_lane);
 	}
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	if (dsc_max_frl_rate)
 		return min(max_frl_rate, dsc_max_frl_rate);
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 
 	return max_frl_rate;
 }
@@ -2878,10 +2897,10 @@ void intel_edp_fixup_vbt_bpp(struct intel_encoder *encoder, int pipe_bpp)
 static void intel_edp_mso_init(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifndef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
 	struct intel_connector *connector = intel_dp->attached_connector;
 	struct drm_display_info *info = &connector->base.display_info;
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif
 	u8 mso;
 
 	if (intel_dp->edp_dpcd[0] < DP_EDP_14)
@@ -2900,14 +2919,14 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	if (mso) {
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
 		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration\n",
 			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#else
 		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration, pixel overlap %u\n",
 			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso,
 			    info->mso_pixel_overlap);
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		if (!HAS_MSO(i915)) {
 			drm_err(&i915->drm, "No source MSO support, disabling\n");
 			mso = 0;
@@ -2915,11 +2934,11 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	intel_dp->mso_link_count = mso;
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
 	intel_dp->mso_pixel_overlap = 0; /* FIXME: read from DisplayID v2.0 */
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#else
 	intel_dp->mso_pixel_overlap = mso ? info->mso_pixel_overlap : 0;
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 }
 
 static bool
@@ -2999,9 +3018,6 @@ intel_edp_init_dpcd(struct intel_dp *intel_dp)
 	else
 		intel_dp_set_sink_rates(intel_dp);
 	intel_dp_set_max_sink_lane_count(intel_dp);
-
-	intel_dp_set_common_rates(intel_dp);
-	intel_dp_reset_max_link_params(intel_dp);
 
 	/* Read the eDP DSC DPCD registers */
 	if (DISPLAY_VER(dev_priv) >= 10)
@@ -5326,7 +5342,8 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 			      IS_ERR(edid) ? NULL : edid);
 
 	intel_panel_add_edid_fixed_modes(intel_connector,
-					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE);
+					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE,
+					 intel_vrr_is_capable(intel_connector));
 
 	/* MSO requires information from the EDID */
 	intel_edp_mso_init(intel_dp);
@@ -5450,11 +5467,8 @@ intel_dp_init_connector(struct intel_digital_port *dig_port,
 		type = DRM_MODE_CONNECTOR_DisplayPort;
 	}
 
-	intel_dp_set_source_rates(intel_dp);
 	intel_dp_set_default_sink_rates(intel_dp);
 	intel_dp_set_default_max_sink_lane_count(intel_dp);
-	intel_dp_set_common_rates(intel_dp);
-	intel_dp_reset_max_link_params(intel_dp);
 
 	if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
 		intel_dp->pps.active_pipe = vlv_active_pipe(intel_dp);
@@ -5482,15 +5496,18 @@ intel_dp_init_connector(struct intel_digital_port *dig_port,
 	else
 		intel_connector->get_hw_state = intel_connector_get_hw_state;
 
+	if (!intel_edp_init_connector(intel_dp, intel_connector)) {
+		intel_dp_aux_fini(intel_dp);
+		goto fail;
+	}
+
+	intel_dp_set_source_rates(intel_dp);
+	intel_dp_set_common_rates(intel_dp);
+	intel_dp_reset_max_link_params(intel_dp);
+
 	/* init MST on ports that can support it */
 	intel_dp_mst_encoder_init(dig_port,
 				  intel_connector->base.base.id);
-
-	if (!intel_edp_init_connector(intel_dp, intel_connector)) {
-		intel_dp_aux_fini(intel_dp);
-		intel_dp_mst_encoder_cleanup(dig_port);
-		goto fail;
-	}
 
 	intel_dp_add_properties(intel_dp, connector);
 

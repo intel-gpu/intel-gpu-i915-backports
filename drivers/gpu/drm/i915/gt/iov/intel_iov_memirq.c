@@ -48,6 +48,7 @@
 
 static int vf_create_memirq_data(struct intel_iov *iov)
 {
+	struct drm_i915_private *i915 = iov_to_i915(iov);
 	struct intel_gt *gt = iov_to_gt(iov);
 	struct drm_i915_gem_object *obj;
 	void *vaddr;
@@ -55,16 +56,16 @@ static int vf_create_memirq_data(struct intel_iov *iov)
 	u32 *enable_vector;
 
 	GEM_BUG_ON(!intel_iov_is_vf(iov));
-	GEM_BUG_ON(!HAS_MEMORY_IRQ_STATUS(iov_to_i915(iov)));
+	GEM_BUG_ON(!HAS_MEMORY_IRQ_STATUS(i915));
 	GEM_BUG_ON(iov->vf.irq.obj);
 
-	obj = i915_gem_object_create_shmem(iov_to_i915(iov), SZ_4K);
+	obj = i915_gem_object_create_shmem(i915, SZ_4K);
 	if (IS_ERR(obj)) {
 		err = PTR_ERR(obj);
 		goto out;
 	}
 
-	vaddr = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
+	vaddr = i915_gem_object_pin_map_unlocked(obj, i915_coherent_map_type(i915, obj, true));
 	if (IS_ERR(vaddr)) {
 		err = PTR_ERR(vaddr);
 		goto out_obj;
@@ -293,6 +294,7 @@ void intel_iov_memirq_handler(struct intel_iov *iov)
 		return;
 
 	MEMIRQ_DEBUG(gt, "SOURCE %*ph\n", 32, source_base);
+	MEMIRQ_DEBUG(gt, "SOURCE %*ph\n", 32, source_base + 32);
 
 	/* TODO: Only check active engines */
 	for_each_engine(engine, gt, id) {

@@ -25,14 +25,23 @@ This repo is a code snapshot of particular version of backports and does not con
 
   In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
   
-    sudo apt install linux-headers-<BASE_KERNEL_NAME_<OS VERSION>>-oem \
-    linux-image-unsigned-<BASE_KERNEL_NAME_<OS VERSION>>-oem
+  For Ubuntu 22.04:
+
+    sudo apt install linux-headers-<BASE_KERNEL_NAME_22.04>-oem \
+    linux-image-unsigned-<BASE_KERNEL_NAME_22.04>-oem
 
     example:
 	      sudo apt install linux-headers-5.17.0-1006-oem\
-	      linux-image-unsigned-5.17.0-1006-oem
-	      sudo reboot
+	      linux-image-unsigned-5.17.0-1006-oem 
 
+  For Ubuntu 20.04:
+
+    sudo apt install linux-headers-<BASE_KERNEL_NAME_20.04>-oem \
+    linux-image-unsigned-<BASE_KERNEL_NAME_20.04>-oem
+    
+    example: 
+        sudo apt install linux-headers-5.14.0-1040-oem\
+        linux-image-unsigned-5.14.0-1040-oem
 
 Please note that dkms installation will skip if the kernel header is not installed.
 
@@ -41,8 +50,12 @@ we have dependencies on the following packages
   - dkms
   - make
   - debhelper
+  - devscripts
+  - build-essential
+  - flex
+  - bison
 
-        sudo apt install dkms make debhelper
+        sudo apt install dkms make debhelper devscripts build-essential flex bison
 
 
 # Dependencies

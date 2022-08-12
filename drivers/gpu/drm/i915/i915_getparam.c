@@ -147,16 +147,20 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		break;
 	case I915_PARAM_SUBSLICE_MASK:
 		/*
-		 * Only copy bits from the first slice.
-		 *
-		 * Note that there are potentially more subslices than
-		 * the number of bits returned to user space in this
-		 * mask. It is recommended to use QUERY_TOPOLOGY_INFO
-		 * instead to get a more fine grained view of the
-		 * platform topology.
+		 * Hack:  The I915_GETPARAM interface fundamentally can't return
+		 * the necessary information on Xe_HP and beyond and is not
+		 * supposed to be used on these platforms.  Until the MDAPI
+		 * transitions away from these, try to return semi-reasonable
+		 * data (although the information will still be truncated to
+		 * 32-bits, only represent a single tile, and will mix
+		 * compute+geometry together).
 		 */
-		memcpy(&value, sseu->subslice_mask,
-		       min(sseu->ss_stride, (u8)sizeof(value)));
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
+			value = (u32)(sseu->subslice_mask.xehp[0]);
+		} else {
+			/* Only copy bits from the first slice */
+			value = intel_sseu_get_hsw_subslices(sseu, 0);
+		}
 		if (!value)
 			return -ENODEV;
 		break;

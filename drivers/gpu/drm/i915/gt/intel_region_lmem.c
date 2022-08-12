@@ -4,16 +4,17 @@
  */
 
 #include "i915_drv.h"
+#include "i915_pci.h"
 #include "i915_reg.h"
 #include "i915_svm.h"
 #include "intel_memory_region.h"
+#include "intel_pci_config.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/iov/intel_iov_utils.h"
-#include "intel_region_lmem.h"
-#include "intel_pci_config.h"
 
 static void
 region_lmem_release(struct intel_memory_region *mem)
@@ -178,7 +179,7 @@ int intel_get_tile_range(struct intel_gt *gt,
 		 * the tile range register intead of assigning the offsets
 		 * manually. The tile ranges are divided into 1GB granularity
 		 */
-		lmem_range = intel_gt_read_register(gt, tile_addr_reg[instance]) & 0xFFFF;
+		lmem_range = intel_gt_mcr_read_any(gt, tile_addr_reg[instance]) & 0xFFFF;
 		*lmem_size = lmem_range >> XEHPSDV_TILE_LMEM_RANGE_SHIFT;
 		*lmem_base = (lmem_range & 0xFF) >> XEHPSDV_TILE_LMEM_BASE_SHIFT;
 
@@ -237,6 +238,9 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 	if (!IS_DGFX(i915))
 		return ERR_PTR(-ENODEV);
 
+	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR))
+		return ERR_PTR(-ENXIO);
+
 	root_lmembar_size = pci_resource_len(pdev, GEN12_LMEM_BAR);
 
 	sparing = &to_gt(i915)->mem_sparing;
@@ -276,10 +280,8 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 					GEN12_MEML3_EN_MASK;
 			hbm_count = hweight8(meml3_mask);
 
-			pvc_flat_ccs_base_addr_low = intel_uncore_read(uncore,
-							PVC_FLAT_CCS_BASE_ADDR_LOWER);
-			pvc_flat_ccs_base_addr_high = intel_uncore_read(uncore,
-							PVC_FLAT_CCS_BASE_ADDR_UPPER);
+			pvc_flat_ccs_base_addr_low = intel_gt_mcr_read_any(gt, PVC_FLAT_CCS_BASE_ADDR_LOWER);
+			pvc_flat_ccs_base_addr_high = intel_gt_mcr_read_any(gt, PVC_FLAT_CCS_BASE_ADDR_UPPER);
 			flat_ccs_base_addr_reg = pvc_flat_ccs_base_addr_high &
 							PVC_FLAT_CCS_BASE_UPPER_ADDR_MASK;
 			flat_ccs_base_addr_reg = flat_ccs_base_addr_reg << 32;
@@ -292,7 +294,7 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 			 */
 			flat_ccs_base = flat_ccs_base_addr_reg * (2 * hbm_count);
 		} else {
-			flat_ccs_base_addr_reg = intel_gt_read_register(gt, XEHPSDV_FLAT_CCS_BASE_ADDR);
+			flat_ccs_base_addr_reg = intel_gt_mcr_read_any(gt, XEHPSDV_FLAT_CCS_BASE_ADDR);
 			flat_ccs_base = (flat_ccs_base_addr_reg >> XEHPSDV_CCS_BASE_SHIFT) * SZ_64K;
 		}
 
@@ -336,10 +338,11 @@ create_region:
 		}
 	}
 
-	io_start = pci_resource_start(pdev, 2) + lmem_base;
+	io_start = pci_resource_start(pdev, GEN12_LMEM_BAR) + lmem_base;
 
 	min_page_size = HAS_64K_PAGES(i915) ? I915_GTT_PAGE_SIZE_64K :
 						I915_GTT_PAGE_SIZE_4K;
+
 	if (i915->params.lmem_size > 0)
 		lmem_size = min_t(resource_size_t, lmem_size,
 				  mul_u32_u32(i915->params.lmem_size, SZ_1M));
@@ -347,7 +350,7 @@ create_region:
 	/* Add the DPA (device physical address) offset */
 	lmem_base += i915->intel_iaf.dpa;
 
-	mem = intel_memory_region_create(i915,
+	mem = intel_memory_region_create(gt,
 					 lmem_base,
 					 lmem_size,
 					 min_page_size,

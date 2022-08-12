@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2019-2020, Intel Corporation. All rights reserved.
+ * Copyright(c) 2019-2022, Intel Corporation. All rights reserved.
  */
 #ifndef __INTEL_GSC_DEV_H__
 #define __INTEL_GSC_DEV_H__
@@ -9,7 +9,7 @@
 
 struct drm_i915_private;
 struct intel_gt;
-struct resource;
+struct mei_aux_device;
 
 #define INTEL_GSC_NUM_INTERFACES 2
 /*
@@ -26,6 +26,7 @@ struct resource;
  */
 struct intel_gsc {
 	struct intel_gsc_intf {
+		struct mei_aux_device *adev;
 		struct drm_i915_gem_object *gem_obj;
 		int irq;
 		unsigned int id;

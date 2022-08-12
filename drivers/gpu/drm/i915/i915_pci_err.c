@@ -3,7 +3,6 @@
  * Copyright © 2021 Intel Corporation
  */
 #include <linux/pci.h>
-#include <linux/mfd/core.h>
 
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
@@ -87,7 +86,6 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 */
 	device_for_each_child(&pdev->dev, NULL, device_set_offline);
 	intel_iaf_pcie_error_notify(i915);
-	mfd_remove_devices(&pdev->dev);
 
 	for_each_gt(i915, i, gt) {
 		intel_gt_set_wedged(gt);

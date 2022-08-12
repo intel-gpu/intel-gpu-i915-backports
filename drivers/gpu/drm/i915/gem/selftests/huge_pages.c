@@ -338,7 +338,7 @@ fake_huge_pages_object(struct drm_i915_private *i915, u64 size, bool single)
 
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
-	obj->cache_level = I915_CACHE_NONE;
+	obj->pat_index = i915_gem_get_pat_index(i915, I915_CACHE_NONE);
 
 	return obj;
 }
@@ -496,7 +496,7 @@ static int igt_mock_memory_region_huge_pages(void *arg)
 	int bit;
 	int err = 0;
 
-	mem = mock_region_create(i915, 0, SZ_2G, I915_GTT_PAGE_SIZE_4K, 0);
+	mem = mock_region_create(ppgtt->vm.gt, 0, SZ_2G, I915_GTT_PAGE_SIZE_4K, 0);
 	if (IS_ERR(mem)) {
 		pr_err("%s failed to create memory region\n", __func__);
 		return PTR_ERR(mem);

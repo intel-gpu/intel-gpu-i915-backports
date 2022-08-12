@@ -32,7 +32,6 @@
 
 #include "gem/i915_gem_object_types.h"
 
-enum i915_cache_level;
 struct i915_vma_work;
 
 /**

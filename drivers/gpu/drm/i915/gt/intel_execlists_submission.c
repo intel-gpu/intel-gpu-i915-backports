@@ -216,10 +216,6 @@ static struct virtual_engine *to_virtual_engine(struct intel_engine_cs *engine)
 	return container_of(engine, struct virtual_engine, base);
 }
 
-static struct intel_context *
-execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
-			 unsigned long flags);
-
 static struct i915_request *
 __active_request(const struct intel_timeline * const tl,
 		 struct i915_request *rq,
@@ -2705,6 +2701,10 @@ unwind:
 	return err;
 }
 
+static struct intel_context *
+execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
+			 unsigned long flags);
+
 static const struct intel_context_ops execlists_context_ops = {
 	.flags = COPS_HAS_INFLIGHT | COPS_RUNTIME_CYCLES,
 
@@ -2906,11 +2906,11 @@ static void enable_error_interrupt(struct intel_engine_cs *engine)
 	u32 status;
 
 	/* Flush ongoing GT interrupts before touching interrupt state */
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef SYNC_HRQ_NOT_PRESENT
 	intel_synchronize_hardirq(engine->i915);
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	synchronize_hardirq(engine->i915->drm.irq);
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 	engine->execlists.error_interrupt = 0;
 
 	ENGINE_WRITE(engine, RING_EMR, ~0u);

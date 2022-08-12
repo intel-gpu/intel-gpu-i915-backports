@@ -4,14 +4,12 @@
  *
  */
 
-#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/semaphore.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/completion.h>
-#include <linux/fs.h>
 #include <linux/io.h>
 
 #include "fw.h"
@@ -20,7 +18,6 @@
 #include "mbdb.h"
 #include "ops.h"
 #include "port.h"
-#include "statedump.h"
 #include "trace.h"
 
 /* Mailbox private structures */
@@ -68,21 +65,6 @@
 
 #include <linux/module.h>
 #include <linux/timer.h>
-
-enum mbdb_counters {
-	MBDB_COUNTERS_FIRST,
-	POSTED_REQUESTS = MBDB_COUNTERS_FIRST,
-	NON_POSTED_REQUESTS,
-	TIMEDOUT_REQUESTS,
-	HANDLED_RECEIVED_REQUESTS,
-	UNHANDLED_RECEIVED_REQUESTS,
-	NON_ERROR_RESPONSES,
-	ERROR_RESPONSES,
-	UNMATCHED_RESPONSES,
-	TIMEDOUT_RESPONSES,
-	RETRY_RESPONSES,
-	MBDB_COUNTERS_MAX,
-};
 
 struct mbdb {
 	struct fsubdev *sd;
@@ -136,25 +118,6 @@ struct mbdb {
 	/* Protect inbox access */
 	struct timer_list inbox_timer;
 };
-
-static const char * const mbdb_counter_names[] = {
-	"posted requests             : ",
-	"non posted requests         : ",
-	"timedout requests           : ",
-	"handled received requests   : ",
-	"unhandled received requests : ",
-	"non error responses         : ",
-	"error responses             : ",
-	"unmatched responses         : ",
-	"timedout responses          : ",
-	"retry responses             : ",
-};
-
-#define MAILBOX_COUNTERS_FILE_NAME "mailbox_counters"
-#define COUNTER_NAME_WIDTH 31
-#define MAX_U64_WIDTH 21
-
-#define MAILBOX_COUNTER_DISPLAY_BUF_SIZE ((COUNTER_NAME_WIDTH + MAX_U64_WIDTH) * MBDB_COUNTERS_MAX)
 
 #define MBDB_SLOW_POLL_TIMEOUT (HZ)
 #define MBDB_FAST_POLL_TIMEOUT 5
@@ -255,51 +218,6 @@ void mbdb_init_module(void)
 		pr_debug("mailbox interrupts enabled\n");
 }
 
-static int mbdb_counters_open(struct inode *inode, struct file *file)
-{
-	struct fsubdev *sd = inode->i_private;
-	u64 *mailbox_counter_values;
-	struct mbdb_counters_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[MAILBOX_COUNTER_DISPLAY_BUF_SIZE];
-	} *info;
-	size_t buf_size;
-	size_t buf_offset;
-	char *buf;
-	enum mbdb_counters i;
-
-	if (!sd)
-		return -EINVAL;
-
-	mailbox_counter_values = sd->mbdb->counters;
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info)
-		return -ENOMEM;
-
-	buf_size = ARRAY_SIZE(info->buf);
-	buf = info->buf;
-
-	for (buf_offset = 0, i = MBDB_COUNTERS_FIRST; i < MBDB_COUNTERS_MAX; i++)
-		buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-					"%s%llu\n", mbdb_counter_names[i],
-					mailbox_counter_values[i]);
-
-	info->blob.data = info->buf;
-	info->blob.size = buf_offset;
-	file->private_data = info;
-
-	return 0;
-}
-
-static const struct file_operations mbdb_counter_fops = {
-	.owner = THIS_MODULE,
-	.open = mbdb_counters_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
 static void mbdb_int_ack_wr(struct mbdb *mbdb, u64 mask)
 {
 	if (unlikely(READ_ONCE(mbdb->sd->fdev->dev_disabled)))
@@ -394,6 +312,11 @@ u64 mbdb_get_mbox_comm_errors(struct fsubdev *sd)
 	return counters[TIMEDOUT_REQUESTS] + counters[HANDLED_RECEIVED_REQUESTS] +
 	       counters[ERROR_RESPONSES] + counters[UNMATCHED_RESPONSES] +
 	       counters[TIMEDOUT_RESPONSES];
+}
+
+u64 *mbdb_get_mailbox_counters(struct fsubdev *sd)
+{
+	return sd->mbdb->counters;
 }
 
 /**
@@ -1072,7 +995,7 @@ static void mbdb_set_mem_addresses(struct mbdb *mbdb)
 		(csr_base + CP_ADDR_MBDB_MISC_SHARED);
 }
 
-int create_mbdb(struct fsubdev *sd, struct dentry *sd_dir_node)
+int create_mbdb(struct fsubdev *sd)
 {
 	struct mbdb *mbdb;
 
@@ -1110,11 +1033,6 @@ int create_mbdb(struct fsubdev *sd, struct dentry *sd_dir_node)
 		timer_setup(&mbdb->inbox_timer, inbox_timer_fn, 0);
 		add_timer(&mbdb->inbox_timer);
 	}
-
-	debugfs_create_file(MAILBOX_COUNTERS_FILE_NAME, 0400, sd_dir_node,
-			    sd, &mbdb_counter_fops);
-
-	statedump_node_init(sd, sd_dir_node);
 
 	return 0;
 }

@@ -271,13 +271,8 @@ static void ibx_write_infoframe(struct intel_encoder *encoder,
 {
 	const u32 *data = frame;
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct intel_crtc *intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	i915_reg_t reg = TVIDEO_DIP_CTL(intel_crtc->pipe);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	i915_reg_t reg = TVIDEO_DIP_CTL(crtc->pipe);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 val = intel_de_read(dev_priv, reg);
 	int i;
 
@@ -292,21 +287,13 @@ static void ibx_write_infoframe(struct intel_encoder *encoder,
 	intel_de_write(dev_priv, reg, val);
 
 	for (i = 0; i < len; i += 4) {
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		intel_de_write(dev_priv, TVIDEO_DIP_DATA(intel_crtc->pipe),
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		intel_de_write(dev_priv, TVIDEO_DIP_DATA(crtc->pipe),
-#endif /* LINUX_VERSION_IN_RANGE */
 			       *data);
 		data++;
 	}
 	/* Write every possible data byte to force correct ECC calculation. */
 	for (; i < VIDEO_DIP_DATA_SIZE; i += 4)
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		intel_de_write(dev_priv, TVIDEO_DIP_DATA(intel_crtc->pipe), 0);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		intel_de_write(dev_priv, TVIDEO_DIP_DATA(crtc->pipe), 0);
-#endif /* LINUX_VERSION_IN_RANGE */
 
 	val |= g4x_infoframe_enable(type);
 	val &= ~VIDEO_DIP_FREQ_MASK;
@@ -363,13 +350,8 @@ static void cpt_write_infoframe(struct intel_encoder *encoder,
 {
 	const u32 *data = frame;
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct intel_crtc *intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	i915_reg_t reg = TVIDEO_DIP_CTL(intel_crtc->pipe);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	i915_reg_t reg = TVIDEO_DIP_CTL(crtc->pipe);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 val = intel_de_read(dev_priv, reg);
 	int i;
 
@@ -387,21 +369,13 @@ static void cpt_write_infoframe(struct intel_encoder *encoder,
 	intel_de_write(dev_priv, reg, val);
 
 	for (i = 0; i < len; i += 4) {
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		intel_de_write(dev_priv, TVIDEO_DIP_DATA(intel_crtc->pipe),
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		intel_de_write(dev_priv, TVIDEO_DIP_DATA(crtc->pipe),
-#endif /* LINUX_VERSION_IN_RANGE */
 			       *data);
 		data++;
 	}
 	/* Write every possible data byte to force correct ECC calculation. */
 	for (; i < VIDEO_DIP_DATA_SIZE; i += 4)
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		intel_de_write(dev_priv, TVIDEO_DIP_DATA(intel_crtc->pipe), 0);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		intel_de_write(dev_priv, TVIDEO_DIP_DATA(crtc->pipe), 0);
-#endif /* LINUX_VERSION_IN_RANGE */
 
 	val |= g4x_infoframe_enable(type);
 	val &= ~VIDEO_DIP_FREQ_MASK;
@@ -454,13 +428,8 @@ static void vlv_write_infoframe(struct intel_encoder *encoder,
 {
 	const u32 *data = frame;
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct intel_crtc *intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	i915_reg_t reg = VLV_TVIDEO_DIP_CTL(intel_crtc->pipe);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	i915_reg_t reg = VLV_TVIDEO_DIP_CTL(crtc->pipe);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 val = intel_de_read(dev_priv, reg);
 	int i;
 
@@ -476,21 +445,13 @@ static void vlv_write_infoframe(struct intel_encoder *encoder,
 
 	for (i = 0; i < len; i += 4) {
 		intel_de_write(dev_priv,
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-			       VLV_TVIDEO_DIP_DATA(intel_crtc->pipe), *data);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 			       VLV_TVIDEO_DIP_DATA(crtc->pipe), *data);
-#endif /* LINUX_VERSION_IN_RANGE */
 		data++;
 	}
 	/* Write every possible data byte to force correct ECC calculation. */
 	for (; i < VIDEO_DIP_DATA_SIZE; i += 4)
 		intel_de_write(dev_priv,
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-			       VLV_TVIDEO_DIP_DATA(intel_crtc->pipe), 0);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 			       VLV_TVIDEO_DIP_DATA(crtc->pipe), 0);
-#endif /* LINUX_VERSION_IN_RANGE */
 
 	val |= g4x_infoframe_enable(type);
 	val &= ~VIDEO_DIP_FREQ_MASK;
@@ -1080,18 +1041,10 @@ static void ibx_set_infoframes(struct intel_encoder *encoder,
 			       const struct drm_connector_state *conn_state)
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct intel_crtc *intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-#endif /* LINUX_VERSION_IN_RANGE */
 	struct intel_digital_port *dig_port = enc_to_dig_port(encoder);
 	struct intel_hdmi *intel_hdmi = &dig_port->hdmi;
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	i915_reg_t reg = TVIDEO_DIP_CTL(intel_crtc->pipe);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	i915_reg_t reg = TVIDEO_DIP_CTL(crtc->pipe);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 val = intel_de_read(dev_priv, reg);
 	u32 port = VIDEO_DIP_PORT(encoder->port);
 
@@ -1147,17 +1100,9 @@ static void cpt_set_infoframes(struct intel_encoder *encoder,
 			       const struct drm_connector_state *conn_state)
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct intel_crtc *intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-#endif /* LINUX_VERSION_IN_RANGE */
 	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	i915_reg_t reg = TVIDEO_DIP_CTL(intel_crtc->pipe);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	i915_reg_t reg = TVIDEO_DIP_CTL(crtc->pipe);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 val = intel_de_read(dev_priv, reg);
 
 	assert_hdmi_port_disabled(intel_hdmi);
@@ -1522,22 +1467,12 @@ static int kbl_repositioning_enc_en_signal(struct intel_connector *connector,
 {
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	struct intel_digital_port *dig_port = intel_attached_dig_port(connector);
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-	struct drm_crtc *crtc = connector->base.state->crtc;
-	struct intel_crtc *intel_crtc = container_of(crtc,
-                                             struct intel_crtc, base);
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 	struct intel_crtc *crtc = to_intel_crtc(connector->base.state->crtc);
-#endif /* LINUX_VERSION_IN_RANGE */
 	u32 scanline;
 	int ret;
 
 	for (;;) {
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		scanline = intel_de_read(dev_priv, PIPEDSL(intel_crtc->pipe));
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		scanline = intel_de_read(dev_priv, PIPEDSL(crtc->pipe));
-#endif /* LINUX_VERSION_IN_RANGE */
 		if (scanline > 100 && scanline < 200)
 			break;
 		usleep_range(25, 50);
@@ -1987,12 +1922,11 @@ static bool intel_hdmi_sink_bpc_possible(struct drm_connector *connector,
 		if (ycbcr420_output)
 			return hdmi->y420_dc_modes & DRM_EDID_YCBCR420_DC_36;
 		else
-#if (LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) && UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1004,4)) \
-       || (LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1035,38))
-			return info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30;
+#ifdef EDID_HDMI_RGB444_DC_MODES_PRESENT
+			return info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_36;
 #else
 			return info->edid_hdmi_dc_modes & DRM_EDID_HDMI_DC_36;
-#endif /* #define UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1004,4) */
+#endif
 	case 10:
 		if (!has_hdmi_sink)
 			return false;
@@ -2000,12 +1934,11 @@ static bool intel_hdmi_sink_bpc_possible(struct drm_connector *connector,
 		if (ycbcr420_output)
 			return hdmi->y420_dc_modes & DRM_EDID_YCBCR420_DC_30;
 		else
-#if (LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) && UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1004,4)) \
-        || (LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1035,38))
+#ifdef EDID_HDMI_RGB444_DC_MODES_PRESENT
 			return info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30;
 #else
 			return info->edid_hdmi_dc_modes & DRM_EDID_HDMI_DC_30;
-#endif /* #define UBUNTU_BACKPORT_RELEASE_CODE >= UBUNTU_BACKPORT_RELEASE_VERSION(1004,4) */
+#endif
 	case 8:
 		return true;
 	default:

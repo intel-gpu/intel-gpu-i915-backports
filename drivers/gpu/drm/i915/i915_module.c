@@ -33,11 +33,11 @@ static int i915_check_nomodeset(void)
 	if (i915_modparams.modeset == 0)
 		use_kms = false;
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef VGACON_TEXT_FORCE_NOT_PRESENT
 	if (drm_firmware_drivers_only() && i915_modparams.modeset == -1)
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	if (vgacon_text_force() && i915_modparams.modeset == -1)
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif
 		use_kms = false;
 
 	if (!use_kms) {

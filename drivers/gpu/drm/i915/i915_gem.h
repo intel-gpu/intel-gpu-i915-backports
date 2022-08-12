@@ -54,9 +54,6 @@ struct drm_i915_private;
 	} while(0)
 #define GEM_WARN_ON(expr) WARN_ON(expr)
 
-#define GEM_DEBUG_DECL(var) var
-#define GEM_DEBUG_EXEC(expr) expr
-#define GEM_DEBUG_BUG_ON(expr) GEM_BUG_ON(expr)
 #define GEM_DEBUG_WARN_ON(expr) GEM_WARN_ON(expr)
 
 #else
@@ -66,9 +63,6 @@ struct drm_i915_private;
 #define GEM_BUG_ON(expr) BUILD_BUG_ON_INVALID(expr)
 #define GEM_WARN_ON(expr) ({ unlikely(!!(expr)); })
 
-#define GEM_DEBUG_DECL(var)
-#define GEM_DEBUG_EXEC(expr) do { } while (0)
-#define GEM_DEBUG_BUG_ON(expr)
 #define GEM_DEBUG_WARN_ON(expr) ({ BUILD_BUG_ON_INVALID(expr); 0; })
 #endif
 
@@ -105,7 +99,7 @@ static inline bool tasklet_is_locked(const struct tasklet_struct *t)
 static inline void __tasklet_disable_sync_once(struct tasklet_struct *t)
 {
 	if (!atomic_fetch_inc(&t->count))
-		tasklet_unlock_wait(t);
+		tasklet_unlock_spin_wait(t);
 }
 
 static inline bool __tasklet_is_enabled(const struct tasklet_struct *t)

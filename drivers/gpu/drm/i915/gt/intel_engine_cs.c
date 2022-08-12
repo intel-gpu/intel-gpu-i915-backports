@@ -23,8 +23,9 @@
 #include "intel_flat_ppgtt_pool.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
-#include "intel_gt_requests.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_requests.h"
 #include "intel_lrc.h"
 #include "intel_lrc_reg.h"
 #include "intel_reset.h"
@@ -551,13 +552,10 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 		engine->flags |= I915_ENGINE_HAS_EU_PRIORITY;
 
 		/*
-		 * FIXME: (1) Enabling the GuC DUAL QUEUE or CONTEXT ISOLATION WAs
+		 * FIXME: Enabling the GuC DUAL QUEUE or CONTEXT ISOLATION WAs
 		 * causes an issue with timeslicing RCS and CCS work. This needs
 		 * to be fixed in GuC. Until that happens, force preemption to
 		 * work around the issue.
-		 * FIXME: (2) This change is also needed for PVC, but due to
-		 * regression with media workloads on A0, PVC is excluded here.
-		 * Once those regressions are fixed, we need to add PVC back.
 		 */
 		if (IS_DG2(gt->i915))
 			engine->flags |= I915_ENGINE_WANT_FORCED_PREEMPTION;
@@ -661,10 +659,7 @@ static void __setup_engine_capabilities(struct intel_engine_cs *engine)
 {
 	struct drm_i915_private *i915 = engine->i915;
 
-	if (engine->class == RENDER_CLASS) {
-		engine->uabi_capabilities =
-			PRELIM_I915_RENDER_CLASS_CAPABILITY_3D;
-	} else if (engine->class == VIDEO_DECODE_CLASS) {
+	if (engine->class == VIDEO_DECODE_CLASS) {
 		/*
 		 * HEVC support is present on first engine instance
 		 * before Gen11 and on all instances afterwards.
@@ -819,8 +814,8 @@ static void engine_mask_apply_compute_fuses(struct intel_gt *gt)
 	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
 		return;
 
-	ccs_mask = intel_slicemask_from_dssmask(intel_sseu_get_compute_subslices(&info->sseu),
-						ss_per_ccs);
+	ccs_mask = intel_slicemask_from_xehp_dssmask(info->sseu.compute_subslice_mask,
+						     ss_per_ccs);
 
 	/*
 	 * As per HSD:22012626112 on PVC when using only quad0, we
@@ -1716,17 +1711,6 @@ void intel_engine_cancel_stop_cs(struct intel_engine_cs *engine)
 	ENGINE_WRITE_FW(engine, RING_MI_MODE, _MASKED_BIT_DISABLE(STOP_RING));
 }
 
-const char *i915_cache_level_str(struct drm_i915_private *i915, int type)
-{
-	switch (type) {
-	case I915_CACHE_NONE: return " uncached";
-	case I915_CACHE_LLC: return HAS_LLC(i915) ? " LLC" : " snooped";
-	case I915_CACHE_L3_LLC: return " L3+LLC";
-	case I915_CACHE_WT: return " WT";
-	default: return "";
-	}
-}
-
 /* NB: please notice the memset */
 void intel_engine_get_instdone(const struct intel_engine_cs *engine,
 			       struct intel_instdone *instdone)
@@ -1760,33 +1744,33 @@ void intel_engine_get_instdone(const struct intel_engine_cs *engine,
 		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
 			for_each_instdone_gslice_dss_xehp(i915, sseu, iter, slice, subslice) {
 				instdone->sampler[slice][subslice] =
-					intel_uncore_read_with_mcr_steering(uncore,
-									    GEN7_SAMPLER_INSTDONE,
-									    slice, subslice);
+					intel_gt_mcr_read(engine->gt,
+							  GEN7_SAMPLER_INSTDONE,
+							  slice, subslice);
 				instdone->row[slice][subslice] =
-					intel_uncore_read_with_mcr_steering(uncore,
-									    GEN7_ROW_INSTDONE,
-									    slice, subslice);
+					intel_gt_mcr_read(engine->gt,
+							  GEN7_ROW_INSTDONE,
+							  slice, subslice);
 			}
 		} else {
 			for_each_instdone_slice_subslice(i915, sseu, slice, subslice) {
 				instdone->sampler[slice][subslice] =
-					intel_uncore_read_with_mcr_steering(uncore,
-									    GEN7_SAMPLER_INSTDONE,
-									    slice, subslice);
+					intel_gt_mcr_read(engine->gt,
+							  GEN7_SAMPLER_INSTDONE,
+							  slice, subslice);
 				instdone->row[slice][subslice] =
-					intel_uncore_read_with_mcr_steering(uncore,
-									    GEN7_ROW_INSTDONE,
-									    slice, subslice);
+					intel_gt_mcr_read(engine->gt,
+							  GEN7_ROW_INSTDONE,
+							  slice, subslice);
 			}
 		}
 
 		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 55)) {
 			for_each_instdone_gslice_dss_xehp(i915, sseu, iter, slice, subslice)
 				instdone->geom_svg[slice][subslice] =
-					intel_uncore_read_with_mcr_steering(uncore,
-									    XEHPG_INSTDONE_GEOM_SVG,
-									    slice, subslice);
+					intel_gt_mcr_read(engine->gt,
+							  XEHPG_INSTDONE_GEOM_SVG,
+							  slice, subslice);
 		}
 	} else if (GRAPHICS_VER(i915) >= 7) {
 		instdone->instdone =
@@ -1859,7 +1843,7 @@ void __intel_engine_flush_submission(struct intel_engine_cs *engine, bool sync)
 
 	/* Synchronise and wait for the tasklet on another CPU */
 	if (sync)
-		tasklet_unlock_wait(t);
+		tasklet_unlock_spin_wait(t);
 }
 
 /**
