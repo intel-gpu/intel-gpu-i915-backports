@@ -516,11 +516,20 @@ eb_unreserve_vma(struct eb_vma *ev)
 	ev->flags &= ~__EXEC_OBJECT_RESERVED;
 }
 
+static bool platform_has_relocs_enabled(const struct i915_execbuffer *eb)
+{
+	/* until everything runs without relocation, consider platform has it */
+	return true;
+}
+
 static int
 eb_validate_vma(struct i915_execbuffer *eb,
 		struct drm_i915_gem_exec_object2 *entry,
 		struct i915_vma *vma)
 {
+	if (entry->relocation_count && !platform_has_relocs_enabled(eb))
+		return -EINVAL;
+
 	if (unlikely(entry->flags & eb->invalid_flags))
 		return -EINVAL;
 
@@ -761,7 +770,7 @@ static inline int use_cpu_reloc(const struct reloc_cache *cache,
 
 	return (cache->has_llc ||
 		obj->cache_dirty ||
-		obj->cache_level != I915_CACHE_NONE);
+		!i915_gem_object_has_cache_level(obj, I915_CACHE_NONE));
 }
 
 static int eb_reserve_vma(struct i915_execbuffer *eb,
@@ -1659,8 +1668,10 @@ static void *reloc_iomap(struct drm_i915_gem_object *obj,
 	offset = cache->node.start;
 	if (drm_mm_node_allocated(&cache->node)) {
 		ggtt->vm.insert_page(&ggtt->vm,
-				     i915_gem_object_get_dma_address(obj, page),
-				     offset, I915_CACHE_NONE, 0);
+			i915_gem_object_get_dma_address(obj, page),
+			offset,
+			i915_gem_get_pat_index(ggtt->vm.i915, I915_CACHE_NONE),
+			0);
 	} else {
 		offset += page << PAGE_SHIFT;
 	}
@@ -2106,7 +2117,7 @@ eb_relocate_entry(struct i915_execbuffer *eb,
 		if (reloc->write_domain == I915_GEM_DOMAIN_INSTRUCTION &&
 		    GRAPHICS_VER(eb->i915) == 6) {
 			err = i915_vma_bind(target->vma,
-					    target->vma->obj->cache_level,
+					    target->vma->obj->pat_index,
 					    PIN_GLOBAL, NULL);
 			if (err)
 				return err;
@@ -3465,7 +3476,7 @@ __free_fence_array(struct eb_fence *fences, unsigned int n)
 	while (n--) {
 		drm_syncobj_put(ptr_mask_bits(fences[n].syncobj, 2));
 		dma_fence_put(fences[n].dma_fence);
-		kfree(fences[n].chain_fence);
+		dma_fence_chain_free(fences[n].chain_fence);
 	}
 	kvfree(fences);
 }
@@ -3579,9 +3590,7 @@ add_timeline_fence_array(struct i915_execbuffer *eb,
 				return -EINVAL;
 			}
 
-			f->chain_fence =
-				kmalloc(sizeof(*f->chain_fence),
-					GFP_KERNEL);
+			f->chain_fence = dma_fence_chain_alloc();
 			if (!f->chain_fence) {
 				drm_syncobj_put(syncobj);
 				dma_fence_put(fence);

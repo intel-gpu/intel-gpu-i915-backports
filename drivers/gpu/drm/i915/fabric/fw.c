@@ -1799,7 +1799,7 @@ static const char *get_fw_image(struct fdev *dev)
 
 	switch (dev->pd->product) {
 	case IAF_PONTEVECCHIO:
-		/* WA: HSD-16011092478 */
+		/* WA_16011092478 */
 		if (IS_ANR_STEP(&dev->sd[0], ANR_ARI_STEP_A0,
 				ANR_ARI_STEP_A_LAST)) {
 			dev_info(fdev_dev(dev), "A0 firmware\n");
@@ -1893,7 +1893,7 @@ static void wrk_load_and_init_subdev(struct work_struct *work)
 
 	load_and_init_subdev(sd);
 
-	create_dev_debugfs_files(sd);
+	create_optional_dev_debugfs_files(sd);
 }
 
 static void wrk_load_psc_data(struct work_struct *work)

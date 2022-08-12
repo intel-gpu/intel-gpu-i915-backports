@@ -1910,8 +1910,8 @@
 #define   PKG_MIN_PWR			GENMASK_ULL(30, 16)
 #define   PKG_MAX_PWR			GENMASK_ULL(46, 32)
 #define   PKG_MAX_WIN			GENMASK_ULL(54, 48)
-#define     PKG_MAX_WIN_Y		GENMASK_ULL(54, 53)
-#define     PKG_MAX_WIN_X		GENMASK_ULL(52, 48)
+#define     PKG_MAX_WIN_X		GENMASK_ULL(54, 53)
+#define     PKG_MAX_WIN_Y		GENMASK_ULL(52, 48)
 
 #define CHV_CLK_CTL1			_MMIO(0x101100)
 #define VLV_CLK_CTL2			_MMIO(0x101104)
@@ -7025,9 +7025,9 @@ enum gt_vctr_registers {
 
 #define GEN6_PCODE_MAILBOX			_MMIO(0x138124)
 #define   GEN6_PCODE_READY			(1 << 31)
-#define   GEN6_PCODE_MB_PARAM2                  REG_GENMASK(23, 16)
-#define   GEN6_PCODE_MB_PARAM1                  REG_GENMASK(15, 8)
-#define   GEN6_PCODE_MB_COMMAND                 REG_GENMASK(7, 0)
+#define   GEN6_PCODE_MB_PARAM2			REG_GENMASK(23, 16)
+#define   GEN6_PCODE_MB_PARAM1			REG_GENMASK(15, 8)
+#define   GEN6_PCODE_MB_COMMAND			REG_GENMASK(7, 0)
 #define   GEN6_PCODE_ERROR_MASK			0xFF
 #define     GEN6_PCODE_SUCCESS			0x0
 #define     GEN6_PCODE_ILLEGAL_CMD		0x1
@@ -7100,6 +7100,7 @@ enum gt_vctr_registers {
 #define     POWER_SETUP_SUBCOMMAND_WRITE_I1	0x5
 #define	    POWER_SETUP_I1_WATTS		REG_BIT(31)
 #define	    POWER_SETUP_I1_SHIFT		6	/* 10.6 fixed point format */
+#define	    POWER_SETUP_I1_DATA_MASK		REG_GENMASK(15, 0)
 #define GEN12_PCODE_READ_SAGV_BLOCK_TIME_US	0x23
 #define   XEHPSDV_PCODE_FREQUENCY_CONFIG		0x6e	/* xehpsdv, pvc */
 /* XEHPSDV_PCODE_FREQUENCY_CONFIG sub-commands (param1) */
@@ -7940,25 +7941,25 @@ enum skl_power_gate {
 #define _PORT_CLK_SEL_A			0x46100
 #define _PORT_CLK_SEL_B			0x46104
 #define PORT_CLK_SEL(port) _MMIO_PORT(port, _PORT_CLK_SEL_A, _PORT_CLK_SEL_B)
-#define  PORT_CLK_SEL_LCPLL_2700	(0 << 29)
-#define  PORT_CLK_SEL_LCPLL_1350	(1 << 29)
-#define  PORT_CLK_SEL_LCPLL_810		(2 << 29)
-#define  PORT_CLK_SEL_SPLL		(3 << 29)
-#define  PORT_CLK_SEL_WRPLL(pll)	(((pll) + 4) << 29)
-#define  PORT_CLK_SEL_WRPLL1		(4 << 29)
-#define  PORT_CLK_SEL_WRPLL2		(5 << 29)
-#define  PORT_CLK_SEL_NONE		(7 << 29)
-#define  PORT_CLK_SEL_MASK		(7 << 29)
+#define  PORT_CLK_SEL_MASK		REG_GENMASK(31, 29)
+#define  PORT_CLK_SEL_LCPLL_2700	REG_FIELD_PREP(PORT_CLK_SEL_MASK, 0)
+#define  PORT_CLK_SEL_LCPLL_1350	REG_FIELD_PREP(PORT_CLK_SEL_MASK, 1)
+#define  PORT_CLK_SEL_LCPLL_810		REG_FIELD_PREP(PORT_CLK_SEL_MASK, 2)
+#define  PORT_CLK_SEL_SPLL		REG_FIELD_PREP(PORT_CLK_SEL_MASK, 3)
+#define  PORT_CLK_SEL_WRPLL(pll)	REG_FIELD_PREP(PORT_CLK_SEL_MASK, 4 + (pll))
+#define  PORT_CLK_SEL_WRPLL1		REG_FIELD_PREP(PORT_CLK_SEL_MASK, 4)
+#define  PORT_CLK_SEL_WRPLL2		REG_FIELD_PREP(PORT_CLK_SEL_MASK, 5)
+#define  PORT_CLK_SEL_NONE		REG_FIELD_PREP(PORT_CLK_SEL_MASK, 7)
 
 /* On ICL+ this is the same as PORT_CLK_SEL, but all bits change. */
 #define DDI_CLK_SEL(port)		PORT_CLK_SEL(port)
-#define  DDI_CLK_SEL_NONE		(0x0 << 28)
-#define  DDI_CLK_SEL_MG			(0x8 << 28)
-#define  DDI_CLK_SEL_TBT_162		(0xC << 28)
-#define  DDI_CLK_SEL_TBT_270		(0xD << 28)
-#define  DDI_CLK_SEL_TBT_540		(0xE << 28)
-#define  DDI_CLK_SEL_TBT_810		(0xF << 28)
-#define  DDI_CLK_SEL_MASK		(0xF << 28)
+#define  DDI_CLK_SEL_MASK		REG_GENMASK(31, 28)
+#define  DDI_CLK_SEL_NONE		REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0x0)
+#define  DDI_CLK_SEL_MG			REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0x8)
+#define  DDI_CLK_SEL_TBT_162		REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0xC)
+#define  DDI_CLK_SEL_TBT_270		REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0xD)
+#define  DDI_CLK_SEL_TBT_540		REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0xE)
+#define  DDI_CLK_SEL_TBT_810		REG_FIELD_PREP(DDI_CLK_SEL_MASK, 0xF)
 
 /* Transcoder clock selection */
 #define _TRANS_CLK_SEL_A		0x46140

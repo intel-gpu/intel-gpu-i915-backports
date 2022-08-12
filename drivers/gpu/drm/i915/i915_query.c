@@ -15,9 +15,9 @@
 #include "i915_drv.h"
 #include "i915_perf.h"
 #include "i915_query.h"
+#include "gt/intel_engine_user.h"
 #include <uapi/drm/i915_drm.h>
 #include "gt/intel_engine_user.h"
-#include "gt/intel_gt.h"
 
 static int copy_query_item(void *query_hdr, size_t query_sz,
 			   u32 total_length,
@@ -38,10 +38,12 @@ static int copy_query_item(void *query_hdr, size_t query_sz,
 
 static int fill_topology_info(const struct sseu_dev_info *sseu,
 			      struct drm_i915_query_item *query_item,
-			      const u8 *subslice_mask)
+			      intel_sseu_ss_mask_t subslice_mask)
 {
 	struct drm_i915_query_topology_info topo;
 	u32 slice_length, subslice_length, eu_length, total_length;
+	int ss_stride = GEN_SSEU_STRIDE(sseu->max_subslices);
+	int eu_stride = GEN_SSEU_STRIDE(sseu->max_eus_per_subslice);
 	int ret;
 
 	BUILD_BUG_ON(sizeof(u8) != sizeof(sseu->slice_mask));
@@ -50,12 +52,13 @@ static int fill_topology_info(const struct sseu_dev_info *sseu,
 		return -ENODEV;
 
 	slice_length = sizeof(sseu->slice_mask);
-	subslice_length = sseu->max_slices * sseu->ss_stride;
-	eu_length = sseu->max_slices * sseu->max_subslices * sseu->eu_stride;
+	subslice_length = sseu->max_slices * ss_stride;
+	eu_length = sseu->max_slices * sseu->max_subslices * eu_stride;
 	total_length = sizeof(topo) + slice_length + subslice_length +
 		       eu_length;
 
 	ret = copy_query_item(&topo, sizeof(topo), total_length, query_item);
+
 	if (ret != 0)
 		return ret;
 
@@ -65,9 +68,9 @@ static int fill_topology_info(const struct sseu_dev_info *sseu,
 	topo.max_eus_per_subslice = sseu->max_eus_per_subslice;
 
 	topo.subslice_offset = slice_length;
-	topo.subslice_stride = sseu->ss_stride;
+	topo.subslice_stride = ss_stride;
 	topo.eu_offset = slice_length + subslice_length;
-	topo.eu_stride = sseu->eu_stride;
+	topo.eu_stride = eu_stride;
 
 	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr),
 			 &topo, sizeof(topo)))
@@ -77,15 +80,15 @@ static int fill_topology_info(const struct sseu_dev_info *sseu,
 			 &sseu->slice_mask, slice_length))
 		return -EFAULT;
 
-	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr +
-					 sizeof(topo) + slice_length),
-			 subslice_mask, subslice_length))
+	if (intel_sseu_copy_ssmask_to_user(u64_to_user_ptr(query_item->data_ptr +
+							   sizeof(topo) + slice_length),
+					   sseu))
 		return -EFAULT;
 
-	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr +
-					 sizeof(topo) +
-					 slice_length + subslice_length),
-			 sseu->eu_mask, eu_length))
+	if (intel_sseu_copy_eumask_to_user(u64_to_user_ptr(query_item->data_ptr +
+							   sizeof(topo) +
+							   slice_length + subslice_length),
+					   sseu))
 		return -EFAULT;
 
 	return total_length;
@@ -100,7 +103,32 @@ static int query_topology_info(struct drm_i915_private *dev_priv,
 		return -EINVAL;
 
 	return fill_topology_info(sseu, query_item, sseu->subslice_mask);
+}
 
+static int query_geometry_subslices(struct drm_i915_private *i915,
+				    struct drm_i915_query_item *query_item)
+{
+	const struct sseu_dev_info *sseu;
+	struct intel_engine_cs *engine;
+	struct i915_engine_class_instance classinstance;
+
+	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		return -ENODEV;
+
+	classinstance = *((struct i915_engine_class_instance *)&query_item->flags);
+
+	engine = intel_engine_lookup_user(i915, (u8)classinstance.engine_class,
+					  (u8)classinstance.engine_instance);
+
+	if (!engine)
+		return -EINVAL;
+
+	if (engine->class != RENDER_CLASS)
+		return -EINVAL;
+
+	sseu = &engine->gt->info.sseu;
+
+	return fill_topology_info(sseu, query_item, sseu->geometry_subslice_mask);
 }
 
 static int
@@ -375,7 +403,6 @@ done:
 	return 0;
 }
 
-/* FIXME: revert to upstream version after UMD switch to PRELIM version */
 static int
 query_engine_info(struct drm_i915_private *i915,
 		  struct drm_i915_query_item *query_item)
@@ -470,10 +497,6 @@ prelim_query_engine_info(struct drm_i915_private *i915,
 				  engine->oa_group->oa_unit_id : U32_MAX;
 
 		switch (engine->uabi_class) {
-		case I915_ENGINE_CLASS_RENDER:
-			info.known_capabilities =
-				PRELIM_I915_RENDER_CLASS_CAPABILITY_3D;
-			break;
 		case I915_ENGINE_CLASS_COPY:
 			info.known_capabilities =
 				PRELIM_I915_COPY_CLASS_CAP_BLOCK_COPY |
@@ -860,6 +883,28 @@ static int query_memregion_info(struct drm_i915_private *i915,
 	return total_length;
 }
 
+static int query_hwconfig_blob(struct drm_i915_private *i915,
+			       struct drm_i915_query_item *query_item)
+{
+	struct intel_gt *gt = to_gt(i915);
+	struct intel_hwconfig *hwconfig = &gt->info.hwconfig;
+
+	if (!hwconfig->size || !hwconfig->ptr)
+		return -ENODEV;
+
+	if (query_item->length == 0)
+		return hwconfig->size;
+
+	if (query_item->length < hwconfig->size)
+		return -EINVAL;
+
+	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr),
+			 hwconfig->ptr, hwconfig->size))
+		return -EFAULT;
+
+	return hwconfig->size;
+}
+
 static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 				       struct drm_i915_query_item *query_item)
 {
@@ -927,87 +972,6 @@ static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 	return total_length;
 }
 
-static int query_memregion_info_wrapper(struct drm_i915_private *i915,
-					struct drm_i915_query_item *query_item)
-{
-	int ret;
-
-	if (query_item->query_id == PRELIM_DRM_I915_QUERY_MEMORY_REGIONS)
-		ret = prelim_query_memregion_info(i915, query_item);
-	else
-		ret = query_memregion_info(i915, query_item);
-
-	return ret;
-}
-
-static int query_hwconfig_table(struct drm_i915_private *i915,
-				struct drm_i915_query_item *query_item)
-{
-	struct intel_gt *gt = to_gt(i915);
-	struct intel_guc_hwconfig *hwconfig = &gt->uc.guc.hwconfig;
-
-	if (!hwconfig->size || !hwconfig->ptr)
-		return -ENODEV;
-
-	if (query_item->length == 0)
-		return hwconfig->size;
-
-	if (query_item->length < hwconfig->size) {
-		drm_dbg(&i915->drm, "Invalid query hwconfig table size=%u expected=%u\n",
-			query_item->length, hwconfig->size);
-		return -EINVAL;
-	}
-
-	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr),
-			 hwconfig->ptr, hwconfig->size))
-		return -EFAULT;
-
-	return hwconfig->size;
-}
-
-static int query_l3banks(struct drm_i915_private *i915,
-			 struct drm_i915_query_item *query_item)
-{
-	u32 banks;
-
-	if (query_item->length == 0)
-		return sizeof(banks);
-
-	if (query_item->length < sizeof(banks))
-		return -EINVAL;
-
-	banks = intel_gt_get_l3bank_count(to_gt(i915));
-
-	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr),
-			 &banks, sizeof(banks)))
-		return -EFAULT;
-
-	return sizeof(banks);
-}
-
-static int query_geometry_subslices(struct drm_i915_private *i915,
-				 struct drm_i915_query_item *query_item)
-{
-	const struct sseu_dev_info *sseu;
-	struct intel_engine_cs *engine;
-	u8 engine_class, engine_instance;
-
-	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
-		return -ENODEV;
-
-	engine_class = query_item->flags & 0xFF;
-	engine_instance = (query_item->flags >> 8) & 0xFF;
-
-	engine = intel_engine_lookup_user(i915, engine_class, engine_instance);
-
-	if (!engine)
-		return -EINVAL;
-
-	sseu = &engine->gt->info.sseu;
-
-	return fill_topology_info(sseu, query_item, sseu->geometry_subslice_mask);
-}
-
 static int query_compute_subslices(struct drm_i915_private *i915,
 				struct drm_i915_query_item *query_item)
 {
@@ -1031,20 +995,31 @@ static int query_compute_subslices(struct drm_i915_private *i915,
 	return fill_topology_info(sseu, query_item, sseu->compute_subslice_mask);
 }
 
-static int (* const i915_query_funcs[])(struct drm_i915_private *dev_priv,
-					struct drm_i915_query_item *query_item) = {
+typedef int (* const i915_query_funcs_table)(struct drm_i915_private *dev_priv,
+						    struct drm_i915_query_item *query_item);
+
+static i915_query_funcs_table i915_query_funcs[] = {
 	query_topology_info,
 	query_engine_info,
 	query_perf_config,
-	query_memregion_info_wrapper,
-	query_distance_info,
-	query_hwconfig_table,
+	query_memregion_info,
+	query_hwconfig_blob,
 	query_geometry_subslices,
-	query_compute_subslices,
-	query_cs_cycles,
-	[10] = query_fabric_connectivity,
-	[12] = prelim_query_engine_info,
-	[PRELIM_DRM_I915_QUERY_MASK(PRELIM_DRM_I915_QUERY_L3_BANK_COUNT) - 1] = query_l3banks,
+};
+
+static i915_query_funcs_table i915_query_funcs_prelim[] = {
+#define MAKE_TABLE_IDX(id)		[PRELIM_DRM_I915_QUERY_MASK(PRELIM_DRM_I915_QUERY_##id) - 1]
+
+	MAKE_TABLE_IDX(MEMORY_REGIONS) = prelim_query_memregion_info,
+	MAKE_TABLE_IDX(DISTANCE_INFO) = query_distance_info,
+	MAKE_TABLE_IDX(HWCONFIG_TABLE) = query_hwconfig_blob,
+	MAKE_TABLE_IDX(GEOMETRY_SUBSLICES) = query_geometry_subslices,
+	MAKE_TABLE_IDX(COMPUTE_SUBSLICES) = query_compute_subslices,
+	MAKE_TABLE_IDX(CS_CYCLES) = query_cs_cycles,
+	MAKE_TABLE_IDX(FABRIC_INFO) = query_fabric_connectivity,
+	MAKE_TABLE_IDX(ENGINE_INFO) = prelim_query_engine_info,
+
+#undef MAKE_TABLE_IDX
 };
 
 int i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
@@ -1060,7 +1035,9 @@ int i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 
 	for (i = 0; i < args->num_items; i++, user_item_ptr++) {
 		struct drm_i915_query_item item;
+		i915_query_funcs_table *table;
 		unsigned long func_idx;
+		size_t table_size;
 		int ret;
 
 		if (copy_from_user(&item, user_item_ptr, sizeof(item)))
@@ -1072,14 +1049,21 @@ int i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		if (overflows_type(item.query_id - 1, unsigned long))
 			return -EINVAL;
 
-		func_idx = PRELIM_DRM_I915_QUERY_MASK(item.query_id) - 1;
+		if (item.query_id & PRELIM_DRM_I915_QUERY) {
+			table = i915_query_funcs_prelim;
+			table_size = ARRAY_SIZE(i915_query_funcs_prelim);
+			func_idx = PRELIM_DRM_I915_QUERY_MASK(item.query_id) - 1;
+		} else {
+			table = i915_query_funcs;
+			table_size = ARRAY_SIZE(i915_query_funcs);
+			func_idx = item.query_id - 1;
+		}
 
 		ret = -EINVAL;
-		if (func_idx < ARRAY_SIZE(i915_query_funcs)) {
-			func_idx = array_index_nospec(func_idx,
-						      ARRAY_SIZE(i915_query_funcs));
-			if (i915_query_funcs[func_idx])
-				ret = i915_query_funcs[func_idx](dev_priv, &item);
+		if (func_idx < table_size) {
+			func_idx = array_index_nospec(func_idx, table_size);
+			if (table[func_idx])
+				ret = table[func_idx](dev_priv, &item);
 		}
 
 		/* Only write the length back to userspace if they differ. */

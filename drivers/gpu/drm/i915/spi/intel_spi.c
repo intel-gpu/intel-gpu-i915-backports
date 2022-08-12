@@ -33,7 +33,7 @@ static const struct mfd_cell intel_spi_cell = {
 
 void intel_spi_init(struct intel_spi *spi, struct drm_i915_private *dev_priv)
 {
-	struct pci_dev *pdev = dev_priv->drm.pdev;
+	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	int ret;
 
 	/* Only the DGFX devices have internal SPI */
@@ -60,7 +60,7 @@ void intel_spi_fini(struct intel_spi *spi)
 	if (!spi->i915)
 		return;
 
-	pdev = spi->i915->drm.pdev;
+	pdev = to_pci_dev(spi->i915->drm.dev);
 
 	dev_dbg(&pdev->dev, "removing i915-spi cell\n");
 }

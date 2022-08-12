@@ -114,12 +114,12 @@ i915_l3_read(struct file *filp, struct kobject *kobj,
 	count = min_t(size_t, GEN7_L3LOG_SIZE - offset, count);
 	memset(buf, 0, count);
 
-	spin_lock(&i915->gem.contexts.lock);
+	spin_lock_irq(&i915->gem.contexts.lock);
 	if (i915->l3_parity.remap_info[slice])
 		memcpy(buf,
 		       i915->l3_parity.remap_info[slice] + offset / sizeof(u32),
 		       count);
-	spin_unlock(&i915->gem.contexts.lock);
+	spin_unlock_irq(&i915->gem.contexts.lock);
 
 	return count;
 }
@@ -147,7 +147,7 @@ i915_l3_write(struct file *filp, struct kobject *kobj,
 	if (!remap_info)
 		return -ENOMEM;
 
-	spin_lock(&i915->gem.contexts.lock);
+	spin_lock_irq(&i915->gem.contexts.lock);
 
 	if (i915->l3_parity.remap_info[slice]) {
 		freeme = remap_info;
@@ -163,7 +163,7 @@ i915_l3_write(struct file *filp, struct kobject *kobj,
 	list_for_each_entry(ctx, &i915->gem.contexts.list, link)
 		ctx->remap_slice |= BIT(slice);
 
-	spin_unlock(&i915->gem.contexts.lock);
+	spin_unlock_irq(&i915->gem.contexts.lock);
 	kfree(freeme);
 
 	/*

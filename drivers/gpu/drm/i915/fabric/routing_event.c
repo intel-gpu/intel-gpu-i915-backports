@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2021 Intel Corporation.
+ * Copyright(c) 2019 - 2022 Intel Corporation.
  *
  */
 
 #include <linux/module.h>
 #include <linux/debugfs.h>
 
+#include "debugfs.h"
 #include "iaf_drv.h"
 #include "routing_event.h"
 #include "routing_engine.h"

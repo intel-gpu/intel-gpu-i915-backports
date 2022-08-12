@@ -63,6 +63,10 @@ int intel_selftest_modify_policy(struct intel_engine_cs *engine,
 		engine->props.preempt_timeout_ms = REDUCED_PREEMPT;
 		break;
 
+	case SELFTEST_SCHEDULER_MODIFY_ENGINE_RESET:
+		engine->i915->params.reset = 2;
+		break;
+
 	case SELFTEST_SCHEDULER_MODIFY_NO_HANGCHECK:
 		engine->props.preempt_timeout_ms = 0;
 		break;

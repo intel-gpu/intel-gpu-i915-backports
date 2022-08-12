@@ -30,6 +30,7 @@
 #include <drm/drm_file.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_managed.h>
 #include <drm/drm_vblank.h>
 
 #include "drm_crtc_internal.h"
@@ -37,7 +38,7 @@
 /**
  * DOC: overview
  *
- * A plane represents an image source that can be blended with or overlayed on
+ * A plane represents an image source that can be blended with or overlaid on
  * top of a CRTC during the scanout process. Planes take their input data from a
  * &drm_framebuffer object. The plane itself specifies the cropping and scaling
  * of that image, and where it is placed on the visible area of a display
@@ -49,14 +50,84 @@
  * &struct drm_plane (possibly as part of a larger structure) and registers it
  * with a call to drm_universal_plane_init().
  *
- * Cursor and overlay planes are optional. All drivers should provide one
- * primary plane per CRTC to avoid surprising userspace too much. See enum
- * drm_plane_type for a more in-depth discussion of these special uapi-relevant
- * plane types. Special planes are associated with their CRTC by calling
- * drm_crtc_init_with_planes().
+ * Each plane has a type, see enum drm_plane_type. A plane can be compatible
+ * with multiple CRTCs, see &drm_plane.possible_crtcs.
  *
- * The type of a plane is exposed in the immutable "type" enumeration property,
- * which has one of the following values: "Overlay", "Primary", "Cursor".
+ * Each CRTC must have a unique primary plane userspace can attach to enable
+ * the CRTC. In other words, userspace must be able to attach a different
+ * primary plane to each CRTC at the same time. Primary planes can still be
+ * compatible with multiple CRTCs. There must be exactly as many primary planes
+ * as there are CRTCs.
+ *
+ * Legacy uAPI doesn't expose the primary and cursor planes directly. DRM core
+ * relies on the driver to set the primary and optionally the cursor plane used
+ * for legacy IOCTLs. This is done by calling drm_crtc_init_with_planes(). All
+ * drivers must provide one primary plane per CRTC to avoid surprising legacy
+ * userspace too much.
+ */
+
+/**
+ * DOC: standard plane properties
+ *
+ * DRM planes have a few standardized properties:
+ *
+ * type:
+ *     Immutable property describing the type of the plane.
+ *
+ *     For user-space which has enabled the &DRM_CLIENT_CAP_ATOMIC capability,
+ *     the plane type is just a hint and is mostly superseded by atomic
+ *     test-only commits. The type hint can still be used to come up more
+ *     easily with a plane configuration accepted by the driver.
+ *
+ *     The value of this property can be one of the following:
+ *
+ *     "Primary":
+ *         To light up a CRTC, attaching a primary plane is the most likely to
+ *         work if it covers the whole CRTC and doesn't have scaling or
+ *         cropping set up.
+ *
+ *         Drivers may support more features for the primary plane, user-space
+ *         can find out with test-only atomic commits.
+ *
+ *         Some primary planes are implicitly used by the kernel in the legacy
+ *         IOCTLs &DRM_IOCTL_MODE_SETCRTC and &DRM_IOCTL_MODE_PAGE_FLIP.
+ *         Therefore user-space must not mix explicit usage of any primary
+ *         plane (e.g. through an atomic commit) with these legacy IOCTLs.
+ *
+ *     "Cursor":
+ *         To enable this plane, using a framebuffer configured without scaling
+ *         or cropping and with the following properties is the most likely to
+ *         work:
+ *
+ *         - If the driver provides the capabilities &DRM_CAP_CURSOR_WIDTH and
+ *           &DRM_CAP_CURSOR_HEIGHT, create the framebuffer with this size.
+ *           Otherwise, create a framebuffer with the size 64x64.
+ *         - If the driver doesn't support modifiers, create a framebuffer with
+ *           a linear layout. Otherwise, use the IN_FORMATS plane property.
+ *
+ *         Drivers may support more features for the cursor plane, user-space
+ *         can find out with test-only atomic commits.
+ *
+ *         Some cursor planes are implicitly used by the kernel in the legacy
+ *         IOCTLs &DRM_IOCTL_MODE_CURSOR and &DRM_IOCTL_MODE_CURSOR2.
+ *         Therefore user-space must not mix explicit usage of any cursor
+ *         plane (e.g. through an atomic commit) with these legacy IOCTLs.
+ *
+ *         Some drivers may support cursors even if no cursor plane is exposed.
+ *         In this case, the legacy cursor IOCTLs can be used to configure the
+ *         cursor.
+ *
+ *     "Overlay":
+ *         Neither primary nor cursor.
+ *
+ *         Overlay planes are the only planes exposed when the
+ *         &DRM_CLIENT_CAP_UNIVERSAL_PLANES capability is disabled.
+ *
+ * IN_FORMATS:
+ *     Blob property which contains the set of buffer format and modifier
+ *     pairs supported by this plane. The blob is a struct
+ *     drm_format_modifier_blob. Without this property the plane doesn't
+ *     support buffers with modifiers. Userspace cannot change this property.
  */
 
 static unsigned int drm_num_planes(struct drm_device *dev)
@@ -152,31 +223,16 @@ done:
 	return 0;
 }
 
-/**
- * drm_universal_plane_init - Initialize a new universal plane object
- * @dev: DRM device
- * @plane: plane object to init
- * @possible_crtcs: bitmask of possible CRTCs
- * @funcs: callbacks for the new plane
- * @formats: array of supported formats (DRM_FORMAT\_\*)
- * @format_count: number of elements in @formats
- * @format_modifiers: array of struct drm_format modifiers terminated by
- *                    DRM_FORMAT_MOD_INVALID
- * @type: type of plane (overlay, primary, cursor)
- * @name: printf style format string for the plane name, or NULL for default name
- *
- * Initializes a plane object of type @type.
- *
- * Returns:
- * Zero on success, error code on failure.
- */
-int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
-			     uint32_t possible_crtcs,
-			     const struct drm_plane_funcs *funcs,
-			     const uint32_t *formats, unsigned int format_count,
-			     const uint64_t *format_modifiers,
-			     enum drm_plane_type type,
-			     const char *name, ...)
+__printf(9, 0)
+static int __drm_universal_plane_init(struct drm_device *dev,
+				      struct drm_plane *plane,
+				      uint32_t possible_crtcs,
+				      const struct drm_plane_funcs *funcs,
+				      const uint32_t *formats,
+				      unsigned int format_count,
+				      const uint64_t *format_modifiers,
+				      enum drm_plane_type type,
+				      const char *name, va_list ap)
 {
 	struct drm_mode_config *config = &dev->mode_config;
 	unsigned int format_modifier_count = 0;
@@ -184,6 +240,13 @@ int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
 
 	/* plane index is used with 32bit bitmasks */
 	if (WARN_ON(config->num_total_plane >= 32))
+		return -EINVAL;
+
+	/*
+	 * First driver to need more than 64 formats needs to fix this. Each
+	 * format is encoded as a bit and the current code only supports a u64.
+	 */
+	if (WARN_ON(format_count > 64))
 		return -EINVAL;
 
 	WARN_ON(drm_drv_uses_atomic_modeset(dev) &&
@@ -206,13 +269,6 @@ int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
 		drm_mode_object_unregister(dev, &plane->base);
 		return -ENOMEM;
 	}
-
-	/*
-	 * First driver to need more than 64 formats needs to fix this. Each
-	 * format is encoded as a bit and the current code only supports a u64.
-	 */
-	if (WARN_ON(format_count > 64))
-		return -EINVAL;
 
 	if (format_modifiers) {
 		const uint64_t *temp_modifiers = format_modifiers;
@@ -237,11 +293,7 @@ int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
 	}
 
 	if (name) {
-		va_list ap;
-
-		va_start(ap, name);
 		plane->name = kvasprintf(GFP_KERNEL, name, ap);
-		va_end(ap);
 	} else {
 		plane->name = kasprintf(GFP_KERNEL, "plane-%d",
 					drm_num_planes(dev));
@@ -286,7 +338,101 @@ int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
 
 	return 0;
 }
+
+/**
+ * drm_universal_plane_init - Initialize a new universal plane object
+ * @dev: DRM device
+ * @plane: plane object to init
+ * @possible_crtcs: bitmask of possible CRTCs
+ * @funcs: callbacks for the new plane
+ * @formats: array of supported formats (DRM_FORMAT\_\*)
+ * @format_count: number of elements in @formats
+ * @format_modifiers: array of struct drm_format modifiers terminated by
+ *                    DRM_FORMAT_MOD_INVALID
+ * @type: type of plane (overlay, primary, cursor)
+ * @name: printf style format string for the plane name, or NULL for default name
+ *
+ * Initializes a plane object of type @type. The &drm_plane_funcs.destroy hook
+ * should call drm_plane_cleanup() and kfree() the plane structure. The plane
+ * structure should not be allocated with devm_kzalloc().
+ *
+ * Note: consider using drmm_universal_plane_alloc() instead of
+ * drm_universal_plane_init() to let the DRM managed resource infrastructure
+ * take care of cleanup and deallocation.
+ *
+ * Returns:
+ * Zero on success, error code on failure.
+ */
+int drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane,
+			     uint32_t possible_crtcs,
+			     const struct drm_plane_funcs *funcs,
+			     const uint32_t *formats, unsigned int format_count,
+			     const uint64_t *format_modifiers,
+			     enum drm_plane_type type,
+			     const char *name, ...)
+{
+	va_list ap;
+	int ret;
+
+	WARN_ON(!funcs->destroy);
+
+	va_start(ap, name);
+	ret = __drm_universal_plane_init(dev, plane, possible_crtcs, funcs,
+					 formats, format_count, format_modifiers,
+					 type, name, ap);
+	va_end(ap);
+	return ret;
+}
 EXPORT_SYMBOL(drm_universal_plane_init);
+
+static void drmm_universal_plane_alloc_release(struct drm_device *dev, void *ptr)
+{
+	struct drm_plane *plane = ptr;
+
+	if (WARN_ON(!plane->dev))
+		return;
+
+	drm_plane_cleanup(plane);
+}
+
+void *__drmm_universal_plane_alloc(struct drm_device *dev, size_t size,
+				   size_t offset, uint32_t possible_crtcs,
+				   const struct drm_plane_funcs *funcs,
+				   const uint32_t *formats, unsigned int format_count,
+				   const uint64_t *format_modifiers,
+				   enum drm_plane_type type,
+				   const char *name, ...)
+{
+	void *container;
+	struct drm_plane *plane;
+	va_list ap;
+	int ret;
+
+	if (WARN_ON(!funcs || funcs->destroy))
+		return ERR_PTR(-EINVAL);
+
+	container = drmm_kzalloc(dev, size, GFP_KERNEL);
+	if (!container)
+		return ERR_PTR(-ENOMEM);
+
+	plane = container + offset;
+
+	va_start(ap, name);
+	ret = __drm_universal_plane_init(dev, plane, possible_crtcs, funcs,
+					 formats, format_count, format_modifiers,
+					 type, name, ap);
+	va_end(ap);
+	if (ret)
+		return ERR_PTR(ret);
+
+	ret = drmm_add_action_or_reset(dev, drmm_universal_plane_alloc_release,
+				       plane);
+	if (ret)
+		return ERR_PTR(ret);
+
+	return container;
+}
+EXPORT_SYMBOL(__drmm_universal_plane_alloc);
 
 int drm_plane_register_all(struct drm_device *dev)
 {

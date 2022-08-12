@@ -142,6 +142,8 @@
 		(REG_FIELD_PREP(BLIT_CCTL_DST_MOCS_MASK, (dst) << 1) | \
 		 REG_FIELD_PREP(BLIT_CCTL_SRC_MOCS_MASK, (src) << 1))
 
+#define RING_CSCMDOP(base)			_MMIO((base) + 0x20c)
+
 /*
  * CMD_CCTL read/write fields take a MOCS value and _not_ a table index.
  * The lsb of each can be considered a separate enabling bit for encryption.
@@ -158,7 +160,6 @@
 		 REG_FIELD_PREP(CMD_CCTL_READ_OVERRIDE_MASK, (read) << 1))
 
 #define RING_PREDICATE_RESULT(base)		_MMIO((base) + 0x3b8) /* gen12+ */
-#define RING_CSCMDOP(base)			_MMIO((base) + 0x20c)
 
 #define MI_PREDICATE_RESULT_2(base)		_MMIO((base) + 0x3bc)
 #define   LOWER_SLICE_ENABLED			(1 << 0)

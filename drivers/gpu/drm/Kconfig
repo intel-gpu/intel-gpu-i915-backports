@@ -18,6 +18,8 @@ menuconfig DRM
 	depends on I2C_ALGOBIT
 	depends on DMA_SHARED_BUFFER
 #	select SYNC_FILE
+# gallium uses SYS_kcmp for os_same_file_description() to de-duplicate
+# device and dmabuf fd. Let's make sure that is available for our userspace.
 	help
 	  Kernel-level support for the Direct Rendering Infrastructure (DRI)
 	  introduced in XFree86 4.0. If you say Y here, you need to select
@@ -35,6 +37,13 @@ config DRM_MIPI_DBI
 config DRM_MIPI_DSI
 	bool
 	depends on DRM
+
+config DRM_DP_AUX_BUS
+	depends on n
+	tristate
+	depends on m
+	depends on DRM
+	depends on OF
 
 config DRM_DP_AUX_CHARDEV
 	bool "DRM DP AUX Interface"
@@ -83,23 +92,6 @@ config DRM_KMS_HELPER
 	help
 	  CRTC helpers for KMS drivers.
 
-config DRM_KMS_FB_HELPER
-	bool
-	depends on DRM_KMS_HELPER
-	depends on FB
-	select FRAMEBUFFER_CONSOLE if !EXPERT
-	select FRAMEBUFFER_CONSOLE_DETECT_PRIMARY if FRAMEBUFFER_CONSOLE
-	depends on FB_SYS_FOPS
-	depends on FB_SYS_FILLRECT
-	depends on FB_SYS_COPYAREA
-	depends on FB_SYS_IMAGEBLIT
-	depends on FB_CFB_FILLRECT
-	depends on FB_CFB_COPYAREA
-	depends on FB_CFB_IMAGEBLIT
-	depends on FB_DEFERRED_IO
-	help
-	  FBDEV helpers for KMS drivers.
-
 config DRM_DEBUG_DP_MST_TOPOLOGY_REFS
         bool "Enable refcount backtrace history in the DP MST helpers"
 	depends on STACKTRACE_SUPPORT
@@ -133,8 +125,18 @@ config DRM_DEBUG_MODESET_LOCK
 config DRM_FBDEV_EMULATION
 	bool "Enable legacy fbdev support for your modesetting driver"
 	depends on DRM
+	depends on FB
 	select DRM_KMS_HELPER
-	select DRM_KMS_FB_HELPER
+	depends on FB_CFB_FILLRECT
+	depends on FB_CFB_COPYAREA
+	depends on FB_CFB_IMAGEBLIT
+	depends on FB_DEFERRED_IO
+	depends on FB_SYS_FOPS
+	depends on FB_SYS_FILLRECT
+	depends on FB_SYS_COPYAREA
+	depends on FB_SYS_IMAGEBLIT
+	select FRAMEBUFFER_CONSOLE if !EXPERT
+	select FRAMEBUFFER_CONSOLE_DETECT_PRIMARY if FRAMEBUFFER_CONSOLE
 	default y
 	help
 	  Choose this option if you have a need for the legacy fbdev
@@ -239,10 +241,6 @@ config DRM_GEM_SHMEM_HELPER
 	help
 	  Choose this if you need the GEM shmem helper functions
 
-config DRM_VM
-	bool
-	depends on DRM && MMU
-
 config DRM_SCHED
 	tristate
 	depends on m
@@ -256,6 +254,7 @@ config DRM_RADEON
 	tristate "ATI Radeon"
 	depends on m
 	depends on DRM && PCI && MMU
+	depends on AGP || !AGP
 	depends on FW_LOADER
         select DRM_KMS_HELPER
         select DRM_TTM
@@ -286,7 +285,6 @@ config DRM_AMDGPU
 	depends on HWMON
 	depends on BACKLIGHT_CLASS_DEVICE
 	depends on INTERVAL_TREE
-	depends on CHASH
 	help
 	  Choose this option if you have a recent AMD Radeon graphics card.
 
@@ -318,16 +316,29 @@ config DRM_VKMS
 
 	  If M is selected the module will be called vkms.
 
-#source "drivers/gpu/drm/panel/Kconfig"
+# source "drivers/gpu/drm/panel/Kconfig"
 
-source "drivers/gpu/drm/bridge/Kconfig"
+ source "drivers/gpu/drm/bridge/Kconfig"
+
+config DRM_HYPERV
+	tristate "DRM Support for Hyper-V synthetic video device"
+	depends on m
+	depends on DRM && PCI && MMU && HYPERV
+	select DRM_KMS_HELPER
+	select DRM_GEM_SHMEM_HELPER
+	help
+	 This is a KMS driver for Hyper-V synthetic video device. Choose this
+	 option if you would like to enable drm driver for Hyper-V virtual
+	 machine. Unselect Hyper-V framebuffer driver (CONFIG_FB_HYPERV) so
+	 that DRM driver is used by default.
+
+	 If M is selected the module will be called hyperv_drm.
 
 # Keep legacy drivers last
 
 menuconfig DRM_LEGACY
 	bool "Enable legacy drivers (DANGEROUS)"
 	depends on DRM && MMU
-	select DRM_VM
 	help
 	  Enable legacy DRI1 drivers. Those drivers expose unsafe and dangerous
 	  APIs to user-space, which can be used to circumvent access

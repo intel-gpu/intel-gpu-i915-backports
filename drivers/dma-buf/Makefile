@@ -17,6 +17,7 @@ dmabuf-$(CPTCFG_DMABUF_HEAPS)	+= dma-heap.o
 obj-$(CPTCFG_DMABUF_HEAPS)	+= heaps/
 dmabuf-$(CPTCFG_SYNC_FILE)	+= sync_file.o
 dmabuf-$(CPTCFG_SW_SYNC)	+= sw_sync.o sync_debug.o
+#obj-$(CPTCFG_DMABUF_SYSFS_STATS) += dma-buf-sysfs-stats.o
 
 dmabuf_selftests-y := \
 	selftest.o \

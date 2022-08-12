@@ -691,7 +691,7 @@ static const struct dev_pagemap_ops i915_devmem_pagemap_ops = {
 
 int i915_svm_devmem_add(struct intel_memory_region *mem)
 {
-	struct device *dev = &mem->i915->drm.pdev->dev;
+	struct device *dev = &to_pci_dev(mem->i915->drm.dev)->dev;
 	struct i915_devmem *devmem;
 	struct resource *res;
 	void *addr;
@@ -743,7 +743,7 @@ devm_err:
 void i915_svm_devmem_remove(struct intel_memory_region *mem)
 {
 	if (mem->devmem) {
-		devm_memunmap_pages(&mem->i915->drm.pdev->dev,
+		devm_memunmap_pages(&to_pci_dev(mem->i915->drm.dev)->dev,
 				    &mem->devmem->pagemap);
 		kfree(mem->devmem);
 		mem->devmem = NULL;

@@ -216,10 +216,6 @@ static struct virtual_engine *to_virtual_engine(struct intel_engine_cs *engine)
 	return container_of(engine, struct virtual_engine, base);
 }
 
-static struct intel_context *
-execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
-			 unsigned long flags);
-
 static struct i915_request *
 __active_request(const struct intel_timeline * const tl,
 		 struct i915_request *rq,
@@ -2702,6 +2698,10 @@ unwind:
 		intel_context_put(parent);
 	return err;
 }
+
+static struct intel_context *
+execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
+			 unsigned long flags);
 
 static const struct intel_context_ops execlists_context_ops = {
 	.flags = COPS_HAS_INFLIGHT | COPS_RUNTIME_CYCLES,

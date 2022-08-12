@@ -398,9 +398,14 @@ static struct i915_gem_engines *default_engines(struct i915_gem_context *ctx)
 void i915_gem_context_release(struct kref *ref)
 {
 	struct i915_gem_context *ctx = container_of(ref, typeof(*ctx), ref);
+	unsigned long flags;
 
 	trace_i915_context_free(ctx);
 	GEM_BUG_ON(!i915_gem_context_is_closed(ctx));
+
+	spin_lock_irqsave(&ctx->i915->gem.contexts.lock, flags);
+	list_del(&ctx->link);
+	spin_unlock_irqrestore(&ctx->i915->gem.contexts.lock, flags);
 
 	if (ctx->client)
 		i915_drm_client_put(ctx->client);
@@ -562,7 +567,7 @@ static void engines_idle_release(struct i915_gem_context *ctx,
 		int err;
 
 		/* serialises with execbuf */
-		set_bit(CONTEXT_CLOSED_BIT, &ce->flags);
+		intel_context_close(ce);
 		if (!intel_context_pin_if_active(ce))
 			continue;
 
@@ -618,7 +623,7 @@ static void context_close(struct i915_gem_context *ctx)
 
 	client = ctx->client;
 	if (client) {
-		i915_debugger_wait_on_discovery(ctx->client->clients->i915);
+		i915_debugger_wait_on_discovery(ctx->i915, client);
 		i915_debugger_context_destroy(ctx);
 	}
 
@@ -644,10 +649,6 @@ static void context_close(struct i915_gem_context *ctx)
 		drm_syncobj_put(ctx->syncobj);
 
 	ctx->file_priv = ERR_PTR(-EBADF);
-
-	spin_lock(&ctx->i915->gem.contexts.lock);
-	list_del(&ctx->link);
-	spin_unlock(&ctx->i915->gem.contexts.lock);
 
 	if (client) {
 		spin_lock(&client->ctx_lock);
@@ -998,9 +999,16 @@ void i915_gem_init__contexts(struct drm_i915_private *i915)
 	init_contexts(&i915->gem.contexts);
 }
 
-static void __assign_debugger(struct intel_context *context, void *client)
+static void __assign_scheduling_policy(struct intel_context *context,
+				       void *client)
 {
-	i915_debugger_register_context(context);
+	intel_context_init_schedule_policy(context);
+}
+
+static void __apply_debugger(struct intel_context *context, void *client)
+{
+	if (i915_debugger_context_guc_debugged(context))
+		intel_context_disable_preemption_timeout(context);
 }
 
 static int gem_context_register(struct i915_gem_context *ctx,
@@ -1027,8 +1035,14 @@ static int gem_context_register(struct i915_gem_context *ctx,
 		 pid_nr(i915_drm_client_pid(client)));
 	rcu_read_unlock();
 
+	i915_debugger_wait_on_discovery(i915, client);
+
 	context_apply_all(ctx, __apply_client, client);
-	context_apply_all(ctx, __assign_debugger, client);
+
+	/* Set the default scheduling values from the engine */
+	context_apply_all(ctx, __assign_scheduling_policy, client);
+	/* Apply any debugger overrides to the context */
+	context_apply_all(ctx, __apply_debugger, client);
 
 	/* And finally expose ourselves to userspace via the idr */
 	ret = xa_alloc(&fpriv->context_xa, id, ctx, xa_limit_32b, GFP_KERNEL);
@@ -1042,9 +1056,9 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	list_add_tail_rcu(&ctx->client_link, &client->ctx_list);
 	spin_unlock(&client->ctx_lock);
 
-	spin_lock(&i915->gem.contexts.lock);
+	spin_lock_irq(&i915->gem.contexts.lock);
 	list_add_tail(&ctx->link, &i915->gem.contexts.list);
-	spin_unlock(&i915->gem.contexts.lock);
+	spin_unlock_irq(&i915->gem.contexts.lock);
 
 	i915_debugger_context_create(ctx);
 	if (vm) {
@@ -1167,8 +1181,6 @@ int i915_gem_vm_create_ioctl(struct drm_device *dev, void *data,
 	if (i915->params.enable_pagefault && HAS_RECOVERABLE_PAGE_FAULT(i915))
 		args->flags |= PRELIM_I915_VM_CREATE_FLAGS_ENABLE_PAGE_FAULT;
 
-	i915_debugger_wait_on_discovery(file_priv->dev_priv);
-
 	if (args->extensions) {
 		vce.i915 = i915;
 		err = i915_user_extensions(u64_to_user_ptr(args->extensions),
@@ -1186,6 +1198,8 @@ int i915_gem_vm_create_ioctl(struct drm_device *dev, void *data,
 		return PTR_ERR(ppgtt);
 
 	ppgtt->vm.client = i915_drm_client_get(file_priv->client);
+
+	i915_debugger_wait_on_discovery(i915, ppgtt->vm.client);
 
 	err = xa_alloc(&file_priv->vm_xa, &id, &ppgtt->vm,
 		       xa_limit_32b, GFP_KERNEL);
@@ -1218,13 +1232,13 @@ int i915_gem_vm_destroy_ioctl(struct drm_device *dev, void *data,
 	if (args->extensions)
 		return -EINVAL;
 
-	i915_debugger_wait_on_discovery(file_priv->dev_priv);
+	i915_debugger_wait_on_discovery(to_i915(dev), file_priv->client);
 
 	vm = xa_erase(&file_priv->vm_xa, args->vm_id);
 	if (!vm)
 		return -ENOENT;
 
-	i915_debugger_vm_destroy(file_priv->client, vm);
+	i915_debugger_vm_destroy(vm->client, vm);
 	i915_vm_close(vm);
 
 	i915_gem_flush_free_objects(to_i915(dev));
@@ -1296,13 +1310,13 @@ static int get_ppgtt(struct drm_i915_file_private *file_priv,
 	if (!rcu_access_pointer(ctx->vm))
 		return -ENODEV;
 
-	i915_debugger_wait_on_discovery(ctx->i915);
-
 	rcu_read_lock();
 	vm = context_get_vm_rcu(ctx);
 	rcu_read_unlock();
 	if (!vm)
 		return -ENODEV;
+
+	i915_debugger_wait_on_discovery(vm->i915, vm->client);
 
 	err = xa_alloc(&file_priv->vm_xa, &id, vm, xa_limit_32b, GFP_KERNEL);
 	if (err)
@@ -1393,6 +1407,10 @@ i915_gem_user_to_context_sseu(struct intel_gt *gt,
 {
 	const struct sseu_dev_info *device = &gt->info.sseu;
 	struct drm_i915_private *i915 = gt->i915;
+	unsigned int dev_subslice_mask;
+
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		return -EINVAL;
 
 	/* No zeros in any field. */
 	if (!user->slice_mask || !user->subslice_mask ||
@@ -1419,7 +1437,8 @@ i915_gem_user_to_context_sseu(struct intel_gt *gt,
 	if (user->slice_mask & ~device->slice_mask)
 		return -EINVAL;
 
-	if (user->subslice_mask & ~device->subslice_mask[0])
+	dev_subslice_mask = intel_sseu_get_hsw_subslices(device, 0);
+	if (user->subslice_mask & ~dev_subslice_mask)
 		return -EINVAL;
 
 	if (user->max_eus_per_subslice > device->max_eus_per_subslice)
@@ -1433,7 +1452,7 @@ i915_gem_user_to_context_sseu(struct intel_gt *gt,
 	/* Part specific restrictions. */
 	if (GRAPHICS_VER(i915) == 11) {
 		unsigned int hw_s = hweight8(device->slice_mask);
-		unsigned int hw_ss_per_s = hweight8(device->subslice_mask[0]);
+		unsigned int hw_ss_per_s = hweight8(dev_subslice_mask);
 		unsigned int req_s = hweight8(context->slice_mask);
 		unsigned int req_ss = hweight8(context->subslice_mask);
 
@@ -2431,8 +2450,6 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		return ret;
 
-	i915_debugger_wait_on_discovery(i915);
-
 	ext_data.fpriv = file->driver_priv;
 	if (client_is_banned(ext_data.fpriv)) {
 		drm_dbg(&i915->drm,
@@ -2483,7 +2500,9 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 	if (!args->ctx_id)
 		return -ENOENT;
 
-	i915_debugger_wait_on_discovery(file_priv->dev_priv);
+	i915_debugger_wait_on_discovery(file_priv->dev_priv,
+					file_priv->client);
+
 	ctx = xa_erase(&file_priv->context_xa, args->ctx_id);
 	if (!ctx)
 		return -ENOENT;
@@ -2679,7 +2698,7 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 	if (!ctx)
 		return -ENOENT;
 
-	i915_debugger_wait_on_discovery(file_priv->dev_priv);
+	i915_debugger_wait_on_discovery(ctx->i915, ctx->client);
 	ret = ctx_setparam(file_priv, ctx, args, false);
 
 	i915_gem_context_put(ctx);

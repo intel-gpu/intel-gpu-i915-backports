@@ -7,8 +7,8 @@
 
 obj-$(CPTCFG_DRM_I915_INTEL_FABRIC) += iaf.o
 
-iaf-y := dev_diag.o \
-	 diagnostics.o \
+iaf-y := debugfs.o \
+	 dev_diag.o \
 	 error.o \
 	 fw.o \
 	 main.o \
@@ -17,6 +17,7 @@ iaf-y := dev_diag.o \
 	 ops.o \
 	 parallel.o \
 	 port.o \
+	 port_diag.o \
 	 routing_debug.o \
 	 routing_engine.o \
 	 routing_event.o \

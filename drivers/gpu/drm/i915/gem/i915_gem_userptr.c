@@ -268,13 +268,10 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	pvec = obj->userptr.pvec;
 
 alloc_table:
-	ret = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
-					num_pages << PAGE_SHIFT,
-					max_segment,
-					GFP_KERNEL);
-	if (ret) {
-		goto err_free;
-	}
+	ret = sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+						num_pages << PAGE_SHIFT, GFP_KERNEL);
+	if (ret)
+		goto err;
 
 	ret = i915_gem_gtt_prepare_pages(obj, st);
 	if (ret) {
@@ -387,13 +384,18 @@ static void i915_gem_object_userptr_invalidate_work(struct work_struct *work)
 	struct i915_gem_ww_ctx ww;
 	int ret;
 
+	if (!kref_get_unless_zero(&obj->base.refcount))
+                return;
+
 	for_i915_gem_ww(&ww, ret, true) {
 		ret = i915_gem_object_lock(obj, &ww);
 		if (ret)
 			continue;
 
-		i915_gem_object_userptr_unbind(obj, &ww);
+		ret = i915_gem_object_userptr_unbind(obj, &ww);
 	}
+
+	i915_gem_object_put(obj);
 }
 
 int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
