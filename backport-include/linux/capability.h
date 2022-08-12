@@ -49,13 +49,13 @@ static inline bool capable(int cap)
 {
         return true;
 }
-#endif /* CONFIG_MULTIUSER */
+#endif
 
 static inline bool perfmon_capable(void)
 {
         return capable(CAP_PERFMON) || capable(CAP_SYS_ADMIN);
 }
 
-#endif /* LINUX_VERSION_IS_LESS (5,8,0) */
+#endif
 #endif /* _BACKPORT_LINUX_CAPABILITY_H */
 

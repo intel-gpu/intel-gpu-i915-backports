@@ -9,7 +9,11 @@
 
 struct drm_i915_private;
 struct intel_gt;
+#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+struct mei_aux_device;
+#else
 struct resource;
+#endif
 
 #define INTEL_GSC_NUM_INTERFACES 2
 /*
@@ -26,6 +30,9 @@ struct resource;
  */
 struct intel_gsc {
 	struct intel_gsc_intf {
+#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+		struct mei_aux_device *adev;
+#endif
 		struct drm_i915_gem_object *gem_obj;
 		int irq;
 		unsigned int id;

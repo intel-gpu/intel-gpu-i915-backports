@@ -1,3 +1,5 @@
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+
 #include <linux/mmu_notifier.h>
 #include <linux/slab.h>
 
@@ -163,3 +165,4 @@ int __rh_drm_mmu_notifier_register(struct __rh_drm_mmu_notifier *mn,
 EXPORT_SYMBOL(__rh_drm_mmu_notifier_register);
 
 #endif /* CONFIG_MMU_NOTIFIER */
+#endif /* RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6) */

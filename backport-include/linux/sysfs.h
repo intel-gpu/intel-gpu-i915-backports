@@ -51,6 +51,6 @@ static inline int sysfs_emit_at(char *buf, int at, const char *fmt, ...)
         return 0;
 }
 
-#endif /* CONFIG_SYSFS */
-#endif /* LINUX_VERSION_IS_LESS(5,10,0) */
+#endif
+#endif
 #endif /* _BACKPORT_SYSFS_H_ */

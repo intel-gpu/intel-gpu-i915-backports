@@ -11,8 +11,6 @@
 #else
 #include <linux/platform_device.h>
 #endif
-#include <linux/debugfs.h>
-#include <linux/fs.h>
 #include <linux/irqreturn.h>
 #include <linux/mtd/mtd.h>
 #include <linux/rwsem.h>
@@ -27,6 +25,8 @@
 #include <drm/intel_iaf_platform.h>
 
 #include "csr.h"
+
+#include "statedump.h"
 
 #define DRIVER_NAME "iaf"
 
@@ -220,8 +220,6 @@
 			dev_dbg(fport_dev(_p), SD_PORT_FMT _fmt, \
 				sd_index(_p->sd), _p->lpn, ##__VA_ARGS__); \
 		} while (0)
-
-#define F_DENTRY(filp) ((filp)->f_path.dentry)
 
 /**
  * struct mbdb_op_fw_version_rsp - currently loaded firmware information
@@ -753,20 +751,6 @@ struct fsubdev_routing_info {
 	u16 plane_index;
 };
 
-struct state_dump {
-	struct debugfs_blob_wrapper blob;
-	/*
-	 * Blocks so only one process can state dump across open/read/release
-	 * of the debugfs node
-	 */
-	struct semaphore state_dump_sem;
-	/*
-	 * Stops all new mailbox traffic and waits until all ops in the device
-	 * have finished
-	 */
-	struct rw_semaphore state_dump_mbdb_sem;
-};
-
 /**
  * struct fsubdev - Per-subdevice state
  * @fw_work: workitem for firmware programming
@@ -784,6 +768,7 @@ struct state_dump {
  * @ok_to_schedule_pm_work: indicates it is OK to request port management
  * @pm_triggers: event triggering for port management
  * @debugfs_dir: sd-level debugfs dentry
+ * @debugfs_port_dir: debugfs_dir/port-level debugfs dentry
  * @kobj: kobject for this sd in the sysfs tree
  * @fw_comm_errors: attribute for fw_comm_errors sysfs file
  * @fw_error: attribute for fw_error sysfs file
@@ -833,6 +818,7 @@ struct fsubdev {
 	bool ok_to_schedule_pm_work;
 	DECLARE_BITMAP(pm_triggers, NUM_PM_TRIGGERS);
 	struct dentry *debugfs_dir;
+	struct dentry *debugfs_port_dir;
 	struct kobject *kobj;
 	struct device_attribute fw_comm_errors;
 	struct device_attribute fw_error;
@@ -1214,10 +1200,6 @@ static inline u64 flits_to_bytes(u64 flits)
 
 	return __builtin_umulll_overflow(flits, BYTES_PER_FLIT, &bytes) ? ULLONG_MAX : bytes;
 }
-
-struct dentry *get_debugfs_root_node(void);
-ssize_t blob_read(struct file *file, char __user *user_buffer, size_t count, loff_t *ppos);
-int blob_release(struct inode *inode, struct file *file);
 
 void indicate_subdevice_error(struct fsubdev *sd, enum sd_error err);
 

@@ -28,6 +28,7 @@
 #include <drm/i915_pciids.h>
 
 #include "gt/intel_gt.h"
+#include "gem/i915_gem_object_types.h"
 
 #include "i915_driver.h"
 #include "i915_drv.h"
@@ -156,6 +157,30 @@
 		   .gamma_lut_tests = DRM_COLOR_LUT_NON_DECREASING, \
 	}
 
+#define LEGACY_CACHELEVEL \
+	.cachelevel_to_pat = { \
+		[I915_CACHE_NONE]   = 0, \
+		[I915_CACHE_LLC]    = 1, \
+		[I915_CACHE_L3_LLC] = 2, \
+		[I915_CACHE_WT]     = 3, \
+	}
+
+#define TGL_CACHELEVEL \
+	.cachelevel_to_pat = { \
+		[I915_CACHE_NONE]   = 3, \
+		[I915_CACHE_LLC]    = 0, \
+		[I915_CACHE_L3_LLC] = 0, \
+		[I915_CACHE_WT]     = 2, \
+	}
+
+#define PVC_CACHELEVEL \
+	.cachelevel_to_pat = { \
+		[I915_CACHE_NONE]   = 0, \
+		[I915_CACHE_LLC]    = 3, \
+		[I915_CACHE_L3_LLC] = 3, \
+		[I915_CACHE_WT]     = 2, \
+	}
+
 /* Keep in gen based order, and chronological order within a gen */
 
 #define GEN_DEFAULT_PAGE_SIZES \
@@ -185,7 +210,8 @@
 	I9XX_CURSOR_OFFSETS, \
 	I9XX_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 #define I845_FEATURES \
 	GEN(2), \
@@ -206,7 +232,8 @@
 	I845_CURSOR_OFFSETS, \
 	I9XX_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 static const struct intel_device_info i830_info = {
 	I830_FEATURES,
@@ -245,7 +272,8 @@ static const struct intel_device_info i865g_info = {
 	I9XX_CURSOR_OFFSETS, \
 	I9XX_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 static const struct intel_device_info i915g_info = {
 	GEN3_FEATURES,
@@ -337,7 +365,8 @@ static const struct intel_device_info pnv_m_info = {
 	I9XX_CURSOR_OFFSETS, \
 	I965_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 static const struct intel_device_info i965g_info = {
 	GEN4_FEATURES,
@@ -391,7 +420,8 @@ static const struct intel_device_info gm45_info = {
 	I9XX_CURSOR_OFFSETS, \
 	ILK_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 static const struct intel_device_info ilk_d_info = {
 	GEN5_FEATURES,
@@ -427,7 +457,8 @@ static const struct intel_device_info ilk_m_info = {
 	I9XX_CURSOR_OFFSETS, \
 	ILK_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 #define SNB_D_PLATFORM \
 	GEN6_FEATURES, \
@@ -481,7 +512,8 @@ static const struct intel_device_info snb_m_gt2_info = {
 	IVB_CURSOR_OFFSETS, \
 	IVB_COLORS, \
 	GEN_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 #define IVB_D_PLATFORM \
 	GEN7_FEATURES, \
@@ -548,6 +580,7 @@ static const struct intel_device_info vlv_info = {
 	I965_COLORS,
 	GEN_DEFAULT_PAGE_SIZES,
 	GEN_DEFAULT_REGIONS,
+	LEGACY_CACHELEVEL,
 };
 
 #define G75_FEATURES  \
@@ -734,7 +767,8 @@ static const struct intel_device_info skl_gt4_info = {
 	IVB_CURSOR_OFFSETS, \
 	IVB_COLORS, \
 	GEN9_DEFAULT_PAGE_SIZES, \
-	GEN_DEFAULT_REGIONS
+	GEN_DEFAULT_REGIONS, \
+	LEGACY_CACHELEVEL
 
 static const struct intel_device_info bxt_info = {
 	GEN9_LP_FEATURES,
@@ -889,6 +923,7 @@ static const struct intel_device_info jsl_info = {
 		[TRANSCODER_DSI_1] = TRANSCODER_DSI1_OFFSET, \
 	}, \
 	TGL_CURSOR_OFFSETS, \
+	TGL_CACHELEVEL, \
 	.has_global_mocs = 1, \
 	.display.has_dsb = 0 /* FIXME: LUT load is broken with DSB */
 
@@ -1034,7 +1069,7 @@ static const struct intel_device_info adl_p_info = {
 	.has_llc = 1, \
 	.has_logical_ring_contexts = 1, \
 	.has_logical_ring_elsq = 1, \
-	.has_mslices = 1, \
+	.has_mslice_steering = 1, \
 	.has_oa_bpc_reporting = 1, \
 	.has_oa_buf_128m = 1, \
 	.has_oa_mmio_trigger = 1, \
@@ -1049,7 +1084,8 @@ static const struct intel_device_info adl_p_info = {
 	.ppgtt_size = 48, \
 	.ppgtt_type = INTEL_PPGTT_FULL, \
 	.has_oam = 1, \
-	.oam_uses_vdbox0_channel = 1
+	.oam_uses_vdbox0_channel = 1, \
+	TGL_CACHELEVEL
 
 #define XE_HPM_FEATURES \
 	.media.ver = 12, \
@@ -1068,11 +1104,10 @@ static const struct intel_device_info xehpsdv_info = {
 	PLATFORM(INTEL_XEHPSDV),
 	.display = { },
 	.has_64k_pages = 1,
+	.has_media_ratio_mode = 1,
 	.has_sriov = 1,
 	.has_iov_memirq = 1,
 	.has_mem_sparing = 1,
-	.has_mi_set_predicate = 1,
-	.has_media_ratio_mode = 1,
 	.platform_engine_mask =
 		BIT(BCS0) |
 		BIT(VECS0) | BIT(VECS1) | BIT(VECS2) | BIT(VECS3) |
@@ -1093,9 +1128,8 @@ static const struct intel_device_info xehpsdv_info = {
 	.has_64k_pages = 1, \
 	.has_guc_deprivilege = 1, \
 	.has_heci_pxp = 1, \
-	.has_iov_memirq = 1, \
 	.has_media_ratio_mode = 1, \
-	.has_mi_set_predicate = 1, \
+	.has_iov_memirq = 1, \
 	.has_oac = 1, \
 	.has_sriov = 1, \
 	.platform_engine_mask = \
@@ -1115,6 +1149,7 @@ static const struct intel_device_info dg2_info = {
 static const struct intel_device_info ats_m_info = {
 	DG2_FEATURES,
 	.display = { 0 },
+	.tuning_thread_rr_after_dep = 1,
 };
 
 #define XE_HPC_FEATURES \
@@ -1125,23 +1160,21 @@ static const struct intel_device_info ats_m_info = {
 	.has_64k_pages = 1, \
 	.has_access_counter = 1, \
 	.has_asid_tlb_invalidation = 1, \
-	.has_bslices = 1, \
 	.has_cache_clos = 1, \
 	.has_eu_stall_sampling = 1, \
 	.has_full_ps64 = 1, \
 	.has_gt_error_vectors = 1, \
 	.has_guc_deprivilege = 1, \
+	.has_guc_programmable_mocs = 1, \
 	.has_iaf = 1, \
 	.has_l3_ccs_read = 1, \
+	.has_link_copy_engines = 1, \
 	.has_lmtt_lvl2 = 1, \
 	.has_media_ratio_mode = 1, \
 	.has_mem_sparing = 1, \
-	.has_mi_set_predicate = 1, \
-	.has_mslices = 0, \
+	.has_mslice_steering = 0, \
 	.has_oac = 1, \
 	.has_one_eu_per_fuse_bit = 1, \
-	.has_link_copy_engines = 1, \
-	.has_guc_programmable_mocs = 1, \
 	.has_recoverable_page_fault = 1, \
 	.has_slim_vdbox = 1, \
 	.has_sriov = 1, \
@@ -1168,6 +1201,7 @@ static const struct intel_device_info pvc_info = {
 		BIT(VCS0) | BIT(VCS1) | BIT(VCS2) |
 		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3),
 	.require_force_probe = 1,
+	PVC_CACHELEVEL,
 };
 
 #undef PLATFORM
@@ -1306,7 +1340,7 @@ static bool force_probe(u16 device_id, const char *devices)
 	return ret;
 }
 
-bool __pci_resource_valid(struct pci_dev *pdev, int bar)
+bool i915_pci_resource_valid(struct pci_dev *pdev, int bar)
 {
 	if (!pci_resource_flags(pdev, bar))
 		return false;
@@ -1320,18 +1354,11 @@ bool __pci_resource_valid(struct pci_dev *pdev, int bar)
 	return true;
 }
 
-static bool intel_bars_valid(struct pci_dev *pdev, struct intel_device_info *intel_info)
+static bool intel_mmio_bar_valid(struct pci_dev *pdev, struct intel_device_info *intel_info)
 {
 	const int gttmmaddr_bar = intel_info->graphics.ver == 2 ? GEN2_GTTMMADR_BAR : GTTMMADR_BAR;
-	const int gfxmem_bar = GFXMEM_BAR;
 
-	if (!__pci_resource_valid(pdev, gttmmaddr_bar))
-		return false;
-
-	if (!__pci_resource_valid(pdev, gfxmem_bar))
-		return false;
-
-	return true;
+	return i915_pci_resource_valid(pdev, gttmmaddr_bar);
 }
 
 static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -1366,8 +1393,8 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (PCI_FUNC(pdev->devfn) && !pdev->is_virtfn)
 		return -ENODEV;
 
-	if (!intel_bars_valid(pdev, intel_info))
-		return -ENODEV;
+	if (!intel_mmio_bar_valid(pdev, intel_info))
+		return -ENXIO;
 
 	/*
 	 * apple-gmux is needed on dual GPU MacBook Pro

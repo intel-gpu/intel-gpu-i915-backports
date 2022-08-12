@@ -64,7 +64,6 @@ fi
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	PACKAGE_NAME=$PKG_NAME
 	PACKAGE_VERSION=$PKG_VER-$REL_NAME
-	REMAKE_INITRD="no"
 	AUTOINSTALL="yes"
 
 	BUILT_MODULE_NAME[0]="i915-compat"
@@ -115,9 +114,6 @@ $ST	BUILT_MODULE_NAME[11]="test-drm_modeset"
 $ST	BUILT_MODULE_LOCATION[11]="drivers/gpu/drm/selftests"
 $ST	DEST_MODULE_LOCATION[11]="/updates"
 
-$KVM	BUILT_MODULE_NAME[$GVT_KVMGT]="kvmgt"
-$KVM	BUILT_MODULE_LOCATION[$GVT_KVMGT]="drivers/gpu/drm/i915/gvt"
-$KVM	DEST_MODULE_LOCATION[$GVT_KVMGT]="/updates"
 	
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
        	# DKMS could use all cores on multicore systems to build the kernel module.

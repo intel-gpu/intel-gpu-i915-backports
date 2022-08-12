@@ -142,13 +142,13 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 {
 	struct i915_gem_context *ctx, *cn;
 
-	spin_lock(&i915->gem.contexts.lock);
+	spin_lock_irq(&i915->gem.contexts.lock);
 	list_for_each_entry_safe(ctx, cn, &i915->gem.contexts.list, link) {
 		struct i915_address_space *vm;
 
 		if (!kref_get_unless_zero(&ctx->ref))
 			continue;
-		spin_unlock(&i915->gem.contexts.lock);
+		spin_unlock_irq(&i915->gem.contexts.lock);
 
 		vm = i915_gem_context_get_vm_rcu(ctx);
 		if (vm) {
@@ -159,11 +159,11 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 			i915_vm_put(vm);
 		}
 
-		spin_lock(&i915->gem.contexts.lock);
+		spin_lock_irq(&i915->gem.contexts.lock);
 		list_safe_reset_next(ctx, cn, link);
 		i915_gem_context_put(ctx);
 	}
-	spin_unlock(&i915->gem.contexts.lock);
+	spin_unlock_irq(&i915->gem.contexts.lock);
 }
 
 void i915_gem_suspend(struct drm_i915_private *i915)

@@ -205,9 +205,6 @@ i915_param_named(enable_dpcd_backlight, int, 0400,
 	"Enable support for DPCD backlight control"
 	"(-1=use per-VBT LFP backlight type setting [default], 0=disabled, 1=enable, 2=force VESA interface, 3=force Intel interface)");
 
-i915_param_named_unsafe(l3_size_override, int, 0400,
-			"Override L3 size (0:disabled (default), -1:Check Fuses, N:Force L3 size to N)");
-
 i915_param_named_unsafe(enable_rc6, bool, 0400,
 	"Enable power-saving render C-state 6. (default: true)");
 i915_param_named_unsafe(rc6_ignore_steppings, bool, 0400,
@@ -281,7 +278,11 @@ i915_param_named_unsafe(force_alloc_contig, int, 0400,
 	"0=disabled [default], 1=SMEM only, 2=LMEM only, 3=both");
 #endif
 
-i915_param_named_unsafe(prelim_override_p2p_dist, bool, 0400, "Override P2P distance check (default: true)");
+i915_param_named_unsafe(prelim_override_p2p_dist, uint, 0400,
+			"Flags to determine P2P behavior: "
+			"Use kernel configured behavior (0), "
+			"Override distance check (default: 1), "
+			"Fabric path only (2)");
 
 i915_param_named_unsafe(smem_access_control, int, 0600,
 			"Bitmask to indicate WA enabled for pcie deadlock, bits 1 and 2 are mutually exclusive"
@@ -298,9 +299,6 @@ i915_param_named_unsafe(ulls_bcs0_pm_wa, bool, 0600,
 
 i915_param_named_unsafe(debug_pages, uint, 0400,
 			"Extra pages allocated for debug (default=0, Bit 31 indicates LMEM)");
-
-i915_param_named_unsafe(wa16012258806, bool, 0600,
-	"Apply workaround 16012258806 (default: false)");
 
 i915_param_named_unsafe(enable_stateless_mc, bool, 0400,
 	"Set default for PVC stateless memory compression (0=disabled [default],  1=enabled)");

@@ -12,10 +12,14 @@
 #include <linux/slab.h>
 #include <linux/sizes.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 #include <linux/platform_device.h>
-#include <linux/delay.h>
 #include <spi/intel_spi.h>
-
+#else
+#include "spi/intel_spi.h"
+#endif
+#include <linux/delay.h>
+#include "i915_reg_defs.h"
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
 
@@ -236,6 +240,24 @@ static ssize_t spi_write(struct i915_spi *spi, u8 region,
 		len_s -= to_shift;
 	}
 
+	if (!IS_ALIGNED(to, sizeof(u64)) &&
+	    ((to ^ (to + len_s)) & REG_GENMASK(31, 10))) {
+		/*
+		 * Workaround reads/writes across 1k-aligned addresses
+		 * (start u32 before 1k, end u32 after)
+		 * as this fails on hardware.
+		 */
+		u32 data;
+
+		memcpy(&data, &buf[0], sizeof(u32));
+		spi_write32(spi, to, data);
+		if (spi_error(spi))
+			return -EIO;
+		buf += sizeof(u32);
+		to += sizeof(u32);
+		len_s -= sizeof(u32);
+	}
+
 	len8 = ALIGN_DOWN(len_s, sizeof(u64));
 	for (i = 0; i < len8; i += sizeof(u64)) {
 		u64 data;
@@ -292,6 +314,23 @@ static ssize_t spi_read(struct i915_spi *spi, u8 region,
 		len_s -= from_shift;
 		buf += from_shift;
 		from += from_shift;
+	}
+
+	if (!IS_ALIGNED(from, sizeof(u64)) &&
+	    ((from ^ (from + len_s)) & REG_GENMASK(31, 10))) {
+		/*
+		 * Workaround reads/writes across 1k-aligned addresses
+		 * (start u32 before 1k, end u32 after)
+		 * as this fails on hardware.
+		 */
+		u32 data = spi_read32(spi, from);
+
+		if (spi_error(spi))
+			return -EIO;
+		memcpy(&buf[0], &data, sizeof(data));
+		len_s -= sizeof(u32);
+		buf += sizeof(u32);
+		from += sizeof(u32);
 	}
 
 	len8 = ALIGN_DOWN(len_s, sizeof(u64));
@@ -672,6 +711,7 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 	return ret;
 }
 
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 static int i915_spi_probe(struct platform_device *platdev)
 {
 	struct resource *bar;
@@ -779,8 +819,127 @@ static int i915_spi_remove(struct platform_device *platdev)
 	kref_put(&spi->refcnt, i915_spi_release);
 	return 0;
 }
+#else
+static int i915_spi_probe(struct auxiliary_device *aux_dev,
+                          const struct auxiliary_device_id *aux_dev_id)
+{
+        struct intel_spi *ispi = auxiliary_dev_to_intel_spi_dev(aux_dev);
+        struct device *device;
+        struct i915_spi *spi;
+        unsigned int nregions;
+        unsigned int i, n;
+        size_t size;
+        char *name;
+        size_t name_size;
+        int ret;
 
+        device = &aux_dev->dev;
+
+        /* count available regions */
+        for (nregions = 0, i = 0; i < I915_SPI_REGIONS; i++) {
+                if (ispi->regions[i].name)
+                        nregions++;
+        }
+
+        if (!nregions) {
+                dev_err(device, "no regions defined\n");
+                return -ENODEV;
+        }
+
+        size = sizeof(*spi) + sizeof(spi->regions[0]) * nregions;
+        spi = kzalloc(size, GFP_KERNEL);
+        if (!spi)
+                return -ENOMEM;
+
+        mutex_init(&spi->lock);
+        kref_init(&spi->refcnt);
+        spi->nregions = nregions;
+        for (n = 0, i = 0; i < I915_SPI_REGIONS; i++) {
+                if (ispi->regions[i].name) {
+                        name_size = strlen(dev_name(&aux_dev->dev)) +
+                                    strlen(ispi->regions[i].name) + 2; /* for point */
+                        name = kzalloc(name_size, GFP_KERNEL);
+                        if (!name)
+                                continue;
+                        snprintf(name, name_size, "%s.%s",
+                                 dev_name(&aux_dev->dev), ispi->regions[i].name);
+                        spi->regions[n].name = name;
+                        spi->regions[n].id = i;
+                        n++;
+                }
+        }
+
+        spi->base = devm_ioremap_resource(device, &ispi->bar);
+        if (IS_ERR(spi->base)) {
+                dev_err(device, "mmio not mapped\n");
+                ret = PTR_ERR(spi->base);
+                goto err;
+        }
+
+        ret = i915_spi_init(spi, device);
+        if (ret < 0) {
+                dev_err(device, "cannot initialize spi\n");
+                ret = -ENODEV;
+                goto err;
+        }
+
+        ret = i915_spi_init_mtd(spi, device, ret);
+        if (ret) {
+                dev_err(device, "i915-spi failed init mtd %d\n", ret);
+                goto err;
+        }
+
+        dev_set_drvdata(&aux_dev->dev, spi);
+
+        dev_dbg(device, "i915-spi is bound\n");
+
+        return 0;
+err:
+        kref_put(&spi->refcnt, i915_spi_release);
+        return ret;
+}
+
+static void i915_spi_remove(struct auxiliary_device *aux_dev)
+{
+        struct i915_spi *spi = dev_get_drvdata(&aux_dev->dev);
+
+        if (!spi)
+                return;
+
+        mtd_device_unregister(&spi->mtd);
+
+        dev_set_drvdata(&aux_dev->dev, NULL);
+
+        kref_put(&spi->refcnt, i915_spi_release);
+}
+#endif
+
+#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+static const struct auxiliary_device_id i915_spi_id_table[] = {
+        {
+                .name = "i915.spi",
+        },
+        {
+                /* sentinel */
+        }
+};
+MODULE_DEVICE_TABLE(auxiliary, i915_spi_id_table);
+
+static struct auxiliary_driver i915_spi_driver = {
+        .probe  = i915_spi_probe,
+        .remove = i915_spi_remove,
+        .driver = {
+                /* auxiliary_driver_register() sets .name to be the modname */
+        },
+        .id_table = i915_spi_id_table
+};
+
+module_auxiliary_driver(i915_spi_driver);
+#endif /* IS_ENABLED (CONFIG_AUXILIARY_BUS) */
+
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 MODULE_ALIAS("platform:i915-spi");
+
 static struct platform_driver i915_spi_driver = {
 	.probe  = i915_spi_probe,
 	.remove = i915_spi_remove,
@@ -788,9 +947,12 @@ static struct platform_driver i915_spi_driver = {
 		.name = "i915-spi",
 	},
 };
-
 module_platform_driver(i915_spi_driver);
+#endif
 
+#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+MODULE_ALIAS("auxiliary:i915.spi");
+#endif
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION("Intel DGFX SPI driver");

@@ -485,7 +485,12 @@ static int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 	struct migrate_vma args = {
 		.vma		= vma,
 		.start		= start,
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
 		.src_owner    	= mem->i915->drm.dev,
+#else
+		.pgmap_owner    = mem->i915->drm.dev,
+		.flags          = MIGRATE_VMA_SELECT_SYSTEM,
+#endif
 	};
 	unsigned long c, i;
 	int ret = 0;
@@ -635,7 +640,12 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 		.end		= vmf->address + PAGE_SIZE,
 		.src		= &src,
 		.dst		= &dst,
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
 		.src_owner	= i915->drm.dev,
+#else
+		.pgmap_owner    = i915->drm.dev,
+		.flags          = MIGRATE_VMA_SELECT_DEVICE_PRIVATE,
+#endif
 	};
 
 	/* XXX: Opportunistically migrate more pages? */
@@ -689,7 +699,7 @@ static const struct dev_pagemap_ops i915_devmem_pagemap_ops = {
 
 int i915_svm_devmem_add(struct intel_memory_region *mem)
 {
-	struct device *dev = &mem->i915->drm.pdev->dev;
+	struct device *dev = &to_pci_dev(mem->i915->drm.dev)->dev;
 	struct i915_devmem *devmem;
 	struct resource *res;
 	void *addr;
@@ -708,8 +718,15 @@ int i915_svm_devmem_add(struct intel_memory_region *mem)
 	}
 
 	devmem->pagemap.type = MEMORY_DEVICE_PRIVATE;
+
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
 	devmem->pagemap.res.start = res->start;
 	devmem->pagemap.res.end = res->end;
+#else
+	devmem->pagemap.range.start = res->start;
+	devmem->pagemap.range.end = res->end;
+	devmem->pagemap.nr_range = 1;
+#endif
 	devmem->pagemap.ops = &i915_devmem_pagemap_ops;
 	devmem->pagemap.owner = mem->i915->drm.dev;
 	addr = devm_memremap_pages(dev, &devmem->pagemap);
@@ -730,7 +747,7 @@ devm_err:
 void i915_svm_devmem_remove(struct intel_memory_region *mem)
 {
 	if (mem->devmem) {
-		devm_memunmap_pages(&mem->i915->drm.pdev->dev,
+		devm_memunmap_pages(&to_pci_dev(mem->i915->drm.dev)->dev,
 				    &mem->devmem->pagemap);
 		kfree(mem->devmem);
 		mem->devmem = NULL;

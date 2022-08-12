@@ -58,7 +58,6 @@ static resource_size_t pvc_lmtt_pte_size(unsigned int level)
 	}
 }
 
-#define SZ_32G (1ULL << 35)
 static unsigned int pvc_lmtt_pte_shift(unsigned int level)
 {
 	switch (level) {

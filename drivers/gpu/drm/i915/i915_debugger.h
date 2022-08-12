@@ -27,9 +27,11 @@ int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 void i915_debugger_init(struct drm_i915_private *i915);
 void i915_debugger_fini(struct drm_i915_private *i915);
 
-void i915_debugger_wait_on_discovery(struct drm_i915_private * const i915);
+void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
+				     struct i915_drm_client *client);
 
-void i915_debugger_client_register(struct i915_drm_client *client);
+void i915_debugger_client_register(struct i915_drm_client *client,
+				   struct task_struct *task);
 void i915_debugger_client_release(struct i915_drm_client *client);
 
 void i915_debugger_client_create(const struct i915_drm_client *client);
@@ -70,7 +72,7 @@ int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine);
 bool i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine);
 bool i915_debugger_active_on_context(struct intel_context *context);
 
-void i915_debugger_register_context(struct intel_context *context);
+bool i915_debugger_context_guc_debugged(struct intel_context *context);
 
 long i915_debugger_attention_poll_interval(struct intel_engine_cs *engine);
 
@@ -85,10 +87,11 @@ static inline int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 static inline void i915_debugger_init(struct drm_i915_private *i915) { }
 static inline void i915_debugger_fini(struct drm_i915_private *i915) { }
 
-static inline void i915_debugger_wait_on_discovery(struct drm_i915_private * const i915) { }
+static inline void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
+						   struct i915_drm_client *client) { }
 
-static inline void i915_debugger_client_register(struct i915_drm_client *client) { }
-
+static inline void i915_debugger_client_register(struct i915_drm_client *client,
+						 struct task_struct *task) { }
 static inline void i915_debugger_client_release(struct i915_drm_client *client) { }
 
 static inline void i915_debugger_client_create(const struct i915_drm_client *client) { }
@@ -140,7 +143,10 @@ static inline bool i915_debugger_active_on_context(struct intel_context *context
 	return false;
 }
 
-static inline void i915_debugger_register_context(struct intel_context *context) { }
+static inline bool i915_debugger_context_guc_debugged(struct intel_context *context)
+{
+	return false;
+}
 
 static inline long
 i915_debugger_attention_poll_interval(struct intel_engine_cs *engine)

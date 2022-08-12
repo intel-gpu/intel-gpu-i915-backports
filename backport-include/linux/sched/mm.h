@@ -47,5 +47,5 @@ static inline void might_alloc(gfp_t gfp_mask)
 
         might_sleep_if(gfpflags_allow_blocking(gfp_mask));
 }
-#endif /* LINUX_VERSION_IS_LESS */
+#endif
 #endif /* _BACKPORT_LINUX_SCHED_MM_H */

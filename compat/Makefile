@@ -18,12 +18,12 @@ i915-compat-$(CPTCFG_KERNEL_3_14) += backport-3.14.o drm_mipi_dsi.o
 i915-compat-$(CPTCFG_KERNEL_3_15) += backport-3.15.o
 i915-compat-$(CPTCFG_KERNEL_3_16) += backport-3.16.o
 i915-compat-$(CPTCFG_KERNEL_3_17) += backport-3.17.o
-i915-compat-$(CPTCFG_KERNEL_4_19) += vmscan.o
 i915-compat-$(CPTCFG_KERNEL_5_4)  += backport-5.4.o ptrace.o
 i915-compat-$(CPTCFG_KERNEL_5_7)  += backport-5.7.o
 i915-compat-$(CPTCFG_KERNEL_5_8)  += hdmi.o
 i915-compat-$(CPTCFG_KERNEL_5_5)  += nvmem-core.o
 i915-compat-$(CPTCFG_KERNEL_5_10) += slub.o slab.o
+i915-compat-$(CPTCFG_KERNEL_5_13) += backport-5.13.o
 
 # Enable shims for the RHEL DRM backport
 ccflags-y += -DRH_DRM_BACKPORT

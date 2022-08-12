@@ -121,9 +121,9 @@ VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
 
 
 ifneq ($(BUILD_VERSION), )
-RELEASE := $(BUILD_VERSION).el8_5
+RELEASE := $(BUILD_VERSION).el8_6
 else
-RELEASE := el8_5
+RELEASE := el8_6
 endif
 
 RELEASE_TYPE ?= opensource

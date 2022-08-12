@@ -61,9 +61,9 @@
  *
  * This library also provides implementations for all the legacy driver
  * interfaces on top of the atomic interface. See drm_atomic_helper_set_config(),
- * drm_atomic_helper_disable_plane(), drm_atomic_helper_disable_plane() and the
- * various functions to implement set_property callbacks. New drivers must not
- * implement these functions themselves but must use the provided helpers.
+ * drm_atomic_helper_disable_plane(), and the various functions to implement
+ * set_property callbacks. New drivers must not implement these functions
+ * themselves but must use the provided helpers.
  *
  * The atomic helper uses the same function table structures as all other
  * modesetting helpers. See the documentation for &struct drm_crtc_helper_funcs,
@@ -106,7 +106,7 @@ static int handle_conflicting_encoders(struct drm_atomic_state *state,
 	struct drm_connector *connector;
 	struct drm_connector_list_iter conn_iter;
 	struct drm_encoder *encoder;
-	unsigned encoder_mask = 0;
+	unsigned int encoder_mask = 0;
 	int i, ret = 0;
 
 	/*
@@ -592,11 +592,10 @@ mode_valid(struct drm_atomic_state *state)
  *
  * Drivers which set &drm_crtc_state.mode_changed (e.g. in their
  * &drm_plane_helper_funcs.atomic_check hooks if a plane update can't be done
- * without a full modeset) _must_ call this function afterwards after that
- * change. It is permitted to call this function multiple times for the same
- * update, e.g. when the &drm_crtc_helper_funcs.atomic_check functions depend
- * upon the adjusted dotclock for fifo space allocation and watermark
- * computation.
+ * without a full modeset) _must_ call this function after that change. It is
+ * permitted to call this function multiple times for the same update, e.g.
+ * when the &drm_crtc_helper_funcs.atomic_check functions depend upon the
+ * adjusted dotclock for fifo space allocation and watermark computation.
  *
  * RETURNS:
  * Zero for success or -errno
@@ -610,7 +609,7 @@ drm_atomic_helper_check_modeset(struct drm_device *dev,
 	struct drm_connector *connector;
 	struct drm_connector_state *old_connector_state, *new_connector_state;
 	int i, ret;
-	unsigned connectors_mask = 0;
+	unsigned int connectors_mask = 0;
 
 	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
 		bool has_connectors =
@@ -634,7 +633,7 @@ drm_atomic_helper_check_modeset(struct drm_device *dev,
 			 * connectors and a NULL mode.
 			 *
 			 * The other way around is true as well. enable != 0
-			 * iff connectors are attached and a mode is set.
+			 * implies that connectors are attached and a mode is set.
 			 */
 			new_crtc_state->mode_changed = true;
 			new_crtc_state->connectors_changed = true;
@@ -902,7 +901,7 @@ drm_atomic_helper_check_planes(struct drm_device *dev,
 		if (!funcs || !funcs->atomic_check)
 			continue;
 
-		ret = funcs->atomic_check(plane, new_plane_state);
+		ret = funcs->atomic_check(plane, state);
 		if (ret) {
 			DRM_DEBUG_ATOMIC("[PLANE:%d:%s] atomic driver check failed\n",
 					 plane->base.id, plane->name);
@@ -996,12 +995,22 @@ crtc_needs_disable(struct drm_crtc_state *old_state,
 		return drm_atomic_crtc_effectively_active(old_state);
 
 	/*
-	 * We need to run through the crtc_funcs->disable() function if the CRTC
-	 * is currently on, if it's transitioning to self refresh mode, or if
-	 * it's in self refresh mode and needs to be fully disabled.
+	 * We need to disable bridge(s) and CRTC if we're transitioning out of
+	 * self-refresh and changing CRTCs at the same time, because the
+	 * bridge tracks self-refresh status via CRTC state.
+	 */
+	if (old_state->self_refresh_active &&
+	    old_state->crtc != new_state->crtc)
+		return true;
+
+	/*
+	 * We also need to run through the crtc_funcs->disable() function if
+	 * the CRTC is currently on, if it's transitioning to self refresh
+	 * mode, or if it's in self refresh mode and needs to be fully
+	 * disabled.
 	 */
 	return old_state->active ||
-	       (old_state->self_refresh_active && !new_state->enable) ||
+	       (old_state->self_refresh_active && !new_state->active) ||
 	       new_state->self_refresh_active;
 }
 
@@ -1019,8 +1028,10 @@ disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 		struct drm_encoder *encoder;
 		struct drm_bridge *bridge;
 
-		/* Shut down everything that's in the changeset and currently
-		 * still on. So need to check the old, saved state. */
+		/*
+		 * Shut down everything that's in the changeset and currently
+		 * still on. So need to check the old, saved state.
+		 */
 		if (!old_conn_state->crtc)
 			continue;
 
@@ -1410,7 +1421,7 @@ EXPORT_SYMBOL(drm_atomic_helper_commit_modeset_enables);
  * @dev: DRM device
  * @state: atomic state object with old state structures
  * @pre_swap: If true, do an interruptible wait, and @state is the new state.
- * 	Otherwise @state is the old state.
+ *	Otherwise @state is the old state.
  *
  * For implicit sync, driver should fish the exclusive fence out from the
  * incoming fb's and stash it in the drm_plane_state.  This is called after
@@ -1479,7 +1490,7 @@ drm_atomic_helper_wait_for_vblanks(struct drm_device *dev,
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
 	int i, ret;
-	unsigned crtc_mask = 0;
+	unsigned int crtc_mask = 0;
 
 	 /*
 	  * Legacy cursor ioctls are completely unsynced, and userspace
@@ -1684,7 +1695,7 @@ static void commit_work(struct work_struct *work)
 }
 
 /**
- * drm_atomic_helper_async_check - check if state can be commited asynchronously
+ * drm_atomic_helper_async_check - check if state can be committed asynchronously
  * @dev: DRM device
  * @state: the driver state object
  *
@@ -1693,7 +1704,7 @@ static void commit_work(struct work_struct *work)
  * but just do in-place changes on the current state.
  *
  * It will return 0 if the commit can happen in an asynchronous fashion or error
- * if not. Note that error just mean it can't be commited asynchronously, if it
+ * if not. Note that error just mean it can't be committed asynchronously, if it
  * fails the commit should be treated like a normal synchronous commit.
  */
 int drm_atomic_helper_async_check(struct drm_device *dev,
@@ -1742,7 +1753,7 @@ int drm_atomic_helper_async_check(struct drm_device *dev,
 		return -EBUSY;
 	}
 
-	return funcs->atomic_async_check(plane, new_plane_state);
+	return funcs->atomic_async_check(plane, state);
 }
 EXPORT_SYMBOL(drm_atomic_helper_async_check);
 
@@ -1772,7 +1783,7 @@ void drm_atomic_helper_async_commit(struct drm_device *dev,
 		struct drm_framebuffer *old_fb = plane->state->fb;
 
 		funcs = plane->helper_private;
-		funcs->atomic_async_update(plane, plane_state);
+		funcs->atomic_async_update(plane, state);
 
 		/*
 		 * ->atomic_async_update() is supposed to update the
@@ -1954,8 +1965,10 @@ static int stall_checks(struct drm_crtc *crtc, bool nonblock)
 	list_for_each_entry(commit, &crtc->commit_list, commit_entry) {
 		if (i == 0) {
 			completed = try_wait_for_completion(&commit->flip_done);
-			/* Userspace is not allowed to get ahead of the previous
-			 * commit with nonblocking ones. */
+			/*
+			 * Userspace is not allowed to get ahead of the previous
+			 * commit with nonblocking ones.
+			 */
 			if (!completed && nonblock) {
 				spin_unlock(&crtc->commit_lock);
 				DRM_DEBUG_ATOMIC("[CRTC:%d:%s] busy with a previous commit\n",
@@ -2040,6 +2053,9 @@ crtc_or_fake_commit(struct drm_atomic_state *state, struct drm_crtc *crtc)
  * should always call this function from their
  * &drm_mode_config_funcs.atomic_commit hook.
  *
+ * Drivers that need to extend the commit setup to private objects can use the
+ * &drm_mode_config_helper_funcs.atomic_commit_setup hook.
+ *
  * To be able to use this support drivers need to use a few more helper
  * functions. drm_atomic_helper_wait_for_dependencies() must be called before
  * actually committing the hardware state, and for nonblocking commits this call
@@ -2083,7 +2099,10 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 	struct drm_plane *plane;
 	struct drm_plane_state *old_plane_state, *new_plane_state;
 	struct drm_crtc_commit *commit;
+	const struct drm_mode_config_helper_funcs *funcs;
 	int i, ret;
+
+	funcs = state->dev->mode_config.helper_private;
 
 	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
 		commit = kzalloc(sizeof(*commit), GFP_KERNEL);
@@ -2098,9 +2117,11 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 		if (ret)
 			return ret;
 
-		/* Drivers only send out events when at least either current or
+		/*
+		 * Drivers only send out events when at least either current or
 		 * new CRTC state is active. Complete right away if everything
-		 * stays off. */
+		 * stays off.
+		 */
 		if (!old_crtc_state->active && !new_crtc_state->active) {
 			complete_all(&commit->flip_done);
 			continue;
@@ -2132,8 +2153,10 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 	}
 
 	for_each_oldnew_connector_in_state(state, conn, old_conn_state, new_conn_state, i) {
-		/* Userspace is not allowed to get ahead of the previous
-		 * commit with nonblocking ones. */
+		/*
+		 * Userspace is not allowed to get ahead of the previous
+		 * commit with nonblocking ones.
+		 */
 		if (nonblock && old_conn_state->commit &&
 		    !try_wait_for_completion(&old_conn_state->commit->flip_done)) {
 			DRM_DEBUG_ATOMIC("[CONNECTOR:%d:%s] busy with a previous commit\n",
@@ -2151,8 +2174,10 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 	}
 
 	for_each_oldnew_plane_in_state(state, plane, old_plane_state, new_plane_state, i) {
-		/* Userspace is not allowed to get ahead of the previous
-		 * commit with nonblocking ones. */
+		/*
+		 * Userspace is not allowed to get ahead of the previous
+		 * commit with nonblocking ones.
+		 */
 		if (nonblock && old_plane_state->commit &&
 		    !try_wait_for_completion(&old_plane_state->commit->flip_done)) {
 			DRM_DEBUG_ATOMIC("[PLANE:%d:%s] busy with a previous commit\n",
@@ -2168,6 +2193,9 @@ int drm_atomic_helper_setup_commit(struct drm_atomic_state *state,
 
 		new_plane_state->commit = drm_crtc_commit_get(commit);
 	}
+
+	if (funcs && funcs->atomic_commit_setup)
+		return funcs->atomic_commit_setup(state);
 
 	return 0;
 }
@@ -2193,70 +2221,27 @@ void drm_atomic_helper_wait_for_dependencies(struct drm_atomic_state *old_state)
 	struct drm_plane_state *old_plane_state;
 	struct drm_connector *conn;
 	struct drm_connector_state *old_conn_state;
-	struct drm_crtc_commit *commit;
 	int i;
 	long ret;
 
 	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i) {
-		commit = old_crtc_state->commit;
-
-		if (!commit)
-			continue;
-
-		ret = wait_for_completion_timeout(&commit->hw_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[CRTC:%d:%s] hw_done timed out\n",
-				  crtc->base.id, crtc->name);
-
-		/* Currently no support for overwriting flips, hence
-		 * stall for previous one to execute completely. */
-		ret = wait_for_completion_timeout(&commit->flip_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[CRTC:%d:%s] flip_done timed out\n",
+		ret = drm_crtc_commit_wait(old_crtc_state->commit);
+		if (ret)
+			DRM_ERROR("[CRTC:%d:%s] commit wait timed out\n",
 				  crtc->base.id, crtc->name);
 	}
 
 	for_each_old_connector_in_state(old_state, conn, old_conn_state, i) {
-		commit = old_conn_state->commit;
-
-		if (!commit)
-			continue;
-
-		ret = wait_for_completion_timeout(&commit->hw_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[CONNECTOR:%d:%s] hw_done timed out\n",
-				  conn->base.id, conn->name);
-
-		/* Currently no support for overwriting flips, hence
-		 * stall for previous one to execute completely. */
-		ret = wait_for_completion_timeout(&commit->flip_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[CONNECTOR:%d:%s] flip_done timed out\n",
+		ret = drm_crtc_commit_wait(old_conn_state->commit);
+		if (ret)
+			DRM_ERROR("[CONNECTOR:%d:%s] commit wait timed out\n",
 				  conn->base.id, conn->name);
 	}
 
 	for_each_old_plane_in_state(old_state, plane, old_plane_state, i) {
-		commit = old_plane_state->commit;
-
-		if (!commit)
-			continue;
-
-		ret = wait_for_completion_timeout(&commit->hw_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[PLANE:%d:%s] hw_done timed out\n",
-				  plane->base.id, plane->name);
-
-		/* Currently no support for overwriting flips, hence
-		 * stall for previous one to execute completely. */
-		ret = wait_for_completion_timeout(&commit->flip_done,
-						  10*HZ);
-		if (ret == 0)
-			DRM_ERROR("[PLANE:%d:%s] flip_done timed out\n",
+		ret = drm_crtc_commit_wait(old_plane_state->commit);
+		if (ret)
+			DRM_ERROR("[PLANE:%d:%s] commit wait timed out\n",
 				  plane->base.id, plane->name);
 	}
 }
@@ -2562,9 +2547,9 @@ void drm_atomic_helper_commit_planes(struct drm_device *dev,
 			    no_disable)
 				continue;
 
-			funcs->atomic_disable(plane, old_plane_state);
+			funcs->atomic_disable(plane, old_state);
 		} else if (new_plane_state->crtc || disabling) {
-			funcs->atomic_update(plane, old_plane_state);
+			funcs->atomic_update(plane, old_state);
 		}
 	}
 
@@ -2598,7 +2583,7 @@ EXPORT_SYMBOL(drm_atomic_helper_commit_planes);
  *
  * This function can only be savely used when planes are not allowed to move
  * between different CRTCs because this function doesn't handle inter-CRTC
- * depencies. Callers need to ensure that either no such depencies exist,
+ * dependencies. Callers need to ensure that either no such dependencies exist,
  * resolve them through ordering of commit calls or through some other means.
  */
 void
@@ -2610,7 +2595,7 @@ drm_atomic_helper_commit_planes_on_crtc(struct drm_crtc_state *old_crtc_state)
 	struct drm_crtc_state *new_crtc_state =
 		drm_atomic_get_new_crtc_state(old_state, crtc);
 	struct drm_plane *plane;
-	unsigned plane_mask;
+	unsigned int plane_mask;
 
 	plane_mask = old_crtc_state->plane_mask;
 	plane_mask |= new_crtc_state->plane_mask;
@@ -2636,10 +2621,10 @@ drm_atomic_helper_commit_planes_on_crtc(struct drm_crtc_state *old_crtc_state)
 
 		if (drm_atomic_plane_disabling(old_plane_state, new_plane_state) &&
 		    plane_funcs->atomic_disable)
-			plane_funcs->atomic_disable(plane, old_plane_state);
+			plane_funcs->atomic_disable(plane, old_state);
 		else if (new_plane_state->crtc ||
 			 drm_atomic_plane_disabling(old_plane_state, new_plane_state))
-			plane_funcs->atomic_update(plane, old_plane_state);
+			plane_funcs->atomic_update(plane, old_state);
 	}
 
 	if (crtc_funcs && crtc_funcs->atomic_flush)
@@ -2735,7 +2720,7 @@ EXPORT_SYMBOL(drm_atomic_helper_cleanup_planes);
 /**
  * drm_atomic_helper_swap_state - store atomic state into current sw state
  * @state: atomic state
- * @stall: stall for preceeding commits
+ * @stall: stall for preceding commits
  *
  * This function stores the atomic state into the current state pointers in all
  * driver objects. It should be called after all failing steps have been done
@@ -3021,7 +3006,7 @@ int drm_atomic_helper_set_config(struct drm_mode_set *set,
 
 	ret = handle_conflicting_encoders(state, true);
 	if (ret)
-		return ret;
+		goto fail;
 
 	ret = drm_atomic_commit(state);
 

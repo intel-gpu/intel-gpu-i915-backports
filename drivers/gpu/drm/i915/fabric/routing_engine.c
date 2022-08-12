@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2021 Intel Corporation.
+ * Copyright(c) 2019 - 2022 Intel Corporation.
  *
  */
 
@@ -10,6 +10,7 @@
 #include <linux/sched/clock.h>
 #include <linux/wait.h>
 
+#include "debugfs.h"
 #include "port.h"
 #include "routing_engine.h"
 #include "routing_event.h"

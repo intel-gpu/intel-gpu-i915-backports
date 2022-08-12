@@ -30,7 +30,9 @@
 #include <linux/aer.h>
 #include <linux/acpi.h>
 #include <linux/device.h>
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/mfd/core.h>
+#endif
 #include <linux/module.h>
 #include <linux/oom.h>
 #include <linux/pci.h>
@@ -42,6 +44,7 @@
 #include <linux/vga_switcheroo.h>
 #include <linux/vt.h>
 
+#include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_ioctl.h>
@@ -65,6 +68,8 @@
 #include "display/intel_vga.h"
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_create.h"
+#include "gem/i915_gem_dmabuf.h"
 #include "gem/i915_gem_ioctls.h"
 #include "gem/i915_gem_mman.h"
 #include "gem/i915_gem_pm.h"
@@ -73,7 +78,11 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_rc6.h"
+
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 #include "gt/intel_gsc.h"
+#endif
+
 #include "gt/iov/intel_iov.h"
 #include "gt/iov/intel_iov_provisioning.h"
 
@@ -89,6 +98,7 @@
 #include "i915_ioctl.h"
 #include "i915_irq.h"
 #include "i915_memcpy.h"
+#include "i915_pci.h"
 #include "i915_perf.h"
 #include "i915_perf_stall_cntr.h"
 #include "i915_query.h"
@@ -441,7 +451,7 @@ static void __release_bars(struct pci_dev *pdev)
 
 int i915_resize_bar(struct drm_i915_private *i915, int resno, resource_size_t size)
 {
-	struct pci_dev *pdev = i915->drm.pdev;
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	int bar_size = pci_rebar_bytes_to_size(size);
 	int ret;
 
@@ -462,7 +472,7 @@ int i915_resize_bar(struct drm_i915_private *i915, int resno, resource_size_t si
 static resource_size_t
 __lmem_rebar_size(struct drm_i915_private *i915, int resno)
 {
-	struct pci_dev *pdev = i915->drm.pdev;
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	u32 rebar = pci_rebar_get_possible_sizes(pdev, resno);
 	resource_size_t size;
 
@@ -486,15 +496,21 @@ __lmem_rebar_size(struct drm_i915_private *i915, int resno)
  * capabilities. Any errors are non-critical, even if resize fails, we go back
  * to the previous configuration.
  */
-#define LMEM_BAR_NUM 2
 static void i915_resize_lmem_bar(struct drm_i915_private *i915)
 {
-	struct pci_dev *pdev = i915->drm.pdev;
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	struct pci_bus *root = pdev->bus;
 	struct resource *root_res;
-	resource_size_t rebar_size = __lmem_rebar_size(i915, LMEM_BAR_NUM);
+	resource_size_t rebar_size;
 	u32 pci_cmd;
 	int i;
+
+	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR)) {
+		drm_warn(&i915->drm, "Can't resize LMEM BAR - BAR not valid\n");
+		return;
+	}
+
+	rebar_size = __lmem_rebar_size(i915, GEN12_LMEM_BAR);
 
 	if (!rebar_size)
 		return;
@@ -524,7 +540,7 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915)
 
 	__release_bars(pdev);
 
-	i915_resize_bar(i915, LMEM_BAR_NUM, rebar_size);
+	i915_resize_bar(i915, GEN12_LMEM_BAR, rebar_size);
 
 	pci_assign_unassigned_bus_resources(pdev->bus);
 	pci_write_config_dword(pdev, PCI_COMMAND, pci_cmd);
@@ -671,7 +687,7 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 {
 #ifdef CONFIG_PCI_ATS
 	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0)) {
-		struct pci_dev *pdev = dev_priv->drm.pdev;
+		struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 		u16 val;
 
 		/* Reading PCI_ATS_CTRL to check if ATS was enabled by IOMMU */
@@ -703,7 +719,7 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 
 	/* Wa_16014292289:pvc[bd_a0] */
 	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0)) {
-		struct pci_bus *bus = dev_priv->drm.pdev->bus;
+		struct pci_bus *bus = to_pci_dev(dev_priv->drm.dev)->bus;
 		struct pci_dev *pdev;
 
 		/* Iterate through the uncore, each of the SoCs and SGunit */
@@ -936,6 +952,22 @@ mask_err:
 	return ret;
 }
 
+static int i915_pcode_init(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	int id, ret;
+
+	for_each_gt(i915, id, gt) {
+		ret = intel_pcode_init(gt->uncore);
+		if (ret) {
+			drm_err(&gt->i915->drm, "gt%d: intel_pcode_init failed %d\n", id, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 /**
  * i915_driver_hw_probe - setup state requiring device access
  * @dev_priv: device private
@@ -996,7 +1028,7 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	if (ret)
 		goto err_perf;
 
-	ret = drm_fb_helper_remove_conflicting_pci_framebuffers(pdev, "inteldrmfb");
+	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, dev_priv->drm.driver);
 	if (ret)
 		goto err_ggtt;
 
@@ -1054,7 +1086,7 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 
 	intel_opregion_init(dev_priv);
 
-	ret = intel_pcode_init(dev_priv);
+	ret = i915_pcode_init(dev_priv);
 	if (ret)
 		goto err_msi;
 
@@ -1170,7 +1202,10 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
  */
 static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 {
+
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
+#endif
 	struct intel_gt *gt;
 	unsigned int i;
 
@@ -1185,7 +1220,14 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 	 * mfd devices may be registered individually either by gt or display,
 	 * but they are unregistered all at once from i915
 	 */
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
+        /*
+         * mfd devices may be registered individually either by gt or display,
+         * but they are unregistered all at once from i915
+         */
 	mfd_remove_devices(&pdev->dev);
+#endif
+
 
 	intel_display_driver_unregister(dev_priv);
 
@@ -1271,7 +1313,6 @@ i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (IS_ERR(i915))
 		return i915;
 
-	i915->drm.pdev = pdev;
 	pci_set_drvdata(pdev, i915);
 
 	/* Device parameters start as a copy of module parameters. */
@@ -1611,11 +1652,6 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 	intel_runtime_pm_disable(&i915->runtime_pm);
 	intel_power_domains_disable(i915);
 
-	i915_gem_suspend(i915);
-
-	for_each_gt(i915, i, gt)
-		intel_gt_shutdown(gt);
-
 	if (HAS_DISPLAY(i915)) {
 		drm_kms_helper_poll_disable(&i915->drm);
 
@@ -1631,6 +1667,11 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 	intel_shutdown_encoders(i915);
 
 	intel_dmc_ucode_suspend(i915);
+
+	i915_gem_suspend(i915);
+
+	for_each_gt(i915, i, gt)
+		intel_gt_shutdown(gt);
 
 	/*
 	 * The only requirement is to reboot with display DC states disabled,
@@ -1809,6 +1850,8 @@ static int i915_drm_suspend(struct drm_device *dev)
 
 	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
+	i915_gem_drain_freed_objects(dev_priv);
+
 	return 0;
 }
 
@@ -1919,7 +1962,7 @@ static int i915_drm_resume(struct drm_device *dev)
 
 	disable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
-	ret = intel_pcode_init(dev_priv);
+	ret = i915_pcode_init(dev_priv);
 	if (ret)
 		return ret;
 
@@ -2270,7 +2313,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
-	drm_dbg_kms(&dev_priv->drm, "Suspending device\n");
+	drm_dbg(&dev_priv->drm, "Suspending device\n");
 
 	disable_rpm_wakeref_asserts(rpm);
 
@@ -2350,7 +2393,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	if (!IS_VALLEYVIEW(dev_priv) && !IS_CHERRYVIEW(dev_priv))
 		intel_hpd_poll_enable(dev_priv);
 
-	drm_dbg_kms(&dev_priv->drm, "Device suspended\n");
+	drm_dbg(&dev_priv->drm, "Device suspended\n");
 	return 0;
 }
 
@@ -2366,7 +2409,7 @@ static int intel_runtime_resume(struct device *kdev)
 	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
-	drm_dbg_kms(&dev_priv->drm, "Resuming device\n");
+	drm_dbg(&dev_priv->drm, "Resuming device\n");
 
 	drm_WARN_ON_ONCE(&dev_priv->drm, atomic_read(&rpm->wakeref_count));
 	disable_rpm_wakeref_asserts(rpm);
@@ -2412,7 +2455,7 @@ static int intel_runtime_resume(struct device *kdev)
 		drm_err(&dev_priv->drm,
 			"Runtime resume failed, disabling it (%d)\n", ret);
 	else
-		drm_dbg_kms(&dev_priv->drm, "Device resumed\n");
+		drm_dbg(&dev_priv->drm, "Device resumed\n");
 
 	return ret;
 }

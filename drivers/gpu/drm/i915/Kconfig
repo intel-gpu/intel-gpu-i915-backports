@@ -4,7 +4,7 @@ config DRM_I915
 	depends on m
 	depends on DRM
 	depends on (X86 || ARM64) && PCI
-	select INTEL_GTT
+	select INTEL_GTT if X86
 	depends on INTERVAL_TREE
 	# we need shmfs for the swappable backing store, and in particular
 	# the shmem_readpage() which depends upon tmpfs
@@ -104,7 +104,6 @@ config DRM_I915_GVT
 	depends on DRM_I915
 	depends on X86
 	depends on 64BIT
-	depends on VFIO_MDEV=y || VFIO_MDEV=DRM_I915
 	default n
 	help
 	  Choose this option if you want to enable Intel GVT-g graphics
@@ -129,7 +128,7 @@ config DRM_I915_GVT_KVMGT
 	depends on m
 	depends on DRM_I915_GVT
 	depends on KVM
-	depends on VFIO_MDEV && VFIO_MDEV_DEVICE
+	depends on VFIO_MDEV
 	default n
 	help
 	  Choose this option if you want to enable KVMGT support for

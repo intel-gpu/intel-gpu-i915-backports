@@ -66,6 +66,8 @@
  *
  * For an implementation of how to use this look at
  * drm_atomic_helper_setup_commit() from the atomic helper library.
+ *
+ * See also drm_crtc_commit_wait().
  */
 struct drm_crtc_commit {
 	/**
@@ -436,6 +438,8 @@ static inline void drm_crtc_commit_put(struct drm_crtc_commit *commit)
 {
 	kref_put(&commit->ref, __drm_crtc_commit_free);
 }
+
+int drm_crtc_commit_wait(struct drm_crtc_commit *commit);
 
 struct drm_atomic_state * __must_check
 drm_atomic_state_alloc(struct drm_device *dev);
@@ -890,6 +894,18 @@ void drm_state_dump(struct drm_device *dev, struct drm_printer *p);
 		for_each_if ((__state)->planes[__i].ptr &&		\
 			     ((plane) = (__state)->planes[__i].ptr,	\
 			      (old_plane_state) = (__state)->planes[__i].old_state,\
+			      (new_plane_state) = (__state)->planes[__i].new_state, 1))
+
+/**
+ * for_each_new_plane_in_state_reverse - other than only tracking new state,
+ * it's the same as for_each_oldnew_plane_in_state_reverse
+ */
+#define for_each_new_plane_in_state_reverse(__state, plane, new_plane_state, __i) \
+	for ((__i) = ((__state)->dev->mode_config.num_total_plane - 1);	\
+	     (__i) >= 0;						\
+	     (__i)--)							\
+		for_each_if ((__state)->planes[__i].ptr &&		\
+			     ((plane) = (__state)->planes[__i].ptr,	\
 			      (new_plane_state) = (__state)->planes[__i].new_state, 1))
 
 /**

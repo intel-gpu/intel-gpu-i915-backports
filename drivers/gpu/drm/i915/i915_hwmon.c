@@ -20,10 +20,14 @@
 
 /*
  * SF_* - scale factors for particular quantities according to hwmon spec.
+ * - time   - milliseconds
  * - power  - microwatts
+ * - curr   - milliamperes
  * - energy - microjoules
  */
+#define SF_TIME            1000
 #define SF_POWER	1000000
+#define SF_CURR		1000
 #define SF_ENERGY	1000000
 
 #define FIELD_SHIFT(__mask)				    \
@@ -48,9 +52,9 @@ _locked_with_pm_intel_uncore_rmw(struct i915_hwmon_drvdata *ddat,
 }
 
 static u64
-_scale_and_shift(u32 in, u32 scale_factor, int nshift)
+_scale_and_shift(u64 in, u32 scale_factor, int nshift)
 {
-	u64 out = mul_u32_u32(scale_factor, in);
+	u64 out = scale_factor * in;
 
 	/* Shift, rounding to nearest */
 	if (nshift > 0)
@@ -255,9 +259,104 @@ static SENSOR_DEVICE_ATTR(power1_max_default, 0444,
 static SENSOR_DEVICE_ATTR(energy1_input, 0444,
 			  i915_energy1_input_show, NULL, 0);
 
+static ssize_t
+i915_power1_max_interval_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct i915_hwmon_drvdata *ddat = dev_get_drvdata(dev);
+	struct i915_hwmon *hwmon = ddat->dd_hwmon;
+	intel_wakeref_t wakeref;
+	u32 r, x, y, x_w = 2; /* 2 bits */
+	u64 tau4, out;
+
+	with_intel_runtime_pm(ddat->dd_uncore->rpm, wakeref)
+		r = intel_uncore_read(ddat->dd_uncore, hwmon->rg.pkg_rapl_limit);
+
+	x = REG_FIELD_GET(PKG_PWR_LIM_1_TIME_X, r);
+	y = REG_FIELD_GET(PKG_PWR_LIM_1_TIME_Y, r);
+	/*
+	 * tau = 1.x * power(2,y), x = bits(23:22), y = bits(21:17)
+	 *     = (4 | x) << (y - 2)
+	 * where (y - 2) ensures a 1.x fixed point representation of 1.x
+	 * However because y can be < 2, we compute
+	 *     tau4 = (4 | x) << y
+	 * but add 2 when doing the final right shift to account for units
+	 */
+	tau4 = ((1 << x_w) | x) << y;
+	/* val in hwmon interface units (millisec) */
+	out = _scale_and_shift(tau4, SF_TIME, hwmon->scl_shift_time + x_w);
+
+	return sysfs_emit(buf, "%llu\n", out);
+}
+
+static ssize_t
+i915_power1_max_interval_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct i915_hwmon_drvdata *ddat = dev_get_drvdata(dev);
+	struct i915_hwmon *hwmon = ddat->dd_hwmon;
+	long val, max_win, ret;
+	u32 x, y, rxy, x_w = 2; /* 2 bits */
+	intel_wakeref_t wakeref;
+	u64 tau4, r;
+
+#define PKG_MAX_WIN_DEFAULT 0x12ull
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	/* val must be < max in hwmon interface units */
+	if (i915_mmio_reg_valid(hwmon->rg.pkg_power_sku)) {
+		with_intel_runtime_pm(ddat->dd_uncore->rpm, wakeref)
+			r = intel_uncore_read64(ddat->dd_uncore, hwmon->rg.pkg_power_sku);
+		/*
+		 * FIXME
+		 * Wa_22015381490:pvc rg.pkg_power_sku value is incorrect on PVC
+		 * at least. The following seems to work:
+		 *	r <<= 8;
+		 * However for now to be safe just use the default value
+		 * below. Once issue is resolved remove the one line below.
+		 */
+		r = FIELD_PREP(PKG_MAX_WIN, PKG_MAX_WIN_DEFAULT);
+	} else {
+		r = FIELD_PREP(PKG_MAX_WIN, PKG_MAX_WIN_DEFAULT);
+	}
+
+	/* Steps below are explained in i915_power1_max_interval_show() */
+	x = REG_FIELD_GET(PKG_MAX_WIN_X, r);
+	y = REG_FIELD_GET(PKG_MAX_WIN_Y, r);
+	tau4 = ((1 << x_w) | x) << y;
+	max_win = _scale_and_shift(tau4, SF_TIME, hwmon->scl_shift_time + x_w);
+
+	if (val > max_win)
+		return -EINVAL;
+
+	/* val in hw units */
+	val = DIV_ROUND_CLOSEST_ULL((u64)val << hwmon->scl_shift_time, SF_TIME);
+	/* Convert to 1.x * power(2,y) */
+	if (!val)
+		return -EINVAL;
+	y = ilog2(val);
+	/* x = (val - (1 << y)) >> (y - 2); */
+	x = (val - (1ul << y)) << x_w >> y;
+
+	rxy = REG_FIELD_PREP(PKG_PWR_LIM_1_TIME_X, x) | REG_FIELD_PREP(PKG_PWR_LIM_1_TIME_Y, y);
+
+	_locked_with_pm_intel_uncore_rmw(ddat, hwmon->rg.pkg_rapl_limit,
+					 PKG_PWR_LIM_1_TIME, rxy);
+	return count;
+}
+
+static SENSOR_DEVICE_ATTR(power1_max_interval, 0664,
+			  i915_power1_max_interval_show,
+			  i915_power1_max_interval_store, 0);
+
 static struct attribute *hwmon_attributes[] = {
 	&sensor_dev_attr_power1_max_default.dev_attr.attr,
 	&sensor_dev_attr_energy1_input.dev_attr.attr,
+	&sensor_dev_attr_power1_max_interval.dev_attr.attr,
 	NULL
 };
 
@@ -281,6 +380,8 @@ static umode_t hwmon_attributes_visible(struct kobject *kobj,
 
 	if (attr == &sensor_dev_attr_energy1_input.dev_attr.attr)
 		rgadr = hwmon->rg.energy_status_all;
+	else if (attr == &sensor_dev_attr_power1_max_interval.dev_attr.attr)
+		rgadr = hwmon->rg.pkg_rapl_limit;
 	else if (attr == &sensor_dev_attr_power1_max_default.dev_attr.attr)
 		return IS_DGFX(i915) ? attr->mode : 0;
 	else
@@ -347,6 +448,20 @@ static const struct hwmon_channel_info i915_power = {
 };
 
 /*
+ * HWMON SENSOR TYPE = hwmon_curr
+ *  - Peak current      (curr1_crit)
+ */
+static const u32 i915_config_curr[] = {
+	HWMON_C_CRIT,
+	0
+};
+
+static const struct hwmon_channel_info i915_curr = {
+	.type = hwmon_curr,
+	.config = i915_config_curr,
+};
+
+/*
  * HWMON SENSOR TYPE = hwmon_in
  *  - Voltage Input value (in0_input)
  */
@@ -362,39 +477,51 @@ static const struct hwmon_channel_info i915_in = {
 
 static const struct hwmon_channel_info *i915_info[] = {
 	&i915_power,
+	&i915_curr,
 	&i915_in,
 	NULL
 };
+
+/* I1 is exposed as power_crit or as curr_crit depending on bit 31 */
+static int pcode_read_i1(struct drm_i915_private *i915, u32 *uval)
+{
+	return snb_pcode_read_p(&i915->uncore, PCODE_POWER_SETUP,
+				POWER_SETUP_SUBCOMMAND_READ_I1, 0, uval);
+}
+
+static int pcode_write_i1(struct drm_i915_private *i915, u32 uval)
+{
+	return  snb_pcode_write_p(&i915->uncore, PCODE_POWER_SETUP,
+				  POWER_SETUP_SUBCOMMAND_WRITE_I1, 0, uval);
+}
 
 static umode_t
 i915_power_is_visible(const struct i915_hwmon_drvdata *ddat, u32 attr, int chan)
 {
 	struct drm_i915_private *i915 = ddat->dd_uncore->i915;
 	struct i915_hwmon *hwmon = ddat->dd_hwmon;
-	i915_reg_t rgadr;
+	u32 uval;
 
 	switch (attr) {
 	case hwmon_power_max:
-		rgadr = hwmon->rg.pkg_rapl_limit;
-		break;
+		if (i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit))
+			return 0664;
+		return 0;
 	case hwmon_power_crit:
-		return IS_DGFX(i915) ? 0664 : 0;
+		if (!IS_DGFX(i915) || pcode_read_i1(i915, &uval) ||
+		    !(uval & POWER_SETUP_I1_WATTS))
+			return 0;
+		return 0644;
 	default:
 		return 0;
 	}
-
-	if (!i915_mmio_reg_valid(rgadr))
-		return 0;
-
-	return 0664;
 }
 
 static int
 i915_power_read(struct i915_hwmon_drvdata *ddat, u32 attr, int chan, long *val)
 {
-	struct drm_i915_private *i915 = ddat->dd_uncore->i915;
 	struct i915_hwmon *hwmon = ddat->dd_hwmon;
-	int ret = 0;
+	int ret;
 	u32 uval;
 
 	switch (attr) {
@@ -405,23 +532,19 @@ i915_power_read(struct i915_hwmon_drvdata *ddat, u32 attr, int chan, long *val)
 					     FIELD_SHIFT(PKG_PWR_LIM_1),
 					     hwmon->scl_shift_power,
 					     SF_POWER);
-		break;
+		return 0;
 	case hwmon_power_crit:
-		ret = __snb_pcode_read(i915, PCODE_POWER_SETUP,
-				       POWER_SETUP_SUBCOMMAND_READ_I1, 0, &uval);
+		ret = pcode_read_i1(ddat->dd_uncore->i915, &uval);
 		if (ret)
 			return ret;
-		if (!(uval & POWER_SETUP_I1_WATTS)) {
-			drm_err(&i915->drm, "Power I1 value is in Amperes\n");
+		if (!(uval & POWER_SETUP_I1_WATTS))
 			return -ENODEV;
-		}
-		*val = _scale_and_shift(uval, SF_POWER, POWER_SETUP_I1_SHIFT);
-		break;
+		*val = _scale_and_shift(REG_FIELD_GET(POWER_SETUP_I1_DATA_MASK, uval),
+					SF_POWER, POWER_SETUP_I1_SHIFT);
+		return 0;
 	default:
-		ret = -EOPNOTSUPP;
+		return -EOPNOTSUPP;
 	}
-
-	return ret;
 }
 
 static int
@@ -429,7 +552,6 @@ i915_power_write(struct i915_hwmon_drvdata *ddat, u32 attr, int chan, long val)
 {
 	struct i915_hwmon *hwmon = ddat->dd_hwmon;
 	u32 uval;
-	int ret = 0;
 
 	switch (attr) {
 	case hwmon_power_max:
@@ -439,17 +561,65 @@ i915_power_write(struct i915_hwmon_drvdata *ddat, u32 attr, int chan, long val)
 				       FIELD_SHIFT(PKG_PWR_LIM_1),
 				       hwmon->scl_shift_power,
 				       SF_POWER, val);
-		break;
+		return 0;
 	case hwmon_power_crit:
 		uval = DIV_ROUND_CLOSEST_ULL(val << POWER_SETUP_I1_SHIFT, SF_POWER);
-		ret = __snb_pcode_write(ddat->dd_uncore->i915, PCODE_POWER_SETUP,
-					POWER_SETUP_SUBCOMMAND_WRITE_I1, 0, uval);
-		break;
+		return pcode_write_i1(ddat->dd_uncore->i915, uval);
 	default:
-		ret = -EOPNOTSUPP;
+		return -EOPNOTSUPP;
 	}
+}
 
-	return ret;
+static umode_t
+i915_curr_is_visible(const struct i915_hwmon_drvdata *ddat, u32 attr)
+{
+	struct drm_i915_private *i915 = ddat->dd_uncore->i915;
+	u32 uval;
+
+	switch (attr) {
+	case hwmon_curr_crit:
+		if (!IS_DGFX(i915) || pcode_read_i1(i915, &uval) ||
+		    (uval & POWER_SETUP_I1_WATTS))
+			return 0;
+		return 0644;
+	default:
+		return 0;
+	}
+}
+
+static int
+i915_curr_read(struct i915_hwmon_drvdata *ddat, u32 attr, long *val)
+{
+	int ret;
+	u32 uval;
+
+	switch (attr) {
+	case hwmon_curr_crit:
+		ret = pcode_read_i1(ddat->dd_uncore->i915, &uval);
+		if (ret)
+			return ret;
+		if (uval & POWER_SETUP_I1_WATTS)
+			return -ENODEV;
+		*val = _scale_and_shift(REG_FIELD_GET(POWER_SETUP_I1_DATA_MASK, uval),
+					SF_CURR, POWER_SETUP_I1_SHIFT);
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static int
+i915_curr_write(struct i915_hwmon_drvdata *ddat, u32 attr, long val)
+{
+	u32 uval;
+
+	switch (attr) {
+	case hwmon_curr_crit:
+		uval = DIV_ROUND_CLOSEST_ULL(val << POWER_SETUP_I1_SHIFT, SF_CURR);
+		return pcode_write_i1(ddat->dd_uncore->i915, uval);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static umode_t
@@ -496,6 +666,8 @@ i915_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 	switch (type) {
 	case hwmon_power:
 		return i915_power_is_visible(ddat, attr, channel);
+	case hwmon_curr:
+		return i915_curr_is_visible(ddat, attr);
 	case hwmon_in:
 		return i915_in_is_visible(ddat, attr);
 	default:
@@ -512,6 +684,8 @@ i915_read(struct device *dev, enum hwmon_sensor_types type, u32 attr,
 	switch (type) {
 	case hwmon_power:
 		return i915_power_read(ddat, attr, channel, val);
+	case hwmon_curr:
+		return i915_curr_read(ddat, attr, val);
 	case hwmon_in:
 		return i915_in_read(ddat, attr, val);
 	default:
@@ -528,6 +702,8 @@ i915_write(struct device *dev, enum hwmon_sensor_types type, u32 attr,
 	switch (type) {
 	case hwmon_power:
 		return i915_power_write(ddat, attr, channel, val);
+	case hwmon_curr:
+		return i915_curr_write(ddat, attr, val);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -617,6 +793,7 @@ i915_hwmon_get_preregistration_info(struct drm_i915_private *i915)
 	le_sku_unit = cpu_to_le32(val_sku_unit);
 	hwmon->scl_shift_power = le32_get_bits(le_sku_unit, PKG_PWR_UNIT);
 	hwmon->scl_shift_energy = le32_get_bits(le_sku_unit, PKG_ENERGY_UNIT);
+	hwmon->scl_shift_time = le32_get_bits(le_sku_unit, PKG_TIME_UNIT);
 
 	/*
 	 * The value of power1_max is reset to the default on reboot, but is

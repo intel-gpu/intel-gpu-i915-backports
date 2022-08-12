@@ -27,6 +27,7 @@
 #define _BACKPORT_LINUX_KERNEL_H
 
 #include <linux/version.h>
+#include <linux/kstrtox.h>
 
 #include_next <linux/kernel.h>
 
@@ -54,7 +55,7 @@
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 #define typeof_member(T, m)     typeof(((T*)0)->m)
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0) */
+#endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
 #define PTR_ALIGN_DOWN(p, a)    ((typeof(p))ALIGN_DOWN((unsigned long)(p), (a)))

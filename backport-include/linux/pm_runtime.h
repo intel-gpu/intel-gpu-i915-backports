@@ -8,5 +8,5 @@
 
 int pm_runtime_get_if_active(struct device *dev, bool ign_usage_count);
 
-#endif /* LINUX_VERSION_IS_LESS(5,7,0) */
+#endif
 #endif /* __BACKPORT_PM_RUNTIME_H */

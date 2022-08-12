@@ -289,6 +289,7 @@ u32 i915_perf_stream_paranoid = true;
 #define OAREPORT_REASON_CTX_SWITCH     (1<<3)
 #define OAREPORT_REASON_CLK_RATIO      (1<<5)
 
+#define HAS_MI_SET_PREDICATE(i915) (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
 
 /* For sysctl proc_dointvec_minmax of i915_oa_max_sample_rate
  *
@@ -2219,7 +2220,7 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 	struct i915_vma *vma;
 	const u64 delay_ticks = 0xffffffffffffffff -
 		intel_gt_ns_to_clock_interval(gt,
-					      atomic64_read(&stream->perf->noa_programming_delay));
+		atomic64_read(&stream->perf->noa_programming_delay));
 	const u32 base = stream->engine->mmio_base;
 #define CS_GPR(x) GEN8_RING_CS_GPR(base, x)
 	u32 *batch, *ts0, *cs, *jump;
@@ -3056,24 +3057,26 @@ oa_configure_all_contexts(struct i915_perf_stream *stream,
 	 * context. Contexts idle at the time of reconfiguration are not
 	 * trapped behind the barrier.
 	 */
-	spin_lock(&i915->gem.contexts.lock);
+	spin_lock_irq(&i915->gem.contexts.lock);
 	list_for_each_entry_safe(ctx, cn, &i915->gem.contexts.list, link) {
 		if (!kref_get_unless_zero(&ctx->ref))
 			continue;
 
-		spin_unlock(&i915->gem.contexts.lock);
+		spin_unlock_irq(&i915->gem.contexts.lock);
 
-		err = gen8_configure_context(stream, ctx, regs, num_regs);
-		if (err) {
-			i915_gem_context_put(ctx);
-			return err;
+		if (!i915_gem_context_is_closed(ctx)) {
+			err = gen8_configure_context(stream, ctx, regs, num_regs);
+			if (err) {
+				i915_gem_context_put(ctx);
+				return err;
+			}
 		}
 
-		spin_lock(&i915->gem.contexts.lock);
+		spin_lock_irq(&i915->gem.contexts.lock);
 		list_safe_reset_next(ctx, cn, link);
 		i915_gem_context_put(ctx);
 	}
-	spin_unlock(&i915->gem.contexts.lock);
+	spin_unlock_irq(&i915->gem.contexts.lock);
 
 	/*
 	 * After updating all other contexts, we need to modify ourselves.
@@ -5141,8 +5144,8 @@ addr_err:
 	return ERR_PTR(err);
 }
 
-static ssize_t show_dynamic_id(struct device *dev,
-			       struct device_attribute *attr,
+static ssize_t show_dynamic_id(struct kobject *kobj,
+			       struct kobj_attribute *attr,
 			       char *buf)
 {
 	struct i915_oa_config *oa_config =

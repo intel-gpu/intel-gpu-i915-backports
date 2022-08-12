@@ -26,6 +26,8 @@
 #ifndef _BACKPORT_LINUX_SLAB_H
 #define _BACKPORT_LINUX_SLAB_H
 #include <linux/version.h>
+#include <linux/sched/mm.h>
+
 #include_next <linux/slab.h>
 
 /*
@@ -164,5 +166,19 @@ struct memcg_cache_params {
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
 #define SLAB_TYPESAFE_BY_RCU    0x00080000UL    /* Defer freeing slabs to RCU */
+#endif
+
+#if RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE
+#define krealloc_array LINUX_I915_BACKPORT(krealloc_array)
+static __must_check inline void *
+krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t flags)
+{
+        size_t bytes;
+
+        if (unlikely(check_mul_overflow(new_n, new_size, &bytes)))
+                return NULL;
+
+        return krealloc(p, bytes, flags);
+}
 #endif
 #endif

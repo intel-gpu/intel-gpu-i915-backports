@@ -44,7 +44,7 @@ struct i2c_lock_operations {
         void (*unlock_bus)(struct i2c_adapter *, unsigned int flags);
 };
 
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0) */
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)
 
@@ -71,6 +71,6 @@ static inline struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle ha
 {
         return NULL;
 }
-#endif /* CONFIG_ACPI */
-#endif /*LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)*/
+#endif
+#endif
 #endif /*_BACKPORT_LINUX_I2C_H */

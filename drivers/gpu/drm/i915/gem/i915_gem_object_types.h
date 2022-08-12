@@ -147,6 +147,7 @@ enum i915_cache_level {
 	 * engine.
 	 */
 	I915_CACHE_WT,
+	I915_MAX_CACHE_LEVEL,
 };
 
 enum i915_map_type {
@@ -289,12 +290,21 @@ struct drm_i915_gem_object {
 #define I915_BO_FABRIC           BIT(11)
 
 	/**
-	 * @cache_level: The desired GTT caching level.
+	 * @pat_index: The desired PAT index.
 	 *
-	 * See enum i915_cache_level for possible values, along with what
-	 * each does.
+	 * See hardware specification for valid PAT indices for each platform.
+	 * This field used to contain a value of enum i915_cache_level. It's
+	 * changed to an unsigned int because PAT indices are being used by
+	 * both UMD and KMD for caching policy control after GEN12.
+	 * For backward compatibility, this field will continue to contain
+	 * value of i915_cache_level for pre-GEN12 platforms so that the PTE
+	 * encode functions for these legacy platforms can stay the same.
+	 * In the meantime platform specific tables are created to translate
+	 * i915_cache_level into pat index, for more details check the macros
+	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
-	unsigned int cache_level:3;
+	unsigned int pat_index:4;
+
 	/**
 	 * @cache_coherent:
 	 *

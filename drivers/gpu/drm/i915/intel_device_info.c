@@ -202,11 +202,6 @@ static const u16 subplatform_g12_ids[] = {
 	INTEL_DG2_G12_IDS(0),
 };
 
-static const u16 subplatform_atsm_ids[] = {
-	INTEL_ATS_M150_IDS(0),
-	INTEL_ATS_M75_IDS(0),
-};
-
 static bool find_devid(u16 id, const u16 *p, unsigned int num)
 {
 	for (; num; num--, p++) {
@@ -262,11 +257,6 @@ void intel_device_info_subplatform_init(struct drm_i915_private *i915)
 			      ARRAY_SIZE(subplatform_g12_ids))) {
 		mask = BIT(INTEL_SUBPLATFORM_G12);
 	}
-
-	/* ATS-M subplatform bit will be set independently of g10/g11/g12 */
-	if (find_devid(devid, subplatform_atsm_ids,
-		       ARRAY_SIZE(subplatform_atsm_ids)))
-		mask |= BIT(INTEL_SUBPLATFORM_ATSM);
 
 	GEM_BUG_ON(mask & ~INTEL_SUBPLATFORM_MASK);
 

@@ -28,7 +28,7 @@ config DRM_I915_DEBUG
 	depends on NEED_DMA_MAP_STATE
 	select DMAR_TABLE if X86
 	select INTEL_IOMMU if X86
-#	select INTEL_IOMMU_DEFAULT_ON if X86
+	select INTEL_IOMMU_DEFAULT_ON if X86
 	depends on DEBUG_FS
 	depends on PREEMPT_COUNT
 	depends on I2C_CHARDEV

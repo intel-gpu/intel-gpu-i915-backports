@@ -34,5 +34,8 @@ void port_link_width_degrade_trap_handler(struct fsubdev *sd);
 void port_link_quality_indicator_trap_handler(struct fsubdev *sd);
 void port_qsfp_presence_trap_handler(struct fsubdev *sd);
 void port_qsfp_fault_trap_handler(struct fsubdev *sd);
+const char *fw_log_state_name(u8 s);
+int signal_pm_thread(struct fsubdev *sd, enum pm_trigger_reasons event);
+s64 ms_elapsed_since_boot(void);
 
 #endif /* end of header file */

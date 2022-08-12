@@ -29,6 +29,11 @@
 struct i915_address_space;
 struct i915_gem_ww_ctx;
 
+void intel_context_update_schedule_policy(struct intel_context *ce);
+void intel_context_init_schedule_policy(struct intel_context *ce);
+void intel_context_reset_preemption_timeout(struct intel_context *ce);
+void intel_context_disable_preemption_timeout(struct intel_context *ce);
+
 void intel_context_init(struct intel_context *ce,
 			struct intel_engine_cs *engine);
 void intel_context_fini(struct intel_context *ce);
@@ -324,6 +329,14 @@ intel_context_get_active_request(struct intel_context *ce)
 static inline bool intel_context_is_barrier(const struct intel_context *ce)
 {
 	return test_bit(CONTEXT_BARRIER_BIT, &ce->flags);
+}
+
+static inline void intel_context_close(struct intel_context *ce)
+{
+	set_bit(CONTEXT_CLOSED_BIT, &ce->flags);
+
+	if (ce->ops->close)
+		ce->ops->close(ce);
 }
 
 static inline bool intel_context_is_closed(const struct intel_context *ce)

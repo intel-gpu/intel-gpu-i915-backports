@@ -1016,7 +1016,8 @@ __i915_request_create(struct intel_context *ce, gfp_t gfp)
 	unsigned long flags = 0;
 	int ret;
 
-	might_sleep_if(gfpflags_allow_blocking(gfp));
+	might_alloc(gfp);
+
 	if (!gfpflags_allow_blocking(gfp))
 		flags |= BIT(I915_FENCE_FLAG_NONBLOCKING);
 
@@ -1412,7 +1413,7 @@ __i915_request_await_execution(struct i915_request *to,
 	 * immediate execution, and so we must wait until it reaches the
 	 * active slot.
 	 */
- 	if (intel_engine_has_semaphores(to->engine) &&
+	if (intel_engine_has_semaphores(to->engine) &&
 	    can_use_semaphore_wait(to, from)) {
 		err = __emit_semaphore_wait(to, from, i915_request_seqno(from) - 1);
 		if (err < 0)

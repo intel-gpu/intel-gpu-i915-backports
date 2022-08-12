@@ -53,6 +53,7 @@ struct i915_hwmon {
 
 	int scl_shift_power;
 	int scl_shift_energy;
+	int scl_shift_time;
 };
 
 void i915_hwmon_register(struct drm_i915_private *i915);

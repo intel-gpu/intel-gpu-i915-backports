@@ -11,11 +11,10 @@
 struct i915_address_space;
 struct intel_gt;
 struct drm_mm_node;
-enum i915_cache_level;
 
 struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags);
 u64 gen8_ggtt_pte_encode(dma_addr_t addr,
-			 enum i915_cache_level level,
+			 unsigned int pat_index,
 			 u32 flags);
 
 int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,

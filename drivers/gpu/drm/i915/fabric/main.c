@@ -9,8 +9,6 @@
 #include <linux/platform_device.h>
 #endif
 #include <linux/bitfield.h>
-#include <linux/debugfs.h>
-#include <linux/fs.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/list.h>
@@ -24,6 +22,8 @@
 #include <drm/intel_iaf_platform.h>
 
 #include "csr.h"
+#include "debugfs.h"
+#include "dev_diag.h"
 #include "fw.h"
 #include "iaf_drv.h"
 #include "mbdb.h"
@@ -57,19 +57,6 @@ LIST_HEAD(routable_list);
  * in the intel_iaf_platform.h file.
  */
 #define PRODUCT_SHIFT 16
-
-#define FABRIC_ID_NODE_NAME "fabric_id"
-#define FABRIC_DPA_OFFSET "dpa_offset"
-#define FABRIC_DPA_SIZE "dpa_size"
-
-#define FW_VERSION_FILE_NAME "fw_version"
-#define FW_VERSION_BUF_SIZE 256
-#define SWITCHINFO_FILE_NAME "switchinfo"
-#define SWITCHINFO_BUF_SIZE 1024
-#define RISC_RESET_FILE_NAME "risc_reset"
-#define RISC_NMI_FILE_NAME "risc_nmi"
-#define ASIC_REV_FILE_NAME "asic_rev"
-#define ASIC_REV_BUF_SIZE 256
 
 static enum iaf_startup_mode param_startup_mode = STARTUP_MODE_DEFAULT;
 
@@ -126,55 +113,6 @@ MODULE_PARM_DESC(startup_mode,
 		 "\t\t - preload: Assume firmware/ini has already been loaded\n"
 		 "\t\t - debug:   Do not interact with the device outside of L8sim debug netlink\n"
 		 "\t\t - fwdebug: As per debug, but load firmawre during device init");
-
-#define ROOT_NODE DRIVER_NAME
-
-static struct dentry *root_node;
-static struct dentry *debugfs_fabric;
-static struct dentry *debugfs_dpa;
-
-struct dentry *get_debugfs_root_node(void)
-{
-	return root_node;
-}
-
-static struct dentry *get_debugfs_fabric_node(void)
-{
-	return debugfs_fabric;
-}
-
-static struct dentry *get_debugfs_dpa_node(void)
-{
-	return debugfs_dpa;
-}
-
-/*
- * This is a copy of the kernel's read_file_blob in fs/debugfs/file.c which is declared static.
- * If it every was exported this could be removed and the kernel's function could be used instead.
- */
-ssize_t blob_read(struct file *file, char __user *user_buffer, size_t count, loff_t *ppos)
-{
-	struct debugfs_blob_wrapper *blob = file->private_data;
-	struct dentry *dentry = F_DENTRY(file);
-	ssize_t ret;
-
-	ret = debugfs_file_get(dentry);
-	if (ret)
-		return ret;
-
-	ret = simple_read_from_buffer(user_buffer, count, ppos, blob->data, blob->size);
-
-	debugfs_file_put(dentry);
-
-	return ret;
-}
-
-int blob_release(struct inode *inode, struct file *file)
-{
-	kfree(file->private_data);
-
-	return 0;
-}
 
 /* BPS Link Speed indexed by bit # as returned by fls set in port info fields */
 static u64 bps_link_speeds[] = {
@@ -346,6 +284,7 @@ struct fsubdev *find_routable_sd(u64 guid)
 	return NULL;
 }
 
+/* configured by request_irq() to refer to corresponding struct fsubdev */
 static irqreturn_t handle_iaf_irq(int irq, void *arg)
 {
 	struct fsubdev *sd = arg;
@@ -522,393 +461,6 @@ static const struct iaf_ops iaf_ops = {
 	.parent_event = handle_parent_event,
 };
 
-static int fw_version_open(struct inode *inode, struct file *file)
-{
-	struct fsubdev *sd = inode->i_private;
-	struct mbdb_op_fw_version_rsp *fw_version = &sd->fw_version;
-	struct fw_version_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[FW_VERSION_BUF_SIZE];
-	} *info;
-	ssize_t element_count;
-	size_t buf_offset;
-	size_t buf_size;
-	char *buf;
-	int ret;
-
-	if (!sd)
-		return -EINVAL;
-
-	ret = ops_fw_version(sd, fw_version);
-	if (ret == MBOX_RSP_STATUS_SEQ_NO_ERROR)
-		ret = ops_fw_version(sd, fw_version);
-	if (ret)
-		return ret;
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info)
-		return -ENOMEM;
-
-	buf_size = ARRAY_SIZE(info->buf);
-	buf = info->buf;
-
-	buf_offset = scnprintf(buf, buf_size, "MBox Version  : %d\n",
-			       fw_version->mbox_version);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"Environment   : %s%s\n",
-				(fw_version->environment & FW_VERSION_ENV_BIT)
-				? "run-time" : "bootloader",
-				(fw_version->environment & FW_VERSION_INIT_BIT)
-				? ", ready" : "");
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"FW Version    : %s\n",
-				fw_version->fw_version_string);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"OPs supported : 0x");
-
-	for (element_count = ARRAY_SIZE(fw_version->supported_opcodes) - 1;
-	     element_count >= 0; element_count--)
-		buf_offset +=
-			scnprintf(buf + buf_offset, buf_size - buf_offset,
-				  "%016lx",
-				  fw_version->supported_opcodes[element_count]);
-
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset, "\n");
-
-	info->blob.data = info->buf;
-	info->blob.size = buf_offset;
-	file->private_data = info;
-
-	return 0;
-}
-
-static const struct file_operations fw_version_fops = {
-	.owner = THIS_MODULE,
-	.open = fw_version_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
-static int switchinfo_open(struct inode *inode, struct file *file)
-{
-	struct fsubdev *sd = inode->i_private;
-	struct mbdb_op_switchinfo switchinfo = {};
-	struct switchinfo_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[SWITCHINFO_BUF_SIZE];
-	} *info;
-	size_t buf_size;
-	size_t buf_offset;
-	char *buf;
-	int ret;
-
-	if (!sd)
-		return -EINVAL;
-
-	ret = ops_switchinfo_get(sd, &switchinfo);
-	if (ret)
-		return ret;
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info)
-		return -ENOMEM;
-
-	buf_size = ARRAY_SIZE(info->buf);
-	buf = info->buf;
-
-	buf_offset = scnprintf(buf, buf_size, "IAF GUID               : 0x%0llx\n",
-			       switchinfo.guid);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"Num Ports              : %d\n",
-				switchinfo.num_ports);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"SLL                    : %ld\n",
-				switchinfo.slt_psc_ep0 &
-				SLT_PSC_EP0_SWITCH_LIFETIME);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"portStateChange        : %d\n",
-				(switchinfo.slt_psc_ep0 &
-				SLT_PSC_EP0_PORT_STATE_CHANGE) ? 1 : 0);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"enhancedPort0          : %d\n",
-				(switchinfo.slt_psc_ep0 &
-				SLT_PSC_EP0_ENHANCED_PORT_0) ? 1 : 0);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"routingModeSupported   : %d\n",
-				switchinfo.routing_mode_supported);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"routingModeEnabled     : %d\n",
-				switchinfo.routing_mode_enabled);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"lftTop                 : 0x%x\n",
-				switchinfo.lft_top);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"unalignedCount         : %d\n",
-				switchinfo.unaligned_cnt);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"unalignedPortWindow    : %d\n",
-				switchinfo.unaligned_portwin);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"unalignedVirtAddr      : 0x%x\n",
-				switchinfo.unaligned_vaddr);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"unalignedPC            : 0x%x\n",
-				switchinfo.unaligned_pc);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifDataErrorCount      : %d\n",
-				switchinfo.pif_data_error_cnt);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifDataErrorPortWindow : %d\n",
-				switchinfo.pif_data_error_portwin);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifDataErrorVirtAddr   : 0x%x\n",
-				switchinfo.pif_data_error_vaddr);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifDataErrorPC         : 0x%x\n",
-				switchinfo.pif_data_error_pc);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifAddrErrorCount      : %d\n",
-				switchinfo.pif_addr_error_cnt);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifAddrErrorPortWindow : %d\n",
-				switchinfo.pif_addr_error_portwin);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifAddrErrorVirtAddr   : 0x%x\n",
-				switchinfo.pif_addr_error_vaddr);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"pifAddrErrorPC         : 0x%x\n",
-				switchinfo.pif_addr_error_pc);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"memScrubSize           : %d\n",
-				switchinfo.mem_scrub_size);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"memScrubCount          : %d\n",
-				switchinfo.mem_scrub_count);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"vffScrubDisable        : %s\n",
-				switchinfo.vff_scrub_disable ? "yes" : "no");
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"vffScrubCount          : %d\n",
-				switchinfo.vff_scrub_count);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"rpipeScrubDisable      : %s\n",
-				switchinfo.rpipe_scrub_disable ? "yes" : "no");
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"rpipeScrubCount        : %d\n",
-				switchinfo.rpipe_scrub_count);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"mrtScrubCount          : %d\n",
-				switchinfo.mrt_scrub_count);
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"4opselScrubCount       : %d\n",
-				switchinfo.fouropsel_scrub_count);
-
-	info->blob.data = info->buf;
-	info->blob.size = buf_offset;
-	file->private_data = info;
-
-	return 0;
-}
-
-static const struct file_operations switchinfo_fops = {
-	.owner = THIS_MODULE,
-	.open = switchinfo_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
-static ssize_t risc_reset_write(struct file *fp, const char __user *buf,
-				size_t count, loff_t *fpos)
-{
-	void __iomem *cport_init_ctrl_reg_addr;
-	u64 cport_init_ctrl_reg_val;
-	struct fsubdev *sd;
-
-	/* always absorb everything written */
-	*fpos += count;
-
-	sd = fp->private_data;
-
-	if (!sd)
-		return -EBADF;
-
-	if (unlikely(READ_ONCE(sd->fdev->dev_disabled)))
-		return -EIO;
-
-	if (!mutex_trylock(&sd->cport_init_ctrl_reg_lock))
-		return -EAGAIN;
-
-	routing_sd_destroy(sd);
-
-	cport_init_ctrl_reg_addr = sd->csr_base + CPORT_INIT_CTRL_ADDR;
-	cport_init_ctrl_reg_val = readq(cport_init_ctrl_reg_addr);
-
-	cport_init_ctrl_reg_val |= RISC_RESET_BIT;
-	writeq(cport_init_ctrl_reg_val, cport_init_ctrl_reg_addr);
-
-	cport_init_ctrl_reg_val ^= RISC_RESET_BIT;
-	writeq(cport_init_ctrl_reg_val, cport_init_ctrl_reg_addr);
-
-	mutex_unlock(&sd->cport_init_ctrl_reg_lock);
-
-	sd_info(sd, "RISC RESET requested\n");
-
-	sd->fw_running = false;
-	mbdb_reinit(sd);
-
-	return count;
-}
-
-static const struct file_operations risc_reset_fops = {
-	.owner = THIS_MODULE,
-	.open = simple_open,
-	.llseek = no_llseek,
-	.write = risc_reset_write
-};
-
-static ssize_t risc_nmi_read(struct file *fp, char __user *buf, size_t count,
-			     loff_t *fpos)
-{
-	void __iomem *cport_init_ctrl_reg_addr;
-	u64 cport_init_ctrl_reg_val;
-	struct fsubdev *sd;
-	char read_buf[10];
-	bool nmi_val;
-	size_t siz;
-
-	sd = fp->private_data;
-
-	if (!sd)
-		return -EBADF;
-
-	if (unlikely(READ_ONCE(sd->fdev->dev_disabled)))
-		return -EIO;
-
-	if (!mutex_trylock(&sd->cport_init_ctrl_reg_lock))
-		return -EAGAIN;
-
-	cport_init_ctrl_reg_addr = sd->csr_base + CPORT_INIT_CTRL_ADDR;
-	cport_init_ctrl_reg_val = readq(cport_init_ctrl_reg_addr);
-	nmi_val = (bool)FIELD_GET(RISC_NMI_BIT, cport_init_ctrl_reg_val);
-
-	mutex_unlock(&sd->cport_init_ctrl_reg_lock);
-
-	siz = scnprintf(read_buf, sizeof(read_buf), "%.1u\n", nmi_val);
-
-	return simple_read_from_buffer(buf, count, fpos, read_buf, siz);
-}
-
-static ssize_t risc_nmi_write(struct file *fp, const char __user *buf,
-			      size_t count, loff_t *fpos)
-{
-	void __iomem *cport_init_ctrl_reg_addr;
-	u64 cport_init_ctrl_reg_val;
-	struct fsubdev *sd;
-	bool nmi_desired;
-	bool nmi_val;
-	int err;
-
-	sd = fp->private_data;
-	if (!sd)
-		return -EBADF;
-
-	if (unlikely(READ_ONCE(sd->fdev->dev_disabled)))
-		return -EIO;
-
-	err = kstrtobool_from_user(buf, count, &nmi_desired);
-	if (err)
-		return err;
-
-	if (!mutex_trylock(&sd->cport_init_ctrl_reg_lock))
-		return -EAGAIN;
-
-	cport_init_ctrl_reg_addr = sd->csr_base + CPORT_INIT_CTRL_ADDR;
-	cport_init_ctrl_reg_val = readq(cport_init_ctrl_reg_addr);
-	nmi_val = (bool)FIELD_GET(RISC_NMI_BIT, cport_init_ctrl_reg_val);
-
-	if (nmi_val != nmi_desired) {
-		cport_init_ctrl_reg_val ^= RISC_NMI_BIT;
-		writeq(cport_init_ctrl_reg_val, cport_init_ctrl_reg_addr);
-	}
-
-	mutex_unlock(&sd->cport_init_ctrl_reg_lock);
-
-	*fpos += count;
-	return count;
-}
-
-static const struct file_operations risc_nmi_fops = {
-	.owner = THIS_MODULE,
-	.open = simple_open,
-	.llseek = no_llseek,
-	.read = risc_nmi_read,
-	.write = risc_nmi_write
-};
-
-static int asic_rev_open(struct inode *inode, struct file *file)
-{
-	struct fsubdev *sd = inode->i_private;
-	struct asci_rev_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[ASIC_REV_BUF_SIZE];
-	} *info;
-	size_t buf_offset;
-	size_t buf_size;
-	char *buf;
-
-	if (!sd)
-		return -EINVAL;
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info)
-		return -ENOMEM;
-
-	buf_size = ARRAY_SIZE(info->buf);
-	buf = info->buf;
-
-	buf_offset = scnprintf(buf, buf_size, "Platform : 0x%04x\n",
-			       (int)FIELD_GET(MASK_ARI_PLATFORM, sd->asic_rev_info));
-	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
-				"Revision : 0x%02x\n",
-				(int)FIELD_GET(MASK_ARI_STEP, sd->asic_rev_info));
-
-	info->blob.data = info->buf;
-	info->blob.size = buf_offset;
-	file->private_data = info;
-
-	return 0;
-}
-
-static const struct file_operations asic_rev_fops = {
-	.owner = THIS_MODULE,
-	.open = asic_rev_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
-static void create_sd_debugfs_dir(struct fsubdev *sd)
-{
-	/*
-	 * currently works in all startup modes, could be conditioned here by
-	 * setting sd->debugfs_dir = ERR_PTR(-ENODEV) instead
-	 */
-	sd->debugfs_dir = debugfs_create_dir(sd->name, sd->fdev->dir_node);
-
-	debugfs_create_file(FW_VERSION_FILE_NAME, 0400, sd->debugfs_dir, sd,
-			    &fw_version_fops);
-	debugfs_create_file(SWITCHINFO_FILE_NAME, 0400, sd->debugfs_dir, sd,
-			    &switchinfo_fops);
-	debugfs_create_file(RISC_RESET_FILE_NAME, 0200, sd->debugfs_dir, sd,
-			    &risc_reset_fops);
-	debugfs_create_file(RISC_NMI_FILE_NAME, 0644, sd->debugfs_dir, sd,
-			    &risc_nmi_fops);
-	debugfs_create_file(ASIC_REV_FILE_NAME, 0400, sd->debugfs_dir, sd,
-			    &asic_rev_fops);
-}
-
 static int validate_product(struct fsubdev *sd)
 {
 	if (dev_is_startup_debug(sd->fdev))
@@ -1005,9 +557,9 @@ static int add_subdevice(struct fsubdev *sd, struct fdev *dev, int index)
 
 	mutex_init(&sd->cport_init_ctrl_reg_lock);
 
-	create_sd_debugfs_dir(sd);
+	create_dev_debugfs_dir(sd);
 
-	err = create_mbdb(sd, sd->debugfs_dir);
+	err = create_mbdb(sd);
 
 	if (err) {
 		sd_err(sd, "Message Box allocation failure\n");
@@ -1068,46 +620,6 @@ void indicate_subdevice_error(struct fsubdev *sd, enum sd_error err)
 	}
 
 	fail_subdevice(sd);
-}
-
-static void init_debugfs(struct fdev *dev)
-{
-	char name[128];
-	char dest[128];
-
-	dev->dir_node = debugfs_create_dir(dev_name(&dev->pdev->dev),
-					   get_debugfs_root_node());
-
-	debugfs_create_x32(FABRIC_ID_NODE_NAME, 0400, dev->dir_node,
-			   &dev->fabric_id);
-	debugfs_create_x32(FABRIC_DPA_OFFSET, 0400, dev->dir_node,
-			   (u32 *)&dev->pd->dpa.pkg_offset);
-	debugfs_create_x16(FABRIC_DPA_SIZE, 0400, dev->dir_node,
-			   (u16 *)&dev->pd->dpa.pkg_size);
-
-	snprintf(dest, ARRAY_SIZE(dest), "../%s", dev_name(&dev->pdev->dev));
-
-	snprintf(name, ARRAY_SIZE(name), "0x%08x", dev->fabric_id);
-	dev->fabric_node = debugfs_create_symlink(name,
-						  get_debugfs_fabric_node(),
-						  dest);
-
-	snprintf(name, ARRAY_SIZE(name), "0x%016llx-0x%016llx",
-		 (u64)dev->pd->dpa.pkg_offset * SZ_1G,
-		 (u64)dev->pd->dpa.pkg_offset * SZ_1G +
-		 (u64)dev->pd->dpa.pkg_size * SZ_1G - 1);
-	dev->dpa_node = debugfs_create_symlink(name, get_debugfs_dpa_node(),
-					       dest);
-}
-
-static void remove_debugfs(struct fdev *dev)
-{
-	/* clean up the "global" entries */
-	debugfs_remove(dev->fabric_node);
-	debugfs_remove(dev->dpa_node);
-
-	/* and now the device specific stuff */
-	debugfs_remove_recursive(dev->dir_node);
 }
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
@@ -1434,7 +946,7 @@ static void __exit iaf_unload_module(void)
 	routing_stop();
 	routing_destroy();
 
-	debugfs_remove_recursive(root_node);
+	remove_debugfs_root_nodes();
 
 	pr_notice("%s Unloaded\n", MODULEDETAILS);
 }
@@ -1449,13 +961,11 @@ static int __init iaf_load_module(void)
 	pr_notice("Initializing %s\n", MODULEDETAILS);
 	pr_debug("Built for Linux Kernel %s\n", UTS_RELEASE);
 
-	root_node = debugfs_create_dir(ROOT_NODE, NULL);
-	debugfs_fabric = debugfs_create_dir("fabric", root_node);
-	debugfs_dpa = debugfs_create_dir("dpa", root_node);
+	create_debugfs_root_nodes();
 
 #if IS_ENABLED(CPTCFG_IAF_DEBUG_SELFTESTS)
 	if (selftests_run()) {
-		debugfs_remove_recursive(root_node);
+		remove_debugfs_root_nodes();
 		return -ENODEV;
 	}
 #endif
@@ -1479,6 +989,10 @@ MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION(MODULEDETAILS);
 MODULE_LICENSE("GPL and additional rights");
 MODULE_VERSION(BACKPORT_MOD_VER);
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
+MODULE_ALIAS("auxiliary:i915.iaf");
+#else
+MODULE_ALIAS("platform:iaf");
+#endif
 MODULE_FIRMWARE("i915/pvc_iaf_ver1.bin");
 MODULE_FIRMWARE("i915/default_iaf.pscbin");
-MODULE_ALIAS("platform:iaf");
