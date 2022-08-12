@@ -3,8 +3,6 @@
  * Copyright © 2020 Intel Corporation
  */
 
-
-#include <linux/sched/mm.h>
 #include <linux/slab.h> /* fault-inject.h is not standalone! */
 
 #include <linux/fault-inject.h>
@@ -806,7 +804,9 @@ int svm_bind_addr_commit(struct i915_address_space *vm, u64 start, u64 size,
 	if (flags & I915_GTT_SVM_LMEM)
 		pte_flags |= (vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
-	vm->insert_entries(vm, vma, 0, pte_flags);
+	vm->insert_entries(vm, vma,
+			   i915_gem_get_pat_index(vm->i915, I915_CACHE_NONE),
+			   pte_flags);
 	i915_vma_free(vma);
 	return 0;
 }

@@ -26,6 +26,7 @@
 #include "intel_engine_types.h"
 #include "intel_flat_ppgtt_pool_types.h"
 #include "intel_gt_buffer_pool_types.h"
+#include "intel_hwconfig.h"
 #include "intel_llc_types.h"
 #include "intel_memory_region.h"
 #include "intel_reset_types.h"
@@ -41,12 +42,6 @@ struct i915_ggtt;
 struct i915_vma;
 struct intel_engine_cs;
 struct intel_uncore;
-
-enum intel_submission_method {
-	INTEL_SUBMISSION_RING,
-	INTEL_SUBMISSION_ELSP,
-	INTEL_SUBMISSION_GUC,
-};
 
 /* Count of GT Correctable and FATAL HW ERRORS */
 enum intel_gt_hw_errors {
@@ -116,9 +111,21 @@ enum intel_steering_type {
 	L3BANK,
 	MSLICE,
 	LNCF,
-	BSLICE,
+
+	/*
+	 * On some platforms there are multiple types of MCR registers that
+	 * will always return a non-terminated value at instance (0, 0).  We'll
+	 * lump those all into a single category to keep things simple.
+	 */
+	INSTANCE0,
 
 	NUM_STEERING_TYPES
+};
+
+enum intel_submission_method {
+	INTEL_SUBMISSION_RING,
+	INTEL_SUBMISSION_ELSP,
+	INTEL_SUBMISSION_GUC,
 };
 
 struct intel_mem_sparing_event {
@@ -330,10 +337,10 @@ struct intel_gt {
 		/* Slice/subslice/EU info */
 		struct sseu_dev_info sseu;
 
-		union {
-			unsigned long mslice_mask;
-			unsigned long bslice_mask;
-		};
+		unsigned long mslice_mask;
+
+		/** @hwconfig: hardware configuration data */
+		struct intel_hwconfig hwconfig;
 	} info;
 
 	struct {

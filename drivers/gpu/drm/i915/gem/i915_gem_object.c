@@ -24,6 +24,7 @@
 
 #include <drm/drm_print.h>
 #include <linux/sched/mm.h>
+#include <linux/iosys-map.h>
 
 #include <drm/drm_cache.h>
 
@@ -38,6 +39,7 @@
 #include "i915_drv.h"
 #include "i915_gem_clflush.h"
 #include "i915_gem_context.h"
+#include "i915_gem_dmabuf.h"
 #include "i915_gem_lmem.h"
 #include "i915_gem_mman.h"
 #include "i915_gem_object.h"
@@ -51,6 +53,21 @@
 static struct kmem_cache *slab_objects;
 
 static const struct drm_gem_object_funcs i915_gem_object_funcs;
+
+unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
+				    enum i915_cache_level level)
+{
+	if (drm_WARN_ON(&i915->drm, level >= I915_MAX_CACHE_LEVEL))
+		return 0;
+
+	return INTEL_INFO(i915)->cachelevel_to_pat[level];
+}
+
+bool i915_gem_object_has_cache_level(const struct drm_i915_gem_object *obj,
+				     enum i915_cache_level lvl)
+{
+	return obj->pat_index == i915_gem_get_pat_index(obj_to_i915(obj), lvl);
+}
 
 struct drm_i915_gem_object *i915_gem_object_alloc(void)
 {
@@ -124,7 +141,8 @@ static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level)
 {
-	obj->cache_level = cache_level;
+	obj->pat_index = i915_gem_get_pat_index(obj_to_i915(obj),
+						cache_level);
 
 	if (cache_level != I915_CACHE_NONE)
 		obj->cache_coherent = (I915_BO_CACHE_COHERENT_FOR_READ |
@@ -138,34 +156,39 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 		!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
-bool i915_gem_object_should_migrate(struct drm_i915_gem_object *obj,
-				    enum intel_region_id dst_region_id)
+bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *dst_mem;
-	bool should_migrate = false;
-	u32 mask;
-
-	if (!obj->mm.n_placements || obj->mm.region->id == dst_region_id)
+	if (!obj->mm.n_placements || obj->mm.region->id == INTEL_REGION_SMEM)
 		return false;
 
-	/* reject migration if region not contained in placement list */
-	mask = obj->memory_mask;
-	if (!(mask & BIT(dst_region_id)))
+	/* reject migration if smem not contained in placement list */
+	if (!(obj->memory_mask & BIT(INTEL_REGION_SMEM)))
 		return false;
 
-	dst_mem = to_i915(obj->base.dev)->mm.regions[dst_region_id];
-
-	if (dst_mem->type == INTEL_MEMORY_SYSTEM)
-		should_migrate =
-			i915_gem_object_allows_atomic_system(obj) ||
-			i915_gem_object_test_preferred_location(obj, dst_region_id);
-	else if (dst_mem->type == INTEL_MEMORY_LOCAL)
-		should_migrate =
-			i915_gem_object_allows_atomic_device(obj) ||
-			i915_gem_object_test_preferred_location(obj, dst_region_id);
-
-	return should_migrate;
+	return i915_gem_object_allows_atomic_system(obj) ||
+	       i915_gem_object_test_preferred_location(obj, INTEL_REGION_SMEM);
 }
+
+bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
+					 enum intel_region_id dst_region_id,
+					 bool is_atomic_fault)
+{
+	if (!dst_region_id)
+		return false;
+
+	if (is_atomic_fault)
+		return true;
+
+	if (i915_gem_object_allows_atomic_device(obj) &&
+	    !i915_gem_object_is_lmem(obj))
+		return true;
+
+	if (i915_gem_object_test_preferred_location(obj, dst_region_id))
+		return true;
+
+	return false;
+}
+
 
 /* Similar to system madvise, we convert hints to stored flags */
 int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
@@ -623,7 +646,6 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		return 0;
 
 	mem = i915->mm.regions[id];
-
 	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
 		I915_BO_ALLOC_CONTIGUOUS : 0;
 	donor = i915_gem_object_create_region(mem, obj->base.size, alloc_flags);
@@ -690,7 +712,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	obj->mm.region = intel_memory_region_get(mem);
 	obj->flags = donor->flags;
 	obj->ops = donor->ops;
-	obj->cache_level = donor->cache_level;
+	obj->pat_index = donor->pat_index;
 	obj->cache_coherent = donor->cache_coherent;
 	obj->cache_dirty = donor->cache_dirty;
 
@@ -716,40 +738,45 @@ struct object_memcpy_info {
 	bool write;
 	int clflush;
 	struct page *page;
-	void *vaddr;
-	void *(*get_vaddr)(struct object_memcpy_info *info,
+	struct iosys_map map;
+	struct iosys_map *(*get_map)(struct object_memcpy_info *info,
 			   unsigned long idx);
-	void (*put_vaddr)(struct object_memcpy_info *info);
+	void (*put_map)(struct object_memcpy_info *info);
 };
 
-static
-void *lmem_get_vaddr(struct object_memcpy_info *info, unsigned long idx)
+static struct iosys_map *
+lmem_get_map(struct object_memcpy_info *info, unsigned long idx)
 {
-	info->vaddr = i915_gem_object_lmem_io_map_page(info->obj, idx);
-	return info->vaddr;
+	void __iomem *vaddr;
+
+	vaddr = i915_gem_object_lmem_io_map_page(info->obj, idx);
+	iosys_map_set_vaddr_iomem(&info->map, vaddr);
+
+	return &info->map;
 }
 
-static
-void lmem_put_vaddr(struct object_memcpy_info *info)
+static void lmem_put_map(struct object_memcpy_info *info)
 {
-	io_mapping_unmap(info->vaddr);
+	io_mapping_unmap(info->map.vaddr_iomem);
 }
 
-static
-void *smem_get_vaddr(struct object_memcpy_info *info, unsigned long idx)
+static struct iosys_map *
+smem_get_map(struct object_memcpy_info *info, unsigned long idx)
 {
+	void *vaddr;
+
 	info->page = i915_gem_object_get_page(info->obj, idx);
-	info->vaddr = kmap(info->page);
+	vaddr = kmap(info->page);
+	iosys_map_set_vaddr(&info->map, vaddr);
 	if (info->clflush & CLFLUSH_BEFORE)
-		drm_clflush_virt_range(info->vaddr, PAGE_SIZE);
-	return info->vaddr;
+		drm_clflush_virt_range(info->map.vaddr, PAGE_SIZE);
+	return &info->map;
 }
 
-static
-void smem_put_vaddr(struct object_memcpy_info *info)
+static void smem_put_map(struct object_memcpy_info *info)
 {
 	if (info->clflush & CLFLUSH_AFTER)
-		drm_clflush_virt_range(info->vaddr, PAGE_SIZE);
+		drm_clflush_virt_range(info->map.vaddr, PAGE_SIZE);
 	kunmap(info->page);
 }
 
@@ -777,8 +804,8 @@ i915_gem_object_prepare_memcpy(struct drm_i915_gem_object *obj,
 		if (!ret) {
 			info->wakeref =
 				intel_runtime_pm_get(&i915->runtime_pm);
-			info->get_vaddr = lmem_get_vaddr;
-			info->put_vaddr = lmem_put_vaddr;
+			info->get_map = lmem_get_map;
+			info->put_map = lmem_put_map;
 		}
 	} else {
 		if (write)
@@ -790,8 +817,8 @@ i915_gem_object_prepare_memcpy(struct drm_i915_gem_object *obj,
 
 		if (!ret) {
 			i915_gem_object_finish_access(obj);
-			info->get_vaddr = smem_get_vaddr;
-			info->put_vaddr = smem_put_vaddr;
+			info->get_map = smem_get_map;
+			info->put_map = smem_put_map;
 		}
 	}
 
@@ -826,7 +853,7 @@ int i915_gem_object_memcpy(struct drm_i915_gem_object *dst,
 			   struct drm_i915_gem_object *src)
 {
 	struct object_memcpy_info sinfo, dinfo;
-	void *svaddr, *dvaddr;
+	struct iosys_map *smap, *dmap;
 	unsigned long npages;
 	int i, ret;
 
@@ -840,16 +867,13 @@ int i915_gem_object_memcpy(struct drm_i915_gem_object *dst,
 
 	npages = min(src->base.size, dst->base.size) / PAGE_SIZE;
 	for (i = 0; i < npages; i++) {
-		svaddr = sinfo.get_vaddr(&sinfo, i);
-		dvaddr = dinfo.get_vaddr(&dinfo, i);
+		smap = sinfo.get_map(&sinfo, i);
+		dmap = dinfo.get_map(&dinfo, i);
 
-		/* a performance optimization */
-		if (!i915_gem_object_is_lmem(src) ||
-		    !i915_memcpy_from_wc(dvaddr, svaddr, PAGE_SIZE))
-			memcpy(dvaddr, svaddr, PAGE_SIZE);
+		i915_memcpy_iosys_map(dmap, smap, PAGE_SIZE);
 
-		dinfo.put_vaddr(&dinfo);
-		sinfo.put_vaddr(&sinfo);
+		dinfo.put_map(&dinfo);
+		sinfo.put_map(&sinfo);
 
 		cond_resched();
 	}
@@ -993,7 +1017,8 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 
 	ret = i915_gem_object_prepare_move(obj, ww);
 	if (ret) {
-		DRM_ERROR("Cannot set memory region, object in use(%d)\n", ret);
+		if (ret != -EDEADLK)
+			DRM_ERROR("Cannot set memory region, object in use(%d)\n", ret);
 	        goto err;
 	}
 
@@ -1090,10 +1115,10 @@ static int i915_alloc_vm_range(struct i915_vma *vma)
 
 static inline void i915_insert_vma_pages(struct i915_vma *vma, bool is_lmem)
 {
-	enum i915_cache_level cache_level = I915_CACHE_NONE;
-
 	intel_flat_ppgtt_allocate_requests(vma, false);
-	vma->vm->insert_entries(vma->vm, vma, cache_level,
+	vma->vm->insert_entries(vma->vm, vma,
+				i915_gem_get_pat_index(vma->vm->i915,
+						       I915_CACHE_NONE),
 				is_lmem ? PTE_LM : 0);
 	intel_flat_ppgtt_request_pool_clean(vma);
 

@@ -31,9 +31,6 @@
 #include <linux/string_helpers.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
-#include <linux/sched/clock.h>
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 #ifdef CONFIG_X86
 #include <asm/hypervisor.h>

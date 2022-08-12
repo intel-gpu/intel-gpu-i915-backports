@@ -125,21 +125,20 @@ struct intel_engine_coredump {
 	u32 esr;
 	u32 bbstate;
 	u32 instpm;
-	u32 nopid;
-	u32 excc;
 	u32 instps;
-	u32 cmd_cctl;
-	u32 cscmdop;
-	u32 ctx_sr_ctl;
-	u32 dma_faddr_hi;
-	u32 dma_faddr_lo;
 	u64 bbaddr;
 	u64 acthd;
 	u32 fault_reg;
 	u32 ctxt_sr_ctl;
 	u64 faddr;
-	u32 comp_ctx0_trtt_cr;
 	u32 rc_psmi; /* sleep state */
+	u32 nopid;
+	u32 excc;
+	u32 cmd_cctl;
+	u32 cscmdop;
+	u32 ctx_sr_ctl;
+	u32 dma_faddr_hi;
+	u32 dma_faddr_lo;
 	u32 td_att[TD_ATT_MAX];
 	u32 td_ctl; /* can be in power ctx on newer gens */
 	struct intel_instdone instdone;
@@ -209,7 +208,6 @@ struct intel_gt_coredump {
 	u32 ier;
 	u32 gtier[6], ngtier;
 	u32 forcewake;
-	u32 row_instdone;
 	u32 error; /* gen6+ */
 	u32 err_int; /* gen7 */
 	u32 fault_data0; /* gen8, gen9 */

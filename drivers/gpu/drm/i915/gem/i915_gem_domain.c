@@ -9,20 +9,20 @@
 
 #include "i915_drv.h"
 #include "i915_gem_clflush.h"
+#include "i915_gem_domain.h"
 #include "i915_gem_gtt.h"
 #include "i915_gem_ioctls.h"
 #include "i915_gem_lmem.h"
+#include "i915_gem_mman.h"
 #include "i915_gem_object.h"
 #include "i915_vma.h"
-#include "i915_gem_lmem.h"
-#include "i915_gem_mman.h"
 
 #define VTD_GUARD (168u * I915_GTT_PAGE_SIZE) /* 168 or tile-row PTE padding */
 
 static bool gpu_write_needs_clflush(struct drm_i915_gem_object *obj)
 {
-	return !(obj->cache_level == I915_CACHE_NONE ||
-		 obj->cache_level == I915_CACHE_WT);
+	return !(i915_gem_object_has_cache_level(obj, I915_CACHE_NONE) ||
+		 i915_gem_object_has_cache_level(obj, I915_CACHE_WT));
 }
 
 static void
@@ -244,7 +244,7 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
 {
 	int ret;
 
-	if (obj->cache_level == cache_level)
+	if (i915_gem_object_has_cache_level(obj, cache_level))
 		return 0;
 
 	ret = i915_gem_object_wait(obj,
@@ -255,10 +255,8 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
 		return ret;
 
 	/* Always invalidate stale cachelines */
-	if (obj->cache_level != cache_level) {
-		i915_gem_object_set_cache_coherency(obj, cache_level);
-		obj->cache_dirty = true;
-	}
+	i915_gem_object_set_cache_coherency(obj, cache_level);
+	obj->cache_dirty = true;
 
 	/* The cache-level will be applied when each vma is rebound. */
 	return i915_gem_object_unbind(obj, ww,
@@ -280,20 +278,13 @@ int i915_gem_get_caching_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 
-	switch (obj->cache_level) {
-	case I915_CACHE_LLC:
-	case I915_CACHE_L3_LLC:
+	if (i915_gem_object_has_cache_level(obj, I915_CACHE_LLC) ||
+	    i915_gem_object_has_cache_level(obj, I915_CACHE_L3_LLC))
 		args->caching = I915_CACHING_CACHED;
-		break;
-
-	case I915_CACHE_WT:
+	else if (i915_gem_object_has_cache_level(obj, I915_CACHE_WT))
 		args->caching = I915_CACHING_DISPLAY;
-		break;
-
-	default:
+	else
 		args->caching = I915_CACHING_NONE;
-		break;
-	}
 out:
 	rcu_read_unlock();
 	return err;
@@ -351,7 +342,7 @@ int i915_gem_set_caching_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 
-	if (i915_gem_object_is_lmem(obj) && level != I915_CACHING_NONE) {
+	if (i915_gem_object_is_lmem(obj) && level != I915_CACHE_NONE) {
 		ret = -EINVAL;
 		goto out;
 	}

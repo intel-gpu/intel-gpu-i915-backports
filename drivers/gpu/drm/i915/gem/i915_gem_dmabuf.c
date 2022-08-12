@@ -8,11 +8,12 @@
 #include <linux/highmem.h>
 #include <linux/pci-p2pdma.h>
 #include <linux/scatterlist.h>
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef MODULE_IMPORT_NS_SUPPORT
 #include <linux/module.h>
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif
 #include <drm/intel_iaf_platform.h>
 
+#include "gem/i915_gem_dmabuf.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
@@ -24,15 +25,15 @@
 #include "i915_trace.h"
 #include "intel_iaf.h"
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef MODULE_IMPORT_NS_SUPPORT
 MODULE_IMPORT_NS(DMA_BUF);
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif
 
 I915_SELFTEST_DECLARE(static bool force_different_devices;)
 
 static const struct drm_i915_gem_object_ops i915_gem_object_dmabuf_ops;
-static bool update_fabric(struct dma_buf *dma_buf,
-			  struct drm_i915_gem_object *obj);
+static int update_fabric(struct dma_buf *dma_buf,
+			 struct drm_i915_gem_object *obj);
 
 static struct drm_i915_gem_object *dma_buf_to_obj(struct dma_buf *buf)
 {
@@ -243,12 +244,7 @@ static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
 		if (ret)
 			return ret;
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
-		fput(vma->vm_file);
-		vma->vm_file = get_file(obj->base.filp);;
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
 		vma_set_file(vma, obj->base.filp);
-#endif /* LINUX_VERSION_IN_RANGE */
 
 		return 0;
 	}
@@ -311,12 +307,26 @@ retry:
 	return err;
 }
 
+#define I915_P2PDMA_OVERRIDE BIT(0)
+#define I915_FABRIC_ONLY BIT(1)
+
+static bool fabric_only(struct drm_i915_private *i915)
+{
+	return i915->params.prelim_override_p2p_dist & I915_FABRIC_ONLY;
+}
+
+static bool p2pdma_override(struct drm_i915_private *i915)
+{
+	return i915->params.prelim_override_p2p_dist & I915_P2PDMA_OVERRIDE;
+}
+
 static int i915_p2p_distance(struct drm_i915_private *i915, struct device *dev)
 {
 	int distance = 255; /* Override uses an arbitrary > 0 value */
 
-	if (!i915->params.prelim_override_p2p_dist)
-		distance = pci_p2pdma_distance(to_pci_dev(i915->drm.dev), dev, false);
+	if (!p2pdma_override(i915))
+		distance = pci_p2pdma_distance(to_pci_dev(i915->drm.dev), dev,
+					       false);
 
 	return distance;
 }
@@ -341,8 +351,8 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 	enum intel_engine_id id = gt->rsvd_bcs;
 	struct intel_context *ce = gt->engine[id]->blitter_context;
 	struct i915_gem_ww_ctx ww;
-	int p2p_distance = -1;
-	bool fabric;
+	int p2p_distance;
+	int fabric;
 	int err;
 
 	fabric = update_fabric(dmabuf, attach->importer_priv);
@@ -350,6 +360,9 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 	p2p_distance = object_to_attachment_p2p_distance(obj, attach);
 
 	trace_i915_dma_buf_attach(obj, fabric, p2p_distance);
+
+	if (fabric < 0)
+		return -EOPNOTSUPP;
 
 	if (!fabric && p2p_distance < 0 &&
 	    !i915_gem_object_can_migrate(obj, INTEL_REGION_SMEM))
@@ -430,28 +443,30 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
  * If the imported object is a i915 dma-buf, and LMEM based, query to see if
  * there is a fabric, and if the fabric is connected set the fabric bit.
  *
- * false indicates no connectivity.
+ * 0 no connectivity, use P2P if available
+ * 1 fabric is available
+ * -1 fabric only is requested, and there is no fabric
  *
  */
-static bool update_fabric(struct dma_buf *dma_buf,
-			  struct drm_i915_gem_object *obj)
+static int update_fabric(struct dma_buf *dma_buf,
+			 struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_gem_object *import;
 	struct drm_i915_private *src;
 	struct drm_i915_private *dst;
 	struct query_info *qi;
-	bool connected;
+	int connected;
 	int i;
 	int n;
 
 	/* Verify that both sides are i915s */
 	if (dma_buf->ops != &i915_dmabuf_ops ||
 	    !obj || obj->ops != &i915_gem_object_dmabuf_ops)
-		return false;
+		return 0;
 
 	import = dma_buf_to_obj(dma_buf);
 	if (!i915_gem_object_is_lmem(import))
-		return false;
+		return 0;
 
 	src = to_i915(obj->base.dev);
 	dst = to_i915(import->base.dev);
@@ -459,29 +474,33 @@ static bool update_fabric(struct dma_buf *dma_buf,
 	qi = src->intel_iaf.ops->connectivity_query(src->intel_iaf.handle,
 						    dst->intel_iaf.fabric_id);
 	if (IS_ERR(qi))
-		return false;
+		return fabric_only(src) ? -1 : 0;
 
 	/*
 	 * Examine the query information.  A zero bandwidth link indicates we
 	 * are NOT connected.
 	 */
-	connected = true;
+	connected = 1;
 	for (i = 0, n = qi->src_cnt * qi->dst_cnt; i < n && connected; i++)
 		if (!qi->sd2sd[i].bandwidth)
-			connected = false;
+			connected = 0;
 
 	/* we are responsible for freeing qi */
 	kfree(qi);
 
 	if (connected) {
 		if (intel_iaf_mapping_get(src))
-			return false;
+			return 0;
 		if (intel_iaf_mapping_get(dst)) {
 			intel_iaf_mapping_put(src);
-			return false;
+			return 0;
 		}
 		i915_gem_object_set_fabric(obj);
 	}
+
+	/* Object can use fabric or P2P, check for fabric only request */
+	if (!connected && fabric_only(src))
+		return -1;
 
 	return connected;
 }

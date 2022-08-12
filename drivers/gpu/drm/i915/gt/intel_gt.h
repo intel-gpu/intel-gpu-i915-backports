@@ -84,21 +84,6 @@ static inline bool intel_gt_is_wedged(const struct intel_gt *gt)
 	return unlikely(test_bit(I915_WEDGED, &gt->reset.flags));
 }
 
-static inline bool intel_gt_needs_read_steering(struct intel_gt *gt,
-						enum intel_steering_type type)
-{
-	return gt->steering_table[type];
-}
-
-void intel_gt_get_valid_steering_for_reg(struct intel_gt *gt, i915_reg_t reg,
-					 u8 *sliceid, u8 *subsliceid);
-
-u32 intel_gt_read_register_fw(struct intel_gt *gt, i915_reg_t reg);
-u32 intel_gt_read_register(struct intel_gt *gt, i915_reg_t reg);
-
-void intel_gt_report_steering(struct drm_printer *p, struct intel_gt *gt,
-			      bool dump_table);
-
 static inline bool
 i915_is_level4_wa_active(struct intel_gt *gt)
 {
@@ -177,7 +162,6 @@ static inline void pvc_wa_allow_rc6_if_awake(struct drm_i915_private *i915)
 
 void intel_gt_info_print(const struct intel_gt_info *info,
 			 struct drm_printer *p);
-int intel_gt_get_l3bank_count(struct intel_gt *gt);
 bool intel_gt_has_eus(const struct intel_gt *gt);
 
 void intel_gt_watchdog_work(struct work_struct *work);

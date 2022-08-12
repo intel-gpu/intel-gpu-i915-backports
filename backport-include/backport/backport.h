@@ -3,6 +3,7 @@
 #include <generated/autoconf.h>
 #ifndef CONFIG_BACKPORT_INTEGRATE
 #include <backport/autoconf.h>
+#include <linux/backport_macro.h>
 #endif
 #include <linux/kconfig.h>
 

@@ -12,6 +12,7 @@
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
 #include "intel_gt_regs.h"
 #include "intel_pcode.h"
@@ -76,16 +77,16 @@ xehpsdv_dfd_restore_tile_addr_regs(struct intel_rc6 *rc6)
 	*dfd_restore_buf++ = MI_LOAD_REGISTER_IMM(4);
 
 	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE0_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_read_register(gt, XEHPSDV_TILE0_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE0_ADDR_RANGE);
 
 	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE1_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_read_register(gt, XEHPSDV_TILE1_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE1_ADDR_RANGE);
 
 	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE2_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_read_register(gt, XEHPSDV_TILE2_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE2_ADDR_RANGE);
 
 	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE3_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_read_register(gt, XEHPSDV_TILE3_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE3_ADDR_RANGE);
 
 	/*
 	 * A write of any value to 0x80FC signals the end of the DFD restore
@@ -115,14 +116,13 @@ xehpsdv_dfd_restore_tile_addr_regs(struct intel_rc6 *rc6)
 	 * during intel_rc6_fini().
 	 */
 	phys_addr >>= 6;
-	intel_uncore_write(uncore, XEHPSDV_DFD_RESTORE_CFG_LSB,
-			   REG_FIELD_PREP(XEHPSDV_DFD_RESTORE_CFG_LSB_ADDR_MASK,
+	intel_uncore_write(uncore, DFD_RESTORE_CFG_LSB,
+			   REG_FIELD_PREP(DFD_RESTORE_CFG_LSB_ADDR_MASK,
 					  phys_addr & GENMASK(29, 0)) |
-			   XEHPSDV_DFD_RESTORE_CFG_LSB_ENABLE);
+			   DFD_RESTORE_CFG_LSB_ENABLE);
 	phys_addr >>= 30;
-	intel_uncore_write(uncore, XEHPSDV_DFD_RESTORE_CFG_MSB,
-			   REG_FIELD_PREP(XEHPSDV_DFD_RESTORE_CFG_MSB_ADDR_MASK,
-					  phys_addr));
+	intel_uncore_write(uncore, DFD_RESTORE_CFG_MSB,
+			   REG_FIELD_PREP(DFD_RESTORE_CFG_MSB_ADDR_MASK, phys_addr));
 }
 
 static int
@@ -395,7 +395,7 @@ static void gen6_rc6_enable(struct intel_rc6 *rc6)
 	    GEN6_RC_CTL_HW_ENABLE;
 
 	rc6vids = 0;
-	ret = snb_pcode_read(i915, GEN6_PCODE_READ_RC6VIDS, &rc6vids, NULL);
+	ret = snb_pcode_read(rc6_to_gt(rc6)->uncore, GEN6_PCODE_READ_RC6VIDS, &rc6vids, NULL);
 	if (GRAPHICS_VER(i915) == 6 && ret) {
 		drm_dbg(&i915->drm, "Couldn't check for BIOS workaround\n");
 	} else if (GRAPHICS_VER(i915) == 6 &&
@@ -405,7 +405,7 @@ static void gen6_rc6_enable(struct intel_rc6 *rc6)
 			GEN6_DECODE_RC6_VID(rc6vids & 0xff), 450);
 		rc6vids &= 0xffff00;
 		rc6vids |= GEN6_ENCODE_RC6_VID(450);
-		ret = snb_pcode_write(i915, GEN6_PCODE_WRITE_RC6VIDS, rc6vids);
+		ret = snb_pcode_write(rc6_to_gt(rc6)->uncore, GEN6_PCODE_WRITE_RC6VIDS, rc6vids);
 		if (ret)
 			drm_err(&i915->drm,
 				"Couldn't fix incorrect rc6 voltage\n");
@@ -844,8 +844,8 @@ void intel_rc6_fini(struct intel_rc6 *rc6)
 	intel_rc6_disable(rc6);
 
 	if (rc6->dfd_restore_obj) {
-		intel_uncore_write(uncore, XEHPSDV_DFD_RESTORE_CFG_LSB, 0);
-		intel_uncore_write(uncore, XEHPSDV_DFD_RESTORE_CFG_MSB, 0);
+		intel_uncore_write(uncore, DFD_RESTORE_CFG_LSB, 0);
+		intel_uncore_write(uncore, DFD_RESTORE_CFG_MSB, 0);
 
 		i915_gem_object_unpin_map(rc6->dfd_restore_obj);
 		i915_gem_object_put(rc6->dfd_restore_obj);

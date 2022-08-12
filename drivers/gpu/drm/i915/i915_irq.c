@@ -2929,14 +2929,14 @@ static void gen12_mem_health_work(struct work_struct *work)
 	case BANK_SPARNG_ERR_MITIGATION_DOWNGRADED:
 		gt->mem_sparing.health_status = MEM_HEALTH_ALARM;
 		sparing_event[event_idx++] = "MEM_HEALTH_ALARM=1";
-		dev_notice(&to_pci_dev(gt->i915->drm.dev)->dev,
+		dev_notice(gt->i915->drm.dev,
 			   "Memory Health Report: Error occurred - No action required.\n"
 			   "Error Cause: 0x%x\n", cause);
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
 		gt->mem_sparing.health_status = MEM_HEALTH_EC_PENDING;
 		sparing_event[event_idx++] = "REBOOT_ALARM=1 EC_PENDING=1";
-		dev_crit(&to_pci_dev(gt->i915->drm.dev)->dev,
+		dev_crit(gt->i915->drm.dev,
 			 "Memory Health Report: Error correction pending.\n"
 			 "System need to be reset or rebooted.\n"
 			 "Memory might now be functioning in unreliable state.\n"
@@ -2946,7 +2946,7 @@ static void gen12_mem_health_work(struct work_struct *work)
 	case BANK_SPARNG_ENA_PCLS_UNCORRECTABLE:
 		gt->mem_sparing.health_status = MEM_HEALTH_DEGRADED;
 		sparing_event[event_idx++] = "DEGRADED=1 EC_FAILED=1";
-		dev_crit(&to_pci_dev(gt->i915->drm.dev)->dev,
+		dev_crit(gt->i915->drm.dev,
 			 "Memory Health Report: Memory Health degraded, and runtime fix not feasible.\n"
 			 "Replacing card might be the best option.\n"
 			 "Error Cause: 0x%x\n", cause);
@@ -2955,7 +2955,7 @@ static void gen12_mem_health_work(struct work_struct *work)
 	default:
 		gt->mem_sparing.health_status = MEM_HEALTH_UNKNOWN;
 		sparing_event[event_idx++] = "SPARING_STATUS_UNKNOWN=1";
-		dev_notice(&to_pci_dev(gt->i915->drm.dev)->dev,
+		dev_notice(gt->i915->drm.dev,
 			   "Unknown memory health status\n");
 		break;
 	}
@@ -3346,7 +3346,7 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 		 * is inaccessible.
 		 */
 		if (master_ctl == REG_GENMASK(31, 0)) {
-			dev_dbg(&to_pci_dev(gt->i915->drm.dev)->dev, "Ignore this IRQ as device might be in DPC containment.\n");
+			dev_dbg(gt->i915->drm.dev, "Ignore this IRQ as device might be in DPC containment.\n");
 			return IRQ_HANDLED;
 		}
 
@@ -5263,21 +5263,21 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 	 * special cases in our ordering checks.
 	 */
 	dev_priv->runtime_pm.irqs_enabled = true;
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	dev_priv->irq_enabled = true;
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	dev_priv->drm.irq_enabled = true;
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif 
 	intel_irq_reset(dev_priv);
 
 	ret = request_irq(irq, intel_irq_handler(dev_priv),
 			  IRQF_SHARED, DRIVER_NAME, dev_priv);
 	if (ret < 0) {
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 		dev_priv->irq_enabled = false;
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 		dev_priv->drm.irq_enabled = false;
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif 
 		return ret;
 	}
 
@@ -5303,18 +5303,18 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
 	 * intel_modeset_driver_remove() calling us out of sequence.
 	 * Would be nice if it didn't do that...
 	 */
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	if (!dev_priv->irq_enabled)
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	if (!dev_priv->drm.irq_enabled)
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif 
 		return;
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	dev_priv->irq_enabled = false;
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#else
 	dev_priv->drm.irq_enabled = false;
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif 
 
 	intel_irq_reset(dev_priv);
 

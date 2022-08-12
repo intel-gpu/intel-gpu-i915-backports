@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2020 - 2021 Intel Corporation.
+ * Copyright(c) 2020 - 2022 Intel Corporation.
  */
 
 #ifndef ROUTING_DEBUG_H_INCLUDED
@@ -10,7 +10,7 @@
 
 #include "iaf_drv.h"
 
-void routing_debug_port_init(struct fsubdev *sd, u8 lpn, struct dentry *port_dentry);
+void routing_debug_port_init(struct fsubdev *sd, u8 lpn);
 
 #endif /* ROUTING_DEBUG_H_INCLUDED */
 

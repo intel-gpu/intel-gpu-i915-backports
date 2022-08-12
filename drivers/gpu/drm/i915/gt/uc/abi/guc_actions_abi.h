@@ -50,7 +50,7 @@
 
 #define HOST2GUC_SELF_CFG_REQUEST_MSG_LEN		(GUC_HXG_REQUEST_MSG_MIN_LEN + 3u)
 #define HOST2GUC_SELF_CFG_REQUEST_MSG_0_MBZ		GUC_HXG_REQUEST_MSG_0_DATA0
-#define HOST2GUC_SELF_CFG_REQUEST_MSG_1_KLV_KEY		(0xffff << 16)
+#define HOST2GUC_SELF_CFG_REQUEST_MSG_1_KLV_KEY		(0xffffU << 16)
 #define HOST2GUC_SELF_CFG_REQUEST_MSG_1_KLV_LEN		(0xffff << 0)
 #define HOST2GUC_SELF_CFG_REQUEST_MSG_2_VALUE32		GUC_HXG_REQUEST_MSG_n_DATAn
 #define HOST2GUC_SELF_CFG_REQUEST_MSG_3_VALUE64		GUC_HXG_REQUEST_MSG_n_DATAn
@@ -103,6 +103,71 @@
 #define HOST2GUC_CONTROL_CTB_RESPONSE_MSG_LEN		GUC_HXG_RESPONSE_MSG_MIN_LEN
 #define HOST2GUC_CONTROL_CTB_RESPONSE_MSG_0_MBZ		GUC_HXG_RESPONSE_MSG_0_DATA0
 
+/**
+ * DOC: GUC2HOST_NOTIFY_MEMORY_CAT_ERROR
+ *
+ * This message is used by the GuC to notify host about catastrophic memory error.
+ *
+ * This G2H message must be sent as `CTB HXG Message`_.
+ *
+ *  +---+-------+--------------------------------------------------------------+
+ *  |   | Bits  | Description                                                  |
+ *  +===+=======+==============================================================+
+ *  | 0 |    31 | ORIGIN = GUC_HXG_ORIGIN_GUC_                                 |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 30:28 | TYPE = GUC_HXG_TYPE_EVENT_                                   |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 27:16 | DATA0 = MBZ                                                  |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   |  15:0 | ACTION = _`GUC_ACTION_GUC2HOST_NOTIFY_MEMORY_CAT_ERROR` =    |
+ *  |   |       |          0x6000                                              |
+ *  +---+-------+--------------------------------------------------------------+
+ *  | 1 |  31:0 | DATA1 = **CONTEXT_ID** - GuC context index of the context    |
+ *  |   |       |         which caused the CAT error, or -1 when no context    |
+ *  |   |       |         id is available.                                     |
+ *  +---+-------+--------------------------------------------------------------+
+ */
+#define GUC_ACTION_GUC2HOST_NOTIFY_MEMORY_CAT_ERROR		0x6000
+
+#define GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_LEN		(GUC_HXG_EVENT_MSG_MIN_LEN + 1u)
+#define GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_0_MBZ		GUC_HXG_EVENT_MSG_0_DATA0
+#define GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_1_CONTEXT_ID	GUC_HXG_EVENT_MSG_n_DATAn
+#define   CAT_ERROR_INV_SW_CTX					(-1)
+
+/**
+ * DOC: GUC_ACTION_GUC2HOST_NOTIFY_PAGE_FAULT
+ *
+ * This message is used by the GuC to notify host about page fault.
+ *
+ * This G2H message must be sent as `CTB HXG Message`_.
+ *
+ *  +---+-------+--------------------------------------------------------------+
+ *  |   | Bits  | Description                                                  |
+ *  +===+=======+==============================================================+
+ *  | 0 |    31 | ORIGIN = GUC_HXG_ORIGIN_GUC_                                 |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 30:28 | TYPE = GUC_HXG_TYPE_EVENT_                                   |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 27:16 | DATA0 = MBZ                                                  |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   |  15:0 | ACTION = _`GUC_ACTION_GUC2HOST_NOTIFY_PAGE_FAULT` = 0x6001   |
+ *  +---+-------+--------------------------------------------------------------+
+ *  | 1 |  31:0 | DATA1 = **ALL_ENGINE_FAULT_REG** - value of register 0xcec4  |
+ *  +---+-------+--------------------------------------------------------------+
+ *  | 2 |  31:0 | DATA2 = **FAULT_TLB_RD_DATA0** - value of register 0xceb8    |
+ *  +---+-------+--------------------------------------------------------------+
+ *  | 3 |  31:0 | DATA3 = **FAULT_TLB_RD_DATA1** - value of register 0xcebc    |
+ *  +---+-------+--------------------------------------------------------------+
+ */
+#define GUC_ACTION_GUC2HOST_NOTIFY_PAGE_FAULT			0x6001
+
+#define GUC2HOST_NOTIFY_PAGE_FAULT_MSG_LEN			(GUC_HXG_EVENT_MSG_MIN_LEN + 3u)
+#define GUC2HOST_NOTIFY_PAGE_FAULT_MSG_0_MBZ			GUC_HXG_EVENT_MSG_0_DATA0
+#define GUC2HOST_NOTIFY_PAGE_FAULT_MSG_1_ALL_ENGINE_FAULT_REG	GUC_HXG_EVENT_MSG_n_DATAn
+#define GUC2HOST_NOTIFY_PAGE_FAULT_MSG_2_FAULT_TLB_RD_DATA0	GUC_HXG_EVENT_MSG_n_DATAn
+#define GUC2HOST_NOTIFY_PAGE_FAULT_MSG_3_FAULT_TLB_RD_DATA1	GUC_HXG_EVENT_MSG_n_DATAn
+
+
 /* legacy definitions */
 
 enum intel_guc_action {
@@ -135,8 +200,6 @@ enum intel_guc_action {
 	INTEL_GUC_ACTION_REGISTER_CONTEXT_MULTI_LRC = 0x4601,
 	INTEL_GUC_ACTION_CLIENT_SOFT_RESET = 0x5507,
 	INTEL_GUC_ACTION_SET_ENG_UTIL_BUFF = 0x550A,
-	INTEL_GUC_ACTION_NOTIFY_MEMORY_CAT_ERROR = 0x6000,
-	INTEL_GUC_ACTION_PAGE_FAULT_NOTIFICATION = 0x6001,
 	INTEL_GUC_ACTION_REPORT_PAGE_FAULT_REQ_DESC = 0x6002,
 	INTEL_GUC_ACTION_PAGE_FAULT_RES_DESC = 0x6003,
 	INTEL_GUC_ACTION_ACCESS_COUNTER_NOTIFY = 0x6004,

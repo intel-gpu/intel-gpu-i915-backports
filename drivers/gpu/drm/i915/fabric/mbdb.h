@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2019 - 2021 Intel Corporation.
+ * Copyright(c) 2019 - 2022 Intel Corporation.
  *
  */
 
@@ -26,6 +26,21 @@
 
 #define CP_ADDR_MBDB_BASE 0x6000
 
+enum mbdb_counters {
+	MBDB_COUNTERS_FIRST,
+	POSTED_REQUESTS = MBDB_COUNTERS_FIRST,
+	NON_POSTED_REQUESTS,
+	TIMEDOUT_REQUESTS,
+	HANDLED_RECEIVED_REQUESTS,
+	UNHANDLED_RECEIVED_REQUESTS,
+	NON_ERROR_RESPONSES,
+	ERROR_RESPONSES,
+	UNMATCHED_RESPONSES,
+	TIMEDOUT_RESPONSES,
+	RETRY_RESPONSES,
+	MBDB_COUNTERS_MAX,
+};
+
 /* Outbox related */
 u8 mbdb_outbox_seqno(struct fsubdev *sd);
 struct mbox_msg __iomem *mbdb_outbox_acquire(struct fsubdev *sd, u64 *cw);
@@ -44,11 +59,13 @@ void mbdb_ibox_release(struct mbdb_ibox *ibox);
 int mbdb_ibox_wait(struct mbdb_ibox *ibox);
 
 void destroy_mbdb(struct fsubdev *sd);
-int create_mbdb(struct fsubdev *sd, struct dentry *sd_dir_node);
+int create_mbdb(struct fsubdev *sd);
 
 irqreturn_t mbdb_handle_irq(struct fsubdev *sd);
 
 u64 mbdb_get_mbox_comm_errors(struct fsubdev *sd);
+
+u64 *mbdb_get_mailbox_counters(struct fsubdev *sd);
 
 static inline u64 build_cw(u8 op_code, enum mbdb_msg_type req_rsp,
 			   enum posted is_posted, u16 seq_no, u16 length,

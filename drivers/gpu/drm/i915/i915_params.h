@@ -88,8 +88,8 @@ struct drm_printer;
 	param(int, smem_access_control, I915_SMEM_ACCESS_CONTROL_DEFAULT, 0600) \
 	param(unsigned int, page_sz_mask, 0, 0600) \
 	param(unsigned int, debug_pages, 0, 0400) \
-	param(int, l3_size_override, 0, 0400) \
-	/* leave bools at the end to not create holes */ \
+	param(unsigned int, prelim_override_p2p_dist, 0, 0400)	\
+	/* leave bools at the end to not create holes */	\
 	param(bool, enable_fake_int_wa, true, 0400) \
 	param(bool, enable_pagefault, false, 0600) \
 	param(bool, enable_iaf, true, 0400) \
@@ -107,10 +107,8 @@ struct drm_printer;
 	param(bool, verbose_state_checks, true, 0) \
 	param(bool, nuclear_pageflip, false, 0400) \
 	param(bool, enable_dp_mst, true, 0600) \
-	param(bool, prelim_override_p2p_dist, false, 0400) \
 	param(bool, enable_gvt, false, IS_ENABLED(CPTCFG_DRM_I915_GVT) ? 0400 : 0) \
 	param(bool, enable_non_private_objects, false, 0400) \
-	param(bool, wa16012258806, false, 0600) \
 	param(bool, enable_mem_fence, false, 0400) \
 	param(bool, ulls_bcs0_pm_wa, true, 0600)
 

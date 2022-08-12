@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2020 - 2021 Intel Corporation.
+ * Copyright(c) 2020 - 2022 Intel Corporation.
  *
  */
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
-#include <linux/debugfs.h>
 #include <linux/fs.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -14,6 +13,8 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
+#include "debugfs.h"
+#include "iaf_drv.h"
 #include "io.h"
 #include "mbdb.h"
 #include "ops.h"
@@ -271,12 +272,12 @@ static const struct file_operations statedump_fops = {
 	.llseek = default_llseek,
 };
 
-void statedump_node_init(struct fsubdev *sd, struct dentry *sd_dir_node)
+void statedump_node_init(struct fsubdev *sd)
 {
 	sema_init(&sd->statedump.state_dump_sem, 1);
 	init_rwsem(&sd->statedump.state_dump_mbdb_sem);
 	sd->statedump.blob.size = 0;
 	sd->statedump.blob.data = NULL;
 
-	debugfs_create_file(STATEDUMP_FILE_NAME, 0400, sd_dir_node, sd, &statedump_fops);
+	debugfs_create_file(STATEDUMP_FILE_NAME, 0400, sd->debugfs_dir, sd, &statedump_fops);
 }

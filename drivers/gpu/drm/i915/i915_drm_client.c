@@ -455,8 +455,6 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	struct i915_drm_client *client;
 	int ret;
 
-	i915_debugger_wait_on_discovery(i915);
-
 	client = kzalloc(sizeof(*client), GFP_KERNEL);
 	if (!client)
 		return ERR_PTR(-ENOMEM);
@@ -472,6 +470,8 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	INIT_RCU_WORK(&client->rcu, __rcu_i915_drm_client_free);
 	pvc_wa_disallow_rc6(i915);
 
+	i915_debugger_wait_on_discovery(clients->i915, NULL);
+
 	ret = xa_alloc_cyclic(&clients->xarray, &client->id, client,
 			      xa_limit_32b, &clients->next_id, GFP_KERNEL);
 	if (ret < 0)
@@ -481,7 +481,8 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	if (ret)
 		goto err_register;
 
-	i915_debugger_client_register(client);
+	GEM_WARN_ON(task != current);
+	i915_debugger_client_register(client, current);
 	i915_debugger_client_create(client);
 
 	i915_uuid_init(client);

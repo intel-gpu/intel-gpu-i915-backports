@@ -18,6 +18,7 @@
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gtt.h"
+#include "intel_gt_compression_formats.h"
 #include "intel_gt_pm.h"
 #include "intel_lrc.h"
 
@@ -95,7 +96,10 @@ pvc_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 
 	/* Src is in SMEM, dst is in LMEM always */
 	if (HAS_STATELESS_MC(gt->i915))
-		comp_bits |= PVC_MEM_COPY_DST_COMPRESSIBLE;
+		comp_bits =
+			PVC_MEM_COPY_DST_COMPRESSIBLE |
+			PVC_MEM_SET_DST_COMPRESS_EN |
+			FIELD_PREP(PVC_MEM_SET_COMPRESSION_FMT, XEHPC_LINEAR_16);
 
 	/*
 	 * Note that PVC_MEM_SET_CMD is not applicable here as we need to
@@ -267,7 +271,7 @@ static u64 gen8_pde_encode(const dma_addr_t addr,
 }
 
 static u64 gen8_pte_encode(dma_addr_t addr,
-			   enum i915_cache_level level,
+			   unsigned int pat_index,
 			   u32 flags)
 {
 	gen8_pte_t pte = addr | GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
@@ -275,7 +279,12 @@ static u64 gen8_pte_encode(dma_addr_t addr,
 	if (unlikely(flags & PTE_READ_ONLY))
 		pte &= ~GEN8_PAGE_RW;
 
-	switch (level) {
+	/*
+	 * For gen8 pat_index is the same as enum i915_cache_level
+	 * so the comparison here is still valid. See translation
+	 * table defined by LEGACY_CACHELEVEL
+	 */
+	switch (pat_index) {
 	case I915_CACHE_NONE:
 		pte |= PPAT_UNCACHED;
 		break;
@@ -291,11 +300,10 @@ static u64 gen8_pte_encode(dma_addr_t addr,
 }
 
 static u64 gen12_pte_encode(dma_addr_t addr,
-			    enum i915_cache_level level,
+			    unsigned int pat_index,
 			    u32 flags)
 {
 	gen8_pte_t pte = addr | GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
-	u8 pat_index;
 
 	if (unlikely(flags & PTE_READ_ONLY))
 		pte &= ~GEN8_PAGE_RW;
@@ -305,32 +313,17 @@ static u64 gen12_pte_encode(dma_addr_t addr,
 	if (flags & PTE_AE)
 		pte |= GEN12_USM_PPGTT_PTE_AE;
 
-	switch (level) {
-	case I915_CACHE_NONE:
-		pat_index = 0; /* PPAT_UC */
-		break;
-	case I915_CACHE_WT:
-		pat_index = 2; /* PPAT_WT */
-		break;
-	case I915_CACHE_LLC:
-		pat_index = 3; /* PPAT_WB */
-		break;
-	case I915_CACHE_L3_LLC:
-		pat_index = 3; /* PPAT_WB */
-		break;
-	default:
-		pat_index = level; /* direct mapping */
-		break;
-	}
-
 	if (pat_index & 1)
 		pte |= GEN12_PPGTT_PTE_PAT0;
 
-	if ( (pat_index >> 1) & 1 )
+	if ((pat_index >> 1) & 1)
 		pte |= GEN12_PPGTT_PTE_PAT1;
 
-	if ( (pat_index >> 2) & 1)
+	if ((pat_index >> 2) & 1)
 		pte |= GEN12_PPGTT_PTE_PAT2;
+
+	if ((pat_index >> 3) & 1)
+		pte |= GEN12_PPGTT_PTE_PAT3;
 
 	return pte;
 }
@@ -1004,11 +997,11 @@ gen8_ppgtt_insert_pte(struct i915_ppgtt *ppgtt,
 		      struct i915_page_directory *pdp,
 		      struct sgt_dma *iter,
 		      u64 idx,
-		      enum i915_cache_level cache_level,
+		      unsigned int pat_index,
 		      u32 flags, u32 **cmd, u32 *count)
 {
 	struct i915_page_directory *pd;
-	const gen8_pte_t pte_encode = ppgtt->vm.pte_encode(0, cache_level, flags);
+	const gen8_pte_t pte_encode = ppgtt->vm.pte_encode(0, pat_index, flags);
 	gen8_pte_t *vaddr;
 	bool needs_flush;
 
@@ -1085,10 +1078,10 @@ static void xehpsdv_ppgtt_color_adjust(const struct drm_mm_node *node,
 static void
 pvc_ppgtt_insert_huge(struct i915_vma *vma,
 		      struct sgt_dma *iter,
-		      enum i915_cache_level cache_level,
+		      unsigned int pat_index,
 		      u32 flags, u32 **cmd, int *nptes)
 {
-	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, cache_level, flags);
+	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, pat_index, flags);
 	u64 rem = min_t(u64, (u64)(iter->max - iter->dma), iter->rem);
 	u64 start = i915_vma_offset(vma) + (vma->size - iter->rem);
 	dma_addr_t daddr;
@@ -1191,7 +1184,7 @@ pvc_ppgtt_insert_huge(struct i915_vma *vma,
 
 static void pvc_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 					 struct sgt_dma *iter,
-					 enum i915_cache_level cache_level,
+					 unsigned int pat_index,
 					 u32 flags)
 {
 	struct intel_gt *gt = vma->vm->gt;
@@ -1203,7 +1196,7 @@ static void pvc_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 		u32 *cmd = bo->cmd;
 		int count = 0;
 
-		pvc_ppgtt_insert_huge(vma, iter, cache_level, flags,
+		pvc_ppgtt_insert_huge(vma, iter, pat_index, flags,
 				      &cmd, &count);
 		GEM_BUG_ON(!count);
 
@@ -1225,7 +1218,7 @@ static void pvc_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 	if (unlikely(iter->rem)) {
 		drm_warn(&gt->i915->drm,
 			 "flat ppgtt huge pte update fallback\n");
-		pvc_ppgtt_insert_huge(vma, &iterb, cache_level, flags,
+		pvc_ppgtt_insert_huge(vma, &iterb, pat_index, flags,
 				      NULL, NULL);
 	}
 }
@@ -1233,10 +1226,10 @@ static void pvc_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 static void
 xehpsdv_ppgtt_insert_huge(struct i915_vma *vma,
 		      struct sgt_dma *iter,
-		      enum i915_cache_level cache_level,
+		      unsigned int pat_index,
 		      u32 flags, u32 **cmd, int *nptes)
 {
-	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, cache_level, flags);
+	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, pat_index, flags);
 	unsigned int rem = min_t(u64, (u64)(iter->max - iter->dma), iter->rem);
 	u64 start = i915_vma_offset(vma) + (vma->size - iter->rem);
 	dma_addr_t daddr;
@@ -1297,7 +1290,11 @@ xehpsdv_ppgtt_insert_huge(struct i915_vma *vma,
 					if (!cmd) {
 						vaddr[__gen8_pte_index(start, 1)] |= GEN12_PDE_64K;
 					} else {
-						u64 pde_encode = vma->vm->pte_encode(px_dma(pt), 0, 0) | GEN12_PDE_64K;
+						u64 pde_encode = GEN12_PDE_64K |
+								 vma->vm->pte_encode(px_dma(pt),
+									i915_gem_get_pat_index(vma->vm->i915,
+											       I915_CACHE_NONE),
+									0);
 
 						*cmd = fill_cmd_pte(*cmd, px_dma(pd), __gen8_pte_index(start, 1),
 								    pde_encode);
@@ -1374,10 +1371,10 @@ xehpsdv_ppgtt_insert_huge(struct i915_vma *vma,
 
 static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 				   struct sgt_dma *iter,
-				   enum i915_cache_level cache_level,
+				   unsigned int pat_index,
 				   u32 flags)
 {
-	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, cache_level, flags);
+	const gen8_pte_t pte_encode = vma->vm->pte_encode(0, pat_index, flags);
 	unsigned int rem = min_t(u64, sg_dma_len(iter->sg), iter->rem);
 	u64 start = i915_vma_offset(vma);
 	bool needs_flush;
@@ -1513,7 +1510,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 
 static void gen8_ppgtt_insert(struct i915_address_space *vm,
 			      struct i915_vma *vma,
-			      enum i915_cache_level cache_level,
+			      unsigned int pat_index,
 			      u32 flags)
 {
 	struct i915_ppgtt * const ppgtt = i915_vm_to_ppgtt(vm);
@@ -1522,11 +1519,13 @@ static void gen8_ppgtt_insert(struct i915_address_space *vm,
 	if (vma->page_sizes.sg >= I915_GTT_PAGE_SIZE_64K) {
 		if (HAS_64K_PAGES(vm->i915)) {
 			if (HAS_FULL_PS64(vm->i915))
-				pvc_ppgtt_insert_huge(vma, &iter, cache_level, flags, NULL, NULL);
+				pvc_ppgtt_insert_huge(vma, &iter, pat_index,
+						      flags, NULL, NULL);
 			else
-				xehpsdv_ppgtt_insert_huge(vma, &iter, cache_level, flags, NULL, NULL);
+				xehpsdv_ppgtt_insert_huge(vma, &iter,
+						pat_index, flags, NULL, NULL);
 		} else {
-			gen8_ppgtt_insert_huge(vma, &iter, cache_level, flags);
+			gen8_ppgtt_insert_huge(vma, &iter, pat_index, flags);
 		}
 	} else  {
 		u64 idx = i915_vma_offset(vma) >> GEN8_PTE_SHIFT;
@@ -1536,7 +1535,8 @@ static void gen8_ppgtt_insert(struct i915_address_space *vm,
 				gen8_pdp_for_page_index(vm, idx);
 
 			idx = gen8_ppgtt_insert_pte(ppgtt, pdp, &iter, idx,
-						    cache_level, flags, NULL, NULL);
+						    pat_index, flags,
+						    NULL, NULL);
 		} while (idx);
 
 		vma->page_sizes.gtt = I915_GTT_PAGE_SIZE;
@@ -1545,7 +1545,7 @@ static void gen8_ppgtt_insert(struct i915_address_space *vm,
 
 static void xehpsdv_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 				   struct sgt_dma *iter,
-				   enum i915_cache_level cache_level, u32 flags)
+				   unsigned int pat_index, u32 flags)
 {
 	struct intel_gt *gt = vma->vm->gt;
 	struct sgt_dma iterb = sgt_dma(vma);
@@ -1556,7 +1556,8 @@ static void xehpsdv_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 		u32 *cmd = bo->cmd;
 		int count = 0;
 
-		xehpsdv_ppgtt_insert_huge(vma, iter, cache_level, flags, &cmd, &count);
+		xehpsdv_ppgtt_insert_huge(vma, iter, pat_index, flags,
+					  &cmd, &count);
 
 		if (!count && iter->rem) {
 			drm_err(&gt->i915->drm, "flat ppgtt error no pte to update\n");
@@ -1584,12 +1585,12 @@ static void xehpsdv_ppgtt_insert_huge_wa_bcs(struct i915_vma *vma,
 	return;
 
 fallback:
-	xehpsdv_ppgtt_insert_huge(vma, &iterb, cache_level, flags, NULL, NULL);
+	xehpsdv_ppgtt_insert_huge(vma, &iterb, pat_index, flags, NULL, NULL);
 }
 
 static void gen8_ppgtt_insert_wa_bcs(struct i915_address_space *vm,
 				     struct i915_vma *vma,
-				     enum i915_cache_level cache_level,
+				     unsigned int pat_index,
 				     u32 flags)
 {
 	struct i915_ppgtt * const ppgtt = i915_vm_to_ppgtt(vm);
@@ -1599,18 +1600,20 @@ static void gen8_ppgtt_insert_wa_bcs(struct i915_address_space *vm,
 
 	wakeref = l4wa_pm_get(gt);
 	if (!wakeref) {
-		gen8_ppgtt_insert(vm, vma, cache_level, flags);
+		gen8_ppgtt_insert(vm, vma, pat_index, flags);
 		return;
 	}
 
 	if ((vma->page_sizes.sg > I915_GTT_PAGE_SIZE)) {
 		if (HAS_64K_PAGES(vm->i915)) {
 			if (HAS_FULL_PS64(vm->i915))
-				pvc_ppgtt_insert_huge_wa_bcs(vma, &iter, cache_level, flags);
+				pvc_ppgtt_insert_huge_wa_bcs(vma, &iter,
+							     pat_index, flags);
 			else
-				xehpsdv_ppgtt_insert_huge_wa_bcs(vma, &iter, cache_level, flags);
+				xehpsdv_ppgtt_insert_huge_wa_bcs(vma, &iter,
+							pat_index, flags);
 		} else {
-			gen8_ppgtt_insert_huge(vma, &iter, cache_level, flags);
+			gen8_ppgtt_insert_huge(vma, &iter, pat_index, flags);
 		}
 	} else  {
 		u64 idx = i915_vma_offset(vma) >> GEN8_PTE_SHIFT;
@@ -1624,7 +1627,8 @@ static void gen8_ppgtt_insert_wa_bcs(struct i915_address_space *vm,
 			u32 *cmd = bo->cmd;
 
 			idx = gen8_ppgtt_insert_pte(ppgtt, pdp, &iter, idx,
-						    cache_level, flags, &cmd, &count);
+						    pat_index, flags, &cmd,
+						    &count);
 
 			/* We should always have > 0 entries to update */
 			if (!count && idx) {
@@ -1660,17 +1664,17 @@ static void gen8_ppgtt_insert_wa_bcs(struct i915_address_space *vm,
 
 fallback:
 	intel_gt_pm_put_async_l4(gt, wakeref);
-	gen8_ppgtt_insert(vm, vma, cache_level, flags);
+	gen8_ppgtt_insert(vm, vma, pat_index, flags);
 }
 
 static void gen8_ppgtt_insert_wa(struct i915_address_space *vm,
-			         struct i915_vma *vma,
-			         enum i915_cache_level cache_level,
+				 struct i915_vma *vma,
+				 unsigned int pat_index,
 				 u32 flags)
 {
 	GEM_WARN_ON(i915_gem_idle_engines(vm->i915));
 
-	gen8_ppgtt_insert(vm, vma, cache_level, flags);
+	gen8_ppgtt_insert(vm, vma, pat_index, flags);
 
 	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
 
@@ -1729,7 +1733,9 @@ static int gen8_init_scratch(struct i915_address_space *vm)
 
 	vm->scratch[0]->encode =
 		vm->pte_encode(px_dma(vm->scratch[0]),
-			       I915_CACHE_NONE, pte_flags);
+			       i915_gem_get_pat_index(vm->i915,
+						      I915_CACHE_NONE),
+			       pte_flags);
 
 	wakeref = l4wa_pm_get(gt);
 	if (wakeref) {
@@ -1925,7 +1931,11 @@ int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,
 
 	start = node->start >> GEN8_PTE_SHIFT;
 	end = start + (node->size >> GEN8_PTE_SHIFT);
-	encode = vm->pte_encode(node->start, 0, PTE_LM) | GEN8_PDPE_PS_1G;
+	encode = GEN8_PDPE_PS_1G |
+		 vm->pte_encode(node->start,
+				i915_gem_get_pat_index(vm->i915,
+						       I915_CACHE_NONE),
+				PTE_LM);
 
 	/* The vm->mm may be hiding the first page already */
 	head = vm->mm.head_node.start + vm->mm.head_node.size;

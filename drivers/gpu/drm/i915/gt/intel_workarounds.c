@@ -9,6 +9,8 @@
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
+#include "intel_gt_compression_formats.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_ring.h"
 #include "intel_workarounds.h"
@@ -222,7 +224,7 @@ static void wa_add(struct i915_wa_list *wal, i915_reg_t reg,
 	 * documented workaround list.
 	 */
 	if (unlikely(GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50) &&
-		     intel_sseu_get_subslices(sseu, 0) == 0 &&
+		     intel_sseu_subslice_total(sseu) == 0 &&
 		     intel_reg_in_fw_domain(gt->uncore, reg, FORCEWAKE_RENDER))) {
 		drm_dbg(&gt->i915->drm, "Not applying workaround on register 0x%x due to fused-off render/compute unit\n",
 			i915_mmio_reg_offset(reg));
@@ -1069,8 +1071,8 @@ gen9_wa_init_mcr(struct drm_i915_private *i915, struct i915_wa_list *wal)
 	 * on s/ss combo, the read should be done with read_subslice_reg.
 	 */
 	slice = ffs(sseu->slice_mask) - 1;
-	GEM_BUG_ON(slice >= ARRAY_SIZE(sseu->subslice_mask));
-	subslice = ffs(intel_sseu_get_subslices(sseu, slice));
+	GEM_BUG_ON(slice >= ARRAY_SIZE(sseu->subslice_mask.hsw));
+	subslice = ffs(intel_sseu_get_hsw_subslices(sseu, slice));
 	GEM_BUG_ON(!subslice);
 	subslice--;
 
@@ -1201,18 +1203,17 @@ static void __add_mcr_wa(struct intel_gt *gt, struct i915_wa_list *wal,
 	gt->default_steering.instanceid = subslice;
 
 	if (drm_debug_enabled(DRM_UT_DRIVER))
-		intel_gt_report_steering(&p, gt, false);
+		intel_gt_mcr_report_steering(&p, gt, false);
 }
 
 static void
 icl_wa_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	const struct sseu_dev_info *sseu = &gt->info.sseu;
-	unsigned int slice, subslice;
+	unsigned int subslice;
 
 	GEM_BUG_ON(GRAPHICS_VER(gt->i915) < 11);
 	GEM_BUG_ON(hweight8(sseu->slice_mask) > 1);
-	slice = 0;
 
 	/*
 	 * Although a platform may have subslices, we need to always steer
@@ -1223,7 +1224,7 @@ icl_wa_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 	 * one of the higher subslices, we run the risk of reading back 0's or
 	 * random garbage.
 	 */
-	subslice = __ffs(intel_sseu_get_subslices(sseu, slice));
+	subslice = __ffs(intel_sseu_get_hsw_subslices(sseu, 0));
 
 	/*
 	 * If the subslice we picked above also steers us to a valid L3 bank,
@@ -1233,7 +1234,7 @@ icl_wa_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 	if (gt->info.l3bank_mask & BIT(subslice))
 		gt->steering_table[L3BANK] = NULL;
 
-	__add_mcr_wa(gt, wal, slice, subslice);
+	__add_mcr_wa(gt, wal, 0, subslice);
 }
 
 static void
@@ -1241,7 +1242,6 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	const struct sseu_dev_info *sseu = &gt->info.sseu;
 	unsigned long slice, subslice = 0, slice_mask = 0;
-	u64 dss_mask = 0;
 	u32 lncf_mask = 0;
 	int i;
 
@@ -1272,8 +1272,8 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 	 */
 
 	/* Find the potential gslice candidates */
-	dss_mask = intel_sseu_get_subslices(sseu, 0);
-	slice_mask = intel_slicemask_from_dssmask(dss_mask, GEN_DSS_PER_GSLICE);
+	slice_mask = intel_slicemask_from_xehp_dssmask(sseu->subslice_mask,
+						       GEN_DSS_PER_GSLICE);
 
 	/*
 	 * Find the potential LNCF candidates.  Either LNCF within a valid
@@ -1298,9 +1298,8 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 	}
 
 	slice = __ffs(slice_mask);
-	subslice = __ffs(dss_mask >> (slice * GEN_DSS_PER_GSLICE));
-	WARN_ON(subslice > GEN_DSS_PER_GSLICE);
-	WARN_ON(dss_mask >> (slice * GEN_DSS_PER_GSLICE) == 0);
+	subslice = intel_sseu_find_first_xehp_dss(sseu, GEN_DSS_PER_GSLICE, slice) %
+		GEN_DSS_PER_GSLICE;
 
 	__add_mcr_wa(gt, wal, slice, subslice);
 
@@ -1320,55 +1319,15 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 static void
 pvc_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 {
-	const struct sseu_dev_info *sseu = &gt->info.sseu;
-	unsigned long slice_mask, slice = 0, subslice = 0;
-	u64 dss_mask;
-
-	/* PVC hardware has 8 compute slices which hold 8 DSS each. */
-	dss_mask = intel_sseu_get_compute_subslices(sseu);
-	slice_mask = intel_slicemask_from_dssmask(dss_mask, GEN_DSS_PER_CSLICE);
+	unsigned int dss;
 
 	/*
-	 * If no DSS are available, we only care about steering bslice,
-	 * for which instance 0 is always valid.
+	 * Setup implicit steering for COMPUTE and DSS ranges to the first
+	 * non-fused-off DSS.  All other types of MCR registers will be
+	 * explicitly steered.
 	 */
-	if (!dss_mask) {
-		gt->steering_table[BSLICE] = NULL;
-		goto out;
-	}
-
-	/*
-	 * Can we find a slice steering value that takes us to both a valid
-	 * cslice and bslice to eliminate the need for explicit bslice
-	 * steering?  If not, we'll use the compute as our default/implicit
-	 * steering and handle BSLICE ranges explicitly.
-	 *
-	 * Note that the sliceid bits are also used to select a half-bslice for
-	 * both the HALFBSLICE ranges.  However any value that steers to a
-	 * valid compute slice will also steer to a valid half-bslice, so we
-	 * don't need to worry about that here.
-	 */
-	if (slice_mask & gt->info.bslice_mask) {
-		slice = __ffs(slice_mask & gt->info.bslice_mask);
-		gt->steering_table[BSLICE] = NULL;
-	} else {
-		slice = __ffs(slice_mask);
-	}
-
-	/*
-	 * Although subslice steering bits are also used to select an instance
-	 * within a half-bslice, all such instances are guaranteed to be
-	 * present.  Furthermore, if we provide an "impossible" ID (such as
-	 * instance #3 for a HALF_BSLICE_2 range), the hardware will steer
-	 * this to instance 0, which is also a valid result for our purposes.
-	 * So it should be safe to choose a subsliceid value solely based on
-	 * DSS fusing.
-	 */
-	subslice = __ffs(dss_mask >> slice * GEN_DSS_PER_CSLICE);
-	GEM_DEBUG_WARN_ON(subslice > 0xF);
-
-out:
-	__add_mcr_wa(gt, wal, slice, subslice);
+	dss = intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0);
+	__add_mcr_wa(gt, wal, dss / GEN_DSS_PER_CSLICE, dss % GEN_DSS_PER_CSLICE);
 }
 
 static void
@@ -1682,12 +1641,6 @@ dg2_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 	 * performance guide section.
 	 */
 	wa_write_or(wal, GEN12_SQCM, EN_32B_ACCESS);
-}
-
-static void
-pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	pvc_init_mcr(gt, wal);
 
 	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)) {
 		/* Wa_14011780169:pvc */
@@ -1749,7 +1702,46 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 		wa_add(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE, 0, 0, false);
 	else
 		wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
+}
 
+static void
+engine_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
+{
+	unsigned int fmt = XEHPC_LINEAR_16;
+
+	wa_write_or(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(DSS_UM_COMPRESSION_FMT_XEHPC, fmt));
+
+	wa_write_or(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(UM_COMPRESSION_FMT_XEHPC, fmt));
+}
+
+static void
+gt_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
+{
+	unsigned int fmt = XEHPC_LINEAR_16;
+
+	wa_write_or(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(LNI_UM_COMPRESSION_FMT_XEHPC, fmt));
+}
+
+static void
+pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
+{
+	pvc_init_mcr(gt, wal);
+
+	/* Wa_14015795083 */
+	wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
+
+	/*
+	 * This is a "fake" workaround to ensure stateless memory compression
+	 * settings are initialized (and re-applied) at the right time.
+	 */
+	if (HAS_STATELESS_MC(gt->i915))
+		gt_stateless_mc_config(gt->i915, wal);
 }
 
 static void
@@ -1961,13 +1953,13 @@ wa_list_apply(struct intel_gt *gt, const struct i915_wa_list *wal)
 		u32 val, old = 0;
 
 		/* open-coded rmw due to steering */
-		old = wa->clr ? intel_gt_read_register_fw(gt, wa->reg) : 0;
+		old = wa->clr ? intel_gt_mcr_read_any_fw(gt, wa->reg) : 0;
 		val = (old & ~wa->clr) | wa->set;
 		if (val != old || !wa->clr)
 			intel_uncore_write_fw(uncore, wa->reg, val);
 
 		if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
-			wa_verify(wa, intel_gt_read_register_fw(gt, wa->reg),
+			wa_verify(wa, intel_gt_mcr_read_any_fw(gt, wa->reg),
 				  wal->name, "application");
 	}
 
@@ -2001,7 +1993,7 @@ static bool wa_list_verify(struct intel_gt *gt,
 
 	for (i = 0, wa = wal->list; i < wal->count; i++, wa++)
 		ok &= wa_verify(wa,
-				intel_gt_read_register_fw(gt, wa->reg),
+				intel_gt_mcr_read_any_fw(gt, wa->reg),
 				wal->name, from);
 
 	intel_uncore_forcewake_put__locked(uncore, fw);
@@ -2451,9 +2443,8 @@ engine_fake_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 
 static bool needs_wa_1308578152(struct intel_engine_cs *engine)
 {
-	u64 dss_mask = intel_sseu_get_subslices(&engine->gt->info.sseu, 0);
-
-	return (dss_mask & GENMASK(GEN_DSS_PER_GSLICE - 1, 0)) == 0;
+	return intel_sseu_find_first_xehp_dss(&engine->gt->info.sseu, 0, 0) >=
+		GEN_DSS_PER_GSLICE;
 }
 
 static void
@@ -2461,20 +2452,14 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
 
-	if (IS_SUBPLATFORM(i915, INTEL_DG2, INTEL_SUBPLATFORM_ATSM) &&
-	    i915_modparams.wa16012258806) {
-		/*
-		 * Wa_16012258806:atsm
-		 *
-		 * FIXME:  This workaround did not follow the usual processes
-		 * so the workaround number may change once finalized.  We've
-		 * also been asked to not enable this by default yet, but
-		 * rather to stick it behind a module parameter for the time
-		 * being.
-		 */
+	/*
+	 * This tuning setting proves beneficial only on ATS-M designs; the
+	 * default "age based" setting is optimal on regular DG2 and other
+	 * platforms.
+	 */
+	if (INTEL_INFO(i915)->tuning_thread_rr_after_dep)
 		wa_masked_field_set(wal, GEN9_ROW_CHICKEN4, THREAD_EX_ARB_MODE,
 				    THREAD_EX_ARB_MODE_RR_AFTER_DEP);
-	}
 
 	if (IS_DG2(i915)) {
 		/* Wa_1509235366:dg2 */
@@ -2618,7 +2603,8 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		/* Wa_22014600077:dg2 */
 		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
 		       _MASKED_BIT_ENABLE(ENABLE_EU_COUNT_FOR_TDL_FLUSH),
-		       0 /* write-only reg (Wa_14012342262) */,
+		       0 /* Wa_14012342262 :write-only reg, so skip
+			    verification */,
 		       true);
 	}
 
@@ -3141,6 +3127,15 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 {
 	struct drm_i915_private *i915 = engine->i915;
 
+	if (IS_PONTEVECCHIO(i915)) {
+		/*
+		 * The following is not actually a "workaround" but rather
+		 * a recommended tuning setting documented in the bspec's
+		 * performance guide section.
+		 */
+		wa_write(wal, XEHPC_L3SCRUB, SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
+	}
+
 	if (IS_XEHPSDV(i915)) {
 		/* Wa_1409954639 */
 		wa_masked_en(wal,
@@ -3180,18 +3175,15 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		/* Wa_22014226127:dg2,pvc */
 		wa_write_or(wal, LSC_CHICKEN_BIT_0, DISABLE_D8_D16_COASLESCE);
 
-		/* Wa_18018781329:dg2, pvc */
+		/* Wa_16015675438:dg2,pvc */
+		wa_masked_en(wal, FF_SLICE_CS_CHICKEN2, GEN12_PERF_FIX_BALANCING_CFE_DISABLE);
+
+		/* Wa_18018781329:dg2,pvc */
 		wa_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, VDBX_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, VEBX_MOD_CTRL, FORCE_MISS_FTLB);
-
 	}
-
-	/* Wa_15010861061:pvc */
-	if (IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
-		wa_masked_en(wal, FF_SLICE_CS_CHICKEN2,
-			     GEN12_PERF_FIX_BALANCING_CFE_DISABLE);
 
 	if (!RCS_MASK(engine->gt)) {
 		/*
@@ -3218,6 +3210,14 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 			wa_write_or(wal, GEN12_LTCDREG, SLPDIS);
 		}
 	}
+
+	/*
+	 * Although not a workaround per-se, stateless compression settings
+	 * need to be programmed and re-applied in the same manner as engine
+	 * workarounds, so we treat these as a "fake" workaround.
+	 */
+	if (HAS_STATELESS_MC(i915))
+		engine_stateless_mc_config(i915, wal);
 }
 
 static void

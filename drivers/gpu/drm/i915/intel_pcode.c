@@ -6,7 +6,6 @@
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "intel_pcode.h"
-#include "gt/intel_gt.h"
 
 static int gen6_check_mailbox_status(u32 mbox)
 {
@@ -53,14 +52,12 @@ static int gen7_check_mailbox_status(u32 mbox)
 	}
 }
 
-static int __gt_pcode_rw(struct intel_gt *gt, u32 mbox,
-			 u32 *val, u32 *val1,
-			 int fast_timeout_us, int slow_timeout_ms,
-			 bool is_read)
+static int __snb_pcode_rw(struct intel_uncore *uncore, u32 mbox,
+			  u32 *val, u32 *val1,
+			  int fast_timeout_us, int slow_timeout_ms,
+			  bool is_read)
 {
-	struct intel_uncore *uncore = gt->uncore;
-
-	lockdep_assert_held(&gt->i915->sb_lock);
+	lockdep_assert_held(&uncore->i915->sb_lock);
 
 	/*
 	 * GEN6_PCODE_* are outside of the forcewake domain, we can use
@@ -89,60 +86,60 @@ static int __gt_pcode_rw(struct intel_gt *gt, u32 mbox,
 	if (is_read && val1)
 		*val1 = intel_uncore_read_fw(uncore, GEN6_PCODE_DATA1);
 
-	if (GRAPHICS_VER(gt->i915) > 6)
+	if (GRAPHICS_VER(uncore->i915) > 6)
 		return gen7_check_mailbox_status(mbox);
 	else
 		return gen6_check_mailbox_status(mbox);
 }
 
-int intel_gt_pcode_read(struct intel_gt *gt, u32 mbox, u32 *val, u32 *val1)
+int snb_pcode_read(struct intel_uncore *uncore, u32 mbox, u32 *val, u32 *val1)
 {
 	int err;
 
-	mutex_lock(&gt->i915->sb_lock);
-	err = __gt_pcode_rw(gt, mbox, val, val1, 500, 20, true);
-	mutex_unlock(&gt->i915->sb_lock);
+	mutex_lock(&uncore->i915->sb_lock);
+	err = __snb_pcode_rw(uncore, mbox, val, val1, 500, 20, true);
+	mutex_unlock(&uncore->i915->sb_lock);
 
 	if (err) {
-		drm_dbg(&gt->i915->drm,
-			"gt %d: warning: pcode (read from mbox %x) mailbox access failed for %ps: %d\n",
-			gt->info.id, mbox, __builtin_return_address(0), err);
+		drm_dbg(&uncore->i915->drm,
+			"warning: pcode (read from mbox %x) mailbox access failed for %ps: %d\n",
+			mbox, __builtin_return_address(0), err);
 	}
 
 	return err;
 }
 
-int intel_gt_pcode_write_timeout(struct intel_gt *gt, u32 mbox, u32 val,
-				 int fast_timeout_us, int slow_timeout_ms)
+int snb_pcode_write_timeout(struct intel_uncore *uncore, u32 mbox, u32 val,
+			    int fast_timeout_us, int slow_timeout_ms)
 {
 	int err;
 
-	mutex_lock(&gt->i915->sb_lock);
-	err = __gt_pcode_rw(gt, mbox, &val, NULL,
-			    fast_timeout_us, slow_timeout_ms, false);
-	mutex_unlock(&gt->i915->sb_lock);
+	mutex_lock(&uncore->i915->sb_lock);
+	err = __snb_pcode_rw(uncore, mbox, &val, NULL,
+			     fast_timeout_us, slow_timeout_ms, false);
+	mutex_unlock(&uncore->i915->sb_lock);
 
 	if (err) {
-		drm_dbg(&gt->i915->drm,
-			"gt %d: warning: pcode (write of 0x%08x to mbox %x) mailbox access failed for %ps: %d\n",
-			gt->info.id, val, mbox, __builtin_return_address(0), err);
+		drm_dbg(&uncore->i915->drm,
+			"warning: pcode (write of 0x%08x to mbox %x) mailbox access failed for %ps: %d\n",
+			val, mbox, __builtin_return_address(0), err);
 	}
 
 	return err;
 }
 
-static bool __gt_pcode_try_request(struct intel_gt *gt, u32 mbox,
-				   u32 request, u32 reply_mask, u32 reply,
-				   u32 *status)
+static bool skl_pcode_try_request(struct intel_uncore *uncore, u32 mbox,
+				  u32 request, u32 reply_mask, u32 reply,
+				  u32 *status)
 {
-	*status = __gt_pcode_rw(gt, mbox, &request, NULL, 500, 20, true);
+	*status = __snb_pcode_rw(uncore, mbox, &request, NULL, 500, 20, true);
 
 	return *status || ((request & reply_mask) == reply);
 }
 
 /**
- * intel_gt_pcode_request - send PCODE request until acknowledgment
- * @gt: gt
+ * skl_pcode_request - send PCODE request until acknowledgment
+ * @uncore: uncore
  * @mbox: PCODE mailbox ID the request is targeted for
  * @request: request ID
  * @reply_mask: mask used to check for request acknowledgment
@@ -159,16 +156,16 @@ static bool __gt_pcode_try_request(struct intel_gt *gt, u32 mbox,
  * Returns 0 on success, %-ETIMEDOUT in case of a timeout, <0 in case of some
  * other error as reported by PCODE.
  */
-int intel_gt_pcode_request(struct intel_gt *gt, u32 mbox, u32 request,
-			   u32 reply_mask, u32 reply, int timeout_base_ms)
+int skl_pcode_request(struct intel_uncore *uncore, u32 mbox, u32 request,
+		      u32 reply_mask, u32 reply, int timeout_base_ms)
 {
 	u32 status;
 	int ret;
 
-	mutex_lock(&gt->i915->sb_lock);
+	mutex_lock(&uncore->i915->sb_lock);
 
 #define COND \
-	__gt_pcode_try_request(gt, mbox, request, reply_mask, reply, &status)
+	skl_pcode_try_request(uncore, mbox, request, reply_mask, reply, &status)
 
 	/*
 	 * Prime the PCODE by doing a request first. Normally it guarantees
@@ -194,50 +191,60 @@ int intel_gt_pcode_request(struct intel_gt *gt, u32 mbox, u32 request,
 	 * requests, and for any quirks of the PCODE firmware that delays
 	 * the request completion.
 	 */
-	drm_dbg_kms(&gt->i915->drm,
+	drm_dbg_kms(&uncore->i915->drm,
 		    "PCODE timeout, retrying with preemption disabled\n");
-	drm_WARN_ON_ONCE(&gt->i915->drm, timeout_base_ms > 3);
+	drm_WARN_ON_ONCE(&uncore->i915->drm, timeout_base_ms > 3);
 	preempt_disable();
 	ret = wait_for_atomic(COND, 50);
 	preempt_enable();
 
 out:
-	mutex_unlock(&gt->i915->sb_lock);
+	mutex_unlock(&uncore->i915->sb_lock);
 	return ret ? ret : status;
 #undef COND
 }
 
-static int __gt_pcode_init(struct intel_gt *gt)
+int intel_pcode_init(struct intel_uncore *uncore)
 {
-	int ret = intel_gt_pcode_request(gt, DG1_PCODE_STATUS,
-					 DG1_UNCORE_GET_INIT_STATUS,
-					 DG1_UNCORE_INIT_STATUS_COMPLETE,
-					 DG1_UNCORE_INIT_STATUS_COMPLETE, 180000);
+	if (!IS_DGFX(uncore->i915) || IS_SRIOV_VF(uncore->i915))
+		return 0;
 
-	drm_dbg(&gt->i915->drm, "gt %d: PCODE init status %d\n", gt->info.id, ret);
-
-	if (ret)
-		drm_err(&gt->i915->drm, "gt %d: Pcode did not report uncore initialization completion!\n",
-			gt->info.id);
-
-	return ret;
+	return skl_pcode_request(uncore, DG1_PCODE_STATUS,
+				 DG1_UNCORE_GET_INIT_STATUS,
+				 DG1_UNCORE_INIT_STATUS_COMPLETE,
+				 DG1_UNCORE_INIT_STATUS_COMPLETE, 180000);
 }
 
-int intel_pcode_init(struct drm_i915_private *i915)
+int snb_pcode_read_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u32 *val)
 {
-	struct intel_gt *gt;
-	int i, ret = 0;
+	intel_wakeref_t wakeref;
+	u32 mbox;
+	int err;
 
-	if (!IS_DGFX(i915) || IS_SRIOV_VF(i915))
-		return ret;
+	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
+		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
+		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
 
-	for_each_gt(i915, i, gt) {
-		ret = __gt_pcode_init(gt);
-		if (ret)
-			return ret;
-	}
+	with_intel_runtime_pm(uncore->rpm, wakeref)
+		err = snb_pcode_read(uncore, mbox, val, NULL);
 
-	return 0;
+	return err;
+}
+
+int snb_pcode_write_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u32 val)
+{
+	intel_wakeref_t wakeref;
+	u32 mbox;
+	int err;
+
+	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
+		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
+		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
+
+	with_intel_runtime_pm(uncore->rpm, wakeref)
+		err = snb_pcode_write(uncore, mbox, val);
+
+	return err;
 }
 
 /**
@@ -257,43 +264,11 @@ int intel_pcode_enable_vram_sr(struct drm_i915_private *i915)
 		return ret;
 
 	ret =
-	snb_pcode_write(i915,
+	snb_pcode_write(&i915->uncore,
 			REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND,
 			DG1_PCODE_D3_VRAM_SR) |
 			REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1,
 			DG1_ENABLE_SR), 0); /* no data needed for this cmd */
 
 	return ret;
-}
-
-int __intel_gt_pcode_read(struct intel_gt *gt, u32 mbcmd, u32 p1, u32 p2, u32 *val)
-{
-	intel_wakeref_t wakeref;
-	u32 mbox;
-	int err;
-
-	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
-
-	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		err = intel_gt_pcode_read(gt, mbox, val, NULL);
-
-	return err;
-}
-
-int __intel_gt_pcode_write(struct intel_gt *gt, u32 mbcmd, u32 p1, u32 p2, u32 val)
-{
-	intel_wakeref_t wakeref;
-	u32 mbox;
-	int err;
-
-	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
-
-	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		err = intel_gt_pcode_write(gt, mbox, val);
-
-	return err;
 }

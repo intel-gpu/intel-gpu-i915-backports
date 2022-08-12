@@ -285,7 +285,7 @@ struct i915_vma_work *i915_vma_work(struct i915_vma *vma);
 int i915_vma_work_set_vm(struct i915_vma_work *work, struct i915_vma *vma,
 			 struct i915_gem_ww_ctx *ww);
 int i915_vma_bind(struct i915_vma *vma,
-		  enum i915_cache_level cache_level,
+		  unsigned int pat_index,
 		  u32 flags,
 		  struct i915_vma_work *work);
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);

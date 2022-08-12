@@ -5,7 +5,11 @@
 
 #include <linux/irq.h>
 #include <linux/firmware.h>
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
+#include <linux/auxiliary_bus.h>
+#else
 #include <linux/mfd/core.h>
+#endif
 #include <linux/mutex.h>
 #include <linux/xarray.h>
 
@@ -274,7 +278,7 @@ static bool iaf_power_enabled(struct drm_i915_private *i915)
 		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, PCODE_MBOX_CD_STATUS) |
 		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, 0);
 	u32 val = 0;
-	int err = snb_pcode_read(i915, mbox, &val, NULL);
+	int err = snb_pcode_read(&i915->uncore, mbox, &val, NULL);
 
 	if (err)
 		return false;
@@ -483,7 +487,7 @@ fail:
  */
 void intel_iaf_init_mfd(struct drm_i915_private *i915)
 {
-	struct device *dev = &to_pci_dev(i915->drm.dev)->dev;
+	struct device *dev = &i915->drm.pdev->dev;
 	struct resource *res = NULL;
 	struct mfd_cell fcell = {};
 	struct iaf_pdata *pd;

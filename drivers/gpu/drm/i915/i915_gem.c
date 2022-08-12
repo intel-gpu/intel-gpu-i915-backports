@@ -95,7 +95,8 @@ int
 i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file)
 {
-	struct i915_ggtt *ggtt = to_gt(to_i915(dev))->ggtt;
+	struct drm_i915_private *i915 = to_i915(dev);
+	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	struct drm_i915_gem_get_aperture *args = data;
 	struct i915_vma *vma;
 	u64 pinned;
@@ -125,7 +126,7 @@ static int i915_vma_unbind_persistent(struct i915_vma *vma,
 	/* VM already locked */
 	if (ww && ww == i915_gem_get_locking_ctx(vma->vm->root_obj)) {
 		/* locked for other than unbinding? */
-		if ((!flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
+		if (!(flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
 		    (!vma->vm->root_obj->evict_locked))
 			return -EBUSY;
 
@@ -462,8 +463,12 @@ i915_gem_gtt_pread(struct drm_i915_gem_object *obj,
 		page_length = remain < page_length ? remain : page_length;
 		if (drm_mm_node_allocated(&node)) {
 			ggtt->vm.insert_page(&ggtt->vm,
-					     i915_gem_object_get_dma_address(obj, offset >> PAGE_SHIFT),
-					     node.start, I915_CACHE_NONE, 0);
+					i915_gem_object_get_dma_address(obj,
+						offset >> PAGE_SHIFT),
+					node.start,
+					i915_gem_get_pat_index(i915,
+							       I915_CACHE_NONE),
+					0);
 		} else {
 			page_base += offset & PAGE_MASK;
 		}
@@ -646,8 +651,12 @@ i915_gem_gtt_pwrite_fast(struct drm_i915_gem_object *obj,
 			/* flush the write before we modify the GGTT */
 			intel_gt_flush_ggtt_writes(ggtt->vm.gt);
 			ggtt->vm.insert_page(&ggtt->vm,
-					     i915_gem_object_get_dma_address(obj, offset >> PAGE_SHIFT),
-					     node.start, I915_CACHE_NONE, 0);
+					i915_gem_object_get_dma_address(obj,
+						offset >> PAGE_SHIFT),
+					node.start,
+					i915_gem_get_pat_index(i915,
+							I915_CACHE_NONE),
+					0);
 			wmb(); /* flush modifications to the GGTT (insert_page) */
 		} else {
 			page_base += offset & PAGE_MASK;

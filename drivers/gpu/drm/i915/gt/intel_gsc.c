@@ -3,9 +3,8 @@
  * Copyright(c) 2019-2022, Intel Corporation. All rights reserved.
  */
 
-#include <linux/platform_device.h>
-#include <linux/mfd/core.h>
 #include <linux/irq.h>
+#include <linux/mei_aux.h>
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "gem/i915_gem_region.h"
@@ -37,43 +36,6 @@ static int gsc_irq_init(int irq)
 
 	return irq_set_chip_data(irq, NULL);
 }
-
-/* gsc (graphics system controller) resources */
-static const struct resource gsc_dg2_resources[] = {
-	DEFINE_RES_IRQ_NAMED(0, "gsc-irq"),
-	DEFINE_RES_MEM_NAMED(DG2_GSC_HECI1_BASE,
-			     GSC_BAR_LENGTH,
-			     "gsc-mmio"),
-};
-
-static const struct resource gsc_pvc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(0, "gsc-irq"),
-	DEFINE_RES_MEM_NAMED(PVC_GSC_HECI1_BASE,
-			     GSC_BAR_LENGTH,
-			     "gsc-mmio"),
-};
-
-/* gscfi (graphics system controller firmware interface) resources */
-static const struct resource gscfi_dg1_resources[] = {
-	DEFINE_RES_IRQ_NAMED(0, "gscfi-irq"),
-	DEFINE_RES_MEM_NAMED(DG1_GSC_HECI2_BASE,
-			     GSC_BAR_LENGTH,
-			     "gscfi-mmio"),
-};
-
-static const struct resource gscfi_dg2_resources[] = {
-	DEFINE_RES_IRQ_NAMED(0, "gscfi-irq"),
-	DEFINE_RES_MEM_NAMED(DG2_GSC_HECI2_BASE,
-			     GSC_BAR_LENGTH,
-			     "gscfi-mmio"),
-};
-
-static const struct resource gscfi_pvc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(0, "gscfi-irq"),
-	DEFINE_RES_MEM_NAMED(PVC_GSC_HECI2_BASE,
-			     GSC_BAR_LENGTH,
-			     "gscfi-mmio"),
-};
 
 static int
 gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size)
@@ -130,53 +92,84 @@ static void gsc_ext_om_destroy(struct intel_gsc_intf *intf)
 	i915_gem_object_put(obj);
 }
 
+struct gsc_def {
+	const char *name;
+	unsigned long bar;
+	size_t bar_size;
+	bool use_polling;
+	bool slow_fw;
+	size_t lmem_size;
+};
+
 /* gsc resources and definitions (HECI1 and HECI2) */
-static const struct mfd_cell intel_gsc_dg1_cell[] = {
+static const struct gsc_def gsc_def_dg1[] = {
 	{
-		.id = 0,
+		/* HECI1 not yet implemented. */
 	},
 	{
-		.id = 1,
 		.name = "mei-gscfi",
-		.num_resources = ARRAY_SIZE(gscfi_dg1_resources),
-		.resources  = gscfi_dg1_resources,
+		.bar = DG1_GSC_HECI2_BASE,
+		.bar_size = GSC_BAR_LENGTH,
 	}
 };
 
-static const struct mfd_cell intel_gsc_dg2_cell[] = {
+static const struct gsc_def gsc_def_xehpsdv[] = {
 	{
-		.id = 0,
-		.name = "mei-gsc",
-		.num_resources = ARRAY_SIZE(gsc_dg2_resources),
-		.resources  = gsc_dg2_resources,
+		/* HECI1 not enabled on the device. */
 	},
 	{
-		.id = 1,
 		.name = "mei-gscfi",
-		.num_resources = ARRAY_SIZE(gscfi_dg2_resources),
-		.resources  = gscfi_dg2_resources,
+		.bar = DG1_GSC_HECI2_BASE,
+		.bar_size = GSC_BAR_LENGTH,
+		.use_polling = true,
+		.slow_fw = true,
 	}
 };
 
-static const struct mfd_cell intel_gsc_pvc_cell[] = {
+static const struct gsc_def gsc_def_dg2[] = {
 	{
-		.id = 0,
 		.name = "mei-gsc",
-		.num_resources = ARRAY_SIZE(gsc_pvc_resources),
-		.resources  = gsc_pvc_resources,
+		.bar = DG2_GSC_HECI1_BASE,
+		.bar_size = GSC_BAR_LENGTH,
+		.lmem_size = SZ_4M,
 	},
 	{
-		.id = 1,
 		.name = "mei-gscfi",
-		.num_resources = ARRAY_SIZE(gscfi_pvc_resources),
-		.resources  = gscfi_pvc_resources,
+		.bar = DG2_GSC_HECI2_BASE,
+		.bar_size = GSC_BAR_LENGTH,
 	}
 };
+
+static const struct gsc_def gsc_def_pvc[] = {
+	{
+		/* HECI1 not enabled on the device. */
+	},
+	{
+		.name = "mei-gscfi",
+		.bar = PVC_GSC_HECI2_BASE,
+		.bar_size = GSC_BAR_LENGTH,
+		.slow_fw = true,
+	}
+};
+
+static void gsc_release_dev(struct device *dev)
+{
+	struct auxiliary_device *aux_dev = to_auxiliary_dev(dev);
+	struct mei_aux_device *adev = auxiliary_dev_to_mei_aux_dev(aux_dev);
+
+	kfree(adev);
+}
 
 static void gsc_destroy_one(struct drm_i915_private *i915,
 				  struct intel_gsc *gsc, unsigned int intf_id)
 {
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
+
+	if (intf->adev) {
+		auxiliary_device_delete(&intf->adev->aux_dev);
+		auxiliary_device_uninit(&intf->adev->aux_dev);
+		intf->adev = NULL;
+	}
 
 	if (intf->irq >= 0)
 		irq_free_desc(intf->irq);
@@ -190,13 +183,12 @@ static void gsc_init_one(struct drm_i915_private *i915,
 			       unsigned int intf_id)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct mei_aux_device *adev;
+	struct auxiliary_device *aux_dev;
+	const struct gsc_def *def;
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
-	const struct mfd_cell *cells;
-	struct mfd_cell cell;
 	bool use_polling = false;
 	int ret;
-	size_t lmem_size = 0;
-	struct resource res;
 
 	intf->irq = -1;
 	intf->id = intf_id;
@@ -205,17 +197,13 @@ static void gsc_init_one(struct drm_i915_private *i915,
 		return;
 
 	if (IS_DG1(i915)) {
-		cells = intel_gsc_dg1_cell;
+		def = &gsc_def_dg1[intf_id];
 	} else if (IS_XEHPSDV(i915)) {
-		cells = intel_gsc_dg1_cell;
-		/* Use polling on XEHPSDV HW bug Wa */
-		use_polling = true;
+		def = &gsc_def_xehpsdv[intf_id];
 	} else if (IS_DG2(i915)) {
-		cells = intel_gsc_dg2_cell;
-		if (intf->id == 0)
-			lmem_size = SZ_4M;
+		def = &gsc_def_dg2[intf_id];
 	} else if (IS_PONTEVECCHIO(i915)) {
-		cells = intel_gsc_pvc_cell;
+		def = &gsc_def_pvc[intf_id];
 		/* Use polling on PVC A-step HW bug Wa */
 		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0))
 			use_polling = true;
@@ -224,26 +212,13 @@ static void gsc_init_one(struct drm_i915_private *i915,
 		return;
 	}
 
-	memcpy(&cell, &cells[intf->id], sizeof(cell));
-
-	if (lmem_size) {
-		dev_dbg(&pdev->dev, "setting up GSC lmem\n");
-
-		if (gsc_ext_om_alloc(gsc, intf, lmem_size)) {
-			dev_err(&pdev->dev, "setting up gsc extended operational memory failed\n");
-			goto fail;
-		}
-
-		memset(&res, 0, sizeof(res));
-		res.start = i915_gem_object_get_dma_address(intf->gem_obj, 0);
-		res.end = res.start + lmem_size;
-
-		cell.pdata_size = sizeof(res);
-		cell.platform_data = &res;
+	if (!def->name) {
+		drm_warn_once(&i915->drm, "HECI%d is not implemented!\n", intf_id + 1);
+		return;
 	}
 
 	/* skip irq initialization */
-	if (use_polling)
+	if (def->use_polling || use_polling)
 		goto add_device;
 
 	intf->irq = irq_alloc_desc(0);
@@ -259,13 +234,53 @@ static void gsc_init_one(struct drm_i915_private *i915,
 	}
 
 add_device:
-	/* this takes a copy of the data, so it is ok to use local vars */
-	ret = mfd_add_devices(&pdev->dev, PLATFORM_DEVID_AUTO,
-				&cell, 1, &pdev->resource[0], intf->irq, NULL);
+	adev = kzalloc(sizeof(*adev), GFP_KERNEL);
+	if (!adev)
+		goto fail;
+
+	if (def->lmem_size) {
+		dev_dbg(&pdev->dev, "setting up GSC lmem\n");
+
+		if (gsc_ext_om_alloc(gsc, intf, def->lmem_size)) {
+			dev_err(&pdev->dev, "setting up gsc extended operational memory failed\n");
+			kfree(adev);
+			goto fail;
+		}
+
+		adev->ext_op_mem.start = i915_gem_object_get_dma_address(intf->gem_obj, 0);
+		adev->ext_op_mem.end = adev->ext_op_mem.start + def->lmem_size;
+	}
+
+	adev->irq = intf->irq;
+	adev->bar.parent = &pdev->resource[0];
+	adev->bar.start = def->bar + pdev->resource[0].start;
+	adev->bar.end = adev->bar.start + def->bar_size - 1;
+	adev->bar.flags = IORESOURCE_MEM;
+	adev->bar.desc = IORES_DESC_NONE;
+	adev->slow_fw = def->slow_fw;
+
+	aux_dev = &adev->aux_dev;
+	aux_dev->name = def->name;
+	aux_dev->id = (pci_domain_nr(pdev->bus) << 16) |
+		      PCI_DEVID(pdev->bus->number, pdev->devfn);
+	aux_dev->dev.parent = &pdev->dev;
+	aux_dev->dev.release = gsc_release_dev;
+
+	ret = auxiliary_device_init(aux_dev);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "cell creation failed\n");
+		drm_err(&i915->drm, "gsc aux init failed %d\n", ret);
+		kfree(adev);
 		goto fail;
 	}
+
+	ret = auxiliary_device_add(aux_dev);
+	if (ret < 0) {
+		drm_err(&i915->drm, "gsc aux add failed %d\n", ret);
+		/* adev will be freed with the put_device() and .release sequence */
+		auxiliary_device_uninit(aux_dev);
+		goto fail;
+	}
+	intf->adev = adev;
 
 	return;
 fail:

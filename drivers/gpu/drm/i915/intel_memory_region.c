@@ -323,6 +323,7 @@ next:
 			/* May arrive from get_pages on another bo */
 			err = __i915_gem_object_put_pages(obj);
 			if (!err && !i915_gem_object_has_pages(obj)) {
+				/* conservative estimate of reclaimed pages */
 				found += obj->base.size;
 				if (obj->mm.madv == I915_MADV_DONTNEED)
 					obj->mm.madv = __I915_MADV_PURGED;
@@ -370,7 +371,17 @@ put:
 	if (ww)
 		i915_gem_ww_ctx_unlock_evictions(ww);
 
-	return (found < target) ? -ENOSPC : 0;
+	/*
+	 * Keep retrying the allocation until there is nothing more to evict.
+	 *
+	 * If we have made any forward progress towards completing our
+	 * allocation; retry. On the next pass, especially if we are competing
+	 * with other threads, we may find more to evict and succeed. It is
+	 * not until there is nothing left to evict on this pass and make
+	 * no forward progress, do we conclude that it is better to report
+	 * failure.
+	 */
+	return found ? 0 : -ENOSPC;
 }
 
 int
@@ -529,7 +540,7 @@ static int intel_memory_region_memtest(struct intel_memory_region *mem,
 }
 
 struct intel_memory_region *
-intel_memory_region_create(struct drm_i915_private *i915,
+intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t start,
 			   resource_size_t size,
 			   resource_size_t min_page_size,
@@ -543,7 +554,8 @@ intel_memory_region_create(struct drm_i915_private *i915,
 	if (!mem)
 		return ERR_PTR(-ENOMEM);
 
-	mem->i915 = i915;
+	mem->gt = gt;
+	mem->i915 = gt->i915;
 	mem->region = (struct resource)DEFINE_RES_MEM(start, size);
 	mem->io_start = io_start;
 	mem->min_page_size = min_page_size;
@@ -639,24 +651,26 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 
 	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); i++) {
 		struct intel_memory_region *mem = ERR_PTR(-ENODEV);
-		u16 type, instance;
+		struct intel_gt *gt;
+		u16 type;
 
 		if (!HAS_REGION(i915, BIT(i)))
 			continue;
 
 		type = intel_region_map[i].class;
-		instance = intel_region_map[i].instance;
+		gt = to_root_gt(i915);
+
 		switch (type) {
 		case INTEL_MEMORY_SYSTEM:
-			mem = i915_gem_shmem_setup(i915);
+			mem = i915_gem_shmem_setup(gt);
 			break;
 		case INTEL_MEMORY_STOLEN_LOCAL:
-			mem = i915_gem_stolen_lmem_setup(i915);
+			mem = i915_gem_stolen_lmem_setup(gt);
 			if (!IS_ERR(mem))
 				i915->mm.stolen_region = mem;
 			break;
 		case INTEL_MEMORY_STOLEN_SYSTEM:
-			mem = i915_gem_stolen_smem_setup(i915);
+			mem = i915_gem_stolen_smem_setup(gt);
 			if (!IS_ERR(mem))
 				i915->mm.stolen_region = mem;
 			break;
@@ -666,15 +680,15 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 
 		if (IS_ERR(mem)) {
 			drm_err(&i915->drm,
-				"Failed to setup region %d (type=%d:%d), error %ld\n",
-				i, type, instance, PTR_ERR(mem));
+				"Failed to setup global region %d type=%d (%pe)\n", i, type, mem);
 			continue;
 		}
 
+		GEM_BUG_ON(intel_region_map[i].instance);
+
 		mem->id = i;
 		mem->type = type;
-		mem->instance = instance;
-		mem->gt = i915->gts[instance];
+		mem->instance = 0;
 
 		i915->mm.regions[i] = mem;
 	}

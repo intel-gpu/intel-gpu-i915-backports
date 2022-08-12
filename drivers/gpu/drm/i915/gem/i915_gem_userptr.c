@@ -251,9 +251,9 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	unsigned int max_segment = i915_sg_segment_size();
 	struct sg_table *st;
 	unsigned int sg_page_sizes;
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 	struct scatterlist *sg;
-#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
+#endif
 	struct page **pvec;
 	int ret;
 
@@ -273,13 +273,7 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	pvec = obj->userptr.pvec;
 
 alloc_table:
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
-	ret = sg_alloc_table_from_pages_segment(st, pvec, num_pages, 0,
-						num_pages << PAGE_SHIFT,
-						max_segment, GFP_KERNEL);
-	if (ret)
-		goto err;
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 	sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
 					 num_pages << PAGE_SHIFT, max_segment,
 					 NULL, 0, GFP_KERNEL);
@@ -287,7 +281,13 @@ alloc_table:
 		ret = PTR_ERR(sg);
 		goto err;
 	}
-#endif /* LINUX_VERSION_IN_RANGE */
+#else
+	ret = sg_alloc_table_from_pages_segment(st, pvec, num_pages, 0,
+						num_pages << PAGE_SHIFT,
+						max_segment, GFP_KERNEL);
+	if (ret)
+		goto err;
+#endif
 	ret = i915_gem_gtt_prepare_pages(obj, st);
 	if (ret) {
 		sg_free_table(st);
@@ -399,13 +399,18 @@ static void i915_gem_object_userptr_invalidate_work(struct work_struct *work)
 	struct i915_gem_ww_ctx ww;
 	int ret;
 
+	if (!kref_get_unless_zero(&obj->base.refcount))
+                return;
+
 	for_i915_gem_ww(&ww, ret, true) {
 		ret = i915_gem_object_lock(obj, &ww);
 		if (ret)
 			continue;
 
-		i915_gem_object_userptr_unbind(obj, &ww);
+		ret = i915_gem_object_userptr_unbind(obj, &ww);
 	}
+
+	i915_gem_object_put(obj);
 }
 
 int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)

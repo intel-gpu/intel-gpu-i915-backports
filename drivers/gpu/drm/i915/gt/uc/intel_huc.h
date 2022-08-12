@@ -53,11 +53,6 @@ static inline bool intel_huc_is_used(const struct intel_huc *huc)
 	       intel_uc_fw_is_preloaded(&huc->fw);
 }
 
-static inline bool intel_huc_is_authenticated(const struct intel_huc *huc)
-{
-	return intel_uc_fw_is_running(&huc->fw);
-}
-
 static inline bool intel_huc_is_loaded_by_gsc(const struct intel_huc *huc)
 {
 	return huc->fw.loaded_via_gsc;

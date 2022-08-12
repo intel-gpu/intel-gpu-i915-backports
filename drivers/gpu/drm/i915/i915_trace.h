@@ -16,10 +16,11 @@
 
 #include "gt/intel_engine.h"
 #include "gt/intel_engine_user.h"
+#include "gt/intel_gt_regs.h"
+#include "gt/intel_pagefault.h"
 
 #include "i915_drv.h"
 #include "i915_irq.h"
-#include "intel_pagefault.h"
 
 /* object tracking */
 
@@ -41,13 +42,13 @@ TRACE_EVENT(i915_gem_object_create,
 );
 
 TRACE_EVENT(i915_dma_buf_attach,
-	    TP_PROTO(struct drm_i915_gem_object *obj, bool fabric, int dist),
+	    TP_PROTO(struct drm_i915_gem_object *obj, unsigned int fabric, int dist),
 	    TP_ARGS(obj, fabric, dist),
 
 	    TP_STRUCT__entry(
 			     __field(struct drm_i915_gem_object *, obj)
 			     __field(bool, lmem)
-			     __field(bool, fabric)
+			     __field(unsigned int, fabric)
 			     __field(int, distance)
 			     ),
 
@@ -828,6 +829,55 @@ DEFINE_EVENT(i915_context, i915_context_free,
 	TP_ARGS(ctx)
 );
 
+TRACE_EVENT(intel_gt_cat_error,
+	    TP_PROTO(struct intel_gt *gt, const char *guc_ctx_id),
+	    TP_ARGS(gt, guc_ctx_id),
+
+	    TP_STRUCT__entry(
+			     __field(struct intel_gt *, gt)
+			     __array(char, guc_ctx_id, 11)
+			     ),
+
+	    TP_fast_assign(
+			   __entry->gt = gt;
+			   strscpy(__entry->guc_ctx_id, guc_ctx_id, 11);
+			   ),
+
+	    TP_printk("GPU catastrophic memory error. GT: %d, GuC context: %s",
+		      __entry->gt->info.id,
+		      __entry->guc_ctx_id)
+);
+
+TRACE_EVENT(intel_gt_pagefault,
+	    TP_PROTO(struct intel_gt *gt, u64 address, u32 fault_reg, bool is_ggtt),
+	    TP_ARGS(gt, address, fault_reg, is_ggtt),
+
+	    TP_STRUCT__entry(
+			     __field(struct intel_gt *, gt)
+			     __field(u64, address)
+			     __field(u32, fault_reg)
+			     __field(bool, is_ggtt)
+			     ),
+
+	    TP_fast_assign(
+			   __entry->gt = gt;
+			   __entry->address = address;
+			   __entry->fault_reg = fault_reg;
+			   __entry->is_ggtt = is_ggtt;
+			   ),
+
+	    TP_printk("dev %p: GPU %s fault: GT: %d, address space %s, address: %#llx, engine ID: %u, source ID: %u, type: %u, fault level: %u",
+		      __entry->gt->i915,
+		      !!(__entry->fault_reg & GEN12_RING_FAULT_ACCESS_TYPE) ? "Write" : "Read",
+		      __entry->gt->info.id,
+		      __entry->is_ggtt ? "GGTT" : "PPGTT",
+		      __entry->address,
+		      GEN8_RING_FAULT_ENGINE_ID(__entry->fault_reg),
+		      RING_FAULT_SRCID(__entry->fault_reg),
+		      GEN12_RING_FAULT_FAULT_TYPE(__entry->fault_reg),
+		      RING_FAULT_LEVEL(__entry->fault_reg))
+);
+
 TRACE_EVENT(i915_gem_object_migrate,
 	    TP_PROTO(struct drm_i915_gem_object *obj,
 			enum intel_region_id region),
@@ -839,6 +889,7 @@ TRACE_EVENT(i915_gem_object_migrate,
 			     __field(u64, size)
 			     __field(u32, src)
 			     __field(u32, dst)
+			     __field(bool, has_pages)
 			     ),
 
 	    TP_fast_assign(
@@ -847,11 +898,12 @@ TRACE_EVENT(i915_gem_object_migrate,
 			   __entry->size = obj->base.size;
 			   __entry->src = obj->mm.region->id;
 			   __entry->dst = region;
+			   __entry->has_pages = i915_gem_object_has_pages(obj);
 			   ),
 
 	    TP_printk("dev %p migrate object %p [size %llx] %s %s from %s to %s",
 		      __entry->dev, __entry->obj, __entry->size,
-		      i915_gem_object_has_pages(__entry->obj) ? "with" : "without", "backing storage",
+		      __entry->has_pages ? "with" : "without", "backing storage",
 		      intel_memory_region_id2str(__entry->src),
 		      intel_memory_region_id2str(__entry->dst))
 );
@@ -891,7 +943,7 @@ TRACE_EVENT(i915_mm_fault,
 
 	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on gem object %p [size %lld] address %llx, %s[%d] %s",
 		      __entry->dev, __entry->vm, __entry->asid,
-		      (__entry->access_type == 0) ? "read" : "write",
+		      intel_access_type2str(__entry->access_type),
 		      __entry->obj, __entry->obj_size, __entry->addr,
 		      intel_engine_class_repr(__entry->engine_class),
 		      __entry->engine_instance,
@@ -948,7 +1000,7 @@ TRACE_EVENT(intel_access_counter,
 			   __entry->vaddr_base = info->va_range_base;
 			   ),
 
-	    TP_printk("dev%u gt%u asid%d %xKB Region/%xKB sub-region %s[%d], VA_BASE: %llx, sub-region hit vector %x",
+	    TP_printk("dev%u gt%u asid%d %d KB Region/%d KB sub-region %s[%d], VA_BASE: %llx, sub-region hit vector %x",
 		      __entry->dev, __entry->id, __entry->asid,
 		      granularity_in_byte(__entry->region_type) / SZ_1K,
 		      sub_granularity_in_byte(__entry->region_type) / SZ_1K,

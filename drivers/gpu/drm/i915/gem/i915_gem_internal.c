@@ -46,11 +46,11 @@ static int i915_gem_object_get_pages_internal(struct drm_i915_gem_object *obj)
 
 	max_order = MAX_ORDER;
 #ifdef CONFIG_SWIOTLB
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
-	if (is_swiotlb_active(obj->base.dev->dev)) {
-#elif LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef IS_SWIOTLB_ACTIVE_ARG_DEV_NOT_PRESENT
 	if (is_swiotlb_active()) {
-#endif /* LINUX_VERSION_IN_RANGE */
+#else
+	if (is_swiotlb_active(obj->base.dev->dev)) {
+#endif
 		unsigned int max_segment;
 
 		max_segment = swiotlb_max_segment();

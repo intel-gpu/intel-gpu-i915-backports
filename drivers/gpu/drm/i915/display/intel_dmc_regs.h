@@ -11,32 +11,32 @@
 #define DMC_PROGRAM(addr, i)	_MMIO((addr) + (i) * 4)
 #define DMC_SSP_BASE_ADDR_GEN9	0x00002FC0
 
-#define _PIPEDMC_REG_MMIO_BASE_A_GEN13	0x5f000
-#define _PIPEDMC_REG_MMIO_BASE_A_GEN12	0x92000
+#define _ADLP_PIPEDMC_REG_MMIO_BASE_A	0x5f000
+#define _TGL_PIPEDMC_REG_MMIO_BASE_A	0x92000
 
-#define _PIPEDMC_REG_MMIO_BASE(i915, dmc_id) \
-	((DISPLAY_VER(i915) >= 13 ? _PIPEDMC_REG_MMIO_BASE_A_GEN13 : \
-				    _PIPEDMC_REG_MMIO_BASE_A_GEN12) + \
+#define __PIPEDMC_REG_MMIO_BASE(i915, dmc_id) \
+	((DISPLAY_VER(i915) >= 13 ? _ADLP_PIPEDMC_REG_MMIO_BASE_A : \
+				    _TGL_PIPEDMC_REG_MMIO_BASE_A) + \
 	 0x400 * ((dmc_id) - 1))
 
-#define _MAINDMC_REG_MMIO_BASE		0x8f000
+#define __DMC_REG_MMIO_BASE		0x8f000
 
 #define _DMC_REG_MMIO_BASE(i915, dmc_id) \
-	((dmc_id) == DMC_FW_MAIN ? _MAINDMC_REG_MMIO_BASE : \
-				   _PIPEDMC_REG_MMIO_BASE(i915, dmc_id))
+	((dmc_id) == DMC_FW_MAIN ? __DMC_REG_MMIO_BASE : \
+				   __PIPEDMC_REG_MMIO_BASE(i915, dmc_id))
 
 #define _DMC_REG(i915, dmc_id, reg) \
-	((reg) - _MAINDMC_REG_MMIO_BASE + _DMC_REG_MMIO_BASE(i915, dmc_id))
+	((reg) - __DMC_REG_MMIO_BASE + _DMC_REG_MMIO_BASE(i915, dmc_id))
 
-#define _MAINDMC_EVT_HTP_0		0x8f004
+#define _DMC_EVT_HTP_0			0x8f004
 
 #define DMC_EVT_HTP(i915, dmc_id, handler) \
-	_MMIO(_DMC_REG(i915, dmc_id, _MAINDMC_EVT_HTP_0) + 4 * (handler))
+	_MMIO(_DMC_REG(i915, dmc_id, _DMC_EVT_HTP_0) + 4 * (handler))
 
-#define _MAINDMC_EVT_CTL_0		0x8f034
+#define _DMC_EVT_CTL_0			0x8f034
 
 #define DMC_EVT_CTL(i915, dmc_id, handler) \
-	_MMIO(_DMC_REG(i915, dmc_id, _MAINDMC_EVT_CTL_0) + 4 * (handler))
+	_MMIO(_DMC_REG(i915, dmc_id, _DMC_EVT_CTL_0) + 4 * (handler))
 
 #define DMC_EVT_CTL_ENABLE		REG_BIT(31)
 #define DMC_EVT_CTL_RECURRING		REG_BIT(30)

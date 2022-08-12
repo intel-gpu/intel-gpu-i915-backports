@@ -10,6 +10,7 @@
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"
+#include "gt/intel_gt_compression_formats.h"
 #include "gt/intel_ring.h"
 #include "i915_gem_clflush.h"
 #include "i915_gem_object_blt.h"
@@ -167,7 +168,10 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * hardware will handle the clearing of CCS.
 	 */
 	if (HAS_STATELESS_MC(i915) && i915_gem_object_is_lmem(vma->obj))
-		stateless_comp = PVC_MEM_SET_DST_COMPRESSIBLE;
+		stateless_comp =
+			PVC_MEM_SET_DST_COMPRESSIBLE |
+			PVC_MEM_SET_DST_COMPRESS_EN |
+			FIELD_PREP(PVC_MEM_SET_COMPRESSION_FMT, XEHPC_LINEAR_16);
 
 	/*
 	 * Whenever the intel_emit_vma_fill_blt() function is used with
@@ -609,8 +613,14 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 
 			/* for stateless compression we mark compressible if LMEM */
 			if (HAS_STATELESS_MC(i915)) {
+				comp_bits = FIELD_PREP(PVC_MEM_COPY_COMPRESSION_FMT,
+						       XEHPC_LINEAR_16);
+
 				if (i915_gem_object_is_lmem(dst->obj))
-					comp_bits |= PVC_MEM_COPY_DST_COMPRESSIBLE;
+					comp_bits |=
+						PVC_MEM_COPY_DST_COMPRESSIBLE |
+						PVC_MEM_COPY_DST_COMPRESS_EN;
+
 				if (i915_gem_object_is_lmem(src->obj))
 					comp_bits |= PVC_MEM_COPY_SRC_COMPRESSIBLE;
 			}
