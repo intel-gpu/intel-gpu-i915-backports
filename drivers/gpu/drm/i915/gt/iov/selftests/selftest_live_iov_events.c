@@ -9,6 +9,8 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_ring.h"
 #include "gt/iov/intel_iov_provisioning.h"
+#include "selftests/igt_spinner.h"
+#include "selftests/intel_scheduler_helpers.h"
 
 static int generate_and_count_events(struct intel_iov *iov, enum intel_iov_threshold threshold,
 				     int (*generate)(struct intel_gt *, unsigned int),
@@ -101,6 +103,67 @@ static int generate_and_count_events(struct intel_iov *iov, enum intel_iov_thres
 	return 0;
 }
 
+static int generate_engine_resets(struct intel_gt *gt, unsigned int count)
+{
+	struct intel_engine_cs *engine = intel_selftest_find_any_engine(gt);
+	struct intel_selftest_saved_policy saved;
+	struct intel_context *ce;
+	struct igt_spinner spin;
+	struct i915_request *rq;
+	int err, i;
+
+	/* enable engine reset */
+	err = intel_selftest_modify_policy(engine, &saved, SELFTEST_SCHEDULER_MODIFY_ENGINE_RESET);
+	if (err)
+		return err;
+
+	err = igt_spinner_init(&spin, gt);
+	if (err)
+		goto out_policy;
+
+	ce = intel_context_create(engine);
+	if (IS_ERR(ce)) {
+		err = PTR_ERR(ce);
+		goto out_spin;
+	}
+
+	for (i = 0; i < count; i++) {
+		rq = igt_spinner_create_request(&spin, ce, MI_NOOP);
+		if (IS_ERR(rq)) {
+			err = PTR_ERR(rq);
+			goto out_ce;
+		}
+
+		i915_request_get(rq);
+		i915_request_add(rq);
+
+		if (!igt_wait_for_spinner(&spin, rq)) {
+			err = -ETIME;
+			goto out_rq;
+		}
+
+		/* wait for reset */
+		err = intel_selftest_wait_for_rq(rq);
+		if (err)
+			goto out_rq;
+
+		i915_request_put(rq);
+	}
+
+	goto out_ce;
+
+out_rq:
+	i915_request_put(rq);
+out_ce:
+	intel_context_put(ce);
+out_spin:
+	igt_spinner_fini(&spin);
+out_policy:
+	intel_selftest_restore_policy(engine, &saved);
+
+	return err;
+}
+
 static int generate_h2g_interrupts(struct intel_gt *gt, unsigned int count)
 {
 	unsigned int i;
@@ -149,6 +212,7 @@ static int generate_gt2g_interrupts(struct intel_gt *gt, unsigned int count)
  * used instead.
  */
 #define THRESHOLD_TCS(threshold) \
+	threshold(ENGINE_RESET, engine_reset) \
 	threshold(H2G_STORM, guc_storm) \
 	threshold(IRQ_STORM, irq_storm) \
 	/*end*/
@@ -173,6 +237,11 @@ static const struct threshold_testcase {
 		u32 sample_period;
 	} normal, abuse;
 } tc[IOV_THRESHOLD_MAX] = {
+	[IOV_THRESHOLD_ENGINE_RESET] = {
+		.generate = generate_engine_resets,
+		.normal = { .generate_arg = 1, .th_value = 2, .sample_period = 15000 },
+		.abuse = { .generate_arg = 2, .th_value = 1, .sample_period = 15000 },
+	},
 	[IOV_THRESHOLD_H2G_STORM] = {
 		.generate = generate_h2g_interrupts,
 		.normal = { .generate_arg = 1000, .th_value = 2000, .sample_period = 100 },

@@ -253,9 +253,10 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	unsigned int sg_page_sizes;
 	struct page **pvec;
 	int ret;
-#if RHEL_RELEASE_VERSION(8, 5) <= RHEL_RELEASE_CODE
-	struct scatterlist *sg;
-#endif /*  RHEL_RELEASE_VERSION(8, 5) <= RHEL_RELEASE_CODE */
+
+#if RHEL_RELEASE_VERSION(8, 5) == RHEL_RELEASE_CODE
+        struct scatterlist *sg;
+#endif /* RHEL_RELEASE_VERSION(8, 5) == RHEL_RELEASE_CODE */
 
 	if (!safe_conversion(&num_pages, obj->base.size >> PAGE_SHIFT))
 		return -E2BIG;
@@ -273,23 +274,26 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	pvec = obj->userptr.pvec;
 
 alloc_table:
-
 #if RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE
-	ret = __sg_alloc_table_from_pages(st, pvec, num_pages,
-			0, num_pages << PAGE_SHIFT,
-			max_segment, GFP_KERNEL);
+	ret = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+					 num_pages << PAGE_SHIFT,
+					 max_segment, GFP_KERNEL);
 	if (ret)
-		goto err_free;
-#else
-	sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
-			num_pages << PAGE_SHIFT, max_segment,
-			NULL, 0, GFP_KERNEL);
+		goto err;
+#elif RHEL_RELEASE_VERSION(8, 5) ==  RHEL_RELEASE_CODE
+        sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+                        num_pages << PAGE_SHIFT, max_segment,
+                        NULL, 0, GFP_KERNEL);
 	if (IS_ERR(sg)) {
 		ret = PTR_ERR(sg);
-		goto err_free;
+		goto err;
 	}
-#endif  /* RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE */
-
+#else
+       ret = sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+                              num_pages << PAGE_SHIFT, GFP_KERNEL);
+       if (ret)
+              goto err;
+#endif
 	ret = i915_gem_gtt_prepare_pages(obj, st);
 	if (ret) {
 		sg_free_table(st);
@@ -401,13 +405,18 @@ static void i915_gem_object_userptr_invalidate_work(struct work_struct *work)
 	struct i915_gem_ww_ctx ww;
 	int ret;
 
+	if (!kref_get_unless_zero(&obj->base.refcount))
+                return;
+
 	for_i915_gem_ww(&ww, ret, true) {
 		ret = i915_gem_object_lock(obj, &ww);
 		if (ret)
 			continue;
 
-		i915_gem_object_userptr_unbind(obj, &ww);
+		ret = i915_gem_object_userptr_unbind(obj, &ww);
 	}
+
+	i915_gem_object_put(obj);
 }
 
 int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)

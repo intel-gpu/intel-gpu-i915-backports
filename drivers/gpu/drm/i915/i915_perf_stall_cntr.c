@@ -6,6 +6,7 @@
 #include <linux/anon_inodes.h>
 
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_lmem.h"
@@ -52,6 +53,35 @@ void i915_perf_stall_cntr_init(struct drm_i915_private *i915)
 
 	for_each_gt(i915, i, gt)
 		mutex_init(&gt->eu_stall_cntr.lock);
+}
+
+/*
+ * set_mcr_multicast - set the multicast bit in the MCR packet control
+ * 		       selector register.
+ *
+ * This shouldn't be necessary as the multicast bit is supposed to be set by
+ * default and cleared only during a unicast write. But it has been observed
+ * that sometimes the multicast bit is not set leading to unexpected and
+ * erroneous results.
+ */
+static void set_mcr_multicast(struct intel_uncore *uncore)
+{
+	enum forcewake_domains fw_domain;
+	u32 mcr;
+
+	fw_domain = intel_uncore_forcewake_for_reg(uncore, GEN8_MCR_SELECTOR,
+						   FW_REG_READ | FW_REG_WRITE);
+	spin_lock_irq(&uncore->lock);
+	intel_uncore_forcewake_get__locked(uncore, fw_domain);
+	mcr = intel_uncore_read_fw(uncore, GEN8_MCR_SELECTOR);
+	if (!(mcr & GEN11_MCR_MULTICAST)) {
+		drm_dbg(&uncore->i915->drm,
+			"Setting multicast bit in the MCR packet ctrl selector register.\n");
+		intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR,
+				      (mcr | GEN11_MCR_MULTICAST));
+	}
+	intel_uncore_forcewake_put__locked(uncore, fw_domain);
+	spin_unlock_irq(&uncore->lock);
 }
 
 /**
@@ -180,12 +210,10 @@ eu_stall_data_in_buf(struct i915_eu_stall_cntr_stream *stream)
 	struct per_dss_buf *dss_buf;
 	u32 read_ptr, write_ptr;
 	unsigned long irqflags;
-	u64 subslice_mask;
 	u8 s, ss;
 	int iter;
 
-	subslice_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
-	for_each_pvc_subslice(s, ss, subslice_mask, iter) {
+	for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
 		dss_buf = &stream->dss_buf[iter];
 		spin_lock_irqsave(&dss_buf->lock, irqflags);
 		read_ptr = dss_buf->read;
@@ -239,16 +267,12 @@ eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	bool min_data_present;
-	u64 subslice_mask;
 	u8 s, ss;
 	int iter;
 
 	min_data_present = false;
-	subslice_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
-	for_each_pvc_subslice(s, ss, subslice_mask, iter) {
-		write_ptr_reg = intel_uncore_read_with_mcr_steering(gt->uncore,
-								    XEHPC_EUSTALL_REPORT,
-								    s, ss);
+	for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
+		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
 		write_ptr = write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK;
 		write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
 		write_ptr &= ((buf_size << 1) - 1);
@@ -275,16 +299,13 @@ eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 }
 
 static void
-clear_dropped_eviction_line_bit(struct intel_uncore *uncore, u8 s, u8 ss)
+clear_dropped_eviction_line_bit(struct intel_gt *gt, u8 s, u8 ss)
 {
 	u32 write_ptr_reg;
 
 	/* Clear the overflow bit by setting it to 1 */
 	write_ptr_reg = _MASKED_BIT_ENABLE(XEHPC_EUSTALL_REPORT_OVERFLOW_DROP);
-	intel_uncore_write_with_mcr_steering(uncore,
-					     XEHPC_EUSTALL_REPORT,
-					     write_ptr_reg,
-					     s, ss);
+	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT, write_ptr_reg, s, ss);
 	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT,
 			  write_ptr_reg, sizeof(write_ptr_reg), true);
 }
@@ -331,9 +352,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	 * buffer isn't big enough to read all the data.
 	 */
 	if (write_ptr == read_ptr) {
-		write_ptr_reg = intel_uncore_read_with_mcr_steering(gt->uncore,
-								    XEHPC_EUSTALL_REPORT,
-								    s, ss);
+		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
 		trace_i915_reg_rw(false, XEHPC_EUSTALL_REPORT, write_ptr_reg,
 				  sizeof(write_ptr_reg), true);
 		write_ptr = (write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK);
@@ -425,14 +444,12 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	read_ptr_reg &= XEHPC_EUSTALL_REPORT1_READ_PTR_MASK;
 	read_ptr_reg |= (XEHPC_EUSTALL_REPORT1_READ_PTR_MASK <<
 			 XEHPC_EUSTALL_REPORT1_MASK_SHIFT);
-	intel_uncore_write_with_mcr_steering(gt->uncore,
-					     XEHPC_EUSTALL_REPORT1,
-					     read_ptr_reg, s, ss);
+	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
 	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT1,
 			  read_ptr_reg, sizeof(read_ptr_reg), true);
 	spin_lock_irqsave(&dss_buf->lock, irqflags);
 	if (dss_buf->line_drop) {
-		clear_dropped_eviction_line_bit(gt->uncore, s, ss);
+		clear_dropped_eviction_line_bit(gt, s, ss);
 		dss_buf->line_drop = false;
 	}
 	dss_buf->read = read_ptr;
@@ -462,14 +479,12 @@ i915_eu_stall_buf_read_locked(struct i915_eu_stall_cntr_stream *stream,
 	struct intel_gt *gt = stream->tile_gt;
 	size_t total_size = 0;
 	u8 slice, subslice;
-	u64 subslice_mask;
 	int ret = 0, iter;
 
 	if (count == 0)
 		return -EINVAL;
 
-	subslice_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
-	for_each_pvc_subslice(slice, subslice, subslice_mask, iter) {
+	for_each_pvc_subslice(slice, subslice, gt->info.sseu.subslice_mask, iter) {
 		ret = __i915_eu_stall_buf_read(stream, buf, count, &total_size,
 					       gt, slice, subslice);
 		if (ret || count == total_size)
@@ -503,7 +518,6 @@ static int alloc_eu_stall_cntr_buf(struct i915_eu_stall_cntr_stream *stream,
 	struct drm_i915_gem_object *bo;
 	struct sseu_dev_info *sseu;
 	struct i915_vma *vma;
-	u64 subslice_mask;
 	u8 *vaddr;
 	u32 size;
 	int ret;
@@ -513,8 +527,7 @@ static int alloc_eu_stall_cntr_buf(struct i915_eu_stall_cntr_stream *stream,
 	 * and calculate total buffer size based on that.
 	 */
 	sseu = &gt->info.sseu;
-	subslice_mask = intel_sseu_get_subslices(sseu, 0);
-	size = per_dss_buf_size * fls64(subslice_mask);
+	size = per_dss_buf_size * intel_sseu_highest_xehp_dss(sseu->subslice_mask);
 
 	bo = intel_gt_object_create_lmem(gt, size, 0);
 	if (IS_ERR(bo))
@@ -591,6 +604,7 @@ i915_eu_stall_stream_enable(struct i915_eu_stall_cntr_stream *stream)
 		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_RENDER);
 
+		set_mcr_multicast(gt->uncore);
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
 				   gen_eustall_base(stream, true));
 	}
@@ -601,12 +615,10 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 {
 	struct intel_gt *gt = stream->tile_gt;
 	intel_wakeref_t wakeref;
-	u64 subslice_mask;
 	u32 reg_value;
 	u16 s, ss;
 	int iter;
 
-	subslice_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
 		/*
 		 * Before disabling EU stall sampling, check if any of the
@@ -618,13 +630,12 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 		 * after disabling EU stall sampling and may cause erroneous
 		 * stall data in the subsequent stall data sampling run.
 		 */
-		for_each_pvc_subslice(s, ss, subslice_mask, iter) {
-			reg_value = intel_uncore_read_with_mcr_steering(gt->uncore,
-									XEHPC_EUSTALL_REPORT,
-									s, ss);
+		for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
+			reg_value = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
 			if (reg_value & XEHPC_EUSTALL_REPORT_OVERFLOW_DROP)
-				clear_dropped_eviction_line_bit(gt->uncore, s, ss);
+				clear_dropped_eviction_line_bit(gt, s, ss);
 		}
+		set_mcr_multicast(gt->uncore);
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
 				   gen_eustall_base(stream, false));
 		/* Wa_22012878696:pvc */
@@ -665,7 +676,6 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	intel_wakeref_t wakeref;
-	u64 subslice_mask;
 	int ret, iter;
 	u16 s, ss;
 
@@ -685,19 +695,18 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 		return ret;
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
+		set_mcr_multicast(gt->uncore);
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
 				   gen_eustall_base(stream, false));
 		/* GGTT addresses can never be > 32 bits */
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE_UPPER, 0);
 		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_CTRL,
+				   _MASKED_FIELD(EUSTALL_MOCS | EUSTALL_SAMPLE_RATE,
 				   REG_FIELD_PREP(EUSTALL_MOCS, gt->mocs.uc_index << 1) |
-				   REG_FIELD_PREP(EUSTALL_SAMPLE_RATE, props->eu_stall_sample_rate));
+				   REG_FIELD_PREP(EUSTALL_SAMPLE_RATE, props->eu_stall_sample_rate)));
 
-		subslice_mask = intel_sseu_get_subslices(&gt->info.sseu, 0);
-		for_each_pvc_subslice(s, ss, subslice_mask, iter) {
-			write_ptr_reg = intel_uncore_read_with_mcr_steering(gt->uncore,
-									    XEHPC_EUSTALL_REPORT,
-									    s, ss);
+		for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
+			write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
 			write_ptr = write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK;
 			write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
 			write_ptr &= ((stream->per_dss_buf_size << 1) - 1);
@@ -705,8 +714,7 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 			read_ptr_reg &= XEHPC_EUSTALL_REPORT1_READ_PTR_MASK;
 			read_ptr_reg |= (XEHPC_EUSTALL_REPORT1_READ_PTR_MASK <<
 					 XEHPC_EUSTALL_REPORT1_MASK_SHIFT);
-			intel_uncore_write_with_mcr_steering(gt->uncore, XEHPC_EUSTALL_REPORT1,
-							     read_ptr_reg, s, ss);
+			intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
 			dss_buf = &stream->dss_buf[iter];
 			vaddr_offset = iter * props->eu_stall_buf_sz;
 			dss_buf->vaddr = stream->vaddr + vaddr_offset;

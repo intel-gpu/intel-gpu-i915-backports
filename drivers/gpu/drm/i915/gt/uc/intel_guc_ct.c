@@ -11,9 +11,8 @@
 
 #include "i915_drv.h"
 #include "intel_guc_ct.h"
-#include "intel_pagefault.h"
 #include "gt/intel_gt.h"
-#include "gem/i915_gem_lmem.h"
+#include "gt/intel_pagefault.h"
 #include "gt/iov/intel_iov_event.h"
 #include "gt/iov/intel_iov_relay.h"
 #include "gt/iov/intel_iov_service.h"
@@ -407,16 +406,15 @@ static int ct_write(struct intel_guc_ct *ct,
 
 	if (unlikely(desc->status)) {
 		/*
-		 * after VF migration H2G is not usable any more
-		 * start recovery procedure and let caller retry
-		 * any other non-migration status is still fatal
+		 * After VF migration, H2G link is not usable any more.
+		 * Let the caller know, so it can do recovery and retry.
+		 * Any other (non-migration) status is still fatal.
 		 */
 		if (desc->status & ~GUC_CTB_STATUS_MIGRATED)
 			goto corrupted;
 		if (!IS_SRIOV_VF(ct_to_i915(ct)))
 			goto corrupted;
-		i915_sriov_vf_start_migration_recovery(ct_to_i915(ct));
-		return -EBUSY;
+		return -EREMCHG;
 	}
 
 	GEM_BUG_ON(tail > size);
@@ -680,6 +678,11 @@ static int ct_send_nb(struct intel_guc_ct *ct,
 out:
 	spin_unlock_irqrestore(&ctb->lock, spin_flags);
 
+	if (ret == -EREMCHG) {
+		i915_sriov_vf_start_migration_recovery(ct_to_i915(ct));
+		ret = -EBUSY;
+	}
+
 	return ret;
 }
 
@@ -789,6 +792,15 @@ unlink:
 	spin_lock_irqsave(&ct->requests.lock, flags);
 	list_del(&request.link);
 	spin_unlock_irqrestore(&ct->requests.lock, flags);
+
+	if (err == -EREMCHG) {
+		/*
+		 * This retcode means that we're a VF and we've got migrated.
+		 * Start recovery procedure, then retry.
+		 */
+		i915_sriov_vf_start_migration_recovery(ct_to_i915(ct));
+		send_again = true;
+	}
 
 	if (unlikely(send_again))
 		goto resend;
@@ -901,7 +913,7 @@ static int ct_read(struct intel_guc_ct *ct, struct ct_incoming_msg **msg)
 			if (!IS_SRIOV_VF(ct_to_i915(ct)))
 				goto corrupted;
 			desc->status &= ~GUC_CTB_STATUS_MIGRATED;
-			i915_sriov_vf_start_migration_recovery(ct_to_i915(ct));
+			return -EREMCHG;
 		}
 	}
 
@@ -1048,7 +1060,7 @@ static int ct_handle_response(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *request)
 {
 	struct intel_guc *guc = ct_to_guc(ct);
-	struct intel_gt *gt = guc_to_gt(guc);
+	struct intel_gt *gt = ct_to_gt(ct);
 	struct intel_iov *iov = &gt->iov;
 	const u32 *hxg;
 	const u32 *payload;
@@ -1084,8 +1096,11 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 	case INTEL_GUC_ACTION_CONTEXT_RESET_NOTIFICATION:
 		ret = intel_guc_context_reset_process_msg(guc, payload, len);
 		break;
-	case INTEL_GUC_ACTION_NOTIFY_MEMORY_CAT_ERROR:
-		ret = intel_pagefault_process_cat_error_msg(guc, payload, len);
+	case GUC_ACTION_GUC2HOST_NOTIFY_MEMORY_CAT_ERROR:
+		ret = intel_gt_pagefault_process_cat_error_msg(gt, hxg, hxg_len);
+		break;
+	case GUC_ACTION_GUC2HOST_NOTIFY_PAGE_FAULT:
+		ret = intel_gt_pagefault_process_page_fault_msg(gt, hxg, hxg_len);
 		break;
 	case INTEL_GUC_ACTION_STATE_CAPTURE_NOTIFICATION:
 		ret = intel_guc_error_capture_process_msg(guc, payload, len);
@@ -1125,9 +1140,6 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 	case INTEL_GUC_ACTION_NOTIFY_EXCEPTION:
 		CT_ERROR(ct, "Received GuC exception notification!\n");
 		ret = 0;
-		break;
-	case INTEL_GUC_ACTION_PAGE_FAULT_NOTIFICATION:
-		ret = intel_pagefault_process_page_fault_msg(guc, payload, len);
 		break;
 	case INTEL_GUC_ACTION_ACCESS_COUNTER_NOTIFY:
 		ret = intel_access_counter_req_process_msg(guc, payload, len);
@@ -1307,11 +1319,17 @@ static int ct_receive(struct intel_guc_ct *ct)
 	unsigned long flags;
 	int ret;
 
+retry:
 	spin_lock_irqsave(&ct->ctbs.recv.lock, flags);
 	ret = ct_read(ct, &msg);
 	spin_unlock_irqrestore(&ct->ctbs.recv.lock, flags);
-	if (ret < 0)
+	if (ret < 0) {
+		if (ret == -EREMCHG) {
+			i915_sriov_vf_start_migration_recovery(ct_to_i915(ct));
+			goto retry;
+		}
 		return ret;
+	}
 
 	if (msg)
 		ct_handle_msg(ct, msg);

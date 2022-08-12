@@ -11,6 +11,7 @@
 struct drm_i915_private;
 struct drm_mm_node;
 struct drm_i915_gem_object;
+struct intel_gt;
 
 int i915_gem_stolen_insert_node(struct drm_i915_private *dev_priv,
 				struct drm_mm_node *node, u64 size,
@@ -21,8 +22,8 @@ int i915_gem_stolen_insert_node_in_range(struct drm_i915_private *dev_priv,
 					 u64 end);
 void i915_gem_stolen_remove_node(struct drm_i915_private *dev_priv,
 				 struct drm_mm_node *node);
-struct intel_memory_region *i915_gem_stolen_smem_setup(struct drm_i915_private *i915);
-struct intel_memory_region *i915_gem_stolen_lmem_setup(struct drm_i915_private *i915);
+struct intel_memory_region *i915_gem_stolen_smem_setup(struct intel_gt *gt);
+struct intel_memory_region *i915_gem_stolen_lmem_setup(struct intel_gt *gt);
 struct drm_i915_gem_object *
 i915_gem_object_create_stolen(struct drm_i915_private *dev_priv,
 			      resource_size_t size);

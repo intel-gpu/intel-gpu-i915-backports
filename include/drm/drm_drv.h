@@ -74,7 +74,7 @@ enum drm_driver_feature {
 	 * @DRIVER_ATOMIC:
 	 *
 	 * Driver supports the full atomic modesetting userspace API. Drivers
-	 * which only use atomic internally, but do not the support the full
+	 * which only use atomic internally, but do not support the full
 	 * userspace API (e.g. not all properties converted to atomic, or
 	 * multi-plane updates are not guaranteed to be tear-free) should not
 	 * set this flag.
@@ -501,8 +501,6 @@ struct drm_driver {
 	/* Everything below here is for legacy driver, never use! */
 	/* private: */
 
-	/* List of devices hanging off this driver with stealth attach. */
-	struct list_head legacy_dev_list;
 	int (*firstopen) (struct drm_device *);
 	int (*dma_ioctl) (struct drm_device *dev, void *data, struct drm_file *file_priv);
 	int (*dma_quiescent) (struct drm_device *);

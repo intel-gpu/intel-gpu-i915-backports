@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2020 - 2021 Intel Corporation.
+ * Copyright(c) 2020 - 2022 Intel Corporation.
  *
  */
 
@@ -473,12 +473,12 @@ static const struct file_operations dpa_ops = {
 	.release = seq_release,
 };
 
-void routing_debug_port_init(struct fsubdev *sd, u8 lpn, struct dentry *port_dentry)
+void routing_debug_port_init(struct fsubdev *sd, u8 lpn)
 {
 	struct fport *port = &sd->port[lpn];
 
-	debugfs_create_file("uft", 0400, port_dentry, port, &uft_ops);
+	debugfs_create_file("uft", 0400, sd->debugfs_port_dir, port, &uft_ops);
 
 	if (test_bit(lpn, sd->bport_lpns))
-		debugfs_create_file("dpa", 0400, port_dentry, port, &dpa_ops);
+		debugfs_create_file("dpa", 0400, sd->debugfs_port_dir, port, &dpa_ops);
 }

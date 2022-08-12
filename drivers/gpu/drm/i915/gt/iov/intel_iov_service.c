@@ -369,7 +369,9 @@ static int pf_handle_l4_wa(struct intel_iov *iov, u32 origin, u32 relay_id,
 	with_intel_gt_pm(gt, wakeref)
 		__gen8_ggtt_insert_page_wa_bcs(iov_to_gt(iov)->ggtt,
 					       origin, addr, offset,
-					       level, flags);
+					       i915_gem_get_pat_index(gt->i915,
+								      level),
+					       flags);
 
 	return intel_iov_relay_reply_ack_to_vf(&iov->relay, origin, relay_id, 0);
 }

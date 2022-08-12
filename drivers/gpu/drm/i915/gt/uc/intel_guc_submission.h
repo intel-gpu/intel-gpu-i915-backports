@@ -39,8 +39,7 @@ int intel_guc_wait_for_pending_msg(struct intel_guc *guc,
 				   bool interruptible,
 				   long timeout);
 
-void intel_guc_context_set_preemption_timeout(struct intel_context *ce,
-					      u32 preemption_timeout);
+void intel_guc_context_set_preemption_timeout(struct intel_context *ce);
 
 static inline bool intel_guc_submission_is_supported(const struct intel_guc *guc)
 {

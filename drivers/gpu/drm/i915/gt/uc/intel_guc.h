@@ -16,7 +16,6 @@
 #include "intel_guc_log.h"
 #include "intel_guc_reg.h"
 #include "intel_guc_slpc_types.h"
-#include "intel_guc_hwconfig.h"
 #include "intel_uc_fw.h"
 #include "intel_uncore.h"
 #include "i915_utils.h"
@@ -51,7 +50,6 @@ struct intel_guc {
 	/** @capture: the error-state-capture module's data and objects */
 	struct intel_guc_state_capture *capture;
 
-	struct intel_guc_hwconfig hwconfig;
 	struct dentry *dbgfs_node;
 
 	/** @sched_engine: Global engine used to submit requests to GuC */
@@ -130,6 +128,10 @@ struct intel_guc {
 		 */
 		struct list_head guc_id_list;
 		/**
+		 * @guc_ids_in_use: Number single-lrc guc_ids in use
+		 */
+		u16 guc_ids_in_use;
+		/**
 		 * @destroyed_contexts: list of contexts waiting to be destroyed
 		 * (deregistered with the GuC)
 		 */
@@ -140,6 +142,12 @@ struct intel_guc {
 		 * function as it might be in an atomic context (no sleeping)
 		 */
 		struct work_struct destroyed_worker;
+#define SCHED_DISABLE_DELAY_MS	100
+		/**
+		 * @sched_disable_delay_ms: schedule disable delay, in ms, for
+		 * contexts
+		 */
+		u64 sched_disable_delay_ms;
 	} submission_state;
 
 	/**
@@ -247,6 +255,14 @@ struct intel_guc {
 		 * @shift: Right shift value for the gpm timestamp
 		 */
 		u32 shift;
+
+		/**
+		 * @last_stat_jiffies: jiffies at last actual stats collection time
+		 * We use this timestamp to ensure we don't oversample the
+		 * stats because runtime power management events can trigger
+		 * stats collection at much higher rates than required.
+		 */
+		unsigned long last_stat_jiffies;
 	} timestamp;
 
 	/* @stall_ms: To insert GuC stalls */

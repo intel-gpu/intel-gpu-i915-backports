@@ -184,7 +184,7 @@ struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt, u32 flags)
 void ppgtt_bind_vma(struct i915_address_space *vm,
 		    struct i915_vm_pt_stash *stash,
 		    struct i915_vma *vma,
-		    enum i915_cache_level cache_level,
+		    unsigned int pat_index,
 		    u32 flags)
 {
 	u32 pte_flags;
@@ -205,7 +205,7 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 	    i915_gem_object_has_fabric(vma->obj))
 		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
-	vm->insert_entries(vm, vma, cache_level, pte_flags);
+	vm->insert_entries(vm, vma, pat_index, pte_flags);
 	/* Flush the PTE writes to memory */
 	i915_write_barrier(vm->i915, i915_gem_object_is_lmem(px_base(i915_vm_to_ppgtt(vm)->pd)));
 }
@@ -213,12 +213,12 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 static void ppgtt_bind_vma_wa(struct i915_address_space *vm,
 			      struct i915_vm_pt_stash *stash,
 			      struct i915_vma *vma,
-			      enum i915_cache_level cache_level,
+			      unsigned int pat_index,
 			      u32 flags)
 {
 	GEM_WARN_ON(i915_gem_idle_engines(vm->i915));
 
-	ppgtt_bind_vma(vm, stash, vma, cache_level, flags);
+	ppgtt_bind_vma(vm, stash, vma, pat_index, flags);
 
 	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
 }

@@ -125,7 +125,4 @@ static inline bool i915_mmio_reg_valid(i915_reg_t reg)
 
 #define TD_ATT_MAX				3
 
-/* Compression Formats */
-#define CMF_LINEAR_16				0xF
-
 #endif /* __I915_REG_DEFS__ */

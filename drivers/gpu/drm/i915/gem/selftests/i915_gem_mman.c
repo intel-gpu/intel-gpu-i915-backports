@@ -840,8 +840,10 @@ static int wc_check(struct drm_i915_gem_object *obj)
 
 static bool can_mmap(struct drm_i915_gem_object *obj, enum i915_mmap_type type)
 {
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
 	if (type == I915_MMAP_TYPE_GTT &&
-	    !i915_ggtt_has_aperture(to_gt(to_i915(obj->base.dev))->ggtt))
+	    !i915_ggtt_has_aperture(to_gt(i915)->ggtt))
 		return false;
 
 	if (type != I915_MMAP_TYPE_GTT &&
@@ -899,7 +901,9 @@ static int __igt_mmap(struct drm_i915_private *i915,
 
 	pr_debug("igt_mmap(%s, %d) @ %lx\n", obj->mm.region->name, type, addr);
 
-	area = find_vma(current->mm, addr);
+	mmap_read_lock(current->mm);
+	area = vma_lookup(current->mm, addr);
+	mmap_read_unlock(current->mm);
 	if (!area) {
 		pr_err("%s: Did not create a vm_area_struct for the mmap\n",
 		       obj->mm.region->name);
@@ -1429,7 +1433,7 @@ int i915_gem_mman_live_selftests(struct drm_i915_private *i915)
 		current->mm = mm;
 	}
 
-	err = i915_subtests(tests, i915);
+	err = i915_live_subtests(tests, i915);
 
 	/* restore current->mm in case a persistent kernel thread */
 	if (mm) {

@@ -558,8 +558,6 @@ void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 	unregister_shrinker(&i915->mm.shrinker);
 }
 
-#define obj_to_i915(obj__) to_i915((obj__)->base.dev)
-
 /**
  * i915_gem_object_make_unshrinkable - Hide the object from the shrinker. By
  * default all object types that support shrinking(see IS_SHRINKABLE), will also

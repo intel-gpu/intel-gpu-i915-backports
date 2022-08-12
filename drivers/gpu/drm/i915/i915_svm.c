@@ -37,7 +37,11 @@ static void release_svm(struct kref *ref)
 	struct i915_address_space *vm = svm->vm;
 	struct mmu_notifier *base_rh = &svm->notifier;
 
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
 	mmu_notifier_unregister(&svm->notifier, base_rh->base._rh->mm);
+#else
+	mmu_notifier_unregister(&svm->notifier, base_rh->_rh->mm);
+#endif
 	mutex_destroy(&svm->mutex);
 	vm->svm = NULL;
 	kfree(svm);
@@ -288,7 +292,11 @@ int i915_gem_vm_unbind_svm_buffer(struct i915_address_space *vm,
 	if (!svm)
 		return -EINVAL;
 	base_rh = &svm->notifier;
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
 	mm = base_rh->base._rh->mm;
+#else
+	mm = base_rh->_rh->mm;
+#endif
 	if (mm != current->mm) {
 		ret = -EPERM;
 		goto unbind_done;
@@ -322,7 +330,12 @@ int i915_gem_vm_bind_svm_buffer(struct i915_address_space *vm,
 	if (!svm)
 		return -EINVAL;
 	base_rh = &svm->notifier;
-	mm = base_rh->base._rh->mm;
+
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+        mm = base_rh->base._rh->mm;
+#else
+        mm = base_rh->_rh->mm;
+#endif
 	if (mm != current->mm) {
 		ret = -EPERM;
 		goto bind_done;

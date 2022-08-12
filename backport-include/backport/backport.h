@@ -28,6 +28,7 @@
 //#include <generated/autoconf.h>
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
+#include <backport/backport_macro.h>
 
 #ifndef __ASSEMBLY__
 #define LINUX_I915_BACKPORT(__sym) i915bkpt_ ##__sym

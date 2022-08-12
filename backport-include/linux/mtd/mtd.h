@@ -29,5 +29,5 @@ static inline struct mtd_info *mtd_get_master(struct mtd_info *mtd)
         part = mtd_to_part(mtd);
         return part->parent;
 }
-#endif /* LINUX_VERSION_IS_LESS */
+#endif
 #endif /* __BACKPORT_MTD_H */

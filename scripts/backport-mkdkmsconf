@@ -34,7 +34,6 @@ fi
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	PACKAGE_NAME=$PKG_NAME
 	PACKAGE_VERSION=$PKG_VER-$REL_NAME
-	REMAKE_INITRD="no"
 	AUTOINSTALL="yes"
 
 	BUILT_MODULE_NAME[0]="i915-compat"
@@ -77,25 +76,21 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BUILT_MODULE_LOCATION[9]="drivers/dma-buf"
 	DEST_MODULE_LOCATION[9]="/updates"
 
-	BUILT_MODULE_NAME[10]="kvmgt"
-	BUILT_MODULE_LOCATION[10]="drivers/gpu/drm/i915/gvt"
-	DEST_MODULE_LOCATION[10]="/updates"
-
-$ST	BUILT_MODULE_NAME[11]="test-drm_mm"
+$ST	BUILT_MODULE_NAME[10]="test-drm_mm"
+$ST	BUILT_MODULE_LOCATION[10]="drivers/gpu/drm/selftests"
+$ST	DEST_MODULE_LOCATION[10]="/updates"
+$ST
+$ST	BUILT_MODULE_NAME[11]="test-drm_cmdline_parser"
 $ST	BUILT_MODULE_LOCATION[11]="drivers/gpu/drm/selftests"
 $ST	DEST_MODULE_LOCATION[11]="/updates"
 $ST
-$ST	BUILT_MODULE_NAME[12]="test-drm_cmdline_parser"
+$ST	BUILT_MODULE_NAME[12]="test-drm_modeset"
 $ST	BUILT_MODULE_LOCATION[12]="drivers/gpu/drm/selftests"
 $ST	DEST_MODULE_LOCATION[12]="/updates"
 $ST
-$ST	BUILT_MODULE_NAME[13]="test-drm_modeset"
-$ST	BUILT_MODULE_LOCATION[13]="drivers/gpu/drm/selftests"
+$ST	BUILT_MODULE_NAME[13]="dmabuf_selftests"
+$ST	BUILT_MODULE_LOCATION[13]="drivers/dma-buf"
 $ST	DEST_MODULE_LOCATION[13]="/updates"
-$ST
-$ST	BUILT_MODULE_NAME[14]="dmabuf_selftests"
-$ST	BUILT_MODULE_LOCATION[14]="drivers/dma-buf"
-$ST	DEST_MODULE_LOCATION[14]="/updates"
 $ST
 	
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.

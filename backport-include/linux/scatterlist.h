@@ -16,7 +16,7 @@
 #define for_each_sgtable_page(sgt, piter, pgoffset)    \
        for_each_sg_page((sgt)->sgl, piter, (sgt)->orig_nents, pgoffset)
 
-#endif /* LINUX_VERSION_IS_LESS(5, 8, 0) */
+#endif
 
 /*
  * for_each_sgtable_dma_page - iterate over the DMA mapped sg_table object

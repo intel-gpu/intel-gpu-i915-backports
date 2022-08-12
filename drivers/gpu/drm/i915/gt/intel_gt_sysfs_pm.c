@@ -946,9 +946,9 @@ static ssize_t mem_RP0_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_P0,
-				    PCODE_MBOX_DOMAIN_HBM, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_P0,
+			       PCODE_MBOX_DOMAIN_HBM, &val);
 	if (err)
 		return err;
 
@@ -967,9 +967,9 @@ static ssize_t mem_RPn_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_PN,
-				    PCODE_MBOX_DOMAIN_HBM, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_PN,
+			       PCODE_MBOX_DOMAIN_HBM, &val);
 	if (err)
 		return err;
 
@@ -1009,9 +1009,9 @@ static ssize_t base_freq_factor_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, PVC_PCODE_QOS_MULTIPLIER_GET,
-				    PCODE_MBOX_DOMAIN_CHIPLET,
-				    PCODE_MBOX_DOMAIN_BASE, &val);
+	err = snb_pcode_read_p(gt->uncore, PVC_PCODE_QOS_MULTIPLIER_GET,
+			       PCODE_MBOX_DOMAIN_CHIPLET,
+			       PCODE_MBOX_DOMAIN_BASE, &val);
 	if (err)
 		return err;
 
@@ -1036,9 +1036,9 @@ static ssize_t base_freq_factor_store(struct kobject *kobj,
 	if (val > U8_8_VAL_MASK)
 		return -EINVAL;
 
-	err = __intel_gt_pcode_write(gt, PVC_PCODE_QOS_MULTIPLIER_SET,
-				     PCODE_MBOX_DOMAIN_CHIPLET,
-				     PCODE_MBOX_DOMAIN_BASE, val);
+	err = snb_pcode_write_p(gt->uncore, PVC_PCODE_QOS_MULTIPLIER_SET,
+			      PCODE_MBOX_DOMAIN_CHIPLET,
+			      PCODE_MBOX_DOMAIN_BASE, val);
 	if (err)
 		return err;
 
@@ -1054,9 +1054,9 @@ static ssize_t base_RP0_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_P0,
-				    PCODE_MBOX_DOMAIN_BASE, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_P0,
+			       PCODE_MBOX_DOMAIN_BASE, &val);
 	if (err)
 		return err;
 
@@ -1075,9 +1075,9 @@ static ssize_t base_RPn_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_PN,
-				    PCODE_MBOX_DOMAIN_BASE, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_PN,
+			       PCODE_MBOX_DOMAIN_BASE, &val);
 	if (err)
 		return err;
 
@@ -1185,9 +1185,9 @@ static ssize_t media_RP0_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_P0,
-				    PCODE_MBOX_DOMAIN_MEDIAFF, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_P0,
+			       PCODE_MBOX_DOMAIN_MEDIAFF, &val);
 
 	if (err)
 		return err;
@@ -1207,9 +1207,9 @@ static ssize_t media_RPn_freq_mhz_show(struct kobject *kobj,
 	u32 val;
 	int err;
 
-	err = __intel_gt_pcode_read(gt, XEHPSDV_PCODE_FREQUENCY_CONFIG,
-				    PCODE_MBOX_FC_SC_READ_FUSED_PN,
-				    PCODE_MBOX_DOMAIN_MEDIAFF, &val);
+	err = snb_pcode_read_p(gt->uncore, XEHPSDV_PCODE_FREQUENCY_CONFIG,
+			       PCODE_MBOX_FC_SC_READ_FUSED_PN,
+			       PCODE_MBOX_DOMAIN_MEDIAFF, &val);
 
 	if (err)
 		return err;
@@ -1548,12 +1548,12 @@ static int iaf_gt_set_power_state(struct device *dev, bool enable)
 	int ret;
 
 	/* enable/disable the IAF device */
-	ret = __snb_pcode_write(gt->i915, PCODE_MBOX_CD, PCODE_MBOX_CD_TRIGGER_SHUTDOWN,
+	ret = snb_pcode_write_p(gt->uncore, PCODE_MBOX_CD, PCODE_MBOX_CD_TRIGGER_SHUTDOWN,
 				0, pcode_cmd);
 	if (ret)
 		return ret;
 
-	ret = __snb_pcode_read(gt->i915, PCODE_MBOX_CD, PCODE_MBOX_CD_STATUS, 0,
+	ret = snb_pcode_read_p(gt->uncore, PCODE_MBOX_CD, PCODE_MBOX_CD_STATUS, 0,
 			       &iaf_status);
 
 	/*
@@ -1562,7 +1562,7 @@ static int iaf_gt_set_power_state(struct device *dev, bool enable)
 	 */
 	while (!ret && iaf_status != status && retry < 10) {
 		ssleep(POWER_STATE_PW_DELAY_MIN);
-		ret = __snb_pcode_read(gt->i915, PCODE_MBOX_CD, PCODE_MBOX_CD_STATUS, 0,
+		ret = snb_pcode_read_p(gt->uncore, PCODE_MBOX_CD, PCODE_MBOX_CD_STATUS, 0,
 				       &iaf_status);
 		retry++;
 	}

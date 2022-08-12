@@ -12,14 +12,29 @@ This repo is a code snapshot of particular version of backports and does not con
  We will add a new branch redhat/rhel<x.y> whenever a version is deprecated or moved to the maintenance phase.
   
 # Supported Version/kernel
-  Our current backport is based on Red Hat® Enterprise Linux® 8.5. We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the time of installation.
+  Our current backport supports following RHEL versions
+
+ | RHEL Version |kernel version    |
+ |---  |---  |
+ | Red Hat® Enterprise Linux® 8.6 | kernel 4.18.372 |
+ | Red Hat® Enterprise Linux® 8.5 | kernel 4.18.348 |
+
+  We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/versions)
-  file to check the BASE_KERNEL_NAME. It will point to the kernel version which is being used during backporting.
+  file to check the RHEL_8.6_KERNEL_VERSION and RHEL_8.5_KERNEL_VERSION. It will point to the kernel version which is being used during backporting.
 
-  In case of an issue with the latest kernel, please install the kernel version pointed by BASE_KERNEL_NAME.
+  In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
-    sudo dnf check-update; sudo dnf install -y kernel-<BASE_KERNEL_NAME>.el8_5.x86_64 \
-    kernel-devel-<BASE_KERNEL_NAME>.el8_5.x86_64
+  For RHEL 8.6:
+    sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.6_KERNEL_VERSION>.el8_6.x86_64 \
+    kernel-devel-<RHEL_8.6_KERNEL_VERSION>.el8_6.x86_64
+    example:
+        sudo dnf check-update; sudo dnf install -y kernel-4.18.0-372.13.1.el8_6.x86_64 \
+        kernel-devel-4.18.0-372.13.1.el8_6.x86_64
+
+  For RHEL 8.5:
+    sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.5_KERNEL_VERSION>.el8_5.x86_64 \
+    kernel-devel-<RHEL_8.5_KERNEL_VERSION>.el8_5.x86_64
     example:
         sudo dnf check-update; sudo dnf install -y kernel-4.18.0-348.7.1.el8_5.x86_64 \
         kernel-devel-4.18.0-348.7.1.el8_5.x86_64
@@ -30,8 +45,10 @@ we have dependencies on the following packages
   - make
   - lsb-release
   - rpm-build
+  - flex
+  - bison
 
-        sudo dnf install -y dkms make lsb-release rpm-build
+        sudo dnf install -y dkms make lsb-release rpm-build flex bison
 
 # Dependencies
 

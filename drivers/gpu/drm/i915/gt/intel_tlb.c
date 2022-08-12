@@ -87,6 +87,8 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_ALL);
 
+	spin_lock_irq(&uncore->lock); /* serialise invalidate with GT reset */
+
 	awake = 0;
 	for_each_engine(engine, gt, id) {
 		struct reg_and_bit rb;
@@ -112,6 +114,8 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 	     IS_ALDERLAKE_S(i915) ||
 	     IS_ALDERLAKE_P(i915)))
 		intel_uncore_write_fw(uncore, GEN12_OA_TLB_INV_CR, 1);
+
+	spin_unlock_irq(&uncore->lock);
 
 	for_each_engine_masked(engine, gt, awake, tmp) {
 		u64 rstcnt = atomic_read(&gt->reset.engines_reset_count);

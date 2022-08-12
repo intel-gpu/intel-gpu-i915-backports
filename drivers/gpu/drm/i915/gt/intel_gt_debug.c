@@ -21,18 +21,11 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 {
 	struct intel_uncore * const uncore = gt->uncore;
 	struct sseu_dev_info *sseu = &gt->info.sseu;
+	intel_sseu_ss_mask_t subslice_mask = sseu->subslice_mask;
 	unsigned int max_slices, max_subslices;
 	unsigned int slice, subslice;
-	u64 subslice_mask;
 	u32 mcr_ss, mcr_old;
 	int ret = 0;
-
-	/*
-	 * The subslice mask for first slice gives all continuous
-	 * subslices in both cases. The c and g slices are masked
-	 * together already.
-	 */
-	subslice_mask = intel_sseu_get_subslices(sseu, 0);
 
 	/*
 	 * For newer hardware access we can't use sseu directly
@@ -42,21 +35,20 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 	 * Further, the eu attention bitmask delivery also needs
 	 * to know if subslice is fused or not.
 	 */
-	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
-		if (GRAPHICS_VER_FULL(gt->i915) == IP_VER(12, 60)) {
-			max_subslices = 8;
-		} else {
-			max_subslices = GEN_DSS_PER_GSLICE;
-		}
-
-		max_slices = DIV_ROUND_UP(fls64(subslice_mask),
+	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 60)) {
+		max_subslices = GEN_DSS_PER_CSLICE;
+		max_slices = DIV_ROUND_UP(intel_sseu_highest_xehp_dss(subslice_mask) + 1,
+					  max_subslices);
+	} else if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
+		max_subslices = GEN_DSS_PER_GSLICE;
+		max_slices = DIV_ROUND_UP(intel_sseu_highest_xehp_dss(subslice_mask) + 1,
 					  max_subslices);
 	} else {
 		max_slices = sseu->max_slices;
 		max_subslices = sseu->max_subslices;
 	}
 
-	GEM_WARN_ON(!subslice_mask);
+	GEM_WARN_ON(!intel_sseu_subslice_total(sseu));
 	GEM_WARN_ON(!max_slices);
 	GEM_WARN_ON(!max_subslices);
 
@@ -66,9 +58,6 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 
 	for (slice = 0; slice < max_slices; slice++) {
 		for (subslice = 0; subslice < max_subslices; subslice++) {
-			const bool ss_present = !!(subslice_mask &
-						   BIT_ULL(max_subslices * slice + subslice));
-
 			if (GRAPHICS_VER(uncore->i915) >= 11)
 				mcr_ss = GEN11_MCR_SLICE(slice) | GEN11_MCR_SUBSLICE(subslice);
 			else
@@ -97,7 +86,9 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 				intel_uncore_write_fw(gt->uncore, EU_CTL, val);
 			}
 
-			ret = fn(gt, data, slice, subslice, ss_present);
+			ret = fn(gt, data, slice, subslice,
+				 intel_sseu_has_subslice(sseu, 0,
+							 max_subslices * slice + subslice));
 			if (ret)
 				goto out;
 		}
@@ -129,7 +120,7 @@ int intel_gt_for_each_compute_slice_subslice(struct intel_gt *gt,
 						       bool subslice_present),
 					     void *data)
 {
-	const enum forcewake_domains fw_domains = FW_DOMAIN_ID_RENDER | FW_DOMAIN_ID_GT;
+	const enum forcewake_domains fw_domains = FORCEWAKE_RENDER | FORCEWAKE_GT;
 	struct intel_uncore * const uncore = gt->uncore;
 	intel_wakeref_t wakeref;
 	int ret;

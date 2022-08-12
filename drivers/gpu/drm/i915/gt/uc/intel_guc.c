@@ -364,6 +364,10 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
 		flags |= GUC_WA_POLLCS;
 
+	/* Wa_16015675438, Wa_18020744125 */
+	if (!RCS_MASK(gt))
+		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
+
 	/* Wa_16011759253:dg2_g10:a0 */
 	/* Wa_22011383443:pvc - Also needed for PVC BD A0 */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_B0) ||
@@ -386,10 +390,11 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 
 	/*
 	 * Wa_22011802037: graphics version 12
-	 * FIXME: GUC_WA_PRE_PARSER causes media workload hang for PVC and PCIe
-	 * errors. Until root caused, disable this for PVC.
+	 * GUC_WA_PRE_PARSER causes media workload hang for PVC A0 and PCIe
+	 * errors. Disable this for PVC A0 steppings.
 	 */
-	if (GRAPHICS_VER(gt->i915) == 12 && !IS_PONTEVECCHIO(gt->i915))
+	if (GRAPHICS_VER(gt->i915) == 12 &&
+	    !IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
 		flags |= GUC_WA_PRE_PARSER;
 
 	/* Wa_16011777198:dg2 */
@@ -401,8 +406,8 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	 * Wa_22012727170:dg2_g10[a0-c0), dg2_g11[a0..), pvc[ctxt_a0..ctxt_b0)
 	 * Wa_22012727685:dg2_g11[a0..)
 	 *
-	 * FIXME: This WA needs to be enabled back for PVC once PVC regressions
-	 * are fixed for media on A0.
+	 * This WA is applicable to PVC CT A0, but causes media regressions. 
+	 * Drop the WA for PVC.
 	 */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_FOREVER))
@@ -415,11 +420,6 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	if (IS_PVC_CT_STEP(gt->i915, STEP_B0, STEP_C0) &&
 	    gt->i915->params.enable_rc6)
 		flags |= GUC_WA_RENDER_RST_RC6_EXIT;
-
-	/* Wa_15010861061:pvc || Wa_18020744125 */
-	if (IS_PVC_BD_STEP(gt->i915, STEP_B0, STEP_FOREVER) ||
-	    !RCS_MASK(gt))
-		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
 
 	return flags;
 }

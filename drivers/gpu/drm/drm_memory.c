@@ -38,7 +38,6 @@
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
 
-#include <drm/drm_agpsupport.h>
 #include <drm/drm_cache.h>
 #include <drm/drm_device.h>
 
@@ -97,24 +96,6 @@ static void *agp_remap(unsigned long offset, unsigned long size,
 	vfree(page_map);
 
 	return addr;
-}
-
-/** Wrapper around agp_free_memory() */
-void drm_free_agp(struct agp_memory *handle, int pages)
-{
-	agp_free_memory(handle);
-}
-
-/** Wrapper around agp_bind_memory() */
-int drm_bind_agp(struct agp_memory *handle, unsigned int start)
-{
-	return agp_bind_memory(handle, start);
-}
-
-/** Wrapper around agp_unbind_memory() */
-int drm_unbind_agp(struct agp_memory *handle)
-{
-	return agp_unbind_memory(handle);
 }
 
 #else /*  CPTCFG_AGP  */

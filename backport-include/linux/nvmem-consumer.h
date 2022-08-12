@@ -8,5 +8,5 @@
 struct nvmem_device *nvmem_device_find(void *data,
                         int (*match)(struct device *dev, const void *data));
 
-#endif /* KERNEL_VERSION(5, 5, 0) */
+#endif
 #endif /* _BACKPORT_LINUX_NVMEM_CONSUMER_H */
