@@ -52,8 +52,8 @@
 
 #define DISPLAY_VER12_DMC_MAX_FW_SIZE	ICL_DMC_MAX_FW_SIZE
 
-#define DG2_DMC_PATH			DMC_PATH(dg2, 2, 02)
-#define DG2_DMC_VERSION_REQUIRED	DMC_VERSION(2, 2)
+#define DG2_DMC_PATH			DMC_PATH(dg2, 2, 06)
+#define DG2_DMC_VERSION_REQUIRED	DMC_VERSION(2, 06)
 MODULE_FIRMWARE(DG2_DMC_PATH);
 
 #define ADLP_DMC_PATH			DMC_PATH(adlp, 2, 16)
@@ -248,14 +248,14 @@ struct stepping_info {
 	char substepping;
 };
 
-static bool intel_dmc_has_fw_payload(struct drm_i915_private *i915, int dmc_id)
+static bool has_dmc_id_fw(struct drm_i915_private *i915, int dmc_id)
 {
 	return i915->dmc.dmc_info[dmc_id].payload;
 }
 
 bool intel_dmc_has_payload(struct drm_i915_private *i915)
 {
-	return intel_dmc_has_fw_payload(i915, DMC_FW_MAIN);
+	return has_dmc_id_fw(i915, DMC_FW_MAIN);
 }
 
 static const struct stepping_info *
@@ -278,8 +278,8 @@ static void gen9_set_dc_state_debugmask(struct drm_i915_private *dev_priv)
 }
 
 static void
-disable_simple_flip_queue_event(struct drm_i915_private *i915,
-				i915_reg_t ctl_reg, i915_reg_t htp_reg)
+disable_flip_queue_event(struct drm_i915_private *i915,
+			 i915_reg_t ctl_reg, i915_reg_t htp_reg)
 {
 	u32 event_ctl;
 	u32 event_htp;
@@ -308,8 +308,8 @@ disable_simple_flip_queue_event(struct drm_i915_private *i915,
 }
 
 static bool
-get_simple_flip_queue_event_regs(struct drm_i915_private *i915, int dmc_id,
-				 i915_reg_t *ctl_reg, i915_reg_t *htp_reg)
+get_flip_queue_event_regs(struct drm_i915_private *i915, int dmc_id,
+			  i915_reg_t *ctl_reg, i915_reg_t *htp_reg)
 {
 	switch (dmc_id) {
 	case DMC_FW_MAIN:
@@ -334,21 +334,25 @@ get_simple_flip_queue_event_regs(struct drm_i915_private *i915, int dmc_id,
 }
 
 static void
-disable_all_simple_flip_queue_events(struct drm_i915_private *i915)
+disable_all_flip_queue_events(struct drm_i915_private *i915)
 {
 	int dmc_id;
+
+	/* TODO: check if the following applies to all D13+ platforms. */
+	if (!IS_DG2(i915) && !IS_TIGERLAKE(i915))
+		return;
 
 	for (dmc_id = 0; dmc_id < DMC_FW_MAX; dmc_id++) {
 		i915_reg_t ctl_reg;
 		i915_reg_t htp_reg;
 
-		if (!intel_dmc_has_fw_payload(i915, dmc_id))
+		if (!has_dmc_id_fw(i915, dmc_id))
 			continue;
 
-		if (!get_simple_flip_queue_event_regs(i915, dmc_id, &ctl_reg, &htp_reg))
+		if (!get_flip_queue_event_regs(i915, dmc_id, &ctl_reg, &htp_reg))
 			continue;
 
-		disable_simple_flip_queue_event(i915, ctl_reg, htp_reg);
+		disable_flip_queue_event(i915, ctl_reg, htp_reg);
 	}
 }
 
@@ -398,7 +402,7 @@ void intel_dmc_load_program(struct drm_i915_private *dev_priv)
 	 * i915 doesn't use the flip queue feature, so disable it already
 	 * here.
 	 */
-	disable_all_simple_flip_queue_events(dev_priv);
+	disable_all_flip_queue_events(dev_priv);
 }
 
 void assert_dmc_loaded(struct drm_i915_private *i915)

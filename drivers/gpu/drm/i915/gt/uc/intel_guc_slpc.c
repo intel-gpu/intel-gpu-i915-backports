@@ -548,9 +548,8 @@ int intel_guc_slpc_set_media_ratio_mode(struct intel_guc_slpc *slpc, u32 val)
 				     SLPC_PARAM_MEDIA_FF_RATIO_MODE,
 				     val);
 	if (ret)
-		intel_gt_log_driver_error(slpc_to_gt(slpc), INTEL_GT_DRIVER_ERROR_RPS,
-					  "set_media_ratio_mode returned %d\n",
-					  ret);
+		i915_probe_error(i915, "set_media_ratio_mode returned %d\n", ret);
+
 	return ret;
 }
 

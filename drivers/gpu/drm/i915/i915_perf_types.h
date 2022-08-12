@@ -94,7 +94,7 @@ struct i915_oa_config {
 
 	struct attribute_group sysfs_metric;
 	struct attribute *attrs[2];
-	struct device_attribute sysfs_metric_id;
+	struct kobj_attribute sysfs_metric_id;
 
 	struct kref ref;
 	struct rcu_head rcu;
@@ -601,7 +601,7 @@ struct i915_eu_stall_cntr_stream {
 	 */
 	u8 *vaddr;
 	struct i915_vma *vma;
-	struct per_dss_buf dss_buf[GEN_MAX_DSS];
+	struct per_dss_buf dss_buf[I915_MAX_SS_FUSE_BITS];
 };
 
 #endif /* _I915_PERF_TYPES_H_ */

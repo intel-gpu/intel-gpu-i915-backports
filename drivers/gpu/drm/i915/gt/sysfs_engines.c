@@ -77,10 +77,6 @@ mmio_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 static struct i915_ext_attr mmio_attr =	{
 	__ATTR(mmio_base, 0444, i915_sysfs_show, NULL), mmio_show, NULL};
 
-static const char * const rcs_caps[] = {
-	[ilog2(PRELIM_I915_RENDER_CLASS_CAPABILITY_3D)] = "3d",
-};
-
 static const char * const vcs_caps[] = {
 	[ilog2(I915_VIDEO_CLASS_CAPABILITY_HEVC)] = "hevc",
 	[ilog2(I915_VIDEO_AND_ENHANCE_CLASS_CAPABILITY_SFC)] = "sfc",
@@ -118,11 +114,6 @@ __caps_show(struct intel_engine_cs *engine,
 	ssize_t len;
 
 	switch (engine->class) {
-	case RENDER_CLASS:
-		repr = rcs_caps;
-		count = ARRAY_SIZE(rcs_caps);
-		break;
-
 	case VIDEO_DECODE_CLASS:
 		repr = vcs_caps;
 		count = ARRAY_SIZE(vcs_caps);

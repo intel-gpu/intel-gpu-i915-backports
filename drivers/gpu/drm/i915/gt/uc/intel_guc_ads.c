@@ -8,6 +8,7 @@
 #include "gem/i915_gem_lmem.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_lrc.h"
 #include "gt/shmem_utils.h"
@@ -345,7 +346,7 @@ static long __must_check guc_mmio_reg_add(struct intel_gt *gt,
 	 * tracking, it is easier to just program the default steering for all
 	 * regs that don't need a non-default one.
 	 */
-	intel_gt_get_valid_steering_for_reg(gt, reg, &group, &inst);
+	intel_gt_mcr_get_nonterminated_steering(gt, reg, &group, &inst);
 	entry.flags |= GUC_REGSET_STEERING(group, inst);
 
 	slot = __mmio_reg_add(regset, &entry);
@@ -463,6 +464,31 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 			slot = __mmio_reg_add(regset, &reg);
 			ret |= IS_ERR(slot);
 		}
+	}
+
+	/*
+	 * i915 OA implementation expects rc6 and coarse power gating (CPG) to
+	 * be disabled for the duration of the OA use case. It disables rc6 by
+	 * setting gucrc mode to no_rc6 and then restoring the gucrc mode once
+	 * OA is done. OA disables CPG by holding forcewakes. While GuC does
+	 * prevent rc6, it does not disable CPG (to conserve power). GuC also
+	 * has no means of knowing if forcewake is held by i915 or not. GuC
+	 * assumes CPG is enabled.
+	 *
+	 * As a side effect of Wa_1509372804, on PVC, GuC resets render engine
+	 * assuming that CPG is enabled. This soft reset results in loss of
+	 * below register state. Include the registers in this list to ensure EU
+	 * FLEX counters work as intended.
+	 */
+	if (IS_PVC_CT_STEP(i915, STEP_B0, STEP_C0) &&
+	    i915->params.enable_rc6) {
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL0, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL1, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL2, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL3, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL4, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL5, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL6, false);
 	}
 
 	if (HAS_STATELESS_MC(i915))

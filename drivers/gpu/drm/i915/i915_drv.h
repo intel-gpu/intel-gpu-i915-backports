@@ -914,10 +914,10 @@ struct drm_i915_private {
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	struct {
-		struct mutex mutex;
-		struct i915_debugger __rcu *debugger;
+		spinlock_t lock; /* lock for list */
+		struct list_head list;
 		u64 session_count;
-	} debug;
+	} debuggers;
 #endif
 
 	struct i915_hdcp_comp_master *hdcp_master;
@@ -1038,11 +1038,11 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 /* Iterator over PVC subslices selected by subslice_mask_ */
 #define for_each_pvc_subslice(slice_, subslice_, subslice_mask_, iter_) \
 	for ((slice_) = 0, (subslice_) = 0, (iter_) = 0; \
-	     (iter_) < (sizeof(subslice_mask_) * BITS_PER_BYTE); \
+	     (iter_) < XEHP_BITMAP_BITS(subslice_mask_); \
 	     (iter_) = ((iter_) + 1), \
 	     (slice_) += ((iter_) % GEN_DSS_PER_CSLICE) ? 0 : 1, \
 	     (subslice_) = (iter_) % GEN_DSS_PER_CSLICE) \
-		for_each_if(BIT(iter_) & (subslice_mask_))
+		for_each_if(test_bit(iter_, subslice_mask_.xehp))
 
 #define I915_GTT_OFFSET_NONE ((u32)-1)
 
@@ -1519,9 +1519,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_OA_BPC_REPORTING(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_oa_bpc_reporting)
 
-#define HAS_MSLICES(dev_priv)	(INTEL_INFO(dev_priv)->has_mslices)
-#define HAS_BSLICES(dev_priv)	(INTEL_INFO(dev_priv)->has_bslices)
-
 /*
  * Set this flag, when platform requires 64K GTT page sizes or larger for
  * device local memory access. Also this flag implies that we require or
@@ -1532,8 +1529,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_OA_BUF_128M(dev_priv) (INTEL_INFO(dev_priv)->has_oa_buf_128m)
 #define HAS_OA_SLICE_CONTRIB_LIMITS(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_oa_slice_contrib_limits)
-#define HAS_MI_SET_PREDICATE(dev_priv) \
-	(INTEL_INFO(dev_priv)->has_mi_set_predicate)
 #define HAS_OA_MMIO_TRIGGER(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_oa_mmio_trigger)
 #define HAS_OAM(dev_priv) \
@@ -1606,7 +1601,9 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 /* Only valid when HAS_DISPLAY() is true */
 #define INTEL_DISPLAY_ENABLED(dev_priv) \
-	(drm_WARN_ON(&(dev_priv)->drm, !HAS_DISPLAY(dev_priv)), !(dev_priv)->params.disable_display)
+	(drm_WARN_ON(&(dev_priv)->drm, !HAS_DISPLAY(dev_priv)),		\
+	 !(dev_priv)->params.disable_display &&				\
+	 !intel_opregion_headless_sku(dev_priv))
 
 #define HAS_GUC_DEPRIVILEGE(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_guc_deprivilege)
@@ -1621,7 +1618,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_3D_PIPELINE(i915)	(INTEL_INFO(i915)->has_3d_pipeline)
 
-#define HAS_ONE_EU_PER_FUSE_BIT(i915) (INTEL_INFO(i915)->has_one_eu_per_fuse_bit)
+#define HAS_ONE_EU_PER_FUSE_BIT(i915)	(INTEL_INFO(i915)->has_one_eu_per_fuse_bit)
 
 #define HAS_MEM_SPARING_SUPPORT(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_mem_sparing)
@@ -1665,8 +1662,6 @@ static inline struct intel_gt *to_gt(struct drm_i915_private *i915)
 	return &i915->gt0;
 }
 
-bool __pci_resource_valid(struct pci_dev *pdev, int bar);
-
 static inline bool
 intel_ggtt_needs_same_mem_type_within_cl_wa(struct drm_i915_private *dev_priv)
 {
@@ -1685,7 +1680,7 @@ int i915_resize_bar(struct drm_i915_private *i915, int resno, resource_size_t si
 void i915_gem_init_early(struct drm_i915_private *dev_priv);
 void i915_gem_cleanup_early(struct drm_i915_private *dev_priv);
 
-struct intel_memory_region *i915_gem_shmem_setup(struct drm_i915_private *i915);
+struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt);
 
 static inline void i915_gem_drain_freed_objects(struct drm_i915_private *i915)
 {
@@ -1752,10 +1747,6 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 
 void i915_gem_runtime_suspend(struct drm_i915_private *dev_priv);
 
-int i915_gem_dumb_create(struct drm_file *file_priv,
-			 struct drm_device *dev,
-			 struct drm_mode_create_dumb *args);
-
 struct drm_i915_gem_object *
 i915_gem_object_create_user(struct drm_i915_private *i915, u64 size,
 			    struct intel_memory_region **placements,
@@ -1772,15 +1763,6 @@ int i915_gem_idle_engines(struct drm_i915_private *i915);
 int i915_gem_resume_engines(struct drm_i915_private *i915);
 
 int i915_gem_open(struct drm_i915_private *i915, struct drm_file *file);
-
-int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
-				    struct i915_gem_ww_ctx *ww,
-				    enum i915_cache_level cache_level);
-
-struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
-				struct dma_buf *dma_buf);
-
-struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags);
 
 static inline struct i915_gem_context *
 __i915_gem_context_lookup_rcu(struct drm_i915_file_private *file_priv, u32 id)
@@ -1832,8 +1814,6 @@ static inline bool i915_gem_object_needs_bit17_swizzle(struct drm_i915_gem_objec
 	return to_gt(i915)->ggtt->bit_6_swizzle_x == I915_BIT_6_SWIZZLE_9_10_17 &&
 		i915_gem_object_is_tiled(obj);
 }
-
-const char *i915_cache_level_str(struct drm_i915_private *i915, int type);
 
 /* intel_device_info.c */
 static inline struct intel_device_info *

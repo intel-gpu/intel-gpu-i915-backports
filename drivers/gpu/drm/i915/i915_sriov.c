@@ -7,10 +7,15 @@
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_drv.h"
+#include "i915_irq.h"
+#include "i915_pci.h"
 #include "intel_pci_config.h"
+#include "gem/i915_gem_pm.h"
 
+#include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
+#include "gt/iov/intel_iov_migration.h"
 #include "gt/iov/intel_iov_provisioning.h"
 #include "gt/iov/intel_iov_state.h"
 #include "gt/iov/intel_iov_utils.h"
@@ -85,10 +90,15 @@ static int pf_reduce_totalvfs(struct drm_i915_private *i915, int limit)
 
 static bool pf_has_valid_vf_bars(struct drm_i915_private *i915)
 {
-	struct pci_dev *pdev = i915->drm.pdev;
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 
-	return __pci_resource_valid(pdev, GEN12_VF_GTTMMADR_BAR) &&
-	       __pci_resource_valid(pdev, GEN12_VF_LMEM_BAR);
+	if (!i915_pci_resource_valid(pdev, GEN12_VF_GTTMMADR_BAR))
+		return false;
+
+	if (HAS_LMEM(i915) && !i915_pci_resource_valid(pdev, GEN12_VF_LMEM_BAR))
+		return false;
+
+	return true;
 }
 
 static bool pf_continue_as_native(struct drm_i915_private *i915, const char *why)
@@ -867,19 +877,188 @@ int i915_sriov_resume_early(struct drm_i915_private *i915)
 	return 0;
 }
 
-static void vf_migration_recovery(struct drm_i915_private *i915)
+static void heartbeats_disable(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(i915, id, gt) {
+		intel_gt_heartbeats_disable(gt);
+	}
+}
+
+static void heartbeats_restore(struct drm_i915_private *i915, bool unpark)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(i915, id, gt) {
+		intel_gt_heartbeats_restore(gt, unpark);
+	}
+}
+
+/**
+ * vf_post_migration_shutdown - Clean up the kernel structures after VF migration.
+ * @i915: the i915 struct
+ *
+ * After this VM is migrated and assigned to a new VF, it is running on a new
+ * hardware, and therefore all hardware-dependent states and related structures
+ * are no longer valid.
+ * By using selected parts from suspend scenario we can check whether any jobs
+ * were able to finish before the migration (some might have finished at such
+ * moment that the information did not made it back), and clean all the
+ * invalidated structures.
+ */
+static void vf_post_migration_shutdown(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
 	unsigned int i;
 
+	heartbeats_disable(i915);
+	i915_gem_suspend(i915);
+	for_each_gt(i915, i, gt)
+		intel_uc_suspend(&gt->uc);
+}
+
+/**
+ * vf_post_migration_reset_guc_state - Reset GuC state.
+ * @i915: the i915 struct
+ *
+ * This function sends VF state reset to GuC, which also checks for the MIGRATED
+ * flag, and re-schedules post-migration worker if the flag was raised.
+ */
+static void vf_post_migration_reset_guc_state(struct drm_i915_private *i915)
+{
+	intel_wakeref_t wakeref;
+
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		struct intel_gt *gt;
+		unsigned int id;
+
+		for_each_gt(i915, id, gt) {
+			__intel_gt_reset(gt, ALL_ENGINES);
+		}
+	}
+}
+
+static bool vf_post_migration_is_scheduled(struct drm_i915_private *i915)
+{
+	return work_pending(&i915->sriov.vf.migration_worker);
+}
+
+static int vf_post_migration_reinit_guc(struct drm_i915_private *i915)
+{
+	intel_wakeref_t wakeref;
+	int err;
+
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		struct intel_gt *gt;
+		unsigned int id;
+
+		for_each_gt(i915, id, gt) {
+			err = intel_iov_migration_reinit_guc(&gt->iov);
+			if (unlikely(err))
+				break;
+		}
+	}
+	return err;
+}
+
+static void vf_post_migration_fixup_ggtt_nodes(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(i915, id, gt) {
+		intel_iov_migration_fixup_ggtt_nodes(&gt->iov);
+	}
+}
+
+/**
+ * vf_post_migration_kickstart - Re-initialize the driver under new hardware.
+ * @i915: the i915 struct
+ *
+ * After we have finished with all post-migration fixes, restart the driver
+ * using selected parts from resume scenario.
+ */
+static void vf_post_migration_kickstart(struct drm_i915_private *i915)
+{
+	intel_runtime_pm_enable_interrupts(i915);
+	i915_gem_resume(i915);
+	heartbeats_restore(i915, true);
+}
+
+static void i915_reset_backoff_enter(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	/* Raise flag for any other resets to back off and resign. */
+	for_each_gt(i915, id, gt)
+		intel_gt_reset_backoff_raise(gt);
+
+	/* Make sure intel_gt_reset_trylock() sees the I915_RESET_BACKOFF. */
+	synchronize_rcu_expedited();
+
+	/*
+	 * Wait for any operations already in progress which state could be
+	 * skewed by post-migration actions.
+	 */
+	for_each_gt(i915, id, gt)
+		synchronize_srcu_expedited(&gt->reset.backoff_srcu);
+}
+
+static void i915_reset_backoff_leave(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(i915, id, gt) {
+		intel_gt_reset_backoff_clear(gt);
+	}
+}
+
+static void vf_post_migration_recovery(struct drm_i915_private *i915)
+{
+	int err;
+
+	i915_reset_backoff_enter(i915);
+
 	drm_dbg(&i915->drm, "migration recovery in progress\n");
+	vf_post_migration_shutdown(i915);
 
-	for_each_gt(i915, i, gt)
-		intel_gt_set_wedged(gt);
-	for_each_gt(i915, i, gt)
-		intel_gt_handle_error(gt, ALL_ENGINES, 0, "migration");
+	/*
+	 * After migration has happened, all requests sent to GuC are expected
+	 * to fail. Only after successful VF state reset, the VF driver can
+	 * re-init GuC communication. If the VF state reset fails, it shall be
+	 * repeated until success - we will skip this run and retry in that
+	 * newly scheduled one.
+	 */
+	vf_post_migration_reset_guc_state(i915);
+	if (vf_post_migration_is_scheduled(i915))
+		goto defer;
+	err = vf_post_migration_reinit_guc(i915);
+	if (unlikely(err))
+		goto fail;
 
-	drm_dbg(&i915->drm, "migration recovery completed\n");
+	vf_post_migration_fixup_ggtt_nodes(i915);
+
+	vf_post_migration_kickstart(i915);
+	i915_reset_backoff_leave(i915);
+	drm_notice(&i915->drm, "migration recovery completed\n");
+	return;
+
+defer:
+	drm_dbg(&i915->drm, "migration recovery deferred\n");
+	/* We bumped wakerefs when disabling heartbeat. Put them back. */
+	heartbeats_restore(i915, false);
+	i915_reset_backoff_leave(i915);
+	return;
+
+fail:
+	drm_err(&i915->drm, "migration recovery failed (%pe)\n", ERR_PTR(err));
+	intel_gt_set_wedged(to_gt(i915));
+	i915_reset_backoff_leave(i915);
 }
 
 static void migration_worker_func(struct work_struct *w)
@@ -887,7 +1066,7 @@ static void migration_worker_func(struct work_struct *w)
 	struct drm_i915_private *i915 = container_of(w, struct drm_i915_private,
 						     sriov.vf.migration_worker);
 
-	vf_migration_recovery(i915);
+	vf_post_migration_recovery(i915);
 }
 
 /**

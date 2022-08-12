@@ -2862,7 +2862,7 @@ static void ilk_compute_wm_level(const struct drm_i915_private *dev_priv,
 }
 
 static void intel_read_wm_latency(struct drm_i915_private *dev_priv,
-				  u16 wm[8])
+				  u16 wm[])
 {
 	struct intel_uncore *uncore = &dev_priv->uncore;
 
@@ -2874,7 +2874,7 @@ static void intel_read_wm_latency(struct drm_i915_private *dev_priv,
 
 		/* read the first set of memory latencies[0:3] */
 		val = 0; /* data0 to be programmed to 0 for first set */
-		ret = snb_pcode_read(dev_priv, GEN9_PCODE_READ_MEM_LATENCY,
+		ret = snb_pcode_read(&dev_priv->uncore, GEN9_PCODE_READ_MEM_LATENCY,
 				     &val, NULL);
 
 		if (ret) {
@@ -2893,7 +2893,7 @@ static void intel_read_wm_latency(struct drm_i915_private *dev_priv,
 
 		/* read the second set of memory latencies[4:7] */
 		val = 1; /* data0 to be programmed to 1 for second set */
-		ret = snb_pcode_read(dev_priv, GEN9_PCODE_READ_MEM_LATENCY,
+		ret = snb_pcode_read(&dev_priv->uncore, GEN9_PCODE_READ_MEM_LATENCY,
 				     &val, NULL);
 		if (ret) {
 			drm_err(&dev_priv->drm,
@@ -3061,9 +3061,9 @@ static void snb_wm_latency_quirk(struct drm_i915_private *dev_priv)
 	 * The BIOS provided WM memory latency values are often
 	 * inadequate for high resolution displays. Adjust them.
 	 */
-	changed = ilk_increase_wm_latency(dev_priv, dev_priv->wm.pri_latency, 12) |
-		ilk_increase_wm_latency(dev_priv, dev_priv->wm.spr_latency, 12) |
-		ilk_increase_wm_latency(dev_priv, dev_priv->wm.cur_latency, 12);
+	changed = ilk_increase_wm_latency(dev_priv, dev_priv->wm.pri_latency, 12);
+	changed |= ilk_increase_wm_latency(dev_priv, dev_priv->wm.spr_latency, 12);
+	changed |= ilk_increase_wm_latency(dev_priv, dev_priv->wm.cur_latency, 12);
 
 	if (!changed)
 		return;
@@ -3679,7 +3679,7 @@ intel_sagv_block_time(struct drm_i915_private *dev_priv)
 		u32 val = 0;
 		int ret;
 
-		ret = snb_pcode_read(dev_priv,
+		ret = snb_pcode_read(&dev_priv->uncore,
 				     GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
 				     &val, NULL);
 		if (ret) {
@@ -3748,7 +3748,7 @@ static void skl_sagv_enable(struct drm_i915_private *dev_priv)
 		return;
 
 	drm_dbg_kms(&dev_priv->drm, "Enabling SAGV\n");
-	ret = snb_pcode_write(dev_priv, GEN9_PCODE_SAGV_CONTROL,
+	ret = snb_pcode_write(&dev_priv->uncore, GEN9_PCODE_SAGV_CONTROL,
 			      GEN9_SAGV_ENABLE);
 
 	/* We don't need to wait for SAGV when enabling */
@@ -3781,7 +3781,7 @@ static void skl_sagv_disable(struct drm_i915_private *dev_priv)
 
 	drm_dbg_kms(&dev_priv->drm, "Disabling SAGV\n");
 	/* bspec says to keep retrying for at least 1 ms */
-	ret = skl_pcode_request(dev_priv, GEN9_PCODE_SAGV_CONTROL,
+	ret = skl_pcode_request(&dev_priv->uncore, GEN9_PCODE_SAGV_CONTROL,
 				GEN9_SAGV_DISABLE,
 				GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED,
 				1);

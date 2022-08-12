@@ -382,7 +382,7 @@ static int igt_mock_splintered_region(void *arg)
 	 */
 
 	size = (SZ_4G - 1) & PAGE_MASK;
-	mem = mock_region_create(i915, 0, size, PAGE_SIZE, 0);
+	mem = mock_region_create(to_gt(i915), 0, size, PAGE_SIZE, 0);
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 
@@ -465,7 +465,7 @@ static int igt_mock_max_segment(void *arg)
 	 */
 
 	size = SZ_8G;
-	mem = mock_region_create(i915, 0, size, PAGE_SIZE, 0);
+	mem = mock_region_create(to_gt(i915), 0, size, PAGE_SIZE, 0);
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 
@@ -1523,7 +1523,7 @@ static int igt_lmem_pages_migrate_cross_tile(void *arg)
 	return ret;
 }
 
-static int mock_selftests(struct drm_i915_private *i915,
+static int mock_selftests(struct intel_gt *gt,
 			  u64 start, u64 end, u64 chunk,
 			  unsigned int flags,
 			  bool exact)
@@ -1539,7 +1539,7 @@ static int mock_selftests(struct drm_i915_private *i915,
 	struct intel_memory_region *mem;
 	int err = 0;
 
-	mem = mock_region_create(i915, start, end - start, chunk, flags);
+	mem = mock_region_create(gt, start, end - start, chunk, flags);
 	if (IS_ERR(mem)) {
 		pr_err("failed to create memory region [%llx, %llx]\n", start, end);
 		return PTR_ERR(mem);
@@ -1581,17 +1581,17 @@ int intel_memory_region_mock_selftests(void)
 		return -ENOMEM;
 
 	/* Ideal */
-	err = mock_selftests(i915, 0, SZ_2G, SZ_4K, 0, true);
+	err = mock_selftests(to_gt(i915), 0, SZ_2G, SZ_4K, 0, true);
 	if (err)
 		goto out;
 
 	/* Slight misalignment */
-	err = mock_selftests(i915, SZ_64K, SZ_2G, SZ_4K, 0, false);
+	err = mock_selftests(to_gt(i915), SZ_64K, SZ_2G, SZ_4K, 0, false);
 	if (err)
 		goto out;
 
 	/* Second slice */
-	err = mock_selftests(i915, SZ_2G, SZ_4G, SZ_4K, 0, true);
+	err = mock_selftests(to_gt(i915), SZ_2G, SZ_4G, SZ_4K, 0, true);
 	if (err)
 		goto out;
 

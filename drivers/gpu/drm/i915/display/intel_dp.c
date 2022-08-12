@@ -406,6 +406,26 @@ static int ehl_max_source_rate(struct intel_dp *intel_dp)
 	return 810000;
 }
 
+static int vbt_max_link_rate(struct intel_dp *intel_dp)
+{
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+	int max_rate;
+
+	max_rate = intel_bios_dp_max_link_rate(encoder);
+
+	if (intel_dp_is_edp(intel_dp)) {
+		struct intel_connector *connector = intel_dp->attached_connector;
+		int edp_max_rate = connector->panel.vbt.edp.max_link_rate;
+
+		if (max_rate && edp_max_rate)
+			max_rate = min(max_rate, edp_max_rate);
+		else if (edp_max_rate)
+			max_rate = edp_max_rate;
+	}
+
+	return max_rate;
+}
+
 static void
 intel_dp_set_source_rates(struct intel_dp *intel_dp)
 {
@@ -427,7 +447,6 @@ intel_dp_set_source_rates(struct intel_dp *intel_dp)
 		162000, 270000
 	};
 	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	struct intel_encoder *encoder = &dig_port->base;
 	struct drm_i915_private *dev_priv = to_i915(dig_port->base.base.dev);
 	const int *source_rates;
 	int size, max_rate = 0, vbt_max_rate;
@@ -463,7 +482,7 @@ intel_dp_set_source_rates(struct intel_dp *intel_dp)
 		size = ARRAY_SIZE(g4x_rates);
 	}
 
-	vbt_max_rate = intel_bios_dp_max_link_rate(encoder);
+	vbt_max_rate = vbt_max_link_rate(intel_dp);
 	if (max_rate && vbt_max_rate)
 		max_rate = min(max_rate, vbt_max_rate);
 	else if (vbt_max_rate)
@@ -2970,9 +2989,6 @@ intel_edp_init_dpcd(struct intel_dp *intel_dp)
 		intel_dp_set_sink_rates(intel_dp);
 	intel_dp_set_max_sink_lane_count(intel_dp);
 
-	intel_dp_set_common_rates(intel_dp);
-	intel_dp_reset_max_link_params(intel_dp);
-
 	/* Read the eDP DSC DPCD registers */
 	if (DISPLAY_VER(dev_priv) >= 10)
 		intel_dp_get_dsc_sink_cap(intel_dp);
@@ -5315,7 +5331,8 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 			      IS_ERR(edid) ? NULL : edid);
 
 	intel_panel_add_edid_fixed_modes(intel_connector,
-					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE);
+					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE,
+					 intel_vrr_is_capable(intel_connector));
 
 	/* MSO requires information from the EDID */
 	intel_edp_mso_init(intel_dp);
@@ -5439,11 +5456,8 @@ intel_dp_init_connector(struct intel_digital_port *dig_port,
 		type = DRM_MODE_CONNECTOR_DisplayPort;
 	}
 
-	intel_dp_set_source_rates(intel_dp);
 	intel_dp_set_default_sink_rates(intel_dp);
 	intel_dp_set_default_max_sink_lane_count(intel_dp);
-	intel_dp_set_common_rates(intel_dp);
-	intel_dp_reset_max_link_params(intel_dp);
 
 	if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
 		intel_dp->pps.active_pipe = vlv_active_pipe(intel_dp);
@@ -5471,15 +5485,18 @@ intel_dp_init_connector(struct intel_digital_port *dig_port,
 	else
 		intel_connector->get_hw_state = intel_connector_get_hw_state;
 
+	if (!intel_edp_init_connector(intel_dp, intel_connector)) {
+		intel_dp_aux_fini(intel_dp);
+		goto fail;
+	}
+
+	intel_dp_set_source_rates(intel_dp);
+	intel_dp_set_common_rates(intel_dp);
+	intel_dp_reset_max_link_params(intel_dp);
+
 	/* init MST on ports that can support it */
 	intel_dp_mst_encoder_init(dig_port,
 				  intel_connector->base.base.id);
-
-	if (!intel_edp_init_connector(intel_dp, intel_connector)) {
-		intel_dp_aux_fini(intel_dp);
-		intel_dp_mst_encoder_cleanup(dig_port);
-		goto fail;
-	}
 
 	intel_dp_add_properties(intel_dp, connector);
 

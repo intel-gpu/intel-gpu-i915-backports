@@ -38,7 +38,7 @@ static inline void write_seqcount_t_invalidate(seqcount_t *s)
         s->sequence+=2;
 }
 
-static inline unsigned __seqcount_sequence(const seqcount_mutex_t *s)
+static inline unsigned seqprop_sequence(const seqcount_mutex_t *s)
 {
         unsigned seq = READ_ONCE(s->seqcount.sequence);
         bool preemptible = true;

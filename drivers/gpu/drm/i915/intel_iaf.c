@@ -106,7 +106,7 @@ static struct iaf_pdata *init_pd(struct drm_i915_private *i915)
 	pd->index = i915->intel_iaf.index & 0xFFFF;
 	pd->sd_cnt = i915->remote_tiles + 1;
 	pd->socket_id = i915->intel_iaf.socket_id;
-	pd->slot = PCI_SLOT(i915->drm.pdev->devfn);
+	pd->slot = PCI_SLOT(to_pci_dev(i915->drm.dev)->devfn);
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	pd->resources = NULL;
@@ -278,7 +278,7 @@ static bool iaf_power_enabled(struct drm_i915_private *i915)
 		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, PCODE_MBOX_CD_STATUS) |
 		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, 0);
 	u32 val = 0;
-	int err = snb_pcode_read(i915, mbox, &val, NULL);
+	int err = snb_pcode_read(&i915->uncore, mbox, &val, NULL);
 
 	if (err)
 		return false;
@@ -419,7 +419,7 @@ static void intel_iaf_release_dev(struct device *dev)
  */
 void intel_iaf_init_aux(struct drm_i915_private *i915)
 {
-	struct device *dev = &i915->drm.pdev->dev;
+	struct device *dev = &to_pci_dev(i915->drm.dev)->dev;
 	struct resource *res = NULL;
 	struct iaf_pdata *pd;
 	int err = -ENOMEM;
@@ -487,7 +487,7 @@ fail:
  */
 void intel_iaf_init_mfd(struct drm_i915_private *i915)
 {
-	struct device *dev = &i915->drm.pdev->dev;
+	struct device *dev = &to_pci_dev(i915->drm.dev)->dev;
 	struct resource *res = NULL;
 	struct mfd_cell fcell = {};
 	struct iaf_pdata *pd;

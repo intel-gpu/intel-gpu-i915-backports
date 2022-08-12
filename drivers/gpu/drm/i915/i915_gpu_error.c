@@ -627,24 +627,22 @@ static void error_print_engine(struct drm_i915_error_state_buf *m,
 		err_printf(m, "  BB_STATE: 0x%08x\n", ee->bbstate);
 		err_printf(m, "  INSTPS: 0x%08x\n", ee->instps);
 	}
-	if (IS_PONTEVECCHIO(m->i915)) {
-		err_printf(m, "  CMD_CCTL: 0x%08x\n", ee->cmd_cctl);
-		err_printf(m, "  CSCMDOP: 0x%08x\n", ee->cscmdop);
-		err_printf(m, "  CTX_SR_CTL: 0x%08x\n", ee->ctx_sr_ctl);
-		err_printf(m, "  DMA_FADDR_HI: 0x%08x\n", ee->dma_faddr_hi);
-		err_printf(m, "  DMA_FADDR_LO: 0x%08x\n", ee->dma_faddr_lo);
-	}
 	err_printf(m, "  INSTPM: 0x%08x\n", ee->instpm);
-	err_printf(m, "  NOPID: 0x%08x\n", ee->nopid);
-	err_printf(m, "  EXCC: 0x%08x\n", ee->excc);
 	err_printf(m, "  FADDR: 0x%08x %08x\n", upper_32_bits(ee->faddr),
 		   lower_32_bits(ee->faddr));
 	if (GRAPHICS_VER(m->i915) >= 6) {
 		err_printf(m, "  RC PSMI: 0x%08x\n", ee->rc_psmi);
 		err_printf(m, "  FAULT_REG: 0x%08x\n", ee->fault_reg);
 	}
-	if (GRAPHICS_VER(m->i915) >= 12)
-		err_printf(m, "  COMP_CTX0_TRTT_CR: 0x%08x\n", ee->comp_ctx0_trtt_cr);
+	if (GRAPHICS_VER(m->i915) >= 11) {
+		err_printf(m, "  NOPID: 0x%08x\n", ee->nopid);
+		err_printf(m, "  EXCC: 0x%08x\n", ee->excc);
+		err_printf(m, "  CMD_CCTL: 0x%08x\n", ee->cmd_cctl);
+		err_printf(m, "  CSCMDOP: 0x%08x\n", ee->cscmdop);
+		err_printf(m, "  CTX_SR_CTL: 0x%08x\n", ee->ctx_sr_ctl);
+		err_printf(m, "  DMA_FADDR_HI: 0x%08x\n", ee->dma_faddr_hi);
+		err_printf(m, "  DMA_FADDR_LO: 0x%08x\n", ee->dma_faddr_lo);
+	}
 	if (HAS_PPGTT(m->i915)) {
 		err_printf(m, "  GFX_MODE: 0x%08x\n", ee->vm_info.gfx_mode);
 
@@ -836,7 +834,6 @@ static void err_print_gt_global(struct drm_i915_error_state_buf *m,
 				struct intel_gt_coredump *gt)
 {
 	err_printf(m, "FORCEWAKE: 0x%08x\n", gt->forcewake);
-	err_printf(m, "ROW_INSTDONE: 0x%08x\n", gt->row_instdone);
 
 	if (IS_GRAPHICS_VER(m->i915, 6, 11)) {
 		err_printf(m, "ERROR: 0x%08x\n", gt->error);
@@ -1291,7 +1288,9 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 
 			mutex_lock(&ggtt->error_mutex);
 			ggtt->vm.insert_page(&ggtt->vm, dma, slot,
-					     I915_CACHE_NONE, 0);
+					     i915_gem_get_pat_index(gt->i915,
+							I915_CACHE_NONE),
+					     0);
 			mb();
 
 			s = io_mapping_map_wc(&ggtt->iomap, slot, PAGE_SIZE);
@@ -1445,20 +1444,20 @@ static void engine_record_registers(struct intel_engine_coredump *ee)
 		ee->ipehr = ENGINE_READ(engine, IPEHR);
 	}
 
-	if (IS_PONTEVECCHIO(i915)) {
+	if (GRAPHICS_VER(i915) >= 11) {
 		ee->cmd_cctl = ENGINE_READ(engine, RING_CMD_CCTL);
 		ee->cscmdop = ENGINE_READ(engine, RING_CSCMDOP);
 		ee->ctx_sr_ctl = ENGINE_READ(engine, RING_CTX_SR_CTL);
 		ee->dma_faddr_hi = ENGINE_READ(engine, RING_DMA_FADD_UDW);
 		ee->dma_faddr_lo = ENGINE_READ(engine, RING_DMA_FADD);
+		ee->nopid = ENGINE_READ(engine, RING_NOPID);
+		ee->excc = ENGINE_READ(engine, RING_EXCC);
 	}
 
 	intel_engine_get_instdone(engine, &ee->instdone);
 
 	ee->instpm = ENGINE_READ(engine, RING_INSTPM);
-	ee->nopid = ENGINE_READ(engine, RING_NOPID);
 	ee->acthd = intel_engine_get_active_head(engine);
-	ee->excc = ENGINE_READ(engine, RING_EXCC);
 	ee->start = ENGINE_READ(engine, RING_START);
 	ee->head = ENGINE_READ(engine, RING_HEAD);
 	ee->tail = ENGINE_READ(engine, RING_TAIL);
@@ -2225,15 +2224,6 @@ static void gt_record_global_regs(struct intel_gt_coredump *gt)
 		}
 	}
 
-	if (IS_PONTEVECCHIO(i915)) {
-		if (intel_gt_has_eus(gt->_gt))
-			gt->row_instdone =
-				intel_uncore_read(uncore, PVC_ROW_INSTDONE);
-	} else {
-		gt->row_instdone =
-			intel_uncore_read(uncore, GEN7_ROW_INSTDONE);
-	}
-
 	/* 3: Feature specific registers */
 	if (IS_GRAPHICS_VER(i915, 6, 7)) {
 		gt->gam_ecochk = intel_uncore_read(uncore, GAM_ECOCHK);
@@ -2648,7 +2638,8 @@ int i915_uuid_register_ioctl(struct drm_device *dev, void *data,
 		if (ret)
 			goto err;
 	}
-	i915_debugger_wait_on_discovery(to_i915(dev));
+
+	i915_debugger_wait_on_discovery(to_i915(dev), client);
 
 	xa_lock(&client->uuids_xa);
 	uuid_res_base = xa_load(&client->uuids_xa, uuid_arg->uuid_class);
@@ -2711,7 +2702,8 @@ int i915_uuid_unregister_ioctl(struct drm_device *dev, void *data,
 
 	if (uuid_arg->handle >= PRELIM_I915_UUID_CLASS_MAX_RESERVED)
 		return -EINVAL;
-	i915_debugger_wait_on_discovery(to_i915(dev));
+
+	i915_debugger_wait_on_discovery(to_i915(dev), client);
 
 	xa_lock(&client->uuids_xa);
 	uuid_res = xa_load(&client->uuids_xa, uuid_arg->handle);

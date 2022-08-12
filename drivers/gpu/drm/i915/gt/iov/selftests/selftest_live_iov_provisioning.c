@@ -35,7 +35,7 @@ static int pf_guc_ignores_unknown_policy_key(void *arg)
 
 	ret = guc_update_policy_klv32(guc, GUC_KLV_VGT_POLICY_DOES_NOT_EXIST_KEY, 0);
 	if (ret != -ENOKEY) {
-		IOV_SELFTEST_ERROR(iov, "GuC didn't ignore example key, %d\n", ret);
+		IOV_SELFTEST_ERROR(iov, "GuC didn't ignore unknown key, %d\n", ret);
 		return 0; /* XXX firmware bug GUC-4317 */
 		return -EINVAL;
 	}
@@ -106,6 +106,101 @@ static int pf_guc_parses_flexible_policy_keys(void *arg)
 
 		if (!IS_ENABLED(CPTCFG_DRM_I915_SELFTEST_BROKEN))
 			len += i915_prandom_u32_max_state(len, &prng);
+	}
+
+	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
+	return result;
+}
+
+static int pf_guc_accepts_duplicated_policy_keys(void *arg)
+{
+	I915_RND_STATE(prng);
+	struct intel_iov *iov = arg;
+	struct intel_guc *guc = iov_to_guc(iov);
+	struct i915_vma *vma;
+	unsigned int n, num_klvs = 1 + i915_prandom_u32_max_state(16, &prng);
+	unsigned int klv_size = GUC_KLV_LEN_MIN + GUC_KLV_VGT_POLICY_EXAMPLE_LEN;
+	unsigned int blob_size = sizeof(u32) * klv_size * num_klvs;
+	u32 *blob;
+	u32 *klvs;
+	u64 addr;
+	int ret;
+
+	ret = intel_guc_allocate_and_map_vma(guc, blob_size, &vma, (void **)&blob);
+	if (unlikely(ret))
+		return ret;
+	addr = intel_guc_ggtt_offset(guc, vma);
+	klvs = blob;
+
+	IOV_DEBUG(iov, "num_klvs=%u\n", num_klvs);
+	for (n = 0; n < num_klvs; n++) {
+		*klvs++ = MAKE_GUC_KLV(VGT_POLICY_EXAMPLE);
+		klvs += GUC_KLV_VGT_POLICY_EXAMPLE_LEN;
+	}
+	pf_verify_config_klvs(iov, blob, klvs - blob);
+
+	ret = guc_try_update_policy(guc, addr, klvs - blob);
+	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
+
+	if (ret != num_klvs) {
+		IOV_SELFTEST_ERROR(iov, "GuC didn't accept duplicated KLV (n=%u), %d\n",
+				   num_klvs, ret);
+		return -EPROTO;
+	}
+
+	return 0;
+}
+
+static int pf_guc_parses_mixed_policy_keys(void *arg)
+{
+	I915_RND_STATE(prng);
+	struct intel_iov *iov = arg;
+	struct intel_guc *guc = iov_to_guc(iov);
+	struct i915_vma *vma;
+	unsigned int n, num_klvs = 2 + i915_prandom_u32_max_state(16, &prng);
+	unsigned int klv_size = GUC_KLV_LEN_MIN + GUC_KLV_VGT_POLICY_EXAMPLE_LEN;
+	unsigned int other_klv_size = GUC_KLV_LEN_MIN + GUC_KLV_VGT_POLICY_DOES_NOT_EXIST_LEN;
+	unsigned int blob_size = sizeof(u32) * max(klv_size, other_klv_size) * num_klvs;
+	unsigned int p, patterns[] = {
+		/* make sure to test with first known KLV and the opposite */
+		[0] = GENMASK(num_klvs - 1, 0) & 0x5555,
+		[1] = GENMASK(num_klvs - 1, 0) & ~patterns[0],
+		[2] = i915_prandom_u32_max_state(GENMASK(num_klvs - 1, 0), &prng),
+	};
+	u32 *blob;
+	u32 *klvs;
+	u64 addr;
+	int ret, result = 0;
+
+	ret = intel_guc_allocate_and_map_vma(guc, blob_size, &vma, (void **)&blob);
+	if (unlikely(ret))
+		return ret;
+	addr = intel_guc_ggtt_offset(guc, vma);
+
+	for (p = 0; p < ARRAY_SIZE(patterns); p++) {
+		unsigned int pattern = patterns[p];
+
+		klvs = blob;
+		for (n = 0; n < num_klvs; n++) {
+			if (pattern & BIT(n)) {
+				*klvs++ = MAKE_GUC_KLV(VGT_POLICY_EXAMPLE);
+				klvs += GUC_KLV_VGT_POLICY_EXAMPLE_LEN;
+			} else {
+				*klvs++ = MAKE_GUC_KLV(VGT_POLICY_DOES_NOT_EXIST);
+				klvs += GUC_KLV_VGT_POLICY_DOES_NOT_EXIST_LEN;
+			}
+		}
+		pf_verify_config_klvs(iov, blob, klvs - blob);
+
+		ret = guc_try_update_policy(guc, addr, klvs - blob);
+
+		if (ret != hweight32(pattern)) {
+			IOV_SELFTEST_ERROR(iov, "GuC didn't parse mixed KLVs (%u/%u p=%#x), %d\n",
+					   hweight32(pattern), num_klvs, pattern, ret);
+			continue; /* XXX firmware bug GUC-4495 */
+			result = -EPROTO;
+			break;
+		}
 	}
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
@@ -545,7 +640,7 @@ static int pf_guc_accepts_extended_update_config_hxg(void *arg)
 	addr = intel_guc_ggtt_offset(guc, vma);
 
 	klvs = blob;
-	*klvs++ = MAKE_GUC_KLV(VGT_POLICY_EXAMPLE);
+	*klvs++ = MAKE_GUC_KLV(VF_CFG_EXAMPLE);
 	*klvs++ = 0;
 	klvs_size = klvs - blob;
 
@@ -559,7 +654,7 @@ static int pf_guc_accepts_extended_update_config_hxg(void *arg)
 
 		ret = __guc_try_update_config(guc, vfid, addr, klvs_size, len);
 		if (ret != 1) {
-			IOV_SELFTEST_ERROR(iov, "GuC didn't accepts extended HXG len=%u, %d\n",
+			IOV_SELFTEST_ERROR(iov, "GuC didn't accept extended HXG len=%u, %d\n",
 					   len, ret);
 			result = -EPROTO;
 			break;
@@ -928,6 +1023,8 @@ int selftest_live_iov_provisioning(struct drm_i915_private *i915)
 		SUBTEST(pf_guc_accepts_example_policy_key),
 		SUBTEST(pf_guc_ignores_unknown_policy_key),
 		SUBTEST(pf_guc_parses_flexible_policy_keys),
+		SUBTEST(pf_guc_accepts_duplicated_policy_keys),
+		SUBTEST(pf_guc_parses_mixed_policy_keys),
 		SUBTEST(pf_guc_rejects_invalid_update_policy_params),
 		SUBTEST(pf_guc_rejects_incomplete_update_policy_hxg),
 		SUBTEST(pf_guc_accepts_extended_update_policy_hxg),

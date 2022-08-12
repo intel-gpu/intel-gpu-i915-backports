@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2021 Intel Corporation.
+ * Copyright(c) 2019 - 2022 Intel Corporation.
  */
 
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
-#include <linux/debugfs.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/timekeeping.h>
 
-#include "diagnostics.h"
 #include "fw.h"
 #include "port.h"
+#include "port_diag.h"
 #include "ops.h"
 #include "routing_debug.h"
 #include "routing_engine.h"
@@ -43,7 +42,7 @@ static void start_linkup_timer(struct fsubdev *sd, struct fport *p)
 	mutex_unlock(&sd->pm_work_lock);
 }
 
-static s64 ms_elapsed_since_boot(void)
+s64 ms_elapsed_since_boot(void)
 {
 	return ktime_to_ms(ktime_get_boottime());
 }
@@ -61,89 +60,10 @@ static const char *state_name(enum pm_port_state s)
 	return "UNKNOWN";
 }
 
-static const char *fw_log_state_name(u8 s)
+const char *fw_log_state_name(u8 s)
 {
 	static const char * const names[] = { "NOP", "DOWN", "INIT", "ARMED",
 					      "ACTIVE" };
-
-	if (s >= ARRAY_SIZE(names))
-		return "UNKNOWN";
-	else
-		return names[s];
-}
-
-static const char *port_health_name(enum fport_health s)
-{
-	switch (s) {
-	case FPORT_HEALTH_OFF:      return "OFF";
-	case FPORT_HEALTH_FAILED:   return "FAILED";
-	case FPORT_HEALTH_DEGRADED: return "DEGRADED";
-	case FPORT_HEALTH_HEALTHY:  return "HEALTHY";
-	}
-
-	return "UNKNOWN";
-}
-
-static const char *fw_phys_state_name(u8 s)
-{
-	static const char * const names[] = { "NOP", "UNKNOWN", "POLLING", "DISABLED", "TRAINING",
-					      "LINKUP", "LINK ERROR RECOVERY", "UNKNOWN", "UNKNOWN",
-					      "OFFLINE", "UNKNOWN", "TEST" };
-
-	if (s >= ARRAY_SIZE(names))
-		return "UNKNOWN";
-	else
-		return names[s];
-}
-
-static const char *link_width_name(u8 s)
-{
-	static const char * const names[] = { "N/A", "1X", "2X", "N/A", "3X", "N/A", "N/A", "N/A",
-					      "4X" };
-
-	if (s >= ARRAY_SIZE(names))
-		return "N/A";
-	else
-		return names[s];
-}
-
-static const char *link_speed_name(u8 s)
-{
-	static const char * const names[] = { "N/A", "12G", "25G", "N/A", "53G", "N/A", "N/A",
-					      "N/A", "90G" };
-
-	if (s >= ARRAY_SIZE(names))
-		return "N/A";
-	else
-		return names[s];
-}
-
-static const char *crc_mode_name(u8 s)
-{
-	static const char * const names[] = { "16b", "14b", "48b", "pLn" };
-
-	if (s >= ARRAY_SIZE(names))
-		return "N/A";
-	else
-		return names[s];
-}
-
-static const char *fec_mode_name(u8 s)
-{
-	static const char * const names[] = { "NONE",
-					      "F132",
-					      "F528",
-					      "UNKNOWN" };
-	if (s >= ARRAY_SIZE(names))
-		return "N/A";
-	else
-		return names[s];
-}
-
-static const char *port_type_name(u8 s)
-{
-	static const char * const names[] = { "UNKNOWN", "DISCONNECTED", "FIXED", "VARIABLE",
-					      "STANDARD", "SI_PHOTONICS" };
 
 	if (s >= ARRAY_SIZE(names))
 		return "UNKNOWN";
@@ -213,7 +133,7 @@ MODULE_PARM_DESC(enable_loopback, "Enable loopback fabric configurations (defaul
 /*
  * This wakes the PM thread
  */
-static int signal_pm_thread(struct fsubdev *sd, enum pm_trigger_reasons event)
+int signal_pm_thread(struct fsubdev *sd, enum pm_trigger_reasons event)
 {
 	int err = 0;
 
@@ -1489,539 +1409,6 @@ static void linkup_timer_expired(struct timer_list *timer)
 	queue_work(system_unbound_wq, &p->sd->rescan_work);
 }
 
-/*
- * port_show debugfs functions
- */
-
-#define PORT_SHOW_FILE_NAME "port_show"
-#define PORT_SHOW_BUF_SIZE 1024
-
-enum port_show_csr_rsp_idx {
-	TP_PRF_XMIT_PKTS_OFFSET_IDX,
-	O_FPC_PORTRCV_PKT_CNT_IDX,
-	O_LCB_STS_RX_CRC_FEC_MODE_IDX,
-	O_LCB_ERR_INFO_SEQ_CRC_CNT_IDX,
-	O_LCB_ERR_INFO_REINIT_FROM_PEER_CNT_IDX,
-	O_LCB_ERR_INFO_TX_REPLAY_CNT_IDX,
-	O_LCB_ERR_INFO_RX_REPLAY_CNT_IDX,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_1,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_2,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_3,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_4,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_5,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_6,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_7,
-	O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_8,
-
-	_RSP_IDX_COUNT,
-};
-
-struct port_show_query_fw_rsp {
-	DECLARE_MBDB_OP_PORT_STATUS_GET_RSP(port_status_op, _RSP_IDX_COUNT);
-	DECLARE_MBDB_OP_PORTINFO(portinfo_op, 1);
-};
-
-static int port_show_query_fw(struct fsubdev *sd, u8 lpn, struct port_show_query_fw_rsp *rsp)
-{
-	static const struct mbdb_op_csr_range port_show_csr_ranges_b0[] = {
-		{ .offset = TP_PRF_XMIT_PKTS_OFFSET, .num_csrs = 1, },
-		{ .offset = O_FPC_PORTRCV_PKT_CNT, .num_csrs = 1, },
-		{ .offset = O_LCB_STS_RX_CRC_FEC_MODE, .num_csrs = 1, },
-		{ .offset = O_LCB_ERR_INFO_SEQ_CRC_CNT, .num_csrs = 1, },
-		{ .offset = O_LCB_ERR_INFO_REINIT_FROM_PEER_CNT, .num_csrs = 1, },
-		{ .offset = O_LCB_ERR_INFO_TX_REPLAY_CNT, .num_csrs = 2, },
-		{ .offset = O_LCB_ERR_INFO_FEC_CERR_CNT_1, .num_csrs = 8, }
-	};
-	const struct mbdb_op_csr_range *csr_ranges = port_show_csr_ranges_b0;
-	u8 num_csr_ranges = ARRAY_SIZE(port_show_csr_ranges_b0);
-
-	if (ops_port_status_get(sd, lpn, num_csr_ranges, csr_ranges,
-				&rsp->port_status_op))
-		return -EINVAL;
-
-	if (ops_portinfo_get(sd, 1U << lpn, &rsp->portinfo_op))
-		return -EINVAL;
-
-	signal_pm_thread(sd, RESCAN_EVENT);
-
-	return 0;
-}
-
-struct port_show_stats {
-	u64 rx_fec_correction_count;
-	u64 error_recovery_count;
-	u64 tx_packet_count;
-	u64 rx_packet_count;
-	u64 tx_replay_count;
-	u64 rx_replay_count;
-	u64 neighbor_guid;
-	s64 linkup_ms;
-	struct fport_status status;
-	u32 link_down_count;
-	u8 lpn;
-	u8 port_type;
-	u8 log_state;
-	u8 phys_state;
-	u8 crc_mode;
-	u8 fec_mode;
-	u8 link_tx_width_active;
-	u8 link_rx_width_active;
-	u8 link_speed_active;
-	u8 lqi;
-	u8 neighbor_port_number;
-};
-
-static int port_show_get_stats(struct fsubdev *sd, u8 lpn, struct port_show_stats *stats)
-{
-	struct port_show_query_fw_rsp rsp = {};
-	struct portinfo *port_info = rsp.portinfo_op.per_portinfo;
-	u64 *regs = rsp.port_status_op.regs;
-
-	if (port_show_query_fw(sd, lpn, &rsp))
-		return -EINVAL;
-
-	if (get_fport_status(sd, lpn, &stats->status))
-		return -EINVAL;
-
-	stats->lpn = lpn;
-	stats->log_state = FIELD_GET(PS_PPS_PORT_STATE, port_info->port_state_port_physical_state);
-	stats->phys_state = FIELD_GET(PS_PPS_PHYSICAL_STATE,
-				      port_info->port_state_port_physical_state);
-	stats->port_type = port_info->port_type;
-
-	stats->link_down_count = port_info->link_down_count;
-	stats->lqi = FIELD_GET(OLDR_NN_LQI_LINK_QUALITY_INDICATOR, port_info->oldr_nn_lqi);
-
-	if (stats->log_state > IAF_FW_PORT_DOWN) {
-		stats->link_tx_width_active = port_info->link_width_downgrade_tx_active;
-		stats->link_rx_width_active = port_info->link_width_downgrade_rx_active;
-		stats->link_speed_active = port_info->link_speed_active;
-		stats->crc_mode = FIELD_GET(CRC_MODE, regs[O_LCB_STS_RX_CRC_FEC_MODE_IDX]);
-		if (stats->crc_mode > LINK_CRC_MODE_48B)
-			stats->crc_mode = LINK_CRC_MODE_PLN;
-		stats->fec_mode = FIELD_GET(FEC_MODE, regs[O_LCB_STS_RX_CRC_FEC_MODE_IDX]);
-		if (stats->fec_mode > LINK_FEC_MODE_UNKNOWN)
-			stats->fec_mode = LINK_FEC_MODE_UNKNOWN;
-		stats->neighbor_guid = port_info->neighbor_guid;
-		stats->neighbor_port_number = port_info->neighbor_port_number;
-		if (stats->status.linkup_since)
-			stats->linkup_ms = ms_elapsed_since_boot() - stats->status.linkup_since;
-		else
-			stats->linkup_ms = 0;
-	} else {
-		stats->link_tx_width_active = 0xFF;
-		stats->link_rx_width_active = 0xFF;
-		stats->link_speed_active = 0xFF;
-		stats->crc_mode = 0xFF;
-		stats->fec_mode = 0xFF;
-		stats->neighbor_guid = 0;
-		stats->neighbor_port_number = 0xFF;
-		stats->linkup_ms = 0;
-	}
-
-	stats->tx_packet_count = regs[TP_PRF_XMIT_PKTS_OFFSET_IDX];
-	stats->rx_packet_count = regs[O_FPC_PORTRCV_PKT_CNT_IDX];
-	stats->error_recovery_count = regs[O_LCB_ERR_INFO_SEQ_CRC_CNT_IDX] +
-				      regs[O_LCB_ERR_INFO_REINIT_FROM_PEER_CNT_IDX];
-	stats->tx_replay_count = regs[O_LCB_ERR_INFO_TX_REPLAY_CNT_IDX];
-	stats->rx_replay_count = regs[O_LCB_ERR_INFO_RX_REPLAY_CNT_IDX];
-	stats->rx_fec_correction_count = regs[O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_1] +
-					 regs[O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_2];
-
-	if (stats->fec_mode == LINK_FEC_MODE_F528) {
-		int i;
-
-		for (i = O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_3;
-		     i <= O_LCB_ERR_INFO_FEC_CERR_CNT_IDX_8; i++)
-			stats->rx_fec_correction_count += regs[i];
-	}
-
-	return 0;
-}
-
-static size_t port_show_print_stats(struct port_show_stats *stats, char *buf)
-{
-	size_t buf_offset = 0;
-
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %u\n", "Port Number",
-		   stats->lpn);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "FW Phys State",
-		   fw_phys_state_name(stats->phys_state));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "FW Link State",
-		   fw_log_state_name(stats->log_state));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Port Health",
-		   port_health_name(stats->status.health));
-
-	if (stats->status.health == FPORT_HEALTH_FAILED) {
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Failed",
-			   test_bit(FPORT_ERROR_FAILED, stats->status.errors) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Isolated",
-			   test_bit(FPORT_ERROR_ISOLATED, stats->status.errors) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Flapping",
-			   test_bit(FPORT_ERROR_FLAPPING, stats->status.errors) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Link Down",
-			   test_bit(FPORT_ERROR_LINK_DOWN, stats->status.errors) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Did Not Train",
-			   test_bit(FPORT_ERROR_DID_NOT_TRAIN, stats->status.errors) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n",
-			   "Port Error Loopback",
-			   test_bit(FPORT_ERROR_LOOPBACK, stats->status.errors) ? "Y" : "N");
-	}
-
-	if (stats->status.health == FPORT_HEALTH_DEGRADED) {
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Port Issue LQI",
-			   test_bit(FPORT_ISSUE_LQI, stats->status.issues) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Port Issue LWD",
-			   test_bit(FPORT_ISSUE_LWD, stats->status.issues) ? "Y" : "N");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Port Issue RATE",
-			   test_bit(FPORT_ISSUE_RATE, stats->status.issues) ? "Y" : "N");
-	}
-
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Tx Width",
-		   link_width_name(stats->link_tx_width_active));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Rx Width",
-		   link_width_name(stats->link_rx_width_active));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Link Speed",
-		   link_speed_name(stats->link_speed_active));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "CRC Mode",
-		   crc_mode_name(stats->crc_mode));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "FEC Mode",
-		   fec_mode_name(stats->fec_mode));
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "TX Packet Count",
-		   stats->tx_packet_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "RX Packet Count",
-		   stats->rx_packet_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %u\n", "Link Down Count",
-		   stats->link_down_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "Error Recovery Count",
-		   stats->error_recovery_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "TX Replays",
-		   stats->tx_replay_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "RX Replays",
-		   stats->rx_replay_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %llu\n", "RX FEC Corr Count",
-		   stats->rx_fec_correction_count);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %u\n", "Link Quality",
-		   stats->lqi);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %s\n", "Port Type",
-		   port_type_name(stats->port_type));
-	if (stats->neighbor_port_number != 0xFF) {
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : 0x%0llx\n",
-			   "Neighbor GUID", stats->neighbor_guid);
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %u\n",
-			   "Neighbor Port Number", stats->neighbor_port_number);
-	} else {
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : N/A\n", "Neighbor GUID");
-		print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : N/A\n",
-			   "Neighbor Port Number");
-	}
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "%-24s : %lld\n", "Link Up Milliseconds",
-		   stats->linkup_ms);
-	print_diag(buf, &buf_offset, PORT_SHOW_BUF_SIZE, "\n");
-
-	return buf_offset;
-}
-
-static int port_show_open(struct inode *inode, struct file *file)
-{
-	struct fport *port = inode->i_private;
-	struct port_show_stats stats;
-	struct port_show_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[PORT_SHOW_BUF_SIZE];
-	} *info;
-
-	if (!port)
-		return -EINVAL;
-
-	if (port_show_get_stats(port->sd, port->lpn, &stats))
-		return -EINVAL;
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info)
-		return -ENOMEM;
-
-	info->blob.data = info->buf;
-	info->blob.size = port_show_print_stats(&stats, info->blob.data);
-	file->private_data = info;
-
-	return 0;
-}
-
-static const struct file_operations port_show_fops = {
-	.owner = THIS_MODULE,
-	.open = port_show_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
-/*
- * bridge port register debugfs functions
- */
-
-#define BRG_FILE_NAME "stats_brg"
-#define RTP_FILE_NAME "stats_rtp"
-#define TPM_FILE_NAME "stats_tpm"
-#define RPM_FILE_NAME "stats_rpm"
-
-#define STATS_BUF_SIZE (PAGE_SIZE * 3)
-
-#define BRG_PERF_COUNT (((BRG_PERF_END - BRG_PERF_OFFSET) / sizeof(u64)) + 1)
-
-#define BRG_ERR_COUNT (((BRG_ERR_END - BRG_ERR_OFFSET) / sizeof(u64)) + 1)
-
-#define BRG_1_ERR_COUNT (((BRG_1_ERR_END - BRG_1_ERR_OFFSET) / sizeof(u64)) + 1)
-#define BRG_2_ERR_COUNT (((BRG_2_ERR_END - BRG_2_ERR_OFFSET) / sizeof(u64)) + 1)
-#define BRG_3_ERR_COUNT (((BRG_3_ERR_END - BRG_3_ERR_OFFSET) / sizeof(u64)) + 1)
-
-#define BRG_RTP_ERR_COUNT (((BRG_RTP_ERR_END - BRG_RTP_ERR_OFFSET) / sizeof(u64)) + 1)
-#define BRG_RTP_STS_COUNT_1 (((BRG_RTP_STS_END_1 - BRG_RTP_STS_START_1) / sizeof(u64)) + 1)
-#define BRG_RTP_STS_COUNT_2 (((BRG_RTP_STS_END_2 - BRG_RTP_STS_START_2) / sizeof(u64)) + 1)
-
-#define TPM_ERR_COUNT (((TPM_ERR_END - TPM_ERR_START) / sizeof(u64)) + 1)
-#define TPM_ERR_MBE_COUNT (((TPM_ERR_MBE_END - TPM_ERR_MBE_START) / sizeof(u64)) + 1)
-#define TPM_PRF_COUNT (((TPM_PRF_END - TPM_PRF_START) / sizeof(u64)) + 1)
-
-#define RPM_INQ_PORT0_ERR_COUNT \
-	(((RPM_INQ_PORT0_ERR_END - RPM_INQ_PORT0_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT1_ERR_COUNT \
-	(((RPM_INQ_PORT1_ERR_END - RPM_INQ_PORT1_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT2_ERR_COUNT \
-	(((RPM_INQ_PORT2_ERR_END - RPM_INQ_PORT2_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT3_ERR_COUNT \
-	(((RPM_INQ_PORT3_ERR_END - RPM_INQ_PORT3_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT4_ERR_COUNT \
-	(((RPM_INQ_PORT4_ERR_END - RPM_INQ_PORT4_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT5_ERR_COUNT \
-	(((RPM_INQ_PORT5_ERR_END - RPM_INQ_PORT5_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT6_ERR_COUNT \
-	(((RPM_INQ_PORT6_ERR_END - RPM_INQ_PORT6_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_PORT7_ERR_COUNT \
-	(((RPM_INQ_PORT7_ERR_END - RPM_INQ_PORT7_ERR_START) / sizeof(u64)) + 1)
-#define RPM_INQ_FLSTOR_ERR_COUNT \
-	(((RPM_INQ_FLSTOR_ERR_END - RPM_INQ_FLSTOR_ERR_START) / sizeof(u64)) + 1)
-
-#define RPM_PORT_STS_COUNT (((RPM_PORT_STS_END - RPM_PORT_STS_START) / sizeof(u64)) + 1)
-
-#define RPM_SBE_ERR_COUNTERS_COUNT \
-	(((RPM_SBE_ERR_COUNTERS_END - RPM_SBE_ERR_COUNTERS_START) / sizeof(u64)) + 1)
-#define RPM_MBE_ERR_COUNTERS_COUNT \
-	(((RPM_MBE_ERR_COUNTERS_END - RPM_MBE_ERR_COUNTERS_START) / sizeof(u64)) + 1)
-
-#define RPM_ARB_PERF_COUNTERS_COUNT \
-	(((RPM_ARB_PERF_COUNTERS_END - RPM_ARB_PERF_COUNTERS_START) / sizeof(u64)) + 1)
-
-#define RPM_PORT_ERR_COUNTERS_COUNT \
-	(((RPM_PORT_ERR_COUNTERS_END - RPM_PORT_ERR_COUNTERS_START) / sizeof(u64)) + 1)
-
-#define RPM_PERF_COUNTERS_COUNT \
-	(((RPM_PERF_COUNTERS_END - RPM_PERF_COUNTERS_START) / sizeof(u64)) + 1)
-
-static const char * const time_names[] = {
-	"NO_TIME",
-	"BRG_TIME",
-	"RTP_TIME",
-	"TPM_TIME",
-	"RPM_PORT_ERRS_TIME",
-	"RPM_TIME",
-};
-
-enum time_type {
-	NO_TIME,
-	BRG_TIME,
-	RTP_TIME,
-	TPM_TIME,
-	RPM_PORT_ERRS_TIME,
-	RPM_TIME,
-};
-
-struct regs_data {
-	DECLARE_MBDB_OP_PORT_STATUS_GET_RSP(regs_op, MAX_CSRS);
-} __packed;
-
-static struct mbdb_op_csr_range brg_csr_ranges[] = {
-	{ .offset = BRG_PERF_OFFSET, .num_csrs = BRG_PERF_COUNT, },
-	{ .offset = BRG_ERR_OFFSET, .num_csrs = BRG_ERR_COUNT, },
-	{ .offset = BRG_1_ERR_OFFSET, .num_csrs = BRG_1_ERR_COUNT, },
-	{ .offset = BRG_2_ERR_OFFSET, .num_csrs = BRG_2_ERR_COUNT, },
-	{ .offset = BRG_3_ERR_OFFSET, .num_csrs = BRG_3_ERR_COUNT, },
-};
-
-static struct mbdb_op_csr_range rtp_csr_ranges[] = {
-	{ .offset = BRG_RTP_ERR_OFFSET, .num_csrs = BRG_RTP_ERR_COUNT, },
-	{ .offset = BRG_RTP_STS_START_1, .num_csrs = BRG_RTP_STS_COUNT_1, },
-	{ .offset = BRG_RTP_STS_START_2, .num_csrs = BRG_RTP_STS_COUNT_2, },
-};
-
-static struct mbdb_op_csr_range tpm_csr_ranges[] = {
-	{ .offset = TPM_ERR_START, .num_csrs = TPM_ERR_COUNT, },
-	{ .offset = TPM_ERR_MBE_START, .num_csrs = TPM_ERR_MBE_COUNT, },
-	{ .offset = TPM_PRF_START, .num_csrs = TPM_PRF_COUNT, },
-};
-
-static struct mbdb_op_csr_range rpm_port_errs_csr_ranges[] = {
-	{ .offset = RPM_PORT_ERR_COUNTERS_START, .num_csrs = RPM_PORT_ERR_COUNTERS_COUNT, },
-};
-
-static struct mbdb_op_csr_range rpm_csr_ranges[] = {
-	{ .offset = RPM_INQ_PORT0_ERR_START, .num_csrs = RPM_INQ_PORT0_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT1_ERR_START, .num_csrs = RPM_INQ_PORT1_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT2_ERR_START, .num_csrs = RPM_INQ_PORT2_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT3_ERR_START, .num_csrs = RPM_INQ_PORT3_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT4_ERR_START, .num_csrs = RPM_INQ_PORT4_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT5_ERR_START, .num_csrs = RPM_INQ_PORT5_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT6_ERR_START, .num_csrs = RPM_INQ_PORT6_ERR_COUNT, },
-	{ .offset = RPM_INQ_PORT7_ERR_START, .num_csrs = RPM_INQ_PORT7_ERR_COUNT, },
-	{ .offset = RPM_INQ_FLSTOR_ERR_START, .num_csrs = RPM_INQ_FLSTOR_ERR_COUNT, },
-	{ .offset = RPM_SBE_ERR_COUNTERS_START, .num_csrs = RPM_SBE_ERR_COUNTERS_COUNT, },
-	{ .offset = RPM_MBE_ERR_COUNTERS_START, .num_csrs = RPM_MBE_ERR_COUNTERS_COUNT, },
-	{ .offset = RPM_ARB_PERF_COUNTERS_START, .num_csrs = RPM_ARB_PERF_COUNTERS_COUNT, },
-	{ .offset = RPM_PORT_STS_START, .num_csrs = RPM_PORT_STS_COUNT, },
-	{ .offset = RPM_PERF_COUNTERS_START, .num_csrs = RPM_PERF_COUNTERS_COUNT, },
-};
-
-static void regs_print_ranges(char *buf, size_t *buf_offset, struct mbdb_op_csr_range *csr_ranges,
-			      size_t csr_ranges_elements, struct regs_data *regs)
-{
-	size_t elem;
-	size_t i = 0;
-
-	for (elem = 0; elem < csr_ranges_elements; elem++) {
-		u32 addr = csr_ranges[elem].offset;
-		u32 end_addr = addr + (csr_ranges[elem].num_csrs * sizeof(u64));
-
-		while (addr < end_addr) {
-			print_diag(buf, buf_offset, STATS_BUF_SIZE, "0x%08x 0x%016llx\n",
-				   addr, regs->regs_op.regs[i++]);
-			addr += sizeof(u64);
-		}
-	}
-}
-
-static size_t regs_print(char *buf, size_t buf_offset, enum time_type time_name,
-			 size_t csr_ranges_sz, struct mbdb_op_csr_range *csr_ranges,
-			 struct regs_data *regs)
-{
-	print_diag(buf, &buf_offset, STATS_BUF_SIZE, "%-8s 0x%016llx\n", time_names[time_name],
-		   regs->regs_op.cp_free_run_rtc);
-
-	regs_print_ranges(buf, &buf_offset, csr_ranges, csr_ranges_sz, regs);
-
-	return buf_offset;
-}
-
-static struct regs_data *regs_query_data(struct fsubdev *sd, u8 lpn, size_t csr_ranges_sz,
-					 struct mbdb_op_csr_range *csr_ranges)
-{
-	struct regs_data *regs;
-
-	regs = kzalloc(sizeof(*regs), GFP_KERNEL);
-	if (!regs)
-		return NULL;
-
-	if (ops_port_status_get(sd, lpn, csr_ranges_sz, csr_ranges, &regs->regs_op)) {
-		kfree(regs);
-		return NULL;
-	}
-
-	return regs;
-}
-
-static int regs_open(struct inode *inode, struct file *file)
-{
-	struct fport *port = inode->i_private;
-	struct regs_info {
-		struct debugfs_blob_wrapper blob;
-		char buf[STATS_BUF_SIZE];
-	} *info;
-	struct mbdb_op_csr_range *csr_ranges[] = { NULL, NULL, NULL, };
-	enum time_type time_name[] = { NO_TIME, NO_TIME, NO_TIME, };
-	struct regs_data *regs[] = { NULL, NULL, NULL, };
-	struct dentry *dentry = F_DENTRY(file);
-	size_t csr_range_sz[] = { 0, 0, 0, };
-	int ret = 0;
-	int i;
-
-	if (!port)
-		return -EINVAL;
-
-	if (!strcmp(dentry->d_iname, BRG_FILE_NAME)) {
-		csr_ranges[0] = brg_csr_ranges;
-		csr_range_sz[0] = ARRAY_SIZE(brg_csr_ranges);
-		time_name[0] = BRG_TIME;
-	}
-
-	if (!strcmp(dentry->d_iname, RTP_FILE_NAME)) {
-		csr_ranges[0] = rtp_csr_ranges;
-		csr_range_sz[0] = ARRAY_SIZE(rtp_csr_ranges);
-		time_name[0] = RTP_TIME;
-	}
-
-	if (!strcmp(dentry->d_iname, TPM_FILE_NAME)) {
-		csr_ranges[0] = tpm_csr_ranges;
-		csr_range_sz[0] = ARRAY_SIZE(tpm_csr_ranges);
-		time_name[0] = TPM_TIME;
-	}
-
-	if (!strcmp(dentry->d_iname, RPM_FILE_NAME)) {
-		csr_ranges[0] = rpm_port_errs_csr_ranges;
-		csr_range_sz[0] = ARRAY_SIZE(rpm_port_errs_csr_ranges);
-		time_name[0] = RPM_PORT_ERRS_TIME;
-
-		csr_ranges[1] = rpm_csr_ranges;
-		csr_range_sz[1] = ARRAY_SIZE(rpm_csr_ranges);
-		time_name[1] = RPM_TIME;
-	}
-
-	for (i = 0; csr_ranges[i]; i++) {
-		regs[i] = regs_query_data(port->sd, port->lpn, csr_range_sz[i], csr_ranges[i]);
-		if (!regs[i]) {
-			ret = -EIO;
-			goto exit;
-		}
-	}
-
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
-	if (!info) {
-		ret = -ENOMEM;
-		goto exit;
-	}
-
-	info->blob.data = &info->buf;
-
-	print_diag(info->buf, &info->blob.size, STATS_BUF_SIZE, "%-8s 0x%08x\n", "FABRIC_ID",
-		   port->sd->fdev->fabric_id);
-	print_diag(info->buf, &info->blob.size, STATS_BUF_SIZE, "%-8s %-u\n", "TILE_NUMBER",
-		   sd_index(port->sd));
-	print_diag(info->buf, &info->blob.size, STATS_BUF_SIZE, "%-3s %-u\n", "LPN", port->lpn);
-
-	for (i = 0; regs[i]; i++)
-		info->blob.size = regs_print(info->buf, info->blob.size, time_name[i],
-					     csr_range_sz[i], csr_ranges[i], regs[i]);
-
-	file->private_data = info;
-
-exit:
-	for (i = 0; regs[i]; i++)
-		kfree(regs[i]);
-
-	return ret;
-}
-
-static const struct file_operations regs_fops = {
-	.owner = THIS_MODULE,
-	.open = regs_open,
-	.read = blob_read,
-	.release = blob_release,
-	.llseek = default_llseek,
-};
-
 /**
  * ports_to_automatically_enable() - Determine which ports to enable at startup
  * @sd: fabric subdevice object
@@ -2082,8 +1469,6 @@ static int initial_port_state(struct fsubdev *sd)
 {
 	struct fport_status *init_status;
 	struct portinfo *curr_portinfo;
-	char debugfs_dir_name[9] = {};
-	struct dentry *debugfs_dir;
 	u32 port_enable_map;
 	struct fport *p;
 	u8 port_cnt;
@@ -2112,8 +1497,7 @@ static int initial_port_state(struct fsubdev *sd)
 
 		INIT_LIST_HEAD(&p->unroute_link);
 
-		snprintf(debugfs_dir_name, ARRAY_SIZE(debugfs_dir_name), "port.%u", lpn);
-		debugfs_dir = debugfs_create_dir(debugfs_dir_name, sd->debugfs_dir);
+		create_port_debugfs_dir(sd, lpn);
 
 		switch (mode) {
 		case IAF_FW_PORT_LINK_MODE_FABRIC:
@@ -2138,18 +1522,13 @@ static int initial_port_state(struct fsubdev *sd)
 			clear_status_link_degrades(&init_status[lpn]);
 			set_bit(lpn, sd->fport_lpns);
 
-			debugfs_create_file(PORT_SHOW_FILE_NAME, 0400, debugfs_dir, p,
-					    &port_show_fops);
-			diagnostics_port_node_init(p, debugfs_dir);
+			create_fabric_port_debugfs_files(sd, p);
 
 			break;
 
 		case IAF_FW_PORT_LINK_MODE_FLIT_BUS:
 			set_bit(lpn, sd->bport_lpns);
-			debugfs_create_file(BRG_FILE_NAME, 0400, debugfs_dir, p, &regs_fops);
-			debugfs_create_file(RTP_FILE_NAME, 0400, debugfs_dir, p, &regs_fops);
-			debugfs_create_file(TPM_FILE_NAME, 0400, debugfs_dir, p, &regs_fops);
-			debugfs_create_file(RPM_FILE_NAME, 0400, debugfs_dir, p, &regs_fops);
+			create_bridge_port_debugfs_files(sd, p);
 			break;
 
 		default:
@@ -2157,7 +1536,7 @@ static int initial_port_state(struct fsubdev *sd)
 			return -ENOENT;
 		}
 
-		routing_debug_port_init(sd, lpn, debugfs_dir);
+		routing_debug_port_init(sd, lpn);
 	}
 
 	/* published and unpublished queryable port state */

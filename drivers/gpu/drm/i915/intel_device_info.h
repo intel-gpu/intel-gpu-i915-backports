@@ -35,6 +35,8 @@
 #include "gt/intel_context_types.h"
 #include "gt/intel_sseu.h"
 
+#include "gem/i915_gem_object_types.h"
+
 struct drm_printer;
 struct drm_i915_private;
 
@@ -97,7 +99,7 @@ enum intel_platform {
  * it is fine for the same bit to be used on multiple parent platforms.
  */
 
-#define INTEL_SUBPLATFORM_BITS (4)
+#define INTEL_SUBPLATFORM_BITS (3)
 #define INTEL_SUBPLATFORM_MASK (BIT(INTEL_SUBPLATFORM_BITS) - 1)
 
 /* HSW/BDW/SKL/KBL/CFL */
@@ -114,7 +116,6 @@ enum intel_platform {
 #define INTEL_SUBPLATFORM_G10	0
 #define INTEL_SUBPLATFORM_G11	1
 #define INTEL_SUBPLATFORM_G12	2
-#define INTEL_SUBPLATFORM_ATSM	3
 
 /* ADL */
 #define INTEL_SUBPLATFORM_RPL	0
@@ -143,7 +144,6 @@ enum intel_ppgtt_type {
 	func(has_64k_pages); \
 	func(has_access_counter); \
 	func(has_asid_tlb_invalidation); \
-	func(has_bslices); \
 	func(has_cache_clos); \
 	func(has_coherent_ggtt); \
 	func(gpu_reset_clobbers_display); \
@@ -172,8 +172,7 @@ enum intel_ppgtt_type {
 	func(has_logical_ring_elsq); \
 	func(has_media_ratio_mode); \
 	func(has_mem_sparing); \
-	func(has_mi_set_predicate); \
-	func(has_mslices); \
+	func(has_mslice_steering); \
 	func(has_oa_bpc_reporting); \
 	func(has_oa_buf_128m); \
 	func(has_oa_mmio_trigger); \
@@ -196,6 +195,7 @@ enum intel_ppgtt_type {
 	func(has_sriov); \
 	func(has_stateless_mc); \
 	func(has_um_queues); \
+	func(tuning_thread_rr_after_dep); \
 	func(unfenced_needs_alignment); \
 	func(hws_needs_physical); \
 	func(oam_uses_vdbox0_channel);
@@ -284,6 +284,8 @@ struct intel_device_info {
 		u32 degamma_lut_tests;
 		u32 gamma_lut_tests;
 	} color;
+
+	unsigned int cachelevel_to_pat[I915_MAX_CACHE_LEVEL];
 };
 
 struct intel_runtime_info {

@@ -20,4 +20,8 @@ struct lockdep_map { };
 #endif /* CONFIG_LOCKDEP */
 #endif /* LINUX_VERSION_IS_LESS(4,15,0) */
 
+#define lockdep_assert_once(c)                  do { } while (0)
+#define lockdep_assert_none_held_once()         \
+        lockdep_assert_once(!current->lockdep_depth)
+
 #endif /* __BACKPORT_LINUX_LOCKDEP_H */

@@ -41,6 +41,7 @@ struct intel_context_ops {
 	int (*alloc)(struct intel_context *ce);
 
 	void (*ban)(struct intel_context *ce, struct i915_request *rq);
+	void (*close)(struct intel_context *ce);
 
 	int (*pre_pin)(struct intel_context *ce, struct i915_gem_ww_ctx *ww, void **vaddr);
 	int (*pin)(struct intel_context *ce, void *vaddr);
@@ -168,6 +169,22 @@ struct intel_context {
 		} runtime;
 	} stats;
 
+	/**
+	 * @schedule_policy - used to collect some context related scheduling
+	 * parameters.
+	 */
+	struct {
+		u32 preempt_timeout_ms;
+		u32 timeslice_duration_ms;
+
+		/**
+		 * @preempt_disable_count: counts the users of the preemption
+		 * timeout. When it's '0' the default value is taken from the
+		 * engine.props structure.
+		 */
+		atomic_t preempt_disable_count;
+	} schedule_policy;
+
 	unsigned int active_count; /* protected by timeline->mutex */
 
 	atomic_t pin_count;
@@ -256,6 +273,12 @@ struct intel_context {
 	 * GuC), protected by guc->submission_state.lock
 	 */
 	struct list_head destroyed_link;
+
+	/**
+	 * @guc_sched_disable_delay: worker to disable scheduling on this
+	 * context
+	 */
+	struct delayed_work guc_sched_disable_delay;
 
 	/** @parallel: sub-structure for parallel submission members */
 	struct {

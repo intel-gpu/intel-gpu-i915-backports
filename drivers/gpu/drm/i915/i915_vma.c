@@ -363,7 +363,7 @@ struct i915_vma_work {
 	struct i915_vma *vma;
 	struct drm_i915_gem_object *pinned;
 	struct i915_sw_dma_fence_cb cb;
-	enum i915_cache_level cache_level;
+	unsigned int pat_index;
 	unsigned int flags;
 };
 
@@ -400,8 +400,7 @@ static int __vma_bind(struct dma_fence_work *work)
 	struct i915_vma_work *vw = container_of(work, typeof(*vw), base);
 	struct i915_vma *vma = vw->vma;
 
-	vma->ops->bind_vma(vw->vm, &vw->stash,
-			   vma, vw->cache_level, vw->flags);
+	vma->ops->bind_vma(vw->vm, &vw->stash, vma, vw->pat_index, vw->flags);
 
 	return 0;
 }
@@ -509,6 +508,7 @@ int i915_vma_wait_for_bind(struct i915_vma *vma)
  * i915_vma_bind - Sets up PTEs for an VMA in it's corresponding address space.
  * @vma: VMA to map
  * @cache_level: mapping cache level
+ * @pat_index: PAT index to set in PTE
  * @flags: flags like global or local mapping
  * @work: preallocated worker for allocating and binding the PTE
  *
@@ -517,7 +517,7 @@ int i915_vma_wait_for_bind(struct i915_vma *vma)
  * Note that DMA addresses are also the only part of the SG table we care about.
  */
 int i915_vma_bind(struct i915_vma *vma,
-		  enum i915_cache_level cache_level,
+		  unsigned int pat_index,
 		  u32 flags,
 		  struct i915_vma_work *work)
 {
@@ -552,7 +552,7 @@ int i915_vma_bind(struct i915_vma *vma,
 		struct dma_fence *prev;
 
 		work->vma = __i915_vma_get(vma);
-		work->cache_level = cache_level;
+		work->pat_index = pat_index;
 		work->flags = bind_flags;
 
 		/*
@@ -579,7 +579,7 @@ int i915_vma_bind(struct i915_vma *vma,
 			work->pinned = i915_gem_object_get(vma->obj);
 		}
 	} else {
-		vma->ops->bind_vma(vma->vm, NULL, vma, cache_level, bind_flags);
+		vma->ops->bind_vma(vma->vm, NULL, vma, pat_index, bind_flags);
 	}
 
 	atomic_or(bind_flags, &vma->flags);
@@ -860,7 +860,7 @@ i915_vma_insert(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 			alignment = max(alignment, I915_GTT_PAGE_SIZE_64K);
 
 		if (i915_vm_has_cache_coloring(vma->vm))
-			color = vma->obj->cache_level;
+			color = vma->obj->pat_index;
 		else if (i915_vm_has_memory_coloring(vma->vm))
 			color = i915_gem_object_is_lmem(vma->obj);
 	}
@@ -1327,7 +1327,9 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 
 	GEM_BUG_ON(!vma->pages);
 	err = i915_vma_bind(vma,
-			    vma->obj ? vma->obj->cache_level : 0,
+			    vma->obj ? vma->obj->pat_index :
+				       i915_gem_get_pat_index(vma->vm->i915,
+							I915_CACHE_NONE),
 			    flags, work);
 	if (err)
 		goto err_remove;

@@ -183,7 +183,8 @@ static int
 i915_gem_object_fence_prepare(struct drm_i915_gem_object *obj,
 			      int tiling_mode, unsigned int stride)
 {
-	struct i915_ggtt *ggtt = to_gt(to_i915(obj->base.dev))->ggtt;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	struct i915_vma *vma, *vn;
 	LIST_HEAD(unbind);
 	int ret = 0;
@@ -364,9 +365,9 @@ i915_gem_set_tiling_ioctl(struct drm_device *dev, void *data,
 		args->stride = 0;
 	} else {
 		if (args->tiling_mode == I915_TILING_X)
-			args->swizzle_mode = to_gt(to_i915(dev))->ggtt->bit_6_swizzle_x;
+			args->swizzle_mode = to_gt(dev_priv)->ggtt->bit_6_swizzle_x;
 		else
-			args->swizzle_mode = to_gt(to_i915(dev))->ggtt->bit_6_swizzle_y;
+			args->swizzle_mode = to_gt(dev_priv)->ggtt->bit_6_swizzle_y;
 
 		/* Hide bit 17 swizzling from the user.  This prevents old Mesa
 		 * from aborting the application on sw fallbacks to bit 17,

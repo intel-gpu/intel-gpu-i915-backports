@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-$(CPTCFG_DRM_CDNS_DSI) += cdns-dsi.o
+obj-$(CPTCFG_DRM_CHIPONE_ICN6211) += chipone-icn6211.o
 obj-$(CPTCFG_DRM_CHRONTEL_CH7033) += chrontel-ch7033.o
+obj-$(CPTCFG_DRM_CROS_EC_ANX7688) += cros-ec-anx7688.o
 obj-$(CPTCFG_DRM_DISPLAY_CONNECTOR) += display-connector.o
+obj-$(CPTCFG_DRM_LONTIUM_LT8912B) += lontium-lt8912b.o
 obj-$(CPTCFG_DRM_LONTIUM_LT9611) += lontium-lt9611.o
 obj-$(CPTCFG_DRM_LONTIUM_LT9611UXC) += lontium-lt9611uxc.o
 obj-$(CPTCFG_DRM_LVDS_CODEC) += lvds-codec.o
@@ -20,10 +23,12 @@ obj-$(CPTCFG_DRM_TOSHIBA_TC358767) += tc358767.o
 obj-$(CPTCFG_DRM_TOSHIBA_TC358768) += tc358768.o
 obj-$(CPTCFG_DRM_TOSHIBA_TC358775) += tc358775.o
 obj-$(CPTCFG_DRM_I2C_ADV7511) += adv7511/
+obj-$(CPTCFG_DRM_TI_SN65DSI83) += ti-sn65dsi83.o
 obj-$(CPTCFG_DRM_TI_SN65DSI86) += ti-sn65dsi86.o
 obj-$(CPTCFG_DRM_TI_TFP410) += ti-tfp410.o
 obj-$(CPTCFG_DRM_TI_TPD12S015) += ti-tpd12s015.o
 obj-$(CPTCFG_DRM_NWL_MIPI_DSI) += nwl-dsi.o
+obj-$(CPTCFG_DRM_ITE_IT66121) += ite-it66121.o
 
 obj-y += analogix/
 obj-y += cadence/

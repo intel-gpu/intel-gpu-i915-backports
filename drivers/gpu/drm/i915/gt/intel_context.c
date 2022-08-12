@@ -388,6 +388,58 @@ sw_fence_dummy_notify(struct i915_sw_fence *sf,
 	return NOTIFY_DONE;
 }
 
+void intel_context_update_schedule_policy(struct intel_context *ce)
+{
+	atomic_t *count = &ce->schedule_policy.preempt_disable_count;
+	struct intel_engine_cs *engine = ce->engine;
+
+	if (atomic_read(count))
+		return;
+
+	ce->schedule_policy.preempt_timeout_ms =
+					engine->props.preempt_timeout_ms;
+	ce->schedule_policy.timeslice_duration_ms =
+					engine->props.timeslice_duration_ms;
+}
+
+void intel_context_init_schedule_policy(struct intel_context *ce)
+{
+	atomic_set(&ce->schedule_policy.preempt_disable_count, 0);
+	intel_context_update_schedule_policy(ce);
+}
+
+static void __intel_context_set_preemption_timeout(struct intel_context *ce,
+						   u32 preemption_timeout_ms)
+{
+	/* FIXME: This needs execlist support as well */
+	if (!intel_uc_wants_guc_submission(&ce->engine->gt->uc))
+		return;
+
+	ce->schedule_policy.preempt_timeout_ms = preemption_timeout_ms;
+
+	intel_guc_context_set_preemption_timeout(ce);
+}
+
+void intel_context_reset_preemption_timeout(struct intel_context *ce)
+{
+	atomic_t *count = &ce->schedule_policy.preempt_disable_count;
+	struct intel_engine_cs *engine = ce->engine;
+
+	GEM_WARN_ON(atomic_read(count) <= 0);
+
+	if (atomic_dec_and_test(count))
+		__intel_context_set_preemption_timeout(ce,
+					engine->props.preempt_timeout_ms);
+}
+
+void intel_context_disable_preemption_timeout(struct intel_context *ce)
+{
+	atomic_t *count = &ce->schedule_policy.preempt_disable_count;
+
+	if (atomic_inc_return(count) == 1)
+		__intel_context_set_preemption_timeout(ce, 0);
+}
+
 void
 intel_context_init(struct intel_context *ce, struct intel_engine_cs *engine)
 {

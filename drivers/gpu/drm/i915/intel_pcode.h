@@ -8,45 +8,25 @@
 
 #include <linux/types.h>
 
-struct intel_gt;
+struct intel_uncore;
 struct drm_i915_private;
 
-int intel_gt_pcode_read(struct intel_gt *gt, u32 mbox, u32 *val, u32 *val1);
+int snb_pcode_read(struct intel_uncore *uncore, u32 mbox, u32 *val, u32 *val1);
+int snb_pcode_write_timeout(struct intel_uncore *uncore, u32 mbox, u32 val,
+			    int fast_timeout_us, int slow_timeout_ms);
+#define snb_pcode_write(uncore, mbox, val) \
+	snb_pcode_write_timeout(uncore, mbox, val, 500, 0)
 
-int intel_gt_pcode_write_timeout(struct intel_gt *gt, u32 mbox, u32 val,
-				 int fast_timeout_us, int slow_timeout_ms);
+int skl_pcode_request(struct intel_uncore *uncore, u32 mbox, u32 request,
+		      u32 reply_mask, u32 reply, int timeout_base_ms);
 
-#define intel_gt_pcode_write(gt, mbox, val) \
-	intel_gt_pcode_write_timeout(gt, mbox, val, 500, 0)
-
-int intel_gt_pcode_request(struct intel_gt *gt, u32 mbox, u32 request,
-			   u32 reply_mask, u32 reply, int timeout_base_ms);
-
-#define snb_pcode_read(i915, mbox, val, val1) \
-	intel_gt_pcode_read(to_gt(i915), mbox, val, val1)
-
-#define snb_pcode_write_timeout(i915, mbox, val, fast_timeout_us, slow_timeout_ms) \
-	intel_gt_pcode_write_timeout(to_gt(i915), mbox, val, fast_timeout_us, slow_timeout_ms)
-
-#define snb_pcode_write(i915, mbox, val) \
-	snb_pcode_write_timeout(i915, mbox, val, 500, 0)
-
-#define skl_pcode_request(i915, mbox, request, reply_mask, reply, timeout_base_ms) \
-	intel_gt_pcode_request(to_gt(i915), mbox, request, reply_mask, reply, timeout_base_ms)
-
-int intel_pcode_init(struct drm_i915_private *i915);
+int intel_pcode_init(struct intel_uncore *uncore);
 int intel_pcode_enable_vram_sr(struct drm_i915_private *i915);
 
 /*
  * Helpers for dGfx PCODE mailbox command formatting
-*/
-int __intel_gt_pcode_read(struct intel_gt *gt, u32 mbcmd, u32 p1, u32 p2, u32 *val);
-int __intel_gt_pcode_write(struct intel_gt *gt, u32 mbcmd, u32 p1, u32 p2, u32 val);
-
-#define __snb_pcode_read(i915, mbcmd, p1, p2, val) \
-	__intel_gt_pcode_read(to_gt(i915), mbcmd, p1, p2, val)
-
-#define __snb_pcode_write(i915, mbcmd, p1, p2, val) \
-	__intel_gt_pcode_write(to_gt(i915), mbcmd, p1, p2, val)
+ */
+int snb_pcode_read_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u32 *val);
+int snb_pcode_write_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u32 val);
 
 #endif /* _INTEL_PCODE_H */

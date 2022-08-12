@@ -907,14 +907,9 @@ static u32 get_allowed_dc_mask(const struct drm_i915_private *dev_priv,
 	if (!HAS_DISPLAY(dev_priv))
 		return 0;
 
-	if (IS_DG2(dev_priv)) {
-		/*
-		 * FIXME: We need to disable DC-states on DG2.
-		 *
-		 *  - DG2: There are still hardware-level issues with DC5
-		 */
+	if (IS_DG2(dev_priv))
 		max_dc = 0;
-	} else if (IS_DG1(dev_priv))
+	else if (IS_DG1(dev_priv))
 		max_dc = 3;
 	else if (DISPLAY_VER(dev_priv) >= 12)
 		max_dc = 4;
@@ -1220,7 +1215,7 @@ static u32 hsw_read_dcomp(struct drm_i915_private *dev_priv)
 static void hsw_write_dcomp(struct drm_i915_private *dev_priv, u32 val)
 {
 	if (IS_HASWELL(dev_priv)) {
-		if (snb_pcode_write(dev_priv, GEN6_PCODE_WRITE_D_COMP, val))
+		if (snb_pcode_write(&dev_priv->uncore, GEN6_PCODE_WRITE_D_COMP, val))
 			drm_dbg_kms(&dev_priv->drm,
 				    "Failed to write to D_COMP\n");
 	} else {
@@ -2454,7 +2449,7 @@ intel_display_power_ddi_io_domain(struct drm_i915_private *i915, enum port port)
 	if (drm_WARN_ON(&i915->drm, !domains) || domains->ddi_io == POWER_DOMAIN_INVALID)
 		return POWER_DOMAIN_PORT_DDI_IO_A;
 
-	return domains->ddi_io + port - domains->port_start;
+	return domains->ddi_io + (int)(port - domains->port_start);
 }
 
 enum intel_display_power_domain
@@ -2465,7 +2460,7 @@ intel_display_power_ddi_lanes_domain(struct drm_i915_private *i915, enum port po
 	if (drm_WARN_ON(&i915->drm, !domains) || domains->ddi_lanes == POWER_DOMAIN_INVALID)
 		return POWER_DOMAIN_PORT_DDI_LANES_A;
 
-	return domains->ddi_lanes + port - domains->port_start;
+	return domains->ddi_lanes + (int)(port - domains->port_start);
 }
 
 static const struct intel_ddi_port_domains *
@@ -2491,7 +2486,7 @@ intel_display_power_legacy_aux_domain(struct drm_i915_private *i915, enum aux_ch
 	if (drm_WARN_ON(&i915->drm, !domains) || domains->aux_legacy_usbc == POWER_DOMAIN_INVALID)
 		return POWER_DOMAIN_AUX_A;
 
-	return domains->aux_legacy_usbc + aux_ch - domains->aux_ch_start;
+	return domains->aux_legacy_usbc + (int)(aux_ch - domains->aux_ch_start);
 }
 
 enum intel_display_power_domain
@@ -2502,5 +2497,5 @@ intel_display_power_tbt_aux_domain(struct drm_i915_private *i915, enum aux_ch au
 	if (drm_WARN_ON(&i915->drm, !domains) || domains->aux_tbt == POWER_DOMAIN_INVALID)
 		return POWER_DOMAIN_AUX_TBT1;
 
-	return domains->aux_tbt + aux_ch - domains->aux_ch_start;
+	return domains->aux_tbt + (int)(aux_ch - domains->aux_ch_start);
 }

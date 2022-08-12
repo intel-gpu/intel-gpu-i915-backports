@@ -89,6 +89,7 @@ typedef u64 gen8_pte_t;
 #define BYT_PTE_SNOOPED_BY_CPU_CACHES	REG_BIT(2)
 #define BYT_PTE_WRITEABLE		REG_BIT(1)
 
+#define GEN12_PPGTT_PTE_PAT3	BIT_ULL(62)
 #define GEN12_PPGTT_PTE_LM	BIT_ULL(11)
 #define GEN12_USM_PPGTT_PTE_AE	BIT_ULL(10)
 #define GEN12_PPGTT_PTE_PAT2	BIT_ULL(7)
@@ -253,7 +254,7 @@ struct i915_vma_ops {
 	void (*bind_vma)(struct i915_address_space *vm,
 			 struct i915_vm_pt_stash *stash,
 			 struct i915_vma *vma,
-			 enum i915_cache_level cache_level,
+			 unsigned int pat_index,
 			 u32 flags);
 	/*
 	 * Unmap an object from an address space. This usually consists of
@@ -388,7 +389,7 @@ struct i915_address_space {
 		(*alloc_scratch_dma)(struct i915_address_space *vm, int sz);
 
 	u64 (*pte_encode)(dma_addr_t addr,
-			  enum i915_cache_level level,
+			  unsigned int pat_index,
 			  u32 flags); /* Create a valid PTE */
 #define PTE_READ_ONLY	BIT(0)
 #define PTE_LM		BIT(1)
@@ -404,11 +405,11 @@ struct i915_address_space {
 	void (*insert_page)(struct i915_address_space *vm,
 			    dma_addr_t addr,
 			    u64 offset,
-			    enum i915_cache_level cache_level,
+			    unsigned int pat_index,
 			    u32 flags);
 	void (*insert_entries)(struct i915_address_space *vm,
 			       struct i915_vma *vma,
-			       enum i915_cache_level cache_level,
+			       unsigned int pat_index,
 			       u32 flags);
 	void (*cleanup)(struct i915_address_space *vm);
 
@@ -672,6 +673,13 @@ i915_page_dir_dma_addr(const struct i915_ppgtt *ppgtt, const unsigned int n)
 
 int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt);
 
+void intel_ggtt_bind_vma(struct i915_address_space *vm,
+			 struct i915_vm_pt_stash *stash,
+			 struct i915_vma *vma,
+			 enum i915_cache_level cache_level,
+			 u32 flags);
+void intel_ggtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma);
+
 int i915_ggtt_probe_hw(struct drm_i915_private *i915);
 int i915_ggtt_init_hw(struct drm_i915_private *i915);
 int i915_ggtt_enable_hw(struct drm_i915_private *i915);
@@ -774,7 +782,7 @@ u64 ggtt_addr_to_pte_offset(u64 ggtt_addr);
 
 void __gen8_ggtt_insert_page_wa_bcs(struct i915_ggtt *ggtt, u32 vfid,
 				    dma_addr_t addr, u64 offset,
-				    enum i915_cache_level level, u32 flags);
+				    unsigned int pat_index, u32 flags);
 
 int ggtt_set_pages(struct i915_vma *vma);
 int ppgtt_set_pages(struct i915_vma *vma);
@@ -783,7 +791,7 @@ void clear_pages(struct i915_vma *vma);
 void ppgtt_bind_vma(struct i915_address_space *vm,
 		    struct i915_vm_pt_stash *stash,
 		    struct i915_vma *vma,
-		    enum i915_cache_level cache_level,
+		    unsigned int pat_index,
 		    u32 flags);
 void ppgtt_unbind_vma(struct i915_address_space *vm,
 		      struct i915_vma *vma);

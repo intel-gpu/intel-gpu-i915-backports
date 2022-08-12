@@ -8,7 +8,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 #include <drm/drm_framebuffer.h>
-#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_managed.h>
@@ -16,6 +16,8 @@
 #include <drm/drm_plane.h>
 #include <drm/drm_prime.h>
 #include <drm/drm_simple_kms_helper.h>
+
+#include <drm/ttm/ttm_range_manager.h>
 
 static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
 
@@ -94,7 +96,7 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
  * memory region. Call drm_gem_vram_offset() to retrieve this value. Typically
  * it's used to program the hardware's scanout engine for framebuffers, set
  * the cursor overlay's image for a mouse cursor, or use it as input to the
- * hardware's draing engine.
+ * hardware's drawing engine.
  *
  * To access a buffer object's memory from the DRM driver, call
  * drm_gem_vram_vmap(). It maps the buffer into kernel address
@@ -245,26 +247,11 @@ void drm_gem_vram_put(struct drm_gem_vram_object *gbo)
 }
 EXPORT_SYMBOL(drm_gem_vram_put);
 
-/**
- * drm_gem_vram_mmap_offset() - Returns a GEM VRAM object's mmap offset
- * @gbo:	the GEM VRAM object
- *
- * See drm_vma_node_offset_addr() for more information.
- *
- * Returns:
- * The buffer object's offset for userspace mappings on success, or
- * 0 if no offset is allocated.
- */
-u64 drm_gem_vram_mmap_offset(struct drm_gem_vram_object *gbo)
-{
-	return drm_vma_node_offset_addr(&gbo->bo.base.vma_node);
-}
-EXPORT_SYMBOL(drm_gem_vram_mmap_offset);
-
 static u64 drm_gem_vram_pg_offset(struct drm_gem_vram_object *gbo)
 {
 	/* Keep TTM behavior for now, remove when drivers are audited */
-	if (WARN_ON_ONCE(!gbo->bo.resource->mm_node))
+	if (WARN_ON_ONCE(!gbo->bo.resource ||
+			 gbo->bo.resource->mem_type == TTM_PL_SYSTEM))
 		return 0;
 
 	return gbo->bo.resource->start;
@@ -385,9 +372,16 @@ static int drm_gem_vram_kmap_locked(struct drm_gem_vram_object *gbo,
 	if (gbo->vmap_use_count > 0)
 		goto out;
 
-	ret = ttm_bo_vmap(&gbo->bo, &gbo->map);
-	if (ret)
-		return ret;
+	/*
+	 * VRAM helpers unmap the BO only on demand. So the previous
+	 * page mapping might still be around. Only vmap if the there's
+	 * no mapping present.
+	 */
+	if (iosys_map_is_null(&gbo->map)) {
+		ret = ttm_bo_vmap(&gbo->bo, &gbo->map);
+		if (ret)
+			return ret;
+	}
 
 out:
 	++gbo->vmap_use_count;
@@ -574,6 +568,7 @@ static void drm_gem_vram_bo_driver_move_notify(struct drm_gem_vram_object *gbo)
 		return;
 
 	ttm_bo_vunmap(bo, &gbo->map);
+	iosys_map_clear(&gbo->map); /* explicitly clear mapping for next vmap call */
 }
 
 static int drm_gem_vram_bo_driver_move(struct drm_gem_vram_object *gbo,
@@ -631,38 +626,6 @@ int drm_gem_vram_driver_dumb_create(struct drm_file *file,
 }
 EXPORT_SYMBOL(drm_gem_vram_driver_dumb_create);
 
-/**
- * drm_gem_vram_driver_dumb_mmap_offset() - \
-	Implements &struct drm_driver.dumb_mmap_offset
- * @file:	DRM file pointer.
- * @dev:	DRM device.
- * @handle:	GEM handle
- * @offset:	Returns the mapping's memory offset on success
- *
- * Returns:
- * 0 on success, or
- * a negative errno code otherwise.
- */
-int drm_gem_vram_driver_dumb_mmap_offset(struct drm_file *file,
-					 struct drm_device *dev,
-					 uint32_t handle, uint64_t *offset)
-{
-	struct drm_gem_object *gem;
-	struct drm_gem_vram_object *gbo;
-
-	gem = drm_gem_object_lookup(file, handle);
-	if (!gem)
-		return -ENOENT;
-
-	gbo = drm_gem_vram_of_gem(gem);
-	*offset = drm_gem_vram_mmap_offset(gbo);
-
-	drm_gem_object_put(gem);
-
-	return 0;
-}
-EXPORT_SYMBOL(drm_gem_vram_driver_dumb_mmap_offset);
-
 /*
  * Helpers for struct drm_plane_helper_funcs
  */
@@ -701,7 +664,7 @@ drm_gem_vram_plane_helper_prepare_fb(struct drm_plane *plane,
 			goto err_drm_gem_vram_unpin;
 	}
 
-	ret = drm_gem_fb_prepare_fb(plane, new_state);
+	ret = drm_gem_plane_helper_prepare_fb(plane, new_state);
 	if (ret)
 		goto err_drm_gem_vram_unpin;
 
