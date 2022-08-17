@@ -14,10 +14,10 @@ This repo is a code snapshot of particular version of backports and does not con
 # Supported Version/kernel
   Our current backport supports following RHEL versions
 
- | RHEL Version |kernel version    |
- |---  |---  |
- | Red Hat® Enterprise Linux® 8.6 | kernel 4.18.372 |
- | Red Hat® Enterprise Linux® 8.5 | kernel 4.18.348 |
+ | RHEL Version |
+ |---  |
+ | Red Hat® Enterprise Linux® 8.6 |
+ | Red Hat® Enterprise Linux® 8.5 |
 
   We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/versions)
@@ -26,6 +26,7 @@ This repo is a code snapshot of particular version of backports and does not con
   In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
   For RHEL 8.6:
+  
     sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.6_KERNEL_VERSION>.el8_6.x86_64 \
     kernel-devel-<RHEL_8.6_KERNEL_VERSION>.el8_6.x86_64
     example:
@@ -33,6 +34,7 @@ This repo is a code snapshot of particular version of backports and does not con
         kernel-devel-4.18.0-372.13.1.el8_6.x86_64
 
   For RHEL 8.5:
+  
     sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.5_KERNEL_VERSION>.el8_5.x86_64 \
     kernel-devel-<RHEL_8.5_KERNEL_VERSION>.el8_5.x86_64
     example:
