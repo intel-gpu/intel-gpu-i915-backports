@@ -54,8 +54,9 @@ we have dependencies on the following packages
   - build-essential
   - flex
   - bison
+  - gawk
 
-        sudo apt install dkms make debhelper devscripts build-essential flex bison
+        sudo apt install dkms make debhelper devscripts build-essential flex bison gawk
 
 
 # Dependencies
