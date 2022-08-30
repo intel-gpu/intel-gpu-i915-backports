@@ -1,63 +1,21 @@
 /* SPDX-License-Identifier: MIT */
 
 /*
- * Copyright © 2020 Intel Corporation
+ * Copyright © 2022 Intel Corporation
  */
 
-#ifndef __INTEL_HWMON_H__
-#define __INTEL_HWMON_H__
+#ifndef __I915_HWMON_H__
+#define __I915_HWMON_H__
 
-#include <linux/types.h>
-#include <linux/mutex.h>
 #include <linux/device.h>
+#include <linux/mutex.h>
+#include <linux/types.h>
 #include "i915_reg.h"
 
-/* For definition of max number of GTs */
-#include "gt/intel_gt_defines.h"
-
 struct drm_i915_private;
-
-struct i915_hwmon_reg {
-	i915_reg_t pkg_power_sku_unit;
-	i915_reg_t pkg_power_sku;
-	i915_reg_t pkg_rapl_limit;
-	i915_reg_t energy_status_all;
-	i915_reg_t energy_status_tile;
-	i915_reg_t gt_perf_status;
-};
-
-struct i915_energy_info {
-	u32 energy_counter_overflow;
-	u32 energy_counter_prev;
-};
-
-struct i915_hwmon_drvdata {
-	struct i915_hwmon *dd_hwmon;
-	struct intel_uncore *dd_uncore;
-	struct device *dd_hwmon_dev;
-	struct i915_energy_info dd_ei;	/*  Energy info for energy1_input */
-	char dd_name[12];
-	int dd_gtix;
-};
-
-struct i915_hwmon {
-	struct i915_hwmon_drvdata ddat;
-
-	struct i915_hwmon_drvdata ddat_gt[I915_MAX_GT];
-
-	struct mutex hwmon_lock;	/* counter overflow logic and rmw */
-
-	struct i915_hwmon_reg rg;
-
-	u32 power_max_initial_value;
-
-	int scl_shift_power;
-	int scl_shift_energy;
-	int scl_shift_time;
-};
 
 void i915_hwmon_register(struct drm_i915_private *i915);
 void i915_hwmon_unregister(struct drm_i915_private *i915);
 
-int i915_energy_status_get(struct drm_i915_private *i915, u64 *energy);
-#endif
+int i915_hwmon_energy_status_get(struct drm_i915_private *i915, long *energy);
+#endif /* __I915_HWMON_H__ */

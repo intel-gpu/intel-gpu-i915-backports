@@ -50,7 +50,7 @@ static int live_slpc_clamp_min(void *arg)
 	int err = 0;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 
 		pr_info("Running on GT: %d", gt->info.id);
 
@@ -209,7 +209,7 @@ static int live_slpc_clamp_max(void *arg)
 	u32 slpc_min_freq, slpc_max_freq, saved_min_freq;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 
 		pr_info("Running on GT: %d", gt->info.id);
 
@@ -368,7 +368,7 @@ int intel_slpc_live_selftests(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(to_gt(i915)))
 			return 0;
 	}

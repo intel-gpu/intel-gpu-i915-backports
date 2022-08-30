@@ -22,17 +22,20 @@ int intel_pcode_read_qgv_points_test(void *arg)
 	struct intel_qgv_point qp;
 	int i, ret;
 	bool fail = false;
+	intel_wakeref_t wakeref;
 
 	if (DISPLAY_VER(i915) < 11) {
 		drm_info(&i915->drm, "QGV doesn't support, skipping\n");
 		return 0;
 	}
 
-	intel_dram_detect(i915);
+	with_intel_runtime_pm(i915->uncore.rpm, wakeref)
+		intel_dram_detect(i915);
+
 	qi.num_points = i915->dram_info.num_qgv_points;
 
 	for (i = 0; i < qi.num_points; i++) {
-		ret = icl_pcode_read_qgv_point_info(i915, &qp, i);
+		ret = intel_read_qgv_point_info(i915, &qp, i);
 		if (ret) {
 			drm_err(&i915->drm, "Pcode failed to read qgv point %d\n", i);
 			fail = true;

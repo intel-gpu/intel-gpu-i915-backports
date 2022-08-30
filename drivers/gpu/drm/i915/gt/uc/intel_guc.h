@@ -92,6 +92,7 @@ struct intel_guc {
 	u32 next_seqno;
 
 	struct {
+		bool enabled;
 		void (*reset)(struct intel_guc *guc);
 		void (*enable)(struct intel_guc *guc);
 		void (*disable)(struct intel_guc *guc);
@@ -344,9 +345,11 @@ retry:
 	return err;
 }
 
+/* Only call this from the interrupt handler code */
 static inline void intel_guc_to_host_event_handler(struct intel_guc *guc)
 {
-	intel_guc_ct_event_handler(&guc->ct);
+	if (guc->interrupts.enabled)
+		intel_guc_ct_event_handler(&guc->ct);
 }
 
 /* GuC addresses above GUC_GGTT_TOP also don't map through the GTT */

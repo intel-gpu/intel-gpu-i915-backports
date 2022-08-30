@@ -83,6 +83,9 @@ i915_param_named_unsafe(vbt_sdvo_panel_type, int, 0400,
 i915_param_named_unsafe(reset, uint, 0400,
 	"Attempt GPU resets (0=disabled, 1=full gpu reset, 2=engine reset [default])");
 
+i915_param_named_unsafe(allow_non_persist_without_reset, bool, 0400,
+	"Allow non-persistent contexts even if reset is disabled (default: false)");
+
 i915_param_named_unsafe(vbt_firmware, charp, 0400,
 	"Load VBT from specified file under /lib/firmware");
 
@@ -184,6 +187,18 @@ i915_param_named(guc_log_level, int, 0400,
 	"GuC firmware logging level. Requires GuC to be loaded. "
 	"(-1=auto [default], 0=disable, 1..4=enable with verbosity min..max)");
 
+i915_param_named(guc_log_size_crash, int, 0400,
+	"GuC firmware logging buffer size for crash dumps (in MB)"
+	"(-1=auto [default], NB: max = 4, other restrictions apply)");
+
+i915_param_named(guc_log_size_debug, int, 0400,
+	"GuC firmware logging buffer size for debug logs (in MB)"
+	"(-1=auto [default], NB: max = 16, other restrictions apply)");
+
+i915_param_named(guc_log_size_capture, int, 0400,
+	"GuC error capture register dump buffer size (in MB)"
+	"(-1=auto [default], NB: max = 4, other restrictions apply)");
+
 i915_param_named_unsafe(guc_firmware_path, charp, 0400,
 	"GuC firmware path to use instead of the default one");
 
@@ -192,6 +207,9 @@ i915_param_named_unsafe(huc_firmware_path, charp, 0400,
 
 i915_param_named_unsafe(dmc_firmware_path, charp, 0400,
 	"DMC firmware path to use instead of the default one");
+
+i915_param_named_unsafe(gsc_firmware_path, charp, 0400,
+	"GSC firmware path to use instead of the default one");
 
 i915_param_named_unsafe(enable_dp_mst, bool, 0400,
 	"Enable multi-stream transport (MST) for new DisplayPort sinks. (default: true)");

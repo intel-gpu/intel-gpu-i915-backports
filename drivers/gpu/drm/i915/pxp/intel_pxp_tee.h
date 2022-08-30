@@ -19,4 +19,8 @@ int intel_pxp_tee_stream_message(struct intel_pxp *pxp,
 				 void *msg_in, size_t msg_in_len,
 				 void *msg_out, size_t msg_out_len);
 
+int intel_pxp_gsc_fw_message(struct intel_pxp *pxp,
+			     void *msg_in, size_t msg_in_len,
+			     void *msg_out, size_t msg_out_len);
+
 #endif /* __INTEL_PXP_TEE_H__ */

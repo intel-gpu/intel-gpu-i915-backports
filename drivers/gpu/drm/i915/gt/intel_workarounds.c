@@ -56,10 +56,8 @@
  * - Public functions to init or apply the given workaround type.
  */
 
-static void wa_init_start(struct i915_wa_list *wal, struct intel_gt *gt,
-			  const char *name, const char *engine_name)
+static void wa_init_start(struct i915_wa_list *wal, const char *name, const char *engine_name)
 {
-	wal->gt = gt;
 	wal->name = name;
 	wal->engine_name = engine_name;
 }
@@ -206,8 +204,6 @@ static void _wa_add(struct i915_wa_list *wal, const struct i915_wa *wa)
 static void wa_add(struct i915_wa_list *wal, i915_reg_t reg,
 		   u32 clear, u32 set, u32 read_mask, bool masked_reg)
 {
-	struct intel_gt *gt = wal->gt;
-	const struct sseu_dev_info *sseu = &gt->info.sseu;
 	struct i915_wa wa = {
 		.reg  = reg,
 		.clr  = clear,
@@ -215,21 +211,6 @@ static void wa_add(struct i915_wa_list *wal, i915_reg_t reg,
 		.read = read_mask,
 		.masked_reg = masked_reg,
 	};
-
-	/*
-	 * Some recent platforms can potentially have all DSS and EUs fused
-	 * off; in such cases the entire render/compute unit is actually
-	 * unavailable and we shouldn't be trying to touch any registers in the
-	 * FORCEWAKE_RENDER domain, even if they appear on the platform's
-	 * documented workaround list.
-	 */
-	if (unlikely(GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50) &&
-		     intel_sseu_subslice_total(sseu) == 0 &&
-		     intel_reg_in_fw_domain(gt->uncore, reg, FORCEWAKE_RENDER))) {
-		drm_dbg(&gt->i915->drm, "Not applying workaround on register 0x%x due to fused-off render/compute unit\n",
-			i915_mmio_reg_offset(reg));
-		return;
-	}
 
 	_wa_add(wal, &wa);
 }
@@ -785,6 +766,9 @@ static void dg2_ctx_workarounds_init(struct intel_engine_cs *engine,
 	if (IS_DG2_GRAPHICS_STEP(engine->i915, G10, STEP_B0, STEP_FOREVER) ||
 		IS_DG2_G11(engine->i915) || IS_DG2_G12(engine->i915))
 		wa_masked_field_set(wal, VF_PREEMPTION, PREEMPTION_VERTEX_COUNT, 0x4000);
+
+	/* Wa_15010599737:dg2 */
+	wa_masked_en(wal, CHICKEN_RASTER_1, DIS_SF_ROUND_NEAREST_EVEN);
 }
 
 static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -801,6 +785,26 @@ static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
 		 */
 		wa_masked_en(wal, BCS_ENGINE_SWCTL(engine->mmio_base),
 			     BCS_ENGINE_SWCTL_DISABLE_256B);
+	}
+}
+
+static void mtl_ctx_workarounds_init(struct intel_engine_cs *engine,
+				     struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) ||
+	    IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0)) {
+		/* Wa_14014947963:mtl */
+		wa_masked_field_set(wal, VF_PREEMPTION,
+				    PREEMPTION_VERTEX_COUNT, 0x4000);
+
+		/* Wa_16013271637:mtl */
+		wa_masked_en(wal, SLICE_COMMON_ECO_CHICKEN1,
+			     MSC_MSAA_REODER_BUF_BYPASS_DISABLE);
+
+		/* Wa_18019627453:mtl */
+		wa_masked_en(wal, VFLSKPD, VF_PREFETCH_TLB_DIS);
 	}
 }
 
@@ -881,7 +885,7 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	wa_init_start(wal, engine->gt, name, engine->name);
+	wa_init_start(wal, name, engine->name);
 
 	/* Applies to all engines */
 	/*
@@ -894,7 +898,9 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	if (engine->class != RENDER_CLASS && render_only_ctx_wa)
 		goto done;
 
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_METEORLAKE(i915))
+		mtl_ctx_workarounds_init(engine, wal);
+	else if (IS_PONTEVECCHIO(i915))
 		pvc_ctx_workarounds_init(engine, wal);
 	else if (IS_DG2(i915))
 		dg2_ctx_workarounds_init(engine, wal);
@@ -929,8 +935,10 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	else
 		MISSING_CASE(GRAPHICS_VER(i915));
 
-	if (i915_modparams.debug_eu && IS_GRAPHICS_VER(i915, 9, 11))
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (i915->debuggers.enable_eu_debug && IS_GRAPHICS_VER(i915, 9, 11))
 		gen9_debug_td_ctl_init(engine, wal);
+#endif
 
 done:
 	wa_init_finish(wal, false);
@@ -1317,17 +1325,21 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 }
 
 static void
-pvc_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
+init_dss_mcr(struct intel_gt *gt, struct i915_wa_list *wal, int grpsize,
+	     void (*add_mcr)(struct intel_gt *gt, struct i915_wa_list *wal,
+			     unsigned group, unsigned instance))
 {
 	unsigned int dss;
 
 	/*
-	 * Setup implicit steering for COMPUTE and DSS ranges to the first
-	 * non-fused-off DSS.  All other types of MCR registers will be
-	 * explicitly steered.
+	 * Setup implicit steering for DSS ranges to the first non-fused-off
+	 * DSS.  This can also be used to steer the MCR type that "contains"
+	 * DSS steering (e.g., "COMPUTE" on PVC, "SLICE" on MTL).
+	 *
+	 * All other types of MCR registers will be explicitly steered.
 	 */
 	dss = intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0);
-	__add_mcr_wa(gt, wal, dss / GEN_DSS_PER_CSLICE, dss % GEN_DSS_PER_CSLICE);
+	add_mcr(gt, wal, dss / grpsize, dss % grpsize);
 }
 
 static void
@@ -1731,7 +1743,7 @@ gt_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
 static void
 pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 {
-	pvc_init_mcr(gt, wal);
+	init_dss_mcr(gt, wal, GEN_DSS_PER_CSLICE, __add_mcr_wa);
 
 	/* Wa_14015795083 */
 	wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
@@ -1744,12 +1756,63 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 		gt_stateless_mc_config(gt->i915, wal);
 }
 
+static void __add_mtl_mcr_wa(struct intel_gt *gt, struct i915_wa_list *wal,
+			     unsigned group, unsigned instance)
+{
+	struct drm_printer p = drm_debug_printer("MCR Steering:");
+
+	wa_write_clr_set(wal, MTL_MCR_SELECTOR,
+			 MTL_MCR_GROUPID | MTL_MCR_INSTANCEID,
+			 REG_FIELD_PREP(MTL_MCR_GROUPID, group) |
+			 REG_FIELD_PREP(MTL_MCR_INSTANCEID, instance));
+
+	gt->default_steering.groupid = group;
+	gt->default_steering.instanceid = instance;
+	if (drm_debug_enabled(DRM_UT_DRIVER))
+		intel_gt_mcr_report_steering(&p, gt, false);
+}
+
+static void
+mtl_media_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
+{
+	/*
+	 * If the first vdbox, first vebox, and first sfc are all unavailable
+	 * then the first media slice is fused off and we must steer to
+	 * media slice 1.  Otherwise we can just steer to instance 0.
+	 */
+	if (((VDBOX_MASK(gt) | VEBOX_MASK(gt) | gt->info.sfc_mask) & BIT(0)) == 0)
+		__add_mtl_mcr_wa(gt, wal, 1, 0);
+	else
+		__add_mtl_mcr_wa(gt, wal, 0, 0);
+}
+
+static void
+mtl_3d_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
+{
+	init_dss_mcr(gt, wal, GEN_DSS_PER_GSLICE, __add_mtl_mcr_wa);
+
+	/* Wa_14014830051:mtl */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    IS_MTL_GRAPHICS_STEP(gt->i915, P, STEP_A0, STEP_B0))
+		wa_write_clr(wal, SARB_CHICKEN1, COMP_CKN_IN);
+}
+
+static void
+mtl_media_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
+{
+	mtl_media_init_mcr(gt, wal);
+}
+
 static void
 gt_init_workarounds(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = gt->i915;
 
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_METEORLAKE(i915) && gt->type == GT_MEDIA)
+		mtl_media_gt_workarounds_init(gt, wal);
+	else if (IS_METEORLAKE(i915) && gt->type == GT_PRIMARY)
+		mtl_3d_gt_workarounds_init(gt, wal);
+	else if (IS_PONTEVECCHIO(i915))
 		pvc_gt_workarounds_init(gt, wal);
 	else if (IS_DG2(i915))
 		dg2_gt_workarounds_init(gt, wal);
@@ -1800,7 +1863,7 @@ void intel_gt_init_workarounds(struct intel_gt *gt)
 	if (IS_SRIOV_VF(gt->i915))
 		return;
 
-	wa_init_start(wal, gt, "GT", "global");
+	wa_init_start(wal, "GT", "global");
 	gt_init_workarounds(gt, wal);
 	wa_init_finish(wal, false);
 }
@@ -2246,22 +2309,22 @@ static void dg1_whitelist_build(struct intel_engine_cs *engine)
 				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
 }
 
+void intel_engine_whitelist_sip(struct intel_engine_cs *engine)
+{
+	/* Wa_22011767781:xehpsdv */
+	if (engine->class == COMPUTE_CLASS &&
+	    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
+		whitelist_reg(&engine->whitelist, EU_GLOBAL_SIP);
+}
+
 static void xehpsdv_whitelist_build(struct intel_engine_cs *engine)
 {
-	struct i915_wa_list *w = &engine->whitelist;
-
 	allow_read_ctx_timestamp(engine);
 
-	switch (engine->class) {
-	case COMPUTE_CLASS:
-		/* Wa_22011767781:xehpsdv */
-		if (i915_modparams.debug_eu &&
-		    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
-			whitelist_reg(w, EU_GLOBAL_SIP);
-		break;
-	default:
-		break;
-	}
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (engine->i915->debuggers.enable_eu_debug)
+		intel_engine_whitelist_sip(engine);
+#endif
 }
 
 static void dg2_whitelist_build(struct intel_engine_cs *engine)
@@ -2331,9 +2394,11 @@ void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 	if (IS_SRIOV_VF(engine->i915))
 		return;
 
-	wa_init_start(w, engine->gt, "whitelist", engine->name);
+	wa_init_start(w, "whitelist", engine->name);
 
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_METEORLAKE(i915))
+		; /* noop; none at this time */
+	else if (IS_PONTEVECCHIO(i915))
 		pvc_whitelist_build(engine);
 	else if (IS_DG2(i915))
 		dg2_whitelist_build(engine);
@@ -2447,10 +2512,44 @@ static bool needs_wa_1308578152(struct intel_engine_cs *engine)
 		GEN_DSS_PER_GSLICE;
 }
 
+static void rcs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
+					 struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (GRAPHICS_VER(i915) >= 11) {
+		bool enable_done = false;
+
+		if (GRAPHICS_VER(i915) >= 12)
+			enable_done = gen9_debug_td_ctl_init(engine, wal);
+
+		if (!enable_done)
+			wa_masked_en(wal, GEN9_CS_DEBUG_MODE2,
+				     GEN11_GLOBAL_DEBUG_ENABLE);
+	}
+
+	if (GRAPHICS_VER(i915) == 9)
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1,
+			     GEN9_GLOBAL_DEBUG_ENABLE);
+}
+
 static void
 rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
+
+	if (IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) ||
+	    IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0) ||
+	    IS_DG2_GRAPHICS_STEP(i915, G10, STEP_B0, STEP_FOREVER) ||
+	    IS_DG2_G11(i915) || IS_DG2_G12(i915)) {
+		/* Wa_1509727124:dg2,mtl */
+		wa_masked_en(wal, GEN10_SAMPLER_MODE,
+			     SC_DISABLE_POWER_OPTIMIZATION_EBB);
+
+		/* Wa_22013037850:dg2,mtl */
+		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW,
+			    DISABLE_128B_EVICTION_COMMAND_UDW);
+	}
 
 	/*
 	 * This tuning setting proves beneficial only on ATS-M designs; the
@@ -2480,14 +2579,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 
 		/* Wa_16011620976:dg2_g11 */
 		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW, DIS_CHAIN_2XSIMD8);
-	}
-
-	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_B0, STEP_FOREVER) ||
-	    IS_DG2_GRAPHICS_STEP(i915, G11, STEP_A0, STEP_FOREVER) ||
-	    IS_DG2_G12(i915)) {
-		/* Wa_1509727124:dg2 */
-		wa_masked_en(wal, GEN10_SAMPLER_MODE,
-			     SC_DISABLE_POWER_OPTIMIZATION_EBB);
 	}
 
 	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_B0) ||
@@ -2520,15 +2611,15 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 	}
 
 	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_B0, STEP_FOREVER) ||
-	    IS_DG2_G11(i915) || IS_DG2_G12(i915)) {
-		/* Wa_22013037850:dg2 */
-		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW,
-			    DISABLE_128B_EVICTION_COMMAND_UDW);
-
-		/* Wa_22012856258:dg2 */
+	    IS_DG2_G11(i915) || IS_DG2_G12(i915) ||
+	    IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0)) {
+		/* Wa_22012856258:dg2,mtl */
 		wa_masked_en(wal, GEN7_ROW_CHICKEN2,
 			     GEN12_DISABLE_READ_SUPPRESSION);
+	}
 
+	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_B0, STEP_FOREVER) ||
+	    IS_DG2_G11(i915) || IS_DG2_G12(i915)) {
 		/*
 		 * Wa_22010960976:dg2
 		 * Wa_14013347512:dg2
@@ -2606,6 +2697,14 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		       0 /* Wa_14012342262 :write-only reg, so skip
 			    verification */,
 		       true);
+	}
+
+	if (IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) ||
+	    IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0)) {
+		/* Wa_22014600077:mtl */
+		wa_masked_en(wal,
+			     GEN10_CACHE_MODE_SS,
+			     ENABLE_EU_COUNT_FOR_TDL_FLUSH);
 	}
 
 	if (IS_DG1_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) ||
@@ -2695,17 +2794,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_masked_en(wal,
 			     GEN10_SAMPLER_MODE,
 			     ENABLE_SMALLPL);
-	}
-
-	if (i915_modparams.debug_eu && GRAPHICS_VER(i915) >= 11) {
-		bool enable_done = false;
-
-		if (GRAPHICS_VER(i915) >= 12)
-			enable_done = gen9_debug_td_ctl_init(engine, wal);
-
-		if (!enable_done)
-			wa_masked_en(wal, GEN9_CS_DEBUG_MODE2,
-				     GEN11_GLOBAL_DEBUG_ENABLE);
 	}
 
 	if (GRAPHICS_VER(i915) == 11) {
@@ -2843,11 +2931,12 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 				 GEN8_LQSQ_NONIA_COHERENT_ATOMICS_ENABLE, 0);
 		wa_write_clr_set(wal, GEN9_SCRATCH1,
 				 EVICTION_PERF_FIX_ENABLE, 0);
-
-		if (i915_modparams.debug_eu)
-			wa_masked_en(wal, GEN9_CS_DEBUG_MODE1,
-				     GEN9_GLOBAL_DEBUG_ENABLE);
 	}
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (i915->debuggers.enable_eu_debug)
+		rcs_engine_wa_add_debug_mode(engine, wal);
+#endif
 
 	if (IS_HASWELL(i915)) {
 		/* WaSampleCChickenBitEnable:hsw */
@@ -3069,6 +3158,16 @@ xcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 					    XEHP_BLITTER_ROUND_ROBIN_MODE);
 }
 
+static void ccs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
+					 struct i915_wa_list *wal)
+{
+	gen9_debug_td_ctl_init(engine, wal);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(engine->i915))
+		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+}
+
 static void
 ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
@@ -3077,13 +3176,10 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_masked_en(wal, GEN10_CACHE_MODE_SS, DISABLE_ECC);
 	}
 
-	if (i915_modparams.debug_eu) {
-		gen9_debug_td_ctl_init(engine, wal);
-
-		/* Wa_14015527279:pvc */
-		if (IS_PONTEVECCHIO(engine->i915))
-			wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
-	}
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (engine->i915->debuggers.enable_eu_debug)
+		ccs_engine_wa_add_debug_mode(engine, wal);
+#endif
 
 	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_18015335494:pvc */
@@ -3134,6 +3230,9 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		 * performance guide section.
 		 */
 		wa_write(wal, XEHPC_L3SCRUB, SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
+
+		/* Wa_16016694945 */
+		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
 	}
 
 	if (IS_XEHPSDV(i915)) {
@@ -3177,8 +3276,13 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 
 		/* Wa_16015675438:dg2,pvc */
 		wa_masked_en(wal, FF_SLICE_CS_CHICKEN2, GEN12_PERF_FIX_BALANCING_CFE_DISABLE);
+	}
 
-		/* Wa_18018781329:dg2,pvc */
+	if (IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) ||
+	    IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0) ||
+	    IS_PONTEVECCHIO(i915) ||
+	    IS_DG2(i915)) {
+		/* Wa_18018781329:dg2,pvc,mtl*/
 		wa_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, VDBX_MOD_CTRL, FORCE_MISS_FTLB);
@@ -3254,9 +3358,19 @@ void intel_engine_init_workarounds(struct intel_engine_cs *engine)
 	if (GRAPHICS_VER(engine->i915) < 4)
 		return;
 
-	wa_init_start(wal, engine->gt, "engine", engine->name);
+	wa_init_start(wal, "engine", engine->name);
 	engine_init_workarounds(engine, wal);
 	wa_init_finish(wal, false);
+}
+
+void intel_engine_wa_add_debug_mode(struct intel_engine_cs *engine)
+{
+	struct i915_wa_list *wal = &engine->wa_list;
+
+	if (engine->class == COMPUTE_CLASS)
+		ccs_engine_wa_add_debug_mode(engine, wal);
+	else if (engine->class == RENDER_CLASS)
+		rcs_engine_wa_add_debug_mode(engine, wal);
 }
 
 void intel_engine_allow_user_register_access(struct intel_engine_cs *engine,

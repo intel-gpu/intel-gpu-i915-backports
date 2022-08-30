@@ -140,6 +140,7 @@ enum intel_engine_id {
 	CCS2,
 	CCS3,
 #define _CCS(n) (CCS0 + (n))
+	GSC0,
 	I915_NUM_ENGINES
 #define INVALID_ENGINE ((enum intel_engine_id)-1)
 };
@@ -168,6 +169,21 @@ struct intel_engine_execlists {
 	 * @preempt: reset the current context if it fails to give way
 	 */
 	struct timer_list preempt;
+
+	/**
+	 * @preempt_target: active request at the time of the preemption request
+	 *
+	 * We force a preemption to occur if the pending contexts have not
+	 * been promoted to active upon receipt of the CS ack event within
+	 * the timeout. This timeout maybe chosen based on the target,
+	 * using a very short timeout if the context is no longer schedulable.
+	 * That short timeout may not be applicable to other contexts, so
+	 * if a context switch should happen within before the preemption
+	 * timeout, we may shoot early at an innocent context. To prevent this,
+	 * we record which context was active at the time of the preemption
+	 * request and only reset that context upon the timeout.
+	 */
+	const struct i915_request *preempt_target;
 
 	/**
 	 * @ccid: identifier for contexts submitted to this engine
@@ -557,9 +573,9 @@ struct intel_engine_cs {
 #define I915_ENGINE_HAS_RCS_REG_STATE  BIT(9)
 #define I915_ENGINE_HAS_EU_PRIORITY    BIT(10)
 #define I915_ENGINE_FIRST_RENDER_COMPUTE BIT(11)
-#define I915_ENGINE_HAS_EU_ATTENTION   BIT(12)
-#define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(13)
-#define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT      BIT(14)
+#define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT BIT(12)
+#define I915_ENGINE_HAS_EU_ATTENTION   BIT(13)
+#define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(14)
 	unsigned int flags;
 
 	/*
@@ -662,12 +678,6 @@ intel_engine_has_relative_mmio(const struct intel_engine_cs * const engine)
 	return engine->flags & I915_ENGINE_HAS_RELATIVE_MMIO;
 }
 
-static inline bool
-intel_engine_has_eu_attention(const struct intel_engine_cs *engine)
-{
-	return engine->flags & I915_ENGINE_HAS_EU_ATTENTION;
-}
-
 /* Wa_14014475959:dg2 */
 static inline bool
 intel_engine_uses_wa_hold_ccs_switchout(struct intel_engine_cs *engine)
@@ -675,26 +685,10 @@ intel_engine_uses_wa_hold_ccs_switchout(struct intel_engine_cs *engine)
 	return engine->flags & I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT;
 }
 
-#define instdone_has_slice(dev_priv___, sseu___, slice___) \
-	((GRAPHICS_VER(dev_priv___) == 7 ? 1 : ((sseu___)->slice_mask)) & BIT(slice___))
-
-#define instdone_has_subslice(dev_priv__, sseu__, slice__, subslice__) \
-	(GRAPHICS_VER(dev_priv__) == 7 ? (1 & BIT(subslice__)) : \
-	 intel_sseu_has_subslice(sseu__, 0, subslice__))
-
-#define for_each_instdone_slice_subslice(dev_priv_, sseu_, slice_, subslice_) \
-	for ((slice_) = 0, (subslice_) = 0; (slice_) < I915_MAX_SLICES; \
-	     (subslice_) = ((subslice_) + 1) % I915_MAX_SUBSLICES, \
-	     (slice_) += ((subslice_) == 0)) \
-		for_each_if((instdone_has_slice(dev_priv_, sseu_, slice_)) && \
-			    (instdone_has_subslice(dev_priv_, sseu_, slice_, \
-						    subslice_)))
-
-#define for_each_instdone_gslice_dss_xehp(dev_priv_, sseu_, iter_, gslice_, dss_) \
-	for ((iter_) = 0, (gslice_) = 0, (dss_) = 0; \
-	     (iter_) < GEN_SS_MASK_SIZE; \
-	     (iter_)++, (gslice_) = (iter_) / GEN_DSS_PER_GSLICE, \
-	     (dss_) = (iter_) % GEN_DSS_PER_GSLICE) \
-		for_each_if(intel_sseu_has_subslice((sseu_), 0, (iter_)))
+static inline bool
+intel_engine_has_eu_attention(const struct intel_engine_cs *engine)
+{
+	return engine->flags & I915_ENGINE_HAS_EU_ATTENTION;
+}
 
 #endif /* __INTEL_ENGINE_TYPES_H__ */

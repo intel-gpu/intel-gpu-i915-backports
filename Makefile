@@ -43,20 +43,18 @@ BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | c
 # for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_DG1_200828.0"
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
 
-BASE_KER_VER_COUNT=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "\"" -f 2 | cut -d "-" -f 2 | awk -F "." '{print NF-1}' 2> /dev/null || echo 1)
+BASE_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "-" -f1 2> /dev/null || echo 1)
+BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_RELEASE | tail -1 | cut -d " " -f3 | cut -d '"' -f2 2> /dev/null || echo 1)
 
-ifeq ($(BASE_KER_VER_COUNT),2)
-	BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '.' -f 1-3 2> /dev/null || echo 1)
-else
-	BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '.' -f 1-5 2> /dev/null || echo 1)
-endif
-RHEL_KERN_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 1 2> /dev/null || echo 1)
-
-KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
+KER_VER := $(shell cat versions | grep $(shell bash scripts/bp_get_latest_KV.sh) | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
 
 RHEL_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
 RHEL_BACKPORT_MINOR_XX = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 | cut -c -2 2> /dev/null)
 RHEL_BACKPORT_MINOR_YY = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 3 | cut -c -2 2> /dev/null)
+
+BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MAJOR | cut -d " " -f3 2> /dev/null)
+BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MINOR | cut -d " " -f3 2> /dev/null)
+ADD_KV := $(shell cat versions | grep RHEL_$(BACKPORT_MAJOR).$(BACKPORT_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
 
 ifeq ($(RHEL_BACKPORT_MINOR_XX),el)
 	RHEL_BACKPORT_MINOR_XX = 0;
@@ -111,9 +109,11 @@ define filechk_osv_version.h
 endef
 
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
-ifeq ($(RHEL_KERN_VER), 4.18.0)
-	@gawk -i inplace '!/BASE_KERNEL_NAME/' versions
-	@echo 'BASE_KERNEL_NAME="$(BASE_KER_VER)"' >> versions
+
+ifneq ($(BACKPORT_MAJOR).$(BACKPORT_MINOR), 8.4)
+ifeq ($(ADD_KV), )
+	@echo 'RHEL_$(BACKPORT_MAJOR).$(BACKPORT_MINOR)_KERNEL_VERSION="$(BASE_VER)-$(BASE_KER_VER)"' >> versions
+endif
 endif
 	$(call filechk,osv_version.h)
 

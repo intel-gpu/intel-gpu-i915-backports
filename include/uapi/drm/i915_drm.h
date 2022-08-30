@@ -2671,8 +2671,6 @@ struct drm_i915_query_item {
 	/**
 	 * @flags:
 	 *
-	 * When &query_id == %DRM_I915_QUERY_TOPOLOGY_INFO, must be 0.
-	 *
 	 * When &query_id == %DRM_I915_QUERY_PERF_CONFIG, must be one of the
 	 * following:
 	 *
@@ -2682,6 +2680,8 @@ struct drm_i915_query_item {
 	 *
 	 * When &query_id == %DRM_I915_QUERY_GEOMETRY_SUBSLICES must contain
 	 * a struct i915_engine_class_instance that references a render engine.
+	 *
+	 * For all other &query_id values, &flags must be 0.
 	 */
 	__u32 flags;
 #define DRM_I915_QUERY_PERF_CONFIG_LIST          1

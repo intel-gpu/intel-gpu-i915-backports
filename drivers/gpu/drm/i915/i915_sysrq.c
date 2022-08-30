@@ -137,7 +137,7 @@ static void show_gts(struct drm_i915_private *i915, struct drm_printer *p)
 	struct intel_gt *gt;
 	int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		show_gt(gt, p);
 }
 
