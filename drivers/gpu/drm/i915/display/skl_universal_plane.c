@@ -786,13 +786,21 @@ static u32 skl_plane_ctl_tiling(u64 fb_modifier)
 	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
 	case PRELIM_I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
 		return PLANE_CTL_TILED_4 | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
+	case PRELIM_I915_FORMAT_MOD_4_TILED_MTL_RC_CCS:
+		return PLANE_CTL_TILED_4 |
+			PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
+			PLANE_CTL_CLEAR_COLOR_DISABLE;
+	case PRELIM_I915_FORMAT_MOD_4_TILED_MTL_RC_CCS_CC:
+		return PLANE_CTL_TILED_4 | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
+	case PRELIM_I915_FORMAT_MOD_4_TILED_MTL_MC_CCS:
+		return PLANE_CTL_TILED_4 | PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Y_TILED_CCS:
 	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
 		return PLANE_CTL_TILED_Y | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
 		return PLANE_CTL_TILED_Y |
-			PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
-			PLANE_CTL_CLEAR_COLOR_DISABLE;
+		       PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
+		       PLANE_CTL_CLEAR_COLOR_DISABLE;
 	case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
 		return PLANE_CTL_TILED_Y | PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Yf_TILED:
@@ -1483,9 +1491,12 @@ static int skl_plane_max_scale(struct drm_i915_private *dev_priv,
 	 * whether we can use the HQ scaler mode. Assume
 	 * the best case.
 	 * FIXME need to properly check this later.
+	 * FIXME On MTL, adjust specific scaler's downscaling capability.
 	 */
-	if (DISPLAY_VER(dev_priv) >= 10 ||
-	    !intel_format_info_is_yuv_semiplanar(fb->format, fb->modifier))
+	if (DISPLAY_VER(dev_priv) >= 14)
+		return 0x10000;
+	else if (DISPLAY_VER(dev_priv) >= 10 ||
+		 !intel_format_info_is_yuv_semiplanar(fb->format, fb->modifier))
 		return 0x30000 - 1;
 	else
 		return 0x20000 - 1;
@@ -2451,16 +2462,20 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 		break;
 	case PLANE_CTL_TILED_Y:
 		plane_config->tiling = I915_TILING_Y;
-		if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE) {
-			if (DISPLAY_VER(dev_priv) >= 12)
+		if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE)
+			if (DISPLAY_VER(dev_priv) >= 14)
+				fb->modifier = PRELIM_I915_FORMAT_MOD_4_TILED_MTL_RC_CCS;
+			else if (DISPLAY_VER(dev_priv) >= 12)
 				fb->modifier = I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS;
 			else
 				fb->modifier = I915_FORMAT_MOD_Y_TILED_CCS;
-		} else if (val & PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE) {
-			fb->modifier = I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS;
-		} else {
+		else if (val & PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE)
+			if (DISPLAY_VER(dev_priv) >= 14)
+				fb->modifier = PRELIM_I915_FORMAT_MOD_4_TILED_MTL_MC_CCS;
+			else
+				fb->modifier = I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS;
+		else
 			fb->modifier = I915_FORMAT_MOD_Y_TILED;
-		}
 		break;
 	case PLANE_CTL_TILED_YF: /* aka PLANE_CTL_TILED_4 on XE_LPD+ */
 		if (HAS_4TILE(dev_priv)) {

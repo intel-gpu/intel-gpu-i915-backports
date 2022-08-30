@@ -68,6 +68,8 @@
 #define IPEIR(base)				_MMIO((base) + 0x88)
 #define IPEHR(base)				_MMIO((base) + 0x8c)
 #define RING_ID(base)				_MMIO((base) + 0x8c)
+/* LSB used to determine whether the engine instance is even or odd */
+#define   RING_ENGINE_ID_LSB			REG_BIT(4)
 #define RING_NOPID(base)			_MMIO((base) + 0x94)
 #define RING_HWSTAM(base)			_MMIO((base) + 0x98)
 #define RING_MI_MODE(base)			_MMIO((base) + 0x9c)

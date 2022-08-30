@@ -24,6 +24,7 @@ struct drm_i915_file_private;
 
 struct i915_drm_clients {
 	struct drm_i915_private *i915;
+	struct workqueue_struct *wq;
 
 	struct xarray xarray;
 	u32 next_id;

@@ -325,7 +325,7 @@ static void pf_handle_vf_flr(struct intel_iov *iov, u32 vfid)
 
 	dev_info(dev, "VF%u FLR\n", vfid);
 
-	for_each_gt(iov_to_i915(iov), gtid, gt)
+	for_each_gt(gt, iov_to_i915(iov), gtid)
 		pf_init_vf_flr(&gt->iov, vfid);
 }
 

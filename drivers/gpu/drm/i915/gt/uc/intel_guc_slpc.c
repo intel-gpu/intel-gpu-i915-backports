@@ -112,6 +112,15 @@ static int guc_action_slpc_set_param_nb(struct intel_guc *guc, u8 id, u32 value)
 	return ret > 0 ? -EPROTO : ret;
 }
 
+static int slpc_set_param_nb(struct intel_guc_slpc *slpc, u8 id, u32 value)
+{
+	struct intel_guc *guc = slpc_to_guc(slpc);
+
+	GEM_BUG_ON(id >= SLPC_MAX_PARAM);
+
+	return guc_action_slpc_set_param_nb(guc, id, value);
+}
+
 static int guc_action_slpc_set_param(struct intel_guc *guc, u8 id, u32 value)
 {
 	u32 request[] = {
@@ -175,15 +184,6 @@ static int slpc_query_task_state(struct intel_guc_slpc *slpc)
 	return ret;
 }
 
-static int slpc_set_param_nb(struct intel_guc_slpc *slpc, u8 id, u32 value)
-{
-	struct intel_guc *guc = slpc_to_guc(slpc);
-
-	GEM_BUG_ON(id >= SLPC_MAX_PARAM);
-
-	return guc_action_slpc_set_param_nb(guc, id, value);
-}
-
 static int slpc_set_param(struct intel_guc_slpc *slpc, u8 id, u32 value)
 {
 	struct intel_guc *guc = slpc_to_guc(slpc);
@@ -233,8 +233,12 @@ static int slpc_force_min_freq(struct intel_guc_slpc *slpc, u32 freq)
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
 		/* Non-blocking request will avoid stalls */
 		ret = slpc_set_param_nb(slpc,
-				     SLPC_PARAM_GLOBAL_MIN_GT_UNSLICE_FREQ_MHZ,
-				     freq);
+					SLPC_PARAM_GLOBAL_MIN_GT_UNSLICE_FREQ_MHZ,
+					freq);
+		if (ret)
+			drm_notice(&i915->drm,
+				   "Failed to send set_param for min freq(%d): (%d)\n",
+				   freq, ret);
 	}
 
 	return ret;
@@ -243,6 +247,7 @@ static int slpc_force_min_freq(struct intel_guc_slpc *slpc, u32 freq)
 static void slpc_boost_work(struct work_struct *work)
 {
 	struct intel_guc_slpc *slpc = container_of(work, typeof(*slpc), boost_work);
+	int err;
 
 	/*
 	 * Raise min freq to boost. It's possible that
@@ -252,7 +257,8 @@ static void slpc_boost_work(struct work_struct *work)
 	 */
 	mutex_lock(&slpc->lock);
 	if (atomic_read(&slpc->num_waiters)) {
-		if (!slpc_force_min_freq(slpc, slpc->boost_freq))
+		err = slpc_force_min_freq(slpc, slpc->boost_freq);
+		if (!err)
 			slpc->num_boosts++;
 	}
 	mutex_unlock(&slpc->lock);

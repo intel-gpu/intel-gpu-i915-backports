@@ -178,6 +178,8 @@ intel_write_status_page(struct intel_engine_cs *engine, int reg, u32 value)
 #define I915_GEM_HWS_BIND_ADDR		(I915_GEM_HWS_BIND * sizeof(u32))
 #define I915_GEM_HWS_PXP		0x60
 #define I915_GEM_HWS_PXP_ADDR		(I915_GEM_HWS_PXP * sizeof(u32))
+#define I915_GEM_HWS_GSC		0x62
+#define I915_GEM_HWS_GSC_ADDR		(I915_GEM_HWS_GSC * sizeof(u32))
 #define I915_GEM_HWS_SCRATCH		0x80
 
 #define I915_HWS_CSB_BUF0_INDEX		0x10
@@ -206,6 +208,8 @@ int intel_ring_submission_setup(struct intel_engine_cs *engine);
 
 int intel_engine_stop_cs(struct intel_engine_cs *engine);
 void intel_engine_cancel_stop_cs(struct intel_engine_cs *engine);
+
+void intel_engine_wait_for_pending_mi_fw(struct intel_engine_cs *engine);
 
 void intel_engine_set_hwsp_writemask(struct intel_engine_cs *engine, u32 mask);
 

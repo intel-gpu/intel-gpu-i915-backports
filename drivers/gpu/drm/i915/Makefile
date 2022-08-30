@@ -42,7 +42,6 @@ i915-y += i915_driver.o \
 	  i915_config.o \
 	  i915_drm_client.o \
 	  i915_getparam.o \
-	  i915_hwmon.o \
 	  i915_ioctl.o \
 	  i915_irq.o \
 	  i915_mitigations.o \
@@ -139,6 +138,7 @@ gt-y += \
 	gt/intel_ring.o \
 	gt/intel_ring_submission.o \
 	gt/intel_rps.o \
+	gt/intel_sa_media.o \
 	gt/intel_sseu.o \
 	gt/intel_sseu_debugfs.o \
 	gt/intel_timeline.o \
@@ -226,7 +226,9 @@ i915-y += gt/uc/intel_uc.o \
 	  gt/uc/intel_guc_submission.o \
 	  gt/uc/intel_huc.o \
 	  gt/uc/intel_huc_debugfs.o \
-	  gt/uc/intel_huc_fw.o
+	  gt/uc/intel_huc_fw.o \
+	  gt/uc/intel_gsc_fw.o \
+	  gt/uc/intel_gsc_uc.o
 
 # graphics system controller (GSC) support
 i915-y += gt/intel_gsc.o
@@ -258,6 +260,9 @@ iov-$(CPTCFG_DRM_I915_SELFTEST) += \
 	gt/iov/selftests/iov_selftest_actions.o \
 	gt/iov/selftests/iov_selftest_utils.o
 i915-y += $(iov-$(CPTCFG_DRM_I915_SELFTEST))
+
+# graphics hardware monitoring (HWMON) support
+i915-$(CONFIG_HWMON) += i915_hwmon.o
 
 # modesetting core code
 i915-y += \
@@ -325,6 +330,7 @@ i915-y += \
 	display/icl_dsi.o \
 	display/intel_backlight.o \
 	display/intel_crt.o \
+	display/intel_cx0_phy.o \
 	display/intel_ddi.o \
 	display/intel_ddi_buf_trans.o \
 	display/intel_display_trace.o \

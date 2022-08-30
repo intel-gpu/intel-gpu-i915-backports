@@ -36,7 +36,6 @@ struct drm_i915_gem_object *
 i915_gem_object_create_lmem(struct drm_i915_private *i915,
 			    resource_size_t size,
 			    unsigned int flags);
-
 int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 				struct drm_i915_gem_object *obj,
 				resource_size_t size,

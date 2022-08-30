@@ -72,17 +72,17 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 	va_end(args);
 }
 
-static void
+void
 __intel_gt_init_early(struct intel_gt *gt,
 		      struct intel_uncore *uncore,
+		      spinlock_t *irq_lock,
 		      struct intel_uncore_mmio_debug *mmio_debug,
 		      struct drm_i915_private *i915)
 {
 	gt->i915 = i915;
 	gt->uncore = uncore;
+	gt->irq_lock = irq_lock;
 	gt->mmio_debug = mmio_debug;
-
-	spin_lock_init(&gt->irq_lock);
 
 	INIT_LIST_HEAD(&gt->closed_vma);
 	spin_lock_init(&gt->closed_lock);
@@ -102,6 +102,7 @@ __intel_gt_init_early(struct intel_gt *gt,
 	intel_gt_init_tlb(gt);
 	intel_gt_pm_init_early(gt);
 
+	intel_wopcm_init_early(&gt->wopcm);
 	intel_flat_ppgtt_pool_init_early(&gt->fpp);
 	intel_uc_init_early(&gt->uc);
 	intel_rps_init_early(&gt->rps);
@@ -137,10 +138,9 @@ static int intel_gt_probe_lmem(struct intel_gt *gt)
 		return err;
 	}
 
-	id = INTEL_REGION_LMEM + instance;
+	id = INTEL_REGION_LMEM_0 + instance;
 
 	mem->id = id;
-	mem->type = INTEL_MEMORY_LOCAL;
 	mem->instance = to_logical_instance(gt, instance);
 	mem->gt = gt;
 
@@ -154,14 +154,23 @@ static int intel_gt_probe_lmem(struct intel_gt *gt)
 	return 0;
 }
 
-void intel_gt_init_early(struct intel_gt *gt, struct drm_i915_private *i915)
+int intel_gt_init_early(struct intel_gt *gt, struct drm_i915_private *i915)
 {
-	__intel_gt_init_early(gt, &i915->uncore, &i915->mmio_debug, i915);
+	spinlock_t *irq_lock = drmm_kzalloc(&i915->drm, sizeof(*irq_lock), GFP_KERNEL);
+	if (!irq_lock)
+		return -ENOMEM;
+
+	spin_lock_init(irq_lock);
+
+	__intel_gt_init_early(gt, &i915->uncore, irq_lock, &i915->mmio_debug, i915);
+
+	return 0;
 }
 
 void intel_gt_init_ggtt(struct intel_gt *gt, struct i915_ggtt *ggtt)
 {
 	gt->ggtt = ggtt;
+	list_add_tail(&gt->ggtt_link, &ggtt->gt_list);
 }
 
 int intel_gt_init_mmio(struct intel_gt *gt)
@@ -292,16 +301,6 @@ static void gen6_clear_engine_error_register(struct intel_engine_cs *engine)
 	GEN6_RING_FAULT_REG_POSTING_READ(engine);
 }
 
-bool intel_gt_has_eus(const struct intel_gt *gt)
-{
-	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
-		return true;
-
-	/* find_first_bit returns #bits when bitmap is empty */
-	return intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0) <
-		XEHP_BITMAP_BITS(gt->info.sseu.subslice_mask);
-}
-
 void
 intel_gt_clear_error_registers(struct intel_gt *gt,
 			       intel_engine_mask_t engine_mask)
@@ -310,26 +309,25 @@ intel_gt_clear_error_registers(struct intel_gt *gt,
 	struct intel_uncore *uncore = gt->uncore;
 	u32 eir;
 
-	if (IS_GRAPHICS_VER(i915, 3, 5))
+	if (GRAPHICS_VER(i915) != 2)
 		clear_register(uncore, PGTBL_ER);
 
 	if (GRAPHICS_VER(i915) < 4)
 		clear_register(uncore, IPEIR(RENDER_RING_BASE));
-
-	if (intel_gt_has_eus(gt)) {
+	else
 		clear_register(uncore, IPEIR_I965);
-		clear_register(uncore, EIR);
-		eir = intel_uncore_read(uncore, EIR);
-		if (eir) {
-			/*
-			 * some errors might have become stuck,
-			 * mask them.
-			 */
-			DRM_DEBUG_DRIVER("EIR stuck: 0x%08x, masking\n", eir);
-			rmw_set(uncore, EMR, eir);
-			intel_uncore_write(uncore, GEN2_IIR,
-					   I915_MASTER_ERROR_INTERRUPT);
-		}
+
+	clear_register(uncore, EIR);
+	eir = intel_uncore_read(uncore, EIR);
+	if (eir) {
+		/*
+		 * some errors might have become stuck,
+		 * mask them.
+		 */
+		DRM_DEBUG_DRIVER("EIR stuck: 0x%08x, masking\n", eir);
+		rmw_set(uncore, EMR, eir);
+		intel_uncore_write(uncore, GEN2_IIR,
+				   I915_MASTER_ERROR_INTERRUPT);
 	}
 
 	if (HAS_MSLICE_STEERING(i915)) {
@@ -710,6 +708,117 @@ static void release_vm(struct intel_gt *gt)
 	i915_vm_put(vm);
 }
 
+/* FIXME Add documentation to API */
+static struct i915_request *
+switch_context_to(struct intel_context *ce, struct i915_request *from)
+{
+	struct i915_request *rq;
+	int err;
+
+	rq = i915_request_create(ce);
+	if (IS_ERR(rq))
+		return rq;
+
+	err = i915_request_await_dma_fence(rq, &from->fence);
+	if (err < 0) {
+		i915_request_add(rq);
+		return ERR_PTR(err);
+	}
+
+	i915_request_get(rq);
+	i915_request_add(rq);
+
+	return rq;
+}
+
+/* FIXME Add documentation to API */
+static struct i915_request *load_default_context(struct intel_context *ce)
+{
+	struct intel_renderstate so;
+	struct i915_request *rq;
+	int err;
+
+	err = intel_renderstate_init(&so, ce);
+	if (err)
+		return ERR_PTR(err);
+
+	rq = i915_request_create(ce);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto err_fini;
+	}
+
+	err = intel_engine_emit_ctx_wa(rq);
+	if (err)
+		goto err_rq;
+
+	err = intel_renderstate_emit(&so, rq);
+	if (err)
+		goto err_rq;
+
+	rq = i915_request_get(rq);
+err_rq:
+	i915_request_add(rq);
+err_fini:
+	intel_renderstate_fini(&so, ce);
+	return err ? ERR_PTR(err) : rq;
+}
+
+/* FIXME Add documentation to API */
+static struct i915_request *
+record_default_context(struct intel_engine_cs *engine)
+{
+	struct i915_request *rq[2];
+	struct i915_gem_ww_ctx ww;
+	struct intel_context *ce;
+	int err;
+
+	/* We must be able to switch to something! */
+	GEM_BUG_ON(!engine->kernel_context);
+
+	ce = intel_context_create(engine);
+	if (IS_ERR(ce))
+		return ERR_CAST(ce);
+
+	err = 0;
+	for_i915_gem_ww(&ww, err, true)
+		err = intel_context_pin_ww(ce, &ww);
+	if (err) {
+		rq[0] = ERR_PTR(err);
+		goto out;
+	}
+
+	/* Prime the golden context with known good state */
+	rq[0] = load_default_context(ce);
+	if (IS_ERR(rq[0]))
+		goto out_unpin;
+
+	rq[1] = switch_context_to(engine->kernel_context, rq[0]);
+	i915_request_put(rq[0]);
+	if (IS_ERR(rq[1])) {
+		rq[0] = rq[1];
+		goto out_unpin;
+	}
+
+	/* Reload the golden context to record the effect of any indirect w/a */
+	rq[0] = switch_context_to(ce, rq[1]);
+	i915_request_put(rq[1]);
+	if (IS_ERR(rq[0]))
+		goto out_unpin;
+
+	/*
+	 * Keep the context referenced until after we read back the
+	 * HW image. The reference is returned to the caller via
+	 * rq->context.
+	 */
+	intel_context_get(ce);
+out_unpin:
+	intel_context_unpin(ce);
+out:
+	intel_context_put(ce);
+	return rq[0];
+}
+
 static int __engines_record_defaults(struct intel_gt *gt)
 {
 	struct i915_request *requests[I915_NUM_ENGINES] = {};
@@ -727,47 +836,15 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	 */
 
 	for_each_engine(engine, gt, id) {
-		struct intel_renderstate so;
-		struct intel_context *ce;
 		struct i915_request *rq;
 
-		/* We must be able to switch to something! */
-		GEM_BUG_ON(!engine->kernel_context);
-
-		ce = intel_context_create(engine);
-		if (IS_ERR(ce)) {
-			err = PTR_ERR(ce);
-			goto out;
-		}
-
-		err = intel_renderstate_init(&so, ce);
-		if (err)
-			goto err;
-
-		rq = i915_request_create(ce);
+		rq = record_default_context(engine);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
-			goto err_fini;
-		}
-
-		err = intel_engine_emit_ctx_wa(rq);
-		if (err)
-			goto err_rq;
-
-		err = intel_renderstate_emit(&so, rq);
-		if (err)
-			goto err_rq;
-
-err_rq:
-		requests[id] = i915_request_get(rq);
-		i915_request_add(rq);
-err_fini:
-		intel_renderstate_fini(&so, ce);
-err:
-		if (err) {
-			intel_context_put(ce);
 			goto out;
 		}
+
+		requests[id] = rq;
 	}
 
 	/* Flush the default context image to memory, and enable powersaving. */
@@ -957,6 +1034,12 @@ int intel_gt_init(struct intel_gt *gt)
 
 	intel_pxp_init(&gt->pxp);
 
+	/*
+	 * FIXME: this should be moved to a delayed work because it takes too
+	 * long, but for now we're doing it as the last step of the init flow
+	 */
+	intel_uc_init_hw_late(&gt->uc);
+
 	goto out_fw;
 err_gt:
 	__intel_gt_disable(gt);
@@ -1057,31 +1140,36 @@ void intel_gt_shutdown(struct intel_gt *gt)
 	intel_iov_vf_put_wakeref_wa(&gt->iov);
 }
 
-static int
-tile_setup(struct intel_gt *gt,
-	   unsigned int id,
-	   struct drm_i915_private *i915,
-	   phys_addr_t phys_addr)
+int intel_tile_setup(struct intel_gt *gt, unsigned int id,
+		     phys_addr_t phys_addr, u32 gsi_offset)
 {
+	struct drm_i915_private *i915 = gt->i915;
 	struct intel_uncore *uncore;
 	struct intel_uncore_mmio_debug *mmio_debug;
+	spinlock_t *irq_lock;
 	int ret;
 
 	gt->phys_addr = phys_addr;
-	gt->info.id = id;
+
+	/* GSI offset is only applicable for media GTs */
+	drm_WARN_ON(&i915->drm, gsi_offset);
 
 	if (id) {
-		uncore = kzalloc(sizeof(*uncore), GFP_KERNEL);
+		uncore = drmm_kzalloc(&i915->drm, sizeof(*uncore), GFP_KERNEL);
 		if (!uncore)
 			return -ENOMEM;
 
-		mmio_debug = kzalloc(sizeof(*mmio_debug), GFP_KERNEL);
-		if (!mmio_debug) {
-			kfree(uncore);
+		mmio_debug = drmm_kzalloc(&i915->drm, sizeof(*mmio_debug), GFP_KERNEL);
+		if (!mmio_debug)
 			return -ENOMEM;
-		}
 
-		__intel_gt_init_early(gt, uncore, mmio_debug, i915);
+		irq_lock = drmm_kzalloc(&i915->drm, sizeof(*irq_lock), GFP_KERNEL);
+		if (!irq_lock)
+			return -ENOMEM;
+
+		spin_lock_init(irq_lock);
+
+		__intel_gt_init_early(gt, uncore, irq_lock, mmio_debug, i915);
 	} else {
 		uncore = &i915->uncore;
 		mmio_debug = &i915->mmio_debug;
@@ -1119,15 +1207,13 @@ static void tile_cleanup(struct intel_gt *gt)
 {
 	intel_uncore_cleanup_mmio(gt->uncore);
 
-	if (gt->info.id) {
-		kfree(gt->mmio_debug);
-		kfree(gt->uncore);
+	if (gt->info.id)
 		kfree(gt);
-	}
 }
 
 static unsigned int tile_count(struct drm_i915_private *i915)
 {
+	unsigned int tiles;
 	u32 mtcfg;
 
 	/*
@@ -1137,7 +1223,13 @@ static unsigned int tile_count(struct drm_i915_private *i915)
 	if (IS_SRIOV_VF(i915)) {
 		u32 tile_mask = to_root_gt(i915)->iov.vf.config.tile_mask;
 
-		if (GEM_WARN_ON(!tile_mask))
+		/*
+		 * On XE_LPM+ platforms media engines are designed into separate tile
+		 */
+		if (MEDIA_VER(i915) >= 13)
+			return 2;
+
+		if (!HAS_REMOTE_TILES(i915) || GEM_WARN_ON(!tile_mask))
 			return 1;
 
 		return fls(tile_mask);
@@ -1148,16 +1240,24 @@ static unsigned int tile_count(struct drm_i915_private *i915)
 	 * MMIO vfuncs are not setup yet
 	 */
 	mtcfg = __raw_uncore_read32(&i915->uncore, XEHPSDV_MTCFG_ADDR);
-	return REG_FIELD_GET(TILE_COUNT, mtcfg) + 1;
+	tiles = REG_FIELD_GET(TILE_COUNT, mtcfg) + 1;
+
+	/*
+	 * On XE_LPM+ platforms media engines are designed into separate tile
+	 */
+	if (MEDIA_VER(i915) >= 13)
+		tiles++;
+
+	return tiles;
 }
 
 static unsigned int tile_mask(struct drm_i915_private *i915)
 {
 	unsigned long mask;
 
-	if (!HAS_REMOTE_TILES(i915))
+	if (!HAS_EXTRA_GTS(i915))
 		mask = BIT(0);
-	else if (IS_SRIOV_VF(i915))
+	else if (IS_SRIOV_VF(i915) && HAS_REMOTE_TILES(i915))
 		mask = to_root_gt(i915)->iov.vf.config.tile_mask;
 	else
 		mask = GENMASK(tile_count(i915) - 1, 0);
@@ -1165,9 +1265,10 @@ static unsigned int tile_mask(struct drm_i915_private *i915)
 	return mask;
 }
 
-int intel_gt_tiles_setup(struct drm_i915_private *i915)
+int intel_probe_gts(struct drm_i915_private *i915)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	const struct intel_gt_definition *gtdef;
 	phys_addr_t phys_addr;
 	unsigned int mmio_bar;
 	unsigned int i, tiles;
@@ -1178,49 +1279,58 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915)
 	mmio_bar = GRAPHICS_VER(i915) == 2 ? 1 : 0;
 	phys_addr = pci_resource_start(pdev, mmio_bar);
 
-	/* Setup root device first */
+	/* We always have at least one primary GT on any device */
 	gt = to_root_gt(i915);
+	gt->i915 = i915;
+	gt->name = "Primary GT";
+	gt->info.engine_mask = INTEL_INFO(i915)->platform_engine_mask;
 
-	ret = tile_setup(gt, 0, i915, phys_addr);
+	drm_dbg(&i915->drm, "Setting up %s %u\n", gt->name, gt->info.id);
+	ret = intel_tile_setup(gt, 0, phys_addr, 0);
 	if (ret)
 		return ret;
-
-	if (!HAS_REMOTE_TILES(i915)) {
-		i915->gts[0] = gt;
-		return 0;
-	}
 
 	enabled_tiles_mask = tile_mask(i915);
 	if (enabled_tiles_mask & BIT(0))
 		i915->gts[0] = gt;
 
-	/* Setup other tiles */
 	tiles = tile_count(i915);
 	drm_info(&i915->drm, "Tile count: %u\n", tiles);
 
-	if (GEM_WARN_ON(tiles > I915_MAX_GT))
-		return -EINVAL;
-
-	/* For Modern GENs size of GTTMMADR is 16MB (for each tile) */
-	if (IS_SRIOV_VF(i915)) {
-		if (GEM_WARN_ON(pci_resource_len(pdev, 0) < tiles * SZ_16M))
-			return -EINVAL;
-	} else {
-		if (GEM_WARN_ON(pci_resource_len(pdev, 0) / tiles != SZ_16M))
-			return -EINVAL;
-	}
-
 	i = 1;
 	for_each_set_bit_from(i, &enabled_tiles_mask, I915_MAX_GT) {
+		gtdef = &INTEL_INFO(i915)->extra_gts[i - 1];
+		if (!gtdef || !gtdef->setup)
+			break;
+
 		gt = kzalloc(sizeof(*gt), GFP_KERNEL);
 		if (!gt) {
 			ret = -ENOMEM;
 			goto err;
 		}
 
-		ret = tile_setup(gt, i, i915, phys_addr + SZ_16M * i);
-		if (ret)
+		gt->i915 = i915;
+		gt->name = gtdef->name;
+		gt->type = gtdef->type;
+		gt->info.engine_mask = gtdef->engine_mask;
+		gt->info.id = i;
+
+		drm_dbg(&i915->drm, "Setting up %s %u\n", gt->name, gt->info.id);
+		if (GEM_WARN_ON(range_overflows_t(resource_size_t,
+						  gtdef->mapping_base,
+						  SZ_16M,
+						  pci_resource_len(pdev, mmio_bar)))) {
+			ret = -ENODEV;
+			kfree(gt);
 			goto err;
+		}
+
+		ret = gtdef->setup(gt, i, phys_addr + gtdef->mapping_base,
+				   gtdef->gsi_offset);
+		if (ret) {
+			kfree(gt);
+			goto err;
+		}
 
 		i915->gts[i] = gt;
 	}
@@ -1230,9 +1340,9 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	i915_probe_error(i915, "Failed to initialize tile %u! (%d)\n", i, ret);
+	i915_probe_error(i915, "Failed to initialize %s %u! (%d)\n", gtdef->name, i, ret);
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		tile_cleanup(gt);
 		i915->gts[i] = NULL;
 	}
@@ -1246,9 +1356,12 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 	unsigned int id;
 	int ret;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		if (id > i915->remote_tiles)
 			break;
+
+		if (GRAPHICS_VER(i915) >= 8)
+			setup_private_pat(gt->uncore);
 
 		ret = intel_gt_probe_lmem(gt);
 		if (ret)
@@ -1263,7 +1376,7 @@ void intel_gt_tiles_cleanup(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		tile_cleanup(gt);
 		i915->gts[id] = NULL;
 	}

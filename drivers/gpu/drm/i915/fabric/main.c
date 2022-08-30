@@ -28,9 +28,7 @@
 #include "iaf_drv.h"
 #include "mbdb.h"
 #include "mbox.h"
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 #include "mei_iaf_user.h"
-#endif
 #include "netlink.h"
 #include "port.h"
 #include "routing_engine.h"
@@ -101,7 +99,7 @@ static int mode_get(char *val, const struct kernel_param *kp)
 	return snprintf(val, PAGE_SIZE, startup_mode_name(param_startup_mode));
 }
 
-static struct kernel_param_ops startup_mode_ops = {
+static const struct kernel_param_ops startup_mode_ops = {
 	.set = mode_set,
 	.get = mode_get,
 };
@@ -640,14 +638,12 @@ static int iaf_remove(struct platform_device *pdev)
 
 	mappings_ref_wait(dev);
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	/*
 	 * intentionally unregister with mei before the flush to maximize
 	 * the chance that remove will prevent an outstanding async init
 	 * from programming a new min SVN
 	 */
 	iaf_mei_stop(dev);
-#endif
 
 	/*
 	 * NOTE: any remove steps performed prior to this flush will race
@@ -720,13 +716,11 @@ void iaf_complete_init_dev(struct fdev *dev)
 		/* checked by netlink agent to reject early requests */
 		smp_store_release(&dev->all_sds_inited, true);
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	/*
 	 * Poke the MEI submodule to indicate that the device is functioning properly. If enabled
 	 * and currently allowed, automatic anti-rollback protection will be initiated.
 	 */
 	iaf_mei_indicate_device_ok(dev);
-#endif
 
 	dev_dbg(fdev_dev(dev), "device init complete\n");
 }
@@ -844,11 +838,9 @@ static int iaf_probe(struct platform_device *pdev)
 			goto add_error;
 	}
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	err = iaf_mei_start(dev);
 	if (err)
 		goto add_error;
-#endif
 
 	/* read link config before initializing FW since it may also use GPIO */
 	read_gpio_link_config_pins(dev);
@@ -863,9 +855,7 @@ static int iaf_probe(struct platform_device *pdev)
 
 load_error:
 	flush_any_outstanding_fw_initializations(dev);
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	iaf_mei_stop(dev);
-#endif
 
 add_error:
 	iaf_sysfs_remove(dev);

@@ -609,6 +609,49 @@ static const u8 dg2_rcs_offsets[] = {
 	END
 };
 
+static const u8 mtl_rcs_offsets[] = {
+       NOP(1),
+       LRI(15, POSTED),
+       REG16(0x244),
+       REG(0x034),
+       REG(0x030),
+       REG(0x038),
+       REG(0x03c),
+       REG(0x168),
+       REG(0x140),
+       REG(0x110),
+       REG(0x1c0),
+       REG(0x1c4),
+       REG(0x1c8),
+       REG(0x180),
+       REG16(0x2b4),
+       REG(0x120),
+       REG(0x124),
+
+       NOP(1),
+       LRI(9, POSTED),
+       REG16(0x3a8),
+       REG16(0x28c),
+       REG16(0x288),
+       REG16(0x284),
+       REG16(0x280),
+       REG16(0x27c),
+       REG16(0x278),
+       REG16(0x274),
+       REG16(0x270),
+
+       NOP(2),
+       LRI(2, POSTED),
+       REG16(0x5a8),
+       REG16(0x5ac),
+
+       NOP(6),
+       LRI(1, 0),
+       REG(0x0c8),
+
+       END
+};
+
 #undef END
 #undef REG16
 #undef REG
@@ -627,7 +670,9 @@ static const u8 *reg_offsets(const struct intel_engine_cs *engine)
 		   !intel_engine_has_relative_mmio(engine));
 
 	if (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE) {
-		if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 55))
+		if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 70))
+			return mtl_rcs_offsets;
+		else if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 55))
 			return dg2_rcs_offsets;
 		else if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 50))
 			return xehp_rcs_offsets;
@@ -766,12 +811,20 @@ lrc_setup_indirect_ctx(u32 *regs,
 		       u32 ctx_bb_ggtt_addr,
 		       u32 size)
 {
+	/*
+	 * NB: wa_bb are only run during context restore, and never if the
+	 * context restore is inhibited [CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT].
+	 */
+
+	/* Pointer to wa_bb instructions to execute */
+
 	GEM_BUG_ON(!size);
 	GEM_BUG_ON(!IS_ALIGNED(size, CACHELINE_BYTES));
 	GEM_BUG_ON(lrc_ring_indirect_ptr(engine) == -1);
 	regs[lrc_ring_indirect_ptr(engine) + 1] =
 		ctx_bb_ggtt_addr | (size / CACHELINE_BYTES);
 
+	/* When to run wa_bb during context restore (cacheline offset) */
 	GEM_BUG_ON(lrc_ring_indirect_offset(engine) == -1);
 	regs[lrc_ring_indirect_offset(engine) + 1] =
 		lrc_ring_indirect_offset_default(engine) << 6;
@@ -1234,6 +1287,7 @@ lrc_pin(struct intel_context *ce,
 
 void lrc_unpin(struct intel_context *ce)
 {
+	lrc_update_runtime(ce);
 	if (unlikely(ce->parallel.last_rq)) {
 		i915_request_put(ce->parallel.last_rq);
 		ce->parallel.last_rq = NULL;
@@ -1397,12 +1451,137 @@ static u32 *gen12_emit_indirectctx_bb(const struct intel_context *ce, u32 *cs)
 	return cs;
 }
 
+/*
+ * Once we're done with our own work, we need to explicitly re-load GPR regs
+ * from the context image again to put GPR regs back at their original values.
+ */
+static u32 *emit_restore_gpr(const struct intel_context *ce, u32 *cs, int count)
+{
+	u32 mem = i915_ggtt_offset(ce->state) + LRC_STATE_OFFSET +
+		(lrc_ring_gpr0(ce->engine) + 1) * sizeof(u32);
+	u32 gpr = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, 0));
+	int i;
+
+	GEM_BUG_ON(lrc_ring_gpr0(ce->engine) == -1);
+
+	for (i = 0; i < 2 * count; i++) { /* each GPR is 64b; 2 LRM each */
+		*cs++ = MI_LOAD_REGISTER_MEM_GEN8 |
+			MI_SRM_LRM_GLOBAL_GTT |
+			MI_LRI_LRM_CS_MMIO;
+		*cs++ = gpr;
+		*cs++ = mem;
+		*cs++ = 0;
+
+		gpr += sizeof(u32);
+		mem += 2 * sizeof(u32);
+	}
+
+	return cs;
+}
+
+static u32 *xehpc_emit_credits_wa(const struct intel_context *ce, u32 *cs)
+{
+	enum { ID = 0, INSTANCE, RSHIFT, WRITEMASK, __NUM_GPR };
+
+	/*
+	 * We need to set the PCIe credits (BCS_SWCTRL) to use based on the
+	 * engine.
+	 * 64B (SWCTRL:2 == 1) on even engines (bcs0,2,4,6,8),
+	 * 256B (SWCTRL:2 == 0) on odd engines (bcs1,3,5,7).
+	 *
+	 * To handle virtual engines that may be transferred unknown between
+	 * physical engines, we set the credits inside context restore by
+	 * inspecting which engine we are running on (using CS_ENGINE_ID).
+	 */
+
+	*cs++ = MI_LOAD_REGISTER_REG |
+		MI_LRR_SOURCE_CS_MMIO |
+		MI_LRR_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(RING_ID(0));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
+	*cs++ = MI_LOAD_REGISTER_IMM(6) | MI_LRI_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, INSTANCE));
+	/*
+	 * RING_ENGINE_ID_LSB is useful to decide even/odd engine
+	 * instance
+	 */
+	*cs++ = RING_ENGINE_ID_LSB; /* RING_ENGINE_ID:instance mask */
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, INSTANCE));
+	*cs++ = 0;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, RSHIFT));
+	/* Right shifter to shift RING_ID to BCS_SWCTRL (bit 2)*/
+	*cs++ = 2; /* rshifter */
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, RSHIFT));
+	*cs++ = 0;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, WRITEMASK));
+	*cs++ = BCS_ENGINE_SWCTL_DISABLE_256B << 16; /* SWCTL mask */
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, WRITEMASK));
+	*cs++ = 0;
+
+	/* SWCTL:2 = ~CS_ENGINE_ID:4 */
+	*cs++ = MI_MATH(16);
+
+	/*
+	 * To determine whether the engine is even or odd, we just need to
+	 * know whether that particular engine index is even or odd (low
+	 * bit is 0). We don't care what the value of the upper bits are.
+	 */
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(INSTANCE));
+	*cs++ = MI_MATH_AND; /* instance = CS_ENGINE_ID & BIT(4) */
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
+
+	/*
+	 * Make sure 1 represents even here per 256B disable definition
+	 * in BCS_ENGINE_SWCTL, since we want 256B disabled on even engine
+	 * instances only.
+	 */
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(INSTANCE));
+	*cs++ = MI_MATH_XOR; /* even = instance ^ BIT(4) */
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
+
+	/*
+	 * Now that we know 1 is even, we want to disable 256B by shifting
+	 * that bit 4 (1 if even) down to bit 2 which is the 256B disable
+	 * bit in BCS_ENGINE_SWCTL.
+	 */
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(RSHIFT));
+	*cs++ = MI_MATH_SHR; /* dis_256B = even >> 2: BIT(4) -> BIT(2) */
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
+
+	/* Now set the mask bit to ensure the set/clear of dis_256B takes effect */
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(WRITEMASK));
+	*cs++ = MI_MATH_OR; /* swctl = dis_256B | BIT(2) << 16 */
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
+
+	*cs++ = MI_LOAD_REGISTER_REG |
+		MI_LRR_SOURCE_CS_MMIO |
+		MI_LRR_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
+	*cs++ = i915_mmio_reg_offset(BCS_ENGINE_SWCTL(0));
+
+	return emit_restore_gpr(ce, cs, __NUM_GPR);
+}
+
+static u32 need_credits_wa(const struct intel_engine_cs *engine)
+{
+	return engine->class == COPY_ENGINE_CLASS &&
+		IS_PONTEVECCHIO(engine->i915);
+}
+
 static u32 *
 gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 {
 	cs = gen12_emit_timestamp_wa(ce, cs);
 	cs = gen12_emit_restore_scratch(ce, cs);
 	cs = gen12_emit_indirectctx_bb(ce, cs);
+
+	/* Wa_16017236439:pvc */
+	if (need_credits_wa(ce->engine))
+		cs = xehpc_emit_credits_wa(ce, cs);
 
 	/* Wa_16013000631:dg2 */
 	if (IS_DG2_GRAPHICS_STEP(ce->engine->i915, G10, STEP_B0, STEP_C0) ||

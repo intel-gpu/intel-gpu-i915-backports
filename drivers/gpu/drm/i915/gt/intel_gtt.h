@@ -126,10 +126,13 @@ typedef u64 gen8_pte_t;
  */
 
 #define GEN12_GGTT_PTE_LM		BIT_ULL(1)
+#define MTL_GGTT_PTE_PAT0		BIT_ULL(52)
+#define MTL_GGTT_PTE_PAT1		BIT_ULL(53)
 #define TGL_GGTT_PTE_VFID_MASK		GENMASK_ULL(4, 2)
 #define XEHPSDV_GGTT_PTE_VFID_MASK	GENMASK_ULL(11, 2)
 #define GEN12_GGTT_PTE_ADDR_MASK	GENMASK_ULL(45, 12)
 #define ADL_GGTT_PTE_ADDR_MASK		GENMASK_ULL(38, 12)
+#define MTL_GGTT_PTE_PAT_MASK		GENMASK_ULL(53, 52)
 
 #define GEN12_PDE_64K BIT(6)
 #define GEN12_PTE_PS64 BIT(8)
@@ -187,6 +190,15 @@ typedef u64 gen8_pte_t;
 #define GEN8_PDE_IPS_64K BIT_ULL(11)
 #define GEN8_PDE_PS_2M	 BIT_ULL(7)
 #define GEN8_PDPE_PS_1G  BIT_ULL(7)
+
+#define MTL_PPAT_L4_CACHE_POLICY_MASK	REG_GENMASK(3, 2)
+#define MTL_PAT_INDEX_COH_MODE_MASK	REG_GENMASK(1, 0)
+#define MTL_PPAT_L4_3_UC	REG_FIELD_PREP(MTL_PPAT_L4_CACHE_POLICY_MASK, 3)
+#define MTL_PPAT_L4_1_WT	REG_FIELD_PREP(MTL_PPAT_L4_CACHE_POLICY_MASK, 1)
+#define MTL_PPAT_L4_0_WB	REG_FIELD_PREP(MTL_PPAT_L4_CACHE_POLICY_MASK, 0)
+#define MTL_3_COH_2W	REG_FIELD_PREP(MTL_PAT_INDEX_COH_MODE_MASK, 3)
+#define MTL_2_COH_1W	REG_FIELD_PREP(MTL_PAT_INDEX_COH_MODE_MASK, 2)
+#define MTL_0_COH_NON	REG_FIELD_PREP(MTL_PAT_INDEX_COH_MODE_MASK, 0)
 
 enum i915_cache_level;
 
@@ -465,6 +477,7 @@ struct i915_ggtt {
 
 	unsigned int num_fences;
 	struct i915_fence_reg *fence_regs;
+	struct wait_queue_head fence_wq;
 	struct list_head fence_list;
 
 	/**
@@ -479,6 +492,9 @@ struct i915_ggtt {
 	struct mutex error_mutex;
 	struct drm_mm_node error_capture;
 	struct drm_mm_node uc_fw;
+
+	/** List of GTs mapping this GGTT */
+	struct list_head gt_list;
 };
 
 struct i915_ppgtt {
@@ -683,8 +699,6 @@ void intel_ggtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma);
 int i915_ggtt_probe_hw(struct drm_i915_private *i915);
 int i915_ggtt_init_hw(struct drm_i915_private *i915);
 int i915_ggtt_enable_hw(struct drm_i915_private *i915);
-void i915_ggtt_enable_guc(struct i915_ggtt *ggtt);
-void i915_ggtt_disable_guc(struct i915_ggtt *ggtt);
 int i915_init_ggtt(struct drm_i915_private *i915);
 void i915_ggtt_driver_release(struct drm_i915_private *i915);
 void i915_ggtt_driver_late_release(struct drm_i915_private *i915);

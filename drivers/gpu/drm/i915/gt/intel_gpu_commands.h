@@ -21,6 +21,7 @@
 #define INSTR_CLIENT_SHIFT      29
 #define   INSTR_MI_CLIENT       0x0
 #define   INSTR_BC_CLIENT       0x2
+#define   INSTR_GSC_CLIENT      0x2 /* MTL + */
 #define   INSTR_RC_CLIENT       0x3
 #define INSTR_SUBCLIENT_SHIFT   27
 #define INSTR_SUBCLIENT_MASK    0x18000000
@@ -156,6 +157,7 @@
  */
 #define MI_LOAD_REGISTER_IMM(x)	MI_INSTR(0x22, 2*(x)-1)
 /* Gen11+. addr = base + (ctx_restore ? offset & GENMASK(12,2) : offset) */
+#define   MI_LRI_DEST_CS_MMIO		REG_BIT(19)
 #define   MI_LRI_LRM_CS_MMIO		REG_BIT(19)
 #define   MI_LRI_FORCE_POSTED		(1<<12)
 #define MI_LOAD_REGISTER_IMM_MAX_REGS (126)
@@ -178,6 +180,7 @@
 #define MI_LOAD_REGISTER_MEM_GEN8  MI_INSTR(0x29, 2)
 #define MI_LOAD_REGISTER_REG    MI_INSTR(0x2A, 1)
 #define   MI_LRR_SOURCE_CS_MMIO		REG_BIT(18)
+#define   MI_LRR_DEST_CS_MMIO		REG_BIT(19)
 #define MI_BATCH_BUFFER		MI_INSTR(0x30, 1)
 #define   MI_BATCH_NON_SECURE		(1)
 /* for snb/ivb/vlv this also means "batch in ppgtt" when ppgtt is enabled. */
@@ -382,6 +385,9 @@
 #define   MI_MATH_XOR			MI_MATH_INSTR(0x104, 0x0, 0x0)
 #define   MI_MATH_STORE(op1, op2)	MI_MATH_INSTR(0x180, op1, op2)
 #define   MI_MATH_STOREINV(op1, op2)	MI_MATH_INSTR(0x580, op1, op2)
+/* DG2+ */
+#define   MI_MATH_SHR			MI_MATH_INSTR(0x106, 0x0, 0x0)
+
 /* Registers used as operands in MI_MATH_INSTR */
 #define   MI_MATH_REG(x)		(x)
 #define   MI_MATH_REG_SRCA		0x20
@@ -463,6 +469,16 @@
 
 #define COLOR_BLT     ((0x2<<29)|(0x40<<22))
 #define SRC_COPY_BLT  ((0x2<<29)|(0x43<<22))
+
+/* Bspec 63347*/
+#define GSC_INSTR(opcode, data, flags) \
+	(__INSTR(INSTR_GSC_CLIENT) | (opcode) << 22 | (data) << 9 | (flags))
+
+/* bspec 65346 */
+#define GSC_FW_LOAD GSC_INSTR(1, 0, 2)
+#define   HECI1_FW_LIMIT_VALID (1<<31)
+
+#define GSC_HECI_CMD_PKT GSC_INSTR(0, 0, 6)
 
 /*
  * Used to convert an address to canonical form based on size of

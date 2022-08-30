@@ -53,7 +53,7 @@ static int notify_guc(struct drm_i915_private *i915)
 	if (IS_SRIOV_VF(i915))
 		return 0;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		if (!intel_uc_uses_guc_submission(&gt->uc))
 			continue;
 

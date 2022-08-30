@@ -198,7 +198,7 @@ int intel_gt_pm_live_selftests(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		int ret;
 
 		ret = intel_gt_live_subtests(tests, gt);

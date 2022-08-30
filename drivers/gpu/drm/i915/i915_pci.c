@@ -28,6 +28,7 @@
 #include <drm/i915_pciids.h>
 
 #include "gt/intel_gt.h"
+#include "gt/intel_sa_media.h"
 #include "gem/i915_gem_object_types.h"
 
 #include "i915_driver.h"
@@ -179,6 +180,14 @@
 		[I915_CACHE_LLC]    = 3, \
 		[I915_CACHE_L3_LLC] = 3, \
 		[I915_CACHE_WT]     = 2, \
+	}
+
+#define MTL_CACHELEVEL \
+	.cachelevel_to_pat = { \
+		[I915_CACHE_NONE]   = 2, \
+		[I915_CACHE_LLC]    = 3, \
+		[I915_CACHE_L3_LLC] = 3, \
+		[I915_CACHE_WT]     = 1, \
 	}
 
 /* Keep in gen based order, and chronological order within a gen */
@@ -1096,6 +1105,41 @@ static const struct intel_device_info adl_p_info = {
 	.memory_regions = REGION_SMEM | REGION_STOLEN_LMEM | REGION_LMEM | \
 			  REGION_LMEM1 | REGION_LMEM2 | REGION_LMEM3
 
+#define XE_HP_SDV_ENGINES \
+	BIT(BCS0) | \
+	BIT(VECS0) | BIT(VECS1) | BIT(VECS2) | BIT(VECS3) | \
+	BIT(VCS0) | BIT(VCS1) | BIT(VCS2) | BIT(VCS3) | \
+	BIT(VCS4) | BIT(VCS5) | BIT(VCS6) | BIT(VCS7) | \
+	BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3) \
+
+static const struct intel_gt_definition xehp_sdv_gts[] = {
+	{
+		.type = GT_TILE,
+		.name = "Remote Tile GT",
+		.setup = intel_tile_setup,
+		.mapping_base = SZ_16M,
+		.engine_mask = XE_HP_SDV_ENGINES,
+
+	},
+	{
+		.type = GT_TILE,
+		.name = "Remote Tile GT",
+		.setup = intel_tile_setup,
+		.mapping_base = SZ_16M * 2,
+		.engine_mask = XE_HP_SDV_ENGINES,
+
+	},
+	{
+		.type = GT_TILE,
+		.name = "Remote Tile GT",
+		.setup = intel_tile_setup,
+		.mapping_base = SZ_16M * 3,
+		.engine_mask = XE_HP_SDV_ENGINES,
+
+	},
+	{}
+};
+
 static const struct intel_device_info xehpsdv_info = {
 	XE_HP_FEATURES,
 	XE_HPM_FEATURES,
@@ -1103,17 +1147,13 @@ static const struct intel_device_info xehpsdv_info = {
 	REMOTE_TILE_FEATURES,
 	PLATFORM(INTEL_XEHPSDV),
 	.display = { },
+	.extra_gts = xehp_sdv_gts,
 	.has_64k_pages = 1,
 	.has_media_ratio_mode = 1,
 	.has_sriov = 1,
 	.has_iov_memirq = 1,
 	.has_mem_sparing = 1,
-	.platform_engine_mask =
-		BIT(BCS0) |
-		BIT(VECS0) | BIT(VECS1) | BIT(VECS2) | BIT(VECS3) |
-		BIT(VCS0) | BIT(VCS1) | BIT(VCS2) | BIT(VCS3) |
-		BIT(VCS4) | BIT(VCS5) | BIT(VCS6) | BIT(VCS7) |
-		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3),
+	.platform_engine_mask = XE_HP_SDV_ENGINES,
 	.require_force_probe = 1,
 };
 
@@ -1184,6 +1224,25 @@ static const struct intel_device_info ats_m_info = {
 	.ppgtt_msb = 56, \
 	.ppgtt_size = 57
 
+#define PVC_ENGINES \
+	BIT(BCS0) | BIT(BCS1) | BIT(BCS2) | BIT(BCS3) | \
+	BIT(BCS4) | BIT(BCS5) | BIT(BCS6) | BIT(BCS7) | \
+	BIT(BCS8) | \
+	BIT(VCS0) | BIT(VCS1) | BIT(VCS2) | \
+	BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3)
+
+static const struct intel_gt_definition pvc_gts[] = {
+	{
+		.type = GT_TILE,
+		.name = "Remote Tile GT",
+		.setup = intel_tile_setup,
+		.mapping_base = SZ_16M,
+		.engine_mask = PVC_ENGINES,
+
+	},
+	{}
+};
+
 static const struct intel_device_info pvc_info = {
 	XE_HPC_FEATURES,
 	XE_HPM_FEATURES,
@@ -1194,17 +1253,55 @@ static const struct intel_device_info pvc_info = {
 	PLATFORM(INTEL_PONTEVECCHIO),
 	.display = { 0 },
 	.has_flat_ccs = 0,
-	.platform_engine_mask =
-		BIT(BCS0) | BIT(BCS1) | BIT(BCS2) | BIT(BCS3) |
-		BIT(BCS4) | BIT(BCS5) | BIT(BCS6) | BIT(BCS7) |
-		BIT(BCS8) |
-		BIT(VCS0) | BIT(VCS1) | BIT(VCS2) |
-		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3),
+	.extra_gts = pvc_gts,
+	.platform_engine_mask = PVC_ENGINES,
 	.require_force_probe = 1,
 	PVC_CACHELEVEL,
 };
 
-#undef PLATFORM
+#define XE_LPDP_FEATURES	\
+	XE_LPD_FEATURES,	\
+	.display.ver = 14,	\
+	.display.has_cdclk_crawl = 1, \
+	.display.fbc_mask = BIT(INTEL_FBC_A) | BIT(INTEL_FBC_B)
+
+static const struct intel_gt_definition xelpmp_gts[] = {
+	{
+		.type = GT_MEDIA,
+		.name = "Standalone Media GT",
+		.setup = intel_sa_mediagt_setup,
+		.gsi_offset = MTL_MEDIA_GSI_BASE,
+		.engine_mask = BIT(VECS0) | BIT(VCS0) | BIT(VCS2) | BIT(GSC0),
+	},
+	{}
+};
+
+static const struct intel_device_info mtl_info = {
+	XE_HP_FEATURES,
+	XE_LPDP_FEATURES,
+	/*
+	 * Real graphics IP version will be obtained from hardware GMD_ID
+	 * register.  Value provided here is just for sanity checking.
+	 */
+	.graphics.ver = 12,
+	.graphics.rel = 70,
+	.media.ver = 13,
+	PLATFORM(INTEL_METEORLAKE),
+	.display.has_modular_fia = 1,
+	.extra_gts = xelpmp_gts,
+	.has_flat_ccs = 0,
+	.has_gmd_id = 1,
+	.has_guc_deprivilege = 1,
+	.has_iov_memirq = 1,
+	.has_llc = 0,
+	.has_mslice_steering = 0,
+	.has_snoop = 1,
+	.has_sriov = 1,
+	.memory_regions = REGION_SMEM | REGION_STOLEN_LMEM,
+	MTL_CACHELEVEL,
+	.platform_engine_mask = BIT(RCS0) | BIT(BCS0) | BIT(CCS0),
+	.require_force_probe = 1,
+};
 
 /*
  * Make sure any device matches here are from most specific to most
@@ -1286,6 +1383,7 @@ static const struct pci_device_id pciidlist[] = {
 	INTEL_RPLP_IDS(&adl_p_info),
 	INTEL_DG2_IDS(&dg2_info),
 	INTEL_ATS_M_IDS(&ats_m_info),
+	INTEL_MTL_IDS(&mtl_info),
 	INTEL_XEHPSDV_IDS(&xehpsdv_info),
 	INTEL_PVC_IDS(&pvc_info),
 	{0, 0, 0}
@@ -1407,16 +1505,16 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		return err;
 
-	i915 = pci_get_drvdata(pdev);
+	i915 = pdev_to_i915(pdev);
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		i915_driver_register(i915);
 
-	if (i915_inject_probe_failure(pci_get_drvdata(pdev))) {
+	if (i915_inject_probe_failure(i915)) {
 		i915_pci_remove(pdev);
 		return -ENODEV;
 	}
 
-	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
+	pvc_wa_disallow_rc6(i915);
 	err = i915_live_selftests(pdev);
 	if (err)
 		goto out_i915_selftests;
@@ -1425,7 +1523,7 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		goto out_i915_selftests;
 
-	pvc_wa_allow_rc6(pdev_to_i915(pdev));
+	pvc_wa_allow_rc6(i915);
 
 	if (i915_save_pci_state(pdev))
 		pci_restore_state(pdev);
@@ -1433,7 +1531,7 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 out_i915_selftests:
-	pvc_wa_allow_rc6(pdev_to_i915(pdev));
+	pvc_wa_allow_rc6(i915);
 	i915_pci_remove(pdev);
 	return err > 0 ? -ENOTTY : err;
 }

@@ -51,7 +51,7 @@ void i915_perf_stall_cntr_init(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	u8 i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		mutex_init(&gt->eu_stall_cntr.lock);
 }
 
@@ -209,16 +209,14 @@ eu_stall_data_in_buf(struct i915_eu_stall_cntr_stream *stream)
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	u32 read_ptr, write_ptr;
-	unsigned long irqflags;
-	u8 s, ss;
-	int iter;
+	int dss, group, instance;
 
-	for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
-		dss_buf = &stream->dss_buf[iter];
-		spin_lock_irqsave(&dss_buf->lock, irqflags);
+	for_each_ss_steering(dss, gt, group, instance) {
+		dss_buf = &stream->dss_buf[dss];
+		spin_lock(&dss_buf->lock);
 		read_ptr = dss_buf->read;
 		write_ptr = dss_buf->write;
-		spin_unlock_irqrestore(&dss_buf->lock, irqflags);
+		spin_unlock(&dss_buf->lock);
 		if (read_ptr != write_ptr)
 			return true;
 	}
@@ -267,17 +265,17 @@ eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	bool min_data_present;
-	u8 s, ss;
-	int iter;
+	int dss, group, instance;
 
 	min_data_present = false;
-	for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
-		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
+	for_each_ss_steering(dss, gt, group, instance) {
+		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT,
+						  group, instance);
 		write_ptr = write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK;
 		write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
 		write_ptr &= ((buf_size << 1) - 1);
 
-		dss_buf = &stream->dss_buf[iter];
+		dss_buf = &stream->dss_buf[dss];
 		spin_lock(&dss_buf->lock);
 		read_ptr = dss_buf->read;
 		if ((write_ptr != read_ptr) && !min_data_present) {
@@ -323,7 +321,6 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	u32 read_offset, write_offset, read_ptr;
 	struct per_dss_buf *dss_buf;
 	bool line_drop = false;
-	unsigned long irqflags;
 	size_t size, tmp_size;
 	int ret = 0;
 
@@ -335,12 +332,12 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	 * check if the write pointer has wrapped around the array.
 	 */
 	dss_buf = &stream->dss_buf[subslice];
-	spin_lock_irqsave(&dss_buf->lock, irqflags);
+	spin_lock(&dss_buf->lock);
 	dss_start_vaddr = dss_buf->vaddr;
 	read_ptr = dss_buf->read;
 	write_ptr = dss_buf->write;
 	line_drop = dss_buf->line_drop;
-	spin_unlock_irqrestore(&dss_buf->lock, irqflags);
+	spin_unlock(&dss_buf->lock);
 	read_offset = read_ptr & (stream->per_dss_buf_size - 1);
 	write_offset = write_ptr & (stream->per_dss_buf_size - 1);
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
@@ -363,7 +360,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 		if (write_ptr == read_ptr)
 			return 0;
 		write_offset = write_ptr & (stream->per_dss_buf_size - 1);
-		spin_lock_irqsave(&dss_buf->lock, irqflags);
+		spin_lock(&dss_buf->lock);
 		dss_buf->write = write_ptr;
 		/* If any data was dropped due to circular buffer being full,
 		 * set a flag to let the userspace know.
@@ -372,7 +369,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 			dss_buf->line_drop = true;
 			line_drop = true;
 		}
-		spin_unlock_irqrestore(&dss_buf->lock, irqflags);
+		spin_unlock(&dss_buf->lock);
 	}
 	/* If write pointer offset is less than the read pointer offset,
 	 * it means, write pointer has wrapped around the array.
@@ -447,13 +444,13 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
 	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT1,
 			  read_ptr_reg, sizeof(read_ptr_reg), true);
-	spin_lock_irqsave(&dss_buf->lock, irqflags);
+	spin_lock(&dss_buf->lock);
 	if (dss_buf->line_drop) {
 		clear_dropped_eviction_line_bit(gt, s, ss);
 		dss_buf->line_drop = false;
 	}
 	dss_buf->read = read_ptr;
-	spin_unlock_irqrestore(&dss_buf->lock, irqflags);
+	spin_unlock(&dss_buf->lock);
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
 				      read_offset, write_offset, *total_size);
 	return ret;
@@ -478,15 +475,14 @@ i915_eu_stall_buf_read_locked(struct i915_eu_stall_cntr_stream *stream,
 {
 	struct intel_gt *gt = stream->tile_gt;
 	size_t total_size = 0;
-	u8 slice, subslice;
-	int ret = 0, iter;
+	int ret = 0, dss, group, instance;
 
 	if (count == 0)
 		return -EINVAL;
 
-	for_each_pvc_subslice(slice, subslice, gt->info.sseu.subslice_mask, iter) {
+	for_each_ss_steering(dss, gt, group, instance) {
 		ret = __i915_eu_stall_buf_read(stream, buf, count, &total_size,
-					       gt, slice, subslice);
+					       gt, group, instance);
 		if (ret || count == total_size)
 			goto exit;
 	}
@@ -525,9 +521,12 @@ static int alloc_eu_stall_cntr_buf(struct i915_eu_stall_cntr_stream *stream,
 	/*
 	 * Enabled subslices can be discontiguous. Find the last subslice
 	 * and calculate total buffer size based on that.
+	 * intel_sseu_highest_xehp_dss returns zero based position.
+	 * Therefore the result is incremented.
 	 */
 	sseu = &gt->info.sseu;
-	size = per_dss_buf_size * intel_sseu_highest_xehp_dss(sseu->subslice_mask);
+	size = per_dss_buf_size *
+			(intel_sseu_highest_xehp_dss(sseu->subslice_mask) + 1);
 
 	bo = intel_gt_object_create_lmem(gt, size, 0);
 	if (IS_ERR(bo))
@@ -567,7 +566,7 @@ static u32
 gen_eustall_base(struct i915_eu_stall_cntr_stream *stream, bool enable)
 {
 	u32 val = i915_ggtt_offset(stream->vma);
-	u32 sz = stream->per_dss_buf_size >> 18;
+	u32 sz;
 
 	drm_WARN_ON(&stream->tile_gt->i915->drm, !IS_ALIGNED(val, 64));
 
@@ -605,8 +604,8 @@ i915_eu_stall_stream_enable(struct i915_eu_stall_cntr_stream *stream)
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_RENDER);
 
 		set_mcr_multicast(gt->uncore);
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
-				   gen_eustall_base(stream, true));
+		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE,
+					     gen_eustall_base(stream, true));
 	}
 }
 
@@ -616,8 +615,7 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 	struct intel_gt *gt = stream->tile_gt;
 	intel_wakeref_t wakeref;
 	u32 reg_value;
-	u16 s, ss;
-	int iter;
+	int dss, group, instance;
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
 		/*
@@ -630,14 +628,16 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 		 * after disabling EU stall sampling and may cause erroneous
 		 * stall data in the subsequent stall data sampling run.
 		 */
-		for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
-			reg_value = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
+		for_each_ss_steering(dss, gt, group, instance) {
+			reg_value = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT,
+						      group, instance);
 			if (reg_value & XEHPC_EUSTALL_REPORT_OVERFLOW_DROP)
-				clear_dropped_eviction_line_bit(gt, s, ss);
+				clear_dropped_eviction_line_bit(gt, group, instance);
 		}
 		set_mcr_multicast(gt->uncore);
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
-				   gen_eustall_base(stream, false));
+		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE,
+					     gen_eustall_base(stream, false));
+
 		/* Wa_22012878696:pvc */
 		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_RENDER);
@@ -676,8 +676,7 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
 	intel_wakeref_t wakeref;
-	int ret, iter;
-	u16 s, ss;
+	int ret, dss, group, instance;
 
 	init_waitqueue_head(&stream->poll_wq);
 	INIT_WORK(&stream->buf_check_work, eu_stall_buf_check_work_fn);
@@ -696,17 +695,18 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
 		set_mcr_multicast(gt->uncore);
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE,
-				   gen_eustall_base(stream, false));
+		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE,
+					     gen_eustall_base(stream, false));
 		/* GGTT addresses can never be > 32 bits */
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_BASE_UPPER, 0);
-		intel_uncore_write(gt->uncore, XEHPC_EUSTALL_CTRL,
-				   _MASKED_FIELD(EUSTALL_MOCS | EUSTALL_SAMPLE_RATE,
-				   REG_FIELD_PREP(EUSTALL_MOCS, gt->mocs.uc_index << 1) |
-				   REG_FIELD_PREP(EUSTALL_SAMPLE_RATE, props->eu_stall_sample_rate)));
+		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE_UPPER, 0);
+		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_CTRL,
+					     _MASKED_FIELD(EUSTALL_MOCS | EUSTALL_SAMPLE_RATE,
+							   REG_FIELD_PREP(EUSTALL_MOCS, gt->mocs.uc_index << 1) |
+							   REG_FIELD_PREP(EUSTALL_SAMPLE_RATE, props->eu_stall_sample_rate)));
 
-		for_each_pvc_subslice(s, ss, gt->info.sseu.subslice_mask, iter) {
-			write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
+		for_each_ss_steering(dss, gt, group, instance) {
+			write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT,
+							  group, instance);
 			write_ptr = write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK;
 			write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
 			write_ptr &= ((stream->per_dss_buf_size << 1) - 1);
@@ -714,9 +714,11 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 			read_ptr_reg &= XEHPC_EUSTALL_REPORT1_READ_PTR_MASK;
 			read_ptr_reg |= (XEHPC_EUSTALL_REPORT1_READ_PTR_MASK <<
 					 XEHPC_EUSTALL_REPORT1_MASK_SHIFT);
-			intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
-			dss_buf = &stream->dss_buf[iter];
-			vaddr_offset = iter * props->eu_stall_buf_sz;
+			intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1,
+						   read_ptr_reg,
+						   group, instance);
+			dss_buf = &stream->dss_buf[dss];
+			vaddr_offset = dss * props->eu_stall_buf_sz;
 			dss_buf->vaddr = stream->vaddr + vaddr_offset;
 			dss_buf->write = write_ptr;
 			dss_buf->read = write_ptr;

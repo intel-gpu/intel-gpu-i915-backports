@@ -285,7 +285,7 @@ alloc_table:
 		goto err;
 	}
 
-	sg_page_sizes = i915_sg_page_sizes(st->sgl);
+	sg_page_sizes = i915_sg_dma_sizes(st->sgl);
 
 	__i915_gem_object_set_pages(obj, st, sg_page_sizes);
 
@@ -398,17 +398,58 @@ static void i915_gem_object_userptr_invalidate_work(struct work_struct *work)
 	i915_gem_object_put(obj);
 }
 
+static void
+lock_range(struct mm_struct *mm, unsigned long addr, unsigned long end)
+{
+	struct vm_area_struct *vma;
+
+	/*
+	 * We want to mark the pages we have bound with userptr as
+	 * VM_SPECIAL, to prevent merges and migrations while the gpu
+	 * is indefinitely busy and so remove unnecessary system wide stalls.
+	 * But not too special to prevent us from acquiring the vma for
+	 * adjacent userptr, or for the system to behave drastically different
+	 * wrt to this vma.
+	 *
+	 * VM_IO would seem to be the prime candidate. The userptr range will
+	 * have I/O side-effects, and so special. However, we cannot use gup
+	 * on an I/O range, preventing us from reusing the same vma for
+	 * adjacent userptr.
+	 *
+	 * VM_PFNMAP implies the vma is no longer contains any struct page,
+	 * confusing the kernel about the contents vma. This prevents us from
+	 * using gup.
+	 *
+	 * VM_DONTEXPAND although special does not prevent migration.
+	 *
+	 * VM_MIXEDMAP is just the right amount of special. It does not change
+	 * the semantics of the vma, it still has knows that the PTE may be
+	 * struct page (and so gup'able) but prevents both numa migration and
+	 * compaction.
+	 */
+	mmap_read_lock(mm);
+	for (vma = find_vma(mm, addr); vma; vma = vma->vm_next) {
+		if (vma->vm_start >= end)
+			break;
+
+		vma->vm_flags |= VM_MIXEDMAP;
+	}
+	mmap_read_unlock(mm);
+}
+
 int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 {
 	const unsigned long num_pages = obj->base.size >> PAGE_SHIFT;
+	struct mm_struct *mm = obj->userptr.notifier.mm;
+	bool in_kthread = !current->mm;
 	struct page **pvec;
 	unsigned int gup_flags = 0;
 	unsigned long notifier_seq;
-	int pinned, ret;
-	bool in_kthread = !current->mm;
 	struct i915_gem_ww_ctx ww;
+	unsigned long pinned;
+	int ret;
 
-	if (!in_kthread && obj->userptr.notifier.mm != current->mm)
+	if (!in_kthread && mm != current->mm)
 		return -EFAULT;
 
 	notifier_seq = mmu_interval_read_begin(&obj->userptr.notifier);
@@ -443,7 +484,7 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		gup_flags |= FOLL_WRITE;
 
 	if (in_kthread)
-		kthread_use_mm(obj->userptr.notifier.mm);
+		kthread_use_mm(mm);
 
 	pinned = ret = 0;
 	while (pinned < num_pages) {
@@ -453,16 +494,17 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 					  &pvec[pinned]);
 		if (ret < 0) {
 			if (in_kthread)
-				kthread_unuse_mm(obj->userptr.notifier.mm);
+				kthread_unuse_mm(mm);
 			goto out;
 		}
 
 		pinned += ret;
 	}
+	lock_range(mm, obj->userptr.ptr, obj->userptr.ptr + obj->base.size);
 	ret = 0;
 
 	if (in_kthread)
-		kthread_unuse_mm(obj->userptr.notifier.mm);
+		kthread_unuse_mm(mm);
 
 	ret = i915_gem_object_lock_interruptible(obj, NULL);
 	if (ret)

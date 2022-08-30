@@ -54,6 +54,7 @@ config DRM_I915_DEBUG
 #	select INTEL_MEI_GSC if X86
 #	select INTEL_MEI_PXP if X86
 #	select INTEL_MEI_IAF if X86
+#	select INTEL_MEI_GSC_PROXY if X86
 	select INTEL_VSEC if X86
 	select INTEL_PMT_TELEMETRY if X86
 	select INTEL_PMT_CRASHLOG if X86

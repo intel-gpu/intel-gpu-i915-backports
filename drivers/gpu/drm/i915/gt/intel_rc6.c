@@ -240,13 +240,8 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 		return;
 	}
 
-	/*
-	 * Enable render powergating only if the render unit is present.
-	 * RPG should also remain disabled for any platforms that
-	 * Wa_16011777198 applies to.
-	 */
-	if (!intel_gt_has_eus(gt) ||
-	    IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
+	/* Wa_16011777198 - Render powergating must remain disabled */
+	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0))
 		pg_enable =
 			GEN9_MEDIA_PG_ENABLE |
@@ -648,6 +643,14 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    i915->remote_tiles > 0)
 		return false;
 
+	/*
+	 * Wa for HSD: 14015706335
+	 */
+
+	if (!i915->params.rc6_ignore_steppings &&
+	    IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		return false;
+
 	return true;
 }
 
@@ -915,6 +918,7 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	unsigned long flags;
 	unsigned int i;
 	u32 mul, div;
+	i915_reg_t base;
 
 	if (!rc6->supported)
 		return 0;
@@ -926,8 +930,10 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	 * other so we can use the relative address, compared to the smallest
 	 * one as the index into driver storage.
 	 */
+	base = (rc6_to_gt(rc6)->type == GT_MEDIA) ?
+	       MTL_MEDIA_MC6 : GEN6_GT_GFX_RC6_LOCKED;
 	i = (i915_mmio_reg_offset(reg) -
-	     i915_mmio_reg_offset(GEN6_GT_GFX_RC6_LOCKED)) / sizeof(u32);
+	     i915_mmio_reg_offset(base)) / sizeof(u32);
 	if (drm_WARN_ON_ONCE(&i915->drm, i >= ARRAY_SIZE(rc6->cur_residency)))
 		return 0;
 

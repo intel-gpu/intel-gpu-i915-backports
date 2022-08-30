@@ -101,9 +101,9 @@ static void gen9_reset_guc_interrupts(struct intel_guc *guc)
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_reset_iir(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen9_enable_guc_interrupts(struct intel_guc *guc)
@@ -111,12 +111,13 @@ static void gen9_enable_guc_interrupts(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
+	guc->interrupts.enabled = true;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	WARN_ON_ONCE(intel_uncore_read(gt->uncore, GEN8_GT_IIR(2)) &
 		     gt->pm_guc_events);
 	gen6_gt_pm_enable_irq(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen9_disable_guc_interrupts(struct intel_guc *guc)
@@ -124,24 +125,33 @@ static void gen9_disable_guc_interrupts(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
+	guc->interrupts.enabled = false;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 
 	gen6_gt_pm_disable_irq(gt, gt->pm_guc_events);
 
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 	intel_synchronize_irq(gt->i915);
 
 	gen9_reset_guc_interrupts(guc);
+}
+
+static bool __gen11_reset_guc_interrupts(struct intel_gt *gt)
+{
+	u32 irq = gt->type == GT_MEDIA ? GEN12_GUCM : GEN11_GUC;
+
+	lockdep_assert_held(gt->irq_lock);
+	return gen11_gt_reset_one_iir(gt, 0, irq);
 }
 
 static void gen11_reset_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-	gen11_gt_reset_one_iir(gt, 0, GEN11_GUC);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 /* Wa:16014207253 */
@@ -165,23 +175,27 @@ static void gen11_enable_fake_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = true;
+
+	spin_lock_irq(gt->irq_lock);
 	WARN_ON_ONCE(gen11_gt_reset_one_iir(gt, 0, GEN11_GUC));
 
 	/* FIXME: Connect timer to GT PM */
 	fake_int_timer_start(gt);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen11_disable_fake_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = false;
+
+	spin_lock_irq(gt->irq_lock);
 
 	fake_int_timer_stop(gt);
 
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 	intel_synchronize_irq(gt->i915);
 
 	gen11_reset_guc_interrupts(guc);
@@ -196,27 +210,19 @@ void intel_guc_init_fake_interrupts(struct intel_guc *guc)
 static void gen11_enable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	u32 events = REG_FIELD_PREP(ENGINE1_MASK, GUC_INTR_GUC2HOST);
 
-	spin_lock_irq(&gt->irq_lock);
-	WARN_ON_ONCE(gen11_gt_reset_one_iir(gt, 0, GEN11_GUC));
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_ENABLE, events);
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_MASK, ~events);
-	spin_unlock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = true;
+
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen11_disable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_MASK, ~0);
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_ENABLE, 0);
-
-	spin_unlock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = false;
 	intel_synchronize_irq(gt->i915);
 
 	gen11_reset_guc_interrupts(guc);
@@ -237,12 +243,17 @@ void intel_guc_init_early(struct intel_guc *guc)
 	mutex_init(&guc->send_mutex);
 	spin_lock_init(&guc->irq_lock);
 	if (GRAPHICS_VER(i915) >= 11) {
-		guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
 		guc->interrupts.reset = gen11_reset_guc_interrupts;
 		guc->interrupts.enable = gen11_enable_guc_interrupts;
 		guc->interrupts.disable = gen11_disable_guc_interrupts;
-		guc->send_regs.base =
-			i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		if (gt->type == GT_MEDIA) {
+			guc->notify_reg = MEDIA_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(MEDIA_SOFT_SCRATCH(0));
+		} else {
+			guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		}
+
 		guc->send_regs.count = GEN11_SOFT_SCRATCH_COUNT;
 	} else {
 		guc->notify_reg = GUC_SEND_INTERRUPT;
@@ -296,52 +307,21 @@ static u32 guc_ctl_feature_flags(struct intel_guc *guc)
 
 static u32 guc_ctl_log_params_flags(struct intel_guc *guc)
 {
-	u32 offset = intel_guc_ggtt_offset(guc, guc->log.vma) >> PAGE_SHIFT;
-	u32 flags;
+	struct intel_guc_log *log = &guc->log;
+	u32 offset, flags;
 
-	#if (((CRASH_BUFFER_SIZE) % SZ_1M) == 0)
-	#define LOG_UNIT SZ_1M
-	#define LOG_FLAG GUC_LOG_LOG_ALLOC_UNITS
-	#else
-	#define LOG_UNIT SZ_4K
-	#define LOG_FLAG 0
-	#endif
+	GEM_BUG_ON(!log->sizes_initialised);
 
-	#if (((CAPTURE_BUFFER_SIZE) % SZ_1M) == 0)
-	#define CAPTURE_UNIT SZ_1M
-	#define CAPTURE_FLAG GUC_LOG_CAPTURE_ALLOC_UNITS
-	#else
-	#define CAPTURE_UNIT SZ_4K
-	#define CAPTURE_FLAG 0
-	#endif
-
-	BUILD_BUG_ON(!CRASH_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(CRASH_BUFFER_SIZE, LOG_UNIT));
-	BUILD_BUG_ON(!DEBUG_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(DEBUG_BUFFER_SIZE, LOG_UNIT));
-	BUILD_BUG_ON(!CAPTURE_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(CAPTURE_BUFFER_SIZE, CAPTURE_UNIT));
-
-	BUILD_BUG_ON((CRASH_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_CRASH_MASK >> GUC_LOG_CRASH_SHIFT));
-	BUILD_BUG_ON((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_DEBUG_MASK >> GUC_LOG_DEBUG_SHIFT));
-	BUILD_BUG_ON((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) >
-			(GUC_LOG_CAPTURE_MASK >> GUC_LOG_CAPTURE_SHIFT));
+	offset = intel_guc_ggtt_offset(guc, log->vma) >> PAGE_SHIFT;
 
 	flags = GUC_LOG_VALID |
 		GUC_LOG_NOTIFY_ON_HALF_FULL |
-		CAPTURE_FLAG |
-		LOG_FLAG |
-		((CRASH_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_CRASH_SHIFT) |
-		((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_DEBUG_SHIFT) |
-		((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) << GUC_LOG_CAPTURE_SHIFT) |
+		log->sizes[GUC_LOG_SECTIONS_DEBUG].flag |
+		log->sizes[GUC_LOG_SECTIONS_CAPTURE].flag |
+		(log->sizes[GUC_LOG_SECTIONS_CRASH].count << GUC_LOG_CRASH_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_DEBUG].count << GUC_LOG_DEBUG_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_CAPTURE].count << GUC_LOG_CAPTURE_SHIFT) |
 		(offset << GUC_LOG_BUF_ADDR_SHIFT);
-
-	#undef LOG_UNIT
-	#undef LOG_FLAG
-	#undef CAPTURE_UNIT
-	#undef CAPTURE_FLAG
 
 	return flags;
 }
@@ -364,18 +344,15 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
 		flags |= GUC_WA_POLLCS;
 
-	/* Wa_16015675438, Wa_18020744125 */
-	if (!RCS_MASK(gt))
-		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
-
 	/* Wa_16011759253:dg2_g10:a0 */
 	/* Wa_22011383443:pvc - Also needed for PVC BD A0 */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_B0) ||
 	    (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)))
 		flags |= GUC_WA_GAM_CREDITS;
 
-	/* Wa_14014475959:dg2 */
-	if (IS_DG2(gt->i915))
+	/* Wa_14014475959:dg2,mtl */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    IS_DG2(gt->i915))
 		flags |= GUC_WA_HOLD_CCS_SWITCHOUT;
 
 	/*
@@ -389,11 +366,11 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 		flags |= GUC_WA_DUAL_QUEUE;
 
 	/*
-	 * Wa_22011802037: graphics version 12
+	 * Wa_22011802037: graphics version 11/12
 	 * GUC_WA_PRE_PARSER causes media workload hang for PVC A0 and PCIe
 	 * errors. Disable this for PVC A0 steppings.
 	 */
-	if (GRAPHICS_VER(gt->i915) == 12 &&
+	if (IS_GRAPHICS_VER(gt->i915, 11, 12) &&
 	    !IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
 		flags |= GUC_WA_PRE_PARSER;
 
@@ -412,6 +389,10 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_FOREVER))
 		flags |= GUC_WA_CONTEXT_ISOLATION;
+
+	/* Wa_16015675438, Wa_18020744125 */
+	if (!RCS_MASK(gt))
+		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
 
 	/*
 	 * Wa_1509372804: PVC, Apply WA in render force wake step by
@@ -604,7 +585,7 @@ int intel_guc_g2g_register(struct intel_guc *guc)
 	unsigned int i, j;
 	int err;
 
-	for_each_gt(gt->i915, i, remote_gt) {
+	for_each_gt(remote_gt, gt->i915, i) {
 		if (i == gt->info.id)
 			continue;
 
@@ -622,7 +603,7 @@ int intel_guc_g2g_register(struct intel_guc *guc)
 	return 0;
 
 err_deregister:
-	for_each_gt(gt->i915, j, remote_gt) {
+	for_each_gt(remote_gt, gt->i915, j) {
 		if (j == gt->info.id)
 			continue;
 
@@ -727,9 +708,6 @@ static int __guc_init(struct intel_guc *guc)
 	/* now that everything is perma-pinned, initialize the parameters */
 	guc_init_params(guc);
 
-	/* We need to notify the guc whenever we change the GGTT */
-	i915_ggtt_enable_guc(gt->ggtt);
-
 	intel_uc_fw_change_status(&guc->fw, INTEL_UC_FIRMWARE_LOADABLE);
 
 	return 0;
@@ -756,12 +734,8 @@ out:
 
 static void __guc_fini(struct intel_guc *guc)
 {
-	struct intel_gt *gt = guc_to_gt(guc);
-
 	if (!intel_uc_fw_is_loadable(&guc->fw))
 		return;
-
-	i915_ggtt_disable_guc(gt->ggtt);
 
 	guc_g2g_destroy(guc);
 
@@ -1318,6 +1292,35 @@ int intel_guc_self_cfg64(struct intel_guc *guc, u16 key, u64 value)
 	return __guc_self_cfg(guc, key, 2, value);
 }
 
+static long must_wait_woken(struct wait_queue_entry *wq_entry, long timeout)
+{
+	/*
+	 * This is equivalent to wait_woken() with the exception that
+	 * we do not wake up early if the kthread task has been completed.
+	 * As we are called from page reclaim in any task context,
+	 * we may be invoked from stopped kthreads, but we *must*
+	 * complete the wait from the HW .
+	 *
+	 * A second problem is that since we are called under reclaim
+	 * and wait_woken() inspected the thread state, it makes an invalid
+	 * assumption that all PF_KTHREAD tasks have set_kthread_struct()
+	 * called upon them, and will trigger a GPF in is_kthread_should_stop().
+	 */
+	do {
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		if (wq_entry->flags & WQ_FLAG_WOKEN)
+			break;
+
+		timeout = schedule_timeout(timeout);
+	} while (timeout);
+	__set_current_state(TASK_RUNNING);
+
+	/* See wait_woken() and woken_wake_function() */
+	smp_store_mb(wq_entry->flags, wq_entry->flags & ~WQ_FLAG_WOKEN);
+
+	return timeout;
+}
+
 static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
 {
 	struct intel_guc_tlb_wait _wq, *wq = &_wq;
@@ -1373,8 +1376,7 @@ static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
  * queued in CT buffer.
  */
 #define OUTSTANDING_GUC_TIMEOUT_PERIOD  (HZ)
-	if (!wait_woken(&wait, TASK_UNINTERRUPTIBLE,
-			OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
+	if (!must_wait_woken(&wait, OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
 		/*
 		 * XXX: Failure of tlb invalidation is critical and would
 		 * warrant a gt reset.

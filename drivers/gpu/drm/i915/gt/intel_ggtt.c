@@ -111,7 +111,15 @@ int i915_ggtt_init_hw(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
+		/*
+		 * Media GT shares primary GT's GGTT which is already
+		 * initialized
+		 */
+		if (gt->type == GT_MEDIA) {
+			drm_WARN_ON(&i915->drm, gt->ggtt != to_gt(i915)->ggtt);
+			continue;
+		}
 		/*
 		 * Note that we use page colouring to enforce a guard page at
 		 * the end of the address space. This is required as the CS may
@@ -168,10 +176,13 @@ void i915_ggtt_suspend_vm(struct i915_address_space *vm)
 
 void i915_ggtt_suspend(struct i915_ggtt *ggtt)
 {
+	struct intel_gt *gt;
+
 	i915_ggtt_suspend_vm(&ggtt->vm);
 	ggtt->invalidate(ggtt);
 
-	intel_gt_check_and_clear_faults(ggtt->vm.gt);
+	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
+		intel_gt_check_and_clear_faults(gt);
 }
 
 void gen6_ggtt_invalidate(struct i915_ggtt *ggtt)
@@ -186,13 +197,17 @@ void gen6_ggtt_invalidate(struct i915_ggtt *ggtt)
 
 static void gen8_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
-	struct intel_uncore *uncore = ggtt->vm.gt->uncore;
+	struct intel_uncore *uncore;
+	struct intel_gt *gt;
 
-	/*
-	 * Note that as an uncached mmio write, this will flush the
-	 * WCB of the writes into the GGTT before it triggers the invalidate.
-	 */
-	intel_uncore_write_fw(uncore, GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN);
+	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link) {
+		uncore = gt->uncore;
+		/*
+		 * Note that as an uncached mmio write, this will flush the
+		 * WCB of the writes into the GGTT before it triggers the invalidate.
+		 */
+		intel_uncore_write_fw(uncore, GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN);
+	}
 }
 
 static void guc_ggtt_ct_invalidate(struct i915_ggtt *ggtt)
@@ -221,31 +236,58 @@ static void guc_ggtt_ct_invalidate(struct i915_ggtt *ggtt)
 
 static void guc_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
-	struct intel_uncore *uncore = ggtt->vm.gt->uncore;
 	struct drm_i915_private *i915 = ggtt->vm.i915;
 
 	gen8_ggtt_invalidate(ggtt);
 
 	if (HAS_ASID_TLB_INVALIDATION(i915))
 		guc_ggtt_ct_invalidate(ggtt);
-	else if (GRAPHICS_VER(i915) >= 12)
-		intel_uncore_write_fw(uncore, GEN12_GUC_TLB_INV_CR,
-				      GEN12_GUC_TLB_INV_CR_INVALIDATE);
-	else
-		intel_uncore_write_fw(uncore, GEN8_GTCR, GEN8_GTCR_INVALIDATE);
+	else if (GRAPHICS_VER(i915) >= 12) {
+		struct intel_gt *gt;
+
+		list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
+			intel_uncore_write_fw(gt->uncore,
+					      GEN12_GUC_TLB_INV_CR,
+					      GEN12_GUC_TLB_INV_CR_INVALIDATE);
+	} else {
+		intel_uncore_write_fw(ggtt->vm.gt->uncore,
+				      GEN8_GTCR, GEN8_GTCR_INVALIDATE);
+	}
 }
 
 static void gen12vf_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
-	struct intel_gt *gt = ggtt->vm.gt;
-	struct intel_guc *guc = &gt->uc.guc;
-	intel_wakeref_t wakeref;
+	struct intel_gt *gt;
 
-	if (!guc->ct.enabled)
-		return;
+	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link) {
+		struct intel_guc *guc = &gt->uc.guc;
+		intel_wakeref_t wakeref;
 
-	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+		if (!guc->ct.enabled)
+			continue;
+		with_intel_runtime_pm(gt->uncore->rpm, wakeref)
+			intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+	}
+}
+
+u64 mtl_ggtt_pte_encode(dma_addr_t addr,
+			unsigned int pat_index,
+			u32 flags)
+{
+	gen8_pte_t pte = addr | GEN8_PAGE_PRESENT;
+
+	GEM_BUG_ON(addr & ~GEN12_GGTT_PTE_ADDR_MASK);
+
+	if (flags & PTE_LM)
+		pte |= GEN12_GGTT_PTE_LM;
+
+	if (pat_index & 1)
+		pte |= MTL_GGTT_PTE_PAT0;
+
+	if ((pat_index >> 1) & 1)
+		pte |= MTL_GGTT_PTE_PAT1;
+
+	return pte;
 }
 
 u64 gen8_ggtt_pte_encode(dma_addr_t addr,
@@ -583,7 +625,7 @@ static void gen12_vf_ggtt_insert_page_wa_vfpf(struct i915_address_space *vm,
 				lower_32_bits(offset));
 	request[2] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_2_OFFSET_HI,
 				upper_32_bits(offset));
-	request[3] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_CACHE_LEVEL, pat_index);
+	request[3] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_PAT_INDEX, pat_index);
 	request[4] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_4_PTE_FLAGS, flags);
 	request[5] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_5_ADDR_LO,
 				lower_32_bits(addr));
@@ -877,7 +919,7 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 	 * why.
 	 */
 	ggtt->pin_bias = max_t(u32, I915_GTT_PAGE_SIZE,
-			       intel_wopcm_guc_size(&ggtt->vm.i915->wopcm));
+			       intel_wopcm_guc_size(&ggtt->vm.gt->wopcm));
 
 	ret = intel_vgt_balloon(ggtt);
 	if (ret)
@@ -1064,7 +1106,15 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
+		/*
+		 * Media GT shares primary GT's GGTT which is already
+		 * initialized
+		 */
+		if (gt->type == GT_MEDIA) {
+			drm_WARN_ON(&i915->drm, gt->ggtt != to_gt(i915)->ggtt);
+			continue;
+		}
 		ret = init_ggtt(gt->ggtt);
 		if (ret)
 			goto err;
@@ -1079,7 +1129,7 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		if (j == i)
 			break;
 		cleanup_init_ggtt(gt->ggtt);
@@ -1135,8 +1185,12 @@ void i915_ggtt_driver_release(struct drm_i915_private *i915)
 
 	intel_ggtt_fini_fences(ggtt);
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i) {
+		if (gt->type == GT_MEDIA)
+			continue;
+
 		ggtt_cleanup_hw(gt->ggtt);
+	}
 }
 
 /**
@@ -1149,8 +1203,11 @@ void i915_ggtt_driver_late_release(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		struct i915_ggtt *ggtt = gt->ggtt;
+
+		if (gt->type == GT_MEDIA)
+			continue;
 
 		GEM_WARN_ON(kref_read(&ggtt->vm.resv_ref) != 1);
 		dma_resv_fini(&ggtt->vm._resv);
@@ -1294,7 +1351,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	unsigned int size;
 	u16 snb_gmch_ctl;
 
-	if (!HAS_LMEM(i915)) {
+	if (!HAS_LMEM(i915) && !HAS_BAR2_SMEM_STOLEN(i915)) {
 		if (!i915_pci_resource_valid(pdev, GTT_APERTURE_BAR))
 			return -ENXIO;
 
@@ -1341,7 +1398,10 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 			I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND;
 	}
 
-	ggtt->invalidate = gen8_ggtt_invalidate;
+	if (intel_uc_wants_guc(&ggtt->vm.gt->uc))
+		ggtt->invalidate = guc_ggtt_invalidate;
+	else
+		ggtt->invalidate = gen8_ggtt_invalidate;
 
 	if (i915_is_mem_wa_enabled(i915, I915_WA_IDLE_GPU_BEFORE_UPDATE)) {
 		ggtt->vm.vma_ops.bind_vma = ggtt_bind_vma_wa;
@@ -1353,9 +1413,10 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.vma_ops.set_pages   = ggtt_set_pages;
 	ggtt->vm.vma_ops.clear_pages = clear_pages;
 
-	ggtt->vm.pte_encode = gen8_ggtt_pte_encode;
-
-	setup_private_pat(ggtt->vm.gt->uncore);
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
+		ggtt->vm.pte_encode = mtl_ggtt_pte_encode;
+	else
+		ggtt->vm.pte_encode = gen8_ggtt_pte_encode;
 
 	return ggtt_probe_common(ggtt, size);
 }
@@ -1530,7 +1591,10 @@ static int gen12vf_ggtt_probe(struct i915_ggtt *ggtt)
 	/* safe guess as native expects the same minimum */
 	ggtt->vm.total = 1ULL << (ilog2(GUC_GGTT_TOP - 1) + 1); /* roundup_pow_of_two(GUC_GGTT_TOP); */
 
-	ggtt->vm.pte_encode = gen8_ggtt_pte_encode;
+	if (IS_METEORLAKE(i915))
+		ggtt->vm.pte_encode = mtl_ggtt_pte_encode;
+	else
+		ggtt->vm.pte_encode = gen8_ggtt_pte_encode;
 	ggtt->vm.clear_range = nop_clear_range;
 	if (i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
 		ggtt->vm.insert_page = gen12_vf_ggtt_insert_page_wa_vfpf;
@@ -1603,7 +1667,7 @@ static int ggtt_probe_hw(struct i915_ggtt *ggtt, struct intel_gt *gt)
 	drm_dbg(&i915->drm, "GMADR size = %lluM\n", (u64)ggtt->mappable_end >> 20);
 	drm_dbg(&i915->drm, "DSM size = %lluM\n",
 		(u64)resource_size(&intel_graphics_stolen_res) >> 20);
-
+	INIT_LIST_HEAD(&ggtt->gt_list);
 	return 0;
 }
 
@@ -1618,8 +1682,17 @@ int i915_ggtt_probe_hw(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		ggtt = gt->ggtt;
+
+		/*
+		 * Media GT shares primary GT's GGTT
+		 */
+		if (gt->type == GT_MEDIA) {
+			ggtt = to_gt(i915)->ggtt;
+			intel_gt_init_ggtt(gt, ggtt);
+			continue;
+		}
 
 		if (!ggtt)
 			ggtt = kzalloc(sizeof(*ggtt), GFP_KERNEL);
@@ -1645,7 +1718,10 @@ int i915_ggtt_probe_hw(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
+		if (gt->type == GT_MEDIA)
+			continue;
+
 		kfree(gt->ggtt);
 	}
 
@@ -1658,29 +1734,6 @@ int i915_ggtt_enable_hw(struct drm_i915_private *i915)
 		return intel_ggtt_gmch_enable_hw(i915);
 
 	return 0;
-}
-
-void i915_ggtt_enable_guc(struct i915_ggtt *ggtt)
-{
-	GEM_BUG_ON(ggtt->invalidate != gen8_ggtt_invalidate);
-
-	ggtt->invalidate = guc_ggtt_invalidate;
-
-	ggtt->invalidate(ggtt);
-}
-
-void i915_ggtt_disable_guc(struct i915_ggtt *ggtt)
-{
-	/* XXX Temporary pardon for error unload */
-	if (ggtt->invalidate == gen8_ggtt_invalidate)
-		return;
-
-	/* We should only be called after i915_ggtt_enable_guc() */
-	GEM_BUG_ON(ggtt->invalidate != guc_ggtt_invalidate);
-
-	ggtt->invalidate = gen8_ggtt_invalidate;
-
-	ggtt->invalidate(ggtt);
 }
 
 /**
@@ -1732,9 +1785,11 @@ bool i915_ggtt_resume_vm(struct i915_address_space *vm)
 
 void i915_ggtt_resume(struct i915_ggtt *ggtt)
 {
+	struct intel_gt *gt;
 	bool flush;
 
-	intel_gt_check_and_clear_faults(ggtt->vm.gt);
+	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
+		intel_gt_check_and_clear_faults(gt);
 
 	flush = i915_ggtt_resume_vm(&ggtt->vm);
 
@@ -1742,9 +1797,6 @@ void i915_ggtt_resume(struct i915_ggtt *ggtt)
 
 	if (flush)
 		wbinvd_on_all_cpus();
-
-	if (GRAPHICS_VER(ggtt->vm.i915) >= 8)
-		setup_private_pat(ggtt->vm.gt->uncore);
 
 	intel_ggtt_restore_fences(ggtt);
 }

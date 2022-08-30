@@ -34,6 +34,7 @@
 #include "intel_rps_types.h"
 #include "intel_wakeref.h"
 #include "pxp/intel_pxp_types.h"
+#include "intel_wopcm.h"
 
 #include "intel_gt_defines.h"
 
@@ -150,12 +151,16 @@ struct intel_rps_defaults {
 
 struct intel_gt {
 	struct drm_i915_private *i915;
+	const char *name;
+	enum intel_gt_type type;
+
 	struct intel_uncore *uncore;
 	struct intel_uncore_mmio_debug *mmio_debug;
 	struct i915_ggtt *ggtt;
 
 	struct intel_uc uc;
 	struct intel_gsc gsc;
+	struct intel_wopcm wopcm;
 	struct intel_iov iov;
 	enum intel_engine_id rsvd_bcs;
 
@@ -247,7 +252,7 @@ struct intel_gt {
 
 	struct i915_vma *dbg;
 
-	spinlock_t irq_lock;
+	spinlock_t *irq_lock;
 	u32 gt_imr;
 	u32 pm_ier;
 	u32 pm_imr;
@@ -324,8 +329,6 @@ struct intel_gt {
 
 		intel_engine_mask_t engine_mask;
 
-		u32 l3bank_mask;
-
 		u8 num_engines;
 
 		/* General presence of SFC units */
@@ -337,7 +340,10 @@ struct intel_gt {
 		/* Slice/subslice/EU info */
 		struct sseu_dev_info sseu;
 
-		unsigned long mslice_mask;
+		union {
+			unsigned long mslice_mask;
+			unsigned long l3bank_mask;
+		};
 
 		/** @hwconfig: hardware configuration data */
 		struct intel_hwconfig hwconfig;
@@ -360,6 +366,9 @@ struct intel_gt {
 	struct i915_perf_gt perf;
 
 	struct i915_eu_stall_cntr_gt eu_stall_cntr;
+
+	/** link: &ggtt.gt_list */
+	struct list_head ggtt_link;
 };
 
 enum intel_gt_scratch_field {
@@ -371,12 +380,6 @@ enum intel_gt_scratch_field {
 
 	/* 8 bytes */
 	INTEL_GT_SCRATCH_FIELD_COHERENTL3_WA = 256,
-
-	/* 6 * 8 bytes */
-	INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR = 2048,
-
-	/* 4 bytes */
-	INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1 = 2096,
 };
 
 #define SOC_HW_ERR_SHIFT	ilog2(SOC_HW_ERR_MAX_BITS)

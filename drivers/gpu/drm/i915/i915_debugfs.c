@@ -66,7 +66,7 @@ static int i915_capabilities_show(struct seq_file *m, void *data)
 	intel_device_info_print_static(INTEL_INFO(i915), &p);
 	intel_device_info_print_runtime(RUNTIME_INFO(i915), &p);
 	i915_print_iommu_status(i915, &p);
-	for_each_gt(i915, id, gt)
+	for_each_gt(gt, i915, id)
 		intel_gt_info_print(&gt->info, &p);
 	intel_driver_caps_print(&i915->caps, &p);
 
@@ -152,7 +152,16 @@ static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = obj_to_i915(obj);
 
-	if (IS_PONTEVECCHIO(i915)) {
+	if (IS_METEORLAKE(i915)) {
+		switch (obj->pat_index) {
+		case 0: return " WB";
+		case 1: return " WT";
+		case 2: return " UC";
+		case 3: return " WB (1-Way Coh)";
+		case 4: return " WB (2-Way Coh)";
+		default: return " not defined";
+		}
+	} else if (IS_PONTEVECCHIO(i915)) {
 		switch (obj->pat_index) {
 		case 0: return " UC";
 		case 1: return " WC";
@@ -716,7 +725,7 @@ static int i915_wedged_get(void *data, u64 *val)
 
 	*val = 0;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		int ret;
 		u64 v;
 
@@ -739,7 +748,7 @@ static int i915_wedged_set(void *data, u64 val)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_debugfs_reset_store(gt, val);
 
 	return 0;
@@ -858,7 +867,7 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 	unsigned int i;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		ret = gt_drop_caches(gt, val);
 		if (ret)
 			return ret;
@@ -938,7 +947,7 @@ static int i915_forcewake_open(struct inode *inode, struct file *file)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_pm_debugfs_forcewake_user_open(gt);
 
 	return 0;
@@ -950,7 +959,7 @@ static int i915_forcewake_release(struct inode *inode, struct file *file)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_pm_debugfs_forcewake_user_release(gt);
 
 	return 0;

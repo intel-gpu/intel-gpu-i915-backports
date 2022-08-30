@@ -90,6 +90,13 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 			  const struct drm_i915_gem_object_ops *ops,
 			  struct lock_class_key *key, unsigned flags)
 {
+	/*
+	 * A gem object is embedded both in a struct ttm_buffer_object :/ and
+	 * in a drm_i915_gem_object. Make sure they are aliased.
+	 */
+	BUILD_BUG_ON(offsetof(typeof(*obj), base) !=
+		     offsetof(typeof(*obj), __do_not_access.base));
+
 	spin_lock_init(&obj->vma.lock);
 	INIT_LIST_HEAD(&obj->vma.list);
 
@@ -175,8 +182,10 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 {
 	if (!dst_region_id)
 		return false;
-
-	if (is_atomic_fault)
+	/* HW support cross-tile atomic access, so no need to
+	 * migrate when object is already in lmem.
+	 */
+	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
 		return true;
 
 	if (i915_gem_object_allows_atomic_device(obj) &&
@@ -334,7 +343,7 @@ static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *f
 	}
 }
 
-static void __i915_gem_free_object_rcu(struct rcu_head *head)
+void __i915_gem_free_object_rcu(struct rcu_head *head)
 {
 	struct drm_i915_gem_object *obj =
 		container_of(head, typeof(*obj), rcu);
@@ -386,68 +395,77 @@ void __i915_gem_object_free_mmaps(struct drm_i915_gem_object *obj)
 	}
 }
 
+void __i915_gem_free_object(struct drm_i915_gem_object *obj)
+{
+	trace_i915_gem_object_destroy(obj);
+
+	if (!list_empty(&obj->vma.list)) {
+		struct i915_vma *vma;
+
+		/*
+		 * Note that the vma keeps an object reference while
+		 * it is active, so it *should* not sleep while we
+		 * destroy it. Our debug code errs insits it *might*.
+		 * For the moment, play along.
+		 */
+		spin_lock(&obj->vma.lock);
+		while ((vma = list_first_entry_or_null(&obj->vma.list,
+						       struct i915_vma,
+						       obj_link))) {
+			GEM_BUG_ON(vma->obj != obj);
+			GEM_BUG_ON(!kref_read(&vma->ref));
+			spin_unlock(&obj->vma.lock);
+
+			__i915_vma_put(vma);
+
+			spin_lock(&obj->vma.lock);
+		}
+		spin_unlock(&obj->vma.lock);
+	}
+
+	__i915_gem_object_free_mmaps(obj);
+
+	GEM_BUG_ON(!list_empty(&obj->lut_list));
+	GEM_BUG_ON(!list_empty(&obj->client_list));
+
+	atomic_set(&obj->mm.pages_pin_count, 0);
+	__i915_gem_object_put_pages(obj);
+	GEM_BUG_ON(i915_gem_object_has_pages(obj));
+	bitmap_free(obj->bit_17);
+
+	if (obj->base.import_attach)
+		drm_prime_gem_destroy(&obj->base, NULL);
+
+	drm_gem_free_mmap_offset(&obj->base);
+
+	if (obj->ops->release)
+		obj->ops->release(obj);
+
+	if (obj->mm.n_placements > 1)
+		kfree(obj->mm.placements);
+
+	if (obj->shares_resv_from)
+		i915_vm_resv_put(obj->shares_resv_from);
+}
+
 static void __i915_gem_free_objects(struct drm_i915_private *i915,
 				    struct llist_node *freed)
 {
 	struct drm_i915_gem_object *obj, *on;
 
 	llist_for_each_entry_safe(obj, on, freed, freed) {
-		struct drm_i915_private *i915 = to_i915(obj->base.dev);
-
-		trace_i915_gem_object_destroy(obj);
-
-		if (!list_empty(&obj->vma.list)) {
-			struct i915_vma *vma;
-
-			/*
-			 * Note that the vma keeps an object reference while
-			 * it is active, so it *should* not sleep while we
-			 * destroy it. Our debug code errs insits it *might*.
-			 * For the moment, play along.
-			 */
-			spin_lock(&obj->vma.lock);
-			while ((vma = list_first_entry_or_null(&obj->vma.list,
-							       struct i915_vma,
-							       obj_link))) {
-				GEM_BUG_ON(vma->obj != obj);
-				GEM_BUG_ON(!kref_read(&vma->ref));
-				spin_unlock(&obj->vma.lock);
-
-				__i915_vma_put(vma);
-
-				spin_lock(&obj->vma.lock);
-			}
-			spin_unlock(&obj->vma.lock);
+		might_sleep();
+		if (obj->ops->delayed_free) {
+			obj->ops->delayed_free(obj);
+			continue;
 		}
-
-		__i915_gem_object_free_mmaps(obj);
-
-		GEM_BUG_ON(!list_empty(&obj->lut_list));
-		GEM_BUG_ON(!list_empty(&obj->client_list));
-
-		atomic_set(&obj->mm.pages_pin_count, 0);
-		__i915_gem_object_put_pages(obj);
-		GEM_BUG_ON(i915_gem_object_has_pages(obj));
-		bitmap_free(obj->bit_17);
-
-		if (obj->base.import_attach)
-			drm_prime_gem_destroy(&obj->base, NULL);
-
-		drm_gem_free_mmap_offset(&obj->base);
-
-		if (obj->ops->release)
-			obj->ops->release(obj);
-
-		if (obj->mm.n_placements > 1)
-			kfree(obj->mm.placements);
 
 		spin_lock(&i915->vm_priv_obj_lock);
 		if (obj->vm && obj->vm != I915_BO_INVALID_PRIV_VM)
 			list_del_init(&obj->priv_obj_link);
 		spin_unlock(&i915->vm_priv_obj_lock);
 
-		if (obj->shares_resv_from)
-			i915_vm_resv_put(obj->shares_resv_from);
+		__i915_gem_free_object(obj);
 
 		/* But keep the pointer alive for RCU-protected lookups */
 		call_rcu(&obj->rcu, __i915_gem_free_object_rcu);
@@ -505,6 +523,7 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 	 * worker and performing frees directly from subsequent allocations for
 	 * crude but effective memory throttling.
 	 */
+
 	if (llist_add(&obj->freed, &i915->mm.free_list))
 		queue_work(i915->wq, &i915->mm.free_work);
 }
@@ -539,42 +558,6 @@ int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 
 	return i915_gem_object_unbind(obj, ww,
 				      I915_GEM_OBJECT_UNBIND_ACTIVE);
-}
-
-/**
- * i915_gem_object_evictable - Whether object is likely evictable after unbind.
- * @obj: The object to check
- *
- * This function checks whether the object is likely unevictable after unbind.
- * If the object is not locked when checking, the result is only advisory.
- * If the object is locked when checking, and the function returns true,
- * then an eviction should indeed be possible. But since unlocked vma
- * unpinning and unbinding is currently possible, the object can actually
- * become evictable even if this function returns false.
- *
- * Return: true if the object may be evictable. False otherwise.
- */
-static bool i915_gem_object_evictable(struct drm_i915_gem_object *obj)
-{
-	struct i915_vma *vma;
-	int pin_count = atomic_read(&obj->mm.pages_pin_count);
-
-	if (!pin_count)
-		return true;
-
-	spin_lock(&obj->vma.lock);
-	list_for_each_entry(vma, &obj->vma.list, obj_link) {
-		if (i915_vma_is_pinned(vma)) {
-			spin_unlock(&obj->vma.lock);
-			return false;
-		}
-		if (atomic_read(&vma->pages_count))
-			pin_count--;
-	}
-	spin_unlock(&obj->vma.lock);
-	GEM_WARN_ON(pin_count < 0);
-
-	return pin_count == 0;
 }
 
 /**
@@ -974,6 +957,60 @@ int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, 
 		return -ENODEV;
 
 	return 0;
+}
+
+/**
+ * i915_gem_object_evictable - Whether object is likely evictable after unbind.
+ * @obj: The object to check
+ *
+ * This function checks whether the object is likely unvictable after unbind.
+ * If the object is not locked when checking, the result is only advisory.
+ * If the object is locked when checking, and the function returns true,
+ * then an eviction should indeed be possible. But since unlocked vma
+ * unpinning and unbinding is currently possible, the object can actually
+ * become evictable even if this function returns false.
+ *
+ * Return: true if the object may be evictable. False otherwise.
+ */
+bool i915_gem_object_evictable(struct drm_i915_gem_object *obj)
+{
+	struct i915_vma *vma;
+	int pin_count = atomic_read(&obj->mm.pages_pin_count);
+
+	if (!pin_count)
+		return true;
+
+	spin_lock(&obj->vma.lock);
+	list_for_each_entry(vma, &obj->vma.list, obj_link) {
+		if (i915_vma_is_pinned(vma)) {
+			spin_unlock(&obj->vma.lock);
+			return false;
+		}
+		if (atomic_read(&vma->pages_count))
+			pin_count--;
+	}
+	spin_unlock(&obj->vma.lock);
+	GEM_WARN_ON(pin_count < 0);
+
+	return pin_count == 0;
+}
+
+/**
+ * i915_gem_object_migratable - Whether the object is migratable out of the
+ * current region.
+ * @obj: Pointer to the object.
+ *
+ * Return: Whether the object is allowed to be resident in other
+ * regions than the current while pages are present.
+ */
+bool i915_gem_object_migratable(struct drm_i915_gem_object *obj)
+{
+	struct intel_memory_region *mr = READ_ONCE(obj->mm.region);
+
+	if (!mr)
+		return false;
+
+	return obj->mm.n_placements > 1;
 }
 
 void i915_gem_init__objects(struct drm_i915_private *i915)

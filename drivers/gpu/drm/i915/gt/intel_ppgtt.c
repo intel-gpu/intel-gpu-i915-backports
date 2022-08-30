@@ -242,7 +242,7 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	 * the most recent TLB invalidation seqno, and if we have not yet
 	 * flushed the TLBs upon release, perform a full invalidation.
 	 */
-	for_each_gt(vm->i915, id, gt) {
+	for_each_gt(gt, vm->i915, id) {
 		WRITE_ONCE(obj->mm.tlb[id], 0);
 		if (!atomic_read(&vm->active_contexts_gt[id]))
 			continue;

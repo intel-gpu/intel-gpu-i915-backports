@@ -238,7 +238,7 @@ static resource_size_t __lmtt_size(struct intel_lmtt *lmtt, unsigned int vf)
 	resource_size_t size = 0;
 	unsigned int id;
 
-	for_each_gt(gt->i915, id, _gt) {
+	for_each_gt(_gt, gt->i915, id) {
 		obj = _gt->iov.pf.provisioning.configs[vf].lmem_obj;
 		if (!obj)
 			continue;
@@ -300,7 +300,7 @@ lmtt_insert_entries(struct intel_lmtt *lmtt, unsigned int vf, u64 start)
 	 * Each tile has its own LMTT, and we need to make all objects (which
 	 * are also per-tile) available.
 	 */
-	for_each_gt(gt->i915, id, _gt) {
+	for_each_gt(_gt, gt->i915, id) {
 		struct drm_i915_gem_object *obj = _gt->iov.pf.provisioning.configs[vf].lmem_obj;
 		struct sg_table *sg;
 

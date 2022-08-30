@@ -620,17 +620,10 @@ fail:
 
 static int init_shmem(struct intel_memory_region *mem)
 {
-	int err;
-
-	err = i915_gemfs_init(mem->i915);
-	if (err) {
-		DRM_NOTE("Unable to create a private tmpfs mount, hugepage support will be disabled(%d).\n",
-			 err);
-	}
-
+	i915_gemfs_init(mem->i915);
 	intel_memory_region_set_name(mem, "system");
 
-	return 0; /* Don't error, we can simply fallback to the kernel mnt */
+	return 0; /* We have fallback to the kernel mnt if gemfs init failed. */
 }
 
 static void release_shmem(struct intel_memory_region *mem)
@@ -644,11 +637,13 @@ static const struct intel_memory_region_ops shmem_region_ops = {
 	.init_object = shmem_object_init,
 };
 
-struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt)
+struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt,
+						 u16 type, u16 instance)
 {
 	return intel_memory_region_create(gt, 0,
 					  totalram_pages() << PAGE_SHIFT,
 					  PAGE_SIZE, 0,
+					  type, instance,
 					  &shmem_region_ops);
 }
 

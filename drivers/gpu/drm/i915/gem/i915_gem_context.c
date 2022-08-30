@@ -218,6 +218,8 @@ static void intel_context_set_gem(struct intel_context *ce,
 	RCU_INIT_POINTER(ce->gem_context, ctx);
 
 	ce->ring_size = SZ_16K;
+	if (ce->engine->class == COMPUTE_CLASS)
+		ce->ring_size = SZ_512K;
 
 	if (rcu_access_pointer(ctx->vm)) {
 		struct i915_address_space *vm;
@@ -663,7 +665,7 @@ static void context_close(struct i915_gem_context *ctx)
 		struct intel_gt *gt;
 		unsigned int i;
 
-		for_each_gt(ctx->i915, i, gt)
+		for_each_gt(gt, ctx->i915, i)
 			intel_engine_pm_put(gt->engine[gt->rsvd_bcs]);
 	}
 
@@ -677,6 +679,23 @@ static void context_close(struct i915_gem_context *ctx)
 	kill_context(ctx);
 
 	i915_gem_context_put(ctx);
+}
+
+static void warn_non_persistent_usage(struct drm_i915_private *i915)
+{
+	static bool once;
+
+	if (xchg(&once, true))
+		return;
+
+	drm_notice(&i915->drm, "*****************************************************************\n");
+	drm_notice(&i915->drm, "* WARNING: Non-persistent context with no engine reset detected!*\n");
+	drm_notice(&i915->drm, "*                                                               *\n");
+	drm_notice(&i915->drm, "* This usage is enabled only for debug purposes and is unsafe   *\n");
+	drm_notice(&i915->drm, "* for production use as it may result in forever spinning,      *\n");
+	drm_notice(&i915->drm, "* potentially non-preemptible jobs left on the GPU.             *\n");
+	drm_notice(&i915->drm, "* Further testing may be unreliable. You have been warned!      *\n");
+	drm_notice(&i915->drm, "*****************************************************************\n");
 }
 
 static int __context_set_persistence(struct i915_gem_context *ctx, bool state)
@@ -716,8 +735,16 @@ static int __context_set_persistence(struct i915_gem_context *ctx, bool state)
 		 * colateral damage, and we should not pretend we can by
 		 * exposing the interface.
 		 */
-		if (!intel_has_reset_engine(to_gt(ctx->i915)))
-			return -ENODEV;
+		if (!intel_has_reset_engine(to_gt(ctx->i915))) {
+			/*
+			 * It is useful to disable resets for debugging purposes
+			 * and still be able to use non-persistent contexts.
+			 */
+			if (!ctx->i915->params.allow_non_persist_without_reset)
+				return -ENODEV;
+
+			warn_non_persistent_usage(ctx->i915);
+		}
 
 		i915_gem_context_clear_persistence(ctx);
 	}
@@ -976,7 +1003,7 @@ i915_gem_context_create_for_gt(struct intel_gt *gt, unsigned int flags)
 
 			drm_dbg(&i915->drm,
 				"Disabling PM for reserved bcs on each tile for ULLS ctx\n");
-			for_each_gt(ctx->i915, i, t)
+			for_each_gt(t, ctx->i915, i)
 				intel_engine_pm_get(t->engine[t->rsvd_bcs]);
 
 			ctx->bcs0_pm_disabled = true;
@@ -1872,11 +1899,11 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 			}
 
 			/*
-			 * XXX: We don't support breadcrumb handshake on these
+			 * We don't support breadcrumb handshake on these
 			 * classes
 			 */
-			if (ci.engine_class == I915_ENGINE_CLASS_RENDER ||
-			    ci.engine_class == I915_ENGINE_CLASS_COMPUTE) {
+			if (siblings[n]->class == RENDER_CLASS ||
+			    siblings[n]->class == COMPUTE_CLASS) {
 				err = -EINVAL;
 				goto out_err;
 			}
