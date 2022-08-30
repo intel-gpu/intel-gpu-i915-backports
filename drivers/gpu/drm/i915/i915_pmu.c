@@ -485,7 +485,7 @@ static void init_samples(struct i915_pmu *pmu)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		intel_wakeref_t wakeref;
 
 		with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
@@ -726,7 +726,7 @@ static enum hrtimer_restart i915_sample(struct hrtimer *hrtimer)
 	 * back delay greatly dominates this so we keep it simple.
 	 */
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (!(pmu->unparked & BIT(i)))
 			continue;
 
@@ -1547,7 +1547,7 @@ create_event_attributes(struct i915_pmu *pmu)
 		     ARRAY_SIZE(i915_driver_error_map));
 
 	/* Count how many counters we will be exposing. */
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		for (i = 0; i < ARRAY_SIZE(events); i++) {
 			u64 config = ___PRELIM_I915_PMU_OTHER(j, events[i].counter);
 
@@ -1604,7 +1604,7 @@ create_event_attributes(struct i915_pmu *pmu)
 	attr_iter = attr;
 
 	/* Initialize supported non-engine counters. */
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		char *str;
 
 		for (i = 0; i < ARRAY_SIZE(events); i++) {

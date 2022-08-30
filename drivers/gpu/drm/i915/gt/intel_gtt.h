@@ -466,6 +466,7 @@ struct i915_ggtt {
 
 	unsigned int num_fences;
 	struct i915_fence_reg *fence_regs;
+	struct wait_queue_head fence_wq;
 	struct list_head fence_list;
 
 	/**

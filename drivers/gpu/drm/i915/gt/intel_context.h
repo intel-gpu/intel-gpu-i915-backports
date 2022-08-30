@@ -228,7 +228,6 @@ static inline void intel_context_exit(struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->timeline->mutex);
 	GEM_BUG_ON(!ce->active_count);
-
 	if (!--ce->active_count)
 		ce->ops->exit(ce);
 }

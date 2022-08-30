@@ -640,7 +640,7 @@ release:
 	mutex_lock(&ggtt->vm.mutex);
 	err = i915_gem_gtt_insert(&ggtt->vm, node, size, alignment,
 		I915_COLOR_UNEVICTABLE,
-		0, ggtt->vm.total,
+		ggtt->pin_bias, GUC_GGTT_TOP,
 		PIN_HIGH);
 	mutex_unlock(&ggtt->vm.mutex);
 	if (unlikely(err))
@@ -1627,7 +1627,7 @@ static int pf_update_all_lmtt(struct drm_i915_private *i915, unsigned int vfid)
 	unsigned int gtid;
 	int err;
 
-	for_each_gt(i915, gtid, gt) {
+	for_each_gt(gt, i915, gtid) {
 		err = pf_update_lmtt(&gt->iov, vfid);
 		if (unlikely(err))
 			return err;
@@ -2315,7 +2315,7 @@ static u32 pf_get_vf_tile_mask(struct intel_iov *iov, unsigned int vfid)
 
 	GEM_BUG_ON(iov_is_remote(iov));
 
-	for_each_gt(iov_to_i915(iov), gtid, gt) {
+	for_each_gt(gt, iov_to_i915(iov), gtid) {
 		err = pf_validate_config(&gt->iov, vfid);
 		if (!err)
 			tile_mask |= BIT(gtid);

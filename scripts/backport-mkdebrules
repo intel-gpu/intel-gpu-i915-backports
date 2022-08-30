@@ -62,6 +62,8 @@ override_dh_install: debian/$PKG_NAME.install
 
 override_dh_dkms: debian/$PKG_NAME.dkms
 	dh_dkms -V \$(DKMS_PACKAGE_VERSION)
+	sed '1d' debian/package.postinst.in >> debian/$PKG_NAME.postinst.debhelper
+	sed '1d' debian/package.postrm.in >> debian/$PKG_NAME.prerm.debhelper
 
 \$(GENERATED_DKMS_FILES) : \$(GENERATED_DKMS_FILES:=.in) debian/rules
 	sed -e 's,@DKMS_PACKAGE_NAME@,\$(DKMS_PACKAGE_NAME),g' \\

@@ -12,11 +12,6 @@
 /* Auto-generated tables: */
 #include "intel_guc_hwconfig_auto.c"
 
-static inline struct intel_gt *hwconfig_to_gt(struct intel_hwconfig *hwconfig)
-{
-	return container_of(hwconfig, struct intel_gt, info.hwconfig);
-}
-
 /*
  * GuC has a blob containing hardware configuration information (HWConfig).
  * This is formatted as a simple and flexible KLV (Key/Length/Value) table.
@@ -101,48 +96,12 @@ static int guc_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig
 	return ret;
 }
 
-static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
-					  u32 *size)
-{
-	if (IS_XEHPSDV(i915)) {
-		*size = ARRAY_SIZE(hwinfo_xehpsdv) * sizeof(u32);
-		return hwinfo_xehpsdv;
-	}
-
-	return NULL;
-}
-
-static int fake_hwconfig_discover_size(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
-{
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
-	const u32 *table;
-	u32 table_size;
-
-	table = fake_hwconfig_get_table(i915, &table_size);
-	if (!table)
-		return -ENOENT;
-
-	hwconfig->size = table_size;
-	return 0;
-}
-
-static int fake_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
-{
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
-	const u32 *table;
-	u32 table_size;
-
-	table = fake_hwconfig_get_table(i915, &table_size);
-	if (!table)
-		return -ENOENT;
-
-	if (hwconfig->size >= table_size)
-		memcpy(hwconfig->ptr, table, table_size);
-
-	return table_size;
-}
-
 /*
+static inline struct intel_gt *hwconfig_to_gt(struct intel_hwconfig *hwconfig)
+{
+	return container_of(hwconfig, struct intel_gt, info.hwconfig);
+}
+
 static int intel_hwconf_override_klv(struct intel_hwconfig *hwconfig, u32 new_key, u32 new_len, u32 *new_value)
 {
 	u32 *old_array, *new_array, *new_ptr;
@@ -207,6 +166,47 @@ static int intel_hwconf_apply_overrides(struct intel_hwconfig *hwconfig)
 	 *   intel_hwconf_override_klv(hwconfig, INTEL_HWCONFIG_XXX, len, data);
 	 */
 	return 0;
+}
+
+static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
+					  u32 *size)
+{
+	if (IS_XEHPSDV(i915)) {
+		*size = ARRAY_SIZE(hwinfo_xehpsdv) * sizeof(u32);
+		return hwinfo_xehpsdv;
+	}
+
+	return NULL;
+}
+
+static int fake_hwconfig_discover_size(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+{
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+	const u32 *table;
+	u32 table_size;
+
+	table = fake_hwconfig_get_table(i915, &table_size);
+	if (!table)
+		return -ENOENT;
+
+	hwconfig->size = table_size;
+	return 0;
+}
+
+static int fake_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+{
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+	const u32 *table;
+	u32 table_size;
+
+	table = fake_hwconfig_get_table(i915, &table_size);
+	if (!table)
+		return -ENOENT;
+
+	if (hwconfig->size >= table_size)
+		memcpy(hwconfig->ptr, table, table_size);
+
+	return table_size;
 }
 
 static bool has_table(struct drm_i915_private *i915)

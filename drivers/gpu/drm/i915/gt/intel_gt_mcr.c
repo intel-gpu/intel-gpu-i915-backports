@@ -228,25 +228,6 @@ static u32 rw_with_mcr_steering(struct intel_uncore *uncore,
  * @instance: the MCR instance
  *
  * Returns the value read from an MCR register after steering toward a specific
- * group/instance.  This function assumes the caller has already acquired any
- * necessary forcewake domains; use intel_gt_mcr_read() instead for automatic
- * forcewake acquisition.
- */
-u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
-			 i915_reg_t reg,
-			 int group, int instance)
-{
-	return rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_READ, group, instance, 0);
-}
-
-/**
- * intel_gt_mcr_read - read a specific instance of an MCR register
- * @gt: GT structure
- * @reg: the MCR register to read
- * @group: the MCR group
- * @instance: the MCR instance
- *
- * Returns the value read from an MCR register after steering toward a specific
  * group/instance.
  */
 u32 intel_gt_mcr_read(struct intel_gt *gt,
@@ -256,10 +237,25 @@ u32 intel_gt_mcr_read(struct intel_gt *gt,
 	return rw_with_mcr_steering(gt->uncore, reg, FW_REG_READ, group, instance, 0);
 }
 
-static void gt_mcr_unicast_write_fw(struct intel_gt *gt, i915_reg_t reg, u32 value,
-				    int group, int instance)
+/**
+ * intel_gt_mcr_read_fw - read a specific instance of an MCR register
+ * @gt: GT structure
+ * @reg: the MCR register to read
+ * @group: the MCR group
+ * @instance: the MCR instance
+ *
+ * Returns the value read from an MCR register after steering toward a specific
+ * group/instance.  This function assumes the caller is already holding any
+ * necessary forcewake domains; use intel_gt_mcr_read() in cases where
+ * forcewake should be obtained automatically.
+
+ */
+u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
+			 i915_reg_t reg,
+			 int group, int instance)
 {
-	rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_WRITE, group, instance, value);
+	return rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_READ,
+				       group, instance, 0);
 }
 
 /**
@@ -277,6 +273,26 @@ void intel_gt_mcr_unicast_write(struct intel_gt *gt, i915_reg_t reg, u32 value,
 				int group, int instance)
 {
 	rw_with_mcr_steering(gt->uncore, reg, FW_REG_WRITE, group, instance, value);
+}
+
+/**
+ * intel_gt_mcr_unicast_write_fw - write a specific instance of an MCR register
+ * @gt: GT structure
+ * @reg: the MCR register to write
+ * @value: value to write
+ * @group: the MCR group
+ * @instance: the MCR instance
+ *
+ * Write an MCR register in unicast mode after steering toward a specific
+ * group/instance.  This function assumes the caller is already holding any
+ * necessary forcewake domains; use intel_gt_mcr_unicast_write() in cases where
+ * forcewake should be obtained automatically.
+ */
+void intel_gt_mcr_unicast_write_fw(struct intel_gt *gt, i915_reg_t reg, u32 value,
+				   int group, int instance)
+{
+	rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_WRITE,
+				group, instance, value);
 }
 
 /**
@@ -309,7 +325,7 @@ void intel_gt_mcr_unicast_rmw(struct intel_gt *gt, i915_reg_t reg,
 	val = intel_gt_mcr_read_fw(gt, reg, group, instance);
 	val &= ~clear;
 	val |= set;
-	gt_mcr_unicast_write_fw(gt, reg, val, group, instance);
+	intel_gt_mcr_unicast_write_fw(gt, reg, val, group, instance);
 
 	intel_uncore_forcewake_put__locked(uncore, fw_domains);
 	spin_unlock_irqrestore(&uncore->lock, irqflags);
@@ -554,3 +570,28 @@ void intel_gt_mcr_report_steering(struct drm_printer *p, struct intel_gt *gt,
 	}
 }
 
+/**
+ * intel_gt_mcr_get_ss_steering - returns the group/instance steering for a SS
+ * @gt: GT structure
+ * @dss: DSS ID to obtain steering for
+ * @group: pointer to storage for steering group ID
+ * @instance: pointer to storage for steering instance ID
+ *
+ * Returns the steering IDs (via the @group and @instance parameters) that
+ * correspond to a specific subslice/DSS ID.
+ */
+void intel_gt_mcr_get_ss_steering(struct intel_gt *gt, unsigned int dss,
+				   unsigned int *group, unsigned int *instance)
+{
+	if (IS_PONTEVECCHIO(gt->i915)) {
+		*group = dss / GEN_DSS_PER_CSLICE;
+		*instance = dss % GEN_DSS_PER_CSLICE;
+	} else if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
+		*group = dss / GEN_DSS_PER_GSLICE;
+		*instance = dss % GEN_DSS_PER_GSLICE;
+	} else {
+		*group = dss / GEN_MAX_SS_PER_HSW_SLICE;
+		*instance = dss % GEN_MAX_SS_PER_HSW_SLICE;
+		return;
+	}
+}

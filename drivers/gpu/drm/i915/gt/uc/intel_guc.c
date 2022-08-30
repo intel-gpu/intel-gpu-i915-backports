@@ -296,52 +296,21 @@ static u32 guc_ctl_feature_flags(struct intel_guc *guc)
 
 static u32 guc_ctl_log_params_flags(struct intel_guc *guc)
 {
-	u32 offset = intel_guc_ggtt_offset(guc, guc->log.vma) >> PAGE_SHIFT;
-	u32 flags;
+	struct intel_guc_log *log = &guc->log;
+	u32 offset, flags;
 
-	#if (((CRASH_BUFFER_SIZE) % SZ_1M) == 0)
-	#define LOG_UNIT SZ_1M
-	#define LOG_FLAG GUC_LOG_LOG_ALLOC_UNITS
-	#else
-	#define LOG_UNIT SZ_4K
-	#define LOG_FLAG 0
-	#endif
+	GEM_BUG_ON(!log->sizes_initialised);
 
-	#if (((CAPTURE_BUFFER_SIZE) % SZ_1M) == 0)
-	#define CAPTURE_UNIT SZ_1M
-	#define CAPTURE_FLAG GUC_LOG_CAPTURE_ALLOC_UNITS
-	#else
-	#define CAPTURE_UNIT SZ_4K
-	#define CAPTURE_FLAG 0
-	#endif
-
-	BUILD_BUG_ON(!CRASH_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(CRASH_BUFFER_SIZE, LOG_UNIT));
-	BUILD_BUG_ON(!DEBUG_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(DEBUG_BUFFER_SIZE, LOG_UNIT));
-	BUILD_BUG_ON(!CAPTURE_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(CAPTURE_BUFFER_SIZE, CAPTURE_UNIT));
-
-	BUILD_BUG_ON((CRASH_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_CRASH_MASK >> GUC_LOG_CRASH_SHIFT));
-	BUILD_BUG_ON((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_DEBUG_MASK >> GUC_LOG_DEBUG_SHIFT));
-	BUILD_BUG_ON((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) >
-			(GUC_LOG_CAPTURE_MASK >> GUC_LOG_CAPTURE_SHIFT));
+	offset = intel_guc_ggtt_offset(guc, log->vma) >> PAGE_SHIFT;
 
 	flags = GUC_LOG_VALID |
 		GUC_LOG_NOTIFY_ON_HALF_FULL |
-		CAPTURE_FLAG |
-		LOG_FLAG |
-		((CRASH_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_CRASH_SHIFT) |
-		((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_DEBUG_SHIFT) |
-		((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) << GUC_LOG_CAPTURE_SHIFT) |
+		log->sizes[GUC_LOG_SECTIONS_DEBUG].flag |
+		log->sizes[GUC_LOG_SECTIONS_CAPTURE].flag |
+		(log->sizes[GUC_LOG_SECTIONS_CRASH].count << GUC_LOG_CRASH_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_DEBUG].count << GUC_LOG_DEBUG_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_CAPTURE].count << GUC_LOG_CAPTURE_SHIFT) |
 		(offset << GUC_LOG_BUF_ADDR_SHIFT);
-
-	#undef LOG_UNIT
-	#undef LOG_FLAG
-	#undef CAPTURE_UNIT
-	#undef CAPTURE_FLAG
 
 	return flags;
 }
@@ -364,10 +333,6 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
 		flags |= GUC_WA_POLLCS;
 
-	/* Wa_16015675438, Wa_18020744125 */
-	if (!RCS_MASK(gt))
-		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
-
 	/* Wa_16011759253:dg2_g10:a0 */
 	/* Wa_22011383443:pvc - Also needed for PVC BD A0 */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_B0) ||
@@ -389,11 +354,11 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 		flags |= GUC_WA_DUAL_QUEUE;
 
 	/*
-	 * Wa_22011802037: graphics version 12
+	 * Wa_22011802037: graphics version 11/12
 	 * GUC_WA_PRE_PARSER causes media workload hang for PVC A0 and PCIe
 	 * errors. Disable this for PVC A0 steppings.
 	 */
-	if (GRAPHICS_VER(gt->i915) == 12 &&
+	if (IS_GRAPHICS_VER(gt->i915, 11, 12) &&
 	    !IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
 		flags |= GUC_WA_PRE_PARSER;
 
@@ -412,6 +377,10 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_FOREVER))
 		flags |= GUC_WA_CONTEXT_ISOLATION;
+
+	/* Wa_16015675438, Wa_18020744125 */
+	if (!RCS_MASK(gt))
+		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
 
 	/*
 	 * Wa_1509372804: PVC, Apply WA in render force wake step by
@@ -604,7 +573,7 @@ int intel_guc_g2g_register(struct intel_guc *guc)
 	unsigned int i, j;
 	int err;
 
-	for_each_gt(gt->i915, i, remote_gt) {
+	for_each_gt(remote_gt, gt->i915, i) {
 		if (i == gt->info.id)
 			continue;
 
@@ -622,7 +591,7 @@ int intel_guc_g2g_register(struct intel_guc *guc)
 	return 0;
 
 err_deregister:
-	for_each_gt(gt->i915, j, remote_gt) {
+	for_each_gt(remote_gt, gt->i915, j) {
 		if (j == gt->info.id)
 			continue;
 
@@ -1318,6 +1287,35 @@ int intel_guc_self_cfg64(struct intel_guc *guc, u16 key, u64 value)
 	return __guc_self_cfg(guc, key, 2, value);
 }
 
+static long must_wait_woken(struct wait_queue_entry *wq_entry, long timeout)
+{
+	/*
+	 * This is equivalent to wait_woken() with the exception that
+	 * we do not wake up early if the kthread task has been completed.
+	 * As we are called from page reclaim in any task context,
+	 * we may be invoked from stopped kthreads, but we *must*
+	 * complete the wait from the HW .
+	 *
+	 * A second problem is that since we are called under reclaim
+	 * and wait_woken() inspected the thread state, it makes an invalid
+	 * assumption that all PF_KTHREAD tasks have set_kthread_struct()
+	 * called upon them, and will trigger a GPF in is_kthread_should_stop().
+	 */
+	do {
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		if (wq_entry->flags & WQ_FLAG_WOKEN)
+			break;
+
+		timeout = schedule_timeout(timeout);
+	} while (timeout);
+	__set_current_state(TASK_RUNNING);
+
+	/* See wait_woken() and woken_wake_function() */
+	smp_store_mb(wq_entry->flags, wq_entry->flags & ~WQ_FLAG_WOKEN);
+
+	return timeout;
+}
+
 static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
 {
 	struct intel_guc_tlb_wait _wq, *wq = &_wq;
@@ -1373,8 +1371,7 @@ static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
  * queued in CT buffer.
  */
 #define OUTSTANDING_GUC_TIMEOUT_PERIOD  (HZ)
-	if (!wait_woken(&wait, TASK_UNINTERRUPTIBLE,
-			OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
+	if (!must_wait_woken(&wait, OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
 		/*
 		 * XXX: Failure of tlb invalidation is critical and would
 		 * warrant a gt reset.

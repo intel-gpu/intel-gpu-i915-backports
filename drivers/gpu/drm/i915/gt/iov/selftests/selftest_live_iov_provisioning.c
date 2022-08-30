@@ -1056,7 +1056,7 @@ int selftest_live_iov_provisioning(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		unsigned int id;
 
-		for_each_gt(i915, id, gt) {
+		for_each_gt(gt, i915, id) {
 			struct intel_iov *iov = &gt->iov;
 
 			err = intel_iov_provisioning_force_vgt_mode(iov);

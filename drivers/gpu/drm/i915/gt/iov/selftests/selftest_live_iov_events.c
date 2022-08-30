@@ -289,7 +289,7 @@ int selftest_live_iov_events(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		unsigned int id;
 
-		for_each_gt(i915, id, gt) {
+		for_each_gt(gt, i915, id) {
 			struct intel_iov *iov = &gt->iov;
 
 			pr_info(DRIVER_NAME ": Running subtests on gt%d\n", gt->info.id);

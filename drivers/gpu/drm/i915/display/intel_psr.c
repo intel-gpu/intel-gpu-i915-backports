@@ -555,7 +555,7 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 		/*
 		 * TODO: 7 lines of IO_BUFFER_WAKE and FAST_WAKE are default
 		 * values from BSpec. In order to setting an optimal power
-		 * consumption, lower than 4k resoluition mode needs to decrese
+		 * consumption, lower than 4k resolution mode needs to decrease
 		 * IO_BUFFER_WAKE and FAST_WAKE. And higher than 4K resolution
 		 * mode needs to increase IO_BUFFER_WAKE and FAST_WAKE.
 		 */
@@ -959,7 +959,7 @@ void intel_psr_compute_config(struct intel_dp *intel_dp,
 	int psr_setup_time;
 
 	/*
-	 * Current PSR panels dont work reliably with VRR enabled
+	 * Current PSR panels don't work reliably with VRR enabled
 	 * So if VRR is enabled, do not enable PSR.
 	 */
 	if (crtc_state->vrr.enable)
@@ -1668,7 +1668,7 @@ static void intel_psr2_sel_fetch_pipe_alignment(const struct intel_crtc_state *c
  *
  * Plane scaling and rotation is not supported by selective fetch and both
  * properties can change without a modeset, so need to be check at every
- * atomic commmit.
+ * atomic commit.
  */
 static bool psr2_sel_fetch_plane_state_supported(const struct intel_plane_state *plane_state)
 {
@@ -1867,7 +1867,9 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 				struct intel_crtc *crtc)
 {
 	struct drm_i915_private *i915 = to_i915(state->base.dev);
-	const struct intel_crtc_state *crtc_state =
+	const struct intel_crtc_state *old_crtc_state =
+		intel_atomic_get_old_crtc_state(state, crtc);
+	const struct intel_crtc_state *new_crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
 	struct intel_encoder *encoder;
 
@@ -1875,7 +1877,7 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 		return;
 
 	for_each_intel_encoder_mask_with_psr(state->base.dev, encoder,
-					     crtc_state->uapi.encoder_mask) {
+					     old_crtc_state->uapi.encoder_mask) {
 		struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 		struct intel_psr *psr = &intel_dp->psr;
 		bool needs_to_disable = false;
@@ -1888,10 +1890,10 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 		 * - All planes will go inactive
 		 * - Changing between PSR versions
 		 */
-		needs_to_disable |= intel_crtc_needs_modeset(crtc_state);
-		needs_to_disable |= !crtc_state->has_psr;
-		needs_to_disable |= !crtc_state->active_planes;
-		needs_to_disable |= crtc_state->has_psr2 != psr->psr2_enabled;
+		needs_to_disable |= intel_crtc_needs_modeset(new_crtc_state);
+		needs_to_disable |= !new_crtc_state->has_psr;
+		needs_to_disable |= !new_crtc_state->active_planes;
+		needs_to_disable |= new_crtc_state->has_psr2 != psr->psr2_enabled;
 
 		if (psr->enabled && needs_to_disable)
 			intel_psr_disable_locked(intel_dp);
@@ -2207,7 +2209,7 @@ static void _psr_invalidate_handle(struct intel_dp *intel_dp)
 }
 
 /**
- * intel_psr_invalidate - Invalidade PSR
+ * intel_psr_invalidate - Invalidate PSR
  * @dev_priv: i915 device
  * @frontbuffer_bits: frontbuffer plane tracking bits
  * @origin: which operation caused the invalidate

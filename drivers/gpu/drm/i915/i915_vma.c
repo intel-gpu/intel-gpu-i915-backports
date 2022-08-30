@@ -1169,7 +1169,7 @@ int i915_vma_fault_pin(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 
 		gen12_init_fault_scratch(vma->vm, vma->node.start, vma->node.size, false);
 
-		for_each_gt(vma->vm->i915, i, gt) {
+		for_each_gt(gt, vma->vm->i915, i) {
 			if (!atomic_read(&vma->vm->active_contexts_gt[i]))
 				continue;
 

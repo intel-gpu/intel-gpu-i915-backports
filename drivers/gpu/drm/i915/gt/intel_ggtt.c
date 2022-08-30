@@ -111,7 +111,7 @@ int i915_ggtt_init_hw(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		/*
 		 * Note that we use page colouring to enforce a guard page at
 		 * the end of the address space. This is required as the CS may
@@ -583,7 +583,7 @@ static void gen12_vf_ggtt_insert_page_wa_vfpf(struct i915_address_space *vm,
 				lower_32_bits(offset));
 	request[2] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_2_OFFSET_HI,
 				upper_32_bits(offset));
-	request[3] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_CACHE_LEVEL, pat_index);
+	request[3] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_PAT_INDEX, pat_index);
 	request[4] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_4_PTE_FLAGS, flags);
 	request[5] = FIELD_PREP(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_5_ADDR_LO,
 				lower_32_bits(addr));
@@ -1064,7 +1064,15 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
+		/*
+                 * Note that we use page colouring to enforce a guard page at
+                 * the end of the address space. This is required as the CS may
+                 * prefetch beyond the end of the batch buffer, across the page
+                 * boundary, and beyond the end of the GTT if we do not provide
+                 * a guard.
+                 */
+
 		ret = init_ggtt(gt->ggtt);
 		if (ret)
 			goto err;
@@ -1079,7 +1087,7 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		if (j == i)
 			break;
 		cleanup_init_ggtt(gt->ggtt);
@@ -1135,7 +1143,7 @@ void i915_ggtt_driver_release(struct drm_i915_private *i915)
 
 	intel_ggtt_fini_fences(ggtt);
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		ggtt_cleanup_hw(gt->ggtt);
 }
 
@@ -1149,7 +1157,7 @@ void i915_ggtt_driver_late_release(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		struct i915_ggtt *ggtt = gt->ggtt;
 
 		GEM_WARN_ON(kref_read(&ggtt->vm.resv_ref) != 1);
@@ -1618,7 +1626,7 @@ int i915_ggtt_probe_hw(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		ggtt = gt->ggtt;
 
 		if (!ggtt)
@@ -1645,7 +1653,7 @@ int i915_ggtt_probe_hw(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		kfree(gt->ggtt);
 	}
 

@@ -56,10 +56,8 @@
  * - Public functions to init or apply the given workaround type.
  */
 
-static void wa_init_start(struct i915_wa_list *wal, struct intel_gt *gt,
-			  const char *name, const char *engine_name)
+static void wa_init_start(struct i915_wa_list *wal, const char *name, const char *engine_name)
 {
-	wal->gt = gt;
 	wal->name = name;
 	wal->engine_name = engine_name;
 }
@@ -206,8 +204,6 @@ static void _wa_add(struct i915_wa_list *wal, const struct i915_wa *wa)
 static void wa_add(struct i915_wa_list *wal, i915_reg_t reg,
 		   u32 clear, u32 set, u32 read_mask, bool masked_reg)
 {
-	struct intel_gt *gt = wal->gt;
-	const struct sseu_dev_info *sseu = &gt->info.sseu;
 	struct i915_wa wa = {
 		.reg  = reg,
 		.clr  = clear,
@@ -215,21 +211,6 @@ static void wa_add(struct i915_wa_list *wal, i915_reg_t reg,
 		.read = read_mask,
 		.masked_reg = masked_reg,
 	};
-
-	/*
-	 * Some recent platforms can potentially have all DSS and EUs fused
-	 * off; in such cases the entire render/compute unit is actually
-	 * unavailable and we shouldn't be trying to touch any registers in the
-	 * FORCEWAKE_RENDER domain, even if they appear on the platform's
-	 * documented workaround list.
-	 */
-	if (unlikely(GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50) &&
-		     intel_sseu_subslice_total(sseu) == 0 &&
-		     intel_reg_in_fw_domain(gt->uncore, reg, FORCEWAKE_RENDER))) {
-		drm_dbg(&gt->i915->drm, "Not applying workaround on register 0x%x due to fused-off render/compute unit\n",
-			i915_mmio_reg_offset(reg));
-		return;
-	}
 
 	_wa_add(wal, &wa);
 }
@@ -785,6 +766,9 @@ static void dg2_ctx_workarounds_init(struct intel_engine_cs *engine,
 	if (IS_DG2_GRAPHICS_STEP(engine->i915, G10, STEP_B0, STEP_FOREVER) ||
 		IS_DG2_G11(engine->i915) || IS_DG2_G12(engine->i915))
 		wa_masked_field_set(wal, VF_PREEMPTION, PREEMPTION_VERTEX_COUNT, 0x4000);
+
+	/* Wa_15010599737:dg2 */
+	wa_masked_en(wal, CHICKEN_RASTER_1, DIS_SF_ROUND_NEAREST_EVEN);
 }
 
 static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -881,7 +865,7 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	wa_init_start(wal, engine->gt, name, engine->name);
+	wa_init_start(wal, name, engine->name);
 
 	/* Applies to all engines */
 	/*
@@ -929,8 +913,10 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	else
 		MISSING_CASE(GRAPHICS_VER(i915));
 
-	if (i915_modparams.debug_eu && IS_GRAPHICS_VER(i915, 9, 11))
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (i915->debuggers.enable_eu_debug && IS_GRAPHICS_VER(i915, 9, 11))
 		gen9_debug_td_ctl_init(engine, wal);
+#endif
 
 done:
 	wa_init_finish(wal, false);
@@ -1800,7 +1786,7 @@ void intel_gt_init_workarounds(struct intel_gt *gt)
 	if (IS_SRIOV_VF(gt->i915))
 		return;
 
-	wa_init_start(wal, gt, "GT", "global");
+	wa_init_start(wal, "GT", "global");
 	gt_init_workarounds(gt, wal);
 	wa_init_finish(wal, false);
 }
@@ -2246,22 +2232,22 @@ static void dg1_whitelist_build(struct intel_engine_cs *engine)
 				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
 }
 
+void intel_engine_whitelist_sip(struct intel_engine_cs *engine)
+{
+	/* Wa_22011767781:xehpsdv */
+	if (engine->class == COMPUTE_CLASS &&
+	    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
+		whitelist_reg(&engine->whitelist, EU_GLOBAL_SIP);
+}
+
 static void xehpsdv_whitelist_build(struct intel_engine_cs *engine)
 {
-	struct i915_wa_list *w = &engine->whitelist;
-
 	allow_read_ctx_timestamp(engine);
 
-	switch (engine->class) {
-	case COMPUTE_CLASS:
-		/* Wa_22011767781:xehpsdv */
-		if (i915_modparams.debug_eu &&
-		    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
-			whitelist_reg(w, EU_GLOBAL_SIP);
-		break;
-	default:
-		break;
-	}
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (engine->i915->debuggers.enable_eu_debug)
+		intel_engine_whitelist_sip(engine);
+#endif
 }
 
 static void dg2_whitelist_build(struct intel_engine_cs *engine)
@@ -2331,7 +2317,7 @@ void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 	if (IS_SRIOV_VF(engine->i915))
 		return;
 
-	wa_init_start(w, engine->gt, "whitelist", engine->name);
+	wa_init_start(w, "whitelist", engine->name);
 
 	if (IS_PONTEVECCHIO(i915))
 		pvc_whitelist_build(engine);
@@ -2445,6 +2431,27 @@ static bool needs_wa_1308578152(struct intel_engine_cs *engine)
 {
 	return intel_sseu_find_first_xehp_dss(&engine->gt->info.sseu, 0, 0) >=
 		GEN_DSS_PER_GSLICE;
+}
+
+static void rcs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
+					 struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (GRAPHICS_VER(i915) >= 11) {
+		bool enable_done = false;
+
+		if (GRAPHICS_VER(i915) >= 12)
+			enable_done = gen9_debug_td_ctl_init(engine, wal);
+
+		if (!enable_done)
+			wa_masked_en(wal, GEN9_CS_DEBUG_MODE2,
+				     GEN11_GLOBAL_DEBUG_ENABLE);
+	}
+
+	if (GRAPHICS_VER(i915) == 9)
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1,
+			     GEN9_GLOBAL_DEBUG_ENABLE);
 }
 
 static void
@@ -2697,17 +2704,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			     ENABLE_SMALLPL);
 	}
 
-	if (i915_modparams.debug_eu && GRAPHICS_VER(i915) >= 11) {
-		bool enable_done = false;
-
-		if (GRAPHICS_VER(i915) >= 12)
-			enable_done = gen9_debug_td_ctl_init(engine, wal);
-
-		if (!enable_done)
-			wa_masked_en(wal, GEN9_CS_DEBUG_MODE2,
-				     GEN11_GLOBAL_DEBUG_ENABLE);
-	}
-
 	if (GRAPHICS_VER(i915) == 11) {
 		/* This is not an Wa. Enable for better image quality */
 		wa_masked_en(wal,
@@ -2843,11 +2839,12 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 				 GEN8_LQSQ_NONIA_COHERENT_ATOMICS_ENABLE, 0);
 		wa_write_clr_set(wal, GEN9_SCRATCH1,
 				 EVICTION_PERF_FIX_ENABLE, 0);
-
-		if (i915_modparams.debug_eu)
-			wa_masked_en(wal, GEN9_CS_DEBUG_MODE1,
-				     GEN9_GLOBAL_DEBUG_ENABLE);
 	}
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (i915->debuggers.enable_eu_debug)
+		rcs_engine_wa_add_debug_mode(engine, wal);
+#endif
 
 	if (IS_HASWELL(i915)) {
 		/* WaSampleCChickenBitEnable:hsw */
@@ -3069,6 +3066,16 @@ xcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 					    XEHP_BLITTER_ROUND_ROBIN_MODE);
 }
 
+static void ccs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
+					 struct i915_wa_list *wal)
+{
+	gen9_debug_td_ctl_init(engine, wal);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(engine->i915))
+		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+}
+
 static void
 ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
@@ -3077,13 +3084,10 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_masked_en(wal, GEN10_CACHE_MODE_SS, DISABLE_ECC);
 	}
 
-	if (i915_modparams.debug_eu) {
-		gen9_debug_td_ctl_init(engine, wal);
-
-		/* Wa_14015527279:pvc */
-		if (IS_PONTEVECCHIO(engine->i915))
-			wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
-	}
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (engine->i915->debuggers.enable_eu_debug)
+		ccs_engine_wa_add_debug_mode(engine, wal);
+#endif
 
 	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_18015335494:pvc */
@@ -3134,6 +3138,9 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		 * performance guide section.
 		 */
 		wa_write(wal, XEHPC_L3SCRUB, SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
+
+		/* Wa_16016694945 */
+		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
 	}
 
 	if (IS_XEHPSDV(i915)) {
@@ -3254,9 +3261,19 @@ void intel_engine_init_workarounds(struct intel_engine_cs *engine)
 	if (GRAPHICS_VER(engine->i915) < 4)
 		return;
 
-	wa_init_start(wal, engine->gt, "engine", engine->name);
+	wa_init_start(wal, "engine", engine->name);
 	engine_init_workarounds(engine, wal);
 	wa_init_finish(wal, false);
+}
+
+void intel_engine_wa_add_debug_mode(struct intel_engine_cs *engine)
+{
+	struct i915_wa_list *wal = &engine->wa_list;
+
+	if (engine->class == COMPUTE_CLASS)
+		ccs_engine_wa_add_debug_mode(engine, wal);
+	else if (engine->class == RENDER_CLASS)
+		rcs_engine_wa_add_debug_mode(engine, wal);
 }
 
 void intel_engine_allow_user_register_access(struct intel_engine_cs *engine,

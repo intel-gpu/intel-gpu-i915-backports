@@ -305,15 +305,23 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 		return -ENOENT;
 	}
 
-	trace_i915_mm_fault(gt->i915, vm, vma->obj, info);
-
-	if (!i915_vma_is_persistent(vma))
-		GEM_BUG_ON(!i915_vma_is_active(vma));
+	trace_i915_mm_fault(gt->i915, vm, vma, info);
 
 	err_code = (info->fault_type << 2) | info->access_type;
 	err = validate_fault(vma, err_code);
 	if (err)
 		goto put_vma;
+
+	/*
+	 * With lots of concurrency to the same unbound VMA, HW will generate a storm
+	 * of page faults. Test this upfront so that the redundant fault requests
+	 * return as early as possible.
+	 */
+	if (i915_vma_is_bound(vma, PIN_USER))
+		goto put_vma;
+
+	if (!i915_vma_is_persistent(vma))
+		GEM_BUG_ON(!i915_vma_is_active(vma));
 
  retry_userptr:
 	if (i915_gem_object_is_userptr(vma->obj)) {
@@ -352,6 +360,7 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	err = vma_get_pages(vma);
 	if (err)
 		goto err_ww;
+	GEM_BUG_ON(!vma->pages);
 
 	work = i915_vma_work(vma);
 	if (!work) {
@@ -365,11 +374,6 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	err = mutex_lock_interruptible(&vm->mutex);
 	if (err)
 		goto err_fence;
-
-	if (i915_vma_is_bound(vma, PIN_USER))
-		goto err_unlock;
-
-	GEM_BUG_ON(!vma->pages);
 
 	err = i915_active_acquire(&vma->active);
 	if (err)
@@ -427,7 +431,7 @@ put_vma:
 	if (!err && vm->invalidate_tlb_scratch) {
 		unsigned int i;
 
-		for_each_gt(vm->i915, i, gt) {
+		for_each_gt(gt, vm->i915, i) {
 			if (!atomic_read(&vm->active_contexts_gt[i]))
 				continue;
 

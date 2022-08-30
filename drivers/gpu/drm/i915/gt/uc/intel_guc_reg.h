@@ -89,6 +89,9 @@
 
 #define GUC_ARAT_C6DIS			_MMIO(0xA178)
 
+#define GUC_EIP				_MMIO(0xc0b0)
+#define GUC_EIP_COUNTER			_MMIO(0xc0b4)
+
 #define GUC_SHIM_CONTROL		_MMIO(0xc064)
 #define   GUC_DISABLE_SRAM_INIT_TO_ZEROES	(1<<0)
 #define   GUC_ENABLE_READ_CACHE_LOGIC		(1<<1)
@@ -105,6 +108,7 @@
 							index)
 
 #define GUC_SHIM_CONTROL2		_MMIO(0xc068)
+#define   ENABLE_EIP			(1<<11)
 #define   GUC_IS_PRIVILEGED		(1<<29)
 #define   GSC_LOADS_HUC			(1<<30)
 

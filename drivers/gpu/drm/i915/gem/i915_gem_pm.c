@@ -185,7 +185,7 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 	 * state. Fortunately, the kernel_context is disposable and we do
 	 * not rely on its state.
 	 */
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_suspend_prepare(gt);
 
 	suspend_ppgtt_mappings(i915);
@@ -227,7 +227,7 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 	 * machine in an unusable condition.
 	 */
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_suspend_late(gt);
 
 	/* Swapout all the residual objects _after_ idling the firmware */
@@ -302,7 +302,7 @@ void i915_gem_resume_early(struct drm_i915_private *i915)
 		drm_err(&i915->drm,
 			"failed to restore pinned objects in local memory\n");
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_resume_early(gt);
 }
 
@@ -319,7 +319,7 @@ void i915_gem_resume(struct drm_i915_private *i915)
 	 * it and start again.
 	 */
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_ALL);
 
 		if (intel_gt_resume(gt))
@@ -331,7 +331,7 @@ void i915_gem_resume(struct drm_i915_private *i915)
 	return;
 
 err_wedged:
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		if (j < i)
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_ALL);
 
@@ -359,14 +359,14 @@ int i915_gem_idle_engines(struct drm_i915_private *i915)
 		return 0;
 
 	/* Disable scheduling on engines */
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		ret = intel_gt_idle_engines_start(gt, false);
 		if (ret)
 			break;
 	}
 
 	if (!ret) {
-		for_each_gt(i915, i, gt)
+		for_each_gt(gt, i915, i)
 			intel_gt_idle_engines_wait(gt);
 	}
 
@@ -383,7 +383,7 @@ int i915_gem_resume_engines(struct drm_i915_private *i915)
 		return 0;
 
 	/* Enable scheduling on engines */
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		ret = intel_gt_idle_engines_start(gt, true);
 		if (ret)
 			break;

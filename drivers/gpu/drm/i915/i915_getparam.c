@@ -74,9 +74,13 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		break;
 	case I915_PARAM_SUBSLICE_TOTAL:
 		value = intel_sseu_subslice_total(sseu);
+		if (!value)
+			return -ENODEV;
 		break;
 	case I915_PARAM_EU_TOTAL:
 		value = sseu->eu_total;
+		if (!value)
+			return -ENODEV;
 		break;
 	case I915_PARAM_HAS_GPU_RESET:
 		value = i915->params.enable_hangcheck &&
@@ -143,24 +147,21 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = intel_engines_has_context_isolation(i915);
 		break;
 	case I915_PARAM_SLICE_MASK:
+		/* Not supported from Xe_HP onward; use topology queries */
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+			return -EINVAL;
+
 		value = sseu->slice_mask;
+		if (!value)
+			return -ENODEV;
 		break;
 	case I915_PARAM_SUBSLICE_MASK:
-		/*
-		 * Hack:  The I915_GETPARAM interface fundamentally can't return
-		 * the necessary information on Xe_HP and beyond and is not
-		 * supposed to be used on these platforms.  Until the MDAPI
-		 * transitions away from these, try to return semi-reasonable
-		 * data (although the information will still be truncated to
-		 * 32-bits, only represent a single tile, and will mix
-		 * compute+geometry together).
-		 */
-		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
-			value = (u32)(sseu->subslice_mask.xehp[0]);
-		} else {
-			/* Only copy bits from the first slice */
-			value = intel_sseu_get_hsw_subslices(sseu, 0);
-		}
+		/* Not supported from Xe_HP onward; use topology queries */
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+			return -EINVAL;
+
+		/* Only copy bits from the first slice */
+		value = intel_sseu_get_hsw_subslices(sseu, 0);
 		if (!value)
 			return -ENODEV;
 		break;
