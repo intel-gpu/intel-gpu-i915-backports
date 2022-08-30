@@ -235,7 +235,7 @@ static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
 	struct intel_gt *gt;
 	int id;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		if (!obj->mm.tlb[id])
 			continue;
 
@@ -552,12 +552,13 @@ struct scatterlist *
 			 unsigned int *offset)
 {
 	const bool dma = iter == &obj->mm.get_dma_page;
-	struct scatterlist *sg;
 	unsigned int idx, count;
+	struct scatterlist *sg;
 
 	might_sleep_if(n);
 	GEM_BUG_ON(n >= obj->base.size >> PAGE_SHIFT);
-	GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
+	if (!i915_gem_object_has_pinned_pages(obj))
+		assert_object_held(obj);
 
 	/* Skip the search and caching for the base address */
 	sg = obj->mm.pages->sgl;

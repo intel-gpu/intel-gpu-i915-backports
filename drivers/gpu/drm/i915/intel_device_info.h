@@ -91,6 +91,7 @@ enum intel_platform {
 	INTEL_XEHPSDV,
 	INTEL_DG2,
 	INTEL_PONTEVECCHIO,
+	INTEL_METEORLAKE,
 	INTEL_MAX_PLATFORMS
 };
 
@@ -128,6 +129,10 @@ enum intel_platform {
  */
 #define INTEL_SUBPLATFORM_N    1
 
+/* MTL */
+#define INTEL_SUBPLATFORM_M	0
+#define INTEL_SUBPLATFORM_P	1
+
 enum intel_ppgtt_type {
 	INTEL_PPGTT_NONE = I915_GEM_PPGTT_NONE,
 	INTEL_PPGTT_ALIASING = I915_GEM_PPGTT_ALIASING,
@@ -146,6 +151,7 @@ enum intel_ppgtt_type {
 	func(has_asid_tlb_invalidation); \
 	func(has_cache_clos); \
 	func(has_coherent_ggtt); \
+	func(has_gmd_id); \
 	func(gpu_reset_clobbers_display); \
 	func(has_reset_engine); \
 	func(has_3d_pipeline); \
@@ -225,6 +231,25 @@ enum intel_ppgtt_type {
 struct ip_version {
 	u8 ver;
 	u8 rel;
+	u8 step;
+};
+
+enum intel_gt_type {
+	GT_PRIMARY,
+	GT_TILE,
+	GT_MEDIA,
+};
+
+struct intel_gt_definition {
+	enum intel_gt_type type;
+	char *name;
+	int (*setup)(struct intel_gt *gt,
+		     unsigned int id,
+		     phys_addr_t phys_addr,
+		     u32 gsi_offset);
+	u32 mapping_base;
+	u32 gsi_offset;
+	intel_engine_mask_t engine_mask;
 };
 
 struct intel_device_info {
@@ -245,6 +270,8 @@ struct intel_device_info {
 	unsigned int page_sizes; /* page sizes supported by the HW */
 
 	u32 memory_regions; /* regions supported by the HW */
+
+	const struct intel_gt_definition *extra_gts;
 
 	u32 display_mmio_offset;
 
@@ -298,6 +325,18 @@ struct intel_runtime_info {
 	 * BUILD_BUG_ON is hit.
 	 */
 	u32 platform_mask[2];
+
+	/*
+	 * On modern platforms, the architecture major.minor version numbers
+	 * and stepping are read directly from the hardware rather than derived
+	 * from the PCI device and revision ID's.
+	 *
+	 * Note that the hardware gives us a single "graphics" number that
+	 * should represent render, compute, and copy behavior.
+	 */
+	struct ip_version graphics;
+	struct ip_version media;
+	struct ip_version display;
 
 	u16 device_id;
 

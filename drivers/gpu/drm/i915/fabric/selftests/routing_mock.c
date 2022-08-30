@@ -46,6 +46,8 @@ static int routing_mock_sd(struct spec *spec,
 	sd->port_cnt = PORT_FABRIC_COUNT;
 	sd->guid = (0xffull << 56) | (dev_id << 8) | sd_index;
 	sd->switchinfo.guid = sd->guid;
+	sd->asic_rev_info = FIELD_PREP(MASK_ARI_PLATFORM, ANR_ARI_PLATFORM)
+			  | FIELD_PREP(MASK_ARI_STEP, ANR_ARI_STEP_B0);
 
 	init_port_maps(sd);
 

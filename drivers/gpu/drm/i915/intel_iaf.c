@@ -163,7 +163,7 @@ static struct resource *init_resource(struct drm_i915_private *i915,
 		return NULL;
 
 	res = res_base;
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 		res->start = i915->intel_iaf.irq_base + i;
 		res->end = i915->intel_iaf.irq_base + i;
@@ -394,7 +394,7 @@ set_range:
 	base |= PKG_ADDR_BASE_ENABLE;
 
 	/* Needs to be set for each gt */
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		intel_uncore_write(gt->uncore, PKG_ADDR_RANGE, range);
 		intel_uncore_write(gt->uncore, PKG_ADDR_BASE, base);
 	}

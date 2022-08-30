@@ -58,9 +58,10 @@ static int igt_mock_fill(void *arg)
 	LIST_HEAD(objects);
 	int err = 0;
 
-	page_size = mem->mm.chunk_size;
-	max_pages = div64_u64(total, page_size);
+	page_size = mem->chunk_size;
 	rem = total;
+retry:
+	max_pages = div64_u64(rem, page_size);
 
 	for_each_prime_number_from(page_num, 1, max_pages) {
 		resource_size_t size = page_num * page_size;
@@ -86,6 +87,11 @@ static int igt_mock_fill(void *arg)
 		err = 0;
 	if (err == -ENXIO) {
 		if (page_num * page_size <= rem) {
+			if (mem->is_range_manager && max_pages > 1) {
+				max_pages >>= 1;
+				goto retry;
+			}
+
 			pr_err("%s failed, space still left in region\n",
 			       __func__);
 			err = -EINVAL;
@@ -206,12 +212,18 @@ static int igt_mock_reserve(void *arg)
 	while (cur_avail) {
 		u32 size = i915_prandom_u32_max_state(cur_avail, &prng);
 
+retry:
 		size = max_t(u32, round_up(size, PAGE_SIZE), PAGE_SIZE);
 		obj = igt_object_create(mem, &objects, size, 0);
 		if (IS_ERR(obj)) {
-			if (PTR_ERR(obj) == -ENXIO)
+			if (PTR_ERR(obj) == -ENXIO) {
+				if (mem->is_range_manager &&
+				    size > mem->chunk_size) {
+					size >>= 1;
+					goto retry;
+				}
 				break;
-
+			}
 			err = PTR_ERR(obj);
 			pr_err("%s allocation { size: %d, avail : %lld / %pa } failed",
 			       __func__, size, cur_avail, &mem->avail);
@@ -229,7 +241,7 @@ static int igt_mock_reserve(void *arg)
 out_close:
 	kfree(order);
 	close_objects(mem, &objects);
-	i915_buddy_free_list(&mem->mm, &mem->reserved);
+	intel_memory_region_unreserve(mem);
 	return err;
 }
 
@@ -248,7 +260,7 @@ static int igt_mock_contiguous(void *arg)
 
 
 	/* Min size */
-	obj = igt_object_create(mem, &objects, mem->mm.chunk_size,
+	obj = igt_object_create(mem, &objects, mem->chunk_size,
 				I915_BO_ALLOC_CONTIGUOUS);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
@@ -330,14 +342,16 @@ static int igt_mock_contiguous(void *arg)
 	min = target;
 	target = max >> 1;
 
-	/* Make sure we can still allocate all the fragmented space */
-	obj = igt_object_create(mem, &objects, target, 0);
-	if (IS_ERR(obj)) {
-		err = PTR_ERR(obj);
-		goto err_close_objects;
-	}
+	if (!mem->is_range_manager) {
+		/* Make sure we can still allocate all the fragmented space */
+		obj = igt_object_create(mem, &objects, target, 0);
+		if (IS_ERR(obj)) {
+			err = PTR_ERR(obj);
+			goto err_close_objects;
+		}
 
-	igt_object_release(obj);
+		igt_object_release(obj);
+	}
 
 	/*
 	 * Even though we have enough free space, we don't have a big enough
@@ -357,7 +371,7 @@ static int igt_mock_contiguous(void *arg)
 		}
 
 		target >>= 1;
-	} while (target >= mem->mm.chunk_size);
+	} while (target >= mem->chunk_size);
 
 err_close_objects:
 	list_splice_tail(&holes, &objects);
@@ -377,7 +391,7 @@ static int igt_mock_splintered_region(void *arg)
 
 	/*
 	 * Sanity check we can still allocate everything even if the
-	 * mm.max_order != mm.size. i.e our starting address space size is not a
+	 * max_order != mm.size. i.e our starting address space size is not a
 	 * power-of-two.
 	 */
 
@@ -386,17 +400,10 @@ static int igt_mock_splintered_region(void *arg)
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 
-	if (mem->mm.size != size) {
-		pr_err("%s size mismatch(%llu != %llu)\n",
-		       __func__, mem->mm.size, size);
-		err = -EINVAL;
-		goto out_put;
-	}
-
 	expected_order = get_order(rounddown_pow_of_two(size));
-	if (mem->mm.max_order != expected_order) {
+	if (mem->max_order != expected_order) {
 		pr_err("%s order mismatch(%u != %u)\n",
-		       __func__, mem->mm.max_order, expected_order);
+		       __func__, mem->max_order, expected_order);
 		err = -EINVAL;
 		goto out_put;
 	}
@@ -417,12 +424,15 @@ static int igt_mock_splintered_region(void *arg)
 	 * sure that does indeed hold true.
 	 */
 
-	obj = igt_object_create(mem, &objects, size, I915_BO_ALLOC_CONTIGUOUS);
-	if (!IS_ERR(obj)) {
-		pr_err("%s too large contiguous allocation was not rejected\n",
-		       __func__);
-		err = -EINVAL;
-		goto out_close;
+	if (!mem->is_range_manager) {
+		obj = igt_object_create(mem, &objects, size,
+					I915_BO_ALLOC_CONTIGUOUS);
+		if (!IS_ERR(obj)) {
+			pr_err("%s too large contiguous allocation was not rejected\n",
+			       __func__);
+			err = -EINVAL;
+			goto out_close;
+		}
 	}
 
 	obj = igt_object_create(mem, &objects, rounddown_pow_of_two(size),
@@ -738,8 +748,8 @@ static int igt_smem_create_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -846,8 +856,8 @@ static int igt_lmem_create_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -928,8 +938,8 @@ static int igt_lmem_write_gpu_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -953,8 +963,8 @@ static int igt_lmem_write_gpu_cross_tile_cross_vm(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1287,8 +1297,8 @@ static int igt_lmem_write_cpu_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1506,8 +1516,8 @@ static int igt_lmem_pages_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1620,7 +1630,7 @@ int intel_memory_region_live_selftests(struct drm_i915_private *i915)
 		return 0;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			continue;
 
@@ -1650,7 +1660,7 @@ int intel_memory_region_cross_tile_live_selftests(struct drm_i915_private *i915)
 		return 0;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			return 0;
 	}

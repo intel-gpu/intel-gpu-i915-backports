@@ -1503,6 +1503,7 @@ static int request_pscdata_from_fw(struct fdev *dev, const char *filename)
 
 	dev->psc.data = dev->psc.as_fw->data;
 	dev->psc.size = dev->psc.as_fw->size;
+	dev_info(fdev_dev(dev), "Loaded %s via FW API\n", filename);
 
 end:
 	return err;

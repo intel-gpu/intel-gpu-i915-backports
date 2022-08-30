@@ -24,20 +24,32 @@ struct ufence_wake {
 	u16 op;
 };
 
+static bool ufence_fault(const struct ufence_wake *wake)
+{
+	u8 dummy, *ptr = wake->ptr;
+
+	/* Fault in the page; or report EFAULT */
+	return get_user(dummy, ptr);
+}
+
 static bool ufence_compare(const struct ufence_wake *wake)
 {
-	u64 value = wake->value & wake->mask;
 	unsigned long remaining;
-	u64 target = 0;
+	u64 target, value;
 
 	GEM_BUG_ON(wake->width > sizeof(target));
 	GEM_BUG_ON(wake->tsk->mm != current->mm);
 
-	remaining = copy_from_user(&target, wake->ptr, wake->width);
-	if (remaining)
+	pagefault_disable();
+	remaining = __copy_from_user_inatomic_nocache(&target, wake->ptr, wake->width);
+	pagefault_enable();
+	if (unlikely(remaining)) {
+		__set_current_state(TASK_RUNNING);
 		return false;
+	}
 
 	target &= wake->mask;
+	value = wake->value & wake->mask;
 
 	switch (wake->op) {
 	case PRELIM_I915_UFENCE_WAIT_EQ:
@@ -76,43 +88,21 @@ static bool ufence_compare(const struct ufence_wake *wake)
 	}
 }
 
-static int ufence_wake(wait_queue_entry_t *curr, unsigned int mode,
-		       int wake_flags, void *key)
-{
-	struct ufence_wake *wake = curr->private;
-
-	return wake_up_process(wake->tsk);
-}
-
 struct engine_wait {
 	struct wait_queue_entry wq_entry;
 	struct intel_breadcrumbs *breadcrumbs;
-	struct drm_i915_private *i915;
 	struct engine_wait *next;
 };
 
-static int
-add_soft_wait(struct drm_i915_private *i915,
-	      struct engine_wait **head,
-	      struct ufence_wake *wake)
+static void
+add_soft_wait(struct drm_i915_private *i915, struct engine_wait *wait)
 {
-	struct engine_wait *wait;
-
-	wait = kmalloc(sizeof(*wait), GFP_KERNEL);
-	if (!wait)
-		return -ENOMEM;
-
+	wait->next = NULL;
 	wait->breadcrumbs = NULL;
-	wait->i915 = i915;
 	wait->wq_entry.flags = 0;
-	wait->wq_entry.private = wake;
-	wait->wq_entry.func = ufence_wake;
+	wait->wq_entry.private = current;
+	wait->wq_entry.func = default_wake_function;
 	add_wait_queue(&i915->user_fence_wq, &wait->wq_entry);
-
-	wait->next = *head;
-	*head = wait;
-
-	return 0;
 }
 
 static bool wait_exists(struct engine_wait *wait, struct intel_breadcrumbs *b)
@@ -128,9 +118,7 @@ static bool wait_exists(struct engine_wait *wait, struct intel_breadcrumbs *b)
 }
 
 static int
-add_engine_wait(struct engine_wait **head,
-		struct intel_engine_cs *engine,
-		struct ufence_wake *wake)
+add_engine_wait(struct engine_wait **head, struct intel_engine_cs *engine)
 {
 	intel_engine_mask_t tmp;
 
@@ -151,8 +139,8 @@ add_engine_wait(struct engine_wait **head,
 
 		wait->breadcrumbs = b;
 		wait->wq_entry.flags = 0;
-		wait->wq_entry.private = wake;
-		wait->wq_entry.func = ufence_wake;
+		wait->wq_entry.private = current;
+		wait->wq_entry.func = default_wake_function;
 		intel_breadcrumbs_add_wait(b, &wait->wq_entry);
 
 		wait->next = *head;
@@ -162,16 +150,14 @@ add_engine_wait(struct engine_wait **head,
 	return 0;
 }
 
-static int add_gt_wait(struct i915_gem_context *ctx,
-		       struct engine_wait **head,
-		       struct ufence_wake *wake)
+static int add_gt_wait(struct i915_gem_context *ctx, struct engine_wait **head)
 {
 	struct i915_gem_engines_iter it;
 	struct intel_context *ce;
 	int err = 0;
 
 	for_each_gem_engine(ce, i915_gem_context_lock_engines(ctx), it) {
-		err = add_engine_wait(head, ce->engine, wake);
+		err = add_engine_wait(head, ce->engine);
 		if (err)
 			break;
 	}
@@ -180,17 +166,17 @@ static int add_gt_wait(struct i915_gem_context *ctx,
 	return err;
 }
 
-static void remove_waits(struct engine_wait *wait)
+static void
+remove_waits(struct drm_i915_private *i915, struct engine_wait *wait)
 {
+	remove_wait_queue(&i915->user_fence_wq, &wait->wq_entry);
+	wait = wait->next;
+
 	while (wait) {
+		struct intel_breadcrumbs *b = wait->breadcrumbs;
 		struct engine_wait *next = wait->next;
 
-		if (wait->breadcrumbs)
-			intel_breadcrumbs_remove_wait(wait->breadcrumbs,
-						      &wait->wq_entry);
-		else
-			remove_wait_queue(&wait->i915->user_fence_wq,
-					  &wait->wq_entry);
+		intel_breadcrumbs_remove_wait(b, &wait->wq_entry);
 		kfree(wait);
 
 		wait = next;
@@ -226,9 +212,8 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 				   void *data, struct drm_file *file)
 {
 	struct prelim_drm_i915_gem_wait_user_fence *arg = data;
-	DEFINE_WAIT_FUNC(w_wait, woken_wake_function);
 	struct i915_gem_context *ctx = NULL;
-	struct engine_wait *wait = NULL;
+	struct engine_wait wait;
 	struct ufence_wake wake;
 	unsigned long timeout;
 	ktime_t start;
@@ -282,6 +267,11 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	if (err)
 		goto out_ctx;
 
+	if (ufence_fault(&wake)) {
+		err = -EFAULT;
+		goto out_ctx;
+	}
+
 	if (ufence_compare(&wake))
 		goto out_ctx;
 
@@ -291,32 +281,38 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		goto out_ctx;
 	}
 
-	if (arg->flags & PRELIM_I915_UFENCE_WAIT_SOFT)
-		err = add_soft_wait(to_i915(dev), &wait, &wake);
-	else
-		err = add_gt_wait(ctx, &wait, &wake);
-	if (err)
-		goto out_wait;
+	add_soft_wait(to_i915(dev), &wait);
+	if (ctx) {
+		err = add_gt_wait(ctx, &wait.next);
+		if (err)
+			goto out_wait;
+	}
 
 	start = ktime_get();
-	add_wait_queue(&to_i915(dev)->user_fence_wq, &w_wait);
 	for (;;) {
+		set_current_state(TASK_INTERRUPTIBLE);
+
 		if (ufence_compare(&wake))
 			break;
-
-		if (signal_pending(wake.tsk)) {
-			err = -ERESTARTSYS;
-			break;
-		}
 
 		if (!timeout) {
 			err = -ETIME;
 			break;
 		}
 
-		timeout = wait_woken(&w_wait, TASK_INTERRUPTIBLE, timeout);
+		if (signal_pending(wake.tsk)) {
+			err = -ERESTARTSYS;
+			break;
+		}
+
+		timeout = io_schedule_timeout(timeout);
+
+		if (ufence_fault(&wake)) {
+			err = -EFAULT;
+			break;
+		}
 	}
-	remove_wait_queue(&to_i915(dev)->user_fence_wq, &w_wait);
+	__set_current_state(TASK_RUNNING);
 
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_ABSTIME) && arg->timeout > 0) {
 		arg->timeout -= ktime_to_ns(ktime_sub(ktime_get(), start));
@@ -337,8 +333,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		if (err == -ETIME && arg->timeout)
 			err = -EAGAIN;
 	}
+
 out_wait:
-	remove_waits(wait);
+	remove_waits(to_i915(dev), &wait);
 out_ctx:
 	if (ctx)
 		i915_gem_context_put(ctx);

@@ -549,7 +549,7 @@ static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 	if (IS_ERR(sgt))
 		return PTR_ERR(sgt);
 
-	sg_page_sizes = i915_sg_page_sizes(sgt->sgl);
+	sg_page_sizes = i915_sg_dma_sizes(sgt->sgl);
 
 	__i915_gem_object_set_pages(obj, sgt, sg_page_sizes);
 

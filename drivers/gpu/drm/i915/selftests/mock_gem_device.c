@@ -114,6 +114,8 @@ static struct intel_gt *mock_probe_gts(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt = to_root_gt(i915);
 
+	gt->name = "Mock GT";
+
 	mkwrite_device_info(i915)->platform_engine_mask = BIT(0);
 	gt->info.engine_mask = INTEL_INFO(i915)->platform_engine_mask;
 
@@ -184,6 +186,7 @@ struct drm_i915_private *mock_gem_device(void)
 	drm_mode_config_init(&i915->drm);
 
 	mkwrite_device_info(i915)->graphics.ver = -1;
+	RUNTIME_INFO(i915)->graphics.ver = ~0;
 
 	mkwrite_device_info(i915)->page_sizes =
 		I915_GTT_PAGE_SIZE_4K |
@@ -231,6 +234,7 @@ struct drm_i915_private *mock_gem_device(void)
 	spin_lock_init(&i915->vm_priv_obj_lock);
 
 	i915->do_release = true;
+	ida_init(&i915->selftest.mock_region_instances);
 
 	return i915;
 

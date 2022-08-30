@@ -9,5 +9,11 @@
 
 #define INTEL_GMCH_GTT_RENAMED
 
+/*
+ * Disable Lowmem reservation for dg1
+ * vlk-26977
+ */
+#define BPC_LOWMEM_FOR_DG1_NOT_SUPPORTED
+
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */
 

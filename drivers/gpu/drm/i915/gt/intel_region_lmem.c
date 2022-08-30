@@ -9,6 +9,7 @@
 #include "i915_svm.h"
 #include "intel_memory_region.h"
 #include "intel_pci_config.h"
+#include "intel_region_lmem.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
@@ -108,7 +109,7 @@ static bool get_tracedebug_region(struct intel_uncore *uncore,
 static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 				     u64 *start, u32 *size)
 {
-	if (IS_DG1(uncore->i915))
+	if (!IS_DG1_GRAPHICS_STEP(uncore->i915, STEP_A0, STEP_C0))
 		return false;
 
 	*start = 0;
@@ -129,11 +130,12 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 	u32 region_size;
 	int ret;
 
+#ifndef BPC_LOWMEM_FOR_DG1_NOT_SUPPORTED
 	if (get_legacy_lowmem_region(uncore, &region_start, &region_size)) {
 		reserve_start = region_start;
 		reserve_size = region_size;
 	}
-
+#endif
 	if (get_tracedebug_region(uncore, &region_start, &region_size)) {
 		reserve_start = 0;
 		reserve_size = region_size;
@@ -147,6 +149,18 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 		drm_err(&uncore->i915->drm, "LMEM: reserving low memory region failed\n");
 
 	return ret;
+}
+
+static inline bool lmembar_is_igpu_stolen(struct drm_i915_private *i915)
+{
+	u32 regions = INTEL_INFO(i915)->memory_regions;
+
+	if (regions & REGION_LMEM_MASK)
+		return false;
+
+	drm_WARN_ON(&i915->drm, (regions & REGION_STOLEN_LMEM) == 0);
+
+	return true;
 }
 
 int intel_get_tile_range(struct intel_gt *gt,
@@ -172,7 +186,7 @@ int intel_get_tile_range(struct intel_gt *gt,
 	 * registers.
 	 * https://gfxspecs.intel.com/Predator/Home/Index/43880
 	 */
-	if (!IS_DG1(i915) &&
+	if (!lmembar_is_igpu_stolen(i915) && !IS_DG1(i915) &&
 	    !(IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) &&
 	      !i915->remote_tiles)) {
 		/* We should take the size and range of the tiles from
@@ -211,7 +225,7 @@ static resource_size_t vf_get_lmem_base(struct intel_iov *iov)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(iov_to_i915(iov)));
 
-	for_each_gt(i915, id, gt)
+	for_each_gt(gt, i915, id)
 		if (id < iov_to_gt(iov)->info.id)
 			base += vf_get_lmem_size(&gt->iov);
 		else
@@ -355,6 +369,8 @@ create_region:
 					 lmem_size,
 					 min_page_size,
 					 io_start,
+					 INTEL_MEMORY_LOCAL,
+					 0,
 					 &intel_region_lmem_ops);
 	if (IS_ERR(mem))
 		return mem;

@@ -205,6 +205,7 @@ struct intel_gt_coredump {
 
 	/* Generic register state */
 	u32 eir;
+	u32 pgtbl_er;
 	u32 ier;
 	u32 gtier[6], ngtier;
 	u32 forcewake;

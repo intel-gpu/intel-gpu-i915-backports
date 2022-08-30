@@ -18,7 +18,7 @@ int igt_flush_test(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret = 0;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			ret = -EIO;
 

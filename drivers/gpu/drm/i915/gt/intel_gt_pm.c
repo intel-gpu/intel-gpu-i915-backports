@@ -212,7 +212,13 @@ void intel_gt_pm_fini(struct intel_gt *gt)
 
 void intel_gt_resume_early(struct intel_gt *gt)
 {
-	i915_ggtt_resume(gt->ggtt);
+	if (gt->type != GT_MEDIA)
+		i915_ggtt_resume(gt->ggtt);
+
+	if (GRAPHICS_VER(gt->i915) >= 8)
+		setup_private_pat(gt->uncore);
+
+	intel_uc_resume_early(&gt->uc);
 }
 
 int intel_gt_resume(struct intel_gt *gt)
@@ -355,7 +361,8 @@ void intel_gt_suspend_late(struct intel_gt *gt)
 		intel_rc6_disable(&gt->rc6);
 		intel_llc_disable(&gt->llc);
 
-		i915_ggtt_suspend(gt->ggtt);
+		if (gt->type != GT_MEDIA)
+			i915_ggtt_suspend(gt->ggtt);
 	}
 
 	gt_sanitize(gt, false); /* Be paranoid, remove all residual GPU state */

@@ -27,24 +27,25 @@ enum intel_memory_type {
 	INTEL_MEMORY_LOCAL = I915_MEMORY_CLASS_DEVICE,
 	INTEL_MEMORY_STOLEN_SYSTEM,
 	INTEL_MEMORY_STOLEN_LOCAL,
+	INTEL_MEMORY_MOCK,
 };
 
 enum intel_region_id {
 	INTEL_REGION_SMEM = 0,
-	INTEL_REGION_LMEM,
-	INTEL_REGION_LMEM1,
-	INTEL_REGION_LMEM2,
-	INTEL_REGION_LMEM3,
+	INTEL_REGION_LMEM_0,
+	INTEL_REGION_LMEM_1,
+	INTEL_REGION_LMEM_2,
+	INTEL_REGION_LMEM_3,
 	INTEL_REGION_STOLEN_SMEM,
 	INTEL_REGION_STOLEN_LMEM,
 	INTEL_REGION_UNKNOWN, /* Should be last */
 };
 
 #define REGION_SMEM     BIT(INTEL_REGION_SMEM)
-#define REGION_LMEM     BIT(INTEL_REGION_LMEM)
-#define REGION_LMEM1     BIT(INTEL_REGION_LMEM1)
-#define REGION_LMEM2     BIT(INTEL_REGION_LMEM2)
-#define REGION_LMEM3     BIT(INTEL_REGION_LMEM3)
+#define REGION_LMEM     BIT(INTEL_REGION_LMEM_0)
+#define REGION_LMEM1     BIT(INTEL_REGION_LMEM_1)
+#define REGION_LMEM2     BIT(INTEL_REGION_LMEM_2)
+#define REGION_LMEM3     BIT(INTEL_REGION_LMEM_3)
 #define REGION_STOLEN_SMEM   BIT(INTEL_REGION_STOLEN_SMEM)
 #define REGION_STOLEN_LMEM   BIT(INTEL_REGION_STOLEN_LMEM)
 
@@ -73,11 +74,20 @@ struct intel_memory_region_ops {
 			   unsigned int flags);
 };
 
+struct intel_memory_region_private_ops {
+	struct ttm_resource * (*reserve)(struct intel_memory_region *mem,
+					 resource_size_t offset,
+					 resource_size_t size);
+	void (*free)(struct intel_memory_region *mem,
+		     struct ttm_resource *res);
+};
+
 struct intel_memory_region {
 	struct drm_i915_private *i915;
 
 	struct i915_devmem *devmem;
 	const struct intel_memory_region_ops *ops;
+	const struct intel_memory_region_private_ops *priv_ops;
 
 	struct io_mapping iomap;
 	struct resource region;
@@ -114,6 +124,12 @@ struct intel_memory_region {
 		struct list_head list;
 		struct list_head purgeable;
 	} objects;
+
+	size_t chunk_size;
+	unsigned int max_order;
+	bool is_range_manager;
+
+	void *region_private;
 };
 
 struct intel_memory_region *
@@ -137,15 +153,14 @@ void __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 					   struct list_head *blocks);
 void __intel_memory_region_put_block_buddy(struct i915_buddy_block *block);
 
-int intel_memory_region_reserve(struct intel_memory_region *mem,
-				u64 offset, u64 size);
-
 struct intel_memory_region *
 intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t start,
 			   resource_size_t size,
 			   resource_size_t min_page_size,
 			   resource_size_t io_start,
+			   u16 type,
+			   u16 instance,
 			   const struct intel_memory_region_ops *ops);
 
 struct intel_memory_region *
@@ -163,6 +178,11 @@ __printf(2, 3) void
 intel_memory_region_set_name(struct intel_memory_region *mem,
 			     const char *fmt, ...);
 
+void intel_memory_region_unreserve(struct intel_memory_region *mem);
+
+int intel_memory_region_reserve(struct intel_memory_region *mem,
+				u64 offset, u64 size);
+
 void intel_memory_regions_remove(struct drm_i915_private *i915);
 
 static inline void intel_memory_region_flush(struct intel_memory_region *mem)
@@ -172,5 +192,4 @@ static inline void intel_memory_region_flush(struct intel_memory_region *mem)
 }
 
 const char *intel_memory_region_id2str(enum intel_region_id id);
-
 #endif

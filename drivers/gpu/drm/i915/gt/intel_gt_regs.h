@@ -45,7 +45,13 @@
 #define FORCEWAKE_ACK_RENDER_GEN9		_MMIO(0xd84)
 #define FORCEWAKE_ACK_MEDIA_GEN9		_MMIO(0xd88)
 
+#define GMD_ID_GRAPHICS				_MMIO(0xd8c)
+
+#define FORCEWAKE_ACK_GSC			_MMIO(0xdf8)
+#define FORCEWAKE_ACK_GT_MTL			_MMIO(0xdfc)
+
 #define MCFG_MCR_SELECTOR			_MMIO(0xfd0)
+#define MTL_MCR_SELECTOR			_MMIO(0xfd4)
 #define SF_MCR_SELECTOR				_MMIO(0xfd8)
 #define GEN8_MCR_SELECTOR			_MMIO(0xfdc)
 #define   GEN8_MCR_SLICE(slice)			(((slice) & 3) << 26)
@@ -57,6 +63,8 @@
 #define   GEN11_MCR_SLICE_MASK			GEN11_MCR_SLICE(0xf)
 #define   GEN11_MCR_SUBSLICE(subslice)		(((subslice) & 0x7) << 24)
 #define   GEN11_MCR_SUBSLICE_MASK		GEN11_MCR_SUBSLICE(0x7)
+#define   MTL_MCR_GROUPID			REG_GENMASK(11, 8)
+#define   MTL_MCR_INSTANCEID			REG_GENMASK(3, 0)
 
 #define IPEIR_I965				_MMIO(0x2064)
 #define IPEHR_I965				_MMIO(0x2068)
@@ -391,7 +399,11 @@
 #define GEN9_WM_CHICKEN3			_MMIO(0x5588)
 #define   GEN9_FACTOR_IN_CLR_VAL_HIZ		(1 << 9)
 
+#define CHICKEN_RASTER_1			_MMIO(0x6204)
+#define   DIS_SF_ROUND_NEAREST_EVEN		REG_BIT(8)
+
 #define VFLSKPD					_MMIO(0x62a8)
+#define   VF_PREFETCH_TLB_DIS			REG_BIT(5)
 #define   DIS_OVER_FETCH_CACHE			REG_BIT(1)
 #define   DIS_MULT_MISS_RD_SQUASH		REG_BIT(0)
 
@@ -533,6 +545,8 @@
 #define   GEN6_MBCTL_BOOT_FETCH_MECH		(1 << 0)
 
 /* Fuse readout registers for GT */
+#define XEHP_FUSE4				_MMIO(0x9114)
+#define   GT_L3_EXC_MASK			REG_GENMASK(6, 4)
 #define	GEN10_MIRROR_FUSE3			_MMIO(0x9118)
 #define   GEN10_L3BANK_PAIR_COUNT		4
 #define   GEN10_L3BANK_MASK			0x0F
@@ -636,6 +650,7 @@
 #define   XEHPC_GRDOM_BLT3			REG_BIT(26)
 #define   XEHPC_GRDOM_BLT2			REG_BIT(25)
 #define   XEHPC_GRDOM_BLT1			REG_BIT(24)
+#define   GEN12_GRDOM_GSC			REG_BIT(21)
 #define   GEN11_GRDOM_SFC3			REG_BIT(20)
 #define   GEN11_GRDOM_SFC2			REG_BIT(19)
 #define   GEN11_GRDOM_SFC1			REG_BIT(18)
@@ -928,6 +943,8 @@
 #define FORCEWAKE_MEDIA_VDBOX_GEN11(n)		_MMIO(0xa540 + (n) * 4)
 #define FORCEWAKE_MEDIA_VEBOX_GEN11(n)		_MMIO(0xa560 + (n) * 4)
 
+#define FORCEWAKE_REQ_GSC			_MMIO(0xa618)
+
 #define CHV_POWER_SS0_SIG1			_MMIO(0xa720)
 #define CHV_POWER_SS0_SIG2			_MMIO(0xa724)
 #define CHV_POWER_SS1_SIG1			_MMIO(0xa728)
@@ -961,6 +978,7 @@
 #define XEHPC_LNCFMISCCFGREG0			_MMIO(0xb01c)
 #define   XEHPC_DIS128BREQ			REG_BIT(5)
 #define   XEHPC_DIS256BREQGLB			REG_BIT(3)
+#define   XEHPC_OVRLSCCC			REG_BIT(0)
 
 #define GEN7_L3CNTLREG2				_MMIO(0xb020)
 
@@ -1638,6 +1656,7 @@
 #define GEN6_GT_GFX_RC6p			_MMIO(0x13810c)
 #define GEN6_GT_GFX_RC6pp			_MMIO(0x138110)
 #define VLV_RENDER_C0_COUNT			_MMIO(0x138118)
+#define VLV_MEDIA_C0_COUNT			_MMIO(0x13811c)
 
 #define GEN12_RPSTAT1				_MMIO(0x1381b4)
 #define   GEN12_CAGF_SHIFT			11
@@ -1645,12 +1664,29 @@
 #define   GEN12_CAGF_MASK			REG_GENMASK(19, 11)
 #define   GEN12_VOLTAGE_MASK			REG_GENMASK(10, 0)
 
-#define VLV_MEDIA_C0_COUNT			_MMIO(0x13811c)
+/*
+ * MTL: Workpoint reg to get Core C state and act freq of 3D, SAMedia/
+ * 3D - 0x0C60 , SAMedia - 0x380C60
+ * Intel uncore handler redirects transactions for SAMedia to MTL_MEDIA_GSI_BASE
+ */
+#define MTL_MIRROR_TARGET_WP1          _MMIO(0x0C60)
+#define   MTL_CAGF_MASK                REG_GENMASK(8, 0)
+#define   MTL_CC0                      0x0
+#define   MTL_CC6                      0x3
+#define   MTL_CC_SHIFT                 9
+#define   MTL_CC_MASK                  (0xf << MTL_CC_SHIFT)
+
+/*
+ * MTL: This register contains the total MC6 residency time that SAMedia was
+ * since boot
+ */
+#define MTL_MEDIA_MC6                          _MMIO(0x138048)
 
 #define GEN11_GT_INTR_DW(x)			_MMIO(0x190018 + ((x) * 4))
 #define   GEN11_CSME				(31)
 #define   GEN11_GUNIT				(28)
 #define   GEN11_GUC				(25)
+#define   GEN12_GUCM				(24)
 #define   GEN11_WDPERF				(20)
 #define   GEN11_KCR				(19)
 #define   GEN11_GTPM				(16)
@@ -1691,6 +1727,8 @@
 #define   OTHER_GTPM_INSTANCE			1
 #define   OTHER_KCR_INSTANCE			4
 #define   OTHER_GSC_INSTANCE			6
+#define   OTHER_MEDIA_GUC_INSTANCE		16
+#define   OTHER_MEDIA_GTPM_INSTANCE		17
 
 #define GEN11_IIR_REG_SELECTOR(x)		_MMIO(0x190070 + ((x) * 4))
 
@@ -1703,6 +1741,7 @@
 #define GEN11_VECS0_VECS1_INTR_MASK		_MMIO(0x1900d0)
 #define GEN12_VECS2_VECS3_INTR_MASK		_MMIO(0x1900d4)
 #define GEN11_GUC_SG_INTR_MASK			_MMIO(0x1900e8)
+#define GEN12_GUC_MGUC_INTR_MASK		_MMIO(0x1900e8) /* MTL+ */
 #define GEN11_GPM_WGBOXPERF_INTR_MASK		_MMIO(0x1900ec)
 #define GEN11_CRYPTO_RSVD_INTR_MASK		_MMIO(0x1900f0)
 #define GEN11_GUNIT_CSME_INTR_MASK		_MMIO(0x1900f4)
@@ -1718,7 +1757,6 @@
 #define GT0_PACKAGE_ENERGY_STATUS		_MMIO(0x250004)
 #define GT0_PACKAGE_RAPL_LIMIT			_MMIO(0x250008)
 #define GT0_PACKAGE_POWER_SKU_UNIT		_MMIO(0x250068)
-#define GT0_PACKAGE_POWER_SKU			INVALID_MMIO_REG
 #define GT0_PLATFORM_ENERGY_STATUS		_MMIO(0x25006c)
 
 #define PVC_GT0_PACKAGE_ENERGY_STATUS		_MMIO(0x281004)
