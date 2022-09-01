@@ -12,6 +12,7 @@
 #include "intel_de.h"
 #include "intel_display_types.h"
 #include "intel_dsi.h"
+#include "intel_hdmi.h"
 #include "intel_qp_tables.h"
 #include "intel_vdsc.h"
 
@@ -283,6 +284,11 @@ static const struct rc_parameters rc_parameters[][MAX_COLUMN_INDEX] = {
 }
 
 };
+
+struct intel_hdmi_cvtem_packet {
+	u32 emp_header;
+	struct drm_dsc_picture_parameter_set pps_payload;
+} __packed;
 
 static int get_row_index_for_rc_params(u16 compressed_bpp)
 {
@@ -587,6 +593,8 @@ static void intel_dsc_pps_configure(const struct intel_crtc_state *crtc_state)
 		DSC_VER_MIN_SHIFT |
 		vdsc_cfg->bits_per_component << DSC_BPC_SHIFT |
 		vdsc_cfg->line_buf_depth << DSC_LINE_BUF_DEPTH_SHIFT;
+	if (vdsc_cfg->dsc_version_minor == 2)
+		pps_val |= DSC_ALT_ICH_SEL;
 	if (vdsc_cfg->block_pred_enable)
 		pps_val |= DSC_BLOCK_PREDICTION;
 	if (vdsc_cfg->convert_rgb)
@@ -1093,6 +1101,39 @@ void intel_dsc_dp_pps_write(struct intel_encoder *encoder,
 	dig_port->write_infoframe(encoder, crtc_state,
 				  DP_SDP_PPS, &dp_dsc_pps_sdp,
 				  sizeof(dp_dsc_pps_sdp));
+}
+
+void intel_dsc_hdmi_pps_write(struct intel_encoder *encoder,
+			      const struct intel_crtc_state *crtc_state)
+{
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct intel_digital_port *dig_port = hdmi_to_dig_port(intel_hdmi);
+	const struct drm_dsc_config *vdsc_cfg = &crtc_state->dsc.config;
+	struct intel_hdmi_cvtem_packet cvtemp;
+
+	if (!crtc_state->dsc.compression_enable)
+		return;
+
+	/*
+	 * For HDMI PPS parameters are sent as Extended Meta Data Packet EMP.
+	 * Specifically the Compressed Video Transport EMP or CVTEM packets
+	 * are used to send the PPS information to the sink.
+	 *
+	 * As per Bspec 66683:
+	 * CVTEM packets (i.e. PPS packets) are formed using the existing
+	 * VIDEO_DIP_PPS registers (i.e. the HDMI_EMP_* registers are not used
+	 * to form the PPS EMP's)
+	 *
+	 * So using DP_SDP_PPS for HDMI, with first 32 bits as per fields in
+	 * HDMI_EMP_HEADER.
+	 */
+	intel_hdmi_fill_emp_header_byte(&crtc_state->cvt_emp, &cvtemp.emp_header);
+
+	drm_dsc_pps_payload_pack(&cvtemp.pps_payload, vdsc_cfg);
+
+	dig_port->write_infoframe(encoder, crtc_state,
+				  DP_SDP_PPS, &cvtemp,
+				  sizeof(cvtemp));
 }
 
 static i915_reg_t dss_ctl1_reg(struct intel_crtc *crtc, enum transcoder cpu_transcoder)

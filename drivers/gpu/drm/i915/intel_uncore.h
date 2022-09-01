@@ -61,6 +61,7 @@ enum forcewake_domain_id {
 	FW_DOMAIN_ID_MEDIA_VEBOX1,
 	FW_DOMAIN_ID_MEDIA_VEBOX2,
 	FW_DOMAIN_ID_MEDIA_VEBOX3,
+	FW_DOMAIN_ID_GSC,
 
 	FW_DOMAIN_ID_COUNT
 };
@@ -81,6 +82,7 @@ enum forcewake_domains {
 	FORCEWAKE_MEDIA_VEBOX1	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX1),
 	FORCEWAKE_MEDIA_VEBOX2	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX2),
 	FORCEWAKE_MEDIA_VEBOX3	= BIT(FW_DOMAIN_ID_MEDIA_VEBOX3),
+	FORCEWAKE_GSC		= BIT(FW_DOMAIN_ID_GSC),
 
 	FORCEWAKE_ALL = BIT(FW_DOMAIN_ID_COUNT) - 1,
 };
@@ -134,6 +136,16 @@ struct intel_uncore {
 	struct intel_runtime_pm *rpm;
 
 	spinlock_t lock; /** lock is also taken in irq contexts. */
+
+	/*
+	 * Do we need to apply an additional offset to reach the beginning
+	 * of the basic non-engine GT registers (referred to as "GSI" on
+	 * newer platforms, or "GT block" on older platforms)?  If so, we'll
+	 * track that here and apply it transparently to registers in the
+	 * appropriate range to maintain compatibility with our existing
+	 * register definitions and GT code.
+	 */
+	u32 gsi_offset;
 
 	unsigned int flags;
 #define UNCORE_HAS_FORCEWAKE		BIT(0)
@@ -235,13 +247,9 @@ const char *intel_uncore_forcewake_domain_to_str(const enum forcewake_domain_id 
 enum forcewake_domains
 intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 			       i915_reg_t reg, unsigned int op);
-
 #define FW_REG_READ  BIT(0)
 #define FW_REG_WRITE BIT(1)
 #define FW_REG_WRITE_MULTICAST BIT(2)
-
-bool intel_reg_in_fw_domain(struct intel_uncore *uncore, i915_reg_t reg,
-			    enum forcewake_domains dom);
 
 void intel_uncore_forcewake_get(struct intel_uncore *uncore,
 				enum forcewake_domains domains);
@@ -300,19 +308,27 @@ intel_wait_for_register_fw(struct intel_uncore *uncore,
 					    2, timeout_ms, NULL);
 }
 
+#define IS_GSI_REG(reg) ((reg) < 0x40000)
+
 /* register access functions */
 #define __raw_read(x__, s__) \
 static inline u##x__ __raw_uncore_read##x__(const struct intel_uncore *uncore, \
 					    i915_reg_t reg) \
 { \
-	return read##s__(uncore->regs + i915_mmio_reg_offset(reg)); \
+	u32 offset = i915_mmio_reg_offset(reg); \
+	if (IS_GSI_REG(offset)) \
+		offset += uncore->gsi_offset; \
+	return read##s__(uncore->regs + offset); \
 }
 
 #define __raw_write(x__, s__) \
 static inline void __raw_uncore_write##x__(const struct intel_uncore *uncore, \
 					   i915_reg_t reg, u##x__ val) \
 { \
-	write##s__(val, uncore->regs + i915_mmio_reg_offset(reg)); \
+	u32 offset = i915_mmio_reg_offset(reg); \
+	if (IS_GSI_REG(offset)) \
+		offset += uncore->gsi_offset; \
+	write##s__(val, uncore->regs + offset); \
 }
 __raw_read(8, b)
 __raw_read(16, w)

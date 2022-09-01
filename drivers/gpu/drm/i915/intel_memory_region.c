@@ -8,7 +8,6 @@
 
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_gt_regs.h"
-#include "gt/intel_gt.h"
 
 #include "intel_memory_region.h"
 #include "i915_drv.h"

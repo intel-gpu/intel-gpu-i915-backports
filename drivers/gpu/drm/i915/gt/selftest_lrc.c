@@ -2236,7 +2236,7 @@ int intel_lrc_live_selftests(struct drm_i915_private *i915)
 	if (!HAS_LOGICAL_RING_CONTEXTS(i915))
 		return 0;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			continue;
 

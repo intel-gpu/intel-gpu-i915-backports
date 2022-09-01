@@ -3184,7 +3184,7 @@ static int icl_compute_combo_phy_dpll(struct intel_atomic_state *state,
 	struct icl_port_dpll *port_dpll =
 		&crtc_state->icl_port_dplls[ICL_PORT_DPLL_DEFAULT];
 	struct skl_wrpll_params pll_params = {};
-	bool ret;
+	int ret;
 
 	if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_HDMI) ||
 	    intel_crtc_has_type(crtc_state, INTEL_OUTPUT_DSI))
@@ -4165,7 +4165,7 @@ void intel_shared_dpll_init(struct drm_i915_private *dev_priv)
 	const struct dpll_info *dpll_info;
 	int i;
 
-	if (IS_DG2(dev_priv))
+	if (DISPLAY_VER(dev_priv) >= 14 || IS_DG2(dev_priv))
 		/* No shared DPLLs on DG2; port PLLs are part of the PHY */
 		dpll_mgr = NULL;
 	else if (IS_ALDERLAKE_P(dev_priv))

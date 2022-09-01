@@ -9,6 +9,8 @@
 #include "gt/intel_reset.h"
 #include "gt/iov/intel_iov_memirq.h"
 #include "gt/iov/intel_iov_query.h"
+#include "intel_gsc_fw.h"
+#include "intel_gsc_uc.h"
 #include "intel_guc.h"
 #include "intel_guc_ads.h"
 #include "intel_guc_submission.h"
@@ -55,6 +57,13 @@ static void uc_expand_default_options(struct intel_uc *uc)
 	 */
 	if (IS_XEHPSDV(i915) ||
 	    IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		i915->params.enable_guc &= ~ENABLE_GUC_LOAD_HUC;
+
+	/*
+	 * FIXME: MTL uses GSC FW to load HuC. Disabling HuC loading until
+	 * support for GSC engine is implemented.
+	 */
+	if (IS_METEORLAKE(i915))
 		i915->params.enable_guc &= ~ENABLE_GUC_LOAD_HUC;
 }
 
@@ -136,6 +145,7 @@ void intel_uc_init_early(struct intel_uc *uc)
 
 	intel_guc_init_early(&uc->guc);
 	intel_huc_init_early(&uc->huc);
+	intel_gsc_uc_init_early(&uc->gsc);
 
 	__confirm_options(uc);
 
@@ -265,9 +275,9 @@ static int guc_enable_communication(struct intel_guc *guc)
 	intel_guc_enable_interrupts(guc);
 
 	/* check for CT messages received before we enabled interrupts */
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	intel_guc_ct_event_handler(&guc->ct);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 
 	drm_dbg(&i915->drm, "GuC communication enabled\n");
 
@@ -316,15 +326,26 @@ static void __uc_fetch_firmwares(struct intel_uc *uc)
 						  INTEL_UC_FIRMWARE_ERROR);
 		}
 
+		if (intel_uc_wants_gsc_uc(uc)) {
+			drm_dbg(&uc_to_gt(uc)->i915->drm,
+				"Failed to fetch GuC: %d disabling GSC\n", err);
+			intel_uc_fw_change_status(&uc->gsc.fw,
+						  INTEL_UC_FIRMWARE_ERROR);
+		}
+
 		return;
 	}
 
 	if (intel_uc_wants_huc(uc))
 		intel_uc_fw_fetch(&uc->huc.fw);
+
+	if (intel_uc_wants_gsc_uc(uc))
+		intel_uc_fw_fetch(&uc->gsc.fw);
 }
 
 static void __uc_cleanup_firmwares(struct intel_uc *uc)
 {
+	intel_uc_fw_cleanup_fetch(&uc->gsc.fw);
 	intel_uc_fw_cleanup_fetch(&uc->huc.fw);
 	intel_uc_fw_cleanup_fetch(&uc->guc.fw);
 }
@@ -350,11 +371,15 @@ static int __uc_init(struct intel_uc *uc)
 	if (intel_uc_uses_huc(uc))
 		intel_huc_init(huc);
 
+	if (intel_uc_uses_gsc_uc(uc))
+		intel_gsc_uc_init(&uc->gsc);
+
 	return 0;
 }
 
 static void __uc_fini(struct intel_uc *uc)
 {
+	intel_gsc_uc_fini(&uc->gsc);
 	intel_huc_fini(&uc->huc);
 	intel_guc_fini(&uc->guc);
 }
@@ -380,8 +405,8 @@ static int uc_init_wopcm(struct intel_uc *uc)
 {
 	struct intel_gt *gt = uc_to_gt(uc);
 	struct intel_uncore *uncore = gt->uncore;
-	u32 base = intel_wopcm_guc_base(&gt->i915->wopcm);
-	u32 size = intel_wopcm_guc_size(&gt->i915->wopcm);
+	u32 base = intel_wopcm_guc_base(&gt->wopcm);
+	u32 size = intel_wopcm_guc_size(&gt->wopcm);
 	u32 huc_agent = intel_uc_uses_huc(uc) ? HUC_LOADING_AGENT_GUC : 0;
 	u32 mask;
 	int err;
@@ -507,12 +532,13 @@ static int __uc_init_hw(struct intel_uc *uc)
 
 	intel_guc_reset_interrupts(guc);
 
-	/* WaEnableuKernelHeaderValidFix:skl */
-	/* WaEnableGuCBootHashCheckNotSet:skl,bxt,kbl */
 	if (GRAPHICS_VER(i915) == 9)
+		/* WaEnableuKernelHeaderValidFix:skl */
+		/* WaEnableGuCBootHashCheckNotSet:skl,bxt,kbl */
 		attempts = 3;
 	else
-		attempts = 1;
+		/* Always retry at least once in case something weird happens */
+		attempts = 2;
 
 	intel_rps_raise_unslice(&uc_to_gt(uc)->rps);
 
@@ -623,6 +649,28 @@ static void __uc_fini_hw(struct intel_uc *uc)
 		intel_guc_submission_disable(guc);
 
 	__uc_sanitize(uc);
+}
+
+/*
+ * Firmwares loaded via the GSC engine require the submission back-end to have
+ * been initialized, so can only be loaded late in the probe/resume process.
+ * TODO move to worker
+ */
+static int __uc_init_hw_late(struct intel_uc *uc)
+{
+	int err;
+
+	if (!intel_uc_uses_gsc_uc(uc))
+		return 0;
+
+	err = intel_gsc_fw_upload(&uc->gsc);
+	if (err)
+		return err;
+
+	if (intel_uc_uses_huc(uc))
+		err = intel_huc_fw_load_and_auth_via_gsc(&uc->huc);
+
+	return err;
 }
 
 static int __vf_uc_sanitize(struct intel_uc *uc)
@@ -779,8 +827,10 @@ void intel_uc_runtime_suspend(struct intel_uc *uc)
 {
 	struct intel_guc *guc = &uc->guc;
 
-	if (!intel_guc_is_ready(guc))
+	if (!intel_guc_is_ready(guc)) {
+		guc->interrupts.enabled = false;
 		return;
+	}
 
 	/*
 	 * Wait for any outstanding CTB before tearing down communication /w the
@@ -800,14 +850,23 @@ void intel_uc_suspend(struct intel_uc *uc)
 	intel_wakeref_t wakeref;
 	int err;
 
-	if (!intel_guc_is_ready(guc))
+	if (!intel_guc_is_ready(guc)) {
+		guc->interrupts.enabled = false;
 		return;
+	}
 
 	with_intel_runtime_pm(&uc_to_gt(uc)->i915->runtime_pm, wakeref) {
 		err = intel_guc_suspend(guc);
 		if (err)
 			DRM_DEBUG_DRIVER("Failed to suspend GuC, err=%d", err);
 	}
+}
+
+static void __uc_resume_early(struct intel_uc *uc)
+{
+	intel_uc_fw_resume(&uc->guc.fw);
+	intel_uc_fw_resume(&uc->huc.fw);
+	intel_uc_fw_resume(&uc->gsc.fw);
 }
 
 static int __uc_resume(struct intel_uc *uc, bool enable_communication)
@@ -873,7 +932,10 @@ static const struct intel_uc_ops uc_ops_on = {
 	.fini = __uc_fini,
 
 	.init_hw = __uc_init_hw,
+	.init_hw_late = __uc_init_hw_late,
 	.fini_hw = __uc_fini_hw,
+
+	.resume_early = __uc_resume_early,
 };
 
 static const struct intel_uc_ops uc_ops_vf = {

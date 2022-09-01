@@ -190,7 +190,15 @@ static ssize_t rc6_residency_ms_show(struct device *dev,
 				     char *buff)
 {
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	u32 rc6_residency = get_residency(gt, GEN6_GT_GFX_RC6);
+	u32 rc6_residency;
+	i915_reg_t reg;
+
+	if (gt->type == GT_MEDIA)
+		reg = MTL_MEDIA_MC6;
+	else
+		reg = GEN6_GT_GFX_RC6;
+
+	rc6_residency = get_residency(gt, reg);
 
 	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6_residency);
 }

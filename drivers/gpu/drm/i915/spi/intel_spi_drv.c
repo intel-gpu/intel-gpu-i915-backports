@@ -19,9 +19,13 @@
 #include "spi/intel_spi.h"
 #endif
 #include <linux/delay.h>
+#include <linux/pm_runtime.h>
 #include "i915_reg_defs.h"
+
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
+
+#define I915_SPI_RPM_TIMEOUT 500
 
 #define BP_MTD_MAGIC_NUMBER 0x12341234
 
@@ -480,6 +484,12 @@ static int i915_spi_erase(struct mtd_info *mtd, struct erase_info *info)
 	total_len = info->len;
 	addr = info->addr;
 
+	ret = pm_runtime_resume_and_get(mtd->dev.parent);
+	if (ret < 0) {
+		dev_err(&mtd->dev, "rpm: get failed %d\n", ret);
+		return ret;
+	}
+
 	mutex_lock(&spi->lock);
 
 	while (total_len > 0) {
@@ -521,6 +531,8 @@ static int i915_spi_erase(struct mtd_info *mtd, struct erase_info *info)
 
 out:
 	mutex_unlock(&spi->lock);
+	pm_runtime_mark_last_busy(mtd->dev.parent);
+	pm_runtime_put_autosuspend(mtd->dev.parent);
 	return ret;
 }
 
@@ -554,6 +566,12 @@ static int i915_spi_read(struct mtd_info *mtd, loff_t from, size_t len,
 	if (len > spi->regions[idx].size - from)
 		len = spi->regions[idx].size - from;
 
+	ret = pm_runtime_resume_and_get(mtd->dev.parent);
+	if (ret < 0) {
+		dev_err(&mtd->dev, "rpm: get failed %zd\n", ret);
+		return ret;
+	}
+
 	mutex_lock(&spi->lock);
 
 	ret = spi_read(spi, region, from, len, buf);
@@ -566,6 +584,8 @@ static int i915_spi_read(struct mtd_info *mtd, loff_t from, size_t len,
 	*retlen = ret;
 
 	mutex_unlock(&spi->lock);
+	pm_runtime_mark_last_busy(mtd->dev.parent);
+	pm_runtime_put_autosuspend(mtd->dev.parent);
 	return 0;
 }
 
@@ -599,6 +619,12 @@ static int i915_spi_write(struct mtd_info *mtd, loff_t to, size_t len,
 	if (len > spi->regions[idx].size - to)
 		len = spi->regions[idx].size - to;
 
+	ret = pm_runtime_resume_and_get(mtd->dev.parent);
+	if (ret < 0) {
+		dev_err(&mtd->dev, "rpm: get failed %zd\n", ret);
+		return ret;
+	}
+
 	mutex_lock(&spi->lock);
 
 	ret = spi_write(spi, region, to, len, buf);
@@ -611,6 +637,8 @@ static int i915_spi_write(struct mtd_info *mtd, loff_t to, size_t len,
 	*retlen = ret;
 
 	mutex_unlock(&spi->lock);
+	pm_runtime_mark_last_busy(mtd->dev.parent);
+	pm_runtime_put_autosuspend(mtd->dev.parent);
 	return 0;
 }
 
@@ -756,16 +784,27 @@ static int i915_spi_probe(struct platform_device *platdev)
 	for (n = 0, i = 0; i < I915_SPI_REGIONS; i++) {
 		if (regions[i].name) {
 			name_size = strlen(dev_name(&platdev->dev)) +
-				    strlen(regions[i].name) + 2; /* for point */
+					strlen(regions[i].name) + 2; /* for point */
 			name = kzalloc(name_size, GFP_KERNEL);
 			if (!name)
 				continue;
 			snprintf(name, name_size, "%s.%s",
-				 dev_name(&platdev->dev), regions[i].name);
+				dev_name(&platdev->dev), regions[i].name);
 			spi->regions[n].name = name;
 			spi->regions[n].id = i;
 			n++;
 		}
+	}
+
+	pm_runtime_enable(device);
+
+	pm_runtime_set_autosuspend_delay(device, I915_SPI_RPM_TIMEOUT);
+	pm_runtime_use_autosuspend(device);
+
+	ret = pm_runtime_resume_and_get(device);
+	if (ret < 0) {
+		dev_err(device, "rpm: get failed %d\n", ret);
+		goto err_norpm;
 	}
 
 	bar = platform_get_resource(platdev, IORESOURCE_MEM, 0);
@@ -798,9 +837,15 @@ static int i915_spi_probe(struct platform_device *platdev)
 
 	dev_dbg(device, "i915-spi is bound\n");
 
+	pm_runtime_put(device);
+
 	return 0;
 
 err:
+	pm_runtime_put(device);
+
+err_norpm:
+	pm_runtime_disable(device);
 	kref_put(&spi->refcnt, i915_spi_release);
 	return ret;
 }
@@ -808,15 +853,17 @@ err:
 static int i915_spi_remove(struct platform_device *platdev)
 {
 	struct i915_spi *spi = platform_get_drvdata(platdev);
-
 	if (!spi)
 		return 0;
+
+	pm_runtime_disable(&platdev->dev);
 
 	mtd_device_unregister(&spi->mtd);
 
 	platform_set_drvdata(platdev, NULL);
 
 	kref_put(&spi->refcnt, i915_spi_release);
+
 	return 0;
 }
 #else
@@ -853,11 +900,12 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 
         mutex_init(&spi->lock);
         kref_init(&spi->refcnt);
+
         spi->nregions = nregions;
         for (n = 0, i = 0; i < I915_SPI_REGIONS; i++) {
                 if (ispi->regions[i].name) {
                         name_size = strlen(dev_name(&aux_dev->dev)) +
-                                    strlen(ispi->regions[i].name) + 2; /* for point */
+					strlen(ispi->regions[i].name) + 2; /* for point */
                         name = kzalloc(name_size, GFP_KERNEL);
                         if (!name)
                                 continue;
@@ -867,6 +915,16 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
                         spi->regions[n].id = i;
                         n++;
                 }
+        }
+        pm_runtime_enable(device);
+
+        pm_runtime_set_autosuspend_delay(device, I915_SPI_RPM_TIMEOUT);
+        pm_runtime_use_autosuspend(device);
+
+        ret = pm_runtime_resume_and_get(device);
+        if (ret < 0) {
+                dev_err(device, "rpm: get failed %d\n", ret);
+                goto err_norpm;
         }
 
         spi->base = devm_ioremap_resource(device, &ispi->bar);
@@ -893,8 +951,13 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 
         dev_dbg(device, "i915-spi is bound\n");
 
+        pm_runtime_put(device);
         return 0;
+
 err:
+        pm_runtime_put(device);
+err_norpm:
+        pm_runtime_disable(device);
         kref_put(&spi->refcnt, i915_spi_release);
         return ret;
 }
@@ -906,6 +969,8 @@ static void i915_spi_remove(struct auxiliary_device *aux_dev)
         if (!spi)
                 return;
 
+        pm_runtime_disable(&aux_dev->dev);
+
         mtd_device_unregister(&spi->mtd);
 
         dev_set_drvdata(&aux_dev->dev, NULL);
@@ -916,12 +981,12 @@ static void i915_spi_remove(struct auxiliary_device *aux_dev)
 
 #if IS_ENABLED (CONFIG_AUXILIARY_BUS)
 static const struct auxiliary_device_id i915_spi_id_table[] = {
-        {
-                .name = "i915.spi",
-        },
-        {
-                /* sentinel */
-        }
+	{
+		.name = "i915.spi",
+	},
+	{
+		/* sentinel */
+	}
 };
 MODULE_DEVICE_TABLE(auxiliary, i915_spi_id_table);
 

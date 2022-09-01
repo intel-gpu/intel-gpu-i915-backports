@@ -591,13 +591,6 @@ void __iomem *i915_vma_pin_iomap(struct i915_vma *vma)
 	void __iomem *ptr;
 	int err;
 
-	if (!i915_gem_object_is_lmem(vma->obj)) {
-		if (GEM_WARN_ON(!i915_vma_is_map_and_fenceable(vma))) {
-			err = -ENODEV;
-			goto err;
-		}
-	}
-
 	GEM_BUG_ON(!i915_vma_is_ggtt(vma));
 	GEM_BUG_ON(!i915_vma_is_bound(vma, I915_VMA_GLOBAL_BIND));
 
@@ -612,17 +605,31 @@ void __iomem *i915_vma_pin_iomap(struct i915_vma *vma)
 		if (i915_gem_object_is_lmem(vma->obj))
 			ptr = i915_gem_object_lmem_io_map(vma->obj, 0,
 							  vma->obj->base.size);
-		else
+		else if (i915_vma_is_map_and_fenceable(vma))
 			ptr = io_mapping_map_wc(&i915_vm_to_ggtt(vma->vm)->iomap,
 						i915_vma_offset(vma),
 						i915_vma_size(vma));
+		else {
+			ptr = (void __iomem *)
+				i915_gem_object_pin_map_unlocked(vma->obj,
+								 I915_MAP_WC);
+			if (IS_ERR(ptr)) {
+				err = PTR_ERR(ptr);
+				goto err;
+			}
+			ptr = page_pack_bits(ptr, 1);
+		}
+
 		if (ptr == NULL) {
 			err = -ENOMEM;
 			goto err;
 		}
 
 		if (unlikely(cmpxchg(&vma->iomap, NULL, ptr))) {
-			io_mapping_unmap(ptr);
+			if (page_unmask_bits(ptr))
+				__i915_gem_object_release_map(vma->obj);
+			else
+				io_mapping_unmap(ptr);
 			ptr = vma->iomap;
 		}
 	}
@@ -636,7 +643,7 @@ void __iomem *i915_vma_pin_iomap(struct i915_vma *vma)
 	i915_vma_set_ggtt_write(vma);
 
 	/* NB Access through the GTT requires the device to be awake. */
-	return ptr;
+	return page_mask_bits(ptr);
 
 err_unpin:
 	__i915_vma_unpin(vma);
@@ -653,6 +660,8 @@ void i915_vma_flush_writes(struct i915_vma *vma)
 void i915_vma_unpin_iomap(struct i915_vma *vma)
 {
 	GEM_BUG_ON(vma->iomap == NULL);
+
+	/* XXX We keep the mapping until __i915_vma_unbind()/evict() */
 
 	i915_vma_flush_writes(vma);
 
@@ -1170,7 +1179,7 @@ int i915_vma_fault_pin(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 
 		gen12_init_fault_scratch(vma->vm, vma->node.start, vma->node.size, false);
 
-		for_each_gt(vma->vm->i915, i, gt) {
+		for_each_gt(gt, vma->vm->i915, i) {
 			if (!atomic_read(&vma->vm->active_contexts_gt[i]))
 				continue;
 
@@ -1385,6 +1394,8 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		  u32 align, unsigned int flags)
 {
 	struct i915_address_space *vm = vma->vm;
+	struct intel_gt *gt;
+	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
 	int err;
 
 	GEM_BUG_ON(!i915_vma_is_ggtt(vma));
@@ -1408,7 +1419,8 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		}
 
 		/* Unlike i915_vma_pin, we don't take no for an answer! */
-		flush_idle_contexts(vm->gt);
+		list_for_each_entry_rcu(gt, &ggtt->gt_list, ggtt_link)
+			flush_idle_contexts(gt);
 		if (mutex_lock_interruptible(&vm->mutex) == 0) {
 			i915_gem_evict_vm(vm);
 			mutex_unlock(&vm->mutex);
@@ -1563,7 +1575,10 @@ static void __i915_vma_iounmap(struct i915_vma *vma)
 	if (vma->iomap == NULL)
 		return;
 
-	io_mapping_unmap(vma->iomap);
+	if (page_unmask_bits(vma->iomap))
+		__i915_gem_object_release_map(vma->obj);
+	else
+		io_mapping_unmap(vma->iomap);
 	vma->iomap = NULL;
 }
 

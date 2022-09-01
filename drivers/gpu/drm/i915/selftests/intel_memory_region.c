@@ -738,8 +738,8 @@ static int igt_smem_create_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -846,8 +846,8 @@ static int igt_lmem_create_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -928,8 +928,8 @@ static int igt_lmem_write_gpu_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -953,8 +953,8 @@ static int igt_lmem_write_gpu_cross_tile_cross_vm(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1287,8 +1287,8 @@ static int igt_lmem_write_cpu_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1506,8 +1506,8 @@ static int igt_lmem_pages_migrate_cross_tile(void *arg)
 	unsigned int i, j;
 	int ret;
 
-	for_each_gt(i915, i, gt) {
-		for_each_gt(i915, j, gt2) {
+	for_each_gt(gt, i915, i) {
+		for_each_gt(gt2, i915, j) {
 			if (gt == gt2)
 				continue;
 
@@ -1620,7 +1620,7 @@ int intel_memory_region_live_selftests(struct drm_i915_private *i915)
 		return 0;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			continue;
 
@@ -1650,7 +1650,7 @@ int intel_memory_region_cross_tile_live_selftests(struct drm_i915_private *i915)
 		return 0;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			return 0;
 	}

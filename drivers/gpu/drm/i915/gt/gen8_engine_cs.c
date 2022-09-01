@@ -166,7 +166,7 @@ static u32 preparser_disable(bool state)
 	return MI_ARB_CHECK | 1 << 8 | state;
 }
 
-static i915_reg_t aux_inv_reg(const struct intel_engine_cs *engine)
+static u32 aux_inv_reg(const struct intel_engine_cs *engine)
 {
 	static const i915_reg_t vd[] = {
 		GEN12_VD0_AUX_NV,
@@ -180,14 +180,18 @@ static i915_reg_t aux_inv_reg(const struct intel_engine_cs *engine)
 		GEN12_VE1_AUX_NV,
 	};
 
-	if (engine->class == VIDEO_DECODE_CLASS)
-		return vd[engine->instance];
+	if (engine->class == VIDEO_DECODE_CLASS) {
+		return i915_mmio_reg_offset(vd[engine->instance]) +
+		       engine->uncore->gsi_offset;
+	}
 
-	if (engine->class == VIDEO_ENHANCEMENT_CLASS)
-		return ve[engine->instance];
+	if (engine->class == VIDEO_ENHANCEMENT_CLASS) {
+		return i915_mmio_reg_offset(ve[engine->instance]) +
+		       engine->uncore->gsi_offset;
+	}
 
 	GEM_BUG_ON("unknown aux_inv reg\n");
-	return INVALID_MMIO_REG;
+	return i915_mmio_reg_offset(INVALID_MMIO_REG);
 }
 
 static u32 *gen12_emit_aux_table_inv(const i915_reg_t inv_reg, u32 *cs)
@@ -300,7 +304,8 @@ int gen12_emit_flush_xcs(struct i915_request *rq, u32 mode)
 
 		if (!HAS_FLAT_CCS(rq->engine->i915)) {
 			aux_inv = rq->execution_mask &
-				~GENMASK(_BCS(I915_MAX_BCS - 1), BCS0);
+				~GENMASK(_BCS(I915_MAX_BCS - 1), BCS0) &
+				~BIT(GSC0);
 			if (aux_inv)
 				cmd += 2 * hweight32(aux_inv) + 2;
 		}
@@ -340,7 +345,7 @@ int gen12_emit_flush_xcs(struct i915_request *rq, u32 mode)
 
 		*cs++ = MI_LOAD_REGISTER_IMM(hweight32(aux_inv));
 		for_each_engine_masked(engine, rq->engine->gt, aux_inv, tmp) {
-			*cs++ = i915_mmio_reg_offset(aux_inv_reg(engine));
+			*cs++ = aux_inv_reg(engine);
 			*cs++ = AUX_INV;
 		}
 		*cs++ = MI_NOOP;

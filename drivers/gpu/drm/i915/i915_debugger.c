@@ -34,9 +34,30 @@
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt_debug.h"
 #include "gt/uc/intel_guc_submission.h"
+#include "gt/intel_workarounds.h"
 
 #define from_event(T, event) container_of((event), typeof(*(T)), base)
 #define to_event(e) (&(e)->base)
+
+enum {
+	DISCONNECT_CLIENT_CLOSE   = 1,
+	DISCONNECT_SEND_TIMEOUT   = 2,
+	DISCONNECT_INTERNAL_ERR   = 3,
+};
+
+static const char *disconnect_reason_to_str(const int reason)
+{
+	switch (reason) {
+	case DISCONNECT_CLIENT_CLOSE:
+		return "client closed";
+	case DISCONNECT_SEND_TIMEOUT:
+		return "send timeout";
+	case DISCONNECT_INTERNAL_ERR:
+		return "internal error";
+	}
+
+	return "unknown";
+}
 
 static void __i915_debugger_print(const struct i915_debugger * const debugger,
 				  const int level,
@@ -311,10 +332,10 @@ static void i915_debugger_print_event(const struct i915_debugger * const debugge
 	};
 	debug_event_printer_t event_printer = NULL;
 
-	if (likely(debugger->debug_lvl < DD_DEBUG_LEVEL_INFO))
+	if (likely(debugger->debug_lvl < DD_DEBUG_LEVEL_VERBOSE))
 		return;
 
-	__i915_debugger_print(debugger, DD_DEBUG_LEVEL_INFO, prefix,
+	__i915_debugger_print(debugger, DD_DEBUG_LEVEL_VERBOSE, prefix,
 			      "%s:%s type=%u, flags=0x%08x, seqno=%llu, size=%llu\n",
 			      event_type_to_str(event->type),
 			      event_flags_to_str(event->flags),
@@ -588,20 +609,58 @@ i915_debugger_restore_ctx_schedule_params(struct i915_debugger *debugger)
 	rcu_read_unlock();
 }
 
-static void i915_debugger_close(struct i915_debugger *debugger)
+static void i915_debugger_disconnect__locked(struct i915_debugger *debugger,
+					    int reason)
 {
+	GEM_WARN_ON(!reason);
+	lockdep_assert_held(&debugger->lock);
+
 	i915_debugger_detach(debugger);
 
-	i915_debugger_restore_ctx_schedule_params(debugger);
-
-	mutex_lock(&debugger->lock);
-	release_acks(debugger);
-	DD_INFO(debugger, "session %lld closed", debugger->session);
-	mutex_unlock(&debugger->lock);
+	if (!debugger->disconnect_reason) {
+		debugger->disconnect_reason = reason;
+		release_acks(debugger);
+		i915_debugger_restore_ctx_schedule_params(debugger);
+		DD_INFO(debugger, "disconnected: %s",
+			disconnect_reason_to_str(reason));
+	} else {
+		DD_INFO(debugger, "earlier disconnected with %s (now %d)",
+			disconnect_reason_to_str(debugger->disconnect_reason),
+			reason);
+	}
 
 	complete_all(&debugger->discovery);
 	wake_up_all(&debugger->write_done);
 	complete_all(&debugger->read_done);
+}
+
+static void i915_debugger_disconnect_timeout(struct i915_debugger *debugger)
+{
+	i915_debugger_disconnect__locked(debugger, DISCONNECT_SEND_TIMEOUT);
+}
+
+static void i915_debugger_disconnect_err(struct i915_debugger *debugger)
+{
+	mutex_lock(&debugger->lock);
+	i915_debugger_disconnect__locked(debugger, DISCONNECT_INTERNAL_ERR);
+	mutex_unlock(&debugger->lock);
+}
+
+static void i915_debugger_client_close(struct i915_debugger *debugger)
+{
+	mutex_lock(&debugger->lock);
+	i915_debugger_disconnect__locked(debugger, DISCONNECT_CLIENT_CLOSE);
+	mutex_unlock(&debugger->lock);
+}
+
+static int i915_debugger_disconnect_retcode(struct i915_debugger *debugger)
+{
+	GEM_WARN_ON(!debugger->disconnect_reason);
+
+	if (debugger->disconnect_reason == DISCONNECT_SEND_TIMEOUT)
+		return -ENXIO;
+
+	return -ENODEV;
 }
 
 static __poll_t i915_debugger_poll(struct file *file, poll_table *wait)
@@ -733,8 +792,8 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 		u64 blocking_seqno;
 
 		if (is_debugger_closed(debugger)) {
-			DD_INFO(debugger, "disconnect on send: debugger was closed\n");
-			goto disconnect;
+			DD_INFO(debugger, "send: debugger was closed\n");
+			goto closed;
 		}
 
 		blocking_event = event_pending(debugger);
@@ -779,8 +838,9 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 	} while (!expired);
 
 	if (event_pending(debugger) && !is_debugger_closed(debugger)) {
-		DD_INFO(debugger, "disconnect: send wait expired");
-		goto disconnect;
+		DD_INFO(debugger, "send: fifo full (no readers?). disconnecting");
+		i915_debugger_disconnect_timeout(debugger);
+		goto closed;
 	}
 
 	reinit_completion(&debugger->read_done);
@@ -789,7 +849,7 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 	if (needs_ack) {
 		if (IS_ERR(ack)) {
 			DD_ERR(debugger, "disconnect: ack not created %ld", PTR_ERR(ack));
-			goto disconnect;
+			goto disconnect_err;
 		}
 
 		if (!insert_ack(debugger, ack)) {
@@ -797,7 +857,7 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 			       event->seqno);
 			handle_ack(debugger, ack);
 			kfree(ack);
-			goto disconnect;
+			goto disconnect_err;
 		}
 	}
 	mutex_unlock(&debugger->lock);
@@ -814,8 +874,8 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 	mutex_lock(&debugger->lock);
 	do {
 		if (is_debugger_closed(debugger)) {
-			DD_INFO(debugger, "disconnect: debugger closed on waiting read");
-			goto disconnect;
+			DD_INFO(debugger, "send: debugger was closed on waiting read");
+			goto closed;
 		}
 
 		/* If it is not our event, we can safely return */
@@ -843,16 +903,18 @@ static int _i915_debugger_send_event(struct i915_debugger * const debugger,
 
 	/* If it is still our event pending, disconnect */
 	if (event_pending(debugger) == event) {
-		DD_INFO(debugger, "disconnect: timeout waiting for read");
-		goto disconnect;
+		DD_INFO(debugger, "send: timeout waiting for event to be read, disconnecting");
+		i915_debugger_disconnect_timeout(debugger);
+		goto closed;
 	}
 
 	mutex_unlock(&debugger->lock);
 	return 0;
 
-disconnect:
+disconnect_err:
+	i915_debugger_disconnect__locked(debugger, DISCONNECT_INTERNAL_ERR);
+closed:
 	mutex_unlock(&debugger->lock);
-	i915_debugger_close(debugger);
 
 	return -ENODEV;
 }
@@ -874,7 +936,7 @@ __i915_debugger_create_event(struct i915_debugger * const debugger,
 	event = kzalloc(size, GFP_KERNEL);
 	if (!event) {
 		DD_ERR(debugger, "unable to create event 0x%08x (ENOMEM), disconnecting", type);
-		i915_debugger_close(debugger);
+		i915_debugger_disconnect_err(debugger);
 		return NULL;
 	}
 
@@ -952,13 +1014,12 @@ static long i915_debugger_read_event(struct i915_debugger *debugger,
 	if (!buf)
 		return -ENOMEM;
 
+	ret = -ENODEV;
 	waits = 0;
 	mutex_lock(&debugger->lock);
 	do {
-		if (is_debugger_closed(debugger)) {
-			ret = -ENODEV;
-			goto unlock;
-		}
+		if (is_debugger_closed(debugger))
+			goto closed;
 
 		event = event_pending(debugger);
 		if (event)
@@ -977,14 +1038,12 @@ static long i915_debugger_read_event(struct i915_debugger *debugger,
 		mutex_lock(&debugger->lock);
 	} while (waits++ < 10);
 
+	if (is_debugger_closed(debugger))
+		goto closed;
+
 	if (!event) {
 		ret = -ETIMEDOUT;
 		complete(&debugger->read_done);
-		goto unlock;
-	}
-
-	if (is_debugger_closed(debugger)) {
-		ret = -ENODEV;
 		goto unlock;
 	}
 
@@ -1017,6 +1076,10 @@ static long i915_debugger_read_event(struct i915_debugger *debugger,
 out:
 	kfree(buf);
 	return ret;
+
+closed:
+	GEM_WARN_ON(ret != -ENODEV);
+	ret = i915_debugger_disconnect_retcode(debugger);
 
 unlock:
 	mutex_unlock(&debugger->lock);
@@ -1103,7 +1166,7 @@ static void gen12_invalidate_eus(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	int id;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		with_intel_gt_pm_if_awake(gt, wakeref) {
 			intel_uncore_write(gt->uncore, GEN9_CS_DEBUG_MODE2,
 					   _MASKED_BIT_ENABLE(bit));
@@ -1116,12 +1179,7 @@ static int engine_rcu_async_flush(struct intel_engine_cs *engine,
 {
 	struct intel_uncore * const uncore = engine->gt->uncore;
 	const i915_reg_t psmi_addr = RING_PSMI_CTL(engine->mmio_base);
-	const enum forcewake_domains fw =
-		intel_uncore_forcewake_for_reg(uncore, psmi_addr,
-					       FW_REG_READ | FW_REG_WRITE) |
-		intel_uncore_forcewake_for_reg(uncore,
-					       GEN12_RCU_ASYNC_FLUSH,
-					       FW_REG_READ | FW_REG_WRITE);
+	const enum forcewake_domains fw = FORCEWAKE_GT | FORCEWAKE_RENDER;
 	u32 psmi_ctrl;
 	u32 id, mask;
 	int ret;
@@ -1182,7 +1240,7 @@ static void dg2_invalidate_eus(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	int gt_id;
 
-	for_each_gt(i915, gt_id, gt) {
+	for_each_gt(gt, i915, gt_id) {
 		struct intel_engine_cs *engine;
 		int engine_id;
 
@@ -1230,7 +1288,9 @@ static int gen12_gt_invalidate_l3(struct intel_gt *gt,
 	cpctl = intel_uncore_read_fw(uncore, GEN7_MISCCPCTL);
 	if (cpctl & mask) {
 		ret = cpctl & GEN12_DOP_CLOCK_GATE_LOCK ? -EACCES : -ENXIO;
-		goto out;
+		drm_notice_once(&gt->i915->drm,
+				"debugger: access failed to prime reg 0x%x 0x%08x. proceeding to invalidate\n",
+				i915_mmio_reg_offset(GEN7_MISCCPCTL), cpctl);
 	}
 
 	ret = __intel_wait_for_register_fw(uncore, GEN11_GLBLINVL,
@@ -1264,7 +1324,7 @@ static void gen12_invalidate_l3(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	int id, ret;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		ret = gen12_gt_invalidate_l3(gt, timeout_us);
 		if (ret)
 			drm_notice_once(&gt->i915->drm,
@@ -1977,7 +2037,7 @@ struct ss_iter {
 };
 
 static int read_attn_ss_fw(struct intel_gt *gt, void *data,
-			   unsigned int slice, unsigned int subslice, bool present)
+			   unsigned int group, unsigned int instance, bool present)
 {
 	struct ss_iter *iter = data;
 	struct i915_debugger *debugger = iter->debugger;
@@ -1994,14 +2054,14 @@ static int read_attn_ss_fw(struct intel_gt *gt, void *data,
 			return -EIO;
 
 		if (present) {
-			val = intel_uncore_read_fw(gt->uncore, TD_ATT(row));
+			val = intel_gt_mcr_read_fw(gt, TD_ATT(row), group, instance);
 
 			DD_INFO(debugger, "TD_ATT: (%d:%d:%d): 0x%08x\n",
-				slice, subslice, row, val);
+				group, instance, row, val);
 		} else {
 			val = 0;
 			DD_INFO(debugger, "TD_ATT: (%d:%d:%d): 0x%08x FUSED OFF\n",
-				slice, subslice, row, val);
+				group, instance, row, val);
 		}
 
 		memcpy(&iter->bits[iter->i], &val, sizeof(val));
@@ -2029,7 +2089,7 @@ static void eu_control_stopped(struct i915_debugger *debugger,
 }
 
 static int check_attn_ss_fw(struct intel_gt *gt, void *data,
-			    unsigned int slice, unsigned int subslice,
+			    unsigned int group, unsigned int instance,
 			    bool present)
 {
 	struct ss_iter *iter = data;
@@ -2050,12 +2110,12 @@ static int check_attn_ss_fw(struct intel_gt *gt, void *data,
 		iter->i += sizeof(val);
 
 		if (present)
-			cur = intel_uncore_read_fw(gt->uncore, TD_ATT(row));
+			cur = intel_gt_mcr_read_fw(gt, TD_ATT(row), group, instance);
 
 		if ((val | cur) != cur) {
 			DD_INFO(debugger,
 				"WRONG CLEAR (%d:%d:%d) TD_CRL: 0x%08x; TD_ATT: 0x%08x\n",
-				slice, subslice, row, val, cur);
+				group, instance, row, val, cur);
 			return -EINVAL;
 		}
 	}
@@ -2064,7 +2124,7 @@ static int check_attn_ss_fw(struct intel_gt *gt, void *data,
 }
 
 static int clear_attn_ss_fw(struct intel_gt *gt, void *data,
-			    unsigned int slice, unsigned int subslice,
+			    unsigned int group, unsigned int instance,
 			    bool present)
 {
 	struct ss_iter *iter = data;
@@ -2088,15 +2148,16 @@ static int clear_attn_ss_fw(struct intel_gt *gt, void *data,
 			continue;
 
 		if (present) {
-			intel_uncore_write_fw(gt->uncore, TD_CLR(row), val);
+			intel_gt_mcr_unicast_write_fw(gt, TD_CLR(row), val,
+						      group, instance);
 
 			DD_INFO(debugger,
 				"TD_CLR: (%d:%d:%d): 0x%08x\n",
-				slice, subslice, row, val);
+				group, instance, row, val);
 		} else {
 			DD_WARN(debugger,
 				"TD_CLR: (%d:%d:%d): 0x%08x write to fused off subslice\n",
-				slice, subslice, row, val);
+				group, instance, row, val);
 		}
 	}
 
@@ -2390,7 +2451,7 @@ static long i915_debugger_ioctl(struct file *file,
 	long ret;
 
 	if (is_debugger_closed(debugger)) {
-		ret = -ENODEV;
+		ret = i915_debugger_disconnect_retcode(debugger);
 		goto out;
 	}
 
@@ -2475,7 +2536,7 @@ static int __i915_debugger_alloc_handle(struct i915_debugger *debugger,
 
 	if (ret) {
 		DD_ERR(debugger, "xa_alloc_cyclic failed %d, disconnecting\n", ret);
-		i915_debugger_close(debugger);
+		i915_debugger_disconnect_err(debugger);
 	}
 
 	return ret;
@@ -2526,7 +2587,7 @@ static void __i915_debugger_vm_create(struct i915_debugger *debugger,
 		DD_ERR(debugger,
 		       "unable to allocate vm handle for client %u, disconnecting\n",
 		       client->id);
-		i915_debugger_close(debugger);
+		i915_debugger_disconnect_err(debugger);
 		return;
 	}
 
@@ -2620,7 +2681,7 @@ static void i915_debugger_discover_vm_bind(struct i915_debugger *debugger,
 
 exit_unlock:
 	i915_gem_vm_bind_unlock(vm);
-	i915_debugger_close(debugger);
+	i915_debugger_disconnect_err(debugger);
 }
 
 static void i915_debugger_discover_vm(struct i915_debugger *debugger,
@@ -2817,7 +2878,7 @@ compute_engines_reschedule_heartbeat(struct i915_debugger *debugger)
 	struct intel_gt *gt;
 	int gt_id;
 
-	for_each_gt(i915, gt_id, gt) {
+	for_each_gt(gt, i915, gt_id) {
 		with_intel_gt_pm_if_awake(gt, wakeref) {
 			struct intel_engine_cs *engine;
 			int engine_id;
@@ -2851,7 +2912,7 @@ static int i915_debugger_release(struct inode *inode, struct file *file)
 {
 	struct i915_debugger *debugger = file->private_data;
 
-	i915_debugger_close(debugger);
+	i915_debugger_client_close(debugger);
 	i915_debugger_put(debugger);
 	return 0;
 }
@@ -3014,35 +3075,36 @@ err_free:
 	return ret;
 }
 
-static bool i915_debugger_modparms_are_sane(struct drm_i915_private *i915)
-{
-	const struct i915_params * const p = &i915->params;
-	int fails = 0;
-
-	if (p->debug_eu != 1 && ++fails)
-		drm_warn(&i915->drm, "i915_debugger: i915.debug_eu=1 not set (is %d)\n",
-			 p->debug_eu);
-
-	return fails == 0;
-}
-
 int i915_debugger_open_ioctl(struct drm_device *dev,
 			     void *data,
 			     struct drm_file *file)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
 	const struct prelim_drm_i915_debugger_open_param * const param = data;
+	int ret = 0;
 
-	if (!i915_debugger_modparms_are_sane(i915))
+	/* Use lock to avoid the debugger getting disabled via sysfs during
+	 * session creation */
+	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
+	if (!i915->debuggers.enable_eu_debug) {
+		drm_err(&i915->drm,
+			"i915_debugger: prelim_enable_eu_debug not set (is %d)\n",
+			i915->debuggers.enable_eu_debug);
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
 		return -ENODEV;
+	}
 
-	return i915_debugger_open(i915, param);
+	ret = i915_debugger_open(i915, param);
+	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+	return ret;
 }
 
 void i915_debugger_init(struct drm_i915_private *i915)
 {
 	spin_lock_init(&i915->debuggers.lock);
 	INIT_LIST_HEAD(&i915->debuggers.list);
+	mutex_init(&i915->debuggers.enable_eu_debug_lock);
+	i915->debuggers.enable_eu_debug = !!i915->params.debug_eu;
 }
 
 void i915_debugger_fini(struct drm_i915_private *i915)
@@ -3427,7 +3489,7 @@ static void __i915_debugger_vm_bind_send_event(struct i915_debugger *debugger,
 	if(__i915_debugger_get_handle(debugger, vma->vm, &vm_handle)) {
 		DD_ERR(debugger, "handle not found for vm %p, disconnecting\n", vma->vm);
 		i915_vma_put(vma);
-		i915_debugger_close(debugger);
+		i915_debugger_disconnect_err(debugger);
 		return;
 	}
 
@@ -3600,7 +3662,7 @@ void i915_debugger_context_param_vm(const struct i915_drm_client *client,
  */
 void i915_debugger_revoke_ptes(struct i915_vma *vma)
 {
-	if (!vma->vm->i915->params.debug_eu)
+	if (!vma->vm->i915->debuggers.enable_eu_debug)
 		return;
 
 	/* Don't race with other revokers revoking */
@@ -3626,7 +3688,7 @@ void i915_debugger_revoke_object_ptes(struct drm_i915_gem_object *obj)
 {
 	struct i915_vma *vma;
 
-	if (!to_i915(obj->base.dev)->params.debug_eu)
+	if (!to_i915(obj->base.dev)->debuggers.enable_eu_debug)
 		return;
 
 	/* Need to restart until we have a clean loop without unlocking */
@@ -3877,6 +3939,23 @@ long i915_debugger_attention_poll_interval(struct intel_engine_cs *engine)
 		delay = i915_DEBUGGER_ATTENTION_INTERVAL;
 
 	return delay;
+}
+
+void i915_debugger_enable(struct drm_i915_private *i915)
+{
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	struct intel_gt *gt;
+	unsigned int i;
+
+	for_each_gt(gt, i915, i) {
+		/* XXX suspend current activity */
+		for_each_engine(engine, gt, id) {
+			intel_engine_wa_add_debug_mode(engine);
+			intel_engine_whitelist_sip(engine);
+		}
+		intel_gt_handle_error(gt, ALL_ENGINES, 0, NULL);
+	}
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

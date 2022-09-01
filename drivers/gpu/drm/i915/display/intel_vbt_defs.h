@@ -290,6 +290,13 @@ struct bdb_general_features {
 #define HDMI_MAX_DATA_RATE_297		1			/* 204 */
 #define HDMI_MAX_DATA_RATE_165		2			/* 204 */
 
+#define HDMI_MAX_FRL_RATE_PLATFORM	0			/* 237 */
+#define HDMI_MAX_FRL_RATE_3G		1			/* 237 */
+#define HDMI_MAX_FRL_RATE_6G		2			/* 237 */
+#define HDMI_MAX_FRL_RATE_8G		3			/* 237 */
+#define HDMI_MAX_FRL_RATE_10G		4			/* 237 */
+#define HDMI_MAX_FRL_RATE_12G		5			/* 237 */
+
 #define LEGACY_CHILD_DEVICE_CONFIG_SIZE		33
 
 /* DDC Bus DDI Type 155+ */
@@ -384,8 +391,10 @@ struct child_device_config {
 			u8 reserved0:4;
 			u8 compression_structure_index:4;	/* 198 */
 			u8 reserved1:4;
-			u8 slave_port;				/* 202 */
-			u8 reserved2;
+			u8 hdmi_max_frl_rate:4;			/* 237 */
+			u8 hdmi_max_frl_rate_valid:1;		/* 237 */
+			u8 reserved2:3;
+			u8 reserved3;
 		} __packed;
 	} __packed;
 
