@@ -87,9 +87,28 @@ static const struct intel_mmio_range pvc_instance0_steering_table[] = {
 	{},
 };
 
+static const struct intel_mmio_range mtl3d_instance0_steering_table[] = {
+	{ 0x000B00, 0x000BFF },         /* SQIDI */
+	{ 0x001000, 0x001FFF },         /* SQIDI */
+	{ 0x004000, 0x0048FF },         /* GAM */
+	{ 0x008700, 0x0087FF },         /* SQIDI */
+	{ 0x00B000, 0x00B0FF },         /* NODE */
+	{ 0x00C800, 0x00CFFF },         /* GAM */
+	{ 0x00D880, 0x00D8FF },         /* NODE */
+	{ 0x00DD00, 0x00DDFF },         /* OAAL2 */
+	{},
+};
+
+static const struct intel_mmio_range mtl3d_l3bank_steering_table[] = {
+	{ 0x00B100, 0x00B3FF },
+	{},
+};
+
 void intel_gt_mcr_init(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
+	unsigned long fuse;
+	int i;
 
 	/*
 	 * An mslice is unavailable only if both the meml3 for the slice is
@@ -107,7 +126,25 @@ void intel_gt_mcr_init(struct intel_gt *gt)
 			drm_warn(&i915->drm, "mslice mask all zero!\n");
 	}
 
-	if (IS_PONTEVECCHIO(i915)) {
+	if (MEDIA_VER(i915) >= 13 && gt->type == GT_MEDIA) {
+		/*
+		 * No explicit steering tables are needed for the
+		 * media GT.
+		 */
+	} else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70)) {
+		fuse = REG_FIELD_GET(GT_L3_EXC_MASK,
+				     intel_uncore_read(gt->uncore, XEHP_FUSE4));
+
+		/*
+		 * Despite the register field being named "exclude mask" the
+		 * bits actually represent enabled banks (two banks per bit).
+		 */
+		for_each_set_bit(i, &fuse, 3)
+			gt->info.l3bank_mask |= (0x3 << 2*i);
+
+		gt->steering_table[INSTANCE0] = mtl3d_instance0_steering_table;
+		gt->steering_table[L3BANK] = mtl3d_l3bank_steering_table;
+	} else if (IS_PONTEVECCHIO(i915)) {
 		gt->steering_table[INSTANCE0] = pvc_instance0_steering_table;
 	} else if (IS_DG2(i915)) {
 		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
@@ -150,37 +187,49 @@ static u32 rw_with_mcr_steering_fw(struct intel_uncore *uncore,
 				   int group, int instance, u32 value)
 {
 	u32 mcr_mask, mcr_ss, mcr, old_mcr, val = 0;
+	i915_reg_t mcr_reg;
 
 	lockdep_assert_held(&uncore->lock);
 
-	if (GRAPHICS_VER(uncore->i915) >= 11) {
+	if (GRAPHICS_VER_FULL(uncore->i915) >= IP_VER(12, 70)) {
+		mcr_mask = MTL_MCR_GROUPID | MTL_MCR_INSTANCEID;
+		mcr_ss = REG_FIELD_PREP(MTL_MCR_GROUPID, group) |
+			REG_FIELD_PREP(MTL_MCR_INSTANCEID, instance);
+		mcr_reg = MTL_MCR_SELECTOR;
+	} else if (GRAPHICS_VER(uncore->i915) >= 11) {
 		mcr_mask = GEN11_MCR_SLICE_MASK | GEN11_MCR_SUBSLICE_MASK;
 		mcr_ss = GEN11_MCR_SLICE(group) | GEN11_MCR_SUBSLICE(instance);
-
-		/*
-		 * Wa_22013088509
-		 *
-		 * The setting of the multicast/unicast bit usually wouldn't
-		 * matter for read operations (which always return the value
-		 * from a single register instance regardless of how that bit
-		 * is set), but some platforms have a workaround requiring us
-		 * to remain in multicast mode for reads.  There's no real
-		 * downside to this, so we'll just go ahead and do so on all
-		 * platforms; we'll only clear the multicast bit from the mask
-		 * when exlicitly doing a write operation.
-		 */
-		if (rw_flag == FW_REG_WRITE)
-			mcr_mask |= GEN11_MCR_MULTICAST;
+		mcr_reg = GEN8_MCR_SELECTOR;
 	} else {
 		mcr_mask = GEN8_MCR_SLICE_MASK | GEN8_MCR_SUBSLICE_MASK;
 		mcr_ss = GEN8_MCR_SLICE(group) | GEN8_MCR_SUBSLICE(instance);
+		mcr_reg = GEN8_MCR_SELECTOR;
 	}
 
-	old_mcr = mcr = intel_uncore_read_fw(uncore, GEN8_MCR_SELECTOR);
+	/*
+	 * Wa_22013088509
+	 *
+	 * The setting of the multicast/unicast bit usually wouldn't
+	 * matter for read operations (which always return the value
+	 * from a single register instance regardless of how that bit
+	 * is set), but some platforms have a workaround requiring us
+	 * to remain in multicast mode for reads.  There's no real
+	 * downside to this, so we'll just go ahead and do so on all
+	 * platforms; we'll only clear the multicast bit from the mask
+	 * when exlicitly doing a write operation.
+	 *
+	 * The initial value is already set by the workarounds code and
+	 * the rmw cycle depends on that.
+	 */
+	if (GRAPHICS_VER(uncore->i915) >= 11 && rw_flag & FW_REG_WRITE)
+		if (!(rw_flag & FW_REG_WRITE_MULTICAST))
+			mcr_mask |= GEN11_MCR_MULTICAST;
+
+	old_mcr = mcr = intel_uncore_read_fw(uncore, mcr_reg);
 
 	mcr &= ~mcr_mask;
 	mcr |= mcr_ss;
-	intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, mcr);
+	intel_uncore_write_fw(uncore, mcr_reg, mcr);
 
 	if (rw_flag == FW_REG_READ)
 		val = intel_uncore_read_fw(uncore, reg);
@@ -190,7 +239,7 @@ static u32 rw_with_mcr_steering_fw(struct intel_uncore *uncore,
 	mcr &= ~mcr_mask;
 	mcr |= old_mcr & mcr_mask;
 
-	intel_uncore_write_fw(uncore, GEN8_MCR_SELECTOR, mcr);
+	intel_uncore_write_fw(uncore, mcr_reg, mcr);
 
 	return val;
 }
@@ -228,25 +277,6 @@ static u32 rw_with_mcr_steering(struct intel_uncore *uncore,
  * @instance: the MCR instance
  *
  * Returns the value read from an MCR register after steering toward a specific
- * group/instance.  This function assumes the caller has already acquired any
- * necessary forcewake domains; use intel_gt_mcr_read() instead for automatic
- * forcewake acquisition.
- */
-u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
-			 i915_reg_t reg,
-			 int group, int instance)
-{
-	return rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_READ, group, instance, 0);
-}
-
-/**
- * intel_gt_mcr_read - read a specific instance of an MCR register
- * @gt: GT structure
- * @reg: the MCR register to read
- * @group: the MCR group
- * @instance: the MCR instance
- *
- * Returns the value read from an MCR register after steering toward a specific
  * group/instance.
  */
 u32 intel_gt_mcr_read(struct intel_gt *gt,
@@ -256,10 +286,25 @@ u32 intel_gt_mcr_read(struct intel_gt *gt,
 	return rw_with_mcr_steering(gt->uncore, reg, FW_REG_READ, group, instance, 0);
 }
 
-static void gt_mcr_unicast_write_fw(struct intel_gt *gt, i915_reg_t reg, u32 value,
-				    int group, int instance)
+/**
+ * intel_gt_mcr_read_fw - read a specific instance of an MCR register
+ * @gt: GT structure
+ * @reg: the MCR register to read
+ * @group: the MCR group
+ * @instance: the MCR instance
+ *
+ * Returns the value read from an MCR register after steering toward a specific
+ * group/instance.  This function assumes the caller is already holding any
+ * necessary forcewake domains; use intel_gt_mcr_read() in cases where
+ * forcewake should be obtained automatically.
+
+ */
+u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
+			 i915_reg_t reg,
+			 int group, int instance)
 {
-	rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_WRITE, group, instance, value);
+	return rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_READ,
+				       group, instance, 0);
 }
 
 /**
@@ -277,6 +322,26 @@ void intel_gt_mcr_unicast_write(struct intel_gt *gt, i915_reg_t reg, u32 value,
 				int group, int instance)
 {
 	rw_with_mcr_steering(gt->uncore, reg, FW_REG_WRITE, group, instance, value);
+}
+
+/**
+ * intel_gt_mcr_unicast_write_fw - write a specific instance of an MCR register
+ * @gt: GT structure
+ * @reg: the MCR register to write
+ * @value: value to write
+ * @group: the MCR group
+ * @instance: the MCR instance
+ *
+ * Write an MCR register in unicast mode after steering toward a specific
+ * group/instance.  This function assumes the caller is already holding any
+ * necessary forcewake domains; use intel_gt_mcr_unicast_write() in cases where
+ * forcewake should be obtained automatically.
+ */
+void intel_gt_mcr_unicast_write_fw(struct intel_gt *gt, i915_reg_t reg, u32 value,
+				   int group, int instance)
+{
+	rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_WRITE,
+				group, instance, value);
 }
 
 /**
@@ -309,7 +374,7 @@ void intel_gt_mcr_unicast_rmw(struct intel_gt *gt, i915_reg_t reg,
 	val = intel_gt_mcr_read_fw(gt, reg, group, instance);
 	val &= ~clear;
 	val |= set;
-	gt_mcr_unicast_write_fw(gt, reg, val, group, instance);
+	intel_gt_mcr_unicast_write_fw(gt, reg, val, group, instance);
 
 	intel_uncore_forcewake_put__locked(uncore, fw_domains);
 	spin_unlock_irqrestore(&uncore->lock, irqflags);
@@ -554,3 +619,28 @@ void intel_gt_mcr_report_steering(struct drm_printer *p, struct intel_gt *gt,
 	}
 }
 
+/**
+ * intel_gt_mcr_get_ss_steering - returns the group/instance steering for a SS
+ * @gt: GT structure
+ * @dss: DSS ID to obtain steering for
+ * @group: pointer to storage for steering group ID
+ * @instance: pointer to storage for steering instance ID
+ *
+ * Returns the steering IDs (via the @group and @instance parameters) that
+ * correspond to a specific subslice/DSS ID.
+ */
+void intel_gt_mcr_get_ss_steering(struct intel_gt *gt, unsigned int dss,
+				   unsigned int *group, unsigned int *instance)
+{
+	if (IS_PONTEVECCHIO(gt->i915)) {
+		*group = dss / GEN_DSS_PER_CSLICE;
+		*instance = dss % GEN_DSS_PER_CSLICE;
+	} else if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
+		*group = dss / GEN_DSS_PER_GSLICE;
+		*instance = dss % GEN_DSS_PER_GSLICE;
+	} else {
+		*group = dss / GEN_MAX_SS_PER_HSW_SLICE;
+		*instance = dss % GEN_MAX_SS_PER_HSW_SLICE;
+		return;
+	}
+}

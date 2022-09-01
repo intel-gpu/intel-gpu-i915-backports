@@ -974,6 +974,28 @@ struct intel_mpllb_state {
 	u32 mpllb_sscstep;
 };
 
+struct intel_c10mpllb_state {
+	u32 clock; /* in KHz */
+	u8 pll[20];
+};
+
+struct intel_c20pll_state {
+	u32 clock; /* in kHz */
+	u16 tx[3];
+	u16 cmn[4];
+	union {
+		u16 mplla[10];
+		u16 mpllb[11];
+	};
+};
+
+struct intel_cx0pll_state {
+	union {
+		struct intel_c10mpllb_state c10mpllb_state;
+		struct intel_c20pll_state c20pll_state;
+	};
+};
+
 struct intel_crtc_state {
 	/*
 	 * uapi (drm) state. This is the software state shown to userspace.
@@ -1113,6 +1135,7 @@ struct intel_crtc_state {
 	union {
 		struct intel_dpll_hw_state dpll_hw_state;
 		struct intel_mpllb_state mpllb_state;
+		struct intel_cx0pll_state cx0pll_state;
 	};
 
 	/*
@@ -1252,6 +1275,8 @@ struct intel_crtc_state {
 		struct drm_dp_vsc_sdp vsc;
 	} infoframes;
 
+	struct hdmi_extended_metadata_packet cvt_emp;
+
 	/* HDMI scrambling status */
 	bool hdmi_scrambling;
 
@@ -1306,6 +1331,29 @@ struct intel_crtc_state {
 		u8 pipeline_full;
 		u16 flipline, vmin, vmax, guardband;
 	} vrr;
+
+	struct {
+		/* Go for FRL training */
+		bool enable;
+
+		/* Enable resource based scheduling */
+		bool rsrc_sched_en;
+
+		/* can be either 3 or 4 lanes */
+		u8 required_lanes;
+
+		/* required rate - can be 3, 6, 8, 10, 12 Gbps */
+		u8 required_rate;
+
+		/* FRL DFM Parameters */
+		u32 tb_borrowed, tb_actual, tb_threshold_min, active_char_buf_threshold;
+
+		/* FRL DFM DSC Tribytes */
+		u32 hcactive_tb, hctotal_tb;
+
+		/* Clock parameters in KHz */
+		u32 div18, link_m_ext, link_n_ext;
+	} frl;
 
 	/* Stream Splitter for eDP MSO */
 	struct {
@@ -1519,8 +1567,17 @@ struct intel_hdmi {
 	} dp_dual_mode;
 	bool has_hdmi_sink;
 	bool has_audio;
+	bool has_sink_hdmi_21;
+	int max_frl_rate;
+	int max_dsc_frl_rate;
 	struct intel_connector *attached_connector;
 	struct cec_notifier *cec_notifier;
+	struct {
+		bool trained;
+		int lanes;
+		int rate_gbps;
+		int ffe_level;
+	} frl;
 };
 
 struct intel_dp_mst_encoder;

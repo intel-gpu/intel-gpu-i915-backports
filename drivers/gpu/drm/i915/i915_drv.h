@@ -98,7 +98,6 @@
 #include "intel_step.h"
 #include "intel_uncore.h"
 #include "intel_wakeref.h"
-#include "intel_wopcm.h"
 
 #include "i915_drm_client.h"
 #include "i915_gem.h"
@@ -542,8 +541,6 @@ struct drm_i915_private {
 
 	struct intel_gvt *gvt;
 
-	struct intel_wopcm wopcm;
-
 	struct intel_dmc dmc;
 
 	struct intel_gmbus *gmbus[GMBUS_NUM_PINS];
@@ -629,6 +626,11 @@ struct drm_i915_private {
 		struct intel_global_obj obj;
 	} dbuf;
 
+	struct {
+		wait_queue_head_t waitqueue;
+		struct mutex lock;
+		struct intel_global_obj obj;
+	} pmdemand;
 	/**
 	 * wq - Driver workqueue for GEM.
 	 *
@@ -851,6 +853,10 @@ struct drm_i915_private {
 	 * i915->gts[0] == &i915->gt
 	 */
 	struct intel_gt *gts[I915_MAX_GT];
+
+	/* Quick lookup of media GT (current platforms only have one) */
+	struct intel_gt *media_gt;
+
 	struct kobject *sysfs_gt;
 
 	struct {
@@ -919,6 +925,8 @@ struct drm_i915_private {
 		spinlock_t lock; /* lock for list */
 		struct list_head list;
 		u64 session_count;
+		bool enable_eu_debug;
+		struct mutex enable_eu_debug_lock;
 	} debuggers;
 #endif
 
@@ -1037,15 +1045,6 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 	     (engine__) && (engine__)->uabi_class == (class__); \
 	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node)))
 
-/* Iterator over PVC subslices selected by subslice_mask_ */
-#define for_each_pvc_subslice(slice_, subslice_, subslice_mask_, iter_) \
-	for ((slice_) = 0, (subslice_) = 0, (iter_) = 0; \
-	     (iter_) < XEHP_BITMAP_BITS(subslice_mask_); \
-	     (iter_) = ((iter_) + 1), \
-	     (slice_) += ((iter_) % GEN_DSS_PER_CSLICE) ? 0 : 1, \
-	     (subslice_) = (iter_) % GEN_DSS_PER_CSLICE) \
-		for_each_if(test_bit(iter_, subslice_mask_.xehp))
-
 #define I915_GTT_OFFSET_NONE ((u32)-1)
 
 /*
@@ -1077,19 +1076,19 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 
 #define IP_VER(ver, rel)		((ver) << 8 | (rel))
 
-#define GRAPHICS_VER(i915)		(INTEL_INFO(i915)->graphics.ver)
-#define GRAPHICS_VER_FULL(i915)		IP_VER(INTEL_INFO(i915)->graphics.ver, \
-					       INTEL_INFO(i915)->graphics.rel)
+#define GRAPHICS_VER(i915)		(RUNTIME_INFO(i915)->graphics.ver)
+#define GRAPHICS_VER_FULL(i915)		IP_VER(RUNTIME_INFO(i915)->graphics.ver, \
+					       RUNTIME_INFO(i915)->graphics.rel)
 #define IS_GRAPHICS_VER(i915, from, until) \
 	(GRAPHICS_VER(i915) >= (from) && GRAPHICS_VER(i915) <= (until))
 
-#define MEDIA_VER(i915)			(INTEL_INFO(i915)->media.ver)
-#define MEDIA_VER_FULL(i915)		IP_VER(INTEL_INFO(i915)->media.ver, \
-					       INTEL_INFO(i915)->media.rel)
+#define MEDIA_VER(i915)			(RUNTIME_INFO(i915)->media.ver)
+#define MEDIA_VER_FULL(i915)		IP_VER(RUNTIME_INFO(i915)->media.ver, \
+					       RUNTIME_INFO(i915)->media.rel)
 #define IS_MEDIA_VER(i915, from, until) \
 	(MEDIA_VER(i915) >= (from) && MEDIA_VER(i915) <= (until))
 
-#define DISPLAY_VER(i915)	(INTEL_INFO(i915)->display.ver)
+#define DISPLAY_VER(i915)		(RUNTIME_INFO(i915)->display.ver)
 #define IS_DISPLAY_VER(i915, from, until) \
 	(DISPLAY_VER(i915) >= (from) && DISPLAY_VER(i915) <= (until))
 
@@ -1226,7 +1225,12 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_XEHPSDV(dev_priv) IS_PLATFORM(dev_priv, INTEL_XEHPSDV)
 #define IS_DG2(dev_priv)	IS_PLATFORM(dev_priv, INTEL_DG2)
 #define IS_PONTEVECCHIO(dev_priv) IS_PLATFORM(dev_priv, INTEL_PONTEVECCHIO)
+#define IS_METEORLAKE(dev_priv) IS_PLATFORM(dev_priv, INTEL_METEORLAKE)
 
+#define IS_METEORLAKE_M(dev_priv) \
+	IS_SUBPLATFORM(dev_priv, INTEL_METEORLAKE, INTEL_SUBPLATFORM_M)
+#define IS_METEORLAKE_P(dev_priv) \
+	IS_SUBPLATFORM(dev_priv, INTEL_METEORLAKE, INTEL_SUBPLATFORM_P)
 #define IS_DG2_G10(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G10)
 #define IS_DG2_G11(dev_priv) \
@@ -1356,6 +1360,14 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_XEHPSDV_GRAPHICS_STEP(__i915, since, until) \
 	(IS_XEHPSDV(__i915) && IS_GRAPHICS_STEP(__i915, since, until))
 
+#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
+	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
+	 IS_GRAPHICS_STEP(__i915, since, until))
+
+#define IS_MTL_DISPLAY_STEP(__i915, since, until) \
+	(DISPLAY_VER(__i915) == 14 && \
+	 IS_DISPLAY_STEP(__i915, since, until))
+
 /*
  * DG2 hardware steppings are a bit unusual.  The hardware design was forked to
  * create three variants (G10, G11, and G12) which each have distinct
@@ -1484,7 +1496,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_IPS(dev_priv)	(IS_HSW_ULT(dev_priv) || IS_BROADWELL(dev_priv))
 
 #define HAS_DP_MST(dev_priv)	(INTEL_INFO(dev_priv)->display.has_dp_mst)
-#define HAS_DP20(dev_priv)	(IS_DG2(dev_priv))
+#define HAS_DP20(dev_priv)	(IS_DG2(dev_priv) || DISPLAY_VER(dev_priv) >= 14)
 
 #define HAS_CDCLK_CRAWL(dev_priv)	 (INTEL_INFO(dev_priv)->display.has_cdclk_crawl)
 #define HAS_DDI(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_ddi)
@@ -1541,12 +1553,15 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_FULL_PS64(dev_priv) (INTEL_INFO(dev_priv)->has_full_ps64)
 
+#define HAS_GMD_ID(i915)	INTEL_INFO(i915)->has_gmd_id
+
 #define HAS_IPC(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_ipc)
 
 #define HAS_REGION(i915, i) (INTEL_INFO(i915)->memory_regions & (i))
 #define HAS_LMEM(i915) HAS_REGION(i915, REGION_LMEM)
 #define HAS_LMEM_SR(i915) (INTEL_INFO(i915)->has_lmem_sr)
 #define HAS_REMOTE_TILES(dev_priv)   (INTEL_INFO(dev_priv)->has_remote_tiles)
+#define HAS_EXTRA_GTS(dev_priv)   (INTEL_INFO(dev_priv)->extra_gts)
 #define HAS_IAF(dev_priv)   (INTEL_INFO(dev_priv)->has_iaf)
 
 /*
@@ -1611,12 +1626,16 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	(INTEL_INFO(dev_priv)->has_guc_deprivilege)
 
 #define HAS_PERCTX_PREEMPT_CTRL(i915) \
-	((GRAPHICS_VER(i915) >= 9) &&  GRAPHICS_VER_FULL(i915) < IP_VER(12, 55))
+	((GRAPHICS_VER(i915) >= 9) && \
+	 /* Wa_14015141709:dg2,mtl */ \
+	 !IS_DG2(i915) && \
+	 !IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) && \
+	 !IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0))
 
 #define HAS_D12_PLANE_MINIMIZATION(dev_priv) (IS_ROCKETLAKE(dev_priv) || \
 					      IS_ALDERLAKE_S(dev_priv))
 
-#define HAS_MBUS_JOINING(i915) (IS_ALDERLAKE_P(i915))
+#define HAS_MBUS_JOINING(i915) (IS_ALDERLAKE_P(i915) || DISPLAY_VER(i915) >= 14)
 
 #define HAS_3D_PIPELINE(i915)	(INTEL_INFO(i915)->has_3d_pipeline)
 
@@ -1641,6 +1660,9 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_MEM_FENCE_SUPPORT(i915) ((i915)->params.enable_mem_fence && IS_PONTEVECCHIO((i915)))
 
 #define HAS_LMTT_LVL2(i915) (INTEL_INFO(i915)->has_lmtt_lvl2)
+
+#define HAS_BAR2_SMEM_STOLEN(i915) (!HAS_LMEM(i915) && \
+				    GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
 
 static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
 {

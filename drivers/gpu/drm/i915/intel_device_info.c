@@ -73,6 +73,7 @@ static const char * const platform_names[] = {
 	PLATFORM_NAME(XEHPSDV),
 	PLATFORM_NAME(DG2),
 	PLATFORM_NAME(PONTEVECCHIO),
+	PLATFORM_NAME(METEORLAKE),
 };
 #undef PLATFORM_NAME
 
@@ -90,22 +91,6 @@ const char *intel_platform_name(enum intel_platform platform)
 void intel_device_info_print_static(const struct intel_device_info *info,
 				    struct drm_printer *p)
 {
-	if (info->graphics.rel)
-		drm_printf(p, "graphics version: %u.%02u\n", info->graphics.ver,
-			   info->graphics.rel);
-	else
-		drm_printf(p, "graphics version: %u\n", info->graphics.ver);
-
-	if (info->media.rel)
-		drm_printf(p, "media version: %u.%02u\n", info->media.ver, info->media.rel);
-	else
-		drm_printf(p, "media version: %u\n", info->media.ver);
-
-	if (info->display.rel)
-		drm_printf(p, "display version: %u.%02u\n", info->display.ver, info->display.rel);
-	else
-		drm_printf(p, "display version: %u\n", info->display.ver);
-
 	drm_printf(p, "gt: %d\n", info->gt);
 	drm_printf(p, "memory-regions: %x\n", info->memory_regions);
 	drm_printf(p, "page-sizes: %x\n", info->page_sizes);
@@ -127,6 +112,22 @@ void intel_device_info_print_static(const struct intel_device_info *info,
 void intel_device_info_print_runtime(const struct intel_runtime_info *info,
 				     struct drm_printer *p)
 {
+	if (info->graphics.rel)
+		drm_printf(p, "graphics version: %u.%02u\n", info->graphics.ver,
+			   info->graphics.rel);
+	else
+		drm_printf(p, "graphics version: %u\n", info->graphics.ver);
+
+	if (info->media.rel)
+		drm_printf(p, "media version: %u.%02u\n", info->media.ver, info->media.rel);
+	else
+		drm_printf(p, "media version: %u\n", info->media.ver);
+
+	if (info->display.rel)
+		drm_printf(p, "display version: %u.%02u\n", info->display.ver, info->display.rel);
+	else
+		drm_printf(p, "display version: %u\n", info->display.ver);
+
 	drm_printf(p, "rawclk rate: %u kHz\n", info->rawclk_freq);
 }
 
@@ -202,6 +203,14 @@ static const u16 subplatform_g12_ids[] = {
 	INTEL_DG2_G12_IDS(0),
 };
 
+static const u16 subplatform_m_ids[] = {
+	INTEL_MTL_M_IDS(0),
+};
+
+static const u16 subplatform_p_ids[] = {
+	INTEL_MTL_P_IDS(0),
+};
+
 static bool find_devid(u16 id, const u16 *p, unsigned int num)
 {
 	for (; num; num--, p++) {
@@ -256,6 +265,12 @@ void intel_device_info_subplatform_init(struct drm_i915_private *i915)
 	} else if (find_devid(devid, subplatform_g12_ids,
 			      ARRAY_SIZE(subplatform_g12_ids))) {
 		mask = BIT(INTEL_SUBPLATFORM_G12);
+	} else if (find_devid(devid, subplatform_m_ids,
+			      ARRAY_SIZE(subplatform_m_ids))) {
+		mask = BIT(INTEL_SUBPLATFORM_M);
+	} else if (find_devid(devid, subplatform_p_ids,
+			      ARRAY_SIZE(subplatform_p_ids))) {
+		mask = BIT(INTEL_SUBPLATFORM_P);
 	}
 
 	GEM_BUG_ON(mask & ~INTEL_SUBPLATFORM_MASK);

@@ -259,16 +259,8 @@ void intel_timeline_enter(struct intel_timeline *tl)
 		return;
 
 	spin_lock(&timelines->lock);
-	if (!atomic_fetch_inc(&tl->active_count)) {
-		/*
-		 * The HWSP is volatile, and may have been lost while inactive,
-		 * e.g. across suspend/resume. Be paranoid, and ensure that
-		 * the HWSP value matches our seqno so we don't proclaim
-		 * the next request as already complete.
-		 */
-		intel_timeline_reset_seqno(tl);
+	if (!atomic_fetch_inc(&tl->active_count))
 		list_add_tail(&tl->link, &timelines->active_list);
-	}
 	spin_unlock(&timelines->lock);
 }
 

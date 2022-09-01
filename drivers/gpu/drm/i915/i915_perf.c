@@ -333,6 +333,8 @@ static struct i915_oa_format oa_formats[PRELIM_I915_OA_FORMAT_MAX] = {
 	[PRELIM_I915_OA_FORMAT_A38u64_R2u64_B8_C8]	= { 1, 448, 0, HDR_64_BIT },
 	[PRELIM_I915_OAM_FORMAT_A2u64_R2u64_B8_C8]	= { 1, 128, TYPE_OAM, HDR_64_BIT },
 	[PRELIM_I915_OAC_FORMAT_A22u32_R2u32_B8_C8]	= { 2, 192, 0, HDR_64_BIT },
+	[PRELIM_I915_OAM_FORMAT_MPEC8u64_B8_C8]	= { 1, 192, TYPE_OAM, HDR_64_BIT },
+	[PRELIM_I915_OAM_FORMAT_MPEC8u32_B8_C8]	= { 2, 128, TYPE_OAM, HDR_64_BIT },
 };
 
 static const u32 xehpsdv_oa_base[] = {
@@ -354,6 +356,11 @@ static const u32 pvc_oa_base[] = {
 	[PERF_GROUP_OAM_0] = 0x13000,
 	[PERF_GROUP_OAM_1] = 0x13200,
 	[PERF_GROUP_OAM_2] = 0x13400,
+};
+
+/* PERF_GROUP_OAG is unused for oa_base, drop it for mtl */
+static const u32 mtl_oa_base[] = {
+	[PERF_GROUP_OAM_SAMEDIA_0] = 0x393000,
 };
 
 #define SAMPLE_OA_REPORT      (1<<0)
@@ -1720,14 +1727,19 @@ static bool engine_supports_oa(struct drm_i915_private *i915,
 		       engine->class == COMPUTE_CLASS ||
 		       engine->class == VIDEO_DECODE_CLASS ||
 		       engine->class == VIDEO_ENHANCEMENT_CLASS;
+	case INTEL_METEORLAKE:
+		return engine->class == RENDER_CLASS ||
+		       ((engine->class == VIDEO_DECODE_CLASS ||
+			 engine->class == VIDEO_ENHANCEMENT_CLASS) &&
+			engine->gt->type == GT_MEDIA);
 	default:
 		return engine->class == RENDER_CLASS;
 	}
 }
 
-static bool engine_class_supports_oa_format(u8 class, int type)
+static bool engine_class_supports_oa_format(struct intel_engine_cs *engine, int type)
 {
-	switch (class) {
+	switch (engine->class) {
 	case RENDER_CLASS:
 	case COMPUTE_CLASS:
 		return type == TYPE_OAG;
@@ -2204,8 +2216,7 @@ static u32 *save_restore_register(struct i915_perf_stream *stream, u32 *cs,
 	for (d = 0; d < dword_count; d++) {
 		*cs++ = cmd;
 		*cs++ = i915_mmio_reg_offset(reg) + 4 * d;
-		*cs++ = intel_gt_scratch_offset(stream->engine->gt,
-						offset) + 4 * d;
+		*cs++ = i915_ggtt_offset(stream->noa_wait) + offset + 4 * d;
 		*cs++ = 0;
 	}
 
@@ -2238,7 +2249,13 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 					  MI_PREDICATE_RESULT_2_ENGINE(base) :
 					  MI_PREDICATE_RESULT_1(RENDER_RING_BASE);
 
-	bo = i915_gem_object_create_internal(i915, 4096);
+	/*
+	 * gt->scratch was being used to save/restore the GPR registers, but on
+	 * some platforms the scratch used stolen lmem. An MI_SRM to this memory
+	 * region caused an engine hang. Instead allocate and additioanl page
+	 * here to save/restore GPR registers
+	 */
+	bo = i915_gem_object_create_internal(i915, 8192);
 	if (IS_ERR(bo)) {
 		drm_err(&i915->drm,
 			"Failed to allocate NOA wait batchbuffer\n");
@@ -2272,14 +2289,19 @@ retry:
 		goto err_unpin;
 	}
 
+	stream->noa_wait = vma;
+
+#define GPR_SAVE_OFFSET 4096
+#define PREDICATE_SAVE_OFFSET 4160
+
 	/* Save registers. */
 	for (i = 0; i < N_CS_GPR; i++)
 		cs = save_restore_register(
 			stream, cs, true /* save */, CS_GPR(i),
-			INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR + 8 * i, 2);
+			GPR_SAVE_OFFSET + 8 * i, 2);
 	cs = save_restore_register(
 		stream, cs, true /* save */, mi_predicate_result,
-		INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1, 1);
+		PREDICATE_SAVE_OFFSET, 1);
 
 	/* First timestamp snapshot location. */
 	ts0 = cs;
@@ -2395,10 +2417,10 @@ retry:
 	for (i = 0; i < N_CS_GPR; i++)
 		cs = save_restore_register(
 			stream, cs, false /* restore */, CS_GPR(i),
-			INTEL_GT_SCRATCH_FIELD_PERF_CS_GPR + 8 * i, 2);
+			GPR_SAVE_OFFSET + 8 * i, 2);
 	cs = save_restore_register(
 		stream, cs, false /* restore */, mi_predicate_result,
-		INTEL_GT_SCRATCH_FIELD_PERF_PREDICATE_RESULT_1, 1);
+		PREDICATE_SAVE_OFFSET, 1);
 
 	/* And return to the ring. */
 	*cs++ = MI_BATCH_BUFFER_END;
@@ -2408,7 +2430,6 @@ retry:
 	i915_gem_object_flush_map(bo);
 	__i915_gem_object_release_map(bo);
 
-	stream->noa_wait = vma;
 	goto out_ww;
 
 err_unpin:
@@ -3619,8 +3640,9 @@ u32 i915_perf_oa_timestamp_frequency(struct drm_i915_private *i915)
 	/*
 	 * Wa_18013179988:dg2
 	 * Wa_14015568240:pvc
+	 * Wa_<FIXME>:mtl:
 	 */
-	if (IS_DG2(i915) || IS_PONTEVECCHIO(i915)) {
+	if (IS_DG2(i915) || IS_PONTEVECCHIO(i915) || IS_METEORLAKE(i915)) {
 		intel_wakeref_t wakeref;
 		u32 reg, shift;
 
@@ -4759,7 +4781,7 @@ static int read_properties_unlocked(struct i915_perf *perf,
 
 	i = array_index_nospec(props->oa_format, PRELIM_I915_OA_FORMAT_MAX);
 	f = &perf->oa_formats[i];
-	if (!engine_class_supports_oa_format(props->engine->class, f->type)) {
+	if (!engine_class_supports_oa_format(props->engine, f->type)) {
 		DRM_DEBUG("Invalid OA format %d for class %d\n",
 			  f->type, props->engine->class);
 		return -EINVAL;
@@ -4996,6 +5018,19 @@ static const struct i915_range gen12_oa_mux_regs[] = {
 	{}
 };
 
+/*
+ * Ref: 14010536224:
+ * 0x20cc is repurposed on MTL, so use a separate array for MTL. Also add the
+ * MPES/MPEC registers.
+ */
+static const struct i915_range mtl_oa_mux_regs[] = {
+	{ .start = 0x0d00, .end = 0x0d04 },	/* RPM_CONFIG[0-1] */
+	{ .start = 0x0d0c, .end = 0x0d2c },	/* NOA_CONFIG[0-8] */
+	{ .start = 0x9840, .end = 0x9840 },	/* GDT_CHICKEN_BITS */
+	{ .start = 0x9884, .end = 0x9888 },	/* NOA_WRITE */
+	{ .start = 0x393200, .end = 0x39323C },	/* MPES[0-7] */
+};
+
 static bool gen7_is_valid_b_counter_addr(struct i915_perf *perf, u32 addr)
 {
 	return reg_in_range_table(addr, gen7_oa_b_counters);
@@ -5071,7 +5106,10 @@ static bool xehp_is_valid_b_counter_addr(struct i915_perf *perf, u32 addr)
 
 static bool gen12_is_valid_mux_addr(struct i915_perf *perf, u32 addr)
 {
-	return reg_in_range_table(addr, gen12_oa_mux_regs);
+	if (IS_METEORLAKE(perf->i915))
+		return reg_in_range_table(addr, mtl_oa_mux_regs);
+	else
+		return reg_in_range_table(addr, gen12_oa_mux_regs);
 }
 
 static u32 mask_reg_value(u32 reg, u32 val)
@@ -5440,6 +5478,8 @@ static u32 __num_perf_groups_per_gt(struct intel_gt *gt)
 		return 3;
 	case INTEL_XEHPSDV:
 		return 5;
+	case INTEL_METEORLAKE:
+		return 1;
 	default:
 		return 1;
 	}
@@ -5452,6 +5492,16 @@ static u32 __oam_engine_group(struct intel_engine_cs *engine)
 	u32 group = PERF_GROUP_INVALID;
 
 	switch (platform) {
+	case INTEL_METEORLAKE:
+		/*
+		 * There's 1 SAMEDIA gt and 1 OAM per SAMEDIA gt. All media slices
+		 * within the gt use the same OAM. All MTL SKUs list 1 SA MEDIA.
+		 */
+		drm_WARN_ON(&engine->i915->drm,
+			    engine->gt->type != GT_MEDIA);
+
+		group = PERF_GROUP_OAM_SAMEDIA_0;
+		break;
 	case INTEL_PONTEVECCHIO:
 		/*
 		 * PVC mappings:
@@ -5556,8 +5606,10 @@ static void oa_init_regs(struct intel_gt *gt, u32 id)
 	struct i915_perf_group *group = &gt->perf.group[id];
 	struct i915_perf_regs *regs = &group->regs;
 
-	if (id == PERF_GROUP_OAG)
+	if (id == PERF_GROUP_OAG && gt->type != GT_MEDIA)
 		*regs = __oag_regs();
+	else if (IS_METEORLAKE(gt->i915))
+		*regs = __oam_regs(mtl_oa_base[id]);
 	else if (IS_PONTEVECCHIO(gt->i915))
 		*regs = __oam_regs(pvc_oa_base[id]);
 	else if (IS_DG2(gt->i915))
@@ -5659,7 +5711,7 @@ static int oa_init_engine_groups(struct i915_perf *perf)
 	struct intel_gt *gt;
 	int i, ret;
 
-	for_each_gt(perf->i915, i, gt) {
+	for_each_gt(gt, perf->i915, i) {
 		ret = oa_init_gt(gt);
 		if (ret)
 			return ret;
@@ -5675,7 +5727,7 @@ static u16 oa_init_default_class(struct i915_perf *perf)
 	struct intel_gt *gt;
 	int i, j;
 
-	for_each_gt(perf->i915, i, gt) {
+	for_each_gt(gt, perf->i915, i) {
 		for (j = 0; j < gt->perf.num_perf_groups; j++) {
 			struct i915_perf_group *g = &gt->perf.group[j];
 
@@ -5767,6 +5819,17 @@ static void oa_init_supported_formats(struct i915_perf *perf)
 		oa_format_add(perf, PRELIM_I915_OAC_FORMAT_A22u32_R2u32_B8_C8);
 		break;
 
+	case INTEL_METEORLAKE:
+		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OA_FORMAT_A24u40_A14u32_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A36u64_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OAC_FORMAT_A24u64_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OA_FORMAT_A38u64_R2u64_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OAC_FORMAT_A22u32_R2u32_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OAM_FORMAT_MPEC8u64_B8_C8);
+		oa_format_add(perf, PRELIM_I915_OAM_FORMAT_MPEC8u32_B8_C8);
+		break;
+
 	default:
 		MISSING_CASE(platform);
 	}
@@ -5800,6 +5863,7 @@ static void gen12_init_info(struct drm_i915_private *i915)
 			XEHPSDV_CTX_CCS_PWR_CLK_STATE;
 		break;
 	case INTEL_DG2:
+	case INTEL_METEORLAKE:
 		perf->ctx_pwr_clk_state_offset[PRELIM_I915_ENGINE_CLASS_COMPUTE] =
 			CTX_R_PWR_CLK_STATE;
 		break;
@@ -5941,7 +6005,7 @@ int i915_perf_init(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		int i, ret;
 
-		for_each_gt(i915, i, gt)
+		for_each_gt(gt, i915, i)
 			mutex_init(&gt->perf.lock);
 
 		/* Choose a representative limit */
@@ -6022,7 +6086,7 @@ void i915_perf_fini(struct drm_i915_private *i915)
 	if (!perf->i915)
 		return;
 
-	for_each_gt(perf->i915, i, gt)
+	for_each_gt(gt, perf->i915, i)
 		kfree(gt->perf.group);
 
 	idr_for_each(&perf->metrics_idr, destroy_config, perf);
@@ -6092,8 +6156,10 @@ int i915_perf_ioctl_version(void)
 	 * 1005: Supports OAC and hence MI_REPORT_PERF_COUNTER for compute class.
 	 *
 	 * 1006: Added support for EU stall monitoring.
+	 *
+	 * 1007: Added support for MPES configuration.
 	 */
-	return 1006;
+	return 1007;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

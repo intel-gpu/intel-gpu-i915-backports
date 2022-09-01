@@ -443,15 +443,11 @@ static inline struct page *i915_vma_first_page(struct i915_vma *vma)
  * True if the vma has a fence, false otherwise.
  */
 int __must_check i915_vma_pin_fence(struct i915_vma *vma);
+int __must_check i915_vma_pin_fence_wait(struct i915_vma *vma);
 void i915_vma_revoke_fence(struct i915_vma *vma);
 
 int __i915_vma_pin_fence(struct i915_vma *vma);
-
-static inline void __i915_vma_unpin_fence(struct i915_vma *vma)
-{
-	GEM_BUG_ON(atomic_read(&vma->fence->pin_count) <= 0);
-	atomic_dec(&vma->fence->pin_count);
-}
+void __i915_vma_unpin_fence(struct i915_vma *vma);
 
 /**
  * i915_vma_unpin_fence - unpin fencing state

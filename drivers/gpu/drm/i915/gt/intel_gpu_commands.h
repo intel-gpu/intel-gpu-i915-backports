@@ -21,6 +21,7 @@
 #define INSTR_CLIENT_SHIFT      29
 #define   INSTR_MI_CLIENT       0x0
 #define   INSTR_BC_CLIENT       0x2
+#define   INSTR_GSC_CLIENT      0x2 /* MTL + */
 #define   INSTR_RC_CLIENT       0x3
 #define INSTR_SUBCLIENT_SHIFT   27
 #define INSTR_SUBCLIENT_MASK    0x18000000
@@ -463,6 +464,16 @@
 
 #define COLOR_BLT     ((0x2<<29)|(0x40<<22))
 #define SRC_COPY_BLT  ((0x2<<29)|(0x43<<22))
+
+/* Bspec 63347*/
+#define GSC_INSTR(opcode, data, flags) \
+	(__INSTR(INSTR_GSC_CLIENT) | (opcode) << 22 | (data) << 9 | (flags))
+
+/* bspec 65346 */
+#define GSC_FW_LOAD GSC_INSTR(1, 0, 2)
+#define   HECI1_FW_LIMIT_VALID (1<<31)
+
+#define GSC_HECI_CMD_PKT GSC_INSTR(0, 0, 6)
 
 /*
  * Used to convert an address to canonical form based on size of

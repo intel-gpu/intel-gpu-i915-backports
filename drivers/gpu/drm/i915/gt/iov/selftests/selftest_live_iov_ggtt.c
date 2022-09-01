@@ -413,7 +413,7 @@ static int igt_pf_ggtt(void *arg)
 
 	GEM_BUG_ON(!IS_SRIOV_PF(i915));
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		err = igt_pf_iov_ggtt(&gt->iov);
 		if (err < 0)
 			return err;
@@ -474,7 +474,7 @@ static int igt_vf_own_ggtt(void *arg)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		err = igt_vf_iov_own_ggtt(&gt->iov, false);
 		if (err < 0)
 			return err;
@@ -542,7 +542,7 @@ static int igt_vf_own_ggtt_via_pf(void *arg)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		err = igt_vf_iov_own_ggtt_via_pf(&gt->iov);
 		if (err < 0)
 			return err;
@@ -715,7 +715,7 @@ static int igt_vf_other_ggtt(void *arg)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		err = igt_vf_iov_other_ggtt(&gt->iov, false);
 		if (err < 0)
 			return err;
@@ -733,7 +733,7 @@ static int igt_vf_other_ggtt_via_pf(void *arg)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		err = igt_vf_iov_other_ggtt(&gt->iov, true);
 		if (err < 0)
 			return err;

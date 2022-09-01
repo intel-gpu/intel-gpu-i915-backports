@@ -183,6 +183,7 @@ static int vm_bind_ext_uuid(struct i915_user_extension __user *base,
 
 #define TGL_MAX_PAT_INDEX	3
 #define PVC_MAX_PAT_INDEX	7
+#define MTL_MAX_PAT_INDEX	4
 
 static int vm_bind_set_pat(struct i915_user_extension __user *base,
 			   void *data)
@@ -195,7 +196,9 @@ static int vm_bind_set_pat(struct i915_user_extension __user *base,
 	if (copy_from_user(&ext, base, sizeof(ext)))
 		return -EFAULT;
 
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_METEORLAKE(i915))
+		max_pat_index = MTL_MAX_PAT_INDEX;
+	else if (IS_PONTEVECCHIO(i915))
 		max_pat_index = PVC_MAX_PAT_INDEX;
 	else if (GRAPHICS_VER(i915) >= 12)
 		max_pat_index = TGL_MAX_PAT_INDEX;

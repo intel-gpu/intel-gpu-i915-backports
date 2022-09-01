@@ -3465,6 +3465,7 @@ static int init_bxt_mmio_info(struct intel_gvt *gvt)
 	MMIO_D(ERROR_GEN6, D_BXT);
 	MMIO_D(DONE_REG, D_BXT);
 	MMIO_D(EIR, D_BXT);
+	MMIO_D(PGTBL_ER, D_BXT);
 	MMIO_D(_MMIO(0x4194), D_BXT);
 	MMIO_D(_MMIO(0x4294), D_BXT);
 	MMIO_D(_MMIO(0x4494), D_BXT);

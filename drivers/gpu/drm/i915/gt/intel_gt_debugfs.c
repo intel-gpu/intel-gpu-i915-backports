@@ -248,6 +248,17 @@ int i915_gt_debugfs_simple_attr_release(struct inode *inode, struct file *file)
 	return ret;
 }
 
+static int name_show(struct seq_file *m, void *data)
+{
+	struct drm_printer p = drm_seq_file_printer(m);
+	struct intel_gt *gt = m->private;
+
+	drm_printf(&p, "%s\n", gt->name);
+
+	return 0;
+}
+DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(name);
+
 static void gt_debugfs_register(struct intel_gt *gt, struct dentry *root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
@@ -256,6 +267,7 @@ static void gt_debugfs_register(struct intel_gt *gt, struct dentry *root)
 		{ "fake_int_slow_ns", &fake_int_slow_fops, NULL },
 		{ "fake_int_fast_ns", &fake_int_fast_fops, NULL },
 		{ "debug_pages", &debug_pages_fops, NULL },
+		{ "name", &name_fops },
 	};
 
 	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);

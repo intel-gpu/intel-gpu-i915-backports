@@ -43,6 +43,7 @@
 #include "i915_sysfs.h"
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
+#include "i915_debugger.h"
 
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
@@ -269,6 +270,10 @@ lmem_avail_bytes_show(struct device *kdev, struct device_attribute *attr, char *
 #define I915_DEVICE_ATTR_WO(_name, _store) \
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0200, NULL, i915_sysfs_store), NULL, _store}
+
+#define I915_DEVICE_ATTR_RW(_name, _mode, _show, _store) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store), _show, _store}
 
 static I915_DEVICE_ATTR_RO(lmem_total_bytes, lmem_total_bytes_show);
 static I915_DEVICE_ATTR_RO(lmem_avail_bytes, lmem_avail_bytes_show);
@@ -506,7 +511,7 @@ static ssize_t quiesce_gpu_store(struct device *dev,
 		flush_workqueue(system_wq);
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_terminally_wedged(gt))
 			continue;
 		intel_gt_set_wedged(gt);
@@ -571,6 +576,59 @@ i915_sysfs_store(struct device *dev, struct device_attribute *attr, const char
 
 	return count;
 }
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+
+static ssize_t enable_eu_debug_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+
+	return sysfs_emit(buf, "%u\n", i915->debuggers.enable_eu_debug);
+}
+
+static ssize_t enable_eu_debug_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+	unsigned int val;
+	int err;
+
+	err = kstrtouint(buf, 10, &val);
+	if (err)
+		return err;
+
+	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
+	if (!val && !list_empty(&i915->debuggers.list)) {
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+		return -EBUSY;
+	}
+
+	if (val && !i915->debuggers.enable_eu_debug)
+		i915_debugger_enable(i915);
+
+	i915->debuggers.enable_eu_debug = !!val;
+	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+
+	return count;
+}
+
+static I915_DEVICE_ATTR_RW(prelim_enable_eu_debug, 0644, enable_eu_debug_show,
+			   enable_eu_debug_store);
+
+static void i915_setup_enable_eu_debug_sysfs(struct device *kdev)
+{
+	if (sysfs_create_file(&kdev->kobj,
+			      &dev_attr_prelim_enable_eu_debug.attr.attr))
+		dev_warn(kdev, "Failed to add prelim_enable_eu_deubg sysfs param\n");
+}
+
+#else /* CPTCFG_DRM_I915_DEBUGGER */
+
+static void i915_setup_enable_eu_debug_sysfs(struct device *kdev) {}
+
+#endif /* CPTCFG_DRM_I915_DEBUGGER */
 
 static ssize_t iaf_socket_id_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
@@ -643,6 +701,8 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	i915_setup_quiesce_gpu_sysfs(dev_priv);
 
 	intel_mem_health_report_sysfs(dev_priv);
+
+	i915_setup_enable_eu_debug_sysfs(kdev);
 }
 
 void i915_teardown_sysfs(struct drm_i915_private *dev_priv)

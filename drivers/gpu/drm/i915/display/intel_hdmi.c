@@ -27,6 +27,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/gcd.h>
 #include <linux/hdmi.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
@@ -38,11 +39,13 @@
 #include <drm/drm_hdcp.h>
 #include <drm/drm_scdc_helper.h>
 #include <drm/intel_lpe_audio.h>
+#include <drm/drm_frl_dfm_helper.h>
 
 #include "i915_debugfs.h"
 #include "i915_drv.h"
 #include "intel_atomic.h"
 #include "intel_connector.h"
+#include "intel_cx0_phy.h"
 #include "intel_ddi.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
@@ -53,8 +56,22 @@
 #include "intel_lspcon.h"
 #include "intel_panel.h"
 #include "intel_snps_phy.h"
+#include "intel_vdsc.h"
 
-static struct drm_i915_private *intel_hdmi_to_i915(struct intel_hdmi *intel_hdmi)
+static int
+get_dsc_compressed_bpp(int num_slices, int slice_width, int hdmi_max_chunk_bytes,
+		       int src_fractional_bpp, int min_dsc_bpp, int max_dsc_bpp);
+
+static void
+get_dsc_min_max_bpp(enum intel_output_format output_format, u8 bpc,
+		    bool hdmi_all_bpp, int *min_dsc_bpp, int *max_dsc_bpp);
+
+static int get_dsc_slice_count(struct intel_hdmi *intel_hdmi,
+			       const struct drm_display_mode *mode,
+			       enum intel_output_format output_format,
+			       bool use_bigjoiner);
+
+inline struct drm_i915_private *intel_hdmi_to_i915(struct intel_hdmi *intel_hdmi)
 {
 	return to_i915(hdmi_to_dig_port(intel_hdmi)->base.base.dev);
 }
@@ -534,8 +551,16 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
 			       0);
 
 	/* Wa_14013475917 */
-	if (DISPLAY_VER(dev_priv) == 13 && crtc_state->has_psr &&
+	if ((DISPLAY_VER(dev_priv) == 13 ||
+	     IS_MTL_DISPLAY_STEP(dev_priv, STEP_A0, STEP_B0)) && crtc_state->has_psr &&
 	    type == DP_SDP_VSC)
+		return;
+	/*
+	 * VIDEO_DIP_CTL's PPS bit is not to be set for HDMI CVTEM PPS, though
+	 * the DP_SDP_DATA is used to send the packets.
+	 */
+	if (DISPLAY_VER(dev_priv) >= 14 && crtc_state->cvt_emp.enabled &&
+	    type == DP_SDP_PPS)
 		return;
 
 	val |= hsw_infoframe_enable(type);
@@ -1354,11 +1379,22 @@ static int intel_hdmi_hdcp_read_bksv(struct intel_digital_port *dig_port,
 	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 
 	int ret;
-	ret = intel_hdmi_hdcp_read(dig_port, DRM_HDCP_DDC_BKSV, bksv,
+	/*
+	 * According to HDMI 2.1 specs only HDCP 2.x can be enabled when
+	 * frl is being used therefore HDCP 1.4 is not supported and 
+	 * reading bksv is also not supported.
+	 */
+	if (dig_port->hdmi.frl.trained) {
+		ret = -ENOTSUPP;
+		drm_dbg_kms(&i915->drm, "Not reading Bksv as frl is enabled(%d)\n",
+				ret);
+	} else {
+		ret = intel_hdmi_hdcp_read(dig_port, DRM_HDCP_DDC_BKSV, bksv,
 				   DRM_HDCP_KSV_LEN);
-	if (ret)
-		drm_dbg_kms(&i915->drm, "Read Bksv over DDC failed (%d)\n",
-			    ret);
+		if (ret)
+			drm_dbg_kms(&i915->drm, "Read Bksv over DDC failed (%d)\n",
+				    ret);
+	}
 	return ret;
 }
 
@@ -1806,9 +1842,9 @@ static bool intel_hdmi_is_ycbcr420(const struct intel_crtc_state *crtc_state)
 	return crtc_state->output_format == INTEL_OUTPUT_FORMAT_YCBCR420;
 }
 
-static int hdmi_port_clock_limit(struct intel_hdmi *hdmi,
-				 bool respect_downstream_limits,
-				 bool has_hdmi_sink)
+static int hdmi_port_tmds_clock_limit(struct intel_hdmi *hdmi,
+				      bool respect_downstream_limits,
+				      bool has_hdmi_sink)
 {
 	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
 	int max_tmds_clock = intel_hdmi_source_max_tmds_clock(encoder);
@@ -1832,17 +1868,17 @@ static int hdmi_port_clock_limit(struct intel_hdmi *hdmi,
 }
 
 static enum drm_mode_status
-hdmi_port_clock_valid(struct intel_hdmi *hdmi,
-		      int clock, bool respect_downstream_limits,
-		      bool has_hdmi_sink)
+hdmi_port_tmds_clock_valid(struct intel_hdmi *hdmi,
+			   int clock, bool respect_downstream_limits,
+			   bool has_hdmi_sink)
 {
 	struct drm_i915_private *dev_priv = intel_hdmi_to_i915(hdmi);
 	enum phy phy = intel_port_to_phy(dev_priv, hdmi_to_dig_port(hdmi)->base.port);
 
 	if (clock < 25000)
 		return MODE_CLOCK_LOW;
-	if (clock > hdmi_port_clock_limit(hdmi, respect_downstream_limits,
-					  has_hdmi_sink))
+	if (clock > hdmi_port_tmds_clock_limit(hdmi, respect_downstream_limits,
+					       has_hdmi_sink))
 		return MODE_CLOCK_HIGH;
 
 	/* GLK DPLL can't generate 446-480 MHz */
@@ -1873,10 +1909,101 @@ hdmi_port_clock_valid(struct intel_hdmi *hdmi,
 	 * FIXME: We will hopefully get an algorithmic way of programming
 	 * the MPLLB for HDMI in the future.
 	 */
-	if (IS_DG2(dev_priv))
+	if (DISPLAY_VER(dev_priv) >= 14)
+		return intel_cx0_phy_check_hdmi_link_rate(hdmi, clock);
+	else if (IS_DG2(dev_priv))
 		return intel_snps_phy_check_hdmi_link_rate(clock);
 
 	return MODE_OK;
+}
+
+/*
+ * Returns the Fixed rate per lane required to support given pixel rate.
+ * Returns 0 for pixel rate demanding > 12 Gbps
+ */
+static int intel_hdmi_frl_required_bitrate(int pixel_rate_kbps)
+{
+	/*
+	 * 3 lane configurations:
+	 * 3 Gbps * 3 = 9 Gbps; 6 Gbps * 3 = 18 Gbps.
+	 *
+	 * 4 lane configurations:
+	 * 6 Gbps * 4 = 24 Gbps; 8 Gbps * 4 = 32 Gbp;
+	 * 10 Gbps * 4 = 40 Gbps; 12 Gbps * 4 = 48 Gbps.
+	 */
+#define frl_gbps_to_kbps(rate) ((rate) * 1000000)
+	if (pixel_rate_kbps <= frl_gbps_to_kbps(9))
+		return frl_gbps_to_kbps(3);
+
+	if (pixel_rate_kbps > frl_gbps_to_kbps(9) &&
+	    pixel_rate_kbps <= frl_gbps_to_kbps(18))
+		return frl_gbps_to_kbps(6);
+
+	if (pixel_rate_kbps > frl_gbps_to_kbps(18) &&
+	    pixel_rate_kbps <= frl_gbps_to_kbps(24))
+		return frl_gbps_to_kbps(6);
+
+	if (pixel_rate_kbps > frl_gbps_to_kbps(24) &&
+	    pixel_rate_kbps <= frl_gbps_to_kbps(32))
+		return frl_gbps_to_kbps(8);
+
+	if (pixel_rate_kbps > frl_gbps_to_kbps(32) &&
+	    pixel_rate_kbps <= frl_gbps_to_kbps(40))
+		return frl_gbps_to_kbps(10);
+
+	if (pixel_rate_kbps > frl_gbps_to_kbps(40) &&
+	    pixel_rate_kbps <= frl_gbps_to_kbps(48))
+		return frl_gbps_to_kbps(12);
+
+	/*
+	 * pixel rate more than 48 Gbps rate, means more than
+	 * 12 Gbps x 4 lanes. Such a rate not possible with FRL.
+	 */
+	return 0;
+}
+
+static int
+hdmi21_port_clock_limit(struct intel_hdmi *hdmi)
+{
+	int max_lane_rate_gbps, max_symbol_clock_khz;
+
+	max_lane_rate_gbps = intel_hdmi_frl_required_bitrate(hdmi->max_frl_rate);
+
+	max_symbol_clock_khz = (max_lane_rate_gbps * 1000000) / 18;
+
+	/*
+	 * FIXME: Currently the resolution of C20 clocks is in 10KHz.
+	 * Check if we need to have finer granularity.
+	 */
+	return roundup(max_symbol_clock_khz, 10);
+}
+
+static enum drm_mode_status
+hdmi_port_frl_clock_valid(struct intel_hdmi *hdmi, int clock)
+{
+	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+
+	if (!clock || clock > hdmi21_port_clock_limit(hdmi))
+		return MODE_CLOCK_HIGH;
+
+	if (DISPLAY_VER(i915) >= 14)
+		return intel_c20_phy_check_hdmi_link_rate(clock);
+
+	return MODE_OK;
+}
+
+static enum drm_mode_status
+hdmi_port_clock_valid(struct intel_hdmi *hdmi,
+		      int clock, bool respect_downstream_limits,
+		      bool has_hdmi_sink, bool frl_mode)
+{
+	if (frl_mode)
+		return hdmi_port_frl_clock_valid(hdmi, clock);
+
+	return hdmi_port_tmds_clock_valid(hdmi, clock,
+					  respect_downstream_limits,
+					  has_hdmi_sink);
 }
 
 int intel_hdmi_tmds_clock(int clock, int bpc, bool ycbcr420_output)
@@ -1939,6 +2066,39 @@ static bool intel_hdmi_sink_bpc_possible(struct drm_connector *connector,
 	}
 }
 
+static
+int intel_hdmi_frl_clock(int clock, int bpc, bool ycbcr420_output)
+{
+	int pixel_rate_kbps, frl_bit_rate_required;
+	int frl_symbol_clock;
+
+	if (ycbcr420_output)
+		clock /= 2;
+
+	pixel_rate_kbps = clock * bpc * 3;
+
+	/* find the closest frl bit rate */
+	frl_bit_rate_required = intel_hdmi_frl_required_bitrate(pixel_rate_kbps);
+
+	/* frl_symbol_clock */
+	frl_symbol_clock = frl_bit_rate_required / 18;
+
+	/*
+	 * FIXME: Currently the resolution of C20 clocks is in 10KHz.
+	 * Check if we need to have finer granularity.
+	 */
+	return roundup(frl_symbol_clock, 10);
+}
+
+static
+int intel_hdmi_clock(int clock, int bpc, bool ycbcr420_output, bool frl_mode)
+{
+	if (frl_mode)
+		return intel_hdmi_frl_clock(clock, bpc, ycbcr420_output);
+
+	return intel_hdmi_tmds_clock(clock, bpc, ycbcr420_output);
+}
+
 static enum drm_mode_status
 intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 			    bool has_hdmi_sink, bool ycbcr420_output)
@@ -1947,6 +2107,9 @@ intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
 	enum drm_mode_status status = MODE_OK;
 	int bpc;
+	bool frl_mode;
+
+	frl_mode = hdmi->has_sink_hdmi_21 && hdmi->max_frl_rate;
 
 	/*
 	 * Try all color depths since valid port clock range
@@ -1954,7 +2117,7 @@ intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 	 * least one color depth is accepted.
 	 */
 	for (bpc = 12; bpc >= 8; bpc -= 2) {
-		int tmds_clock = intel_hdmi_tmds_clock(clock, bpc, ycbcr420_output);
+		int hdmi_clock = intel_hdmi_clock(clock, bpc, ycbcr420_output, frl_mode);
 
 		if (!intel_hdmi_source_bpc_possible(i915, bpc))
 			continue;
@@ -1962,7 +2125,7 @@ intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 		if (!intel_hdmi_sink_bpc_possible(connector, bpc, has_hdmi_sink, ycbcr420_output))
 			continue;
 
-		status = hdmi_port_clock_valid(hdmi, tmds_clock, true, has_hdmi_sink);
+		status = hdmi_port_clock_valid(hdmi, hdmi_clock, true, has_hdmi_sink, frl_mode);
 		if (status == MODE_OK)
 			return MODE_OK;
 	}
@@ -1974,16 +2137,93 @@ intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 }
 
 static enum drm_mode_status
+intel_hdmi_dsc_mode_valid(struct drm_connector *connector,
+			  struct drm_display_mode *mode, int clock,
+			  bool ycbcr420_only)
+{
+	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
+	int slice_count, slice_width, src_frc_bpp;
+	int pixel_rate_kbps, dsc_frl_rate_kbps, hdmi_max_chunk_bytes;
+	int compressed_bpp_x16, frl_symbol_clock, frl_bit_rate_required;
+	bool hdmi_all_bpp, bigjoiner;
+	u8 min_bpc;
+
+	/* TBD: get the lowest dsc bpc from the common pool of src and sink */
+	min_bpc = 8;
+
+	/* TBD: bigjoiner support */
+	bigjoiner = false;
+	 /* TBD: need to add dsc support for other formats*/
+	if (ycbcr420_only)
+		return MODE_CLOCK_HIGH;
+
+	slice_count = get_dsc_slice_count(hdmi, mode, INTEL_OUTPUT_FORMAT_RGB,
+					  bigjoiner);
+	if (slice_count == 0)
+		return MODE_CLOCK_HIGH;
+
+	slice_width = mode->hdisplay / slice_count;
+	src_frc_bpp = 0;
+
+	hdmi_max_chunk_bytes =
+			connector->display_info.hdmi.dsc_cap.total_chunk_kbytes * 1024;
+	hdmi_all_bpp = connector->display_info.hdmi.dsc_cap.all_bpp;
+
+	/*
+	 * Check if we get a valid compressed bpp with the min bpc for the given
+	 * mode, and src/sink capabilities. If we do not get a valid compressed
+	 * bpp with the min bpc, then the mode cannot be supported.
+	 */
+	compressed_bpp_x16 = intel_hdmi_dsc_get_bpp(src_frc_bpp, slice_width, slice_count,
+						    INTEL_OUTPUT_FORMAT_RGB, min_bpc,
+						    hdmi_all_bpp, hdmi_max_chunk_bytes);
+	if (compressed_bpp_x16 == 0)
+		return MODE_CLOCK_HIGH;
+
+	pixel_rate_kbps = clock * DIV_ROUND_UP(compressed_bpp_x16, 16);
+
+	dsc_frl_rate_kbps = hdmi->max_dsc_frl_rate * 1000000;
+
+	/* Check if mode can be supported with max available dsc rate */
+	if (pixel_rate_kbps > dsc_frl_rate_kbps)
+		return MODE_CLOCK_HIGH;
+
+	/*
+	 * Check if mode can be supported by the port clock.
+	 * First get the required Fixed rate that will support the given b/w
+	 * with compression.
+	 * Next, get the frl symbol clock and see it its supported by our port
+	 * clock.
+	 */
+	frl_bit_rate_required = intel_hdmi_frl_required_bitrate(pixel_rate_kbps);
+
+	frl_symbol_clock = DIV_ROUND_UP(frl_bit_rate_required, 18);
+
+	return hdmi_port_frl_clock_valid(hdmi, frl_symbol_clock);
+}
+
+static bool
+intel_hdmi_src_dsc_supported(struct drm_i915_private *dev_priv)
+{
+	return DISPLAY_VER(dev_priv) >= 14;
+}
+
+static enum drm_mode_status
 intel_hdmi_mode_valid(struct drm_connector *connector,
 		      struct drm_display_mode *mode)
 {
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
 	struct drm_i915_private *dev_priv = intel_hdmi_to_i915(hdmi);
+	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
 	enum drm_mode_status status;
 	int clock = mode->clock;
 	int max_dotclk = to_i915(connector->dev)->max_dotclk_freq;
 	bool has_hdmi_sink = intel_has_hdmi_sink(hdmi, connector->state);
-	bool ycbcr_420_only;
+	bool bigjoiner = false;
+	bool ycbcr_420_only, dsc;
+
+	dsc = intel_hdmi_src_dsc_supported(dev_priv) &&
+		connector->display_info.hdmi.dsc_cap.v_1p2;
 
 	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
 		return MODE_NO_DBLESCAN;
@@ -1991,7 +2231,16 @@ intel_hdmi_mode_valid(struct drm_connector *connector,
 	if ((mode->flags & DRM_MODE_FLAG_3D_MASK) == DRM_MODE_FLAG_3D_FRAME_PACKING)
 		clock *= 2;
 
-	if (clock > max_dotclk)
+	if (intel_need_bigjoiner(encoder, mode->hdisplay,
+				 mode->crtc_clock)) {
+		bigjoiner = true;
+		max_dotclk *= 2;
+	}
+
+	if (clock > max_dotclk && !bigjoiner)
+		return MODE_CLOCK_HIGH;
+
+	if (DISPLAY_VER(dev_priv) < 13 && bigjoiner && !dsc)
 		return MODE_CLOCK_HIGH;
 
 	if (mode->flags & DRM_MODE_FLAG_DBLCLK) {
@@ -2006,15 +2255,22 @@ intel_hdmi_mode_valid(struct drm_connector *connector,
 	if (status != MODE_OK) {
 		if (ycbcr_420_only ||
 		    !connector->ycbcr_420_allowed ||
-		    !drm_mode_is_420_also(&connector->display_info, mode))
+		    !drm_mode_is_420_also(&connector->display_info, mode) ||
+		    !dsc)
 			return status;
 
 		status = intel_hdmi_mode_clock_valid(connector, clock, has_hdmi_sink, true);
-		if (status != MODE_OK)
+		if (status != MODE_OK || !dsc)
 			return status;
 	}
 
-	return intel_mode_valid_max_plane_size(dev_priv, mode, false);
+	if (status != MODE_OK && dsc)
+		status = intel_hdmi_dsc_mode_valid(connector, mode, clock, ycbcr_420_only);
+
+	if (status != MODE_OK)
+		return status;
+
+	return intel_mode_valid_max_plane_size(dev_priv, mode, bigjoiner);
 }
 
 bool intel_hdmi_bpc_possible(const struct intel_crtc_state *crtc_state,
@@ -2090,9 +2346,9 @@ static int intel_hdmi_compute_bpc(struct intel_encoder *encoder,
 		int tmds_clock = intel_hdmi_tmds_clock(clock, bpc, ycbcr420_output);
 
 		if (hdmi_bpc_possible(crtc_state, bpc) &&
-		    hdmi_port_clock_valid(intel_hdmi, tmds_clock,
-					  respect_downstream_limits,
-					  crtc_state->has_hdmi_sink) == MODE_OK)
+		    hdmi_port_tmds_clock_valid(intel_hdmi, tmds_clock,
+					       respect_downstream_limits,
+					       crtc_state->has_hdmi_sink) == MODE_OK)
 			return bpc;
 	}
 
@@ -2116,9 +2372,16 @@ static int intel_hdmi_compute_clock(struct intel_encoder *encoder,
 	if (bpc < 0)
 		return bpc;
 
-	crtc_state->port_clock =
-		intel_hdmi_tmds_clock(clock, bpc, intel_hdmi_is_ycbcr420(crtc_state));
-
+	/*
+	 * In case of frl mode div18 symbol clock is computed
+	 * during frl capacity computation
+	 */
+	if (crtc_state->frl.enable)
+		crtc_state->port_clock = crtc_state->frl.div18;
+	else
+		crtc_state->port_clock =
+			    intel_hdmi_tmds_clock(clock, bpc,
+						  intel_hdmi_is_ycbcr420(crtc_state));
 	/*
 	 * pipe_bpp could already be below 8bpc due to
 	 * FDI bandwidth constraints. We shouldn't bump it
@@ -2222,6 +2485,352 @@ static int intel_hdmi_compute_output_format(struct intel_encoder *encoder,
 	return ret;
 }
 
+static void intel_hdmi_compute_cvtemp_header(struct intel_crtc_state *pipe_config)
+{
+	struct hdmi_extended_metadata_packet *cvt_emp = &pipe_config->cvt_emp;
+
+	cvt_emp->type = HDMI_EMP_TYPE_CVTEM;
+	cvt_emp->header.hb0 = TRANS_HDMI_EMP_HB0;
+	cvt_emp->first_data_set.pb0_new = true;
+	cvt_emp->first_data_set.pb0_end = false;
+	cvt_emp->first_data_set.pb0_afr = false;
+	cvt_emp->first_data_set.pb0_vfr = true;
+	cvt_emp->first_data_set.pb0_sync = true;
+	cvt_emp->first_data_set.ds_type = HDMI_EMP_DS_TYPE_PSTATIC;
+	cvt_emp->first_data_set.org_id = 1;
+	cvt_emp->first_data_set.data_set_tag = 2;
+	/*
+	 * HDMI2.1 defined EMP CVTEM packets:
+	 * 128 DSC packets + 2 HFront + 2 HSync + 2 Hback + 2 HCactive
+	 * = 136 Bytes.
+	 */
+	cvt_emp->first_data_set.data_set_length = 136;
+	cvt_emp->enabled = true;
+}
+
+static bool intel_dsc_supports_ycbcr420(struct drm_i915_private *i915)
+{
+	if (DISPLAY_VER(i915) >= 14)
+		return true;
+
+	return false;
+}
+
+static void intel_hdmi_dsc_compute_config(struct intel_encoder *encoder,
+					  struct intel_crtc_state *pipe_config,
+					  struct drm_hdmi_frl_dfm *frl_dfm)
+{
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct intel_connector *intel_connector = intel_hdmi->attached_connector;
+	struct drm_connector *connector = &intel_connector->base;
+	const struct drm_display_mode *adjusted_mode =
+		&pipe_config->hw.adjusted_mode;
+	struct drm_dsc_config *vdsc_cfg = &pipe_config->dsc.config;
+	int ret = 0;
+
+	/* HDMI2.1 supports VDSC 1.2 onwards */
+	if (!connector->display_info.hdmi.dsc_cap.v_1p2)
+		return;
+
+	if (!frl_dfm->config.target_bpp_16 || !frl_dfm->config.slice_width)
+		return;
+
+	pipe_config->dsc.compressed_bpp = frl_dfm->config.target_bpp_16;
+
+	pipe_config->dsc.slice_count = adjusted_mode->hdisplay / frl_dfm->config.slice_width;
+
+	/*
+	 * TODO : Common code for DP and HDMI Move out
+	 * VDSC engine operates at 1 Pixel per clock, so if peak pixel rate
+	 * is greater than the maximum Cdclock and if slice count is even
+	 * then we need to use 2 VDSC instances.
+	 */
+	if (adjusted_mode->crtc_clock > i915->max_cdclk_freq ||
+	    pipe_config->bigjoiner_pipes) {
+		if (pipe_config->dsc.slice_count < 2) {
+			drm_dbg_kms(&i915->drm,
+				    "Cannot split stream to use 2 VDSC instances\n");
+			return;
+		}
+
+		pipe_config->dsc.dsc_split = true;
+	}
+
+	if (intel_dsc_supports_ycbcr420(i915) &&
+	    connector->display_info.hdmi.dsc_cap.native_420 &&
+	    pipe_config->output_format == INTEL_OUTPUT_FORMAT_YCBCR420) {
+		vdsc_cfg->convert_rgb = 0;
+		vdsc_cfg->native_420 = 1;
+	} else {
+		vdsc_cfg->convert_rgb = 1;
+		vdsc_cfg->native_420 = 0;
+	}
+
+	vdsc_cfg->slice_height = intel_hdmi_dsc_get_slice_height(adjusted_mode->vdisplay);
+	/*
+	 * Following PPS parameters are hard coded as per HDMI2.1 spec Table 7-25, 28-30
+	 */
+	vdsc_cfg->dsc_version_major = 1;
+	vdsc_cfg->dsc_version_minor = 2;
+	vdsc_cfg->line_buf_depth = 13;
+	vdsc_cfg->block_pred_enable = 1;
+	vdsc_cfg->rc_model_size = DSC_RC_MODEL_SIZE_CONST; //As per C-Model-AN
+
+	/* Fill remaining common DSC parameters */
+	ret = intel_dsc_compute_params(pipe_config);
+	if (ret < 0) {
+		drm_dbg_kms(&i915->drm,
+			    "Cannot compute valid DSC parameters for Input Bpp = %d Compressed BPP = %d\n",
+			    pipe_config->pipe_bpp,
+			    pipe_config->dsc.compressed_bpp);
+		return;
+	}
+
+	ret = drm_dsc_compute_rc_parameters(vdsc_cfg);
+	if (ret < 0)
+		return;
+
+	pipe_config->dsc.compression_enable = true;
+	drm_dbg_kms(&i915->drm,
+		    "HDMI DSC computed with Input Bpp = %d Compressed Bpp = %d Slice Count = %d\n",
+		    pipe_config->pipe_bpp,
+		    pipe_config->dsc.compressed_bpp,
+		    pipe_config->dsc.slice_count);
+}
+
+static u32
+get_drm_color_format(enum intel_output_format output_format)
+{
+	switch (output_format) {
+	case INTEL_OUTPUT_FORMAT_RGB:
+		return DRM_COLOR_FORMAT_RGB444;
+	case INTEL_OUTPUT_FORMAT_YCBCR420:
+		return DRM_COLOR_FORMAT_YCRCB420;
+	case INTEL_OUTPUT_FORMAT_YCBCR444:
+		return DRM_COLOR_FORMAT_YCRCB444;
+	default:
+		return DRM_COLOR_FORMAT_RGB444;
+	}
+}
+
+static void
+compute_frl_mn(struct intel_crtc_state *crtc_state, u32 ftb_avg_k)
+{
+	u64 ftb_avg, div_18_clk, gcd_val;
+
+	ftb_avg = ftb_avg_k * 1000;
+	div_18_clk = mult_frac(1000000000, crtc_state->frl.required_rate, 18);
+	gcd_val = gcd(ftb_avg, div_18_clk);
+
+	crtc_state->frl.link_m_ext = DIV_ROUND_UP_ULL(ftb_avg, gcd_val);
+	crtc_state->frl.link_n_ext = DIV_ROUND_UP_ULL(div_18_clk, gcd_val);
+
+	/* Frl div 18 stored in Khz */
+	crtc_state->frl.div18 = DIV_ROUND_UP_ULL(div_18_clk, 1000);
+}
+
+static int get_dsc_slice_count(struct intel_hdmi *intel_hdmi,
+		               const struct drm_display_mode *mode,
+			       enum intel_output_format output_format,
+			       bool use_bigjoiner)
+{
+	/*
+	 * Bspec: 31627
+	 * max_slices per line 4, without big joiner, 8 with big joiner
+	 * max slice width in pixels 5120 without pipe joiner, 8192 with pipe joiner
+	 */
+#define SRC_MAX_SLICES                 4
+#define SRC_MAX_SLICES_BIG_JOINER      8
+#define SRC_MAX_SLICES_WIDTH            5120
+#define SRC_MAX_SLICES_WIDTH_BIG_JOINER        8192
+
+	int src_max_slices = SRC_MAX_SLICES;
+	int src_max_width = SRC_MAX_SLICES_WIDTH;
+	struct intel_connector *intel_connector = intel_hdmi->attached_connector;
+	struct drm_connector *connector = &intel_connector->base;
+	int hdmi_throughput = connector->display_info.hdmi.dsc_cap.clk_per_slice;
+	int hdmi_max_slices = connector->display_info.hdmi.dsc_cap.max_slices;
+
+	if (use_bigjoiner) {
+		src_max_slices = SRC_MAX_SLICES_BIG_JOINER;
+		src_max_width = SRC_MAX_SLICES_WIDTH_BIG_JOINER;
+	}
+
+	return intel_hdmi_dsc_get_num_slices(mode, output_format,
+			src_max_slices, src_max_width,
+			hdmi_max_slices, hdmi_throughput);
+}
+
+static bool
+intel_hdmi_can_support_frl_mode_with_dsc(struct intel_hdmi *intel_hdmi,
+					 struct intel_crtc_state *pipe_config,
+					 struct drm_hdmi_frl_dfm *frl_dfm)
+{
+	const struct drm_display_mode *adjusted_mode = &pipe_config->hw.adjusted_mode;
+	struct intel_connector *intel_connector = intel_hdmi->attached_connector;
+	struct drm_connector *connector = &intel_connector->base;
+	int hdmi_max_chunk_bytes = connector->display_info.hdmi.dsc_cap.total_chunk_kbytes * 1024;
+	bool hdmi_all_bpp = connector->display_info.hdmi.dsc_cap.all_bpp;
+	int slice_count, slice_width;
+	int src_frc_bpp, bpp, bpp_x16, max_dsc_bpp, min_dsc_bpp;
+	u8 bpc;
+
+	slice_count = get_dsc_slice_count(intel_hdmi, adjusted_mode,
+			pipe_config->output_format,
+			pipe_config->bigjoiner_pipes);
+	if (!slice_count)
+		return false;
+
+	slice_width = adjusted_mode->hdisplay / slice_count;
+
+	/*TODO Check for fractional bpp support from source */
+	src_frc_bpp = 0;
+	bpc = pipe_config->pipe_bpp / 3;
+
+	get_dsc_min_max_bpp(pipe_config->output_format, bpc, hdmi_all_bpp,
+			&min_dsc_bpp, &max_dsc_bpp);
+
+	for (bpp = max_dsc_bpp; bpp > min_dsc_bpp; bpp--) {
+		bpp_x16 = get_dsc_compressed_bpp(slice_count, slice_width,
+						 hdmi_max_chunk_bytes,
+						 src_frc_bpp, min_dsc_bpp, bpp);
+		if (!bpp_x16)
+			return false;
+
+		bpp = DIV_ROUND_UP(bpp_x16, 16);
+
+		/* Fill DSC related DFM input parameters */
+		frl_dfm->config.target_bpp_16 = bpp_x16;
+		frl_dfm->config.slice_width = slice_width;
+
+		if (drm_frl_dfm_dsc_requirement_met(frl_dfm))
+			return true;
+	}
+
+	return false;
+}
+
+static bool
+intel_hdmi_can_support_frl_mode(struct intel_encoder *encoder,
+				struct intel_crtc_state *pipe_config)
+{
+	int rate[] =  {48, 40, 32, 24, 18, 9};
+	int audio_freq_hz[] = {192000, 176400, 96000, 88200, 48000};
+	struct drm_hdmi_frl_dfm frl_dfm = {0};
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	int max_rate = intel_hdmi->max_frl_rate;
+	int max_dsc_rate = intel_hdmi->max_dsc_frl_rate;
+	struct drm_display_mode *adjusted_mode = &pipe_config->hw.adjusted_mode;
+	bool can_support_frl_mode = false;
+	bool can_support_frl_mode_with_dsc = false;
+	int i, j;
+
+	/* Fill mode related input params */
+	frl_dfm.config.pixel_clock_nominal_khz = adjusted_mode->clock;
+	frl_dfm.config.hactive = adjusted_mode->hdisplay;
+	frl_dfm.config.hblank = adjusted_mode->htotal - adjusted_mode->hdisplay;
+
+	/*
+	 * #FIXME Currently the bpc and color_format are set to default values
+	 * of 8bpc and RGB format. Need to compute the format and check with different
+	 * bpc, that satisfies the DFM calculation.
+	 */
+
+	/* Fill color related input params */
+	frl_dfm.config.bpc = 8;
+	frl_dfm.config.color_format = get_drm_color_format(INTEL_OUTPUT_FORMAT_RGB);
+
+	pipe_config->pipe_bpp = frl_dfm.config.bpc * 3;
+	pipe_config->output_format = INTEL_OUTPUT_FORMAT_RGB;
+	/*
+	 * Check if the resolution can be supported in FRL mode
+	 * We try with maximum FRL rate and check if Data flow metring
+	 * requirements are met, otherwise a lower rate is tried.
+	 */
+	for (i = 0; i < ARRAY_SIZE(rate); i++) {
+		if (rate[i] > max_rate)
+			continue;
+		/* Fill the bw related input parameters */
+		frl_dfm.config.lanes = rate[i] < 24 ? 3 : 4;
+		frl_dfm.config.bit_rate_kbps = (rate[i] * 1000000) / frl_dfm.config.lanes;
+		for (j = 0; j < ARRAY_SIZE(audio_freq_hz); j++) {
+			/* TODO: Check if pipe_config->has_audio is set */
+			/* Fill the audio related input params */
+			frl_dfm.config.audio_hz = audio_freq_hz[j];
+			frl_dfm.config.audio_channels = 8; /*Support 8 channel audio */
+			if (drm_frl_dfm_nondsc_requirement_met(&frl_dfm)) {
+				can_support_frl_mode = true;
+				break;
+			}
+
+			if (!max_dsc_rate || max_dsc_rate < rate[i])
+				continue;
+			/* Try with DSC */
+			if (intel_hdmi_can_support_frl_mode_with_dsc(intel_hdmi,
+								     pipe_config,
+								     &frl_dfm)) {
+				can_support_frl_mode_with_dsc = true;
+				break;
+			}
+		}
+
+		if (can_support_frl_mode || can_support_frl_mode_with_dsc)
+			break;
+	}
+
+	if (!can_support_frl_mode && !can_support_frl_mode_with_dsc) {
+		drm_dbg_kms(&dev_priv->drm, "Cannot support FRL mode\n");
+
+		return false;
+	}
+
+	/* Fill frl capacity output params */
+	pipe_config->frl.required_lanes = frl_dfm.config.lanes;
+	pipe_config->frl.required_rate = frl_dfm.config.bit_rate_kbps / 1000000;
+	pipe_config->frl.tb_borrowed = frl_dfm.params.tb_borrowed;
+	pipe_config->frl.tb_actual = frl_dfm.params.tb_borrowed / 2;
+	drm_dbg_kms(&dev_priv->drm, "FRL DFM config: tb_borrowed = %d, tb_actual = %d\n",
+		    pipe_config->frl.tb_borrowed, pipe_config->frl.tb_actual);
+
+	/*
+	 * If no time borrowing required to transmit the active region,
+	 * min tb threshold is set to default of 492 tribytes.
+	 * Otherwise min tb threshold is 492 - (tb Borrowed / 2)
+	 */
+	if (frl_dfm.params.tb_borrowed && (frl_dfm.params.tb_borrowed / 2) <= 492)
+		pipe_config->frl.tb_threshold_min = 492 - (frl_dfm.params.tb_borrowed / 2);
+	else
+		pipe_config->frl.tb_threshold_min = 492;
+
+	compute_frl_mn(pipe_config, frl_dfm.params.ftb_avg_k);
+	drm_dbg_kms(&dev_priv->drm, "FRL Clock: link_m = %dHz, link_n = %dHz, div18 = %dKHz\n",
+		    pipe_config->frl.link_m_ext, pipe_config->frl.link_n_ext,
+		    pipe_config->frl.div18);
+
+	/*
+	 * TODO
+	 * 1. Calculate condition for Reseource based scheduling enable.
+	 * Disabling resource based scheduling for now.
+	 * 2. Active Character buffer threshold depends on cd clock bw.
+	 * Setting default value of 0.
+	 */
+	pipe_config->frl.rsrc_sched_en = false;
+	pipe_config->frl.active_char_buf_threshold = 0;
+
+	if (can_support_frl_mode_with_dsc) {
+		pipe_config->frl.hcactive_tb = frl_dfm.params.hcactive_target;
+		pipe_config->frl.hctotal_tb = frl_dfm.params.hcactive_target + frl_dfm.params.hcblank_target;
+		drm_dbg_kms(&dev_priv->drm, "FRL DFM DSC config: hcactive_tb = %d, hctotal_tb = %d\n",
+			    pipe_config->frl.hcactive_tb, pipe_config->frl.hctotal_tb);
+		/* Compute all DSC parameters */
+		intel_hdmi_dsc_compute_config(encoder, pipe_config, &frl_dfm);
+	}
+
+	return true;
+}
+
 int intel_hdmi_compute_config(struct intel_encoder *encoder,
 			      struct intel_crtc_state *pipe_config,
 			      struct drm_connector_state *conn_state)
@@ -2231,6 +2840,7 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 	struct drm_display_mode *adjusted_mode = &pipe_config->hw.adjusted_mode;
 	struct drm_connector *connector = conn_state->connector;
 	struct drm_scdc *scdc = &connector->display_info.hdmi.scdc;
+	struct intel_crtc *crtc = to_intel_crtc(pipe_config->uapi.crtc);
 	int ret;
 
 	if (adjusted_mode->flags & DRM_MODE_FLAG_DBLSCAN)
@@ -2252,18 +2862,43 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 	pipe_config->has_audio =
 		intel_hdmi_has_audio(encoder, pipe_config, conn_state);
 
-	/*
-	 * Try to respect downstream TMDS clock limits first, if
-	 * that fails assume the user might know something we don't.
-	 */
-	ret = intel_hdmi_compute_output_format(encoder, pipe_config, conn_state, true);
-	if (ret)
-		ret = intel_hdmi_compute_output_format(encoder, pipe_config, conn_state, false);
-	if (ret) {
+	if (intel_need_bigjoiner(encoder, adjusted_mode->hdisplay,
+				 adjusted_mode->crtc_clock))
+		pipe_config->bigjoiner_pipes = GENMASK(crtc->pipe + 1, crtc->pipe);
+
+	if (intel_bios_hdmi_max_frl_rate(encoder) &&
+	    intel_hdmi->has_sink_hdmi_21 &&
+	    intel_hdmi_can_support_frl_mode(encoder, pipe_config)) {
 		drm_dbg_kms(&dev_priv->drm,
-			    "unsupported HDMI clock (%d kHz), rejecting mode\n",
-			    pipe_config->hw.adjusted_mode.crtc_clock);
-		return ret;
+			    "Enabling FRL mode with lanes = %d rate = %d\n",
+			    pipe_config->frl.required_lanes,
+			    pipe_config->frl.required_rate);
+
+		pipe_config->frl.enable = true;
+		pipe_config->lane_count = pipe_config->frl.required_lanes;
+		/* Port clock is div18 clock rounded to 10 Khz */
+		pipe_config->port_clock = roundup(pipe_config->frl.div18, 10);
+	} else {
+
+		/* Modes that need Bigjoiner cannot work without FRL */
+		if (pipe_config->bigjoiner_pipes)
+			return -EINVAL;
+		/*
+		 * Try to respect downstream TMDS clock limits first, if
+		 * that fails assume the user might know something we don't.
+		 */
+		ret = intel_hdmi_compute_output_format(encoder, pipe_config, conn_state, true);
+		if (ret)
+			ret = intel_hdmi_compute_output_format(encoder, pipe_config, conn_state,
+							       false);
+		if (ret) {
+			drm_dbg_kms(&dev_priv->drm,
+				    "unsupported HDMI clock (%d kHz), rejecting mode\n",
+				    pipe_config->hw.adjusted_mode.crtc_clock);
+			return ret;
+		}
+		pipe_config->frl.enable = false;
+		pipe_config->lane_count = 4;
 	}
 
 	if (intel_hdmi_is_ycbcr420(pipe_config)) {
@@ -2279,9 +2914,14 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 		adjusted_mode->picture_aspect_ratio =
 			conn_state->picture_aspect_ratio;
 
-	pipe_config->lane_count = 4;
 
-	if (scdc->scrambling.supported && DISPLAY_VER(dev_priv) >= 10) {
+	/*
+	 * Enable scrambing for only for TMDS mode.
+	 * For FRL mode, scrambling is always enabled by HW, and
+	 * scrambling enable and high tmds clock bits are not used.
+	 */
+	if (scdc->scrambling.supported && DISPLAY_VER(dev_priv) >= 10 &&
+	    !pipe_config->frl.enable) {
 		if (scdc->scrambling.low_rates)
 			pipe_config->hdmi_scrambling = true;
 
@@ -2314,6 +2954,9 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 		return -EINVAL;
 	}
 
+	if (pipe_config->dsc.compression_enable)
+		intel_hdmi_compute_cvtemp_header(pipe_config);
+
 	return 0;
 }
 
@@ -2335,6 +2978,7 @@ intel_hdmi_unset_edid(struct drm_connector *connector)
 
 	intel_hdmi->has_hdmi_sink = false;
 	intel_hdmi->has_audio = false;
+	intel_hdmi->has_sink_hdmi_21 = false;
 
 	intel_hdmi->dp_dual_mode.type = DRM_DP_DUAL_MODE_NONE;
 	intel_hdmi->dp_dual_mode.max_tmds_clock = 0;
@@ -2400,11 +3044,21 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector, bool has_edid)
 	}
 }
 
+static void
+intel_hdmi_reset_frl_config(struct intel_hdmi *intel_hdmi)
+{
+	intel_hdmi->frl.trained = false;
+	intel_hdmi->frl.lanes = 0;
+	intel_hdmi->frl.rate_gbps = 0;
+	intel_hdmi->frl.ffe_level = 0;
+}
+
 static bool
 intel_hdmi_set_edid(struct drm_connector *connector)
 {
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_hdmi *intel_hdmi = intel_attached_hdmi(to_intel_connector(connector));
+	struct intel_encoder *encoder = &hdmi_to_dig_port(intel_hdmi)->base;
 	intel_wakeref_t wakeref;
 	struct edid *edid;
 	bool connected = false;
@@ -2430,8 +3084,19 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 
 	to_intel_connector(connector)->detect_edid = edid;
 	if (edid && edid->input & DRM_EDID_INPUT_DIGITAL) {
+		int src_rate_lane_gbps = DIV_ROUND_UP(intel_bios_hdmi_max_frl_rate(encoder),
+						      1000000);
+		int max_src_rate = src_rate_lane_gbps * 4;
+
 		intel_hdmi->has_audio = drm_detect_monitor_audio(edid);
 		intel_hdmi->has_hdmi_sink = drm_detect_hdmi_monitor(edid);
+		intel_hdmi->has_sink_hdmi_21 =
+			drm_hdmi_sink_max_frl_rate(connector) > 0 ? true : false;
+		intel_hdmi->max_frl_rate = min(drm_hdmi_sink_max_frl_rate(connector),
+					       max_src_rate);
+		intel_hdmi->max_dsc_frl_rate = min(drm_hdmi_sink_dsc_max_frl_rate(connector),
+						   max_src_rate);
+		intel_hdmi_reset_frl_config(intel_hdmi);
 
 		connected = true;
 	}
@@ -2917,6 +3582,31 @@ void intel_infoframe_init(struct intel_digital_port *dig_port)
 	}
 }
 
+/* Common code with DP, need to put in a common place */
+static void intel_hdmi_modeset_retry_work_fn(struct work_struct *work)
+{
+	struct intel_connector *intel_connector;
+	struct drm_connector *connector;
+
+	intel_connector = container_of(work, typeof(*intel_connector),
+				       modeset_retry_work);
+	connector = &intel_connector->base;
+	DRM_DEBUG_KMS("[CONNECTOR:%d:%s]\n", connector->base.id,
+		      connector->name);
+
+	/* Grab the locks before changing connector property*/
+	mutex_lock(&connector->dev->mode_config.mutex);
+	/*
+	 * Set connector link status to BAD and send a Uevent to notify
+	 * userspace to do a modeset.
+	 */
+	drm_connector_set_link_status_property(connector,
+					       DRM_MODE_LINK_STATUS_BAD);
+	mutex_unlock(&connector->dev->mode_config.mutex);
+	/* Send Hotplug uevent so userspace can reprobe */
+	drm_kms_helper_hotplug_event(connector->dev);
+}
+
 void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 			       struct intel_connector *intel_connector)
 {
@@ -2999,6 +3689,10 @@ void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 	if (!intel_hdmi->cec_notifier)
 		drm_dbg_kms(&dev_priv->drm, "CEC notifier get failed\n");
 #endif
+	/* Initialize the work for modeset in case of link train failure */
+	if (DISPLAY_VER(dev_priv) >= 14)
+		INIT_WORK(&intel_connector->modeset_retry_work,
+			  intel_hdmi_modeset_retry_work_fn);
 }
 
 /*
@@ -3138,61 +3832,15 @@ intel_hdmi_dsc_get_num_slices(const struct drm_display_mode *mode,
 	return target_slices;
 }
 
-/*
- * intel_hdmi_dsc_get_bpp - get the appropriate compressed bits_per_pixel based on
- * source and sink capabilities.
- *
- * @src_fraction_bpp: fractional bpp supported by the source
- * @slice_width: dsc slice width supported by the source and sink
- * @num_slices: num of slices supported by the source and sink
- * @output_format: video output format
- * @bpc: bits per color
- * @hdmi_all_bpp: sink supports decoding of 1/16th bpp setting
- * @hdmi_max_chunk_bytes: max bytes in a line of chunks supported by sink
- *
- * @return: compressed bits_per_pixel in step of 1/16 of bits_per_pixel
- */
-int
-intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
-		       enum intel_output_format output_format, u8 bpc,
-		       bool hdmi_all_bpp, int hdmi_max_chunk_bytes)
+static int
+get_dsc_compressed_bpp(int num_slices, int slice_width, int hdmi_max_chunk_bytes,
+		       int src_fractional_bpp, int min_dsc_bpp, int max_dsc_bpp)
 {
-	int max_dsc_bpp, min_dsc_bpp;
 	int target_bytes;
 	bool bpp_found = false;
 	int bpp_decrement_x16;
 	int bpp_target;
 	int bpp_target_x16;
-
-	/*
-	 * Get min bpp and max bpp as per Table 7.23, in HDMI2.1 spec
-	 * Start with the max bpp and keep on decrementing with
-	 * fractional bpp, if supported by PCON DSC encoder
-	 *
-	 * for each bpp we check if no of bytes can be supported by HDMI sink
-	 */
-
-	if (output_format == INTEL_OUTPUT_FORMAT_YCBCR420) {
-		min_dsc_bpp = 6;
-		max_dsc_bpp = 3 * bpc / 2;
-	} else if (output_format == INTEL_OUTPUT_FORMAT_YCBCR444 ||
-		   output_format == INTEL_OUTPUT_FORMAT_RGB) {
-		min_dsc_bpp = 8;
-		max_dsc_bpp = 3 * bpc;
-	} else {
-		/* Assuming 4:2:2 encoding */
-		min_dsc_bpp = 7;
-		max_dsc_bpp = 2 * bpc;
-	}
-
-	/*
-	 * Taking into account if all dsc_all_bpp supported by HDMI2.1 sink
-	 * Section 7.7.34 : Source shall not enable compressed Video
-	 * Transport with bpp_target settings above 12 bpp unless
-	 * DSC_all_bpp is set to 1.
-	 */
-	if (!hdmi_all_bpp)
-		max_dsc_bpp = min(max_dsc_bpp, 12);
 
 	/*
 	 * The Sink has a limit of compressed data in bytes for a scanline,
@@ -3234,4 +3882,498 @@ intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
 		return bpp_target_x16;
 
 	return 0;
+}
+
+static void
+get_dsc_min_max_bpp(enum intel_output_format output_format, u8 bpc,
+		    bool hdmi_all_bpp, int *min_dsc_bpp, int *max_dsc_bpp)
+{
+	/*
+	 * Get min bpp and max bpp as per Table 7.23, in HDMI2.1 spec
+	 * Start with the max bpp and keep on decrementing with
+	 * fractional bpp, if supported by the DSC encoder
+	 *
+	 * for each bpp we check if no of bytes can be supported by HDMI sink
+	 */
+
+	if (output_format == INTEL_OUTPUT_FORMAT_YCBCR420) {
+		*min_dsc_bpp = 6;
+		*max_dsc_bpp = 3 * bpc / 2;
+	} else if (output_format == INTEL_OUTPUT_FORMAT_YCBCR444 ||
+		   output_format == INTEL_OUTPUT_FORMAT_RGB) {
+		*min_dsc_bpp = 8;
+		*max_dsc_bpp = 3 * bpc;
+	} else {
+		/* Assuming 4:2:2 encoding */
+		*min_dsc_bpp = 7;
+		*max_dsc_bpp = 2 * bpc;
+	}
+
+	/*
+	 * Taking into account if all dsc_all_bpp supported by HDMI2.1 sink
+	 * Section 7.7.34 : Source shall not enable compressed Video
+	 * Transport with bpp_target settings above 12 bpp unless
+	 * DSC_all_bpp is set to 1.
+	 */
+	if (!hdmi_all_bpp)
+		*max_dsc_bpp = min(*max_dsc_bpp, 12);
+}
+
+/*
+ * intel_hdmi_dsc_get_bpp - get the appropriate compressed bits_per_pixel based on
+ * source and sink capabilities.
+ *
+ * @src_fraction_bpp: fractional bpp supported by the source
+ * @slice_width: dsc slice width supported by the source and sink
+ * @num_slices: num of slices supported by the source and sink
+ * @output_format: video output format
+ * @bpc: bits per color
+ * @hdmi_all_bpp: sink supports decoding of 1/16th bpp setting
+ * @hdmi_max_chunk_bytes: max bytes in a line of chunks supported by sink
+ *
+ * @return: compressed bits_per_pixel in step of 1/16 of bits_per_pixel
+ */
+int
+intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
+		       enum intel_output_format output_format, u8 bpc,
+		       bool hdmi_all_bpp, int hdmi_max_chunk_bytes)
+{
+	int max_dsc_bpp, min_dsc_bpp;
+	int dsc_bpp_x16;
+
+	get_dsc_min_max_bpp(output_format, bpc, hdmi_all_bpp,
+			    &min_dsc_bpp, &max_dsc_bpp);
+
+	dsc_bpp_x16 = get_dsc_compressed_bpp(num_slices, slice_width,
+					     hdmi_max_chunk_bytes,
+					     src_fractional_bpp,
+					     min_dsc_bpp, max_dsc_bpp);
+
+	return dsc_bpp_x16;
+}
+
+static
+bool is_flt_ready(struct intel_encoder *encoder)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+
+	return drm_scdc_read_status_flags(adapter) & SCDC_FLT_READY;
+}
+
+static
+bool intel_hdmi_frl_prepare_lts2(struct intel_encoder *encoder,
+				 const struct intel_crtc_state *crtc_state,
+				 int ffe_level)
+{
+#define TIMEOUT_FLT_READY_MS  250
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+	bool flt_ready = false;
+	int frl_rate;
+	int frl_lanes;
+
+	frl_rate = crtc_state->frl.required_rate;
+	frl_lanes = crtc_state->frl.required_lanes;
+
+	if (!frl_rate || !frl_lanes)
+		return false;
+
+	/*
+	 * POLL for FRL ready : READ SCDC 0x40 Bit 6 FLT ready
+	 * #TODO Check if 250 msec is required
+	 */
+	wait_for(flt_ready = is_flt_ready(encoder) == true,
+		 TIMEOUT_FLT_READY_MS);
+
+	if (!flt_ready) {
+		drm_dbg_kms(&dev_priv->drm,
+			    "HDMI sink not ready for FRL in %d\n",
+			    TIMEOUT_FLT_READY_MS);
+
+		return false;
+	}
+
+	/*
+	 * #TODO As per spec, during prepare phase LTS2, the TXFFE to be
+	 * programmed to be 0 for each lane in the PHY registers.
+	 */
+
+	if (drm_scdc_config_frl(adapter, frl_rate, frl_lanes, ffe_level) < 0) {
+		drm_dbg_kms(&dev_priv->drm,
+			    "Failed to write SCDC config regs for FRL\n");
+
+		return false;
+	}
+
+	return flt_ready;
+}
+
+enum frl_lt_status {
+	FRL_TRAINING_PASSED,
+	FRL_CHANGE_RATE,
+	FRL_TRAIN_CONTINUE,
+	FRL_TRAIN_RETRAIN,
+	FRL_TRAIN_STOP,
+};
+
+static
+u8 get_frl_update_flag(struct intel_encoder *encoder)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+
+	return drm_scdc_read_update_flags(adapter);
+}
+
+static
+int get_link_training_patterns(struct intel_encoder *encoder,
+			       enum drm_scdc_frl_ltp ltp[4])
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+
+	return drm_scdc_get_ltp(adapter, ltp);
+}
+
+static enum frl_lt_status
+intel_hdmi_train_lanes(struct intel_encoder *encoder,
+		       const struct intel_crtc_state *crtc_state,
+		       int ffe_level)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	enum drm_scdc_frl_ltp ltp[4];
+	int num_lanes = crtc_state->frl.required_lanes;
+	int lane;
+
+	/*
+	 * LTS3 Link Training in Progress.
+	 * Section 6.4.2.3 Table 6-34.
+	 *
+	 * Transmit link training pattern as requested by the sink
+	 * for a specific rate.
+	 * Source keep on Polling on FLT update flag and keep
+	 * repeating patterns till timeout or request for new rate,
+	 * or training is successful.
+	 */
+	if (!(get_frl_update_flag(encoder) & SCDC_FLT_UPDATE))
+		return FRL_TRAIN_CONTINUE;
+
+	if (get_link_training_patterns(encoder, ltp) < 0)
+		return FRL_TRAIN_STOP;
+
+	if (ltp[0] == ltp[1] && ltp[1] == ltp[2]) {
+		if (num_lanes == 3 || (num_lanes == 4 && ltp[2] == ltp[3])) {
+			if (ltp[0] == SCDC_FRL_NO_LTP)
+				return FRL_TRAINING_PASSED;
+			if (ltp[0] == SCDC_FRL_CHNG_RATE)
+				return FRL_CHANGE_RATE;
+		}
+	}
+
+	for (lane = 0; lane < num_lanes; lane++) {
+		if (ltp[lane] >= SCDC_FRL_LTP1 && ltp[lane] <= SCDC_FRL_LTP8)
+			/* write the LTP for the lane*/
+			intel_de_write(dev_priv, TRANS_HDMI_FRL_TRAIN(trans),
+				       TRANS_HDMI_FRL_LTP(ltp[lane], lane));
+		else if (ltp[lane] == SCDC_FRL_CHNG_FFE) {
+			/*
+			 * #TODO Update TxFFE for the lane
+			 *
+			 * Read the existing TxFFE for the lane, from PHY regs.
+			 * If TxFFE is already at FFE_level (i.e. max level)
+			 * then Set TXFFE0 for the lane.
+			 * Otherwise increment TxFFE for the lane.
+			 */
+		}
+	}
+
+	return FRL_TRAIN_CONTINUE;
+}
+
+static int
+clear_scdc_update_flags(struct intel_encoder *encoder, u8 flags)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+
+	return drm_scdc_clear_update_flags(adapter, flags);
+}
+
+static enum frl_lt_status
+frl_train_complete_ltsp(struct intel_encoder *encoder,
+			const struct intel_crtc_state *crtc_state)
+{
+#define FLT_UPDATE_TIMEOUT_MS 200
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	u32 buf;
+	u8 update_flag = 0;
+
+	/*
+	 * Start FRL transmission with only Gap Characters, with Scrambing,
+	 * Reed Solomon FEC, and Super block structure.
+	 */
+	buf = intel_de_read(dev_priv, TRANS_HDMI_FRL_CFG(trans));
+	intel_de_write(dev_priv, TRANS_HDMI_FRL_CFG(trans),
+		       buf | TRANS_HDMI_FRL_TRAINING_COMPLETE);
+
+	/* Clear SCDC FLT_UPDATE by writing 1 */
+	if (clear_scdc_update_flags(encoder, SCDC_FLT_UPDATE) < 0)
+		return FRL_TRAIN_STOP;
+
+	wait_for((update_flag = get_frl_update_flag(encoder)) &
+		 (SCDC_FRL_START | SCDC_FLT_UPDATE), FLT_UPDATE_TIMEOUT_MS);
+
+	if (update_flag & SCDC_FRL_START)
+		return FRL_TRAINING_PASSED;
+
+	if (update_flag & SCDC_FLT_UPDATE) {
+		drm_dbg_kms(&dev_priv->drm,
+			    "FRL update received for retraining the lanes\n");
+		clear_scdc_update_flags(encoder, SCDC_FLT_UPDATE);
+
+		return FRL_TRAIN_RETRAIN;
+	}
+
+	drm_err(&dev_priv->drm, "FRL TRAINING: FRL update timedout\n");
+
+	return FRL_TRAIN_STOP;
+}
+
+static enum frl_lt_status
+intel_hdmi_frl_train_lts3(struct intel_encoder *encoder,
+			  const struct intel_crtc_state *crtc_state,
+			  int ffe_level)
+{
+/*
+ * Time interval specified for link training HDMI2.1 Spec:
+ * Sec 6.4.2.1 Table 6-31
+ */
+#define FLT_TIMEOUT_MS 200
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	enum frl_lt_status status;
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	u32 buf;
+
+	buf = intel_de_read(dev_priv, TRANS_HDMI_FRL_CFG(trans));
+	intel_de_write(dev_priv, TRANS_HDMI_FRL_CFG(trans),
+		       buf | TRANS_HDMI_FRL_ENABLE);
+
+#define done ((status = intel_hdmi_train_lanes(encoder, crtc_state, ffe_level)) != FRL_TRAIN_CONTINUE)
+	wait_for(done, FLT_TIMEOUT_MS);
+
+	/* TIMEDOUT */
+	if (status == FRL_TRAIN_CONTINUE) {
+		drm_err(&dev_priv->drm, "FRL TRAINING: FLT TIMEDOUT\n");
+
+		return FRL_TRAIN_STOP;
+	}
+
+	if (status != FRL_TRAINING_PASSED)
+		return status;
+
+	return frl_train_complete_ltsp(encoder, crtc_state);
+}
+
+static void intel_hdmi_frl_ltsl(struct intel_encoder *encoder,
+				const struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_hdmi *intel_hdmi = enc_to_intel_hdmi(encoder);
+	struct i2c_adapter *adapter =
+		intel_gmbus_get_adapter(dev_priv, intel_hdmi->ddc_bus);
+	int lanes = crtc_state->frl.required_lanes;
+
+	/* Clear flags */
+	drm_scdc_config_frl(adapter, 0, lanes, 0);
+	drm_scdc_clear_update_flags(adapter, SCDC_FLT_UPDATE);
+}
+
+static bool get_next_frl_rate(int *curr_rate_gbps, int max_sink_rate)
+{
+	int valid_rate[] =  {48, 40, 32, 24, 18, 9};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(valid_rate); i++) {
+		if (max_sink_rate < valid_rate[i])
+			continue;
+
+		if (*curr_rate_gbps < valid_rate[i]) {
+			*curr_rate_gbps = valid_rate[i];
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static int get_ffe_level(int rate_gbps)
+{
+	/*
+	 * #TODO check for FFE_LEVEL to be programmed
+	 *
+	 * Should start with max ffe_levels supported by source. MAX can be 3.
+	 * Currently setting ffe_level = 0.
+	 */
+	return 0;
+}
+
+/*
+ * intel_hdmi_start_frl - Start FRL training for HDMI2.1 sink
+ *
+ */
+void intel_hdmi_start_frl(struct intel_encoder *encoder,
+			  const struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_digital_port *dig_port = enc_to_dig_port(encoder);
+	struct intel_hdmi *intel_hdmi = &dig_port->hdmi;
+	struct intel_connector *intel_connector = intel_hdmi->attached_connector;
+	struct drm_connector *connector = &intel_connector->base;
+	int *rate;
+	int max_rate = crtc_state->dsc.compression_enable ? intel_hdmi->max_dsc_frl_rate :
+							intel_hdmi->max_frl_rate;
+	int req_rate = crtc_state->frl.required_lanes * crtc_state->frl.required_rate;
+	int ffe_level = get_ffe_level(req_rate);
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	enum frl_lt_status status;
+	u32 buf = 0;
+
+	if (DISPLAY_VER(dev_priv) < 14)
+		return;
+
+	if (!crtc_state->frl.enable)
+		goto ltsl_tmds_mode;
+
+	if (intel_hdmi->frl.trained &&
+	    intel_hdmi->frl.rate_gbps >= req_rate &&
+	    intel_hdmi->frl.ffe_level == ffe_level) {
+		drm_dbg_kms(&dev_priv->drm,
+			    "[CONNECTOR:%d:%s] FRL Already trained with rate=%d, ffe_level=%d\n",
+			    connector->base.id, connector->name,
+			    req_rate, ffe_level);
+
+		return;
+	}
+
+	intel_hdmi_reset_frl_config(intel_hdmi);
+
+	if (!intel_hdmi_frl_prepare_lts2(encoder, crtc_state, ffe_level))
+		status = FRL_TRAIN_STOP;
+	else
+		status = intel_hdmi_frl_train_lts3(encoder, crtc_state, ffe_level);
+
+	switch (status) {
+	case FRL_TRAINING_PASSED:
+		intel_hdmi->frl.trained = true;
+		intel_hdmi->frl.rate_gbps = req_rate;
+		intel_hdmi->frl.ffe_level = ffe_level;
+		drm_dbg_kms(&dev_priv->drm,
+			    "[CONNECTOR:%d:%s] FRL Training Passed with rate=%d, ffe_level=%d\n",
+			    connector->base.id, connector->name,
+			    req_rate, ffe_level);
+
+		return;
+	case FRL_TRAIN_STOP:
+		/*
+		 * Cannot go with FRL transmission.
+		 * Reset FRL rates so during next modeset TMDS mode will be
+		 * selected.
+		 */
+		if (crtc_state->dsc.compression_enable)
+			intel_hdmi->max_dsc_frl_rate = 0;
+		else
+			intel_hdmi->max_frl_rate = 0;
+		break;
+	case FRL_CHANGE_RATE:
+		/*
+		 * Sink request for change of FRL rate.
+		 * Set FRL rates for the connector with lower rate.
+		 */
+		if (crtc_state->dsc.compression_enable)
+			rate = &intel_hdmi->max_dsc_frl_rate;
+		else
+			rate = &intel_hdmi->max_frl_rate;
+		if (!get_next_frl_rate(rate, max_rate))
+			*rate = 0;
+		break;
+	case FRL_TRAIN_RETRAIN:
+		/*
+		 * For Retraining with same rate, we send a uevent to userspace.
+		 * TODO Need to check how many times we can retry.
+		 */
+		fallthrough;
+	default:
+		break;
+	}
+
+ltsl_tmds_mode:
+	intel_hdmi_frl_ltsl(encoder, crtc_state);
+	buf = intel_de_read(dev_priv, TRANS_HDMI_FRL_CFG(trans));
+	intel_de_write(dev_priv, TRANS_HDMI_FRL_CFG(trans),
+		       buf & ~(TRANS_HDMI_FRL_ENABLE | TRANS_HDMI_FRL_TRAINING_COMPLETE));
+
+	if (crtc_state->frl.enable && !intel_hdmi->frl.trained) {
+		drm_err(&dev_priv->drm,
+			"[CONNECTOR:%d:%s] FRL Training Failed with rate=%d, ffe_level=%d\n",
+			connector->base.id, connector->name,
+			req_rate, ffe_level);
+		/* Send event to user space, to try with next rate or fall back to TMDS */
+		schedule_work(&intel_connector->modeset_retry_work);
+	}
+}
+
+void intel_hdmi_fill_emp_header_byte(const struct hdmi_extended_metadata_packet *emp,
+				     u32 *emp_header)
+{
+	if (!emp->enabled)
+		return;
+
+	*emp_header = 0;
+	*emp_header |= TRANS_HDMI_EMP_HB0;
+	*emp_header |= TRANS_HDMI_EMP_NUM_PACKETS(emp->first_data_set.data_set_length);
+
+	switch (emp->first_data_set.ds_type) {
+	case HDMI_EMP_DS_TYPE_PSTATIC:
+		*emp_header |= TRANS_HDMI_EMP_DS_TYPE_PSTATIC;
+		break;
+	case HDMI_EMP_DS_TYPE_DYNAMIC:
+		*emp_header |= TRANS_HDMI_EMP_DS_TYPE_DYNAMIC;
+		break;
+	case HDMI_EMP_DS_TYPE_UNIQUE:
+		*emp_header |= TRANS_HDMI_EMP_DS_TYPE_UNIQUE;
+		break;
+	default:
+		break;
+	}
+
+	if (emp->first_data_set.pb0_end)
+		*emp_header |= TRANS_HDMI_EMP_END;
+}
+
+void intel_hdmi_set_hcactive(struct drm_i915_private *dev_priv,
+			     const struct intel_crtc_state *crtc_state)
+{
+	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
+	u32 val = 0;
+
+	if (!crtc_state->dsc.compression_enable)
+		return;
+
+	val |= TRANS_HDMI_HCACTIVE_TB(crtc_state->frl.hcactive_tb);
+	val |= TRANS_HDMI_HCTOTAL_TB(crtc_state->frl.hctotal_tb);
+
+	intel_de_write(dev_priv, TRANS_HDMI_HCTOTAL(cpu_transcoder), val);
 }

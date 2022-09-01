@@ -46,6 +46,7 @@
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt_debug.h"
@@ -462,7 +463,6 @@ static void compress_print_pages(struct drm_i915_error_state_buf *m,
 static void error_print_instdone(struct drm_i915_error_state_buf *m,
 				 const struct intel_engine_coredump *ee)
 {
-	const struct sseu_dev_info *sseu = &ee->engine->gt->info.sseu;
 	int slice;
 	int subslice;
 	int iter;
@@ -479,33 +479,21 @@ static void error_print_instdone(struct drm_i915_error_state_buf *m,
 	if (GRAPHICS_VER(m->i915) <= 6)
 		return;
 
-	if (GRAPHICS_VER_FULL(m->i915) >= IP_VER(12, 50)) {
-		for_each_instdone_gslice_dss_xehp(m->i915, sseu, iter, slice, subslice)
-			err_printf(m, "  SAMPLER_INSTDONE[%d][%d]: 0x%08x\n",
-				   slice, subslice,
-				   ee->instdone.sampler[slice][subslice]);
+	for_each_ss_steering(iter, ee->engine->gt, slice, subslice)
+		err_printf(m, "  SAMPLER_INSTDONE[%d][%d]: 0x%08x\n",
+			   slice, subslice,
+			   ee->instdone.sampler[slice][subslice]);
 
-		for_each_instdone_gslice_dss_xehp(m->i915, sseu, iter, slice, subslice)
-			err_printf(m, "  ROW_INSTDONE[%d][%d]: 0x%08x\n",
-				   slice, subslice,
-				   ee->instdone.row[slice][subslice]);
-	} else {
-		for_each_instdone_slice_subslice(m->i915, sseu, slice, subslice)
-			err_printf(m, "  SAMPLER_INSTDONE[%d][%d]: 0x%08x\n",
-				   slice, subslice,
-				   ee->instdone.sampler[slice][subslice]);
-
-		for_each_instdone_slice_subslice(m->i915, sseu, slice, subslice)
-			err_printf(m, "  ROW_INSTDONE[%d][%d]: 0x%08x\n",
-				   slice, subslice,
-				   ee->instdone.row[slice][subslice]);
-	}
+	for_each_ss_steering(iter, ee->engine->gt, slice, subslice)
+		err_printf(m, "  ROW_INSTDONE[%d][%d]: 0x%08x\n",
+			   slice, subslice,
+			   ee->instdone.row[slice][subslice]);
 
 	if (GRAPHICS_VER(m->i915) < 12)
 		return;
 
 	if (GRAPHICS_VER_FULL(m->i915) >= IP_VER(12, 55)) {
-		for_each_instdone_gslice_dss_xehp(m->i915, sseu, iter, slice, subslice)
+		for_each_ss_steering(iter, ee->engine->gt, slice, subslice)
 			err_printf(m, "  GEOM_SVGUNIT_INSTDONE[%d][%d]: 0x%08x\n",
 				   slice, subslice,
 				   ee->instdone.geom_svg[slice][subslice]);
@@ -825,6 +813,7 @@ static void err_print_gt_global_nonguc(struct drm_i915_error_state_buf *m,
 	err_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
 		   gt->clock_frequency, gt->clock_period_ns);
 	err_printf(m, "EIR: 0x%08x\n", gt->eir);
+	err_printf(m, "PGTBL_ER: 0x%08x\n", gt->pgtbl_er);
 
 	for (i = 0; i < gt->ngtier; i++)
 		err_printf(m, "GTIER[%d]: 0x%08x\n", i, gt->gtier[i]);
@@ -2163,8 +2152,8 @@ static void gt_record_global_nonguc_regs(struct intel_gt_coredump *gt)
 		gt->ngtier = 1;
 	}
 
-	if (intel_gt_has_eus(gt->_gt))
-		gt->eir = intel_uncore_read(uncore, EIR);
+	gt->eir = intel_uncore_read(uncore, EIR);
+	gt->pgtbl_er = intel_uncore_read(uncore, PGTBL_ER);
 }
 
 /*
@@ -2854,8 +2843,16 @@ void intel_klog_error_capture(struct intel_gt *gt,
 	size_t pos_err;
 	char *buf, *ptr, *next;
 
-	if (i915_is_pci_faulted(i915))
+	/* Can't allocate memory during a reset */
+	if (test_bit(I915_RESET_BACKOFF, &gt->reset.flags)) {
+		drm_err(&gt->i915->drm, "Inside GT reset, skipping error capture :(\n");
 		return;
+	}
+
+	if (i915_is_pci_faulted(i915)) {
+		drm_err(&gt->i915->drm, "PCI is faulted, skipping error capture :(\n");
+		return;
+	}
 
 	error = READ_ONCE(i915->gpu_error.first_error);
 	if (error) {

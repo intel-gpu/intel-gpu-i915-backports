@@ -20,7 +20,7 @@ int intel_engine_live_selftests(struct drm_i915_private *i915)
 	for (fn = tests; *fn; fn++) {
 		int err;
 
-		for_each_gt(i915, id, gt) {
+		for_each_gt(gt, i915, id) {
 			err = (*fn)(gt);
 			if (err)
 				return err;

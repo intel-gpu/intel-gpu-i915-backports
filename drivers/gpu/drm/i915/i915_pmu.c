@@ -300,9 +300,15 @@ static bool pmu_needs_timer(struct i915_pmu *pmu, bool gpu_active)
 static u64 __get_rc6(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
+	i915_reg_t reg;
 	u64 val;
 
-	val = intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6);
+	if (gt->type == GT_MEDIA)
+		reg = MTL_MEDIA_MC6;
+	else
+		reg = GEN6_GT_GFX_RC6;
+
+	val = intel_rc6_residency_ns(&gt->rc6, reg);
 
 	if (HAS_RC6p(i915))
 		val += intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6p);
@@ -486,7 +492,7 @@ static void init_samples(struct i915_pmu *pmu)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		intel_wakeref_t wakeref;
 
 		with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
@@ -727,7 +733,7 @@ static enum hrtimer_restart i915_sample(struct hrtimer *hrtimer)
 	 * back delay greatly dominates this so we keep it simple.
 	 */
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (!(pmu->unparked & BIT(i)))
 			continue;
 
@@ -1548,7 +1554,7 @@ create_event_attributes(struct i915_pmu *pmu)
 		     ARRAY_SIZE(i915_driver_error_map));
 
 	/* Count how many counters we will be exposing. */
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		for (i = 0; i < ARRAY_SIZE(events); i++) {
 			u64 config = ___PRELIM_I915_PMU_OTHER(j, events[i].counter);
 
@@ -1605,7 +1611,7 @@ create_event_attributes(struct i915_pmu *pmu)
 	attr_iter = attr;
 
 	/* Initialize supported non-engine counters. */
-	for_each_gt(i915, j, gt) {
+	for_each_gt(gt, i915, j) {
 		char *str;
 
 		for (i = 0; i < ARRAY_SIZE(events); i++) {

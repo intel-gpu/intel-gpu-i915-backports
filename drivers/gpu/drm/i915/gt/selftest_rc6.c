@@ -15,11 +15,18 @@
 
 static u64 rc6_residency(struct intel_rc6 *rc6)
 {
+	struct intel_gt *gt = rc6_to_gt(rc6);
+	i915_reg_t reg;
 	u64 result;
 
 	/* XXX VLV_GT_MEDIA_RC6? */
 
-	result = intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6);
+	if (gt->type == GT_MEDIA)
+		reg = MTL_MEDIA_MC6;
+	else
+		reg = GEN6_GT_GFX_RC6;
+
+	result = intel_rc6_residency_ns(rc6, reg);
 	if (HAS_RC6p(rc6_to_i915(rc6)))
 		result += intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6p);
 	if (HAS_RC6pp(rc6_to_i915(rc6)))

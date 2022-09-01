@@ -132,6 +132,7 @@ void mock_init_ggtt(struct drm_i915_private *i915, struct i915_ggtt *ggtt)
 	ggtt->vm.vma_ops.set_pages   = ggtt_set_pages;
 	ggtt->vm.vma_ops.clear_pages = clear_pages;
 
+	INIT_LIST_HEAD(&ggtt->gt_list);
 	i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
 	intel_gt_init_ggtt(to_gt(i915), ggtt);
 }

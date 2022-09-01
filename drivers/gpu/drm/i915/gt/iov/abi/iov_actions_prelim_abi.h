@@ -34,7 +34,7 @@
  *  +---+-------+--------------------------------------------------------------+
  *  | 2 |  31:0 | **OFFSET_HI** - high bits of GGTT PTE offset                 |
  *  +---+-------+--------------------------------------------------------------+
- *  | 3 |  31:0 | **CACHE_LEVEL** - cache level                                |
+ *  | 3 |  31:0 | **PAT_INDEX** - PAT index                                    |
  *  +---+-------+--------------------------------------------------------------+
  *  | 4 |  31:0 | **PTE_FLAGS** - PTE flags                                    |
  *  +---+-------+--------------------------------------------------------------+
@@ -59,7 +59,7 @@
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_0_MBZ		GUC_HXG_REQUEST_MSG_0_DATA0
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_1_OFFSET_LO	GUC_HXG_REQUEST_MSG_n_DATAn
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_2_OFFSET_HI	GUC_HXG_REQUEST_MSG_n_DATAn
-#define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_CACHE_LEVEL	GUC_HXG_REQUEST_MSG_n_DATAn
+#define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_PAT_INDEX	GUC_HXG_REQUEST_MSG_n_DATAn
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_4_PTE_FLAGS	GUC_HXG_REQUEST_MSG_n_DATAn
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_5_ADDR_LO	GUC_HXG_REQUEST_MSG_n_DATAn
 #define VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_6_ADDR_HI	GUC_HXG_REQUEST_MSG_n_DATAn

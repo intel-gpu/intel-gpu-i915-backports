@@ -111,8 +111,6 @@ u16 intel_dp_dsc_get_output_bpp(struct drm_i915_private *i915,
 u8 intel_dp_dsc_get_slice_count(struct intel_dp *intel_dp,
 				int mode_clock, int mode_hdisplay,
 				bool bigjoiner);
-bool intel_dp_need_bigjoiner(struct intel_dp *intel_dp,
-			     int hdisplay, int clock);
 
 static inline unsigned int intel_dp_unused_lane_mask(int lane_count)
 {

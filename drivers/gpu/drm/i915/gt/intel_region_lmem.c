@@ -212,7 +212,7 @@ static resource_size_t vf_get_lmem_base(struct intel_iov *iov)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(iov_to_i915(iov)));
 
-	for_each_gt(i915, id, gt)
+	for_each_gt(gt, i915, id)
 		if (id < iov_to_gt(iov)->info.id)
 			base += vf_get_lmem_size(&gt->iov);
 		else

@@ -1089,6 +1089,10 @@ static void gen9_dbuf_enable(struct drm_i915_private *dev_priv)
 	dev_priv->dbuf.enabled_slices =
 		intel_enabled_dbuf_slices_mask(dev_priv);
 
+	if (DISPLAY_VER(dev_priv) >= 14)
+		intel_program_dbuf_pmdemand(dev_priv, BIT(DBUF_S1) |
+					    dev_priv->dbuf.enabled_slices);
+
 	/*
 	 * Just power up at least 1 slice, we will
 	 * figure out later which slices we have and what we need.
@@ -1100,6 +1104,9 @@ static void gen9_dbuf_enable(struct drm_i915_private *dev_priv)
 static void gen9_dbuf_disable(struct drm_i915_private *dev_priv)
 {
 	gen9_dbuf_slices_update(dev_priv, 0);
+
+	if (DISPLAY_VER(dev_priv) >= 14)
+		intel_program_dbuf_pmdemand(dev_priv, 0);
 }
 
 static void gen12_dbuf_slices_config(struct drm_i915_private *dev_priv)
@@ -1120,7 +1127,7 @@ static void icl_mbus_init(struct drm_i915_private *dev_priv)
 	unsigned long abox_regs = INTEL_INFO(dev_priv)->display.abox_mask;
 	u32 mask, val, i;
 
-	if (IS_ALDERLAKE_P(dev_priv))
+	if (IS_ALDERLAKE_P(dev_priv) || DISPLAY_VER(dev_priv) >= 14)
 		return;
 
 	mask = MBUS_ABOX_BT_CREDIT_POOL1_MASK |
@@ -1400,6 +1407,9 @@ static void intel_pch_reset_handshake(struct drm_i915_private *dev_priv,
 		reset_bits = RESET_PCH_HANDSHAKE_ENABLE;
 	}
 
+	if (DISPLAY_VER(dev_priv) >= 14)
+		reset_bits |= MTL_RESET_PICA_HANDSHAKE_EN;
+
 	val = intel_de_read(dev_priv, reg);
 
 	if (enable)
@@ -1452,6 +1462,7 @@ static void skl_display_core_uninit(struct drm_i915_private *dev_priv)
 		return;
 
 	gen9_disable_dc_states(dev_priv);
+	/* TODO: disable DMC program */
 
 	gen9_dbuf_disable(dev_priv);
 
@@ -1519,6 +1530,7 @@ static void bxt_display_core_uninit(struct drm_i915_private *dev_priv)
 		return;
 
 	gen9_disable_dc_states(dev_priv);
+	/* TODO: disable DMC program */
 
 	gen9_dbuf_disable(dev_priv);
 
@@ -1632,6 +1644,14 @@ static void icl_display_core_init(struct drm_i915_private *dev_priv,
 		intel_de_rmw(dev_priv, SOUTH_DSPCLK_GATE_D, 0,
 			     PCH_DPMGUNIT_CLOCK_GATE_DISABLE);
 
+	/* Wa_16015201720:adl-p,dg2 */
+	if (DISPLAY_VER(dev_priv) == 13) {
+		intel_de_rmw(dev_priv, CLKGATE_DIS_PSL_EXT(PIPE_A),
+			     0, PIPEDMC_GATING_DIS);
+		intel_de_rmw(dev_priv, CLKGATE_DIS_PSL_EXT(PIPE_B),
+			     0, PIPEDMC_GATING_DIS);
+	}
+
 	/* 1. Enable PCH reset handshake. */
 	intel_pch_reset_handshake(dev_priv, !HAS_PCH_NOP(dev_priv));
 
@@ -1639,7 +1659,8 @@ static void icl_display_core_init(struct drm_i915_private *dev_priv,
 		return;
 
 	/* 2. Initialize all combo phys */
-	intel_combo_phy_init(dev_priv);
+	if (DISPLAY_VER(dev_priv) < 14)
+		intel_combo_phy_init(dev_priv);
 
 	/*
 	 * 3. Enable Power Well 1 (PG1).
@@ -1649,6 +1670,10 @@ static void icl_display_core_init(struct drm_i915_private *dev_priv,
 	well = lookup_power_well(dev_priv, SKL_DISP_PW_1);
 	intel_power_well_enable(dev_priv, well);
 	mutex_unlock(&power_domains->lock);
+
+	if (DISPLAY_VER(dev_priv) == 14)
+		intel_de_rmw(dev_priv, DC_STATE_EN,
+			     HOLD_PHY_PG1_LATCH | HOLD_PHY_CLKREQ_PG1_LATCH, 0);
 
 	/* 4. Enable CDCLK. */
 	intel_cdclk_init_hw(dev_priv);
@@ -1694,6 +1719,7 @@ static void icl_display_core_uninit(struct drm_i915_private *dev_priv)
 		return;
 
 	gen9_disable_dc_states(dev_priv);
+	intel_dmc_disable_program(dev_priv);
 
 	/* 1. Disable all display engine functions -> aready done */
 
@@ -1702,6 +1728,10 @@ static void icl_display_core_uninit(struct drm_i915_private *dev_priv)
 
 	/* 3. Disable CD clock */
 	intel_cdclk_uninit_hw(dev_priv);
+
+	if (DISPLAY_VER(dev_priv) == 14)
+		intel_de_rmw(dev_priv, DC_STATE_EN, 0,
+			     HOLD_PHY_PG1_LATCH | HOLD_PHY_CLKREQ_PG1_LATCH);
 
 	/*
 	 * 4. Disable Power Well 1 (PG1).

@@ -32,6 +32,7 @@ void i915_drm_clients_init(struct i915_drm_clients *clients,
 			   struct drm_i915_private *i915)
 {
 	clients->i915 = i915;
+	clients->wq = create_workqueue("i915_drm_clients");
 
 	clients->next_id = 0;
 	xa_init_flags(&clients->xarray, XA_FLAGS_ALLOC);
@@ -505,7 +506,7 @@ void __i915_drm_client_free(struct kref *kref)
 	struct i915_drm_client *client =
 		container_of(kref, typeof(*client), kref);
 
-	queue_rcu_work(system_wq, &client->rcu);
+	queue_rcu_work(client->clients->wq, &client->rcu);
 }
 
 void i915_drm_client_close(struct i915_drm_client *client)
@@ -537,12 +538,13 @@ i915_drm_client_update(struct i915_drm_client *client,
 
 void i915_drm_clients_fini(struct i915_drm_clients *clients)
 {
-	flush_scheduled_work();
+	flush_workqueue(clients->wq);
 
 	if (!xa_empty(&clients->xarray)) {
 		rcu_barrier();
-		flush_workqueue(system_wq);
+		flush_workqueue(clients->wq);
 	}
 
 	xa_destroy(&clients->xarray);
+	destroy_workqueue(clients->wq);
 }

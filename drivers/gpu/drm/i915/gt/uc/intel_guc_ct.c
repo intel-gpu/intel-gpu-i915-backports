@@ -111,8 +111,8 @@ enum { CTB_SEND = 0, CTB_RECV = 1 };
 
 enum { CTB_OWNER_HOST = 0 };
 
-static void ct_receive_tasklet_func(unsigned long data);
-static void ct_incoming_request_worker_func(struct work_struct *w);
+static noinline void ct_receive_tasklet_func(unsigned long data);
+static noinline  void ct_incoming_request_worker_func(struct work_struct *w);
 
 /**
  * intel_guc_ct_init_early - Initialize CT state without requiring device access
@@ -1191,7 +1191,7 @@ static bool ct_process_incoming_requests(struct intel_guc_ct *ct, struct list_he
 	return done;
 }
 
-static void ct_incoming_request_worker_func(struct work_struct *w)
+static noinline void ct_incoming_request_worker_func(struct work_struct *w)
 {
 	struct intel_guc_ct *ct =
 		container_of(w, struct intel_guc_ct, requests.worker);
@@ -1351,7 +1351,7 @@ static void ct_try_receive_message(struct intel_guc_ct *ct)
 		tasklet_hi_schedule(&ct->receive_tasklet);
 }
 
-static void ct_receive_tasklet_func(unsigned long data)
+static noinline void ct_receive_tasklet_func(unsigned long data)
 {
 	struct intel_guc_ct *ct = (struct intel_guc_ct *)data;
 
