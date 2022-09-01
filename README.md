@@ -14,7 +14,7 @@ This driver is part of a collection of kernel-mode drivers that enable support f
 - [Intel® Graphics Driver Backports for Linux](https://github.com/intel-gpu/intel-gpu-i915-backports) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
 - [Intel® Converged Security Engine Backports](https://github.com/intel-gpu/intel-gpu-cse-backports) - Converged Security Engine
 - [Intel® Platform Monitoring Technology Backports](https://github.com/intel-gpu/intel-gpu-pmt-backports/) - Intel Platform Telemetry
-- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-i915-backports) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag. 
 
