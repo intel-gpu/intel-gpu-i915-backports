@@ -919,6 +919,8 @@ struct drm_i915_private {
 		spinlock_t lock; /* lock for list */
 		struct list_head list;
 		u64 session_count;
+		bool enable_eu_debug;
+		struct mutex enable_eu_debug_lock;
 	} debuggers;
 #endif
 
@@ -1036,15 +1038,6 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 	for ((engine__) = intel_engine_lookup_user((i915__), (class__), 0); \
 	     (engine__) && (engine__)->uabi_class == (class__); \
 	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node)))
-
-/* Iterator over PVC subslices selected by subslice_mask_ */
-#define for_each_pvc_subslice(slice_, subslice_, subslice_mask_, iter_) \
-	for ((slice_) = 0, (subslice_) = 0, (iter_) = 0; \
-	     (iter_) < XEHP_BITMAP_BITS(subslice_mask_); \
-	     (iter_) = ((iter_) + 1), \
-	     (slice_) += ((iter_) % GEN_DSS_PER_CSLICE) ? 0 : 1, \
-	     (subslice_) = (iter_) % GEN_DSS_PER_CSLICE) \
-		for_each_if(test_bit(iter_, subslice_mask_.xehp))
 
 #define I915_GTT_OFFSET_NONE ((u32)-1)
 
@@ -1226,7 +1219,12 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_XEHPSDV(dev_priv) IS_PLATFORM(dev_priv, INTEL_XEHPSDV)
 #define IS_DG2(dev_priv)	IS_PLATFORM(dev_priv, INTEL_DG2)
 #define IS_PONTEVECCHIO(dev_priv) IS_PLATFORM(dev_priv, INTEL_PONTEVECCHIO)
+#define IS_METEORLAKE(dev_priv) IS_PLATFORM(dev_priv, INTEL_METEORLAKE)
 
+#define IS_METEORLAKE_M(dev_priv) \
+	IS_SUBPLATFORM(dev_priv, INTEL_METEORLAKE, INTEL_SUBPLATFORM_M)
+#define IS_METEORLAKE_P(dev_priv) \
+	IS_SUBPLATFORM(dev_priv, INTEL_METEORLAKE, INTEL_SUBPLATFORM_P)
 #define IS_DG2_G10(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G10)
 #define IS_DG2_G11(dev_priv) \

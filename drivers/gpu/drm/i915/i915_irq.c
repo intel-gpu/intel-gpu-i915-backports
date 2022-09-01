@@ -3332,7 +3332,7 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 		return IRQ_NONE;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		void __iomem *const regs = gt->uncore->regs;
 
 		if ((master_tile_ctl & DG1_MSTR_TILE(i)) == 0)
@@ -3385,7 +3385,7 @@ static irqreturn_t vf_mem_irq_handler(int irq, void *arg)
 	if (!intel_irqs_enabled(i915))
 		return IRQ_NONE;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_iov_memirq_handler(&gt->iov);
 
 	pmu_irq_stats(i915, IRQ_HANDLED);
@@ -3398,7 +3398,7 @@ static void vf_mem_irq_reset(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_iov_memirq_reset(&gt->iov);
 }
 
@@ -3407,7 +3407,7 @@ static int vf_mem_irq_postinstall(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_iov_memirq_postinstall(&gt->iov);
 
 	return 0;
@@ -3795,7 +3795,7 @@ static void dg1_irq_reset(struct drm_i915_private *dev_priv)
 
 	dg1_master_intr_disable(dev_priv->uncore.regs);
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		gen11_gt_irq_reset(gt);
 
 		uncore = gt->uncore;
@@ -4538,7 +4538,7 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		/*
 		 * All Soc error correctable, non fatal and fatal are reported
 		 * to IEH registers only. To be safe we are clearing these errors as well.
@@ -5222,7 +5222,7 @@ static void process_fatal_hw_errors(struct drm_i915_private *dev_priv)
 	if (!dev_pcieerr_status)
 		return;
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		void __iomem *const regs = gt->uncore->regs;
 
 		if (dev_pcieerr_status & DEV_PCIEERR_IS_FATAL(i))

@@ -1203,6 +1203,31 @@ static const struct intel_device_info pvc_info = {
 	PVC_CACHELEVEL,
 };
 
+#define XE_LPDP_FEATURES	\
+	XE_LPD_FEATURES,	\
+	.display.ver = 14,	\
+	.display.has_cdclk_crawl = 1
+
+__maybe_unused
+static const struct intel_device_info mtl_info = {
+	XE_HP_FEATURES,
+	XE_LPDP_FEATURES,
+	/*
+	 * Real graphics IP version will be obtained from hardware GMD_ID
+	 * register.  Value provided here is just for sanity checking.
+	 */
+	.graphics.ver = 12,
+	.graphics.rel = 70,
+	.media.ver = 13,
+	PLATFORM(INTEL_METEORLAKE),
+	.display.has_modular_fia = 1,
+	.has_flat_ccs = 0,
+	.has_snoop = 1,
+	.memory_regions = REGION_SMEM | REGION_STOLEN_LMEM,
+	.platform_engine_mask = BIT(RCS0) | BIT(BCS0) | BIT(CCS0),
+	.require_force_probe = 1,
+};
+
 #undef PLATFORM
 
 /*
@@ -1285,6 +1310,7 @@ static const struct pci_device_id pciidlist[] = {
 	INTEL_RPLP_IDS(&adl_p_info),
 	INTEL_DG2_IDS(&dg2_info),
 	INTEL_ATS_M_IDS(&ats_m_info),
+	INTEL_MTL_IDS(&mtl_info),
 	INTEL_XEHPSDV_IDS(&xehpsdv_info),
 	INTEL_PVC_IDS(&pvc_info),
 	{0, 0, 0}
@@ -1406,16 +1432,16 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		return err;
 
-	i915 = pci_get_drvdata(pdev);
+	i915 = pdev_to_i915(pdev);
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		i915_driver_register(i915);
 
-	if (i915_inject_probe_failure(pci_get_drvdata(pdev))) {
+	if (i915_inject_probe_failure(i915)) {
 		i915_pci_remove(pdev);
 		return -ENODEV;
 	}
 
-	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
+	pvc_wa_disallow_rc6(i915);
 	err = i915_live_selftests(pdev);
 	if (err)
 		goto out_i915_selftests;
@@ -1424,7 +1450,7 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		goto out_i915_selftests;
 
-	pvc_wa_allow_rc6(pdev_to_i915(pdev));
+	pvc_wa_allow_rc6(i915);
 
 	if (i915_save_pci_state(pdev))
 		pci_restore_state(pdev);
@@ -1432,7 +1458,7 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 out_i915_selftests:
-	pvc_wa_allow_rc6(pdev_to_i915(pdev));
+	pvc_wa_allow_rc6(i915);
 	i915_pci_remove(pdev);
 	return err > 0 ? -ENOTTY : err;
 }

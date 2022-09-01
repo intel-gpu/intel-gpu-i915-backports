@@ -100,7 +100,7 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915);
 int intel_gt_tiles_init(struct drm_i915_private *i915);
 void intel_gt_tiles_cleanup(struct drm_i915_private *i915);
 
-#define for_each_gt(i915__, id__, gt__) \
+#define for_each_gt(gt__, i915__, id__) \
 	for ((id__) = 0; \
 	     (id__) < I915_MAX_GT; \
 	     (id__)++) \
@@ -129,13 +129,13 @@ static inline void _pvc_wa_disallow_rc6(struct drm_i915_private *i915, bool enab
 	intel_uncore_forcewake = enable ? intel_uncore_forcewake_get :
 						intel_uncore_forcewake_put;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		/* FIXME Remove static check and add dynamic check to avoid rpm helper */
 		if (!rpm_awake) {
 			with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-				intel_uncore_forcewake(gt->uncore, FORCEWAKE_ALL);
+				intel_uncore_forcewake(gt->uncore, FORCEWAKE_GT);
 		} else {
-			intel_uncore_forcewake(gt->uncore, FORCEWAKE_ALL);
+			intel_uncore_forcewake(gt->uncore, FORCEWAKE_GT);
 		}
 	}
 }
@@ -162,7 +162,6 @@ static inline void pvc_wa_allow_rc6_if_awake(struct drm_i915_private *i915)
 
 void intel_gt_info_print(const struct intel_gt_info *info,
 			 struct drm_printer *p);
-bool intel_gt_has_eus(const struct intel_gt *gt);
 
 void intel_gt_watchdog_work(struct work_struct *work);
 

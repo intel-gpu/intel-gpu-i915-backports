@@ -147,17 +147,6 @@ guc_create_parallel(struct intel_engine_cs **engines,
 #define GUC_REQUEST_SIZE 64 /* bytes */
 
 /*
- * We reserve 1/16 of the guc_ids for multi-lrc as these need to be contiguous
- * per the GuC submission interface. A different allocation algorithm is used
- * (bitmap vs. ida) between multi-lrc and single-lrc hence the reason to
- * partition the guc_id space. We believe the number of multi-lrc contexts in
- * use should be low and 1/16 should be sufficient. Minimum of 32 guc_ids for
- * multi-lrc.
- */
-#define NUMBER_MULTI_LRC_GUC_ID(guc)	\
-	((guc)->submission_state.num_guc_ids / 16)
-
-/*
  * Below is a set of functions which control the GuC scheduling state which
  * require a lock.
  */
@@ -1226,20 +1215,6 @@ static u32 gpm_timestamp_shift(struct intel_gt *gt)
 	return 3 - shift;
 }
 
-static u64 gpm_timestamp(struct intel_gt *gt)
-{
-	u32 lo, hi, old_hi, loop = 0;
-
-	hi = intel_uncore_read(gt->uncore, MISC_STATUS1);
-	do {
-		lo = intel_uncore_read(gt->uncore, MISC_STATUS0);
-		old_hi = hi;
-		hi = intel_uncore_read(gt->uncore, MISC_STATUS1);
-	} while (old_hi != hi && loop++ < 2);
-
-	return ((u64)hi << 32) | lo;
-}
-
 static void guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
@@ -1249,7 +1224,8 @@ static void guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 	lockdep_assert_held(&guc->timestamp.lock);
 
 	gt_stamp_hi = upper_32_bits(guc->timestamp.gt_stamp);
-	gpm_ts = gpm_timestamp(gt) >> guc->timestamp.shift;
+	gpm_ts = intel_uncore_read64_2x32(gt->uncore, MISC_STATUS0,
+					  MISC_STATUS1) >> guc->timestamp.shift;
 	gt_stamp_lo = lower_32_bits(gpm_ts);
 	*now = ktime_get();
 
@@ -1431,7 +1407,12 @@ void intel_guc_busyness_park(struct intel_gt *gt)
 	if (!guc_submission_initialized(guc))
 		return;
 
-	cancel_delayed_work(&guc->timestamp.work);
+	/*
+	 * There is a race with suspend flow where the worker runs after suspend
+	 * and causes an unclaimed register access warning. Cancel the worker
+	 * synchronously here.
+	 */
+	cancel_delayed_work_sync(&guc->timestamp.work);
 
 	/*
 	 * Before parking, we should sample engine busyness stats if we need to.
@@ -1611,85 +1592,18 @@ static void guc_reset_state(struct intel_context *ce, u32 head, bool scrub)
 	lrc_update_regs(ce, engine, head);
 }
 
-static u32 __cs_pending_mi_force_wakes(struct intel_engine_cs *engine)
-{
-	static const i915_reg_t _reg[I915_NUM_ENGINES] = {
-		[RCS0] = MSG_IDLE_CS,
-		[BCS0] = MSG_IDLE_BCS,
-		[VCS0] = MSG_IDLE_VCS0,
-		[VCS1] = MSG_IDLE_VCS1,
-		[VCS2] = MSG_IDLE_VCS2,
-		[VCS3] = MSG_IDLE_VCS3,
-		[VCS4] = MSG_IDLE_VCS4,
-		[VCS5] = MSG_IDLE_VCS5,
-		[VCS6] = MSG_IDLE_VCS6,
-		[VCS7] = MSG_IDLE_VCS7,
-		[VECS0] = MSG_IDLE_VECS0,
-		[VECS1] = MSG_IDLE_VECS1,
-		[VECS2] = MSG_IDLE_VECS2,
-		[VECS3] = MSG_IDLE_VECS3,
-		[CCS0] = MSG_IDLE_CS,
-		[CCS1] = MSG_IDLE_CS,
-		[CCS2] = MSG_IDLE_CS,
-		[CCS3] = MSG_IDLE_CS,
-	};
-	u32 val;
-
-	if (!_reg[engine->id].reg)
-		return 0;
-
-	val = intel_uncore_read(engine->uncore, _reg[engine->id]);
-
-	/* bits[29:25] & bits[13:9] >> shift */
-	return (val & (val >> 16) & MSG_IDLE_FW_MASK) >> MSG_IDLE_FW_SHIFT;
-}
-
-static void __gpm_wait_for_fw_complete(struct intel_gt *gt, u32 fw_mask)
-{
-	int ret;
-
-	/* Ensure GPM receives fw up/down after CS is stopped */
-	udelay(1);
-
-	/* Wait for forcewake request to complete in GPM */
-	ret =  __intel_wait_for_register_fw(gt->uncore,
-					    GEN9_PWRGT_DOMAIN_STATUS,
-					    fw_mask, fw_mask, 5000, 0, NULL);
-
-	/* Ensure CS receives fw ack from GPM */
-	udelay(1);
-
-	if (ret)
-		GT_TRACE(gt, "Failed to complete pending forcewake %d\n", ret);
-}
-
-/*
- * Wa_22011802037:gen12: In addition to stopping the cs, we need to wait for any
- * pending MI_FORCE_WAKEUP requests that the CS has initiated to complete. The
- * pending status is indicated by bits[13:9] (masked by bits[ 29:25]) in the
- * MSG_IDLE register. There's one MSG_IDLE register per reset domain. Since we
- * are concerned only with the gt reset here, we use a logical OR of pending
- * forcewakeups from all reset domains and then wait for them to complete by
- * querying PWRGT_DOMAIN_STATUS.
- */
 static void guc_engine_reset_prepare(struct intel_engine_cs *engine)
 {
-	u32 fw_pending;
-
-	if (GRAPHICS_VER(engine->i915) != 12)
+	if (!IS_GRAPHICS_VER(engine->i915, 11, 12))
 		return;
 
-	/*
-	 * Wa_22011802037:
-	 * FIXME: stopping the cs times out occassionally. Need to check with HW
-	 * is the timeout configured for stop_cs is good enought to rule out any
-	 * active MI FORCE WAKEUPs. Until then discard the return value.
-	 */
 	intel_engine_stop_cs(engine);
 
-	fw_pending = __cs_pending_mi_force_wakes(engine);
-	if (fw_pending)
-		__gpm_wait_for_fw_complete(engine->gt, fw_pending);
+	/*
+	 * Wa_22011802037:gen11/gen12: In addition to stopping the cs, we need
+	 * to wait for any pending mi force wakeups
+	 */
+	intel_engine_wait_for_pending_mi_fw(engine);
 }
 
 static void guc_reset_nop(struct intel_engine_cs *engine)
@@ -2026,6 +1940,7 @@ void intel_guc_submission_reset_finish(struct intel_guc *guc)
 }
 
 static void destroyed_worker_func(struct work_struct *w);
+static int number_mlrc_guc_id(struct intel_guc *guc);
 
 static int init_tlb_lookup(struct intel_guc *guc)
 {
@@ -2079,7 +1994,7 @@ int intel_guc_submission_init(struct intel_guc *guc)
 		return ret;
 
 	guc->submission_state.guc_ids_bitmap =
-		bitmap_zalloc(NUMBER_MULTI_LRC_GUC_ID(guc), GFP_KERNEL);
+		bitmap_zalloc(number_mlrc_guc_id(guc), GFP_KERNEL);
 	if (!guc->submission_state.guc_ids_bitmap) {
 		ret = -ENOMEM;
 		goto err;
@@ -2172,6 +2087,57 @@ static void guc_submit_request(struct i915_request *rq)
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
 }
 
+/*
+ * We reserve 1/16 of the guc_ids for multi-lrc as these need to be contiguous
+ * per the GuC submission interface. A different allocation algorithm is used
+ * (bitmap vs. ida) between multi-lrc and single-lrc hence the reason to
+ * partition the guc_id space. We believe the number of multi-lrc contexts in
+ * use should be low and 1/16 should be sufficient.
+ */
+#define MLRC_GUC_ID_RATIO	16
+
+static int number_mlrc_guc_id(struct intel_guc *guc)
+{
+	return guc->submission_state.num_guc_ids / MLRC_GUC_ID_RATIO;
+}
+
+static int number_slrc_guc_id(struct intel_guc *guc)
+{
+	return guc->submission_state.num_guc_ids - number_mlrc_guc_id(guc);
+}
+
+static int mlrc_guc_id_base(struct intel_guc *guc)
+{
+	return number_slrc_guc_id(guc);
+}
+
+static int new_mlrc_guc_id(struct intel_guc *guc, struct intel_context *ce)
+{
+	int ret;
+
+	GEM_BUG_ON(!intel_context_is_parent(ce));
+	GEM_BUG_ON(!guc->submission_state.guc_ids_bitmap);
+
+	ret =  bitmap_find_free_region(guc->submission_state.guc_ids_bitmap,
+				       number_mlrc_guc_id(guc),
+				       order_base_2(ce->parallel.number_children
+						    + 1));
+	if (unlikely(ret < 0))
+		return ret;
+
+	return ret + mlrc_guc_id_base(guc);
+}
+
+static int new_slrc_guc_id(struct intel_guc *guc, struct intel_context *ce)
+{
+	GEM_BUG_ON(intel_context_is_parent(ce));
+
+	return ida_simple_get(&guc->submission_state.guc_ids,
+			      0, number_slrc_guc_id(guc),
+			      GFP_KERNEL | __GFP_RETRY_MAYFAIL |
+			      __GFP_NOWARN);
+}
+
 int intel_guc_submission_limit_ids(struct intel_guc *guc, u32 limit)
 {
 	if (limit > GUC_MAX_CONTEXT_ID)
@@ -2191,16 +2157,10 @@ static int new_guc_id(struct intel_guc *guc, struct intel_context *ce)
 	GEM_BUG_ON(intel_context_is_child(ce));
 
 	if (intel_context_is_parent(ce))
-		ret = bitmap_find_free_region(guc->submission_state.guc_ids_bitmap,
-					      NUMBER_MULTI_LRC_GUC_ID(guc),
-					      order_base_2(ce->parallel.number_children
-							   + 1));
+		ret = new_mlrc_guc_id(guc, ce);
 	else
-		ret = ida_simple_get(&guc->submission_state.guc_ids,
-				     NUMBER_MULTI_LRC_GUC_ID(guc),
-				     guc->submission_state.num_guc_ids,
-				     GFP_KERNEL | __GFP_RETRY_MAYFAIL |
-				     __GFP_NOWARN);
+		ret = new_slrc_guc_id(guc, ce);
+
 	if (unlikely(ret < 0))
 		return ret;
 
@@ -2218,7 +2178,7 @@ static void __release_guc_id(struct intel_guc *guc, struct intel_context *ce)
 	if (!context_guc_id_invalid(ce)) {
 		if (intel_context_is_parent(ce)) {
 			bitmap_release_region(guc->submission_state.guc_ids_bitmap,
-					      ce->guc_id.id,
+					      ce->guc_id.id - mlrc_guc_id_base(guc),
 					      order_base_2(ce->parallel.number_children
 							   + 1));
 		} else {
@@ -3168,7 +3128,7 @@ static bool guc_id_pressure(struct intel_guc *guc, struct intel_context *ce)
 	 * If more than 3/4 of guc_ids in use, do schedule disable immediately.
 	 */
 	return guc->submission_state.guc_ids_in_use >
-		((GUC_MAX_CONTEXT_ID - NUMBER_MULTI_LRC_GUC_ID(guc)) / 4) * 3;
+		((GUC_MAX_CONTEXT_ID - number_mlrc_guc_id(guc)) / 4) * 3;
 }
 
 static void guc_context_sched_disable(struct intel_context *ce)
@@ -3559,13 +3519,8 @@ static void remove_from_context(struct i915_request *rq)
 	i915_request_notify_execute_cb_imm(rq);
 }
 
-static void guc_context_exit(struct intel_context *ce)
-{
-	lrc_update_runtime(ce);
-	intel_context_exit_engine(ce);
-}
-
 static const struct intel_context_ops guc_context_ops = {
+	.flags = COPS_RUNTIME_CYCLES,
 	.alloc = guc_context_alloc,
 
 	.pre_pin = guc_context_pre_pin,
@@ -3582,7 +3537,7 @@ static const struct intel_context_ops guc_context_ops = {
 	.resume = guc_context_resume,
 
 	.enter = intel_context_enter_engine,
-	.exit = guc_context_exit,
+	.exit = intel_context_exit_engine,
 
 	.sched_disable = guc_context_sched_disable,
 
@@ -3812,8 +3767,6 @@ static void guc_virtual_context_exit(struct intel_context *ce)
 	intel_engine_mask_t tmp, mask = ce->engine->mask;
 	struct intel_engine_cs *engine;
 
-	lrc_update_runtime(ce);
-
 	for_each_engine_masked(engine, ce->engine->gt, mask, tmp)
 		intel_engine_pm_put(engine);
 
@@ -3840,6 +3793,7 @@ static struct intel_context *guc_clone_virtual(struct intel_engine_cs *src)
 }
 
 static const struct intel_context_ops virtual_guc_context_ops = {
+	.flags = COPS_RUNTIME_CYCLES,
 	.alloc = guc_virtual_context_alloc,
 
 	.pre_pin = guc_virtual_context_pre_pin,
@@ -3934,6 +3888,7 @@ static void guc_child_context_destroy(struct kref *kref)
 }
 
 static const struct intel_context_ops virtual_parent_context_ops = {
+	.flags = COPS_RUNTIME_CYCLES,
 	.alloc = guc_virtual_context_alloc,
 
 	.pre_pin = guc_context_pre_pin,
@@ -3960,6 +3915,7 @@ static const struct intel_context_ops virtual_parent_context_ops = {
 };
 
 static const struct intel_context_ops virtual_child_context_ops = {
+	.flags = COPS_RUNTIME_CYCLES,
 	.alloc = guc_virtual_context_alloc,
 
 	.pre_pin = guc_context_pre_pin,

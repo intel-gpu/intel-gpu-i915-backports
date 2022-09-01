@@ -32,7 +32,7 @@ static void clear_poison_registers(struct drm_i915_private *i915)
 	 * HSDES: 14015574849
 	 */
 	if (IS_DGFX(i915)) {
-		for_each_gt(i915, i, gt) {
+		for_each_gt(gt, i915, i) {
 			/*
 			 * We just came out of a PCI reset, we can't truct mmio access yet
 			 * so limit to using raw access.
@@ -87,7 +87,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	device_for_each_child(&pdev->dev, NULL, device_set_offline);
 	intel_iaf_pcie_error_notify(i915);
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		intel_gt_set_wedged(gt);
 		intel_gt_retire_requests(gt);
 	}

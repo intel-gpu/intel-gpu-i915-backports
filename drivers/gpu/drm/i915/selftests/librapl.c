@@ -13,10 +13,12 @@ u64 librapl_energy_uJ(struct drm_i915_private *i915)
 {
 	unsigned long long power;
 	u32 units;
-	u64 energy_uJ = 0;
+	long energy_uJ = 0;
 
 	if (IS_DGFX(i915)) {
-		if (i915_energy_status_get(i915, &energy_uJ))
+#ifdef CONFIG_HWMON
+		if (i915_hwmon_energy_status_get(i915, &energy_uJ))
+#endif
 			return 0;
 
 	} else {
@@ -31,5 +33,4 @@ u64 librapl_energy_uJ(struct drm_i915_private *i915)
 		energy_uJ = (1000000 * power) >> units; /* convert to uJ */
 	}
 	return energy_uJ;
-
 }

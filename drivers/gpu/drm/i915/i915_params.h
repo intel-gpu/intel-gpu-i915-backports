@@ -65,6 +65,9 @@ struct drm_printer;
 	param(int, enable_guc, -1, 0400) \
 	param(unsigned int, guc_feature_flags, 0, 0400) \
 	param(int, guc_log_level, -1, 0400) \
+	param(int, guc_log_size_crash, -1, 0400) \
+	param(int, guc_log_size_debug, -1, 0400) \
+	param(int, guc_log_size_capture, -1, 0400) \
 	param(char *, guc_firmware_path, NULL, 0400) \
 	param(char *, huc_firmware_path, NULL, 0400) \
 	param(char *, dmc_firmware_path, NULL, 0400) \
@@ -89,7 +92,8 @@ struct drm_printer;
 	param(unsigned int, page_sz_mask, 0, 0600) \
 	param(unsigned int, debug_pages, 0, 0400) \
 	param(unsigned int, prelim_override_p2p_dist, 0, 0400)	\
-	/* leave bools at the end to not create holes */	\
+	/* leave bools at the end to not create holes */ \
+	param(bool, allow_non_persist_without_reset, false, 0400) \
 	param(bool, enable_fake_int_wa, true, 0400) \
 	param(bool, enable_pagefault, false, 0600) \
 	param(bool, enable_iaf, true, 0400) \

@@ -344,7 +344,7 @@ static int pf_handle_l4_wa(struct intel_iov *iov, u32 origin, u32 relay_id,
 			   const u32 *msg, u32 len)
 {
 	struct intel_gt *gt = iov_to_gt(iov);
-	u32 mbz, offset_low, offset_high, level, flags, addr_low, addr_high;
+	u32 mbz, offset_low, offset_high, pat_index, flags, addr_low, addr_high;
 	intel_wakeref_t wakeref;
 	dma_addr_t addr;
 	u64 offset;
@@ -358,7 +358,7 @@ static int pf_handle_l4_wa(struct intel_iov *iov, u32 origin, u32 relay_id,
 
 	offset_low = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_1_OFFSET_LO, msg[1]);
 	offset_high = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_2_OFFSET_HI, msg[2]);
-	level = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_CACHE_LEVEL, msg[3]);
+	pat_index = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_3_PAT_INDEX, msg[3]);
 	flags = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_4_PTE_FLAGS, msg[4]);
 	addr_low = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_5_ADDR_LO, msg[5]);
 	addr_high = FIELD_GET(VF2PF_PF_L4_WA_UPDATE_GGTT_REQUEST_MSG_6_ADDR_HI, msg[6]);
@@ -369,9 +369,7 @@ static int pf_handle_l4_wa(struct intel_iov *iov, u32 origin, u32 relay_id,
 	with_intel_gt_pm(gt, wakeref)
 		__gen8_ggtt_insert_page_wa_bcs(iov_to_gt(iov)->ggtt,
 					       origin, addr, offset,
-					       i915_gem_get_pat_index(gt->i915,
-								      level),
-					       flags);
+					       pat_index, flags);
 
 	return intel_iov_relay_reply_ack_to_vf(&iov->relay, origin, relay_id, 0);
 }

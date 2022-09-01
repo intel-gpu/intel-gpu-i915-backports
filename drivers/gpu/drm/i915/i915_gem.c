@@ -1148,7 +1148,7 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	if (ret)
 		return ret;
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uc_fetch_firmwares(&gt->uc);
 	intel_wopcm_init(&dev_priv->wopcm);
 
@@ -1172,7 +1172,7 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	if (HAS_UM_QUEUES(dev_priv))
 		xa_init_flags(&dev_priv->asid_resv.xa, XA_FLAGS_ALLOC);
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		ret = intel_gt_init(gt);
 		if (ret)
 			goto err_unlock;
@@ -1190,12 +1190,12 @@ err_unlock:
 	i915_gem_drain_workqueue(dev_priv);
 
 	if (ret != -EIO) {
-		for_each_gt(dev_priv, i, gt) {
+		for_each_gt(gt, dev_priv, i) {
 			intel_gt_driver_remove(gt);
 			intel_gt_driver_release(gt);
 		}
 
-		for_each_gt(dev_priv, i, gt)
+		for_each_gt(gt, dev_priv, i)
 			intel_uc_cleanup_firmwares(&gt->uc);
 	}
 
@@ -1205,7 +1205,7 @@ err_unlock:
 		 * as wedged. But we only want to do this when the GPU is angry,
 		 * for all other failure, such as an allocation failure, bail.
 		 */
-		for_each_gt(dev_priv, i, gt) {
+		for_each_gt(gt, dev_priv, i) {
 			if (!intel_gt_is_wedged(gt)) {
 				i915_probe_error(dev_priv,
 						"Failed to initialize GPU, declaring it wedged!\n");
@@ -1245,7 +1245,7 @@ void i915_gem_driver_remove(struct drm_i915_private *dev_priv)
 	i915_gem_drain_workqueue(dev_priv);
 
 	i915_gem_suspend_late(dev_priv);
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_remove(gt);
 	dev_priv->uabi_engines = RB_ROOT;
 
@@ -1259,10 +1259,10 @@ void i915_gem_driver_release(struct drm_i915_private *dev_priv)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_release(gt);
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uc_cleanup_firmwares(&gt->uc);
 
 	i915_gem_drain_freed_objects(dev_priv);

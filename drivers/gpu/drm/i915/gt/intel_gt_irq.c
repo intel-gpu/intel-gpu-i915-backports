@@ -15,7 +15,7 @@
 #include "intel_rps.h"
 #include "pxp/intel_pxp_irq.h"
 
-static void guc_irq_handler(struct intel_guc *guc, u16 iir)
+static noinline void guc_irq_handler(struct intel_guc *guc, u16 iir)
 {
 	if (iir & GUC_INTR_GUC2HOST)
 		intel_guc_to_host_event_handler(guc);

@@ -235,7 +235,7 @@ static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
 	struct intel_gt *gt;
 	int id;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		if (!obj->mm.tlb[id])
 			continue;
 

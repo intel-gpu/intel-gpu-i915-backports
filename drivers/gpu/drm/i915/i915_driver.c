@@ -394,7 +394,7 @@ static void sanitize_gpu(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		unsigned int i;
 
-		for_each_gt(i915, i, gt)
+		for_each_gt(gt, i915, i)
 			__intel_gt_reset(gt, ALL_ENGINES);
 	}
 }
@@ -711,7 +711,7 @@ static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 	intel_power_domains_cleanup(dev_priv);
 	i915_gem_cleanup_early(dev_priv);
 	i915_debugger_fini(dev_priv);
-	for_each_gt(dev_priv, id, gt)
+	for_each_gt(gt, dev_priv, id)
 		intel_gt_driver_late_release(gt);
 	i915_drm_clients_fini(&dev_priv->clients);
 	vlv_suspend_cleanup(dev_priv);
@@ -804,7 +804,7 @@ static int i915_driver_mmio_probe(struct drm_i915_private *dev_priv)
 	if (ret < 0)
 		return ret;
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		ret = intel_uncore_init_mmio(gt->uncore);
 		if (ret)
 			goto err_uncore;
@@ -814,7 +814,7 @@ static int i915_driver_mmio_probe(struct drm_i915_private *dev_priv)
 	intel_setup_mchbar(dev_priv);
 	intel_device_info_runtime_init(dev_priv);
 
-	for_each_gt(dev_priv, j, gt) {
+	for_each_gt(gt, dev_priv, j) {
 		ret = intel_gt_init_mmio(gt);
 		if (ret)
 			goto err_mchbar;
@@ -833,7 +833,7 @@ static int i915_driver_mmio_probe(struct drm_i915_private *dev_priv)
 err_mchbar:
 	intel_teardown_mchbar(dev_priv);
 err_uncore:
-	for_each_gt(dev_priv, j, gt) {
+	for_each_gt(gt, dev_priv, j) {
 		if (j >= i)
 			break;
 		intel_uncore_fini_mmio(gt->uncore);
@@ -853,7 +853,7 @@ static void i915_driver_mmio_release(struct drm_i915_private *dev_priv)
 	unsigned int i;
 
 	intel_teardown_mchbar(dev_priv);
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uncore_fini_mmio(gt->uncore);
 	pci_dev_put(dev_priv->bridge_dev);
 }
@@ -923,7 +923,7 @@ static int i915_pcode_init(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	int id, ret;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		ret = intel_pcode_init(gt->uncore);
 		if (ret) {
 			drm_err(&gt->i915->drm, "gt%d: intel_pcode_init failed %d\n", id, ret);
@@ -1146,11 +1146,13 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 
 	intel_spi_init(&dev_priv->spi, dev_priv);
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_register(gt);
 
-	if(!IS_SRIOV_VF(dev_priv))
+#ifdef CONFIG_HWMON
+	if (!IS_SRIOV_VF(dev_priv))
 		i915_hwmon_register(dev_priv);
+#endif
 
 	intel_display_driver_register(dev_priv);
 
@@ -1191,9 +1193,10 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 #endif
 	intel_display_driver_unregister(dev_priv);
 
+#ifdef CONFIG_HWMON
 	i915_hwmon_unregister(dev_priv);
-
-	for_each_gt(dev_priv, i, gt)
+#endif
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_unregister(gt);
 
 	intel_iaf_remove(dev_priv);
@@ -1245,7 +1248,7 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 		intel_device_info_print_static(INTEL_INFO(dev_priv), &p);
 		intel_device_info_print_runtime(RUNTIME_INFO(dev_priv), &p);
 		i915_print_iommu_status(dev_priv, &p);
-		for_each_gt(dev_priv, id, gt)
+		for_each_gt(gt, dev_priv, id)
 			intel_gt_info_print(&gt->info, &p);
 
 		drm_printf(&p, "mode: %s\n", i915_iov_mode_to_string(IOV_MODE(dev_priv)));
@@ -1625,7 +1628,7 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 
 	i915_gem_suspend(i915);
 
-	for_each_gt(i915, i, gt)
+	for_each_gt(gt, i915, i)
 		intel_gt_shutdown(gt);
 
 	/*
@@ -1843,7 +1846,7 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 		return ret;
 	}
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uncore_suspend(gt->uncore);
 
 	intel_power_domains_suspend(dev_priv,
@@ -2052,7 +2055,7 @@ static int i915_drm_resume_early(struct drm_device *dev)
 		drm_err(&dev_priv->drm,
 			"Resume prepare failed: %d, continuing anyway\n", ret);
 
-	for_each_gt(dev_priv, i, gt) {
+	for_each_gt(gt, dev_priv, i) {
 		intel_uncore_resume_early(gt->uncore);
 		intel_gt_check_and_clear_faults(gt);
 	}
@@ -2278,12 +2281,12 @@ static int intel_runtime_suspend(struct device *kdev)
 	 */
 	i915_gem_runtime_suspend(dev_priv);
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_runtime_suspend(gt);
 
 	intel_runtime_pm_disable_interrupts(dev_priv);
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uncore_suspend(gt->uncore);
 
 	intel_display_power_suspend(dev_priv);
@@ -2292,12 +2295,12 @@ static int intel_runtime_suspend(struct device *kdev)
 	if (ret) {
 		drm_err(&dev_priv->drm,
 			"Runtime suspend failed, disabling it (%d)\n", ret);
-		for_each_gt(dev_priv, i, gt)
+		for_each_gt(gt, dev_priv, i)
 			intel_uncore_runtime_resume(gt->uncore);
 
 		intel_runtime_pm_enable_interrupts(dev_priv);
 
-		for_each_gt(dev_priv, i, gt)
+		for_each_gt(gt, dev_priv, i)
 			intel_gt_runtime_resume(gt);
 
 		enable_rpm_wakeref_asserts(rpm);
@@ -2380,7 +2383,7 @@ static int intel_runtime_resume(struct device *kdev)
 
 	ret = vlv_resume_prepare(dev_priv, true);
 
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_uncore_runtime_resume(gt->uncore);
 
 	intel_runtime_pm_enable_interrupts(dev_priv);
@@ -2389,7 +2392,7 @@ static int intel_runtime_resume(struct device *kdev)
 	 * No point of rolling back things in case of an error, as the best
 	 * we can do is to hope that things will still work (and disable RPM).
 	 */
-	for_each_gt(dev_priv, i, gt)
+	for_each_gt(gt, dev_priv, i)
 		intel_gt_runtime_resume(gt);
 
 	/*
