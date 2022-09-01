@@ -31,7 +31,6 @@
 #include "i915_trace.h"
 #include "i915_vgpu.h"
 #include "intel_pm.h"
-#include "gt/intel_gt.h"
 
 #define FORCEWAKE_ACK_TIMEOUT_MS 50
 #define GT_FIFO_TIMEOUT_MS	 10
@@ -938,7 +937,7 @@ static int fw_range_cmp(u32 offset, const struct intel_forcewake_range *entry)
 })
 
 static enum forcewake_domains
-_find_fw_domain(struct intel_uncore *uncore, u32 offset)
+find_fw_domain(struct intel_uncore *uncore, u32 offset)
 {
 	const struct intel_forcewake_range *entry;
 
@@ -958,19 +957,11 @@ _find_fw_domain(struct intel_uncore *uncore, u32 offset)
 	if (entry->domains == FORCEWAKE_ALL)
 		return uncore->fw_domains;
 
-	return entry->domains;
-}
-
-static enum forcewake_domains
-find_fw_domain(struct intel_uncore *uncore, u32 offset)
-{
-	enum forcewake_domains domains = _find_fw_domain(uncore, offset);
-
-	drm_WARN(&uncore->i915->drm, domains & ~uncore->fw_domains,
+	drm_WARN(&uncore->i915->drm, entry->domains & ~uncore->fw_domains,
 		 "Uninitialized forcewake domain(s) 0x%x accessed at 0x%x\n",
-		 domains & ~uncore->fw_domains, offset);
+		 entry->domains & ~uncore->fw_domains, offset);
 
-	return domains;
+	return entry->domains;
 }
 
 /*
@@ -2545,14 +2536,6 @@ void intel_uncore_prune_engine_fw_domains(struct intel_uncore *uncore,
 	if (!intel_uncore_has_forcewake(uncore) || GRAPHICS_VER(uncore->i915) < 11)
 		return;
 
-	/*
-	 * For a device without EUs, uninitialize the render well
-	 * since this is earliest point where we are able to detect
-	 * the absence of compute/render correctly
-	 */
-	if (!intel_gt_has_eus(gt))
-		fw_domain_fini(uncore, FW_DOMAIN_ID_RENDER);
-
 	for (i = 0; i < I915_MAX_VCS; i++) {
 		domain_id = FW_DOMAIN_ID_MEDIA_VDBOX0 + i;
 
@@ -2793,30 +2776,6 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 	drm_WARN_ON(&uncore->i915->drm, fw_domains & ~uncore->fw_domains);
 
 	return fw_domains;
-}
-
-/**
- * intel_reg_in_fw_domain - Checks if register is in a specific forcewake
- *			    domain's MMIO range
- *
- * @uncore: pointer to struct intel_uncore
- * @reg: register in question
- * @dom: forcewake domain to check
- *
- * Checks whether a register resides in a range associated with the specified
- * forcewake domain.  This function can check domains that have already been
- * pruned via intel_uncore_prune_engine_fw_domains().
- */
-bool intel_reg_in_fw_domain(struct intel_uncore *uncore, i915_reg_t reg,
-			    enum forcewake_domains dom)
-{
-	drm_WARN_ON(&uncore->i915->drm,
-		    dom == FORCEWAKE_ALL || hweight32(dom) > 1);
-
-	if (!intel_uncore_has_forcewake(uncore))
-		return false;
-
-	return _find_fw_domain(uncore, i915_mmio_reg_offset(reg)) & dom;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

@@ -423,7 +423,7 @@ retry:
 		goto err_unpin;
 	}
 
-	ret = i915_vma_pin_fence(vma);
+	ret = i915_vma_pin_fence_wait(vma);
 	if (ret)
 		goto err_unpin;
 

@@ -235,13 +235,9 @@ const char *intel_uncore_forcewake_domain_to_str(const enum forcewake_domain_id 
 enum forcewake_domains
 intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 			       i915_reg_t reg, unsigned int op);
-
 #define FW_REG_READ  BIT(0)
 #define FW_REG_WRITE BIT(1)
 #define FW_REG_WRITE_MULTICAST BIT(2)
-
-bool intel_reg_in_fw_domain(struct intel_uncore *uncore, i915_reg_t reg,
-			    enum forcewake_domains dom);
 
 void intel_uncore_forcewake_get(struct intel_uncore *uncore,
 				enum forcewake_domains domains);

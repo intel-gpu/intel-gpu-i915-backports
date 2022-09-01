@@ -98,14 +98,14 @@ reference_lists_init(struct intel_gt *gt, struct wa_lists *lists)
 
 	memset(lists, 0, sizeof(*lists));
 
-	wa_init_start(&lists->gt_wa_list, gt, "GT_REF", "global");
+	wa_init_start(&lists->gt_wa_list, "GT_REF", "global");
 	gt_init_workarounds(gt, &lists->gt_wa_list);
 	wa_init_finish(&lists->gt_wa_list, false);
 
 	for_each_engine(engine, gt, id) {
 		struct i915_wa_list *wal = &lists->engine[id].wa_list;
 
-		wa_init_start(wal, gt, "REF", engine->name);
+		wa_init_start(wal, "REF", engine->name);
 		engine_init_workarounds(engine, wal);
 		wa_init_finish(wal, false);
 
@@ -1378,7 +1378,7 @@ int intel_workarounds_live_selftests(struct drm_i915_private *i915)
 	unsigned int i;
 	int ret = 0;
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		if (intel_gt_is_wedged(gt))
 			continue;
 

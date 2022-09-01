@@ -791,8 +791,8 @@ static u32 skl_plane_ctl_tiling(u64 fb_modifier)
 		return PLANE_CTL_TILED_Y | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
 		return PLANE_CTL_TILED_Y |
-			PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
-			PLANE_CTL_CLEAR_COLOR_DISABLE;
+		       PLANE_CTL_RENDER_DECOMPRESSION_ENABLE |
+		       PLANE_CTL_CLEAR_COLOR_DISABLE;
 	case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
 		return PLANE_CTL_TILED_Y | PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE;
 	case I915_FORMAT_MOD_Yf_TILED:
@@ -2434,16 +2434,15 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 		break;
 	case PLANE_CTL_TILED_Y:
 		plane_config->tiling = I915_TILING_Y;
-		if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE) {
+		if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE)
 			if (DISPLAY_VER(dev_priv) >= 12)
 				fb->modifier = I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS;
 			else
 				fb->modifier = I915_FORMAT_MOD_Y_TILED_CCS;
-		} else if (val & PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE) {
+		else if (val & PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE)
 			fb->modifier = I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS;
-		} else {
+		else
 			fb->modifier = I915_FORMAT_MOD_Y_TILED;
-		}
 		break;
 	case PLANE_CTL_TILED_YF: /* aka PLANE_CTL_TILED_4 on XE_LPD+ */
 		if (HAS_4TILE(dev_priv)) {

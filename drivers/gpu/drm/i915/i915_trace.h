@@ -911,9 +911,9 @@ TRACE_EVENT(i915_gem_object_migrate,
 TRACE_EVENT(i915_mm_fault,
 	    TP_PROTO(struct drm_i915_private *i915,
 			struct i915_address_space *vm,
-			struct drm_i915_gem_object *obj,
+			struct i915_vma *vma,
 			struct recoverable_page_fault_info *info),
-	    TP_ARGS(i915, vm, obj, info),
+	    TP_ARGS(i915, vm, vma, info),
 
 	    TP_STRUCT__entry(
 			     __field(struct drm_i915_private*, dev)
@@ -921,30 +921,35 @@ TRACE_EVENT(i915_mm_fault,
 			     __field(struct drm_i915_gem_object*, obj)
 			     __field(u64, obj_size)
 			     __field(u64, addr)
+			     __field(u64, vma_size)
 			     __field(u32, asid)
 			     __field(u8, access_type)
 			     __field(u8, fault_type)
 			     __field(u8, engine_class)
 			     __field(u8, engine_instance)
+			     __field(bool, is_bound)
 			     ),
 
 	    TP_fast_assign(
 			   __entry->dev = i915;
 			   __entry->vm = vm;
-			   __entry->obj = obj;
-			   __entry->obj_size = obj->base.size;
+			   __entry->obj = vma->obj;
+			   __entry->obj_size = vma->obj->base.size;
 			   __entry->addr = info->page_addr;
+			   __entry->vma_size = i915_vma_size(vma);
 			   __entry->asid = info->asid;
 			   __entry->access_type = info->access_type;
 			   __entry->fault_type = info->fault_type;
 			   __entry->engine_class = info->engine_class;
 			   __entry->engine_instance = info->engine_instance;
+			   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   ),
 
-	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on gem object %p [size %lld] address %llx, %s[%d] %s",
+	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on gem object %p [size %lld] address %llx%s size 0x%llx, %s[%d] %s",
 		      __entry->dev, __entry->vm, __entry->asid,
 		      intel_access_type2str(__entry->access_type),
 		      __entry->obj, __entry->obj_size, __entry->addr,
+		      __entry->is_bound ? " bound" : "", __entry->vma_size,
 		      intel_engine_class_repr(__entry->engine_class),
 		      __entry->engine_instance,
 		      intel_pagefault_type2str(__entry->fault_type))

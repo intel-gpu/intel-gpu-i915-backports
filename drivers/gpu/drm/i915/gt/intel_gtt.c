@@ -743,7 +743,7 @@ void setup_private_pat(struct intel_uncore *uncore)
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	if (HAS_CACHE_CLOS(i915))
+	if (IS_PONTEVECCHIO(i915))
 		pvc_setup_private_ppat(uncore);
 	else if (GRAPHICS_VER(i915) >= 12)
 		tgl_setup_private_ppat(uncore);

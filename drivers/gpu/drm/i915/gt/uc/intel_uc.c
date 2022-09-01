@@ -507,12 +507,13 @@ static int __uc_init_hw(struct intel_uc *uc)
 
 	intel_guc_reset_interrupts(guc);
 
-	/* WaEnableuKernelHeaderValidFix:skl */
-	/* WaEnableGuCBootHashCheckNotSet:skl,bxt,kbl */
 	if (GRAPHICS_VER(i915) == 9)
+		/* WaEnableuKernelHeaderValidFix:skl */
+		/* WaEnableGuCBootHashCheckNotSet:skl,bxt,kbl */
 		attempts = 3;
 	else
-		attempts = 1;
+		/* Always retry at least once in case something weird happens */
+		attempts = 2;
 
 	intel_rps_raise_unslice(&uc_to_gt(uc)->rps);
 

@@ -38,7 +38,7 @@ static void update_l3cache_masks(struct drm_i915_private *dev_priv)
 					start_bits, ways, mask);
 			start_bits += ways;
 		}
-		for_each_gt(dev_priv, j, gt)
+		for_each_gt(gt, dev_priv, j)
 			clos_update_ways(to_gt(dev_priv), i, mask);
 	}
 }

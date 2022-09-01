@@ -41,7 +41,6 @@ i915-y += i915_driver.o \
 	  i915_config.o \
 	  i915_drm_client.o \
 	  i915_getparam.o \
-	  i915_hwmon.o \
 	  i915_ioctl.o \
 	  i915_irq.o \
 	  i915_mitigations.o \
@@ -257,6 +256,9 @@ iov-$(CPTCFG_DRM_I915_SELFTEST) += \
 	gt/iov/selftests/iov_selftest_actions.o \
 	gt/iov/selftests/iov_selftest_utils.o
 i915-y += $(iov-$(CPTCFG_DRM_I915_SELFTEST))
+
+# graphics hardware monitoring (HWMON) support
+i915-$(CONFIG_HWMON) += i915_hwmon.o
 
 # modesetting core code
 i915-y += \

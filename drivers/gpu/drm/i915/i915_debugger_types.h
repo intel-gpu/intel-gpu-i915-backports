@@ -121,9 +121,9 @@ struct i915_debugger {
 	struct completion discovery;
 	unsigned int next_handle;
 	struct xarray resources_xa;
+	int disconnect_reason;
 
 	struct list_head connection_link;
-	bool closed;
 
 	u64 session;
 	atomic_long_t event_seqno;

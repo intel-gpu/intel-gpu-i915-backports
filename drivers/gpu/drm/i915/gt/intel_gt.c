@@ -292,16 +292,6 @@ static void gen6_clear_engine_error_register(struct intel_engine_cs *engine)
 	GEN6_RING_FAULT_REG_POSTING_READ(engine);
 }
 
-bool intel_gt_has_eus(const struct intel_gt *gt)
-{
-	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
-		return true;
-
-	/* find_first_bit returns #bits when bitmap is empty */
-	return intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0) <
-		XEHP_BITMAP_BITS(gt->info.sseu.subslice_mask);
-}
-
 void
 intel_gt_clear_error_registers(struct intel_gt *gt,
 			       intel_engine_mask_t engine_mask)
@@ -310,26 +300,25 @@ intel_gt_clear_error_registers(struct intel_gt *gt,
 	struct intel_uncore *uncore = gt->uncore;
 	u32 eir;
 
-	if (IS_GRAPHICS_VER(i915, 3, 5))
+	if (GRAPHICS_VER(i915) != 2)
 		clear_register(uncore, PGTBL_ER);
 
 	if (GRAPHICS_VER(i915) < 4)
 		clear_register(uncore, IPEIR(RENDER_RING_BASE));
-
-	if (intel_gt_has_eus(gt)) {
+	else
 		clear_register(uncore, IPEIR_I965);
-		clear_register(uncore, EIR);
-		eir = intel_uncore_read(uncore, EIR);
-		if (eir) {
-			/*
-			 * some errors might have become stuck,
-			 * mask them.
-			 */
-			DRM_DEBUG_DRIVER("EIR stuck: 0x%08x, masking\n", eir);
-			rmw_set(uncore, EMR, eir);
-			intel_uncore_write(uncore, GEN2_IIR,
-					   I915_MASTER_ERROR_INTERRUPT);
-		}
+
+	clear_register(uncore, EIR);
+	eir = intel_uncore_read(uncore, EIR);
+	if (eir) {
+		/*
+		 * some errors might have become stuck,
+		 * mask them.
+		 */
+		DRM_DEBUG_DRIVER("EIR stuck: 0x%08x, masking\n", eir);
+		rmw_set(uncore, EMR, eir);
+		intel_uncore_write(uncore, GEN2_IIR,
+				   I915_MASTER_ERROR_INTERRUPT);
 	}
 
 	if (HAS_MSLICE_STEERING(i915)) {
@@ -1232,7 +1221,7 @@ int intel_gt_tiles_setup(struct drm_i915_private *i915)
 err:
 	i915_probe_error(i915, "Failed to initialize tile %u! (%d)\n", i, ret);
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		tile_cleanup(gt);
 		i915->gts[i] = NULL;
 	}
@@ -1246,7 +1235,7 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 	unsigned int id;
 	int ret;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		if (id > i915->remote_tiles)
 			break;
 
@@ -1263,7 +1252,7 @@ void intel_gt_tiles_cleanup(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(i915, id, gt) {
+	for_each_gt(gt, i915, id) {
 		tile_cleanup(gt);
 		i915->gts[id] = NULL;
 	}

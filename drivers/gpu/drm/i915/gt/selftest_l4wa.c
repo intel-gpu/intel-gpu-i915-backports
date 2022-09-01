@@ -53,7 +53,7 @@ int intel_gtt_l4wa_live_selftests(struct drm_i915_private *i915)
 		return -EINVAL;
 	}
 
-	for_each_gt(i915, i, gt) {
+	for_each_gt(gt, i915, i) {
 		int err;
 
 		if (!gt->lmem)

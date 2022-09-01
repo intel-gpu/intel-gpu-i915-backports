@@ -3129,15 +3129,7 @@ static const enum intel_engine_id user_ring_map_wo_rcs[] = {
 	[I915_EXEC_VEBOX]	= VECS0
 };
 
-static const enum intel_engine_id user_ring_map_wo_rcs_ccs[] = {
-	[I915_EXEC_DEFAULT]	= BCS0,
-	[I915_EXEC_RENDER]	= INVALID_ENGINE,
-	[I915_EXEC_BLT]		= BCS0,
-	[I915_EXEC_BSD]		= VCS0,
-	[I915_EXEC_VEBOX]	= VECS0
-};
-
-static struct i915_request *eb_throttle(struct i915_execbuffer *eb, struct intel_context *ce)
+static struct i915_request *eb_throttle(struct intel_context *ce)
 {
 	struct intel_ring *ring = ce->ring;
 	struct intel_timeline *tl = ce->timeline;
@@ -3171,8 +3163,14 @@ static struct i915_request *eb_throttle(struct i915_execbuffer *eb, struct intel
 	return i915_request_get(rq);
 }
 
-static int eb_pin_timeline(struct i915_execbuffer *eb, struct intel_context *ce,
-			   bool throttle)
+static void eb_exit_context(struct intel_context *ce)
+{
+	mutex_lock(&ce->timeline->mutex);
+	intel_context_exit(ce);
+	mutex_unlock(&ce->timeline->mutex);
+}
+
+static int eb_enter_context(struct i915_execbuffer *eb, struct intel_context *ce)
 {
 	struct intel_timeline *tl;
 	struct i915_request *rq = NULL;
@@ -3190,43 +3188,74 @@ static int eb_pin_timeline(struct i915_execbuffer *eb, struct intel_context *ce,
 		return PTR_ERR(tl);
 
 	intel_context_enter(ce);
-	if (throttle)
-		rq = eb_throttle(eb, ce);
+	rq = eb_throttle(ce);
 	intel_context_timeline_unlock(tl);
 
 	if (rq) {
 		bool nonblock = eb->file->filp->f_flags & O_NONBLOCK;
 		long timeout = nonblock ? 0 : MAX_SCHEDULE_TIMEOUT;
 
-		if (i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE,
-				      timeout) < 0) {
+		timeout = i915_request_wait(rq,
+					    I915_WAIT_INTERRUPTIBLE,
+					    timeout);
+		if (timeout < 0) {
 			i915_request_put(rq);
+			eb_exit_context(ce);
 
-			/*
-			 * Error path, cannot use intel_context_timeline_lock as
-			 * that is user interruptable and this clean up step
-			 * must be done.
-			 */
-			mutex_lock(&ce->timeline->mutex);
-			intel_context_exit(ce);
-			mutex_unlock(&ce->timeline->mutex);
-
-			if (nonblock)
-				return -EWOULDBLOCK;
-			else
-				return -EINTR;
+			if (timeout == -ETIME)
+				timeout = -EWOULDBLOCK;
+			return timeout;
 		}
+
 		i915_request_put(rq);
 	}
 
 	return 0;
 }
 
+static int eb_enter(struct i915_execbuffer *eb)
+{
+	struct intel_context *ce = eb->context, *child;
+	int i = 0;
+	int err;
+
+	for_each_child(ce, child) {
+		err = eb_enter_context(eb, child);
+		if (err)
+			goto unwind;
+		++i;
+	}
+
+	err = eb_enter_context(eb, ce);
+	if (err)
+		goto unwind;
+
+	return 0;
+
+unwind:
+	for_each_child(ce, child) {
+		if (i-- == 0)
+			break;
+
+		eb_exit_context(child);
+	}
+	return err;
+}
+
+static void eb_exit(struct i915_execbuffer *eb)
+{
+	struct intel_context *ce = eb->context, *child;
+
+	for_each_child(ce, child)
+		eb_exit_context(child);
+
+	eb_exit_context(ce);
+}
+
 static int eb_pin_engine(struct i915_execbuffer *eb, bool throttle)
 {
 	struct intel_context *ce = eb->context, *child;
 	int err;
-	int i = 0, j = 0;
 
 	GEM_BUG_ON(eb->args->flags & __EXEC_ENGINE_PINNED);
 
@@ -3246,31 +3275,8 @@ static int eb_pin_engine(struct i915_execbuffer *eb, bool throttle)
 		GEM_BUG_ON(err);	/* perma-pinned should incr a counter */
 	}
 
-	for_each_child(ce, child) {
-		err = eb_pin_timeline(eb, child, throttle);
-		if (err)
-			goto unwind;
-		++i;
-	}
-	err = eb_pin_timeline(eb, ce, throttle);
-	if (err)
-		goto unwind;
-
 	eb->args->flags |= __EXEC_ENGINE_PINNED;
 	return 0;
-
-unwind:
-	for_each_child(ce, child) {
-		if (j++ < i) {
-			mutex_lock(&child->timeline->mutex);
-			intel_context_exit(child);
-			mutex_unlock(&child->timeline->mutex);
-		}
-	}
-	for_each_child(ce, child)
-		intel_context_unpin(child);
-	intel_context_unpin(ce);
-	return err;
 }
 
 static void eb_unpin_engine(struct i915_execbuffer *eb)
@@ -3282,17 +3288,8 @@ static void eb_unpin_engine(struct i915_execbuffer *eb)
 
 	eb->args->flags &= ~__EXEC_ENGINE_PINNED;
 
-	for_each_child(ce, child) {
-		mutex_lock(&child->timeline->mutex);
-		intel_context_exit(child);
-		mutex_unlock(&child->timeline->mutex);
-
+	for_each_child(ce, child)
 		intel_context_unpin(child);
-	}
-
-	mutex_lock(&ce->timeline->mutex);
-	intel_context_exit(ce);
-	mutex_unlock(&ce->timeline->mutex);
 
 	intel_context_unpin(ce);
 }
@@ -3338,8 +3335,6 @@ eb_select_legacy_ring(struct i915_execbuffer *eb)
 		}
 
 		idx =  _VCS(bsd_idx);
-	} else if (!CCS_MASK(to_gt(i915)) && !RCS_MASK(to_gt(i915))) {
-		idx = user_ring_map_wo_rcs_ccs[user_ring_id];
 	} else if (!RCS_MASK(to_gt(i915))) {
 		idx = user_ring_map_wo_rcs[user_ring_id];
 	} else {
@@ -4199,6 +4194,10 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 		}
 	}
 
+	err = eb_enter(&eb);
+	if (unlikely(err))
+		goto err_sfence;
+
 	i915_gem_vm_bind_lock(eb.context->vm);
 
 	err = eb_lookup_vmas(&eb);
@@ -4293,6 +4292,8 @@ err_vma:
 		intel_context_put(eb.reloc_context);
 err_vm_bind_unlock:
 	i915_gem_vm_bind_unlock(eb.context->vm);
+	eb_exit(&eb);
+err_sfence:
 	kfree(sfence);
 err_engine:
 	eb_put_engine(&eb);

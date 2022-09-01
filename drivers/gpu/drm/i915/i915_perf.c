@@ -5656,7 +5656,7 @@ static int oa_init_engine_groups(struct i915_perf *perf)
 	struct intel_gt *gt;
 	int i, ret;
 
-	for_each_gt(perf->i915, i, gt) {
+	for_each_gt(gt, perf->i915, i) {
 		ret = oa_init_gt(gt);
 		if (ret)
 			return ret;
@@ -5672,7 +5672,7 @@ static u16 oa_init_default_class(struct i915_perf *perf)
 	struct intel_gt *gt;
 	int i, j;
 
-	for_each_gt(perf->i915, i, gt) {
+	for_each_gt(gt, perf->i915, i) {
 		for (j = 0; j < gt->perf.num_perf_groups; j++) {
 			struct i915_perf_group *g = &gt->perf.group[j];
 
@@ -5938,7 +5938,7 @@ int i915_perf_init(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		int i, ret;
 
-		for_each_gt(i915, i, gt)
+		for_each_gt(gt, i915, i)
 			mutex_init(&gt->perf.lock);
 
 		/* Choose a representative limit */
@@ -6019,7 +6019,7 @@ void i915_perf_fini(struct drm_i915_private *i915)
 	if (!perf->i915)
 		return;
 
-	for_each_gt(perf->i915, i, gt)
+	for_each_gt(gt, perf->i915, i)
 		kfree(gt->perf.group);
 
 	idr_for_each(&perf->metrics_idr, destroy_config, perf);
