@@ -74,20 +74,11 @@ struct intel_memory_region_ops {
 			   unsigned int flags);
 };
 
-struct intel_memory_region_private_ops {
-	struct ttm_resource * (*reserve)(struct intel_memory_region *mem,
-					 resource_size_t offset,
-					 resource_size_t size);
-	void (*free)(struct intel_memory_region *mem,
-		     struct ttm_resource *res);
-};
-
 struct intel_memory_region {
 	struct drm_i915_private *i915;
 
 	struct i915_devmem *devmem;
 	const struct intel_memory_region_ops *ops;
-	const struct intel_memory_region_private_ops *priv_ops;
 
 	struct io_mapping iomap;
 	struct resource region;
@@ -125,8 +116,6 @@ struct intel_memory_region {
 		struct list_head purgeable;
 	} objects;
 
-	size_t chunk_size;
-	unsigned int max_order;
 	bool is_range_manager;
 
 	void *region_private;
@@ -177,8 +166,6 @@ intel_memory_region_by_type(struct drm_i915_private *i915,
 __printf(2, 3) void
 intel_memory_region_set_name(struct intel_memory_region *mem,
 			     const char *fmt, ...);
-
-void intel_memory_region_unreserve(struct intel_memory_region *mem);
 
 int intel_memory_region_reserve(struct intel_memory_region *mem,
 				u64 offset, u64 size);

@@ -50,8 +50,8 @@ SLES_KERN_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "
 
 KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
 
-SLES_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
-SLES_BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 2> /dev/null)
+SLES_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 2> /dev/null)
+SLES_BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 3 2> /dev/null)
 
 ###
 # Easy method for doing a status message

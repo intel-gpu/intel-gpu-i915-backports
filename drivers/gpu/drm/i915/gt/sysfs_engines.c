@@ -349,14 +349,6 @@ preempt_timeout_store(struct kobject *kobj, struct kobj_attribute *attr,
 	int err;
 
 	/*
-	 * FIXME: On engines with I915_ENGINE_WANT_FORCED_PREEMPTION enabled, we
-	 * set the preemption timeout to 0 to avoid resets on long running
-	 * workloads. Don't allow user to overwrite the setting in xuch cases.
-	 */
-	if (engine->flags & I915_ENGINE_WANT_FORCED_PREEMPTION)
-		return -EPERM;
-
-	/*
 	 * After initialising a preemption request, we give the current
 	 * resident a small amount of time to vacate the GPU. The preemption
 	 * request is for a higher priority context and should be immediate to

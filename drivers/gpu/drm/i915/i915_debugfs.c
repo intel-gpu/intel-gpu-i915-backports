@@ -827,14 +827,14 @@ gt_drop_caches(struct intel_gt *gt, u64 val)
 {
 	int ret;
 
-	if (val & DROP_RETIRE || val & DROP_RESET_ACTIVE)
-		intel_gt_retire_requests(gt);
-
 	if (val & DROP_RESET_ACTIVE &&
-	    wait_for(intel_engines_are_idle(gt), I915_IDLE_ENGINES_TIMEOUT))
+	    intel_gt_wait_for_idle(gt, I915_IDLE_ENGINES_TIMEOUT) == -ETIME)
 		intel_gt_set_wedged(gt);
 
-	if (val & (DROP_IDLE | DROP_ACTIVE)) {
+	if (val & DROP_RETIRE)
+		intel_gt_retire_requests(gt);
+
+	if (val & (DROP_RESET_ACTIVE | DROP_IDLE | DROP_ACTIVE)) {
 		ret = intel_gt_wait_for_idle(gt, MAX_SCHEDULE_TIMEOUT);
 		if (ret)
 			return ret;

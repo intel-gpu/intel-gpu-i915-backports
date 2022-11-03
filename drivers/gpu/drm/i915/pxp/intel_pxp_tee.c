@@ -4,6 +4,7 @@
  */
 
 #include <linux/component.h>
+
 #include <drm/i915_pxp_tee_interface.h>
 #include <drm/i915_component.h>
 
@@ -19,7 +20,9 @@
 
 static inline struct intel_pxp *i915_dev_to_pxp(struct device *i915_kdev)
 {
-	return &to_gt(kdev_to_i915(i915_kdev))->pxp;
+	struct drm_i915_private *i915 = kdev_to_i915(i915_kdev);
+
+	return &to_gt(i915)->pxp;
 }
 
 static int intel_pxp_tee_io_message(struct intel_pxp *pxp,
@@ -353,8 +356,11 @@ void intel_pxp_tee_component_fini(struct intel_pxp *pxp)
 {
 	struct drm_i915_private *i915 = pxp_to_gt(pxp)->i915;
 
-	if (fetch_and_zero(&pxp->pxp_component_added))
-		component_del(i915->drm.dev, &i915_pxp_tee_component_ops);
+	if (!pxp->pxp_component_added)
+		return;
+
+	component_del(i915->drm.dev, &i915_pxp_tee_component_ops);
+	pxp->pxp_component_added = false;
 
 	free_streaming_command(pxp);
 }

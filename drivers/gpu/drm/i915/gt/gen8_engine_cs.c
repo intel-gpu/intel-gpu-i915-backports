@@ -7,7 +7,6 @@
 #include "i915_drv.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
-#include "intel_gt_regs.h"
 #include "intel_lrc.h"
 #include "intel_ring.h"
 
@@ -166,38 +165,12 @@ static u32 preparser_disable(bool state)
 	return MI_ARB_CHECK | 1 << 8 | state;
 }
 
-static u32 aux_inv_reg(const struct intel_engine_cs *engine)
+u32 *gen12_emit_aux_table_inv(struct intel_gt *gt, u32 *cs, const i915_reg_t inv_reg)
 {
-	static const i915_reg_t vd[] = {
-		GEN12_VD0_AUX_NV,
-		GEN12_VD1_AUX_NV,
-		GEN12_VD2_AUX_NV,
-		GEN12_VD3_AUX_NV,
-	};
+	u32 gsi_offset = gt->uncore->gsi_offset;
 
-	static const i915_reg_t ve[] = {
-		GEN12_VE0_AUX_NV,
-		GEN12_VE1_AUX_NV,
-	};
-
-	if (engine->class == VIDEO_DECODE_CLASS) {
-		return i915_mmio_reg_offset(vd[engine->instance]) +
-		       engine->uncore->gsi_offset;
-	}
-
-	if (engine->class == VIDEO_ENHANCEMENT_CLASS) {
-		return i915_mmio_reg_offset(ve[engine->instance]) +
-		       engine->uncore->gsi_offset;
-	}
-
-	GEM_BUG_ON("unknown aux_inv reg\n");
-	return i915_mmio_reg_offset(INVALID_MMIO_REG);
-}
-
-static u32 *gen12_emit_aux_table_inv(const i915_reg_t inv_reg, u32 *cs)
-{
-	*cs++ = MI_LOAD_REGISTER_IMM(1);
-	*cs++ = i915_mmio_reg_offset(inv_reg);
+	*cs++ = MI_LOAD_REGISTER_IMM(1) | MI_LRI_MMIO_REMAP_EN;
+	*cs++ = i915_mmio_reg_offset(inv_reg) + gsi_offset;
 	*cs++ = AUX_INV;
 	*cs++ = MI_NOOP;
 
@@ -283,7 +256,8 @@ int gen12_emit_flush_rcs(struct i915_request *rq, u32 mode)
 
 		if (!HAS_FLAT_CCS(rq->engine->i915)) {
 			/* hsdes: 1809175790 */
-			cs = gen12_emit_aux_table_inv(GEN12_GFX_CCS_AUX_NV, cs);
+			cs = gen12_emit_aux_table_inv(rq->engine->gt,
+						      cs, GEN12_GFX_CCS_AUX_NV);
 		}
 
 		*cs++ = preparser_disable(false);
@@ -302,12 +276,14 @@ int gen12_emit_flush_xcs(struct i915_request *rq, u32 mode)
 	if (mode & EMIT_INVALIDATE) {
 		cmd += 2;
 
-		if (!HAS_FLAT_CCS(rq->engine->i915)) {
+		if (!HAS_FLAT_CCS(rq->engine->i915) &&
+		    (rq->engine->class == VIDEO_DECODE_CLASS ||
+		     rq->engine->class == VIDEO_ENHANCEMENT_CLASS)) {
 			aux_inv = rq->execution_mask &
 				~GENMASK(_BCS(I915_MAX_BCS - 1), BCS0) &
 				~BIT(GSC0);
 			if (aux_inv)
-				cmd += 2 * hweight32(aux_inv) + 2;
+				cmd += 4;
 		}
 	}
 
@@ -340,15 +316,12 @@ int gen12_emit_flush_xcs(struct i915_request *rq, u32 mode)
 	*cs++ = 0; /* value */
 
 	if (aux_inv) { /* hsdes: 1809175790 */
-		struct intel_engine_cs *engine;
-		unsigned int tmp;
-
-		*cs++ = MI_LOAD_REGISTER_IMM(hweight32(aux_inv));
-		for_each_engine_masked(engine, rq->engine->gt, aux_inv, tmp) {
-			*cs++ = aux_inv_reg(engine);
-			*cs++ = AUX_INV;
-		}
-		*cs++ = MI_NOOP;
+		if (rq->engine->class == VIDEO_DECODE_CLASS)
+			cs = gen12_emit_aux_table_inv(rq->engine->gt,
+						      cs, GEN12_VD0_AUX_NV);
+		else
+			cs = gen12_emit_aux_table_inv(rq->engine->gt,
+						      cs, GEN12_VE0_AUX_NV);
 	}
 
 	if (mode & EMIT_INVALIDATE)

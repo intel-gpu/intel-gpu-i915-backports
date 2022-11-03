@@ -613,7 +613,8 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 		return ERR_PTR(-ENOMEM);
 
 	drm_gem_private_object_init(dev, &obj->base, dma_buf->size);
-	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class, 0);
+	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class,
+			     I915_BO_ALLOC_USER);
 	obj->base.resv = dma_buf->resv;
 
 	/*

@@ -190,6 +190,9 @@ rebuild_st:
 	if (i915_gem_object_needs_bit17_swizzle(obj))
 		i915_gem_object_do_bit_17_swizzle(obj, st);
 
+	if (i915_gem_object_can_bypass_llc(obj))
+		obj->cache_dirty = true;
+
 	__i915_gem_object_set_pages(obj, st, sg_page_sizes);
 
 	mem->avail -= size;
@@ -293,6 +296,8 @@ __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 				struct sg_table *pages,
 				bool needs_clflush)
 {
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
 	GEM_BUG_ON(obj->mm.madv == __I915_MADV_PURGED);
 
 	if (obj->mm.madv == I915_MADV_DONTNEED)
@@ -304,6 +309,16 @@ __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 		drm_clflush_sg(pages);
 
 	__start_cpu_write(obj);
+	/*
+	 * On non-LLC platforms, force the flush-on-acquire if this is ever
+	 * swapped-in. Our async flush path is not trust worthy enough yet(and
+	 * happens in the wrong order), and with some tricks it's conceivable
+	 * for userspace to change the cache-level to I915_CACHE_NONE after the
+	 * pages are swapped-in, and since execbuf binds the object before doing
+	 * the async flush, we have a race window.
+	 */
+	if (!HAS_LLC(i915) && !IS_DGFX(i915))
+		obj->cache_dirty = true;
 }
 
 void i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_table *pages)

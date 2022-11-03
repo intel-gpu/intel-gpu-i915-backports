@@ -532,7 +532,6 @@ struct drm_i915_private {
 	resource_size_t stolen_usable_size;	/* Total size minus reserved ranges */
 
 	unsigned int remote_tiles;
-
 	struct intel_uncore uncore;
 	struct intel_uncore_mmio_debug mmio_debug;
 
@@ -608,6 +607,9 @@ struct drm_i915_private {
 	unsigned int hpll_freq;
 	unsigned int fdi_pll_freq;
 	unsigned int czclk_freq;
+
+	/* Quick lookup of media GT (current platforms only have one) */
+	struct intel_gt *media_gt;
 
 	struct {
 		/* The current hardware cdclk configuration */
@@ -850,12 +852,9 @@ struct drm_i915_private {
 	struct intel_gt gt0;
 
 	/*
-	 * i915->gts[0] == &i915->gt
+	 * i915->gt[0] == &i915->gt0
 	 */
-	struct intel_gt *gts[I915_MAX_GT];
-
-	/* Quick lookup of media GT (current platforms only have one) */
-	struct intel_gt *media_gt;
+	struct intel_gt *gt[I915_MAX_GT];
 
 	struct kobject *sysfs_gt;
 
@@ -1049,6 +1048,8 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node)))
 
 #define I915_GTT_OFFSET_NONE ((u32)-1)
+
+#define HAS_EXTRA_GT_LIST(dev_priv)   (INTEL_INFO(dev_priv)->extra_gt_list)
 
 /*
  * Frontbuffer tracking bits. Set in obj->frontbuffer_bits while a gem bo is
@@ -1363,13 +1364,13 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_XEHPSDV_GRAPHICS_STEP(__i915, since, until) \
 	(IS_XEHPSDV(__i915) && IS_GRAPHICS_STEP(__i915, since, until))
 
-#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
-	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
-	 IS_GRAPHICS_STEP(__i915, since, until))
-
 #define IS_MTL_DISPLAY_STEP(__i915, since, until) \
 	(DISPLAY_VER(__i915) == 14 && \
 	 IS_DISPLAY_STEP(__i915, since, until))
+
+#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
+	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
+	 IS_GRAPHICS_STEP(__i915, since, until))
 
 /*
  * DG2 hardware steppings are a bit unusual.  The hardware design was forked to
@@ -1564,7 +1565,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_LMEM(i915) HAS_REGION(i915, REGION_LMEM)
 #define HAS_LMEM_SR(i915) (INTEL_INFO(i915)->has_lmem_sr)
 #define HAS_REMOTE_TILES(dev_priv)   (INTEL_INFO(dev_priv)->has_remote_tiles)
-#define HAS_EXTRA_GTS(dev_priv)   (INTEL_INFO(dev_priv)->extra_gts)
 #define HAS_IAF(dev_priv)   (INTEL_INFO(dev_priv)->has_iaf)
 
 /*
@@ -1590,6 +1590,9 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_GLOBAL_MOCS_REGISTERS(dev_priv)	(INTEL_INFO(dev_priv)->has_global_mocs)
 
+#define HAS_PXP(dev_priv)  ((IS_ENABLED(CPTCFG_DRM_I915_PXP) && \
+			    INTEL_INFO(dev_priv)->has_pxp) && \
+			    VDBOX_MASK(to_gt(dev_priv)))
 
 #define HAS_MEMORY_IRQ_STATUS(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_iov_memirq && IS_SRIOV_VF(dev_priv))
@@ -1616,10 +1619,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_ASYNC_FLIPS(i915)		(DISPLAY_VER(i915) >= 5)
 
-#define HAS_PXP(dev_priv) (IS_ENABLED(CPTCFG_DRM_I915_PXP) && \
-			   INTEL_INFO(dev_priv)->has_pxp) && \
-			   VDBOX_MASK(to_gt(dev_priv))
-
 /* Only valid when HAS_DISPLAY() is true */
 #define INTEL_DISPLAY_ENABLED(dev_priv) \
 	(drm_WARN_ON(&(dev_priv)->drm, !HAS_DISPLAY(dev_priv)),		\
@@ -1628,13 +1627,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_GUC_DEPRIVILEGE(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_guc_deprivilege)
-
-#define HAS_PERCTX_PREEMPT_CTRL(i915) \
-	((GRAPHICS_VER(i915) >= 9) && \
-	 /* Wa_14015141709:dg2,mtl */ \
-	 !IS_DG2(i915) && \
-	 !IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) && \
-	 !IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0))
 
 #define HAS_D12_PLANE_MINIMIZATION(dev_priv) (IS_ROCKETLAKE(dev_priv) || \
 					      IS_ALDERLAKE_S(dev_priv))
@@ -1685,7 +1677,7 @@ static inline struct intel_gt *to_root_gt(struct drm_i915_private *i915)
 static inline struct intel_gt *to_gt(struct drm_i915_private *i915)
 {
 	if (HAS_REMOTE_TILES(i915) && IOV_MODE(i915) == I915_IOV_MODE_SRIOV_VF)
-		return i915->gts[__ffs(to_root_gt(i915)->iov.vf.config.tile_mask)];
+		return i915->gt[__ffs(to_root_gt(i915)->iov.vf.config.tile_mask)];
 
 	return &i915->gt0;
 }

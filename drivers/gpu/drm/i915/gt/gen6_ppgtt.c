@@ -249,6 +249,7 @@ err_scratch1:
 	i915_gem_object_put(vm->scratch[1]);
 err_scratch0:
 	i915_gem_object_put(vm->scratch[0]);
+	vm->scratch[0] = NULL;
 	return ret;
 }
 
@@ -278,7 +279,6 @@ static void gen6_ppgtt_cleanup(struct i915_address_space *vm)
 
 	mutex_destroy(&ppgtt->flush);
 	mutex_destroy(&ppgtt->pin_mutex);
-
 }
 
 static int pd_vma_set_pages(struct i915_vma *vma)

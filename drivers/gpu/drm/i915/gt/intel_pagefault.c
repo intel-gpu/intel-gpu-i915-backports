@@ -48,6 +48,19 @@
  * any DMA fences, including suspend fence or request fence, to a faultable vm.
  */
 
+enum access_type {
+	ACCESS_TYPE_READ = 0,
+	ACCESS_TYPE_WRITE = 1,
+	ACCESS_TYPE_ATOMIC = 2,
+	ACCESS_TYPE_RESERVED = 3,
+};
+
+enum fault_type {
+	NOT_PRESENT = 0,
+	WRITE_ACCESS_VIOLATION = 1,
+	ATOMIC_ACCESS_VIOLATION = 2,
+};
+
 int intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, const u32 *msg, u32 len)
 {
 	struct drm_device *drm = &gt->i915->drm;
@@ -124,9 +137,11 @@ int intel_gt_pagefault_process_page_fault_msg(struct intel_gt *gt, const u32 *ms
 	return 0;
 }
 
-static void print_recoverable_fault(struct recoverable_page_fault_info *info)
+static void print_recoverable_fault(struct recoverable_page_fault_info *info,
+				    const char *reason, int ret)
 {
-	DRM_DEBUG_DRIVER("\n\tASID: %d\n"
+	DRM_DEBUG_DRIVER("\n\t%s: error %d\n"
+			 "\tASID: %d\n"
 			 "\tVFID: %d\n"
 			 "\tPDATA: 0x%04x\n"
 			 "\tFaulted Address: 0x%08x_%08x\n"
@@ -135,6 +150,7 @@ static void print_recoverable_fault(struct recoverable_page_fault_info *info)
 			 "\tFaultLevel: %d\n"
 			 "\tEngineClass: %d\n"
 			 "\tEngineInstance: %d\n",
+			 reason, ret,
 			 info->asid,
 			 info->vfid,
 			 info->pdata,
@@ -200,13 +216,9 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	return i915_gem_object_migrate(obj, ww, ce, lmem_id, true);
 }
 
-static inline bool access_is_atomic(enum recoverable_page_fault_type err_code)
+static inline bool access_is_atomic(struct recoverable_page_fault_info *info)
 {
-	if (err_code == FAULT_ATOMIC_NOT_PRESENT ||
-	    err_code == FAULT_ATOMIC_ACCESS_VIOLATION)
-		return true;
-
-	return false;
+	return (info->access_type == ACCESS_TYPE_ATOMIC);
 }
 
 static enum intel_region_id get_lmem_region_id(struct drm_i915_gem_object *obj, struct intel_gt *gt)
@@ -230,9 +242,19 @@ static enum intel_region_id get_lmem_region_id(struct drm_i915_gem_object *obj, 
 	return 0;
 }
 
-static int validate_fault(struct i915_vma *vma, enum recoverable_page_fault_type err_code)
+static int validate_fault(struct i915_vma *vma, struct recoverable_page_fault_info *info)
 {
+	/* combined access_type and fault_type */
+	enum {
+		FAULT_READ_NOT_PRESENT = 0x0,
+		FAULT_WRITE_NOT_PRESENT = 0x1,
+		FAULT_ATOMIC_NOT_PRESENT = 0x2,
+		FAULT_WRITE_ACCESS_VIOLATION = 0x5,
+		FAULT_ATOMIC_ACCESS_VIOLATION = 0xa,
+	} err_code;
 	int err = 0;
+
+	err_code = (info->fault_type << 2) | info->access_type;
 
 	switch (err_code & 0xF) {
 	case FAULT_READ_NOT_PRESENT:
@@ -274,7 +296,6 @@ static struct i915_address_space *faulted_vm(struct intel_guc *guc, u32 asid)
 static int handle_i915_mm_fault(struct intel_guc *guc,
 				struct recoverable_page_fault_info *info)
 {
-	enum recoverable_page_fault_type err_code;
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct i915_vma_work *work = NULL;
 	struct intel_engine_cs *engine;
@@ -294,21 +315,22 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 		if (vm->has_scratch) {
 			u64 length = i915_vm_has_scratch_64K(vm) ? I915_GTT_PAGE_SIZE_64K : I915_GTT_PAGE_SIZE_4K;
 
-			print_recoverable_fault(info);
-			DRM_DEBUG_DRIVER("Bind invalid va to scratch\n");
+			print_recoverable_fault(info, "Bind invalid va to scratch", 0);
 			gen12_init_fault_scratch(vm, info->page_addr, length, true);
 			vm->invalidate_tlb_scratch = true;
 			return 0;
 		}
-
-		GEM_WARN_ON(!vma);
-		return -ENOENT;
+		else {
+			err = -ENOENT;
+			print_recoverable_fault(info, "Invalid va", err);
+			GEM_WARN_ON(!vma);
+			return err;
+		}
 	}
 
 	trace_i915_mm_fault(gt->i915, vm, vma, info);
 
-	err_code = (info->fault_type << 2) | info->access_type;
-	err = validate_fault(vma, err_code);
+	err = validate_fault(vma, info);
 	if (err)
 		goto put_vma;
 
@@ -343,7 +365,7 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 
 	lmem_id = get_lmem_region_id(vma->obj, gt);
 	if (i915_gem_object_should_migrate_lmem(vma->obj, lmem_id,
-					        access_is_atomic(err_code))) {
+						access_is_atomic(info))) {
 		err = migrate_to_lmem(vma->obj, gt, lmem_id, &ww);
 
 		/*
@@ -448,6 +470,7 @@ put_vma:
 static void get_fault_info(const u32 *payload, struct recoverable_page_fault_info *info)
 {
 	const struct intel_guc_pagefault_desc *desc;
+
 	desc = (const struct intel_guc_pagefault_desc *)payload;
 
 	info->fault_level = FIELD_GET(PAGE_FAULT_DESC_FAULT_LEVEL, desc->dw0);
@@ -481,9 +504,8 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 
 	ret = handle_i915_mm_fault(guc, &info);
 	if (unlikely(ret)) {
-		print_recoverable_fault(&info);
+		print_recoverable_fault(&info, "Fault response: Unsuccessful", ret);
 		info.fault_unsuccessful = 1;
-		DRM_DEBUG_DRIVER("Fault response: Unsuccessful %d\n", ret);
 	}
 
 	reply.dw0 = FIELD_PREP(PAGE_FAULT_REPLY_VALID, 1) |
@@ -500,23 +522,21 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	return intel_guc_send_pagefault_reply(guc, &reply);
 }
 
-const char *intel_pagefault_type2str(enum recoverable_page_fault_type type)
+const char *intel_pagefault_type2str(unsigned int type)
 {
 	static const char * const faults[] = {
-		[FAULT_READ_NOT_PRESENT] = "read not present",
-		[FAULT_WRITE_NOT_PRESENT] = "write not present",
-		[FAULT_ATOMIC_NOT_PRESENT] = "atomic not present",
-		[FAULT_WRITE_ACCESS_VIOLATION] = "write access violation",
-		[FAULT_ATOMIC_ACCESS_VIOLATION] = "atomic access violation",
+		[NOT_PRESENT] = "not present",
+		[WRITE_ACCESS_VIOLATION] = "write access violation",
+		[ATOMIC_ACCESS_VIOLATION] = "atomic access violation",
 	};
 
-	if (type > FAULT_ATOMIC_ACCESS_VIOLATION || !faults[type])
+	if (type > ATOMIC_ACCESS_VIOLATION || !faults[type])
 		return "invalid fault type";
 
 	return faults[type];
-};
+}
 
-const char *intel_access_type2str(int type)
+const char *intel_access_type2str(unsigned int type)
 {
 	static const char * const access[] = {
 		[ACCESS_TYPE_READ] = "read",
@@ -529,7 +549,8 @@ const char *intel_access_type2str(int type)
 		return "invalid access type";
 
 	return access[type];
-};
+}
+
 static struct i915_vma *get_acc_vma(struct intel_guc *guc,
 				    struct acc_info *info)
 {

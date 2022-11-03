@@ -416,8 +416,10 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 		info->ppgtt_type = INTEL_PPGTT_NONE;
 	}
 
-	runtime->rawclk_freq = intel_read_rawclk(dev_priv);
-	drm_dbg(&dev_priv->drm, "rawclk rate: %d kHz\n", runtime->rawclk_freq);
+	if (!IS_SRIOV_VF(dev_priv)) {
+		runtime->rawclk_freq = intel_read_rawclk(dev_priv);
+		drm_dbg(&dev_priv->drm, "rawclk rate: %d kHz\n", runtime->rawclk_freq);
+	}
 
 	if (!HAS_DISPLAY(dev_priv)) {
 		dev_priv->drm.driver_features &= ~(DRIVER_MODESET |
