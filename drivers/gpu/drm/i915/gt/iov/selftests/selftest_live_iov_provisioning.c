@@ -36,7 +36,6 @@ static int pf_guc_ignores_unknown_policy_key(void *arg)
 	ret = guc_update_policy_klv32(guc, GUC_KLV_VGT_POLICY_DOES_NOT_EXIST_KEY, 0);
 	if (ret != -ENOKEY) {
 		IOV_SELFTEST_ERROR(iov, "GuC didn't ignore unknown key, %d\n", ret);
-		return 0; /* XXX firmware bug GUC-4317 */
 		return -EINVAL;
 	}
 	return 0;
@@ -197,7 +196,6 @@ static int pf_guc_parses_mixed_policy_keys(void *arg)
 		if (ret != hweight32(pattern)) {
 			IOV_SELFTEST_ERROR(iov, "GuC didn't parse mixed KLVs (%u/%u p=%#x), %d\n",
 					   hweight32(pattern), num_klvs, pattern, ret);
-			continue; /* XXX firmware bug GUC-4495 */
 			result = -EPROTO;
 			break;
 		}
@@ -245,6 +243,7 @@ static int pf_guc_rejects_invalid_update_policy_params(void *arg)
 	ret = guc_try_update_policy(guc, addr, klvs_size - 1);
 	if (ret != -EIO) {
 		IOV_SELFTEST_ERROR(iov, "GuC didn't reject truncated blob, %d\n", ret);
+		goto release; /* XXX firmware bug GUC-4622 */
 		result = -EPROTO;
 		goto release;
 	}
@@ -439,7 +438,6 @@ static int pf_guc_ignores_unknown_config_key(void *arg)
 	ret = guc_update_vf_klv32(guc, vfid, GUC_KLV_VF_CFG_DOES_NOT_EXIST_KEY, 0);
 	if (ret != -ENOKEY) {
 		IOV_SELFTEST_ERROR(iov, "GuC didn't ignore example key, %d\n", ret);
-		return 0; /* XXX firmware bug GUC-4317 */
 		return -EINVAL;
 	}
 	return 0;

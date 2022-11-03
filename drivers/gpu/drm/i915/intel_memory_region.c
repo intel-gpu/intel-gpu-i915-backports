@@ -47,11 +47,6 @@ static const struct {
 	},
 };
 
-struct intel_region_reserve {
-	struct list_head link;
-	void *node;
-};
-
 static int __iopagetest(struct intel_memory_region *mem,
 			u8 __iomem *va, int pagesize,
 			u8 value, resource_size_t offset,
@@ -488,7 +483,6 @@ __intel_memory_region_get_block_buddy(struct intel_memory_region *mem,
 int intel_memory_region_init_buddy(struct intel_memory_region *mem,
 				   u64 start, u64 end, u64 chunk)
 {
-	mem->chunk_size = chunk;
 	return i915_buddy_init(&mem->mm, start, end, chunk);
 }
 
@@ -528,27 +522,6 @@ intel_memory_region_by_type(struct drm_i915_private *i915,
 			return mr;
 
 	return NULL;
-}
-
-/**
- * intel_memory_region_unreserve - Unreserve all previously reserved
- * ranges
- * @mem: The region containing the reserved ranges.
- */
-void intel_memory_region_unreserve(struct intel_memory_region *mem)
-{
-	struct intel_region_reserve *reserve, *next;
-
-	if (!mem->priv_ops || !mem->priv_ops->free)
-		return;
-
-	mutex_lock(&mem->mm_lock);
-	list_for_each_entry_safe(reserve, next, &mem->reserved, link) {
-		list_del(&reserve->link);
-		mem->priv_ops->free(mem, reserve->node);
-		kfree(reserve);
-	}
-	mutex_unlock(&mem->mm_lock);
 }
 
 static int intel_memory_region_memtest(struct intel_memory_region *mem,
@@ -598,8 +571,8 @@ intel_memory_region_create(struct intel_gt *gt,
 
 	mutex_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
-	INIT_LIST_HEAD(&mem->objects.purgeable);
 	INIT_LIST_HEAD(&mem->reserved);
+	INIT_LIST_HEAD(&mem->objects.purgeable);
 
 	mutex_init(&mem->mm_lock);
 
@@ -642,7 +615,6 @@ static void __intel_memory_region_destroy(struct kref *kref)
 	/* Flush any pending work to free blocks region */
 	flush_work(&mem->pd_put.work);
 
-	intel_memory_region_unreserve(mem);
 	if (mem->ops->release)
 		mem->ops->release(mem);
 

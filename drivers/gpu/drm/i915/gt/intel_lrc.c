@@ -1222,6 +1222,23 @@ int lrc_alloc(struct intel_context *ce, struct intel_engine_cs *engine)
 			goto err_ring;
 		}
 
+		/*
+		 * To support mutex_lock_nest_lock(), lockdep requires the
+		 * outer/inner (our parent/child contexts) to be of distinct
+		 * lockclasses.
+		 *
+		 * Like lockdep_set_subclass() but we need to preserve the
+		 * original lockclass name.
+		 */
+#if IS_ENABLED(CONFIG_LOCKDEP)
+		lockdep_init_map_waits(&tl->mutex.dep_map,
+				       tl->mutex.dep_map.name,
+				       tl->mutex.dep_map.key,
+				       intel_context_is_child(ce),
+				       tl->mutex.dep_map.wait_type_inner,
+				       tl->mutex.dep_map.wait_type_outer);
+#endif
+
 		ce->timeline = tl;
 	}
 
@@ -1410,6 +1427,23 @@ dg2_emit_rcs_hang_wabb(const struct intel_context *ce, u32 *cs)
 	return cs;
 }
 
+/*
+ * The bspec's tuning guide asks us to program a vertical watermark value of
+ * 0x3FF.  However this register is not saved/restored properly by the
+ * hardware, so we're required to apply the desired value via INDIRECT_CTX
+ * batch buffer to ensure the value takes effect properly.  All other bits
+ * in this register should remain at 0 (the hardware default).
+ */
+static u32 *
+dg2_emit_draw_watermark_setting(u32 *cs)
+{
+	*cs++ = MI_LOAD_REGISTER_IMM(1);
+	*cs++ = i915_mmio_reg_offset(DRAW_WATERMARK);
+	*cs++ = REG_FIELD_PREP(VERT_WM_VAL, 0x3FF);
+
+	return cs;
+}
+
 static u32 *
 gen12_emit_indirect_ctx_rcs(const struct intel_context *ce, u32 *cs)
 {
@@ -1426,6 +1460,15 @@ gen12_emit_indirect_ctx_rcs(const struct intel_context *ce, u32 *cs)
 	if (IS_DG2_GRAPHICS_STEP(ce->engine->i915, G10, STEP_B0, STEP_C0) ||
 	    IS_DG2_G11(ce->engine->i915))
 		cs = gen8_emit_pipe_control(cs, PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE, 0);
+
+	/* hsdes: 1809175790 */
+	if (!HAS_FLAT_CCS(ce->engine->i915))
+		cs = gen12_emit_aux_table_inv(ce->engine->gt,
+					      cs, GEN12_GFX_CCS_AUX_NV);
+
+	/* Wa_16014892111 */
+	if (IS_DG2(ce->engine->i915))
+		cs = dg2_emit_draw_watermark_setting(cs);
 
 	return cs;
 }
@@ -1590,6 +1633,16 @@ gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 			cs = gen8_emit_pipe_control(cs,
 						    PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE,
 						    0);
+
+	/* hsdes: 1809175790 */
+	if (!HAS_FLAT_CCS(ce->engine->i915)) {
+		if (ce->engine->class == VIDEO_DECODE_CLASS)
+			cs = gen12_emit_aux_table_inv(ce->engine->gt,
+						      cs, GEN12_VD0_AUX_NV);
+		else if (ce->engine->class == VIDEO_ENHANCEMENT_CLASS)
+			cs = gen12_emit_aux_table_inv(ce->engine->gt,
+						      cs, GEN12_VE0_AUX_NV);
+	}
 
 	return cs;
 }

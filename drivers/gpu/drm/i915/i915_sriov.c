@@ -17,6 +17,7 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/iov/intel_iov_migration.h"
 #include "gt/iov/intel_iov_provisioning.h"
+#include "gt/iov/intel_iov_service.h"
 #include "gt/iov/intel_iov_state.h"
 #include "gt/iov/intel_iov_utils.h"
 
@@ -70,11 +71,28 @@ static bool works_with_iaf(struct drm_i915_private *i915)
 
 static bool wants_pf(struct drm_i915_private *i915)
 {
-	return i915->params.enable_guc & ENABLE_GUC_SRIOV_PF;
+#define ENABLE_GUC_SRIOV_PF		BIT(2)
+
+	if (i915->params.enable_guc < 0)
+		return false;
+
+	if (i915->params.enable_guc & ENABLE_GUC_SRIOV_PF) {
+		drm_info(&i915->drm,
+			 "Don't enable PF with 'enable_guc=%d' - try 'max_vfs=%u' instead\n",
+			 i915->params.enable_guc,
+			 pci_sriov_get_totalvfs(to_pci_dev(i915->drm.dev)));
+		return true;
+	}
+
+	return false;
 }
 
 static unsigned int wanted_max_vfs(struct drm_i915_private *i915)
 {
+	/* XXX allow to override "max_vfs" with deprecated "enable_guc" */
+	if (wants_pf(i915))
+		return ~0;
+
 	return i915->params.max_vfs;
 }
 
@@ -122,12 +140,6 @@ static bool pf_verify_readiness(struct drm_i915_private *i915)
 
 	if (!newlimit)
 		return pf_continue_as_native(i915, "all VFs disabled");
-
-	if (!wants_pf(i915))
-		return pf_continue_as_native(i915, "GuC virtualization disabled");
-
-	if (!intel_uc_wants_guc_submission(&to_root_gt(i915)->uc))
-		return pf_continue_as_native(i915, "GuC submission disabled");
 
 	if (!pf_has_valid_vf_bars(i915))
 		return pf_continue_as_native(i915, "VFs BAR not ready");
@@ -569,6 +581,14 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 		}
 		if (unlikely(err))
 			goto fail_pm;
+
+		/*
+		 * Update cached values of runtime registers shared with the VFs in case
+		 * HuC status register has been updated by the GSC after our initial probe.
+		 */
+		if (intel_uc_wants_huc(&gt->uc) && intel_huc_is_loaded_by_gsc(&gt->uc.huc)) {
+			intel_iov_service_update(&gt->iov);
+		}
 	}
 
 	for_each_gt(gt, i915, id) {

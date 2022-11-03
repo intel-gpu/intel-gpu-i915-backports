@@ -17,6 +17,7 @@
 #include "i915_utils.h"
 #include "intel_engine_types.h"
 #include "intel_sseu.h"
+#include "intel_wakeref.h"
 
 #include "uc/intel_guc_fwif.h"
 
@@ -119,6 +120,7 @@ struct intel_context {
 	u32 ring_size;
 	struct intel_ring *ring;
 	struct intel_timeline *timeline;
+	intel_wakeref_t wakeref;
 
 	unsigned long flags;
 #define CONTEXT_BARRIER_BIT		0
@@ -211,11 +213,6 @@ struct intel_context {
 
 	u8 wa_bb_page; /* if set, page num reserved for context workarounds */
 	struct i915_suspend_fence *sfence;
-
-	/* vm remote gt wakeref tracker */
-	intel_wakeref_t vm_remote_gt_wakeref;
-	/* vm remote gt or NULL if not remote */
-	struct intel_gt *vm_remote_gt;
 
 	struct {
 		/** @lock: protects everything in guc_state */

@@ -9,7 +9,6 @@
 
 #include "gem/i915_gem_region.h"
 #include "intel_memory_region.h"
-#include "intel_region_ttm.h"
 
 #include "mock_region.h"
 
@@ -17,7 +16,7 @@
 static void mock_region_put_pages(struct drm_i915_gem_object *obj,
 				  struct sg_table *pages)
 {
-	intel_region_ttm_node_free(obj->mm.region, obj->mm.st_mm_node);
+	intel_region_ttm_resource_free(obj->mm.region, obj->mm.res);
 	sg_free_table(pages);
 	kfree(pages);
 }
@@ -26,26 +25,31 @@ static int mock_region_get_pages(struct drm_i915_gem_object *obj)
 {
 	unsigned int flags;
 	struct sg_table *pages;
+	int err;
 
 	flags = I915_ALLOC_MIN_PAGE_SIZE;
 	if (obj->flags & I915_BO_ALLOC_CONTIGUOUS)
-		flags |= I915_ALLOC_CONTIGUOUS;
+		flags |= TTM_PL_FLAG_CONTIGUOUS;
 
-	obj->mm.st_mm_node = intel_region_ttm_node_alloc(obj->mm.region,
-							 obj->base.size,
-							 flags);
-	if (IS_ERR(obj->mm.st_mm_node))
-		return PTR_ERR(obj->mm.st_mm_node);
+	obj->mm.res = intel_region_ttm_resource_alloc(obj->mm.region,
+						      obj->base.size,
+						      flags);
+	if (IS_ERR(obj->mm.res))
+		return PTR_ERR(obj->mm.res);
 
-	pages = intel_region_ttm_node_to_st(obj->mm.region, obj->mm.st_mm_node);
+	pages = intel_region_ttm_resource_to_st(obj->mm.region, obj->mm.res);
 	if (IS_ERR(pages)) {
-		intel_region_ttm_node_free(obj->mm.region, obj->mm.st_mm_node);
-		return PTR_ERR(pages);
+		err = PTR_ERR(pages);
+		goto err_free_resource;
 	}
 
 	__i915_gem_object_set_pages(obj, pages, i915_sg_dma_sizes(pages->sgl));
 
 	return 0;
+
+err_free_resource:
+	intel_region_ttm_resource_free(obj->mm.region, obj->mm.res);
+	return err;
 }
 #endif
 

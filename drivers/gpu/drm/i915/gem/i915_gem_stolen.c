@@ -13,6 +13,7 @@
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt_mcr.h"
+#include "gt/intel_gt_regs.h"
 #include "gt/intel_region_lmem.h"
 #include "i915_drv.h"
 #include "i915_gem_stolen.h"
@@ -847,15 +848,15 @@ i915_gem_stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 	resource_size_t io_start;
 	int ret;
 
+	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR))
+		return ERR_PTR(-ENXIO);
+
 	ret = intel_get_tile_range(to_gt(i915), &lmem_base, &lmem_size);
 	if (ret)
 		return ERR_PTR(ret);
 
 	min_page_size = HAS_64K_PAGES(i915) ? I915_GTT_PAGE_SIZE_64K :
 						I915_GTT_PAGE_SIZE_4K;
-
-	if (!i915_pci_resource_valid(pdev, GFXMEM_BAR))
-		return ERR_PTR(-ENXIO);
 
 	if (HAS_BAR2_SMEM_STOLEN(i915)) {
 		/*

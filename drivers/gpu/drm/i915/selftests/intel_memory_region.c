@@ -21,6 +21,7 @@
 #include "gem/selftests/mock_context.h"
 #include "gt/intel_engine_user.h"
 #include "gt/intel_gt.h"
+#include "i915_buddy.h"
 #include "i915_memcpy.h"
 #include "selftests/igt_flush_test.h"
 #include "selftests/i915_random.h"
@@ -58,7 +59,7 @@ static int igt_mock_fill(void *arg)
 	LIST_HEAD(objects);
 	int err = 0;
 
-	page_size = mem->chunk_size;
+	page_size = PAGE_SIZE;
 	rem = total;
 retry:
 	max_pages = div64_u64(rem, page_size);
@@ -165,6 +166,7 @@ static bool is_contiguous(struct drm_i915_gem_object *obj)
 static int igt_mock_reserve(void *arg)
 {
 	struct intel_memory_region *mem = arg;
+	struct drm_i915_private *i915 = mem->i915;
 	struct drm_i915_gem_object *obj;
 	const u32 chunk_size = SZ_32M;
 	u32 i, offset, count, *order;
@@ -173,15 +175,17 @@ static int igt_mock_reserve(void *arg)
 	LIST_HEAD(objects);
 	int err = 0;
 
-	if (!list_empty(&mem->reserved)) {
-		pr_err("%s region reserved list is not empty\n", __func__);
-		return -EINVAL;
-	}
-
 	count = mem->avail / chunk_size;
 	order = i915_random_order(count, &prng);
 	if (!order)
 		return 0;
+
+	mem = mock_region_create(to_gt(i915), 0, SZ_2G, I915_GTT_PAGE_SIZE_4K, 0);
+	if (IS_ERR(mem)) {
+		pr_err("failed to create memory region\n");
+		err = PTR_ERR(mem);
+		goto out_free_order;
+	}
 
 	/* Reserve a bunch of ranges within the region */
 	for (i = 0; i < count; ++i) {
@@ -218,7 +222,7 @@ retry:
 		if (IS_ERR(obj)) {
 			if (PTR_ERR(obj) == -ENXIO) {
 				if (mem->is_range_manager &&
-				    size > mem->chunk_size) {
+				    size > mem->mm.chunk_size) {
 					size >>= 1;
 					goto retry;
 				}
@@ -239,9 +243,10 @@ retry:
 	}
 
 out_close:
-	kfree(order);
 	close_objects(mem, &objects);
-	intel_memory_region_unreserve(mem);
+	intel_memory_region_put(mem);
+out_free_order:
+	kfree(order);
 	return err;
 }
 
@@ -260,7 +265,7 @@ static int igt_mock_contiguous(void *arg)
 
 
 	/* Min size */
-	obj = igt_object_create(mem, &objects, mem->chunk_size,
+	obj = igt_object_create(mem, &objects, PAGE_SIZE,
 				I915_BO_ALLOC_CONTIGUOUS);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
@@ -371,7 +376,7 @@ static int igt_mock_contiguous(void *arg)
 		}
 
 		target >>= 1;
-	} while (target >= mem->chunk_size);
+	} while (target >= PAGE_SIZE);
 
 err_close_objects:
 	list_splice_tail(&holes, &objects);
@@ -401,9 +406,9 @@ static int igt_mock_splintered_region(void *arg)
 		return PTR_ERR(mem);
 
 	expected_order = get_order(rounddown_pow_of_two(size));
-	if (mem->max_order != expected_order) {
+	if (mem->mm.max_order != expected_order) {
 		pr_err("%s order mismatch(%u != %u)\n",
-		       __func__, mem->max_order, expected_order);
+		       __func__, mem->mm.max_order, expected_order);
 		err = -EINVAL;
 		goto out_put;
 	}
@@ -457,7 +462,7 @@ out_put:
 
 static int igt_mock_max_segment(void *arg)
 {
-	const unsigned int max_segment = i915_sg_segment_size();
+	const unsigned int max_segment = rounddown(UINT_MAX, PAGE_SIZE);
 	struct intel_memory_region *mem = arg;
 	struct drm_i915_private *i915 = mem->i915;
 	struct drm_i915_gem_object *obj;

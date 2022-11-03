@@ -12,7 +12,6 @@
 #include "gt/intel_gt.h"
 
 static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
-						       bool write,
 						       int (*fn)(struct intel_gt *gt,
 								 void *data,
 								 unsigned int slice,
@@ -24,7 +23,8 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 	struct sseu_dev_info *sseu = &gt->info.sseu;
 	unsigned int dss, group, instance;
 	bool present;
-	int lastdss, ret;
+	int lastdss;
+	int ret = 0;
 
 	GEM_WARN_ON(!intel_sseu_subslice_total(sseu));
 
@@ -38,25 +38,6 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
 	for_each_possible_ss_steering(dss, gt, group, instance, present) {
 		if (dss > lastdss)
 			break;
-
-		/*
-		 * hsdes: <pending>
-		 *
-		 * XXX: We observe on some 12gens that less attention
-		 * bits are lit than it is expected. The wa is to kick
-		 * the EU thread by writing anything to EU_CTL register.
-		 * 0xf value in the EU SELECT field disables a read of
-		 * the debug data. It is not intrusive, so there should be
-		 * no ill effects as userspace does not manipulate this
-		 * register. Keep it here for now as all callsites are
-		 * interested in attentions.
-		 */
-		if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 55)) {
-			const u32 val =  FIELD_PREP(EU_CTL_EU_SELECT, 0xf);
-
-			intel_gt_mcr_unicast_write_fw(gt, EU_CTL, val,
-						      group, instance);
-		}
 
 		ret = fn(gt, data, group, instance, present);
 		if (ret)
@@ -78,7 +59,6 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
  *
  */
 int intel_gt_for_each_compute_slice_subslice(struct intel_gt *gt,
-					     bool write,
 					     int (*fn)(struct intel_gt *gt,
 						       void *data,
 						       unsigned int slice,
@@ -95,7 +75,7 @@ int intel_gt_for_each_compute_slice_subslice(struct intel_gt *gt,
 		spin_lock_irq(&uncore->lock);
 		intel_uncore_forcewake_get__locked(uncore, fw_domains);
 
-		ret = intel_gt_for_each_compute_slice_subslice_fw(gt, write, fn, data);
+		ret = intel_gt_for_each_compute_slice_subslice_fw(gt, fn, data);
 
 		intel_uncore_forcewake_put__locked(uncore, fw_domains);
 		spin_unlock_irq(&uncore->lock);
@@ -135,7 +115,7 @@ static int read_first_attention_ss_fw(struct intel_gt *gt, void *data,
 
 int intel_gt_eu_threads_needing_attention(struct intel_gt* gt)
 {
-	return intel_gt_for_each_compute_slice_subslice(gt, false,
+	return intel_gt_for_each_compute_slice_subslice(gt,
 							read_first_attention_ss_fw,
 							NULL);
 }

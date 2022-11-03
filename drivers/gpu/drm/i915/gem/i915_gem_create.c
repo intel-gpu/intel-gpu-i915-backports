@@ -138,7 +138,7 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 		I915_BO_ALLOC_CONTIGUOUS : 0;
 
 	size = object_size_align(mr, size, &alloc_flags);
-	ret = mr->ops->init_object(mr, obj, size, alloc_flags);
+	ret = mr->ops->init_object(mr, obj, size, alloc_flags | I915_BO_ALLOC_USER);
 	if (ret)
 		return ret;
 
@@ -147,6 +147,60 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 	obj->memory_mask = placement_mask(obj->mm.placements, obj->mm.n_placements);
 
 	trace_i915_gem_object_create(obj);
+
+	return ret;
+}
+
+/**
+ * handle_clear_errors - handle errors observed while clearing/migrating
+ *                       user objects.
+ * @obj: object being cleared
+ * @errors: return value of the clear/migration operation
+ * @locked: used to determine whether the object was already locked
+ *          before returning back to userspace.
+ *
+ * Before returning to userspace, first issue in uninterruptible
+ * wait on the object being cleared to let the operation complete
+ * in the event of an interrupt when under high memory pressure.
+ */
+static int
+handle_clear_errors(struct drm_i915_gem_object *obj, int errors, bool locked)
+{
+	int ret;
+
+	ret = i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
+	if (!ret)
+		goto unlock;
+
+	/*
+	 * return error code, caller needs to do cleaning
+	 * with i915_gem_object_put().
+	 */
+	if (errors == -EINTR || errors == -ERESTARTSYS) {
+		ret = errors;
+		goto unlock;
+	}
+
+	/*
+	 * XXX: Post the error to where we would normally gather
+	 * and clear the pages. This better reflects the final
+	 * uapi behaviour, once we are at the point where we can
+	 * move the clear worker to get_pages().
+	 */
+	if (!locked)
+		i915_gem_object_lock(obj, NULL);
+	locked = true;
+
+	i915_gem_object_unbind(obj, NULL,
+			       I915_GEM_OBJECT_UNBIND_ACTIVE);
+
+	GEM_WARN_ON(__i915_gem_object_put_pages(obj));
+
+unlock:
+	if (locked)
+		i915_gem_object_unlock(obj);
+
+	obj->mm.gem_create_posted_err = errors;
 
 	return ret;
 }
@@ -194,28 +248,8 @@ clear_object(struct drm_i915_gem_object *obj)
 		 */
 
 		ret = i915_gem_object_fill_blt(obj, ce, 0);
-		if (ret) {
-			/*
-			 * return error code, caller needs to do cleaning
-			 * with i915_gem_object_put().
-			 */
-			if (ret == -EINTR || ret == -ERESTARTSYS)
-				return ret;
-
-			/*
-			 * XXX: Post the error to where we would normally gather
-			 * and clear the pages. This better reflects the final
-			 * uapi behaviour, once we are at the point where we can
-			 * move the clear worker to get_pages().
-			 */
-			i915_gem_object_lock(obj, NULL);
-			i915_gem_object_unbind(obj, NULL,
-					       I915_GEM_OBJECT_UNBIND_ACTIVE);
-			GEM_WARN_ON(__i915_gem_object_put_pages(obj));
-			i915_gem_object_unlock(obj);
-			obj->mm.gem_create_posted_err = ret;
-			return 0;
-		}
+		if (ret)
+			return handle_clear_errors(obj, ret, false);
 
 		/*
 		 * XXX: Occasionally i915_gem_object_wait() called inside
@@ -224,28 +258,8 @@ clear_object(struct drm_i915_gem_object *obj)
 		 */
 		i915_gem_object_lock(obj, NULL);
 		ret = i915_gem_object_set_to_cpu_domain(obj, false);
-		if (ret) {
-			/*
-			 * return error code, caller needs to do cleaning
-			 * with i915_gem_object_put().
-			 */
-			if (ret == -EINTR || ret == -ERESTARTSYS) {
-				i915_gem_object_unlock(obj);
-				return ret;
-			}
-
-			/*
-			 * If error, wait on the object uninterruptible
-			 * to finish the filling operation.
-			 */
-			i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
-			i915_gem_object_unbind(obj, NULL,
-					       I915_GEM_OBJECT_UNBIND_ACTIVE);
-			GEM_WARN_ON(__i915_gem_object_put_pages(obj));
-			i915_gem_object_unlock(obj);
-			obj->mm.gem_create_posted_err = ret;
-			return 0;
-		}
+		if (ret)
+			return handle_clear_errors(obj, ret, true);
 		i915_gem_object_unlock(obj);
 	}
 

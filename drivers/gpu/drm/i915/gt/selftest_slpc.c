@@ -187,10 +187,10 @@ static int live_slpc_clamp_min(void *arg)
 		/* Don't continue with next tile if err is set */
 		if (err)
 			break;
-	}
 
-	if (slpc->min_is_rpmax)
-		slpc_set_min_freq(slpc, saved_min_freq);
+		if (slpc->min_is_rpmax)
+			slpc_set_min_freq(slpc, saved_min_freq);
+	}
 
 	return err;
 }
@@ -350,10 +350,10 @@ static int live_slpc_clamp_max(void *arg)
 		/* Don't continue with next tile if err is set */
 		if (err)
 			break;
-	}
 
-	if (slpc->min_is_rpmax)
-		slpc_set_min_freq(slpc, saved_min_freq);
+		if (slpc->min_is_rpmax)
+			slpc_set_min_freq(slpc, saved_min_freq);
+	}
 
 	return err;
 }

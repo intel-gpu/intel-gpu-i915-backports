@@ -2992,10 +2992,12 @@ static u32 __oa_ccs_select(struct i915_perf_stream *stream)
 {
 	struct intel_engine_cs *engine = stream->engine;
 
+	if (!OAC_ENABLED(stream))
+		return 0;
+
 	GEM_BUG_ON(engine->instance > GEN12_OAG_OACONTROL_OA_CCS_SELECT_MASK);
 
-	return OAC_ENABLED(stream) ?
-		engine->instance << GEN12_OAG_OACONTROL_OA_CCS_SELECT_SHIFT : 0;
+	return engine->instance << GEN12_OAG_OACONTROL_OA_CCS_SELECT_SHIFT;
 }
 
 static int gen12_configure_oa_compute_context(struct i915_perf_stream *stream,

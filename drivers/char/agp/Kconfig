@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 menuconfig AGP
 	tristate "/dev/agpgart (AGP Support)"
-	depends on ALPHA || ARM64 || IA64 || PARISC || PPC || X86
+	depends on ALPHA || IA64 || PARISC || PPC || X86
 	depends on PCI
 	help
 	  AGP (Accelerated Graphics Port) is a bus system mainly used to
@@ -152,5 +152,5 @@ config AGP_EFFICEON
 
 config INTEL_GTT
 	tristate
-	depends on (X86 || ARM64) && PCI
+	depends on X86 && PCI
 

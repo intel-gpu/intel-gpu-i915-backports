@@ -208,6 +208,68 @@ to_wait_timeout(const struct prelim_drm_i915_gem_wait_user_fence *arg)
 	return nsecs_to_jiffies_timeout(arg->timeout);
 }
 
+static unsigned long local_clock_ns(unsigned int *cpu)
+{
+	unsigned long t;
+
+	/*
+	 * The local clock is only comparable on the local cpu. However,
+	 * we don't want to disable preemption for the entirety of the busy
+	 * spin but instead we use the preemption event as an indication
+	 * that we have overstayed our welcome and should relinquish the CPU,
+	 * to stop busywaiting and go to sleep.
+	 */
+	*cpu = get_cpu();
+	t = local_clock();
+	put_cpu();
+
+	return t;
+}
+
+static bool
+busy_wait_stop(struct task_struct *tsk, unsigned long timeout_ns, unsigned int cpu)
+{
+	unsigned int this_cpu;
+
+	/* Interrupted by the user already? */
+	if (signal_pending(tsk))
+		return true;
+
+	if (time_after(local_clock_ns(&this_cpu), timeout_ns))
+		return true;
+
+	/*
+	 * Check if we were preempted off the cpu, or if something else is
+	 * ready to run.  We don't immediately yield in that case, i.e. using
+	 * need_resched() instead of cond_resched(), as we want to set up our
+	 * interrupt prior to calling schedule()
+	 */
+	return this_cpu != cpu || need_resched();
+}
+
+static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
+{
+	unsigned int cpu;
+
+	/*
+	 * Busywait for the fence completion until the end of the user's
+	 * timeslice.
+	 *
+	 * Normally for requests we try to limit busywaits to only when
+	 * we expect the request to complete in the near future. With
+	 * a plain memory address, we have no execution flow associated
+	 * with the userfence and so simply wait until we see the fence
+	 * signaled or get kicked off the cpu.
+	 */
+	timeout_ns += local_clock_ns(&cpu);
+	do {
+		if (ufence_compare(wake))
+			return true;
+	} while (!busy_wait_stop(wake->tsk, timeout_ns, cpu));
+
+	return false;
+}
+
 int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 				   void *data, struct drm_file *file)
 {
@@ -280,6 +342,28 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		err = -ETIME;
 		goto out_ctx;
 	}
+	start = ktime_get();
+
+	/*
+	 * In order to avoid interrupt latency (and the wakeup from sleep
+	 * penalty for a C-state), busy wait for a short interval first.
+	 * If the fence is due to be signalled in ~100us, then an interrupt
+	 * latency of ~1ms significantly affects the fence duration and client
+	 * latency/throughput. However, if the fence will not be signaled
+	 * for another 100ms, then a 1ms delay on top of that for waking up
+	 * from a deep sleep is less impactful. Therefore a short spin
+	 * before sleeping benefits the most sensitive fence signaling,
+	 * and is the most impactful for userspace measurements. We also
+	 * know then it is not worth spinning for much longer than the typical
+	 * wakeup penalty as any wait longer than that is less affected by
+	 * the additional wakeup latency.
+	 *
+	 * In practice, we spin for the completion of the timeslice, yielding
+	 * to any other work ready to run to try to avoid stealing the CPU
+	 * from useful work.
+	 */
+	if (busy_wait(&wake, jiffies_to_nsecs(min(2ul, timeout))))
+		goto out_time;
 
 	add_soft_wait(to_i915(dev), &wait);
 	if (ctx) {
@@ -288,7 +372,6 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 			goto out_wait;
 	}
 
-	start = ktime_get();
 	for (;;) {
 		set_current_state(TASK_INTERRUPTIBLE);
 
@@ -314,6 +397,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	}
 	__set_current_state(TASK_RUNNING);
 
+out_wait:
+	remove_waits(to_i915(dev), &wait);
+out_time:
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_ABSTIME) && arg->timeout > 0) {
 		arg->timeout -= ktime_to_ns(ktime_sub(ktime_get(), start));
 		if (arg->timeout < 0)
@@ -333,9 +419,6 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		if (err == -ETIME && arg->timeout)
 			err = -EAGAIN;
 	}
-
-out_wait:
-	remove_waits(to_i915(dev), &wait);
 out_ctx:
 	if (ctx)
 		i915_gem_context_put(ctx);

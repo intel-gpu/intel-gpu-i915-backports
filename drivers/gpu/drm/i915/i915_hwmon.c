@@ -60,7 +60,6 @@ struct i915_hwmon {
 	struct hwm_drvdata ddat_gt[I915_MAX_GT];
 	struct mutex hwmon_lock;		/* counter overflow logic and rmw */
 	struct hwm_reg rg;
-	u32 power_max_initial_value;
 	int scl_shift_power;
 	int scl_shift_energy;
 	int scl_shift_time;
@@ -188,25 +187,6 @@ i915_hwmon_energy_status_get(struct drm_i915_private *i915, long *energy)
 	return hwm_energy(ddat, energy);
 }
 
-static ssize_t
-hwm_power1_max_default_show(struct device *dev, struct device_attribute *attr,
-			    char *buf)
-{
-	struct hwm_drvdata *ddat = dev_get_drvdata(dev);
-	struct i915_hwmon *hwmon = ddat->hwmon;
-	u64 val = hwm_field_read_and_scale(ddat,
-					   hwmon->rg.pkg_power_sku,
-					   PKG_PKG_TDP,
-					   FIELD_SHIFT(PKG_PKG_TDP),
-					   hwmon->scl_shift_power,
-					   SF_POWER);
-
-	return sysfs_emit(buf, "%llu\n", val);
-}
-
-static SENSOR_DEVICE_ATTR(power1_max_default, 0444,
-			  hwm_power1_max_default_show, NULL, 0);
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0)
 static ssize_t
 hwm_power1_rated_max_show(struct device *dev, struct device_attribute *attr,
@@ -323,7 +303,6 @@ static SENSOR_DEVICE_ATTR(power1_max_interval, 0664,
 			  hwm_power1_max_interval_store, 0);
 
 static struct attribute *hwm_attributes[] = {
-	&sensor_dev_attr_power1_max_default.dev_attr.attr,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0)
 	&sensor_dev_attr_power1_rated_max.dev_attr.attr,
 #endif
@@ -340,8 +319,6 @@ static umode_t hwm_attributes_visible(struct kobject *kobj,
 
 	if (attr == &sensor_dev_attr_power1_max_interval.dev_attr.attr)
 		return i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit) ? attr->mode : 0;
-	else if (attr == &sensor_dev_attr_power1_max_default.dev_attr.attr)
-		return i915_mmio_reg_valid(hwmon->rg.pkg_power_sku) ? attr->mode : 0;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0)
 	else if (attr == &sensor_dev_attr_power1_rated_max.dev_attr.attr)
 		return i915_mmio_reg_valid(hwmon->rg.pkg_power_sku) ? attr->mode : 0;
@@ -427,7 +404,7 @@ hwm_power_is_visible(const struct hwm_drvdata *ddat, u32 attr, int chan)
 	case hwmon_power_max:
 		return i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit) ? 0664 : 0;
 	case hwmon_power_crit:
-		return (!IS_DGFX(i915) || hwm_pcode_read_i1(i915, &uval) ||
+		return (hwm_pcode_read_i1(i915, &uval) ||
 			!(uval & POWER_SETUP_I1_WATTS)) ? 0 : 0644;
 	default:
 		return 0;
@@ -524,7 +501,7 @@ hwm_curr_is_visible(const struct hwm_drvdata *ddat, u32 attr)
 
 	switch (attr) {
 	case hwmon_curr_crit:
-		return (!IS_DGFX(i915) || hwm_pcode_read_i1(i915, &uval) ||
+		return (hwm_pcode_read_i1(i915, &uval) ||
 			(uval & POWER_SETUP_I1_WATTS)) ? 0 : 0644;
 	default:
 		return 0;

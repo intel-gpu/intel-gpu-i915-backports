@@ -1392,14 +1392,17 @@ int intel_dp_dsc_compute_bpp(struct intel_dp *intel_dp, u8 max_req_bpc)
 	return 0;
 }
 
-#define DSC_11_VERSION_MIN		1
-#define DSC_12_VERSION_MIN		2
-
-static int get_dsc_version_min(struct drm_i915_private *i915)
+static int intel_dp_source_dsc_version_minor(struct intel_dp *intel_dp)
 {
-	if (DISPLAY_VER(i915) > 13)
-		return DSC_12_VERSION_MIN;
-	return DSC_11_VERSION_MIN;
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+
+	return DISPLAY_VER(i915) >= 14 ? 2 : 1;
+}
+
+static int intel_dp_sink_dsc_version_minor(struct intel_dp *intel_dp)
+{
+	return (intel_dp->dsc_dpcd[DP_DSC_REV - DP_DSC_SUPPORT] & DP_DSC_MINOR_MASK) >>
+		DP_DSC_MINOR_SHIFT;
 }
 
 static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
@@ -1439,9 +1442,8 @@ static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 		(intel_dp->dsc_dpcd[DP_DSC_REV - DP_DSC_SUPPORT] &
 		 DP_DSC_MAJOR_MASK) >> DP_DSC_MAJOR_SHIFT;
 	vdsc_cfg->dsc_version_minor =
-		min(get_dsc_version_min(i915),
-		    (intel_dp->dsc_dpcd[DP_DSC_REV - DP_DSC_SUPPORT] &
-		     DP_DSC_MINOR_MASK) >> DP_DSC_MINOR_SHIFT);
+		min(intel_dp_source_dsc_version_minor(intel_dp),
+		    intel_dp_sink_dsc_version_minor(intel_dp));
 
 	vdsc_cfg->convert_rgb = intel_dp->dsc_dpcd[DP_DSC_DEC_COLOR_FORMAT_CAP - DP_DSC_SUPPORT] &
 		DP_DSC_RGB;
@@ -1453,7 +1455,7 @@ static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 		return -EINVAL;
 	}
 
-	if (vdsc_cfg->dsc_version_minor == DSC_12_VERSION_MIN)
+	if (vdsc_cfg->dsc_version_minor == 2)
 		vdsc_cfg->line_buf_depth = (line_buf_depth == DSC_1_2_MAX_LINEBUF_DEPTH_BITS) ?
 			DSC_1_2_MAX_LINEBUF_DEPTH_VAL : line_buf_depth;
 	else
@@ -5325,6 +5327,7 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	struct drm_device *dev = &dev_priv->drm;
 	struct drm_connector *connector = &intel_connector->base;
 	struct drm_display_mode *fixed_mode;
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
 	bool has_dpcd;
 	enum pipe pipe = INVALID_PIPE;
 	struct edid *edid;
@@ -5374,7 +5377,7 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	intel_connector->edid = edid;
 
 	intel_bios_init_panel(dev_priv, &intel_connector->panel,
-			      IS_ERR(edid) ? NULL : edid);
+			      encoder->devdata, IS_ERR(edid) ? NULL : edid);
 
 	intel_panel_add_edid_fixed_modes(intel_connector,
 					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE,
@@ -5414,8 +5417,6 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 
 	intel_panel_init(intel_connector);
 
-	if (!(dev_priv->quirks & QUIRK_NO_PPS_BACKLIGHT_POWER_HOOK))
-		intel_connector->panel.backlight.power = intel_pps_backlight_power;
 	intel_backlight_setup(intel_connector, pipe);
 
 	intel_edp_add_properties(intel_dp);

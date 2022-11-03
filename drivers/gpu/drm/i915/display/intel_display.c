@@ -27,7 +27,6 @@
 #include <acpi/video.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
-#include <linux/intel-iommu.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/dma-resv.h>
@@ -122,8 +121,6 @@
 
 static void intel_set_transcoder_timings(const struct intel_crtc_state *crtc_state);
 static void intel_set_pipe_src_size(const struct intel_crtc_state *crtc_state);
-static void i9xx_set_pipeconf(const struct intel_crtc_state *crtc_state);
-static void ilk_set_pipeconf(const struct intel_crtc_state *crtc_state);
 static void hsw_set_transconf(const struct intel_crtc_state *crtc_state);
 static void bdw_set_pipemisc(const struct intel_crtc_state *crtc_state);
 static void ilk_pfit_enable(const struct intel_crtc_state *crtc_state);
@@ -3213,14 +3210,18 @@ static void intel_get_pipe_src_size(struct intel_crtc *crtc,
 	intel_bigjoiner_adjust_pipe_src(pipe_config);
 }
 
-static void i9xx_set_pipeconf(const struct intel_crtc_state *crtc_state)
+void i9xx_set_pipeconf(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	u32 pipeconf = 0;
 
-	/* we keep both pipes enabled on 830 */
-	if (IS_I830(dev_priv))
+	/*
+	 * - We keep both pipes enabled on 830
+	 * - During modeset the pipe is still disabled and must remain so
+	 * - During fastset the pipe is already enabled and must remain so
+	 */
+	if (IS_I830(dev_priv) || !intel_crtc_needs_modeset(crtc_state))
 		pipeconf |= PIPECONF_ENABLE;
 
 	if (crtc_state->double_wide)
@@ -3533,14 +3534,19 @@ out:
 	return ret;
 }
 
-static void ilk_set_pipeconf(const struct intel_crtc_state *crtc_state)
+void ilk_set_pipeconf(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum pipe pipe = crtc->pipe;
-	u32 val;
+	u32 val = 0;
 
-	val = 0;
+	/*
+	 * - During modeset the pipe is still disabled and must remain so
+	 * - During fastset the pipe is already enabled and must remain so
+	 */
+	if (!intel_crtc_needs_modeset(crtc_state))
+		val |= PIPECONF_ENABLE;
 
 	switch (crtc_state->pipe_bpp) {
 	default:
@@ -3598,6 +3604,13 @@ static void hsw_set_transconf(const struct intel_crtc_state *crtc_state)
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
 	u32 val = 0;
+
+	/*
+	 * - During modeset the pipe is still disabled and must remain so
+	 * - During fastset the pipe is already enabled and must remain so
+	 */
+	if (!intel_crtc_needs_modeset(crtc_state))
+		val |= PIPECONF_ENABLE;
 
 	if (IS_HASWELL(dev_priv) && crtc_state->dither)
 		val |= PIPECONF_DITHER_EN | PIPECONF_DITHER_TYPE_SP;
@@ -6875,6 +6888,7 @@ verify_c10mpllb_state(struct intel_atomic_state *state,
 	enum phy phy;
 	int i;
 	bool use_ssc = false;
+	bool use_hdmi = false;
 
 	if (DISPLAY_VER(i915) < 14)
 		return;
@@ -6909,7 +6923,7 @@ verify_c10mpllb_state(struct intel_atomic_state *state,
 } while (0)
 
 	for (i = 0; i < 20; i++)
-		if (!use_ssc && i > 3 && i < 9) {
+		if (!(use_ssc || use_hdmi) && i > 3 && i < 9) {
 			if (mpllb_hw_state.pll[i] != 0)
 				pipe_config_mismatch(false, crtc, "C10MPLLB:",
 					"Register[%d] (expected 0x%2.2x, found 0x%2.2x)",

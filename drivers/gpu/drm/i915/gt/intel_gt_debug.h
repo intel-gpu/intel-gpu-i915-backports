@@ -11,7 +11,6 @@
 int intel_gt_eu_threads_needing_attention(struct intel_gt *gt);
 
 int intel_gt_for_each_compute_slice_subslice(struct intel_gt *gt,
-					     bool write,
 					     int (*fn)(struct intel_gt *gt,
 						       void *data,
 						       unsigned int slice,

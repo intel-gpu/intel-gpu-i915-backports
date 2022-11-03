@@ -95,26 +95,60 @@ static int guc_xfer_rsa(struct intel_uc_fw *guc_fw,
 /*
  * Read the GuC status register (GUC_STATUS) and store it in the
  * specified location; then return a boolean indicating whether
- * the value matches either of two values representing completion
- * of the GuC boot process.
+ * the value matches either completion or a known failure code.
  *
  * This is used for polling the GuC status in a wait_for()
  * loop below.
  */
-static inline bool guc_ready(struct intel_uncore *uncore, u32 *status)
+static inline bool guc_load_done(struct intel_uncore *uncore, u32 *status, bool *success)
 {
 	u32 val = intel_uncore_read(uncore, GUC_STATUS);
 	u32 uk_val = REG_FIELD_GET(GS_UKERNEL_MASK, val);
+	u32 br_val = REG_FIELD_GET(GS_BOOTROM_MASK, val);
 
 	*status = val;
-	return uk_val == INTEL_GUC_LOAD_STATUS_READY;
+	*success = true;
+	switch (uk_val) {
+		case INTEL_GUC_LOAD_STATUS_READY:
+			return true;
+
+		case INTEL_GUC_LOAD_STATUS_ERROR_DEVID_BUILD_MISMATCH:
+		case INTEL_GUC_LOAD_STATUS_GUC_PREPROD_BUILD_MISMATCH:
+		case INTEL_GUC_LOAD_STATUS_ERROR_DEVID_INVALID_GUCTYPE:
+		case INTEL_GUC_LOAD_STATUS_HWCONFIG_DECRYPTION_ERROR:
+		case INTEL_GUC_LOAD_STATUS_DPC_ERROR:
+		case INTEL_GUC_LOAD_STATUS_EXCEPTION:
+		case INTEL_GUC_LOAD_STATUS_INIT_DATA_INVALID:
+		case INTEL_GUC_LOAD_STATUS_MPU_DATA_INVALID:
+		case INTEL_GUC_LOAD_STATUS_INIT_MMIO_SAVE_RESTORE_INVALID:
+			*success = false;
+			return true;
+	}
+
+	switch (br_val) {
+		case INTEL_BOOTROM_STATUS_RSA_FAILED:
+		case INTEL_BOOTROM_STATUS_PAVPC_FAILED:
+		case INTEL_BOOTROM_STATUS_WOPCM_FAILED:
+		case INTEL_BOOTROM_STATUS_LOADLOC_FAILED:
+		case INTEL_BOOTROM_STATUS_JUMP_FAILED:
+		case INTEL_BOOTROM_STATUS_RC6CTXCONFIG_FAILED:
+		case INTEL_BOOTROM_STATUS_MPUMAP_INCORRECT:
+		case INTEL_BOOTROM_STATUS_EXCEPTION:
+			*success = false;
+			return true;
+	}
+
+	return false;
 }
 
 static int guc_wait_ucode(struct intel_uncore *uncore)
 {
+	bool success;
 	u32 status;
 	int ret;
+	int count;
 	ktime_t before, after, delta;
+	u64 delta_ms;
 
 	/*
 	 * Wait for the GuC to start up.
@@ -134,36 +168,60 @@ static int guc_wait_ucode(struct intel_uncore *uncore)
 	 * in the working case, a larger timeout makes no difference.
 	 *
 	 * FIXME: There is possibly an unknown an even rarer race condition
-	 * where 200ms is still not enough.
+	 * where 200ms is still not enough. However, there is a limit on how
+	 * long an individual wait_for() can wait. So wrap it in a loop.
 	 */
 	before = ktime_get();
-	ret = wait_for(guc_ready(uncore, &status), 1000);
+	for (count = 0; count < 20; count++) {
+		ret = wait_for(guc_load_done(uncore, &status, &success), 1000);
+		if (!ret || !success)
+			break;
+	}
 	after = ktime_get();
 	delta = ktime_sub(after, before);
-	if (ret) {
+	delta_ms = ktime_to_ms(delta);
+	if (ret || !success) {
 		struct drm_device *drm = &uncore->i915->drm;
+		u32 ukernel = REG_FIELD_GET(GS_UKERNEL_MASK, status);
+		u32 bootrom = REG_FIELD_GET(GS_BOOTROM_MASK, status);
 
-		drm_info(drm, "GuC load failed: status = 0x%08X, timeout = %lldms, freq = %dMHz\n", status,
-			 ktime_to_ms(delta), intel_rps_read_actual_frequency(&uncore->gt->rps));
+		drm_info(drm, "GuC load failed: status = 0x%08X, time = %lldms, freq = %dMHz, ret = %d\n",
+			 status, delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), ret);
 		drm_info(drm, "GuC load failed: status: Reset = %d, "
 			"BootROM = 0x%02X, UKernel = 0x%02X, "
 			"MIA = 0x%02X, Auth = 0x%02X\n",
 			REG_FIELD_GET(GS_MIA_IN_RESET, status),
-			REG_FIELD_GET(GS_BOOTROM_MASK, status),
-			REG_FIELD_GET(GS_UKERNEL_MASK, status),
+			bootrom,
+			ukernel,
 			REG_FIELD_GET(GS_MIA_MASK, status),
 			REG_FIELD_GET(GS_AUTH_STATUS_MASK, status));
 
-		if ((status & GS_BOOTROM_MASK) == GS_BOOTROM_RSA_FAILED) {
+		if (bootrom == INTEL_BOOTROM_STATUS_RSA_FAILED) {
 			drm_info(drm, "GuC firmware signature verification failed\n");
 			ret = -ENOEXEC;
 		}
 
-		if (REG_FIELD_GET(GS_UKERNEL_MASK, status) == INTEL_GUC_LOAD_STATUS_EXCEPTION) {
-			drm_info(drm, "GuC firmware exception. EIP: %#x\n",
-				 intel_uncore_read(uncore, SOFT_SCRATCH(13)));
-			ret = -ENXIO;
+		switch (ukernel) {
+			case INTEL_GUC_LOAD_STATUS_EXCEPTION:
+				drm_info(drm, "GuC firmware exception. EIP: %#x\n",
+					 intel_uncore_read(uncore, SOFT_SCRATCH(13)));
+				ret = -ENXIO;
+				break;
+
+			case INTEL_GUC_LOAD_STATUS_INIT_MMIO_SAVE_RESTORE_INVALID:
+				drm_info(drm, "Illegal register in save/restore workaround list\n");
+				ret = -EPERM;
+				break;
+
+			case INTEL_GUC_LOAD_STATUS_HWCONFIG_DECRYPTION_START:
+				drm_info(drm, "GuC still decoding hwconfig table.\n");
+				ret = -ETIMEDOUT;
+				break;
 		}
+
+		/* Uncommon/unexpected error, see earlier status code print for details */
+		if (ret == 0)
+			ret = -ENXIO;
 
 		/*
 		 * If the GuC load has timed out, dump the instruction pointers
@@ -184,9 +242,12 @@ static int guc_wait_ucode(struct intel_uncore *uncore)
 				 intel_uncore_read(uncore, GUC_EIP),
 				 intel_uncore_read(uncore, GUC_EIP_COUNTER));
 		}
+	} else if (delta_ms > 200) {
+		drm_warn(&uncore->i915->drm, "Excessive GuC init time: %lldms! [freq = %dMHz, status = 0x%08X, count = %d, ret = %d]\n",
+			 delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), status, count, ret);
 	} else {
-		drm_dbg(&uncore->i915->drm, "GuC init took %lldms, freq = %dMHz [status = 0x%08X, ret = %d]\n",
-			ktime_to_ms(delta), intel_rps_read_actual_frequency(&uncore->gt->rps), status, ret);
+		drm_dbg(&uncore->i915->drm, "GuC init took %lldms, freq = %dMHz, status = 0x%08X, count = %d, ret = %d\n",
+			delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), status, count, ret);
 	}
 
 	return ret;
