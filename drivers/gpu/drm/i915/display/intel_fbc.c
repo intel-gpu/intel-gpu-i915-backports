@@ -1098,7 +1098,7 @@ static int intel_fbc_check_plane(struct intel_atomic_state *state,
 	}
 
 	/* Wa_14016291713 */
-	if (IS_DISPLAY_VER(i915, 12, 13) && crtc_state->has_psr) {
+	if (IS_DISPLAY_VER(i915, 12, 14) && crtc_state->has_psr) {
 		plane_state->no_fbc_reason = "PSR1 enabled (Wa_14016291713)";
 		return 0;
 	}

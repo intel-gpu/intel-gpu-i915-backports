@@ -101,9 +101,9 @@ static void gen9_reset_guc_interrupts(struct intel_guc *guc)
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_reset_iir(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen9_enable_guc_interrupts(struct intel_guc *guc)
@@ -111,12 +111,13 @@ static void gen9_enable_guc_interrupts(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
+	guc->interrupts.enabled = true;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	WARN_ON_ONCE(intel_uncore_read(gt->uncore, GEN8_GT_IIR(2)) &
 		     gt->pm_guc_events);
 	gen6_gt_pm_enable_irq(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen9_disable_guc_interrupts(struct intel_guc *guc)
@@ -124,24 +125,33 @@ static void gen9_disable_guc_interrupts(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
+	guc->interrupts.enabled = false;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 
 	gen6_gt_pm_disable_irq(gt, gt->pm_guc_events);
 
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 	intel_synchronize_irq(gt->i915);
 
 	gen9_reset_guc_interrupts(guc);
+}
+
+static bool __gen11_reset_guc_interrupts(struct intel_gt *gt)
+{
+	u32 irq = gt->type == GT_MEDIA ? GEN12_GUCM : GEN11_GUC;
+
+	lockdep_assert_held(gt->irq_lock);
+	return gen11_gt_reset_one_iir(gt, 0, irq);
 }
 
 static void gen11_reset_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-	gen11_gt_reset_one_iir(gt, 0, GEN11_GUC);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 /* Wa:16014207253 */
@@ -165,23 +175,27 @@ static void gen11_enable_fake_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = true;
+
+	spin_lock_irq(gt->irq_lock);
 	WARN_ON_ONCE(gen11_gt_reset_one_iir(gt, 0, GEN11_GUC));
 
 	/* FIXME: Connect timer to GT PM */
 	fake_int_timer_start(gt);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen11_disable_fake_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = false;
+
+	spin_lock_irq(gt->irq_lock);
 
 	fake_int_timer_stop(gt);
 
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 	intel_synchronize_irq(gt->i915);
 
 	gen11_reset_guc_interrupts(guc);
@@ -196,27 +210,19 @@ void intel_guc_init_fake_interrupts(struct intel_guc *guc)
 static void gen11_enable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	u32 events = REG_FIELD_PREP(ENGINE1_MASK, GUC_INTR_GUC2HOST);
 
-	spin_lock_irq(&gt->irq_lock);
-	WARN_ON_ONCE(gen11_gt_reset_one_iir(gt, 0, GEN11_GUC));
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_ENABLE, events);
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_MASK, ~events);
-	spin_unlock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = true;
+
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen11_disable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_MASK, ~0);
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_ENABLE, 0);
-
-	spin_unlock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = false;
 	intel_synchronize_irq(gt->i915);
 
 	gen11_reset_guc_interrupts(guc);
@@ -237,12 +243,17 @@ void intel_guc_init_early(struct intel_guc *guc)
 	mutex_init(&guc->send_mutex);
 	spin_lock_init(&guc->irq_lock);
 	if (GRAPHICS_VER(i915) >= 11) {
-		guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
 		guc->interrupts.reset = gen11_reset_guc_interrupts;
 		guc->interrupts.enable = gen11_enable_guc_interrupts;
 		guc->interrupts.disable = gen11_disable_guc_interrupts;
-		guc->send_regs.base =
-			i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		if (gt->type == GT_MEDIA) {
+			guc->notify_reg = MEDIA_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(MEDIA_SOFT_SCRATCH(0));
+		} else {
+			guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		}
+
 		guc->send_regs.count = GEN11_SOFT_SCRATCH_COUNT;
 	} else {
 		guc->notify_reg = GUC_SEND_INTERRUPT;
@@ -339,8 +350,9 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	    (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)))
 		flags |= GUC_WA_GAM_CREDITS;
 
-	/* Wa_14014475959:dg2 */
-	if (IS_DG2(gt->i915))
+	/* Wa_14014475959:dg2,mtl */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    IS_DG2(gt->i915))
 		flags |= GUC_WA_HOLD_CCS_SWITCHOUT;
 
 	/*
@@ -387,7 +399,7 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	 * GUC FW before any work submission to CCS engines
 	 */
 	if (IS_PVC_CT_STEP(gt->i915, STEP_B0, STEP_C0) &&
-	    gt->i915->params.enable_rc6)
+	    gt->rc6.supported)
 		flags |= GUC_WA_RENDER_RST_RC6_EXIT;
 
 	return flags;
@@ -696,9 +708,6 @@ static int __guc_init(struct intel_guc *guc)
 	/* now that everything is perma-pinned, initialize the parameters */
 	guc_init_params(guc);
 
-	/* We need to notify the guc whenever we change the GGTT */
-	i915_ggtt_enable_guc(gt->ggtt);
-
 	intel_uc_fw_change_status(&guc->fw, INTEL_UC_FIRMWARE_LOADABLE);
 
 	return 0;
@@ -725,12 +734,8 @@ out:
 
 static void __guc_fini(struct intel_guc *guc)
 {
-	struct intel_gt *gt = guc_to_gt(guc);
-
 	if (!intel_uc_fw_is_loadable(&guc->fw))
 		return;
-
-	i915_ggtt_disable_guc(gt->ggtt);
 
 	guc_g2g_destroy(guc);
 
@@ -1413,6 +1418,31 @@ int intel_guc_invalidate_tlb_full(struct intel_guc *guc,
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }
 
+static u64 tlb_page_selective_size(u64 start, u64 length)
+{
+	length = roundup_pow_of_two(length);
+
+	if (length < SZ_4K)
+		length = SZ_4K;
+	/*
+	 * Minimum invalidation size for a 2MB page that the hardware expects is
+	 * 16MB
+	 */
+	if (length >= SZ_2M)
+		length = max((u64)(SZ_2M * 8), length);
+
+	/*
+	 * We need to invalidate a higher granularity if start address is not
+	 * aligned to length. When start is not aligned with length we need to
+	 * find the length large enough to create an address mask covering the
+	 * required range.
+	 */
+	if (!IS_ALIGNED(start, length))
+		length = roundup_pow_of_two(length << 1);
+
+	return length;
+}
+
 /*
  * Selective TLB Invalidation for Address Range:
  * TLB's in the Address Range is Invalidated across all engines.
@@ -1422,8 +1452,16 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 					    u64 start, u64 length, u32 asid)
 {
 	u64 vm_total = BIT_ULL(INTEL_INFO(guc_to_gt(guc)->i915)->ppgtt_size);
-	u32 address_mask = (ilog2(length) - ilog2(I915_GTT_PAGE_SIZE_4K));
-	u32 full_range = vm_total == length;
+	u64 size = min(vm_total, tlb_page_selective_size(start, length));
+	u64 address = ALIGN_DOWN(start, size);
+
+	/*
+	 * For page selective invalidations, this specifies the number of contiguous
+	 * PPGTT pages that needs to be invalidated. The Address Mask values are 0 for
+	 * 4KB page, 4 for 64KB page, 12 for 2MB page.
+	 */
+	u32 address_mask = ilog2(size) - ilog2(SZ_4K);
+	u32 full_range = vm_total == size;
 	u32 action[] = {
 		INTEL_GUC_ACTION_TLB_INVALIDATION,
 		0,
@@ -1431,8 +1469,8 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 			mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
 			INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
 		asid,
-		full_range ? full_range : lower_32_bits(start),
-		full_range ? 0 : upper_32_bits(start),
+		full_range ? full_range : lower_32_bits(address),
+		full_range ? 0 : upper_32_bits(address),
 		full_range ? 0 : address_mask,
 	};
 
@@ -1441,9 +1479,9 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 		return 0;
 	}
 
-	GEM_BUG_ON(!IS_ALIGNED(start, I915_GTT_PAGE_SIZE_4K));
-	GEM_BUG_ON(!IS_ALIGNED(length, I915_GTT_PAGE_SIZE_4K));
-	GEM_BUG_ON(range_overflows(start, length, vm_total));
+	GEM_BUG_ON(!IS_ALIGNED(address, I915_GTT_PAGE_SIZE_4K));
+	GEM_BUG_ON(!IS_ALIGNED(size, I915_GTT_PAGE_SIZE_4K));
+	GEM_BUG_ON(range_overflows(address, size, vm_total));
 
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }

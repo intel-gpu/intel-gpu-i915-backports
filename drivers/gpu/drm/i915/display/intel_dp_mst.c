@@ -668,7 +668,7 @@ static void intel_mst_enable_dp(struct intel_atomic_state *state,
 	drm_dp_update_payload_part2(&intel_dp->mst_mgr);
 
 	if (DISPLAY_VER(dev_priv) >= 12 && pipe_config->fec_enable)
-		intel_de_rmw(dev_priv, CHICKEN_TRANS(trans), 0,
+		intel_de_rmw(dev_priv, CHICKEN_TRANS(dev_priv, trans), 0,
 			     FECSTALL_DIS_DPTSTREAM_DPTTG);
 
 	intel_enable_transcoder(pipe_config);
@@ -784,6 +784,8 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_connector *intel_connector = to_intel_connector(connector);
 	struct intel_dp *intel_dp = intel_connector->mst_port;
+	struct intel_digital_port *intel_dig_port = dp_to_dig_port(intel_dp);
+	struct intel_encoder *encoder = &intel_dig_port->base;
 	struct drm_dp_mst_topology_mgr *mgr = &intel_dp->mst_mgr;
 	struct drm_dp_mst_port *port = intel_connector->port;
 	const int min_bpp = 18;
@@ -831,7 +833,7 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 		return 0;
 	}
 
-	if (intel_dp_need_bigjoiner(intel_dp, mode->hdisplay, target_clock)) {
+	if (intel_need_bigjoiner(encoder, mode->hdisplay, target_clock)) {
 		bigjoiner = true;
 		max_dotclk *= 2;
 	}

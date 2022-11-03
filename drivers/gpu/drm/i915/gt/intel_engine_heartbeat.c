@@ -91,6 +91,18 @@ static void show_heartbeat(const struct i915_request *rq,
 static void
 reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 {
+	const char *reason;
+	int ret;
+
+	ret = i915_debugger_handle_engine_attention(engine);
+	if (ret > 0)
+		return; /* Skip as debugger handled it */
+
+	if (ret < 0)
+		reason = "unable to handle EU attention on %s, error: %d";
+	else
+		reason = "stopped heartbeat on %s";
+
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
 		show_heartbeat(rq, engine);
 
@@ -104,8 +116,8 @@ reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 
 	intel_gt_handle_error(engine->gt, engine->mask,
 			      I915_ERROR_CAPTURE,
-			      "stopped heartbeat on %s",
-			      engine->name);
+			      reason,
+			      engine->name, ret);
 }
 
 static void heartbeat(struct work_struct *wrk)
@@ -116,7 +128,6 @@ static void heartbeat(struct work_struct *wrk)
 	struct intel_context *ce = engine->kernel_context;
 	struct i915_request *rq;
 	unsigned long serial;
-	int ret;
 
 	/* Just in case everything has gone horribly wrong, give it a kick */
 	intel_engine_flush_submission(engine);
@@ -133,14 +144,8 @@ static void heartbeat(struct work_struct *wrk)
 	if (intel_gt_is_wedged(engine->gt))
 		goto out;
 
-	ret = i915_debugger_handle_engine_attention(engine);
-	if (ret) {
-		intel_gt_handle_error(engine->gt, engine->mask,
-				      I915_ERROR_CAPTURE,
-				      "unable to handle EU attention on %s, error:%d",
-				      engine->name, ret);
-		goto out;
-	}
+	/* Try to send attentions to any listening debugger */
+	i915_debugger_handle_engine_attention(engine);
 
 	/* Hangcheck disabled so do not check for systole. */
 	if (!engine->i915->params.enable_hangcheck)

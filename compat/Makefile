@@ -41,38 +41,3 @@ compat-$(CPTCFG_KERNEL_5_2) += backport-5.2.o backport-genetlink.o
 compat-$(CPTCFG_KERNEL_5_5) += backport-5.5.o
 compat-y += backport-5.10.o
 compat-y += slub.o slab.o
-
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/verify.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/pkcs7.asn1.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/pkcs7_verify.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/pkcs7_parser.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/x509.asn1.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/x509_akid.asn1.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/x509_cert_parser.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/x509_public_key.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/pkcs7_trust.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/key.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/public_key.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/rsa.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/bignum.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/md.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/md_wrap.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/sha256.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/oid.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/asn1parse.o
-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/rsapubkey.asn1.o
-
-$(obj)/lib-oid_registry.o: $(obj)/oid_registry_data.c
-
-$(obj)/oid_registry_data.c: $(src)/../include/linux/backport-oid_registry.h \
-			    $(src)/build_OID_registry
-	$(call cmd,build_OID_registry)
-
-quiet_cmd_build_OID_registry = GEN     $@
-	cmd_build_OID_registry = perl $(src)/build_OID_registry $< $@
-compat-$(CPTCFG_BPAUTO_ASN1_DECODER) += lib-asn1_decoder.o
-compat-$(CPTCFG_BPAUTO_REFCOUNT) += lib-refcount.o
-compat-$(CPTCFG_BPAUTO_RHASHTABLE) += lib-rhashtable.o
-compat-$(CPTCFG_BPAUTO_PUBLIC_KEY) += 
-compat-$(CPTCFG_BPAUTO_BUCKET_LOCKS) += lib-bucket_locks.o
-compat-$(CPTCFG_BPAUTO_PKCS7) += 

@@ -23,6 +23,7 @@
 #include "i915_mm.h"
 #include "i915_trace.h"
 #include "i915_user_extensions.h"
+#include "i915_gem_ttm.h"
 #include "i915_vma.h"
 
 static inline bool
@@ -690,6 +691,8 @@ i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
 	struct i915_mmap_offset *mmo;
 	int err;
 
+	GEM_BUG_ON(obj->ops->mmap_offset || obj->ops->mmap_ops);
+
 	mmo = lookup_mmo(obj, mmap_type);
 	if (mmo)
 		goto out;
@@ -733,30 +736,24 @@ err:
 }
 
 static int
-__assign_mmap_offset(struct drm_file *file,
-		     u32 handle,
+__assign_mmap_offset(struct drm_i915_gem_object *obj,
 		     enum i915_mmap_type mmap_type,
-		     u64 *offset)
+		     u64 *offset, struct drm_file *file)
 {
-	struct drm_i915_gem_object *obj;
 	struct i915_mmap_offset *mmo;
-	int err;
 
-	obj = i915_gem_object_lookup(file, handle);
-	if (!obj)
-		return -ENOENT;
+	if (i915_gem_object_never_mmap(obj))
+		return -ENODEV;
 
-	if (i915_gem_object_never_mmap(obj)) {
-		err = -ENODEV;
-		goto out;
+	if (obj->ops->mmap_offset)  {
+		*offset = obj->ops->mmap_offset(obj);
+		return 0;
 	}
 
 	if (mmap_type != I915_MMAP_TYPE_GTT &&
 	    !i915_gem_object_has_struct_page(obj) &&
-	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM)) {
-		err = -ENODEV;
-		goto out;
-	}
+	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
+		return -ENODEV;
 
 	if (i915_gem_object_is_lmem(obj) &&
 	    i915_is_level4_wa_active(obj->mm.region->gt) &&
@@ -767,14 +764,27 @@ __assign_mmap_offset(struct drm_file *file,
 	}
 
 	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
-	if (IS_ERR(mmo)) {
-		err = PTR_ERR(mmo);
-		goto out;
-	}
+	if (IS_ERR(mmo))
+		return PTR_ERR(mmo);
 
 	*offset = drm_vma_node_offset_addr(&mmo->vma_node);
-	err = 0;
-out:
+	return 0;
+}
+
+static int
+__assign_mmap_offset_handle(struct drm_file *file,
+			    u32 handle,
+			    enum i915_mmap_type mmap_type,
+			    u64 *offset)
+{
+	struct drm_i915_gem_object *obj;
+	int err;
+
+	obj = i915_gem_object_lookup(file, handle);
+	if (!obj)
+		return -ENOENT;
+
+	err = __assign_mmap_offset(obj, mmap_type, offset, file);
 	i915_gem_object_put(obj);
 	return err;
 }
@@ -795,7 +805,7 @@ i915_gem_dumb_mmap_offset(struct drm_file *file,
 	else
 		mmap_type = I915_MMAP_TYPE_GTT;
 
-	return __assign_mmap_offset(file, handle, mmap_type, offset);
+	return __assign_mmap_offset_handle(file, handle, mmap_type, offset);
 }
 
 /**
@@ -863,7 +873,7 @@ i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
-	return __assign_mmap_offset(file, args->handle, type, &args->offset);
+	return __assign_mmap_offset_handle(file, args->handle, type, &args->offset);
 }
 
 static void vm_open(struct vm_area_struct *vma)
@@ -954,17 +964,20 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	if (i915_gem_object_is_readonly(obj)) {
 		if (vma->vm_flags & VM_WRITE)
 			return -EINVAL;
-
+		
 		vma->vm_flags &= ~VM_MAYWRITE;
 	}
 
-	anon = mmap_singleton(i915);
+	anon = mmap_singleton(to_i915(obj->base.dev));
 	if (IS_ERR(anon))
 		return PTR_ERR(anon);
 
 	pvc_wa_disallow_rc6(i915);
 	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
 	vma->vm_private_data = mmo;
+
+	if (i915_gem_object_has_iomem(obj))
+		vma->vm_flags |= VM_IO;
 
 	/*
 	 * We keep the ref on mmo->obj, not vm_file, but we require
@@ -977,6 +990,15 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	vma_set_file(vma, anon);
 	/* Drop the initial creation reference, the vma is now holding one. */
 	fput(anon);
+
+	if (obj->ops->mmap_ops) {
+		vma->vm_page_prot = pgprot_decrypted(vm_get_page_prot(vma->vm_flags));
+		vma->vm_ops = obj->ops->mmap_ops;
+		//vma->vm_private_data = node->driver_private;
+		return 0;
+	}
+
+	vma->vm_private_data = mmo;
 
 	switch (mmo->mmap_type) {
 	case I915_MMAP_TYPE_WC:

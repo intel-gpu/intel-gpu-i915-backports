@@ -5,6 +5,7 @@
 
 #include "i915_utils.h"
 #include "gt/intel_gt.h"
+#include "intel_pci_config.h"
 #include "iov_selftest_actions.h"
 #include "../abi/iov_actions_selftest_abi.h"
 #include "../intel_iov_relay.h"
@@ -359,10 +360,10 @@ static int igt_pf_iov_ggtt(struct intel_iov *iov)
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	struct drm_mm_node ggtt_block = {};
 	static struct pte_testcase pte_testcases[] = {
-		{ pte_gpa_modifiable },
-		{ pte_vfid_modifiable },
-		{ pte_lmem_modifiable, has_lmem },
-		{ pte_valid_modifiable },
+		{ .test = pte_gpa_modifiable },
+		{ .test = pte_vfid_modifiable },
+		{ .test = pte_lmem_modifiable, .requires = has_lmem },
+		{ .test = pte_valid_modifiable },
 		{ },
 	};
 	int failed = 0;
@@ -426,11 +427,11 @@ static int igt_vf_iov_own_ggtt(struct intel_iov *iov, bool sanitycheck)
 {
 	gen8_pte_t __iomem *gsm = iov_to_gt(iov)->ggtt->gsm;
 	static struct pte_testcase pte_testcases[] = {
-		{ pte_gpa_modifiable },
-		{ pte_vfid_not_readable },
-		{ pte_vfid_not_modifiable },
-		{ pte_lmem_modifiable, has_lmem },
-		{ pte_valid_not_modifiable },
+		{ .test = pte_gpa_modifiable },
+		{ .test = pte_vfid_not_readable },
+		{ .test = pte_vfid_not_modifiable },
+		{ .test = pte_lmem_modifiable, .requires = has_lmem },
+		{ .test = pte_valid_not_modifiable },
 		{ },
 	};
 	int failed = 0;
@@ -490,9 +491,9 @@ static int igt_vf_iov_own_ggtt_via_pf(struct intel_iov *iov)
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	gen8_pte_t __iomem *gsm = ggtt->gsm;
 	static struct pte_testcase pte_testcases[] = {
-		{ pte_vfid_not_modifiable_check_via_pf },
-		{ pte_valid_not_modifiable_check_via_pf },
-		{ pte_valid_readable_check_via_pf, wa_1808546409 },
+		{ .test = pte_vfid_not_modifiable_check_via_pf },
+		{ .test = pte_valid_not_modifiable_check_via_pf },
+		{ .test = pte_valid_readable_check_via_pf, .requires = wa_1808546409 },
 		{ },
 	};
 	int failed = 0, err;
@@ -556,11 +557,11 @@ _test_other_ggtt_region(struct intel_iov *iov, gen8_pte_t __iomem *gsm,
 			struct drm_mm_node *ggtt_region)
 {
 	static struct pte_testcase pte_testcases[] = {
-		{ pte_not_accessible },
-		{ pte_gpa_not_modifiable },
-		{ pte_vfid_not_modifiable },
-		{ pte_lmem_not_modifiable, has_lmem },
-		{ pte_valid_not_modifiable },
+		{ .test = pte_not_accessible },
+		{ .test = pte_gpa_not_modifiable },
+		{ .test = pte_vfid_not_modifiable },
+		{ .test = pte_lmem_not_modifiable, .requires = has_lmem },
+		{ .test = pte_valid_not_modifiable },
 		{ },
 	};
 	int failed = 0;
@@ -584,9 +585,9 @@ _test_other_ggtt_region_via_pf(struct intel_iov *iov, gen8_pte_t __iomem *gsm,
 			       struct drm_mm_node *ggtt_region)
 {
 	static struct pte_testcase pte_testcases[] = {
-		{ pte_gpa_not_modifiable_check_via_pf },
-		{ pte_vfid_not_modifiable_check_via_pf },
-		{ pte_valid_not_modifiable_check_via_pf },
+		{ .test = pte_gpa_not_modifiable_check_via_pf },
+		{ .test = pte_vfid_not_modifiable_check_via_pf },
+		{ .test = pte_valid_not_modifiable_check_via_pf },
 		{ },
 	};
 	int failed = 0;
@@ -628,7 +629,7 @@ static void *map_gsm(struct intel_gt *gt, u64 ggtt_size)
 	 * Since GEN8 GTTADDR starts at 8MB offset
 	 */
 	gttaddr = SZ_8M;
-	phys_addr =  pci_resource_start(pdev, 0) + gttaddr;
+	phys_addr =  pci_resource_start(pdev, GTTMMADR_BAR) + gttaddr;
 
 	gsm = ioremap(phys_addr, gsm_ggtt_size);
 	if (!gsm) {

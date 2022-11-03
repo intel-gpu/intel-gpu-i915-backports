@@ -356,6 +356,7 @@ alloc_vm_end:
 					break;
 			}
 
+			mock_vma->vm = vm;
 			mock_vma->size = BIT_ULL(size);
 			mock_vma->pages = obj->mm.pages;
 			mock_vma->node.size = BIT_ULL(aligned_size);
@@ -1202,7 +1203,7 @@ static int igt_ppgtt_flat(void *arg)
 	flat.size = round_up(mr->region.end, SZ_1G) - flat.start;
 	flat.color = I915_COLOR_UNEVICTABLE;
 
-	vm = i915_gem_context_get_vm_rcu(ctx);
+	vm = i915_gem_context_get_eb_vm(ctx);
 
 	ret = intel_flat_lmem_ppgtt_init(vm, &flat);
 	if (ret)
@@ -1531,7 +1532,7 @@ static int exercise_mock(struct drm_i915_private *i915,
 	if (!ctx)
 		return -ENOMEM;
 
-	vm = i915_gem_context_get_vm_rcu(ctx);
+	vm = i915_gem_context_get_eb_vm(ctx);
 	err = func(vm, 0, min(vm->total, limit), end_time);
 	i915_vm_put(vm);
 
@@ -2080,7 +2081,7 @@ static int igt_cs_tlb(void *arg)
 		goto out_unlock;
 	}
 
-	vm = i915_gem_context_get_vm_rcu(ctx);
+	vm = i915_gem_context_get_eb_vm(ctx);
 	if (i915_is_ggtt(vm))
 		goto out_vm;
 

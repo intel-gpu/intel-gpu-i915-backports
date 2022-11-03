@@ -197,9 +197,9 @@ static void rps_enable_interrupts(struct intel_rps *rps)
 
 	rps_reset_ei(rps);
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_enable_irq(gt, rps->pm_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 
 	intel_uncore_write(gt->uncore,
 			   GEN6_PMINTRMSK, rps_pm_mask(rps, rps->last_freq));
@@ -220,14 +220,14 @@ static void rps_reset_interrupts(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	if (GRAPHICS_VER(gt->i915) >= 11)
 		gen11_rps_reset_interrupts(rps);
 	else
 		gen6_rps_reset_interrupts(rps);
 
 	rps->pm_iir = 0;
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void rps_disable_interrupts(struct intel_rps *rps)
@@ -237,9 +237,9 @@ static void rps_disable_interrupts(struct intel_rps *rps)
 	intel_uncore_write(gt->uncore,
 			   GEN6_PMINTRMSK, rps_pm_sanitize_mask(rps, ~0u));
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_disable_irq(gt, GEN6_PM_RPS_EVENTS);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 
 	intel_synchronize_irq(gt->i915);
 
@@ -1088,6 +1088,23 @@ static u32 intel_rps_read_state_cap(struct intel_rps *rps)
 		return intel_uncore_read(uncore, GEN6_RP_STATE_CAP);
 }
 
+static void
+mtl_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
+{
+	struct intel_uncore *uncore = rps_to_uncore(rps);
+	u32 rp_state_cap = rps_to_gt(rps)->type == GT_MEDIA ?
+				intel_uncore_read(uncore, MTL_MEDIAP_STATE_CAP) :
+				intel_uncore_read(uncore, MTL_RP_STATE_CAP);
+	u32 rpe = rps_to_gt(rps)->type == GT_MEDIA ?
+			intel_uncore_read(uncore, MTL_MPE_FREQUENCY) :
+			intel_uncore_read(uncore, MTL_GT_RPE_FREQUENCY);
+
+	/* MTL values are in units of 16.67 MHz */
+	caps->rp0_freq = REG_FIELD_GET(MTL_RP0_CAP_MASK, rp_state_cap);
+	caps->min_freq = REG_FIELD_GET(MTL_RPN_CAP_MASK, rp_state_cap);
+	caps->rp1_freq = REG_FIELD_GET(MTL_RPE_MASK, rpe);
+}
+
 /**
  * gen6_rps_get_freq_caps - Get freq caps exposed by HW
  * @rps: the intel_rps structure
@@ -1100,6 +1117,9 @@ void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *c
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 rp_state_cap;
+
+	if (IS_METEORLAKE(i915))
+		return mtl_get_freq_caps(rps, caps);
 
 	rp_state_cap = intel_rps_read_state_cap(rps);
 
@@ -1792,10 +1812,10 @@ static void rps_work(struct work_struct *work)
 	int new_freq, adj, min, max;
 	u32 pm_iir = 0;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	pm_iir = fetch_and_zero(&rps->pm_iir) & rps->pm_events;
 	client_boost = atomic_read(&rps->num_waiters);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 
 	/* Make sure we didn't queue anything we're not going to process. */
 	if (!pm_iir && !client_boost)
@@ -1868,9 +1888,9 @@ static void rps_work(struct work_struct *work)
 	mutex_unlock(&rps->lock);
 
 out:
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_unmask_irq(gt, rps->pm_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 void gen11_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
@@ -1878,7 +1898,7 @@ void gen11_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
 	struct intel_gt *gt = rps_to_gt(rps);
 	const u32 events = rps->pm_events & pm_iir;
 
-	lockdep_assert_held(&gt->irq_lock);
+	lockdep_assert_held(gt->irq_lock);
 
 	if (unlikely(!events))
 		return;
@@ -1898,7 +1918,7 @@ void gen6_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
 
 	events = pm_iir & rps->pm_events;
 	if (events) {
-		spin_lock(&gt->irq_lock);
+		spin_lock(gt->irq_lock);
 
 		GT_TRACE(gt, "irq events:%x\n", events);
 
@@ -1906,7 +1926,7 @@ void gen6_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
 		rps->pm_iir |= events;
 
 		schedule_work(&rps->work);
-		spin_unlock(&gt->irq_lock);
+		spin_unlock(gt->irq_lock);
 	}
 
 	if (GRAPHICS_VER(gt->i915) >= 8)
@@ -1967,6 +1987,9 @@ void intel_rps_init_early(struct intel_rps *rps)
 void intel_rps_init(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
+
+	if (IS_SRIOV_VF(i915))
+		return;
 
 	if (rps_uses_slpc(rps))
 		return;
@@ -2029,6 +2052,9 @@ void intel_rps_init(struct intel_rps *rps)
 
 void intel_rps_sanitize(struct intel_rps *rps)
 {
+	if (IS_SRIOV_VF(rps_to_i915(rps)))
+		return;
+
 	if (rps_uses_slpc(rps))
 		return;
 
@@ -2041,7 +2067,10 @@ u32 intel_rps_read_rpstat(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 rpstat;
 
-	if (GRAPHICS_VER(i915) >= 12)
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
+		rpstat = intel_uncore_read(rps_to_gt(rps)->uncore,
+					   MTL_MIRROR_TARGET_WP1);
+	else if (GRAPHICS_VER(i915) >= 12)
 		rpstat = intel_uncore_read(rps_to_gt(rps)->uncore, GEN12_RPSTAT1);
 	else
 		rpstat = intel_uncore_read(rps_to_gt(rps)->uncore, GEN6_RPSTAT1);
@@ -2056,6 +2085,8 @@ u32 intel_rps_get_cagf(struct intel_rps *rps, u32 rpstat)
 
 	if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915))
 		cagf = (rpstat >> 8) & 0xff;
+	else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
+		cagf = rpstat & MTL_CAGF_MASK;
 	else if (GRAPHICS_VER(i915) >= 12)
 		cagf = (rpstat & GEN12_CAGF_MASK) >> GEN12_CAGF_SHIFT;
 	else if (GRAPHICS_VER(i915) >= 9)
@@ -2388,13 +2419,18 @@ u32 intel_rps_read_rapl_pl1_frequency(struct intel_rps *rps)
 {
 	u32 rapl_freq = intel_rps_get_rapl(rps, intel_rps_read_rapl_pl1(rps));
 
-	return rapl_freq * GT_FREQUENCY_MULTIPLIER;
+	return (rapl_freq >> 8) * GT_FREQUENCY_MULTIPLIER;
+}
+
+static u32 read_perf_limit_reasons(struct intel_gt *gt)
+{
+	return __rps_read_mmio(gt, intel_gt_perf_limit_reasons_reg(gt));
 }
 
 u32 intel_rps_read_throttle_reason_status(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 status = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & GT0_PERF_LIMIT_REASONS_MASK;
+	u32 status = read_perf_limit_reasons(gt) & GT0_PERF_LIMIT_REASONS_MASK;
 
 	return status;
 }
@@ -2402,7 +2438,7 @@ u32 intel_rps_read_throttle_reason_status(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_pl1(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 pl1 = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & POWER_LIMIT_1_MASK;
+	u32 pl1 = read_perf_limit_reasons(gt) & POWER_LIMIT_1_MASK;
 
 	return pl1;
 }
@@ -2410,7 +2446,7 @@ u32 intel_rps_read_throttle_reason_pl1(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_pl2(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 pl2 = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & POWER_LIMIT_2_MASK;
+	u32 pl2 = read_perf_limit_reasons(gt) & POWER_LIMIT_2_MASK;
 
 	return pl2;
 }
@@ -2418,7 +2454,7 @@ u32 intel_rps_read_throttle_reason_pl2(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_pl4(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 pl4 = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & POWER_LIMIT_4_MASK;
+	u32 pl4 = read_perf_limit_reasons(gt) & POWER_LIMIT_4_MASK;
 
 	return pl4;
 }
@@ -2426,7 +2462,7 @@ u32 intel_rps_read_throttle_reason_pl4(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_thermal(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 thermal = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & THERMAL_LIMIT_MASK;
+	u32 thermal = read_perf_limit_reasons(gt) & THERMAL_LIMIT_MASK;
 
 	return thermal;
 }
@@ -2434,7 +2470,7 @@ u32 intel_rps_read_throttle_reason_thermal(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_prochot(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 prochot = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & PROCHOT_MASK;
+	u32 prochot = read_perf_limit_reasons(gt) & PROCHOT_MASK;
 
 	return prochot;
 }
@@ -2442,7 +2478,7 @@ u32 intel_rps_read_throttle_reason_prochot(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_ratl(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 ratl = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & RATL_MASK;
+	u32 ratl = read_perf_limit_reasons(gt) & RATL_MASK;
 
 	return ratl;
 }
@@ -2450,7 +2486,7 @@ u32 intel_rps_read_throttle_reason_ratl(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_vr_thermalert(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 thermalert = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & VR_THERMALERT_MASK;
+	u32 thermalert = read_perf_limit_reasons(gt) & VR_THERMALERT_MASK;
 
 	return thermalert;
 }
@@ -2458,7 +2494,7 @@ u32 intel_rps_read_throttle_reason_vr_thermalert(struct intel_rps *rps)
 u32 intel_rps_read_throttle_reason_vr_tdc(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 tdc = __rps_read_mmio(gt, GT0_PERF_LIMIT_REASONS) & VR_TDC_MASK;
+	u32 tdc = read_perf_limit_reasons(gt) & VR_TDC_MASK;
 
 	return tdc;
 }

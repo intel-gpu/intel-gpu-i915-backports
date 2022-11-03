@@ -1,7 +1,6 @@
 /*
  * Copyright (C) 2021 Intel Corporation
  */
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
 
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_print.h>
@@ -14,6 +13,7 @@ u8 dp_link_status(const u8 link_status[DP_LINK_STATUS_SIZE], int r)
 EXPORT_SYMBOL(dp_link_status);
 
 /* DP 2.0 128b/132b */
+#ifdef DRM_DP_GET_ADJUST_NOT_PRESENT
 u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 				   int lane)
 {
@@ -26,7 +26,9 @@ u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 	return (l >> s) & 0xf;
 }
 EXPORT_SYMBOL(drm_dp_get_adjust_tx_ffe_preset);
+#endif /* DRM_DP_GET_ADJUST_NOT_PRESENT */
 
+#ifdef DRM_EDP_BACKLIGHT_NOT_PRESENT
 static inline int
 drm_edp_backlight_probe_level(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl,
 			      u8 *current_mode)
@@ -298,6 +300,7 @@ drm_edp_backlight_init(struct drm_dp_aux *aux, struct drm_edp_backlight_info *bl
 	return 0;
 }
 EXPORT_SYMBOL(drm_edp_backlight_init);
+#endif /* DRM_EDP_BACKLIGHT_NOT_PRESENT */
 
 /**
  * drm_hdmi_sink_max_frl_rate - get the max frl rate, if supported
@@ -336,5 +339,3 @@ int drm_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector)
         return max_dsc_lanes * dsc_rate_per_lane;
 }
 EXPORT_SYMBOL(drm_hdmi_sink_dsc_max_frl_rate);
-
-#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */

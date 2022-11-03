@@ -10,9 +10,46 @@
 #include "gt/intel_context.h"
 #include "i915_drv.h"
 
+/**
+ * DOC: PXP
+ *
+ * PXP (Protected Xe Path) is a feature available in Gen12 and newer platforms.
+ * It allows execution and flip to display of protected (i.e. encrypted)
+ * objects. The SW support is enabled via the CPTCFG_DRM_I915_PXP kconfig.
+ *
+ * Objects can opt-in to PXP encryption at creation time via the
+ * I915_GEM_CREATE_EXT_PROTECTED_CONTENT create_ext flag. For objects to be
+ * correctly protected they must be used in conjunction with a context created
+ * with the I915_CONTEXT_PARAM_PROTECTED_CONTENT flag. See the documentation
+ * of those two uapi flags for details and restrictions.
+ *
+ * Protected objects are tied to a pxp session; currently we only support one
+ * session, which i915 manages and whose index is available in the uapi
+ * (I915_PROTECTED_CONTENT_DEFAULT_SESSION) for use in instructions targeting
+ * protected objects.
+ * The session is invalidated by the HW when certain events occur (e.g.
+ * suspend/resume). When this happens, all the objects that were used with the
+ * session are marked as invalid and all contexts marked as using protected
+ * content are banned. Any further attempt at using them in an execbuf call is
+ * rejected, while flips are converted to black frames.
+ *
+ * Some of the PXP setup operations are performed by the Management Engine,
+ * which is handled by the mei driver; communication between i915 and mei is
+ * performed via the mei_pxp component module.
+ */
+
+struct intel_gt *pxp_to_gt(const struct intel_pxp *pxp)
+{
+	return container_of(pxp, struct intel_gt, pxp);
+}
+
+bool intel_pxp_is_active(const struct intel_pxp *pxp)
+{
+	return pxp->arb_is_valid;
+}
+
 /* KCR register definitions */
 #define KCR_INIT _MMIO(0x320f0)
-
 /* Setting KCR Init bit is required after system boot */
 #define KCR_INIT_ALLOW_DISPLAY_ME_WRITES REG_BIT(14)
 
@@ -99,6 +136,8 @@ void intel_pxp_init(struct intel_pxp *pxp)
 {
 	struct intel_gt *gt = pxp_to_gt(pxp);
 
+	/*DKMS I915 assumes CONFIG_INTEL_MEI_PXP is enabled always*/
+
 	/*
 	 * If HuC is loaded by GSC but PXP is disabled, we can skip the init of
 	 * the full PXP session/object management and just init the tee channel.
@@ -132,11 +171,11 @@ static void intel_pxp_queue_termination(struct intel_pxp *pxp)
 	 * We want to get the same effect as if we received a termination
 	 * interrupt, so just pretend that we did.
 	 */
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	intel_pxp_mark_termination_in_progress(pxp);
 	pxp->session_events |= PXP_TERMINATION_REQUEST;
 	queue_work(system_unbound_wq, &pxp->session_work);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 /*

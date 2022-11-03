@@ -10,6 +10,7 @@
 #include "intel_huc.h"
 #include "i915_drv.h"
 #include "pxp/intel_pxp_tee_interface.h"
+#include "pxp/intel_pxp_huc.h"
 
 /**
  * DOC: HuC
@@ -43,11 +44,28 @@
  * HuC-specific commands.
  */
 
+static bool vcs_supported(struct intel_gt *gt)
+{
+	return gt->info.engine_mask ?
+		VDBOX_MASK(gt) :
+		INTEL_INFO(gt->i915)->platform_engine_mask & BIT(VCS0);
+}
+
 void intel_huc_init_early(struct intel_huc *huc)
 {
 	struct drm_i915_private *i915 = huc_to_gt(huc)->i915;
+	struct intel_gt *gt = huc_to_gt(huc);
 
 	intel_uc_fw_init_early(&huc->fw, INTEL_UC_FW_TYPE_HUC);
+
+	/* we can arrive here from i915_driver_early_probe for primary
+	 * GT with it being not fully setup hence check device info's
+	 * engine mask
+	 */
+	if (!vcs_supported(gt)) {
+		intel_uc_fw_change_status(&huc->fw, INTEL_UC_FIRMWARE_NOT_SUPPORTED);
+		return;
+	}
 
 	if (GRAPHICS_VER(i915) >= 11) {
 		huc->status.reg = GEN11_HUC_KERNEL_LOAD_INFO;
@@ -90,7 +108,8 @@ static int check_huc_loading_mode(struct intel_huc *huc)
 
 int intel_huc_init(struct intel_huc *huc)
 {
-	struct drm_i915_private *i915 = huc_to_gt(huc)->i915;
+	struct intel_gt *gt = huc_to_gt(huc);
+	struct drm_i915_private *i915 = gt->i915;
 	int err;
 
 	err = check_huc_loading_mode(huc);
@@ -199,10 +218,6 @@ static bool huc_is_authenticated(struct intel_huc *huc)
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
 		status = intel_uncore_read(gt->uncore, huc->status.reg);
-
-	/* if status is suspicious, VFs must trust PF that HuC was loaded */
-	if ((!status || !~status) && IS_SRIOV_VF(gt->i915))
-		return true;
 
 	return (status & huc->status.mask) == huc->status.value;
 }

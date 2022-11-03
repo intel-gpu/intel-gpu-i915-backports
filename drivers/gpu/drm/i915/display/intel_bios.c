@@ -603,12 +603,14 @@ get_lfp_data_tail(const struct bdb_lvds_lfp_data *data,
 }
 
 static int opregion_get_panel_type(struct drm_i915_private *i915,
+				   const struct intel_bios_encoder_data *devdata,
 				   const struct edid *edid)
 {
 	return intel_opregion_get_panel_type(i915);
 }
 
 static int vbt_get_panel_type(struct drm_i915_private *i915,
+			      const struct intel_bios_encoder_data *devdata,
 			      const struct edid *edid)
 {
 	const struct bdb_lvds_options *lvds_options;
@@ -624,10 +626,16 @@ static int vbt_get_panel_type(struct drm_i915_private *i915,
 		return -1;
 	}
 
+	if (devdata && devdata->child.handle == DEVICE_HANDLE_LFP2)
+		return lvds_options->panel_type2;
+
+	drm_WARN_ON(&i915->drm, devdata && devdata->child.handle != DEVICE_HANDLE_LFP1);
+
 	return lvds_options->panel_type;
 }
 
 static int pnpid_get_panel_type(struct drm_i915_private *i915,
+				const struct intel_bios_encoder_data *devdata,
 				const struct edid *edid)
 {
 	const struct bdb_lvds_lfp_data *data;
@@ -674,6 +682,7 @@ static int pnpid_get_panel_type(struct drm_i915_private *i915,
 }
 
 static int fallback_get_panel_type(struct drm_i915_private *i915,
+				   const struct intel_bios_encoder_data *devdata,
 				   const struct edid *edid)
 {
 	return 0;
@@ -687,11 +696,13 @@ enum panel_type {
 };
 
 static int get_panel_type(struct drm_i915_private *i915,
+			  const struct intel_bios_encoder_data *devdata,
 			  const struct edid *edid)
 {
 	struct {
 		const char *name;
 		int (*get_panel_type)(struct drm_i915_private *i915,
+				      const struct intel_bios_encoder_data *devdata,
 				      const struct edid *edid);
 		int panel_type;
 	} panel_types[] = {
@@ -715,7 +726,7 @@ static int get_panel_type(struct drm_i915_private *i915,
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(panel_types); i++) {
-		panel_types[i].panel_type = panel_types[i].get_panel_type(i915, edid);
+		panel_types[i].panel_type = panel_types[i].get_panel_type(i915, devdata, edid);
 
 		drm_WARN_ON(&i915->drm, panel_types[i].panel_type > 0xf &&
 			    panel_types[i].panel_type != 0xff);
@@ -2149,7 +2160,7 @@ static u8 map_ddc_pin(struct drm_i915_private *i915, u8 vbt_pin)
 	const u8 *ddc_pin_map;
 	int n_entries;
 
-	if (IS_ALDERLAKE_P(i915)) {
+	if (HAS_PCH_MTP(i915) || IS_ALDERLAKE_P(i915)) {
 		ddc_pin_map = adlp_ddc_pin_map;
 		n_entries = ARRAY_SIZE(adlp_ddc_pin_map);
 	} else if (IS_ALDERLAKE_S(i915)) {
@@ -2405,7 +2416,7 @@ static enum port dvo_port_to_port(struct drm_i915_private *i915,
 		[PORT_TC4] = { DVO_PORT_HDMII, DVO_PORT_DPI, -1 },
 	};
 
-	if (DISPLAY_VER(i915) == 13)
+	if (DISPLAY_VER(i915) >= 13)
 		return __dvo_port_to_port(ARRAY_SIZE(xelpd_port_mapping),
 					  ARRAY_SIZE(xelpd_port_mapping[0]),
 					  xelpd_port_mapping,
@@ -2475,6 +2486,44 @@ static int _intel_bios_dp_max_link_rate(const struct intel_bios_encoder_data *de
 	else
 		return parse_bdb_216_dp_max_link_rate(devdata->child.dp_max_link_rate);
 }
+
+#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
+static int _intel_bios_hdmi_max_frl_rate(const struct intel_bios_encoder_data *devdata)
+{
+	struct drm_i915_private *i915 = devdata->i915;
+
+	if (i915->vbt.version >= 237 &&
+	    devdata->child.hdmi_max_frl_rate_valid) {
+		switch (devdata->child.hdmi_max_frl_rate) {
+		default:
+		case HDMI_MAX_FRL_RATE_PLATFORM:
+			drm_dbg_kms(&i915->drm, "HDMI2.1 is limited to support only TMDS modes\n");
+			return 0;
+		case HDMI_MAX_FRL_RATE_3G:
+			return 3000000;
+		case HDMI_MAX_FRL_RATE_6G:
+			return 6000000;
+		case HDMI_MAX_FRL_RATE_8G:
+			return 8000000;
+		case HDMI_MAX_FRL_RATE_10G:
+			return 10000000;
+		case HDMI_MAX_FRL_RATE_12G:
+			return 12000000;
+		}
+	}
+
+	/*
+	 * When hdmi_max_frl_rate_valid is 0
+	 * Don't consider the hdmi_max_frl_rate for
+	 * limiting the FrlRates on HDMI2.1 displays
+	 */
+	if (i915->vbt.version >= 237 &&
+	    IS_METEORLAKE(i915))
+		return 12000000;
+
+	return 0;
+}
+#endif
 
 static void sanitize_device_type(struct intel_bios_encoder_data *devdata,
 				 enum port port)
@@ -2575,7 +2624,9 @@ static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
 	const struct child_device_config *child = &devdata->child;
 	bool is_dvi, is_hdmi, is_dp, is_edp, is_crt, supports_typec_usb, supports_tbt;
 	int dp_boost_level, dp_max_link_rate, hdmi_boost_level, hdmi_level_shift, max_tmds_clock;
-
+#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
+	int hdmi_max_frl_rate;
+#endif
 	is_dvi = intel_bios_encoder_supports_dvi(devdata);
 	is_dp = intel_bios_encoder_supports_dp(devdata);
 	is_crt = intel_bios_encoder_supports_crt(devdata);
@@ -2623,6 +2674,14 @@ static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
 		drm_dbg_kms(&i915->drm,
 			    "Port %c VBT DP max link rate: %d\n",
 			    port_name(port), dp_max_link_rate);
+
+#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
+	hdmi_max_frl_rate = _intel_bios_hdmi_max_frl_rate(devdata);
+	if (hdmi_max_frl_rate)
+		drm_dbg_kms(&i915->drm,
+			    "VBT HDMI max frl rate for port %c: %d\n",
+			    port_name(port), hdmi_max_frl_rate);
+#endif
 }
 
 static void parse_ddi_port(struct intel_bios_encoder_data *devdata)
@@ -3120,11 +3179,12 @@ out:
 
 void intel_bios_init_panel(struct drm_i915_private *i915,
 			   struct intel_panel *panel,
+			   const struct intel_bios_encoder_data *devdata,
 			   const struct edid *edid)
 {
 	init_vbt_panel_defaults(panel);
 
-	panel->vbt.panel_type = get_panel_type(i915, edid);
+	panel->vbt.panel_type = get_panel_type(i915, devdata, edid);
 
 	parse_panel_options(i915, panel);
 	parse_generic_dtd(i915, panel);
@@ -3552,7 +3612,7 @@ enum aux_ch intel_bios_port_aux_ch(struct drm_i915_private *i915,
 			aux_ch = AUX_CH_C;
 		break;
 	case DP_AUX_D:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_D_XELPD;
 		else if (IS_ALDERLAKE_S(i915))
 			aux_ch = AUX_CH_USBC3;
@@ -3562,7 +3622,7 @@ enum aux_ch intel_bios_port_aux_ch(struct drm_i915_private *i915,
 			aux_ch = AUX_CH_D;
 		break;
 	case DP_AUX_E:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_E_XELPD;
 		else if (IS_ALDERLAKE_S(i915))
 			aux_ch = AUX_CH_USBC4;
@@ -3570,25 +3630,25 @@ enum aux_ch intel_bios_port_aux_ch(struct drm_i915_private *i915,
 			aux_ch = AUX_CH_E;
 		break;
 	case DP_AUX_F:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_USBC1;
 		else
 			aux_ch = AUX_CH_F;
 		break;
 	case DP_AUX_G:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_USBC2;
 		else
 			aux_ch = AUX_CH_G;
 		break;
 	case DP_AUX_H:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_USBC3;
 		else
 			aux_ch = AUX_CH_H;
 		break;
 	case DP_AUX_I:
-		if (DISPLAY_VER(i915) == 13)
+		if (DISPLAY_VER(i915) >= 13)
 			aux_ch = AUX_CH_USBC4;
 		else
 			aux_ch = AUX_CH_I;
@@ -3612,6 +3672,16 @@ int intel_bios_max_tmds_clock(struct intel_encoder *encoder)
 
 	return _intel_bios_max_tmds_clock(devdata);
 }
+
+#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
+int intel_bios_hdmi_max_frl_rate(struct intel_encoder *encoder)
+{
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	const struct intel_bios_encoder_data *devdata = i915->vbt.ports[encoder->port];
+
+	return _intel_bios_hdmi_max_frl_rate(devdata);
+}
+#endif
 
 /* This is an index in the HDMI/DVI DDI buffer translation table, or -1 */
 int intel_bios_hdmi_level_shift(struct intel_encoder *encoder)

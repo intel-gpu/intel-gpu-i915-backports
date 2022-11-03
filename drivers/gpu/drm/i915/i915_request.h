@@ -379,6 +379,8 @@ struct kmem_cache *i915_request_slab_cache(void);
 struct i915_request * __must_check
 __i915_request_create(struct intel_context *ce, gfp_t gfp);
 struct i915_request * __must_check
+i915_request_create_locked(struct intel_context *ce, gfp_t gfp);
+struct i915_request * __must_check
 i915_request_create(struct intel_context *ce);
 struct i915_request * __must_check
 i915_request_create_atomic(struct intel_context *ce);
