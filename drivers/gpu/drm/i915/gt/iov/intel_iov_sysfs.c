@@ -662,7 +662,7 @@ static int pf_setup_provisioning(struct intel_iov *iov)
 
 		parent = &parents[n]->base;
 
-		if (HAS_EXTRA_GTS(iov_to_i915(iov))) {
+		if (HAS_EXTRA_GT_LIST(iov_to_i915(iov))) {
 			err = kobject_init_and_add(kobj, &iov_ktype, parent, IOV_KOBJ_GTn_NAME,
 						   iov_to_gt(iov)->info.id);
 		} else {

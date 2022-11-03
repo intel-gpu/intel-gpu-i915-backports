@@ -602,17 +602,16 @@ void __iomem *i915_vma_pin_iomap(struct i915_vma *vma)
 		 * of pages, that way we can also drop the
 		 * I915_BO_ALLOC_CONTIGUOUS when allocating the object.
 		 */
-		if (i915_gem_object_is_lmem(vma->obj))
+		if (i915_gem_object_is_lmem(vma->obj)) {
 			ptr = i915_gem_object_lmem_io_map(vma->obj, 0,
 							  vma->obj->base.size);
-		else if (i915_vma_is_map_and_fenceable(vma))
+		} else if (i915_vma_is_map_and_fenceable(vma)) {
 			ptr = io_mapping_map_wc(&i915_vm_to_ggtt(vma->vm)->iomap,
 						i915_vma_offset(vma),
 						i915_vma_size(vma));
-		else {
+		} else {
 			ptr = (void __iomem *)
-				i915_gem_object_pin_map_unlocked(vma->obj,
-								 I915_MAP_WC);
+				i915_gem_object_pin_map(vma->obj, I915_MAP_WC);
 			if (IS_ERR(ptr)) {
 				err = PTR_ERR(ptr);
 				goto err;
@@ -1706,9 +1705,11 @@ void __i915_vma_evict(struct i915_vma *vma)
 		/* release the fence reg _after_ flushing */
 		i915_vma_revoke_fence(vma);
 
-		__i915_vma_iounmap(vma);
 		clear_bit(I915_VMA_CAN_FENCE_BIT, __i915_vma_flags(vma));
 	}
+
+	__i915_vma_iounmap(vma);
+
 	GEM_BUG_ON(vma->fence);
 	GEM_BUG_ON(i915_vma_has_userfault(vma));
 

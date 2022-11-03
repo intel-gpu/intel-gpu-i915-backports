@@ -172,6 +172,7 @@ intel_write_status_page(struct intel_engine_cs *engine, int reg, u32 value)
 #define I915_GEM_HWS_PREEMPT_ADDR	(I915_GEM_HWS_PREEMPT * sizeof(u32))
 #define I915_GEM_HWS_SEQNO		0x40
 #define I915_GEM_HWS_SEQNO_ADDR		(I915_GEM_HWS_SEQNO * sizeof(u32))
+#define I915_GEM_HWS_MIGRATE		(0x42 * sizeof(u32)) /* XXX: NOT USED */
 #define I915_GEM_HWS_BLITTER		0x42
 #define I915_GEM_HWS_BLITTER_ADDR	(I915_GEM_HWS_BLITTER * sizeof(u32))
 #define I915_GEM_HWS_EVICT		0x44
@@ -234,7 +235,6 @@ static inline void __intel_engine_reset(struct intel_engine_cs *engine,
 	engine->serial++; /* contexts lost */
 }
 
-bool intel_engines_are_idle(struct intel_gt *gt);
 bool intel_engine_is_idle(struct intel_engine_cs *engine);
 
 void __intel_engine_flush_submission(struct intel_engine_cs *engine, bool sync);

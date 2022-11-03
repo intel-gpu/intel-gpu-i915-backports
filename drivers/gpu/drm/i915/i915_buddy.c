@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright © 2019 Intel Corporation
+ * Copyright © 2021 Intel Corporation
  */
 
 #include <linux/kmemleak.h>
-#include <linux/slab.h>
 
 #include "i915_buddy.h"
 
@@ -13,7 +12,8 @@
 
 static struct kmem_cache *slab_blocks;
 
-static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_block *parent,
+static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_mm *mm,
+						 struct i915_buddy_block *parent,
 						 unsigned int order,
 						 u64 offset)
 {
@@ -33,7 +33,8 @@ static struct i915_buddy_block *i915_block_alloc(struct i915_buddy_block *parent
 	return block;
 }
 
-static void i915_block_free(struct i915_buddy_block *block)
+static void i915_block_free(struct i915_buddy_mm *mm,
+			    struct i915_buddy_block *block)
 {
 	kmem_cache_free(slab_blocks, block);
 }
@@ -69,7 +70,7 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 	struct i915_buddy_block **roots;
 	unsigned int i, max_order;
 	u64 offset, size;
-
+ 
 	if (GEM_WARN_ON(range_overflows(start, chunk, end)))
 		return -EINVAL;
 
@@ -89,6 +90,7 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 	size = round_down(end, chunk);
 	if (size <= offset)
 		return -EINVAL;
+
 	size -= offset;
 
 	mm->size = size;
@@ -97,7 +99,7 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 	max_order = ilog2(size) - ilog2(chunk);
 	GEM_BUG_ON(max_order > I915_BUDDY_MAX_ORDER);
 	mm->max_order = 0;
-
+ 
 	mm->free_list = kmalloc_array(max_order + 1,
 				      sizeof(struct list_head),
 				      GFP_KERNEL);
@@ -129,7 +131,7 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 		GEM_BUG_ON(order < ilog2(chunk));
 		GEM_BUG_ON(order > ilog2(chunk) + max_order);
 
-		root = i915_block_alloc(NULL, order - ilog2(chunk), offset);
+		root = i915_block_alloc(mm, NULL, order - ilog2(chunk), offset);
 		if (!root)
 			goto out_free_roots;
 
@@ -138,11 +140,11 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 
 		if (order > mm->max_order)
 			mm->max_order = order;
-
+ 
 		mark_free(mm, root);
 		roots[i++] = root;
 		GEM_BUG_ON(i > 2 * max_order + 1);
-
+ 
 		offset += BIT_ULL(order);
 		size -= BIT_ULL(order);
 	} while (size);
@@ -159,7 +161,7 @@ int i915_buddy_init(struct i915_buddy_mm *mm, u64 start, u64 end, u64 chunk)
 
 out_free_roots:
 	while (i--)
-		i915_block_free(roots[i]);
+		i915_block_free(mm, roots[i]);
 	kfree(roots);
 out_free_list:
 	kfree(mm->free_list);
@@ -172,7 +174,7 @@ void i915_buddy_fini(struct i915_buddy_mm *mm)
 
 	for (i = 0; i < mm->n_roots; ++i) {
 		GEM_WARN_ON(!i915_buddy_block_is_free(mm->roots[i]));
-		i915_block_free(mm->roots[i]);
+		i915_block_free(mm, mm->roots[i]);
 	}
 
 	kfree(mm->roots);
@@ -188,14 +190,14 @@ static int split_block(struct i915_buddy_mm *mm,
 	GEM_BUG_ON(!i915_buddy_block_is_free(block));
 	GEM_BUG_ON(!i915_buddy_block_order(block));
 
-	block->left = i915_block_alloc(block, block_order, offset);
+	block->left = i915_block_alloc(mm, block, block_order, offset);
 	if (!block->left)
 		return -ENOMEM;
 
-	block->right = i915_block_alloc(block, block_order,
+	block->right = i915_block_alloc(mm, block, block_order,
 					offset + (mm->chunk_size << block_order));
 	if (!block->right) {
-		i915_block_free(block->left);
+		i915_block_free(mm, block->left);
 		return -ENOMEM;
 	}
 
@@ -237,8 +239,8 @@ static void __i915_buddy_free(struct i915_buddy_mm *mm,
 
 		list_del(&buddy->link);
 
-		i915_block_free(block);
-		i915_block_free(buddy);
+		i915_block_free(mm, block);
+		i915_block_free(mm, buddy);
 
 		block = parent;
 	}

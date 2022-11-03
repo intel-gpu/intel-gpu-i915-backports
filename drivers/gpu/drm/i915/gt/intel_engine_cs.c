@@ -563,15 +563,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 		engine->flags |= I915_ENGINE_HAS_RCS_REG_STATE;
 		engine->flags |= I915_ENGINE_HAS_EU_PRIORITY;
 
-		/*
-		 * FIXME: Enabling the GuC DUAL QUEUE or CONTEXT ISOLATION WAs
-		 * causes an issue with timeslicing RCS and CCS work. This needs
-		 * to be fixed in GuC. Until that happens, force preemption to
-		 * work around the issue.
-		 */
-		if (IS_DG2(gt->i915))
-			engine->flags |= I915_ENGINE_WANT_FORCED_PREEMPTION;
-
 		/* EU attention is not available on VFs */
 		if(!IS_SRIOV_VF(gt->i915))
 			engine->flags |= I915_ENGINE_HAS_EU_ATTENTION;
@@ -606,21 +597,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 
 			engine->props.preempt_timeout_ms = triple_beat;
 		}
-	}
-
-	/*
-	 * FIXME: Timeslicing works with I915_ENGINE_WANT_FORCED_PREEMPTION, but
-	 * it breaks long running workloads that do not expect preemption
-	 * because they are the only ones running.  Since the result of a
-	 * failed preemption is context reset, this causes the long running
-	 * workload to fail. Use zero preemption timeout to prevent the reset
-	 * from happening when the DUAL QUEUE and/or CONTEXT ISOLATION WA is
-	 * enabled.
-	 */
-	if (engine->flags & I915_ENGINE_WANT_FORCED_PREEMPTION) {
-		drm_info(&gt->i915->drm, "Disabling pre-emption timeout to work around forced preemption for %s\n",
-			 engine->name);
-		engine->props.preempt_timeout_ms = 0;
 	}
 
 	engine->defaults = engine->props; /* never to change again */
@@ -1960,30 +1936,6 @@ bool intel_engine_is_idle(struct intel_engine_cs *engine)
 
 	/* Ring stopped? */
 	return ring_is_idle(engine);
-}
-
-bool intel_engines_are_idle(struct intel_gt *gt)
-{
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	/*
-	 * If the driver is wedged, HW state may be very inconsistent and
-	 * report that it is still busy, even though we have stopped using it.
-	 */
-	if (intel_gt_is_wedged(gt))
-		return true;
-
-	/* Already parked (and passed an idleness test); must still be idle */
-	if (!READ_ONCE(gt->awake))
-		return true;
-
-	for_each_engine(engine, gt, id) {
-		if (!intel_engine_is_idle(engine))
-			return false;
-	}
-
-	return true;
 }
 
 bool intel_engine_irq_enable(struct intel_engine_cs *engine)

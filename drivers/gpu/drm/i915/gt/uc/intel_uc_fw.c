@@ -59,31 +59,30 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  * firmware as TGL.
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_def) \
-	fw_def(METEORLAKE,   0, guc_def(mtl,  70, 2, 0)) \
-	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 2, 0)) \
-	fw_def(DG2,          0, guc_def(dg2,  70, 2, 0)) \
-	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 2, 0)) \
-	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 2, 0)) \
-	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(DG1,          0, guc_def(dg1,  70, 2, 0)) \
-	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 2, 0)) \
-	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 2, 0)) \
-	fw_def(ICELAKE,      0, guc_def(icl,  70, 2, 0)) \
-	fw_def(COMETLAKE,    5, guc_def(cml,  70, 2, 0)) \
-	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 2, 0)) \
-	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(BROXTON,      0, guc_def(bxt,  70, 2, 0)) \
-	fw_def(SKYLAKE,      0, guc_def(skl,  70, 2, 0))
+	fw_def(METEORLAKE,   0, guc_def(mtl,  70, 4, 1)) \
+	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 4, 1)) \
+	fw_def(DG2,          0, guc_def(dg2,  70, 4, 1)) \
+	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 4, 1)) \
+	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 4, 1)) \
+	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(DG1,          0, guc_def(dg1,  70, 4, 1)) \
+	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 4, 1)) \
+	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 4, 1)) \
+	fw_def(ICELAKE,      0, guc_def(icl,  70, 4, 1)) \
+	fw_def(COMETLAKE,    5, guc_def(cml,  70, 4, 1)) \
+	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 4, 1)) \
+	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(BROXTON,      0, guc_def(bxt,  70, 4, 1)) \
+	fw_def(SKYLAKE,      0, guc_def(skl,  70, 4, 1))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_dma_def, huc_gsc_def) \
 	fw_def(METEORLAKE,   0, huc_gsc_def(mtl,  8, 3, 0)) \
 	fw_def(PONTEVECCHIO, 0, huc_dma_def(pvc,  7, 8, 7)) \
-	fw_def(DG2,          4, huc_gsc_def(dg2,  7, 10, 3)) \
-	fw_def(DG2,          0, huc_dma_def(dg2,  7, 9, 0)) \
+	fw_def(DG2,          0, huc_gsc_def(dg2,  7, 10, 3)) \
 	fw_def(ALDERLAKE_P,  0, huc_dma_def(tgl,  7, 9, 3)) \
 	fw_def(ALDERLAKE_S,  0, huc_dma_def(tgl,  7, 9, 3)) \
 	fw_def(DG1,          0, huc_dma_def(dg1,  7, 9, 3)) \
@@ -206,10 +205,6 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 	 */
 	if (IS_ADLP_N(i915))
 		p = INTEL_ALDERLAKE_S;
-
-	/* G11 A-step is the same as G10 B-step */
-	if (IS_DG2_G11(i915) && rev < 4)
-		rev = 4;
 
 	GEM_BUG_ON(uc_fw->type >= ARRAY_SIZE(blobs_all));
 	fw_blobs = blobs_all[uc_fw->type].blobs;

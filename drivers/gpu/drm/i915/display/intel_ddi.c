@@ -2994,9 +2994,13 @@ static void intel_ddi_post_disable_hdmi(struct intel_atomic_state *state,
 	dig_port->set_infoframes(encoder, false,
 				 old_crtc_state, old_conn_state);
 
-	intel_ddi_disable_pipe_clock(old_crtc_state);
+	if (DISPLAY_VER(dev_priv) < 12)
+		intel_ddi_disable_pipe_clock(old_crtc_state);
 
 	intel_disable_ddi_buf(encoder, old_crtc_state);
+
+	if (DISPLAY_VER(dev_priv) >= 12)
+		intel_ddi_disable_pipe_clock(old_crtc_state);
 
 	if (old_crtc_state->frl.enable) {
 		hdmi_transcoder = old_crtc_state->cpu_transcoder;
@@ -3174,6 +3178,7 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 	struct intel_digital_port *dig_port = enc_to_dig_port(encoder);
 	struct drm_connector *connector = conn_state->connector;
 	enum port port = encoder->port;
+	enum phy phy = intel_port_to_phy(dev_priv, port);
 
 	if (!intel_hdmi_handle_sink_scrambling(encoder, connector,
 					       crtc_state->hdmi_high_tmds_clock_ratio,
@@ -3184,6 +3189,10 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 
 	if (has_buf_trans_select(dev_priv))
 		hsw_prepare_hdmi_ddi_buffers(encoder, crtc_state);
+
+	/* e. Enable D2D Link for C10/C20 Phy */
+	if (DISPLAY_VER(dev_priv) >= 14)
+		mtl_ddi_enable_d2d(encoder);
 
 	encoder->set_signal_levels(encoder, crtc_state);
 
@@ -3235,14 +3244,14 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 	 * needs to be filled with either 3 or 4 lanes. For TMDS mode this
 	 * is always filled with 4 lanes, already set in the crtc_state.
 	 */
-
 	if (DISPLAY_VER(dev_priv) > 13) {
 		u32 ddi_buf = 0;
+		u8  lane_count = mtl_get_port_width(crtc_state->lane_count);
 		u32 port_buf = intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port));
 
-		port_buf |= XELPDP_PORT_WIDTH(crtc_state->lane_count);
+		port_buf |= XELPDP_PORT_WIDTH(lane_count);
 		ddi_buf |= DDI_BUF_CTL_ENABLE |
-			   DDI_PORT_WIDTH(crtc_state->lane_count);
+			   DDI_PORT_WIDTH(lane_count);
 
 		if (intel_bios_is_lane_reversal_needed(dev_priv, port))
 			port_buf |= XELPDP_PORT_REVERSAL;
@@ -3259,6 +3268,13 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 		intel_de_write(dev_priv, XELPDP_PORT_BUF_CTL1(port), port_buf);
 		intel_de_write(dev_priv, DDI_BUF_CTL(port),
 			       dig_port->saved_port_bits | ddi_buf);
+		/* i. Poll for PORT_BUF_CTL Idle Status == 0, timeout after 100 us */
+		intel_wait_ddi_buf_active(dev_priv, port);
+	} else if (IS_ALDERLAKE_P(dev_priv) && intel_phy_is_tc(dev_priv, phy)) {
+		drm_WARN_ON(&dev_priv->drm, !intel_tc_port_in_legacy_mode(dig_port));
+		intel_de_write(dev_priv, DDI_BUF_CTL(port),
+			       dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE |
+			       DDI_BUF_CTL_TC_PHY_OWNERSHIP);
 	} else {
 		intel_de_write(dev_priv, DDI_BUF_CTL(port),
 			       dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE);
@@ -4604,7 +4620,7 @@ static enum hpd_pin ehl_hpd_pin(struct drm_i915_private *dev_priv,
 	if (port == PORT_D)
 		return HPD_PORT_A;
 
-	if (HAS_PCH_MCC(dev_priv))
+	if (HAS_PCH_TGP(dev_priv))
 		return icl_hpd_pin(dev_priv, port);
 
 	return HPD_PORT_A + port - PORT_A;

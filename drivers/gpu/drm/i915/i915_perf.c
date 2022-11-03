@@ -200,6 +200,7 @@
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_mman.h"
+#include "gem/i915_gem_region.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_engine_user.h"
@@ -2134,6 +2135,7 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 	struct drm_i915_gem_object *bo;
 	struct i915_vma *vma;
 	size_t size = 1U << size_exponent;
+	size_t adjust = 0;
 	int ret;
 
 	if (drm_WARN_ON(&gt->i915->drm, stream->oa_buffer.vma))
@@ -2150,10 +2152,10 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 	 * by 896Kb when the user requests a size greater than 16Mb. To workaround the
 	 * issue, we adjust the OA buffer size accordingly before allocating.
 	 */
-	bo = i915_gem_object_create_shmem(gt->i915,
-					  size > SZ_16M ?
-					  size - (896 * 1024) :
-					  size);
+	if (IS_XEHPSDV(gt->i915) && size > SZ_16M)
+		adjust = 896 * 1024;
+
+	bo = i915_gem_object_create_shmem(gt->i915, size - adjust);
 	if (IS_ERR(bo)) {
 		drm_err(&gt->i915->drm, "Failed to allocate OA buffer\n");
 		return PTR_ERR(bo);
@@ -2237,6 +2239,7 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 	u32 *batch, *ts0, *cs, *jump;
 	struct i915_gem_ww_ctx ww;
 	int ret, i;
+	enum i915_map_type type;
 	enum {
 		START_TS,
 		NOW_TS,
@@ -2250,12 +2253,24 @@ static int alloc_noa_wait(struct i915_perf_stream *stream)
 					  MI_PREDICATE_RESULT_1(RENDER_RING_BASE);
 
 	/*
+	 * On 2T PVC, iaf driver init puts pressure on the PCIe bus. When
+	 * noa wait bo is allocated outside the gt, the batch below runs much
+	 * slower and the delay is more than double the intended
+	 * noa_programming_delay. Using LMEM in such cases resolves the issue.
+	 *
 	 * gt->scratch was being used to save/restore the GPR registers, but on
 	 * some platforms the scratch used stolen lmem. An MI_SRM to this memory
 	 * region caused an engine hang. Instead allocate and additioanl page
 	 * here to save/restore GPR registers
 	 */
-	bo = i915_gem_object_create_internal(i915, 8192);
+	if (HAS_LMEM(gt->i915)) {
+		bo = intel_gt_object_create_lmem(gt, 8192, 0);
+		type = I915_MAP_WC;
+	} else {
+		bo = i915_gem_object_create_internal(i915, 8192);
+		type = I915_MAP_WB;
+	}
+
 	if (IS_ERR(bo)) {
 		drm_err(&i915->drm,
 			"Failed to allocate NOA wait batchbuffer\n");
@@ -2283,7 +2298,7 @@ retry:
 	if (ret)
 		goto out_ww;
 
-	batch = cs = i915_gem_object_pin_map(bo, I915_MAP_WB);
+	batch = cs = i915_gem_object_pin_map(bo, type);
 	if (IS_ERR(batch)) {
 		ret = PTR_ERR(batch);
 		goto err_unpin;
@@ -2976,6 +2991,18 @@ static int gen12_configure_oa_render_context(struct i915_perf_stream *stream,
 				    active);
 }
 
+static u32 __oa_ccs_select(struct i915_perf_stream *stream)
+{
+	struct intel_engine_cs *engine = stream->engine;
+
+	if (!OAC_ENABLED(stream))
+		return 0;
+
+	GEM_BUG_ON(engine->instance > GEN12_OAG_OACONTROL_OA_CCS_SELECT_MASK);
+
+	return engine->instance << GEN12_OAG_OACONTROL_OA_CCS_SELECT_SHIFT;
+}
+
 static int gen12_configure_oa_compute_context(struct i915_perf_stream *stream,
 					      struct i915_active *active)
 {
@@ -3001,6 +3028,11 @@ static int gen12_configure_oa_compute_context(struct i915_perf_stream *stream,
 			gen12_ring_context_control(stream, active)
 		},
 	};
+
+	/* Set ccs select to enable programming of GEN12_OAC_OACONTROL */
+	intel_uncore_write(stream->uncore,
+			   __oa_regs(stream)->oa_ctrl,
+			   __oa_ccs_select(stream));
 
 	return oa_configure_context(ce,
 				    regs_context, ARRAY_SIZE(regs_context),
@@ -3462,29 +3494,26 @@ static void gen12_oa_enable(struct i915_perf_stream *stream)
 {
 	const struct i915_perf_regs *regs = __oa_regs(stream);
 	u32 report_format = stream->oa_buffer.format->format;
-	u32 val, ccs_select;
+	u32 val;
 
 	/*
 	 * If we don't want OA reports from the OA buffer, then we don't even
-	 * need to initialize the OA buffer. ccs_select still needs to be
-	 * programmed to enable OAC unit for the correct ccs and support MI_RPC.
-	 * OAC reports land in user buffer.
+	 * need to initialize the OA buffer.
 	 */
 	if (stream->sample_flags & SAMPLE_OA_REPORT)
 		gen12_init_oa_buffer(stream);
-
-	ccs_select = (OAC_ENABLED(stream) ? stream->engine->instance : 0) &
-		     GEN12_OAG_OACONTROL_OA_CCS_SELECT_MASK;
 
 	/*
 	 * Irrespective of whether OA buffer is enabled or not,
 	 * GEN12_OAG_OACONTROL_OA_COUNTER_ENABLE needs to be set so that
 	 * counters are enabled. Without this, MI_RPC would not work as
 	 * expected.
+	 *
+	 * If OAC is being used, then ccs_select is already programmed. Instead
+	 * of a rmw, we reprogram it here with the same value.
 	 */
 	val = (report_format << regs->oa_ctrl_counter_format_shift) |
-	      (ccs_select << GEN12_OAG_OACONTROL_OA_CCS_SELECT_SHIFT) |
-	      GEN12_OAG_OACONTROL_OA_COUNTER_ENABLE;
+	      __oa_ccs_select(stream) | GEN12_OAG_OACONTROL_OA_COUNTER_ENABLE;
 
 	intel_uncore_write(stream->uncore, regs->oa_ctrl, val);
 }

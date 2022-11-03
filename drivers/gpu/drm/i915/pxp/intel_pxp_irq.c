@@ -8,6 +8,7 @@
 #include "intel_pxp_session.h"
 #include "gt/intel_gt_irq.h"
 #include "gt/intel_gt_regs.h"
+#include "gt/intel_gt_types.h"
 #include "i915_irq.h"
 #include "i915_reg.h"
 

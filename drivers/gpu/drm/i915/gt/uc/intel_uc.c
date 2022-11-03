@@ -733,8 +733,11 @@ static int __vf_uc_init_hw(struct intel_uc *uc)
 	 * for status rely on runtime reg shared by PF
 	 */
 	if (intel_uc_fw_is_supported(&huc->fw)) {
-		/* XXX: We don't know how to get the HuC version yet */
-		intel_uc_fw_set_preloaded(&huc->fw, 0, 0);
+		if (intel_huc_check_status(huc) > 0)
+			/* XXX: We don't know how to get the HuC version yet */
+			intel_uc_fw_set_preloaded(&huc->fw, 0, 0);
+		else
+			intel_uc_fw_change_status(&huc->fw, INTEL_UC_FIRMWARE_DISABLED);
 	}
 
 	intel_guc_submission_enable(guc);

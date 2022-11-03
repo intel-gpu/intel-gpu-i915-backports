@@ -19,9 +19,7 @@
 #include <linux/timer.h>
 #include <linux/kref.h>
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 #include <drm/i915_mei_iaf_interface.h>
-#endif
 #include <drm/intel_iaf_platform.h>
 
 #include "csr.h"
@@ -1026,7 +1024,6 @@ struct fdev {
 	} mappings_ref;
 
 	const struct firmware *fw;
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	/* protects mei_ops/mei_dev/mei_bind_continuation */
 	struct mutex mei_ops_lock;
 	const struct i915_iaf_component_ops *mei_ops;
@@ -1034,7 +1031,6 @@ struct fdev {
 	void (*mei_bind_continuation)(struct fdev *dev);
 	struct timer_list mei_continuation_timer;
 	struct work_struct mei_work;
-#endif
 	struct {
 		struct work_struct work;
 		struct completion done;

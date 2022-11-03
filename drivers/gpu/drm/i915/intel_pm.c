@@ -2868,9 +2868,10 @@ static void ilk_compute_wm_level(const struct drm_i915_private *dev_priv,
 }
 
 static void
-adjust_wm_latency(u16 wm[], int max_level, int read_latency,
-		  bool wm_lv_0_adjust_needed)
+adjust_wm_latency(struct drm_i915_private *i915,
+		  u16 wm[], int max_level, int read_latency)
 {
+	bool wm_lv_0_adjust_needed = i915->dram_info.wm_lv_0_adjust_needed;
 	int i, level;
 
 	/*
@@ -2920,17 +2921,16 @@ static void intel_read_wm_latency(struct drm_i915_private *dev_priv,
 		u32 val;
 
 		val = intel_uncore_read(uncore, MTL_LATENCY_LP0_LP1);
-		wm[0] = REG_FIELD_GET(MTL_LATENCY_LEVEL0_2_4_MASK, val);
-		wm[1] = REG_FIELD_GET(MTL_LATENCY_LEVEL1_3_5_MASK, val);
+		wm[0] = REG_FIELD_GET(MTL_LATENCY_LEVEL_EVEN_MASK, val);
+		wm[1] = REG_FIELD_GET(MTL_LATENCY_LEVEL_ODD_MASK, val);
 		val = intel_uncore_read(uncore, MTL_LATENCY_LP2_LP3);
-		wm[2] = REG_FIELD_GET(MTL_LATENCY_LEVEL0_2_4_MASK, val);
-		wm[3] = REG_FIELD_GET(MTL_LATENCY_LEVEL1_3_5_MASK, val);
+		wm[2] = REG_FIELD_GET(MTL_LATENCY_LEVEL_EVEN_MASK, val);
+		wm[3] = REG_FIELD_GET(MTL_LATENCY_LEVEL_ODD_MASK, val);
 		val = intel_uncore_read(uncore, MTL_LATENCY_LP4_LP5);
-		wm[4] = REG_FIELD_GET(MTL_LATENCY_LEVEL0_2_4_MASK, val);
-		wm[5] = REG_FIELD_GET(MTL_LATENCY_LEVEL1_3_5_MASK, val);
+		wm[4] = REG_FIELD_GET(MTL_LATENCY_LEVEL_EVEN_MASK, val);
+		wm[5] = REG_FIELD_GET(MTL_LATENCY_LEVEL_ODD_MASK, val);
 
-		adjust_wm_latency(wm, max_level, 6,
-				  dev_priv->dram_info.wm_lv_0_adjust_needed);
+		adjust_wm_latency(dev_priv, wm, max_level, 6);
 	} else if (DISPLAY_VER(dev_priv) >= 9) {
 		int read_latency = DISPLAY_VER(dev_priv) >= 12 ? 3 : 2;
 		int mult = IS_DG2(dev_priv) ? 2 : 1;
@@ -2974,8 +2974,7 @@ static void intel_read_wm_latency(struct drm_i915_private *dev_priv,
 		wm[7] = ((val >> GEN9_MEM_LATENCY_LEVEL_3_7_SHIFT) &
 				GEN9_MEM_LATENCY_LEVEL_MASK) * mult;
 
-		adjust_wm_latency(wm, max_level, read_latency,
-				  dev_priv->dram_info.wm_lv_0_adjust_needed);
+		adjust_wm_latency(dev_priv, wm, max_level, read_latency);
 	} else if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv)) {
 		u64 sskpd = intel_uncore_read64(uncore, MCH_SSKPD);
 
@@ -4153,8 +4152,8 @@ static u16 skl_ddb_entry_init(struct skl_ddb_entry *entry,
 
 static int intel_dbuf_slice_size(struct drm_i915_private *dev_priv)
 {
-	return INTEL_INFO(dev_priv)->dbuf.size /
-		hweight8(INTEL_INFO(dev_priv)->dbuf.slice_mask);
+	return INTEL_INFO(dev_priv)->display.dbuf.size /
+		hweight8(INTEL_INFO(dev_priv)->display.dbuf.slice_mask);
 }
 
 static void
@@ -4173,7 +4172,7 @@ skl_ddb_entry_for_slices(struct drm_i915_private *dev_priv, u8 slice_mask,
 	ddb->end = fls(slice_mask) * slice_size;
 
 	WARN_ON(ddb->start >= ddb->end);
-	WARN_ON(ddb->end > INTEL_INFO(dev_priv)->dbuf.size);
+	WARN_ON(ddb->end > INTEL_INFO(dev_priv)->display.dbuf.size);
 }
 
 static unsigned int mbus_ddb_offset(struct drm_i915_private *i915, u8 slice_mask)
@@ -4958,7 +4957,7 @@ static u8 skl_compute_dbuf_slices(struct intel_crtc *crtc, u8 active_pipes, bool
 
 	if (IS_DG2(dev_priv))
 		return dg2_compute_dbuf_slices(pipe, active_pipes, join_mbus);
-	else if (DISPLAY_VER(dev_priv) >= 14 || IS_ALDERLAKE_P(dev_priv))
+	else if (DISPLAY_VER(dev_priv) >= 13)
 		return adlp_compute_dbuf_slices(pipe, active_pipes, join_mbus);
 	else if (DISPLAY_VER(dev_priv) == 12)
 		return tgl_compute_dbuf_slices(pipe, active_pipes, join_mbus);
@@ -6148,7 +6147,7 @@ skl_compute_ddb(struct intel_atomic_state *state)
 			    "Enabled dbuf slices 0x%x -> 0x%x (total dbuf slices 0x%x), mbus joined? %s->%s\n",
 			    old_dbuf_state->enabled_slices,
 			    new_dbuf_state->enabled_slices,
-			    INTEL_INFO(dev_priv)->dbuf.slice_mask,
+			    INTEL_INFO(dev_priv)->display.dbuf.slice_mask,
 			    str_yes_no(old_dbuf_state->joined_mbus),
 			    str_yes_no(new_dbuf_state->joined_mbus));
 	}
@@ -8329,7 +8328,9 @@ CG_FUNCS(nop);
  */
 void intel_init_clock_gating_hooks(struct drm_i915_private *dev_priv)
 {
-	if (IS_PONTEVECCHIO(dev_priv))
+	if (IS_SRIOV_VF(dev_priv))
+		dev_priv->clock_gating_funcs = &nop_clock_gating_funcs;
+	else if (IS_PONTEVECCHIO(dev_priv))
 		dev_priv->clock_gating_funcs = &pvc_clock_gating_funcs;
 	else if (IS_DG2(dev_priv))
 		dev_priv->clock_gating_funcs = &dg2_clock_gating_funcs;

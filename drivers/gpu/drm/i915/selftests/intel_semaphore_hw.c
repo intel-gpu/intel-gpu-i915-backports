@@ -218,9 +218,14 @@ static int igt_semaphore_token(void *arg)
 				goto out_waiters;
 
 			wait_for(i915_request_is_running(rq), IGT_WAITER_RUNNING_TIMEOUT);
-			GEM_BUG_ON(!i915_request_is_running(rq));
+			if (!i915_request_is_running(rq)) {
+				drm_err(&i915->drm, "Request failed to start\n");
+				err = -EIO;
+				goto out_waiters;
+			}
+
 			if (i915_request_completed(rq)) {
-				pr_err("Request completed before the semaphore is signalled \n");
+				drm_err(&i915->drm, "Request completed before the semaphore is signalled\n");
 				err = -EIO;
 				goto out_waiters;
 			}
@@ -245,8 +250,8 @@ static int igt_semaphore_token(void *arg)
 
 		if (i915_request_wait(signaler, 0, IGT_SIGNAL_DONE_TIMEOUT) <
 		    0) {
-			pr_err("Wait for signaller %s timed out! \n",
-			       engine_signal->name);
+			drm_err(&i915->drm, "Wait for signaller %s timed out! \n",
+				engine_signal->name);
 			err = -EIO;
 			goto out_signaler;
 		}
@@ -254,9 +259,9 @@ static int igt_semaphore_token(void *arg)
 		for (i = 0; i < w; i++) {
 			if (i915_request_wait(waiters[i], 0,
 					      IGT_WAIT_DONE_TIMEOUT) < 0) {
-				pr_err("Wait for waiter %s signalled by %s timed out!\n",
-				       waiters[i]->engine->name,
-				       signaler->engine->name);
+				drm_err(&i915->drm, "Wait for waiter %s signalled by %s timed out!\n",
+					waiters[i]->engine->name,
+					signaler->engine->name);
 				err = -EIO;
 				goto out_signaler;
 			}
@@ -302,7 +307,7 @@ int intel_semaphore_live_selftests(struct drm_i915_private *i915)
 	 * submission mode to avoid false-negatives.
 	 */
 	if (!intel_uc_uses_guc_submission(&to_gt(i915)->uc)) {
-		pr_info("i915 is not using GuC submission, skipping\n");
+		drm_info(&i915->drm, "i915 is not using GuC submission, skipping\n");
 		return 0;
 	}
 

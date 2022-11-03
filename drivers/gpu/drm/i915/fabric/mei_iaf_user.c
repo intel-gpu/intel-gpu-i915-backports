@@ -34,7 +34,7 @@ MODULE_PARM_DESC(mei_timeout,
 static bool automatic_rollback_protection;
 module_param(automatic_rollback_protection, bool, 0600);
 MODULE_PARM_DESC(automatic_rollback_protection,
-		 "Protect booted/initialized FW against rollback (default: Y)");
+		 "Protect booted/initialized FW against rollback (default: N)");
 
 /*
  * register access helper functions - can be called at any time

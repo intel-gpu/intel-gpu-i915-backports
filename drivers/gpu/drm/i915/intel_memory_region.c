@@ -9,6 +9,7 @@
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_gt_regs.h"
 
+#include "i915_buddy.h"
 #include "intel_memory_region.h"
 #include "i915_drv.h"
 #include "i915_svm.h"
@@ -21,19 +22,19 @@ static const struct {
 		.class = INTEL_MEMORY_SYSTEM,
 		.instance = 0,
 	},
-	[INTEL_REGION_LMEM] = {
+	[INTEL_REGION_LMEM_0] = {
 		.class = INTEL_MEMORY_LOCAL,
 		.instance = 0,
 	},
-	[INTEL_REGION_LMEM1] = {
+	[INTEL_REGION_LMEM_1] = {
 		.class = INTEL_MEMORY_LOCAL,
 		.instance = 1,
 	},
-	[INTEL_REGION_LMEM2] = {
+	[INTEL_REGION_LMEM_2] = {
 		.class = INTEL_MEMORY_LOCAL,
 		.instance = 2,
 	},
-	[INTEL_REGION_LMEM3] = {
+	[INTEL_REGION_LMEM_3] = {
 		.class = INTEL_MEMORY_LOCAL,
 		.instance = 3,
 	},
@@ -167,20 +168,6 @@ intel_memory_region_lookup(struct drm_i915_private *i915,
 		if (mr->type == class && mr->instance == instance)
 			return mr;
 	}
-
-	return NULL;
-}
-
-struct intel_memory_region *
-intel_memory_region_by_type(struct drm_i915_private *i915,
-			    enum intel_memory_type mem_type)
-{
-	struct intel_memory_region *mr;
-	int id;
-
-	for_each_memory_region(mr, i915, id)
-		if (mr->type == mem_type)
-			return mr;
 
 	return NULL;
 }
@@ -522,6 +509,20 @@ int intel_memory_region_reserve(struct intel_memory_region *mem,
 	mutex_unlock(&mem->mm_lock);
 
 	return ret;
+ }
+ 
+struct intel_memory_region *
+intel_memory_region_by_type(struct drm_i915_private *i915,
+			    enum intel_memory_type mem_type)
+{
+	struct intel_memory_region *mr;
+	int id;
+
+	for_each_memory_region(mr, i915, id)
+		if (mr->type == mem_type)
+			return mr;
+
+	return NULL;
 }
 
 static int intel_memory_region_memtest(struct intel_memory_region *mem,
@@ -545,6 +546,8 @@ intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t size,
 			   resource_size_t min_page_size,
 			   resource_size_t io_start,
+			   u16 type,
+			   u16 instance,
 			   const struct intel_memory_region_ops *ops)
 {
 	struct intel_memory_region *mem;
@@ -562,13 +565,15 @@ intel_memory_region_create(struct intel_gt *gt,
 	mem->ops = ops;
 	mem->total = size;
 	mem->avail = mem->total;
+	mem->type = type;
+	mem->instance = instance;
 
 	INIT_WORK(&mem->pd_put.work, __intel_memory_region_put_block_work);
 
 	mutex_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
-	INIT_LIST_HEAD(&mem->objects.purgeable);
 	INIT_LIST_HEAD(&mem->reserved);
+	INIT_LIST_HEAD(&mem->objects.purgeable);
 
 	mutex_init(&mem->mm_lock);
 
@@ -652,25 +657,26 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); i++) {
 		struct intel_memory_region *mem = ERR_PTR(-ENODEV);
 		struct intel_gt *gt;
-		u16 type;
+		u16 type, instance;
 
 		if (!HAS_REGION(i915, BIT(i)))
 			continue;
 
 		type = intel_region_map[i].class;
+		instance = intel_region_map[i].instance;
 		gt = to_root_gt(i915);
 
 		switch (type) {
 		case INTEL_MEMORY_SYSTEM:
-			mem = i915_gem_shmem_setup(gt);
+			mem = i915_gem_shmem_setup(gt, type, instance);
 			break;
 		case INTEL_MEMORY_STOLEN_LOCAL:
-			mem = i915_gem_stolen_lmem_setup(gt);
+			mem = i915_gem_stolen_lmem_setup(gt, type, instance);
 			if (!IS_ERR(mem))
 				i915->mm.stolen_region = mem;
 			break;
 		case INTEL_MEMORY_STOLEN_SYSTEM:
-			mem = i915_gem_stolen_smem_setup(gt);
+			mem = i915_gem_stolen_smem_setup(gt, type, instance);
 			if (!IS_ERR(mem))
 				i915->mm.stolen_region = mem;
 			break;
@@ -687,9 +693,7 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 		GEM_BUG_ON(intel_region_map[i].instance);
 
 		mem->id = i;
-		mem->type = type;
 		mem->instance = 0;
-
 		i915->mm.regions[i] = mem;
 	}
 
@@ -745,10 +749,10 @@ const char *intel_memory_region_id2str(enum intel_region_id id)
 {
 	static const char * const regions[] = {
 		[INTEL_REGION_SMEM] = "smem",
-		[INTEL_REGION_LMEM] = "lmem",
-		[INTEL_REGION_LMEM1] = "lmem1",
-		[INTEL_REGION_LMEM2] = "lmem2",
-		[INTEL_REGION_LMEM3] = "lmem3",
+		[INTEL_REGION_LMEM_0] = "lmem",
+		[INTEL_REGION_LMEM_1] = "lmem1",
+		[INTEL_REGION_LMEM_2] = "lmem2",
+		[INTEL_REGION_LMEM_3] = "lmem3",
 		[INTEL_REGION_STOLEN_SMEM] = "stolen smem",
 		[INTEL_REGION_STOLEN_LMEM] = "stolen lmem",
 		[INTEL_REGION_UNKNOWN] = "unknown",

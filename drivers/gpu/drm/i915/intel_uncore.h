@@ -33,6 +33,7 @@
 
 #include "i915_reg_defs.h"
 
+struct drm_device;
 struct drm_i915_private;
 struct intel_runtime_pm;
 struct intel_uncore;
@@ -222,11 +223,9 @@ intel_uncore_has_fifo(const struct intel_uncore *uncore)
 	return uncore->flags & UNCORE_HAS_FIFO;
 }
 
-void
-intel_uncore_mmio_debug_init_early(struct intel_uncore_mmio_debug *mmio_debug);
+void intel_uncore_mmio_debug_init_early(struct drm_i915_private *i915);
 void intel_uncore_init_early(struct intel_uncore *uncore,
-			     struct intel_gt *gt,
-			     struct intel_uncore_mmio_debug *mmio_debug);
+			     struct intel_gt *gt);
 int intel_uncore_setup_mmio(struct intel_uncore *uncore, phys_addr_t phys_addr);
 int intel_uncore_init_mmio(struct intel_uncore *uncore);
 void intel_uncore_prune_engine_fw_domains(struct intel_uncore *uncore,
@@ -234,7 +233,7 @@ void intel_uncore_prune_engine_fw_domains(struct intel_uncore *uncore,
 bool intel_uncore_unclaimed_mmio(struct intel_uncore *uncore);
 bool intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore);
 void intel_uncore_cleanup_mmio(struct intel_uncore *uncore);
-void intel_uncore_fini_mmio(struct intel_uncore *uncore);
+void intel_uncore_fini_mmio(struct drm_device *dev, void *data);
 void intel_uncore_suspend(struct intel_uncore *uncore);
 void intel_uncore_resume_early(struct intel_uncore *uncore);
 void intel_uncore_runtime_resume(struct intel_uncore *uncore);

@@ -177,8 +177,7 @@ i915_param_named_unsafe(edp_vswing, int, 0400,
 i915_param_named_unsafe(enable_guc, int, 0400,
 	"Enable GuC load for GuC submission and/or HuC load. "
 	"Required functionality can be selected using bitmask values. "
-	"(-1=auto [default], 0=disable, 1=GuC submission, 2=HuC load, "
-	"4=SR-IOV PF)");
+	"(-1=auto [default], 0=disable, 1=GuC submission, 2=HuC load)");
 
 i915_param_named_unsafe(guc_feature_flags, uint, 0400,
 	"GuC feature flags. Requires GuC to be loaded. (0=none [default])");
@@ -241,13 +240,13 @@ i915_param_named_unsafe(request_timeout_ms, uint, 0600,
 			"Default request/fence/batch buffer expiration timeout.");
 #endif
 
+i915_param_named_unsafe(lmem_size, uint, 0400,
+			"Set the lmem size(in MiB) for each region. (default: 0, all memory)");
+
 i915_param_named_unsafe(enable_eviction, uint, 0600,
 	"Enable eviction which does not rely on DMA resv refactoring "
 	"0=disabled, 1=memcpy based only, 2=blt based only, "
 	"3=blt based but fallsback to memcpy based [default])");
-
-i915_param_named_unsafe(lmem_size, uint, 0400,
-	"Change lmem size for each region. (default: 0, all memory)");
 
 /*
  * In execbuff path, we should iterate over all non-private (shared) objects of
@@ -266,7 +265,7 @@ i915_param_named_unsafe(enable_non_private_objects, bool, 0400,
 
 i915_param_named(max_vfs, uint, 0400,
 	"Limit number of virtual functions to allocate. "
-	"(default: no limit; N=limit to N, 0=no VFs)");
+	"(0 = no VFs [default]; N = allow up to N VFs)");
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_IOV)
 i915_param_named_unsafe(vfs_flr_mask, ulong, 0600,

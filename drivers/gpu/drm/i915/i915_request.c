@@ -1085,15 +1085,13 @@ err_unreserve:
 	return ERR_PTR(ret);
 }
 
-static struct i915_request *
-_i915_request_create(struct intel_context *ce, gfp_t gfp)
+struct i915_request *
+i915_request_create_locked(struct intel_context *ce, gfp_t gfp)
 {
-	struct i915_request *rq = NULL;
-	struct intel_timeline *tl;
+	struct intel_timeline *tl = ce->timeline;
+	struct i915_request *rq;
 
-	tl = intel_context_timeline_lock(ce);
-	if (IS_ERR(tl))
-		return ERR_CAST(tl);
+	lockdep_assert_held(&tl->mutex);
 
 	/* Move our oldest request to the slab-cache (if not in use!) */
 	rq = list_first_entry(&tl->requests, typeof(*rq), link);
@@ -1104,10 +1102,26 @@ _i915_request_create(struct intel_context *ce, gfp_t gfp)
 	rq = __i915_request_create(ce, gfp);
 	intel_context_exit(ce); /* active reference transferred to request */
 	if (IS_ERR(rq))
-		goto err_unlock;
+		return rq;
 
 	/* Check that we do not interrupt ourselves with a new request */
 	rq->cookie = lockdep_pin_lock(&tl->mutex);
+	return rq;
+}
+
+static struct i915_request *
+_i915_request_create(struct intel_context *ce, gfp_t gfp)
+{
+	struct intel_timeline *tl;
+	struct i915_request *rq;
+
+	tl = intel_context_timeline_lock(ce);
+	if (IS_ERR(tl))
+		return ERR_CAST(tl);
+
+	rq = i915_request_create_locked(ce, gfp);
+	if (IS_ERR(rq))
+		goto err_unlock;
 
 	return rq;
 
@@ -1130,14 +1144,12 @@ i915_request_construct(struct i915_request *rq,
 	ret = __i915_request_initialize(rq, ce, flags);
 	intel_context_exit(ce); /* active reference transferred to request */
 	if (ret)
-		goto err_unpin;
+		goto err_unlock;
 
 	rq->cookie = lockdep_pin_lock(&tl->mutex);
-
 	return 0;
 
-err_unpin:
-	intel_context_unpin(ce);
+err_unlock:
 	mutex_unlock(&tl->mutex);
 	return ret;
 }
@@ -2351,7 +2363,7 @@ enum i915_request_state i915_test_request_state(struct i915_request *rq)
 	if (!i915_request_started(rq))
 		return I915_REQUEST_PENDING;
 
-	if (match_ring(rq))
+	if (IS_SRIOV_VF(rq->engine->i915) ? i915_request_is_active(rq) : match_ring(rq))
 		return I915_REQUEST_ACTIVE;
 
 	return I915_REQUEST_QUEUED;

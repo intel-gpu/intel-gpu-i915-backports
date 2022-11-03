@@ -408,8 +408,10 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 	ret |= GUC_MMIO_REG_ADD(gt, regset, RING_IMR(base), false);
 
 	if ((engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE) &&
-	    CCS_MASK(engine->gt))
+	    CCS_MASK(engine->gt)) {
 		ret |= GUC_MMIO_REG_ADD(gt, regset, GEN12_RCU_MODE, true);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHP_CCS_MODE, false);
+	}
 
 	for (i = 0, wa = wal->list; i < wal->count; i++, wa++) {
 		/* Wa_1607720814 - dummy write must be last not sorted! */
@@ -429,6 +431,14 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 	/* add in local MOCS registers */
 	for (i = 0; i < GEN9_LNCFCMOCS_REG_COUNT; i++)
 		ret |= GUC_MMIO_REG_ADD(gt, regset, GEN9_LNCFCMOCS(i), false);
+
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL0, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL1, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL2, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL3, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL4, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL5, false);
+	ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL6, false);
 
 	/*
 	 * Wa_1607720814:
@@ -464,31 +474,6 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 			slot = __mmio_reg_add(regset, &reg);
 			ret |= IS_ERR(slot);
 		}
-	}
-
-	/*
-	 * i915 OA implementation expects rc6 and coarse power gating (CPG) to
-	 * be disabled for the duration of the OA use case. It disables rc6 by
-	 * setting gucrc mode to no_rc6 and then restoring the gucrc mode once
-	 * OA is done. OA disables CPG by holding forcewakes. While GuC does
-	 * prevent rc6, it does not disable CPG (to conserve power). GuC also
-	 * has no means of knowing if forcewake is held by i915 or not. GuC
-	 * assumes CPG is enabled.
-	 *
-	 * As a side effect of Wa_1509372804, on PVC, GuC resets render engine
-	 * assuming that CPG is enabled. This soft reset results in loss of
-	 * below register state. Include the registers in this list to ensure EU
-	 * FLEX counters work as intended.
-	 */
-	if (IS_PVC_CT_STEP(i915, STEP_B0, STEP_C0) &&
-	    i915->params.enable_rc6) {
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL0, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL1, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL2, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL3, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL4, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL5, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL6, false);
 	}
 
 	if (HAS_STATELESS_MC(i915))
