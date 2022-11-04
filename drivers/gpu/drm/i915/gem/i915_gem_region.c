@@ -235,7 +235,7 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 	if (!safe_conversion(&num_pages,
 			     round_up(obj->base.size, mem->min_page_size) >>
 			     ilog2(mem->min_page_size)))
-		return -E2BIG;
+		 return -E2BIG;
 
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if (!st)
@@ -359,6 +359,7 @@ err_free_sg:
 	return ret;
 }
 
+ 
 void i915_gem_object_init_memory_region(struct drm_i915_gem_object *obj,
 					struct intel_memory_region *mem)
 {

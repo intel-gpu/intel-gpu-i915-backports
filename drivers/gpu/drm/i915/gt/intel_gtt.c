@@ -537,6 +537,9 @@ void free_scratch(struct i915_address_space *vm)
 {
 	int i;
 
+	if (!vm->scratch[0])
+		return;
+
 	for (i = 0; i <= vm->top; i++)
 		i915_gem_object_put(vm->scratch[i]);
 }
@@ -898,5 +901,6 @@ __vm_create_scratch_for_read_pinned(struct i915_address_space *vm, unsigned long
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/mock_gtt.c"
+#include "selftest_gtt.c"
 #include "selftest_l4wa.c"
 #endif

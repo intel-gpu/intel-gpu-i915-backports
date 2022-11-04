@@ -187,7 +187,7 @@ static int read_eu_stall_properties(struct drm_i915_private *i915,
 	 */
 	if (ci.engine_class == (u16)I915_ENGINE_CLASS_INVALID &&
 	    ci.engine_instance == (u16)I915_ENGINE_CLASS_INVALID_NONE) {
-		props->tile_gt = i915->gts[0];
+		props->tile_gt = i915->gt[0];
 		return 0;
 	}
 

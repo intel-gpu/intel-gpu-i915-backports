@@ -592,24 +592,16 @@ static ssize_t enable_eu_debug_store(struct device *dev,
 				     const char *buf, size_t count)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
-	unsigned int val;
-	int err;
+	bool enable;
+	int ret;
 
-	err = kstrtouint(buf, 10, &val);
-	if (err)
-		return err;
+	ret = kstrtobool(buf, &enable);
+	if (ret)
+		return ret;
 
-	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
-	if (!val && !list_empty(&i915->debuggers.list)) {
-		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
-		return -EBUSY;
-	}
-
-	if (val && !i915->debuggers.enable_eu_debug)
-		i915_debugger_enable(i915);
-
-	i915->debuggers.enable_eu_debug = !!val;
-	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+	ret = i915_debugger_enable(i915, enable);
+	if (ret)
+		return ret;
 
 	return count;
 }

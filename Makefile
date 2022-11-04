@@ -40,13 +40,13 @@ ARCH := x86_64
 BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
 
 # DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
-# for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_DG1_200828.0"
-DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+# for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_ATSM_6213.0.1"
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2- | sed 's/[^0-9.]*//g' 2>/dev/null || echo 1)
 
 BASE_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "-" -f1 2> /dev/null || echo 1)
 BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_RELEASE | tail -1 | cut -d " " -f3 | cut -d '"' -f2 2> /dev/null || echo 1)
 
-KER_VER := $(shell cat versions | grep $(shell bash scripts/bp_get_latest_KV.sh) | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
+KER_VER := $(shell cat versions | grep -F $(shell bash scripts/bp_get_latest_KV.sh) | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
 
 RHEL_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
 RHEL_BACKPORT_MINOR_XX = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 | cut -c -2 2> /dev/null)

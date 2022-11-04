@@ -416,8 +416,10 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 		info->ppgtt_type = INTEL_PPGTT_NONE;
 	}
 
-	runtime->rawclk_freq = intel_read_rawclk(dev_priv);
-	drm_dbg(&dev_priv->drm, "rawclk rate: %d kHz\n", runtime->rawclk_freq);
+	if (!IS_SRIOV_VF(dev_priv)) {
+		runtime->rawclk_freq = intel_read_rawclk(dev_priv);
+		drm_dbg(&dev_priv->drm, "rawclk rate: %d kHz\n", runtime->rawclk_freq);
+	}
 
 	if (!HAS_DISPLAY(dev_priv)) {
 		dev_priv->drm.driver_features &= ~(DRIVER_MODESET |
@@ -428,12 +430,11 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 	}
 
 	/*
-	 * Early DG2 and PVC steppings don't have the GuC depriv feature. We
-	 * can't rely on the fuse on those platforms because the meaning of the
+	 * Early PVC steppings don't have the GuC depriv feature. We can't
+	 * rely on the fuse on those platforms because the meaning of the
 	 * fuse bit is inverted on platforms that do have the feature.
 	 */
-	if (IS_DG2_GRAPHICS_STEP(dev_priv, G10, STEP_A0, STEP_A1) ||
-	    IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0))
+	if (IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0))
 		info->has_guc_deprivilege = 0;
 }
 

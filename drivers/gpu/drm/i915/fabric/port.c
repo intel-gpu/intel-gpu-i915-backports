@@ -1673,9 +1673,8 @@ int enable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 
 int disable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 {
-	int changed = 0;
+	bool any_was_enabled = false;
 	struct fport *p;
-	int cur;
 	u8 lpn;
 
 	/* routing lock, then mappings lock */
@@ -1686,15 +1685,16 @@ int disable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 	}
 
 	for_each_masked_port(p, lpn, sd->port, lpnmask, max_ports) {
-		cur = test_and_clear_bit(PORT_CONTROL_ENABLED, p->controls);
-		if (cur && test_bit(PORT_CONTROL_ROUTABLE, p->controls) &&
+		bool enabled = test_and_clear_bit(PORT_CONTROL_ENABLED, p->controls);
+
+		if (enabled && test_bit(PORT_CONTROL_ROUTABLE, p->controls) &&
 		    list_empty(&p->unroute_link))
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
-		changed |= cur;
+		any_was_enabled |= enabled;
 	}
 	unlock_exclusive(&routable_lock);
 
-	return changed ? signal_pm_thread(sd, NL_PM_CMD_EVENT) : 0;
+	return any_was_enabled ? signal_pm_thread(sd, NL_PM_CMD_EVENT) : 0;
 }
 
 int enable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
@@ -1714,9 +1714,8 @@ int enable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports
 
 int disable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 {
-	int changed = 0;
+	bool any_was_routable = false;
 	struct fport *p;
-	int cur;
 	u8 lpn;
 
 	lock_exclusive(&routable_lock);
@@ -1726,14 +1725,15 @@ int disable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_port
 	}
 
 	for_each_masked_port(p, lpn, sd->port, lpnmask, max_ports) {
-		cur = test_and_clear_bit(PORT_CONTROL_ROUTABLE, p->controls);
-		if (cur && list_empty(&p->unroute_link))
+		bool routable = test_and_clear_bit(PORT_CONTROL_ROUTABLE, p->controls);
+
+		if (routable && list_empty(&p->unroute_link))
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
-		changed |= cur;
+		any_was_routable |= routable;
 	}
 	unlock_exclusive(&routable_lock);
 
-	if (changed)
+	if (any_was_routable)
 		rem_request();
 
 	return 0;

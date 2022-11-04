@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright © 2019 Intel Corporation
+ * Copyright © 2021 Intel Corporation
  */
 
 #ifndef __I915_BUDDY_H__
@@ -9,6 +9,7 @@
 #include <linux/bitops.h>
 #include <linux/list.h>
 #include <linux/llist.h>
+#include <linux/slab.h>
 
 /* 512 bits (one per pages) supports 2MB blocks */
 #define I915_BUDDY_MAX_PAGES   512

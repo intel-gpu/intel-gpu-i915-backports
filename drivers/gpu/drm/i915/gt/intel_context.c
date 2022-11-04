@@ -527,21 +527,12 @@ int __init i915_context_module_init(void)
 void intel_context_enter_engine(struct intel_context *ce)
 {
 	intel_engine_pm_get(ce->engine);
-	if (ce->vm->gt != ce->engine->gt) {
-		ce->vm_remote_gt_wakeref = intel_gt_pm_get(ce->vm->gt);
-		ce->vm_remote_gt = ce->vm->gt;
-	}
 	intel_timeline_enter(ce->timeline);
 }
 
 void intel_context_exit_engine(struct intel_context *ce)
 {
 	intel_timeline_exit(ce->timeline);
-	if (ce->vm_remote_gt) {
-		intel_gt_pm_put_async(ce->vm_remote_gt,
-				      ce->vm_remote_gt_wakeref);
-		ce->vm_remote_gt = NULL;
-	}
 	intel_engine_pm_put(ce->engine);
 }
 

@@ -14,6 +14,7 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pm_runtime.h>
 #include <linux/rwsem.h>
 #include <linux/sizes.h>
 #include <linux/xarray.h>
@@ -28,9 +29,7 @@
 #include "iaf_drv.h"
 #include "mbdb.h"
 #include "mbox.h"
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 #include "mei_iaf_user.h"
-#endif
 #include "netlink.h"
 #include "port.h"
 #include "routing_engine.h"
@@ -101,7 +100,7 @@ static int mode_get(char *val, const struct kernel_param *kp)
 	return snprintf(val, PAGE_SIZE, startup_mode_name(param_startup_mode));
 }
 
-static struct kernel_param_ops startup_mode_ops = {
+static const struct kernel_param_ops startup_mode_ops = {
 	.set = mode_set,
 	.get = mode_get,
 };
@@ -640,14 +639,12 @@ static int iaf_remove(struct platform_device *pdev)
 
 	mappings_ref_wait(dev);
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	/*
 	 * intentionally unregister with mei before the flush to maximize
 	 * the chance that remove will prevent an outstanding async init
 	 * from programming a new min SVN
 	 */
 	iaf_mei_stop(dev);
-#endif
 
 	/*
 	 * NOTE: any remove steps performed prior to this flush will race
@@ -674,6 +671,10 @@ static int iaf_remove(struct platform_device *pdev)
 		remove_subdevice(&dev->sd[i]);
 
 	routing_p2p_clear(dev);
+
+	pm_runtime_put(fdev_dev(dev));
+	pm_runtime_allow(fdev_dev(dev));
+	pm_runtime_disable(fdev_dev(dev));
 
 	WARN(kref_read(&dev->refs), "fabric_id 0x%08x has %u references",
 	     dev->fabric_id, kref_read(&dev->refs));
@@ -720,13 +721,11 @@ void iaf_complete_init_dev(struct fdev *dev)
 		/* checked by netlink agent to reject early requests */
 		smp_store_release(&dev->all_sds_inited, true);
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	/*
 	 * Poke the MEI submodule to indicate that the device is functioning properly. If enabled
 	 * and currently allowed, automatic anti-rollback protection will be initiated.
 	 */
 	iaf_mei_indicate_device_ok(dev);
-#endif
 
 	dev_dbg(fdev_dev(dev), "device init complete\n");
 }
@@ -830,6 +829,19 @@ static int iaf_probe(struct platform_device *pdev)
 	init_completion(&dev->mappings_ref.complete);
 	INIT_LIST_HEAD(&dev->port_unroute_list);
 
+	/*
+	 * The IAF cannot be suspended via runtime, but the parent could have
+	 * the capability.  Set runtime to forbid to be explicit about what
+	 * the requirement is.  Do a get to make sure that suspend cannot be
+	 * started externally (i.e. sysfs), to keep the parent from going to
+	 * sleep.
+	 * If the parent is asleep at this time, pm_runtime_forbid will cause
+	 * it to resume.
+	 */
+	pm_runtime_enable(&pdev->dev);
+	pm_runtime_forbid(&pdev->dev);
+	pm_runtime_get(&pdev->dev);
+
 	err = pd->register_dev(pd->parent, dev, dev->fabric_id, &iaf_ops);
 	if (err) {
 		iaf_sysfs_remove(dev);
@@ -844,11 +856,9 @@ static int iaf_probe(struct platform_device *pdev)
 			goto add_error;
 	}
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	err = iaf_mei_start(dev);
 	if (err)
 		goto add_error;
-#endif
 
 	/* read link config before initializing FW since it may also use GPIO */
 	read_gpio_link_config_pins(dev);
@@ -863,9 +873,7 @@ static int iaf_probe(struct platform_device *pdev)
 
 load_error:
 	flush_any_outstanding_fw_initializations(dev);
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	iaf_mei_stop(dev);
-#endif
 
 add_error:
 	iaf_sysfs_remove(dev);
@@ -878,6 +886,9 @@ sysfs_error:
 	remove_debugfs(dev);
 	dev->dir_node = NULL;
 	fdev_wait_on_release(dev);
+	pm_runtime_put(&pdev->dev);
+	pm_runtime_allow(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 	kfree(dev);
 	return err;
 }

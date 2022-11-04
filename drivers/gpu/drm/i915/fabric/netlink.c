@@ -807,7 +807,6 @@ static enum cmd_rsp nl_add_fport_properties(struct sk_buff *msg, u8 lpn,
 					    struct fsubdev *sd)
 {
 	struct nlattr *nested_attr;
-	enum cmd_rsp err = IAF_CMD_RSP_SUCCESS;
 	struct fport *fabric_port = get_fport_handle(sd, lpn);
 	struct portinfo *port_info;
 
@@ -898,12 +897,7 @@ static enum cmd_rsp nl_add_fport_properties(struct sk_buff *msg, u8 lpn,
 	    nla_put_u32(msg, IAF_ATTR_FPORT_LQI_CHANGE_COUNT,
 			port_info->lqi_change_count)) {
 		nla_nest_cancel(msg, nested_attr);
-		err = IAF_CMD_RSP_MSGSIZE;
-	}
-
-	if (err) {
-		nla_nest_cancel(msg, nested_attr);
-		return err;
+		return IAF_CMD_RSP_MSGSIZE;
 	}
 
 	nla_nest_end(msg, nested_attr);

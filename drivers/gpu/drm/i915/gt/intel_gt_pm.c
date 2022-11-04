@@ -12,6 +12,7 @@
 #include "intel_engine_pm.h"
 #include "intel_flat_ppgtt_pool.h"
 #include "intel_gt.h"
+#include "intel_gt_ccs_mode.h"
 #include "intel_gt_clock_utils.h"
 #include "intel_gt_pm.h"
 #include "intel_gt_requests.h"
@@ -108,6 +109,8 @@ static int __gt_park(struct intel_wakeref *wf)
 	intel_rps_park(&gt->rps);
 	intel_rc6_park(&gt->rc6);
 
+	intel_gt_park_ccs_mode(gt, NULL);
+
 	/* Everything switched off, flush any residual interrupt just in case */
 	intel_synchronize_irq(i915);
 
@@ -125,7 +128,13 @@ static const struct intel_wakeref_ops wf_ops = {
 
 void intel_gt_pm_init_early(struct intel_gt *gt)
 {
-	/* FIXME with multi-gt, gt->uncore is not intialized yet at this point */
+	/*
+	 * We access the runtime_pm structure via gt->i915 here rather than
+	 * gt->uncore as we do elsewhere in the file because gt->uncore is not
+	 * yet initialized for all tiles at this point in the driver startup.
+	 * runtime_pm is per-device rather than per-tile, so this is still the
+	 * correct structure.
+	 */
 	intel_wakeref_init(&gt->wakeref, &gt->i915->runtime_pm, &wf_ops, "GT");
 }
 

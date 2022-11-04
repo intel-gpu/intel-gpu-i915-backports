@@ -13,6 +13,9 @@
 
 #include "i915_gem.h"
 
+struct drm_mm_node;
+struct ttm_resource;
+
 /*
  * Optimised SGL iterator for GEM objects
  */
@@ -110,15 +113,23 @@ static inline struct scatterlist *__sg_next(struct scatterlist *sg)
 	     (((__iter).curr += (__step)) >= (__iter).max) ?		\
 	     (__iter) = __sgt_iter(__sg_next((__iter).sgp), true), 0 : 0)
 
-static inline unsigned int i915_sg_page_sizes(struct scatterlist *sg)
+/**
+ * i915_sg_dma_sizes - Record the dma segment sizes of a scatterlist
+ * @sg: The scatterlist
+ *
+ * Return: An unsigned int with segment sizes logically or'ed together.
+ * A caller can use this information to determine what hardware page table
+ * entry sizes can be used to map the memory represented by the scatterlist.
+ */
+static inline unsigned int i915_sg_dma_sizes(struct scatterlist *sg)
 {
 	unsigned int page_sizes;
 
 	page_sizes = 0;
-	while (sg) {
+	while (sg && sg_dma_len(sg)) {
 		GEM_BUG_ON(sg->offset);
-		GEM_BUG_ON(!IS_ALIGNED(sg->length, PAGE_SIZE));
-		page_sizes |= sg->length;
+		GEM_BUG_ON(!IS_ALIGNED(sg_dma_len(sg), PAGE_SIZE));
+		page_sizes |= sg_dma_len(sg);
 		sg = __sg_next(sg);
 	}
 
@@ -149,5 +160,12 @@ typedef unsigned int __sg_size_t; /* see linux/scatterlist.h */
 
 #define sg_alloc_table_from_pages(sgt, pages, npages, offset, size, gfp) \
 	overflows_type(npages, __sg_size_t) ? -E2BIG : (sg_alloc_table_from_pages)(sgt, pages, (__sg_size_t)(npages), offset, size, gfp)
+
+
+struct sg_table *i915_sg_from_mm_node(const struct drm_mm_node *node,
+				      u64 region_start);
+
+struct sg_table *i915_sg_from_buddy_resource(struct ttm_resource *res,
+					     u64 region_start);
 
 #endif

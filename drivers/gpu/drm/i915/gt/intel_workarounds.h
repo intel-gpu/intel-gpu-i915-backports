@@ -44,6 +44,8 @@ void intel_engine_deny_user_register_access(struct intel_engine_cs *engine,
 					    u32 count);
 
 void intel_engine_whitelist_sip(struct intel_engine_cs *engine);
-void intel_engine_wa_add_debug_mode(struct intel_engine_cs *engine);
+void intel_engine_undo_whitelist_sip(struct intel_engine_cs *engine);
+void intel_engine_debug_enable(struct intel_engine_cs *engine);
+void intel_engine_debug_disable(struct intel_engine_cs *engine);
 
 #endif

@@ -1,0 +1,7 @@
+SR-IOV - MTL Enabling (done)
+D:	Michal Wajdeczko <michal.wajdeczko@intel.com>
+D:	Michal Winiarski <michal.winiarski@intel.com>
+M:	Michal Wajdeczko <michal.wajdeczko@intel.com>
+T:	drm/i915/iov
+T:	drm/i915/pf
+T:	drm/i915/vf
