@@ -17,7 +17,6 @@
 #include "routing_logic.h"
 #include "routing_io.h"
 #include "routing_p2p.h"
-#include "selftests/routing_mock.h"
 #include "trace.h"
 
 #define DEBUGFS_ROUTING_ROOT_NAME "routing"

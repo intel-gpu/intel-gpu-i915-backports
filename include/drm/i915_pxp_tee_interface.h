@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Copyright © 2020 Intel Corporation
- *
- * Authors:
- * Vitaly Lubart <vitaly.lubart@intel.com>
  */
 
 #ifndef _I915_PXP_TEE_INTERFACE_H_

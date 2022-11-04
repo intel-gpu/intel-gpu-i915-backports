@@ -3,9 +3,6 @@
 #include_next <linux/slab.h>
 #include <linux/version.h>
 #include <linux/sched/mm.h>
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
-#include <linux/mm.h>
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
 
 #if LINUX_VERSION_IS_LESS(3,4,0)
 /* This backports:
@@ -135,7 +132,7 @@ struct kmem_cache_node {
 
 #endif /* CONFIG_SLOB */
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef FOLIO_ADDRESS_PRESENT
 
 #if defined(CONFIG_SLUB) || defined(CONFIG_SLAB)
 
@@ -223,5 +220,5 @@ struct slab {
 #endif
 };
 
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif /* FOLIO_ADDRESS_PRESENT */
 #endif /* __BACKPORT_SLAB_H */

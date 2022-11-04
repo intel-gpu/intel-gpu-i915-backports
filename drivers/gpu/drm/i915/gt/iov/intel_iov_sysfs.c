@@ -523,6 +523,9 @@ static umode_t vf_attr_is_visible(struct kobject *kobj,
 	if (attr == &lmem_quota_iov_attr.attr && !HAS_LMEM(iov_to_i915(iov)))
 		return 0;
 
+	if (attr == &ggtt_quota_iov_attr.attr && iov_to_gt(iov)->type == GT_MEDIA)
+		return attr->mode & 0444;
+
 	return attr->mode;
 }
 
@@ -659,7 +662,7 @@ static int pf_setup_provisioning(struct intel_iov *iov)
 
 		parent = &parents[n]->base;
 
-		if (HAS_REMOTE_TILES(iov_to_i915(iov))) {
+		if (HAS_EXTRA_GT_LIST(iov_to_i915(iov))) {
 			err = kobject_init_and_add(kobj, &iov_ktype, parent, IOV_KOBJ_GTn_NAME,
 						   iov_to_gt(iov)->info.id);
 		} else {

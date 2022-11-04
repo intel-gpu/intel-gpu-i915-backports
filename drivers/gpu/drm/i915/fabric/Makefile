@@ -12,6 +12,7 @@ iaf-y := debugfs.o \
 	 error.o \
 	 fw.o \
 	 main.o \
+	 mei_iaf_user.o \
 	 mbdb.o \
 	 netlink.o \
 	 ops.o \
@@ -29,8 +30,6 @@ iaf-y := debugfs.o \
 	 statedump.o \
 	 sysfs.o \
 	 trace.o \
-
-iaf-$(CPTCFG_IAF_ANTI_ROLLBACK) += mei_iaf_user.o
 
 iaf-$(CPTCFG_IAF_DEBUG_MBOX_ACCESS) += mbox.o
 

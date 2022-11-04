@@ -1200,11 +1200,9 @@ static u32 *copy_batch(struct drm_i915_gem_object *dst_obj,
 		 * validate up to the end of the batch.
 		 */
 		remain = length;
-#if defined(CONFIG_X86)
 		if (dst_needs_clflush & CLFLUSH_BEFORE)
 			remain = round_up(remain,
 					  boot_cpu_data.x86_clflush_size);
-#endif
 
 		ptr = dst;
 		x = offset_in_page(offset);

@@ -276,6 +276,14 @@ static const struct engine_info intel_engines[] = {
 			{ .graphics_ver = 12, .base = GEN12_COMPUTE3_RING_BASE }
 		}
 	},
+	[GSC0] = {
+		.class = OTHER_CLASS,
+		.instance = OTHER_GSC_INSTANCE,
+		.irq_offset = GEN11_CSME,
+		.mmio_bases = {
+			{ .graphics_ver = 12, .base = GEN12_GSC_RING_BASE }
+		}
+	},
 };
 
 /**
@@ -352,6 +360,9 @@ u32 intel_engine_context_size(struct intel_gt *gt, u8 class)
 		break;
 	default:
 		MISSING_CASE(class);
+		fallthrough;
+	case OTHER_CLASS:
+		GEM_BUG_ON(!HAS_ENGINE(gt, GSC0));
 		fallthrough;
 	case VIDEO_DECODE_CLASS:
 	case VIDEO_ENHANCEMENT_CLASS:
@@ -454,6 +465,7 @@ static u32 get_reset_domain(u8 ver, enum intel_engine_id id)
 			[CCS1]  = GEN11_GRDOM_RENDER,
 			[CCS2]  = GEN11_GRDOM_RENDER,
 			[CCS3]  = GEN11_GRDOM_RENDER,
+			[GSC0]  = GEN12_GRDOM_GSC,
 		};
 		GEM_BUG_ON(id >= ARRAY_SIZE(engine_reset_domains) ||
 			   !engine_reset_domains[id]);
@@ -551,15 +563,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 		engine->flags |= I915_ENGINE_HAS_RCS_REG_STATE;
 		engine->flags |= I915_ENGINE_HAS_EU_PRIORITY;
 
-		/*
-		 * FIXME: Enabling the GuC DUAL QUEUE or CONTEXT ISOLATION WAs
-		 * causes an issue with timeslicing RCS and CCS work. This needs
-		 * to be fixed in GuC. Until that happens, force preemption to
-		 * work around the issue.
-		 */
-		if (IS_DG2(gt->i915))
-			engine->flags |= I915_ENGINE_WANT_FORCED_PREEMPTION;
-
 		/* EU attention is not available on VFs */
 		if(!IS_SRIOV_VF(gt->i915))
 			engine->flags |= I915_ENGINE_HAS_EU_ATTENTION;
@@ -594,21 +597,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 
 			engine->props.preempt_timeout_ms = triple_beat;
 		}
-	}
-
-	/*
-	 * FIXME: Timeslicing works with I915_ENGINE_WANT_FORCED_PREEMPTION, but
-	 * it breaks long running workloads that do not expect preemption
-	 * because they are the only ones running.  Since the result of a
-	 * failed preemption is context reset, this causes the long running
-	 * workload to fail. Use zero preemption timeout to prevent the reset
-	 * from happening when the DUAL QUEUE and/or CONTEXT ISOLATION WA is
-	 * enabled.
-	 */
-	if (engine->flags & I915_ENGINE_WANT_FORCED_PREEMPTION) {
-		drm_info(&gt->i915->drm, "Disabling pre-emption timeout to work around forced preemption for %s\n",
-			 engine->name);
-		engine->props.preempt_timeout_ms = 0;
 	}
 
 	engine->defaults = engine->props; /* never to change again */
@@ -811,7 +799,7 @@ static void engine_mask_apply_compute_fuses(struct intel_gt *gt)
 		return;
 	}
 
-	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+	if (hweight32(CCS_MASK(gt)) <= 1)
 		return;
 
 	ccs_mask = intel_slicemask_from_xehp_dssmask(info->sseu.compute_subslice_mask,
@@ -889,7 +877,7 @@ static intel_engine_mask_t init_engine_mask(struct intel_gt *gt)
 	u16 vdbox_mask;
 	u16 vebox_mask;
 
-	info->engine_mask = INTEL_INFO(i915)->platform_engine_mask;
+	GEM_BUG_ON(!info->engine_mask);
 
 	if (GRAPHICS_VER(i915) < 11)
 		return info->engine_mask;
@@ -1951,39 +1939,15 @@ bool intel_engine_is_idle(struct intel_engine_cs *engine)
 	return ring_is_idle(engine);
 }
 
-bool intel_engines_are_idle(struct intel_gt *gt)
-{
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	/*
-	 * If the driver is wedged, HW state may be very inconsistent and
-	 * report that it is still busy, even though we have stopped using it.
-	 */
-	if (intel_gt_is_wedged(gt))
-		return true;
-
-	/* Already parked (and passed an idleness test); must still be idle */
-	if (!READ_ONCE(gt->awake))
-		return true;
-
-	for_each_engine(engine, gt, id) {
-		if (!intel_engine_is_idle(engine))
-			return false;
-	}
-
-	return true;
-}
-
 bool intel_engine_irq_enable(struct intel_engine_cs *engine)
 {
 	if (!engine->irq_enable)
 		return false;
 
 	/* Caller disables interrupts */
-	spin_lock(&engine->gt->irq_lock);
+	spin_lock(engine->gt->irq_lock);
 	engine->irq_enable(engine);
-	spin_unlock(&engine->gt->irq_lock);
+	spin_unlock(engine->gt->irq_lock);
 
 	return true;
 }
@@ -1994,9 +1958,9 @@ void intel_engine_irq_disable(struct intel_engine_cs *engine)
 		return;
 
 	/* Caller disables interrupts */
-	spin_lock(&engine->gt->irq_lock);
+	spin_lock(engine->gt->irq_lock);
 	engine->irq_disable(engine);
-	spin_unlock(&engine->gt->irq_lock);
+	spin_unlock(engine->gt->irq_lock);
 }
 
 void intel_engines_reset_default_submission(struct intel_gt *gt)

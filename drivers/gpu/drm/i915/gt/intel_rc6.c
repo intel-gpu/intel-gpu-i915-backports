@@ -76,17 +76,17 @@ xehpsdv_dfd_restore_tile_addr_regs(struct intel_rc6 *rc6)
 	*dfd_restore_buf++ = MI_NOOP;
 	*dfd_restore_buf++ = MI_LOAD_REGISTER_IMM(4);
 
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE0_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE0_ADDR_RANGE);
+	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE0_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE0_ADDR_RANGE);
 
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE1_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE1_ADDR_RANGE);
+	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE1_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE1_ADDR_RANGE);
 
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE2_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE2_ADDR_RANGE);
+	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE2_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE2_ADDR_RANGE);
 
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHPSDV_TILE3_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHPSDV_TILE3_ADDR_RANGE);
+	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE3_ADDR_RANGE);
+	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE3_ADDR_RANGE);
 
 	/*
 	 * A write of any value to 0x80FC signals the end of the DFD restore
@@ -600,7 +600,7 @@ static bool bxt_check_bios_rc6_setup(struct intel_rc6 *rc6)
 	return enable_rc6;
 }
 
-static bool rc6_supported(struct intel_rc6 *rc6)
+static bool rc6_exists(struct intel_rc6 *rc6)
 {
 	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 
@@ -612,6 +612,13 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 
 	if (is_mock_gt(rc6_to_gt(rc6)))
 		return false;
+
+	return true;
+}
+
+static bool rc6_supported(struct intel_rc6 *rc6)
+{
+	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 
 	if (IS_GEN9_LP(i915) && !bxt_check_bios_rc6_setup(rc6)) {
 		drm_notice(&i915->drm,
@@ -643,7 +650,15 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    i915->remote_tiles > 0)
 		return false;
 
-	return true;
+	/*
+	 * Wa for HSD: 14015706335
+	 */
+
+	if (!i915->params.rc6_ignore_steppings &&
+	    IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		return false;
+
+	return i915->params.enable_rc6;
 }
 
 void intel_rc6_rpm_get(struct intel_rc6 *rc6)
@@ -703,7 +718,7 @@ void intel_rc6_init(struct intel_rc6 *rc6)
 	/* Disable runtime-pm until we can save the GPU state with rc6 pctx */
 	intel_rc6_rpm_get(rc6);
 
-	if (!rc6_supported(rc6))
+	if (!rc6_exists(rc6))
 		return;
 
 	if (IS_XEHPSDV(i915))
@@ -718,7 +733,7 @@ void intel_rc6_init(struct intel_rc6 *rc6)
 	/* Sanitize rc6, ensure it is disabled before we are ready. */
 	__intel_rc6_disable(rc6);
 
-	if (!i915->params.enable_rc6)
+	if (!rc6_supported(rc6))
 		err = -ECANCELED;
 
 	rc6->supported = err == 0;
@@ -910,6 +925,7 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	unsigned long flags;
 	unsigned int i;
 	u32 mul, div;
+	i915_reg_t base;
 
 	if (!rc6->supported)
 		return 0;
@@ -921,8 +937,10 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	 * other so we can use the relative address, compared to the smallest
 	 * one as the index into driver storage.
 	 */
+	base = (rc6_to_gt(rc6)->type == GT_MEDIA) ?
+	       MTL_MEDIA_MC6 : GEN6_GT_GFX_RC6_LOCKED;
 	i = (i915_mmio_reg_offset(reg) -
-	     i915_mmio_reg_offset(GEN6_GT_GFX_RC6_LOCKED)) / sizeof(u32);
+	     i915_mmio_reg_offset(base)) / sizeof(u32);
 	if (drm_WARN_ON_ONCE(&i915->drm, i >= ARRAY_SIZE(rc6->cur_residency)))
 		return 0;
 

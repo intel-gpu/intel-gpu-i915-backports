@@ -299,9 +299,15 @@ static bool pmu_needs_timer(struct i915_pmu *pmu, bool gpu_active)
 static u64 __get_rc6(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
+	i915_reg_t reg;
 	u64 val;
 
-	val = intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6);
+	if (gt->type == GT_MEDIA)
+		reg = MTL_MEDIA_MC6;
+	else
+		reg = GEN6_GT_GFX_RC6;
+
+	val = intel_rc6_residency_ns(&gt->rc6, reg);
 
 	if (HAS_RC6p(i915))
 		val += intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6p);
@@ -1000,7 +1006,7 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 	} else if (is_hw_error_config(event->attr.config)) {
 		const unsigned int gt_id = config_gt_id(event->attr.config);
 		unsigned int id = hw_error_id(event->attr.config);
-		struct intel_gt *gt = i915->gts[gt_id];
+		struct intel_gt *gt = i915->gt[gt_id];
 
 		/* Mapping of ABI constants to internal enums. */
 
@@ -1017,7 +1023,7 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 	} else if (is_gt_driver_error_config(event->attr.config)) {
 		const unsigned int gt_id = config_gt_id(event->attr.config);
 		unsigned int id = gt_driver_error_id(event->attr.config);
-		struct intel_gt *gt = i915->gts[gt_id];
+		struct intel_gt *gt = i915->gt[gt_id];
 
 		val = gt->errors.driver[gt_driver_error_map[id]];
 	} else if (is_i915_driver_error_config(event->attr.config)) {
@@ -1045,22 +1051,22 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 			val = READ_ONCE(pmu->irq_count);
 			break;
 		case I915_PMU_RC6_RESIDENCY:
-			val = get_rc6(i915->gts[gt_id]);
+			val = get_rc6(i915->gt[gt_id]);
 			break;
 		case I915_PMU_SOFTWARE_GT_AWAKE_TIME:
 			val = ktime_to_ns(intel_gt_get_awake_time(to_gt(i915)));
 			break;
 		case PRELIM_I915_PMU_ENGINE_RESET_COUNT:
-			val = atomic_read(&i915->gts[gt_id]->reset.engines_reset_count);
+			val = atomic_read(&i915->gt[gt_id]->reset.engines_reset_count);
 			break;
 		case PRELIM_I915_PMU_EU_ATTENTION_COUNT:
-			val = atomic_read(&i915->gts[gt_id]->reset.eu_attention_count);
+			val = atomic_read(&i915->gt[gt_id]->reset.eu_attention_count);
 			break;
 		case PRELIM_I915_PMU_RENDER_GROUP_BUSY:
 		case PRELIM_I915_PMU_COPY_GROUP_BUSY:
 		case PRELIM_I915_PMU_MEDIA_GROUP_BUSY:
 		case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
-			val = engine_group_busyness_read(i915->gts[gt_id],
+			val = engine_group_busyness_read(i915->gt[gt_id],
 							 config);
 			break;
 		}

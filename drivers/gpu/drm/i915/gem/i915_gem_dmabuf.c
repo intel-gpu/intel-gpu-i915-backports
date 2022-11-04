@@ -556,7 +556,7 @@ static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 	if (IS_ERR(sgt))
 		return PTR_ERR(sgt);
 
-	sg_page_sizes = i915_sg_page_sizes(sgt->sgl);
+	sg_page_sizes = i915_sg_dma_sizes(sgt->sgl);
 
 	__i915_gem_object_set_pages(obj, sgt, sg_page_sizes);
 
@@ -620,7 +620,8 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 		return ERR_PTR(-ENOMEM);
 
 	drm_gem_private_object_init(dev, &obj->base, dma_buf->size);
-	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class, 0);
+	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class,
+			     I915_BO_ALLOC_USER);
 	obj->base.resv = dma_buf->resv;
 
 	/*

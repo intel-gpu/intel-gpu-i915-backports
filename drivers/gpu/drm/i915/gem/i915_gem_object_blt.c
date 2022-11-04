@@ -57,14 +57,14 @@ static phys_addr_t calc_ctrl_surf_instr_size(struct drm_i915_private *i915,
 	 * Each XY_CTRL_SURF_COPY_BLT command is 20 bytes in
 	 * size.
 	 */
-	total_size = XY_CTRL_SURF_INSTR_SIZE * num_cmds;
+	total_size = (XY_CTRL_SURF_INSTR_SIZE * sizeof(u32)) * num_cmds;
 
 	/*
 	 * We will also need to add a MI_FLUSH_DW before all the
 	 * XY_CTRL_SURF_COPY_BLT commands for compatibility with
 	 * legacy commands
 	 */
-	total_size += 2 * MI_FLUSH_DW_SIZE;
+	total_size += 2 * (MI_FLUSH_DW_SIZE * sizeof(u32));
 
 	/*
 	 * Wa_1409498409: xehpsdv

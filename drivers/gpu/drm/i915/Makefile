@@ -22,12 +22,6 @@ subdir-ccflags-y += $(call cc-disable-warning, unused-but-set-variable)
 subdir-ccflags-y += $(call cc-disable-warning, frame-address)
 subdir-ccflags-$(CPTCFG_DRM_I915_WERROR) += -Werror
 
-# FIXME: Remove when additional custom headers for arm64 are no
-# longer needed
-ifdef CONFIG_ARM64
-LINUXINCLUDE := -I$(src)/arm64_missing/ $(LINUXINCLUDE)
-endif
-
 # Fine grained warnings disable
 CFLAGS_i915_pci.o = $(call cc-disable-warning, override-init)
 CFLAGS_display/intel_fbdev.o = $(call cc-disable-warning, override-init)
@@ -66,6 +60,7 @@ i915-y += i915_driver.o \
 	  intel_step.o \
 	  intel_sysfs_mem_health.o \
 	  intel_uncore.o \
+	  intel_vsec.o \
 	  intel_wakeref.o \
 	  vlv_sideband.o \
 	  vlv_suspend.o
@@ -112,6 +107,7 @@ gt-y += \
 	gt/intel_ggtt_fencing.o \
 	gt/intel_gt.o \
 	gt/intel_gt_buffer_pool.o \
+	gt/intel_gt_ccs_mode.o \
 	gt/intel_gt_clock_utils.o \
 	gt/intel_gt_debug.o \
 	gt/intel_gt_debugfs.o \
@@ -127,6 +123,7 @@ gt-y += \
 	gt/intel_gtt.o \
 	gt/intel_llc.o \
 	gt/intel_lrc.o \
+	gt/intel_migrate.o \
 	gt/intel_mocs.o \
 	gt/intel_pagefault.o \
 	gt/intel_ppgtt.o \
@@ -137,6 +134,7 @@ gt-y += \
 	gt/intel_ring.o \
 	gt/intel_ring_submission.o \
 	gt/intel_rps.o \
+	gt/intel_sa_media.o \
 	gt/intel_sseu.o \
 	gt/intel_sseu_debugfs.o \
 	gt/intel_timeline.o \
@@ -224,7 +222,9 @@ i915-y += gt/uc/intel_uc.o \
 	  gt/uc/intel_guc_submission.o \
 	  gt/uc/intel_huc.o \
 	  gt/uc/intel_huc_debugfs.o \
-	  gt/uc/intel_huc_fw.o
+	  gt/uc/intel_huc_fw.o \
+	  gt/uc/intel_gsc_fw.o \
+	  gt/uc/intel_gsc_uc.o
 
 # graphics system controller (GSC) support
 i915-y += gt/intel_gsc.o
@@ -326,6 +326,7 @@ i915-y += \
 	display/icl_dsi.o \
 	display/intel_backlight.o \
 	display/intel_crt.o \
+	display/intel_cx0_phy.o \
 	display/intel_ddi.o \
 	display/intel_ddi_buf_trans.o \
 	display/intel_display_trace.o \
@@ -391,10 +392,6 @@ i915-$(CPTCFG_DRM_I915_GVT) += \
 	intel_gvt.o
 include $(src)/gvt/Makefile
 
-ifneq ($(CONFIG_X86),y)
-i915-y += arm64_missing/x86_hacks.o
-endif
-
 obj-$(CPTCFG_DRM_I915) += i915.o
 obj-$(CPTCFG_DRM_I915_GVT_KVMGT) += gvt/kvmgt.o
 obj-$(CPTCFG_DRM_I915_INTEL_FABRIC) += fabric/
@@ -406,14 +403,6 @@ i915_spi-y := spi/intel_spi_drv.o
 
 # exclude some broken headers from the test coverage
 no-header-test := \
-	arm64_missing/asm/cacheflush.h		\
-	arm64_missing/asm/atomic.h		\
-	arm64_missing/asm/cpufeature.h		\
-	arm64_missing/asm/iosf_mbi.h		\
-	arm64_missing/asm/pgtable-types.h	\
-	arm64_missing/asm/tsc.h			\
-	arm64_missing/drm/intel-gtt.h		\
-	arm64_missing/linux/intel-iommu.h	\
 	display/intel_vbt_defs.h \
 	fabric/io.h \
 	fabric/mbdb.h \

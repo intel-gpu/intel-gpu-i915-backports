@@ -49,7 +49,7 @@ struct pxp_tee_create_arb_out {
 struct pxp_tee_start_huc_auth_in {
 	struct pxp_tee_cmd_header header;
 	__le64                    huc_base_address;
-};
+} __packed;
 
 struct pxp_tee_start_huc_auth_out {
 	struct pxp_tee_cmd_header header;

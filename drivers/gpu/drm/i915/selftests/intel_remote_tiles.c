@@ -15,9 +15,9 @@ static int igt_lmem_create_remote_tiles(void *arg)
 
        /* test if we can create gem objects from remote tiles */
        static const u32 remote_tiles[] = {
-               INTEL_REGION_LMEM1,
-               INTEL_REGION_LMEM2,
-               INTEL_REGION_LMEM3,
+               INTEL_REGION_LMEM_1,
+               INTEL_REGION_LMEM_2,
+               INTEL_REGION_LMEM_3,
        };
        struct drm_i915_gem_object *remote_obj[ARRAY_SIZE(remote_tiles)];
 

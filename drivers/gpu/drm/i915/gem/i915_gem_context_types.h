@@ -101,6 +101,8 @@ struct i915_gem_context {
 	 * CONTEXT_USER_ENGINES flag is set).
 	 */
 	struct i915_gem_engines __rcu *engines;
+	/* Track the condensed set of physical engines enabled for this user */
+	intel_engine_mask_t engine_mask;
 
 	/** @engines_mutex: guards writes to engines */
 	struct mutex engines_mutex;

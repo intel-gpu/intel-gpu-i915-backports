@@ -3,7 +3,8 @@
 
 #include_next  <drm/drm_dp_helper.h>
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef DRM_DP_GET_ADJUST_NOT_PRESENT
+
 #define drm_dp_get_adjust_tx_ffe_preset LINUX_I915_BACKPORT(drm_dp_get_adjust_tx_ffe_preset)
 u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 				   int lane);
@@ -31,6 +32,9 @@ u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 #define DP_EDP_DISPLAY_CONTROL_REGISTER                 0x720
 #define DP_EDP_BACKLIGHT_BRIGHTNESS_MSB                 0x722
 
+#endif /* DRM_DP_GET_ADJUST_NOT_PRESENT */
+
+#ifdef DRM_EDP_BACKLIGHT_NOT_PRESENT
 /**
 * struct drm_edp_backlight_info - Probed eDP backlight info struct
 * @pwmgen_bit_count: The pwmgen bit count
@@ -67,13 +71,16 @@ int drm_edp_backlight_enable(struct drm_dp_aux *aux, const struct drm_edp_backli
 #define drm_edp_backlight_disable LINUX_I915_BACKPORT(drm_edp_backlight_disable)
 int drm_edp_backlight_disable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl);
 
+#ifndef DRM_EDP_BACKLIGHT_SUPPORT_PRESENT
+#define drm_edp_backlight_supported LINUX_I915_BACKPORT(drm_edp_backlight_supported)
 static inline bool
 drm_edp_backlight_supported(const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE])
 {
        return (edp_dpcd[1] & DP_EDP_TCON_BACKLIGHT_ADJUSTMENT_CAP) &&
 	       (edp_dpcd[2] & DP_EDP_BACKLIGHT_BRIGHTNESS_AUX_SET_CAP);
 }
-
+#endif /* DRM_EDP_BACKLIGHT_SUPPORT_PRESENT */
+#endif /* DRM_EDP_BACKLIGHT_NOT_PRESENT */
 
 #define drm_hdmi_sink_max_frl_rate LINUX_I915_BACKPORT(drm_hdmi_sink_max_frl_rate)
 int drm_hdmi_sink_max_frl_rate(struct drm_connector *connector);
@@ -81,5 +88,4 @@ int drm_hdmi_sink_max_frl_rate(struct drm_connector *connector);
 #define drm_hdmi_sink_dsc_max_frl_rate LINUX_I915_BACKPORT(drm_hdmi_sink_dsc_max_frl_rate)
 int drm_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector);
 
-#endif /* LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) */
 #endif /* _BACKPORT_DRM_DP_HELPER_H_ */

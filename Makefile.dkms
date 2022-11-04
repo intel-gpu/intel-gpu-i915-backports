@@ -1,0 +1,324 @@
+#
+# Makefile for the output source package for dkms
+#
+
+ifeq ($(KERNELRELEASE),)
+
+
+# BKPT_VER is extracted from BACKPORTS_RELEASE_TAG, which is auto genereated from backport description.Tagging is needed
+# for decoding this, Sample in the version file 'BACKPORTS_RELEASE_TAG="I915_5899_PRERELEASE_220622.0"'
+# Backports tagging is needed for this to work, for above example tag filtered output will be 220622.0
+# release in backports branch
+OSV_NAME = ""
+OSV_VER = 0
+BASE_KERN = 0
+KERN_TYPE = ""
+EXTENDED_VERSION_X = 0
+EXTENDED_VERSION_Y = 0
+EXTENDED_VERSION_Z = 0
+
+BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 6 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
+
+# DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
+# for decoding this, Sample in the version file DII_KERNEL_TAG="PROD_ATSM_6213.0.1"
+# for above example tag filtered out put will be 6213.0.1
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2- | sed 's/[^0-9.]*//g' 2>/dev/null || echo 1)
+
+# Read kernel version from the utsrelease.h which is common among the all the supported OSVs.
+# UTS_RELEASE is extracted from UTS_RELEASE, which is present in the utsrelease.h is a part of kernel.
+# for decoding this, Sample in utsrelease.h file for ubuntu oem kernel #define UTS_RELEASE "5.17.15"
+# where as for suse sp4 kernel, #define UTS_RELEASE "5.14.21-150400.24.18-default"
+# for above example, the extracted output ubuntu oem will be 5.17.15 and
+# for suse sp4 will be 5.14.21-150400.24.18-default
+UTS_RELEASE=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | tr -d '~+')
+BASE_KERN=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1)
+KERN_VER=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-3 | cut -d '-' -f1 | tr -d '+')
+
+# Findout OSV name from autoconf
+# In case of SLES we can verify if CONFIG_SUSE_KERNEL is defined
+# In case of Ubuntu we use CONFIG_VERSION_SIGNATURE data and verify tag "ubuntu"
+OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
+ifeq ($(OSV_NAME),)
+#check for Ubuntu
+OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+# if osv name is not present, check for rhel by extracting the macro RHEL_RELEASE from file version.h
+ifeq ($(OSV_NAME),)
+# check for rhel
+OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d " " -f2 | cut -d "_" -f1)
+# if the osv name is rhel then read the version info from version.h
+# else check if mainline and vanilla kernels are present.
+# otherwise print error message as the supported osv is not found.
+ifeq ($(OSV_NAME), RHEL)
+RHEL_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MAJOR | cut -d ' ' -f3)
+RHEL_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MINOR | cut -d ' ' -f3)
+OSV_VER = $(RHEL_MAJOR).$(RHEL_MINOR)
+EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f1)
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f2)
+EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f3)
+ADD_KV = $(shell cat versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
+else ifeq ($(OSV_NAME),)
+# check for mainline and vanilla kernels using kernel versions
+ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
+OSV_NAME = UBUNTU_MAINLINE
+ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== 5.18), 1)
+OSV_NAME = VANILLA
+ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else
+$(info "OSV_NOT SUPPORTED")
+endif
+endif
+else
+# get the ubuntu version information from the autoconf.h
+OSV_NAME := $(shell echo $(OSV_NAME) | tr '[:lower:]' '[:upper:]')
+KERN_VER := $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f2 | cut -d ' ' -f2 | cut -d '-' -f1)
+KERN_TYPE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d "-" -f3 | cut -d ' ' -f1 | tr -d "\"")
+# get the osv version by comparing the kernel versions
+ifeq ($(shell expr $(BASE_KERN) \<= 5.16), 1)
+OSV_VER = 20.04
+else ifeq ($(shell expr $(BASE_KERN) \>= 5.17), 1)
+OSV_VER = 22.04
+endif
+EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$1}' 2> /dev/null)
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$2}' 2> /dev/null)
+ifeq ($(KERN_TYPE), oem)
+ADD_KV = $(shell cat versions | grep "UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION" | cut -d '"' -f 2)
+else
+ADD_KV = $(shell cat versions | grep "UBUNTU_GENERIC_KERNEL_VERSION" | cut -d '"' -f 2)
+endif
+endif
+else
+# Read suse version info
+SUSE_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_VERSION | cut -d " " -f3)
+SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_PATCHLEVEL | cut -d " " -f3)
+SUSE_AUXRELEASE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
+OSV_VER = $(SUSE_VERSION)0$(SUSE_PATCHLEVEL)0$(SUSE_AUXRELEASE)
+EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f2)
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f3)
+ADD_KV = $(shell cat versions | grep "SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION" | cut -d '"' -f 2)
+endif #end of suse
+
+# disable built-in rules for this file
+.SUFFIXES:
+
+version_h := $(BACKPORT_DIR)/backport-include/linux/osv_version.h
+export version_h
+
+.PHONY: modules
+modules: backport-include/backport/backport_path.h $(version_h)
+
+backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kernel
+	@echo -n "Building backport-include/backport/backport_path.h ..."
+	@grep -f local-symbols .config | (				\
+		echo "#ifndef COMPAT_BACKPORTED_PATH_INCLUDED"		;\
+		echo "#define COMPAT_BACKPORTED_PATH_INCLUDED"		;\
+		echo "/*"						;\
+		echo " * Automatically generated file, don't edit!"	;\
+		echo " * Changes will be overwritten"			;\
+		echo " */"						;\
+		echo ""							;\
+		echo "#define BACKPORT_PATH $(shell pwd)"		;\
+		echo ""							;\
+		echo "#endif /* BACKPORTED_PATH_INCLUDED */"		;\
+		) > backport-include/backport/backport_path.h
+	@echo " done."
+
+###
+# Easy method for doing a status message
+       kecho := :
+ quiet_kecho := echo
+silent_kecho := :
+kecho := $($(quiet)kecho)
+
+###
+# filechk is used to check if the content of a generated file is updated.
+# Sample usage:
+# define filechk_sample
+#       echo $KERNELRELEASE
+# endef
+# version.h : Makefile
+#       $(call filechk,sample)
+# The rule defined shall write to stdout the content of the new file.
+# The existing file will be compared with the new one.
+# - If no file exist it is created
+# - If the content differ the new file is used
+# - If they are equal no change, and no timestamp update
+# - stdin is piped in from the first prerequisite ($<) so one has
+#   to specify a valid file as first prerequisite (often the kbuild file)
+
+define filechk
+        @set -e;                             \
+        mkdir -p $(dir $@);                     \
+        { $(filechk_$(1)); } > $@.tmp;          \
+        if [ -r $@ ] && cmp -s $@ $@.tmp; then  \
+                rm -f $@.tmp;                   \
+        else                                    \
+                $(kecho) '  UPD     $@';        \
+                mv -f $@.tmp $@;                \
+        fi
+endef
+
+define filechk_osv_version_ubuntu.h
+        echo '#define UBUNTU_BACKPORT_MAJOR $(EXTENDED_VERSION_X)'; \
+        echo '#define UBUNTU_BACKPORT_MINOR $(EXTENDED_VERSION_Y)'; \
+	echo '#define UBUNTU_BACKPORT_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define UBUNTU_BACKPORT_RELEASE_CODE $(shell \
+	expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256)'
+endef
+
+define filechk_osv_version_sles.h
+        echo '#define SUSE_LOCALVERSION_MAJOR $(EXTENDED_VERSION_X)'; \
+        echo '#define SUSE_LOCALVERSION_MINOR $(EXTENDED_VERSION_Y)'; \
+        echo '#define SUSE_LOCALVERSION(a,b) (((a) << 8) + (b))'; \
+        echo '#define SUSE_LOCALVERSION_RELEASE_CODE \
+        $(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'; \
+        echo '#define SUSE_RELEASE_VERSION(a,b,c) (((a) << 16) + (b << 8) + (c))'; \
+        echo '#define SUSE_RELEASE_CODE \
+        $(shell expr $(SUSE_VERSION) \* 256 \* 256 + $(SUSE_PATCHLEVEL) \* 256 + $(SUSE_AUXRELEASE))'
+endef
+
+define filechk_osv_version_rhel.h
+        echo '#define RHEL_BACKPORT_MAJOR $(EXTENDED_VERSION_X)'; \
+        echo '#define RHEL_BACKPORT_MINOR_XX_P $(EXTENDED_VERSION_Y)'; \
+        echo '#define RHEL_BACKPORT_MINOR_YY_Q $(EXTENDED_VERSION_Z)'; \
+        echo '#define RHEL_BACKPORT_RELEASE_VERSION(a,b,c) ((a) << 16 + (b) << 8 + (c))'; \
+        echo '#define RHEL_BACKPORT_RELEASE_CODE \
+	$(shell expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256 + 0$(EXTENDED_VERSION_Z))'
+endef
+
+define filechk_osv_version_generic.h
+        echo '#define GENERIC_BACKPORT_MAJOR $(EXTENDED_VERSION_X)'; \
+        echo '#define GENERIC_BACKPORT_MINOR $(EXTENDED_VERSION_Y)'; \
+        echo '#define GENERIC_BACKPORT_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define GENERIC_BACKPORT_RELEASE_CODE $(shell \
+        expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256)'
+endef
+
+$(version_h): $(BACKPORT_DIR)/Makefile FORCE
+ifeq ($(OSV_NAME), UBUNTU)
+ifeq ($(ADD_KV), )
+ifeq ($(KERN_TYPE), oem)
+	@echo 'UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER)-$(EXTENDED_VERSION_X)"' >> versions
+else
+	@echo 'UBUNTU_GENERIC_KERNEL_VERSION="$(KERN_VER)-$(EXTENDED_VERSION_X)"' >> versions
+endif
+endif
+	$(call filechk,osv_version_ubuntu.h)
+else ifeq ($(OSV_NAME), SUSE)
+ifeq ($(ADD_KV), )
+	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER)-$(OSV_VER).$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
+endif
+	$(call filechk,osv_version_sles.h)
+else ifeq ($(OSV_NAME), RHEL)
+ifeq ($(ADD_KV), )
+	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y).$(EXTENDED_VERSION_Z)"' >> versions
+endif
+	$(call filechk,osv_version_rhel.h)
+else
+ifeq ($(ADD_KV), )
+	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER)"' >> versions
+endif
+	$(call filechk,osv_version_generic.h)
+endif
+
+# VERSION is generated as 0.DII_TAG.BACKPORT_RELEASE_TAG.KERNEL_BASE_VERSION
+VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KERN_VER)
+
+ifneq ($(BUILD_VERSION), )
+RELEASE := $(BUILD_VERSION)
+else
+RELEASE := 1
+endif
+
+RELEASE_TYPE ?= opensource
+
+ifeq ($(RELEASE_TYPE), opensource)
+	PKG_SUFFIX=
+else
+	PKG_SUFFIX=-$(RELEASE_TYPE)
+endif
+
+I915_PKG_NAME_BASENAME=intel-i915-dkms
+I915_PKG_NAME := $(I915_PKG_NAME_BASENAME)$(PKG_SUFFIX)
+I915_PKG_VERSION := $(VERSION)
+I915_PKG_RELEASE := $(RELEASE)
+
+
+# i915dkmsdeb-pkg
+# Creates Backports i915 alone dkms package
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsdeb-pkg
+# BUILD_VERSION : pass build version to be added to package name
+# RELEASE_TYPE : <opensource/prerelease> package need to be createdi
+# RELEASE_TYPE=<custom> is used to create custome package.
+# Example: RELEASE_TYPE=test
+#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
+# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
+# already installed before you intalling current one.
+# ------------------------------------------------------------------------------
+I915DKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
+I915DKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
+I915DKMSMK_INSTALL := $(BACKPORT_DIR)/scripts/backport-mkdebinstall
+I915DKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mkdebdkms
+I915DKMSMK_README := $(BACKPORT_DIR)/scripts/backport-mkdebreadme
+I915DKMSMK_COPYRIGHT := $(BACKPORT_DIR)/scripts/backport-mkdebcopyright
+
+.PHONY: i915dkmsdeb-pkg
+i915dkmsdeb-pkg:
+	$(CONFIG_SHELL) $(I915DKMSMK_CONTROL) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/control
+	$(CONFIG_SHELL) $(I915DKMSMK_RULES) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/rules
+	cp $(BACKPORT_DIR)/debian/changelog.in $(BACKPORT_DIR)/debian/changelog
+	sed -i 's/pkg-name/$(I915_PKG_NAME)/g' $(BACKPORT_DIR)/debian/changelog
+	cp $(BACKPORT_DIR)/debian/package.install.in $(BACKPORT_DIR)/debian/$(I915_PKG_NAME).install.in
+	$(CONFIG_SHELL) $(I915DKMSMK_DKMS) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/$(I915_PKG_NAME).dkms.in
+	$(CONFIG_SHELL) $(I915DKMSMK_README) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/README.Debian
+	$(CONFIG_SHELL) $(I915DKMSMK_COPYRIGHT) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/copyright
+	+dch -l "+i${I915_PKG_RELEASE}-" -m "build ${I915_PKG_RELEASE}"
+	+dpkg-buildpackage -j`nproc --all` -us -uc -b -rfakeroot
+
+# i915dkmsrpm-pkg
+# Creates Backports i915 alone dkms package
+# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsrpm-pkg
+# BUILD_VERSION : pass build version to be added to package name
+# RELEASE_TYPE : <opensource/prerelease> package need to be created
+# Depends on package generated by dmadkmsrpm-pkg
+#------------------------------------------------------------------------------
+export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/platform include scripts)
+I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINTAINERS \
+		    Kconfig* COPYING versions defconfigs backport-include kconf compat
+I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
+I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
+
+.PHONY: i915dkmsrpm-pkg
+i915dkmsrpm-pkg:
+	cp $(BACKPORT_DIR)/defconfigs/i915 .config
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
+	tar -cz $(RCS_TAR_IGNORE) -f $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+		$(I915_TAR_CONTENT) $(I915_PKG_NAME).spec dkms.conf;
+	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+	--define='_smp_mflags %{nil}'
+
+.PHONY: clean
+clean:
+	@rm -f $(version_h)
+
+.PHONY: mrproper
+mrproper:
+	@rm -f backport-include/backport/backport_path.h
+	@rm -f debian/README.Debian
+	@rm -f debian/changelog
+	@rm -f debian/control
+	@rm -f debian/copyright
+	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.dkms.in
+	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.install.in
+	@rm -f debian/rules
+	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*.spec
+	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*-src.tar.gz
+	@rm -f $(BACKPORT_DIR)/dkms.conf
+	@test -f .config && $(MAKE) clean || true
+
+
+endif
+
+PHONY += FORCE
+FORCE:

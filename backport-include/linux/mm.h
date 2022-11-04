@@ -58,7 +58,7 @@ static inline void *kvcalloc(size_t n, size_t size, gfp_t flags)
 }
 #endif /* < 4.18 */
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef FOLIO_ADDRESS_PRESENT
 
 #if defined(HASHED_PAGE_VIRTUAL)
 void *page_address(const struct page *page);
@@ -78,5 +78,5 @@ static inline void *folio_address(const struct folio *folio)
 	return page_address(&folio->page);
 }
 
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif /* FOLIO_ADDRESS_PRESENT */
 #endif /* __BACKPORT_MM_H */
