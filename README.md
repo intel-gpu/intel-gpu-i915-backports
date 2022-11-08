@@ -28,17 +28,15 @@ backport/main will point to the currently supported version of Ubuntu® and SLES
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| Ubuntu® | 22.04 | Kernel 5.17 oem | [UBUNTU_README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
-| | 22.04/20.04 |  Kernel 5.15 generic | [UBUNTU_README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
-| | Mainline |  Kernel 5.15.72 | [UBUNTU_README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
-| SLES | 15SP4 | Kernel 5.14 |  [SLES_README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_SLES.md) |
+| Ubuntu® | 22.04 | Kernel 5.17 oem | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
+| | 22.04/20.04 |  Kernel 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
+| | Mainline LTS |  Kernel 5.15.72 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md) |
+| SLES | 15SP4 | Kernel 5.14 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_SLES.md) |
 
 
-# Key Released DKMS versions
+| Product  | Backport Released Tag|OS Version	 | Kernel Version  | Building | Testing |
+|--- |--- |---  |---  |---  |--- |
+|Intel® Data Center GPU Flex Series|I915_22WW45.5_476.14_6213_220914.2 |Ubuntu® 22.04 | 5.17.0-1019-oem| Yes |No |
+|| | Ubuntu® 22.04 |  5.15.0-50 |Yes |Yes |
+| || Mainline LTS |  5.15.72 |Yes |No |
 
-| DKMS Released Tag | OS Version | Kernel Version  | DKMS Building | CI Testing |
-|---  |---  |---  |--- |--- |
-|I915_22WW45.5_476.14_6213_220914.2 |Ubuntu 22.04 | Kernel 5.17 oem | Yes |Yes |
-| | Ubuntu 22.04/20.04 |  Kernel 5.15 generic |Yes |Yes |
-| | Mainline |  Kernel 5.15.72 |Yes |No |
-|I915_22WW45.5_476.14_6213_220914.2 | SLES15SP4 | Kernel 5.14 | Yes | Yes |
