@@ -24,6 +24,12 @@ This repo is a code snapshot of particular version of backports and does not con
 	 sudo dnf check-update; sudo dnf install -y kernel-4.18.0-348.7.1.el8_5.x86_64 \
 	 kernel-devel-4.18.0-348.7.1.el8_5.x86_64
 
+  
+|Milestone | Backport Released Tag | OS Version | Kernel Version  | Building | Testing |
+|---- |---  |---  |---  |--- |--- |
+|Flex PV1 |RHEL86_22WW45.5_476.14_6213_220914.1 |RHEL8.6 | 4.18.0-372.26.1 | Yes |Yes |
+| | | RHEL8.5 |  4.18.0-348.23.1 |Yes |No |
+
 # Prerequisite
 we have dependencies on the following packages
   - dkms
@@ -53,6 +59,9 @@ We need to create dmabuf and i915 dkms packages using the below command.
 Above will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
 # Installation
+
+i915 driver has dependency on [VSEC(PMT)](https://github.com/intel-gpu/intel-gpu-pmt-backports/), Please install [Intel Platform Telemetry](https://github.com/intel-gpu/intel-gpu-pmt-backports/) before installting i915 driver.
+    
     sudo rpm -ivh intel-dmabuf-dkms*.rpm intel-i915-dkms*.rpm
     # Reboot the device after installation of all packages.
     sudo reboot
@@ -72,9 +81,4 @@ Please grep **backport**  from dmesg after reboot. you should see something like
     [2.724641] [drm] DRM_KMS_HELPER BACKPORTED INIT
     [2.838672] [drm] I915 BACKPORTED INIT
 
-# Key Released DKMS versions
-  
-| DKMS Released Tag | OS Version | Kernel Version  | DKMS Building | CI Testing |
-|---  |---  |---  |--- |--- |
-|RHEL86_22WW45.5_476.14_6213_220914.1 |RHEL8.6 | 4.18.0-372.26.1 | Yes |Yes |
-| | RHEL8.5 |  4.18.0-348.23.1 |Yes |No |
+
