@@ -25,12 +25,13 @@
 #ifndef __MOCK_UNCORE_H
 #define __MOCK_UNCORE_H
 
-struct intel_uncore_mmio_debug;
 struct drm_i915_private;
 struct intel_uncore;
 
-void mock_uncore_init(struct intel_uncore *uncore,
-		      struct drm_i915_private *i915,
-		      struct intel_uncore_mmio_debug *mmio_debug);
+int mock_uncore_init(struct intel_uncore *uncore,
+		      struct drm_i915_private *i915);
+
+void mock_uncore_uninit(struct intel_uncore *uncore,
+			struct drm_i915_private *i915);
 
 #endif /* !__MOCK_UNCORE_H */

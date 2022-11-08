@@ -23,8 +23,6 @@
  */
 
 #include <linux/kernel.h>
-
-#if defined(CONFIG_X86)
 #include <asm/fpu/api.h>
 #include <linux/iosys-map.h>
 
@@ -169,27 +167,6 @@ void i915_memcpy_init_early(struct drm_i915_private *dev_priv)
 	    !boot_cpu_has(X86_FEATURE_HYPERVISOR))
 		static_branch_enable(&has_movntdqa);
 }
-
-#else
-
-#include <asm/string.h>
-#include "i915_memcpy.h"
-
-void i915_unaligned_memcpy_from_wc(void *dst, const void *src, unsigned long len)
-{
-        memcpy(dst, src, len);
-}
-
-bool i915_memcpy_from_wc(void *dst, const void *src, unsigned long len)
-{
-        return false;
-}
-
-void i915_memcpy_init_early(struct drm_i915_private *dev_priv)
-{
-}
-
-#endif
 
 /**
  * i915_memcpy_iosys_map: perform a memcpy between address in smap to dmap

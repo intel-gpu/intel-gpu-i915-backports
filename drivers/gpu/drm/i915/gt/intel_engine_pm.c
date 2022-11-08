@@ -11,6 +11,7 @@
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
 #include "intel_gt.h"
+#include "intel_gt_ccs_mode.h"
 #include "intel_gt_pm.h"
 #include "intel_rc6.h"
 #include "intel_ring.h"
@@ -128,6 +129,10 @@ __queue_and_release_pm(struct i915_request *rq,
 	struct intel_gt_timelines *timelines = &engine->gt->timelines;
 
 	ENGINE_TRACE(engine, "parking\n");
+
+	GEM_BUG_ON(rq->context->active_count != 1);
+	__intel_gt_pm_get(engine->gt);
+	rq->context->wakeref = intel_wakeref_track(&engine->gt->wakeref);
 
 	/*
 	 * We have to serialise all potential retirement paths with our
@@ -287,6 +292,8 @@ static int __engine_park(struct intel_wakeref *wf)
 
 	if (engine->park)
 		engine->park(engine);
+
+	intel_gt_park_ccs_mode(engine->gt, engine);
 
 	/* While gt calls i915_vma_parked(), we have to break the lock cycle */
 	intel_gt_pm_put_async(engine->gt, engine->wakeref_track);

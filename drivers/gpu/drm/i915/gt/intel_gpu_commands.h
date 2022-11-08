@@ -130,10 +130,12 @@
 #define   MI_SEMAPHORE_SAD_LTE_SDD	(3 << 12)
 #define   MI_SEMAPHORE_SAD_EQ_SDD	(4 << 12)
 #define   MI_SEMAPHORE_SAD_NEQ_SDD	(5 << 12)
+#define MI_STORE_DATA_IMM	MI_INSTR(0x20, 0)
 #define   MI_SEMAPHORE_27_TOKEN_MASK	REG_GENMASK(9, 5)
 #define   MI_SEMAPHORE_256_TOKEN_MASK	REG_GENMASK(9, 2)
 #define   MI_SEMAPHORE_27_TOKEN_SHIFT	5
 #define   MI_SEMAPHORE_256_TOKEN_SHIFT	2
+#define MI_STORE_DATA_IMM	MI_INSTR(0x20, 0)
 #define MI_STORE_DWORD_IMM	MI_INSTR(0x20, 1)
 #define MI_STORE_DWORD_IMM_GEN4	MI_INSTR(0x20, 2)
 #define MI_STORE_QWORD_IMM_GEN8_POSTED (MI_INSTR(0x20, 3) | (1 << 21))
@@ -147,6 +149,10 @@
 #define   MI_ATOMIC_INLINE_DATA		(1 << 18)
 #define   MI_ATOMIC_CS_STALL		(1 << 17)
 #define	  MI_ATOMIC_MOVE		(0x4 << 8)
+#define	  MI_ATOMIC_INC			(0x5 << 8)
+#define	  MI_ATOMIC_DEC			(0x6 << 8)
+#define	  MI_ATOMIC_ADD			(0x7 << 8)
+#define	  MI_ATOMIC_SUB			(0x8 << 8)
 
 /*
  * Official intel docs are somewhat sloppy concerning MI_LOAD_REGISTER_IMM:
@@ -159,18 +165,21 @@
 /* Gen11+. addr = base + (ctx_restore ? offset & GENMASK(12,2) : offset) */
 #define   MI_LRI_DEST_CS_MMIO		REG_BIT(19)
 #define   MI_LRI_LRM_CS_MMIO		REG_BIT(19)
+#define   MI_LRI_MMIO_REMAP_EN		REG_BIT(17)
 #define   MI_LRI_FORCE_POSTED		(1<<12)
 #define MI_LOAD_REGISTER_IMM_MAX_REGS (126)
 #define MI_STORE_REGISTER_MEM        MI_INSTR(0x24, 1)
 #define MI_STORE_REGISTER_MEM_GEN8   MI_INSTR(0x24, 2)
 #define   MI_SRM_LRM_GLOBAL_GTT		(1<<22)
 #define MI_FLUSH_DW		MI_INSTR(0x26, 1) /* for GEN6 */
-#define   MI_FLUSH_DW_PROTECTED_MEM_EN	(1<<22)
+#define   MI_FLUSH_DW_PROTECTED_MEM_EN	(1 << 22)
 #define   MI_FLUSH_DW_STORE_INDEX	(1<<21)
 #define   MI_INVALIDATE_TLB		(1<<18)
-#define   MI_FLUSH_CCS			(1<<16)
+#define   MI_FLUSH_DW_CCS		(1<<16)
 #define   MI_FLUSH_DW_OP_STOREDW	(1<<14)
 #define   MI_FLUSH_DW_OP_MASK		(3<<14)
+#define   MI_FLUSH_DW_LLC		(1<<9)
+#define   MI_FLUSH_CCS			(1<<16)
 #define   MI_FLUSH_LLC			(1<<9)
 #define   MI_FLUSH_DW_NOTIFY		(1<<8)
 #define   MI_INVALIDATE_BSD		(1<<7)
@@ -221,18 +230,29 @@
 #define GFX_OP_DRAWRECT_INFO     ((0x3<<29)|(0x1d<<24)|(0x80<<16)|(0x3))
 #define GFX_OP_DRAWRECT_INFO_I965  ((0x7900<<16)|0x2)
 
-#define XY_CTRL_SURF_COPY_BLT		(2<<29 | 0x48<<22 | 3)
+#define XY_CTRL_SURF_INSTR_SIZE		5
+#define MI_FLUSH_DW_SIZE		3
+#define XY_CTRL_SURF_COPY_BLT		((2 << 29) | (0x48 << 22) | 3)
 #define   SRC_ACCESS_TYPE_SHIFT		21
 #define   DST_ACCESS_TYPE_SHIFT		20
+#define   CCS_SIZE_MASK			0x3FF
 #define   CCS_SIZE_SHIFT		8
+#define   XY_CTRL_SURF_MOCS_MASK	GENMASK(31, 25)
 /* Bspec lists field as [31:25], but index alone is at [31:26] */
 #define   XY_CSC_BLT_MOCS_INDEX_MASK	GENMASK(31, 26)
 #define   NUM_CCS_BYTES_PER_BLOCK	256
-#define   NUM_CCS_BLKS_PER_XFER	1024
+#define   NUM_BYTES_PER_CCS_BYTE	256
+#define   NUM_CCS_BLKS_PER_XFER		1024
 #define   INDIRECT_ACCESS		0
-#define   DIRECT_ACCESS		1
+#define   DIRECT_ACCESS			1
 
 #define COLOR_BLT_CMD			(2 << 29 | 0x40 << 22 | (5 - 2))
+#define XY_COLOR_BLT_CMD		(2 << 29 | 0x50 << 22)
+#define XY_FAST_COLOR_BLT_CMD		(2 << 29 | 0x44 << 22)
+#define   XY_FAST_COLOR_BLT_DEPTH_32	(2 << 19)
+#define   XY_FAST_COLOR_BLT_DW		16
+#define   XY_FAST_COLOR_BLT_MOCS_MASK	GENMASK(27, 21)
+#define   XY_FAST_COLOR_BLT_MEM_TYPE_SHIFT 31
 #define XY_BLOCK_COPY_BLT_CMD       	(2 << 29 | 0x41 << 22)
 #define   DEST_MEM_TYPE_SHIFT		(31)
 #define   SRC_MEM_TYPE_SHIFT		(31)

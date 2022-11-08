@@ -88,7 +88,10 @@ static bool get_tracedebug_region(struct intel_uncore *uncore,
 	if (!IS_XEHPSDV(uncore->i915))
 		return false;
 
-	*size = intel_uncore_read(uncore, XEHPSDV_DBGTRACEMEM_SZ);
+	if (IS_SRIOV_VF(uncore->i915))
+		return false;
+
+	*size = intel_uncore_read(uncore, XEHP_DBGTRACEMEM_SZ);
 	if (!*size)
 		return false;
 
@@ -97,8 +100,8 @@ static bool get_tracedebug_region(struct intel_uncore *uncore,
 
 	*size *= SZ_1M;
 	*start = intel_uncore_read64_2x32(uncore,
-					  XEHPSDV_DBGTRACEMEMBASE_LDW,
-					  XEHPSDV_DBGTRACEMEMBASE_UDW);
+					  XEHP_DBGTRACEMEMBASE_LDW,
+					  XEHP_DBGTRACEMEMBASE_UDW);
 
 	DRM_DEBUG_DRIVER("LMEM: debug trace data region: [0x%llx-0x%llx]\n",
 			 *start, *start + *size);
@@ -172,12 +175,15 @@ int intel_get_tile_range(struct intel_gt *gt,
 	resource_size_t root_lmembar_size;
 	resource_size_t lmem_range;
 	static const i915_reg_t tile_addr_reg[] = {
-		XEHPSDV_TILE0_ADDR_RANGE,
-		XEHPSDV_TILE1_ADDR_RANGE,
-		XEHPSDV_TILE2_ADDR_RANGE,
-		XEHPSDV_TILE3_ADDR_RANGE,
+		XEHP_TILE0_ADDR_RANGE,
+		XEHP_TILE1_ADDR_RANGE,
+		XEHP_TILE2_ADDR_RANGE,
+		XEHP_TILE3_ADDR_RANGE,
 	};
 	u32 instance = gt->info.id;
+
+	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR))
+		return -ENXIO;
 
 	root_lmembar_size = pci_resource_len(pdev, GEN12_LMEM_BAR);
 
@@ -194,8 +200,8 @@ int intel_get_tile_range(struct intel_gt *gt,
 		 * manually. The tile ranges are divided into 1GB granularity
 		 */
 		lmem_range = intel_gt_mcr_read_any(gt, tile_addr_reg[instance]) & 0xFFFF;
-		*lmem_size = lmem_range >> XEHPSDV_TILE_LMEM_RANGE_SHIFT;
-		*lmem_base = (lmem_range & 0xFF) >> XEHPSDV_TILE_LMEM_BASE_SHIFT;
+		*lmem_size = lmem_range >> XEHP_TILE_LMEM_RANGE_SHIFT;
+		*lmem_base = (lmem_range & 0xFF) >> XEHP_TILE_LMEM_BASE_SHIFT;
 
 		*lmem_size *= SZ_1G;
 		*lmem_base *= SZ_1G;
@@ -280,6 +286,7 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 	/* Leave space for per-tile WOPCM/GSM stolen memory at the LMEM roof.
 	 * Applicable only to XEHPSDV/DG2 etc.
 	 */
+
 	if (HAS_FLAT_CCS(i915)) {
 		u64 tile_stolen, flat_ccs_base_addr_reg, flat_ccs_base;
 		u64 actual_flat_ccs_size, expected_flat_ccs_size, bgsm;
@@ -308,8 +315,8 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 			 */
 			flat_ccs_base = flat_ccs_base_addr_reg * (2 * hbm_count);
 		} else {
-			flat_ccs_base_addr_reg = intel_gt_mcr_read_any(gt, XEHPSDV_FLAT_CCS_BASE_ADDR);
-			flat_ccs_base = (flat_ccs_base_addr_reg >> XEHPSDV_CCS_BASE_SHIFT) * SZ_64K;
+			flat_ccs_base_addr_reg = intel_gt_mcr_read_any(gt, XEHP_FLAT_CCS_BASE_ADDR);
+			flat_ccs_base = (flat_ccs_base_addr_reg >> XEHP_CCS_BASE_SHIFT) * SZ_64K;
 		}
 
 		/* CCS to LMEM size ratio is 1:256 */
@@ -319,8 +326,8 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 
 		/* If the FLAT_CCS_BASE_ADDR register is not populated, flag an error */
 		if (tile_stolen == lmem_size)
-			drm_err(&i915->drm, "CCS_BASE_ADDR register did not have expected value\n");
-
+			drm_err(&i915->drm,
+				"CCS_BASE_ADDR register did not have expected value\n");
 		/*
 		 * If the actual flat ccs size is greater than the expected
 		 * value, then there is memory degradation
@@ -330,10 +337,12 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 			drm_err(&i915->drm, "CCS_BASE_ADDR register did not have expected value - and memory degradation might have occurred\n");
 			is_degraded = true;
 		}
+
 		lmem_size -= tile_stolen;
 	} else {
 		/* Stolen starts from GSMBASE without CCS */
 		lmem_size = intel_uncore_read64(uncore, GEN12_GSMBASE) - lmem_base;
+
 	}
 
 create_region:
@@ -350,16 +359,20 @@ create_region:
 			lmem_size = min(lmem_size, root_lmembar_size);
 			drm_warn(&i915->drm, "Continuing with reduced LMEM size: %pa\n", &lmem_size);
 		}
+ 	}
+ 
+	if (i915->params.lmem_size > 0) {
+		lmem_size = min_t(resource_size_t, lmem_size,
+				  mul_u32_u32(i915->params.lmem_size, SZ_1M));
 	}
+
+	if (GEM_WARN_ON(lmem_size > pci_resource_len(pdev, GEN12_LMEM_BAR)))
+		return ERR_PTR(-ENODEV);
 
 	io_start = pci_resource_start(pdev, GEN12_LMEM_BAR) + lmem_base;
 
 	min_page_size = HAS_64K_PAGES(i915) ? I915_GTT_PAGE_SIZE_64K :
 						I915_GTT_PAGE_SIZE_4K;
-
-	if (i915->params.lmem_size > 0)
-		lmem_size = min_t(resource_size_t, lmem_size,
-				  mul_u32_u32(i915->params.lmem_size, SZ_1M));
 
 	/* Add the DPA (device physical address) offset */
 	lmem_base += i915->intel_iaf.dpa;

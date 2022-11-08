@@ -16,6 +16,7 @@
 #include <drm/intel_iaf_platform.h>
 
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_regs.h"
 
 #include "i915_drv.h"
 #include "intel_iaf.h"
@@ -121,16 +122,16 @@ static struct iaf_pdata *init_pd(struct drm_i915_private *i915)
 	 * Each tile will have the same amount of memory, so we only need to
 	 * read the first one.
 	 */
-	reg = intel_uncore_read(&i915->uncore, XEHPSDV_TILE0_ADDR_RANGE) &
-		XEHPSDV_TILE_LMEM_RANGE_MASK;
+	reg = intel_uncore_read(&i915->uncore, XEHP_TILE0_ADDR_RANGE) &
+		XEHP_TILE_LMEM_RANGE_MASK;
 
 	// FIXME: On some systems, TILE0 is < 8Gb. PVC needs 8GB, so fake it.
-	if (reg >> XEHPSDV_TILE_LMEM_RANGE_SHIFT < 8) {
-		drm_err(&i915->drm, "XEHPSDV_TILE0_ADDR_RANGE: %x\n", reg);
-		reg = 8 << XEHPSDV_TILE_LMEM_RANGE_SHIFT;
+	if (reg >> XEHP_TILE_LMEM_RANGE_SHIFT < 8) {
+		drm_err(&i915->drm, "XEHP_TILE0_ADDR_RANGE: %x\n", reg);
+		reg = 8 << XEHP_TILE_LMEM_RANGE_SHIFT;
 	}
 	pd->dpa.pkg_offset = (u32)i915->intel_iaf.index * MAX_DPA_SIZE;
-	pd->dpa.pkg_size = (reg >> XEHPSDV_TILE_LMEM_RANGE_SHIFT) * pd->sd_cnt;
+	pd->dpa.pkg_size = (reg >> XEHP_TILE_LMEM_RANGE_SHIFT) * pd->sd_cnt;
 
 	return pd;
 }

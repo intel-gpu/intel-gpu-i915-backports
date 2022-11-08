@@ -117,11 +117,13 @@
 #include "intel_pm.h"
 #include "vlv_suspend.h"
 
-#if !defined(CONFIG_X86)
-struct resource intel_graphics_stolen_res __ro_after_init = DEFINE_RES_MEM(0, 0);
-#endif
-
 static const struct drm_driver i915_drm_driver;
+
+static void i915_release_bridge_dev(struct drm_device *dev,
+				    void *bridge)
+{
+	pci_dev_put(bridge);
+}
 
 static const char *i915_driver_errors_to_str[] = {
 	[I915_DRIVER_ERROR_OBJECT_MIGRATION] = "OBJECT MIGRATION",
@@ -194,7 +196,9 @@ static int i915_get_bridge_dev(struct drm_i915_private *dev_priv)
 		drm_err(&dev_priv->drm, "bridge device not found\n");
 		return -EIO;
 	}
-	return 0;
+
+	return drmm_add_action_or_reset(&dev_priv->drm, i915_release_bridge_dev,
+					dev_priv->bridge_dev);
 }
 
 /* Allocate space for the MCH regs if needed, return nonzero on error */
@@ -609,6 +613,8 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	intel_device_info_subplatform_init(dev_priv);
 	intel_step_init(dev_priv);
 
+	intel_uncore_mmio_debug_init_early(dev_priv);
+
 	spin_lock_init(&dev_priv->irq_lock);
 	spin_lock_init(&dev_priv->gpu_error.lock);
 	mutex_init(&dev_priv->backlight_lock);
@@ -634,9 +640,9 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	if (ret < 0)
 		goto err_workqueues;
 
-	ret = intel_gt_init_early(to_root_gt(dev_priv), dev_priv);
+	ret = intel_root_gt_init_early(dev_priv);
 	if (ret < 0)
-		goto err_workqueues;
+		goto err_rootgt;
 
 	i915_drm_clients_init(&dev_priv->clients, dev_priv);
 
@@ -664,7 +670,8 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 
 err_gem:
 	i915_gem_cleanup_early(dev_priv);
-	intel_gt_driver_late_release(to_root_gt(dev_priv));
+	intel_gt_driver_late_release_all(dev_priv);
+err_rootgt:
 	i915_drm_clients_fini(&dev_priv->clients);
 	vlv_suspend_cleanup(dev_priv);
 err_workqueues:
@@ -781,15 +788,11 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
  */
 static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 {
-	struct intel_gt *gt;
-	unsigned int id;
-
 	intel_irq_fini(dev_priv);
 	intel_power_domains_cleanup(dev_priv);
 	i915_gem_cleanup_early(dev_priv);
 	i915_debugger_fini(dev_priv);
-	for_each_gt(gt, dev_priv, id)
-		intel_gt_driver_late_release(gt);
+	intel_gt_driver_late_release_all(dev_priv);
 	i915_drm_clients_fini(&dev_priv->clients);
 	vlv_suspend_cleanup(dev_priv);
 	i915_workqueues_cleanup(dev_priv);
@@ -871,8 +874,7 @@ static void init_fake_interrupts(struct intel_gt *gt)
 static int i915_driver_mmio_probe(struct drm_i915_private *dev_priv)
 {
 	struct intel_gt *gt;
-	unsigned int i, j;
-	int ret;
+	int ret, i;
 
 	if (i915_inject_probe_failure(dev_priv))
 		return -ENODEV;
@@ -884,38 +886,36 @@ static int i915_driver_mmio_probe(struct drm_i915_private *dev_priv)
 	for_each_gt(gt, dev_priv, i) {
 		ret = intel_uncore_init_mmio(gt->uncore);
 		if (ret)
-			goto err_uncore;
-	} /* keep i for err_uncore unwinding below */
+			return ret;
+
+		ret = drmm_add_action_or_reset(&dev_priv->drm,
+					       intel_uncore_fini_mmio,
+					       gt->uncore);
+		if (ret)
+			return ret;
+	}
 
 	/* Try to make sure MCHBAR is enabled before poking at it */
 	intel_setup_mchbar(dev_priv);
 	intel_device_info_runtime_init(dev_priv);
 
-	for_each_gt(gt, dev_priv, j) {
+	for_each_gt(gt, dev_priv, i) {
 		ret = intel_gt_init_mmio(gt);
 		if (ret)
-			goto err_mchbar;
+			goto err_uncore;
 
 		init_fake_interrupts(gt);
 	}
 
 	intel_iaf_init_mmio(dev_priv);
-	intel_power_domains_prune(dev_priv);
 
 	/* As early as possible, scrub existing GPU state before clobbering */
 	sanitize_gpu(dev_priv);
 
 	return 0;
 
-err_mchbar:
-	intel_teardown_mchbar(dev_priv);
 err_uncore:
-	for_each_gt(gt, dev_priv, j) {
-		if (j >= i)
-			break;
-		intel_uncore_fini_mmio(gt->uncore);
-	}
-	pci_dev_put(dev_priv->bridge_dev);
+	intel_teardown_mchbar(dev_priv);
 
 	return ret;
 }
@@ -926,13 +926,7 @@ err_uncore:
  */
 static void i915_driver_mmio_release(struct drm_i915_private *dev_priv)
 {
-	struct intel_gt *gt;
-	unsigned int i;
-
 	intel_teardown_mchbar(dev_priv);
-	for_each_gt(gt, dev_priv, i)
-		intel_uncore_fini_mmio(gt->uncore);
-	pci_dev_put(dev_priv->bridge_dev);
 }
 
 static void intel_sanitize_options(struct drm_i915_private *dev_priv)
@@ -1191,7 +1185,7 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 {
 	struct drm_device *dev = &dev_priv->drm;
 	struct intel_gt *gt;
-	int i;
+	unsigned int i;
 
 	i915_gem_driver_register(dev_priv);
 	i915_pmu_register(dev_priv);
@@ -1222,7 +1216,7 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_register(gt);
 
-#ifdef CONFIG_HWMON
+#if IS_REACHABLE(CONFIG_HWMON)
 	if (!IS_SRIOV_VF(dev_priv))
 		i915_hwmon_register(dev_priv);
 #endif
@@ -1266,7 +1260,7 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 #endif
 	intel_display_driver_unregister(dev_priv);
 
-#ifdef CONFIG_HWMON
+#if IS_REACHABLE(CONFIG_HWMON)
 	i915_hwmon_unregister(dev_priv);
 #endif
 	for_each_gt(gt, dev_priv, i)
@@ -1308,7 +1302,7 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 	if (drm_debug_enabled(DRM_UT_DRIVER)) {
 		struct drm_printer p = drm_debug_printer("i915 device info:");
 		struct intel_gt *gt;
-		unsigned int id;
+		unsigned int i;
 
 		drm_printf(&p, "pciid=0x%04x rev=0x%02x platform=%s (subplatform=0x%x) gen=%i\n",
 			   INTEL_DEVID(dev_priv),
@@ -1321,7 +1315,7 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 		intel_device_info_print_static(INTEL_INFO(dev_priv), &p);
 		intel_device_info_print_runtime(RUNTIME_INFO(dev_priv), &p);
 		i915_print_iommu_status(dev_priv, &p);
-		for_each_gt(gt, dev_priv, id)
+		for_each_gt(gt, dev_priv, i)
 			intel_gt_info_print(&gt->info, &p);
 
 		drm_printf(&p, "mode: %s\n", i915_iov_mode_to_string(IOV_MODE(dev_priv)));
@@ -1410,6 +1404,9 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		goto out_fini;
 
+	/* This must be called before any calls to IS/IOV_MODE() macros */
+	i915_virtualization_probe(i915);
+
 	/*
 	 * GRAPHICS_VER() and DISPLAY_VER() will return 0 before this is
 	 * called, so we want to take care of this very early in the
@@ -1427,9 +1424,6 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_driver_late_release;
 
 	disable_rpm_wakeref_asserts(&i915->runtime_pm);
-
-	/* This must be called before any calls to IS/IOV_MODE() macros */
-	i915_virtualization_probe(i915);
 
 	ret = i915_sriov_early_tweaks(i915);
 	if (ret < 0)
@@ -1450,7 +1444,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		}
 	}
 
-	ret = intel_probe_gts(i915);
+	ret = intel_gt_probe_all(i915);
 	if (ret < 0)
 		goto out_runtime_pm_put;
 
@@ -1530,7 +1524,7 @@ out_cleanup_hw:
 out_cleanup_mmio:
 	i915_driver_mmio_release(i915);
 out_tiles_cleanup:
-	intel_gt_tiles_cleanup(i915);
+	intel_gt_release_all(i915);
 out_runtime_pm_put:
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
 out_driver_late_release:
@@ -1918,8 +1912,7 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	struct intel_runtime_pm *rpm = &dev_priv->runtime_pm;
 	struct intel_gt *gt;
-	unsigned int i;
-	int ret;
+	int ret, i;
 
 	disable_rpm_wakeref_asserts(rpm);
 
@@ -2071,8 +2064,7 @@ static int i915_drm_resume_early(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	struct intel_gt *gt;
-	unsigned int i;
-	int ret;
+	int ret, i;
 
 	/*
 	 * We have a resume ordering issue with the snd-hda driver also
@@ -2352,8 +2344,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	struct intel_runtime_pm *rpm = &dev_priv->runtime_pm;
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	struct intel_gt *gt;
-	unsigned int i;
-	int ret;
+	int ret, i;
 
 	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
@@ -2448,8 +2439,7 @@ static int intel_runtime_resume(struct device *kdev)
 	struct intel_runtime_pm *rpm = &dev_priv->runtime_pm;
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 	struct intel_gt *gt;
-	unsigned int i;
-	int ret;
+	int ret, i;
 
 	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;

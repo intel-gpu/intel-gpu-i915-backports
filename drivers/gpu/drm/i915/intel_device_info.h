@@ -39,6 +39,7 @@
 
 struct drm_printer;
 struct drm_i915_private;
+struct intel_gt_definition;
 
 /* Keep in gen based order, and chronological order within a gen */
 enum intel_platform {
@@ -234,24 +235,6 @@ struct ip_version {
 	u8 step;
 };
 
-enum intel_gt_type {
-	GT_PRIMARY,
-	GT_TILE,
-	GT_MEDIA,
-};
-
-struct intel_gt_definition {
-	enum intel_gt_type type;
-	char *name;
-	int (*setup)(struct intel_gt *gt,
-		     unsigned int id,
-		     phys_addr_t phys_addr,
-		     u32 gsi_offset);
-	u32 mapping_base;
-	u32 gsi_offset;
-	intel_engine_mask_t engine_mask;
-};
-
 struct intel_device_info {
 	struct ip_version graphics;
 	struct ip_version media;
@@ -271,9 +254,7 @@ struct intel_device_info {
 
 	u32 memory_regions; /* regions supported by the HW */
 
-	const struct intel_gt_definition *extra_gts;
-
-	u32 display_mmio_offset;
+	const struct intel_gt_definition *extra_gt_list;
 
 	u8 gt; /* GT number, 0 if undefined */
 
@@ -290,27 +271,30 @@ struct intel_device_info {
 		u8 fbc_mask;
 		u8 abox_mask;
 
+		struct {
+			u16 size; /* in blocks */
+			u8 slice_mask;
+		} dbuf;
+
 #define DEFINE_FLAG(name) u8 name:1
 		DEV_INFO_DISPLAY_FOR_EACH_FLAG(DEFINE_FLAG);
 #undef DEFINE_FLAG
+
+		/* Global register offset for the display engine */
+		u32 mmio_offset;
+
+		/* Register offsets for the various display pipes and transcoders */
+		u32 pipe_offsets[I915_MAX_TRANSCODERS];
+		u32 trans_offsets[I915_MAX_TRANSCODERS];
+		u32 cursor_offsets[I915_MAX_PIPES];
+
+		struct {
+			u32 degamma_lut_size;
+			u32 gamma_lut_size;
+			u32 degamma_lut_tests;
+			u32 gamma_lut_tests;
+		} color;
 	} display;
-
-	struct {
-		u16 size; /* in blocks */
-		u8 slice_mask;
-	} dbuf;
-
-	/* Register offsets for the various display pipes and transcoders */
-	int pipe_offsets[I915_MAX_TRANSCODERS];
-	int trans_offsets[I915_MAX_TRANSCODERS];
-	int cursor_offsets[I915_MAX_PIPES];
-
-	struct color_luts {
-		u32 degamma_lut_size;
-		u32 gamma_lut_size;
-		u32 degamma_lut_tests;
-		u32 gamma_lut_tests;
-	} color;
 
 	unsigned int cachelevel_to_pat[I915_MAX_CACHE_LEVEL];
 };

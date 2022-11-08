@@ -1569,7 +1569,9 @@ int intel_display_power_map_init(struct i915_power_domains *power_domains)
 		return 0;
 	}
 
-	if (DISPLAY_VER(i915) >= 14)
+	if (IS_SRIOV_VF(i915))
+		return set_power_wells(power_domains, i9xx_power_wells);
+	else if (DISPLAY_VER(i915) >= 14)
 		return set_power_wells(power_domains, xelpdp_power_wells);
 	else if (DISPLAY_VER(i915) >= 13)
 		return set_power_wells(power_domains, xelpd_power_wells);
@@ -1601,27 +1603,6 @@ int intel_display_power_map_init(struct i915_power_domains *power_domains)
 		return set_power_wells(power_domains, i830_power_wells);
 	else
 		return set_power_wells(power_domains, i9xx_power_wells);
-}
-
-/**
- * intel_display_power_map_prune - prune power domain -> power well mappings
- * @power_domains: power domain state
- *
- * Replace the current mapping with all domains pointing to the always-on
- * power well, in practice disabling the display power domain functionality.
- * Needed for an SRIOV_VF initialization quirk, not to be used elsewhere.
- *
- * FIXME: fix this by setting up the correct mapping in
- * intel_display_power_map_init() instead.
- */
-void intel_display_power_map_prune(struct i915_power_domains *power_domains)
-{
-	struct drm_i915_private *i915 = container_of(power_domains,
-						     struct drm_i915_private,
-						     power_domains);
-
-	kfree(power_domains->power_wells);
-	drm_WARN_ON(&i915->drm, set_power_wells(power_domains, i9xx_power_wells) < 0);
 }
 
 /**

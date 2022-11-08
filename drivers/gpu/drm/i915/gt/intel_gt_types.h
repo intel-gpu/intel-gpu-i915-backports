@@ -32,6 +32,7 @@
 #include "intel_reset_types.h"
 #include "intel_rc6_types.h"
 #include "intel_rps_types.h"
+#include "intel_migrate_types.h"
 #include "intel_wakeref.h"
 #include "pxp/intel_pxp_types.h"
 #include "intel_wopcm.h"
@@ -149,13 +150,18 @@ struct intel_rps_defaults {
 	u32 base_freq_factor;
 };
 
+enum intel_gt_type {
+	GT_PRIMARY,
+	GT_TILE,
+	GT_MEDIA,
+};
+
 struct intel_gt {
 	struct drm_i915_private *i915;
 	const char *name;
 	enum intel_gt_type type;
 
 	struct intel_uncore *uncore;
-	struct intel_uncore_mmio_debug *mmio_debug;
 	struct i915_ggtt *ggtt;
 
 	struct intel_uc uc;
@@ -279,6 +285,15 @@ struct intel_gt {
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
 	struct intel_engine_cs *engine_class[MAX_ENGINE_CLASS + 1]
 					    [MAX_ENGINE_INSTANCE + 1];
+	struct {
+		/* Serialize CCS mode access */
+		struct mutex mutex;
+		/* Active CCS engines */
+		intel_engine_mask_t active;
+		/* CCS context -> C-slice */
+		intel_engine_mask_t config;
+	} ccs;
+
 	enum intel_submission_method submission_method;
 
 	/*
@@ -302,6 +317,7 @@ struct intel_gt {
 	struct i915_vma *scratch;
 
 	const struct intel_mmio_range *steering_table[NUM_STEERING_TYPES];
+	struct intel_migrate migrate;
 
 	struct {
 		u8 groupid;
@@ -369,6 +385,14 @@ struct intel_gt {
 
 	/** link: &ggtt.gt_list */
 	struct list_head ggtt_link;
+};
+
+struct intel_gt_definition {
+	enum intel_gt_type type;
+	char *name;
+	u32 mapping_base;
+	u32 gsi_offset;
+	intel_engine_mask_t engine_mask;
 };
 
 enum intel_gt_scratch_field {

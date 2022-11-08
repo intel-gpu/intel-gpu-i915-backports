@@ -551,30 +551,19 @@ static void ilk_color_commit_noarm(const struct intel_crtc_state *crtc_state)
 
 static void i9xx_color_commit_arm(const struct intel_crtc_state *crtc_state)
 {
-	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	enum pipe pipe = crtc->pipe;
-	u32 val;
-
-	val = intel_de_read(dev_priv, PIPECONF(pipe));
-	val &= ~PIPECONF_GAMMA_MODE_MASK_I9XX;
-	val |= PIPECONF_GAMMA_MODE(crtc_state->gamma_mode);
-	intel_de_write(dev_priv, PIPECONF(pipe), val);
+	/* update PIPECONF GAMMA_MODE */
+	i9xx_set_pipeconf(crtc_state);
 }
 
 static void ilk_color_commit_arm(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	enum pipe pipe = crtc->pipe;
-	u32 val;
 
-	val = intel_de_read(dev_priv, PIPECONF(pipe));
-	val &= ~PIPECONF_GAMMA_MODE_MASK_ILK;
-	val |= PIPECONF_GAMMA_MODE(crtc_state->gamma_mode);
-	intel_de_write(dev_priv, PIPECONF(pipe), val);
+	/* update PIPECONF GAMMA_MODE */
+	ilk_set_pipeconf(crtc_state);
 
-	intel_de_write_fw(dev_priv, PIPE_CSC_MODE(pipe),
+	intel_de_write_fw(dev_priv, PIPE_CSC_MODE(crtc->pipe),
 			  crtc_state->csc_mode);
 }
 
@@ -898,7 +887,7 @@ static void glk_load_degamma_lut(const struct intel_crtc_state *crtc_state)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum pipe pipe = crtc->pipe;
-	int i, lut_size = INTEL_INFO(dev_priv)->color.degamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.degamma_lut_size;
 	const struct drm_color_lut *lut = crtc_state->hw.degamma_lut->data;
 
 	/*
@@ -940,7 +929,7 @@ static void glk_load_degamma_lut_linear(const struct intel_crtc_state *crtc_stat
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum pipe pipe = crtc->pipe;
-	int i, lut_size = INTEL_INFO(dev_priv)->color.degamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.degamma_lut_size;
 
 	/*
 	 * When setting the auto-increment bit, the hardware seems to
@@ -1167,7 +1156,7 @@ xelpd_program_logarithmic_gamma_lut(const struct intel_crtc_state *crtc_state)
 	if (crtc_state->uapi.advance_gamma_mode_active)
 		lut_size = drm_color_lut_size(blob);
 	else
-		lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+		lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 
 	lut = blob->data;
 	intel_dsb_reg_write(crtc_state, PREC_PAL_INDEX(pipe),
@@ -1479,7 +1468,7 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 		return -EINVAL;
 	}
 
-	degamma_length = INTEL_INFO(dev_priv)->color.degamma_lut_size;
+	degamma_length = INTEL_INFO(dev_priv)->display.color.degamma_lut_size;
 
 	/*
 	 * In case of advance gamma i.e logarithmic, lut size
@@ -1490,10 +1479,10 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 	if (gamma_lut && crtc_state->uapi.advance_gamma_mode_active)
 		gamma_length = drm_color_lut_size(gamma_lut);
 	else
-		gamma_length = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+		gamma_length = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 
-	degamma_tests = INTEL_INFO(dev_priv)->color.degamma_lut_tests;
-	gamma_tests = INTEL_INFO(dev_priv)->color.gamma_lut_tests;
+	degamma_tests = INTEL_INFO(dev_priv)->display.color.degamma_lut_tests;
+	gamma_tests = INTEL_INFO(dev_priv)->display.color.gamma_lut_tests;
 
 	if (check_lut_size(degamma_lut, degamma_length) ||
 	    check_lut_size(gamma_lut, gamma_length))
@@ -2066,7 +2055,7 @@ static void i9xx_read_luts(struct intel_crtc_state *crtc_state)
 static struct drm_property_blob *i965_read_lut_10p6(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	int i, lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
@@ -2109,7 +2098,7 @@ static void i965_read_luts(struct intel_crtc_state *crtc_state)
 static struct drm_property_blob *chv_read_cgm_gamma(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	int i, lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
@@ -2170,7 +2159,7 @@ static struct drm_property_blob *ilk_read_lut_8(struct intel_crtc *crtc)
 static struct drm_property_blob *ilk_read_lut_10(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	int i, lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
@@ -2221,7 +2210,7 @@ static struct drm_property_blob *bdw_read_lut_10(struct intel_crtc *crtc,
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	int i, hw_lut_size = ivb_lut_10_size(prec_index);
-	int lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+	int lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
@@ -2274,7 +2263,7 @@ static struct drm_property_blob *
 icl_read_lut_multi_segment(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	int i, lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
@@ -2364,7 +2353,7 @@ xelpd_read_lut_logarithmic(struct intel_crtc *crtc)
 	if (crtc_state->uapi.advance_gamma_mode_active)
 		lut_size = drm_color_lut_size(gamma_lut);
 	else
-		lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+		lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 
 	blob = drm_property_create_blob(&dev_priv->drm,
 					sizeof(struct drm_color_lut) * lut_size,
@@ -3210,7 +3199,7 @@ int intel_color_plane_init(struct drm_plane *plane)
 void intel_color_init(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	bool has_ctm = INTEL_INFO(dev_priv)->color.degamma_lut_size != 0;
+	bool has_ctm = INTEL_INFO(dev_priv)->display.color.degamma_lut_size != 0;
 
 	drm_mode_crtc_set_gamma_size(&crtc->base, 256);
 
@@ -3252,7 +3241,7 @@ void intel_color_init(struct intel_crtc *crtc)
 	}
 
 	drm_crtc_enable_color_mgmt(&crtc->base,
-				   INTEL_INFO(dev_priv)->color.degamma_lut_size,
+				   INTEL_INFO(dev_priv)->display.color.degamma_lut_size,
 				   has_ctm,
-				   INTEL_INFO(dev_priv)->color.gamma_lut_size);
+				   INTEL_INFO(dev_priv)->display.color.gamma_lut_size);
 }

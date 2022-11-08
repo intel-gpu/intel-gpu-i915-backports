@@ -463,15 +463,17 @@ static int tgl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel
 		int clpchgroup;
 		int j;
 
-		if (i < num_groups - 1)
-			bi_next = &dev_priv->max_bw[i + 1];
-
 		clpchgroup = (sa->deburst * qi.deinterleave / num_channels) << i;
 
-		if (i < num_groups - 1 && clpchgroup < clperchgroup)
-			bi_next->num_planes = (ipqdepth - clpchgroup) / clpchgroup + 1;
-		else
-			bi_next->num_planes = 0;
+		if (i < num_groups - 1) {
+			bi_next = &dev_priv->max_bw[i + 1];
+
+			if (clpchgroup < clperchgroup)
+				bi_next->num_planes = (ipqdepth - clpchgroup) /
+						       clpchgroup + 1;
+			else
+				bi_next->num_planes = 0;
+		}
 
 		bi->num_qgv_points = qi.num_points;
 		bi->num_psf_gv_points = qi.num_psf_points;
@@ -621,7 +623,7 @@ void intel_bw_init_hw(struct drm_i915_private *dev_priv)
 		tgl_get_bw_info(dev_priv, &mtl_sa_info);
 	else if (IS_DG2(dev_priv))
 		dg2_get_bw_info(dev_priv);
-	else if (IS_ALDERLAKE_P(dev_priv))
+	else if (DISPLAY_VER(dev_priv) >= 13 || IS_ALDERLAKE_P(dev_priv))
 		tgl_get_bw_info(dev_priv, &adlp_sa_info);
 	else if (IS_ALDERLAKE_S(dev_priv))
 		tgl_get_bw_info(dev_priv, &adls_sa_info);

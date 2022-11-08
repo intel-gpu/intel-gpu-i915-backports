@@ -16,7 +16,7 @@
 
 #if defined(CONFIG_X86)
 #include <asm/smp.h>
-#elif !defined(wbinvd_on_all_cpus)
+#else
 #define wbinvd_on_all_cpus() \
 	pr_warn(DRIVER_NAME ": Missing cache flush in %s\n", __func__)
 #endif
@@ -150,7 +150,7 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 			continue;
 		spin_unlock_irq(&i915->gem.contexts.lock);
 
-		vm = i915_gem_context_get_vm_rcu(ctx);
+		vm = i915_gem_context_get_eb_vm(ctx);
 		if (vm) {
 			mutex_lock(&vm->mutex);
 			GEM_WARN_ON(i915_gem_evict_vm(vm));

@@ -5,6 +5,8 @@
 
 #include <drm/drm_managed.h>
 
+#include "i915_drv.h"
+#include "gt/intel_gt.h"
 #include "gt/intel_sa_media.h"
 #include "gt/iov/intel_iov.h"
 
@@ -19,11 +21,11 @@ int intel_sa_mediagt_setup(struct intel_gt *gt, unsigned int id,
 	if (!uncore)
 		return -ENOMEM;
 
-	uncore->gt = gt;
 	uncore->gsi_offset = gsi_offset;
 
-	__intel_gt_init_early(gt, uncore, to_gt(i915)->irq_lock, &i915->mmio_debug, i915);
-	intel_uncore_init_early(uncore, gt, &i915->mmio_debug);
+	gt->irq_lock = to_gt(i915)->irq_lock;
+	intel_gt_common_init_early(gt);
+	intel_uncore_init_early(uncore, gt);
 	intel_iov_init_early(&gt->iov);
 
 	/*
@@ -34,6 +36,7 @@ int intel_sa_mediagt_setup(struct intel_gt *gt, unsigned int id,
 	if (drm_WARN_ON(&i915->drm, uncore->regs == NULL))
 		return -EIO;
 
+	gt->uncore = uncore;
 	gt->phys_addr = phys_addr;
 
 	err = intel_iov_init_mmio(&gt->iov);

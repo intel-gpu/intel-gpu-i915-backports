@@ -26,21 +26,6 @@ struct recoverable_page_fault_info {
 	u8 fault_unsuccessful;
 };
 
-enum recoverable_page_fault_type {
-	FAULT_READ_NOT_PRESENT = 0x0,
-	FAULT_WRITE_NOT_PRESENT = 0x1,
-	FAULT_ATOMIC_NOT_PRESENT = 0x2,
-	FAULT_WRITE_ACCESS_VIOLATION = 0x5,
-	FAULT_ATOMIC_ACCESS_VIOLATION = 0xa,
-};
-
-enum access_type {
-	ACCESS_TYPE_READ = 0,
-	ACCESS_TYPE_WRITE = 1,
-	ACCESS_TYPE_ATOMIC = 2,
-	ACCESS_TYPE_RESERVED = 3,
-};
-
 struct acc_info {
 	u64 va_range_base;
 	u32 asid;
@@ -73,9 +58,9 @@ static inline int sub_granularity_in_byte(int val)
 	return (granularity_in_byte(val) / 32);
 }
 
-const char *intel_pagefault_type2str(enum recoverable_page_fault_type type);
+const char *intel_pagefault_type2str(unsigned int type);
 
-const char *intel_access_type2str(int type);
+const char *intel_access_type2str(unsigned int type);
 
 int intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, const u32 *msg, u32 len);
 int intel_gt_pagefault_process_page_fault_msg(struct intel_gt *gt, const u32 *msg, u32 len);

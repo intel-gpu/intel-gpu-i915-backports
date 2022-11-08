@@ -59,25 +59,25 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  * firmware as TGL.
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_def) \
-	fw_def(METEORLAKE,   0, guc_def(mtl,  70, 2, 0)) \
-	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 2, 0)) \
-	fw_def(DG2,          0, guc_def(dg2,  70, 2, 0)) \
-	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 2, 0)) \
-	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 2, 0)) \
-	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(DG1,          0, guc_def(dg1,  70, 2, 0)) \
-	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 2, 0)) \
-	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 2, 0)) \
-	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 2, 0)) \
-	fw_def(ICELAKE,      0, guc_def(icl,  70, 2, 0)) \
-	fw_def(COMETLAKE,    5, guc_def(cml,  70, 2, 0)) \
-	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 2, 0)) \
-	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 2, 0)) \
-	fw_def(BROXTON,      0, guc_def(bxt,  70, 2, 0)) \
-	fw_def(SKYLAKE,      0, guc_def(skl,  70, 2, 0))
+	fw_def(METEORLAKE,   0, guc_def(mtl,  70, 4, 1)) \
+	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 4, 1)) \
+	fw_def(DG2,          0, guc_def(dg2,  70, 4, 1)) \
+	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 4, 1)) \
+	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 4, 1)) \
+	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(DG1,          0, guc_def(dg1,  70, 4, 1)) \
+	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 4, 1)) \
+	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 4, 1)) \
+	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 4, 1)) \
+	fw_def(ICELAKE,      0, guc_def(icl,  70, 4, 1)) \
+	fw_def(COMETLAKE,    5, guc_def(cml,  70, 4, 1)) \
+	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 4, 1)) \
+	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 4, 1)) \
+	fw_def(BROXTON,      0, guc_def(bxt,  70, 4, 1)) \
+	fw_def(SKYLAKE,      0, guc_def(skl,  70, 4, 1))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_dma_def, huc_gsc_def) \
 	fw_def(METEORLAKE,   0, huc_gsc_def(mtl,  8, 3, 0)) \
