@@ -31,7 +31,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 | Mainline LTS kernel ( 5.15 LTS) | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_UBUNTU.md)| Yes | No |
 
 
-# Product Milestone releases
+# Product releases
 
 | Product | TAG |Supported OS |
 |---- |--- |--- |
