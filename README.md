@@ -25,9 +25,9 @@ This repo is a code snapshot of particular version of backports and does not con
 	 kernel-devel-4.18.0-348.7.1.el8_5.x86_64
 
   
-|Milestone | Backport Released Tag | OS Version | Kernel Version  | Building | Testing |
+|Product | Backport Released Tag | OS Version | Kernel Version  | Building | Testing |
 |---- |---  |---  |---  |--- |--- |
-|Flex PV1 |RHEL86_22WW45.5_476.14_6213_220914.1 |RHEL8.6 | 4.18.0-372.26.1 | Yes |Yes |
+|Intel® Data Center GPU Flex Series |RHEL86_22WW45.5_476.14_6213_220914.2 |RHEL8.6 | 4.18.0-372.26.1 | Yes |Yes |
 | | | RHEL8.5 |  4.18.0-348.23.1 |Yes |No |
 
 # Prerequisite
