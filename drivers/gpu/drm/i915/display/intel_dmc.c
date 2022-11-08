@@ -52,6 +52,11 @@
 
 #define DISPLAY_VER12_DMC_MAX_FW_SIZE	ICL_DMC_MAX_FW_SIZE
 
+#define MTL_DMC_PATH			DMC_PATH(mtl, 2, 08)
+#define MTL_DMC_VERSION_REQUIRED	DMC_VERSION(2, 8)
+#define MTL_DMC_MAX_FW_SIZE		0x10000
+MODULE_FIRMWARE(MTL_DMC_PATH);
+
 #define DG2_DMC_PATH			DMC_PATH(dg2, 2, 07)
 #define DG2_DMC_VERSION_REQUIRED	DMC_VERSION(2, 07)
 MODULE_FIRMWARE(DG2_DMC_PATH);
@@ -383,6 +388,30 @@ static void disable_all_event_handlers(struct drm_i915_private *i915)
 	}
 }
 
+static void pipedmc_clock_gating_wa(struct drm_i915_private *i915, bool enable)
+{
+	enum pipe pipe;
+
+	if (DISPLAY_VER(i915) != 13)
+		return;
+
+	/*
+	 * Wa_16015201720:adl-p,dg2
+	 * The WA requires clock gating to be disabled all the time
+	 * for pipe A and B.
+	 * For pipe C and D clock gating needs to be disabled only
+	 * during initializing the firmware.
+	 */
+	if (enable)
+		for (pipe = PIPE_A; pipe <= PIPE_D; pipe++)
+			intel_de_rmw(i915, CLKGATE_DIS_PSL_EXT(pipe),
+				     0, PIPEDMC_GATING_DIS);
+	else
+		for (pipe = PIPE_C; pipe <= PIPE_D; pipe++)
+			intel_de_rmw(i915, CLKGATE_DIS_PSL_EXT(pipe),
+				     PIPEDMC_GATING_DIS, 0);
+}
+
 /**
  * intel_dmc_load_program() - write the firmware from memory to register.
  * @dev_priv: i915 drm device.
@@ -398,6 +427,8 @@ void intel_dmc_load_program(struct drm_i915_private *dev_priv)
 
 	if (!intel_dmc_has_payload(dev_priv))
 		return;
+
+	pipedmc_clock_gating_wa(dev_priv, true);
 
 	disable_all_event_handlers(dev_priv);
 
@@ -432,6 +463,8 @@ void intel_dmc_load_program(struct drm_i915_private *dev_priv)
 	 * here.
 	 */
 	disable_all_flip_queue_events(dev_priv);
+
+	pipedmc_clock_gating_wa(dev_priv, false);
 }
 
 /**
@@ -446,7 +479,9 @@ void intel_dmc_disable_program(struct drm_i915_private *i915)
 	if (!intel_dmc_has_payload(i915))
 		return;
 
+	pipedmc_clock_gating_wa(i915, true);
 	disable_all_event_handlers(i915);
+	pipedmc_clock_gating_wa(i915, false);
 }
 
 void assert_dmc_loaded(struct drm_i915_private *i915)
@@ -782,23 +817,6 @@ static void parse_dmc_fw(struct drm_i915_private *dev_priv,
 		return;
 
 	readcount += r;
-	/*
-	 * FIXME: Load Pipe DMC once the CI for display
-	 * tests on DG2 looks good.
-	 * DG2 on CI break when some display tests are run
-	 * with the Pipe DMC support. Till we can get to root of it,
-	 * disable loading the Pipe DMC altogether.
-	 */
-	if (IS_DG2(dev_priv)) {
-		for (id = 1; id < DMC_FW_MAX; id++) {
-			if (!dev_priv->dmc.dmc_info[id].present)
-				continue;
-
-			drm_dbg(&dev_priv->drm, "Overriding pipe dmc loading.\n");
-			dev_priv->dmc.dmc_info[id].present = false;
-			dev_priv->dmc.dmc_info[id].dmc_offset = 0;
-		}
-	}
 
 	for (id = 0; id < DMC_FW_MAX; id++) {
 		if (!dev_priv->dmc.dmc_info[id].present)
@@ -888,7 +906,11 @@ void intel_dmc_ucode_init(struct drm_i915_private *dev_priv)
 	 */
 	intel_dmc_runtime_pm_get(dev_priv);
 
-	if (IS_DG2(dev_priv)) {
+	if (IS_METEORLAKE(dev_priv)) {
+		dmc->fw_path = MTL_DMC_PATH;
+		dmc->required_version = MTL_DMC_VERSION_REQUIRED;
+		dmc->max_fw_size = MTL_DMC_MAX_FW_SIZE;
+	} else if (IS_DG2(dev_priv)) {
 		dmc->fw_path = DG2_DMC_PATH;
 		dmc->required_version = DG2_DMC_VERSION_REQUIRED;
 		dmc->max_fw_size = DISPLAY_VER13_DMC_MAX_FW_SIZE;
@@ -1057,7 +1079,7 @@ static int intel_dmc_debugfs_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "Pipe A fw loaded: %s\n",
 		   str_yes_no(dmc->dmc_info[DMC_FW_PIPEA].payload));
 	seq_printf(m, "Pipe B fw support: %s\n",
-		   str_yes_no(IS_ALDERLAKE_P(i915)));
+		   str_yes_no(DISPLAY_VER(i915) >= 13));
 	seq_printf(m, "Pipe B fw loaded: %s\n",
 		   str_yes_no(dmc->dmc_info[DMC_FW_PIPEB].payload));
 
@@ -1081,9 +1103,9 @@ static int intel_dmc_debugfs_status_show(struct seq_file *m, void *unused)
 		 * reg for DC3CO debugging and validation,
 		 * but TGL DMC f/w is using DMC_DEBUG3 reg for DC3CO counter.
 		 */
-		seq_printf(m, "DC3CO count: %d\n",
-			   intel_de_read(i915, IS_DGFX(i915) ?
-					 DG1_DMC_DEBUG3 : TGL_DMC_DEBUG3));
+		seq_printf(m, "DC3CO count: %d\n", intel_de_read(i915,
+			   (IS_DGFX(i915) || DISPLAY_VER(i915) >= 14) ?
+			    DG1_DMC_DEBUG3 : TGL_DMC_DEBUG3));
 	} else {
 		dc5_reg = IS_BROXTON(i915) ? BXT_DMC_DC3_DC5_COUNT :
 			SKL_DMC_DC3_DC5_COUNT;

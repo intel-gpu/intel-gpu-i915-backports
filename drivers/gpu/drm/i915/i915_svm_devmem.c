@@ -655,7 +655,7 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 	migrate.i915 = i915;
 	migrate.args = &args;
 	migrate.host_dma = &dma_addr;
-	migrate.src_id = INTEL_REGION_LMEM;
+	migrate.src_id = INTEL_REGION_LMEM_0;
 	migrate.dst_id = INTEL_REGION_SMEM;
 	if (migrate_vma_setup(&args) < 0)
 		return VM_FAULT_SIGBUS;

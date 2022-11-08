@@ -35,7 +35,7 @@ struct intel_engine_cs;
 
 enum {
 	PERF_GROUP_OAG = 0,
-
+	PERF_GROUP_OAM_SAMEDIA_0 = 0,
 	PERF_GROUP_OAM_0 = 1,
 	PERF_GROUP_OAM_1 = 2,
 	PERF_GROUP_OAM_2 = 3,

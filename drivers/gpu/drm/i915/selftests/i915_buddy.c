@@ -168,8 +168,10 @@ static int igt_check_blocks(struct i915_buddy_mm *mm,
 		igt_dump_block(mm, prev);
 	}
 
-	pr_err("bad block, dump:\n");
-	igt_dump_block(mm, block);
+	if (block) {
+		pr_err("bad block, dump:\n");
+		igt_dump_block(mm, block);
+	}
 
 	return err;
 }

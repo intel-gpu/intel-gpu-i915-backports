@@ -9,9 +9,7 @@
 #include "fw.h"
 #include "iaf_drv.h"
 #include "mbdb.h"
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 #include "mei_iaf_user.h"
-#endif
 #include "ops.h"
 #include "port.h"
 #include "sysfs.h"
@@ -126,7 +124,6 @@ static ssize_t firmware_version_show(struct device *dev,
 
 static DEVICE_ATTR_RO(firmware_version);
 
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 static ssize_t min_svn_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct fdev *fdev = dev_get_drvdata(dev);
@@ -167,14 +164,11 @@ static ssize_t prevent_rollback_store(struct device *dev,
 }
 
 static DEVICE_ATTR_WO(prevent_rollback);
-#endif
 
 static const struct attribute *iaf_attrs[] = {
 	&dev_attr_iaf_fabric_id.attr,
-#if IS_ENABLED(CPTCFG_IAF_ANTI_ROLLBACK)
 	&dev_attr_prevent_rollback.attr,
 	&dev_attr_min_svn.attr,
-#endif
 	&dev_attr_pscbin_brand.attr,
 	&dev_attr_pscbin_product.attr,
 	&dev_attr_pscbin_version.attr,

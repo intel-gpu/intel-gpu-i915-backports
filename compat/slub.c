@@ -44,17 +44,17 @@ static inline unsigned long node_nr_slabs(struct kmem_cache_node *n)
 #define count_free  LINUX_I915_BACKPORT(count_free)
 #define node_nr_objs  LINUX_I915_BACKPORT(node_nr_objs)
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef COUNT_STRUCT_PAGE_PRESENT
 static int count_free(struct page *page)
 {
 	return page->objects - page->inuse;
 }
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#elif defined(COUNT_STRUCT_SLAB_PRESENT)
 static int count_free(struct slab *slab)
 {
 	return slab->objects - slab->inuse;
 }
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif /* COUNT_STRUCT_PAGE_PRESENT */
 
 static inline unsigned long node_nr_objs(struct kmem_cache_node *n)
 {
@@ -79,7 +79,7 @@ static inline unsigned int oo_objects(struct kmem_cache_order_objects x)
 
 #if defined(CONFIG_SLUB_DEBUG) || defined(CONFIG_SYSFS)
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#ifdef COUNT_STRUCT_PAGE_PRESENT
 static unsigned long count_partial(struct kmem_cache_node *n,
 					int (*get_count)(struct page *))
 {
@@ -93,7 +93,7 @@ static unsigned long count_partial(struct kmem_cache_node *n,
 	spin_unlock_irqrestore(&n->list_lock, flags);
 	return x;
 }
-#elif LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#elif defined(COUNT_STRUCT_SLAB_PRESENT)
 static unsigned long count_partial(struct kmem_cache_node *n,
 					int (*get_count)(struct slab *))
 {
@@ -107,7 +107,7 @@ static unsigned long count_partial(struct kmem_cache_node *n,
 	spin_unlock_irqrestore(&n->list_lock, flags);
 	return x;
 }
-#endif /* LINUX_VERSION_IN_RANGE */
+#endif /* COUNT_STRUCT_PAGE_PRESENT */
 
 #endif /* CONFIG_SLUB */
 #endif /* CONFIG_SLUB_DEBUG || CONFIG_SYSFS */

@@ -746,10 +746,8 @@ i915_gem_shmem_pwrite(struct drm_i915_gem_object *obj,
 	 * overcomplicate things and flush the entire patch.
 	 */
 	partial_cacheline_write = 0;
-#if defined(CONFIG_X86)
 	if (needs_clflush & CLFLUSH_BEFORE)
 		partial_cacheline_write = boot_cpu_data.x86_clflush_size - 1;
-#endif
 
 	user_data = u64_to_user_ptr(args->data_ptr);
 	remain = args->size;
@@ -1083,8 +1081,11 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 		}
 	}
 
-	if (obj->mm.madv != __I915_MADV_PURGED)
+	if (obj->mm.madv != __I915_MADV_PURGED) {
 		obj->mm.madv = args->madv;
+		if (obj->ops->adjust_lru)
+			obj->ops->adjust_lru(obj);
+	}
 
 	if (i915_gem_object_has_pages(obj)) {
 		unsigned long flags;
@@ -1148,9 +1149,10 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	if (ret)
 		return ret;
 
-	for_each_gt(gt, dev_priv, i)
+	for_each_gt(gt, dev_priv, i) {
 		intel_uc_fetch_firmwares(&gt->uc);
-	intel_wopcm_init(&dev_priv->wopcm);
+		intel_wopcm_init(&gt->wopcm);
+	}
 
 	ret = i915_init_ggtt(dev_priv);
 	if (ret) {
@@ -1220,6 +1222,7 @@ err_unlock:
 	}
 
 	i915_gem_drain_freed_objects(dev_priv);
+
 	return ret;
 }
 
@@ -1242,7 +1245,6 @@ void i915_gem_driver_remove(struct drm_i915_private *dev_priv)
 
 	/* Flush any outstanding unpin_work. */
 	intel_wakeref_auto_fini(&to_gt(dev_priv)->ggtt->userfault_wakeref);
-	i915_gem_drain_workqueue(dev_priv);
 
 	i915_gem_suspend_late(dev_priv);
 	for_each_gt(gt, dev_priv, i)
@@ -1251,7 +1253,6 @@ void i915_gem_driver_remove(struct drm_i915_private *dev_priv)
 
 	/* Finish any generated work, and free all leftover objects. */
 	i915_gem_drain_workqueue(dev_priv);
-	i915_gem_drain_freed_objects(dev_priv);
 }
 
 void i915_gem_driver_release(struct drm_i915_private *dev_priv)
@@ -1297,7 +1298,7 @@ void i915_gem_init_early(struct drm_i915_private *dev_priv)
 
 void i915_gem_cleanup_early(struct drm_i915_private *dev_priv)
 {
-	i915_gem_drain_freed_objects(dev_priv);
+	i915_gem_drain_workqueue(dev_priv);
 	GEM_BUG_ON(!llist_empty(&dev_priv->mm.free_list));
 	GEM_BUG_ON(atomic_read(&dev_priv->mm.free_count));
 	drm_WARN_ON(&dev_priv->drm, dev_priv->mm.shrink_count);

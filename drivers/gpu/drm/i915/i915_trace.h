@@ -923,8 +923,12 @@ TRACE_EVENT(i915_mm_fault,
 			     __field(u64, addr)
 			     __field(u64, vma_size)
 			     __field(u32, asid)
+			     __field(u32, pg_sz_mask)
+			     __field(u32, region)
+			     __field(u16, pdata)
 			     __field(u8, access_type)
 			     __field(u8, fault_type)
+			     __field(u8, fault_level)
 			     __field(u8, engine_class)
 			     __field(u8, engine_instance)
 			     __field(bool, is_bound)
@@ -937,22 +941,27 @@ TRACE_EVENT(i915_mm_fault,
 			   __entry->obj_size = vma->obj->base.size;
 			   __entry->addr = info->page_addr;
 			   __entry->vma_size = i915_vma_size(vma);
+			   __entry->pg_sz_mask = vma->page_sizes.gtt;
+			   __entry->region = !vma->obj->mm.region ? INTEL_REGION_UNKNOWN : vma->obj->mm.region->id;
 			   __entry->asid = info->asid;
 			   __entry->access_type = info->access_type;
 			   __entry->fault_type = info->fault_type;
+			   __entry->fault_level = info->fault_level;
 			   __entry->engine_class = info->engine_class;
 			   __entry->engine_instance = info->engine_instance;
+			   __entry->pdata = info->pdata;
 			   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   ),
 
-	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on gem object %p [size %lld] address %llx%s size 0x%llx, %s[%d] %s",
+	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx pgsz %x, %s[%d] %d: %s (0x%x)",
 		      __entry->dev, __entry->vm, __entry->asid,
 		      intel_access_type2str(__entry->access_type),
+		      intel_memory_region_id2str(__entry->region),
 		      __entry->obj, __entry->obj_size, __entry->addr,
-		      __entry->is_bound ? " bound" : "", __entry->vma_size,
+		      __entry->is_bound ? " bound" : "", __entry->vma_size, __entry->pg_sz_mask,
 		      intel_engine_class_repr(__entry->engine_class),
-		      __entry->engine_instance,
-		      intel_pagefault_type2str(__entry->fault_type))
+		      __entry->engine_instance, __entry->fault_level,
+		      intel_pagefault_type2str(__entry->fault_type), __entry->pdata)
 );
 
 TRACE_EVENT(intel_tlb_invalidate,
@@ -1034,7 +1043,7 @@ TRACE_EVENT(i915_vm_prefetch,
 	    TP_printk("dev %p prefetch va start %llx (len %llx) to region %s",
 		      __entry->dev,
 		      __entry->start, __entry->len,
-		      (__entry->region == INTEL_REGION_SMEM || __entry->region == INTEL_REGION_STOLEN_SMEM) ? "smem" : "lmem")
+		      intel_memory_region_id2str(__entry->region))
 );
 #endif /* _I915_TRACE_H_ */
 

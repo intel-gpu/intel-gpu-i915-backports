@@ -169,7 +169,15 @@ static ssize_t rc6_residency_ms_show(struct device *dev,
 				     char *buff)
 {
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	u32 rc6_residency = get_residency(gt, GEN6_GT_GFX_RC6);
+	u32 rc6_residency;
+	i915_reg_t reg;
+
+	if (gt->type == GT_MEDIA)
+		reg = MTL_MEDIA_MC6;
+	else
+		reg = GEN6_GT_GFX_RC6;
+
+	rc6_residency = get_residency(gt, reg);
 
 	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6_residency);
 }
@@ -1323,10 +1331,10 @@ static ssize_t iaf_power_enable_show(struct device *dev,
 	return sysfs_emit(buf, "%d\n", gt->i915->intel_iaf.power_enabled);
 }
 
-static DEVICE_ATTR_RW(iaf_power_enable);
+static I915_DEVICE_ATTR_RW(iaf_power_enable, 0644, iaf_power_enable_show, iaf_power_enable_store);
 
-static const struct attribute *iaf_attrs[] = {
-	&dev_attr_iaf_power_enable.attr,
+static const struct attribute * const iaf_attrs[] = {
+	&dev_attr_iaf_power_enable.attr.attr,
 	NULL
 };
 
@@ -1334,6 +1342,9 @@ static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
 {
 	const struct attribute * const *attrs;
 	int ret;
+
+	if (IS_SRIOV_VF(gt->i915))
+		return 0;
 
 	if (is_object_gt(kobj))
 		attrs = gen6_rps_attrs;

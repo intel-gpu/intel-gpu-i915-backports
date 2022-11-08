@@ -6,6 +6,7 @@
 #include <drm/i915_drm.h>
 
 #include "i915_drv.h"
+
 #include "intel_pxp.h"
 #include "intel_pxp_cmd.h"
 #include "intel_pxp_session.h"
@@ -134,9 +135,9 @@ static void pxp_session_work(struct work_struct *work)
 	struct intel_gt *gt = pxp_to_gt(pxp);
 	u32 events = 0;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	events = fetch_and_zero(&pxp->session_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 
 	if (!events)
 		return;

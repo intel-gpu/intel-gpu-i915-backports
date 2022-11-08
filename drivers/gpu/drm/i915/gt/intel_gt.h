@@ -20,6 +20,11 @@ struct drm_printer;
 		  ##__VA_ARGS__);					\
 } while (0)
 
+static inline bool gt_is_root(struct intel_gt *gt)
+{
+	return !gt->info.id;
+}
+
 static inline struct intel_gt *uc_to_gt(struct intel_uc *uc)
 {
 	return container_of(uc, struct intel_gt, uc);
@@ -35,12 +40,18 @@ static inline struct intel_gt *huc_to_gt(struct intel_huc *huc)
 	return container_of(huc, struct intel_gt, uc.huc);
 }
 
+static inline struct intel_gt *gsc_uc_to_gt(struct intel_gsc_uc *gsc_uc)
+{
+	return container_of(gsc_uc, struct intel_gt, uc.gsc);
+}
+
 static inline struct intel_gt *gsc_to_gt(struct intel_gsc *gsc)
 {
 	return container_of(gsc, struct intel_gt, gsc);
 }
 
-void intel_gt_init_early(struct intel_gt *gt, struct drm_i915_private *i915);
+void intel_gt_common_init_early(struct intel_gt *gt);
+int intel_root_gt_init_early(struct drm_i915_private *i915);
 int intel_gt_init_mmio(struct intel_gt *gt);
 int __must_check intel_gt_init_hw(struct intel_gt *gt);
 void intel_gt_init_ggtt(struct intel_gt *gt, struct i915_ggtt *ggtt);
@@ -50,8 +61,7 @@ void intel_gt_driver_register(struct intel_gt *gt);
 void intel_gt_driver_unregister(struct intel_gt *gt);
 void intel_gt_driver_remove(struct intel_gt *gt);
 void intel_gt_driver_release(struct intel_gt *gt);
-
-void intel_gt_driver_late_release(struct intel_gt *gt);
+void intel_gt_driver_late_release_all(struct drm_i915_private *i915);
 
 void intel_gt_shutdown(struct intel_gt *gt);
 
@@ -84,6 +94,15 @@ static inline bool intel_gt_is_wedged(const struct intel_gt *gt)
 	return unlikely(test_bit(I915_WEDGED, &gt->reset.flags));
 }
 
+static inline
+i915_reg_t intel_gt_perf_limit_reasons_reg(struct intel_gt *gt)
+{
+	if (gt->type == GT_MEDIA)
+		return MTL_MEDIA_PERF_LIMIT_REASONS;
+
+	return GT0_PERF_LIMIT_REASONS;
+}
+
 static inline bool
 i915_is_level4_wa_active(struct intel_gt *gt)
 {
@@ -96,19 +115,30 @@ i915_is_level4_wa_active(struct intel_gt *gt)
 		!atomic_read(&i915->level4_wa_disabled);
 }
 
-int intel_gt_tiles_setup(struct drm_i915_private *i915);
+int intel_gt_probe_all(struct drm_i915_private *i915);
 int intel_gt_tiles_init(struct drm_i915_private *i915);
-void intel_gt_tiles_cleanup(struct drm_i915_private *i915);
+void intel_gt_release_all(struct drm_i915_private *i915);
 
 #define for_each_gt(gt__, i915__, id__) \
 	for ((id__) = 0; \
 	     (id__) < I915_MAX_GT; \
 	     (id__)++) \
-		for_each_if (((gt__) = (i915__)->gts[(id__)]))
+		for_each_if(((gt__) = (i915__)->gt[(id__)]))
 
 static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 {
 	if (!i915->params.enable_rc6)
+		return false;
+
+	/* Disable RC6 for all B-step - hsd: 14015706335*/
+	if (!i915->params.rc6_ignore_steppings)
+		return false;
+
+	/*
+	 * Lets not break the dpc recovery, which will be hindered
+	 * by rpm resume caused by RC6 Wa
+	 */
+	if (i915_is_pci_faulted(i915))
 		return false;
 
 	return (IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER) && i915->remote_tiles > 0);

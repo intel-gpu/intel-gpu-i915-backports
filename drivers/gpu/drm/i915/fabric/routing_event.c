@@ -5,7 +5,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/debugfs.h>
 
 #include "debugfs.h"
 #include "iaf_drv.h"

@@ -3,7 +3,7 @@
  * Copyright © 2019 Intel Corporation
  */
 
-#define HAS_GUC_MMIO_DB(i915) IS_DGFX(i915)
+#define HAS_GUC_MMIO_DB(i915) (IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
 #define HAS_GUC_DIST_DB(i915) (GRAPHICS_VER(i915) >= 12 && !HAS_GUC_MMIO_DB(i915))
 
 #define GUC_NUM_HW_DOORBELLS 256

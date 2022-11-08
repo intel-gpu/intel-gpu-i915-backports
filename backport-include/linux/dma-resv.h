@@ -2,7 +2,7 @@
 #define __BACKPORT_DMA_RESV_H
 
 #include_next <linux/dma-resv.h>
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#ifdef DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
 
 /**
  * dma_resv_get_excl_unlocked - get the reservation object's
@@ -30,6 +30,6 @@ dma_resv_get_excl_unlocked(struct dma_resv *obj)
 
         return fence;
 }
-#endif /* LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0) */
+#endif /* DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT */
 
 #endif /* __BACKPORT_DMA_RESV_H */

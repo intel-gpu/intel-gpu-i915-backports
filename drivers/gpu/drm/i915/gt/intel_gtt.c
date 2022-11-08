@@ -538,6 +538,9 @@ void free_scratch(struct i915_address_space *vm)
 {
 	int i;
 
+	if (!vm->scratch[0])
+		return;
+
 	for (i = 0; i <= vm->top; i++)
 		i915_gem_object_put(vm->scratch[i]);
 }
@@ -611,6 +614,25 @@ void gtt_write_workarounds(struct intel_gt *gt)
 				 intel_uncore_read(uncore,
 						   HSW_GTT_CACHE_EN) == 0);
 	}
+}
+
+static void mtl_setup_private_ppat(struct intel_uncore *uncore)
+{
+	intel_uncore_write(uncore, GEN12_PAT_INDEX(0),
+			   MTL_PPAT_L4_0_WB);
+	intel_uncore_write(uncore, GEN12_PAT_INDEX(1),
+			   MTL_PPAT_L4_1_WT | MTL_2_COH_1W);
+	intel_uncore_write(uncore, GEN12_PAT_INDEX(2),
+			   MTL_PPAT_L4_3_UC | MTL_2_COH_1W);
+	intel_uncore_write(uncore, GEN12_PAT_INDEX(3),
+			   MTL_PPAT_L4_0_WB | MTL_2_COH_1W);
+	intel_uncore_write(uncore, GEN12_PAT_INDEX(4),
+			   MTL_PPAT_L4_0_WB | MTL_3_COH_2W);
+
+	/*
+	 * Remaining PAT entries are left at the hardware-default
+	 * fully-cached setting
+	 */
 }
 
 static void pvc_setup_private_ppat(struct intel_uncore *uncore)
@@ -743,7 +765,9 @@ void setup_private_pat(struct intel_uncore *uncore)
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_METEORLAKE(i915))
+		mtl_setup_private_ppat(uncore);
+	else if (IS_PONTEVECCHIO(i915))
 		pvc_setup_private_ppat(uncore);
 	else if (GRAPHICS_VER(i915) >= 12)
 		tgl_setup_private_ppat(uncore);
@@ -878,5 +902,6 @@ __vm_create_scratch_for_read_pinned(struct i915_address_space *vm, unsigned long
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/mock_gtt.c"
+#include "selftest_gtt.c"
 #include "selftest_l4wa.c"
 #endif
