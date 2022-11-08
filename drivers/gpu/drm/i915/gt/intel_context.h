@@ -15,6 +15,7 @@
 #include "i915_suspend_fence.h"
 #include "intel_context_types.h"
 #include "intel_engine_types.h"
+#include "intel_gt_pm.h"
 #include "intel_ring_types.h"
 #include "intel_timeline_types.h"
 #include "i915_trace.h"
@@ -214,8 +215,11 @@ void intel_context_exit_engine(struct intel_context *ce);
 static inline void intel_context_enter(struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->timeline->mutex);
-	if (!ce->active_count++)
-		ce->ops->enter(ce);
+	if (ce->active_count++)
+		return;
+
+	ce->ops->enter(ce);
+	ce->wakeref = intel_gt_pm_get(ce->vm->gt);
 }
 
 static inline void intel_context_mark_active(struct intel_context *ce)
@@ -228,8 +232,11 @@ static inline void intel_context_exit(struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->timeline->mutex);
 	GEM_BUG_ON(!ce->active_count);
-	if (!--ce->active_count)
-		ce->ops->exit(ce);
+	if (--ce->active_count)
+		return;
+
+	intel_gt_pm_put_async(ce->vm->gt, ce->wakeref);
+	ce->ops->exit(ce);
 }
 
 static inline bool intel_context_is_active(const struct intel_context *ce)
@@ -285,13 +292,7 @@ intel_context_timeline_lock(struct intel_context *ce)
 	struct intel_timeline *tl = ce->timeline;
 	int err;
 
-	if (intel_context_is_parent(ce))
-		err = mutex_lock_interruptible_nested(&tl->mutex, 0);
-	else if (intel_context_is_child(ce))
-		err = mutex_lock_interruptible_nested(&tl->mutex,
-						      ce->parallel.child_index + 1);
-	else
-		err = mutex_lock_interruptible(&tl->mutex);
+	err = mutex_lock_interruptible(&tl->mutex);
 	if (err)
 		return ERR_PTR(err);
 

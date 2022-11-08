@@ -376,13 +376,14 @@ is_debugger_closed(const struct i915_debugger * const debugger)
 static void i915_debugger_detach(struct i915_debugger *debugger)
 {
 	struct drm_i915_private * const i915 = debugger->i915;
+	unsigned long flags;
 
-	spin_lock(&i915->debuggers.lock);
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	if (!is_debugger_closed(debugger)) {
 		DD_INFO(debugger, "session %lld detached", debugger->session);
 		list_del_init(&debugger->connection_link);
 	}
-	spin_unlock(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 }
 
 static inline const struct i915_debug_event *
@@ -700,6 +701,7 @@ i915_debugger_get(const struct i915_drm_client * const client)
 	struct drm_i915_private *i915;
 	const u64 session = client_session(client);
 	struct i915_debugger *debugger, *iter;
+	unsigned long flags;
 
 	if (likely(!session))
 		return NULL;
@@ -707,7 +709,7 @@ i915_debugger_get(const struct i915_drm_client * const client)
 	i915 = client->clients->i915;
 	debugger = NULL;
 
-	spin_lock_bh(&i915->debuggers.lock);
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
 		if (iter->session != session)
 			continue;
@@ -716,7 +718,7 @@ i915_debugger_get(const struct i915_drm_client * const client)
 		debugger = iter;
 		break;
 	}
-	spin_unlock_bh(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 
 	return debugger;
 }
@@ -726,10 +728,11 @@ i915_debugger_find_task_get(struct drm_i915_private *i915,
 			    struct task_struct *task)
 {
 	struct i915_debugger *debugger, *iter;
+	unsigned long flags;
 
 	debugger = NULL;
 
-	spin_lock(&i915->debuggers.lock);
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
 		if (iter->target_task != task)
 			continue;
@@ -738,7 +741,7 @@ i915_debugger_find_task_get(struct drm_i915_private *i915,
 		debugger = iter;
 		break;
 	}
-	spin_unlock(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 
 	return debugger;
 }
@@ -1159,7 +1162,7 @@ out_uuid:
 	return ret;
 }
 
-static void gen12_invalidate_eus(struct drm_i915_private *i915)
+static void gen12_invalidate_inst_cache(struct drm_i915_private *i915)
 {
 	const u32 bit = GEN12_INST_STATE_CACHE_INVALIDATE;
 	intel_wakeref_t wakeref;
@@ -1175,13 +1178,14 @@ static void gen12_invalidate_eus(struct drm_i915_private *i915)
 }
 
 static int engine_rcu_async_flush(struct intel_engine_cs *engine,
+				  u32 mask,
 				  unsigned int timeout_us)
 {
 	struct intel_uncore * const uncore = engine->gt->uncore;
 	const i915_reg_t psmi_addr = RING_PSMI_CTL(engine->mmio_base);
 	const enum forcewake_domains fw = FORCEWAKE_GT | FORCEWAKE_RENDER;
 	u32 psmi_ctrl;
-	u32 id, mask;
+	u32 id = 0;
 	int ret;
 
 	if (engine->class == COMPUTE_CLASS)
@@ -1208,8 +1212,6 @@ static int engine_rcu_async_flush(struct intel_engine_cs *engine,
 	if (ret)
 		goto out;
 
-	mask = GEN12_RCU_ASYNC_FLUSH_ENABLE_MASK;
-
 	if (id < 8)
 		mask |= id << GEN12_RCU_ASYNC_FLUSH_ENGINE_ID_SHIFT;
 	else
@@ -1234,7 +1236,7 @@ out:
 	return ret;
 }
 
-static void dg2_invalidate_eus(struct drm_i915_private *i915)
+static void dg2_flush_engines(struct drm_i915_private *i915, u32 mask)
 {
 	const unsigned int timeout_us = 5000;
 	struct intel_gt *gt;
@@ -1247,7 +1249,8 @@ static void dg2_invalidate_eus(struct drm_i915_private *i915)
 		for_each_engine(engine, gt, engine_id) {
 			if (engine->class == COMPUTE_CLASS ||
 			    engine->class == RENDER_CLASS) {
-				if (engine_rcu_async_flush(engine, timeout_us))
+				if (engine_rcu_async_flush(engine,
+							   mask, timeout_us))
 					drm_warn(&i915->drm,
 						 "debugger: eu invalidation timeout for gt%d, engine %s\n",
 						 gt_id, engine->name);
@@ -1288,9 +1291,14 @@ static int gen12_gt_invalidate_l3(struct intel_gt *gt,
 	cpctl = intel_uncore_read_fw(uncore, GEN7_MISCCPCTL);
 	if (cpctl & mask) {
 		ret = cpctl & GEN12_DOP_CLOCK_GATE_LOCK ? -EACCES : -ENXIO;
-		drm_notice_once(&gt->i915->drm,
-				"debugger: access failed to prime reg 0x%x 0x%08x. proceeding to invalidate\n",
-				i915_mmio_reg_offset(GEN7_MISCCPCTL), cpctl);
+		/*
+		 * XXX: We need to bail out as there are gens
+		 * that wont survive invalidate without disabling
+		 * the gating of above clocks. The resulting hang is
+		 * is catastrophic and we lose the gpu in a way
+		 * that even reset wont help.
+		 */
+		goto out;
 	}
 
 	ret = __intel_wait_for_register_fw(uncore, GEN11_GLBLINVL,
@@ -1328,12 +1336,14 @@ static void gen12_invalidate_l3(struct drm_i915_private *i915)
 		ret = gen12_gt_invalidate_l3(gt, timeout_us);
 		if (ret)
 			drm_notice_once(&gt->i915->drm,
-					"debugger: gt%d l3 invalidation fail: %d, "
-					"use i915.mocs_table_path=uncached.bin\n", id, ret);
+					"debugger: gt%d l3 invalidation fail: %s(%d). "
+					"Surfaces need to be declared uncached to avoid coherency issues!\n",
+					id, ret == -EACCES ? "incompatible bios" : "timeout",
+					ret);
 	}
 }
 
-static void gpu_invalidate_eus(struct drm_i915_private *i915)
+static void gpu_flush_engines(struct drm_i915_private *i915, u32 mask)
 {
 	const bool flush_in_debug_mode2 = IS_ALDERLAKE_P(i915) ||
 		IS_ALDERLAKE_S(i915) ||
@@ -1347,9 +1357,9 @@ static void gpu_invalidate_eus(struct drm_i915_private *i915)
 	}
 
 	if (flush_in_debug_mode2)
-		return gen12_invalidate_eus(i915);
+		return gen12_invalidate_inst_cache(i915);
 
-	dg2_invalidate_eus(i915);
+	dg2_flush_engines(i915, mask);
 }
 
 static void gpu_invalidate_l3(struct drm_i915_private *i915)
@@ -1554,9 +1564,13 @@ static ssize_t i915_debugger_vm_write(struct file *file,
 	struct i915_address_space *vm = file->private_data;
 	ssize_t s;
 
+	gpu_flush_engines(vm->i915, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
+	gpu_invalidate_l3(vm->i915);
+
 	s = debugger_vm_write(vm, buffer, count, pos);
 
-	gpu_invalidate_eus(vm->i915);
+	gpu_invalidate_l3(vm->i915);
+	gpu_flush_engines(vm->i915, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 
 	return s;
 }
@@ -1567,6 +1581,7 @@ static ssize_t i915_debugger_vm_read(struct file *file, char __user *buffer,
 	struct i915_address_space *vm = file->private_data;
 	ssize_t s;
 
+	gpu_flush_engines(vm->i915, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 	gpu_invalidate_l3(vm->i915);
 
 	s = debugger_vm_read(file->private_data, buffer, count, pos);
@@ -1653,6 +1668,7 @@ static int i915_debugger_vm_mmap(struct file *file, struct vm_area_struct *area)
 	area->vm_flags |= VM_PFNMAP;
 
 	gpu_invalidate_l3(vm->i915);
+	gpu_flush_engines(vm->i915, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 
 	return 0;
 }
@@ -1662,7 +1678,8 @@ static int i915_debugger_vm_release(struct inode *inode, struct file *file)
 	struct i915_address_space *vm = file->private_data;
 	struct drm_device *dev = &vm->i915->drm;
 
-	gpu_invalidate_eus(vm->i915);
+	gpu_invalidate_l3(vm->i915);
+	gpu_flush_engines(vm->i915, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 
 	i915_vm_put(vm);
 	drm_dev_put(dev);
@@ -2084,7 +2101,6 @@ static void eu_control_stopped(struct i915_debugger *debugger,
 	};
 
 	intel_gt_for_each_compute_slice_subslice(engine->gt,
-						 false,
 						 read_attn_ss_fw, &iter);
 }
 
@@ -2184,7 +2200,6 @@ static int eu_control_resume(struct i915_debugger *debugger,
 	 */
 	if (GRAPHICS_VER_FULL(engine->i915) == IP_VER(12, 60)) {
 		ret = intel_gt_for_each_compute_slice_subslice(engine->gt,
-							       false,
 							       check_attn_ss_fw,
 							       &iter);
 		if (ret)
@@ -2195,7 +2210,6 @@ static int eu_control_resume(struct i915_debugger *debugger,
 
 
 	intel_gt_for_each_compute_slice_subslice(engine->gt,
-						 true,
 						 clear_attn_ss_fw, &iter);
 	return 0;
 }
@@ -2739,7 +2753,7 @@ static void i915_debugger_ctx_vm_def(struct i915_debugger *debugger,
 static void i915_debugger_ctx_vm_create(struct i915_debugger *debugger,
 					struct i915_gem_context *ctx)
 {
-	struct i915_address_space *vm = i915_gem_context_get_vm_rcu(ctx);
+	struct i915_address_space *vm = i915_gem_context_get_eb_vm(ctx);
 	bool vm_found;
 
 	vm_found = __i915_debugger_has_resource(debugger, vm);
@@ -2957,6 +2971,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	struct i915_debugger *debugger, *iter;
 	struct task_struct *discovery_task;
 	unsigned long f_flags = 0;
+	unsigned long flags;
 	int debug_fd;
 	bool allowed;
 	int ret;
@@ -3014,7 +3029,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	if (param->flags & PRELIM_DRM_I915_DEBUG_FLAG_FD_NONBLOCK)
 		f_flags |= O_NONBLOCK;
 
-	spin_lock(&i915->debuggers.lock);
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
 
 	for_each_debugger(iter, &i915->debuggers.list) {
 		if (iter->target_task == debugger->target_task) {
@@ -3040,12 +3055,12 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	debugger->i915 = i915;
 	debugger->session = ++i915->debuggers.session_count;
 	list_add_tail(&debugger->connection_link, &i915->debuggers.list);
-	spin_unlock(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 
 	debug_fd = anon_inode_getfd("[i915_debugger]", &fops, debugger, f_flags);
 	if (debug_fd < 0) {
 		ret = debug_fd;
-		spin_lock(&i915->debuggers.lock);
+		spin_lock_irqsave(&i915->debuggers.lock, flags);
 		list_del_init(&debugger->connection_link);
 		goto err_unlock;
 	}
@@ -3064,7 +3079,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	return debug_fd;
 
 err_unlock:
-	spin_unlock(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 	discovery_thread_stop(discovery_task);
 err_put_task:
 	put_task_struct(debugger->target_task);
@@ -3115,10 +3130,9 @@ void i915_debugger_fini(struct drm_i915_private *i915)
 void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
 				     struct i915_drm_client *client)
 {
-	struct pid *pid;
-	unsigned long timeleft;
-	struct i915_debugger *debugger;
 	const unsigned long waitjiffs = msecs_to_jiffies(5000);
+	struct i915_debugger *debugger;
+	long timeleft;
 
 	if (client && READ_ONCE(client->debugger_session) == 0)
 		return;
@@ -3134,17 +3148,13 @@ void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
 	timeleft = wait_for_completion_interruptible_timeout(&debugger->discovery,
 							     waitjiffs);
 	if (timeleft == -ERESTARTSYS) {
-		pid = get_task_pid(current, PIDTYPE_PID);
 		DD_WARN(debugger,
 			"task %d interrupted while waited during debugger discovery process\n",
-			pid_nr(pid));
-		put_pid(pid);
+			task_pid_nr(current));
 	} else if (!timeleft) {
-		pid = get_task_pid(current, PIDTYPE_PID);
 		DD_WARN(debugger,
 			"task %d waited too long for discovery to complete. Ignoring barrier.\n",
-			pid_nr(pid));
-		put_pid(pid);
+			task_pid_nr(current));
 	}
 
 	i915_debugger_put(debugger);
@@ -3155,12 +3165,13 @@ void i915_debugger_client_register(struct i915_drm_client *client,
 {
 	struct drm_i915_private * const i915 = client->clients->i915;
 	struct i915_debugger *iter;
+	unsigned long flags;
 
 	/*
 	 * Session count only grows and we cannot connect to
 	 * the same pid twice.
 	 */
-	spin_lock(&i915->debuggers.lock);
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
 		if (iter->target_task != task)
 			continue;
@@ -3168,7 +3179,7 @@ void i915_debugger_client_register(struct i915_drm_client *client,
 		WRITE_ONCE(client->debugger_session, iter->session);
 		break;
 	}
-	spin_unlock(&i915->debuggers.lock);
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 }
 
 void i915_debugger_client_release(struct i915_drm_client *client)
@@ -3227,9 +3238,14 @@ static int i915_debugger_send_engine_attention(struct intel_engine_cs *engine)
 	struct intel_context *ce;
 	int ret;
 
+	/* Anybody listening out for an event? */
+	if (list_empty_careful(&engine->i915->debuggers.list))
+		return -ENOTCONN;
+
+	/* Find the client seeking attention */
 	ce = engine_active_context_get(engine);
 	if (!ce)
-		return 0;
+		return -ENOENT;
 
 	if (!ce->client) {
 		intel_context_put(ce);
@@ -3858,9 +3874,18 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
 	kfree(event_param);
 }
 
+/**
+ * i915_debugger_handle_engine_attention() - handle attentions if any
+ * @engine: engine
+ *
+ * Check if there are eu thread attentions in engine and if so
+ * pass a message to debugger to handle them.
+ *
+ * Returns: number of attentions present or negative on error
+ */
 int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 {
-	int ret;
+	int ret, attentions;
 
 	if (!intel_engine_has_eu_attention(engine))
 		return 0;
@@ -3869,16 +3894,16 @@ int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 	if (ret <= 0)
 		return ret;
 
+	attentions = ret;
+
 	atomic_inc(&engine->gt->reset.eu_attention_count);
 
 	/* We dont care if it fails reach this debugger at this time */
 	ret = i915_debugger_send_engine_attention(engine);
-
-	/* We can resolve on next tick as discovery not yet done */
 	if (ret == -EBUSY)
-		return 0;
+		return attentions; /* Discovery in progress, fake it */
 
-	return ret;
+	return ret ?: attentions;
 }
 
 static bool i915_debugger_active_on_client(struct i915_drm_client *client)
@@ -3941,21 +3966,46 @@ long i915_debugger_attention_poll_interval(struct intel_engine_cs *engine)
 	return delay;
 }
 
-void i915_debugger_enable(struct drm_i915_private *i915)
+int i915_debugger_enable(struct drm_i915_private *i915, bool enable)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
 	struct intel_gt *gt;
 	unsigned int i;
 
+	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
+	if (!enable && !list_empty(&i915->debuggers.list)) {
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+		return -EBUSY;
+	}
+
+	if (enable == i915->debuggers.enable_eu_debug) {
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+		return 0;
+	}
+
 	for_each_gt(gt, i915, i) {
 		/* XXX suspend current activity */
 		for_each_engine(engine, gt, id) {
-			intel_engine_wa_add_debug_mode(engine);
-			intel_engine_whitelist_sip(engine);
+			if (engine->class != COMPUTE_CLASS &&
+			    engine->class != RENDER_CLASS)
+				continue;
+
+			if (enable) {
+				intel_engine_debug_enable(engine);
+				intel_engine_whitelist_sip(engine);
+			} else {
+				intel_engine_debug_disable(engine);
+				intel_engine_undo_whitelist_sip(engine);
+			}
 		}
 		intel_gt_handle_error(gt, ALL_ENGINES, 0, NULL);
 	}
+
+	i915->debuggers.enable_eu_debug = enable;
+	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+
+	return 0;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

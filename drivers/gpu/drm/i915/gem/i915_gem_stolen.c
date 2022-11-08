@@ -13,6 +13,7 @@
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt_mcr.h"
+#include "gt/intel_gt_regs.h"
 #include "gt/intel_region_lmem.h"
 #include "i915_drv.h"
 #include "i915_gem_stolen.h"
@@ -835,7 +836,7 @@ static int get_mtl_gms_size(struct intel_uncore *uncore)
 }
 
 struct intel_memory_region *
-i915_gem_stolen_lmem_setup(struct intel_gt *gt)
+i915_gem_stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 {
 	struct intel_uncore *uncore = gt->uncore;
 	struct drm_i915_private *i915 = gt->i915;
@@ -847,15 +848,15 @@ i915_gem_stolen_lmem_setup(struct intel_gt *gt)
 	resource_size_t io_start;
 	int ret;
 
+	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR))
+		return ERR_PTR(-ENXIO);
+
 	ret = intel_get_tile_range(to_gt(i915), &lmem_base, &lmem_size);
 	if (ret)
 		return ERR_PTR(ret);
 
 	min_page_size = HAS_64K_PAGES(i915) ? I915_GTT_PAGE_SIZE_64K :
 						I915_GTT_PAGE_SIZE_4K;
-
-	if (!i915_pci_resource_valid(pdev, GFXMEM_BAR))
-		return ERR_PTR(-ENXIO);
 
 	if (HAS_BAR2_SMEM_STOLEN(i915)) {
 		/*
@@ -889,6 +890,7 @@ i915_gem_stolen_lmem_setup(struct intel_gt *gt)
 
 	mem = intel_memory_region_create(gt, dsm_base, dsm_size,
 					 min_page_size, io_start,
+					 type, instance,
 					 &i915_region_stolen_lmem_ops);
 	if (IS_ERR(mem))
 		return mem;
@@ -913,14 +915,14 @@ i915_gem_stolen_lmem_setup(struct intel_gt *gt)
 }
 
 struct intel_memory_region*
-i915_gem_stolen_smem_setup(struct intel_gt *gt)
+i915_gem_stolen_smem_setup(struct intel_gt *gt, u16 type, u16 instance)
 {
 	struct intel_memory_region *mem;
 
 	mem = intel_memory_region_create(gt,
 					 intel_graphics_stolen_res.start,
 					 resource_size(&intel_graphics_stolen_res),
-					 PAGE_SIZE, 0,
+					 PAGE_SIZE, 0, type, instance,
 					 &i915_region_stolen_smem_ops);
 	if (IS_ERR(mem))
 		return mem;
@@ -928,7 +930,6 @@ i915_gem_stolen_smem_setup(struct intel_gt *gt)
 	intel_memory_region_set_name(mem, "stolen-system");
 
 	mem->private = true;
-
 	return mem;
 }
 

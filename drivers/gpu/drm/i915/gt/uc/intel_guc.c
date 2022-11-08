@@ -399,7 +399,7 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	 * GUC FW before any work submission to CCS engines
 	 */
 	if (IS_PVC_CT_STEP(gt->i915, STEP_B0, STEP_C0) &&
-	    gt->i915->params.enable_rc6)
+	    gt->rc6.supported)
 		flags |= GUC_WA_RENDER_RST_RC6_EXIT;
 
 	return flags;
@@ -1418,6 +1418,31 @@ int intel_guc_invalidate_tlb_full(struct intel_guc *guc,
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }
 
+static u64 tlb_page_selective_size(u64 start, u64 length)
+{
+	length = roundup_pow_of_two(length);
+
+	if (length < SZ_4K)
+		length = SZ_4K;
+	/*
+	 * Minimum invalidation size for a 2MB page that the hardware expects is
+	 * 16MB
+	 */
+	if (length >= SZ_2M)
+		length = max((u64)(SZ_2M * 8), length);
+
+	/*
+	 * We need to invalidate a higher granularity if start address is not
+	 * aligned to length. When start is not aligned with length we need to
+	 * find the length large enough to create an address mask covering the
+	 * required range.
+	 */
+	if (!IS_ALIGNED(start, length))
+		length = roundup_pow_of_two(length << 1);
+
+	return length;
+}
+
 /*
  * Selective TLB Invalidation for Address Range:
  * TLB's in the Address Range is Invalidated across all engines.
@@ -1427,8 +1452,16 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 					    u64 start, u64 length, u32 asid)
 {
 	u64 vm_total = BIT_ULL(INTEL_INFO(guc_to_gt(guc)->i915)->ppgtt_size);
-	u32 address_mask = (ilog2(length) - ilog2(I915_GTT_PAGE_SIZE_4K));
-	u32 full_range = vm_total == length;
+	u64 size = min(vm_total, tlb_page_selective_size(start, length));
+	u64 address = ALIGN_DOWN(start, size);
+
+	/*
+	 * For page selective invalidations, this specifies the number of contiguous
+	 * PPGTT pages that needs to be invalidated. The Address Mask values are 0 for
+	 * 4KB page, 4 for 64KB page, 12 for 2MB page.
+	 */
+	u32 address_mask = ilog2(size) - ilog2(SZ_4K);
+	u32 full_range = vm_total == size;
 	u32 action[] = {
 		INTEL_GUC_ACTION_TLB_INVALIDATION,
 		0,
@@ -1436,8 +1469,8 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 			mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
 			INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
 		asid,
-		full_range ? full_range : lower_32_bits(start),
-		full_range ? 0 : upper_32_bits(start),
+		full_range ? full_range : lower_32_bits(address),
+		full_range ? 0 : upper_32_bits(address),
 		full_range ? 0 : address_mask,
 	};
 
@@ -1446,9 +1479,9 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 		return 0;
 	}
 
-	GEM_BUG_ON(!IS_ALIGNED(start, I915_GTT_PAGE_SIZE_4K));
-	GEM_BUG_ON(!IS_ALIGNED(length, I915_GTT_PAGE_SIZE_4K));
-	GEM_BUG_ON(range_overflows(start, length, vm_total));
+	GEM_BUG_ON(!IS_ALIGNED(address, I915_GTT_PAGE_SIZE_4K));
+	GEM_BUG_ON(!IS_ALIGNED(size, I915_GTT_PAGE_SIZE_4K));
+	GEM_BUG_ON(range_overflows(address, size, vm_total));
 
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }

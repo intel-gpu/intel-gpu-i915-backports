@@ -281,6 +281,9 @@ static inline void i915_gem_object_lock_isolated(struct drm_i915_gem_object *obj
 
 static inline void i915_gem_object_unlock(struct drm_i915_gem_object *obj)
 {
+	if (obj->ops->adjust_lru)
+		obj->ops->adjust_lru(obj);
+
 	dma_resv_unlock(obj->base.resv);
 }
 
@@ -534,7 +537,6 @@ i915_gem_object_get_dirty_page(struct drm_i915_gem_object *obj, pgoff_t n);
 dma_addr_t
 i915_gem_object_get_dma_address_len(struct drm_i915_gem_object *obj, pgoff_t n,
 				    unsigned int *len);
-
 #define i915_gem_object_get_dma_address_len(obj, n, len) ({ \
 	exactly_pgoff_t(n); \
 	(i915_gem_object_get_dma_address_len)(obj, n, len); \
@@ -671,6 +673,7 @@ i915_gem_object_finish_access(struct drm_i915_gem_object *obj)
 
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
+bool i915_gem_object_can_bypass_llc(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj);
 
@@ -748,6 +751,16 @@ i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
 int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, void *dst, int size);
 
 bool i915_gem_object_is_shmem(const struct drm_i915_gem_object *obj);
+
+void __i915_gem_free_object_rcu(struct rcu_head *head);
+
+void __i915_gem_free_object(struct drm_i915_gem_object *obj);
+
+bool i915_gem_object_evictable(struct drm_i915_gem_object *obj);
+
+bool i915_gem_object_migratable(struct drm_i915_gem_object *obj);
+
+bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj);
 
 /**
  * i915_gem_get_locking_ctx - Get the locking context of a locked object

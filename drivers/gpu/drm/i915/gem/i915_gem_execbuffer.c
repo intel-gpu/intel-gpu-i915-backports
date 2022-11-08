@@ -4,7 +4,6 @@
  * Copyright © 2008,2010 Intel Corporation
  */
 
-#include <linux/intel-iommu.h>
 #include <linux/dma-resv.h>
 #include <linux/sync_file.h>
 #include <linux/uaccess.h>
@@ -19,6 +18,7 @@
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"
+#include "gt/intel_gt_ccs_mode.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
 
@@ -255,8 +255,7 @@ struct i915_execbuffer {
 	struct intel_gt *gt; /* gt for the execbuf */
 	struct intel_context *context; /* logical state for the request */
 	struct i915_gem_context *gem_context; /** caller's context */
-	intel_wakeref_t engine_gt_wakeref;
-	intel_wakeref_t vm_gt_wakeref;
+	intel_wakeref_t wakeref;
 
 	/** our requests to build */
 	struct i915_request *requests[MAX_ENGINE_INSTANCE + 1];
@@ -2722,6 +2721,17 @@ static int eb_move_to_gpu(struct i915_execbuffer *eb)
 		 *   !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ)
 		 * but gcc's optimiser doesn't handle that as well and emits
 		 * two jumps instead of one. Maybe one day...
+		 *
+		 * FIXME: There is also sync flushing in set_pages(), which
+		 * serves a different purpose(some of the time at least).
+		 *
+		 * We should consider:
+		 *
+		 *   1. Rip out the async flush code.
+		 *
+		 *   2. Or make the sync flushing use the async clflush path
+		 *   using mandatory fences underneath. Currently the below
+		 *   async flush happens after we bind the object.
 		 */
 		if (unlikely(obj->cache_dirty & ~obj->cache_coherent)) {
 			if (i915_gem_clflush_object(obj, 0))
@@ -3409,8 +3419,7 @@ eb_select_engine(struct i915_execbuffer *eb)
 
 	for_each_child(ce, child)
 		intel_context_get(child);
-	eb->engine_gt_wakeref = intel_gt_pm_get(ce->engine->gt);
-	eb->vm_gt_wakeref = intel_gt_pm_get(ce->vm->gt);
+	eb->wakeref = intel_gt_pm_get(ce->engine->gt);
 
 	if (!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)) {
 		err = intel_context_alloc_state(ce);
@@ -3449,8 +3458,7 @@ eb_select_engine(struct i915_execbuffer *eb)
 	return err;
 
 err:
-	intel_gt_pm_put(ce->vm->gt, eb->vm_gt_wakeref);
-	intel_gt_pm_put(ce->engine->gt, eb->engine_gt_wakeref);
+	intel_gt_pm_put(ce->engine->gt, eb->wakeref);
 	for_each_child(ce, child)
 		intel_context_put(child);
 	intel_context_put(ce);
@@ -3462,9 +3470,8 @@ eb_put_engine(struct i915_execbuffer *eb)
 {
 	struct intel_context *child;
 
-	intel_gt_pm_put(eb->context->vm->gt, eb->vm_gt_wakeref);
 	i915_vm_close(eb->context->vm);
-	intel_gt_pm_put(eb->context->engine->gt, eb->engine_gt_wakeref);
+	intel_gt_pm_put(eb->context->engine->gt, eb->wakeref);
 	for_each_child(eb->context, child)
 		intel_context_put(child);
 	intel_context_put(eb->context);
@@ -3792,7 +3799,6 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 	struct i915_request *prev;
 
 	lockdep_assert_held(&tl->mutex);
-	lockdep_unpin_lock(&tl->mutex, rq->cookie);
 
 	trace_i915_request_add(rq);
 
@@ -3840,6 +3846,21 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 static int eb_requests_add(struct i915_execbuffer *eb, int err)
 {
 	int i;
+
+	/*
+	 * The pin operates on the lockclass. In order to prepare
+	 * to unlock a nested and pinned lock, we must first unpin
+	 * all the locks en masse.
+	 */
+	for_each_batch_add_order(eb, i) {
+		struct i915_request *rq = eb->requests[i];
+
+		if (!rq)
+			continue;
+
+		lockdep_unpin_lock(&i915_request_timeline(rq)->mutex,
+				rq->cookie);
+	}
 
 	/*
 	 * We iterate in reverse order of creation to release timeline mutexes in
@@ -4003,8 +4024,36 @@ eb_find_context(struct i915_execbuffer *eb, unsigned int context_number)
 			return child;
 
 	GEM_BUG_ON("Context not found");
+	return eb->context;
+}
 
-	return NULL;
+static inline struct intel_context *
+eb_lock_context(struct i915_execbuffer *eb, unsigned int context_number)
+{
+	struct intel_context *ce = eb_find_context(eb, context_number);
+	struct intel_timeline *tl = ce->timeline;
+
+	if (!intel_context_is_child(ce)) {
+		if (mutex_lock_interruptible(&tl->mutex))
+			return ERR_PTR(-EINTR);
+	} else {
+		mutex_lock_nest_lock(&tl->mutex,
+				     &ce->parallel.parent->timeline->mutex);
+	}
+
+	return ce;
+}
+
+static inline struct i915_request *
+eb_request_create(struct i915_execbuffer *eb, unsigned int context_number)
+{
+	struct intel_context *ce;
+
+	ce = eb_lock_context(eb, context_number);
+	if (IS_ERR(ce))
+		return ERR_CAST(ce);
+
+	return i915_request_create_locked(ce, GFP_KERNEL | __GFP_NOWARN);
 }
 
 static struct sync_file *
@@ -4016,7 +4065,7 @@ eb_requests_create(struct i915_execbuffer *eb, struct dma_fence *in_fence,
 
 	for_each_batch_create_order(eb, i) {
 		/* Allocate a request for this batch buffer nice and early. */
-		eb->requests[i] = i915_request_create(eb_find_context(eb, i));
+		eb->requests[i] = eb_request_create(eb, i);
 		if (IS_ERR(eb->requests[i])) {
 			out_fence = ERR_CAST(eb->requests[i]);
 			eb->requests[i] = NULL;
@@ -4203,6 +4252,23 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	if (unlikely(err))
 		goto err_sfence;
 
+	/*
+	 * For any client that wishes to use compute engines, even if
+	 * they are not requiring them for this execbuf, we will change
+	 * the CCS mode and the configuration, and this configuration
+	 * will remain locked until those compute engines are idle.
+	 * That is a second client wishing to use a different compute
+	 * mode will have to wait until the first is finished, even
+	 * if both do not use compute in this sequence. The benefit
+	 * is that the system is always ready for the first client if
+	 * they need to use compute in conjunction with the context
+	 * and must not block.
+	 */
+	err = intel_gt_configure_ccs_mode(eb.context->engine->gt,
+					  eb.gem_context->engine_mask);
+	if (err)
+		goto err_exit;
+
 	i915_gem_vm_bind_lock(eb.context->vm);
 
 	err = eb_lookup_vmas(&eb);
@@ -4297,6 +4363,7 @@ err_vma:
 		intel_context_put(eb.reloc_context);
 err_vm_bind_unlock:
 	i915_gem_vm_bind_unlock(eb.context->vm);
+err_exit:
 	eb_exit(&eb);
 err_sfence:
 	kfree(sfence);

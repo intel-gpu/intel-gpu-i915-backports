@@ -56,49 +56,13 @@
  * - Public functions to init or apply the given workaround type.
  */
 
-static void wa_init_start(struct i915_wa_list *wal, const char *name, const char *engine_name)
+static void wa_init(struct i915_wa_list *wal, const char *name, const char *engine_name)
 {
 	wal->name = name;
 	wal->engine_name = engine_name;
 }
 
 #define WA_LIST_CHUNK (1 << 4)
-
-/*
- * Some of the i915 code like perf OA tries to whitelist registers on demand.
- * Such code adds to the wal->list, but that would not work because the list
- * is compacted below by wa_init_finish. While _wa_add does have code to grow
- * the list, it does not seem to take the compaction into consideration. Leave
- * 8 entries free during the compaction until a better mechanism can be put in
- * place. The additional entries apply only to engine whitelists.
- */
-#define WA_LIST_DYNAMIC_ENTRIES 8
-
-static void wa_init_finish(struct i915_wa_list *wal, bool dynamic)
-{
-	struct i915_wa *list;
-	size_t size = wal->count + (dynamic ? WA_LIST_DYNAMIC_ENTRIES : 0);
-
-	/*
-	 * Earlier this was a kmemdup call, but kmemdup will end up accessing
-	 * beyond the originally allocated src when we add
-	 * WA_LIST_DYNAMIC_ENTRIES to the size, so kasan complains. For now
-	 * replace with krealloc.
-	 *
-	 * FIXME:
-	 * 1) Bring in patches pending upstream where this code is refactored.
-	 * 2) Remove this comment after (1)
-	 */
-	list = krealloc(wal->list, size * sizeof(*list), GFP_KERNEL);
-	if (list)
-		wal->list = list;
-
-	if (!wal->count)
-		return;
-
-	DRM_DEBUG_DRIVER("Initialized %u %s workarounds on %s\n",
-			 wal->wa_count, wal->name, wal->engine_name);
-}
 
 static int _wa_index(struct i915_wa_list *wal, i915_reg_t reg)
 {
@@ -147,7 +111,7 @@ static void _wa_add(struct i915_wa_list *wal, const struct i915_wa *wa)
 	const unsigned int grow = WA_LIST_CHUNK;
 	struct i915_wa *wa_;
 
-	GEM_BUG_ON(!is_power_of_2(grow));
+	BUILD_BUG_ON(!is_power_of_2(grow));
 
 	if (IS_ALIGNED(wal->count, grow)) { /* Either uninitialized or full. */
 		struct i915_wa *list;
@@ -179,14 +143,22 @@ static void _wa_add(struct i915_wa_list *wal, const struct i915_wa *wa)
 			wa_->set &= ~wa->clr;
 		}
 
-		wal->wa_count++;
+		GEM_WARN_ON(wa->masked_reg != wa_->masked_reg);
+
+		if (wa->masked_reg) {
+			GEM_WARN_ON(wa->clr);
+			GEM_WARN_ON(wa_->clr);
+
+			/* Keep the enable mask, reset the actual target bits */
+			wa_->set &= ~(wa->set >> 16);
+		}
+
 		wa_->set |= wa->set;
 		wa_->clr |= wa->clr;
 		wa_->read |= wa->read;
 		return;
 	}
 
-	wal->wa_count++;
 	wa_ = &wal->list[wal->count++];
 	*wa_ = *wa;
 
@@ -281,32 +253,22 @@ static void gen7_ctx_workarounds_init(struct intel_engine_cs *engine,
 	wa_masked_en(wal, INSTPM, INSTPM_FORCE_ORDERING);
 }
 
-static bool global_debug_enable_in_td_ctl(struct drm_i915_private *i915)
-{
-	return GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50);
-}
-
 /* Returns true if global was enabled and nothing more needs to be done */
-static bool gen9_debug_td_ctl_init(struct intel_engine_cs *engine,
+static void gen9_debug_td_ctl_init(struct intel_engine_cs *engine,
 				   struct i915_wa_list *wal)
 {
-	bool enable;
 	u32 ctl_mask;
 
 	GEM_BUG_ON(GRAPHICS_VER(engine->i915) < 9);
-
-	enable = global_debug_enable_in_td_ctl(engine->i915);
 
 	ctl_mask = TD_CTL_BREAKPOINT_ENABLE |
 		TD_CTL_FORCE_THREAD_BREAKPOINT_ENABLE |
 		TD_CTL_FEH_AND_FEE_ENABLE;
 
-	if (enable)
+	if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 50))
 		ctl_mask |= TD_CTL_GLOBAL_DEBUG_ENABLE;
 
 	wa_add(wal, TD_CTL, 0, ctl_mask, ctl_mask, false);
-
-	return enable;
 }
 
 static void gen8_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -645,6 +607,7 @@ static void icl_ctx_workarounds_init(struct intel_engine_cs *engine,
 static void dg2_ctx_gt_tuning_init(struct intel_engine_cs *engine,
 				   struct i915_wa_list *wal)
 {
+	wa_masked_en(wal, CHICKEN_RASTER_2, TBIMR_FAST_CLIP);
 	wa_write_clr_set(wal, GEN11_L3SQCREG5, L3_PWM_TIMER_INIT_VAL_MASK,
 			 REG_FIELD_PREP(L3_PWM_TIMER_INIT_VAL_MASK, 0x7f));
 	wa_add(wal,
@@ -874,6 +837,66 @@ gen12_ctx_gt_fake_wa_init(struct intel_engine_cs *engine,
 	gen12_ctx_gt_mocs_init(engine, wal);
 }
 
+static void intel_engine_debug_init(struct intel_engine_cs *engine,
+				    struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (GRAPHICS_VER(i915) < 9)
+		return;
+
+	gen9_debug_td_ctl_init(engine, wal);
+
+	/* Wa_22015693276 */
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		wa_masked_en(wal, GEN8_ROW_CHICKEN,
+			     STALL_DOP_GATING_DISABLE);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(i915))
+		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+
+	if (engine->class == COMPUTE_CLASS)
+		return;
+
+	GEM_WARN_ON(engine->class != RENDER_CLASS);
+
+	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE2, GEN11_GLOBAL_DEBUG_ENABLE);
+	else if (GRAPHICS_VER(i915) == 9)
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1, GEN9_GLOBAL_DEBUG_ENABLE);
+}
+
+static void intel_engine_debug_fini(struct intel_engine_cs *engine,
+				    struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (GRAPHICS_VER(i915) < 9)
+		return;
+
+	_wa_remove(wal, TD_CTL, 0);
+
+	/* Wa_22015693276 */
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		wa_masked_dis(wal, GEN8_ROW_CHICKEN,
+			      STALL_DOP_GATING_DISABLE);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(i915))
+		_wa_remove(wal, GEN7_ROW_CHICKEN2, 0);
+
+	if (engine->class == COMPUTE_CLASS)
+		return;
+
+	GEM_WARN_ON(engine->class != RENDER_CLASS);
+
+	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		_wa_remove(wal, GEN9_CS_DEBUG_MODE2, 0);
+	else if (GRAPHICS_VER(i915) == 9)
+		_wa_remove(wal, GEN9_CS_DEBUG_MODE1, 0);
+}
+
 static void
 __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 			   struct i915_wa_list *wal,
@@ -885,7 +908,7 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	wa_init_start(wal, name, engine->name);
+	wa_init(wal, name, engine->name);
 
 	/* Applies to all engines */
 	/*
@@ -896,7 +919,7 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 		gen12_ctx_gt_fake_wa_init(engine, wal);
 
 	if (engine->class != RENDER_CLASS && render_only_ctx_wa)
-		goto done;
+		return;
 
 	if (IS_METEORLAKE(i915))
 		mtl_ctx_workarounds_init(engine, wal);
@@ -937,11 +960,8 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (i915->debuggers.enable_eu_debug && IS_GRAPHICS_VER(i915, 9, 11))
-		gen9_debug_td_ctl_init(engine, wal);
+		intel_engine_debug_init(engine, wal);
 #endif
-
-done:
-	wa_init_finish(wal, false);
 }
 
 void intel_engine_init_ctx_wa(struct intel_engine_cs *engine)
@@ -1653,6 +1673,54 @@ dg2_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 	 * performance guide section.
 	 */
 	wa_write_or(wal, GEN12_SQCM, EN_32B_ACCESS);
+}
+
+static void
+engine_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
+{
+	unsigned int fmt = XEHPC_LINEAR_16;
+
+	wa_write_or(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(DSS_UM_COMPRESSION_FMT_XEHPC, fmt));
+
+	wa_write_or(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(UM_COMPRESSION_FMT_XEHPC, fmt));
+}
+
+static void
+gt_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
+{
+	unsigned int fmt = XEHPC_LINEAR_16;
+
+	wa_write_or(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_EN);
+	wa_write_clr_set(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_FMT_XEHPC,
+			 REG_FIELD_PREP(LNI_UM_COMPRESSION_FMT_XEHPC, fmt));
+}
+
+static void
+pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
+{
+	init_dss_mcr(gt, wal, GEN_DSS_PER_CSLICE, __add_mcr_wa);
+
+	/*
+	 * Wa_14015795083
+	 * Apply to all PVC but don't verify it on PVC A0 steps, as this Wa is
+	 * dependent on clearing GEN12_DOP_CLOCK_GATE_LOCK Lock bit by
+	 * respective firmware. PVC A0 steps may not have that firmware fix.
+	 */
+	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
+		wa_add(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE, 0, 0, false);
+	else
+		wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
+
+	/*
+	 * This is a "fake" workaround to ensure stateless memory compression
+	 * settings are initialized (and re-applied) at the right time.
+	 */
+	if (HAS_STATELESS_MC(gt->i915))
+		gt_stateless_mc_config(gt->i915, wal);
 
 	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)) {
 		/* Wa_14011780169:pvc */
@@ -1702,58 +1770,6 @@ dg2_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 		wa_write_or(wal, UNSLCGCTL9430, UNSLCG_MCRUNIT_CLKGATE_DIS);
 		wa_write_or(wal, UNSLCGCTL9444, SMCR_CLKGATE_DIS);
 	}
-
-	/*
-	 * Wa_16011234808:pvc
-	 * Wa_14015795083
-	 * Apply the Wa_14015795083 to all PVC but don't verify it on PVC A0 steps,
-	 * as this Wa is dependent on clearing GEN12_DOP_CLOCK_GATE_LOCK Lock bit
-	 * by respective firmware. PVC A0 steps may not have that firmware fix.
-	 */
-	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
-		wa_add(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE, 0, 0, false);
-	else
-		wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
-}
-
-static void
-engine_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
-{
-	unsigned int fmt = XEHPC_LINEAR_16;
-
-	wa_write_or(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(DSS_UM_COMPRESSION_FMT_XEHPC, fmt));
-
-	wa_write_or(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(UM_COMPRESSION_FMT_XEHPC, fmt));
-}
-
-static void
-gt_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
-{
-	unsigned int fmt = XEHPC_LINEAR_16;
-
-	wa_write_or(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(LNI_UM_COMPRESSION_FMT_XEHPC, fmt));
-}
-
-static void
-pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	init_dss_mcr(gt, wal, GEN_DSS_PER_CSLICE, __add_mcr_wa);
-
-	/* Wa_14015795083 */
-	wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
-
-	/*
-	 * This is a "fake" workaround to ensure stateless memory compression
-	 * settings are initialized (and re-applied) at the right time.
-	 */
-	if (HAS_STATELESS_MC(gt->i915))
-		gt_stateless_mc_config(gt->i915, wal);
 }
 
 static void __add_mtl_mcr_wa(struct intel_gt *gt, struct i915_wa_list *wal,
@@ -1863,9 +1879,8 @@ void intel_gt_init_workarounds(struct intel_gt *gt)
 	if (IS_SRIOV_VF(gt->i915))
 		return;
 
-	wa_init_start(wal, "GT", "global");
+	wa_init(wal, "GT", "global");
 	gt_init_workarounds(gt, wal);
-	wa_init_finish(wal, false);
 }
 
 static enum forcewake_domains
@@ -2317,6 +2332,15 @@ void intel_engine_whitelist_sip(struct intel_engine_cs *engine)
 		whitelist_reg(&engine->whitelist, EU_GLOBAL_SIP);
 }
 
+void intel_engine_undo_whitelist_sip(struct intel_engine_cs *engine)
+{
+	/* Wa_22011767781:xehpsdv */
+	if (engine->class == COMPUTE_CLASS &&
+	    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
+		_wa_remove(&engine->whitelist, EU_GLOBAL_SIP,
+			   RING_FORCE_TO_NONPRIV_ACCESS_RW);
+}
+
 static void xehpsdv_whitelist_build(struct intel_engine_cs *engine)
 {
 	allow_read_ctx_timestamp(engine);
@@ -2348,6 +2372,9 @@ static void dg2_whitelist_build(struct intel_engine_cs *engine)
 			whitelist_reg_ext(w, PS_INVOCATION_COUNT,
 					  RING_FORCE_TO_NONPRIV_ACCESS_RD |
 					  RING_FORCE_TO_NONPRIV_RANGE_4);
+
+		/* Wa_14012503353 */
+		whitelist_reg(w, GEN11_COMMON_SLICE_CHICKEN3);
 
 		break;
 	case COMPUTE_CLASS:
@@ -2389,12 +2416,11 @@ static void pvc_whitelist_build(struct intel_engine_cs *engine)
 void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 {
 	struct drm_i915_private *i915 = engine->i915;
-	struct i915_wa_list *w = &engine->whitelist;
 
 	if (IS_SRIOV_VF(engine->i915))
 		return;
 
-	wa_init_start(w, "whitelist", engine->name);
+	wa_init(&engine->whitelist, "whitelist", engine->name);
 
 	if (IS_METEORLAKE(i915))
 		; /* noop; none at this time */
@@ -2426,8 +2452,6 @@ void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 		;
 	else
 		MISSING_CASE(GRAPHICS_VER(i915));
-
-	wa_init_finish(w, true);
 }
 
 void intel_engine_apply_whitelist(struct intel_engine_cs *engine)
@@ -2512,27 +2536,6 @@ static bool needs_wa_1308578152(struct intel_engine_cs *engine)
 		GEN_DSS_PER_GSLICE;
 }
 
-static void rcs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
-					 struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	if (GRAPHICS_VER(i915) >= 11) {
-		bool enable_done = false;
-
-		if (GRAPHICS_VER(i915) >= 12)
-			enable_done = gen9_debug_td_ctl_init(engine, wal);
-
-		if (!enable_done)
-			wa_masked_en(wal, GEN9_CS_DEBUG_MODE2,
-				     GEN11_GLOBAL_DEBUG_ENABLE);
-	}
-
-	if (GRAPHICS_VER(i915) == 9)
-		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1,
-			     GEN9_GLOBAL_DEBUG_ENABLE);
-}
-
 static void
 rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
@@ -2551,34 +2554,15 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			    DISABLE_128B_EVICTION_COMMAND_UDW);
 	}
 
-	/*
-	 * This tuning setting proves beneficial only on ATS-M designs; the
-	 * default "age based" setting is optimal on regular DG2 and other
-	 * platforms.
-	 */
-	if (INTEL_INFO(i915)->tuning_thread_rr_after_dep)
-		wa_masked_field_set(wal, GEN9_ROW_CHICKEN4, THREAD_EX_ARB_MODE,
-				    THREAD_EX_ARB_MODE_RR_AFTER_DEP);
-
 	if (IS_DG2(i915)) {
 		/* Wa_1509235366:dg2 */
 		wa_write_or(wal, GEN12_GAMCNTRL_CTRL, INVALIDATION_BROADCAST_MODE_DIS |
 			    GLOBAL_INVALIDATION_MODE);
-
-		/*
-		 * The following are not actually "workarounds" but rather
-		 * recommended tuning settings documented in the bspec's
-		 * performance guide section.
-		 */
-		wa_write_or(wal, XEHP_L3SCQREG7, BLEND_FILL_CACHING_OPT_DIS);
 	}
 
 	if (IS_DG2_GRAPHICS_STEP(i915, G11, STEP_A0, STEP_B0)) {
 		/* Wa_14013392000:dg2_g11 */
 		wa_masked_en(wal, GEN7_ROW_CHICKEN2, GEN12_ENABLE_LARGE_GRF_MODE);
-
-		/* Wa_16011620976:dg2_g11 */
-		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW, DIS_CHAIN_2XSIMD8);
 	}
 
 	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_B0) ||
@@ -2655,15 +2639,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 
 		/* Wa_14010648519:dg2 */
 		wa_write_or(wal, XEHP_L3NODEARBCFG, XEHP_LNESPARE);
-	}
-
-	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_C0) ||
-	    IS_DG2_G11(i915)) {
-		/* Wa_22012654132:dg2 */
-		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
-		       _MASKED_BIT_ENABLE(ENABLE_PREFETCH_INTO_IC),
-		       0 /* write-only, so skip validation */,
-		       true);
 	}
 
 	/* Wa_14013202645:dg2 */
@@ -2876,7 +2851,7 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			     FF_DOP_CLOCK_GATE_DISABLE);
 	}
 
-	if (HAS_PERCTX_PREEMPT_CTRL(i915)) {
+	if (IS_GRAPHICS_VER(i915, 9, 12)) {
 		/* FtrPerCtxtPreemptionGranularityControl:skl,bxt,kbl,cfl,cnl,icl,tgl */
 		wa_masked_en(wal,
 			     GEN7_FF_SLICE_CS_CHICKEN1,
@@ -2935,7 +2910,7 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (i915->debuggers.enable_eu_debug)
-		rcs_engine_wa_add_debug_mode(engine, wal);
+		intel_engine_debug_init(engine, wal);
 #endif
 
 	if (IS_HASWELL(i915)) {
@@ -3158,16 +3133,6 @@ xcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 					    XEHP_BLITTER_ROUND_ROBIN_MODE);
 }
 
-static void ccs_engine_wa_add_debug_mode(struct intel_engine_cs *engine,
-					 struct i915_wa_list *wal)
-{
-	gen9_debug_td_ctl_init(engine, wal);
-
-	/* Wa_14015527279:pvc */
-	if (IS_PONTEVECCHIO(engine->i915))
-		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
-}
-
 static void
 ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
@@ -3178,7 +3143,7 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (engine->i915->debuggers.enable_eu_debug)
-		ccs_engine_wa_add_debug_mode(engine, wal);
+		intel_engine_debug_init(engine, wal);
 #endif
 
 	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
@@ -3210,6 +3175,56 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 }
 
 /*
+ * The bspec performance guide has recommended MMIO tuning settings.  These
+ * aren't truly "workarounds" but we want to program them with the same
+ * workaround infrastructure to ensure that they're automatically added to
+ * the GuC save/restore lists, re-applied at the right times, and checked for
+ * any conflicting programming requested by real workarounds.
+ *
+ * Programming settings should be added here only if their registers are not
+ * part of an engine's register state context.  If a register is part of a
+ * context, then any tuning settings should be programmed in an appropriate
+ * function invoked by __intel_engine_init_ctx_wa().
+ */
+static void
+add_render_compute_tuning_settings(struct drm_i915_private *i915,
+				   struct i915_wa_list *wal)
+{
+	if (IS_PONTEVECCHIO(i915)) {
+		wa_write(wal, XEHPC_L3SCRUB,
+			 SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
+	}
+
+	if (IS_DG2(i915)) {
+		wa_write_or(wal, XEHP_L3SCQREG7, BLEND_FILL_CACHING_OPT_DIS);
+		wa_write_clr_set(wal, RT_CTRL, STACKID_CTRL, STACKID_CTRL_512);
+
+		/*
+		 * This is also listed as Wa_22012654132 for certain DG2
+		 * steppings, but the tuning setting programming is a superset
+		 * since it applies to all DG2 variants and steppings.
+		 *
+		 * Note that register 0xE420 is write-only and cannot be read
+		 * back for verification on DG2 (due to Wa_14012342262), so
+		 * we need to explicitly skip the readback.
+		 */
+		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
+		       _MASKED_BIT_ENABLE(ENABLE_PREFETCH_INTO_IC),
+		       0 /* write-only, so skip validation */,
+		       true);
+	}
+
+	/*
+	 * This tuning setting proves beneficial only on ATS-M designs; the
+	 * default "age based" setting is optimal on regular DG2 and other
+	 * platforms.
+	 */
+	if (INTEL_INFO(i915)->tuning_thread_rr_after_dep)
+		wa_masked_field_set(wal, GEN9_ROW_CHICKEN4, THREAD_EX_ARB_MODE,
+				    THREAD_EX_ARB_MODE_RR_AFTER_DEP);
+}
+
+/*
  * The workarounds in this function apply to shared registers in
  * the general render reset domain that aren't tied to a
  * specific engine.  Since all render+compute engines get reset
@@ -3222,17 +3237,28 @@ static void
 general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
+	bool debug_eu = false;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	debug_eu = i915->debuggers.enable_eu_debug;
+#endif
+
+	add_render_compute_tuning_settings(i915, wal);
 
 	if (IS_PONTEVECCHIO(i915)) {
-		/*
-		 * The following is not actually a "workaround" but rather
-		 * a recommended tuning setting documented in the bspec's
-		 * performance guide section.
-		 */
-		wa_write(wal, XEHPC_L3SCRUB, SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
-
 		/* Wa_16016694945 */
 		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
+
+		/*
+		 * Wa_16017028706 Disable load balancing
+		 *
+		 * FIXME: EU debug current implementation does not allow
+		 *        fixed slice mode. Only enable this workaround
+		 *        when EU debug is not enabled for now.
+		 */
+		if (!debug_eu)
+			wa_masked_en(wal, GEN12_RCU_MODE,
+				     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
 	}
 
 	if (IS_XEHPSDV(i915)) {
@@ -3287,6 +3313,14 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		wa_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, VDBX_MOD_CTRL, FORCE_MISS_FTLB);
 		wa_write_or(wal, VEBX_MOD_CTRL, FORCE_MISS_FTLB);
+	}
+
+	if (IS_DG2(i915)) {
+		/*
+		 * Wa_16011620976:dg2_g11
+		 * Wa_22015475538:dg2
+		 */
+		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW, DIS_CHAIN_2XSIMD8);
 	}
 
 	if (!RCS_MASK(engine->gt)) {
@@ -3358,19 +3392,24 @@ void intel_engine_init_workarounds(struct intel_engine_cs *engine)
 	if (GRAPHICS_VER(engine->i915) < 4)
 		return;
 
-	wa_init_start(wal, "engine", engine->name);
+	wa_init(wal, "engine", engine->name);
 	engine_init_workarounds(engine, wal);
-	wa_init_finish(wal, false);
 }
 
-void intel_engine_wa_add_debug_mode(struct intel_engine_cs *engine)
+void intel_engine_debug_enable(struct intel_engine_cs *engine)
 {
 	struct i915_wa_list *wal = &engine->wa_list;
 
-	if (engine->class == COMPUTE_CLASS)
-		ccs_engine_wa_add_debug_mode(engine, wal);
-	else if (engine->class == RENDER_CLASS)
-		rcs_engine_wa_add_debug_mode(engine, wal);
+	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
+		intel_engine_debug_init(engine, wal);
+}
+
+void intel_engine_debug_disable(struct intel_engine_cs *engine)
+{
+	struct i915_wa_list *wal = &engine->wa_list;
+
+	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
+		intel_engine_debug_fini(engine, wal);
 }
 
 void intel_engine_allow_user_register_access(struct intel_engine_cs *engine,

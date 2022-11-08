@@ -1215,6 +1215,7 @@ static void intel_c10_pll_program(struct drm_i915_private *i915,
 	int i;
 	struct intel_dp *intel_dp;
 	bool use_ssc = false;
+	bool use_hdmi = false;
 	u8 cmn0;
 
 	if (intel_crtc_has_dp_encoder(crtc_state)) {
@@ -1227,6 +1228,7 @@ static void intel_c10_pll_program(struct drm_i915_private *i915,
 
 		cmn0 = C10_CMN0_DP_VAL;
 	} else {
+		use_hdmi = true;
 		cmn0 = C10_CMN0_HDMI_VAL;
 	}
 
@@ -1243,7 +1245,7 @@ static void intel_c10_pll_program(struct drm_i915_private *i915,
 	for (i = 0; i < 20; i++)
 		/* If not using ssc pll[4] through pll[8] must be 0*/
 		intel_cx0_write(i915, encoder->port, master_lane, PHY_C10_VDR_PLL(i),
-				(!use_ssc && (i > 3 && i < 9)) ? 0 : pll_state->pll[i],
+				(!(use_ssc || use_hdmi) && (i > 3 && i < 9)) ? 0 : pll_state->pll[i],
 				(i % 4) ? MB_WRITE_UNCOMMITTED : MB_WRITE_COMMITTED);
 
 	intel_cx0_write(i915, encoder->port, master_lane, PHY_C10_VDR_CMN(0), cmn0, MB_WRITE_COMMITTED);
@@ -1502,6 +1504,7 @@ static void intel_c20_pll_program(struct drm_i915_private *i915,
 {
 	const struct intel_c20pll_state *pll_state = &crtc_state->cx0pll_state.c20pll_state;
 	bool dp = false;
+	int lane_count = crtc_state->lane_count;
 	bool cntx;
 	int i;
 
@@ -1564,36 +1567,52 @@ static void intel_c20_pll_program(struct drm_i915_private *i915,
 	}
 
 	/* 4. Program custom width to match the link protocol */
-	if (dp)
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_WIDTH,
+	if (dp) {
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE0, PHY_C20_VDR_CUSTOM_WIDTH,
 				is_dp2(pll_state->clock) ? 2 : 0,
-				MB_WRITE_UNCOMMITTED);
-	else if (is_hdmi_frl(pll_state->clock))
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_WIDTH, 1, MB_WRITE_UNCOMMITTED);
-	else
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_WIDTH, 0, MB_WRITE_UNCOMMITTED);
+				MB_WRITE_COMMITTED);
+		if (lane_count == 4)
+			intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE1, PHY_C20_VDR_CUSTOM_WIDTH,
+					is_dp2(pll_state->clock) ? 2 : 0,
+					MB_WRITE_COMMITTED);
+	} else if (is_hdmi_frl(pll_state->clock)) {
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE0, PHY_C20_VDR_CUSTOM_WIDTH,
+				1, MB_WRITE_COMMITTED);
+		if (lane_count == 4)
+			intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE1,
+					PHY_C20_VDR_CUSTOM_WIDTH, 1, MB_WRITE_COMMITTED);
+	} else
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_BOTH_LANES, PHY_C20_VDR_CUSTOM_WIDTH,
+				0, MB_WRITE_COMMITTED);
 
 	/* 5. For DP or 6. For HDMI */
 	if (dp) {
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_SERDES_RATE,
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE0, PHY_C20_VDR_CUSTOM_SERDES_RATE,
 				BIT(6) | (intel_c20_get_dp_rate(pll_state->clock) << 1),
-				MB_WRITE_UNCOMMITTED);
+				MB_WRITE_COMMITTED);
+		if (lane_count == 4)
+			intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE1, PHY_C20_VDR_CUSTOM_SERDES_RATE,
+					BIT(6) | (intel_c20_get_dp_rate(pll_state->clock) << 1),
+					MB_WRITE_COMMITTED);
 	} else {
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_SERDES_RATE,
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_BOTH_LANES, PHY_C20_VDR_CUSTOM_SERDES_RATE,
 				((is_hdmi_frl(pll_state->clock) ? 1 : 0) << 7),
-				MB_WRITE_UNCOMMITTED);
+				MB_WRITE_COMMITTED);
 
-		intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_HDMI_RATE,
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_BOTH_LANES, PHY_C20_VDR_HDMI_RATE,
 				(intel_c20_get_hdmi_rate(pll_state->clock) << 0),
-				MB_WRITE_UNCOMMITTED);
+				MB_WRITE_COMMITTED);
 	}
 
 	/*
 	 * 7. Write Vendor specific registers to toggle context setting to load
 	 * the updated programming toggle context bit
 	 */
-	intel_cx0_write(i915, encoder->port, 0, PHY_C20_VDR_CUSTOM_SERDES_RATE,
+	intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE0, PHY_C20_VDR_CUSTOM_SERDES_RATE,
 			cntx ? 0 : 1, MB_WRITE_COMMITTED);
+	if (lane_count == 4)
+		intel_cx0_write(i915, encoder->port, INTEL_CX0_LANE1, PHY_C20_VDR_CUSTOM_SERDES_RATE,
+				cntx ? 0 : 1, MB_WRITE_COMMITTED);
 }
 
 int intel_c10mpllb_calc_port_clock(struct intel_encoder *encoder,

@@ -28,7 +28,6 @@ struct i915_wa_list {
 	const char	*engine_name;
 	struct i915_wa	*list;
 	unsigned int	count;
-	unsigned int	wa_count;
 };
 
 #endif /* __INTEL_WORKAROUNDS_TYPES_H__ */

@@ -26,9 +26,9 @@ config DRM_I915_DEBUG
 	depends on IOMMU_IOVA
 	depends on IOMMU_SUPPORT
 	depends on NEED_DMA_MAP_STATE
-	select DMAR_TABLE if X86
-	select INTEL_IOMMU if X86
-	select INTEL_IOMMU_DEFAULT_ON if X86
+	depends on DMAR_TABLE
+	depends on INTEL_IOMMU
+	depends on INTEL_IOMMU_DEFAULT_ON
 	depends on DEBUG_FS
 	depends on PREEMPT_COUNT
 	depends on I2C_CHARDEV
@@ -50,7 +50,7 @@ config DRM_I915_DEBUG
 	select DRM_I915_DEBUG_RUNTIME_PM
 	select DRM_I915_DEBUG_WAKEREF
 	select DRM_I915_SW_FENCE_DEBUG_OBJECTS
-	select DRM_I915_SELFTEST if X86
+	select DRM_I915_SELFTEST
 #	select INTEL_MEI_GSC if X86
 #	select INTEL_MEI_PXP if X86
 #	select INTEL_MEI_IAF if X86
@@ -201,7 +201,6 @@ config DRM_I915_DEBUG_IOV
 config DRM_I915_SELFTEST
 	bool "Enable selftests upon driver load"
 	depends on DRM_I915
-	depends on X86
 	default n
 	select DRM_EXPORT_FOR_TESTS if m
 	depends on FAULT_INJECTION

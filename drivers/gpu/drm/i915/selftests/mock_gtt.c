@@ -107,12 +107,12 @@ static void mock_unbind_ggtt(struct i915_address_space *vm,
 {
 }
 
-void mock_init_ggtt(struct drm_i915_private *i915, struct i915_ggtt *ggtt)
+void mock_init_ggtt(struct intel_gt *gt)
 {
-	memset(ggtt, 0, sizeof(*ggtt));
+	struct i915_ggtt *ggtt = gt->ggtt;
 
-	ggtt->vm.gt = to_gt(i915);
-	ggtt->vm.i915 = i915;
+	ggtt->vm.gt = gt;
+	ggtt->vm.i915 = gt->i915;
 	ggtt->vm.is_ggtt = true;
 
 	ggtt->gmadr = (struct resource) DEFINE_RES_MEM(0, 2048 * PAGE_SIZE);
@@ -134,7 +134,6 @@ void mock_init_ggtt(struct drm_i915_private *i915, struct i915_ggtt *ggtt)
 
 	INIT_LIST_HEAD(&ggtt->gt_list);
 	i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
-	intel_gt_init_ggtt(to_gt(i915), ggtt);
 }
 
 void mock_fini_ggtt(struct i915_ggtt *ggtt)

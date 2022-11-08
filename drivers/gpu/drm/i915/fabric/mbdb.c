@@ -69,6 +69,7 @@
 struct mbdb {
 	struct fsubdev *sd;
 	bool stopping;
+	bool polling;
 	atomic_t pending_new_seq;
 
 	u64 __iomem *int_status_unmasked_addr;
@@ -122,7 +123,7 @@ struct mbdb {
 #define MBDB_SLOW_POLL_TIMEOUT (HZ)
 #define MBDB_FAST_POLL_TIMEOUT 5
 
-static bool mbdb_polling_mode;
+static unsigned int mbdb_polling_mode;
 
 static void mbdb_disable_interrupts(struct mbdb *mbdb, u64 intr_mask);
 static void mbdb_enable_interrupts(struct mbdb *mbdb, u64 intr_mask);
@@ -139,12 +140,10 @@ static void inbox_full_enqueue(struct mbdb *mbdb)
 
 static void inbox_timer_fn(struct timer_list *timer)
 {
-	if (mbdb_polling_mode) {
-		struct mbdb *mbdb = from_timer(mbdb, timer, inbox_timer);
+	struct mbdb *mbdb = from_timer(mbdb, timer, inbox_timer);
 
-		inbox_full_enqueue(mbdb);
-		mod_timer(&mbdb->inbox_timer, jiffies + MBDB_SLOW_POLL_TIMEOUT);
-	}
+	inbox_full_enqueue(mbdb);
+	mod_timer(&mbdb->inbox_timer, jiffies + MBDB_SLOW_POLL_TIMEOUT);
 }
 
 /**
@@ -203,19 +202,123 @@ static int mbdb_wait_outbox_empty(struct mbdb *mbdb)
 	return -ETIMEDOUT;
 }
 
-module_param(mbdb_polling_mode, bool, 0400);
+#define MBDB_POLLING_MODE_TILE_ENABLE BIT(31)
+#define MBDB_POLLING_MODE_TILE_MASK GENMASK(IAF_MAX_SUB_DEVS - 1, 0)
+
+static int mbdb_polling_mode_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int as_uint;
+	bool as_bool;
+	bool is_uint;
+	bool is_bool;
+
+	is_uint = !kstrtouint(val, 0, &as_uint);
+	is_bool = !strtobool(val, &as_bool);
+
+	/*
+	 * check for boolean mode: interpret as a single boolean that globally
+	 * selects interrupts (off) or polling (on), applying WAs as necessary.
+	 */
+	if (is_uint && as_uint <= 1) {
+		mbdb_polling_mode = as_uint;
+		return 0;
+	}
+	if (!is_uint && is_bool) {
+		mbdb_polling_mode = as_bool;
+		return 0;
+	}
+
+	/*
+	 * check for tile mask mode: interpret the lower bits as explicit
+	 * polling mode enables for each corresponding tile, with WAs disabled
+	 */
+	if (is_uint) {
+		if (!(as_uint & MBDB_POLLING_MODE_TILE_ENABLE)) {
+			/* the mask bit MUST be set */
+			return -EINVAL;
+		}
+		mbdb_polling_mode = as_uint;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static const struct kernel_param_ops mbdb_polling_mode_ops = {
+	.set = mbdb_polling_mode_set,
+	.get = param_get_uint,
+};
+
+/*
+ * If bit 31 is clear, the remaining bits are interpreted as a boolean value
+ * that enables polling mode as documented in the help text.  In this mode, any
+ * workarounds relevant to the device will be applied.  Intended as a general
+ * debug workaround for interrupt issues.
+ *
+ * If bit 31 is set, the remaining bits are interpreted as a mask of tiles
+ * to explicitly set polling mode for.  In this mode, workarounds are NOT
+ * applied and the user is in complete control of the mailbox mode.  Intended
+ * for debugging software in the mailbox control path that depends on a
+ * particular mode.
+ */
+module_param_cb(mbdb_polling_mode, &mbdb_polling_mode_ops, &mbdb_polling_mode, 0400);
 MODULE_PARM_DESC(mbdb_polling_mode,
 		 "Use polling instead of interrupts to access Mailbox (default: N)");
+
+/**
+ * mbdb_apply_pvc_rc6_wa - use polling mode on tile 1 to avoid
+ * RC6-related mailbox latency (WA_14017048588).
+ * @mbdb: subdevice mailbox reference
+ */
+static void mbdb_apply_pvc_rc6_wa(struct mbdb *mbdb)
+{
+	struct fsubdev *sd = mbdb->sd;
+
+	if (mbdb->polling)
+		return;
+
+	if (sd->fdev->pd->product == IAF_PONTEVECCHIO && sd_index(sd) == 1) {
+		sd_info(sd, "mbdb polling mode pvc wa enabled for tile 1\n");
+		mbdb->polling = true;
+	}
+}
+
+static void mbdb_polling_mode_apply(struct mbdb *mbdb)
+{
+	if (mbdb_polling_mode & MBDB_POLLING_MODE_TILE_ENABLE) {
+		/* do NOT apply any WAs in tile mask mode */
+		mbdb->polling = mbdb_polling_mode
+			      & MBDB_POLLING_MODE_TILE_MASK
+			      & BIT(sd_index(mbdb->sd));
+	} else {
+		/* apply applicable WAs in legacy boolean mode */
+		mbdb->polling = mbdb_polling_mode;
+		mbdb_apply_pvc_rc6_wa(mbdb);
+	}
+}
 
 /**
  * mbdb_init_module - Early device-independent module initialization
  */
 void mbdb_init_module(void)
 {
-	if (mbdb_polling_mode)
-		pr_info("mailbox is in polling mode\n");
-	else
-		pr_debug("mailbox interrupts enabled\n");
+	unsigned int tile, mask;
+
+	if (!mbdb_polling_mode) {
+		pr_debug("mailbox mode: interrupts enabled\n");
+		return;
+	}
+
+	if (!(mbdb_polling_mode & MBDB_POLLING_MODE_TILE_ENABLE)) {
+		pr_info("mailbox mode: polling enabled for all tiles\n");
+		return;
+	}
+
+	pr_info("mailbox mode: workarounds disabled\n");
+	for (tile = 0, mask = 1; mask < MBDB_POLLING_MODE_TILE_MASK; ++tile, mask <<= 1) {
+		if (mbdb_polling_mode & mask)
+			pr_info("mailbox mode: polling enabled for tile %u\n", tile);
+	}
 }
 
 static void mbdb_int_ack_wr(struct mbdb *mbdb, u64 mask)
@@ -342,7 +445,7 @@ static void mbdb_stop_from_handler(struct mbdb *mbdb)
 
 	WRITE_ONCE(mbdb->stopping, true);
 
-	if (mbdb_polling_mode)
+	if (mbdb->polling)
 		del_timer_sync(&mbdb->inbox_timer);
 	else
 		complete(&mbdb->outbox_empty);
@@ -472,12 +575,12 @@ static void mbdb_inbox_empty(struct mbdb *mbdb)
 {
 /* tell our partner it can put a new message in its outbox */
 
-	if (!mbdb_polling_mode)
+	if (!mbdb->polling)
 		mbdb_enable_interrupts(mbdb, INBOX_FULL_MASK);
 
 	mbdb_int_partner_set_wr(mbdb, OUTBOX_EMPTY_MASK);
 
-	if (mbdb_polling_mode)
+	if (mbdb->polling)
 		inbox_full_enqueue(mbdb);
 }
 
@@ -499,7 +602,7 @@ static void mbdb_inbox_full_fn(struct work_struct *inbox_full)
 
 	mutex_lock(&mbdb->inbox_mutex);
 
-	if (mbdb_polling_mode) {
+	if (mbdb->polling) {
 		u64 int_status_unmasked;
 
 		if (mbdb_readq(mbdb, mbdb->int_status_unmasked_addr, &int_status_unmasked))
@@ -602,7 +705,7 @@ static void mbdb_init(struct mbdb *mbdb)
 	mbdb->int_enables = 0ull;
 	mbdb_int_partner_set_wr(mbdb, OUTBOX_EMPTY_MASK);
 
-	if (!mbdb_polling_mode)
+	if (!mbdb->polling)
 		mbdb_enable_interrupts(mbdb, INBOX_FULL_MASK);
 }
 
@@ -642,7 +745,7 @@ static int mbdb_outbox_is_empty(struct mbdb *mbdb)
 	if (reg_val & OUTBOX_EMPTY_MASK)
 		return 0;
 
-	if (mbdb_polling_mode) {
+	if (mbdb->polling) {
 		int ret = mbdb_wait_outbox_empty(mbdb);
 
 		if (ret == -ETIMEDOUT) {
@@ -868,7 +971,7 @@ int mbdb_ibox_wait(struct mbdb_ibox *ibox)
 
 	atomic_inc(&mbdb->ibox_waiters);
 
-	if (mbdb_polling_mode)
+	if (mbdb->polling)
 		inbox_full_enqueue(mbdb);
 
 	completed = wait_for_completion_timeout(&ibox->ibox_full, TIMEOUT);
@@ -906,7 +1009,7 @@ int mbdb_ibox_wait(struct mbdb_ibox *ibox)
 	if (atomic_dec_and_test(&mbdb->ibox_waiters) && stopping)
 		complete(&mbdb->ibox_waiters_done);
 
-	if (mbdb_polling_mode)
+	if (mbdb->polling)
 		inbox_full_enqueue(mbdb);
 
 	return ret;
@@ -941,7 +1044,7 @@ void destroy_mbdb(struct fsubdev *sd)
 
 	WRITE_ONCE(mbdb->stopping, true);
 
-	if (mbdb_polling_mode) {
+	if (mbdb->polling) {
 		del_timer_sync(&mbdb->inbox_timer);
 	} else {
 		mbdb_disable_interrupts(mbdb, mbdb->int_enables);
@@ -1008,6 +1111,8 @@ int create_mbdb(struct fsubdev *sd)
 	mbdb->stopping = false;
 	atomic_set(&mbdb->pending_new_seq, 0);
 
+	mbdb_polling_mode_apply(mbdb);
+
 	mbdb_set_mem_addresses(mbdb);
 
 	init_completion(&mbdb->outbox_empty);
@@ -1029,7 +1134,7 @@ int create_mbdb(struct fsubdev *sd)
 
 	mbdb_init(mbdb);
 
-	if (mbdb_polling_mode) {
+	if (mbdb->polling) {
 		timer_setup(&mbdb->inbox_timer, inbox_timer_fn, 0);
 		add_timer(&mbdb->inbox_timer);
 	}

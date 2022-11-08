@@ -15,7 +15,7 @@ config DRM_I915_INTEL_FABRIC
 config IAF_DEBUG_ENABLE
 	bool "Enable Intel Accelerator Fabric debug configurations"
 	depends on DRM_I915_INTEL_FABRIC
-	default y
+	default n
 	help
 	  Support Intel Accelerator Fabric debug Kconfig options
 
@@ -61,11 +61,3 @@ config IAF_DEBUG_STARTUP
 	  DO NOT UPSTREAM:
 	  Allow startup_mode parameter to boot devices into debug modes
 
-config IAF_ANTI_ROLLBACK
-	bool "Enable Intel Accelerator Fabric anti-rollback support"
-	depends on DRM_I915_INTEL_FABRIC
-	depends on INTEL_MEI_IAF
-	default y
-	help
-	  DO NOT UPSTREAM:
-	  Build Intel Accelerator Fabric driver for preproduction environment

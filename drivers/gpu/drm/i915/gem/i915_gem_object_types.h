@@ -10,6 +10,7 @@
 #include <linux/mmu_notifier.h>
 
 #include <drm/drm_gem.h>
+#include <drm/ttm/ttm_bo_api.h>
 #include <uapi/drm/i915_drm.h>
 
 #include "../i915_active.h"
@@ -62,10 +63,26 @@ struct drm_i915_gem_object_ops {
 		     const struct drm_i915_gem_pread *arg);
 	int (*pwrite)(struct drm_i915_gem_object *obj,
 		      const struct drm_i915_gem_pwrite *arg);
+	u64 (*mmap_offset)(struct drm_i915_gem_object *obj);
 
 	int (*dmabuf_export)(struct drm_i915_gem_object *obj);
+
+	/**
+	 * adjust_lru - notify that the madvise value was updated
+	 * @obj: The gem object
+	 *
+	 * The madvise value may have been updated, or object was recently
+	 * referenced so act accordingly (Perhaps changing an LRU list etc).
+	 */
+	void (*adjust_lru)(struct drm_i915_gem_object *obj);
+
+	/**
+	 * delayed_free - Override the default delayed free implementation
+	 */
+	void (*delayed_free)(struct drm_i915_gem_object *obj);
 	void (*release)(struct drm_i915_gem_object *obj);
 
+	const struct vm_operations_struct *mmap_ops;
 	const char *name; /* friendly name for debug, e.g. lockdep classes */
 };
 
@@ -182,7 +199,16 @@ struct i915_gem_object_page_iter {
 };
 
 struct drm_i915_gem_object {
-	struct drm_gem_object base;
+	/*
+	 * We might have reason to revisit the below since it wastes
+	 * a lot of space for non-ttm gem objects.
+	 * In any case, always use the accessors for the ttm_buffer_object
+	 * when accessing it.
+	 */
+	union {
+		struct drm_gem_object base;
+		struct ttm_buffer_object __do_not_access;
+	};
 
 	const struct drm_i915_gem_object_ops *ops;
 
@@ -271,23 +297,26 @@ struct drm_i915_gem_object {
 #define I915_BO_ALLOC_VOLATILE   BIT(1)
 #define I915_BO_ALLOC_STRUCT_PAGE BIT(2)
 #define I915_BO_ALLOC_CPU_CLEAR  BIT(3)
-#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE	BIT(4)
-#define I915_BO_ALLOC_CHUNK_64K  BIT(5)
-#define I915_BO_ALLOC_CHUNK_2M   BIT(6)
-#define I915_BO_ALLOC_CHUNK_4K   BIT(9)
-#define I915_BO_ALLOC_CHUNK_1G   BIT(10)
+#define I915_BO_ALLOC_USER       BIT(4)
+#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE     BIT(5)
+#define I915_BO_ALLOC_CHUNK_64K  BIT(6)
+#define I915_BO_ALLOC_CHUNK_2M   BIT(7)
+#define I915_BO_ALLOC_CHUNK_4K   BIT(11)
+#define I915_BO_ALLOC_CHUNK_1G   BIT(12)
 #define I915_BO_ALLOC_FLAGS (I915_BO_ALLOC_CONTIGUOUS | \
 			     I915_BO_ALLOC_VOLATILE | \
 			     I915_BO_ALLOC_STRUCT_PAGE | \
 			     I915_BO_ALLOC_CPU_CLEAR | \
+			     I915_BO_ALLOC_USER | \
 			     I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE | \
 			     I915_BO_ALLOC_CHUNK_4K | \
 			     I915_BO_ALLOC_CHUNK_64K | \
 			     I915_BO_ALLOC_CHUNK_2M | \
 			     I915_BO_ALLOC_CHUNK_1G)
-#define I915_BO_READONLY         BIT(7)
-#define I915_TILING_QUIRK_BIT    8 /* unknown swizzling; do not release! */
-#define I915_BO_FABRIC           BIT(11)
+#define I915_BO_READONLY         BIT(8)
+#define I915_TILING_QUIRK_BIT    9 /* unknown swizzling; do not release! */
+#define I915_BO_WAS_BOUND_BIT    10
+#define I915_BO_FABRIC           BIT(13)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -404,6 +433,39 @@ struct drm_i915_gem_object {
 	 * Note that on shared LLC platforms we still apply the heavy flush for
 	 * I915_CACHE_NONE objects, under the assumption that this is going to
 	 * be used for scanout.
+	 *
+	 * Update: On some hardware there is now also the 'Bypass LLC' MOCS
+	 * entry, which defeats our @cache_coherent tracking, since userspace
+	 * can freely bypass the CPU cache when touching the pages with the GPU,
+	 * where the kernel is completely unaware. On such platform we need
+	 * apply the sledgehammer-on-acquire regardless of the @cache_coherent.
+	 *
+	 * Special care is taken on non-LLC platforms, to prevent potential
+	 * information leak. The driver currently ensures:
+	 *
+	 *   1. All userspace objects, by default, have @cache_level set as
+	 *   I915_CACHE_NONE. The only exception is userptr objects, where we
+	 *   instead force I915_CACHE_LLC, but we also don't allow userspace to
+	 *   ever change the @cache_level for such objects. Another special case
+	 *   is dma-buf, which doesn't rely on @cache_dirty,  but there we
+	 *   always do a forced flush when acquiring the pages, if there is a
+	 *   chance that the pages can be read directly from main memory with
+	 *   the GPU.
+	 *
+	 *   2. All I915_CACHE_NONE objects have @cache_dirty initially true.
+	 *
+	 *   3. All swapped-out objects(i.e shmem) have @cache_dirty set to
+	 *   true.
+	 *
+	 *   4. The @cache_dirty is never freely reset before the initial
+	 *   flush, even if userspace adjusts the @cache_level through the
+	 *   i915_gem_set_caching_ioctl.
+	 *
+	 *   5. All @cache_dirty objects(including swapped-in) are initially
+	 *   flushed with a synchronous call to drm_clflush_sg in
+	 *   __i915_gem_object_set_pages. The @cache_dirty can be freely reset
+	 *   at this point. All further asynchronous clfushes are never security
+	 *   critical, i.e userspace is free to race against itself.
 	 */
 	unsigned int cache_dirty:1;
 
@@ -474,9 +536,12 @@ struct drm_i915_gem_object {
 		 * Memory region for this object.
 		 */
 		struct intel_memory_region *region;
+
 		/**
-		 * List of memory region blocks allocated for this object.
+		 * Memory manager resource allocated for this object. Only
+		 * needed for the mock region.
 		 */
+		struct ttm_resource *res;
 		struct list_head blocks;
 		/**
 		 * Element within memory_region->objects or region->purgeable
@@ -542,6 +607,12 @@ struct drm_i915_gem_object {
 
 		u32 tlb[I915_MAX_GT];
 	} mm;
+
+	struct {
+		struct sg_table *cached_io_st;
+		struct i915_gem_object_page_iter get_io_page;
+		bool created:1;
+	} ttm;
 
 	/** Record of address bit 17 of each page at last unbind. */
 	unsigned long *bit_17;
