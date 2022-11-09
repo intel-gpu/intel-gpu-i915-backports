@@ -36,7 +36,7 @@ backport/main will point to the currently supported version of Ubuntu® and SLES
 
 | Product  | Backport Released Tag|OS Version	 | Kernel Version  | Building | Testing |
 |--- |--- |---  |---  |---  |--- |
-|Intel® Data Center GPU Flex Series|I915_22WW45.5_476.14_6213_220914.2 |Ubuntu® 22.04 | 5.17.0-1019-oem| Yes |No |
+|Intel® Data Center GPU Flex Series|I915_22WW45.5_476.14_6213_220914.3 |Ubuntu® 22.04 | 5.17.0-1019-oem| Yes |No |
 || | Ubuntu® 22.04 |  5.15.0-50 |Yes |Yes |
 | || Mainline LTS |  5.15.72 |Yes |No |
 
