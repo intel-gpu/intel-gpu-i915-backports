@@ -53,6 +53,7 @@ mrproper:
 	echo "| for more options."							;\
 	echo "\\--"									;\
 	false)
+ifeq (,$(filter i915dkmsdeb-pkg i915dkmsrpm-pkg, $(MAKECMDGOALS)))
 	@set -e ; test -f $(KERNEL_CONFIG) || (						\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
@@ -116,6 +117,7 @@ mrproper:
 		echo " done."								;\
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
+endif
 	@$(MAKE) -f Makefile.real "$@"
 
 .PHONY: defconfig-help
