@@ -20,10 +20,11 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
+PKG_DISTRO_TARGETS := i915dkmsdeb-pkg i915dkmsrpm-pkg
 
 ARCH := x86_64
 
-export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH KBUILD_MODPOST_WARN
+export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH KBUILD_MODPOST_WARN PKG_DISTRO_TARGETS
 
 # disable built-in rules for this file
 .SUFFIXES:
@@ -53,7 +54,7 @@ mrproper:
 	echo "| for more options."							;\
 	echo "\\--"									;\
 	false)
-ifeq (,$(filter i915dkmsdeb-pkg i915dkmsrpm-pkg, $(MAKECMDGOALS)))
+ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	@set -e ; test -f $(KERNEL_CONFIG) || (						\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
@@ -130,8 +131,30 @@ defconfig-help:
 		done
 	@echo ""
 
+.PHONY: i915dkmsdeb-pkg-help
+i915dkmsdeb-pkg-help:
+	$(info deb package contains the default kernel version.)
+	$(info You can set this value by passing supported kernel name.)
+	$(info ###   List of supported osv kernel versions   ###)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC" 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep "GENERIC" 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep MAINLINE 1>&2)
+	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
+	@echo "      ex: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC"
+
+.PHONY: i915dkmsrpm-pkg-help
+i915dkmsrpm-pkg-help:
+	$(info rpm package contains the default kernel version.)
+	$(info You can set this value by passing supported kernel name.)
+	$(info ###   List of supported osv kernel versions   ###)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep MAINLINE 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
+	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
+	@echo "      ex: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4"
+
 .PHONY: help
-help: defconfig-help
+help: defconfig-help i915dkmsdeb-pkg-help i915dkmsrpm-pkg-help
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"
@@ -167,7 +190,7 @@ help: defconfig-help
 	@echo ""
 	@echo "Execute "make" or "make all" to build all targets marked with [*]"
 else
-include $(BACKPORT_DIR)/Makefile.kernel
+include $(BACKPORT_DIR)/Makefile.dkms
 endif
 
 PHONY += FORCE
