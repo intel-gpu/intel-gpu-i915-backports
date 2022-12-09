@@ -2702,6 +2702,7 @@ struct drm_i915_query_item {
 	 *  - %DRM_I915_QUERY_MEMORY_REGIONS (see struct drm_i915_query_memory_regions)
 	 *  - %DRM_I915_QUERY_HWCONFIG_BLOB (see `GuC HWCONFIG blob uAPI`)
 	 *  - %DRM_I915_QUERY_GEOMETRY_SUBSLICES (see struct drm_i915_query_topology_info)
+	 *  - %DRM_I915_QUERY_HW_IP_VERSION (see struct drm_i915_query_hw_ip_version)
 	 */
 	__u64 query_id;
 #define DRM_I915_QUERY_TOPOLOGY_INFO		1
@@ -3378,6 +3379,35 @@ struct drm_i915_gem_create_ext_memory_regions {
 
 /* ID of the protected content session managed by i915 when PXP is active */
 #define I915_PROTECTED_CONTENT_DEFAULT_SESSION 0xf
+
+/**
+ * struct drm_i915_query_hw_ip_version
+ *
+ * Hardware IP version (i.e., architecture generation) associated with a
+ * specific engine.
+ */
+struct drm_i915_query_hw_ip_version {
+	/** Engine to query HW IP version for */
+	struct i915_engine_class_instance engine;
+
+	/** @flags: MBZ */
+	__u8 flags;
+
+	/** @arch: Architecture version */
+	__u8 arch;
+
+	/** @release: Architecture release id */
+	__u8 release;
+
+	/**
+	 * @stepping: Architecture stepping
+	 *
+	 * The value returned is taken from the hardware's GMD_ID register.
+	 * For older (pre-Meteor Lake) platforms that did not have a GMD_ID
+	 * register, 0 will be returned.
+	 */
+	__u8 stepping;
+};
 
 #if defined(__cplusplus)
 }

@@ -4,6 +4,10 @@
  */
 #include <linux/pci.h>
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
+#include <linux/mfd/core.h>
+#endif
+
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
@@ -15,32 +19,6 @@ static int device_set_offline(struct device *dev, void *data)
 {
 	dev->offline = true;
 	return 0;
-}
-
-static void clear_poison_registers(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	u32 poisondatasts;
-	int i;
-
-	/*
-	 * The HW poisons the data sent towards host when an uncorrectable
-	 * error occurs and sets the VIRAL_POISON_CONDITION bit in
-	 * POISON_DATA_STATUS register which is sticky and needs to be
-	 * cleared once the HW came out of warm reset otherwise the HW
-	 * continues to poison the data towards host.
-	 * HSDES: 14015574849
-	 */
-	if (IS_DGFX(i915)) {
-		for_each_gt(gt, i915, i) {
-			/*
-			 * We just came out of a PCI reset, we can't truct mmio access yet
-			 * so limit to using raw access.
-			 */
-			poisondatasts = raw_reg_read(gt->uncore->regs, POISON_DATA_STATUS);
-			raw_reg_write(gt->uncore->regs, POISON_DATA_STATUS, poisondatasts);
-		}
-	}
 }
 
 /**
@@ -87,6 +65,10 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	device_for_each_child(&pdev->dev, NULL, device_set_offline);
 	intel_iaf_pcie_error_notify(i915);
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
+	mfd_remove_devices(&pdev->dev);
+#endif
+
 	for_each_gt(gt, i915, i) {
 		intel_gt_set_wedged(gt);
 		intel_gt_retire_requests(gt);
@@ -128,7 +110,6 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	 * the i915 private data and reinitialize afresh similar to
 	 * probe
 	 */
-	clear_poison_registers(i915);
 	i915_pci_error_clear_fault(i915);
 	pdev->driver->remove(pdev);
 	devm_drm_release_action(&i915->drm);

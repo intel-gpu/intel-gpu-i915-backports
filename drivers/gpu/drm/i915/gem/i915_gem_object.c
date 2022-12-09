@@ -22,17 +22,19 @@
  *
  */
 
-#include <drm/drm_print.h>
+#include <linux/highmem.h>
 #include <linux/sched/mm.h>
 #include <linux/iosys-map.h>
 
 #include <drm/drm_cache.h>
+#include <drm/drm_print.h>
 
 #include "display/intel_frontbuffer.h"
 #include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
+#include "gt/intel_migrate.h"
 #include "gt/intel_ring.h"
 
 #include "i915_debugger.h"
@@ -45,6 +47,7 @@
 #include "i915_gem_object.h"
 #include "i915_gem_object_blt.h"
 #include "i915_gem_region.h"
+#include "i915_gem_tiling.h"
 #include "i915_gem_vm_bind.h"
 #include "i915_memcpy.h"
 #include "i915_svm.h"
@@ -221,6 +224,18 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 	if (i915_gem_object_test_preferred_location(obj, dst_region_id))
 		return true;
 
+	/* Migrate if no backing store (aka migrate on 'first touch') */
+	if (!(i915_gem_object_has_pages(obj) || obj->base.filp))
+		return true;
+
+	/*
+	 * Migrate if backing store never mapped to page table (as above,
+	 * this is to migrate on first touch).  We don't need this extra
+	 * check if we defer page allocation to get_pages().
+	 */
+	if (!i915_gem_object_has_first_bind(obj))
+		return true;
+
 	return false;
 }
 
@@ -320,6 +335,11 @@ static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *f
 	LIST_HEAD(close);
 
 	i915_drm_client_del_bo_sz(file, obj);
+
+	if (obj->pair) {
+		i915_gem_object_put(obj->pair);
+		obj->pair = NULL;
+	}
 
 	spin_lock(&obj->lut_lock);
 	list_for_each_entry_safe(lut, ln, &obj->lut_list, obj_link) {
@@ -522,11 +542,16 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 
 	GEM_BUG_ON(i915_gem_object_is_framebuffer(obj));
 
+	if (obj->smem_obj) {
+		/* Release mirrored resources */
+		i915_gem_object_put(obj->smem_obj);
+		obj->smem_obj = NULL;
+	}
+
 	/*
 	 * If object had been swapped out, free the hidden object.
 	 */
 	if (obj->swapto) {
-		GEM_BUG_ON(!i915->params.enable_eviction);
 		i915_gem_object_put(obj->swapto);
 		obj->swapto = NULL;
 	}
@@ -635,6 +660,19 @@ bool i915_gem_object_can_migrate(struct drm_i915_gem_object *obj,
 	return false;
 }
 
+static struct drm_i915_gem_object *
+_i915_gem_object_create_region(struct drm_i915_private *i915,
+			       enum intel_region_id id, long int size)
+{
+	struct intel_memory_region *mem;
+	unsigned int alloc_flags;
+
+	mem = i915->mm.regions[id];
+	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
+		      I915_BO_ALLOC_CONTIGUOUS : 0;
+	return i915_gem_object_create_region(mem, size, alloc_flags);
+}
+
 int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 			    struct i915_gem_ww_ctx *ww,
 			    struct intel_context *ce,
@@ -643,9 +681,8 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct drm_i915_gem_object *donor;
-	struct intel_memory_region *mem;
-	struct sg_table *pages = NULL;
-	unsigned int page_sizes, alloc_flags;
+	struct sg_table *pages, *donor_pages;
+	unsigned int page_sizes, donor_page_sizes;
 	int err = 0;
 
 	assert_object_held(obj);
@@ -654,18 +691,42 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	if (obj->mm.region->id == id)
 		return 0;
 
-	mem = i915->mm.regions[id];
-	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
-		I915_BO_ALLOC_CONTIGUOUS : 0;
-	donor = i915_gem_object_create_region(mem, obj->base.size, alloc_flags);
-	if (IS_ERR(donor)) {
-		err = PTR_ERR(donor);
-		return err;
+	if (!obj->smem_obj) {
+		if (id == INTEL_REGION_SMEM || obj->base.filp) {
+			/* only create smem_obj if to and from SMEM */
+			obj->smem_obj = _i915_gem_object_create_region(i915, INTEL_REGION_SMEM,
+								       obj->base.size);
+			if (IS_ERR(obj->smem_obj)) {
+				err = PTR_ERR(obj->smem_obj);
+				obj->smem_obj = 0;
+				return err;
+			}
+		}
+	}
+
+	if (id == INTEL_REGION_SMEM) {
+		GEM_BUG_ON(!obj->smem_obj);
+		donor = obj->smem_obj;
+		donor->cache_dirty = 0;
+		/* Need to clear I915_MADV_DONTNEED */
+		donor->mm.madv = I915_MADV_WILLNEED;
+	} else {
+		donor = _i915_gem_object_create_region(i915, id, obj->base.size);
+		if (IS_ERR(donor)) {
+			err = PTR_ERR(donor);
+			return err;
+		}
+
+		if (obj->smem_obj) {
+			err = i915_gem_object_lock(obj->smem_obj, ww);
+			if (err)
+				goto err_put_donor;
+		}
 	}
 
 	err = i915_gem_object_lock(donor, ww);
 	if (err)
-		goto err_put_donor;
+		goto unlock_smem_obj;
 
 	/* Copy backing-pages if we have to */
 	if (i915_gem_object_has_pages(obj) ||
@@ -686,10 +747,6 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 			goto unlock_donor;
 	}
 
-	err = i915_gem_object_set_to_cpu_domain(donor, false);
-	if (err)
-		goto unlock_donor;
-
 	intel_gt_retire_requests(to_gt(i915));
 
 	i915_gem_object_unbind(donor, ww, 0);
@@ -699,45 +756,96 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		goto unlock_donor;
 
 	trace_i915_gem_object_migrate(obj, id);
-	pages = __i915_gem_object_unset_pages(obj);
-	if (pages)
-		GEM_WARN_ON(obj->ops->put_pages(obj, pages));
+	donor_page_sizes = donor->mm.page_sizes.phys;
+	donor_pages = __i915_gem_object_unset_pages(donor);
 
-	page_sizes = donor->mm.page_sizes.phys;
-	pages = __i915_gem_object_unset_pages(donor);
+	if (obj->base.filp) {
+		GEM_BUG_ON(!obj->smem_obj);
+		if (obj->smem_obj->base.filp != obj->base.filp) {
+			/*
+			 * free smem_obj's initial filp before
+			 * replace with obj's
+			 */
+			if (obj->smem_obj->base.filp)
+				fput(obj->smem_obj->base.filp);
+			/* reuse the obj filp */
+			atomic_long_inc(&obj->base.filp->f_count);
+			obj->smem_obj->base.filp = obj->base.filp;
+		}
+	}
+	page_sizes = obj->mm.page_sizes.phys;
+	pages = __i915_gem_object_unset_pages(obj);
+	if (pages) {
+		if (obj->base.filp)
+			 /* Only reuse smem as lmem alloc/pin is efficient */
+			__i915_gem_object_set_pages(obj->smem_obj, pages, page_sizes);
+		else
+			GEM_WARN_ON(obj->ops->put_pages(obj, pages));
+	}
 
 	if (obj->ops->release)
 		obj->ops->release(obj);
 
 	/* We need still need a little special casing for shmem */
 	if (obj->base.filp)
-		fput(fetch_and_zero(&obj->base.filp));
-	else if (donor->base.filp) {
-		atomic_long_inc(&donor->base.filp->f_count);
-		obj->base.filp = donor->base.filp;
+		obj->base.filp = 0;
+	else if (id == INTEL_REGION_SMEM) {
+		GEM_BUG_ON(!obj->smem_obj);
+		atomic_long_inc(&obj->smem_obj->base.filp->f_count);
+		obj->base.filp = obj->smem_obj->base.filp;
 	}
 
 	obj->base.size = donor->base.size;
-	obj->mm.region = intel_memory_region_get(mem);
+	obj->mm.region = intel_memory_region_get(i915->mm.regions[id]);
 	obj->flags = donor->flags;
 	obj->ops = donor->ops;
-	obj->pat_index = donor->pat_index;
-	obj->cache_coherent = donor->cache_coherent;
 	obj->cache_dirty = donor->cache_dirty;
 
 	list_replace_init(&donor->mm.blocks, &obj->mm.blocks);
 
-	/* set pages after migrated */
-	if (pages)
-		__i915_gem_object_set_pages(obj, pages, page_sizes);
+	/* Need to set I915_MADV_DONTNEED so that shrinker can free it */
+	if (obj->smem_obj)
+		obj->smem_obj->mm.madv = I915_MADV_DONTNEED;
+	if (id != INTEL_REGION_SMEM) {
+		GEM_BUG_ON(i915_gem_object_has_pages(donor));
+		GEM_BUG_ON(i915_gem_object_has_pinned_pages(donor));
+	}
 
-	GEM_BUG_ON(i915_gem_object_has_pages(donor));
-	GEM_BUG_ON(i915_gem_object_has_pinned_pages(donor));
+	i915_gem_ww_unlock_single(donor);
+	if (id != INTEL_REGION_SMEM && obj->smem_obj)
+		i915_gem_ww_unlock_single(obj->smem_obj);
+	if (id != INTEL_REGION_SMEM)
+		i915_gem_object_put(donor);
+
+	/* set pages after migrated */
+	if (donor_pages) {
+		__i915_gem_object_set_pages(obj, donor_pages, donor_page_sizes);
+	} else if (obj->mm.region->type == INTEL_MEMORY_LOCAL) {
+		/*
+		 * Ensure backing store (new pages) are zeroed.
+		 * TODO: this should be part of get_pages(),
+		 * when async get_pages arrives
+		 */
+		err = i915_gem_object_ww_fill_blt(obj, ww, ce, 0);
+		if (err) {
+			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
+					      "Failed to clear object backing store! (%d)\n", err);
+			goto err;
+		}
+	}
+
+	/* set to cpu read domain, after any blt operations */
+	return i915_gem_object_set_to_cpu_domain(obj, false);
+
 unlock_donor:
 	i915_gem_ww_unlock_single(donor);
+unlock_smem_obj:
+	if (id != INTEL_REGION_SMEM && obj->smem_obj)
+		i915_gem_ww_unlock_single(obj->smem_obj);
 err_put_donor:
-	i915_gem_object_put(donor);
-
+	if (id != INTEL_REGION_SMEM)
+		i915_gem_object_put(donor);
+err:
 	return err;
 }
 
@@ -1091,26 +1199,8 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 		struct intel_memory_region *region = regions[i];
 
 		ret = i915_gem_object_migrate(obj, ww, ce, region->id, false);
-		if (!ret) {
-			if (!i915_gem_object_has_pages(obj) &&
-			    region->type == INTEL_MEMORY_LOCAL) {
-				/*
-				 * TODO: this should be part of get_pages(),
-				 * when async get_pages arrives
-				 */
-				ret = i915_gem_object_ww_fill_blt(obj, ww, ce, 0);
-				if (ret) {
-					i915_log_driver_error(dev_priv, I915_DRIVER_ERROR_OBJECT_MIGRATION,
-							      "Failed to clear object backing store! (%d)\n", ret);
-					goto err;
-				}
-
-				ret = i915_gem_object_set_to_cpu_domain(obj, false);
-				if (ret)
-					goto err;
-			}
+		if (!ret)
 			break;
-		}
 	}
 err:
 	return ret;
@@ -1433,29 +1523,19 @@ static void prepare_vma(struct i915_vma *vma,
 
 static int
 i915_ccs_batch_prepare(struct i915_request *rq,
-				   struct i915_vma *lmem,
-				   struct i915_vma *ccs, size_t size, bool src_is_lmem)
+		       struct i915_vma *lmem,
+		       struct i915_vma *ccs, size_t size, bool src_is_lmem)
 {
 	u32 *cmd;
-	int num_ccs_blocks, src_mem_access, dst_mem_access;
+	int cmdsize = i915_calc_ctrl_surf_instr_dwords(rq->engine->i915, lmem);
+	int src_mem_access, dst_mem_access;
 	struct i915_vma *src, *dst;
-	struct intel_gt *gt = lmem->vm->gt;
-	u32 mocs = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, gt->mocs.uc_index);
 
 	GEM_BUG_ON(size > BLT_WINDOW_SZ);
-	/*
-	 * Size of XY_surf_cmd is 5.
-	 * Size of two MI_FLUSH_DW cmd is 6.
-	 * Added 1 for even size requirement of intel_ring_begin.
-	 */
-	cmd = intel_ring_begin(rq, 12);
+
+	cmd = intel_ring_begin(rq, cmdsize);
 	if (IS_ERR(cmd))
 		return PTR_ERR(cmd);
-
-	GEM_BUG_ON(size >> PAGE_SHIFT > S16_MAX);
-	num_ccs_blocks = size/NUM_CCS_BYTES_PER_BLOCK;
-	if (num_ccs_blocks < 1)
-		num_ccs_blocks = 1;
 
 	if (src_is_lmem) {
 		src_mem_access = INDIRECT_ACCESS;
@@ -1469,18 +1549,11 @@ i915_ccs_batch_prepare(struct i915_request *rq,
 		dst = lmem;
 	}
 
-	*cmd++ = XY_CTRL_SURF_COPY_BLT |
-		(src_mem_access << SRC_ACCESS_TYPE_SHIFT) |
-		(dst_mem_access << DST_ACCESS_TYPE_SHIFT) |
-		(((num_ccs_blocks - 1) & 1023) << CCS_SIZE_SHIFT);
+	cmd = xehp_emit_ccs_copy(cmd, rq->engine->gt,
+				 i915_vma_offset(src), src_mem_access,
+				 i915_vma_offset(dst), dst_mem_access,
+				 size);
 
-	*cmd++ = lower_32_bits(i915_vma_offset(src));
-	*cmd++ = upper_32_bits(i915_vma_offset(src)) | mocs;
-	*cmd++ = lower_32_bits(i915_vma_offset(dst));
-	*cmd++ = upper_32_bits(i915_vma_offset(dst)) | mocs;
-	cmd = i915_flush_dw(cmd, dst, MI_FLUSH_LLC | MI_INVALIDATE_TLB);
-	cmd = i915_flush_dw(cmd, dst, MI_FLUSH_CCS);
-	*cmd++ = 0;
 	intel_ring_advance(rq, cmd);
 
 	return 0;
@@ -1606,7 +1679,7 @@ int i915_window_blt_copy(struct drm_i915_gem_object *dst,
 
 		if (ccs_handling) {
 			err = i915_ccs_batch_prepare(rq, (src_is_lmem) ? src_vma : dst_vma,
-							ccs_vma, chunk>>8, src_is_lmem);
+						     ccs_vma, chunk, src_is_lmem);
 			if (err) {
 				DRM_ERROR("CCS Batch preparation failed. %d\n", err);
 				i915_request_set_error_once(rq, -EIO);

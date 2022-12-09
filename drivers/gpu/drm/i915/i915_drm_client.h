@@ -50,6 +50,8 @@ struct i915_drm_client_name {
 	struct rcu_head rcu;
 	struct i915_drm_client *client;
 	struct pid *pid;
+	kuid_t uid;
+	kgid_t gid;
 	char name[];
 };
 

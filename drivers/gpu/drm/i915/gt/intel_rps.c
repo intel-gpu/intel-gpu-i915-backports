@@ -1105,21 +1105,11 @@ mtl_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
 	caps->rp1_freq = REG_FIELD_GET(MTL_RPE_MASK, rpe);
 }
 
-/**
- * gen6_rps_get_freq_caps - Get freq caps exposed by HW
- * @rps: the intel_rps structure
- * @caps: returned freq caps
- *
- * Returned "caps" frequencies should be converted to MHz using
- * intel_gpu_freq()
- */
-void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
+static void
+__gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 rp_state_cap;
-
-	if (IS_METEORLAKE(i915))
-		return mtl_get_freq_caps(rps, caps);
 
 	rp_state_cap = intel_rps_read_state_cap(rps);
 
@@ -1144,6 +1134,24 @@ void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *c
 		caps->rp1_freq *= GEN9_FREQ_SCALER;
 		caps->min_freq *= GEN9_FREQ_SCALER;
 	}
+}
+
+/**
+ * gen6_rps_get_freq_caps - Get freq caps exposed by HW
+ * @rps: the intel_rps structure
+ * @caps: returned freq caps
+ *
+ * Returned "caps" frequencies should be converted to MHz using
+ * intel_gpu_freq()
+ */
+void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps)
+{
+	struct drm_i915_private *i915 = rps_to_i915(rps);
+
+	if (IS_METEORLAKE(i915))
+		return mtl_get_freq_caps(rps, caps);
+	else
+		return __gen6_rps_get_freq_caps(rps, caps);
 }
 
 static void gen6_rps_init(struct intel_rps *rps)
@@ -2184,6 +2192,31 @@ u32 intel_rps_get_max_frequency(struct intel_rps *rps)
 		return intel_gpu_freq(rps, rps->max_freq_softlimit);
 }
 
+/**
+ * intel_rps_get_max_raw_freq - returns the max frequency in some raw format.
+ * @rps: the intel_rps structure
+ *
+ * Returns the max frequency in a raw format. In newer platforms raw is in
+ * units of 50 MHz.
+ */
+u32 intel_rps_get_max_raw_freq(struct intel_rps *rps)
+{
+	struct intel_guc_slpc *slpc = rps_to_slpc(rps);
+	u32 freq;
+
+	if (rps_uses_slpc(rps)) {
+		return DIV_ROUND_CLOSEST(slpc->rp0_freq,
+					 GT_FREQUENCY_MULTIPLIER);
+	} else {
+		freq = rps->max_freq;
+		if (GRAPHICS_VER(rps_to_i915(rps)) >= 9) {
+			/* Convert GT frequency to 50 MHz units */
+			freq /= GEN9_FREQ_SCALER;
+		}
+		return freq;
+	}
+}
+
 u32 intel_rps_get_rp0_frequency(struct intel_rps *rps)
 {
 	struct intel_guc_slpc *slpc = rps_to_slpc(rps);
@@ -2270,6 +2303,31 @@ u32 intel_rps_get_min_frequency(struct intel_rps *rps)
 		return slpc->min_freq_softlimit;
 	else
 		return intel_gpu_freq(rps, rps->min_freq_softlimit);
+}
+
+/**
+ * intel_rps_get_min_raw_freq - returns the min frequency in some raw format.
+ * @rps: the intel_rps structure
+ *
+ * Returns the min frequency in a raw format. In newer platforms raw is in
+ * units of 50 MHz.
+ */
+u32 intel_rps_get_min_raw_freq(struct intel_rps *rps)
+{
+	struct intel_guc_slpc *slpc = rps_to_slpc(rps);
+	u32 freq;
+
+	if (rps_uses_slpc(rps)) {
+		return DIV_ROUND_CLOSEST(slpc->min_freq,
+					 GT_FREQUENCY_MULTIPLIER);
+	} else {
+		freq = rps->min_freq;
+		if (GRAPHICS_VER(rps_to_i915(rps)) >= 9) {
+			/* Convert GT frequency to 50 MHz units */
+			freq /= GEN9_FREQ_SCALER;
+		}
+		return freq;
+	}
 }
 
 static int set_min_freq(struct intel_rps *rps, u32 val)

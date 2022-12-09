@@ -412,15 +412,26 @@ static void intel_iaf_release_dev(struct device *dev)
 
 	kfree(pd);
 }
+#endif
 
 /**
  * intel_iaf_init_aux - Initialize resources and add auxiliary bus interface
  * @i915: valid i915 instance
  *
  */
+
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 void intel_iaf_init_aux(struct drm_i915_private *i915)
 {
 	struct device *dev = &to_pci_dev(i915->drm.dev)->dev;
+#else
+void intel_iaf_init_mfd(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct device *dev = &pdev->dev;
+	struct mfd_cell fcell = {};
+#endif
+
 	struct resource *res = NULL;
 	struct iaf_pdata *pd;
 	int err = -ENOMEM;
@@ -444,6 +455,7 @@ void intel_iaf_init_aux(struct drm_i915_private *i915)
 	if (!res)
 		goto cleanup;
 
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	pd->resources = res;
 	pd->num_resources = res_cnt;
 
@@ -463,56 +475,7 @@ void intel_iaf_init_aux(struct drm_i915_private *i915)
 	}
 
 	i915->intel_iaf.pd = pd;
-
-	return;
-
-cleanup:
-	xa_erase(&intel_fdevs, i915->intel_iaf.index);
-	irq_free_descs(i915->intel_iaf.irq_base, i915->remote_tiles + 1);
-	kfree(res);
-	kfree(pd);
-	i915->intel_iaf.index = err;
-fail:
-	drm_err(&i915->drm, "IAF: Failed to initialize fabric: %d\n", err);
-}
-
 #else
-
-/**
- * intel_iaf_init_mfd - Initialize resources and add MFD interface
- * @i915: valid i915 instance
- *
- * NOTE: MFD allows irq_base to be specified.  It will update the
- * IORESOURCE_IRQ with the base + instance.
- *
- */
-void intel_iaf_init_mfd(struct drm_i915_private *i915)
-{
-	struct device *dev = &to_pci_dev(i915->drm.dev)->dev;
-	struct resource *res = NULL;
-	struct mfd_cell fcell = {};
-	struct iaf_pdata *pd;
-	int err = -ENOMEM;
-	u32 res_cnt;
-
-	if (!i915->intel_iaf.present)
-		return;
-
-	if (i915->intel_iaf.index < 0) {
-		err = i915->intel_iaf.index;
-		goto fail;
-	}
-
-	WARN(IS_SRIOV_VF(i915), "Intel IAF doesn't support VF\n");
-
-	pd = init_pd(i915);
-	if (!pd)
-		goto cleanup;
-
-	res = init_resource(i915, &res_cnt);
-	if (!res)
-		goto cleanup;
-
 	fcell.name = "iaf";
 	fcell.platform_data = pd;
 	fcell.pdata_size = sizeof(*pd);
@@ -520,14 +483,14 @@ void intel_iaf_init_mfd(struct drm_i915_private *i915)
 	fcell.num_resources = res_cnt;
 
 	err = mfd_add_devices(dev, pd->index, &fcell, 1, NULL,
-			      i915->intel_iaf.irq_base, NULL);
+			i915->intel_iaf.irq_base, NULL);
 	if (err)
 		goto cleanup;
 
 	/* mfd_add_devices copied this info,clean up*/
 	kfree(pd);
 	kfree(res);
-
+#endif /* CONFIG_AUXILIARY_BUS */
 	return;
 
 cleanup:
@@ -539,7 +502,6 @@ cleanup:
 fail:
 	drm_err(&i915->drm, "IAF: Failed to initialize fabric: %d\n", err);
 }
-#endif
 
 void intel_iaf_remove(struct drm_i915_private *i915)
 {

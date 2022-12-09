@@ -293,23 +293,19 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 
 void i915_gem_resume_early(struct drm_i915_private *i915)
 {
-	struct intel_gt *gt;
-	unsigned int i;
-
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
 	if (lmem_resume(i915))
 		drm_err(&i915->drm,
 			"failed to restore pinned objects in local memory\n");
 
-	for_each_gt(gt, i915, i)
-		intel_gt_resume_early(gt);
+	intel_gt_resume_early(to_gt(i915));
 }
 
 void i915_gem_resume(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
-	unsigned int i, j;
+	int i, j;
 
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
@@ -318,10 +314,7 @@ void i915_gem_resume(struct drm_i915_private *i915)
 	 * guarantee that the context image is complete. So let's just reset
 	 * it and start again.
 	 */
-
 	for_each_gt(gt, i915, i) {
-		intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_ALL);
-
 		if (intel_gt_resume(gt))
 			goto err_wedged;
 
@@ -331,25 +324,18 @@ void i915_gem_resume(struct drm_i915_private *i915)
 		 * the easiest place to put it without doing throw-away work.
 		 */
 		intel_uc_init_hw_late(&gt->uc);
-
-		intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_ALL);
 	}
 
 	return;
 
 err_wedged:
 	for_each_gt(gt, i915, j) {
-		if (j < i)
-			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_ALL);
-
 		if (!intel_gt_is_wedged(gt)) {
 			dev_err(i915->drm.dev,
 				"Failed to re-initialize GPU[%u], declaring it wedged!\n",
 				j);
 			intel_gt_set_wedged(gt);
 		}
-
-		intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_ALL);
 
 		if (j == i)
 			break;

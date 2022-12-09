@@ -93,6 +93,7 @@ enum intel_cx0_lanes {
 #define PHY_C10_VDR_PLL(idx)		(0xC00 + (idx))
 #define  C10_PLL0_FRACEN		REG_BIT8(4)
 #define  C10_PLL3_MULTIPLIERH_MASK	REG_GENMASK8(3, 0)
+#define  C10_PLL15_HDMIDIV_MASK	REG_GENMASK8(5, 3)
 #define  C10_PLL15_TXCLKDIV_MASK	REG_GENMASK8(2, 0)
 #define PHY_C10_VDR_CMN(idx)		(0xC20 + (idx))
 #define  C10_CMN0_DP_VAL		0x21
@@ -182,6 +183,8 @@ void intel_c10mpllb_dump_hw_state(struct drm_i915_private *dev_priv,
 				  const struct intel_c10mpllb_state *hw_state);
 int intel_c10mpllb_calc_port_clock(struct intel_encoder *encoder,
 				   const struct intel_c10mpllb_state *pll_state);
+void intel_c10mpllb_state_verify(struct intel_atomic_state *state,
+				 struct intel_crtc_state *new_crtc_state);
 int intel_c20pll_calc_port_clock(struct intel_encoder *encoder,
 				 const struct intel_c20pll_state *pll_state);
 int intel_cx0_phy_check_hdmi_link_rate(struct intel_hdmi *hdmi, int clock);

@@ -1785,6 +1785,27 @@ static int switch_to_kernel_sync(struct intel_context *ce, int err)
 	i915_request_put(rq);
 
 	while (!err && !intel_engine_is_idle(ce->engine)) {
+		/*
+		 * The perf selftest is keeping the context pinned while
+		 * checking for idle. This does not work with GuC submission,
+		 * because in this mode the idleness is determined based on
+		 * the wakeref count and a pinned context owns a wakeref.
+		 * Instead of relying only on the check for idle, we can
+		 * handle this case by checking that there are no requests in
+		 * flight
+		 */
+		if (intel_engine_uses_guc(ce->engine)) {
+			int i;
+			int cnt = 0;
+
+			for (i = GUC_CLIENT_PRIORITY_KMD_HIGH;
+			     i < GUC_CLIENT_PRIORITY_NUM; ++i)
+				cnt += ce->guc_state.prio_count[i];
+
+			if (cnt == 0)
+				break;
+		}
+
 		intel_engine_flush_submission(ce->engine);
 		intel_gt_retire_requests(ce->engine->gt);
 	}

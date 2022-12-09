@@ -29,15 +29,15 @@
 
 static void guc_log_copy_debuglogs_for_relay(struct intel_guc_log *log);
 
-struct guc_log_section
-{
+struct guc_log_section {
 	u32 max;
 	u32 flag;
 	u32 default_val;
 	const char *name;
 };
 
-static s32 scale_log_param(struct intel_guc_log *log, const struct guc_log_section *section, s32 param)
+static s32 scale_log_param(struct intel_guc_log *log, const struct guc_log_section *section,
+			   s32 param)
 {
 	/* -1 means default */
 	if (param < 0)
@@ -58,8 +58,7 @@ static void _guc_log_init_sizes(struct intel_guc_log *log)
 {
 	struct intel_guc *guc = log_to_guc(log);
 	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
-	static const struct guc_log_section sections[GUC_LOG_SECTIONS_LIMIT] =
-	{
+	static const struct guc_log_section sections[GUC_LOG_SECTIONS_LIMIT] = {
 		{
 			GUC_LOG_CRASH_MASK >> GUC_LOG_CRASH_SHIFT,
 			GUC_LOG_LOG_ALLOC_UNITS,
@@ -90,7 +89,8 @@ static void _guc_log_init_sizes(struct intel_guc_log *log)
 		log->sizes[i].bytes = scale_log_param(log, sections + i, params[i]);
 
 	/* If debug size > 1MB then bump default crash size to keep the same units */
-	if ((log->sizes[GUC_LOG_SECTIONS_DEBUG].bytes >= SZ_1M) && (i915->params.guc_log_size_crash == -1) &&
+	if ((log->sizes[GUC_LOG_SECTIONS_DEBUG].bytes >= SZ_1M) &&
+	    (i915->params.guc_log_size_crash == -1) &&
 	    (GUC_LOG_DEFAULT_CRASH_BUFFER_SIZE < SZ_1M))
 		log->sizes[GUC_LOG_SECTIONS_CRASH].bytes = SZ_1M;
 
@@ -127,7 +127,8 @@ static void _guc_log_init_sizes(struct intel_guc_log *log)
 
 	if (log->sizes[GUC_LOG_SECTIONS_CRASH].units != log->sizes[GUC_LOG_SECTIONS_DEBUG].units) {
 		drm_err(&i915->drm, "Unit mis-match for GuC log crash and debug sections: %d vs %d!",
-			log->sizes[GUC_LOG_SECTIONS_CRASH].units, log->sizes[GUC_LOG_SECTIONS_DEBUG].units);
+			log->sizes[GUC_LOG_SECTIONS_CRASH].units,
+			log->sizes[GUC_LOG_SECTIONS_DEBUG].units);
 		log->sizes[GUC_LOG_SECTIONS_CRASH].units = log->sizes[GUC_LOG_SECTIONS_DEBUG].units;
 		log->sizes[GUC_LOG_SECTIONS_CRASH].count = 0;
 	}

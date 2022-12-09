@@ -31,6 +31,7 @@
 
 #include "i915_drv.h"
 #include "intel_audio.h"
+#include "intel_audio_regs.h"
 #include "intel_backlight.h"
 #include "intel_combo_phy.h"
 #include "intel_combo_phy_regs.h"
@@ -166,8 +167,8 @@ static void mtl_wait_ddi_buf_idle(struct drm_i915_private *i915, enum port port)
 {
 	int ret;
 
-	ret = wait_for_us(!(intel_de_read(i915, XELPDP_PORT_BUF_CTL1(port)) &
-			    XELPDP_PORT_BUF_PHY_IDLE), 100);
+	ret = wait_for_us((intel_de_read(i915, XELPDP_PORT_BUF_CTL1(port)) &
+			   XELPDP_PORT_BUF_PHY_IDLE), 100);
 	if (ret)
 		drm_err(&i915->drm, "Timeout waiting for DDI BUF %c to get idle\n",
 			port_name(port));
@@ -198,8 +199,12 @@ static void intel_wait_ddi_buf_active(struct drm_i915_private *dev_priv,
 		return;
 	}
 
-	ret = _wait_for(!(intel_de_read(dev_priv, DDI_BUF_CTL(port)) &
-			  DDI_BUF_IS_IDLE), IS_DG2(dev_priv) ? 1200 : 500, 10, 10);
+	if (DISPLAY_VER(dev_priv) >= 14)
+		ret = wait_for_us(!(intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port)) &
+				    XELPDP_PORT_BUF_PHY_IDLE), 100);
+	else
+		ret = _wait_for(!(intel_de_read(dev_priv, DDI_BUF_CTL(port)) &
+				  DDI_BUF_IS_IDLE), IS_DG2(dev_priv) ? 1200 : 500, 10, 10);
 
 	if (ret)
 		drm_err(&dev_priv->drm, "Timeout waiting for DDI BUF %c to get active\n",
@@ -338,28 +343,6 @@ static int icl_calc_tbt_pll_link(struct drm_i915_private *dev_priv,
 		MISSING_CASE(val);
 		return 0;
 	}
-}
-
-int intel_crtc_dotclock(const struct intel_crtc_state *pipe_config)
-{
-	int dotclock;
-
-	if (intel_crtc_has_dp_encoder(pipe_config))
-		dotclock = intel_dotclock_calculate(pipe_config->port_clock,
-						    &pipe_config->dp_m_n);
-	else if (pipe_config->has_hdmi_sink && pipe_config->pipe_bpp > 24)
-		dotclock = pipe_config->port_clock * 24 / pipe_config->pipe_bpp;
-	else
-		dotclock = pipe_config->port_clock;
-
-	if (pipe_config->output_format == INTEL_OUTPUT_FORMAT_YCBCR420 &&
-	    !intel_crtc_has_dp_encoder(pipe_config))
-		dotclock *= 2;
-
-	if (pipe_config->pixel_multiplier)
-		dotclock /= pipe_config->pixel_multiplier;
-
-	return dotclock;
 }
 
 static void ddi_dotclock_get(struct intel_crtc_state *pipe_config)
@@ -4052,7 +4035,7 @@ static void intel_ddi_sync_state(struct intel_encoder *encoder,
 	enum phy phy = intel_port_to_phy(i915, encoder->port);
 
 	if (intel_phy_is_tc(i915, phy))
-		intel_tc_port_sanitize(enc_to_dig_port(encoder));
+		intel_tc_port_sanitize_mode(enc_to_dig_port(encoder));
 
 	if (crtc_state && intel_crtc_has_dp_encoder(crtc_state))
 		intel_dp_sync_state(encoder, crtc_state);
@@ -4250,11 +4233,17 @@ static void intel_ddi_encoder_destroy(struct drm_encoder *encoder)
 
 static void intel_ddi_encoder_reset(struct drm_encoder *encoder)
 {
+	struct drm_i915_private *i915 = to_i915(encoder->dev);
 	struct intel_dp *intel_dp = enc_to_intel_dp(to_intel_encoder(encoder));
+	struct intel_digital_port *dig_port = enc_to_dig_port(to_intel_encoder(encoder));
+	enum phy phy = intel_port_to_phy(i915, dig_port->base.port);
 
 	intel_dp->reset_link_params = true;
 
 	intel_pps_encoder_reset(intel_dp);
+
+	if (intel_phy_is_tc(i915, phy))
+		intel_tc_port_init_mode(dig_port);
 }
 
 static const struct drm_encoder_funcs intel_ddi_funcs = {

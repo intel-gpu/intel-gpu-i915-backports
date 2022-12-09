@@ -19,6 +19,16 @@
 struct drm_device;
 struct drm_file;
 
+static inline bool i915_gem_context_is_banned(const struct i915_gem_context *ctx)
+{
+	return test_bit(CONTEXT_BAN, &ctx->flags);
+}
+
+static inline void i915_gem_context_set_banned(struct i915_gem_context *ctx)
+{
+	set_bit(CONTEXT_BAN, &ctx->flags);
+}
+
 static inline bool i915_gem_context_is_closed(const struct i915_gem_context *ctx)
 {
 	return test_bit(CONTEXT_CLOSED, &ctx->flags);

@@ -181,11 +181,6 @@ static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
 		return hwinfo_xehpsdv;
 	}
 
-	if (IS_DG2(i915)) {
-		*size = ARRAY_SIZE(hwinfo_dg2) * sizeof(u32);
-		return hwinfo_dg2;
-	}
-
 	return NULL;
 }
 
@@ -221,11 +216,6 @@ static int fake_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfi
 
 static bool has_table(struct drm_i915_private *i915)
 {
-	if (IS_ADLP_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-		return false;
-	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_A2))
-		return false;
-
 	if (IS_ALDERLAKE_P(i915) && !IS_ADLP_N(i915))
 		return true;
 	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 55))

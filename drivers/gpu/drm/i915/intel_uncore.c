@@ -26,12 +26,14 @@
 
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt_regs.h"
+#include "gt/intel_gt.h"
 
 #include "i915_drv.h"
 #include "i915_iosf_mbi.h"
 #include "i915_trace.h"
 #include "i915_vgpu.h"
 #include "intel_pm.h"
+#include "intel_pcode.h"
 
 #define FORCEWAKE_ACK_TIMEOUT_MS 50
 #define GT_FIFO_TIMEOUT_MS	 10
@@ -127,16 +129,22 @@ intel_uncore_forcewake_domain_to_str(const enum forcewake_domain_id id)
 static inline void
 fw_domain_reset(const struct intel_uncore_forcewake_domain *d)
 {
+	struct drm_i915_private *i915 = d->uncore->i915;
 	/*
 	 * We don't really know if the powerwell for the forcewake domain we are
 	 * trying to reset here does exist at this point (engines could be fused
 	 * off in ICL+), so no waiting for acks
 	 */
 	/* WaRsClearFWBitsAtReset */
-	if (GRAPHICS_VER(d->uncore->i915) >= 12)
-		fw_clear(d, 0xefff);
-	else
+	if (GRAPHICS_VER(i915) >= 12) {
+		/* Wa_16017528748 mdfi wa in pcode uses bit#1 */
+		if (pvc_needs_rc6_wa(i915))
+			fw_clear(d, 0xeffd);
+		else
+			fw_clear(d, 0xefff);
+	} else {
 		fw_clear(d, 0xffff);
+	}
 }
 
 static inline void
@@ -1726,25 +1734,27 @@ static const struct intel_forcewake_range __pvc_fw_ranges[] = {
 	GEN_FW_RANGE(0x12000, 0x12fff, 0), /*
 		0x12000 - 0x127ff: always on
 		0x12800 - 0x12fff: reserved */
-	GEN_FW_RANGE(0x13000, 0x23fff, FORCEWAKE_GT), /*
+	GEN_FW_RANGE(0x13000, 0x19fff, FORCEWAKE_GT), /*
 		0x13000 - 0x135ff: gt
 		0x13600 - 0x147ff: reserved
 		0x14800 - 0x153ff: gt
-		0x15400 - 0x19fff: reserved
-		0x1a000 - 0x1ffff: gt
-		0x20000 - 0x21fff: reserved
-		0x22000 - 0x23fff: gt */
+		0x15400 - 0x19fff: reserved */
+	GEN_FW_RANGE(0x1a000, 0x21fff, FORCEWAKE_RENDER), /*
+		0x1a000 - 0x1ffff: render
+		0x20000 - 0x21fff: reserved */
+	GEN_FW_RANGE(0x22000, 0x23fff, FORCEWAKE_GT),
 	GEN_FW_RANGE(0x24000, 0x2417f, 0), /*
 		24000 - 0x2407f: always on
 		24080 - 0x2417f: reserved */
-	GEN_FW_RANGE(0x24180, 0x3ffff, FORCEWAKE_GT), /*
+	GEN_FW_RANGE(0x24180, 0x25fff, FORCEWAKE_GT), /*
 		0x24180 - 0x241ff: gt
 		0x24200 - 0x251ff: reserved
 		0x25200 - 0x252ff: gt
-		0x25300 - 0x25fff: reserved
-		0x26000 - 0x27fff: gt
-		0x28000 - 0x2ffff: reserved
-		0x30000 - 0x3ffff: gt */
+		0x25300 - 0x25fff: reserved */
+	GEN_FW_RANGE(0x26000, 0x2ffff, FORCEWAKE_RENDER), /*
+		0x26000 - 0x27fff: render
+		0x28000 - 0x2ffff: reserved */
+	GEN_FW_RANGE(0x30000, 0x3ffff, FORCEWAKE_GT),
 	GEN_FW_RANGE(0x40000, 0x1bffff, 0),
 	GEN_FW_RANGE(0x1c0000, 0x1c3fff, FORCEWAKE_MEDIA_VDBOX0), /*
 		0x1c0000 - 0x1c2bff: VD0
@@ -2737,7 +2747,7 @@ static bool __lmem_is_init(struct intel_uncore *uncore)
 	return __raw_uncore_read32(uncore, GU_CNTL) & LMEM_INIT;
 }
 
-static int wait_for_lmem(struct intel_uncore *uncore)
+int intel_uncore_wait_for_lmem(struct intel_uncore *uncore)
 {
 	struct drm_i915_private *i915 = uncore->i915;
 	unsigned long timeout, start;
@@ -2776,16 +2786,6 @@ int intel_uncore_init_mmio(struct intel_uncore *uncore)
 {
 	struct drm_i915_private *i915 = uncore->i915;
 	int ret;
-
-	/*
-	 * The boot firmware initializes local memory and assesses its health.
-	 * If memory training fails, the punit will have been instructed to
-	 * keep the GT powered down; we won't be able to communicate with it
-	 * and we should not continue with driver initialization.
-	 */
-	ret = wait_for_lmem(uncore);
-	if (ret)
-		return ret;
 
 	if (GRAPHICS_VER(i915) > 5 &&
 	    !IS_SRIOV_VF(i915) &&

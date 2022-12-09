@@ -31,10 +31,9 @@ region_lmem_init(struct intel_memory_region *mem)
 	u64 start, end;
 	int ret;
 
-	if (mem->io_start &&
-	    !io_mapping_init_wc(&mem->iomap,
+	if (!io_mapping_init_wc(&mem->iomap,
 				mem->io_start,
-				resource_size(&mem->region)))
+				mem->io_size))
 		return -EIO;
 
 	/*
@@ -53,16 +52,6 @@ region_lmem_init(struct intel_memory_region *mem)
 	ret = intel_memory_region_init_buddy(mem, start, end, PAGE_SIZE);
 	if (ret)
 		goto init_err;
-
-	/* FIXME skip devmem allocation for VFs */
-	if (i915_has_svm(mem->i915) &&
-	    mem->io_start && !IS_SRIOV_VF(mem->i915)) {
-		ret = i915_svm_devmem_add(mem);
-		if (ret)
-			drm_info(&mem->i915->drm,
-				 "SVM init of mem region %d failed %d\n",
-				 mem->id, ret);
-	}
 
 	return 0;
 init_err:
@@ -109,6 +98,7 @@ static bool get_tracedebug_region(struct intel_uncore *uncore,
 	return true;
 }
 
+#ifndef BPC_LOWMEM_FOR_DG1_NOT_SUPPORTED
 static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 				     u64 *start, u32 *size)
 {
@@ -123,6 +113,7 @@ static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 
 	return true;
 }
+#endif
 
 static int reserve_lowmem_region(struct intel_uncore *uncore,
 				 struct intel_memory_region *mem)
@@ -158,7 +149,7 @@ static inline bool lmembar_is_igpu_stolen(struct drm_i915_private *i915)
 {
 	u32 regions = INTEL_INFO(i915)->memory_regions;
 
-	if (regions & REGION_LMEM_MASK)
+	if (regions & REGION_LMEM)
 		return false;
 
 	drm_WARN_ON(&i915->drm, (regions & REGION_STOLEN_LMEM) == 0);
@@ -382,6 +373,7 @@ create_region:
 					 lmem_size,
 					 min_page_size,
 					 io_start,
+					 lmem_size,
 					 INTEL_MEMORY_LOCAL,
 					 0,
 					 &intel_region_lmem_ops);
@@ -395,6 +387,8 @@ create_region:
 	drm_dbg(&i915->drm, "Local memory: %pR\n", &mem->region);
 	drm_dbg(&i915->drm, "Local memory IO start: %pa\n",
 		&mem->io_start);
+	drm_info(&i915->drm, "Local memory IO size: %pa\n",
+		 &mem->io_size);
 	drm_info(&i915->drm, "Local memory available: %pa\n",
 		 &lmem_size);
 

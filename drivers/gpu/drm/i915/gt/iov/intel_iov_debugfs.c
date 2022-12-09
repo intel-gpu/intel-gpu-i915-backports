@@ -38,6 +38,15 @@ static int ggtt_provisioning_show(struct seq_file *m, void *data)
 }
 DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(ggtt_provisioning);
 
+static int ggtt_available_show(struct seq_file *m, void *data)
+{
+	struct intel_iov *iov = &((struct intel_gt *)m->private)->iov;
+	struct drm_printer p = drm_seq_file_printer(m);
+
+	return intel_iov_provisioning_print_available_ggtt(iov, &p);
+}
+DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(ggtt_available);
+
 static int ctxs_provisioning_show(struct seq_file *m, void *data)
 {
 	struct intel_iov *iov = &((struct intel_gt *)m->private)->iov;
@@ -186,6 +195,7 @@ void intel_iov_debugfs_register(struct intel_iov *iov, struct dentry *root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
 		{ "ggtt_provisioning", &ggtt_provisioning_fops, eval_is_pf },
+		{ "ggtt_available", &ggtt_available_fops, eval_is_pf },
 		{ "contexts_provisioning", &ctxs_provisioning_fops, eval_is_pf },
 		{ "doorbells_provisioning", &dbs_provisioning_fops, eval_is_pf },
 		{ "adverse_events", &adverse_events_fops, eval_is_pf },

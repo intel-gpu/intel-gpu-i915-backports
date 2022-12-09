@@ -60,8 +60,9 @@ static void uc_expand_default_options(struct intel_uc *uc)
 		i915->params.enable_guc &= ~ENABLE_GUC_LOAD_HUC;
 
 	/*
-	 * FIXME: MTL uses GSC FW to load HuC. Disabling HuC loading until
-	 * support for GSC engine is implemented.
+	 * FIXME: MTL IFWI still has issues with FLR, so we can't reload the
+	 * driver with GSC enabled. Since GSC is a requirement for HuC, we can't
+	 * enable HuC without GSC.
 	 */
 	if (IS_METEORLAKE(i915))
 		i915->params.enable_guc &= ~ENABLE_GUC_LOAD_HUC;
@@ -149,7 +150,9 @@ void intel_uc_init_early(struct intel_uc *uc)
 
 	__confirm_options(uc);
 
-	if (intel_uc_wants_guc(uc))
+	if (IS_SRIOV_VF(uc_to_gt(uc)->i915))
+		uc->ops = &uc_ops_vf;
+	else if (intel_uc_wants_guc(uc))
 		uc->ops = &uc_ops_on;
 	else
 		uc->ops = &uc_ops_off;
@@ -174,10 +177,6 @@ void intel_uc_driver_late_release(struct intel_uc *uc)
 void intel_uc_init_mmio(struct intel_uc *uc)
 {
 	intel_guc_init_send_regs(&uc->guc);
-
-	/* XXX can't do it in intel_uc_init_early, it's too early */
-	if (IS_SRIOV_VF(uc_to_gt(uc)->i915))
-		uc->ops = &uc_ops_vf;
 }
 
 static void __uc_capture_load_err_log(struct intel_uc *uc)
@@ -498,9 +497,11 @@ static void print_fw_ver(struct intel_uc *uc, struct intel_uc_fw *fw)
 {
 	struct drm_i915_private *i915 = uc_to_gt(uc)->i915;
 
-	drm_info(&i915->drm, "%s firmware %s version %u.%u\n",
-		 intel_uc_fw_type_repr(fw->type), fw->path,
-		 fw->major_ver_found, fw->minor_ver_found);
+	drm_info(&i915->drm, "%s firmware %s version %u.%u.%u\n",
+		 intel_uc_fw_type_repr(fw->type), fw->file_selected.path,
+		 fw->file_selected.major_ver,
+		 fw->file_selected.minor_ver,
+		 fw->file_selected.patch_ver);
 }
 
 static int __uc_init_hw(struct intel_uc *uc)
@@ -614,12 +615,9 @@ err_submission:
 err_log_capture:
 	__uc_capture_load_err_log(uc);
 err_out:
-#if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) && IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-	if (!i915_error_injected()) {
-		drm_info(&i915->drm, "Dumping on GuC load failure...\n");
-		intel_klog_error_capture(uc_to_gt(uc), (intel_engine_mask_t) ~0U);
-	}
-#endif
+	if (!i915_error_injected())
+		intel_klog_error_capture(uc_to_gt(uc),
+					 (intel_engine_mask_t) ~0U);
 
 	/* Return GT back to RPn */
 	intel_rps_lower_unslice(&uc_to_gt(uc)->rps);
@@ -679,6 +677,15 @@ static int __vf_uc_sanitize(struct intel_uc *uc)
 	intel_guc_sanitize(&uc->guc);
 
 	return 0;
+}
+
+static void __vf_uc_init_fw(struct intel_uc *uc)
+{
+	struct intel_gt *gt = uc_to_gt(uc);
+	unsigned int major = gt->iov.vf.config.guc_abi.major;
+	unsigned int minor = gt->iov.vf.config.guc_abi.minor;
+
+	intel_uc_fw_set_preloaded(&uc->guc.fw, major, minor);
 }
 
 static int __vf_uc_init(struct intel_uc *uc)
@@ -743,8 +750,8 @@ static int __vf_uc_init_hw(struct intel_uc *uc)
 	intel_guc_submission_enable(guc);
 
 	dev_info(i915->drm.dev, "%s firmware %s version %u.%u %s:%s\n",
-		 intel_uc_fw_type_repr(INTEL_UC_FW_TYPE_GUC), guc->fw.path,
-		 guc->fw.major_ver_found, guc->fw.minor_ver_found,
+		 intel_uc_fw_type_repr(INTEL_UC_FW_TYPE_GUC), guc->fw.file_selected.path,
+		 guc->fw.file_selected.major_ver, guc->fw.file_selected.minor_ver,
 		 "submission", i915_iov_mode_to_string(IOV_MODE(i915)));
 
 	dev_info(i915->drm.dev, "%s firmware %s\n",
@@ -943,6 +950,7 @@ static const struct intel_uc_ops uc_ops_on = {
 
 static const struct intel_uc_ops uc_ops_vf = {
 	.sanitize = __vf_uc_sanitize,
+	.init_fw = __vf_uc_init_fw,
 	.init = __vf_uc_init,
 	.fini = __vf_uc_fini,
 	.init_hw = __vf_uc_init_hw,

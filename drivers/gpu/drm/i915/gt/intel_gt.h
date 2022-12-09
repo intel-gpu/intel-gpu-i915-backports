@@ -130,9 +130,11 @@ static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 	if (!i915->params.enable_rc6)
 		return false;
 
+#ifdef RC6_NOT_SUPPORTED
 	/* Disable RC6 for all B-step - hsd: 14015706335*/
 	if (!i915->params.rc6_ignore_steppings)
 		return false;
+#endif
 
 	/*
 	 * Lets not break the dpc recovery, which will be hindered

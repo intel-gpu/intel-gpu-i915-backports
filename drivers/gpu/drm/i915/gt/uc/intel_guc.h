@@ -187,6 +187,11 @@ struct intel_guc {
 	/** @ads_engine_usage_size: size of engine usage in the ADS */
 	u32 ads_engine_usage_size;
 
+	/** @lrc_desc_pool_v69: object allocated to hold the GuC LRC descriptor pool */
+	struct i915_vma *lrc_desc_pool_v69;
+	/** @lrc_desc_pool_vaddr_v69: contents of the GuC LRC descriptor pool */
+	void *lrc_desc_pool_vaddr_v69;
+
 	spinlock_t sched_lock;
 	int sched_enable_ref;
 
@@ -427,8 +432,8 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 					    enum intel_guc_tlb_inval_mode mode,
 					    u64 start, u64 length, u32 asid);
 int intel_guc_invalidate_tlb_page_selective_ctx(struct intel_guc *guc,
-						  enum intel_guc_tlb_inval_mode mode,
-						  u64 start, u64 length, u32 ctxid);
+						enum intel_guc_tlb_inval_mode mode,
+						u64 start, u64 length, u32 ctxid);
 int intel_guc_invalidate_tlb_guc(struct intel_guc *guc,
 				 enum intel_guc_tlb_inval_mode mode);
 int intel_guc_invalidate_tlb_all(struct intel_guc *guc);
@@ -548,7 +553,6 @@ intel_guc_send_pagefault_reply(struct intel_guc *guc,
 
 void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p);
 void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p);
-
 
 void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 
