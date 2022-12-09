@@ -22,6 +22,7 @@
 #include <linux/printk.h>
 #include <linux/rcupdate.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define dma_fence_get_stub LINUX_DMABUF_BACKPORT(dma_fence_get_stub)
 #define dma_fence_context_alloc LINUX_DMABUF_BACKPORT(dma_fence_context_alloc)
 #define dma_fence_signal_locked LINUX_DMABUF_BACKPORT(dma_fence_signal_locked)
@@ -36,6 +37,7 @@
 #define dma_fence_default_wait LINUX_DMABUF_BACKPORT(dma_fence_default_wait)
 #define dma_fence_wait_any_timeout LINUX_DMABUF_BACKPORT(dma_fence_wait_any_timeout)
 #define dma_fence_init LINUX_DMABUF_BACKPORT(dma_fence_init)
+#endif
 
 struct dma_fence;
 struct dma_fence_ops;

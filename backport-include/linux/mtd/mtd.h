@@ -4,7 +4,7 @@
 #include <linux/mtd/partitions.h>
 #include_next <linux/mtd/mtd.h>
 
-#if LINUX_VERSION_IS_LESS(5,7,0)
+#ifdef BPM_MTD_PART_NOT_PRESENT
 struct mtd_part {
         struct mtd_info mtd;
         struct mtd_info *parent;

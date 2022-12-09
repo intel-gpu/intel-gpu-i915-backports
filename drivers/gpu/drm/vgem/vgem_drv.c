@@ -44,7 +44,9 @@
 
 #include "vgem_drv.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 #define DRIVER_NAME	"vgem"
 #define DRIVER_DESC	"Virtual GEM provider"
@@ -327,7 +329,7 @@ static struct sg_table *vgem_prime_get_sg_table(struct drm_gem_object *obj)
 {
 	struct drm_vgem_gem_object *bo = to_vgem_bo(obj);
 
-	return drm_prime_pages_to_sg(bo->pages, bo->base.size >> PAGE_SHIFT);
+	return drm_prime_pages_to_sg(obj->dev, bo->pages, bo->base.size >> PAGE_SHIFT);
 }
 
 static struct drm_gem_object* vgem_prime_import(struct drm_device *dev,
@@ -450,7 +452,9 @@ static int __init vgem_init(void)
 	int ret;
 	struct platform_device *pdev;
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	DRM_INFO("VGEM BACKPORTED INIT \n");
+#endif
 	pdev = platform_device_register_simple("vgem", -1, NULL, 0);
 	if (IS_ERR(pdev))
 		return PTR_ERR(pdev);
@@ -499,6 +503,8 @@ module_exit(vgem_exit);
 
 MODULE_AUTHOR("Red Hat, Inc.");
 MODULE_AUTHOR("Intel Corporation");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL and additional rights");

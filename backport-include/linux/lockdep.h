@@ -32,7 +32,7 @@
         lock(_lock)
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0))
+#ifdef BPM_MIGHT_LOCK_NESTED_NOT_PRESENT
 #ifdef CONFIG_PROVE_LOCKING
 # define might_lock_nested(lock, subclass)				\
 do {									\
@@ -46,7 +46,7 @@ do {									\
 #endif
 #endif
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_LOCKDEP_ASSERT_API_NOT_PRESENT
 #define lockdep_assert_once(c)                  do { } while (0)
 #define lockdep_assert_none_held_once()         \
         lockdep_assert_once(!current->lockdep_depth)

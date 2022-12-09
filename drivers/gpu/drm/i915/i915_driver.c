@@ -122,35 +122,6 @@
 #include "intel_vsec.h"
 #include "vlv_suspend.h"
 
-struct resource intel_graphics_fake_lmem_res  = DEFINE_RES_MEM(0, 0);
-EXPORT_SYMBOL(intel_graphics_fake_lmem_res);
-
-#ifndef MODULE
-static int  early_i915_fake_lmem_init(char *s)
-{
-        u64 start;
-        int ret;
-
-        if (*s == '=')
-                s++;
-
-        ret = kstrtoull(s, 16, &start);
-        if (ret)
-                return ret;
-
-        intel_graphics_fake_lmem_res.start = start;
-        intel_graphics_fake_lmem_res.end = SZ_2G; /* Placeholder; depends on aperture size */
-
-        printk(KERN_INFO "Intel graphics fake LMEM starts at %pa\n",
-               &intel_graphics_fake_lmem_res.start);
-
-        return 0;
-}
-
-early_param("i915_fake_lmem_start", early_i915_fake_lmem_init);
-#endif
-
-
 static const struct drm_driver i915_drm_driver;
 
 static void i915_release_bridge_dev(struct drm_device *dev,
@@ -457,7 +428,7 @@ static void sanitize_gpu(struct drm_i915_private *i915)
 	\
 	/* Sanity check against expected versions from device info */ \
 	if (RUNTIME_INFO(i915)->ri_prefix.ver != INTEL_INFO(i915)->ri_prefix.ver || \
-	    RUNTIME_INFO(i915)->ri_prefix.rel > INTEL_INFO(i915)->ri_prefix.rel) \
+	    RUNTIME_INFO(i915)->ri_prefix.rel < INTEL_INFO(i915)->ri_prefix.rel) \
 		drm_dbg(&i915->drm, \
 			"Hardware reports " #ri_prefix " IP version %u.%u but minimum expected is %u.%u\n", \
 			RUNTIME_INFO(i915)->ri_prefix.ver, \
@@ -526,22 +497,23 @@ static void __release_bars(struct pci_dev *pdev)
 #endif
 }
 
-int i915_resize_bar(struct drm_i915_private *i915, int resno, resource_size_t size)
+static void
+__resize_bar(struct drm_i915_private *i915, int resno, resource_size_t size)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	int bar_size = pci_rebar_bytes_to_size(size);
 	int ret;
 
+	__release_bars(pdev);
+
 	ret = pci_resize_resource(pdev, resno, bar_size);
 	if (ret) {
 		drm_info(&i915->drm, "Failed to resize BAR%d to %dM (%pe)\n",
 			 resno, 1 << bar_size, ERR_PTR(ret));
-		return ret;
+		return;
 	}
 
 	drm_info(&i915->drm, "BAR%d resized to %dM\n", resno, 1 << bar_size);
-
-	return 0;
 }
 
 /* BAR size starts from 1MB - 2^20 */
@@ -615,9 +587,7 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915)
 	pci_write_config_dword(pdev, PCI_COMMAND,
 			       pci_cmd & ~PCI_COMMAND_MEMORY);
 
-	__release_bars(pdev);
-
-	i915_resize_bar(i915, GEN12_LMEM_BAR, rebar_size);
+	__resize_bar(i915, GEN12_LMEM_BAR, rebar_size);
 
 	pci_assign_unassigned_bus_resources(pdev->bus);
 	pci_write_config_dword(pdev, PCI_COMMAND, pci_cmd);
@@ -1039,6 +1009,32 @@ static int i915_pcode_init(struct drm_i915_private *i915)
 	return 0;
 }
 
+static int intel_pcode_probe(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	int id, ret;
+
+	/*
+	 * The boot firmware initializes local memory and assesses its health.
+	 * If memory training fails, the punit will have been instructed to
+	 * keep the GT powered down; we won't be able to communicate with it
+	 * and we should not continue with driver initialization.
+	 */
+	for_each_gt(gt, i915, id) {
+		ret = intel_uncore_wait_for_lmem(gt->uncore);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * Driver handshakes with pcode via mailbox command to know that SoC
+	 * initialization is complete before proceeding further
+	 */
+	ret = i915_pcode_init(i915);
+
+	return ret;
+}
+
 /**
  * i915_driver_hw_probe - setup state requiring device access
  * @dev_priv: device private
@@ -1157,10 +1153,6 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 
 	intel_opregion_init(dev_priv);
 
-	ret = i915_pcode_init(dev_priv);
-	if (ret)
-		goto err_msi;
-
 	intel_pm_vram_sr_setup(dev_priv);
 
 	/*
@@ -1266,7 +1258,9 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 
 	i915_virtualization_commit(dev_priv);
 
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	intel_vsec_init(dev_priv);
+#endif
 	pvc_wa_allow_rc6(dev_priv);
 }
 
@@ -1277,9 +1271,6 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 {
 
-#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
-	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
-#endif
 	struct intel_gt *gt;
 	unsigned int i;
 
@@ -1290,19 +1281,13 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 	intel_runtime_pm_disable(&dev_priv->runtime_pm);
 	intel_power_domains_disable(dev_priv);
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	/*
 	 * mfd devices may be registered individually either by gt or display,
 	 * but they are unregistered all at once from i915
 	 */
-#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
-        /*
-         * mfd devices may be registered individually either by gt or display,
-         * but they are unregistered all at once from i915
-         */
-	mfd_remove_devices(&pdev->dev);
+	mfd_remove_devices(dev_priv->drm.dev);
 #endif
-
-
 	intel_display_driver_unregister(dev_priv);
 
 #if IS_REACHABLE(CONFIG_HWMON)
@@ -1401,6 +1386,14 @@ i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return i915;
 }
 
+static void i915_read_dev_uid(struct drm_i915_private *i915)
+{
+	if (INTEL_INFO(i915)->has_csc_uid)
+		RUNTIME_INFO(i915)->uid  = intel_uncore_read64_2x32(&i915->uncore,
+								    CSC_DEVUID_LWORD,
+								    CSC_DEVUID_HWORD);
+}
+
 static void i915_virtualization_probe(struct drm_i915_private *i915)
 {
 	GEM_BUG_ON(i915->__mode);
@@ -1493,9 +1486,15 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret < 0)
 		goto out_runtime_pm_put;
 
+	ret = intel_pcode_probe(i915);
+	if (ret)
+		goto out_tiles_cleanup;
+
 	ret = i915_driver_mmio_probe(i915);
 	if (ret < 0)
 		goto out_tiles_cleanup;
+
+	i915_read_dev_uid(i915);
 
 	pvc_wa_disallow_rc6(i915);
 
@@ -2663,6 +2662,62 @@ static int i915_gem_vm_advise_ioctl(struct drm_device *dev, void *data,
 	i915_gem_object_put(obj);
 
 	return ret;
+}
+
+static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
+			struct prelim_drm_i915_gem_vm_prefetch *args,
+			struct drm_i915_file_private *file_priv)
+{
+	struct intel_memory_region *mem;
+	struct i915_address_space *vm;
+	struct drm_mm_node *node;
+	struct i915_vma *vma;
+	u16 class, instance;
+	int err = 0;
+
+	class = args->region >> 16;
+	instance = args->region & 0xffff;
+	mem = intel_memory_region_lookup(i915, class, instance);
+	if (!mem)
+		return -EINVAL;
+
+	vm = i915_address_space_lookup(file_priv, args->vm_id);
+	if (unlikely(!vm))
+		return -ENOENT;
+
+	trace_i915_vm_prefetch(i915, args->vm_id, args->start, args->length, mem->id);
+
+	drm_mm_for_each_node_in_range(node, &vm->mm, args->start,
+					args->start + args->length) {
+		GEM_BUG_ON(!drm_mm_node_allocated(node));
+		vma = container_of(node, typeof(*vma), node);
+		vma = __i915_vma_get(vma);
+		if (!vma)
+			continue;
+		vma = i915_vma_get(vma);
+		/**
+		 * Prefetch is best effort. Even if we fail to prefetch one vma, we will
+		 * proceed with other vmas.
+		 */
+		i915_vma_prefetch(vma, mem);
+		i915_vma_put(vma);
+		__i915_vma_put(vma);
+	}
+
+	i915_vm_put(vm);
+	return err;
+}
+
+static int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_i915_private *i915 = to_i915(dev);
+	struct prelim_drm_i915_gem_vm_prefetch *args = data;
+
+	if (!args->vm_id)
+		return i915_svm_vm_prefetch(i915, args);
+	else
+		return i915_runtime_vm_prefetch(i915, args, file_priv->driver_priv);
 }
 
 static const struct drm_ioctl_desc i915_ioctls[] = {

@@ -4,7 +4,7 @@
 #include <linux/version.h>
 #include_next <linux/jiffies.h>
 
-#if LINUX_VERSION_IS_LESS(4,19,0)
+#ifdef BPM_JIFFIES_DELTA_TO_MSECS_NOT_PRESENT
 
 static inline unsigned int jiffies_delta_to_msecs(long delta)
 {

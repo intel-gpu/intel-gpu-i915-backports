@@ -23,6 +23,7 @@
 #include <linux/dma-fence.h>
 #include <linux/wait.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define dma_buf_export LINUX_DMABUF_BACKPORT(dma_buf_export)
 #define dma_buf_fd LINUX_DMABUF_BACKPORT(dma_buf_fd)
 #define dma_buf_get LINUX_DMABUF_BACKPORT(dma_buf_get)
@@ -40,6 +41,7 @@
 #define dma_buf_move_notify LINUX_DMABUF_BACKPORT(dma_buf_move_notify)
 #define dma_buf_pin LINUX_DMABUF_BACKPORT(dma_buf_pin)
 #define dma_buf_unpin LINUX_DMABUF_BACKPORT(dma_buf_unpin)
+#endif
 
 struct device;
 struct dma_buf;
@@ -641,7 +643,9 @@ int dma_buf_mmap(struct dma_buf *, struct vm_area_struct *,
 		 unsigned long);
 int dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map);
 void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map);
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 int __init dma_buf_init(void);
 void __exit dma_buf_deinit(void);
-int __init dma_heap_init(void);
+#endif
+
 #endif /* __BACKPORT_DMA_BUF_H__  */

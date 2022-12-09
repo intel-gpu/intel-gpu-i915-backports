@@ -26,7 +26,8 @@ config DRM_I915
 	depends on CRC32
 	select SND_HDA_I915 if SND_HDA_CORE
 	select CEC_CORE if CEC_NOTIFIER
-	select MFD_CORE
+	select VMAP_PFN if (BACKPORT_RHEL_KERNEL_8_5 || BACKPORT_RHEL_KERNEL_8_6)
+	depends on AUXILIARY_BUS || MFD_CORE
 	select MTD
 	help
 	  Choose this option if you have a system that has "Intel Graphics
@@ -137,7 +138,7 @@ config DRM_I915_PXP
 	bool "Enable Intel PXP support for Intel Gen12 and newer platform"
 	depends on DRM_I915
 	depends on INTEL_MEI
-	default y
+	default n
 	help
 	  PXP (Protected Xe Path) is an i915 component, available on GEN12 and
 	  newer GPUs, that helps to establish the hardware protected session and

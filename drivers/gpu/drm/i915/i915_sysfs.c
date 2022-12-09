@@ -44,7 +44,6 @@
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
 #include "i915_debugger.h"
-
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
 
@@ -57,6 +56,7 @@ typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char
 typedef ssize_t (*store)(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count);
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t
 i915_sysfs_id_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf);
@@ -69,6 +69,7 @@ struct ext_attr_kobj {
 	unsigned long id;
 	show_kobj i915_show_kobj;
 };
+#endif
 
 struct ext_attr {
 	struct device_attribute attr;
@@ -354,13 +355,33 @@ static ssize_t prelim_uapi_version_show(struct device *dev,
 
 static I915_DEVICE_ATTR_RO(prelim_uapi_version, prelim_uapi_version_show);
 
+static ssize_t
+prelim_csc_unique_id_show(struct device *kdev, struct device_attribute *attr, char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+
+	return sysfs_emit(buf, "%llx\n", RUNTIME_INFO(i915)->uid);
+}
+
+static I915_DEVICE_ATTR_RO(prelim_csc_unique_id, prelim_csc_unique_id_show);
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t i915_driver_error_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
+#else
+static ssize_t i915_driver_error_show(struct device *dev,
+                                   struct device_attribute *attr,
+                                   char *buf)
+#endif
 {
 	struct device *dev = kobj_to_dev(kobj);
 	struct device *kdev = kobj_to_dev(dev->kobj.parent);
 	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct ext_attr_kobj *ea = container_of(attr, struct ext_attr_kobj, attr);
+#else
+	struct ext_attr *ea = container_of(attr, struct ext_attr, attr);
+#endif
 
 	if (GEM_WARN_ON(ea->id > ARRAY_SIZE(i915->errors)))
 		return -ENOENT;
@@ -369,28 +390,45 @@ static ssize_t i915_driver_error_show(struct kobject *kobj,
 }
 
 static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 i915_sysfs_id_show(struct kobject *kobj, struct kobj_attribute *attr,
 		char *buf)
+#else
+i915_sysfs_id_show(struct device *dev, struct device_attribute *attr, char *buf)
+#endif
 {
 	ssize_t value;
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct ext_attr_kobj *ea = container_of(attr, struct ext_attr_kobj, attr);
 	struct device *dev = kobj_to_dev(kobj);
+#else
+	struct ext_attr *ea = container_of(attr, struct ext_attr, attr);
+#endif
 	struct device *kdev = kobj_to_dev(dev->kobj.parent);
 	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
 
 	/* Wa_16015476723 & Wa_16015666671 */
 	pvc_wa_disallow_rc6(i915);
-
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	value = ea->i915_show_kobj(kobj, attr, buf);
+#else
+	value = ea->i915_show(dev, attr, buf);
+#endif
 
 	pvc_wa_allow_rc6(i915);
 
 	return value;
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT 
 #define I915_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct ext_attr_kobj dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_id_show, NULL), (_id), i915_driver_error_show}
+#else 
+#define I915_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
+	struct ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_id_show, NULL), (_id), i915_driver_error_show}
+#endif  
 
 static I915_DRIVER_SYSFS_ERROR_ATTR_RO(driver_object_migration, I915_DRIVER_ERROR_OBJECT_MIGRATION);
 
@@ -644,6 +682,12 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 
 	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr.attr))
 		dev_err(kdev, "Failed adding prelim_uapi_version to sysfs\n");
+
+	if (INTEL_INFO(dev_priv)->has_csc_uid) {
+		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_csc_unique_id.attr.attr);
+		if (ret)
+			drm_warn(&dev_priv->drm, "UID sysfs setup failed\n");
+	}
 
 	if (HAS_LMEM(dev_priv)) {
 		ret = sysfs_create_files(&kdev->kobj, lmem_attrs);

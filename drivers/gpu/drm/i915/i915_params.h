@@ -27,7 +27,6 @@
 
 #include <linux/bitops.h>
 #include <linux/cache.h> /* for __read_mostly */
-#include <backport/autoconf.h>
 
 struct drm_printer;
 
@@ -36,6 +35,9 @@ struct drm_printer;
 #define ENABLE_GUC_DO_NOT_LOAD_GUC	BIT(7)
 #define ENABLE_GUC_MASK			GENMASK(1, 0)
 
+#ifdef BPM_PRELIM_OVERRIDE_P2P_DIST_DEFAULT_ENABLE
+#define ENABLE_PARAM
+#endif
 /*
  * Invoke param, a function-like macro, for each i915 param, with arguments:
  *
@@ -92,7 +94,7 @@ struct drm_printer;
 	param(int, smem_access_control, I915_SMEM_ACCESS_CONTROL_DEFAULT, 0600) \
 	param(unsigned int, page_sz_mask, 0, 0600) \
 	param(unsigned int, debug_pages, 0, 0400) \
-	param(unsigned int, prelim_override_p2p_dist, 1, 0400)	\
+	param(unsigned int, prelim_override_p2p_dist, IS_ENABLED(ENABLE_PARAM)?1:0, 0400) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, allow_non_persist_without_reset, false, 0400) \
 	param(bool, enable_fake_int_wa, true, 0400) \
@@ -115,7 +117,8 @@ struct drm_printer;
 	param(bool, enable_gvt, false, IS_ENABLED(CPTCFG_DRM_I915_GVT) ? 0400 : 0) \
 	param(bool, enable_non_private_objects, false, 0400) \
 	param(bool, enable_mem_fence, false, 0400) \
-	param(bool, ulls_bcs0_pm_wa, true, 0600)
+	param(bool, ulls_bcs0_pm_wa, true, 0600) \
+	param(int, force_driver_flr, -1, 0400)
 
 #define MEMBER(T, member, ...) T member;
 struct i915_params {

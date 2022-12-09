@@ -16,6 +16,18 @@
 #include "i915_gem_lmem.h"
 #include "i915_gem_mman.h"
 
+unsigned int i915_gem_sg_segment_size(const struct drm_i915_gem_object *obj)
+{
+	/*
+	 * Internal device memory is not passed through dma-mapping, so
+	 * we are only limited by the maximum page size.
+	 */
+	if (i915_gem_object_is_lmem(obj))
+		return rounddown_pow_of_two(UINT_MAX);
+
+	return rounddown_pow_of_two(i915_sg_segment_size());
+}
+
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages,
 				 unsigned int sg_page_sizes)
@@ -67,7 +79,7 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 	shrinkable = i915_gem_object_is_shrinkable(obj);
 
 	if (i915_gem_object_is_tiled(obj) &&
-	    i915->quirks & QUIRK_PIN_SWIZZLED_PAGES) {
+	    i915->gem_quirks & GEM_QUIRK_PIN_SWIZZLED_PAGES) {
 		GEM_BUG_ON(i915_gem_object_has_tiling_quirk(obj));
 		i915_gem_object_set_tiling_quirk(obj);
 		GEM_BUG_ON(!list_empty(&obj->mm.link));
@@ -315,6 +327,101 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	return err;
 }
 
+#ifndef BPM_VMAP_PFN_NOT_PRESENT
+/* The 'mapping' part of i915_gem_object_pin_map() below */
+static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
+				      enum i915_map_type type)
+{
+	unsigned long n_pages = obj->base.size >> PAGE_SHIFT, i;
+	struct page *stack[32], **pages = stack, *page;
+	struct sgt_iter iter;
+	pgprot_t pgprot;
+	void *vaddr;
+
+	switch (type) {
+	default:
+		MISSING_CASE(type);
+		fallthrough;	/* to use PAGE_KERNEL anyway */
+	case I915_MAP_WB:
+		/*
+		 * On 32b, highmem using a finite set of indirect PTE (i.e.
+		 * vmap) to provide virtual mappings of the high pages.
+		 * As these are finite, map_new_virtual() must wait for some
+		 * other kmap() to finish when it runs out. If we map a large
+		 * number of objects, there is no method for it to tell us
+		 * to release the mappings, and we deadlock.
+		 *
+		 * However, if we make an explicit vmap of the page, that
+		 * uses a larger vmalloc arena, and also has the ability
+		 * to tell us to release unwanted mappings. Most importantly,
+		 * it will fail and propagate an error instead of waiting
+		 * forever.
+		 *
+		 * So if the page is beyond the 32b boundary, make an explicit
+		 * vmap.
+		 */
+		if (n_pages == 1 && !PageHighMem(sg_page(obj->mm.pages->sgl)))
+			return page_address(sg_page(obj->mm.pages->sgl));
+		pgprot = PAGE_KERNEL;
+		break;
+	case I915_MAP_WC:
+		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
+		break;
+	}
+
+	if (n_pages > ARRAY_SIZE(stack)) {
+		/* Too big for stack -- allocate temporary array instead */
+		pages = kvmalloc_array(n_pages, sizeof(*pages), GFP_KERNEL);
+		if (!pages)
+			return ERR_PTR(-ENOMEM);
+	}
+
+	i = 0;
+	for_each_sgt_page(page, iter, obj->mm.pages)
+		pages[i++] = page;
+	vaddr = vmap(pages, n_pages, 0, pgprot);
+	if (pages != stack)
+		kvfree(pages);
+
+	return vaddr ?: ERR_PTR(-ENOMEM);
+}
+
+static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
+				     enum i915_map_type type)
+{
+	resource_size_t iomap = obj->mm.region->iomap.base -
+		obj->mm.region->region.start;
+	unsigned long n_pfn = obj->base.size >> PAGE_SHIFT;
+	unsigned long stack[32], *pfns = stack, i;
+	struct sgt_iter iter;
+	dma_addr_t addr;
+	void *vaddr;
+
+	if (type != I915_MAP_WC)
+		return ERR_PTR(-ENODEV);
+
+	/* A single contiguous block of lmem? Reuse the io_mapping */
+	if (obj->flags & I915_BO_ALLOC_CONTIGUOUS)
+		return i915_gem_object_lmem_io_map(obj, 0, obj->base.size);
+
+	if (n_pfn > ARRAY_SIZE(stack)) {
+		/* Too big for stack -- allocate temporary array instead */
+		pfns = kvmalloc_array(n_pfn, sizeof(*pfns), GFP_KERNEL);
+		if (!pfns)
+			return ERR_PTR(-ENOMEM);
+	}
+
+	i = 0;
+	for_each_sgt_daddr(addr, iter, obj->mm.pages)
+		pfns[i++] = (iomap + addr) >> PAGE_SHIFT;
+	vaddr = vmap_pfn(pfns, n_pfn, pgprot_writecombine(PAGE_KERNEL_IO));
+	if (pfns != stack)
+		kvfree(pfns);
+
+	return vaddr ?: ERR_PTR(-ENOMEM);
+}
+
+#else
 static inline pte_t iomap_pte(resource_size_t base,
                               dma_addr_t offset,
                               pgprot_t prot)
@@ -414,6 +521,7 @@ static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
 
 	return area->addr;
 }
+#endif
 
 /* get, pin, and map the pages of the object into kernel space */
 void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
@@ -461,11 +569,22 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 	}
 
 	if (!ptr) {
+#ifndef BPM_VMAP_PFN_NOT_PRESENT
+		if (GEM_WARN_ON(type == I915_MAP_WC && !pat_enabled()))
+			ptr = ERR_PTR(-ENODEV);
+		else if (i915_gem_object_has_struct_page(obj))
+			ptr = i915_gem_object_map_page(obj, type);
+		else
+			ptr = i915_gem_object_map_pfn(obj, type);
+		if (IS_ERR(ptr))
+			goto err_unpin;
+#else
 		ptr = i915_gem_object_map(obj, type);
 		if (!ptr) {
 			ptr = ERR_PTR(-ENOMEM);
 			goto err_unpin;
 		}
+#endif
 
 		obj->mm.mapping = page_pack_bits(ptr, type);
 	}

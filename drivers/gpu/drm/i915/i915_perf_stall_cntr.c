@@ -213,10 +213,10 @@ eu_stall_data_in_buf(struct i915_eu_stall_cntr_stream *stream)
 
 	for_each_ss_steering(dss, gt, group, instance) {
 		dss_buf = &stream->dss_buf[dss];
-		spin_lock(&dss_buf->lock);
+		mutex_lock(&dss_buf->lock);
 		read_ptr = dss_buf->read;
 		write_ptr = dss_buf->write;
-		spin_unlock(&dss_buf->lock);
+		mutex_unlock(&dss_buf->lock);
 		if (read_ptr != write_ptr)
 			return true;
 	}
@@ -260,7 +260,7 @@ buf_data_size(size_t buf_size, u32 read_ptr, u32 write_ptr)
 static bool
 eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 {
-	u32 read_ptr, write_ptr_reg, write_ptr, total_data = 0;
+	u32 read_ptr_reg, read_ptr, write_ptr_reg, write_ptr, total_data = 0;
 	u32 buf_size = stream->per_dss_buf_size;
 	struct intel_gt *gt = stream->tile_gt;
 	struct per_dss_buf *dss_buf;
@@ -269,15 +269,28 @@ eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 
 	min_data_present = false;
 	for_each_ss_steering(dss, gt, group, instance) {
+		dss_buf = &stream->dss_buf[dss];
+		mutex_lock(&dss_buf->lock);
+		read_ptr = dss_buf->read;
 		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT,
 						  group, instance);
 		write_ptr = write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK;
 		write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
 		write_ptr &= ((buf_size << 1) - 1);
-
-		dss_buf = &stream->dss_buf[dss];
-		spin_lock(&dss_buf->lock);
-		read_ptr = dss_buf->read;
+		/*
+		 * If there has been an engine reset by GuC, and GuC doesn't restore
+		 * the read and write pointer registers, the pointers will reset to 0.
+		 * If so, update the cached read pointer.
+		 */
+		if (unlikely((write_ptr < read_ptr) &&
+			     ((read_ptr & buf_size) == (write_ptr & buf_size)))) {
+			read_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT1,
+							 group, instance);
+			read_ptr = read_ptr_reg & XEHPC_EUSTALL_REPORT1_READ_PTR_MASK;
+			read_ptr <<= (6 - XEHPC_EUSTALL_REPORT1_READ_PTR_SHIFT);
+			read_ptr &= ((buf_size << 1) - 1);
+			dss_buf->read = read_ptr;
+		}
 		if ((write_ptr != read_ptr) && !min_data_present) {
 			total_data += buf_data_size(buf_size, read_ptr, write_ptr);
 			/*
@@ -291,7 +304,7 @@ eu_stall_cntr_buf_check(struct i915_eu_stall_cntr_stream *stream)
 		if (write_ptr_reg & XEHPC_EUSTALL_REPORT_OVERFLOW_DROP)
 			dss_buf->line_drop = true;
 		dss_buf->write = write_ptr;
-		spin_unlock(&dss_buf->lock);
+		mutex_unlock(&dss_buf->lock);
 	}
 	return min_data_present;
 }
@@ -314,14 +327,14 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 			 size_t *total_size, struct intel_gt *gt,
 			 u8 s, u8 ss)
 {
+	size_t size, tmp_size, buf_size = stream->per_dss_buf_size;
 	u16 flags = 0, subslice = (s * GEN_DSS_PER_CSLICE) + ss;
 	struct prelim_drm_i915_stall_cntr_info info;
 	u8 *dss_start_vaddr, *read_vaddr, *tmp_addr;
-	u32 read_ptr_reg, write_ptr_reg, write_ptr;
-	u32 read_offset, write_offset, read_ptr;
+	u32 read_ptr_reg, read_ptr, write_ptr;
+	u32 read_offset, write_offset;
 	struct per_dss_buf *dss_buf;
 	bool line_drop = false;
-	size_t size, tmp_size;
 	int ret = 0;
 
 	/* Hardware increments the read and write pointers such that they can
@@ -332,59 +345,52 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	 * check if the write pointer has wrapped around the array.
 	 */
 	dss_buf = &stream->dss_buf[subslice];
-	spin_lock(&dss_buf->lock);
+	mutex_lock(&dss_buf->lock);
 	dss_start_vaddr = dss_buf->vaddr;
 	read_ptr = dss_buf->read;
 	write_ptr = dss_buf->write;
 	line_drop = dss_buf->line_drop;
-	spin_unlock(&dss_buf->lock);
-	read_offset = read_ptr & (stream->per_dss_buf_size - 1);
-	write_offset = write_ptr & (stream->per_dss_buf_size - 1);
+	read_offset = read_ptr & (buf_size - 1);
+	write_offset = write_ptr & (buf_size - 1);
+	/*
+	 * If there has been an engine reset by GuC, and GuC doesn't restore
+	 * the read and write pointer registers, the pointers will reset to 0.
+	 * If so, update the cached read pointer.
+	 */
+	if (unlikely((write_ptr < read_ptr) &&
+		     ((read_ptr & buf_size) == (write_ptr & buf_size)))) {
+		read_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT1,
+						s, ss);
+		read_ptr = read_ptr_reg & XEHPC_EUSTALL_REPORT1_READ_PTR_MASK;
+		read_ptr <<= (6 - XEHPC_EUSTALL_REPORT1_READ_PTR_SHIFT);
+		read_ptr &= ((buf_size << 1) - 1);
+		read_offset = read_ptr & (buf_size - 1);
+		dss_buf->read = read_ptr;
+	}
+
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
 				      read_offset, write_offset, *total_size);
-	/* First check if the cached read and write pointers are equal.
-	 * If equal, read the write pointer from the register and re-check.
-	 * If not equal, it means there is unread data in the buffer during
-	 * the last read operation. This can happen for example when the user
-	 * buffer isn't big enough to read all the data.
-	 */
 	if (write_ptr == read_ptr) {
-		write_ptr_reg = intel_gt_mcr_read(gt, XEHPC_EUSTALL_REPORT, s, ss);
-		trace_i915_reg_rw(false, XEHPC_EUSTALL_REPORT, write_ptr_reg,
-				  sizeof(write_ptr_reg), true);
-		write_ptr = (write_ptr_reg & XEHPC_EUSTALL_REPORT_WRITE_PTR_MASK);
-		/* write pointer is 64B aligned */
-		write_ptr <<= (6 - XEHPC_EUSTALL_REPORT_WRITE_PTR_SHIFT);
-		write_ptr &= ((stream->per_dss_buf_size << 1) - 1);
-		/* If still equal, there is no data to read */
-		if (write_ptr == read_ptr)
-			return 0;
-		write_offset = write_ptr & (stream->per_dss_buf_size - 1);
-		spin_lock(&dss_buf->lock);
-		dss_buf->write = write_ptr;
-		/* If any data was dropped due to circular buffer being full,
-		 * set a flag to let the userspace know.
-		 */
-		if (write_ptr_reg & XEHPC_EUSTALL_REPORT_OVERFLOW_DROP) {
-			dss_buf->line_drop = true;
-			line_drop = true;
-		}
-		spin_unlock(&dss_buf->lock);
+		mutex_unlock(&dss_buf->lock);
+		return 0;
 	}
+
 	/* If write pointer offset is less than the read pointer offset,
 	 * it means, write pointer has wrapped around the array.
 	 */
 	if (write_offset > read_offset)
 		size = write_offset - read_offset;
 	else
-		size = stream->per_dss_buf_size - read_offset + write_offset;
+		size = buf_size - read_offset + write_offset;
 
 	/* Read only the data that the user space buffer can accommodate */
 	if ((*total_size + size) > count)
 		size = count - *total_size;
 
-	if (size == 0)
+	if (size == 0) {
+		mutex_unlock(&dss_buf->lock);
 		return 0;
+	}
 
 	if (line_drop)
 		flags = PRELIM_I915_EUSTALL_FLAG_OVERFLOW_DROP;
@@ -406,19 +412,23 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 		for (tmp_addr = read_vaddr; tmp_addr < read_vaddr + size;
 						tmp_addr += CACHELINE_BYTES)
 			memcpy((tmp_addr + 48), &info, sizeof(info));
-		if (copy_to_user((buf + *total_size), read_vaddr, size))
+		if (copy_to_user((buf + *total_size), read_vaddr, size)) {
+			mutex_unlock(&dss_buf->lock);
 			return -EFAULT;
+		}
 		*total_size += size;
 		read_ptr += size;
 	} else {
-		tmp_size = stream->per_dss_buf_size - read_offset;
+		tmp_size = buf_size - read_offset;
 		if (tmp_size > size)
 			tmp_size = size;
 		for (tmp_addr = read_vaddr; tmp_addr < read_vaddr + tmp_size;
 						tmp_addr += CACHELINE_BYTES)
 			memcpy((tmp_addr + 48), &info, sizeof(info));
-		if (copy_to_user((buf + *total_size), read_vaddr, tmp_size))
+		if (copy_to_user((buf + *total_size), read_vaddr, tmp_size)) {
+			mutex_unlock(&dss_buf->lock);
 			return -EFAULT;
+		}
 		*total_size += tmp_size;
 		read_ptr += tmp_size;
 
@@ -428,13 +438,15 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 					tmp_addr < dss_start_vaddr + size;
 					tmp_addr += CACHELINE_BYTES)
 				memcpy((tmp_addr + 48), &info, sizeof(info));
-			if (copy_to_user((buf + *total_size), dss_start_vaddr, size))
+			if (copy_to_user((buf + *total_size), dss_start_vaddr, size)) {
+				mutex_unlock(&dss_buf->lock);
 				return -EFAULT;
+			}
 			*total_size += size;
 			read_ptr += size;
 		}
 		/* Read pointer can overflow into one additional bit */
-		read_ptr &= ((stream->per_dss_buf_size << 1) - 1);
+		read_ptr &= ((buf_size << 1) - 1);
 	}
 
 	read_ptr_reg = ((read_ptr >> 6) << XEHPC_EUSTALL_REPORT1_READ_PTR_SHIFT);
@@ -444,13 +456,12 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
 	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT1,
 			  read_ptr_reg, sizeof(read_ptr_reg), true);
-	spin_lock(&dss_buf->lock);
 	if (dss_buf->line_drop) {
 		clear_dropped_eviction_line_bit(gt, s, ss);
 		dss_buf->line_drop = false;
 	}
 	dss_buf->read = read_ptr;
-	spin_unlock(&dss_buf->lock);
+	mutex_unlock(&dss_buf->lock);
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
 				      read_offset, write_offset, *total_size);
 	return ret;
@@ -723,7 +734,7 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 			dss_buf->write = write_ptr;
 			dss_buf->read = write_ptr;
 			dss_buf->line_drop = false;
-			spin_lock_init(&dss_buf->lock);
+			mutex_init(&dss_buf->lock);
 		}
 	}
 	return 0;

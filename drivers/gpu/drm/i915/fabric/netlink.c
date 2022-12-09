@@ -1010,6 +1010,7 @@ exit:
 	return ret;
 }
 
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
 static const struct nla_policy nl_iaf_policy[] = {
 	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
 	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
@@ -1107,6 +1108,34 @@ static const struct nla_policy nl_iaf_policy[] = {
 	[IAF_ATTR_SUB_DEVICE_QSFP_MGR_FAULT_TRAP_COUNT] = { .type = NLA_U64 },
 	[IAF_ATTR_SUB_DEVICE_QSFP_MGR_PORT_PRESENT_TRAP_COUNT] = { .type = NLA_U64 },
 };
+#else
+static const struct nla_policy nl_iaf_policy_basic[IAF_ATTR_MAX + 1] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+};
+
+static const struct nla_policy nl_iaf_policy_fabric_id[IAF_ATTR_MAX + 1] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
+};
+
+static const struct nla_policy nl_iaf_policy_fabric_id_sd_index[IAF_ATTR_MAX + 1] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
+	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
+};
+
+static const struct nla_policy nl_iaf_policy_fabric_id_sd_index_port[IAF_ATTR_MAX + 1] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
+	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
+	[IAF_ATTR_FABRIC_PORT_NUMBER] = { .type = NLA_U8 },
+};
+#endif
+
 
 static int nl_device_enum_op(struct sk_buff *msg, struct genl_info *info)
 {
@@ -1203,6 +1232,7 @@ static int nl_fport_xmit_recv_counts_op(struct sk_buff *msg, struct genl_info *i
 	return nl_process_query(msg, info, nl_process_fport_xmit_recv_counts);
 }
 
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
 static const struct genl_ops nl_iaf_cmds[] = {
 	{ .cmd = IAF_CMD_OP_DEVICE_ENUM, .doit = nl_device_enum_op, },
 	{ .cmd = IAF_CMD_OP_PORT_ENABLE, .doit = nl_port_enable_op, .flags = GENL_UNS_ADMIN_PERM, },
@@ -1231,6 +1261,111 @@ static const struct genl_ops nl_iaf_cmds[] = {
 	{ .cmd = IAF_CMD_OP_FPORT_PROPERTIES, .doit = nl_fport_properties_op, },
 	{ .cmd = IAF_CMD_OP_FPORT_XMIT_RECV_COUNTS, .doit = nl_fport_xmit_recv_counts_op, },
 };
+#else
+static const struct genl_ops nl_iaf_cmds[] = {
+	{ .cmd = IAF_CMD_OP_DEVICE_ENUM,
+	  .doit = nl_device_enum_op,
+	  .policy = nl_iaf_policy_basic,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_ENABLE,
+	  .doit = nl_port_enable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_DISABLE,
+	  .doit = nl_port_disable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_STATE_QUERY,
+	  .doit = nl_port_state_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_ENABLE,
+	  .doit = nl_port_usage_enable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_DISABLE,
+	  .doit = nl_port_usage_disable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_STATE_QUERY,
+	  .doit = nl_port_usage_state_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_ENABLE,
+	  .doit = nl_port_beacon_enable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_DISABLE,
+	  .doit = nl_port_beacon_disable_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_STATE_QUERY,
+	  .doit = nl_port_beacon_state_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_PORT_ROUTED_QUERY,
+	  .doit = nl_port_routed_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_REM_REQUEST,
+	  .doit = nl_rem_request_op,
+	  .policy = nl_iaf_policy_basic,
+	  .flags = GENL_UNS_ADMIN_PERM,
+	},
+
+	{ .cmd = IAF_CMD_OP_ROUTING_GEN_QUERY,
+	  .doit = nl_routing_gen_query_op,
+	  .policy = nl_iaf_policy_basic,
+	},
+
+	{ .cmd = IAF_CMD_OP_FABRIC_DEVICE_PROPERTIES,
+	  .doit = nl_fabric_device_properties_op,
+	  .policy = nl_iaf_policy_fabric_id,
+	},
+
+	{ .cmd = IAF_CMD_OP_SUB_DEVICE_PROPERTIES_GET,
+	  .doit = nl_fabric_sub_device_properties_get_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index,
+	},
+
+	{ .cmd = IAF_CMD_OP_FPORT_STATUS_QUERY,
+	  .doit = nl_fport_status_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_SUB_DEVICE_TRAP_COUNT_QUERY,
+	  .doit = nl_sub_device_trap_count_query_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index,
+	},
+
+	{ .cmd = IAF_CMD_OP_FPORT_PROPERTIES,
+	  .doit = nl_fport_properties_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_FPORT_XMIT_RECV_COUNTS,
+	  .doit = nl_fport_xmit_recv_counts_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+};
+#endif
 
 static struct genl_family nl_iaf_family = {
 	.name = "iaf_ze",
@@ -1238,7 +1373,9 @@ static struct genl_family nl_iaf_family = {
 	.maxattr = IAF_ATTR_MAX,
 	.ops = nl_iaf_cmds,
 	.n_ops = ARRAY_SIZE(nl_iaf_cmds),
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
 	.policy = nl_iaf_policy,
+#endif
 	.parallel_ops = true,
 };
 
@@ -1258,7 +1395,9 @@ void nl_term(void)
  */
 int nl_init(void)
 {
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_policy) != _IAF_ATTR_COUNT);
+#endif
 
 	/* IAF_CMD_OP_UNSPEC is not included so-1 */
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_cmds) != _IAF_CMD_OP_COUNT - 1);

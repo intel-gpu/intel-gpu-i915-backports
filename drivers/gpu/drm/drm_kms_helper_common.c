@@ -25,13 +25,20 @@
  *
  */
 
+#include <linux/module.h>
+
 #include <drm/drm_print.h>
 
 #include "drm_crtc_helper_internal.h"
+
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 MODULE_AUTHOR("David Airlie, Jesse Barnes");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION("DRM KMS helper");
 MODULE_LICENSE("GPL and additional rights");
 
@@ -70,7 +77,9 @@ static int __init drm_kms_helper_init(void)
 	 * attempt to load fbcon to avoid leaving the system without a usable
 	 * console.
 	 */
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	DRM_INFO("DRM_KMS_HELPER BACKPORTED INIT\n");
+#endif
 	if (IS_ENABLED(CPTCFG_DRM_FBDEV_EMULATION) &&
 	    IS_MODULE(CONFIG_FRAMEBUFFER_CONSOLE) &&
 	    !IS_ENABLED(CONFIG_EXPERT))

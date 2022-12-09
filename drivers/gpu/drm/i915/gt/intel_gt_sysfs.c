@@ -20,25 +20,43 @@
 #include "intel_gt_sysfs_pm.h"
 #include "sysfs_gt_errors.h"
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+#else
+typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
+#endif
 
 
 struct i915_ext_attr {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct kobj_attribute attr;
+#else
+	struct device_attribute attr;
+#endif
 	show i915_show;
 };
 
 static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+#else
+i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
+#endif
 
 {
 	ssize_t value;
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 	pvc_wa_disallow_rc6(gt->i915);
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	value = ea->i915_show(kobj, attr, buf);
+#else
+	value = ea->i915_show(dev, attr, buf);
+#endif
 
 	pvc_wa_allow_rc6(gt->i915);
 
@@ -74,10 +92,17 @@ struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 }
 
 static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 addr_range_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+#else
+addr_range_show(struct device *kdev, struct device_attribute *attr, char *buf)
+#endif
 {
-
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct intel_gt *gt = kobj_to_gt(kobj);
+#else
+	struct intel_gt *gt = kobj_to_gt(&kdev->kobj);
+#endif
 
 	return sysfs_emit(buf, "%pa\n", &gt->lmem->actual_physical_mem);
 }
@@ -108,12 +133,19 @@ static struct kobject *gt_get_parent_obj(struct intel_gt *gt)
 	return &gt->i915->drm.primary->kdev->kobj;
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t id_show(struct kobject *kobj,
 		struct kobj_attribute *attr,
 		char *buf)
-
+#else
+static ssize_t id_show(struct device *dev,
+                      struct device_attribute *attr,
+                      char *buf)
+#endif
 {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 
 	return sysfs_emit(buf, "%u\n", gt->info.id);

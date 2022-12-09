@@ -5,7 +5,7 @@
 #include_next <linux/bitmap.h>
 
 /* bitmap_for_each_clear_region introduced in 5.6 version */
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6) && LINUX_VERSION_IS_LESS(5,6,0)
+#ifdef BPM_BITMAP_CLEAR_REGION_NOT_PRESENT
 
 static inline void bitmap_next_clear_region(unsigned long *bitmap,
                                             unsigned int *rs, unsigned int *re,

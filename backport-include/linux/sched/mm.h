@@ -29,7 +29,7 @@
 
 #include_next <linux/sched/mm.h>
 
-#if LINUX_VERSION_IS_LESS(5,11,0)
+#ifdef BPM_MIGHT_ALLOC_NOT_PRESENT
 #define might_alloc LINUX_I915_BACKPORT(might_alloc)
 /**
  * might_alloc - Mark possible allocation sites

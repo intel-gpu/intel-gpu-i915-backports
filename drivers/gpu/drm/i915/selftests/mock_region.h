@@ -16,6 +16,7 @@ mock_region_create(struct intel_gt *gt,
 		   resource_size_t start,
 		   resource_size_t size,
 		   resource_size_t min_page_size,
-		   resource_size_t io_start);
+		   resource_size_t io_start,
+		   resource_size_t io_size);
 
 #endif /* !__MOCK_REGION_H */

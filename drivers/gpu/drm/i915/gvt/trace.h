@@ -28,7 +28,9 @@
  *
  */
 
+#ifdef BPM_TRACE_INCLUDE_PATH_NOT_PRESENT
 #include <backport/backport_path.h>
+#endif
 
 #if !defined(_GVT_TRACE_H_) || defined(TRACE_HEADER_MULTI_READ)
 #define _GVT_TRACE_H_
@@ -380,6 +382,10 @@ TRACE_EVENT(render_mmio,
 /* This part must be out of protection */
 #undef TRACE_INCLUDE_PATH
 #undef TRACE_INCLUDE_FILE
+#ifdef BPM_TRACE_INCLUDE_PATH_NOT_PRESENT
 #define TRACE_INCLUDE_PATH BACKPORT_PATH/drivers/gpu/drm/i915/gvt
+#else
+#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/i915/gvt
+#endif
 #define TRACE_INCLUDE_FILE trace
 #include <trace/define_trace.h>

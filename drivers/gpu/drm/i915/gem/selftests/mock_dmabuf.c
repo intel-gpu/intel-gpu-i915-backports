@@ -66,7 +66,7 @@ static int mock_dmabuf_vmap(struct dma_buf *dma_buf, struct iosys_map *map)
 	struct mock_dmabuf *mock = to_mock(dma_buf);
 	void *vaddr;
 
-	vaddr = vm_map_ram(mock->pages, mock->npages, 0, PAGE_KERNEL);
+	vaddr = vm_map_ram(mock->pages, mock->npages, 0);
 	if (!vaddr)
 		return -ENOMEM;
 	iosys_map_set_vaddr(map, vaddr);

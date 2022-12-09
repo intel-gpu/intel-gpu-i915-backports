@@ -51,7 +51,7 @@ int agp_memory_reserved;
  * Needed by the Nforce GART driver for the time being. Would be
  * nice to do this some other way instead of needing this export.
  */
-//EXPORT_SYMBOL_GPL(agp_memory_reserved);
+EXPORT_SYMBOL_GPL(agp_memory_reserved);
 
 /*
  * Generic routines for handling agp_memory structures -
@@ -199,7 +199,7 @@ void agp_free_memory(struct agp_memory *curr)
 	agp_free_page_array(curr);
 	kfree(curr);
 }
-//EXPORT_SYMBOL(agp_free_memory);
+EXPORT_SYMBOL(agp_free_memory);
 
 #define ENTRIES_PER_PAGE		(PAGE_SIZE / sizeof(unsigned long))
 
@@ -275,7 +275,7 @@ struct agp_memory *agp_allocate_memory(struct agp_bridge_data *bridge,
 
 	return new;
 }
-//EXPORT_SYMBOL(agp_allocate_memory);
+EXPORT_SYMBOL(agp_allocate_memory);
 
 
 /* End - Generic routines for handling agp_memory structures */
@@ -349,7 +349,7 @@ int agp_num_entries(void)
 		num_entries = 0;
 	return num_entries;
 }
-//EXPORT_SYMBOL_GPL(agp_num_entries);
+EXPORT_SYMBOL_GPL(agp_num_entries);
 
 
 /**
@@ -386,7 +386,7 @@ int agp_copy_info(struct agp_bridge_data *bridge, struct agp_kern_info *info)
 	info->page_mask = ~0UL;
 	return 0;
 }
-//EXPORT_SYMBOL(agp_copy_info);
+EXPORT_SYMBOL(agp_copy_info);
 
 /* End - Routine to copy over information structure */
 
@@ -434,7 +434,7 @@ int agp_bind_memory(struct agp_memory *curr, off_t pg_start)
 
 	return 0;
 }
-//EXPORT_SYMBOL(agp_bind_memory);
+EXPORT_SYMBOL(agp_bind_memory);
 
 
 /**
@@ -469,7 +469,7 @@ int agp_unbind_memory(struct agp_memory *curr)
 	spin_unlock(&curr->bridge->mapped_lock);
 	return 0;
 }
-//EXPORT_SYMBOL(agp_unbind_memory);
+EXPORT_SYMBOL(agp_unbind_memory);
 
 
 /* End - Routines for handling swapping of agp_memory into the GATT */
@@ -844,6 +844,7 @@ void agp_generic_enable(struct agp_bridge_data *bridge, u32 requested_mode)
 	/* AGP v<3 */
 	agp_device_command(bridge_agpstat, false);
 }
+EXPORT_SYMBOL(agp_generic_enable);
 
 
 int agp_generic_create_gatt_table(struct agp_bridge_data *bridge)
@@ -1286,7 +1287,7 @@ void agp_enable(struct agp_bridge_data *bridge, u32 mode)
 		return;
 	bridge->driver->agp_enable(bridge, mode);
 }
-//EXPORT_SYMBOL(agp_enable);
+EXPORT_SYMBOL(agp_enable);
 
 /* When we remove the global variable agp_bridge from all drivers
  * then agp_alloc_bridge and agp_generic_find_bridge need to be updated

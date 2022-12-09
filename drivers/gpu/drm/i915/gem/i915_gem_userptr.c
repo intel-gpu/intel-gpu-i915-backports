@@ -34,9 +34,11 @@
  *    Christian König <christian.koenig@amd.com>
  */
 
-#include <linux/mmu_context.h>
-/* enable redhat backport to support mmu notifer wrapper*/
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1
 #define RH_DRM_BACKPORT
+#endif
+
+#include <linux/mmu_context.h>
 #include <linux/mempolicy.h>
 #include <linux/swap.h>
 #include <linux/sched/mm.h>
@@ -110,7 +112,9 @@ restart:
 	}
 
 	if (vm) {
+		atomic_inc(&vm->invalidations);
 		ret = i915_vm_sync(vm);
+		atomic_dec(&vm->invalidations);
 		i915_vm_put(vm);
 		vm = NULL;
 	} else {
@@ -240,7 +244,12 @@ static void i915_gem_object_userptr_drop_ref(struct drm_i915_gem_object *obj)
 	if (pvec) {
 		const unsigned long num_pages = obj->base.size >> PAGE_SHIFT;
 
+#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+		unpin_user_pages(pvec, num_pages);
+#else
 		release_pages(pvec, num_pages);
+#endif
+
 		kvfree(pvec);
 	}
 }
@@ -248,15 +257,14 @@ static void i915_gem_object_userptr_drop_ref(struct drm_i915_gem_object *obj)
 static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
 	pgoff_t num_pages; /* limited by __sg_alloc_table_from_pages */
-	unsigned int max_segment = i915_sg_segment_size();
+	unsigned int max_segment = i915_gem_sg_segment_size(obj);
 	struct sg_table *st;
 	unsigned int sg_page_sizes;
+#ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_RETURNS_SCATTERLIST
+       struct scatterlist *sg;
+#endif
 	struct page **pvec;
 	int ret;
-
-#if RHEL_RELEASE_VERSION(8, 5) == RHEL_RELEASE_CODE
-        struct scatterlist *sg;
-#endif /* RHEL_RELEASE_VERSION(8, 5) == RHEL_RELEASE_CODE */
 
 	if (!safe_conversion(&num_pages, obj->base.size >> PAGE_SHIFT))
 		return -E2BIG;
@@ -274,26 +282,30 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	pvec = obj->userptr.pvec;
 
 alloc_table:
-#if RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE
-	ret = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
-					 num_pages << PAGE_SHIFT,
-					 max_segment, GFP_KERNEL);
-	if (ret)
-		goto err;
-#elif RHEL_RELEASE_VERSION(8, 5) ==  RHEL_RELEASE_CODE
-        sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
-                        num_pages << PAGE_SHIFT, max_segment,
-                        NULL, 0, GFP_KERNEL);
+#ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
+#ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_RETURNS_SCATTERLIST
+	sg = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+			num_pages << PAGE_SHIFT, max_segment,
+			NULL, 0, GFP_KERNEL);
 	if (IS_ERR(sg)) {
 		ret = PTR_ERR(sg);
 		goto err;
 	}
 #else
-       ret = sg_alloc_table_from_pages(st, pvec, num_pages, 0,
-                              num_pages << PAGE_SHIFT, GFP_KERNEL);
-       if (ret)
-              goto err;
+	ret = __sg_alloc_table_from_pages(st, pvec, num_pages, 0,
+			num_pages << PAGE_SHIFT,
+			max_segment, GFP_KERNEL);
+	if (ret)
+		goto err;
 #endif
+#else
+	ret = sg_alloc_table_from_pages_segment(st, pvec, num_pages, 0,
+			num_pages << PAGE_SHIFT,
+			max_segment, GFP_KERNEL);
+	if (ret)
+		goto err;
+#endif
+
 	ret = i915_gem_gtt_prepare_pages(obj, st);
 	if (ret) {
 		sg_free_table(st);
@@ -512,10 +524,17 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 
 	pinned = ret = 0;
 	while (pinned < num_pages) {
+#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+		ret = pin_user_pages_fast(obj->userptr.ptr + pinned * PAGE_SIZE,
+				num_pages - pinned, gup_flags,
+				&pvec[pinned]);
+#else
 		ret = get_user_pages_fast(obj->userptr.ptr + pinned * PAGE_SIZE,
-					  num_pages - pinned,
-					  gup_flags,
-					  &pvec[pinned]);
+				num_pages - pinned,
+				gup_flags,
+				&pvec[pinned]);
+#endif
+
 		if (ret < 0) {
 			if (in_kthread)
 				kthread_unuse_mm(mm);
@@ -555,7 +574,12 @@ out_unlock:
 
 out:
 	if (pvec) {
+
+#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+		unpin_user_pages(pvec, pinned);
+#else
 		release_pages(pvec, pinned);
+#endif
 		kvfree(pvec);
 	}
 

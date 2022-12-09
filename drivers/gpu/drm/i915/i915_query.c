@@ -544,11 +544,11 @@ static int can_copy_perf_config_registers_or_number(u32 user_n_regs,
 
 	if (user_n_regs < kernel_n_regs)
 		return -EINVAL;
-
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 	if (!access_ok(u64_to_user_ptr(user_regs_ptr),
 		       2 * sizeof(u32) * kernel_n_regs))
 		return -EFAULT;
-
+#endif
 	return 0;
 }
 
@@ -557,6 +557,9 @@ static int copy_perf_config_registers_or_number(const struct i915_oa_reg *kernel
 						u64 user_regs_ptr,
 						u32 *user_n_regs)
 {
+#ifndef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+	u32 __user *p = u64_to_user_ptr(user_regs_ptr);
+#endif
 	u32 r;
 
 	if (*user_n_regs == 0) {
@@ -566,6 +569,7 @@ static int copy_perf_config_registers_or_number(const struct i915_oa_reg *kernel
 
 	*user_n_regs = kernel_n_regs;
 
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 	for (r = 0; r < kernel_n_regs; r++) {
 		u32 __user *user_reg_ptr =
 			u64_to_user_ptr(user_regs_ptr + sizeof(u32) * r * 2);
@@ -583,8 +587,22 @@ static int copy_perf_config_registers_or_number(const struct i915_oa_reg *kernel
 		if (ret)
 			return -EFAULT;
 	}
+#else
+	if (!user_write_access_begin(p, 2 * sizeof(u32) * kernel_n_regs))
+		return -EFAULT;
+
+	for (r = 0; r < kernel_n_regs; r++, p += 2) {
+		unsafe_put_user(i915_mmio_reg_offset(kernel_regs[r].addr),
+				p, Efault);
+		unsafe_put_user(kernel_regs[r].value, p + 1, Efault);
+	}
+	user_write_access_end();
+#endif
 
 	return 0;
+Efault:
+	user_write_access_end();
+	return -EFAULT;
 }
 
 static int query_perf_config_data(struct drm_i915_private *i915,
@@ -620,10 +638,14 @@ static int query_perf_config_data(struct drm_i915_private *i915,
 		return -EINVAL;
 	}
 
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 	if (!access_ok(user_query_config_ptr, total_size))
 		return -EFAULT;
 
 	if (__get_user(flags, &user_query_config_ptr->flags))
+#else
+	if (get_user(flags, &user_query_config_ptr->flags))
+#endif
 		return -EFAULT;
 
 	if (flags != 0)
@@ -636,8 +658,13 @@ static int query_perf_config_data(struct drm_i915_private *i915,
 		BUILD_BUG_ON(sizeof(user_query_config_ptr->uuid) >= sizeof(uuid));
 
 		memset(&uuid, 0, sizeof(uuid));
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 		if (__copy_from_user(uuid, user_query_config_ptr->uuid,
 				     sizeof(user_query_config_ptr->uuid)))
+#else
+		if (copy_from_user(uuid, user_query_config_ptr->uuid,
+				     sizeof(user_query_config_ptr->uuid)))
+#endif
 			return -EFAULT;
 
 		oa_config = NULL;
@@ -650,16 +677,25 @@ static int query_perf_config_data(struct drm_i915_private *i915,
 		}
 		rcu_read_unlock();
 	} else {
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 		if (__get_user(config_id, &user_query_config_ptr->config))
+#else
+		if (get_user(config_id, &user_query_config_ptr->config))
+#endif
 			return -EFAULT;
+
 
 		oa_config = i915_perf_get_oa_config(perf, config_id);
 	}
 	if (!oa_config)
 		return -ENOENT;
 
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 	if (__copy_from_user(&user_config, user_config_ptr,
 			     sizeof(user_config))) {
+#else
+	if (copy_from_user(&user_config, user_config_ptr, sizeof(user_config))) {
+#endif
 		ret = -EFAULT;
 		goto out;
 	}
@@ -705,8 +741,12 @@ static int query_perf_config_data(struct drm_i915_private *i915,
 
 	memcpy(user_config.uuid, oa_config->uuid, sizeof(user_config.uuid));
 
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 	if (__copy_to_user(user_config_ptr, &user_config,
 			   sizeof(user_config))) {
+#else
+	if (copy_to_user(user_config_ptr, &user_config, sizeof(user_config))) {
+#endif
 		ret = -EFAULT;
 		goto out;
 	}
@@ -905,6 +945,65 @@ static int query_hwconfig_blob(struct drm_i915_private *i915,
 	return hwconfig->size;
 }
 
+static int query_hw_ip_version(struct drm_i915_private *i915,
+			       struct drm_i915_query_item *query_item)
+{
+	struct drm_i915_query_hw_ip_version ipver;
+	struct intel_engine_cs *engine;
+	int ret;
+
+	ret = copy_query_item(&ipver, sizeof(ipver), sizeof(ipver), query_item);
+	if (ret != 0)
+		return ret;
+
+	/*
+	 * Flags (both inside the query item and inside the ip version
+	 * structure) are reserved for future expansion; we don't accept any
+	 * yet.
+	 */
+	if (ipver.flags != 0 || query_item->flags != 0)
+		return -EINVAL;
+
+	engine = intel_engine_lookup_user(i915,
+					  ipver.engine.engine_class,
+					  ipver.engine.engine_instance);
+	if (!engine)
+		return -EINVAL;
+
+	switch (engine->uabi_class) {
+		default:
+			MISSING_CASE(engine->class);
+			fallthrough;
+		case I915_ENGINE_CLASS_RENDER:
+		case I915_ENGINE_CLASS_COMPUTE:
+		case I915_ENGINE_CLASS_COPY:
+			ipver.arch = RUNTIME_INFO(i915)->graphics.ver;
+			ipver.release = RUNTIME_INFO(i915)->graphics.rel;
+			ipver.stepping = RUNTIME_INFO(i915)->graphics.step;
+			break;
+		case I915_ENGINE_CLASS_VIDEO:
+		case I915_ENGINE_CLASS_VIDEO_ENHANCE:
+			ipver.arch = RUNTIME_INFO(i915)->media.ver;
+			ipver.release = RUNTIME_INFO(i915)->media.rel;
+			ipver.stepping = RUNTIME_INFO(i915)->media.step;
+			break;
+	}
+
+	/*
+	 * For pre-GMD_ID platforms, RUNTIME_INFO's 'step' fields are just
+	 * i915-internal enum values that we don't want to expose as ABI.
+	 * We'll always return 0 for the stepping on those platforms.
+	 */
+	if (!HAS_GMD_ID(i915))
+		ipver.stepping = 0;
+
+	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr), &ipver,
+			 sizeof(ipver)))
+		return -EFAULT;
+
+	return sizeof(ipver);
+}
+
 static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 				       struct drm_i915_query_item *query_item)
 {
@@ -995,7 +1094,7 @@ static int query_compute_subslices(struct drm_i915_private *i915,
 	return fill_topology_info(sseu, query_item, sseu->compute_subslice_mask);
 }
 
-static int query_hw_ip_version(struct drm_i915_private *i915,
+static int prelim_query_hw_ip_version(struct drm_i915_private *i915,
 			       struct drm_i915_query_item *query_item)
 {
 	struct prelim_drm_i915_query_hw_ip_version ipver;
@@ -1056,6 +1155,7 @@ static i915_query_funcs_table i915_query_funcs[] = {
 	query_memregion_info,
 	query_hwconfig_blob,
 	query_geometry_subslices,
+	query_hw_ip_version,
 };
 
 static i915_query_funcs_table i915_query_funcs_prelim[] = {
@@ -1068,7 +1168,7 @@ static i915_query_funcs_table i915_query_funcs_prelim[] = {
 	MAKE_TABLE_IDX(COMPUTE_SUBSLICES) = query_compute_subslices,
 	MAKE_TABLE_IDX(CS_CYCLES) = query_cs_cycles,
 	MAKE_TABLE_IDX(FABRIC_INFO) = query_fabric_connectivity,
-	MAKE_TABLE_IDX(HW_IP_VERSION) = query_hw_ip_version,
+	MAKE_TABLE_IDX(HW_IP_VERSION) = prelim_query_hw_ip_version,
 	MAKE_TABLE_IDX(ENGINE_INFO) = prelim_query_engine_info,
 
 #undef MAKE_TABLE_IDX

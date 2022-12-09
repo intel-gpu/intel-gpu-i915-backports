@@ -27,8 +27,7 @@
 #include <linux/init.h>
 #include <linux/idr.h>
 #include <linux/dma-buf.h>
-#include <backport/bp-dma-buf.h>
-#include "backports.h"
+#include <linux/dma-heap.h>
 #include <backport/bp_module_version.h>
 
 #define DRIVER_AUTHOR	"Intel Graphics"
@@ -75,6 +74,7 @@ static int __init dmabuf_backport_init(void)
 
 static void __exit dmabuf_backport_exit(void)
 {
+	dma_heap_deinit();
 	dma_buf_deinit();
 	printk(KERN_INFO "DMABUF-COMPAT BACKPORTED EXIT\n");
 }

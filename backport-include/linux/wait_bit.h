@@ -28,7 +28,7 @@
 #include <linux/version.h>
 #include_next <linux/wait_bit.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0))
+#ifdef BPM_WAIT_VAR_EVENT_INTERRUPTIBLE_NOT_PRESENT
 #define __wait_var_event_interruptible(var, condition)			\
 	___wait_var_event(var, condition, TASK_INTERRUPTIBLE, 0, 0,	\
 			  schedule())

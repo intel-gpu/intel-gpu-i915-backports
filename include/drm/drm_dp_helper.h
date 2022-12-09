@@ -30,6 +30,9 @@
 
 struct drm_device;
 struct drm_dp_aux;
+#ifndef BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
+struct drm_panel;
+#endif
 
 /*
  * Unless otherwise noted, all values are from the DP 1.1a spec.  Note that
@@ -2218,6 +2221,23 @@ int drm_edp_backlight_set_level(struct drm_dp_aux *aux, const struct drm_edp_bac
 int drm_edp_backlight_enable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl,
 			     u16 level);
 int drm_edp_backlight_disable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl);
+
+#ifndef BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
+#if IS_ENABLED(CPTCFG_DRM_KMS_HELPER) && (IS_BUILTIN(CONFIG_BACKLIGHT_CLASS_DEVICE) || \
+	(IS_MODULE(CPTCFG_DRM_KMS_HELPER) && IS_MODULE(CONFIG_BACKLIGHT_CLASS_DEVICE)))
+
+int drm_panel_dp_aux_backlight(struct drm_panel *panel, struct drm_dp_aux *aux);
+
+#else
+
+static inline int drm_panel_dp_aux_backlight(struct drm_panel *panel,
+					     struct drm_dp_aux *aux)
+{
+	return 0;
+}
+
+#endif
+#endif
 
 #ifdef CPTCFG_DRM_DP_CEC
 void drm_dp_cec_irq(struct drm_dp_aux *aux);

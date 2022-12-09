@@ -2,9 +2,13 @@
 /*
  * Copyright © 2019 Intel Corporation
  */
-#include <linux/compiler_attributes.h>
 
+#ifdef BPM_PRANDOM_H_NOT_PRESENT
 #include <linux/random.h>
+#else
+#include <linux/prandom.h>
+#endif
+#include <uapi/drm/i915_drm.h>
 
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_gt_regs.h"
@@ -117,10 +121,10 @@ static int iomemtest(struct intel_memory_region *mem,
 	resource_size_t last, page;
 	int err;
 
-	if (resource_size(&mem->region) < PAGE_SIZE)
+	if (mem->io_size < PAGE_SIZE)
 		return 0;
 
-	last = resource_size(&mem->region) - PAGE_SIZE;
+	last = mem->io_size - PAGE_SIZE;
 
 	/*
 	 * Quick test to check read/write access to the iomap (backing store).
@@ -287,12 +291,12 @@ next:
 					   timeout);
 		if (err)
 			goto put;
+
 		if (ww) {
 			err = i915_gem_object_lock_to_evict(obj, ww);
 			if (err)
 				goto put;
 		} else {
-			flags |= I915_GEM_OBJECT_UNBIND_TRYLOCK;
 			if (!i915_gem_object_trylock(obj))
 				goto put;
 		}
@@ -546,6 +550,7 @@ intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t size,
 			   resource_size_t min_page_size,
 			   resource_size_t io_start,
+			   resource_size_t io_size,
 			   u16 type,
 			   u16 instance,
 			   const struct intel_memory_region_ops *ops)
@@ -561,6 +566,7 @@ intel_memory_region_create(struct intel_gt *gt,
 	mem->i915 = gt->i915;
 	mem->region = (struct resource)DEFINE_RES_MEM(start, size);
 	mem->io_start = io_start;
+	mem->io_size = io_size;
 	mem->min_page_size = min_page_size;
 	mem->ops = ops;
 	mem->total = size;
@@ -762,6 +768,25 @@ const char *intel_memory_region_id2str(enum intel_region_id id)
 		return "invalid memory region";
 
 	return regions[id];
+}
+
+int intel_memory_regions_add_svm(struct drm_i915_private  *i915)
+{
+	struct intel_memory_region *mr;
+	enum intel_region_id id;
+	int ret = 0;
+
+	mutex_lock(&i915->svm_init_mutex);
+	for_each_memory_region(mr, i915, id) {
+		if (mr->type != INTEL_MEMORY_LOCAL || mr->devmem)
+			continue;
+
+		ret = i915_svm_devmem_add(mr);
+		if (ret)
+			break;
+	}
+	mutex_unlock(&i915->svm_init_mutex);
+	return ret;
 }
 
 void intel_memory_regions_remove(struct drm_i915_private *i915)

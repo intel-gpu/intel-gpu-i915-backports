@@ -339,7 +339,11 @@ static const struct attribute_group *hwm_groups[] = {
 
 static const struct hwmon_channel_info *hwm_info[] = {
 	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT),
+#ifdef POWER1_RATED_MAX_NOT_PRESENT
 	HWMON_CHANNEL_INFO(power, HWMON_P_MAX | HWMON_P_CRIT),
+#else
+	HWMON_CHANNEL_INFO(power, HWMON_P_MAX | HWMON_P_RATED_MAX | HWMON_P_CRIT),
+#endif
 	HWMON_CHANNEL_INFO(energy, HWMON_E_INPUT),
 	HWMON_CHANNEL_INFO(curr, HWMON_C_CRIT),
 	NULL
@@ -403,6 +407,10 @@ hwm_power_is_visible(const struct hwm_drvdata *ddat, u32 attr, int chan)
 	switch (attr) {
 	case hwmon_power_max:
 		return i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit) ? 0664 : 0;
+#ifndef POWER1_RATED_MAX_NOT_PRESENT
+	case hwmon_power_rated_max:
+		return i915_mmio_reg_valid(hwmon->rg.pkg_power_sku) ? 0444 : 0;
+#endif
 	case hwmon_power_crit:
 		return (hwm_pcode_read_i1(i915, &uval) ||
 			!(uval & POWER_SETUP_I1_WATTS)) ? 0 : 0644;
@@ -427,6 +435,17 @@ hwm_power_read(struct hwm_drvdata *ddat, u32 attr, int chan, long *val)
 						hwmon->scl_shift_power,
 						SF_POWER);
 		return 0;
+	
+#ifndef POWER1_RATED_MAX_NOT_PRESENT
+	case hwmon_power_rated_max:
+		*val = hwm_field_read_and_scale(ddat,
+				hwmon->rg.pkg_power_sku,
+				PKG_PKG_TDP,
+				FIELD_SHIFT(PKG_PKG_TDP),
+				hwmon->scl_shift_power,
+				SF_POWER);
+		return 0;
+#endif
 	case hwmon_power_crit:
 		ret = hwm_pcode_read_i1(ddat->uncore->i915, &uval);
 		if (ret)

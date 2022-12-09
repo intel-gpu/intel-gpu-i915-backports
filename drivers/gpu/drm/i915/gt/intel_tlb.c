@@ -183,14 +183,21 @@ unlock:
 
 static bool mmio_invalidate_range(struct intel_gt *gt, u64 start, u64 length)
 {
-	u32 address_mask = (ilog2(length) - ilog2(I915_GTT_PAGE_SIZE_4K));
 	u64 vm_total = BIT_ULL(INTEL_INFO(gt->i915)->ppgtt_size);
+	/*
+	 * For page selective invalidations, this specifies the number of contiguous
+	 * PPGTT pages that needs to be invalidated. The Address Mask values are 0 for
+	 * 4KB page, 4 for 64KB page, 12 for 2MB page.
+	 */
+	u32 address_mask = (ilog2(length) - ilog2(SZ_4K));
 	intel_wakeref_t wakeref;
 	u32 dw0, dw1;
 	int err;
 
-	GEM_BUG_ON(!IS_ALIGNED(start, I915_GTT_PAGE_SIZE_4K));
-	GEM_BUG_ON(!IS_ALIGNED(length, I915_GTT_PAGE_SIZE_4K));
+	GEM_BUG_ON(length < SZ_4K);
+	GEM_BUG_ON(!is_power_of_2(length));
+	GEM_BUG_ON(length & GENMASK(ilog2(SZ_16M) - 1, ilog2(SZ_2M) + 1));
+	GEM_BUG_ON(!IS_ALIGNED(start, length));
 	GEM_BUG_ON(range_overflows(start, length, vm_total));
 
 	dw0 = FIELD_PREP(XEHPSDV_TLB_INV_DESC0_ADDR_LO, (lower_32_bits(start) >> 12)) |
@@ -224,12 +231,49 @@ static bool mmio_invalidate_range(struct intel_gt *gt, u64 start, u64 length)
 	return err == 0;
 }
 
+static u64 tlb_page_selective_size(u64 *addr, u64 length)
+{
+	u64 start, end, align;
+
+	if (length < SZ_4K)
+		length = SZ_4K;
+
+	align = roundup_pow_of_two(length);
+
+	/*
+	 * We need to invalidate a higher granularity if start address is not
+	 * aligned to length. When start is not aligned with length we need to
+	 * find the length large enough to create an address mask covering the
+	 * required range.
+	 */
+	start = ALIGN_DOWN(*addr, align);
+	end = ALIGN(*addr + length, align);
+	length = align;
+	while (start + length < end) {
+		length <<= 1;
+		start = ALIGN_DOWN(*addr, length);
+	}
+
+	/*
+	 * Minimum invalidation size for a 2MB page that the hardware expects is
+	 * 16MB
+	 */
+	if (length >= SZ_2M) {
+		length = max_t(u64, SZ_16M, length);
+		start = ALIGN_DOWN(*addr, length);
+	}
+	*addr = start;
+
+	return length;
+}
+
 bool intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 				   struct i915_address_space *vm,
 				   u64 start, u64 length)
 {
 	struct intel_guc *guc = &gt->uc.guc;
 	intel_wakeref_t wakeref;
+	u64 size, vm_total;
 
 	if (intel_gt_is_wedged(gt))
 		return true;
@@ -239,16 +283,20 @@ bool intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
 		return false;
 
+	vm_total = BIT_ULL(INTEL_INFO(gt->i915)->ppgtt_size);
+	/* Align start and length */
+	size =  min_t(u64, vm_total, tlb_page_selective_size(&start, length));
+
 	/*XXX: We are seeing timeouts on guc based tlb invalidations on XEHPSDV.
 	 * Until we have a fix, use mmio
 	 */
 	if (IS_XEHPSDV(gt->i915))
-		return mmio_invalidate_range(gt, start, length);
+		return mmio_invalidate_range(gt, start, size);
 
 	with_intel_gt_pm_if_awake(gt, wakeref) {
 		intel_guc_invalidate_tlb_page_selective(guc,
 							INTEL_GUC_TLB_INVAL_MODE_HEAVY,
-							start, length, vm->asid);
+							start, size, vm->asid);
 	}
 
 	return true;

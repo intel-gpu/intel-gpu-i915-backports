@@ -131,7 +131,7 @@ static __always_inline long __get_user_pages_locked(struct task_struct *tsk,
 	}
 	return pages_done;
 }
-#if RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(7,5)
+#if REDHAT_RELEASE_VERSION_IS_NOT_EQL(7,5)
 long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
 		unsigned long start, unsigned long nr_pages,
 		unsigned int gup_flags, struct page **pages,
@@ -219,6 +219,6 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 	return __vmalloc_node_flags_caller(size, node, flags,
 			__builtin_return_address(0));
 }
-#if RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(7,5)
+#if REDHAT_RELEASE_VERSION_IS_NOT_EQL(7,5)
 EXPORT_SYMBOL(kvmalloc_node);
 #endif

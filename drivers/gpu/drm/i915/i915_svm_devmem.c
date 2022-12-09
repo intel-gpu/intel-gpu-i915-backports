@@ -485,7 +485,7 @@ static int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 	struct migrate_vma args = {
 		.vma		= vma,
 		.start		= start,
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
 		.src_owner    	= mem->i915->drm.dev,
 #else
 		.pgmap_owner    = mem->i915->drm.dev,
@@ -640,7 +640,7 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 		.end		= vmf->address + PAGE_SIZE,
 		.src		= &src,
 		.dst		= &dst,
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
 		.src_owner	= i915->drm.dev,
 #else
 		.pgmap_owner    = i915->drm.dev,
@@ -719,7 +719,7 @@ int i915_svm_devmem_add(struct intel_memory_region *mem)
 
 	devmem->pagemap.type = MEMORY_DEVICE_PRIVATE;
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_PAGEMAP_RANGE_START_NOT_PRESENT
 	devmem->pagemap.res.start = res->start;
 	devmem->pagemap.res.end = res->end;
 #else
@@ -754,11 +754,9 @@ void i915_svm_devmem_remove(struct intel_memory_region *mem)
 	}
 }
 
-int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
-			       struct drm_file *file_priv)
+int i915_svm_vm_prefetch(struct drm_i915_private *i915,
+			struct prelim_drm_i915_gem_vm_prefetch *args)
 {
-	struct drm_i915_private *i915 = to_i915(dev);
-	struct prelim_drm_i915_gem_vm_prefetch *args = data;
 	unsigned long addr, end, size = args->length;
 	struct intel_memory_region *mem;
 	struct i915_gem_ww_ctx ww;
@@ -788,7 +786,7 @@ int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
 
 	i915_gem_ww_ctx_init(&ww, true);
 
-	trace_i915_vm_prefetch(i915, args->start, args->length, mem->id);
+	trace_i915_vm_prefetch(i915, 0, args->start, args->length, mem->id);
 retry:
 	for (addr = args->start, end = args->start + size; addr < end;) {
 		struct vm_area_struct *vma;

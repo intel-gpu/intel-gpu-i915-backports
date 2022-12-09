@@ -51,8 +51,6 @@ static int drop_pages(struct drm_i915_gem_object *obj,
 		flags |= I915_GEM_OBJECT_UNBIND_TEST;
 	if (trylock_vm)
 		flags |= I915_GEM_OBJECT_UNBIND_VM_TRYLOCK;
-	if (!ww)
-		flags |= I915_GEM_OBJECT_UNBIND_TRYLOCK;
 
 	return i915_gem_object_unbind(obj, ww, flags);
 }
@@ -535,14 +533,14 @@ void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 	i915->mm.shrinker.count_objects = i915_gem_shrinker_count;
 	i915->mm.shrinker.seeks = DEFAULT_SEEKS;
 	i915->mm.shrinker.batch = 4096;
-//	drm_WARN_ON(&i915->drm, register_shrinker(&i915->mm.shrinker));
+	drm_WARN_ON(&i915->drm, register_shrinker(&i915->mm.shrinker));
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
-//	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
+	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
 
 	i915->mm.vmap_notifier.notifier_call = i915_gem_shrinker_vmap;
-//	drm_WARN_ON(&i915->drm,
-//		    register_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	drm_WARN_ON(&i915->drm,
+		    register_vmap_purge_notifier(&i915->mm.vmap_notifier));
 
 	start_swapper(i915);
 }
@@ -551,10 +549,10 @@ void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 {
 	stop_swapper(i915);
 
-//	drm_WARN_ON(&i915->drm,
-//		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
-//	drm_WARN_ON(&i915->drm,
-//		    unregister_oom_notifier(&i915->mm.oom_notifier));
+	drm_WARN_ON(&i915->drm,
+		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	drm_WARN_ON(&i915->drm,
+		    unregister_oom_notifier(&i915->mm.oom_notifier));
 	unregister_shrinker(&i915->mm.shrinker);
 }
 

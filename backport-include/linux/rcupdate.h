@@ -28,7 +28,7 @@
 #include <linux/version.h>
 #include_next <linux/rcupdate.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,5,0))
+#ifdef BPM_RCU_REPLACE_POINTER_NOT_PRESENT
 /**
  * rcu_replace_pointer() - replace an RCU pointer, returning its old value
  * @rcu_ptr: RCU pointer, whose old value is returned

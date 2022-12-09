@@ -549,7 +549,7 @@ void intel_gt_driver_register(struct intel_gt *gt)
 	if (gt->info.id == 0)
 		intel_gsc_init(&gt->gsc, gt->i915);
 	else
-		drm_info(&gt->i915->drm, "Not initializing gsc for remote tiles\n");
+		drm_dbg(&gt->i915->drm, "Not initializing gsc for remote tiles\n");
 
 	intel_rps_driver_register(&gt->rps);
 
@@ -854,6 +854,7 @@ static int __engines_record_defaults(struct intel_gt *gt)
 
 	/* Flush the default context image to memory, and enable powersaving. */
 	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME) {
+		intel_klog_error_capture(gt, (intel_engine_mask_t) ~0U);
 		err = -EIO;
 		goto out;
 	}
@@ -1146,6 +1147,76 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 	}
 }
 
+static int driver_flr(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt = to_gt(i915);
+	struct intel_uncore *uncore = gt->uncore;
+	int ret;
+
+	if (i915->params.force_driver_flr != 1)
+		return 0;
+
+	if (intel_uncore_read(uncore, GU_CNTL_PROTECTED) & DRIVERINT_FLR_DIS) {
+		drm_info_once(&i915->drm, "BIOS Disabled Driver-FLR\n");
+		return 0;
+	}
+
+	drm_dbg(&i915->drm, "Triggering Driver-FLR\n");
+
+	/*
+	 * As the fastest safe-measure, always clear GU_DEBUG's DRIVERFLR_STATUS
+	 * if it was still set from a prior attempt
+	 */
+	intel_uncore_write_fw(uncore, GU_DEBUG, DRIVERFLR_STATUS);
+
+	/* Trigger the actula Driver-FLR */
+	intel_uncore_rmw_fw(uncore, GU_CNTL, 0, DRIVERFLR);
+
+	ret = intel_wait_for_register_fw(uncore, GU_CNTL, DRIVERFLR, 0, 15);
+	if (ret) {
+		drm_err(&i915->drm, "Driver-FLR failed! %d\n", ret);
+		return ret;
+	}
+
+	ret = intel_wait_for_register_fw(uncore, GU_DEBUG,
+					 DRIVERFLR_STATUS, DRIVERFLR_STATUS,
+					 15);
+	if (ret) {
+		drm_err(&i915->drm, "wait for Driver-FLR completion failed! %d\n", ret);
+		return ret;
+	}
+
+	intel_uncore_write_fw(uncore, GU_DEBUG, DRIVERFLR_STATUS);
+
+	return 0;
+}
+
+static void driver_flr_fini(struct drm_device *dev, void *i915)
+{
+	driver_flr((struct drm_i915_private *)i915);
+}
+
+static int driver_flr_init(struct drm_i915_private *i915)
+{
+	int ret;
+
+	/*
+	 * Sanitize force_driver_flr at init time: If hardware needs driver-FLR at
+	 * load / unload and the user has not forced it off then allow triggering driver-FLR.
+	 * Exception: VFs cant access the driver-FLR registers.
+	 */
+	if (!INTEL_INFO(i915)->needs_driver_flr || IS_SRIOV_VF(i915))
+		i915->params.force_driver_flr = 0;
+	else if (i915->params.force_driver_flr == -1)
+		i915->params.force_driver_flr = 1;
+
+	ret = driver_flr(i915);
+	if (ret)
+		return ret;
+
+	return drmm_add_action(&i915->drm, driver_flr_fini, i915);
+}
+
 void intel_gt_shutdown(struct intel_gt *gt)
 {
 	intel_iov_vf_put_wakeref_wa(&gt->iov);
@@ -1189,6 +1260,12 @@ static int intel_gt_tile_setup(struct intel_gt *gt,
 		return ret;
 
 	intel_iov_init_early(&gt->iov);
+
+	if (!id) {
+		ret = driver_flr_init(i915);
+		if (ret)
+			return ret;
+	}
 
 	/* Which tile am I? default to zero on single tile systems */
 	if (HAS_REMOTE_TILES(i915) && !IS_SRIOV_VF(i915)) {
@@ -1360,6 +1437,7 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 	unsigned int id;
 	int ret;
 
+	mutex_init(&i915->svm_init_mutex);
 	for_each_gt(gt, i915, id) {
 		if (!i915->gt[id])
 			break;
@@ -1382,6 +1460,8 @@ void intel_gt_release_all(struct drm_i915_private *i915)
 
 	for_each_gt(gt, i915, id)
 		i915->gt[id] = NULL;
+
+	mutex_destroy(&i915->svm_init_mutex);
 }
 
 void intel_gt_info_print(const struct intel_gt_info *info,

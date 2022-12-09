@@ -157,6 +157,12 @@ struct i915_sched_engine {
 	 * @no_priolist: priority lists disabled
 	 */
 	bool no_priolist;
+#ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	/**
+	 * @private_data: private data of the submission backend
+	 */
+	void *private_data;
+#endif
 
 	/**
 	 * @destroy: destroy schedule engine / cleanup in backend

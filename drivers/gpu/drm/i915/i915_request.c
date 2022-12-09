@@ -48,7 +48,6 @@
 #include "i915_trace.h"
 #include "intel_pm.h"
 
-#define CPTCFG_DRM_I915_SPIN_REQUEST 5
 struct execute_cb {
 	struct irq_work work;
 	struct i915_sw_fence *fence;
@@ -227,9 +226,15 @@ __notify_execute_cb(struct i915_request *rq, bool (*fn)(struct irq_work *wrk))
 	if (llist_empty(&rq->execute_cb))
 		return;
 
+#ifdef BPM_IRQ_WORK_NODE_LLIST_NOT_PRESENT
 	llist_for_each_entry_safe(cb, cn,
 				  llist_del_all(&rq->execute_cb),
 				  work.llnode)
+#else
+	llist_for_each_entry_safe(cb, cn,
+				  llist_del_all(&rq->execute_cb),
+				work.node.llist)
+#endif
 		fn(&cb->work);
 }
 
@@ -555,7 +560,11 @@ __await_execution(struct i915_request *rq,
 	 * callback first, then checking the ACTIVE bit, we serialise with
 	 * the completed/retired request.
 	 */
+#ifdef BPM_IRQ_WORK_NODE_LLIST_NOT_PRESENT
 	if (llist_add(&cb->work.llnode, &signal->execute_cb)) {
+#else
+	if (llist_add(&cb->work.node.llist, &signal->execute_cb)) {
+#endif
 		if (i915_request_is_active(signal) ||
 		    __request_in_flight(signal))
 			i915_request_notify_execute_cb_imm(signal);

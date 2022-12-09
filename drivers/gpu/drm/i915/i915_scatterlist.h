@@ -158,6 +158,11 @@ typedef unsigned int __sg_size_t; /* see linux/scatterlist.h */
 #define sg_alloc_table(sgt, nents, gfp) \
 	overflows_type(nents, __sg_size_t) ? -E2BIG : (sg_alloc_table)(sgt, (__sg_size_t)(nents), gfp)
 
+#ifndef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
+#define __sg_alloc_table_from_pages(sgt, pages, npages, offset, size, max_segment, prv, left, gfp) \
+	overflows_type(npages, __sg_size_t) ? ERR_PTR(-E2BIG) : (__sg_alloc_table_from_pages)(sgt, pages, (__sg_size_t)(npages), offset, size, max_segment, prv, left, gfp)
+#endif
+
 #define sg_alloc_table_from_pages(sgt, pages, npages, offset, size, gfp) \
 	overflows_type(npages, __sg_size_t) ? -E2BIG : (sg_alloc_table_from_pages)(sgt, pages, (__sg_size_t)(npages), offset, size, gfp)
 

@@ -5,7 +5,7 @@
 
 #include<linux/interrupt.h>
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_TASKLET_UNLOCK_SPIN_WAIT_NOT_PRESENT
 #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
 /*
  * Do not use in new code. Waiting for tasklets from atomic contexts is
@@ -30,7 +30,7 @@ void tasklet_unlock_spin_wait(struct tasklet_struct *t)
         }
 }
 EXPORT_SYMBOL(tasklet_unlock_spin_wait);
-#endif /* defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT) */
-#endif /* RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6) */
+#endif
+#endif /* BPM_TASKLET_UNLOCK_SPIN_WAIT_NOT_PRESENT */
 
 

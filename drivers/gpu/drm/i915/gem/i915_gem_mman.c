@@ -113,8 +113,11 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 	if (args->flags & I915_MMAP_WC) {
 		struct mm_struct *mm = current->mm;
 		struct vm_area_struct *vma;
-
+#ifdef BPM_MMAP_WRITE_LOCK_UNLOCK_NOT_PRESENT
 		if (down_write_killable(&mm->mmap_sem)) {
+#else
+		if (mmap_write_lock_killable(mm)) {
+#endif
 			addr = -EINTR;
 			goto err;
 		}
@@ -124,7 +127,11 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 				pgprot_writecombine(vm_get_page_prot(vma->vm_flags));
 		else
 			addr = -ENOMEM;
+#ifdef BPM_MMAP_WRITE_LOCK_UNLOCK_NOT_PRESENT
 		up_write(&mm->mmap_sem);
+#else
+		mmap_write_unlock(mm);
+#endif
 		if (IS_ERR_VALUE(addr))
 			goto err;
 	}
@@ -314,6 +321,9 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 				  area->vm_start, area->vm_end - area->vm_start,
 				  obj->mm.pages->sgl, iomap);
 
+		/* Mark when object becomes writable by userspace (used by migration policy) */
+		i915_gem_object_set_first_bind(obj);
+
 		if (area->vm_flags & VM_WRITE) {
 			GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
 			obj->mm.dirty = true;
@@ -444,6 +454,9 @@ retry:
 	if (!i915_vma_set_userfault(vma) && !obj->userfault_count++)
 		list_add(&obj->userfault_link, &to_gt(i915)->ggtt->userfault_list);
 	mutex_unlock(&to_gt(i915)->ggtt->vm.mutex);
+
+	/* Mark when object becomes writable by userspace (used by migration policy) */
+	i915_gem_object_set_first_bind(obj);
 
 	/* Track the mmo associated with the fenced vma */
 	vma->mmo = mmo;

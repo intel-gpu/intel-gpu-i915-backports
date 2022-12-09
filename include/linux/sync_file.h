@@ -20,8 +20,10 @@
 #include <linux/dma-fence.h>
 #include <linux/dma-fence-array.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define sync_file_create LINUX_DMABUF_BACKPORT(sync_file_create)
 #define sync_file_get_fence LINUX_DMABUF_BACKPORT(sync_file_get_fence)
+#endif
 
 /**
  * struct sync_file - sync file to export to the userspace

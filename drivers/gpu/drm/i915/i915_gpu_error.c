@@ -28,6 +28,7 @@
  */
 
 #include <linux/ascii85.h>
+#include <linux/highmem.h>
 #include <linux/nmi.h>
 #include <linux/pagevec.h>
 #include <linux/scatterlist.h>
@@ -550,9 +551,13 @@ static void error_print_context(struct drm_i915_error_state_buf *m,
 				const char *header,
 				const struct i915_gem_context_coredump *ctx)
 {
-	err_printf(m, "%s%s[%d] prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
-		   header, ctx->comm, ctx->pid, ctx->sched_attr.priority,
-		   ctx->guilty, ctx->active, ctx->sip_installed ? "true" : "false",
+	err_printf(m, "%s%s[%d] uid %u gid %u prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
+		   header, ctx->comm, ctx->pid,
+		   from_kuid_munged(&init_user_ns, ctx->uid),
+		   from_kgid_munged(&init_user_ns, ctx->gid),
+		   ctx->sched_attr.priority,
+		   ctx->guilty, ctx->active,
+		   ctx->sip_installed ? "true" : "false",
 		   ctx->total_runtime, ctx->avg_runtime);
 
 	i915_uuid_resources_dump(ctx, m);
@@ -651,21 +656,6 @@ static void error_print_engine(struct drm_i915_error_state_buf *m,
 	for (n = 0; n < ee->num_ports; n++) {
 		err_printf(m, "  ELSP[%d]:", n);
 		error_print_request(m, " ", &ee->execlist[n]);
-	}
-
-	err_printf(m, "  TD_CTL: 0x%08x\n", ee->td_ctl);
-	err_printf(m, "  TD_ATT:");
-	for (n = 0; n < ARRAY_SIZE(ee->td_att); n++)
-		err_printf(m, " 0x%08x", ee->td_att[n]);
-
-	if (ee->sip_timing.wait_error != -ENODEV) {
-		err_printf(m, " (ret:%d max:%uus signal:%lldus wait:%lldus)",
-			   ee->sip_timing.wait_error,
-			   ee->sip_timing.max_wait_us,
-			   ktime_to_us(ktime_sub(ee->sip_timing.attention,
-						 ee->sip_timing.signal)),
-			   ktime_to_us(ktime_sub(ee->sip_timing.attention,
-						 ee->sip_timing.wait)));
 	}
 }
 
@@ -786,6 +776,39 @@ static void err_free_sgl(struct scatterlist *sgl)
 		free_page((unsigned long)sgl);
 		sgl = sg;
 	}
+}
+
+static void err_print_gt_attentions(struct drm_i915_error_state_buf *m,
+				    struct intel_gt_coredump *gt)
+{
+	unsigned int dws;
+	u32 *a;
+	unsigned long *bm;
+	int n, bits, n_before, n_after;
+
+	bits = gt->attentions.bitmap_size * BITS_PER_BYTE;
+	bm = (unsigned long *)gt->attentions.att_before;
+	n_before = bitmap_weight(bm, bits);
+
+	bm = (unsigned long *)gt->attentions.att_after;
+	n_after = bitmap_weight(bm, bits);
+
+	dws = gt->attentions.bitmap_size / sizeof(u32);
+
+	err_printf(m, "TD_CTL: 0x%08x\n", gt->attentions.td_ctl);
+	err_printf(m, "TD_ATT before (%d):", n_before);
+	a = (u32 *)gt->attentions.att_before;
+	for (n = 0; n < dws; n++)
+		err_printf(m, " %08x", a[n]);
+
+	err_printf(m, "\n");
+
+	err_printf(m, "TD_ATT after (%d):", n_after);
+	a = (u32 *)gt->attentions.att_after;
+	for (n = 0; n < dws; n++)
+		err_printf(m, " %08x", a[n]);
+
+	err_printf(m, "\n");
 }
 
 static void err_print_gt_info(struct drm_i915_error_state_buf *m,
@@ -971,6 +994,7 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 			err_print_uc(m, error->gt->uc);
 
 		err_print_gt_info(m, error->gt);
+		err_print_gt_attentions(m, error->gt);
 	}
 
 	if (error->overlay)
@@ -1119,8 +1143,10 @@ static void cleanup_params(struct i915_gpu_coredump *error)
 
 static void cleanup_uc(struct intel_uc_coredump *uc)
 {
-	kfree(uc->guc_fw.path);
-	kfree(uc->huc_fw.path);
+	kfree(uc->guc_fw.file_selected.path);
+	kfree(uc->huc_fw.file_selected.path);
+	kfree(uc->guc_fw.file_wanted.path);
+	kfree(uc->huc_fw.file_wanted.path);
 	i915_vma_coredump_free(uc->guc.vma_log);
 	i915_vma_coredump_free(uc->guc.vma_ctb);
 
@@ -1380,23 +1406,22 @@ static void gt_record_fences(struct intel_gt_coredump *gt)
 	gt->nfence = i;
 }
 
-static int wait_thread_attention(const struct intel_engine_cs *engine,
+static int wait_thread_attention(struct intel_gt *gt,
 				 const unsigned int timeout_ms)
 {
 	const ktime_t end = ktime_add_ms(ktime_get_raw(), timeout_ms);
 
 	do {
 		/* XXX: how many threads to wait? */
-		if (intel_gt_eu_threads_needing_attention(engine->gt))
+		if (intel_gt_eu_threads_needing_attention(gt))
 			return 0;
 
 		cpu_relax();
 	} while (!ktime_after(ktime_get_raw(), end));
 
-	if (intel_gt_eu_threads_needing_attention(engine->gt))
+	if (intel_gt_eu_threads_needing_attention(gt))
 		return 0;
 
-	drm_dbg(&engine->i915->drm, "sip thread attention signal timeout\n");
 	return -ETIMEDOUT;
 }
 
@@ -1521,28 +1546,6 @@ static void engine_record_registers(struct intel_engine_coredump *ee)
 							  GEN8_RING_PDP_LDW(base, i));
 			}
 		}
-	}
-
-	if (intel_engine_has_eu_attention(engine) &&
-	    GRAPHICS_VER(engine->i915) >= 9) {
-		const unsigned int timeout = READ_ONCE(engine->props.stop_timeout_ms);
-		struct intel_uncore *uncore = engine->uncore;
-		int i, ret;
-
-		ee->td_ctl = intel_uncore_read_fw(uncore, TD_CTL);
-
-		ee->sip_timing.wait = ktime_get_raw();
-		if (ee->td_ctl)
-			ret = wait_thread_attention(engine, timeout);
-		else
-			ret = -ENODEV;
-
-		ee->sip_timing.attention = ktime_get_raw();
-		ee->sip_timing.max_wait_us = timeout * 1000;
-		ee->sip_timing.wait_error = ret;
-
-		for (i = 0; i < ARRAY_SIZE(ee->td_att); i++)
-			ee->td_att[i] = intel_uncore_read_fw(uncore, TD_ATT(i));
 	}
 }
 
@@ -1729,6 +1732,17 @@ i915_uuid_resource_coredump_create(struct i915_drm_client *client,
 	return head;
 }
 
+static void record_client_cred_rcu(struct i915_drm_client *client,
+				   struct i915_gem_context_coredump *e)
+{
+	const struct i915_drm_client_name *name;
+
+	name = __i915_drm_client_name(client);
+
+	e->uid = name->uid;
+	e->gid = name->gid;
+}
+
 static bool record_context(struct i915_gem_context_coredump *e,
 			   const struct i915_request *rq,
 			   struct i915_page_compress *compress)
@@ -1751,6 +1765,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 	} else {
 		strcpy(e->comm, i915_drm_client_name(ctx->client));
 		e->pid = pid_nr(i915_drm_client_pid(ctx->client));
+		record_client_cred_rcu(ctx->client, e);
 	}
 
 	rcu_read_unlock();
@@ -1944,29 +1959,10 @@ capture_engine(struct intel_engine_cs *engine,
 	struct intel_context *ce;
 	struct i915_request *rq = NULL;
 	unsigned long flags;
-	ktime_t sip_signal = 0;
-
-	/* Invoke sip early so it has max time to save thread state */
-	if (intel_engine_has_eu_attention(engine) &&
-	    GRAPHICS_VER(engine->i915) >= 9) {
-		const u32 td_ctl = intel_uncore_read_fw(engine->uncore, TD_CTL);
-
-		if (td_ctl) {
-			/* implicit multicast */
-			intel_uncore_write_fw(engine->uncore, TD_CTL, td_ctl |
-					      TD_CTL_FEH_AND_FEE_ENABLE |
-					      TD_CTL_FORCE_EXTERNAL_HALT |
-					      TD_CTL_FORCE_EXCEPTION);
-
-			sip_signal = ktime_get_raw();
-		}
-	}
 
 	ee = intel_engine_coredump_alloc(engine, ALLOW_FAIL, dump_flags);
 	if (!ee)
 		return NULL;
-
-	ee->sip_timing.signal = sip_signal;
 
 	ce = intel_engine_get_hung_context(engine);
 	if (ce) {
@@ -2071,16 +2067,15 @@ gt_record_uc(struct intel_gt_coredump *gt,
 	memcpy(&error_uc->guc_fw, &uc->guc.fw, sizeof(uc->guc.fw));
 	memcpy(&error_uc->huc_fw, &uc->huc.fw, sizeof(uc->huc.fw));
 
-	/* Non-default firmware paths will be specified by the modparam.
-	 * As modparams are generally accesible from the userspace make
-	 * explicit copies of the firmware paths.
-	 */
-	error_uc->guc_fw.path = kstrdup(uc->guc.fw.path, ALLOW_FAIL);
-	error_uc->huc_fw.path = kstrdup(uc->huc.fw.path, ALLOW_FAIL);
+	error_uc->guc_fw.file_selected.path = kstrdup(uc->guc.fw.file_selected.path, ALLOW_FAIL);
+	error_uc->huc_fw.file_selected.path = kstrdup(uc->huc.fw.file_selected.path, ALLOW_FAIL);
+	error_uc->guc_fw.file_wanted.path = kstrdup(uc->guc.fw.file_wanted.path, ALLOW_FAIL);
+	error_uc->huc_fw.file_wanted.path = kstrdup(uc->huc.fw.file_wanted.path, ALLOW_FAIL);
 
 	/*
-	 * Save the GuC log and include a timestamp reference for
-	 * converting the log times to system times.
+	 * Save the GuC log and include a timestamp reference for converting the
+	 * log times to system times (in conjunction with the error->boottime and
+	 * gt->clock_frequency fields saved elsewhere).
 	 */
 	if (!IS_SRIOV_VF(gt->_gt->i915)) {
 		error_uc->guc.timestamp = intel_uncore_read(gt->_gt->uncore, GUCPMTIMESTAMP);
@@ -2264,6 +2259,59 @@ static void gt_record_info(struct intel_gt_coredump *gt)
 	gt->clock_period_ns = gt->_gt->clock_period_ns;
 }
 
+static void gt_record_attentions(struct intel_gt_coredump *gt)
+{
+	struct intel_uncore *uncore = gt->_gt->uncore;
+	struct drm_i915_private *i915 = uncore->i915;
+	u32 td_ctl, bitmap_size;
+	/* Need to wait for threads to report attention. */
+	const unsigned int timeout_ms = 100;
+
+	if (GRAPHICS_VER(i915) < 9)
+		return;
+
+	td_ctl = intel_uncore_read_fw(uncore, TD_CTL);
+	gt->attentions.td_ctl = td_ctl;
+
+	bitmap_size = min_t(int,
+			    intel_gt_eu_attention_bitmap_size(uncore->gt),
+			    sizeof(gt->attentions.att_before));
+	gt->attentions.bitmap_size = bitmap_size;
+
+	intel_gt_eu_attention_bitmap(uncore->gt,
+				     gt->attentions.att_before,
+				     bitmap_size);
+
+	/* If there is no debug functionality, dont invoke sip */
+	if (!td_ctl)
+		return;
+
+	/* Halt on next thread dispatch */
+	if (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT))
+		intel_uncore_write_fw(uncore, TD_CTL,
+				      td_ctl | TD_CTL_FORCE_EXTERNAL_HALT);
+
+	/*
+	 * The sleep is needed because some interrupts are ignored
+	 * by the HW, hence we allow the HW some time to acknowledge
+	 * that.
+	 */
+	udelay(200);
+
+	/* Halt regardless of thread dependencies */
+	if (!(td_ctl & TD_CTL_FORCE_EXCEPTION))
+		intel_uncore_write_fw(uncore, TD_CTL,
+				      td_ctl | TD_CTL_FORCE_EXCEPTION);
+
+	wait_thread_attention(uncore->gt, timeout_ms);
+
+	intel_gt_invalidate_l3_mmio(uncore->gt);
+
+	intel_gt_eu_attention_bitmap(uncore->gt,
+				     gt->attentions.att_after,
+				     bitmap_size);
+}
+
 /*
  * Generate a semi-unique error code. The code is not meant to have meaning, The
  * code's only purpose is to try to prevent false duplicated bug reports by
@@ -2399,6 +2447,9 @@ intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp, u32 dump_flags)
 		gt_record_global_regs(gc);
 
 	gt_record_fences(gc);
+
+	gt_record_attentions(gc);
+
 	gc->engines_reset_count = atomic_read(&gt->reset.engines_reset_count);
 
 	return gc;
@@ -2892,7 +2943,8 @@ void intel_klog_error_capture(struct intel_gt *gt,
 		return;
 	}
 
-	drm_info(&i915->drm, "Dumping i915 error capture...\n");
+	drm_info(&i915->drm, "Dumping i915 error capture for %ps...\n",
+		 __builtin_return_address(0));
 
 	/* Largest string length safe to print via dmesg */
 #	define MAX_CHUNK	800

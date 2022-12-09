@@ -34,7 +34,7 @@
  * Since kmem_cache_get_slabinfo() got introduced in KV5.10.0,
  * added check here. May need to change in future.
  */
-#if LINUX_VERSION_IS_LESS(5,10,0)
+#ifdef BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT
 
 
 #define slabinfo LINUX_I915_BACKPORT(slabinfo)
@@ -162,13 +162,9 @@ struct memcg_cache_params {
         };
 };
 #endif /* !CONFIG_SLOB */
-#endif /* LINUX_VERSION_IS_LESS(5,10,0) */
+#endif /* BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
-#define SLAB_TYPESAFE_BY_RCU    0x00080000UL    /* Defer freeing slabs to RCU */
-#endif
-
-#if RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE
+#ifdef BPM_KREALLOC_ARRAY_NOT_PRESENT
 #define krealloc_array LINUX_I915_BACKPORT(krealloc_array)
 static __must_check inline void *
 krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t flags)

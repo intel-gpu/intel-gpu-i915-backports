@@ -58,7 +58,7 @@ struct agp_bridge_data *agp_bridge;
 LIST_HEAD(agp_bridges);
 EXPORT_SYMBOL(agp_bridge);
 EXPORT_SYMBOL(agp_bridges);
-//EXPORT_SYMBOL(agp_find_bridge);
+EXPORT_SYMBOL(agp_find_bridge);
 
 /**
  *	agp_backend_acquire  -  attempt to acquire an agp backend.
@@ -78,7 +78,7 @@ struct agp_bridge_data *agp_backend_acquire(struct pci_dev *pdev)
 	atomic_inc(&bridge->agp_in_use);
 	return bridge;
 }
-//EXPORT_SYMBOL(agp_backend_acquire);
+EXPORT_SYMBOL(agp_backend_acquire);
 
 
 /**
@@ -95,7 +95,7 @@ void agp_backend_release(struct agp_bridge_data *bridge)
 	if (bridge)
 		atomic_dec(&bridge->agp_in_use);
 }
-//EXPORT_SYMBOL(agp_backend_release);
+EXPORT_SYMBOL(agp_backend_release);
 
 
 static const struct { int mem, agp; } maxes_table[] = {
@@ -115,9 +115,9 @@ static int agp_find_max(void)
 	long memory, index, result;
 
 #if PAGE_SHIFT < 20
-	memory = totalram_pages >> (20 - PAGE_SHIFT);
+	memory = totalram_pages() >> (20 - PAGE_SHIFT);
 #else
-	memory = totalram_pages << (PAGE_SHIFT - 20);
+	memory = totalram_pages() << (PAGE_SHIFT - 20);
 #endif
 	index = 1;
 

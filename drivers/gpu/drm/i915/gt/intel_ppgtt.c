@@ -280,6 +280,11 @@ static unsigned long pd_count(u64 size, int shift)
 	return (size + 2 * (BIT_ULL(shift) - 1)) >> shift;
 }
 
+u64 i915_vm_estimate_pt_size(struct i915_address_space *vm, u64 size)
+{
+	return pd_count(size, vm->pd_shift) * I915_GTT_PAGE_SIZE_4K;
+}
+
 int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash,
 			   u64 size)

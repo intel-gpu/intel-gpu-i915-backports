@@ -28,14 +28,15 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
-#include <linux/compiler_attributes.h>
 #include <linux/string_helpers.h>
 
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_dp_mst_helper.h>
-
+#ifndef BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
+#include <drm/drm_panel.h>
+#endif
 #include "drm_crtc_helper_internal.h"
 
 /**

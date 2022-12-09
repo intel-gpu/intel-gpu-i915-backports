@@ -14,9 +14,11 @@ struct intel_memory_region;
 struct drm_i915_gem_object;
 struct sg_table;
 
-int i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj);
+struct sg_table *
+i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
+				unsigned int *page_sizes);
 int i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
-				    struct sg_table *pages);
+				     struct sg_table *pages);
 
 void i915_gem_object_init_memory_region(struct drm_i915_gem_object *obj,
 					struct intel_memory_region *mem);

@@ -27,7 +27,7 @@
 
 #include_next <linux/sysfs.h>
 
-#if LINUX_VERSION_IS_LESS(5,10,0)
+#ifdef BPM_SYSFS_EMIT_NOT_PRESENT
 
 #define sysfs_emit LINUX_I915_BACKPORT(sysfs_emit)
 #define sysfs_emit_at LINUX_I915_BACKPORT(sysfs_emit_at)

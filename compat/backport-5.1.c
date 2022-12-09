@@ -31,7 +31,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)
+#ifdef BPM_I2C_ACPI_GET_I2C_RESOURCE_NOT_PRESENT
 /**
  * i2c_acpi_get_i2c_resource - Gets I2cSerialBus resource if type matches
  * @ares:       ACPI resource
@@ -58,7 +58,9 @@ bool i2c_acpi_get_i2c_resource(struct acpi_resource *ares,
         return true;
 }
 EXPORT_SYMBOL_GPL(i2c_acpi_get_i2c_resource);
+#endif
 
+#ifdef BPM_I2C_ACPI_FIND_ADAPTER_BY_HANDLE_EXPORT_NOT_PRESENT
 static int i2c_acpi_find_match_adapter(struct device *dev, const void *data)
 {
         struct i2c_adapter *adapter = i2c_verify_adapter(dev);
@@ -79,6 +81,7 @@ struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle handle)
         return dev ? i2c_verify_adapter(dev) : NULL;
 }
 EXPORT_SYMBOL_GPL(i2c_acpi_find_adapter_by_handle);
+#endif
 
 /*
  * Helper function for dentry_operations.d_dname() members
@@ -100,5 +103,3 @@ char *dynamic_dname(struct dentry *dentry, char *buffer, int buflen,
 	buffer += buflen - sz;
 	return memcpy(buffer, temp, sz);
 }
-
-#endif /*LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)*/

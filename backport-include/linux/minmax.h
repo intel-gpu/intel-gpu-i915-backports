@@ -8,7 +8,7 @@
 #ifndef _BACKPORT_LINUX_MINMAX_H
 #define _BACKPORT_LINUX_MINMAX_H
 
-#if RHEL_RELEASE_VERSION(8, 5) <= RHEL_RELEASE_CODE
+#ifndef BPM_LINUX_MINMAX_H_PRESENT
 #include_next <linux/minmax.h>
 #endif
 

@@ -28,8 +28,8 @@
  */
 
 #include <linux/export.h>
-#include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
+#include <linux/i2c.h>
 
 #include <drm/drm_hdcp.h>
 

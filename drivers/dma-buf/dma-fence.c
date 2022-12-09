@@ -157,7 +157,7 @@ struct dma_fence *dma_fence_allocate_private_stub(void)
 
 	return fence;
 }
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_DMA_FENCE_PRIVATE_STUB_NOT_PRESENT
 EXPORT_SYMBOL(dma_fence_allocate_private_stub);
 #endif
 
@@ -404,7 +404,7 @@ int dma_fence_signal_timestamp(struct dma_fence *fence, ktime_t timestamp)
 
 	return ret;
 }
-#if RHEL_RELEASE_VERSION(8, 5) > RHEL_RELEASE_CODE
+#ifdef BPM_DMA_FENCE_TIMESTAMP_NOT_PRESENT
 EXPORT_SYMBOL(dma_fence_signal_timestamp);
 #endif
 
@@ -930,5 +930,6 @@ dma_fence_init(struct dma_fence *fence, const struct dma_fence_ops *ops,
 	fence->seqno = seqno;
 	fence->flags = 0UL;
 	fence->error = 0;
+
 }
 EXPORT_SYMBOL(dma_fence_init);

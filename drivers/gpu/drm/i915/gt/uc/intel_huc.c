@@ -101,6 +101,15 @@ static int check_huc_loading_mode(struct intel_huc *huc)
 		return -ENOEXEC;
 	}
 
+#ifndef BPM_INTEL_MEI_PXP_GSC_ASSUME_ALWAYS_ENABLED
+      /* make sure we can access the GSC via the mei driver if we need it */
+       if (!(IS_ENABLED(CONFIG_INTEL_MEI_PXP) && IS_ENABLED(CONFIG_INTEL_MEI_GSC)) &&
+           fw_needs_gsc) {
+               drm_info(&gt->i915->drm,
+                        "Can't load HuC due to missing MEI modules\n");
+               return -EIO;
+       }
+#endif
 	drm_dbg(&gt->i915->drm, "GSC loads huc=%s\n", str_yes_no(fw_needs_gsc));
 
 	return 0;

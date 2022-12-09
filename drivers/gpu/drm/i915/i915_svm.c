@@ -3,10 +3,12 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 /* Enable redhat backport to support mmu notifer wrapper */
 #define RH_DRM_BACKPORT
-
 #include <linux/mmu_notifier.h>
+#endif
+
 #include <linux/mm_types.h>
 #include <linux/sched/mm.h>
 
@@ -35,12 +37,16 @@ static void release_svm(struct kref *ref)
 {
 	struct i915_svm *svm = container_of(ref, typeof(*svm), ref);
 	struct i915_address_space *vm = svm->vm;
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 	struct mmu_notifier *base_rh = &svm->notifier;
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#if defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1)
 	mmu_notifier_unregister(&svm->notifier, base_rh->base._rh->mm);
-#else
+#elif defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_2)
 	mmu_notifier_unregister(&svm->notifier, base_rh->_rh->mm);
+#endif
+#else
+	mmu_notifier_unregister(&svm->notifier, svm->notifier.mm);
 #endif
 	mutex_destroy(&svm->mutex);
 	vm->svm = NULL;
@@ -74,8 +80,7 @@ static u32 i915_svm_build_sg(struct i915_address_space *vm,
 	 * extending SVM support there.
 	 */
 	for (i = 0; i < npages; i++) {
-
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5)
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 		unsigned long addr = range->pfns[i];
 #else
 		unsigned long addr = range->hmm_pfns[i];
@@ -139,8 +144,7 @@ static int i915_hmm_convert_pfn(struct drm_i915_private *dev_priv,
 	for (i = 0; i < npages; ++i) {
 		struct page *page;
 		unsigned long addr;
-
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5)
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 		if (!(range->pfns[i] & HMM_PFN_VALID)) {
 			range->pfns[i] = 0;
 			continue;
@@ -156,6 +160,7 @@ static int i915_hmm_convert_pfn(struct drm_i915_private *dev_priv,
 
 		page = hmm_pfn_to_page(range->hmm_pfns[i]);
 #endif
+
 		if (!page)
 			continue;
 
@@ -170,12 +175,12 @@ static int i915_hmm_convert_pfn(struct drm_i915_private *dev_priv,
 			regions |= REGION_SMEM;
 			addr = page_to_phys(page);
 		}
-
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5)
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 		range->pfns[i] = addr;
 #else
 		range->hmm_pfns[i] = addr;
 #endif
+
 	}
 
 	return regions;
@@ -193,12 +198,15 @@ static int i915_range_fault(struct svm_notifier *sn,
 	struct hmm_range range = {
 		.start = sn->notifier.interval_tree.start,
 		.end = sn->notifier.interval_tree.last + 1,
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 		.pfn_flags_mask = HMM_PFN_VALID | HMM_PFN_WRITE,
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5)
 		.pfns = (uint64_t*) pfns,
 #else
+		.pfn_flags_mask = HMM_PFN_REQ_FAULT | HMM_PFN_REQ_WRITE,
 		.hmm_pfns = pfns,
+		.dev_private_owner = vm->i915->drm.dev,
 #endif
+
 	};
 
 	struct mmu_interval_notifier *notifier = &sn->notifier;
@@ -216,7 +224,7 @@ static int i915_range_fault(struct svm_notifier *sn,
 
 		notifier_seq = mmu_interval_read_begin(notifier);
 		mmap_read_lock(mm);
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5)
+#ifdef BPM_HMM_RANGE_FAULT_ARG_PRESENT
 		ret = hmm_range_fault(&range, HMM_PFN_VALID);
 #else
 		ret = hmm_range_fault(&range);
@@ -283,7 +291,9 @@ int i915_gem_vm_unbind_svm_buffer(struct i915_address_space *vm,
 	struct i915_svm *svm;
 	struct mm_struct *mm;
 	int ret = 0;
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 	struct mmu_notifier *base_rh;
+#endif
 
 	if (unlikely(!i915_vm_is_svm_enabled(vm)))
 		return -ENOTSUPP;
@@ -291,11 +301,16 @@ int i915_gem_vm_unbind_svm_buffer(struct i915_address_space *vm,
 	svm = vm_get_svm(vm);
 	if (!svm)
 		return -EINVAL;
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 	base_rh = &svm->notifier;
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+
+#if defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1)
 	mm = base_rh->base._rh->mm;
-#else
+#elif defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_2)
 	mm = base_rh->_rh->mm;
+#endif
+#else
+	mm = svm->notifier.mm;
 #endif
 	if (mm != current->mm) {
 		ret = -EPERM;
@@ -314,27 +329,38 @@ unbind_done:
 int i915_gem_vm_bind_svm_buffer(struct i915_address_space *vm,
 				struct prelim_drm_i915_gem_vm_bind *va)
 {
+
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 	unsigned long *pfns, flags = HMM_PFN_VALID;
+#else
+	unsigned long *pfns, flags = HMM_PFN_REQ_FAULT;
+#endif
 	struct svm_notifier sn;
 	struct i915_svm *svm;
 	struct mm_struct *mm;
 	struct sg_table st;
 	int ret = 0;
 	u64 npages;
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 	struct mmu_notifier *base_rh;
-
+#endif
 	if (unlikely(!i915_vm_is_svm_enabled(vm)))
 		return -ENOTSUPP;
 
 	svm = vm_get_svm(vm);
 	if (!svm)
 		return -EINVAL;
+
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 	base_rh = &svm->notifier;
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#if defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1)
         mm = base_rh->base._rh->mm;
-#else
+#elif defined(BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_2)
         mm = base_rh->_rh->mm;
+#endif
+#else
+	mm = svm->notifier.mm;
 #endif
 	if (mm != current->mm) {
 		ret = -EPERM;
@@ -356,14 +382,18 @@ int i915_gem_vm_bind_svm_buffer(struct i915_address_space *vm,
 	}
 
 	if (!(va->flags & PRELIM_I915_GEM_VM_BIND_READONLY))
+#ifdef BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
 		flags |= HMM_PFN_WRITE;
+#else
+		flags |= HMM_PFN_REQ_WRITE;
+#endif
 
 	memset64((u64 *)pfns, (u64)flags, npages);
 
 	sn.svm = svm;
 	ret = mmu_interval_notifier_insert(&sn.notifier, mm,
-					   va->start, va->length,
-					   &i915_svm_mni_ops);
+			va->start, va->length,
+			&i915_svm_mni_ops);
 	if (!ret) {
 		ret = i915_range_fault(&sn, va, &st, pfns);
 		mmu_interval_notifier_remove(&sn.notifier);

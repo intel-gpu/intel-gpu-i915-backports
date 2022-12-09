@@ -9,7 +9,7 @@
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
 
-#if KERNEL_VERSION(5, 5, 0) > LINUX_VERSION_CODE
+#ifdef BPM_NVMEM_DEVICE_FIND_NOT_PRESENT
 
 /**
  * nvmem_device_find() - Find nvmem device with matching function
@@ -27,4 +27,4 @@ struct nvmem_device *nvmem_device_find(void *data,
 }
 EXPORT_SYMBOL_GPL(nvmem_device_find);
 
-#endif /* KERNEL_VERSION(5, 5, 0) */
+#endif /* BPM_NVMEM_DEVICE_FIND_NOT_PRESENT */

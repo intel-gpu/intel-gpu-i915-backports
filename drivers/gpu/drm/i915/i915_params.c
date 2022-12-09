@@ -297,8 +297,13 @@ i915_param_named_unsafe(force_alloc_contig, int, 0400,
 
 i915_param_named_unsafe(prelim_override_p2p_dist, uint, 0400,
 			"Flags to determine P2P behavior: "
+#ifdef BPM_PRELIM_OVERRIDE_P2P_DIST_DEFAULT_ENABLE
 			"Use kernel configured behavior (0), "
 			"Override distance check (default: 1), "
+#else
+			"Use kernel configured behavior (default: 0), "
+			"Override distance check (1), "
+#endif
 			"Fabric path only (2)");
 
 i915_param_named_unsafe(smem_access_control, int, 0600,
@@ -322,6 +327,11 @@ i915_param_named_unsafe(enable_stateless_mc, bool, 0400,
 
 i915_param_named_unsafe(enable_mem_fence, bool, 0400,
 			"Set this true to enable MEM_FENCE workaround (default: false");
+
+i915_param_named_unsafe(force_driver_flr, int, 0400,
+			"Set this to enforce doing or skipping a driver-FLR at MMIO init and fini"
+			"-1=driver decides[default], 0=skip driver flr, 1=trigger driver flr");
+
 /*
  * This module parameter is needed because SRIOV PF and IAF are mutually
  * exclusive (see HSDES #14014623804).  Until this is fixed, the driver

@@ -13,7 +13,7 @@
 #include <drm/ttm/ttm_bo_api.h>
 #include <uapi/drm/i915_drm.h>
 
-#include "../i915_active.h"
+#include "i915_active.h"
 #include "i915_selftest.h"
 
 #include "gt/intel_gt_defines.h"
@@ -211,6 +211,7 @@ struct drm_i915_gem_object {
 	};
 
 	const struct drm_i915_gem_object_ops *ops;
+	struct drm_i915_gem_object *smem_obj;
 
 	/* VM pointer if the object is private to a VM; NULL otherwise */
 	struct i915_address_space *vm;
@@ -317,6 +318,7 @@ struct drm_i915_gem_object {
 #define I915_TILING_QUIRK_BIT    9 /* unknown swizzling; do not release! */
 #define I915_BO_WAS_BOUND_BIT    10
 #define I915_BO_FABRIC           BIT(13)
+#define I915_BO_FIRST_BIND       BIT(14)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -667,6 +669,11 @@ struct drm_i915_gem_object {
 	 * which memory region the object should reside in
 	 */
 	u32 memory_mask;
+
+	/*
+	 * Implicity scaling uses two objects, allow them to be connected
+	 */
+	struct drm_i915_gem_object *pair;
 };
 
 static inline struct drm_i915_gem_object *

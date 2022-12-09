@@ -482,8 +482,6 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 	if (HAS_EU_STALL_SAMPLING(i915)) {
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_BASE, false);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_BASE_UPPER, false);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_REPORT, true);
-		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_REPORT1, true);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_CTRL, true);
 	}
 

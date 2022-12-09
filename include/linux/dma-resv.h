@@ -45,6 +45,7 @@
 #include <linux/seqlock.h>
 #include <linux/rcupdate.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define reservation_ww_class LINUX_DMABUF_BACKPORT(reservation_ww_class)
 #define reservation_seqcount_class LINUX_DMABUF_BACKPORT(reservation_seqcount_class)
 #define reservation_seqcount_string LINUX_DMABUF_BACKPORT(reservation_seqcount_string)
@@ -57,6 +58,7 @@
 #define dma_resv_get_fences LINUX_DMABUF_BACKPORT(dma_resv_get_fences)
 #define dma_resv_wait_timeout LINUX_DMABUF_BACKPORT(dma_resv_wait_timeout)
 #define dma_resv_test_signaled LINUX_DMABUF_BACKPORT(dma_resv_test_signaled)
+#endif
 
 extern struct ww_class reservation_ww_class;
 
@@ -82,7 +84,7 @@ struct dma_resv_list {
  */
 struct dma_resv {
 	struct ww_mutex lock;
-	seqcount_t seq;
+	seqcount_ww_mutex_t seq;
 
 	struct dma_fence __rcu *fence_excl;
 	struct dma_resv_list __rcu *fence;

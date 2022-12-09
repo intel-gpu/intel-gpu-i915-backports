@@ -106,7 +106,11 @@ typedef struct {
 
 #define INVALID_MMIO_REG _MMIO(0)
 
+#ifndef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+static __always_inline u32 i915_mmio_reg_offset(i915_reg_t reg)
+#else
 static inline u32 i915_mmio_reg_offset(i915_reg_t reg)
+#endif
 {
 	return reg.reg;
 }

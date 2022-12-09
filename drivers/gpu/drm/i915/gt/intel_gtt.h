@@ -361,6 +361,7 @@ struct i915_address_space {
 	struct list_head non_priv_vm_bind_list;
 	struct drm_i915_gem_object *root_obj;
 	struct list_head priv_obj_list;
+	atomic_t invalidations;
 
 	struct {
 		struct i915_vma *vma;
@@ -836,6 +837,8 @@ int i915_vm_map_pt_stash(struct i915_address_space *vm,
 			 struct i915_vm_pt_stash *stash);
 void i915_vm_free_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash);
+
+u64 i915_vm_estimate_pt_size(struct i915_address_space *vm, u64 size);
 
 struct i915_vma *
 __vm_create_scratch_for_read(struct i915_address_space *vm, unsigned long size);

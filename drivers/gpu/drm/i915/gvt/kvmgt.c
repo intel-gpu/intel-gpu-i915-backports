@@ -44,7 +44,9 @@
 #include <linux/mdev.h>
 #include <linux/debugfs.h>
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 #include <linux/nospec.h>
 
@@ -2232,7 +2234,9 @@ static const struct intel_gvt_mpt kvmgt_mpt = {
 
 static int __init kvmgt_init(void)
 {
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	DRM_INFO("KVMGT BACKPORTED INIT\n");
+#endif
 	if (intel_gvt_register_hypervisor(&kvmgt_mpt) < 0)
 		return -ENODEV;
 	return 0;
@@ -2241,7 +2245,6 @@ static int __init kvmgt_init(void)
 static void __exit kvmgt_exit(void)
 {
 	intel_gvt_unregister_hypervisor();
-	DRM_INFO("KVMGT BACKPORTED EXIT\n");
 }
 
 module_init(kvmgt_init);
@@ -2249,4 +2252,6 @@ module_exit(kvmgt_exit);
 
 MODULE_LICENSE("GPL and additional rights");
 MODULE_AUTHOR("Intel Corporation");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif

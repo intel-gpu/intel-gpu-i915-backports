@@ -4,7 +4,7 @@
 
 #include <linux/version.h>
 #include_next <linux/vmalloc.h>
-#if (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,5) && LINUX_VERSION_CODE < KERNEL_VERSION(5,10,0))
+#ifdef BPM_VM_MAP_PUT_PAGES_NOT_PRESENT
 /* bits in flags of vmalloc's vm_struct below */
 #define VM_MAP_PUT_PAGES        0x00000100      /* put pages and free array in vfree */
 #endif

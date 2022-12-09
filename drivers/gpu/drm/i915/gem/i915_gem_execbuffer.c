@@ -5,9 +5,12 @@
  */
 
 #include <linux/dma-resv.h>
+#include <linux/highmem.h>
+#include <linux/intel-iommu.h>
 #include <linux/sync_file.h>
 #include <linux/uaccess.h>
 
+#include <drm/drm_auth.h>
 #include <drm/drm_syncobj.h>
 
 #include "display/intel_frontbuffer.h"
@@ -4048,12 +4051,17 @@ static inline struct i915_request *
 eb_request_create(struct i915_execbuffer *eb, unsigned int context_number)
 {
 	struct intel_context *ce;
+	struct i915_request *rq;
 
 	ce = eb_lock_context(eb, context_number);
 	if (IS_ERR(ce))
 		return ERR_CAST(ce);
 
-	return i915_request_create_locked(ce, GFP_KERNEL | __GFP_NOWARN);
+	rq = i915_request_create_locked(ce, GFP_KERNEL | __GFP_NOWARN);
+	if (IS_ERR(rq))
+		mutex_unlock(&ce->timeline->mutex);
+
+	return rq;
 }
 
 static struct sync_file *
@@ -4457,7 +4465,13 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 		 * And this range already got effectively checked earlier
 		 * when we did the "copy_from_user()" above.
 		 */
-		if (!user_access_begin(user_exec_list, count * sizeof(*user_exec_list)))
+
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+               if (!user_access_begin(user_exec_list, count * sizeof(*user_exec_list)))
+#else
+               if (!user_write_access_begin(user_exec_list,
+                                            count * sizeof(*user_exec_list)))
+#endif
 			goto end;
 
 		for (i = 0; i < args->buffer_count; i++) {
@@ -4472,7 +4486,13 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 					end_user);
 		}
 end_user:
-		user_access_end();
+
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+               user_access_end();
+#else
+               user_write_access_end();
+#endif
+
 end:;
 	}
 
@@ -4546,6 +4566,10 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	} else {
 		kfree(sfence);
 	}
+
+	/* Wait till all invalidations on VM are complete */
+	while (atomic_read(&ce->vm->invalidations))
+		udelay(1);
 
 	/*
 	 * From now on, we can't retry locally, but need to wait

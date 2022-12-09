@@ -1,8 +1,7 @@
 #include <linux/version.h> 
 #include <linux/hdmi.h>
 
-#if LINUX_VERSION_IS_LESS(5,8,0) && \
-	(!defined(RHEL_RELEASE_CODE) || (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,4)))
+#ifdef BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT
 
 #define hdmi_drm_infoframe_unpack_only  LINUX_I915_BACKPORT(hdmi_drm_infoframe_unpack_only)
 /**
@@ -60,4 +59,4 @@ int hdmi_drm_infoframe_unpack_only(struct hdmi_drm_infoframe *frame,
         return 0;
 }
 EXPORT_SYMBOL(hdmi_drm_infoframe_unpack_only);
-#endif /*LINUX_VERSION_IS_LESS(5,8,0)*/
+#endif /* BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT */

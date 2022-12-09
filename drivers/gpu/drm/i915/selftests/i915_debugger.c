@@ -36,7 +36,7 @@ static u32 mmio_read(struct intel_engine_cs *engine,
 	u32 val = 0;
 
 	with_intel_runtime_pm(engine->uncore->rpm, wakeref)
-		val = intel_uncore_read(engine->gt->uncore, TD_CTL);
+		val = intel_uncore_read(engine->gt->uncore, reg);
 
 	return val;
 }
@@ -138,6 +138,7 @@ static int test_debug_enable(struct drm_i915_private *i915,
 			continue;
 
 		td_ctl = mmio_read(engine, TD_CTL);
+		row_chicken = mmio_read(engine, GEN8_ROW_CHICKEN);
 
 		pr_info("%s %s TD_CTL (mmio): %08x\n", engine->name,
 			enable ? "enable" : "disable", td_ctl);
@@ -152,7 +153,7 @@ static int test_debug_enable(struct drm_i915_private *i915,
 			ret |= -EINVAL;
 		}
 
-		if ((row_chicken & row_chicken_mask) != row_chicken_mask) {
+		if ((row_chicken & REG_BIT(5)) != row_chicken_mask) {
 			pr_err("%s GEN8_ROW_CHICKEN (mmio) %s error 0x%08x vs 0x%08x (expected)\n",
 			       engine->name, enable ? "enable" : "disable",
 			       row_chicken, row_chicken_mask);

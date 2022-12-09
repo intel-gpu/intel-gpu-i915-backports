@@ -19,7 +19,9 @@
 #include "i915_selftest.h"
 #include "i915_vma.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 static int i915_check_nomodeset(void)
 {
@@ -80,9 +82,10 @@ static int init_progress;
 static int __init i915_init(void)
 {
 	int err, i;
-	
-	DRM_INFO("I915 BACKPORTED INIT \n");
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+	DRM_INFO("I915 BACKPORTED INIT \n");
+#endif
 	for (i = 0; i < ARRAY_SIZE(init_funcs); i++) {
 		err = init_funcs[i].init();
 		if (err < 0) {
@@ -125,6 +128,8 @@ module_exit(i915_exit);
 MODULE_AUTHOR("Tungsten Graphics, Inc.");
 MODULE_AUTHOR("Intel Corporation");
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL and additional rights");
