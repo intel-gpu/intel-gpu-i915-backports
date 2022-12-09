@@ -151,7 +151,7 @@
  */
 #define VGA_CLIENT_UNREGISTER_NOT_PRESENT
 
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(15,4,0))
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 /* 
  * 97c9bfe3f660 drm/aperture: Pass DRM driver structure instead of driver name
  *
@@ -178,10 +178,15 @@
  */
 #define SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 
+/*
+ * f0ab00174eb7 PCI: Make saved capability state private to core
+ */
+#define PCI_INTERFACES_NOT_PRESENT
+
 #endif
 
 
-#if (SUSE_RELEASE_VERSION_IS_GEQ(15,4,0))
+#if (SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 /*
  * 867cf9cd73c3d drm/dp: Extract i915's eDP backlight code into DRM helpers
  */
@@ -196,6 +201,9 @@
  * Update to utilize intel_synchronize_irq instead of old synchronize_hardirq API
  */
 #define SYNC_HRQ_NOT_PRESENT
+
+/* TBD: Need to check if its generic or controllable with version */
+#define BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
 #endif
 
 /*

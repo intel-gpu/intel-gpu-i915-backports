@@ -32,6 +32,7 @@
 #include "icl_dsi_regs.h"
 #include "intel_atomic.h"
 #include "intel_backlight.h"
+#include "intel_backlight_regs.h"
 #include "intel_combo_phy.h"
 #include "intel_combo_phy_regs.h"
 #include "intel_connector.h"
@@ -1626,6 +1627,8 @@ static int gen11_dsi_dsc_compute_config(struct intel_encoder *encoder,
 	/* FIXME: initialize from VBT */
 	vdsc_cfg->rc_model_size = DSC_RC_MODEL_SIZE_CONST;
 
+	vdsc_cfg->pic_height = crtc_state->hw.adjusted_mode.crtc_vdisplay;
+
 	ret = intel_dsc_compute_params(crtc_state);
 	if (ret)
 		return ret;
@@ -1968,16 +1971,8 @@ static void icl_dsi_add_properties(struct intel_connector *connector)
 {
 	const struct drm_display_mode *fixed_mode =
 		intel_panel_preferred_fixed_mode(connector);
-	u32 allowed_scalers;
 
-	allowed_scalers = BIT(DRM_MODE_SCALE_ASPECT) |
-			   BIT(DRM_MODE_SCALE_FULLSCREEN) |
-			   BIT(DRM_MODE_SCALE_CENTER);
-
-	drm_connector_attach_scaling_mode_property(&connector->base,
-						   allowed_scalers);
-
-	connector->base.state->scaling_mode = DRM_MODE_SCALE_ASPECT;
+	intel_attach_scaling_mode_property(&connector->base);
 
 	drm_connector_set_panel_orientation_with_quirk(&connector->base,
 						       intel_dsi_get_panel_orientation(connector),
@@ -2040,8 +2035,6 @@ void icl_dsi_init(struct drm_i915_private *dev_priv)
 			   DRM_MODE_CONNECTOR_DSI);
 	drm_connector_helper_add(connector, &gen11_dsi_connector_helper_funcs);
 	connector->display_info.subpixel_order = SubPixelHorizontalRGB;
-	connector->interlace_allowed = false;
-	connector->doublescan_allowed = false;
 	intel_connector->get_hw_state = intel_connector_get_hw_state;
 
 	/* attach connector to encoder */
@@ -2067,8 +2060,11 @@ void icl_dsi_init(struct drm_i915_private *dev_priv)
 	else
 		intel_dsi->ports = BIT(port);
 
-	intel_dsi->dcs_backlight_ports = intel_connector->panel.vbt.dsi.bl_ports;
-	intel_dsi->dcs_cabc_ports = intel_connector->panel.vbt.dsi.cabc_ports;
+	if (drm_WARN_ON(&dev_priv->drm, intel_connector->panel.vbt.dsi.bl_ports & ~intel_dsi->ports))
+		intel_connector->panel.vbt.dsi.bl_ports &= intel_dsi->ports;
+
+	if (drm_WARN_ON(&dev_priv->drm, intel_connector->panel.vbt.dsi.cabc_ports & ~intel_dsi->ports))
+		intel_connector->panel.vbt.dsi.cabc_ports &= intel_dsi->ports;
 
 	for_each_dsi_port(port, intel_dsi->ports) {
 		struct intel_dsi_host *host;

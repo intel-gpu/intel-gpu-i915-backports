@@ -10,7 +10,6 @@
 
 #include "gt/intel_context.h"
 #include "gt/intel_engine_pm.h"
-#include "gt/intel_gpu_commands.h"
 #include "i915_vma.h"
 
 struct drm_i915_gem_object;
@@ -55,16 +54,12 @@ int i915_gem_object_ww_compressed_copy_blt(struct drm_i915_gem_object *src,
 				struct intel_context *ce,
 				bool nowait);
 
-static inline u32 *i915_flush_dw(u32 *cmd, struct i915_vma *dst, u32 flags)
-{
-	/* Mask the 3 LSB to use the PPGTT address space */
-	GEM_BUG_ON(!IS_ALIGNED(i915_vma_offset(dst), 8));
+phys_addr_t i915_calc_ctrl_surf_instr_dwords(struct drm_i915_private *i915,
+					     size_t copy_sz);
 
-	*cmd++ = MI_FLUSH_DW | flags;
-	*cmd++ = lower_32_bits(i915_vma_offset(dst));
-	*cmd++ = upper_32_bits(i915_vma_offset(dst));
-
-	return cmd;
-}
+u32 *xehp_emit_ccs_copy(u32 *cmd, struct intel_gt *gt,
+			u64 src_addr, int src_mem_access,
+			u64 dst_addr, int dst_mem_access,
+			size_t size);
 
 #endif

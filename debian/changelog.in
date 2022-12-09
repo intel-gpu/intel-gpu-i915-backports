@@ -1,9 +1,45 @@
-pkg-name (0.6213.0.1.220914.2.5.17.0.1019) UNRELEASED; urgency=low
+pkg-name (0.6365.0.0.221124.0.5.17.0.1019) UNRELEASED; urgency=low
 
-  New driver source to PROD_ATSM_6213.0.1 against 5.17-OEM
+  New driver source to DII_6365_prerelease against 5.17-OEM
 
- -- Intel Linux Graphics Team <linux-graphics@intel.com>  Wed, 11 Oct 2022 14:30:26 +0530
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 27 Oct 2022 11:59:31 +0530 
 
+pkg-name (0.6365.221027.0.5.17.0.1019) UNRELEASED; urgency=low
+
+  New driver source to DII_6365_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 27 Oct 2022 11:59:31 +0530 
+ 
+pkg-name (0.6347.221019.0.5.17.0.1019) UNRELEASED; urgency=low
+
+  New driver source to DII_6347_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Wed, 19 Oct 2022 18:18:09 +0530 
+ 
+pkg-name (0.6330.221014.0.5.17.0.1019) UNRELEASED; urgency=low
+
+  New driver source to DII_6330_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Fri, 14 Oct 2022 15:33:24 +0530 
+ 
+pkg-name (0.6305.221006.0.5.17.0.1019) UNRELEASED; urgency=low
+
+  New driver source to DII_6305_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 06 Oct 2022 11:26:49 +0530 
+ 
+pkg-name (0.6285.220929.0.5.17.0.1019) UNRELEASED; urgency=low
+
+  New driver source to DII_6285_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 29 Sep 2022 18:21:43 +0530 
+ 
+pkg-name (0.6255.220924.0.5.17.0.1015) UNRELEASED; urgency=low
+
+  New driver source to DII_6255_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Sat, 24 Sep 2022 00:09:45 +0530 
+ 
 pkg-name (0.6213.220914.1.5.17.0.1015) UNRELEASED; urgency=low
 
   New driver source to DII_6213_prerelease against 5.17-OEM

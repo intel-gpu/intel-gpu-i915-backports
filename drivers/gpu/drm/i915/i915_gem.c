@@ -134,8 +134,7 @@ static int i915_vma_unbind_persistent(struct i915_vma *vma,
 		goto already_locked;
 	}
 
-	GEM_BUG_ON(ww && (flags & I915_GEM_OBJECT_UNBIND_TRYLOCK));
-	if (flags & I915_GEM_OBJECT_UNBIND_TRYLOCK)
+	if (!ww)
 		ret = i915_gem_vm_priv_trylock(vma->vm);
 	else
 		ret = i915_gem_vm_priv_lock_to_evict(vma->vm, ww);
@@ -531,12 +530,6 @@ i915_gem_pread_ioctl(struct drm_device *dev, void *data,
 	}
 
 	trace_i915_gem_object_pread(obj, args->offset, args->size);
-	ret = -ENODEV;
-	if (obj->ops->pread)
-		ret = obj->ops->pread(obj, args);
-	if (ret != -ENODEV)
-		goto out;
-
 	ret = -ENODEV;
 	if (obj->ops->pread)
 		ret = obj->ops->pread(obj, args);
@@ -1068,7 +1061,7 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 
 	if (i915_gem_object_has_pages(obj) &&
 	    i915_gem_object_is_tiled(obj) &&
-	    i915->quirks & QUIRK_PIN_SWIZZLED_PAGES) {
+	    i915->gem_quirks & GEM_QUIRK_PIN_SWIZZLED_PAGES) {
 		if (obj->mm.madv == I915_MADV_WILLNEED) {
 			GEM_BUG_ON(!i915_gem_object_has_tiling_quirk(obj));
 			i915_gem_object_clear_tiling_quirk(obj);
@@ -1195,10 +1188,8 @@ err_unlock:
 		for_each_gt(gt, dev_priv, i) {
 			intel_gt_driver_remove(gt);
 			intel_gt_driver_release(gt);
-		}
-
-		for_each_gt(gt, dev_priv, i)
 			intel_uc_cleanup_firmwares(&gt->uc);
+		}
 	}
 
 	if (ret == -EIO) {
@@ -1210,7 +1201,7 @@ err_unlock:
 		for_each_gt(gt, dev_priv, i) {
 			if (!intel_gt_is_wedged(gt)) {
 				i915_probe_error(dev_priv,
-						"Failed to initialize GPU, declaring it wedged!\n");
+						 "Failed to initialize GPU, declaring it wedged!\n");
 				intel_gt_set_wedged(gt);
 			}
 		}
@@ -1260,11 +1251,10 @@ void i915_gem_driver_release(struct drm_i915_private *dev_priv)
 	struct intel_gt *gt;
 	unsigned int i;
 
-	for_each_gt(gt, dev_priv, i)
+	for_each_gt(gt, dev_priv, i) {
 		intel_gt_driver_release(gt);
-
-	for_each_gt(gt, dev_priv, i)
 		intel_uc_cleanup_firmwares(&gt->uc);
+	}
 
 	i915_gem_drain_freed_objects(dev_priv);
 

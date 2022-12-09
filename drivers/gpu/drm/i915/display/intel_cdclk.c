@@ -63,6 +63,7 @@ enum mtl_cdclk_sequence {
 	CDCLK_SQUASH_THRESHOLD_CRAWL,
 	CDCLK_CRAWL_THRESHOLD_SQUASH,
 	CDCLK_LEGACY_CHANGE,
+	CDCLK_DISABLE
 };
 
 /**
@@ -1360,14 +1361,6 @@ static const struct intel_cdclk_vals adlp_cdclk_table[] = {
 	{}
 };
 
-/* WA: Max cdclk supported on DG2 A0 is 307.2 MHz */
-static const struct intel_cdclk_vals dg2_a0_cdclk_table[] = {
-	{ .refclk = 38400, .cdclk = 172800, .divider = 2, .ratio =  9 },
-	{ .refclk = 38400, .cdclk = 192000, .divider = 2, .ratio = 10 },
-	{ .refclk = 38400, .cdclk = 307200, .divider = 2, .ratio = 16 },
-	{}
-};
-
 static const struct intel_cdclk_vals dg2_cdclk_table[] = {
 	{ .refclk = 38400, .cdclk = 163200, .divider = 2, .ratio = 34, .waveform = 0x8888 },
 	{ .refclk = 38400, .cdclk = 204000, .divider = 2, .ratio = 34, .waveform = 0x9248 },
@@ -1494,7 +1487,9 @@ static void bxt_de_pll_readout(struct drm_i915_private *dev_priv,
 {
 	u32 val, ratio;
 
-	if (IS_DG2(dev_priv))
+	if (DISPLAY_VER(dev_priv) >= 14)
+		cdclk_config->ref = 38400;
+	else if (IS_DG2(dev_priv))
 		cdclk_config->ref = 38400;
 	else if (DISPLAY_VER(dev_priv) >= 11)
 		icl_readout_refclk(dev_priv, cdclk_config);
@@ -1805,9 +1800,12 @@ static u32 cdclk_squash_waveform(struct drm_i915_private *dev_priv,
 
 static enum mtl_cdclk_sequence
 mtl_determine_cdclk_sequence(struct drm_i915_private *i915,
+			     const struct intel_cdclk_config *cdclk_config,
 			     int cdclk)
 {
-	if ((i915)->cdclk.hw.cdclk == 0) {
+	if (cdclk_config->vco == 0) {
+		return CDCLK_DISABLE;
+	} else if ((i915)->cdclk.hw.cdclk == 0) {
 		return CDCLK_LEGACY_CHANGE;
 	} else if (MTL_CRAWL_ONLY(i915, cdclk) || MTL_CRAWL_THRESHOLD(i915, cdclk)) {
 		return CDCLK_CRAWL_ONLY;
@@ -1850,6 +1848,8 @@ static const char *cdclk_sequence_to_string(enum mtl_cdclk_sequence
 		return "Crawl to threshold, followed by Squash";
 	case CDCLK_LEGACY_CHANGE:
 		return "Legacy method";
+	case CDCLK_DISABLE:
+		return "Disable CDCLK";
 	default:
 		return "Not a valid cdclk sequence";
 	}
@@ -1866,7 +1866,7 @@ static void mtl_set_cdclk(struct drm_i915_private *i915,
 	u32 val;
 	u16 waveform;
 
-	mtl_cdclk_sequence = mtl_determine_cdclk_sequence(i915, cdclk);
+	mtl_cdclk_sequence = mtl_determine_cdclk_sequence(i915, cdclk_config, cdclk);
 	if (mtl_cdclk_sequence == CDCLK_INVALID_ACTION)
 		return;
 
@@ -1908,6 +1908,9 @@ static void mtl_set_cdclk(struct drm_i915_private *i915,
 
 		waveform = cdclk_squash_waveform(i915, cdclk);
 		dg2_prog_squash_ctl(i915, waveform);
+		break;
+	case CDCLK_DISABLE:
+		icl_cdclk_pll_disable(i915);
 		break;
 	default:
 		drm_err(&i915->drm, "Invalid CDCLK sequence requested");
@@ -2733,10 +2736,6 @@ static int bdw_modeset_calc_cdclk(struct intel_cdclk_state *cdclk_state)
 	if (min_cdclk < 0)
 		return min_cdclk;
 
-	/*
-	 * FIXME should also account for plane ratio
-	 * once 64bpp pixel formats are supported.
-	 */
 	cdclk = bdw_calc_cdclk(min_cdclk);
 
 	cdclk_state->logical.cdclk = cdclk;
@@ -2803,10 +2802,6 @@ static int skl_modeset_calc_cdclk(struct intel_cdclk_state *cdclk_state)
 
 	vco = skl_dpll0_vco(cdclk_state);
 
-	/*
-	 * FIXME should also account for plane ratio
-	 * once 64bpp pixel formats are supported.
-	 */
 	cdclk = skl_calc_cdclk(min_cdclk, vco);
 
 	cdclk_state->logical.vco = vco;
@@ -3107,9 +3102,7 @@ static int intel_compute_max_dotclk(struct drm_i915_private *dev_priv)
  */
 void intel_update_max_cdclk(struct drm_i915_private *dev_priv)
 {
-	if (IS_DG2_DISPLAY_STEP(dev_priv, STEP_A0, STEP_A0)) {
-		dev_priv->max_cdclk_freq = 307200;
-	} else if (IS_JSL_EHL(dev_priv)) {
+	if (IS_JSL_EHL(dev_priv)) {
 		if (dev_priv->cdclk.hw.ref == 24000)
 			dev_priv->max_cdclk_freq = 552000;
 		else
@@ -3487,10 +3480,6 @@ void intel_init_cdclk_hooks(struct drm_i915_private *dev_priv)
 	if (IS_METEORLAKE(dev_priv)) {
 		dev_priv->cdclk_funcs = &mtl_cdclk_funcs;
 		dev_priv->cdclk.table = mtl_cdclk_table;
-	} else if (IS_DG2_DISPLAY_STEP(dev_priv, STEP_A0, STEP_B0)) {
-		/* Wa_22010458760 */
-		dev_priv->cdclk_funcs = &tgl_cdclk_funcs;
-		dev_priv->cdclk.table = dg2_a0_cdclk_table;
 	} else if (IS_DG2(dev_priv)) {
 		dev_priv->cdclk_funcs = &tgl_cdclk_funcs;
 		dev_priv->cdclk.table = dg2_cdclk_table;

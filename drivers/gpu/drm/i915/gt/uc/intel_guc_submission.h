@@ -82,4 +82,9 @@ intel_guc_modify_scheduling_wait(struct intel_guc *guc)
 
 }
 
+static inline u16 intel_guc_submission_ids_in_use(struct intel_guc *guc)
+{
+	return guc->submission_state.guc_ids_in_use;
+}
+
 #endif

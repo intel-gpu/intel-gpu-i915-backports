@@ -5,9 +5,12 @@
  */
 
 #include <linux/dma-resv.h>
+#include <linux/highmem.h>
+#include <linux/intel-iommu.h>
 #include <linux/sync_file.h>
 #include <linux/uaccess.h>
 
+#include <drm/drm_auth.h>
 #include <drm/drm_syncobj.h>
 
 #include "display/intel_frontbuffer.h"
@@ -4048,12 +4051,17 @@ static inline struct i915_request *
 eb_request_create(struct i915_execbuffer *eb, unsigned int context_number)
 {
 	struct intel_context *ce;
+	struct i915_request *rq;
 
 	ce = eb_lock_context(eb, context_number);
 	if (IS_ERR(ce))
 		return ERR_CAST(ce);
 
-	return i915_request_create_locked(ce, GFP_KERNEL | __GFP_NOWARN);
+	rq = i915_request_create_locked(ce, GFP_KERNEL | __GFP_NOWARN);
+	if (IS_ERR(rq))
+		mutex_unlock(&ce->timeline->mutex);
+
+	return rq;
 }
 
 static struct sync_file *

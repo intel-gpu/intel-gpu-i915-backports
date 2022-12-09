@@ -650,14 +650,6 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    i915->remote_tiles > 0)
 		return false;
 
-	/*
-	 * Wa for HSD: 14015706335
-	 */
-
-	if (!i915->params.rc6_ignore_steppings &&
-	    IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
-		return false;
-
 	return i915->params.enable_rc6;
 }
 

@@ -51,8 +51,6 @@ static int drop_pages(struct drm_i915_gem_object *obj,
 		flags |= I915_GEM_OBJECT_UNBIND_TEST;
 	if (trylock_vm)
 		flags |= I915_GEM_OBJECT_UNBIND_VM_TRYLOCK;
-	if (!ww)
-		flags |= I915_GEM_OBJECT_UNBIND_TRYLOCK;
 
 	return i915_gem_object_unbind(obj, ww, flags);
 }

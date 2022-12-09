@@ -21,6 +21,9 @@
 #include "gt/iov/intel_iov_state.h"
 #include "gt/iov/intel_iov_utils.h"
 
+/* XXX: We need to dig into PCI-core internals to be able to implement VF BAR resize */
+#include "../../../pci/pci.h"
+
 /* safe for use before register access via uncore is completed */
 static u32 pci_peek_mmio_read32(struct pci_dev *pdev, i915_reg_t reg)
 {
@@ -148,9 +151,6 @@ static bool pf_verify_readiness(struct drm_i915_private *i915)
 		return pf_continue_as_native(i915, "can't work with IAF");
 
 	pf_reduce_totalvfs(i915, newlimit);
-
-	if (HAS_LMEM(i915))
-		i915->sriov.pf.initial_vf_lmembar = pci_resource_len(pdev, GEN12_VF_LMEM_BAR);
 
 	i915->sriov.pf.device_vfs = totalvfs;
 	i915->sriov.pf.driver_vfs = newlimit;
@@ -465,50 +465,48 @@ static int pf_update_guc_clients(struct intel_iov *iov, unsigned int num_vfs)
 
 #ifdef CONFIG_PCI_IOV
 
-static void pf_restore_vf_rebar(struct drm_i915_private *i915)
-{
-	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
-
-	if (!HAS_LMEM(i915))
-		return;
-
-	if (pci_resource_len(pdev, GEN12_VF_LMEM_BAR) == i915->sriov.pf.initial_vf_lmembar)
-		return;
-
-	pf_reduce_totalvfs(i915, i915->sriov.pf.device_vfs);
-
-	pci_release_resource(pdev, GEN12_VF_LMEM_BAR);
-	i915_resize_bar(i915, GEN12_VF_LMEM_BAR, i915->sriov.pf.initial_vf_lmembar / i915->sriov.pf.device_vfs);
-	pci_assign_unassigned_bus_resources(pdev->bus);
-
-	pf_reduce_totalvfs(i915, i915->sriov.pf.driver_vfs);
-}
-
-#define VF_BAR_SIZE_SHIFT 20
+#ifndef PCI_EXT_CAP_ID_VF_REBAR
+#define PCI_EXT_CAP_ID_VF_REBAR        0x24    /* VF Resizable BAR */
+#endif
 static void pf_apply_vf_rebar(struct drm_i915_private *i915, unsigned int num_vfs)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	resource_size_t size;
-	u32 rebar;
-	int i, ret;
+	unsigned int pos;
+	u32 rebar, ctrl;
+	int i, vf_bar_idx = GEN12_VF_LMEM_BAR - PCI_IOV_RESOURCES;
 
 	if (!HAS_LMEM(i915))
 		return;
 
-	rebar = pci_rebar_get_possible_sizes(pdev, GEN12_VF_LMEM_BAR);
+	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_VF_REBAR);
+	if (!pos)
+		return;
+
+	/*
+	 * For all current platform we're expecting a single VF resizable BAR, and we expect it to
+	 * always be BAR2.
+	 */
+	pci_read_config_dword(pdev, pos + PCI_REBAR_CTRL, &ctrl);
+	if (FIELD_GET(PCI_REBAR_CTRL_NBAR_MASK, ctrl) != 1 ||
+	    FIELD_GET(PCI_REBAR_CTRL_BAR_IDX, ctrl) != vf_bar_idx) {
+		drm_warn(&i915->drm, "Unexpected resource in VF resizable BAR, skipping resize\n");
+		return;
+	}
+
+	pci_read_config_dword(pdev, pos + PCI_REBAR_CAP, &rebar);
+	rebar = FIELD_GET(PCI_REBAR_CAP_SIZES, rebar);
 
 	while (rebar > 0) {
 		i = __fls(rebar);
-		size = 1ULL << (i + VF_BAR_SIZE_SHIFT);
+		size = pci_rebar_size_to_bytes(i);
 
-		if (size * num_vfs <= i915->sriov.pf.initial_vf_lmembar) {
-			pf_reduce_totalvfs(i915, num_vfs);
-			pci_release_resource(pdev, GEN12_VF_LMEM_BAR);
-			ret = i915_resize_bar(i915, GEN12_VF_LMEM_BAR, size);
-			pci_assign_unassigned_bus_resources(pdev->bus);
-
-			if (ret)
-				pf_restore_vf_rebar(i915);
+		if (size * num_vfs <= pci_resource_len(pdev, GEN12_VF_LMEM_BAR)) {
+			ctrl &= ~PCI_REBAR_CTRL_BAR_SIZE;
+			ctrl |= pci_rebar_bytes_to_size(size) << PCI_REBAR_CTRL_BAR_SHIFT;
+			pci_write_config_dword(pdev, pos + PCI_REBAR_CTRL, ctrl);
+			pdev->sriov->barsz[vf_bar_idx] = size;
+			drm_info(&i915->drm, "VF BAR%d resized to %dM\n", vf_bar_idx, 1 << i);
 
 			break;
 		}
@@ -519,14 +517,8 @@ static void pf_apply_vf_rebar(struct drm_i915_private *i915, unsigned int num_vf
 
 #else
 
-static void pf_restore_vf_rebar(struct drm_i915_private *i915)
-{
-	return;
-
-}
 static void pf_apply_vf_rebar(struct drm_i915_private *i915, unsigned int num_vfs)
 {
-	return;
 }
 
 #endif
@@ -601,16 +593,14 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 
 	err = pci_enable_sriov(pdev, num_vfs);
 	if (err < 0)
-		goto fail_rebar;
+		goto fail_guc;
 
 	i915_sriov_sysfs_update_links(i915, true);
 
 	dev_info(dev, "Enabled %u VFs\n", num_vfs);
 	return num_vfs;
 
-fail_rebar:
-	pf_restore_vf_rebar(i915);
-
+fail_guc:
 	for_each_gt(gt, i915, id)
 		pf_update_guc_clients(&gt->iov, 0);
 fail_pm:
@@ -688,8 +678,6 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 	i915_sriov_sysfs_update_links(i915, false);
 
 	pci_disable_sriov(pdev);
-
-	pf_restore_vf_rebar(i915);
 
 	for_each_gt(gt, i915, id)
 		pf_start_vfs_flr(&gt->iov, num_vfs);

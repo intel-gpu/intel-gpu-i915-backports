@@ -203,9 +203,11 @@ enum intel_ppgtt_type {
 	func(has_stateless_mc); \
 	func(has_um_queues); \
 	func(tuning_thread_rr_after_dep); \
+	func(has_csc_uid);	\
 	func(unfenced_needs_alignment); \
 	func(hws_needs_physical); \
-	func(oam_uses_vdbox0_channel);
+	func(oam_uses_vdbox0_channel); \
+	func(needs_driver_flr);
 
 #define DEV_INFO_DISPLAY_FOR_EACH_FLAG(func) \
 	/* Keep in alphabetical order */ \
@@ -323,6 +325,8 @@ struct intel_runtime_info {
 	struct ip_version display;
 
 	u16 device_id;
+
+	u64 uid; /* device uid, used for generating uuid */
 
 	u8 num_sprites[I915_MAX_PIPES];
 	u8 num_scalers[I915_MAX_PIPES];

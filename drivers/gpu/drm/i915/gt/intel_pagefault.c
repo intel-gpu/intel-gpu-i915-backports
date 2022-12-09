@@ -61,30 +61,24 @@ enum fault_type {
 	ATOMIC_ACCESS_VIOLATION = 2,
 };
 
-int intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, const u32 *msg, u32 len)
+void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_id)
 {
 	struct drm_device *drm = &gt->i915->drm;
+	struct intel_guc *guc = &gt->uc.guc;
+	struct intel_context *ce;
 	char buf[11];
-	u32 guc_ctx_id;
 
-	if (len != GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_LEN)
-		return -EPROTO;
-
-	if (FIELD_GET(GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_0_MBZ, msg[0]) != 0)
-		return -EPROTO;
-
-	guc_ctx_id = FIELD_GET(GUC2HOST_NOTIFY_MEMORY_CAT_ERROR_MSG_1_CONTEXT_ID, msg[1]);
-
-	if (guc_ctx_id != CAT_ERROR_INV_SW_CTX)
+	ce = xa_load(&guc->context_lookup, guc_ctx_id);
+	if (ce) {
 		snprintf(buf, sizeof(buf), "%#04x", guc_ctx_id);
-	else
+		intel_context_set_error(ce);
+	} else {
 		snprintf(buf, sizeof(buf), "n/a");
+	}
 
 	trace_intel_gt_cat_error(gt, buf);
 
 	drm_err(drm, "GPU catastrophic memory error. GT: %d, GuC context: %s\n", gt->info.id, buf);
-
-	return 0;
 }
 
 static u64 fault_va(u32 fault_data1, u32 fault_data0)
@@ -213,6 +207,24 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 		return ret;
 	}
 
+	/*
+	 * If object was never bound to page table, unset pages so we don't
+	 * copy empty pages as part of migration.  Instead we will get new
+	 * (zero filled) pages from destination region during the object
+	 * migrate.  This ensures pages will be resident in the location
+	 * where first touched (avoids being penalized with migration cost
+	 * when we have backing store that is not yet written).  This logic
+	 * is unneeded if we were to defer page allocation until get_pages.
+	 */
+	if (i915_gem_object_has_pages(obj) &&
+	    !i915_gem_object_has_first_bind(obj)) {
+		struct sg_table *pages;
+
+		pages = __i915_gem_object_unset_pages(obj);
+		if (pages)
+			GEM_WARN_ON(obj->ops->put_pages(obj, pages));
+	}
+
 	return i915_gem_object_migrate(obj, ww, ce, lmem_id, true);
 }
 
@@ -297,8 +309,6 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 				struct recoverable_page_fault_info *info)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct i915_vma_work *work = NULL;
-	struct intel_engine_cs *engine;
 	struct i915_address_space *vm;
 	struct i915_vma *vma = NULL;
 	enum intel_region_id lmem_id;
@@ -359,10 +369,6 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	if (err)
 		goto err_ww;
 
-	GEM_BUG_ON(info->engine_class > MAX_ENGINE_CLASS ||
-		   info->engine_instance > MAX_ENGINE_INSTANCE);
-	engine = gt->engine_class[info->engine_class][info->engine_instance];
-
 	lmem_id = get_lmem_region_id(vma->obj, gt);
 	if (i915_gem_object_should_migrate_lmem(vma->obj, lmem_id,
 						access_is_atomic(info))) {
@@ -379,51 +385,7 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 
 	}
 
-	err = vma_get_pages(vma);
-	if (err)
-		goto err_ww;
-	GEM_BUG_ON(!vma->pages);
-
-	work = i915_vma_work(vma);
-	if (!work) {
-		err = -ENOMEM;
-		goto err_pages;
-	}
-	err = i915_vma_work_set_vm(work, vma, &ww);
-	if (err)
-		goto err_fence;
-
-	err = mutex_lock_interruptible(&vm->mutex);
-	if (err)
-		goto err_fence;
-
-	err = i915_active_acquire(&vma->active);
-	if (err)
-		goto err_unlock;
-
-	err = i915_vma_bind(vma, vma->obj->pat_index, PIN_USER, work);
-	if (err)
-		goto err_active;
-
-	atomic_add(I915_VMA_PAGES_ACTIVE, &vma->pages_count);
-	GEM_BUG_ON(!i915_vma_is_bound(vma, PIN_USER));
-
-	/*
-	 * For non active bind, it has already been pinned in
-	 * i915_vma_fault_pin, so, only pin for active bind here.
-	 */
-	if (i915_vma_is_active_bind(vma))
-		__i915_vma_pin(vma);
-err_active:
-	i915_active_release(&vma->active);
-err_unlock:
-	mutex_unlock(&vm->mutex);
-err_fence:
-	i915_vma_work_commit(work);
-err_pages:
-	vma_put_pages(vma);
-	if (!err)
-		err = i915_vma_wait_for_bind(vma);
+	err = i915_vma_bind_sync(vma, &ww);
 	if (!err && userptr_needs_rebind(vma->obj)) {
 		i915_gem_ww_ctx_fini(&ww);
 		goto retry_userptr;

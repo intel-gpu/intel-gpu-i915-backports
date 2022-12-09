@@ -4,6 +4,7 @@
  */
 
 #include "intel_lmtt.h"
+#include "intel_iov_utils.h"
 
 #include "i915_drv.h"
 #include "i915_scatterlist.h"
@@ -473,4 +474,33 @@ int intel_lmtt_update_entries(struct intel_lmtt *lmtt, unsigned int vf)
 		ret = lmtt_create_entries(lmtt, vf);
 
 	return ret;
+}
+
+/**
+ * intel_lmtt_estimate_pt_size - Estimate size of VF's LMTT PT allocation.
+ * @lmtt: the LMTT struct
+ * @size: planned VF's LMEM size
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: size of the VF's PT allocation(s).
+ */
+resource_size_t intel_lmtt_estimate_pt_size(struct intel_lmtt *lmtt, u64 size)
+{
+	resource_size_t pt_size;
+	unsigned int level = 0;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(lmtt_to_gt(lmtt)->i915));
+	GEM_BUG_ON(!HAS_LMEM(lmtt_to_gt(lmtt)->i915));
+
+	pt_size = lmtt->ops->lmtt_pte_size(level) *
+		  lmtt->ops->lmtt_pte_num(level);
+
+	while (++level < lmtt->ops->lmtt_root_pd_level()) {
+		pt_size *= lmtt->ops->lmtt_pte_idx(size, level) + 1;
+		pt_size += lmtt->ops->lmtt_pte_size(level) *
+			   lmtt->ops->lmtt_pte_num(level);
+	}
+
+	return pt_size;
 }

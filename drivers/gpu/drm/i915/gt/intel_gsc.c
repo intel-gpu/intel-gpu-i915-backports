@@ -42,10 +42,11 @@ gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size
 {
 	struct intel_gt *gt = gsc_to_gt(gsc);
 	struct drm_i915_gem_object *obj;
-	void *vaddr;
 	int err;
 
-	obj = i915_gem_object_create_lmem(gt->i915, size, I915_BO_ALLOC_CONTIGUOUS);
+	obj = i915_gem_object_create_lmem(gt->i915, size,
+					  I915_BO_ALLOC_CONTIGUOUS |
+					  I915_BO_ALLOC_CPU_CLEAR);
 	if (IS_ERR(obj)) {
 		drm_err(&gt->i915->drm, "Failed to allocate gsc memory\n");
 		return PTR_ERR(obj);
@@ -57,23 +58,10 @@ gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size
 		goto out_put;
 	}
 
-	vaddr = i915_gem_object_pin_map_unlocked(obj, i915_coherent_map_type(gt->i915, obj, true));
-	if (IS_ERR(vaddr)) {
-		err = PTR_ERR(vaddr);
-		drm_err(&gt->i915->drm, "Failed to map gsc memory\n");
-		goto out_unpin;
-	}
-
-	memset(vaddr, 0, obj->base.size);
-
-	i915_gem_object_unpin_map(obj);
-
 	intf->gem_obj = obj;
 
 	return 0;
 
-out_unpin:
-	i915_gem_object_unpin_pages(obj);
 out_put:
 	i915_gem_object_put(obj);
 	return err;
@@ -92,12 +80,42 @@ static void gsc_ext_om_destroy(struct intel_gsc_intf *intf)
 	i915_gem_object_put(obj);
 }
 
+static void intel_gsc_forcewake_get(void *gsc)
+{
+	struct intel_uncore *uncore = gsc_to_gt(gsc)->uncore;
+	intel_wakeref_t wakeref;
+
+	with_intel_runtime_pm(uncore->rpm, wakeref)
+		intel_uncore_forcewake_get(uncore, FORCEWAKE_GT);
+}
+
+static void intel_gsc_forcewake_put(void *gsc)
+{
+	struct intel_uncore *uncore = gsc_to_gt(gsc)->uncore;
+	intel_wakeref_t wakeref;
+
+	with_intel_runtime_pm(uncore->rpm, wakeref)
+		intel_uncore_forcewake_put(uncore, FORCEWAKE_GT);
+}
+
+/**
+ * struct gsc_def - GSC definitions per generation
+ *
+ * @name: device name
+ * @bar: base offset for HECI bar
+ * @bar_size: size of HECI bar
+ * @use_polling: use register polling instead of interrupts
+ * @slow_firmware: the firmware is slow and requires longer timeouts
+ * @forcewake_needed: the GT forcewake is needed before operations
+ * @lmem_size: size of extended operation memory for GSC, if required
+ */
 struct gsc_def {
 	const char *name;
 	unsigned long bar;
 	size_t bar_size;
 	bool use_polling;
-	bool slow_fw;
+	bool slow_firmware;
+	bool forcewake_needed;
 	size_t lmem_size;
 };
 
@@ -122,7 +140,7 @@ static const struct gsc_def gsc_def_xehpsdv[] = {
 		.bar = DG1_GSC_HECI2_BASE,
 		.bar_size = GSC_BAR_LENGTH,
 		.use_polling = true,
-		.slow_fw = true,
+		.slow_firmware = true,
 	}
 };
 
@@ -148,7 +166,8 @@ static const struct gsc_def gsc_def_pvc[] = {
 		.name = "mei-gscfi",
 		.bar = PVC_GSC_HECI2_BASE,
 		.bar_size = GSC_BAR_LENGTH,
-		.slow_fw = true,
+		.slow_firmware = true,
+		.forcewake_needed = true,
 	}
 };
 
@@ -161,7 +180,7 @@ static void gsc_release_dev(struct device *dev)
 }
 
 static void gsc_destroy_one(struct drm_i915_private *i915,
-				  struct intel_gsc *gsc, unsigned int intf_id)
+			    struct intel_gsc *gsc, unsigned int intf_id)
 {
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
 
@@ -178,9 +197,8 @@ static void gsc_destroy_one(struct drm_i915_private *i915,
 	gsc_ext_om_destroy(intf);
 }
 
-static void gsc_init_one(struct drm_i915_private *i915,
-			       struct intel_gsc *gsc,
-			       unsigned int intf_id)
+static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
+			 unsigned int intf_id)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	struct mei_aux_device *adev;
@@ -239,10 +257,10 @@ add_device:
 		goto fail;
 
 	if (def->lmem_size) {
-		dev_dbg(&pdev->dev, "setting up GSC lmem\n");
+		drm_dbg(&i915->drm, "setting up GSC lmem\n");
 
 		if (gsc_ext_om_alloc(gsc, intf, def->lmem_size)) {
-			dev_err(&pdev->dev, "setting up gsc extended operational memory failed\n");
+			drm_err(&i915->drm, "setting up gsc extended operational memory failed\n");
 			kfree(adev);
 			goto fail;
 		}
@@ -257,7 +275,11 @@ add_device:
 	adev->bar.end = adev->bar.start + def->bar_size - 1;
 	adev->bar.flags = IORESOURCE_MEM;
 	adev->bar.desc = IORES_DESC_NONE;
-	adev->slow_fw = def->slow_fw;
+	adev->slow_firmware = def->slow_firmware;
+	adev->forcewake_needed = def->forcewake_needed;
+	adev->gsc = gsc;
+	adev->forcewake_get = intel_gsc_forcewake_get;
+	adev->forcewake_put = intel_gsc_forcewake_put;
 
 	aux_dev = &adev->aux_dev;
 	aux_dev->name = def->name;

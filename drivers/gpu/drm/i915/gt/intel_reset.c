@@ -99,6 +99,9 @@ static bool mark_guilty(struct i915_request *rq)
 		goto out;
 	}
 
+	if (intel_context_has_error(rq->context))
+		i915_gem_context_set_banned(ctx);
+
 	drm_notice(&ctx->i915->drm,
 		   "%s context reset due to GPU hang\n",
 		   ctx->name);
@@ -110,12 +113,15 @@ static bool mark_guilty(struct i915_request *rq)
 	ctx->hang_timestamp[i] = jiffies;
 
 	/* If we have hung N+1 times in rapid succession, we ban the context! */
-	banned = !i915_gem_context_is_recoverable(ctx);
+	banned = !i915_gem_context_is_recoverable(ctx) ||
+		i915_gem_context_is_banned(ctx);
 	if (time_before(jiffies, prev_hang + CONTEXT_FAST_HANG_JIFFIES))
 		banned = true;
-	if (banned)
+	if (banned) {
 		drm_dbg(&ctx->i915->drm, "context %s: guilty %d, banned\n",
 			ctx->name, atomic_read(&ctx->guilty_count));
+		wake_up_all(&ctx->i915->user_fence_wq);
+	}
 
 	client_mark_guilty(ctx, banned);
 

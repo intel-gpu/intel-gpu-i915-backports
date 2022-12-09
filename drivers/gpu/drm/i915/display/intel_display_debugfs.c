@@ -28,17 +28,6 @@
 #include "intel_psr.h"
 #include "intel_sprite.h"
 
-struct {
-	/* manufacturer and product code of connector from edid data */
-	u8 edid_manuf_code[2];
-	u8 edid_prod_code[2];
-} wakeup_hpd_monitor_list[] = {
-	/* LG 27UL650-W, 27UK850 */
-	{{0x1e,0x6d}, {0x06,0x77}},
-	{{0x1e,0x6d}, {0x07,0x77}},
-	{{0x26,0xcd}, {0x40,0x66}},
-};
-
 static inline struct drm_i915_private *node_to_i915(struct drm_info_node *node)
 {
 	return to_i915(node->minor->dev);
@@ -1909,43 +1898,13 @@ i915_fifo_underrun_reset_write(struct file *filp,
 	return cnt;
 }
 
-static const struct file_operations i915_fifo_underrun_reset_ops = {
-	.owner = THIS_MODULE,
-	.open = simple_open,
-	.write = i915_fifo_underrun_reset_write,
-	.llseek = default_llseek,
-};
-
-bool intel_connector_need_suppress_wakeup_hpd(struct intel_connector *connector)
-{
-	int i;
-	struct edid *edid = connector->detect_edid;
-
-	if (!edid)
-		return false;
-
-	for (i = 0; i < ARRAY_SIZE(wakeup_hpd_monitor_list); i++) {
-		if (*((u16 *)&wakeup_hpd_monitor_list[i].edid_manuf_code) !=
-		    *((u16 *)&edid->mfg_id))
-			continue;
-
-		if (*((u16 *)&wakeup_hpd_monitor_list[i].edid_prod_code) !=
-		    *((u16 *)&edid->prod_code))
-			continue;
-
-		return true;
-	}
-
-	return false;
-}
-
 static int i915_suppress_wakeup_hpd_set(void *data, u64 val)
 {
 	struct drm_i915_private *i915 = data;
 
-	drm_dbg(&i915->drm, "Suppress wakeup HPDs enabled: %s\n", str_yes_no(val));
+	drm_dbg_kms(&i915->drm, "Ignoring long HPDs: %s\n", str_yes_no(val));
 
-	i915->hotplug.suppress_wakeup_hpd_enabled = val;
+	i915->hotplug.ignore_long_hpd = val;
 
 	return 0;
 }
@@ -1954,13 +1913,21 @@ static int i915_suppress_wakeup_hpd_get(void *data, u64 *val)
 {
 	struct drm_i915_private *i915 = data;
 
-	*val = i915->hotplug.suppress_wakeup_hpd_enabled;
+	*val = i915->hotplug.ignore_long_hpd;
 
 	return 0;
 }
 
-DEFINE_SIMPLE_ATTRIBUTE(i915_suppress_wakeup_hpd_fops, i915_suppress_wakeup_hpd_get,
+DEFINE_SIMPLE_ATTRIBUTE(i915_suppress_wakeup_hpd_fops,
+			i915_suppress_wakeup_hpd_get,
 			i915_suppress_wakeup_hpd_set, "%llu\n");
+
+static const struct file_operations i915_fifo_underrun_reset_ops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.write = i915_fifo_underrun_reset_write,
+	.llseek = default_llseek,
+};
 
 static const struct drm_info_list intel_display_debugfs_list[] = {
 	{"i915_frontbuffer_tracking", i915_frontbuffer_tracking, 0},
@@ -1996,7 +1963,7 @@ static const struct {
 	{"i915_ipc_status", &i915_ipc_status_fops},
 	{"i915_drrs_ctl", &i915_drrs_ctl_fops},
 	{"i915_edp_psr_debug", &i915_edp_psr_debug_fops},
-	{"i915_suppress_wakeup_hpd", &i915_suppress_wakeup_hpd_fops}
+	{"i915_suppress_wakeup_hpd", &i915_suppress_wakeup_hpd_fops},
 };
 
 static int dither_state_show(struct seq_file *m, void *data)
@@ -2256,7 +2223,7 @@ static const struct file_operations i915_dsc_fec_support_fops = {
 	.write = i915_dsc_fec_support_write
 };
 
-static int i915_dsc_bpp_show(struct seq_file *m, void *data)
+static int i915_dsc_bpc_show(struct seq_file *m, void *data)
 {
 	struct drm_connector *connector = m->private;
 	struct drm_device *dev = connector->dev;
@@ -2279,14 +2246,14 @@ static int i915_dsc_bpp_show(struct seq_file *m, void *data)
 	}
 
 	crtc_state = to_intel_crtc_state(crtc->state);
-	seq_printf(m, "Compressed_BPP: %d\n", crtc_state->dsc.compressed_bpp);
+	seq_printf(m, "Input_BPC: %d\n", crtc_state->dsc.config.bits_per_component);
 
 out:	drm_modeset_unlock(&dev->mode_config.connection_mutex);
 
 	return ret;
 }
 
-static ssize_t i915_dsc_bpp_write(struct file *file,
+static ssize_t i915_dsc_bpc_write(struct file *file,
 				  const char __user *ubuf,
 				  size_t len, loff_t *offp)
 {
@@ -2294,33 +2261,32 @@ static ssize_t i915_dsc_bpp_write(struct file *file,
 		((struct seq_file *)file->private_data)->private;
 	struct intel_encoder *encoder = intel_attached_encoder(to_intel_connector(connector));
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
-	int dsc_bpp = 0;
+	int dsc_bpc = 0;
 	int ret;
 
-	ret = kstrtoint_from_user(ubuf, len, 0, &dsc_bpp);
+	ret = kstrtoint_from_user(ubuf, len, 0, &dsc_bpc);
 	if (ret < 0)
 		return ret;
 
-	intel_dp->force_dsc_bpp = dsc_bpp;
+	intel_dp->force_dsc_bpc = dsc_bpc;
 	*offp += len;
 
 	return len;
 }
 
-static int i915_dsc_bpp_open(struct inode *inode,
+static int i915_dsc_bpc_open(struct inode *inode,
 			     struct file *file)
 {
-	return single_open(file, i915_dsc_bpp_show,
-			   inode->i_private);
+	return single_open(file, i915_dsc_bpc_show, inode->i_private);
 }
 
-static const struct file_operations i915_dsc_bpp_fops = {
+static const struct file_operations i915_dsc_bpc_fops = {
 	.owner = THIS_MODULE,
-	.open = i915_dsc_bpp_open,
+	.open = i915_dsc_bpc_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
-	.write = i915_dsc_bpp_write
+	.write = i915_dsc_bpc_write
 };
 
 /*
@@ -2390,8 +2356,8 @@ void intel_connector_debugfs_add(struct intel_connector *intel_connector)
 		debugfs_create_file("i915_dsc_fec_support", 0644, root,
 				    connector, &i915_dsc_fec_support_fops);
 
-		debugfs_create_file("i915_dsc_bpp", 0644, root,
-				    connector, &i915_dsc_bpp_fops);
+		debugfs_create_file("i915_dsc_bpc", 0644, root,
+				    connector, &i915_dsc_bpc_fops);
 	}
 
 	if (connector->connector_type == DRM_MODE_CONNECTOR_DSI ||

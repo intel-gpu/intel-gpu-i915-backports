@@ -5,14 +5,16 @@
  */
 
 #include <linux/pagevec.h>
+#include <linux/shmem_fs.h>
 #include <linux/swap.h>
 
 #include <drm/drm_cache.h>
 
 #include "gem/i915_gem_region.h"
 #include "i915_drv.h"
-#include "i915_gemfs.h"
 #include "i915_gem_object.h"
+#include "i915_gem_tiling.h"
+#include "i915_gemfs.h"
 #include "i915_scatterlist.h"
 #include "i915_trace.h"
 
@@ -38,7 +40,7 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 	struct sgt_iter sgt_iter;
 	struct page *page;
 	unsigned long last_pfn = 0;	/* suppress gcc warning */
-	unsigned int max_segment = i915_sg_segment_size();
+	unsigned int max_segment = i915_gem_sg_segment_size(obj);
 	unsigned int sg_page_sizes;
 	pgoff_t page_count, i;
 	gfp_t noreclaim;
@@ -657,7 +659,7 @@ struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt,
 {
 	return intel_memory_region_create(gt, 0,
 					  totalram_pages() << PAGE_SHIFT,
-					  PAGE_SIZE, 0,
+					  PAGE_SIZE, 0, 0,
 					  type, instance,
 					  &shmem_region_ops);
 }

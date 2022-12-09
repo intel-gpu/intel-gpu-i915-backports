@@ -491,7 +491,7 @@ corrupted:
 
 /**
  * wait_for_ct_request_update - Wait for CT request state update.
- * @ct:		the CT to wait on
+ * @ct:		pointer to CT
  * @req:	pointer to pending request
  * @status:	placeholder for status
  *
@@ -504,10 +504,10 @@ corrupted:
  * *	0 response received (status is valid)
  * *	-ETIMEDOUT no response within hardcoded timeout
  */
-static int wait_for_ct_request_update(struct intel_guc_ct *ct,
-				      struct ct_request *req, u32 *status)
+static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request *req, u32 *status)
 {
 	int err;
+	bool ct_enabled;
 
 	/*
 	 * Fast commands should complete in less than 10us, so sample quickly
@@ -519,13 +519,16 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct,
 #define GUC_CTB_RESPONSE_TIMEOUT_SHORT_MS 10
 #define GUC_CTB_RESPONSE_TIMEOUT_LONG_MS 1000
 #define done \
-	(FIELD_GET(GUC_HXG_MSG_0_ORIGIN, READ_ONCE(req->status)) == \
+	(!(ct_enabled = intel_guc_ct_enabled(ct)) || \
+	 FIELD_GET(GUC_HXG_MSG_0_ORIGIN, READ_ONCE(req->status)) == \
 	 GUC_HXG_ORIGIN_GUC)
 	intel_boost_fake_int_timer(ct_to_gt(ct), true);
 	err = wait_for_us(done, GUC_CTB_RESPONSE_TIMEOUT_SHORT_MS);
 	if (err)
 		err = wait_for(done, GUC_CTB_RESPONSE_TIMEOUT_LONG_MS);
 #undef done
+	if (!ct_enabled)
+		err = -ENODEV;
 
 	if (unlikely(err))
 		DRM_ERROR("CT: fence %u err %d\n", req->fence, err);
@@ -759,8 +762,15 @@ retry:
 	err = wait_for_ct_request_update(ct, &request, status);
 	g2h_release_space(ct, GUC_CTB_HXG_MSG_MAX_LEN);
 	if (unlikely(err)) {
-		CT_ERROR(ct, "No response for request %#x (fence %u)\n",
-			 action[0], request.fence);
+		if (err == -ENODEV)
+			/* wait_for_ct_request_update returns -ENODEV on reset/suspend in progress.
+			 * In this case, output is debug rather than error info
+			 */
+			CT_DEBUG(ct, "Request %#x (fence %u) cancelled as CTB is disabled\n",
+				 action[0], request.fence);
+		else
+			CT_ERROR(ct, "No response for request %#x (fence %u)\n",
+				 action[0], request.fence);
 		goto unlink;
 	}
 
@@ -844,8 +854,9 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 		return ret;
 
 	if (unlikely(ret < 0)) {
-		CT_ERROR(ct, "Sending action %#x failed (%pe) status=%#X\n",
-			 action[0], ERR_PTR(ret), status);
+		if (ret != -ENODEV)
+			CT_ERROR(ct, "Sending action %#x failed (%pe) status=%#X\n",
+				 action[0], ERR_PTR(ret), status);
 	} else if (unlikely(ret)) {
 		CT_DEBUG(ct, "send action %#x returned %d (%#x)\n",
 			 action[0], ret, ret);
@@ -1096,9 +1107,6 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 	case INTEL_GUC_ACTION_CONTEXT_RESET_NOTIFICATION:
 		ret = intel_guc_context_reset_process_msg(guc, payload, len);
 		break;
-	case GUC_ACTION_GUC2HOST_NOTIFY_MEMORY_CAT_ERROR:
-		ret = intel_gt_pagefault_process_cat_error_msg(gt, hxg, hxg_len);
-		break;
 	case GUC_ACTION_GUC2HOST_NOTIFY_PAGE_FAULT:
 		ret = intel_gt_pagefault_process_page_fault_msg(gt, hxg, hxg_len);
 		break;
@@ -1223,7 +1231,8 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 		g2h_release_space(ct, request->size);
 	}
 	/* Handle tlb invalidation response in interrupt context */
-	if (action == INTEL_GUC_ACTION_TLB_INVALIDATION_DONE) {
+	if (action == INTEL_GUC_ACTION_TLB_INVALIDATION_DONE ||
+	    action == GUC_ACTION_GUC2HOST_NOTIFY_MEMORY_CAT_ERROR) {
 		const u32 *payload;
 		u32 hxg_len, len;
 
@@ -1232,7 +1241,11 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 		if (unlikely(len < 1))
 			return -EPROTO;
 		payload = &hxg[GUC_HXG_MSG_MIN_LEN];
-		intel_guc_tlb_invalidation_done(ct_to_guc(ct),  payload[0]);
+		if (action == INTEL_GUC_ACTION_TLB_INVALIDATION_DONE)
+			intel_guc_tlb_invalidation_done(ct_to_guc(ct),  payload[0]);
+		else
+			intel_gt_pagefault_process_cat_error_msg(ct_to_gt(ct), payload[0]);
+
 		ct_free_msg(request);
 		return 0;
 	}
@@ -1411,8 +1424,8 @@ static void ct_dead_ct_worker_func(struct work_struct *w)
 		return;
 
 	ct->dead_ct_reported = true;
-#if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
-	drm_info(&ct_to_i915(ct)->drm, "%s:%d> Dumping on CTB because 0x%X...\n", __func__, __LINE__, ct->dead_ct_reason);
+
+	drm_info(&ct_to_i915(ct)->drm, "CTB is dead - reason=0x%X\n",
+		 ct->dead_ct_reason);
 	intel_klog_error_capture(ct_to_gt(ct), (intel_engine_mask_t) ~0U);
-#endif
 }

@@ -28,9 +28,8 @@ config DRM_I915
 	select CEC_CORE if CEC_NOTIFIER
 	depends on VMAP_PFN
 	depends on DRM_TTM
-	depends on AUXILIARY_BUS
+	depends on AUXILIARY_BUS || MFD_CORE
 	depends on MTD
-	depends on MFD_CORE
 	help
 	  Choose this option if you have a system that has "Intel Graphics
 	  Media Accelerator" or "HD Graphics" integrated graphics,

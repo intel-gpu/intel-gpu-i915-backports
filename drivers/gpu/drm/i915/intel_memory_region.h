@@ -11,7 +11,7 @@
 #include <linux/mutex.h>
 #include <linux/io-mapping.h>
 #include <drm/drm_mm.h>
-#include <drm/i915_drm.h>
+#include <uapi/drm/i915_drm.h>
 
 #include "i915_buddy.h"
 
@@ -94,6 +94,7 @@ struct intel_memory_region {
 	struct kref kref;
 
 	resource_size_t io_start;
+	resource_size_t io_size;
 	resource_size_t min_page_size;
 	resource_size_t total;
 	resource_size_t avail;
@@ -148,6 +149,7 @@ intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t size,
 			   resource_size_t min_page_size,
 			   resource_size_t io_start,
+			   resource_size_t io_size,
 			   u16 type,
 			   u16 instance,
 			   const struct intel_memory_region_ops *ops);
@@ -169,6 +171,8 @@ intel_memory_region_set_name(struct intel_memory_region *mem,
 
 int intel_memory_region_reserve(struct intel_memory_region *mem,
 				u64 offset, u64 size);
+
+int intel_memory_regions_add_svm(struct drm_i915_private *i915);
 
 void intel_memory_regions_remove(struct drm_i915_private *i915);
 

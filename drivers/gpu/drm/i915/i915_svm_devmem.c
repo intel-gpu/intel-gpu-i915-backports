@@ -98,6 +98,7 @@ i915_devmem_page_get_locked(struct intel_memory_region *mem,
 	return NULL;
 }
 
+#ifndef MIGRATE_PFN_LOCKED_REMOVED
 static void
 i915_devmem_page_free_locked(struct drm_i915_private *dev_priv,
 			     struct page *page)
@@ -105,6 +106,7 @@ i915_devmem_page_free_locked(struct drm_i915_private *dev_priv,
 	unlock_page(page);
 	put_page(page);
 }
+#endif
 
 static int i915_devmem_bind_addr(struct i915_devmem_migrate *migrate,
 				 struct i915_gem_ww_ctx *ww,
@@ -398,7 +400,7 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 #else
 		args->dst[i] = migrate_pfn(page_to_pfn(page)) |
 			       MIGRATE_PFN_LOCKED;
-#endif 
+#endif
 	}
 
 	if (!cnt) {
@@ -422,7 +424,7 @@ migrate_out:
 				page = migrate_pfn_to_page(args->dst[i]);
 				i915_devmem_page_free_locked(i915, page);
 			}
-#endif 
+#endif
 			args->dst[i] = 0;
 		}
 	}
@@ -577,7 +579,7 @@ i915_devmem_fault_alloc_and_copy(struct i915_devmem_migrate *migrate)
 	args->dst[0] = migrate_pfn(page_to_pfn(dpage));
 #else
 	args->dst[0] = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
-#endif 
+#endif
 
 	/* Copy the pages */
 	migrate->npages = 1;
@@ -750,11 +752,9 @@ void i915_svm_devmem_remove(struct intel_memory_region *mem)
 	}
 }
 
-int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
-			       struct drm_file *file_priv)
+int i915_svm_vm_prefetch(struct drm_i915_private *i915,
+			struct prelim_drm_i915_gem_vm_prefetch *args)
 {
-	struct drm_i915_private *i915 = to_i915(dev);
-	struct prelim_drm_i915_gem_vm_prefetch *args = data;
 	unsigned long addr, end, size = args->length;
 	struct intel_memory_region *mem;
 	struct i915_gem_ww_ctx ww;
@@ -784,7 +784,7 @@ int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
 
 	i915_gem_ww_ctx_init(&ww, true);
 
-	trace_i915_vm_prefetch(i915, args->start, args->length, mem->id);
+	trace_i915_vm_prefetch(i915, 0, args->start, args->length, mem->id);
 retry:
 	for (addr = args->start, end = args->start + size; addr < end;) {
 		struct vm_area_struct *vma;

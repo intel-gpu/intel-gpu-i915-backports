@@ -153,7 +153,7 @@ static int live_nop_switch(void *arg)
 				i915_request_add(this);
 			}
 			GEM_BUG_ON(!rq);
-			if (i915_request_wait(rq, 0, HZ / 5) < 0) {
+			if (i915_request_wait(rq, 0, HZ) < 0) {
 				pr_err("Switching between %ld contexts timed out\n",
 				       prime);
 				intel_gt_set_wedged(to_gt(i915));

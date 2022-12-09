@@ -378,6 +378,11 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		if (ufence_compare(&wake))
 			break;
 
+		if (ctx && i915_gem_context_is_banned(ctx)) {
+			err = -EIO;
+			break;
+		}
+
 		if (!timeout) {
 			err = -ETIME;
 			break;

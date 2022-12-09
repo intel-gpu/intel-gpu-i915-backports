@@ -7,6 +7,7 @@
 
 #include "i915_drv.h"
 #include "i915_irq.h"
+#include "intel_backlight_regs.h"
 #include "intel_cdclk.h"
 #include "intel_combo_phy.h"
 #include "intel_de.h"
@@ -907,12 +908,14 @@ static u32 get_allowed_dc_mask(const struct drm_i915_private *dev_priv,
 	if (!HAS_DISPLAY(dev_priv))
 		return 0;
 
-	if (IS_DG2(dev_priv) || IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
+	if (IS_DG2(dev_priv))
 		max_dc = 1;
 	else if (IS_DG1(dev_priv))
 		max_dc = 3;
 	else if (DISPLAY_VER(dev_priv) >= 12)
 		max_dc = 4;
+	else if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
+		max_dc = 1;
 	else if (DISPLAY_VER(dev_priv) >= 9)
 		max_dc = 2;
 	else
