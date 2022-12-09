@@ -2,8 +2,9 @@
 /* Common header for intel-gtt.ko and i915.ko */
 
 #ifndef __BACKPORT__DRM_INTEL_GTT_H
-#define	__BACKPORT__DRM_INTEL_GTT_H
+#define __BACKPORT__DRM_INTEL_GTT_H
 
+#include <linux/scatterlist.h>
 #include_next <drm/intel-gtt.h>
 
 #ifdef INTEL_GMCH_GTT_RENAMED

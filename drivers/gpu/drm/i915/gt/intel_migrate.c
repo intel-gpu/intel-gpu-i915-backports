@@ -502,7 +502,7 @@ static bool wa_1209644611_applies(int gen, u32 size)
  * {lmem, smem}, objects are treated as non Flat-CCS capable objects.
  */
 
-static inline u32 *i915_flush_dw(u32 *cmd, u32 flags)
+u32 *i915_flush_dw(u32 *cmd, u32 flags)
 {
 	*cmd++ = MI_FLUSH_DW | flags;
 	*cmd++ = 0;
@@ -546,7 +546,7 @@ static int emit_copy_ccs(struct i915_request *rq,
 	*cs++ = XY_CTRL_SURF_COPY_BLT |
 		src_access << SRC_ACCESS_TYPE_SHIFT |
 		dst_access << DST_ACCESS_TYPE_SHIFT |
-		((num_ccs_blks - 1) & CCS_SIZE_MASK) << CCS_SIZE_SHIFT;
+		REG_FIELD_PREP(CCS_SIZE_MASK_XEHP, num_ccs_blks - 1);
 	*cs++ = src_offset;
 	*cs++ = rq->engine->instance |
 		FIELD_PREP(XY_CTRL_SURF_MOCS_MASK, mocs);

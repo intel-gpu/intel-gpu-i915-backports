@@ -139,8 +139,6 @@ struct intel_engine_coredump {
 	u32 ctx_sr_ctl;
 	u32 dma_faddr_hi;
 	u32 dma_faddr_lo;
-	u32 td_att[TD_ATT_MAX];
-	u32 td_ctl; /* can be in power ctx on newer gens */
 	struct intel_instdone instdone;
 
 	/* GuC matched capture-lists info */
@@ -154,6 +152,8 @@ struct intel_engine_coredump {
 		u64 avg_runtime;
 
 		pid_t pid;
+		kuid_t uid;
+		kgid_t gid;
 		int active;
 		int guilty;
 		struct i915_sched_attr sched_attr;
@@ -174,14 +174,6 @@ struct intel_engine_coredump {
 			u32 pp_dir_base;
 		};
 	} vm_info;
-
-	struct {
-		int wait_error;
-		unsigned int max_wait_us;
-		ktime_t signal;
-		ktime_t wait;
-		ktime_t attention;
-	} sip_timing;
 
 	struct intel_engine_coredump *next;
 };
@@ -246,6 +238,15 @@ struct intel_gt_coredump {
 			bool is_guc_capture;
 		} guc;
 	} *uc;
+
+	struct {
+		u32 bitmap_size;
+#define ES_MAX_EUS 1024
+#define ES_MAX_THREADS 8
+		u32 td_ctl; /* can be in power ctx on newer gens */
+		u8 att_before[ES_MAX_EUS * ES_MAX_THREADS / BITS_PER_BYTE];
+		u8 att_after[ES_MAX_EUS * ES_MAX_THREADS / BITS_PER_BYTE];
+	} attentions;
 
 	struct intel_gt_coredump *next;
 };
@@ -319,6 +320,7 @@ static inline int i915_reset_engine_count(const struct intel_engine_cs *engine)
 
 #define CORE_DUMP_FLAG_NONE           0x0
 #define CORE_DUMP_FLAG_IS_GUC_CAPTURE BIT(0)
+
 
 #if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
 
@@ -404,6 +406,11 @@ static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
 	kref_put(&uuid_res->ref, __i915_uuid_free);
 }
 #else
+
+static inline void intel_klog_error_capture(struct intel_gt *gt,
+					    intel_engine_mask_t engine_mask)
+{
+}
 
 __printf(2, 3)
 static inline void

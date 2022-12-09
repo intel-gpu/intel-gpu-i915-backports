@@ -14,7 +14,6 @@
  * @__status: Status of the PF. Don't access directly!
  * @device_vfs: Number of VFs supported by the device.
  * @driver_vfs: Number of VFs supported by the driver.
- * @initial_vf_lmembar: Initial size of resource representing reservation for VF LMEMBAR.
  * @sysfs.home: Home object for all entries in sysfs.
  * @sysfs.kobjs: Array with PF and VFs objects exposed in sysfs.
  */
@@ -22,7 +21,6 @@ struct i915_sriov_pf {
 	int __status;
 	u16 device_vfs;
 	u16 driver_vfs;
-	resource_size_t initial_vf_lmembar;
 	struct {
 		struct i915_sriov_kobj *home;
 		struct i915_sriov_ext_kobj **kobjs;

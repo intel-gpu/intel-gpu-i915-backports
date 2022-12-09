@@ -371,6 +371,7 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 					     struct task_struct *task)
 {
 	struct i915_drm_client_name *name;
+	const struct cred *cred;
 	int len = strlen(task->comm);
 
 	name = kmalloc(struct_size(name, name, len + 1), GFP_KERNEL);
@@ -380,6 +381,10 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 	init_rcu_head(&name->rcu);
 	name->client = client;
 	name->pid = get_task_pid(task, PIDTYPE_PID);
+	cred = get_task_cred(task);
+	name->uid = cred->uid;
+	name->gid = cred->gid;
+	put_cred(cred);
 	memcpy(name->name, task->comm, len + 1);
 
 	return name;

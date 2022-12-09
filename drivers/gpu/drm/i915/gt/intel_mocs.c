@@ -421,7 +421,7 @@ static const struct drm_i915_mocs_entry pvc_mocs_table[] = {
 static const struct drm_i915_mocs_entry mtl_mocs_table[] = {
 	/* Error - Reserved for Non-Use */
 	MOCS_ENTRY(0,
-		   IG_PAT(1),
+		   IG_PAT(0),
 		   L3_LKUP(1) | L3_3_WB),
 	/* Cached - L3 + L4 */
 	MOCS_ENTRY(1,

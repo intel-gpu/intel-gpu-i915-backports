@@ -66,52 +66,6 @@ static struct iov_attr name##_iov_attr = \
 
 /* common attributes */
 
-static ssize_t contexts_quota_iov_attr_show(struct intel_iov *iov,
-					    unsigned int id, char *buf)
-{
-	u16 num_ctxs = intel_iov_provisioning_get_ctxs(iov, id);
-
-	return sysfs_emit(buf, "%hu\n", num_ctxs);
-}
-
-static ssize_t contexts_quota_iov_attr_store(struct intel_iov *iov,
-					     unsigned int id,
-					     const char *buf, size_t count)
-{
-	u16 num_ctxs;
-	int err;
-
-	err = kstrtou16(buf, 0, &num_ctxs);
-	if (err)
-		return err;
-
-	err = intel_iov_provisioning_set_ctxs(iov, id, num_ctxs);
-	return err ?: count;
-}
-
-static ssize_t doorbells_quota_iov_attr_show(struct intel_iov *iov,
-					     unsigned int id, char *buf)
-{
-	u16 num_dbs = intel_iov_provisioning_get_dbs(iov, id);
-
-	return sysfs_emit(buf, "%hu\n", num_dbs);
-}
-
-static ssize_t doorbells_quota_iov_attr_store(struct intel_iov *iov,
-					      unsigned int id,
-					      const char *buf, size_t count)
-{
-	u16 num_dbs;
-	int err;
-
-	err = kstrtou16(buf, 0, &num_dbs);
-	if (err)
-		return err;
-
-	err = intel_iov_provisioning_set_dbs(iov, id, num_dbs);
-	return err ?: count;
-}
-
 static ssize_t exec_quantum_ms_iov_attr_show(struct intel_iov *iov,
 					     unsigned int id, char *buf)
 {
@@ -158,14 +112,10 @@ static ssize_t preempt_timeout_us_iov_attr_store(struct intel_iov *iov,
 	return err ?: count;
 }
 
-IOV_ATTR(contexts_quota);
-IOV_ATTR(doorbells_quota);
 IOV_ATTR(exec_quantum_ms);
 IOV_ATTR(preempt_timeout_us);
 
 static struct attribute *iov_attrs[] = {
-	&contexts_quota_iov_attr.attr,
-	&doorbells_quota_iov_attr.attr,
 	&exec_quantum_ms_iov_attr.attr,
 	&preempt_timeout_us_iov_attr.attr,
 	NULL
@@ -181,6 +131,98 @@ static const struct attribute_group *default_iov_attr_groups[] = {
 };
 
 /* PF only attributes */
+
+static ssize_t ggtt_spare_iov_attr_show(struct intel_iov *iov,
+					unsigned int id, char *buf)
+{
+	GEM_WARN_ON(id);
+	return sysfs_emit(buf, "%llu\n", intel_iov_provisioning_get_spare_ggtt(iov));
+}
+
+static ssize_t ggtt_spare_iov_attr_store(struct intel_iov *iov,
+					 unsigned int id,
+					 const char *buf, size_t count)
+{
+	u64 size;
+	int err;
+
+	err = kstrtou64(buf, 0, &size);
+	if (err)
+		return err;
+
+	GEM_WARN_ON(id);
+	err = intel_iov_provisioning_set_spare_ggtt(iov, size);
+	return err ?: count;
+}
+
+static ssize_t contexts_spare_iov_attr_show(struct intel_iov *iov,
+					    unsigned int id, char *buf)
+{
+	GEM_WARN_ON(id);
+	return sysfs_emit(buf, "%hu\n", intel_iov_provisioning_get_spare_ctxs(iov));
+}
+
+static ssize_t contexts_spare_iov_attr_store(struct intel_iov *iov,
+					     unsigned int id,
+					     const char *buf, size_t count)
+{
+	u16 spare;
+	int err;
+
+	err = kstrtou16(buf, 0, &spare);
+	if (err)
+		return err;
+
+	GEM_WARN_ON(id);
+	err = intel_iov_provisioning_set_spare_ctxs(iov, spare);
+	return err ?: count;
+}
+
+static ssize_t doorbells_spare_iov_attr_show(struct intel_iov *iov,
+					     unsigned int id, char *buf)
+{
+	GEM_WARN_ON(id);
+	return sysfs_emit(buf, "%hu\n", intel_iov_provisioning_get_spare_dbs(iov));
+}
+
+static ssize_t doorbells_spare_iov_attr_store(struct intel_iov *iov,
+					      unsigned int id,
+					      const char *buf, size_t count)
+{
+	u16 spare;
+	int err;
+
+	err = kstrtou16(buf, 0, &spare);
+	if (err)
+		return err;
+
+	GEM_WARN_ON(id);
+	err = intel_iov_provisioning_set_spare_dbs(iov, spare);
+	return err ?: count;
+}
+
+static ssize_t lmem_spare_iov_attr_show(struct intel_iov *iov,
+					unsigned int id, char *buf)
+{
+	GEM_WARN_ON(id);
+	return sysfs_emit(buf, "%llu\n", intel_iov_provisioning_get_spare_lmem(iov));
+}
+
+static ssize_t lmem_spare_iov_attr_store(struct intel_iov *iov,
+					 unsigned int id,
+					 const char *buf, size_t count)
+{
+	u64 size;
+	int err;
+
+	err = kstrtou64(buf, 0, &size);
+	if (err)
+		return err;
+
+	GEM_WARN_ON(id);
+	err = intel_iov_provisioning_set_spare_lmem(iov, size);
+	return err ?: count;
+}
 
 static ssize_t ggtt_free_iov_attr_show(struct intel_iov *iov,
 				       unsigned int id, char *buf)
@@ -305,6 +347,11 @@ static ssize_t sample_period_ms_iov_attr_store(struct intel_iov *iov,
 	return err ?: count;
 }
 
+IOV_ATTR(ggtt_spare);
+IOV_ATTR(contexts_spare);
+IOV_ATTR(doorbells_spare);
+IOV_ATTR(lmem_spare);
+
 IOV_ATTR_RO(ggtt_free);
 IOV_ATTR_RO(ggtt_max_quota);
 IOV_ATTR_RO(contexts_free);
@@ -319,11 +366,27 @@ IOV_ATTR(engine_reset);
 IOV_ATTR(sample_period_ms);
 
 static struct attribute *pf_attrs[] = {
+	&ggtt_spare_iov_attr.attr,
+	&contexts_spare_iov_attr.attr,
+	&doorbells_spare_iov_attr.attr,
+	&lmem_spare_iov_attr.attr,
 	NULL
 };
 
+static umode_t pf_attr_is_visible(struct kobject *kobj,
+				  struct attribute *attr, int index)
+{
+	struct intel_iov *iov = kobj_to_iov(kobj);
+
+	if (attr == &lmem_spare_iov_attr.attr && !HAS_LMEM(iov_to_i915(iov)))
+		return 0;
+
+	return attr->mode;
+}
+
 static const struct attribute_group pf_attr_group = {
 	.attrs = pf_attrs,
+	.is_visible = pf_attr_is_visible,
 };
 
 static struct attribute *pf_available_attrs[] = {
@@ -369,10 +432,13 @@ static const struct attribute_group pf_policies_attr_group = {
 	.attrs = pf_policies_attrs,
 };
 
+static const struct attribute_group pf_deprecated_attr_group;
+
 static const struct attribute_group *pf_attr_groups[] = {
 	&pf_attr_group,
 	&pf_available_attr_group,
 	&pf_policies_attr_group,
+	&pf_deprecated_attr_group,
 	NULL
 };
 
@@ -401,6 +467,58 @@ static ssize_t ggtt_quota_iov_attr_store(struct intel_iov *iov,
 	return err ?: count;
 }
 
+static ssize_t contexts_quota_iov_attr_show(struct intel_iov *iov,
+					    unsigned int id, char *buf)
+{
+	u16 num_ctxs = intel_iov_provisioning_get_ctxs(iov, id);
+
+	return sysfs_emit(buf, "%hu\n", num_ctxs);
+}
+
+static ssize_t contexts_quota_iov_attr_store(struct intel_iov *iov,
+					     unsigned int id,
+					     const char *buf, size_t count)
+{
+	u16 num_ctxs;
+	int err;
+
+	err = kstrtou16(buf, 0, &num_ctxs);
+	if (err)
+		return err;
+
+	err = intel_iov_provisioning_set_ctxs(iov, id, num_ctxs);
+	return err ?: count;
+}
+
+static ssize_t doorbells_quota_iov_attr_show(struct intel_iov *iov,
+					     unsigned int id, char *buf)
+{
+	/* XXX: for PF treat show(quota) as alias to show(free) */
+	if (!id)
+		return doorbells_free_iov_attr_show(iov, id, buf);
+
+	return sysfs_emit(buf, "%hu\n", intel_iov_provisioning_get_dbs(iov, id));
+}
+
+static ssize_t doorbells_quota_iov_attr_store(struct intel_iov *iov,
+					      unsigned int id,
+					      const char *buf, size_t count)
+{
+	u16 num_dbs;
+	int err;
+
+	/* XXX: for PF treat store(quota) as alias to store(spare) */
+	if (!id)
+		return doorbells_spare_iov_attr_store(iov, 0, buf, count);
+
+	err = kstrtou16(buf, 0, &num_dbs);
+	if (err)
+		return err;
+
+	err = intel_iov_provisioning_set_dbs(iov, id, num_dbs);
+	return err ?: count;
+}
+
 static ssize_t lmem_quota_iov_attr_show(struct intel_iov *iov,
 					unsigned int id, char *buf)
 {
@@ -423,10 +541,24 @@ static ssize_t lmem_quota_iov_attr_store(struct intel_iov *iov,
 }
 
 IOV_ATTR(ggtt_quota);
+IOV_ATTR(contexts_quota);
+IOV_ATTR(doorbells_quota);
 IOV_ATTR(lmem_quota);
+
+static struct attribute *pf_deprecated_attrs[] = {
+	&contexts_quota_iov_attr.attr,
+	&doorbells_quota_iov_attr.attr,
+	NULL
+};
+
+static const struct attribute_group pf_deprecated_attr_group = {
+	.attrs = pf_deprecated_attrs,
+};
 
 static struct attribute *vf_attrs[] = {
 	&ggtt_quota_iov_attr.attr,
+	&contexts_quota_iov_attr.attr,
+	&doorbells_quota_iov_attr.attr,
 	&lmem_quota_iov_attr.attr,
 	NULL
 };

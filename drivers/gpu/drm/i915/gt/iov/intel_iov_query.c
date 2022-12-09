@@ -101,6 +101,18 @@ static int vf_handshake_with_guc(struct intel_iov *iov)
 	if (unlikely(err))
 		goto fail;
 
+	/* XXX we don't support interface version change */
+	if ((iov->vf.config.guc_abi.major || iov->vf.config.guc_abi.major) &&
+	    (iov->vf.config.guc_abi.branch != branch ||
+	     iov->vf.config.guc_abi.major != major ||
+	     iov->vf.config.guc_abi.minor != minor)) {
+		IOV_ERROR(iov, "Unexpected interface version change: %u.%u.%u.%u != %u.%u.%u.%u\n",
+			  branch, major, minor, patch,
+			  iov->vf.config.guc_abi.branch, iov->vf.config.guc_abi.major,
+			  iov->vf.config.guc_abi.minor, iov->vf.config.guc_abi.patch);
+		return -EREMCHG;
+	}
+
 	/* XXX we only support one version, there must be a match */
 	if (major != GUC_VF_VERSION_LATEST_MAJOR || minor != GUC_VF_VERSION_LATEST_MINOR)
 		goto fail;
@@ -109,7 +121,10 @@ static int vf_handshake_with_guc(struct intel_iov *iov)
 		 intel_uc_fw_type_repr(guc->fw.type),
 		 branch, major, minor, patch);
 
-	intel_uc_fw_set_preloaded(&guc->fw, major, minor);
+	iov->vf.config.guc_abi.branch = branch;
+	iov->vf.config.guc_abi.major = major;
+	iov->vf.config.guc_abi.minor = minor;
+	iov->vf.config.guc_abi.patch = patch;
 	return 0;
 
 fail:
@@ -232,6 +247,11 @@ static int vf_get_tiles(struct intel_iov *iov)
 	err = guc_action_query_single_klv32(guc, GUC_KLV_VF_CFG_TILE_MASK_KEY, &tile_mask);
 	if (unlikely(err))
 		return err;
+
+	if (!tile_mask) {
+		IOV_ERROR(iov, "Invalid GT assignment: %#x\n", tile_mask);
+		return -ENODATA;
+	}
 
 	IOV_DEBUG(iov, "tile mask %#x\n", tile_mask);
 

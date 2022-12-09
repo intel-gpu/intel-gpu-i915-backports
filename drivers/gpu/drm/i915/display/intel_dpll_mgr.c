@@ -708,8 +708,6 @@ struct hsw_wrpll_rnp {
 
 static unsigned hsw_wrpll_get_budget_for_freq(int clock)
 {
-	unsigned budget;
-
 	switch (clock) {
 	case 25175000:
 	case 25200000:
@@ -742,21 +740,18 @@ static unsigned hsw_wrpll_get_budget_for_freq(int clock)
 	case 222750000:
 	case 296703000:
 	case 297000000:
-		budget = 0;
-		break;
+		return 0;
 	case 233500000:
 	case 245250000:
 	case 247750000:
 	case 253250000:
 	case 298000000:
-		budget = 1500;
-		break;
+		return 1500;
 	case 169128000:
 	case 169500000:
 	case 179500000:
 	case 202000000:
-		budget = 2000;
-		break;
+		return 2000;
 	case 256250000:
 	case 262500000:
 	case 270000000:
@@ -766,18 +761,13 @@ static unsigned hsw_wrpll_get_budget_for_freq(int clock)
 	case 281250000:
 	case 286000000:
 	case 291750000:
-		budget = 4000;
-		break;
+		return 4000;
 	case 267250000:
 	case 268500000:
-		budget = 5000;
-		break;
+		return 5000;
 	default:
-		budget = 1000;
-		break;
+		return 1000;
 	}
-
-	return budget;
 }
 
 static void hsw_wrpll_update_rnp(u64 freq2k, unsigned int budget,
@@ -4448,4 +4438,92 @@ void intel_dpll_dump_hw_state(struct drm_i915_private *dev_priv,
 			    hw_state->fp0,
 			    hw_state->fp1);
 	}
+}
+
+static void
+verify_single_dpll_state(struct drm_i915_private *dev_priv,
+			 struct intel_shared_dpll *pll,
+			 struct intel_crtc *crtc,
+			 struct intel_crtc_state *new_crtc_state)
+{
+	struct intel_dpll_hw_state dpll_hw_state;
+	u8 pipe_mask;
+	bool active;
+
+	memset(&dpll_hw_state, 0, sizeof(dpll_hw_state));
+
+	drm_dbg_kms(&dev_priv->drm, "%s\n", pll->info->name);
+
+	active = intel_dpll_get_hw_state(dev_priv, pll, &dpll_hw_state);
+
+	if (!(pll->info->flags & INTEL_DPLL_ALWAYS_ON)) {
+		I915_STATE_WARN(!pll->on && pll->active_mask,
+				"pll in active use but not on in sw tracking\n");
+		I915_STATE_WARN(pll->on && !pll->active_mask,
+				"pll is on but not used by any active pipe\n");
+		I915_STATE_WARN(pll->on != active,
+				"pll on state mismatch (expected %i, found %i)\n",
+				pll->on, active);
+	}
+
+	if (!crtc) {
+		I915_STATE_WARN(pll->active_mask & ~pll->state.pipe_mask,
+				"more active pll users than references: 0x%x vs 0x%x\n",
+				pll->active_mask, pll->state.pipe_mask);
+
+		return;
+	}
+
+	pipe_mask = BIT(crtc->pipe);
+
+	if (new_crtc_state->hw.active)
+		I915_STATE_WARN(!(pll->active_mask & pipe_mask),
+				"pll active mismatch (expected pipe %c in active mask 0x%x)\n",
+				pipe_name(crtc->pipe), pll->active_mask);
+	else
+		I915_STATE_WARN(pll->active_mask & pipe_mask,
+				"pll active mismatch (didn't expect pipe %c in active mask 0x%x)\n",
+				pipe_name(crtc->pipe), pll->active_mask);
+
+	I915_STATE_WARN(!(pll->state.pipe_mask & pipe_mask),
+			"pll enabled crtcs mismatch (expected 0x%x in 0x%x)\n",
+			pipe_mask, pll->state.pipe_mask);
+
+	I915_STATE_WARN(pll->on && memcmp(&pll->state.hw_state,
+					  &dpll_hw_state,
+					  sizeof(dpll_hw_state)),
+			"pll hw state mismatch\n");
+}
+
+void intel_shared_dpll_state_verify(struct intel_crtc *crtc,
+				    struct intel_crtc_state *old_crtc_state,
+				    struct intel_crtc_state *new_crtc_state)
+{
+	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
+
+	if (new_crtc_state->shared_dpll)
+		verify_single_dpll_state(dev_priv, new_crtc_state->shared_dpll,
+					 crtc, new_crtc_state);
+
+	if (old_crtc_state->shared_dpll &&
+	    old_crtc_state->shared_dpll != new_crtc_state->shared_dpll) {
+		u8 pipe_mask = BIT(crtc->pipe);
+		struct intel_shared_dpll *pll = old_crtc_state->shared_dpll;
+
+		I915_STATE_WARN(pll->active_mask & pipe_mask,
+				"pll active mismatch (didn't expect pipe %c in active mask (0x%x))\n",
+				pipe_name(crtc->pipe), pll->active_mask);
+		I915_STATE_WARN(pll->state.pipe_mask & pipe_mask,
+				"pll enabled crtcs mismatch (found %x in enabled mask (0x%x))\n",
+				pipe_name(crtc->pipe), pll->state.pipe_mask);
+	}
+}
+
+void intel_shared_dpll_verify_disabled(struct drm_i915_private *i915)
+{
+	int i;
+
+	for (i = 0; i < i915->dpll.num_shared_dpll; i++)
+		verify_single_dpll_state(i915, &i915->dpll.shared_dplls[i],
+					 NULL, NULL);
 }

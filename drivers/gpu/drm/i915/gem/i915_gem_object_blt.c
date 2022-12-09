@@ -11,79 +11,82 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"
 #include "gt/intel_gt_compression_formats.h"
+#include "gt/intel_migrate.h"
 #include "gt/intel_ring.h"
 #include "i915_gem_clflush.h"
 #include "i915_gem_object_blt.h"
 
-static size_t calc_ccs_size(struct drm_i915_private *i915,
-			    struct drm_i915_gem_object *obj)
-{
-	/*
-	 * We only calculate space for CCS for objects resident in Local
-	 * Memory only
-	 *
-	 * The CCS size is (1/256)th the size of the object
-	 */
-	if (HAS_FLAT_CCS(i915))
-		return obj->base.size >> 8;
+/*
+ * Determine how many blocks of CCS data correspond to a given amount of
+ * main buffer data.
+ */
+static int num_ccs_blocks(size_t size) {
+	size_t ccs_size = DIV_ROUND_UP(size, NUM_BYTES_PER_CCS_BYTE);
 
-	return 0;
+	return DIV_ROUND_UP(ccs_size, NUM_CCS_BYTES_PER_BLOCK);
 }
 
-static phys_addr_t calc_ctrl_surf_instr_size(struct drm_i915_private *i915,
-					     struct i915_vma *src)
+/*
+ * Determine how many XY_CTRL_SURF_COPY_BLT instructions must be emitted to
+ * copy all of the FlatCCS data (each instruction can only copy a maximum
+ * of 1024 blocks of data).
+ */
+static int num_ctrl_surf_copies(struct drm_i915_private *i915,
+				struct drm_i915_gem_object *obj)
 {
-	phys_addr_t total_size, ccs_size;
-	int num_cmds, num_blks;
-
-	/* CCS size is (1/256)th the object size */
-	ccs_size = calc_ccs_size(i915, src->obj);
-	if (!ccs_size)
+	if (!HAS_FLAT_CCS(i915))
 		return 0;
 
-	/*
-	 * XY_CTRL_SURF_COPY_BLT transfers CCS in 256 byte
-	 * blocks.
-	 */
-	num_blks = (ccs_size + (NUM_CCS_BYTES_PER_BLOCK - 1)) >> 8;
+	return DIV_ROUND_UP(num_ccs_blocks(obj->base.size),
+			    NUM_CCS_BLKS_PER_XFER);
+}
+
+phys_addr_t i915_calc_ctrl_surf_instr_dwords(struct drm_i915_private *i915,
+					     struct i915_vma *src)
+{
+	phys_addr_t total_size;
+
+	if (!HAS_FLAT_CCS(i915))
+		return 0;
+
+	/* Each XY_CTRL_SURF_COPY_BLT command is 5 dwords in size. */
+	total_size = XY_CTRL_SURF_INSTR_SIZE * num_ctrl_surf_copies(i915, src->obj);
 
 	/*
-	 * 1 XY_CTRL_SURF_COPY_BLT command can trnasfer upto
-	 * 1024 such 256 byte blocks.
+	 * We will also need to add MI_FLUSH_DW instructions before and after
+	 * the group of XY_CTRL_SURF_COPY_BLT commands for compatibility with
+	 * legacy commands.
 	 */
-	num_cmds = (num_blks + (NUM_CCS_BLKS_PER_XFER - 1)) >> 10;
-
-	/*
-	 * Each XY_CTRL_SURF_COPY_BLT command is 20 bytes in
-	 * size.
-	 */
-	total_size = (XY_CTRL_SURF_INSTR_SIZE * sizeof(u32)) * num_cmds;
-
-	/*
-	 * We will also need to add a MI_FLUSH_DW before all the
-	 * XY_CTRL_SURF_COPY_BLT commands for compatibility with
-	 * legacy commands
-	 */
-	total_size += 2 * (MI_FLUSH_DW_SIZE * sizeof(u32));
+	total_size += 2 * MI_FLUSH_DW_SIZE;
 
 	/*
 	 * Wa_1409498409: xehpsdv
-	 * Account for the extra flush in intel_emit_vma_fill_blt()
+	 * Account for the extra flush in xehp_emit_ccs_copy()
 	 */
 	if (IS_XEHPSDV(i915))
 		total_size += MI_FLUSH_DW_SIZE;
 
-	return total_size;
+	/* Final emission is always qword-aligned */
+	return round_up(total_size, 2);
 }
 
-static u32 *_i915_ctrl_surf_copy_blt(u32 *cmd, u64 src_addr, u64 dst_addr,
-				     u8 src_mem_access, u8 dst_mem_access,
-				     int src_mocs, int dst_mocs,
-				     u16 num_ccs_blocks)
+/* Emit instructions to copy CCS data corresponding to src/dst surfaces */
+u32 *xehp_emit_ccs_copy(u32 *cmd, struct intel_gt *gt,
+			u64 src_addr, int src_mem_access,
+			u64 dst_addr, int dst_mem_access,
+			size_t size)
 {
-	u32 src_mocs_field = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, src_mocs);
-	u32 dst_mocs_field = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK, dst_mocs);
-	int i = num_ccs_blocks;
+	u32 mocs = REG_FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK_XEHP,
+				  gt->mocs.uc_index);
+	u32 *origcmd = cmd;
+
+	/* Wa_1409498409: xehpsdv */
+	if (IS_XEHPSDV(gt->i915)) {
+		cmd = i915_flush_dw(cmd, MI_FLUSH_DW_LLC);
+		cmd = i915_flush_dw(cmd, MI_FLUSH_DW_CCS);
+	} else {
+		cmd = i915_flush_dw(cmd, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
+	}
 
 	/*
 	 * The XY_CTRL_SURF_COPY_BLT instruction is used to copy the CCS
@@ -103,24 +106,30 @@ static u32 *_i915_ctrl_surf_copy_blt(u32 *cmd, u64 src_addr, u64 dst_addr,
 	 * So, after every iteration, we advance the src and dst
 	 * addresses by 64 MB
 	 */
-	do {
-		/*
-		 * We use logical AND with 1023 since the size field
-		 * takes values which is in the range of 0 - 1023
-		 */
-		*cmd++ = ((XY_CTRL_SURF_COPY_BLT) |
-			  (src_mem_access << SRC_ACCESS_TYPE_SHIFT) |
-			  (dst_mem_access << DST_ACCESS_TYPE_SHIFT) |
-			  (((i - 1) & 1023) << CCS_SIZE_SHIFT));
+	while (size) {
+		int inst_blocks = min(num_ccs_blocks(size), NUM_CCS_BLKS_PER_XFER);
+
+		*cmd++ = XY_CTRL_SURF_COPY_BLT |
+			(src_mem_access << SRC_ACCESS_TYPE_SHIFT) |
+			(dst_mem_access << DST_ACCESS_TYPE_SHIFT) |
+			REG_FIELD_PREP(CCS_SIZE_MASK_XEHP, inst_blocks - 1);
+
 		*cmd++ = lower_32_bits(src_addr);
-		*cmd++ = ((upper_32_bits(src_addr) & 0xFFFF) | src_mocs_field);
+		*cmd++ = upper_32_bits(src_addr) | mocs;
 		*cmd++ = lower_32_bits(dst_addr);
-		*cmd++ = ((upper_32_bits(dst_addr) & 0xFFFF) | dst_mocs_field);
+		*cmd++ = upper_32_bits(dst_addr) | mocs;
 
 		src_addr += SZ_64M;
 		dst_addr += SZ_64M;
-		i -= NUM_CCS_BLKS_PER_XFER;
-	} while (i > 0);
+		size -= inst_blocks * NUM_CCS_BYTES_PER_BLOCK *
+			NUM_BYTES_PER_CCS_BYTE;
+	}
+
+	cmd = i915_flush_dw(cmd, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
+
+	/* Ensure command sequence is qword-aligned */
+	if ((cmd - origcmd) % 2)
+		*cmd++ = MI_NOOP;
 
 	return cmd;
 }
@@ -135,13 +144,11 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	u32 block_size, stateless_comp = 0;
 	struct intel_gt_buffer_pool_node *pool;
 	struct i915_vma *batch;
-	size_t ccs_size = calc_ccs_size(i915, vma->obj);
 	u64 offset;
 	u64 count;
 	u64 rem;
 	u64 size;
 	u32 *cmd;
-	u16 num_ccs_blks = (ccs_size + NUM_CCS_BYTES_PER_BLOCK - 1) >> 8;
 	int err;
 
 	GEM_BUG_ON(HAS_LINK_COPY_ENGINES(i915) && value > 255);
@@ -184,7 +191,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * object.
 	 */
 	if (!value && !stateless_comp)
-		size += calc_ctrl_surf_instr_size(i915, vma);
+		size += i915_calc_ctrl_surf_instr_dwords(i915, vma) * sizeof(u32);
 
 	size = round_up(size, PAGE_SIZE);
 
@@ -308,30 +315,11 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * We only update the CCS if the BO is located in LMEM only and
 	 * the value to be filled in the BO is all zeroes
 	 */
-	if (HAS_FLAT_CCS(i915) && !value && !stateless_comp) {
-		/* Wa_1409498409: xehpsdv */
-		if (IS_XEHPSDV(i915)) {
-			cmd = i915_flush_dw(cmd, vma, MI_FLUSH_LLC);
-			cmd = i915_flush_dw(cmd, vma, MI_FLUSH_CCS);
-		} else {
-			cmd = i915_flush_dw(cmd, vma,
-					     MI_FLUSH_LLC | MI_FLUSH_CCS);
-		}
-
-		/*
-		 * The src and dst addresses are same here since we will
-		 * copy the zeroed out pages to the CCS of themselves in
-		 * order to clear the CCS associated with the pages
-		 */
-		cmd = _i915_ctrl_surf_copy_blt(cmd,
-					       i915_vma_offset(vma),
-					       i915_vma_offset(vma),
-					       DIRECT_ACCESS, INDIRECT_ACCESS,
-					       gt->mocs.uc_index,
-					       gt->mocs.uc_index,
-					       num_ccs_blks);
-		cmd = i915_flush_dw(cmd, vma, MI_FLUSH_LLC | MI_FLUSH_CCS);
-	}
+	if (HAS_FLAT_CCS(i915) && !value && !stateless_comp)
+		cmd = xehp_emit_ccs_copy(cmd, ce->engine->gt,
+					 i915_vma_offset(vma), DIRECT_ACCESS,
+					 i915_vma_offset(vma), INDIRECT_ACCESS,
+					 vma->obj->base.size);
 
 	*cmd = MI_BATCH_BUFFER_END;
 
@@ -638,11 +626,7 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 		} else if (GRAPHICS_VER(i915) >= 9 &&
 			   !wa_1209644611_applies(i915, size)) {
 			*cmd++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
-			*cmd = BLT_DEPTH_32 | PAGE_SIZE;
-			/* Wa_14010828422:xehpsdv */
-			if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-				*cmd |= BLT_SRCMEM_SYS;
-			cmd++;
+			*cmd++ = BLT_DEPTH_32 | PAGE_SIZE;
 			*cmd++ = 0;
 			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
 			*cmd++ = lower_32_bits(dst_offset);
@@ -800,8 +784,8 @@ prepare_compressed_copy_cmd_buf(struct intel_context *ce,
 
 		*cmd++ = 0;
 		*cmd++ = 0;
-		cmd = i915_flush_dw(cmd, dst, MI_FLUSH_LLC|MI_INVALIDATE_TLB);
-		cmd = i915_flush_dw(cmd, dst, MI_FLUSH_CCS);
+		cmd = i915_flush_dw(cmd, MI_FLUSH_DW_LLC | MI_INVALIDATE_TLB);
+		cmd = i915_flush_dw(cmd, MI_FLUSH_DW_CCS);
 		*cmd++ = MI_ARB_CHECK;
 
 		src_offset += block_size;

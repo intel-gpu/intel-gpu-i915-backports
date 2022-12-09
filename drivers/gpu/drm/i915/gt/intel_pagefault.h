@@ -62,7 +62,7 @@ const char *intel_pagefault_type2str(unsigned int type);
 
 const char *intel_access_type2str(unsigned int type);
 
-int intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, const u32 *msg, u32 len);
+void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_id);
 int intel_gt_pagefault_process_page_fault_msg(struct intel_gt *gt, const u32 *msg, u32 len);
 int intel_pagefault_req_process_msg(struct intel_guc *guc, const u32 *payload,
 				    u32 len);

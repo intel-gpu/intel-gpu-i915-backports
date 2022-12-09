@@ -1023,11 +1023,12 @@ TRACE_EVENT(intel_access_counter,
 );
 
 TRACE_EVENT(i915_vm_prefetch,
-	    TP_PROTO(struct drm_i915_private *i915, u64 start, u64 len, enum intel_region_id region),
-	    TP_ARGS(i915, start, len, region),
+	    TP_PROTO(struct drm_i915_private *i915, u32 vm_id, u64 start, u64 len, enum intel_region_id region),
+	    TP_ARGS(i915, vm_id, start, len, region),
 
 	    TP_STRUCT__entry(
 			     __field(struct drm_i915_private*, dev)
+			     __field(u32, vm_id)
 			     __field(u64, start)
 			     __field(u64, len)
 			     __field(enum intel_region_id, region)
@@ -1035,15 +1036,16 @@ TRACE_EVENT(i915_vm_prefetch,
 
 	    TP_fast_assign(
 			   __entry->dev = i915;
+			   __entry->vm_id = vm_id;
 			   __entry->start = start;
 			   __entry->len = len;
 			   __entry->region = region;
 			   ),
 
-	    TP_printk("dev %p prefetch va start %llx (len %llx) to region %s",
+	    TP_printk("dev %p prefetch va start %llx (len %llx) to region %s for vm %d",
 		      __entry->dev,
 		      __entry->start, __entry->len,
-		      intel_memory_region_id2str(__entry->region))
+		      intel_memory_region_id2str(__entry->region), __entry->vm_id)
 );
 #endif /* _I915_TRACE_H_ */
 

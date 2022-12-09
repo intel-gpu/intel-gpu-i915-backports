@@ -31,16 +31,22 @@ int intel_iov_provisioning_push(struct intel_iov *iov, unsigned int num);
 
 int intel_iov_provisioning_set_ggtt(struct intel_iov *iov, unsigned int id, u64 size);
 u64 intel_iov_provisioning_get_ggtt(struct intel_iov *iov, unsigned int id);
+int intel_iov_provisioning_set_spare_ggtt(struct intel_iov *iov, u64 size);
+u64 intel_iov_provisioning_get_spare_ggtt(struct intel_iov *iov);
 u64 intel_iov_provisioning_query_free_ggtt(struct intel_iov *iov);
 u64 intel_iov_provisioning_query_max_ggtt(struct intel_iov *iov);
 
 int intel_iov_provisioning_set_ctxs(struct intel_iov *iov, unsigned int id, u16 num_ctxs);
 u16 intel_iov_provisioning_get_ctxs(struct intel_iov *iov, unsigned int id);
+int intel_iov_provisioning_set_spare_ctxs(struct intel_iov *iov, u16 spare);
+u16 intel_iov_provisioning_get_spare_ctxs(struct intel_iov *iov);
 u16 intel_iov_provisioning_query_max_ctxs(struct intel_iov *iov);
 u16 intel_iov_provisioning_query_free_ctxs(struct intel_iov *iov);
 
 int intel_iov_provisioning_set_dbs(struct intel_iov *iov, unsigned int id, u16 num_dbs);
 u16 intel_iov_provisioning_get_dbs(struct intel_iov *iov, unsigned int id);
+int intel_iov_provisioning_set_spare_dbs(struct intel_iov *iov, u16 spare);
+u16 intel_iov_provisioning_get_spare_dbs(struct intel_iov *iov);
 u16 intel_iov_provisioning_query_free_dbs(struct intel_iov *iov);
 u16 intel_iov_provisioning_query_max_dbs(struct intel_iov *iov);
 
@@ -52,6 +58,8 @@ u32 intel_iov_provisioning_get_preempt_timeout(struct intel_iov *iov, unsigned i
 
 int intel_iov_provisioning_set_lmem(struct intel_iov *iov, unsigned int id, u64 size);
 u64 intel_iov_provisioning_get_lmem(struct intel_iov *iov, unsigned int id);
+int intel_iov_provisioning_set_spare_lmem(struct intel_iov *iov, u64 size);
+u64 intel_iov_provisioning_get_spare_lmem(struct intel_iov *iov);
 u64 intel_iov_provisioning_query_free_lmem(struct intel_iov *iov);
 u64 intel_iov_provisioning_query_max_lmem(struct intel_iov *iov);
 
@@ -65,6 +73,8 @@ int intel_iov_provisioning_clear(struct intel_iov *iov, unsigned int id);
 int intel_iov_provisioning_print_ggtt(struct intel_iov *iov, struct drm_printer *p);
 int intel_iov_provisioning_print_ctxs(struct intel_iov *iov, struct drm_printer *p);
 int intel_iov_provisioning_print_dbs(struct intel_iov *iov, struct drm_printer *p);
+
+int intel_iov_provisioning_print_available_ggtt(struct intel_iov *iov, struct drm_printer *p);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_IOV)
 int intel_iov_provisioning_move_ggtt(struct intel_iov *iov, unsigned int id);

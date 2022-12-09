@@ -49,4 +49,6 @@ void intel_lmtt_fini(struct intel_lmtt *lmtt);
 void intel_lmtt_init_hw(struct intel_lmtt *lmtt);
 int intel_lmtt_update_entries(struct intel_lmtt *lmtt, unsigned int vf);
 
+resource_size_t intel_lmtt_estimate_pt_size(struct intel_lmtt *lmtt, u64 size);
+
 #endif

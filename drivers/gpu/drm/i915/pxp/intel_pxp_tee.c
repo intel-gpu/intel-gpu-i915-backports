@@ -126,6 +126,7 @@ int intel_pxp_gsc_fw_message(struct intel_pxp *pxp,
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_gsc_mtl_header *header = pxp->stream_cmd.vaddr;
 	const size_t max_msg_size = PAGE_SIZE - sizeof(*header);
+	void *payload = pxp->stream_cmd.vaddr + sizeof(*header);
 	u64 addr;
 	u32 reply_size;
 	int ret;
@@ -147,7 +148,7 @@ int intel_pxp_gsc_fw_message(struct intel_pxp *pxp,
 	header->header_version = MTL_GSC_HEADER_VERSION;
 	header->message_size = msg_in_len + sizeof(*header);
 
-	memcpy(pxp->stream_cmd.vaddr + sizeof(*header), msg_in, msg_in_len);
+	memcpy(payload, msg_in, msg_in_len);
 
 	ret = intel_gsc_fw_heci_send(&gt->uc.gsc, addr, header->message_size,
 				     addr, msg_out_len + sizeof(*header));
@@ -162,7 +163,7 @@ int intel_pxp_gsc_fw_message(struct intel_pxp *pxp,
 		drm_err(&i915->drm, "unexpected PXP reply size %u (%u)\n",
 			reply_size, (u32)msg_out_len);
 
-	memcpy(msg_out, pxp->stream_cmd.vaddr, msg_out_len);
+	memcpy(msg_out, payload, msg_out_len);
 
 unlock:
 	mutex_unlock(&pxp->tee_mutex);
@@ -356,11 +357,10 @@ void intel_pxp_tee_component_fini(struct intel_pxp *pxp)
 {
 	struct drm_i915_private *i915 = pxp_to_gt(pxp)->i915;
 
-	if (!pxp->pxp_component_added)
-		return;
-
-	component_del(i915->drm.dev, &i915_pxp_tee_component_ops);
-	pxp->pxp_component_added = false;
+	if (pxp->pxp_component_added) {
+		component_del(i915->drm.dev, &i915_pxp_tee_component_ops);
+		pxp->pxp_component_added = false;
+	}
 
 	free_streaming_command(pxp);
 }
@@ -386,6 +386,9 @@ int intel_pxp_tee_cmd_create_arb_session(struct intel_pxp *pxp,
 
 	if (ret)
 		drm_err(&i915->drm, "Failed to send tee msg ret=[%d]\n", ret);
+	else if (msg_out.header.status != 0x0)
+		drm_warn(&i915->drm, "PXP firmware failed arb session init request ret=[0x%08x]\n",
+			 msg_out.header.status);
 
 	return ret;
 }

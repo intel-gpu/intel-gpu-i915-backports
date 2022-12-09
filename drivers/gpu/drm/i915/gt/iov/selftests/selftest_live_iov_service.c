@@ -7,8 +7,7 @@
 #include "gt/iov/abi/iov_version_abi.h"
 #include "gt/iov/intel_iov_provisioning.h"
 
-static int handshake(struct intel_iov *iov, u32 major, u32 minor,
-		     u32 major_expect, u32 minor_expect, bool ignore_vers_match)
+static int handshake(struct intel_iov *iov, u32 major, u32 minor, bool ignore_vers_match)
 {
 	u32 request[VF2PF_HANDSHAKE_REQUEST_MSG_LEN] = {
 		FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_HOST) |
@@ -21,42 +20,47 @@ static int handshake(struct intel_iov *iov, u32 major, u32 minor,
 	u32 major_resp, minor_resp;
 	int ret = 0;
 
-	IOV_DEBUG(iov, "try handshaking %u.%u => %u.%u\n", major, minor, major_expect,
-		  minor_expect);
+	IOV_DEBUG(iov, "try handshaking %u.%u\n", major, minor);
 
 	ret = intel_iov_relay_send_to_pf(&iov->relay, request, ARRAY_SIZE(request), response,
 					 ARRAY_SIZE(response));
 	if (ret < 0) {
-		IOV_SELFTEST_ERROR(iov, "%s %u.%u failed (%pe)", __func__, major, minor,
+		IOV_SELFTEST_ERROR(iov, "Handshake %u.%u failed (%pe)", major, minor,
 				   ERR_PTR(ret));
 		goto out;
 	}
 
 	if (ret != VF2PF_HANDSHAKE_RESPONSE_MSG_LEN) {
-		IOV_SELFTEST_ERROR(iov, "%s %u.%u unexpected reply msg len (%d != %u)", __func__,
+		IOV_SELFTEST_ERROR(iov, "Handshake %u.%u unexpected reply msg len (%d != %u)",
 				   major, minor, ret, VF2PF_HANDSHAKE_RESPONSE_MSG_LEN);
 		ret = -EPROTO;
 		goto out;
 	}
 
 	if (FIELD_GET(VF2PF_HANDSHAKE_RESPONSE_MSG_0_MBZ, response[0])) {
-		IOV_SELFTEST_ERROR(iov, "%s %u.%u unexpected reply data (%u != 0)", __func__,
-				   major, minor, FIELD_GET(VF2PF_HANDSHAKE_RESPONSE_MSG_0_MBZ,
+		IOV_SELFTEST_ERROR(iov, "Handshake %u.%u unexpected reply data (%u != 0)", major,
+				   minor, FIELD_GET(VF2PF_HANDSHAKE_RESPONSE_MSG_0_MBZ,
 				   response[0]));
 		ret = -EPROTO;
 		goto out;
 	}
 
 	if (ignore_vers_match)
-		return VF2PF_HANDSHAKE_RESPONSE_MSG_LEN;
+		return 0;
 
 	major_resp = FIELD_GET(VF2PF_HANDSHAKE_RESPONSE_MSG_1_MAJOR, response[1]);
 	minor_resp = FIELD_GET(VF2PF_HANDSHAKE_RESPONSE_MSG_1_MINOR, response[1]);
 
-	if (major != major_expect && minor != minor_expect) {
-		IOV_SELFTEST_ERROR(iov, "%s %u.%u unexpected reply version (%u.%u != %u.%u)",
-				   __func__, major, minor, major_resp, minor_resp,
-				   major_expect, minor_expect);
+	if (major_resp > major) {
+		IOV_SELFTEST_ERROR(iov, "Handshake %u.%u unexpected version: %u.%u",
+				   major, minor, major_resp, minor_resp);
+		ret = -ERANGE;
+		goto out;
+	}
+
+	if (major_resp == major && minor_resp > minor) {
+		IOV_SELFTEST_ERROR(iov, "Handshake %u.%u unexpected version: %u.%u",
+				   major, minor, major_resp, minor_resp);
 		ret = -ERANGE;
 		goto out;
 	}
@@ -72,7 +76,7 @@ static int pf_loopback_handshake_baseline(void *arg)
 	iov->relay.selftest.disable_strict = 1;
 	iov->relay.selftest.enable_loopback = 1;
 
-	ret = handshake(iov, 1, 0, 1, 0, false);
+	ret = handshake(iov, 1, 0, false);
 
 	iov->relay.selftest.disable_strict = 0;
 	iov->relay.selftest.enable_loopback = 0;
@@ -88,8 +92,7 @@ static int pf_loopback_handshake_latest(void *arg)
 	iov->relay.selftest.disable_strict = 1;
 	iov->relay.selftest.enable_loopback = 1;
 
-	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR,
-			IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR, false);
+	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR, false);
 
 	iov->relay.selftest.disable_strict = 0;
 	iov->relay.selftest.enable_loopback = 0;
@@ -102,7 +105,7 @@ static int vf_handshake_query(void *arg)
 	struct intel_iov *iov = arg;
 	int ret;
 
-	ret = handshake(iov, 0, 0, IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR, true);
+	ret = handshake(iov, 0, 0, true);
 
 	return ret;
 }
@@ -112,13 +115,7 @@ static int vf_handshake_fallback_minor(void *arg)
 	struct intel_iov *iov = arg;
 	int ret;
 
-	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR + 1,
-			IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR, false);
-
-	if (!ret) {
-		IOV_SELFTEST_ERROR(iov, "handshake failed %pe\n", ERR_PTR(ret));
-		return -ENODATA;
-	}
+	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR + 1, false);
 
 	return ret;
 }
@@ -128,13 +125,7 @@ static int vf_handshake_fallback_major_minor(void *arg)
 	struct intel_iov *iov = arg;
 	int ret;
 
-	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR + 1, IOV_VERSION_LATEST_MINOR + 1,
-			IOV_VERSION_LATEST_MAJOR, IOV_VERSION_LATEST_MINOR, false);
-
-	if (!ret) {
-		IOV_SELFTEST_ERROR(iov, "handshake failed %pe\n", ERR_PTR(ret));
-		return -ENODATA;
-	}
+	ret = handshake(iov, IOV_VERSION_LATEST_MAJOR + 1, IOV_VERSION_LATEST_MINOR + 1, false);
 
 	return ret;
 }
