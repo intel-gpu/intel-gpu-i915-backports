@@ -31,46 +31,7 @@
 
 #include_next <linux/mm.h>
 
-#define FOLL_REMOTE     0x2000  /* we are working on non-current tsk/mm */
-extern void *kvmalloc_node(size_t size, gfp_t flags, int node);
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0))
-#if RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(7,5)
-static inline void *kvmalloc(size_t size, gfp_t flags)
-{
-        return kvmalloc_node(size, flags, NUMA_NO_NODE);
-}
-static inline void *kvzalloc_node(size_t size, gfp_t flags, int node)
-{
-        return kvmalloc_node(size, flags | __GFP_ZERO, node);
-}
-static inline void *kvzalloc(size_t size, gfp_t flags)
-{
-        return kvmalloc(size, flags | __GFP_ZERO);
-}
-
-static inline void *kvmalloc_array(size_t n, size_t size, gfp_t flags)
-{
-        if (size != 0 && n > SIZE_MAX / size)
-                return NULL;
-
-        return kvmalloc(n * size, flags);
-}
-#endif
-
-static inline void mmgrab(struct mm_struct *mm)
-{
-        atomic_inc(&mm->mm_count);
-}
-
-#if RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(7,5)
-long get_user_pages_remote(struct task_struct *tsk, struct mm_struct *mm,
-                            unsigned long start, unsigned long nr_pages,
-                            unsigned int gup_flags, struct page **pages,
-                            struct vm_area_struct **vmas, int *locked);
-#endif
-#endif /* (LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0))*/
-
-#if LINUX_VERSION_IS_LESS(5,10,0)
+#ifdef BPM_VMA_SET_FILE_NOT_PRESENT
 #define vma_set_file LINUX_DMABUF_BACKPORT(vma_set_file)
 void vma_set_file(struct vm_area_struct *vma, struct file *file);
 #endif

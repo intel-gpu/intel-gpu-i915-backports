@@ -1481,7 +1481,11 @@ static inline void dma_buf_uninit_debugfs(void)
 }
 #endif
 
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 int __init dma_buf_init(void)
+#else
+static int __init dma_buf_init(void)
+#endif
 {
 	int ret;
 
@@ -1498,10 +1502,20 @@ int __init dma_buf_init(void)
 	dma_buf_init_debugfs();
 	return 0;
 }
+#ifndef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+subsys_initcall(dma_buf_init);
+#endif
 
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 void __exit dma_buf_deinit(void)
+#else
+static void __exit dma_buf_deinit(void)
+#endif
 {
 	dma_buf_uninit_debugfs();
 	kern_unmount(dma_buf_mnt);
 	dma_buf_uninit_sysfs_statistics();
 }
+#ifndef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+__exitcall(dma_buf_deinit);
+#endif

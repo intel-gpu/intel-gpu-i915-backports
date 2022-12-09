@@ -56,6 +56,7 @@ struct intel_initial_plane_config;
 struct intel_load_detect_pipe;
 struct intel_plane;
 struct intel_plane_state;
+struct intel_power_domain_mask;
 struct intel_remapped_info;
 struct intel_rotation_info;
 
@@ -538,14 +539,6 @@ enum hpd_pin {
 			     ((connector) = to_intel_connector((__state)->base.connectors[__i].ptr), \
 			     (new_connector_state) = to_intel_digital_connector_state((__state)->base.connectors[__i].new_state), 1))
 
-#define for_each_old_intel_connector_in_state(__state, connector, old_connector_state, __i) \
-	for ((__i) = 0; \
-		(__i) < (__state)->base.num_connector; \
-		(__i)++) \
-		for_each_if((__state)->base.connectors[__i].ptr && \
-				((connector) = to_intel_connector((__state)->base.connectors[__i].ptr), \
-				(old_connector_state) = to_intel_digital_connector_state((__state)->base.connectors[__i].old_state), 1))
-
 int intel_atomic_add_affected_planes(struct intel_atomic_state *state,
 				     struct intel_crtc *crtc);
 u8 intel_calc_active_pipes(struct intel_atomic_state *state,
@@ -567,6 +560,11 @@ bool intel_crtc_is_bigjoiner_slave(const struct intel_crtc_state *crtc_state);
 bool intel_crtc_is_bigjoiner_master(const struct intel_crtc_state *crtc_state);
 u8 intel_crtc_bigjoiner_slave_pipes(const struct intel_crtc_state *crtc_state);
 struct intel_crtc *intel_master_crtc(const struct intel_crtc_state *crtc_state);
+bool intel_crtc_get_pipe_config(struct intel_crtc_state *crtc_state);
+bool intel_pipe_config_compare(const struct intel_crtc_state *current_config,
+			       const struct intel_crtc_state *pipe_config,
+			       bool fastset);
+void intel_crtc_update_active_timings(const struct intel_crtc_state *crtc_state);
 
 void intel_plane_destroy(struct drm_plane *plane);
 void i9xx_set_pipeconf(const struct intel_crtc_state *crtc_state);
@@ -593,6 +591,8 @@ int intel_display_suspend(struct drm_device *dev);
 void intel_encoder_destroy(struct drm_encoder *encoder);
 struct drm_display_mode *
 intel_encoder_current_mode(struct intel_encoder *encoder);
+void intel_encoder_get_config(struct intel_encoder *encoder,
+			      struct intel_crtc_state *crtc_state);
 bool intel_phy_is_combo(struct drm_i915_private *dev_priv, enum phy phy);
 bool intel_phy_is_tc(struct drm_i915_private *dev_priv, enum phy phy);
 bool intel_phy_is_snps(struct drm_i915_private *dev_priv, enum phy phy);
@@ -663,9 +663,15 @@ intel_get_crtc_new_encoder(const struct intel_atomic_state *state,
 			   const struct intel_crtc_state *crtc_state);
 void intel_plane_disable_noatomic(struct intel_crtc *crtc,
 				  struct intel_plane *plane);
+void intel_set_plane_visible(struct intel_crtc_state *crtc_state,
+			     struct intel_plane_state *plane_state,
+			     bool visible);
+void intel_plane_fixup_bitmasks(struct intel_crtc_state *crtc_state);
 
 void intel_display_driver_register(struct drm_i915_private *i915);
 void intel_display_driver_unregister(struct drm_i915_private *i915);
+
+void intel_update_watermarks(struct drm_i915_private *i915);
 
 /* modesetting */
 void intel_modeset_init_hw(struct drm_i915_private *i915);
@@ -677,6 +683,10 @@ void intel_modeset_driver_remove_noirq(struct drm_i915_private *i915);
 void intel_modeset_driver_remove_nogem(struct drm_i915_private *i915);
 void intel_display_resume(struct drm_device *dev);
 int intel_modeset_all_pipes(struct intel_atomic_state *state);
+void intel_modeset_get_crtc_power_domains(struct intel_crtc_state *crtc_state,
+					  struct intel_power_domain_mask *old_domains);
+void intel_modeset_put_crtc_power_domains(struct intel_crtc *crtc,
+					  struct intel_power_domain_mask *domains);
 
 /* modesetting asserts */
 void assert_transcoder(struct drm_i915_private *dev_priv,

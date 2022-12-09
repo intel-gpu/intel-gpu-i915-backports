@@ -15,7 +15,7 @@
 
 #include_next<linux/seqlock.h>
 
-#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(8,6)
+#ifdef BPM_SEQCOUNT_SEQUENCE_NOT_PRESENT
 static inline unsigned __seqcount_sequence(const seqcount_t *s)
 {
         return READ_ONCE(s->sequence);

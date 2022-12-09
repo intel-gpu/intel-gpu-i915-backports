@@ -328,7 +328,9 @@ int drm_get_panel_orientation_quirk(int width, int height)
 	const char *bios_date;
 	int i;
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	printk(" DRM_PANEL_ORIENTED_QUIRK BACKPORTED \n");
+#endif
 	for (match = dmi_first_match(orientation_data);
 	     match;
 	     match = dmi_first_match(match + 1)) {
@@ -352,7 +354,10 @@ int drm_get_panel_orientation_quirk(int width, int height)
 
 	return DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
 }
-//EXPORT_SYMBOL(drm_get_panel_orientation_quirk);
+
+#ifndef BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
+EXPORT_SYMBOL(drm_get_panel_orientation_quirk);
+#endif
 
 #else
 
@@ -361,7 +366,7 @@ int drm_get_panel_orientation_quirk(int width, int height)
 {
 	return DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
 }
-//EXPORT_SYMBOL(drm_get_panel_orientation_quirk);
+EXPORT_SYMBOL(drm_get_panel_orientation_quirk);
 
 #endif
 

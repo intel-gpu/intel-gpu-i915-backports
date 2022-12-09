@@ -53,11 +53,11 @@
 #define U64_MAX         ((u64)~0ULL)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
+#ifdef BPM_TYPEOF_MEMBER_NOT_PRESENT
 #define typeof_member(T, m)     typeof(((T*)0)->m)
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,10,0)
+#ifdef BPM_PTR_ALIGN_DOWN_NOT_PRESENT
 #define PTR_ALIGN_DOWN(p, a)    ((typeof(p))ALIGN_DOWN((unsigned long)(p), (a)))
 #endif
 

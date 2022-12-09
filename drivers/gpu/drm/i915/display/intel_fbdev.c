@@ -119,8 +119,11 @@ static int intel_fbdev_pan_display(struct fb_var_screeninfo *var,
 
 	return ret;
 }
-
+#ifdef BPM_CONST_STRUCT_FB_OPS_NOT_PRESENT
 static struct fb_ops intelfb_ops = {
+#else
+static const struct fb_ops intelfb_ops = {
+#endif
 	.owner = THIS_MODULE,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_set_par = intel_fbdev_set_par,
@@ -266,7 +269,7 @@ static int intelfb_create(struct drm_fb_helper *helper,
 		struct intel_memory_region *mem = obj->mm.region;
 
 		info->apertures->ranges[0].base = mem->io_start;
-		info->apertures->ranges[0].size = mem->total;
+		info->apertures->ranges[0].size = mem->io_size;
 
 		/* Use fbdev's framebuffer from lmem for discrete */
 		info->fix.smem_start =

@@ -5,11 +5,13 @@
 
 #include <linux/bitfield.h>
 #include <linux/firmware.h>
+#include <linux/highmem.h>
 
 #include <drm/drm_cache.h>
 #include <drm/drm_print.h>
 
 #include "gem/i915_gem_lmem.h"
+#include "gt/uc/abi/guc_version_abi.h"
 #include "intel_uc_fw.h"
 #include "intel_uc_fw_abi.h"
 #include "i915_drv.h"
@@ -47,7 +49,7 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
 		"%s firmware -> %s\n",
 		intel_uc_fw_type_repr(uc_fw->type),
 		status == INTEL_UC_FIRMWARE_SELECTED ?
-		uc_fw->path : intel_uc_fw_status_repr(status));
+		uc_fw->file_selected.path : intel_uc_fw_status_repr(status));
 }
 #endif
 
@@ -57,104 +59,187 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  *
  * Note that RKL and ADL-S have the same GuC/HuC device ID's and use the same
  * firmware as TGL.
+ *
+ * Version numbers:
+ * Originally, the driver required an exact match major/minor/patch furmware
+ * file and only supported that one version for any given platform. However,
+ * the new direction from upstream is to be backwards compatible with all
+ * prior releases and to be as flexible as possible as to what firmware is
+ * loaded.
+ *
+ * For GuC, the major version number signifies a backwards breaking API change.
+ * So, new format GuC firmware files are labelled by their major version only.
+ * For HuC, there is no KMD interaction, hence no version matching requirement.
+ * So, new format HuC firmware files have no version number at all.
+ *
+ * All of which means that the table below must keep all old format files with
+ * full three point version number. But newer files have reduced requirements.
+ * Having said that, the driver still needs to track the minor version number
+ * for GuC at least. As it is useful to report to the user that they are not
+ * running with a recent enough version for all KMD supported features,
+ * security fixes, etc. to be enabled.
  */
-#define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_def) \
-	fw_def(METEORLAKE,   0, guc_def(mtl,  70, 4, 1)) \
-	fw_def(PONTEVECCHIO, 0, guc_def(pvc,  70, 4, 1)) \
-	fw_def(DG2,          0, guc_def(dg2,  70, 4, 1)) \
-	fw_def(XEHPSDV,  0, guc_def(xehpsdv,  70, 4, 1)) \
-	fw_def(ALDERLAKE_P,  0, guc_def(adlp, 70, 4, 1)) \
-	fw_def(ALDERLAKE_S,  0, guc_def(tgl,  70, 4, 1)) \
-	fw_def(DG1,          0, guc_def(dg1,  70, 4, 1)) \
-	fw_def(ROCKETLAKE,   0, guc_def(tgl,  70, 4, 1)) \
-	fw_def(TIGERLAKE,    0, guc_def(tgl,  70, 4, 1)) \
-	fw_def(JASPERLAKE,   0, guc_def(ehl,  70, 4, 1)) \
-	fw_def(ELKHARTLAKE,  0, guc_def(ehl,  70, 4, 1)) \
-	fw_def(ICELAKE,      0, guc_def(icl,  70, 4, 1)) \
-	fw_def(COMETLAKE,    5, guc_def(cml,  70, 4, 1)) \
-	fw_def(COMETLAKE,    0, guc_def(kbl,  70, 4, 1)) \
-	fw_def(COFFEELAKE,   0, guc_def(kbl,  70, 4, 1)) \
-	fw_def(GEMINILAKE,   0, guc_def(glk,  70, 4, 1)) \
-	fw_def(KABYLAKE,     0, guc_def(kbl,  70, 4, 1)) \
-	fw_def(BROXTON,      0, guc_def(bxt,  70, 4, 1)) \
-	fw_def(SKYLAKE,      0, guc_def(skl,  70, 4, 1))
+#define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_maj, guc_mmp) \
+	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 5, 2)) \
+	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 5, 2)) \
+	fw_def(DG2,          0, guc_mmp(dg2,  70, 5, 2)) \
+	fw_def(XEHPSDV,  0, guc_mmp(xehpsdv,  70, 5, 2)) \
+	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 5, 2)) \
+	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 5, 2)) \
+	fw_def(DG1,          0, guc_mmp(dg1,  70, 5, 2)) \
+	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 5, 2)) \
+	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 5, 2)) \
+	fw_def(JASPERLAKE,   0, guc_mmp(ehl,  70, 5, 2)) \
+	fw_def(ELKHARTLAKE,  0, guc_mmp(ehl,  70, 5, 2)) \
+	fw_def(ICELAKE,      0, guc_mmp(icl,  70, 5, 2)) \
+	fw_def(COMETLAKE,    5, guc_mmp(cml,  70, 5, 2)) \
+	fw_def(COMETLAKE,    0, guc_mmp(kbl,  70, 5, 2)) \
+	fw_def(COFFEELAKE,   0, guc_mmp(kbl,  70, 5, 2)) \
+	fw_def(GEMINILAKE,   0, guc_mmp(glk,  70, 5, 2)) \
+	fw_def(KABYLAKE,     0, guc_mmp(kbl,  70, 5, 2)) \
+	fw_def(BROXTON,      0, guc_mmp(bxt,  70, 5, 2)) \
+	fw_def(SKYLAKE,      0, guc_mmp(skl,  70, 5, 2))
 
-#define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_dma_def, huc_gsc_def) \
-	fw_def(METEORLAKE,   0, huc_gsc_def(mtl,  8, 3, 0)) \
-	fw_def(PONTEVECCHIO, 0, huc_dma_def(pvc,  7, 8, 7)) \
-	fw_def(DG2,          0, huc_gsc_def(dg2,  7, 10, 3)) \
-	fw_def(ALDERLAKE_P,  0, huc_dma_def(tgl,  7, 9, 3)) \
-	fw_def(ALDERLAKE_S,  0, huc_dma_def(tgl,  7, 9, 3)) \
-	fw_def(DG1,          0, huc_dma_def(dg1,  7, 9, 3)) \
-	fw_def(ROCKETLAKE,   0, huc_dma_def(tgl,  7, 9, 3)) \
-	fw_def(TIGERLAKE,    0, huc_dma_def(tgl,  7, 9, 3)) \
-	fw_def(JASPERLAKE,   0, huc_dma_def(ehl,  9, 0, 0)) \
-	fw_def(ELKHARTLAKE,  0, huc_dma_def(ehl,  9, 0, 0)) \
-	fw_def(ICELAKE,      0, huc_dma_def(icl,  9, 0, 0)) \
-	fw_def(COMETLAKE,    5, huc_dma_def(cml,  4, 0, 0)) \
-	fw_def(COMETLAKE,    0, huc_dma_def(kbl,  4, 0, 0)) \
-	fw_def(COFFEELAKE,   0, huc_dma_def(kbl,  4, 0, 0)) \
-	fw_def(GEMINILAKE,   0, huc_dma_def(glk,  4, 0, 0)) \
-	fw_def(KABYLAKE,     0, huc_dma_def(kbl,  4, 0, 0)) \
-	fw_def(BROXTON,      0, huc_dma_def(bxt,  2, 0, 0)) \
-	fw_def(SKYLAKE,      0, huc_dma_def(skl,  2, 0, 0))
+#define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_raw, huc_mmp, huc_gsc) \
+	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 0)) \
+	fw_def(PONTEVECCHIO, 0, huc_mmp(pvc,  7, 8, 7)) \
+	fw_def(DG2,          0, huc_gsc(dg2,  7, 10, 3)) \
+	fw_def(ALDERLAKE_P,  0, huc_mmp(tgl,  7, 9, 3)) \
+	fw_def(ALDERLAKE_S,  0, huc_mmp(tgl,  7, 9, 3)) \
+	fw_def(DG1,          0, huc_mmp(dg1,  7, 9, 3)) \
+	fw_def(ROCKETLAKE,   0, huc_mmp(tgl,  7, 9, 3)) \
+	fw_def(TIGERLAKE,    0, huc_mmp(tgl,  7, 9, 3)) \
+	fw_def(JASPERLAKE,   0, huc_mmp(ehl,  9, 0, 0)) \
+	fw_def(ELKHARTLAKE,  0, huc_mmp(ehl,  9, 0, 0)) \
+	fw_def(ICELAKE,      0, huc_mmp(icl,  9, 0, 0)) \
+	fw_def(COMETLAKE,    5, huc_mmp(cml,  4, 0, 0)) \
+	fw_def(COMETLAKE,    0, huc_mmp(kbl,  4, 0, 0)) \
+	fw_def(COFFEELAKE,   0, huc_mmp(kbl,  4, 0, 0)) \
+	fw_def(GEMINILAKE,   0, huc_mmp(glk,  4, 0, 0)) \
+	fw_def(KABYLAKE,     0, huc_mmp(kbl,  4, 0, 0)) \
+	fw_def(BROXTON,      0, huc_mmp(bxt,  2, 0, 0)) \
+	fw_def(SKYLAKE,      0, huc_mmp(skl,  2, 0, 0))
 
 #define INTEL_GSC_FIRMWARE_DEFS(fw_def, gsc_def) \
 	fw_def(METEORLAKE,   0, gsc_def(mtl, 102, 0, 0, 7366))
 
-#define __MAKE_UC_FW_PATH(prefix_, name_, major_, minor_, patch_, postfix_) \
+/*
+ * Set of macros for producing a list of filenames from the above table.
+ */
+#define __MAKE_UC_FW_PATH_BLANK(prefix_, name_) \
 	"i915/" \
-	__stringify(prefix_) name_ \
+	__stringify(prefix_) "_" name_ ".bin"
+
+#define __MAKE_UC_FW_PATH_MAJOR(prefix_, name_, major_) \
+	"i915/" \
+	__stringify(prefix_) "_" name_ "_" \
+	__stringify(major_) ".bin"
+
+#define __MAKE_UC_FW_PATH_MMP(prefix_, name_, major_, minor_, patch_) \
+	"i915/" \
+	__stringify(prefix_) "_" name_  "_" \
 	__stringify(major_) "." \
 	__stringify(minor_) "." \
-	__stringify(patch_) postfix_ ".bin"
+	__stringify(patch_) ".bin"
 
-#define MAKE_GUC_FW_PATH(prefix_, major_, minor_, patch_) \
-	__MAKE_UC_FW_PATH(prefix_, "_guc_", major_, minor_, patch_, "")
+#define __MAKE_UC_FW_PATH_MMPS(prefix_, name_, major_, minor_, patch_, suffix_) \
+	"i915/" \
+	__stringify(prefix_) "_" name_ "_" \
+	__stringify(major_) "." \
+	__stringify(minor_) "." \
+	__stringify(patch_) "_" suffix_ ".bin"
 
-#define MAKE_HUC_FW_PATH(prefix_, major_, minor_, bld_num_) \
-	__MAKE_UC_FW_PATH(prefix_, "_huc_", major_, minor_, bld_num_, "")
+#define __MAKE_UC_FW_PATH_MMPB(prefix_, name_, major_, minor_, patch_, build_) \
+	"i915/" \
+	__stringify(prefix_) "_" name_ "_" \
+	__stringify(major_) "." \
+	__stringify(minor_) "." \
+	__stringify(patch_) "." \
+	__stringify(build_) ".bin"
 
-#define MAKE_HUC_GSC_FW_PATH(prefix_, major_, minor_, bld_num_) \
-	__MAKE_UC_FW_PATH(prefix_, "_huc_", major_, minor_, bld_num_, "_gsc")
+/* Minor for internal driver use, not part of file name */
+#define MAKE_GUC_FW_PATH_MAJOR(prefix_, major_, minor_) \
+	__MAKE_UC_FW_PATH_MAJOR(prefix_, "guc", major_)
 
-#define MAKE_GSC_FW_PATH(prefix_, major_, minor_, patch, bld_num_) \
-	__MAKE_UC_FW_PATH(prefix_, "_gsc_", major_, minor_, patch, "."__stringify(bld_num_))
+#define MAKE_GUC_FW_PATH_MMP(prefix_, major_, minor_, patch_) \
+	__MAKE_UC_FW_PATH_MMP(prefix_, "guc", major_, minor_, patch_)
 
-/* All blobs need to be declared via MODULE_FIRMWARE() */
+#define MAKE_HUC_FW_PATH_BLANK(prefix_) \
+	__MAKE_UC_FW_PATH_BLANK(prefix_, "huc")
+
+#define MAKE_HUC_FW_PATH_GSC(prefix_, major_, minor_, patch_) \
+	__MAKE_UC_FW_PATH_MMPS(prefix_, "huc", major_, minor_, patch_, "gsc")
+
+#define MAKE_HUC_FW_PATH_MMP(prefix_, major_, minor_, patch_) \
+	__MAKE_UC_FW_PATH_MMP(prefix_, "huc", major_, minor_, patch_)
+
+#define MAKE_GSC_FW_PATH(prefix_, major_, minor_, patch, build_) \
+	__MAKE_UC_FW_PATH_MMPB(prefix_, "gsc", major_, minor_, patch, build_)
+
+/*
+ * All blobs need to be declared via MODULE_FIRMWARE().
+ * This first expansion of the table macros is solely to provide
+ * that declaration.
+ */
 #define INTEL_UC_MODULE_FW(platform_, revid_, uc_) \
 	MODULE_FIRMWARE(uc_);
 
-INTEL_GUC_FIRMWARE_DEFS(INTEL_UC_MODULE_FW, MAKE_GUC_FW_PATH)
-INTEL_HUC_FIRMWARE_DEFS(INTEL_UC_MODULE_FW, MAKE_HUC_FW_PATH, MAKE_HUC_GSC_FW_PATH)
+INTEL_GUC_FIRMWARE_DEFS(INTEL_UC_MODULE_FW, MAKE_GUC_FW_PATH_MAJOR, MAKE_GUC_FW_PATH_MMP)
+INTEL_HUC_FIRMWARE_DEFS(INTEL_UC_MODULE_FW, MAKE_HUC_FW_PATH_BLANK, MAKE_HUC_FW_PATH_MMP, MAKE_HUC_FW_PATH_GSC)
 INTEL_GSC_FIRMWARE_DEFS(INTEL_UC_MODULE_FW, MAKE_GSC_FW_PATH)
 
-/* The below structs and macros are used to iterate across the list of blobs */
+/*
+ * The next expansion of the table macros (in __uc_fw_auto_select below) provides
+ * actual data structures with both the filename and the version information.
+ * These structure arrays are then iterated over to the list of suitable files
+ * for the current platform and to then attempt to load those files, in the order
+ * listed, until one is successfully found.
+ */
 struct __packed uc_fw_blob {
+	const char *path;
+	bool legacy;
 	u8 major;
 	u8 minor;
+	u8 patch;
 	bool loaded_via_gsc;
-	const char *path;
 };
 
-#define UC_FW_BLOB(major_, minor_, gsc_, path_) \
-	{ .major = major_, .minor = minor_, .loaded_via_gsc = gsc_, .path = path_ }
+#define UC_FW_BLOB_BASE(major_, minor_, patch_, path_) \
+	.major = major_, \
+	.minor = minor_, \
+	.patch = patch_, \
+	.path = path_,
 
-#define GUC_FW_BLOB(prefix_, major_, minor_, patch_) \
-	UC_FW_BLOB(major_, minor_, false, \
-		   MAKE_GUC_FW_PATH(prefix_, major_, minor_, patch_))
+#define UC_FW_BLOB_NEW(major_, minor_, patch_, gsc_, path_) \
+	{ UC_FW_BLOB_BASE(major_, minor_, patch_, path_) \
+	  .legacy = false, .loaded_via_gsc = gsc_ }
 
-#define HUC_FW_BLOB(prefix_, major_, minor_, bld_num_) \
-	UC_FW_BLOB(major_, minor_, false, \
-		   MAKE_HUC_FW_PATH(prefix_, major_, minor_, bld_num_))
+#define UC_FW_BLOB_OLD(major_, minor_, patch_, path_) \
+	{ UC_FW_BLOB_BASE(major_, minor_, patch_, path_) \
+	  .legacy = true }
 
-#define HUC_GSC_FW_BLOB(prefix_, major_, minor_, bld_num_) \
-	UC_FW_BLOB(major_, minor_, true, \
-		   MAKE_HUC_GSC_FW_PATH(prefix_, major_, minor_, bld_num_))
+#define GUC_FW_BLOB(prefix_, major_, minor_) \
+	UC_FW_BLOB_NEW(major_, minor_, 0, false, \
+		       MAKE_GUC_FW_PATH_MAJOR(prefix_, major_, minor_))
 
-#define GSC_FW_BLOB(prefix_, major_, minor_, patch, bld_num_) \
-	UC_FW_BLOB(major_, minor_, false, \
-		   MAKE_GSC_FW_PATH(prefix_, major_, minor_, patch, bld_num_))
+#define GUC_FW_BLOB_MMP(prefix_, major_, minor_, patch_) \
+	UC_FW_BLOB_OLD(major_, minor_, patch_, \
+		       MAKE_GUC_FW_PATH_MMP(prefix_, major_, minor_, patch_))
+
+#define HUC_FW_BLOB(prefix_) \
+	UC_FW_BLOB_NEW(0, 0, 0, false, MAKE_HUC_FW_PATH_BLANK(prefix_))
+
+#define HUC_FW_BLOB_MMP(prefix_, major_, minor_, patch_) \
+	UC_FW_BLOB_OLD(major_, minor_, patch_, \
+		       MAKE_HUC_FW_PATH_MMP(prefix_, major_, minor_, patch_))
+
+#define HUC_FW_BLOB_GSC(prefix_, major_, minor_, patch_) \
+	UC_FW_BLOB_NEW(major_, minor_, patch_, true, \
+		       MAKE_HUC_FW_PATH_GSC(prefix_, major_, minor_, patch_))
+
+#define GSC_FW_BLOB(prefix_, major_, minor_, patch_, build_) \
+	UC_FW_BLOB_OLD(major_, minor_, patch_, \
+		       MAKE_GSC_FW_PATH(prefix_, major_, minor_, patch_, build_))
 
 struct __packed uc_fw_platform_requirement {
 	enum intel_platform p;
@@ -178,10 +263,10 @@ static void
 __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 {
 	static const struct uc_fw_platform_requirement blobs_guc[] = {
-		INTEL_GUC_FIRMWARE_DEFS(MAKE_FW_LIST, GUC_FW_BLOB)
+		INTEL_GUC_FIRMWARE_DEFS(MAKE_FW_LIST, GUC_FW_BLOB, GUC_FW_BLOB_MMP)
 	};
 	static const struct uc_fw_platform_requirement blobs_huc[] = {
-		INTEL_HUC_FIRMWARE_DEFS(MAKE_FW_LIST, HUC_FW_BLOB, HUC_GSC_FW_BLOB)
+		INTEL_HUC_FIRMWARE_DEFS(MAKE_FW_LIST, HUC_FW_BLOB, HUC_FW_BLOB_MMP, HUC_FW_BLOB_GSC)
 	};
 	static const struct uc_fw_platform_requirement blobs_gsc[] = {
 		INTEL_GSC_FIRMWARE_DEFS(MAKE_FW_LIST, GSC_FW_BLOB)
@@ -191,11 +276,13 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 		[INTEL_UC_FW_TYPE_HUC] = { blobs_huc, ARRAY_SIZE(blobs_huc) },
 		[INTEL_UC_FW_TYPE_GSC] = { blobs_gsc, ARRAY_SIZE(blobs_gsc) },
 	};
+	static bool verified;
 	const struct uc_fw_platform_requirement *fw_blobs;
 	enum intel_platform p = INTEL_INFO(i915)->platform;
 	u32 fw_count;
 	u8 rev = INTEL_REVID(i915);
 	int i;
+	bool found;
 
 	/*
 	 * The only difference between the ADL GuC FWs is the HWConfig support.
@@ -210,34 +297,103 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 	fw_blobs = blobs_all[uc_fw->type].blobs;
 	fw_count = blobs_all[uc_fw->type].count;
 
+	found = false;
 	for (i = 0; i < fw_count && p <= fw_blobs[i].p; i++) {
-		if (p == fw_blobs[i].p && rev >= fw_blobs[i].rev) {
-			const struct uc_fw_blob *blob = &fw_blobs[i].blob;
-			uc_fw->path = blob->path;
-			uc_fw->major_ver_wanted = blob->major;
-			uc_fw->minor_ver_wanted = blob->minor;
-			uc_fw->loaded_via_gsc = blob->loaded_via_gsc;
-			break;
+		const struct uc_fw_blob *blob = &fw_blobs[i].blob;
+
+		if (p != fw_blobs[i].p)
+			continue;
+
+		if (rev < fw_blobs[i].rev)
+			continue;
+
+		if (uc_fw->file_selected.path) {
+			if (uc_fw->file_selected.path == blob->path)
+				uc_fw->file_selected.path = NULL;
+
+			continue;
 		}
+
+		uc_fw->file_selected.path = blob->path;
+		uc_fw->file_wanted.path = blob->path;
+		uc_fw->file_wanted.major_ver = blob->major;
+		uc_fw->file_wanted.minor_ver = blob->minor;
+		uc_fw->loaded_via_gsc = blob->loaded_via_gsc;
+		found = true;
+		break;
+	}
+
+	if (!found && uc_fw->file_selected.path) {
+		/* Failed to find a match for the last attempt?! */
+		uc_fw->file_selected.path = NULL;
 	}
 
 	/* make sure the list is ordered as expected */
-	if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)) {
+	if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) && !verified) {
+		verified = true;
+
 		for (i = 1; i < fw_count; i++) {
+			/* Next platform is good: */
 			if (fw_blobs[i].p < fw_blobs[i - 1].p)
 				continue;
 
+			/* Next platform revision is good: */
 			if (fw_blobs[i].p == fw_blobs[i - 1].p &&
 			    fw_blobs[i].rev < fw_blobs[i - 1].rev)
 				continue;
 
-			drm_err(&i915->drm, "Invalid FW blob order: %s r%u comes before %s r%u\n",
-				intel_platform_name(fw_blobs[i - 1].p),
-				fw_blobs[i - 1].rev,
-				intel_platform_name(fw_blobs[i].p),
-				fw_blobs[i].rev);
+			/* Platform/revision must be in order: */
+			if (fw_blobs[i].p != fw_blobs[i - 1].p ||
+			    fw_blobs[i].rev != fw_blobs[i - 1].rev)
+				goto bad;
 
-			uc_fw->path = NULL;
+			/* Next major version is good: */
+			if (fw_blobs[i].blob.major < fw_blobs[i - 1].blob.major)
+				continue;
+
+			/* New must be before legacy: */
+			if (!fw_blobs[i].blob.legacy && fw_blobs[i - 1].blob.legacy)
+				goto bad;
+
+			/* New to legacy also means 0.0 to X.Y (HuC), or X.0 to X.Y (GuC) */
+			if (fw_blobs[i].blob.legacy && !fw_blobs[i - 1].blob.legacy) {
+				if (!fw_blobs[i - 1].blob.major)
+					continue;
+
+				if (fw_blobs[i].blob.major == fw_blobs[i - 1].blob.major)
+					continue;
+			}
+
+			/* Major versions must be in order: */
+			if (fw_blobs[i].blob.major != fw_blobs[i - 1].blob.major)
+				goto bad;
+
+			/* Next minor version is good: */
+			if (fw_blobs[i].blob.minor < fw_blobs[i - 1].blob.minor)
+				continue;
+
+			/* Minor versions must be in order: */
+			if (fw_blobs[i].blob.minor != fw_blobs[i - 1].blob.minor)
+				goto bad;
+
+			/* Patch versions must be in order: */
+			if (fw_blobs[i].blob.patch <= fw_blobs[i - 1].blob.patch)
+				continue;
+
+bad:
+			drm_err(&i915->drm, "Invalid FW blob order: %s r%u %s%d.%d.%d comes before %s r%u %s%d.%d.%d\n",
+				intel_platform_name(fw_blobs[i - 1].p), fw_blobs[i - 1].rev,
+				fw_blobs[i - 1].blob.legacy ? "L" : "v",
+				fw_blobs[i - 1].blob.major,
+				fw_blobs[i - 1].blob.minor,
+				fw_blobs[i - 1].blob.patch,
+				intel_platform_name(fw_blobs[i].p), fw_blobs[i].rev,
+				fw_blobs[i].blob.legacy ? "L" : "v",
+				fw_blobs[i].blob.major,
+				fw_blobs[i].blob.minor,
+				fw_blobs[i].blob.patch);
+
+			uc_fw->file_selected.path = NULL;
 		}
 	}
 }
@@ -281,7 +437,7 @@ static void __uc_fw_user_override(struct drm_i915_private *i915, struct intel_uc
 	}
 
 	if (unlikely(path)) {
-		uc_fw->path = path;
+		uc_fw->file_selected.path = path;
 		uc_fw->user_overridden = true;
 	}
 }
@@ -306,7 +462,7 @@ void intel_uc_fw_init_early(struct intel_uc_fw *uc_fw,
 	 */
 	BUILD_BUG_ON(INTEL_UC_FIRMWARE_UNINITIALIZED);
 	GEM_BUG_ON(uc_fw->status);
-	GEM_BUG_ON(uc_fw->path);
+	GEM_BUG_ON(uc_fw->file_selected.path);
 
 	uc_fw->type = type;
 
@@ -315,7 +471,7 @@ void intel_uc_fw_init_early(struct intel_uc_fw *uc_fw,
 		__uc_fw_user_override(i915, uc_fw);
 	}
 
-	intel_uc_fw_change_status(uc_fw, uc_fw->path ? *uc_fw->path ?
+	intel_uc_fw_change_status(uc_fw, uc_fw->file_selected.path ? *uc_fw->file_selected.path ?
 				  INTEL_UC_FIRMWARE_SELECTED :
 				  INTEL_UC_FIRMWARE_DISABLED :
 				  INTEL_UC_FIRMWARE_NOT_SUPPORTED);
@@ -332,9 +488,21 @@ void intel_uc_fw_init_early(struct intel_uc_fw *uc_fw,
  */
 void intel_uc_fw_set_preloaded(struct intel_uc_fw *uc_fw, u16 major, u16 minor)
 {
-	uc_fw->path = "PRELOADED";
-	uc_fw->major_ver_found = major;
-	uc_fw->minor_ver_found = minor;
+	uc_fw->file_selected.path = "PRELOADED";
+	uc_fw->file_selected.major_ver = major;
+	uc_fw->file_selected.minor_ver = minor;
+
+	if (major == GUC_VF_VERSION_LATEST_MAJOR && minor == GUC_VF_VERSION_LATEST_MINOR) {
+		/*
+		 * FIXME: Hack to keep the native GuC submission code happy - there are
+		 * checks for v69 versus v70 for backwards compatibility support.
+		 * Either they need to check for the VF interface version and native needs
+		 * to first query the VF interface version or the VF interface version
+		 * needs to start matching the native full GuC version.
+		 */
+		uc_fw->file_selected.major_ver = uc_fw->file_wanted.major_ver;
+		uc_fw->file_selected.minor_ver = uc_fw->file_wanted.minor_ver;
+	}
 
 	intel_uc_fw_change_status(uc_fw, INTEL_UC_FIRMWARE_PRELOADED);
 }
@@ -346,32 +514,32 @@ static void __force_fw_fetch_failures(struct intel_uc_fw *uc_fw, int e)
 
 	if (i915_inject_probe_error(i915, e)) {
 		/* non-existing blob */
-		uc_fw->path = "<invalid>";
+		uc_fw->file_selected.path = "<invalid>";
 		uc_fw->user_overridden = user;
 	} else if (i915_inject_probe_error(i915, e)) {
 		/* require next major version */
-		uc_fw->major_ver_wanted += 1;
-		uc_fw->minor_ver_wanted = 0;
+		uc_fw->file_wanted.major_ver += 1;
+		uc_fw->file_wanted.minor_ver = 0;
 		uc_fw->user_overridden = user;
 	} else if (i915_inject_probe_error(i915, e)) {
 		/* require next minor version */
-		uc_fw->minor_ver_wanted += 1;
+		uc_fw->file_wanted.minor_ver += 1;
 		uc_fw->user_overridden = user;
-	} else if (uc_fw->major_ver_wanted &&
+	} else if (uc_fw->file_wanted.major_ver &&
 		   i915_inject_probe_error(i915, e)) {
 		/* require prev major version */
-		uc_fw->major_ver_wanted -= 1;
-		uc_fw->minor_ver_wanted = 0;
+		uc_fw->file_wanted.major_ver -= 1;
+		uc_fw->file_wanted.minor_ver = 0;
 		uc_fw->user_overridden = user;
-	} else if (uc_fw->minor_ver_wanted &&
+	} else if (uc_fw->file_wanted.minor_ver &&
 		   i915_inject_probe_error(i915, e)) {
 		/* require prev minor version - hey, this should work! */
-		uc_fw->minor_ver_wanted -= 1;
+		uc_fw->file_wanted.minor_ver -= 1;
 		uc_fw->user_overridden = user;
 	} else if (user && i915_inject_probe_error(i915, e)) {
 		/* officially unsupported platform */
-		uc_fw->major_ver_wanted = 0;
-		uc_fw->minor_ver_wanted = 0;
+		uc_fw->file_wanted.major_ver = 0;
+		uc_fw->file_wanted.minor_ver = 0;
 		uc_fw->user_overridden = true;
 	}
 }
@@ -380,10 +548,12 @@ static int check_gsc_manifest(const struct firmware *fw,
 			      struct intel_uc_fw *uc_fw)
 {
 	u32 *dw = (u32 *)fw->data;
-	u32 version = dw[HUC_GSC_VERSION_DW];
+	u32 version_hi = dw[HUC_GSC_VERSION_HI_DW];
+	u32 version_lo = dw[HUC_GSC_VERSION_LO_DW];
 
-	uc_fw->major_ver_found = FIELD_GET(HUC_GSC_MAJOR_VER_MASK, version);
-	uc_fw->minor_ver_found = FIELD_GET(HUC_GSC_MINOR_VER_MASK, version);
+	uc_fw->file_selected.major_ver = FIELD_GET(HUC_GSC_MAJOR_VER_HI_MASK, version_hi);
+	uc_fw->file_selected.minor_ver = FIELD_GET(HUC_GSC_MINOR_VER_HI_MASK, version_hi);
+	uc_fw->file_selected.patch_ver = FIELD_GET(HUC_GSC_PATCH_VER_LO_MASK, version_lo);
 
 	return 0;
 }
@@ -399,7 +569,7 @@ static int check_ccs_header(struct intel_gt *gt,
 	/* Check the size of the blob before examining buffer contents */
 	if (unlikely(fw->size < sizeof(struct uc_css_header))) {
 		drm_warn(&i915->drm, "%s firmware %s: invalid size: %zu < %zu\n",
-			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
 			 fw->size, sizeof(struct uc_css_header));
 		return -ENODATA;
 	}
@@ -412,7 +582,7 @@ static int check_ccs_header(struct intel_gt *gt,
 	if (unlikely(size != sizeof(struct uc_css_header))) {
 		drm_warn(&i915->drm,
 			 "%s firmware %s: unexpected header size: %zu != %zu\n",
-			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
 			 fw->size, sizeof(struct uc_css_header));
 		return -EPROTO;
 	}
@@ -427,7 +597,7 @@ static int check_ccs_header(struct intel_gt *gt,
 	size = sizeof(struct uc_css_header) + uc_fw->ucode_size + uc_fw->rsa_size;
 	if (unlikely(fw->size < size)) {
 		drm_warn(&i915->drm, "%s firmware %s: invalid size: %zu < %zu\n",
-			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
 			 fw->size, size);
 		return -ENOEXEC;
 	}
@@ -436,16 +606,18 @@ static int check_ccs_header(struct intel_gt *gt,
 	size = __intel_uc_fw_get_upload_size(uc_fw);
 	if (unlikely(size >= gt->wopcm.size)) {
 		drm_warn(&i915->drm, "%s firmware %s: invalid size: %zu > %zu\n",
-			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
 			 size, (size_t)gt->wopcm.size);
 		return -E2BIG;
 	}
 
 	/* Get version numbers from the CSS header */
-	uc_fw->major_ver_found = FIELD_GET(CSS_SW_VERSION_UC_MAJOR,
-					   css->sw_version);
-	uc_fw->minor_ver_found = FIELD_GET(CSS_SW_VERSION_UC_MINOR,
-					   css->sw_version);
+	uc_fw->file_selected.major_ver = FIELD_GET(CSS_SW_VERSION_UC_MAJOR,
+						   css->sw_version);
+	uc_fw->file_selected.minor_ver = FIELD_GET(CSS_SW_VERSION_UC_MINOR,
+						   css->sw_version);
+	uc_fw->file_selected.patch_ver = FIELD_GET(CSS_SW_VERSION_UC_PATCH,
+						   css->sw_version);
 
 	if (uc_fw->type == INTEL_UC_FW_TYPE_GUC)
 		uc_fw->private_data_size = css->private_data_size;
@@ -470,17 +642,6 @@ static int check_fw_header(struct intel_gt *gt,
 	if (err)
 		return err;
 
-	if (uc_fw->major_ver_found != uc_fw->major_ver_wanted ||
-	    uc_fw->minor_ver_found < uc_fw->minor_ver_wanted) {
-		drm_notice(&gt->i915->drm,
-			   "%s firmware %s: unexpected version: %u.%u != %u.%u\n",
-			   intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
-			   uc_fw->major_ver_found, uc_fw->minor_ver_found,
-			   uc_fw->major_ver_wanted, uc_fw->minor_ver_wanted);
-		if (!intel_uc_fw_is_overridden(uc_fw))
-			return -ENOEXEC;
-	}
-
 	return 0;
 }
 
@@ -496,9 +657,11 @@ int intel_uc_fw_fetch(struct intel_uc_fw *uc_fw)
 {
 	struct intel_gt *gt = __uc_fw_to_gt(uc_fw);
 	struct drm_i915_private *i915 = gt->i915;
+	struct intel_uc_fw_file file_ideal;
 	struct device *dev = i915->drm.dev;
 	struct drm_i915_gem_object *obj;
 	const struct firmware *fw = NULL;
+	bool old_ver = false;
 	int err;
 
 	GEM_BUG_ON(!gt->wopcm.size);
@@ -511,13 +674,73 @@ int intel_uc_fw_fetch(struct intel_uc_fw *uc_fw)
 	__force_fw_fetch_failures(uc_fw, -EINVAL);
 	__force_fw_fetch_failures(uc_fw, -ESTALE);
 
-	err = request_firmware(&fw, uc_fw->path, dev);
+	err = firmware_request_nowarn(&fw, uc_fw->file_selected.path, dev);
+	memcpy(&file_ideal, &uc_fw->file_wanted, sizeof(file_ideal));
+
+	/* Any error is terminal if overriding. Don't bother searching for older versions */
+	if (err && intel_uc_fw_is_overridden(uc_fw))
+		goto fail;
+
+	while (err == -ENOENT) {
+		old_ver = true;
+
+		__uc_fw_auto_select(i915, uc_fw);
+		if (!uc_fw->file_selected.path) {
+			/*
+			 * No more options! But set the path back to something
+			 * valid just in case it gets dereferenced.
+			 */
+			uc_fw->file_selected.path = file_ideal.path;
+
+			/* Also, preserve the version that was really wanted */
+			memcpy(&uc_fw->file_wanted, &file_ideal, sizeof(uc_fw->file_wanted));
+			break;
+		}
+
+		err = firmware_request_nowarn(&fw, uc_fw->file_selected.path, dev);
+	}
+
 	if (err)
 		goto fail;
 
 	err = check_fw_header(gt, fw, uc_fw);
 	if (err)
 		goto fail;
+
+	if (uc_fw->file_wanted.major_ver && uc_fw->file_selected.major_ver) {
+		/* Check the file's major version was as it claimed */
+		if (uc_fw->file_selected.major_ver != uc_fw->file_wanted.major_ver) {
+			drm_notice(&i915->drm, "%s firmware %s: unexpected version: %u.%u != %u.%u\n",
+				   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
+				   uc_fw->file_selected.major_ver, uc_fw->file_selected.minor_ver,
+				   uc_fw->file_wanted.major_ver, uc_fw->file_wanted.minor_ver);
+			if (!intel_uc_fw_is_overridden(uc_fw)) {
+				err = -ENOEXEC;
+				goto fail;
+			}
+		} else {
+			if (uc_fw->file_selected.minor_ver < uc_fw->file_wanted.minor_ver)
+				old_ver = true;
+		}
+	}
+
+	if (old_ver) {
+		/* Preserve the version that was really wanted */
+		memcpy(&uc_fw->file_wanted, &file_ideal, sizeof(uc_fw->file_wanted));
+
+		if (uc_fw->file_selected.major_ver) {
+			drm_notice(&i915->drm,
+				   "%s firmware %s (%d.%d) is recommended, but only %s (%d.%d) was found\n",
+				   intel_uc_fw_type_repr(uc_fw->type),
+				   uc_fw->file_wanted.path,
+				   uc_fw->file_wanted.major_ver, uc_fw->file_wanted.minor_ver,
+				   uc_fw->file_selected.path,
+				   uc_fw->file_selected.major_ver, uc_fw->file_selected.minor_ver);
+			drm_info(&i915->drm,
+				 "Consider updating your linux-firmware pkg or downloading from %s\n",
+				 INTEL_UC_FIRMWARE_URL);
+		}
+	}
 
 	if (HAS_LMEM(i915) && !i915_is_mem_wa_enabled(i915, I915_WA_FORCE_SMEM_OBJECT))
 		obj = i915_gem_object_create_lmem_from_data(gt->lmem, fw->data, fw->size);
@@ -541,8 +764,8 @@ fail:
 				  INTEL_UC_FIRMWARE_MISSING :
 				  INTEL_UC_FIRMWARE_ERROR);
 
-	drm_notice(&i915->drm, "%s firmware %s: fetch failed with error %d\n",
-		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->path, err);
+	i915_probe_error(i915, "%s firmware %s: fetch failed with error %d\n",
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path, err);
 	drm_info(&i915->drm, "%s firmware(s) can be downloaded from %s\n",
 		 intel_uc_fw_type_repr(uc_fw->type), INTEL_UC_FIRMWARE_URL);
 
@@ -606,7 +829,7 @@ int intel_uc_fw_mark_load_failed(struct intel_uc_fw *uc_fw, int err)
 	GEM_BUG_ON(!intel_uc_fw_is_loadable(uc_fw));
 
 	i915_probe_error(gt->i915, "Failed to load %s firmware %s (%d)\n",
-			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->path,
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path,
 			 err);
 	intel_uc_fw_change_status(uc_fw, INTEL_UC_FIRMWARE_LOAD_FAIL);
 
@@ -951,13 +1174,34 @@ size_t intel_uc_fw_copy_rsa(struct intel_uc_fw *uc_fw, void *dst, u32 max_len)
  */
 void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 {
+	u32 ver_sel, ver_want;
+
 	drm_printf(p, "%s firmware: %s\n",
-		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->path);
+		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path);
+	if (uc_fw->file_selected.path != uc_fw->file_wanted.path)
+		drm_printf(p, "%s firmware wanted: %s\n",
+			   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_wanted.path);
 	drm_printf(p, "\tstatus: %s\n",
 		   intel_uc_fw_status_repr(uc_fw->status));
-	drm_printf(p, "\tversion: wanted %u.%u, found %u.%u\n",
-		   uc_fw->major_ver_wanted, uc_fw->minor_ver_wanted,
-		   uc_fw->major_ver_found, uc_fw->minor_ver_found);
+	ver_sel = MAKE_UC_VER(uc_fw->file_selected.major_ver,
+			      uc_fw->file_selected.minor_ver,
+			      uc_fw->file_selected.patch_ver);
+	ver_want = MAKE_UC_VER(uc_fw->file_wanted.major_ver,
+			       uc_fw->file_wanted.minor_ver,
+			       uc_fw->file_wanted.patch_ver);
+	if (ver_sel < ver_want)
+		drm_printf(p, "\tversion: wanted %u.%u.%u, found %u.%u.%u\n",
+			   uc_fw->file_wanted.major_ver,
+			   uc_fw->file_wanted.minor_ver,
+			   uc_fw->file_wanted.patch_ver,
+			   uc_fw->file_selected.major_ver,
+			   uc_fw->file_selected.minor_ver,
+			   uc_fw->file_selected.patch_ver);
+	else
+		drm_printf(p, "\tversion: found %u.%u.%u\n",
+			   uc_fw->file_selected.major_ver,
+			   uc_fw->file_selected.minor_ver,
+			   uc_fw->file_selected.patch_ver);
 	drm_printf(p, "\tuCode: %u bytes\n", uc_fw->ucode_size);
 	drm_printf(p, "\tRSA: %u bytes\n", uc_fw->rsa_size);
 }

@@ -107,8 +107,7 @@ static DECLARE_RWSEM(shrinker_rwsem);
 
 
 
-
-extern void register_shrinker(struct shrinker *);
+extern int register_shrinker(struct shrinker *);
 extern void unregister_shrinker(struct shrinker *);
 
 

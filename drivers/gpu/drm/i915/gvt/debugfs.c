@@ -41,13 +41,13 @@ struct diff_mmio {
 
 /* Compare two diff_mmio items. */
 
-#if LINUX_VERSION_IS_LESS(5,10,70)
+#ifdef BPM_LIST_CMP_FUNC_T_NOT_PRESENT
 static int mmio_offset_compare(void *priv,
 	struct list_head *a, struct list_head *b)
 #else
 static int mmio_offset_compare(void *priv,
 	const struct list_head *a, const struct list_head *b)
-#endif /* LINUX_VERSION_IS_LESS(5,10,70) */
+#endif
 {
 	struct diff_mmio *ma;
 	struct diff_mmio *mb;

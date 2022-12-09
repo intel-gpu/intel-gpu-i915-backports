@@ -24,6 +24,7 @@
 
 #include <linux/vga_switcheroo.h>
 
+#include <drm/drm_color_mgmt.h>
 #include <drm/drm_drv.h>
 #include <drm/i915_pciids.h>
 
@@ -1185,6 +1186,7 @@ static const struct intel_device_info ats_m_info = {
 	DG2_FEATURES,
 	.display = { 0 },
 	.tuning_thread_rr_after_dep = 1,
+	.has_csc_uid = 1,
 };
 
 #define XE_HPC_FEATURES \
@@ -1249,6 +1251,13 @@ static const struct intel_device_info pvc_info = {
 	.has_flat_ccs = 0,
 	.extra_gt_list = pvc_extra_gt,
 	.platform_engine_mask = PVC_ENGINES,
+
+	/*
+	 * Runtime PM is not a PVC requirement, few PVC platforms
+	 * has ended up with DPC and Internal fabric error when entered to
+	 * Runtime Suspend D3, therefore disabling Runtime PM.
+	 */
+	.has_runtime_pm = 0,
 	.require_force_probe = 1,
 	PVC_CACHELEVEL,
 };
@@ -1295,6 +1304,7 @@ static const struct intel_device_info mtl_info = {
 	MTL_CACHELEVEL,
 	.platform_engine_mask = BIT(RCS0) | BIT(BCS0) | BIT(CCS0),
 	.require_force_probe = 1,
+	.needs_driver_flr = 0, /* FIXME: IFWI still has issues with FLR */
 };
 
 #undef PLATFORM

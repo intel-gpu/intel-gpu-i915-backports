@@ -15,7 +15,9 @@
 #include <linux/dma-fence.h>
 #include <linux/dma-buf.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define seqno_fence_ops LINUX_DMABUF_BACKPORT(seqno_fence_ops)
+#endif
 
 enum seqno_fence_condition {
 	SEQNO_FENCE_WAIT_GEQUAL,

@@ -67,6 +67,8 @@ static int dmabuf_map_addr(struct device *dev, struct drm_i915_gem_object *obj,
 	int i;
 
 	for_each_sg(sgt->sgl, sg, sgt->orig_nents, i) {
+		if (obj->pair && i == obj->mm.pages->orig_nents)
+			mem = obj->pair->mm.region;
 		addr = sg_dma_address(sg) - mem->region.start + mem->io_start;
 		sg->dma_address = dma_map_resource(dev, addr, sg->length, dir,
 						   attrs);
@@ -87,6 +89,7 @@ static struct sg_table *i915_gem_copy_pages(struct drm_i915_gem_object *obj)
 	struct scatterlist *src;
 	struct scatterlist *dst;
 	struct sg_table *sgt;
+	unsigned int nents;
 	int i;
 
 	/*
@@ -99,7 +102,11 @@ static struct sg_table *i915_gem_copy_pages(struct drm_i915_gem_object *obj)
 	if (!sgt)
 		return NULL;
 
-	if (sg_alloc_table(sgt, obj->mm.pages->orig_nents, GFP_KERNEL)) {
+	nents = obj->mm.pages->orig_nents;
+	if (obj->pair)
+		nents += obj->pair->mm.pages->orig_nents;
+
+	if (sg_alloc_table(sgt, nents, GFP_KERNEL)) {
 		kfree(sgt);
 		return NULL;
 	}
@@ -110,6 +117,16 @@ static struct sg_table *i915_gem_copy_pages(struct drm_i915_gem_object *obj)
 		sg_dma_address(dst) = sg_dma_address(src);
 		sg_dma_len(dst) = sg_dma_len(src);
 		dst = sg_next(dst);
+	}
+
+	/* If object is paired, add the pair's page info */
+	if (obj->pair) {
+		for_each_sg(obj->pair->mm.pages->sgl, src, obj->pair->mm.pages->orig_nents, i) {
+			sg_set_page(dst, sg_page(src), src->length, 0);
+			sg_dma_address(dst) = sg_dma_address(src);
+			sg_dma_len(dst) = sg_dma_len(src);
+			dst = sg_next(dst);
+		}
 	}
 
 	return sgt;
@@ -366,8 +383,16 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
+		if (obj->pair) {
+			err = i915_gem_object_lock(obj->pair, &ww);
+			if (err) {
+				i915_gem_object_unlock(obj);
+				continue;
+			}
+		}
 
 		if (!fabric && p2p_distance < 0) {
+			GEM_BUG_ON(obj->pair);
 			err = i915_gem_object_migrate(obj, &ww, ce,
 						      INTEL_REGION_SMEM, false);
 			if (err)
@@ -375,6 +400,11 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 		}
 
 		err = i915_gem_object_pin_pages(obj);
+		if (!err && obj->pair) {
+			err = i915_gem_object_pin_pages(obj->pair);
+			if (err)
+				i915_gem_object_unpin_pages(obj);
+		}
 	}
 
 	return err;
@@ -385,6 +415,9 @@ static void i915_gem_dmabuf_detach(struct dma_buf *dmabuf,
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
+	if (obj->pair)
+		i915_gem_object_unpin_pages(obj->pair);
 
 	i915_gem_object_unpin_pages(obj);
 	pvc_wa_allow_rc6(i915);
@@ -416,6 +449,8 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 
 	exp_info.ops = &i915_dmabuf_ops;
 	exp_info.size = gem_obj->size;
+	if (obj->pair)
+		exp_info.size += obj->pair->base.size;
 	exp_info.flags = flags;
 	exp_info.priv = gem_obj;
 	exp_info.resv = obj->base.resv;

@@ -6,7 +6,6 @@
 #ifndef __INTEL_GT__
 #define __INTEL_GT__
 
-#include <linux/compiler_attributes.h>
 #include "intel_engine_types.h"
 #include "intel_gt_types.h"
 #include "intel_reset.h"
@@ -129,10 +128,6 @@ void intel_gt_release_all(struct drm_i915_private *i915);
 static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 {
 	if (!i915->params.enable_rc6)
-		return false;
-
-	/* Disable RC6 for all B-step - hsd: 14015706335*/
-	if (!i915->params.rc6_ignore_steppings)
 		return false;
 
 	/*

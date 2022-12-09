@@ -37,8 +37,6 @@
 #include <asm/hypervisor.h>
 #endif
 
-#include "backport/autoconf.h"
-
 struct drm_i915_private;
 struct timer_list;
 

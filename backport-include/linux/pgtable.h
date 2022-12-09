@@ -13,7 +13,7 @@
 #ifndef _BACKPORT_LINUX_PGTABLE_H
 #define _BACKPORT_LINUX_PGTABLE_H
 
-#if LINUX_VERSION_IS_LESS(5,8,0)
+#ifdef BPM_ASM_PGTABLE_H_NOT_PRESENT
 #include <asm/pgtable.h>
 #endif
 

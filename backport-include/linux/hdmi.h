@@ -3,7 +3,7 @@
 #include <linux/version.h>
 #include_next <linux/hdmi.h>
 
-#if LINUX_VERSION_IS_LESS(5,8,0)
+#ifdef BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT
 int hdmi_drm_infoframe_unpack_only(struct hdmi_drm_infoframe *frame,
                                    const void *buffer, size_t size);
 #endif
@@ -51,4 +51,3 @@ struct hdmi_extended_metadata_packet {
 };
 
 #endif /*_BACKPORT_LINUX_HDMI_H_*/
-

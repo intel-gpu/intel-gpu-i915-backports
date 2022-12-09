@@ -29,7 +29,7 @@
 #include_next <linux/capability.h>
 
 /* perfmon_capable introduced in 5.8 version */
-#if LINUX_VERSION_IS_LESS(5,8,0)
+#ifdef BPM_PERFMON_CAPABLE_NOT_PRESENT
 
 #define perfmon_capable LINUX_I915_BACKPORT(perfmon_capable)
 

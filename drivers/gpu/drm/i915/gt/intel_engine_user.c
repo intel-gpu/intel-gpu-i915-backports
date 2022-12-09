@@ -50,13 +50,13 @@ static const u8 uabi_classes[] = {
 	[COMPUTE_CLASS] = I915_ENGINE_CLASS_COMPUTE,
 };
 
-#if LINUX_VERSION_IS_LESS(5,10,70)
+#ifdef BPM_LIST_CMP_FUNC_T_NOT_PRESENT
 static int engine_cmp(void *priv, struct list_head *A,
 		       struct list_head *B)
 #else
 static int engine_cmp(void *priv, const struct list_head *A,
 		      const struct list_head *B)
-#endif /* LINUX_VERSION_IS_LESS(5,10,70) */
+#endif
 {
 	const struct intel_engine_cs *a =
 		container_of((struct rb_node *)A, typeof(*a), uabi_node);

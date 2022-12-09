@@ -34,7 +34,6 @@
 #include <linux/list.h>
 #include <linux/list_sort.h>
 #include <linux/export.h>
-#include <linux/compiler_attributes.h>
 
 #include <video/of_videomode.h>
 #include <video/videomode.h>
@@ -1287,13 +1286,13 @@ EXPORT_SYMBOL(drm_mode_prune_invalid);
  * positive if @lh_b is better than @lh_a.
  */
 
-#if LINUX_VERSION_IS_LESS(5,10,70)
+#ifdef BPM_LIST_CMP_FUNC_T_NOT_PRESENT
 static int drm_mode_compare(void *priv, struct list_head *lh_a,
-			    struct list_head *lh_b)
+                           struct list_head *lh_b)
 #else
 static int drm_mode_compare(void *priv, const struct list_head *lh_a,
 			    const struct list_head *lh_b)
-#endif /* LINUX_VERSION_IS_LESS(5,10,70) */
+#endif
 {
 	struct drm_display_mode *a = list_entry(lh_a, struct drm_display_mode, head);
 	struct drm_display_mode *b = list_entry(lh_b, struct drm_display_mode, head);

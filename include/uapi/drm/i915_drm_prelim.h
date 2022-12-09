@@ -239,6 +239,9 @@ struct prelim_i915_user_extension {
 
 /* Recoverable pagefault support */
 #define PRELIM_I915_PARAM_HAS_PAGE_FAULT	(PRELIM_I915_PARAM | 7)
+
+/* Implicit scale support */
+#define PRELIM_I915_PARAM_HAS_SET_PAIR	(PRELIM_I915_PARAM | 8)
 /* End getparam */
 
 struct prelim_drm_i915_gem_create_ext {
@@ -292,6 +295,14 @@ struct prelim_drm_i915_gem_object_param {
  *	.param = PRELIM_I915_OBJECT_PARAM | PRELIM_I915_PARAM_MEMORY_REGIONS
  */
 #define PRELIM_I915_PARAM_MEMORY_REGIONS ((1 << 16) | 0x1)
+
+/*
+ * PRELIM_I915_PARAM_SET_PAIR:
+ *
+ * Allows a "paired" buffer object to be specified to allow implicit scaling to
+ * use two buffer objects with a single exported dma-buf file descriptor
+ */
+#define PRELIM_I915_PARAM_SET_PAIR ((1 << 17) | 0x1)
 	__u64 param;
 
 	/* Data value or pointer */
@@ -1344,14 +1355,19 @@ struct prelim_drm_i915_gem_cache_reserve {
 /**
  * struct prelim_drm_i915_gem_vm_prefetch
  *
- * Prefetch an address range to a memory region.
+ * Prefetch an address range to a memory region, support both
+ * system allocator and runtime allocator.
  */
 struct prelim_drm_i915_gem_vm_prefetch {
 	/** Memory region to prefetch to **/
 	__u32 region;
 
-	/** Reserved **/
-	__u32 rsvd;
+	/**
+	 * Destination vm id to prefetch to.
+	 * Only valid for runtime allocator.
+	 * System allocator doesn't need a vm_id, should be set to 0.
+	 */
+	__u32 vm_id;
 
 	/** VA start to prefetch **/
 	__u64 start;

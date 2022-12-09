@@ -628,8 +628,11 @@ static int live_hold_reset(void *arg)
 		err = engine_lock_reset_tasklet(engine);
 		if (err)
 			goto out;
-
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 		engine->sched_engine->tasklet.func(engine->sched_engine->tasklet.data);
+#else
+		engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
+#endif
 		GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
 
 		i915_request_get(rq);
@@ -4649,7 +4652,11 @@ static int reset_virtual_engine(struct intel_gt *gt,
 	if (err)
 		goto out_heartbeat;
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	engine->sched_engine->tasklet.func(engine->sched_engine->tasklet.data);
+#else
+	engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
+#endif
 	GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
 
 	/* Fake a preemption event; failed of course */

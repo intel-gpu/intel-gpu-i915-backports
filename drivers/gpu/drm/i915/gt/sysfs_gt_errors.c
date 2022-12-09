@@ -11,19 +11,38 @@
 #include "gt/intel_gt_requests.h"
 
 static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+#else
+i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
+#endif
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+#else
+typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
+#endif
 
 struct i915_ext_attr {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct kobj_attribute attr;
+#else
+	struct device_attribute attr;
+#endif
 	unsigned long id;
 	show i915_show;
 };
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t gt_driver_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t gt_driver_error_show(struct device *dev,
+                                   struct device_attribute *attr,
+                                   char *buf)
+{
+#endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
@@ -33,60 +52,104 @@ static ssize_t gt_driver_error_show(struct kobject *kobj, struct kobj_attribute 
 	return sysfs_emit(buf, "%lu\n", gt->errors.driver[ea->id]);
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t sgunit_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t sgunit_error_show(struct device *dev,
+                            struct device_attribute *attr,
+                            char *buf)
+{
+#endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%lu\n", gt->errors.sgunit[ea->id]);
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t soc_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t soc_error_show(struct device *dev,
+                             struct device_attribute *attr,
+                             char *buf)
+{
+#endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%lu\n", xa_to_value(xa_load(&gt->errors.soc, ea->id)));
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t gt_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t gt_error_show(struct device *dev,
+                            struct device_attribute *attr,
+                            char *buf)
+{
+#endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%lu\n", gt->errors.hw[ea->id]);
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t engine_reset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t engine_reset_show(struct device *dev,
+                                struct device_attribute *attr,
+                                char *buf)
+{
+#endif
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%u\n", atomic_read(&gt->reset.engines_reset_count));
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t eu_attention_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t eu_attention_show(struct device *dev,
+                                struct device_attribute *attr,
+                                char *buf)
+{
+#endif
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%u\n", atomic_read(&gt->reset.eu_attention_count));
 }
 
 static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	ssize_t value;
 	struct device *dev = kobj_to_dev(kobj);
+#else
+i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+#endif
+	ssize_t value;
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	pvc_wa_disallow_rc6(gt->i915);
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	value = ea->i915_show(kobj, attr, buf);
+#else
+	value = ea->i915_show(dev, attr, buf);
+#endif
 
 	pvc_wa_allow_rc6(gt->i915);
 

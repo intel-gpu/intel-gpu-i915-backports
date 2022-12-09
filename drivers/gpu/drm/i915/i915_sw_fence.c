@@ -8,7 +8,6 @@
 #include <linux/dma-fence.h>
 #include <linux/irq_work.h>
 #include <linux/dma-resv.h>
-#include <backport/autoconf.h>
 
 #include "i915_sw_fence.h"
 #include "i915_selftest.h"
@@ -42,7 +41,11 @@ static void *i915_sw_fence_debug_hint(void *addr)
 
 #ifdef CPTCFG_DRM_I915_SW_FENCE_DEBUG_OBJECTS
 
+#ifdef BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
 static struct debug_obj_descr i915_sw_fence_debug_descr = {
+#else
+static const struct debug_obj_descr i915_sw_fence_debug_descr = {
+#endif
 	.name = "i915_sw_fence",
 	.debug_hint = i915_sw_fence_debug_hint,
 };

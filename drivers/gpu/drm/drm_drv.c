@@ -48,10 +48,14 @@
 #include "drm_internal.h"
 #include "drm_legacy.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 MODULE_AUTHOR("Gareth Hughes, Leif Delgass, José Fonseca, Jon Smirl");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION("DRM shared core routines");
 MODULE_LICENSE("GPL and additional rights");
 
@@ -1052,7 +1056,9 @@ static int __init drm_core_init(void)
 {
 	int ret;
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	DRM_INFO("DRM BACKPORTED INIT\n");
+#endif
 	drm_connector_ida_init();
 	idr_init(&drm_minors_idr);
 	drm_memcpy_init_early();

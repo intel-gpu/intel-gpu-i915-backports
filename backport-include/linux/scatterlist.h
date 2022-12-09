@@ -2,7 +2,7 @@
 #define __BACKPORT_SCATTERLIST_H
 #include_next <linux/scatterlist.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)
+#ifdef BPM_FOR_EACH_SGTABLE_PAGE_NOT_PRESENT
 /*
  * for_each_sgtable_page - iterate over all pages in the sg_table object
  * @sgt:        sg_table object to iterate over

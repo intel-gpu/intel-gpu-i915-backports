@@ -21,8 +21,6 @@
 #include <linux/sync_file.h>
 #include <uapi/linux/sync_file.h>
 
-#include <backport/bp-dma-buf.h>
-
 /**
  * struct sync_timeline - sync object
  * @kref:		reference count on fence.

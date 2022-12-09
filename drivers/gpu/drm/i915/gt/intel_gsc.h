@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2019-2020, Intel Corporation. All rights reserved.
+ * Copyright(c) 2019-2022, Intel Corporation. All rights reserved.
  */
 #ifndef __INTEL_GSC_DEV_H__
 #define __INTEL_GSC_DEV_H__
@@ -9,7 +9,7 @@
 
 struct drm_i915_private;
 struct intel_gt;
-#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 struct mei_aux_device;
 #else
 struct resource;
@@ -30,7 +30,7 @@ struct resource;
  */
 struct intel_gsc {
 	struct intel_gsc_intf {
-#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 		struct mei_aux_device *adev;
 #endif
 		struct drm_i915_gem_object *gem_obj;

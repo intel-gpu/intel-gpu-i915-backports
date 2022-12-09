@@ -378,7 +378,7 @@ static const struct rb_augment_callbacks dummy_callbacks = {
 	dummy_propagate, dummy_copy, dummy_rotate
 };
 
-#if RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(6,7) && RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(6,8)
+#if REDHAT_RELEASE_VERSION_IS_NOT_EQL(6,7) && REDHAT_RELEASE_VERSION_IS_NOT_EQL(6,8)
 void rb_insert_color(struct rb_node *node, struct rb_root *root)
 {
 	__rb_insert(node, root, dummy_rotate);
@@ -554,4 +554,4 @@ struct rb_node *rb_first_postorder(const struct rb_root *root)
 	return rb_left_deepest_node(root->rb_node);
 }
 EXPORT_SYMBOL(rb_first_postorder);
-#endif
+#endif /* REDHAT_RELEASE_VERSION_IS_NOT_EQL(6,7) && REDHAT_RELEASE_VERSION_IS_NOT_EQL(6,8) */

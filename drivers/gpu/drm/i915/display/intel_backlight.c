@@ -8,6 +8,7 @@
 #include <linux/string_helpers.h>
 
 #include "intel_backlight.h"
+#include "intel_backlight_regs.h"
 #include "intel_connector.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
@@ -969,7 +970,7 @@ int intel_backlight_device_register(struct intel_connector *connector)
 	if (!name)
 		return -ENOMEM;
 
-#ifdef BACKLIGHT_DEV_GET_BY_NAME_NOT_PRESENT
+#ifdef BPM_BACKLIGHT_DEV_GET_BY_NAME_NOT_PRESENT
 	bd = backlight_device_register(name, connector->base.kdev, connector,
                                        &intel_backlight_device_ops, &props);
 

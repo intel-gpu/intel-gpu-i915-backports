@@ -453,7 +453,7 @@ gen8_pdp_for_page_address(struct i915_address_space * const vm, const u64 addr)
 	return gen8_pdp_for_page_index(vm, addr >> GEN8_PTE_SHIFT);
 }
 
-struct i915_page_directory *
+static struct i915_page_directory *
 i915_pdx_for_page_address(struct i915_address_space * const vm, const u64 addr,
 			  unsigned int exp_lvl)
 {

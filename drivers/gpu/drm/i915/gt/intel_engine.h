@@ -20,8 +20,6 @@
 #include "intel_workarounds.h"
 #include "uc/intel_guc_submission.h"
 
-#include "backport/autoconf.h"
-
 struct drm_printer;
 struct intel_context;
 struct intel_gt;

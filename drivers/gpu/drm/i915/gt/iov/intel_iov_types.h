@@ -62,6 +62,20 @@ struct intel_iov_config {
 };
 
 /**
+ * struct intel_iov_spare_config - PF spare configuration data.
+ * @ggtt_size: GGTT size.
+ * @lmem_size: LMEM size.
+ * @num_ctxs: number of GuC submission contexts.
+ * @num_dbs: number of GuC doorbells.
+ */
+struct intel_iov_spare_config {
+	u64 ggtt_size;
+	u64 lmem_size;
+	u16 num_ctxs;
+	u16 num_dbs;
+};
+
+/**
  * struct intel_iov_sysfs - IOV sysfs data.
  * @entries: array with kobjects that represent PF and VFs.
  */
@@ -93,6 +107,7 @@ struct intel_iov_provisioning {
 	unsigned int num_pushed;
 	struct work_struct worker;
 	struct intel_iov_policies policies;
+	struct intel_iov_spare_config spare;
 	struct intel_iov_config *configs;
 	struct mutex lock;
 
@@ -201,6 +216,12 @@ struct intel_iov_relay {
  * @tile_mask: assigned tiles (as bitmask with tile0 = BIT(0)).
  */
 struct intel_iov_vf_config {
+	struct {
+		u8 branch;
+		u8 major;
+		u8 minor;
+		u8 patch;
+	} guc_abi;
 	u64 ggtt_base;
 	u64 ggtt_size;
 	u64 lmem_size;

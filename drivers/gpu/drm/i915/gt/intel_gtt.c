@@ -347,6 +347,7 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	i915_active_init(&vm->active, __i915_vm_active, __i915_vm_retire, 0);
 
 	init_llist_head(&vm->vm_bind_free_list);
+	atomic_set(&vm->invalidations, 0);
 	i915_gem_vm_bind_init(vm);
 
 	if (HAS_UM_QUEUES(vm->i915) && subclass == VM_CLASS_PPGTT) {

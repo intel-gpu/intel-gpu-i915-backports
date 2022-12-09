@@ -21,12 +21,10 @@
 #include "i915_utils.h"
 #include "i915_debugger.h"
 
+#ifndef BPM_SYSFS_EMIT_NOT_PRESENT
 /* compat: 2efc459d06f1 ("sysfs: Add sysfs_emit and sysfs_emit_at to format sysfs output") */
-
-/* Commented sysfs_emit macro as we backported sysfs_emit in
- * backport-include/linux/sysfs.h
- */
-//#define sysfs_emit(buf, fmt...) scnprintf(buf, PAGE_SIZE, fmt)
+#define sysfs_emit(buf, fmt...) scnprintf(buf, PAGE_SIZE, fmt)
+#endif
 
 void i915_drm_clients_init(struct i915_drm_clients *clients,
 			   struct drm_i915_private *i915)
@@ -371,6 +369,7 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 					     struct task_struct *task)
 {
 	struct i915_drm_client_name *name;
+	const struct cred *cred;
 	int len = strlen(task->comm);
 
 	name = kmalloc(struct_size(name, name, len + 1), GFP_KERNEL);
@@ -380,6 +379,10 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 	init_rcu_head(&name->rcu);
 	name->client = client;
 	name->pid = get_task_pid(task, PIDTYPE_PID);
+	cred = get_task_cred(task);
+	name->uid = cred->uid;
+	name->gid = cred->gid;
+	put_cred(cred);
 	memcpy(name->name, task->comm, len + 1);
 
 	return name;

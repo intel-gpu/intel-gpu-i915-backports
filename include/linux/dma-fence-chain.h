@@ -14,10 +14,12 @@
 #include <linux/irq_work.h>
 #include <linux/slab.h>
 
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
 #define dma_fence_chain_walk LINUX_DMABUF_BACKPORT(dma_fence_chain_walk)
 #define dma_fence_chain_find_seqno LINUX_DMABUF_BACKPORT(dma_fence_chain_find_seqno)
 #define dma_fence_chain_ops  LINUX_DMABUF_BACKPORT(dma_fence_chain_ops)
 #define dma_fence_chain_init LINUX_DMABUF_BACKPORT(dma_fence_chain_init)
+#endif
 
 /**
  * struct dma_fence_chain - fence to represent an node of a fence chain

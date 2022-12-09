@@ -20,7 +20,6 @@
  * OF THIS SOFTWARE.
  */
 
-#include <backport/autoconf.h>
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/errno.h>

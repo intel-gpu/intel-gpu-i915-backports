@@ -306,6 +306,18 @@ i915_gem_object_has_fabric(const struct drm_i915_gem_object *obj)
 }
 
 static inline void
+i915_gem_object_set_first_bind(struct drm_i915_gem_object *obj)
+{
+	obj->flags |= I915_BO_FIRST_BIND;
+}
+
+static inline bool
+i915_gem_object_has_first_bind(const struct drm_i915_gem_object *obj)
+{
+	return obj->flags & I915_BO_FIRST_BIND;
+}
+
+static inline void
 i915_gem_object_set_readonly(struct drm_i915_gem_object *obj)
 {
 	obj->flags |= I915_BO_READONLY;
@@ -549,6 +561,8 @@ i915_gem_object_get_dma_address(struct drm_i915_gem_object *obj, pgoff_t n);
 	exactly_pgoff_t(n); \
 	(i915_gem_object_get_dma_address)(obj, n); \
 })
+
+unsigned int i915_gem_sg_segment_size(const struct drm_i915_gem_object *obj);
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages,

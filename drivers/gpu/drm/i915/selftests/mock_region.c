@@ -12,51 +12,29 @@
 
 #include "mock_region.h"
 
-#if 0
-static void mock_region_put_pages(struct drm_i915_gem_object *obj,
-				  struct sg_table *pages)
+static int mock_region_put_pages(struct drm_i915_gem_object *obj,
+				 struct sg_table *pages)
 {
-	intel_region_ttm_resource_free(obj->mm.region, obj->mm.res);
-	sg_free_table(pages);
-	kfree(pages);
+	return i915_gem_object_put_pages_buddy(obj, pages);
 }
 
 static int mock_region_get_pages(struct drm_i915_gem_object *obj)
 {
-	unsigned int flags;
 	struct sg_table *pages;
-	int err;
+	unsigned int sizes;
 
-	flags = I915_ALLOC_MIN_PAGE_SIZE;
-	if (obj->flags & I915_BO_ALLOC_CONTIGUOUS)
-		flags |= TTM_PL_FLAG_CONTIGUOUS;
+	pages = i915_gem_object_get_pages_buddy(obj, &sizes);
+	if (IS_ERR(pages))
+		return PTR_ERR(pages);
 
-	obj->mm.res = intel_region_ttm_resource_alloc(obj->mm.region,
-						      obj->base.size,
-						      flags);
-	if (IS_ERR(obj->mm.res))
-		return PTR_ERR(obj->mm.res);
-
-	pages = intel_region_ttm_resource_to_st(obj->mm.region, obj->mm.res);
-	if (IS_ERR(pages)) {
-		err = PTR_ERR(pages);
-		goto err_free_resource;
-	}
-
-	__i915_gem_object_set_pages(obj, pages, i915_sg_dma_sizes(pages->sgl));
-
+	__i915_gem_object_set_pages(obj, pages, sizes);
 	return 0;
-
-err_free_resource:
-	intel_region_ttm_resource_free(obj->mm.region, obj->mm.res);
-	return err;
 }
-#endif
 
 static const struct drm_i915_gem_object_ops mock_region_obj_ops = {
 	.name = "mock-region",
-	.get_pages = i915_gem_object_get_pages_buddy,
-	.put_pages = i915_gem_object_put_pages_buddy,
+	.get_pages = mock_region_get_pages,
+	.put_pages = mock_region_put_pages,
 	.release = i915_gem_object_release_memory_region,
 };
 
@@ -113,9 +91,11 @@ mock_region_create(struct intel_gt *gt,
 		   resource_size_t start,
 		   resource_size_t size,
 		   resource_size_t min_page_size,
-		   resource_size_t io_start)
+		   resource_size_t io_start,
+		   resource_size_t io_size)
 {
 	return intel_memory_region_create(gt, start, size, min_page_size,
-					  io_start, INTEL_MEMORY_MOCK, 0,
+					  io_start, io_size,
+					  INTEL_MEMORY_MOCK, 0,
 					  &mock_region_ops);
 }

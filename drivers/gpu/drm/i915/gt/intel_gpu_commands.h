@@ -179,8 +179,6 @@
 #define   MI_FLUSH_DW_OP_STOREDW	(1<<14)
 #define   MI_FLUSH_DW_OP_MASK		(3<<14)
 #define   MI_FLUSH_DW_LLC		(1<<9)
-#define   MI_FLUSH_CCS			(1<<16)
-#define   MI_FLUSH_LLC			(1<<9)
 #define   MI_FLUSH_DW_NOTIFY		(1<<8)
 #define   MI_INVALIDATE_BSD		(1<<7)
 #define   MI_FLUSH_DW_USE_GTT		(1<<2)
@@ -235,11 +233,10 @@
 #define XY_CTRL_SURF_COPY_BLT		((2 << 29) | (0x48 << 22) | 3)
 #define   SRC_ACCESS_TYPE_SHIFT		21
 #define   DST_ACCESS_TYPE_SHIFT		20
-#define   CCS_SIZE_MASK			0x3FF
-#define   CCS_SIZE_SHIFT		8
+#define   CCS_SIZE_MASK_XEHP		GENMASK(17, 8)
 #define   XY_CTRL_SURF_MOCS_MASK	GENMASK(31, 25)
-/* Bspec lists field as [31:25], but index alone is at [31:26] */
-#define   XY_CSC_BLT_MOCS_INDEX_MASK	GENMASK(31, 26)
+/* This is the subset of XY_CTRL_SURF_MOCS_MASK that corresponds to MOCS index */
+#define   XY_CSC_BLT_MOCS_INDEX_MASK_XEHP	GENMASK(31, 26)
 #define   NUM_CCS_BYTES_PER_BLOCK	256
 #define   NUM_BYTES_PER_CCS_BYTE	256
 #define   NUM_CCS_BLKS_PER_XFER		1024

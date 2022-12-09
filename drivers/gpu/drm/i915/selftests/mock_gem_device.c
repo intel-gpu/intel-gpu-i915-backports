@@ -164,6 +164,7 @@ struct drm_i915_private *mock_gem_device(void)
 	if (pm_runtime_enabled(&pdev->dev))
 		WARN_ON(pm_runtime_get_sync(&pdev->dev));
 
+	i915->__mode = I915_IOV_MODE_NONE;
 
 	i915_params_copy(&i915->params, &i915_modparams);
 
@@ -198,7 +199,6 @@ struct drm_i915_private *mock_gem_device(void)
 
 	spin_lock_init(&i915->gpu_error.lock);
 
-	i915->__mode = I915_IOV_MODE_NONE;
 	i915_gem_init__mm(i915);
 
 	i915->wq = alloc_ordered_workqueue("mock", 0);

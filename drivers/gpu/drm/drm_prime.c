@@ -571,7 +571,8 @@ int drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data,
  *
  * Returns 0 on success, negative error code on failure.
  */
-int drm_gem_map_attach(struct dma_buf *dma_buf, struct dma_buf_attachment *attach)
+int drm_gem_map_attach(struct dma_buf *dma_buf,
+		       struct dma_buf_attachment *attach)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
 
@@ -781,7 +782,7 @@ int drm_gem_dmabuf_mmap(struct dma_buf *dma_buf, struct vm_area_struct *vma)
 EXPORT_SYMBOL(drm_gem_dmabuf_mmap);
 
 static const struct dma_buf_ops drm_gem_prime_dmabuf_ops =  {
-//	.cache_sgt_mapping = true,
+	.cache_sgt_mapping = true,
 	.attach = drm_gem_map_attach,
 	.detach = drm_gem_map_detach,
 	.map_dma_buf = drm_gem_map_dma_buf,
@@ -794,6 +795,7 @@ static const struct dma_buf_ops drm_gem_prime_dmabuf_ops =  {
 
 /**
  * drm_prime_pages_to_sg - converts a page array into an sg list
+ * @dev: DRM device
  * @pages: pointer to the array of page pointers to convert
  * @nr_pages: length of the page vector
  *
@@ -803,24 +805,72 @@ static const struct dma_buf_ops drm_gem_prime_dmabuf_ops =  {
  *
  * This is useful for implementing &drm_gem_object_funcs.get_sg_table.
  */
-struct sg_table *drm_prime_pages_to_sg(struct page **pages, unsigned int nr_pages)
+struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
+				       struct page **pages, unsigned int nr_pages)
 {
 	struct sg_table *sg;
+#ifndef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
+	size_t max_segment = 0;
+#endif
 	int err;
 
 	sg = kmalloc(sizeof(struct sg_table), GFP_KERNEL);
 	if (!sg)
 		return ERR_PTR(-ENOMEM);
-
+#ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 	err = sg_alloc_table_from_pages(sg, pages, nr_pages, 0,
-                                         nr_pages << PAGE_SHIFT, GFP_KERNEL);
+			nr_pages << PAGE_SHIFT, GFP_KERNEL);
 	if (err) {
 		kfree(sg);
 		sg = ERR_PTR(err);
 	}
+#else
+	if (dev)
+		max_segment = dma_max_mapping_size(dev->dev);
+	if (max_segment == 0)
+		max_segment = UINT_MAX;
+	err = sg_alloc_table_from_pages_segment(sg, pages, nr_pages, 0,
+			nr_pages << PAGE_SHIFT,
+			max_segment, GFP_KERNEL);
+	if (err) {
+		kfree(sg);
+		sg = ERR_PTR(err);
+	}
+#endif
 	return sg;
 }
 EXPORT_SYMBOL(drm_prime_pages_to_sg);
+
+/**
+ * drm_prime_get_contiguous_size - returns the contiguous size of the buffer
+ * @sgt: sg_table describing the buffer to check
+ *
+ * This helper calculates the contiguous size in the DMA address space
+ * of the the buffer described by the provided sg_table.
+ *
+ * This is useful for implementing
+ * &drm_gem_object_funcs.gem_prime_import_sg_table.
+ */
+unsigned long drm_prime_get_contiguous_size(struct sg_table *sgt)
+{
+	dma_addr_t expected = sg_dma_address(sgt->sgl);
+	struct scatterlist *sg;
+	unsigned long size = 0;
+	int i;
+
+	for_each_sgtable_dma_sg(sgt, sg, i) {
+		unsigned int len = sg_dma_len(sg);
+
+		if (!len)
+			break;
+		if (sg_dma_address(sg) != expected)
+			break;
+		expected += len;
+		size += len;
+	}
+	return size;
+}
+EXPORT_SYMBOL(drm_prime_get_contiguous_size);
 
 /**
  * drm_gem_prime_export - helper library implementation of the export callback

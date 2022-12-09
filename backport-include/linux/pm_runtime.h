@@ -11,11 +11,11 @@
 #include_next <linux/pm_runtime.h>
 
 
-#ifdef PM_RUNTIME_GET_IF_ACTIVE_NOT_PRESENT
+#ifdef BPM_PM_RUNTIME_GET_IF_ACTIVE_NOT_PRESENT
 int pm_runtime_get_if_active(struct device *dev, bool ign_usage_count);
 #endif
 
-#ifdef PM_RUNTIME_RESUME_AND_GET_NOT_PRESENT
+#ifdef BPM_PM_RUNTIME_RESUME_AND_GET_NOT_PRESENT
 /**
  * pm_runtime_resume_and_get - Bump up usage counter of a device and resume it.
  * @dev: Target device.

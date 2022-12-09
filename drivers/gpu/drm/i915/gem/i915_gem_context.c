@@ -64,6 +64,7 @@
  *
  */
 
+#include <linux/highmem.h>
 #include <linux/log2.h>
 #include <linux/nospec.h>
 
@@ -1300,12 +1301,15 @@ static int i915_gem_vm_setparam_ioctl(struct drm_device *dev, void *data,
 	switch (lower_32_bits(args->param)) {
 	case PRELIM_I915_GEM_VM_PARAM_SVM:
 		/* FIXME: Ensure ppgtt is empty before switching */
-		if (!i915_has_svm(file_priv->dev_priv))
+		if (!i915_has_svm(file_priv->dev_priv) || IS_SRIOV_VF(file_priv->dev_priv)) {
 			err = -ENOTSUPP;
-		else if (args->value)
-			err = i915_svm_bind_mm(vm);
-		else
+		} else if (args->value) {
+			err = intel_memory_regions_add_svm(file_priv->dev_priv);
+			if (!err)
+				err = i915_svm_bind_mm(vm);
+		} else {
 			i915_svm_unbind_mm(vm);
+		}
 		break;
 	default:
 		err = -EINVAL;
@@ -1447,10 +1451,7 @@ i915_gem_user_to_context_sseu(struct intel_gt *gt,
 {
 	const struct sseu_dev_info *device = &gt->info.sseu;
 	struct drm_i915_private *i915 = gt->i915;
-	unsigned int dev_subslice_mask;
-
-	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
-		return -EINVAL;
+	unsigned int dev_subslice_mask = intel_sseu_get_hsw_subslices(device, 0);
 
 	/* No zeros in any field. */
 	if (!user->slice_mask || !user->subslice_mask ||
@@ -1477,7 +1478,6 @@ i915_gem_user_to_context_sseu(struct intel_gt *gt,
 	if (user->slice_mask & ~device->slice_mask)
 		return -EINVAL;
 
-	dev_subslice_mask = intel_sseu_get_hsw_subslices(device, 0);
 	if (user->subslice_mask & ~dev_subslice_mask)
 		return -EINVAL;
 

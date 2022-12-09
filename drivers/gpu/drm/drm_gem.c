@@ -588,10 +588,10 @@ fail:
 	pagevec_init(&pvec);
 	while (i--) {
 		if (!pagevec_add(&pvec, pages[i]))
-                       drm_gem_check_release_pagevec(&pvec);
+			drm_gem_check_release_pagevec(&pvec);
 	}
 	if (pagevec_count(&pvec))
-               drm_gem_check_release_pagevec(&pvec);
+		drm_gem_check_release_pagevec(&pvec);
 
 	kvfree(pages);
 	return ERR_CAST(p);
@@ -636,10 +636,10 @@ void drm_gem_put_pages(struct drm_gem_object *obj, struct page **pages,
 
 		/* Undo the reference we took when populating the table */
 		if (!pagevec_add(&pvec, pages[i]))
-                       drm_gem_check_release_pagevec(&pvec);
+			drm_gem_check_release_pagevec(&pvec);
 	}
 	if (pagevec_count(&pvec))
-               drm_gem_check_release_pagevec(&pvec);
+		drm_gem_check_release_pagevec(&pvec);
 
 	kvfree(pages);
 }
@@ -1296,7 +1296,6 @@ drm_gem_unlock_reservations(struct drm_gem_object **objs, int count,
 }
 EXPORT_SYMBOL(drm_gem_unlock_reservations);
 
-#if 0
 /**
  * drm_gem_fence_array_add - Adds the fence to an array of fences to be
  * waited on, deduplicating fences from the same context.
@@ -1313,8 +1312,6 @@ EXPORT_SYMBOL(drm_gem_unlock_reservations);
 int drm_gem_fence_array_add(struct xarray *fence_array,
 			    struct dma_fence *fence)
 {
-	return 0;
-#if 0
 	struct dma_fence *entry;
 	unsigned long index;
 	u32 id = 0;
@@ -1345,8 +1342,8 @@ int drm_gem_fence_array_add(struct xarray *fence_array,
 		dma_fence_put(fence);
 
 	return ret;
-#endif
 }
+EXPORT_SYMBOL(drm_gem_fence_array_add);
 
 /**
  * drm_gem_fence_array_add_implicit - Adds the implicit dependencies tracked
@@ -1366,8 +1363,6 @@ int drm_gem_fence_array_add_implicit(struct xarray *fence_array,
 				     struct drm_gem_object *obj,
 				     bool write)
 {
-	return 0;
-#if 0
 	int ret;
 	struct dma_fence **fences;
 	unsigned int i, fence_count;
@@ -1394,6 +1389,5 @@ int drm_gem_fence_array_add_implicit(struct xarray *fence_array,
 		dma_fence_put(fences[i]);
 	kfree(fences);
 	return ret;
-#endif
 }
-#endif
+EXPORT_SYMBOL(drm_gem_fence_array_add_implicit);

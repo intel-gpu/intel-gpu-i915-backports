@@ -26,7 +26,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/idr.h>
-#include "backports.h"
 
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
@@ -92,14 +91,6 @@ static ssize_t dkms_i915_show(struct kobject *kobj,
 static int __init backport_init(void)
 {
 	int ret = 0;
-#if LINUX_VERSION_CODE > KERNEL_VERSION(3,0,0)
-	ukmd_mipi_dsi_bus_init();
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0) && RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(6,7) && \
-    RHEL_RELEASE_CODE != RHEL_RELEASE_VERSION(6,8)
-	workqueue_init();
-#endif
 
 	printk(KERN_INFO "I915 COMPAT BACKPORTED INIT\n");
 	printk(KERN_INFO "Loading I915 modules backported from " CPTCFG_DII_KERNEL_TAG "\n");

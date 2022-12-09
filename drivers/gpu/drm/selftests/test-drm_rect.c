@@ -5,7 +5,7 @@
 
 #define pr_fmt(fmt) "drm_rect: " fmt
 
-#include <linux/kernel.h>
+#include <linux/limits.h>
 
 #include <drm/drm_rect.h>
 

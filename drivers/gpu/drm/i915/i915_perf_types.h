@@ -574,7 +574,7 @@ struct per_dss_buf {
 	u32 read;
 	bool line_drop;
 	/* lock to protect read and write pointers */
-	spinlock_t lock;
+	struct mutex lock;
 };
 
 /**

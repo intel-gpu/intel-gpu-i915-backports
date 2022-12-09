@@ -25,7 +25,10 @@
 #include <linux/sched/mm.h>
 #include <drm/drm_gem.h>
 
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESET
 #include <linux/mmu_context.h>
+#endif
+
 #include "display/intel_frontbuffer.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_tiling.h"
@@ -429,12 +432,21 @@ static void __vma_user_fence_signal(struct i915_vma *vma)
 	}
 
 	if (kthread)
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESET
 		use_mm(ufence->mm);
+#else
+		kthread_use_mm(ufence->mm);
+#endif
 
 	remaining = copy_to_user(ufence->ptr, &ufence->val,
 				 sizeof(ufence->val));
 	if (kthread)
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESET
 		unuse_mm(ufence->mm);
+#else
+		kthread_unuse_mm(ufence->mm);
+#endif
+
 	if (remaining)
 		atomic_or(I915_VMA_ERROR, &vma->flags);
 
@@ -582,8 +594,76 @@ int i915_vma_bind(struct i915_vma *vma,
 		vma->ops->bind_vma(vma->vm, NULL, vma, pat_index, bind_flags);
 	}
 
+	/*
+	 * Mark when object becomes bound to GPU and accessible to user,
+	 * (used by migration policy).
+	 */
+	if (vma->obj && vma->vm->client)
+		i915_gem_object_set_first_bind(vma->obj);
+
 	atomic_or(bind_flags, &vma->flags);
 	return 0;
+}
+/**
+ * i915_vma_bind_sync - a synchronous version of vma_bind. When function returns,
+ * page table is updated for this vma.
+ * @vma: vma to bind
+ * @ww: ww context for object lock
+ */
+int i915_vma_bind_sync(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
+{
+	struct i915_address_space *vm = vma->vm;
+	struct i915_vma_work *work = NULL;
+	int err;
+
+	assert_object_held(vma->obj);
+	err = vma_get_pages(vma);
+	if (err)
+		return err;
+	GEM_BUG_ON(!vma->pages);
+
+	work = i915_vma_work(vma);
+	if (!work) {
+		err = -ENOMEM;
+		goto err_pages;
+	}
+	err = i915_vma_work_set_vm(work, vma, ww);
+	if (err)
+		goto err_fence;
+
+	err = mutex_lock_interruptible(&vm->mutex);
+	if (err)
+		goto err_fence;
+
+	err = i915_active_acquire(&vma->active);
+	if (err)
+		goto err_unlock;
+
+	err = i915_vma_bind(vma, vma->obj->pat_index, PIN_USER, work);
+	if (err)
+		goto err_active;
+
+	atomic_add(I915_VMA_PAGES_ACTIVE, &vma->pages_count);
+	GEM_BUG_ON(!i915_vma_is_bound(vma, PIN_USER));
+
+	/*
+	 * For non active bind, it has already been pinned in
+	 * i915_vma_fault_pin, so, only pin for active bind here.
+	 */
+	if (i915_vma_is_active_bind(vma))
+		__i915_vma_pin(vma);
+err_active:
+	i915_active_release(&vma->active);
+err_unlock:
+	mutex_unlock(&vm->mutex);
+err_fence:
+	i915_vma_work_commit(work);
+err_pages:
+	vma_put_pages(vma);
+	if (!err)
+		err = i915_vma_wait_for_bind(vma);
+
+	return err;
 }
 
 void __iomem *i915_vma_pin_iomap(struct i915_vma *vma)
@@ -1813,6 +1893,48 @@ out_rpm:
 		intel_runtime_pm_put(&vm->i915->runtime_pm, wakeref);
 
 	intel_flat_ppgtt_request_pool_clean(vma);
+	return err;
+}
+
+/**
+ * i915_vma_prefetch - Prefetch a vma to desired memory region
+ * @vma: vma to prefetch
+ * @mem: the destination memory region to prefetch to
+ *
+ * Prefetch vma's backing store to desired memory region, and
+ * bind vma to gpu synchronously
+ */
+int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem)
+{
+	struct i915_gem_ww_ctx ww;
+	int err;
+
+	if (!i915_gem_object_can_migrate(vma->obj, mem->id))
+		return -EINVAL;
+
+	if (i915_gem_object_is_userptr(vma->obj))
+		return -EINVAL;
+
+	i915_gem_ww_ctx_init(&ww, true);
+
+retry:
+	err = i915_gem_object_lock(vma->obj, &ww);
+	if (err)
+		goto err_ww;
+
+	err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
+	if (err)
+		goto err_ww;
+
+	err = i915_vma_bind_sync(vma, &ww);
+err_ww:
+	if (err == -EDEADLK) {
+		err = i915_gem_ww_ctx_backoff(&ww);
+		if (!err)
+			goto retry;
+	}
+
+	i915_gem_ww_ctx_fini(&ww);
 	return err;
 }
 

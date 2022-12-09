@@ -27,7 +27,7 @@
 #define _BACKPORT_LINUX_I2C_H
 #include <linux/version.h>
 #include_next <linux/i2c.h>
-
+#include <linux/acpi.h>
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
 /**
@@ -46,31 +46,35 @@ struct i2c_lock_operations {
 
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,18,0)
-
-#include <linux/acpi.h>
+#ifdef BPM_I2C_ACPI_GET_I2C_RESOURCE_NOT_PRESENT
 
 struct acpi_resource;
 struct acpi_resource_i2c_serialbus;
 
 #define i2c_acpi_get_i2c_resource LINUX_DMABUF_BACKPORT(i2c_acpi_get_i2c_resource)
-#define i2c_acpi_find_adapter_by_handle LINUX_DMABUF_BACKPORT(i2c_acpi_find_adapter_by_handle)
-
-
 #if IS_ENABLED(CONFIG_ACPI)
 bool i2c_acpi_get_i2c_resource(struct acpi_resource *ares,
                                struct acpi_resource_i2c_serialbus **i2c);
-struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle handle);
 #else
 static inline bool i2c_acpi_get_i2c_resource(struct acpi_resource *ares,
                                              struct acpi_resource_i2c_serialbus **i2c)
 {
         return false;
 }
+#endif
+#endif
+
+#ifdef BPM_I2C_ACPI_FIND_ADAPTER_BY_HANDLE_EXPORT_NOT_PRESENT
+
+#define i2c_acpi_find_adapter_by_handle LINUX_DMABUF_BACKPORT(i2c_acpi_find_adapter_by_handle)
+#if IS_ENABLED(CONFIG_ACPI)
+struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle handle);
+#else
 static inline struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle handle)
 {
         return NULL;
 }
 #endif
 #endif
+
 #endif /*_BACKPORT_LINUX_I2C_H */

@@ -128,9 +128,6 @@ int intel_connector_register(struct drm_connector *connector)
 
 	intel_connector_debugfs_add(intel_connector);
 
-	intel_connector->disabled_time =
-		get_jiffies_64() - msecs_to_jiffies(MSEC_PER_SEC * 10);
-
 	return 0;
 
 err_backlight:
@@ -295,4 +292,22 @@ intel_attach_dp_colorspace_property(struct drm_connector *connector)
 {
 	if (!drm_mode_create_dp_colorspace_property(connector))
 		drm_connector_attach_colorspace_property(connector);
+}
+
+void
+intel_attach_scaling_mode_property(struct drm_connector *connector)
+{
+	struct drm_i915_private *i915 = to_i915(connector->dev);
+	u32 scaling_modes;
+
+	scaling_modes = BIT(DRM_MODE_SCALE_ASPECT) |
+		BIT(DRM_MODE_SCALE_FULLSCREEN);
+
+	/* On GMCH platforms borders are only possible on the LVDS port */
+	if (!HAS_GMCH(i915) || connector->connector_type == DRM_MODE_CONNECTOR_LVDS)
+		scaling_modes |= BIT(DRM_MODE_SCALE_CENTER);
+
+	drm_connector_attach_scaling_mode_property(connector, scaling_modes);
+
+	connector->state->scaling_mode = DRM_MODE_SCALE_ASPECT;
 }
