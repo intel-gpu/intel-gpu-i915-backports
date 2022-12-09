@@ -16,6 +16,7 @@
 #include "intel_rc6.h"
 #include "intel_ring.h"
 #include "shmem_utils.h"
+#include "intel_gt_regs.h"
 
 static void dbg_poison_ce(struct intel_context *ce)
 {
@@ -307,10 +308,22 @@ static const struct intel_wakeref_ops wf_ops = {
 
 void intel_engine_init__pm(struct intel_engine_cs *engine)
 {
+	struct drm_i915_private *i915 = engine->i915;
 	struct intel_runtime_pm *rpm = engine->uncore->rpm;
 
 	intel_wakeref_init(&engine->wakeref, rpm, &wf_ops, engine->name);
 	intel_engine_init_heartbeat(engine);
+
+	if (IS_METEORLAKE(i915) && engine->id == GSC0) {
+		/* FIXME: Enable GSC CS Idle messaging */
+		intel_uncore_write(engine->gt->uncore,
+				   RC_PSMI_CTRL_GSCCS,
+				   _MASKED_BIT_DISABLE(IDLE_MSG_DISABLE));
+		drm_dbg(&i915->drm,
+			"Set GSC CS Idle Reg to: 0x%x",
+			intel_uncore_read(engine->gt->uncore, RC_PSMI_CTRL_GSCCS));
+	}
+
 }
 
 /**

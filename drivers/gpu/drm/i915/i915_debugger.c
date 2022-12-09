@@ -1259,87 +1259,22 @@ static void dg2_flush_engines(struct drm_i915_private *i915, u32 mask)
 	}
 }
 
-static int gen12_gt_invalidate_l3(struct intel_gt *gt,
-				  unsigned int timeout_us)
+static void gen12_flush_l3(struct drm_i915_private *i915)
 {
-	struct intel_uncore * const uncore = gt->uncore;
-	const enum forcewake_domains fw =
-		intel_uncore_forcewake_for_reg(uncore, GEN7_MISCCPCTL,
-					       FW_REG_READ | FW_REG_WRITE) |
-		intel_uncore_forcewake_for_reg(uncore, GEN11_GLBLINVL,
-					       FW_REG_READ | FW_REG_WRITE);
 	intel_wakeref_t wakeref;
-	u32 cpctl, cpctl_org, inv, mask;
-	int ret;
-
-	/* Reasonable to expect that when it went to sleep, it flushed */
-	wakeref = intel_gt_pm_get_if_awake(gt);
-	if (!wakeref)
-		return 0;
-
-	mask = GEN12_DOP_CLOCK_GATE_RENDER_ENABLE;
-	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50))
-		mask |= GEN8_DOP_CLOCK_GATE_CFCLK_ENABLE;
-
-	spin_lock_irq(&uncore->lock);
-	intel_uncore_forcewake_get__locked(uncore, fw);
-
-	cpctl_org = intel_uncore_read_fw(uncore, GEN7_MISCCPCTL);
-	if (cpctl_org & mask)
-		intel_uncore_write_fw(uncore, GEN7_MISCCPCTL, cpctl_org & ~mask);
-
-	cpctl = intel_uncore_read_fw(uncore, GEN7_MISCCPCTL);
-	if (cpctl & mask) {
-		ret = cpctl & GEN12_DOP_CLOCK_GATE_LOCK ? -EACCES : -ENXIO;
-		/*
-		 * XXX: We need to bail out as there are gens
-		 * that wont survive invalidate without disabling
-		 * the gating of above clocks. The resulting hang is
-		 * is catastrophic and we lose the gpu in a way
-		 * that even reset wont help.
-		 */
-		goto out;
-	}
-
-	ret = __intel_wait_for_register_fw(uncore, GEN11_GLBLINVL,
-					   GEN11_L3_GLOBAL_INVALIDATE, 0,
-					   timeout_us, 0, &inv);
-	if (ret)
-		goto out;
-
-	intel_uncore_write_fw(uncore, GEN11_GLBLINVL,
-			      inv | GEN11_L3_GLOBAL_INVALIDATE);
-
-	ret = __intel_wait_for_register_fw(uncore, GEN11_GLBLINVL,
-					   GEN11_L3_GLOBAL_INVALIDATE, 0,
-					   timeout_us, 0, &inv);
-
-out:
-	if (cpctl_org != cpctl)
-		intel_uncore_write_fw(uncore, GEN7_MISCCPCTL, cpctl_org);
-
-	intel_uncore_forcewake_put__locked(uncore, fw);
-	spin_unlock_irq(&uncore->lock);
-
-	intel_gt_pm_put(gt, wakeref);
-
-	return ret;
-}
-
-static void gen12_invalidate_l3(struct drm_i915_private *i915)
-{
-	const unsigned int timeout_us = 5000;
 	struct intel_gt *gt;
 	int id, ret;
 
 	for_each_gt(gt, i915, id) {
-		ret = gen12_gt_invalidate_l3(gt, timeout_us);
-		if (ret)
-			drm_notice_once(&gt->i915->drm,
-					"debugger: gt%d l3 invalidation fail: %s(%d). "
-					"Surfaces need to be declared uncached to avoid coherency issues!\n",
-					id, ret == -EACCES ? "incompatible bios" : "timeout",
-					ret);
+		with_intel_gt_pm_if_awake(gt, wakeref) {
+			ret = intel_gt_invalidate_l3_mmio(gt);
+			if (ret)
+				drm_notice_once(&gt->i915->drm,
+						"debugger: gt%d l3 invalidation fail: %s(%d). "
+						"Surfaces need to be declared uncached to avoid coherency issues!\n",
+						id, ret == -EACCES ? "incompatible bios" : "timeout",
+						ret);
+		}
 	}
 }
 
@@ -1364,7 +1299,7 @@ static void gpu_flush_engines(struct drm_i915_private *i915, u32 mask)
 
 static void gpu_invalidate_l3(struct drm_i915_private *i915)
 {
-	gen12_invalidate_l3(i915);
+	gen12_flush_l3(i915);
 }
 
 static loff_t i915_debugger_vm_llseek(struct file *file,
@@ -1629,7 +1564,13 @@ static vm_fault_t vm_mmap_fault(struct vm_fault *vmf)
 		if (i915_gem_object_has_struct_page(obj)) {
 			pfn = page_to_pfn(i915_gem_object_get_page(obj, n));
 		} else if (i915_gem_object_is_lmem(obj)) {
-			pfn = PHYS_PFN(i915_gem_object_get_dma_address(obj, n));
+			const dma_addr_t region_offset =
+				(obj->mm.region->iomap.base -
+				 obj->mm.region->region.start);
+			const dma_addr_t page_start_addr =
+				i915_gem_object_get_dma_address(obj, n);
+
+			pfn = PHYS_PFN(page_start_addr + region_offset);
 			prot = pgprot_writecombine(prot);
 		} else {
 			err = -EFAULT;
@@ -1898,14 +1839,15 @@ i915_debugger_vm_open_ioctl(struct i915_debugger *debugger, unsigned long arg)
 
 	switch (vmo.flags & O_ACCMODE) {
 	case O_RDONLY:
-		file->f_mode |= FMODE_PREAD;
+		file->f_mode |= FMODE_PREAD | FMODE_READ | FMODE_LSEEK;
 		break;
 	case O_WRONLY:
-		file->f_mode |= FMODE_PWRITE;
+		file->f_mode |= FMODE_PWRITE | FMODE_WRITE| FMODE_LSEEK;
 		break;
 	case O_RDWR:
-		file->f_mode |= FMODE_PREAD | FMODE_PWRITE;
-		break;
+		file->f_mode |= FMODE_PREAD | FMODE_PWRITE | 
+				FMODE_READ | FMODE_WRITE | FMODE_LSEEK;
+		break;	
 	}
 
 	file->f_mapping = vm->inode->i_mapping;
@@ -2015,36 +1957,6 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	return 0;
 }
 
-/*
- * On EU_ATT register there are two rows with 4 eus each with 8 threads per eu.
- * For example on some TGL there is one slice and 6 sublices. This makes 48 eus.
- * However the sseu reports 16 eus per subslice. This is explained by
- * lockstep execution units so there are 2 eus working in pairs.
- * With this in mind the total execution unit number matches but our attention
- * resolution is then half.
- */
-
-#define MAX_ROWS 2u
-#define MAX_EUS_PER_ROW 4u
-#define MAX_THREADS 8u
-
-/*
- * Using the userspace view for slice/subslices seems wrong but this is only
- * for userspace to match the bitmask sizes. When we divide the actual
- * gslices for hw access, sizes should match.
- *
- */
-static unsigned int thread_attn_bitmap_size(const struct intel_gt * const gt)
-{
-	const struct sseu_dev_info * const sseu = &gt->info.sseu;
-
-	BUILD_BUG_ON(MAX_EUS_PER_ROW * MAX_ROWS * MAX_THREADS !=
-		     2 * sizeof(u32) * BITS_PER_BYTE);
-
-	return sseu->max_slices * sseu->max_subslices *
-		MAX_ROWS * MAX_THREADS * MAX_EUS_PER_ROW / BITS_PER_BYTE;
-}
-
 struct ss_iter {
 	struct i915_debugger *debugger;
 	unsigned int i;
@@ -2052,57 +1964,6 @@ struct ss_iter {
 	unsigned int size;
 	u8 *bits;
 };
-
-static int read_attn_ss_fw(struct intel_gt *gt, void *data,
-			   unsigned int group, unsigned int instance, bool present)
-{
-	struct ss_iter *iter = data;
-	struct i915_debugger *debugger = iter->debugger;
-	unsigned int row;
-
-	for (row = 0; row < MAX_ROWS; row++) {
-		u32 val;
-
-		if (iter->i >= iter->size)
-			return 0;
-
-		if (GEM_WARN_ON((iter->i + sizeof(val)) >
-				(thread_attn_bitmap_size(gt))))
-			return -EIO;
-
-		if (present) {
-			val = intel_gt_mcr_read_fw(gt, TD_ATT(row), group, instance);
-
-			DD_INFO(debugger, "TD_ATT: (%d:%d:%d): 0x%08x\n",
-				group, instance, row, val);
-		} else {
-			val = 0;
-			DD_INFO(debugger, "TD_ATT: (%d:%d:%d): 0x%08x FUSED OFF\n",
-				group, instance, row, val);
-		}
-
-		memcpy(&iter->bits[iter->i], &val, sizeof(val));
-		iter->i += sizeof(val);
-	}
-
-	return 0;
-}
-
-static void eu_control_stopped(struct i915_debugger *debugger,
-			       struct intel_engine_cs *engine,
-			       u8 *bits,
-			       unsigned int bitmask_size)
-{
-	struct ss_iter iter = {
-		.debugger = debugger,
-		.i = 0,
-		.size = bitmask_size,
-		.bits = bits
-	};
-
-	intel_gt_for_each_compute_slice_subslice(engine->gt,
-						 read_attn_ss_fw, &iter);
-}
 
 static int check_attn_ss_fw(struct intel_gt *gt, void *data,
 			    unsigned int group, unsigned int instance,
@@ -2112,14 +1973,14 @@ static int check_attn_ss_fw(struct intel_gt *gt, void *data,
 	struct i915_debugger *debugger = iter->debugger;
 	unsigned int row;
 
-	for (row = 0; row < MAX_ROWS; row++) {
+	for (row = 0; row < TD_EU_ATTENTION_MAX_ROWS; row++) {
 		u32 val, cur = 0;
 
 		if (iter->i >= iter->size)
 			return 0;
 
 		if (GEM_WARN_ON((iter->i + sizeof(val)) >
-				(thread_attn_bitmap_size(gt))))
+				(intel_gt_eu_attention_bitmap_size(gt))))
 			return -EIO;
 
 		memcpy(&val, &iter->bits[iter->i], sizeof(val));
@@ -2147,14 +2008,14 @@ static int clear_attn_ss_fw(struct intel_gt *gt, void *data,
 	struct i915_debugger *debugger = iter->debugger;
 	unsigned int row;
 
-	for (row = 0; row < MAX_ROWS; row++) {
+	for (row = 0; row < TD_EU_ATTENTION_MAX_ROWS; row++) {
 		u32 val;
 
 		if (iter->i >= iter->size)
 			return 0;
 
 		if (GEM_WARN_ON((iter->i + sizeof(val)) >
-				(thread_attn_bitmap_size(gt))))
+				(intel_gt_eu_attention_bitmap_size(gt))))
 			return -EIO;
 
 		memcpy(&val, &iter->bits[iter->i], sizeof(val));
@@ -2240,7 +2101,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 	if (!engine)
 		return -EINVAL;
 
-	hw_attn_size = thread_attn_bitmap_size(engine->gt);
+	hw_attn_size = intel_gt_eu_attention_bitmap_size(engine->gt);
 	attn_size = arg->bitmask_size;
 
 	if (attn_size > hw_attn_size)
@@ -2283,7 +2144,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 					       engine, bits, attn_size);
 		break;
 	case PRELIM_I915_DEBUG_EU_THREADS_CMD_STOPPED:
-		eu_control_stopped(debugger, engine, bits, attn_size);
+		intel_gt_eu_attention_bitmap(engine->gt, bits, attn_size);
 		break;
 	case PRELIM_I915_DEBUG_EU_THREADS_CMD_RESUME:
 		ret = eu_control_resume(debugger, engine, bits, attn_size);
@@ -3202,7 +3063,7 @@ static int send_engine_attentions(struct i915_debugger *debugger,
 
 	/* XXX test for CONTEXT_DEBUG when igt/umd is there */
 
-	size = struct_size(ea, bitmask, thread_attn_bitmap_size(engine->gt));
+	size = struct_size(ea, bitmask, intel_gt_eu_attention_bitmap_size(engine->gt));
 	event = __i915_debugger_create_event(debugger,
 					     PRELIM_DRM_I915_DEBUG_EVENT_EU_ATTENTION,
 					     PRELIM_DRM_I915_DEBUG_EVENT_STATE_CHANGE,
@@ -3215,12 +3076,12 @@ static int send_engine_attentions(struct i915_debugger *debugger,
 
 	ea->ci.engine_class = engine->uabi_class;
 	ea->ci.engine_instance = engine->uabi_instance;
-	ea->bitmask_size = thread_attn_bitmap_size(engine->gt);
+	ea->bitmask_size = intel_gt_eu_attention_bitmap_size(engine->gt);
 	ea->ctx_handle = ce->dbg_id.gem_context_id;
 	ea->lrc_handle = ce->dbg_id.lrc_id;
 
 	mutex_lock(&debugger->lock);
-	eu_control_stopped(debugger, engine, &ea->bitmask[0], ea->bitmask_size);
+	intel_gt_eu_attention_bitmap(engine->gt, &ea->bitmask[0], ea->bitmask_size);
 	event->seqno = atomic_long_inc_return(&debugger->event_seqno);
 	mutex_unlock(&debugger->lock);
 
@@ -3987,17 +3848,10 @@ int i915_debugger_enable(struct drm_i915_private *i915, bool enable)
 	for_each_gt(gt, i915, i) {
 		/* XXX suspend current activity */
 		for_each_engine(engine, gt, id) {
-			if (engine->class != COMPUTE_CLASS &&
-			    engine->class != RENDER_CLASS)
-				continue;
-
-			if (enable) {
+			if (enable)
 				intel_engine_debug_enable(engine);
-				intel_engine_whitelist_sip(engine);
-			} else {
+			else
 				intel_engine_debug_disable(engine);
-				intel_engine_undo_whitelist_sip(engine);
-			}
 		}
 		intel_gt_handle_error(gt, ALL_ENGINES, 0, NULL);
 	}

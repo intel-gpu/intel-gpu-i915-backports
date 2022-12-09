@@ -314,6 +314,9 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 				  area->vm_start, area->vm_end - area->vm_start,
 				  obj->mm.pages->sgl, iomap);
 
+		/* Mark when object becomes writable by userspace (used by migration policy) */
+		i915_gem_object_set_first_bind(obj);
+
 		if (area->vm_flags & VM_WRITE) {
 			GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
 			obj->mm.dirty = true;
@@ -444,6 +447,9 @@ retry:
 	if (!i915_vma_set_userfault(vma) && !obj->userfault_count++)
 		list_add(&obj->userfault_link, &to_gt(i915)->ggtt->userfault_list);
 	mutex_unlock(&to_gt(i915)->ggtt->vm.mutex);
+
+	/* Mark when object becomes writable by userspace (used by migration policy) */
+	i915_gem_object_set_first_bind(obj);
 
 	/* Track the mmo associated with the fenced vma */
 	vma->mmo = mmo;

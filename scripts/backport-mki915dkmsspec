@@ -93,6 +93,14 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 			echo "SKIP DKMS Installation: kernel Headers not available for variant \$K";
 		fi
 	done
+	echo -e
+	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		/sbin/mkinitrd
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
 	exit 0
 
 	%preun
@@ -102,6 +110,13 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		K=\$(echo \$i | cut -d '/' -f 7);
 		/usr/sbin/dkms remove -m %{module} -v %{version} -k \$K --rpm_safe_upgrade
 	done
+	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		/sbin/mkinitrd
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
 	exit 0
 EOF
 

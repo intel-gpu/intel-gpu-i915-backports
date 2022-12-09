@@ -184,8 +184,16 @@
 #define _MASKED_BIT_ENABLE(a)	({ typeof(a) _a = (a); _MASKED_FIELD(_a, _a); })
 #define _MASKED_BIT_DISABLE(a)	(_MASKED_FIELD((a), 0))
 
+#define CSC_DEVUID_LWORD            _MMIO(0x102008)
+#define CSC_DEVUID_HWORD            _MMIO(0x10200C)
+
 #define GU_CNTL				_MMIO(0x101010)
 #define   LMEM_INIT			REG_BIT(7)
+#define   DRIVERFLR			REG_BIT(31)
+#define GU_DEBUG			_MMIO(0x101018)
+#define   DRIVERFLR_STATUS		REG_BIT(31)
+#define GU_CNTL_PROTECTED		_MMIO(0x10100C)
+#define   DRIVERINT_FLR_DIS		REG_BIT(31)
 
 #define GEN6_STOLEN_RESERVED		_MMIO(0x1082C0)
 #define GEN6_STOLEN_RESERVED_ADDR_MASK	(0xFFF << 20)
@@ -1879,12 +1887,12 @@
 
 #define MTL_RP_STATE_CAP	_MMIO(0x138000)
 #define MTL_MEDIAP_STATE_CAP	_MMIO(0x138020)
-#define   MTL_RP0_CAP_MASK		REG_GENMASK(8, 0)
-#define   MTL_RPN_CAP_MASK		REG_GENMASK(24, 16)
+#define   MTL_RP0_CAP_MASK	REG_GENMASK(8, 0)
+#define   MTL_RPN_CAP_MASK	REG_GENMASK(24, 16)
 
 #define MTL_GT_RPE_FREQUENCY	_MMIO(0x13800c)
 #define MTL_MPE_FREQUENCY	_MMIO(0x13802c)
-#define   MTL_RPE_MASK			REG_GENMASK(8, 0)
+#define   MTL_RPE_MASK		REG_GENMASK(8, 0)
 
 #define GT0_PERF_LIMIT_REASONS	_MMIO(0x1381A8)
 #define MTL_MEDIA_PERF_LIMIT_REASONS	_MMIO(0x138030)
@@ -3063,118 +3071,6 @@
 #define		PFIT_HORIZ_SCALE_MASK_965	0x00001fff
 
 #define PFIT_AUTO_RATIOS _MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x61238)
-
-#define _VLV_BLC_PWM_CTL2_A (DISPLAY_MMIO_BASE(dev_priv) + 0x61250)
-#define _VLV_BLC_PWM_CTL2_B (DISPLAY_MMIO_BASE(dev_priv) + 0x61350)
-#define VLV_BLC_PWM_CTL2(pipe) _MMIO_PIPE(pipe, _VLV_BLC_PWM_CTL2_A, \
-					 _VLV_BLC_PWM_CTL2_B)
-
-#define _VLV_BLC_PWM_CTL_A (DISPLAY_MMIO_BASE(dev_priv) + 0x61254)
-#define _VLV_BLC_PWM_CTL_B (DISPLAY_MMIO_BASE(dev_priv) + 0x61354)
-#define VLV_BLC_PWM_CTL(pipe) _MMIO_PIPE(pipe, _VLV_BLC_PWM_CTL_A, \
-					_VLV_BLC_PWM_CTL_B)
-
-#define _VLV_BLC_HIST_CTL_A (DISPLAY_MMIO_BASE(dev_priv) + 0x61260)
-#define _VLV_BLC_HIST_CTL_B (DISPLAY_MMIO_BASE(dev_priv) + 0x61360)
-#define VLV_BLC_HIST_CTL(pipe) _MMIO_PIPE(pipe, _VLV_BLC_HIST_CTL_A, \
-					 _VLV_BLC_HIST_CTL_B)
-
-/* Backlight control */
-#define BLC_PWM_CTL2	_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x61250) /* 965+ only */
-#define   BLM_PWM_ENABLE		(1 << 31)
-#define   BLM_COMBINATION_MODE		(1 << 30) /* gen4 only */
-#define   BLM_PIPE_SELECT		(1 << 29)
-#define   BLM_PIPE_SELECT_IVB		(3 << 29)
-#define   BLM_PIPE_A			(0 << 29)
-#define   BLM_PIPE_B			(1 << 29)
-#define   BLM_PIPE_C			(2 << 29) /* ivb + */
-#define   BLM_TRANSCODER_A		BLM_PIPE_A /* hsw */
-#define   BLM_TRANSCODER_B		BLM_PIPE_B
-#define   BLM_TRANSCODER_C		BLM_PIPE_C
-#define   BLM_TRANSCODER_EDP		(3 << 29)
-#define   BLM_PIPE(pipe)		((pipe) << 29)
-#define   BLM_POLARITY_I965		(1 << 28) /* gen4 only */
-#define   BLM_PHASE_IN_INTERUPT_STATUS	(1 << 26)
-#define   BLM_PHASE_IN_ENABLE		(1 << 25)
-#define   BLM_PHASE_IN_INTERUPT_ENABL	(1 << 24)
-#define   BLM_PHASE_IN_TIME_BASE_SHIFT	(16)
-#define   BLM_PHASE_IN_TIME_BASE_MASK	(0xff << 16)
-#define   BLM_PHASE_IN_COUNT_SHIFT	(8)
-#define   BLM_PHASE_IN_COUNT_MASK	(0xff << 8)
-#define   BLM_PHASE_IN_INCR_SHIFT	(0)
-#define   BLM_PHASE_IN_INCR_MASK	(0xff << 0)
-#define BLC_PWM_CTL	_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x61254)
-/*
- * This is the most significant 15 bits of the number of backlight cycles in a
- * complete cycle of the modulated backlight control.
- *
- * The actual value is this field multiplied by two.
- */
-#define   BACKLIGHT_MODULATION_FREQ_SHIFT	(17)
-#define   BACKLIGHT_MODULATION_FREQ_MASK	(0x7fff << 17)
-#define   BLM_LEGACY_MODE			(1 << 16) /* gen2 only */
-/*
- * This is the number of cycles out of the backlight modulation cycle for which
- * the backlight is on.
- *
- * This field must be no greater than the number of cycles in the complete
- * backlight modulation cycle.
- */
-#define   BACKLIGHT_DUTY_CYCLE_SHIFT		(0)
-#define   BACKLIGHT_DUTY_CYCLE_MASK		(0xffff)
-#define   BACKLIGHT_DUTY_CYCLE_MASK_PNV		(0xfffe)
-#define   BLM_POLARITY_PNV			(1 << 0) /* pnv only */
-
-#define BLC_HIST_CTL	_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x61260)
-#define  BLM_HISTOGRAM_ENABLE			(1 << 31)
-
-/* New registers for PCH-split platforms. Safe where new bits show up, the
- * register layout machtes with gen4 BLC_PWM_CTL[12]. */
-#define BLC_PWM_CPU_CTL2	_MMIO(0x48250)
-#define BLC_PWM_CPU_CTL		_MMIO(0x48254)
-
-#define HSW_BLC_PWM2_CTL	_MMIO(0x48350)
-
-/* PCH CTL1 is totally different, all but the below bits are reserved. CTL2 is
- * like the normal CTL from gen4 and earlier. Hooray for confusing naming. */
-#define BLC_PWM_PCH_CTL1	_MMIO(0xc8250)
-#define   BLM_PCH_PWM_ENABLE			(1 << 31)
-#define   BLM_PCH_OVERRIDE_ENABLE		(1 << 30)
-#define   BLM_PCH_POLARITY			(1 << 29)
-#define BLC_PWM_PCH_CTL2	_MMIO(0xc8254)
-
-#define UTIL_PIN_CTL			_MMIO(0x48400)
-#define   UTIL_PIN_ENABLE		(1 << 31)
-#define   UTIL_PIN_PIPE_MASK		(3 << 29)
-#define   UTIL_PIN_PIPE(x)		((x) << 29)
-#define   UTIL_PIN_MODE_MASK		(0xf << 24)
-#define   UTIL_PIN_MODE_DATA		(0 << 24)
-#define   UTIL_PIN_MODE_PWM		(1 << 24)
-#define   UTIL_PIN_MODE_VBLANK		(4 << 24)
-#define   UTIL_PIN_MODE_VSYNC		(5 << 24)
-#define   UTIL_PIN_MODE_EYE_LEVEL	(8 << 24)
-#define   UTIL_PIN_OUTPUT_DATA		(1 << 23)
-#define   UTIL_PIN_POLARITY		(1 << 22)
-#define   UTIL_PIN_DIRECTION_INPUT	(1 << 19)
-#define   UTIL_PIN_INPUT_DATA		(1 << 16)
-
-/* BXT backlight register definition. */
-#define _BXT_BLC_PWM_CTL1			0xC8250
-#define   BXT_BLC_PWM_ENABLE			(1 << 31)
-#define   BXT_BLC_PWM_POLARITY			(1 << 29)
-#define _BXT_BLC_PWM_FREQ1			0xC8254
-#define _BXT_BLC_PWM_DUTY1			0xC8258
-
-#define _BXT_BLC_PWM_CTL2			0xC8350
-#define _BXT_BLC_PWM_FREQ2			0xC8354
-#define _BXT_BLC_PWM_DUTY2			0xC8358
-
-#define BXT_BLC_PWM_CTL(controller)    _MMIO_PIPE(controller,		\
-					_BXT_BLC_PWM_CTL1, _BXT_BLC_PWM_CTL2)
-#define BXT_BLC_PWM_FREQ(controller)   _MMIO_PIPE(controller, \
-					_BXT_BLC_PWM_FREQ1, _BXT_BLC_PWM_FREQ2)
-#define BXT_BLC_PWM_DUTY(controller)   _MMIO_PIPE(controller, \
-					_BXT_BLC_PWM_DUTY1, _BXT_BLC_PWM_DUTY2)
 
 #define PCH_GTC_CTL		_MMIO(0xe7000)
 #define   PCH_GTC_ENABLE	(1 << 31)
@@ -6264,8 +6160,6 @@ enum gt_vctr_registers {
 						_SLM_ECC_ERROR_CNT : \
 						_SLM_UNCORR_ECC_ERROR_CNT)
 
-#define POISON_DATA_STATUS		_MMIO(0x100124)
-
 /* VF_CAPABILITY_REGISTER */
 #define GEN12_VF_CAP_REG		_MMIO(0x1901f8)
 #define   GEN12_VF			REG_BIT(0)
@@ -7330,6 +7224,13 @@ enum gt_vctr_registers {
 #define     PCODE_MBOX_CD_STATUS_DATA_REENABLE_IN_PROGRESS 0x1
 #define     PCODE_MBOX_CD_STATUS_DATA_SHUTDOWN 0x2
 #define     PCODE_MBOX_CD_STATUS_DATA_ONLINE 0x3
+/* Wa_14017210380: mtl */
+#define   PCODE_MBOX_GT_STATE		0x50	/* MTL */
+/* sub-commands (param1) */
+#define     PCODE_MBOX_GT_STATE_MEDIA_BUSY	0x1
+#define     PCODE_MBOX_GT_STATE_MEDIA_NOT_BUSY	0x2
+/* param2 */
+#define     PCODE_MBOX_GT_STATE_DOMAIN_MEDIA	0x1
 #define GEN6_PCODE_DATA				_MMIO(0x138128)
 #define   GEN6_PCODE_FREQ_IA_RATIO_SHIFT	8
 #define   GEN6_PCODE_FREQ_RING_RATIO_SHIFT	16
@@ -7351,162 +7252,11 @@ enum gt_vctr_registers {
 		(((reg) & GEN7_L3CDERRST1_SUBBANK_MASK) >> 8)
 #define   GEN7_L3CDERRST1_ENABLE	(1 << 7)
 
-/* Audio */
-#define G4X_AUD_VID_DID			_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x62020)
-#define   INTEL_AUDIO_DEVCL		0x808629FB
-#define   INTEL_AUDIO_DEVBLC		0x80862801
-#define   INTEL_AUDIO_DEVCTG		0x80862802
-
-#define G4X_AUD_CNTL_ST			_MMIO(0x620B4)
-#define   G4X_ELDV_DEVCL_DEVBLC		(1 << 13)
-#define   G4X_ELDV_DEVCTG		(1 << 14)
-#define   G4X_ELD_ADDR_MASK		(0xf << 5)
-#define   G4X_ELD_ACK			(1 << 4)
-#define G4X_HDMIW_HDMIEDID		_MMIO(0x6210C)
-
-#define _IBX_HDMIW_HDMIEDID_A		0xE2050
-#define _IBX_HDMIW_HDMIEDID_B		0xE2150
-#define IBX_HDMIW_HDMIEDID(pipe)	_MMIO_PIPE(pipe, _IBX_HDMIW_HDMIEDID_A, \
-						  _IBX_HDMIW_HDMIEDID_B)
-#define _IBX_AUD_CNTL_ST_A		0xE20B4
-#define _IBX_AUD_CNTL_ST_B		0xE21B4
-#define IBX_AUD_CNTL_ST(pipe)		_MMIO_PIPE(pipe, _IBX_AUD_CNTL_ST_A, \
-						  _IBX_AUD_CNTL_ST_B)
-#define   IBX_ELD_BUFFER_SIZE_MASK	(0x1f << 10)
-#define   IBX_ELD_ADDRESS_MASK		(0x1f << 5)
-#define   IBX_ELD_ACK			(1 << 4)
-#define IBX_AUD_CNTL_ST2		_MMIO(0xE20C0)
-#define   IBX_CP_READY(port)		((1 << 1) << (((port) - 1) * 4))
-#define   IBX_ELD_VALID(port)		((1 << 0) << (((port) - 1) * 4))
-
-#define _CPT_HDMIW_HDMIEDID_A		0xE5050
-#define _CPT_HDMIW_HDMIEDID_B		0xE5150
-#define CPT_HDMIW_HDMIEDID(pipe)	_MMIO_PIPE(pipe, _CPT_HDMIW_HDMIEDID_A, _CPT_HDMIW_HDMIEDID_B)
-#define _CPT_AUD_CNTL_ST_A		0xE50B4
-#define _CPT_AUD_CNTL_ST_B		0xE51B4
-#define CPT_AUD_CNTL_ST(pipe)		_MMIO_PIPE(pipe, _CPT_AUD_CNTL_ST_A, _CPT_AUD_CNTL_ST_B)
-#define CPT_AUD_CNTRL_ST2		_MMIO(0xE50C0)
-
-#define _VLV_HDMIW_HDMIEDID_A		(VLV_DISPLAY_BASE + 0x62050)
-#define _VLV_HDMIW_HDMIEDID_B		(VLV_DISPLAY_BASE + 0x62150)
-#define VLV_HDMIW_HDMIEDID(pipe)	_MMIO_PIPE(pipe, _VLV_HDMIW_HDMIEDID_A, _VLV_HDMIW_HDMIEDID_B)
-#define _VLV_AUD_CNTL_ST_A		(VLV_DISPLAY_BASE + 0x620B4)
-#define _VLV_AUD_CNTL_ST_B		(VLV_DISPLAY_BASE + 0x621B4)
-#define VLV_AUD_CNTL_ST(pipe)		_MMIO_PIPE(pipe, _VLV_AUD_CNTL_ST_A, _VLV_AUD_CNTL_ST_B)
-#define VLV_AUD_CNTL_ST2		_MMIO(VLV_DISPLAY_BASE + 0x620C0)
-
 /* These are the 4 32-bit write offset registers for each stream
  * output buffer.  It determines the offset from the
  * 3DSTATE_SO_BUFFERs that the next streamed vertex output goes to.
  */
 #define GEN7_SO_WRITE_OFFSET(n)		_MMIO(0x5280 + (n) * 4)
-
-#define _IBX_AUD_CONFIG_A		0xe2000
-#define _IBX_AUD_CONFIG_B		0xe2100
-#define IBX_AUD_CFG(pipe)		_MMIO_PIPE(pipe, _IBX_AUD_CONFIG_A, _IBX_AUD_CONFIG_B)
-#define _CPT_AUD_CONFIG_A		0xe5000
-#define _CPT_AUD_CONFIG_B		0xe5100
-#define CPT_AUD_CFG(pipe)		_MMIO_PIPE(pipe, _CPT_AUD_CONFIG_A, _CPT_AUD_CONFIG_B)
-#define _VLV_AUD_CONFIG_A		(VLV_DISPLAY_BASE + 0x62000)
-#define _VLV_AUD_CONFIG_B		(VLV_DISPLAY_BASE + 0x62100)
-#define VLV_AUD_CFG(pipe)		_MMIO_PIPE(pipe, _VLV_AUD_CONFIG_A, _VLV_AUD_CONFIG_B)
-
-#define   AUD_CONFIG_N_VALUE_INDEX		(1 << 29)
-#define   AUD_CONFIG_N_PROG_ENABLE		(1 << 28)
-#define   AUD_CONFIG_UPPER_N_SHIFT		20
-#define   AUD_CONFIG_UPPER_N_MASK		(0xff << 20)
-#define   AUD_CONFIG_LOWER_N_SHIFT		4
-#define   AUD_CONFIG_LOWER_N_MASK		(0xfff << 4)
-#define   AUD_CONFIG_N_MASK			(AUD_CONFIG_UPPER_N_MASK | AUD_CONFIG_LOWER_N_MASK)
-#define   AUD_CONFIG_N(n) \
-	(((((n) >> 12) & 0xff) << AUD_CONFIG_UPPER_N_SHIFT) |	\
-	 (((n) & 0xfff) << AUD_CONFIG_LOWER_N_SHIFT))
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_SHIFT	16
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_MASK	(0xf << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_25175	(0 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_25200	(1 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_27000	(2 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_27027	(3 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_54000	(4 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_54054	(5 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_74176	(6 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_74250	(7 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_148352	(8 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_148500	(9 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_296703	(10 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_297000	(11 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_593407	(12 << 16)
-#define   AUD_CONFIG_PIXEL_CLOCK_HDMI_594000	(13 << 16)
-#define   AUD_CONFIG_DISABLE_NCTS		(1 << 3)
-
-/* HSW Audio */
-#define _HSW_AUD_CONFIG_A		0x65000
-#define _HSW_AUD_CONFIG_B		0x65100
-#define HSW_AUD_CFG(trans)		_MMIO_TRANS(trans, _HSW_AUD_CONFIG_A, _HSW_AUD_CONFIG_B)
-
-#define _HSW_AUD_MISC_CTRL_A		0x65010
-#define _HSW_AUD_MISC_CTRL_B		0x65110
-#define HSW_AUD_MISC_CTRL(trans)	_MMIO_TRANS(trans, _HSW_AUD_MISC_CTRL_A, _HSW_AUD_MISC_CTRL_B)
-
-#define _HSW_AUD_M_CTS_ENABLE_A		0x65028
-#define _HSW_AUD_M_CTS_ENABLE_B		0x65128
-#define HSW_AUD_M_CTS_ENABLE(trans)	_MMIO_TRANS(trans, _HSW_AUD_M_CTS_ENABLE_A, _HSW_AUD_M_CTS_ENABLE_B)
-#define   AUD_M_CTS_M_VALUE_INDEX	(1 << 21)
-#define   AUD_M_CTS_M_PROG_ENABLE	(1 << 20)
-#define   AUD_CONFIG_M_MASK		0xfffff
-
-#define _HSW_AUD_DIP_ELD_CTRL_ST_A	0x650b4
-#define _HSW_AUD_DIP_ELD_CTRL_ST_B	0x651b4
-#define HSW_AUD_DIP_ELD_CTRL(trans)	_MMIO_TRANS(trans, _HSW_AUD_DIP_ELD_CTRL_ST_A, _HSW_AUD_DIP_ELD_CTRL_ST_B)
-
-/* Audio Digital Converter */
-#define _HSW_AUD_DIG_CNVT_1		0x65080
-#define _HSW_AUD_DIG_CNVT_2		0x65180
-#define AUD_DIG_CNVT(trans)		_MMIO_TRANS(trans, _HSW_AUD_DIG_CNVT_1, _HSW_AUD_DIG_CNVT_2)
-#define DIP_PORT_SEL_MASK		0x3
-
-#define _HSW_AUD_EDID_DATA_A		0x65050
-#define _HSW_AUD_EDID_DATA_B		0x65150
-#define HSW_AUD_EDID_DATA(trans)	_MMIO_TRANS(trans, _HSW_AUD_EDID_DATA_A, _HSW_AUD_EDID_DATA_B)
-
-#define HSW_AUD_PIPE_CONV_CFG		_MMIO(0x6507c)
-#define HSW_AUD_PIN_ELD_CP_VLD		_MMIO(0x650c0)
-#define   AUDIO_INACTIVE(trans)		((1 << 3) << ((trans) * 4))
-#define   AUDIO_OUTPUT_ENABLE(trans)	((1 << 2) << ((trans) * 4))
-#define   AUDIO_CP_READY(trans)		((1 << 1) << ((trans) * 4))
-#define   AUDIO_ELD_VALID(trans)	((1 << 0) << ((trans) * 4))
-
-#define _AUD_TCA_DP_2DOT0_CTRL		0x650bc
-#define _AUD_TCB_DP_2DOT0_CTRL		0x651bc
-#define AUD_DP_2DOT0_CTRL(trans)	_MMIO_TRANS(trans, _AUD_TCA_DP_2DOT0_CTRL, _AUD_TCB_DP_2DOT0_CTRL)
-#define  AUD_ENABLE_SDP_SPLIT		REG_BIT(31)
-
-#define HSW_AUD_CHICKENBIT			_MMIO(0x65f10)
-#define   SKL_AUD_CODEC_WAKE_SIGNAL		(1 << 15)
-
-#define AUD_FREQ_CNTRL			_MMIO(0x65900)
-#define AUD_PIN_BUF_CTL		_MMIO(0x48414)
-#define   AUD_PIN_BUF_ENABLE		REG_BIT(31)
-
-#define AUD_TS_CDCLK_M			_MMIO(0x65ea0)
-#define   AUD_TS_CDCLK_M_EN		REG_BIT(31)
-#define AUD_TS_CDCLK_N			_MMIO(0x65ea4)
-
-/* Display Audio Config Reg */
-#define AUD_CONFIG_BE			_MMIO(0x65ef0)
-#define HBLANK_EARLY_ENABLE_ICL(pipe)		(0x1 << (20 - (pipe)))
-#define HBLANK_EARLY_ENABLE_TGL(pipe)		(0x1 << (24 + (pipe)))
-#define HBLANK_START_COUNT_MASK(pipe)		(0x7 << (3 + ((pipe) * 6)))
-#define HBLANK_START_COUNT(pipe, val)		(((val) & 0x7) << (3 + ((pipe)) * 6))
-#define NUMBER_SAMPLES_PER_LINE_MASK(pipe)	(0x3 << ((pipe) * 6))
-#define NUMBER_SAMPLES_PER_LINE(pipe, val)	(((val) & 0x3) << ((pipe) * 6))
-
-#define HBLANK_START_COUNT_8	0
-#define HBLANK_START_COUNT_16	1
-#define HBLANK_START_COUNT_32	2
-#define HBLANK_START_COUNT_64	3
-#define HBLANK_START_COUNT_96	4
-#define HBLANK_START_COUNT_128	5
 
 /*
  * HSW - ICL power wells
@@ -7961,16 +7711,16 @@ enum skl_power_gate {
 
 /* CDCLK_CTL */
 #define CDCLK_CTL			_MMIO(0x46000)
-#define  CDCLK_FREQ_SEL_MASK		(3 << 26)
-#define  CDCLK_FREQ_450_432		(0 << 26)
-#define  CDCLK_FREQ_540			(1 << 26)
-#define  CDCLK_FREQ_337_308		(2 << 26)
-#define  CDCLK_FREQ_675_617		(3 << 26)
-#define  BXT_CDCLK_CD2X_DIV_SEL_MASK	(3 << 22)
-#define  BXT_CDCLK_CD2X_DIV_SEL_1	(0 << 22)
-#define  BXT_CDCLK_CD2X_DIV_SEL_1_5	(1 << 22)
-#define  BXT_CDCLK_CD2X_DIV_SEL_2	(2 << 22)
-#define  BXT_CDCLK_CD2X_DIV_SEL_4	(3 << 22)
+#define  CDCLK_FREQ_SEL_MASK		REG_GENMASK(27, 26)
+#define  CDCLK_FREQ_450_432		REG_FIELD_PREP(CDCLK_FREQ_SEL_MASK, 0)
+#define  CDCLK_FREQ_540			REG_FIELD_PREP(CDCLK_FREQ_SEL_MASK, 1)
+#define  CDCLK_FREQ_337_308		REG_FIELD_PREP(CDCLK_FREQ_SEL_MASK, 2)
+#define  CDCLK_FREQ_675_617		REG_FIELD_PREP(CDCLK_FREQ_SEL_MASK, 3)
+#define  BXT_CDCLK_CD2X_DIV_SEL_MASK	REG_GENMASK(23, 22)
+#define  BXT_CDCLK_CD2X_DIV_SEL_1	REG_FIELD_PREP(BXT_CDCLK_CD2X_DIV_SEL_MASK, 0)
+#define  BXT_CDCLK_CD2X_DIV_SEL_1_5	REG_FIELD_PREP(BXT_CDCLK_CD2X_DIV_SEL_MASK, 1)
+#define  BXT_CDCLK_CD2X_DIV_SEL_2	REG_FIELD_PREP(BXT_CDCLK_CD2X_DIV_SEL_MASK, 2)
+#define  BXT_CDCLK_CD2X_DIV_SEL_4	REG_FIELD_PREP(BXT_CDCLK_CD2X_DIV_SEL_MASK, 3)
 #define  BXT_CDCLK_CD2X_PIPE(pipe)	((pipe) << 20)
 #define  CDCLK_DIVMUX_CD_OVERRIDE	(1 << 19)
 #define  BXT_CDCLK_CD2X_PIPE_NONE	BXT_CDCLK_CD2X_PIPE(3)

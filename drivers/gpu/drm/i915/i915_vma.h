@@ -288,6 +288,7 @@ int i915_vma_bind(struct i915_vma *vma,
 		  unsigned int pat_index,
 		  u32 flags,
 		  struct i915_vma_work *work);
+int i915_vma_bind_sync(struct i915_vma *vma, struct i915_gem_ww_ctx *ww);
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags);
@@ -296,6 +297,7 @@ void i915_vma_revoke_mmap(struct i915_vma *vma);
 void __i915_vma_evict(struct i915_vma *vma);
 int __i915_vma_unbind(struct i915_vma *vma);
 int __must_check i915_vma_unbind(struct i915_vma *vma);
+int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem);
 void i915_vma_unlink_ctx(struct i915_vma *vma);
 void i915_vma_close(struct i915_vma *vma);
 void i915_vma_reopen(struct i915_vma *vma);

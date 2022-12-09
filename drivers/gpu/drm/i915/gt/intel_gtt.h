@@ -838,6 +838,8 @@ int i915_vm_map_pt_stash(struct i915_address_space *vm,
 void i915_vm_free_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash);
 
+u64 i915_vm_estimate_pt_size(struct i915_address_space *vm, u64 size);
+
 struct i915_vma *
 __vm_create_scratch_for_read(struct i915_address_space *vm, unsigned long size);
 

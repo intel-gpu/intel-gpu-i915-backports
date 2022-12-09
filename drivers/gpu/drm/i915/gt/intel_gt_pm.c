@@ -21,6 +21,33 @@
 #include "intel_rc6.h"
 #include "intel_rps.h"
 #include "intel_wakeref.h"
+#include "intel_pcode.h"
+
+/*
+ * Wa_14017210380: mtl
+ */
+
+static bool mtl_needs_media_mc6_wa(struct intel_gt *gt)
+{
+	return (IS_MTL_GRAPHICS_STEP(gt->i915, P, STEP_A0, STEP_B0) &&
+		gt->type == GT_MEDIA);
+}
+
+static void mtl_mc6_wa_media_busy(struct intel_gt *gt)
+{
+	if (mtl_needs_media_mc6_wa(gt))
+		snb_pcode_write_p(gt->uncore, PCODE_MBOX_GT_STATE,
+				  PCODE_MBOX_GT_STATE_MEDIA_BUSY,
+				  PCODE_MBOX_GT_STATE_DOMAIN_MEDIA, 0);
+}
+
+static void mtl_mc6_wa_media_not_busy(struct intel_gt *gt)
+{
+	if (mtl_needs_media_mc6_wa(gt))
+		snb_pcode_write_p(gt->uncore, PCODE_MBOX_GT_STATE,
+				  PCODE_MBOX_GT_STATE_MEDIA_NOT_BUSY,
+				  PCODE_MBOX_GT_STATE_DOMAIN_MEDIA, 0);
+}
 
 static void user_forcewake(struct intel_gt *gt, bool suspend)
 {
@@ -65,6 +92,9 @@ static int __gt_unpark(struct intel_wakeref *wf)
 	struct drm_i915_private *i915 = gt->i915;
 
 	GT_TRACE(gt, "\n");
+
+	/* Wa_14017210380: mtl */
+	mtl_mc6_wa_media_busy(gt);
 
 	/*
 	 * It seems that the DMC likes to transition between the DC states a lot
@@ -117,6 +147,9 @@ static int __gt_park(struct intel_wakeref *wf)
 	/* Defer dropping the display power well for 100ms, it's slow! */
 	GEM_BUG_ON(!wakeref);
 	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ, wakeref);
+
+	/* Wa_14017210380: mtl */
+	mtl_mc6_wa_media_not_busy(gt);
 
 	return 0;
 }

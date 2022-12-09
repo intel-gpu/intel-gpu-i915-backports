@@ -3,6 +3,10 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <uapi/drm/i915_drm.h>
+
+#include "gt/intel_gt.h"
+
 #include "intel_memory_region.h"
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_lmem.h"
@@ -76,7 +80,7 @@ bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
  * Return: Whether the object migratable but resident in lmem, or not
  * migratable and will be present in lmem when valid.
  */
-bool i915_gem_object_is_lmem(struct drm_i915_gem_object *obj)
+bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 {
 	struct intel_memory_region *mr = READ_ONCE(obj->mm.region);
 #if 0
@@ -116,6 +120,245 @@ i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
 	return obj;
 }
 
+static void
+__update_stat(struct i915_mm_swap_stat *stat,
+	      unsigned long pages,
+	      ktime_t start)
+{
+	if (stat) {
+		start = ktime_get() - start;
+
+		write_seqlock(&stat->lock);
+		stat->time = ktime_add(stat->time, start);
+		stat->pages += pages;
+		write_sequnlock(&stat->lock);
+	}
+}
+
+static int
+swapout_pages(struct drm_i915_gem_object *obj,
+	      struct sg_table *pages, unsigned int sizes)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct i915_mm_swap_stat *stat = NULL;
+	struct drm_i915_gem_object *dst, *src;
+	ktime_t start = ktime_get();
+	int err = -EINVAL;
+	u64 size;
+
+	GEM_BUG_ON(obj->swapto);
+	assert_object_held(obj);
+
+	/* create a shadow object on smem region */
+	size = obj->base.size;
+	if (HAS_FLAT_CCS(i915))
+		size += size >> 8;
+	dst = i915_gem_object_create_shmem(i915, size);
+	if (IS_ERR(dst))
+		return PTR_ERR(dst);
+
+	/* Share the dma-resv between the shadow- and the parent object */
+	dst->base.resv = obj->base.resv;
+	assert_object_held(dst);
+
+	/*
+	 * create working object on the same region as 'obj',
+	 * if 'obj' is used directly, it is set pages and is pinned
+	 * again, other thread may wrongly use 'obj' pages.
+	 */
+	src = i915_gem_object_create_region(obj->mm.region,
+					    obj->base.size, 0);
+	if (IS_ERR(src)) {
+		i915_gem_object_put(dst);
+		return PTR_ERR(src);
+	}
+
+	/* set and pin working object pages */
+	i915_gem_object_lock_isolated(src);
+	__i915_gem_object_set_pages(src, pages, sizes);
+	__i915_gem_object_pin_pages(src);
+
+	/* copying the pages */
+	if (i915->params.enable_eviction >= 2 &&
+	    !intel_gt_is_wedged(obj->mm.region->gt)) {
+		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
+		if (!err)
+			stat = &i915->mm.blt_swap_stats.out;
+	}
+
+	if (err &&
+	    err != -ERESTARTSYS && err != -EINTR &&
+	    !HAS_FLAT_CCS(i915) &&
+	    i915->params.enable_eviction != 2) {
+		err = i915_gem_object_memcpy(dst, src);
+		if (!err)
+			stat = &i915->mm.memcpy_swap_stats.out;
+	}
+
+	__i915_gem_object_unpin_pages(src);
+	__i915_gem_object_unset_pages(src);
+	i915_gem_object_unlock(src);
+	i915_gem_object_put(src);
+
+	if (!err) {
+		obj->swapto = dst;
+	} else {
+		if (err != -EINTR && err != -ERESTARTSYS)
+			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
+					      "Failed to swap-out object (%d)\n", err);
+		i915_gem_object_put(dst);
+	}
+
+	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
+
+	return err;
+}
+
+static int
+swapin_pages(struct drm_i915_gem_object *obj,
+	     struct sg_table *pages, unsigned int sizes)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct drm_i915_gem_object *dst, *src = obj->swapto;
+	struct i915_mm_swap_stat *stat = NULL;
+	ktime_t start = ktime_get();
+	int err = -EINVAL;
+
+	assert_object_held(obj);
+
+	/*
+	 * create working object on the same region as 'obj',
+	 * if 'obj' is used directly, it is set pages and is pinned
+	 * again, other thread may wrongly use 'obj' pages.
+	 */
+	dst = i915_gem_object_create_region(obj->mm.region,
+					    obj->base.size, 0);
+	if (IS_ERR(dst)) {
+		err = PTR_ERR(dst);
+		return err;
+	}
+
+	/* @scr is sharing @obj's reservation object */
+	assert_object_held(src);
+
+	/* set and pin working object pages */
+	i915_gem_object_lock_isolated(dst);
+	__i915_gem_object_set_pages(dst, pages, sizes);
+	__i915_gem_object_pin_pages(dst);
+
+	/* copying the pages */
+	if (i915->params.enable_eviction >= 2 &&
+	    !intel_gt_is_wedged(obj->mm.region->gt)) {
+		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
+		if (!err)
+			stat = &i915->mm.blt_swap_stats.in;
+	}
+
+	if (err &&
+	    err != -ERESTARTSYS && err != -EINTR &&
+	    !HAS_FLAT_CCS(i915) &&
+	    i915->params.enable_eviction != 2) {
+		err = i915_gem_object_memcpy(dst, src);
+		if (!err)
+			stat = &i915->mm.memcpy_swap_stats.in;
+	}
+
+	__i915_gem_object_unpin_pages(dst);
+	__i915_gem_object_unset_pages(dst);
+	i915_gem_object_unlock(dst);
+	i915_gem_object_put(dst);
+
+	if (!err) {
+		obj->swapto = NULL;
+		i915_gem_object_put(src);
+	} else {
+		if (err != -EINTR && err != -ERESTARTSYS)
+			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
+					      "Failed to swap-in object (%d)\n", err);
+	}
+
+	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
+
+	return err;
+}
+
+static void clear_cpu(struct intel_memory_region *mem, struct sg_table *sgt)
+{
+        struct scatterlist *sg;
+
+        for (sg = sgt->sgl; sg; sg = __sg_next(sg)) {
+                unsigned int length;
+                void __iomem *vaddr;
+                dma_addr_t daddr;
+
+                length = sg_dma_len(sg);
+                if (!length)
+                        continue;
+
+                daddr = sg_dma_address(sg);
+                daddr -= mem->region.start;
+
+                vaddr = io_mapping_map_wc(&mem->iomap, daddr, length);
+                memset64((void __force *)vaddr, 0, length / sizeof(u64));
+                io_mapping_unmap(vaddr);
+        }
+
+        wmb();
+}
+
+static int lmem_get_pages(struct drm_i915_gem_object *obj)
+{
+	unsigned int flags = obj->flags;
+	unsigned int page_sizes;
+	struct sg_table *pages;
+	int err = 0;
+
+	/* XXX: Check if we have any post. This is nasty hack, see gem_create */
+	if (obj->mm.gem_create_posted_err)
+		return obj->mm.gem_create_posted_err;
+
+	pages = i915_gem_object_get_pages_buddy(obj, &page_sizes);
+	if (IS_ERR(pages))
+		return PTR_ERR(pages);
+
+	/* if we saved the page contents, swap them in */
+	if (obj->swapto) {
+		err = swapin_pages(obj, pages, page_sizes);
+	} else if (flags & I915_BO_ALLOC_CPU_CLEAR) {
+		/* Intended for kernel internal use only */
+		clear_cpu(obj->mm.region, pages);
+	}
+
+	if (err)
+		goto err;
+
+	__i915_gem_object_set_pages(obj, pages, page_sizes);
+	return 0;
+
+err:
+	i915_gem_object_put_pages_buddy(obj, pages);
+	return err;
+}
+
+static int
+lmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
+{
+	/* if need to save the page contents, swap them out */
+	if (obj->do_swapping) {
+		unsigned int sizes = obj->mm.page_sizes.phys;
+		int err;
+
+		GEM_BUG_ON(obj->mm.madv != I915_MADV_WILLNEED);
+		GEM_BUG_ON(i915_gem_object_is_volatile(obj));
+
+		err = swapout_pages(obj, pages, sizes);
+		if (err)
+			return err;
+	}
+
+	return i915_gem_object_put_pages_buddy(obj, pages);
+}
+
 static int
 i915_ww_pin_lock_interruptible(struct drm_i915_gem_object *obj)
 {
@@ -150,8 +393,8 @@ out_unpin:
 	return ret;
 }
 
-static int i915_gem_object_lmem_pread(struct drm_i915_gem_object *obj,
-				      const struct drm_i915_gem_pread *arg)
+static int lmem_pread(struct drm_i915_gem_object *obj,
+		      const struct drm_i915_gem_pread *arg)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct intel_runtime_pm *rpm = &i915->runtime_pm;
@@ -219,8 +462,8 @@ out_put:
 	return ret;
 }
 
-static int i915_gem_object_lmem_pwrite(struct drm_i915_gem_object *obj,
-				       const struct drm_i915_gem_pwrite *arg)
+static int lmem_pwrite(struct drm_i915_gem_object *obj,
+		       const struct drm_i915_gem_pwrite *arg)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct intel_runtime_pm *rpm = &i915->runtime_pm;
@@ -291,12 +534,12 @@ const struct drm_i915_gem_object_ops i915_gem_lmem_obj_ops = {
 	.name = "i915_gem_object_lmem",
 	.flags = I915_GEM_OBJECT_HAS_IOMEM,
 
-	.get_pages = i915_gem_object_get_pages_buddy,
-	.put_pages = i915_gem_object_put_pages_buddy,
+	.get_pages = lmem_get_pages,
+	.put_pages = lmem_put_pages,
 	.release = i915_gem_object_release_memory_region,
 
-	.pread = i915_gem_object_lmem_pread,
-	.pwrite = i915_gem_object_lmem_pwrite,
+	.pread = lmem_pread,
+	.pwrite = lmem_pwrite,
 };
 
 void __iomem *

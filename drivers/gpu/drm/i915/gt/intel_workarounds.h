@@ -43,8 +43,6 @@ void intel_engine_deny_user_register_access(struct intel_engine_cs *engine,
 					    struct i915_whitelist_reg *reg,
 					    u32 count);
 
-void intel_engine_whitelist_sip(struct intel_engine_cs *engine);
-void intel_engine_undo_whitelist_sip(struct intel_engine_cs *engine);
 void intel_engine_debug_enable(struct intel_engine_cs *engine);
 void intel_engine_debug_disable(struct intel_engine_cs *engine);
 

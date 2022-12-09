@@ -61,4 +61,6 @@ intel_context_migrate_clear(struct intel_context *ce,
 
 void intel_migrate_fini(struct intel_migrate *m);
 
+u32 *i915_flush_dw(u32 *cmd, u32 flags);
+
 #endif /* __INTEL_MIGRATE__ */

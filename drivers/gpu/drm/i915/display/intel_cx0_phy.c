@@ -175,7 +175,7 @@ retry:
 			intel_cx0_bus_reset(i915, port, lane);
 			goto retry;
 		}
-	} else if ((intel_de_read(i915, XELPDP_PORT_P2M_MSGBUS_STATUS(phy, lane)) &
+	} else if ((intel_de_read(i915, XELPDP_PORT_P2M_MSGBUS_STATUS(port, lane)) &
 			    XELPDP_PORT_P2M_ERROR_SET)) {
 		drm_dbg(&i915->drm, "PHY %c Error occurred during write command.\n", phy_name(phy));
 		attempts++;
@@ -1619,7 +1619,8 @@ int intel_c10mpllb_calc_port_clock(struct intel_encoder *encoder,
 				   const struct intel_c10mpllb_state *pll_state)
 {
 	unsigned int frac_quot = 0, frac_rem = 0, frac_den = 1;
-	unsigned int multiplier, tx_clk_div, refclk = 38400;
+	unsigned int multiplier, tx_clk_div, hdmi_div, refclk = 38400;
+	int tmpclk = 0;
 
 	if (pll_state->pll[0] & C10_PLL0_FRACEN) {
 		frac_quot = pll_state->pll[12] << 8 | pll_state->pll[11];
@@ -1631,10 +1632,14 @@ int intel_c10mpllb_calc_port_clock(struct intel_encoder *encoder,
 		      pll_state->pll[2]) / 2 + 16;
 
 	tx_clk_div = REG_FIELD_GET8(C10_PLL15_TXCLKDIV_MASK, pll_state->pll[15]);
+	hdmi_div = REG_FIELD_GET8(C10_PLL15_HDMIDIV_MASK, pll_state->pll[15]);
 
-	return DIV_ROUND_CLOSEST_ULL(mul_u32_u32(refclk, (multiplier << 16) + frac_quot) +
+	tmpclk = DIV_ROUND_CLOSEST_ULL(mul_u32_u32(refclk, (multiplier << 16) + frac_quot) +
 				     DIV_ROUND_CLOSEST(refclk * frac_rem, frac_den),
 				     10 << (tx_clk_div + 16));
+	tmpclk *= (hdmi_div ? 2 : 1);
+
+	return tmpclk;
 }
 
 int intel_c20pll_calc_port_clock(struct intel_encoder *encoder,
@@ -2171,3 +2176,57 @@ void intel_mtl_pll_disable(struct intel_encoder *encoder)
 
 #undef PHY_LANES_VAL_ARG
 #undef PHY_LANES_VAL
+
+void intel_c10mpllb_state_verify(struct intel_atomic_state *state,
+				 struct intel_crtc_state *new_crtc_state)
+{
+	struct drm_i915_private *i915 = to_i915(state->base.dev);
+	struct intel_c10mpllb_state mpllb_hw_state = { 0 };
+	struct intel_c10mpllb_state *mpllb_sw_state = &new_crtc_state->cx0pll_state.c10mpllb_state;
+	struct intel_crtc *crtc = to_intel_crtc(new_crtc_state->uapi.crtc);
+	struct intel_encoder *encoder;
+	struct intel_dp *intel_dp;
+	enum phy phy;
+	int i;
+	bool use_ssc = false;
+	bool use_hdmi = false;
+
+	if (DISPLAY_VER(i915) < 14)
+		return;
+
+	if (!new_crtc_state->hw.active)
+		return;
+
+	encoder = intel_get_crtc_new_encoder(state, new_crtc_state);
+	phy = intel_port_to_phy(i915, encoder->port);
+
+	if (intel_crtc_has_dp_encoder(new_crtc_state)) {
+		intel_dp = enc_to_intel_dp(encoder);
+		use_ssc = (intel_dp->dpcd[DP_MAX_DOWNSPREAD] &
+			  DP_MAX_DOWNSPREAD_0_5);
+
+		if (intel_dp_is_edp(intel_dp) && !intel_panel_use_ssc(i915))
+			use_ssc = false;
+	} else {
+		use_hdmi = true;
+	}
+
+	if (!intel_is_c10phy(i915, phy))
+		return;
+
+	intel_c10mpllb_readout_hw_state(encoder, &mpllb_hw_state);
+
+	for (i = 0; i < 20; i++) {
+		u8 expected;
+
+		if (!(use_ssc || use_hdmi) && i > 3 && i < 9)
+			expected = 0;
+		else
+			expected = mpllb_sw_state->pll[i];
+
+		I915_STATE_WARN(mpllb_hw_state.pll[i] != expected,
+				"[CRTC:%d:%s] mismatch in C10MPLLB: Register[%d] (expected 0x%02x, found 0x%02x)",
+				crtc->base.base.id, crtc->base.name,
+				i, expected, mpllb_hw_state.pll[i]);
+	}
+}

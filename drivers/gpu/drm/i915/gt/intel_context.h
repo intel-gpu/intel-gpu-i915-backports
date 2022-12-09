@@ -326,6 +326,16 @@ intel_context_get_active_request(struct intel_context *ce)
 	return __intel_context_find_active_request(ce, true);
 }
 
+static inline bool intel_context_has_error(const struct intel_context *ce)
+{
+	return test_bit(CONTEXT_ERROR, &ce->flags);
+}
+
+static inline void intel_context_set_error(struct intel_context *ce)
+{
+	set_bit(CONTEXT_ERROR, &ce->flags);
+}
+
 static inline bool intel_context_is_barrier(const struct intel_context *ce)
 {
 	return test_bit(CONTEXT_BARRIER_BIT, &ce->flags);

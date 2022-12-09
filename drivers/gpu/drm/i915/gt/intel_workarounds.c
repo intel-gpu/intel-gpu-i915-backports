@@ -644,9 +644,36 @@ static void gen12_ctx_gt_tuning_init(struct intel_engine_cs *engine,
 	       0, false);
 }
 
+/*
+ * These settings aren't actually workarounds, but general tuning settings that
+ * need to be programmed on PVC 0x0BD6.
+ */
+static void pvc_ctx_gt_tuning_init(struct intel_engine_cs *engine,
+				   struct i915_wa_list *wal)
+{
+	/*
+	 * For tuning power.
+	 * FPU residue disable will lower the power consumption.
+	 */
+	if (INTEL_DEVID(engine->i915) == 0x0BD6 &&
+	    engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE) {
+		struct intel_gt *gt;
+		u16 eu_count = 0;
+		int id;
+
+		for_each_gt(gt, engine->i915, id)
+			eu_count += gt->info.sseu.eu_total;
+
+		if (eu_count == 1024)
+			wa_write_or(wal, GEN8_ROW_CHICKEN, FPU_RESIDUAL_DISABLE);
+	}
+}
+
 static void gen12_ctx_workarounds_init(struct intel_engine_cs *engine,
 				       struct i915_wa_list *wal)
 {
+	struct drm_i915_private *i915 = engine->i915;
+
 	gen12_ctx_gt_tuning_init(engine, wal);
 
 	/*
@@ -680,6 +707,11 @@ static void gen12_ctx_workarounds_init(struct intel_engine_cs *engine,
 	       FF_MODE2_GS_TIMER_MASK,
 	       FF_MODE2_GS_TIMER_224,
 	       0, false);
+
+	if (!IS_DG1(i915))
+		/* Wa_1806527549 */
+		wa_masked_en(wal, HIZ_CHICKEN, HZ_DEPTH_TEST_LE_GE_OPT_DISABLE);
+
 }
 
 static void dg1_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -738,6 +770,8 @@ static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
 				     struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
+
+	pvc_ctx_gt_tuning_init(engine, wal);
 
 	if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0) &&
 	    engine->class == COPY_ENGINE_CLASS) {
@@ -837,66 +871,6 @@ gen12_ctx_gt_fake_wa_init(struct intel_engine_cs *engine,
 	gen12_ctx_gt_mocs_init(engine, wal);
 }
 
-static void intel_engine_debug_init(struct intel_engine_cs *engine,
-				    struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	if (GRAPHICS_VER(i915) < 9)
-		return;
-
-	gen9_debug_td_ctl_init(engine, wal);
-
-	/* Wa_22015693276 */
-	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
-		wa_masked_en(wal, GEN8_ROW_CHICKEN,
-			     STALL_DOP_GATING_DISABLE);
-
-	/* Wa_14015527279:pvc */
-	if (IS_PONTEVECCHIO(i915))
-		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
-
-	if (engine->class == COMPUTE_CLASS)
-		return;
-
-	GEM_WARN_ON(engine->class != RENDER_CLASS);
-
-	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
-		wa_masked_en(wal, GEN9_CS_DEBUG_MODE2, GEN11_GLOBAL_DEBUG_ENABLE);
-	else if (GRAPHICS_VER(i915) == 9)
-		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1, GEN9_GLOBAL_DEBUG_ENABLE);
-}
-
-static void intel_engine_debug_fini(struct intel_engine_cs *engine,
-				    struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	if (GRAPHICS_VER(i915) < 9)
-		return;
-
-	_wa_remove(wal, TD_CTL, 0);
-
-	/* Wa_22015693276 */
-	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
-		wa_masked_dis(wal, GEN8_ROW_CHICKEN,
-			      STALL_DOP_GATING_DISABLE);
-
-	/* Wa_14015527279:pvc */
-	if (IS_PONTEVECCHIO(i915))
-		_wa_remove(wal, GEN7_ROW_CHICKEN2, 0);
-
-	if (engine->class == COMPUTE_CLASS)
-		return;
-
-	GEM_WARN_ON(engine->class != RENDER_CLASS);
-
-	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
-		_wa_remove(wal, GEN9_CS_DEBUG_MODE2, 0);
-	else if (GRAPHICS_VER(i915) == 9)
-		_wa_remove(wal, GEN9_CS_DEBUG_MODE1, 0);
-}
-
 static void
 __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 			   struct i915_wa_list *wal,
@@ -960,7 +934,7 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (i915->debuggers.enable_eu_debug && IS_GRAPHICS_VER(i915, 9, 11))
-		intel_engine_debug_init(engine, wal);
+		gen9_debug_td_ctl_init(engine, wal);
 #endif
 }
 
@@ -2324,31 +2298,27 @@ static void dg1_whitelist_build(struct intel_engine_cs *engine)
 				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
 }
 
-void intel_engine_whitelist_sip(struct intel_engine_cs *engine)
+static void engine_debug_init_whitelist(struct intel_engine_cs *engine,
+					struct i915_wa_list *wal)
 {
 	/* Wa_22011767781:xehpsdv */
-	if (engine->class == COMPUTE_CLASS &&
-	    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
-		whitelist_reg(&engine->whitelist, EU_GLOBAL_SIP);
+	if (IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0) &&
+	    engine->class == COMPUTE_CLASS)
+		whitelist_reg(wal, EU_GLOBAL_SIP);
 }
 
-void intel_engine_undo_whitelist_sip(struct intel_engine_cs *engine)
+static void engine_debug_fini_whitelist(struct intel_engine_cs *engine,
+					struct i915_wa_list *wal)
 {
 	/* Wa_22011767781:xehpsdv */
-	if (engine->class == COMPUTE_CLASS &&
-	    IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0))
-		_wa_remove(&engine->whitelist, EU_GLOBAL_SIP,
-			   RING_FORCE_TO_NONPRIV_ACCESS_RW);
+	if (IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0) &&
+	    engine->class == COMPUTE_CLASS)
+		_wa_remove(wal, EU_GLOBAL_SIP, RING_FORCE_TO_NONPRIV_ACCESS_RW);
 }
 
 static void xehpsdv_whitelist_build(struct intel_engine_cs *engine)
 {
 	allow_read_ctx_timestamp(engine);
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	if (engine->i915->debuggers.enable_eu_debug)
-		intel_engine_whitelist_sip(engine);
-#endif
 }
 
 static void dg2_whitelist_build(struct intel_engine_cs *engine)
@@ -2452,6 +2422,11 @@ void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 		;
 	else
 		MISSING_CASE(GRAPHICS_VER(i915));
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (i915->debuggers.enable_eu_debug)
+		engine_debug_init_whitelist(engine, &engine->whitelist);
+#endif
 }
 
 void intel_engine_apply_whitelist(struct intel_engine_cs *engine)
@@ -2908,11 +2883,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 				 EVICTION_PERF_FIX_ENABLE, 0);
 	}
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	if (i915->debuggers.enable_eu_debug)
-		intel_engine_debug_init(engine, wal);
-#endif
-
 	if (IS_HASWELL(i915)) {
 		/* WaSampleCChickenBitEnable:hsw */
 		wa_masked_en(wal,
@@ -3141,11 +3111,6 @@ ccs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_masked_en(wal, GEN10_CACHE_MODE_SS, DISABLE_ECC);
 	}
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	if (engine->i915->debuggers.enable_eu_debug)
-		intel_engine_debug_init(engine, wal);
-#endif
-
 	if (IS_PVC_CT_STEP(engine->i915, STEP_A0, STEP_B0)) {
 		/* Wa_18015335494:pvc */
 		wa_write_or(wal, GEN8_ROW_CHICKEN, FPU_RESIDUAL_DISABLE);
@@ -3237,29 +3202,12 @@ static void
 general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 {
 	struct drm_i915_private *i915 = engine->i915;
-	bool debug_eu = false;
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	debug_eu = i915->debuggers.enable_eu_debug;
-#endif
 
 	add_render_compute_tuning_settings(i915, wal);
 
-	if (IS_PONTEVECCHIO(i915)) {
-		/* Wa_16016694945 */
+	/* Wa_16016694945 */
+	if (IS_PONTEVECCHIO(i915))
 		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
-
-		/*
-		 * Wa_16017028706 Disable load balancing
-		 *
-		 * FIXME: EU debug current implementation does not allow
-		 *        fixed slice mode. Only enable this workaround
-		 *        when EU debug is not enabled for now.
-		 */
-		if (!debug_eu)
-			wa_masked_en(wal, GEN12_RCU_MODE,
-				     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
-	}
 
 	if (IS_XEHPSDV(i915)) {
 		/* Wa_1409954639 */
@@ -3382,6 +3330,90 @@ engine_init_workarounds(struct intel_engine_cs *engine, struct i915_wa_list *wal
 		xcs_engine_wa_init(engine, wal);
 }
 
+static void engine_debug_init_workarounds(struct intel_engine_cs *engine,
+					  struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (!(engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE) ||
+	    GRAPHICS_VER(i915) < 9)
+		return;
+
+	gen9_debug_td_ctl_init(engine, wal);
+
+	/* Wa_22015693276 */
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		wa_masked_en(wal, GEN8_ROW_CHICKEN,
+			     STALL_DOP_GATING_DISABLE);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(i915))
+		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+
+	/*
+	 * Wa_16017028706 Disable load balancing
+	 *
+	 * FIXME: EU debug current implementation does not allow
+	 *        fixed slice mode. Only enable this workaround
+	 *        when EU debug is not enabled for now.
+	 */
+	if (IS_PONTEVECCHIO(i915))
+		wa_masked_dis(wal, GEN12_RCU_MODE,
+			      XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
+
+	if (engine->class == COMPUTE_CLASS)
+		return;
+
+	GEM_WARN_ON(engine->class != RENDER_CLASS);
+
+	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE2, GEN11_GLOBAL_DEBUG_ENABLE);
+	else if (GRAPHICS_VER(i915) == 9)
+		wa_masked_en(wal, GEN9_CS_DEBUG_MODE1, GEN9_GLOBAL_DEBUG_ENABLE);
+}
+
+static void engine_debug_fini_workarounds(struct intel_engine_cs *engine,
+					  struct i915_wa_list *wal)
+{
+	struct drm_i915_private *i915 = engine->i915;
+
+	if (!(engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE) ||
+	    GRAPHICS_VER(i915) < 9)
+		return;
+
+	_wa_remove(wal, TD_CTL, 0);
+
+	/* Wa_22015693276 */
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		wa_masked_dis(wal, GEN8_ROW_CHICKEN,
+			      STALL_DOP_GATING_DISABLE);
+
+	/* Wa_14015527279:pvc */
+	if (IS_PONTEVECCHIO(i915))
+		wa_masked_dis(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
+
+	/*
+	 * Wa_16017028706 Disable load balancing
+	 *
+	 * FIXME: EU debug current implementation does not allow
+	 *        fixed slice mode. Only enable this workaround
+	 *        when EU debug is not enabled for now.
+	 */
+	if (IS_PONTEVECCHIO(i915))
+		wa_masked_en(wal, GEN12_RCU_MODE,
+			     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
+
+	if (engine->class == COMPUTE_CLASS)
+		return;
+
+	GEM_WARN_ON(engine->class != RENDER_CLASS);
+
+	if (GRAPHICS_VER(i915) >= 11 && GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		wa_masked_dis(wal, GEN9_CS_DEBUG_MODE2, GEN11_GLOBAL_DEBUG_ENABLE);
+	else if (GRAPHICS_VER(i915) == 9)
+		wa_masked_dis(wal, GEN9_CS_DEBUG_MODE1, GEN9_GLOBAL_DEBUG_ENABLE);
+}
+
 void intel_engine_init_workarounds(struct intel_engine_cs *engine)
 {
 	struct i915_wa_list *wal = &engine->wa_list;
@@ -3394,22 +3426,23 @@ void intel_engine_init_workarounds(struct intel_engine_cs *engine)
 
 	wa_init(wal, "engine", engine->name);
 	engine_init_workarounds(engine, wal);
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+	if (engine->i915->debuggers.enable_eu_debug)
+		engine_debug_init_workarounds(engine, wal);
+#endif
 }
 
 void intel_engine_debug_enable(struct intel_engine_cs *engine)
 {
-	struct i915_wa_list *wal = &engine->wa_list;
-
-	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
-		intel_engine_debug_init(engine, wal);
+	engine_debug_init_workarounds(engine, &engine->wa_list);
+	engine_debug_init_whitelist(engine, &engine->whitelist);
 }
 
 void intel_engine_debug_disable(struct intel_engine_cs *engine)
 {
-	struct i915_wa_list *wal = &engine->wa_list;
-
-	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
-		intel_engine_debug_fini(engine, wal);
+	engine_debug_fini_workarounds(engine, &engine->wa_list);
+	engine_debug_fini_whitelist(engine, &engine->whitelist);
 }
 
 void intel_engine_allow_user_register_access(struct intel_engine_cs *engine,
