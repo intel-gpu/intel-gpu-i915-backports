@@ -35,7 +35,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 | Product | TAG |Supported OS |
 |---- |--- |--- |
-| Intel® Data Center GPU Flex Series  | RHEL86_22WW45.5_476.14_6213_220914.1	 | RHEL 8.6 |
-| | I915_22WW45.5_476.14_6213_220914.2	| Ubuntu 22.04 ( 5.15 generic) |
+| Intel® Data Center GPU Flex Series  | RHEL86_22WW51.5_518.5_6365.0.0_221202.0	 | RHEL 8.6 |
+| | I915_22WW51.5_518.5_6365.0.0_221124.0	| Ubuntu 22.04 ( 5.15 generic) |
 
 
