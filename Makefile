@@ -20,188 +20,15 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile.rhelver
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 
-version_h := $(BACKPORT_DIR)/backport-include/linux/osv_version.h
-export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG version_h
+ARCH := x86_64
+export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH
 
 # disable built-in rules for this file
 .SUFFIXES:
 
 .PHONY: default
-default: $(version_h)
+default:
 	@$(MAKE) modules
-
-ARCH := x86_64
-
-# BKPT_VER is extracted from BACKPORTS_RELEASE_TAG, which is auto genereated from backport description.Tagging is needed
-# for decoding this, Sample in the version file 'BACKPORTS_RELEASE_TAG="RHEL_86_6365_PRERELEASE_221027.0"'
-# Backports tagging is needed for this to work, for example "RHEL_86_6365_PRERELEASE_221027.0" is the tag for 221027.0 release in
-# backports branch
-#
-BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
-
-# DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
-# for decoding this, Sample in the version file DII_KERNEL_TAG="DII_6365_prerelease"
-# for above example tag filtered out put will be 6365
-DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
-
-BASE_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "-" -f1 2> /dev/null || echo 1)
-BASE_KER_VER = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_RELEASE | tail -1 | cut -d " " -f3 | cut -d '"' -f2 2> /dev/null || echo 1)
-
-KER_VER := $(shell cat versions | grep -F $(shell bash scripts/bp_get_latest_KV.sh) | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
-
-RHEL_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 1 2> /dev/null)
-RHEL_BACKPORT_MINOR_XX = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 | cut -c -2 2> /dev/null)
-RHEL_BACKPORT_MINOR_YY = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 3 | cut -c -2 2> /dev/null)
-
-BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MAJOR | cut -d " " -f3 2> /dev/null)
-BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MINOR | cut -d " " -f3 2> /dev/null)
-ADD_KV := $(shell cat versions | grep RHEL_$(BACKPORT_MAJOR).$(BACKPORT_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
-
-ifeq ($(RHEL_BACKPORT_MINOR_XX),el)
-	RHEL_BACKPORT_MINOR_XX = 0;
-	RHEL_BACKPORT_MINOR_YY = 0;
-else ifeq ($(RHEL_BACKPORT_MINOR_YY),el)
-	RHEL_BACKPORT_MINOR_YY = 0;
-endif
-
-###
-# Easy method for doing a status message
-       kecho := :
- quiet_kecho := echo
-silent_kecho := :
-kecho := $($(quiet)kecho)
-
-###
-# filechk is used to check if the content of a generated file is updated.
-# Sample usage:
-# define filechk_sample
-#       echo $KERNELRELEASE
-# endef
-# version.h : Makefile
-#       $(call filechk,sample)
-# The rule defined shall write to stdout the content of the new file.
-# The existing file will be compared with the new one.
-# - If no file exist it is created
-# - If the content differ the new file is used
-# - If they are equal no change, and no timestamp update
-# - stdin is piped in from the first prerequisite ($<) so one has
-#   to specify a valid file as first prerequisite (often the kbuild file)
-
-# VERSION is generated as 0.DII_TAG.BackportVersion
-define filechk
-        $(Q)set -e;                             \
-        mkdir -p $(dir $@);                     \
-        { $(filechk_$(1)); } > $@.tmp;          \
-        if [ -r $@ ] && cmp -s $@ $@.tmp; then  \
-                rm -f $@.tmp;                   \
-        else                                    \
-                $(kecho) '  UPD     $@';        \
-                mv -f $@.tmp $@;                \
-        fi
-endef
-
-define filechk_osv_version.h
-        echo '#define RHEL_BACKPORT_MAJOR $(RHEL_BACKPORT_MAJOR)'; \
-        echo '#define RHEL_BACKPORT_MINOR_XX_P $(RHEL_BACKPORT_MINOR_XX)'; \
-        echo '#define RHEL_BACKPORT_MINOR_YY_Q $(RHEL_BACKPORT_MINOR_YY)'; \
-	echo '#define RHEL_BACKPORT_RELEASE_VERSION(a,b,c) ((a) << 16 + (b) << 8 + (c))'; \
-        echo '#define RHEL_BACKPORT_RELEASE_CODE $(shell                                  \
-	expr $(RHEL_BACKPORT_MAJOR) \* 65536 + 0$(RHEL_BACKPORT_MINOR_XX_P) \* 256 + 0$(RHEL_BACKPORT_MINOR_YY_Q))'
-endef
-
-$(version_h): $(BACKPORT_DIR)/Makefile FORCE
-
-ifneq ($(BACKPORT_MAJOR).$(BACKPORT_MINOR), 8.4)
-ifeq ($(ADD_KV), )
-	@echo 'RHEL_$(BACKPORT_MAJOR).$(BACKPORT_MINOR)_KERNEL_VERSION="$(BASE_VER)-$(BASE_KER_VER)"' >> versions
-endif
-endif
-	$(call filechk,osv_version.h)
-
-VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
-
-
-ifneq ($(BUILD_VERSION), )
-RELEASE := $(BUILD_VERSION).el8_6
-else
-RELEASE := el8_6
-endif
-
-RELEASE_TYPE ?= opensource
-
-ifeq ($(RELEASE_TYPE), opensource)
-PKG_SUFFIX=
-else
-PKG_SUFFIX=-$(RELEASE_TYPE)
-endif
-
-# dmadkmsrpm-pkg
-# Creates Backports dmabuf dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> dmadkmsrpm-pkg
-# Rpm generated can be copied to client machine and install
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE: <opensource/prerelease> package need to be created
-# will trigger source build and install on modules
-#------------------------------------------------------------------------------
-export KBUILD_ONLYDMADIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf include scripts)
-DMA_TAR_CONTENT := $(KBUILD_ONLYDMADIRS) .config Makefile* local-symbols MAINTAINERS \
-               Kconfig* COPYING versions defconfigs backport-include kconf compat
-DMADKMSMKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsspec
-DMADKMSMKCONF := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsconf
-DMAMODULE_NAME := intel-dmabuf-dkms$(PKG_SUFFIX)
-DMAVERSION := $(VERSION)
-DMARELEASE := $(RELEASE)
-
-.PHONY: dmadkmsrpm-pkg
-dmadkmsrpm-pkg:
-	cp $(BACKPORT_DIR)/defconfigs/dmabuf .config
-	$(CONFIG_SHELL) $(DMADKMSMKCONF) -n $(DMAMODULE_NAME) -v $(DMAVERSION) -r $(DMARELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
-	$(CONFIG_SHELL) $(DMADKMSMKSPEC) -n $(DMAMODULE_NAME) -v $(DMAVERSION) -r $(DMARELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(DMAMODULE_NAME).spec
-	patch -p1 < $(BACKPORT_DIR)/scripts/disable_drm.patch ;
-	tar -cz $(RCS_TAR_IGNORE) -f $(DMAMODULE_NAME)-$(DMAVERSION)-src.tar.gz \
-	        $(DMA_TAR_CONTENT) $(DMAMODULE_NAME).spec dkms.conf;
-	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(DMAMODULE_NAME)-$(DMAVERSION)-src.tar.gz \
-	--define='_smp_mflags %{nil}'
-	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_drm.patch ;
-
-# i915dkmsrpm-pkg
-# Creates Backports i915 alone dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsrpm-pkg
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE : <opensource/prerelease> package need to be created
-# Depends on package generated by dmadkmsrpm-pkg
-#------------------------------------------------------------------------------
-export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/char drivers/platform drivers/pci include scripts)
-I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINTAINERS \
-               Kconfig* COPYING versions defconfigs backport-include kconf compat
-I915DKMSMKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
-I915DKMSMKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
-I915MODULE_NAME := intel-i915-dkms$(PKG_SUFFIX)
-I915VERSION := $(VERSION)
-I915RELEASE := $(RELEASE)
-
-.PHONY: i915dkmsrpm-pkg
-i915dkmsrpm-pkg:
-	cp $(BACKPORT_DIR)/defconfigs/i915 .config
-	$(CONFIG_SHELL) $(I915DKMSMKCONF) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
-	$(CONFIG_SHELL) $(I915DKMSMKSPEC) -n $(I915MODULE_NAME) -v $(I915VERSION) -r $(I915RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(I915MODULE_NAME).spec
-	patch -p1 < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
-	tar -cz $(RCS_TAR_IGNORE) -f $(I915MODULE_NAME)-$(I915VERSION)-src.tar.gz \
-	        $(I915_TAR_CONTENT) $(I915MODULE_NAME).spec dkms.conf;
-	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(I915MODULE_NAME)-$(I915VERSION)-src.tar.gz \
-	--define='_smp_mflags %{nil}'
-	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
-
-# dkmsrpm-pkg
-# Creates Backports both dmabuf and i915 dkms packages
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/"custom"> dkmsrpm-pkg
-# RELEASE_TYPE=<custom> is used to create custome package.
-# Example: RELEASE_TYPE=test
-#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
-# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
-# already installed before you intalling current one.
-.PHONY: dkmsrpm-pkg
-dkmsrpm-pkg: i915dkmsrpm-pkg dmadkmsrpm-pkg
 
 .PHONY: mrproper
 mrproper:
@@ -209,13 +36,7 @@ mrproper:
 	@rm -f .config
 	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
 	@rm -f backport-include/backport/autoconf.h
-	@rm -f $(BACKPORT_DIR)/$(DMAMODULE_NAME).spec
-	@rm -f $(BACKPORT_DIR)/$(I915MODULE_NAME).spec
-	@rm -f $(BACKPORT_DIR)/dkms.conf
-	@rm -f $(BACKPORT_DIR)/$(DMAMODULE_NAME)-*-src.tar.gz
-	@rm -f $(BACKPORT_DIR)/$(I915MODULE_NAME)-*-src.tar.gz
-	@rm -f backport-include/backport/backport_path.h
-
+	@$(MAKE) -f Makefile.real mrproper
 
 .DEFAULT:
 	@set -e ; test -f local-symbols || (						\
@@ -230,6 +51,7 @@ mrproper:
 	echo "| for more options."							;\
 	echo "\\--"									;\
 	false)
+ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 	@set -e ; test -f $(KERNEL_CONFIG) || (						\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
@@ -293,6 +115,7 @@ mrproper:
 		echo " done."								;\
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
+endif
 	@$(MAKE) -f Makefile.real "$@"
 
 .PHONY: defconfig-help
@@ -305,8 +128,20 @@ defconfig-help:
 		done
 	@echo ""
 
+
+.PHONY: dkms-help
+dkms-help:
+	@echo "DKMS Targets:"
+	@echo "  dmadkmsrpm-pkg  - Build package RPM for dma dkms package"
+	@echo "  i915dkmsrpm-pkg - Build package RPM for i915 dkms package"
+	@echo "  dkmsrpm-pkg     - Build above two target dmadkmsrpm-pkg i915dkmsrpm-pkg"
+	@echo ""
+	@echo "DKMS Package creation using targets help:"
+	@echo "  make BUILD_VERSION=<Numeric> RELEASE_TYPE=<prerelease/opensource> <target>"
+	@echo ""
+
 .PHONY: help
-help: defconfig-help
+help: dkms-help defconfig-help
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"
@@ -342,7 +177,7 @@ help: defconfig-help
 	@echo ""
 	@echo "Execute "make" or "make all" to build all targets marked with [*]"
 else
-include $(BACKPORT_DIR)/Makefile.kernel
+include $(BACKPORT_DIR)/Makefile.backport
 endif
 
 PHONY += FORCE

@@ -100,7 +100,8 @@ backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kern
 	@echo " done."
 
 .PHONY: modules
-modules: backport-include/backport/autoconf.h backport-include/backport/backport_path.h
+modules: backport-include/backport/autoconf.h
+	@$(MAKE) -f Makefile.backport modules
 	@$(MAKE) -f Makefile.build modules
 
 .PHONY: install
@@ -134,4 +135,21 @@ uninstall:
 .PHONY: clean
 clean:
 	@$(MAKE) -f Makefile.build clean
-	@rm -f $(version_h)
+	@$(MAKE) -C kconf clean
+	@$(MAKE) -f Makefile.backport clean
+
+.PHONY: mrproper
+mrproper:
+	@$(MAKE) -f Makefile.backport mrproper
+
+.PHONY: dmadkmsrpm-pkg
+dmadkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport dmadkmsrpm-pkg
+
+.PHONY: i915dkmsrpm-pkg
+i915dkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport i915dkmsrpm-pkg
+
+.PHONY: dkmsrpm-pkg
+dkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport dmadkmsrpm-pkg i915dkmsrpm-pkg

@@ -5,6 +5,7 @@
 
 #include "intel_gt.h"
 #include "intel_gt_ccs_mode.h"
+#include "intel_gt_debugfs.h"
 #include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
@@ -254,6 +255,95 @@ void intel_gt_park_ccs_mode(struct intel_gt *gt, struct intel_engine_cs *engine)
 		gt->ccs.config = 0;
 
 	mutex_unlock(&gt->ccs.mutex);
+}
+
+static int ccs_mode_show(struct seq_file *m, void *data)
+{
+	struct intel_gt *gt = m->private;
+	intel_engine_mask_t config, active, tmp;
+	struct intel_engine_cs *engine;
+	const char *prefix;
+	intel_wakeref_t wf;
+	u32 rcu_debug;
+	u32 rcu_mode;
+	u32 ccs_mode;
+	int i;
+
+	with_intel_runtime_pm(gt->uncore->rpm, wf) {
+		mutex_lock(&gt->ccs.mutex);
+		active = gt->ccs.active;
+		config = gt->ccs.config;
+		ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
+		rcu_mode = intel_uncore_read(gt->uncore, GEN12_RCU_MODE);
+		rcu_debug = intel_uncore_read(gt->uncore, GEN12_RCU_DEBUG_1);
+		mutex_unlock(&gt->ccs.mutex);
+	}
+
+	if (rcu_mode & XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE)
+		seq_printf(m, "strategy: fixed\n");
+	else
+		seq_printf(m, "strategy: dynamic\n");
+
+	prefix = "";
+	seq_printf(m, "config: %08x [", config);
+	for_each_engine_masked(engine, gt, config, tmp) {
+		seq_printf(m, "%s%s", prefix, engine->name);
+		prefix = ", ";
+	}
+	seq_printf(m, "]\n");
+
+	prefix = "";
+	seq_printf(m, "active: %08x [", active);
+	for_each_engine_masked(engine, gt, active, tmp) {
+		seq_printf(m, "%s%s", prefix, engine->name);
+		prefix = ", ";
+	}
+	seq_printf(m, "]\n");
+
+	prefix = "";
+	seq_printf(m, "CCS_MODE: %08x [", ccs_mode);
+	for (i = 0; i < PVC_NUM_CSLICES_PER_TILE; i++) {
+		int inst = (ccs_mode >> (XEHP_CCS_MODE_CSLICE_WIDTH * i)) & XEHP_CCS_MODE_CSLICE_MASK;
+		const char *name;
+
+		if (inst == 0x7) {
+			name = "disabled";
+		} else {
+			engine = gt->engine_class[COMPUTE_CLASS][inst];
+			if (engine)
+				name = engine->name;
+			else
+				name = "invalid";
+		}
+		seq_printf(m, "%s%s", prefix, name);
+		prefix = ", ";
+	}
+	seq_printf(m, "]\n");
+
+	seq_printf(m, "RCU_MODE: %08x\n", rcu_mode);
+
+	prefix = "";
+	seq_printf(m, "RCU_DEBUG_1: %08x [", rcu_debug);
+	for (i = 0; i < PVC_NUM_CSLICES_PER_TILE; i++) {
+		if (rcu_debug & BIT(10 + 3 * i)) {
+			seq_printf(m, "%sslice%d", prefix, i);
+			prefix = ", ";
+		}
+	}
+	seq_printf(m, "]\n");
+
+	return 0;
+}
+DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(ccs_mode);
+
+void intel_gt_debugfs_register_ccs_mode(struct intel_gt *gt, struct dentry *root)
+{
+	static const struct intel_gt_debugfs_file files[] = {
+		{ "ccs_mode", &ccs_mode_fops, NULL },
+	};
+
+	if (needs_ccs_mode(gt))
+		intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);
 }
 
 void intel_gt_fini_ccs_mode(struct intel_gt *gt)

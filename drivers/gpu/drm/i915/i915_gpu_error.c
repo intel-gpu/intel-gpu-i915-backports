@@ -551,13 +551,9 @@ static void error_print_context(struct drm_i915_error_state_buf *m,
 				const char *header,
 				const struct i915_gem_context_coredump *ctx)
 {
-	err_printf(m, "%s%s[%d] uid %u gid %u prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
-		   header, ctx->comm, ctx->pid,
-		   from_kuid_munged(&init_user_ns, ctx->uid),
-		   from_kgid_munged(&init_user_ns, ctx->gid),
-		   ctx->sched_attr.priority,
-		   ctx->guilty, ctx->active,
-		   ctx->sip_installed ? "true" : "false",
+	err_printf(m, "%s%s[%d] prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
+		   header, ctx->comm, ctx->pid, ctx->sched_attr.priority,
+		   ctx->guilty, ctx->active, ctx->sip_installed ? "true" : "false",
 		   ctx->total_runtime, ctx->avg_runtime);
 
 	i915_uuid_resources_dump(ctx, m);
@@ -1732,17 +1728,6 @@ i915_uuid_resource_coredump_create(struct i915_drm_client *client,
 	return head;
 }
 
-static void record_client_cred_rcu(struct i915_drm_client *client,
-				   struct i915_gem_context_coredump *e)
-{
-	const struct i915_drm_client_name *name;
-
-	name = __i915_drm_client_name(client);
-
-	e->uid = name->uid;
-	e->gid = name->gid;
-}
-
 static bool record_context(struct i915_gem_context_coredump *e,
 			   const struct i915_request *rq,
 			   struct i915_page_compress *compress)
@@ -1765,7 +1750,6 @@ static bool record_context(struct i915_gem_context_coredump *e,
 	} else {
 		strcpy(e->comm, i915_drm_client_name(ctx->client));
 		e->pid = pid_nr(i915_drm_client_pid(ctx->client));
-		record_client_cred_rcu(ctx->client, e);
 	}
 
 	rcu_read_unlock();

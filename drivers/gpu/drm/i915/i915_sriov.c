@@ -7,6 +7,7 @@
 
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
+#include "i915_debugger.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_pci.h"
@@ -67,7 +68,8 @@ static bool works_with_iaf(struct drm_i915_private *i915)
 	if (!HAS_IAF(i915) || !i915->params.enable_iaf)
 		return true;
 
-	if (IS_PONTEVECCHIO(i915))
+	/* can't use IS_PLATFORM as RUNTIME_INFO is not ready yet */
+	if (INTEL_INFO(i915)->platform == INTEL_PONTEVECCHIO)
 		return false;
 
 	return true;
@@ -553,6 +555,11 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 	if (err < 0)
 		goto fail;
 
+	/* ensure the debugger is disabled */
+	err = i915_debugger_disallow(i915);
+	if (err < 0)
+		goto fail;
+
 	/* hold the reference to runtime pm as long as VFs are enabled */
 	for_each_gt(gt, i915, id)
 		intel_gt_pm_get_untracked(gt);
@@ -612,6 +619,7 @@ fail_pm:
 	pvc_wa_allow_rc6(i915);
 	for_each_gt(gt, i915, id)
 		intel_gt_pm_put_untracked(gt);
+	i915_debugger_allow(i915);
 fail:
 	drm_err(&i915->drm, "Failed to enable %u VFs (%pe)\n",
 		num_vfs, ERR_PTR(err));
@@ -699,6 +707,8 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 
 	for_each_gt(gt, i915, id)
 		intel_gt_pm_put_untracked(gt);
+
+	i915_debugger_allow(i915);
 
 	dev_info(dev, "Disabled %u VFs\n", num_vfs);
 	return 0;

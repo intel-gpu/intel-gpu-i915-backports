@@ -3,6 +3,16 @@
 #include <linux/version.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_LESS(6,0,0)
+
+#if !((REDHAT_RELEASE_VERSION_IS_GEQ(8,4)) || FBK_VERSION)
+/*
+ * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
+ */
+#define INTEL_GMCH_GTT_RENAMED
+#endif
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(15,4,0))
 
@@ -39,7 +49,7 @@
  */
 #define BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
-#if REDHAT_RELEASE_VERSION_IS_EQL(8,5)
+#if !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4))
 /*
  * 89d8589cd72c6 Introduce and export __sg_alloc_table_from_pages
  */
@@ -80,10 +90,21 @@
  * aa6159ab99a9ab kernel.h: split out mathematical helpers
  */
 #define BPM_INCLUDE_KERNEL_H_IN_ASCII85_H
+
+/* TBD: Need to check if its generic or controllable with version */
+#define BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
+
+#if !LINUX_VERSION_IN_RANGE(5,10,80, 5,11,0)
+/*
+ * 438153d5ba7f
+ * arch/cc: Introduce a function to check for confidential computing features
+ */
+#define BPM_CC_PLATFORM_H_NOT_PRESENT
+#endif
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,13,0) && \
-	!(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+#if LINUX_VERSION_IS_LESS(5,13,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
 
 /*
  * eb2dafbba8b82 tasklets: Prevent tasklet_unlock_spin_wait() deadlock on RT
@@ -95,6 +116,20 @@
  *
  */
 #define BPM_DMA_FENCE_PRIVATE_STUB_NOT_PRESENT
+
+/*
+ * f21ffe9f6da6d swiotlb: Expose swiotlb_nr_tlb function to modules
+ *
+ */
+#define BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+#endif
+#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || FBK_VERSION)
+/*
+ * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
+ *
+ */
+#define BPM_LIST_CMP_FUNC_T_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,12,0)
@@ -112,16 +147,14 @@
  *
  */
 #define BPM_PCI_REBAR_SIZE_NOT_PRESENT
-#endif
-
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
 
 /*
- * f21ffe9f6da6d swiotlb: Expose swiotlb_nr_tlb function to modules
- *
+ * 2d24dd5798d0 rbtree: Add generic add and find helpers
  */
-#define BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+#define RB_FIND_NOT_PRESENT
+
 #endif
+
 
 #endif
 
@@ -154,24 +187,6 @@
  *
  */
 #define BPM_MIGHT_ALLOC_NOT_PRESENT
-#endif
-
-#if LINUX_VERSION_IS_LESS(5,10,80)
-
-/*
- * 438153d5ba7f
- * arch/cc: Introduce a function to check for confidential computing features
- */
-#define CC_PLATFORM_H_NOT_PRESENT
-#endif
-
-#if LINUX_VERSION_IS_LESS(5,10,70)
-
-/*
- * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
- *
- */
-#define BPM_LIST_CMP_FUNC_T_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
@@ -230,7 +245,6 @@
 /*
  * 8af2fa888eaf0e Show slab cache occupancy for debug
  *
- * JIRA: VLK-31059
  */
 #define BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT
 
@@ -334,6 +348,7 @@
  *
  */
 #define BPM_PERFMON_CAPABLE_NOT_PRESENT
+#endif
 
 /*
  * ca5999f mm: introduce include/linux/pgtable.h
@@ -341,7 +356,6 @@
  *
  */
 #define BPM_ASM_PGTABLE_H_NOT_PRESENT
-#endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
         SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
@@ -383,7 +397,6 @@
 /*
  * 132ccc0422814203ca64 INTEL_DII: drm/i915/spi: refcount spi object lifetime
  *
- * JIRA: VLK-29902
  */
 #define BPM_MTD_PART_NOT_PRESENT
 #endif
@@ -505,6 +518,15 @@
 #define BPM_I2C_ACPI_GET_I2C_RESOURCE_NOT_PRESENT
 #endif
 
+#if LINUX_VERSION_IS_LESS(4,20,0)
+/*
+ * a3f8a30f3f00 Compiler Attributes: use feature
+ * checks instead of version checks
+ */
+
+#define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_LESS(4,19,0)
 
 /*
@@ -528,8 +550,12 @@
 #endif
 #endif
 
-#if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
+#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || FBK_VERSION)
+/* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
+#endif
+
+#if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
 #endif
 

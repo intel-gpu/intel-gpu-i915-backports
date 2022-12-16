@@ -39,10 +39,45 @@ static int random_compute(struct intel_gt *gt,
 	return 0;
 }
 
-static int live_ccs_mode(struct intel_gt *gt, int num_engines,
-			 struct rnd_state *prng)
+static intel_engine_mask_t
+random_config(struct intel_gt *gt, int width, struct rnd_state *prng)
 {
 	struct intel_engine_cs *engines[MAX_ENGINE_INSTANCE + 1];
+	intel_engine_mask_t config;
+	int i;
+
+	if (random_compute(gt, engines, width, prng) < 0)
+		return 0;
+
+	pr_info("Using %d engines: ", width);
+	config = 0;
+	for (i = 0; i < width; i++) {
+		pr_cont("%s%s", i ? ", " : "", engines[i]->name);
+		config |= engines[i]->mask;
+	}
+	pr_cont(" -> config:%x\n", config);
+
+	GEM_BUG_ON(hweight32(config) != width);
+	return config;
+}
+
+static u32 apply_ccs_mode(struct intel_gt *gt, u32 config)
+{
+       u32 ccs_mode;
+
+       mutex_lock(&gt->ccs.mutex);
+       __intel_gt_apply_ccs_mode(gt, config);
+       ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
+       pr_info("GT%d (config:%08x): CCS_MODE:%x\n",
+               gt->info.id, config, ccs_mode);
+       mutex_unlock(&gt->ccs.mutex);
+
+       return ccs_mode;
+}
+
+static int
+live_ccs_mode(struct intel_gt *gt, int num_engines, struct rnd_state *prng)
+{
 	u32 count[MAX_ENGINE_INSTANCE + 1] = {};
 	intel_engine_mask_t config;
 	intel_wakeref_t wf;
@@ -56,36 +91,34 @@ static int live_ccs_mode(struct intel_gt *gt, int num_engines,
 	 * slices per engine for different configurations
 	 */
 
-	if (random_compute(gt, engines, num_engines, prng) < 0)
+	config = random_config(gt, num_engines, prng);
+	if (!config)
 		return 0;
 
 	wf = intel_gt_pm_get(gt);
 
-	config = 0;
-	for (i = 0; i < num_engines; i++) {
-		pr_info("Using %s\n", engines[i]->name);
-		config |= engines[i]->mask;
-	}
-	GEM_BUG_ON(hweight32(config) != num_engines);
-	slices_per_engine = hweight32(CCS_MASK(gt)) / num_engines;
-
-	mutex_lock(&gt->ccs.mutex);
-	pr_info("Applying config:%x\n", config);
-	__intel_gt_apply_ccs_mode(gt, config);
-	ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
-	pr_info("CCS_MODE:%x\n", ccs_mode);
-	mutex_unlock(&gt->ccs.mutex);
-
+	ccs_mode = apply_ccs_mode(gt, config);
 	for (i = 0; i < PVC_NUM_CSLICES_PER_TILE; i++) {
-		pr_info("slice:%d, instance=%d\n",
-			i, (ccs_mode >> (XEHP_CCS_MODE_CSLICE_WIDTH * i)) &
-			   XEHP_CCS_MODE_CSLICE_MASK);
-		count[(ccs_mode >> (XEHP_CCS_MODE_CSLICE_WIDTH * i)) &
-		XEHP_CCS_MODE_CSLICE_MASK]++;
+		int inst = (ccs_mode >> (XEHP_CCS_MODE_CSLICE_WIDTH * i)) & XEHP_CCS_MODE_CSLICE_MASK;
+		bool disabled = inst == XEHP_CCS_MODE_CSLICE_MASK;
+
+		pr_info("slice:%d, instance=%d%s\n", i, inst,
+			disabled ? " (disabled)" : "");
+		if (disabled)
+			continue; /* disabled */
+
+		if (!(CCS_MASK(gt) & BIT(inst))) {
+			pr_err("CCS_MODE:%08x: unknown instance:%d enabled for slice:%d slice",
+			       ccs_mode, inst, i);
+			err = -EINVAL;
+		}
+
+		count[inst]++;
 	}
 
+	slices_per_engine = hweight32(CCS_MASK(gt)) / num_engines;
 	for (i = 0; i < ARRAY_SIZE(count); i++) {
-		if (!(config & _CCS(i)))
+		if (!(config & BIT(i + CCS0)))
 			continue;
 
 		if (count[i] != slices_per_engine) {
@@ -272,7 +305,7 @@ static int live_ccs_reactive(void *arg)
 			continue;
 
 		pr_info("Re-enabling CCS config:%x for %s\n",
-		       gt->ccs.config, engine->name);
+			gt->ccs.config, engine->name);
 		GEM_BUG_ON(!(gt->ccs.config & engine->mask));
 		WRITE_ONCE(gt->ccs.active, 0);
 
@@ -302,56 +335,204 @@ static int live_ccs_reactive(void *arg)
 	return err;
 }
 
-static int live_ccs_gt_reset(void *arg)
+static int live_ccs_gt_reset(struct intel_gt *gt, bool active)
 {
-	struct intel_gt *gt = arg;
-	intel_wakeref_t wf;
+	intel_engine_mask_t config, tmp;
+	struct intel_engine_cs *engine;
+	I915_RND_STATE(prng);
 	u32 before, after;
 	int err = 0;
+
+	/*
+	 * After a reset we expect the CCS mode to be restored for the
+	 * currently active configuration. If idle, before the next
+	 * HW execution.
+	 */
 
 	if (!intel_has_gpu_reset(gt))
 		return 0;
 
-	/*
-	 * After a reset we expect the CCS mode to be restored for the
-	 * currently active configuration.
-	 */
+	config = random_config(gt, 2, &prng);
+	if (!config)
+		return 0;
 
-	wf = intel_gt_pm_get(gt);
-	igt_global_reset_lock(gt);
+	for_each_engine_masked(engine, gt, config, tmp)
+		intel_engine_pm_get(engine);
 
-	live_ccs_mode_2(gt);
-	before = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
+	err = intel_gt_configure_ccs_mode(gt, config);
+	if (err) {
+		pr_err("Failed to setup config:%08x, ccs.config:%08x, ccs.active:%08x\n",
+		       config, gt->ccs.config, gt->ccs.active);
+		err = -EINVAL;
+		goto out;
+	}
+	GEM_BUG_ON(gt->ccs.config != config);
+	GEM_BUG_ON(gt->ccs.active != config);
 
 	/* We want a non-trivial configuration */
+	before = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
 	GEM_BUG_ON((before ^ XEHP_CCS_MODE_CSLICE_0_3_MASK) == 0);
 
-	gt->ccs.active = ALL_CCS(gt);
-	intel_gt_reset(gt, ALL_ENGINES, "CCS mode");
+	if (!active)
+		intel_gt_park_ccs_mode(gt, NULL); /* force idling */
+
+	igt_global_reset_lock(gt);
+	intel_gt_reset(gt, config, "CCS mode");
+	igt_global_reset_unlock(gt);
+
+	if (active) {
+		/*
+		 * With an active reset, computation is expected to continue
+		 * immediately following the reset, so CCS_MODE must be restored
+		 * for the compute kernels to function.
+		 */
+		after = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
+		if (after != before) {
+			pr_err("CCS_MODE lost across an active GT reset, before:%08x, after:%08x\n",
+			       before, after);
+			err = -EINVAL;
+		}
+	}
+
+	/* A new submission after the reset should always restore CCS_MODE */
+	err = intel_gt_configure_ccs_mode(gt, config);
+	if (err) {
+		pr_err("Failed to reapply config:%08x after reset, ccs.config:%08x, ccs.active:%08x\n",
+		       config, gt->ccs.config, gt->ccs.active);
+		err = -EINVAL;
+	}
 
 	after = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
 	if (after != before) {
-		pr_err("CCS mode configuration lost across a GT reset, before:%08x, after:%08x\n",
+		pr_err("CCS_MODE lost across on resubmission after GT reset, before:%08x, after:%08x\n",
 		       before, after);
 		err = -EINVAL;
 	}
 
-	igt_global_reset_unlock(gt);
-	intel_gt_pm_put(gt, wf);
+out:
+	for_each_engine_masked(engine, gt, config, tmp)
+		intel_engine_pm_put(engine);
+
+	return err;
+}
+
+static int live_ccs_gt_reset_active(void *arg)
+{
+       return live_ccs_gt_reset(arg, true);
+}
+
+static int live_ccs_gt_reset_idle(void *arg)
+{
+       return live_ccs_gt_reset(arg, false);
+}
+
+static int live_ccs_sim_reset(void *arg)
+{
+	struct intel_gt *gt = arg;
+	struct intel_engine_cs *engine;
+	u32 expected, ccs_mode;
+	intel_wakeref_t wf;
+	int err = 0;
+
+	/*
+	 * Simulate a race condition where a user submits a new compute
+	 * execbuf concurrent with a GT reset. Do we write the expected
+	 * CCS_MODE prior to re-enabling HW submission?
+	 */
+
+	engine = gt->engine_class[COMPUTE_CLASS][__ffs(CCS_MASK(gt))];
+	GEM_BUG_ON(!engine);
+
+	with_intel_gt_pm(gt, wf)
+		expected = apply_ccs_mode(gt, engine->mask);
+	GEM_BUG_ON(gt->ccs.config | gt->ccs.active); /* no cheating! */
+
+	intel_engine_pm_get(engine);
+	err = intel_gt_configure_ccs_mode(gt, engine->mask);
+	if (err)
+		goto out;
+
+	/* After configuring a fresh config, it must be currently tracked */
+	GEM_BUG_ON(!gt->ccs.config);
+	GEM_BUG_ON(!gt->ccs.active);
+
+	/*
+	 * A: Simulate a reset, leaving it exposed to a race with execbuf.
+	 *
+	 * The GT (engine) reset will reset the CCS_MODE to default (all
+	 * disabled). The normal intel_gt_reset() will try to restore the
+	 * CCS_MODE (via intel_gt_init_hw), but since we are looking at the
+	 * race condition between the reset and execbuf, we leave it open.
+	 *
+	 * Serialisation between execbuf and the point restoring CCS_MODE
+	 * inside reset is handled by gt->ccs.mutex;
+	 */
+	intel_uncore_write(gt->uncore,
+			   XEHP_CCS_MODE,
+			   XEHP_CCS_MODE_CSLICE_0_3_MASK);
+
+	/*
+	 * B: Simulate execbuf; concurrent with the reset.
+	 *
+	 * We do not attempt to change config, so the configure will
+	 * attempt to reuse the existing CCS_MODE.
+	 */
+	err = intel_gt_configure_ccs_mode(gt, engine->mask);
+	GEM_BUG_ON(err);
+	if (!(gt->ccs.active & engine->mask)) {
+		pr_err("GT%d(%s) ccs.active:%08x not set after configuring for an identical config:%08x\n",
+		       gt->info.id, engine->name, gt->ccs.active, gt->ccs.config);
+		err = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * A: Simulate intel_init_gt_hw()
+	 *
+	 * intel_init_gt_hw is called (after reset) to prepare the HW before
+	 * submission. That calls intel_gt_apply_ccs_mode().
+	 */
+	intel_gt_apply_ccs_mode(gt);
+
+	ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
+	if (ccs_mode != expected) {
+		pr_err("GT%d(%s) CCS_MODE:%x not restored to expected:%x after simulated reset\n",
+		       gt->info.id, engine->name, ccs_mode, expected);
+		err = -EINVAL;
+	}
+
+	/*
+	 * Now the real intel_gt_reset will re-enable HW command submission.
+	 *
+	 * We expect the CCS_MODE will be kept now until all current compute
+	 * activity ceases.
+	 [3: thread] [gfx-internal-devel] [PATCH] ccs[124] -- the missing patch                                                 */
+	if (!(gt->ccs.config & engine->mask)) {
+		pr_err("GT%d(%s) config:%08x does not contain the submission engine:%08x\n",
+		       gt->info.id, engine->name, gt->ccs.config, engine->mask);
+		err = -EINVAL;
+	}
+	if (!(gt->ccs.active & engine->mask)) {
+		pr_err("GT%d(%s) active:%08x does not contain the submission engine:%08x\n",
+		       gt->info.id, engine->name, gt->ccs.active, engine->mask);
+		err = -EINVAL;
+	}
+
+out:
+	intel_engine_pm_put(engine);
 	return err;
 }
 
 static int live_ccs_engine_reset(void *arg)
 {
 	struct intel_gt *gt = arg;
-	struct intel_engine_cs *engines[MAX_ENGINE_INSTANCE + 1];
-	intel_engine_mask_t config;
+	intel_engine_mask_t config, tmp;
+	struct intel_engine_cs *engine;
 	struct igt_spinner spin;
 	I915_RND_STATE(prng);
 	intel_wakeref_t wf;
 	u32 ccs_mode;
 	int err;
-	int i;
 
 	/*
 	 * Check that the CCS_MODE is restored for an engine reset,
@@ -359,7 +540,8 @@ static int live_ccs_engine_reset(void *arg)
 	 * from the driver (for GuC mediated resets).
 	 */
 
-	if (random_compute(gt, engines, 2, &prng) < 0)
+	config = random_config(gt, 2, &prng);
+	if (!config)
 		return 0;
 
 	wf = intel_gt_pm_get(gt);
@@ -369,28 +551,18 @@ static int live_ccs_engine_reset(void *arg)
 	if (err)
 		goto out;
 
-	config = 0;
-	for (i = 0; i < 2; i++)
-		config |= engines[i]->mask;
-
-	mutex_lock(&gt->ccs.mutex);
-	pr_info("Applying config:%x\n", config);
-	__intel_gt_apply_ccs_mode(gt, config);
-	ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
-	pr_info("CCS_MODE:%x\n", ccs_mode);
-	mutex_unlock(&gt->ccs.mutex);
-
-	for (i = 0; i < 2; i++) {
+	ccs_mode = apply_ccs_mode(gt, config);
+	for_each_engine_masked(engine, gt, config, tmp) {
 		struct intel_selftest_saved_policy saved;
 		struct intel_context *ce;
 		struct i915_request *rq;
 
-		err = intel_selftest_modify_policy(engines[i], &saved,
+		err = intel_selftest_modify_policy(engine, &saved,
 						   SELFTEST_SCHEDULER_MODIFY_FAST_RESET);
 		if (err)
 			break;
 
-		ce = intel_context_create(engines[i]);
+		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
 			err = PTR_ERR(ce);
 			goto restore;
@@ -431,7 +603,7 @@ err_rq:
 err_ce:
 		intel_context_put(ce);
 restore:
-		intel_selftest_restore_policy(engines[i], &saved);
+		intel_selftest_restore_policy(engine, &saved);
 		if (err)
 			break;
 	}
@@ -453,23 +625,24 @@ int intel_gt_ccs_mode_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(live_ccs_fused),
 		SUBTEST(live_ccs_active),
 		SUBTEST(live_ccs_reactive),
-		SUBTEST(live_ccs_gt_reset),
+		SUBTEST(live_ccs_gt_reset_active),
+		SUBTEST(live_ccs_gt_reset_idle),
 		SUBTEST(live_ccs_engine_reset),
-
+		SUBTEST(live_ccs_sim_reset),
 	};
 	struct intel_gt *gt;
 	int i;
-
-	if (GRAPHICS_VER(i915) < 12)
-		return 0;
-
-	if (!IS_PONTEVECCHIO(i915))
-		return 0;
 
 	for_each_gt(gt, i915, i) {
 		int err;
 
 		if (intel_gt_is_wedged(gt))
+			continue;
+
+		if (!CCS_MASK(gt))
+			continue;
+
+		if (!needs_ccs_mode(gt))
 			continue;
 
 		err =  intel_gt_live_subtests(tests, gt);
@@ -479,4 +652,3 @@ int intel_gt_ccs_mode_live_selftests(struct drm_i915_private *i915)
 
 	return 0;
 }
-

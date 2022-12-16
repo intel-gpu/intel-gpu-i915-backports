@@ -10,7 +10,7 @@ endif
 dmabuf-y +=  ../../compat/dmabuf-main.o
 dmabuf-$(CPTCFG_KERNEL_5_1)  += ../../compat/backport-5.1.o
 dmabuf-$(CPTCFG_KERNEL_5_10) += ../../compat/backport-5.10.o
-dmabuf-y +=  ../../compat/backport-3.17.o
+dmabuf-y +=  ../../compat/backport-3.17.o ../../compat/fs_d_path.o
 
 dmabuf-y += dma-buf.o dma-fence.o dma-fence-array.o dma-fence-chain.o \
          dma-resv.o seqno-fence.o

@@ -28,10 +28,11 @@
 #ifndef __BACKPORT_PTRACE_H
 #define __BACKPORT_PTRACE_H
 
+#ifdef BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
 #include_next <linux/ptrace.h>
 
 #define ptrace_may_access LINUX_I915_BACKPORT(ptrace_may_access)
 bool ptrace_may_access(struct task_struct *task, unsigned int mode);
-
+#endif
 #endif 
 

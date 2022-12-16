@@ -9,25 +9,28 @@ REL_NAME="1"
 REL_TYPE=""
 DEP_PKG_NAME=""
 DEP_PMT_PKG_NAME="intel-platform-vsec-dkms"
+BUILD_TYPE=""
 
 helpFunction()
 {
 	echo ""
-	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource"
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion"
 	echo -e "\t-n packagename"
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
+	echo -e "\t-s buildversion"
 	exit 1
 }
 
-while getopts "n:v:r:p:" opt
+while getopts "n:v:r:p:s:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done

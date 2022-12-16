@@ -28,7 +28,8 @@ int __intel_wakeref_get_first(struct intel_wakeref *wf)
 
 		err = wf->ops->get(wf);
 		if (unlikely(err)) {
-			wakeref = fetch_and_zero(&wf->wakeref);
+			wakeref = xchg(&wf->wakeref, 0);
+			wake_up_var(&wf->wakeref);
 			goto unlock;
 		}
 
@@ -56,7 +57,7 @@ static void ____intel_wakeref_put_last(struct intel_wakeref *wf)
 	/* ops->put() must reschedule its own release on error/deferral */
 	if (likely(!wf->ops->put(wf))) {
 		INTEL_WAKEREF_BUG_ON(!wf->wakeref);
-		wakeref = fetch_and_zero(&wf->wakeref);
+		wakeref = xchg(&wf->wakeref, 0);
 		wake_up_var(&wf->wakeref);
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_WAKEREF)
 		ref_tracker_dir_exit(&wf->debug);

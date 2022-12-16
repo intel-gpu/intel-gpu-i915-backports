@@ -208,6 +208,7 @@
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_clock_utils.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_lrc.h"
 #include "gt/intel_lrc_reg.h"
@@ -323,6 +324,8 @@ static struct i915_oa_format oa_formats[PRELIM_I915_OA_FORMAT_MAX] = {
 	[I915_OA_FORMAT_A12]		    = { 0, 64 },
 	[I915_OA_FORMAT_A12_B8_C8]	    = { 2, 128 },
 	[I915_OA_FORMAT_A32u40_A4u32_B8_C8] = { 5, 256 },
+	[I915_OAR_FORMAT_A32u40_A4u32_B8_C8]    = { 5, 256 },
+	[I915_OA_FORMAT_A24u40_A14u32_B8_C8]    = { 5, 256 },
 	[PRELIM_I915_OAR_FORMAT_A32u40_A4u32_B8_C8]    = { 5, 256 },
 	[PRELIM_I915_OA_FORMAT_A24u40_A14u32_B8_C8]    = { 5, 256 },
 	[PRELIM_I915_OAM_FORMAT_A2u64_B8_C8]           = { 5, 128, TYPE_OAM },
@@ -1468,7 +1471,10 @@ err_scratch:
  * XXX_MAX_CONTEXT_HW_ID is used by idle context
  *
  * For GuC mode of submission read context id from the upper dword of the
- * EXECLIST_STATUS register.
+ * EXECLIST_STATUS register. Note that we read this value only once and expect
+ * that the value stays fixed for the entire OA use case. There are cases where
+ * GuC KMD implementation may deregister a context to reuse it's context id, but
+ * we prevent that from happening to the OA context by pinning it.
  */
 static int gen12_get_render_context_id(struct i915_perf_stream *stream)
 {
@@ -1501,32 +1507,39 @@ static int gen12_get_render_context_id(struct i915_perf_stream *stream)
 	return 0;
 }
 
-#define MI_OPCODE(x) (((x) >> 23) & 0x3f)
-#define IS_MI_LRI_CMD(x) (MI_OPCODE(x) == MI_OPCODE(MI_INSTR(0x22, 0)))
-#define MI_LRI_LEN(x) (((x) & 0xff) + 1)
-#define __valid_oactxctrl_offset(x) ((x) && (x) != U32_MAX)
-static bool __find_reg_in_lri(u32 *state, u32 reg, u32 *offset)
+static bool oa_find_reg_in_lri(u32 *state, u32 reg, u32 *offset, u32 end)
 {
 	u32 idx = *offset;
-	u32 len = MI_LRI_LEN(state[idx]) + idx;
+	u32 len = min(MI_LRI_LEN(state[idx]) + idx, end);
+	bool found = false;
 
 	idx++;
-	for (; idx < len; idx += 2)
-		if (state[idx] == reg)
+	for (; idx < len; idx += 2) {
+		if (state[idx] == reg) {
+			found = true;
 			break;
+		}
+	}
 
 	*offset = idx;
-	return state[idx] == reg;
+	return found;
 }
 
-static u32 __context_image_offset(struct intel_context *ce, u32 reg)
+static u32 oa_context_image_offset(struct intel_context *ce, u32 reg)
 {
 	u32 offset, len = (ce->engine->context_size - PAGE_SIZE) / 4;
 	u32 *state = ce->lrc_reg_state;
 
 	for (offset = 0; offset < len; ) {
 		if (IS_MI_LRI_CMD(state[offset])) {
-			if (__find_reg_in_lri(state, reg, &offset))
+			/*
+			 * We expect reg-value pairs in MI_LRI command, so
+			 * MI_LRI_LEN() should be even, if not, issue a warning.
+			 */
+			drm_WARN_ON(&ce->engine->i915->drm,
+				    MI_LRI_LEN(state[offset]) & 0x1);
+
+			if (oa_find_reg_in_lri(state, reg, &offset, len))
 				break;
 		} else {
 			offset++;
@@ -1536,24 +1549,26 @@ static u32 __context_image_offset(struct intel_context *ce, u32 reg)
 	return offset < len ? offset : U32_MAX;
 }
 
-static int __set_oa_ctx_ctrl_offset(struct intel_context *ce)
+static int set_oa_ctx_ctrl_offset(struct intel_context *ce)
 {
 	i915_reg_t reg = GEN12_OACTXCONTROL(ce->engine->mmio_base);
 	struct i915_perf *perf = &ce->engine->i915->perf;
-	u32 saved_offset = perf->ctx_oactxctrl_offset[ce->engine->uabi_class];
-	u32 offset;
+	u16 idx = ce->engine->uabi_class;
+	u32 offset = perf->ctx_oactxctrl_offset[idx];
 
 	/* Do this only once. Failure is stored as offset of U32_MAX */
-	if (saved_offset)
-		return 0;
+	if (offset)
+		goto exit;
 
-	offset = __context_image_offset(ce, i915_mmio_reg_offset(reg));
-	perf->ctx_oactxctrl_offset[ce->engine->uabi_class] = offset;
+	offset = oa_context_image_offset(ce, i915_mmio_reg_offset(reg));
+	perf->ctx_oactxctrl_offset[idx] = offset;
 
-	DRM_DEBUG("%s oa ctx control at 0x%08x dword offset\n",
-		  ce->engine->name, offset);
+	drm_dbg(&ce->engine->i915->drm,
+		"%s oa ctx control at 0x%08x dword offset\n",
+		ce->engine->name, offset);
 
-	return __valid_oactxctrl_offset(offset) ? 0 : -ENODEV;
+exit:
+	return offset && offset != U32_MAX ? 0 : -ENODEV;
 }
 
 static bool engine_supports_mi_query(struct intel_engine_cs *engine)
@@ -1582,8 +1597,12 @@ static int oa_get_render_ctx_id(struct i915_perf_stream *stream)
 		return PTR_ERR(ce);
 
 	if (engine_supports_mi_query(stream->engine)) {
-		ret = __set_oa_ctx_ctrl_offset(ce);
-		if (ret && !(stream->sample_flags & SAMPLE_OA_REPORT)) {
+		/*
+		 * We are enabling perf query here. If we don't find the context
+		 * offset here, just return an error.
+		 */
+		ret = set_oa_ctx_ctrl_offset(ce);
+		if (ret) {
 			intel_context_unpin(ce);
 			drm_err(&stream->perf->i915->drm,
 				"Enabling perf query failed for %s\n",
@@ -1914,10 +1933,11 @@ static void perf_group_remove_oa_whitelist(struct i915_perf_group *g)
 static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 {
 	struct i915_perf *perf = stream->perf;
-	struct i915_perf_group *g = stream->engine->oa_group;
 	struct intel_gt *gt = stream->engine->gt;
+	struct i915_perf_group *g = stream->engine->oa_group;
 
-	BUG_ON(!g || stream != g->exclusive_stream);
+	if (WARN_ON(stream != g->exclusive_stream))
+		return;
 
 	if (stream->oa_whitelisted)
 		perf_group_remove_oa_whitelist(g);
@@ -1938,8 +1958,7 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	 * Wa_16011777198:dg2: Wa_1509372804:pvc:
 	 * Unset the override of GUCRC mode to enable rc6.
 	 */
-	if (intel_guc_slpc_is_used(&gt->uc.guc) &&
-	    intel_uc_uses_guc_rc(&gt->uc) &&
+	if (intel_uc_uses_guc_rc(&gt->uc) &&
 	    (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	     IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0) ||
 	     IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_C0)))
@@ -2938,21 +2957,17 @@ static int oa_configure_context(struct intel_context *ce,
 				struct flex *regs_lri, int num_regs_lri,
 				struct i915_active *active)
 {
-	struct i915_perf *perf = &ce->engine->i915->perf;
-	u32 offset = perf->ctx_oactxctrl_offset[ce->engine->uabi_class];
 	int err;
 
 	/* Modify the context image of pinned context with regs_context */
-	if (__valid_oactxctrl_offset(offset)) {
-		err = intel_context_lock_pinned(ce);
-		if (err)
-			return err;
+	err = intel_context_lock_pinned(ce);
+	if (err)
+		return err;
 
-		err = gen8_modify_context(ce, regs_ctx, num_regs_ctx);
-		intel_context_unlock_pinned(ce);
-		if (err)
-			return err;
-	}
+	err = gen8_modify_context(ce, regs_ctx, num_regs_ctx);
+	intel_context_unlock_pinned(ce);
+	if (err)
+		return err;
 
 	/* Apply regs_lri using LRI with pinned context */
 	return gen8_modify_self(ce, regs_lri, num_regs_lri, active);
@@ -3313,10 +3328,10 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	 */
 	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
 	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
-		intel_uncore_write(uncore, GEN8_ROW_CHICKEN,
-				_MASKED_BIT_ENABLE(STALL_DOP_GATING_DISABLE));
+		intel_gt_mcr_multicast_write(uncore->gt, GEN8_ROW_CHICKEN,
+					     _MASKED_BIT_ENABLE(STALL_DOP_GATING_DISABLE));
 		intel_uncore_write(uncore, GEN7_ROW_CHICKEN2,
-				_MASKED_BIT_ENABLE(GEN12_DISABLE_DOP_GATING));
+				   _MASKED_BIT_ENABLE(GEN12_DISABLE_DOP_GATING));
 	}
 
 	intel_uncore_write(uncore, __oa_regs(stream)->oa_debug,
@@ -3345,7 +3360,7 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	/*
 	 * Initialize Super Queue Internal Cnt Register
 	 * Set PMON Enable in order to collect valid metrics.
-	 * Enable commands per clock reporting in OA for XEHPSDV onward.
+	 * Enable byets per clock reporting in OA for XEHPSDV onward.
 	 */
 	sqcnt1 = GEN12_SQCNT1_PMON_ENABLE |
 		 (HAS_OA_BPC_REPORTING(i915) ? GEN12_SQCNT1_OABPC : 0);
@@ -3410,10 +3425,10 @@ static void gen12_disable_metric_set(struct i915_perf_stream *stream)
 	 */
 	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
 	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
-		intel_uncore_write(uncore, GEN8_ROW_CHICKEN,
-				_MASKED_BIT_DISABLE(STALL_DOP_GATING_DISABLE));
+		intel_gt_mcr_multicast_write(uncore->gt, GEN8_ROW_CHICKEN,
+					     _MASKED_BIT_DISABLE(STALL_DOP_GATING_DISABLE));
 		intel_uncore_write(uncore, GEN7_ROW_CHICKEN2,
-				_MASKED_BIT_DISABLE(GEN12_DISABLE_DOP_GATING));
+				   _MASKED_BIT_DISABLE(GEN12_DISABLE_DOP_GATING));
 	}
 
 	/* Reset all contexts' slices/subslices configurations. */
@@ -3674,8 +3689,8 @@ u32 i915_perf_oa_timestamp_frequency(struct drm_i915_private *i915)
 		with_intel_runtime_pm(to_gt(i915)->uncore->rpm, wakeref)
 			reg = intel_uncore_read(to_gt(i915)->uncore, RPM_CONFIG0);
 
-		shift = (reg & GEN10_RPM_CONFIG0_CTC_SHIFT_PARAMETER_MASK) >>
-			 GEN10_RPM_CONFIG0_CTC_SHIFT_PARAMETER_SHIFT;
+		shift = REG_FIELD_GET(GEN10_RPM_CONFIG0_CTC_SHIFT_PARAMETER_MASK,
+				      reg);
 
 		return to_gt(i915)->clock_frequency << (3 - shift);
 	}
@@ -3709,7 +3724,6 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	struct i915_perf *perf = stream->perf;
 	struct i915_perf_group *g;
 	struct intel_gt *gt;
-	int format_size;
 	int ret;
 
 	if (!props->engine) {
@@ -3771,15 +3785,13 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 
 	stream->sample_size = sizeof(struct drm_i915_perf_record_header);
 
-	format_size = perf->oa_formats[props->oa_format].size;
-
-	stream->sample_flags = props->sample_flags;
-	stream->sample_size += format_size;
-
 	stream->oa_buffer.group = g;
 	stream->oa_buffer.format = &perf->oa_formats[props->oa_format];
 	if (drm_WARN_ON(&i915->drm, stream->oa_buffer.format->size == 0))
 		return -EINVAL;
+
+	stream->sample_flags = props->sample_flags;
+	stream->sample_size += stream->oa_buffer.format->size;
 
 	stream->hold_preemption = props->hold_preemption;
 
@@ -3834,15 +3846,15 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 	 * Wa_1509372804:pvc: Another bug causes GuC to reset an engine and OA
 	 * loses state. Add PVC to the check below.
 	 */
-	if (intel_guc_slpc_is_used(&gt->uc.guc) &&
-	    intel_uc_uses_guc_rc(&gt->uc) &&
+	if (intel_uc_uses_guc_rc(&gt->uc) &&
 	    (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
 	     IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0) ||
 	     IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_C0))) {
 		ret = intel_guc_slpc_override_gucrc_mode(&gt->uc.guc.slpc,
 							 SLPC_GUCRC_MODE_GUCRC_NO_RC6);
 		if (ret) {
-			DRM_DEBUG("Unable to override gucrc mode\n");
+			drm_dbg(&stream->perf->i915->drm,
+				"Unable to override gucrc mode\n");
 			goto err_config;
 		}
 	}
@@ -5909,6 +5921,8 @@ static void oa_init_supported_formats(struct i915_perf *perf)
 		break;
 
 	case INTEL_XEHPSDV:
+		oa_format_add(perf, I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
+		oa_format_add(perf, I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAM_FORMAT_A2u64_B8_C8);
@@ -5916,6 +5930,8 @@ static void oa_init_supported_formats(struct i915_perf *perf)
 
 	case INTEL_DG2:
 	case INTEL_PONTEVECCHIO:
+		oa_format_add(perf, I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
+		oa_format_add(perf, I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAM_FORMAT_A2u64_B8_C8);
@@ -5927,6 +5943,8 @@ static void oa_init_supported_formats(struct i915_perf *perf)
 		break;
 
 	case INTEL_METEORLAKE:
+		oa_format_add(perf, I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
+		oa_format_add(perf, I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A32u40_A4u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OA_FORMAT_A24u40_A14u32_B8_C8);
 		oa_format_add(perf, PRELIM_I915_OAR_FORMAT_A36u64_B8_C8);
@@ -6025,7 +6043,6 @@ int i915_perf_init(struct drm_i915_private *i915)
 	struct i915_perf *perf = &i915->perf;
 
 	/* XXX const struct i915_perf_ops! */
-
 	if (IS_SRIOV_VF(i915))
 		return 0;
 

@@ -28,6 +28,7 @@
 #include <drm/intel-gtt.h>
 #include <asm/set_memory.h>
 
+#ifndef INTEL_GMCH_GTT_RENAMED
 /*
  * If we have Intel graphics, we're not going to have anything other than
  * an Intel IOMMU. So make the correct use of the PCI DMA API contingent
@@ -1462,6 +1463,7 @@ void intel_gmch_remove(void)
 	intel_private.driver = NULL;
 }
 EXPORT_SYMBOL(intel_gmch_remove);
+#endif
 
 MODULE_AUTHOR("Dave Jones, Various @Intel");
 MODULE_LICENSE("GPL and additional rights");

@@ -202,6 +202,7 @@ void intel_engines_free(struct intel_gt *gt);
 
 int intel_engine_init_common(struct intel_engine_cs *engine);
 void intel_engine_cleanup_common(struct intel_engine_cs *engine);
+void intel_engine_quiesce(struct intel_engine_cs *engine);
 
 int intel_engine_resume(struct intel_engine_cs *engine);
 
@@ -373,6 +374,12 @@ intel_engine_get_hung_context(struct intel_engine_cs *engine)
 {
 	return engine->hung_ce;
 }
+
+u64 intel_clamp_heartbeat_interval_ms(struct intel_engine_cs *engine, u64 value);
+u64 intel_clamp_max_busywait_duration_ns(struct intel_engine_cs *engine, u64 value);
+u64 intel_clamp_preempt_timeout_ms(struct intel_engine_cs *engine, u64 value);
+u64 intel_clamp_stop_timeout_ms(struct intel_engine_cs *engine, u64 value);
+u64 intel_clamp_timeslice_duration_ms(struct intel_engine_cs *engine, u64 value);
 
 void
 intel_engine_reset_failed_uevent(struct intel_engine_cs *engine);

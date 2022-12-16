@@ -160,6 +160,9 @@ struct intel_guc {
 	bool submission_selected;
 	/** @submission_initialized: tracks whether GuC submission has been initialised */
 	bool submission_initialized;
+	/** @submission_version: Submission API version of the currently loaded firmware */
+	struct intel_uc_fw_ver submission_version;
+
 	/**
 	 * @rc_supported: tracks whether we support GuC rc on the current platform
 	 */
@@ -281,6 +284,8 @@ struct intel_guc {
 	int number_guc_id_stolen;
 #endif
 };
+
+#define GUC_SUBMIT_VER(guc)	MAKE_UC_VER_STRUCT((guc)->submission_version)
 
 struct intel_guc_tlb_wait {
 	struct wait_queue_head wq;

@@ -11,6 +11,7 @@
 #include "intel_workarounds_types.h"
 
 struct drm_i915_private;
+struct drm_printer;
 struct i915_request;
 struct intel_engine_cs;
 struct intel_gt;
@@ -26,6 +27,9 @@ int intel_engine_emit_ctx_wa(struct i915_request *rq);
 
 void intel_gt_init_workarounds(struct intel_gt *gt);
 void intel_gt_apply_workarounds(struct intel_gt *gt);
+int intel_gt_show_workarounds(struct drm_printer *p,
+			      struct intel_gt *gt,
+			      const struct i915_wa_list * const wal);
 bool intel_gt_verify_workarounds(struct intel_gt *gt, const char *from);
 
 void intel_engine_init_whitelist(struct intel_engine_cs *engine);
@@ -33,6 +37,9 @@ void intel_engine_apply_whitelist(struct intel_engine_cs *engine);
 
 void intel_engine_init_workarounds(struct intel_engine_cs *engine);
 void intel_engine_apply_workarounds(struct intel_engine_cs *engine);
+int intel_engine_show_workarounds(struct drm_printer *m,
+				  struct intel_engine_cs *engine,
+				  const struct i915_wa_list * const wal);
 int intel_engine_verify_workarounds(struct intel_engine_cs *engine,
 				    const char *from);
 
