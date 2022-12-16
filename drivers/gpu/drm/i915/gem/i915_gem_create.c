@@ -171,7 +171,7 @@ handle_clear_errors(struct drm_i915_gem_object *obj, int errors, bool locked)
 	int ret;
 
 	ret = i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
-	if (ret)
+	if (!ret)
 		goto unlock;
 
 	/*

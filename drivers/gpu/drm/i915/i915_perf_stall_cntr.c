@@ -203,26 +203,6 @@ static int read_eu_stall_properties(struct drm_i915_private *i915,
 	return 0;
 }
 
-static bool
-eu_stall_data_in_buf(struct i915_eu_stall_cntr_stream *stream)
-{
-	struct intel_gt *gt = stream->tile_gt;
-	struct per_dss_buf *dss_buf;
-	u32 read_ptr, write_ptr;
-	int dss, group, instance;
-
-	for_each_ss_steering(dss, gt, group, instance) {
-		dss_buf = &stream->dss_buf[dss];
-		mutex_lock(&dss_buf->lock);
-		read_ptr = dss_buf->read;
-		write_ptr = dss_buf->write;
-		mutex_unlock(&dss_buf->lock);
-		if (read_ptr != write_ptr)
-			return true;
-	}
-	return false;
-}
-
 /**
  * buf_data_size - Calculate the number of bytes in a circular buffer
  *		   of size buf_size given the read and write pointers
@@ -763,9 +743,8 @@ static ssize_t i915_eu_stall_buf_read(struct file *file,
 
 	if (!(file->f_flags & O_NONBLOCK)) {
 		do {
-			if (!eu_stall_data_in_buf(stream)) {
-				ret = wait_event_interruptible(stream->poll_wq,
-							       eu_stall_data_in_buf(stream));
+			if (!stream->pollin) {
+				ret = wait_event_interruptible(stream->poll_wq, stream->pollin);
 				if (ret)
 					return -EINTR;
 			}

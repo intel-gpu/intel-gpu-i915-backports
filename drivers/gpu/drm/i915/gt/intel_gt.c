@@ -843,6 +843,9 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	for_each_engine(engine, gt, id) {
 		struct i915_request *rq;
 
+		drm_dbg(&gt->i915->drm,
+			"Record default context on %s", engine->name);
+
 		rq = record_default_context(engine);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);

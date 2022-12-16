@@ -542,17 +542,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	if (IS_PONTEVECCHIO(i915) && engine->class == VIDEO_DECODE_CLASS)
 		engine->ppgtt_size = min_t(u8, engine->ppgtt_size, 48);
 
-	engine->props.heartbeat_interval_ms =
-		CPTCFG_DRM_I915_HEARTBEAT_INTERVAL;
-	engine->props.max_busywait_duration_ns =
-		CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT;
-	engine->props.preempt_timeout_ms =
-		CPTCFG_DRM_I915_PREEMPT_TIMEOUT;
-	engine->props.stop_timeout_ms =
-		CPTCFG_DRM_I915_STOP_TIMEOUT;
-	engine->props.timeslice_duration_ms =
-		CPTCFG_DRM_I915_TIMESLICE_DURATION;
-
 	if ((engine->class == COMPUTE_CLASS && !RCS_MASK(engine->gt) &&
 	     __ffs(CCS_MASK(engine->gt)) == engine->instance) ||
 	     engine->class == RENDER_CLASS)
@@ -572,6 +561,17 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 			engine->flags |= I915_ENGINE_HAS_RUN_ALONE_MODE;
 	}
 
+	engine->props.heartbeat_interval_ms =
+		CPTCFG_DRM_I915_HEARTBEAT_INTERVAL;
+	engine->props.max_busywait_duration_ns =
+		CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT;
+	engine->props.preempt_timeout_ms =
+		CPTCFG_DRM_I915_PREEMPT_TIMEOUT;
+	engine->props.stop_timeout_ms =
+		CPTCFG_DRM_I915_STOP_TIMEOUT;
+	engine->props.timeslice_duration_ms =
+		CPTCFG_DRM_I915_TIMESLICE_DURATION;
+
 	/* FIXME: Balancer IGT test starts to fail below 5ms timeslice */
 	if (intel_guc_submission_is_wanted(&gt->uc.guc) &&
 	    (engine->props.timeslice_duration_ms < 5))
@@ -579,25 +579,32 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 
 	/*
 	 * Mid-thread pre-emption is not available in Gen12. Unfortunately,
-	 * some OpenCL workloads run quite long threads. That means they get
+	 * some compute workloads run quite long threads. That means they get
 	 * reset due to not pre-empting in a timely manner. So, bump the
 	 * pre-emption timeout value to be much higher for compute engines.
-	 * A good rule of thumb seems to be the three times the heartbeat
-	 * value. That is long enough for a reasonable task to reach a
-	 * pre-emption point but not long enough for the heartbeat to actually
-	 * cause a reset.
 	 */
-	if (GRAPHICS_VER(i915) == 12 &&
-	    engine->flags & I915_ENGINE_HAS_RCS_REG_STATE) {
-		unsigned long triple_beat = engine->props.heartbeat_interval_ms * 3;
+	if (GRAPHICS_VER(i915) == 12 && (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE))
+		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE;
 
-		if (triple_beat > engine->props.preempt_timeout_ms) {
-			drm_info(&gt->i915->drm, "Bumping pre-emption timeout from %ld to %ld on %s to allow slow compute pre-emption\n",
-				 engine->props.preempt_timeout_ms, triple_beat, engine->name);
+	/* Cap properties according to any system limits */
+#define CLAMP_PROP(field) \
+	do { \
+		u64 clamp = intel_clamp_##field(engine, engine->props.field); \
+		if (clamp != engine->props.field) { \
+			drm_notice(&engine->i915->drm, \
+				   "Warning, clamping %s to %lld to prevent overflow\n", \
+				   #field, clamp); \
+			engine->props.field = clamp; \
+		} \
+	} while (0)
 
-			engine->props.preempt_timeout_ms = triple_beat;
-		}
-	}
+	CLAMP_PROP(heartbeat_interval_ms);
+	CLAMP_PROP(max_busywait_duration_ns);
+	CLAMP_PROP(preempt_timeout_ms);
+	CLAMP_PROP(stop_timeout_ms);
+	CLAMP_PROP(timeslice_duration_ms);
+
+#undef CLAMP_PROP
 
 	engine->defaults = engine->props; /* never to change again */
 
@@ -622,6 +629,55 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 		gt->rsvd_bcs = id;
 
 	return 0;
+}
+
+u64 intel_clamp_heartbeat_interval_ms(struct intel_engine_cs *engine, u64 value)
+{
+	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
+
+	return value;
+}
+
+u64 intel_clamp_max_busywait_duration_ns(struct intel_engine_cs *engine, u64 value)
+{
+	value = min(value, jiffies_to_nsecs(2));
+
+	return value;
+}
+
+u64 intel_clamp_preempt_timeout_ms(struct intel_engine_cs *engine, u64 value)
+{
+	/*
+	 * NB: The GuC API only supports 32bit values. However, the limit is further
+	 * reduced due to internal calculations which would otherwise overflow.
+	 */
+	if (intel_guc_submission_is_wanted(&engine->gt->uc.guc))
+		value = min_t(u64, value, guc_policy_max_preempt_timeout_ms());
+
+	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
+
+	return value;
+}
+
+u64 intel_clamp_stop_timeout_ms(struct intel_engine_cs *engine, u64 value)
+{
+	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
+
+	return value;
+}
+
+u64 intel_clamp_timeslice_duration_ms(struct intel_engine_cs *engine, u64 value)
+{
+	/*
+	 * NB: The GuC API only supports 32bit values. However, the limit is further
+	 * reduced due to internal calculations which would otherwise overflow.
+	 */
+	if (intel_guc_submission_is_wanted(&engine->gt->uc.guc))
+		value = min_t(u64, value, guc_policy_max_exec_quantum_ms());
+
+	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
+
+	return value;
 }
 
 static void __setup_bcs_capabilities(struct intel_engine_cs *engine)
@@ -949,6 +1005,9 @@ static intel_engine_mask_t init_engine_mask(struct intel_gt *gt)
 	engine_mask_apply_media_fuses(gt);
 	engine_mask_apply_compute_fuses(gt);
 	engine_mask_apply_copy_fuses(gt);
+
+	if (!intel_uc_wants_gsc_uc(&gt->uc))
+		info->engine_mask &= ~BIT(GSC0);
 
 	return info->engine_mask;
 }
@@ -1552,6 +1611,15 @@ int intel_engines_init(struct intel_gt *gt)
 	return 0;
 }
 
+void intel_engine_quiesce(struct intel_engine_cs *engine)
+{
+	destroy_pinned_context(engine->evict_context);
+	destroy_pinned_context(engine->blitter_context);
+	destroy_pinned_context(engine->bind_context);
+	destroy_pinned_context(engine->kernel_context);
+	cleanup_status_page(engine);
+}
+
 /**
  * intel_engines_cleanup_common - cleans up the engine state created by
  *                                the common initiailizers.
@@ -1572,13 +1640,10 @@ void intel_engine_cleanup_common(struct intel_engine_cs *engine)
 	if (engine->default_state)
 		fput(engine->default_state);
 
-	destroy_pinned_context(engine->evict_context);
-	destroy_pinned_context(engine->blitter_context);
-	destroy_pinned_context(engine->bind_context);
-	destroy_pinned_context(engine->kernel_context);
+	if (!engine->i915->quiesce_gpu)
+		intel_engine_quiesce(engine);
 
 	GEM_BUG_ON(!llist_empty(&engine->barrier_tasks));
-	cleanup_status_page(engine);
 
 	intel_wa_list_free(&engine->ctx_wa_list);
 	intel_wa_list_free(&engine->wa_list);

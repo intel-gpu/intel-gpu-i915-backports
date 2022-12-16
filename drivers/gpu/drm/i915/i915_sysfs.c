@@ -32,6 +32,7 @@
 
 #include "gem/i915_gem_mman.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_rc6.h"
@@ -525,6 +526,9 @@ static ssize_t quiesce_gpu_store(struct device *dev,
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
 	struct intel_gt *gt = to_gt(i915);
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	intel_wakeref_t wakeref;
 	unsigned int i;
 	ssize_t ret;
 	bool val;
@@ -549,12 +553,18 @@ static ssize_t quiesce_gpu_store(struct device *dev,
 		flush_workqueue(system_wq);
 	}
 
+	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 	for_each_gt(gt, i915, i) {
 		if (intel_gt_terminally_wedged(gt))
 			continue;
 		intel_gt_set_wedged(gt);
 		intel_gt_retire_requests(gt);
+		for_each_engine(engine, gt, id) {
+			intel_engine_quiesce(engine);
+		}
+		GEM_BUG_ON(intel_gt_pm_is_awake(gt));
 	}
+	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
 
 	/* flush the scheduled jobs when clients were closed */
 	rcu_barrier();
@@ -647,8 +657,13 @@ static ssize_t enable_eu_debug_store(struct device *dev,
 static I915_DEVICE_ATTR_RW(prelim_enable_eu_debug, 0644, enable_eu_debug_show,
 			   enable_eu_debug_store);
 
-static void i915_setup_enable_eu_debug_sysfs(struct device *kdev)
+static void i915_setup_enable_eu_debug_sysfs(struct drm_i915_private *i915)
 {
+	struct device *kdev = i915->drm.primary->kdev;
+
+	if (IS_SRIOV_VF(i915))
+		return;
+
 	if (sysfs_create_file(&kdev->kobj,
 			      &dev_attr_prelim_enable_eu_debug.attr.attr))
 		dev_warn(kdev, "Failed to add prelim_enable_eu_deubg sysfs param\n");
@@ -656,7 +671,7 @@ static void i915_setup_enable_eu_debug_sysfs(struct device *kdev)
 
 #else /* CPTCFG_DRM_I915_DEBUGGER */
 
-static void i915_setup_enable_eu_debug_sysfs(struct device *kdev) {}
+static void i915_setup_enable_eu_debug_sysfs(struct drm_i915_private *i915) {}
 
 #endif /* CPTCFG_DRM_I915_DEBUGGER */
 
@@ -738,7 +753,7 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 
 	intel_mem_health_report_sysfs(dev_priv);
 
-	i915_setup_enable_eu_debug_sysfs(kdev);
+	i915_setup_enable_eu_debug_sysfs(dev_priv);
 }
 
 void i915_teardown_sysfs(struct drm_i915_private *dev_priv)

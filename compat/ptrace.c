@@ -24,6 +24,8 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  */
+
+#ifdef BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
 #include <linux/ptrace.h>
 
 
@@ -120,3 +122,4 @@ bool ptrace_may_access(struct task_struct *task, unsigned int mode)
         return !err;
 }
 EXPORT_SYMBOL_GPL(ptrace_may_access);
+#endif /* BPM_PTRACE_MAY_ACCESS_NOT_PRESENT */

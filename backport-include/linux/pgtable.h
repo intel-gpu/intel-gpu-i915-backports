@@ -15,6 +15,7 @@
 
 #ifdef BPM_ASM_PGTABLE_H_NOT_PRESENT
 #include <asm/pgtable.h>
+#else
+#include_next <linux/pgtable.h>
 #endif
-
 #endif /* _LINUX_PGTABLE_H */

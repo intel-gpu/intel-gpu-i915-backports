@@ -81,8 +81,12 @@ static void __i915_debugger_print(const struct i915_debugger * const debugger,
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	drm_printf(&p, "%s(%d:%lld:%d): %pV", prefix, current->pid,
-		   debugger->session, debugger->target_task->pid, &vaf);
+	drm_printf(&p, "%s(%d/%d:%lld:%d/%d): %pV", prefix,
+		   current->pid, task_tgid_nr(current),
+		   debugger->session,
+		   debugger->target_task->pid,
+		   task_tgid_nr(debugger->target_task),
+		   &vaf);
 
 	va_end(args);
 }
@@ -735,7 +739,7 @@ i915_debugger_find_task_get(struct drm_i915_private *i915,
 
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (iter->target_task != task)
+		if (!same_thread_group(iter->target_task, task))
 			continue;
 
 		kref_get(&iter->ref);
@@ -1846,9 +1850,9 @@ i915_debugger_vm_open_ioctl(struct i915_debugger *debugger, unsigned long arg)
 		file->f_mode |= FMODE_PWRITE | FMODE_WRITE| FMODE_LSEEK;
 		break;
 	case O_RDWR:
-		file->f_mode |= FMODE_PREAD | FMODE_PWRITE | 
+		file->f_mode |= FMODE_PREAD | FMODE_PWRITE |
 				FMODE_READ | FMODE_WRITE | FMODE_LSEEK;
-		break;	
+		break;
 	}
 
 	file->f_mapping = vm->inode->i_mapping;
@@ -2662,14 +2666,14 @@ i915_debugger_discover_contexts(struct i915_debugger *debugger,
 static bool
 i915_debugger_client_task_register(const struct i915_debugger * const debugger,
 				   struct i915_drm_client * const client,
-				   const struct task_struct * const task)
+				   struct task_struct * const task)
 {
 	bool registered = false;
 
 	rcu_read_lock();
 	if (!READ_ONCE(client->closed) &&
 	    !is_debugger_closed(debugger) &&
-	    debugger->target_task == task) {
+	    same_thread_group(debugger->target_task, task)) {
 		GEM_WARN_ON(client->debugger_session >= debugger->session);
 		WRITE_ONCE(client->debugger_session, debugger->session);
 		registered = true;
@@ -2894,7 +2898,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (iter->target_task == debugger->target_task) {
+		if (same_thread_group(iter->target_task, debugger->target_task)) {
 			drm_info(&i915->drm, "pid %llu already debugged\n", param->pid);
 			ret = -EBUSY;
 			goto err_unlock;
@@ -2981,7 +2985,15 @@ void i915_debugger_init(struct drm_i915_private *i915)
 	spin_lock_init(&i915->debuggers.lock);
 	INIT_LIST_HEAD(&i915->debuggers.list);
 	mutex_init(&i915->debuggers.enable_eu_debug_lock);
+
 	i915->debuggers.enable_eu_debug = !!i915->params.debug_eu;
+	if (IS_SRIOV_VF(i915) && i915->params.debug_eu) {
+		drm_notice(&i915->drm,
+			   "i915_debugger: ignoring 'debug_eu=1' in VF mode\n");
+		i915->debuggers.enable_eu_debug = false;
+	}
+
+	i915->debuggers.allow_eu_debug = !IS_SRIOV_VF(i915);
 }
 
 void i915_debugger_fini(struct drm_i915_private *i915)
@@ -3003,7 +3015,7 @@ void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
 	if (!debugger)
 		return;
 
-	GEM_WARN_ON(debugger->target_task != current);
+	GEM_WARN_ON(!same_thread_group(debugger->target_task, current));
 	if (client && READ_ONCE(client->debugger_session))
 		GEM_WARN_ON(client->debugger_session != debugger->session);
 
@@ -3035,7 +3047,7 @@ void i915_debugger_client_register(struct i915_drm_client *client,
 	 */
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (iter->target_task != task)
+		if (!same_thread_group(iter->target_task, task))
 			continue;
 
 		WRITE_ONCE(client->debugger_session, iter->session);
@@ -3836,6 +3848,11 @@ int i915_debugger_enable(struct drm_i915_private *i915, bool enable)
 	unsigned int i;
 
 	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
+	if (!i915->debuggers.allow_eu_debug) {
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+		return -EPERM;
+	}
+
 	if (!enable && !list_empty(&i915->debuggers.list)) {
 		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
 		return -EBUSY;
@@ -3861,6 +3878,33 @@ int i915_debugger_enable(struct drm_i915_private *i915, bool enable)
 	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
 
 	return 0;
+}
+
+static int __i915_debugger_allow(struct drm_i915_private *i915, bool allow)
+{
+	if (IS_SRIOV_VF(i915) && allow)
+		return -EPERM;
+
+	mutex_lock(&i915->debuggers.enable_eu_debug_lock);
+	if (!allow && i915->debuggers.enable_eu_debug) {
+		mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+		return -EBUSY;
+	}
+
+	i915->debuggers.allow_eu_debug = allow;
+	mutex_unlock(&i915->debuggers.enable_eu_debug_lock);
+
+	return 0;
+}
+
+int i915_debugger_allow(struct drm_i915_private *i915)
+{
+	return __i915_debugger_allow(i915, true);
+}
+
+int i915_debugger_disallow(struct drm_i915_private *i915)
+{
+	return __i915_debugger_allow(i915, false);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

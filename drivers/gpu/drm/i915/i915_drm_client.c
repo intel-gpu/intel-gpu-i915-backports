@@ -21,6 +21,13 @@
 #include "i915_utils.h"
 #include "i915_debugger.h"
 
+struct i915_drm_client_bo {
+	struct rb_node node;
+	struct i915_drm_client *client;
+	unsigned int count;
+	bool shared;
+};
+
 #ifndef BPM_SYSFS_EMIT_NOT_PRESENT
 /* compat: 2efc459d06f1 ("sysfs: Add sysfs_emit and sysfs_emit_at to format sysfs output") */
 #define sysfs_emit(buf, fmt...) scnprintf(buf, PAGE_SIZE, fmt)
@@ -115,8 +122,19 @@ static ssize_t show_client_created_devm_bytes(struct device *kdev,
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.created_devm_bytes);
 
-	return snprintf(buf, PAGE_SIZE, "%llu\n",
-			atomic64_read(&client->created_devm_bytes));
+	return sysfs_emit(buf, "%llu\n",
+			  atomic64_read(&client->created_devm_bytes));
+}
+
+static ssize_t show_client_resident_created_devm_bytes(struct device *kdev,
+						       struct device_attribute *attr,
+						       char *buf)
+{
+	struct i915_drm_client *client =
+		container_of(attr, typeof(*client), attr.resident_created_devm_bytes);
+
+	return sysfs_emit(buf, "%llu\n",
+			  atomic64_read(&client->resident_created_devm_bytes));
 }
 
 /*
@@ -131,8 +149,19 @@ static ssize_t show_client_imported_devm_bytes(struct device *kdev,
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.imported_devm_bytes);
 
-	return snprintf(buf, PAGE_SIZE, "%llu\n",
-			atomic64_read(&client->imported_devm_bytes));
+	return sysfs_emit(buf, "%llu\n",
+			  atomic64_read(&client->imported_devm_bytes));
+}
+
+static ssize_t show_client_resident_imported_devm_bytes(struct device *kdev,
+							struct device_attribute *attr,
+							char *buf)
+{
+	struct i915_drm_client *client =
+		container_of(attr, typeof(*client), attr.resident_imported_devm_bytes);
+
+	return sysfs_emit(buf, "%llu\n",
+			  atomic64_read(&client->resident_imported_devm_bytes));
 }
 
 static const char * const uabi_class_names[] = {
@@ -187,72 +216,153 @@ static void __client_unregister_sysfs_busy(struct i915_drm_client *client)
 	kobject_put(fetch_and_zero(&client->busy_root));
 }
 
-int i915_drm_client_add_bo_sz(struct drm_file *file,
-			      struct drm_i915_gem_object *obj)
+void i915_drm_client_init_bo(struct drm_i915_gem_object *obj)
 {
-	struct drm_i915_file_private *fpriv = file->driver_priv;
-	struct i915_drm_client *client = fpriv->client;
-	struct i915_drm_client_bo *client_bo;
-	struct intel_memory_region *placement;
+	spin_lock_init(&obj->client.lock);
+	obj->client.rb = RB_ROOT;
+}
+
+static bool object_has_lmem(const struct drm_i915_gem_object *obj)
+{
 	int i;
 
 	for (i = 0; i < obj->mm.n_placements; i++) {
-		placement = obj->mm.placements[i];
+		struct intel_memory_region *placement = obj->mm.placements[i];
 
-		if (placement->type != INTEL_MEMORY_LOCAL)
-			continue;
+		if (placement->type == INTEL_MEMORY_LOCAL)
+			return true;
+	}
 
-		client_bo = kzalloc(sizeof(*client_bo), GFP_KERNEL);
-		if (!client_bo)
-			return -ENOMEM;
+	return false;
+}
 
-		client_bo->client = client;
+static int sort_client_key(const void *key, const struct rb_node *node)
+{
+	const struct i915_drm_client_bo *cb = rb_entry(node, typeof(*cb), node);
 
-		/* only objs which can reside in LOCAL MEMORY are considered */
-		if (obj->base.dma_buf) {
+	return ptrdiff(key, cb->client);
+}
+
+static int sort_client(struct rb_node *node, const struct rb_node *parent)
+{
+	const struct i915_drm_client_bo *cb = rb_entry(node, typeof(*cb), node);
+
+	return sort_client_key(cb->client, parent);
+}
+
+int i915_drm_client_add_bo(struct i915_drm_client *client,
+			   struct drm_i915_gem_object *obj)
+{
+	struct i915_drm_client_bo *cb;
+	struct rb_node *old;
+
+	/* only objs which can reside in LOCAL MEMORY are tracked */
+	if (!object_has_lmem(obj))
+		return 0;
+
+	cb = kzalloc(sizeof(*cb), GFP_KERNEL);
+	if (!cb)
+		return -ENOMEM;
+
+	cb->client = client;
+	cb->shared = obj->base.dma_buf;
+
+	spin_lock(&obj->client.lock);
+
+	old = rb_find_add(&cb->node, &obj->client.rb, sort_client);
+	if (old) {
+		kfree(cb);
+		cb = rb_entry(old, typeof(*cb), node);
+	} else {
+		if (cb->shared)
 			atomic64_add(obj->base.size,
 				     &client->imported_devm_bytes);
-			client_bo->shared = true;
-		} else {
+		else
 			atomic64_add(obj->base.size,
 				     &client->created_devm_bytes);
-		}
 
-		i915_gem_object_lock(obj, NULL);
-		list_add(&client_bo->link, &obj->client_list);
-		i915_gem_object_unlock(obj);
-		break;
+		if (obj->client.resident) {
+			if (cb->shared)
+				atomic64_add(obj->base.size,
+					     &client->resident_imported_devm_bytes);
+			else
+				atomic64_add(obj->base.size,
+					     &client->resident_created_devm_bytes);
+		}
 	}
+
+	cb->count++;
+	spin_unlock(&obj->client.lock);
 
 	return 0;
 }
 
-void i915_drm_client_del_bo_sz(struct drm_file *file,
-			       struct drm_i915_gem_object *obj)
+void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
+				   bool resident)
 {
-	struct drm_i915_file_private *fpriv = file->driver_priv;
-	struct i915_drm_client *client = fpriv->client;
-	struct i915_drm_client_bo *client_bo, *cn;
+	struct i915_drm_client_bo *cb, *n;
+	int64_t sz;
 
-	i915_gem_object_lock(obj, NULL);
+	sz = obj->base.size;
+	if (!resident)
+		sz = -sz;
 
-	list_for_each_entry_safe(client_bo, cn, &obj->client_list, link) {
-		if (client_bo->client != client)
-			continue;
+	spin_lock(&obj->client.lock);
+	if (obj->client.resident != resident) {
+		obj->client.resident = resident;
+		rbtree_postorder_for_each_entry_safe(cb, n, &obj->client.rb, node) {
+			if (cb->shared)
+				atomic64_add(sz, &cb->client->resident_imported_devm_bytes);
+			else
+				atomic64_add(sz, &cb->client->resident_created_devm_bytes);
+		}
+	}
+	spin_unlock(&obj->client.lock);
+}
 
-		if (client_bo->shared)
+static struct i915_drm_client_bo *
+lookup_client(struct i915_drm_client *client,
+	      struct drm_i915_gem_object *obj)
+{
+	struct rb_node *rb = rb_find(client, &obj->client.rb, sort_client_key);
+
+	GEM_BUG_ON(offsetof(struct i915_drm_client_bo, node));
+	return rb_entry(rb, struct i915_drm_client_bo, node);
+}
+
+void i915_drm_client_del_bo(struct i915_drm_client *client,
+			    struct drm_i915_gem_object *obj)
+{
+	struct i915_drm_client_bo *cb;
+
+	spin_lock(&obj->client.lock);
+	cb = lookup_client(client, obj);
+	if (cb && !--cb->count) {
+		if (cb->shared)
 			atomic64_sub(obj->base.size,
 				     &client->imported_devm_bytes);
 		else
 			atomic64_sub(obj->base.size,
 				     &client->created_devm_bytes);
 
-		list_del(&client_bo->link);
-		kfree(client_bo);
-		break;
-	}
+		if (obj->client.resident) {
+			if (cb->shared)
+				atomic64_sub(obj->base.size,
+					     &client->resident_imported_devm_bytes);
+			else
+				atomic64_sub(obj->base.size,
+					     &client->resident_created_devm_bytes);
+		}
 
-	i915_gem_object_unlock(obj);
+		rb_erase(&cb->node, &obj->client.rb);
+		kfree(cb);
+	}
+	spin_unlock(&obj->client.lock);
+}
+
+void i915_drm_client_fini_bo(struct drm_i915_gem_object *obj)
+{
+	GEM_BUG_ON(!RB_EMPTY_ROOT(&obj->client.rb));
 }
 
 static int
@@ -265,10 +375,26 @@ __client_register_sysfs_memory_stats(struct i915_drm_client *client)
 				struct device_attribute *attr,
 				char *buf);
 	} files[] = {
-		{ "created_bytes", &client->attr.created_devm_bytes,
-				   show_client_created_devm_bytes },
-		{ "imported_bytes", &client->attr.imported_devm_bytes,
-				    show_client_imported_devm_bytes },
+		{
+			"created_bytes",
+			&client->attr.created_devm_bytes,
+			show_client_created_devm_bytes
+		},
+		{
+			"imported_bytes",
+			&client->attr.imported_devm_bytes,
+			show_client_imported_devm_bytes
+		},
+		{
+			"prelim_resident_created_bytes",
+			&client->attr.resident_created_devm_bytes,
+			show_client_resident_created_devm_bytes
+		},
+		{
+			"prelim_resident_imported_bytes",
+			&client->attr.resident_imported_devm_bytes,
+			show_client_resident_imported_devm_bytes
+		},
 	};
 	unsigned int i;
 	int ret;
@@ -369,7 +495,6 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 					     struct task_struct *task)
 {
 	struct i915_drm_client_name *name;
-	const struct cred *cred;
 	int len = strlen(task->comm);
 
 	name = kmalloc(struct_size(name, name, len + 1), GFP_KERNEL);
@@ -379,10 +504,6 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 	init_rcu_head(&name->rcu);
 	name->client = client;
 	name->pid = get_task_pid(task, PIDTYPE_PID);
-	cred = get_task_cred(task);
-	name->uid = cred->uid;
-	name->gid = cred->gid;
-	put_cred(cred);
 	memcpy(name->name, task->comm, len + 1);
 
 	return name;

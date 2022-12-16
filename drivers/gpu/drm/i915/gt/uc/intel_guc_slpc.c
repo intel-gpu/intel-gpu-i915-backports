@@ -200,8 +200,7 @@ static int slpc_set_param(struct intel_guc_slpc *slpc, u8 id, u32 value)
 	return ret;
 }
 
-static int slpc_unset_param(struct intel_guc_slpc *slpc,
-			    u8 id)
+static int slpc_unset_param(struct intel_guc_slpc *slpc, u8 id)
 {
 	struct intel_guc *guc = slpc_to_guc(slpc);
 
@@ -698,30 +697,30 @@ int intel_guc_slpc_override_gucrc_mode(struct intel_guc_slpc *slpc, u32 mode)
 	if (mode >= SLPC_GUCRC_MODE_MAX)
 		return -EINVAL;
 
-	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
-
-	ret = slpc_set_param(slpc, SLPC_PARAM_PWRGATE_RC_MODE, mode);
-	if (ret)
-		intel_gt_log_driver_error(slpc_to_gt(slpc),
-					  INTEL_GT_DRIVER_ERROR_RPS,
-					  "Override gucrc mode %d failed %d\n",
-					  mode, ret);
-
-	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		ret = slpc_set_param(slpc, SLPC_PARAM_PWRGATE_RC_MODE, mode);
+		if (ret)
+			drm_err(&i915->drm,
+				"Override gucrc mode %d failed %d\n",
+				mode, ret);
+	}
 
 	return ret;
 }
 
 int intel_guc_slpc_unset_gucrc_mode(struct intel_guc_slpc *slpc)
 {
+	struct drm_i915_private *i915 = slpc_to_i915(slpc);
+	intel_wakeref_t wakeref;
 	int ret = 0;
 
-	ret = slpc_unset_param(slpc, SLPC_PARAM_PWRGATE_RC_MODE);
-	if (ret)
-		intel_gt_log_driver_error(slpc_to_gt(slpc),
-					  INTEL_GT_DRIVER_ERROR_RPS,
-					  "Unsetting gucrc mode failed %d\n",
-					  ret);
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		ret = slpc_unset_param(slpc, SLPC_PARAM_PWRGATE_RC_MODE);
+		if (ret)
+			drm_err(&i915->drm,
+				"Unsetting gucrc mode failed %d\n",
+				ret);
+	}
 
 	return ret;
 }

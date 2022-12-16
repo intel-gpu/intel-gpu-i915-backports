@@ -109,8 +109,6 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	INIT_LIST_HEAD(&obj->lut_list);
 	spin_lock_init(&obj->lut_lock);
 
-	INIT_LIST_HEAD(&obj->client_list);
-
 	spin_lock_init(&obj->mmo.lock);
 	obj->mmo.offsets = RB_ROOT;
 
@@ -127,6 +125,8 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	INIT_RADIX_TREE(&obj->mm.get_dma_page.radix, GFP_KERNEL | __GFP_NOWARN);
 	mutex_init(&obj->mm.get_dma_page.lock);
 	INIT_LIST_HEAD(&obj->priv_obj_link);
+
+	i915_drm_client_init_bo(obj);
 }
 
 static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
@@ -320,9 +320,9 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 
 static int i915_gem_open_object(struct drm_gem_object *gem, struct drm_file *file)
 {
-	struct drm_i915_gem_object *obj = to_intel_bo(gem);
+	struct drm_i915_file_private *fpriv = file->driver_priv;
 
-	return i915_drm_client_add_bo_sz(file, obj);
+	return i915_drm_client_add_bo(fpriv->client, to_intel_bo(gem));
 }
 
 static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *file)
@@ -334,7 +334,7 @@ static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *f
 	struct i915_lut_handle *lut, *ln;
 	LIST_HEAD(close);
 
-	i915_drm_client_del_bo_sz(file, obj);
+	i915_drm_client_del_bo(fpriv->client, obj);
 
 	if (obj->pair) {
 		i915_gem_object_put(obj->pair);
@@ -445,6 +445,8 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 {
 	trace_i915_gem_object_destroy(obj);
 
+	i915_drm_client_fini_bo(obj);
+
 	if (!list_empty(&obj->vma.list)) {
 		struct i915_vma *vma;
 
@@ -472,7 +474,6 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	__i915_gem_object_free_mmaps(obj);
 
 	GEM_BUG_ON(!list_empty(&obj->lut_list));
-	GEM_BUG_ON(!list_empty(&obj->client_list));
 
 	atomic_set(&obj->mm.pages_pin_count, 0);
 	__i915_gem_object_put_pages(obj);
@@ -1350,7 +1351,9 @@ static void i915_window_vma_teardown(struct i915_vma *vma)
 	if (!vma)
 		return;
 
-	vma->vm->clear_range(vma->vm, i915_vma_offset(vma), vma->size);
+	if (!vma->vm->i915->quiesce_gpu)
+		vma->vm->clear_range(vma->vm, i915_vma_offset(vma), vma->size);
+
 	drm_mm_remove_node(&vma->node);
 	sg_free_table(vma->pages);
 	kfree(vma->pages);
