@@ -7,6 +7,7 @@
 
 #include "i915_drv.h"
 #include "intel_gt.h"
+#include "intel_gt_ccs_mode.h"
 #include "intel_gt_debugfs.h"
 #include "intel_gt_engines_debugfs.h"
 #include "intel_gt_mcr.h"
@@ -288,6 +289,7 @@ void intel_gt_debugfs_register(struct intel_gt *gt)
 
 	gt_debugfs_register(gt, root);
 
+	intel_gt_debugfs_register_ccs_mode(gt, root);
 	intel_gt_engines_debugfs_register(gt, root);
 	intel_gt_pm_debugfs_register(gt, root);
 	intel_sseu_debugfs_register(gt, root);

@@ -1924,22 +1924,6 @@
 #define GEN9_RAPL_PL1_FREQ_LIMIT_UDW	_MMIO(0x145F44)
 #define GEN9_RAPL_PL1_FREQ_LIMIT_MASK	0xff0000
 
-/*
- * *_PACKAGE_POWER_SKU - SKU power and timing parameters.
- * Used herein as a 64-bit register.
- * These masks are defined using GENMASK_ULL as REG_GENMASK is limited to u32
- * and as GENMASK is "long" and therefore 32-bits on a 32-bit system.
- * PKG_PKG_TDP, PKG_MIN_PWR, and PKG_MAX_PWR are scaled in the same way as
- * PKG_PWR_LIM_*, above.
- * PKG_MAX_WIN has sub-fields for x and y, and has the value: is 1.x * 2^y.
- */
-#define   PKG_PKG_TDP			GENMASK_ULL(14, 0)
-#define   PKG_MIN_PWR			GENMASK_ULL(30, 16)
-#define   PKG_MAX_PWR			GENMASK_ULL(46, 32)
-#define   PKG_MAX_WIN			GENMASK_ULL(54, 48)
-#define     PKG_MAX_WIN_X		GENMASK_ULL(54, 53)
-#define     PKG_MAX_WIN_Y		GENMASK_ULL(52, 48)
-
 #define CHV_CLK_CTL1			_MMIO(0x101100)
 #define VLV_CLK_CTL2			_MMIO(0x101104)
 #define   CLK_CTL2_CZCOUNT_30NS_SHIFT	28
@@ -2363,10 +2347,18 @@
 #define TRANS_PSR_IIR(tran)			_MMIO_TRANS2(tran, _PSR_IIR_A)
 #define   _EDP_PSR_TRANS_SHIFT(trans)		((trans) == TRANSCODER_EDP ? \
 						 0 : ((trans) - TRANSCODER_A + 1) * 8)
-#define   EDP_PSR_TRANS_MASK(trans)		(0x7 << _EDP_PSR_TRANS_SHIFT(trans))
-#define   EDP_PSR_ERROR(trans)			(0x4 << _EDP_PSR_TRANS_SHIFT(trans))
-#define   EDP_PSR_POST_EXIT(trans)		(0x2 << _EDP_PSR_TRANS_SHIFT(trans))
-#define   EDP_PSR_PRE_ENTRY(trans)		(0x1 << _EDP_PSR_TRANS_SHIFT(trans))
+#define   TGL_PSR_MASK			REG_GENMASK(2, 0)
+#define   TGL_PSR_ERROR			REG_BIT(2)
+#define   TGL_PSR_POST_EXIT		REG_BIT(1)
+#define   TGL_PSR_PRE_ENTRY		REG_BIT(0)
+#define   EDP_PSR_MASK(trans)		(TGL_PSR_MASK <<		\
+					 _EDP_PSR_TRANS_SHIFT(trans))
+#define   EDP_PSR_ERROR(trans)		(TGL_PSR_ERROR <<		\
+					 _EDP_PSR_TRANS_SHIFT(trans))
+#define   EDP_PSR_POST_EXIT(trans)	(TGL_PSR_POST_EXIT <<		\
+					 _EDP_PSR_TRANS_SHIFT(trans))
+#define   EDP_PSR_PRE_ENTRY(trans)	(TGL_PSR_PRE_ENTRY <<		\
+					 _EDP_PSR_TRANS_SHIFT(trans))
 
 #define _SRD_AUX_DATA_A				0x60814
 #define _SRD_AUX_DATA_EDP			0x6f814
