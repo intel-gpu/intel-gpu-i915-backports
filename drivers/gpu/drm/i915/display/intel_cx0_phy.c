@@ -897,12 +897,382 @@ static const struct intel_c10mpllb_state mtl_c10_hdmi_594 = {
 	.pll[19] = 0x23,
 };
 
+/* Precomputed C10 HDMI PLL tables */
+static const struct intel_c10mpllb_state mtl_c10_hdmi_25200 = {
+	.clock = 25200,
+	.pll[0]=0x04, .pll[1]=0x00, .pll[2]=0xB2, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x00,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0D,.pll[16]=0x09,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_27027 = {
+	.clock = 27027,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xC0, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xCC,.pll[12]=0x9C,.pll[13]=0xCB,.pll[14]=0xCC,
+	.pll[15]=0x0D,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_28320 = {
+	.clock = 28320,
+	.pll[0]=0x04, .pll[1]=0x00, .pll[2]=0xCC, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x00,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0D,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_30240 = {
+	.clock = 30240,
+	.pll[0]=0x04, .pll[1]=0x00, .pll[2]=0xDC, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x00,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0D,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_31500 = {
+	.clock = 31500,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x62, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0xA0,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0C,.pll[16]=0x09,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_36000 = {
+	.clock = 36000,
+	.pll[0]=0xC4, .pll[1]=0x00, .pll[2]=0x76, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x00,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_40000 = {
+	.clock = 40000,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x86, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0x55,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_49500 = {
+	.clock = 49500,
+	.pll[0]=0x74, .pll[1]=0x00, .pll[2]=0xAE, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x20,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_50000 = {
+	.clock = 50000,
+	.pll[0]=0x74, .pll[1]=0x00, .pll[2]=0xB0, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0x2A,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_57284 = {
+	.clock = 57284,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xCE, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x77,.pll[12]=0x57,.pll[13]=0x77,.pll[14]=0x77,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_58000 = {
+	.clock = 58000,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xD0, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0xD5,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0C,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_65000 = {
+	.clock = 65000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x66, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0xB5,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0B,.pll[16]=0x09,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_71000 = {
+	.clock = 71000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x72, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0xF5,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_74176 = {
+	.clock = 74176,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x44,.pll[12]=0x44,.pll[13]=0x44,.pll[14]=0x44,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_75000 = {
+	.clock = 75000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7C, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x20,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_78750 = {
+	.clock = 78750,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x84, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x08,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_85500 = {
+	.clock = 85500,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x92, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x10,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_88750 = {
+	.clock = 88750,
+	.pll[0]=0x74, .pll[1]=0x00, .pll[2]=0x98, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0x72,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x0B,.pll[16]=0x09,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_106500 = {
+	.clock = 106500,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xBC, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0xF0,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_108000 = {
+	.clock = 108000,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xC0, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x80,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_115500 = {
+	.clock = 115500,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xD0, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x50,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_119000 = {
+	.clock = 119000,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xD6, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0xF5,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0B,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_135000 = {
+	.clock = 135000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x6C, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x50,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0A,.pll[16]=0x09,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_138500 = {
+	.clock = 138500,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x70, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0x22,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_147160 = {
+	.clock = 147160,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x78, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0xA5,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_148352 = {
+	.clock = 148352,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x44,.pll[12]=0x44,.pll[13]=0x44,.pll[14]=0x44,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_154000 = {
+	.clock = 154000,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x80, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0x35,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_162000 = {
+	.clock = 162000,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x88, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x60,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_167000 = {
+	.clock = 167000,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x8C, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0xFA,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_197802 = {
+	.clock = 197802,
+	.pll[0]=0x74, .pll[1]=0x00, .pll[2]=0xAE, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x99,.pll[12]=0x05,.pll[13]=0x98,.pll[14]=0x99,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_198000 = {
+	.clock = 198000,
+	.pll[0]=0x74, .pll[1]=0x00, .pll[2]=0xAE, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x20,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_209800 = {
+	.clock = 209800,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xBA, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0x45,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_241500 = {
+	.clock = 241500,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xDA, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0xC8,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x0A,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_262750 = {
+	.clock = 262750,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x68, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0x6C,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x09,.pll[16]=0x09,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_268500 = {
+	.clock = 268500,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x6A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0xEC,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x09,.pll[16]=0x09,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_296703 = {
+	.clock = 296703,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x33,.pll[12]=0x44,.pll[13]=0x33,.pll[14]=0x33,
+	.pll[15]=0x09,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_297000 = {
+	.clock = 297000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x00,.pll[12]=0x58,.pll[13]=0x00,.pll[14]=0x00,
+	.pll[15]=0x09,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_319750 = {
+	.clock = 319750,
+	.pll[0]=0xB4, .pll[1]=0x00, .pll[2]=0x86, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0xAA,.pll[12]=0x44,.pll[13]=0xA9,.pll[14]=0xAA,
+	.pll[15]=0x09,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_497750 = {
+	.clock = 497750,
+	.pll[0]=0x34, .pll[1]=0x00, .pll[2]=0xE2, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0x9F,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x09,.pll[16]=0x08,.pll[17]=0xCF,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_592000 = {
+	.clock = 592000,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x55,.pll[12]=0x15,.pll[13]=0x55,.pll[14]=0x55,
+	.pll[15]=0x08,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
+static const struct intel_c10mpllb_state mtl_c10_hdmi_593407 = {
+	.clock = 593407,
+	.pll[0]=0xF4, .pll[1]=0x00, .pll[2]=0x7A, .pll[3]=0x00, .pll[4]=0x00,
+	.pll[5]=0x00, .pll[6]=0x00, .pll[7]=0x00, .pll[8]=0x20, .pll[9]=0xFF,
+	.pll[10]=0xFF,.pll[11]=0x3B,.pll[12]=0x44,.pll[13]=0xBA,.pll[14]=0xBB,
+	.pll[15]=0x08,.pll[16]=0x08,.pll[17]=0x8F,.pll[18]=0x84,.pll[19]=0x23,
+};
+
 static const struct intel_c10mpllb_state * const mtl_c10_hdmi_tables[] = {
-	&mtl_c10_hdmi_25_175,
-	&mtl_c10_hdmi_27_0,
-	&mtl_c10_hdmi_74_25,
-	&mtl_c10_hdmi_148_5,
-	&mtl_c10_hdmi_594,
+	&mtl_c10_hdmi_25_175 /* Consolidated Table */,
+	&mtl_c10_hdmi_25200,
+	&mtl_c10_hdmi_27_0, /* Consolidated Table */
+	&mtl_c10_hdmi_27027,
+	&mtl_c10_hdmi_28320,
+	&mtl_c10_hdmi_30240,
+	&mtl_c10_hdmi_31500,
+	&mtl_c10_hdmi_36000,
+	&mtl_c10_hdmi_40000,
+	&mtl_c10_hdmi_49500,
+	&mtl_c10_hdmi_50000,
+	&mtl_c10_hdmi_57284,
+	&mtl_c10_hdmi_58000,
+	&mtl_c10_hdmi_65000,
+	&mtl_c10_hdmi_71000,
+	&mtl_c10_hdmi_74176,
+	&mtl_c10_hdmi_74_25, /* Consolidated Table */
+	&mtl_c10_hdmi_75000,
+	&mtl_c10_hdmi_78750,
+	&mtl_c10_hdmi_85500,
+	&mtl_c10_hdmi_88750,
+	&mtl_c10_hdmi_106500,
+	&mtl_c10_hdmi_108000,
+	&mtl_c10_hdmi_115500,
+	&mtl_c10_hdmi_119000,
+	&mtl_c10_hdmi_135000,
+	&mtl_c10_hdmi_138500,
+	&mtl_c10_hdmi_147160,
+	&mtl_c10_hdmi_148352,
+	&mtl_c10_hdmi_148_5, /* Consolidated Table */
+	&mtl_c10_hdmi_154000,
+	&mtl_c10_hdmi_162000,
+	&mtl_c10_hdmi_167000,
+	&mtl_c10_hdmi_197802,
+	&mtl_c10_hdmi_198000,
+	&mtl_c10_hdmi_209800,
+	&mtl_c10_hdmi_241500,
+	&mtl_c10_hdmi_262750,
+	&mtl_c10_hdmi_268500,
+	&mtl_c10_hdmi_296703,
+	&mtl_c10_hdmi_297000,
+	&mtl_c10_hdmi_319750,
+	&mtl_c10_hdmi_497750,
+	&mtl_c10_hdmi_592000,
+	&mtl_c10_hdmi_593407,
+	&mtl_c10_hdmi_594, /* Consolidated Table */
 	NULL,
 };
 

@@ -285,6 +285,35 @@ struct intel_gt {
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
 	struct intel_engine_cs *engine_class[MAX_ENGINE_CLASS + 1]
 					    [MAX_ENGINE_INSTANCE + 1];
+
+	/*
+	 * Track fixed mapping between CCS engines and compute slices.
+	 *
+	 * In order to w/a HW that has the inability to dynamically load
+	 * balance between CCS engines and EU in the compute slices, we have to
+	 * reconfigure a static mapping on the fly. We track the current CCS
+	 * configuration (determined by inspection of the user's engine
+	 * selection during execbuf) and compare it against the current
+	 * CCS_MODE (which maps CCS engines to compute slices).  If there is
+	 * only a single engine selected, we can map it to all available
+	 * compute slices for maximal single task performance (fast/narrow). If
+	 * there are more then one engine selected, we have to reduce the
+	 * number of slices allocated to each engine (wide/slow), fairly
+	 * distributing the EU between the equivalent engines.
+	 *
+	 * Since we can only reconfigure the mapping when the slices are idle,
+	 * we also listen to engine parking and reject any CCS_MODE changes
+	 * with -EBUSY. To reduce the number of mode switches, we only change
+	 * CCS_MODE to widen the engine selection, if two contexts use the
+	 * same subset of engines, then both contexts are run in parallel even
+	 * if that means reduced performance for a narrower context. When
+	 * the system is idle again, we allow switching back to a narrow mode.
+	 *
+	 * The reconfiguration is only applied to execbuf / user paths as it
+	 * is only required when dispatch compute kernels to EU. The minimal
+	 * kernel execution along CCS engines does not invoke any compute
+	 * kernels so does not require any allocation of compute slices.
+	 */
 	struct {
 		/* Serialize CCS mode access */
 		struct mutex mutex;

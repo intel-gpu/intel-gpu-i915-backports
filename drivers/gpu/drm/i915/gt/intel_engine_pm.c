@@ -49,6 +49,8 @@ static int __engine_unpark(struct intel_wakeref *wf)
 
 	ENGINE_TRACE(engine, "\n");
 
+	GEM_BUG_ON(engine->i915->quiesce_gpu);
+
 	engine->wakeref_track = intel_gt_pm_get(engine->gt);
 
 	/* Discard stale context state from across idling */

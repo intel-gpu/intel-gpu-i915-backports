@@ -661,8 +661,15 @@ struct drm_i915_gem_object {
 	/** mark evicted object during suspend */
 	bool evicted;
 
-	/* list of Client ids which allocated/imported this obj */
-	struct list_head client_list;
+	struct {
+		spinlock_t lock;
+
+		/* list of clients which allocated/imported this object */
+		struct rb_root rb;
+
+		/* Whether this object currently resides in local memory */
+		bool resident:1;
+	} client;
 
 	/*
 	 * To store the memory mask which represents the user preference about

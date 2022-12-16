@@ -10,6 +10,7 @@
 
 #include "i915_drv.h"
 #include "i915_hwmon.h"
+#include "i915_reg.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
 #include "gt/intel_gt.h"
@@ -17,20 +18,17 @@
 
 /*
  * SF_* - scale factors for particular quantities according to hwmon spec.
- * - time   - milliseconds
+ * - voltage  - millivolts
  * - power  - microwatts
  * - curr   - milliamperes
  * - energy - microjoules
+ * - time   - milliseconds
  */
-#define SF_TIME		1000
+#define SF_VOLTAGE	1000
 #define SF_POWER	1000000
 #define SF_CURR		1000
 #define SF_ENERGY	1000000
-
-#define FIELD_SHIFT(__mask)				    \
-	(BUILD_BUG_ON_ZERO(!__builtin_constant_p(__mask)) + \
-		BUILD_BUG_ON_ZERO((__mask) == 0) +	    \
-		__bf_shf(__mask))
+#define SF_TIME		1000
 
 struct hwm_reg {
 	i915_reg_t gt_perf_status;
@@ -88,8 +86,7 @@ hwm_locked_with_pm_intel_uncore_rmw(struct hwm_drvdata *ddat,
  */
 static u64
 hwm_field_read_and_scale(struct hwm_drvdata *ddat, i915_reg_t rgadr,
-			 u32 field_msk, int field_shift,
-			 int nshift, u32 scale_factor)
+			 u32 field_msk, int nshift, u32 scale_factor)
 {
 	struct intel_uncore *uncore = ddat->uncore;
 	intel_wakeref_t wakeref;
@@ -98,15 +95,15 @@ hwm_field_read_and_scale(struct hwm_drvdata *ddat, i915_reg_t rgadr,
 	with_intel_runtime_pm(uncore->rpm, wakeref)
 		reg_value = intel_uncore_read(uncore, rgadr);
 
-	reg_value = (reg_value & field_msk) >> field_shift;
+	reg_value = REG_FIELD_GET(field_msk, reg_value);
 
 	return mul_u64_u32_shr(reg_value, scale_factor, nshift);
 }
 
 static void
 hwm_field_scale_and_write(struct hwm_drvdata *ddat, i915_reg_t rgadr,
-			  u32 field_msk, int field_shift,
-			  int nshift, unsigned int scale_factor, long lval)
+			  u32 field_msk, int nshift,
+			  unsigned int scale_factor, long lval)
 {
 	u32 nval;
 	u32 bits_to_clear;
@@ -116,7 +113,7 @@ hwm_field_scale_and_write(struct hwm_drvdata *ddat, i915_reg_t rgadr,
 	nval = DIV_ROUND_CLOSEST_ULL((u64)lval << nshift, scale_factor);
 
 	bits_to_clear = field_msk;
-	bits_to_set = (nval << field_shift) & field_msk;
+	bits_to_set = FIELD_PREP(field_msk, nval);
 
 	hwm_locked_with_pm_intel_uncore_rmw(ddat, rgadr,
 					    bits_to_clear, bits_to_set);
@@ -197,7 +194,6 @@ hwm_power1_rated_max_show(struct device *dev, struct device_attribute *attr,
 	u64 val = hwm_field_read_and_scale(ddat,
 					   hwmon->rg.pkg_power_sku,
 					   PKG_PKG_TDP,
-					   FIELD_SHIFT(PKG_PKG_TDP),
 					   hwmon->scl_shift_power,
 					   SF_POWER);
 
@@ -245,16 +241,21 @@ hwm_power1_max_interval_store(struct device *dev,
 {
 	struct hwm_drvdata *ddat = dev_get_drvdata(dev);
 	struct i915_hwmon *hwmon = ddat->hwmon;
-	long val, max_win, ret;
 	u32 x, y, rxy, x_w = 2; /* 2 bits */
 	intel_wakeref_t wakeref;
-	u64 tau4, r;
-
-#define PKG_MAX_WIN_DEFAULT 0x12ull
+	u64 tau4, r, max_win;
+	unsigned long val;
+	int ret;
 
 	ret = kstrtoul(buf, 0, &val);
 	if (ret)
 		return ret;
+
+	/*
+	 * Max HW supported tau in '1.x * power(2,y)' format, x = 0, y = 0x12
+	 * The hwmon->scl_shift_time default of 0xa results in a max tau of 256 seconds
+	 */
+#define PKG_MAX_WIN_DEFAULT 0x12ull
 
 	/* val must be < max in hwmon interface units */
 	if (i915_mmio_reg_valid(hwmon->rg.pkg_power_sku)) {
@@ -323,8 +324,8 @@ static umode_t hwm_attributes_visible(struct kobject *kobj,
 	else if (attr == &sensor_dev_attr_power1_rated_max.dev_attr.attr)
 		return i915_mmio_reg_valid(hwmon->rg.pkg_power_sku) ? attr->mode : 0;
 #endif
-	else
-		return 0;
+
+	return 0;
 }
 
 static const struct attribute_group hwm_attrgroup = {
@@ -339,7 +340,11 @@ static const struct attribute_group *hwm_groups[] = {
 
 static const struct hwmon_channel_info *hwm_info[] = {
 	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT),
+#ifdef POWER1_RATED_MAX_NOT_PRESENT
 	HWMON_CHANNEL_INFO(power, HWMON_P_MAX | HWMON_P_CRIT),
+#else
+	HWMON_CHANNEL_INFO(power, HWMON_P_MAX | HWMON_P_RATED_MAX | HWMON_P_CRIT),
+#endif
 	HWMON_CHANNEL_INFO(energy, HWMON_E_INPUT),
 	HWMON_CHANNEL_INFO(curr, HWMON_C_CRIT),
 	NULL
@@ -366,9 +371,11 @@ static int hwm_pcode_write_i1(struct drm_i915_private *i915, u32 uval)
 static umode_t
 hwm_in_is_visible(const struct hwm_drvdata *ddat, u32 attr)
 {
+	struct drm_i915_private *i915 = ddat->uncore->i915;
+
 	switch (attr) {
 	case hwmon_in_input:
-		return i915_mmio_reg_valid(ddat->hwmon->rg.gt_perf_status) ? 0444 : 0;
+		return IS_DG1(i915) || IS_DG2(i915) ? 0444 : 0;
 	default:
 		return 0;
 	}
@@ -385,7 +392,7 @@ hwm_in_read(struct hwm_drvdata *ddat, u32 attr, long *val)
 	case hwmon_in_input:
 		with_intel_runtime_pm(ddat->uncore->rpm, wakeref)
 			reg_value = intel_uncore_read(ddat->uncore, hwmon->rg.gt_perf_status);
-		/* In units of 2.5 millivolt */
+		/* HW register value in units of 2.5 millivolt */
 		*val = DIV_ROUND_CLOSEST(REG_FIELD_GET(GEN12_VOLTAGE_MASK, reg_value) * 25, 10);
 		return 0;
 	default:
@@ -403,6 +410,10 @@ hwm_power_is_visible(const struct hwm_drvdata *ddat, u32 attr, int chan)
 	switch (attr) {
 	case hwmon_power_max:
 		return i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit) ? 0664 : 0;
+#ifndef POWER1_RATED_MAX_NOT_PRESENT
+	case hwmon_power_rated_max:
+		return i915_mmio_reg_valid(hwmon->rg.pkg_power_sku) ? 0444 : 0;
+#endif
 	case hwmon_power_crit:
 		return (hwm_pcode_read_i1(i915, &uval) ||
 			!(uval & POWER_SETUP_I1_WATTS)) ? 0 : 0644;
@@ -411,22 +422,59 @@ hwm_power_is_visible(const struct hwm_drvdata *ddat, u32 attr, int chan)
 	}
 }
 
+/*
+ * HW allows arbitrary PL1 limits to be set but silently clamps these values to
+ * "typical but not guaranteed" min/max values in rg.pkg_power_sku. Follow the
+ * same pattern for sysfs, allow arbitrary PL1 limits to be set but display
+ * clamped values when read. Write/read I1 also follows the same pattern.
+ */
+static int
+hwm_power_max_read(struct hwm_drvdata *ddat, long *val)
+{
+	struct i915_hwmon *hwmon = ddat->hwmon;
+	intel_wakeref_t wakeref;
+	u64 r, min, max;
+
+	*val = hwm_field_read_and_scale(ddat,
+					hwmon->rg.pkg_rapl_limit,
+					PKG_PWR_LIM_1,
+					hwmon->scl_shift_power,
+					SF_POWER);
+
+	with_intel_runtime_pm(ddat->uncore->rpm, wakeref)
+		r = intel_uncore_read64(ddat->uncore, hwmon->rg.pkg_power_sku);
+	min = REG_FIELD_GET(PKG_MIN_PWR, r);
+	min = mul_u64_u32_shr(min, SF_POWER, hwmon->scl_shift_power);
+	max = REG_FIELD_GET(PKG_MAX_PWR, r);
+	max = mul_u64_u32_shr(max, SF_POWER, hwmon->scl_shift_power);
+
+	if (min && max)
+		*val = clamp_t(u64, *val, min, max);
+
+	return 0;
+}
+
 static int
 hwm_power_read(struct hwm_drvdata *ddat, u32 attr, int chan, long *val)
 {
+#ifndef POWER1_RATED_MAX_NOT_PRESENT
 	struct i915_hwmon *hwmon = ddat->hwmon;
+#endif
 	int ret;
 	u32 uval;
 
 	switch (attr) {
 	case hwmon_power_max:
+		return hwm_power_max_read(ddat, val);
+#ifndef POWER1_RATED_MAX_NOT_PRESENT
+	case hwmon_power_rated_max:
 		*val = hwm_field_read_and_scale(ddat,
-						hwmon->rg.pkg_rapl_limit,
-						PKG_PWR_LIM_1,
-						FIELD_SHIFT(PKG_PWR_LIM_1),
+						hwmon->rg.pkg_power_sku,
+						PKG_PKG_TDP,
 						hwmon->scl_shift_power,
 						SF_POWER);
 		return 0;
+#endif
 	case hwmon_power_crit:
 		ret = hwm_pcode_read_i1(ddat->uncore->i915, &uval);
 		if (ret)
@@ -452,7 +500,6 @@ hwm_power_write(struct hwm_drvdata *ddat, u32 attr, int chan, long val)
 		hwm_field_scale_and_write(ddat,
 					  hwmon->rg.pkg_rapl_limit,
 					  PKG_PWR_LIM_1,
-					  FIELD_SHIFT(PKG_PWR_LIM_1),
 					  hwmon->scl_shift_power,
 					  SF_POWER, val);
 		return 0;
@@ -655,15 +702,17 @@ hwm_get_preregistration_info(struct drm_i915_private *i915)
 	struct intel_uncore *uncore = &i915->uncore;
 	struct hwm_drvdata *ddat = &hwmon->ddat;
 	intel_wakeref_t wakeref;
-	u32 val_sku_unit;
+	u32 val_sku_unit = 0;
 	struct intel_gt *gt;
 	long energy;
 	int i;
 
+	/* Available for all Gen12+/dGfx */
+	hwmon->rg.gt_perf_status = GEN12_RPSTAT1;
+
 	if (IS_DG1(i915) || IS_DG2(i915)) {
-		hwmon->rg.gt_perf_status = GEN12_RPSTAT1;
 		hwmon->rg.pkg_power_sku_unit = PCU_PACKAGE_POWER_SKU_UNIT;
-		hwmon->rg.pkg_power_sku = INVALID_MMIO_REG;
+		hwmon->rg.pkg_power_sku = PCU_PACKAGE_POWER_SKU;
 		hwmon->rg.pkg_rapl_limit = PCU_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = PCU_PACKAGE_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = INVALID_MMIO_REG;
@@ -673,16 +722,13 @@ hwm_get_preregistration_info(struct drm_i915_private *i915)
 		hwmon->rg.pkg_rapl_limit = GT0_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = GT0_PLATFORM_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = GT0_PACKAGE_ENERGY_STATUS;
-		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 	} else if (IS_PONTEVECCHIO(i915)) {
 		hwmon->rg.pkg_power_sku_unit = PVC_GT0_PACKAGE_POWER_SKU_UNIT;
 		hwmon->rg.pkg_power_sku = PVC_GT0_PACKAGE_POWER_SKU;
 		hwmon->rg.pkg_rapl_limit = PVC_GT0_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = PVC_GT0_PLATFORM_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = PVC_GT0_PACKAGE_ENERGY_STATUS;
-		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 	} else {
-		hwmon->rg.gt_perf_status = INVALID_MMIO_REG;
 		hwmon->rg.pkg_power_sku_unit = INVALID_MMIO_REG;
 		hwmon->rg.pkg_power_sku = INVALID_MMIO_REG;
 		hwmon->rg.pkg_rapl_limit = INVALID_MMIO_REG;
@@ -694,17 +740,10 @@ hwm_get_preregistration_info(struct drm_i915_private *i915)
 		/*
 		 * The contents of register hwmon->rg.pkg_power_sku_unit do not change,
 		 * so read it once and store the shift values.
-		 *
-		 * For some platforms, this value is defined as available "for all
-		 * tiles", with the values consistent across all tiles.
-		 * In this case, use the tile 0 value for all.
 		 */
-		if (i915_mmio_reg_valid(hwmon->rg.pkg_power_sku_unit)) {
+		if (i915_mmio_reg_valid(hwmon->rg.pkg_power_sku_unit))
 			val_sku_unit = intel_uncore_read(uncore,
 							 hwmon->rg.pkg_power_sku_unit);
-		} else {
-			val_sku_unit = 0;
-		}
 	}
 
 	hwmon->scl_shift_power = REG_FIELD_GET(PKG_PWR_UNIT, val_sku_unit);
@@ -731,14 +770,13 @@ void i915_hwmon_register(struct drm_i915_private *i915)
 	struct hwm_drvdata *ddat;
 	struct hwm_drvdata *ddat_gt;
 	struct intel_gt *gt;
-	const char *ddname;
 	int i;
 
 	/* hwmon is available only for dGfx */
 	if (!IS_DGFX(i915))
 		return;
 
-	hwmon = kzalloc(sizeof(*hwmon), GFP_KERNEL);
+	hwmon = devm_kzalloc(dev, sizeof(*hwmon), GFP_KERNEL);
 	if (!hwmon)
 		return;
 
@@ -763,14 +801,12 @@ void i915_hwmon_register(struct drm_i915_private *i915)
 	hwm_get_preregistration_info(i915);
 
 	/*  hwmon_dev points to device hwmon<i> */
-	hwmon_dev = hwmon_device_register_with_info(dev, ddat->name,
-						    ddat,
-						    &hwm_chip_info,
-						    hwm_groups);
+	hwmon_dev = devm_hwmon_device_register_with_info(dev, ddat->name,
+							 ddat,
+							 &hwm_chip_info,
+							 hwm_groups);
 	if (IS_ERR(hwmon_dev)) {
-		mutex_destroy(&hwmon->hwmon_lock);
 		i915->hwmon = NULL;
-		kfree(hwmon);
 		return;
 	}
 
@@ -785,11 +821,10 @@ void i915_hwmon_register(struct drm_i915_private *i915)
 		if (!hwm_gt_is_visible(ddat_gt, hwmon_energy, hwmon_energy_input, 0))
 			continue;
 
-		ddname = ddat_gt->name;
-		hwmon_dev = hwmon_device_register_with_info(dev, ddname,
-							    ddat_gt,
-							    &hwm_gt_chip_info,
-							    NULL);
+		hwmon_dev = devm_hwmon_device_register_with_info(dev, ddat_gt->name,
+								 ddat_gt,
+								 &hwm_gt_chip_info,
+								 NULL);
 		if (!IS_ERR(hwmon_dev))
 			ddat_gt->hwmon_dev = hwmon_dev;
 	}
@@ -797,31 +832,5 @@ void i915_hwmon_register(struct drm_i915_private *i915)
 
 void i915_hwmon_unregister(struct drm_i915_private *i915)
 {
-	struct i915_hwmon *hwmon;
-	struct hwm_drvdata *ddat;
-	struct intel_gt *gt;
-	int i;
-
-	hwmon = fetch_and_zero(&i915->hwmon);
-	if (!hwmon)
-		return;
-
-	ddat = &hwmon->ddat;
-
-	for_each_gt(gt, i915, i) {
-		struct hwm_drvdata *ddat_gt;
-
-		ddat_gt = hwmon->ddat_gt + i;
-
-		if (ddat_gt->hwmon_dev) {
-			hwmon_device_unregister(ddat_gt->hwmon_dev);
-			ddat_gt->hwmon_dev = NULL;
-		}
-	}
-
-	if (ddat->hwmon_dev)
-		hwmon_device_unregister(ddat->hwmon_dev);
-
-	mutex_destroy(&hwmon->hwmon_lock);
-	kfree(hwmon);
+	fetch_and_zero(&i915->hwmon);
 }

@@ -211,6 +211,13 @@ out:
 
 static int pcode_init_wait(struct intel_uncore *uncore, int timeout_ms)
 {
+	if (__intel_wait_for_register_fw(uncore,
+					 GEN6_PCODE_MAILBOX,
+					 GEN6_PCODE_READY, 0,
+					 500, timeout_ms,
+					 NULL))
+		return -EPROBE_DEFER;
+
 	return skl_pcode_request(uncore,
 				 DG1_PCODE_STATUS,
 				 DG1_UNCORE_GET_INIT_STATUS,
