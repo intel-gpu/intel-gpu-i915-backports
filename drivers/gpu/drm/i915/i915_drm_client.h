@@ -32,14 +32,6 @@ struct i915_drm_clients {
 	struct kobject *root;
 };
 
-struct i915_drm_client;
-
-struct i915_drm_client_bo {
-	struct i915_drm_client *client;
-	bool shared;
-	struct list_head link;
-};
-
 struct i915_engine_busy_attribute {
 	struct device_attribute attr;
 	struct i915_drm_client *client;
@@ -50,8 +42,6 @@ struct i915_drm_client_name {
 	struct rcu_head rcu;
 	struct i915_drm_client *client;
 	struct pid *pid;
-	kuid_t uid;
-	kgid_t gid;
 	char name[];
 };
 
@@ -80,7 +70,9 @@ struct i915_drm_client {
 		struct device_attribute pid;
 		struct device_attribute name;
 		struct device_attribute created_devm_bytes;
+		struct device_attribute resident_created_devm_bytes;
 		struct device_attribute imported_devm_bytes;
+		struct device_attribute resident_imported_devm_bytes;
 		struct i915_engine_busy_attribute busy[MAX_ENGINE_CLASS + 1];
 	} attr;
 
@@ -89,7 +81,9 @@ struct i915_drm_client {
 	 */
 	atomic64_t past_runtime[MAX_ENGINE_CLASS + 1];
 	atomic64_t created_devm_bytes;
+	atomic64_t resident_created_devm_bytes;
 	atomic64_t imported_devm_bytes;
+	atomic64_t resident_imported_devm_bytes;
 
 	/*
 	 * A placeholder for all UUID Resources defined and registered for
@@ -140,11 +134,14 @@ struct i915_drm_client *i915_drm_client_add(struct i915_drm_clients *clients,
 int i915_drm_client_update(struct i915_drm_client *client,
 			   struct task_struct *task);
 
-int i915_drm_client_add_bo_sz(struct drm_file *file,
-			      struct drm_i915_gem_object *obj);
-
-void i915_drm_client_del_bo_sz(struct drm_file *file,
-			       struct drm_i915_gem_object *obj);
+void i915_drm_client_init_bo(struct drm_i915_gem_object *obj);
+int i915_drm_client_add_bo(struct i915_drm_client *client,
+			   struct drm_i915_gem_object *obj);
+void i915_drm_client_del_bo(struct i915_drm_client *client,
+			    struct drm_i915_gem_object *obj);
+void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
+				   bool resident);
+void i915_drm_client_fini_bo(struct drm_i915_gem_object *obj);
 
 static inline const struct i915_drm_client_name *
 __i915_drm_client_name(const struct i915_drm_client *client)

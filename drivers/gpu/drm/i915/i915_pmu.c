@@ -1134,21 +1134,27 @@ static void i915_pmu_enable(struct perf_event *event)
 	if (is_engine_event(event)) {
 		u8 sample = engine_event_sample(event);
 		struct intel_engine_cs *engine;
+		u8 class = engine_event_class(event);
+		u8 instance = engine_event_instance(event);
 
-		engine = intel_engine_lookup_user(i915,
-						  engine_event_class(event),
-						  engine_event_instance(event));
+		engine = intel_engine_lookup_user(i915, class, instance);
+		if (!drm_WARN_ONCE(&i915->drm,
+				   !engine,
+				   "Invalid engine event: { class:%d, inst:%d }\n",
+				   class, instance)) {
+			BUILD_BUG_ON(ARRAY_SIZE(engine->pmu.enable_count) !=
+				     I915_ENGINE_SAMPLE_COUNT);
+			BUILD_BUG_ON(ARRAY_SIZE(engine->pmu.sample) !=
+				     I915_ENGINE_SAMPLE_COUNT);
+			GEM_BUG_ON(sample >=
+				   ARRAY_SIZE(engine->pmu.enable_count));
+			GEM_BUG_ON(sample >=
+				   ARRAY_SIZE(engine->pmu.sample));
+			GEM_BUG_ON(engine->pmu.enable_count[sample] == ~0);
 
-		BUILD_BUG_ON(ARRAY_SIZE(engine->pmu.enable_count) !=
-			     I915_ENGINE_SAMPLE_COUNT);
-		BUILD_BUG_ON(ARRAY_SIZE(engine->pmu.sample) !=
-			     I915_ENGINE_SAMPLE_COUNT);
-		GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.enable_count));
-		GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.sample));
-		GEM_BUG_ON(engine->pmu.enable_count[sample] == ~0);
-
-		engine->pmu.enable |= BIT(sample);
-		engine->pmu.enable_count[sample]++;
+			engine->pmu.enable |= BIT(sample);
+			engine->pmu.enable_count[sample]++;
+		}
 	}
 
 	spin_unlock_irqrestore(&pmu->lock, flags);
@@ -1178,21 +1184,25 @@ static void i915_pmu_disable(struct perf_event *event)
 	if (is_engine_event(event)) {
 		u8 sample = engine_event_sample(event);
 		struct intel_engine_cs *engine;
+		u8 class = engine_event_class(event);
+		u8 instance = engine_event_instance(event);
 
-		engine = intel_engine_lookup_user(i915,
-						  engine_event_class(event),
-						  engine_event_instance(event));
+		engine = intel_engine_lookup_user(i915, class, instance);
+		if (!drm_WARN_ONCE(&i915->drm,
+				   !engine,
+				   "Invalid engine event: { class:%d, inst:%d }\n",
+				   class, instance)) {
+			GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.enable_count));
+			GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.sample));
+			GEM_BUG_ON(engine->pmu.enable_count[sample] == 0);
 
-		GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.enable_count));
-		GEM_BUG_ON(sample >= ARRAY_SIZE(engine->pmu.sample));
-		GEM_BUG_ON(engine->pmu.enable_count[sample] == 0);
-
-		/*
-		 * Decrement the reference count and clear the enabled
-		 * bitmask when the last listener on an event goes away.
-		 */
-		if (--engine->pmu.enable_count[sample] == 0)
-			engine->pmu.enable &= ~BIT(sample);
+			/*
+			 * Decrement the reference count and clear the enabled
+			 * bitmask when the last listener on an event goes away.
+			 */
+			if (--engine->pmu.enable_count[sample] == 0)
+				engine->pmu.enable &= ~BIT(sample);
+		}
 	}
 
 	GEM_BUG_ON(bit >= ARRAY_SIZE(pmu->enable_count));

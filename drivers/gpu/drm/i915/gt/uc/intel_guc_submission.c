@@ -1424,9 +1424,11 @@ static void guc_timestamp_ping(struct work_struct *wrk)
 
 	/*
 	 * Synchronize with gt reset to make sure the worker does not
-	 * corrupt the engine/guc stats.
+	 * corrupt the engine/guc stats. NB: can't actually block waiting
+	 * for a reset to complete as the reset requires flushing out
+	 * any running worker thread. So waiting would deadlock.
 	 */
-	ret = intel_gt_reset_trylock(gt, &srcu);
+	ret = intel_gt_reset_trylock_noretry(gt, &srcu);
 	if (ret)
 		return;
 
@@ -2062,7 +2064,7 @@ int intel_guc_submission_init(struct intel_guc *guc)
 	if (guc->submission_initialized)
 		return 0;
 
-	if (GET_UC_VER(guc) < MAKE_UC_VER(70, 0, 0)) {
+	if (GUC_SUBMIT_VER(guc) < MAKE_UC_VER(1, 0, 0)) {
 		ret = guc_lrc_desc_pool_create_v69(guc);
 		if (ret)
 			return ret;
@@ -2389,7 +2391,7 @@ out_unlock:
 	if (ret == -EAGAIN && --tries) {
 		if (PIN_GUC_ID_TRIES - tries > 1) {
 			unsigned int timeslice_shifted =
-				ce->engine->props.timeslice_duration_ms <<
+				ce->schedule_policy.timeslice_duration_ms <<
 				(PIN_GUC_ID_TRIES - tries - 2);
 			unsigned int max = min_t(unsigned int, 100,
 						 timeslice_shifted);
@@ -2568,7 +2570,7 @@ static int register_context(struct intel_context *ce, bool loop)
 	GEM_BUG_ON(intel_context_is_child(ce));
 	trace_intel_context_register(ce);
 
-	if (GET_UC_VER(guc) >= MAKE_UC_VER(70, 0, 0))
+	if (GUC_SUBMIT_VER(guc) >= MAKE_UC_VER(1, 0, 0))
 		ret = register_context_v70(guc, ce, loop);
 	else
 		ret = register_context_v69(guc, ce, loop);
@@ -2580,7 +2582,7 @@ static int register_context(struct intel_context *ce, bool loop)
 		set_context_registered(ce);
 		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
-		if (GET_UC_VER(guc) >= MAKE_UC_VER(70, 0, 0))
+		if (GUC_SUBMIT_VER(guc) >= MAKE_UC_VER(1, 0, 0))
 			guc_context_policy_init_v70(ce, loop);
 	}
 
@@ -2692,6 +2694,10 @@ static int guc_context_policy_init_v70(struct intel_context *ce, bool loop)
 	intel_context_update_schedule_policy(ce);
 
 	/* NB: For both of these, zero means disabled. */
+	GEM_BUG_ON(overflows_type(ce->schedule_policy.timeslice_duration_ms * 1000,
+				  execution_quantum));
+	GEM_BUG_ON(overflows_type(ce->schedule_policy.preempt_timeout_ms * 1000,
+				  preemption_timeout));
 	execution_quantum = ce->schedule_policy.timeslice_duration_ms * 1000;
 	preemption_timeout = ce->schedule_policy.preempt_timeout_ms * 1000;
 
@@ -2716,17 +2722,23 @@ static int guc_context_policy_init_v70(struct intel_context *ce, bool loop)
 	return ret;
 }
 
-static void guc_context_policy_init_v69(struct intel_engine_cs *engine,
+static void guc_context_policy_init_v69(struct intel_context *ce,
 					struct guc_lrc_desc_v69 *desc)
 {
+	struct intel_engine_cs *engine = ce->engine;
+
 	desc->policy_flags = 0;
 
 	if (engine->flags & I915_ENGINE_WANT_FORCED_PREEMPTION)
 		desc->policy_flags |= CONTEXT_POLICY_FLAG_PREEMPT_TO_IDLE_V69;
 
 	/* NB: For both of these, zero means disabled. */
-	desc->execution_quantum = engine->props.timeslice_duration_ms * 1000;
-	desc->preemption_timeout = engine->props.preempt_timeout_ms * 1000;
+	GEM_BUG_ON(overflows_type(ce->schedule_policy.timeslice_duration_ms * 1000,
+				  desc->execution_quantum));
+	GEM_BUG_ON(overflows_type(ce->schedule_policy.preempt_timeout_ms * 1000,
+				  desc->preemption_timeout));
+	desc->execution_quantum = ce->schedule_policy.timeslice_duration_ms * 1000;
+	desc->preemption_timeout = ce->schedule_policy.preempt_timeout_ms * 1000;
 }
 
 static u32 map_guc_prio_to_lrc_desc_prio(u8 prio)
@@ -2798,7 +2810,7 @@ static void prepare_context_registration_info_v69(struct intel_context *ce)
 	desc->hw_context_desc = ce->lrc.lrca;
 	desc->priority = ce->guc_state.prio;
 	desc->context_flags = CONTEXT_REGISTRATION_FLAG_KMD;
-	guc_context_policy_init_v69(engine, desc);
+	guc_context_policy_init_v69(ce, desc);
 
 	/*
 	 * If context is a parent, we need to register a process descriptor
@@ -2835,7 +2847,7 @@ static void prepare_context_registration_info_v69(struct intel_context *ce)
 			desc->hw_context_desc = child->lrc.lrca;
 			desc->priority = ce->guc_state.prio;
 			desc->context_flags = CONTEXT_REGISTRATION_FLAG_KMD;
-			guc_context_policy_init_v69(engine, desc);
+			guc_context_policy_init_v69(ce, desc);
 		}
 
 		clear_children_join_go_memory(ce);
@@ -3219,7 +3231,7 @@ static void __guc_context_set_preemption_timeout(struct intel_guc *guc,
 						 u16 guc_id,
 						 u32 preemption_timeout)
 {
-	if (GET_UC_VER(guc) >= MAKE_UC_VER(70, 0, 0)) {
+	if (GUC_SUBMIT_VER(guc) >= MAKE_UC_VER(1, 0, 0)) {
 		struct context_policy policy;
 
 		__guc_context_policy_start_klv(&policy, guc_id);
@@ -3600,7 +3612,7 @@ static int guc_context_alloc(struct intel_context *ce)
 static void __guc_context_set_prio(struct intel_guc *guc,
 				   struct intel_context *ce)
 {
-	if (GET_UC_VER(guc) >= MAKE_UC_VER(70, 0, 0)) {
+	if (GUC_SUBMIT_VER(guc) >= MAKE_UC_VER(1, 0, 0)) {
 		struct context_policy policy;
 
 		__guc_context_policy_start_klv(&policy, ce->guc_id.id);
@@ -4460,6 +4472,9 @@ static inline void guc_kernel_context_pin(struct intel_guc *guc,
 	if (context_guc_id_invalid(ce))
 		pin_guc_id(guc, ce);
 
+	if (!test_bit(CONTEXT_GUC_INIT, &ce->flags))
+		guc_context_init(ce);
+
 	try_context_registration(ce, true);
 }
 
@@ -4755,7 +4770,7 @@ static int guc_init_global_schedule_policy(struct intel_guc *guc)
 	intel_wakeref_t wakeref;
 	int ret = 0;
 
-	if (GET_UC_VER(guc) < MAKE_UC_VER(70, 3, 0))
+	if (GUC_SUBMIT_VER(guc) < MAKE_UC_VER(1, 1, 0))
 		return 0;
 
 	__guc_scheduling_policy_start_klv(&policy);
@@ -5322,6 +5337,9 @@ void intel_guc_submission_print_info(struct intel_guc *guc,
 	if (!sched_engine)
 		return;
 
+	drm_printf(p, "GuC Submission API Version: %d.%d.%d\n",
+		   guc->submission_version.major, guc->submission_version.minor,
+		   guc->submission_version.patch);
 	drm_printf(p, "GuC Number Outstanding Submission G2H: %u\n",
 		   atomic_read(&guc->outstanding_submission_g2h));
 	drm_printf(p, "GuC tasklet count: %u\n\n",

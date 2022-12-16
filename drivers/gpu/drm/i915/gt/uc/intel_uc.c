@@ -499,9 +499,9 @@ static void print_fw_ver(struct intel_uc *uc, struct intel_uc_fw *fw)
 
 	drm_info(&i915->drm, "%s firmware %s version %u.%u.%u\n",
 		 intel_uc_fw_type_repr(fw->type), fw->file_selected.path,
-		 fw->file_selected.major_ver,
-		 fw->file_selected.minor_ver,
-		 fw->file_selected.patch_ver);
+		 fw->file_selected.ver.major,
+		 fw->file_selected.ver.minor,
+		 fw->file_selected.ver.patch);
 }
 
 static int __uc_init_hw(struct intel_uc *uc)
@@ -751,7 +751,7 @@ static int __vf_uc_init_hw(struct intel_uc *uc)
 
 	dev_info(i915->drm.dev, "%s firmware %s version %u.%u %s:%s\n",
 		 intel_uc_fw_type_repr(INTEL_UC_FW_TYPE_GUC), guc->fw.file_selected.path,
-		 guc->fw.file_selected.major_ver, guc->fw.file_selected.minor_ver,
+		 guc->fw.file_selected.ver.major, guc->fw.file_selected.ver.minor,
 		 "submission", i915_iov_mode_to_string(IOV_MODE(i915)));
 
 	dev_info(i915->drm.dev, "%s firmware %s\n",

@@ -152,8 +152,6 @@ struct intel_engine_coredump {
 		u64 avg_runtime;
 
 		pid_t pid;
-		kuid_t uid;
-		kgid_t gid;
 		int active;
 		int guilty;
 		struct i915_sched_attr sched_attr;

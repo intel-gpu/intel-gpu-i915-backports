@@ -77,6 +77,8 @@ bool i915_debugger_context_guc_debugged(struct intel_context *context);
 long i915_debugger_attention_poll_interval(struct intel_engine_cs *engine);
 
 int i915_debugger_enable(struct drm_i915_private *i915, bool enable);
+int i915_debugger_allow(struct drm_i915_private *i915);
+int i915_debugger_disallow(struct drm_i915_private *i915);
 
 #else /* CPTCFG_DRM_I915_DEBUGGER */
 
@@ -152,6 +154,18 @@ static inline bool i915_debugger_context_guc_debugged(struct intel_context *cont
 
 static inline long
 i915_debugger_attention_poll_interval(struct intel_engine_cs *engine)
+{
+	return 0;
+}
+
+static inline int
+i915_debugger_allow(struct drm_i915_private *i915)
+{
+	return 0;
+}
+
+static inline int
+i915_debugger_disallow(struct drm_i915_private *i915)
 {
 	return 0;
 }

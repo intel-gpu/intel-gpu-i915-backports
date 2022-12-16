@@ -197,10 +197,7 @@ define filechk_osv_version_sles.h
         echo '#define SUSE_LOCALVERSION_MINOR $(EXTENDED_VERSION_Y)'; \
         echo '#define SUSE_LOCALVERSION(a,b) (((a) << 8) + (b))'; \
         echo '#define SUSE_LOCALVERSION_RELEASE_CODE \
-	$(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'; \
-	echo '#define SUSE_RELEASE_VERSION(a,b,c) (((a) << 16) + (b << 8) + (c))'; \
-	echo '#define SUSE_RELEASE_CODE \
-	$(shell expr $(SUSE_VERSION) \* 256 \* 256 + $(SUSE_PATCHLEVEL) \* 256 + $(SUSE_AUXRELEASE))'
+	$(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'
 endef
 
 define filechk_osv_version_rhel.h

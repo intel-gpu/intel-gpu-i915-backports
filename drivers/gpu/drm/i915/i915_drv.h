@@ -916,8 +916,13 @@ struct drm_i915_private {
 		spinlock_t lock; /* lock for list */
 		struct list_head list;
 		u64 session_count;
-		bool enable_eu_debug;
+
+		/* Allow to enable the debugger */
+		bool allow_eu_debug;
+		/* lock for enable_eu_debug */
 		struct mutex enable_eu_debug_lock;
+		/* debugger state */
+		bool enable_eu_debug;
 	} debuggers;
 #endif
 
@@ -1510,6 +1515,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	(INTEL_INFO(dev_priv)->has_semaphore_xehpsdv)
 #define HAS_OA_BPC_REPORTING(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_oa_bpc_reporting)
+#define HAS_OA_SLICE_CONTRIB_LIMITS(dev_priv) \
+	(INTEL_INFO(dev_priv)->has_oa_slice_contrib_limits)
 
 /*
  * Set this flag, when platform requires 64K GTT page sizes or larger for
@@ -1519,8 +1526,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
  */
 #define HAS_64K_PAGES(dev_priv) (INTEL_INFO(dev_priv)->has_64k_pages)
 #define HAS_OA_BUF_128M(dev_priv) (INTEL_INFO(dev_priv)->has_oa_buf_128m)
-#define HAS_OA_SLICE_CONTRIB_LIMITS(dev_priv) \
-	(INTEL_INFO(dev_priv)->has_oa_slice_contrib_limits)
 #define HAS_OA_MMIO_TRIGGER(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_oa_mmio_trigger)
 #define HAS_OAM(dev_priv) \

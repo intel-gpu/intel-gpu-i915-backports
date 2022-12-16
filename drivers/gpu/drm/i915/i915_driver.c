@@ -1213,7 +1213,6 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	unsigned int i;
 
 	i915_gem_driver_register(dev_priv);
-	i915_pmu_register(dev_priv);
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	intel_iaf_init_aux(dev_priv);
 #else
@@ -1233,18 +1232,18 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	i915_setup_sysfs(dev_priv);
 	i915_register_sysrq(dev_priv);
 
-	/* Depends on sysfs having been initialized */
-	i915_perf_register(dev_priv);
 
 	intel_spi_init(&dev_priv->spi, dev_priv);
 
 	for_each_gt(gt, dev_priv, i)
 		intel_gt_driver_register(gt);
 
-#if IS_REACHABLE(CONFIG_HWMON)
+	/* Depends on sysfs having been initialized */
+	i915_pmu_register(dev_priv);
+	i915_perf_register(dev_priv);
+
 	if (!IS_SRIOV_VF(dev_priv))
 		i915_hwmon_register(dev_priv);
-#endif
 
 	intel_display_driver_register(dev_priv);
 
@@ -1286,18 +1285,18 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 #endif
 	intel_display_driver_unregister(dev_priv);
 
-#if IS_REACHABLE(CONFIG_HWMON)
 	i915_hwmon_unregister(dev_priv);
-#endif
-	for_each_gt(gt, dev_priv, i)
-		intel_gt_driver_unregister(gt);
 
 	intel_iaf_remove(dev_priv);
 
 	intel_spi_fini(&dev_priv->spi);
 
 	i915_perf_unregister(dev_priv);
+	/* GT should be available until PMU is gone */
 	i915_pmu_unregister(dev_priv);
+
+	for_each_gt(gt, dev_priv, i)
+		intel_gt_driver_unregister(gt);
 
 	i915_unregister_sysrq(dev_priv);
 
