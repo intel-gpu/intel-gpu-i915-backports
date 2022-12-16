@@ -31,18 +31,16 @@ static int num_ccs_blocks(size_t size) {
  * copy all of the FlatCCS data (each instruction can only copy a maximum
  * of 1024 blocks of data).
  */
-static int num_ctrl_surf_copies(struct drm_i915_private *i915,
-				struct drm_i915_gem_object *obj)
+static int num_ctrl_surf_copies(struct drm_i915_private *i915, size_t copy_sz)
 {
 	if (!HAS_FLAT_CCS(i915))
 		return 0;
 
-	return DIV_ROUND_UP(num_ccs_blocks(obj->base.size),
-			    NUM_CCS_BLKS_PER_XFER);
+	return DIV_ROUND_UP(num_ccs_blocks(copy_sz), NUM_CCS_BLKS_PER_XFER);
 }
 
 phys_addr_t i915_calc_ctrl_surf_instr_dwords(struct drm_i915_private *i915,
-					     struct i915_vma *src)
+					     size_t copy_sz)
 {
 	phys_addr_t total_size;
 
@@ -50,7 +48,7 @@ phys_addr_t i915_calc_ctrl_surf_instr_dwords(struct drm_i915_private *i915,
 		return 0;
 
 	/* Each XY_CTRL_SURF_COPY_BLT command is 5 dwords in size. */
-	total_size = XY_CTRL_SURF_INSTR_SIZE * num_ctrl_surf_copies(i915, src->obj);
+	total_size = XY_CTRL_SURF_INSTR_SIZE * num_ctrl_surf_copies(i915, copy_sz);
 
 	/*
 	 * We will also need to add MI_FLUSH_DW instructions before and after
@@ -191,7 +189,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * object.
 	 */
 	if (!value && !stateless_comp)
-		size += i915_calc_ctrl_surf_instr_dwords(i915, vma) * sizeof(u32);
+		size += i915_calc_ctrl_surf_instr_dwords(i915, vma->obj->base.size) * sizeof(u32);
 
 	size = round_up(size, PAGE_SIZE);
 

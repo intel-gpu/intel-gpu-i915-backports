@@ -785,8 +785,23 @@ u32 *gen12_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 	 * Add an additional pipe control with CS stall when
 	 * EU stall sampling is enabled
 	 */
-	if (IS_PONTEVECCHIO(i915) && gt->eu_stall_cntr.stream)
-		cs = gen12_emit_pipe_control(cs, 0, PIPE_CONTROL_CS_STALL, 0);
+	if (IS_PONTEVECCHIO(i915)) {
+		if (gt->eu_stall_cntr.stream) {
+			cs = gen12_emit_pipe_control(cs, 0, PIPE_CONTROL_CS_STALL, 0);
+		} else {
+			/*
+			 * Reserve space for an additional pipe control as
+			 * EU stall sampling isn't enabled during driver load.
+			 * See measure_breadcrumb_dw()
+			 */
+			*cs++ = MI_NOOP;
+			*cs++ = MI_NOOP;
+			*cs++ = MI_NOOP;
+			*cs++ = MI_NOOP;
+			*cs++ = MI_NOOP;
+			*cs++ = MI_NOOP;
+		}
+	}
 
 	cs = gen12_emit_pipe_control(cs, PIPE_CONTROL0_HDC_PIPELINE_FLUSH, flags, 0);
 

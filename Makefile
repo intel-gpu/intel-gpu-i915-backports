@@ -43,16 +43,18 @@ BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | c
 # DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
 # for decoding this, Sample in the version file DII_KERNEL_TAG="DII_6365_prerelease"
 # for above example tag filtered out put will be 6365
-DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
 
+KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
+
+ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 BASE_KER_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 1-2 2> /dev/null)
 
 SLES_KERN_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d "-" -f 1 | cut -d '.' -f 1,2,3 2> /dev/null)
 
-KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
-
 SLES_BACKPORT_MAJOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 2 2> /dev/null)
 SLES_BACKPORT_MINOR = $(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 2 | cut -d '.' -f 3 2> /dev/null)
+endif
 
 ###
 # Easy method for doing a status message
@@ -88,6 +90,7 @@ define filechk
         fi
 endef
 
+ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 define filechk_osv_version.h
         echo '#define SLES_BACKPORT_MAJOR $(SLES_BACKPORT_MAJOR)'; \
         echo '#define SLES_BACKPORT_MINOR $(SLES_BACKPORT_MINOR)'; \
@@ -102,6 +105,7 @@ ifeq ($(SLES_KERN_VER), 5.3.18)
 	@echo 'BASE_KERNEL_NAME="$(BASE_KER_VER)"' >> versions
 endif
 	$(call filechk,osv_version.h)
+endif
 
 # VERSION is generated as 1.DII_TAG.BackportVersion
 VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
@@ -214,6 +218,7 @@ mrproper:
 	echo "| for more options."							;\
 	echo "\\--"									;\
 	false)
+ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 	@set -e ; test -f $(KERNEL_CONFIG) || (						\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
@@ -277,6 +282,7 @@ mrproper:
 		echo " done."								;\
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
+endif
 	@$(MAKE) -f Makefile.real "$@"
 
 .PHONY: defconfig-help

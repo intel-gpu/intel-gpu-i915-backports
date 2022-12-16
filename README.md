@@ -10,9 +10,9 @@ This repo is a code snapshot of particular version of backports and does not con
  suse/main will point to the currently supported version of SUSE® Linux® Enterprise Server.
  
  We will add a new branch suse/sles<x.y> whenever a version is deprecated or moved to the maintenance phase.
- 
- **NOTE: For sles 15sp4, please use [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) branch.**
 
+ **NOTE: For sles 15sp4, please use [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) branch.**
+  
 # Supported Version/kernel
   our current backport is based on **SUSE® Linux® Enterprise Server 15SP3**. We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the installation time.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/suse/main/versions)

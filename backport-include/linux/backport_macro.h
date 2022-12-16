@@ -12,6 +12,24 @@
 
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,10,0)
+
+/*
+ * 1967f71267742 hwmon: (core) Add support for rated attributes
+ */
+#define POWER1_RATED_MAX_NOT_PRESENT
+
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,12,0)
+
+/*
+ * 2d24dd5798d0 rbtree: Add generic add and find helpers
+ */
+#define RB_FIND_NOT_PRESENT
+
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,8,0)
 
 /*

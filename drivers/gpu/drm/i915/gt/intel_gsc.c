@@ -123,6 +123,7 @@ static void gsc_ext_om_destroy(struct intel_gsc_intf *intf)
 	i915_gem_object_put(obj);
 }
 
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 static void intel_gsc_forcewake_get(void *gsc)
 {
 	struct intel_uncore *uncore = gsc_to_gt(gsc)->uncore;
@@ -152,7 +153,6 @@ static void intel_gsc_forcewake_put(void *gsc)
  * @forcewake_needed: the GT forcewake is needed before operations
  * @lmem_size: size of extended operation memory for GSC, if required
  */
-#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 struct gsc_def {
 	const char *name;
 	unsigned long bar;

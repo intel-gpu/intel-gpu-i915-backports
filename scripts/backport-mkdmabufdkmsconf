@@ -59,7 +59,12 @@ $ST
        	num_cpu_cores()
        	{
 		if [ -x /usr/bin/nproc ]; then
-			nproc
+			np=`nproc`
+			if [ "\$np" -le "64" ]; then
+				echo "\$np"
+			else
+				echo "64"
+			fi
 		else
 			echo "1"
 		fi

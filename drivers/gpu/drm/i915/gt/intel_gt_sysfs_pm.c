@@ -1220,7 +1220,9 @@ static int intel_sysfs_rps_init_gt(struct intel_gt *gt, struct kobject *kobj)
 		ret = sysfs_create_file(kobj, &dev_attr_rapl_PL1_freq_mhz.attr.attr);
 		if (ret)
 			return ret;
+	}
 
+	if (IS_DGFX(gt->i915) && !IS_DG1(gt->i915) && !IS_DG2(gt->i915)) {
 		ret = sysfs_create_files(kobj, mem_freq_attrs);
 		if (ret)
 			return ret;
