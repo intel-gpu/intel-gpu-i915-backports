@@ -44,7 +44,7 @@ static inline unsigned long node_nr_slabs(struct kmem_cache_node *n)
 #define count_free  LINUX_I915_BACKPORT(count_free)
 #define node_nr_objs  LINUX_I915_BACKPORT(node_nr_objs)
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,16,0)
 static int count_free(struct page *page)
 {
 	return page->objects - page->inuse;
@@ -79,7 +79,7 @@ static inline unsigned int oo_objects(struct kmem_cache_order_objects x)
 
 #if defined(CONFIG_SLUB_DEBUG) || defined(CONFIG_SYSFS)
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,16,0)
 static unsigned long count_partial(struct kmem_cache_node *n,
 					int (*get_count)(struct page *))
 {

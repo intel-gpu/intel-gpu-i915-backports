@@ -3,7 +3,7 @@
 
 #include_next  <drm/drm_dp_helper.h>
 
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,16,0)
 #define drm_dp_get_adjust_tx_ffe_preset LINUX_I915_BACKPORT(drm_dp_get_adjust_tx_ffe_preset)
 u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 				   int lane);
@@ -67,6 +67,7 @@ int drm_edp_backlight_enable(struct drm_dp_aux *aux, const struct drm_edp_backli
 #define drm_edp_backlight_disable LINUX_I915_BACKPORT(drm_edp_backlight_disable)
 int drm_edp_backlight_disable(struct drm_dp_aux *aux, const struct drm_edp_backlight_info *bl);
 
+#define drm_edp_backlight_supported LINUX_I915_BACKPORT(drm_edp_backlight_supported)
 static inline bool
 drm_edp_backlight_supported(const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE])
 {

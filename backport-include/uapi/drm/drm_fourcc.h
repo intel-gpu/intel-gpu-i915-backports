@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#if LINUX_VERSION_IN_RANGE(5,17,0, 5,18,0)
+#if LINUX_VERSION_IN_RANGE(5,15,0, 5,18,0)
 /**
  * DRM_FORMAT_MAX_PLANES - maximum number of planes a DRM format can have
  */

@@ -132,6 +132,12 @@
 
 #endif
 
+#if LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0)
+
+#define MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+
+#endif
+
 #if LINUX_VERSION_IS_GEQ(5,14,0)
 
 /* 

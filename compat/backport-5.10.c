@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2021 Intel Corporation
  */
-#if LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0)
+#if LINUX_VERSION_IN_RANGE(5,14,0, 5,16,0)
 
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_print.h>
