@@ -1,5 +1,0 @@
-SRIOV VF enabling
-D:	Michal Wajdeczko <michal.wajdeczko@intel.com>
-M:	Michal Wajdeczko <michal.wajdeczko@intel.com>
-T:	drm/i915/vf
-END
