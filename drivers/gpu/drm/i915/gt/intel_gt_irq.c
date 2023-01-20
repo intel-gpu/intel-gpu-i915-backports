@@ -261,8 +261,12 @@ void gen11_gt_irq_reset(struct intel_gt *gt)
 	intel_uncore_write(uncore, GEN11_CRYPTO_RSVD_INTR_ENABLE, 0);
 	intel_uncore_write(uncore, GEN11_CRYPTO_RSVD_INTR_MASK,  ~0);
 
-	if (gt->i915->intel_iaf.present)
-		intel_uncore_write64_fw(uncore, CPORT_MBDB_INT_ENABLE_MASK, 0);
+	if (gt->i915->intel_iaf.present) {
+		mutex_lock(&gt->i915->intel_iaf.power_mutex);
+		if (gt->i915->intel_iaf.power_enabled)
+			intel_uncore_write64_fw(uncore, CPORT_MBDB_INT_ENABLE_MASK, 0);
+		mutex_unlock(&gt->i915->intel_iaf.power_mutex);
+	}
 }
 
 void gen11_gt_irq_postinstall(struct intel_gt *gt)

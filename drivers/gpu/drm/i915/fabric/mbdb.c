@@ -135,7 +135,7 @@ static void inbox_full_enqueue(struct mbdb *mbdb)
 	 * destroy path is sufficient to guarantee the inbox worker is dead
 	 */
 	if (!READ_ONCE(mbdb->stopping))
-		queue_work(system_unbound_wq, &mbdb->inbox_full);
+		queue_work(iaf_unbound_wq, &mbdb->inbox_full);
 }
 
 static void inbox_timer_fn(struct timer_list *timer)
@@ -412,7 +412,7 @@ u64 mbdb_get_mbox_comm_errors(struct fsubdev *sd)
 {
 	u64 *counters = sd->mbdb->counters;
 
-	return counters[TIMEDOUT_REQUESTS] + counters[HANDLED_RECEIVED_REQUESTS] +
+	return counters[TIMEDOUT_REQUESTS] + counters[UNHANDLED_RECEIVED_REQUESTS] +
 	       counters[ERROR_RESPONSES] + counters[UNMATCHED_RESPONSES] +
 	       counters[TIMEDOUT_RESPONSES];
 }

@@ -52,7 +52,7 @@ static void rem_schedule(void)
 		delay = min_delay;
 	}
 
-	queue_delayed_work(system_unbound_wq, &rem_routing_work, delay);
+	queue_delayed_work(iaf_unbound_wq, &rem_routing_work, delay);
 
 	rem_state = REM_STATE_QUEUED;
 }
@@ -242,7 +242,7 @@ module_param_cb(routing_disable, &disable_ops, &routing_disable, 0600);
 MODULE_PARM_DESC(routing_disable, "Disables routing engine from automatically running (default: N) (bool)");
 
 module_param(routing_min_delay_ms, ulong, 0600);
-MODULE_PARM_DESC(routing_min_delay_ms, "Minimum delay for scheduling the routing engine in microseconds (default: 1000)");
+MODULE_PARM_DESC(routing_min_delay_ms, "Minimum delay for scheduling the routing engine in milliseconds (default: 1000)");
 
 module_param(routing_max_delay_ms, ulong, 0600);
-MODULE_PARM_DESC(routing_max_delay_ms, "Maximum delay for scheduling the routing engine in microseconds (default: 10000)");
+MODULE_PARM_DESC(routing_max_delay_ms, "Maximum delay for scheduling the routing engine in milliseconds (default: 10000)");
