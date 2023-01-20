@@ -2887,7 +2887,7 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 
 	for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
 		raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
-			      (HARDWARE_ERROR_MAX < 1) + 1);
+			      (HARDWARE_ERROR_MAX << 1) + 1);
 
 }
 
@@ -3135,22 +3135,26 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 	case HARDWARE_ERROR_CORRECTABLE:
 		gen12_gt_correctable_hw_error_stats_update(gt, errstat);
 		if (HAS_GT_ERROR_VECTORS(gt->i915)) {
-			unsigned long errstat_vctr;
-			int i;
 			bool error = false;
+			int i;
 
 			for (i = 0; i < ERR_STAT_GT_COR_VCTR_LEN; i++) {
-				errstat_vctr = raw_reg_read(regs, ERR_STAT_GT_COR_VCTR_REG(i));
-				if (!errstat_vctr)
-					continue;
-				error = true;
+				const char *name = "Unknown";
+				u32 vctr;
 
-				if (i < ERR_STAT_GT_VCTR2) {
-					log_gt_hw_err(gt, "SubSlice CORRECTABLE ERROR\n");
-				} else {
-					log_gt_hw_err(gt, "L3 BANK CORRECTABLE ERROR\n");
-				}
-				raw_reg_write(regs, ERR_STAT_GT_COR_VCTR_REG(i), errstat_vctr);
+				vctr = raw_reg_read(regs, ERR_STAT_GT_COR_VCTR_REG(i));
+				if (!vctr)
+					continue;
+
+				if (i < ERR_STAT_GT_VCTR2)
+					name = "SubSlice";
+				else
+					name = "L3 BANK";
+
+				raw_reg_write(regs, ERR_STAT_GT_COR_VCTR_REG(i), vctr);
+				log_gt_hw_err(gt, "%s CORRECTABLE ERROR, ERR_STAT_GT_CORRECTABLE_%d:0x%08x\n",
+					      name, i, vctr);
+				error = true;
 			}
 			if (!error)
 				log_gt_hw_err(gt, "UNKNOWN CORRECTABLE ERROR\n");
@@ -3168,37 +3172,42 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 	case HARDWARE_ERROR_FATAL:
 		gen12_gt_fatal_hw_error_stats_update(gt, errstat);
 		if (HAS_GT_ERROR_VECTORS(gt->i915)) {
-			unsigned long errstat_vctr;
-			int i;
 			bool error = false;
+			int i;
 
 			for (i = 0; i < ERR_STAT_GT_FATAL_VCTR_LEN; i++) {
-				errstat_vctr = raw_reg_read(regs, ERR_STAT_GT_FATAL_VCTR_REG(i));
-				if (!errstat_vctr)
+				const char *name = "Unknown";
+				u32 vctr;
+
+				vctr = raw_reg_read(regs, ERR_STAT_GT_FATAL_VCTR_REG(i));
+				if (!vctr)
 					continue;
-				error = true;
+
 				/* i represents the vector register index */
 				switch (i) {
 				case ERR_STAT_GT_VCTR0:
 				case ERR_STAT_GT_VCTR1:
-					log_gt_hw_err(gt, "SubSlice FATAL ERROR\n");
+					name = "SubSlice";
 					break;
 				case ERR_STAT_GT_VCTR2:
 				case ERR_STAT_GT_VCTR3:
-					log_gt_hw_err(gt, "L3 BANK FATAL ERROR\n");
+					name = "L3 BANK";
 					break;
 				case ERR_STAT_GT_VCTR6:
-					gt->errors.hw[INTEL_GT_HW_ERROR_FAT_TLB] += hweight16(errstat_vctr) ;
-					log_gt_hw_err(gt, "TLB FATAL ERROR\n");
+					gt->errors.hw[INTEL_GT_HW_ERROR_FAT_TLB] += hweight16(vctr);
+					name = "TLB";
 					break;
 				case ERR_STAT_GT_VCTR7:
-					gt->errors.hw[INTEL_GT_HW_ERROR_FAT_L3_FABRIC] += hweight8(errstat_vctr);
-					log_gt_hw_err(gt, "L3 FABRIC FATAL ERROR\n");
+					gt->errors.hw[INTEL_GT_HW_ERROR_FAT_L3_FABRIC] += hweight8(vctr);
+					name = "L3 FABRIC";
 					break;
 				default:
 					break;
 				}
-				raw_reg_write(regs, ERR_STAT_GT_FATAL_VCTR_REG(i), errstat_vctr);
+				raw_reg_write(regs, ERR_STAT_GT_FATAL_VCTR_REG(i), vctr);
+				log_gt_hw_err(gt, "%s FATAL ERROR, ERR_STAT_GT_FATAL_%d:0x%08x\n",
+					      name, i, vctr);
+				error = true;
 			}
 			if (!error)
 				log_gt_hw_err(gt, "UNKNOWN FATAL ERROR\n");
@@ -4775,7 +4784,7 @@ static void clear_all_soc_errors(struct intel_gt *gt)
 
 	for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
 		raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
-			      (HARDWARE_ERROR_MAX < 1) + 1);
+			      (HARDWARE_ERROR_MAX << 1) + 1);
 }
 
 static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)

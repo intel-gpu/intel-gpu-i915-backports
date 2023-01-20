@@ -168,7 +168,7 @@ struct mbdb_serdes_eq_info {
 	s8 cdr_intg;
 	s16 cdr_ph_err_flt;
 	u64 cntr_ilv_excl_msk;
-	s32 ppm;
+	s32 pphm;
 	u8 cntr_sh;
 	u8 hcntr[5];
 	s16 cntr_ch_est[5];

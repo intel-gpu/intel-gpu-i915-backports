@@ -59,6 +59,8 @@ LIST_HEAD(routable_list);
 
 static enum iaf_startup_mode param_startup_mode = STARTUP_MODE_DEFAULT;
 
+struct workqueue_struct *iaf_unbound_wq;
+
 static const char *startup_mode_name(enum iaf_startup_mode m)
 {
 	switch (m) {
@@ -106,12 +108,21 @@ static const struct kernel_param_ops startup_mode_ops = {
 };
 
 module_param_cb(startup_mode, &startup_mode_ops, &param_startup_mode, 0600);
+#if IS_ENABLED(CPTCFG_IAF_DEBUG_STARTUP)
 MODULE_PARM_DESC(startup_mode,
 		 "Operational mode for newly probed devices:\n"
 		 "\t\t - default: Operate normally\n"
 		 "\t\t - preload: Assume firmware/ini has already been loaded\n"
 		 "\t\t - debug:   Do not interact with the device outside of L8sim debug netlink\n"
-		 "\t\t - fwdebug: As per debug, but load firmawre during device init");
+		 "\t\t - fwdebug: As per debug, but load firmware during device init"
+		 );
+#else
+MODULE_PARM_DESC(startup_mode,
+		 "Operational mode for newly probed devices:\n"
+		 "\t\t - default: Operate normally\n"
+		 "\t\t - preload: Assume firmware/ini has already been loaded"
+		 );
+#endif
 
 /* BPS Link Speed indexed by bit # as returned by fls set in port info fields */
 static u64 bps_link_speeds[] = {
@@ -857,8 +868,10 @@ static int iaf_probe(struct platform_device *pdev)
 	}
 
 	err = iaf_mei_start(dev);
-	if (err)
+	if (err) {
+		dev_err(fdev_dev(dev), "failed to register as MEI user\n");
 		goto add_error;
+	}
 
 	/* read link config before initializing FW since it may also use GPIO */
 	read_gpio_link_config_pins(dev);
@@ -941,7 +954,7 @@ static void __exit iaf_unload_module(void)
 
 	fw_abort();
 
-	flush_workqueue(system_unbound_wq);
+	flush_workqueue(iaf_unbound_wq);
 
 	/* notify routing event manager to minimize delays since we are shutting down */
 	rem_shutting_down();
@@ -959,6 +972,8 @@ static void __exit iaf_unload_module(void)
 
 	remove_debugfs_root_nodes();
 
+	destroy_workqueue(iaf_unbound_wq);
+
 	pr_notice("%s Unloaded\n", MODULEDETAILS);
 }
 module_exit(iaf_unload_module);
@@ -969,15 +984,21 @@ module_exit(iaf_unload_module);
  */
 static int __init iaf_load_module(void)
 {
+	int err;
+
 	pr_notice("Initializing %s\n", MODULEDETAILS);
 	pr_debug("Built for Linux Kernel %s\n", UTS_RELEASE);
+
+	iaf_unbound_wq = alloc_workqueue("iaf_unbound_wq", WQ_UNBOUND, WQ_UNBOUND_MAX_ACTIVE);
+	if (!iaf_unbound_wq)
+		return -ENOMEM;
 
 	create_debugfs_root_nodes();
 
 #if IS_ENABLED(CPTCFG_IAF_DEBUG_SELFTESTS)
 	if (selftests_run()) {
-		remove_debugfs_root_nodes();
-		return -ENODEV;
+		err = -ENODEV;
+		goto exit;
 	}
 #endif
 
@@ -985,14 +1006,30 @@ static int __init iaf_load_module(void)
 	rem_init();
 	mbdb_init_module();
 	mbox_init_module();
-	nl_init();
+	err = nl_init();
+	if (err)
+		goto exit;
 	fw_init_module();
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
-	return auxiliary_driver_register(&iaf_driver);
+	err = auxiliary_driver_register(&iaf_driver);
+	if (err)
+		pr_err("Cannot register with auxiliary bus\n");
 #else
-	return platform_driver_register(&iaf_driver);
+	err = platform_driver_register(&iaf_driver);
+	if (err)
+		pr_err("Cannot register with platform bus\n");
 #endif
+
+exit:
+	if (err) {
+		mbox_term_module();
+		nl_term();
+		remove_debugfs_root_nodes();
+		destroy_workqueue(iaf_unbound_wq);
+	}
+
+	return err;
 }
 module_init(iaf_load_module);
 

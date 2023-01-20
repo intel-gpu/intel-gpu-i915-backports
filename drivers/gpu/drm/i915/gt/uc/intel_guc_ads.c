@@ -19,7 +19,7 @@
 #include "i915_drv.h"
 
 /* UM Queue parameters: */
-#define GUC_UM_QUEUE_SIZE	(SZ_64K)
+#define GUC_UM_QUEUE_SIZE	(SZ_4K)
 #define GUC_PAGE_RES_TIMEOUT_US	(-1)
 
 /*
