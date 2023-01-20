@@ -111,6 +111,17 @@ bool i915_error_injected(void);
 #define range_overflows_end_t(type, start, size, max) \
 	range_overflows_end((type)(start), (type)(size), (type)(max))
 
+#ifndef check_round_up_overflow
+#define check_round_up_overflow(a, b, d) __must_check_overflow(({		\
+	typeof(a) __a = (a);							\
+	typeof(b) __b = (b);							\
+	typeof(d) __d = (d);							\
+	(void) (&__a == &__b);							\
+	(void) (&__a == __d);							\
+	(*__d = __a) && __builtin_add_overflow((__a-1) | (__b-1), 1, __d);	\
+}))
+#endif
+
 /* Note we don't consider signbits :| */
 #define overflows_type(x, T) \
 	(sizeof(x) > sizeof(T) && (x) >> BITS_PER_TYPE(T))

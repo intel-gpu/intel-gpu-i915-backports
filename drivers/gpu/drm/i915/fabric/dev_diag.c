@@ -27,7 +27,7 @@
 static int fw_version_open(struct inode *inode, struct file *file)
 {
 	struct fsubdev *sd = inode->i_private;
-	struct mbdb_op_fw_version_rsp *fw_version = &sd->fw_version;
+	struct mbdb_op_fw_version_rsp fw_version = {};
 	struct fw_version_info {
 		struct debugfs_blob_wrapper blob;
 		char buf[FW_VERSION_BUF_SIZE];
@@ -41,9 +41,9 @@ static int fw_version_open(struct inode *inode, struct file *file)
 	if (!sd)
 		return -EINVAL;
 
-	ret = ops_fw_version(sd, fw_version);
+	ret = ops_fw_version(sd, &fw_version);
 	if (ret == MBOX_RSP_STATUS_SEQ_NO_ERROR)
-		ret = ops_fw_version(sd, fw_version);
+		ret = ops_fw_version(sd, &fw_version);
 	if (ret)
 		return ret;
 
@@ -55,25 +55,25 @@ static int fw_version_open(struct inode *inode, struct file *file)
 	buf = info->buf;
 
 	buf_offset = scnprintf(buf, buf_size, "MBox Version  : %d\n",
-			       fw_version->mbox_version);
+			       fw_version.mbox_version);
 	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
 				"Environment   : %s%s\n",
-				(fw_version->environment & FW_VERSION_ENV_BIT)
+				(fw_version.environment & FW_VERSION_ENV_BIT)
 				? "run-time" : "bootloader",
-				(fw_version->environment & FW_VERSION_INIT_BIT)
+				(fw_version.environment & FW_VERSION_INIT_BIT)
 				? ", ready" : "");
 	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
 				"FW Version    : %s\n",
-				fw_version->fw_version_string);
+				fw_version.fw_version_string);
 	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset,
 				"OPs supported : 0x");
 
-	for (element_count = ARRAY_SIZE(fw_version->supported_opcodes) - 1;
+	for (element_count = ARRAY_SIZE(fw_version.supported_opcodes) - 1;
 	     element_count >= 0; element_count--)
 		buf_offset +=
 			scnprintf(buf + buf_offset, buf_size - buf_offset,
 				  "%016lx",
-				  fw_version->supported_opcodes[element_count]);
+				  fw_version.supported_opcodes[element_count]);
 
 	buf_offset += scnprintf(buf + buf_offset, buf_size - buf_offset, "\n");
 

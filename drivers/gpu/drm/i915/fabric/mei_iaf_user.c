@@ -97,7 +97,7 @@ static u16 get_updated_svn(struct fdev *dev)
  */
 static void queue_commit_svn_work(struct fdev *dev)
 {
-	queue_work(system_unbound_wq, &dev->mei_work);
+	queue_work(iaf_unbound_wq, &dev->mei_work);
 }
 
 /**

@@ -586,6 +586,17 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	if (GRAPHICS_VER(i915) == 12 && (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE))
 		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE;
 
+	/*
+	 * With their many BCS engines (and CCS engines), PVC systems can overload
+	 * the PCIe bus. That results in all operations crawling along. Forward
+	 * progress is made but it can take a while to complete each individual
+	 * copy. So need to bump the pre-emption timeout to compensate and not
+	 * kill such copies off prematurely.
+	 */
+	if (GRAPHICS_VER(i915) == 12 && engine->class == COPY_ENGINE_CLASS &&
+	    (hweight32(BCS_MASK(gt)) >= 2))
+		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE_COPY;
+
 	/* Cap properties according to any system limits */
 #define CLAMP_PROP(field) \
 	do { \

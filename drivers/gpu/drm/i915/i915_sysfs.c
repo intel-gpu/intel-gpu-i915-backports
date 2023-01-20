@@ -42,6 +42,7 @@
 #include "i915_drv.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_sysfs.h"
+#include "intel_pcode.h"
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
 #include "i915_debugger.h"
@@ -365,6 +366,24 @@ prelim_csc_unique_id_show(struct device *kdev, struct device_attribute *attr, ch
 }
 
 static I915_DEVICE_ATTR_RO(prelim_csc_unique_id, prelim_csc_unique_id_show);
+
+static ssize_t
+prelim_lmem_max_bw_Mbps_show(struct device *dev, struct device_attribute *attr, char *buff)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+	u32 val;
+	int err;
+
+	err = snb_pcode_read_p(&i915->uncore, PCODE_MEMORY_CONFIG,
+			       MEMORY_CONFIG_SUBCOMMAND_READ_MAX_BANDWIDTH,
+			       0x0, &val);
+	if (err)
+		return err;
+
+	return sysfs_emit(buff, "%u\n", val);
+}
+
+static I915_DEVICE_ATTR_RO(prelim_lmem_max_bw_Mbps, prelim_lmem_max_bw_Mbps_show);
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t i915_driver_error_show(struct kobject *kobj,
@@ -702,6 +721,12 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_csc_unique_id.attr.attr);
 		if (ret)
 			drm_warn(&dev_priv->drm, "UID sysfs setup failed\n");
+	}
+
+	if (HAS_LMEM_MAX_BW(dev_priv)) {
+		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_lmem_max_bw_Mbps.attr.attr);
+		if (ret)
+			drm_warn(&dev_priv->drm, "Failed to create maximum memory bandwidth sysfs file\n");
 	}
 
 	if (HAS_LMEM(dev_priv)) {

@@ -244,7 +244,6 @@
 
 /*
  * 8af2fa888eaf0e Show slab cache occupancy for debug
- *
  */
 #define BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT
 
@@ -396,7 +395,6 @@
 
 /*
  * 132ccc0422814203ca64 INTEL_DII: drm/i915/spi: refcount spi object lifetime
- *
  */
 #define BPM_MTD_PART_NOT_PRESENT
 #endif

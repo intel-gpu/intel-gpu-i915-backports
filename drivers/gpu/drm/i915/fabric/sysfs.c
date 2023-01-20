@@ -65,6 +65,27 @@ static ssize_t sd_failure_show(struct device *dev, struct device_attribute *attr
 	return sysfs_emit(buf, "%u\n", test_bit(SD_ERROR_FAILED, sd->errors));
 }
 
+static ssize_t firmware_version_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mbdb_op_fw_version_rsp fw_version = {};
+	struct fsubdev *sd;
+	int err;
+
+	sd = container_of(attr, struct fsubdev, firmware_version);
+
+	err = ops_fw_version(sd, &fw_version);
+	if (err == MBOX_RSP_STATUS_SEQ_NO_ERROR)
+		err = ops_fw_version(sd, &fw_version);
+	if (err) {
+		sd_err(sd, "unable to query firmware version\n");
+		return -EIO;
+	}
+
+	return sysfs_emit(buf, "%.*s\n", (int)sizeof(fw_version.fw_version_string),
+			  (fw_version.environment & FW_VERSION_ENV_BIT) ?
+			  (char *)fw_version.fw_version_string : "UNKNOWN");
+}
+
 static ssize_t iaf_fabric_id_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
@@ -105,24 +126,6 @@ static ssize_t pscbin_version_show(struct device *dev,
 static DEVICE_ATTR_RO(pscbin_brand);
 static DEVICE_ATTR_RO(pscbin_product);
 static DEVICE_ATTR_RO(pscbin_version);
-
-static ssize_t firmware_version_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	struct fsubdev *sd;
-	struct fdev *fdev = dev_get_drvdata(dev);
-
-	sd = fdev->sd;
-	if (!sd)
-		return -EINVAL;
-
-	return sysfs_emit(buf, "%.*s\n",
-			  (int)sizeof(sd->fw_version.fw_version_string),
-			  (sd->fw_version.environment & FW_VERSION_ENV_BIT) ?
-			  (char *)sd->fw_version.fw_version_string : "UNKNOWN");
-}
-
-static DEVICE_ATTR_RO(firmware_version);
 
 static ssize_t min_svn_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -172,7 +175,6 @@ static const struct attribute *iaf_attrs[] = {
 	&dev_attr_pscbin_brand.attr,
 	&dev_attr_pscbin_product.attr,
 	&dev_attr_pscbin_version.attr,
-	&dev_attr_firmware_version.attr,
 	NULL,
 };
 
@@ -256,8 +258,15 @@ static int iaf_sysfs_add_sd_nodes(struct fsubdev *sd)
 	}
 
 	err = iaf_sysfs_add_node("sd_failure", 0400, sd_failure_show, &sd->sd_failure, sd->kobj);
-	if (err)
+	if (err) {
 		sd_warn(sd, "Failed to add sysfs node %s for %s\n", "sd_failure", sd->name);
+		goto exit;
+	}
+
+	err = iaf_sysfs_add_node("firmware_version", 0444, firmware_version_show,
+				 &sd->firmware_version, sd->kobj);
+	if (err)
+		sd_warn(sd, "Failed to add sysfs node %s for %s\n", "firmware_version", sd->name);
 
 exit:
 	return err;
