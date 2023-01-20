@@ -223,7 +223,7 @@ static int rpipe_write(struct fsubdev *sd)
 	u32 port_mask = ~(~(u32)0 << sd->extended_port_cnt);
 	int err;
 
-	rpipe_buf = kmalloc(rpipe_size, GFP_KERNEL);
+	rpipe_buf = kzalloc(rpipe_size, GFP_KERNEL);
 	if (!rpipe_buf)
 		return -ENOMEM;
 

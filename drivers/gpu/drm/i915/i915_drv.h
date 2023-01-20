@@ -919,6 +919,8 @@ struct drm_i915_private {
 		struct list_head list;
 		u64 session_count;
 
+		struct mutex eu_flush_lock;
+
 		/* Allow to enable the debugger */
 		bool allow_eu_debug;
 		/* lock for enable_eu_debug */
@@ -1545,6 +1547,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_REGION(i915, i) (INTEL_INFO(i915)->memory_regions & (i))
 #define HAS_LMEM(i915) HAS_REGION(i915, REGION_LMEM)
 #define HAS_LMEM_SR(i915) (INTEL_INFO(i915)->has_lmem_sr)
+#define HAS_LMEM_MAX_BW(dev_priv) (INTEL_INFO(dev_priv)->has_lmem_max_bandwidth)
 #define HAS_REMOTE_TILES(dev_priv)   (INTEL_INFO(dev_priv)->has_remote_tiles)
 #define HAS_IAF(dev_priv)   (INTEL_INFO(dev_priv)->has_iaf)
 

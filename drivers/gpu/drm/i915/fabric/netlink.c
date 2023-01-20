@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2021 Intel Corporation.
+ * Copyright(c) 2019 - 2022 Intel Corporation.
  *
  */
 
@@ -1242,31 +1242,41 @@ static struct genl_family nl_iaf_family = {
 	.parallel_ops = true,
 };
 
+static bool nl_iaf_family_registered;
+
 /**
  * nl_term - Unregisters the interface between kernel and user space.
  */
 void nl_term(void)
 {
+	if (!nl_iaf_family_registered)
+		return;
+
 	if (genl_unregister_family(&nl_iaf_family))
-		pr_err("Unable to unregister family\n");
+		pr_err("Unable to unregister netlink family %s\n", nl_iaf_family.name);
+	else
+		nl_iaf_family_registered = false;
 }
 
 /**
  * nl_init - Registers the interface between kernel and user space.
  *
- * Return: Zero on success, -EIO when unsuccessful.
+ * Return: genl_register_family result
  */
 int nl_init(void)
 {
+	int err;
+
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_policy) != _IAF_ATTR_COUNT);
 
 	/* IAF_CMD_OP_UNSPEC is not included so-1 */
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_cmds) != _IAF_CMD_OP_COUNT - 1);
 
-	if (genl_register_family(&nl_iaf_family)) {
-		pr_err("Cannot register iaf family\n");
-		return -EIO;
-	}
+	err = genl_register_family(&nl_iaf_family);
+	if (err)
+		pr_err("Cannot register iaf family %s\n", nl_iaf_family.name);
+	else
+		nl_iaf_family_registered = true;
 
-	return 0;
+	return err;
 }

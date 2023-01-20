@@ -1184,9 +1184,10 @@ static void gen12_invalidate_inst_cache(struct drm_i915_private *i915)
 
 static int engine_rcu_async_flush(struct intel_engine_cs *engine,
 				  u32 mask,
-				  unsigned int timeout_us)
+				  unsigned int timeout_ms)
 {
-	struct intel_uncore * const uncore = engine->gt->uncore;
+	struct drm_i915_private *i915 = engine->i915;
+	struct intel_uncore * const uncore = engine->uncore;
 	const i915_reg_t psmi_addr = RING_PSMI_CTL(engine->mmio_base);
 	const enum forcewake_domains fw = FORCEWAKE_GT | FORCEWAKE_RENDER;
 	u32 psmi_ctrl;
@@ -1203,17 +1204,18 @@ static int engine_rcu_async_flush(struct intel_engine_cs *engine,
 	if (!intel_engine_pm_get_if_awake(engine))
 		return 0;
 
-	spin_lock_irq(&uncore->lock);
-	intel_uncore_forcewake_get__locked(uncore, fw);
+	intel_uncore_forcewake_get(uncore, fw);
+	mutex_lock(&i915->debuggers.eu_flush_lock);
 
 	psmi_ctrl = intel_uncore_read_fw(uncore, psmi_addr);
 	if (!(psmi_ctrl & GEN6_PSMI_SLEEP_MSG_DISABLE))
 		intel_uncore_write_fw(uncore, psmi_addr,
 				      _MASKED_BIT_ENABLE(GEN6_PSMI_SLEEP_MSG_DISABLE));
 
-	ret = __intel_wait_for_register_fw(uncore, GEN12_RCU_ASYNC_FLUSH,
-					   GEN12_RCU_ASYNC_FLUSH_IN_PROGRESS, 0,
-					   timeout_us, 0, NULL);
+	/* We dont track time spent here so worst case is 2 * timeout_ms */
+	ret = intel_wait_for_register_fw(uncore, GEN12_RCU_ASYNC_FLUSH,
+					 GEN12_RCU_ASYNC_FLUSH_IN_PROGRESS, 0,
+					 timeout_ms);
 	if (ret)
 		goto out;
 
@@ -1225,17 +1227,17 @@ static int engine_rcu_async_flush(struct intel_engine_cs *engine,
 
 	intel_uncore_write_fw(uncore, GEN12_RCU_ASYNC_FLUSH, mask);
 
-	ret = __intel_wait_for_register_fw(uncore, GEN12_RCU_ASYNC_FLUSH,
-					   GEN12_RCU_ASYNC_FLUSH_IN_PROGRESS, 0,
-					   timeout_us, 0, NULL);
+	ret = intel_wait_for_register_fw(uncore, GEN12_RCU_ASYNC_FLUSH,
+					 GEN12_RCU_ASYNC_FLUSH_IN_PROGRESS, 0,
+					 timeout_ms);
+
 out:
 	if (!(psmi_ctrl & GEN6_PSMI_SLEEP_MSG_DISABLE))
 		intel_uncore_write_fw(uncore, psmi_addr,
 				      _MASKED_BIT_DISABLE(GEN6_PSMI_SLEEP_MSG_DISABLE));
 
-	intel_uncore_forcewake_put__locked(uncore, fw);
-	spin_unlock_irq(&uncore->lock);
-
+	mutex_unlock(&i915->debuggers.eu_flush_lock);
+	intel_uncore_forcewake_put(uncore, fw);
 	intel_engine_pm_put(engine);
 
 	return ret;
@@ -1243,24 +1245,18 @@ out:
 
 static void dg2_flush_engines(struct drm_i915_private *i915, u32 mask)
 {
-	const unsigned int timeout_us = 5000;
-	struct intel_gt *gt;
-	int gt_id;
+	const unsigned int timeout_ms = 500;
+	struct intel_engine_cs *engine;
 
-	for_each_gt(gt, i915, gt_id) {
-		struct intel_engine_cs *engine;
-		int engine_id;
+	for_each_uabi_engine(engine, i915) {
+		if (!(engine->class == COMPUTE_CLASS ||
+		      engine->class == RENDER_CLASS))
+			continue;
 
-		for_each_engine(engine, gt, engine_id) {
-			if (engine->class == COMPUTE_CLASS ||
-			    engine->class == RENDER_CLASS) {
-				if (engine_rcu_async_flush(engine,
-							   mask, timeout_us))
-					drm_warn(&i915->drm,
-						 "debugger: eu invalidation timeout for gt%d, engine %s\n",
-						 gt_id, engine->name);
-			}
-		}
+		if (engine_rcu_async_flush(engine, mask, timeout_ms))
+			drm_warn(&i915->drm,
+				 "debugger: EU invalidation timeout for engine %s\n",
+				 engine->name);
 	}
 }
 
@@ -2984,6 +2980,9 @@ void i915_debugger_init(struct drm_i915_private *i915)
 {
 	spin_lock_init(&i915->debuggers.lock);
 	INIT_LIST_HEAD(&i915->debuggers.list);
+
+	mutex_init(&i915->debuggers.eu_flush_lock);
+
 	mutex_init(&i915->debuggers.enable_eu_debug_lock);
 
 	i915->debuggers.enable_eu_debug = !!i915->params.debug_eu;
@@ -2999,6 +2998,8 @@ void i915_debugger_init(struct drm_i915_private *i915)
 void i915_debugger_fini(struct drm_i915_private *i915)
 {
 	GEM_WARN_ON(!list_empty(&i915->debuggers.list));
+
+	mutex_destroy(&i915->debuggers.eu_flush_lock);
 }
 
 void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,

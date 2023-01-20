@@ -470,7 +470,7 @@ static void pf_teardown_prelim_link(struct drm_i915_private *i915)
 			  SRIOV_KOBJ_HOME_NAME + sizeof(SRIOV_PRELIMINARY) - 1);
 }
 
-static void pf_welcome(struct drm_i915_private* i915)
+static void pf_welcome(struct drm_i915_private *i915)
 {
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
 	struct i915_sriov_pf *pf = &i915->sriov.pf;
@@ -482,10 +482,17 @@ static void pf_welcome(struct drm_i915_private* i915)
 	GEM_BUG_ON(!i915->sriov.pf.sysfs.kobjs);
 }
 
-static void pf_goodbye(struct drm_i915_private* i915)
+static void pf_goodbye(struct drm_i915_private *i915)
 {
 	GEM_WARN_ON(i915->sriov.pf.sysfs.kobjs);
 	GEM_WARN_ON(i915->sriov.pf.sysfs.home);
+}
+
+static bool pf_initialized(struct drm_i915_private *i915)
+{
+	GEM_WARN_ON(i915->sriov.pf.sysfs.home && !i915->sriov.pf.sysfs.kobjs);
+	GEM_WARN_ON(!i915->sriov.pf.sysfs.home && i915->sriov.pf.sysfs.kobjs);
+	return i915->sriov.pf.sysfs.home;
 }
 
 /**
@@ -540,6 +547,9 @@ failed:
 void i915_sriov_sysfs_teardown(struct drm_i915_private *i915)
 {
 	if (!IS_SRIOV_PF(i915))
+		return;
+
+	if (!pf_initialized(i915))
 		return;
 
 	pf_teardown_prelim_link(i915);

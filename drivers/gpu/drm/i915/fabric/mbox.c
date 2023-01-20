@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2020 - 2021 Intel Corporation.
+ * Copyright(c) 2020 - 2022 Intel Corporation.
  *
  */
 
@@ -410,26 +410,31 @@ static struct genl_family mbox_iaf_family = {
 	.parallel_ops = true,
 };
 
+static bool mbox_iaf_family_registered;
+
 /**
  * mbox_term_module - Unregisters the interface between kernel and user space.
  */
 void mbox_term_module(void)
 {
+	if (!mbox_iaf_family_registered)
+		return;
+
 	if (genl_unregister_family(&mbox_iaf_family))
-		pr_err("Unable to unregister family\n");
+		pr_err("Unable to unregister netlink family %s\n", mbox_iaf_family.name);
+	else
+		mbox_iaf_family_registered = false;
 }
 
 /**
  * mbox_init_module - Registers the interface between kernel and user space.
- *
- * Return: Zero on success, -EIO when unsuccessful.
  */
-int mbox_init_module(void)
+void mbox_init_module(void)
 {
 	if (genl_register_family(&mbox_iaf_family)) {
-		pr_err("Cannot register mbox_iaf family\n");
-		return -EIO;
+		pr_err("Cannot register mbox_iaf family %s\n", mbox_iaf_family.name);
+		pr_info("Green Link interface is not available\n");
+	} else {
+		mbox_iaf_family_registered = true;
 	}
-
-	return 0;
 }

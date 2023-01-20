@@ -538,7 +538,8 @@ int intel_iov_provisioning_set_spare_ggtt(struct intel_iov *iov, u64 size)
 	if (size && size < pf_get_min_spare_ggtt(iov))
 		return -EINVAL;
 
-	size = round_up(size, pf_get_ggtt_alignment(iov));
+	if (check_round_up_overflow(size, pf_get_ggtt_alignment(iov), &size))
+		size = U64_MAX;
 
 	mutex_lock(pf_provisioning_mutex(iov));
 	iov->pf.provisioning.spare.ggtt_size = size;
@@ -678,7 +679,8 @@ static int pf_provision_ggtt(struct intel_iov *iov, unsigned int id, u64 size)
 	if (iov_to_gt(iov)->type == GT_MEDIA)
 		return -ENODEV;
 
-	size = round_up(size, alignment);
+	if (check_round_up_overflow(size, alignment, &size))
+		return -EOVERFLOW;
 
 	if (drm_mm_node_allocated(node)) {
 		if (size == node->size)
@@ -1902,7 +1904,8 @@ static int pf_provision_lmem(struct intel_iov *iov, unsigned int id, u64 size)
 	struct intel_gt *gt = iov_to_gt(iov);
 	int err, ret;
 
-	size = round_up(size, SZ_2M);
+	if (check_round_up_overflow(size, (u64)SZ_2M, &size))
+		return -EOVERFLOW;
 
 	if (obj) {
 		if (size == obj->base.size) {

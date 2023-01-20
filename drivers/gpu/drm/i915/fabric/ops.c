@@ -893,7 +893,7 @@ int ops_fw_start(struct fsubdev *sd)
 {
 	const u8 op_code = MBOX_OP_CODE_FW_START;
 	struct mbdb_ibox *ibox;
-	u32 result;
+	u32 result = 0;
 	u64 cw;
 
 	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, 0, &result, sizeof(result), &cw,

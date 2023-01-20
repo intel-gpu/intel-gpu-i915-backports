@@ -320,6 +320,12 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	if (GEM_WARN_ON(!vm))
 		return -ENOENT;
 
+	if (!i915_vm_page_fault_enabled(vm)) {
+		err = -ENOENT;
+		print_recoverable_fault(info, "PF in non-faultable vm", err);
+		return err;
+	}
+
 	vma = i915_find_vma(vm, info->page_addr);
 	if (!vma) {
 		if (vm->has_scratch) {
