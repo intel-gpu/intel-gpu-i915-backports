@@ -945,65 +945,6 @@ static int query_hwconfig_blob(struct drm_i915_private *i915,
 	return hwconfig->size;
 }
 
-static int query_hw_ip_version(struct drm_i915_private *i915,
-			       struct drm_i915_query_item *query_item)
-{
-	struct drm_i915_query_hw_ip_version ipver;
-	struct intel_engine_cs *engine;
-	int ret;
-
-	ret = copy_query_item(&ipver, sizeof(ipver), sizeof(ipver), query_item);
-	if (ret != 0)
-		return ret;
-
-	/*
-	 * Flags (both inside the query item and inside the ip version
-	 * structure) are reserved for future expansion; we don't accept any
-	 * yet.
-	 */
-	if (ipver.flags != 0 || query_item->flags != 0)
-		return -EINVAL;
-
-	engine = intel_engine_lookup_user(i915,
-					  ipver.engine.engine_class,
-					  ipver.engine.engine_instance);
-	if (!engine)
-		return -EINVAL;
-
-	switch (engine->uabi_class) {
-		default:
-			MISSING_CASE(engine->class);
-			fallthrough;
-		case I915_ENGINE_CLASS_RENDER:
-		case I915_ENGINE_CLASS_COMPUTE:
-		case I915_ENGINE_CLASS_COPY:
-			ipver.arch = RUNTIME_INFO(i915)->graphics.ver;
-			ipver.release = RUNTIME_INFO(i915)->graphics.rel;
-			ipver.stepping = RUNTIME_INFO(i915)->graphics.step;
-			break;
-		case I915_ENGINE_CLASS_VIDEO:
-		case I915_ENGINE_CLASS_VIDEO_ENHANCE:
-			ipver.arch = RUNTIME_INFO(i915)->media.ver;
-			ipver.release = RUNTIME_INFO(i915)->media.rel;
-			ipver.stepping = RUNTIME_INFO(i915)->media.step;
-			break;
-	}
-
-	/*
-	 * For pre-GMD_ID platforms, RUNTIME_INFO's 'step' fields are just
-	 * i915-internal enum values that we don't want to expose as ABI.
-	 * We'll always return 0 for the stepping on those platforms.
-	 */
-	if (!HAS_GMD_ID(i915))
-		ipver.stepping = 0;
-
-	if (copy_to_user(u64_to_user_ptr(query_item->data_ptr), &ipver,
-			 sizeof(ipver)))
-		return -EFAULT;
-
-	return sizeof(ipver);
-}
-
 static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 				       struct drm_i915_query_item *query_item)
 {
@@ -1155,7 +1096,6 @@ static i915_query_funcs_table i915_query_funcs[] = {
 	query_memregion_info,
 	query_hwconfig_blob,
 	query_geometry_subslices,
-	query_hw_ip_version,
 };
 
 static i915_query_funcs_table i915_query_funcs_prelim[] = {

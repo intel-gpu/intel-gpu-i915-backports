@@ -879,6 +879,9 @@ int intel_iov_sysfs_setup(struct intel_iov *iov)
 	if (!intel_iov_is_pf(iov))
 		return 0;
 
+	if (pf_in_error(iov))
+		return 0;
+
 	err = pf_setup_provisioning(iov);
 	if (unlikely(err))
 		goto failed;

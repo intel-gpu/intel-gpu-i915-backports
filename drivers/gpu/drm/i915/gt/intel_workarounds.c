@@ -3240,6 +3240,7 @@ add_render_compute_tuning_settings(struct drm_i915_private *i915,
 	if (IS_PONTEVECCHIO(i915)) {
 		wa_write(wal, XEHPC_L3SCRUB,
 			 SCRUB_CL_DWNGRADE_SHARED | SCRUB_RATE_4B_PER_CLK);
+		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_HOSTCACHEEN);
 	}
 
 	if (IS_DG2(i915)) {
@@ -3337,6 +3338,9 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		 * Wa_22015475538:dg2
 		 */
 		wa_write_or(wal, LSC_CHICKEN_BIT_0_UDW, DIS_CHAIN_2XSIMD8);
+
+		/* Wa_18017747507:dg2 */
+		wa_masked_en(wal, VFG_PREEMPTION_CHICKEN, POLYGON_TRIFAN_LINELOOP_DISABLE);
 	}
 
 	if (!RCS_MASK(engine->gt)) {
@@ -3418,17 +3422,6 @@ static void engine_debug_init_workarounds(struct intel_engine_cs *engine,
 	if (IS_PONTEVECCHIO(i915))
 		wa_masked_en(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
 
-	/*
-	 * Wa_16017028706 Disable load balancing
-	 *
-	 * FIXME: EU debug current implementation does not allow
-	 *        fixed slice mode. Only enable this workaround
-	 *        when EU debug is not enabled for now.
-	 */
-	if (IS_PONTEVECCHIO(i915))
-		wa_masked_dis(wal, GEN12_RCU_MODE,
-			      XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
-
 	if (engine->class == COMPUTE_CLASS)
 		return;
 
@@ -3459,17 +3452,6 @@ static void engine_debug_fini_workarounds(struct intel_engine_cs *engine,
 	/* Wa_14015527279:pvc */
 	if (IS_PONTEVECCHIO(i915))
 		wa_masked_dis(wal, GEN7_ROW_CHICKEN2, XEHPC_DISABLE_BTB);
-
-	/*
-	 * Wa_16017028706 Disable load balancing
-	 *
-	 * FIXME: EU debug current implementation does not allow
-	 *        fixed slice mode. Only enable this workaround
-	 *        when EU debug is not enabled for now.
-	 */
-	if (IS_PONTEVECCHIO(i915))
-		wa_masked_en(wal, GEN12_RCU_MODE,
-			     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
 
 	if (engine->class == COMPUTE_CLASS)
 		return;

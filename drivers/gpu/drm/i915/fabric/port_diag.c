@@ -534,7 +534,7 @@ static void serdes_eqinfo_process(char *buf, size_t *buf_offset, size_t buf_size
 
 	PRINT_LANES_EQINFO_FIELD_16("cdrPhErrFlt", cdr_ph_err_flt, buf, buf_offset, buf_size);
 	PRINT_LANES_EQINFO_FIELD_64("cntrIlvExclMsk", cntr_ilv_excl_msk, buf, buf_offset, buf_size);
-	PRINT_LANES_EQINFO_FIELD_32("ppm", ppm, buf, buf_offset, buf_size);
+	PRINT_LANES_EQINFO_FIELD_32("pphm", pphm, buf, buf_offset, buf_size);
 	PRINT_LANES_EQINFO_FIELD_8("cntrSh", cntr_sh, buf, buf_offset, buf_size);
 
 	for (i = 0; i < ARRAY_SIZE(eq_info[0].hcntr); i++) {
@@ -1045,7 +1045,7 @@ static int read_tx_tunings(struct fport *port, u32 link_speed, u32 idx[LANES])
 
 static int write_tx_tunings(struct fport *port, u32 link_speed, const u32 idx[LANES])
 {
-	struct port_var_data var_data;
+	struct port_var_data var_data = {};
 	int err;
 	int i;
 

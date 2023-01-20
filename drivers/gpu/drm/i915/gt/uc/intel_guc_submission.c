@@ -144,6 +144,9 @@ guc_create_parallel(struct intel_engine_cs **engines,
 		    unsigned int num_siblings,
 		    unsigned int width);
 
+static void
+__unwind_incomplete_requests(struct intel_context *ce);
+
 #define GUC_REQUEST_SIZE 64 /* bytes */
 
 /*
@@ -1036,7 +1039,7 @@ add_request:
 		ret = guc_add_request(guc, last);
 		if (unlikely(ret == -EPIPE)) {
 			goto deadlk;
-		} else if (ret == -EBUSY) {
+		} else if (ret == -EBUSY || ret == -EREMCHG) {
 			goto schedule_tasklet;
 		} else if (ret != 0) {
 			GEM_WARN_ON(ret);	/* Unexpected */
@@ -1656,6 +1659,60 @@ void intel_guc_submission_reset_prepare(struct intel_guc *guc)
 	scrub_guc_desc_for_outstanding_g2h(guc);
 }
 
+/*
+ * guc_submission_unwind_all - stop waiting for unfinished requests,
+ *    add them back to scheduled requests list instead
+ *
+ * If hardware reset, or migration, prevents any submitted requests from
+ * completing, this function can be used to un-submit the requests in
+ * flight, and schedule them to be later submitted again.
+ */
+static void guc_submission_unwind_all(struct intel_guc *guc)
+{
+	struct intel_context *ce;
+	unsigned long index;
+	unsigned long flags;
+
+	xa_lock_irqsave(&guc->context_lookup, flags);
+	xa_for_each(&guc->context_lookup, index, ce) {
+		if (!kref_get_unless_zero(&ce->ref))
+			continue;
+
+		xa_unlock(&guc->context_lookup);
+
+		if (intel_context_is_pinned(ce) &&
+		    !intel_context_is_child(ce))
+			__unwind_incomplete_requests(ce);
+
+		intel_context_put(ce);
+
+		xa_lock(&guc->context_lookup);
+	}
+	xa_unlock_irqrestore(&guc->context_lookup, flags);
+}
+
+/**
+ * intel_guc_submission_pause - temporarily stop GuC submission mechanics
+ */
+void intel_guc_submission_pause(struct intel_guc *guc)
+{
+	struct i915_sched_engine * const sched_engine = guc->sched_engine;
+
+	tasklet_disable_nosync(&sched_engine->tasklet);
+	guc_submission_unwind_all(guc);
+}
+
+/**
+ * intel_guc_submission_restore - unpause GuC submission mechanics
+ */
+void intel_guc_submission_restore(struct intel_guc *guc)
+{
+	struct i915_sched_engine * const sched_engine = guc->sched_engine;
+
+	tasklet_enable(&sched_engine->tasklet);
+	tasklet_hi_schedule(&sched_engine->tasklet);
+}
+
 static struct intel_engine_cs *
 guc_virtual_get_sibling(struct intel_engine_cs *ve, unsigned int sibling)
 {
@@ -2208,8 +2265,13 @@ static void guc_submit_request(struct i915_request *rq)
 
 	if (need_tasklet(guc, rq))
 		queue_request(sched_engine, rq, rq_prio(rq));
-	else if (guc_bypass_tasklet_submit(guc, rq) == -EBUSY)
-		tasklet_hi_schedule(&sched_engine->tasklet);
+	else {
+		int ret;
+
+		ret = guc_bypass_tasklet_submit(guc, rq);
+		if (ret == -EBUSY || ret == -EREMCHG)
+			tasklet_hi_schedule(&sched_engine->tasklet);
+	}
 
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
 }
