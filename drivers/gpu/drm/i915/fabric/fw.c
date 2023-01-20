@@ -270,12 +270,12 @@ MODULE_PARM_DESC(psc_file_override,
 #define ROPTION_DEFAULT_STR  __stringify(ROPTION_DEFAULT)
 
 #if IS_ENABLED(CPTCFG_IAF_DEBUG_FIRMWARE_ROPTION)
-static u32 firmware_roption = ROPTION_DEFAULT;
+static unsigned int firmware_roption = ROPTION_DEFAULT;
 module_param(firmware_roption, uint, 0600);
 MODULE_PARM_DESC(firmware_roption,
 		 "Set the firmware roption debug register (default: " ROPTION_DEFAULT_STR ")");
 #else
-static const u32 firmware_roption = ROPTION_DEFAULT;
+static const unsigned int firmware_roption = ROPTION_DEFAULT;
 #endif
 
 /*
@@ -563,16 +563,18 @@ static int verify_fw(struct fdev *dev)
 	    data + css_hdr->size * sizeof(u32) != segment_data_end ||
 	    css_hdr->key_size != KEY_SIZE_SHA384 ||
 	    css_hdr->modulus_size != MODULUS_SIZE_SHA384 ||
-	    css_hdr->exponent_size != EXPONENT_SIZE_SHA384)
-		dev_warn(fdev_dev(dev),
-			 "Mismatched size information in fw header\n");
+	    css_hdr->exponent_size != EXPONENT_SIZE_SHA384) {
+		dev_err(fdev_dev(dev), "Mismatched size information in fw header\n");
+		return -EINVAL;
+	}
 
 	dev_dbg(fdev_dev(dev), "Firmware available, dated: %08x\n",
 		css_hdr->date);
 
-	if (!valid_bcd_date(css_hdr->date))
-		dev_warn(fdev_dev(dev),
-			 "Invalid date format in firmware header\n");
+	if (css_hdr->date == 0 || !valid_bcd_date(css_hdr->date)) {
+		dev_err(fdev_dev(dev), "Invalid date format in firmware header\n");
+		return -EINVAL;
+	}
 
 	if (css_hdr->module_id & MODULE_ID_DEBUG_SIGNED)
 		dev_dbg(fdev_dev(dev), "Firmware is debug signed\n");
@@ -789,7 +791,7 @@ static int set_roption(struct fsubdev *sd)
 
 static int copy_ini_to_device(struct fsubdev *sd, const u8 *data, size_t size)
 {
-	struct mbdb_op_ini_table_load_req ini;
+	struct mbdb_op_ini_table_load_req ini = {};
 	u32 *end = (u32 *)(data + size);
 	u32 *dword = (u32 *)data;
 	u32 op_err = OP_ERR_NOT_SET;
@@ -1852,7 +1854,7 @@ int load_and_init_fw(struct fdev *dev)
 	queue_load_and_init_all_subdevs(dev);
 
 	fdev_get_early(dev);
-	queue_work(system_unbound_wq, &dev->psc.work);
+	queue_work(iaf_unbound_wq, &dev->psc.work);
 
 	return 0;
 }
@@ -1884,7 +1886,7 @@ static void queue_load_and_init_all_subdevs(struct fdev *dev)
 		 */
 		fdev_get_early(dev);
 
-		queue_work(system_unbound_wq, &dev->sd[i].fw_work);
+		queue_work(iaf_unbound_wq, &dev->sd[i].fw_work);
 	}
 }
 

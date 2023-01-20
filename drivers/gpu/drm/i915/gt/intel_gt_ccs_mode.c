@@ -137,16 +137,6 @@ static bool needs_ccs_mode(struct intel_gt *gt)
 	if (!IS_PONTEVECCHIO(gt->i915))
 		return false;
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	/*
-	 * FIXME: EU debug current implementation does not allow
-	 *        fixed slice mode. Only enable this workaround
-	 *        when EU debug is not enabled for now.
-	 */
-	if (gt->i915->debuggers.enable_eu_debug)
-		return false;
-#endif
-
 	/*
 	 * Only the PF knows the entire system state and can deduce the
 	 * appropriate engine:slice mapping. However, the PF doesn't know

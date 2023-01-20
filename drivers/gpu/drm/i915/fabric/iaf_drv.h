@@ -502,44 +502,61 @@ struct fport_routing {
  * struct fport - Per-port state, used for fabric ports only
  * @sd: link to containing subdevice
  * @portinfo: link to relevant &struct fsubdev.portinfo_op.per_portinfo
- * @state: driver-abstracted high level view of port state
- * @controls: atomically-accessed control bits to enable/disable features
- * @routed: indicates whether this port was included in the routing logic
- * @flap_check_since: timestamp indicating beginning of current flap-check leaky bucket period
- * @bounce_count: number of bounces in current flap-check leaky bucket period
- * for the most recent successful sweep
+ * @kobj: kobject for this port's sysfs directory node
+ * @link_failures: attribute for link_failures sysfs file
+ * @link_degrades: attribute for link_degrades sysfs file
  * @lpn: logical port number in firmware
  * @port_type: type of port (hardwired, QFSP, etc.)
  * @log_state: firmware logical state (DOWN, INIT, ARMED, ACTIVE)
  * @phys_state: firmware physical state (DISABLED, POLLING, ..., LINKUP)
+ * @state: driver-abstracted high level view of port state
+ * @bounce_count: number of bounces in current flap-check leaky bucket period for the most recent
+ *		  successful sweep
+ * @flap_check_since: timestamp indicating beginning of current flap-check leaky bucket period
  * @linkup_timer: to verify port link up timeliness
  * @routing: routing-specific data
- * @kobj: kobject for this port's sysfs directory node
- * @link_failures: attribute for link_failures sysfs file
- * @link_degrades: attribute for link_degrades sysfs file
  * @unroute_link: Entry into the list of ports that are waiting to be unrouted.
+ * @controls: atomically-accessed control bits to enable/disable features
+ * @routed: indicates whether this port was included in the routing logic
  *
- * Used throughout the driver (mostly by the port manager and routing engine)
- * to maintain information about a given port.
+ * Used throughout the driver (mostly by the port manager and routing engine) to maintain
+ * information about a given port.
+ *
+ * Protection mechanisms used outside of init/destroy are documented inline. A single PM thread per
+ * tile manages port-related data for that tile: per-tile data written by PM is written by a single
+ * thread and not accessed by any other PM threads.
  */
 struct fport {
+	/* pointers const after async probe, content protection is by object type */
 	struct fsubdev *sd;
 	struct portinfo *portinfo;
-	enum pm_port_state state;
-	DECLARE_BITMAP(controls, NUM_PORT_CONTROLS);
-	atomic_t routed;
-	s64 flap_check_since;
-	u16 bounce_count;
-	u8 lpn;
-	u8 port_type;
-	u8 log_state;
-	u8 phys_state;
-	struct timer_list linkup_timer;
-	struct fport_routing routing;
 	struct kobject *kobj;
 	struct device_attribute link_failures;
 	struct device_attribute link_degrades;
+
+	/* values const after async probe */
+	u8 lpn;
+	u8 port_type;
+
+	/* protected by routable_lock, written by PM thread with shared lock */
+	u8 log_state;
+	u8 phys_state;
+	enum pm_port_state state;
+
+	/* private to PM, written by PM thread with shared routable_lock */
+	u16 bounce_count;
+	s64 flap_check_since;
+	struct timer_list linkup_timer;
+
+	/* protected by routable_lock, written by routing with exclusive lock */
+	struct fport_routing routing;
+
+	/* protected by routable_lock, written by routing or parent device with exclusive lock */
 	struct list_head unroute_link;
+
+	/* atomic with no need for additional barrier constraints */
+	DECLARE_BITMAP(controls, NUM_PORT_CONTROLS);
+	atomic_t routed;
 };
 
 /**
@@ -751,39 +768,40 @@ struct fsubdev_routing_info {
 
 /**
  * struct fsubdev - Per-subdevice state
+ * @fdev: link to containing device
+ * @mbdb: link to dedicated mailbox struct
+ * @csr_base: base address of this subdevice's memory
+ * @irq: assigned interrupt
+ * @name: small string to describe SD
+ * @asic_rev_info: raw contents of the asic rev info register
  * @fw_work: workitem for firmware programming
  * @pm_work: workitem for port management
  * @ue_work: workitem for uevent processing
  * @rescan_work: workitem to signal PM thread if ports need rescanning
- * @fdev: link to containing device
- * @csr_base: base address of this subdevice's memory
- * @irq: assigned interrupt
- * @fw_running: whether runtime firmware is initialized/running
- * @errors: bitmap of active error states
- * @mbdb: link to dedicated mailbox struct
- * @fw_version: version information of firmware
- * @pm_work_lock: protects ok_to_schedule_pm_work
- * @ok_to_schedule_pm_work: indicates it is OK to request port management
- * @pm_triggers: event triggering for port management
  * @debugfs_dir: sd-level debugfs dentry
  * @debugfs_port_dir: debugfs_dir/port-level debugfs dentry
  * @kobj: kobject for this sd in the sysfs tree
  * @fw_comm_errors: attribute for fw_comm_errors sysfs file
  * @fw_error: attribute for fw_error sysfs file
  * @sd_failure: attribute for sd_failure sysfs file
- * @fw_comm_error_cnt: number of mailbox communication errors detected
- * @name: small string to describe SD
- * @asic_rev_info: raw contents of the asic rev info register
- * @routable_link: link in global routable_list
+ * @firmware_version: attribute for firmware_version sysfs file
  * @guid: GUID retrieved from firmware
  * @switchinfo: switch information read directly from firmware
  * @extended_port_cnt: count of all ports including CPORT and bridge ports
  * @port_cnt: count of all fabric ports
- * @port: internal port state, includes references into @portinfo_op
+ * @PORT_COUNT: number of supported fabric ports
  * @fport_lpns: bitmap of which logical ports are fabric ports
  * @bport_lpns: bitmap of which logical ports are bridge ports
+ * @fw_version: version information of firmware
+ * @fw_running: whether runtime firmware is initialized/running
+ * @errors: bitmap of active error states
+ * @pm_work_lock: protects ok_to_schedule_pm_work
+ * @ok_to_schedule_pm_work: indicates it is OK to request port management
+ * @pm_triggers: event triggering for port management
+ * @routable_link: link in global routable_list
+ * @routing: routing information
+ * @port: internal port state, includes references into @portinfo_op
  * @portinfo_op: all port information, read from firmware via MBDB op
- * @PORT_COUNT: number of supported fabric ports
  * @_portstatus: logical port status, access via @port_status/@next_port_status
  * @port_status: for querying port status via RCU (organized by lpn)
  * @next_port_status: for updating port status via RCU (organized by lpn)
@@ -793,59 +811,83 @@ struct fsubdev_routing_info {
  * @lqi_trap_count: number of link quality issue trap notifications reported
  * @qsfp_fault_trap_count: number of qsfp faulted trap notifications reported
  * @qsfp_present_trap_count: number of qsfp present trap notifications reported
- * @routing: routing information
  * @cport_init_ctrl_reg_lock: controls access to the cport_init_ctrl_reg
  * @statedump: state dump data information
  *
  * Used throughout the driver to maintain information about a given subdevice.
+ *
+ * Protection mechanisms used outside of init/destroy are documented inline. Sync probe is the
+ * context of the initial probe function. Async probe includes the initialization threads used to
+ * load the firmware and platform configuration before enabling general processing.
  */
 struct fsubdev {
+	/* pointers const after sync probe, content protection is by object type */
+	struct fdev *fdev;
+	struct mbdb *mbdb;
+	char __iomem *csr_base;
+
+	/* values const after sync probe */
+	int irq;
+	char name[8];
+	u64 asic_rev_info;
+
+	/* work items for thread synchronization */
 	struct work_struct fw_work;
 	struct work_struct pm_work;
 	struct delayed_work ue_work;
 	struct work_struct rescan_work;
-	struct fdev *fdev;
-	char __iomem *csr_base;
-	int irq;
-	bool fw_running;
-	DECLARE_BITMAP(errors, NUM_SD_ERRORS);
-	struct mbdb *mbdb;
-	struct mbdb_op_fw_version_rsp fw_version;
-	/* protects ok_to_schedule_pm_work */
-	struct mutex pm_work_lock;
-	bool ok_to_schedule_pm_work;
-	DECLARE_BITMAP(pm_triggers, NUM_PM_TRIGGERS);
+
+	/* values const after async probe */
 	struct dentry *debugfs_dir;
 	struct dentry *debugfs_port_dir;
 	struct kobject *kobj;
 	struct device_attribute fw_comm_errors;
 	struct device_attribute fw_error;
 	struct device_attribute sd_failure;
-	char name[8];
-	u64 asic_rev_info;
-
-	/* routable_lock needed to modify */
-	struct list_head routable_link;
+	struct device_attribute firmware_version;
 
 	u64 guid;
 	struct mbdb_op_switchinfo switchinfo;
-	u8 extended_port_cnt;	/* includes CPORT + bridge ports */
+	u8 extended_port_cnt;
 	u8 port_cnt;
-	struct fport port[PORT_COUNT];
 	DECLARE_BITMAP(fport_lpns, PORT_COUNT);
 	DECLARE_BITMAP(bport_lpns, PORT_COUNT);
+	struct mbdb_op_fw_version_rsp fw_version;
 
-	/*
-	 * Initial population occurs during probe, after that routable_lock is
-	 * needed for access
-	 */
+	/* essentially const after async probe (RISC RESET invalidates driver state anyway) */
+	bool fw_running;
+
+	/* atomic, never cleared after sync probe */
+	DECLARE_BITMAP(errors, NUM_SD_ERRORS);
+
+	/* protects ok_to_schedule_pm_work */
+	struct mutex pm_work_lock;
+
+	/* for PM thread interaction, protected by pm_work_lock */
+	bool ok_to_schedule_pm_work;
+
+	/* for PM thread interaction, protected by atomic bitops */
+	DECLARE_BITMAP(pm_triggers, NUM_PM_TRIGGERS);
+
+	/* protected by routable_lock, written by routing with exclusive lock */
+	struct list_head routable_link;
+	struct fsubdev_routing_info routing;
+
+	/* protections are documented in &struct fport */
+	struct fport port[PORT_COUNT];
+
+	/* protected by routable_lock, written by PM thread with shared lock */
 	DECLARE_MBDB_OP_PORTINFO(portinfo_op, PORT_COUNT);
 
-	struct fport_status _portstatus[2 * PORT_COUNT];
-	struct fport_status __rcu *port_status;
-	struct fport_status *next_port_status;
+	/* protected by RCU, owned by PM, ping-pong data structure accessed by pointer only */
+	struct fport_status _portstatus[2 * PORT_COUNT]; /* backing data, owned by PM thread */
+	struct fport_status __rcu *port_status; /* read by any */
+	struct fport_status *next_port_status; /* written by PM thread */
 
-	/* these can be read from netlink and therefore needs to be atomic */
+	/*
+	 * atomic, incremented by PM thread: total_trap_count can trail the total of individual
+	 * trap counts due to their implementation as independent atomics
+	 */
 	atomic64_t total_trap_count;
 	atomic64_t psc_trap_count;
 	atomic64_t lwd_trap_count;
@@ -853,11 +895,10 @@ struct fsubdev {
 	atomic64_t qsfp_fault_trap_count;
 	atomic64_t qsfp_present_trap_count;
 
-	struct fsubdev_routing_info routing;
-
-	/* Blocks so only one process can access the cport_init_ctrl_reg */
+	/* protects cport_init_ctrl_reg */
 	struct mutex cport_init_ctrl_reg_lock;
 
+	/* protections are documented in &struct statedump */
 	struct state_dump statedump;
 };
 
@@ -1209,5 +1250,7 @@ struct fsubdev *find_routable_sd(u64 guid);
 void iaf_complete_init_dev(struct fdev *dev);
 
 bool mappings_ref_check(struct fdev *dev);
+
+extern struct workqueue_struct *iaf_unbound_wq;
 
 #endif

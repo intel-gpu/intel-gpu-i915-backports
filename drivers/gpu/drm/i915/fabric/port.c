@@ -98,23 +98,37 @@ struct fsm_io {
 };
 
 /*
+ * This wakes the PM thread
+ */
+int signal_pm_thread(struct fsubdev *sd, enum pm_trigger_reasons event)
+{
+	int err = 0;
+
+	set_bit(event, sd->pm_triggers);
+
+	mutex_lock(&sd->pm_work_lock);
+	if (sd->ok_to_schedule_pm_work)
+		queue_work(iaf_unbound_wq, &sd->pm_work); /* implies a full memory barrier */
+	else
+		err = -EAGAIN;
+	mutex_unlock(&sd->pm_work_lock);
+
+	return err;
+}
+
+/*
  * number of isolated ports in the entire system
  */
 static atomic_t isolated_port_cnt = ATOMIC_INIT(0);
 
 static void deisolate_all_ports(void)
 {
-	struct fsubdev *sd;
+	if (atomic_read(&isolated_port_cnt) > 0) {
+		struct fsubdev *sd;
 
-	if (atomic_read(&isolated_port_cnt) > 0)
-		list_for_each_entry(sd, &routable_list, routable_link) {
-			set_bit(DEISOLATE_EVENT, sd->pm_triggers);
-
-			mutex_lock(&sd->pm_work_lock);
-			if (sd->ok_to_schedule_pm_work)
-				queue_work(system_unbound_wq, &sd->pm_work);
-			mutex_unlock(&sd->pm_work_lock);
-		}
+		list_for_each_entry(sd, &routable_list, routable_link)
+			signal_pm_thread(sd, DEISOLATE_EVENT); /* ignore (per-device) errors */
+	}
 }
 
 static bool port_manual_bringup;
@@ -129,25 +143,6 @@ MODULE_PARM_DESC(port_manual_bringup,
 static bool port_enable_loopback = true;
 module_param_named(enable_loopback, port_enable_loopback, bool, 0400);
 MODULE_PARM_DESC(enable_loopback, "Enable loopback fabric configurations (default: Y)");
-
-/*
- * This wakes the PM thread
- */
-int signal_pm_thread(struct fsubdev *sd, enum pm_trigger_reasons event)
-{
-	int err = 0;
-
-	set_bit(event, sd->pm_triggers);
-
-	mutex_lock(&sd->pm_work_lock);
-	if (sd->ok_to_schedule_pm_work)
-		queue_work(system_unbound_wq, &sd->pm_work);
-	else
-		err = -EAGAIN;
-	mutex_unlock(&sd->pm_work_lock);
-
-	return err;
-}
 
 /*
  * Helpers to update port health
@@ -399,7 +394,7 @@ static void port_enable_polling(struct fsubdev *sd, struct fport *p, struct fsm_
 		goto failed;
 
 	if (op_err) {
-		u32 state;
+		u32 state = 0;
 
 		/*
 		 * op_err could be set if port is somehow already enabled and not OFFLINE -- bounce
@@ -518,7 +513,7 @@ static void port_deisolate(struct fsubdev *sd, struct fport *p, struct fsm_io *f
 		goto failed;
 
 	if (op_err) {
-		u32 state;
+		u32 state = 0;
 
 		/*
 		 * op_err could be set if port is somehow already enabled and not OFFLINE -- bounce
@@ -586,6 +581,7 @@ static void port_did_not_train(struct fsubdev *sd, struct fport *p, struct fsm_i
 {
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_DID_NOT_TRAIN);
 	fio->status_changed = true;
+	fport_warn(p, "port failed to train in %u seconds\n", linkup_timeout);
 }
 
 static void port_linkup_timedout(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
@@ -822,7 +818,8 @@ static void port_arm_or_isolate(struct fsubdev *sd, struct fport *p, struct fsm_
 
 static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	fport_info(p, "in error, reinitializing\n");
+	/* downed port. retry by re-init and re-arm */
+	fport_warn(p, "link went down, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -833,7 +830,8 @@ static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	fport_info(p, "in error, rearming\n");
+	/* port reverted to INIT. retry by re-arm */
+	fport_warn(p, "link reinitialized itself, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -843,12 +841,16 @@ static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_retry_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
+	fport_warn(p, "active link went down...\n");
+
 	port_retry(sd, p, fio);
 	fio->routing_changed = true;
 }
 
 static void port_rearm_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
+	fport_warn(p, "active link reinitialized itself...\n");
+
 	port_rearm(sd, p, fio);
 	fio->routing_changed = true;
 }
@@ -881,7 +883,7 @@ static void port_flapping(struct fsubdev *sd, struct fport *p, struct fsm_io *fi
 	fio->routing_changed = true;
 	fio->status_changed = true;
 
-	fport_dbg(p, "flapping port disabled\n");
+	fport_warn(p, "flapping port disabled\n");
 	return;
 
 failed:
@@ -1369,7 +1371,7 @@ static void update_ports_work(struct work_struct *work)
 	if (initializing || port_change || qsfp_change || rescanning) {
 		mutex_lock(&sd->pm_work_lock);
 		if (sd->ok_to_schedule_pm_work)
-			queue_delayed_work(system_unbound_wq, &sd->ue_work, UEVENT_DELAY);
+			queue_delayed_work(iaf_unbound_wq, &sd->ue_work, UEVENT_DELAY);
 		/* else we are shutting down so don't send a state change UEVENT */
 		mutex_unlock(&sd->pm_work_lock);
 	}
@@ -1406,7 +1408,7 @@ static void linkup_timer_expired(struct timer_list *timer)
 	 * it is only safe to do this since del_timer_sync is called on all timers before canceling
 	 * rescan_work when cleaning up
 	 */
-	queue_work(system_unbound_wq, &p->sd->rescan_work);
+	queue_work(iaf_unbound_wq, &p->sd->rescan_work);
 }
 
 /**

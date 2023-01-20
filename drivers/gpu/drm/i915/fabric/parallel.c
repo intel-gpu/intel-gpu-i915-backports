@@ -6,6 +6,7 @@
 
 #include <linux/slab.h>
 
+#include "iaf_drv.h"
 #include "parallel.h"
 
 /**
@@ -89,7 +90,7 @@ int par_work_queue(struct par_group *group,
 	pw->fn = fn;
 	pw->fn_ctx = fn_ctx;
 	atomic_inc(&group->outstanding);
-	queue_work(system_unbound_wq, &pw->work);
+	queue_work(iaf_unbound_wq, &pw->work);
 
 	return 0;
 }
