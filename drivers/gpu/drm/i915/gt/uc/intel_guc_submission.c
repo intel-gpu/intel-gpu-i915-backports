@@ -5962,6 +5962,9 @@ void intel_guc_context_set_preemption_timeout(struct intel_context *ce)
 	struct intel_guc *guc = ce_to_guc(ce);
 	intel_wakeref_t wakeref;
 
+	if (!context_registered(ce))
+		return;
+
 	with_intel_runtime_pm(runtime_pm, wakeref)
 		__guc_context_set_preemption_timeout(guc, ce->guc_id.id,
 						     preempt_timeout_ms * 1000);

@@ -934,7 +934,6 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_wait_vf_flr_done, I915);
 unsigned int i915_sriov_pf_get_vf_tile_mask(struct drm_i915_private *i915, unsigned int vfid)
 {
 	struct intel_iov *iov = &to_root_gt(i915)->iov;
-	int mask;
 
 	GEM_BUG_ON(!IS_SRIOV_PF(i915));
 
@@ -948,11 +947,7 @@ unsigned int i915_sriov_pf_get_vf_tile_mask(struct drm_i915_private *i915, unsig
 		return BIT(0) | BIT(1);
 #endif
 
-	mutex_lock(pf_provisioning_mutex(iov));
-	mask = intel_iov_provisioning_get_tile_mask(iov, vfid);
-	mutex_unlock(pf_provisioning_mutex(iov));
-
-	return mask;
+	return intel_iov_provisioning_get_tile_mask(iov, vfid);
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_get_vf_tile_mask, I915);
 
