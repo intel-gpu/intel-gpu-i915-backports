@@ -1,3 +1,9 @@
+pkg-name (0.6379.0.28.221103.25.5.17.0.1020) UNRELEASED; urgency=low
+
+  New driver source to DII_6379_prerelease against 5.17-OEM
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Wed, 11 Jan 2023 01:30:01 +0530
+
 pkg-name (0.6379.0.25.221103.22.5.17.0.1020) UNRELEASED; urgency=low
 
   New driver source to DII_6379_prerelease against 5.17-OEM

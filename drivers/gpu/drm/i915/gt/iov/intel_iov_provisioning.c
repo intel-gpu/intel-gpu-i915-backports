@@ -2594,6 +2594,29 @@ static u32 pf_get_vf_tile_mask(struct intel_iov *iov, unsigned int vfid)
 	return tile_mask;
 }
 
+/**
+ * intel_iov_provisioning_get_tile_mask() - Query tile mask of the VF.
+ * @iov: the IOV struct
+ * @id: VF identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: tile mask.
+ */
+u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int id)
+{
+	u32 tile_mask;
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(id > pf_get_totalvfs(iov));
+
+	mutex_lock(pf_provisioning_mutex(iov));
+	tile_mask = pf_get_vf_tile_mask(iov_get_root(iov), id);
+	mutex_unlock(pf_provisioning_mutex(iov));
+
+	return tile_mask;
+}
+
 /* Return: number of configuration dwords written */
 static u32 encode_config_ggtt(u32 *cfg, const struct intel_iov_config *config)
 {
