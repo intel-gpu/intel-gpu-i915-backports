@@ -3288,9 +3288,23 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 
 	add_render_compute_tuning_settings(i915, wal);
 
-	/* Wa_16016694945 */
-	if (IS_PONTEVECCHIO(i915))
+	if (IS_PONTEVECCHIO(i915)) {
+		/* Wa_16016694945 */
 		wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
+
+		/* Wa_16017028706 */
+		wa_masked_en(wal, GEN12_RCU_MODE,
+			     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
+
+		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) {
+			/* Wa_16011062782:pvc */
+			wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0,
+				     XEHPC_DIS256BREQGLB | XEHPC_DIS128BREQ);
+	
+			/* Wa_14010847520:pvc */
+			wa_write_or(wal, GEN12_LTCDREG, SLPDIS);
+		}
+	}
 
 	if (IS_XEHPSDV(i915)) {
 		/* Wa_1409954639 */
@@ -3354,19 +3368,6 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		 *  Wa_18020744125
 		 */
 		wa_write(wal, RING_HWSTAM(RENDER_RING_BASE), ~0);
-	}
-
-	if (IS_PONTEVECCHIO(i915)) {
-		wa_masked_en(wal, GEN9_ROW_CHICKEN4, XEHP_DIS_BBL_SYSPIPE);
-
-		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) {
-			/* Wa_16011062782:pvc */
-			wa_masked_en(wal, XEHPC_LNCFMISCCFGREG0,
-				     XEHPC_DIS256BREQGLB | XEHPC_DIS128BREQ);
-
-			/* Wa_14010847520:pvc */
-			wa_write_or(wal, GEN12_LTCDREG, SLPDIS);
-		}
 	}
 
 	/*
