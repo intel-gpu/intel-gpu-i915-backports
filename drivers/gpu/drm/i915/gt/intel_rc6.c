@@ -650,12 +650,9 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    i915->remote_tiles > 0)
 		return false;
 
-	/*
-	 * Wa for HSD: 14015706335
-	 */
-
+	/* Disable RC6 for all steppings except B4 */
 	if (!i915->params.rc6_ignore_steppings &&
-	    IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+	    IS_PVC_CT_STEP(i915, STEP_B0, STEP_C0))
 		return false;
 
 #ifdef RC6_NOT_SUPPORTED
