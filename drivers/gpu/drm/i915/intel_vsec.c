@@ -96,8 +96,8 @@ void intel_vsec_init(struct drm_i915_private *dev_priv)
 	 */
 	intel_vsec_register(pdev, &dg2_info);
 }
-#endif
 
 #ifndef BPM_MODULE_IMPORT_NS_NOT_PRESENT
 MODULE_IMPORT_NS(INTEL_VSEC);
 #endif
+#endif /* IS_ENABLED (CONFIG_AUXILIARY_BUS) */

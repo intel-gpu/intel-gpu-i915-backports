@@ -387,16 +387,20 @@ static I915_DEVICE_ATTR_RO(prelim_lmem_max_bw_Mbps, prelim_lmem_max_bw_Mbps_show
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t i915_driver_error_show(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf)
+               struct kobj_attribute *attr, char *buf)
 #else
 static ssize_t i915_driver_error_show(struct device *dev,
-                                   struct device_attribute *attr,
-                                   char *buf)
+				    struct device_attribute *attr,
+				    char *buf)
 #endif
 {
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct device *kdev = kobj_to_dev(dev->kobj.parent);
 	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct ext_attr_kobj *ea = container_of(attr, struct ext_attr_kobj, attr);
 #else

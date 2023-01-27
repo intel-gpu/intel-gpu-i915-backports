@@ -104,11 +104,7 @@ static inline struct intel_vsec_device *auxdev_to_ivdev(struct auxiliary_device 
 	return container_of(auxdev, struct intel_vsec_device, auxdev);
 }
 
-#ifdef BPM_INTEL_VSEC_ASSUME_ALWAYS_ENABLED
-void intel_vsec_register(struct pci_dev *pdev,
-			 struct intel_vsec_platform_info *info);
-#else
-#if IS_ENABLED(CONFIG_INTEL_VSEC)
+#ifdef CONFIG_INTEL_VSEC
 void intel_vsec_register(struct pci_dev *pdev,
                         struct intel_vsec_platform_info *info);
 #else
@@ -116,7 +112,5 @@ static inline void
 intel_vsec_register(struct pci_dev *pdev,
                    struct intel_vsec_platform_info *info) {}
 #endif
-#endif
-
 
 #endif

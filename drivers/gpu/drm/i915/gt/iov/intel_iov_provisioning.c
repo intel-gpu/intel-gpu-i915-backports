@@ -487,9 +487,7 @@ static int pf_push_config_tile_mask(struct intel_iov *iov, unsigned int id, u32 
 	return 0;
 }
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 static u32 pf_get_vf_tile_mask(struct intel_iov *iov, unsigned int id);
-#endif
 
 static int pf_finish_config_change(struct intel_iov *iov, unsigned int id)
 {
@@ -497,11 +495,7 @@ static int pf_finish_config_change(struct intel_iov *iov, unsigned int id)
 
 	if (HAS_REMOTE_TILES(iov_to_i915(iov))) {
 		struct intel_iov *root = iov_get_root(iov);
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 		u32 tile_mask = pf_get_vf_tile_mask(root, id);
-#else
-		u32 tile_mask = intel_iov_provisioning_get_tile_mask(root, id);
-#endif
 
 		err = pf_push_config_tile_mask(root, id, tile_mask);
 	}
@@ -2564,11 +2558,7 @@ int intel_iov_provisioning_verify(struct intel_iov *iov, unsigned int num_vfs)
 	return 0;
 }
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 static u32 pf_get_vf_tile_mask(struct intel_iov *iov, unsigned int vfid)
-#else
-u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int vfid)
-#endif
 {
 	struct intel_gt *gt;
 	unsigned int gtid;
@@ -2585,6 +2575,29 @@ u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int vfi
 
 	IOV_DEBUG(iov, "VF%d tile_mask=%#x\n", vfid, tile_mask);
 	GEM_BUG_ON(tile_mask & ~GENMASK(iov_to_i915(iov)->remote_tiles, 0));
+
+	return tile_mask;
+}
+
+/**
+ * intel_iov_provisioning_get_tile_mask() - Query tile mask of the VF.
+ * @iov: the IOV struct
+ * @id: VF identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: tile mask.
+ */
+u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int id)
+{
+	u32 tile_mask;
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(id > pf_get_totalvfs(iov));
+
+	mutex_lock(pf_provisioning_mutex(iov));
+	tile_mask = pf_get_vf_tile_mask(iov_get_root(iov), id);
+	mutex_unlock(pf_provisioning_mutex(iov));
 
 	return tile_mask;
 }
@@ -2722,11 +2735,7 @@ static int pf_push_configs(struct intel_iov *iov, unsigned int num)
 			cfg_size = encode_config(cfg, &provisioning->configs[n]);
 
 		if (iov_is_root(iov) && HAS_REMOTE_TILES(iov_to_i915(iov))) {
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 			u32 tile_mask = pf_get_vf_tile_mask(iov, n);
-#else
-			u32 tile_mask = intel_iov_provisioning_get_tile_mask(iov, n);
-#endif
 
 			cfg_size += encode_tile_mask(cfg + cfg_size, tile_mask);
 		}

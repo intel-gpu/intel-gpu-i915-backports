@@ -889,7 +889,6 @@ static ssize_t throttle_reason_pl1_show(struct kobject *kobj,
 #else
 static ssize_t throttle_reason_pl1_show(struct device *dev,
                                        struct device_attribute *attr,
-					struct kobj_attribute *attr,
 					char *buff)
 #endif
 {
@@ -1488,8 +1487,12 @@ static ssize_t media_act_freq_mhz_show(struct device *dev,
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 	struct intel_rps *rps = &gt->rps;
 	i915_reg_t rgadr = PVC_MEDIA_PERF_STATUS;
-	u32 val = _with_pm_intel_dev_read(kobj, attr, rgadr);
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	u32 val = _with_pm_intel_dev_read(kobj, attr, rgadr);
+#else
+	u32 val = _with_pm_intel_dev_read(dev, attr, rgadr);
+#endif
 	/* Available from PVC B-step */
 	val = REG_FIELD_GET(PVC_MEDIA_PERF_MEDIA_RATIO, val);
 	val = intel_gpu_freq(rps, val);
@@ -1704,6 +1707,7 @@ i915_sysfs_store(struct device *dev, struct device_attribute *attr, const char
 }
 
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t
 i915_sysfs_show_kobj(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1722,7 +1726,6 @@ i915_sysfs_show_kobj(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	return value;
 }
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t
 i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr, const char
 		 *buf, size_t count)
@@ -1740,6 +1743,8 @@ i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr, const c
 
 	return count;
 }
+#endif
+
 static ssize_t
 i915_kobj_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1757,7 +1762,6 @@ i915_kobj_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 
 	return value;
 }
-#endif
 
 static int add_rps_defaults(struct intel_gt *gt)
 {

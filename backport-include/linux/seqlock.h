@@ -51,7 +51,9 @@ SEQCOUNT_LOCKNAME(spinlock,     spinlock_t,      __SEQ_RT, s->lock,        spin,
 SEQCOUNT_LOCKNAME(rwlock,       rwlock_t,        __SEQ_RT, s->lock,        read,     read_lock(s->lock))
 SEQCOUNT_LOCKNAME(mutex,        struct mutex,    true,     s->lock,        mutex,    mutex_lock(s->lock))
 SEQCOUNT_LOCKNAME(ww_mutex,     struct ww_mutex, true,     &s->lock->base, ww_mutex, ww_mutex_lock(s->lock, NULL))
+#endif
 
+#ifdef BPM_SEQPROP_SEQUENCE_NOT_PRESENT
 #define seqprop_sequence(s)	__seqprop(s, sequence)
 #endif
 #endif /* _BACKPORT_LINUX_SEQLOCK_H */
