@@ -167,8 +167,9 @@ static void mtl_wait_ddi_buf_idle(struct drm_i915_private *i915, enum port port)
 {
 	int ret;
 
+	/* FIXME: find out why Bspec's 100us timeout is too short */
 	ret = wait_for_us((intel_de_read(i915, XELPDP_PORT_BUF_CTL1(port)) &
-			   XELPDP_PORT_BUF_PHY_IDLE), 100);
+			   XELPDP_PORT_BUF_PHY_IDLE), 10000);
 	if (ret)
 		drm_err(&i915->drm, "Timeout waiting for DDI BUF %c to get idle\n",
 			port_name(port));
@@ -199,9 +200,10 @@ static void intel_wait_ddi_buf_active(struct drm_i915_private *dev_priv,
 		return;
 	}
 
+	/* FIXME: find out why Bspec's 100us timeout is too short */
 	if (DISPLAY_VER(dev_priv) >= 14)
 		ret = wait_for_us(!(intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port)) &
-				    XELPDP_PORT_BUF_PHY_IDLE), 100);
+				    XELPDP_PORT_BUF_PHY_IDLE), 10000);
 	else
 		ret = _wait_for(!(intel_de_read(dev_priv, DDI_BUF_CTL(port)) &
 				  DDI_BUF_IS_IDLE), IS_DG2(dev_priv) ? 1200 : 500, 10, 10);
@@ -2765,6 +2767,9 @@ static void intel_ddi_pre_enable_hdmi(struct intel_atomic_state *state,
 	dig_port->set_infoframes(encoder,
 				 crtc_state->has_infoframe,
 				 crtc_state, conn_state);
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	intel_mtl_write_emp(encoder, crtc_state);
+#endif
 }
 
 static void intel_ddi_pre_enable(struct intel_atomic_state *state,
@@ -3301,7 +3306,11 @@ static void intel_enable_ddi(struct intel_atomic_state *state,
 	if (!intel_crtc_is_bigjoiner_slave(crtc_state))
 		intel_ddi_enable_transcoder_func(encoder, crtc_state);
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	intel_vrr_enable(to_intel_connector(conn_state->connector), crtc_state);
+#else
 	intel_vrr_enable(encoder, crtc_state);
+#endif
 
 	intel_enable_transcoder(crtc_state);
 
@@ -3911,6 +3920,10 @@ static void intel_ddi_get_config(struct intel_encoder *encoder,
 	intel_read_dp_sdp(encoder, pipe_config, DP_SDP_VSC);
 
 	intel_psr_get_config(encoder, pipe_config);
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	intel_mtl_read_emp(encoder, pipe_config);
+#endif
 }
 
 void intel_ddi_get_clock(struct intel_encoder *encoder,

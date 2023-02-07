@@ -242,6 +242,10 @@ struct prelim_i915_user_extension {
 
 /* Implicit scale support */
 #define PRELIM_I915_PARAM_HAS_SET_PAIR	(PRELIM_I915_PARAM | 8)
+
+/* EU Debugger support */
+#define PRELIM_I915_PARAM_EU_DEBUGGER_VERSION  (PRELIM_I915_PARAM | 9)
+
 /* End getparam */
 
 struct prelim_drm_i915_gem_create_ext {
@@ -261,9 +265,11 @@ struct prelim_drm_i915_gem_create_ext {
 	__u32 pad;
 
 #define PRELIM_I915_GEM_CREATE_EXT_SETPARAM	(PRELIM_I915_USER_EXT | 1)
+#define PRELIM_I915_GEM_CREATE_EXT_PROTECTED_CONTENT   (PRELIM_I915_USER_EXT | 2)
 #define PRELIM_I915_GEM_CREATE_EXT_VM_PRIVATE	(PRELIM_I915_USER_EXT | 3)
 #define PRELIM_I915_GEM_CREATE_EXT_FLAGS_UNKNOWN			\
 	(~(PRELIM_I915_GEM_CREATE_EXT_SETPARAM |			\
+	   PRELIM_I915_GEM_CREATE_EXT_PROTECTED_CONTENT |		\
 	   PRELIM_I915_GEM_CREATE_EXT_VM_PRIVATE))
 	__u64 extensions;
 };
@@ -449,6 +455,7 @@ struct prelim_drm_i915_query_item {
 #define PRELIM_DRM_I915_QUERY_FABRIC_INFO		(PRELIM_DRM_I915_QUERY | 11)
 #define PRELIM_DRM_I915_QUERY_HW_IP_VERSION		(PRELIM_DRM_I915_QUERY | 12)
 #define PRELIM_DRM_I915_QUERY_ENGINE_INFO		(PRELIM_DRM_I915_QUERY | 13)
+#define PRELIM_DRM_I915_QUERY_L3BANK_COUNT		(PRELIM_DRM_I915_QUERY | 14)
 };
 
 /*
@@ -592,6 +599,24 @@ struct prelim_drm_i915_gem_context_param {
  */
 #define PRELIM_I915_CONTEXT_PARAM_ACC		(PRELIM_I915_CONTEXT_PARAM | 0xd)
 };
+
+/*
+ * I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+ *
+ * Mark that the context makes use of protected content, which will result
+ * in the context being invalidated when the protected content session is.
+ * This flag can only be set at context creation time and, when set to true,
+ * must be preceded by an explicit setting of I915_CONTEXT_PARAM_RECOVERABLE
+ * to false. This flag can't be set to true in conjunction with setting the
+ * I915_CONTEXT_PARAM_BANNABLE flag to false.
+ *
+ * Given the numerous restriction on this flag, there are several unique
+ * failure cases:
+ *
+ * -ENODEV: feature not available
+ * -EPERM: trying to mark a recoverable or not bannable context as protected
+ */
+#define PRELIM_I915_CONTEXT_PARAM_PROTECTED_CONTENT (PRELIM_I915_CONTEXT_PARAM | 0xe)
 
 struct prelim_drm_i915_gem_context_create_ext {
 /* Depricated in favor of PRELIM_I915_CONTEXT_CREATE_FLAGS_LONG_RUNNING */
@@ -738,12 +763,21 @@ struct prelim_drm_i915_debug_event_context {
 	__u64 handle;
 } __attribute__((packed));
 
+/*
+ * Debugger ABI (ioctl and events) Version History:
+ * 0 - No debugger available
+ * 1 - Initial version
+ * 2 - Events sent from a small fifo queue
+ * 3 - VM_BIND ioctl is non-blocking wrt to the debugger ack
+ */
+#define PRELIM_DRM_I915_DEBUG_VERSION 3
+
 struct prelim_drm_i915_debugger_open_param {
 	__u64 pid; /* input: Target process ID */
 	__u32 flags;
 #define PRELIM_DRM_I915_DEBUG_FLAG_FD_NONBLOCK	(1u << 31)
 
-	__u32 version;
+	__u32 version; /* output: current ABI (ioctl / events) version */
 	__u64 events;  /* input: event types to subscribe to */
 	__u64 extensions; /* MBZ */
 };

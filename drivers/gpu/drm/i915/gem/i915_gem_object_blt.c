@@ -10,7 +10,6 @@
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"
-#include "gt/intel_gt_compression_formats.h"
 #include "gt/intel_migrate.h"
 #include "gt/intel_ring.h"
 #include "i915_gem_clflush.h"
@@ -139,7 +138,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 {
 	struct drm_i915_private *i915 = ce->vm->i915;
 	struct intel_gt *gt = ce->engine->gt;
-	u32 block_size, stateless_comp = 0;
+	u32 block_size;
 	struct intel_gt_buffer_pool_node *pool;
 	struct i915_vma *batch;
 	u64 offset;
@@ -169,16 +168,6 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 		size = (1 + 8 * count) * sizeof(u32);
 
 	/*
-	 * For stateless compression we set compressible if LMEM, and note,
-	 * hardware will handle the clearing of CCS.
-	 */
-	if (HAS_STATELESS_MC(i915) && i915_gem_object_is_lmem(vma->obj))
-		stateless_comp =
-			PVC_MEM_SET_DST_COMPRESSIBLE |
-			PVC_MEM_SET_DST_COMPRESS_EN |
-			FIELD_PREP(PVC_MEM_SET_COMPRESSION_FMT, XEHPC_LINEAR_16);
-
-	/*
 	 * Whenever the intel_emit_vma_fill_blt() function is used with
 	 * the value to be filled in the BO as zero, we check if the BO
 	 * is located in LMEM only and if it is, we zero out the
@@ -188,7 +177,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * we want to calculate the size of the CCS of the source
 	 * object.
 	 */
-	if (!value && !stateless_comp)
+	if (!value)
 		size += i915_calc_ctrl_surf_instr_dwords(i915, vma->obj->base.size) * sizeof(u32);
 
 	size = round_up(size, PAGE_SIZE);
@@ -234,7 +223,7 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 			u32 mocs = FIELD_PREP(MS_MOCS_INDEX_MASK,
 					      gt->mocs.uc_index);
 
-			*cmd++ = PVC_MEM_SET_CMD | stateless_comp | (7 - 2);
+			*cmd++ = PVC_MEM_SET_CMD | (7 - 2);
 			*cmd++ = size - 1;
 			*cmd++ = 0;
 			*cmd++ = 0;
@@ -243,18 +232,18 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 			/* Value is Bit 31:24 */
 			*cmd++ = value << 24 | mocs;
 		} else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
-			u32 mocs = FIELD_PREP(XY_FCB_MOCS_INDEX_MASK,
-					      gt->mocs.uc_index);
-			u8 mem_type;
+			u32 mocs = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK,
+					      gt->mocs.uc_index << 1);
+			u8 mem_type = MEM_TYPE_SYS;
 
 			/* Wa to set the target memory region as system */
-			if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-				mem_type = MEM_TYPE_SYS;
-			else
-				mem_type = i915_gem_object_is_lmem(vma->obj)?
-					MEM_TYPE_LOCAL : MEM_TYPE_SYS;
+			if (!IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) &&
+			    i915_gem_object_is_lmem(vma->obj))
+				mem_type = MEM_TYPE_LOCAL;
 
-			*cmd++ = XY_FAST_COLOR_BLT | BLT_COLOR_DEPTH_32 | (16 - 2);
+			*cmd++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+				XY_FAST_COLOR_BLT_DEPTH_32 |
+				(16 - 2);
 			*cmd++ = mocs | (PAGE_SIZE - 1);
 			*cmd++ = 0;
 			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
@@ -274,7 +263,9 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 			*cmd++ = 0;
 			*cmd++ = 0;
 		} else if (GRAPHICS_VER(i915) >= 12) {
-			*cmd++ = XY_FAST_COLOR_BLT | BLT_COLOR_DEPTH_32 | (11 - 2);
+			*cmd++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+				XY_FAST_COLOR_BLT_DEPTH_32 |
+				(11 - 2);
 			*cmd++ = PAGE_SIZE - 1;
 			*cmd++ = 0;
 			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
@@ -313,8 +304,8 @@ struct i915_vma *intel_emit_vma_fill_blt(struct intel_context *ce,
 	 * We only update the CCS if the BO is located in LMEM only and
 	 * the value to be filled in the BO is all zeroes
 	 */
-	if (HAS_FLAT_CCS(i915) && !value && !stateless_comp)
-		cmd = xehp_emit_ccs_copy(cmd, ce->engine->gt,
+	if (HAS_FLAT_CCS(i915) && !value)
+		cmd = xehp_emit_ccs_copy(cmd, gt,
 					 i915_vma_offset(vma), DIRECT_ACCESS,
 					 i915_vma_offset(vma), INDIRECT_ACCESS,
 					 vma->obj->base.size);
@@ -595,23 +586,8 @@ struct i915_vma *intel_emit_vma_copy_blt(struct intel_context *ce,
 						  gt->mocs.uc_index);
 			u32 dst_mocs = FIELD_PREP(MC_DST_MOCS_INDEX_MASK,
 						  gt->mocs.uc_index);
-			u32 comp_bits = 0;
 
-			/* for stateless compression we mark compressible if LMEM */
-			if (HAS_STATELESS_MC(i915)) {
-				comp_bits = FIELD_PREP(PVC_MEM_COPY_COMPRESSION_FMT,
-						       XEHPC_LINEAR_16);
-
-				if (i915_gem_object_is_lmem(dst->obj))
-					comp_bits |=
-						PVC_MEM_COPY_DST_COMPRESSIBLE |
-						PVC_MEM_COPY_DST_COMPRESS_EN;
-
-				if (i915_gem_object_is_lmem(src->obj))
-					comp_bits |= PVC_MEM_COPY_SRC_COMPRESSIBLE;
-			}
-
-			*cmd++ = PVC_MEM_COPY_CMD | comp_bits | (10 - 2);
+			*cmd++ = PVC_MEM_COPY_CMD | (10 - 2);
 			*cmd++ = size - 1;
 			*cmd++ = 0;
 			*cmd++ = 0;
@@ -704,7 +680,7 @@ prepare_compressed_copy_cmd_buf(struct intel_context *ce,
 
 	intel_engine_pm_get(ce->engine);
 
-	pool = intel_gt_get_buffer_pool(ce->engine->gt, size, I915_MAP_WC);
+	pool = intel_gt_get_buffer_pool(gt, size, I915_MAP_WC);
 	if (IS_ERR(pool)) {
 		err = PTR_ERR(pool);
 		goto out_pm;

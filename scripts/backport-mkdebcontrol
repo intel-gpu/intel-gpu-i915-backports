@@ -53,6 +53,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	 bison,
 	 libc6-dev | libc-dev,
 	 ${DEP_PMT_PKG_NAME},
+	 intel-platform-cse-dkms,
 	 \${misc:Depends},
 	Provides: i915-modules
 	Conflicts: intel-gpgpu-dkms-ubuntu-5.17-oem, intel-gpgpu-dkms-ubuntu-5.14-oem

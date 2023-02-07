@@ -3,6 +3,16 @@
 #include_next <linux/dma-mapping.h>
 #include <linux/version.h>
 
+#ifdef BPM_PCI_DMA_COMPAT_H_NOT_PRESENT
+
+#define PCI_DMA_BIDIRECTIONAL  DMA_BIDIRECTIONAL
+#define PCI_DMA_TODEVICE       DMA_TO_DEVICE
+#define PCI_DMA_FROMDEVICE     DMA_FROM_DEVICE
+#define PCI_DMA_NONE           DMA_NONE
+
+#endif
+
+
 #if LINUX_VERSION_IS_LESS(3,2,0)
 #define dma_zalloc_coherent LINUX_I915_BACKPORT(dma_zalloc_coherent)
 static inline void *dma_zalloc_coherent(struct device *dev, size_t size,

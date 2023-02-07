@@ -173,7 +173,6 @@ enum intel_ppgtt_type {
 	func(has_l3_dpf); \
 	func(has_link_copy_engines); \
 	func(has_llc); \
-	func(has_lmem_sr); \
 	func(has_lmtt_lvl2); \
 	func(has_logical_ring_contexts); \
 	func(has_logical_ring_elsq); \
@@ -200,7 +199,6 @@ enum intel_ppgtt_type {
 	func(has_slim_vdbox); \
 	func(has_snoop); \
 	func(has_sriov); \
-	func(has_stateless_mc); \
 	func(has_um_queues); \
 	func(tuning_thread_rr_after_dep); \
 	func(has_csc_uid);	\

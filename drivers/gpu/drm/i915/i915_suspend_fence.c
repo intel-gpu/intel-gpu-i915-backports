@@ -7,16 +7,19 @@
 
 #include "i915_suspend_fence.h"
 
-static void suspend_fence_release(struct dma_fence_work *f)
+static void suspend_fence_complete(struct dma_fence_work *f)
 {
 	struct i915_suspend_fence *sfence =
 		container_of(f, typeof(*sfence), base);
+
+	dma_fence_signal(&f->dma);
 
 	if (sfence->block_requested) {
 		if (intel_context_is_active(sfence->ce))
 			sfence->ops->revalidate(sfence->ce);
 		intel_context_resume(sfence->ce);
 	}
+
 	intel_context_put(sfence->ce);
 	sfence->ce = NULL;
 }
@@ -40,7 +43,7 @@ static void suspend_fence_suspend(struct i915_suspend_fence *sfence,
 		 */
 		if (IS_ERR(block_completed)) {
 			GEM_BUG_ON(!atomic || PTR_ERR(block_completed) != -EBUSY);
-			queue_work(sfence->base.wq, &sfence->suspend_work);
+			queue_work(system_unbound_wq, &sfence->suspend_work);
 			return;
 		}
 
@@ -75,7 +78,7 @@ static bool suspend_fence_enable_signaling(struct dma_fence_work *f)
 static const struct dma_fence_work_ops suspend_fence_ops = {
 	.name = "suspend_fence",
 	.work = suspend_fence_work,
-	.release = suspend_fence_release,
+	.complete = suspend_fence_complete,
 	.enable_signaling = suspend_fence_enable_signaling,
 };
 
@@ -104,7 +107,7 @@ i915_suspend_fence_init(struct i915_suspend_fence *sfence,
 
 	lockdep_assert_held(&ce->timeline->mutex);
 	INIT_WORK(&sfence->suspend_work, suspend_fence_suspend_work);
-	dma_fence_work_init(base, NULL, &suspend_fence_ops);
+	dma_fence_work_init(base, &suspend_fence_ops);
 	__set_bit(I915_SUSPEND_FENCE, &base->dma.flags);
 	sfence->ops = ops;
 

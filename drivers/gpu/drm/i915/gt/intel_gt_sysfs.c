@@ -105,6 +105,39 @@ static struct kobject *gt_get_parent_obj(struct intel_gt *gt)
 	return &gt->i915->drm.primary->kdev->kobj;
 }
 
+int intel_gt_sysfs_reset(struct intel_gt *gt)
+{
+	/* Check if already wedged, if not then reset */
+	if (intel_gt_terminally_wedged(gt))
+		return -EIO;
+
+	/* The string is appended to "Resetting chip for..." */
+	intel_gt_handle_error(gt, ALL_ENGINES, I915_ERROR_CAPTURE,
+			      "GT%u manually from sysfs", gt->info.id);
+
+	return 0;
+}
+
+static ssize_t prelim_reset_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	bool val;
+	int ret;
+
+	ret = kstrtobool(buf, &val);
+	if (ret)
+		return ret;
+
+	if (!val)
+		return count;
+
+	return intel_gt_sysfs_reset(gt) ?: count;
+}
+
+DEVICE_ATTR_WO(prelim_reset);
+
 static ssize_t id_show(struct device *dev,
 		       struct device_attribute *attr,
 		       char *buf)
@@ -181,6 +214,10 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 	if (sysfs_create_file(dir, &dev_attr_id.attr.attr))
 		drm_err(&gt->i915->drm,
 			"failed to create sysfs %s info files\n", name);
+
+	if (sysfs_create_file(dir, &dev_attr_prelim_reset.attr))
+		drm_warn(&gt->i915->drm,
+			 "failed to create sysfs %s reset files\n", name);
 
 	intel_gt_sysfs_pm_init(gt, dir);
 	intel_gt_sysfs_register_errors(gt, dir);

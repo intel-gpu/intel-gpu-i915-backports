@@ -134,67 +134,46 @@ long intel_gt_retire_requests_timeout(struct intel_gt *gt, long timeout,
 				      long *remaining_timeout)
 {
 	struct intel_gt_timelines *timelines = &gt->timelines;
-	struct intel_timeline *tl, *tn;
 	unsigned long active_count = 0;
-	LIST_HEAD(free);
+	struct intel_timeline *tl;
 
 	if (gt->i915->quiesce_gpu)
 		return 0;
 
 	flush_submission(gt, timeout); /* kick the ksoftirqd tasklets */
-	spin_lock(&timelines->lock);
-	list_for_each_entry_safe(tl, tn, &timelines->active_list, link) {
-		if (!mutex_trylock(&tl->mutex)) {
-			active_count++; /* report busy to caller, try again? */
-			continue;
-		}
 
-		intel_timeline_get(tl);
-		GEM_BUG_ON(!atomic_read(&tl->active_count));
-		atomic_inc(&tl->active_count); /* pin the list element */
-		spin_unlock(&timelines->lock);
+	rcu_read_lock();
+	list_for_each_entry_rcu(tl, &timelines->active_list, link) {
+		if (!intel_timeline_get_if_active(tl)) /* pin the link */
+			continue;
+		rcu_read_unlock();
 
 		if (timeout > 0) {
 			struct dma_fence *fence;
 
 			fence = i915_active_fence_get(&tl->last_request);
 			if (fence) {
-				mutex_unlock(&tl->mutex);
-
 				timeout = dma_fence_wait_timeout(fence,
 								 true,
 								 timeout);
 				dma_fence_put(fence);
-
-				/* Retirement is best effort */
-				if (!mutex_trylock(&tl->mutex)) {
-					active_count++;
-					goto out_active;
-				}
 			}
 		}
 
-		if (!retire_requests(tl))
-			active_count++;
-		mutex_unlock(&tl->mutex);
-
-out_active:	spin_lock(&timelines->lock);
-
-		/* Resume list iteration after reacquiring spinlock */
-		list_safe_reset_next(tl, tn, link);
-		if (atomic_dec_and_test(&tl->active_count))
-			list_del(&tl->link);
-
-		/* Defer the final release to after the spinlock */
-		if (refcount_dec_and_test(&tl->kref.refcount)) {
-			GEM_BUG_ON(atomic_read(&tl->active_count));
-			list_add(&tl->link, &free);
+		/* Retirement is best effort */
+		if (!list_empty(&tl->requests)) {
+			if (mutex_trylock(&tl->mutex)) {
+				active_count += !retire_requests(tl);
+				mutex_unlock(&tl->mutex);
+			} else {
+				active_count++;
+			}
 		}
-	}
-	spin_unlock(&timelines->lock);
 
-	list_for_each_entry_safe(tl, tn, &free, link)
-		__intel_timeline_free(&tl->kref);
+		rcu_read_lock();
+		intel_timeline_put_active(tl);
+	}
+	rcu_read_unlock();
 
 	if (flush_submission(gt, timeout)) /* Wait, there's more! */
 		active_count++;

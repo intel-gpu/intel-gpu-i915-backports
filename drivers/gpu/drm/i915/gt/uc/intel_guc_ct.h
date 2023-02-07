@@ -91,6 +91,19 @@ struct intel_guc_ct {
 	int dead_ct_reason;
 	bool dead_ct_reported;
 	struct work_struct dead_ct_worker;
+
+	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
+	struct {
+		/**
+		 * @delay: Period for polling the CTB tail
+		 */
+		unsigned long delay;
+
+		/**
+		 * @work: Periodic work to detect and fix CTB tail loss.
+		 */
+		struct delayed_work work;
+	} mtl_workaround;
 };
 
 void intel_guc_ct_init_early(struct intel_guc_ct *ct);

@@ -100,7 +100,6 @@ struct drm_printer;
 	param(bool, enable_secure_batch, false, 0400) \
 	param(bool, enable_hw_throttle_blt, false, 0400) \
 	param(bool, enable_rc6, true, 0400) \
-	param(bool, enable_stateless_mc, false, 0400) \
 	param(bool, rc6_ignore_steppings, false, 0400) \
 	param(bool, enable_hangcheck, true, 0600) \
 	param(bool, load_detect_test, false, 0600) \

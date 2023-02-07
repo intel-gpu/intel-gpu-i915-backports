@@ -306,18 +306,6 @@ i915_gem_object_has_fabric(const struct drm_i915_gem_object *obj)
 }
 
 static inline void
-i915_gem_object_set_first_bind(struct drm_i915_gem_object *obj)
-{
-	obj->flags |= I915_BO_FIRST_BIND;
-}
-
-static inline bool
-i915_gem_object_has_first_bind(const struct drm_i915_gem_object *obj)
-{
-	return obj->flags & I915_BO_FIRST_BIND;
-}
-
-static inline void
 i915_gem_object_set_readonly(struct drm_i915_gem_object *obj)
 {
 	obj->flags |= I915_BO_READONLY;
@@ -409,6 +397,12 @@ static inline void
 i915_gem_object_clear_tiling_quirk(struct drm_i915_gem_object *obj)
 {
 	clear_bit(I915_TILING_QUIRK_BIT, &obj->flags);
+}
+
+static inline bool
+i915_gem_object_is_protected(const struct drm_i915_gem_object *obj)
+{
+	return obj->flags & I915_BO_PROTECTED;
 }
 
 static inline bool
@@ -585,6 +579,7 @@ i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
 }
 
 int i915_gem_object_pin_pages_unlocked(struct drm_i915_gem_object *obj);
+int i915_gem_object_pin_pages_sync(struct drm_i915_gem_object *obj);
 
 static inline bool
 i915_gem_object_has_pages(struct drm_i915_gem_object *obj)
@@ -824,5 +819,25 @@ bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj);
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 					 enum intel_region_id dst_region_id,
 					 bool is_atomic_fault);
+
+void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,
+				     struct i915_request *rq);
+long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
+				  unsigned int flags,
+				  long timeout);
+int i915_gem_object_migrate_sync(struct drm_i915_gem_object *obj);
+void i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj);
+
+static inline bool
+i915_gem_object_has_migrate(const struct drm_i915_gem_object *obj)
+{
+	return i915_active_fence_isset(&obj->mm.migrate);
+}
+
+static inline int
+i915_gem_object_migrate_has_error(const struct drm_i915_gem_object *obj)
+{
+	return i915_active_fence_has_error(&obj->mm.migrate);
+}
 
 #endif

@@ -38,8 +38,8 @@ int __intel_engine_reset_bh(struct intel_engine_cs *engine,
 
 void __i915_request_reset(struct i915_request *rq, bool guilty);
 
-int __must_check intel_gt_reset_trylock_noretry(struct intel_gt *gt, int *srcu);
 int __must_check intel_gt_reset_trylock(struct intel_gt *gt, int *srcu);
+int __must_check intel_gt_reset_lock_interruptible(struct intel_gt *gt, int *srcu);
 void intel_gt_reset_unlock(struct intel_gt *gt, int tag);
 void intel_gt_reset_backoff_raise(struct intel_gt *gt);
 void intel_gt_reset_backoff_clear(struct intel_gt *gt);

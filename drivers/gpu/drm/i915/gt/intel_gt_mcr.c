@@ -132,9 +132,16 @@ void intel_gt_mcr_init(struct intel_gt *gt)
 		 * media GT.
 		 */
 	} else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70)) {
-		fuse = REG_FIELD_GET(GT_L3_EXC_MASK,
-				     intel_uncore_read(gt->uncore, XEHP_FUSE4));
 
+		/* Wa_14016747170:mtl-m[a0], mtl-p[a0] */
+		if (IS_MTL_GRAPHICS_STEP(i915, M, STEP_A0, STEP_B0) ||
+		    IS_MTL_GRAPHICS_STEP(i915, P, STEP_A0, STEP_B0))
+			fuse = REG_FIELD_GET(MTL_GT_L3_EXC_MASK,
+					     intel_uncore_read(gt->uncore,
+							       MTL_GT_ACTIVITY_FACTOR));
+		else
+			fuse = REG_FIELD_GET(GT_L3_EXC_MASK,
+					     intel_uncore_read(gt->uncore, XEHP_FUSE4));
 		/*
 		 * Despite the register field being named "exclude mask" the
 		 * bits actually represent enabled banks (two banks per bit).

@@ -64,6 +64,9 @@
 #ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
 #include "intel_vdsc.h"
 #endif
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+#include "intel_vrr.h"
+#endif
 
 #ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
 static int
@@ -2927,6 +2930,53 @@ intel_hdmi_can_support_frl_mode(struct intel_encoder *encoder,
 }
 #endif
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+void intel_hdmi_compute_vtemp_payload(struct intel_crtc_state *crtc_state)
+{
+	struct drm_display_mode *mode = &crtc_state->hw.adjusted_mode;
+	struct hdmi_vtem_payload *vtem_payload = &crtc_state->vrr.vtem_config.payload;
+
+	int base_rr = drm_mode_vrefresh(mode);
+	int vic = crtc_state->infoframes.avi.avi.video_code;
+
+	vtem_payload->vrr_en = crtc_state->vrr.enable;
+	vtem_payload->qms_en = false;
+	vtem_payload->fva_factor = 0;
+
+	if (vic != 0) {
+		vtem_payload->base_vfront = 0;
+		vtem_payload->base_refresh_rate = 0;
+	} else {
+		vtem_payload->base_vfront = mode->vsync_start - mode->vdisplay;
+		vtem_payload->base_refresh_rate = base_rr;
+	}
+
+	vtem_payload->m_const = false;
+}
+
+static void intel_hdmi_compute_vtemp_header(struct intel_crtc_state *pipe_config)
+{
+	struct hdmi_extended_metadata_packet *vtem_emp = &pipe_config->vrr.vtem_config.vtemp;
+
+	vtem_emp->type = HDMI_EMP_TYPE_VTEM;
+	vtem_emp->header.hb0 = TRANS_HDMI_EMP_HB0;
+	vtem_emp->first_data_set.pb0_new = true;
+	vtem_emp->first_data_set.pb0_end = false;
+	vtem_emp->first_data_set.pb0_afr = false;
+	vtem_emp->first_data_set.pb0_vfr = true;
+
+	if (pipe_config->vrr.vtem_config.payload.qms_en)
+		vtem_emp->first_data_set.pb0_sync = true;
+	else
+		vtem_emp->first_data_set.pb0_sync = false;
+	vtem_emp->first_data_set.ds_type = HDMI_EMP_DS_TYPE_PSTATIC;
+	vtem_emp->first_data_set.org_id = 1;
+	vtem_emp->first_data_set.data_set_tag = 1;
+	vtem_emp->first_data_set.data_set_length = 4;
+	vtem_emp->enabled = true;
+}
+#endif
+
 int intel_hdmi_compute_config(struct intel_encoder *encoder,
 			      struct intel_crtc_state *pipe_config,
 			      struct drm_connector_state *conn_state)
@@ -3071,10 +3121,21 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 		drm_dbg_kms(&dev_priv->drm, "bad DRM infoframe\n");
 		return -EINVAL;
 	}
+
 #ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
 	if (pipe_config->dsc.compression_enable)
 		intel_hdmi_compute_cvtemp_header(pipe_config);
 #endif
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	intel_vrr_compute_config(pipe_config, conn_state);
+
+	if (pipe_config->vrr.enable) {
+		intel_hdmi_compute_vtemp_payload(pipe_config);
+		intel_hdmi_compute_vtemp_header(pipe_config);
+	}
+#endif
+
 	return 0;
 }
 
@@ -3102,6 +3163,10 @@ intel_hdmi_unset_edid(struct drm_connector *connector)
 
 	intel_hdmi->dp_dual_mode.type = DRM_DP_DUAL_MODE_NONE;
 	intel_hdmi->dp_dual_mode.max_tmds_clock = 0;
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	drm_connector_set_vrr_capable_property(connector, false);
+#endif
 
 	kfree(to_intel_connector(connector)->detect_edid);
 	to_intel_connector(connector)->detect_edid = NULL;
@@ -3186,6 +3251,9 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 	intel_wakeref_t wakeref;
 	struct edid *edid;
 	bool connected = false;
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	bool vrr_capable;
+#endif
 	struct i2c_adapter *i2c;
 
 	wakeref = intel_display_power_get(dev_priv, POWER_DOMAIN_GMBUS);
@@ -3230,6 +3298,13 @@ intel_hdmi_set_edid(struct drm_connector *connector)
 	}
 
 	cec_notifier_set_phys_addr_from_edid(intel_hdmi->cec_notifier, edid);
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	vrr_capable = intel_vrr_is_capable(to_intel_connector(connector));
+	drm_dbg_kms(&dev_priv->drm, "[CONNECTOR:%d:%s] VRR capable: %s\n",
+		    connector->base.id, connector->name, str_yes_no(vrr_capable));
+	drm_connector_set_vrr_capable_property(connector, vrr_capable);
+#endif
 
 	return connected;
 }
@@ -3393,6 +3468,11 @@ intel_hdmi_add_properties(struct intel_hdmi *intel_hdmi, struct drm_connector *c
 
 	if (!HAS_GMCH(dev_priv))
 		drm_connector_attach_max_bpc_property(connector, 8, 12);
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	if (HAS_HDMI_VRR(dev_priv))
+		drm_connector_attach_vrr_capable_property(connector);
+#endif
 }
 
 /*
@@ -4557,5 +4637,108 @@ void intel_hdmi_set_hcactive(struct drm_i915_private *dev_priv,
 	val |= TRANS_HDMI_HCTOTAL_TB(crtc_state->frl.hctotal_tb);
 
 	intel_de_write(dev_priv, TRANS_HDMI_HCTOTAL(cpu_transcoder), val);
+}
+#endif
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+static void intel_hdmi_mtl_write_vtemp(struct intel_encoder *encoder,
+				       const struct intel_crtc_state *crtc_state)
+{
+	const struct hdmi_vtem_payload *payload = &crtc_state->vrr.vtem_config.payload;
+	const struct hdmi_emp_first_dsf *vtemp = &crtc_state->vrr.vtem_config.vtemp.first_data_set;
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	u32 emp_ctl = intel_de_read(dev_priv, TRANS_HDMI_EMP_CTL(trans));
+	u32 emp_header = 0;
+	u32 data[VTEM_NUM_DWORDS] = {0};
+	u8 payload_data[EMP_PAYLOAD_SIZE] = {0};
+	int i;
+
+	payload_data[0] = vtemp->pb0_sync << 1 | vtemp->pb0_vfr << 2 | vtemp->pb0_afr << 3
+		| vtemp->ds_type << 4 | vtemp->pb0_end << 6 | vtemp->pb0_new << 7;
+
+	payload_data[2] = vtemp->org_id;
+
+	payload_data[3] = vtemp->data_set_tag;
+	payload_data[4] = 0;
+	payload_data[5] = vtemp->data_set_length;
+	payload_data[6] = 0;
+
+	payload_data[7] = payload->vrr_en | payload->m_const << 1 | payload->qms_en << 2
+		| payload->fva_factor << 4;
+
+	payload_data[8] |= payload->base_vfront;
+
+	/* bits 8,9 of base refresh rate */
+	payload_data[9] = (payload->base_refresh_rate & 0x300) >> 8 | payload->rb << 2
+		| payload->next_tfr << 3;
+
+	/* bits 0-7 of base refresh rate */
+	payload_data[10] |= payload->base_refresh_rate & 0xFF;
+
+	data[0] = payload_data[3] << 24 | payload_data[2] << 16 |
+		  payload_data[1] << 8 | payload_data[0];
+
+	data[1] = payload_data[7] << 24 | payload_data[6] << 16 |
+		  payload_data[5] << 8 | payload_data[4];
+
+	data[2] = payload_data[11] << 24 | payload_data[10] << 16 |
+		  payload_data[9] << 8 | payload_data[8];
+
+	emp_ctl |= HDMI_VTEM_ENABLE;
+
+	intel_de_write(dev_priv, TRANS_HDMI_EMP_CTL(trans), emp_ctl);
+
+	/*TRANS_HDMI_EMP_DATA is wriiten as DW at a time and stored in FIFO internally */
+	for (i = 0; i < VTEM_NUM_DWORDS; i++)
+		intel_de_write(dev_priv, TRANS_HDMI_EMP_DATA(trans), data[i]);
+
+	intel_hdmi_fill_emp_header_byte(&crtc_state->vrr.vtem_config.vtemp, &emp_header);
+
+	intel_de_write(dev_priv, TRANS_HDMI_EMP_HEADER(trans), emp_header);
+}
+
+void intel_mtl_write_emp(struct intel_encoder *encoder,
+			 const struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+
+	if (DISPLAY_VER(dev_priv) < 14)
+		return;
+
+	if (crtc_state->vrr.vtem_config.vtemp.enabled)
+		intel_hdmi_mtl_write_vtemp(encoder, crtc_state);
+}
+
+static void intel_hdmi_mtl_read_vtemp(struct intel_encoder *encoder,
+				      struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	enum transcoder trans = crtc_state->cpu_transcoder;
+	u32 emp_ctl, emp_header;
+
+	emp_ctl = intel_de_read(dev_priv, TRANS_HDMI_EMP_CTL(trans));
+
+	if (emp_ctl & HDMI_VTEM_ENABLE) {
+		crtc_state->vrr.vtem_config.vtemp.type = HDMI_EMP_TYPE_VTEM;
+		crtc_state->vrr.vtem_config.vtemp.enabled = true;
+	}
+
+	emp_header =
+		intel_de_read(dev_priv, TRANS_HDMI_EMP_HEADER(trans));
+
+	crtc_state->vrr.vtem_config.vtemp.first_data_set.ds_type =
+		REG_FIELD_GET(TRANS_HDMI_EMP_DS_TYPE_MASK, emp_header);
+}
+
+void intel_mtl_read_emp(struct intel_encoder *encoder,
+			struct intel_crtc_state *crtc_state)
+{
+		struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+
+		if (DISPLAY_VER(dev_priv) < 14)
+			return;
+
+		intel_hdmi_mtl_read_vtemp(encoder, crtc_state);
 }
 #endif

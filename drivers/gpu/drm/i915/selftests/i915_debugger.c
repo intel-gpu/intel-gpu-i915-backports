@@ -201,6 +201,8 @@ int i915_debugger_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(debug_hw_enable),
 	};
 
+	pr_info("sizeof(i915_debugger)=%zd\n", sizeof(struct i915_debugger));
+
 	if (intel_gt_is_wedged(to_gt(i915)))
 		return 0;
 

@@ -18,6 +18,7 @@
 #include "gt/intel_engine_user.h"
 #include <uapi/drm/i915_drm.h>
 #include "gt/intel_engine_user.h"
+#include "gt/intel_gt.h"
 
 static int copy_query_item(void *query_hdr, size_t query_sz,
 			   u32 total_length,
@@ -1032,6 +1033,35 @@ static int prelim_query_hw_ip_version(struct drm_i915_private *i915,
 	return sizeof(ipver);
 }
 
+static int
+prelim_query_l3bank_count(struct drm_i915_private *i915,
+			  struct drm_i915_query_item *query_item)
+{
+	struct prelim_drm_i915_query_memory_regions __user *query_ptr =
+		u64_to_user_ptr(query_item->data_ptr);
+	struct intel_engine_cs *engine;
+	u8 engine_class, engine_instance;
+	int count;
+
+	engine_class = query_item->flags & 0xFF;
+	engine_instance = (query_item->flags >> 8) & 0xFF;
+
+	engine = intel_engine_lookup_user(i915, engine_class, engine_instance);
+
+	if (!engine)
+		return -EINVAL;
+
+	count = intel_count_l3_banks(i915, engine);
+
+	if(count < 0)
+		return count;
+
+	if (copy_to_user(query_ptr, &count, sizeof(count)))
+		return -EFAULT;
+
+	return sizeof(count);
+}
+
 typedef int (* const i915_query_funcs_table)(struct drm_i915_private *dev_priv,
 						    struct drm_i915_query_item *query_item);
 
@@ -1056,6 +1086,7 @@ static i915_query_funcs_table i915_query_funcs_prelim[] = {
 	MAKE_TABLE_IDX(FABRIC_INFO) = query_fabric_connectivity,
 	MAKE_TABLE_IDX(HW_IP_VERSION) = prelim_query_hw_ip_version,
 	MAKE_TABLE_IDX(ENGINE_INFO) = prelim_query_engine_info,
+	MAKE_TABLE_IDX(L3BANK_COUNT) = prelim_query_l3bank_count,
 
 #undef MAKE_TABLE_IDX
 };

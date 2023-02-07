@@ -45,8 +45,6 @@ static void mock_bind_ppgtt(struct i915_address_space *vm,
 			    unsigned int pat_index,
 			    u32 flags)
 {
-	GEM_BUG_ON(flags & I915_VMA_GLOBAL_BIND);
-	set_bit(I915_VMA_LOCAL_BIND_BIT, __i915_vma_flags(vma));
 }
 
 static void mock_unbind_ppgtt(struct i915_address_space *vm,

@@ -82,6 +82,8 @@
 #include "gt/iov/intel_iov.h"
 #include "gt/iov/intel_iov_provisioning.h"
 
+#include "pxp/intel_pxp_pm.h"
+
 #include "spi/intel_spi.h"
 
 #include "i915_debugfs.h"
@@ -339,18 +341,8 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	if (dev_priv->hotplug.dp_wq == NULL)
 		goto out_free_wq;
 
-	/*
-	 * Workqueue for async binding of vmas during vm_bind. There,
-	 * user exptes the bindings to finish in order.
-	 */
-	dev_priv->vm_bind_wq = alloc_ordered_workqueue("vm_bind", 0);
-	if (!dev_priv->vm_bind_wq)
-		goto out_free_dp_wq;
-
 	return 0;
 
-out_free_dp_wq:
-	destroy_workqueue(dev_priv->hotplug.dp_wq);
 out_free_wq:
 	destroy_workqueue(dev_priv->wq);
 out_err:
@@ -361,7 +353,6 @@ out_err:
 
 static void i915_workqueues_cleanup(struct drm_i915_private *dev_priv)
 {
-	destroy_workqueue(dev_priv->vm_bind_wq);
 	destroy_workqueue(dev_priv->hotplug.dp_wq);
 	destroy_workqueue(dev_priv->wq);
 }
@@ -825,7 +816,7 @@ static enum hrtimer_restart fake_int_timer_callback(struct hrtimer *hrtimer)
 }
 
 /*
- * Wa:16014207253,ats
+ * Wa:16014207253,xehpsdv
  * Wa:16014202112,pvc
  */
 static void init_fake_interrupts(struct intel_gt *gt)
@@ -839,8 +830,7 @@ static void init_fake_interrupts(struct intel_gt *gt)
 	if (!gt->i915->params.enable_fake_int_wa)
 		return;
 
-	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0 + 1) ||
-	    IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B1)) {
+	if (IS_XEHPSDV(gt->i915) || IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B1)) {
 		gt->fake_int.delay_slow = 1000 * 1000 * 100;	/* 100ms */
 		gt->fake_int.delay_fast = 1000 * 100;		/* 100us */
 
@@ -1151,8 +1141,6 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 		goto err_msi;
 
 	intel_opregion_init(dev_priv);
-
-	intel_pm_vram_sr_setup(dev_priv);
 
 	/*
 	 * Fill the dram structure to get the system dram info. This will be
@@ -1577,9 +1565,18 @@ out_fini:
 
 void i915_driver_remove(struct drm_i915_private *i915)
 {
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
 	disable_rpm_wakeref_asserts(&i915->runtime_pm);
 
 	pvc_wa_disallow_rc6(i915);
+
+	/*
+	 * If device is quiesced set device to offline status
+	 * so MEI driver can avoid access to HW registers
+	 */
+	if (i915->quiesce_gpu)
+		i915_pci_set_offline(pdev);
 
 	i915_driver_unregister(i915);
 
@@ -2363,31 +2360,6 @@ static int i915_pm_restore(struct device *kdev)
 	return i915_pm_resume(kdev);
 }
 
-static int intel_runtime_idle(struct device *kdev)
-{
-	struct drm_i915_private *dev_priv = kdev_to_i915(kdev);
-	int ret = 1;
-
-	if (!HAS_LMEM_SR(dev_priv)) {
-		/*TODO: Prepare for D3Cold-Off */
-		goto out;
-	}
-
-	disable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
-
-	ret = intel_pm_vram_sr(dev_priv, true);
-	if (!ret)
-		drm_dbg(&dev_priv->drm, "VRAM Self Refresh enabled\n");
-
-	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
-
-out:
-	pm_runtime_mark_last_busy(kdev);
-	pm_runtime_autosuspend(kdev);
-
-	return ret;
-}
-
 static int intel_runtime_suspend(struct device *kdev)
 {
 	struct drm_i915_private *dev_priv = kdev_to_i915(kdev);
@@ -2589,7 +2561,6 @@ const struct dev_pm_ops i915_pm_ops = {
 	.restore = i915_pm_restore,
 
 	/* S0ix (via runtime suspend) event handlers */
-	.runtime_idle = intel_runtime_idle,
 	.runtime_suspend = intel_runtime_suspend,
 	.runtime_resume = intel_runtime_resume,
 };

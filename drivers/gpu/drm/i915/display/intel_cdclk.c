@@ -1803,7 +1803,7 @@ mtl_determine_cdclk_sequence(struct drm_i915_private *i915,
 			     const struct intel_cdclk_config *cdclk_config,
 			     int cdclk)
 {
-	if (cdclk_config->vco == 0) {
+	if (cdclk_config->vco == 0 || cdclk_config->vco == ~0) {
 		return CDCLK_DISABLE;
 	} else if ((i915)->cdclk.hw.cdclk == 0) {
 		return CDCLK_LEGACY_CHANGE;

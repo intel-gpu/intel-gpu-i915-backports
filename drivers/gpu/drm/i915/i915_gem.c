@@ -1198,13 +1198,9 @@ err_unlock:
 		 * as wedged. But we only want to do this when the GPU is angry,
 		 * for all other failure, such as an allocation failure, bail.
 		 */
-		for_each_gt(gt, dev_priv, i) {
-			if (!intel_gt_is_wedged(gt)) {
-				i915_probe_error(dev_priv,
-						 "Failed to initialize GPU, declaring it wedged!\n");
-				intel_gt_set_wedged(gt);
-			}
-		}
+		for_each_gt(gt, dev_priv, i)
+			/* Make any cross-tile error permanent */
+			intel_gt_set_wedged_on_init(gt);
 
 		/* Minimal basic recovery for KMS */
 		ret = i915_ggtt_enable_hw(dev_priv);

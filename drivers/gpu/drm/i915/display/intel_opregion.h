@@ -74,9 +74,6 @@ int intel_opregion_notify_encoder(struct intel_encoder *intel_encoder,
 int intel_opregion_notify_adapter(struct drm_i915_private *dev_priv,
 				  pci_power_t state);
 int intel_opregion_get_panel_type(struct drm_i915_private *dev_priv);
-bool intel_opregion_bios_supports_vram_sr(struct drm_i915_private *i915);
-void intel_opregion_vram_sr(struct drm_i915_private *i915, bool enable);
-bool intel_opregion_vram_sr_required(struct drm_i915_private *i915);
 
 bool intel_opregion_headless_sku(struct drm_i915_private *i915);
 
@@ -126,20 +123,6 @@ static inline int intel_opregion_get_panel_type(struct drm_i915_private *dev)
 }
 
 static inline bool intel_opregion_headless_sku(struct drm_i915_private *i915)
-{
-	return false;
-}
-
-static bool intel_opregion_bios_supports_vram_sr(struct drm_i915_private *i915)
-{
-	return false;
-}
-
-static void intel_opregion_vram_sr(struct drm_i915_private *i915, bool enable)
-{
-}
-
-static bool intel_opregion_vram_sr_required(struct drm_i915_private *i915)
 {
 	return false;
 }

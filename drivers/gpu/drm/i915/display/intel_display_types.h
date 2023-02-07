@@ -42,7 +42,7 @@
 #include <drm/drm_rect.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_work.h>
-#include <drm/i915_mei_hdcp_interface.h>
+#include <drm/i915_cp_fw_hdcp_interface.h>
 #include <media/cec-notifier.h>
 
 #include "i915_vma.h"
@@ -1326,6 +1326,10 @@ struct intel_crtc_state {
 		bool enable;
 		u8 pipeline_full;
 		u16 flipline, vmin, vmax, guardband;
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+		u16 vsync_start, vsync_end;
+		struct hdmi_video_timing_emp_config vtem_config;
+#endif
 	} vrr;
 
 #ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED

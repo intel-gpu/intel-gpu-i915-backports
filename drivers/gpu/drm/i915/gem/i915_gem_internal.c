@@ -16,7 +16,6 @@
 #include "i915_utils.h"
 
 #define QUIET (__GFP_NORETRY | __GFP_NOWARN)
-#define MAYFAIL (__GFP_RETRY_MAYFAIL | __GFP_NOWARN)
 
 static void internal_free_pages(struct sg_table *st)
 {
@@ -88,7 +87,7 @@ create_st:
 		struct page *page;
 
 		do {
-			page = alloc_pages(gfp | (order ? QUIET : MAYFAIL),
+			page = alloc_pages(gfp | (order ? QUIET : I915_GFP_ALLOW_FAIL),
 					   order);
 			if (page)
 				break;

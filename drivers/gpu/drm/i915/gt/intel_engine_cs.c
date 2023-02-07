@@ -1437,7 +1437,7 @@ create_blitter_context(struct intel_engine_cs *engine)
 {
 	static struct lock_class_key blitter;
 
-	return intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_4K,
+	return intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_512K,
 						  I915_GEM_HWS_BLITTER_ADDR,
 						  &blitter, "blitter_context");
 }
@@ -2498,6 +2498,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		drm_printf(m, "*** WEDGED ***\n");
 
 	drm_printf(m, "\tAwake? %d\n", atomic_read(&engine->wakeref.count));
+	drm_printf(m, "\tInterrupts: %lu\n", engine->stats.irq_count);
 	drm_printf(m, "\tBarriers?: %s\n",
 		   str_yes_no(!llist_empty(&engine->barrier_tasks)));
 	drm_printf(m, "\tLatency: %luus\n",
@@ -2514,6 +2515,10 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	if (rq)
 		drm_printf(m, "\tHeartbeat: %d ms ago\n",
 			   jiffies_to_msecs(jiffies - rq->emitted_jiffies));
+	else if (work_pending(&engine->heartbeat.work.work))
+		drm_printf(m, "\tHeartbeat: pending\n");
+	else
+		drm_printf(m, "\tHeartbeat: idle\n");
 	rcu_read_unlock();
 	drm_printf(m, "\tReset count: %d (global %d)\n",
 		   i915_reset_engine_count(engine),

@@ -2135,6 +2135,15 @@
 #define   EXITLINE_SHIFT	0
 
 /* VRR registers */
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+#define _TRANS_VRR_VSYNC_A		0x60078
+#define TRANS_VRR_VSYNC(trans)		_MMIO_TRANS2(trans, _TRANS_VRR_VSYNC_A)
+#define   VRR_VSYNC_START_MASK		REG_GENMASK(12, 0)
+#define   VRR_VSYNC_END_MASK		REG_GENMASK(28, 16)
+#define   VRR_VSYNC_START(x)		REG_FIELD_PREP(VRR_VSYNC_START_MASK, (x))
+#define   VRR_VSYNC_END(x)		REG_FIELD_PREP(VRR_VSYNC_END_MASK, (x))
+#endif
+
 #define _TRANS_VRR_CTL_A		0x60420
 #define _TRANS_VRR_CTL_B		0x61420
 #define _TRANS_VRR_CTL_C		0x62420
@@ -2257,7 +2266,17 @@
 
 /* HDMI 2.1 EMP PACKET HEADER */
 #define _TRANS_HDMI_EMP_HEADER_A	0x600D4
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+#define _TRANS_HDMI_EMP_CTL_A           0x600D0
+#define _TRANS_HDMI_EMP_DATA_A          0x600D8
+#define  HDMI_VTEM_ENABLE_MASK          REG_GENMASK(3, 0)
+#define  HDMI_VTEM_ENABLE               REG_FIELD_PREP(HDMI_VTEM_ENABLE_MASK, 1)
+#endif
 #define TRANS_HDMI_EMP_HEADER(trans)	_MMIO_TRANS2(trans, _TRANS_HDMI_EMP_HEADER_A)
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+#define TRANS_HDMI_EMP_CTL(trans)       _MMIO_TRANS2(trans, _TRANS_HDMI_EMP_CTL_A)
+#define TRANS_HDMI_EMP_DATA(trans)      _MMIO_TRANS2(trans, _TRANS_HDMI_EMP_DATA_A)
+#endif
 #define  TRANS_HDMI_EMP_END			REG_BIT(26)
 #define  TRANS_HDMI_EMP_DS_TYPE_MASK		REG_GENMASK(25, 24)
 #define  TRANS_HDMI_EMP_DS_TYPE_PSTATIC		REG_FIELD_PREP(TRANS_HDMI_EMP_DS_TYPE_MASK, 0)
@@ -7178,8 +7197,6 @@ enum gt_vctr_registers {
 #define   DG1_PCODE_STATUS			0x7E
 #define     DG1_UNCORE_GET_INIT_STATUS		0x0
 #define     DG1_UNCORE_INIT_STATUS_COMPLETE	0x1
-#define   DG1_PCODE_D3_VRAM_SR                  0x71
-#define     DG1_ENABLE_SR                        0x1
 #define   PCODE_POWER_SETUP			0x7C
 #define     POWER_SETUP_SUBCOMMAND_READ_I1	0x4
 #define     POWER_SETUP_SUBCOMMAND_WRITE_I1	0x5
@@ -7229,8 +7246,6 @@ enum gt_vctr_registers {
 #define   GEN6_PCODE_FREQ_IA_RATIO_SHIFT	8
 #define   GEN6_PCODE_FREQ_RING_RATIO_SHIFT	16
 #define GEN6_PCODE_DATA1			_MMIO(0x13812C)
-#define VRAM_CAPABILITY                         _MMIO(0x138144)
-#define   VRAM_SUPPORTED                        REG_BIT(0)
 
 /* IVYBRIDGE DPF */
 #define GEN7_L3CDERRST1(slice)		_MMIO(0xB008 + (slice) * 0x200) /* L3CD Error Status 1 */

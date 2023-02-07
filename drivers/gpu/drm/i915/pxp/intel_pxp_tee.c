@@ -207,16 +207,16 @@ static int i915_pxp_tee_component_bind(struct device *i915_kdev,
 		}
 	}
 
-	if (intel_pxp_is_enabled(pxp)) {
-		/* the component is required to fully start the PXP HW */
+	/* if we are suspended, the HW will be re-initialized on resume */
+	wakeref = intel_runtime_pm_get_if_in_use(&i915->runtime_pm);
+	if (!wakeref)
+		return 0;
+
+	/* the component is required to fully start the PXP HW */
+	if (intel_pxp_is_enabled(pxp))
 		intel_pxp_init_hw(pxp);
-		ret = intel_pxp_wait_for_arb_start(pxp);
-		if (ret) {
-			drm_err(&i915->drm, "Failed to create arb session during bind\n");
-			intel_pxp_fini_hw(pxp);
-			pxp->pxp_component = NULL;
-		}
-	}
+
+	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
 
 	return ret;
 }
