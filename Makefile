@@ -133,25 +133,31 @@ defconfig-help:
 
 .PHONY: i915dkmsdeb-pkg-help
 i915dkmsdeb-pkg-help:
-	$(info deb package contains the default kernel version.)
-	$(info You can set this value by passing supported kernel name.)
-	$(info ###   List of supported osv kernel versions   ###)
+	$(info Debian package contains the default kernel version (KV of UBUNTU_OEM_22.04))
+	$(info To create the package with specific kernel version, \
+		pass the supported kernel name to OS_DISTRIBUTION option)
+	$(info )
+	$(info ##### List of supported osv kernel versions #####)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC" 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep "GENERIC" 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep MAINLINE 1>&2)
-	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
-	@echo "      ex: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC"
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
+	$(info )
+	$(info Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC)
+	@echo ""
 
 .PHONY: i915dkmsrpm-pkg-help
 i915dkmsrpm-pkg-help:
-	$(info rpm package contains the default kernel version.)
-	$(info You can set this value by passing supported kernel name.)
-	$(info ###   List of supported osv kernel versions   ###)
+	$(info Rpm package contains the default kernel version (KV of SLES15_SP4))
+	$(info To create the package with specific kernel version, \
+		pass the supported kernel name to OS_DISTRIBUTION option)
+	$(info )
+	$(info ##### List of supported osv kernel versions #####)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep MAINLINE 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
-	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
-	@echo "      ex: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4"
+	$(info )
+	$(info Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4)
+	@echo ""
 
 .PHONY: help
 help: defconfig-help i915dkmsdeb-pkg-help i915dkmsrpm-pkg-help

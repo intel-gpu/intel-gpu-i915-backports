@@ -44,6 +44,8 @@ config DRM_I915_DEBUG
 	depends on DMABUF_SELFTESTS
 	select SW_SYNC # signaling validation framework (igt/syncobj*)
 	select DRM_I915_WERROR
+	select DRM_I915_CAPTURE_ERROR
+	select DRM_I915_DEBUGGER
 	select DRM_I915_DEBUG_GEM
 	select DRM_I915_DEBUG_GEM_ONCE
 	select DRM_I915_DEBUG_MMIO

@@ -35,6 +35,7 @@ struct intel_gsc_mtl_header
 	 * Bits 16-31: Extension Size
 	 */
 	u32 flags;
+#define INTEL_GSC_MSG_PENDING	1
 
 	u32 status;
 } __packed;

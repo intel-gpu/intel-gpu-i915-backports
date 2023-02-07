@@ -10,7 +10,6 @@
 #include "gt/intel_tlb.h"
 
 #include "i915_drv.h"
-#include "i915_debugger.h"
 #include "i915_gem_object.h"
 #include "i915_scatterlist.h"
 #include "i915_gem_lmem.h"
@@ -190,6 +189,28 @@ retry:
 	return err;
 }
 
+int i915_gem_object_pin_pages_sync(struct drm_i915_gem_object *obj)
+{
+	int err;
+
+	/* Hint that any fresh pages will be acquired synchronously */
+	obj->flags |= I915_BO_ALLOC_SYNC_HINT;
+
+	err = i915_gem_object_pin_pages(obj);
+	if (err)
+		return err;
+
+	err = i915_gem_object_migrate_sync(obj);
+	if (err)
+		goto err;
+
+	return 0;
+
+err:
+	i915_gem_object_unpin_pages(obj);
+	return err;
+}
+
 /* Immediately discard the backing storage */
 void i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 {
@@ -263,7 +284,6 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	assert_object_held_shared(obj);
 
-	i915_debugger_revoke_object_ptes(obj);
 	pages = fetch_and_zero(&obj->mm.pages);
 	if (IS_ERR_OR_NULL(pages))
 		return pages;
@@ -442,6 +462,8 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 		if (unlikely(!i915_gem_object_has_pages(obj))) {
 			GEM_BUG_ON(i915_gem_object_has_pinned_pages(obj));
 
+			obj->flags |= I915_BO_ALLOC_SYNC_HINT;
+
 			err = ____i915_gem_object_get_pages(obj);
 			if (err)
 				return ERR_PTR(err);
@@ -476,6 +498,12 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 			goto err_unpin;
 
 		obj->mm.mapping = page_pack_bits(ptr, type);
+	}
+
+	err = i915_gem_object_migrate_sync(obj);
+	if (err) {
+		ptr = ERR_PTR(err);
+		goto err_unpin;
 	}
 
 	return ptr;

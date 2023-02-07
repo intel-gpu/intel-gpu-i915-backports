@@ -4078,7 +4078,11 @@ static bool hsw_get_pipe_config(struct intel_crtc *crtc,
 	    DISPLAY_VER(dev_priv) >= 11)
 		intel_get_transcoder_timings(crtc, pipe_config);
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	if (HAS_DP_VRR(dev_priv) && !transcoder_is_dsi(pipe_config->cpu_transcoder))
+#else
 	if (HAS_VRR(dev_priv) && !transcoder_is_dsi(pipe_config->cpu_transcoder))
+#endif
 		intel_vrr_get_config(crtc, pipe_config);
 
 	intel_get_pipe_src_size(crtc, pipe_config);
@@ -5959,6 +5963,13 @@ intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 	PIPE_CONF_CHECK_I(vrr.flipline);
 	PIPE_CONF_CHECK_I(vrr.pipeline_full);
 	PIPE_CONF_CHECK_I(vrr.guardband);
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	PIPE_CONF_CHECK_I(vrr.vsync_start);
+	PIPE_CONF_CHECK_I(vrr.vsync_end);
+
+	PIPE_CONF_CHECK_BOOL(vrr.vtem_config.vtemp.enabled);
+	PIPE_CONF_CHECK_BOOL(vrr.vtem_config.vtemp.type);
+#endif
 
 #undef PIPE_CONF_CHECK_X
 #undef PIPE_CONF_CHECK_I
@@ -6745,6 +6756,10 @@ static int intel_async_flip_check_hw(struct intel_atomic_state *state, struct in
 				    plane->base.base.id, plane->base.name);
 			return -EINVAL;
 		}
+
+		/* plane decryption is allow to change only in synchronous flips */
+		if (old_plane_state->decrypt != new_plane_state->decrypt)
+			return -EINVAL;
 	}
 
 	return 0;
@@ -7465,7 +7480,7 @@ static void intel_atomic_helper_free_state_worker(struct work_struct *work)
 	intel_atomic_helper_free_state(dev_priv);
 }
 
-static void intel_atomic_commit_fence_wait(struct intel_atomic_state *intel_state)
+static int intel_atomic_commit_fence_wait(struct intel_atomic_state *intel_state)
 {
 	struct wait_queue_entry wait_fence, wait_reset;
 	struct drm_i915_private *dev_priv = to_i915(intel_state->base.dev);
@@ -7490,6 +7505,8 @@ static void intel_atomic_commit_fence_wait(struct intel_atomic_state *intel_stat
 	finish_wait(bit_waitqueue(&to_gt(dev_priv)->reset.flags,
 				  I915_RESET_MODESET),
 		    &wait_reset);
+
+	return intel_state->commit_ready.error;
 }
 
 static void intel_cleanup_dsbs(struct intel_atomic_state *state)
@@ -7568,9 +7585,15 @@ static void intel_atomic_commit_tail(struct intel_atomic_state *state)
 	struct intel_crtc *crtc;
 	struct intel_power_domain_mask put_domains[I915_MAX_PIPES] = {};
 	intel_wakeref_t wakeref = 0;
+	int err;
 	int i;
 
-	intel_atomic_commit_fence_wait(state);
+	/* XXX handle asynchronous errors; scanout may be reading void */
+	err = intel_atomic_commit_fence_wait(state);
+	if (err)
+		drm_notice(&dev_priv->drm,
+			   "Incomplete display update: %i\n",
+			   err);
 
 	drm_atomic_helper_wait_for_dependencies(&state->base);
 

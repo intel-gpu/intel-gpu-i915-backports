@@ -37,6 +37,7 @@
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_rc6.h"
 #include "gt/intel_rps.h"
+#include "gt/intel_gt_sysfs.h"
 #include "gt/sysfs_engines.h"
 
 #include "i915_drv.h"
@@ -567,6 +568,39 @@ static void i915_setup_quiesce_gpu_sysfs(struct drm_i915_private *i915)
 		dev_err(kdev, "Failed to add sysfs files to setup quiesce GPU\n");
 }
 
+static ssize_t prelim_reset_all_gt_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+	struct intel_gt *gt;
+	unsigned int id;
+	bool val;
+	int ret;
+
+	ret = kstrtobool(buf, &val);
+	if (ret)
+		return ret;
+
+	if (!val)
+		return count;
+
+	for_each_gt(gt, i915, id) {
+		int __ret = intel_gt_sysfs_reset(gt);
+
+		/*
+		 * try to reset as much as possible but return
+		 * error if any of the GTs are wedged
+		 */
+		if (!ret && __ret)
+			ret = __ret;
+	}
+
+	return ret ?: count;
+}
+
+DEVICE_ATTR_WO(prelim_reset_all_gt);
+
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -717,6 +751,10 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 					"l3 parity slice 1 setup failed\n");
 		}
 	}
+
+	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_reset_all_gt.attr))
+		drm_warn(&dev_priv->drm,
+			 "failed to create sysfs reset interface\n");
 
 	dev_priv->sysfs_gt = i915_setup_gt_sysfs(&kdev->kobj);
 	if (!dev_priv->sysfs_gt)

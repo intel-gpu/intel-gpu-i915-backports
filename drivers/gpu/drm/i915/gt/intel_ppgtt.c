@@ -93,7 +93,7 @@ write_dma_entry(struct drm_i915_gem_object * const pdma,
 	bool needs_flush;
 	u64 * const vaddr = __px_vaddr(pdma, &needs_flush);
 
-	vaddr[idx] = encoded_entry;
+	WRITE_ONCE(vaddr[idx], encoded_entry);
 	if (needs_flush)
 		drm_clflush_virt_range(&vaddr[idx], sizeof(u64));
 }
@@ -187,7 +187,16 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 		    unsigned int pat_index,
 		    u32 flags)
 {
+	bool is_lmem = i915_gem_object_is_lmem(px_base(i915_vm_to_ppgtt(vm)->pd));
 	u32 pte_flags;
+
+	if (!(flags & PIN_RESIDENT)) {
+		gen12_init_fault_scratch(vm,
+					 i915_vma_offset(vma),
+					 i915_vma_size(vma),
+					 false);
+		goto invalidate_tlb;
+	}
 
 	if (!test_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma))) {
 		GEM_BUG_ON(vma->size > i915_vma_size(vma));
@@ -206,8 +215,24 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
 	vm->insert_entries(vm, vma, pat_index, pte_flags);
+
+invalidate_tlb:
 	/* Flush the PTE writes to memory */
-	i915_write_barrier(vm->i915, i915_gem_object_is_lmem(px_base(i915_vm_to_ppgtt(vm)->pd)));
+	i915_write_barrier(vm->i915, is_lmem);
+
+	if (i915_vm_page_fault_enabled(vm)) {
+		struct intel_gt *gt;
+		int i;
+
+		for_each_gt(gt, vm->i915, i) {
+			if (!atomic_read(&vm->active_contexts_gt[i]))
+				continue;
+
+			intel_gt_invalidate_tlb_range(gt, vm,
+						      i915_vma_offset(vma),
+						      i915_vma_size(vma));
+		}
+	}
 }
 
 static void ppgtt_bind_vma_wa(struct i915_address_space *vm,

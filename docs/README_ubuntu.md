@@ -3,10 +3,10 @@
   Our current backport supports the following OS Distribution.
 
 
-| OS Distribution | OS Version | Kernel Version  | 
+| OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 | Kernel 5.17 oem | 
-| | 22.04/20.04 |  Kernel 5.15 generic |
+| Ubuntu® | 22.04 | Kernel 5.17 oem |
+| | 20.04 |  Kernel 5.15 generic |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of UBUNTU_OEM_20.04_KERNEL_VERSION/UBUNTU_OEM_22.04_KERNEL_VERSION for Ubuntu. It will point to the kernel version which is being used during backporting.
@@ -65,11 +65,41 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 # Dynamic Kernel Module Support(DKMS) based package creation
 
 ## Ubuntu
-We need to create i915 dkms debian package using the below command.
+There are two ways to create i915 dkms packages.
+1. Using default command :
 ```
-make i915dkmsdeb-pkg
+$make i915dkmsdeb-pkg
+example:
+        $make i915dkmsdeb-pkg
+        generated package name :
+                intel-i915-dkms_0.6411.221110.0.5.17.0.1020+i1-1_all.deb
+```
+
+2. Using os_distribution as an option :
+```
+$make i915dkmsdeb-pkg OS_DISTRIBUTION=<os_distribution>
+example:
+        $make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC
+        generated package name :
+                intel-i915-dkms_0.6411.221110.0.5.15.0.53+i1-1_all.deb
 ```
 Above cmd will create debain package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
+
+Use below help command to get the list of supported os distributions.
+```
+$make i915dkmsdeb-pkg-help
+Debian package contains the default kernel version (KV of UBUNTU_OEM_22.04)
+To create the package with specific kernel version, pass the supported kernel name to OS_DISTRIBUTION option
+
+##### List of supported osv kernel versions #####
+UBUNTU_OEM_22.04
+UBUNTU_OEM_20.04
+UBUNTU_GENERIC
+VANILLA_5.15LTS
+
+Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC
+
+```
 
 ### Installation
 ```

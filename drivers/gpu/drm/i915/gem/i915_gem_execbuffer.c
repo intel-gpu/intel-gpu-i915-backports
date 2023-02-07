@@ -25,6 +25,8 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
 
+#include "pxp/intel_pxp.h"
+
 #include "i915_cmd_parser.h"
 #include "i915_drv.h"
 #include "i915_gem_clflush.h"
@@ -581,78 +583,6 @@ eb_validate_vma(struct i915_execbuffer *eb,
 	return 0;
 }
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-static int eb_await_debugger_fences(struct i915_execbuffer *eb)
-{
-	struct i915_address_space *vm = eb->context->vm;
-	struct i915_request *rq = eb->requests[0];
-	struct bookmark {
-		struct i915_vma_debugger base;
-		struct rcu_head rcu;
-	} *bookmark;
-	struct i915_vma_debugger *dbg;
-	int err = 0;
-
-	if (list_empty(&vm->debugger_fence_list))
-		return 0;
-
-	bookmark = kzalloc(sizeof(*bookmark), GFP_KERNEL | __GFP_NOWARN);
-	if (!bookmark)
-		return -ENOMEM;
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(dbg, &vm->debugger_fence_list, link) {
-		struct dma_fence *fence;
-
-		fence = dma_fence_get_rcu_safe(&dbg->fence);
-		if (!fence)
-			continue;
-
-		err = i915_sw_fence_await_dma_fence(&rq->submit,
-						    fence, 0,
-						    GFP_NOWAIT | __GFP_NOWARN);
-		if (err < 0) {
-			struct bookmark *new;
-
-			spin_lock(&vm->debugger_lock);
-			list_add_rcu(&bookmark->base.link, &dbg->link);
-			spin_unlock(&vm->debugger_lock);
-			rcu_read_unlock();
-
-			new = kzalloc(sizeof(*bookmark),
-				      GFP_KERNEL | __GFP_NOWARN);
-			if (new)
-				err = i915_sw_fence_await_dma_fence(&rq->submit,
-								    fence, 0,
-								    I915_FENCE_GFP);
-			else
-				err = -ENOMEM;
-
-			rcu_read_lock();
-			spin_lock(&vm->debugger_lock);
-			list_del_rcu(&bookmark->base.link);
-			spin_unlock(&vm->debugger_lock);
-
-			kfree_rcu(bookmark, rcu);
-			dbg = &bookmark->base; /* continue list iteration */
-			bookmark = new;
-		}
-		dma_fence_put(fence);
-		if (err < 0)
-			break;
-	}
-	rcu_read_unlock();
-	kfree(bookmark);
-
-	return err;
-}
-#else
-static inline int eb_await_debugger_fences(struct i915_execbuffer *eb)
-{
-	return 0;
-}
-#endif
-
 static int __eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb,
 					       struct i915_request *rq)
 {
@@ -663,19 +593,13 @@ static int __eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb,
 	assert_vm_bind_held(vm);
 	assert_vm_priv_held(vm);
 
-	err = eb_await_debugger_fences(eb);
-	if (err < 0)
-		return err;
-
 	list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
-		/* Wait for the vma to be bound before we start! */
-		err = i915_request_await_active(rq, &vma->active,
-						I915_ACTIVE_AWAIT_EXCL);
+		err = __i915_request_await_bind(rq, vma);
 		if (err)
 			return err;
 	}
 
-	return i915_vm_move_to_active(eb->context->vm, rq->context, rq);
+	return i915_vm_move_to_active(vm, rq->context, rq);
 }
 
 static inline bool
@@ -709,11 +633,6 @@ eb_add_vma(struct i915_execbuffer *eb,
 
 	if (entry->relocation_count)
 		list_add_tail(&ev->reloc_link, &eb->relocs);
-
-	if ((GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70)) &&
-	    (ev->flags & EXEC_OBJECT_PINNED))
-		vma->obj->pat_index =
-			i915_gem_get_pat_index(i915, I915_CACHE_L3_LLC);
 
 	/*
 	 * SNA is doing fancy tricks with compressing batch buffers, which leads
@@ -1076,6 +995,22 @@ static struct i915_vma *eb_lookup_vma(struct i915_execbuffer *eb, u32 handle)
 		if (unlikely(!obj))
 			return ERR_PTR(-ENOENT);
 
+		/*
+		 * If the user has opted-in for protected-object tracking, make
+		 * sure the object encryption can be used.
+		 * We only need to do this when the object is first used with
+		 * this context, because the context itself will be banned when
+		 * the protected objects become invalid.
+		 */
+		if (i915_gem_context_uses_protected_content(eb->gem_context) &&
+		    i915_gem_object_is_protected(obj)) {
+			err = intel_pxp_key_check(&vm->gt->pxp, obj, true);
+			if (err) {
+				i915_gem_object_put(obj);
+				return ERR_PTR(err);
+			}
+		}
+
 		vma = i915_vma_instance(obj, vm, NULL);
 		if (IS_ERR(vma)) {
 			i915_gem_object_put(obj);
@@ -1211,8 +1146,7 @@ static int eb_lock_vmas(struct i915_execbuffer *eb)
 static int eb_validate_persistent_vmas(struct i915_execbuffer *eb)
 {
 	struct i915_address_space *vm = eb->context->vm;
-	struct i915_vma *vma, *last_pinned_vma = NULL;
-	int ret = 0;
+	struct i915_vma *vma;
 
 	assert_vm_bind_held(vm);
 	assert_vm_priv_held(vm);
@@ -1222,25 +1156,20 @@ static int eb_validate_persistent_vmas(struct i915_execbuffer *eb)
 
 	list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
 		u64 pin_flags = vma->start | PIN_OFFSET_FIXED | PIN_USER;
+		int err;
 
-		ret = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
-		if (ret)
-			break;
+		err = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
+		if (!err)
+			continue;
 
-		last_pinned_vma = vma;
-	}
-
-	if (ret && last_pinned_vma) {
-		list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
+		list_for_each_entry_continue_reverse(vma, &vm->vm_bind_list, vm_bind_link)
 			__i915_vma_unpin(vma);
-			if (vma == last_pinned_vma)
-				break;
-		}
-	} else if (last_pinned_vma) {
-		eb->args->flags |= __EXEC_PERSIST_HAS_PIN;
+
+		return err;
 	}
 
-	return ret;
+	eb->args->flags |= __EXEC_PERSIST_HAS_PIN;
+	return 0;
 }
 
 /*
@@ -1931,6 +1860,9 @@ static inline bool use_reloc_gpu(struct i915_vma *vma)
 	if (DBG_FORCE_RELOC)
 		return false;
 
+	if (i915_gem_object_has_migrate(vma->obj))
+		return true;
+
 	return !dma_resv_test_signaled(vma->resv, true);
 }
 
@@ -2123,9 +2055,10 @@ eb_relocate_entry(struct i915_execbuffer *eb,
 		 */
 		if (reloc->write_domain == I915_GEM_DOMAIN_INSTRUCTION &&
 		    GRAPHICS_VER(eb->i915) == 6) {
-			err = i915_vma_bind(target->vma,
-					    target->vma->obj->pat_index,
-					    PIN_GLOBAL, NULL);
+			err = __i915_vma_bind(target->vma,
+					      target->vma->obj->pat_index,
+					      PIN_GLOBAL,
+					      NULL);
 			if (err)
 				return err;
 		}
@@ -3109,7 +3042,18 @@ static int eb_submit(struct i915_execbuffer *eb)
 
 static int num_vcs_engines(struct drm_i915_private *i915)
 {
-	return hweight_long(VDBOX_MASK(to_gt(i915)));
+	struct intel_gt *gt;
+	int id;
+
+	for_each_gt(gt, i915, id) {
+		int count;
+
+		count = hweight_long(VDBOX_MASK(gt));
+		if (count)
+			return count;
+	}
+
+	return 0;
 }
 
 /*
@@ -3985,6 +3929,16 @@ eb_fences_add(struct i915_execbuffer *eb, struct i915_request *rq,
 	struct sync_file *out_fence = NULL;
 	int err;
 
+	if (unlikely(eb->gem_context->syncobj)) {
+		struct dma_fence *fence;
+
+		fence = drm_syncobj_fence_get(eb->gem_context->syncobj);
+		err = i915_request_await_dma_fence(rq, fence);
+		dma_fence_put(fence);
+		if (err < 0)
+			return ERR_PTR(err);
+	}
+
 	if (in_fence) {
 		if (eb->args->flags & I915_EXEC_FENCE_SUBMIT)
 			err = i915_request_await_execution(rq, in_fence,
@@ -4505,7 +4459,7 @@ static int persistent_vmas_move_to_active_sync(struct i915_execbuffer *eb)
 			return err;
 	}
 
-	return i915_vm_move_to_active(eb->context->vm, eb->context, NULL);
+	return i915_vm_move_to_active(vm, eb->context, NULL);
 }
 
 static int revalidate_transaction(struct i915_execbuffer *eb)

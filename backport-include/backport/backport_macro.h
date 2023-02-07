@@ -3,6 +3,53 @@
 #include <linux/version.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(5,19,0)
+
+/*
+ * da68386d9edb1f57a drm: Rename dp/ to display/
+ */
+#define BPM_DRM_DP_HELPER_DIR_DISPLAY_PRESENT
+
+#elif LINUX_VERSION_IN_RANGE(5,18,0, 5,19,0)
+
+/*
+ * 5b529e8d9c387a34 drm/dp: Move public DisplayPort headers into dp/
+ */
+#define BPM_DRM_DP_HELPER_DIR_DP_PRESENT
+
+#endif /*  LINUX_VERSION_IN_RANGE(5,18,0, 5,19,0) */
+
+#if LINUX_VERSION_IS_GEQ(5,18,0)
+
+/*
+ * 4a46e5d251a39e7c10
+ * drm/edid: Rename drm_hdmi_avi_infoframe_colorspace to _colorimetry
+ */
+#define BPM_DRM_HDMI_AVI_INFOFRAME_COLORSPACE_NOT_PRESENT
+
+/*
+ * 7968778914e53788a
+ * PCI: Remove the deprecated "pci-dma-compat.h" API
+ */
+#define BPM_PCI_DMA_COMPAT_H_NOT_PRESENT
+
+/*
+ * 730ff52194cdb324
+ * mm: remove pointless includes from <linux/hmm.h>
+ *
+ */
+
+#define BPM_MIGRATE_AND_MEMREMAP_NOT_PRESENT
+
+/*
+ * 7938f4218168ae9f
+ * dma-buf-map: Rename to iosys-map
+ */
+#define BPM_IOSYS_MAP_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(5,18,0) */
+
+
 #if LINUX_VERSION_IS_GEQ(5,17,2) || \
 	(LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
 	LINUX_VERSION_IN_RANGE(5,15,33, 5,16,0) || \
@@ -18,6 +65,21 @@
 
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,18,0)
+/*
+ * 398d06216ff27b7 iosys-map: Add offset to iosys_map_memcpy_to()
+ *
+ */
+#define BPM_IOSYS_MAP_MEMCPY_TO_ARG_OFFSET_ADDED
+
+/*
+ * 210d0b65d94f5f iosys-map: Add a few more helpers
+ *
+ */
+#define BPM_IOSYS_MAP_FEW_MORE_HELPER_APIS
+#define BPM_IOSYS_MAP_RENAME_APIS
+#endif
+
 #if LINUX_VERSION_IS_GEQ(5,17,0)
 
 /*
@@ -29,13 +91,6 @@
  * 6a2d2ddf2c345e0 drm: Move nomodeset kernel parameter to the DRM subsystem
  */
 #define VGACON_TEXT_FORCE_NOT_PRESENT
-
-/* 
- * 348332e00069 mm: don't include <linux/blk-cgroup.h> in <linux/writeback.h>
- *
- * Took partial i915 patch from KV 5.17.0
- */
-#define LINUX_SCHED_CLOCK_H_ADDED
 
 /*
  * 502fee2499277c drm/i915/dp: Use the drm helpers for getting max FRL rate.
@@ -82,7 +137,6 @@
  *
  */
 #define DRM_EDP_BACKLIGHT_NOT_PRESENT
-
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,16,0)
@@ -242,5 +296,19 @@
  * 7706b76ec9090b Backport couple of fixes for dpcd controlled backlight
  */
 #define DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
+
+/*
+ * Add macro to disable DGLUT 24bit support for MTL+ onwards 
+ * Introduced in DII_6514
+ * a82ae9f6b7d716 Support 24 bit DGLUT for MTL+
+ */
+#define BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
+
+/*
+ * Add macro to disable HDMI2.1 VRR support
+ * Introduced in DII_6556
+ * 64ccfe30b7e258 Enable support for HDMI2.1 VRR
+ */
+#define VRR_FEATURE_NOT_SUPPORTED
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

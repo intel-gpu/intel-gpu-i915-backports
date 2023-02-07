@@ -39,6 +39,7 @@
 #include <linux/seqlock.h>
 
 #include <drm/drm_connector.h>
+#include <drm/i915_cp_fw_hdcp_interface.h>
 #include <drm/ttm/ttm_device.h>
 
 #include "display/intel_cdclk.h"
@@ -114,6 +115,8 @@ struct intel_limit;
 struct intel_overlay;
 struct intel_overlay_error_state;
 struct vlv_s0ix_state;
+
+#define I915_GFP_ALLOW_FAIL (GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN)
 
 enum i915_driver_errors {
 	I915_DRIVER_ERROR_OBJECT_MIGRATION = 0,
@@ -327,7 +330,6 @@ struct i915_gem_mm {
 	 */
 	struct llist_head free_list;
 	struct work_struct free_work;
-
 	/**
 	 * Count of objects pending destructions. Used to skip needlessly
 	 * waiting on an RCU barrier if no objects are waiting to be freed.
@@ -633,8 +635,6 @@ struct drm_i915_private {
 	struct workqueue_struct *modeset_wq;
 	/* unbound hipri wq for page flips/plane updates */
 	struct workqueue_struct *flip_wq;
-	/* ordered wq for async vm_bind */
-	struct workqueue_struct *vm_bind_wq;
 
 	/* pm private clock gating functions */
 	const struct drm_i915_clock_gating_funcs *clock_gating_funcs;
@@ -744,13 +744,6 @@ struct drm_i915_private {
 	u32 bxt_phy_grc;
 
 	u32 suspend_count;
-
-	struct {
-		/* lock to protect vram_sr flags */
-		struct mutex lock;
-		bool supported;
-	} vram_sr;
-
 	struct i915_suspend_saved_registers regfile;
 	struct vlv_s0ix_state *vlv_s0ix_state;
 
@@ -928,7 +921,7 @@ struct drm_i915_private {
 	} debuggers;
 #endif
 
-	struct i915_hdcp_comp_master *hdcp_master;
+	struct i915_hdcp_fw_master *hdcp_master;
 	bool hdcp_comp_added;
 
 	/* Mutex to protect the above hdcp component related values. */
@@ -1220,15 +1213,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G11)
 #define IS_DG2_G12(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_DG2, INTEL_SUBPLATFORM_G12)
-/*
- * FIXME: Need to define a new SUBPLATFORM INTEL_SUBPLATFORM_DG2_MBD
- * for PCI id range 5690..5695, but G10, G11 SUBPLATFROM conflicts
- * with those pci id range.
- */
-#define DG2_MBD_CONFIG_MASK	GENMASK(7, 4)
-#define DG2_MBD_CONFIG_VAL	FIELD_PREP(DG2_MBD_CONFIG_MASK, 9)
-#define IS_DG2_MBD(dev_priv) (IS_DG2(dev_priv) && \
-			      (INTEL_DEVID(dev_priv) & DG2_MBD_CONFIG_MASK) == DG2_MBD_CONFIG_VAL)
 #define IS_ADLS_RPLS(dev_priv) \
 	IS_SUBPLATFORM(dev_priv, INTEL_ALDERLAKE_S, INTEL_SUBPLATFORM_RPL)
 #define IS_ADLP_N(dev_priv) \
@@ -1544,7 +1528,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_REGION(i915, i) (INTEL_INFO(i915)->memory_regions & (i))
 #define HAS_LMEM(i915) HAS_REGION(i915, REGION_LMEM)
-#define HAS_LMEM_SR(i915) (INTEL_INFO(i915)->has_lmem_sr)
 #define HAS_LMEM_MAX_BW(dev_priv) (INTEL_INFO(dev_priv)->has_lmem_max_bandwidth)
 #define HAS_REMOTE_TILES(dev_priv)   (INTEL_INFO(dev_priv)->has_remote_tiles)
 #define HAS_IAF(dev_priv)   (INTEL_INFO(dev_priv)->has_iaf)
@@ -1556,10 +1539,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
  * stored in lmem to support the 3D and media compression formats.
  */
 #define HAS_FLAT_CCS(dev_priv)   (INTEL_INFO(dev_priv)->has_flat_ccs)
-
-#define HAS_STATELESS_MC(dev_priv) (INTEL_INFO(dev_priv)->has_stateless_mc && \
-				    IS_PVC_BD_STEP(dev_priv, STEP_B0, STEP_FOREVER) && \
-				    (dev_priv)->params.enable_stateless_mc)
 
 #define HAS_UM_QUEUES(dev_priv) (INTEL_INFO(dev_priv)->has_um_queues)
 
@@ -1599,7 +1578,12 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_DISPLAY(dev_priv) (INTEL_INFO(dev_priv)->display.pipe_mask != 0)
 
-#define HAS_VRR(i915)	(DISPLAY_VER(i915) >= 11)
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+#define HAS_DP_VRR(i915)       (DISPLAY_VER(i915) >= 11)
+#define HAS_HDMI_VRR(i915)     (DISPLAY_VER(i915) >= 14)
+#else
+#define HAS_VRR(i915)  (DISPLAY_VER(i915) >= 11)
+#endif
 
 #define HAS_ASYNC_FLIPS(i915)		(DISPLAY_VER(i915) >= 5)
 

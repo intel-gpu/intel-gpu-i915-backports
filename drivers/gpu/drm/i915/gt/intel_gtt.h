@@ -32,8 +32,6 @@
 #include "i915_params.h"
 #include "intel_memory_region.h"
 
-#define I915_GFP_ALLOW_FAIL (GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN)
-
 #if IS_ENABLED(CPTCFG_DRM_I915_TRACE_GTT)
 #define DBG(...) trace_printk(__VA_ARGS__)
 #else
@@ -186,6 +184,7 @@ typedef u64 gen8_pte_t;
 
 #define GEN8_PAGE_PRESENT		BIT_ULL(0)
 #define GEN8_PAGE_RW			BIT_ULL(1)
+#define PTE_NULL_PAGE			BIT_ULL(9)
 
 #define GEN8_PDE_IPS_64K BIT_ULL(11)
 #define GEN8_PDE_PS_2M   BIT_ULL(7)
@@ -355,22 +354,18 @@ struct i915_address_space {
 	struct list_head vm_rebind_list;
 	spinlock_t vm_capture_lock;  /* Protects vm_capture_list */
 	spinlock_t vm_rebind_lock;   /* Protects vm_rebind_list */
-	bool invalidate_tlb_scratch:1;
 	/* va tree of persistent vmas */
 	struct rb_root_cached va;
 	struct list_head non_priv_vm_bind_list;
 	struct drm_i915_gem_object *root_obj;
 	struct list_head priv_obj_list;
+	struct i915_active_fence user_fence;
 	atomic_t invalidations;
 
 	struct {
 		struct i915_vma *vma;
 		struct drm_i915_gem_object *obj;
 	} mfence;
-
-	/* EU debugger */
-	spinlock_t debugger_lock;
-	struct list_head debugger_fence_list;
 
 	/* SVM */
 	struct i915_svm *svm;
@@ -421,6 +416,8 @@ struct i915_address_space {
 				  u64 start, u64 length);
 	void (*clear_range)(struct i915_address_space *vm,
 			    u64 start, u64 length);
+	void (*error_range)(struct i915_address_space *vm,
+			    u64 start, u64 length);
 	void (*dump_va_range)(struct i915_address_space *vm,
 			      u64 start, u64 length);
 	void (*insert_page)(struct i915_address_space *vm,
@@ -447,12 +444,6 @@ struct i915_address_space {
 	I915_SELFTEST_DECLARE(bool scrub_64K);
 
 	struct i915_active active;
-
-	/**
-	 * List of persistent vmas which are pending destruction.
-	 */
-	struct llist_head vm_bind_free_list;
-	struct work_struct vm_bind_free_work;
 
 	/* Per tile active users of this VM */
 	atomic_t active_contexts_gt[I915_MAX_GT];

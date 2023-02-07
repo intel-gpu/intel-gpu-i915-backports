@@ -3,8 +3,8 @@
 #
 
 # BKPT_VER is extracted from BACKPORTS_RELEASE_TAG, which is auto genereated from backport description.Tagging is needed
-# for decoding this, Sample in the version file 'BACKPORTS_RELEASE_TAG="I915_6365_PRERELEASE_221027.0"'
-# Backports tagging is needed for this to work, for example "I915_6365_PRERELEASE_221027.0" is the tag for 221027.0
+# for decoding this, Sample in the version file 'BACKPORTS_RELEASE_TAG="I915_5899_PRERELEASE_220622.0"'
+# Backports tagging is needed for this to work, for above example tag filtered output will be 220622.0
 # release in backports branch
 OSV_NAME = ""
 OSV_VER = 0
@@ -14,8 +14,8 @@ BASE_KERNEL_NAME = ""
 EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
-RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_8.6 RHEL_8.5 MAINLINE
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_GENERIC MAINLINE
+RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_GENERIC VANILLA_5.15LTS
 
 ifeq ($(MAKECMDGOALS),i915dkmsdeb-pkg)
 	OS_DISTRIBUTION ?= UBUNTU_OEM_22.04
@@ -25,9 +25,18 @@ endif
 
 BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 6 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
 
-# for decoding this, Sample in the version file DII_KERNEL_TAG="DII_6365_prerelease"
-# for above example tag filtered out put will be 6365
+# DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
+# for decoding this, Sample in the version file DII_KERNEL_TAG="DII_6001_prerelease"
+# for above example tag filtered out put will be 6001
+# for DII_TAG_PREFIX output will be DII or PROD.
+
+DII_TAG_PREFIX=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 1 2>/dev/null || echo 1)
+
+ifeq ($(DII_TAG_PREFIX) , PROD)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
+else
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+endif
 
 ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 # Read kernel version from the utsrelease.h which is common among the all the supported OSVs.
@@ -66,7 +75,7 @@ BASE_KERNEL_NAME = $(KERN_VER)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y).$(EXT
 else ifeq ($(OSV_NAME),)
 # check for mainline and vanilla kernels using kernel versions
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
-OSV_NAME = MAINLINE
+OSV_NAME = VANILLA_5.15LTS
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== 5.18), 1)
 OSV_NAME = VANILLA
@@ -197,7 +206,7 @@ define filechk_osv_version_sles.h
         echo '#define SUSE_LOCALVERSION_MINOR $(EXTENDED_VERSION_Y)'; \
         echo '#define SUSE_LOCALVERSION(a,b) (((a) << 8) + (b))'; \
         echo '#define SUSE_LOCALVERSION_RELEASE_CODE \
-	$(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'
+        $(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'
 endef
 
 define filechk_osv_version_rhel.h

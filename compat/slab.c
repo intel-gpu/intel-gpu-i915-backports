@@ -1,4 +1,5 @@
-#include <linux/slab.h>
+#include <linux/mm.h>
+#include "slab.h"
 
 #ifdef CONFIG_SLAB
 #include <linux/slab_def.h>

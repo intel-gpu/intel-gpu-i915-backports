@@ -67,6 +67,9 @@ static inline bool intel_timeline_sync_is_later(struct intel_timeline *tl,
 	return __intel_timeline_sync_is_later(tl, fence->context, lower_32_bits(fence->seqno));
 }
 
+bool intel_timeline_get_if_active(struct intel_timeline *tl);
+void intel_timeline_put_active(struct intel_timeline *tl);
+
 void __intel_timeline_pin(struct intel_timeline *tl);
 int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww);
 void intel_timeline_enter(struct intel_timeline *tl);

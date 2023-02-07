@@ -64,6 +64,7 @@ static void set_offsets(u32 *regs,
 
 	while (*data) {
 		u8 count, flags;
+		u32 cmd;
 
 		if (*data & BIT(7)) { /* skip */
 			count = *data++ & ~BIT(7);
@@ -75,12 +76,12 @@ static void set_offsets(u32 *regs,
 		flags = *data >> 6;
 		data++;
 
-		*regs = MI_LOAD_REGISTER_IMM(count);
+		cmd = MI_LOAD_REGISTER_IMM(count);
 		if (flags & POSTED)
-			*regs |= MI_LRI_FORCE_POSTED;
+			cmd |= MI_LRI_FORCE_POSTED;
 		if (GRAPHICS_VER(engine->i915) >= 11)
-			*regs |= MI_LRI_LRM_CS_MMIO;
-		regs++;
+			cmd |= MI_LRI_LRM_CS_MMIO;
+		*regs++ = cmd;
 
 		GEM_BUG_ON(!count);
 		do {
@@ -992,8 +993,6 @@ static void __lrc_init_regs(u32 *regs,
 
 	if (HAS_MEMORY_IRQ_STATUS(engine->i915))
 		init_vf_irq_reg_state(regs, engine);
-
-	__reset_stop_ring(regs, engine);
 }
 
 void lrc_init_regs(const struct intel_context *ce,
@@ -1053,9 +1052,50 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 	}
 }
 
-static void
-check_redzone(const void *vaddr, const struct intel_engine_cs *engine)
+static bool lrc_check_regs(const struct intel_context *ce,
+			   const struct intel_engine_cs *engine)
 {
+	const struct intel_ring *ring = ce->ring;
+	u32 *regs = ce->lrc_reg_state;
+	bool valid = true;
+	int x;
+
+	if (regs[CTX_RING_START] != i915_ggtt_offset(ring->vma)) {
+		pr_err("%s: context submitted with incorrect RING_START [%08x], expected %08x\n",
+		       engine->name,
+		       regs[CTX_RING_START],
+		       i915_ggtt_offset(ring->vma));
+		regs[CTX_RING_START] = i915_ggtt_offset(ring->vma);
+		valid = false;
+	}
+
+	if ((regs[CTX_RING_CTL] & ~(RING_WAIT | RING_WAIT_SEMAPHORE)) !=
+	    (RING_CTL_SIZE(ring->size) | RING_VALID)) {
+		pr_err("%s: context submitted with incorrect RING_CTL [%08x], expected %08x\n",
+		       engine->name,
+		       regs[CTX_RING_CTL],
+		       (u32)(RING_CTL_SIZE(ring->size) | RING_VALID));
+		regs[CTX_RING_CTL] = RING_CTL_SIZE(ring->size) | RING_VALID;
+		valid = false;
+	}
+
+	x = lrc_ring_mi_mode(engine);
+	if (x != -1 && regs[x + 1] & (regs[x + 1] >> 16) & STOP_RING) {
+		pr_err("%s: context submitted with STOP_RING [%08x] in RING_MI_MODE\n",
+		       engine->name, regs[x + 1]);
+		regs[x + 1] &= ~STOP_RING;
+		regs[x + 1] |= STOP_RING << 16;
+		valid = false;
+	}
+
+	return valid;
+}
+
+static void
+check_redzone(struct intel_context *ce)
+{
+	const void *vaddr = (void *)ce->lrc_reg_state - LRC_STATE_OFFSET;
+	const struct intel_engine_cs *engine = ce->engine;
 	const int len = REDZONE_KTIME;
 	ktime_t now, *last;
 
@@ -1084,6 +1124,13 @@ check_redzone(const void *vaddr, const struct intel_engine_cs *engine)
 			     memchr_inv(vaddr, CONTEXT_REDZONE, len) - vaddr);
 		hexdump(&p, vaddr, REDZONE_KTIME);
 		*last = KTIME_MAX; /* never check again */
+	}
+
+	if (!lrc_check_regs(ce, engine)) {
+		drm_err_once(&engine->i915->drm,
+			     "%s: Invalid lrc state found during submission\n",
+			     engine->name);
+		*last = KTIME_MAX;
 	}
 }
 
@@ -1260,6 +1307,13 @@ int lrc_alloc(struct intel_context *ce, struct intel_engine_cs *engine)
 				       intel_context_is_child(ce),
 				       tl->mutex.dep_map.wait_type_inner,
 				       tl->mutex.dep_map.wait_type_outer);
+		/*
+		 * Due to an interesting quirk in lockdep's internal debug
+		 * tracking, after setting a subclass we must ensure the lock
+		 * is used. Otherwise, nr_unused_locks is incremented once too
+		 * often.
+		 */
+		might_lock(&tl->mutex);
 #endif
 
 		ce->timeline = tl;
@@ -1332,8 +1386,8 @@ void lrc_unpin(struct intel_context *ce)
 		i915_request_put(ce->parallel.last_rq);
 		ce->parallel.last_rq = NULL;
 	}
-	check_redzone((void *)ce->lrc_reg_state - LRC_STATE_OFFSET,
-		      ce->engine);
+
+	check_redzone(ce);
 }
 
 void lrc_post_unpin(struct intel_context *ce)
@@ -1808,46 +1862,6 @@ void lrc_update_offsets(struct intel_context *ce,
 			struct intel_engine_cs *engine)
 {
 	set_offsets(ce->lrc_reg_state, reg_offsets(engine), engine, false);
-}
-
-void lrc_check_regs(const struct intel_context *ce,
-		    const struct intel_engine_cs *engine,
-		    const char *when)
-{
-	const struct intel_ring *ring = ce->ring;
-	u32 *regs = ce->lrc_reg_state;
-	bool valid = true;
-	int x;
-
-	if (regs[CTX_RING_START] != i915_ggtt_offset(ring->vma)) {
-		pr_err("%s: context submitted with incorrect RING_START [%08x], expected %08x\n",
-		       engine->name,
-		       regs[CTX_RING_START],
-		       i915_ggtt_offset(ring->vma));
-		regs[CTX_RING_START] = i915_ggtt_offset(ring->vma);
-		valid = false;
-	}
-
-	if ((regs[CTX_RING_CTL] & ~(RING_WAIT | RING_WAIT_SEMAPHORE)) !=
-	    (RING_CTL_SIZE(ring->size) | RING_VALID)) {
-		pr_err("%s: context submitted with incorrect RING_CTL [%08x], expected %08x\n",
-		       engine->name,
-		       regs[CTX_RING_CTL],
-		       (u32)(RING_CTL_SIZE(ring->size) | RING_VALID));
-		regs[CTX_RING_CTL] = RING_CTL_SIZE(ring->size) | RING_VALID;
-		valid = false;
-	}
-
-	x = lrc_ring_mi_mode(engine);
-	if (x != -1 && regs[x + 1] & (regs[x + 1] >> 16) & STOP_RING) {
-		pr_err("%s: context submitted with STOP_RING [%08x] in RING_MI_MODE\n",
-		       engine->name, regs[x + 1]);
-		regs[x + 1] &= ~STOP_RING;
-		regs[x + 1] |= STOP_RING << 16;
-		valid = false;
-	}
-
-	WARN_ONCE(!valid, "Invalid lrc state found %s submission\n", when);
 }
 
 /*

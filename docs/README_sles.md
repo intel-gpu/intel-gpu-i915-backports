@@ -5,7 +5,7 @@
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
 | SLES | 15SP4 | Kernel 5.14 |
-  
+
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to get information on the kernel version being used during backporting.
 
@@ -17,8 +17,8 @@ sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP4_KERNEL_V
 kernel-syms-<SLES15_SP4_KERNEL_VERSION>
 
 example:
-	sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150400.24.11 \
-	kernel-syms-5.14.21-150400.24.11
+       sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150400.24.11 \
+       kernel-syms-5.14.21-150400.24.11
 ```
 
 Please note that dkms installation will skip if the kernel headers are not installed.
@@ -54,11 +54,37 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 # Dynamic Kernel Module Support(DKMS) based package creation
 
 ## SLES
-We need to create i915 dkms packages using the below command.
+There are two ways to create i915 dkms packages.
+1. Using default command:
 ```
-make i915dkmsrpm-pkg
+$make i915dkmsrpm-pkg
+example:
+        $make i915dkmsrpm-pkg
+        generated package name :
+                intel-i915-dkms-0.6411.221110.0.5.14.21.150400.24.21-1.x86_64.rpm
+```
+
+2. Using os_distribution as an option :
+```
+$make i915dkmsrpm-pkg OS_DISTRIBUTION=<os-distribution>
+example:
+        $make i915dkmsrpm-pkg OS_DISTRIBUTION=VANILLA_5.15LTS
+        generated package name :
+                intel-i915-dkms-0.6411.221110.0.5.15.74-1.x86_64.rpm
 ```
   Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
+
+ Use below help command to get the list of supported os distributions.
+
+       $make i915dkmsrpm-pkg-help
+       Rpm package contains the default kernel version (KV of SLES15_SP4)
+       To create the package with specific kernel version, pass the supported kernel name to OS_DISTRIBUTION option
+
+       ##### List of supported osv kernel versions #####
+       SLES15_SP4
+       VANILLA_5.15LTS
+
+       Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4
 
 ### Installation
  ```

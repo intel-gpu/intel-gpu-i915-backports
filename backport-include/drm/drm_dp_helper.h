@@ -1,7 +1,13 @@
 #ifndef _BACKPORT_DRM_DP_HELPER_H_
 #define _BACKPORT_DRM_DP_HELPER_H_
 
+#ifdef BPM_DRM_DP_HELPER_DIR_DISPLAY_PRESENT
+#include_next  <drm/display/drm_dp_helper.h>
+#elif defined(BPM_DRM_DP_HELPER_DIR_DP_PRESENT)
+#include_next  <drm/dp/drm_dp_helper.h>
+#else
 #include_next  <drm/drm_dp_helper.h>
+#endif /* DRM_DP_HELPER_DIR_DISPLAY_PRESENT */
 
 #ifdef DRM_DP_GET_ADJUST_NOT_PRESENT
 

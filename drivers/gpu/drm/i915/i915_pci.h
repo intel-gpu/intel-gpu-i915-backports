@@ -14,5 +14,6 @@ int i915_pci_register_driver(void);
 void i915_pci_unregister_driver(void);
 
 bool i915_pci_resource_valid(struct pci_dev *pdev, int bar);
+void i915_pci_set_offline(struct pci_dev *pdev);
 
 #endif /* __I915_PCI_H__ */

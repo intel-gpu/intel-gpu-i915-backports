@@ -10,12 +10,7 @@
 #include "i915_drv.h"
 #include "i915_driver.h"
 #include "intel_iaf.h"
-
-static int device_set_offline(struct device *dev, void *data)
-{
-	dev->offline = true;
-	return 0;
-}
+#include "i915_pci.h"
 
 /**
  * i915_pci_error_detected - Called when a PCI error is detected.
@@ -58,7 +53,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 * mei_gsc_remove() and will complete the remove flow without
 	 * read/write to the HW registers
 	 */
-	device_for_each_child(&pdev->dev, NULL, device_set_offline);
+	i915_pci_set_offline(pdev);
 	intel_iaf_pcie_error_notify(i915);
 
 	for_each_gt(gt, i915, i) {

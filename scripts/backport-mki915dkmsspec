@@ -55,7 +55,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
 
 	%description
-	Out of tree i915 driver for SLES15SP3 kernel Version 5.3.18.
+	Out of tree i915 driver for SLES15SP4 kernel Version 5.14.
 	Installed as dkms module.
 
 	%prep

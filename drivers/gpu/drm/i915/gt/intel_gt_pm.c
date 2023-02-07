@@ -23,6 +23,8 @@
 #include "intel_wakeref.h"
 #include "intel_pcode.h"
 
+#include "pxp/intel_pxp_pm.h"
+
 /*
  * Wa_14017210380: mtl
  */
@@ -325,6 +327,8 @@ int intel_gt_resume(struct intel_gt *gt)
 
 	intel_uc_resume(&gt->uc);
 
+	intel_pxp_resume(&gt->pxp);
+
 	user_forcewake(gt, false);
 
 out_fw:
@@ -339,23 +343,23 @@ err_wedged:
 
 static void wait_for_suspend(struct intel_gt *gt)
 {
-	if (!intel_gt_pm_is_awake(gt))
-		return;
-
-	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME) {
+	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
 		/*
 		 * Forcibly cancel outstanding work and leave
 		 * the gpu quiet.
 		 */
 		intel_gt_set_wedged(gt);
-		intel_gt_retire_requests(gt);
-	}
+
+	/* Make the GPU available again for swapout */
+	intel_gt_unset_wedged(gt);
 }
 
 void intel_gt_suspend_prepare(struct intel_gt *gt)
 {
 	user_forcewake(gt, true);
 	wait_for_suspend(gt);
+
+	intel_pxp_suspend(&gt->pxp, false);
 }
 
 static suspend_state_t pm_suspend_target(void)
@@ -414,6 +418,7 @@ void intel_gt_suspend_late(struct intel_gt *gt)
 
 void intel_gt_runtime_suspend(struct intel_gt *gt)
 {
+	intel_pxp_suspend(&gt->pxp, true);
 	intel_uc_runtime_suspend(&gt->uc);
 
 	GT_TRACE(gt, "\n");
@@ -421,11 +426,19 @@ void intel_gt_runtime_suspend(struct intel_gt *gt)
 
 int intel_gt_runtime_resume(struct intel_gt *gt)
 {
+	int ret;
+
 	GT_TRACE(gt, "\n");
 	intel_gt_init_swizzling(gt);
 	intel_ggtt_restore_fences(gt->ggtt);
 
-	return intel_uc_runtime_resume(&gt->uc);
+	ret = intel_uc_runtime_resume(&gt->uc);
+	if (ret)
+		return ret;
+
+	intel_pxp_resume(&gt->pxp);
+
+	return 0;
 }
 
 ktime_t intel_gt_get_awake_time(const struct intel_gt *gt)

@@ -647,22 +647,29 @@ static int i915_engine_info_show(struct seq_file *m, void *unused)
 	struct intel_engine_cs *engine;
 	intel_wakeref_t wakeref;
 	struct drm_printer p;
+	struct intel_gt *gt;
+	int id;
 
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 
-	seq_printf(m, "GT awake? %s [%d], %llums\n",
-		   str_yes_no(to_gt(i915)->awake),
-		   atomic_read(&to_gt(i915)->wakeref.count),
-		   ktime_to_ms(intel_gt_get_awake_time(to_gt(i915))));
-	seq_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
-		   to_gt(i915)->clock_frequency,
-		   to_gt(i915)->clock_period_ns);
+	for_each_gt(gt, i915, id) {
+		seq_printf(m, "GT%d awake? %s [%d], %llums, interrupts: %lu\n",
+			   gt->info.id,
+			   str_yes_no(gt->awake),
+			   atomic_read(&gt->wakeref.count),
+			   ktime_to_ms(intel_gt_get_awake_time(gt)),
+			   gt->irq_count);
+		seq_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
+			   gt->clock_frequency,
+			   gt->clock_period_ns);
+	}
 
 	p = drm_seq_file_printer(m);
 	for_each_uabi_engine(engine, i915)
 		intel_engine_dump(engine, &p, "%s\n", engine->name);
 
-	intel_gt_show_timelines(to_gt(i915), &p, i915_request_show_with_schedule);
+	for_each_gt(gt, i915, id)
+		intel_gt_show_timelines(gt, &p, i915_request_show_with_schedule);
 
 	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
 

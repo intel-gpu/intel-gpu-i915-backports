@@ -1,5 +1,5 @@
 #include <linux/mm.h>
-#include <linux/slab.h>
+#include "slab.h"
 
 #ifdef CONFIG_SLUB
 #include <linux/slub_def.h>

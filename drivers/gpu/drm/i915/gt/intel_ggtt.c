@@ -214,23 +214,21 @@ static void guc_ggtt_ct_invalidate(struct i915_ggtt *ggtt)
 {
 	struct intel_gt *gt = ggtt->vm.gt;
 	struct intel_uncore *uncore = gt->uncore;
-	struct intel_guc *guc = &gt->uc.guc;
+	intel_wakeref_t wakeref;
 
-	if (guc->ct.enabled) {
-		intel_wakeref_t wakeref;
-		int err = 0;
+	with_intel_runtime_pm_if_active(uncore->rpm, wakeref) {
+		struct intel_guc *guc = &gt->uc.guc;
+		int err = -ENODEV;
 
-		with_intel_runtime_pm(uncore->rpm, wakeref)
-			err = intel_guc_invalidate_tlb_guc(guc,
-							   INTEL_GUC_TLB_INVAL_MODE_HEAVY);
-		if (err)
-			DRM_ERROR("GuC tlb invalidate failed with error %d\n", err);
+		if (guc->ct.enabled)
+			err = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
 
-	} else {
-		intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC1,
-				      PVC_GUC_TLB_INV_DESC1_INVALIDATE);
-		intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC0,
-				      PVC_GUC_TLB_INV_DESC0_VALID);
+		if (err) {
+			intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC1,
+					      PVC_GUC_TLB_INV_DESC1_INVALIDATE);
+			intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC0,
+					      PVC_GUC_TLB_INV_DESC0_VALID);
+		}
 	}
 }
 
@@ -240,9 +238,9 @@ static void guc_ggtt_invalidate(struct i915_ggtt *ggtt)
 
 	gen8_ggtt_invalidate(ggtt);
 
-	if (HAS_ASID_TLB_INVALIDATION(i915))
+	if (HAS_ASID_TLB_INVALIDATION(i915)) {
 		guc_ggtt_ct_invalidate(ggtt);
-	else if (GRAPHICS_VER(i915) >= 12) {
+	} else if (GRAPHICS_VER(i915) >= 12) {
 		struct intel_gt *gt;
 
 		list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
@@ -717,6 +715,20 @@ static void gen6_ggtt_insert_entries(struct i915_address_space *vm,
 	 * updates have finished.
 	 */
 	ggtt->invalidate(ggtt);
+}
+
+static void gen8_ggtt_clear_range(struct i915_address_space *vm,
+				  u64 start, u64 length)
+{
+	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
+	unsigned long first_entry = start / I915_GTT_PAGE_SIZE;
+	unsigned long num_entries = length / I915_GTT_PAGE_SIZE;
+	gen8_pte_t __iomem *pte =
+		(gen8_pte_t __iomem *)ggtt->gsm + first_entry;
+	const gen8_pte_t scratch = vm->scratch[0]->encode;
+
+	while (num_entries--)
+		iowrite32(scratch, pte++);
 }
 
 static void nop_clear_range(struct i915_address_space *vm,
@@ -1371,6 +1383,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.total = (size / sizeof(gen8_pte_t)) * I915_GTT_PAGE_SIZE;
 	ggtt->vm.cleanup = gen6_gmch_remove;
 	ggtt->vm.clear_range = nop_clear_range;
+	ggtt->vm.error_range = gen8_ggtt_clear_range;
 
 	if (i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
 		ggtt->vm.insert_entries = gen8_ggtt_insert_entries_wa_bcs;
@@ -1549,6 +1562,7 @@ static int gen6_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.alloc_scratch_dma = alloc_pt_dma;
 
 	ggtt->vm.clear_range = nop_clear_range;
+	ggtt->vm.error_range = gen6_ggtt_clear_range;
 	if (!HAS_FULL_PPGTT(i915))
 		ggtt->vm.clear_range = gen6_ggtt_clear_range;
 	ggtt->vm.insert_page = gen6_ggtt_insert_page;

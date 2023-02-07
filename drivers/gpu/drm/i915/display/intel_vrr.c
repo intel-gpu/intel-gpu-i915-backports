@@ -9,11 +9,13 @@
 #include "intel_display_types.h"
 #include "intel_vrr.h"
 
-bool intel_vrr_is_capable(struct intel_connector *connector)
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+static bool
+intel_vrr_dp_is_capable(struct intel_connector *connector)
 {
 	const struct drm_display_info *info = &connector->base.display_info;
 	struct drm_i915_private *i915 = to_i915(connector->base.dev);
-	struct intel_dp *intel_dp;
+	struct intel_dp *intel_dp = intel_attached_dp(connector);
 
 	/*
 	 * DP Sink is capable of VRR video timings if
@@ -21,25 +23,73 @@ bool intel_vrr_is_capable(struct intel_connector *connector)
 	 * EDID monitor range also should be atleast 10 for reasonable
 	 * Adaptive Sync or Variable Refresh Rate end user experience.
 	 */
+	if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
+		return false;
+
+	return HAS_DP_VRR(i915) &&
+	       info->monitor_range.max_vfreq - info->monitor_range.min_vfreq > 10;
+}
+
+static bool
+intel_vrr_hdmi_is_capable(struct intel_connector *connector)
+{
+	struct drm_display_info *info = &connector->base.display_info;
+	struct drm_i915_private *i915 = to_i915(connector->base.dev);
+	struct drm_hdmi_info *hdmi = &info->hdmi;
+
+	return HAS_HDMI_VRR(i915) && hdmi->vrr_cap.vrr_min > 0;
+}
+
+bool intel_vrr_is_capable(struct intel_connector *connector)
+{
 	switch (connector->base.connector_type) {
 	case DRM_MODE_CONNECTOR_eDP:
 		if (!connector->panel.vbt.vrr)
 			return false;
 		fallthrough;
 	case DRM_MODE_CONNECTOR_DisplayPort:
-		intel_dp = intel_attached_dp(connector);
-
-		if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
-			return false;
-
-		break;
+		return intel_vrr_dp_is_capable(connector);
+	case DRM_MODE_CONNECTOR_HDMIA:
+		fallthrough;
+	case DRM_MODE_CONNECTOR_HDMIB:
+		return intel_vrr_hdmi_is_capable(connector);
 	default:
 		return false;
 	}
-
-	return HAS_VRR(i915) &&
-		info->monitor_range.max_vfreq - info->monitor_range.min_vfreq > 10;
 }
+#else
+bool intel_vrr_is_capable(struct intel_connector *connector)
+{
+       const struct drm_display_info *info = &connector->base.display_info;
+       struct drm_i915_private *i915 = to_i915(connector->base.dev);
+       struct intel_dp *intel_dp;
+
+        /*
+         * DP Sink is capable of VRR video timings if
+         * Ignore MSA bit is set in DPCD.
+         * EDID monitor range also should be atleast 10 for reasonable
+         * Adaptive Sync or Variable Refresh Rate end user experience.
+         */
+        switch (connector->base.connector_type) {
+        case DRM_MODE_CONNECTOR_eDP:
+                if (!connector->panel.vbt.vrr)
+                        return false;
+                fallthrough;
+        case DRM_MODE_CONNECTOR_DisplayPort:
+               intel_dp = intel_attached_dp(connector);
+
+               if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
+                       return false;
+
+               break;
+        default:
+                return false;
+        }
+
+       return HAS_VRR(i915) &&
+               info->monitor_range.max_vfreq - info->monitor_range.min_vfreq > 10;
+}
+#endif
 
 void
 intel_vrr_check_modeset(struct intel_atomic_state *state)
@@ -95,6 +145,49 @@ int intel_vrr_vmax_vblank_start(const struct intel_crtc_state *crtc_state)
 	return crtc_state->vrr.vmax - intel_vrr_vblank_exit_length(crtc_state);
 }
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+static void
+intel_vrr_hdmi_get_vmin_max(struct drm_display_mode *adjusted_mode,
+			    struct intel_connector *connector,
+			    int *vmin, int *vmax)
+{
+	struct drm_display_info *info = &connector->base.display_info;
+	struct drm_hdmi_info *hdmi = &info->hdmi;
+	int brr, vrr_max;
+
+	brr = drm_mode_vrefresh(adjusted_mode);
+	vrr_max = hdmi->vrr_cap.vrr_max;
+	/*
+	 * As per HDMI2.1 spec, VRR max is optional and lowest valid value is
+	 * 100 Hz. For cases where VRR max is not given or when BRR
+	 * (Base Refresh-Rate) is less than or equal to VRR max, the
+	 * upper-limit is taken as the BRR only.
+	 * Vmin in that case will be equal to VTotal.
+	 */
+	if (vrr_max < 100 || brr <= vrr_max)
+		*vmin = adjusted_mode->crtc_vtotal;
+	else
+		*vmin = DIV_ROUND_UP(adjusted_mode->crtc_clock * 1000,
+				     adjusted_mode->crtc_htotal * vrr_max);
+
+	*vmax = adjusted_mode->crtc_clock * 1000 /
+		(adjusted_mode->crtc_htotal * hdmi->vrr_cap.vrr_min);
+}
+
+static void
+intel_vrr_dp_get_vmin_max(struct drm_display_mode *adjusted_mode,
+			  struct intel_connector *connector,
+			  int *vmin, int *vmax)
+{
+	const struct drm_display_info *info = &connector->base.display_info;
+
+	*vmin = DIV_ROUND_UP(adjusted_mode->crtc_clock * 1000,
+			     adjusted_mode->crtc_htotal * info->monitor_range.max_vfreq);
+	*vmax = adjusted_mode->crtc_clock * 1000 /
+		(adjusted_mode->crtc_htotal * info->monitor_range.min_vfreq);
+}
+#endif
+
 void
 intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 			 struct drm_connector_state *conn_state)
@@ -104,7 +197,9 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 	struct intel_connector *connector =
 		to_intel_connector(conn_state->connector);
 	struct drm_display_mode *adjusted_mode = &crtc_state->hw.adjusted_mode;
+#ifdef VRR_FEATURE_NOT_SUPPORTED
 	const struct drm_display_info *info = &connector->base.display_info;
+#endif
 	int vmin, vmax;
 
 	if (!intel_vrr_is_capable(connector))
@@ -116,10 +211,23 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 	if (!crtc_state->uapi.vrr_enabled)
 		return;
 
-	vmin = DIV_ROUND_UP(adjusted_mode->crtc_clock * 1000,
-			    adjusted_mode->crtc_htotal * info->monitor_range.max_vfreq);
-	vmax = adjusted_mode->crtc_clock * 1000 /
-		(adjusted_mode->crtc_htotal * info->monitor_range.min_vfreq);
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	if (connector->base.connector_type == DRM_MODE_CONNECTOR_eDP ||
+	    connector->base.connector_type == DRM_MODE_CONNECTOR_DisplayPort)
+		intel_vrr_dp_get_vmin_max(adjusted_mode, connector, &vmin, &vmax);
+
+	else if (connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIA ||
+		 connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIB)
+		intel_vrr_hdmi_get_vmin_max(adjusted_mode, connector, &vmin, &vmax);
+
+	else
+		return;
+#else
+       vmin = DIV_ROUND_UP(adjusted_mode->crtc_clock * 1000,
+                           adjusted_mode->crtc_htotal * info->monitor_range.max_vfreq);
+       vmax = adjusted_mode->crtc_clock * 1000 /
+               (adjusted_mode->crtc_htotal * info->monitor_range.min_vfreq);
+#endif
 
 	vmin = max_t(int, vmin, adjusted_mode->crtc_vtotal);
 	vmax = max_t(int, vmax, adjusted_mode->crtc_vtotal);
@@ -134,6 +242,14 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 	 */
 	crtc_state->vrr.vmin = vmin - 1;
 	crtc_state->vrr.vmax = vmax;
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	if (connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIA ||
+	    connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIB) {
+		crtc_state->vrr.vsync_start = adjusted_mode->crtc_vsync_start;
+		crtc_state->vrr.vsync_end = adjusted_mode->crtc_vsync_end;
+	}
+#endif
 	crtc_state->vrr.enable = true;
 
 	crtc_state->vrr.flipline = crtc_state->vrr.vmin + 1;
@@ -169,12 +285,24 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
 	crtc_state->mode_flags |= I915_MODE_FLAG_VRR;
 }
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+void intel_vrr_enable(struct intel_connector *connector,
+		      const struct intel_crtc_state *crtc_state)
+#else
 void intel_vrr_enable(struct intel_encoder *encoder,
 		      const struct intel_crtc_state *crtc_state)
+#endif
 {
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	struct intel_encoder *encoder = intel_attached_encoder(connector);
+#endif
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	u32 trans_vrr_ctl, trans_vrr_vsync;
+#else
 	u32 trans_vrr_ctl;
+#endif
 
 	if (!crtc_state->vrr.enable)
 		return;
@@ -191,6 +319,16 @@ void intel_vrr_enable(struct intel_encoder *encoder,
 
 	intel_de_write(dev_priv, TRANS_VRR_VMIN(cpu_transcoder), crtc_state->vrr.vmin - 1);
 	intel_de_write(dev_priv, TRANS_VRR_VMAX(cpu_transcoder), crtc_state->vrr.vmax - 1);
+
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	if (connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIA ||
+	    connector->base.connector_type == DRM_MODE_CONNECTOR_HDMIB) {
+		trans_vrr_vsync = VRR_VSYNC_START(crtc_state->vrr.vsync_start) |
+				  VRR_VSYNC_END(crtc_state->vrr.vsync_end);
+		intel_de_write(dev_priv, TRANS_VRR_VSYNC(cpu_transcoder), trans_vrr_vsync);
+	}
+#endif
+
 	intel_de_write(dev_priv, TRANS_VRR_CTL(cpu_transcoder), trans_vrr_ctl);
 	intel_de_write(dev_priv, TRANS_VRR_FLIPLINE(cpu_transcoder), crtc_state->vrr.flipline - 1);
 	intel_de_write(dev_priv, TRANS_PUSH(cpu_transcoder), TRANS_PUSH_EN);
@@ -239,7 +377,11 @@ void intel_vrr_get_config(struct intel_crtc *crtc,
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	u32 trans_vrr_ctl, trans_vrr_vsync;
+#else
 	u32 trans_vrr_ctl;
+#endif
 
 	trans_vrr_ctl = intel_de_read(dev_priv, TRANS_VRR_CTL(cpu_transcoder));
 	crtc_state->vrr.enable = trans_vrr_ctl & VRR_CTL_VRR_ENABLE;
@@ -258,5 +400,11 @@ void intel_vrr_get_config(struct intel_crtc *crtc,
 	crtc_state->vrr.vmax = intel_de_read(dev_priv, TRANS_VRR_VMAX(cpu_transcoder)) + 1;
 	crtc_state->vrr.vmin = intel_de_read(dev_priv, TRANS_VRR_VMIN(cpu_transcoder)) + 1;
 
+#ifndef VRR_FEATURE_NOT_SUPPORTED
+	trans_vrr_vsync = intel_de_read(dev_priv, TRANS_VRR_VSYNC(cpu_transcoder));
+	crtc_state->vrr.vsync_start = REG_FIELD_GET(VRR_VSYNC_START_MASK, trans_vrr_vsync);
+	crtc_state->vrr.vsync_end = REG_FIELD_GET(VRR_VSYNC_END_MASK, trans_vrr_vsync);
+
+#endif
 	crtc_state->mode_flags |= I915_MODE_FLAG_VRR;
 }

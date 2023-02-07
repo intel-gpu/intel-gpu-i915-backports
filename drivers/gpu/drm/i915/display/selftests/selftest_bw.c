@@ -29,8 +29,8 @@ int intel_pcode_read_qgv_points_test(void *arg)
 		return 0;
 	}
 
-	with_intel_runtime_pm(i915->uncore.rpm, wakeref)
-		intel_dram_detect(i915);
+	wakeref = intel_runtime_pm_get(i915->uncore.rpm);
+	intel_dram_detect(i915);
 
 	qi.num_points = i915->dram_info.num_qgv_points;
 
@@ -46,6 +46,8 @@ int intel_pcode_read_qgv_points_test(void *arg)
 			fail = true;
 		}
 	}
+
+	intel_runtime_pm_put(i915->uncore.rpm, wakeref);
 
 	if (fail)
 		return -EINVAL;

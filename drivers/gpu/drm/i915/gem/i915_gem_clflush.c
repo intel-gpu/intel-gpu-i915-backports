@@ -22,6 +22,8 @@ static void __do_clflush(struct drm_i915_gem_object *obj)
 {
 	GEM_BUG_ON(!i915_gem_object_has_pages(obj));
 	drm_clflush_sg(obj->mm.pages);
+
+	i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
 }
 
 static int clflush_work(struct dma_fence_work *base)
@@ -33,29 +35,18 @@ static int clflush_work(struct dma_fence_work *base)
 	return 0;
 }
 
-static void clflush_release(struct dma_fence_work *base)
+static void clflush_complete(struct dma_fence_work *base)
 {
 	struct clflush *clflush = container_of(base, typeof(*clflush), base);
-	struct drm_i915_gem_object *obj = clflush->obj;
 
-	/*
-	 * Note that by deferring the frontbuffer flush to after the signal,
-	 * listeners may proceed before the frontbuffer flush is completed.
-	 * This may affect intel_atomic_tail() as the flip may depend on PSR
-	 * state. At present no impact has yet to be seen (look for sporadic
-	 * CRC failures with flips and PSR), and pushing the flush after the
-	  * critical path does avoid some nasty lock dependencies.
-	  */
-	i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
-
-	i915_gem_object_unpin_pages(obj);
-	i915_gem_object_put(obj);
+	i915_gem_object_unpin_pages(clflush->obj);
+	i915_gem_object_put(clflush->obj);
 }
 
 static const struct dma_fence_work_ops clflush_ops = {
 	.name = "clflush",
 	.work = clflush_work,
-	.release = clflush_release,
+	.complete = clflush_complete,
 };
 
 static struct clflush *clflush_work_create(struct drm_i915_gem_object *obj)
@@ -73,7 +64,7 @@ static struct clflush *clflush_work_create(struct drm_i915_gem_object *obj)
 		return NULL;
 	}
 
-	dma_fence_work_init(&clflush->base, NULL, &clflush_ops);
+	dma_fence_work_init(&clflush->base, &clflush_ops);
 	clflush->obj = i915_gem_object_get(obj); /* obj <-> clflush cycle */
 
 	return clflush;
