@@ -60,7 +60,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	Provides: %{module}
 	Packager: linux-graphics@intel.com
 	Requires: dkms gcc bash sed intel-platform-cse-dkms
-	Requires: %{deppkg} %{deppmtpkg}
+	Requires: %{deppkg} = %{version} %{deppmtpkg}
 	# There is no Source# line for dkms.conf since it has been placed
 	# into the source tarball of SOURCE0
 	Source0: %{module}-%{version}-src.tar.gz

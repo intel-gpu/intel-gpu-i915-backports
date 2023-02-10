@@ -940,6 +940,7 @@ static const struct intel_device_info jsl_info = {
 	TGL_CURSOR_OFFSETS, \
 	TGL_CACHELEVEL, \
 	.has_global_mocs = 1, \
+	.has_pxp = 1, \
 	.display.has_dsb = 0 /* FIXME: LUT load is broken with DSB */
 
 static const struct intel_device_info tgl_info = {
@@ -967,6 +968,7 @@ static const struct intel_device_info rkl_info = {
 #define DGFX_FEATURES \
 	.memory_regions = REGION_SMEM | REGION_LMEM | REGION_STOLEN_LMEM, \
 	.has_llc = 0, \
+	.has_pxp = 0, \
 	.has_snoop = 1, \
 	.is_dgfx = 1, \
 	.has_heci_gscfi = 1
@@ -976,7 +978,6 @@ static const struct intel_device_info dg1_info = {
 	DGFX_FEATURES,
 	.graphics.rel = 10,
 	PLATFORM(INTEL_DG1),
-	.has_lmem_sr = 0,
 	.display.pipe_mask = BIT(PIPE_A) | BIT(PIPE_B) | BIT(PIPE_C) | BIT(PIPE_D),
 	.platform_engine_mask =
 		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) |
@@ -1160,7 +1161,6 @@ static const struct intel_device_info xehpsdv_info = {
 	.graphics.rel = 55, \
 	.media.rel = 55, \
 	PLATFORM(INTEL_DG2), \
-	.has_4tile = 1, \
 	.has_64k_pages = 1, \
 	.has_guc_deprivilege = 1, \
 	.has_heci_pxp = 1, \
@@ -1177,7 +1177,6 @@ static const struct intel_device_info xehpsdv_info = {
 static const struct intel_device_info dg2_info = {
 	DG2_FEATURES,
 	XE_LPD_FEATURES,
-	.has_lmem_sr = 1,
 	.display.cpu_transcoder_mask = BIT(TRANSCODER_A) | BIT(TRANSCODER_B) |
 			       BIT(TRANSCODER_C) | BIT(TRANSCODER_D),
 };
@@ -1205,6 +1204,7 @@ static const struct intel_device_info ats_m_info = {
 	.has_guc_deprivilege = 1, \
 	.has_guc_programmable_mocs = 1, \
 	.has_iaf = 1, \
+	.has_iov_memirq = 1, \
 	.has_l3_ccs_read = 1, \
 	.has_link_copy_engines = 1, \
 	.has_lmtt_lvl2 = 1, \
@@ -1216,8 +1216,6 @@ static const struct intel_device_info ats_m_info = {
 	.has_recoverable_page_fault = 1, \
 	.has_slim_vdbox = 1, \
 	.has_sriov = 1, \
-	.has_iov_memirq = 1, \
-	.has_stateless_mc = 1, \
 	.has_um_queues = 1, \
 	.ppgtt_msb = 56, \
 	.ppgtt_size = 57
@@ -1457,6 +1455,17 @@ bool i915_pci_resource_valid(struct pci_dev *pdev, int bar)
 		return false;
 
 	return true;
+}
+
+static int device_set_offline(struct device *dev, void *data)
+{
+	dev->offline = true;
+	return 0;
+}
+
+void i915_pci_set_offline(struct pci_dev *pdev)
+{
+	device_for_each_child(&pdev->dev, NULL, device_set_offline);
 }
 
 static bool intel_mmio_bar_valid(struct pci_dev *pdev, struct intel_device_info *intel_info)

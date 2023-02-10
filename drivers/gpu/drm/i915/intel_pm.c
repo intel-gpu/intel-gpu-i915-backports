@@ -8646,49 +8646,6 @@ void intel_pm_setup(struct drm_i915_private *dev_priv)
 	atomic_set(&dev_priv->runtime_pm.wakeref_count, 0);
 }
 
-void intel_pm_vram_sr_setup(struct drm_i915_private *i915)
-{
-	if (!HAS_LMEM_SR(i915))
-		return;
-
-	mutex_init(&i915->vram_sr.lock);
-
-	i915->vram_sr.supported = intel_uncore_read(&i915->uncore,
-						    VRAM_CAPABILITY) & VRAM_SUPPORTED;
-	if (intel_opregion_vram_sr_required(i915))
-		i915->vram_sr.supported = i915->vram_sr.supported &&
-						intel_opregion_bios_supports_vram_sr(i915);
-}
-
-int intel_pm_vram_sr(struct drm_i915_private *i915, bool enable)
-{
-	int ret = 0;
-
-	if (!HAS_LMEM_SR(i915))
-		return -EOPNOTSUPP;
-
-	mutex_lock(&i915->vram_sr.lock);
-	if (!i915->vram_sr.supported) {
-		drm_dbg(&i915->drm, "VRAM Self Refresh is not supported\n");
-		ret = -EOPNOTSUPP;
-		goto unlock;
-	}
-
-	drm_dbg(&i915->drm, "VRAM Self Refresh supported\n");
-	if (enable)
-		ret = intel_pcode_enable_vram_sr(i915);
-
-	if (ret)
-		goto unlock;
-
-	intel_opregion_vram_sr(i915, enable);
-
-unlock:
-	mutex_unlock(&i915->vram_sr.lock);
-
-	return ret;
-}
-
 static struct intel_global_state *intel_dbuf_duplicate_state(struct intel_global_obj *obj)
 {
 	struct intel_dbuf_state *dbuf_state;

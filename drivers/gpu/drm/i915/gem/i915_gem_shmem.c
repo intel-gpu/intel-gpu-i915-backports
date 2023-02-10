@@ -72,7 +72,7 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 		return -ENOMEM;
 
 rebuild_st:
-	if (sg_alloc_table(st, page_count, GFP_KERNEL)) {
+	if (sg_alloc_table(st, page_count, I915_GFP_ALLOW_FAIL)) {
 		kfree(st);
 		return -ENOMEM;
 	}
@@ -331,6 +331,7 @@ void i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_
 	struct pagevec pvec;
 	struct page *page;
 
+	i915_gem_object_migrate_finish(obj);
 	__i915_gem_object_release_shmem(obj, pages, true);
 
 	i915_gem_gtt_finish_pages(obj, pages);

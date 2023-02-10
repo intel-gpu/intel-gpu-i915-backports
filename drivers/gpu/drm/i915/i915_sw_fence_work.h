@@ -19,6 +19,7 @@ struct dma_fence_work_ops {
 	const char *name;
 	int (*work)(struct dma_fence_work *f);
 	bool (*enable_signaling)(struct dma_fence_work *f);
+	void (*complete)(struct dma_fence_work *f);
 	void (*release)(struct dma_fence_work *f);
 };
 
@@ -29,7 +30,6 @@ struct dma_fence_work {
 	struct i915_sw_fence chain;
 	struct i915_sw_dma_fence_cb cb;
 
-	struct workqueue_struct *wq;
 	struct work_struct work;
 	const struct dma_fence_work_ops *ops;
 };
@@ -42,7 +42,6 @@ enum {
 extern const struct dma_fence_ops sw_fence_work_ops;
 
 void dma_fence_work_init(struct dma_fence_work *f,
-			 struct workqueue_struct *wq,
 			 const struct dma_fence_work_ops *ops);
 int dma_fence_work_chain(struct dma_fence_work *f, struct dma_fence *signal);
 

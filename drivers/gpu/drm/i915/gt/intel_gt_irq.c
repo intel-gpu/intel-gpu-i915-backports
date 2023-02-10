@@ -182,6 +182,8 @@ void gen11_gt_irq_handler(struct intel_gt *gt, const u32 master_ctl)
 	}
 
 	spin_unlock(gt->irq_lock);
+
+	WRITE_ONCE(gt->irq_count, gt->irq_count + 1);
 }
 
 bool gen11_gt_reset_one_iir(struct intel_gt *gt,

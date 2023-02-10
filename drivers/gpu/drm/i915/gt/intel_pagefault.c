@@ -207,24 +207,6 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 		return ret;
 	}
 
-	/*
-	 * If object was never bound to page table, unset pages so we don't
-	 * copy empty pages as part of migration.  Instead we will get new
-	 * (zero filled) pages from destination region during the object
-	 * migrate.  This ensures pages will be resident in the location
-	 * where first touched (avoids being penalized with migration cost
-	 * when we have backing store that is not yet written).  This logic
-	 * is unneeded if we were to defer page allocation until get_pages.
-	 */
-	if (i915_gem_object_has_pages(obj) &&
-	    !i915_gem_object_has_first_bind(obj)) {
-		struct sg_table *pages;
-
-		pages = __i915_gem_object_unset_pages(obj);
-		if (pages)
-			GEM_WARN_ON(obj->ops->put_pages(obj, pages));
-	}
-
 	return i915_gem_object_migrate(obj, ww, ce, lmem_id, true);
 }
 
@@ -305,43 +287,37 @@ static struct i915_address_space *faulted_vm(struct intel_guc *guc, u32 asid)
 	return xa_load(&guc_to_gt(guc)->i915->asid_resv.xa, asid);
 }
 
-static int handle_i915_mm_fault(struct intel_guc *guc,
-				struct recoverable_page_fault_info *info)
+static struct dma_fence *
+handle_i915_mm_fault(struct intel_guc *guc,
+		     struct recoverable_page_fault_info *info)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
+	struct dma_fence *fence = NULL;
 	struct i915_address_space *vm;
-	struct i915_vma *vma = NULL;
 	enum intel_region_id lmem_id;
 	struct i915_gem_ww_ctx ww;
-	int err;
+	struct i915_vma *vma;
+	int err = 0;
 
 	vm = faulted_vm(guc, info->asid);
 	/* The active context [asid] is protected while servicing a fault */
 	if (GEM_WARN_ON(!vm))
-		return -ENOENT;
+		return ERR_PTR(-ENOENT);
 
-	if (!i915_vm_page_fault_enabled(vm)) {
-		err = -ENOENT;
-		print_recoverable_fault(info, "PF in non-faultable vm", err);
-		return err;
-	}
+	if (!i915_vm_page_fault_enabled(vm))
+		return ERR_PTR(-ENOENT);
 
 	vma = i915_find_vma(vm, info->page_addr);
 	if (!vma) {
 		if (vm->has_scratch) {
-			u64 length = i915_vm_has_scratch_64K(vm) ? I915_GTT_PAGE_SIZE_64K : I915_GTT_PAGE_SIZE_4K;
+			gen12_init_fault_scratch(vm,
+						 info->page_addr,
+						 BIT(vm->scratch_order + PAGE_SHIFT),
+						 true);
+			return NULL;
+		}
 
-			print_recoverable_fault(info, "Bind invalid va to scratch", 0);
-			gen12_init_fault_scratch(vm, info->page_addr, length, true);
-			vm->invalidate_tlb_scratch = true;
-			return 0;
-		}
-		else {
-			err = -ENOENT;
-			print_recoverable_fault(info, "Invalid va", err);
-			GEM_WARN_ON(!vma);
-			return err;
-		}
+		return ERR_PTR(-ENOENT);
 	}
 
 	trace_i915_mm_fault(gt->i915, vm, vma, info);
@@ -355,11 +331,8 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	 * of page faults. Test this upfront so that the redundant fault requests
 	 * return as early as possible.
 	 */
-	if (i915_vma_is_bound(vma, PIN_USER))
+	if (i915_vma_is_bound(vma, PIN_RESIDENT))
 		goto put_vma;
-
-	if (!i915_vma_is_persistent(vma))
-		GEM_BUG_ON(!i915_vma_is_active(vma));
 
  retry_userptr:
 	if (i915_gem_object_is_userptr(vma->obj)) {
@@ -379,7 +352,6 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 	if (i915_gem_object_should_migrate_lmem(vma->obj, lmem_id,
 						access_is_atomic(info))) {
 		err = migrate_to_lmem(vma->obj, gt, lmem_id, &ww);
-
 		/*
 		 * Migration is best effort.
 		 * if we see -EDEADLK handle that with proper backoff. Otherwise
@@ -391,7 +363,7 @@ static int handle_i915_mm_fault(struct intel_guc *guc,
 
 	}
 
-	err = i915_vma_bind_sync(vma, &ww);
+	err = i915_vma_bind(vma, &ww);
 	if (!err && userptr_needs_rebind(vma->obj)) {
 		i915_gem_ww_ctx_fini(&ww);
 		goto retry_userptr;
@@ -411,28 +383,12 @@ put_vma:
 			err = 0;
 	}
 
+	fence = i915_active_fence_get_or_error(&vma->active.excl);
+
 	i915_vma_put(vma);
 	__i915_vma_put(vma);
-	/*
-	 * Intermediate levels of page tables could have been cached in the tlbs
-	 * which maps to scarcth entries. Make sure they are invalidated, so
-	 * that walker see the correct mappings
-	 */
-	if (!err && vm->invalidate_tlb_scratch) {
-		unsigned int i;
 
-		for_each_gt(gt, vm->i915, i) {
-			if (!atomic_read(&vm->active_contexts_gt[i]))
-				continue;
-
-			intel_gt_invalidate_tlb_range(gt, vm,
-						      i915_vma_offset(vma),
-						      i915_vma_size(vma));
-		}
-		vm->invalidate_tlb_scratch = false;
-	}
-
-	return err;
+	return fence ?: ERR_PTR(err);
 }
 
 static void get_fault_info(const u32 *payload, struct recoverable_page_fault_info *info)
@@ -457,37 +413,98 @@ static void get_fault_info(const u32 *payload, struct recoverable_page_fault_inf
 				     desc->dw2) << PAGE_FAULT_DESC_VIRTUAL_ADDR_LO_SHIFT;
 }
 
+struct fault_reply {
+	struct dma_fence_work base;
+	struct recoverable_page_fault_info info;
+	struct i915_sw_dma_fence_cb cb;
+	struct intel_guc *guc;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
+};
+
+static int fault_work(struct dma_fence_work *work)
+{
+	return 0;
+}
+
+static int send_fault_reply(struct fault_reply *f)
+{
+	struct intel_guc_pagefault_reply pkt = {
+		.dw0 =  FIELD_PREP(PAGE_FAULT_REPLY_VALID, 1) |
+			FIELD_PREP(PAGE_FAULT_REPLY_SUCCESS,
+				   f->info.fault_unsuccessful) |
+			FIELD_PREP(PAGE_FAULT_REPLY_REPLY,
+				   PAGE_FAULT_REPLY_ACCESS) |
+			FIELD_PREP(PAGE_FAULT_REPLY_DESC_TYPE,
+				   FAULT_RESPONSE_DESC) |
+			FIELD_PREP(PAGE_FAULT_REPLY_ASID,
+				   f->info.asid),
+
+		.dw1 =  FIELD_PREP(PAGE_FAULT_REPLY_VFID,
+				   f->info.vfid) |
+			FIELD_PREP(PAGE_FAULT_REPLY_ENG_INSTANCE,
+				   f->info.engine_instance) |
+			FIELD_PREP(PAGE_FAULT_REPLY_ENG_CLASS,
+				   f->info.engine_class) |
+			FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
+				   f->info.pdata),
+	};
+
+	return intel_guc_send_pagefault_reply(f->guc, &pkt);
+}
+
+static void fault_complete(struct dma_fence_work *work)
+{
+	struct fault_reply *f = container_of(work, typeof(*f), base);
+
+	if (work->dma.error) {
+		print_recoverable_fault(&f->info,
+					"Fault response: Unsuccessful",
+					work->dma.error);
+		f->info.fault_unsuccessful = true;
+	}
+
+	send_fault_reply(f);
+	intel_gt_pm_put(f->gt, f->wakeref);
+}
+
+static const struct dma_fence_work_ops reply_ops = {
+	.name = "pagefault",
+	.work = fault_work,
+	.complete = fault_complete,
+};
+
 int intel_pagefault_req_process_msg(struct intel_guc *guc,
 				    const u32 *payload,
 				    u32 len)
 {
-	struct intel_guc_pagefault_reply reply = {};
-	struct recoverable_page_fault_info info = {};
-	int ret;
+	struct fault_reply *reply;
+	struct dma_fence *fence;
 
 	if (unlikely(len != 4))
 		return -EPROTO;
 
-	get_fault_info(payload, &info);
+	reply = kzalloc(sizeof(*reply), GFP_KERNEL);
+	if (!reply)
+		return -ENOMEM;
 
-	ret = handle_i915_mm_fault(guc, &info);
-	if (unlikely(ret)) {
-		print_recoverable_fault(&info, "Fault response: Unsuccessful", ret);
-		info.fault_unsuccessful = 1;
+	dma_fence_work_init(&reply->base, &reply_ops);
+	get_fault_info(payload, &reply->info);
+	reply->guc = guc;
+
+	reply->gt = guc_to_gt(guc);
+	reply->wakeref = intel_gt_pm_get(reply->gt);
+
+	fence = handle_i915_mm_fault(guc, &reply->info);
+	if (IS_ERR(fence)) {
+		i915_sw_fence_set_error_once(&reply->base.chain, PTR_ERR(fence));
+	} else if (fence) {
+		__i915_sw_fence_await_dma_fence(&reply->base.chain, fence, &reply->cb);
+		dma_fence_put(fence);
 	}
 
-	reply.dw0 = FIELD_PREP(PAGE_FAULT_REPLY_VALID, 1) |
-		FIELD_PREP(PAGE_FAULT_REPLY_SUCCESS, info.fault_unsuccessful) |
-		FIELD_PREP(PAGE_FAULT_REPLY_REPLY, PAGE_FAULT_REPLY_ACCESS) |
-		FIELD_PREP(PAGE_FAULT_REPLY_DESC_TYPE, FAULT_RESPONSE_DESC) |
-		FIELD_PREP(PAGE_FAULT_REPLY_ASID, info.asid);
-
-	reply.dw1 =  FIELD_PREP(PAGE_FAULT_REPLY_VFID, info.vfid) |
-		FIELD_PREP(PAGE_FAULT_REPLY_ENG_INSTANCE, info.engine_instance) |
-		FIELD_PREP(PAGE_FAULT_REPLY_ENG_CLASS, info.engine_class) |
-		FIELD_PREP(PAGE_FAULT_REPLY_PDATA, info.pdata);
-
-	return intel_guc_send_pagefault_reply(guc, &reply);
+	dma_fence_work_commit_imm(&reply->base);
+	return 0;
 }
 
 const char *intel_pagefault_type2str(unsigned int type)
@@ -542,7 +559,7 @@ static int acc_migrate_to_lmem(struct intel_gt *gt, struct i915_vma *vma)
 
 	i915_gem_vm_bind_lock(vma->vm);
 
-	if (!i915_vma_is_bound(vma, PIN_USER)) {
+	if (!i915_vma_is_bound(vma, PIN_RESIDENT)) {
 		i915_gem_vm_bind_unlock(vma->vm);
 		return 0;
 	}

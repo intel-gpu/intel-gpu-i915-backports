@@ -384,12 +384,33 @@ static ssize_t edid_write(struct file *file, const char __user *ubuf,
 static int vrr_range_show(struct seq_file *m, void *data)
 {
 	struct drm_connector *connector = m->private;
+	struct drm_display_info *info = &connector->display_info;
+	struct drm_hdmi_info *hdmi = &info->hdmi;
+	u8 vrr_min = 0;
+	/*
+	 * For HDMI2.1 VRR, VRRmax [10bits] is optional.
+	 * A value > 0, denotes the highest framerate in Hz that sink can
+	 * support for VRR. A value of 0 indicates that sink does not
+	 * impose any additional limit, and the upper limit will be the
+	 * frame rate of Base video Timing.
+	 */
+	u16 vrr_max = 0;
 
 	if (connector->status != connector_status_connected)
 		return -ENODEV;
 
-	seq_printf(m, "Min: %u\n", (u8)connector->display_info.monitor_range.min_vfreq);
-	seq_printf(m, "Max: %u\n", (u8)connector->display_info.monitor_range.max_vfreq);
+	if (connector->connector_type == DRM_MODE_CONNECTOR_eDP ||
+	    connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort) {
+		vrr_min = connector->display_info.monitor_range.min_vfreq;
+		vrr_max = connector->display_info.monitor_range.max_vfreq;
+	} else if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA ||
+		connector->connector_type == DRM_MODE_CONNECTOR_HDMIB) {
+		vrr_max = hdmi->vrr_cap.vrr_max;
+		vrr_min = hdmi->vrr_cap.vrr_min;
+	}
+
+	seq_printf(m, "Min: %u\n", (u8)vrr_min);
+	seq_printf(m, "Max: %u\n", (u16)vrr_max);
 
 	return 0;
 }

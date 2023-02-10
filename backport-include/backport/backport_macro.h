@@ -578,7 +578,6 @@
         SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
 
 #define BPM_BP_MTD_MAGIC_NUMBER
-#define BPM_PRELIM_OVERRIDE_P2P_DIST_DEFAULT_ENABLE
 #define BPM_INCLUDE_KERNEL_H_IN_ASCII85_H
 #endif
 /* upstream changes not landed in mainline kernel yet.
@@ -614,5 +613,12 @@
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #define CONFIG_INTEL_VSEC
 #endif
+
+/*
+ * Add macro to enable support for HDMI2.1 VRR
+ * Introduced in DII_6556
+ * 64ccfe30b7e258 Enable support for HDMI2.1 VRR
+ */
+#define BPM_VRR_SUPPORT_NOT_PRESENT
 
 #endif /* BP_LINUX_BACKPORT_MACRO_H */

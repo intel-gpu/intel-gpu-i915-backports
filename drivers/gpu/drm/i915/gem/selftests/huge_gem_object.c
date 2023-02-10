@@ -27,18 +27,17 @@ static void huge_free_pages(struct drm_i915_gem_object *obj,
 
 static int huge_get_pages(struct drm_i915_gem_object *obj)
 {
-#define GFP (GFP_KERNEL | __GFP_NOWARN | __GFP_RETRY_MAYFAIL)
 	const unsigned long nreal = obj->scratch / PAGE_SIZE;
 	const unsigned long npages = obj->base.size / PAGE_SIZE;
 	struct scatterlist *sg, *src, *end;
 	struct sg_table *pages;
 	unsigned long n;
 
-	pages = kmalloc(sizeof(*pages), GFP);
+	pages = kmalloc(sizeof(*pages), I915_GFP_ALLOW_FAIL);
 	if (!pages)
 		return -ENOMEM;
 
-	if (sg_alloc_table(pages, npages, GFP)) {
+	if (sg_alloc_table(pages, npages, I915_GFP_ALLOW_FAIL)) {
 		kfree(pages);
 		return -ENOMEM;
 	}
@@ -47,7 +46,7 @@ static int huge_get_pages(struct drm_i915_gem_object *obj)
 	for (n = 0; n < nreal; n++) {
 		struct page *page;
 
-		page = alloc_page(GFP | __GFP_HIGHMEM);
+		page = alloc_page(I915_GFP_ALLOW_FAIL | __GFP_HIGHMEM);
 		if (!page) {
 			sg_mark_end(sg);
 			goto err;
@@ -75,7 +74,6 @@ static int huge_get_pages(struct drm_i915_gem_object *obj)
 err:
 	huge_free_pages(obj, pages);
 	return -ENOMEM;
-#undef GFP
 }
 
 static int huge_put_pages(struct drm_i915_gem_object *obj,

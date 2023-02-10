@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config DRM_I915_INTEL_FABRIC
 	tristate "Intel Fabric Connectivity driver support"
-	depends on BOTH_DMABUF_I915 || ONLY_I915
 	depends on m
+	depends on BOTH_DMABUF_I915 || ONLY_I915
 	depends on 64BIT
 	depends on NET
 	depends on LIBCRC32C

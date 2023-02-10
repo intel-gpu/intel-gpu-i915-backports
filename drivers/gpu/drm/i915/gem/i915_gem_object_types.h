@@ -216,7 +216,7 @@ struct drm_i915_gem_object {
 	/* VM pointer if the object is private to a VM; NULL otherwise */
 	struct i915_address_space *vm;
 /* Invalid VM pointer value if VM is released */
-#define I915_BO_INVALID_PRIV_VM		((void *)0xffffffff)
+#define I915_BO_INVALID_PRIV_VM		ERR_PTR(-EACCES)
 	struct list_head priv_obj_link;
 
 	struct {
@@ -299,11 +299,12 @@ struct drm_i915_gem_object {
 #define I915_BO_ALLOC_STRUCT_PAGE BIT(2)
 #define I915_BO_ALLOC_CPU_CLEAR  BIT(3)
 #define I915_BO_ALLOC_USER       BIT(4)
-#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE     BIT(5)
-#define I915_BO_ALLOC_CHUNK_64K  BIT(6)
-#define I915_BO_ALLOC_CHUNK_2M   BIT(7)
-#define I915_BO_ALLOC_CHUNK_4K   BIT(11)
-#define I915_BO_ALLOC_CHUNK_1G   BIT(12)
+#define I915_BO_ALLOC_SYNC_HINT	 BIT(5)
+#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE     BIT(6)
+#define I915_BO_ALLOC_CHUNK_4K   BIT(7)
+#define I915_BO_ALLOC_CHUNK_64K  BIT(8)
+#define I915_BO_ALLOC_CHUNK_2M   BIT(9)
+#define I915_BO_ALLOC_CHUNK_1G   BIT(10)
 #define I915_BO_ALLOC_FLAGS (I915_BO_ALLOC_CONTIGUOUS | \
 			     I915_BO_ALLOC_VOLATILE | \
 			     I915_BO_ALLOC_STRUCT_PAGE | \
@@ -314,11 +315,10 @@ struct drm_i915_gem_object {
 			     I915_BO_ALLOC_CHUNK_64K | \
 			     I915_BO_ALLOC_CHUNK_2M | \
 			     I915_BO_ALLOC_CHUNK_1G)
-#define I915_BO_READONLY         BIT(8)
-#define I915_TILING_QUIRK_BIT    9 /* unknown swizzling; do not release! */
-#define I915_BO_WAS_BOUND_BIT    10
-#define I915_BO_FABRIC           BIT(13)
-#define I915_BO_FIRST_BIND       BIT(14)
+#define I915_BO_READONLY         BIT(11)
+#define I915_TILING_QUIRK_BIT    12 /* unknown swizzling; do not release! */
+#define I915_BO_PROTECTED        BIT(13)
+#define I915_BO_FABRIC           BIT(14)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -531,9 +531,6 @@ struct drm_i915_gem_object {
 		struct intel_memory_region *preferred_region;
 		int n_placements;
 
-		/* XXX: Nasty hack, see gem_create */
-		int gem_create_posted_err;
-
 		/**
 		 * Memory region for this object.
 		 */
@@ -607,6 +604,20 @@ struct drm_i915_gem_object {
 		 */
 		bool dirty:1;
 
+		/*
+		 * Track the completion of the page construction if using the
+		 * blitter for swapin/swapout and for clears. Following
+		 * completion, it holds a persistent ERR_PTR should the
+		 * GPU operation to instantiate the pages fail and all
+		 * attempts to utilise the backing store must be prevented
+		 * (as the backing store is in undefined state) until the
+		 * taint is removed. All operations on the backing store
+		 * must wait for the fence to be signaled, be it asynchronously
+		 * as part of the scheduling pipeline or synchronously before
+		 * CPU access.
+		 */
+		struct i915_active_fence migrate;
+
 		u32 tlb[I915_MAX_GT];
 	} mm;
 
@@ -615,6 +626,13 @@ struct drm_i915_gem_object {
 		struct i915_gem_object_page_iter get_io_page;
 		bool created:1;
 	} ttm;
+
+	/*
+	 * Record which PXP key instance this object was created against (if
+	 * any), so we can use it to determine if the encryption is valid by
+	 * comparing against the current key instance.
+	 */
+	u32 pxp_key_instance;
 
 	/** Record of address bit 17 of each page at last unbind. */
 	unsigned long *bit_17;

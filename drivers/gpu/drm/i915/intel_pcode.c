@@ -273,29 +273,3 @@ int snb_pcode_write_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u3
 
 	return err;
 }
-
-/**
- * intel_pcode_enable_vram_sr - Enable pcode vram_sr.
- * @dev_priv: i915 device
- *
- * This function triggers the required pcode flow to enable vram_sr.
- * This function stictly need to call from rpm handlers, as i915 is
- * transitioning to rpm idle/suspend, it doesn't require to grab
- * rpm wakeref.
- */
-int intel_pcode_enable_vram_sr(struct drm_i915_private *i915)
-{
-	int ret = 0;
-
-	if (!HAS_LMEM_SR(i915))
-		return ret;
-
-	ret =
-	snb_pcode_write(&i915->uncore,
-			REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND,
-			DG1_PCODE_D3_VRAM_SR) |
-			REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1,
-			DG1_ENABLE_SR), 0); /* no data needed for this cmd */
-
-	return ret;
-}

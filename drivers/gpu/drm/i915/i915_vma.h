@@ -39,6 +39,8 @@
 #include "i915_request.h"
 #include "i915_vma_types.h"
 
+struct i915_vma_work;
+
 struct i915_vma *
 i915_vma_instance(struct drm_i915_gem_object *obj,
 		  struct i915_address_space *vm,
@@ -167,21 +169,6 @@ static inline void i915_vma_set_persistent(struct i915_vma *vma)
 	set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
 }
 
-static inline bool i915_vma_is_active_bind(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_ACTIVE_BIND_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_set_active_bind(struct i915_vma *vma)
-{
-	set_bit(I915_VMA_ACTIVE_BIND_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_unset_active_bind(struct i915_vma *vma)
-{
-	clear_bit(I915_VMA_ACTIVE_BIND_BIT, __i915_vma_flags(vma));
-}
-
 static inline bool i915_vma_is_purged(const struct i915_vma *vma)
 {
 	return test_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
@@ -192,16 +179,6 @@ static inline void i915_vma_set_purged(struct i915_vma *vma)
 	set_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
 }
 
-static inline bool i915_vma_is_freed(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_FREED_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_set_freed(struct i915_vma *vma)
-{
-	set_bit(I915_VMA_FREED_BIT, __i915_vma_flags(vma));
-}
-
 static inline bool i915_vma_is_persistent_capture(const struct i915_vma *vma)
 {
 	return !list_empty(&vma->vm_capture_link);
@@ -209,12 +186,12 @@ static inline bool i915_vma_is_persistent_capture(const struct i915_vma *vma)
 
 static inline bool i915_vma_is_active(const struct i915_vma *vma)
 {
-	if (i915_vma_is_persistent(vma)) {
-		if (i915_vma_is_purged(vma))
-			return false;
+	if (i915_vma_is_purged(vma))
+		return false;
 
-		return i915_vm_is_active(vma->vm);
-	}
+	if (i915_vma_is_persistent(vma) &&
+	    i915_vm_is_active(vma->vm))
+		return true;
 
 	return !i915_active_is_idle(&vma->active);
 }
@@ -280,15 +257,12 @@ i915_vma_compare(struct i915_vma *vma,
 	return memcmp(&vma->ggtt_view.partial, &view->partial, view->type);
 }
 
-void i915_vma_work_commit(struct i915_vma_work *work);
-struct i915_vma_work *i915_vma_work(struct i915_vma *vma);
-int i915_vma_work_set_vm(struct i915_vma_work *work, struct i915_vma *vma,
-			 struct i915_gem_ww_ctx *ww);
-int i915_vma_bind(struct i915_vma *vma,
-		  unsigned int pat_index,
-		  u32 flags,
-		  struct i915_vma_work *work);
-int i915_vma_bind_sync(struct i915_vma *vma, struct i915_gem_ww_ctx *ww);
+int __i915_vma_bind(struct i915_vma *vma,
+		    unsigned int pat_index,
+		    u32 flags,
+		    struct i915_vma_work *work);
+int i915_vma_bind(struct i915_vma *vma, struct i915_gem_ww_ctx *ww);
+
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags);
@@ -352,8 +326,6 @@ retry:
 
 	return err;
 }
-
-int i915_vma_fault_pin(struct i915_vma *vma, u64 size, u64 alignment, u64 flags);
 
 int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		  u32 align, unsigned int flags);
@@ -544,19 +516,7 @@ static inline bool i915_vma_is_bind_complete(struct i915_vma *vma)
 		return false;
 
 	/* Ensure any binding started is complete */
-	if (rcu_access_pointer(vma->active.excl.fence)) {
-		struct dma_fence *fence;
-
-		rcu_read_lock();
-		fence = dma_fence_get_rcu_safe(&vma->active.excl.fence);
-		rcu_read_unlock();
-		if (fence) {
-			dma_fence_put(fence);
-			return false;
-		}
-	}
-
-	return true;
+	return !i915_active_fence_isset(&vma->active.excl);
 }
 
 static inline struct i915_vma *i915_find_vma(struct i915_address_space *vm,
@@ -586,6 +546,12 @@ static inline struct i915_vma *i915_find_vma(struct i915_address_space *vm,
 	mutex_unlock(&vm->mutex);
 
 	return vma;
+}
+
+static inline int
+__i915_request_await_bind(struct i915_request *rq, struct i915_vma *vma)
+{
+	return __i915_request_await_exclusive(rq, &vma->active);
 }
 
 void i915_vma_module_exit(void);

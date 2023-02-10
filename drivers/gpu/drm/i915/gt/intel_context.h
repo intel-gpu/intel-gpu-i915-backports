@@ -235,6 +235,11 @@ static inline void intel_context_exit(struct intel_context *ce)
 	if (--ce->active_count)
 		return;
 
+	if (ce->sfence) {
+		i915_suspend_fence_retire_dma_fence(&ce->sfence->base.dma);
+		ce->sfence = NULL;
+	}
+
 	intel_gt_pm_put_async(ce->vm->gt, ce->wakeref);
 	ce->ops->exit(ce);
 }

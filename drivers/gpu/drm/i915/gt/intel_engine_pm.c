@@ -265,7 +265,7 @@ static void call_idle_barriers(struct intel_engine_cs *engine)
 			container_of((struct list_head *)node,
 				     typeof(*cb), node);
 
-		cb->func(ERR_PTR(-EAGAIN), cb);
+		cb->func(IDLE_BARRIER, cb);
 	}
 }
 
@@ -345,6 +345,32 @@ void intel_engine_reset_pinned_contexts(struct intel_engine_cs *engine)
 		dbg_poison_ce(ce);
 		ce->ops->reset(ce);
 	}
+}
+
+struct i915_request *
+intel_engine_create_kernel_request(struct intel_engine_cs *engine)
+{
+	struct i915_request *rq;
+
+	/*
+	 * The engine->kernel_context is special as it is used inside
+	 * the engine-pm barrier (see __engine_park()), circumventing
+	 * the usual mutexes and relying on the engine-pm barrier
+	 * instead. So whenever we use the engine->kernel_context
+	 * outside of the barrier, we must manually handle the
+	 * engine wakeref to serialise with the use inside.
+	 */
+	intel_engine_pm_get(engine);
+
+	rq = i915_request_create(engine->kernel_context);
+	if (!IS_ERR(rq)) {
+		engine->wakeref_serial = engine->serial + 1;
+		i915_request_add_active_barriers(rq);
+	}
+
+	intel_engine_pm_put(engine);
+
+	return rq;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

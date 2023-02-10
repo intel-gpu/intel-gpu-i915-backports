@@ -217,6 +217,30 @@ struct drm_hdmi_dsc_cap {
 };
 
 /**
+ * struct drm_hdmi_vrr_cap - VRR capabilities of HDMI sink
+ *
+ * Describes the VRR support provided by HDMI 2.1 sink.
+ * The information is fetched fom additional HFVSDB blocks defined
+ * for HDMI 2.1.
+ */
+struct drm_hdmi_vrr_cap {
+	/** @cnm_vrr: sink supports negative Mvrr values*/
+	bool cnm_vrr;
+
+	/** @cinema_vrr: sink supports fractional and integer media rates < VRRmin*/
+	bool cinema_vrr;
+
+	/** @m_delta: sink can anticipate and compensate for frame-to-frame variation in Mvrr */
+	bool m_delta;
+
+	/** @vrr_min: VRRmin - lowest framerate in Hz that sink can support in VRR */
+	u8 vrr_min;
+
+	/** @vrr_max: VRRmax - highest framerate in Hz that sink can support in VRR */
+	u16 vrr_max;
+};
+
+/**
  * struct drm_hdmi_info - runtime information about the connected HDMI sink
  *
  * Describes if a given display supports advanced HDMI 2.0 features.
@@ -256,6 +280,9 @@ struct drm_hdmi_info {
 
 	/** @dsc_cap: DSC capabilities of the sink */
 	struct drm_hdmi_dsc_cap dsc_cap;
+
+	/** @vrr_cap: VRR capabilities of the sink */
+	struct drm_hdmi_vrr_cap vrr_cap;
 };
 
 /**

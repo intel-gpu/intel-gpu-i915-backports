@@ -5238,7 +5238,7 @@ intel_dp_add_properties(struct intel_dp *intel_dp, struct drm_connector *connect
 	if (has_gamut_metadata_dip(dev_priv, port))
 		drm_connector_attach_hdr_output_metadata_property(connector);
 
-	if (HAS_VRR(dev_priv))
+	if (HAS_DP_VRR(dev_priv))
 		drm_connector_attach_vrr_capable_property(connector);
 }
 

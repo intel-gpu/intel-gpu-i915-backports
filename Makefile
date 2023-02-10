@@ -38,6 +38,7 @@ mrproper:
 	@rm -f backport-include/backport/autoconf.h
 	@$(MAKE) -f Makefile.real mrproper
 
+
 .DEFAULT:
 	@set -e ; test -f local-symbols || (						\
 	echo "/--------------"								;\

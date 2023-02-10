@@ -612,6 +612,8 @@ struct intel_engine_cs {
 		 * @rps: Utilisation at last RPS sampling.
 		 */
 		ktime_t rps;
+
+		unsigned long irq_count;
 	} stats;
 
 	struct {

@@ -120,6 +120,8 @@ struct intel_color_funcs {
 #define GAMMA_MODE_SPLIT_12BIT			BIT(4)
 #define GAMMA_MODE_LOGARITHMIC_12BIT		BIT(5) /* XELPD+ */
 
+#define DEGAMMA_MODE_24BIT			BIT(0) /* MTL/D14+ */
+
 #define INTEL_GAMMA_MODE_MASK (\
 		GAMMA_MODE_LEGACY_PALETTE_8BIT | \
 		GAMMA_MODE_PRECISION_PALETTE_10BIT | \
@@ -985,6 +987,79 @@ static void glk_load_luts(const struct intel_crtc_state *crtc_state)
 	}
 }
 
+static void mtl_load_legacy_lut(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
+	const struct drm_property_blob *degamma_lut_blob = crtc_state->hw.degamma_lut;
+	struct drm_color_lut *degamma_lut = degamma_lut_blob->data;
+	enum pipe pipe = crtc->pipe;
+	int i, lut_size = drm_color_lut_size(degamma_lut_blob);
+
+	/*
+	 * When setting the auto-increment bit, the hardware seems to
+	 * ignore the index bits, so we need to reset it to index 0
+	 * separately.
+	 */
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe), 0);
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe),
+			  PRE_CSC_GAMC_AUTO_INCREMENT);
+
+	for (i = 0; i < lut_size; i++) {
+		u64 word = mul_u32_u32(degamma_lut[i].green, (1 << 24)) / (1 << 16);
+		u32 lut_val = (word & 0xffffff);
+
+		intel_de_write_fw(i915, PRE_CSC_GAMC_DATA(pipe),
+				  lut_val);
+	}
+	/* Clamp values > 1.0. */
+	while (i++ < glk_degamma_lut_size(i915))
+		intel_de_write_fw(i915, PRE_CSC_GAMC_DATA(pipe), 1 << 24);
+
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe), 0);
+}
+
+static void mtl_load_degamma_lut(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
+	struct drm_color_lut_ext *degamma_lut = crtc_state->hw.degamma_lut->data;
+	u32 i, lut_size = INTEL_INFO(i915)->display.color.degamma_lut_size;
+	enum pipe pipe = crtc->pipe;
+
+	if (crtc_state->uapi.degamma_mode_type == 0) {
+		if (!crtc_state->uapi.advance_degamma_mode_active)
+			mtl_load_legacy_lut(crtc_state);
+		return;
+	}
+
+	/*
+	 * When setting the auto-increment bit, the hardware seems to
+	 * ignore the index bits, so we need to reset it to index 0
+	 * separately.
+	 */
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe), 0);
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe),
+			  PRE_CSC_GAMC_AUTO_INCREMENT);
+
+	for (i = 0; i < lut_size; i++) {
+		u64 word = drm_color_lut_extract_ext(degamma_lut[i].green, 24);
+		u32 lut_val = (word & 0xffffff);
+
+		intel_de_write_fw(i915, PRE_CSC_GAMC_DATA(pipe),
+				  lut_val);
+	}
+
+	/*
+	 * Clamp values > 1.0.
+	 * TODO: Extend to max 7.0.
+	 */
+	while (i++ < glk_degamma_lut_size(i915))
+		intel_de_write_fw(i915, PRE_CSC_GAMC_DATA(pipe), 1 << 24);
+
+	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe), 0);
+}
+
 /* ilk+ "12.4" interpolated format (high 10 bits) */
 static u32 ilk_lut_12p4_udw(const struct drm_color_lut *color)
 {
@@ -1177,9 +1252,14 @@ static void xelpd_load_luts(const struct intel_crtc_state *crtc_state)
 {
 	const struct drm_property_blob *gamma_lut = crtc_state->hw.gamma_lut;
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
 
-	if (crtc_state->hw.degamma_lut)
-		glk_load_degamma_lut(crtc_state);
+	if (crtc_state->hw.degamma_lut) {
+		if ((DISPLAY_VER(i915) >= 14))
+			mtl_load_degamma_lut(crtc_state);
+		else
+			glk_load_degamma_lut(crtc_state);
+	}
 
 	switch (crtc_state->gamma_mode & GAMMA_MODE_MODE_MASK) {
 	case GAMMA_MODE_MODE_8BIT:
@@ -1432,6 +1512,23 @@ intel_color_add_affected_planes(struct intel_crtc_state *new_crtc_state)
 	return 0;
 }
 
+static int check_lut_ext_size(const struct drm_property_blob *lut, int expected)
+{
+	int len;
+
+	if (!lut)
+		return 0;
+
+	len = drm_color_lut_ext_size(lut);
+	if (len != expected) {
+		DRM_DEBUG_KMS("Invalid LUT size; got %d, expected %d\n",
+			      len, expected);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int check_lut_size(const struct drm_property_blob *lut, int expected)
 {
 	int len;
@@ -1484,15 +1581,42 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 	degamma_tests = INTEL_INFO(dev_priv)->display.color.degamma_lut_tests;
 	gamma_tests = INTEL_INFO(dev_priv)->display.color.gamma_lut_tests;
 
-	if (check_lut_size(degamma_lut, degamma_length) ||
-	    check_lut_size(gamma_lut, gamma_length))
-		return -EINVAL;
-
-	if (drm_color_lut_check(degamma_lut, degamma_tests) ||
+	if (check_lut_size(gamma_lut, gamma_length) ||
 	    drm_color_lut_check(gamma_lut, gamma_tests))
 		return -EINVAL;
 
+	/* If extended degamma property set*/
+	if (crtc_state->uapi.advance_degamma_mode_active) {
+		if (check_lut_ext_size(degamma_lut, degamma_length) ||
+		    drm_color_lut_ext_check(degamma_lut, degamma_tests))
+			return -EINVAL;
+	} else {
+		if (check_lut_size(degamma_lut, degamma_length) ||
+		    drm_color_lut_check(degamma_lut, degamma_tests))
+			return -EINVAL;
+	}
+
 	return 0;
+}
+
+static int mtl_check_degamma_lut(const struct intel_crtc_state *crtc_state)
+{
+	const struct drm_property_blob *degamma_lut_blob = crtc_state->hw.gamma_lut;
+
+	if (!degamma_lut_blob)
+		return 0;
+
+	if (crtc_state->uapi.degamma_mode_type == DEGAMMA_MODE_24BIT &&
+	    crtc_state->uapi.advance_degamma_mode_active)
+		return 0;
+
+	/* 16 bit LUT value usecase */
+	if (crtc_state->uapi.degamma_mode_type == 0)
+		return 0;
+
+	DRM_ERROR("%s check failed\n", __func__);
+
+	return -EINVAL;
 }
 
 static u32 i9xx_gamma_mode(struct intel_crtc_state *crtc_state)
@@ -1813,7 +1937,8 @@ static int icl_color_check(struct intel_crtc_state *crtc_state)
 {
 	struct drm_device *dev = crtc_state->uapi.crtc->dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
-	struct drm_property *property = crtc_state->uapi.crtc->gamma_mode_property;
+	struct drm_property *gamma_mode_property = crtc_state->uapi.crtc->gamma_mode_property;
+	struct drm_property *degamma_mode_property = crtc_state->uapi.crtc->degamma_mode_property;
 	struct drm_property_enum *prop_enum;
 	u32 index = 0;
 	int ret;
@@ -1822,8 +1947,31 @@ static int icl_color_check(struct intel_crtc_state *crtc_state)
 	if (ret)
 		return ret;
 
+	if (DISPLAY_VER(dev_priv) >= 14) {
+		list_for_each_entry(prop_enum, &degamma_mode_property->enum_list, head) {
+			if (prop_enum->value == crtc_state->uapi.degamma_mode) {
+				if (!strcmp(prop_enum->name,
+					    "extended degamma")) {
+					crtc_state->uapi.degamma_mode_type =
+						DEGAMMA_MODE_24BIT;
+					drm_dbg_kms(dev,
+						    "extended degamma enabled\n");
+				} else {
+					crtc_state->uapi.degamma_mode_type = 0;
+					drm_dbg_kms(dev,
+						    "extended degamma disabled\n");
+				}
+				break;
+			}
+		}
+
+		ret = mtl_check_degamma_lut(crtc_state);
+		if (ret)
+			return ret;
+	}
+
 	if (DISPLAY_VER(dev_priv) >= 13) {
-		list_for_each_entry(prop_enum, &property->enum_list, head) {
+		list_for_each_entry(prop_enum, &gamma_mode_property->enum_list, head) {
 			if (prop_enum->value == crtc_state->uapi.gamma_mode) {
 				if (!strcmp(prop_enum->name,
 					    "logarithmic gamma")) {
@@ -3136,6 +3284,21 @@ static const struct drm_color_lut_range xelpd_gamma_hdr[] = {
 	},
 };
 
+static const struct drm_color_lut_range mtl_24bit_degamma[] = {
+	/* segment 0 */
+	{
+		.flags = (DRM_MODE_LUT_DEGAMMA |
+			  DRM_MODE_LUT_REFLECT_NEGATIVE |
+			  DRM_MODE_LUT_INTERPOLATE |
+			  DRM_MODE_LUT_REUSE_LAST |
+			  DRM_MODE_LUT_NON_DECREASING),
+		.count = 128,
+		.input_bpc = 24, .output_bpc = 16,
+		.start = 0, .end = (1 << 24) - 1,
+		.min = 0, .max = (1 << 24) - 1,
+	}
+};
+
 int intel_color_plane_init(struct drm_plane *plane)
 {
 	struct drm_i915_private *dev_priv = to_i915(plane->dev);
@@ -3215,13 +3378,30 @@ void intel_color_init(struct intel_crtc *crtc)
 		if (DISPLAY_VER(dev_priv) >= 13) {
 			dev_priv->color_funcs = &xelpd_color_funcs;
 			drm_color_create_gamma_mode_property(&crtc->base, 2);
-			drm_color_add_gamma_mode_range(&crtc->base,
-						       "no gamma", NULL, 0);
-			drm_color_add_gamma_mode_range(&crtc->base,
-						       "logarithmic gamma",
-							xelpd_logarithmic_gamma,
-							sizeof(xelpd_logarithmic_gamma));
-			drm_crtc_attach_gamma_mode_property(&crtc->base);
+			drm_color_add_gamma_degamma_mode_range(&crtc->base,
+							       "no gamma", NULL, 0,
+							       LUT_TYPE_GAMMA);
+			drm_color_add_gamma_degamma_mode_range(&crtc->base,
+							       "logarithmic gamma",
+							       xelpd_logarithmic_gamma,
+							       sizeof(xelpd_logarithmic_gamma),
+							       LUT_TYPE_GAMMA);
+			drm_crtc_attach_gamma_degamma_mode_property(&crtc->base,
+								    LUT_TYPE_GAMMA);
+
+			if (DISPLAY_VER(dev_priv) >= 14) {
+				drm_color_create_degamma_mode_property(&crtc->base, 2);
+				drm_color_add_gamma_degamma_mode_range(&crtc->base,
+								       "no degamma", NULL, 0,
+								       LUT_TYPE_DEGAMMA);
+				drm_color_add_gamma_degamma_mode_range(&crtc->base,
+								       "extended degamma",
+								       mtl_24bit_degamma,
+								       sizeof(mtl_24bit_degamma),
+								       LUT_TYPE_DEGAMMA);
+				drm_crtc_attach_gamma_degamma_mode_property(&crtc->base,
+									    LUT_TYPE_DEGAMMA);
+			}
 		} else if (DISPLAY_VER(dev_priv) >= 11) {
 			dev_priv->color_funcs = &icl_color_funcs;
 		} else if (DISPLAY_VER(dev_priv) == 10) {

@@ -53,11 +53,7 @@
 #define MBOX_ASLE_EXT		BIT(4)	/* Mailbox #5 */
 #define MBOX_BACKLIGHT		BIT(5)	/* Mailbox #2 (valid from v3.x) */
 
-#define PCON_DG1_MBD_CONFIG				BIT(9)
-#define PCON_DG1_MBD_CONFIG_FIELD_VALID			BIT(10)
-#define PCON_DGFX_BIOS_SUPPORTS_VRSR			BIT(11)
-#define PCON_DGFX_BIOS_SUPPORTS_VRSR_FIELD_VALID	BIT(12)
-#define PCON_HEADLESS_SKU				BIT(13)
+#define PCON_HEADLESS_SKU	BIT(13)
 
 struct opregion_header {
 	u8 signature[16];
@@ -134,8 +130,7 @@ struct opregion_asle {
 	u64 rvda;	/* Physical (2.0) or relative from opregion (2.1+)
 			 * address of raw VBT data. */
 	u32 rvds;	/* Size of raw vbt data */
-	u8 vrsr;	/* DGFX Video Ram Self Refresh */
-	u8 rsvd[57];
+	u8 rsvd[58];
 } __packed;
 
 /* OpRegion mailbox #5: ASLE ext */
@@ -238,9 +233,6 @@ struct pci_data_structure {
 #define ASLE_IUER_VOLUME_UP_BTN		(1 << 2)
 #define ASLE_IUER_WINDOWS_BTN		(1 << 1)
 #define ASLE_IUER_POWER_BTN		(1 << 0)
-
-/* VRAM SR */
-#define ASLE_VRSR_ENABLE		BIT(0)
 
 /* Software System Control Interrupt (SWSCI) */
 #define SWSCI_SCIC_INDICATOR		(1 << 0)
@@ -1140,8 +1132,6 @@ static int intel_opregion_setup(struct drm_i915_private *dev_priv)
 		opregion->header->over.minor,
 		opregion->header->over.revision);
 
-	drm_dbg(&dev_priv->drm, "OpRegion PCON values 0x%x\n", opregion->header->pcon);
-
 	mboxes = opregion->header->mboxes;
 	if (mboxes & MBOX_ACPI) {
 		drm_dbg(&dev_priv->drm, "Public ACPI methods supported\n");
@@ -1626,39 +1616,6 @@ static const struct i915_opregion_func dgfx_opregion_func = {
 	.free_opregion = intel_dgfx_free_opregion,
 };
 
-static bool intel_opregion_dg1_mbd_config(struct drm_i915_private *i915)
-{
-	struct intel_opregion *opregion = &i915->opregion;
-
-	if (!IS_DG1(i915))
-		return false;
-
-	if (opregion->header->pcon & PCON_DG1_MBD_CONFIG_FIELD_VALID)
-		return opregion->header->pcon & PCON_DG1_MBD_CONFIG;
-	else
-		return false;
-}
-
-/**
- * intel_opregion_vram_sr_required().
- * @i915 i915 device priv data.
- * It returns a boolean whether opregion vram_sr support
- * is required.
- */
-bool
-intel_opregion_vram_sr_required(struct drm_i915_private *i915)
-{
-	if (!IS_DGFX(i915))
-		return false;
-
-	if (IS_DG1(i915))
-		return intel_opregion_dg1_mbd_config(i915);
-	else if (IS_DG2_MBD(i915))
-		return true;
-
-	return false;
-}
-
 /**
  * intel_opregion_init() - Init ACPI opregion.
  * @i915 i915 device priv data.
@@ -1675,43 +1632,4 @@ int intel_opregion_init(struct drm_i915_private *i915)
 		opregion->opregion_func = &igfx_opregion_func;
 
 	return intel_opregion_setup(i915);
-}
-
-/*
- * intel_opregion_bios_supports_vram_sr() get HOST BIOS VRAM Self
- * Refresh capability support.
- * @i915: pointer to i915 device.
- */
-bool intel_opregion_bios_supports_vram_sr(struct drm_i915_private *i915)
-{
-	struct intel_opregion *opregion = &i915->opregion;
-
-	if (!IS_DGFX(i915))
-		return false;
-
-	if (opregion->header->pcon & PCON_DGFX_BIOS_SUPPORTS_VRSR_FIELD_VALID)
-		return opregion->header->pcon & PCON_DGFX_BIOS_SUPPORTS_VRSR;
-	else
-		return false;
-}
-
-/*
- * intel_opregion_vram_sr() enable/disable VRAM Self Refresh.
- * @i915: pointer to i915 device.
- * @enable: Argument to enable/disable VRSR.
- */
-void intel_opregion_vram_sr(struct drm_i915_private *i915, bool enable)
-{
-	struct intel_opregion *opregion = &i915->opregion;
-
-	if (!intel_opregion_vram_sr_required(i915))
-		return;
-
-	if (drm_WARN(&i915->drm, !opregion->asle, "ASLE MAILBOX3 is not available\n"))
-		return;
-
-	if (enable)
-		opregion->asle->vrsr |= ASLE_VRSR_ENABLE;
-	else
-		opregion->asle->vrsr &= ~ASLE_VRSR_ENABLE;
 }

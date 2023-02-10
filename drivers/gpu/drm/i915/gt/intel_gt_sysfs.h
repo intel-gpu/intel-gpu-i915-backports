@@ -42,4 +42,6 @@ void intel_gt_sysfs_unregister(struct intel_gt *gt);
 struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 					    const char *name);
 
+int intel_gt_sysfs_reset(struct intel_gt *gt);
+
 #endif /* SYSFS_GT_H */
