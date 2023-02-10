@@ -54,7 +54,7 @@ config DRM_I915_HEARTBEAT_INTERVAL
 
 config DRM_I915_PREEMPT_TIMEOUT
 	int "Preempt timeout (ms, jiffy granularity)"
-	default 1900 # milliseconds
+	default 640 # milliseconds
 	help
 	  How long to wait (in milliseconds) for a preemption event to occur
 	  when submitting a new context. If the current context does not hit
@@ -160,3 +160,8 @@ config DRM_I915_TIMESLICE_DURATION
 	  /sys/class/drm/card?/engine/*/timeslice_duration_ms
 
 	  May be 0 to disable timeslicing.
+
+config DRM_I915_DEBUGGER_KFIFO
+	int "Select kfifo event queue size for EU debugger"
+	default 256
+	range 2 512

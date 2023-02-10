@@ -515,7 +515,7 @@ void __mark_lock_used_irq(struct lockdep_map *lock);
 	overflows_type(__v, *__ptr) ? 0 : (*__ptr = (typeof(*__ptr))__v), 1; \
 })
 
-#define make_u64(hi__, low__)  ((u64)(hi__) << 32 | (u64)(low__))
+#define make_u64(hi__, low__) ((u64)(hi__) << 32 | (low__))
 
 int from_user_to_u32array(const char __user *from, size_t count,
 			  u32 *array, unsigned int size);

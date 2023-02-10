@@ -478,4 +478,20 @@ struct hdmi_extended_metadata_packet {
 	struct hdmi_emp_first_dsf first_data_set;
 };
 
+struct hdmi_vtem_payload {
+	bool vrr_en;
+	bool m_const;
+	bool qms_en;
+	bool rb;
+	u8 fva_factor;
+	u8 base_vfront;
+	u8 next_tfr;
+	u16 base_refresh_rate;
+};
+
+struct hdmi_video_timing_emp_config {
+	struct hdmi_extended_metadata_packet vtemp;
+	struct hdmi_vtem_payload payload;
+};
+
 #endif /* _DRM_HDMI_H */

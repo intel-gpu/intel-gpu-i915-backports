@@ -143,12 +143,14 @@ static inline bool guc_load_done(struct intel_uncore *uncore, u32 *status, bool 
 
 static int guc_wait_ucode(struct intel_uncore *uncore)
 {
+	struct drm_device *drm = &uncore->i915->drm;
 	bool success;
 	u32 status;
 	int ret;
 	int count;
 	ktime_t before, after, delta;
 	u64 delta_ms;
+	u32 before_freq;
 
 	/*
 	 * Wait for the GuC to start up.
@@ -171,17 +173,20 @@ static int guc_wait_ucode(struct intel_uncore *uncore)
 	 * where 200ms is still not enough. However, there is a limit on how
 	 * long an individual wait_for() can wait. So wrap it in a loop.
 	 */
+	before_freq = intel_rps_read_actual_frequency(&uncore->gt->rps);
 	before = ktime_get();
 	for (count = 0; count < 20; count++) {
 		ret = wait_for(guc_load_done(uncore, &status, &success), 1000);
 		if (!ret || !success)
 			break;
+
+		drm_dbg(drm, "GuC load still in progress, count = %d, freq = %dMHz\n",
+			count, intel_rps_read_actual_frequency(&uncore->gt->rps));
 	}
 	after = ktime_get();
 	delta = ktime_sub(after, before);
 	delta_ms = ktime_to_ms(delta);
 	if (ret || !success) {
-		struct drm_device *drm = &uncore->i915->drm;
 		u32 ukernel = REG_FIELD_GET(GS_UKERNEL_MASK, status);
 		u32 bootrom = REG_FIELD_GET(GS_BOOTROM_MASK, status);
 
@@ -243,11 +248,11 @@ static int guc_wait_ucode(struct intel_uncore *uncore)
 				 intel_uncore_read(uncore, GUC_EIP_COUNTER));
 		}
 	} else if (delta_ms > 200) {
-		drm_warn(&uncore->i915->drm, "Excessive GuC init time: %lldms! [freq = %dMHz, status = 0x%08X, count = %d, ret = %d]\n",
-			 delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), status, count, ret);
+		drm_warn(drm, "Excessive GuC init time: %lldms! [freq = %dMHz, before = %dMHz, status = 0x%08X, count = %d, ret = %d]\n",
+			 delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), before_freq, status, count, ret);
 	} else {
-		drm_dbg(&uncore->i915->drm, "GuC init took %lldms, freq = %dMHz, status = 0x%08X, count = %d, ret = %d\n",
-			delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), status, count, ret);
+		drm_dbg(drm, "GuC init took %lldms, freq = %dMHz, before = %dMHz, status = 0x%08X, count = %d, ret = %d\n",
+			delta_ms, intel_rps_read_actual_frequency(&uncore->gt->rps), before_freq, status, count, ret);
 	}
 
 	return ret;

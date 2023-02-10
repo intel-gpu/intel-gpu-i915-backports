@@ -172,6 +172,7 @@ retry:
 	if (committed) {
 		if (intel_cx0_wait_cwrite_ack(i915, port, lane) < 0) {
 			attempts++;
+			drm_dbg(&i915->drm, "PHY %c Timeout waiting for write ack. Reset the bus and retry.\n", phy_name(phy));
 			intel_cx0_bus_reset(i915, port, lane);
 			goto retry;
 		}
@@ -1563,10 +1564,8 @@ void intel_c10mpllb_readout_hw_state(struct intel_encoder *encoder,
 	cmn = intel_cx0_read(i915, encoder->port, lane, PHY_C10_VDR_CMN(0));
 	tx0 = intel_cx0_read(i915, encoder->port, lane, PHY_C10_VDR_TX(0));
 
-	if (tx0 != C10_TX0_VAL || cmn != (intel_encoder_is_dp(encoder) ?
-					  C10_CMN0_DP_VAL : C10_CMN0_HDMI_VAL))
-		drm_warn(&i915->drm, "Unexpected tx: %x or cmn: %x for phy: %c.\n",
-			 tx0, cmn, phy_name(phy));
+	drm_dbg_kms(&i915->drm, "tx: %x and cmn %x for phy: %c.\n",
+		    tx0, cmn, phy_name(phy));
 
 	intel_cx0_phy_transaction_end(encoder, wakeref);
 }

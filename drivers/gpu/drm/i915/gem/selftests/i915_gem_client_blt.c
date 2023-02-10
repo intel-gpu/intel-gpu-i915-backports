@@ -19,7 +19,6 @@
 #include "huge_gem_object.h"
 #include "mock_context.h"
 
-#define I915_TILING_4	PRELIM_I915_TILING_4
 #define OW_SIZE 16                      /* in bytes */
 #define F_SUBTILE_SIZE 64               /* in bytes */
 #define F_TILE_WIDTH 128                /* in bytes */
@@ -108,17 +107,33 @@ struct tiled_blits {
 	u32 height;
 };
 
-static bool fast_blit_ok(struct blit_buffer *buf)
+static bool fastblit_supports_x_tiling(const struct drm_i915_private *i915)
 {
-	int gen = GRAPHICS_VER(buf->vma->vm->i915);
+	int gen = GRAPHICS_VER(i915);
 
-	if (gen < 9)
-		return false;
+	/* XY_FAST_COPY_BLT does not exist on pre-gen9 platforms */
+	drm_WARN_ON(&i915->drm, gen < 9);
 
 	if (gen < 12)
 		return true;
 
-	return buf->tiling != CLIENT_TILING_X;
+	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50))
+		return false;
+
+	return HAS_DISPLAY(i915);
+}
+
+static bool fast_blit_ok(const struct blit_buffer *buf)
+{
+	/* XY_FAST_COPY_BLT does not exist on pre-gen9 platforms */
+	if (GRAPHICS_VER(buf->vma->vm->i915) < 9)
+		return false;
+
+	/* filter out platforms with unsupported X-tile support in fastblit */
+	if (buf->tiling == CLIENT_TILING_X && !fastblit_supports_x_tiling(buf->vma->vm->i915))
+		return false;
+
+	return true;
 }
 
 static int prepare_blit(const struct tiled_blits *t,
@@ -135,10 +150,6 @@ static int prepare_blit(const struct tiled_blits *t,
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
-	/*
-	 * On GEN12+ X-tiled format support is removed from the fast blit
-	 * command, so use the XY_SRC blit command for it instead.
-	 */
 	if (fast_blit_ok(dst) && fast_blit_ok(src)) {
 		struct intel_gt *gt = t->ce->engine->gt;
 		u32 src_tiles = 0, dst_tiles = 0;
@@ -238,6 +249,7 @@ static int prepare_blit(const struct tiled_blits *t,
 	}
 
 	*cs++ = MI_BATCH_BUFFER_END;
+
 	i915_gem_object_flush_map(batch);
 	i915_gem_object_unpin_map(batch);
 

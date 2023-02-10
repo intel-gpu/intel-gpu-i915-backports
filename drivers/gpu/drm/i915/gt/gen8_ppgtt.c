@@ -18,7 +18,6 @@
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gtt.h"
-#include "intel_gt_compression_formats.h"
 #include "intel_gt_pm.h"
 #include "intel_lrc.h"
 
@@ -92,14 +91,6 @@ pvc_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 	u32 src_mocs = FIELD_PREP(MC_SRC_MOCS_INDEX_MASK, gt->mocs.uc_index);
 	u32 dst_mocs = FIELD_PREP(MC_DST_MOCS_INDEX_MASK, gt->mocs.uc_index);
 	size_t size = count << 3;
-	u32 comp_bits = 0;
-
-	/* Src is in SMEM, dst is in LMEM always */
-	if (HAS_STATELESS_MC(gt->i915))
-		comp_bits =
-			PVC_MEM_COPY_DST_COMPRESSIBLE |
-			PVC_MEM_SET_DST_COMPRESS_EN |
-			FIELD_PREP(PVC_MEM_SET_COMPRESSION_FMT, XEHPC_LINEAR_16);
 
 	/*
 	 * Note that PVC_MEM_SET_CMD is not applicable here as we need to
@@ -108,7 +99,7 @@ pvc_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 	 * page tables (or we submit the values in a buffer alongside the
 	 * command stream).
 	 */
-	*cmd++ = PVC_MEM_COPY_CMD | comp_bits | (10 - 2);
+	*cmd++ = PVC_MEM_COPY_CMD | (10 - 2);
 	*cmd++ = size - 1;
 	*cmd++ = 0;
 	*cmd++ = 0;
@@ -133,25 +124,26 @@ static u32 *
 gen12_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 		     u64 offset, int idx, int count, u64 val)
 {
-	u32 mocs = FIELD_PREP(XY_FCB_MOCS_INDEX_MASK, gt->mocs.uc_index);
-	u32 mem;
+	u32 mocs = 0;
+	u32 mem = 0;
 	int len;
 
 	/* XY_FAST_COLOR_BLT was added in gen12 */
 	drm_WARN_ON(&gt->i915->drm, GRAPHICS_VER(gt->i915) < 12);
 
-	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0))
-		mem = MEM_TYPE_SYS << 31;
-	else
-		mem = MEM_TYPE_LOCAL << 31;
-
-	len = 16;
-	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50)) {
-		len = 11;
-		mem = 0;
+	len = 11;
+	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
+		mocs = gt->mocs.uc_index << 1;
+		mocs = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs);
+		len = 16;
 	}
 
-	*cmd++ = XY_FAST_COLOR_BLT | BLT_COLOR_DEPTH_64 | (len - 2);
+	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0))
+		mem = MEM_TYPE_SYS << 31;
+
+	*cmd++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+		XY_FAST_COLOR_BLT_DEPTH_64 |
+		(len - 2);
 	*cmd++ = mocs | (PAGE_SIZE - 1);
 	*cmd++ = idx;
 	*cmd++ = (1 << 16) | (idx + count);
@@ -741,20 +733,16 @@ static int __gen8_ppgtt_alloc(struct i915_address_space * const vm,
 			pt = stash->pt[!!lvl];
 			__i915_gem_object_pin_pages(pt->base);
 
-			if (lvl ||
-			    gen8_pt_count(*start, end) < I915_PDES ||
-			    intel_vgpu_active(vm->i915)) {
-				if (!cmd) {
-					/* TODO: need page size to decide what level of page tables are needed */
-					fill_px(pt, vm->scratch[lvl]->encode);
-					/* Ensure this entry visible to HW before set pd */
-					i915_write_barrier(vm->i915, true);
-				} else {
-					*cmd = fill_page_blt(vm->gt, *cmd, px_dma(pt),
-							     vm->scratch[lvl]->encode,
-							     px_dma(vm->scratch[lvl + 1]));
-					*nptes += 1;
-				}
+			if (!cmd) {
+				/* TODO: need page size to decide what level of page tables are needed */
+				fill_px(pt, vm->scratch[lvl]->encode);
+				/* Ensure this entry visible to HW before set pd */
+				i915_write_barrier(vm->i915, true);
+			} else {
+				*cmd = fill_page_blt(vm->gt, *cmd, px_dma(pt),
+						     vm->scratch[lvl]->encode,
+						     px_dma(vm->scratch[lvl + 1]));
+				*nptes += 1;
 			}
 			spin_lock(&pd->lock);
 			if (likely(!pd->entry[idx])) {
@@ -1958,6 +1946,9 @@ static int gen8_init_scratch(struct i915_address_space *vm)
 		memset(&invalid_pte, 0xAA, sizeof(u64));
 		for (i = 0; i <= vm->top; i++) {
 			vm->scratch[i]->fault_encode[1] = vm->scratch[i]->encode;
+			/* To use Null page for scratch leaf page to avoid TLB invalidation */
+			if ((i == 0) & i915_vm_page_fault_enabled(vm))
+				vm->scratch[i]->fault_encode[1] |= PTE_NULL_PAGE;
 			vm->scratch[i]->fault_encode[0] = invalid_pte;
 		}
 	}
@@ -2276,12 +2267,11 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	else
 		ppgtt->vm.pte_encode = gen8_pte_encode;
 
-	ppgtt->vm.bind_async_flags = I915_VMA_LOCAL_BIND;
+	ppgtt->vm.bind_async_flags = I915_VMA_LOCAL_BIND | PIN_RESIDENT;
 	if (i915_is_mem_wa_enabled(gt->i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
 		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa_bcs;
 		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa_bcs;
 		ppgtt->vm.clear_range = gen8_ppgtt_clear_wa_bcs;
-		ppgtt->vm.bind_async_flags |= I915_VMA_ERROR;
 	} else if (i915_is_mem_wa_enabled(gt->i915, I915_WA_IDLE_GPU_BEFORE_UPDATE)) {
 		ppgtt->vm.insert_entries = gen8_ppgtt_insert_wa;
 		ppgtt->vm.allocate_va_range = gen8_ppgtt_alloc_wa ;

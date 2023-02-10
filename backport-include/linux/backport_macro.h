@@ -12,15 +12,6 @@
 
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,10,0)
-
-/*
- * 1967f71267742 hwmon: (core) Add support for rated attributes
- */
-#define POWER1_RATED_MAX_NOT_PRESENT
-
-#endif
-
 #if LINUX_VERSION_IS_LESS(5,12,0)
 
 /*
@@ -29,6 +20,15 @@
 #define RB_FIND_NOT_PRESENT
 
 #endif
+
+#if LINUX_VERSION_IS_LESS(5,10,0)
+
+/*
+ * 1967f71267742 hwmon: (core) Add support for rated attributes
+ */
+#define POWER1_RATED_MAX_NOT_PRESENT
+
+#endif /* LINUX_VERSION_IS_LESS(5,10,0) */
 
 #if LINUX_VERSION_IS_LESS(5,8,0)
 

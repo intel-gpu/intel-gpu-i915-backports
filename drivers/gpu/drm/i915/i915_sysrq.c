@@ -111,11 +111,13 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 	enum intel_engine_id id;
 	intel_wakeref_t wakeref;
 
-	drm_printf(p, "GT%d awake? %s [%d], %llums\n",
+	drm_printf(p, "GT%d awake? %s [%d], %llums, interrupts: %lu\n",
 		   gt->info.id,
 		   str_yes_no(gt->awake),
 		   atomic_read(&gt->wakeref.count),
-		   ktime_to_ms(intel_gt_get_awake_time(gt)));
+		   ktime_to_ms(intel_gt_get_awake_time(gt)),
+		   gt->irq_count);
+
 	if (gt->awake)
 		intel_wakeref_show(&gt->wakeref, p);
 

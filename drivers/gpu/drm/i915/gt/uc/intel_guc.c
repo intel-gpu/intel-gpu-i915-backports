@@ -1175,6 +1175,11 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
+	if (IS_METEORLAKE(gt->i915))
+		obj->pat_index = 3;
+
+	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
+
 	vma = guc_vma_from_obj(guc, obj, bias);
 	if (IS_ERR(vma))
 		i915_gem_object_put(obj);
@@ -1415,10 +1420,8 @@ int intel_guc_invalidate_tlb_full(struct intel_guc *guc,
 			INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
 	};
 
-	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc)) {
-		DRM_ERROR("Tlb invalidation: Operation not supported in this platform!\n");
-		return 0;
-	}
+	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc))
+		return -EINVAL;
 
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }
@@ -1450,10 +1453,8 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 		address_mask,
 	};
 
-	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc)) {
-		DRM_ERROR("Tlb invalidation: Operation not supported in this platform!\n");
-		return 0;
-	}
+	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
+		return -EINVAL;
 
 	GEM_BUG_ON(length < SZ_4K);
 	GEM_BUG_ON(!is_power_of_2(length));
@@ -1487,10 +1488,8 @@ int intel_guc_invalidate_tlb_page_selective_ctx(struct intel_guc *guc,
 		full_range ? 0 : address_mask,
 	};
 
-	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc)) {
-		DRM_ERROR("Tlb invalidation: Operation not supported in this platform!\n");
-		return 0;
-	}
+	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
+		return -EINVAL;
 
 	GEM_BUG_ON(length < SZ_4K);
 	GEM_BUG_ON(!is_power_of_2(length));
@@ -1515,10 +1514,8 @@ int intel_guc_invalidate_tlb_guc(struct intel_guc *guc,
 			INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
 	};
 
-	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc)) {
-		DRM_ERROR("Tlb invalidation: Operation not supported in this platform!\n");
-		return 0;
-	}
+	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc))
+		return -EINVAL;
 
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
 }
@@ -1569,14 +1566,14 @@ void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p)
 		u32 status = intel_uncore_read(uncore, GUC_STATUS);
 		u32 i;
 
-		drm_printf(p, "\nGuC status 0x%08x:\n", status);
+		drm_printf(p, "GuC status 0x%08x:\n", status);
 		drm_printf(p, "\tBootrom status = 0x%x\n",
 			   (status & GS_BOOTROM_MASK) >> GS_BOOTROM_SHIFT);
 		drm_printf(p, "\tuKernel status = 0x%x\n",
 			   (status & GS_UKERNEL_MASK) >> GS_UKERNEL_SHIFT);
 		drm_printf(p, "\tMIA Core status = 0x%x\n",
 			   (status & GS_MIA_MASK) >> GS_MIA_SHIFT);
-		drm_puts(p, "\nScratch registers:\n");
+		drm_puts(p, "Scratch registers:\n");
 		for (i = 0; i < 16; i++) {
 			drm_printf(p, "\t%2d: \t0x%x\n",
 				   i, intel_uncore_read(uncore, SOFT_SCRATCH(i)));

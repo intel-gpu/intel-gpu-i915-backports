@@ -68,10 +68,6 @@ u32 lrc_update_regs(const struct intel_context *ce,
 void lrc_update_offsets(struct intel_context *ce,
 			struct intel_engine_cs *engine);
 
-void lrc_check_regs(const struct intel_context *ce,
-		    const struct intel_engine_cs *engine,
-		    const char *when);
-
 void lrc_update_runtime(struct intel_context *ce);
 
 static inline void lrc_runtime_start(struct intel_context *ce)

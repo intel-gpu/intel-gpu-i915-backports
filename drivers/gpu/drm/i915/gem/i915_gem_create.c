@@ -7,10 +7,8 @@
 
 #include "gem/i915_gem_ioctls.h"
 #include "gem/i915_gem_lmem.h"
-#include "gem/i915_gem_object.h"
-#include "gem/i915_gem_object_blt.h"
 #include "gem/i915_gem_region.h"
-#include "gt/intel_gt.h"
+#include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
 #include "i915_gem_create.h"
@@ -52,6 +50,20 @@ static void object_set_placements(struct drm_i915_gem_object *obj,
 		obj->mm.placements = placements;
 		obj->mm.n_placements = n_placements;
 	}
+}
+
+static u64 object_limit(struct drm_i915_gem_object *obj)
+{
+	u64 min_region_size = U64_MAX;
+	int i;
+
+	for (i = 0; i < obj->mm.n_placements; i++) {
+		struct intel_memory_region *mr = obj->mm.placements[i];
+
+		min_region_size = min_t(u64, min_region_size, mr->total);
+	}
+
+	return min_region_size;
 }
 
 static u64 object_size_align(struct intel_memory_region *mr, u64 size, u32 *flags)
@@ -130,10 +142,7 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 	/* For most of the ABI (e.g. mmap) we think in system pages */
 	GEM_BUG_ON(!IS_ALIGNED(size, PAGE_SIZE));
 
-	if (size >> PAGE_SHIFT > INT_MAX)
-		return -E2BIG;
-
-	if (overflows_type(size, obj->base.size))
+	if (overflows_type(size, obj->base.size) || size > object_limit(obj))
 		return -E2BIG;
 
 	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
@@ -149,122 +158,6 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 	obj->memory_mask = placement_mask(obj->mm.placements, obj->mm.n_placements);
 
 	trace_i915_gem_object_create(obj);
-
-	return ret;
-}
-
-/**
- * handle_clear_errors - handle errors observed while clearing/migrating
- *                       user objects.
- * @obj: object being cleared
- * @errors: return value of the clear/migration operation
- * @locked: used to determine whether the object was already locked
- *          before returning back to userspace.
- *
- * Before returning to userspace, first issue in uninterruptible
- * wait on the object being cleared to let the operation complete
- * in the event of an interrupt when under high memory pressure.
- */
-static int
-handle_clear_errors(struct drm_i915_gem_object *obj, int errors, bool locked)
-{
-	int ret;
-
-	ret = i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
-	if (!ret)
-		goto unlock;
-
-	/*
-	 * return error code, caller needs to do cleaning
-	 * with i915_gem_object_put().
-	 */
-	if (errors == -EINTR || errors == -ERESTARTSYS) {
-		ret = errors;
-		goto unlock;
-	}
-
-	/*
-	 * XXX: Post the error to where we would normally gather
-	 * and clear the pages. This better reflects the final
-	 * uapi behaviour, once we are at the point where we can
-	 * move the clear worker to get_pages().
-	 */
-	if (!locked)
-		i915_gem_object_lock(obj, NULL);
-	locked = true;
-
-	i915_gem_object_unbind(obj, NULL,
-			       I915_GEM_OBJECT_UNBIND_ACTIVE);
-
-	GEM_WARN_ON(__i915_gem_object_put_pages(obj));
-
-unlock:
-	if (locked)
-		i915_gem_object_unlock(obj);
-
-	obj->mm.gem_create_posted_err = errors;
-
-	return ret;
-}
-
-static int
-clear_object(struct drm_i915_gem_object *obj)
-{
-	if (i915_gem_object_is_lmem(obj)) {
-		struct intel_gt *gt = obj->mm.region->gt;
-		enum intel_engine_id id = gt->rsvd_bcs;
-		struct intel_context *ce = gt->engine[id]->blitter_context;
-		int ret;
-
-		/*
-		 * Sometimes, the GPU is wedged, blitter_context is not
-		 * setup, but driver is claimed to load successfully. If
-		 * userland try to allocate lmem object, we should use
-		 * CPU to clear the lmem pages.
-		 */
-		if (intel_gt_is_wedged(gt)) {
-			void *ptr;
-
-			ptr = i915_gem_object_pin_map_unlocked(obj,
-							       I915_MAP_WC);
-			if (IS_ERR(ptr))
-				return PTR_ERR(ptr);
-
-			memset(ptr, 0, obj->base.size);
-
-			i915_gem_object_flush_map(obj);
-			__i915_gem_object_release_map(obj);
-
-			return 0;
-		}
-
-		/*
-		 * XXX: We really want to move this to get_pages(), but we
-		 * require grabbing the BKL for the blitting operation which is
-		 * annoying. In the pipeline is support for async get_pages()
-		 * which should fit nicely for this. Also note that the actual
-		 * clear should be done async(we currently do an object_wait
-		 * which is pure garbage), we just need to take care if
-		 * userspace opts of implicit sync for the execbuf, to avoid any
-		 * potential info leak.
-		 */
-
-		ret = i915_gem_object_fill_blt(obj, ce, 0);
-		if (ret)
-			return handle_clear_errors(obj, ret, false);
-
-		/*
-		 * XXX: Occasionally i915_gem_object_wait() called inside
-		 * i915_gem_object_set_to_cpu_domain() get interrupted
-		 * and return -ERESTARTSYS.
-		 */
-		i915_gem_object_lock(obj, NULL);
-		ret = i915_gem_object_set_to_cpu_domain(obj, false);
-		if (ret)
-			return handle_clear_errors(obj, ret, true);
-		i915_gem_object_unlock(obj);
-	}
-
 	return 0;
 }
 
@@ -322,15 +215,7 @@ i915_gem_dumb_create(struct drm_file *file,
 	if (ret)
 		goto object_free;
 
-	ret = clear_object(obj);
-	if (ret)
-		goto object_put;
-
 	return i915_gem_publish(obj, file, &args->size, &args->handle);
-
-object_put:
-	i915_gem_object_put(obj);
-	return ret;
 
 object_free:
 	i915_gem_object_free(obj);
@@ -340,6 +225,7 @@ object_free:
 struct create_ext {
 	struct drm_i915_private *i915;
 	struct drm_i915_gem_object *vanilla_object;
+	unsigned long flags;
 	u32 vm_id;
 	u32 pair_id;
 };
@@ -540,9 +426,11 @@ static int ext_set_vm_private(struct i915_user_extension __user *base,
 	return 0;
 }
 
+static int ext_set_protected(struct i915_user_extension __user *base, void *data);
 static const i915_user_extension_fn prelim_create_extensions[] = {
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_SETPARAM)] = create_setparam,
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_VM_PRIVATE)] = ext_set_vm_private,
+	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_PROTECTED_CONTENT)] = ext_set_protected,
 };
 
 static int check_for_pair(struct drm_file *file, struct drm_i915_gem_object *obj,
@@ -660,13 +548,9 @@ i915_gem_create_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto vm_put;
 
-	ret = clear_object(obj);
-	if (ret)
-		goto object_put;
-
 	ret = check_for_pair(file, obj, &ext_data);
 	if (ret)
-		goto object_put;
+		goto vm_put;
 
 	if (obj->vm) {
 		list_add_tail(&obj->priv_obj_link, &obj->vm->priv_obj_list);
@@ -674,13 +558,11 @@ i915_gem_create_ioctl(struct drm_device *dev, void *data,
 		i915_vm_put(obj->vm);
 	}
 
+	/* Add any flag set by create_ext options */
+	obj->flags |= ext_data.flags;
+
 	return i915_gem_publish(obj, file, &args->size, &args->handle);
 
-object_put:
-	if (obj->vm)
-		i915_vm_put(obj->vm);
-	i915_gem_object_put(obj);
-	return ret;
 vm_put:
 	if (obj->vm)
 		i915_vm_put(obj->vm);
@@ -806,8 +688,28 @@ static int ext_set_placements(struct i915_user_extension __user *base,
 	return set_placements(&ext, data);
 }
 
+static int ext_set_protected(struct i915_user_extension __user *base, void *data)
+{
+	struct drm_i915_gem_create_ext_protected_content ext;
+	struct create_ext *ext_data = data;
+
+	if (copy_from_user(&ext, base, sizeof(ext)))
+		return -EFAULT;
+
+	if (ext.flags)
+		return -EINVAL;
+
+	if (!intel_pxp_is_enabled(&ext_data->i915->gt0.pxp))
+		return -ENODEV;
+
+	ext_data->flags |= I915_BO_PROTECTED;
+
+	return 0;
+}
+
 static const i915_user_extension_fn create_extensions[] = {
 	[I915_GEM_CREATE_EXT_MEMORY_REGIONS] = ext_set_placements,
+	[I915_GEM_CREATE_EXT_PROTECTED_CONTENT] = ext_set_protected,
 };
 
 /**
@@ -826,8 +728,6 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 	struct intel_memory_region **placements_ext;
 	struct drm_i915_gem_object *obj;
 	int ret;
-
-	return -EINVAL;
 
 	if (args->flags)
 		return -EINVAL;
@@ -867,22 +767,17 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto vm_put;
 
-	ret = clear_object(obj);
-	if (ret)
-		goto object_put;
-
 	if (obj->vm) {
 		list_add_tail(&obj->priv_obj_link, &obj->vm->priv_obj_list);
 		obj->base.resv = obj->vm->root_obj->base.resv;
 		i915_vm_put(obj->vm);
 	}
 
+	/* Add any flag set by create_ext options */
+	obj->flags |= ext_data.flags;
+
 	return i915_gem_publish(obj, file, &args->size, &args->handle);
-object_put:
-	if (obj->vm)
-		i915_vm_put(obj->vm);
-	i915_gem_object_put(obj);
-	return ret;
+
 vm_put:
 	if (obj->vm)
 		i915_vm_put(obj->vm);
@@ -931,15 +826,7 @@ i915_gem_object_create_user(struct drm_i915_private *i915, u64 size,
 	if (ret)
 		goto placement_free;
 
-	ret = clear_object(obj);
-	if (ret)
-		goto object_put;
-
 	return obj;
-
-object_put:
-	i915_gem_object_put(obj);
-	return ERR_PTR(ret);
 
 placement_free:
 	if (n_placements > 1)
@@ -949,4 +836,3 @@ object_free:
 	i915_gem_object_free(obj);
 	return ERR_PTR(ret);
 }
-

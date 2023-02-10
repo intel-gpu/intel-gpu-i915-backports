@@ -9,6 +9,7 @@
 #include "intel_rps_types.h"
 
 struct i915_request;
+struct drm_printer;
 
 void intel_rps_init_early(struct intel_rps *rps);
 void intel_rps_init(struct intel_rps *rps);
@@ -53,6 +54,7 @@ u32 intel_rps_read_rpstat(struct intel_rps *rps);
 void gen6_rps_get_freq_caps(struct intel_rps *rps, struct intel_rps_freq_caps *caps);
 void intel_rps_raise_unslice(struct intel_rps *rps);
 void intel_rps_lower_unslice(struct intel_rps *rps);
+void gen6_rps_frequency_dump(struct intel_rps *rps, struct drm_printer *p);
 u32 intel_rps_read_throttle_reason(struct intel_rps *rps);
 u32 intel_rps_read_throttle_reason_status(struct intel_rps *rps);
 u32 intel_rps_read_throttle_reason_pl1(struct intel_rps *rps);

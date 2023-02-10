@@ -1095,6 +1095,8 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	__intel_gt_set_wedged(gt);
 
 	mutex_unlock(&gt->reset.mutex);
+
+	intel_gt_retire_requests(gt);
 	intel_runtime_pm_put(gt->uncore->rpm, wakeref);
 }
 
@@ -1634,10 +1636,11 @@ void intel_gt_reset_backoff_clear(struct intel_gt *gt)
 	wake_up_all(&gt->reset.queue);
 }
 
-static int _intel_gt_reset_trylock(struct intel_gt *gt, int *srcu, bool retry)
+static int _intel_gt_reset_lock(struct intel_gt *gt, int *srcu, bool retry)
 {
 	might_lock(&gt->reset.backoff_srcu);
-	might_sleep();
+	if (retry)
+		might_sleep();
 
 	rcu_read_lock();
 	while (test_bit(I915_RESET_BACKOFF, &gt->reset.flags)) {
@@ -1659,14 +1662,14 @@ static int _intel_gt_reset_trylock(struct intel_gt *gt, int *srcu, bool retry)
 	return 0;
 }
 
-int intel_gt_reset_trylock_noretry(struct intel_gt *gt, int *srcu)
-{
-	return _intel_gt_reset_trylock(gt, srcu, false);
-}
-
 int intel_gt_reset_trylock(struct intel_gt *gt, int *srcu)
 {
-	return _intel_gt_reset_trylock(gt, srcu, true);
+	return _intel_gt_reset_lock(gt, srcu, false);
+}
+
+int intel_gt_reset_lock_interruptible(struct intel_gt *gt, int *srcu)
+{
+	return _intel_gt_reset_lock(gt, srcu, true);
 }
 
 void intel_gt_reset_unlock(struct intel_gt *gt, int tag)

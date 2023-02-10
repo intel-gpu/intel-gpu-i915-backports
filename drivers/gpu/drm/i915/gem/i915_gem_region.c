@@ -47,11 +47,14 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 			     ilog2(mem->min_page_size)))
 		 return ERR_PTR(-E2BIG);
 
+	if (obj->base.size > mem->total)
+		return ERR_PTR(-E2BIG);
+
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if (!st)
 		return ERR_PTR(-ENOMEM);
 
-	if (sg_alloc_table(st, num_pages, GFP_KERNEL)) {
+	if (sg_alloc_table(st, num_pages, I915_GFP_ALLOW_FAIL)) {
 		kfree(st);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -98,19 +101,18 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 				GEM_BUG_ON(st->nents >= num_pages);
 
 				if (st->nents) {
+					sg_dma_len(sg) = sg->length;
 					sg_page_sizes |= sg->length;
 					sg = __sg_next(sg);
 				}
 
 				sg_dma_address(sg) = offset;
-				sg_dma_len(sg) = 0;
 				sg->length = 0;
 				st->nents++;
 			}
 
 			len = min(block_size, max_segment - sg->length);
 			sg->length += len;
-			sg_dma_len(sg) += len;
 
 			offset += len;
 			block_size -= len;
@@ -119,6 +121,7 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 		}
 	}
 
+	sg_dma_len(sg) = sg->length;
 	sg_page_sizes |= sg->length;
 	sg_mark_end(sg);
 	i915_sg_trim(st);
@@ -179,7 +182,7 @@ i915_gem_object_create_region(struct intel_memory_region *mem,
 	GEM_BUG_ON(!size);
 	GEM_BUG_ON(!IS_ALIGNED(size, I915_GTT_MIN_ALIGNMENT));
 
-	if (i915_gem_object_size_2big(size))
+	if (i915_gem_object_size_2big(size) || size > mem->total)
 		return ERR_PTR(-E2BIG);
 
 	obj = i915_gem_object_alloc();

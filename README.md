@@ -29,7 +29,7 @@ This repo is a code snapshot of particular version of backports and does not con
  
 # Prerequisite
 we have dependencies on the following packages
-  - dkms
+  - dkms (only for dkms build)
   - make
   - linux-glibc-devel
   - lsb-release
@@ -48,21 +48,66 @@ This driver is part of a collection of kernel-mode drivers that enable support f
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
-# Dynamic Kernel Module Support(DKMS) based package creation
+# Package Creation
+Backports support two different kinds of packaging.
+1) Dynamic Kernel Module Support(DKMS) Packages
+2) Binary Packages
 
+## DKMS package creation
+DKMS package consists of source required to build and install ko files agains kernel dynamically.
 We need to create dmabuf and i915 dkms packages using the below command.
-
+```
     make dkmsrpm-pkg
+```
+ Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
-  Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
-
-# Installation
+### DKMS Installation
+```
     sudo rpm -ivh intel-dmabuf-dkms*.rpm intel-i915-dkms*.rpm
     # Reboot the device after installation of all packages.
     sudo reboot
-## Installation varification
-Please grep **backport**  from dmesg after reboot. you should see something like below
+```
+## Binary Packages Creation
 
+Binary rpm's consists of pre-built ko modules for particular kernel version and flavor.
+To create binary packages, Build system should be having SLES kernel and respective headers installed
+
+### Command to build single binary rpm (combination of dma-buf,drm and i915)
+```
+  make binrpm-pkg
+```
+Generated Files:
+	intel-i915-kmp-default-<version>-1.x86_64.rpm
+
+### Command to build dma-buf binary rpm
+If you want to generate seperate rpm, please use below command alternatively to binrpm-pkg.
+
+```
+  make dmabinrpm-pkg
+```
+Generated Files:
+	intel-dmabuf-kmp-default-<version>-1.x86_64.rpm
+	intel-dmabuf-symvers-default-<version>.x86_64.rpm
+
+### Command to build i915 binary rpm
+```
+  make i915binrpm-pkg
+```
+Generated Files:
+	intel-i915-kmp-default-<version>.x86_64.rpm
+
+Note: In case of seperate rpm creation, i915 will have dependency on dma-buf and uses dmabuf-symvers package symbol file.
+Installation should be done at once.
+
+### Binary package Installation
+use below command to install binary rpm
+```
+ rpm -ivh <rpm>
+```
+
+# Installation varification
+Please grep **backport**  from dmesg after reboot. you should see something like below
+```
     > sudo dmesg |grep -i backport
     [sudo] password for gta:
     [    4.042298] DMABUF-COMPAT BACKPORTED INIT
@@ -74,3 +119,4 @@ Please grep **backport**  from dmesg after reboot. you should see something like
     [    4.049920] [drm] DRM BACKPORTED INIT
     [    4.323473] [drm] DRM_KMS_HELPER BACKPORTED INIT
     [    4.419171] [drm] I915 BACKPORTED INIT
+```

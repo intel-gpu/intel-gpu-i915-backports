@@ -8,7 +8,6 @@
 #include <uapi/drm/i915_drm.h>
 
 #include "gt/intel_gt_requests.h"
-#include "gt/intel_gt_regs.h"
 
 #include "i915_buddy.h"
 #include "intel_memory_region.h"

@@ -53,22 +53,14 @@ static inline void i915_gem_vm_priv_unlock(struct i915_address_space *vm)
 
 struct i915_vma *
 i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va);
-void i915_gem_vm_bind_remove(struct i915_vma *vma, bool release_obj);
 int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 			 struct prelim_drm_i915_gem_vm_bind *va,
 			 struct drm_file *file);
 int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 			   struct prelim_drm_i915_gem_vm_bind *va);
-void i915_gem_vm_bind_init(struct i915_address_space *vm);
+
 void i915_gem_vm_unbind_all(struct i915_address_space *vm);
 
 void i915_vma_metadata_free(struct i915_vma *vma);
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-int i915_vma_add_debugger_fence(struct i915_vma *vma);
-void i915_vma_signal_debugger_fence(struct i915_vma *vma);
-#else
-static inline void i915_vma_signal_debugger_fence(struct i915_vma *vma) { };
-#endif
 
 #endif /* __I915_GEM_VM_BIND_H */

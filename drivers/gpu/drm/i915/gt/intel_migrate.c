@@ -516,7 +516,8 @@ static int emit_copy_ccs(struct i915_request *rq,
 			 u32 src_offset, u8 src_access, int size)
 {
 	struct drm_i915_private *i915 = rq->engine->i915;
-	int mocs = rq->engine->gt->mocs.uc_index << 1;
+	u32 mocs = FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK_XEHP,
+			      rq->engine->gt->mocs.uc_index);
 	u32 num_ccs_blks;
 	u32 *cs;
 
@@ -548,11 +549,9 @@ static int emit_copy_ccs(struct i915_request *rq,
 		dst_access << DST_ACCESS_TYPE_SHIFT |
 		REG_FIELD_PREP(CCS_SIZE_MASK_XEHP, num_ccs_blks - 1);
 	*cs++ = src_offset;
-	*cs++ = rq->engine->instance |
-		FIELD_PREP(XY_CTRL_SURF_MOCS_MASK, mocs);
+	*cs++ = rq->engine->instance | mocs;
 	*cs++ = dst_offset;
-	*cs++ = rq->engine->instance |
-		FIELD_PREP(XY_CTRL_SURF_MOCS_MASK, mocs);
+	*cs++ = rq->engine->instance | mocs;
 
 	cs = i915_flush_dw(cs, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
 	*cs++ = MI_NOOP;
@@ -900,7 +899,8 @@ static int emit_clear(struct i915_request *rq, u32 offset, int size,
 		return PTR_ERR(cs);
 
 	if (HAS_FLAT_CCS(i915) && ver >= 12) {
-		*cs++ = XY_FAST_COLOR_BLT_CMD | XY_FAST_COLOR_BLT_DEPTH_32 |
+		*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+			XY_FAST_COLOR_BLT_DEPTH_32 |
 			(XY_FAST_COLOR_BLT_DW - 2);
 		*cs++ = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs) |
 			(PAGE_SIZE - 1);

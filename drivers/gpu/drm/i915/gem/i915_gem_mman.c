@@ -299,7 +299,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 				continue;
 		}
 
-		err = i915_gem_object_pin_pages(obj);
+		err = i915_gem_object_pin_pages_sync(obj);
 		if (err)
 			continue;
 
@@ -313,9 +313,6 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		err = remap_io_sg(area,
 				  area->vm_start, area->vm_end - area->vm_start,
 				  obj->mm.pages->sgl, iomap);
-
-		/* Mark when object becomes writable by userspace (used by migration policy) */
-		i915_gem_object_set_first_bind(obj);
 
 		if (area->vm_flags & VM_WRITE) {
 			GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
@@ -371,11 +368,11 @@ retry:
 		goto err_rpm;
 	}
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_pin_pages_sync(obj);
 	if (ret)
 		goto err_rpm;
 
-	ret = intel_gt_reset_trylock(ggtt->vm.gt, &srcu);
+	ret = intel_gt_reset_lock_interruptible(ggtt->vm.gt, &srcu);
 	if (ret)
 		goto err_pages;
 
@@ -447,9 +444,6 @@ retry:
 	if (!i915_vma_set_userfault(vma) && !obj->userfault_count++)
 		list_add(&obj->userfault_link, &to_gt(i915)->ggtt->userfault_list);
 	mutex_unlock(&to_gt(i915)->ggtt->vm.mutex);
-
-	/* Mark when object becomes writable by userspace (used by migration policy) */
-	i915_gem_object_set_first_bind(obj);
 
 	/* Track the mmo associated with the fenced vma */
 	vma->mmo = mmo;
@@ -688,6 +682,47 @@ insert_mmo(struct drm_i915_gem_object *obj, struct i915_mmap_offset *mmo)
 	return mmo;
 }
 
+static int
+vma_node_allow_once(struct drm_vma_offset_node *node, struct drm_file *tag)
+{
+        struct rb_node **iter;
+        struct rb_node *parent = NULL;
+        struct drm_vma_offset_file *new, *entry;
+        int ret = 0;
+
+        new = kmalloc(sizeof(*entry), GFP_KERNEL);
+        write_lock(&node->vm_lock);
+
+        iter = &node->vm_files.rb_node;
+        while (likely(*iter)) {
+                parent = *iter;
+                entry = rb_entry(*iter, struct drm_vma_offset_file, vm_rb);
+
+                if (tag == entry->vm_tag)
+                        goto unlock;
+                else if (tag > entry->vm_tag)
+                        iter = &parent->rb_right;
+                else
+                        iter = &parent->rb_left;
+        }
+
+        if (!new) {
+                ret = -ENOMEM;
+                goto unlock;
+        }
+
+        new->vm_tag = tag;
+        new->vm_count = 1;
+        rb_link_node(&new->vm_rb, parent, iter);
+        rb_insert_color(&new->vm_rb, &node->vm_files);
+        new = NULL;
+
+unlock:
+        write_unlock(&node->vm_lock);
+        kfree(new);
+        return ret;
+}
+
 struct i915_mmap_offset *
 i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
 			    enum i915_mmap_type mmap_type,
@@ -732,8 +767,12 @@ insert:
 	mmo = insert_mmo(obj, mmo);
 	GEM_BUG_ON(lookup_mmo(obj, mmap_type) != mmo);
 out:
-	if (file)
-		drm_vma_node_allow(&mmo->vma_node, file);
+	if (file) {
+		err = vma_node_allow_once(&mmo->vma_node, file);
+		if (err)
+			return ERR_PTR(err);
+	}
+
 	return mmo;
 
 err:

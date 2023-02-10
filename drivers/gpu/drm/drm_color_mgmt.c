@@ -191,15 +191,23 @@ void drm_crtc_enable_color_mgmt(struct drm_crtc *crtc,
 }
 EXPORT_SYMBOL(drm_crtc_enable_color_mgmt);
 
-void drm_crtc_attach_gamma_mode_property(struct drm_crtc *crtc)
+void drm_crtc_attach_gamma_degamma_mode_property(struct drm_crtc *crtc,
+						 enum lut_type type)
 {
-	if (!crtc->gamma_mode_property)
+	struct drm_property *prop;
+
+	if (type == LUT_TYPE_DEGAMMA)
+		prop = crtc->degamma_mode_property;
+	else
+		prop = crtc->gamma_mode_property;
+
+	if (!prop)
 		return;
 
 	drm_object_attach_property(&crtc->base,
-				   crtc->gamma_mode_property, 0);
+				   prop, 0);
 }
-EXPORT_SYMBOL(drm_crtc_attach_gamma_mode_property);
+EXPORT_SYMBOL(drm_crtc_attach_gamma_degamma_mode_property);
 
 int drm_color_create_gamma_mode_property(struct drm_crtc *crtc,
 					 int num_values)
@@ -218,17 +226,38 @@ int drm_color_create_gamma_mode_property(struct drm_crtc *crtc,
 }
 EXPORT_SYMBOL(drm_color_create_gamma_mode_property);
 
-int drm_color_add_gamma_mode_range(struct drm_crtc *crtc,
-				   const char *name,
-				   const struct drm_color_lut_range *ranges,
-				   size_t length)
+int drm_color_create_degamma_mode_property(struct drm_crtc *crtc,
+					   int num_values)
+{
+	struct drm_property *prop;
+
+	prop = drm_property_create(crtc->dev,
+				   DRM_MODE_PROP_ENUM,
+				   "DEGAMMA_MODE", num_values);
+	if (!prop)
+		return -ENOMEM;
+
+	crtc->degamma_mode_property = prop;
+
+	return 0;
+}
+EXPORT_SYMBOL(drm_color_create_degamma_mode_property);
+
+int drm_color_add_gamma_degamma_mode_range(struct drm_crtc *crtc,
+					   const char *name,
+					   const struct drm_color_lut_range *ranges,
+					   size_t length, enum lut_type type)
 {
 	struct drm_property_blob *blob;
 	struct drm_property *prop;
 	int num_ranges = length / sizeof(ranges[0]);
 	int i, ret, num_types_0;
 
-	prop = crtc->gamma_mode_property;
+	if (type == LUT_TYPE_DEGAMMA)
+		prop = crtc->degamma_mode_property;
+	else
+		prop = crtc->gamma_mode_property;
+
 	if (!prop)
 		return -EINVAL;
 
@@ -264,7 +293,7 @@ int drm_color_add_gamma_mode_range(struct drm_crtc *crtc,
 
 	return 0;
 }
-EXPORT_SYMBOL(drm_color_add_gamma_mode_range);
+EXPORT_SYMBOL(drm_color_add_gamma_degamma_mode_range);
 
 /**
  * drm_mode_crtc_set_gamma_size - set the gamma table size
@@ -878,3 +907,46 @@ int drm_color_lut_check(const struct drm_property_blob *lut, u32 tests)
 	return 0;
 }
 EXPORT_SYMBOL(drm_color_lut_check);
+
+/**
+ * drm_color_lut_ext_check - check validity of extended lookup table
+ * @lut: property blob containing extended LUT to check
+ * @tests: bitmask of tests to run
+ *
+ * Helper to check whether a userspace-provided extended lookup table is valid and
+ * satisfies hardware requirements.  Drivers pass a bitmask indicating which of
+ * the tests in &drm_color_lut_tests should be performed.
+ *
+ * Returns 0 on success, -EINVAL on failure.
+ */
+int drm_color_lut_ext_check(const struct drm_property_blob *lut, u32 tests)
+{
+	const struct drm_color_lut_ext *entry;
+	int i;
+
+	if (!lut || !tests)
+		return 0;
+
+	entry = lut->data;
+	for (i = 0; i < drm_color_lut_ext_size(lut); i++) {
+		if (tests & DRM_COLOR_LUT_EQUAL_CHANNELS) {
+			if (entry[i].red != entry[i].blue ||
+			    entry[i].red != entry[i].green) {
+				DRM_DEBUG_KMS("All LUT entries must have equal r/g/b\n");
+				return -EINVAL;
+			}
+		}
+
+		if (i > 0 && tests & DRM_COLOR_LUT_NON_DECREASING) {
+			if (entry[i].red < entry[i - 1].red ||
+			    entry[i].green < entry[i - 1].green ||
+			    entry[i].blue < entry[i - 1].blue) {
+				DRM_DEBUG_KMS("LUT entries must never decrease.\n");
+				return -EINVAL;
+			}
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(drm_color_lut_ext_check);

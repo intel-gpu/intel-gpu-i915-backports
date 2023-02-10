@@ -1412,7 +1412,7 @@ static unsigned long *alloc_whitelist(u32 batch_length)
 
 	/* Prefer to report transient allocation failure rather than hit oom */
 	jmp = bitmap_zalloc(DIV_ROUND_UP(batch_length, sizeof(u32)),
-			    GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+			    I915_GFP_ALLOW_FAIL);
 	if (!jmp)
 		return ERR_PTR(-ENOMEM);
 

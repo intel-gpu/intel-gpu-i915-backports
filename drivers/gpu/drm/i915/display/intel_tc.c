@@ -453,7 +453,7 @@ static bool xelpdp_wait_for_tcss_power(struct intel_digital_port *dig_port,
 				    XELPDP_PORT_BUF_CTL1(dig_port->base.port),
 				    XELPDP_TCSS_POWER_STATE,
 				    enabled ? XELPDP_TCSS_POWER_STATE : 0,
-				    1)) {
+				    5)) {
 		drm_dbg_kms(&i915->drm,
 			    "Port %s: TCSS power state not as expected\n",
 			    dig_port->tc_port_name);
@@ -478,7 +478,7 @@ static bool xelpdp_tc_power_request(struct intel_digital_port *dig_port, bool re
 	intel_uncore_write(uncore, XELPDP_PORT_BUF_CTL1(port), val);
 
 	return xelpdp_wait_phy_status_complete(dig_port) &&
-	       xelpdp_wait_for_tcss_power(dig_port, true);
+	       xelpdp_wait_for_tcss_power(dig_port, request);
 }
 
 static bool tc_phy_status_complete(struct intel_digital_port *dig_port)
@@ -637,8 +637,10 @@ static void icl_tc_phy_connect(struct intel_digital_port *dig_port,
 	u32 live_status_mask;
 	int max_lanes;
 
-	if (DISPLAY_VER(i915) >= 14)
-		xelpdp_tc_power_request(dig_port, true);
+	if (DISPLAY_VER(i915) >= 14) {
+		if (!xelpdp_tc_power_request(dig_port, true))
+			goto out_release_phy;
+	}
 
 	if (!tc_phy_status_complete(dig_port)) {
 		drm_dbg_kms(&i915->drm, "Port %s: PHY not ready\n",
