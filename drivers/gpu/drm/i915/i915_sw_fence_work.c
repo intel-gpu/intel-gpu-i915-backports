@@ -6,10 +6,16 @@
 
 #include "i915_sw_fence_work.h"
 
+static void fence_complete(struct dma_fence_work *f)
+{
+	if (f->ops->complete)
+		f->ops->complete(f);
+	dma_fence_signal(&f->dma);
+}
+
 static void fence_work(struct work_struct *work)
 {
 	struct dma_fence_work *f = container_of(work, typeof(*f), work);
-	bool cookie = dma_fence_begin_signalling();
 
 	if (!f->dma.error) {
 		int err;
@@ -19,12 +25,7 @@ static void fence_work(struct work_struct *work)
 			dma_fence_set_error(&f->dma, err);
 	}
 
-	dma_fence_signal(&f->dma);
-	dma_fence_end_signalling(cookie);
-
-	if (f->ops->release)
-		f->ops->release(f);
-
+	fence_complete(f);
 	dma_fence_put(&f->dma);
 }
 
@@ -42,7 +43,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 		if (test_bit(DMA_FENCE_WORK_IMM, &f->dma.flags))
 			fence_work(&f->work);
 		else
-			queue_work(f->wq, &f->work);
+			queue_work(system_unbound_wq, &f->work);
 		break;
 
 	case FENCE_FREE:
@@ -69,6 +70,9 @@ static void fence_release(struct dma_fence *fence)
 {
 	struct dma_fence_work *f = container_of(fence, typeof(*f), dma);
 
+	if (f->ops->release)
+		f->ops->release(f);
+
 	i915_sw_fence_fini(&f->chain);
 
 	BUILD_BUG_ON(offsetof(typeof(*f), dma));
@@ -93,11 +97,9 @@ const struct dma_fence_ops sw_fence_work_ops = {
 };
 
 void dma_fence_work_init(struct dma_fence_work *f,
-			 struct workqueue_struct *wq,
 			 const struct dma_fence_work_ops *ops)
 {
 	f->ops = ops;
-	f->wq = wq ? : system_unbound_wq;
 	spin_lock_init(&f->lock);
 	dma_fence_init(&f->dma, &sw_fence_work_ops, &f->lock, 0, 0);
 	i915_sw_fence_init(&f->chain, fence_notify);

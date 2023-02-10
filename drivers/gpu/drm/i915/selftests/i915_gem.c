@@ -127,6 +127,7 @@ static suspend_state_t do_hibernate(struct drm_i915_private *i915)
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
 		i915_gem_freeze(i915);
+		i915_gem_suspend_late(i915);
 		i915_gem_freeze_late(i915);
 	}
 

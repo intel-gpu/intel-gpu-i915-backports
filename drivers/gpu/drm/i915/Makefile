@@ -294,6 +294,7 @@ i915-y += \
 	display/intel_frontbuffer.o \
 	display/intel_global_state.o \
 	display/intel_hdcp.o \
+	display/intel_hdcp_gsc.o \
 	display/intel_hotplug.o \
 	display/intel_lpe_audio.o \
 	display/intel_modeset_verify.o \
@@ -368,7 +369,9 @@ i915-y += \
 
 i915-$(CPTCFG_DRM_I915_PXP) += \
 	pxp/intel_pxp_cmd.o \
+	pxp/intel_pxp_debugfs.o \
 	pxp/intel_pxp_irq.o \
+	pxp/intel_pxp_pm.o \
 	pxp/intel_pxp_session.o
 
 # Post-mortem debug and GPU hang state capture

@@ -199,6 +199,10 @@ i915_gem_object_wait(struct drm_i915_gem_object *obj,
 	might_sleep();
 	GEM_BUG_ON(timeout < 0);
 
+	timeout = i915_gem_object_migrate_wait(obj, flags, timeout);
+	if (timeout < 0)
+		return timeout;
+
 	timeout = i915_gem_object_wait_reservation(obj->base.resv,
 						   flags, timeout);
 	return timeout < 0 ? timeout : 0;

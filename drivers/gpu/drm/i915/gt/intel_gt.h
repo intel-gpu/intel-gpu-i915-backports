@@ -115,6 +115,9 @@ i915_is_level4_wa_active(struct intel_gt *gt)
 		!atomic_read(&i915->level4_wa_disabled);
 }
 
+int intel_count_l3_banks(struct drm_i915_private *i915,
+			 struct intel_engine_cs *engine);
+
 int intel_gt_probe_all(struct drm_i915_private *i915);
 int intel_gt_tiles_init(struct drm_i915_private *i915);
 void intel_gt_release_all(struct drm_i915_private *i915);
@@ -130,15 +133,14 @@ static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 	if (!i915->params.enable_rc6)
 		return false;
 
-	if (i915->quiesce_gpu)
-		return false;
-
 #ifdef RC6_NOT_SUPPORTED
 	/* Disable RC6 for all B-step - hsd: 14015706335*/
 	if (!i915->params.rc6_ignore_steppings)
 		return false;
 #endif
 
+	if (i915->quiesce_gpu)
+		return false;
 	/*
 	 * Lets not break the dpc recovery, which will be hindered
 	 * by rpm resume caused by RC6 Wa

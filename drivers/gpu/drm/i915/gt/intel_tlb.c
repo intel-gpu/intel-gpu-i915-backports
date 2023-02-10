@@ -100,7 +100,7 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 		if (!i915_mmio_reg_offset(rb.reg))
 			continue;
 
-		intel_uncore_write_fw(uncore, rb.reg, rb.bit);
+		intel_uncore_write_fw(uncore, rb.reg, rb.bit << 16 | rb.bit);
 		awake |= engine->mask;
 	}
 
@@ -170,9 +170,7 @@ void intel_gt_invalidate_tlb_full(struct intel_gt *gt, u32 seqno)
 		if (tlb_seqno_passed(gt, seqno))
 			goto unlock;
 
-		if (INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc))
-			intel_guc_invalidate_tlb_full(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
-		else
+		if (intel_guc_invalidate_tlb_full(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY) < 0)
 			mmio_invalidate_full(gt);
 
 		write_seqcount_invalidate(&gt->tlb.seqno);
@@ -274,14 +272,12 @@ bool intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 	struct intel_guc *guc = &gt->uc.guc;
 	intel_wakeref_t wakeref;
 	u64 size, vm_total;
+	bool ret = true;
 
 	if (intel_gt_is_wedged(gt))
 		return true;
 
 	trace_intel_tlb_invalidate(gt, start, length);
-
-	if (!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
-		return false;
 
 	vm_total = BIT_ULL(INTEL_INFO(gt->i915)->ppgtt_size);
 	/* Align start and length */
@@ -293,13 +289,12 @@ bool intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 	if (IS_XEHPSDV(gt->i915))
 		return mmio_invalidate_range(gt, start, size);
 
-	with_intel_gt_pm_if_awake(gt, wakeref) {
-		intel_guc_invalidate_tlb_page_selective(guc,
-							INTEL_GUC_TLB_INVAL_MODE_HEAVY,
-							start, size, vm->asid);
-	}
+	with_intel_gt_pm_if_awake(gt, wakeref)
+		ret = intel_guc_invalidate_tlb_page_selective(guc,
+							      INTEL_GUC_TLB_INVAL_MODE_HEAVY,
+							      start, size, vm->asid) == 0;
 
-	return true;
+	return ret;
 }
 
 void intel_gt_init_tlb(struct intel_gt *gt)
@@ -312,3 +307,7 @@ void intel_gt_fini_tlb(struct intel_gt *gt)
 {
 	mutex_destroy(&gt->tlb.invalidate_lock);
 }
+
+#if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
+#include "selftest_tlb.c"
+#endif

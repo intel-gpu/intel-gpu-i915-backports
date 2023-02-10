@@ -1737,7 +1737,6 @@ static bool engine_supports_oa(struct drm_i915_private *i915,
 
 	switch (platform) {
 	case INTEL_XEHPSDV:
-	case INTEL_PONTEVECCHIO:
 		return engine->class == COMPUTE_CLASS ||
 		       engine->class == VIDEO_DECODE_CLASS ||
 		       engine->class == VIDEO_ENHANCEMENT_CLASS;
@@ -1746,6 +1745,9 @@ static bool engine_supports_oa(struct drm_i915_private *i915,
 		       engine->class == COMPUTE_CLASS ||
 		       engine->class == VIDEO_DECODE_CLASS ||
 		       engine->class == VIDEO_ENHANCEMENT_CLASS;
+	case INTEL_PONTEVECCHIO:
+		return engine->class == COMPUTE_CLASS ||
+		       engine->class == VIDEO_DECODE_CLASS;
 	case INTEL_METEORLAKE:
 		return engine->class == RENDER_CLASS ||
 		       ((engine->class == VIDEO_DECODE_CLASS ||
@@ -3101,9 +3103,9 @@ oa_configure_all_contexts(struct i915_perf_stream *stream,
 			  struct i915_active *active)
 {
 	struct drm_i915_private *i915 = stream->perf->i915;
-	struct intel_engine_cs *engine;
 	struct intel_gt *gt = stream->engine->gt;
-	struct i915_gem_context *ctx, *cn;
+	struct intel_engine_cs *engine;
+	struct i915_gem_context *ctx;
 	int err;
 
 	lockdep_assert_held(&gt->perf.lock);
@@ -3124,12 +3126,12 @@ oa_configure_all_contexts(struct i915_perf_stream *stream,
 	 * context. Contexts idle at the time of reconfiguration are not
 	 * trapped behind the barrier.
 	 */
-	spin_lock_irq(&i915->gem.contexts.lock);
-	list_for_each_entry_safe(ctx, cn, &i915->gem.contexts.list, link) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
 		if (!kref_get_unless_zero(&ctx->ref))
 			continue;
 
-		spin_unlock_irq(&i915->gem.contexts.lock);
+		rcu_read_unlock();
 
 		if (!i915_gem_context_is_closed(ctx)) {
 			err = gen8_configure_context(stream, ctx, regs, num_regs);
@@ -3139,11 +3141,10 @@ oa_configure_all_contexts(struct i915_perf_stream *stream,
 			}
 		}
 
-		spin_lock_irq(&i915->gem.contexts.lock);
-		list_safe_reset_next(ctx, cn, link);
+		rcu_read_lock();
 		i915_gem_context_put(ctx);
 	}
-	spin_unlock_irq(&i915->gem.contexts.lock);
+	rcu_read_unlock();
 
 	/*
 	 * After updating all other contexts, we need to modify ourselves.
@@ -5053,6 +5054,7 @@ static const struct i915_range gen12_oa_b_counters[] = {
 static const struct i915_range xehp_oa_b_counters[] = {
 	{ .start = 0xdc48, .end = 0xdc48 },	/* OAA_ENABLE_REG */
 	{ .start = 0xdd00, .end = 0xdd48 },	/* OAG_LCE0_0 - OAA_LENABLE_REG */
+	{},
 };
 
 static const struct i915_range gen7_oa_mux_regs[] = {

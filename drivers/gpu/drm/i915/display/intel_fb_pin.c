@@ -255,6 +255,29 @@ int intel_plane_pin_fb(struct intel_plane_state *plane_state)
 	return 0;
 }
 
+int intel_plane_sync_fb(struct intel_plane_state *plane_state)
+{
+	int err;
+
+	if (plane_state->ggtt_vma) {
+		err = i915_vma_wait_for_bind(plane_state->ggtt_vma);
+		if (err)
+			return err;
+	}
+
+	if (plane_state->dpt_vma) {
+		err = i915_vma_wait_for_bind(plane_state->dpt_vma);
+		if (err)
+			return err;
+	}
+
+	err = i915_gem_object_migrate_sync(intel_fb_obj(plane_state->hw.fb));
+	if (err)
+		return err;
+
+	return 0;
+}
+
 void intel_plane_unpin_fb(struct intel_plane_state *old_plane_state)
 {
 	struct drm_framebuffer *fb = old_plane_state->hw.fb;

@@ -9,7 +9,6 @@
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
-#include "intel_gt_compression_formats.h"
 #include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_ring.h"
@@ -711,7 +710,6 @@ static void gen12_ctx_workarounds_init(struct intel_engine_cs *engine,
 	if (!IS_DG1(i915))
 		/* Wa_1806527549 */
 		wa_masked_en(wal, HIZ_CHICKEN, HZ_DEPTH_TEST_LE_GE_OPT_DISABLE);
-
 }
 
 static void dg1_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -810,7 +808,13 @@ static void mtl_ctx_workarounds_init(struct intel_engine_cs *engine,
 
 		/* Wa_18019627453:mtl */
 		wa_masked_en(wal, VFLSKPD, VF_PREFETCH_TLB_DIS);
+
+		/*Wa_18018764978:mtl */
+		wa_masked_en(wal, PSS_MODE2, SCOREBOARD_STALL_FLUSH_CONTROL);
 	}
+
+	/* Wa_18019271663:mtl */
+	wa_masked_en(wal, CACHE_MODE_1, MSAA_OPTIMIZATION_REDUC_DISABLE);
 }
 
 static void fakewa_disable_nestedbb_mode(struct intel_engine_cs *engine,
@@ -1686,30 +1690,6 @@ dg2_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 }
 
 static void
-engine_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
-{
-	unsigned int fmt = XEHPC_LINEAR_16;
-
-	wa_write_or(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_DSS_UM_COMPRESSION, DSS_UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(DSS_UM_COMPRESSION_FMT_XEHPC, fmt));
-
-	wa_write_or(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_UM_COMPRESSION, UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(UM_COMPRESSION_FMT_XEHPC, fmt));
-}
-
-static void
-gt_stateless_mc_config(struct drm_i915_private *i915, struct i915_wa_list *wal)
-{
-	unsigned int fmt = XEHPC_LINEAR_16;
-
-	wa_write_or(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_EN);
-	wa_write_clr_set(wal, XEHPC_LNI_UM_COMPRESSION, LNI_UM_COMPRESSION_FMT_XEHPC,
-			 REG_FIELD_PREP(LNI_UM_COMPRESSION_FMT_XEHPC, fmt));
-}
-
-static void
 pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	init_dss_mcr(gt, wal, GEN_DSS_PER_CSLICE, __add_mcr_wa);
@@ -1726,13 +1706,6 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 		wa_add(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE, 0, 0, false);
 	else
 		wa_write_clr(wal, GEN7_MISCCPCTL, GEN12_DOP_CLOCK_GATE_RENDER_ENABLE);
-
-	/*
-	 * This is a "fake" workaround to ensure stateless memory compression
-	 * settings are initialized (and re-applied) at the right time.
-	 */
-	if (HAS_STATELESS_MC(gt->i915))
-		gt_stateless_mc_config(gt->i915, wal);
 
 	if (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)) {
 		/* Wa_14011780169:pvc */
@@ -3246,20 +3219,6 @@ add_render_compute_tuning_settings(struct drm_i915_private *i915,
 	if (IS_DG2(i915)) {
 		wa_write_or(wal, XEHP_L3SCQREG7, BLEND_FILL_CACHING_OPT_DIS);
 		wa_write_clr_set(wal, RT_CTRL, STACKID_CTRL, STACKID_CTRL_512);
-
-		/*
-		 * This is also listed as Wa_22012654132 for certain DG2
-		 * steppings, but the tuning setting programming is a superset
-		 * since it applies to all DG2 variants and steppings.
-		 *
-		 * Note that register 0xE420 is write-only and cannot be read
-		 * back for verification on DG2 (due to Wa_14012342262), so
-		 * we need to explicitly skip the readback.
-		 */
-		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
-		       _MASKED_BIT_ENABLE(ENABLE_PREFETCH_INTO_IC),
-		       0 /* write-only, so skip validation */,
-		       true);
 	}
 
 	/*
@@ -3357,6 +3316,19 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		wa_masked_en(wal, VFG_PREEMPTION_CHICKEN, POLYGON_TRIFAN_LINELOOP_DISABLE);
 	}
 
+	if (IS_DG2_GRAPHICS_STEP(i915, G10, STEP_A0, STEP_C0) || IS_DG2_G11(i915))
+		/*
+		 * Wa_22012654132
+		 *
+		 * Note that register 0xE420 is write-only and cannot be read
+		 * back for verification on DG2 (due to Wa_14012342262), so
+		 * we need to explicitly skip the readback.
+		 */
+		wa_add(wal, GEN10_CACHE_MODE_SS, 0,
+		       _MASKED_BIT_ENABLE(ENABLE_PREFETCH_INTO_IC),
+		       0 /* write-only, so skip validation */,
+		       true);
+
 	if (!RCS_MASK(engine->gt)) {
 		/*
 		 * EUs on compute engines can generate hardware status page
@@ -3369,14 +3341,6 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		 */
 		wa_write(wal, RING_HWSTAM(RENDER_RING_BASE), ~0);
 	}
-
-	/*
-	 * Although not a workaround per-se, stateless compression settings
-	 * need to be programmed and re-applied in the same manner as engine
-	 * workarounds, so we treat these as a "fake" workaround.
-	 */
-	if (HAS_STATELESS_MC(i915))
-		engine_stateless_mc_config(i915, wal);
 }
 
 static void

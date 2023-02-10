@@ -9,7 +9,6 @@
 #include <linux/types.h>
 
 struct intel_uncore;
-struct drm_i915_private;
 
 int snb_pcode_read(struct intel_uncore *uncore, u32 mbox, u32 *val, u32 *val1);
 int snb_pcode_write_timeout(struct intel_uncore *uncore, u32 mbox, u32 val,
@@ -21,7 +20,6 @@ int skl_pcode_request(struct intel_uncore *uncore, u32 mbox, u32 request,
 		      u32 reply_mask, u32 reply, int timeout_base_ms);
 
 int intel_pcode_init(struct intel_uncore *uncore);
-int intel_pcode_enable_vram_sr(struct drm_i915_private *i915);
 
 /*
  * Helpers for dGfx PCODE mailbox command formatting

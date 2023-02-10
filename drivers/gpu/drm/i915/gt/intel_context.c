@@ -341,21 +341,10 @@ static void __intel_context_retire(struct i915_active *active)
 		 intel_context_get_avg_runtime_ns(ce));
 
 	set_bit(CONTEXT_VALID_BIT, &ce->flags);
-	intel_context_post_unpin(ce);
 
 	atomic_dec(&ce->vm->active_contexts_gt[ce->engine->gt->info.id]);
 
-	mutex_lock(&ce->timeline->mutex);
-	/*
-	 * Do not retire suspend fence in case context is reactivated again,
-	 * in which case a new __intel_context_retire is guaranteed to run.
-	 */
-	if (ce->sfence && !intel_context_is_active(ce)) {
-		i915_suspend_fence_retire_dma_fence(&ce->sfence->base.dma);
-		ce->sfence = NULL;
-	}
-	mutex_unlock(&ce->timeline->mutex);
-
+	intel_context_post_unpin(ce);
 	intel_context_put(ce);
 }
 
@@ -485,8 +474,7 @@ intel_context_init(struct intel_context *ce, struct intel_engine_cs *engine)
 	i915_sw_fence_commit(&ce->guc_state.blocked);
 
 	i915_active_init(&ce->active,
-			 __intel_context_active, __intel_context_retire,
-			 I915_ACTIVE_RETIRE_SLEEPS);
+			 __intel_context_active, __intel_context_retire, 0);
 }
 
 void intel_context_fini(struct intel_context *ce)

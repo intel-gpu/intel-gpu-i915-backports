@@ -259,6 +259,7 @@ struct intel_gt {
 	struct i915_vma *dbg;
 
 	spinlock_t *irq_lock;
+	unsigned long irq_count;
 	u32 gt_imr;
 	u32 pm_ier;
 	u32 pm_imr;
@@ -401,6 +402,9 @@ struct intel_gt {
 
 	struct intel_pxp pxp;
 
+	/** link: &ggtt.gt_list */
+	struct list_head ggtt_link;
+
 	/* sysfs defaults per gt */
 	struct intel_rps_defaults rps_defaults;
 	struct kobject *sysfs_defaults;
@@ -411,9 +415,6 @@ struct intel_gt {
 	struct i915_perf_gt perf;
 
 	struct i915_eu_stall_cntr_gt eu_stall_cntr;
-
-	/** link: &ggtt.gt_list */
-	struct list_head ggtt_link;
 };
 
 struct intel_gt_definition {

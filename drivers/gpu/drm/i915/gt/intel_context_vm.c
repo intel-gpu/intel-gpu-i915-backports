@@ -148,9 +148,6 @@ gen8_modify_vm(struct intel_context *ce, struct i915_address_space *vm)
 	if (err == 0 && HAS_LOGICAL_RING_CONTEXTS(vm->i915))
 		err = gen8_emit_vm_config(rq, ce, i915_vm_to_ppgtt(vm));
 
-	ce->engine->wakeref_serial = READ_ONCE(ce->engine->serial) + 1;
-	i915_request_add_active_barriers(rq);
-
 out_request:
 	i915_request_add(rq);
 out_unpin:

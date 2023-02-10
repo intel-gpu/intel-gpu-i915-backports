@@ -131,7 +131,7 @@ struct intel_guc {
 		/**
 		 * @guc_ids_in_use: Number single-lrc guc_ids in use
 		 */
-		u16 guc_ids_in_use;
+		unsigned int guc_ids_in_use;
 		/**
 		 * @destroyed_contexts: list of contexts waiting to be destroyed
 		 * (deregistered with the GuC)
@@ -143,12 +143,16 @@ struct intel_guc {
 		 * function as it might be in an atomic context (no sleeping)
 		 */
 		struct work_struct destroyed_worker;
-#define SCHED_DISABLE_DELAY_MS	100
 		/**
 		 * @sched_disable_delay_ms: schedule disable delay, in ms, for
 		 * contexts
 		 */
-		u64 sched_disable_delay_ms;
+		unsigned int sched_disable_delay_ms;
+		/**
+		 * @sched_disable_gucid_threshold: threshold of min remaining available
+		 * guc_ids before we start bypassing the schedule disable delay
+		 */
+		unsigned int sched_disable_gucid_threshold;
 	} submission_state;
 
 	/**
@@ -285,7 +289,13 @@ struct intel_guc {
 #endif
 };
 
-#define GUC_SUBMIT_VER(guc)	MAKE_UC_VER_STRUCT((guc)->submission_version)
+/*
+ * GuC version number components are only 8-bit, so converting to a 32bit 8.8.8
+ * integer works.
+ */
+#define MAKE_GUC_VER(maj, min, pat)	(((maj) << 16) | ((min) << 8) | (pat))
+#define MAKE_GUC_VER_STRUCT(ver)	MAKE_GUC_VER((ver).major, (ver).minor, (ver).patch)
+#define GUC_SUBMIT_VER(guc)		MAKE_GUC_VER_STRUCT((guc)->submission_version)
 
 struct intel_guc_tlb_wait {
 	struct wait_queue_head wq;
@@ -560,6 +570,8 @@ void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p);
 void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p);
 
 void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
+
+int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc);
 
 void intel_guc_init_fake_interrupts(struct intel_guc *guc);
 

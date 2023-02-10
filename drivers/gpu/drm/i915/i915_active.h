@@ -71,6 +71,8 @@ __i915_active_fence_init(struct i915_active_fence *active,
 #define INIT_ACTIVE_FENCE(A) \
 	__i915_active_fence_init((A), NULL, NULL)
 
+void i915_active_fence_fini(struct i915_active_fence *active);
+
 struct dma_fence *
 __i915_active_fence_set(struct i915_active_fence *active,
 			struct dma_fence *fence);
@@ -87,6 +89,57 @@ __i915_active_fence_set(struct i915_active_fence *active,
 int __must_check
 i915_active_fence_set(struct i915_active_fence *active,
 		      struct i915_request *rq);
+
+static inline struct dma_fence *
+__i915_active_fence_get(struct dma_fence **fencep)
+{
+	/* See dma_fence_get_rcu_safe */
+	do {
+		struct dma_fence *fence;
+
+		fence = rcu_dereference(*fencep);
+		if (IS_ERR_OR_NULL(fence))
+			return fence;
+
+		if (!dma_fence_get_rcu(fence))
+			continue;
+
+		if (fence == rcu_access_pointer(*fencep))
+			return rcu_pointer_handoff(fence);
+
+		dma_fence_put(fence);
+	} while (1);
+}
+
+static inline int
+i915_active_fence_has_error(const struct i915_active_fence *active)
+{
+	return PTR_ERR_OR_ZERO(rcu_access_pointer(active->fence));
+}
+
+/**
+ * i915_active_fence_get_or_error - return a reference to the active fence, or persistent error
+ * @active - the active tracker
+ *
+ * i915_active_fence_get_or_error() returns a reference to the active fence,
+ * or ERR_PTR if the active tracker is idle with the status of the persistent
+ * error. The reference is obtained under RCU, so no locking is required by the
+ * caller.
+ *
+ * The reference should be freed with dma_fence_put().
+ */
+static inline struct dma_fence *
+i915_active_fence_get_or_error(struct i915_active_fence *active)
+{
+	struct dma_fence *fence;
+
+	rcu_read_lock();
+	fence = __i915_active_fence_get(&active->fence);
+	rcu_read_unlock();
+
+	return fence;
+}
+
 /**
  * i915_active_fence_get - return a reference to the active fence
  * @active - the active tracker
@@ -100,13 +153,9 @@ i915_active_fence_set(struct i915_active_fence *active,
 static inline struct dma_fence *
 i915_active_fence_get(struct i915_active_fence *active)
 {
-	struct dma_fence *fence;
+	struct dma_fence *fence = i915_active_fence_get_or_error(active);
 
-	rcu_read_lock();
-	fence = dma_fence_get_rcu_safe(&active->fence);
-	rcu_read_unlock();
-
-	return fence;
+	return IS_ERR(fence) ? NULL : fence;
 }
 
 /**
@@ -114,13 +163,13 @@ i915_active_fence_get(struct i915_active_fence *active)
  * @active - the active tracker
  *
  * i915_active_fence_isset() returns true if the active tracker is currently
- * assigned to a fence. Due to the lazy retiring, that fence may be idle
- * and this may report stale information.
+ * assigned to a fence (and not a persistent error). Due to the lazy retiring,
+ * that fence may be idle and this may report stale information.
  */
 static inline bool
 i915_active_fence_isset(const struct i915_active_fence *active)
 {
-	return rcu_access_pointer(active->fence);
+	return !IS_ERR_OR_NULL(rcu_access_pointer(active->fence));
 }
 
 /*
@@ -233,13 +282,17 @@ static inline int __i915_request_await_exclusive(struct i915_request *rq,
 						 struct i915_active *active)
 {
 	struct dma_fence *fence;
-	int err = 0;
+	int err;
 
-	fence = i915_active_fence_get(&active->excl);
-	if (fence) {
-		err = i915_request_await_dma_fence(rq, fence);
-		dma_fence_put(fence);
-	}
+	fence = i915_active_fence_get_or_error(&active->excl);
+	if (!fence)
+		return 0;
+
+	if (IS_ERR(fence))
+		return PTR_ERR(fence);
+
+	err = i915_request_await_dma_fence(rq, fence);
+	dma_fence_put(fence);
 
 	return err;
 }

@@ -140,15 +140,15 @@ static int lmem_resume(struct drm_i915_private *i915)
 
 static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 {
-	struct i915_gem_context *ctx, *cn;
+	struct i915_gem_context *ctx;
 
-	spin_lock_irq(&i915->gem.contexts.lock);
-	list_for_each_entry_safe(ctx, cn, &i915->gem.contexts.list, link) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
 		struct i915_address_space *vm;
 
 		if (!kref_get_unless_zero(&ctx->ref))
 			continue;
-		spin_unlock_irq(&i915->gem.contexts.lock);
+		rcu_read_unlock();
 
 		vm = i915_gem_context_get_eb_vm(ctx);
 		if (vm) {
@@ -159,11 +159,10 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 			i915_vm_put(vm);
 		}
 
-		spin_lock_irq(&i915->gem.contexts.lock);
-		list_safe_reset_next(ctx, cn, link);
+		rcu_read_lock();
 		i915_gem_context_put(ctx);
 	}
-	spin_unlock_irq(&i915->gem.contexts.lock);
+	rcu_read_unlock();
 }
 
 void i915_gem_suspend(struct drm_i915_private *i915)
@@ -293,13 +292,17 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 
 void i915_gem_resume_early(struct drm_i915_private *i915)
 {
+	struct intel_gt *gt;
+	unsigned int i;
+
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
 	if (lmem_resume(i915))
 		drm_err(&i915->drm,
 			"failed to restore pinned objects in local memory\n");
 
-	intel_gt_resume_early(to_gt(i915));
+	for_each_gt(gt, i915, i)
+		intel_gt_resume_early(gt);
 }
 
 void i915_gem_resume(struct drm_i915_private *i915)

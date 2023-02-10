@@ -1047,7 +1047,7 @@ static const union intel_ddi_buf_trans_entry direct_map_trans[] = {
     { .direct = { .level = 0, .preemph = 2 } },
     { .direct = { .level = 0, .preemph = 3 } },
     { .direct = { .level = 1, .preemph = 0 } },
-    { .direct = { .level = 1, .preemph = 0 } },
+    { .direct = { .level = 1, .preemph = 1 } },
     { .direct = { .level = 1, .preemph = 2 } },
     { .direct = { .level = 2, .preemph = 0 } },
     { .direct = { .level = 2, .preemph = 1 } },
@@ -1076,8 +1076,8 @@ static const union intel_ddi_buf_trans_entry _mtl_c20_trans_uhbr[] = {
 	{ .snps = { 40, 4, 4 } },       /* preset 11 */
 	{ .snps = { 37, 4, 7 } },       /* preset 12 */
 	{ .snps = { 33, 4, 11 } },      /* preset 13 */
-	{ .snps = { 36, 6, 6 } },       /* preset 14 */
-	{ .snps = { 28, 6, 2 } },       /* preset 15 */
+	{ .snps = { 40, 8, 0 } },	/* preset 14 */
+	{ .snps = { 28, 2, 2 } },	/* preset 15 */
 };
 
 static const struct intel_ddi_buf_trans mtl_c20_trans_uhbr = {

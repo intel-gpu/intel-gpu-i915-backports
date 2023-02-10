@@ -130,7 +130,6 @@
 #define   MI_SEMAPHORE_SAD_LTE_SDD	(3 << 12)
 #define   MI_SEMAPHORE_SAD_EQ_SDD	(4 << 12)
 #define   MI_SEMAPHORE_SAD_NEQ_SDD	(5 << 12)
-#define MI_STORE_DATA_IMM	MI_INSTR(0x20, 0)
 #define   MI_SEMAPHORE_27_TOKEN_MASK	REG_GENMASK(9, 5)
 #define   MI_SEMAPHORE_256_TOKEN_MASK	REG_GENMASK(9, 2)
 #define   MI_SEMAPHORE_27_TOKEN_SHIFT	5
@@ -238,9 +237,9 @@
 #define   SRC_ACCESS_TYPE_SHIFT		21
 #define   DST_ACCESS_TYPE_SHIFT		20
 #define   CCS_SIZE_MASK_XEHP		GENMASK(17, 8)
-#define   XY_CTRL_SURF_MOCS_MASK	GENMASK(31, 25)
 /* This is the subset of XY_CTRL_SURF_MOCS_MASK that corresponds to MOCS index */
 #define   XY_CSC_BLT_MOCS_INDEX_MASK_XEHP	GENMASK(31, 26)
+
 #define   NUM_CCS_BYTES_PER_BLOCK	256
 #define   NUM_BYTES_PER_CCS_BYTE	256
 #define   NUM_CCS_BLKS_PER_XFER		1024
@@ -248,12 +247,6 @@
 #define   DIRECT_ACCESS			1
 
 #define COLOR_BLT_CMD			(2 << 29 | 0x40 << 22 | (5 - 2))
-#define XY_COLOR_BLT_CMD		(2 << 29 | 0x50 << 22)
-#define XY_FAST_COLOR_BLT_CMD		(2 << 29 | 0x44 << 22)
-#define   XY_FAST_COLOR_BLT_DEPTH_32	(2 << 19)
-#define   XY_FAST_COLOR_BLT_DW		16
-#define   XY_FAST_COLOR_BLT_MOCS_MASK	GENMASK(27, 21)
-#define   XY_FAST_COLOR_BLT_MEM_TYPE_SHIFT 31
 #define XY_BLOCK_COPY_BLT_CMD       	(2 << 29 | 0x41 << 22)
 #define   DEST_MEM_TYPE_SHIFT		(31)
 #define   SRC_MEM_TYPE_SHIFT		(31)
@@ -282,23 +275,40 @@
 #define     TILE_X				0x1
 #define     XMAJOR				0x1
 #define     YMAJOR				0x2
-#define     TILE_64			0x3
-#define   XY_FAST_COPY_BLT_D1_SRC_TILE4	REG_BIT(31)
-#define   XY_FAST_COPY_BLT_D1_DST_TILE4	REG_BIT(30)
-#define   PVC_ENABLE_COMPRESSED_SURFACE	REG_BIT(16)
-#define BLIT_CCTL_SRC_MOCS_MASK  REG_GENMASK(6, 0)
-#define BLIT_CCTL_DST_MOCS_MASK  REG_GENMASK(14, 8)
+#define     TILE_64				0x3
+#define   XY_FAST_COPY_BLT_D1_SRC_TILE4		REG_BIT(31)
+#define   XY_FAST_COPY_BLT_D1_DST_TILE4		REG_BIT(30)
+#define   PVC_ENABLE_COMPRESSED_SURFACE		REG_BIT(16)
+#define   BLIT_CCTL_SRC_MOCS_MASK		REG_GENMASK(6, 0)
+#define   BLIT_CCTL_DST_MOCS_MASK		REG_GENMASK(14, 8)
 /* Note:  MOCS value = (index << 1) */
-#define BLIT_CCTL_SRC_MOCS(idx) \
-	REG_FIELD_PREP(BLIT_CCTL_SRC_MOCS_MASK, idx << 1)
-#define BLIT_CCTL_DST_MOCS(idx) \
-	REG_FIELD_PREP(BLIT_CCTL_DST_MOCS_MASK, idx << 1)
+#define   BLIT_CCTL_SRC_MOCS(idx) \
+	REG_FIELD_PREP(BLIT_CCTL_SRC_MOCS_MASK, (idx) << 1)
+#define   BLIT_CCTL_DST_MOCS(idx) \
+	REG_FIELD_PREP(BLIT_CCTL_DST_MOCS_MASK, (idx) << 1)
+
 #define SRC_COPY_BLT_CMD		(2 << 29 | 0x43 << 22)
-#define XY_FAST_COLOR_BLT		(2 << 29 | 0x44 << 22)
-#define   BLT_COLOR_DEPTH_32		(2 << 19)
-#define   BLT_COLOR_DEPTH_64		(3 << 19)
-/* Bspec lists field as [27:21], but index resides in [27:22] */
-#define   XY_FCB_MOCS_INDEX_MASK	GENMASK(27, 22)
+#define GEN9_XY_FAST_COLOR_BLT_CMD	(2 << 29 | 0x44 << 22)
+#define   XY_FAST_COLOR_BLT_DW		16
+#define   XY_FAST_COLOR_BLT_MOCS_MASK	GENMASK(27, 21)
+#define   XY_FAST_COLOR_BLT_MEM_TYPE_SHIFT 31
+#define   XY_FAST_CLEAR_1		(1 << 12)
+#define   XY_FAST_CLEAR_0		(2 << 12)
+#define   XY_FAST_TILE_Y		(1 << 30)
+#define   XY_FAST_TILE_X		(1 << 30)
+#define   XY_FAST_TILE_4		(2 << 30)
+#define   XY_FAST_TILE_64		(3 << 30)
+#define   XY_FAST_COLOR_BLT_DEPTH_8	(0 << 19)
+#define   XY_FAST_COLOR_BLT_DEPTH_16	(1 << 19)
+#define   XY_FAST_COLOR_BLT_DEPTH_32	(2 << 19)
+#define   XY_FAST_COLOR_BLT_DEPTH_64	(3 << 19)
+#define   XY_FAST_COMPRESSION		REG_BIT(29)
+#define   AUX_CCS_NONE			(0 << 18)
+#define   AUX_CCS_E			(5 << 18)
+#define   SURFTYPE_1D			(0 << 29)
+#define   SURFTYPE_2D			(1 << 29)
+#define   SURFTYPE_3D			(2 << 29)
+#define   SURFTYPE_CUBE			(3 << 29)
 #define XY_COLOR_BLT_CMD		(2 << 29 | 0x50 << 22)
 #define XY_SRC_COPY_BLT_CMD		(2 << 29 | 0x53 << 22)
 #define XY_MONO_SRC_COPY_IMM_BLT	(2 << 29 | 0x71 << 22 | 5)
@@ -313,10 +323,6 @@
 #define   BLT_ROP_SRC_COPY		(0xcc<<16)
 #define   BLT_ROP_COLOR_COPY		(0xf0<<16)
 #define PVC_MEM_COPY_CMD		(2 << 29 | 0x5a << 22)
-#define   PVC_MEM_COPY_SRC_COMPRESSIBLE	BIT(16)
-#define   PVC_MEM_COPY_DST_COMPRESSIBLE	BIT(15)
-#define   PVC_MEM_COPY_DST_COMPRESS_EN	BIT(13)
-#define   PVC_MEM_COPY_COMPRESSION_FMT	GENMASK(12, 8)
 /*
  * Bspec lists MOCS fields as [31:25] and [6:0], but the actual indices are
  * in [31:26] and [6:1].
@@ -324,9 +330,8 @@
 #define   MC_SRC_MOCS_INDEX_MASK	GENMASK(31, 26)
 #define   MC_DST_MOCS_INDEX_MASK	GENMASK(6, 1)
 #define PVC_MEM_SET_CMD			(2 << 29 | 0x5b << 22)
-#define   PVC_MEM_SET_DST_COMPRESSIBLE	BIT(15)
-#define   PVC_MEM_SET_DST_COMPRESS_EN	BIT(13)
-#define   PVC_MEM_SET_COMPRESSION_FMT	GENMASK(12, 8)
+#define   MS_LINEAR			0
+#define   MS_MATRIX			REG_BIT(17)
 /* Bspec lists field as [6:0], but index alone is from [6:1] */
 #define   MS_MOCS_INDEX_MASK		GENMASK(6, 1)
 #define XY_SRC_COPY_BLT_SRC_TILED	(1<<15) /* 965+ only */
@@ -450,6 +455,7 @@
 #define MI_LOAD_URB_MEM         MI_INSTR(0x2C, 0)
 #define MI_STORE_URB_MEM        MI_INSTR(0x2D, 0)
 #define MI_CONDITIONAL_BATCH_BUFFER_END MI_INSTR(0x36, 0)
+#define  MI_DO_COMPARE		REG_BIT(21)
 
 #define STATE_SYSTEM_MEM_FENCE_ADDRESS \
 	((0x3 << 29) | (0x0 << 27) | (0x1 << 24) | (0x9 << 16) | 0x1)

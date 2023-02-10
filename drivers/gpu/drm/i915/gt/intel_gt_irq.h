@@ -43,8 +43,11 @@ void gen8_gt_irq_postinstall(struct intel_gt *gt);
 
 static inline void intel_engine_cs_irq(struct intel_engine_cs *engine, u16 iir)
 {
-	if (iir)
-		engine->irq_handler(engine, iir);
+	if (!iir)
+		return;
+
+	engine->irq_handler(engine, iir);
+	WRITE_ONCE(engine->stats.irq_count, engine->stats.irq_count + 1);
 }
 
 static inline void
