@@ -21,14 +21,13 @@ config DRM_I915
 	select INPUT if ACPI
 	select ACPI_VIDEO if ACPI
 	select ACPI_BUTTON if ACPI
-#	select SYNC_FILE
 	select IOSF_MBI if X86
 	depends on CRC32
 	select SND_HDA_I915 if SND_HDA_CORE
 	select CEC_CORE if CEC_NOTIFIER
 	select VMAP_PFN if (BACKPORT_RHEL_KERNEL_8_5 || BACKPORT_RHEL_KERNEL_8_6)
 	depends on AUXILIARY_BUS || MFD_CORE
-	select MTD
+	depends on MTD
 	help
 	  Choose this option if you have a system that has "Intel Graphics
 	  Media Accelerator" or "HD Graphics" integrated graphics,

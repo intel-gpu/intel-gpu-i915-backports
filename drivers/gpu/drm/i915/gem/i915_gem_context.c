@@ -82,6 +82,8 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_ring.h"
 
+#include "pxp/intel_pxp.h"
+
 #include "i915_drm_client.h"
 #include "i915_gem_context.h"
 #include "i915_gem_ioctls.h"
@@ -419,8 +421,11 @@ void i915_gem_context_release(struct kref *ref)
 	GEM_BUG_ON(!i915_gem_context_is_closed(ctx));
 
 	spin_lock_irqsave(&ctx->i915->gem.contexts.lock, flags);
-	list_del(&ctx->link);
+	list_del_rcu(&ctx->link);
 	spin_unlock_irqrestore(&ctx->i915->gem.contexts.lock, flags);
+
+	if (ctx->pxp_wakeref)
+		intel_runtime_pm_put(&ctx->i915->runtime_pm, ctx->pxp_wakeref);
 
 	if (ctx->client)
 		i915_drm_client_put(ctx->client);
@@ -765,6 +770,38 @@ static int __context_set_persistence(struct i915_gem_context *ctx, bool state)
 	return 0;
 }
 
+static int __context_set_protected(struct drm_i915_private *i915,
+				   struct i915_gem_context *ctx,
+				   bool protected)
+{
+	int ret = 0;
+
+	if (ctx->file_priv) {
+		/* can't change this after creation! */
+		ret = -EINVAL;
+	} else if (!protected) {
+		ctx->uses_protected_content = false;
+	} else if (!intel_pxp_is_enabled(&i915->gt0.pxp)) {
+		ret = -ENODEV;
+	} else if ((i915_gem_context_is_recoverable(ctx)) ||
+		   !(i915_gem_context_is_bannable(ctx))) {
+		ret = -EPERM;
+	} else {
+		ctx->uses_protected_content = true;
+
+		/*
+		 * protected context usage requires the PXP session to be up,
+		 * which in turn requires the device to be active.
+		 */
+		ctx->pxp_wakeref = intel_runtime_pm_get(&i915->runtime_pm);
+
+		if (!intel_pxp_is_active(&i915->gt0.pxp))
+			ret = intel_pxp_start(&i915->gt0.pxp);
+	}
+
+	return ret;
+}
+
 /*
  * FIXME: We want this to be more random.
  */
@@ -857,7 +894,8 @@ i915_gem_context_engines_get(struct i915_gem_context *ctx,
 	rcu_read_lock();
 	do {
 		engines = rcu_dereference(ctx->engines);
-		GEM_BUG_ON(!engines);
+		if (!engines)
+			break;
 
 		if (user_engines)
 			*user_engines = i915_gem_context_user_engines(ctx);
@@ -905,10 +943,6 @@ static struct i915_address_space *
 __set_ppgtt(struct i915_gem_context *ctx, struct i915_address_space *vm)
 {
 	struct i915_address_space *old;
-
-	if (unlikely(!i915_gem_context_is_lr(ctx) &&
-			i915_vm_page_fault_enabled(vm)))
-		return NULL;
 
 	if (!i915_vm_tryopen(vm))
 		return NULL;
@@ -1098,7 +1132,7 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	spin_unlock(&client->ctx_lock);
 
 	spin_lock_irq(&i915->gem.contexts.lock);
-	list_add_tail(&ctx->link, &i915->gem.contexts.list);
+	list_add_tail_rcu(&ctx->link, &i915->gem.contexts.list);
 	spin_unlock_irq(&i915->gem.contexts.lock);
 
 	i915_debugger_context_create(ctx);
@@ -1109,7 +1143,6 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	i915_debugger_context_param_engines(ctx);
 
 	return 0;
-
 err_pid:
 	i915_drm_client_put(client);
 	return ret;
@@ -2369,6 +2402,8 @@ static int ctx_setparam(struct drm_i915_file_private *fpriv,
 			ret = -EPERM;
 		else if (args->value)
 			i915_gem_context_set_bannable(ctx);
+		else if (ctx->uses_protected_content)
+			ret = -EPERM;
 		else
 			i915_gem_context_clear_bannable(ctx);
 		break;
@@ -2376,10 +2411,12 @@ static int ctx_setparam(struct drm_i915_file_private *fpriv,
 	case I915_CONTEXT_PARAM_RECOVERABLE:
 		if (args->size)
 			ret = -EINVAL;
-		else if (args->value)
-			i915_gem_context_set_recoverable(ctx);
-		else
+		else if (!args->value)
 			i915_gem_context_clear_recoverable(ctx);
+		else if (ctx->uses_protected_content)
+			ret = -EPERM;
+		else
+			i915_gem_context_set_recoverable(ctx);
 		break;
 
 	case I915_CONTEXT_PARAM_PRIORITY:
@@ -2421,6 +2458,12 @@ static int ctx_setparam(struct drm_i915_file_private *fpriv,
 
 	case I915_CONTEXT_PARAM_PERSISTENCE:
 		ret = set_persistence(ctx, args);
+		break;
+
+	case I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+	case PRELIM_I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+		ret = __context_set_protected(fpriv->dev_priv, ctx,
+					      args->value);
 		break;
 
 	case PRELIM_I915_CONTEXT_PARAM_DEBUG_FLAGS:
@@ -2693,6 +2736,12 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_CONTEXT_PARAM_PERSISTENCE:
 		args->size = 0;
 		args->value = i915_gem_context_is_persistent(ctx);
+		break;
+
+	case I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+	case PRELIM_I915_CONTEXT_PARAM_PROTECTED_CONTENT:
+		args->size = 0;
+		args->value = i915_gem_context_uses_protected_content(ctx);
 		break;
 
 	case PRELIM_I915_CONTEXT_PARAM_DEBUG_FLAGS:

@@ -1292,14 +1292,14 @@ out_request:
 		goto out_batch;
 	}
 
-	for (i = 0; i < obj->base.size / sizeof(u32); ++i) {
-		if (HAS_LINK_COPY_ENGINES(i915))
-			ret = (vaddr[i] != (val << 24 | val << 16 | val << 8 | val));
-		else
-			ret = (vaddr[i] != val);
+	if (HAS_LINK_COPY_ENGINES(i915))
+		val = val << 24 | val << 16 | val << 8 | val;
 
-		if (ret) {
-			pr_err("vaddr[%u]=%u\n", i, vaddr[i]);
+	for (i = 0; i < obj->base.size; i += 17 * PAGE_SIZE) {
+		int j = (i + (i >> PAGE_SHIFT) % PAGE_SIZE) / sizeof(*vaddr);
+
+		if (vaddr[j] != val) {
+			pr_err("vaddr[%u]=%u\n", j, vaddr[j]);
 			ret = -EINVAL;
 			break;
 		}

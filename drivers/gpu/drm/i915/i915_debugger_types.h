@@ -8,6 +8,7 @@
 
 #include <linux/mutex.h>
 #include <linux/kref.h>
+#include <linux/kfifo.h>
 #include <uapi/drm/i915_drm.h>
 #include <linux/completion.h>
 #include <linux/wait.h>
@@ -22,8 +23,8 @@ struct i915_debug_event {
 	u32 flags;
 	u64 seqno;
 	union {
+		void *ack_data;
 		u64 size;
-		u64 ack_data;
 	};
 	u8 data[0];
 } __packed;
@@ -130,7 +131,9 @@ struct i915_debugger {
 
 	struct rb_root ack_tree;
 
-	const struct i915_debug_event *event;
+	DECLARE_KFIFO(event_fifo,
+		      struct i915_debug_event *,
+		      CPTCFG_DRM_I915_DEBUGGER_KFIFO);
 };
 
 #endif /* __I915_DEBUGGER_TYPES_H__ */

@@ -13,7 +13,7 @@
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
-#include "gem/i915_gem_vm_bind.h"
+#include "gem/i915_gem_vm_bind.h" /* XXX */
 
 #include "i915_svm.h"
 #include "i915_trace.h"
@@ -112,11 +112,12 @@ static void __i915_vm_close(struct i915_address_space *vm)
 	spin_lock(&vm->i915->vm_priv_obj_lock);
 	list_for_each_entry_safe(obj, on, &vm->priv_obj_list, priv_obj_link) {
 		list_del_init(&obj->priv_obj_link);
-		obj->vm = (void *)I915_BO_INVALID_PRIV_VM;
+		obj->vm = I915_BO_INVALID_PRIV_VM;
 	}
 	spin_unlock(&vm->i915->vm_priv_obj_lock);
 
 	i915_gem_vm_unbind_all(vm);
+
 	mutex_lock(&vm->mutex);
 	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link) {
 		struct drm_i915_gem_object *obj = vma->obj;
@@ -166,6 +167,7 @@ void i915_address_space_fini(struct i915_address_space *vm)
 		i915_drm_client_put(vm->client);
 
 	i915_active_fini(&vm->active);
+	i915_active_fence_fini(&vm->user_fence);
 
 	drm_mm_takedown(&vm->mm);
 
@@ -177,7 +179,6 @@ void i915_address_space_fini(struct i915_address_space *vm)
 	i915_gem_object_put(vm->root_obj);
 	GEM_BUG_ON(!RB_EMPTY_ROOT(&vm->va.rb_root));
 	mutex_destroy(&vm->vm_bind_lock);
-	GEM_BUG_ON(!llist_empty(&vm->vm_bind_free_list));
 
 	iput(vm->inode);
 }
@@ -302,6 +303,7 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	vm->inode = alloc_anon_inode(vm->i915->drm.anon_inode->i_sb);
 	if (IS_ERR(vm->inode))
 		return PTR_ERR(vm->inode);
+	i_size_write(vm->inode, vm->total);
 
 	min_alignment = I915_GTT_MIN_ALIGNMENT;
 	if (subclass == VM_CLASS_GGTT &&
@@ -325,9 +327,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	vm->mm.head_node.color = I915_COLOR_UNEVICTABLE;
 
-	INIT_LIST_HEAD(&vm->debugger_fence_list);
-	spin_lock_init(&vm->debugger_lock);
-
 	INIT_LIST_HEAD(&vm->bound_list);
 
 	vm->va = RB_ROOT_CACHED;
@@ -342,13 +341,11 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	spin_lock_init(&vm->vm_capture_lock);
 	INIT_LIST_HEAD(&vm->vm_rebind_list);
 	spin_lock_init(&vm->vm_rebind_lock);
+	INIT_ACTIVE_FENCE(&vm->user_fence);
+
 	vm->has_scratch = true;
 
 	i915_active_init(&vm->active, __i915_vm_active, __i915_vm_retire, 0);
-
-	init_llist_head(&vm->vm_bind_free_list);
-	atomic_set(&vm->invalidations, 0);
-	i915_gem_vm_bind_init(vm);
 
 	if (HAS_UM_QUEUES(vm->i915) && subclass == VM_CLASS_PPGTT) {
 		u32 asid;
@@ -621,9 +618,9 @@ static void mtl_setup_private_ppat(struct intel_uncore *uncore)
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(0),
 			   MTL_PPAT_L4_0_WB);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(1),
-			   MTL_PPAT_L4_1_WT | MTL_2_COH_1W);
+			   MTL_PPAT_L4_1_WT);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(2),
-			   MTL_PPAT_L4_3_UC | MTL_2_COH_1W);
+			   MTL_PPAT_L4_3_UC);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(3),
 			   MTL_PPAT_L4_0_WB | MTL_2_COH_1W);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(4),

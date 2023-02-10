@@ -79,28 +79,28 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  * security fixes, etc. to be enabled.
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_maj, guc_mmp) \
-	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 5, 4)) \
-	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 5, 4)) \
-	fw_def(DG2,          0, guc_mmp(dg2,  70, 5, 4)) \
-	fw_def(XEHPSDV,  0, guc_mmp(xehpsdv,  70, 5, 4)) \
-	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 5, 4)) \
-	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 5, 4)) \
-	fw_def(DG1,          0, guc_mmp(dg1,  70, 5, 4)) \
-	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 5, 4)) \
-	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 5, 4)) \
-	fw_def(JASPERLAKE,   0, guc_mmp(ehl,  70, 5, 4)) \
-	fw_def(ELKHARTLAKE,  0, guc_mmp(ehl,  70, 5, 4)) \
-	fw_def(ICELAKE,      0, guc_mmp(icl,  70, 5, 4)) \
-	fw_def(COMETLAKE,    5, guc_mmp(cml,  70, 5, 4)) \
-	fw_def(COMETLAKE,    0, guc_mmp(kbl,  70, 5, 4)) \
-	fw_def(COFFEELAKE,   0, guc_mmp(kbl,  70, 5, 4)) \
-	fw_def(GEMINILAKE,   0, guc_mmp(glk,  70, 5, 4)) \
-	fw_def(KABYLAKE,     0, guc_mmp(kbl,  70, 5, 4)) \
-	fw_def(BROXTON,      0, guc_mmp(bxt,  70, 5, 4)) \
-	fw_def(SKYLAKE,      0, guc_mmp(skl,  70, 5, 4))
+	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 6, 2)) \
+	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 6, 2)) \
+	fw_def(DG2,          0, guc_mmp(dg2,  70, 6, 2)) \
+	fw_def(XEHPSDV,  0, guc_mmp(xehpsdv,  70, 6, 2)) \
+	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 6, 2)) \
+	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 6, 2)) \
+	fw_def(DG1,          0, guc_mmp(dg1,  70, 6, 2)) \
+	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 6, 2)) \
+	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 6, 2)) \
+	fw_def(JASPERLAKE,   0, guc_mmp(ehl,  70, 6, 2)) \
+	fw_def(ELKHARTLAKE,  0, guc_mmp(ehl,  70, 6, 2)) \
+	fw_def(ICELAKE,      0, guc_mmp(icl,  70, 6, 2)) \
+	fw_def(COMETLAKE,    5, guc_mmp(cml,  70, 6, 2)) \
+	fw_def(COMETLAKE,    0, guc_mmp(kbl,  70, 6, 2)) \
+	fw_def(COFFEELAKE,   0, guc_mmp(kbl,  70, 6, 2)) \
+	fw_def(GEMINILAKE,   0, guc_mmp(glk,  70, 6, 2)) \
+	fw_def(KABYLAKE,     0, guc_mmp(kbl,  70, 6, 2)) \
+	fw_def(BROXTON,      0, guc_mmp(bxt,  70, 6, 2)) \
+	fw_def(SKYLAKE,      0, guc_mmp(skl,  70, 6, 2))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_raw, huc_mmp, huc_gsc) \
-	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 0)) \
+	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 7)) \
 	fw_def(PONTEVECCHIO, 0, huc_mmp(pvc,  7, 8, 7)) \
 	fw_def(DG2,          0, huc_gsc(dg2,  7, 10, 3)) \
 	fw_def(ALDERLAKE_P,  0, huc_mmp(tgl,  7, 9, 3)) \
@@ -275,7 +275,7 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 		[INTEL_UC_FW_TYPE_HUC] = { blobs_huc, ARRAY_SIZE(blobs_huc) },
 		[INTEL_UC_FW_TYPE_GSC] = { blobs_gsc, ARRAY_SIZE(blobs_gsc) },
 	};
-	static bool verified;
+	static bool verified[INTEL_UC_FW_NUM_TYPES];
 	const struct uc_fw_platform_requirement *fw_blobs;
 	enum intel_platform p = INTEL_INFO(i915)->platform;
 	u32 fw_count;
@@ -328,8 +328,8 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 	}
 
 	/* make sure the list is ordered as expected */
-	if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) && !verified) {
-		verified = true;
+	if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) && !verified[uc_fw->type]) {
+		verified[uc_fw->type] = true;
 
 		for (i = 1; i < fw_count; i++) {
 			/* Next platform is good: */
@@ -380,7 +380,8 @@ __uc_fw_auto_select(struct drm_i915_private *i915, struct intel_uc_fw *uc_fw)
 				continue;
 
 bad:
-			drm_err(&i915->drm, "Invalid FW blob order: %s r%u %s%d.%d.%d comes before %s r%u %s%d.%d.%d\n",
+			drm_err(&i915->drm, "Invalid %s blob order: %s r%u %s%d.%d.%d comes before %s r%u %s%d.%d.%d\n",
+				intel_uc_fw_type_repr(uc_fw->type),
 				intel_platform_name(fw_blobs[i - 1].p), fw_blobs[i - 1].rev,
 				fw_blobs[i - 1].blob.legacy ? "L" : "v",
 				fw_blobs[i - 1].blob.major,
@@ -553,6 +554,62 @@ static int check_gsc_manifest(const struct firmware *fw,
 	return 0;
 }
 
+static void uc_unpack_css_version(struct intel_uc_fw_ver *ver, u32 css_value)
+{
+	/* Get version numbers from the CSS header */
+	ver->major = FIELD_GET(CSS_SW_VERSION_UC_MAJOR, css_value);
+	ver->minor = FIELD_GET(CSS_SW_VERSION_UC_MINOR, css_value);
+	ver->patch = FIELD_GET(CSS_SW_VERSION_UC_PATCH, css_value);
+}
+
+static void guc_read_css_info(struct intel_uc_fw *uc_fw, struct uc_css_header *css)
+{
+	struct intel_guc *guc = container_of(uc_fw, struct intel_guc, fw);
+
+	/*
+	 * The GuC firmware includes an extra version number to specify the
+	 * submission API level. This allows submission code to work with
+	 * multiple GuC versions without having to know the absolute firmware
+	 * version number (there are likely to be multiple firmware releases
+	 * which all support the same submission API level).
+	 *
+	 * Note that the spec for the CSS header defines this version number
+	 * as 'vf_version' as it was originally intended for virtualisation.
+	 * However, it is applicable to native submission as well.
+	 *
+	 * Unfortunately, due to an oversight, this version number was only
+	 * exposed in the CSS header from v70.6.0.
+	 */
+	if (uc_fw->file_selected.ver.major >= 70) {
+		if (uc_fw->file_selected.ver.minor >= 6) {
+			/* v70.6.0 adds CSS header support */
+			uc_unpack_css_version(&guc->submission_version, css->vf_version);
+		} else if (uc_fw->file_selected.ver.minor >= 3) {
+			/* v70.3.0 introduced v1.1.0 */
+			guc->submission_version.major = 1;
+			guc->submission_version.minor = 1;
+			guc->submission_version.patch = 0;
+		} else {
+			/* v70.0.0 introduced v1.0.0 */
+			guc->submission_version.major = 1;
+			guc->submission_version.minor = 0;
+			guc->submission_version.patch = 0;
+		}
+	} else if (uc_fw->file_selected.ver.major >= 69) {
+		/* v69.0.0 introduced v0.10.0 */
+		guc->submission_version.major = 0;
+		guc->submission_version.minor = 10;
+		guc->submission_version.patch = 0;
+	} else {
+		/* Prior versions were v0.1.0 */
+		guc->submission_version.major = 0;
+		guc->submission_version.minor = 1;
+		guc->submission_version.patch = 0;
+	}
+
+	uc_fw->private_data_size = css->private_data_size;
+}
+
 static int check_ccs_header(struct intel_gt *gt,
 			    const struct firmware *fw,
 			    struct intel_uc_fw *uc_fw)
@@ -606,47 +663,10 @@ static int check_ccs_header(struct intel_gt *gt,
 		return -E2BIG;
 	}
 
-	/* Get version numbers from the CSS header */
-	uc_fw->file_selected.ver.major = FIELD_GET(CSS_SW_VERSION_UC_MAJOR,
-						   css->sw_version);
-	uc_fw->file_selected.ver.minor = FIELD_GET(CSS_SW_VERSION_UC_MINOR,
-						   css->sw_version);
-	uc_fw->file_selected.ver.patch = FIELD_GET(CSS_SW_VERSION_UC_PATCH,
-						   css->sw_version);
+	uc_unpack_css_version(&uc_fw->file_selected.ver, css->sw_version);
 
-	if (uc_fw->type == INTEL_UC_FW_TYPE_GUC) {
-		struct intel_guc *guc = container_of(uc_fw, struct intel_guc, fw);
-
-		/*
-		 * The GuC firmware includes an extra version number to specify the
-		 * submission API level. This allows submission code to work with
-		 * multiple GuC versions without having to know the absolute firmware
-		 * version number (there are likely to be multiple firmware releases
-		 * which all support the same submission API level).
-		 *
-		 * Unfortunately, due to an oversight, this version was only exposed
-		 * in the CSS header from v70.6.0.
-		 */
-		if (MAKE_UC_VER_STRUCT(uc_fw->file_selected.ver) >= MAKE_UC_VER(70, 6, 0)) {
-			/* FIXME: Read from CSS header */
-			guc->submission_version.major = 1;
-			guc->submission_version.minor = 1;
-		} else if (MAKE_UC_VER_STRUCT(uc_fw->file_selected.ver) >= MAKE_UC_VER(70, 3, 0)) {
-			guc->submission_version.major = 1;
-			guc->submission_version.minor = 1;
-		} else if (MAKE_UC_VER_STRUCT(uc_fw->file_selected.ver) >= MAKE_UC_VER(70, 0, 0)) {
-			guc->submission_version.major = 1;
-			guc->submission_version.minor = 0;
-		} else if (MAKE_UC_VER_STRUCT(uc_fw->file_selected.ver) >= MAKE_UC_VER(69, 0, 0)) {
-			guc->submission_version.major = 0;
-			guc->submission_version.minor = 10;
-		} else {
-			guc->submission_version.major = 0;
-			guc->submission_version.minor = 1;
-		}
-
-		uc_fw->private_data_size = css->private_data_size;
-	}
+	if (uc_fw->type == INTEL_UC_FW_TYPE_GUC)
+		guc_read_css_info(uc_fw, css);
 
 	return 0;
 }
@@ -669,6 +689,42 @@ static int check_fw_header(struct intel_gt *gt,
 		return err;
 
 	return 0;
+}
+
+static bool is_ver_8bit(struct intel_uc_fw_ver *ver)
+{
+	return ver->major < 0xFF && ver->minor < 0xFF && ver->patch < 0xFF;
+}
+
+static bool guc_check_version_range(struct intel_uc_fw *uc_fw)
+{
+	struct intel_guc *guc = container_of(uc_fw, struct intel_guc, fw);
+
+	/*
+	 * GuC version number components are defined as being 8-bits.
+	 * The submission code relies on this to optimise version comparison
+	 * tests. So enforce the restriction here.
+	 */
+
+	if (!is_ver_8bit(&uc_fw->file_selected.ver)) {
+		drm_warn(&__uc_fw_to_gt(uc_fw)->i915->drm, "%s firmware: invalid file version: 0x%02X:%02X:%02X\n",
+			 intel_uc_fw_type_repr(uc_fw->type),
+			 uc_fw->file_selected.ver.major,
+			 uc_fw->file_selected.ver.minor,
+			 uc_fw->file_selected.ver.patch);
+		return false;
+	}
+
+	if (!is_ver_8bit(&guc->submission_version)) {
+		drm_warn(&__uc_fw_to_gt(uc_fw)->i915->drm, "%s firmware: invalid submit version: 0x%02X:%02X:%02X\n",
+			 intel_uc_fw_type_repr(uc_fw->type),
+			 guc->submission_version.major,
+			 guc->submission_version.minor,
+			 guc->submission_version.patch);
+		return false;
+	}
+
+	return true;
 }
 
 /**
@@ -731,6 +787,9 @@ int intel_uc_fw_fetch(struct intel_uc_fw *uc_fw)
 
 	err = check_fw_header(gt, fw, uc_fw);
 	if (err)
+		goto fail;
+
+	if (uc_fw->type == INTEL_UC_FW_TYPE_GUC && !guc_check_version_range(uc_fw))
 		goto fail;
 
 	if (uc_fw->file_wanted.ver.major && uc_fw->file_selected.ver.major) {
@@ -1200,7 +1259,7 @@ size_t intel_uc_fw_copy_rsa(struct intel_uc_fw *uc_fw, void *dst, u32 max_len)
  */
 void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 {
-	u64 ver_sel, ver_want;
+	bool got_wanted;
 
 	drm_printf(p, "%s firmware: %s\n",
 		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path);
@@ -1209,9 +1268,20 @@ void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 			   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_wanted.path);
 	drm_printf(p, "\tstatus: %s\n",
 		   intel_uc_fw_status_repr(uc_fw->status));
-	ver_sel = MAKE_UC_VER_STRUCT(uc_fw->file_selected.ver);
-	ver_want = MAKE_UC_VER_STRUCT(uc_fw->file_wanted.ver);
-	if (ver_sel < ver_want)
+
+	if (uc_fw->file_selected.ver.major < uc_fw->file_wanted.ver.major)
+		got_wanted = false;
+	else if ((uc_fw->file_selected.ver.major == uc_fw->file_wanted.ver.major) &&
+		 (uc_fw->file_selected.ver.minor < uc_fw->file_wanted.ver.minor))
+		got_wanted = false;
+	else if ((uc_fw->file_selected.ver.major == uc_fw->file_wanted.ver.major) &&
+		 (uc_fw->file_selected.ver.minor == uc_fw->file_wanted.ver.minor) &&
+		 (uc_fw->file_selected.ver.patch < uc_fw->file_wanted.ver.patch))
+		got_wanted = false;
+	else
+		got_wanted = true;
+
+	if (!got_wanted)
 		drm_printf(p, "\tversion: wanted %u.%u.%u, found %u.%u.%u\n",
 			   uc_fw->file_wanted.ver.major,
 			   uc_fw->file_wanted.ver.minor,

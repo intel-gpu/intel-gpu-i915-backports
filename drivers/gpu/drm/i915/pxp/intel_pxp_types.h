@@ -44,14 +44,21 @@ struct intel_pxp {
 	 */
 	bool arb_is_valid;
 
+	/**
+	 * @key_instance: tracks which key instance we're on, so we can use it
+	 * to determine if an object was created using the current key or a
+	 * previous one.
+	 */
+	u32 key_instance;
+
+	/** @tee_mutex: protects the tee channel binding and messaging. */
+	struct mutex tee_mutex;
+
 	struct {
 		struct drm_i915_gem_object *obj; /* contains PXP command memory */
 		struct i915_vma *vma; /* vma for the obj - MTL+ */
 		void *vaddr; /* virtual memory for PXP command */
 	} stream_cmd;
-
-	/** @tee_mutex: protects the tee channel binding and messaging. */
-	struct mutex tee_mutex;
 
 	/**
 	 * @hw_state_invalidated: if the HW perceives an attack on the integrity
@@ -75,6 +82,7 @@ struct intel_pxp {
 	u32 session_events;
 #define PXP_TERMINATION_REQUEST  BIT(0)
 #define PXP_TERMINATION_COMPLETE BIT(1)
+#define PXP_INVAL_REQUIRED       BIT(2)
 };
 
 #endif /* __INTEL_PXP_TYPES_H__ */

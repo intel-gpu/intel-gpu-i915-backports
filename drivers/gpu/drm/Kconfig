@@ -7,8 +7,8 @@
 #
 menuconfig DRM
 	tristate "Direct Rendering Manager (XFree86 4.1.0 and higher DRI support)"
-	depends on BOTH_DMABUF_I915 || ONLY_I915
 	depends on m
+	depends on BOTH_DMABUF_I915 || ONLY_I915
 	depends on (AGP || AGP=n) && !EMULATED_CMPXCHG && HAS_DMA
 	select DRM_PANEL_ORIENTATION_QUIRKS
 	select BPAUTO_HDMI
@@ -16,7 +16,6 @@ menuconfig DRM
 	depends on I2C
 	depends on I2C_ALGOBIT
 	depends on DMA_SHARED_BUFFER
-#	select SYNC_FILE
 # gallium uses SYS_kcmp for os_same_file_description() to de-duplicate
 # device and dmabuf fd. Let's make sure that is available for our userspace.
 	help
@@ -197,7 +196,6 @@ config DRM_DP_CEC
 	  that do support this they often do not hook up the CEC pin.
 
 config DRM_TTM
-	depends on n
 	tristate
 	depends on m
 	depends on DRM && MMU
@@ -241,7 +239,6 @@ config DRM_GEM_SHMEM_HELPER
 	  Choose this if you need the GEM shmem helper functions
 
 config DRM_SCHED
-	depends on n
 	tristate
 	depends on m
 	depends on DRM
@@ -251,7 +248,6 @@ config DRM_SCHED
 #source "drivers/gpu/drm/arm/Kconfig"
 
 config DRM_RADEON
-	depends on n
 	tristate "ATI Radeon"
 	depends on m
 	depends on DRM && PCI && MMU
@@ -274,7 +270,6 @@ config DRM_RADEON
 #source "drivers/gpu/drm/radeon/Kconfig"
 
 config DRM_AMDGPU
-	depends on n
 	tristate "AMD GPU"
 	depends on m
 	depends on DRM && PCI && MMU
@@ -304,7 +299,6 @@ config DRM_VGEM
 	  If M is selected the module will be called vgem.
 
 config DRM_VKMS
-	depends on n
 	tristate "Virtual KMS (EXPERIMENTAL)"
 	depends on m
 	depends on DRM
@@ -410,7 +404,6 @@ source "drivers/gpu/drm/bridge/Kconfig"
 #source "drivers/gpu/drm/gud/Kconfig"
 
 config DRM_HYPERV
-	depends on n
 	tristate "DRM Support for Hyper-V synthetic video device"
 	depends on m
 	depends on DRM && PCI && MMU && HYPERV
@@ -444,7 +437,6 @@ menuconfig DRM_LEGACY
 if DRM_LEGACY
 
 config DRM_TDFX
-	depends on n
 	tristate "3dfx Banshee/Voodoo3+"
 	depends on m
 	depends on DRM && PCI
@@ -453,7 +445,6 @@ config DRM_TDFX
 	  graphics card.  If M is selected, the module will be called tdfx.
 
 config DRM_R128
-	depends on n
 	tristate "ATI Rage 128"
 	depends on m
 	depends on DRM && PCI
@@ -464,7 +455,6 @@ config DRM_R128
 	  this card is strongly suggested (unless you have a PCI version).
 
 config DRM_I810
-	depends on n
 	tristate "Intel I810"
 	depends on m
 	# !PREEMPTION because of missing ioctl locking
@@ -475,7 +465,6 @@ config DRM_I810
 	  for this driver to work.
 
 config DRM_MGA
-	depends on n
 	tristate "Matrox g200/g400"
 	depends on m
 	depends on DRM && PCI
@@ -486,7 +475,6 @@ config DRM_MGA
 	  support is required for this driver to work.
 
 config DRM_SIS
-	depends on n
 	tristate "SiS video cards"
 	depends on m
 	depends on DRM && AGP
@@ -497,7 +485,6 @@ config DRM_SIS
 	  support is required for this driver to work.
 
 config DRM_VIA
-	depends on n
 	tristate "Via unichrome video cards"
 	depends on m
 	depends on DRM && PCI
@@ -506,7 +493,6 @@ config DRM_VIA
 	  chipset. If M is selected the module will be called via.
 
 config DRM_SAVAGE
-	depends on n
 	tristate "Savage video cards"
 	depends on m
 	depends on DRM && PCI

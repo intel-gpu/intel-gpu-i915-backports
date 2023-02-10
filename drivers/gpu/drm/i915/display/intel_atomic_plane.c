@@ -959,6 +959,56 @@ static void add_rps_boost_after_vblank(struct drm_crtc *crtc,
 	add_wait_queue(drm_crtc_vblank_waitqueue(crtc), &wait->wait);
 }
 
+static int await_active_fence(struct drm_i915_private *i915,
+			      struct intel_atomic_state *state,
+			      struct i915_active_fence *f)
+{
+	struct dma_fence *fence;
+	int err;
+
+	fence = i915_active_fence_get_or_error(f);
+	if (!fence)
+		return 0;
+
+	if (IS_ERR(fence))
+		return PTR_ERR(fence);
+
+	err = i915_sw_fence_await_dma_fence(&state->commit_ready, fence,
+					    i915_fence_timeout(i915),
+					    GFP_KERNEL);
+	dma_fence_put(fence);
+
+	return err;
+}
+
+static int await_vma_bind(struct drm_i915_private *i915,
+			  struct intel_atomic_state *state,
+			  struct i915_vma *vma)
+{
+	return vma ? await_active_fence(i915, state, &vma->active.excl) : 0;
+}
+
+static int await_gt(struct drm_i915_private *i915,
+		    struct intel_atomic_state *state,
+		    struct intel_plane_state *plane)
+{
+	int err;
+
+	err = await_vma_bind(i915, state, plane->ggtt_vma);
+	if (err)
+		return err;
+
+	err = await_vma_bind(i915, state, plane->dpt_vma);
+	if (err)
+		return err;
+
+	err = await_active_fence(i915, state, &intel_fb_obj(plane->hw.fb)->mm.migrate);
+	if (err)
+		return err;
+
+	return 0;
+}
+
 /**
  * intel_prepare_plane_fb - Prepare fb for usage on plane
  * @_plane: drm plane to prepare for
@@ -1028,8 +1078,12 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	if (!obj)
 		return 0;
 
-
 	ret = intel_plane_pin_fb(new_plane_state);
+	if (ret)
+		return ret;
+
+	/* Mandatory fences that must not be bypassed by explicit fencing */
+	ret = await_gt(dev_priv, state, new_plane_state);
 	if (ret)
 		return ret;
 

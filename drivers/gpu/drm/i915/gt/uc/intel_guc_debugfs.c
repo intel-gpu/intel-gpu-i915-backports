@@ -82,30 +82,65 @@ static bool intel_eval_slpc_support(void *data)
 
 static int guc_sched_disable_delay_ms_get(void *data, u64 *val)
 {
-	struct intel_guc *guc = data;
+	struct intel_gt *gt = data;
+	struct intel_guc *guc = &gt->uc.guc;
 
 	if (!intel_guc_submission_is_used(guc))
 		return -ENODEV;
 
-	*val = guc->submission_state.sched_disable_delay_ms;
+	*val = (u64)guc->submission_state.sched_disable_delay_ms;
 
 	return 0;
 }
 
 static int guc_sched_disable_delay_ms_set(void *data, u64 val)
 {
-	struct intel_guc *guc = data;
+	struct intel_gt *gt = data;
+	struct intel_guc *guc = &gt->uc.guc;
 
 	if (!intel_guc_submission_is_used(guc))
 		return -ENODEV;
 
-	guc->submission_state.sched_disable_delay_ms = val;
+	/* clamp to a practical limit, 1 minute is reasonable for a longest delay */
+	guc->submission_state.sched_disable_delay_ms = min_t(u64, val, 60000);
 
 	return 0;
 }
-DEFINE_SIMPLE_ATTRIBUTE(guc_sched_disable_delay_ms_fops,
-			guc_sched_disable_delay_ms_get,
-			guc_sched_disable_delay_ms_set, "%lld\n");
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(guc_sched_disable_delay_ms_fops,
+				guc_sched_disable_delay_ms_get,
+				guc_sched_disable_delay_ms_set, "%lld\n");
+
+static int guc_sched_disable_gucid_threshold_get(void *data, u64 *val)
+{
+	struct intel_gt *gt = data;
+	struct intel_guc *guc = &gt->uc.guc;
+
+	if (!intel_guc_submission_is_used(guc))
+		return -ENODEV;
+
+	*val = guc->submission_state.sched_disable_gucid_threshold;
+	return 0;
+}
+
+static int guc_sched_disable_gucid_threshold_set(void *data, u64 val)
+{
+	struct intel_gt *gt = data;
+	struct intel_guc *guc = &gt->uc.guc;
+
+	if (!intel_guc_submission_is_used(guc))
+		return -ENODEV;
+
+	if (val > intel_guc_sched_disable_gucid_threshold_max(guc))
+		guc->submission_state.sched_disable_gucid_threshold =
+			intel_guc_sched_disable_gucid_threshold_max(guc);
+	else
+		guc->submission_state.sched_disable_gucid_threshold = val;
+
+	return 0;
+}
+DEFINE_I915_GT_SIMPLE_ATTRIBUTE(guc_sched_disable_gucid_threshold_fops,
+				guc_sched_disable_gucid_threshold_get,
+				guc_sched_disable_gucid_threshold_set, "%lld\n");
 
 static int guc_stall_get(void *data, u64 *val)
 {
@@ -149,7 +184,6 @@ static int guc_stall_set(void *data, u64 val)
 
 	return intel_guc_set_schedule_mode(guc, mode, val);
 }
-
 DEFINE_I915_GT_SIMPLE_ATTRIBUTE(guc_stall_fops, guc_stall_get, guc_stall_set, "%lld\n");
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
@@ -218,6 +252,8 @@ void intel_guc_debugfs_register(struct intel_guc *guc, struct dentry *root)
 		{ "guc_registered_contexts", &guc_registered_contexts_fops, NULL },
 		{ "guc_slpc_info", &guc_slpc_info_fops, &intel_eval_slpc_support},
 		{ "guc_sched_disable_delay_ms", &guc_sched_disable_delay_ms_fops, NULL },
+		{ "guc_sched_disable_gucid_threshold", &guc_sched_disable_gucid_threshold_fops,
+		   NULL },
 		{ "guc_stall_ms", &guc_stall_fops, NULL },
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
 		{ "guc_send_mmio", &guc_send_mmio_fops, NULL },

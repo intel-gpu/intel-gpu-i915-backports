@@ -574,7 +574,7 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 	 * continue to assume that the obj remained out of the CPU cached
 	 * domain.
 	 */
-	err = i915_gem_object_pin_pages(obj);
+	err = i915_gem_object_pin_pages_sync(obj);
 	if (err)
 		goto out_unlock;
 

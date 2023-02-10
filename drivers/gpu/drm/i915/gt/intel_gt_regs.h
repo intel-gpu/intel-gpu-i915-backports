@@ -50,6 +50,10 @@
 #define FORCEWAKE_ACK_GSC			_MMIO(0xdf8)
 #define FORCEWAKE_ACK_GT_MTL			_MMIO(0xdfc)
 
+/* Wa_14016747170:mtl-p[a0], mtl-m[a0] */
+#define MTL_GT_ACTIVITY_FACTOR			_MMIO(0x138010)
+#define   MTL_GT_L3_EXC_MASK			REG_GENMASK(5, 3)
+
 #define MCFG_MCR_SELECTOR			_MMIO(0xfd0)
 #define MTL_MCR_SELECTOR			_MMIO(0xfd4)
 #define SF_MCR_SELECTOR				_MMIO(0xfd8)
@@ -393,10 +397,6 @@
 #define   MMCD_PCLA				(1 << 31)
 #define   MMCD_HOTSPOT_EN			(1 << 27)
 
-#define XEHPC_UM_COMPRESSION			_MMIO(0x519c)
-#define   UM_COMPRESSION_FMT_XEHPC		REG_GENMASK(7, 3)
-#define   UM_COMPRESSION_EN			REG_BIT(0)
-
 #define MERT_TAGBITSONIOSFP			_MMIO(0x51f0)
 #define   MERT_TAG_BITS_MASK			REG_GENMASK(1, 0)
 #define   MERT_TAG_BITS_TAG_8			0x0
@@ -578,6 +578,7 @@
 #define	GEN10_MIRROR_FUSE3			_MMIO(0x9118)
 #define   GEN10_L3BANK_PAIR_COUNT		4
 #define   GEN10_L3BANK_MASK			0x0F
+#define   XEHPC_GT_L3_MODE_MASK			REG_GENMASK(7, 4)
 /* on Xe_HP the same fuses indicates mslices instead of L3 banks */
 #define   GEN12_MAX_MSLICES			4
 #define   GEN12_MEML3_EN_MASK			0x0F
@@ -1050,10 +1051,6 @@
 #define XEHP_L3NODEARBCFG			_MMIO(0xb0b4)
 #define   XEHP_LNESPARE				REG_BIT(19)
 
-#define XEHPC_LNI_UM_COMPRESSION		_MMIO(0xb0f0)
-#define   LNI_UM_COMPRESSION_FMT_XEHPC		REG_GENMASK(7, 3)
-#define   LNI_UM_COMPRESSION_EN			REG_BIT(0)
-
 #define GEN8_L3SQCREG1				_MMIO(0xb100)
 /*
  * Note that on CHV the following has an off-by-one error wrt. to BSpec.
@@ -1249,10 +1246,6 @@
 
 #define HSW_ROW_CHICKEN3			_MMIO(0xe49c)
 #define   HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE	(1 << 6)
-
-#define XEHPC_DSS_UM_COMPRESSION		_MMIO(0xe4c0)
-#define   DSS_UM_COMPRESSION_FMT_XEHPC		REG_GENMASK(7, 3)
-#define   DSS_UM_COMPRESSION_EN			REG_BIT(0)
 
 #define GEN8_ROW_CHICKEN			_MMIO(0xe4f0)
 #define   FLOW_CONTROL_ENABLE			REG_BIT(15)

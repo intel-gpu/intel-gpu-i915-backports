@@ -32,8 +32,6 @@
 
 #include "gem/i915_gem_object_types.h"
 
-struct i915_vma_work;
-
 /**
  * DOC: Global GTT views
  *
@@ -170,12 +168,6 @@ struct i915_ggtt_view {
 	};
 };
 
-struct vm_bind_user_fence {
-	struct mm_struct *mm;
-	void __user *ptr;
-	u64 val;
-};
-
 struct i915_vma_metadata {
 	struct list_head vma_link;
 	struct i915_uuid_resource *uuid;
@@ -280,13 +272,9 @@ struct i915_vma {
 
 #define I915_VMA_PERSISTENT_BIT	19
 #define I915_VMA_PURGED_BIT	20
-#define I915_VMA_ACTIVE_BIND_BIT	21
-#define I915_VMA_FREED_BIT	22
 
 #define I915_VMA_PERSISTENT	((int)BIT(I915_VMA_PERSISTENT_BIT))
 #define I915_VMA_PURGED		((int)BIT(I915_VMA_PURGED_BIT))
-#define I915_VMA_ACTIVE_BIND	((int)BIT(I915_VMA_ACTIVE_BIND_BIT))
-#define I915_VMA_FREED		((int)BIT(I915_VMA_FREED_BIT))
 
 	struct i915_active active;
 
@@ -307,23 +295,12 @@ struct i915_vma {
 	/** This object's place on the active/inactive lists */
 	struct list_head vm_link;
 
-	struct i915_vma_debugger {
-		/* For revoking debugger ptes */
-		struct mutex revoke_mutex;
-		bool faulted;
-
-		/* Link in vm debugger fence list */
-		struct dma_fence __rcu *fence;
-		struct list_head link;
-	} debugger;
-
 	struct list_head vm_bind_link; /* Link in persistent VMA list */
 	/* Link in non-private persistent VMA list */
 	struct list_head non_priv_vm_bind_link;
 	struct list_head vm_capture_link; /* Link in captureable VMA list */
 	struct list_head vm_rebind_link; /* Link in vm_rebind_list */
-	struct vm_bind_user_fence bind_fence;
-	struct llist_node freed;
+	struct i915_sw_fence *bind_fence;
 
 	/** Interval tree structures for persistent vma */
 	struct rb_node rb;
