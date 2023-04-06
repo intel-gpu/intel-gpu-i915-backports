@@ -938,12 +938,23 @@ TRACE_EVENT(i915_mm_fault,
 	    TP_fast_assign(
 			   __entry->dev = i915;
 			   __entry->vm = vm;
-			   __entry->obj = vma->obj;
-			   __entry->obj_size = vma->obj->base.size;
+			   if (vma) {
+				   __entry->obj = vma->obj;
+				   __entry->obj_size = vma->obj->base.size;
+				   __entry->vma_size = i915_vma_size(vma);
+				   __entry->region = !vma->obj->mm.region ? INTEL_REGION_UNKNOWN :
+						     vma->obj->mm.region->id;
+				   __entry->pg_sz_mask = vma->page_sizes.gtt;
+				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
+			   } else {
+				   __entry->obj = NULL;
+				   __entry->obj_size = 0;
+				   __entry->vma_size = 0;
+				   __entry->region = INTEL_REGION_UNKNOWN;
+				   __entry->pg_sz_mask = 0;
+				   __entry->is_bound = false;
+			   }
 			   __entry->addr = info->page_addr;
-			   __entry->vma_size = i915_vma_size(vma);
-			   __entry->pg_sz_mask = vma->page_sizes.gtt;
-			   __entry->region = !vma->obj->mm.region ? INTEL_REGION_UNKNOWN : vma->obj->mm.region->id;
 			   __entry->asid = info->asid;
 			   __entry->access_type = info->access_type;
 			   __entry->fault_type = info->fault_type;
@@ -951,7 +962,6 @@ TRACE_EVENT(i915_mm_fault,
 			   __entry->engine_class = info->engine_class;
 			   __entry->engine_instance = info->engine_instance;
 			   __entry->pdata = info->pdata;
-			   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   ),
 
 	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx pgsz %x, %s[%d] %d: %s (0x%x)",

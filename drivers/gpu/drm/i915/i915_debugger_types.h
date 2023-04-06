@@ -129,6 +129,9 @@ struct i915_debugger {
 	u64 session;
 	atomic_long_t event_seqno;
 
+	rwlock_t eu_lock;
+
+	spinlock_t ack_lock;
 	struct rb_root ack_tree;
 
 	DECLARE_KFIFO(event_fifo,

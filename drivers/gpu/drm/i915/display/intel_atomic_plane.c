@@ -920,7 +920,7 @@ static int do_rps_boost(struct wait_queue_entry *_wait,
 	 * vblank without our intervention, so leave RPS alone.
 	 */
 	if (!i915_request_started(rq))
-		intel_rps_boost(rq);
+		intel_rps_boost_for_request(rq);
 	i915_request_put(rq);
 
 	drm_crtc_vblank_put(wait->crtc);
@@ -978,7 +978,7 @@ static int await_active_fence(struct drm_i915_private *i915,
 					    GFP_KERNEL);
 	dma_fence_put(fence);
 
-	return err;
+	return err < 0 ? err : 0;
 }
 
 static int await_vma_bind(struct drm_i915_private *i915,

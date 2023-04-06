@@ -363,6 +363,9 @@ struct i915_gem_mm {
 	u64 shrink_memory;
 	u32 shrink_count;
 
+	/* lmemovercommit limit in %, set through sysfs */
+	u8 user_acct_limit[2];
+
 	struct i915_vma *lmem_window[2];
 	struct i915_vma *smem_window[2];
 	struct i915_vma *ccs_window[2];
@@ -1578,8 +1581,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_DISPLAY(dev_priv) (INTEL_INFO(dev_priv)->display.pipe_mask != 0)
 
-#define HAS_DP_VRR(i915)       (DISPLAY_VER(i915) >= 11)
-#define HAS_HDMI_VRR(i915)     (DISPLAY_VER(i915) >= 14)
+#define HAS_VRR(i915)	(DISPLAY_VER(i915) >= 11)
 
 #define HAS_ASYNC_FLIPS(i915)		(DISPLAY_VER(i915) >= 5)
 
@@ -1864,6 +1866,11 @@ static inline bool
 i915_is_mem_wa_enabled(struct drm_i915_private *i915, int val)
 {
 	return i915->params.smem_access_control & BIT(val);
+}
+static inline bool i915_allows_overcommit(const struct drm_i915_private *i915)
+{
+	/* If either acct_limit[] is non-zero, both are non-zero */
+	return !i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM];
 }
 
 static inline void

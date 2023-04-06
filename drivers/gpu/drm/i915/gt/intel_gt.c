@@ -389,7 +389,11 @@ static void gen8_check_faults(struct intel_gt *gt)
 	i915_reg_t fault_reg, fault_data0_reg, fault_data1_reg;
 	u32 fault;
 
-	if (GRAPHICS_VER(gt->i915) >= 12) {
+	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
+		fault_reg = XEHP_RING_FAULT_REG;
+		fault_data0_reg = XEHP_FAULT_TLB_DATA0;
+		fault_data1_reg = XEHP_FAULT_TLB_DATA1;
+	} else if (GRAPHICS_VER(gt->i915) >= 12) {
 		fault_reg = GEN12_RING_FAULT_REG;
 		fault_data0_reg = GEN12_FAULT_TLB_DATA0;
 		fault_data1_reg = GEN12_FAULT_TLB_DATA1;
@@ -590,6 +594,56 @@ static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
 err_unref:
 	i915_gem_object_put(obj);
 	return ret;
+}
+
+static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
+{
+	struct drm_i915_gem_object *obj;
+	struct i915_gem_ww_ctx ww;
+	struct i915_vma *vma;
+	void *addr;
+	int err;
+
+	obj = intel_gt_object_create_lmem(gt, size, I915_BO_ALLOC_CPU_CLEAR);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+
+	vma = i915_vma_instance(obj, &gt->ggtt->vm, NULL);
+	if (IS_ERR(vma)) {
+		err = PTR_ERR(vma);
+		goto err_unref;
+	}
+
+	for_i915_gem_ww(&ww, err, false) {
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
+
+		err = i915_ggtt_pin(vma, &ww, 0, PIN_HIGH);
+		if (err)
+			continue;
+
+		addr = i915_gem_object_pin_map(obj, I915_MAP_WC);
+		if (IS_ERR(addr)) {
+			err = PTR_ERR(addr);
+			continue;
+		}
+	}
+	if (err)
+		goto err_unref;
+
+	gt->counters.vma = i915_vma_make_unshrinkable(vma);
+	gt->counters.map = addr;
+	return 0;
+
+err_unref:
+	i915_gem_object_put(obj);
+	return err;
+}
+
+static void intel_gt_fini_counters(struct intel_gt *gt)
+{
+	i915_vma_unpin_and_release(&gt->counters.vma, I915_VMA_RELEASE_MAP);
 }
 
 static void intel_gt_fini_scratch(struct intel_gt *gt)
@@ -990,6 +1044,10 @@ int intel_gt_init(struct intel_gt *gt)
 	if (err)
 		goto err_iov;
 
+	err = intel_gt_init_counters(gt, SZ_4K);
+	if (err && err != -ENODEV)
+		goto err_scratch;
+
 	intel_gt_init_debug_pages(gt);
 
 	intel_gt_pm_init(gt);
@@ -1058,6 +1116,8 @@ err_engines:
 err_pm:
 	intel_gt_pm_fini(gt);
 	intel_gt_fini_debug_pages(gt);
+	intel_gt_fini_counters(gt);
+err_scratch:
 	intel_gt_fini_scratch(gt);
 err_iov:
 	intel_iov_fini(&gt->iov);
@@ -1120,6 +1180,7 @@ void intel_gt_driver_release(struct intel_gt *gt)
 	intel_wa_list_free(&gt->wa_list);
 	intel_gt_pm_fini(gt);
 	intel_gt_fini_debug_pages(gt);
+	intel_gt_fini_counters(gt);
 	intel_gt_fini_scratch(gt);
 	intel_gt_fini_buffer_pool(gt);
 	intel_gt_fini_hwconfig(gt);
@@ -1146,9 +1207,9 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 	}
 }
 
-static int driver_flr(struct drm_i915_private *i915)
+static int driver_flr(struct intel_gt *gt)
 {
-	struct intel_gt *gt = to_gt(i915);
+	struct drm_i915_private *i915 = gt->i915;
 	struct intel_uncore *uncore = gt->uncore;
 	int ret;
 
@@ -1190,30 +1251,20 @@ static int driver_flr(struct drm_i915_private *i915)
 	return 0;
 }
 
-static void driver_flr_fini(struct drm_device *dev, void *i915)
+static void driver_flr_fini(struct drm_device *dev, void *gt)
 {
-	driver_flr((struct drm_i915_private *)i915);
+	driver_flr((struct intel_gt *)gt);
 }
 
-static int driver_flr_init(struct drm_i915_private *i915)
+static int driver_flr_init(struct intel_gt *gt)
 {
 	int ret;
 
-	/*
-	 * Sanitize force_driver_flr at init time: If hardware needs driver-FLR at
-	 * load / unload and the user has not forced it off then allow triggering driver-FLR.
-	 * Exception: VFs cant access the driver-FLR registers.
-	 */
-	if (!INTEL_INFO(i915)->needs_driver_flr || IS_SRIOV_VF(i915))
-		i915->params.force_driver_flr = 0;
-	else if (i915->params.force_driver_flr == -1)
-		i915->params.force_driver_flr = 1;
-
-	ret = driver_flr(i915);
+	ret = driver_flr(gt);
 	if (ret)
 		return ret;
 
-	return drmm_add_action(&i915->drm, driver_flr_fini, i915);
+	return drmm_add_action(&gt->i915->drm, driver_flr_fini, gt);
 }
 
 void intel_gt_shutdown(struct intel_gt *gt)
@@ -1261,7 +1312,7 @@ static int intel_gt_tile_setup(struct intel_gt *gt,
 	intel_iov_init_early(&gt->iov);
 
 	if (!id) {
-		ret = driver_flr_init(i915);
+		ret = driver_flr_init(gt);
 		if (ret)
 			return ret;
 	}
@@ -1468,7 +1519,7 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 			break;
 
 		if (GRAPHICS_VER(i915) >= 8)
-			setup_private_pat(gt->uncore);
+			setup_private_pat(gt);
 
 		ret = intel_gt_probe_lmem(gt);
 		if (ret)

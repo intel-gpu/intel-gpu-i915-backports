@@ -150,6 +150,23 @@ struct prelim_i915_user_extension {
 	(PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_SOUTH + 0x1 + (ss) * 0x10 + (n))
 
 /* 108 is the last ID used by SOC errors */
+#define PRELIM_I915_PMU_GSC_ERROR_CORRECTABLE_SRAM_ECC          (109)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_SHUTDOWN         (110)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_INT              (111)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_SRAM_ECC             (112)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_WDG_TIMEOUT          (113)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_ROM_PARITY           (114)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_UCODE_PARITY         (115)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_GLITCH_DET           (116)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_PULL            (117)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_CRC_CHECK       (118)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_SELFMBIST       (119)
+#define PRELIM_I915_PMU_GSC_ERROR_NONFATAL_AON_PARITY           (120)
+#define PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_SUBSLICE           (121)
+#define PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK             (122)
+#define PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE                 (123)
+#define PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK                   (124)
+
 #define PRELIM_I915_PMU_HW_ERROR(gt, id) \
 	((__PRELIM_I915_PMU_HW_ERROR_EVENT_ID_OFFSET + (id)) | \
 	((__u64)(gt) << __PRELIM_I915_PMU_GT_SHIFT))
@@ -456,6 +473,7 @@ struct prelim_drm_i915_query_item {
 #define PRELIM_DRM_I915_QUERY_HW_IP_VERSION		(PRELIM_DRM_I915_QUERY | 12)
 #define PRELIM_DRM_I915_QUERY_ENGINE_INFO		(PRELIM_DRM_I915_QUERY | 13)
 #define PRELIM_DRM_I915_QUERY_L3BANK_COUNT		(PRELIM_DRM_I915_QUERY | 14)
+#define PRELIM_DRM_I915_QUERY_LMEM_MEMORY_REGIONS	(PRELIM_DRM_I915_QUERY | 15)
 };
 
 /*
@@ -957,6 +975,43 @@ struct prelim_drm_i915_query_memory_regions {
 
 	/* Info about each supported region */
 	struct prelim_drm_i915_memory_region_info regions[];
+};
+
+/**
+ * struct prelim_drm_i915_lmem_memory_region_info
+ *
+ * Expose the available lmem region size in bytes as per the limit's
+ * set in prelim_sharedmem_alloc_limit, prelim_lmem_alloc_limit
+ */
+struct prelim_drm_i915_lmem_memory_region_info {
+	/** class:instance pair encoding */
+	struct prelim_drm_i915_gem_memory_class_instance region;
+
+	/** MBZ */
+	__u32 rsvd0;
+
+	/** Estimate of memory remaining  */
+	__u64 unallocated_usr_lmem_size;
+
+	/** Estimate of memory remaining */
+	__u64 unallocated_usr_shared_size;
+};
+
+/**
+ * struct prelim_drm_i915_query_lmem_memory_regions
+ *
+ * Region info query enumerates all lmem regions known to the driver by filling in
+ * an array of struct prelim_drm_i915_lmem_memory_region_info structures.
+ */
+struct prelim_drm_i915_query_lmem_memory_regions {
+	/** Number of supported regions */
+	__u32 num_lmem_regions;
+
+	/** MBZ */
+	__u32 rsvd[3];
+
+	/* Info about each supported region */
+	struct prelim_drm_i915_lmem_memory_region_info regions[];
 };
 
 /**

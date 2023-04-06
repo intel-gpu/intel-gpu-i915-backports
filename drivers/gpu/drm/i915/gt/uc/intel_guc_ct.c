@@ -140,7 +140,7 @@ void intel_guc_ct_init_early(struct intel_guc_ct *ct)
 	init_waitqueue_head(&ct->wq);
 
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
-	if (IS_METEORLAKE(ct_to_gt(ct)->i915)) {
+	if (IS_METEORLAKE(ct_to_i915(ct))) {
 		ct->mtl_workaround.delay = msecs_to_jiffies(100); /* 100 ms */
 		INIT_DELAYED_WORK(&ct->mtl_workaround.work,
 				  mtl_workaround_worker_func);
@@ -301,6 +301,15 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 	return 0;
 }
 
+void intel_guc_ct_sanitize(struct intel_guc_ct *ct)
+{
+	ct->enabled = false;
+
+	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
+	if (IS_METEORLAKE(ct_to_i915(ct)) && ct->mtl_workaround.work.wq)
+		cancel_delayed_work_sync(&ct->mtl_workaround.work);
+}
+
 /**
  * intel_guc_ct_fini - Fini buffer-based communication
  * @ct: pointer to CT struct
@@ -310,6 +319,10 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 void intel_guc_ct_fini(struct intel_guc_ct *ct)
 {
 	GEM_BUG_ON(ct->enabled);
+
+	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
+	if (IS_METEORLAKE(ct_to_i915(ct)) && ct->mtl_workaround.work.wq)
+		cancel_delayed_work_sync(&ct->mtl_workaround.work);
 
 	tasklet_kill(&ct->receive_tasklet);
 	i915_vma_unpin_and_release(&ct->vma, I915_VMA_RELEASE_MAP);
@@ -372,7 +385,7 @@ int intel_guc_ct_enable(struct intel_guc_ct *ct)
 	ct->dead_ct_reason = CT_DEAD_ALIVE;
 
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
-	if (IS_METEORLAKE(ct_to_gt(ct)->i915))
+	if (IS_METEORLAKE(ct_to_i915(ct)))
 		mod_delayed_work(system_highpri_wq, &ct->mtl_workaround.work,
 				 ct->mtl_workaround.delay);
 
@@ -399,7 +412,7 @@ void intel_guc_ct_disable(struct intel_guc_ct *ct)
 
 	ct->enabled = false;
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
-	if (IS_METEORLAKE(ct_to_gt(ct)->i915))
+	if (IS_METEORLAKE(ct_to_i915(ct)))
 		cancel_delayed_work_sync(&ct->mtl_workaround.work);
 
 	if (intel_guc_is_fw_running(guc)) {
@@ -508,7 +521,7 @@ static int ct_write(struct intel_guc_ct *ct,
 	/* now update descriptor */
 	WRITE_ONCE(desc->tail, tail);
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
-	if (IS_METEORLAKE(ct_to_gt(ct)->i915)) {
+	if (IS_METEORLAKE(ct_to_i915(ct))) {
 		u32 desc_tail = READ_ONCE(desc->tail);
 
 		if (tail != desc_tail) {

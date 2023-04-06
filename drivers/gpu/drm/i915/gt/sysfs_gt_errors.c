@@ -58,8 +58,8 @@ static ssize_t sgunit_error_show(struct kobject *kobj, struct kobj_attribute *at
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t sgunit_error_show(struct device *dev,
-                            struct device_attribute *attr,
-                            char *buf)
+			     struct device_attribute *attr,
+			     char *buf)
 {
 #endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
@@ -74,8 +74,8 @@ static ssize_t soc_error_show(struct kobject *kobj, struct kobj_attribute *attr,
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t soc_error_show(struct device *dev,
-                             struct device_attribute *attr,
-                             char *buf)
+			      struct device_attribute *attr,
+			      char *buf)
 {
 #endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
@@ -90,8 +90,8 @@ static ssize_t gt_error_show(struct kobject *kobj, struct kobj_attribute *attr, 
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t gt_error_show(struct device *dev,
-                            struct device_attribute *attr,
-                            char *buf)
+			     struct device_attribute *attr,
+			     char *buf)
 {
 #endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
@@ -101,13 +101,29 @@ static ssize_t gt_error_show(struct device *dev,
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t gsc_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+      struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t gsc_error_show(struct device *dev,
+			      struct device_attribute *attr,
+			      char *buf)
+{
+#endif
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+
+	return sysfs_emit(buf, "%lu\n", gt->errors.gsc_hw[ea->id]);
+}
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t engine_reset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t engine_reset_show(struct device *dev,
-                                struct device_attribute *attr,
-                                char *buf)
+				 struct device_attribute *attr,
+				 char *buf)
 {
 #endif
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
@@ -121,8 +137,8 @@ static ssize_t eu_attention_show(struct kobject *kobj, struct kobj_attribute *at
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t eu_attention_show(struct device *dev,
-                                struct device_attribute *attr,
-                                char *buf)
+				 struct device_attribute *attr,
+				 char *buf)
 {
 #endif
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
@@ -149,8 +165,8 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	value = ea->i915_show(kobj, attr, buf);
 #else
 	value = ea->i915_show(dev, attr, buf);
-#endif
 
+#endif
 	pvc_wa_allow_rc6(gt->i915);
 
 	return value;
@@ -172,6 +188,10 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_error_show}
 
+#define GSC_SYSFS_ERROR_ATTR_RO(_name,  _id) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gsc_error_show}
+
 #define GT_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_driver_error_show}
@@ -179,6 +199,19 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 #define I915_DEVICE_ATTR_RO(_name, _id) \
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), _name##_show}
+
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_correctable_sram_ecc, INTEL_GSC_HW_ERROR_COR_SRAM_ECC);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_mia_shutdown, INTEL_GSC_HW_ERROR_UNCOR_MIA_SHUTDOWN);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_mia_int, INTEL_GSC_HW_ERROR_UNCOR_MIA_INT);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_sram_ecc, INTEL_GSC_HW_ERROR_UNCOR_SRAM_ECC);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_wdg_timeout, INTEL_GSC_HW_ERROR_UNCOR_WDG_TIMEOUT);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_rom_parity, INTEL_GSC_HW_ERROR_UNCOR_ROM_PARITY);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_ucode_parity, INTEL_GSC_HW_ERROR_UNCOR_UCODE_PARITY);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_glitch_det, INTEL_GSC_HW_ERROR_UNCOR_GLITCH_DET);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_fuse_pull, INTEL_GSC_HW_ERROR_UNCOR_FUSE_PULL);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_fuse_crc_check, INTEL_GSC_HW_ERROR_UNCOR_FUSE_CRC_CHECK);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_selfmbist, INTEL_GSC_HW_ERROR_UNCOR_SELFMBIST);
+static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_aon_parity, INTEL_GSC_HW_ERROR_UNCOR_AON_PARITY);
 
 static GT_SYSFS_ERROR_ATTR_RO(correctable_l3_sng, INTEL_GT_HW_ERROR_COR_L3_SNG);
 static GT_SYSFS_ERROR_ATTR_RO(correctable_guc, INTEL_GT_HW_ERROR_COR_GUC);
@@ -197,6 +230,10 @@ static GT_SYSFS_ERROR_ATTR_RO(fatal_slm, INTEL_GT_HW_ERROR_FAT_SLM);
 static GT_SYSFS_ERROR_ATTR_RO(fatal_eu_ic, INTEL_GT_HW_ERROR_FAT_EU_IC);
 static GT_SYSFS_ERROR_ATTR_RO(fatal_eu_grf, INTEL_GT_HW_ERROR_FAT_EU_GRF);
 static GT_SYSFS_ERROR_ATTR_RO(fatal_fpu, INTEL_GT_HW_ERROR_FAT_FPU);
+static GT_SYSFS_ERROR_ATTR_RO(correctable_subslice, INTEL_GT_HW_ERROR_COR_SUBSLICE);
+static GT_SYSFS_ERROR_ATTR_RO(correctable_l3bank, INTEL_GT_HW_ERROR_COR_L3BANK);
+static GT_SYSFS_ERROR_ATTR_RO(fatal_subslice, INTEL_GT_HW_ERROR_FAT_SUBSLICE);
+static GT_SYSFS_ERROR_ATTR_RO(fatal_l3bank, INTEL_GT_HW_ERROR_FAT_L3BANK);
 static GT_SYSFS_ERROR_ATTR_RO(fatal_tlb, INTEL_GT_HW_ERROR_FAT_TLB);
 static GT_SYSFS_ERROR_ATTR_RO(fatal_l3_fabric, INTEL_GT_HW_ERROR_FAT_L3_FABRIC);
 static SGUNIT_SYSFS_ERROR_ATTR_RO(sgunit_correctable, HARDWARE_ERROR_CORRECTABLE);
@@ -255,8 +292,8 @@ static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_1, SOC_ERR_INDEX(INTEL_GT_SOC_I
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_cd0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_cd0_mdfi, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI));
-static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST));
-static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_0));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_1));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_2));
@@ -323,10 +360,41 @@ static const struct attribute *gt_error_attrs[] = {
 	NULL
 };
 
-static const struct attribute *pvc_gt_error_attrs[] = {
-	&dev_attr_fatal_fpu.attr.attr,
+static const struct attribute *gsc_error_attrs[] = {
+	&dev_attr_gsc_correctable_sram_ecc.attr.attr,
+	&dev_attr_gsc_nonfatal_mia_shutdown.attr.attr,
+	&dev_attr_gsc_nonfatal_mia_int.attr.attr,
+	&dev_attr_gsc_nonfatal_sram_ecc.attr.attr,
+	&dev_attr_gsc_nonfatal_wdg_timeout.attr.attr,
+	&dev_attr_gsc_nonfatal_rom_parity.attr.attr,
+	&dev_attr_gsc_nonfatal_ucode_parity.attr.attr,
+	&dev_attr_gsc_nonfatal_glitch_det.attr.attr,
+	&dev_attr_gsc_nonfatal_fuse_pull.attr.attr,
+	&dev_attr_gsc_nonfatal_fuse_crc_check.attr.attr,
+	&dev_attr_gsc_nonfatal_selfmbist.attr.attr,
+	&dev_attr_gsc_nonfatal_aon_parity.attr.attr,
+	NULL
+};
+
+static const struct attribute *gt_error_vctr_attrs[] = {
+	&dev_attr_correctable_subslice.attr.attr,
+	&dev_attr_correctable_l3bank.attr.attr,
+	&dev_attr_fatal_subslice.attr.attr,
+	&dev_attr_fatal_l3bank.attr.attr,
 	&dev_attr_fatal_tlb.attr.attr,
 	&dev_attr_fatal_l3_fabric.attr.attr,
+	NULL
+};
+
+static const struct attribute *pvc_gt_error_attrs[] = {
+	&dev_attr_correctable_guc.attr.attr,
+	&dev_attr_correctable_slm.attr.attr,
+	&dev_attr_correctable_eu_ic.attr.attr,
+	&dev_attr_correctable_eu_grf.attr.attr,
+	&dev_attr_fatal_fpu.attr.attr,
+	&dev_attr_fatal_guc.attr.attr,
+	&dev_attr_fatal_slm.attr.attr,
+	&dev_attr_fatal_eu_grf.attr.attr,
 	NULL
 };
 
@@ -440,23 +508,33 @@ void intel_gt_sysfs_register_errors(struct intel_gt *gt, struct kobject *parent)
 	if (!dir)
 		goto err;
 
-	if (sysfs_create_files(dir, gt_error_attrs))
-		goto err;
+	if (!IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, gt_error_attrs))
+		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error sysfs\n", gt->info.id);
+
+	if (HAS_GT_ERROR_VECTORS(gt->i915) && sysfs_create_files(dir, gt_error_vctr_attrs))
+		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error_vector sysfs\n",
+			 gt->info.id);
+
+	/* Report GSC errors on root gt only */
+	if ((HAS_MEM_SPARING_SUPPORT(gt->i915) && gt->info.id == 0) &&
+	    sysfs_create_files(dir, gsc_error_attrs))
+		drm_warn(&gt->i915->drm, "Failed to create gt%u gsc_error sysfs\n", gt->info.id);
 
 	if (IS_XEHPSDV(gt->i915) &&
 	    sysfs_create_files(dir, soc_error_attrs))
-		goto err;
+		drm_warn(&gt->i915->drm, "Failed to create gt%u soc_error sysfs\n", gt->info.id);
 
-	if (HAS_GT_ERROR_VECTORS(gt->i915) &&
-	    (sysfs_create_files(dir, pvc_gt_error_attrs) ||
-	    sysfs_create_files(dir, pvc_soc_error_attrs)))
-		goto err;
+	if (IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, pvc_gt_error_attrs))
+		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error sysfs\n", gt->info.id);
+
+	if (IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, pvc_soc_error_attrs))
+		drm_warn(&gt->i915->drm, "Failed to create gt%u soc_error sysfs\n", gt->info.id);
 
 	return;
 
 err:
 	drm_err(&gt->i915->drm,
-		"Failed to create gt%u error_counter sysfs files\n",
+		"Failed to create gt%u error_counter directory\n",
 		gt->info.id);
 	kobject_put(dir);
 }

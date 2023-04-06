@@ -76,17 +76,21 @@ FBK_KERN_NAME = ""
 # Filtered output: 221021.0
 BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
 
-# DII_TAG consist of DII tag version.
-# Expected input: DII_KERNEL_TAG="DII_6001_prerelease"
-# Filtered output: 6001
-# for DII_TAG_PREFIX output will be DII or PROD.
+#DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source.
+#Tagging is needed for decoding this,
+#Ex: For DII_KERNEL_TAG="DII_6001_prerelease" : DII_TAG will be 6001
+#    For DII_KERNEL_TAG="PROD_I915_6469.0.7"  : DII_TAG will be 6469.0.7
+#    For DII_KERNEL_TAG="I915-23.4.0"         : DII_TAG will be 23.4.0
+#for DII_TAG_PREFIX output will be DII or PROD or I915-23.4.0.
 
 DII_TAG_PREFIX=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 1 2>/dev/null || echo 1)
 
 ifeq ($(DII_TAG_PREFIX) , PROD)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
-else
+else ifeq ($(DII_TAG_PREFIX) , DII)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+else
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
 endif
 
 # Read kernel version from the utsrelease.h which is common among the all the supported OSVs.
@@ -150,7 +154,12 @@ OSV_KV_SUPPORTED = $(shell cat versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_
 
 # BASE_KERNEL_NAME consist of kernel version
 # Output: 4.18.0-372.32.1
-BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y).$(EXTENDED_VERSION_Z)
+ifneq ($(EXTENDED_VERSION_Y),)
+BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Y)
+ifneq ($(EXTENDED_VERSION_Z),)
+BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Z)
+endif
+endif
 
 else ifeq ($(OSV_NAME),)
 
@@ -231,7 +240,10 @@ OSV_VER = $(SUSE_VERSION)0$(SUSE_PATCHLEVEL)0$(SUSE_AUXRELEASE)
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f2)
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f3)
 OSV_KV_SUPPORTED = $(shell cat versions | grep "SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION" | cut -d '"' -f 2)
-BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)
+BASE_KERNEL_NAME = $(KERN_VER)-$(OSV_VER).$(EXTENDED_VERSION_X)
+ifneq ($(EXTENDED_VERSION_Y),)
+BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Y)
+endif
 
 endif #End of suse
 endif #Ifneq($(MAKECMDGOALS) , dkmsrpm-pkg)
@@ -320,7 +332,7 @@ define filechk_osv_version_sles.h
         echo '#define SUSE_LOCALVERSION_MINOR $(EXTENDED_VERSION_Y)'; \
         echo '#define SUSE_LOCALVERSION(a,b) (((a) << 8) + (b))'; \
         echo '#define SUSE_LOCALVERSION_RELEASE_CODE \
-        $(shell expr $(EXTENDED_VERSION_X) \* 256 + $(EXTENDED_VERSION_Y))'
+        $(shell expr $(EXTENDED_VERSION_X) \* 256 + 0$(EXTENDED_VERSION_Y))'
 endef
 
 define filechk_osv_version_rhel.h
@@ -391,7 +403,7 @@ ifeq ($(BUILD_CONFIG), fbk)
 KER_VER = $(CUSTOM_KER_VER)
 endif
 
-VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)

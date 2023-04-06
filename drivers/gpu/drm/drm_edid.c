@@ -4971,38 +4971,11 @@ static void drm_parse_hdmi_forum_vsdb(struct drm_connector *connector,
 		u8 dsc_max_frl_rate;
 		u8 dsc_max_slices;
 		struct drm_hdmi_dsc_cap *hdmi_dsc = &hdmi->dsc_cap;
-		struct drm_hdmi_vrr_cap *hdmi_vrr = &hdmi->vrr_cap;
 
 		DRM_DEBUG_KMS("hdmi_21 sink detected. parsing edid\n");
 		max_frl_rate = (hf_vsdb[7] & DRM_EDID_MAX_FRL_RATE_MASK) >> 4;
 		drm_get_max_frl_rate(max_frl_rate, &hdmi->max_lanes,
 				     &hdmi->max_frl_rate_per_lane);
-
-		if (hf_vsdb[8] & DRM_EDID_CNMVRR)
-			hdmi_vrr->cnm_vrr = true;
-		if (hf_vsdb[8] & DRM_EDID_CINEMA_VRR)
-			hdmi_vrr->cinema_vrr = true;
-		if (hf_vsdb[8] & DRM_EDID_MDELTA)
-			hdmi_vrr->m_delta = true;
-		hdmi_vrr->vrr_min = hf_vsdb[9] & DRM_EDID_VRR_MIN_MASK;
-		hdmi_vrr->vrr_max = (hf_vsdb[9] & DRM_EDID_VRR_MAX_UPPER_MASK) << 2;
-		hdmi_vrr->vrr_max |= hf_vsdb[10] & DRM_EDID_VRR_MAX_LOWER_MASK;
-
-		/*
-		 * This field shall contain a value of 48 or less.
-		 * values of 49–63 are reserved
-		 */
-		if (hdmi_vrr->vrr_min > 48)
-			hdmi_vrr->vrr_min = 0;
-
-		/*
-		 * The lowest allowed limit is 100 Hz.
-		 * A value of 0 shall indicate that the Sink imposes no additional upper limit
-		 * and that the limit is the frame rate of the Base Video Timing.
-		 */
-		if (hdmi_vrr->vrr_max < 100)
-			hdmi_vrr->vrr_max = 0;
-
 		hdmi_dsc->v_1p2 = hf_vsdb[11] & DRM_EDID_DSC_1P2;
 
 		if (hdmi_dsc->v_1p2) {

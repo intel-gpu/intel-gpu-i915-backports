@@ -23,8 +23,11 @@ void intel_rps_disable(struct intel_rps *rps);
 
 void intel_rps_park(struct intel_rps *rps);
 void intel_rps_unpark(struct intel_rps *rps);
-void intel_rps_boost(struct i915_request *rq);
-void intel_rps_dec_waiters(struct intel_rps *rps);
+
+void intel_rps_boost(struct intel_rps *rps);
+void intel_rps_boost_for_request(struct i915_request *rq);
+void intel_rps_cancel_boost(struct intel_rps *rps);
+
 u32 intel_rps_get_boost_frequency(struct intel_rps *rps);
 int intel_rps_set_boost_frequency(struct intel_rps *rps, u32 freq);
 
