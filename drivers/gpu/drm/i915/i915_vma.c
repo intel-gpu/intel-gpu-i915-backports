@@ -676,31 +676,51 @@ void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags)
 	i915_gem_object_put(obj);
 }
 
+/**
+ * i915_vma_misplaced - check the current placement against requested
+ * @vma - i915_vma to compare
+ * @size - the size of the range required in the GTT for this vma access, or 0
+ * @alignment - the required virtual address alignment or 0 for default
+ * @flags - placement flags, see i915_vma_pin()
+ *
+ * i915_vma_misplaced() checks that if the vma is currently bound,
+ * the current drm_mm_node (offset and size) match the caller's required
+ * placement restraints, as would passed to i915_vma_pin().
+ *
+ * Normally, i915_vma_pin() would unbind any conflicting and /unpinned/ vma,
+ * but sometimes we would prefer to e.g. use a secondary vma if this vma
+ * itself would not satisfy the callers constraints, and thus would like
+ * to check if the placement is valid for itself.
+ *
+ * Returns true if the vma is currently bound and its placement in the GTT
+ * does not match the passed in constraints.
+ */
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags)
 {
+	u64 act_size = __i915_vma_size(vma);
+	u64 act_offset = __i915_vma_offset(vma);
+
 	if (!drm_mm_node_allocated(&vma->node))
 		return false;
 
 	if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
 		return true;
 
-	if (i915_vma_size(vma) < size)
+	if (act_size < size)
 		return true;
 
 	GEM_BUG_ON(alignment && !is_power_of_2(alignment));
-	if (alignment && !IS_ALIGNED(i915_vma_offset(vma), alignment))
+	if (alignment && !IS_ALIGNED(act_offset, alignment))
 		return true;
 
 	if (flags & PIN_MAPPABLE && !i915_vma_is_map_and_fenceable(vma))
 		return true;
 
-	if (flags & PIN_OFFSET_BIAS &&
-	    i915_vma_offset(vma) < (flags & PIN_OFFSET_MASK))
+	if (flags & PIN_OFFSET_BIAS && act_offset < (flags & PIN_OFFSET_MASK))
 		return true;
 
-	if (flags & PIN_OFFSET_FIXED &&
-	    i915_vma_offset(vma) != (flags & PIN_OFFSET_MASK))
+	if (flags & PIN_OFFSET_FIXED && act_offset != (flags & PIN_OFFSET_MASK))
 		return true;
 
 	if (flags & PIN_OFFSET_GUARD && vma->guard < (flags & PIN_OFFSET_MASK))
@@ -1045,7 +1065,7 @@ unpinned:
 	return pinned;
 }
 
-int vma_get_pages(struct i915_vma *vma)
+static int vma_get_pages(struct i915_vma *vma)
 {
 	int err = 0;
 	bool pinned_pages = false;
@@ -1057,6 +1077,10 @@ int vma_get_pages(struct i915_vma *vma)
 		err = i915_gem_object_pin_pages(vma->obj);
 		if (err)
 			return err;
+		/*
+		 * This is set such that we will unpin on error
+		 * or for the faultable VM case (see below).
+		 */
 		pinned_pages = true;
 	}
 
@@ -1070,7 +1094,14 @@ int vma_get_pages(struct i915_vma *vma)
 		err = vma->ops->set_pages(vma);
 		if (err)
 			goto unlock;
-		pinned_pages = false;
+		/*
+		 * For faultable VM, always unpin on return as we
+		 * don't need object pinned beyond above set_pages().
+		 * Else this clears pinned_pages, so pin count will
+		 * persist until vma_put_pages()/vma_unbind_pages.
+		 */
+		if (!i915_vm_page_fault_enabled(vma->vm))
+			pinned_pages = false;
 	}
 	atomic_inc(&vma->pages_count);
 
@@ -1091,13 +1122,13 @@ static void __vma_put_pages(struct i915_vma *vma, unsigned int count)
 	if (atomic_sub_return(count, &vma->pages_count) == 0) {
 		vma->ops->clear_pages(vma);
 		GEM_BUG_ON(vma->pages);
-		if (vma->obj)
+		if (vma->obj && !i915_vm_page_fault_enabled(vma->vm))
 			i915_gem_object_unpin_pages(vma->obj);
 	}
 	mutex_unlock(&vma->pages_mutex);
 }
 
-void vma_put_pages(struct i915_vma *vma)
+static void vma_put_pages(struct i915_vma *vma)
 {
 	if (atomic_add_unless(&vma->pages_count, -1, 1))
 		return;
@@ -1274,6 +1305,14 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		goto err_unlock;
 	}
 
+	if (unlikely(i915_vma_misplaced(vma, size, alignment, flags))) {
+		err = -EBUSY;
+		if (!(flags & (PIN_NONBLOCK | PIN_NOEVICT)))
+			err = __i915_vma_unbind(vma);
+		if (err)
+			goto err_unlock;
+	}
+
 	bound = atomic_read(&vma->flags);
 	if (unlikely(bound & I915_VMA_ERROR)) {
 		err = i915_active_fence_has_error(&vma->active.excl) ?: -EFAULT;
@@ -1295,9 +1334,12 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		goto err_unlock;
 
 	if (!(bound & I915_VMA_BIND_MASK)) {
-		err = i915_vma_insert(vma, size, alignment, flags);
-		if (err)
-			goto err_active;
+		/* For faultable VM, vma->node may already be allocated */
+		if (!drm_mm_node_allocated(&vma->node)) {
+			err = i915_vma_insert(vma, size, alignment, flags);
+			if (err)
+				goto err_active;
+		}
 
 		if (i915_is_ggtt(vma->vm))
 			__i915_vma_set_map_and_fenceable(vma);

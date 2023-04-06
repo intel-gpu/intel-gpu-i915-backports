@@ -260,7 +260,7 @@ void intel_gt_resume_early(struct intel_gt *gt)
 		i915_ggtt_resume(gt->ggtt);
 
 	if (GRAPHICS_VER(gt->i915) >= 8)
-		setup_private_pat(gt->uncore);
+		setup_private_pat(gt);
 
 	intel_uc_resume_early(&gt->uc);
 }
@@ -343,15 +343,19 @@ err_wedged:
 
 static void wait_for_suspend(struct intel_gt *gt)
 {
-	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
-		/*
-		 * Forcibly cancel outstanding work and leave
-		 * the gpu quiet.
-		 */
-		intel_gt_set_wedged(gt);
+	intel_wakeref_t wf;
 
-	/* Make the GPU available again for swapout */
-	intel_gt_unset_wedged(gt);
+	if (gt->i915->quiesce_gpu)
+		return;
+
+	with_intel_gt_pm(gt, wf) {
+		/* Cancel outstanding work and leave the gpu quiet */
+		if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
+			intel_gt_set_wedged(gt);
+
+		/* Make the GPU available again for swapout */
+		intel_gt_unset_wedged(gt);
+	}
 }
 
 void intel_gt_suspend_prepare(struct intel_gt *gt)

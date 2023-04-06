@@ -11,6 +11,7 @@
 #include <uapi/drm/i915_drm.h>
 
 #include "gt/intel_gt_requests.h"
+#include "gem/i915_gem_object.h"
 
 #include "i915_buddy.h"
 #include "intel_memory_region.h"
@@ -225,6 +226,18 @@ __intel_memory_region_put_block_buddy(struct i915_buddy_block *block)
 		schedule_work(&mem->pd_put.work);
 }
 
+static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
+{
+	/* Only evict user lmem only objects if overcommit is enabled */
+	if (!(obj->flags & I915_BO_ALLOC_USER))
+		return true;
+
+	if (obj->memory_mask & REGION_SMEM)
+		return true;
+
+	return i915_allows_overcommit(to_i915(obj->base.dev));
+}
+
 static int intel_memory_region_evict(struct intel_memory_region *mem,
 				     struct i915_gem_ww_ctx *ww,
 				     resource_size_t target)
@@ -270,6 +283,9 @@ next:
 		unsigned long flags = 0;
 
 		list_move_tail(&obj->mm.region_link, &still_in_list);
+
+		if (!i915_gem_object_allows_eviction(obj))
+			continue;
 
 		if (i915_gem_object_is_framebuffer(obj))
 			continue;

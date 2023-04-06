@@ -144,6 +144,9 @@
 #define MI_STORE_DWORD_INDEX	MI_INSTR(0x21, 1)
 #define MI_ATOMIC		MI_INSTR(0x2f, 1)
 #define MI_ATOMIC_INLINE	(MI_INSTR(0x2f, 9) | MI_ATOMIC_INLINE_DATA)
+#define   MI_ATOMIC32                  (0 << 19)
+#define   MI_ATOMIC64                  (1 << 19)
+#define   MI_ATOMIC128                 (2 << 19)
 #define   MI_ATOMIC_GLOBAL_GTT		(1 << 22)
 #define   MI_ATOMIC_INLINE_DATA		(1 << 18)
 #define   MI_ATOMIC_CS_STALL		(1 << 17)
@@ -152,6 +155,7 @@
 #define	  MI_ATOMIC_DEC			(0x6 << 8)
 #define	  MI_ATOMIC_ADD			(0x7 << 8)
 #define	  MI_ATOMIC_SUB			(0x8 << 8)
+#define	  MI_ATOMIC_ADD64		(0x27 << 8)
 
 /*
  * Official intel docs are somewhat sloppy concerning MI_LOAD_REGISTER_IMM:

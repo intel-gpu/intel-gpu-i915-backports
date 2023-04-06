@@ -188,7 +188,7 @@ bool intel_hdcp2_capable(struct intel_connector *connector)
 	bool capable = false;
 
 	/* I915 support for HDCP2.2 */
-	if (!hdcp->hdcp2_supported)
+	if (!gt || !hdcp->hdcp2_supported)
 		return false;
 
 	/* If MTL+ make sure gsc is loaded and proxy is setup */

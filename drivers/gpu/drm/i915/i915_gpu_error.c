@@ -1937,43 +1937,38 @@ capture_engine(struct intel_engine_cs *engine,
 	       struct i915_page_compress *compress,
 	       u32 dump_flags)
 {
-	struct intel_engine_capture_vma *capture = NULL;
+	struct intel_engine_capture_vma *capture;
 	struct intel_engine_coredump *ee;
 	struct intel_context *ce;
-	struct i915_request *rq = NULL;
-	unsigned long flags;
+	struct i915_request *rq;
 
 	ee = intel_engine_coredump_alloc(engine, I915_GFP_ALLOW_FAIL, dump_flags);
 	if (!ee)
 		return NULL;
 
+	rcu_read_lock();
 	ce = intel_engine_get_hung_context(engine);
 	if (ce) {
 		intel_engine_clear_hung_context(engine);
 		rq = intel_context_find_active_request(ce);
-		if (!rq || !i915_request_started(rq))
-			goto no_request_capture;
 	} else {
-		/*
-		 * Getting here with GuC enabled means it is a forced error capture
-		 * with no actual hang. So, no need to attempt the execlist search.
-		 */
-		if (!intel_uc_uses_guc_submission(&engine->gt->uc)) {
-			spin_lock_irqsave(&engine->sched_engine->lock, flags);
-			rq = intel_engine_execlist_find_hung_request(engine);
-			spin_unlock_irqrestore(&engine->sched_engine->lock,
-					       flags);
-		}
+		rq = intel_engine_find_active_request(engine);
 	}
-	if (rq)
+	rq = rq ? i915_request_get_rcu(rq) : NULL;
+	rcu_read_unlock();
+
+	capture = NULL;
+	if (rq) {
 		capture = intel_engine_coredump_add_request(ee, rq,
 							    ATOMIC_MAYFAIL,
 							    compress);
+		i915_request_put(rq);
+	}
 	if (!capture) {
-no_request_capture:
 		kfree(ee);
 		return NULL;
 	}
+
 	if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
 		intel_guc_capture_get_matching_node(engine->gt, ee, ce);
 

@@ -1269,8 +1269,6 @@ struct intel_crtc_state {
 		struct drm_dp_vsc_sdp vsc;
 	} infoframes;
 
-	struct hdmi_extended_metadata_packet cvt_emp;
-
 	/* HDMI scrambling status */
 	bool hdmi_scrambling;
 
@@ -1324,32 +1322,7 @@ struct intel_crtc_state {
 		bool enable;
 		u8 pipeline_full;
 		u16 flipline, vmin, vmax, guardband;
-		u16 vsync_start, vsync_end;
-		struct hdmi_video_timing_emp_config vtem_config;
 	} vrr;
-
-	struct {
-		/* Go for FRL training */
-		bool enable;
-
-		/* Enable resource based scheduling */
-		bool rsrc_sched_en;
-
-		/* can be either 3 or 4 lanes */
-		u8 required_lanes;
-
-		/* required rate - can be 3, 6, 8, 10, 12 Gbps */
-		u8 required_rate;
-
-		/* FRL DFM Parameters */
-		u32 tb_borrowed, tb_actual, tb_threshold_min, active_char_buf_threshold;
-
-		/* FRL DFM DSC Tribytes */
-		u32 hcactive_tb, hctotal_tb;
-
-		/* Clock parameters in KHz */
-		u32 div18, link_m_ext, link_n_ext;
-	} frl;
 
 	/* Stream Splitter for eDP MSO */
 	struct {
@@ -1563,17 +1536,8 @@ struct intel_hdmi {
 	} dp_dual_mode;
 	bool has_hdmi_sink;
 	bool has_audio;
-	bool has_sink_hdmi_21;
-	int max_frl_rate;
-	int max_dsc_frl_rate;
 	struct intel_connector *attached_connector;
 	struct cec_notifier *cec_notifier;
-	struct {
-		bool trained;
-		int lanes;
-		int rate_gbps;
-		int ffe_level;
-	} frl;
 };
 
 struct intel_dp_mst_encoder;

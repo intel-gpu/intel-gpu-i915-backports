@@ -395,6 +395,9 @@ struct i915_address_space {
 	/* Is address space enabled for recoverable page faults? */
 	bool page_fault_enabled:1;
 
+	/* Address space requires scratch page invalidation  on bind */
+	bool invalidate_tlb_scratch:1;
+
 	u8 top;
 	u8 pd_shift;
 	u8 scratch_order;
@@ -819,7 +822,7 @@ void ppgtt_unbind_vma(struct i915_address_space *vm,
 
 void gtt_write_workarounds(struct intel_gt *gt);
 
-void setup_private_pat(struct intel_uncore *uncore);
+void setup_private_pat(struct intel_gt *gt);
 
 int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash,

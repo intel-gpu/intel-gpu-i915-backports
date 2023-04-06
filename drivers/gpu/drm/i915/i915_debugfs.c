@@ -33,6 +33,8 @@
 #include <drm/drm_debugfs.h>
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_lmem.h"
+#include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gpu_commands.h"
@@ -295,6 +297,23 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 		seq_printf(m, " (fb)");
 }
 
+static void show_xfer(struct seq_file *m,
+		      struct intel_gt *gt,
+		      const char *name,
+		      u64 bytes,
+		      u64 time)
+{
+	time = intel_gt_clock_interval_to_ns(gt, time);
+	if (!time)
+		return;
+
+	seq_printf(m, "GT%d %s: %llu MiB in %llums, %llu MiB/s\n",
+		   gt->info.id, name,
+		   bytes >> 20,
+		   div_u64(time, NSEC_PER_MSEC),
+		   div64_u64(mul_u64_u32_shr(bytes, NSEC_PER_SEC, 20), time));
+}
+
 static void
 evict_stat(struct seq_file *m,
 	   const char *name,
@@ -337,6 +356,7 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 	struct drm_i915_private *i915 = m->private;
 	struct intel_memory_region *mr;
 	enum intel_region_id id;
+	struct intel_gt *gt;
 
 	seq_printf(m, "%u shrinkable [%u free] objects, %llu bytes\n",
 		   i915->mm.shrink_count,
@@ -346,10 +366,54 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		seq_printf(m, "%s: total:%pa, available:%pa bytes\n",
 			   mr->name, &mr->total, &mr->avail);
 
+	for_each_gt(gt, i915, id) {
+		if (!gt->counters.map)
+			continue;
+
+		show_xfer(m, gt, "clear",
+			  gt->counters.map[INTEL_GT_CLEAR_BYTES],
+			  gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+	}
+
 	evict_stats(m, "Blitter", &i915->mm.blt_swap_stats);
 	evict_stats(m, "Memcpy", &i915->mm.memcpy_swap_stats);
 
 	return 0;
+}
+
+static int
+i915_get_mem_region_acct_limit(struct seq_file *m, void *data, u32 index)
+{
+	struct drm_i915_private *i915 = m->private;
+	struct intel_memory_region *mr;
+	int id;
+
+	seq_printf(m, "usr_acct_limit:%u\n", i915->mm.user_acct_limit[index]);
+
+	for_each_memory_region(mr, i915, id) {
+		u64 mem_available;
+
+		if (mr->type != INTEL_MEMORY_LOCAL)
+			continue;
+
+		mem_available = mr->acct_limit[index];
+		seq_printf(m, "%s: available:%llu bytes\n", mr->name,
+			   mem_available);
+	}
+
+	return 0;
+}
+
+static int lmem_alloc_limit_info_show(struct seq_file *m, void *data)
+{
+	return i915_get_mem_region_acct_limit(m,  data,
+					      INTEL_MEMORY_OVERCOMMIT_LMEM);
+}
+
+static int sharedmem_alloc_limit_info_show(struct seq_file *m, void *data)
+{
+	return i915_get_mem_region_acct_limit(m,  data,
+					      INTEL_MEMORY_OVERCOMMIT_SHARED);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
@@ -769,6 +833,22 @@ static int workarounds_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
+static int clear_lmem_show(struct seq_file *m, void *unused)
+{
+	struct drm_i915_private *i915 = m->private;
+	struct drm_printer p = drm_seq_file_printer(m);
+	struct intel_gt *gt;
+	int err, id;
+
+	for_each_gt(gt, i915, id) {
+		err = i915_gem_clear_all_lmem(gt, &p);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int i915_l4wa_open(struct inode *inode, struct file *file)
 {
 	struct drm_i915_private *i915 = inode->i_private;
@@ -1147,6 +1227,9 @@ DEFINE_I915_SHOW_ATTRIBUTE(i915_sseu_status);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_rps_boost_info);
 DEFINE_I915_SHOW_ATTRIBUTE(sriov_info);
 DEFINE_I915_SHOW_ATTRIBUTE(workarounds);
+DEFINE_I915_SHOW_ATTRIBUTE(clear_lmem);
+DEFINE_I915_SHOW_ATTRIBUTE(lmem_alloc_limit_info);
+DEFINE_I915_SHOW_ATTRIBUTE(sharedmem_alloc_limit_info);
 
 static struct i915_debugfs_file i915_debugfs_list[] = {
 	{"i915_capabilities", &i915_capabilities_fops, NULL},
@@ -1158,7 +1241,10 @@ static struct i915_debugfs_file i915_debugfs_list[] = {
 	{"i915_sseu_status", &i915_sseu_status_fops, NULL},
 	{"i915_rps_boost_info", &i915_rps_boost_info_fops, NULL},
 	{"i915_sriov_info", &sriov_info_fops, NULL},
-	{"i915_workarounds", &workarounds_fops, 0},
+	{"i915_workarounds", &workarounds_fops, NULL},
+	{"i915_clear_lmem", &clear_lmem_fops, NULL},
+	{"lmem_alloc_limit_info", &lmem_alloc_limit_info_fops, NULL},
+	{"sharedmem_alloc_limit_info", &sharedmem_alloc_limit_info_fops, NULL},
 };
 
 static struct i915_debugfs_file i915_vf_debugfs_list[] = {

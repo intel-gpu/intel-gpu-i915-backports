@@ -320,13 +320,6 @@ struct bdb_general_features {
 #define HDMI_MAX_DATA_RATE_340		4			/* 249+ */
 #define HDMI_MAX_DATA_RATE_300		5			/* 249+ */
 
-#define HDMI_MAX_FRL_RATE_PLATFORM	0			/* 237 */
-#define HDMI_MAX_FRL_RATE_3G		1			/* 237 */
-#define HDMI_MAX_FRL_RATE_6G		2			/* 237 */
-#define HDMI_MAX_FRL_RATE_8G		3			/* 237 */
-#define HDMI_MAX_FRL_RATE_10G		4			/* 237 */
-#define HDMI_MAX_FRL_RATE_12G		5			/* 237 */
-
 #define LEGACY_CHILD_DEVICE_CONFIG_SIZE		33
 
 /* DDC Bus DDI Type 155+ */

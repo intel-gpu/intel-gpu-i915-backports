@@ -62,6 +62,11 @@ enum intel_region_id {
 	for (id = 0; id < ARRAY_SIZE((i915)->mm.regions); id++) \
 		for_each_if((mr) = (i915)->mm.regions[id])
 
+enum {
+	INTEL_MEMORY_OVERCOMMIT_SHARED = 0,
+	INTEL_MEMORY_OVERCOMMIT_LMEM
+};
+
 struct intel_memory_region_ops {
 	unsigned int flags;
 
@@ -98,6 +103,9 @@ struct intel_memory_region {
 	resource_size_t min_page_size;
 	resource_size_t total;
 	resource_size_t avail;
+
+	resource_size_t acct_limit[2];
+	resource_size_t acct_user[2];
 
 	/* Track actual LMEM size, without stolen memory */
 	resource_size_t actual_physical_mem;

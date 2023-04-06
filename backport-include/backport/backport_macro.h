@@ -614,11 +614,4 @@
 #define CONFIG_INTEL_VSEC
 #endif
 
-/*
- * Add macro to enable support for HDMI2.1 VRR
- * Introduced in DII_6556
- * 64ccfe30b7e258 Enable support for HDMI2.1 VRR
- */
-#define BPM_VRR_SUPPORT_NOT_PRESENT
-
 #endif /* BP_LINUX_BACKPORT_MACRO_H */
