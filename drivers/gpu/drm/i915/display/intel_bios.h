@@ -272,8 +272,5 @@ bool intel_bios_encoder_supports_typec_usb(const struct intel_bios_encoder_data 
 bool intel_bios_encoder_supports_tbt(const struct intel_bios_encoder_data *devdata);
 int intel_bios_encoder_dp_boost_level(const struct intel_bios_encoder_data *devdata);
 int intel_bios_encoder_hdmi_boost_level(const struct intel_bios_encoder_data *devdata);
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-int intel_bios_hdmi_max_frl_rate(struct intel_encoder *encoder);
-#endif
 
 #endif /* _INTEL_BIOS_H_ */

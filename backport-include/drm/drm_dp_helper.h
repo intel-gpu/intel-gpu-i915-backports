@@ -9,6 +9,18 @@
 #include_next  <drm/drm_dp_helper.h>
 #endif /* DRM_DP_HELPER_DIR_DISPLAY_PRESENT */
 
+#ifdef BPM_DP_READ_LTTPR_CAPS_DPCD_ARG_NOT_PRESENT
+
+#define drm_dp_read_lttpr_common_caps LINUX_I915_BACKPORT(drm_dp_read_lttpr_common_caps)
+int drm_dp_read_lttpr_common_caps(struct drm_dp_aux *aux,
+                                  u8 caps[DP_LTTPR_COMMON_CAP_SIZE]);
+
+#define drm_dp_read_lttpr_phy_caps LINUX_I915_BACKPORT(drm_dp_read_lttpr_phy_caps)
+int drm_dp_read_lttpr_phy_caps(struct drm_dp_aux *aux,
+                               enum drm_dp_phy dp_phy,
+                               u8 caps[DP_LTTPR_PHY_CAP_SIZE]);
+#endif
+
 #ifdef DRM_DP_GET_ADJUST_NOT_PRESENT
 
 #define drm_dp_get_adjust_tx_ffe_preset LINUX_I915_BACKPORT(drm_dp_get_adjust_tx_ffe_preset)

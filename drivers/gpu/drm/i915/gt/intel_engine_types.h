@@ -526,6 +526,7 @@ struct intel_engine_cs {
 	 * be irq safe.
 	 */
 	void		(*submit_request)(struct i915_request *rq);
+	void		(*remove_active_request)(struct i915_request *rq);
 
 	/*
 	 * Called on signaling of a SUBMIT_FENCE, passing along the signaling
@@ -535,12 +536,6 @@ struct intel_engine_cs {
 					struct dma_fence *signal);
 
 	void		(*release)(struct intel_engine_cs *engine);
-
-	/*
-	 * Add / remove request from engine active tracking
-	 */
-	void		(*add_active_request)(struct i915_request *rq);
-	void		(*remove_active_request)(struct i915_request *rq);
 
 	/*
 	 * Get engine busyness and the time at which the busyness was sampled.

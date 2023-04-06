@@ -135,7 +135,12 @@ static const char *i915_fence_get_timeline_name(struct dma_fence *fence)
 
 static bool i915_fence_signaled(struct dma_fence *fence)
 {
-	return i915_request_completed(to_request(fence));
+	struct i915_request *rq = to_request(fence);
+
+	if (!i915_request_is_active(rq))
+		return false;
+
+	return i915_request_completed(rq);
 }
 
 static bool i915_fence_enable_signaling(struct dma_fence *fence)
@@ -243,7 +248,7 @@ static bool irq_work_imm(struct irq_work *wrk)
 	return false;
 }
 
-void i915_request_notify_execute_cb_imm(struct i915_request *rq)
+static void __notify_execute_cb_imm(struct i915_request *rq)
 {
 	__notify_execute_cb(rq, irq_work_imm);
 }
@@ -365,6 +370,36 @@ static void __rq_cancel_watchdog(struct i915_request *rq)
 		i915_request_put(rq);
 }
 
+static void remove_from_engine(struct i915_request *rq)
+{
+	struct i915_sched_engine *engine, *locked;
+
+	/*
+	 * Virtual engines complicate acquiring the engine timeline lock,
+	 * as their rq->engine pointer is not stable until under that
+	 * engine lock. The simple ploy we use is to take the lock then
+	 * check that the rq still belongs to the newly locked engine.
+	 */
+	locked = READ_ONCE(rq->engine)->sched_engine;
+	spin_lock_irq(&locked->lock);
+	while (unlikely(locked != (engine = READ_ONCE(rq->engine)->sched_engine))) {
+		spin_unlock(&locked->lock);
+		spin_lock(&engine->lock);
+		locked = engine;
+	}
+	list_del_init(&rq->sched.link);
+
+	clear_bit(I915_FENCE_FLAG_PQUEUE, &rq->fence.flags);
+	clear_bit(I915_FENCE_FLAG_HOLD, &rq->fence.flags);
+
+	/* Prevent further __await_execution() registering a cb, then flush */
+	set_bit(I915_FENCE_FLAG_ACTIVE, &rq->fence.flags);
+
+	spin_unlock_irq(&locked->lock);
+
+	__notify_execute_cb_imm(rq);
+}
+
 bool i915_request_retire(struct i915_request *rq)
 {
 	if (!__i915_request_is_complete(rq))
@@ -401,7 +436,7 @@ bool i915_request_retire(struct i915_request *rq)
 	}
 
 	if (test_and_set_bit(I915_FENCE_FLAG_BOOST, &rq->fence.flags))
-		intel_rps_dec_waiters(&rq->engine->gt->rps);
+		intel_rps_cancel_boost(&rq->engine->gt->rps);
 
 	/*
 	 * We only loosely track inflight requests across preemption,
@@ -413,8 +448,11 @@ bool i915_request_retire(struct i915_request *rq)
 	 * after removing the breadcrumb and signaling it, so that we do not
 	 * inadvertently attach the breadcrumb to a completed request.
 	 */
-	rq->engine->remove_active_request(rq);
+	if (!list_empty(&rq->sched.link))
+		remove_from_engine(rq);
 	GEM_BUG_ON(!llist_empty(&rq->execute_cb));
+	if (rq->engine->remove_active_request)
+		rq->engine->remove_active_request(rq);
 
 	__list_del_entry(&rq->link); /* poison neither prev/next (RCU walks) */
 
@@ -557,7 +595,7 @@ __await_execution(struct i915_request *rq,
 	if (llist_add(&cb->work.node.llist, &signal->execute_cb)) {
 		if (i915_request_is_active(signal) ||
 		    __request_in_flight(signal))
-			i915_request_notify_execute_cb_imm(signal);
+			__notify_execute_cb_imm(signal);
 	}
 
 	return 0;
@@ -696,7 +734,7 @@ bool __i915_request_submit(struct i915_request *request)
 	result = true;
 
 	GEM_BUG_ON(test_bit(I915_FENCE_FLAG_ACTIVE, &request->fence.flags));
-	engine->add_active_request(request);
+	list_move_tail(&request->sched.link, &engine->sched_engine->requests);
 active:
 	clear_bit(I915_FENCE_FLAG_PQUEUE, &request->fence.flags);
 	set_bit(I915_FENCE_FLAG_ACTIVE, &request->fence.flags);
@@ -1113,6 +1151,9 @@ _i915_request_create(struct intel_context *ce, gfp_t gfp)
 {
 	struct intel_timeline *tl;
 	struct i915_request *rq;
+
+	if (gfpflags_allow_blocking(gfp) && intel_context_throttle(ce))
+		return ERR_PTR(-EINTR);
 
 	tl = intel_context_timeline_lock(ce);
 	if (IS_ERR(tl))
@@ -1701,8 +1742,22 @@ i915_request_await_object(struct i915_request *to,
 			  struct drm_i915_gem_object *obj,
 			  bool write)
 {
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *fence;
+#else
 	struct dma_fence *excl;
+#endif
 	int ret = 0;
+
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	dma_resv_for_each_fence(&cursor, obj->base.resv,
+			dma_resv_usage_rw(write), fence) {
+		ret = i915_request_await_dma_fence(to, fence);
+		if (ret)
+			break;
+	}
+#else
 
 	if (write) {
 		struct dma_fence **shared;
@@ -1734,7 +1789,7 @@ i915_request_await_object(struct i915_request *to,
 
 		dma_fence_put(excl);
 	}
-
+#endif
 	return ret;
 }
 
@@ -2092,7 +2147,7 @@ long __i915_request_wait_timeout(struct i915_request *rq,
 	 * (bad for battery).
 	 */
 	if (flags & I915_WAIT_PRIORITY && !i915_request_started(rq))
-		intel_rps_boost(rq);
+		intel_rps_boost_for_request(rq);
 
 	wait.tsk = current;
 	if (dma_fence_add_callback(&rq->fence, &wait.cb, request_wait_wake))

@@ -26,9 +26,5 @@ void intel_dsc_dsi_pps_write(struct intel_encoder *encoder,
 			     const struct intel_crtc_state *crtc_state);
 void intel_dsc_dp_pps_write(struct intel_encoder *encoder,
 			    const struct intel_crtc_state *crtc_state);
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-void intel_dsc_hdmi_pps_write(struct intel_encoder *encoder,
-			      const struct intel_crtc_state *crtc_state);
-#endif
 
 #endif /* __INTEL_VDSC_H__ */

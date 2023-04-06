@@ -520,10 +520,6 @@ intel_ddi_transcoder_func_reg_val_get(struct intel_encoder *encoder,
 			temp |= TRANS_DDI_HDMI_SCRAMBLING;
 		if (crtc_state->hdmi_high_tmds_clock_ratio)
 			temp |= TRANS_DDI_HIGH_TMDS_CHAR_RATE;
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-		if (crtc_state->frl.enable)
-			temp |= TRANS_DDI_PORT_WIDTH(crtc_state->lane_count);
-#endif
 	} else if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_ANALOG)) {
 		temp |= TRANS_DDI_MODE_SELECT_FDI_OR_128B132B;
 		temp |= (crtc_state->fdi_lanes - 1) << 1;
@@ -2701,39 +2697,6 @@ static void intel_ddi_pre_enable_dp(struct intel_atomic_state *state,
 		intel_ddi_set_dp_msa(crtc_state, conn_state);
 }
 
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-static void intel_hdmi_configure_frl_dfm(struct intel_encoder *encoder,
-					 const struct intel_crtc_state *crtc_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	enum transcoder cpu_trans = crtc_state->cpu_transcoder;
-	u32 val;
-	i915_reg_t reg;
-
-	reg = TRANS_HDMI_FRL_CFG(cpu_trans);
-	val = TRANS_HDMI_R_B_SCHED_ENABLE(crtc_state->frl.rsrc_sched_en);
-	val |= TRANS_HDMI_ACTIVE_CHAR_BUF_THRESH(crtc_state->frl.active_char_buf_threshold);
-	val |= TRANS_HDMI_MIN_BLANK_CHAR(TRANS_HDMI_MIN_BLANK_CHAR_VAL);
-	intel_de_write(dev_priv, reg, val);
-
-	reg = TRANS_HDMI_FRL_DFMWRCTL(cpu_trans);
-	val = TB_ACTUAL_OFFSET(crtc_state->frl.tb_actual);
-	intel_de_rmw(dev_priv, reg, TB_ACTUAL_OFFSET_MASK, val);
-
-	reg = TRANS_HDMI_FRL_DFMTHRSH(cpu_trans);
-	val = TB_MIN_THESHOLD(crtc_state->frl.tb_threshold_min);
-	intel_de_rmw(dev_priv, reg, TB_MIN_THESHOLD_MASK, val);
-
-	reg = PIPE_LINK_M1(cpu_trans);
-	val = crtc_state->frl.link_m_ext;
-	intel_de_write(dev_priv, reg, val);
-
-	reg = PIPE_LINK_N1(cpu_trans);
-	val = crtc_state->frl.link_n_ext;
-	intel_de_write(dev_priv, reg, val);
-}
-#endif 
-
 static void intel_ddi_pre_enable_hdmi(struct intel_atomic_state *state,
 				      struct intel_encoder *encoder,
 				      const struct intel_crtc_state *crtc_state,
@@ -2754,22 +2717,9 @@ static void intel_ddi_pre_enable_hdmi(struct intel_atomic_state *state,
 
 	intel_ddi_enable_pipe_clock(encoder, crtc_state);
 
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-	intel_hdmi_start_frl(encoder, crtc_state);
-
-	intel_hdmi_set_hcactive(dev_priv, crtc_state);
-	intel_dsc_hdmi_pps_write(encoder, crtc_state);
-
-	/* set all the DFM parameters,TBD: Fixed Rate CFG */
-	if (crtc_state->frl.enable)
-		intel_hdmi_configure_frl_dfm(encoder, crtc_state);
-#endif
 	dig_port->set_infoframes(encoder,
 				 crtc_state->has_infoframe,
 				 crtc_state, conn_state);
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	intel_mtl_write_emp(encoder, crtc_state);
-#endif
 }
 
 static void intel_ddi_pre_enable(struct intel_atomic_state *state,
@@ -2847,13 +2797,6 @@ static void mtl_disable_ddi_buf(struct intel_encoder *encoder,
 		/* 3.c Poll for PORT_BUF_CTL Idle Status == 1, timeout after 100us */
 		mtl_wait_ddi_buf_idle(dev_priv, port);
 	}
-
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-	/* HDMI: Clear PORT_BUF_CTL1 HDMI FRL Shifter Enable to 0. */
-	if (crtc_state->frl.enable)
-		intel_de_rmw(dev_priv, XELPDP_PORT_BUF_CTL1(port),
-			     XELPDP_PORT_HDMI_FRL_SHFTR_EN, 0);
-#endif
 
 	/* 3.d Disable D2D Link */
 	mtl_ddi_disable_d2d_link(encoder);
@@ -2984,11 +2927,6 @@ static void intel_ddi_post_disable_hdmi(struct intel_atomic_state *state,
 	struct intel_digital_port *dig_port = enc_to_dig_port(encoder);
 	struct intel_hdmi *intel_hdmi = &dig_port->hdmi;
 
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-	enum transcoder hdmi_transcoder;
-	u8 buf;
-
-#endif
 	dig_port->set_infoframes(encoder, false,
 				 old_crtc_state, old_conn_state);
 
@@ -3000,18 +2938,6 @@ static void intel_ddi_post_disable_hdmi(struct intel_atomic_state *state,
 	if (DISPLAY_VER(dev_priv) >= 12)
 		intel_ddi_disable_pipe_clock(old_crtc_state);
 
-#ifndef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-	if (old_crtc_state->frl.enable) {
-		hdmi_transcoder = old_crtc_state->cpu_transcoder;
-		buf = intel_de_read(dev_priv,
-				    TRANS_HDMI_FRL_CFG(hdmi_transcoder));
-		buf &= ~(TRANS_HDMI_FRL_ENABLE | TRANS_HDMI_FRL_TRAINING_COMPLETE);
-
-		intel_de_write(dev_priv,
-			       TRANS_HDMI_FRL_CFG(hdmi_transcoder), buf);
-	}
-
-#endif
 	intel_display_power_put(dev_priv,
 				dig_port->ddi_io_power_domain,
 				fetch_and_zero(&dig_port->ddi_io_wakeref));
@@ -3244,18 +3170,6 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 	 * needs to be filled with either 3 or 4 lanes. For TMDS mode this
 	 * is always filled with 4 lanes, already set in the crtc_state.
 	 */
-
-#ifdef NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-	if (IS_ALDERLAKE_P(dev_priv) && intel_phy_is_tc(dev_priv, phy)) {
-	    drm_WARN_ON(&dev_priv->drm, !intel_tc_port_in_legacy_mode(dig_port));
-	    intel_de_write(dev_priv, DDI_BUF_CTL(port),
-			   dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE |
-			   DDI_BUF_CTL_TC_PHY_OWNERSHIP);
-	} else {
-		intel_de_write(dev_priv, DDI_BUF_CTL(port),
-		               dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE);
-	}
-#else	
 	if (DISPLAY_VER(dev_priv) > 13) {
 		u32 ddi_buf = 0;
 		u8  lane_count = mtl_get_port_width(crtc_state->lane_count);
@@ -3268,14 +3182,8 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 		if (intel_bios_is_lane_reversal_needed(dev_priv, port))
 			port_buf |= XELPDP_PORT_REVERSAL;
 
-		if (crtc_state->frl.enable) {
-			port_buf |= XELPDP_PORT_HDMI_FRL_SHFTR_EN;
-			port_buf |= XELPDP_PORT_BUF_PORT_DATA_20BIT;
-			ddi_buf |= DDI_BUF_PORT_DATA_20BIT;
-		} else {
-			port_buf &= ~XELPDP_PORT_BUF_PORT_DATA_WIDTH_MASK;
-			ddi_buf &= ~DDI_BUF_PORT_DATA_WIDTH_MASK;
-		}
+		port_buf &= ~XELPDP_PORT_BUF_PORT_DATA_WIDTH_MASK;
+		ddi_buf &= ~DDI_BUF_PORT_DATA_WIDTH_MASK;
 
 		intel_de_write(dev_priv, XELPDP_PORT_BUF_CTL1(port), port_buf);
 		intel_de_write(dev_priv, DDI_BUF_CTL(port),
@@ -3291,7 +3199,6 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 		intel_de_write(dev_priv, DDI_BUF_CTL(port),
 			       dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE);
 	}
-#endif
 
 	intel_audio_codec_enable(encoder, crtc_state, conn_state);
 }
@@ -3306,11 +3213,7 @@ static void intel_enable_ddi(struct intel_atomic_state *state,
 	if (!intel_crtc_is_bigjoiner_slave(crtc_state))
 		intel_ddi_enable_transcoder_func(encoder, crtc_state);
 
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	intel_vrr_enable(to_intel_connector(conn_state->connector), crtc_state);
-#else
 	intel_vrr_enable(encoder, crtc_state);
-#endif
 
 	intel_enable_transcoder(crtc_state);
 
@@ -3920,10 +3823,6 @@ static void intel_ddi_get_config(struct intel_encoder *encoder,
 	intel_read_dp_sdp(encoder, pipe_config, DP_SDP_VSC);
 
 	intel_psr_get_config(encoder, pipe_config);
-
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	intel_mtl_read_emp(encoder, pipe_config);
-#endif
 }
 
 void intel_ddi_get_clock(struct intel_encoder *encoder,

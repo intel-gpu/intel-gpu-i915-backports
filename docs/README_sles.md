@@ -27,7 +27,6 @@ Please note that dkms installation will skip if the kernel headers are not insta
 we have dependencies on the following packages
 
 For SLES
-  - dkms
   - make
   - linux-glibc-devel
   - lsb-release
@@ -36,9 +35,13 @@ For SLES
   - bison
   - awk
 ```
-sudo zypper install dkms make linux-glibc-devel lsb-release rpm-build bison flex awk
+sudo zypper install make linux-glibc-devel lsb-release rpm-build bison flex awk
 ```
+For dkms packages, we need to install `dkms` package along with above packages.
 
+```
+sudo zypper install dkms
+```
 # Dependencies
 
 This driver is part of a collection of kernel-mode drivers that enable support for Intel graphics. The backports collection within https://github.com/intel-gpu includes:
@@ -51,9 +54,9 @@ This driver is part of a collection of kernel-mode drivers that enable support f
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
 
-# Dynamic Kernel Module Support(DKMS) based package creation
+# Package creation
 
-## SLES
+## Dynamic Kernel Module Support(DKMS) 
 There are two ways to create i915 dkms packages.
 1. Using default command:
 ```
@@ -83,12 +86,28 @@ example:
        ##### List of supported osv kernel versions #####
        SLES15_SP4
        VANILLA_5.15LTS
+       VANILLA
 
        Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4
 
-### Installation
- ```
+### DKMS Installation
+```
 sudo rpm -ivh intel-i915-dkms*.rpm
+# Reboot the device after installation of all packages.
+sudo reboot
+```
+
+## Binary RPM
+Creation of binary rpm can be done using the below command.
+```
+make binrpm-pkg
+```
+Generated Files:
+intel-i915-kmp-default-<version>-1.x86_64.rpm
+
+### Binary Installation
+```
+sudo rpm -ivh intel-i915-kmp-default*.rpm
 # Reboot the device after installation of all packages.
 sudo reboot
 ```

@@ -5,7 +5,10 @@
 
 #include <uapi/drm/i915_drm.h>
 
+#include "gt/gen8_engine_cs.h"
+#include "gt/intel_context.h"
 #include "gt/intel_engine_pm.h"
+#include "gt/intel_engine_regs.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
@@ -14,7 +17,82 @@
 #include "intel_memory_region.h"
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_lmem.h"
+#include "gt/intel_rps.h"
+#include "gt/intel_gt_clock_utils.h"
 #include "i915_drv.h"
+
+static u32 *emit_timestamp(struct i915_request *rq, u32 *cs, int gpr)
+{
+	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRI_LRM_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP_UDW(0));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, gpr));
+
+	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRI_LRM_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(0));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, gpr));
+
+	return cs;
+}
+
+static int emit_start_timestamp(struct i915_request *rq)
+{
+	u32 *cs;
+
+	cs = intel_ring_begin(rq, 6);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	cs = emit_timestamp(rq, cs, 0);
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static u32 *emit_mem_fence(struct i915_request *rq, u32 *cs)
+{
+	u32 scratch = i915_ggtt_offset(rq->engine->gt->scratch);
+
+	return gen8_emit_ggtt_write(cs, 0, scratch, 0);
+}
+
+static int emit_update_counters(struct i915_request *rq, u64 size)
+{
+	u32 global = i915_ggtt_offset(rq->engine->gt->counters.vma);
+	u32 *cs;
+
+	cs = intel_ring_begin(rq, 26);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	cs = emit_mem_fence(rq, cs);
+	cs = emit_timestamp(rq, cs, 1);
+
+	/* Compute elapsed time (end - start) */
+	*cs++ = MI_MATH(4);
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(1));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(0));
+	*cs++ = MI_MATH_SUB;
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(0), MI_MATH_REG_ACCU);
+
+	/* Increment cycle counters */
+	*cs++ = MI_ATOMIC | MI_ATOMIC_ADD64 | MI_ATOMIC64 | MI_USE_GGTT;
+	*cs++ = global + INTEL_GT_CLEAR_CYCLES * sizeof(u64);
+	*cs++ = 0;
+
+	/* Increment byte counters */
+	*cs++ = MI_LOAD_REGISTER_IMM(2) | MI_LRI_LRM_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, 0));
+	*cs++ = lower_32_bits(size);
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, 0));
+	*cs++ = upper_32_bits(size);
+
+	*cs++ = MI_ATOMIC | MI_ATOMIC_ADD64 | MI_ATOMIC64 | MI_USE_GGTT;
+	*cs++ = global + INTEL_GT_CLEAR_BYTES * sizeof(u64);
+	*cs++ = 0;
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
 
 static struct intel_context *
 get_blitter_context(const struct intel_gt *gt, int idx)
@@ -439,6 +517,38 @@ xy_emit_clear(struct i915_request *rq, u64 offset, u32 size, u32 page_shift)
 	return 0;
 }
 
+static struct i915_request *
+chain_request(struct i915_request *rq, struct i915_request *chain)
+{
+	struct intel_timeline *tl = rq->context->timeline;
+	struct i915_sched_attr attr = {};
+
+	/*
+	 * Hold the request until the next is chained. We need
+	 * a complete chain in order to propagate any error to the
+	 * final fence, and into the obj->mm.migrate. If we drop
+	 * the error at any point (due to a completed request),
+	 * then we may continue to use the uninitialised contents.
+	 */
+
+	lockdep_assert_held(&tl->mutex);
+	lockdep_unpin_lock(&tl->mutex, rq->cookie);
+
+	i915_sw_fence_await(&rq->submit);
+	i915_request_get(rq);
+
+	trace_i915_request_add(rq);
+	__i915_request_commit(rq);
+	__i915_request_queue(rq, &attr);
+
+	if (chain) {
+		i915_sw_fence_complete(&chain->submit);
+		i915_request_put(chain);
+	}
+
+	return rq;
+}
+
 static int
 clear_blt(struct intel_context *ce,
 	  struct sg_table *sgt,
@@ -454,16 +564,21 @@ clear_blt(struct intel_context *ce,
 		flags & I915_BO_ALLOC_USER &&
 		HAS_FLAT_CCS(ce->engine->i915);
 	struct sgt_iter it;
-	int err = 0;
 	u64 offset;
+	int err;
 
 	GEM_BUG_ON(ce->ring->size < SZ_64K);
 	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
 	GEM_BUG_ON(!drm_mm_node_allocated(&ce->engine->gt->flat));
 
-	intel_engine_pm_get(ce->engine);
-
 	*out = NULL;
+
+	err = intel_context_throttle(ce);
+	if (err)
+		return err;
+
+	mutex_lock(&ce->timeline->mutex);
+	intel_context_enter(ce);
 	__for_each_sgt_daddr(offset, it, sgt, step) {
 		struct i915_request *rq;
 		u32 length;
@@ -475,11 +590,15 @@ clear_blt(struct intel_context *ce,
 		GEM_BUG_ON(offset < ce->engine->gt->flat.start);
 		GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
 
-		rq = i915_request_create(ce);
+		rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
 			break;
 		}
+
+		err = emit_start_timestamp(rq);
+		if (err)
+			goto skip;
 
 		if (use_pvc_memset)
 			err = pvc_emit_clear(rq, offset, length, page_shift);
@@ -487,29 +606,21 @@ clear_blt(struct intel_context *ce,
 			err = xy_emit_clear(rq, offset, length, page_shift);
 		if (err == 0 && use_ccs_clear)
 			err = emit_ccs_clear(rq, offset, length);
+		if (err)
+			goto skip;
 
-		/*
-		 * Hold the request until the next is chained. We need
-		 * a complete chain in order to propagate any error to the
-		 * final fence, and into the obj->mm.migrate. If we drop
-		 * the error at any point (due to a completed request),
-		 * then we may continue to use the uninitialised contents.
-		 */
-		i915_sw_fence_await(&rq->submit);
-		i915_request_get(rq);
-		i915_request_add(rq);
+		err = emit_update_counters(rq, length);
+		if (err)
+			goto skip;
 
-		if (*out) {
-			i915_sw_fence_complete(&(*out)->submit);
-			i915_request_put(*out);
-		}
-		*out = rq;
-
+skip:
+		*out = chain_request(rq, *out);
 		if (err)
 			break;
 	}
+	intel_context_exit(ce);
+	mutex_unlock(&ce->timeline->mutex);
 
-	intel_engine_pm_put(ce->engine);
 	return err;
 }
 
@@ -891,6 +1002,101 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 	i915_gem_object_init_memory_region(obj, mem);
 
 	return 0;
+}
+
+int i915_gem_clear_all_lmem(struct intel_gt *gt, struct drm_printer *p)
+{
+	struct i915_request *last = NULL;
+	struct intel_memory_region *mr;
+	struct intel_context *ce;
+	struct sg_table *pages;
+	intel_wakeref_t wf;
+	u64 cycles, bytes;
+	int err = 0;
+	int i;
+
+	mr = gt->lmem;
+	if (!mr)
+		return 0;
+
+	pages = kmalloc(sizeof(*pages), GFP_KERNEL);
+	if (!pages)
+		return -ENOMEM;
+
+	if (sg_alloc_table(pages, 1, GFP_KERNEL)) {
+		err = -ENOMEM;
+		goto err_pages;
+	}
+
+	wf = intel_gt_pm_get(gt);
+	intel_rps_boost(&gt->rps);
+
+	ce = get_blitter_context(gt, BCS0);
+	if (!ce) {
+		err = -EIO;
+		goto err_wf;
+	}
+
+	cycles = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+	bytes = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_BYTES]);
+
+	mutex_lock(&mr->mm_lock);
+	for (i = mr->mm.max_order; i >= 0; i--) {
+		struct i915_buddy_block *block;
+
+		list_for_each_entry(block, &mr->mm.free_list[i], link) {
+			u64 sz = i915_buddy_block_size(&mr->mm, block);
+			u64 offset = i915_buddy_block_offset(block);
+			struct i915_request *rq;
+
+			while (sz) { /* sg_dma_len() is unsigned int */
+				u64 len = min_t(u64, sz, SZ_2G);
+
+				sg_dma_address(pages->sgl) = offset;
+				sg_dma_len(pages->sgl) = len;
+				GEM_BUG_ON(!sg_is_last(pages->sgl));
+
+				err = clear_blt(ce, pages, len, 0, &rq);
+				if (rq) {
+					i915_sw_fence_complete(&rq->submit);
+					if (last)
+						i915_request_put(last);
+					last = rq;
+				}
+				if (err)
+					goto unlock;
+
+				sz -= len;
+				offset += len;
+			}
+		}
+	}
+unlock:
+	if (last) {
+		i915_request_wait(last, 0, MAX_SCHEDULE_TIMEOUT);
+		if (err == 0)
+			err = last->fence.error;
+		i915_request_put(last);
+	}
+	mutex_unlock(&mr->mm_lock);
+
+	bytes += READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_BYTES]);
+	cycles += READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+	cycles = intel_gt_clock_interval_to_ns(gt, cycles);
+	if (err == 0 && cycles && p)
+		drm_printf(p, "%s%d, cleared %lluMiB in %lldms, %lldMiB/s\n",
+			   gt->name, gt->info.id,
+			   bytes >> 20,
+			   div_u64(cycles, NSEC_PER_MSEC),
+			   div64_u64(mul_u64_u32_shr(bytes, NSEC_PER_SEC, 20), cycles));
+
+err_wf:
+	intel_rps_cancel_boost(&gt->rps);
+	intel_gt_pm_put(gt, wf);
+	sg_free_table(pages);
+err_pages:
+	kfree(pages);
+	return err;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

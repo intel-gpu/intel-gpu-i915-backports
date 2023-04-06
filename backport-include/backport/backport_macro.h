@@ -10,6 +10,62 @@
  */
 #define BPM_DRM_DP_HELPER_DIR_DISPLAY_PRESENT
 
+/*
+ * 6a99099fe1d6 drm/display: Move HDCP helpers into display-helper module
+ */
+#define BPM_DISPLAY_DRM_HDCP_PRESENT
+
+/*
+ * 2a64b147350f drm/display: Move DSC header and helpers into display-helper module
+ */
+#define BPM_DISPLAY_DRM_DSC_PRESENT
+
+/*
+ * 644edf52b630 drm/display: Move SCDC helpers into display-helper library
+ */
+#define BPM_DISPLAY_DRM_SCDC_HELPER_PRESENT
+
+/*
+ * 73511edf8b19 dma-buf: specify usage while adding fences to dma_resv obj v7
+ * 842d9346b2fd drm/i915: Individualize fences before adding to dma_resv obj
+ */
+#define BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
+
+/*
+ * 912ff2ebd695 drm/i915: use the new iterator in i915_gem_busy_ioctl v2
+ */
+#define BPM_DMA_RESV_ITER_BEGIN_PRESENT
+
+/*
+ * f7fd7814f34c drm/i915: Remove dma_resv_prune
+ */
+#define BPM_DMA_RESV_PRUNE_NOT_PRESENT
+
+/*
+ * c8d4c18bfbc4 dma-buf/drivers: make reserving a shared slot mandatory v4
+ */
+#define BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
+
+/*
+ * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
+ */
+#define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
+
+/*
+ * 4fc8cb47fcfd drm/display: Move HDMI helpers into display-helper module
+ */
+#define BPM_DISPLAY_DRM_HDMI_HELPER_PRESENT
+
+/*
+ * c4f135d64382 workqueue: Wrap flush_workqueue() using a macro
+ */
+#define BPM_FLUSH_WQ_WITH_WARN_WRAPPER_PRESENT
+
+/*
+ * 657586e474bd drm/i915: Add a DP1.2 compatible way to read LTTPR capabilities
+ */
+#define BPM_DP_READ_LTTPR_CAPS_DPCD_ARG_NOT_PRESENT
+
 #elif LINUX_VERSION_IN_RANGE(5,18,0, 5,19,0)
 
 /*
@@ -49,6 +105,14 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(5,18,0) */
 
+#if LINUX_VERSION_IN_RANGE(5,17,0, 5,19,0)
+
+/*
+ * 6b41323a265a02b dma-buf: rename dma_resv_get_excl_rcu to _unlocked
+ */
+#define DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
+
+#endif
 
 #if LINUX_VERSION_IS_GEQ(5,17,2) || \
 	(LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
@@ -102,12 +166,6 @@
  *
  */
 #define COUNT_STRUCT_SLAB_PRESENT
-
-/*
- * 6b41323a265a02b dma-buf: rename dma_resv_get_excl_rcu to _unlocked
- *
- */
-#define DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
 
 /*
  * d122019bf061c mm: Split slab into its own type
@@ -283,14 +341,6 @@
 #define DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
 
 /*
- * Add macro to disable HDMI21 features
- * Introduced in DII_6023
- * 623878a1e7da2c Add support for HDMI21 FRL link training
- * b00ac558fad656 Add support for CVTEM packets for HDMI21 DSC
- */
-#define NATIVE_HDMI21_FEATURES_NOT_SUPPORTED
-
-/*
  * Add macro to disable luminance range info backlight changes
  * Introduced in DII_6152
  * 7706b76ec9090b Backport couple of fixes for dpcd controlled backlight
@@ -303,12 +353,5 @@
  * a82ae9f6b7d716 Support 24 bit DGLUT for MTL+
  */
 #define BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
-
-/*
- * Add macro to disable HDMI2.1 VRR support
- * Introduced in DII_6556
- * 64ccfe30b7e258 Enable support for HDMI2.1 VRR
- */
-#define VRR_FEATURE_NOT_SUPPORTED
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

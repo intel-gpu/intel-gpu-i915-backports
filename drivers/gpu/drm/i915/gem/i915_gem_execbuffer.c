@@ -1265,11 +1265,18 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 			}
 		}
 
+#ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
+		/* Reserve enough slots to accommodate composite fences */
+		err = dma_resv_reserve_shared(vma->resv, eb->num_batches);
+		if (err)
+			return err;
+#else
 		if (!(ev->flags & EXEC_OBJECT_WRITE)) {
 			err = dma_resv_reserve_shared(vma->resv, 1);
 			if (err)
 				return err;
 		}
+#endif
 
 		GEM_BUG_ON(drm_mm_node_allocated(&vma->node) &&
 			   eb_vma_misplaced(&eb->exec[i], vma, ev->flags));

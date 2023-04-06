@@ -406,7 +406,7 @@ void intel_engine_set_hwsp_writemask(struct intel_engine_cs *engine, u32 mask)
 	if (IS_SRIOV_VF(engine->i915))
 		return;
 
-	if (engine->gt->i915->quiesce_gpu)
+	if (engine->i915->quiesce_gpu)
 		return;
 
 	/*
@@ -1305,9 +1305,9 @@ static int engine_setup_common(struct intel_engine_cs *engine)
 	return 0;
 
 err_cmd_parser:
-	i915_sched_engine_put(engine->sched_engine);
+	i915_sched_engine_put(fetch_and_zero(&engine->sched_engine));
 err_sched_engine:
-	intel_breadcrumbs_put(engine->breadcrumbs);
+	intel_breadcrumbs_put(fetch_and_zero(&engine->breadcrumbs));
 err_status:
 	cleanup_status_page(engine);
 	return err;
@@ -1640,8 +1640,8 @@ void intel_engine_cleanup_common(struct intel_engine_cs *engine)
 {
 	GEM_BUG_ON(!list_empty(&engine->sched_engine->requests));
 
-	i915_sched_engine_put(engine->sched_engine);
-	intel_breadcrumbs_put(engine->breadcrumbs);
+	i915_sched_engine_put(fetch_and_zero(&engine->sched_engine));
+	intel_breadcrumbs_put(fetch_and_zero(&engine->breadcrumbs));
 
 	intel_engine_fini_retire(engine);
 	intel_engine_cleanup_cmd_parser(engine);
@@ -1892,11 +1892,11 @@ void intel_engine_get_instdone(const struct intel_engine_cs *engine,
 		for_each_ss_steering(iter, engine->gt, slice, subslice) {
 			instdone->sampler[slice][subslice] =
 				intel_gt_mcr_read(engine->gt,
-						  GEN7_SAMPLER_INSTDONE,
+						  GEN8_SAMPLER_INSTDONE,
 						  slice, subslice);
 			instdone->row[slice][subslice] =
 				intel_gt_mcr_read(engine->gt,
-						  GEN7_ROW_INSTDONE,
+						  GEN8_ROW_INSTDONE,
 						  slice, subslice);
 		}
 
@@ -2225,7 +2225,8 @@ static void intel_engine_print_registers(struct intel_engine_cs *engine,
 		drm_printf(m, "\tIPEHR: 0x%08x\n", ENGINE_READ(engine, IPEHR));
 	}
 
-	if (HAS_EXECLISTS(dev_priv) && !intel_engine_uses_guc(engine)) {
+	if (intel_engine_uses_guc(engine)) {
+	} else if (HAS_EXECLISTS(dev_priv) && engine->sched_engine) {
 		struct i915_request * const *port, *rq;
 		const u32 *hws =
 			&engine->status_page.addr[I915_HWS_CSB_BUF0_INDEX];
@@ -2415,36 +2416,15 @@ static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, 
 	}
 }
 
-void intel_engine_dump_active_requests(struct list_head *requests,
-				       struct i915_request *hung_rq,
-				       struct drm_printer *m)
-{
-	struct i915_request *rq;
-	const char *msg;
-	enum i915_request_state state;
-
-	list_for_each_entry(rq, requests, sched.link) {
-		if (rq == hung_rq)
-			continue;
-
-		state = i915_test_request_state(rq);
-		if (state < I915_REQUEST_QUEUED)
-			continue;
-
-		if (state == I915_REQUEST_ACTIVE)
-			msg = "\t\tactive on engine";
-		else
-			msg = "\t\tactive in queue";
-
-		engine_dump_request(rq, m, msg);
-	}
-}
-
 static void engine_dump_active_requests(struct intel_engine_cs *engine, struct drm_printer *m)
 {
-	struct i915_request *hung_rq = NULL;
-	struct intel_context *ce;
-	bool guc;
+	struct i915_sched_engine *se;
+	struct i915_request *rq;
+	unsigned long flags;
+
+	se = engine->sched_engine;
+	if (!se)
+		return;
 
 	/*
 	 * No need for an engine->irq_seqno_barrier() before the seqno reads.
@@ -2453,27 +2433,20 @@ static void engine_dump_active_requests(struct intel_engine_cs *engine, struct d
 	 * But the intention here is just to report an instantaneous snapshot
 	 * so that's fine.
 	 */
-	lockdep_assert_held(&engine->sched_engine->lock);
+
+	spin_lock_irqsave(&se->lock, flags);
 
 	drm_printf(m, "\tRequests:\n");
-
-	guc = intel_uc_uses_guc_submission(&engine->gt->uc);
-	if (guc) {
-		ce = intel_engine_get_hung_context(engine);
-		if (ce)
-			hung_rq = intel_context_find_active_request(ce);
-	} else {
-		hung_rq = intel_engine_execlist_find_hung_request(engine);
+	list_for_each_entry(rq, &se->requests, sched.link) {
+		if (rq->execution_mask & engine->mask &&
+		    !__i915_request_is_complete(rq) &&
+		    i915_request_started(rq))
+			engine_dump_request(rq, m, "\t");
 	}
 
-	if (hung_rq)
-		engine_dump_request(hung_rq, m, "\t\thung");
+	drm_printf(m, "\tOn hold?: %lu\n", list_count(&se->hold));
 
-	if (guc)
-		intel_guc_dump_active_requests(engine, hung_rq, m);
-	else
-		intel_engine_dump_active_requests(&engine->sched_engine->requests,
-						  hung_rq, m);
+	spin_unlock_irqrestore(&se->lock, flags);
 }
 
 void intel_engine_dump(struct intel_engine_cs *engine,
@@ -2483,7 +2456,6 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	struct i915_gpu_error * const error = &engine->i915->gpu_error;
 	struct i915_request *rq;
 	intel_wakeref_t wakeref;
-	unsigned long flags;
 	ktime_t dummy;
 
 	if (header) {
@@ -2525,12 +2497,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		   i915_reset_count(error));
 	print_properties(engine, m);
 
-	spin_lock_irqsave(&engine->sched_engine->lock, flags);
 	engine_dump_active_requests(engine, m);
-
-	drm_printf(m, "\tOn hold?: %lu\n",
-		   list_count(&engine->sched_engine->hold));
-	spin_unlock_irqrestore(&engine->sched_engine->lock, flags);
 
 	drm_printf(m, "\tMMIO base:  0x%08x\n", engine->mmio_base);
 	wakeref = intel_runtime_pm_get_if_in_use(engine->uncore->rpm);
@@ -2543,11 +2510,12 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 
 	intel_execlists_show_requests(engine, m, i915_request_show, 8);
 
-	drm_printf(m, "HWSP [0x%08x,0x%08llx):\n",
-		   i915_ggtt_offset(engine->status_page.vma),
-		   i915_ggtt_offset(engine->status_page.vma) + engine->status_page.vma->node.size);
-
-	hexdump(m, engine->status_page.addr, PAGE_SIZE);
+	if (engine->status_page.vma) {
+		drm_printf(m, "HWSP [0x%08x,0x%08llx):\n",
+				i915_ggtt_offset(engine->status_page.vma),
+				i915_ggtt_offset(engine->status_page.vma) + engine->status_page.vma->node.size);
+		hexdump(m, engine->status_page.addr, PAGE_SIZE);
+	}
 
 	drm_printf(m, "Idle? %s\n", str_yes_no(intel_engine_is_idle(engine)));
 
@@ -2581,16 +2549,11 @@ intel_engine_create_virtual(struct intel_engine_cs **siblings,
 }
 
 struct i915_request *
-intel_engine_execlist_find_hung_request(struct intel_engine_cs *engine)
+intel_engine_find_active_request(struct intel_engine_cs *engine)
 {
 	struct i915_request *request, *active = NULL;
-
-	/*
-	 * This search does not work in GuC submission mode. However, the GuC
-	 * will report the hanging context directly to the driver itself. So
-	 * the driver should never get here when in GuC mode.
-	 */
-	GEM_BUG_ON(intel_uc_uses_guc_submission(&engine->gt->uc));
+	struct i915_sched_engine *se;
+	unsigned long flags;
 
 	/*
 	 * We are called by the error capture, reset and to dump engine
@@ -2603,7 +2566,6 @@ intel_engine_execlist_find_hung_request(struct intel_engine_cs *engine)
 	 * At all other times, we must assume the GPU is still running, but
 	 * we only care about the snapshot of this moment.
 	 */
-	lockdep_assert_held(&engine->sched_engine->lock);
 
 	rcu_read_lock();
 	request = execlists_active(&engine->execlists);
@@ -2614,21 +2576,28 @@ intel_engine_execlist_find_hung_request(struct intel_engine_cs *engine)
 			if (__i915_request_is_complete(request))
 				break;
 
-			active = request;
+			if (request->execution_mask & engine->mask)
+				active = request;
 		}
 	}
 	rcu_read_unlock();
 	if (active)
 		return active;
 
-	list_for_each_entry(request, &engine->sched_engine->requests,
-			    sched.link) {
+	se = engine->sched_engine;
+	if (!se)
+		return active;
+
+	spin_lock_irqsave(&se->lock, flags);
+	list_for_each_entry(request, &se->requests, sched.link) {
 		if (i915_test_request_state(request) != I915_REQUEST_ACTIVE)
 			continue;
 
-		active = request;
+		if (request->execution_mask & engine->mask)
+			active = request;
 		break;
 	}
+	spin_unlock_irqrestore(&se->lock, flags);
 
 	return active;
 }

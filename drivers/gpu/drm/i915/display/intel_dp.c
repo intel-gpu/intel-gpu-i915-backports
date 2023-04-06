@@ -954,14 +954,23 @@ intel_dp_mode_valid_downstream(struct intel_connector *connector,
 	return MODE_OK;
 }
 
+bool intel_dp_need_bigjoiner(struct intel_dp *intel_dp,
+			     int hdisplay, int clock)
+{
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+
+	if (!intel_dp_can_bigjoiner(intel_dp))
+		return false;
+
+	return clock > i915->max_dotclk_freq || hdisplay > 5120;
+}
+
 static enum drm_mode_status
 intel_dp_mode_valid(struct drm_connector *_connector,
 		    struct drm_display_mode *mode)
 {
 	struct intel_connector *connector = to_intel_connector(_connector);
 	struct intel_dp *intel_dp = intel_attached_dp(connector);
-	struct intel_digital_port *intel_dig_port = dp_to_dig_port(intel_dp);
-	struct intel_encoder *encoder = &intel_dig_port->base;
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	const struct drm_display_mode *fixed_mode;
 	int target_clock = mode->clock;
@@ -990,7 +999,7 @@ intel_dp_mode_valid(struct drm_connector *_connector,
 	if (mode->clock < 10000)
 		return MODE_CLOCK_LOW;
 
-	if (intel_need_bigjoiner(encoder, mode->hdisplay, target_clock)) {
+	if (intel_dp_need_bigjoiner(intel_dp, mode->hdisplay, target_clock)) {
 		bigjoiner = true;
 		max_dotclk *= 2;
 	}
@@ -1703,8 +1712,8 @@ intel_dp_compute_link_config(struct intel_encoder *encoder,
 		    limits.max_lane_count, limits.max_rate,
 		    limits.max_bpp, adjusted_mode->crtc_clock);
 
-	if (intel_need_bigjoiner(encoder, adjusted_mode->crtc_hdisplay,
-				 adjusted_mode->crtc_clock))
+	if (intel_dp_need_bigjoiner(intel_dp, adjusted_mode->crtc_hdisplay,
+				    adjusted_mode->crtc_clock))
 		pipe_config->bigjoiner_pipes = GENMASK(crtc->pipe + 1, crtc->pipe);
 
 	/*
@@ -5249,11 +5258,7 @@ intel_dp_add_properties(struct intel_dp *intel_dp, struct drm_connector *connect
 	if (has_gamut_metadata_dip(dev_priv, port))
 		drm_connector_attach_hdr_output_metadata_property(connector);
 
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	if (HAS_DP_VRR(dev_priv))
-#else
 	if (HAS_VRR(dev_priv))
-#endif
 		drm_connector_attach_vrr_capable_property(connector);
 }
 

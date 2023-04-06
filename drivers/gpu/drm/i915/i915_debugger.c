@@ -402,11 +402,78 @@ static void event_fifo_drain(struct i915_debugger *debugger)
 		kfree(event);
 }
 
+static inline bool
+is_debugger_closed(const struct i915_debugger * const debugger)
+{
+	return READ_ONCE(debugger->disconnect_reason);
+}
+
+static void i915_debugger_detach(struct i915_debugger *debugger)
+{
+	struct drm_i915_private * const i915 = debugger->i915;
+	unsigned long flags;
+
+	spin_lock_irqsave(&i915->debuggers.lock, flags);
+	if (is_debugger_closed(debugger)) {
+		DD_INFO(debugger, "session %lld detached", debugger->session);
+		list_del_init(&debugger->connection_link);
+	}
+	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
+}
+
+static inline u64 client_session(const struct i915_drm_client *client)
+{
+	return client ? READ_ONCE(client->debugger_session) : 0;
+}
+
+static void
+i915_debugger_ctx_process_callback(const struct i915_gem_context *ctx,
+				   void (*func)(struct intel_context *ce))
+{
+	struct i915_gem_engines_iter it;
+	struct intel_context *ce;
+
+	for_each_gem_engine(ce, ctx->engines, it)
+		if (i915_debugger_active_on_context(ce))
+			func(ce);
+}
+
+static void
+i915_debugger_restore_ctx_schedule_params(struct i915_debugger *debugger)
+{
+	struct i915_drm_client *client;
+	unsigned long idx;
+
+	rcu_read_lock();
+	xa_for_each(&debugger->i915->clients.xarray, idx, client) {
+		struct i915_gem_context *ctx;
+
+		client = i915_drm_client_get_rcu(client);
+		if (client_session(client) != debugger->session)
+			continue;
+
+		list_for_each_entry_rcu(ctx, &client->ctx_list, client_link) {
+			rcu_read_unlock();
+			i915_debugger_ctx_process_callback(ctx,
+							   intel_context_reset_preemption_timeout);
+			rcu_read_lock();
+		}
+
+		i915_drm_client_put(client);
+	}
+	rcu_read_unlock();
+}
+
 static void _i915_debugger_free(struct kref *ref)
 {
 	struct i915_debugger *debugger = container_of(ref, typeof(*debugger), ref);
 
+	i915_debugger_detach(debugger);
+
 	event_fifo_drain(debugger);
+
+	/* Since it's the last reference no race here */
+	i915_debugger_restore_ctx_schedule_params(debugger);
 
 	put_task_struct(debugger->target_task);
 	xa_destroy(&debugger->resources_xa);
@@ -416,25 +483,6 @@ static void _i915_debugger_free(struct kref *ref)
 static void i915_debugger_put(struct i915_debugger *debugger)
 {
 	kref_put(&debugger->ref, _i915_debugger_free);
-}
-
-static inline bool
-is_debugger_closed(const struct i915_debugger * const debugger)
-{
-	return list_empty(&debugger->connection_link);
-}
-
-static void i915_debugger_detach(struct i915_debugger *debugger)
-{
-	struct drm_i915_private * const i915 = debugger->i915;
-	unsigned long flags;
-
-	spin_lock_irqsave(&i915->debuggers.lock, flags);
-	if (!is_debugger_closed(debugger)) {
-		DD_INFO(debugger, "session %lld detached", debugger->session);
-		list_del_init(&debugger->connection_link);
-	}
-	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 }
 
 static const char *get_driver_name(struct dma_fence *fence)
@@ -493,8 +541,7 @@ static struct debugger_fence *create_debugger_fence(gfp_t gfp)
 	return f;
 }
 
-#define fetch_ack(x) \
-	rb_entry(READ_ONCE(x), typeof(struct i915_debug_ack), rb_node)
+#define fetch_ack(x) rb_entry(x, struct i915_debug_ack, rb_node)
 
 static inline int compare_ack(const u64 a, const u64 b)
 {
@@ -506,57 +553,22 @@ static inline int compare_ack(const u64 a, const u64 b)
 	return 0;
 }
 
-static struct i915_debug_ack *
-find_ack(struct i915_debugger *debugger, u64 seqno)
+static inline int ack_insert_cmp(struct rb_node *node, const struct rb_node *p)
 {
-	struct rb_node *node = debugger->ack_tree.rb_node;
-
-	lockdep_assert_held(&debugger->lock);
-
-	while (node) {
-		struct i915_debug_ack * const ack = fetch_ack(node);
-		const int result = compare_ack(seqno, ack->event.seqno);
-
-		if (result < 0)
-			node = node->rb_left;
-		else if (result > 0)
-			node = node->rb_right;
-		else
-			return ack;
-	}
-	return NULL;
+	return compare_ack(fetch_ack(node)->event.seqno,
+			   fetch_ack(p)->event.seqno);
 }
 
 static bool
 insert_ack(struct i915_debugger *debugger, struct i915_debug_ack *ack)
 {
-	struct rb_root *root = &debugger->ack_tree;
-	struct rb_node **p = &root->rb_node;
-	struct rb_node *parent = NULL;
+	struct rb_node *old;
 
-	lockdep_assert_held(&debugger->lock);
+	spin_lock(&debugger->ack_lock);
+	old = rb_find_add(&ack->rb_node, &debugger->ack_tree, ack_insert_cmp);
+	spin_unlock(&debugger->ack_lock);
 
-	while (*p) {
-		struct i915_debug_ack *__ack;
-		int result;
-
-		parent = *p;
-
-		__ack = fetch_ack(parent);
-		result = compare_ack(ack->event.seqno, __ack->event.seqno);
-		if (result < 0)
-			p = &parent->rb_left;
-		else if (result > 0)
-			p = &parent->rb_right;
-		else
-			return false;
-	}
-
-	rb_link_node(&ack->rb_node, parent, p);
-	rb_insert_color(&ack->rb_node, root);
-
-	DEBUG_ACK(debugger, ack);
-	return true;
+	return old == NULL;
 }
 
 static struct dma_fence *
@@ -602,21 +614,25 @@ static void handle_vm_bind_ack(struct i915_debug_ack *ack)
 	i915_sw_fence_complete(ack->event.ack_data);
 }
 
+static inline int ack_lookup_cmp(const void *key, const struct rb_node *node)
+{
+	return compare_ack(*(const u64 *)key,
+			   fetch_ack(node)->event.seqno);
+}
+
 static struct i915_debug_ack *
 remove_ack(struct i915_debugger *debugger, u64 seqno)
 {
 	struct rb_root * const root = &debugger->ack_tree;
-	struct i915_debug_ack *ack;
+	struct rb_node *node;
 
-	lockdep_assert_held(&debugger->lock);
+	spin_lock(&debugger->ack_lock);
+	node = rb_find(&seqno, root, ack_lookup_cmp);
+	if (node)
+		rb_erase(node, root);
+	spin_unlock(&debugger->ack_lock);
 
-	ack = find_ack(debugger, seqno);
-	if (!ack)
-		return NULL;
-
-	rb_erase(&ack->rb_node, root);
-	DEBUG_ACK(debugger, ack);
-	return ack;
+	return rb_entry_safe(node, struct i915_debug_ack, rb_node);
 }
 
 static void
@@ -667,55 +683,18 @@ create_ack(struct i915_debugger *debugger,
 
 static void release_acks(struct i915_debugger *debugger)
 {
-	struct rb_root *root = &debugger->ack_tree;
 	struct i915_debug_ack *ack, *n;
+	struct rb_root root;
 
-	lockdep_assert_held(&debugger->lock);
+	spin_lock(&debugger->ack_lock);
+	root = debugger->ack_tree;
+	debugger->ack_tree = RB_ROOT;
+	spin_unlock(&debugger->ack_lock);
 
-	rbtree_postorder_for_each_entry_safe(ack, n, root, rb_node) {
+	rbtree_postorder_for_each_entry_safe(ack, n, &root, rb_node) {
 		handle_ack(debugger, ack);
 		kfree(ack);
 	}
-
-	*root = RB_ROOT;
-}
-
-static void
-i915_debugger_ctx_process_callback(const struct i915_gem_context *ctx,
-				   void (*func)(struct intel_context *ce))
-{
-	struct i915_gem_engines_iter it;
-	struct intel_context *ce;
-
-	for_each_gem_engine(ce, ctx->engines, it)
-		if (i915_debugger_active_on_context(ce))
-			func(ce);
-}
-
-static void
-i915_debugger_restore_ctx_schedule_params(struct i915_debugger *debugger)
-{
-	struct i915_drm_client *client;
-	unsigned long idx;
-
-	rcu_read_lock();
-	xa_for_each(&debugger->i915->clients.xarray, idx, client) {
-		struct i915_gem_context *ctx;
-
-		client = i915_drm_client_get_rcu(client);
-		if (!client)
-			continue;
-
-		list_for_each_entry_rcu(ctx, &client->ctx_list, client_link) {
-			rcu_read_unlock();
-			i915_debugger_ctx_process_callback(ctx,
-					intel_context_reset_preemption_timeout);
-			rcu_read_lock();
-		}
-
-		i915_drm_client_put(client);
-	}
-	rcu_read_unlock();
 }
 
 static void i915_debugger_disconnect__locked(struct i915_debugger *debugger,
@@ -724,12 +703,9 @@ static void i915_debugger_disconnect__locked(struct i915_debugger *debugger,
 	GEM_WARN_ON(!reason);
 	lockdep_assert_held(&debugger->lock);
 
-	i915_debugger_detach(debugger);
-
 	if (!debugger->disconnect_reason) {
 		debugger->disconnect_reason = reason;
 		release_acks(debugger);
-		i915_debugger_restore_ctx_schedule_params(debugger);
 		DD_INFO(debugger, "disconnected: %s",
 			disconnect_reason_to_str(reason));
 	} else {
@@ -738,7 +714,6 @@ static void i915_debugger_disconnect__locked(struct i915_debugger *debugger,
 			reason);
 	}
 
-	complete_all(&debugger->discovery);
 	wake_up_all(&debugger->write_done);
 	complete_all(&debugger->read_done);
 }
@@ -764,9 +739,9 @@ static void i915_debugger_client_close(struct i915_debugger *debugger)
 
 static int i915_debugger_disconnect_retcode(struct i915_debugger *debugger)
 {
-	GEM_WARN_ON(!debugger->disconnect_reason);
+	GEM_WARN_ON(!READ_ONCE(debugger->disconnect_reason));
 
-	if (debugger->disconnect_reason == DISCONNECT_SEND_TIMEOUT)
+	if (READ_ONCE(debugger->disconnect_reason) == DISCONNECT_SEND_TIMEOUT)
 		return -ENXIO;
 
 	return -ENODEV;
@@ -774,9 +749,9 @@ static int i915_debugger_disconnect_retcode(struct i915_debugger *debugger)
 
 static bool was_debugger_disconnected(const struct i915_debugger *debugger)
 {
-	GEM_BUG_ON(!debugger->disconnect_reason);
+	GEM_BUG_ON(!READ_ONCE(debugger->disconnect_reason));
 
-	return debugger->disconnect_reason != DISCONNECT_CLIENT_CLOSE;
+	return READ_ONCE(debugger->disconnect_reason) != DISCONNECT_CLIENT_CLOSE;
 }
 
 static __poll_t i915_debugger_poll(struct file *file, poll_table *wait)
@@ -806,11 +781,6 @@ static ssize_t i915_debugger_read(struct file *file,
 	return 0;
 }
 
-static inline u64 client_session(const struct i915_drm_client *client)
-{
-	return client ? READ_ONCE(client->debugger_session) : 0;
-}
-
 #define for_each_debugger(debugger, head) \
 	list_for_each_entry(debugger, head, connection_link)
 
@@ -830,11 +800,12 @@ i915_debugger_get(const struct i915_drm_client * const client)
 
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (iter->session != session)
+		if (is_debugger_closed(iter) || iter->session != session)
 			continue;
 
-		kref_get(&iter->ref);
-		debugger = iter;
+		/* Could be 0 for a brief moment. is_debugger_closed should catch it */
+		if (kref_get_unless_zero(&iter->ref))
+			debugger = iter;
 		break;
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
@@ -853,11 +824,13 @@ i915_debugger_find_task_get(struct drm_i915_private *i915,
 
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (!same_thread_group(iter->target_task, task))
+		if (is_debugger_closed(iter) ||
+		    !same_thread_group(iter->target_task, task))
 			continue;
 
-		kref_get(&iter->ref);
-		debugger = iter;
+		/* Could be 0 for a brief moment. is_debugger_closed should catch it */
+		if (kref_get_unless_zero(&iter->ref))
+			debugger = iter;
 		break;
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
@@ -892,16 +865,9 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 	unsigned long timeout;
 	bool expired;
 
-	/* No need to send base events */
-	if (event->size <= sizeof(struct prelim_drm_i915_debug_event) ||
-	    !event->type ||
-	    event->type == PRELIM_DRM_I915_DEBUG_EVENT_READ) {
-		GEM_WARN_ON(event->size <= sizeof(struct prelim_drm_i915_debug_event));
-		GEM_WARN_ON(!event->type);
-		GEM_WARN_ON(event->type == PRELIM_DRM_I915_DEBUG_EVENT_READ);
-
-		return -EINVAL;
-	}
+	GEM_BUG_ON(event->size <= sizeof(struct prelim_drm_i915_debug_event));
+	GEM_BUG_ON(!event->type);
+	GEM_BUG_ON(event->type == PRELIM_DRM_I915_DEBUG_EVENT_READ);
 
 	if (event->flags & PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK)
 		ack = create_ack(debugger, event, ack_data, gfp);
@@ -992,6 +958,8 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 			kfree(ack);
 			goto disconnect_err;
 		}
+
+		DEBUG_ACK(debugger, ack);
 	}
 
 	mutex_unlock(&debugger->lock);
@@ -1763,9 +1731,6 @@ static bool context_lrc_match(struct intel_engine_cs *engine,
 static bool context_verify_active(struct intel_engine_cs *engine,
 				  struct intel_context *ce)
 {
-	if (!ce)
-		return false;
-
 	/* We can't do better than this on older gens */
 	if (GRAPHICS_VER(engine->i915) < 11)
 		return true;
@@ -1782,53 +1747,18 @@ static bool context_verify_active(struct intel_engine_cs *engine,
 	return true;
 }
 
-static struct intel_context *execlists_active_context_get(struct intel_engine_cs *engine)
+static struct intel_context *engine_active_context_get(struct intel_engine_cs *engine)
 {
 	struct intel_context *ce = NULL;
-	struct i915_request * const *port, *rq;
+	struct i915_request *rq;
 
 	rcu_read_lock();
-	for (port = engine->execlists.active; (rq = *port); port++) {
-		if (!__i915_request_is_complete(rq)) {
-			ce = intel_context_get(rq->context);
-			break;
-		}
-	}
+	rq = intel_engine_find_active_request(engine);
+	if (rq && context_verify_active(engine, rq->context))
+		ce = intel_context_get(rq->context);
 	rcu_read_unlock();
 
 	return ce;
-}
-
-static struct intel_context *engine_active_context_get(struct intel_engine_cs *engine)
-{
-	struct intel_context *ce, *active_ce = NULL;
-
-	if (!intel_engine_pm_get_if_awake(engine))
-		return NULL;
-
-	i915_sched_engine_active_lock_bh(engine->sched_engine);
-	spin_lock_irq(&engine->sched_engine->lock);
-
-	if (intel_uc_uses_guc_submission(&engine->gt->uc))
-		ce = intel_guc_active_context_get(engine);
-	else
-		ce = execlists_active_context_get(engine);
-
-	if (ce && context_verify_active(engine, ce))
-		active_ce = ce;
-
-	spin_unlock_irq(&engine->sched_engine->lock);
-	i915_sched_engine_active_unlock_bh(engine->sched_engine);
-
-	intel_engine_pm_put(engine);
-
-	if (active_ce)
-		return active_ce;
-
-	if (ce)
-		intel_context_put(ce);
-
-	return active_ce;
 }
 
 static bool client_has_vm(struct i915_drm_client *client,
@@ -2009,14 +1939,14 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	 * by the HW, hence we allow the HW some time to acknowledge
 	 * that.
 	 */
-	usleep_range(100, 200);
+	udelay(100);
 
 	/* Halt regardless of thread dependancies */
 	if (!(td_ctl & TD_CTL_FORCE_EXCEPTION))
 		intel_gt_mcr_multicast_write(gt, TD_CTL,
 					     td_ctl | TD_CTL_FORCE_EXCEPTION);
 
-	usleep_range(100, 200);
+	udelay(100);
 
 	intel_gt_mcr_multicast_write(gt, TD_CTL, td_ctl &
 				     ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION));
@@ -2029,8 +1959,6 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	if (!(lrca & 0x1) || context_lrca != (lrca & GENMASK(31, 12)))
 		dev_warn(gt->i915->drm.dev,
 			 "i915 debugger: interrupted wrong context.");
-
-	intel_engine_schedule_heartbeat(engine);
 
 	return 0;
 }
@@ -2218,7 +2146,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 	}
 
 	ret = 0;
-	mutex_lock(&debugger->lock);
+	write_lock(&debugger->eu_lock);
 	switch (arg->cmd) {
 	case PRELIM_I915_DEBUG_EU_THREADS_CMD_INTERRUPT_ALL:
 		ret = eu_control_interrupt_all(debugger, arg->client_handle,
@@ -2242,7 +2170,9 @@ static int do_eu_control(struct i915_debugger * debugger,
 	if (ret == 0)
 		seqno = atomic_long_inc_return(&debugger->event_seqno);
 
-	mutex_unlock(&debugger->lock);
+	write_unlock(&debugger->eu_lock);
+
+	intel_engine_schedule_heartbeat(engine);
 	intel_engine_pm_put(engine);
 
 	if (ret)
@@ -2383,13 +2313,13 @@ i915_debugger_ack_event_ioctl(struct i915_debugger *debugger,
 	if (user_arg.flags)
 		return -EINVAL;
 
-	mutex_lock(&debugger->lock);
 	ack = remove_ack(debugger, user_arg.seqno);
-	mutex_unlock(&debugger->lock);
 	if (!ack)
 		return -EINVAL;
 
+	DEBUG_ACK(debugger, ack);
 	handle_ack(debugger, ack);
+
 	kfree(ack);
 	return 0;
 }
@@ -2633,14 +2563,15 @@ out:
 static void i915_debugger_discover_vm(struct i915_debugger *debugger,
 				      struct i915_drm_client *client)
 {
+	u64 session = client_session(client);
 	struct i915_address_space *vm;
 	unsigned long i;
 
 	if (!client->file) /* protect kernel internals */
 		return;
 
-	if (GEM_WARN_ON(client->debugger_session &&
-			debugger->session != client->debugger_session))
+	if (GEM_WARN_ON(session &&
+			debugger->session != session))
 		return;
 
 	xa_for_each(&client->file->vm_xa, i, vm) {
@@ -2740,7 +2671,7 @@ i915_debugger_client_task_register(const struct i915_debugger * const debugger,
 	if (!READ_ONCE(client->closed) &&
 	    !is_debugger_closed(debugger) &&
 	    same_thread_group(debugger->target_task, task)) {
-		GEM_WARN_ON(client->debugger_session >= debugger->session);
+		GEM_WARN_ON(client_session(client) >= debugger->session);
 		WRITE_ONCE(client->debugger_session, debugger->session);
 		registered = true;
 	}
@@ -2932,7 +2863,12 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	mutex_init(&debugger->lock);
 	INIT_LIST_HEAD(&debugger->connection_link);
 	atomic_long_set(&debugger->event_seqno, 0);
+
+	rwlock_init(&debugger->eu_lock);
+
+	spin_lock_init(&debugger->ack_lock);
 	debugger->ack_tree = RB_ROOT;
+
 	init_completion(&debugger->read_done);
 	init_waitqueue_head(&debugger->write_done);
 	init_completion(&debugger->discovery);
@@ -2965,7 +2901,8 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (same_thread_group(iter->target_task, debugger->target_task)) {
+		if (!is_debugger_closed(iter) &&
+		    same_thread_group(iter->target_task, debugger->target_task)) {
 			drm_info(&i915->drm, "pid %llu already debugged\n", param->pid);
 			ret = -EBUSY;
 			goto err_unlock;
@@ -3123,10 +3060,12 @@ void i915_debugger_client_register(struct i915_drm_client *client,
 	 */
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	for_each_debugger(iter, &i915->debuggers.list) {
-		if (!same_thread_group(iter->target_task, task))
+		if (is_debugger_closed(iter) ||
+		    !same_thread_group(iter->target_task, task))
 			continue;
 
-		WRITE_ONCE(client->debugger_session, iter->session);
+		if (kref_read(&iter->ref))
+			WRITE_ONCE(client->debugger_session, iter->session);
 		break;
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
@@ -3149,6 +3088,9 @@ static int send_engine_attentions(struct i915_debugger *debugger,
 	if (is_debugger_closed(debugger))
 		return -ENODEV;
 
+	if (!intel_engine_pm_get_if_awake(engine))
+		return -ENOENT;
+
 	/* XXX test for CONTEXT_DEBUG when igt/umd is there */
 
 	size = struct_size(ea, bitmask, intel_gt_eu_attention_bitmap_size(engine->gt));
@@ -3169,10 +3111,11 @@ static int send_engine_attentions(struct i915_debugger *debugger,
 	ea->ctx_handle = ce->dbg_id.gem_context_id;
 	ea->lrc_handle = ce->dbg_id.lrc_id;
 
-	mutex_lock(&debugger->lock);
+	read_lock(&debugger->eu_lock);
 	intel_gt_eu_attention_bitmap(engine->gt, &ea->bitmask[0], ea->bitmask_size);
 	event->seqno = atomic_long_inc_return(&debugger->event_seqno);
-	mutex_unlock(&debugger->lock);
+	read_unlock(&debugger->eu_lock);
+	intel_engine_pm_put(engine);
 
 	return i915_debugger_queue_event(debugger, event);
 }

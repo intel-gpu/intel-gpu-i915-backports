@@ -2,6 +2,11 @@
 #define __BACKPORT_DMA_RESV_H
 
 #include_next <linux/dma-resv.h>
+
+#ifdef BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
+#define dma_resv_reserve_shared dma_resv_reserve_fences
+#endif
+
 #ifdef DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
 
 /**
