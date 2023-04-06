@@ -68,4 +68,14 @@ extern long compat_ptr_ioctl(struct file *file, unsigned int cmd,
 #define proc_write write
 #endif /* < 5.6 */
 
+#ifdef BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
+int pagecache_write_begin(struct file *, struct address_space *mapping,
+                                loff_t pos, unsigned len, unsigned flags,
+                                struct page **pagep, void **fsdata);
+
+int pagecache_write_end(struct file *, struct address_space *mapping,
+                                loff_t pos, unsigned len, unsigned copied,
+                                struct page *page, void *fsdata);
+#endif
+
 #endif	/* _COMPAT_LINUX_FS_H */

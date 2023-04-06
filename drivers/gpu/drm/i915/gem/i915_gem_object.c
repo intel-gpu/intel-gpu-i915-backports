@@ -88,7 +88,8 @@ int i915_gem_object_migrate_sync(struct drm_i915_gem_object *obj)
 {
 	long timeout =
 		i915_gem_object_migrate_wait(obj,
-					     I915_WAIT_INTERRUPTIBLE,
+					     I915_WAIT_INTERRUPTIBLE |
+					     I915_WAIT_PRIORITY,
 					     MAX_SCHEDULE_TIMEOUT);
 
 	return timeout < 0 ? timeout : 0;
@@ -238,7 +239,7 @@ bool i915_gem_object_can_bypass_llc(struct drm_i915_gem_object *obj)
 
 bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj)
 {
-	if (!obj->mm.n_placements || obj->mm.region->id == INTEL_REGION_SMEM)
+	if (!i915_gem_object_migratable(obj) || obj->mm.region->id == INTEL_REGION_SMEM)
 		return false;
 
 	/* reject migration if smem not contained in placement list */
@@ -255,6 +256,10 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 {
 	if (!dst_region_id)
 		return false;
+
+	if (!i915_gem_object_migratable(obj) || obj->mm.region->id == dst_region_id)
+		return false;
+
 	/* HW support cross-tile atomic access, so no need to
 	 * migrate when object is already in lmem.
 	 */
@@ -268,13 +273,20 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 	if (i915_gem_object_test_preferred_location(obj, dst_region_id))
 		return true;
 
+	/*
+	 * No backing store: we won't migrate but still want
+	 * i915_gem_object_migrate() to reassign the BO's placment to
+	 * the faulting GT's memory region (first touch policy).
+	 */
+	if (!(i915_gem_object_has_pages(obj) || obj->base.filp))
+		return true;
+
 	return false;
 }
 
-
-/* Similar to system madvise, we convert hints to stored flags */
-int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
-			     struct prelim_drm_i915_gem_vm_advise *args)
+static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
+				      struct i915_gem_ww_ctx *ww,
+				      struct prelim_drm_i915_gem_vm_advise *args)
 {
 	struct intel_memory_region *region;
 	int err = 0;
@@ -284,7 +296,6 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 	 * Could treat these hints as DGFX only, but as these are hints
 	 * this seems unnecessary burden for user to worry about
 	 */
-	i915_gem_object_lock(obj, NULL);
 	switch (args->attribute) {
 	case PRELIM_I915_VM_ADVISE_ATOMIC_DEVICE:
 		/*
@@ -292,7 +303,7 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 		 * we migrate local to the GPU on the next GPU access
 		 */
 		if (!i915_gem_object_is_lmem(obj)) {
-			err = i915_gem_object_unbind(obj, NULL,
+			err = i915_gem_object_unbind(obj, ww,
 						     I915_GEM_OBJECT_UNBIND_ACTIVE);
 			if (err)
 				break;
@@ -305,7 +316,7 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 		 * faulting device on the next GPU or CPU access
 		 */
 		if (!i915_gem_object_is_lmem(obj)) {
-			err = i915_gem_object_unbind(obj, NULL,
+			err = i915_gem_object_unbind(obj, ww,
 						     I915_GEM_OBJECT_UNBIND_ACTIVE);
 			if (err)
 				break;
@@ -345,7 +356,23 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 	default:
 		err = -EINVAL;
 	}
-	i915_gem_object_unlock(obj);
+
+	return err;
+}
+
+/* Similar to system madvise, we convert hints to stored flags */
+int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
+			     struct prelim_drm_i915_gem_vm_advise *args)
+{
+	struct i915_gem_ww_ctx ww;
+	int err = 0;
+
+	for_i915_gem_ww(&ww, err, true) {
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
+		err = __i915_gem_object_set_hint(obj, &ww, args);
+	}
 
 	return err;
 }
@@ -479,6 +506,8 @@ void __i915_gem_object_free_mmaps(struct drm_i915_gem_object *obj)
 void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 {
 	trace_i915_gem_object_destroy(obj);
+
+	i915_gem_object_unaccount(obj);
 
 	i915_drm_client_fini_bo(obj);
 
@@ -853,21 +882,8 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		i915_gem_object_put(donor);
 
 	/* set pages after migrated */
-	if (donor_pages) {
+	if (donor_pages)
 		__i915_gem_object_set_pages(obj, donor_pages, donor_page_sizes);
-	} else if (obj->mm.region->type == INTEL_MEMORY_LOCAL) {
-		/*
-		 * Ensure backing store (new pages) are zeroed.
-		 * TODO: this should be part of get_pages(),
-		 * when async get_pages arrives
-		 */
-		err = i915_gem_object_ww_fill_blt(obj, ww, ce, 0);
-		if (err) {
-			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
-					      "Failed to clear object backing store! (%d)\n", err);
-			goto err;
-		}
-	}
 
 	/* set to cpu read domain, after any blt operations */
 	return i915_gem_object_set_to_cpu_domain(obj, false);
@@ -880,7 +896,6 @@ unlock_smem_obj:
 err_put_donor:
 	if (id != INTEL_REGION_SMEM)
 		i915_gem_object_put(donor);
-err:
 	return err;
 }
 

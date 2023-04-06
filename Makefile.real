@@ -149,3 +149,7 @@ i915dkmsdeb-pkg:
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
 	@$(MAKE) -f Makefile.dkms i915dkmsrpm-pkg
+
+.PHONY: binrpm-pkg
+binrpm-pkg:
+	@$(MAKE) -f Makefile.dkms binrpm-pkg

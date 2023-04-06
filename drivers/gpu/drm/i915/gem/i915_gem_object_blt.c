@@ -15,6 +15,13 @@
 #include "i915_gem_clflush.h"
 #include "i915_gem_object_blt.h"
 
+static void i915_request_set_priority(struct i915_request *rq, int prio) {
+	struct i915_sched_attr attr = { .priority = prio };
+
+	if (rq->engine->sched_engine->schedule)
+		rq->engine->sched_engine->schedule(rq, &attr);
+}
+
 /*
  * Determine how many blocks of CCS data correspond to a given amount of
  * main buffer data.
@@ -839,6 +846,13 @@ static int __i915_gem_object_ww_copy_blt(struct drm_i915_gem_object *src,
 		err = PTR_ERR(rq);
 		goto out_batch;
 	}
+	/*
+	 * Bump up rq priority for reserved bcs so that it won't be blocked by
+	 * other rqs which are blocked by page fault on other bcs due to current
+	 * GuC limitation.
+	 */
+	if (rq->engine->id == rq->engine->gt->rsvd_bcs)
+		i915_request_set_priority(rq, I915_PRIORITY_MAX);
 
 	err = intel_emit_vma_mark_active(batch, rq);
 	if (unlikely(err))

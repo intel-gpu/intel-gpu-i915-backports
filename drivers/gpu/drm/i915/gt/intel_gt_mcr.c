@@ -38,6 +38,7 @@ static const char * const intel_steering_types[] = {
 	"L3BANK",
 	"MSLICE",
 	"LNCF",
+	"GAM",
 	"INSTANCE 0",
 };
 
@@ -46,11 +47,20 @@ static const struct intel_mmio_range icl_l3bank_steering_table[] = {
 	{},
 };
 
+/*
+ * Although the bspec lists more "MSLICE" ranges than shown here, some of those
+ * are of a "GAM" subclass that has special rules.  Thus we use a separate
+ * GAM table farther down for those.
+ */
 static const struct intel_mmio_range xehpsdv_mslice_steering_table[] = {
-	{ 0x004000, 0x004AFF },
-	{ 0x00C800, 0x00CFFF },
 	{ 0x00DD00, 0x00DDFF },
 	{ 0x00E900, 0x00FFFF }, /* 0xEA00 - OxEFFF is unused */
+	{},
+};
+
+static const struct intel_mmio_range xehpsdv_gam_steering_table[] = {
+	{ 0x004000, 0x004AFF },
+	{ 0x00C800, 0x00CFFF },
 	{},
 };
 
@@ -156,9 +166,15 @@ void intel_gt_mcr_init(struct intel_gt *gt)
 	} else if (IS_DG2(i915)) {
 		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
 		gt->steering_table[LNCF] = dg2_lncf_steering_table;
+		/*
+		 * No need to hook up the GAM table since it has a dedicated
+		 * steering control register on DG2 and can use implicit
+		 * steering.
+		 */
 	} else if (IS_XEHPSDV(i915)) {
 		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
 		gt->steering_table[LNCF] = xehpsdv_lncf_steering_table;
+		gt->steering_table[GAM] = xehpsdv_gam_steering_table;
 	} else if (GRAPHICS_VER(i915) >= 11 &&
 		   GRAPHICS_VER_FULL(i915) < IP_VER(12, 50)) {
 		gt->steering_table[L3BANK] = icl_l3bank_steering_table;
@@ -178,7 +194,7 @@ void intel_gt_mcr_init(struct intel_gt *gt)
 
 /*
  * rw_with_mcr_steering_fw - Access a register with specific MCR steering
- * @uncore: pointer to struct intel_uncore
+ * @gt: GT to read register from
  * @reg: register being accessed
  * @rw_flag: FW_REG_READ for read access or FW_REG_WRITE for write access
  * @group: group number (documented as "sliceid" on older platforms)
@@ -189,10 +205,11 @@ void intel_gt_mcr_init(struct intel_gt *gt)
  *
  * Caller needs to make sure the relevant forcewake wells are up.
  */
-static u32 rw_with_mcr_steering_fw(struct intel_uncore *uncore,
+static u32 rw_with_mcr_steering_fw(struct intel_gt *gt,
 				   i915_reg_t reg, u8 rw_flag,
 				   int group, int instance, u32 value)
 {
+	struct intel_uncore *uncore = gt->uncore;
 	u32 mcr_mask, mcr_ss, mcr, old_mcr, val = 0;
 	i915_reg_t mcr_reg;
 
@@ -251,11 +268,12 @@ static u32 rw_with_mcr_steering_fw(struct intel_uncore *uncore,
 	return val;
 }
 
-static u32 rw_with_mcr_steering(struct intel_uncore *uncore,
+static u32 rw_with_mcr_steering(struct intel_gt *gt,
 				i915_reg_t reg, u8 rw_flag,
 				int group, int instance,
 				u32 value)
 {
+	struct intel_uncore *uncore = gt->uncore;
 	enum forcewake_domains fw_domains;
 	u32 val;
 
@@ -268,7 +286,7 @@ static u32 rw_with_mcr_steering(struct intel_uncore *uncore,
 	spin_lock_irq(&uncore->lock);
 	intel_uncore_forcewake_get__locked(uncore, fw_domains);
 
-	val = rw_with_mcr_steering_fw(uncore, reg, rw_flag, group, instance, value);
+	val = rw_with_mcr_steering_fw(gt, reg, rw_flag, group, instance, value);
 
 	intel_uncore_forcewake_put__locked(uncore, fw_domains);
 	spin_unlock_irq(&uncore->lock);
@@ -290,7 +308,7 @@ u32 intel_gt_mcr_read(struct intel_gt *gt,
 		      i915_reg_t reg,
 		      int group, int instance)
 {
-	return rw_with_mcr_steering(gt->uncore, reg, FW_REG_READ, group, instance, 0);
+	return rw_with_mcr_steering(gt, reg, FW_REG_READ, group, instance, 0);
 }
 
 /**
@@ -310,8 +328,7 @@ u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
 			 i915_reg_t reg,
 			 int group, int instance)
 {
-	return rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_READ,
-				       group, instance, 0);
+	return rw_with_mcr_steering_fw(gt, reg, FW_REG_READ, group, instance, 0);
 }
 
 /**
@@ -328,7 +345,7 @@ u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
 void intel_gt_mcr_unicast_write(struct intel_gt *gt, i915_reg_t reg, u32 value,
 				int group, int instance)
 {
-	rw_with_mcr_steering(gt->uncore, reg, FW_REG_WRITE, group, instance, value);
+	rw_with_mcr_steering(gt, reg, FW_REG_WRITE, group, instance, value);
 }
 
 /**
@@ -347,8 +364,7 @@ void intel_gt_mcr_unicast_write(struct intel_gt *gt, i915_reg_t reg, u32 value,
 void intel_gt_mcr_unicast_write_fw(struct intel_gt *gt, i915_reg_t reg, u32 value,
 				   int group, int instance)
 {
-	rw_with_mcr_steering_fw(gt->uncore, reg, FW_REG_WRITE,
-				group, instance, value);
+	rw_with_mcr_steering_fw(gt, reg, FW_REG_WRITE, group, instance, value);
 }
 
 /**
@@ -482,6 +498,10 @@ static void get_nonterminated_steering(struct intel_gt *gt,
 		*group = __ffs(gt->info.mslice_mask) << 1;
 		*instance = 0;	/* unused */
 		break;
+	case GAM:
+		*group = IS_DG2(gt->i915) ? 1 : 0;
+		*instance = 0;
+		break;
 	case INSTANCE0:
 		/*
 		 * There are a lot of MCR types for which instance (0, 0)
@@ -548,7 +568,7 @@ u32 intel_gt_mcr_read_any_fw(struct intel_gt *gt, i915_reg_t reg)
 	for (type = 0; type < NUM_STEERING_TYPES; type++) {
 		if (reg_needs_read_steering(gt, reg, type)) {
 			get_nonterminated_steering(gt, type, &group, &instance);
-			return rw_with_mcr_steering_fw(gt->uncore, reg,
+			return rw_with_mcr_steering_fw(gt, reg,
 						       FW_REG_READ,
 						       group, instance, 0);
 		}
@@ -575,7 +595,7 @@ u32 intel_gt_mcr_read_any(struct intel_gt *gt, i915_reg_t reg)
 	for (type = 0; type < NUM_STEERING_TYPES; type++) {
 		if (reg_needs_read_steering(gt, reg, type)) {
 			get_nonterminated_steering(gt, type, &group, &instance);
-			return rw_with_mcr_steering(gt->uncore, reg,
+			return rw_with_mcr_steering(gt, reg,
 						    FW_REG_READ,
 						    group, instance, 0);
 		}

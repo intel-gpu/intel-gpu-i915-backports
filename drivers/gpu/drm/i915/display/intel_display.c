@@ -4078,11 +4078,7 @@ static bool hsw_get_pipe_config(struct intel_crtc *crtc,
 	    DISPLAY_VER(dev_priv) >= 11)
 		intel_get_transcoder_timings(crtc, pipe_config);
 
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	if (HAS_DP_VRR(dev_priv) && !transcoder_is_dsi(pipe_config->cpu_transcoder))
-#else
 	if (HAS_VRR(dev_priv) && !transcoder_is_dsi(pipe_config->cpu_transcoder))
-#endif
 		intel_vrr_get_config(crtc, pipe_config);
 
 	intel_get_pipe_src_size(crtc, pipe_config);
@@ -5963,13 +5959,6 @@ intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 	PIPE_CONF_CHECK_I(vrr.flipline);
 	PIPE_CONF_CHECK_I(vrr.pipeline_full);
 	PIPE_CONF_CHECK_I(vrr.guardband);
-#ifndef VRR_FEATURE_NOT_SUPPORTED
-	PIPE_CONF_CHECK_I(vrr.vsync_start);
-	PIPE_CONF_CHECK_I(vrr.vsync_end);
-
-	PIPE_CONF_CHECK_BOOL(vrr.vtem_config.vtemp.enabled);
-	PIPE_CONF_CHECK_BOOL(vrr.vtem_config.vtemp.type);
-#endif
 
 #undef PIPE_CONF_CHECK_X
 #undef PIPE_CONF_CHECK_I
@@ -8378,25 +8367,6 @@ intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
 		return MODE_V_ILLEGAL;
 
 	return MODE_OK;
-}
-
-static
-bool intel_can_bigjoiner(struct intel_encoder *encoder)
-{
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
-
-	return DISPLAY_VER(i915) >= 12 ||
-		(DISPLAY_VER(i915) == 11 && encoder->port != PORT_A);
-}
-
-bool intel_need_bigjoiner(struct intel_encoder *encoder, int hdisplay, int clock)
-{
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
-
-	if (!intel_can_bigjoiner(encoder))
-		return false;
-
-	return clock > i915->max_dotclk_freq || hdisplay > 5120;
 }
 
 static const struct drm_mode_config_funcs intel_mode_funcs = {

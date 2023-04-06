@@ -920,7 +920,7 @@ static int do_rps_boost(struct wait_queue_entry *_wait,
 	 * vblank without our intervention, so leave RPS alone.
 	 */
 	if (!i915_request_started(rq))
-		intel_rps_boost(rq);
+		intel_rps_boost_for_request(rq);
 	i915_request_put(rq);
 
 	drm_crtc_vblank_put(wait->crtc);
@@ -978,7 +978,7 @@ static int await_active_fence(struct drm_i915_private *i915,
 					    GFP_KERNEL);
 	dma_fence_put(fence);
 
-	return err;
+	return err < 0 ? err : 0;
 }
 
 static int await_vma_bind(struct drm_i915_private *i915,
@@ -1090,6 +1090,9 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	i915_gem_object_wait_priority(obj, 0, &attr);
 
 	if (!new_plane_state->uapi.fence) { /* implicit fencing */
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+		struct dma_resv_iter cursor;
+#endif
 		struct dma_fence *fence;
 
 		ret = i915_sw_fence_await_reservation(&state->commit_ready,
@@ -1100,17 +1103,26 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 		if (ret < 0)
 			goto unpin_fb;
 
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+		dma_resv_iter_begin(&cursor, obj->base.resv,
+				    DMA_RESV_USAGE_WRITE);
+		dma_resv_for_each_fence_unlocked(&cursor, fence) {
+			add_rps_boost_after_vblank(new_plane_state->hw.crtc,
+						   fence);
+		}
+		dma_resv_iter_end(&cursor);
+#else		
 		fence = dma_resv_get_excl_unlocked(obj->base.resv);
 		if (fence) {
 			add_rps_boost_after_vblank(new_plane_state->hw.crtc,
 						   fence);
 			dma_fence_put(fence);
 		}
+#endif
 	} else {
 		add_rps_boost_after_vblank(new_plane_state->hw.crtc,
 					   new_plane_state->uapi.fence);
 	}
-
 	/*
 	 * We declare pageflips to be interactive and so merit a small bias
 	 * towards upclocking to deliver the frame on time. By only changing

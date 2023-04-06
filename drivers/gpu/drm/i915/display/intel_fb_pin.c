@@ -51,14 +51,6 @@ intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
 	if (IS_ERR(vma))
 		goto err;
 
-	if (i915_vma_misplaced(vma, 0, alignment, 0)) {
-		ret = i915_vma_unbind(vma);
-		if (ret) {
-			vma = ERR_PTR(ret);
-			goto err;
-		}
-	}
-
 	ret = i915_vma_pin(vma, 0, alignment, PIN_GLOBAL);
 	if (ret) {
 		vma = ERR_PTR(ret);
@@ -271,9 +263,11 @@ int intel_plane_sync_fb(struct intel_plane_state *plane_state)
 			return err;
 	}
 
-	err = i915_gem_object_migrate_sync(intel_fb_obj(plane_state->hw.fb));
-	if (err)
-		return err;
+	if (plane_state->hw.fb) {
+		err = i915_gem_object_migrate_sync(intel_fb_obj(plane_state->hw.fb));
+		if (err)
+			return err;
+	}
 
 	return 0;
 }

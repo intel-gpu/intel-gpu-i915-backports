@@ -1110,7 +1110,13 @@ static int gem_context_register(struct i915_gem_context *ctx,
 		 pid_nr(i915_drm_client_pid(client)));
 	rcu_read_unlock();
 
+	ctx->client = client;
+
 	i915_debugger_wait_on_discovery(i915, client);
+
+	spin_lock(&client->ctx_lock);
+	list_add_tail_rcu(&ctx->client_link, &client->ctx_list);
+	spin_unlock(&client->ctx_lock);
 
 	context_apply_all(ctx, __apply_client, client);
 
@@ -1119,31 +1125,34 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	/* Apply any debugger overrides to the context */
 	context_apply_all(ctx, __apply_debugger, client);
 
-	/* And finally expose ourselves to userspace via the idr */
-	ret = xa_alloc(&fpriv->context_xa, id, ctx, xa_limit_32b, GFP_KERNEL);
-	if (ret)
-		goto err_pid;
-
-	ctx->id = *id;
-	ctx->client = client;
-
-	spin_lock(&client->ctx_lock);
-	list_add_tail_rcu(&ctx->client_link, &client->ctx_list);
-	spin_unlock(&client->ctx_lock);
-
 	spin_lock_irq(&i915->gem.contexts.lock);
 	list_add_tail_rcu(&ctx->link, &i915->gem.contexts.list);
 	spin_unlock_irq(&i915->gem.contexts.lock);
 
-	i915_debugger_context_create(ctx);
-	if (vm) {
-		i915_debugger_vm_create(client, vm);
-		i915_debugger_context_param_vm(client, ctx, vm);
+	/* And finally expose ourselves to userspace via the idr */
+	i915_gem_context_get(ctx);
+	ret = xa_alloc(&fpriv->context_xa, id, ctx, xa_limit_32b, GFP_KERNEL);
+	if (!ret) {
+		ctx->id = *id;
+		i915_debugger_context_create(ctx);
+		if (vm) {
+			i915_debugger_vm_create(client, vm);
+			i915_debugger_context_param_vm(client, ctx, vm);
+		}
+		i915_debugger_context_param_engines(ctx);
 	}
-	i915_debugger_context_param_engines(ctx);
+	i915_gem_context_put(ctx);
+	if (!ret)
+		return 0;
 
-	return 0;
-err_pid:
+	spin_lock(&client->ctx_lock);
+	list_del_rcu(&ctx->client_link);
+	spin_unlock(&client->ctx_lock);
+
+	spin_lock_irq(&i915->gem.contexts.lock);
+	list_del_rcu(&ctx->link);
+	spin_unlock_irq(&i915->gem.contexts.lock);
+
 	i915_drm_client_put(client);
 	return ret;
 }

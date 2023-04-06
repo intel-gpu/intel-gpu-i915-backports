@@ -761,8 +761,6 @@ bool
 i915_request_active_engine(struct i915_request *rq,
 			   struct intel_engine_cs **active);
 
-void i915_request_notify_execute_cb_imm(struct i915_request *rq);
-
 enum i915_request_state {
 	I915_REQUEST_UNKNOWN = 0,
 	I915_REQUEST_COMPLETE,

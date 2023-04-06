@@ -3,6 +3,11 @@
 #include_next <linux/workqueue.h>
 #include <linux/version.h>
 
+#ifdef BPM_FLUSH_WQ_WITH_WARN_WRAPPER_PRESENT
+#undef flush_workqueue
+#define flush_workqueue __flush_workqueue
+#endif
+
 #if LINUX_VERSION_IS_LESS(3,7,0)
 #define mod_delayed_work LINUX_I915_BACKPORT(mod_delayed_work)
 bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,

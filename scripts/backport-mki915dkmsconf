@@ -16,16 +16,18 @@ helpFunction()
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p prerelease/opensource"
+	echo -e "\t-s buildversion"
 	exit 1
 }
 
-while getopts "n:v:r:p:" opt
+while getopts "n:v:r:p:s:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
 		? ) helpFunction ;;
 	esac
 done
@@ -72,6 +74,6 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		fi
 	}
 
-	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PMT_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver"
+	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PMT_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver"
 	CLEAN="export LEX=flex; 'make' clean"
 EOF

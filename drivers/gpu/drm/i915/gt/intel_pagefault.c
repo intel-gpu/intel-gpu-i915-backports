@@ -180,6 +180,10 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	struct intel_context *ce;
 	int ret;
 
+	/* return if object has single placement or already in lmem_id */
+	if (!i915_gem_object_migratable(obj) || obj->mm.region->id == lmem_id)
+		return 0;
+
 	if (!gt->engine[id])
 		return -ENODEV;
 
@@ -236,7 +240,8 @@ static enum intel_region_id get_lmem_region_id(struct drm_i915_gem_object *obj, 
 	return 0;
 }
 
-static int validate_fault(struct i915_vma *vma, struct recoverable_page_fault_info *info)
+static int validate_fault(struct drm_i915_private *i915, struct i915_vma *vma,
+			  struct recoverable_page_fault_info *info)
 {
 	/* combined access_type and fault_type */
 	enum {
@@ -255,23 +260,35 @@ static int validate_fault(struct i915_vma *vma, struct recoverable_page_fault_in
 		break;
 	case FAULT_WRITE_NOT_PRESENT:
 		if (i915_gem_object_is_readonly(vma->obj)) {
-			pr_err("Write Access Violation: read only\n");
+			drm_err(&i915->drm, "Write Access Violation: read only\n");
 			err = -EACCES;
 		}
 		break;
 	case FAULT_ATOMIC_NOT_PRESENT:
+		/*
+		 * This case is early detection of ATOMIC ACCESS_VIOLATION.
+		 *
+		 * Imported (dma-buf) objects do not have a memory_mask (or
+		 * placement list), so allow the NOT_PRESENT fault to proceed
+		 * as we cannot test placement list.
+		 * The replayed memory access will catch a true ATOMIC
+		 * ACCESS_VIOLATION and fail appropriately.
+		 */
+		if (!vma->obj->memory_mask)
+			break;
+		fallthrough;
 	case FAULT_ATOMIC_ACCESS_VIOLATION:
 		if (!(vma->obj->memory_mask & REGION_LMEM_MASK)) {
-			pr_err("Atomic Access Violation\n");
+			drm_err(&i915->drm, "Atomic Access Violation\n");
 			err = -EACCES;
 		}
 		break;
 	case FAULT_WRITE_ACCESS_VIOLATION:
-		pr_err("Write Access Violation\n");
+		drm_err(&i915->drm, "Write Access Violation\n");
 		err = -EACCES;
 		break;
 	default:
-		pr_err("Undefined Fault Type\n");
+		drm_err(&i915->drm, "Undefined Fault Type\n");
 		err = -EACCES;
 		break;
 	}
@@ -308,21 +325,36 @@ handle_i915_mm_fault(struct intel_guc *guc,
 		return ERR_PTR(-ENOENT);
 
 	vma = i915_find_vma(vm, info->page_addr);
+
+	trace_i915_mm_fault(gt->i915, vm, vma, info);
+
 	if (!vma) {
 		if (vm->has_scratch) {
+			/* Map the out-of-bound access to scratch page.
+			 *
+			 * Out-of-bound virtual address range is not tracked,
+			 * so whenever we bind a new vma we do not know if it
+			 * is replacing a scratch mapping, and so we must always
+			 * flush the TLB of the vma's address range so that the
+			 * next access will not load scratch. Set invalidate_tlb_scratch
+			 * flag so we know on next vm_bind.
+			 *
+			 * This is an exceptional path to ease userspace development.
+			 * Once user space fixes all the out-of-bound access, this
+			 * logic will be removed.
+			 */
 			gen12_init_fault_scratch(vm,
 						 info->page_addr,
 						 BIT(vm->scratch_order + PAGE_SHIFT),
 						 true);
+			vm->invalidate_tlb_scratch = true;
 			return NULL;
 		}
 
 		return ERR_PTR(-ENOENT);
 	}
 
-	trace_i915_mm_fault(gt->i915, vm, vma, info);
-
-	err = validate_fault(vma, info);
+	err = validate_fault(gt->i915, vma, info);
 	if (err)
 		goto put_vma;
 

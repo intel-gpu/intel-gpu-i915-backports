@@ -580,12 +580,31 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 				    unsigned long timeout,
 				    gfp_t gfp)
 {
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *f;
+#else
 	struct dma_fence *excl;
+#endif
 	int ret = 0, pending;
 
 	debug_fence_assert(fence);
 	might_sleep_if(gfpflags_allow_blocking(gfp));
 
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	dma_resv_iter_begin(&cursor, resv, dma_resv_usage_rw(write));
+	dma_resv_for_each_fence_unlocked(&cursor, f) {
+		 pending = i915_sw_fence_await_dma_fence(fence, f, timeout,
+				 			 gfp);
+		 if (pending < 0) {
+			 ret = pending;
+			 break;
+		 }
+		 
+		 ret |= pending;
+	}
+	dma_resv_iter_end(&cursor);
+#else
 	if (write) {
 		struct dma_fence **shared;
 		unsigned int count, i;
@@ -629,7 +648,7 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 	}
 
 	dma_fence_put(excl);
-
+#endif
 	return ret;
 }
 

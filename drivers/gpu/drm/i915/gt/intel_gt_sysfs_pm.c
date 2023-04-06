@@ -106,7 +106,7 @@ static u32 _with_pm_intel_dev_read(struct device *dev,
 	return regval;
 }
 
-#ifdef CONFIG_PM
+#if IS_ENABLED(CONFIG_PM)
 static u32 get_residency(struct intel_gt *gt, i915_reg_t reg)
 {
 	intel_wakeref_t wakeref;
@@ -319,11 +319,6 @@ static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
 				gt->info.id);
 	}
 }
-#else
-static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
-{
-}
-#endif /* CONFIG_PM */
 
 static ssize_t vlv_rpe_freq_mhz_show(struct device *dev,
 				     struct device_attribute *attr, char *buff)
@@ -335,6 +330,11 @@ static ssize_t vlv_rpe_freq_mhz_show(struct device *dev,
 			intel_gpu_freq(rps, rps->efficient_freq));
 }
 
+#else
+static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
+{
+}
+#endif /* CONFIG_PM */
 static ssize_t act_freq_mhz_show(struct device *dev,
 				 struct device_attribute *attr, char *buff)
 {
@@ -508,7 +508,9 @@ static ssize_t RPn_freq_mhz_show(struct device *dev,
 }
 
 /* sysfs dual-location files <dev>/vlv_rpe_freq_mhz and <dev>/gt/gt0/vlv_rpe_freq_mhz */
+#if IS_ENABLED(CONFIG_PM)
 static I915_DEVICE_ATTR_RO(vlv_rpe_freq_mhz, vlv_rpe_freq_mhz_show);
+#endif
 
 /* sysfs dual-location files <dev>/gt_* and <dev>/gt/gt<i>/rps_* */
 
@@ -554,6 +556,7 @@ static const struct attribute * const gen6_rps_attrs[] = GEN6_ATTR(rps);
 /* sysfs files <dev>/gt/gt<i>/rps_* */
 static const struct attribute * const gen6_gt_attrs[]  = GEN6_ATTR(gt);
 
+#if IS_ENABLED(CONFIG_PM)
 static ssize_t rapl_PL1_freq_mhz_show(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buff)
@@ -1039,7 +1042,6 @@ static ssize_t sys_pwr_balance_store(struct device *dev,
 				 PVC_SYS_PWR_BAL_FACTOR_MASK, val);
 	return count;
 }
-
 static ssize_t sys_pwr_balance_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
@@ -1057,6 +1059,7 @@ static const struct attribute * const sys_pwr_balance_attrs[] = {
 	&dev_attr_sys_pwr_balance.attr.attr,
 	NULL
 };
+#endif
 
 static ssize_t
 default_min_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -1094,6 +1097,7 @@ static struct i915_kobj_ext_attr default_boost_freq_mhz = {
 	__ATTR(rps_boost_freq_mhz, 0444, i915_kobj_sysfs_show, NULL),
 	default_boost_freq_mhz_show, NULL};
 
+#if IS_ENABLED(CONFIG_PM)
 static ssize_t
 default_media_freq_factor_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1106,6 +1110,7 @@ default_media_freq_factor_show(struct kobject *kobj, struct kobj_attribute *attr
 static struct i915_kobj_ext_attr default_media_freq_factor = {
 	__ATTR(media_freq_factor, 0444, i915_kobj_sysfs_show, NULL),
 	default_media_freq_factor_show, NULL};
+#endif
 
 static ssize_t
 default_base_freq_factor_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -1194,15 +1199,19 @@ static int intel_sysfs_rps_init_gt(struct intel_gt *gt, struct kobject *kobj)
 	int ret;
 
 	if (GRAPHICS_VER(gt->i915) >= 12) {
+#if IS_ENABLED(CONFIG_PM)
 		ret = sysfs_create_files(kobj, freq_attrs);
 		if (ret)
 			return ret;
+#endif
 	}
 
 	if (IS_PONTEVECCHIO(gt->i915)) {
+#if IS_ENABLED(CONFIG_PM)
 		ret = sysfs_create_files(kobj, pvc_perf_power_attrs);
 		if (ret)
 			return ret;
+#endif
 
 		set_default_base_freq_factor(gt);
 		ret = sysfs_create_file(gt->sysfs_defaults, &default_base_freq_factor.attr.attr);
@@ -1210,6 +1219,7 @@ static int intel_sysfs_rps_init_gt(struct intel_gt *gt, struct kobject *kobj)
 			return ret;
 	}
 
+#if IS_ENABLED(CONFIG_PM)
 	if (IS_PVC_BD_STEP(gt->i915, STEP_B0, STEP_FOREVER)) {
 		ret = sysfs_create_file(kobj, &dev_attr_media_act_freq_mhz.attr.attr);
 		if (ret)
@@ -1238,9 +1248,11 @@ static int intel_sysfs_rps_init_gt(struct intel_gt *gt, struct kobject *kobj)
 			return ret;
 	}
 
+#endif
 	return add_rps_defaults(gt);
 }
 
+#if IS_ENABLED(CONFIG_PM)
 /* seconds */
 #define POWER_STATE_PW_DELAY_MIN 5
 
@@ -1339,7 +1351,7 @@ static const struct attribute * const iaf_attrs[] = {
 	&dev_attr_iaf_power_enable.attr.attr,
 	NULL
 };
-
+#endif
 static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
 {
 	const struct attribute * const *attrs;
@@ -1356,18 +1368,21 @@ static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
 	if (ret)
 		return ret;
 
+#if IS_ENABLED(CONFIG_PM)
 	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915)) {
 		ret = sysfs_create_file(kobj, &dev_attr_vlv_rpe_freq_mhz.attr.attr);
 		if (ret)
 			return ret;
 	}
-
+#endif
 	if (is_object_gt(kobj)) {
 		/* attributes for only directory gt/gt<i> */
 		ret = intel_sysfs_rps_init_gt(gt, kobj);
 		if (ret)
 			return ret;
 	} else if (IS_PONTEVECCHIO(gt->i915)) {
+
+#if IS_ENABLED(CONFIG_PM)
 		ret = sysfs_create_files(kobj, sys_pwr_balance_attrs);
 		if (ret)
 			return ret;
@@ -1378,6 +1393,7 @@ static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
 			if (ret)
 				return ret;
 		}
+#endif
 	}
 
 	return 0;

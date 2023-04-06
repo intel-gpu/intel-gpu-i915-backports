@@ -27,7 +27,6 @@ config DRM_I915
 	select SND_HDA_I915 if SND_HDA_CORE
 	select CEC_CORE if CEC_NOTIFIER
 	depends on VMAP_PFN
-	depends on DRM_TTM
 	depends on AUXILIARY_BUS || MFD_CORE
 	depends on MTD
 	help

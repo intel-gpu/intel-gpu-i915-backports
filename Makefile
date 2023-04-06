@@ -20,7 +20,7 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
-PKG_DISTRO_TARGETS := i915dkmsdeb-pkg i915dkmsrpm-pkg
+PKG_DISTRO_TARGETS := i915dkmsdeb-pkg i915dkmsrpm-pkg binrpm-pkg
 
 ARCH := x86_64
 
@@ -141,6 +141,7 @@ i915dkmsdeb-pkg-help:
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC" 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep "GENERIC" 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
+	$(shell cat versions |& tail -n +4 | grep VANILLA_KERNEL_VERSION | cut -d "_" -f 1 1>&2)
 	$(info )
 	$(info Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC)
 	@echo ""
@@ -155,6 +156,8 @@ i915dkmsrpm-pkg-help:
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep FBK 1>&2)
+	$(shell cat versions |& tail -n +4 | grep VANILLA_KERNEL_VERSION | cut -d "_" -f 1 1>&2)
 	$(info )
 	$(info Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4)
 	@echo ""
