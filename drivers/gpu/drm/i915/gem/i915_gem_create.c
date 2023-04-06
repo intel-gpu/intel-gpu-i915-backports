@@ -8,6 +8,7 @@
 #include "gem/i915_gem_ioctls.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
+#include "gem/i915_gem_object.h"
 #include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
@@ -158,7 +159,64 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 	obj->memory_mask = placement_mask(obj->mm.placements, obj->mm.n_placements);
 
 	trace_i915_gem_object_create(obj);
+
+	return i915_gem_object_account(obj);
+}
+
+static int account_size(struct drm_i915_private *i915, unsigned long
+			region_mask, int acct, ssize_t size)
+{
+	int region_id;
+
+	for_each_set_bit(region_id, &region_mask, INTEL_REGION_UNKNOWN) {
+		struct intel_memory_region *mr = i915->mm.regions[region_id];
+		int ret = 0;
+
+		mutex_lock(&mr->mm_lock);
+
+		if (!i915_allows_overcommit(i915)) {
+			if (size > 0 && mr->acct_limit[acct] < size)
+				ret = -EPERM;
+			if (!ret)
+				mr->acct_limit[acct] -= size;
+		}
+
+		if (!ret)
+			mr->acct_user[acct] += size;
+
+		mutex_unlock(&mr->mm_lock);
+
+		if (ret) {
+			account_size(i915, region_mask & (BIT(region_id) - 1),
+				     acct, -size);
+
+			return ret;
+		}
+	}
+
 	return 0;
+}
+
+int i915_gem_object_account(struct drm_i915_gem_object *obj)
+{
+	if (!(obj->flags & I915_BO_ALLOC_USER))
+		return 0;
+
+	return account_size(to_i915(obj->base.dev),
+			    obj->memory_mask & REGION_LMEM_MASK,
+			    i915_gem_object_get_accounting(obj),
+			    obj->base.size);
+}
+
+void i915_gem_object_unaccount(struct drm_i915_gem_object *obj)
+{
+	if (!(obj->flags & I915_BO_ALLOC_USER))
+		return;
+
+	account_size(to_i915(obj->base.dev),
+		     obj->memory_mask & REGION_LMEM_MASK,
+		     i915_gem_object_get_accounting(obj),
+		     -obj->base.size);
 }
 
 int

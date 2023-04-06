@@ -1175,10 +1175,8 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
-	if (IS_METEORLAKE(gt->i915))
-		obj->pat_index = 3;
-
-	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
+	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 70))
+		i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
 
 	vma = guc_vma_from_obj(guc, obj, bias);
 	if (IS_ERR(vma))

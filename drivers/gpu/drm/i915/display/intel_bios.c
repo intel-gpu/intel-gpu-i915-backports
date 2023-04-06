@@ -2500,42 +2500,6 @@ static int _intel_bios_dp_max_link_rate(const struct intel_bios_encoder_data *de
 		return parse_bdb_216_dp_max_link_rate(devdata->child.dp_max_link_rate);
 }
 
-static int _intel_bios_hdmi_max_frl_rate(const struct intel_bios_encoder_data *devdata)
-{
-	struct drm_i915_private *i915 = devdata->i915;
-
-	if (i915->vbt.version >= 237 &&
-	    devdata->child.hdmi_max_frl_rate_valid) {
-		switch (devdata->child.hdmi_max_frl_rate) {
-		default:
-		case HDMI_MAX_FRL_RATE_PLATFORM:
-			drm_dbg_kms(&i915->drm, "HDMI2.1 is limited to support only TMDS modes\n");
-			return 0;
-		case HDMI_MAX_FRL_RATE_3G:
-			return 3000000;
-		case HDMI_MAX_FRL_RATE_6G:
-			return 6000000;
-		case HDMI_MAX_FRL_RATE_8G:
-			return 8000000;
-		case HDMI_MAX_FRL_RATE_10G:
-			return 10000000;
-		case HDMI_MAX_FRL_RATE_12G:
-			return 12000000;
-		}
-	}
-
-	/*
-	 * When hdmi_max_frl_rate_valid is 0
-	 * Don't consider the hdmi_max_frl_rate for
-	 * limiting the FrlRates on HDMI2.1 displays
-	 */
-	if (i915->vbt.version >= 237 &&
-	    IS_METEORLAKE(i915))
-		return 12000000;
-
-	return 0;
-}
-
 static void sanitize_device_type(struct intel_bios_encoder_data *devdata,
 				 enum port port)
 {
@@ -2641,7 +2605,6 @@ static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
 	const struct child_device_config *child = &devdata->child;
 	bool is_dvi, is_hdmi, is_dp, is_edp, is_crt, supports_typec_usb, supports_tbt;
 	int dp_boost_level, dp_max_link_rate, hdmi_boost_level, hdmi_level_shift, max_tmds_clock;
-	int hdmi_max_frl_rate;
 
 	is_dvi = intel_bios_encoder_supports_dvi(devdata);
 	is_dp = intel_bios_encoder_supports_dp(devdata);
@@ -2690,12 +2653,6 @@ static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
 		drm_dbg_kms(&i915->drm,
 			    "Port %c VBT DP max link rate: %d\n",
 			    port_name(port), dp_max_link_rate);
-
-	hdmi_max_frl_rate = _intel_bios_hdmi_max_frl_rate(devdata);
-	if (hdmi_max_frl_rate)
-		drm_dbg_kms(&i915->drm,
-			    "VBT HDMI max frl rate for port %c: %d\n",
-			    port_name(port), hdmi_max_frl_rate);
 
 	/*
 	 * FIXME need to implement support for VBT
@@ -3697,14 +3654,6 @@ int intel_bios_max_tmds_clock(struct intel_encoder *encoder)
 	const struct intel_bios_encoder_data *devdata = i915->vbt.ports[encoder->port];
 
 	return _intel_bios_max_tmds_clock(devdata);
-}
-
-int intel_bios_hdmi_max_frl_rate(struct intel_encoder *encoder)
-{
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
-	const struct intel_bios_encoder_data *devdata = i915->vbt.ports[encoder->port];
-
-	return _intel_bios_hdmi_max_frl_rate(devdata);
 }
 
 /* This is an index in the HDMI/DVI DDI buffer translation table, or -1 */

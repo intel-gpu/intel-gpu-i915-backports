@@ -893,9 +893,6 @@ mem_write_tearing(struct intel_gt *gt,
 		if (err == 0) {
 			unsigned long sizes = INTEL_INFO(gt->i915)->page_sizes;
 
-			if (!IS_ENABLED(DRM_I915_SELFTEST_BROKEN))
-				sizes &= ~SZ_64K;
-
 			for_each_set_bit(bit, &sizes, BITS_PER_LONG) {
 				err = pte_fn(ce, va, vb, BIT_ULL(bit), &prng);
 				if (err)
@@ -1008,6 +1005,27 @@ int intel_gtt_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(direct_mov),
 		SUBTEST(direct_inc),
 		SUBTEST(direct_dec),
+	};
+	struct intel_gt *gt;
+	unsigned int i;
+
+	for_each_gt(gt, i915, i) {
+		int err;
+
+		if (intel_gt_is_wedged(gt))
+			continue;
+
+		err = intel_gt_live_subtests(tests, gt);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+int intel_gtt_wip_selftests(struct drm_i915_private *i915)
+{
+	static const struct i915_subtest tests[] = {
 		SUBTEST(write_tearing),
 		SUBTEST(invalid_read),
 		SUBTEST(invalid_fault),

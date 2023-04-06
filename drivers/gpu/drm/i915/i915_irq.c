@@ -2761,6 +2761,101 @@ hardware_error_type_to_str(const enum hardware_error hw_err)
 	drm_err_ratelimited(&(gt)->i915->drm, HW_ERR "GT%d detected " fmt, \
 			    (gt)->info.id, ##__VA_ARGS__)
 
+static const char *
+soc_err_index_to_str(unsigned long index)
+{
+	switch (index) {
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_PSF_CSC_0):
+		return "PSF CSC0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_PSF_CSC_1):
+		return "PSF CSC1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_PSF_CSC_2):
+		return "PSF CSC2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_0):
+		return "PSF0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_1):
+		return "PSF1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2):
+		return "PSF2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0):
+		return "CD0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI):
+		return "CD0 MDFI";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST):
+		return "MDFI EAST";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH):
+		return "MDFI SOUTH";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_PUNIT):
+		return "PUNIT";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_0):
+		return "HBM SS0: Sbbridge0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_1):
+		return "HBM SS0: Sbbridge1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_2):
+		return "HBM SS0: Sbbridge2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_3):
+		return "HBM SS0: Sbbridge3";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_4):
+		return "HBM SS0: Sbbridge4";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_5):
+		return "HBM SS0: Sbbridge5";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_6):
+		return "HBM SS0: Sbbridge6";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_7):
+		return "HBM SS0: Sbbridge7";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_0):
+		return "HBM SS1: Sbbridge0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_1):
+		return "HBM SS1: Sbbridge1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_2):
+		return "HBM SS1: Sbbridge2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_3):
+		return "HBM SS1: Sbbridge3";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_4):
+		return "HBM SS1: Sbbridge4";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_5):
+		return "HBM SS1: Sbbridge5";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_6):
+		return "HBM SS1: Sbbridge6";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_7):
+		return "HBM SS1: Sbbridge7";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_0):
+		return "HBM SS2: Sbbridge0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_1):
+		return "HBM SS2: Sbbridge1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_2):
+		return "HBM SS2: Sbbridge2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_3):
+		return "HBM SS2: Sbbridge3";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_4):
+		return "HBM SS2: Sbbridge4";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_5):
+		return "HBM SS2: Sbbridge5";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_6):
+		return "HBM SS2: Sbbridge6";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS2_7):
+		return "HBM SS2: Sbbridge7";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_0):
+		return "HBM SS3: Sbbridge0";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_1):
+		return "HBM SS3: Sbbridge1";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_2):
+		return "HBM SS3: Sbbridge2";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_3):
+		return "HBM SS3: Sbbridge3";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_4):
+		return "HBM SS3: Sbbridge4";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_5):
+		return "HBM SS3: Sbbridge5";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_6):
+		return "HBM SS3: Sbbridge6";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_7):
+		return "HBM SS3: Sbbridge7";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static void update_soc_hw_error_cnt(struct intel_gt *gt, unsigned long index)
 {
 	unsigned long flags;
@@ -2814,9 +2909,9 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 			      REG_GENMASK(31, 0));
 		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err),
 			      REG_GENMASK(31, 0));
-		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(base, hw_err),
+		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      REG_GENMASK(31, 0));
-		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(base, hw_err),
+		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      REG_GENMASK(31, 0));
 
 		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT, "UNKNOWN SOC %s error\n", hardware_error_type_to_str(hw_err));
@@ -2834,15 +2929,20 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 
 	mst_glb_errstat = raw_reg_read(regs,
 				       SOC_GLOBAL_ERR_STAT_MASTER_REG(base, hw_err));
+	log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_MASTER_REG_FATAL:0x%08lx\n", mst_glb_errstat);
 	if (mst_glb_errstat & REG_BIT(SOC_SLAVE_IEH)) {
 		slv_glb_errstat = raw_reg_read(regs,
 					       SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base,
 									     hw_err));
+		log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_SLAVE_REG_FATAL:0x%08lx\n",
+			      slv_glb_errstat);
 
 		if (slv_glb_errstat & REG_BIT(SOC_IEH1_LOCAL_ERR_STATUS)) {
 			lcl_errstat = raw_reg_read(regs,
 						   SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base,
 										hw_err));
+			log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_SLAVE_REG_FATAL:0x%08lx\n",
+				      lcl_errstat);
 
 			for_each_set_bit(errbit, &lcl_errstat,
 					 SOC_HW_ERR_MAX_BITS) {
@@ -2854,6 +2954,9 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 				 */
 				index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 				update_soc_hw_error_cnt(gt, index);
+				if (IS_PONTEVECCHIO(gt->i915))
+					log_gt_hw_err(gt, "%s SOC FATAL error\n",
+						      soc_err_index_to_str(index));
 			}
 			raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 				      lcl_errstat);
@@ -2862,6 +2965,9 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 		for_each_set_bit(errbit, &slv_glb_errstat, SOC_HW_ERR_MAX_BITS) {
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
+			if (IS_PONTEVECCHIO(gt->i915))
+				log_gt_hw_err(gt, "%s SOC FATAL error\n",
+					      soc_err_index_to_str(index));
 		}
 		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      slv_glb_errstat);
@@ -2870,9 +2976,13 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 	if (mst_glb_errstat & REG_BIT(SOC_IEH0_LOCAL_ERR_STATUS)) {
 		lcl_errstat = raw_reg_read(regs,
 					   SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err));
+		log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_MASTER_REG_FATAL:0x%08lx\n", lcl_errstat);
 		for_each_set_bit(errbit, &lcl_errstat, SOC_HW_ERR_MAX_BITS) {
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
+			if (IS_PONTEVECCHIO(gt->i915))
+				log_gt_hw_err(gt, "%s SOC FATAL error\n",
+					      soc_err_index_to_str(index));
 		}
 		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err),
 			      lcl_errstat);
@@ -2881,6 +2991,9 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 	for_each_set_bit(errbit, &mst_glb_errstat, SOC_HW_ERR_MAX_BITS) {
 		index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, hw_err, errbit);
 		update_soc_hw_error_cnt(gt, index);
+		if (IS_PONTEVECCHIO(gt->i915))
+			log_gt_hw_err(gt, "%s SOC FATAL error\n",
+				      soc_err_index_to_str(index));
 	}
 	raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_MASTER_REG(base, hw_err),
 		      mst_glb_errstat);
@@ -2898,7 +3011,14 @@ static void gen12_gt_fatal_hw_error_stats_update(struct intel_gt *gt,
 
 	if (!errstat && HAS_GT_ERROR_VECTORS(gt->i915))
 		return;
+
 	for_each_set_bit(errbit, &errstat, GT_HW_ERROR_MAX_ERR_BITS) {
+		if (IS_PONTEVECCHIO(gt->i915) && !(REG_BIT(errbit) & PVC_FAT_ERR_MASK)) {
+			intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
+						  "UNKNOWN FATAL error\n");
+			continue;
+		}
+
 		switch (errbit) {
 		case ARRAY_BIST_FAT_ERR:
 			gt->errors.hw[INTEL_GT_HW_ERROR_FAT_ARR_BIST]++;
@@ -2964,6 +3084,12 @@ gen12_gt_correctable_hw_error_stats_update(struct intel_gt *gt,
 		return;
 
 	for_each_set_bit(errbit, &errstat, GT_HW_ERROR_MAX_ERR_BITS) {
+		if (IS_PONTEVECCHIO(gt->i915) && !(REG_BIT(errbit) & PVC_COR_ERR_MASK)) {
+			intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
+						  "UNKNOWN CORRECTABLE error\n");
+			continue;
+		}
+
 		switch (errbit) {
 		case L3_SNG_COR_ERR:
 			gt->errors.hw[INTEL_GT_HW_ERROR_COR_L3_SNG]++;
@@ -2998,6 +3124,22 @@ gen12_gt_correctable_hw_error_stats_update(struct intel_gt *gt,
 	}
 }
 
+static void gen12_gsc_hw_error_work(struct work_struct *work)
+{
+	struct intel_gt *gt =
+		container_of(work, typeof(*gt), gsc_hw_error_work);
+	char *csc_hw_error_event[3];
+
+	csc_hw_error_event[0] = PRELIM_I915_MEMORY_HEALTH_UEVENT "=1";
+	csc_hw_error_event[1] = "SPARING_STATUS_UNKNOWN=1 RESET_REQUIRED=1";
+	csc_hw_error_event[2] = NULL;
+	gt->mem_sparing.health_status = MEM_HEALTH_UNKNOWN;
+
+	dev_notice(gt->i915->drm.dev, "Unknown memory health status, Reset Required\n");
+	kobject_uevent_env(&gt->i915->drm.primary->kdev->kobj, KOBJ_CHANGE,
+			   csc_hw_error_event);
+}
+
 static void gen12_mem_health_work(struct work_struct *work)
 {
 	struct intel_gt *gt =
@@ -3023,10 +3165,10 @@ static void gen12_mem_health_work(struct work_struct *work)
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
 		gt->mem_sparing.health_status = MEM_HEALTH_EC_PENDING;
-		sparing_event[event_idx++] = "REBOOT_ALARM=1 EC_PENDING=1";
+		sparing_event[event_idx++] = "RESET_REQUIRED=1 EC_PENDING=1";
 		dev_crit(gt->i915->drm.dev,
 			 "Memory Health Report: Error correction pending.\n"
-			 "System need to be reset or rebooted.\n"
+			 "Card need to be reset.\n"
 			 "Memory might now be functioning in unreliable state.\n"
 			 "Error Cause: 0x%x\n", cause);
 		add_taint(TAINT_MACHINE_CHECK, LOCKDEP_STILL_OK);
@@ -3061,6 +3203,7 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 	void __iomem * const regs = gt->uncore->regs;
 	u32 base = DG1_GSC_HECI1_BASE;
 	unsigned long err_status;
+	u32 errbit;
 
 	if (!HAS_MEM_SPARING_SUPPORT(gt->i915))
 		return;
@@ -3078,27 +3221,102 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 
 	switch (hw_err) {
 	case HARDWARE_ERROR_CORRECTABLE:
-		if (err_status & DEV_ERR_STAT_CORR_FW_ERR) {
-			gt->mem_sparing.cause |=
-				raw_reg_read(regs,
-					     GSC_HEC_CORR_FW_ERR_DW0(base));
-			if (unlikely(!gt->mem_sparing.cause))
-				goto re_enable_interrupt;
-			schedule_work(&gt->mem_sparing.mem_health_work);
-			drm_err_ratelimited(&gt->i915->drm,
-					    HW_ERR "Correctable Memory Error Detected\n");
+		for_each_set_bit(errbit, &err_status, GSC_HW_ERROR_MAX_ERR_BITS) {
+			u32 err_type = GSC_HW_ERROR_MAX_ERR_BITS;
+			const char *name;
+
+			switch (errbit) {
+			case GSC_COR_SRAM_ECC_SINGLE_BIT_ERR:
+				name = "Single bit error on CSME SRAM";
+				err_type = INTEL_GSC_HW_ERROR_COR_SRAM_ECC;
+				break;
+			case GSC_COR_FW_REPORTED_ERR:
+				gt->mem_sparing.cause |=
+					raw_reg_read(regs,
+						     GSC_HEC_CORR_FW_ERR_DW0(base));
+				if (unlikely(!gt->mem_sparing.cause))
+					goto re_enable_interrupt;
+				schedule_work(&gt->mem_sparing.mem_health_work);
+				break;
+			default:
+				name = "Unknown";
+				break;
+			}
+
+			if (err_type != GSC_HW_ERROR_MAX_ERR_BITS)
+				gt->errors.gsc_hw[err_type]++;
+
+			if (errbit != GSC_COR_FW_REPORTED_ERR)
+				drm_err_ratelimited(&gt->i915->drm, HW_ERR
+						    "%s GSC Correctable Error, GSC_HEC_CORR_ERR_STATUS:0x%08lx\n",
+						    name, err_status);
 		}
 		break;
 	case HARDWARE_ERROR_NONFATAL:
-		if (err_status & DEV_ERR_STAT_UNCORR_FW_ERR) {
-			gt->mem_sparing.cause |=
-				raw_reg_read(regs,
-					     GSC_HEC_UNCORR_FW_ERR_DW0(base));
-			if (unlikely(!gt->mem_sparing.cause))
-				goto re_enable_interrupt;
-			schedule_work(&gt->mem_sparing.mem_health_work);
-			drm_err_ratelimited(&gt->i915->drm,
-					    HW_ERR "Non_fatal Uncorrectable Memory Error Detected\n");
+		for_each_set_bit(errbit, &err_status, GSC_HW_ERROR_MAX_ERR_BITS) {
+			u32 err_type = GSC_HW_ERROR_MAX_ERR_BITS;
+			const char *name;
+
+			switch (errbit) {
+			case GSC_UNCOR_MIA_SHUTDOWN_ERR:
+				name = "MinuteIA Unexpected Shutdown";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_MIA_SHUTDOWN;
+				break;
+			case GSC_UNCOR_MIA_INT_ERR:
+				name = "MinuteIA Internal Error";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_MIA_INT;
+				break;
+			case GSC_UNCOR_SRAM_ECC_ERR:
+				name = "Double bit error on CSME SRAM";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_SRAM_ECC;
+				break;
+			case GSC_UNCOR_WDG_TIMEOUT_ERR:
+				name = "WDT 2nd Timeout";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_WDG_TIMEOUT;
+				break;
+			case GSC_UNCOR_ROM_PARITY_ERR:
+				name = "ROM has a parity error";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_ROM_PARITY;
+				break;
+			case GSC_UNCOR_UCODE_PARITY_ERR:
+				name = "Ucode has a parity error";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_UCODE_PARITY;
+				break;
+			case GSC_UNCOR_FW_REPORTED_ERR:
+				name = "Errors Reported to FW and Detected by FW";
+				break;
+			case GSC_UNCOR_GLITCH_DET_ERR:
+				name = "Glitch is detected on voltage rail";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_GLITCH_DET;
+				break;
+			case GSC_UNCOR_FUSE_PULL_ERR:
+				name = "Fuse Pull Error";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_FUSE_PULL;
+				break;
+			case GSC_UNCOR_FUSE_CRC_CHECK_ERR:
+				name = "Fuse CRC Check Failed on Fuse Pull";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_FUSE_CRC_CHECK;
+				break;
+			case GSC_UNCOR_SELFMBIST_ERR:
+				name = "Self Mbist Failed";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_SELFMBIST;
+				break;
+			case GSC_UNCOR_AON_PARITY_ERR:
+				name = "AON RF has parity error";
+				err_type = INTEL_GSC_HW_ERROR_UNCOR_AON_PARITY;
+				break;
+			default:
+				name = "Unknown";
+				break;
+			}
+
+			if (err_type != GSC_HW_ERROR_MAX_ERR_BITS)
+				gt->errors.gsc_hw[err_type]++;
+
+			schedule_work(&gt->gsc_hw_error_work);
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "%s GSC NON_FATAL Error, GSC_HEC_UNCORR_ERR_STATUS:0x%08lx\n",
+					    name, err_status);
 		}
 		break;
 	case HARDWARE_ERROR_FATAL:
@@ -3123,41 +3341,71 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 
 	lockdep_assert_held(gt->irq_lock);
 
-	errstat = raw_reg_read(regs, ERR_STAT_GT_REG(hw_err));
-
-	if (!errstat && !HAS_GT_ERROR_VECTORS(gt->i915)) {
-		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
-					  "ERR_STAT_GT_REG_%s blank!\n", hw_err_str);
-		return;
+	if (!HAS_GT_ERROR_VECTORS(gt->i915)) {
+		errstat = raw_reg_read(regs, ERR_STAT_GT_REG(hw_err));
+		if (unlikely(!errstat)) {
+			intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
+						  "ERR_STAT_GT_REG_%s blank!\n", hw_err_str);
+			return;
+		}
 	}
 
 	switch (hw_err) {
 	case HARDWARE_ERROR_CORRECTABLE:
-		gen12_gt_correctable_hw_error_stats_update(gt, errstat);
 		if (HAS_GT_ERROR_VECTORS(gt->i915)) {
 			bool error = false;
 			int i;
 
+			errstat = 0;
 			for (i = 0; i < ERR_STAT_GT_COR_VCTR_LEN; i++) {
-				const char *name = "Unknown";
-				u32 vctr;
+				u32 err_type = ERR_STAT_GT_COR_VCTR_LEN;
+				unsigned long vctr;
+				const char *name;
 
 				vctr = raw_reg_read(regs, ERR_STAT_GT_COR_VCTR_REG(i));
 				if (!vctr)
 					continue;
 
-				if (i < ERR_STAT_GT_VCTR2)
-					name = "SubSlice";
-				else
-					name = "L3 BANK";
+				switch (i) {
+				case ERR_STAT_GT_VCTR0:
+				case ERR_STAT_GT_VCTR1:
+					err_type = INTEL_GT_HW_ERROR_COR_SUBSLICE;
+					gt->errors.hw[err_type] += hweight32(vctr);
+					name = "SUBSLICE";
 
+					/* Avoid second read/write to error status register*/
+					if (errstat)
+						break;
+
+					errstat = raw_reg_read(regs, ERR_STAT_GT_REG(hw_err));
+					log_gt_hw_err(gt, "ERR_STAT_GT_CORRECTABLE:0x%08lx\n",
+						      errstat);
+					gen12_gt_correctable_hw_error_stats_update(gt, errstat);
+					if (errstat)
+						raw_reg_write(regs, ERR_STAT_GT_REG(hw_err), errstat);
+					break;
+
+				case ERR_STAT_GT_VCTR2:
+				case ERR_STAT_GT_VCTR3:
+					err_type = INTEL_GT_HW_ERROR_COR_L3BANK;
+					gt->errors.hw[err_type] += hweight32(vctr);
+					name = "L3 BANK";
+					break;
+				default:
+					name = "UNKNOWN";
+					break;
+				}
 				raw_reg_write(regs, ERR_STAT_GT_COR_VCTR_REG(i), vctr);
-				log_gt_hw_err(gt, "%s CORRECTABLE ERROR, ERR_STAT_GT_CORRECTABLE_%d:0x%08x\n",
+				log_gt_hw_err(gt, "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08lx\n",
 					      name, i, vctr);
 				error = true;
 			}
+
 			if (!error)
-				log_gt_hw_err(gt, "UNKNOWN CORRECTABLE ERROR\n");
+				log_gt_hw_err(gt, "UNKNOWN CORRECTABLE error\n");
+		} else {
+			gen12_gt_correctable_hw_error_stats_update(gt, errstat);
+			log_gt_hw_err(gt, "ERR_STAT_GT_CORRECTABLE:0x%08lx\n", errstat);
 		}
 		break;
 	case HARDWARE_ERROR_NONFATAL:
@@ -3170,14 +3418,15 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 				    HW_ERR "detected Non-Fatal error\n");
 		break;
 	case HARDWARE_ERROR_FATAL:
-		gen12_gt_fatal_hw_error_stats_update(gt, errstat);
 		if (HAS_GT_ERROR_VECTORS(gt->i915)) {
 			bool error = false;
 			int i;
 
+			errstat = 0;
 			for (i = 0; i < ERR_STAT_GT_FATAL_VCTR_LEN; i++) {
-				const char *name = "Unknown";
-				u32 vctr;
+				u32 err_type = ERR_STAT_GT_FATAL_VCTR_LEN;
+				unsigned long vctr;
+				const char *name;
 
 				vctr = raw_reg_read(regs, ERR_STAT_GT_FATAL_VCTR_REG(i));
 				if (!vctr)
@@ -3187,10 +3436,25 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 				switch (i) {
 				case ERR_STAT_GT_VCTR0:
 				case ERR_STAT_GT_VCTR1:
-					name = "SubSlice";
+					err_type = INTEL_GT_HW_ERROR_FAT_SUBSLICE;
+					gt->errors.hw[err_type] += hweight32(vctr);
+					name = "SUBSLICE";
+
+					/*Avoid second read/write to error status register.*/
+					if (errstat)
+						break;
+
+					errstat = raw_reg_read(regs, ERR_STAT_GT_REG(hw_err));
+					log_gt_hw_err(gt, "ERR_STAT_GT_FATAL:0x%08lx\n", errstat);
+					gen12_gt_fatal_hw_error_stats_update(gt, errstat);
+					if (errstat)
+						raw_reg_write(regs, ERR_STAT_GT_REG(hw_err), errstat);
 					break;
+
 				case ERR_STAT_GT_VCTR2:
 				case ERR_STAT_GT_VCTR3:
+					err_type = INTEL_GT_HW_ERROR_FAT_L3BANK;
+					gt->errors.hw[err_type] += hweight32(vctr);
 					name = "L3 BANK";
 					break;
 				case ERR_STAT_GT_VCTR6:
@@ -3202,22 +3466,27 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 					name = "L3 FABRIC";
 					break;
 				default:
+					name = "UNKNOWN";
 					break;
 				}
 				raw_reg_write(regs, ERR_STAT_GT_FATAL_VCTR_REG(i), vctr);
-				log_gt_hw_err(gt, "%s FATAL ERROR, ERR_STAT_GT_FATAL_%d:0x%08x\n",
+				log_gt_hw_err(gt, "%s FATAL error, ERR_VECT_GT_FATAL_%d:0x%08lx\n",
 					      name, i, vctr);
 				error = true;
 			}
 			if (!error)
-				log_gt_hw_err(gt, "UNKNOWN FATAL ERROR\n");
+				log_gt_hw_err(gt, "UNKNOWN FATAL error\n");
+		} else {
+			gen12_gt_fatal_hw_error_stats_update(gt, errstat);
+			log_gt_hw_err(gt, "ERR_STAT_GT_FATAL:0x%08lx\n", errstat);
 		}
 		break;
 	default:
 		break;
 	}
 
-	raw_reg_write(regs, ERR_STAT_GT_REG(hw_err), errstat);
+	if (!HAS_GT_ERROR_VECTORS(gt->i915))
+		raw_reg_write(regs, ERR_STAT_GT_REG(hw_err), errstat);
 }
 
 static void
@@ -4775,9 +5044,9 @@ static void clear_all_soc_errors(struct intel_gt *gt)
 			      REG_GENMASK(31, 0));
 		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err),
 			      REG_GENMASK(31, 0));
-		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(base, hw_err),
+		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      REG_GENMASK(31, 0));
-		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(base, hw_err),
+		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      REG_GENMASK(31, 0));
 		hw_err++;
 	}
@@ -5307,6 +5576,9 @@ void intel_irq_init(struct drm_i915_private *dev_priv)
 	for (i = 0; i < MAX_L3_SLICES; ++i)
 		dev_priv->l3_parity.remap_info[i] = NULL;
 
+	if (HAS_MEM_SPARING_SUPPORT(dev_priv))
+		INIT_WORK(&gt->gsc_hw_error_work, gen12_gsc_hw_error_work);
+
 	if (HAS_MEM_SPARING_SUPPORT(dev_priv)) {
 		INIT_WORK(&gt->mem_sparing.mem_health_work,
 			  gen12_mem_health_work);
@@ -5466,14 +5738,15 @@ static void intel_irq_postinstall(struct drm_i915_private *dev_priv)
 }
 
 /**
- * process_fatal_hw_errors - checks for the occurrence of fatal HW errors
+ * process_hw_errors - checks for the occurrence of HW errors
  * @dev_priv: i915 device instance
  *
- * This checks for the Fatal Errors that might have occurred in the previous boot of
- * the driver which will initiate PCIe FLR reset of the device and cause the
+ * This checks for the HW Errors including FATAL error that might
+ * have occurred in the previous boot of the driver which will
+ * initiate PCIe FLR reset of the device and cause the
  * driver to reload.
  */
-static void process_fatal_hw_errors(struct drm_i915_private *dev_priv)
+static void process_hw_errors(struct drm_i915_private *dev_priv)
 {
 	struct intel_gt *gt = to_gt(dev_priv);
 	void __iomem * const t0_regs = gt->uncore->regs;
@@ -5481,23 +5754,19 @@ static void process_fatal_hw_errors(struct drm_i915_private *dev_priv)
 	int i;
 
 	dev_pcieerr_status = raw_reg_read(t0_regs, DEV_PCIEERR_STATUS);
-	if (!dev_pcieerr_status)
-		return;
 
 	for_each_gt(gt, dev_priv, i) {
 		void __iomem *const regs = gt->uncore->regs;
 
 		if (dev_pcieerr_status & DEV_PCIEERR_IS_FATAL(i))
 			gen12_hw_error_source_handler(gt, HARDWARE_ERROR_FATAL);
-		/*
-		 * just to be safe enough log and clear other errors
-		 * if there were reported alongside fatal errors
-		 */
+
 		master_ctl = raw_reg_read(regs, GEN11_GFX_MSTR_IRQ);
 		raw_reg_write(regs, GEN11_GFX_MSTR_IRQ, master_ctl);
 		gen12_hw_error_irq_handler(gt, master_ctl);
 	}
-	raw_reg_write(t0_regs, DEV_PCIEERR_STATUS, dev_pcieerr_status);
+	if (dev_pcieerr_status)
+		raw_reg_write(t0_regs, DEV_PCIEERR_STATUS, dev_pcieerr_status);
 }
 
 /**
@@ -5517,7 +5786,7 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 	int ret;
 
 	if (IS_DGFX(dev_priv))
-		process_fatal_hw_errors(dev_priv);
+		process_hw_errors(dev_priv);
 
 	/*
 	 * We enable some interrupt sources in our postinstall hooks, so mark

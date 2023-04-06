@@ -377,6 +377,9 @@ fw_domains_put(struct intel_uncore *uncore, enum forcewake_domains fw_domains)
 
 	GEM_BUG_ON(fw_domains & ~uncore->fw_domains);
 
+	if (uncore->gt->i915->quiesce_gpu)
+		return;
+
 	for_each_fw_domain_masked(d, fw_domains, uncore, tmp)
 		fw_domain_put(d);
 
@@ -1855,10 +1858,15 @@ static const struct intel_forcewake_range __mtl_fw_ranges[] = {
  * Note that the register ranges here are the final offsets after
  * translation of the GSI block to the 0x380000 offset.
  *
- * FIXME:  There are a couple special ranges near the bottom of this table
+ * NOTE:  There are a couple MCR ranges near the bottom of this table
  * that need to power up either VD0 or VD2 depending on which replicated
- * instance of the register we're trying to access.  For now we're just using
- * FORCEWAKE_ALL to wake everything.
+ * instance of the register we're trying to access.  Our forcewake logic
+ * at the moment doesn't have a good way to take steering into consideration,
+ * and the driver doesn't even access any registers in those ranges today,
+ * so for now we just mark those ranges as FORCEWAKE_ALL.  That will ensure
+ * proper operation if we do start using the ranges in the future, and we
+ * can determine at that time whether it's worth adding extra complexity to
+ * the forcewake handling to take steering into consideration.
  */
 static const struct intel_forcewake_range __xelpmp_fw_ranges[] = {
 	GEN_FW_RANGE(0x0, 0x115fff, 0), /* render GT range */
@@ -1924,9 +1932,9 @@ static const struct intel_forcewake_range __xelpmp_fw_ranges[] = {
 		0x392000 - 0x3927ff: always on
 		0x392800 - 0x292fff: reserved */
 	GEN_FW_RANGE(0x393000, 0x3931ff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x393200, 0x39323f, FORCEWAKE_ALL), /* FIXME: instance-based */
+	GEN_FW_RANGE(0x393200, 0x39323f, FORCEWAKE_ALL), /* instance-based, see note above */
 	GEN_FW_RANGE(0x393240, 0x3933ff, FORCEWAKE_GT),
-	GEN_FW_RANGE(0x393400, 0x3934ff, FORCEWAKE_ALL), /* FIXME: instance-based */
+	GEN_FW_RANGE(0x393400, 0x3934ff, FORCEWAKE_ALL), /* instance-based, see note above */
 	GEN_FW_RANGE(0x393500, 0x393c7f, 0), /*
 		0x393500 - 0x393bff: reserved
 		0x393c00 - 0x393c7f: always on */
@@ -2437,7 +2445,6 @@ static int intel_uncore_fw_domains_init(struct intel_uncore *uncore)
 		emask = uncore->gt->info.engine_mask;
 
 		uncore->fw_get_funcs = &uncore_get_fallback;
-
 		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
 			fw_domain_init(uncore, FW_DOMAIN_ID_GT,
 				       FORCEWAKE_GT_GEN9,

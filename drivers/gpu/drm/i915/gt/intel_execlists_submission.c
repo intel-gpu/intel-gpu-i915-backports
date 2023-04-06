@@ -3305,42 +3305,6 @@ static void execlists_park(struct intel_engine_cs *engine)
 	WRITE_ONCE(engine->sched_engine->queue_priority_hint, INT_MIN);
 }
 
-static void add_to_engine(struct i915_request *rq)
-{
-	lockdep_assert_held(&rq->engine->sched_engine->lock);
-	list_move_tail(&rq->sched.link, &rq->engine->sched_engine->requests);
-}
-
-static void remove_from_engine(struct i915_request *rq)
-{
-	struct intel_engine_cs *engine, *locked;
-
-	/*
-	 * Virtual engines complicate acquiring the engine timeline lock,
-	 * as their rq->engine pointer is not stable until under that
-	 * engine lock. The simple ploy we use is to take the lock then
-	 * check that the rq still belongs to the newly locked engine.
-	 */
-	locked = READ_ONCE(rq->engine);
-	spin_lock_irq(&locked->sched_engine->lock);
-	while (unlikely(locked != (engine = READ_ONCE(rq->engine)))) {
-		spin_unlock(&locked->sched_engine->lock);
-		spin_lock(&engine->sched_engine->lock);
-		locked = engine;
-	}
-	list_del_init(&rq->sched.link);
-
-	clear_bit(I915_FENCE_FLAG_PQUEUE, &rq->fence.flags);
-	clear_bit(I915_FENCE_FLAG_HOLD, &rq->fence.flags);
-
-	/* Prevent further __await_execution() registering a cb, then flush */
-	set_bit(I915_FENCE_FLAG_ACTIVE, &rq->fence.flags);
-
-	spin_unlock_irq(&locked->sched_engine->lock);
-
-	i915_request_notify_execute_cb_imm(rq);
-}
-
 static bool can_preempt(struct intel_engine_cs *engine)
 {
 	if (GRAPHICS_VER(engine->i915) > 8)
@@ -3456,8 +3420,6 @@ logical_ring_default_vfuncs(struct intel_engine_cs *engine)
 
 	engine->cops = &execlists_context_ops;
 	engine->request_alloc = execlists_request_alloc;
-	engine->add_active_request = add_to_engine;
-	engine->remove_active_request = remove_from_engine;
 
 	engine->reset.prepare = execlists_reset_prepare;
 	engine->reset.rewind = execlists_reset_rewind;
@@ -4176,7 +4138,6 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 			 "v%dx%d", ve->base.class, count);
 		ve->base.context_size = sibling->context_size;
 
-		ve->base.add_active_request = sibling->add_active_request;
 		ve->base.remove_active_request = sibling->remove_active_request;
 		ve->base.emit_bb_start = sibling->emit_bb_start;
 		ve->base.emit_flush = sibling->emit_flush;
@@ -4207,17 +4168,24 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 				   unsigned int max)
 {
 	const struct intel_engine_execlists *execlists = &engine->execlists;
-	struct i915_sched_engine *sched_engine = engine->sched_engine;
 	struct i915_request *rq, *last;
+	struct i915_sched_engine *se;
 	unsigned long flags;
 	unsigned int count;
 	struct rb_node *rb;
 
-	spin_lock_irqsave(&sched_engine->lock, flags);
+	se = engine->sched_engine;
+	if (!se)
+		return;
+
+	spin_lock_irqsave(&se->lock, flags);
 
 	last = NULL;
 	count = 0;
-	list_for_each_entry(rq, &sched_engine->requests, sched.link) {
+	list_for_each_entry(rq, &se->requests, sched.link) {
+		if (!(rq->execution_mask & engine->mask))
+			continue;
+
 		if (count++ < max - 1)
 			show_request(m, rq, "\t\t", 0);
 		else
@@ -4232,16 +4200,19 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 		show_request(m, last, "\t\t", 0);
 	}
 
-	if (sched_engine->queue_priority_hint != INT_MIN)
+	if (se->queue_priority_hint != INT_MIN)
 		drm_printf(m, "\t\tQueue priority hint: %d\n",
-			   READ_ONCE(sched_engine->queue_priority_hint));
+			   READ_ONCE(se->queue_priority_hint));
 
 	last = NULL;
 	count = 0;
-	for (rb = rb_first_cached(&sched_engine->queue); rb; rb = rb_next(rb)) {
+	for (rb = rb_first_cached(&se->queue); rb; rb = rb_next(rb)) {
 		struct i915_priolist *p = rb_entry(rb, typeof(*p), node);
 
 		priolist_for_each_request(rq, p) {
+			if (!(rq->execution_mask & engine->mask))
+				continue;
+
 			if (count++ < max - 1)
 				show_request(m, rq, "\t\t", 0);
 			else
@@ -4280,7 +4251,7 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 		show_request(m, last, "\t\t", 0);
 	}
 
-	spin_unlock_irqrestore(&sched_engine->lock, flags);
+	spin_unlock_irqrestore(&se->lock, flags);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

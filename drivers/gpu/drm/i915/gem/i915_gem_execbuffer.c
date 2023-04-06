@@ -73,7 +73,7 @@ enum {
 #define __EXEC_HAS_RELOC		BIT_ULL(36)
 #define __EXEC_ENGINE_PINNED		BIT_ULL(35)
 #define __EXEC_USERPTR_USED		BIT_ULL(34)
-#define __EXEC_PERSIST_HAS_PIN		BIT_ULL(33)
+#define __EXEC_PERSIST_HAS_PIN  	BIT_ULL(33)
 #define __EXEC_INTERNAL_FLAGS		GENMASK_ULL(37, 33)
 #define UPDATE				PIN_OFFSET_FIXED
 
@@ -159,15 +159,15 @@ enum {
  * the update. (If userspace is wrong, the likely outcome is an impromptu GPU
  * hang.) The requirement for using I915_EXEC_NO_RELOC are:
  *
- *	The addresses written in the objects must match the corresponding
- *	reloc.presumed_offset which in turn must match the corresponding
- *	execobject.offset.
+ *      The addresses written in the objects must match the corresponding
+ *      reloc.presumed_offset which in turn must match the corresponding
+ *      execobject.offset.
  *
- *	Any render targets written to in the batch must be flagged with
- *	EXEC_OBJECT_WRITE.
+ *      Any render targets written to in the batch must be flagged with
+ *      EXEC_OBJECT_WRITE.
  *
- *	To avoid stalling, execobject.offset should match the current
- *	address of that object within the active context.
+ *      To avoid stalling, execobject.offset should match the current
+ *      address of that object within the active context.
  *
  * The reservation is done is multiple phases. First we try and keep any
  * object already bound in its current location - so as long as meets the
@@ -4508,6 +4508,10 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	} else {
 		kfree(sfence);
 	}
+
+	/* Wait till all invalidations on VM are complete */
+	while (atomic_read(&ce->vm->invalidations))
+		udelay(1);
 
 	/*
 	 * From now on, we can't retry locally, but need to wait

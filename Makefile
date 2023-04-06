@@ -40,17 +40,21 @@ ARCH := x86_64
 #
 BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 7 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
 
-# DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source. Tagging is needed
-# for decoding this, Sample in the version file DII_KERNEL_TAG="DII_6365_prerelease"
-# for above example tag filtered out put will be 6365
-# for DII_TAG_PREFIX output will be DII or PROD.
+#DII_TAG is extracted from DII_KERNEL_TAG, which is auto genereated from base kernel source.
+#Tagging is needed for decoding this,
+#Ex: For DII_KERNEL_TAG="DII_6001_prerelease" : DII_TAG will be 6001
+#    For DII_KERNEL_TAG="PROD_I915_6469.0.7"  : DII_TAG will be 6469.0.7
+#    For DII_KERNEL_TAG="I915-23.4.0"         : DII_TAG will be 23.4.0
+#for DII_TAG_PREFIX output will be DII or PROD or I915-23.4.0.
 
 DII_TAG_PREFIX=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 1 2>/dev/null || echo 1)
 
 ifeq ($(DII_TAG_PREFIX) , PROD)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
-else
+else ifeq ($(DII_TAG_PREFIX) , DII)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+else
+DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
 endif
 
 KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
@@ -116,7 +120,7 @@ endif
 endif
 
 # VERSION is generated as 1.DII_TAG.BackportVersion
-VERSION := 0.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)

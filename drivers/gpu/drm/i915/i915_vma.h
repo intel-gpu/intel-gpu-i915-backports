@@ -127,10 +127,15 @@ static inline bool i915_vma_is_closed(const struct i915_vma *vma)
 	return !list_empty(&vma->closed_link);
 }
 
+static inline u64 __i915_vma_size(const struct i915_vma *vma)
+{
+	return vma->node.size - 2 * vma->guard;
+}
+
 static inline u64 i915_vma_size(const struct i915_vma *vma)
 {
 	GEM_BUG_ON(!drm_mm_node_allocated(&vma->node));
-	return vma->node.size - 2 * vma->guard;
+	return __i915_vma_size(vma);
 }
 
 static inline u64 __i915_vma_offset(const struct i915_vma *vma)
@@ -476,8 +481,6 @@ void i915_vma_free(struct i915_vma *vma);
 struct i915_vma *i915_vma_make_unshrinkable(struct i915_vma *vma);
 void i915_vma_make_shrinkable(struct i915_vma *vma);
 void i915_vma_make_purgeable(struct i915_vma *vma);
-void vma_put_pages(struct i915_vma *vma);
-int vma_get_pages(struct i915_vma *vma);
 
 int i915_vma_wait_for_bind(struct i915_vma *vma);
 

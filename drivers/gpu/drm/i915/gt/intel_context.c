@@ -456,7 +456,6 @@ intel_context_init(struct intel_context *ce, struct intel_engine_cs *engine)
 
 	spin_lock_init(&ce->guc_state.lock);
 	INIT_LIST_HEAD(&ce->guc_state.fences);
-	INIT_LIST_HEAD(&ce->guc_state.requests);
 
 	ce->guc_id.id = GUC_INVALID_CONTEXT_ID;
 	INIT_LIST_HEAD(&ce->guc_id.link);
@@ -593,11 +592,7 @@ struct i915_request *
 __intel_context_find_active_request(struct intel_context *ce,
 				    bool rq_get_ref)
 {
-	struct intel_context *parent = intel_context_to_parent(ce);
 	struct i915_request *rq, *active = NULL;
-	unsigned long flags;
-
-	GEM_BUG_ON(!intel_engine_uses_guc(ce->engine));
 
 	/*
 	 * We search the parent list to find an active request on the submitted
@@ -605,21 +600,19 @@ __intel_context_find_active_request(struct intel_context *ce,
 	 * in the relationship so we have to do a compare of each request's
 	 * context.
 	 */
-	spin_lock_irqsave(&parent->guc_state.lock, flags);
-	list_for_each_entry_reverse(rq, &parent->guc_state.requests,
-				    sched.link) {
-		if (rq->context != ce)
-			continue;
-		if (i915_request_completed(rq))
+	rcu_read_lock();
+	list_for_each_entry_reverse(rq, &ce->timeline->requests, link) {
+		if (__i915_request_is_complete(rq))
 			break;
 
-		active = rq;
+		if (__i915_request_has_started(rq))
+			active = rq;
 	}
 
 	if (rq_get_ref && active)
 		active = i915_request_get(active);
 
-	spin_unlock_irqrestore(&parent->guc_state.lock, flags);
+	rcu_read_unlock();
 
 	return active;
 }
@@ -666,6 +659,47 @@ u64 intel_context_get_avg_runtime_ns(struct intel_context *ce)
 		avg *= ce->engine->gt->clock_period_ns;
 
 	return avg;
+}
+
+int intel_context_throttle(const struct intel_context *ce)
+{
+	const struct intel_timeline *tl = ce->timeline;
+	const struct intel_ring *ring = ce->ring;
+	struct i915_request *rq;
+	int err = 0;
+
+	if (READ_ONCE(ring->space) >= SZ_1K)
+		return 0;
+
+	rcu_read_lock();
+	list_for_each_entry_reverse(rq, &tl->requests, link) {
+		if (__i915_request_is_complete(rq))
+			break;
+
+		if (rq->ring != ring)
+			continue;
+
+		/* Wait until there will be enough space following that rq */
+		if (__intel_ring_space(rq->postfix,
+				       ring->emit,
+				       ring->size) < ring->size / 2) {
+			if (i915_request_get_rcu(rq)) {
+				rcu_read_unlock();
+
+				if (i915_request_wait(rq,
+						      I915_WAIT_INTERRUPTIBLE,
+						      MAX_SCHEDULE_TIMEOUT) < 0)
+					err = -EINTR;
+
+				rcu_read_lock();
+				i915_request_put(rq);
+			}
+			break;
+		}
+	}
+	rcu_read_unlock();
+
+	return err;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

@@ -19,6 +19,7 @@
 #include "i915_trace.h"
 #include "i915_utils.h"
 #include "intel_gt.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_gtt.h"
 
@@ -613,18 +614,18 @@ void gtt_write_workarounds(struct intel_gt *gt)
 	}
 }
 
-static void mtl_setup_private_ppat(struct intel_uncore *uncore)
+static void mtl_setup_private_ppat(struct intel_gt *gt)
 {
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(0),
-			   MTL_PPAT_L4_0_WB);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(1),
-			   MTL_PPAT_L4_1_WT);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(2),
-			   MTL_PPAT_L4_3_UC);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(3),
-			   MTL_PPAT_L4_0_WB | MTL_2_COH_1W);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(4),
-			   MTL_PPAT_L4_0_WB | MTL_3_COH_2W);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(0),
+				     MTL_PPAT_L4_0_WB);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(1),
+				     MTL_PPAT_L4_1_WT);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(2),
+				     MTL_PPAT_L4_3_UC);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(3),
+				     MTL_PPAT_L4_0_WB | MTL_2_COH_1W);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(4),
+				     MTL_PPAT_L4_0_WB | MTL_3_COH_2W);
 
 	/*
 	 * Remaining PAT entries are left at the hardware-default
@@ -632,20 +633,20 @@ static void mtl_setup_private_ppat(struct intel_uncore *uncore)
 	 */
 }
 
-static void pvc_setup_private_ppat(struct intel_uncore *uncore)
+static void pvc_setup_private_ppat(struct intel_gt *gt)
 {
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(0), GEN8_PPAT_UC);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(1), GEN8_PPAT_WC);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(2), GEN8_PPAT_WT);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(3), GEN8_PPAT_WB);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(4),
-			   GEN12_PPAT_CLOS(1) | GEN8_PPAT_WT);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(5),
-			   GEN12_PPAT_CLOS(1) | GEN8_PPAT_WB);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(6),
-			   GEN12_PPAT_CLOS(2) | GEN8_PPAT_WT);
-	intel_uncore_write(uncore, GEN12_PAT_INDEX(7),
-			   GEN12_PPAT_CLOS(2) | GEN8_PPAT_WB);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(0), GEN8_PPAT_UC);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(1), GEN8_PPAT_WC);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(2), GEN8_PPAT_WT);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(3), GEN8_PPAT_WB);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(4),
+				     GEN12_PPAT_CLOS(1) | GEN8_PPAT_WT);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(5),
+				     GEN12_PPAT_CLOS(1) | GEN8_PPAT_WB);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(6),
+				     GEN12_PPAT_CLOS(2) | GEN8_PPAT_WT);
+        intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(7),
+				     GEN12_PPAT_CLOS(2) | GEN8_PPAT_WB);
 }
 
 static void tgl_setup_private_ppat(struct intel_uncore *uncore)
@@ -659,6 +660,18 @@ static void tgl_setup_private_ppat(struct intel_uncore *uncore)
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(5), GEN8_PPAT_WB);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(6), GEN8_PPAT_WB);
 	intel_uncore_write(uncore, GEN12_PAT_INDEX(7), GEN8_PPAT_WB);
+}
+
+static void xehp_setup_private_ppat(struct intel_gt *gt)
+{
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(0), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(1), GEN8_PPAT_WC);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(2), GEN8_PPAT_WT);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(3), GEN8_PPAT_UC);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(4), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(5), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(6), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(7), GEN8_PPAT_WB);
 }
 
 static void icl_setup_private_ppat(struct intel_uncore *uncore)
@@ -753,9 +766,10 @@ static void chv_setup_private_ppat(struct intel_uncore *uncore)
 	intel_uncore_write(uncore, GEN8_PRIVATE_PAT_HI, upper_32_bits(pat));
 }
 
-void setup_private_pat(struct intel_uncore *uncore)
+void setup_private_pat(struct intel_gt *gt)
 {
-	struct drm_i915_private *i915 = uncore->i915;
+	struct intel_uncore *uncore = gt->uncore;
+	struct drm_i915_private *i915 = gt->i915;
 
 	GEM_BUG_ON(GRAPHICS_VER(i915) < 8);
 
@@ -763,9 +777,11 @@ void setup_private_pat(struct intel_uncore *uncore)
 		return;
 
 	if (IS_METEORLAKE(i915))
-		mtl_setup_private_ppat(uncore);
+		mtl_setup_private_ppat(gt);
 	else if (IS_PONTEVECCHIO(i915))
-		pvc_setup_private_ppat(uncore);
+		pvc_setup_private_ppat(gt);
+	else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		xehp_setup_private_ppat(gt);
 	else if (GRAPHICS_VER(i915) >= 12)
 		tgl_setup_private_ppat(uncore);
 	else if (GRAPHICS_VER(i915) >= 11)

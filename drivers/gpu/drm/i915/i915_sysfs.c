@@ -274,6 +274,140 @@ static const struct attribute *lmem_attrs[] = {
 	NULL
 };
 
+static int i915_set_mem_region_acct_limit(struct drm_i915_private *i915,
+					  u32 index)
+{
+	struct intel_memory_region *mem;
+	int id, ret = 0;
+
+	i915_gem_drain_freed_objects(i915);
+
+	for_each_memory_region(mem, i915, id) {
+		if (mem->type != INTEL_MEMORY_LOCAL)
+			continue;
+
+		mutex_lock(&mem->mm_lock);
+		mem->acct_limit[index] =
+			min_t(resource_size_t, mem->total,
+			      div_u64(i915->mm.user_acct_limit[index] *
+				      mem->total, 100));
+
+		if (mem->acct_limit[index] < mem->acct_user[index])
+			ret = -EINVAL;
+		else
+			mem->acct_limit[index] = mem->acct_limit[index] -
+				mem->acct_user[index];
+		mutex_unlock(&mem->mm_lock);
+
+		if (ret)
+			break;
+	}
+
+	return ret;
+}
+
+static ssize_t i915_get_mem_region_acct_limit(struct device *dev, char *buf,
+					      u32 index)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+
+	return sysfs_emit(buf, "%u\n", i915->mm.user_acct_limit[index]);
+}
+
+static void reset_alloc_limit(struct drm_i915_private *i915)
+{
+	memset(i915->mm.user_acct_limit, 0, sizeof(i915->mm.user_acct_limit));
+}
+
+static ssize_t lmem_alloc_limit_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+	int ret = 0;
+	u8 val;
+
+	ret = kstrtou8(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val >= 100)
+		return -EINVAL;
+
+	if (val + i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED] > 100)
+		return -EINVAL;
+
+	if (!val) {
+		reset_alloc_limit(i915);
+		goto out;
+	} else {
+		i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM] = val;
+	}
+
+	ret = i915_set_mem_region_acct_limit(i915, INTEL_MEMORY_OVERCOMMIT_LMEM);
+
+out:
+	return ret ?: count;
+}
+
+static ssize_t lmem_alloc_limit_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	return i915_get_mem_region_acct_limit(dev, buf,
+					      INTEL_MEMORY_OVERCOMMIT_LMEM);
+}
+
+static ssize_t sharedmem_alloc_limit_store(struct device *dev,
+					   struct device_attribute *attr,
+					   const char *buf, size_t count)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+	int ret;
+	u8 val;
+
+	ret = kstrtou8(buf, 0, &val);
+	if (ret)
+		return ret;
+
+	if (val >= 100)
+		return -EINVAL;
+
+	if (val + i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM] > 100)
+		return -EINVAL;
+
+	if (!val) {
+		reset_alloc_limit(i915);
+		goto out;
+	} else {
+		i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED] = val;
+	}
+
+	i915_set_mem_region_acct_limit(i915, INTEL_MEMORY_OVERCOMMIT_SHARED);
+
+out:
+	return count;
+}
+
+static ssize_t sharedmem_alloc_limit_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	return i915_get_mem_region_acct_limit(dev, buf,
+					      INTEL_MEMORY_OVERCOMMIT_SHARED);
+}
+
+static I915_DEVICE_ATTR_RW(prelim_lmem_alloc_limit, 0644,
+			    lmem_alloc_limit_show, lmem_alloc_limit_store);
+static I915_DEVICE_ATTR_RW(prelim_sharedmem_alloc_limit, 0644,
+			   sharedmem_alloc_limit_show,
+			   sharedmem_alloc_limit_store);
+
+static const struct attribute *alloc_limit_attrs[] = {
+	&dev_attr_prelim_lmem_alloc_limit.attr.attr,
+	&dev_attr_prelim_sharedmem_alloc_limit.attr.attr,
+	NULL
+};
+
 #if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
 
 static ssize_t error_state_read(struct file *filp, struct kobject *kobj,
@@ -532,6 +666,11 @@ static ssize_t quiesce_gpu_store(struct device *dev,
 
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 	for_each_gt(gt, i915, i) {
+		/*
+		 * Disable rc6 and render power gate to make sure GT and
+		 * Render are awake for EUs Array and Scan Diagnostics
+		 */
+		intel_gt_pm_fini(gt);
 		if (intel_gt_terminally_wedged(gt))
 			continue;
 		intel_gt_set_wedged(gt);
@@ -760,6 +899,10 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	if (!dev_priv->sysfs_gt)
 		drm_err(&dev_priv->drm,
 			"failed to register GT sysfs directory\n");
+
+	ret = sysfs_create_files(&kdev->kobj, alloc_limit_attrs);
+	if (ret)
+		drm_warn(&dev_priv->drm, "failed to create prelim_lmem/shared_alloc_limit sysfs entries\n");
 
 	i915_sriov_sysfs_setup(dev_priv);
 
