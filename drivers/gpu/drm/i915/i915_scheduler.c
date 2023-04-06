@@ -471,18 +471,6 @@ i915_sched_engine_create(unsigned int subclass)
 	lockdep_set_subclass(&sched_engine->lock, subclass);
 	mark_lock_used_irq(&sched_engine->lock);
 
-	/*
-	 * Due to an interesting quirk in lockdep's internal debug tracking,
-	 * after setting a subclass we must ensure the lock is used. Otherwise,
-	 * nr_unused_locks is incremented once too often.
-	 */
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	local_irq_disable();
-	lock_map_acquire(&sched_engine->lock.dep_map);
-	lock_map_release(&sched_engine->lock.dep_map);
-	local_irq_enable();
-#endif
-
 	return sched_engine;
 }
 

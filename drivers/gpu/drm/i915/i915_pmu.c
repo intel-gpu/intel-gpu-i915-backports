@@ -107,8 +107,8 @@ static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_PSF_2] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_CD0] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_CD0_MDFI] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI),
-	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_EAST] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST),
-	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_SOUTH] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH),
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_EAST] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST),
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_SOUTH] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(0, 0)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_0),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(0, 1)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_1),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(0, 2)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_2),
@@ -141,6 +141,23 @@ static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 13)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_5),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 14)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_6),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 15)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_7),
+	[PRELIM_I915_PMU_GSC_ERROR_CORRECTABLE_SRAM_ECC] = INTEL_GSC_HW_ERROR_COR_SRAM_ECC,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_SHUTDOWN] = INTEL_GSC_HW_ERROR_UNCOR_MIA_SHUTDOWN,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_INT] = INTEL_GSC_HW_ERROR_UNCOR_MIA_INT,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_SRAM_ECC] = INTEL_GSC_HW_ERROR_UNCOR_SRAM_ECC,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_WDG_TIMEOUT] = INTEL_GSC_HW_ERROR_UNCOR_WDG_TIMEOUT,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_ROM_PARITY] = INTEL_GSC_HW_ERROR_UNCOR_ROM_PARITY,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_UCODE_PARITY] = INTEL_GSC_HW_ERROR_UNCOR_UCODE_PARITY,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_GLITCH_DET] = INTEL_GSC_HW_ERROR_UNCOR_GLITCH_DET,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_PULL] = INTEL_GSC_HW_ERROR_UNCOR_FUSE_PULL,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_CRC_CHECK] = INTEL_GSC_HW_ERROR_UNCOR_FUSE_CRC_CHECK,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_SELFMBIST] = INTEL_GSC_HW_ERROR_UNCOR_SELFMBIST,
+	[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_AON_PARITY] = INTEL_GSC_HW_ERROR_UNCOR_AON_PARITY,
+	[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_SUBSLICE] = INTEL_GT_HW_ERROR_COR_SUBSLICE,
+	[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK] = INTEL_GT_HW_ERROR_COR_L3BANK,
+	[PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE] = INTEL_GT_HW_ERROR_FAT_SUBSLICE,
+	[PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK] = INTEL_GT_HW_ERROR_FAT_L3BANK,
+
 };
 
 static const unsigned long gt_driver_error_map[] = {
@@ -786,6 +803,47 @@ static unsigned int hw_error_id(const u64 config)
 	       __PRELIM_I915_PMU_HW_ERROR_EVENT_ID_OFFSET;
 }
 
+static bool is_gt_vector_error(const u64 config)
+{
+	unsigned int error;
+
+	error = hw_error_id(config);
+	if ((error >= PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_SUBSLICE &&
+	     error <= PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK) ||
+	     error == PRELIM_I915_PMU_GT_ERROR_FATAL_TLB ||
+	     error == PRELIM_I915_PMU_GT_ERROR_FATAL_L3_FABRIC)
+		return true;
+
+	return false;
+}
+
+static bool is_pvc_invalid_gt_errors(const u64 config)
+{
+	switch (hw_error_id(config)) {
+	case PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3_SNG:
+	case PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_SAMPLER:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_ARR_BIST:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_L3_DOUB:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_L3_ECC_CHK:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_IDI_PAR:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_SQIDI:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_SAMPLER:
+	case PRELIM_I915_PMU_GT_ERROR_FATAL_EU_IC:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool is_gsc_hw_error(const u64 config)
+{
+	if (hw_error_id(config) >= PRELIM_I915_PMU_GSC_ERROR_CORRECTABLE_SRAM_ECC &&
+	    hw_error_id(config) <= PRELIM_I915_PMU_GSC_ERROR_NONFATAL_AON_PARITY)
+		return true;
+
+	return false;
+}
+
 static bool is_xehpsdv_soc_error(const u64 config)
 {
 	if (hw_error_id(config) >= PRELIM_I915_PMU_SOC_ERROR_FATAL_MDFI_EAST &&
@@ -850,8 +908,27 @@ config_status(struct drm_i915_private *i915, u64 config)
 		if (!IS_DGFX(i915))
 			return -ENODEV;
 
+		/* GSC HW ERRORS are present on root tile of
+		 * platform supporting MEMORY SPARING only
+		 */
+		if (is_gsc_hw_error(config) && !(HAS_MEM_SPARING_SUPPORT(i915) && gt_id == 0))
+			return -ENODEV;
+
 		/* SOC errors are present on XEHPSDV, PVC only */
 		if (is_xehpsdv_soc_error(config) && !IS_XEHPSDV(i915))
+			return -ENODEV;
+
+		/* GT vectors error  are valid on Platforms supporting error vectors only */
+		if (is_gt_vector_error(config) && !HAS_GT_ERROR_VECTORS(i915))
+			return -ENODEV;
+
+		/* Skip gt errors not supported on pvc */
+		if (is_pvc_invalid_gt_errors(config) && IS_PONTEVECCHIO(i915))
+			return  -ENODEV;
+
+		/* FATAL FPU error is valid on PVC only */
+		if (hw_error_id(config) == PRELIM_I915_PMU_GT_ERROR_FATAL_FPU &&
+		    !IS_PONTEVECCHIO(i915))
 			return -ENODEV;
 
 		if (is_pvc_soc_error(config) && !IS_PONTEVECCHIO(i915))
@@ -859,13 +936,6 @@ config_status(struct drm_i915_private *i915, u64 config)
 
 		if (is_common_soc_error(config) && !IS_PONTEVECCHIO(i915) &&
 		    !IS_XEHPSDV(i915))
-			return -ENODEV;
-
-		/* These errors are valid on PVC only */
-		if ((hw_error_id(config) == PRELIM_I915_PMU_GT_ERROR_FATAL_FPU ||
-		     hw_error_id(config) == PRELIM_I915_PMU_GT_ERROR_FATAL_TLB ||
-		     hw_error_id(config) == PRELIM_I915_PMU_GT_ERROR_FATAL_L3_FABRIC) &&
-		     !HAS_GT_ERROR_VECTORS(i915))
 			return -ENODEV;
 
 		return (hw_error_id(config) >=
@@ -1014,6 +1084,8 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 		    is_pvc_soc_error(event->attr.config) ||
 		    is_common_soc_error(event->attr.config))
 			val = xa_to_value(xa_load(&gt->errors.soc, i915_hw_error_map[id]));
+		else if (is_gsc_hw_error(event->attr.config))
+			val = gt->errors.gsc_hw[i915_hw_error_map[id]];
 		else if (id >= PRELIM_I915_PMU_SGUNIT_ERROR_CORRECTABLE &&
 			 id <= PRELIM_I915_PMU_SGUNIT_ERROR_FATAL)
 			val = gt->errors.sgunit[i915_hw_error_map[id]];
@@ -1527,6 +1599,22 @@ create_event_attributes(struct i915_pmu *pmu)
 		[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 13)] = "soc-fatal-hbm-ss3-5",
 		[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 14)] = "soc-fatal-hbm-ss3-6",
 		[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 15)] = "soc-fatal-hbm-ss3-7",
+		[PRELIM_I915_PMU_GSC_ERROR_CORRECTABLE_SRAM_ECC] = "gsc-correctable-sram-ecc",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_SHUTDOWN] = "gsc-nonfatal-mia-shutdown",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_MIA_INT] = "gsc-nonfatal-mia-int",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_SRAM_ECC] = "gsc-nonfatal-sram-ecc",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_WDG_TIMEOUT] = "gsc-nonfatal-wdg-timeout",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_ROM_PARITY] = "gsc-nonfatal-rom-parity",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_UCODE_PARITY] = "gsc-nonfatal-ucode-parity",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_GLITCH_DET] = "gsc-nonfatal-glitch-det",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_PULL] = "gsc-nonfatal-fuse-pull",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_CRC_CHECK] = "gsc-nonfatal-fuse-crc-check",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_FUSE_SELFMBIST] = "gsc-nonfatal-selfmbist",
+		[PRELIM_I915_PMU_GSC_ERROR_NONFATAL_AON_PARITY] = "gsc-nonfatal-aon-parity",
+		[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_SUBSLICE] = "correctable-subslice",
+		[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK] = "correctable-l3bank",
+		[PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE] = "fatal-subslice",
+		[PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK] = "fatal-l3bank",
 	};
 	static const char *gt_driver_error_events[] = {
 		[PRELIM_I915_PMU_GT_DRIVER_ERROR_GGTT] = "driver-ggtt",

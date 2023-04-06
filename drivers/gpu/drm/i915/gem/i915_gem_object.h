@@ -162,6 +162,18 @@ i915_gem_object_put(struct drm_i915_gem_object *obj)
 	__drm_gem_object_put(&obj->base);
 }
 
+int i915_gem_object_account(struct drm_i915_gem_object *obj);
+void i915_gem_object_unaccount(struct drm_i915_gem_object *obj);
+
+static inline u32
+i915_gem_object_get_accounting(const struct drm_i915_gem_object *obj)
+{
+	if (obj->memory_mask & REGION_SMEM)
+		return INTEL_MEMORY_OVERCOMMIT_SHARED;
+	else
+		return INTEL_MEMORY_OVERCOMMIT_LMEM;
+}
+
 #ifdef CONFIG_LOCKDEP
 #define assert_object_held(obj) do {					\
 		dma_resv_assert_held((obj)->base.resv);			\

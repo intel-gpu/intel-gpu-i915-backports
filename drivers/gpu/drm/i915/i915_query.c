@@ -973,6 +973,86 @@ static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 	return total_length;
 }
 
+static int prelim_query_lmem_memregion_info(struct drm_i915_private *i915,
+					    struct drm_i915_query_item
+					    *query_item)
+{
+	struct prelim_drm_i915_query_lmem_memory_regions __user *query_ptr =
+		u64_to_user_ptr(query_item->data_ptr);
+	struct prelim_drm_i915_lmem_memory_region_info __user *info_ptr =
+		&query_ptr->regions[0];
+	struct prelim_drm_i915_lmem_memory_region_info info = { };
+	struct prelim_drm_i915_query_lmem_memory_regions query;
+	u32 total_length;
+	int ret, i;
+
+	if (query_item->flags != 0)
+		return -EINVAL;
+
+	total_length = sizeof(query);
+	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); ++i) {
+		struct intel_memory_region *region = i915->mm.regions[i];
+
+		if (!region)
+			continue;
+
+		if (region->private)
+			continue;
+
+		if (region->type != INTEL_MEMORY_LOCAL)
+			continue;
+
+		total_length += sizeof(info);
+	}
+
+	ret = copy_query_item(&query, sizeof(query), total_length, query_item);
+	if (ret != 0)
+		return ret;
+
+	if (query.num_lmem_regions)
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(query.rsvd); ++i) {
+		if (query.rsvd[i])
+			return  -EINVAL;
+	}
+
+	i915_gem_drain_freed_objects(i915);
+
+	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); ++i) {
+		struct intel_memory_region *region = i915->mm.regions[i];
+
+		if (!region)
+			continue;
+
+		if (region->private)
+			continue;
+
+		if (region->type != INTEL_MEMORY_LOCAL)
+			continue;
+
+		info.region.memory_class = region->type;
+		info.region.memory_instance = region->instance;
+		if (capable(CAP_SYS_ADMIN)) {
+			info.unallocated_usr_lmem_size =
+				region->acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM];
+			info.unallocated_usr_shared_size =
+				region->acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED];
+		}
+
+		if (__copy_to_user(info_ptr, &info, sizeof(info)))
+			return -EFAULT;
+
+		query.num_lmem_regions++;
+		info_ptr++;
+	}
+
+	if (__copy_to_user(query_ptr, &query, sizeof(query)))
+		return -EFAULT;
+
+	return total_length;
+}
+
 static int query_compute_subslices(struct drm_i915_private *i915,
 				struct drm_i915_query_item *query_item)
 {
@@ -1101,6 +1181,7 @@ static i915_query_funcs_table i915_query_funcs_prelim[] = {
 	MAKE_TABLE_IDX(HW_IP_VERSION) = prelim_query_hw_ip_version,
 	MAKE_TABLE_IDX(ENGINE_INFO) = prelim_query_engine_info,
 	MAKE_TABLE_IDX(L3BANK_COUNT) = prelim_query_l3bank_count,
+	MAKE_TABLE_IDX(LMEM_MEMORY_REGIONS) = prelim_query_lmem_memregion_info,
 
 #undef MAKE_TABLE_IDX
 };

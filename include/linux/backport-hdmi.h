@@ -39,7 +39,6 @@ enum hdmi_packet_type {
 	HDMI_PACKET_TYPE_DST_AUDIO = 0x08,
 	HDMI_PACKET_TYPE_HBR_AUDIO_STREAM = 0x09,
 	HDMI_PACKET_TYPE_GAMUT_METADATA = 0x0a,
-	HDMI_PACKET_TYPE_EMP = 0x7F,
 	/* + enum hdmi_infoframe_type */
 };
 
@@ -437,61 +436,5 @@ int hdmi_infoframe_unpack(union hdmi_infoframe *frame,
 			  const void *buffer, size_t size);
 void hdmi_infoframe_log(const char *level, struct device *dev,
 			const union hdmi_infoframe *frame);
-
-/* HDMI2.1 Extended Metadata Packet Sec: 8.8 */
-enum hdmi_emp_type {
-	HDMI_EMP_TYPE_VSEMDS,
-	HDMI_EMP_TYPE_CVTEM,
-	HDMI_EMP_TYPE_HDR_DMEI,
-	HDMI_EMP_TYPE_VTEM,
-};
-
-enum hdmi_emp_ds_type {
-	HDMI_EMP_DS_TYPE_PSTATIC,
-	HDMI_EMP_DS_TYPE_DYNAMIC,
-	HDMI_EMP_DS_TYPE_UNIQUE,
-	HDMI_EMP_DS_TYPE_RESERVED,
-};
-
-struct hdmi_emp_header {
-	u8 hb0;
-	u8 hb1;
-	u8 hb2;
-};
-
-struct hdmi_emp_first_dsf {
-	bool pb0_new;
-	bool pb0_end;
-	bool pb0_afr;
-	bool pb0_vfr;
-	bool pb0_sync;
-	enum hdmi_emp_ds_type ds_type;
-	int org_id;
-	int data_set_tag;
-	int data_set_length;
-};
-
-struct hdmi_extended_metadata_packet {
-	bool enabled;
-	enum hdmi_emp_type type;
-	struct hdmi_emp_header header;
-	struct hdmi_emp_first_dsf first_data_set;
-};
-
-struct hdmi_vtem_payload {
-	bool vrr_en;
-	bool m_const;
-	bool qms_en;
-	bool rb;
-	u8 fva_factor;
-	u8 base_vfront;
-	u8 next_tfr;
-	u16 base_refresh_rate;
-};
-
-struct hdmi_video_timing_emp_config {
-	struct hdmi_extended_metadata_packet vtemp;
-	struct hdmi_vtem_payload payload;
-};
 
 #endif /* _DRM_HDMI_H */

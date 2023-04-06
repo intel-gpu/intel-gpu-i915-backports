@@ -1521,32 +1521,36 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		return err;
 
+	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
+
 	i915 = pdev_to_i915(pdev);
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		i915_driver_register(i915);
 
-	if (i915_inject_probe_failure(i915)) {
-		i915_pci_remove(pdev);
-		return -ENODEV;
+	if (i915_inject_probe_failure(pci_get_drvdata(pdev))) {
+		err = -ENODEV;
+		goto err_remove;
 	}
 
-	pvc_wa_disallow_rc6(i915);
 	err = i915_live_selftests(pdev);
 	if (err)
-		goto out_i915_selftests;
+		goto err_remove;
+
+	err = i915_wip_selftests(pdev);
+	if (err)
+		goto err_remove;
 
 	err = i915_perf_selftests(pdev);
 	if (err)
-		goto out_i915_selftests;
-
-	pvc_wa_allow_rc6(i915);
+		goto err_remove;
 
 	if (i915_save_pci_state(pdev))
 		pci_restore_state(pdev);
 
+	pvc_wa_allow_rc6(i915);
 	return 0;
 
-out_i915_selftests:
+err_remove:
 	pvc_wa_allow_rc6(i915);
 	i915_pci_remove(pdev);
 	return err > 0 ? -ENOTTY : err;

@@ -32,10 +32,6 @@
 #define SCDC_SOURCE_VERSION 0x02
 
 #define SCDC_UPDATE_0 0x10
-#define  SCDC_RSED_UPDATE (1 << 6)
-#define  SCDC_FLT_UPDATE (1 << 5)
-#define  SCDC_FRL_START (1 << 4)
-#define  SCDC_SOURCE_TEST_UPDATE (1 << 3)
 #define  SCDC_READ_REQUEST_TEST (1 << 2)
 #define  SCDC_CED_UPDATE (1 << 1)
 #define  SCDC_STATUS_UPDATE (1 << 0)
@@ -53,20 +49,7 @@
 #define SCDC_CONFIG_0 0x30
 #define  SCDC_READ_REQUEST_ENABLE (1 << 0)
 
-#define SCDC_CONFIG_1 0x31
-#define  SCDC_FRL_DISABLE		0
-#define  SCDC_FRL_RATE_3GBPS_3LANES	1
-#define  SCDC_FRL_RATE_6GBPS_3LANES	2
-#define  SCDC_FRL_RATE_6GBPS_4LANES	3
-#define  SCDC_FRL_RATE_8GBPS_4LANES	4
-#define  SCDC_FRL_RATE_10GBPS_4LANES	5
-#define  SCDC_FRL_RATE_12GBPS_4LANES	6
-#define  SCDC_FFE_LEVELS_SHIFT		4
-
 #define SCDC_STATUS_FLAGS_0 0x40
-#define  SCDC_DSC_DECODE_FAIL (1 << 7)
-#define  SCDC_FLT_READY (1 << 6)
-#define  SCDC_LANE3_LOCKED (1 << 4)
 #define  SCDC_CH2_LOCK (1 << 3)
 #define  SCDC_CH1_LOCK (1 << 2)
 #define  SCDC_CH0_LOCK (1 << 1)
@@ -74,12 +57,6 @@
 #define  SCDC_CLOCK_DETECT (1 << 0)
 
 #define SCDC_STATUS_FLAGS_1 0x41
-#define  SCDC_LN0_LTP_REQ (0xF << 0)
-#define  SCDC_LN1_LTP_REQ (0xF << 4)
-
-#define SCDC_STATUS_FLAGS_2 0x42
-#define  SCDC_LN2_LTP_REQ (0xF << 0)
-#define  SCDC_LN3_LTP_REQ (0xF << 4)
 
 #define SCDC_ERR_DET_0_L 0x50
 #define SCDC_ERR_DET_0_H 0x51
@@ -115,19 +92,6 @@ ssize_t drm_scdc_read(struct i2c_adapter *adapter, u8 offset, void *buffer,
 		      size_t size);
 ssize_t drm_scdc_write(struct i2c_adapter *adapter, u8 offset,
 		       const void *buffer, size_t size);
-enum drm_scdc_frl_ltp {
-	SCDC_FRL_NO_LTP = 0,
-	SCDC_FRL_LTP1,
-	SCDC_FRL_LTP2,
-	SCDC_FRL_LTP3,
-	SCDC_FRL_LTP4,
-	SCDC_FRL_LTP5,
-	SCDC_FRL_LTP6,
-	SCDC_FRL_LTP7,
-	SCDC_FRL_LTP8,
-	SCDC_FRL_CHNG_FFE = 0xE,
-	SCDC_FRL_CHNG_RATE = 0xF,
-};
 
 /**
  * drm_scdc_readb - read a single byte from SCDC
@@ -169,11 +133,4 @@ bool drm_scdc_get_scrambling_status(struct i2c_adapter *adapter);
 
 bool drm_scdc_set_scrambling(struct i2c_adapter *adapter, bool enable);
 bool drm_scdc_set_high_tmds_clock_ratio(struct i2c_adapter *adapter, bool set);
-u8 drm_scdc_read_update_flags(struct i2c_adapter *adapter);
-int drm_scdc_clear_update_flags(struct i2c_adapter *adapter, u8 update_flags);
-u8 drm_scdc_read_status_flags(struct i2c_adapter *adapter);
-int drm_scdc_config_frl(struct i2c_adapter *adapter, int frl_rate,
-			int num_lanes, int ffe_levels);
-int drm_scdc_get_ltp(struct i2c_adapter *adapter,
-		     enum drm_scdc_frl_ltp ltp[4]);
 #endif

@@ -23,18 +23,6 @@ union hdmi_infoframe;
 enum port;
 enum intel_output_format;
 
-/* Total Payload Bytes in an EMP(PB0-PB27) is 28 Bytes*/
-#define EMP_PAYLOAD_SIZE 28
-
-/*
- * Total VTEM Payload Packets to be written in 32bit EMP DATA REG
- * DW1: PB3|PB2|PB1|PB0
- * DW2: MD0|PB6|PB5|PB4
- * DW3: MD4|MD3|MD2|MD1
- * DW4-7: Padding
- */
-#define VTEM_NUM_DWORDS (EMP_PAYLOAD_SIZE / 4)
-
 void intel_hdmi_init_connector(struct intel_digital_port *dig_port,
 			       struct intel_connector *intel_connector);
 int intel_hdmi_compute_config(struct intel_encoder *encoder,
@@ -70,15 +58,5 @@ int intel_hdmi_dsc_get_num_slices(const struct drm_display_mode *mode,
 				  int hdmi_max_slices, int hdmi_throughput);
 int intel_hdmi_dsc_get_slice_height(int vactive);
 struct drm_i915_private *intel_hdmi_to_i915(struct intel_hdmi *intel_hdmi);
-void intel_hdmi_start_frl(struct intel_encoder *encoder,
-			  const struct intel_crtc_state *crtc_state);
-void intel_hdmi_fill_emp_header_byte(const struct hdmi_extended_metadata_packet *emp,
-				     u32 *emp_header);
-void intel_hdmi_set_hcactive(struct drm_i915_private *dev_priv,
-			     const struct intel_crtc_state *crtc_state);
-void intel_mtl_write_emp(struct intel_encoder *encoder,
-			 const struct intel_crtc_state *crtc_state);
-void intel_mtl_read_emp(struct intel_encoder *encoder,
-			struct intel_crtc_state *crtc_state);
 
 #endif /* __INTEL_HDMI_H__ */

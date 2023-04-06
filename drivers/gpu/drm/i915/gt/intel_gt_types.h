@@ -45,14 +45,23 @@ struct i915_vma;
 struct intel_engine_cs;
 struct intel_uncore;
 
+enum intel_gt_counters { /* u64 indices into gt->counters */
+	INTEL_GT_CLEAR_CYCLES = 0,
+	INTEL_GT_CLEAR_BYTES,
+};
+
 /* Count of GT Correctable and FATAL HW ERRORS */
 enum intel_gt_hw_errors {
-	INTEL_GT_HW_ERROR_COR_L3_SNG = 0,
+	INTEL_GT_HW_ERROR_COR_SUBSLICE = 0,
+	INTEL_GT_HW_ERROR_COR_L3BANK,
+	INTEL_GT_HW_ERROR_COR_L3_SNG,
 	INTEL_GT_HW_ERROR_COR_GUC,
 	INTEL_GT_HW_ERROR_COR_SAMPLER,
 	INTEL_GT_HW_ERROR_COR_SLM,
 	INTEL_GT_HW_ERROR_COR_EU_IC,
 	INTEL_GT_HW_ERROR_COR_EU_GRF,
+	INTEL_GT_HW_ERROR_FAT_SUBSLICE,
+	INTEL_GT_HW_ERROR_FAT_L3BANK,
 	INTEL_GT_HW_ERROR_FAT_ARR_BIST,
 	INTEL_GT_HW_ERROR_FAT_FPU,
 	INTEL_GT_HW_ERROR_FAT_L3_DOUB,
@@ -67,6 +76,22 @@ enum intel_gt_hw_errors {
 	INTEL_GT_HW_ERROR_FAT_TLB,
 	INTEL_GT_HW_ERROR_FAT_L3_FABRIC,
 	INTEL_GT_HW_ERROR_COUNT
+};
+
+enum intel_gsc_hw_errors {
+	INTEL_GSC_HW_ERROR_COR_SRAM_ECC = 0,
+	INTEL_GSC_HW_ERROR_UNCOR_MIA_SHUTDOWN,
+	INTEL_GSC_HW_ERROR_UNCOR_MIA_INT,
+	INTEL_GSC_HW_ERROR_UNCOR_SRAM_ECC,
+	INTEL_GSC_HW_ERROR_UNCOR_WDG_TIMEOUT,
+	INTEL_GSC_HW_ERROR_UNCOR_ROM_PARITY,
+	INTEL_GSC_HW_ERROR_UNCOR_UCODE_PARITY,
+	INTEL_GSC_HW_ERROR_UNCOR_GLITCH_DET,
+	INTEL_GSC_HW_ERROR_UNCOR_FUSE_PULL,
+	INTEL_GSC_HW_ERROR_UNCOR_FUSE_CRC_CHECK,
+	INTEL_GSC_HW_ERROR_UNCOR_SELFMBIST,
+	INTEL_GSC_HW_ERROR_UNCOR_AON_PARITY,
+	INTEL_GSC_HW_ERROR_COUNT
 };
 
 enum intel_soc_num_ieh {
@@ -113,6 +138,7 @@ enum intel_steering_type {
 	L3BANK,
 	MSLICE,
 	LNCF,
+	GAM,
 
 	/*
 	 * On some platforms there are multiple types of MCR registers that
@@ -345,6 +371,10 @@ struct intel_gt {
 	struct intel_gt_buffer_pool buffer_pool;
 
 	struct i915_vma *scratch;
+	struct { /* See enum intel_gt_counters */
+		struct i915_vma *vma;
+		const u64 *map;
+	} counters;
 
 	const struct intel_mmio_range *steering_table[NUM_STEERING_TYPES];
 	struct intel_migrate migrate;
@@ -365,6 +395,7 @@ struct intel_gt {
 
 	struct intel_hw_errors {
 		unsigned long hw[INTEL_GT_HW_ERROR_COUNT];
+		unsigned long gsc_hw[INTEL_GSC_HW_ERROR_COUNT];
 		struct xarray soc;
 		unsigned long sgunit[HARDWARE_ERROR_MAX];
 		unsigned long driver[INTEL_GT_DRIVER_ERROR_COUNT];
@@ -408,6 +439,8 @@ struct intel_gt {
 	/* sysfs defaults per gt */
 	struct intel_rps_defaults rps_defaults;
 	struct kobject *sysfs_defaults;
+
+	struct work_struct gsc_hw_error_work;
 
 	/* Memory sparing data structure for errors reporting on root tile */
 	struct intel_mem_sparing_event mem_sparing;

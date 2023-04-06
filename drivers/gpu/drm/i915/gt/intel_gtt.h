@@ -76,7 +76,7 @@ typedef u64 gen8_pte_t;
 #define GEN6_PTE_VALID			REG_BIT(0)
 
 #define GEN6_PTES			I915_PTES(sizeof(gen6_pte_t))
-#define GEN6_PD_SIZE			(I915_PDES * PAGE_SIZE)
+#define GEN6_PD_SIZE		        (I915_PDES * PAGE_SIZE)
 #define GEN6_PD_ALIGN			(PAGE_SIZE * 16)
 #define GEN6_PDE_SHIFT			22
 #define GEN6_PDE_VALID			REG_BIT(0)
@@ -101,23 +101,23 @@ typedef u64 gen8_pte_t;
  * TGL:
  *
  * +----------+---------+---------+-----------------+--------------+---------+
- * |	63:46 |   45:12 |    11:5 |		4:2 |		 1 |	   0 |
+ * |    63:46 |   45:12 |    11:5 |             4:2 |            1 |       0 |
  * +==========+=========+=========+=================+==============+=========+
  * |  Ignored | Address | Ignored | Function Number | Local Memory | Present |
  * +----------+---------+---------+-----------------+--------------+---------+
  *
  * ADL-P/S:
  * +----------+--------------+-------------------+---------+---------+----------+--------+---------+
- * |	63:46 |        45:42 |		   41:39 |   38:12 |   11:5  |	    4:2 |      1 |	 0 |
+ * |    63:46 |        45:42 |             41:39 |   38:12 |   11:5  |      4:2 |      1 |       0 |
  * +==========+==============+===================+=========+=========+==========+========+=========+
- * |  Ignored | MKTME key ID | 2LM Far Memory	 | Address | Ignored | Function | Local  | Present |
- * |	      |		     | address extension |	   |	     | Number	| Memory |	   |
+ * |  Ignored | MKTME key ID | 2LM Far Memory    | Address | Ignored | Function | Local  | Present |
+ * |          |              | address extension |         |         | Number   | Memory |         |
  * +----------+--------------+-------------------+---------+---------+----------+--------+---------+
  *
  * Platforms supporting more than 7 VFs (XEHPSDV and later):
  *
  * +----------+---------+-----------------+--------------+---------+
- * |	63:46 |   45:12 |	     11:2 |	       1 |	 0 |
+ * |    63:46 |   45:12 |            11:2 |            1 |       0 |
  * +==========+=========+=================+==============+=========+
  * |  Ignored | Address | Function Number | Local Memory | Present |
  * +----------+---------+-----------------+--------------+---------+
@@ -170,7 +170,7 @@ typedef u64 gen8_pte_t;
 #define PPAT_DISPLAY_ELLC		_PAGE_PCD /* WT eLLC */
 
 #define CHV_PPAT_SNOOP			REG_BIT(6)
-#define GEN12_PPAT_CLOS(x)		((x)<<2)
+#define GEN12_PPAT_CLOS(x)              ((x)<<2)
 #define GEN8_PPAT_AGE(x)		((x)<<4)
 #define GEN8_PPAT_LLCeLLC		(3<<2)
 #define GEN8_PPAT_LLCELLC		(2<<2)
@@ -187,7 +187,7 @@ typedef u64 gen8_pte_t;
 #define PTE_NULL_PAGE			BIT_ULL(9)
 
 #define GEN8_PDE_IPS_64K BIT_ULL(11)
-#define GEN8_PDE_PS_2M	 BIT_ULL(7)
+#define GEN8_PDE_PS_2M   BIT_ULL(7)
 #define GEN8_PDPE_PS_1G  BIT_ULL(7)
 
 #define MTL_PPAT_L4_CACHE_POLICY_MASK	REG_GENMASK(3, 2)
@@ -360,6 +360,7 @@ struct i915_address_space {
 	struct drm_i915_gem_object *root_obj;
 	struct list_head priv_obj_list;
 	struct i915_active_fence user_fence;
+	atomic_t invalidations;
 
 	struct {
 		struct i915_vma *vma;
@@ -393,6 +394,9 @@ struct i915_address_space {
 
 	/* Is address space enabled for recoverable page faults? */
 	bool page_fault_enabled:1;
+
+	/* Address space requires scratch page invalidation  on bind */
+	bool invalidate_tlb_scratch:1;
 
 	u8 top;
 	u8 pd_shift;
@@ -460,7 +464,7 @@ struct i915_ggtt {
 	struct i915_address_space vm;
 
 	struct io_mapping iomap;	/* Mapping to our CPU mappable region */
-	struct resource gmadr;		/* GMADR resource */
+	struct resource gmadr;          /* GMADR resource */
 	resource_size_t mappable_end;	/* End offset that we can CPU map */
 
 	/** "Graphics Stolen Memory" holds the global PTEs */
@@ -818,7 +822,7 @@ void ppgtt_unbind_vma(struct i915_address_space *vm,
 
 void gtt_write_workarounds(struct intel_gt *gt);
 
-void setup_private_pat(struct intel_uncore *uncore);
+void setup_private_pat(struct intel_gt *gt);
 
 int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash,
