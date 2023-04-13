@@ -1,5 +1,5 @@
 # ChangeLog
-## Release I915_23WW14.5_602_23.3.19_PSB_230122.18
+## Release SLES15SP3_23WW14.5_602_23.3.19_PSB_230125.14
 * i915: update to load and use guc fw version 70.6.4
 * i915: fix to adjust reserved blt priority to avoid deadlock
 * i915: fix to allow evictions when over-commit enabled (is by default)
