@@ -5,8 +5,9 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 | Kernel 5.17 oem |
-| | 20.04 |  Kernel 5.15 generic |
+| Ubuntu® | 22.04 | Kernel 5.19 generic |
+| | 22.04 | Kernel 5.17 oem |
+| | 20.04 | Kernel 5.15 generic |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of UBUNTU_OEM_20.04_KERNEL_VERSION/UBUNTU_OEM_22.04_KERNEL_VERSION for Ubuntu. It will point to the kernel version which is being used during backporting.
