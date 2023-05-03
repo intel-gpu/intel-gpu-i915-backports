@@ -26,6 +26,10 @@ This repo is a code snapshot of particular version of backports and does not con
     example:
         sudo zypper ref -s && sudo zypper install -y kernel-default-5.3.18-150300.59.49.1 \
         kernel-syms-5.3.18-150300.59.49.1
+
+# Product Releases:
+Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
+
  
 # Prerequisite
 we have dependencies on the following packages
