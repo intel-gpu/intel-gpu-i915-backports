@@ -24,11 +24,8 @@ This repo is a code snapshot of particular version of backports and does not con
 	 sudo dnf check-update; sudo dnf install -y kernel-4.18.0-348.7.1.el8_5.x86_64 \
 	 kernel-devel-4.18.0-348.7.1.el8_5.x86_64
 
-  
-|Product | Backport Released Tag | OS Version | Kernel Version  | Building | Testing |
-|---- |---  |---  |---  |--- |--- |
-|Intel® Data Center GPU Flex Series |RHEL86_22WW51.5_518.5_6365.0.0_221202.0 |RHEL8.6 | 4.18.0-372.26.1 | Yes |Yes |
-| | | RHEL8.5 |  4.18.0-348.23.1 |Yes |No |
+# Product Releases:
+Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
 
 # Prerequisite
 we have dependencies on the following packages
