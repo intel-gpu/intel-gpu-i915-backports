@@ -26,9 +26,9 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 | Red Hat® Enterprise Linux® 8.5       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/README.md)| Yes | No |
 | SUSE® Linux® Enterprise Server 15SP3 | [suse/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/suse/main) |[Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/suse/main/README.md)| Yes | Yes |
 | SUSE® Linux® Enterprise Server 15SP4 | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
-| Ubuntu® 22.04 (5.19 generic)  | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
+| Ubuntu® 22.04 (linux-oem image 5.17)  | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | No |
 | Ubuntu® 20.04 (5.15 generic)  | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
-| Mainline LTS kernel ( 5.15 LTS) | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | No |
+| Mainline LTS kernel (5.15 LTS) | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | No |
 
 
 # Product Releases:
