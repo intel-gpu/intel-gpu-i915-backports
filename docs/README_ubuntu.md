@@ -5,8 +5,7 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 | Kernel 5.19 generic |
-| | 22.04 | Kernel 5.17 oem |
+| Ubuntu® | 22.04 | Kernel 5.17 oem |
 | | 20.04 | Kernel 5.15 generic |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
