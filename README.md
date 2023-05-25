@@ -57,12 +57,16 @@ Above will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
 # Installation
 
-i915 driver has dependency on [VSEC(PMT)](https://github.com/intel-gpu/intel-gpu-pmt-backports/), Please install [Intel Platform Telemetry](https://github.com/intel-gpu/intel-gpu-pmt-backports/) before installting i915 driver.
-    
+i915 driver has dependency on [VSEC(PMT)](https://github.com/intel-gpu/intel-gpu-pmt-backports/) and [MEI(CSE)](https://github.com/intel-gpu/intel-gpu-cse-backports), Please install VSEC and MEI before installting i915 driver.
+
     sudo rpm -ivh intel-dmabuf-dkms*.rpm intel-i915-dkms*.rpm
     # Reboot the device after installation of all packages.
     sudo reboot
-  
+
+## Blacklist base kernel dmabuf:
+On redhat/main, along with i915 we are backporting dmabuf and drm. Since dmabuf is part of base kernel, we need to blacklist dmabuf by adding
+"initcall_blacklist=sync_debugfs_init,dma_buf_init" in kernel command line.
+
 ## Installation varification
 Please grep **backport**  from dmesg after reboot. you should see something like below
 
