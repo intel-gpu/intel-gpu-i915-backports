@@ -346,6 +346,9 @@ int mock_engine_init(struct intel_engine_cs *engine)
 {
 	struct intel_context *ce;
 
+	spin_lock_init(&engine->barrier_lock);
+	INIT_LIST_HEAD(&engine->barrier_tasks);
+
 	INIT_LIST_HEAD(&engine->pinned_contexts_list);
 
 	engine->sched_engine = i915_sched_engine_create(ENGINE_MOCK);
@@ -359,6 +362,7 @@ int mock_engine_init(struct intel_engine_cs *engine)
 	engine->breadcrumbs = intel_breadcrumbs_create(NULL);
 	if (!engine->breadcrumbs)
 		goto err_schedule;
+	engine->breadcrumbs->irq_enabled++;
 
 	ce = create_kernel_context(engine);
 	if (IS_ERR(ce))

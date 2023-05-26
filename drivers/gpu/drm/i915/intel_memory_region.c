@@ -173,29 +173,27 @@ intel_memory_region_lookup(struct drm_i915_private *i915,
 	return NULL;
 }
 
-static u64
+static void
 intel_memory_region_free_pages(struct intel_memory_region *mem,
 			       struct list_head *blocks)
 {
 	struct i915_buddy_block *block, *on;
-	u64 size = 0;
 
+	mutex_lock(&mem->mm_lock);
 	list_for_each_entry_safe(block, on, blocks, link) {
-		size += i915_buddy_block_size(&mem->mm, block);
+		mem->avail += i915_buddy_block_size(&mem->mm, block);
 		i915_buddy_free(&mem->mm, block);
 	}
-	INIT_LIST_HEAD(blocks);
+	mutex_unlock(&mem->mm_lock);
 
-	return size;
+	INIT_LIST_HEAD(blocks);
 }
 
 void
 __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 				      struct list_head *blocks)
 {
-	mutex_lock(&mem->mm_lock);
-	mem->avail += intel_memory_region_free_pages(mem, blocks);
-	mutex_unlock(&mem->mm_lock);
+	intel_memory_region_free_pages(mem, blocks);
 }
 
 static void __intel_memory_region_put_block_work(struct work_struct *work)
@@ -223,6 +221,53 @@ __intel_memory_region_put_block_buddy(struct i915_buddy_block *block)
 		schedule_work(&mem->pd_put.work);
 }
 
+static void add_to_ww_evictions(struct intel_memory_region *mem,
+                               struct i915_gem_ww_ctx *ww,
+                               struct list_head *pos)
+{
+	struct i915_gem_ww_region *r = &ww->region;
+
+	do {
+		if (r->mem == mem)
+			goto move;
+
+		if (!r->next)
+			break;
+
+		r = r->next;
+	} while (1);
+
+	if (!r->mem)
+		goto set;
+
+	r->next = kmalloc(sizeof(*r), GFP_ATOMIC);
+	if (!r->next)
+		return;
+
+	r = r->next;
+	r->next = NULL;
+set:
+	r->mem = mem;
+	list_add_tail(&r->link, &mem->objects.locked);
+	INIT_LIST_HEAD(&r->locked);
+move:
+	list_move_tail(pos, &r->locked);
+}
+
+static int __i915_gem_object_lock_to_evict(struct drm_i915_gem_object *obj,
+					   struct i915_gem_ww_ctx *ww)
+{
+	int err;
+
+	err = dma_resv_lock_interruptible(obj->base.resv, &ww->ctx);
+	if (err == -EDEADLK) {
+		ww->contended_evict = true;
+		ww->contended = i915_gem_object_get(obj);
+	}
+
+	return err;
+}
+
 static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
 {
 	/* Only evict user lmem only objects if overcommit is enabled */
@@ -239,8 +284,6 @@ static int intel_memory_region_evict(struct intel_memory_region *mem,
 				     struct i915_gem_ww_ctx *ww,
 				     resource_size_t target)
 {
-	struct list_head still_in_list;
-	struct drm_i915_gem_object *obj;
 	struct list_head *phases[] = {
 		/*
 		 * Purgeable objects are deemed to be free by userspace
@@ -261,25 +304,50 @@ static int intel_memory_region_evict(struct intel_memory_region *mem,
 		&mem->objects.list,
 		NULL,
 	};
-	unsigned long timeout = 0;
-	struct list_head **phase;
-	resource_size_t found;
+	struct intel_memory_region_link bookmark = {};
+	struct intel_memory_region_link *pos, *next;
+	struct list_head **phase = phases;
+	struct list_head still_in_list;
+	bool wait = false, busy = true;
+	resource_size_t found = 0;
+	long timeout = 0;
 	int err = 0;
-
-	found = 0;
-	phase = phases;
 
 next:
 	INIT_LIST_HEAD(&still_in_list);
-	mutex_lock(&mem->objects.lock);
+	spin_lock(&mem->objects.lock);
+	list_for_each_entry_safe(pos, next, *phase, link) {
+		struct drm_i915_gem_object *obj;
 
-	while (found < target &&
-	       (obj = list_first_entry_or_null(*phase,
-					       typeof(*obj),
-					       mm.region_link))) {
-		unsigned long flags = 0;
+		if (!pos->mem) /* skip over other bookmarks */
+			continue;
 
-		list_move_tail(&obj->mm.region_link, &still_in_list);
+		if (signal_pending(current)) {
+			err = -EINTR;
+			break;
+		}
+
+		if (need_resched()) {
+			list_add_tail(&bookmark.link, &pos->link);
+			spin_unlock(&mem->objects.lock);
+
+			schedule();
+
+			spin_lock(&mem->objects.lock);
+			list_safe_reset_next(&bookmark, next, link);
+			__list_del_entry(&bookmark.link);
+			continue;
+		}
+
+		obj = container_of(pos, typeof(*obj), mm.region);
+
+		/* Already locked this object? */
+		if (ww && ww == i915_gem_get_locking_ctx(obj)) {
+			add_to_ww_evictions(mem, ww, &pos->link);
+			continue;
+		}
+
+		list_move_tail(&pos->link, &still_in_list);
 
 		if (!i915_gem_object_allows_eviction(obj))
 			continue;
@@ -287,25 +355,28 @@ next:
 		if (i915_gem_object_is_framebuffer(obj))
 			continue;
 
-		/* Already locked this object? */
-		if (ww && ww == i915_gem_get_locking_ctx(obj))
+		obj = i915_gem_object_get_rcu(obj);
+		if (!obj) {
+			list_del_init(&pos->link);
 			continue;
+		}
 
-		if (!kref_get_unless_zero(&obj->base.refcount))
-			continue;
-
-		mutex_unlock(&mem->objects.lock);
+		list_add_tail(&bookmark.link, &next->link);
+		spin_unlock(&mem->objects.lock);
 
 		/* Flush activity prior to grabbing locks */
-		err = i915_gem_object_wait(obj,
-					   I915_WAIT_INTERRUPTIBLE |
-					   I915_WAIT_ALL,
-					   timeout);
-		if (err)
+		timeout = __i915_gem_object_wait(obj,
+						 I915_WAIT_INTERRUPTIBLE |
+						 I915_WAIT_ALL,
+						 timeout);
+		if (timeout < 0) {
+			busy = true;
+			timeout = 0;
 			goto put;
+		}
 
 		if (ww) {
-			err = i915_gem_object_lock_to_evict(obj, ww);
+			err = __i915_gem_object_lock_to_evict(obj, ww);
 			if (err)
 				goto put;
 		} else {
@@ -316,20 +387,16 @@ next:
 		if (!i915_gem_object_has_pages(obj))
 			goto unlock;
 
-		/* tell callee to do swapping */
-		if (i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM)
-		    && obj->mm.madv == I915_MADV_WILLNEED)
-			obj->do_swapping = true;
-
-		err = i915_gem_object_unbind(obj, ww, flags);
+		err = i915_gem_object_unbind(obj, ww, 0);
 		if (!err) {
-			/* May arrive from get_pages on another bo */
 			err = __i915_gem_object_put_pages(obj);
 			if (!err && !i915_gem_object_has_pages(obj)) {
 				/* conservative estimate of reclaimed pages */
 				found += obj->base.size;
 				if (obj->mm.madv == I915_MADV_DONTNEED)
 					obj->mm.madv = __I915_MADV_PURGED;
+
+				wait = false; /* wait after forward progress */
 			}
 		}
 
@@ -337,27 +404,27 @@ next:
 		if (err != -EDEADLK && err != -EINTR && err != -ERESTARTSYS)
 			err = 0;
 
-		obj->do_swapping = false;
 unlock:
-		if (!ww)
-			i915_gem_object_unlock(obj);
+		i915_gem_object_unlock(obj);
 put:
 		i915_gem_object_put(obj);
-		mutex_lock(&mem->objects.lock);
+		spin_lock(&mem->objects.lock);
 
-		if (err == -EDEADLK || err == -EINTR ||
-		    err == -ERESTARTSYS || found >= target)
+		list_safe_reset_next(&bookmark, next, link);
+		__list_del_entry(&bookmark.link);
+		if (err || found >= target)
 			break;
 	}
 	list_splice_tail(&still_in_list, *phase);
-	mutex_unlock(&mem->objects.lock);
-	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
+	spin_unlock(&mem->objects.lock);
+	if (err)
 		return err;
 
 	if (found < target) {
-		if (!timeout && !list_empty(&still_in_list)) {
+		if (!wait && busy) {
 			/* Repeat, waiting for the active objects */
 			timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
+			wait = true;
 			goto next;
 		}
 
@@ -366,13 +433,39 @@ put:
 			intel_gt_retire_requests(mem->gt);
 
 			timeout = 0;
+			wait = false;
+			busy = false;
 			if (*++phase)
 				goto next;
 		}
-	}
 
-	if (ww)
-		i915_gem_ww_ctx_unlock_evictions(ww);
+		if (ww) {
+			struct i915_gem_ww_region *r;
+
+			spin_lock(&mem->objects.lock);
+			list_for_each_entry(r, &mem->objects.locked, link) {
+				struct drm_i915_gem_object *obj;
+
+				obj = list_first_entry_or_null(&r->locked,
+							       typeof(*obj),
+							       mm.region.link);
+				if (obj && i915_gem_get_locking_ctx(obj) != ww) {
+					obj = i915_gem_object_get_rcu(obj);
+					spin_unlock(&mem->objects.lock);
+
+					if (obj) {
+						err = __i915_gem_object_lock_to_evict(obj, ww);
+						if (err == 0)
+							i915_gem_object_unlock(obj);
+						i915_gem_object_put(obj);
+					}
+
+					return err;
+				}
+			}
+			spin_unlock(&mem->objects.lock);
+		}
+	}
 
 	/*
 	 * Keep retrying the allocation until there is nothing more to evict.
@@ -384,7 +477,16 @@ put:
 	 * no forward progress, do we conclude that it is better to report
 	 * failure.
 	 */
-	return found ? 0 : -ENOSPC;
+	return found ? 0 : -ENXIO;
+}
+
+static unsigned int
+__max_order(const struct intel_memory_region *mem, unsigned long n_pages)
+{
+	if (n_pages >> mem->mm.max_order)
+		return mem->mm.max_order;
+
+	return __fls(n_pages);
 }
 
 int
@@ -396,6 +498,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 {
 	unsigned int min_order = 0;
 	unsigned long n_pages;
+	unsigned int order;
 	int err;
 
 	GEM_BUG_ON(!IS_ALIGNED(size, mem->mm.chunk_size));
@@ -424,59 +527,54 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 	if (size > mem->mm.size)
 		return -E2BIG;
 
+	n_pages = READ_ONCE(mem->avail);
+	if (size > n_pages) {
+		err = intel_memory_region_evict(mem, ww, n_pages - size);
+		if (err)
+			return err;
+	}
+
 	n_pages = size >> ilog2(mem->mm.chunk_size);
+	order = __max_order(mem, n_pages);
+	GEM_BUG_ON(order < min_order);
 
 	mutex_lock(&mem->mm_lock);
-
 	do {
 		struct i915_buddy_block *block;
-		unsigned int order;
 
-retry:
-		order = min_t(unsigned int, __fls(n_pages), mem->mm.max_order);
-		GEM_BUG_ON(order < min_order);
-
-		do {
+		block = ERR_PTR(-ENXIO);
+		if (mem->avail >> order >= mem->mm.chunk_size)
 			block = i915_buddy_alloc(&mem->mm, order);
-			if (!IS_ERR(block))
+		if (!IS_ERR(block)) {
+			GEM_BUG_ON(i915_buddy_block_order(block) != order);
+			list_add_tail(&block->link, blocks);
+			mem->avail -= mem->mm.chunk_size << order;
+			block->private = mem;
+
+			n_pages -= BIT(order);
+			if (!n_pages)
 				break;
 
-			if (order-- == min_order) {
-				resource_size_t target;
+			while (!(n_pages >> order))
+				order--;
+		} else if (order-- == min_order) {
+			mutex_unlock(&mem->mm_lock);
 
-				target = n_pages * mem->mm.chunk_size;
+			err = intel_memory_region_evict(mem, ww, n_pages * mem->mm.chunk_size);
+			if (err)
+				goto err_free_blocks;
 
-				mutex_unlock(&mem->mm_lock);
-				err = intel_memory_region_evict(mem, ww,
-								target);
-				mutex_lock(&mem->mm_lock);
-				if (err)
-					goto err_free_blocks;
-
-				goto retry;
-			}
-		} while (1);
-
-		n_pages -= BIT(order);
-
-		block->private = mem;
-		list_add_tail(&block->link, blocks);
-
-		if (!n_pages)
-			break;
+			order = __max_order(mem, n_pages);
+			mutex_lock(&mem->mm_lock);
+		}
 	} while (1);
-
-	mem->avail -= size;
 	mutex_unlock(&mem->mm_lock);
+
 	return 0;
 
 err_free_blocks:
 	intel_memory_region_free_pages(mem, blocks);
-	mutex_unlock(&mem->mm_lock);
-	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
-		return err;
-
-	return -ENXIO;
+	return err;
 }
 
 struct i915_buddy_block *
@@ -588,10 +686,12 @@ intel_memory_region_create(struct intel_gt *gt,
 
 	INIT_WORK(&mem->pd_put.work, __intel_memory_region_put_block_work);
 
-	mutex_init(&mem->objects.lock);
+	spin_lock_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
-	INIT_LIST_HEAD(&mem->reserved);
 	INIT_LIST_HEAD(&mem->objects.purgeable);
+	INIT_LIST_HEAD(&mem->objects.locked);
+
+	INIT_LIST_HEAD(&mem->reserved);
 
 	mutex_init(&mem->mm_lock);
 
@@ -638,7 +738,6 @@ static void __intel_memory_region_destroy(struct kref *kref)
 		mem->ops->release(mem);
 
 	mutex_destroy(&mem->mm_lock);
-	mutex_destroy(&mem->objects.lock);
 	kfree(mem);
 }
 

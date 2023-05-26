@@ -192,7 +192,7 @@ huge_pages_object(struct drm_i915_private *i915,
 
 	drm_gem_private_object_init(&i915->drm, &obj->base, size);
 	i915_gem_object_init(obj, &huge_page_ops, &lock_class,
-			     I915_BO_ALLOC_STRUCT_PAGE);
+			     I915_BO_STRUCT_PAGE);
 
 	i915_gem_object_set_volatile(obj);
 
@@ -789,9 +789,6 @@ static int igt_mock_ppgtt_huge_fill(void *arg)
 		GEM_BUG_ON(!expected_gtt);
 		GEM_BUG_ON(size);
 
-		if (expected_gtt & I915_GTT_PAGE_SIZE_4K)
-			expected_gtt &= ~I915_GTT_PAGE_SIZE_64K;
-
 		i915_vma_unpin(vma);
 
 		if (vma->page_sizes.sg & I915_GTT_PAGE_SIZE_64K) {
@@ -832,171 +829,6 @@ static int igt_mock_ppgtt_huge_fill(void *arg)
 
 	if (err == -ENOMEM || err == -ENOSPC)
 		err = 0;
-
-	return err;
-}
-
-static int igt_mock_ppgtt_64K(void *arg)
-{
-	struct i915_ppgtt *ppgtt = arg;
-	struct drm_i915_private *i915 = ppgtt->vm.i915;
-	struct drm_i915_gem_object *obj;
-	const struct object_info {
-		unsigned int size;
-		unsigned int gtt;
-		unsigned int offset;
-	} objects[] = {
-		/* Cases with forced padding/alignment */
-		{
-			.size = SZ_64K,
-			.gtt = I915_GTT_PAGE_SIZE_64K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_64K + SZ_4K,
-			.gtt = I915_GTT_PAGE_SIZE_4K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_64K - SZ_4K,
-			.gtt = I915_GTT_PAGE_SIZE_4K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_2M,
-			.gtt = I915_GTT_PAGE_SIZE_64K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_2M - SZ_4K,
-			.gtt = I915_GTT_PAGE_SIZE_4K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_2M + SZ_4K,
-			.gtt = I915_GTT_PAGE_SIZE_64K | I915_GTT_PAGE_SIZE_4K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_2M + SZ_64K,
-			.gtt = I915_GTT_PAGE_SIZE_64K,
-			.offset = 0,
-		},
-		{
-			.size = SZ_2M - SZ_64K,
-			.gtt = I915_GTT_PAGE_SIZE_64K,
-			.offset = 0,
-		},
-		/* Try without any forced padding/alignment */
-		{
-			.size = SZ_64K,
-			.offset = SZ_2M,
-			.gtt = I915_GTT_PAGE_SIZE_4K,
-		},
-		{
-			.size = SZ_128K,
-			.offset = SZ_2M - SZ_64K,
-			.gtt = I915_GTT_PAGE_SIZE_4K,
-		},
-	};
-	struct i915_vma *vma;
-	int i, single;
-	int err;
-
-	/*
-	 * Sanity check some of the trickiness with 64K pages -- either we can
-	 * safely mark the whole page-table(2M block) as 64K, or we have to
-	 * always fallback to 4K.
-	 */
-
-	if (!HAS_PAGE_SIZES(i915, I915_GTT_PAGE_SIZE_64K))
-		return 0;
-
-	for (i = 0; i < ARRAY_SIZE(objects); ++i) {
-		unsigned int size = objects[i].size;
-		unsigned int expected_gtt = objects[i].gtt;
-		unsigned int offset = objects[i].offset;
-		unsigned int flags = PIN_USER;
-
-		for (single = 0; single <= 1; single++) {
-			obj = fake_huge_pages_object(i915, size, !!single);
-			if (IS_ERR(obj))
-				return PTR_ERR(obj);
-
-			err = i915_gem_object_pin_pages_unlocked(obj);
-			if (err)
-				goto out_object_put;
-
-			/*
-			 * Disable 2M pages -- We only want to use 64K/4K pages
-			 * for this test.
-			 */
-			obj->mm.page_sizes.sg &= ~I915_GTT_PAGE_SIZE_2M;
-
-			vma = i915_vma_instance(obj, &ppgtt->vm, NULL);
-			if (IS_ERR(vma)) {
-				err = PTR_ERR(vma);
-				goto out_object_unpin;
-			}
-
-			if (offset)
-				flags |= PIN_OFFSET_FIXED | offset;
-
-			err = i915_vma_pin(vma, 0, 0, flags);
-			if (err)
-				goto out_object_unpin;
-
-			err = igt_check_page_sizes(vma);
-			if (err)
-				goto out_vma_unpin;
-
-			if (!offset && vma->page_sizes.sg & I915_GTT_PAGE_SIZE_64K) {
-				if (!IS_ALIGNED(vma->node.start,
-						I915_GTT_PAGE_SIZE_2M)) {
-					pr_err("node.start(%llx) not aligned to 2M\n",
-					       vma->node.start);
-					err = -EINVAL;
-					goto out_vma_unpin;
-				}
-
-				if (!IS_ALIGNED(vma->node.size,
-						I915_GTT_PAGE_SIZE_2M)) {
-					pr_err("node.size(%llx) not aligned to 2M\n",
-					       vma->node.size);
-					err = -EINVAL;
-					goto out_vma_unpin;
-				}
-			}
-
-			if (vma->page_sizes.gtt != expected_gtt) {
-				pr_err("gtt=%u, expected=%u, i=%d, single=%s\n",
-				       vma->page_sizes.gtt, expected_gtt, i,
-				       str_yes_no(!!single));
-				err = -EINVAL;
-				goto out_vma_unpin;
-			}
-
-			i915_vma_unpin(vma);
-			i915_gem_object_lock(obj, NULL);
-			i915_gem_object_unpin_pages(obj);
-			__i915_gem_object_put_pages(obj);
-			i915_gem_object_unlock(obj);
-			i915_gem_object_put(obj);
-
-			i915_gem_drain_freed_objects(i915);
-		}
-	}
-
-	return 0;
-
-out_vma_unpin:
-	i915_vma_unpin(vma);
-out_object_unpin:
-	i915_gem_object_lock(obj, NULL);
-	i915_gem_object_unpin_pages(obj);
-	i915_gem_object_unlock(obj);
-out_object_put:
-	i915_gem_object_put(obj);
 
 	return err;
 }
@@ -1762,7 +1594,6 @@ int i915_gem_huge_page_mock_selftests(void)
 		SUBTEST(igt_mock_memory_region_huge_pages),
 		SUBTEST(igt_mock_ppgtt_misaligned_dma),
 		SUBTEST(igt_mock_ppgtt_huge_fill),
-		SUBTEST(igt_mock_ppgtt_64K),
 	};
 	struct drm_i915_private *dev_priv;
 	struct i915_ppgtt *ppgtt;

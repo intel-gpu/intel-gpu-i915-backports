@@ -1960,10 +1960,7 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	 * Wa_16011777198:dg2: Wa_1509372804:pvc:
 	 * Unset the override of GUCRC mode to enable rc6.
 	 */
-	if (intel_uc_uses_guc_rc(&gt->uc) &&
-	    (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
-	     IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0) ||
-	     IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_C0)))
+	if (stream->override_gucrc)
 		drm_WARN_ON(&gt->i915->drm,
 			    intel_guc_slpc_unset_gucrc_mode(&gt->uc.guc.slpc));
 
@@ -3856,13 +3853,15 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		if (ret) {
 			drm_dbg(&stream->perf->i915->drm,
 				"Unable to override gucrc mode\n");
-			goto err_config;
+			goto err_fw;
 		}
+
+		stream->override_gucrc = true;
 	}
 
 	ret = alloc_oa_buffer(stream, props->oa_buffer_size_exponent);
 	if (ret)
-		goto err_oa_buf_alloc;
+		goto err_gucrc;
 
 	stream->ops = &i915_oa_stream_ops;
 
@@ -3895,11 +3894,15 @@ err_enable:
 
 	free_oa_buffer(stream);
 
-err_oa_buf_alloc:
-	free_oa_configs(stream);
+err_gucrc:
+	if (stream->override_gucrc)
+		intel_guc_slpc_unset_gucrc_mode(&gt->uc.guc.slpc);
 
+err_fw:
 	intel_uncore_forcewake_put(stream->uncore, g->fw_domains);
 	intel_engine_pm_put(stream->engine);
+
+	free_oa_configs(stream);
 
 err_config:
 	free_noa_wait(stream);

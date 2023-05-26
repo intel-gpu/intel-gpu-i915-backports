@@ -10,6 +10,7 @@
 
 #include "gem/i915_gem_context.h"
 #include "gt/intel_breadcrumbs.h"
+#include "gt/intel_rps.h"
 
 #include "i915_drv.h"
 #include "i915_gem_ioctls.h"
@@ -26,7 +27,7 @@ struct ufence_wake {
 
 static bool ufence_fault(const struct ufence_wake *wake)
 {
-	u8 dummy, *ptr = wake->ptr;
+	u8 dummy, __user *ptr = wake->ptr;
 
 	/* Fault in the page; or report EFAULT */
 	return get_user(dummy, ptr);
@@ -141,7 +142,9 @@ add_engine_wait(struct engine_wait **head, struct intel_engine_cs *engine)
 		wait->wq_entry.flags = 0;
 		wait->wq_entry.private = current;
 		wait->wq_entry.func = default_wake_function;
+
 		intel_breadcrumbs_add_wait(b, &wait->wq_entry);
+		intel_rps_boost(&b->irq_engine->gt->rps);
 
 		wait->next = *head;
 		*head = wait;
@@ -176,6 +179,7 @@ remove_waits(struct drm_i915_private *i915, struct engine_wait *wait)
 		struct intel_breadcrumbs *b = wait->breadcrumbs;
 		struct engine_wait *next = wait->next;
 
+		intel_rps_cancel_boost(&b->irq_engine->gt->rps);
 		intel_breadcrumbs_remove_wait(b, &wait->wq_entry);
 		kfree(wait);
 

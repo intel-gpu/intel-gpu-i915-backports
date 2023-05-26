@@ -11,15 +11,16 @@
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_clock_utils.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
-
-#include "intel_memory_region.h"
-#include "gem/i915_gem_region.h"
-#include "gem/i915_gem_lmem.h"
 #include "gt/intel_rps.h"
-#include "gt/intel_gt_clock_utils.h"
+
 #include "i915_drv.h"
+#include "i915_gem_lmem.h"
+#include "i915_gem_region.h"
+#include "i915_sw_fence.h"
+#include "intel_memory_region.h"
 
 static u32 *emit_timestamp(struct i915_request *rq, u32 *cs, int gpr)
 {
@@ -112,12 +113,13 @@ void __iomem *
 i915_gem_object_lmem_io_map_page_atomic(struct drm_i915_gem_object *obj,
 					unsigned long n)
 {
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	resource_size_t offset;
 
 	offset = i915_gem_object_get_dma_address(obj, n);
-	offset -= obj->mm.region->region.start;
+	offset -= mem->region.start;
 
-	return io_mapping_map_atomic_wc(&obj->mm.region->iomap, offset);
+	return io_mapping_map_atomic_wc(&mem->iomap, offset);
 }
 
 void __iomem *
@@ -125,14 +127,15 @@ i915_gem_object_lmem_io_map(struct drm_i915_gem_object *obj,
 			    unsigned long n,
 			    unsigned long size)
 {
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	resource_size_t offset;
 
 	GEM_BUG_ON(!i915_gem_object_is_contiguous(obj));
 
 	offset = i915_gem_object_get_dma_address(obj, n);
-	offset -= obj->mm.region->region.start;
+	offset -= mem->region.start;
 
-	return io_mapping_map_wc(&obj->mm.region->iomap, offset, size);
+	return io_mapping_map_wc(&mem->iomap, offset, size);
 }
 
 unsigned long i915_gem_object_lmem_offset(struct drm_i915_gem_object *obj)
@@ -155,7 +158,7 @@ unsigned long i915_gem_object_lmem_offset(struct drm_i915_gem_object *obj)
  */
 bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mr = READ_ONCE(obj->mm.region);
+	struct intel_memory_region *mr = READ_ONCE(obj->mm.region.mem);
 
 	return !i915_gem_object_migratable(obj) &&
 		mr && (mr->type == INTEL_MEMORY_LOCAL ||
@@ -178,7 +181,7 @@ bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
  */
 bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mr = READ_ONCE(obj->mm.region);
+	struct intel_memory_region *mr = READ_ONCE(obj->mm.region.mem);
 #if 0
 #ifdef CONFIG_LOCKDEP
 	if (i915_gem_object_migratable(obj) &&
@@ -326,7 +329,7 @@ lmem_swapout(struct drm_i915_gem_object *obj,
 	 * if 'obj' is used directly, it is set pages and is pinned
 	 * again, other thread may wrongly use 'obj' pages.
 	 */
-	src = i915_gem_object_create_region(obj->mm.region,
+	src = i915_gem_object_create_region(obj->mm.region.mem,
 					    obj->base.size, 0);
 	if (IS_ERR(src)) {
 		i915_gem_object_put(dst);
@@ -340,7 +343,7 @@ lmem_swapout(struct drm_i915_gem_object *obj,
 
 	/* copying the pages */
 	if (i915->params.enable_eviction >= 2 &&
-	    !intel_gt_is_wedged(obj->mm.region->gt)) {
+	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
 		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
 		if (!err)
 			stat = &i915->mm.blt_swap_stats.out;
@@ -364,8 +367,7 @@ lmem_swapout(struct drm_i915_gem_object *obj,
 		obj->swapto = dst;
 	} else {
 		if (err != -EINTR && err != -ERESTARTSYS)
-			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
-					      "Failed to swap-out object (%d)\n", err);
+			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
 		i915_gem_object_put(dst);
 	}
 
@@ -391,7 +393,7 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 	 * if 'obj' is used directly, it is set pages and is pinned
 	 * again, other thread may wrongly use 'obj' pages.
 	 */
-	dst = i915_gem_object_create_region(obj->mm.region,
+	dst = i915_gem_object_create_region(obj->mm.region.mem,
 					    obj->base.size, 0);
 	if (IS_ERR(dst)) {
 		err = PTR_ERR(dst);
@@ -408,7 +410,7 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 
 	/* copying the pages */
 	if (i915->params.enable_eviction >= 2 &&
-	    !intel_gt_is_wedged(obj->mm.region->gt)) {
+	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
 		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
 		if (!err)
 			stat = &i915->mm.blt_swap_stats.in;
@@ -433,8 +435,7 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 		i915_gem_object_put(src);
 	} else {
 		if (err != -EINTR && err != -ERESTARTSYS)
-			i915_log_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION,
-					      "Failed to swap-in object (%d)\n", err);
+			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
 	}
 
 	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
@@ -518,10 +519,9 @@ xy_emit_clear(struct i915_request *rq, u64 offset, u32 size, u32 page_shift)
 }
 
 static struct i915_request *
-chain_request(struct i915_request *rq, struct i915_request *chain)
+chain_request(struct i915_request *rq, struct i915_request *chain, int prio)
 {
 	struct intel_timeline *tl = rq->context->timeline;
-	struct i915_sched_attr attr = {};
 
 	/*
 	 * Hold the request until the next is chained. We need
@@ -539,7 +539,7 @@ chain_request(struct i915_request *rq, struct i915_request *chain)
 
 	trace_i915_request_add(rq);
 	__i915_request_commit(rq);
-	__i915_request_queue(rq, &attr);
+	__i915_request_queue(rq, prio);
 
 	if (chain) {
 		i915_sw_fence_complete(&chain->submit);
@@ -551,18 +551,21 @@ chain_request(struct i915_request *rq, struct i915_request *chain)
 
 static int
 clear_blt(struct intel_context *ce,
+	  struct drm_i915_gem_object *fence,
 	  struct sg_table *sgt,
 	  unsigned int page_sizes,
 	  unsigned int flags,
 	  struct i915_request **out)
 {
 	const int page_shift = min(__ffs(page_sizes), 16ul);
-	const u32 step = BIT(page_shift) << 14; /* 128-1024MiB */
+	const u32 step = min(BIT(page_shift) << 14, /* 128-1024MiB */
+			     ce->engine->gt->lmem_clear_chunk);
 	bool use_pvc_memset = HAS_LINK_COPY_ENGINES(ce->engine->i915);
 	const bool use_ccs_clear =
 		!use_pvc_memset &&
 		flags & I915_BO_ALLOC_USER &&
 		HAS_FLAT_CCS(ce->engine->i915);
+	const int prio = flags & I915_BO_FAULT_CLEAR ? I915_PRIORITY_MAX : I915_PRIORITY_NORMAL;
 	struct sgt_iter it;
 	u64 offset;
 	int err;
@@ -596,6 +599,14 @@ clear_blt(struct intel_context *ce,
 			break;
 		}
 
+		if (fence) {
+			err = i915_request_await_object(rq, fence, true);
+			if (err)
+				goto skip;
+
+			fence = NULL;
+		}
+
 		err = emit_start_timestamp(rq);
 		if (err)
 			goto skip;
@@ -614,7 +625,7 @@ clear_blt(struct intel_context *ce,
 			goto skip;
 
 skip:
-		*out = chain_request(rq, *out);
+		*out = chain_request(rq, *out, prio);
 		if (err)
 			break;
 	}
@@ -651,7 +662,7 @@ static void clear_cpu(struct intel_memory_region *mem, struct sg_table *sgt, u64
 static inline bool
 small_sync_clear(const struct drm_i915_gem_object *obj, unsigned int flags)
 {
-	if (!(flags & I915_BO_ALLOC_SYNC_HINT))
+	if (!(flags & I915_BO_SYNC_HINT))
 		return false;
 
 	/* Assume exec + sync latency ~2ms and WC bw of ~4GiB/s */
@@ -668,7 +679,7 @@ use_flat_ccs(struct intel_gt *gt)
 static inline bool
 use_cpu_clear(struct intel_gt *gt, unsigned int flags)
 {
-	if (!(flags & I915_BO_ALLOC_CPU_CLEAR))
+	if (!(flags & I915_BO_CPU_CLEAR))
 		return false;
 
 	if (!(flags & I915_BO_ALLOC_USER))
@@ -682,38 +693,87 @@ static int lmem_clear(struct drm_i915_gem_object *obj,
 		      unsigned int page_sizes,
 		      struct i915_request **out)
 {
-	struct intel_memory_region *mem = obj->mm.region;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	unsigned int flags = obj->flags;
 	struct intel_gt *gt = mem->gt;
 	struct intel_context *ce;
 	intel_wakeref_t wf = 0;
 	int err = 0;
 
+	if (flags & I915_BO_SKIP_CLEAR)
+		return 0;
+
 	ce = NULL;
-	if (flags & (I915_BO_ALLOC_USER | I915_BO_ALLOC_CPU_CLEAR)) {
+	if (flags & (I915_BO_ALLOC_USER | I915_BO_CPU_CLEAR)) {
 		ce = get_clear_context(gt);
 		if (!ce || small_sync_clear(obj, flags))
-			flags |= I915_BO_ALLOC_CPU_CLEAR;
+			flags |= I915_BO_CPU_CLEAR;
 	}
 
 	/* Avoid misspending PCI credits between the GT; must use BLT clears */
 	if (ce && gt->info.id > 0 && intel_gt_pm_is_awake(gt))
-		flags &= ~I915_BO_ALLOC_CPU_CLEAR;
+		flags &= ~I915_BO_CPU_CLEAR;
 
 	/* Clear is too small to benefit from waking up the GPU */
 	if (ce && page_sizes < SZ_2M && !(wf = intel_gt_pm_get_if_awake(gt)))
-		flags |= I915_BO_ALLOC_CPU_CLEAR;
+		flags |= I915_BO_CPU_CLEAR;
 
 	/* Intended for kernel internal use only */
 	if (use_cpu_clear(gt, flags))
 		clear_cpu(mem, pages, 0);
 	else if (ce)
-		err = clear_blt(ce, pages, page_sizes, flags, out);
-	else if (flags & I915_BO_ALLOC_CPU_CLEAR)
+		err = clear_blt(ce, NULL, pages, page_sizes, flags, out);
+	else if (flags & I915_BO_CPU_CLEAR)
 		err = -EIO;
 
 	if (wf)
 		intel_gt_pm_put(gt, wf);
+
+	return err;
+}
+
+/**
+ * i915_gem_object_clear_lmem - Clear local memory using the bliter
+ * @obj - the lmem object (and flat-ccs) to be cleared (fill with 0)
+ *
+ * Clears the lmem backing store of the object, and any implicit flat-ccs
+ * storage, reporting an error if the object has no lmem storage or if
+ * the blitter is unusable. The blitter operation is queued to HW, with
+ * the completion fence stored on the object. If it is required to know
+ * the result of clearing the lmem, wait upon i915_gem_object_migrate_sync().
+ */
+int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj)
+{
+	struct intel_context *ce;
+	int err;
+
+	if (!i915_gem_object_is_lmem(obj))
+		return -EINVAL;
+
+	ce = get_clear_context(obj->mm.region.mem->gt);
+	if (!ce)
+		return -EINVAL;
+
+	err = i915_gem_object_lock_interruptible(obj, NULL);
+	if (err)
+		return err;
+
+	if (obj->mm.pages) {
+		struct i915_request *rq = NULL;
+
+		err = clear_blt(ce, obj,
+				obj->mm.pages,
+				obj->mm.page_sizes.sg,
+				obj->flags,
+				&rq);
+		if (rq) {
+			i915_gem_object_migrate_prepare(obj, rq);
+			i915_sw_fence_complete(&rq->submit);
+			i915_request_put(rq);
+		}
+	}
+
+	i915_gem_object_unlock(obj);
 
 	return err;
 }
@@ -750,16 +810,29 @@ err:
 	return err;
 }
 
+static bool need_swap(const struct drm_i915_gem_object *obj)
+{
+	if (i915_gem_object_migrate_has_error(obj))
+		return false;
+
+	if (i915_gem_object_is_volatile(obj))
+		return false;
+
+	if (obj->mm.madv != I915_MADV_WILLNEED)
+		return false;
+
+	if (kref_read(&obj->base.refcount) == 0)
+		return false;
+
+	return obj->mm.dirty;
+}
+
 static int
 lmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 {
-	/* if need to save the page contents, swap them out */
-	if (obj->do_swapping && !i915_gem_object_migrate_has_error(obj)) {
+	if (need_swap(obj)) {
 		unsigned int sizes = obj->mm.page_sizes.phys;
 		int err;
-
-		GEM_BUG_ON(obj->mm.madv != I915_MADV_WILLNEED);
-		GEM_BUG_ON(i915_gem_object_is_volatile(obj));
 
 		err = lmem_swapout(obj, pages, sizes);
 		if (err)
@@ -767,7 +840,7 @@ lmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 	}
 
 	i915_gem_object_migrate_finish(obj);
-	obj->flags &= ~I915_BO_ALLOC_SYNC_HINT;
+	obj->flags &= ~I915_BO_SYNC_HINT;
 
 	return i915_gem_object_put_pages_buddy(obj, pages);
 }
@@ -963,6 +1036,7 @@ void __iomem *
 i915_gem_object_lmem_io_map_page(struct drm_i915_gem_object *obj,
 				 unsigned long n)
 {
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	resource_size_t offset;
 	int err;
 
@@ -971,9 +1045,9 @@ i915_gem_object_lmem_io_map_page(struct drm_i915_gem_object *obj,
 		return IO_ERR_PTR(err);
 
 	offset = i915_gem_object_get_dma_address(obj, n);
-	offset -= obj->mm.region->region.start;
+	offset -= mem->region.start;
 
-	return io_mapping_map_wc(&obj->mm.region->iomap, offset, PAGE_SIZE);
+	return io_mapping_map_wc(&mem->iomap, offset, PAGE_SIZE);
 }
 
 struct drm_i915_gem_object *
@@ -1002,6 +1076,90 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 	i915_gem_object_init_memory_region(obj, mem);
 
 	return 0;
+}
+
+void i915_gem_init_lmem(struct intel_gt *gt)
+{
+	struct i915_buddy_block *block;
+	struct intel_context *ce;
+	struct i915_request *rq;
+	struct sg_table *pages;
+	intel_wakeref_t wf;
+	LIST_HEAD(blocks);
+	u64 offset;
+	u64 cycles;
+	int err = 0;
+
+	if (!gt->lmem)
+		return;
+
+	gt->lmem_clear_chunk = -4096;
+
+	pages = kmalloc(sizeof(*pages), GFP_KERNEL);
+	if (!pages)
+		return;
+
+	if (sg_alloc_table(pages, 1, GFP_KERNEL))
+		goto err_pages;
+
+	wf = intel_gt_pm_get(gt);
+	intel_rps_boost(&gt->rps);
+
+	ce = get_clear_context(gt);
+	if (!ce)
+		goto err_wf;
+
+	err = __intel_memory_region_get_pages_buddy(gt->lmem, NULL,
+						    SZ_16M, 0,
+						    &blocks);
+	if (err)
+		goto err_wf;
+
+	block = list_first_entry(&blocks, typeof(*block), link);
+	offset = i915_buddy_block_offset(block);
+
+	sg_dma_address(pages->sgl) = offset;
+	sg_dma_len(pages->sgl) = i915_buddy_block_size(&gt->lmem->mm, block);
+
+	cycles = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+	err = clear_blt(ce, NULL, pages, sg_dma_len(pages->sgl), 0, &rq);
+	if (rq) {
+		i915_sw_fence_complete(&rq->submit);
+		if (i915_request_wait(rq, 0, HZ) < 0)
+			err = -ETIME;
+		else
+			err = err ?: rq->fence.error;
+		i915_request_put(rq);
+	}
+	cycles += READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+	cycles = intel_gt_clock_interval_to_ns(gt, cycles);
+	if (err == 0 && cycles) {
+		u32 quantum_ns = 1000000; /* 1ms */
+		u64 chunk_size;
+
+		dev_info(gt->i915->drm.dev,
+			 "GT%d: %s %s clear bandwidth:%lld MB/s\n",
+			 gt->info.id, gt->lmem->name, ce->engine->name,
+			 div_u64(mul_u32_u32(1000, sg_dma_len(pages->sgl)), cycles));
+
+		chunk_size =
+			div_u64(mul_u32_u32(quantum_ns, sg_dma_len(pages->sgl)),
+				cycles);
+		chunk_size = round_up(chunk_size + 1, SZ_64K);
+		gt->lmem_clear_chunk = min_t(u64, chunk_size, SZ_1G);
+		drm_dbg(&gt->i915->drm,
+			"GT%d: %s %s clear chunk size:%luKiB\n",
+			gt->info.id, gt->lmem->name, ce->engine->name,
+			gt->lmem_clear_chunk >> 10);
+	}
+
+	__intel_memory_region_put_pages_buddy(gt->lmem, &blocks);
+err_wf:
+	intel_rps_cancel_boost(&gt->rps);
+	intel_gt_pm_put(gt, wf);
+	sg_free_table(pages);
+err_pages:
+	kfree(pages);
 }
 
 int i915_gem_clear_all_lmem(struct intel_gt *gt, struct drm_printer *p)
@@ -1056,7 +1214,7 @@ int i915_gem_clear_all_lmem(struct intel_gt *gt, struct drm_printer *p)
 				sg_dma_len(pages->sgl) = len;
 				GEM_BUG_ON(!sg_is_last(pages->sgl));
 
-				err = clear_blt(ce, pages, len, 0, &rq);
+				err = clear_blt(ce, NULL, pages, len, 0, &rq);
 				if (rq) {
 					i915_sw_fence_complete(&rq->submit);
 					if (last)

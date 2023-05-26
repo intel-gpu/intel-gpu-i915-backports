@@ -263,7 +263,7 @@ static int intelfb_create(struct drm_fb_helper *helper,
 	/* setup aperture base/size for vesafb takeover */
 	obj = intel_fb_obj(&intel_fb->base);
 	if (i915_gem_object_is_lmem(obj)) {
-		struct intel_memory_region *mem = obj->mm.region;
+		struct intel_memory_region *mem = obj->mm.region.mem;
 
 		info->apertures->ranges[0].base = mem->io_start;
 		info->apertures->ranges[0].size = mem->io_size;

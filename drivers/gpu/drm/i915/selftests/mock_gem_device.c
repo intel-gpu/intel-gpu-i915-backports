@@ -43,6 +43,7 @@
 
 void mock_device_flush(struct drm_i915_private *i915)
 {
+	long timeout = MAX_SCHEDULE_TIMEOUT;
 	struct intel_gt *gt = to_gt(i915);
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
@@ -50,8 +51,7 @@ void mock_device_flush(struct drm_i915_private *i915)
 	do {
 		for_each_engine(engine, gt, id)
 			mock_engine_flush(engine);
-	} while (intel_gt_retire_requests_timeout(gt, MAX_SCHEDULE_TIMEOUT,
-						  NULL));
+	} while (!intel_gt_retire_requests_timeout(gt, &timeout));
 }
 
 static void mock_device_release(struct drm_device *dev)
@@ -194,6 +194,7 @@ struct drm_i915_private *mock_gem_device(void)
 	intel_memory_regions_hw_probe(i915);
 
 	spin_lock_init(&i915->gpu_error.lock);
+	init_waitqueue_head(&i915->user_fence_wq);
 
 	i915_gem_init__mm(i915);
 

@@ -203,7 +203,7 @@ __check_struct_size(size_t base, size_t arr, size_t count, size_t *size)
 	__T;								\
 })
 
-static __always_inline ptrdiff_t ptrdiff(const void *a, const void *b)
+static __always_inline ptrdiff_t ptrdiff(const void __force *a, const void __force *b)
 {
 	return a - b;
 }

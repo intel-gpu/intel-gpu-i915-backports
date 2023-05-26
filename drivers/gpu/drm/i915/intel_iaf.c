@@ -16,6 +16,7 @@
 #include <drm/intel_iaf_platform.h>
 
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 
 #include "i915_drv.h"
@@ -122,7 +123,7 @@ static struct iaf_pdata *init_pd(struct drm_i915_private *i915)
 	 * Each tile will have the same amount of memory, so we only need to
 	 * read the first one.
 	 */
-	reg = intel_uncore_read(&i915->uncore, XEHP_TILE0_ADDR_RANGE) &
+	reg = intel_gt_mcr_read_any(to_gt(i915), XEHP_TILE0_ADDR_RANGE) &
 		XEHP_TILE_LMEM_RANGE_MASK;
 
 	// FIXME: On some systems, TILE0 is < 8Gb. PVC needs 8GB, so fake it.

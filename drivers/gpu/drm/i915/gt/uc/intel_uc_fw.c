@@ -1086,7 +1086,7 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
 
-	ggtt->vm.insert_entries(&ggtt->vm, dummy,
+	ggtt->vm.insert_entries(&ggtt->vm, NULL, dummy,
 				i915_gem_get_pat_index(ggtt->vm.i915,
 						       I915_CACHE_NONE),
 				pte_flags);
@@ -1186,7 +1186,7 @@ void intel_uc_fw_cleanup_fetch(struct intel_uc_fw *uc_fw)
  */
 size_t intel_uc_fw_copy_rsa(struct intel_uc_fw *uc_fw, void *dst, u32 max_len)
 {
-	struct intel_memory_region *mr = uc_fw->obj->mm.region;
+	struct intel_memory_region *mr = uc_fw->obj->mm.region.mem;
 	u32 size = min_t(u32, uc_fw->rsa_size, max_len);
 	u32 offset = sizeof(struct uc_css_header) + uc_fw->ucode_size;
 	struct sgt_iter iter;

@@ -993,19 +993,49 @@ gt_idle(struct intel_gt *gt, u64 val)
 		ret = intel_gt_pm_wait_for_idle(gt);
 		if (ret)
 			return ret;
+
+		i915_vma_clock_flush(&gt->vma_clock);
 	}
 
 	return 0;
+}
+
+static void reset_active(struct intel_gt *gt)
+{
+	struct intel_engine_cs *engine;
+	unsigned long hb = 0, pt = 0;
+	enum intel_engine_id id;
+	long timeout;
+
+	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT);
+	if (intel_gt_retire_requests_timeout(gt, &timeout))
+		return;
+
+	/*
+	 * Wait for the pulse to clear any stuck work along each engine
+	 * and then allow for the queue to clear (allow for a hearbeart
+	 * interval).
+	 */
+	for_each_engine(engine, gt, id) {
+		if (!intel_engine_pm_get_if_awake(engine))
+			continue;
+
+		hb = max(hb, engine->defaults.heartbeat_interval_ms);
+		if (intel_engine_pulse(engine) == 0)
+			pt = max(pt, engine->props.preempt_timeout_ms);
+
+		intel_engine_pm_put(engine);
+	}
+
+	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT + pt + hb);
+	if (!intel_gt_retire_requests_timeout(gt, &timeout))
+		intel_gt_set_wedged(gt);
 }
 
 static int
 gt_drop_caches(struct intel_gt *gt, u64 val)
 {
 	int ret;
-
-	if (val & DROP_RESET_ACTIVE &&
-	    intel_gt_wait_for_idle(gt, I915_IDLE_ENGINES_TIMEOUT) == -ETIME)
-		intel_gt_set_wedged(gt);
 
 	if (val & DROP_RETIRE)
 		intel_gt_retire_requests(gt);
@@ -1032,6 +1062,12 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 	struct intel_gt *gt;
 	unsigned int i;
 	int ret;
+
+	/* Reset all GT first before doing any waits/flushes */
+	if (val & DROP_RESET_ACTIVE) {
+		for_each_gt(gt, i915, i)
+			reset_active(gt);
+	}
 
 	/* Flush all the active requests across both GT ... */
 	for_each_gt(gt, i915, i) {

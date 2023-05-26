@@ -1137,6 +1137,7 @@ static const struct intel_gt_definition xehp_sdv_extra_gt[] = {
 	{}
 };
 
+__maybe_unused
 static const struct intel_device_info xehpsdv_info = {
 	XE_HP_FEATURES,
 	XE_HPM_FEATURES,
@@ -1389,7 +1390,6 @@ static const struct pci_device_id pciidlist[] = {
 	INTEL_DG2_IDS(&dg2_info),
 	INTEL_ATS_M_IDS(&ats_m_info),
 	INTEL_MTL_IDS(&mtl_info),
-	INTEL_XEHPSDV_IDS(&xehpsdv_info),
 	INTEL_PVC_IDS(&pvc_info),
 	{0, 0, 0}
 };
@@ -1484,7 +1484,7 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	int err;
 
 	/* If we've already injected a fault into an earlier device, bail */
-	if (i915_error_injected())
+	if (i915_error_injected() && !i915_modparams.inject_probe_failure)
 		return -ENODEV;
 
 	if (intel_info->require_force_probe &&

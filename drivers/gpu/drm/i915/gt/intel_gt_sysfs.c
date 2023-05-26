@@ -136,7 +136,7 @@ static ssize_t prelim_reset_store(struct device *dev,
 	return intel_gt_sysfs_reset(gt) ?: count;
 }
 
-DEVICE_ATTR_WO(prelim_reset);
+static DEVICE_ATTR_WO(prelim_reset);
 
 static ssize_t id_show(struct device *dev,
 		       struct device_attribute *attr,

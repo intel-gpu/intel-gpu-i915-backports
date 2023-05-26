@@ -53,6 +53,14 @@ static const char *intel_gt_driver_errors_to_str[] = {
 	[INTEL_GT_DRIVER_ERROR_INTERRUPT] = "INTERRUPT",
 };
 
+void intel_gt_silent_driver_error(struct intel_gt *gt,
+				  const enum intel_gt_driver_errors error)
+{
+	GEM_BUG_ON(error >= ARRAY_SIZE(gt->errors.driver));
+	WRITE_ONCE(gt->errors.driver[error],
+		   READ_ONCE(gt->errors.driver[error]) + 1);
+}
+
 void intel_gt_log_driver_error(struct intel_gt *gt,
 			       const enum intel_gt_driver_errors error,
 			       const char *fmt, ...)
@@ -60,15 +68,14 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 	struct va_format vaf;
 	va_list args;
 
+	intel_gt_silent_driver_error(gt, error);
+
 	va_start(args, fmt);
 	vaf.fmt = fmt;
 	vaf.va = &args;
 
 	BUILD_BUG_ON(ARRAY_SIZE(intel_gt_driver_errors_to_str) !=
 		     INTEL_GT_DRIVER_ERROR_COUNT);
-	GEM_BUG_ON(error >= INTEL_GT_DRIVER_ERROR_COUNT);
-
-	gt->errors.driver[error]++;
 
 	drm_err_ratelimited(&gt->i915->drm, "GT%u [%s] %pV",
 			    gt->info.id,
@@ -80,9 +87,6 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 void intel_gt_common_init_early(struct intel_gt *gt)
 {
 	spin_lock_init(gt->irq_lock);
-
-	INIT_LIST_HEAD(&gt->closed_vma);
-	spin_lock_init(&gt->closed_lock);
 
 	init_llist_head(&gt->watchdog.list);
 	INIT_WORK(&gt->watchdog.work, intel_gt_watchdog_work);
@@ -104,6 +108,8 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	intel_flat_ppgtt_pool_init_early(&gt->fpp);
 	intel_uc_init_early(&gt->uc);
 	intel_rps_init_early(&gt->rps);
+
+	i915_vma_clock_init_early(&gt->vma_clock);
 }
 
 /* Preliminary initialization of Tile 0 */
@@ -335,16 +341,10 @@ intel_gt_clear_error_registers(struct intel_gt *gt,
 				   I915_MASTER_ERROR_INTERRUPT);
 	}
 
-	if (HAS_MSLICE_STEERING(i915)) {
-		u8 mslice;
-
-		for_each_set_bit(mslice, &gt->info.mslice_mask, GEN12_MAX_MSLICES)
-			intel_gt_mcr_unicast_rmw(gt, GEN12_RING_FAULT_REG,
-						 RING_FAULT_VALID, 0,
-						 mslice, 0);
-
-		/* multicast post */
-		intel_uncore_posting_read_fw(uncore, GEN12_RING_FAULT_REG);
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
+		intel_gt_mcr_multicast_rmw(gt, XEHP_RING_FAULT_REG,
+					   RING_FAULT_VALID, 0);
+		intel_gt_mcr_read_any(gt, XEHP_RING_FAULT_REG);
 	} else if (GRAPHICS_VER(i915) >= 12) {
 		rmw_clear(uncore, GEN12_RING_FAULT_REG, RING_FAULT_VALID);
 		intel_uncore_posting_read(uncore, GEN12_RING_FAULT_REG);
@@ -383,17 +383,50 @@ static void gen6_check_faults(struct intel_gt *gt)
 	}
 }
 
+static void xehp_check_faults(struct intel_gt *gt)
+{
+	u32 fault;
+
+	/*
+	 * Although the fault register now lives in an MCR register range,
+	 * the GAM registers are special and we only truly need to read
+	 * the "primary" GAM instance rather than handling each instance
+	 * individually.  intel_gt_mcr_read_any() will automatically steer
+	 * toward the primary instance.
+	 */
+	fault = intel_gt_mcr_read_any(gt, XEHP_RING_FAULT_REG);
+	if (fault & RING_FAULT_VALID) {
+		u32 fault_data0, fault_data1;
+		u64 fault_addr;
+
+		fault_data0 = intel_gt_mcr_read_any(gt, XEHP_FAULT_TLB_DATA0);
+		fault_data1 = intel_gt_mcr_read_any(gt, XEHP_FAULT_TLB_DATA1);
+
+		fault_addr = ((u64)(fault_data1 & FAULT_VA_HIGH_BITS) << 44) |
+			     ((u64)fault_data0 << 12);
+
+		drm_dbg(&gt->i915->drm, "Unexpected fault\n"
+			"\tAddr: 0x%08x_%08x\n"
+			"\tAddress space: %s\n"
+			"\tEngine ID: %d\n"
+			"\tSource ID: %d\n"
+			"\tLevel: %d\n",
+			upper_32_bits(fault_addr),
+			lower_32_bits(fault_addr),
+			fault_data1 & FAULT_GTT_SEL ? "GGTT" : "PPGTT",
+			GEN8_RING_FAULT_ENGINE_ID(fault),
+			RING_FAULT_SRCID(fault),
+			RING_FAULT_LEVEL(fault));
+	}
+}
+
 static void gen8_check_faults(struct intel_gt *gt)
 {
 	struct intel_uncore *uncore = gt->uncore;
 	i915_reg_t fault_reg, fault_data0_reg, fault_data1_reg;
 	u32 fault;
 
-	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50)) {
-		fault_reg = XEHP_RING_FAULT_REG;
-		fault_data0_reg = XEHP_FAULT_TLB_DATA0;
-		fault_data1_reg = XEHP_FAULT_TLB_DATA1;
-	} else if (GRAPHICS_VER(gt->i915) >= 12) {
+	if (GRAPHICS_VER(gt->i915) >= 12) {
 		fault_reg = GEN12_RING_FAULT_REG;
 		fault_data0_reg = GEN12_FAULT_TLB_DATA0;
 		fault_data1_reg = GEN12_FAULT_TLB_DATA1;
@@ -429,54 +462,6 @@ static void gen8_check_faults(struct intel_gt *gt)
 	}
 }
 
-static void xehpsdv_check_faults(struct intel_gt *gt)
-{
-	struct intel_uncore *uncore = gt->uncore;
-	enum forcewake_domains fw_domains;
-	u8 mslice;
-	u32 fault;
-
-	/* all the fault regs are in the same FW domain. */
-	fw_domains = intel_uncore_forcewake_for_reg(uncore, GEN12_RING_FAULT_REG,
-						    FW_REG_READ | FW_REG_WRITE);
-
-	spin_lock_irq(&uncore->lock);
-	intel_uncore_forcewake_get__locked(uncore, fw_domains);
-
-	for_each_set_bit(mslice, &gt->info.mslice_mask, GEN12_MAX_MSLICES) {
-		fault = intel_gt_mcr_read_fw(gt, GEN12_RING_FAULT_REG, mslice, 0);
-
-		if (fault & RING_FAULT_VALID) {
-			u32 fault_data0, fault_data1;
-			u64 fault_addr;
-
-			fault_data0 = intel_gt_mcr_read_fw(gt, GEN12_FAULT_TLB_DATA0, mslice, 0);
-			fault_data1 = intel_gt_mcr_read_fw(gt, GEN12_FAULT_TLB_DATA1, mslice, 0);
-
-			fault_addr = ((u64)(fault_data1 & FAULT_VA_HIGH_BITS) << 44) |
-				     ((u64)fault_data0 << 12);
-
-			DRM_DEBUG_DRIVER("Unexpected fault\n"
-					 "\tM-slice: %u\n"
-					 "\tAddr: 0x%08x_%08x\n"
-					 "\tAddress space: %s\n"
-					 "\tEngine ID: %d\n"
-					 "\tSource ID: %d\n"
-					 "\tLevel: %d\n",
-					 mslice,
-					 upper_32_bits(fault_addr),
-					 lower_32_bits(fault_addr),
-					 fault_data1 & FAULT_GTT_SEL ? "GGTT" : "PPGTT",
-					 GEN8_RING_FAULT_ENGINE_ID(fault),
-					 RING_FAULT_SRCID(fault),
-					 RING_FAULT_LEVEL(fault));
-		}
-	}
-
-	intel_uncore_forcewake_put__locked(uncore, fw_domains);
-	spin_unlock_irq(&uncore->lock);
-}
-
 void intel_gt_check_and_clear_faults(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
@@ -488,8 +473,8 @@ void intel_gt_check_and_clear_faults(struct intel_gt *gt)
 		return;
 
 	/* From GEN8 onwards we only have one 'All Engine Fault Register' */
-	if (HAS_MSLICE_STEERING(i915))
-		xehpsdv_check_faults(gt);
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+		xehp_check_faults(gt);
 	else if (GRAPHICS_VER(i915) >= 8)
 		gen8_check_faults(gt);
 	else if (GRAPHICS_VER(i915) >= 6)
@@ -583,7 +568,7 @@ static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
 		goto err_unref;
 	}
 
-	ret = i915_ggtt_pin(vma, NULL, 0, PIN_HIGH);
+	ret = i915_ggtt_pin_for_gt(vma, NULL, 0, PIN_HIGH);
 	if (ret)
 		goto err_unref;
 
@@ -604,7 +589,7 @@ static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
 	void *addr;
 	int err;
 
-	obj = intel_gt_object_create_lmem(gt, size, I915_BO_ALLOC_CPU_CLEAR);
+	obj = intel_gt_object_create_lmem(gt, size, I915_BO_CPU_CLEAR);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -619,7 +604,7 @@ static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
 		if (err)
 			continue;
 
-		err = i915_ggtt_pin(vma, &ww, 0, PIN_HIGH);
+		err = i915_ggtt_pin_for_gt(vma, &ww, 0, PIN_HIGH);
 		if (err)
 			continue;
 
@@ -693,7 +678,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 	if (IS_ERR(vma))
 		goto err_unref;
 
-	if (i915_ggtt_pin(vma, NULL, 0, PIN_HIGH))
+	if (i915_ggtt_pin_for_gt(vma, NULL, 0, PIN_HIGH))
 		goto err_unref;
 
 	gt->dbg = i915_vma_make_unshrinkable(vma);
@@ -701,7 +686,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 	drm_dbg(&i915->drm,
 		"gt%u debug pages allocated in %s: ggtt=0x%08x, phys=0x%016llx, size=0x%zx\n",
 		gt->info.id,
-		obj->mm.region->name,
+		obj->mm.region.mem->name,
 		i915_ggtt_offset(vma),
 		(u64)i915_gem_object_get_dma_address(obj, 0),
 		obj->base.size);
@@ -907,8 +892,9 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	}
 
 	/* Flush the default context image to memory, and enable powersaving. */
-	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME) {
-		intel_klog_error_capture(gt, (intel_engine_mask_t) ~0U);
+	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT)) {
+		if (!i915_error_injected())
+			intel_klog_error_capture(gt, (intel_engine_mask_t) ~0U);
 		err = -EIO;
 		goto out;
 	}
@@ -945,20 +931,15 @@ out:
 	 * and ready to be torn-down. The quickest way we can accomplish
 	 * this is by declaring ourselves wedged.
 	 */
-	if (err)
-		intel_gt_set_wedged(gt);
-
 	for (id = 0; id < ARRAY_SIZE(requests); id++) {
-		struct intel_context *ce;
 		struct i915_request *rq;
 
 		rq = requests[id];
 		if (!rq)
 			continue;
 
-		ce = rq->context;
+		intel_context_put(rq->context);
 		i915_request_put(rq);
-		intel_context_put(ce);
 	}
 	return err;
 }
@@ -978,7 +959,7 @@ static int __engines_verify_workarounds(struct intel_gt *gt)
 	}
 
 	/* Flush and restore the kernel context for safety */
-	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
+	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT))
 		err = -EIO;
 
 	return err;
@@ -998,21 +979,21 @@ static void __intel_gt_disable(struct intel_gt *gt)
 
 int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
 {
-	long remaining_timeout;
-
 	/* If the device is asleep, we have no requests outstanding */
 	if (!intel_gt_pm_is_awake(gt))
 		return 0;
 
-	while ((timeout = intel_gt_retire_requests_timeout(gt, timeout,
-							   &remaining_timeout)) > 0) {
-		cond_resched();
+	while (!intel_gt_retire_requests_timeout(gt, &timeout)) {
 		if (signal_pending(current))
 			return -EINTR;
+
+		if (timeout == 0)
+			return -ETIME;
+
+		cond_resched();
 	}
 
-	return timeout ? timeout : intel_uc_wait_for_idle(&gt->uc,
-							  remaining_timeout);
+	return intel_uc_wait_for_idle(&gt->uc, timeout);
 }
 
 int intel_gt_init(struct intel_gt *gt)
@@ -1132,6 +1113,7 @@ void intel_gt_driver_remove(struct intel_gt *gt)
 {
 	intel_gt_fini_clock_frequency(gt);
 
+	i915_vma_clock_flush(&gt->vma_clock);
 	intel_flat_ppgtt_pool_fini(&gt->fpp);
 	intel_iov_fini_hw(&gt->iov);
 
@@ -1502,8 +1484,7 @@ int intel_gt_probe_all(struct drm_i915_private *i915)
 
 err:
 	i915_probe_error(i915, "Failed to initialize %s! (%d)\n", gtdef->name, ret);
-	intel_gt_release_all(i915);
-
+	memset(i915->gt, 0, sizeof(i915->gt));
 	return ret;
 }
 
@@ -1513,7 +1494,6 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 	unsigned int id;
 	int ret;
 
-	mutex_init(&i915->svm_init_mutex);
 	for_each_gt(gt, i915, id) {
 		if (!i915->gt[id])
 			break;
@@ -1527,17 +1507,6 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 	}
 
 	return 0;
-}
-
-void intel_gt_release_all(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int id;
-
-	for_each_gt(gt, i915, id)
-		i915->gt[id] = NULL;
-
-	mutex_destroy(&i915->svm_init_mutex);
 }
 
 void intel_gt_info_print(const struct intel_gt_info *info,

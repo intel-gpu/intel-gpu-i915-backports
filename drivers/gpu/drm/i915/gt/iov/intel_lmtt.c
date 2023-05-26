@@ -8,6 +8,7 @@
 
 #include "i915_drv.h"
 #include "i915_scatterlist.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_regs.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
@@ -45,8 +46,8 @@ lmtt_pt_alloc(struct intel_lmtt *lmtt, unsigned int level)
 	obj = intel_gt_object_create_lmem(lmtt_to_gt(lmtt), pt_size,
 					  I915_BO_ALLOC_CHUNK_64K |
 					  I915_BO_ALLOC_CONTIGUOUS |
-					  I915_BO_ALLOC_CPU_CLEAR |
-					  I915_BO_ALLOC_VOLATILE);
+					  I915_BO_ALLOC_VOLATILE |
+					  I915_BO_CPU_CLEAR);
 	if (IS_ERR(obj)) {
 		err = PTR_ERR(obj);
 		goto out_entry;
@@ -329,7 +330,7 @@ static void gt_set_lmtt_dir_ptr(struct intel_gt *gt, unsigned long offset)
 	GEM_BUG_ON(!IS_ALIGNED(offset, SZ_64K));
 	lmem_cfg = REG_FIELD_PREP(LMTT_DIR_PTR, offset / SZ_64K) | LMEM_ENABLE;
 
-	intel_uncore_write(gt->uncore, GEN12_LMEM_CFG_ADDR, lmem_cfg);
+	intel_gt_mcr_multicast_write(gt, XEHP_LMEM_CFG_ADDR, lmem_cfg);
 }
 
 static int lmtt_pd_init(struct intel_lmtt *lmtt)

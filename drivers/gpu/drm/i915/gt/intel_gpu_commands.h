@@ -306,6 +306,7 @@
 #define   XY_FAST_COLOR_BLT_DEPTH_16	(1 << 19)
 #define   XY_FAST_COLOR_BLT_DEPTH_32	(2 << 19)
 #define   XY_FAST_COLOR_BLT_DEPTH_64	(3 << 19)
+#define   XY_FAST_COLOR_BLT_DEPTH_128	(5 << 19)
 #define   XY_FAST_COMPRESSION		REG_BIT(29)
 #define   AUX_CCS_NONE			(0 << 18)
 #define   AUX_CCS_E			(5 << 18)

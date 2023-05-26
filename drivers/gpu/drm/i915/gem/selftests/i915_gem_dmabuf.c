@@ -221,7 +221,7 @@ static int igt_dmabuf_import_same_driver(struct drm_i915_private *i915,
 	 * weird is going on. TODO: When p2p is supported, this is no
 	 * longer considered weird.
 	 */
-	if (obj->mm.region != i915->mm.regions[INTEL_REGION_SMEM]) {
+	if (obj->mm.region.mem != i915->mm.regions[INTEL_REGION_SMEM]) {
 		pr_err("Exported dma-buf is not in system memory\n");
 		err = -EINVAL;
 	}

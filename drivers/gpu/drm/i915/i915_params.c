@@ -214,7 +214,7 @@ i915_param_named_unsafe(enable_dp_mst, bool, 0400,
 	"Enable multi-stream transport (MST) for new DisplayPort sinks. (default: true)");
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
-i915_param_named_unsafe(inject_probe_failure, uint, 0400,
+i915_param_named_unsafe(inject_probe_failure, int, 0400,
 	"Force an error after a number of failure check points (0:disabled (default), N:force failure at the Nth failure check point)");
 #endif
 
@@ -333,6 +333,11 @@ i915_param_named_unsafe(force_driver_flr, int, 0400,
  * SRIOV PF is required.
  */
 i915_param_named(enable_iaf, bool, 0400, "Enable IAF feature (default: true)");
+
+#if IS_ENABLED(CPTCFG_DRM_I915_ATS)
+i915_param_named_unsafe(address_translation_services, bool, 0400,
+			"Enable Address Translation Services (ATS) (default: false)");
+#endif
 
 static __always_inline void _print_param(struct drm_printer *p,
 					 const char *name,

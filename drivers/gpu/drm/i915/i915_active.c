@@ -27,6 +27,7 @@ static struct kmem_cache *slab_cache;
 struct active_node {
 	struct rb_node node;
 	struct i915_active_fence base;
+	struct intel_engine_cs *engine;
 	struct i915_active *ref;
 	u64 timeline;
 };
@@ -46,29 +47,26 @@ static inline bool is_barrier(const struct i915_active_fence *active)
 	return rcu_access_pointer(active->fence) == IDLE_BARRIER;
 }
 
+static inline struct list_head *barrier_to_task(struct active_node *node)
+{
+	GEM_BUG_ON(!is_barrier(&node->base));
+	return &node->base.cb.node;
+}
+
+static inline struct active_node *barrier_from_task(struct list_head *x)
+{
+	return container_of(x, struct active_node, base.cb.node);
+}
+
 static inline struct llist_node *barrier_to_ll(struct active_node *node)
 {
 	GEM_BUG_ON(!is_barrier(&node->base));
 	return (struct llist_node *)&node->base.cb.node;
 }
 
-static inline struct intel_engine_cs *
-__barrier_to_engine(struct active_node *node)
-{
-	return (struct intel_engine_cs *)READ_ONCE(node->base.cb.node.prev);
-}
-
-static inline struct intel_engine_cs *
-barrier_to_engine(struct active_node *node)
-{
-	GEM_BUG_ON(!is_barrier(&node->base));
-	return __barrier_to_engine(node);
-}
-
 static inline struct active_node *barrier_from_ll(struct llist_node *x)
 {
-	return container_of((struct list_head *)x,
-			    struct active_node, base.cb.node);
+	return barrier_from_task((struct list_head *)x);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM) && IS_ENABLED(CONFIG_DEBUG_OBJECTS)
@@ -379,56 +377,28 @@ void __i915_active_init(struct i915_active *ref,
 #endif
 }
 
-static bool ____active_del_barrier(struct i915_active *ref,
-				   struct active_node *node,
-				   struct intel_engine_cs *engine)
-
+static bool
+active_del_barrier(struct active_node *node, struct dma_fence *fence)
 {
-	struct llist_node *head = NULL, *tail = NULL;
-	struct llist_node *pos, *next;
+	struct intel_engine_cs *engine = node->engine;
+	unsigned long flags;
+	bool result = false;
 
-	GEM_BUG_ON(node->timeline != engine->kernel_context->timeline->fence_context);
-
-	/*
-	 * Rebuild the llist excluding our node. We may perform this
-	 * outside of the kernel_context timeline mutex and so someone
-	 * else may be manipulating the engine->barrier_tasks, in
-	 * which case either we or they will be upset :)
-	 *
-	 * A second __active_del_barrier() will report failure to claim
-	 * the active_node and the caller will just shrug and know not to
-	 * claim ownership of its node.
-	 *
-	 * A concurrent i915_request_add_active_barriers() will miss adding
-	 * any of the tasks, but we will try again on the next -- and since
-	 * we are actively using the barrier, we know that there will be
-	 * at least another opportunity when we idle.
-	 */
-	llist_for_each_safe(pos, next, llist_del_all(&engine->barrier_tasks)) {
-		if (node == barrier_from_ll(pos)) {
-			node = NULL;
-			continue;
-		}
-
-		pos->next = head;
-		head = pos;
-		if (!tail)
-			tail = pos;
+	GEM_BUG_ON(!intel_engine_pm_is_awake(engine));
+	spin_lock_irqsave(&engine->barrier_lock, flags);
+	if (is_barrier(&node->base)) {
+		__list_del_entry(barrier_to_task(node));
+		RCU_INIT_POINTER(node->base.fence, fence);
+		GEM_BUG_ON(is_barrier(&node->base));
+		result = true;
 	}
-	if (head)
-		llist_add_batch(head, tail, &engine->barrier_tasks);
+	spin_unlock_irqrestore(&engine->barrier_lock, flags);
 
-	return !node;
+	return result;
 }
 
-static bool
-__active_del_barrier(struct i915_active *ref, struct active_node *node)
-{
-	return ____active_del_barrier(ref, node, barrier_to_engine(node));
-}
-
-static bool
-replace_barrier(struct i915_active *ref, struct i915_active_fence *active)
+static bool replace_barrier(struct i915_active_fence *active,
+			    struct dma_fence *fence)
 {
 	if (!is_barrier(active)) /* proto-node used by our idle barrier? */
 		return false;
@@ -438,8 +408,7 @@ replace_barrier(struct i915_active *ref, struct i915_active_fence *active)
 	 * we can use it to substitute for the pending idle-barrer
 	 * request that we want to emit on the kernel_context.
 	 */
-	__active_del_barrier(ref, node_from_active(active));
-	return true;
+	return active_del_barrier(node_from_active(active), fence);
 }
 
 int i915_active_ref(struct i915_active *ref, u64 idx, struct dma_fence *fence)
@@ -458,10 +427,9 @@ int i915_active_ref(struct i915_active *ref, u64 idx, struct dma_fence *fence)
 		goto out;
 	}
 
-	if (replace_barrier(ref, active)) {
-		RCU_INIT_POINTER(active->fence, NULL);
+	if (replace_barrier(active, ERR_PTR(-EBUSY)))
 		atomic_dec(&ref->count);
-	}
+
 	if (!__i915_active_fence_set(active, fence))
 		__i915_active_acquire(ref);
 
@@ -477,10 +445,7 @@ __i915_active_set_fence(struct i915_active *ref,
 {
 	struct dma_fence *prev;
 
-	if (replace_barrier(ref, active)) {
-		RCU_INIT_POINTER(active->fence, fence);
-		return NULL;
-	}
+	GEM_BUG_ON(is_barrier(active));
 
 	rcu_read_lock();
 	prev = __i915_active_fence_set(active, fence);
@@ -583,17 +548,10 @@ static void enable_signaling(struct i915_active_fence *active)
 
 static int flush_barrier(struct active_node *it)
 {
-	struct intel_engine_cs *engine;
-
 	if (likely(!is_barrier(&it->base)))
 		return 0;
 
-	engine = __barrier_to_engine(it);
-	smp_rmb(); /* serialise with add_active_barriers */
-	if (!is_barrier(&it->base))
-		return 0;
-
-	return intel_engine_flush_barriers(engine);
+	return intel_engine_flush_barriers(it->engine);
 }
 
 static int flush_lazy_signals(struct i915_active *ref)
@@ -793,6 +751,7 @@ static inline bool is_idle_barrier(struct active_node *node, u64 idx)
 static struct active_node *reuse_idle_barrier(struct i915_active *ref, u64 idx)
 {
 	struct rb_node *prev, *p;
+	struct active_node *node;
 
 	if (RB_EMPTY_ROOT(&ref->tree))
 		return NULL;
@@ -806,16 +765,14 @@ static struct active_node *reuse_idle_barrier(struct i915_active *ref, u64 idx)
 	 * completely idle barriers (less hassle in manipulating the llists),
 	 * but otherwise any will do.
 	 */
-	if (ref->cache && is_idle_barrier(ref->cache, idx)) {
-		p = &ref->cache->node;
+	node = ref->cache;
+	if (node && is_idle_barrier(node, idx))
 		goto match;
-	}
 
 	prev = NULL;
 	p = ref->tree.rb_node;
 	while (p) {
-		struct active_node *node =
-			rb_entry(p, struct active_node, node);
+		node = rb_entry(p, struct active_node, node);
 
 		if (is_idle_barrier(node, idx))
 			goto match;
@@ -834,9 +791,7 @@ static struct active_node *reuse_idle_barrier(struct i915_active *ref, u64 idx)
 	 * the first pending barrier.
 	 */
 	for (p = prev; p; p = rb_next(p)) {
-		struct active_node *node =
-			rb_entry(p, struct active_node, node);
-		struct intel_engine_cs *engine;
+		node = rb_entry(p, struct active_node, node);
 
 		if (node->timeline > idx)
 			break;
@@ -854,23 +809,23 @@ static struct active_node *reuse_idle_barrier(struct i915_active *ref, u64 idx)
 		 * the barrier before we claim it, so we have to check
 		 * for success.
 		 */
-		engine = __barrier_to_engine(node);
-		smp_rmb(); /* serialise with add_active_barriers */
-		if (is_barrier(&node->base) &&
-		    ____active_del_barrier(ref, node, engine))
+		if (replace_barrier(&node->base, NULL)) {
+			atomic_dec(&ref->count);
 			goto match;
+		}
 	}
 
 	return NULL;
 
 match:
+	/* Hide from waits and sibling allocations */
 	spin_lock_irq(&ref->tree_lock);
-	rb_erase(p, &ref->tree); /* Hide from waits and sibling allocations */
-	if (p == &ref->cache->node)
+	rb_erase(&node->node, &ref->tree);
+	if (node == ref->cache)
 		WRITE_ONCE(ref->cache, NULL);
 	spin_unlock_irq(&ref->tree_lock);
 
-	return rb_entry(p, struct active_node, node);
+	return node;
 }
 
 int i915_active_acquire_preallocate_barrier(struct i915_active *ref,
@@ -898,42 +853,42 @@ int i915_active_acquire_preallocate_barrier(struct i915_active *ref,
 		struct llist_node *prev = first;
 		struct active_node *node;
 
+		intel_engine_pm_get(engine);
+
 		rcu_read_lock();
 		node = reuse_idle_barrier(ref, idx);
 		rcu_read_unlock();
 		if (!node) {
 			node = kmem_cache_alloc(slab_cache, GFP_KERNEL);
-			if (!node)
+			if (!node) {
+				intel_engine_pm_put(engine);
 				goto unwind;
+			}
 
 			RCU_INIT_POINTER(node->base.fence, NULL);
 			node->base.cb.func = node_retire;
 			node->timeline = idx;
 			node->ref = ref;
 		}
+		GEM_BUG_ON(is_barrier(&node->base));
 
-		if (!is_barrier(&node->base)) {
-			/*
-			 * Mark this as being *our* unconnected proto-node.
-			 *
-			 * Since this node is not in any list, and we have
-			 * decoupled it from the rbtree, we can reuse the
-			 * request to indicate this is an idle-barrier node
-			 * and then we can use the rb_node and list pointers
-			 * for our tracking of the pending barrier.
-			 */
-			RCU_INIT_POINTER(node->base.fence, IDLE_BARRIER);
-			node->base.cb.node.prev = (void *)engine;
-			__i915_active_acquire(ref);
-		}
-		GEM_BUG_ON(!is_barrier(&node->base));
+		/*
+		 * Mark this as being *our* unconnected proto-node.
+		 *
+		 * Since this node is not in any list, and we have
+		 * decoupled it from the rbtree, we can reuse the
+		 * request to indicate this is an idle-barrier node
+		 * and then we can use the rb_node and list pointers
+		 * for our tracking of the pending barrier.
+		 */
+		__i915_active_acquire(ref);
+		RCU_INIT_POINTER(node->base.fence, IDLE_BARRIER);
+		node->engine = engine;
 
-		GEM_BUG_ON(barrier_to_engine(node) != engine);
 		first = barrier_to_ll(node);
 		first->next = prev;
 		if (!last)
 			last = first;
-		intel_engine_pm_get(engine);
 	}
 
 	GEM_BUG_ON(!llist_empty(&ref->preallocated_barriers));
@@ -948,7 +903,7 @@ unwind:
 		first = first->next;
 
 		atomic_dec(&ref->count);
-		intel_engine_pm_put(barrier_to_engine(node));
+		intel_engine_pm_put(node->engine);
 
 		kmem_cache_free(slab_cache, node);
 	}
@@ -970,11 +925,17 @@ void i915_active_acquire_barrier(struct i915_active *ref)
 	 */
 	llist_for_each_safe(pos, next, take_preallocated_barriers(ref)) {
 		struct active_node *node = barrier_from_ll(pos);
-		struct intel_engine_cs *engine = barrier_to_engine(node);
+		struct intel_engine_cs *engine = node->engine;
 		struct rb_node **p, *parent;
 
-		spin_lock_irqsave_nested(&ref->tree_lock, flags,
-					 SINGLE_DEPTH_NESTING);
+		GEM_BUG_ON(!intel_engine_pm_is_awake(engine));
+		spin_lock_irqsave(&engine->barrier_lock, flags);
+		list_add_tail(barrier_to_task(node), &engine->barrier_tasks);
+		GEM_BUG_ON(!is_barrier(&node->base));
+		spin_unlock(&engine->barrier_lock);
+
+		spin_lock_nested(&ref->tree_lock, SINGLE_DEPTH_NESTING);
+
 		parent = NULL;
 		p = &ref->tree.rb_node;
 		while (*p) {
@@ -990,43 +951,41 @@ void i915_active_acquire_barrier(struct i915_active *ref)
 		}
 		rb_link_node(&node->node, parent, p);
 		rb_insert_color(&node->node, &ref->tree);
+
 		spin_unlock_irqrestore(&ref->tree_lock, flags);
 
-		GEM_BUG_ON(!intel_engine_pm_is_awake(engine));
-		llist_add(barrier_to_ll(node), &engine->barrier_tasks);
 		intel_engine_pm_put_delay(engine, 2);
 	}
-}
-
-static struct dma_fence **ll_to_fence_slot(struct llist_node *node)
-{
-	return __active_fence_slot(&barrier_from_ll(node)->base);
 }
 
 void i915_request_add_active_barriers(struct i915_request *rq)
 {
 	struct intel_engine_cs *engine = rq->engine;
-	struct llist_node *node, *next;
+	struct list_head *node, *next;
 	unsigned long flags;
 
 	GEM_BUG_ON(!intel_context_is_barrier(rq->context));
 	GEM_BUG_ON(intel_engine_is_virtual(engine));
 	GEM_BUG_ON(i915_request_timeline(rq) != engine->kernel_context->timeline);
 
-	node = llist_del_all(&engine->barrier_tasks);
-	if (!node)
+	GEM_BUG_ON(!intel_engine_pm_is_awake(engine));
+	if (list_empty(&engine->barrier_tasks))
 		return;
+
 	/*
 	 * Attach the list of proto-fences to the in-flight request such
 	 * that the parent i915_active will be released when this request
 	 * is retired.
 	 */
 	spin_lock_irqsave(&rq->lock, flags);
-	llist_for_each_safe(node, next, node) {
-		/* serialise with reuse_idle_barrier */
-		smp_store_mb(*ll_to_fence_slot(node), &rq->fence);
-		list_add_tail((struct list_head *)node, &rq->fence.cb_list);
+	spin_lock(&engine->barrier_lock);
+	list_for_each_safe(node, next, &engine->barrier_tasks) {
+		rcu_assign_pointer(barrier_from_task(node)->base.fence,
+				   &rq->fence);
+		list_add_tail(node, &rq->fence.cb_list);
 	}
+	INIT_LIST_HEAD(&engine->barrier_tasks);
+	spin_unlock(&engine->barrier_lock);
 	spin_unlock_irqrestore(&rq->lock, flags);
 }
 

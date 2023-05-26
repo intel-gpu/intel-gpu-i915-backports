@@ -64,7 +64,7 @@ void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint)
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
-static unsigned int i915_probe_fail_count;
+static int i915_probe_fail_count;
 
 int __i915_inject_probe_error(struct drm_i915_private *i915, int err,
 			      const char *func, int line)
@@ -84,7 +84,7 @@ int __i915_inject_probe_error(struct drm_i915_private *i915, int err,
 
 bool i915_error_injected(void)
 {
-	return i915_probe_fail_count && !i915_modparams.inject_probe_failure;
+	return i915_probe_fail_count > i915_modparams.inject_probe_failure;
 }
 
 #endif

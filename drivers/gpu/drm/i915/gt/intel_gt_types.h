@@ -139,6 +139,8 @@ enum intel_steering_type {
 	MSLICE,
 	LNCF,
 	GAM,
+	DSS,
+	OADDRM,
 
 	/*
 	 * On some platforms there are multiple types of MCR registers that
@@ -250,9 +252,6 @@ struct intel_gt {
 
 	struct intel_wakeref wakeref;
 	atomic_t user_wakeref;
-
-	struct list_head closed_vma;
-	spinlock_t closed_lock; /* guards the list of closed_vma */
 
 	ktime_t last_init_time;
 	struct intel_reset reset;
@@ -369,6 +368,7 @@ struct intel_gt {
 	 * or may be reclaimed by the shrinker before then.
 	 */
 	struct intel_gt_buffer_pool buffer_pool;
+	struct i915_vma_clock vma_clock;
 
 	struct i915_vma *scratch;
 	struct { /* See enum intel_gt_counters */
@@ -378,11 +378,20 @@ struct intel_gt {
 
 	const struct intel_mmio_range *steering_table[NUM_STEERING_TYPES];
 	struct intel_migrate migrate;
+	unsigned long lmem_clear_chunk; /* XXX find me a better home! */
 
 	struct {
 		u8 groupid;
 		u8 instanceid;
 	} default_steering;
+
+	/**
+	 * @mcr_lock: Protects the MCR steering register
+	 *
+	 * Protects the MCR steering register (e.g., GEN8_MCR_SELECTOR).
+	 * Should be taken before uncore->lock in cases where both are desired.
+	 */
+	spinlock_t mcr_lock;
 
 	/*
 	 * Base of per-tile GTTMMADR where we can derive the MMIO and the GGTT.
@@ -406,6 +415,8 @@ struct intel_gt {
 
 		intel_engine_mask_t engine_mask;
 
+		u32 l3bank_mask;
+
 		u8 num_engines;
 
 		/* General presence of SFC units */
@@ -417,10 +428,7 @@ struct intel_gt {
 		/* Slice/subslice/EU info */
 		struct sseu_dev_info sseu;
 
-		union {
-			unsigned long mslice_mask;
-			unsigned long l3bank_mask;
-		};
+		unsigned long mslice_mask;
 
 		/** @hwconfig: hardware configuration data */
 		struct intel_hwconfig hwconfig;
@@ -482,10 +490,5 @@ enum intel_gt_scratch_field {
 	 (REG_GROUP) << REG_GROUP_SHIFT | \
 	 (HW_ERR) << SOC_HW_ERR_SHIFT | \
 	 (ERRBIT))
-
-__printf(3, 4)
-void intel_gt_log_driver_error(struct intel_gt *gt,
-			       const enum intel_gt_driver_errors error,
-			       const char *fmt, ...);
 
 #endif /* __INTEL_GT_TYPES_H__ */

@@ -84,7 +84,7 @@ static int __perf_fill_blt(struct drm_i915_gem_object *obj)
 		sort(t, ARRAY_SIZE(t), sizeof(*t), wrap_ktime_compare, NULL);
 		pr_info("%s(%s): blt %zd KiB fill: %lld MiB/s\n",
 			engine->name,
-			obj->mm.region->name,
+			obj->mm.region.mem->name,
 			obj->base.size >> 10,
 			div64_u64(mul_u32_u32(4 * obj->base.size,
 					      1000 * 1000 * 1000),
@@ -165,7 +165,7 @@ static int __perf_copy_blt(struct drm_i915_gem_object *src,
 		sort(t, ARRAY_SIZE(t), sizeof(*t), wrap_ktime_compare, NULL);
 		pr_info("%s(%s): blt %zd KiB copy: %lld MiB/s\n",
 			engine->name,
-			src->mm.region->name,
+			src->mm.region.mem->name,
 			src->base.size >> 10,
 			div64_u64(mul_u32_u32(4 * src->base.size,
 					      1000 * 1000 * 1000),
