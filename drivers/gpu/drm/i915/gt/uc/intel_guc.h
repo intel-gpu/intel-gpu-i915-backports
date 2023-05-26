@@ -549,19 +549,6 @@ void intel_guc_submission_cancel_requests(struct intel_guc *guc);
 int intel_guc_set_schedule_mode(struct intel_guc *guc,
 				enum intel_guc_scheduler_mode mode, u32 delay);
 
-static inline int
-intel_guc_send_pagefault_reply(struct intel_guc *guc,
-			       struct intel_guc_pagefault_reply *reply)
-{
-	u32 action[] = {
-		INTEL_GUC_ACTION_PAGE_FAULT_RES_DESC,
-		reply->dw0,
-		reply->dw1,
-	};
-
-	return intel_guc_send_busy_loop(guc, action, ARRAY_SIZE(action), 0, true);
-}
-
 void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p);
 void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p);
 

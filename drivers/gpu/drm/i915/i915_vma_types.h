@@ -168,6 +168,12 @@ struct i915_ggtt_view {
 	};
 };
 
+struct i915_vma_clock {
+	spinlock_t lock;
+	struct list_head age[2];
+	struct delayed_work work;
+};
+
 struct i915_vma_metadata {
 	struct list_head vma_link;
 	struct i915_uuid_resource *uuid;
@@ -272,9 +278,6 @@ struct i915_vma {
 
 #define I915_VMA_PERSISTENT_BIT	19
 #define I915_VMA_PURGED_BIT	20
-
-#define I915_VMA_PERSISTENT	((int)BIT(I915_VMA_PERSISTENT_BIT))
-#define I915_VMA_PURGED		((int)BIT(I915_VMA_PURGED_BIT))
 
 	struct i915_active active;
 

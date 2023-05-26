@@ -10,6 +10,20 @@
  */
 #define PCI_INTERFACES_NOT_PRESENT
 
+/*
+ * Add macro to export pci_find_host_bridge()
+ * 59dc33252ee7 PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus
+ */
+#define BPM_PCI_FIND_HOST_BRIDGE_NOT_EXPORTED
+
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,13,0)
+
+/* 
+ * 3e31f94752e4 lockdep: Add lockdep_assert_not_held()
+ */
+#define BPM_LOCKDEP_ASSERT_NOT_HELD_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,12,0)

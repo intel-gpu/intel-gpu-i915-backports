@@ -1043,4 +1043,6 @@ MODULE_ALIAS("auxiliary:i915.iaf");
 MODULE_ALIAS("platform:iaf");
 #endif
 MODULE_FIRMWARE("i915/pvc_iaf_ver1.bin");
+MODULE_FIRMWARE("i915/pvc_iaf_ver1d.bin");
+MODULE_FIRMWARE("i915/pvc_iaf_ver1e.bin");
 MODULE_FIRMWARE("i915/default_iaf.pscbin");

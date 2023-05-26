@@ -62,7 +62,7 @@ void intel_guc_notify(struct intel_guc *guc)
 	 * (H2G interrupt), so we can just write the value that the HW expects
 	 * on older gens.
 	 */
-	intel_uncore_write(gt->uncore, guc->notify_reg, GUC_SEND_TRIGGER);
+	raw_reg_write(gt->uncore->regs, guc->notify_reg, GUC_SEND_TRIGGER);
 }
 
 static inline i915_reg_t guc_send_reg(struct intel_guc *guc, u32 i)
@@ -354,7 +354,7 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	    (IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0)))
 		flags |= GUC_WA_GAM_CREDITS;
 
-	/* Wa_14014475959:dg2,mtl */
+	/* Wa_14014475959 */
 	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
 	    IS_DG2(gt->i915))
 		flags |= GUC_WA_HOLD_CCS_SWITCHOUT;
@@ -374,7 +374,9 @@ static u32 guc_ctl_wa_flags(struct intel_guc *guc)
 	 * GUC_WA_PRE_PARSER causes media workload hang for PVC A0 and PCIe
 	 * errors. Disable this for PVC A0 steppings.
 	 */
-	if (IS_GRAPHICS_VER(gt->i915, 11, 12) &&
+	if ((IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    (GRAPHICS_VER(gt->i915) >= 11 &&
+	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 70))) &&
 	    !IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0))
 		flags |= GUC_WA_PRE_PARSER;
 
@@ -1111,16 +1113,14 @@ static struct i915_vma *guc_vma_from_obj(struct intel_guc *guc,
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct i915_vma *vma;
-	u32 pin_bias;
-	u64 flags;
+	unsigned int flags;
 	int ret;
 
 	vma = i915_vma_instance(obj, &gt->ggtt->vm, NULL);
 	if (IS_ERR(vma))
 		return vma;
 
-	pin_bias = max(bias, i915_ggtt_pin_bias(vma));
-	flags = PIN_OFFSET_BIAS | pin_bias;
+	flags = max(bias, i915_ggtt_pin_bias(vma)) | PIN_OFFSET_BIAS;
 	ret = i915_ggtt_pin(vma, NULL, 0, flags);
 	if (ret) {
 		vma = ERR_PTR(ret);
@@ -1167,7 +1167,7 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 
 	if (HAS_LMEM(gt->i915) && !force_smem)
 		obj = intel_gt_object_create_lmem(gt, size,
-						  I915_BO_ALLOC_CPU_CLEAR |
+						  I915_BO_CPU_CLEAR |
 						  I915_BO_ALLOC_CONTIGUOUS);
 	else
 		obj = i915_gem_object_create_shmem(gt->i915, size);
@@ -1175,8 +1175,12 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
-	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 70))
-		i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
+	/*
+	 * Wa_22016122933: For MTL the shared memory needs to be mapped
+	 * as WC on CPU side and UC (PAT index 2) on GPU side
+	 */
+	if (IS_METEORLAKE(gt->i915))
+		i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
 	vma = guc_vma_from_obj(guc, obj, bias);
 	if (IS_ERR(vma))

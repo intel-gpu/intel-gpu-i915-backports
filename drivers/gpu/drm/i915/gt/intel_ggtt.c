@@ -383,7 +383,7 @@ void __gen8_ggtt_insert_page_wa_bcs(struct i915_ggtt *ggtt, u32 vfid,
 	i915_request_get(rq);
 	i915_request_add(rq);
 
-	__i915_request_wait_timeout(rq, 0, MAX_SCHEDULE_TIMEOUT);
+	__i915_request_wait(rq, 0, MAX_SCHEDULE_TIMEOUT);
 
 	i915_request_put(rq);
 	ggtt->invalidate(ggtt);
@@ -415,6 +415,7 @@ static void gen8_ggtt_insert_page_wa_bcs(struct i915_address_space *vm,
 }
 
 static void gen8_ggtt_insert_entries(struct i915_address_space *vm,
+				     struct i915_vm_pt_stash *stash,
 				     struct i915_vma *vma,
 				     unsigned int pat_index,
 				     u32 flags)
@@ -457,22 +458,23 @@ static void gen8_ggtt_insert_entries(struct i915_address_space *vm,
 }
 
 static void gen8_ggtt_insert_entries_wa(struct i915_address_space *vm,
+					struct i915_vm_pt_stash *stash,
 					struct i915_vma *vma,
 					unsigned int pat_index,
 					u32 flags)
 {
 	GEM_WARN_ON(i915_gem_idle_engines(vm->i915));
 
-	gen8_ggtt_insert_entries(vm, vma, pat_index, flags);
+	gen8_ggtt_insert_entries(vm, stash, vma, pat_index, flags);
 
 	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
-
 }
 
 static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
-				     struct i915_vma *vma,
-				     unsigned int pat_index,
-				     u32 flags)
+					    struct i915_vm_pt_stash *stash,
+					    struct i915_vma *vma,
+					    unsigned int pat_index,
+					    u32 flags)
 {
 	gen8_pte_t pte_encode;
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
@@ -490,7 +492,7 @@ static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
 
 	wakeref = l4wa_pm_get(gt);
 	if (!wakeref) {
-		gen8_ggtt_insert_entries(vm, vma, pat_index, flags);
+		gen8_ggtt_insert_entries(vm, stash, vma, pat_index, flags);
 		return;
 	}
 
@@ -578,7 +580,7 @@ static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
 		start += (I915_GTT_PAGE_SIZE * num_entries);
 	} while (max_entries);
 
-	__i915_request_wait_timeout(wait, 0, MAX_SCHEDULE_TIMEOUT);
+	__i915_request_wait(wait, 0, MAX_SCHEDULE_TIMEOUT);
 	i915_request_put(wait);
 	intel_gt_pm_put_async_l4(gt, wakeref);
 	/*
@@ -590,11 +592,11 @@ static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
 
 flat_err:
 	if (wait) {
-		__i915_request_wait_timeout(wait, 0, MAX_SCHEDULE_TIMEOUT);
+		__i915_request_wait(wait, 0, MAX_SCHEDULE_TIMEOUT);
 		i915_request_put(wait);
 	}
 	intel_gt_pm_put_async_l4(gt, wakeref);
-	gen8_ggtt_insert_entries(vm, vma, pat_index, flags);
+	gen8_ggtt_insert_entries(vm, stash, vma, pat_index, flags);
 }
 
 static void gen12_vf_ggtt_insert_page_wa_vfpf(struct i915_address_space *vm,
@@ -636,6 +638,7 @@ static void gen12_vf_ggtt_insert_page_wa_vfpf(struct i915_address_space *vm,
 }
 
 static void gen12_vf_ggtt_insert_entries_wa_vfpf(struct i915_address_space *vm,
+						 struct i915_vm_pt_stash *stash,
 						 struct i915_vma *vma,
 						 unsigned int pat_index,
 						 u32 flags)
@@ -649,7 +652,7 @@ static void gen12_vf_ggtt_insert_entries_wa_vfpf(struct i915_address_space *vm,
 	GEM_BUG_ON(!intel_iov_is_vf(&gt->iov));
 
 	if (!unlikely(i915_is_level4_wa_active(gt))) {
-		gen8_ggtt_insert_entries(vm, vma, pat_index, flags);
+		gen8_ggtt_insert_entries(vm, stash, vma, pat_index, flags);
 		return;
 	}
 
@@ -684,6 +687,7 @@ static void gen6_ggtt_insert_page(struct i915_address_space *vm,
  * through the GMADR mapped BAR (i915->mm.gtt->gtt).
  */
 static void gen6_ggtt_insert_entries(struct i915_address_space *vm,
+				     struct i915_vm_pt_stash *stash,
 				     struct i915_vma *vma,
 				     unsigned int pat_index,
 				     u32 flags)
@@ -779,6 +783,7 @@ static void bxt_vtd_ggtt_insert_page__BKL(struct i915_address_space *vm,
 
 struct insert_entries {
 	struct i915_address_space *vm;
+	struct i915_vm_pt_stash *stash;
 	struct i915_vma *vma;
 	unsigned int pat_index;
 	u32 flags;
@@ -788,19 +793,19 @@ static int bxt_vtd_ggtt_insert_entries__cb(void *_arg)
 {
 	struct insert_entries *arg = _arg;
 
-	gen8_ggtt_insert_entries(arg->vm, arg->vma,
-				 arg->pat_index, arg->flags);
+	gen8_ggtt_insert_entries(arg->vm, arg->stash, arg->vma, arg->pat_index, arg->flags);
 	bxt_vtd_ggtt_wa(arg->vm);
 
 	return 0;
 }
 
 static void bxt_vtd_ggtt_insert_entries__BKL(struct i915_address_space *vm,
+					     struct i915_vm_pt_stash *stash,
 					     struct i915_vma *vma,
 					     unsigned int pat_index,
 					     u32 flags)
 {
-	struct insert_entries arg = { vm, vma, pat_index, flags };
+	struct insert_entries arg = { vm, stash, vma, pat_index, flags };
 
 	stop_machine(bxt_vtd_ggtt_insert_entries__cb, &arg, NULL);
 }
@@ -845,7 +850,7 @@ void intel_ggtt_bind_vma(struct i915_address_space *vm,
 	if (i915_gem_object_is_lmem(obj) || i915_gem_object_has_fabric(obj))
 		pte_flags |= PTE_LM;
 
-	vm->insert_entries(vm, vma, pat_index, pte_flags);
+	vm->insert_entries(vm, stash, vma, pat_index, pte_flags);
 	vma->page_sizes.gtt = I915_GTT_PAGE_SIZE;
 }
 
@@ -898,14 +903,6 @@ static void cleanup_init_ggtt(struct i915_ggtt *ggtt)
 	if (drm_mm_node_allocated(&ggtt->error_capture))
 		drm_mm_remove_node(&ggtt->error_capture);
 	mutex_destroy(&ggtt->error_mutex);
-}
-
-static void ggtt_insert_scratch_page(struct i915_ggtt *ggtt, u64 offset)
-{
-	struct i915_address_space *vm = &ggtt->vm;
-
-	vm->insert_page(vm, px_dma(vm->scratch[0]), offset,
-			i915_gem_get_pat_index(vm->i915, I915_CACHE_NONE), 0);
 }
 
 static int init_ggtt(struct i915_ggtt *ggtt)
@@ -974,17 +971,16 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 	if (drm_mm_node_allocated(&ggtt->error_capture)) {
 		u64 start = ggtt->error_capture.start;
 		u64 end = ggtt->error_capture.start + ggtt->error_capture.size;
-		u64 i;
+
+		drm_dbg(&ggtt->vm.i915->drm,
+			"Reserved GGTT:[%llx, %llx] for use by error capture\n",
+			start, end);
 
 		/*
 		 * During error capture, memcpying from the GGTT is triggering a
 		 * prefetch of the following PTE, so fill it with a guard page.
 		 */
-		for (i = start + I915_GTT_PAGE_SIZE; i < end; i += I915_GTT_PAGE_SIZE)
-			ggtt_insert_scratch_page(ggtt, i);
-		drm_dbg(&ggtt->vm.i915->drm,
-			"Reserved GGTT:[%llx, %llx] for use by error capture\n",
-			start, end);
+		ggtt->vm.scratch_range(&ggtt->vm, start, end);
 	}
 
 	/*
@@ -1033,7 +1029,7 @@ static void aliasing_gtt_bind_vma(struct i915_address_space *vm,
 			       stash, vma, pat_index, flags);
 
 	if (flags & I915_VMA_GLOBAL_BIND)
-		vm->insert_entries(vm, vma, pat_index, pte_flags);
+		vm->insert_entries(vm, stash, vma, pat_index, pte_flags);
 }
 
 static void aliasing_gtt_unbind_vma(struct i915_address_space *vm,
@@ -1162,7 +1158,7 @@ static void ggtt_cleanup_hw(struct i915_ggtt *ggtt)
 	mutex_lock(&ggtt->vm.mutex);
 
 	list_for_each_entry_safe(vma, vn, &ggtt->vm.bound_list, vm_link)
-		WARN_ON(__i915_vma_unbind(vma));
+		WARN_ON_ONCE(__i915_vma_unbind(vma));
 
 	if (drm_mm_node_allocated(&ggtt->error_capture))
 		drm_mm_remove_node(&ggtt->error_capture);
@@ -1383,7 +1379,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.total = (size / sizeof(gen8_pte_t)) * I915_GTT_PAGE_SIZE;
 	ggtt->vm.cleanup = gen6_gmch_remove;
 	ggtt->vm.clear_range = nop_clear_range;
-	ggtt->vm.error_range = gen8_ggtt_clear_range;
+	ggtt->vm.scratch_range = gen8_ggtt_clear_range;
 
 	if (i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE)) {
 		ggtt->vm.insert_entries = gen8_ggtt_insert_entries_wa_bcs;
@@ -1562,9 +1558,9 @@ static int gen6_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.alloc_scratch_dma = alloc_pt_dma;
 
 	ggtt->vm.clear_range = nop_clear_range;
-	ggtt->vm.error_range = gen6_ggtt_clear_range;
 	if (!HAS_FULL_PPGTT(i915))
 		ggtt->vm.clear_range = gen6_ggtt_clear_range;
+	ggtt->vm.scratch_range = gen6_ggtt_clear_range;
 	ggtt->vm.insert_page = gen6_ggtt_insert_page;
 	ggtt->vm.insert_entries = gen6_ggtt_insert_entries;
 	ggtt->vm.cleanup = gen6_gmch_remove;

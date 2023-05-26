@@ -32,7 +32,7 @@ static void check_release_pagevec(struct pagevec *pvec)
 static int shmem_get_pages(struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct intel_memory_region *mem = obj->mm.region;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	resource_size_t size = obj->base.size;
 	struct address_space *mapping;
 	struct sg_table *st;
@@ -325,7 +325,7 @@ __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 
 void i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_table *pages)
 {
-	struct intel_memory_region *mem = obj->mm.region;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	resource_size_t size = obj->base.size;
 	struct sgt_iter sgt_iter;
 	struct pagevec pvec;
@@ -478,7 +478,7 @@ shmem_pread(struct drm_i915_gem_object *obj,
 
 static void shmem_release(struct drm_i915_gem_object *obj)
 {
-	if (obj->flags & I915_BO_ALLOC_STRUCT_PAGE)
+	if (obj->flags & I915_BO_STRUCT_PAGE)
 		i915_gem_object_release_memory_region(obj);
 
 	fput(obj->base.filp);
@@ -548,12 +548,16 @@ static int shmem_object_init(struct intel_memory_region *mem,
 	GEM_BUG_ON(!(mapping_gfp_mask(mapping) & __GFP_RECLAIM));
 
 	i915_gem_object_init(obj, &i915_gem_shmem_ops, &lock_class,
-			     I915_BO_ALLOC_STRUCT_PAGE);
-
+			     flags | I915_BO_STRUCT_PAGE);
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
 
-	if (HAS_LLC(i915))
+	/*
+	 * Soft-pinned buffers need to be 1-way coherent from MTL onward
+	 * because GPU is no longer snooping CPU cache by default. Make it
+	 * default setting and let others to modify as needed later
+	 */
+	if (HAS_LLC(i915) || (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70)))
 		/* On some devices, we can have the GPU use the LLC (the CPU
 		 * cache) for about a 10% performance improvement
 		 * compared to uncached.  Graphics requests other than

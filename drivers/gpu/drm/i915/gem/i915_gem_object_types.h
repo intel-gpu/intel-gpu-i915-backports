@@ -270,11 +270,6 @@ struct drm_i915_gem_object {
 	 */
 	struct i915_address_space *shares_resv_from;
 
-	/**
-	 * @evict_locked: Whether @obj_link sits on the eviction_list
-	 */
-	bool evict_locked;
-
 	union {
 		struct rcu_head rcu;
 		struct llist_node freed;
@@ -296,29 +291,29 @@ struct drm_i915_gem_object {
 	unsigned long flags;
 #define I915_BO_ALLOC_CONTIGUOUS BIT(0)
 #define I915_BO_ALLOC_VOLATILE   BIT(1)
-#define I915_BO_ALLOC_STRUCT_PAGE BIT(2)
-#define I915_BO_ALLOC_CPU_CLEAR  BIT(3)
-#define I915_BO_ALLOC_USER       BIT(4)
-#define I915_BO_ALLOC_SYNC_HINT	 BIT(5)
-#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE     BIT(6)
-#define I915_BO_ALLOC_CHUNK_4K   BIT(7)
-#define I915_BO_ALLOC_CHUNK_64K  BIT(8)
-#define I915_BO_ALLOC_CHUNK_2M   BIT(9)
-#define I915_BO_ALLOC_CHUNK_1G   BIT(10)
+#define I915_BO_ALLOC_USER       BIT(2)
+#define I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE     BIT(3)
+#define I915_BO_ALLOC_CHUNK_4K   BIT(4)
+#define I915_BO_ALLOC_CHUNK_64K  BIT(5)
+#define I915_BO_ALLOC_CHUNK_2M   BIT(6)
+#define I915_BO_ALLOC_CHUNK_1G   BIT(7)
 #define I915_BO_ALLOC_FLAGS (I915_BO_ALLOC_CONTIGUOUS | \
 			     I915_BO_ALLOC_VOLATILE | \
-			     I915_BO_ALLOC_STRUCT_PAGE | \
-			     I915_BO_ALLOC_CPU_CLEAR | \
 			     I915_BO_ALLOC_USER | \
 			     I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE | \
 			     I915_BO_ALLOC_CHUNK_4K | \
 			     I915_BO_ALLOC_CHUNK_64K | \
 			     I915_BO_ALLOC_CHUNK_2M | \
 			     I915_BO_ALLOC_CHUNK_1G)
-#define I915_BO_READONLY         BIT(11)
-#define I915_TILING_QUIRK_BIT    12 /* unknown swizzling; do not release! */
-#define I915_BO_PROTECTED        BIT(13)
-#define I915_BO_FABRIC           BIT(14)
+#define I915_BO_STRUCT_PAGE	BIT(8)
+#define I915_BO_READONLY	BIT(9)
+#define I915_TILING_QUIRK_BIT	10 /* unknown swizzling; do not release! */
+#define I915_BO_PROTECTED	BIT(11)
+#define I915_BO_SKIP_CLEAR	BIT(12)
+#define I915_BO_CPU_CLEAR	BIT(13)
+#define I915_BO_FAULT_CLEAR	BIT(14)
+#define I915_BO_SYNC_HINT	BIT(15)
+#define I915_BO_FABRIC		BIT(16)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -472,6 +467,11 @@ struct drm_i915_gem_object {
 	unsigned int cache_dirty:1;
 
 	/**
+	 * @evict_locked: Whether @obj_link sits on the eviction_list
+	 */
+	bool evict_locked:1;
+
+	/**
 	 * @read_domains: Read memory domains.
 	 *
 	 * These monitor which caches contain read/write data related to the
@@ -524,6 +524,20 @@ struct drm_i915_gem_object {
 		 */
 		atomic_t shrink_pin;
 
+		struct intel_memory_region_link {
+			/**
+			 * Memory region for this object.
+			 */
+			struct intel_memory_region *mem;
+
+			/**
+			 * Element within memory_region->objects or region->purgeable
+			 * if the object is marked as DONTNEED. Access is protected by
+			 * region->obj_lock.
+			 */
+			struct list_head link;
+		} region;
+
 		/**
 		 * Priority list of potential placements for this object.
 		 */
@@ -532,22 +546,11 @@ struct drm_i915_gem_object {
 		int n_placements;
 
 		/**
-		 * Memory region for this object.
-		 */
-		struct intel_memory_region *region;
-
-		/**
 		 * Memory manager resource allocated for this object. Only
 		 * needed for the mock region.
 		 */
 		struct ttm_resource *res;
 		struct list_head blocks;
-		/**
-		 * Element within memory_region->objects or region->purgeable
-		 * if the object is marked as DONTNEED. Access is protected by
-		 * region->obj_lock.
-		 */
-		struct list_head region_link;
 
 		struct sg_table *pages;
 		void *mapping;
@@ -668,16 +671,7 @@ struct drm_i915_gem_object {
 		void *gvt_info;
 	};
 
-	/**
-	 * object to swap-to if non-null.
-	 */
-
-	bool do_swapping;
-
 	struct drm_i915_gem_object *swapto;
-
-	/** mark evicted object during suspend */
-	bool evicted;
 
 	struct {
 		spinlock_t lock;

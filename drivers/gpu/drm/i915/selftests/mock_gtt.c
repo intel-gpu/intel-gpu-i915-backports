@@ -33,6 +33,7 @@ static void mock_insert_page(struct i915_address_space *vm,
 }
 
 static void mock_insert_entries(struct i915_address_space *vm,
+				struct i915_vm_pt_stash *stash,
 				struct i915_vma *vma,
 				unsigned int pat_index,
 				u32 flags)

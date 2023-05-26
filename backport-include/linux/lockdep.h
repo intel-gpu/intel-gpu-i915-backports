@@ -3,6 +3,17 @@
 #include_next <linux/lockdep.h>
 #include <linux/version.h>
 
+#ifdef BPM_LOCKDEP_ASSERT_NOT_HELD_NOT_PRESENT
+
+#ifdef CONFIG_LOCKDEP
+#define lockdep_assert_not_held(l)      \
+                lockdep_assert(lockdep_is_held(l) != LOCK_STATE_HELD)
+#else
+#define lockdep_assert_not_held(l)        do { (void)(l); } while (0)
+#endif
+
+#endif
+
 #if LINUX_VERSION_IS_LESS(3,9,0)
 #undef lockdep_assert_held
 #ifdef CONFIG_LOCKDEP

@@ -13,6 +13,8 @@
 #include "gen8_ppgtt.h"
 #include "intel_context.h"
 #include "intel_gt.h"
+#include "intel_gt_debug.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_tlb.h"
 #include "intel_pagefault.h"
@@ -71,7 +73,7 @@ void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_i
 	ce = xa_load(&guc->context_lookup, guc_ctx_id);
 	if (ce) {
 		snprintf(buf, sizeof(buf), "%#04x", guc_ctx_id);
-		intel_context_set_error(ce);
+		intel_context_ban(ce, NULL);
 	} else {
 		snprintf(buf, sizeof(buf), "n/a");
 	}
@@ -124,9 +126,9 @@ int intel_gt_pagefault_process_page_fault_msg(struct intel_gt *gt, const u32 *ms
 			    fault_data1 & FAULT_GTT_SEL ? "GGTT" : "PPGTT",
 			    GEN8_RING_FAULT_ENGINE_ID(fault_reg),
 			    RING_FAULT_SRCID(fault_reg),
-			    GEN12_RING_FAULT_FAULT_TYPE(fault_reg),
+			    RING_FAULT_FAULT_TYPE(fault_reg),
 			    RING_FAULT_LEVEL(fault_reg),
-			    !!(fault_reg & GEN12_RING_FAULT_ACCESS_TYPE) ? "Write" : "Read");
+			    !!(fault_reg & RING_FAULT_ACCESS_TYPE) ? "Write" : "Read");
 
 	return 0;
 }
@@ -181,7 +183,8 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	int ret;
 
 	/* return if object has single placement or already in lmem_id */
-	if (!i915_gem_object_migratable(obj) || obj->mm.region->id == lmem_id)
+	if (!i915_gem_object_migratable(obj) ||
+	    obj->mm.region.mem->id == lmem_id)
 		return 0;
 
 	if (!gt->engine[id])
@@ -304,9 +307,49 @@ static struct i915_address_space *faulted_vm(struct intel_guc *guc, u32 asid)
 	return xa_load(&guc_to_gt(guc)->i915->asid_resv.xa, asid);
 }
 
+static struct intel_engine_cs *
+lookup_engine(struct intel_gt *gt, u8 class, u8 instance)
+{
+	if (class >= ARRAY_SIZE(gt->engine_class) ||
+	    instance >= ARRAY_SIZE(gt->engine_class[class]))
+		return NULL;
+
+	return gt->engine_class[class][instance];
+}
+
+static struct i915_gpu_coredump *
+pf_coredump(struct intel_gt *gt, struct recoverable_page_fault_info *info)
+{
+	struct i915_gpu_coredump *error;
+	struct intel_engine_cs *engine;
+
+	engine = lookup_engine(gt, info->engine_class, info->engine_instance);
+	if (!engine)
+		return NULL;
+	GEM_BUG_ON(engine->gt != gt);
+
+	error = i915_gpu_coredump_create_for_engine(engine, GFP_KERNEL);
+	if (!error)
+		return NULL;
+
+	error->fault.addr = info->page_addr | BIT(0);
+	error->fault.type = info->fault_type;
+	error->fault.level = info->fault_level;
+	error->fault.access = info->access_type;
+
+	rcu_read_lock();
+	error->private = intel_engine_find_active_request(engine);
+	if (error->private)
+		error->private = i915_request_get_rcu(error->private);
+	rcu_read_unlock();
+
+	return error;
+}
+
 static struct dma_fence *
 handle_i915_mm_fault(struct intel_guc *guc,
-		     struct recoverable_page_fault_info *info)
+		     struct recoverable_page_fault_info *info,
+		     struct i915_gpu_coredump **dump)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct dma_fence *fence = NULL;
@@ -329,6 +372,22 @@ handle_i915_mm_fault(struct intel_guc *guc,
 	trace_i915_mm_fault(gt->i915, vm, vma, info);
 
 	if (!vma) {
+		/* Driver specific implementation of handling PRS */
+		if (is_vm_pasid_active(vm)) {
+			err = i915_handle_ats_fault_request(vm, info);
+			if (err) {
+				drm_err(&vm->i915->drm,
+					"Handling OS request for device to handle faulting failed error: %d\n",
+					err);
+				return ERR_PTR(err);
+			}
+			return 0;
+		}
+
+		/* Each EU thread may trigger its own pf to the same address! */
+		if (!vm->invalidate_tlb_scratch)
+			*dump = pf_coredump(gt, info);
+
 		if (vm->has_scratch) {
 			/* Map the out-of-bound access to scratch page.
 			 *
@@ -347,7 +406,6 @@ handle_i915_mm_fault(struct intel_guc *guc,
 						 info->page_addr,
 						 BIT(vm->scratch_order + PAGE_SHIFT),
 						 true);
-			vm->invalidate_tlb_scratch = true;
 			return NULL;
 		}
 
@@ -379,6 +437,8 @@ handle_i915_mm_fault(struct intel_guc *guc,
 	err = i915_gem_object_lock(vma->obj, &ww);
 	if (err)
 		goto err_ww;
+
+	vma->obj->flags |= I915_BO_FAULT_CLEAR;
 
 	lmem_id = get_lmem_region_id(vma->obj, gt);
 	if (i915_gem_object_should_migrate_lmem(vma->obj, lmem_id,
@@ -449,6 +509,7 @@ struct fault_reply {
 	struct dma_fence_work base;
 	struct recoverable_page_fault_info info;
 	struct i915_sw_dma_fence_cb cb;
+	struct i915_gpu_coredump *dump;
 	struct intel_guc *guc;
 	struct intel_gt *gt;
 	intel_wakeref_t wakeref;
@@ -459,30 +520,51 @@ static int fault_work(struct dma_fence_work *work)
 	return 0;
 }
 
-static int send_fault_reply(struct fault_reply *f)
+static int send_fault_reply(const struct fault_reply *f)
 {
-	struct intel_guc_pagefault_reply pkt = {
-		.dw0 =  FIELD_PREP(PAGE_FAULT_REPLY_VALID, 1) |
-			FIELD_PREP(PAGE_FAULT_REPLY_SUCCESS,
-				   f->info.fault_unsuccessful) |
-			FIELD_PREP(PAGE_FAULT_REPLY_REPLY,
-				   PAGE_FAULT_REPLY_ACCESS) |
-			FIELD_PREP(PAGE_FAULT_REPLY_DESC_TYPE,
-				   FAULT_RESPONSE_DESC) |
-			FIELD_PREP(PAGE_FAULT_REPLY_ASID,
-				   f->info.asid),
+	u32 action[] = {
+		INTEL_GUC_ACTION_PAGE_FAULT_RES_DESC,
 
-		.dw1 =  FIELD_PREP(PAGE_FAULT_REPLY_VFID,
-				   f->info.vfid) |
-			FIELD_PREP(PAGE_FAULT_REPLY_ENG_INSTANCE,
-				   f->info.engine_instance) |
-			FIELD_PREP(PAGE_FAULT_REPLY_ENG_CLASS,
-				   f->info.engine_class) |
-			FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
-				   f->info.pdata),
+		(FIELD_PREP(PAGE_FAULT_REPLY_VALID, 1) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_SUCCESS,
+			    f->info.fault_unsuccessful) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_REPLY,
+			    PAGE_FAULT_REPLY_ACCESS) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_DESC_TYPE,
+			    FAULT_RESPONSE_DESC) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_ASID,
+			    f->info.asid)),
+
+		(FIELD_PREP(PAGE_FAULT_REPLY_VFID,
+			    f->info.vfid) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_ENG_INSTANCE,
+			    f->info.engine_instance) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_ENG_CLASS,
+			    f->info.engine_class) |
+		 FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
+			    f->info.pdata)),
 	};
 
-	return intel_guc_send_pagefault_reply(f->guc, &pkt);
+	return intel_guc_send(f->guc, action, ARRAY_SIZE(action));
+}
+
+static void coredump_add_request(struct i915_gpu_coredump *dump,
+				 struct i915_request *rq,
+				 gfp_t gfp)
+{
+	struct intel_gt_coredump *gt = dump->gt;
+	struct intel_engine_capture_vma *vma;
+	struct i915_page_compress *compress;
+
+	compress = i915_vma_capture_prepare(gt);
+	if (!compress)
+		return;
+
+	vma = intel_engine_coredump_add_request(gt->engine, rq, gfp, compress);
+	if (vma)
+		intel_engine_coredump_add_vma(gt->engine, vma, compress);
+
+	i915_vma_capture_finish(gt, compress);
 }
 
 static void fault_complete(struct dma_fence_work *work)
@@ -496,7 +578,25 @@ static void fault_complete(struct dma_fence_work *work)
 		f->info.fault_unsuccessful = true;
 	}
 
-	send_fault_reply(f);
+	GEM_WARN_ON(send_fault_reply(f));
+
+	if (f->dump) {
+		struct i915_gpu_coredump *dump = f->dump;
+		struct intel_gt_coredump *gt = dump->gt;
+
+		if (dump->private) {
+			coredump_add_request(dump, dump->private, GFP_KERNEL);
+			i915_request_put(dump->private);
+		}
+
+		if (intel_gt_mcr_read_any(f->gt, TD_CTL))
+			intel_eu_attentions_read(f->gt, &gt->attentions.resolved,
+						 INTEL_GT_ATTENTION_TIMEOUT_MS);
+
+		i915_error_state_store(dump);
+		i915_gpu_coredump_put(dump);
+	}
+
 	intel_gt_pm_put(f->gt, f->wakeref);
 }
 
@@ -527,7 +627,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	reply->gt = guc_to_gt(guc);
 	reply->wakeref = intel_gt_pm_get(reply->gt);
 
-	fence = handle_i915_mm_fault(guc, &reply->info);
+	fence = handle_i915_mm_fault(guc, &reply->info, &reply->dump);
 	if (IS_ERR(fence)) {
 		i915_sw_fence_set_error_once(&reply->base.chain, PTR_ERR(fence));
 	} else if (fence) {
@@ -535,7 +635,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 		dma_fence_put(fence);
 	}
 
-	dma_fence_work_commit_imm(&reply->base);
+	dma_fence_work_commit_imm_if(&reply->base, !reply->dump);
 	return 0;
 }
 

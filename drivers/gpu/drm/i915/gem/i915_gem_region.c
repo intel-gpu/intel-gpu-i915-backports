@@ -14,10 +14,10 @@ int
 i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
 				struct sg_table *pages)
 {
-	__intel_memory_region_put_pages_buddy(obj->mm.region, &obj->mm.blocks);
+	__intel_memory_region_put_pages_buddy(obj->mm.region.mem,
+					      &obj->mm.blocks);
 	i915_drm_client_make_resident(obj, false);
 
-	obj->mm.dirty = false;
 	sg_free_table(pages);
 	kfree(pages);
 
@@ -29,7 +29,8 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 				unsigned int *page_sizes)
 {
 	const u64 max_segment = i915_gem_sg_segment_size(obj);
-	struct intel_memory_region *mem = obj->mm.region;
+	struct i915_gem_ww_ctx *ww = i915_gem_get_locking_ctx(obj);
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct list_head *blocks = &obj->mm.blocks;
 	resource_size_t size = obj->base.size;
 	resource_size_t prev_end;
@@ -40,7 +41,6 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 	unsigned int sg_page_sizes;
 	pgoff_t num_pages; /* implicitly limited by sg_alloc_table */
 	int ret;
-	struct i915_gem_ww_ctx *ww = i915_gem_get_locking_ctx(obj);
 
 	if (!safe_conversion(&num_pages,
 			     round_up(obj->base.size, mem->min_page_size) >>
@@ -140,9 +140,10 @@ err_free_sg:
 void i915_gem_object_init_memory_region(struct drm_i915_gem_object *obj,
 					struct intel_memory_region *mem)
 {
+	GEM_BUG_ON(i915_gem_object_has_pages(obj));
+
+	obj->mm.region.mem = intel_memory_region_get(mem);
 	INIT_LIST_HEAD(&obj->mm.blocks);
-	WARN_ON(i915_gem_object_has_pages(obj));
-	obj->mm.region = intel_memory_region_get(mem);
 
 	if (obj->base.size <= mem->min_page_size)
 		obj->flags |= I915_BO_ALLOC_CONTIGUOUS;
@@ -150,7 +151,7 @@ void i915_gem_object_init_memory_region(struct drm_i915_gem_object *obj,
 
 void i915_gem_object_release_memory_region(struct drm_i915_gem_object *obj)
 {
-	intel_memory_region_put(obj->mm.region);
+	intel_memory_region_put(obj->mm.region.mem);
 }
 
 struct drm_i915_gem_object *
@@ -166,8 +167,6 @@ i915_gem_object_create_region(struct intel_memory_region *mem,
 	 * resource for the mem->region. We might need to revisit this in the
 	 * future.
 	 */
-
-	GEM_BUG_ON(flags & ~I915_BO_ALLOC_FLAGS);
 
 	if (!mem)
 		return ERR_PTR(-ENODEV);

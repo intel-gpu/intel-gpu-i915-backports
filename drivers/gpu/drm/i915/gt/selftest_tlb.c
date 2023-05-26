@@ -99,7 +99,7 @@ pte_tlbinv(struct intel_context *ce,
 					 4, 4);
 
 	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x), invalidate:%llx+%llx\n",
-		ce->engine->name, va->obj->mm.region->name ?: "smem",
+		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
 		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg,
 		addr & -length, length);
 
@@ -144,12 +144,30 @@ pte_tlbinv(struct intel_context *ce,
 			err = -EIO;
 		}
 	} else if (!i915_request_completed(rq)) {
+		struct i915_vm_pt_stash stash = {};
 		unsigned int pte_flags = 0;
+		struct i915_gem_ww_ctx ww;
+
+		err = i915_vm_alloc_pt_stash(ce->vm, &stash, vb->size);
+		if (err)
+			goto err;
+
+		for_i915_gem_ww(&ww, err, false) {
+			err = i915_vm_lock_objects(ce->vm, &ww);
+			if (err)
+				continue;
+
+			err = i915_vm_map_pt_stash(ce->vm, &stash);
+		}
+		if (err) {
+			i915_vm_free_pt_stash(ce->vm, &stash);
+			goto err;
+		}
 
 		/* Flip the PTE between A and B */
 		if (i915_gem_object_is_lmem(vb->obj))
 			pte_flags |= PTE_LM;
-		ce->vm->insert_entries(ce->vm, vb, pat_index, pte_flags);
+		ce->vm->insert_entries(ce->vm, &stash, vb, pat_index, pte_flags);
 
 		/* Flush the PTE update to concurrent HW */
 		tlbinv(ce->vm, addr & -length, length);
@@ -159,10 +177,13 @@ pte_tlbinv(struct intel_context *ce,
 			       ce->engine->name);
 			err = -EINVAL;
 		}
+
+		i915_vm_free_pt_stash(ce->vm, &stash);
 	} else {
 		pr_err("Spinner sanitycheck failed\n");
 		err = -EIO;
 	}
+err:
 	i915_request_put(rq);
 
 	cs = page_mask_bits(batch->mm.mapping);

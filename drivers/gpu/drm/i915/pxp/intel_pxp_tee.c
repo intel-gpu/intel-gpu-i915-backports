@@ -150,6 +150,9 @@ int intel_pxp_gsc_fw_message(struct intel_pxp *pxp,
 
 	memcpy(payload, msg_in, msg_in_len);
 
+	/* Wa_22016122933: Making sure the data is visible to GSC right away */
+	i915_write_barrier(i915);
+
 	ret = intel_gsc_fw_heci_send(&gt->uc.gsc, addr, header->message_size,
 				     addr, msg_out_len + sizeof(*header));
 	if (ret) {

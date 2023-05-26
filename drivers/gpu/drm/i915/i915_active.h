@@ -91,7 +91,7 @@ i915_active_fence_set(struct i915_active_fence *active,
 		      struct i915_request *rq);
 
 static inline struct dma_fence *
-__i915_active_fence_get(struct dma_fence **fencep)
+__i915_active_fence_get(struct dma_fence __rcu **fencep)
 {
 	/* See dma_fence_get_rcu_safe */
 	do {

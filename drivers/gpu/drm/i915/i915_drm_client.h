@@ -126,6 +126,7 @@ static inline void i915_drm_client_put(struct i915_drm_client *client)
 }
 
 void i915_drm_client_close(struct i915_drm_client *client);
+void i915_drm_client_cleanup(struct i915_drm_client *client);
 
 struct i915_drm_client *i915_drm_client_add(struct i915_drm_clients *clients,
 					    struct task_struct *task,

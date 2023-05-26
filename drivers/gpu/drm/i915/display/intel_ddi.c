@@ -38,6 +38,7 @@
 #include "intel_connector.h"
 #include "intel_crtc.h"
 #include "intel_cx0_phy.h"
+#include "intel_cx0_reg_defs.h"
 #include "intel_ddi.h"
 #include "intel_ddi_buf_trans.h"
 #include "intel_de.h"
@@ -192,6 +193,8 @@ void intel_wait_ddi_buf_idle(struct drm_i915_private *dev_priv,
 static void intel_wait_ddi_buf_active(struct drm_i915_private *dev_priv,
 				      enum port port)
 {
+	enum phy phy = intel_port_to_phy(dev_priv, port);
+	int timeout_us;
 	int ret;
 
 	/* Wait > 518 usecs for DDI_BUF_CTL to be non idle */
@@ -200,13 +203,25 @@ static void intel_wait_ddi_buf_active(struct drm_i915_private *dev_priv,
 		return;
 	}
 
-	/* FIXME: find out why Bspec's 100us timeout is too short */
+	if (DISPLAY_VER(dev_priv) >= 14) {
+		timeout_us = 10000;
+	} else if (IS_DG2(dev_priv)) {
+		timeout_us = 1200;
+	} else if (DISPLAY_VER(dev_priv) >= 12) {
+		if (intel_phy_is_tc(dev_priv, phy))
+			timeout_us = 3000;
+		else
+			timeout_us = 1000;
+	} else {
+		timeout_us = 500;
+	}
+
 	if (DISPLAY_VER(dev_priv) >= 14)
-		ret = wait_for_us(!(intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port)) &
-				    XELPDP_PORT_BUF_PHY_IDLE), 10000);
+		ret = _wait_for(!(intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port)) & XELPDP_PORT_BUF_PHY_IDLE),
+				timeout_us, 10, 10);
 	else
-		ret = _wait_for(!(intel_de_read(dev_priv, DDI_BUF_CTL(port)) &
-				  DDI_BUF_IS_IDLE), IS_DG2(dev_priv) ? 1200 : 500, 10, 10);
+		ret = _wait_for(!(intel_de_read(dev_priv, DDI_BUF_CTL(port)) & DDI_BUF_IS_IDLE),
+				timeout_us, 10, 10);
 
 	if (ret)
 		drm_err(&dev_priv->drm, "Timeout waiting for DDI BUF %c to get active\n",
@@ -520,6 +535,8 @@ intel_ddi_transcoder_func_reg_val_get(struct intel_encoder *encoder,
 			temp |= TRANS_DDI_HDMI_SCRAMBLING;
 		if (crtc_state->hdmi_high_tmds_clock_ratio)
 			temp |= TRANS_DDI_HIGH_TMDS_CHAR_RATE;
+		if (DISPLAY_VER(dev_priv) >= 14)
+			temp |= TRANS_DDI_PORT_WIDTH(crtc_state->lane_count);
 	} else if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_ANALOG)) {
 		temp |= TRANS_DDI_MODE_SELECT_FDI_OR_128B132B;
 		temp |= (crtc_state->fdi_lanes - 1) << 1;
@@ -2353,7 +2370,7 @@ static void mtl_port_buf_ctl_program(struct intel_encoder *encoder,
 		val |= XELPDP_PORT_BUF_PORT_DATA_10BIT;
 
 	if (dig_port->saved_port_bits & DDI_BUF_PORT_REVERSAL)
-		val |= XELPDP_PORT_BUF_PORT_REVERSAL;
+		val |= XELPDP_PORT_REVERSAL;
 
 	intel_de_write(i915, XELPDP_PORT_BUF_CTL1(port), val);
 }
@@ -3105,6 +3122,7 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 	struct drm_connector *connector = conn_state->connector;
 	enum port port = encoder->port;
 	enum phy phy = intel_port_to_phy(dev_priv, port);
+	u32 buf_ctl;
 
 	if (!intel_hdmi_handle_sink_scrambling(encoder, connector,
 					       crtc_state->hdmi_high_tmds_clock_ratio,
@@ -3166,39 +3184,40 @@ static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,
 	 * On ADL_P the PHY link rate and lane count must be programmed but
 	 * these are both 0 for HDMI.
 	 *
-	 * But MTL onwards HDMI2.1 is supported and in FRL mode, port width
-	 * needs to be filled with either 3 or 4 lanes. For TMDS mode this
+	 * But MTL onwards HDMI2.1 is supported and in TMDS mode this
 	 * is always filled with 4 lanes, already set in the crtc_state.
+	 * The same is required to be filled in PORT_BUF_CTL for C10/20 Phy.
 	 */
-	if (DISPLAY_VER(dev_priv) > 13) {
+	if (DISPLAY_VER(dev_priv) >= 14) {
 		u32 ddi_buf = 0;
 		u8  lane_count = mtl_get_port_width(crtc_state->lane_count);
-		u32 port_buf = intel_de_read(dev_priv, XELPDP_PORT_BUF_CTL1(port));
+		u32 port_buf = 0;
 
 		port_buf |= XELPDP_PORT_WIDTH(lane_count);
-		ddi_buf |= DDI_BUF_CTL_ENABLE |
-			   DDI_PORT_WIDTH(lane_count);
 
 		if (intel_bios_is_lane_reversal_needed(dev_priv, port))
 			port_buf |= XELPDP_PORT_REVERSAL;
 
-		port_buf &= ~XELPDP_PORT_BUF_PORT_DATA_WIDTH_MASK;
-		ddi_buf &= ~DDI_BUF_PORT_DATA_WIDTH_MASK;
+		intel_de_rmw(dev_priv, XELPDP_PORT_BUF_CTL1(port), 0, port_buf);
 
-		intel_de_write(dev_priv, XELPDP_PORT_BUF_CTL1(port), port_buf);
+		ddi_buf |= DDI_BUF_CTL_ENABLE |
+			   DDI_PORT_WIDTH(lane_count);
+
 		intel_de_write(dev_priv, DDI_BUF_CTL(port),
 			       dig_port->saved_port_bits | ddi_buf);
+
 		/* i. Poll for PORT_BUF_CTL Idle Status == 0, timeout after 100 us */
 		intel_wait_ddi_buf_active(dev_priv, port);
-	} else if (IS_ALDERLAKE_P(dev_priv) && intel_phy_is_tc(dev_priv, phy)) {
-		drm_WARN_ON(&dev_priv->drm, !intel_tc_port_in_legacy_mode(dig_port));
-		intel_de_write(dev_priv, DDI_BUF_CTL(port),
-			       dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE |
-			       DDI_BUF_CTL_TC_PHY_OWNERSHIP);
 	} else {
-		intel_de_write(dev_priv, DDI_BUF_CTL(port),
-			       dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE);
+		buf_ctl = dig_port->saved_port_bits | DDI_BUF_CTL_ENABLE;
+		if (IS_ALDERLAKE_P(dev_priv) && intel_phy_is_tc(dev_priv, phy)) {
+			drm_WARN_ON(&dev_priv->drm, !intel_tc_port_in_legacy_mode(dig_port));
+			buf_ctl |= DDI_BUF_CTL_TC_PHY_OWNERSHIP;
+		}
+		intel_de_write(dev_priv, DDI_BUF_CTL(port), buf_ctl);
 	}
+
+	intel_wait_ddi_buf_active(dev_priv, port);
 
 	intel_audio_codec_enable(encoder, crtc_state, conn_state);
 }
@@ -3712,7 +3731,11 @@ static void intel_ddi_read_func_ctl(struct intel_encoder *encoder,
 		fallthrough;
 	case TRANS_DDI_MODE_SELECT_DVI:
 		pipe_config->output_types |= BIT(INTEL_OUTPUT_HDMI);
-		pipe_config->lane_count = 4;
+		if (DISPLAY_VER(dev_priv) >= 14)
+			pipe_config->lane_count =
+				((temp & DDI_PORT_WIDTH_MASK) >> DDI_PORT_WIDTH_SHIFT) + 1;
+		else
+			pipe_config->lane_count = 4;
 		break;
 	case TRANS_DDI_MODE_SELECT_DP_SST:
 		if (encoder->type == INTEL_OUTPUT_EDP)

@@ -80,7 +80,7 @@ static void __i915_debugger_print(const struct i915_debugger * const debugger,
 	vaf.fmt = format;
 	vaf.va = &args;
 
-	drm_printf(&p, "%s(%d/%d:%lld:%d/%d): %pV", prefix,
+	drm_printf(&p, "%s(%d/%d:%llu:%d/%d): %pV", prefix,
 		   current->pid, task_tgid_nr(current),
 		   debugger->session,
 		   debugger->target_task->pid,
@@ -174,7 +174,7 @@ static const char *event_flags_to_str(const u32 flags)
 
 #define EVENT_PRINT_MEMBER_U64(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "%llu", u64)
 #define EVENT_PRINT_MEMBER_U32(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "%u", u32)
-#define EVENT_PRINT_MEMBER_U16(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "%u", u16)
+#define EVENT_PRINT_MEMBER_U16(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "%hu", u16)
 #define EVENT_PRINT_MEMBER_U64X(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "0x%llx", u64)
 #define EVENT_PRINT_MEMBER_U32X(d, p, s, n) EVENT_PRINT_MEMBER(d, p, s, n, "0x%x", u32)
 #define EVENT_PRINT_MEMBER_HANDLE(d, p, s, n) EVENT_PRINT_MEMBER_U64(d, p, s, n)
@@ -243,7 +243,7 @@ static void event_printer_vma(const struct i915_debugger * const debugger,
 
 	for (i = 0; i < ev->num_uuids; i++)
 		i915_debugger_print(debugger, DD_DEBUG_LEVEL_INFO, prefix,
-				    "  vma->uuids[%u] = %lld",
+				    "  vma->uuids[%u] = %llu",
 				    i, ev->uuids[i]);
 }
 
@@ -311,7 +311,7 @@ static void event_printer_engines(const struct i915_debugger * const debugger,
 		const struct i915_debug_engine_info * const ei = &engines->engines[i];
 
 		i915_debugger_print(debugger, DD_DEBUG_LEVEL_INFO, prefix,
-				    "  engines->engines[%lld] = engine_class=%u, engine_instance=%u, lrc_handle = %lld",
+				    "  engines->engines[%llu] = engine_class=%hu, engine_instance=%hu, lrc_handle = %llu",
 				    i, ei->engine.engine_class,
 				    ei->engine.engine_instance, ei->lrc_handle);
 	}
@@ -416,7 +416,7 @@ static void i915_debugger_detach(struct i915_debugger *debugger)
 
 	spin_lock_irqsave(&i915->debuggers.lock, flags);
 	if (is_debugger_closed(debugger)) {
-		DD_INFO(debugger, "session %lld detached", debugger->session);
+		DD_INFO(debugger, "session %llu detached", debugger->session);
 		list_del_init(&debugger->connection_link);
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
@@ -870,8 +870,13 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 	GEM_BUG_ON(!event->type);
 	GEM_BUG_ON(event->type == PRELIM_DRM_I915_DEBUG_EVENT_READ);
 
-	if (event->flags & PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK)
+	if (event->flags & PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK) {
 		ack = create_ack(debugger, event, ack_data, gfp);
+		if (IS_ERR(ack)) {
+			i915_debugger_disconnect_err(debugger);
+			goto free;
+		}
+	}
 
 	disconnect_ts = ktime_add_ms(ktime_get_raw(), user_ms);
 	mutex_lock(&debugger->lock);
@@ -947,16 +952,9 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 	event = NULL;
 
 	if (ack) {
-		if (IS_ERR(ack)) {
-			DD_ERR(debugger, "disconnect: ack not created %ld", PTR_ERR(ack));
-			goto disconnect_err;
-		}
-
 		if (!insert_ack(debugger, ack)) {
 			DD_ERR(debugger, "disconnect: duplicate ack found for %llu",
 			       ack->event.seqno);
-			handle_ack(debugger, ack);
-			kfree(ack);
 			goto disconnect_err;
 		}
 
@@ -974,6 +972,11 @@ disconnect_err:
 closed:
 	mutex_unlock(&debugger->lock);
 
+	if (ack) {
+		handle_ack(debugger, ack);
+		kfree(ack);
+	}
+free:
 	/* If ownership was transferred, kfree(NULL) is valid */
 	kfree(event);
 
@@ -1144,7 +1147,7 @@ static long i915_debugger_read_uuid_ioctl(struct i915_debugger *debugger,
 		       read_arg.payload_size))
 		return -EFAULT;
 
-	DD_INFO(debugger, "read_uuid: client_handle=%lld, handle=%lld, flags=0x%x",
+	DD_INFO(debugger, "read_uuid: client_handle=%llu, handle=%llu, flags=0x%x",
 		read_arg.client_handle, read_arg.handle, read_arg.flags);
 
 	uuid = NULL;
@@ -1182,7 +1185,7 @@ static long i915_debugger_read_uuid_ioctl(struct i915_debugger *debugger,
 	if (copy_to_user(u64_to_user_ptr(arg), &read_arg, sizeof(read_arg)))
 		ret = -EFAULT;
 
-	DD_INFO(debugger, "read_uuid: payload delivery of %lld bytes returned %lld\n", uuid->size, ret);
+	DD_INFO(debugger, "read_uuid: payload delivery of %llu bytes returned %ld\n", uuid->size, ret);
 
 out_uuid:
 	i915_uuid_put(uuid);
@@ -1613,8 +1616,8 @@ static vm_fault_t vm_mmap_fault(struct vm_fault *vmf)
 			pfn = page_to_pfn(i915_gem_object_get_page(obj, n));
 		} else if (i915_gem_object_is_lmem(obj)) {
 			const dma_addr_t region_offset =
-				(obj->mm.region->iomap.base -
-				 obj->mm.region->region.start);
+				(obj->mm.region.mem->iomap.base -
+				 obj->mm.region.mem->region.start);
 			const dma_addr_t page_start_addr =
 				i915_gem_object_get_dma_address(obj, n);
 
@@ -1765,10 +1768,14 @@ static struct intel_context *engine_active_context_get(struct intel_engine_cs *e
 static bool client_has_vm(struct i915_drm_client *client,
 			  struct i915_address_space *vm)
 {
+	struct drm_i915_file_private *file = READ_ONCE(client->file);
 	struct i915_address_space *__vm;
 	unsigned long idx;
 
-	xa_for_each(&client->file->vm_xa, idx, __vm)
+	if (READ_ONCE(client->closed))
+		return false;
+
+	xa_for_each(&file->vm_xa, idx, __vm)
 		if (__vm == vm)
 			return true;
 
@@ -1812,7 +1819,7 @@ i915_debugger_vm_open_ioctl(struct i915_debugger *debugger, unsigned long arg)
 	struct i915_debug_vm_open vmo;
 	struct i915_address_space *vm;
 	struct file *file;
-	int ret;
+	long ret;
 	int fd;
 
 	if (is_debugger_closed(debugger))
@@ -1864,7 +1871,7 @@ i915_debugger_vm_open_ioctl(struct i915_debugger *debugger, unsigned long arg)
 
 	drm_dev_get(&vm->i915->drm);
 
-	DD_VERBOSE(debugger, "vm_open: client_handle=%lld, handle=%lld, flags=0x%llx, fd=%d vm_address=%px",
+	DD_VERBOSE(debugger, "vm_open: client_handle=%llu, handle=%llu, flags=0x%llx, fd=%d vm_address=%px",
 		   vmo.client_handle, vmo.handle, vmo.flags, fd, vm);
 
 	return fd;
@@ -1874,7 +1881,7 @@ err_vm:
 err_fd:
 	put_unused_fd(fd);
 
-	DD_WARN(debugger, "vm_open: client_handle=%lld, handle=%lld, flags=0x%llx, ret=%lld",
+	DD_WARN(debugger, "vm_open: client_handle=%llu, handle=%llu, flags=0x%llx, ret=%ld",
 		vmo.client_handle, vmo.handle, vmo.flags, ret);
 
 	return ret;
@@ -1887,7 +1894,6 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 				    unsigned int bitmask_size)
 {
 	struct intel_gt *gt = engine->gt;
-	struct intel_uncore *uncore = gt->uncore;
 	struct i915_drm_client *client;
 	struct intel_context *active_ctx;
 	u32 context_lrca, lrca;
@@ -1928,7 +1934,7 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	if (context_lrca != lrca)
 		return -EBUSY;
 
-	td_ctl = intel_uncore_read(uncore, TD_CTL);
+	td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
 
 	/* Halt on next thread dispatch */
 	if (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT))
@@ -1998,7 +2004,7 @@ static int check_attn_ss_fw(struct intel_gt *gt, void *data,
 
 		if ((val | cur) != cur) {
 			DD_INFO(debugger,
-				"WRONG CLEAR (%d:%d:%d) TD_CRL: 0x%08x; TD_ATT: 0x%08x\n",
+				"WRONG CLEAR (%u:%u:%u) TD_CRL: 0x%08x; TD_ATT: 0x%08x\n",
 				group, instance, row, val, cur);
 			return -EINVAL;
 		}
@@ -2036,11 +2042,11 @@ static int clear_attn_ss_fw(struct intel_gt *gt, void *data,
 						      group, instance);
 
 			DD_INFO(debugger,
-				"TD_CLR: (%d:%d:%d): 0x%08x\n",
+				"TD_CLR: (%u:%u:%u): 0x%08x\n",
 				group, instance, row, val);
 		} else {
 			DD_WARN(debugger,
-				"TD_CLR: (%d:%d:%d): 0x%08x write to fused off subslice\n",
+				"TD_CLR: (%u:%u:%u): 0x%08x write to fused off subslice\n",
 				group, instance, row, val);
 		}
 	}
@@ -2135,7 +2141,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 					continue;
 
 				i915_debugger_print(debugger, DD_DEBUG_LEVEL_VERBOSE, "eu_control",
-						    "from_user.bitmask[%u:%u] = 0x%x",
+						    "from_user.bitmask[%lu:%u] = 0x%x",
 						    i, attn_size, bits[i]);
 			}
 		}
@@ -2197,7 +2203,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 				continue;
 
 			i915_debugger_print(debugger, DD_DEBUG_LEVEL_VERBOSE, "eu_control",
-					    "to_user.bitmask[%u:%u] = 0x%x",
+					    "to_user.bitmask[%lu:%u] = 0x%x",
 					    i, attn_size, bits[i]);
 		}
 	}
@@ -2265,13 +2271,13 @@ static long i915_debugger_eu_control(struct i915_debugger *debugger,
 		return -EFAULT;
 
 	DD_INFO(debugger,
-		"eu_control: client_handle=%lld, cmd=%u, flags=0x%x, ci.engine_class=%u, ci.engine_instance=%u, bitmask_size=%u\n",
+		"eu_control: client_handle=%llu, cmd=%u, flags=0x%x, ci.engine_class=%hu, ci.engine_instance=%hu, bitmask_size=%u\n",
 		user_arg.client_handle, user_arg.cmd, user_arg.flags, user_arg.ci.engine_class,
 		user_arg.ci.engine_instance, user_arg.bitmask_size);
 
 	client = find_client_get(debugger, user_arg.client_handle);
 	if (!client) {
-		DD_INFO(debugger, "eu_control: no client found for %lld\n", user_arg.client_handle);
+		DD_INFO(debugger, "eu_control: no client found for %llu\n", user_arg.client_handle);
 		return -EINVAL;
 	}
 
@@ -2280,7 +2286,7 @@ static long i915_debugger_eu_control(struct i915_debugger *debugger,
 	ret = do_eu_control(debugger, &user_arg, user_ptr);
 
 	DD_INFO(debugger,
-		"eu_control: client_handle=%lld, cmd=%u, flags=0x%x, ci.engine_class=%u, ci.engine_instance=%u, bitmask_size=%u, ret=%lld\n",
+		"eu_control: client_handle=%llu, cmd=%u, flags=0x%x, ci.engine_class=%hu, ci.engine_instance=%hu, bitmask_size=%u, ret=%d\n",
 		user_arg.client_handle, user_arg.cmd, user_arg.flags, user_arg.ci.engine_class, user_arg.ci.engine_instance,
 		user_arg.bitmask_size, ret);
 
@@ -2336,23 +2342,23 @@ static long i915_debugger_ioctl(struct file *file,
 	case PRELIM_I915_DEBUG_IOCTL_READ_EVENT:
 		ret = i915_debugger_read_event(debugger, arg,
 					       file->f_flags & O_NONBLOCK);
-		DD_VERBOSE(debugger, "ioctl cmd=READ_EVENT ret=%lld\n", ret);
+		DD_VERBOSE(debugger, "ioctl cmd=READ_EVENT ret=%ld\n", ret);
 		break;
 	case PRELIM_I915_DEBUG_IOCTL_READ_UUID:
 		ret = i915_debugger_read_uuid_ioctl(debugger, cmd, arg);
-		DD_VERBOSE(debugger, "ioctl cmd=READ_UUID ret = %lld\n", ret);
+		DD_VERBOSE(debugger, "ioctl cmd=READ_UUID ret = %ld\n", ret);
 		break;
 	case PRELIM_I915_DEBUG_IOCTL_VM_OPEN:
 		ret = i915_debugger_vm_open_ioctl(debugger, arg);
-		DD_VERBOSE(debugger, "ioctl cmd=VM_OPEN ret = %lld\n", ret);
+		DD_VERBOSE(debugger, "ioctl cmd=VM_OPEN ret = %ld\n", ret);
 		break;
 	case PRELIM_I915_DEBUG_IOCTL_EU_CONTROL:
 		ret = i915_debugger_eu_control(debugger, cmd, arg);
-		DD_VERBOSE(debugger, "ioctl cmd=EU_CONTROL ret=%lld\n", ret);
+		DD_VERBOSE(debugger, "ioctl cmd=EU_CONTROL ret=%ld\n", ret);
 		break;
 	case PRELIM_I915_DEBUG_IOCTL_ACK_EVENT:
 		ret = i915_debugger_ack_event_ioctl(debugger, cmd, arg);
-		DD_VERBOSE(debugger, "ioctl cmd=ACK_EVENT ret=%lld\n", ret);
+		DD_VERBOSE(debugger, "ioctl cmd=ACK_EVENT ret=%ld\n", ret);
 		break;
 	default:
 		ret = -EINVAL;
@@ -2360,7 +2366,7 @@ static long i915_debugger_ioctl(struct file *file,
 	}
 
 	if (ret < 0)
-		DD_INFO(debugger, "ioctl cmd=0x%x arg=0x%llx ret=%lld\n", cmd, arg, ret);
+		DD_INFO(debugger, "ioctl cmd=0x%x arg=0x%lx ret=%ld\n", cmd, arg, ret);
 
 	return ret;
 }
@@ -2695,7 +2701,7 @@ i915_debugger_register_client(const struct i915_debugger * const debugger,
 		client_task = get_pid_task(name->pid, PIDTYPE_PID);
 	} else {
 		/* XXX: clients->xarray can contain unregistered clients, should we wait or lock? */
-		DD_WARN(debugger, "client %d with no pid, will not be found by discovery\n",
+		DD_WARN(debugger, "client %u with no pid, will not be found by discovery\n",
 			 client->id);
 	}
 	rcu_read_unlock();
@@ -2704,7 +2710,7 @@ i915_debugger_register_client(const struct i915_debugger * const debugger,
 		return false;
 
 	registered = i915_debugger_client_task_register(debugger, client, client_task);
-	DD_INFO(debugger, "client %d, pid %d, session %lld, %s registered\n",
+	DD_INFO(debugger, "client %u, pid %d, session %llu, %s registered\n",
 		client->id, client_task->pid, client_session(client), registered ? "was" : "not");
 
 	put_task_struct(client_task);
@@ -2941,7 +2947,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 
 	compute_engines_reschedule_heartbeat(debugger);
 
-	DD_INFO(debugger, "connected session %lld, debug level = %d",
+	DD_INFO(debugger, "connected session %llu, debug level = %d",
 		debugger->session, debugger->debug_lvl);
 
 	if (debugger->debug_lvl >= DD_DEBUG_LEVEL_VERBOSE)
@@ -3596,10 +3602,10 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
 			     count * sizeof(struct i915_debug_engine_info);
 
 		event = i915_debugger_create_event(debugger,
-					PRELIM_DRM_I915_DEBUG_EVENT_ENGINES,
-					PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-					event_size,
-					GFP_KERNEL);
+						   PRELIM_DRM_I915_DEBUG_EVENT_ENGINES,
+						   PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
+						   event_size,
+						   GFP_KERNEL);
 		if (!event) {
 			i915_gem_context_engines_put(gem_engines);
 			i915_debugger_put(debugger);

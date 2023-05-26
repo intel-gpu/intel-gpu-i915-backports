@@ -25,6 +25,7 @@
 #include <linux/pm_runtime.h>
 
 #include "gt/intel_engine_regs.h"
+#include "gt/intel_gt.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt.h"
 
@@ -2401,7 +2402,7 @@ static void fw_domain_fini(struct intel_uncore *uncore,
 		return;
 
 	uncore->fw_domains &= ~BIT(domain_id);
-	drm_WARN_ON(&uncore->i915->drm, (d->wake_count && !uncore->i915->quiesce_gpu));
+	drm_WARN_ON(&uncore->i915->drm, d->wake_count && !uncore->i915->quiesce_gpu);
 	drm_WARN_ON(&uncore->i915->drm, hrtimer_cancel(&d->timer));
 	kfree(d);
 }

@@ -23,6 +23,7 @@ i915-compat-$(CPTCFG_KERNEL_5_4)  += plist.o ptrace.o
 i915-compat-$(CPTCFG_KERNEL_5_5)  += nvmem-core.o
 i915-compat-$(CPTCFG_KERNEL_5_10) += slub.o slab.o
 i915-compat-$(CPTCFG_KERNEL_5_13) += backport-5.13.o
+i915-compat-$(CPTCFG_KERNEL_5_15) += backport-5.15.o
 
 i915-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/verify.o
 i915-compat-$(CPTCFG_BPAUTO_BUILD_SYSTEM_DATA_VERIFICATION) += verification/pkcs7.asn1.o
