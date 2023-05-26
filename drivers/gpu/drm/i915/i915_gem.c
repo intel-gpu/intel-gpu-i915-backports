@@ -74,11 +74,16 @@ insert_mappable_node(struct i915_ggtt *ggtt, struct drm_mm_node *node, u32 size)
 
 	memset(node, 0, sizeof(*node));
 	err = drm_mm_insert_node_in_range(&ggtt->vm.mm, node,
-					  size, 0, I915_COLOR_UNEVICTABLE,
+					  size + SZ_4K, 0,
+					  I915_COLOR_UNEVICTABLE,
 					  0, ggtt->mappable_end,
 					  DRM_MM_INSERT_LOW);
-
 	mutex_unlock(&ggtt->vm.mutex);
+
+	if (err == 0)
+		ggtt->vm.scratch_range(&ggtt->vm,
+				       node->start + size - SZ_4K,
+				       SZ_4K);
 
 	return err;
 }
@@ -86,6 +91,8 @@ insert_mappable_node(struct i915_ggtt *ggtt, struct drm_mm_node *node, u32 size)
 static void
 remove_mappable_node(struct i915_ggtt *ggtt, struct drm_mm_node *node)
 {
+	ggtt->vm.clear_range(&ggtt->vm, node->start, node->size);
+
 	mutex_lock(&ggtt->vm.mutex);
 	drm_mm_remove_node(node);
 	mutex_unlock(&ggtt->vm.mutex);
@@ -366,6 +373,7 @@ retry:
 
 	if (!i915_gem_object_is_tiled(obj))
 		vma = i915_gem_object_ggtt_pin_ww(obj, &ww, ggtt, NULL, 0, 0,
+						  PIN_OFFSET_GUARD | SZ_4K |
 						  PIN_MAPPABLE |
 						  PIN_NONBLOCK /* NOWARN */ |
 						  PIN_NOEVICT);
@@ -385,12 +393,10 @@ retry:
 
 	ret = i915_gem_object_pin_pages(obj);
 	if (ret) {
-		if (drm_mm_node_allocated(node)) {
-			ggtt->vm.clear_range(&ggtt->vm, node->start, node->size);
+		if (drm_mm_node_allocated(node))
 			remove_mappable_node(ggtt, node);
-		} else {
+		else
 			i915_vma_unpin(vma);
-		}
 	}
 
 err_ww:
@@ -412,12 +418,10 @@ static void i915_gem_gtt_cleanup(struct drm_i915_gem_object *obj,
 	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 
 	i915_gem_object_unpin_pages(obj);
-	if (drm_mm_node_allocated(node)) {
-		ggtt->vm.clear_range(&ggtt->vm, node->start, node->size);
+	if (drm_mm_node_allocated(node))
 		remove_mappable_node(ggtt, node);
-	} else {
+	else
 		i915_vma_unpin(vma);
-	}
 }
 
 static int
@@ -1098,21 +1102,18 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 	    !i915_gem_object_has_pages(obj))
 		i915_gem_object_truncate(obj);
 
-	if (obj->mm.region && i915_gem_object_has_pages(obj)) {
-		mutex_lock(&obj->mm.region->objects.lock);
+	if (obj->mm.region.mem && i915_gem_object_has_pages(obj)) {
+		struct intel_memory_region *mem = obj->mm.region.mem;
+		struct list_head *list;
 
-		switch (obj->mm.madv) {
-		case I915_MADV_WILLNEED:
-			list_move_tail(&obj->mm.region_link,
-				       &obj->mm.region->objects.list);
-			break;
-		default:
-			list_move_tail(&obj->mm.region_link,
-				       &obj->mm.region->objects.purgeable);
-			break;
-		}
+		if (obj->mm.madv == I915_MADV_WILLNEED)
+			list = &mem->objects.list;
+		else
+			list = &mem->objects.purgeable;
 
-		mutex_unlock(&obj->mm.region->objects.lock);
+		spin_lock(&mem->objects.lock);
+		list_move_tail(&obj->mm.region.link, list);
+		spin_unlock(&mem->objects.lock);
 	}
 
 	args->retained = obj->mm.madv != __I915_MADV_PURGED;
@@ -1167,6 +1168,8 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 		ret = intel_gt_init(gt);
 		if (ret)
 			goto err_unlock;
+
+		i915_gem_init_lmem(gt);
 	}
 
 	return 0;
@@ -1229,9 +1232,10 @@ void i915_gem_driver_remove(struct drm_i915_private *dev_priv)
 	/* Flush any outstanding unpin_work. */
 	intel_wakeref_auto_fini(&to_gt(dev_priv)->ggtt->userfault_wakeref);
 
-	i915_gem_suspend_late(dev_priv);
-	for_each_gt(gt, dev_priv, i)
+	for_each_gt(gt, dev_priv, i) {
+		intel_gt_suspend_late(gt);
 		intel_gt_driver_remove(gt);
+	}
 	dev_priv->uabi_engines = RB_ROOT;
 
 	/* Finish any generated work, and free all leftover objects. */

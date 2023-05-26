@@ -120,7 +120,6 @@ int intel_count_l3_banks(struct drm_i915_private *i915,
 
 int intel_gt_probe_all(struct drm_i915_private *i915);
 int intel_gt_tiles_init(struct drm_i915_private *i915);
-void intel_gt_release_all(struct drm_i915_private *i915);
 
 #define for_each_gt(gt__, i915__, id__) \
 	for ((id__) = 0; \
@@ -197,5 +196,13 @@ void intel_gt_info_print(const struct intel_gt_info *info,
 void intel_gt_watchdog_work(struct work_struct *work);
 
 void intel_boost_fake_int_timer(struct intel_gt *gt, bool on_off);
+
+void intel_gt_silent_driver_error(struct intel_gt *gt,
+				  const enum intel_gt_driver_errors error);
+
+__printf(3, 4)
+void intel_gt_log_driver_error(struct intel_gt *gt,
+			       const enum intel_gt_driver_errors error,
+			       const char *fmt, ...);
 
 #endif /* __INTEL_GT_H__ */

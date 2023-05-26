@@ -524,12 +524,12 @@ static int __uc_init_hw(struct intel_uc *uc)
 		      intel_uc_fw_is_overridden(&guc->fw) ||
 		      intel_uc_wants_guc_submission(uc) ?
 		      intel_uc_fw_status_to_error(guc->fw.status) : 0;
-		goto err_out;
+		goto err_sanitize;
 	}
 
 	ret = uc_init_wopcm(uc);
 	if (ret)
-		goto err_out;
+		goto err_sanitize;
 
 	intel_guc_reset_interrupts(guc);
 
@@ -550,7 +550,7 @@ static int __uc_init_hw(struct intel_uc *uc)
 		 */
 		ret = __uc_sanitize(uc);
 		if (ret)
-			goto err_out;
+			goto err_rps;
 
 		intel_huc_fw_upload(huc);
 		intel_guc_ads_reset(guc);
@@ -617,7 +617,7 @@ err_submission:
 	intel_guc_submission_disable(guc);
 err_log_capture:
 	__uc_capture_load_err_log(uc);
-err_out:
+err_rps:
 	if (!i915_error_injected())
 		intel_klog_error_capture(uc_to_gt(uc),
 					 (intel_engine_mask_t) ~0U);
@@ -625,6 +625,7 @@ err_out:
 	/* Return GT back to RPn */
 	intel_rps_lower_unslice(&uc_to_gt(uc)->rps);
 
+err_sanitize:
 	__uc_sanitize(uc);
 
 	if (!ret) {
@@ -887,6 +888,9 @@ static int __uc_resume(struct intel_uc *uc, bool enable_communication)
 	struct intel_guc *guc = &uc->guc;
 	struct intel_gt *gt = guc_to_gt(guc);
 	int err;
+
+	if (intel_gt_terminally_wedged(gt))
+		return 0;
 
 	if (!intel_guc_is_fw_running(guc))
 		return 0;

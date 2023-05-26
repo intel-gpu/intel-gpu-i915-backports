@@ -49,6 +49,9 @@ config BACKPORTED_DRM_I915_DEBUGGER
 config BACKPORTED_DRM_I915_SVM
 	tristate
 	default DRM_I915_SVM
+config BACKPORTED_DRM_I915_ATS
+	tristate
+	default DRM_I915_ATS
 config BACKPORTED_DRM_I915_WERROR
 	tristate
 	default DRM_I915_WERROR

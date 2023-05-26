@@ -1995,7 +1995,7 @@ static void cpt_irq_handler(struct drm_i915_private *dev_priv, u32 pch_iir)
 		cpt_serr_int_handler(dev_priv);
 }
 
-static void xelpdp_pica_hpd_irq_handler(struct drm_i915_private *dev_priv, u32 iir)
+static void xelpdp_pica_irq_handler(struct drm_i915_private *dev_priv, u32 iir)
 {
 	enum hpd_pin pin;
 	u32 hotplug_trigger = iir & (XELPDP_DP_ALT_HOTPLUG_MASK | XELPDP_TBT_HOTPLUG_MASK);
@@ -2061,15 +2061,6 @@ static void icp_irq_handler(struct drm_i915_private *dev_priv, u32 pch_iir)
 				   tc_hotplug_trigger, dig_hotplug_reg,
 				   dev_priv->hotplug.pch_hpd,
 				   icp_tc_port_hotplug_long_detect);
-	}
-
-	if (pch_iir & SDE_PICAINTERRUPT) {
-		u32 iir = intel_uncore_read(&dev_priv->uncore, PICAINTERRUPT_IIR);
-
-		if (iir) {
-			intel_uncore_write(&dev_priv->uncore, PICAINTERRUPT_IIR, iir);
-			xelpdp_pica_hpd_irq_handler(dev_priv, iir);
-		}
 	}
 
 	if (pin_mask)
@@ -2539,6 +2530,34 @@ u32 gen8_de_pipe_underrun_mask(struct drm_i915_private *dev_priv)
 	return mask;
 }
 
+static void gen8_read_and_ack_pch_irqs(struct drm_i915_private *i915, u32 *pch_iir, u32 *pica_iir)
+{
+	u32 pica_ier = 0;
+
+	*pica_iir = 0;
+	*pch_iir = intel_de_read(i915, SDEIIR);
+	if (!*pch_iir)
+		return;
+
+	/**
+	 * PICA IER must be disabled/re-enabled around clearing PICA IIR and
+	 * SDEIIR, to avoid losing PICA IRQs and to ensure that such IRQs set
+	 * their flags both in the PICA and SDE IIR.
+	 */
+	if (*pch_iir & SDE_PICAINTERRUPT) {
+		drm_WARN_ON(&i915->drm, INTEL_PCH_TYPE(i915) < PCH_MTP);
+
+		pica_ier = intel_de_rmw(i915, PICAINTERRUPT_IER, ~0, 0);
+		*pica_iir = intel_de_read(i915, PICAINTERRUPT_IIR);
+		intel_de_write(i915, PICAINTERRUPT_IIR, *pica_iir);
+	}
+
+	intel_de_write(i915, SDEIIR, *pch_iir);
+
+	if (pica_ier)
+		intel_de_write(i915, PICAINTERRUPT_IER, pica_ier);
+}
+
 static irqreturn_t
 gen8_de_irq_handler(struct drm_i915_private *dev_priv, u32 master_ctl)
 {
@@ -2663,15 +2682,19 @@ gen8_de_irq_handler(struct drm_i915_private *dev_priv, u32 master_ctl)
 
 	if (HAS_PCH_SPLIT(dev_priv) && !HAS_PCH_NOP(dev_priv) &&
 	    master_ctl & GEN8_DE_PCH_IRQ) {
+		u32 pica_iir;
+
 		/*
 		 * FIXME(BDW): Assume for now that the new interrupt handling
 		 * scheme also closed the SDE interrupt handling race we've seen
 		 * on older pch-split platforms. But this needs testing.
 		 */
-		iir = intel_uncore_read(&dev_priv->uncore, SDEIIR);
+		gen8_read_and_ack_pch_irqs(dev_priv, &iir, &pica_iir);
 		if (iir) {
-			intel_uncore_write(&dev_priv->uncore, SDEIIR, iir);
 			ret = IRQ_HANDLED;
+
+			if (pica_iir)
+				xelpdp_pica_irq_handler(dev_priv, pica_iir);
 
 			if (INTEL_PCH_TYPE(dev_priv) >= PCH_ICP)
 				icp_irq_handler(dev_priv, iir);

@@ -171,7 +171,7 @@ static int i915_range_fault(struct svm_notifier *sn,
 		.dev_private_owner = vm->i915->drm.dev,
 	};
 	struct mm_struct *mm = sn->notifier.mm;
-	struct i915_vm_pt_stash stash = { 0 };
+	struct i915_vm_pt_stash stash = {};
 	struct i915_gem_ww_ctx ww;
 	u32 sg_page_sizes;
 	int regions;
@@ -221,8 +221,8 @@ static int i915_range_fault(struct svm_notifier *sn,
 	flags = (regions & REGION_LMEM) ? I915_GTT_SVM_LMEM : 0;
 	flags |= (va->flags & PRELIM_I915_GEM_VM_BIND_READONLY) ?
 		 I915_GTT_SVM_READONLY : 0;
-	ret = svm_bind_addr_commit(vm, va->start, va->length,
-				   flags, st, sg_page_sizes);
+	ret = svm_bind_addr_commit(vm, &stash, va->start, va->length, flags,
+				   st, sg_page_sizes);
 	mutex_unlock(&svm->mutex);
 	i915_vm_free_pt_stash(vm, &stash);
 fault_done:

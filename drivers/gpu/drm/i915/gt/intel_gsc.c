@@ -46,7 +46,7 @@ gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size
 
 	obj = i915_gem_object_create_lmem(gt->i915, size,
 					  I915_BO_ALLOC_CONTIGUOUS |
-					  I915_BO_ALLOC_CPU_CLEAR);
+					  I915_BO_CPU_CLEAR);
 	if (IS_ERR(obj)) {
 		drm_err(&gt->i915->drm, "Failed to allocate gsc memory\n");
 		return PTR_ERR(obj);
@@ -106,7 +106,6 @@ static void intel_gsc_forcewake_put(void *gsc)
  * @bar_size: size of HECI bar
  * @use_polling: use register polling instead of interrupts
  * @slow_firmware: the firmware is slow and requires longer timeouts
- * @forcewake_needed: the GT forcewake is needed before operations
  * @lmem_size: size of extended operation memory for GSC, if required
  */
 struct gsc_def {
@@ -115,7 +114,6 @@ struct gsc_def {
 	size_t bar_size;
 	bool use_polling;
 	bool slow_firmware;
-	bool forcewake_needed;
 	size_t lmem_size;
 };
 
@@ -167,7 +165,6 @@ static const struct gsc_def gsc_def_pvc[] = {
 		.bar = PVC_GSC_HECI2_BASE,
 		.bar_size = GSC_BAR_LENGTH,
 		.slow_firmware = true,
-		.forcewake_needed = true,
 	}
 };
 
@@ -206,6 +203,7 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 	const struct gsc_def *def;
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
 	bool use_polling = false;
+	bool forcewake_needed = false;
 	int ret;
 
 	intf->irq = -1;
@@ -233,6 +231,8 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 		/* Use polling on PVC A-step HW bug Wa */
 		if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0))
 			use_polling = true;
+		if (pvc_needs_rc6_wa(i915))
+			forcewake_needed = true;
 	} else {
 		drm_warn_once(&i915->drm, "Unknown platform\n");
 		return;
@@ -284,7 +284,7 @@ add_device:
 	adev->bar.flags = IORESOURCE_MEM;
 	adev->bar.desc = IORES_DESC_NONE;
 	adev->slow_firmware = def->slow_firmware;
-	adev->forcewake_needed = def->forcewake_needed;
+	adev->forcewake_needed = forcewake_needed;
 	adev->gsc = gsc;
 	adev->forcewake_get = intel_gsc_forcewake_get;
 	adev->forcewake_put = intel_gsc_forcewake_put;

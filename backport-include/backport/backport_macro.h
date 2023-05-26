@@ -304,6 +304,11 @@
  */
 #define DRM_EDP_BACKLIGHT_SUPPORT_PRESENT
 #endif
+
+/*
+ * 59dc33252ee7 PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus
+ */
+#define BPM_PCI_FIND_HOST_BRIDGE_NOT_EXPORTED
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,14,0)

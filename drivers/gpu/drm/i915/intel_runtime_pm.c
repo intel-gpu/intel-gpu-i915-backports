@@ -398,11 +398,19 @@ void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 		pm_runtime_use_autosuspend(kdev);
 	}
 
+	/*
+	 *  FIXME: Temp hammer to keep autosupend disable on lmem supported platforms.
+	 *  As per PCIe specs 5.3.1.4.1, all iomem read write request over a PCIe
+	 *  function will be unsupported in case PCIe endpoint function is in D3.
+	 *  Let's keep i915 autosuspend control 'on' till we fix all known issue
+	 *  with lmem access in D3.
+	 */
+	if (!IS_DGFX(i915))
+		pm_runtime_allow(kdev);
+
 	/* Enable by default only for client platforms for now */
 	if (IS_XEHPSDV(i915) || IS_PONTEVECCHIO(i915))
 		pm_runtime_forbid(kdev);
-	else
-		pm_runtime_allow(kdev);
 
 	/*
 	 * The core calls the driver load handler with an RPM reference held.

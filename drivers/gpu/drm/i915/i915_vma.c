@@ -38,6 +38,7 @@
 #include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_tlb.h"
 
 #include "i915_debugger.h"
@@ -94,26 +95,12 @@ static inline struct i915_vma *active_to_vma(struct i915_active *ref)
 
 static int __i915_vma_active(struct i915_active *ref)
 {
-	struct i915_vma *vma = active_to_vma(ref);
-
-	if (!i915_vma_tryget(vma))
-		return -ENOENT;
-
-	if (!i915_vm_tryopen(vma->vm)) {
-		i915_vma_put(vma);
-		return -ENOENT;
-	}
-
-	return 0;
+	return i915_vma_open(active_to_vma(ref)) ? 0 : -ENOENT;
 }
 
 static void __i915_vma_retire(struct i915_active *ref)
 {
-	struct i915_vma *vma = active_to_vma(ref);
-	struct drm_i915_gem_object *obj = vma->obj;
-
-	i915_vm_close(vma->vm);
-	i915_gem_object_put(obj);
+	i915_vma_close(active_to_vma(ref));
 }
 
 struct i915_vma *
@@ -426,8 +413,8 @@ static void __vma_complete(struct dma_fence_work *work)
 	if (work->dma.error) {
 		GEM_BUG_ON(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &work->dma.flags));
 		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
-		if (vma->vm->error_range)
-			vma->vm->error_range(vma->vm, vma->node.start, vma->node.size);
+		if (vma->vm->scratch_range)
+			vma->vm->scratch_range(vma->vm, vma->node.start, vma->node.size);
 	}
 
 	__vma_user_fence_signal(vma);
@@ -564,6 +551,9 @@ int __i915_vma_bind(struct i915_vma *vma,
 	} else {
 		vma->ops->bind_vma(vma->vm, NULL, vma, pat_index, bind_flags);
 	}
+
+	if (bind_flags & PIN_RESIDENT && vma->obj)
+		vma->obj->mm.dirty = true;
 
 	atomic_or(bind_flags, &vma->flags);
 	return 0;
@@ -1436,8 +1426,24 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	} while (1);
 }
 
-static void __vma_close(struct i915_vma *vma, struct intel_gt *gt)
+int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
+			 u32 align, unsigned int flags)
 {
+	flags |= i915_ggtt_pin_bias(vma) | PIN_OFFSET_BIAS;
+	return i915_ggtt_pin(vma, ww, align, flags);
+}
+
+static bool object_inuse(struct drm_i915_gem_object *obj)
+{
+	return READ_ONCE(obj->base.handle_count);
+}
+
+void i915_vma_close(struct i915_vma *vma)
+{
+	struct i915_address_space *vm = vma->vm;
+	struct i915_vma_clock *clock = &vm->gt->vma_clock;
+	unsigned long flags;
+
 	/*
 	 * We defer actually closing, unbinding and destroying the VMA until
 	 * the next idle point, or if the object is freed in the meantime. By
@@ -1450,47 +1456,65 @@ static void __vma_close(struct i915_vma *vma, struct intel_gt *gt)
 	 * causing us to rebind the VMA once more. This ends up being a lot
 	 * of wasted work for the steady state.
 	 */
-	GEM_BUG_ON(i915_vma_is_closed(vma));
-	list_add(&vma->closed_link, &gt->closed_vma);
-}
-
-void i915_vma_close(struct i915_vma *vma)
-{
-	struct intel_gt *gt = vma->vm->gt;
-	unsigned long flags;
-
-	if (i915_vma_is_ggtt(vma))
-		return;
-
 	GEM_BUG_ON(!atomic_read(&vma->open_count));
 	if (atomic_dec_and_lock_irqsave(&vma->open_count,
-					&gt->closed_lock,
+					&clock->lock,
 					flags)) {
-		if (!i915_vma_is_persistent(vma))
-			__vma_close(vma, gt);
-		spin_unlock_irqrestore(&gt->closed_lock, flags);
+		struct drm_i915_gem_object *obj = vma->obj;
+		bool inuse =
+			!i915_vma_is_persistent(vma) &&
+			object_inuse(obj) &&
+			!i915_is_ggtt_or_dpt(vm);
+
+		if (inuse) {
+			list_add(&vma->closed_link, &clock->age[0]);
+			__i915_vma_get(vma);
+		}
+		spin_unlock_irqrestore(&clock->lock, flags);
+		__i915_vma_put(vma);
+
+		i915_vm_close(vm);
+		i915_gem_object_put(obj);
 	}
 }
 
-static void __i915_vma_remove_closed(struct i915_vma *vma)
+void i915_vma_unpublish(struct i915_vma *vma)
 {
-	struct intel_gt *gt = vma->vm->gt;
+	lockdep_assert_held(&vma->vm->mutex);
 
-	spin_lock_irq(&gt->closed_lock);
-	list_del_init(&vma->closed_link);
-	spin_unlock_irq(&gt->closed_lock);
-}
+	/* Drop the original ref held for a published vma, just once */
+	if (!i915_vma_set_purged(vma))
+		return;
 
-void i915_vma_reopen(struct i915_vma *vma)
-{
-	if (i915_vma_is_closed(vma))
-		__i915_vma_remove_closed(vma);
+	if (drm_mm_node_allocated(&vma->node)) {
+		GEM_BUG_ON(i915_vma_is_active(vma));
+
+		atomic_and(~I915_VMA_PIN_MASK, &vma->flags);
+		__i915_vma_evict(vma);
+
+		drm_mm_remove_node(&vma->node);
+	}
+
+	if (vma->obj) {
+		struct drm_i915_gem_object *obj = vma->obj;
+
+		spin_lock(&obj->vma.lock);
+		list_del(&vma->obj_link);
+		if (!RB_EMPTY_NODE(&vma->obj_node))
+			rb_erase(&vma->obj_node, &obj->vma.tree);
+		spin_unlock(&obj->vma.lock);
+	}
+
+	__i915_vma_put(vma);
 }
 
 void i915_vma_release(struct kref *ref)
 {
 	struct i915_vma *vma = container_of(ref, typeof(*vma), ref);
 
+	GEM_BUG_ON(i915_vma_is_active(vma));
+	GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
+	GEM_BUG_ON(i915_active_fence_isset(&vma->active.excl));
 	GEM_BUG_ON(!list_empty(&vma->vm_bind_link));
 
 	if (unlikely(vma->bind_fence)) {
@@ -1498,31 +1522,7 @@ void i915_vma_release(struct kref *ref)
 		i915_sw_fence_complete(vma->bind_fence);
 	}
 
-	if (drm_mm_node_allocated(&vma->node)) {
-		intel_flat_ppgtt_allocate_requests(vma, true);
-		mutex_lock(&vma->vm->mutex);
-		atomic_and(~I915_VMA_PIN_MASK, &vma->flags);
-		WARN_ON(__i915_vma_unbind(vma));
-		mutex_unlock(&vma->vm->mutex);
-		GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
-	}
-	GEM_BUG_ON(i915_active_fence_isset(&vma->active.excl));
 	intel_flat_ppgtt_request_pool_clean(vma);
-
-	if (vma->obj) {
-		struct drm_i915_gem_object *obj = vma->obj;
-
-		spin_lock(&obj->vma.lock);
-		list_del(&vma->obj_link);
-
-		if (!i915_vma_is_persistent(vma) &&
-		    !RB_EMPTY_NODE(&vma->obj_node))
-			rb_erase(&vma->obj_node, &obj->vma.tree);
-
-		spin_unlock(&obj->vma.lock);
-	}
-
-	__i915_vma_remove_closed(vma);
 	i915_vm_put(vma->vm);
 
 	i915_active_fini(&vma->active);
@@ -1530,41 +1530,114 @@ void i915_vma_release(struct kref *ref)
 	i915_vma_free(vma);
 }
 
-void i915_vma_parked(struct intel_gt *gt)
+struct i915_vma *i915_vma_open(struct i915_vma *vma)
 {
-	struct i915_vma *vma, *next;
-	LIST_HEAD(closed);
+	if (!atomic_add_unless(&vma->open_count, 1, 0)) {
+		struct i915_vma_clock *clock = &vma->vm->gt->vma_clock;
+		unsigned long flags;
 
-	spin_lock_irq(&gt->closed_lock);
-	list_for_each_entry_safe(vma, next, &gt->closed_vma, closed_link) {
-		struct drm_i915_gem_object *obj = vma->obj;
-		struct i915_address_space *vm = vma->vm;
-
-		/* XXX All to avoid keeping a reference on i915_vma itself */
-
-		if (!kref_get_unless_zero(&obj->base.refcount))
-			continue;
-
-		if (!i915_vm_tryopen(vm)) {
-			i915_gem_object_put(obj);
-			continue;
+		spin_lock_irqsave(&clock->lock, flags);
+		if (!atomic_add_unless(&vma->open_count, 1, 0)) {
+			if (i915_vma_is_purged(vma) ||
+			    !i915_vm_tryopen(vma->vm)) {
+				vma = NULL;
+			} else {
+				__i915_vma_get(vma);
+				i915_vma_get(vma);
+				if (!list_empty(&vma->closed_link)) {
+					list_del_init(&vma->closed_link);
+					__i915_vma_put(vma);
+				}
+				atomic_set_release(&vma->open_count, 1);
+			}
 		}
-
-		list_move(&vma->closed_link, &closed);
+		spin_unlock_irqrestore(&clock->lock, flags);
 	}
-	spin_unlock_irq(&gt->closed_lock);
 
-	/* As the GT is held idle, no vma can be reopened as we destroy them */
-	list_for_each_entry_safe(vma, next, &closed, closed_link) {
-		struct drm_i915_gem_object *obj = vma->obj;
+	return vma;
+}
+
+static void i915_vma_clock(struct work_struct *w)
+{
+	struct i915_vma_clock *clock =
+		container_of(w, typeof(*clock), work.work);
+	struct intel_gt *gt = container_of(clock, typeof(*gt), vma_clock);
+	struct i915_vma *vma;
+
+	/*
+	 * A very simple clock aging algorithm: we keep the user's closed
+	 * vma alive for a couple of timer ticks before destroying them.
+	 * This serves a shortlived cache so that frequently reused VMA
+	 * are kept alive between frames and we skip having to rebing them.
+	 *
+	 * When closed, we insert the vma into age[0]. Upon completion of
+	 * a timer tick, it is moved to age[1]. At the start of each timer
+	 * tick, we destroy all the old vma that were accumulated into age[1]
+	 * and have not been reused. All destroyed vma have therefore been
+	 * unused for more than 1 tick (at least a second), and at most 2
+	 * ticks (we expect the average to be 1.5 ticks).
+	 *
+	 * https://en.wikipedia.org/wiki/Page_replacement_algorithm#Clock
+	 */
+
+	spin_lock_irq(&clock->lock);
+	while ((vma = list_first_entry_or_null(&clock->age[1],
+					       typeof(*vma),
+					       closed_link))) {
 		struct i915_address_space *vm = vma->vm;
 
-		INIT_LIST_HEAD(&vma->closed_link);
-		__i915_vma_put(vma);
+		list_del_init(&vma->closed_link);
+		spin_unlock_irq(&clock->lock);
 
-		i915_vm_close(vm);
-		i915_gem_object_put(obj);
+		mutex_lock(&vm->mutex);
+		i915_vma_unpublish(vma);
+		mutex_unlock(&vm->mutex);
+
+		__i915_vma_put(vma);
+		spin_lock_irq(&clock->lock);
 	}
+	list_replace_init(&clock->age[0], &clock->age[1]);
+	spin_unlock_irq(&clock->lock);
+
+	if (!list_empty(&clock->age[1]) && !intel_gt_pm_is_awake(gt))
+		schedule_delayed_work(&clock->work,
+				      round_jiffies_up_relative(HZ));
+}
+
+void i915_vma_unpark(struct intel_gt *gt)
+{
+	struct i915_vma_clock *clock = &gt->vma_clock;
+
+	cancel_delayed_work_sync(&clock->work);
+}
+
+void i915_vma_park(struct intel_gt *gt)
+{
+	struct i915_vma_clock *clock = &gt->vma_clock;
+
+	if (list_empty(&clock->age[0]) && list_empty(&clock->age[1]))
+		return;
+
+	mod_delayed_work(system_wq,
+			 &clock->work, round_jiffies_up_relative(HZ));
+}
+
+
+void i915_vma_clock_init_early(struct i915_vma_clock *clock)
+{
+	spin_lock_init(&clock->lock);
+	INIT_LIST_HEAD(&clock->age[0]);
+	INIT_LIST_HEAD(&clock->age[1]);
+
+	INIT_DELAYED_WORK(&clock->work, i915_vma_clock);
+}
+
+void i915_vma_clock_flush(struct i915_vma_clock *clock)
+{
+       do {
+               if (cancel_delayed_work_sync(&clock->work))
+                       i915_vma_clock(&clock->work.work);
+       } while (delayed_work_pending(&clock->work));
 }
 
 static void __i915_vma_iounmap(struct i915_vma *vma)
@@ -1796,13 +1869,21 @@ int __i915_vma_unbind(struct i915_vma *vma)
 
 	if(!i915_vm_page_fault_enabled(vm) || i915_vma_is_purged(vma) ||
 	   !i915_vma_is_persistent(vma))
-		drm_mm_remove_node(&vma->node); /* pair with i915_vma_release */
+		drm_mm_remove_node(&vma->node);
+
 	if (i915_vma_is_persistent(vma)) {
 		spin_lock(&vm->vm_rebind_lock);
-		if (list_empty(&vma->vm_rebind_link) &&
-		    !i915_vma_is_purged(vma))
+
+		/*
+		 * Confirm this vma is still alive after acquiring the spinlock
+		 * to serialize with i915_gem_vm_bind_remove(). Otherwise, we
+		 * may re-add the vma onto the rebind list /after/ the vma has
+		 * already been marked as freed.
+		 */
+		if (list_empty(&vma->vm_rebind_link))
 			list_add_tail(&vma->vm_rebind_link,
 				      &vm->vm_rebind_list);
+
 		spin_unlock(&vm->vm_rebind_lock);
 	}
 
@@ -1874,7 +1955,8 @@ retry:
 	if (err)
 		goto err_ww;
 
-	err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
+	if (vma->obj->mm.region.mem->id != mem->id)
+		err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
 	if (err)
 		goto err_ww;
 

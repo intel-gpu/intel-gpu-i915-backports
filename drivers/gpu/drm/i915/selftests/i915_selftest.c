@@ -408,6 +408,8 @@ int __i915_subtests(const char *caller,
 		if (!apply_subtest_filter(caller, st->name))
 			continue;
 
+		tracing_snapshot_alloc();
+
 		err = setup(data);
 		if (err) {
 			pr_err(DRIVER_NAME "/%s: setup failed for %s\n",

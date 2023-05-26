@@ -152,9 +152,9 @@ static signed long i915_fence_wait(struct dma_fence *fence,
 				   bool interruptible,
 				   signed long timeout)
 {
-	return i915_request_wait_timeout(to_request(fence),
-					 interruptible | I915_WAIT_PRIORITY,
-					 timeout);
+	return i915_request_wait(to_request(fence),
+				 interruptible | I915_WAIT_PRIORITY,
+				 timeout) ?: 0;
 }
 
 struct kmem_cache *i915_request_slab_cache(void)
@@ -460,7 +460,7 @@ bool i915_request_retire(struct i915_request *rq)
 	intel_context_unpin(rq->context);
 
 	free_capture_list(rq);
-	i915_sched_node_fini(&rq->sched);
+	i915_sched_node_retire(&rq->sched);
 	i915_request_put(rq);
 
 	return true;
@@ -1041,6 +1041,7 @@ err_unwind:
 	GEM_BUG_ON(!list_empty(&rq->sched.waiters_list));
 
 err_free:
+	intel_context_unpin(ce);
 	intel_context_put(ce);
 	return ret;
 }
@@ -1091,10 +1092,8 @@ __i915_request_create(struct intel_context *ce, gfp_t gfp)
 			      gfp | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
 	if (unlikely(!rq)) {
 		rq = request_alloc_slow(tl, &ce->engine->request_pool, gfp);
-		if (!rq) {
-			ret = -ENOMEM;
-			goto err_unreserve;
-		}
+		if (!rq)
+			return ERR_PTR(-ENOMEM);
 	}
 
 	/*
@@ -1117,8 +1116,6 @@ __i915_request_create(struct intel_context *ce, gfp_t gfp)
 
 err_free:
 	kmem_cache_free(slab_requests, rq);
-err_unreserve:
-	intel_context_unpin(ce);
 	return ERR_PTR(ret);
 }
 
@@ -1473,7 +1470,7 @@ __i915_request_await_execution(struct i915_request *to,
 	}
 
 	/* Couple the dependency tree for PI on this exposed to->fence */
-	if (to->engine->sched_engine->schedule) {
+	if (i915_request_use_scheduler(to)) {
 		err = i915_sched_node_add_dependency(&to->sched,
 						     &from->sched,
 						     I915_DEPENDENCY_WEAK);
@@ -1634,7 +1631,7 @@ i915_request_await_request(struct i915_request *to, struct i915_request *from)
 		return 0;
 	}
 
-	if (to->engine->sched_engine->schedule) {
+	if (i915_request_use_scheduler(to)) {
 		ret = i915_sched_node_add_dependency(&to->sched,
 						     &from->sched,
 						     I915_DEPENDENCY_EXTERNAL);
@@ -1808,7 +1805,7 @@ __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 						     &prev->submit,
 						     &rq->submitq);
 
-			if (rq->engine->sched_engine->schedule)
+			if (i915_request_use_scheduler(rq))
 				__i915_sched_node_add_dependency(&rq->sched,
 								 &prev->sched,
 								 &rq->dep,
@@ -1858,7 +1855,7 @@ __i915_request_ensure_ordering(struct i915_request *rq,
 			__i915_sw_fence_await_dma_fence(&rq->submit,
 							&prev->fence,
 							&rq->dmaq);
-		if (rq->engine->sched_engine->schedule)
+		if (i915_request_use_scheduler(rq))
 			__i915_sched_node_add_dependency(&rq->sched,
 							 &prev->sched,
 							 &rq->dep,
@@ -1960,8 +1957,7 @@ void __i915_request_queue_bh(struct i915_request *rq)
 	i915_sw_fence_commit(&rq->submit);
 }
 
-void __i915_request_queue(struct i915_request *rq,
-			  const struct i915_sched_attr *attr)
+void __i915_request_queue(struct i915_request *rq, int prio)
 {
 	/*
 	 * Let the backend know a new request has arrived that may need
@@ -1974,8 +1970,8 @@ void __i915_request_queue(struct i915_request *rq,
 	 * decide whether to preempt the entire chain so that it is ready to
 	 * run at the earliest possible convenience.
 	 */
-	if (attr && rq->engine->sched_engine->schedule)
-		rq->engine->sched_engine->schedule(rq, attr);
+	i915_request_set_priority(rq, prio);
+	GEM_BUG_ON(rq->sched.attr.priority == I915_PRIORITY_INVALID);
 
 	local_bh_disable();
 	__i915_request_queue_bh(rq);
@@ -1985,7 +1981,7 @@ void __i915_request_queue(struct i915_request *rq,
 void i915_request_add(struct i915_request *rq)
 {
 	struct intel_timeline * const tl = i915_request_timeline(rq);
-	struct i915_sched_attr attr = {};
+	int prio = I915_PRIORITY_NORMAL;
 	struct i915_gem_context *ctx;
 
 	lockdep_assert_held(&tl->mutex);
@@ -1998,10 +1994,10 @@ void i915_request_add(struct i915_request *rq)
 	rcu_read_lock();
 	ctx = rcu_dereference(rq->context->gem_context);
 	if (ctx)
-		attr = ctx->sched;
+		prio = ctx->sched.priority;
 	rcu_read_unlock();
 
-	__i915_request_queue(rq, &attr);
+	__i915_request_queue(rq, prio);
 
 	mutex_unlock(&tl->mutex);
 }
@@ -2099,9 +2095,26 @@ static void request_wait_wake(struct dma_fence *fence, struct dma_fence_cb *cb)
 	wake_up_process(fetch_and_zero(&wait->tsk));
 }
 
-long __i915_request_wait_timeout(struct i915_request *rq,
-				 unsigned int flags,
-				 long timeout)
+/**
+ * i915_request_wait - wait until execution of request has finished
+ * @rq: the request to wait upon
+ * @flags: how to wait
+ * @timeout: how long to wait in jiffies
+ *
+ * i915_request_wait() waits for the request to be completed, for a
+ * maximum of @timeout jiffies (with MAX_SCHEDULE_TIMEOUT implying an
+ * unbounded wait).
+ *
+ * Returns the remaining time (in jiffies) if the request completed, which may
+ * be zero if the request is unfinished after the timeout expires.
+ * If the timeout is 0, it will return 1 if the fence is signaled.
+ *
+ * May return -EINTR is called with I915_WAIT_INTERRUPTIBLE and a signal is
+ * pending before the request completes.
+ */
+long __i915_request_wait(struct i915_request *rq,
+			 unsigned int flags,
+			 long timeout)
 {
 	const int state = flags & I915_WAIT_INTERRUPTIBLE ?
 		TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
@@ -2200,12 +2213,12 @@ out:
 }
 
 /**
- * i915_request_wait_timeout - wait until execution of request has finished
+ * i915_request_wait - wait until execution of request has finished
  * @rq: the request to wait upon
  * @flags: how to wait
  * @timeout: how long to wait in jiffies
  *
- * i915_request_wait_timeout() waits for the request to be completed, for a
+ * i915_request_wait() waits for the request to be completed, for a
  * maximum of @timeout jiffies (with MAX_SCHEDULE_TIMEOUT implying an
  * unbounded wait).
  *
@@ -2215,19 +2228,17 @@ out:
  *
  * May return -EINTR is called with I915_WAIT_INTERRUPTIBLE and a signal is
  * pending before the request completes.
- *
- * NOTE: This function has the same wait semantics as dma-fence.
  */
-long i915_request_wait_timeout(struct i915_request *rq,
-			       unsigned int flags,
-			       long timeout)
+long i915_request_wait(struct i915_request *rq,
+		       unsigned int flags,
+		       long timeout)
 {
 	might_sleep();
 	GEM_BUG_ON(timeout < 0);
 	i915_fence_check_lr_lockdep(&rq->fence);
 
 	if (dma_fence_is_signaled(&rq->fence))
-		return timeout ?: 1;
+		return timeout;
 
 	if (!timeout)
 		return -ETIME;
@@ -2242,44 +2253,11 @@ long i915_request_wait_timeout(struct i915_request *rq,
 	 */
 	mutex_acquire(&rq->engine->gt->reset.mutex.dep_map, 0, 0, _THIS_IP_);
 
-	timeout = __i915_request_wait_timeout(rq, flags, timeout);
+	timeout = __i915_request_wait(rq, flags, timeout);
 
 	mutex_release(&rq->engine->gt->reset.mutex.dep_map, _THIS_IP_);
 	trace_i915_request_wait_end(rq);
 	return timeout;
-}
-
-/**
- * i915_request_wait - wait until execution of request has finished
- * @rq: the request to wait upon
- * @flags: how to wait
- * @timeout: how long to wait in jiffies
- *
- * i915_request_wait() waits for the request to be completed, for a
- * maximum of @timeout jiffies (with MAX_SCHEDULE_TIMEOUT implying an
- * unbounded wait).
- *
- * Returns the remaining time (in jiffies) if the request completed, which may
- * be zero or -ETIME if the request is unfinished after the timeout expires.
- * May return -EINTR is called with I915_WAIT_INTERRUPTIBLE and a signal is
- * pending before the request completes.
- *
- * NOTE: This function behaves differently from dma-fence wait semantics for
- * timeout = 0. It returns 0 on success, and -ETIME if not signaled.
- */
-long i915_request_wait(struct i915_request *rq,
-		       unsigned int flags,
-		       long timeout)
-{
-	long ret = i915_request_wait_timeout(rq, flags, timeout);
-
-	if (!ret)
-		return -ETIME;
-
-	if (ret > 0 && !timeout)
-		return 0;
-
-	return ret;
 }
 
 static int print_sched_attr(const struct i915_sched_attr *attr,

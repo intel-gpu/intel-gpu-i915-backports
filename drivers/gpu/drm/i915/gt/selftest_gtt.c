@@ -6,6 +6,7 @@
 #include "i915_selftest.h"
 
 #include "gem/i915_gem_region.h"
+#include "gem/i915_gem_object_blt.h"
 
 #include "gen8_engine_cs.h"
 #include "i915_gem_ww.h"
@@ -13,10 +14,76 @@
 #include "intel_gpu_commands.h"
 #include "intel_context.h"
 #include "intel_gt.h"
+#include "intel_gt_clock_utils.h"
 #include "intel_ring.h"
+#include "intel_rps.h"
 
 #include "selftests/igt_flush_test.h"
 #include "selftests/i915_random.h"
+
+static u32 *emit_timestamp(struct i915_request *rq, u32 *cs, int gpr)
+{
+	u32 base = rq->engine->mmio_base;
+
+	*cs++ = MI_LOAD_REGISTER_REG;
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP_UDW(base));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(base, gpr));
+
+	*cs++ = MI_LOAD_REGISTER_REG;
+	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(base));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(base, gpr));
+
+	return cs;
+}
+
+static int emit_start_timestamp(struct i915_request *rq)
+{
+	u32 *cs;
+
+	cs = intel_ring_begin(rq, 6);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	cs = emit_timestamp(rq, cs, 0);
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static u32 *emit_mem_fence(struct i915_request *rq, u32 *cs, u64 addr)
+{
+	return __gen8_emit_flush_dw(cs, 0, addr + 64, MI_FLUSH_DW_OP_STOREDW);
+}
+
+static int emit_write_elaspsed(struct i915_request *rq, u64 addr)
+{
+	u32 *cs;
+
+	cs = intel_ring_begin(rq, 20);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	cs = emit_mem_fence(rq, cs, addr + 64);
+	cs = emit_timestamp(rq, cs, 1);
+
+	/* Compute elapsed time (end - start) */
+	*cs++ = MI_MATH(4);
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(1));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(0));
+	*cs++ = MI_MATH_SUB;
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(0), MI_MATH_REG_ACCU);
+
+	/* Increment cycle counters */
+	*cs++ = MI_STORE_REGISTER_MEM_GEN8;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(rq->engine->mmio_base, 0));
+	*cs++ = lower_32_bits(addr);
+	*cs++ = upper_32_bits(addr);
+
+	*cs++ = MI_NOOP;
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
 
 static int direct_op(struct intel_gt *gt, int (*op)(struct intel_context *ce, struct drm_i915_gem_object *obj))
 {
@@ -558,14 +625,14 @@ pte_write_tearing(struct intel_context *ce,
 	i915_request_add(rq);
 
 	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x)\n",
-		ce->engine->name, va->obj->mm.region->name ?: "smem",
+		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
 		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg);
 	if (va->page_sizes.gtt != align &&
 	    va->page_sizes.gtt > va->size) {
 		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
 
 		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
-			ce->engine->name, va->obj->mm.region->name ?: "smem",
+			ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
 			&dma);
 	}
 
@@ -576,12 +643,32 @@ pte_write_tearing(struct intel_context *ce,
 		IGT_TIMEOUT(end_time);
 
 		while (!__igt_timeout(end_time, NULL)) {
+			struct i915_vm_pt_stash stash = {};
 			unsigned int pte_flags = 0;
+			struct i915_gem_ww_ctx ww;
+
+			err = i915_vm_alloc_pt_stash(ce->vm, &stash, vv[0]->size);
+			if (err)
+				break;
+
+			for_i915_gem_ww(&ww, err, false) {
+				err = i915_vm_lock_objects(ce->vm, &ww);
+				if (err)
+					continue;
+
+				err = i915_vm_map_pt_stash(ce->vm, &stash);
+			}
+			if (err) {
+				i915_vm_free_pt_stash(ce->vm, &stash);
+				break;
+			}
 
 			/* Flip the PTE between A and B */
 			if (i915_gem_object_is_lmem(vv[0]->obj))
 				pte_flags |= PTE_LM;
-			ce->vm->insert_entries(ce->vm, vv[0], pat_index, pte_flags);
+			ce->vm->insert_entries(ce->vm, &stash, vv[0], pat_index, pte_flags);
+
+			i915_vm_free_pt_stash(ce->vm, &stash);
 
 			/* Check if the semaphore read anywhere other than A|B */
 			if (i915_request_completed(rq)) {
@@ -676,14 +763,14 @@ pte_invalid_read(struct intel_context *ce,
 					 4, 4);
 
 	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x)\n",
-		ce->engine->name, va->obj->mm.region->name ?: "smem",
+		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
 		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg);
 	if (va->page_sizes.gtt != align &&
 	    va->page_sizes.gtt > va->size) {
 		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
 
 		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
-			ce->engine->name, va->obj->mm.region->name ?: "smem",
+			ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
 			&dma);
 	}
 
@@ -998,6 +1085,162 @@ static int invalid_fault(void *arg)
 	return err;
 }
 
+static int __pat_speed(struct intel_context *ce,
+		       struct drm_i915_gem_object *obj)
+{
+	struct intel_gt *gt = ce->engine->gt;
+	struct i915_vma *vma, *batch;
+	struct i915_gem_ww_ctx ww;
+	intel_wakeref_t wf;
+	int cache_level;
+	u64 *cycles;
+	int err;
+
+	cycles = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
+	if (IS_ERR(cycles))
+		return PTR_ERR(cycles);
+
+	vma = i915_vma_instance(obj, ce->vm, 0);
+	if (IS_ERR(vma)) {
+		err = PTR_ERR(vma);
+		goto out_map;
+	}
+
+	err = i915_vma_pin(vma, 0, obj->base.size, PIN_USER);
+	if (err)
+		goto out_map;
+
+	for_i915_gem_ww(&ww, err, false) {
+		batch = intel_emit_vma_fill_blt(ce, vma, &ww, 0x0);
+		if (IS_ERR(batch))
+			err = PTR_ERR(batch);
+	}
+	if (err)
+		goto out_vma;
+
+	wf = intel_gt_pm_get(gt);
+	intel_rps_boost(&gt->rps);
+
+	for (cache_level = 0; cache_level < I915_MAX_CACHE_LEVEL; cache_level++) {
+		struct i915_vm_pt_stash stash = {};
+		struct i915_request *rq;
+		unsigned int pte_flags;
+		unsigned int fill_bw;
+		uint64_t elapsed;
+		int pat_index;
+
+		err = i915_vm_alloc_pt_stash(ce->vm, &stash, vma->size);
+		if (err)
+			break;
+
+		for_i915_gem_ww(&ww, err, false) {
+			err = i915_vm_lock_objects(ce->vm, &ww);
+			if (err)
+				continue;
+
+			err = i915_vm_map_pt_stash(ce->vm, &stash);
+		}
+		if (err) {
+			i915_vm_free_pt_stash(ce->vm, &stash);
+			break;
+		}
+
+		pte_flags = 0;
+		if (i915_gem_object_is_lmem(obj))
+			pte_flags |= PTE_LM;
+
+		pat_index = i915_gem_get_pat_index(gt->i915, cache_level);
+
+		ce->vm->insert_entries(ce->vm, &stash, vma, pat_index, pte_flags);
+		i915_vm_free_pt_stash(ce->vm, &stash);
+
+		rq = i915_request_create(ce);
+		if (IS_ERR(rq)) {
+			err = PTR_ERR(rq);
+			break;
+		}
+
+		err = emit_start_timestamp(rq);
+		if (err == 0)
+			err = ce->engine->emit_bb_start(rq,
+							i915_vma_offset(batch),
+							i915_vma_size(batch),
+							0);
+		if (err == 0)
+			err = emit_write_elaspsed(rq, i915_vma_offset(vma));
+
+		i915_request_get(rq);
+		i915_request_add(rq);
+		if (i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, 5 * HZ) < 0)
+			err = -ETIME;
+		i915_request_put(rq);
+		if (err)
+			break;
+
+		elapsed = intel_gt_clock_interval_to_ns(gt, READ_ONCE(*cycles));
+		if (!elapsed)
+			continue;
+
+		fill_bw = div_u64(mul_u64_u32_shr(obj->base.size, NSEC_PER_SEC, 20), elapsed);
+
+		dev_info(gt->i915->drm.dev,
+			 "GT%d: %s, cache-level:%d, pat-index:%d, size:%zx, time:%lldns, GPU fill:%dMiB/s\n",
+			 gt->info.id, obj->mm.region.mem->name,
+			 cache_level, pat_index,
+			 obj->base.size, elapsed, fill_bw);
+	}
+
+	intel_rps_cancel_boost(&gt->rps);
+	intel_gt_pm_put(gt, wf);
+
+	intel_emit_vma_release(ce, batch);
+out_vma:
+	i915_vma_unpin(vma);
+out_map:
+	i915_gem_object_unpin_map(obj);
+	return err;
+}
+
+static int pat_speed(void *arg)
+{
+	struct intel_gt *gt = arg;
+	struct drm_i915_gem_object *obj;
+	struct intel_context *ce;
+	int err = 0;
+
+	if (GRAPHICS_VER(gt->i915) < 8)
+		return 0;
+
+	ce = NULL;
+	if (gt->engine_class[COPY_ENGINE_CLASS][0])
+		ce = gt->engine_class[COPY_ENGINE_CLASS][0]->kernel_context;
+	if (!ce)
+		return 0;
+
+	if (gt->lmem) {
+		obj = i915_gem_object_create_region(gt->lmem, SZ_1G, 0);
+		if (!IS_ERR(obj)) {
+			err = __pat_speed(ce, obj);
+			i915_gem_object_put(obj);
+			if (err)
+				goto out;
+		}
+	}
+
+	obj = i915_gem_object_create_internal(gt->i915, SZ_64M);
+	if (!IS_ERR(obj)) {
+		err = __pat_speed(ce, obj);
+		i915_gem_object_put(obj);
+		if (err)
+			goto out;
+	}
+
+out:
+	if (igt_flush_test(gt->i915))
+		err = -EIO;
+	return err;
+}
+
 int intel_gtt_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
@@ -1005,6 +1248,7 @@ int intel_gtt_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(direct_mov),
 		SUBTEST(direct_inc),
 		SUBTEST(direct_dec),
+		SUBTEST(pat_speed),
 	};
 	struct intel_gt *gt;
 	unsigned int i;

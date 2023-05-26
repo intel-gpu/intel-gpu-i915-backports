@@ -1916,7 +1916,6 @@ static int pf_provision_lmem(struct intel_iov *iov, unsigned int id, u64 size)
 	struct intel_iov_provisioning *provisioning = &iov->pf.provisioning;
 	struct intel_iov_config *config = &provisioning->configs[id];
 	struct drm_i915_gem_object *obj = fetch_and_zero(&config->lmem_obj);
-	struct intel_gt *gt = iov_to_gt(iov);
 	int err, ret;
 
 	if (check_round_up_overflow(size, (u64)SZ_2M, &size))
@@ -1948,8 +1947,10 @@ static int pf_provision_lmem(struct intel_iov *iov, unsigned int id, u64 size)
 	}
 
 	obj = intel_gt_object_create_lmem(iov_to_gt(iov), size,
+					  I915_BO_ALLOC_USER | /* must clear */
+					  I915_BO_ALLOC_CHUNK_2M |
 					  I915_BO_ALLOC_VOLATILE |
-					  I915_BO_ALLOC_CHUNK_2M);
+					  I915_BO_SYNC_HINT);
 	if (IS_ERR(obj)) {
 		err = PTR_ERR(obj);
 		goto finish;
@@ -1959,13 +1960,7 @@ static int pf_provision_lmem(struct intel_iov *iov, unsigned int id, u64 size)
 	if (unlikely(err))
 		goto err_put;
 
-	err = i915_gem_object_fill_blt(obj,
-				       gt->engine[gt->rsvd_bcs]->blitter_context,
-				       0);
-	if (unlikely(err))
-		goto err_unpin;
-
-	err = i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
+	err = i915_gem_object_migrate_sync(obj);
 	if (unlikely(err))
 		goto err_unpin;
 

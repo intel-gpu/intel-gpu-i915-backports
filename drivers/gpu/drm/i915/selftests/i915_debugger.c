@@ -29,14 +29,27 @@ static int emit_srm(struct i915_request *rq, i915_reg_t reg, u32 *out)
 	return 0;
 }
 
+/*
+ * Note that accesses to MCR registers originating from engine instructions
+ * are unaffected by CPU steering controls.  We never touch the engine steering,
+ * so writes are always multicast and reads are always from some non-terminated
+ * instance.
+ */
+static int emit_srm_mcr(struct i915_request *rq, i915_mcr_reg_t mreg, u32 *out)
+{
+	i915_reg_t r = _MMIO(mreg.reg);
+
+	return emit_srm(rq, r, out);
+}
+
 static u32 mmio_read(struct intel_engine_cs *engine,
-		     i915_reg_t reg)
+		     i915_mcr_reg_t reg)
 {
 	intel_wakeref_t wakeref;
 	u32 val = 0;
 
 	with_intel_runtime_pm(engine->uncore->rpm, wakeref)
-		val = intel_uncore_read(engine->gt->uncore, reg);
+		val = intel_gt_mcr_read_any(engine->gt, reg);
 
 	return val;
 }
@@ -91,8 +104,8 @@ static int test_debug_enable(struct drm_i915_private *i915,
 		if (IS_ERR(rq))
 			return PTR_ERR(rq);
 
-		err = emit_srm(rq, TD_CTL, result);
-		err |= emit_srm(rq, GEN8_ROW_CHICKEN, result + 1);
+		err = emit_srm_mcr(rq, TD_CTL, result);
+		err |= emit_srm_mcr(rq, GEN8_ROW_CHICKEN, result + 1);
 
 		i915_request_get(rq);
 		i915_request_add(rq);

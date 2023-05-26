@@ -134,7 +134,7 @@ static int debug_pages_show(struct seq_file *m, void *data)
 		int i;
 		seq_printf(m, "debug pages allocated in %s: "
 				"ggtt=0x%08x, phys=0x%016llx, size=0x%zx\n\n",
-				gt->dbg->obj->mm.region->name,
+				gt->dbg->obj->mm.region.mem->name,
 				i915_ggtt_offset(gt->dbg),
 				(u64)i915_gem_object_get_dma_address(gt->dbg->obj, 0),
 				gt->dbg->obj->base.size);

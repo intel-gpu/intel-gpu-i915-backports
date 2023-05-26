@@ -205,6 +205,9 @@ i915-$(CPTCFG_DRM_I915_SVM) += i915_svm.o \
 			       i915_svm_devmem.o \
 			       i915_svm_copy.o
 
+# Address Translation Services (ATS) code
+i915-$(CPTCFG_DRM_I915_ATS) += i915_addr_trans_svc.o
+
 # general-purpose microcontroller (GuC) support
 i915-y += gt/uc/intel_uc.o \
 	  gt/uc/intel_uc_debugfs.o \

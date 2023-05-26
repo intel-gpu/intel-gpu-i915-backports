@@ -106,9 +106,6 @@ static void __i915_vm_close(struct i915_address_space *vm)
 {
 	struct drm_i915_gem_object *obj, *on;
 	struct i915_vma *vma, *vn;
-	struct list_head list;
-
-	INIT_LIST_HEAD(&list);
 
 	spin_lock(&vm->i915->vm_priv_obj_lock);
 	list_for_each_entry_safe(obj, on, &vm->priv_obj_list, priv_obj_link) {
@@ -120,26 +117,9 @@ static void __i915_vm_close(struct i915_address_space *vm)
 	i915_gem_vm_unbind_all(vm);
 
 	mutex_lock(&vm->mutex);
-	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link) {
-		struct drm_i915_gem_object *obj = vma->obj;
-
-		/* Keep the obj (and hence the vma) alive as _we_ destroy it */
-		if (!kref_get_unless_zero(&obj->base.refcount))
-			continue;
-
-		atomic_and(~I915_VMA_PIN_MASK, &vma->flags);
-		WARN_ON(__i915_vma_unbind(vma));
-		list_add_tail(&vma->vm_link, &list);
-	}
+	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link)
+		i915_vma_unpublish(vma);
 	mutex_unlock(&vm->mutex);
-
-	/* Release vma outside vm->mutex */
-	list_for_each_entry_safe(vma, vn, &list, vm_link) {
-		struct drm_i915_gem_object *obj = vma->obj;
-
-		__i915_vma_put(vma);
-		i915_gem_object_put(obj);
-	}
 
 	if (vm->mfence.obj) {
 		i915_gem_object_put(vm->mfence.obj);
@@ -205,6 +185,7 @@ static void __i915_vm_release(struct work_struct *work)
 	struct i915_address_space *vm =
 		container_of(work, struct i915_address_space, rcu.work);
 
+	i915_destroy_pasid(vm);
 	i915_svm_unbind_mm(vm);
 	vm->cleanup(vm);
 	i915_address_space_fini(vm);
@@ -816,8 +797,10 @@ int svm_bind_addr_prepare(struct i915_address_space *vm,
 	return 0;
 }
 
-int svm_bind_addr_commit(struct i915_address_space *vm, u64 start, u64 size,
-			 u64 flags, struct sg_table *st, u32 sg_page_sizes)
+int svm_bind_addr_commit(struct i915_address_space *vm,
+			 struct i915_vm_pt_stash *stash,
+			 u64 start, u64 size, u64 flags,
+			 struct sg_table *st, u32 sg_page_sizes)
 {
 	struct i915_vma *vma;
 	u32 pte_flags = 0;
@@ -841,7 +824,7 @@ int svm_bind_addr_commit(struct i915_address_space *vm, u64 start, u64 size,
 	if (flags & I915_GTT_SVM_LMEM)
 		pte_flags |= (vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
-	vm->insert_entries(vm, vma,
+	vm->insert_entries(vm, stash, vma,
 			   i915_gem_get_pat_index(vm->i915, I915_CACHE_NONE),
 			   pte_flags);
 	i915_vma_free(vma);
@@ -852,14 +835,14 @@ int svm_bind_addr(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww,
 		  u64 start, u64 size, u64 flags,
 		  struct sg_table *st, u32 sg_page_sizes)
 {
-	struct i915_vm_pt_stash stash = { 0 };
+	struct i915_vm_pt_stash stash = {};
 	int ret;
 
 	ret = svm_bind_addr_prepare(vm, &stash, ww, start, size);
 	if (ret)
 		goto out_stash;
 
-	ret = svm_bind_addr_commit(vm, start, size, flags,
+	ret = svm_bind_addr_commit(vm, &stash, start, size, flags,
 				   st, sg_page_sizes);
 out_stash:
 	i915_vm_free_pt_stash(vm, &stash);
@@ -870,6 +853,7 @@ void svm_unbind_addr(struct i915_address_space *vm,
 		     u64 start, u64 size)
 {
 	vm->clear_range(vm, start, size);
+	vm->invalidate_dev_tlb(vm, start, size);
 }
 
 struct i915_vma *

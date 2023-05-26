@@ -177,6 +177,23 @@ config DRM_I915_SVM
 	  address space between a process and the GPU. SVM is supported
 	  on both integrated and discrete Intel GPUs.
 
+config DRM_I915_ATS
+	bool "Enable Address Translation Services (ATS) support in i915"
+	depends on DRM_I915
+	depends on DRM_I915_SVM
+	depends on INTEL_IOMMU
+	depends on INTEL_IOMMU_SVM
+	depends on PCI_PRI
+	depends on PCI_PASID
+	depends on PCI_IOV
+	default y if DRM_I915_DEBUG
+	help
+	  Choose this option if you prefer to have Address Translation
+	  Services (ATS) support in i915. With ATS enabled, device would
+	  be able to request a system translation of a Virtual Address (VA)
+	  into either a Host Physical Address (HPA) or Guest Physical
+	  Address (GPA) for native and virtualized environments respectively.
+
 menu "drm/i915 Debugging"
 depends on DRM_I915
 depends on EXPERT

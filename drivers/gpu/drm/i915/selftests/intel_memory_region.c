@@ -799,7 +799,7 @@ static int igt_lmem_create_cleared_cpu(void *arg)
 		 * user.
 		 */
 
-		flags = I915_BO_ALLOC_CPU_CLEAR;
+		flags = I915_BO_CPU_CLEAR;
 		if (i & 1)
 			flags = 0;
 
@@ -815,7 +815,7 @@ static int igt_lmem_create_cleared_cpu(void *arg)
 		dword = i915_prandom_u32_max_state(PAGE_SIZE / sizeof(u32),
 						   &prng);
 
-		if (flags & I915_BO_ALLOC_CPU_CLEAR) {
+		if (flags & I915_BO_CPU_CLEAR) {
 			err = igt_cpu_check(obj, dword, 0);
 			if (err) {
 				pr_err("%s failed with size=%u, flags=%u\n",
@@ -1321,13 +1321,14 @@ static int igt_lmem_write_cpu_cross_tile(void *arg)
 
 static void igt_mark_evictable(struct drm_i915_gem_object *obj)
 {
+	struct intel_memory_region *mem = obj->mm.region.mem;
+
 	i915_gem_object_unpin_pages(obj);
 	obj->mm.madv = I915_MADV_DONTNEED;
 
-	mutex_lock(&obj->mm.region->objects.lock);
-	list_move_tail(&obj->mm.region_link,
-		       &obj->mm.region->objects.purgeable);
-	mutex_unlock(&obj->mm.region->objects.lock);
+	spin_lock(&mem->objects.lock);
+	list_move_tail(&obj->mm.region.link, &mem->objects.purgeable);
+	spin_unlock(&mem->objects.lock);
 }
 
 static int igt_mock_shrink(void *arg)

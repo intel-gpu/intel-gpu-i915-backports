@@ -1,4 +1,11 @@
 # ChangeLog
+## Release I915_23WW21.5_627.7_23.4.15_PSB_230307.15
+* i915: fix for reported list corruption on flex and ai issue seen on max
+* i915: fix for LMEM->SMEM migration
+* i915: fix for unexpected page faults on buffer object migration with vm_prefetch
+* i915: fix for eudebug to avoid closed clients on vm search
+* i915: fix corrupted state in eudebug error handling
+
 ## Release I915_23WW14.5_602_23.3.19_PSB_230122.18
 * i915: update to load and use guc fw version 70.6.4
 * i915: fix to adjust reserved blt priority to avoid deadlock

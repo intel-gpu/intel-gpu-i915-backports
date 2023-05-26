@@ -26,6 +26,21 @@ static void irq_disable(struct intel_breadcrumbs *b)
 	intel_engine_irq_disable(b->irq_engine);
 }
 
+static void __intel_breadcrumbs_enable_irq(struct intel_breadcrumbs *b)
+{
+	/* Requests may have completed before we could enable the interrupt. */
+	if (!b->irq_enabled++ && b->irq_enable(b))
+		irq_work_queue(&b->irq_work);
+	GEM_BUG_ON(!b->irq_enabled); /* no overflow! */
+}
+
+static void __intel_breadcrumbs_disable_irq(struct intel_breadcrumbs *b)
+{
+	GEM_BUG_ON(!b->irq_enabled); /* no underflow! */
+	if (!--b->irq_enabled)
+		b->irq_disable(b);
+}
+
 static void __intel_breadcrumbs_arm_irq(struct intel_breadcrumbs *b)
 {
 	intel_wakeref_t wakeref;
@@ -45,10 +60,7 @@ static void __intel_breadcrumbs_arm_irq(struct intel_breadcrumbs *b)
 	 * the irq.
 	 */
 	WRITE_ONCE(b->irq_armed, wakeref);
-
-	/* Requests may have completed before we could enable the interrupt. */
-	if (!b->irq_enabled++ && b->irq_enable(b))
-		irq_work_queue(&b->irq_work);
+	__intel_breadcrumbs_enable_irq(b);
 }
 
 static void intel_breadcrumbs_arm_irq(struct intel_breadcrumbs *b)
@@ -66,10 +78,7 @@ static void __intel_breadcrumbs_disarm_irq(struct intel_breadcrumbs *b)
 {
 	intel_wakeref_t wakeref = b->irq_armed;
 
-	GEM_BUG_ON(!b->irq_enabled);
-	if (!--b->irq_enabled)
-		b->irq_disable(b);
-
+	__intel_breadcrumbs_disable_irq(b);
 	WRITE_ONCE(b->irq_armed, 0);
 	intel_gt_pm_put_async(b->irq_engine->gt, wakeref);
 }
@@ -320,18 +329,14 @@ void intel_breadcrumbs_reset(struct intel_breadcrumbs *b)
 void intel_breadcrumbs_pin_irq(struct intel_breadcrumbs *b)
 {
 	spin_lock_irq(&b->irq_lock);
-	if (!b->irq_enabled++)
-		b->irq_enable(b);
-	GEM_BUG_ON(!b->irq_enabled); /* no overflow! */
+	__intel_breadcrumbs_enable_irq(b);
 	spin_unlock_irq(&b->irq_lock);
 }
 
 void intel_breadcrumbs_unpin_irq(struct intel_breadcrumbs *b)
 {
 	spin_lock_irq(&b->irq_lock);
-	GEM_BUG_ON(!b->irq_enabled); /* no underflow! */
-	if (!--b->irq_enabled)
-		b->irq_disable(b);
+	__intel_breadcrumbs_disable_irq(b);
 	spin_unlock_irq(&b->irq_lock);
 }
 
@@ -605,4 +610,16 @@ void intel_engine_print_breadcrumbs(struct intel_engine_cs *engine,
 	drm_printf(p, "IRQ: %s\n", str_enabled_disabled(b->irq_armed));
 	if (!list_empty(&b->signalers))
 		print_signals(b, p);
+}
+
+void intel_engine_signal_breadcrumbs(const struct intel_engine_cs *engine)
+{
+	struct intel_breadcrumbs *b;
+
+	b = engine->breadcrumbs;
+	if (!b)
+		return;
+
+	if (READ_ONCE(b->irq_enabled))
+		irq_work_queue(&b->irq_work);
 }

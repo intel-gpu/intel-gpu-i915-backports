@@ -1075,7 +1075,7 @@ static void ring_release(struct intel_engine_cs *engine)
 
 static void irq_handler(struct intel_engine_cs *engine, u16 iir)
 {
-	intel_engine_signal_breadcrumbs(engine);
+	intel_engine_signal_breadcrumbs_irq(engine);
 }
 
 static void setup_irq(struct intel_engine_cs *engine)

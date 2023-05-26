@@ -162,7 +162,7 @@ int intel_get_tile_range(struct intel_gt *gt,
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 	resource_size_t root_lmembar_size;
 	resource_size_t lmem_range;
-	static const i915_reg_t tile_addr_reg[] = {
+	static const i915_mcr_reg_t tile_addr_reg[] = {
 		XEHP_TILE0_ADDR_RANGE,
 		XEHP_TILE1_ADDR_RANGE,
 		XEHP_TILE2_ADDR_RANGE,
