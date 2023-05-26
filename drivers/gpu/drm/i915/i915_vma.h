@@ -164,24 +164,19 @@ static inline u32 i915_ggtt_pin_bias(struct i915_vma *vma)
 	return i915_vm_to_ggtt(vma->vm)->pin_bias;
 }
 
+static inline bool i915_vma_is_purged(const struct i915_vma *vma)
+{
+       return test_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
+}
+
+static inline bool i915_vma_set_purged(struct i915_vma *vma)
+{
+       return !test_and_set_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
+}
+
 static inline bool i915_vma_is_persistent(const struct i915_vma *vma)
 {
 	return test_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_set_persistent(struct i915_vma *vma)
-{
-	set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
-}
-
-static inline bool i915_vma_is_purged(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_set_purged(struct i915_vma *vma)
-{
-	set_bit(I915_VMA_PURGED_BIT, __i915_vma_flags(vma));
 }
 
 static inline bool i915_vma_is_persistent_capture(const struct i915_vma *vma)
@@ -209,6 +204,9 @@ static inline struct i915_vma *i915_vma_get(struct i915_vma *vma)
 
 static inline struct i915_vma *i915_vma_tryget(struct i915_vma *vma)
 {
+	if (unlikely(i915_vma_is_purged(vma)))
+		return NULL;
+
 	if (likely(kref_get_unless_zero(&vma->obj->base.refcount)))
 		return vma;
 
@@ -278,8 +276,12 @@ int __i915_vma_unbind(struct i915_vma *vma);
 int __must_check i915_vma_unbind(struct i915_vma *vma);
 int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem);
 void i915_vma_unlink_ctx(struct i915_vma *vma);
+struct i915_vma *i915_vma_open(struct i915_vma *vma);
 void i915_vma_close(struct i915_vma *vma);
-void i915_vma_reopen(struct i915_vma *vma);
+void i915_vma_unpublish(struct i915_vma *vma);
+
+void i915_vma_park(struct intel_gt *gt);
+void i915_vma_unpark(struct intel_gt *gt);
 
 static inline struct i915_vma *__i915_vma_get(struct i915_vma *vma)
 {
@@ -334,6 +336,8 @@ retry:
 
 int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		  u32 align, unsigned int flags);
+int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
+			 u32 align, unsigned int flags);
 
 static inline int i915_vma_pin_count(const struct i915_vma *vma)
 {
@@ -443,8 +447,6 @@ i915_vma_unpin_fence(struct i915_vma *vma)
 		__i915_vma_unpin_fence(vma);
 }
 
-void i915_vma_parked(struct intel_gt *gt);
-
 static inline bool i915_vma_is_scanout(const struct i915_vma *vma)
 {
 	return test_bit(I915_VMA_SCANOUT_BIT, __i915_vma_flags(vma));
@@ -477,6 +479,9 @@ static inline void i915_vma_clear_scanout(struct i915_vma *vma)
 
 struct i915_vma *i915_vma_alloc(void);
 void i915_vma_free(struct i915_vma *vma);
+
+void i915_vma_clock_init_early(struct i915_vma_clock *clock);
+void i915_vma_clock_flush(struct i915_vma_clock *clock);
 
 struct i915_vma *i915_vma_make_unshrinkable(struct i915_vma *vma);
 void i915_vma_make_shrinkable(struct i915_vma *vma);

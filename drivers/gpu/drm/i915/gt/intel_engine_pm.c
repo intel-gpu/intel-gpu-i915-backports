@@ -97,7 +97,11 @@ static unsigned long __timeline_mark_lock(struct intel_context *ce)
 static void __timeline_mark_unlock(struct intel_context *ce,
 				   unsigned long flags)
 {
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	mutex_release(&ce->timeline->mutex.dep_map, 0, _THIS_IP_);
+#else
 	mutex_release(&ce->timeline->mutex.dep_map, _THIS_IP_);
+#endif
 	local_irq_restore(flags);
 }
 
@@ -258,15 +262,14 @@ out_unlock:
 
 static void call_idle_barriers(struct intel_engine_cs *engine)
 {
-	struct llist_node *node, *next;
+	struct list_head *node, *next;
 
-	llist_for_each_safe(node, next, llist_del_all(&engine->barrier_tasks)) {
-		struct dma_fence_cb *cb =
-			container_of((struct list_head *)node,
-				     typeof(*cb), node);
+	list_for_each_safe(node, next, &engine->barrier_tasks) {
+		struct dma_fence_cb *cb = container_of(node, typeof(*cb), node);
 
 		cb->func(IDLE_BARRIER, cb);
 	}
+	INIT_LIST_HEAD(&engine->barrier_tasks);
 }
 
 static int __engine_park(struct intel_wakeref *wf)
@@ -316,7 +319,7 @@ void intel_engine_init__pm(struct intel_engine_cs *engine)
 	intel_wakeref_init(&engine->wakeref, rpm, &wf_ops, engine->name);
 	intel_engine_init_heartbeat(engine);
 
-	if (IS_METEORLAKE(i915) && engine->id == GSC0) {
+	if (IS_METEORLAKE(i915) && engine->id == GSC0 && !IS_SRIOV_VF(i915)) {
 		/* FIXME: Enable GSC CS Idle messaging */
 		intel_uncore_write(engine->gt->uncore,
 				   RC_PSMI_CTRL_GSCCS,

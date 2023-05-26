@@ -290,8 +290,11 @@ static inline int modeset_lock(struct drm_modeset_lock *lock,
 
 	if (ctx->trylock_only) {
 		lockdep_assert_held(&ctx->ww_ctx);
-
+#ifdef BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
+		if (!ww_mutex_trylock(&lock->mutex, NULL))
+#else
 		if (!ww_mutex_trylock(&lock->mutex))
+#endif
 			return -EBUSY;
 		else
 			return 0;

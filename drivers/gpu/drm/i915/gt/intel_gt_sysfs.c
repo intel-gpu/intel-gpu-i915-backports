@@ -164,7 +164,7 @@ static ssize_t prelim_reset_store(struct device *dev,
 	return intel_gt_sysfs_reset(gt) ?: count;
 }
 
-DEVICE_ATTR_WO(prelim_reset);
+static DEVICE_ATTR_WO(prelim_reset);
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t id_show(struct kobject *kobj,

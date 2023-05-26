@@ -11,6 +11,11 @@
 
 #include <drm/drm_cache.h>
 
+
+#ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
+#include <linux/mmap_lock.h>
+#endif
+
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
@@ -96,13 +101,11 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 		goto err;
 	}
 
-
 	if (i915_gem_object_is_lmem(obj) &&
-	    i915_is_level4_wa_active(obj->mm.region->gt) &&
+	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
 	    !i915_gem_object_should_migrate_smem(obj) &&
-	    obj->mm.region->instance > 0) {
-		drm_dbg(dev, "Trying to mmap an lmem object when L4wa is enabled\n");
-	}
+	    obj->mm.region.mem->instance > 0)
+		drm_dbg(dev, "Trying to mmap lmem1 when L4wa is enabled\n");
 
 	addr = vm_mmap(obj->base.filp, 0, args->size,
 		       PROT_READ | PROT_WRITE, MAP_SHARED,
@@ -113,11 +116,8 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 	if (args->flags & I915_MMAP_WC) {
 		struct mm_struct *mm = current->mm;
 		struct vm_area_struct *vma;
-#ifdef BPM_MMAP_WRITE_LOCK_UNLOCK_NOT_PRESENT
-		if (down_write_killable(&mm->mmap_sem)) {
-#else
+
 		if (mmap_write_lock_killable(mm)) {
-#endif
 			addr = -EINTR;
 			goto err;
 		}
@@ -127,11 +127,7 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 				pgprot_writecombine(vm_get_page_prot(vma->vm_flags));
 		else
 			addr = -ENOMEM;
-#ifdef BPM_MMAP_WRITE_LOCK_UNLOCK_NOT_PRESENT
-		up_write(&mm->mmap_sem);
-#else
 		mmap_write_unlock(mm);
-#endif
 		if (IS_ERR_VALUE(addr))
 			goto err;
 	}
@@ -294,7 +290,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		goto out;
 	}
 
-	for_i915_gem_ww(&ww, err, true) {
+	do for_i915_gem_ww(&ww, err, true) {
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
@@ -312,8 +308,8 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 
 		iomap = -1;
 		if (!i915_gem_object_has_struct_page(obj)) {
-			iomap = obj->mm.region->iomap.base;
-			iomap -= obj->mm.region->region.start;
+			iomap = obj->mm.region.mem->iomap.base;
+			iomap -= obj->mm.region.mem->region.start;
 		}
 
 		/* PTEs are revoked in obj->ops->put_pages() */
@@ -327,8 +323,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		}
 
 		i915_gem_object_unpin_pages(obj);
-		/* Implicit unlock */
-	}
+	} while (err == -ENXIO);
 
 	ret = i915_error_to_vmf_fault(err);
 out:
@@ -341,6 +336,7 @@ out:
 static vm_fault_t vm_fault_gtt(struct vm_fault *vmf)
 {
 #define MIN_CHUNK_PAGES (SZ_1M >> PAGE_SHIFT)
+	const unsigned int guard = PIN_OFFSET_GUARD | SZ_4K;
 	struct vm_area_struct *area = vmf->vma;
 	struct i915_mmap_offset *mmo = area->vm_private_data;
 	struct drm_i915_gem_object *obj = mmo->obj;
@@ -384,9 +380,8 @@ retry:
 		goto err_pages;
 
 	/* Now pin it into the GTT as needed */
-	vma = i915_gem_object_ggtt_pin_ww(obj, &ww,
-					  ggtt, NULL,
-					  0, 0,
+	vma = i915_gem_object_ggtt_pin_ww(obj, &ww, ggtt, NULL, 0, 0,
+					  guard |
 					  PIN_MAPPABLE |
 					  PIN_NONBLOCK /* NOWARN */ |
 					  PIN_NOEVICT);
@@ -405,15 +400,13 @@ retry:
 		 * all hope that the hardware is able to track future writes.
 		 */
 
-		vma = i915_gem_object_ggtt_pin_ww(obj, &ww,
-						  ggtt, &view,
-						  0, 0, flags);
+		vma = i915_gem_object_ggtt_pin_ww(obj, &ww, ggtt, &view,
+						  0, 0, guard | flags);
 		if (IS_ERR(vma) && vma != ERR_PTR(-EDEADLK)) {
 			flags = PIN_MAPPABLE;
 			view.type = I915_GGTT_VIEW_PARTIAL;
-			vma = i915_gem_object_ggtt_pin_ww(obj, &ww,
-							  ggtt, &view,
-							  0, 0, flags);
+			vma = i915_gem_object_ggtt_pin_ww(obj, &ww, ggtt, &view,
+							  0, 0, guard | flags);
 		}
 
 		/* The entire mappable GGTT is pinned? Unexpected! */
@@ -737,7 +730,9 @@ i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct i915_mmap_offset *mmo;
+	struct intel_gt *gt;
 	int err;
+	int i;
 
 	GEM_BUG_ON(obj->ops->mmap_offset || obj->ops->mmap_ops);
 
@@ -759,12 +754,10 @@ i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
 		goto insert;
 
 	/* Attempt to reap some mmap space from dead objects */
-	err = intel_gt_retire_requests_timeout(to_gt(i915), MAX_SCHEDULE_TIMEOUT,
-					       NULL);
-	if (err)
-		goto err;
-
+	for_each_gt(gt, i915, i)
+		intel_gt_retire_requests(gt);
 	i915_gem_drain_freed_objects(i915);
+
 	err = drm_vma_offset_add(obj->base.dev->vma_offset_manager,
 				 &mmo->vma_node, obj->base.size / PAGE_SIZE);
 	if (err)
@@ -808,12 +801,11 @@ __assign_mmap_offset(struct drm_i915_gem_object *obj,
 		return -ENODEV;
 
 	if (i915_gem_object_is_lmem(obj) &&
-	    i915_is_level4_wa_active(obj->mm.region->gt) &&
+	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
 	    !i915_gem_object_should_migrate_smem(obj) &&
-	    obj->mm.region->instance > 0) {
+	    obj->mm.region.mem->instance > 0)
 		drm_dbg(obj->base.dev,
-			"Trying to mmap an lmem object when L4wa is enabled\n");
-	}
+			"Trying to mmap lmem1 when L4wa is enabled\n");
 
 	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
 	if (IS_ERR(mmo))

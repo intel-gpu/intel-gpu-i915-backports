@@ -1146,6 +1146,8 @@ void intel_engine_init_execlists(struct intel_engine_cs *engine)
 	memset(execlists->pending, 0, sizeof(execlists->pending));
 	execlists->active =
 		memset(execlists->inflight, 0, sizeof(execlists->inflight));
+
+	i915_sched_init_ipi(&execlists->ipi);
 }
 
 static void cleanup_status_page(struct intel_engine_cs *engine)
@@ -1191,7 +1193,7 @@ static int pin_ggtt_status_page(struct intel_engine_cs *engine,
 	else
 		flags = PIN_HIGH;
 
-	return i915_ggtt_pin(vma, ww, 0, flags);
+	return i915_ggtt_pin_for_gt(vma, ww, 0, flags);
 }
 
 static int init_status_page(struct intel_engine_cs *engine)
@@ -1263,7 +1265,8 @@ static int engine_setup_common(struct intel_engine_cs *engine)
 {
 	int err;
 
-	init_llist_head(&engine->barrier_tasks);
+	spin_lock_init(&engine->barrier_lock);
+	INIT_LIST_HEAD(&engine->barrier_tasks);
 
 	err = init_status_page(engine);
 	if (err)
@@ -1654,7 +1657,7 @@ void intel_engine_cleanup_common(struct intel_engine_cs *engine)
 	if (!engine->i915->quiesce_gpu)
 		intel_engine_quiesce(engine);
 
-	GEM_BUG_ON(!llist_empty(&engine->barrier_tasks));
+	GEM_BUG_ON(!list_empty(&engine->barrier_tasks));
 
 	intel_wa_list_free(&engine->ctx_wa_list);
 	intel_wa_list_free(&engine->wa_list);
@@ -1729,10 +1732,12 @@ static int __intel_engine_stop_cs(struct intel_engine_cs *engine,
 	intel_uncore_write_fw(uncore, mode, _MASKED_BIT_ENABLE(STOP_RING));
 
 	/*
-	 * Wa_22011802037 : gen11, gen12, Prior to doing a reset, ensure CS is
+	 * Wa_22011802037: Prior to doing a reset, ensure CS is
 	 * stopped, set ring stop bit and prefetch disable bit to halt CS
 	 */
-	if (IS_GRAPHICS_VER(engine->i915, 11, 12))
+	if (IS_MTL_GRAPHICS_STEP(engine->i915, M, STEP_A0, STEP_B0) ||
+	    (GRAPHICS_VER(engine->i915) >= 11 &&
+	    GRAPHICS_VER_FULL(engine->i915) < IP_VER(12, 70)))
 		intel_uncore_write_fw(uncore, RING_MODE_GEN7(engine->mmio_base),
 				      _MASKED_BIT_ENABLE(GEN12_GFX_PREFETCH_DISABLE));
 
@@ -2397,7 +2402,11 @@ static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, 
 
 	i915_request_show(m, rq, msg, 0);
 
-	drm_printf(m, "\t\tvm->poison:  0x%08x\n",
+	drm_printf(m, "\t\tce->lrc.lrca: 0x%08x\n",
+		   rq->context->lrc.lrca);
+	drm_printf(m, "\t\tce->lrc.ccid: 0x%08x\n",
+		   rq->context->lrc.ccid);
+	drm_printf(m, "\t\tvm->poison:   0x%08x\n",
 		   rq->context->vm->poison);
 	drm_printf(m, "\t\tring->start:  0x%08x\n",
 		   i915_ggtt_offset(rq->ring->vma));
@@ -2482,7 +2491,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	drm_printf(m, "\tAwake? %d\n", atomic_read(&engine->wakeref.count));
 	drm_printf(m, "\tInterrupts: %lu\n", engine->stats.irq_count);
 	drm_printf(m, "\tBarriers?: %s\n",
-		   str_yes_no(!llist_empty(&engine->barrier_tasks)));
+		   str_yes_no(!list_empty(&engine->barrier_tasks)));
 	drm_printf(m, "\tLatency: %luus\n",
 		   ewma__engine_latency_read(&engine->latency));
 	if (intel_engine_supports_stats(engine))

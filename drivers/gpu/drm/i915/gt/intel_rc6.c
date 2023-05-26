@@ -655,6 +655,15 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    IS_PVC_CT_STEP(i915, STEP_B0, STEP_C0))
 		return false;
 
+#ifdef BPM_RC6_DISABLED
+	/*
+	 * Wa for HSD: 14015706335
+	 */
+	if (!i915->params.rc6_ignore_steppings &&
+			IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		return false;
+#endif
+
 	return i915->params.enable_rc6;
 }
 

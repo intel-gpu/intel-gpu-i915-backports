@@ -20,6 +20,7 @@
 #include "i915_gem.h"
 #include "i915_pmu.h"
 #include "i915_priolist_types.h"
+#include "i915_scheduler_types.h"
 #include "i915_selftest.h"
 #include "intel_sseu.h"
 #include "intel_timeline_types.h"
@@ -267,6 +268,8 @@ struct intel_engine_execlists {
 	 */
 	struct rb_root_cached virtual;
 
+	struct i915_sched_ipi ipi;
+
 	/**
 	 * @csb_write: control register for Context Switch buffer
 	 *
@@ -397,7 +400,8 @@ struct intel_engine_cs {
 
 	struct intel_context *hung_ce;
 
-	struct llist_head barrier_tasks;
+	spinlock_t barrier_lock;
+	struct list_head barrier_tasks;
 
 	struct intel_context *kernel_context; /* pinned */
 	struct intel_context *blitter_context; /* pinned; exists for BCS only */
@@ -558,19 +562,20 @@ struct intel_engine_cs {
 
 #define I915_ENGINE_USING_CMD_PARSER BIT(0)
 #define I915_ENGINE_SUPPORTS_STATS   BIT(1)
-#define I915_ENGINE_HAS_PREEMPTION   BIT(2)
-#define I915_ENGINE_HAS_SEMAPHORES   BIT(3)
-#define I915_ENGINE_HAS_TIMESLICES   BIT(4)
-#define I915_ENGINE_IS_VIRTUAL       BIT(5)
-#define I915_ENGINE_HAS_RELATIVE_MMIO BIT(6)
-#define I915_ENGINE_REQUIRES_CMD_PARSER BIT(7)
-#define I915_ENGINE_WANT_FORCED_PREEMPTION BIT(8)
-#define I915_ENGINE_HAS_RCS_REG_STATE  BIT(9)
-#define I915_ENGINE_HAS_EU_PRIORITY    BIT(10)
-#define I915_ENGINE_FIRST_RENDER_COMPUTE BIT(11)
-#define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT BIT(12)
-#define I915_ENGINE_HAS_EU_ATTENTION   BIT(13)
-#define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(14)
+#define I915_ENGINE_HAS_SCHEDULER    BIT(2)
+#define I915_ENGINE_HAS_PREEMPTION   BIT(3)
+#define I915_ENGINE_HAS_SEMAPHORES   BIT(4)
+#define I915_ENGINE_HAS_TIMESLICES   BIT(5)
+#define I915_ENGINE_IS_VIRTUAL       BIT(6)
+#define I915_ENGINE_HAS_RELATIVE_MMIO BIT(7)
+#define I915_ENGINE_REQUIRES_CMD_PARSER BIT(8)
+#define I915_ENGINE_WANT_FORCED_PREEMPTION BIT(9)
+#define I915_ENGINE_HAS_RCS_REG_STATE  BIT(10)
+#define I915_ENGINE_HAS_EU_PRIORITY    BIT(11)
+#define I915_ENGINE_FIRST_RENDER_COMPUTE BIT(12)
+#define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT BIT(13)
+#define I915_ENGINE_HAS_EU_ATTENTION   BIT(14)
+#define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(15)
 	unsigned int flags;
 
 	/*
@@ -640,6 +645,12 @@ static inline bool
 intel_engine_supports_stats(const struct intel_engine_cs *engine)
 {
 	return engine->flags & I915_ENGINE_SUPPORTS_STATS;
+}
+
+static inline bool
+intel_engine_has_scheduler(const struct intel_engine_cs *engine)
+{
+	return engine->flags & I915_ENGINE_HAS_SCHEDULER;
 }
 
 static inline bool

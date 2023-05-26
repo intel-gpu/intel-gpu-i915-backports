@@ -180,9 +180,10 @@ int intel_vgpu_reg_imr_handler(struct intel_vgpu *vgpu,
 	struct intel_gvt_irq_ops *ops = gvt->irq.ops;
 	u32 imr = *(u32 *)p_data;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_write_ir(vgpu->id, "IMR", reg, imr, vgpu_vreg(vgpu, reg),
 		       (vgpu_vreg(vgpu, reg) ^ imr));
-
+#endif
 	vgpu_vreg(vgpu, reg) = imr;
 
 	ops->check_pending_irq(vgpu);
@@ -211,8 +212,10 @@ int intel_vgpu_reg_master_irq_handler(struct intel_vgpu *vgpu,
 	u32 ier = *(u32 *)p_data;
 	u32 virtual_ier = vgpu_vreg(vgpu, reg);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_write_ir(vgpu->id, "MASTER_IRQ", reg, ier, virtual_ier,
 		       (virtual_ier ^ ier));
+#endif
 
 	/*
 	 * GEN8_MASTER_IRQ is a special irq register,
@@ -251,9 +254,11 @@ int intel_vgpu_reg_ier_handler(struct intel_vgpu *vgpu,
 	struct intel_gvt_irq_info *info;
 	u32 ier = *(u32 *)p_data;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_write_ir(vgpu->id, "IER", reg, ier, vgpu_vreg(vgpu, reg),
 		       (vgpu_vreg(vgpu, reg) ^ ier));
 
+#endif
 	vgpu_vreg(vgpu, reg) = ier;
 
 	info = regbase_to_irq_info(gvt, ier_to_regbase(reg));
@@ -289,9 +294,11 @@ int intel_vgpu_reg_iir_handler(struct intel_vgpu *vgpu, unsigned int reg,
 		iir_to_regbase(reg));
 	u32 iir = *(u32 *)p_data;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_write_ir(vgpu->id, "IIR", reg, iir, vgpu_vreg(vgpu, reg),
 		       (vgpu_vreg(vgpu, reg) ^ iir));
 
+#endif
 	if (drm_WARN_ON(&i915->drm, !info))
 		return -EINVAL;
 
@@ -418,7 +425,9 @@ static void propagate_event(struct intel_gvt_irq *irq,
 
 	if (!test_bit(bit, (void *)&vgpu_vreg(vgpu,
 					regbase_to_imr(reg_base)))) {
+#ifndef BPM_DISABLE_TRACES
 		trace_propagate_event(vgpu->id, irq_name[event], bit);
+#endif
 		set_bit(bit, (void *)&vgpu_vreg(vgpu,
 					regbase_to_iir(reg_base)));
 	}

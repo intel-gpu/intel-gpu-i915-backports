@@ -252,7 +252,9 @@ static void propagate_plane(struct routing_plane *plane,
 	struct fsubdev *sd;
 	LIST_HEAD(queue);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_rt_plane(root);
+#endif
 
 	list_add_tail(&root->routing.plane_link, &queue);
 
@@ -625,8 +627,10 @@ static void unicast_route_pair_once(struct fsubdev *sd_src, struct fsubdev *sd_d
 
 	routing_uft_entry_set(block, UFT_SEL_HOP, dfid_offset, lpn_hop);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_rt_pair(sd_src->fdev->pd->index, sd_index(sd_src),
 		      dfid_base + dfid_offset, lpn_origin, lpn_hop);
+#endif
 }
 
 /**
@@ -816,9 +820,10 @@ static int unicast_route_local(struct routing_uft *uft, struct fsubdev *sd_src)
 			      sd_src->routing.fid_mgmt -
 			      ROUTING_FID_CPORT_BASE, 0);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_rt_local(sd_src->fdev->pd->index, sd_index(sd_src),
 		       sd_src->routing.fid_mgmt, 0, 0);
-
+#endif
 	block = routing_uft_bridge_get(uft, sd_src);
 	if (!block)
 		return -ENOMEM;
@@ -838,8 +843,10 @@ static int unicast_route_local(struct routing_uft *uft, struct fsubdev *sd_src)
 
 		routing_uft_entry_set(block, UFT_SEL_BOTH, fid, port);
 
+#ifndef BPM_DISABLE_TRACES
 		trace_rt_local(sd_src->fdev->pd->index,
 			       sd_index(sd_src), fid, port, port);
+#endif
 	}
 
 	return 0;

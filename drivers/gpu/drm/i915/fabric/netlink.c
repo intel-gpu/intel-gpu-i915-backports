@@ -133,7 +133,9 @@ static enum cmd_rsp nl_process_op_req(struct genl_info *info, nl_process_op_cb_t
 	size_t msg_sz;
 	int retries;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_nl_rsp(info->genlhdr->cmd, NLMSG_GOODSIZE, info->snd_seq);
+#endif
 
 	/* If we run out of space in the message, try to enlarge it */
 	for (msg_sz = NLMSG_GOODSIZE, retries = MSG_ENLARGE_RETRIES; retries; retries--,
@@ -156,7 +158,9 @@ static int nl_process_query(struct sk_buff *msg, struct genl_info *info, nl_proc
 
 	mutex_lock(&nl_lock);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_nl_req(info->genlhdr->cmd, info->nlhdr->nlmsg_len, info->snd_seq);
+#endif
 
 	if (info->genlhdr->version != INTERFACE_VERSION) {
 		ret = nl_send_error_reply(info, IAF_CMD_RSP_INVALID_INTERFACE_VERSION);

@@ -30,5 +30,7 @@
 
 #ifndef __CHECKER__
 #define CREATE_TRACE_POINTS
+#ifndef BPM_DISABLE_TRACES
 #include "trace.h"
+#endif
 #endif

@@ -7,6 +7,7 @@
 #include "i915_request.h"
 #include "i915_debugger.h"
 
+#include "intel_breadcrumbs.h"
 #include "intel_context.h"
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
@@ -87,13 +88,12 @@ static void idle_pulse(struct intel_engine_cs *engine, struct i915_request *rq)
 		engine->heartbeat.systole = i915_request_get(rq);
 }
 
-static void heartbeat_commit(struct i915_request *rq,
-			     const struct i915_sched_attr *attr)
+static void heartbeat_commit(struct i915_request *rq, int prio)
 {
 	idle_pulse(rq->engine, rq);
 
 	__i915_request_commit(rq);
-	__i915_request_queue(rq, attr);
+	__i915_request_queue(rq, prio);
 }
 
 static void show_heartbeat(const struct i915_request *rq,
@@ -141,15 +141,16 @@ reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 
 static void heartbeat(struct work_struct *wrk)
 {
-	struct i915_sched_attr attr = { .priority = I915_PRIORITY_MIN };
 	struct intel_engine_cs *engine =
 		container_of(wrk, typeof(*engine), heartbeat.work.work);
 	struct intel_context *ce = engine->kernel_context;
+	int prio = I915_PRIORITY_MIN;
 	struct i915_request *rq;
 	unsigned long serial;
 
 	/* Just in case everything has gone horribly wrong, give it a kick */
 	intel_engine_flush_submission(engine);
+	intel_engine_signal_breadcrumbs(engine);
 
 	rq = engine->heartbeat.systole;
 	if (rq && i915_request_completed(rq)) {
@@ -205,22 +206,23 @@ static void heartbeat(struct work_struct *wrk)
 			 * but all other contexts, including the kernel
 			 * context are stuck waiting for the signal.
 			 */
-		} else if (engine->sched_engine->schedule &&
-			   rq->sched.attr.priority < I915_PRIORITY_BARRIER) {
+		} else if (rq->sched.attr.priority < I915_PRIORITY_BARRIER) {
+			int prio;
+
 			/*
 			 * Gradually raise the priority of the heartbeat to
 			 * give high priority work [which presumably desires
 			 * low latency and no jitter] the chance to naturally
 			 * complete before being preempted.
 			 */
-			attr.priority = I915_PRIORITY_NORMAL;
-			if (rq->sched.attr.priority >= attr.priority)
-				attr.priority = I915_PRIORITY_HEARTBEAT;
-			if (rq->sched.attr.priority >= attr.priority)
-				attr.priority = I915_PRIORITY_BARRIER;
+			prio = I915_PRIORITY_NORMAL;
+			if (rq->sched.attr.priority >= prio)
+				prio = I915_PRIORITY_HEARTBEAT;
+			if (rq->sched.attr.priority >= prio)
+				prio = I915_PRIORITY_BARRIER;
 
 			local_bh_disable();
-			engine->sched_engine->schedule(rq, &attr);
+			i915_request_set_priority(rq, prio);
 			local_bh_enable();
 		} else {
 			reset_engine(engine, rq);
@@ -248,7 +250,7 @@ static void heartbeat(struct work_struct *wrk)
 	if (IS_ERR(rq))
 		goto unlock;
 
-	heartbeat_commit(rq, &attr);
+	heartbeat_commit(rq, prio);
 
 unlock:
 	mutex_unlock(&ce->timeline->mutex);
@@ -337,8 +339,8 @@ void intel_gt_heartbeats_restore(struct intel_gt *gt, bool unpark)
 
 static int __intel_engine_pulse(struct intel_engine_cs *engine)
 {
-	struct i915_sched_attr attr = { .priority = I915_PRIORITY_BARRIER };
 	struct intel_context *ce = engine->kernel_context;
+	int prio = I915_PRIORITY_BARRIER;
 	struct i915_request *rq;
 
 	lockdep_assert_held(&ce->timeline->mutex);
@@ -351,7 +353,7 @@ static int __intel_engine_pulse(struct intel_engine_cs *engine)
 
 	__set_bit(I915_FENCE_FLAG_SENTINEL, &rq->fence.flags);
 
-	heartbeat_commit(rq, &attr);
+	heartbeat_commit(rq, prio);
 	GEM_BUG_ON(rq->sched.attr.priority < I915_PRIORITY_BARRIER);
 
 	return 0;
@@ -439,12 +441,12 @@ int intel_engine_pulse(struct intel_engine_cs *engine)
 
 int intel_engine_flush_barriers(struct intel_engine_cs *engine)
 {
-	struct i915_sched_attr attr = { .priority = I915_PRIORITY_MIN };
 	struct intel_context *ce = engine->kernel_context;
+	int prio = I915_PRIORITY_MIN;
 	struct i915_request *rq;
 	int err;
 
-	if (llist_empty(&engine->barrier_tasks))
+	if (list_empty(&engine->barrier_tasks))
 		return 0;
 
 	if (!intel_engine_pm_get_if_awake(engine))
@@ -461,7 +463,7 @@ int intel_engine_flush_barriers(struct intel_engine_cs *engine)
 		goto out_unlock;
 	}
 
-	heartbeat_commit(rq, &attr);
+	heartbeat_commit(rq, prio);
 
 	err = 0;
 out_unlock:

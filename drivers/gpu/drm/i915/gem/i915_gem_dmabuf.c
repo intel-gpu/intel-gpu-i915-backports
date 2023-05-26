@@ -61,14 +61,14 @@ static int dmabuf_map_addr(struct device *dev, struct drm_i915_gem_object *obj,
 			   struct sg_table *sgt, enum dma_data_direction dir,
 			   unsigned long attrs)
 {
-	struct intel_memory_region *mem = obj->mm.region;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct scatterlist *sg;
 	phys_addr_t addr;
 	int i;
 
 	for_each_sg(sgt->sgl, sg, sgt->orig_nents, i) {
 		if (obj->pair && i == obj->mm.pages->orig_nents)
-			mem = obj->pair->mm.region;
+			mem = obj->pair->mm.region.mem;
 		addr = sg_dma_address(sg) - mem->region.start + mem->io_start;
 		sg->dma_address = dma_map_resource(dev, addr, sg->length, dir,
 						   attrs);
@@ -357,7 +357,7 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 				  struct dma_buf_attachment *attach)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
-	struct intel_gt *gt = obj->mm.region->gt;
+	struct intel_gt *gt = obj->mm.region.mem->gt;
 	enum intel_engine_id id = gt->rsvd_bcs;
 	struct intel_context *ce = gt->engine[id]->blitter_context;
 	struct i915_gem_ww_ctx ww;
@@ -369,14 +369,14 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 
 	p2p_distance = object_to_attachment_p2p_distance(obj, attach);
 
-	trace_i915_dma_buf_attach(obj, fabric, p2p_distance);
-
 	if (fabric < 0)
 		return -EOPNOTSUPP;
 
 	if (!fabric && p2p_distance < 0 &&
 	    !i915_gem_object_can_migrate(obj, INTEL_REGION_SMEM))
 		return -EOPNOTSUPP;
+
+	trace_i915_dma_buf_attach(obj, fabric, p2p_distance);
 
 	pvc_wa_disallow_rc6(ce->engine->i915);
 	for_i915_gem_ww(&ww, err, true) {

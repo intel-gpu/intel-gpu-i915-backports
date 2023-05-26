@@ -113,13 +113,13 @@ static int __live_idle_pulse(struct intel_engine_cs *engine,
 	i915_active_release(&p->active);
 
 	GEM_BUG_ON(i915_active_is_idle(&p->active));
-	GEM_BUG_ON(llist_empty(&engine->barrier_tasks));
+	GEM_BUG_ON(list_empty(&engine->barrier_tasks));
 
 	err = fn(engine);
 	if (err)
 		goto out;
 
-	GEM_BUG_ON(!llist_empty(&engine->barrier_tasks));
+	GEM_BUG_ON(!list_empty(&engine->barrier_tasks));
 
 	if (engine_sync_barrier(engine)) {
 		struct drm_printer m = drm_err_printer("pulse");

@@ -44,10 +44,12 @@ struct intel_dsi {
 
 	struct intel_dsi_host *dsi_hosts[I915_MAX_PORTS];
 	intel_wakeref_t io_wakeref[I915_MAX_PORTS];
-
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	/* GPIO Desc for panel and backlight control */
-	struct gpio_desc *gpio_panel;
 	struct gpio_desc *gpio_backlight;
+#endif
+	/* GPIO Desc for CRC based Panel control */
+	struct gpio_desc *gpio_panel;
 
 	struct intel_connector *attached_connector;
 

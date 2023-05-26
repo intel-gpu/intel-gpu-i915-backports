@@ -643,7 +643,10 @@ static bool intel_fbc_hw_is_active(struct intel_fbc *fbc)
 
 static void intel_fbc_hw_activate(struct intel_fbc *fbc)
 {
+
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_fbc_activate(fbc->state.plane);
+#endif
 
 	fbc->active = true;
 	fbc->activated = true;
@@ -653,8 +656,10 @@ static void intel_fbc_hw_activate(struct intel_fbc *fbc)
 
 static void intel_fbc_hw_deactivate(struct intel_fbc *fbc)
 {
-	trace_intel_fbc_deactivate(fbc->state.plane);
 
+#ifndef BPM_DISABLE_TRACES
+	trace_intel_fbc_deactivate(fbc->state.plane);
+#endif
 	fbc->active = false;
 
 	fbc->funcs->deactivate(fbc);
@@ -672,7 +677,9 @@ static void intel_fbc_nuke(struct intel_fbc *fbc)
 	lockdep_assert_held(&fbc->lock);
 	drm_WARN_ON(&i915->drm, fbc->flip_pending);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_fbc_nuke(fbc->state.plane);
+#endif
 
 	fbc->funcs->nuke(fbc);
 }

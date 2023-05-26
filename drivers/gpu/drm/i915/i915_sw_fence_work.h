@@ -50,6 +50,14 @@ static inline void dma_fence_work_commit(struct dma_fence_work *f)
 	i915_sw_fence_commit(&f->chain);
 }
 
+static inline void dma_fence_work_commit_imm_if(struct dma_fence_work *f, bool cond)
+{
+	if (atomic_read(&f->chain.pending) <= cond)
+		__set_bit(DMA_FENCE_WORK_IMM, &f->dma.flags);
+
+	dma_fence_work_commit(f);
+}
+
 /**
  * dma_fence_work_commit_imm: Commit the fence, and if possible execute locally.
  * @f: the fenced worker
@@ -63,10 +71,7 @@ static inline void dma_fence_work_commit(struct dma_fence_work *f)
  */
 static inline void dma_fence_work_commit_imm(struct dma_fence_work *f)
 {
-	if (atomic_read(&f->chain.pending) <= 1)
-		__set_bit(DMA_FENCE_WORK_IMM, &f->dma.flags);
-
-	dma_fence_work_commit(f);
+	dma_fence_work_commit_imm_if(f, true);
 }
 
 #endif /* I915_SW_FENCE_WORK_H */

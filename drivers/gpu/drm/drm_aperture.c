@@ -344,7 +344,12 @@ int drm_aperture_remove_conflicting_pci_framebuffers(struct pci_dev *pdev,
 	 * otherwise the vga fbdev driver falls over.
 	 */
 #if IS_REACHABLE(CONFIG_FB)
+
+#ifdef BPM_REMOVE_CONF_PCI_FB_ARG_NOT_PRESENT
+	ret = remove_conflicting_pci_framebuffers(pdev, 0, req_driver->name);
+#else
 	ret = remove_conflicting_pci_framebuffers(pdev, req_driver->name);
+#endif
 #endif
 	if (ret == 0)
 		ret = vga_remove_vgacon(pdev);

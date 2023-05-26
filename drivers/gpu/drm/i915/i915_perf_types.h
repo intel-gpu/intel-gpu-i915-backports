@@ -365,6 +365,13 @@ struct i915_perf_stream {
 	 * @oa_whitelisted: Indicates that the oa registers are whitelisted.
 	 */
 	bool oa_whitelisted;
+
+
+	/**
+	 * @override_gucrc: GuC RC has been overridden for the perf stream,
+	 * and we need to restore the default configuration on release.
+	 */
+	bool override_gucrc:1;
 };
 
 /**

@@ -1069,9 +1069,10 @@ void intel_dsc_dsi_pps_write(struct intel_encoder *encoder,
 
 	for_each_dsi_port(port, intel_dsi->ports) {
 		dsi = intel_dsi->dsi_hosts[port]->device;
-
+#ifndef BPM_DRM_MIPI_DSI_DISABLED
 		mipi_dsi_picture_parameter_set(dsi, &pps);
 		mipi_dsi_compression_mode(dsi, true);
+#endif
 	}
 }
 

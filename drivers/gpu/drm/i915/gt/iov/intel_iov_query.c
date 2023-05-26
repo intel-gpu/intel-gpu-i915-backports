@@ -545,6 +545,7 @@ static const i915_reg_t mtl_early_regs[] = {
 	XEHPC_GT_COMPUTE_DSS_ENABLE_EXT,/* _MMIO(0x9148) */
 	CTC_MODE,			/* _MMIO(0xA26C) */
 	GEN11_HUC_KERNEL_LOAD_INFO,	/* _MMIO(0xC1DC) */
+	MTL_GT_ACTIVITY_FACTOR,		/* _MMIO(0x138010) */
 };
 
 static const i915_reg_t *get_early_regs(struct drm_i915_private *i915,

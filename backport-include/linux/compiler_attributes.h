@@ -26,6 +26,7 @@
 #ifndef _BACKPORT_LINUX_COMPILER_ATTRIBUTES_H
 #define _BACKPORT_LINUX_COMPILER_ATTRIBUTES_H
 #include <linux/version.h>
+#include_next <linux/compiler_attributes.h>
 #ifdef BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
 
 #ifndef __has_attribute
@@ -47,8 +48,6 @@
 #else
 # define fallthrough	do {} while (0)  /* fallthrough */
 #endif
-#else
-#include_next <linux/compiler_attributes.h>
 #endif
 #endif /* _BACKPORT_LINUX_COMPILER_ATTRIBUTES_H */
 

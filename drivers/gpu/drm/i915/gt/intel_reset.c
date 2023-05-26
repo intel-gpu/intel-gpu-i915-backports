@@ -99,9 +99,6 @@ static bool mark_guilty(struct i915_request *rq)
 		goto out;
 	}
 
-	if (intel_context_has_error(rq->context))
-		i915_gem_context_set_banned(ctx);
-
 	drm_notice(&ctx->i915->drm,
 		   "%s context reset due to GPU hang\n",
 		   ctx->name);
@@ -113,14 +110,13 @@ static bool mark_guilty(struct i915_request *rq)
 	ctx->hang_timestamp[i] = jiffies;
 
 	/* If we have hung N+1 times in rapid succession, we ban the context! */
-	banned = !i915_gem_context_is_recoverable(ctx) ||
-		i915_gem_context_is_banned(ctx);
+	banned = !i915_gem_context_is_recoverable(ctx);
 	if (time_before(jiffies, prev_hang + CONTEXT_FAST_HANG_JIFFIES))
 		banned = true;
 	if (banned) {
 		drm_dbg(&ctx->i915->drm, "context %s: guilty %d, banned\n",
 			ctx->name, atomic_read(&ctx->guilty_count));
-		wake_up_all(&ctx->i915->user_fence_wq);
+		i915_gem_context_set_banned(ctx);
 	}
 
 	client_mark_guilty(ctx, banned);
@@ -1078,7 +1074,9 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
 	mutex_lock(&gt->reset.mutex);
 
-	if (GEM_SHOW_DEBUG() && !i915_is_pci_faulted(gt->i915)) {
+	if (GEM_SHOW_DEBUG() &&
+	    !i915_error_injected() &&
+	    !i915_is_pci_faulted(gt->i915)) {
 		struct drm_printer p = drm_debug_printer(__func__);
 		struct intel_engine_cs *engine;
 		enum intel_engine_id id;
@@ -1711,10 +1709,15 @@ void intel_gt_set_wedged_on_init(struct intel_gt *gt)
 
 void intel_gt_set_wedged_on_fini(struct intel_gt *gt)
 {
+	long timeout = 0;
+
 	intel_gt_set_wedged(gt);
 	i915_disable_error_state(gt->i915, -ENODEV);
 	set_bit(I915_WEDGED_ON_FINI, &gt->reset.flags);
-	intel_gt_retire_requests(gt); /* cleanup any wedged requests */
+
+	/* cleanup any wedged requests */
+	while (!intel_gt_retire_requests_timeout(gt, &timeout))
+		;
 }
 
 void intel_gt_init_reset(struct intel_gt *gt)

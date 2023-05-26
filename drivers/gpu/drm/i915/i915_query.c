@@ -597,12 +597,24 @@ static int copy_perf_config_registers_or_number(const struct i915_oa_reg *kernel
 				p, Efault);
 		unsafe_put_user(kernel_regs[r].value, p + 1, Efault);
 	}
+
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+	user_access_end();
+#else
 	user_write_access_end();
+#endif
+
 #endif
 
 	return 0;
 Efault:
+
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+	user_access_end();
+#else
 	user_write_access_end();
+#endif
+
 	return -EFAULT;
 }
 

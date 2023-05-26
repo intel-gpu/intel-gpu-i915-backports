@@ -742,7 +742,11 @@ void drm_connector_list_iter_end(struct drm_connector_list_iter *iter)
 		__drm_connector_put_safe(iter->conn);
 		spin_unlock_irqrestore(&config->connector_list_lock, flags);
 	}
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	lock_release(&connector_list_iter_dep_map, 0, _RET_IP_);
+#else
 	lock_release(&connector_list_iter_dep_map, _RET_IP_);
+#endif
 }
 EXPORT_SYMBOL(drm_connector_list_iter_end);
 

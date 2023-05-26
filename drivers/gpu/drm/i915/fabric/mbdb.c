@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2020 - 2022 Intel Corporation.
+ * Copyright(c) 2020 - 2023 Intel Corporation.
  *
  */
 
@@ -454,6 +454,19 @@ static void mbdb_stop_from_handler(struct mbdb *mbdb)
 		complete(&ibox->ibox_full);
 }
 
+static void mbdb_inbox_empty(struct mbdb *mbdb)
+{
+	/* tell our partner it can put a new message in its outbox */
+
+	if (!mbdb->polling)
+		mbdb_enable_interrupts(mbdb, INBOX_FULL_MASK);
+
+	mbdb_int_partner_set_wr(mbdb, OUTBOX_EMPTY_MASK);
+
+	if (mbdb->polling)
+		inbox_full_enqueue(mbdb);
+}
+
 static void mbdb_ibox_handle_request(struct fsubdev *sd, u64 cw)
 {
 	u16 len;
@@ -571,49 +584,97 @@ static struct mbdb_ibox *mbdb_find_ibox(struct mbdb *mbdb, u32 tid, u8 op_code)
 	return found ? ibox : NULL;
 }
 
-static void mbdb_inbox_empty(struct mbdb *mbdb)
+static void mbdb_update_response_counters(struct mbdb *mbdb, u8 rsp_status, u64 cw)
 {
-/* tell our partner it can put a new message in its outbox */
+	switch (rsp_status) {
+	case MBOX_RSP_STATUS_OK:
+		mbdb->counters[NON_ERROR_RESPONSES]++;
+		break;
+	case MBOX_RSP_STATUS_RETRY:
+		mbdb->counters[RETRY_RESPONSES]++;
+		break;
+	case MBOX_RSP_STATUS_SEQ_NO_ERROR:
+		sd_warn(mbdb->sd, "Synchronizing outbound sequence number\n");
+		break;
+	case MBOX_RSP_STATUS_OP_CODE_ERROR:
+	case MBOX_RSP_STATUS_LOGICAL_ERROR:
+	case MBOX_RSP_STATUS_DENIED:
+		mbdb->counters[ERROR_RESPONSES]++;
+		sd_err(mbdb->sd, "Errored MBOX control word: 0x%016llx\n", cw);
+		break;
+	default:
+		mbdb->counters[ERROR_RESPONSES]++;
+		break;
+	}
+}
 
-	if (!mbdb->polling)
-		mbdb_enable_interrupts(mbdb, INBOX_FULL_MASK);
+static void mbdb_ibox_handle_response(struct mbdb *mbdb, u64 cw)
+{
+	struct mbdb_ibox *ibox = mbdb_find_ibox(mbdb, mbdb_mbox_tid(cw), mbdb_mbox_op_code(cw));
 
-	mbdb_int_partner_set_wr(mbdb, OUTBOX_EMPTY_MASK);
+	if (likely(ibox)) {
+		if (mbdb_mbox_params_len(cw) > MBOX_PARAM_AREA_IN_BYTES) {
+			ibox->rsp_status = MBOX_RSP_STATUS_LOGICAL_ERROR;
+		} else {
+			if (unlikely(READ_ONCE(mbdb->sd->fdev->dev_disabled))) {
+				ibox->rsp_status = -EIO;
+			} else {
+				ibox->cw = cw;
+				ibox->rsp_status = mbdb_mbox_rsp_status(cw);
 
-	if (mbdb->polling)
-		inbox_full_enqueue(mbdb);
+				if (ibox->rsp_status == MBOX_RSP_STATUS_OK)
+					/* transfer the h/w data into the virtual ibox */
+					ibox->op_rsp_handler(ibox);
+			}
+		}
+
+		mbdb_update_response_counters(mbdb, ibox->rsp_status, cw);
+
+		mbdb_seq_reset(mbdb, cw);
+
+		complete(&ibox->ibox_full);
+	} else {
+		mbdb->counters[UNMATCHED_RESPONSES]++;
+		if (mbdb_mbox_is_posted(cw))
+			sd_warn(mbdb->sd, "Received response to posted request cw=0x%016llx op_code=%u tid=%u rsp_status=%u\n",
+				cw, mbdb_mbox_op_code(cw), mbdb_mbox_tid(cw),
+				mbdb_mbox_rsp_status(cw));
+		else
+			sd_warn(mbdb->sd, "NOT found cw=0x%016llx op_code=%u tid=%u rsp_status=%u\n",
+				cw, mbdb_mbox_op_code(cw), mbdb_mbox_tid(cw),
+				mbdb_mbox_rsp_status(cw));
+	}
+}
+
+static bool mbdb_get_polling_input(struct mbdb *mbdb)
+{
+	u64 int_status_unmasked;
+
+	if (mbdb_readq(mbdb, mbdb->int_status_unmasked_addr, &int_status_unmasked))
+		return false;
+
+	if (!(int_status_unmasked & INBOX_FULL_MASK)) {
+		if (atomic_read(&mbdb->ibox_waiters))
+			inbox_full_enqueue(mbdb);
+		return false;
+	}
+
+	return true;
 }
 
 static void mbdb_inbox_full_fn(struct work_struct *inbox_full)
 {
 	struct mbdb *mbdb = container_of(inbox_full, struct mbdb, inbox_full);
-	struct fsubdev *sd = mbdb->sd;
-	u8 op_code;
-	u8 seq_no;
-	bool seq_no_error;
-	u8 rsp_status;
-	u32 tid;
 	u64 cw;
-	enum mbdb_msg_type msg_type;
-	struct mbdb_ibox *ibox = NULL;
 
 	if (READ_ONCE(mbdb->stopping))
 		return;
 
 	mutex_lock(&mbdb->inbox_mutex);
 
-	if (mbdb->polling) {
-		u64 int_status_unmasked;
-
-		if (mbdb_readq(mbdb, mbdb->int_status_unmasked_addr, &int_status_unmasked))
+	if (mbdb->polling)
+		if (!mbdb_get_polling_input(mbdb))
 			goto exit;
-
-		if (!(int_status_unmasked & INBOX_FULL_MASK)) {
-			if (atomic_read(&mbdb->ibox_waiters))
-				inbox_full_enqueue(mbdb);
-			goto exit;
-		}
-	}
 
 	/* Get the control word info */
 	if (mbdb_readq(mbdb, mbdb->gp_inbox_cw_addr, &cw))
@@ -622,77 +683,27 @@ static void mbdb_inbox_full_fn(struct work_struct *inbox_full)
 	/* acknowlege the inbox full */
 	mbdb_int_ack_wr(mbdb, INBOX_FULL_MASK);
 
-	/* fetch information about the message */
-	op_code = mbdb_mbox_op_code(cw);
-	rsp_status = mbdb_mbox_rsp_status(cw);
-	tid = mbdb_mbox_tid(cw);
-	msg_type = mbdb_mbox_msg_type(cw);
-	seq_no = mbdb_mbox_seq_no(cw);
-	seq_no_error = mbdb_mbox_seqno_error(seq_no, mbdb->inbox_seqno);
+#ifndef BPM_DISABLE_TRACES
+	trace_iaf_mbx_in(mbdb->sd->fdev->pd->index, sd_index(mbdb->sd), mbdb_mbox_op_code(cw),
+			 mbdb->inbox_seqno, mbdb_mbox_seq_no(cw), mbdb_mbox_rsp_status(cw),
+			 mbdb_mbox_tid(cw), cw);
+#endif
 
-	/* make sure we don't have a sequence number mismatch */
-	if (seq_no_error)
-		sd_info(sd, "Synchronizing recv sequence number\n");
-
-	trace_iaf_mbx_in(sd->fdev->pd->index, sd_index(sd), op_code,
-			 mbdb->inbox_seqno, seq_no, rsp_status, tid, cw);
-
-	/* update our expected sequence number of the next received message */
-	mbdb->inbox_seqno = mbdb_mbox_seqno_next(seq_no);
-
-	if (msg_type == MBOX_REQUEST) {
-		mbdb_ibox_handle_request(sd, cw);
-		mbdb_inbox_empty(mbdb);
-		goto exit;
+	/* Check that the "inbound" sequence number in the cw matches what we expect to receive */
+	if (mbdb_mbox_seqno_error(mbdb_mbox_seq_no(cw), mbdb->inbox_seqno)) {
+		sd_warn(mbdb->sd, "Synchronizing inbound sequence number\n");
 	}
 
-	ibox = mbdb_find_ibox(mbdb, tid, op_code);
-	if (!ibox) {
-		mbdb->counters[UNMATCHED_RESPONSES]++;
-		if (mbdb_mbox_is_posted(cw))
-			sd_warn(sd, "Received response to posted request cw=0x%016llx op_code=%u tid=%u rsp_status=%u\n",
-				cw, op_code, tid, rsp_status);
-		else
-			sd_warn(sd, "NOT found cw=0x%016llx op_code=%u tid=%u rsp_status=%u\n",
-				cw, op_code, tid, rsp_status);
-		mbdb_inbox_empty(mbdb);
-		goto exit;
-	}
+	/*
+	 * synchronize our expected "inbound" sequence number for the next message received from the
+	 * firmware
+	 */
+	mbdb->inbox_seqno = mbdb_mbox_seqno_next(mbdb_mbox_seq_no(cw));
 
-	ibox->cw = cw;
-
-	/* transfer the h/w data into the virtual ibox */
-	switch (rsp_status) {
-	case MBOX_RSP_STATUS_OK:
-		if (seq_no_error)
-			mbdb->counters[ERROR_RESPONSES]++;
-		else
-			mbdb->counters[NON_ERROR_RESPONSES]++;
-
-		ibox->op_rsp_handler(ibox);
-		break;
-	case MBOX_RSP_STATUS_RETRY:
-		mbdb->counters[RETRY_RESPONSES]++;
-		break;
-	case MBOX_RSP_STATUS_SEQ_NO_ERROR:
-		mbdb->counters[ERROR_RESPONSES]++;
-		sd_info(sd, "Synchronizing xmit sequence number\n");
-		break;
-	case MBOX_RSP_STATUS_OP_CODE_ERROR:
-	case MBOX_RSP_STATUS_LOGICAL_ERROR:
-	case MBOX_RSP_STATUS_DENIED:
-	default:
-		mbdb->counters[ERROR_RESPONSES]++;
-		sd_err(sd, "Errored MBOX control word: 0x%016llx\n", cw);
-		break;
-	}
-
-	ibox->rsp_status =
-		seq_no_error ? MBOX_RSP_STATUS_SEQ_NO_ERROR : rsp_status;
-
-	mbdb_seq_reset(mbdb, cw);
-
-	complete(&ibox->ibox_full);
+	if (mbdb_mbox_msg_type(cw) == MBOX_REQUEST)
+		mbdb_ibox_handle_request(mbdb->sd, cw);
+	else
+		mbdb_ibox_handle_response(mbdb, cw);
 
 	mbdb_inbox_empty(mbdb);
 

@@ -710,6 +710,17 @@ int i915_svm_devmem_add(struct intel_memory_region *mem)
 		return -ENOMEM;
 
 	devmem->mem = mem;
+#ifdef BPM_ROUND_DOWN_IOMEM_RESOURCE_END
+	/*
+	 * FIXME: If 5 Level paging is enabled then round down iomem_resource.end to get
+	 * end within 52 bits range.
+	 */
+	if (pgtable_l5_enabled() == TRUE) {
+		iomem_resource.end = iomem_resource.end - 1;
+		iomem_resource.end = round_down(iomem_resource.end, SZ_2M);
+	}
+#endif
+
 	res = devm_request_free_mem_region(dev, &iomem_resource,
 					   resource_size(&mem->region));
 	if (IS_ERR(res)) {

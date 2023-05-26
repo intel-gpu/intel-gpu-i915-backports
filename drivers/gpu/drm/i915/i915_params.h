@@ -75,7 +75,7 @@ struct drm_printer;
 	param(int, mmio_debug, -IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO), 0600) \
 	param(int, edp_vswing, 0, 0400) \
 	param(unsigned int, reset, 3, 0600) \
-	param(unsigned int, inject_probe_failure, 0, 0) \
+	param(int, inject_probe_failure, 0, 0) \
 	param(unsigned int, debug_eu, 0, 0400) \
 	param(unsigned int, debugger_timeout_ms, 3000, 0400) \
 	param(int, debugger_log_level, -1, 0600) \
@@ -97,6 +97,7 @@ struct drm_printer;
 	param(bool, enable_fake_int_wa, true, 0400) \
 	param(bool, enable_pagefault, false, 0600) \
 	param(bool, enable_iaf, true, 0400) \
+	param(bool, address_translation_services, false, IS_ENABLED(CPTCFG_DRM_I915_ATS) ? 0400 : 0) \
 	param(bool, enable_secure_batch, false, 0400) \
 	param(bool, enable_hw_throttle_blt, false, 0400) \
 	param(bool, enable_rc6, true, 0400) \

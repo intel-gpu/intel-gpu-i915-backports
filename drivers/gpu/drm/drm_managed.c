@@ -91,8 +91,17 @@ static __always_inline struct drmres * alloc_dr(drmres_release_t release,
 	/* We must catch any near-SIZE_MAX cases that could overflow. */
 	if (unlikely(check_add_overflow(sizeof(*dr), size, &tot_size)))
 		return NULL;
-
+#ifdef BPM_KMALLOC_TRACK_CALLER_NOT_EXPORTED
+/*     Commenting out tracker as backport kernel does not export
+ *     symbol externally
+ *
+ *     dr = kmalloc_node_track_caller(tot_size, gfp, nid);
+ *     Alternatively use kmalloc
+ */
+	dr = kmalloc(tot_size, gfp);
+#else
 	dr = kmalloc_node_track_caller(tot_size, gfp, nid);
+#endif
 	if (unlikely(!dr))
 		return NULL;
 

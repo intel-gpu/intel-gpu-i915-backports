@@ -19,9 +19,10 @@ KLIB_BUILD ?= $(KLIB)/build/
 KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile.rhelver
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
+PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg
 
 ARCH := x86_64
-export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH
+export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH PKG_DISTRO_TARGETS
 
 # disable built-in rules for this file
 .SUFFIXES:
@@ -128,7 +129,16 @@ defconfig-help:
 			echo "  defconfig-$${cfg##defconfigs/}"	;\
 		done
 	@echo ""
-
+.PHONY: dkmsrpm-pkg-help
+dkmsrpm-pkg-help:
+	$(info rpm package contains the default kernel version.)
+	$(info You can set this value by passing supported kernel name.)
+	$(info ###   List of supported osv kernel versions   ###)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-1 | grep FBK 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA 1>&2)
+	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
+	@echo "      ex: make dkmsrpm-pkg OS_DISTRIBUTION=FBK"
 
 .PHONY: dkms-help
 dkms-help:
@@ -142,7 +152,7 @@ dkms-help:
 	@echo ""
 
 .PHONY: help
-help: dkms-help defconfig-help
+help: dkms-help defconfig-help dkmsrpm-pkg-help
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"

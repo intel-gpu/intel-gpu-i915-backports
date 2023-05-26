@@ -25,5 +25,9 @@
 
 #define PCI_EXT_CAP_ID_VF_REBAR 0x24    /* VF Resizable BAR */
 
+#ifdef BPM_PCI_STD_NUM_BARS_NOT_DEFINED
+#define PCI_STD_NUM_BARS        6       /* Number of standard BARs */
+#endif
+
 #endif
 

@@ -530,7 +530,7 @@ static int check_for_pair(struct drm_file *file, struct drm_i915_gem_object *obj
 	}
 
 	/* obj memory regions should not be the same */
-	if (obj->mm.region == first->mm.region) {
+	if (obj->mm.region.mem == first->mm.region.mem) {
 		drm_dbg(&to_i915(obj->base.dev)->drm, "Object pair must be in different regions\n");
 		goto err_out;
 	}

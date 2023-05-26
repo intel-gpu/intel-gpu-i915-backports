@@ -447,7 +447,9 @@ void routing_sd_init(struct fsubdev *sd)
 		 sd->fdev->pd->index, sd_index(sd),
 		 sd->routing.fid_mgmt, sd->routing.fid_base);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_rt_assign_fids(sd);
+#endif
 }
 
 /**

@@ -87,9 +87,9 @@ static void frontbuffer_flush(struct drm_i915_private *i915,
 
 	if (!frontbuffer_bits)
 		return;
-
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_frontbuffer_flush(frontbuffer_bits, origin);
-
+#endif
 	might_sleep();
 	intel_drrs_flush(i915, frontbuffer_bits);
 	intel_psr_flush(i915, frontbuffer_bits, origin);
@@ -176,7 +176,9 @@ void __intel_fb_invalidate(struct intel_frontbuffer *front,
 		spin_unlock(&i915->fb_tracking.lock);
 	}
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_frontbuffer_invalidate(frontbuffer_bits, origin);
+#endif
 
 	might_sleep();
 	intel_psr_invalidate(i915, frontbuffer_bits, origin);
