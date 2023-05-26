@@ -192,9 +192,9 @@ static bool i915_gem_userptr_invalidate(struct mmu_interval_notifier *mni,
 			continue;
 
 		spin_lock(&vm->vm_rebind_lock);
-		if (!i915_vma_is_purged(vma))
-			list_move_tail(&vma->vm_rebind_link,
-				       &vm->vm_rebind_list);
+		if (list_empty(&vma->vm_rebind_link))
+			list_add_tail(&vma->vm_rebind_link,
+				      &vm->vm_rebind_list);
 		spin_unlock(&vm->vm_rebind_lock);
 	}
 	spin_unlock(&obj->vma.lock);
@@ -734,7 +734,7 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 
 	drm_gem_private_object_init(dev, &obj->base, args->user_size);
 	i915_gem_object_init(obj, &i915_gem_userptr_ops, &lock_class,
-			     I915_BO_ALLOC_STRUCT_PAGE |
+			     I915_BO_STRUCT_PAGE |
 			     I915_BO_ALLOC_USER);
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
 	obj->write_domain = I915_GEM_DOMAIN_CPU;

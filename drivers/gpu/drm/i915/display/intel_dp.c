@@ -5167,13 +5167,6 @@ intel_dp_hpd_pulse(struct intel_digital_port *dig_port, bool long_hpd)
 		return IRQ_HANDLED;
 	}
 
-	if (i915->hotplug.ignore_long_hpd && long_hpd) {
-		drm_dbg_kms(&i915->drm, "[ENCODER:%d:%s] ignoring long hpd\n",
-			    dig_port->base.base.base.id,
-			    dig_port->base.base.name);
-		return IRQ_HANDLED;
-	}
-
 	drm_dbg_kms(&i915->drm, "got hpd irq on [ENCODER:%d:%s] - %s\n",
 		    dig_port->base.base.base.id,
 		    dig_port->base.base.name,

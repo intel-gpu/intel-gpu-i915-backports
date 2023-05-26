@@ -292,39 +292,6 @@ static const u8 dg2_xcs_offsets[] = {
 	END
 };
 
-static const u8 mtl_xcs_offsets[] = {
-	NOP(1),
-	LRI(13, POSTED),
-	REG16(0x244),
-	REG(0x034),
-	REG(0x030),
-	REG(0x038),
-	REG(0x03c),
-	REG(0x168),
-	REG(0x140),
-	REG(0x110),
-	REG(0x1c0),
-	REG(0x1c4),
-	REG(0x1c8),
-	REG(0x180),
-	REG16(0x2b4),
-	NOP(4),
-
-	NOP(1),
-	LRI(9, POSTED),
-	REG16(0x3a8),
-	REG16(0x28c),
-	REG16(0x288),
-	REG16(0x284),
-	REG16(0x280),
-	REG16(0x27c),
-	REG16(0x278),
-	REG16(0x274),
-	REG16(0x270),
-
-	END
-};
-
 static const u8 gen8_rcs_offsets[] = {
 	NOP(1),
 	LRI(14, POSTED),
@@ -743,9 +710,7 @@ static const u8 *reg_offsets(const struct intel_engine_cs *engine)
 		else
 			return gen8_rcs_offsets;
 	} else {
-		if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 70))
-			return mtl_xcs_offsets;
-		else if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 55))
+		if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 55))
 			return dg2_xcs_offsets;
 		else if (GRAPHICS_VER(engine->i915) >= 12)
 			return gen12_xcs_offsets;
@@ -904,6 +869,11 @@ static void init_common_regs(u32 * const regs,
 	if (GRAPHICS_VER(engine->i915) < 11)
 		ctl |= _MASKED_BIT_DISABLE(CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT |
 					   CTX_CTRL_RS_CTX_ENABLE);
+	if (engine->flags & I915_ENGINE_HAS_RUN_ALONE_MODE) {
+		ctl |= _MASKED_BIT_DISABLE(CTX_CTRL_RUN_ALONE);
+		if (test_bit(CONTEXT_RUNALONE, &ce->flags))
+			ctl |= CTX_CTRL_RUN_ALONE;
+	}
 	regs[CTX_CONTEXT_CONTROL] = ctl;
 
 	regs[CTX_TIMESTAMP] = ce->stats.runtime.last;
@@ -1525,16 +1495,16 @@ static u32 *
 dg2_emit_rcs_hang_wabb(const struct intel_context *ce, u32 *cs)
 {
 	*cs++ = MI_LOAD_REGISTER_IMM(1);
-	*cs++ = i915_mmio_reg_offset(GEN12_STATE_ACK_DEBUG);
+	*cs++ = i915_mmio_reg_offset(GEN12_STATE_ACK_DEBUG(ce->engine->mmio_base));
 	*cs++ = 0x21;
 
 	*cs++ = MI_LOAD_REGISTER_REG;
 	*cs++ = i915_mmio_reg_offset(RING_NOPID(ce->engine->mmio_base));
-	*cs++ = i915_mmio_reg_offset(GEN12_CULLBIT1);
+	*cs++ = i915_mmio_reg_offset(XEHP_CULLBIT1);
 
 	*cs++ = MI_LOAD_REGISTER_REG;
 	*cs++ = i915_mmio_reg_offset(RING_NOPID(ce->engine->mmio_base));
-	*cs++ = i915_mmio_reg_offset(GEN12_CULLBIT2);
+	*cs++ = i915_mmio_reg_offset(XEHP_CULLBIT2);
 
 	return cs;
 }
@@ -1883,13 +1853,6 @@ u32 lrc_update_regs(const struct intel_context *ce,
 		setup_indirect_ctx_bb(ce, engine, fn);
 	}
 
-	if (engine->flags & I915_ENGINE_HAS_RUN_ALONE_MODE) {
-		regs[CTX_CONTEXT_CONTROL] &= ~CTX_CTRL_RUN_ALONE;
-		regs[CTX_CONTEXT_CONTROL] |= (CTX_CTRL_RUN_ALONE << 16);
-		if (test_bit(CONTEXT_RUNALONE, &ce->flags))
-			regs[CTX_CONTEXT_CONTROL] |= CTX_CTRL_RUN_ALONE;
-	}
-
 	return lrc_descriptor(ce) | CTX_DESC_FORCE_RESTORE;
 }
 
@@ -2159,7 +2122,7 @@ void lrc_init_wa_ctx(struct intel_engine_cs *engine)
 retry:
 	err = i915_gem_object_lock(wa_ctx->vma->obj, &ww);
 	if (!err)
-		err = i915_ggtt_pin(wa_ctx->vma, &ww, 0, PIN_HIGH);
+		err = i915_ggtt_pin_for_gt(wa_ctx->vma, &ww, 0, PIN_HIGH);
 	if (err)
 		goto err;
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2019 - 2022 Intel Corporation.
+ * Copyright(c) 2019 - 2023 Intel Corporation.
  *
  */
 
@@ -12,19 +12,46 @@
 #include <linux/bitfield.h>
 
 #include "iaf_drv.h"
-#include "ops.h"
 
-#define MBOX_CW_OPCODE GENMASK(7, 0)
+#define MBOX_CW_OPCODE GENMASK_ULL(7, 0)
 #define MBOX_CW_IS_REQ BIT_ULL_MASK(8)
 #define MBOX_CW_POSTED BIT_ULL_MASK(9)
-#define MBOX_CW_SEQ_NO GENMASK(15, 10)
-#define MBOX_CW_PARAMS_LEN GENMASK(27, 16)
-#define MBOX_CW_RSP_STATUS GENMASK(31, 28)
-#define MBOX_CW_TID GENMASK(63, 32)
+#define MBOX_CW_SEQ_NO GENMASK_ULL(15, 10)
+#define MBOX_CW_PARAMS_LEN GENMASK_ULL(27, 16)
+#define MBOX_CW_RSP_STATUS GENMASK_ULL(31, 28)
+#define MBOX_CW_TID GENMASK_ULL(63, 32)
 
 #define MBOX_CW_SEQ_NO_MASK 0x3F
 
 #define CP_ADDR_MBDB_BASE 0x6000
+
+enum mbdb_msg_type {
+	MBOX_RESPONSE = 0,
+	MBOX_REQUEST  = 1
+};
+
+enum posted {
+	MBOX_RESPONSE_REQUESTED    = 0,
+	MBOX_NO_RESPONSE_REQUESTED = 1
+};
+
+struct mbdb_ibox;
+
+typedef void (*op_response_handler)(struct mbdb_ibox *ibox);
+
+struct mbdb_ibox {
+	struct list_head ibox_list_link;
+	struct mbdb *mbdb;
+	struct completion ibox_full;
+	u64 cw;
+	u32 tid;
+	u16 rsp_len;
+	void *response;
+	int rsp_status; /* MBDB_RSP_STATUS value from the cw or errno from a response handler */
+	op_response_handler op_rsp_handler;
+	u8 op_code;
+	u8 retries;
+};
 
 enum mbdb_counters {
 	MBDB_COUNTERS_FIRST,
@@ -71,17 +98,17 @@ static inline u64 build_cw(u8 op_code, enum mbdb_msg_type req_rsp,
 			   enum posted is_posted, u16 seq_no, u16 length,
 			   u32 tid)
 {
-	return (u64)FIELD_PREP(MBOX_CW_OPCODE, op_code) |
-		    FIELD_PREP(MBOX_CW_IS_REQ, req_rsp) |
-		    FIELD_PREP(MBOX_CW_POSTED, is_posted) |
-		    FIELD_PREP(MBOX_CW_SEQ_NO, seq_no) |
-		    FIELD_PREP(MBOX_CW_PARAMS_LEN, length) |
-		    FIELD_PREP(MBOX_CW_TID, tid);
+	return (FIELD_PREP(MBOX_CW_OPCODE, op_code) |
+		FIELD_PREP(MBOX_CW_IS_REQ, req_rsp) |
+		FIELD_PREP(MBOX_CW_POSTED, is_posted) |
+		FIELD_PREP(MBOX_CW_SEQ_NO, seq_no) |
+		FIELD_PREP(MBOX_CW_PARAMS_LEN, length) |
+		FIELD_PREP(MBOX_CW_TID, tid));
 }
 
 static inline u8 mbdb_mbox_op_code(u64 cw)
 {
-	return (u8)FIELD_GET(MBOX_CW_OPCODE, cw);
+	return FIELD_GET(MBOX_CW_OPCODE, cw);
 }
 
 static inline enum mbdb_msg_type mbdb_mbox_msg_type(u64 cw)
@@ -96,7 +123,7 @@ static inline enum posted mbdb_mbox_is_posted(u64 cw)
 
 static inline u8 mbdb_mbox_seq_no(u64 cw)
 {
-	return (u8)FIELD_GET(MBOX_CW_SEQ_NO, cw);
+	return FIELD_GET(MBOX_CW_SEQ_NO, cw);
 }
 
 static inline u8 mbdb_mbox_seqno_next(u8 seqno)
@@ -111,12 +138,12 @@ static inline bool mbdb_mbox_seqno_error(u8 seqno, u8 expected_seqno)
 
 static inline u16 mbdb_mbox_params_len(u64 cw)
 {
-	return (u16)FIELD_GET(MBOX_CW_PARAMS_LEN, cw);
+	return FIELD_GET(MBOX_CW_PARAMS_LEN, cw);
 }
 
 static inline u32 mbdb_mbox_tid(u64 cw)
 {
-	return (u32)FIELD_GET(MBOX_CW_TID, cw);
+	return FIELD_GET(MBOX_CW_TID, cw);
 }
 
 static inline u32 mbdb_ibox_tid(struct mbdb_ibox *ibox)
@@ -126,7 +153,7 @@ static inline u32 mbdb_ibox_tid(struct mbdb_ibox *ibox)
 
 static inline u8 mbdb_mbox_rsp_status(u64 cw)
 {
-	return (u8)FIELD_GET(MBOX_CW_RSP_STATUS, cw);
+	return FIELD_GET(MBOX_CW_RSP_STATUS, cw);
 }
 
 struct fsubdev *mbdb_ibox_sd(struct mbdb_ibox *ibox);

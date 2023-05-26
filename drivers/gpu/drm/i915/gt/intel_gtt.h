@@ -94,6 +94,7 @@ typedef u64 gen8_pte_t;
 #define GEN12_PPGTT_PTE_NC	BIT_ULL(5)
 #define GEN12_PPGTT_PTE_PAT1	BIT_ULL(4)
 #define GEN12_PPGTT_PTE_PAT0	BIT_ULL(3)
+#define GEN12_PPGTT_PTE_FF	BIT_ULL(2)
 
 /*
  *  DOC: GEN12 GGTT Table Entry format
@@ -413,13 +414,14 @@ struct i915_address_space {
 #define PTE_READ_ONLY	BIT(0)
 #define PTE_LM		BIT(1)
 #define PTE_AE		BIT(2)
+#define PTE_FF		BIT(3)
 
 	void (*allocate_va_range)(struct i915_address_space *vm,
 				  struct i915_vm_pt_stash *stash,
 				  u64 start, u64 length);
 	void (*clear_range)(struct i915_address_space *vm,
 			    u64 start, u64 length);
-	void (*error_range)(struct i915_address_space *vm,
+	void (*scratch_range)(struct i915_address_space *vm,
 			    u64 start, u64 length);
 	void (*dump_va_range)(struct i915_address_space *vm,
 			      u64 start, u64 length);
@@ -429,6 +431,7 @@ struct i915_address_space {
 			    unsigned int pat_index,
 			    u32 flags);
 	void (*insert_entries)(struct i915_address_space *vm,
+			       struct i915_vm_pt_stash *stash,
 			       struct i915_vma *vma,
 			       unsigned int pat_index,
 			       u32 flags);
@@ -441,6 +444,9 @@ struct i915_address_space {
 				   void *data),
 			void *data);
 
+	void (*invalidate_dev_tlb)(struct i915_address_space *vm,
+				   u64 start, u64 length);
+
 	struct i915_vma_ops vma_ops;
 
 	I915_SELFTEST_DECLARE(struct fault_attr fault_attr);
@@ -450,6 +456,12 @@ struct i915_address_space {
 
 	/* Per tile active users of this VM */
 	atomic_t active_contexts_gt[I915_MAX_GT];
+
+	/* PASID for Address Translation Services */
+	struct iommu_sva *sva;
+	u32 pasid;
+	/* Indicates if address space has a valid PASID bounded to IOMMU */
+	bool has_pasid:1;
 };
 
 /*
@@ -883,8 +895,10 @@ int svm_bind_addr_prepare(struct i915_address_space *vm,
 			  struct i915_vm_pt_stash *stash,
 			  struct i915_gem_ww_ctx *ww,
 			  u64 start, u64 size);
-int svm_bind_addr_commit(struct i915_address_space *vm, u64 start, u64 size,
-			 u64 flags, struct sg_table *st, u32 sg_page_sizes);
+int svm_bind_addr_commit(struct i915_address_space *vm,
+			 struct i915_vm_pt_stash *stash,
+			 u64 start, u64 size, u64 flags,
+			 struct sg_table *st, u32 sg_page_sizes);
 int svm_bind_addr(struct i915_address_space *vm, struct i915_gem_ww_ctx *ctx,
 		  u64 start, u64 size, u64 flags,
 		  struct sg_table *st, u32 sg_page_sizes);

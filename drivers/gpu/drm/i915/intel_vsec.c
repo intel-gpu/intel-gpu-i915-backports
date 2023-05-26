@@ -5,7 +5,6 @@
 #include <linux/intel_vsec.h>
 
 #include "i915_drv.h"
-#include "intel_pci_config.h"
 #include "intel_vsec.h"
 
 #define SOC_BASE		0x280000
@@ -22,10 +21,12 @@
 #define TELEM_OFFSET		(SOC_BASE + PMT_BASE + TELEM_START)
 #define TELEM_BASE_OFFSET	0x8
 
+#define GFX_BAR			0
+
 static struct intel_vsec_header dg2_telemetry = {
 	.length = 0x10,
 	.entry_size = 3,
-	.tbir = GTTMMADR_BAR,
+	.tbir = GFX_BAR,
 	.offset = DISCOVERY_OFFSET,
 	.id = VSEC_ID_TELEMETRY,
 	.num_entries = 1,
@@ -74,7 +75,7 @@ void intel_vsec_init(struct drm_i915_private *dev_priv)
 	 * save this so that the telemetry driver can use it to adjust the
 	 * value.
 	 */
-	addr = pci_resource_start(pdev, GTTMMADR_BAR) + DISCOVERY_OFFSET;
+	addr = pci_resource_start(pdev, GFX_BAR) + DISCOVERY_OFFSET;
 	res = (struct resource)DEFINE_RES_MEM(addr, 16);
 	base = devm_ioremap_resource(dev, &res);
 	if (IS_ERR(base))

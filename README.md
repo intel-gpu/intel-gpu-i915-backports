@@ -28,10 +28,12 @@ backport/main will point to the currently supported version of Ubuntu® and SLES
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| Ubuntu® | 22.04 | Kernel 5.17 oem | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| | 20.04 | Kernel 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| | Mainline LTS |  Kernel 5.15 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| SLES | 15SP4 | Kernel 5.14 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md) |
+| Ubuntu® | 22.04 | Kernel 5.19 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_ubuntu.md) |
+| | 22.04 |  Kernel 5.17 oem | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_ubuntu.md) |
+| | 20.04 |  Kernel 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_ubuntu.md) |
+| | Mainline LTS |  Kernel 5.15 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_ubuntu.md) |
+| SLES | 15SP4 | Kernel 5.14 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README_sles.md) |
+
 
 # Product Releases:
 Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)

@@ -138,12 +138,10 @@ i915dkmsdeb-pkg-help:
 		pass the supported kernel name to OS_DISTRIBUTION option)
 	$(info )
 	$(info ##### List of supported osv kernel versions #####)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC" 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep "GENERIC" 1>&2)
+	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC_KERNEL" 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
-	$(shell cat versions |& tail -n +4 | grep VANILLA_KERNEL_VERSION | cut -d "_" -f 1 1>&2)
 	$(info )
-	$(info Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_GENERIC)
+	$(info Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_GENERIC)
 	@echo ""
 
 .PHONY: i915dkmsrpm-pkg-help
@@ -157,7 +155,6 @@ i915dkmsrpm-pkg-help:
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep FBK 1>&2)
-	$(shell cat versions |& tail -n +4 | grep VANILLA_KERNEL_VERSION | cut -d "_" -f 1 1>&2)
 	$(info )
 	$(info Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4)
 	@echo ""
@@ -199,7 +196,7 @@ help: defconfig-help i915dkmsdeb-pkg-help i915dkmsrpm-pkg-help
 	@echo ""
 	@echo "Execute "make" or "make all" to build all targets marked with [*]"
 else
-include $(BACKPORT_DIR)/Makefile.dkms
+include $(BACKPORT_DIR)/Makefile.backport
 endif
 
 PHONY += FORCE

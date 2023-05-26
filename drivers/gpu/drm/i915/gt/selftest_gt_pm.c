@@ -50,8 +50,8 @@ static void measure_clocks(struct intel_engine_cs *engine,
 
 		udelay(1000);
 
-		dt[i] = ktime_sub(ktime_get(), dt[i]);
 		cycles[i] += ENGINE_READ_FW(engine, RING_TIMESTAMP);
+		dt[i] = ktime_sub(ktime_get(), dt[i]);
 		local_irq_enable();
 	}
 

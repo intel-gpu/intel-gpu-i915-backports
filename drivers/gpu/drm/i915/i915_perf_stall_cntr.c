@@ -297,7 +297,7 @@ clear_dropped_eviction_line_bit(struct intel_gt *gt, u8 s, u8 ss)
 	/* Clear the overflow bit by setting it to 1 */
 	write_ptr_reg = _MASKED_BIT_ENABLE(XEHPC_EUSTALL_REPORT_OVERFLOW_DROP);
 	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT, write_ptr_reg, s, ss);
-	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT,
+	trace_i915_reg_rw(true, _MMIO(XEHPC_EUSTALL_REPORT.reg),
 			  write_ptr_reg, sizeof(write_ptr_reg), true);
 }
 
@@ -434,7 +434,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	read_ptr_reg |= (XEHPC_EUSTALL_REPORT1_READ_PTR_MASK <<
 			 XEHPC_EUSTALL_REPORT1_MASK_SHIFT);
 	intel_gt_mcr_unicast_write(gt, XEHPC_EUSTALL_REPORT1, read_ptr_reg, s, ss);
-	trace_i915_reg_rw(true, XEHPC_EUSTALL_REPORT1,
+	trace_i915_reg_rw(true, _MMIO(XEHPC_EUSTALL_REPORT1.reg),
 			  read_ptr_reg, sizeof(read_ptr_reg), true);
 	if (dss_buf->line_drop) {
 		clear_dropped_eviction_line_bit(gt, s, ss);

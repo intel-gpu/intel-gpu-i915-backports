@@ -49,17 +49,22 @@ static int ufence_work(struct dma_fence_work *work)
 	struct vm_bind_user_fence *vb =
 		container_of(work, struct vm_bind_user_fence, base);
 	struct user_fence *ufence = &vb->user_fence;
+	struct mm_struct *mm;
 	int ret = -EFAULT;
 
-	if (!ufence->mm)
+	mm = ufence->mm;
+	if (!mm)
 		return 0;
 
-	kthread_use_mm(ufence->mm);
-	if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
-		wake_up_all(vb->wq);
-		ret = 0;
+	if (mmget_not_zero(mm)) {
+		kthread_use_mm(mm);
+		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
+			wake_up_all(vb->wq);
+			ret = 0;
+		}
+		kthread_unuse_mm(mm);
+		mmput(mm);
 	}
-	kthread_unuse_mm(ufence->mm);
 
 	return ret;
 }
@@ -111,7 +116,7 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 
 static int __vm_bind_fence(struct vm_bind_user_ext *arg, u64 addr, u64 val)
 {
-	u64 x, * __user ptr = u64_to_user_ptr(addr);
+	u64 x, __user *ptr = u64_to_user_ptr(addr);
 
 	if (arg->bind_fence.mm)
 		return -EINVAL;
@@ -274,6 +279,15 @@ i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va)
 	return vma;
 }
 
+static void i915_gem_vm_bind_unpublish(struct i915_vma *vma)
+{
+	struct i915_address_space *vm = vma->vm;
+
+	mutex_lock_nested(&vm->mutex, SINGLE_DEPTH_NESTING);
+	i915_vma_unpublish(vma);
+	mutex_unlock(&vm->mutex);
+}
+
 static void i915_gem_vm_bind_release(struct i915_vma *vma)
 {
 	struct drm_i915_gem_object *obj = vma->obj;
@@ -287,16 +301,13 @@ static void i915_gem_vm_bind_remove(struct i915_vma *vma)
 	assert_vm_bind_held(vma->vm);
 	GEM_BUG_ON(list_empty(&vma->vm_bind_link));
 
-	i915_vma_set_purged(vma);
-
 	spin_lock(&vma->vm->vm_capture_lock);
 	if (!list_empty(&vma->vm_capture_link))
 		list_del_init(&vma->vm_capture_link);
 	spin_unlock(&vma->vm->vm_capture_lock);
 
 	spin_lock(&vma->vm->vm_rebind_lock);
-	if (!list_empty(&vma->vm_rebind_link))
-		list_del_init(&vma->vm_rebind_link);
+	list_del(&vma->vm_rebind_link);
 	spin_unlock(&vma->vm->vm_rebind_lock);
 
 	list_del_init(&vma->vm_bind_link);
@@ -329,16 +340,8 @@ struct unbind_work {
 static int unbind(struct dma_fence_work *work)
 {
 	struct unbind_work *w = container_of(work, typeof(*w), base);
-	struct i915_vma *vma = w->vma;
-	struct i915_address_space *vm = vma->vm;
 
-	mutex_lock_nested(&vm->mutex, SINGLE_DEPTH_NESTING);
-	if (drm_mm_node_allocated(&vma->node)) {
-		__i915_vma_evict(vma);
-		drm_mm_remove_node(&vma->node);
-	}
-	mutex_unlock(&vm->mutex);
-
+	i915_gem_vm_bind_unpublish(w->vma);
 	return 0;
 }
 
@@ -459,9 +462,9 @@ static struct i915_vma *vm_bind_get_vma(struct i915_address_space *vm,
 
 	vma->start = va->start;
 	vma->last = va->start + va->length - 1;
-	i915_vma_set_persistent(vma);
+	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
 
-	return vma;
+	return __i915_vma_get(vma);
 }
 
 int i915_gem_vm_bind_obj(struct i915_address_space *vm,
@@ -597,8 +600,10 @@ out_ww:
 	}
 	i915_gem_ww_ctx_fini(&ww);
 
-	if (ret)
+	if (ret) {
+		i915_gem_vm_bind_unpublish(vma);
 		i915_gem_vm_bind_release(vma);
+	}
 unlock_vm:
 	i915_gem_vm_bind_unlock(vm);
 put_obj:

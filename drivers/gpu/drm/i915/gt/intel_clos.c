@@ -6,6 +6,7 @@
 #include "i915_drv.h"
 
 #include "intel_gt.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_regs.h"
 #include "intel_clos.h"
 
@@ -15,7 +16,7 @@ static void clos_update_ways(struct intel_gt *gt, u8 clos_index, u32 mask)
 
 	DRM_DEBUG("clos index = %d mask = 0x%x", clos_index,  mask);
 	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
-	intel_uncore_write(gt->uncore, GEN12_L3CLOS_MASK(clos_index), mask);
+	intel_gt_mcr_multicast_write(gt, XEHPC_L3CLOS_MASK(clos_index), mask);
 	intel_runtime_pm_put(gt->uncore->rpm, wakeref);
 }
 
@@ -47,6 +48,9 @@ static void update_l3cache_masks(struct drm_i915_private *dev_priv)
 void init_device_clos(struct drm_i915_private *dev_priv)
 {
 	int i;
+	
+	if (!HAS_CACHE_CLOS(dev_priv))
+		return;
 
 	mutex_init(&dev_priv->cache_resv.clos_mutex);
 	// CLOS1 and CLOS2 available for Reservation
@@ -63,17 +67,26 @@ void init_device_clos(struct drm_i915_private *dev_priv)
 
 void uninit_device_clos(struct drm_i915_private *dev_priv)
 {
+	if (!HAS_CACHE_CLOS(dev_priv))
+		return;
+
 	mutex_destroy(&dev_priv->cache_resv.clos_mutex);
 }
 
 void init_client_clos(struct drm_i915_file_private *fpriv)
 {
+	if (!HAS_CACHE_CLOS(fpriv->dev_priv))
+		return;
+
 	fpriv->clos_resv.clos_mask = 0;   // No CLOS reserved yet
 	fpriv->clos_resv.l3_rsvd_ways = 0;
 }
 
 void uninit_client_clos(struct drm_i915_file_private *fpriv)
 {
+	if (!HAS_CACHE_CLOS(fpriv->dev_priv))
+		return;
+
 	while (fpriv->clos_resv.clos_mask){
 		u16 clos_index = ffs(fpriv->clos_resv.clos_mask) - 1;
 

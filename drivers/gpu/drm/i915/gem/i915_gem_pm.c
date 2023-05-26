@@ -35,11 +35,9 @@ static int perma_pinned_swapout(struct drm_i915_gem_object *obj)
 	dst->base.resv = obj->base.resv;
 	assert_object_held(dst);
 	err = i915_gem_object_memcpy(dst, obj);
-
-	if (!err) {
+	if (!err)
 		obj->swapto = dst;
-		obj->evicted = true;
-	} else
+	else
 		i915_gem_object_put(dst);
 
 	return err;
@@ -55,12 +53,11 @@ static int perma_pinned_swapin(struct drm_i915_gem_object *obj)
 
 	assert_object_held(src);
 	err = i915_gem_object_memcpy(obj, src);
-
 	if (!err) {
 		obj->swapto = NULL;
-		obj->evicted = false;
 		i915_gem_object_put(src);
 	}
+
 	return err;
 }
 
@@ -79,8 +76,8 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			continue;
 
 		/* singlethreaded suspend; list immutable */
-		list_for_each_entry(obj, &mem->objects.list, mm.region_link) {
-			int err = 0;
+		list_for_each_entry(obj, &mem->objects.list, mm.region.link) {
+			int err;
 
 			if (obj->swapto ||
 			    !i915_gem_object_has_pinned_pages(obj))
@@ -90,7 +87,7 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			if (!kref_get_unless_zero(&obj->base.refcount))
 				continue;
 
-                        i915_gem_object_lock(obj, NULL);
+			i915_gem_object_lock(obj, NULL);
 			err = perma_pinned_swapout(obj);
 			i915_gem_object_unlock(obj);
 
@@ -115,7 +112,7 @@ static int lmem_resume(struct drm_i915_private *i915)
 			continue;
 
 		/* singlethreaded resume; list immutable */
-		list_for_each_entry(obj, &mem->objects.list, mm.region_link) {
+		list_for_each_entry(obj, &mem->objects.list, mm.region.link) {
 			int err;
 
 			if (!obj->swapto ||

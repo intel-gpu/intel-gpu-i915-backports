@@ -1000,8 +1000,8 @@ struct prelim_drm_i915_lmem_memory_region_info {
 /**
  * struct prelim_drm_i915_query_lmem_memory_regions
  *
- * Region info query enumerates all lmem regions known to the driver by filling in
- * an array of struct prelim_drm_i915_lmem_memory_region_info structures.
+ * Region info query enumerates all lmem regions known to the driver by filling
+ * in an array of struct prelim_drm_i915_lmem_memory_region_info structures.
  */
 struct prelim_drm_i915_query_lmem_memory_regions {
 	/** Number of supported regions */

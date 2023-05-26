@@ -115,14 +115,14 @@ static void set_scheduler_caps(struct drm_i915_private *i915)
 	for_each_uabi_engine(engine, i915) { /* all engines must agree! */
 		int i;
 
-		if (engine->sched_engine->schedule)
+		if (intel_engine_has_scheduler(engine))
 			enabled |= (I915_SCHEDULER_CAP_ENABLED |
 				    I915_SCHEDULER_CAP_PRIORITY);
 		else
 			disabled |= (I915_SCHEDULER_CAP_ENABLED |
 				     I915_SCHEDULER_CAP_PRIORITY);
 
-		if (intel_uc_uses_guc_submission(&to_gt(i915)->uc))
+		if (intel_engine_uses_guc(engine))
 			enabled |= I915_SCHEDULER_CAP_STATIC_PRIORITY_MAP |
 				PRELIM_I915_SCHEDULER_CAP_STATIC_PRIORITY_MAP;
 

@@ -2257,26 +2257,12 @@ static struct execlists_capture *capture_regs(struct intel_engine_cs *engine)
 	if (!cap)
 		return NULL;
 
-	cap->error = i915_gpu_coredump_alloc(engine->i915, gfp);
+	cap->error = i915_gpu_coredump_create_for_engine(engine, gfp);
 	if (!cap->error)
 		goto err_cap;
 
-	cap->error->gt = intel_gt_coredump_alloc(engine->gt, gfp, CORE_DUMP_FLAG_NONE);
-	if (!cap->error->gt)
-		goto err_gpu;
-
-	cap->error->gt->engine = intel_engine_coredump_alloc(engine, gfp, CORE_DUMP_FLAG_NONE);
-	if (!cap->error->gt->engine)
-		goto err_gt;
-
-	cap->error->gt->engine->hung = true;
-
 	return cap;
 
-err_gt:
-	kfree(cap->error->gt);
-err_gpu:
-	kfree(cap->error);
 err_cap:
 	kfree(cap);
 	return NULL;
@@ -2540,7 +2526,7 @@ static void execlists_irq_handler(struct intel_engine_cs *engine, u16 iir)
 		tasklet = true;
 
 	if (iir & GT_RENDER_USER_INTERRUPT)
-		intel_engine_signal_breadcrumbs(engine);
+		intel_engine_signal_breadcrumbs_irq(engine);
 
 	/* XXX unmask NOTIFY_INTERRUPT in RING_IMR, and include MI_FLUSH_DW */
 	if (iir & GT_RENDER_PIPECTL_NOTIFY_INTERRUPT)
@@ -3034,10 +3020,12 @@ static void execlists_reset_prepare(struct intel_engine_cs *engine)
 	intel_engine_stop_cs(engine);
 
 	/*
-	 * Wa_22011802037:gen11/gen12: In addition to stopping the cs, we need
+	 * Wa_22011802037: In addition to stopping the cs, we need
 	 * to wait for any pending mi force wakeups
 	 */
-	if (IS_GRAPHICS_VER(engine->i915, 11, 12))
+	if (IS_MTL_GRAPHICS_STEP(engine->i915, M, STEP_A0, STEP_B0) ||
+	    (GRAPHICS_VER(engine->i915) >= 11 &&
+	    GRAPHICS_VER_FULL(engine->i915) < IP_VER(12, 70)))
 		intel_engine_wait_for_pending_mi_fw(engine);
 
 	engine->execlists.reset_ccid = active_ccid(engine);
@@ -3375,7 +3363,6 @@ unlock:
 static void execlists_set_default_submission(struct intel_engine_cs *engine)
 {
 	engine->submit_request = execlists_submit_request;
-	engine->sched_engine->schedule = i915_schedule;
 	engine->sched_engine->kick_backend = kick_execlists;
 	engine->sched_engine->tasklet.callback = execlists_submission_tasklet;
 }
@@ -3459,6 +3446,7 @@ logical_ring_default_vfuncs(struct intel_engine_cs *engine)
 	}
 	intel_engine_set_irq_handler(engine, execlists_irq_handler);
 
+	engine->flags |= I915_ENGINE_HAS_SCHEDULER;
 	engine->flags |= I915_ENGINE_SUPPORTS_STATS;
 	if (!intel_vgpu_active(engine->i915)) {
 		engine->flags |= I915_ENGINE_HAS_SEMAPHORES;
@@ -4080,7 +4068,6 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 	ve->base.cops = &virtual_context_ops;
 	ve->base.request_alloc = execlists_request_alloc;
 
-	ve->base.sched_engine->schedule = i915_schedule;
 	ve->base.sched_engine->kick_backend = kick_execlists;
 	ve->base.submit_request = virtual_submit_request;
 	ve->base.bond_execute = virtual_bond_execute;

@@ -7,7 +7,7 @@
 #include "intel_iov_event.h"
 #include "intel_iov_state.h"
 #include "intel_iov_utils.h"
-#include "gem/i915_gem_object_blt.h"
+#include "gem/i915_gem_lmem.h"
 #include "gt/intel_gt.h"
 #include "gt/uc/abi/guc_actions_pf_abi.h"
 
@@ -158,8 +158,6 @@ static void pf_clear_vf_ggtt_entries(struct intel_iov *iov, u32 vfid)
 
 static void pf_clear_vf_lmem_obj(struct intel_iov *iov, u32 vfid)
 {
-	struct intel_gt *gt = iov_to_gt(iov);
-	struct intel_context *ce = gt->engine[gt->rsvd_bcs]->blitter_context;
 	struct drm_i915_gem_object *obj;
 	int err;
 
@@ -169,7 +167,7 @@ static void pf_clear_vf_lmem_obj(struct intel_iov *iov, u32 vfid)
 	if (!obj)
 		return;
 
-	err = i915_gem_object_fill_blt(obj, ce, 0);
+	err = i915_gem_object_clear_lmem(obj);
 	if (unlikely(err))
 		IOV_ERROR(iov, "Failed to clear VF%u LMEM (%pe)\n",
 			  vfid, ERR_PTR(err));

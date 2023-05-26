@@ -8,13 +8,17 @@
 #include "i915_trace.h"
 #include "intel_engine_pm.h"
 #include "intel_gt.h"
+#include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
 #include "intel_gt_regs.h"
 #include "intel_tlb.h"
 #include "uc/intel_guc.h"
 
 struct reg_and_bit {
-	i915_reg_t reg;
+	union {
+		i915_reg_t reg;
+		i915_mcr_reg_t mcr_reg;
+	};
 	u32 bit;
 };
 
@@ -23,7 +27,7 @@ get_reg_and_bit(const struct intel_engine_cs *engine, const bool gen8,
 		const i915_reg_t *regs, const unsigned int num)
 {
 	const unsigned int class = engine->class;
-	struct reg_and_bit rb = { };
+	struct reg_and_bit rb = {};
 
 	if (drm_WARN_ON_ONCE(&engine->i915->drm,
 			     class >= num || !regs[class].reg))
@@ -38,6 +42,49 @@ get_reg_and_bit(const struct intel_engine_cs *engine, const bool gen8,
 	rb.bit = BIT(rb.bit);
 
 	return rb;
+}
+
+static struct reg_and_bit
+get_mcr_reg_and_bit(const struct intel_engine_cs *engine,
+		    const i915_mcr_reg_t *regs, const unsigned int num)
+{
+	const unsigned int class = engine->class;
+	struct reg_and_bit rb = {};
+
+	if (drm_WARN_ON_ONCE(&engine->i915->drm,
+			     class >= num || !regs[class].reg))
+		return rb;
+
+	rb.mcr_reg = regs[class];
+	rb.bit = BIT(engine->instance);
+
+	return rb;
+}
+
+/*
+ * HW architecture suggest typical invalidation time at 40us,
+ * with pessimistic cases up to 100us and a recommendation to
+ * cap at 1ms. We go a bit higher just in case.
+ */
+#define TLB_INVAL_TIMEOUT_US 100
+#define TLB_INVAL_TIMEOUT_MS 4
+
+/*
+ * On Xe_HP the TLB invalidation registers are located at the same MMIO offsets
+ * but are now considered MCR registers.  Since they exist within a GAM range,
+ * the primary instance of the register rolls up the status from each unit.
+ */
+static int wait_for_invalidate(struct intel_gt *gt, struct reg_and_bit rb)
+{
+	if (GRAPHICS_VER_FULL(gt->i915) >= IP_VER(12, 50))
+		return intel_gt_mcr_wait_for_reg(gt, rb.mcr_reg, rb.bit, 0,
+						 TLB_INVAL_TIMEOUT_US,
+						 TLB_INVAL_TIMEOUT_MS);
+	else
+		return __intel_wait_for_register_fw(gt->uncore, rb.reg, rb.bit, 0,
+						    TLB_INVAL_TIMEOUT_US,
+						    TLB_INVAL_TIMEOUT_MS,
+						    NULL);
 }
 
 static bool tlb_seqno_passed(const struct intel_gt *gt, u32 seqno)
@@ -63,7 +110,7 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 		[COPY_ENGINE_CLASS]		= GEN12_BLT_TLB_INV_CR,
 		[COMPUTE_CLASS]			= GEN12_COMPCTX_TLB_INV_CR,
 	};
-	static const i915_reg_t xehp_regs[] = {
+	static const i915_mcr_reg_t xehp_regs[] = {
 		[RENDER_CLASS]			= XEHP_GFX_TLB_INV_CR,
 		[VIDEO_DECODE_CLASS]		= XEHP_VD_TLB_INV_CR,
 		[VIDEO_ENHANCEMENT_CLASS]	= XEHP_VE_TLB_INV_CR,
@@ -77,9 +124,10 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 	enum intel_engine_id id;
 	const i915_reg_t *regs;
 	unsigned int num = 0;
+	unsigned long flags;
 
 	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
-		regs = xehp_regs;
+		regs = NULL;
 		num = ARRAY_SIZE(xehp_regs);
 	} else if (GRAPHICS_VER(i915) == 12) {
 		regs = gen12_regs;
@@ -97,7 +145,8 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_ALL);
 
-	spin_lock_irq(&uncore->lock); /* serialise invalidate with GT reset */
+	intel_gt_mcr_lock(gt, &flags);
+	spin_lock(&uncore->lock); /* serialise invalidate with GT reset */
 
 	awake = 0;
 	for_each_engine(engine, gt, id) {
@@ -106,11 +155,31 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 		if (!intel_engine_pm_is_awake(engine))
 			continue;
 
-		rb = get_reg_and_bit(engine, regs == gen8_regs, regs, num);
-		if (!i915_mmio_reg_offset(rb.reg))
-			continue;
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50)) {
+			rb = get_mcr_reg_and_bit(engine, xehp_regs, num);
+			if (!i915_mmio_reg_offset(rb.reg))
+				continue;
 
-		intel_uncore_write_fw(uncore, rb.reg, rb.bit << 16 | rb.bit);
+			if (engine->class == VIDEO_DECODE_CLASS ||
+			    engine->class == VIDEO_ENHANCEMENT_CLASS ||
+			    engine->class == COMPUTE_CLASS)
+				rb.bit = _MASKED_BIT_ENABLE(rb.bit);
+
+			intel_gt_mcr_multicast_write_fw(gt, rb.mcr_reg, rb.bit);
+		} else {
+			rb = get_reg_and_bit(engine, regs == gen8_regs, regs, num);
+
+			if (!i915_mmio_reg_offset(rb.reg))
+				continue;
+
+			if (GRAPHICS_VER(i915) == 12 &&
+			    (engine->class == VIDEO_DECODE_CLASS ||
+			     engine->class == VIDEO_ENHANCEMENT_CLASS ||
+			     engine->class == COMPUTE_CLASS))
+				rb.bit = _MASKED_BIT_ENABLE(rb.bit);
+
+			intel_uncore_write_fw(uncore, rb.reg, rb.bit);
+		}
 		awake |= engine->mask;
 	}
 
@@ -125,29 +194,22 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 	     IS_ALDERLAKE_P(i915)))
 		intel_uncore_write_fw(uncore, GEN12_OA_TLB_INV_CR, 1);
 
-	spin_unlock_irq(&uncore->lock);
+	spin_unlock(&uncore->lock);
+	intel_gt_mcr_unlock(gt, flags);
 
 	for_each_engine_masked(engine, gt, awake, tmp) {
-		u64 rstcnt = atomic_read(&gt->reset.engines_reset_count);
 		struct reg_and_bit rb;
 
-		/*
-		 * HW architecture suggest typical invalidation time at 40us,
-		 * with pessimistic cases up to 100us and a recommendation to
-		 * cap at 1ms. We go a bit higher just in case.
-		 */
-		const unsigned int timeout_us = 100;
-		const unsigned int timeout_ms = 4;
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+			rb = get_mcr_reg_and_bit(engine, xehp_regs, num);
+		else
+			rb = get_reg_and_bit(engine, regs == gen8_regs, regs, num);
+		GEM_BUG_ON(!i915_mmio_reg_offset(rb.reg));
 
-		rb = get_reg_and_bit(engine, regs == gen8_regs, regs, num);
-		if (__intel_wait_for_register_fw(uncore,
-						 rb.reg, rb.bit, 0,
-						 timeout_us, timeout_ms,
-						 NULL) &&
-		    rstcnt == atomic_read(&gt->reset.engines_reset_count))
+		if (wait_for_invalidate(gt, rb))
 			drm_err_ratelimited(&gt->i915->drm,
 					    "%s TLB invalidation did not complete in %ums!\n",
-					    engine->name, timeout_ms);
+					    engine->name, TLB_INVAL_TIMEOUT_MS);
 	}
 
 	/*

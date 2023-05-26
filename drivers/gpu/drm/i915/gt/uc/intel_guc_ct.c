@@ -503,7 +503,7 @@ static int ct_write(struct intel_guc_ct *ct,
 	 * make sure H2G buffer update and LRC tail update (if this triggering a
 	 * submission) are visible before updating the descriptor tail
 	 */
-	i915_write_barrier(ct_to_i915(ct), i915_gem_object_is_lmem(ct->vma->obj));
+	i915_write_barrier(ct_to_i915(ct));
 
 	/* update local copies */
 	ctb->tail = tail;
@@ -524,6 +524,14 @@ static int ct_write(struct intel_guc_ct *ct,
 					  ct_to_guc(ct)->notify_reg);
 		}
 	}
+
+	/* Wa_22016122933: Theoretically write combining buffer flush is
+	 * needed here to make the tail update visible to GuC right away,
+	 * but ct_write is always followed by a MMIO write which triggers
+	 * the interrupt to GuC, so an explicit flush is not required.
+	 * Just leave a comment here for now.
+	 */
+	/* i915_write_barrier(ct_to_i915(ct)); */
 
 	return 0;
 
@@ -1045,6 +1053,12 @@ static int ct_read(struct intel_guc_ct *ct, struct ct_incoming_msg **msg)
 
 	/* now update descriptor */
 	WRITE_ONCE(desc->head, head);
+
+	/*
+	 * Wa_22016122933: Making sure the head update is
+	 * visible to GuC right away
+	 */
+	i915_write_barrier(ct_to_i915(ct));
 
 	return available - len;
 

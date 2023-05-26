@@ -66,7 +66,7 @@ static void binder_throttle(struct intel_context *ce)
 	rcu_read_unlock();
 
 	if (rq) {
-		__i915_request_wait_timeout(rq, 0, MAX_SCHEDULE_TIMEOUT);
+		__i915_request_wait(rq, 0, MAX_SCHEDULE_TIMEOUT);
 		i915_request_put(rq);
 	}
 }

@@ -123,6 +123,7 @@ enum {
 
 #define PVC_FW_IMAGE  "i915/pvc_iaf_ver1.bin"
 #define PVC_FW_IMAGE_DEBUG_SIGNED  "i915/pvc_iaf_ver1d.bin"
+#define PVC_FW_IMAGE_EXPORT_LIMITED  "i915/pvc_iaf_ver1e.bin"
 /*
  * FW image
  */
@@ -661,20 +662,6 @@ static int load_fw(struct fsubdev *sd)
 {
 	struct mbdb_op_fw_version_rsp *fw_version = &sd->fw_version;
 	int err;
-
-	/*
-	 * Make sure mailbox seq_nos are synced between KMD and FW
-	 * If a good response is received, the driver will check that it is
-	 * communicating with the bootrom and take appropriate actions if not
-	 */
-	err = ops_fw_version(sd, fw_version);
-	if (err == MBOX_RSP_STATUS_SEQ_NO_ERROR)
-		err = ops_fw_version(sd, fw_version);
-
-	if (err) {
-		sd_err(sd, "unable to query firmware version\n");
-		goto load_failed;
-	}
 
 	report_fw_info(sd, fw_version, "at boot");
 
@@ -1793,23 +1780,80 @@ end:
 	fdev_put(dev);
 }
 
+/**
+ * prep_ops_and_fw_version - set the FW version and make sure the sequence is in line
+ * @dev: valid ANR device
+ *
+ * Make sure mailbox seq_nos are synced between KMD and FW.  If a good response
+ * is received, the driver will check that it is communicating with the bootrom
+ * and take appropriate actions if not
+ *
+ * ops_fw_version is the only ops request that does not need a ops valiation.
+ * For any ops_xxx calls, the current firmware is need.
+ *
+ * NOTE: if this is not the bootloader, later init will reset the SD.
+ *
+ * Return: 0 on success, else negative error code
+ */
+static int prep_ops_and_fw_version(struct fdev *dev)
+{
+	struct mbdb_op_fw_version_rsp *fw_version;
+	int err;
+	int i;
+
+	for (i = 0; i < dev->pd->sd_cnt; i++) {
+		fw_version = &dev->sd[i].fw_version;
+		err = ops_fw_version(&dev->sd[i], fw_version);
+		if (err == MBOX_RSP_STATUS_SEQ_NO_ERROR)
+			err = ops_fw_version(&dev->sd[i], fw_version);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static const char *select_pvc_fw(struct fsubdev *sd)
+{
+	u64 fuses = 0;
+	int err;
+
+	err = ops_csr_raw_read(sd, CSR_CP_DEV_EFUSE_VERSION, sizeof(fuses), &fuses);
+	if (err) {
+		sd_err(sd, "Failed to read efuse info: %d\n", err);
+		return NULL;
+	}
+	switch (FIELD_GET(CP_DEV_EFUSE_VERSION_VARIANT_MASK, fuses)) {
+	case CP_DEV_EFUSE_VERSION_VARIANT_NORMAL:
+		/* WA: HSD-16011092478 */
+		if (IS_ANR_STEP(sd, ANR_ARI_STEP_A0, ANR_ARI_STEP_A_LAST)) {
+			sd_info(sd, "A0 firmware\n");
+			return PVC_FW_IMAGE_DEBUG_SIGNED;
+		}
+
+		return PVC_FW_IMAGE;
+
+	case CP_DEV_EFUSE_VERSION_VARIANT_EXPORT:
+		return PVC_FW_IMAGE_EXPORT_LIMITED;
+
+	default:
+		sd_err(sd, "Invalid fuse info: %llu\n", fuses);
+		break;
+	}
+
+	return NULL;
+}
+
 static const char *get_fw_image(struct fdev *dev)
 {
 #if IS_ENABLED(CPTCFG_IAF_DEBUG_ALTERNATE_FW_LOAD)
 	if (fw_image && fw_image[0])
 		return fw_image;
 #endif
-
 	switch (dev->pd->product) {
 	case IAF_PONTEVECCHIO:
-		/* WA_16011092478 */
-		if (IS_ANR_STEP(&dev->sd[0], ANR_ARI_STEP_A0,
-				ANR_ARI_STEP_A_LAST)) {
-			dev_info(fdev_dev(dev), "A0 firmware\n");
-			return PVC_FW_IMAGE_DEBUG_SIGNED;
-		}
+		return select_pvc_fw(&dev->sd[0]);
 
-		return PVC_FW_IMAGE;
 	default:
 		break;
 	}
@@ -1826,6 +1870,12 @@ int load_and_init_fw(struct fdev *dev)
 		/* complete remaining device initialization immediately */
 		iaf_complete_init_dev(dev);
 		return 0;
+	}
+
+	err = prep_ops_and_fw_version(dev);
+	if (err) {
+		dev_err(fdev_dev(dev), "Ops sequence init failed: %d\n", err);
+		return err;
 	}
 
 	fw_image = get_fw_image(dev);

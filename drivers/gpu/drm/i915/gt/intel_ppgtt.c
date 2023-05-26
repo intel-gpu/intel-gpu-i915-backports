@@ -187,7 +187,6 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 		    unsigned int pat_index,
 		    u32 flags)
 {
-	bool is_lmem = i915_gem_object_is_lmem(px_base(i915_vm_to_ppgtt(vm)->pd));
 	u32 pte_flags;
 
 	if (!(flags & PIN_RESIDENT)) {
@@ -218,10 +217,10 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 	    i915_gem_object_has_fabric(vma->obj))
 		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
-	vm->insert_entries(vm, vma, pat_index, pte_flags);
+	vm->insert_entries(vm, stash, vma, pat_index, pte_flags);
 
 	/* Flush the PTE writes to memory */
-	i915_write_barrier(vm->i915, is_lmem);
+	i915_write_barrier(vm->i915);
 
 	/*
 	 * If there were virtual address range mapped to scratch page, all
