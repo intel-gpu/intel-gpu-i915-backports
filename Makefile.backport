@@ -13,6 +13,16 @@ EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
 OSV_KV_SUPPORTED = ""
+RPM_DISTRIBUTIONS := RHEL_8.7 RHEL_8.6 RHEL_8.5 FBK VANILLA_5.10LTS
+BUILD_CONFIG_VARIANT := fbk sp2
+ifneq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
+	OS_DISTRIBUTION ?= RHEL_8.7
+endif
+
+ifneq (,$(filter $(BUILD_CONFIG_VARIANT), $(BUILD_CONFIG)))
+OS_DISTRIBUTION = $(BUILD_CONFIG)
+endif
+
 # OSV_NAME extract OSV name
 # Expected Input: REDHAT,UBUNTU,SLES,MAINLINE,VANILLA
 # Filtered output: REDHAT,UBUNTU,SLES,MAINLINE,VANILLA
@@ -28,6 +38,7 @@ KER_VER = ""
 KERN_VER_XY = 0
 BASE_KERNEL_NAME = ""
 KERN_TYPE = ""
+BUILD_KERNEL_VARIANT = ""
 
 #
 # OSV specific variables.
@@ -69,7 +80,10 @@ SUSE_AUXRELEASE = ""
 #
 #FBK specific
 #
-FBK_KERN_NAME = ""
+FBK_IDENTIFIER = ""
+FBK_MAJOR = ""
+FBK_MINOR = ""
+FBK_VER = ""
 
 # BKPT_VER consist of backported release version.
 # Expected input: 'BACKPORTS_RELEASE_TAG="BKPT_6365_PRERELEASE_221021.0"' (TBD: Need to change as per final unification tag)
@@ -93,10 +107,19 @@ else
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
 endif
 
+ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 # Read kernel version from the utsrelease.h which is common among the all the supported OSVs.
 # Expected input: #define UTS_RELEASE "5.17.15" OR #define UTS_RELEASE "5.14.21-150400.24.18-default"
 # Filtered output: 5.17.15 OR 5.14.21-150400.24.18-default
 UTS_RELEASE=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | tr -d '~+')
+
+FBK_IDENTIFIER =$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "fbk")
+
+ifneq ($(FBK_IDENTIFIER),)
+FBK_VER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | cut -c 1-3 2>/dev/null || echo 1)
+FBK_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
+FBK_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4 2>/dev/null || echo 1)
+endif
 
 # KER_VER Extract latest KV from version file,
 # Used for package name to append latest KV.
@@ -110,9 +133,6 @@ ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 # Filtered output: 5.17.15 OR 5.14.21
 KERN_VER_XYZ=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-3 | cut -d '-' -f1 | tr -d '+')
 
-ifeq ($(BUILD_CONFIG), fbk)
-FBK_KERN_NAME := fbk
-endif
 
 # KERN_VER_XY consist of release kernel major and minor version.
 # Expected input:  #define UTS_RELEASE "5.17.15" OR #define UTS_RELEASE "5.14.21-150400.24.18-default"
@@ -161,6 +181,7 @@ BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Z)
 endif
 endif
 
+#else for RHEL /* ifeq ($(OSV_NAME), RHEL) */
 else ifeq ($(OSV_NAME),)
 
 ifeq ($(shell expr $(KERN_VER_XY) \== 5.10), 1)
@@ -175,18 +196,19 @@ else ifeq ($(shell expr $(KERN_VER_XY) \== 5.18), 1)
 OSV_NAME = VANILLA
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 
-else ifeq ($(BUILD_CONFIG), fbk)
-OSV_NAME := $(shell echo $(BUILD_CONFIG) | tr '[:lower:]' '[:upper:]')
+else ifneq ($(FBK_IDENTIFIER),)
+OSV_NAME := $(shell echo $(FBK_VER) | tr '[:lower:]' '[:upper:]')
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
 else
 $(info "OSV_NOT SUPPORTED")
 endif # MAINLINE
 
-ifneq ($(OSV_NAME),)
+ifneq ($(OSV_NAME),) #ifneq for RHEL /* ifeq ($(OSV_NAME), RHEL) */
 BASE_KERNEL_NAME = $(KERN_VER_XYZ)
-endif
+endif # /* ifeq ($(OSV_NAME), RHEL) */
 
 endif
+#else for /* ifeq ($(OSV_NAME),) */
 else
 OSV_NAME := $(shell echo $(OSV_NAME) | tr '[:lower:]' '[:upper:]')
 # Get the ubuntu version information from the autoconf.h
@@ -214,13 +236,8 @@ else
 OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_GENERIC_KERNEL_VERSION" | cut -d '"' -f 2)
 endif # oem
 
-ifeq ($(BUILD_CONFIG), fbk)
-OSV_NAME := $(shell echo $(BUILD_CONFIG) | tr '[:lower:]' '[:upper:]')
-CUSTOM_KER_VER = $(shell cat versions | grep -w "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
-
-endif
-else
+else # else for /* ifeq ($(OSV_NAME),) */
 # Read suse version info
 # SUSE_VERSION consist of SUSE release version
 # Expected input: #define CONFIG_SUSE_VERSION 15
@@ -247,6 +264,21 @@ endif
 
 endif #End of suse
 endif #Ifneq($(MAKECMDGOALS) , dkmsrpm-pkg)
+else #else ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
+OS_DISTRIBUTION := $(shell echo $(OS_DISTRIBUTION) | tr '[:lower:]' '[:upper:]')
+ifeq ($(BUILD_CONFIG), sp2)
+BASE_KERNEL_NAME = $(shell cat versions | grep -w "SLES15_$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
+else
+BASE_KERNEL_NAME = $(shell cat versions | grep -w "$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
+endif
+ifeq ($(BASE_KERNEL_NAME),)
+$(error "Unsupported os. Please see i915dkmsdeb-pkg-help (or) i915dkmsrpm-pkg-help and provide supported kernel name")
+else ifeq (dkmsrpm-pkg, $(MAKECMDGOALS))
+ifeq (,$(filter $(RPM_DISTRIBUTIONS), $(OS_DISTRIBUTION)))
+$(error rpm package cannot be generated for $(OS_DISTRIBUTION), please use i915dkmsdeb-pkg)
+endif
+endif
+endif #endif for ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 
 ifeq ($(KERNELRELEASE),)
 # Disable built-in rules for this file
@@ -275,9 +307,8 @@ backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kern
 	@echo " done."
 
 BUILD_CONFIG ?=
-BUILD_KERNEL_VARIANT = ""
-ifeq ($(BUILD_CONFIG), fbk)
-BUILD_KERNEL_VARIANT = "fbk"
+ifneq (,$(filter $(BUILD_CONFIG_VARIANT), $(BUILD_CONFIG)))
+BUILD_KERNEL_VARIANT = $(BUILD_CONFIG)
 endif
 
 ###
@@ -353,7 +384,12 @@ define filechk_osv_version_generic.h
 endef
 
 define filechk_osv_fbk.h
-        echo '#define FBK_VERSION 1'
+	echo '#define FBK_VER $(FBK_VER)'; \
+        echo '#define FBK_MAJOR $(FBK_MAJOR)'; \
+        echo '#define FBK_MINOR $(FBK_MINOR)'; \
+        echo '#define FBK_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define FBK_RELEASE_CODE $(shell \
+        expr $(FBK_MAJOR) \* 65536 + 0$(FBK_MINOR) \* 256)'
 endef
 
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
@@ -383,9 +419,9 @@ ifeq ($(OSV_KV_SUPPORTED), )
 endif
 endif
 	$(call filechk,osv_version_rhel.h)
-else ifeq ($(BUILD_CONFIG), fbk)
+else ifneq ($(FBK_IDENTIFIER),)
 ifeq ($(OSV_KV_SUPPORTED), )
-	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER_XYZ).$(FBK_KERN_NAME)"' >> versions
+	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER_XYZ).$(FBK_VER)$(FBK_MAJOR)"' >> versions
 endif
 	$(call filechk,osv_fbk.h)
 
@@ -399,9 +435,7 @@ endif
 
 endif
 
-ifeq ($(BUILD_CONFIG), fbk)
-KER_VER = $(CUSTOM_KER_VER)
-endif
+KER_VER = $(subst -,.,$(BASE_KERNEL_NAME))
 
 VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
 
@@ -462,7 +496,7 @@ dmadkmsrpm-pkg:
 # RELEASE_TYPE : <opensource/prerelease> package need to be created
 # Depends on package generated by dmadkmsrpm-pkg
 #------------------------------------------------------------------------------
-export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/char drivers/platform drivers/pci include scripts)
+export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
 I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINTAINERS \
                Kconfig* COPYING versions defconfigs backport-include kconf compat
 I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec

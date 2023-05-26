@@ -47,6 +47,8 @@
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
 #include "i915_debugger.h"
+#include "i915_addr_trans_svc.h"
+
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
 
@@ -627,9 +629,7 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 					   const char *buff, size_t count)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
-	struct drm_i915_gem_object *obj;
 	struct intel_memory_region *mem;
-	struct list_head *pos;
 	ssize_t ret;
 	bool val;
 	int id;
@@ -656,21 +656,35 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 		return ret;
 
 	for_each_memory_region(mem, i915, id) {
-		if (mem->type == INTEL_MEMORY_LOCAL) {
-			mutex_lock(&mem->objects.lock);
-			list_for_each(pos, &mem->objects.list) {
-				obj = container_of(pos, struct drm_i915_gem_object,
-						   mm.region_link);
-				i915_gem_object_get(obj);
-				mutex_unlock(&mem->objects.lock);
-				i915_gem_object_lock(obj, NULL);
-				i915_gem_object_release_mmap(obj);
-				i915_gem_object_unlock(obj);
-				i915_gem_object_put(obj);
-				mutex_lock(&mem->objects.lock);
-			}
-			mutex_unlock(&mem->objects.lock);
+		struct intel_memory_region_link bookmark = {};
+		struct intel_memory_region_link *pos, *next;
+
+		if (mem->type != INTEL_MEMORY_LOCAL)
+			continue;
+
+		spin_lock(&mem->objects.lock);
+		list_for_each_entry_safe(pos, next, &mem->objects.list, link) {
+			struct drm_i915_gem_object *obj;
+
+			if (!pos->mem)
+				continue;
+
+			obj = container_of(pos, struct drm_i915_gem_object, mm.region);
+			i915_gem_object_get(obj);
+
+			list_add(&bookmark.link, &pos->link);
+			spin_unlock(&mem->objects.lock);
+
+			i915_gem_object_lock(obj, NULL);
+			i915_gem_object_release_mmap(obj);
+			i915_gem_object_unlock(obj);
+			i915_gem_object_put(obj);
+
+			spin_lock(&mem->objects.lock);
+			list_safe_reset_next(pos, next, link);
+			__list_del_entry(&pos->link);
 		}
+		spin_unlock(&mem->objects.lock);
 	}
 
 	return count;
@@ -886,6 +900,41 @@ static const struct attribute *iaf_attrs[] = {
 	NULL
 };
 
+/* Provide Address Translation Services Status: enabled/disabled */
+static ssize_t
+addr_trans_services_status_show(struct device *kdev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+
+	return sysfs_emit(buf, "%s\n",
+			  i915_ats_enabled(i915) ? "Enabled" : "Disabled");
+}
+
+static ssize_t
+global_pasid_counter_show(struct device *kdev,
+			  struct device_attribute *attr,
+			  char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+	u64 global_pasid_counter = 0;
+
+	global_pasid_counter = i915_global_pasid_counter(i915);
+	return sysfs_emit(buf, "%llu\n", global_pasid_counter);
+}
+
+static DEVICE_ATTR(addr_trans_services_status, S_IRUGO,
+		   addr_trans_services_status_show, NULL);
+static DEVICE_ATTR(global_pasid_counter, S_IRUGO,
+		   global_pasid_counter_show, NULL);
+
+static const struct attribute *mode_b_attrs[] = {
+	&dev_attr_addr_trans_services_status.attr,
+	&dev_attr_global_pasid_counter.attr,
+	NULL
+};
+
 void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 {
 	struct device *kdev = dev_priv->drm.primary->kdev;
@@ -962,6 +1011,12 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	i915_setup_quiesce_gpu_sysfs(dev_priv);
 
 	intel_mem_health_report_sysfs(dev_priv);
+
+	if (i915_ats_enabled(dev_priv)) {
+		ret = sysfs_create_files(&kdev->kobj, mode_b_attrs);
+		if (ret)
+			DRM_ERROR("Failed to setup Address Translation Services sysfs\n");
+	}
 
 	i915_setup_enable_eu_debug_sysfs(dev_priv);
 }

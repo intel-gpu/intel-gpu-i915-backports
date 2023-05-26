@@ -347,32 +347,11 @@ static inline bool
 i915_gem_object_test_preferred_location(struct drm_i915_gem_object *obj,
 					enum intel_region_id region_id)
 {
-	bool have_preferred;
 
 	if (!obj->mm.preferred_region)
 		return false;
 
-	/*
-	 * test if target region is our preferred region but only honor
-	 * when the atomic hint doesn't exclude migration
-	 */
-	switch (obj->mm.preferred_region->type) {
-	case INTEL_MEMORY_SYSTEM:
-		have_preferred =
-			(obj->mm.preferred_region->id == region_id) &&
-			!i915_gem_object_allows_atomic_device(obj);
-		break;
-	case INTEL_MEMORY_LOCAL:
-		have_preferred =
-			(obj->mm.preferred_region->id == region_id) &&
-			!i915_gem_object_allows_atomic_system(obj);
-		break;
-	default:
-		have_preferred = false;
-		break;
-	}
-
-	return have_preferred;
+	return obj->mm.preferred_region->id == region_id;
 }
 
 static inline bool
@@ -427,7 +406,7 @@ i915_gem_object_type_has(const struct drm_i915_gem_object *obj,
 static inline bool
 i915_gem_object_has_struct_page(const struct drm_i915_gem_object *obj)
 {
-	return obj->flags & I915_BO_ALLOC_STRUCT_PAGE;
+	return obj->flags & I915_BO_STRUCT_PAGE;
 }
 
 static inline bool
@@ -738,15 +717,18 @@ static inline void __start_cpu_write(struct drm_i915_gem_object *obj)
 		obj->cache_dirty = true;
 }
 
-void i915_gem_fence_wait_priority(struct dma_fence *fence,
-				  const struct i915_sched_attr *attr);
+void i915_gem_fence_wait_priority(struct dma_fence *fence, int prio);
 
+long
+__i915_gem_object_wait(struct drm_i915_gem_object *obj,
+		     unsigned int flags,
+		     long timeout);
 int i915_gem_object_wait(struct drm_i915_gem_object *obj,
 			 unsigned int flags,
 			 long timeout);
 int i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 				  unsigned int flags,
-				  const struct i915_sched_attr *attr);
+				  int prio);
 
 void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 					 enum fb_op_origin origin);

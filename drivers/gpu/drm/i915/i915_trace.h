@@ -869,13 +869,13 @@ TRACE_EVENT(intel_gt_pagefault,
 
 	    TP_printk("dev %p: GPU %s fault: GT: %d, address space %s, address: %#llx, engine ID: %u, source ID: %u, type: %u, fault level: %u",
 		      __entry->gt->i915,
-		      !!(__entry->fault_reg & GEN12_RING_FAULT_ACCESS_TYPE) ? "Write" : "Read",
+		      !!(__entry->fault_reg & RING_FAULT_ACCESS_TYPE) ? "Write" : "Read",
 		      __entry->gt->info.id,
 		      __entry->is_ggtt ? "GGTT" : "PPGTT",
 		      __entry->address,
 		      GEN8_RING_FAULT_ENGINE_ID(__entry->fault_reg),
 		      RING_FAULT_SRCID(__entry->fault_reg),
-		      GEN12_RING_FAULT_FAULT_TYPE(__entry->fault_reg),
+		      RING_FAULT_FAULT_TYPE(__entry->fault_reg),
 		      RING_FAULT_LEVEL(__entry->fault_reg))
 );
 
@@ -897,7 +897,7 @@ TRACE_EVENT(i915_gem_object_migrate,
 			   __entry->dev = to_i915(obj->base.dev);
 			   __entry->obj = obj;
 			   __entry->size = obj->base.size;
-			   __entry->src = obj->mm.region->id;
+			   __entry->src = obj->mm.region.mem->id;
 			   __entry->dst = region;
 			   __entry->has_pages = i915_gem_object_has_pages(obj);
 			   ),
@@ -942,8 +942,9 @@ TRACE_EVENT(i915_mm_fault,
 				   __entry->obj = vma->obj;
 				   __entry->obj_size = vma->obj->base.size;
 				   __entry->vma_size = i915_vma_size(vma);
-				   __entry->region = !vma->obj->mm.region ? INTEL_REGION_UNKNOWN :
-						     vma->obj->mm.region->id;
+				   __entry->region = !vma->obj->mm.region.mem ?
+				   	INTEL_REGION_UNKNOWN :
+				   	vma->obj->mm.region.mem->id;
 				   __entry->pg_sz_mask = vma->page_sizes.gtt;
 				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   } else {

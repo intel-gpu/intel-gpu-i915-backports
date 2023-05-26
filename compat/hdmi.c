@@ -3,7 +3,6 @@
 
 #ifdef BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT
 
-#define hdmi_drm_infoframe_unpack_only  LINUX_I915_BACKPORT(hdmi_drm_infoframe_unpack_only)
 /**
  * hdmi_drm_infoframe_unpack_only() - unpack binary buffer of CTA-861-G DRM
  *                                    infoframe DataBytes to a HDMI DRM

@@ -719,9 +719,11 @@ void intel_plane_update_noarm(struct intel_plane *plane,
 			      const struct intel_crtc_state *crtc_state,
 			      const struct intel_plane_state *plane_state)
 {
+#ifndef BPM_DISABLE_TRACES
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
 	trace_intel_plane_update_noarm(&plane->base, crtc);
+#endif
 
 	if (plane->update_noarm)
 		plane->update_noarm(plane, crtc_state, plane_state);
@@ -731,10 +733,11 @@ void intel_plane_update_arm(struct intel_plane *plane,
 			    const struct intel_crtc_state *crtc_state,
 			    const struct intel_plane_state *plane_state)
 {
+#ifndef BPM_DISABLE_TRACES
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
 	trace_intel_plane_update_arm(&plane->base, crtc);
-
+#endif
 	if (crtc_state->do_async_flip && plane->async_flip)
 		plane->async_flip(plane, crtc_state, plane_state, true);
 	else
@@ -744,9 +747,11 @@ void intel_plane_update_arm(struct intel_plane *plane,
 void intel_plane_disable_arm(struct intel_plane *plane,
 			     const struct intel_crtc_state *crtc_state)
 {
+#ifndef BPM_DISABLE_TRACES
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
 	trace_intel_plane_disable_arm(&plane->base, crtc);
+#endif
 	plane->disable_arm(plane, crtc_state);
 }
 
@@ -1025,7 +1030,6 @@ static int
 intel_prepare_plane_fb(struct drm_plane *_plane,
 		       struct drm_plane_state *_new_plane_state)
 {
-	struct i915_sched_attr attr = { .priority = I915_PRIORITY_DISPLAY };
 	struct intel_plane *plane = to_intel_plane(_plane);
 	struct intel_plane_state *new_plane_state =
 		to_intel_plane_state(_new_plane_state);
@@ -1066,7 +1070,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 
 	if (new_plane_state->uapi.fence) { /* explicit fencing */
 		i915_gem_fence_wait_priority(new_plane_state->uapi.fence,
-					     &attr);
+					     I915_PRIORITY_DISPLAY);
 		ret = i915_sw_fence_await_dma_fence(&state->commit_ready,
 						    new_plane_state->uapi.fence,
 						    i915_fence_timeout(dev_priv),
@@ -1087,7 +1091,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	if (ret)
 		return ret;
 
-	i915_gem_object_wait_priority(obj, 0, &attr);
+	i915_gem_object_wait_priority(obj, 0, I915_PRIORITY_DISPLAY);
 
 	if (!new_plane_state->uapi.fence) { /* implicit fencing */
 		struct dma_fence *fence;

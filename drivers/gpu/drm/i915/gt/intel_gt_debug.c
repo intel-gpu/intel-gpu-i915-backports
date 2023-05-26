@@ -69,16 +69,19 @@ int intel_gt_for_each_compute_slice_subslice(struct intel_gt *gt,
 	const enum forcewake_domains fw_domains = FORCEWAKE_RENDER | FORCEWAKE_GT;
 	struct intel_uncore * const uncore = gt->uncore;
 	intel_wakeref_t wakeref;
+	unsigned long flags;
 	int ret = 0;
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-		spin_lock_irq(&uncore->lock);
+		intel_gt_mcr_lock(gt, &flags);
+		spin_lock(&uncore->lock);
 		intel_uncore_forcewake_get__locked(uncore, fw_domains);
 
 		ret = intel_gt_for_each_compute_slice_subslice_fw(gt, fn, data);
 
 		intel_uncore_forcewake_put__locked(uncore, fw_domains);
-		spin_unlock_irq(&uncore->lock);
+		spin_unlock(&uncore->lock);
+		intel_gt_mcr_unlock(gt, flags);
 	}
 
 	return ret;
@@ -260,7 +263,6 @@ out:
  *
  * Return: 1 if threads waiting host attention.
  */
-
 int intel_gt_eu_threads_needing_attention(struct intel_gt* gt)
 {
 	return intel_gt_for_each_compute_slice_subslice(gt,

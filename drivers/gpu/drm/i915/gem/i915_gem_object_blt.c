@@ -15,13 +15,6 @@
 #include "i915_gem_clflush.h"
 #include "i915_gem_object_blt.h"
 
-static void i915_request_set_priority(struct i915_request *rq, int prio) {
-	struct i915_sched_attr attr = { .priority = prio };
-
-	if (rq->engine->sched_engine->schedule)
-		rq->engine->sched_engine->schedule(rq, &attr);
-}
-
 /*
  * Determine how many blocks of CCS data correspond to a given amount of
  * main buffer data.
@@ -812,6 +805,9 @@ static int __i915_gem_object_ww_copy_blt(struct drm_i915_gem_object *src,
 	if (IS_ERR(vma[1]))
 		return PTR_ERR(vma[1]);
 
+	if (src->base.size >= dst->base.size)
+		dst->flags |= I915_BO_SKIP_CLEAR;
+
 	intel_engine_pm_get(ce->engine);
 	err = intel_context_pin_ww(ce, ww);
 	if (err)
@@ -846,13 +842,6 @@ static int __i915_gem_object_ww_copy_blt(struct drm_i915_gem_object *src,
 		err = PTR_ERR(rq);
 		goto out_batch;
 	}
-	/*
-	 * Bump up rq priority for reserved bcs so that it won't be blocked by
-	 * other rqs which are blocked by page fault on other bcs due to current
-	 * GuC limitation.
-	 */
-	if (rq->engine->id == rq->engine->gt->rsvd_bcs)
-		i915_request_set_priority(rq, I915_PRIORITY_MAX);
 
 	err = intel_emit_vma_mark_active(batch, rq);
 	if (unlikely(err))
@@ -887,6 +876,12 @@ out_request:
 	if (unlikely(err))
 		i915_request_set_error_once(rq, err);
 
+	/*
+	 * Bump up rq priority for reserved bcs so that it won't be blocked by
+	 * other rqs which are blocked by page fault on other bcs due to current
+	 * GuC limitation.
+	 */
+	i915_request_set_priority(rq, I915_PRIORITY_MAX);
 	i915_request_add(rq);
 out_batch:
 	i915_gem_ww_unlock_single(batch->obj);

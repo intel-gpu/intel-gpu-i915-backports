@@ -60,6 +60,11 @@
 #define dma_resv_test_signaled LINUX_DMABUF_BACKPORT(dma_resv_test_signaled)
 #endif
 
+#ifdef BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
+#define dma_resv_iter_first_unlocked LINUX_DMABUF_BACKPORT(dma_resv_iter_first_unlocked)
+#define dma_resv_iter_next_unlocked LINUX_DMABUF_BACKPORT(dma_resv_iter_next_unlocked)
+#endif
+
 extern struct ww_class reservation_ww_class;
 
 /**
@@ -84,8 +89,12 @@ struct dma_resv_list {
  */
 struct dma_resv {
 	struct ww_mutex lock;
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	seqcount_t seq;
+#else
 	seqcount_ww_mutex_t seq;
-
+#endif
+	
 	struct dma_fence __rcu *fence_excl;
 	struct dma_resv_list __rcu *fence;
 };
@@ -283,7 +292,11 @@ static inline int dma_resv_lock_slow_interruptible(struct dma_resv *obj,
  */
 static inline bool __must_check dma_resv_trylock(struct dma_resv *obj)
 {
+#ifdef BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
+	return ww_mutex_trylock(&obj->lock, NULL);
+#else
 	return ww_mutex_trylock(&obj->lock);
+#endif
 }
 
 /**

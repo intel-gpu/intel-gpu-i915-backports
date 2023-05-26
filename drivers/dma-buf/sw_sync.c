@@ -14,7 +14,9 @@
 #include "sync_debug.h"
 
 #define CREATE_TRACE_POINTS
+#ifndef BPM_DISABLE_TRACES
 #include "sync_trace.h"
+#endif
 
 /*
  * SW SYNC validation framework
@@ -193,8 +195,9 @@ static void sync_timeline_signal(struct sync_timeline *obj, unsigned int inc)
 {
 	struct sync_pt *pt, *next;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_sync_timeline(obj);
-
+#endif
 	spin_lock_irq(&obj->lock);
 
 	obj->value += inc;

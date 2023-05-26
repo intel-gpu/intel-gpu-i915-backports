@@ -13,10 +13,6 @@
 #define INTEL_DVSEC_TABLE_OFFSET(x)	((x) & GENMASK(31, 3))
 #define TABLE_OFFSET_SHIFT		3
 
-/* Intel Virtual DVSEC capability vendor space offsets */
-#define PMWRBASE_OFFSET			0x14
-#define READ_LPM_TELEM_OFFSET		0x1C
-
 struct pci_dev;
 struct resource;
 
@@ -24,39 +20,30 @@ enum intel_vsec_id {
 	VSEC_ID_TELEMETRY	= 2,
 	VSEC_ID_WATCHER		= 3,
 	VSEC_ID_CRASHLOG	= 4,
-	VSEC_ID_SDSI		= 65,
-	VSEC_ID_TPMI		= 66,
 };
 
 /**
  * struct intel_vsec_header - Common fields of Intel VSEC and DVSEC registers.
- * @rev:         Revision ID of the VSEC/DVSEC register space
- * @length:      Length of the VSEC/DVSEC register space
- * @id:          ID of the feature
- * @num_entries: Number of instances of the feature
- * @entry_size:  Size of the discovery table for each feature
- * @tbir:        BAR containing the discovery tables
- * @offset:      BAR offset of start of the first discovery table
+ * @rev:	Revision ID of the VSEC/DVSEC register space
+ * @length:	Length of the VSEC/DVSEC register space
+ * @id:		ID of the feature
+ * @num_entries:Number of instances of the feature
+ * @entry_size:	Size of the discovery table for each feature
+ * @tbir:	BAR containing the discovery tables
+ * @offset:	BAR offset of start of the first discovery table
  */
 struct intel_vsec_header {
 	u8	rev;
 	u16	length;
 	u16	id;
+	u8	num_entries;
 	u16	cap_id;
 	u8	cap_ver;
 	u32	next_cap_offset;
 	u32	venid;
-	u8	num_entries;
 	u8	entry_size;
 	u8	tbir;
 	u32	offset;
-};
-
-/* Platform specific data */
-struct intel_vsec_platform_info {
-	struct intel_vsec_header **capabilities;
-	unsigned long quirks;
-	s32 base_adjust;
 };
 
 enum intel_vsec_quirks {
@@ -73,10 +60,14 @@ enum intel_vsec_quirks {
 	VSEC_QUIRK_NO_DVSEC	= BIT(3),
 
 	/* Platforms requiring quirk in the auxiliary driver */
-	VSEC_QUIRK_EARLY_HW	= BIT(4),
+	VSEC_QUIRK_EARLY_HW     = BIT(4),
+};
 
-	/* Virtual DVSEC */
-	VSEC_QUIRK_VDVSEC	= BIT(5),
+/* Platform specific data */
+struct intel_vsec_platform_info {
+	struct intel_vsec_header **capabilities;
+	unsigned long quirks;
+	s32 base_adjust;
 };
 
 struct intel_vsec_device {
@@ -86,13 +77,7 @@ struct intel_vsec_device {
 	struct ida *ida;
 	struct intel_vsec_platform_info *info;
 	int num_resources;
-	void *priv_data;
-	size_t priv_data_size;
 };
-
-int intel_vsec_add_aux(struct pci_dev *pdev, struct device *parent,
-		       struct intel_vsec_device *intel_vsec_dev,
-		       const char *name);
 
 static inline struct intel_vsec_device *dev_to_ivdev(struct device *dev)
 {

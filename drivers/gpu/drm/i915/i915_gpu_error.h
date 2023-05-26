@@ -142,7 +142,7 @@ struct intel_engine_coredump {
 	struct intel_instdone instdone;
 
 	/* GuC matched capture-lists info */
-	struct intel_guc_state_capture *capture;
+	struct intel_guc_state_capture *guc_capture;
 	struct __guc_capture_parsed_output *guc_capture_node;
 
 	struct i915_gem_context_coredump {
@@ -184,6 +184,25 @@ struct intel_ctb_coredump {
 	u32 cmds_offset;
 	u32 size;
 };
+
+struct intel_eu_attentions {
+#define ES_MAX_EUS 1024
+#define ES_MAX_THREADS 8
+
+	u8 att[ES_MAX_EUS * ES_MAX_THREADS / BITS_PER_BYTE];
+	unsigned int size;
+	ktime_t ts;
+};
+
+static inline unsigned int
+intel_eu_attentions_count(const struct intel_eu_attentions *a)
+{
+	return bitmap_weight((void *)a->att, a->size * BITS_PER_BYTE);
+}
+
+void intel_eu_attentions_read(struct intel_gt *gt,
+			      struct intel_eu_attentions *a,
+			      const unsigned int settle_time_ms);
 
 struct intel_gt_coredump {
 	const struct intel_gt *_gt;
@@ -238,12 +257,11 @@ struct intel_gt_coredump {
 	} *uc;
 
 	struct {
-		u32 bitmap_size;
-#define ES_MAX_EUS 1024
-#define ES_MAX_THREADS 8
 		u32 td_ctl; /* can be in power ctx on newer gens */
-		u8 att_before[ES_MAX_EUS * ES_MAX_THREADS / BITS_PER_BYTE];
-		u8 att_after[ES_MAX_EUS * ES_MAX_THREADS / BITS_PER_BYTE];
+
+		struct intel_eu_attentions before;
+		struct intel_eu_attentions after;
+		struct intel_eu_attentions resolved;
 	} attentions;
 
 	struct intel_gt_coredump *next;
@@ -268,6 +286,13 @@ struct i915_gpu_coredump {
 	u32 reset_count;
 	u32 suspend_count;
 
+	struct {
+		u64 addr;
+		int type;
+		int level;
+		int access;
+	} fault;
+
 	struct intel_device_info device_info;
 	struct intel_runtime_info runtime_info;
 	struct intel_driver_caps driver_caps;
@@ -276,6 +301,8 @@ struct i915_gpu_coredump {
 	struct intel_overlay_error_state *overlay;
 
 	struct scatterlist *sgl, *fit;
+
+	void *private;
 };
 
 struct i915_gpu_error {
@@ -346,6 +373,9 @@ intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp, u32 dump_flags);
 
 struct intel_engine_coredump *
 intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_flags);
+
+struct i915_gpu_coredump *
+i915_gpu_coredump_create_for_engine(struct intel_engine_cs *engine, gfp_t gfp);
 
 struct intel_engine_capture_vma *
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
@@ -423,6 +453,12 @@ i915_capture_error_state(struct intel_gt *gt, intel_engine_mask_t engine_mask, u
 
 static inline struct i915_gpu_coredump *
 i915_gpu_coredump_alloc(struct drm_i915_private *i915, gfp_t gfp)
+{
+	return NULL;
+}
+
+struct i915_gpu_coredump *
+i915_gpu_coredump_create_for_engine(struct intel_engine_cs *engine, gfp_t gfp)
 {
 	return NULL;
 }

@@ -5,7 +5,7 @@
 
 #if LINUX_VERSION_IS_LESS(6,0,0)
 
-#if !((REDHAT_RELEASE_VERSION_IS_GEQ(8,4)) || FBK_VERSION)
+#if !((REDHAT_RELEASE_VERSION_IS_GEQ(8,4)) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
 /*
  * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
  */
@@ -13,8 +13,29 @@
 #endif
 #endif
 
+#if (LINUX_VERSION_IS_GEQ(5,17,0) || \
+               REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+/*
+ * 6a2d2ddf2c345e0 drm: Move nomodeset kernel parameter to the DRM subsystem
+ */
+#define BPM_VGACON_TEXT_FORCE_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(5,16,0) || \
+               REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+/*
+ *12235da8c80a1 kernel/locking: Add context to ww_mutex_trylock()
+ */
+#define BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
+
+/* c921ff373b469 dma-buf: add dma_resv_for_each_fence_unlocked v8
+ *
+ */
+#define BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,15,0)
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(15,4,0))
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 
 /*
  * f0ab00174eb7 PCI: Make saved capability state private to core
@@ -31,8 +52,9 @@
 #define BPM_LOCKDEP_ASSERT_API_NOT_PRESENT
 #endif
 
-#if !(UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
 
+#if !(UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  * bf44e8cecc03c vgaarb: don't pass a cookie to vga_client_register
  *
@@ -49,7 +71,8 @@
  */
 #define BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
-#if !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4))
+#if !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4) || \
+         SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
 /*
  * 89d8589cd72c6 Introduce and export __sg_alloc_table_from_pages
  */
@@ -58,15 +81,16 @@
 #endif
 #endif
 
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(15,4,0) || \
-	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
+	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 
 #define BPM_VGA_CLIENT_UNREGISTER_NOT_PRESENT
 #endif
 
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(15,4,0) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
 		UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
 
 /*
@@ -82,7 +106,15 @@
  * 10f7b40e4f3050 drm/panel: add basic DP AUX backlight support
  */
 #define BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+/*
+ * Add macro to export pci_find_host_bridge()
+ * 59dc33252ee7 PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus 
+ */
+#define BPM_PCI_FIND_HOST_BRIDGE_NOT_EXPORTED
 #endif
+#endif /*#if LINUX_VERSION_IS_LESS(5,15,0) */
 
 #if LINUX_VERSION_IS_LESS(5,14,0)
 /* 
@@ -122,8 +154,17 @@
  *
  */
 #define BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
+
+/*
+ * 3e31f94752e4 lockdep: Add lockdep_assert_not_held()
+ */
+#define BPM_LOCKDEP_ASSERT_NOT_HELD_NOT_PRESENT
 #endif
-#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || FBK_VERSION)
+#endif
+
+#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
 /*
  * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
  *
@@ -174,6 +215,11 @@
  *
  */
 #define BPM_CONST_STRUCT_RCHAN_CALLBACKS_NOT_PRESENT
+
+/*
+ *cfc78dfd9b36 iommu/sva: Add PASID helpers
+ */
+#define BPM_IOMMU_SVA_LIB_H_NOT_PRESENT
 #endif
 /*
  * 295992fb815e7 mm: introduce vma_set_file function v5
@@ -188,14 +234,15 @@
  */
 #define BPM_MIGHT_ALLOC_NOT_PRESENT
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
 /*
  * ab440b2c604b seqlock: Rename __seqprop() users
  */
 #define BPM_SEQPROP_SEQUENCE_NOT_PRESENT
 #endif
 
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /* Need to check the need of panel_orientatio_quirks */
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
@@ -231,8 +278,8 @@
 #define BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
 #endif
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
-
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
 /*
  * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
  *
@@ -241,7 +288,7 @@
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * b7b3c01b19159 mm/memremap_pages: support multiple ranges per invocation
@@ -250,11 +297,13 @@
 #define BPM_PAGEMAP_RANGE_START_NOT_PRESENT
 #endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  * 7a9f50a05843 irq_work: Cleanup
  *
  */
 #define BPM_IRQ_WORK_NODE_LLIST_NOT_PRESENT
+#endif
 
 /*
  * 8af2fa888eaf0e Show slab cache occupancy for debug
@@ -279,7 +328,10 @@
 
 #if LINUX_VERSION_IS_LESS(5,9,11)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	LINUX_VERSION_IN_RANGE(5,4,86, 5,5,0))
+	LINUX_VERSION_IN_RANGE(5,4,86, 5,5,0) || \
+	   SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) && \
+		 SUSE_LOCAL_VERSION_IS_GEQ(24,61)))
 /*
  * dd8088d5a896 PM: runtime: Add pm_runtime_resume_and_get
  * to deal with usage counter
@@ -292,11 +344,32 @@
 #if LINUX_VERSION_IS_LESS(5,9,0)
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 #define BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
 #endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+/*
+ * 267580db047ef428 seqlock: Unbreak lockdep
+ */
+#define BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+
+/* 8b700983de82f sched: Remove sched_set_*() return value */
+#define BPM_SCHED_SET_FIFO_NOT_PRESENT
+#endif
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) && \
+	SUSE_LOCAL_VERSION_IS_GEQ(24,24)))
+
+/* 3022c6a1b4b7 driver-core: Introduce DEVICE_ATTR_ADMIN_{RO,RW} */
+#define BPM_DEVICE_ATTR_ADMIN_RX_NOT_PRESENT
+#endif
 /*
  * 229f5879facf96e5 Defined PTR_ALIGN_DOWN() in kernel.h
  *
@@ -319,7 +392,7 @@
 #if LINUX_VERSION_IS_LESS(5,8,0)
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * 709d6d73c7561 scatterlist: add generic wrappers for iterating over sgtable objects
@@ -334,17 +407,48 @@
  */
 #define BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
 
-/*
- * 07e5bfe651f8 mmap locking API: add mmap_lock_is_contended()
- *
- */
-#define BPM_MMAP_WRITE_LOCK_UNLOCK_NOT_PRESENT
+/* 3f50f132d8400e1 bpf: Verifier, do explicit ALU32 bounds tracking */
+#define BPM_U32_MIN_NOT_PRESESNT
 
+/* dc5bdb68b5b drm/fb-helper: Fix vt restore */
+#define BPM_FB_ACTIVATE_KD_TEXT_NOT_PRESENT
+
+/* d9d200bcebc1f6e dma-mapping: add generic helpers
+ * for mapping sgtable objects
+ */
+#define BPM_DMA_MAP_UNMAP_SGTABLE_NOT_PRESENT
+
+/* e07515563d010d8b PM: sleep: core: Rename DPM_FLAG_NEVER_SKIP */
+#define BPM_DPM_FLAG_NEVER_SKIP_RENAMED
+
+/* 9740ca4e95b43b mmap locking API: initial implementation as rwsem wrappers */
+#define BPM_MMAP_WRITE_LOCK_NOT_PRESENT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+       SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) && \
+               SUSE_LOCAL_VERSION_IS_GEQ(24,43)))
 /*
  * f5678e7f2ac3 kernel: better document the use_mm/unuse_mm API contract
  *
  */
-#define BPM_KTHREAD_USE_MM_NOT_PRESET
+#define BPM_KTHREAD_USE_MM_NOT_PRESENT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+/*3d2d827f5ca5e3  mm: move use_mm/unuse_mm from aio.c to mm */
+#define BPM_KTHREAD_HEADER_NOT_PRESENT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+/*
+ * f45ce9336ff0640 video/hdmi: Add Unpack only function for DRM infoframe
+ *
+ */
+#define BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
@@ -352,13 +456,6 @@
  * 479da1f538a2 backlight: Add backlight_device_get_by_name()
  */
 #define BPM_BACKLIGHT_DEV_GET_BY_NAME_NOT_PRESENT
-
-/*
- * f45ce9336ff0640 video/hdmi: Add Unpack only function for DRM infoframe
- *
- */
-#define BPM_HDMI_DRM_INFOFRAME_UNPACK_NOT_PRESENT
-
 /*
  * 9807372 capabilities: Introduce CAP_PERFMON to kernel and user space
  *
@@ -374,7 +471,7 @@
 #define BPM_ASM_PGTABLE_H_NOT_PRESENT
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * 2733ea144dcc mm/hmm: remove the customizable
@@ -393,7 +490,10 @@
  * c111566bea7c PM: runtime: Add pm_runtime_get_if_active()
  */
 #define BPM_PM_RUNTIME_GET_IF_ACTIVE_NOT_PRESENT
+#endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 /*
  * be957c886d92a mm/hmm: make hmm_range_fault return 0 or -1
  *
@@ -402,7 +502,7 @@
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 /*
  * c0842fbc1b18 random32: move the pseudo-random 32-bit
  * definitions to prandom.h
@@ -410,6 +510,14 @@
 #define BPM_PRANDOM_H_NOT_PRESENT
 #endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+/* 67b06ba01857 PM: QoS: Drop PM_QOS_CPU_DMA_LATENCY and rename
+ * related functions
+ */
+
+#define BPM_CPU_LATENCY_QOS_NOT_PRESENT
+#endif
 /*
  * 132ccc0422814203ca64 INTEL_DII: drm/i915/spi: refcount spi object lifetime
  */
@@ -437,13 +545,23 @@
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * b6ff753a0ca0d drm: constify fb ops across all drivers
  *
  */
 #define BPM_CONST_STRUCT_FB_OPS_NOT_PRESENT
+
+/* c72bed23b9e45ac pinctrl: Allow modules to
+ * use pinctrl_[un]register_mappings
+ */
+#define BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
+
+/* 
+ * 28ca0d6d39ab list: introduce list_for_each_continue()
+ */
+#define BPM_LIST_FOR_EACH_CONTINUE_NOT_PRESENT
 #endif
 
 
@@ -457,17 +575,39 @@
 
 #if LINUX_VERSION_IS_LESS(5,5,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * a63fc6b75cca9 rcu: Upgrade rcu_swap_protected() to rcu_replace_pointer()
  *
  */
 #define BPM_RCU_REPLACE_POINTER_NOT_PRESENT
+
+/* c9c13ba428ef9 PCI: Add PCI_STD_NUM_BARS for the number of standard BARs */
+#define BPM_PCI_STD_NUM_BARS_NOT_DEFINED
+
+/* 
+ * 0a8459693238a339 fbdev: drop res_id parameter from 
+ * remove_conflicting_pci_framebuffers
+ */
+#define BPM_REMOVE_CONF_PCI_FB_ARG_NOT_PRESENT
+
+/* 5facae4f354 locking/lockdep: Remove unused
+ * @nested argument from lock_release()
+ */
+#define BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+
+/* 8c9312a925ad8 i2c: add helper to check if a client has a driver attached */
+#define BPM_I2C_CLIENT_HAS_DRIVER_NOT_PRESENT
+
+/*
+ * fa83433c92e3 iommu: Add I/O ASID allocator
+ */
+#define BPM_IOASID_H_NOT_PRESENT
 #endif
 
 #if (REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * 99cb252f5e68d72  mm/mmu_notifier: add an interval tree notifier
@@ -484,6 +624,16 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,4,0)
+
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) && \
+	SUSE_LOCAL_VERSION_IS_GEQ(24,46))
+/*
+ * a3f8a30f3f00 Compiler Attributes: use feature
+ * checks instead of version checks
+ */
+
+#define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#endif
 
 /*
  * 12c88d840b45 module: add support for symbol namespaces (jsc#SLE-10158).
@@ -514,7 +664,7 @@
 
 #if LINUX_VERSION_IS_LESS(5,2,0) && \
 	!(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 /*
  * a49294eac27c7 Add wait_var_event_interruptible()
@@ -531,15 +681,6 @@
  *
  */
 #define BPM_I2C_ACPI_GET_I2C_RESOURCE_NOT_PRESENT
-#endif
-
-#if LINUX_VERSION_IS_LESS(4,20,0)
-/*
- * a3f8a30f3f00 Compiler Attributes: use feature
- * checks instead of version checks
- */
-
-#define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,19,0)
@@ -565,21 +706,50 @@
 #endif
 #endif
 
-#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || FBK_VERSION)
+#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
 /* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif
 
-#if SUSE_RELEASE_VERSION_IS_GEQ(15,3,0)
+#if SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0)
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_RENAME
 #endif
 
 #if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 #define BPM_BP_MTD_MAGIC_NUMBER
 #define BPM_INCLUDE_KERNEL_H_IN_ASCII85_H
 #endif
+
+/* Hack section */
+#if SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0)
+/* aeef8b5089b7 x86/pat: Pass valid address to sanitize_phys()*/
+#define BPM_ROUND_DOWN_IOMEM_RESOURCE_END
+/*SLES 15sp3 is based on MFD, it doesn't support AUX bus and
+ RC6 related changes are not present in mei. */
+#define BPM_RC6_DISABLED
+#endif
+
+#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0))
+/*
+ * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
+ *
+ */
+#define BPM_SEQCOUNT_MUTEX_INIT_NOT_PRESENT
+#endif
+
+/*sp2 only section */
+#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,3,0))
+#define BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+/* Declaring traces are causing issue during macro expansion.
+   Temporarily disable traces for SP2. */
+#define BPM_DISABLE_TRACES
+#define BPM_DRM_MIPI_DSI_DISABLED
+/* __kmalloc is not exported only in sp2 */
+#define BPM_KMALLOC_TRACK_CALLER_NOT_EXPORTED
+#endif
+
 /* upstream changes not landed in mainline kernel yet.
  *
  * c1a01f290103d drm: constify sysrq_key_op

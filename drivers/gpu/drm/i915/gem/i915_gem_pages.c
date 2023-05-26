@@ -106,30 +106,29 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 		spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
 	}
 
-	mem = obj->mm.region;
+	mem = obj->mm.region.mem;
 	if (mem) {
 		struct list_head *list;
 
-		mutex_lock(&mem->objects.lock);
-		GEM_WARN_ON(!list_empty(&obj->mm.region_link));
 		if (obj->mm.madv != I915_MADV_WILLNEED)
 			list = &mem->objects.purgeable;
 		else
 			list = &mem->objects.list;
-		list_move_tail(&obj->mm.region_link, list);
-		mutex_unlock(&mem->objects.lock);
+
+		spin_lock(&mem->objects.lock);
+		list_move_tail(&obj->mm.region.link, list);
+		spin_unlock(&mem->objects.lock);
 	}
 }
 
 int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	int err;
 
 	assert_object_held_shared(obj);
 
 	if (unlikely(obj->mm.madv != I915_MADV_WILLNEED)) {
-		drm_dbg(&i915->drm,
+		drm_dbg(obj->base.dev,
 			"Attempting to obtain a purgeable object\n");
 		return -EFAULT;
 	}
@@ -194,7 +193,7 @@ int i915_gem_object_pin_pages_sync(struct drm_i915_gem_object *obj)
 	int err;
 
 	/* Hint that any fresh pages will be acquired synchronously */
-	obj->flags |= I915_BO_ALLOC_SYNC_HINT;
+	obj->flags |= I915_BO_SYNC_HINT;
 
 	err = i915_gem_object_pin_pages(obj);
 	if (err)
@@ -245,7 +244,7 @@ static bool is_iomap_addr(struct drm_i915_gem_object *obj, void *ptr)
 {
 	struct intel_memory_region *mem;
 
-	mem = obj->mm.region;
+	mem = obj->mm.region.mem;
 	if (!mem)
 		return false;
 
@@ -279,7 +278,7 @@ static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
 struct sg_table *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mem = obj->mm.region;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct sg_table *pages;
 
 	assert_object_held_shared(obj);
@@ -294,9 +293,9 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 	i915_gem_object_make_unshrinkable(obj);
 
 	if (mem) {
-		mutex_lock(&mem->objects.lock);
-		list_del_init(&obj->mm.region_link);
-		mutex_unlock(&mem->objects.lock);
+		spin_lock(&mem->objects.lock);
+		list_del_init(&obj->mm.region.link);
+		spin_unlock(&mem->objects.lock);
 	}
 
 	if (obj->mm.mapping) {
@@ -409,8 +408,8 @@ static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 				     enum i915_map_type type)
 {
-	resource_size_t iomap = obj->mm.region->iomap.base -
-		obj->mm.region->region.start;
+	struct intel_memory_region *mem = obj->mm.region.mem;
+	resource_size_t iomap = mem->iomap.base - mem->region.start;
 	unsigned long n_pfn = obj->base.size >> PAGE_SHIFT;
 	unsigned long stack[32], *pfns = stack, i;
 	struct sgt_iter iter;
@@ -422,7 +421,7 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 
 	/* A single contiguous block of lmem? Reuse the io_mapping */
 	if (obj->flags & I915_BO_ALLOC_CONTIGUOUS)
-		return i915_gem_object_lmem_io_map(obj, 0, obj->base.size);
+		return (void __force *)i915_gem_object_lmem_io_map(obj, 0, obj->base.size);
 
 	if (n_pfn > ARRAY_SIZE(stack)) {
 		/* Too big for stack -- allocate temporary array instead */
@@ -529,8 +528,8 @@ static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
                 struct sgt_iter iter;
                 pte_t **ptes = mem;
                 dma_addr_t addr;
-                iomap = obj->mm.region->iomap.base;
-                iomap -= obj->mm.region->region.start;
+                iomap = obj->mm.region.mem->iomap.base;
+                iomap -= obj->mm.region.mem->region.start;
                 for_each_sgt_daddr(addr, iter, sgt)
                         **ptes++ = iomap_pte(iomap, addr, pgprot);
 
@@ -565,7 +564,7 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 		if (unlikely(!i915_gem_object_has_pages(obj))) {
 			GEM_BUG_ON(i915_gem_object_has_pinned_pages(obj));
 
-			obj->flags |= I915_BO_ALLOC_SYNC_HINT;
+			obj->flags |= I915_BO_SYNC_HINT;
 
 			err = ____i915_gem_object_get_pages(obj);
 			if (err)

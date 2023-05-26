@@ -17,3 +17,4 @@
  */
 selftest(sanitycheck, i915_wip_sanitycheck) /* keep first (igt selfcheck) */
 selftest(gt_gtt, intel_gtt_wip_selftests)
+selftest(lmem, i915_gem_lmem_wip_selftests)

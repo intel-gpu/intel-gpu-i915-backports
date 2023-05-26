@@ -102,10 +102,9 @@ static void intel_context_active_release(struct intel_context *ce)
 
 static int __context_pin_state(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
 {
-	unsigned int bias = i915_ggtt_pin_bias(vma) | PIN_OFFSET_BIAS;
 	int err;
 
-	err = i915_ggtt_pin(vma, ww, 0, bias | PIN_HIGH);
+	err = i915_ggtt_pin_for_gt(vma, ww, 0, PIN_HIGH);
 	if (err)
 		return err;
 
@@ -581,7 +580,11 @@ retry:
 	 * Hack around this to shut up lockdep in selftests..
 	 */
 	lockdep_unpin_lock(&ce->timeline->mutex, rq->cookie);
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	mutex_release(&ce->timeline->mutex.dep_map, 0, _RET_IP_);
+#else
 	mutex_release(&ce->timeline->mutex.dep_map, _RET_IP_);
+#endif
 	mutex_acquire(&ce->timeline->mutex.dep_map, SINGLE_DEPTH_NESTING, 0, _RET_IP_);
 	rq->cookie = lockdep_pin_lock(&ce->timeline->mutex);
 
@@ -700,6 +703,27 @@ int intel_context_throttle(const struct intel_context *ce)
 	rcu_read_unlock();
 
 	return err;
+}
+
+bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
+{
+	bool ret = intel_context_set_banned(ce);
+
+	trace_intel_context_ban(ce);
+	if (ce->ops->ban)
+		ce->ops->ban(ce, rq);
+
+	if (!ret) {
+		struct i915_gem_context *ctx;
+
+		rcu_read_lock();
+		ctx = rcu_dereference(ce->gem_context);
+		if (ctx)
+			i915_gem_context_set_banned(ctx);
+		rcu_read_unlock();
+	}
+
+	return ret;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

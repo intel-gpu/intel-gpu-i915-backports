@@ -13,6 +13,7 @@
 #include "i915_pci.h"
 #include "intel_pci_config.h"
 #include "gem/i915_gem_pm.h"
+#include "gem/i915_gem_context.h"
 
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_gt.h"
@@ -1270,6 +1271,78 @@ int i915_sriov_resume_early(struct drm_i915_private *i915)
 	return 0;
 }
 
+static void contexts_ring_move_back(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(gt, i915, id) {
+		guc_submission_revert_ring_heads(&gt->uc.guc);
+	}
+}
+
+static void user_contexts_hwsp_rebase(struct drm_i915_private *i915)
+{
+	struct i915_gem_context *ctx;
+
+	spin_lock_irq(&i915->gem.contexts.lock);
+	rcu_read_lock();
+	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
+		struct i915_gem_engines_iter it;
+		struct intel_context *ce;
+
+		if (!kref_get_unless_zero(&ctx->ref))
+			continue;
+		spin_unlock_irq(&i915->gem.contexts.lock);
+
+		for_each_gem_engine(ce, rcu_dereference(ctx->engines), it) {
+			if (intel_context_is_pinned(ce)) {
+				intel_timeline_rebase_hwsp(ce->timeline);
+				ce->ops->reset(ce);
+			}
+		}
+
+		spin_lock_irq(&i915->gem.contexts.lock);
+		i915_gem_context_put(ctx);
+	}
+	rcu_read_unlock();
+	spin_unlock_irq(&i915->gem.contexts.lock);
+}
+
+static void intel_gt_default_contexts_hwsp_rebase(struct intel_gt *gt)
+{
+	struct intel_engine_cs *engine;
+	enum intel_engine_id eid;
+
+	for_each_engine(engine, gt, eid) {
+		struct intel_context *ce;
+
+		list_for_each_entry(ce, &engine->pinned_contexts_list,
+				    pinned_contexts_link) {
+			if (intel_context_is_pinned(ce)) {
+				intel_timeline_rebase_hwsp(ce->timeline);
+				ce->ops->reset(ce);
+			}
+		}
+	}
+}
+
+static void default_contexts_hwsp_rebase(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(gt, i915, id)
+		intel_gt_default_contexts_hwsp_rebase(gt);
+}
+
+static void vf_post_migration_fixup_contexts(struct drm_i915_private *i915)
+{
+	default_contexts_hwsp_rebase(i915);
+	user_contexts_hwsp_rebase(i915);
+	contexts_ring_move_back(i915);
+}
+
 static void heartbeats_disable(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
@@ -1327,6 +1400,37 @@ static void submissions_restore(struct drm_i915_private *i915)
 }
 
 /**
+ * vf_post_migration_status_page_sanitization_disable - Disable sanitization of status pages.
+ * @i915: the i915 struct
+ *
+ * The post-migration recovery uses gt sanitization code to prepare the driver re-enabling.
+ * This code however clears status pages of contexts, as it assumes they were damaged
+ * by suspend. Migration is not suspend, and it keeps the status pages content intact.
+ * In fact, we need the values within to recover unfinished submissions.
+ */
+static void vf_post_migration_status_page_sanitization_disable(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(gt, i915, id)
+		guc_submission_status_page_sanitization_disable(&gt->uc.guc);
+}
+
+/**
+ * vf_post_migration_status_page_sanitization_enable - Re-enable sanitization of status pages.
+ * @i915: the i915 struct
+ */
+static void vf_post_migration_status_page_sanitization_enable(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(gt, i915, id)
+		guc_submission_status_page_sanitization_enable(&gt->uc.guc);
+}
+
+/**
  * vf_post_migration_shutdown - Clean up the kernel structures after VF migration.
  * @i915: the i915 struct
  *
@@ -1348,6 +1452,7 @@ static void vf_post_migration_shutdown(struct drm_i915_private *i915)
 	i915_gem_drain_freed_objects(i915);
 	for_each_gt(gt, i915, id)
 		intel_uc_suspend(&gt->uc);
+	vf_post_migration_status_page_sanitization_disable(i915);
 }
 
 /**
@@ -1423,6 +1528,7 @@ static void vf_post_migration_kickstart(struct drm_i915_private *i915)
 		intel_uc_resume_early(&gt->uc);
 	intel_runtime_pm_enable_interrupts(i915);
 	i915_gem_resume(i915);
+	vf_post_migration_status_page_sanitization_enable(i915);
 	submissions_restore(i915);
 	heartbeats_restore(i915, true);
 }
@@ -1481,6 +1587,7 @@ static void vf_post_migration_recovery(struct drm_i915_private *i915)
 		goto fail;
 
 	vf_post_migration_fixup_ggtt_nodes(i915);
+	vf_post_migration_fixup_contexts(i915);
 
 	vf_post_migration_kickstart(i915);
 	i915_reset_backoff_leave(i915);

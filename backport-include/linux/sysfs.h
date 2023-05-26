@@ -53,4 +53,13 @@ static inline int sysfs_emit_at(char *buf, int at, const char *fmt, ...)
 
 #endif
 #endif
+
+#ifdef BPM_DEVICE_ATTR_ADMIN_RX_NOT_PRESENT
+#define __ATTR_RW_MODE(_name, _mode) {                                 \
+       .attr   = { .name = __stringify(_name),                         \
+                   .mode = VERIFY_OCTAL_PERMISSIONS(_mode) },          \
+       .show   = _name##_show,                                         \
+       .store  = _name##_store,                                        \
+}
+#endif
 #endif /* _BACKPORT_SYSFS_H_ */

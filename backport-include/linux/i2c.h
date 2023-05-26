@@ -77,4 +77,11 @@ static inline struct i2c_adapter *i2c_acpi_find_adapter_by_handle(acpi_handle ha
 #endif
 #endif
 
+#ifdef BPM_I2C_CLIENT_HAS_DRIVER_NOT_PRESENT
+static inline bool i2c_client_has_driver(struct i2c_client *client)
+{
+        return !IS_ERR_OR_NULL(client) && client->dev.driver;
+}
+#endif
+
 #endif /*_BACKPORT_LINUX_I2C_H */

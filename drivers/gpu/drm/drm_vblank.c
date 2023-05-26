@@ -1005,7 +1005,9 @@ static void send_vblank_event(struct drm_device *dev,
 		e->event.seq.time_ns = ktime_to_ns(now);
 		break;
 	}
+#ifndef BPM_DISABLE_TRACES
 	trace_drm_vblank_event_delivered(e->base.file_priv, e->pipe, seq);
+#endif
 	/*
 	 * Use the same timestamp for any associated fence signal to avoid
 	 * mismatch in timestamps for vsync & fence events triggered by the
@@ -1668,7 +1670,9 @@ static int drm_queue_vblank_event(struct drm_device *dev, unsigned int pipe,
 	drm_dbg_core(dev, "event on vblank count %llu, current %llu, crtc %u\n",
 		     req_seq, seq, pipe);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_drm_vblank_event_queued(file_priv, pipe, req_seq);
+#endif
 
 	e->sequence = req_seq;
 	if (drm_vblank_passed(seq, req_seq)) {
@@ -1917,7 +1921,9 @@ static void drm_handle_vblank_events(struct drm_device *dev, unsigned int pipe)
 	if (crtc && crtc->funcs->get_vblank_timestamp)
 		high_prec = true;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_drm_vblank_event(pipe, seq, now, high_prec);
+#endif
 }
 
 /**

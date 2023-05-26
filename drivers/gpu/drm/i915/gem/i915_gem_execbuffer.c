@@ -870,13 +870,17 @@ static int __eb_add_lut(struct i915_execbuffer *eb,
 	struct i915_lut_handle *lut;
 	int err;
 
+	vma = i915_vma_open(vma);
+	if (!vma) /* closed after lookup, recreate */
+		return -EEXIST;
+
 	lut = i915_lut_handle_alloc();
-	if (unlikely(!lut))
-		return -ENOMEM;
+	if (unlikely(!lut)) {
+		err = -ENOMEM;
+		goto err_open;
+	}
 
 	i915_vma_get(vma);
-	if (!atomic_fetch_inc(&vma->open_count))
-		i915_vma_reopen(vma);
 	lut->handle = handle;
 	lut->ctx = ctx;
 
@@ -906,14 +910,15 @@ static int __eb_add_lut(struct i915_execbuffer *eb,
 		mutex_unlock(&ctx->lut_mutex);
 	}
 	if (unlikely(err))
-		goto err;
+		goto err_lut;
 
 	return 0;
 
-err:
-	i915_vma_close(vma);
+err_lut:
 	i915_vma_put(vma);
 	i915_lut_handle_free(lut);
+err_open:
+	i915_vma_close(vma);
 	return err;
 }
 
@@ -987,6 +992,8 @@ static struct i915_vma *eb_lookup_vma(struct i915_execbuffer *eb, u32 handle)
 		vma = radix_tree_lookup(&eb->gem_context->handles_vma, handle);
 		if (likely(vma && vma->vm == vm))
 			vma = i915_vma_tryget(vma);
+		else
+			vma = NULL;
 		rcu_read_unlock();
 		if (likely(vma))
 			return vma;
@@ -1550,7 +1557,7 @@ static void *reloc_lmem(struct drm_i915_gem_object *obj,
 		cache->is_lmem = true;
 	}
 
-	vaddr = i915_gem_object_lmem_io_map_page_atomic(obj, page);
+	vaddr = (void __force *)i915_gem_object_lmem_io_map_page_atomic(obj, page);
 
 	cache->vaddr = (unsigned long)vaddr;
 	cache->page = page;
@@ -3742,7 +3749,7 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 			  int err, bool last_parallel)
 {
 	struct intel_timeline * const tl = i915_request_timeline(rq);
-	struct i915_sched_attr attr = {};
+	int prio = I915_PRIORITY_NORMAL;
 	struct i915_request *prev;
 
 	lockdep_assert_held(&tl->mutex);
@@ -3760,7 +3767,7 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 
 	/* Check that the context wasn't destroyed before submission */
 	if (likely(!intel_context_is_closed(eb->context))) {
-		attr = eb->gem_context->sched;
+		prio = eb->gem_context->sched.priority;
 	} else {
 		/* Serialise with context_close via the add_to_timeline */
 		i915_request_set_error_once(rq, -ENOENT);
@@ -3779,7 +3786,7 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 				&rq->fence.flags);
 	}
 
-	__i915_request_queue(rq, &attr);
+	__i915_request_queue(rq, prio);
 
 	/* Try to clean up the client's timeline after submitting the request */
 	if (prev)

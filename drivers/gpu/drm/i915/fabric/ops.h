@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2019 - 2022 Intel Corporation.
+ * Copyright(c) 2019 - 2023 Intel Corporation.
  *
  */
 
@@ -14,6 +14,7 @@
 #include <linux/types.h>
 
 #include "iaf_drv.h"
+#include "mbdb.h"
 
 /* MBOX opcodes */
 /* Firmware Load and Generic CSR Access opcodes */
@@ -72,6 +73,20 @@
 #define MBOX_OP_CODE_LINK_MGR_TRACE_MASK_GET 86
 #define MBOX_OP_CODE_LINK_MGR_TRACE_MASK_SET 87
 
+#define MBOX_OP_CODE_SERDES_TX_DCC_MARGIN 92
+
+// Sub-Ops for SerDes Tx Dcc Margin Op
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_MARGIN_PARAM_GET 0
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_MARGIN_PARAM_SET 1
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INTERP_GET 2
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INDEX_SET 3
+#define SERDES_MARGIN_SUB_OP_CODE_MAINT_MODE_GET 4
+#define SERDES_MARGIN_SUB_OP_CODE_MAINT_MODE_SET 5
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INTERP_OVVL_GET 6
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INTERP_OVVL_SET 7
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INTERP_OV_EN_GET 8
+#define SERDES_MARGIN_SUB_OP_CODE_TX_DCC_INTERP_OV_EN_SET 9
+
 #define MBOX_OP_CODE_FAULT_TRAP 254
 
 #define MBOX_RSP_STATUS_OK            0
@@ -101,16 +116,6 @@
 #define NON_POSTED_CHECK_OP (OP_CODE_CHECK_IS_VALID)
 #define POSTED(p)           (p ? OP_CODE_POSTED : NON_POSTED)
 #define POSTED_CHECK_OP(p)  (OP_CODE_CHECK_IS_VALID | POSTED(p))
-
-enum mbdb_msg_type {
-	MBOX_RESPONSE = 0,
-	MBOX_REQUEST  = 1
-};
-
-enum posted {
-	MBOX_RESPONSE_REQUESTED    = 0,
-	MBOX_NO_RESPONSE_REQUESTED = 1
-};
 
 struct mbox_msg {
 	u64 cw;
@@ -236,6 +241,37 @@ struct port_var_data {
 	u8 tx_tuning[LANES];
 } __packed;
 
+struct tx_dcc_margin_param_get_rsp {
+	u32 sub_op;
+	u16 value;
+} __packed;
+
+struct tx_dcc_interp_get_rsp {
+	u32 sub_op;
+	u32 dccp;
+	u32 dccnb;
+	u32 tx_interp2_ctl;
+	u32 tx_mux_delay_ctrl2;
+	u32 reverse_pd;
+} __packed;
+
+struct maint_mode_get_rsp {
+	u32 sub_op;
+	u32 mode;
+} __packed;
+
+struct tx_dcc_interp_override_get_rsp {
+	u32 sub_op;
+	u32 value;
+} __packed;
+
+struct tx_dcc_interp_override_enable_get_rsp {
+	u32 sub_op;
+	u32 enable;
+} __packed;
+
+#define QSFP_PAGE_SIZE (CINFO_PAGE_SIZE)
+
 #define MAX_TRACE_ENTRIES ((MBOX_READ_DATA_SIZE_IN_BYTES - sizeof(u64)) / sizeof(u64))
 
 struct mbdb_op_linkmgr_trace_dump_rsp {
@@ -283,26 +319,8 @@ struct mbdb_op_enable_param {
 	u32 enabled;
 };
 
-struct mbdb_ibox;
-
-typedef void (*op_response_handler)(struct mbdb_ibox *ibox);
-
-struct mbdb_ibox {
-	struct list_head ibox_list_link;
-	struct mbdb *mbdb;
-	struct completion ibox_full;
-	u64 cw;
-	u32 tid;
-	u16 rsp_len;
-	void *response;
-	int rsp_status;
-	op_response_handler op_rsp_handler;
-	u8 op_code;
-	u8 retries;
-};
-
-void ops_default_rsp_handler_nowarn(struct mbdb_ibox *ibox);
-void ops_default_rsp_handler(struct mbdb_ibox *ibox);
+void ops_rsp_handler_relaxed(struct mbdb_ibox *ibox);
+void ops_rsp_handler_default(struct mbdb_ibox *ibox);
 
 void ops_element_copy(void __iomem *src, void *dst, size_t src_sz, size_t dst_sz, size_t elements);
 
@@ -325,6 +343,40 @@ struct mbdb_ibox *
 mbdb_op_build_cw_and_acquire_ibox(struct fsubdev *sd, const u8 op_code, size_t parm_len,
 				  void *response, u32 rsp_len, u64 *cw, unsigned long flags)
 	__attribute__((nonnull(1, 6)));
+
+int ops_tx_dcc_interp_override_enable_set(struct fsubdev *sd, u32 port, u32 lane, u32 enable,
+					  bool posted)
+	__attribute__((nonnull(1)));
+
+int ops_tx_dcc_interp_override_enable_get(struct fsubdev *sd, u32 port, u32 lane,
+					  struct tx_dcc_interp_override_enable_get_rsp *rsp)
+	__attribute__((nonnull(1, 4)));
+
+int ops_tx_dcc_interp_override_set(struct fsubdev *sd, u32 port, u32 lane, u32 value, bool posted)
+	__attribute__((nonnull(1)));
+
+int ops_tx_dcc_interp_override_get(struct fsubdev *sd, u32 port, u32 lane,
+				   struct tx_dcc_interp_override_get_rsp *rsp)
+	__attribute__((nonnull(1, 4)));
+
+int ops_maint_mode_set(struct fsubdev *sd, u32 port, u32 mode, bool posted)
+	__attribute__((nonnull(1)));
+
+int ops_maint_mode_get(struct fsubdev *sd, u32 port, struct maint_mode_get_rsp *rsp)
+	__attribute__((nonnull(1, 3)));
+
+int ops_tx_dcc_index_set(struct fsubdev *sd, u32 port, u32 lane, u32 index, bool posted)
+	__attribute__((nonnull(1)));
+
+int ops_tx_dcc_interp_get(struct fsubdev *sd, u32 port, u32 lane, struct tx_dcc_interp_get_rsp *rsp)
+	__attribute__((nonnull(1, 4)));
+
+int ops_tx_dcc_margin_param_set(struct fsubdev *sd, u32 port, u16 value, bool posted)
+	__attribute__((nonnull(1)));
+
+int ops_tx_dcc_margin_param_get(struct fsubdev *sd, u32 port,
+				struct tx_dcc_margin_param_get_rsp *rsp)
+	__attribute__((nonnull(1, 3)));
 
 int ops_serdes_channel_estimate_get(struct fsubdev *sd, u32 port, u32 lane,
 				    struct mbdb_serdes_ch_est_rsp *rsp)

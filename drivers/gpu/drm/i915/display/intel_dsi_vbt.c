@@ -27,8 +27,10 @@
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/machine.h>
 #include <linux/mfd/intel_soc_pmic.h>
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 #include <linux/pinctrl/consumer.h>
 #include <linux/pinctrl/machine.h>
+#endif
 #include <linux/slab.h>
 #include <linux/string_helpers.h>
 
@@ -671,15 +673,21 @@ void intel_dsi_vbt_exec_sequence(struct intel_dsi *intel_dsi,
 {
 	if (seq_id == MIPI_SEQ_POWER_ON && intel_dsi->gpio_panel)
 		gpiod_set_value_cansleep(intel_dsi->gpio_panel, 1);
+
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	if (seq_id == MIPI_SEQ_BACKLIGHT_ON && intel_dsi->gpio_backlight)
 		gpiod_set_value_cansleep(intel_dsi->gpio_backlight, 1);
+#endif
 
 	intel_dsi_vbt_exec(intel_dsi, seq_id);
 
 	if (seq_id == MIPI_SEQ_POWER_OFF && intel_dsi->gpio_panel)
 		gpiod_set_value_cansleep(intel_dsi->gpio_panel, 0);
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	if (seq_id == MIPI_SEQ_BACKLIGHT_OFF && intel_dsi->gpio_backlight)
 		gpiod_set_value_cansleep(intel_dsi->gpio_backlight, 0);
+#endif
+
 }
 
 void intel_dsi_msleep(struct intel_dsi *intel_dsi, int msec)
@@ -857,8 +865,6 @@ bool intel_dsi_vbt_init(struct intel_dsi *intel_dsi, u16 panel_id)
 /*
  * On some BYT/CHT devs some sequences are incomplete and we need to manually
  * control some GPIOs. We need to add a GPIO lookup table before we get these.
- * If the GOP did not initialize the panel (HDMI inserted) we may need to also
- * change the pinmux for the SoC's PWM0 pin from GPIO to PWM.
  */
 static struct gpiod_lookup_table pmic_panel_gpio_table = {
 	/* Intel GFX is consumer */
@@ -870,19 +876,21 @@ static struct gpiod_lookup_table pmic_panel_gpio_table = {
 	},
 };
 
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 static struct gpiod_lookup_table soc_panel_gpio_table = {
-	.dev_id = "0000:00:02.0",
-	.table = {
-		GPIO_LOOKUP("INT33FC:01", 10, "backlight", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("INT33FC:01", 11, "panel", GPIO_ACTIVE_HIGH),
-		{ }
-	},
+       .dev_id = "0000:00:02.0",
+       .table = {
+               GPIO_LOOKUP("INT33FC:01", 10, "backlight", GPIO_ACTIVE_HIGH),
+               GPIO_LOOKUP("INT33FC:01", 11, "panel", GPIO_ACTIVE_HIGH),
+               { }
+       },
 };
 
 static const struct pinctrl_map soc_pwm_pinctrl_map[] = {
-	PIN_MAP_MUX_GROUP("0000:00:02.0", "soc_pwm0", "INT33FC:00",
-			  "pwm0_grp", "pwm"),
+       PIN_MAP_MUX_GROUP("0000:00:02.0", "soc_pwm0", "INT33FC:00",
+                         "pwm0_grp", "pwm"),
 };
+#endif
 
 void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on)
 {
@@ -891,14 +899,17 @@ void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on)
 	struct intel_connector *connector = intel_dsi->attached_connector;
 	struct mipi_config *mipi_config = connector->panel.vbt.dsi.config;
 	enum gpiod_flags flags = panel_is_on ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW;
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	bool want_backlight_gpio = false;
 	bool want_panel_gpio = false;
 	struct pinctrl *pinctrl;
 	int ret;
+#endif
 
 	if ((IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) &&
-	    mipi_config->pwm_blc == PPS_BLC_PMIC) {
+			mipi_config->pwm_blc == PPS_BLC_PMIC) {
 		gpiod_add_lookup_table(&pmic_panel_gpio_table);
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 		want_panel_gpio = true;
 	}
 
@@ -909,18 +920,19 @@ void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on)
 
 		/* Ensure PWM0 pin is muxed as PWM instead of GPIO */
 		ret = pinctrl_register_mappings(soc_pwm_pinctrl_map,
-					     ARRAY_SIZE(soc_pwm_pinctrl_map));
+				ARRAY_SIZE(soc_pwm_pinctrl_map));
 		if (ret)
 			drm_err(&dev_priv->drm,
-				"Failed to register pwm0 pinmux mapping\n");
+					"Failed to register pwm0 pinmux mapping\n");
 
 		pinctrl = devm_pinctrl_get_select(dev->dev, "soc_pwm0");
 		if (IS_ERR(pinctrl))
 			drm_err(&dev_priv->drm,
-				"Failed to set pinmux to PWM\n");
+					"Failed to set pinmux to PWM\n");
 	}
 
-	if (want_panel_gpio) {
+       if (want_panel_gpio) {
+#endif
 		intel_dsi->gpio_panel = gpiod_get(dev->dev, "panel", flags);
 		if (IS_ERR(intel_dsi->gpio_panel)) {
 			drm_err(&dev_priv->drm,
@@ -929,15 +941,18 @@ void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on)
 		}
 	}
 
-	if (want_backlight_gpio) {
-		intel_dsi->gpio_backlight =
-			gpiod_get(dev->dev, "backlight", flags);
-		if (IS_ERR(intel_dsi->gpio_backlight)) {
-			drm_err(&dev_priv->drm,
-				"Failed to own gpio for backlight control\n");
-			intel_dsi->gpio_backlight = NULL;
-		}
-	}
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
+       if (want_backlight_gpio) {
+	       intel_dsi->gpio_backlight =
+		       gpiod_get(dev->dev, "backlight", flags);
+	       if (IS_ERR(intel_dsi->gpio_backlight)) {
+		       drm_err(&dev_priv->drm,
+				       "Failed to own gpio for backlight control\n");
+		       intel_dsi->gpio_backlight = NULL;
+	       }
+       }
+#endif
+
 }
 
 void intel_dsi_vbt_gpio_cleanup(struct intel_dsi *intel_dsi)
@@ -947,22 +962,27 @@ void intel_dsi_vbt_gpio_cleanup(struct intel_dsi *intel_dsi)
 	struct intel_connector *connector = intel_dsi->attached_connector;
 	struct mipi_config *mipi_config = connector->panel.vbt.dsi.config;
 
-	if (intel_dsi->gpio_panel) {
-		gpiod_put(intel_dsi->gpio_panel);
-		intel_dsi->gpio_panel = NULL;
-	}
-
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	if (intel_dsi->gpio_backlight) {
 		gpiod_put(intel_dsi->gpio_backlight);
 		intel_dsi->gpio_backlight = NULL;
+	}
+#endif
+
+	if (intel_dsi->gpio_panel) {
+		gpiod_put(intel_dsi->gpio_panel);
+		intel_dsi->gpio_panel = NULL;
 	}
 
 	if ((IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) &&
 	    mipi_config->pwm_blc == PPS_BLC_PMIC)
 		gpiod_remove_lookup_table(&pmic_panel_gpio_table);
 
+#ifndef BPM_PINCTRL_UNREGISTER_MAPPINGS_NOT_PRESENT
 	if (IS_VALLEYVIEW(dev_priv) && mipi_config->pwm_blc == PPS_BLC_SOC) {
 		pinctrl_unregister_mappings(soc_pwm_pinctrl_map);
 		gpiod_remove_lookup_table(&soc_panel_gpio_table);
 	}
+#endif
+
 }

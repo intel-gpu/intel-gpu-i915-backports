@@ -128,7 +128,9 @@ void intel_crtc_vblank_on(const struct intel_crtc_state *crtc_state)
 	 * but we want the frame counters in the trace, and that
 	 * requires vblank support on some platforms/outputs.
 	 */
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_pipe_enable(crtc);
+#endif
 }
 
 void intel_crtc_vblank_off(const struct intel_crtc_state *crtc_state)
@@ -140,7 +142,9 @@ void intel_crtc_vblank_off(const struct intel_crtc_state *crtc_state)
 	 * but we want the frame counters in the trace, and that
 	 * requires vblank support on some platforms/outputs.
 	 */
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_pipe_disable(crtc);
+#endif
 
 	drm_crtc_vblank_off(&crtc->base);
 	assert_vblank_disabled(&crtc->base);
@@ -399,8 +403,9 @@ static void intel_crtc_vblank_work(struct kthread_work *base)
 		container_of(work, typeof(*crtc_state), vblank_work);
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_crtc_vblank_work_start(crtc);
-
+#endif
 	intel_color_load_luts(crtc_state);
 
 	if (crtc_state->uapi.event) {
@@ -410,7 +415,9 @@ static void intel_crtc_vblank_work(struct kthread_work *base)
 		spin_unlock_irq(&crtc->base.dev->event_lock);
 	}
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_crtc_vblank_work_end(crtc);
+#endif
 }
 
 static void intel_crtc_vblank_work_init(struct intel_crtc_state *crtc_state)
@@ -526,8 +533,9 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 
 	crtc->debug.min_vbl = min;
 	crtc->debug.max_vbl = max;
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_pipe_update_start(crtc);
-
+#endif
 	for (;;) {
 		/*
 		 * prepare_to_wait() has a memory barrier, which guarantees
@@ -580,7 +588,9 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 	crtc->debug.start_vbl_time = ktime_get();
 	crtc->debug.start_vbl_count = intel_crtc_get_vblank_counter(crtc);
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_pipe_update_vblank_evaded(crtc);
+#endif
 	return;
 
 irq_disable:
@@ -639,7 +649,9 @@ void intel_pipe_update_end(struct intel_crtc_state *new_crtc_state)
 	if (new_crtc_state->do_async_flip)
 		return;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_intel_pipe_update_end(crtc, end_vbl_count, scanline_end);
+#endif
 
 	/*
 	 * Incase of mipi dsi command mode, we need to set frame update

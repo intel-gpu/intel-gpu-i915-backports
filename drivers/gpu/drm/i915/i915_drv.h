@@ -92,6 +92,7 @@
 #include "intel_runtime_pm.h"
 #include "intel_step.h"
 #include "intel_uncore.h"
+#include "i915_addr_trans_svc.h"
 
 struct dpll;
 struct drm_i915_clock_gating_funcs;
@@ -629,6 +630,7 @@ struct drm_i915_private {
 		struct mutex lock;
 		struct intel_global_obj obj;
 	} pmdemand;
+
 	/**
 	 * wq - Driver workqueue for GEM.
 	 *
@@ -676,6 +678,11 @@ struct drm_i915_private {
 
 	struct drm_atomic_state *modeset_restore_state;
 	struct drm_modeset_acquire_ctx reset_ctx;
+
+#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+	DECLARE_HASHTABLE(mm_structs, 7);
+	spinlock_t mm_lock;
+#endif
 
 	struct i915_gem_mm mm;
 
@@ -990,6 +997,12 @@ struct drm_i915_private {
 
 	bool device_faulted;
 	struct pci_saved_state *pci_state;
+
+	/* Address translation service support */
+	struct i915_ats_priv *ats_priv;
+	unsigned long flags;
+	int pasid_counter;
+#define INTEL_FLAG_ATS_ENABLED		0
 };
 
 static inline struct drm_i915_private *to_i915(const struct drm_device *dev)
@@ -1330,13 +1343,17 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define IS_XEHPSDV_GRAPHICS_STEP(__i915, since, until) \
 	(IS_XEHPSDV(__i915) && IS_GRAPHICS_STEP(__i915, since, until))
 
+#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
+	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
+	 IS_GRAPHICS_STEP(__i915, since, until))
+
 #define IS_MTL_DISPLAY_STEP(__i915, since, until) \
 	(DISPLAY_VER(__i915) == 14 && \
 	 IS_DISPLAY_STEP(__i915, since, until))
 
-#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
-	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
-	 IS_GRAPHICS_STEP(__i915, since, until))
+#define IS_MTL_MEDIA_STEP(__i915, since, until) \
+	(IS_METEORLAKE(__i915) && \
+	 IS_MEDIA_STEP(__i915, since, until))
 
 /*
  * DG2 hardware steppings are a bit unusual.  The hardware design was forked to
@@ -1800,7 +1817,12 @@ static inline enum i915_map_type
 i915_coherent_map_type(struct drm_i915_private *i915,
 		       struct drm_i915_gem_object *obj, bool always_coherent)
 {
-	if (i915_gem_object_is_lmem(obj))
+	/*
+	 * Wa_22016122933: FIXME: always return I915_MAP_WC for MTL
+	 * Issue is expected to be tracked as Wa_22016122933, but not
+	 * finalized by hardware team yet. So marked as fixme for now.
+	 */
+	if (i915_gem_object_is_lmem(obj) || IS_METEORLAKE(i915))
 		return I915_MAP_WC;
 	if (HAS_LLC(i915) || always_coherent)
 		return I915_MAP_WB;
@@ -1808,24 +1830,21 @@ i915_coherent_map_type(struct drm_i915_private *i915,
 		return I915_MAP_WC;
 }
 
-static inline void
-i915_write_barrier(struct drm_i915_private *i915, bool barrier_to_lmem)
+static inline void i915_write_barrier(struct drm_i915_private *i915)
 {
-	/* Ensure all previous writes are flushed out of store buffers */
-	wmb();
-
-	if (barrier_to_lmem) {
-		/*
-		 * We need a MMIO write as barrier to lmem. A following lmem write
-		 * will stall until all previous writes are pushed to lmem.
-		 *
-		 * We don't need to use a local uncore. A mmio write to a root
-		 * tile register also ensures remote tile lmem writes are
-		 * pushed.
-		 */
-		intel_uncore_write_fw(&i915->uncore, SOFTWARE_FLAGS_SPR33, 0);
-	}
+	/*
+	 * We need a MMIO write as barrier to lmem. A following lmem write
+	 * will stall until all previous writes are pushed to lmem.
+	 *
+	 * We don't need to use a local uncore. A mmio write to a root
+	 * tile register also ensures remote tile lmem writes are
+	 * pushed.
+	 */
+	raw_reg_write(i915->uncore.regs, SOFTWARE_FLAGS_SPR33, 0);
 }
+
+void i915_silent_driver_error(struct drm_i915_private *i915,
+			      const enum i915_driver_errors error);
 
 __printf(3, 4)
 void i915_log_driver_error(struct drm_i915_private *i915,

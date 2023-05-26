@@ -28,7 +28,7 @@ REL_NAME="1"
 REL_TYPE=""
 BUILD_TYPE=""
 DEP_PKG_NAME=""
-
+I915_CONFIG=""
 DEP_PMT_PKG_NAME="intel-platform-vsec-dkms"
 
 helpFunction()
@@ -59,6 +59,12 @@ if [ "$REL_TYPE" = "opensource" ]; then
 	DEP_PKG_NAME="intel-dmabuf-dkms"
 else
 	DEP_PKG_NAME="intel-dmabuf-dkms-$REL_TYPE"
+fi
+
+if [ "$BUILD_TYPE" != "sp2" ]; then
+       I915_CONFIG="i915"
+else
+       I915_CONFIG="i915_disable_svm"
 fi
 
 # We can label the here-doc lines for conditional output to the conf file
@@ -136,6 +142,6 @@ $ST	DEST_MODULE_LOCATION[11]="/updates"
 		fi
 	}
 	
-	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers \$dkms_tree/$DEP_PMT_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE"
+	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers \$dkms_tree/$DEP_PMT_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/$I915_CONFIG .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE"
 	CLEAN="export LEX=flex; export YACC=bison; 'make' clean"
 EOF

@@ -2742,9 +2742,11 @@ static int cmd_parser_exec(struct parser_exec_state *s)
 
 	s->info = info;
 
+#ifndef BPM_DISABLE_TRACES
 	trace_gvt_command(vgpu->id, s->engine->id, s->ip_gma, s->ip_va,
 			  cmd_length(s), s->buf_type, s->buf_addr_type,
 			  s->workload, info->name);
+#endif
 
 	if ((info->flag & F_LEN_MASK) == F_LEN_VAR_FIXED) {
 		ret = gvt_check_valid_cmd_length(cmd_length(s),

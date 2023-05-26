@@ -12,6 +12,11 @@
 #include <linux/mm_types.h>
 #include <linux/sched/mm.h>
 
+#ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
+#include <linux/mmap_lock.h>
+#endif
+
+
 #include "i915_svm.h"
 #include "intel_memory_region.h"
 #include "gem/i915_gem_context.h"
@@ -211,7 +216,7 @@ static int i915_range_fault(struct svm_notifier *sn,
 
 	struct mmu_interval_notifier *notifier = &sn->notifier;
 	struct mm_struct *mm = sn->notifier.mm;
-	struct i915_vm_pt_stash stash = { 0 };
+	struct i915_vm_pt_stash stash = {};
 	struct i915_gem_ww_ctx ww;
 	u32 sg_page_sizes;
 	int regions;
@@ -265,8 +270,8 @@ static int i915_range_fault(struct svm_notifier *sn,
 	flags = (regions & REGION_LMEM) ? I915_GTT_SVM_LMEM : 0;
 	flags |= (va->flags & PRELIM_I915_GEM_VM_BIND_READONLY) ?
 		 I915_GTT_SVM_READONLY : 0;
-	ret = svm_bind_addr_commit(vm, va->start, va->length,
-				   flags, st, sg_page_sizes);
+	ret = svm_bind_addr_commit(vm, &stash, va->start, va->length, flags,
+				   st, sg_page_sizes);
 	mutex_unlock(&svm->mutex);
 	i915_vm_free_pt_stash(vm, &stash);
 fault_done:

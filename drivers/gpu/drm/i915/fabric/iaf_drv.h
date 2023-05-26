@@ -466,6 +466,7 @@ enum iaf_startup_mode {
 #endif
 };
 
+struct fport; /* from this file */
 struct fsubdev; /* from this file */
 
 /**
@@ -483,6 +484,11 @@ enum PORT_CONTROL {
 	PORT_CONTROL_ROUTABLE,
 	PORT_CONTROL_BEACONING,
 	NUM_PORT_CONTROLS
+};
+
+struct port_lane {
+	struct fport *port;
+	u32 lane_number;
 };
 
 /*
@@ -507,6 +513,7 @@ struct fport_routing {
  * @link_degrades: attribute for link_degrades sysfs file
  * @lpn: logical port number in firmware
  * @port_type: type of port (hardwired, QFSP, etc.)
+ * @ports_lanes: used by debugfs code to match a port/lane combination
  * @log_state: firmware logical state (DOWN, INIT, ARMED, ACTIVE)
  * @phys_state: firmware physical state (DISABLED, POLLING, ..., LINKUP)
  * @state: driver-abstracted high level view of port state
@@ -537,6 +544,7 @@ struct fport {
 	/* values const after async probe */
 	u8 lpn;
 	u8 port_type;
+	struct port_lane ports_lanes[LANES];
 
 	/* protected by routable_lock, written by PM thread with shared lock */
 	u8 log_state;

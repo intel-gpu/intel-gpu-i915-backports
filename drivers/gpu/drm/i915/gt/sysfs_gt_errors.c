@@ -103,7 +103,7 @@ static ssize_t gt_error_show(struct device *dev,
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t gsc_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-      struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t gsc_error_show(struct device *dev,
 			      struct device_attribute *attr,
@@ -165,8 +165,8 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	value = ea->i915_show(kobj, attr, buf);
 #else
 	value = ea->i915_show(dev, attr, buf);
-
 #endif
+
 	pvc_wa_allow_rc6(gt->i915);
 
 	return value;

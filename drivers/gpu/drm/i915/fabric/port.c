@@ -1341,8 +1341,9 @@ static void update_ports_work(struct work_struct *work)
 				  p->portinfo->link_down_count,
 				  p->portinfo->port_error_action,
 				  p->portinfo->lqi_change_count);
-
+#ifndef BPM_DISABLE_TRACES
 			trace_pm_psc(sd->fdev->pd->index, sd_index(sd), lpn, p->portinfo);
+#endif
 		}
 	}
 
@@ -1488,6 +1489,7 @@ static int initial_port_state(struct fsubdev *sd)
 	     ++lpn, ++p, ++curr_portinfo) {
 		u8 mode = curr_portinfo->port_link_mode_active;
 		u8 type = curr_portinfo->port_type;
+		u8 lane;
 
 		sd_dbg(sd, PORT_FMT "mode %u type %u\n", lpn, mode, type);
 
@@ -1495,6 +1497,10 @@ static int initial_port_state(struct fsubdev *sd)
 		p->portinfo = curr_portinfo;
 		p->sd = sd;
 		p->port_type = type;
+		for (lane = 0; lane < LANES; lane++) {
+			p->ports_lanes[lane].port = p;
+			p->ports_lanes[lane].lane_number = lane;
+		}
 		timer_setup(&p->linkup_timer, linkup_timer_expired, 0);
 
 		INIT_LIST_HEAD(&p->unroute_link);
