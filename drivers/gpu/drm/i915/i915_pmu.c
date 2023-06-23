@@ -106,7 +106,7 @@ static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_PSF_1] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_1),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_PSF_2] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_CD0] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0),
-	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_CD0_MDFI] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI),
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_CD0_MDFI] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_EAST] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_MDFI_SOUTH] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH),
 	[PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(0, 0)] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_0),
@@ -157,6 +157,9 @@ static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK] = INTEL_GT_HW_ERROR_COR_L3BANK,
 	[PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE] = INTEL_GT_HW_ERROR_FAT_SUBSLICE,
 	[PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK] = INTEL_GT_HW_ERROR_FAT_L3BANK,
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_CD0_MDFI] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_CD0_MDFI),
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_EAST] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_EAST),
+	[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_SOUTH] = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_SOUTH),
 
 };
 
@@ -706,14 +709,15 @@ frequency_sample(struct intel_gt *gt, unsigned int period_ns)
 		 * case we assume the system is running at the intended
 		 * frequency. Fortunately, the read should rarely fail!
 		 */
-		val = intel_rps_read_rpstat_fw(rps);
-		if (val)
-			val = intel_rps_get_cagf(rps, val);
+		if (IS_PONTEVECCHIO(gt->i915))
+			val = intel_rps_read_chiplet_frequency(&gt->rps);
 		else
-			val = rps->cur_freq;
+			val = intel_rps_read_actual_frequency_fw(rps);
+		if (!val)
+			val = intel_gpu_freq(rps, rps->cur_freq);
 
 		add_sample_mult(pmu, gt_id, __I915_SAMPLE_FREQ_ACT,
-				intel_gpu_freq(rps, val), period_ns / 1000);
+				val, period_ns / 1000);
 	}
 
 	if (pmu->enable & config_mask(__PRELIM_I915_PMU_REQUESTED_FREQUENCY(gt_id))) {
@@ -855,8 +859,10 @@ static bool is_xehpsdv_soc_error(const u64 config)
 
 static bool is_pvc_soc_error(const u64 config)
 {
-	if (hw_error_id(config) >= PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_PSF_0 &&
-	    hw_error_id(config) <= PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 15))
+	if ((hw_error_id(config) >= PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_PSF_0 &&
+	    hw_error_id(config) <= PRELIM_I915_PVC_PMU_SOC_ERROR_FATAL_HBM(1, 15)) ||
+	    (hw_error_id(config) >= PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_CD0_MDFI &&
+	    hw_error_id(config) <= PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_SOUTH))
 		return true;
 
 	return false;
@@ -1615,6 +1621,10 @@ create_event_attributes(struct i915_pmu *pmu)
 		[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK] = "correctable-l3bank",
 		[PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE] = "fatal-subslice",
 		[PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK] = "fatal-l3bank",
+		[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_CD0_MDFI] = "soc-nonfatal-cd0-mdfi",
+		[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_EAST] = "soc-nonfatal-mdfi-east",
+		[PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_SOUTH] = "soc-nonfatal-mdfi-south",
+
 	};
 	static const char *gt_driver_error_events[] = {
 		[PRELIM_I915_PMU_GT_DRIVER_ERROR_GGTT] = "driver-ggtt",

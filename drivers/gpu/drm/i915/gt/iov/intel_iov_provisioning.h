@@ -29,6 +29,10 @@ int intel_iov_provisioning_auto(struct intel_iov *iov, unsigned int num_vfs);
 int intel_iov_provisioning_verify(struct intel_iov *iov, unsigned int num_vfs);
 int intel_iov_provisioning_push(struct intel_iov *iov, unsigned int num);
 
+#ifndef BPM_PCI_IOV_VF_ID_NOT_PRESENT
+u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int vfid);
+#endif
+
 int intel_iov_provisioning_set_ggtt(struct intel_iov *iov, unsigned int id, u64 size);
 u64 intel_iov_provisioning_get_ggtt(struct intel_iov *iov, unsigned int id);
 int intel_iov_provisioning_set_spare_ggtt(struct intel_iov *iov, u64 size);

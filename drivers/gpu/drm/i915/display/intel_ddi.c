@@ -3109,7 +3109,7 @@ gen9_chicken_trans_reg_by_port(struct drm_i915_private *dev_priv,
 	if (drm_WARN_ON(&dev_priv->drm, port < PORT_A || port > PORT_E))
 		port = PORT_A;
 
-	return CHICKEN_TRANS(dev_priv, trans[port]);
+	return CHICKEN_TRANS(trans[port]);
 }
 
 static void intel_enable_ddi_hdmi(struct intel_atomic_state *state,

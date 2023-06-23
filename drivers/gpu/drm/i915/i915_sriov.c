@@ -3,13 +3,19 @@
  * Copyright © 2022 Intel Corporation
  */
 
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 #include "i915_sriov.h"
+#else
+#include <drm/i915_sriov.h>
+#endif
+
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_debugger.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_pci.h"
+#include "i915_utils.h"
 #include "intel_pci_config.h"
 #include "gem/i915_gem_pm.h"
 #include "gem/i915_gem_context.h"
@@ -20,6 +26,7 @@
 #include "gt/iov/intel_iov_migration.h"
 #include "gt/iov/intel_iov_provisioning.h"
 #include "gt/iov/intel_iov_service.h"
+#include "gt/iov/intel_iov_reg.h"
 #include "gt/iov/intel_iov_state.h"
 #include "gt/iov/intel_iov_utils.h"
 
@@ -791,6 +798,272 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 	return 0;
 }
 
+static bool needs_save_restore(struct drm_i915_private *i915, unsigned int vfid)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct pci_dev *vfpdev = i915_pci_pf_get_vf_dev(pdev, vfid);
+	bool ret;
+
+	if (!vfpdev)
+		return false;
+
+	/*
+	 * If VF has the same driver as PF loaded (from host perspective), we don't need
+	 * to save/restore its state, because the VF driver will receive the same PM
+	 * handling as all the host drivers. There is also no need to save/restore state
+	 * when no driver is loaded on VF.
+	 */
+	ret = (vfpdev->driver && strcmp(vfpdev->driver->name, pdev->driver->name) != 0);
+
+	pci_dev_put(vfpdev);
+	return ret;
+}
+
+static void pf_restore_vfs_pci_state(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	unsigned int vfid;
+
+	GEM_BUG_ON(num_vfs > pci_num_vf(pdev));
+
+	for (vfid = 1; vfid <= num_vfs; vfid++) {
+		struct pci_dev *vfpdev = i915_pci_pf_get_vf_dev(pdev, vfid);
+
+		if (!vfpdev)
+			continue;
+		if (!needs_save_restore(i915, vfid))
+			continue;
+
+		/*
+		 * XXX: Waiting for other drivers to do their job.
+		 * We can ignore the potential error in this function -
+		 * in case of an error, we still want to try to reinitialize
+		 * the MSI and set the PCI master.
+		 */
+		device_pm_wait_for_dev(&pdev->dev, &vfpdev->dev);
+
+		pci_restore_msi_state(vfpdev);
+		pci_set_master(vfpdev);
+
+		pci_dev_put(vfpdev);
+	}
+}
+
+#define I915_VF_PAUSE_TIMEOUT_MS 500
+#define I915_VF_REPROVISION_TIMEOUT_MS 1000
+
+static int pf_gt_save_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
+{
+	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
+	struct intel_iov *iov = &gt->iov;
+	unsigned long timeout_ms = I915_VF_PAUSE_TIMEOUT_MS;
+	void **guc_state = &iov->pf.state.data[vfid].guc_state;
+	int err;
+
+	GEM_BUG_ON(!vfid);
+	GEM_BUG_ON(vfid > pci_num_vf(pdev));
+
+	err = intel_iov_state_pause_vf(iov, vfid);
+	if (err) {
+		IOV_ERROR(iov, "Failed to pause VF%u: (%pe)", vfid, ERR_PTR(err));
+		return err;
+	}
+
+	/* FIXME: How long we should wait? */
+	if (wait_for(iov->pf.state.data[vfid].paused, timeout_ms)) {
+		IOV_ERROR(iov, "VF%u pause didn't complete within %lu ms\n", vfid, timeout_ms);
+		return -ETIMEDOUT;
+	}
+
+	if (*guc_state)
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+		memset(*guc_state, 0, SZ_4K);
+#else
+		memset(*guc_state, 0, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
+#endif
+	else
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+		*guc_state = kzalloc(SZ_4K, GFP_KERNEL);
+#else
+		*guc_state = kzalloc(PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE, GFP_KERNEL);
+#endif
+
+	if (!*guc_state) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+	err = intel_iov_state_save_vf(iov, vfid, *guc_state);
+#else
+	err = intel_iov_state_save_vf(iov, vfid, *guc_state, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
+#endif
+error:
+	if (err)
+		IOV_ERROR(iov, "Failed to save VF%u GuC state: (%pe)", vfid, ERR_PTR(err));
+
+	return err;
+}
+
+static void pf_save_vfs_guc_state(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	unsigned int saved = 0;
+	struct intel_gt *gt;
+	unsigned int gt_id;
+	unsigned int vfid;
+
+	for (vfid = 1; vfid <= num_vfs; vfid++) {
+		if (!needs_save_restore(i915, vfid)) {
+			drm_dbg(&i915->drm, "Save of VF%u GuC state has been skipped\n", vfid);
+			continue;
+		}
+
+		for_each_gt(gt, i915, gt_id) {
+			int err = pf_gt_save_vf_guc_state(gt, vfid);
+
+			if (err < 0)
+				goto skip_vf;
+		}
+		saved++;
+		continue;
+skip_vf:
+		break;
+	}
+
+	drm_dbg(&i915->drm, "%u of %u VFs GuC state successfully saved", saved, num_vfs);
+}
+
+static int pf_gt_restore_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
+{
+	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
+	struct intel_iov *iov = &gt->iov;
+	unsigned long timeout_ms = I915_VF_REPROVISION_TIMEOUT_MS;
+	int err;
+
+	GEM_BUG_ON(!vfid);
+	GEM_BUG_ON(vfid > pci_num_vf(pdev));
+
+	if (!iov->pf.state.data[vfid].guc_state)
+		return -EINVAL;
+
+	if (wait_for(iov->pf.provisioning.num_pushed >= vfid, timeout_ms)) {
+		IOV_ERROR(iov,
+			  "Failed to restore VF%u GuC state. Provisioning didn't complete within %lu ms\n",
+			  vfid, timeout_ms);
+		return -ETIMEDOUT;
+	}
+
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+	err = intel_iov_state_restore_vf(iov, vfid, iov->pf.state.data[vfid].guc_state);
+#else
+	err = intel_iov_state_restore_vf(iov, vfid, iov->pf.state.data[vfid].guc_state,
+					 PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
+#endif
+	if (err < 0) {
+		IOV_ERROR(iov, "Failed to restore VF%u GuC state: (%pe)", vfid, ERR_PTR(err));
+		return err;
+	}
+
+	kfree(iov->pf.state.data[vfid].guc_state);
+	iov->pf.state.data[vfid].guc_state = NULL;
+
+	return 0;
+}
+
+static void pf_restore_vfs_guc_state(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	unsigned int restored = 0;
+	struct intel_gt *gt;
+	unsigned int gt_id;
+	unsigned int vfid;
+
+	for (vfid = 1; vfid <= num_vfs; vfid++) {
+		if (!needs_save_restore(i915, vfid)) {
+			drm_dbg(&i915->drm, "Restoration of VF%u GuC state has been skipped\n",
+				vfid);
+			continue;
+		}
+
+		for_each_gt(gt, i915, gt_id) {
+			int err = pf_gt_restore_vf_guc_state(gt, vfid);
+
+			if (err < 0)
+				goto skip_vf;
+		}
+		restored++;
+		continue;
+skip_vf:
+		break;
+	}
+
+	drm_dbg(&i915->drm, "%u of %u VFs GuC state restored successfully", restored, num_vfs);
+}
+
+static i915_reg_t vf_master_irq(struct drm_i915_private *i915, unsigned int vfid)
+{
+	return (GRAPHICS_VER_FULL(i915) < IP_VER(12, 50)) ?
+		GEN12_VF_GFX_MSTR_IRQ(vfid) :
+		XEHPSDV_VF_GFX_MSTR_IRQ(vfid);
+}
+
+static void pf_restore_vfs_irqs(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	struct intel_gt *gt;
+	unsigned int gt_id;
+
+	for_each_gt(gt, i915, gt_id) {
+		unsigned int vfid;
+
+		for (vfid = 1; vfid <= num_vfs; vfid++)
+			raw_reg_write(gt->uncore->regs, vf_master_irq(i915, vfid),
+				      GEN11_MASTER_IRQ);
+	}
+}
+
+static void pf_suspend_active_vfs(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	unsigned int num_vfs = pci_num_vf(pdev);
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	if (num_vfs == 0)
+		return;
+
+	pf_save_vfs_guc_state(i915, num_vfs);
+}
+
+static void pf_resume_active_vfs(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	unsigned int num_vfs = pci_num_vf(pdev);
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	if (num_vfs == 0)
+		return;
+
+	pf_restore_vfs_pci_state(i915, num_vfs);
+	pf_restore_vfs_guc_state(i915, num_vfs);
+	pf_restore_vfs_irqs(i915, num_vfs);
+}
+
+/**
+ * i915_sriov_suspend_prepare - Prepare SR-IOV to suspend.
+ * @i915: the i915 struct
+ *
+ * The function is called in a callback prepare.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int i915_sriov_suspend_prepare(struct drm_i915_private *i915)
+{
+	if (IS_SRIOV_PF(i915))
+		pf_suspend_active_vfs(i915);
+
+	return 0;
+}
+
 /**
  * i915_sriov_pf_stop_vf - Stop VF.
  * @i915: the i915 struct
@@ -853,6 +1126,10 @@ int i915_sriov_pf_pause_vf(struct drm_i915_private *i915, unsigned int vfid)
 	return result;
 }
 
+#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_pause_vf, I915);
+#endif 
+
 /**
  * i915_sriov_pf_resume_vf - Resume VF.
  * @i915: the i915 struct
@@ -883,6 +1160,288 @@ int i915_sriov_pf_resume_vf(struct drm_i915_private *i915, unsigned int vfid)
 
 	return result;
 }
+
+#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_resume_vf, I915);
+#endif
+
+/**
+ * i915_sriov_pf_wait_vf_flr_done - Wait for VF FLR completion.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ *
+ * This function will wait until VF FLR is processed by PF on all tiles (or
+ * until timeout occurs).
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+int i915_sriov_pf_wait_vf_flr_done(struct drm_i915_private *i915, unsigned int vfid)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+	int ret;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+	for_each_gt(gt, i915, id) {
+		ret = wait_for(intel_iov_state_no_flr(&gt->iov, vfid), I915_VF_FLR_TIMEOUT_MS);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_wait_vf_flr_done, I915);
+
+/**
+ * i915_sriov_pf_get_vf_tile_mask - Get mask of tiles that contain VF state.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Mask of tiles that contain VF state.
+ */
+unsigned int i915_sriov_pf_get_vf_tile_mask(struct drm_i915_private *i915, unsigned int vfid)
+{
+	struct intel_iov *iov = &to_root_gt(i915)->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	if (!HAS_EXTRA_GT_LIST(i915))
+		return BIT(0);
+	else if (!HAS_REMOTE_TILES(i915))
+		return BIT(0) | BIT(1);
+
+	return intel_iov_provisioning_get_tile_mask(iov, vfid);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_get_vf_tile_mask, I915);
+
+/**
+ * i915_sriov_pf_get_vf_ggtt_size - Get size needed to store VF GGTT.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size in bytes.
+ */
+size_t
+i915_sriov_pf_get_vf_ggtt_size(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+	ssize_t size;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	if (!HAS_REMOTE_TILES(i915) && tile > 0)
+		return 0;
+
+	size = intel_iov_state_save_ggtt(iov, vfid, NULL, 0);
+	WARN_ON(size < 0);
+
+	return size;
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_get_vf_ggtt_size, I915);
+
+/**
+ * i915_sriov_pf_save_vf_ggtt - Save VF GGTT.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer to save VF GGTT
+ * @size: size of buffer to save VF GGTT
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size of data written on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_pf_save_vf_ggtt(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			   void *buf, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	WARN_ON(buf == NULL && size == 0);
+
+	return intel_iov_state_save_ggtt(iov, vfid, buf, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_save_vf_ggtt, I915);
+
+/**
+ * i915_sriov_pf_load_vf_ggtt - Load VF GGTT.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer with VF GGTT
+ * @size: size of buffer with VF GGTT
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int
+i915_sriov_pf_load_vf_ggtt(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			   const void *buf, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	return intel_iov_state_restore_ggtt(iov, vfid, buf, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_load_vf_ggtt, I915);
+
+/**
+ * i915_sriov_pf_get_vf_lmem_size - Get size needed to store VF Local Memory.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size in bytes.
+ */
+size_t
+i915_pf_get_vf_lmem_size(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	if (!HAS_REMOTE_TILES(i915) && tile > 0)
+		return 0;
+
+	return intel_iov_provisioning_get_lmem(iov, vfid);
+}
+EXPORT_SYMBOL_NS_GPL(i915_pf_get_vf_lmem_size, I915);
+
+/**
+ * i915_sriov_pf_save_vf_ggtt - Save VF Local Memory.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer to save VF LMEM
+ * @offset: offset from the start of VF LMEM
+ * @size: size of buffer to save VF LMEM
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size of data written on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_pf_save_vf_lmem(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			   void *buf, loff_t offset, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	return intel_iov_state_save_lmem(iov, vfid, buf, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_save_vf_lmem, I915);
+
+/**
+ * i915_sriov_pf_load_vf_lmem - Load VF Local Memory.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer with VF LMEM to load
+ * @offset: offset from the start of VF LMEM
+ * @size: size of buffer with VF LMEM
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int
+i915_sriov_pf_load_vf_lmem(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			   const void *buf, loff_t offset, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	return intel_iov_state_restore_lmem(iov, vfid, buf, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_load_vf_lmem, I915);
+
+/**
+ * i915_pf_get_vf_fw_state_size - Get size needed to store GuC FW state.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size in bytes.
+ */
+size_t
+i915_pf_get_vf_fw_state_size(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile)
+{
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	return SZ_4K;
+}
+EXPORT_SYMBOL_NS_GPL(i915_pf_get_vf_fw_state_size, I915);
+
+/**
+ * i915_sriov_pf_save_vf_fw_state - Save GuC FW state.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer to save GuC FW state
+ * @size: size of buffer to save GuC FW state
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size of data written on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_pf_save_vf_fw_state(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			       void *buf, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+	int ret;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	ret = intel_iov_state_save_vf(iov, vfid, buf, size);
+	if (ret)
+		return ret;
+
+	return SZ_4K;
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_save_vf_fw_state, I915);
+
+/**
+ * i915_sriov_pf_load_vf_fw_state - Load GuC FW state.
+ * @i915: the i915 struct
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer with GuC FW state to load
+ * @size: size of buffer with GuC FW state
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int
+i915_sriov_pf_load_vf_fw_state(struct drm_i915_private *i915, unsigned int vfid, unsigned int tile,
+			       const void *buf, size_t size)
+{
+	struct intel_iov *iov = &i915->gt[tile]->iov;
+
+	GEM_BUG_ON(!IS_SRIOV_PF(i915));
+
+	return intel_iov_state_restore_vf(iov, vfid, buf, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_pf_load_vf_fw_state, I915);
+#endif /* BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT */ 
 
 /**
  * i915_sriov_pf_clear_vf - Unprovision VF.
@@ -969,6 +1528,22 @@ int i915_sriov_resume_early(struct drm_i915_private *i915)
 				intel_gt_pm_get_untracked(gt);
 		}
 	}
+
+	return 0;
+}
+
+/**
+ * i915_sriov_resume - Resume SR-IOV.
+ * @i915: the i915 struct
+ *
+ * The function is called in a callback resume.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int i915_sriov_resume(struct drm_i915_private *i915)
+{
+	if (IS_SRIOV_PF(i915))
+		pf_resume_active_vfs(i915);
 
 	return 0;
 }

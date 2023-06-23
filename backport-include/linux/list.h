@@ -151,5 +151,18 @@ static inline void list_rotate_to_front(struct list_head *list,
 
 
 #endif
-    
+
+#ifdef BPM_LIST_IS_HEAD_NOT_PRESENT
+
+/**
+ * list_is_head - tests whether @list is the list @head
+ * @list: the entry to test
+ * @head: the head of the list
+ */
+static inline int list_is_head(const struct list_head *list, const struct list_head *head)
+{
+	return list == head;
+}
+#endif
+   
 #endif /* __BACKPORT_LIST_H */

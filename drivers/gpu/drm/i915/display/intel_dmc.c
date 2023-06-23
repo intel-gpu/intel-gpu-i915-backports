@@ -48,13 +48,12 @@
 	__stringify(major) "_"		 \
 	__stringify(minor) ".bin"
 
+#define XELPDP_DMC_MAX_FW_SIZE          0x7000
 #define DISPLAY_VER13_DMC_MAX_FW_SIZE	0x20000
-
 #define DISPLAY_VER12_DMC_MAX_FW_SIZE	ICL_DMC_MAX_FW_SIZE
 
-#define MTL_DMC_PATH			DMC_PATH(mtl, 2, 11)
-#define MTL_DMC_VERSION_REQUIRED	DMC_VERSION(2, 11)
-#define MTL_DMC_MAX_FW_SIZE		0x10000
+#define MTL_DMC_PATH			DMC_PATH(mtl, 2, 12)
+#define MTL_DMC_VERSION_REQUIRED	DMC_VERSION(2, 12)
 MODULE_FIRMWARE(MTL_DMC_PATH);
 
 #define DG2_DMC_PATH			DMC_PATH(dg2, 2, 07)
@@ -390,12 +389,9 @@ static void disable_all_event_handlers(struct drm_i915_private *i915)
 	}
 }
 
-static void pipedmc_clock_gating_wa(struct drm_i915_private *i915, bool enable)
+static void adlp_pipedmc_clock_gating_wa(struct drm_i915_private *i915, bool enable)
 {
 	enum pipe pipe;
-
-	if (DISPLAY_VER(i915) != 13)
-		return;
 
 	/*
 	 * Wa_16015201720:adl-p,dg2
@@ -412,6 +408,25 @@ static void pipedmc_clock_gating_wa(struct drm_i915_private *i915, bool enable)
 		for (pipe = PIPE_C; pipe <= PIPE_D; pipe++)
 			intel_de_rmw(i915, CLKGATE_DIS_PSL_EXT(pipe),
 				     PIPEDMC_GATING_DIS, 0);
+}
+
+static void mtl_pipedmc_clock_gating_wa(struct drm_i915_private *i915)
+{
+	/*
+	 * Wa_16015201720
+	 * The WA requires clock gating to be disabled all the time
+	 * for pipe A and B.
+	 */
+	intel_de_rmw(i915, GEN9_CLKGATE_DIS_0, 0,
+		     MTL_PIPEDMC_GATING_DIS_A | MTL_PIPEDMC_GATING_DIS_B);
+}
+
+static void pipedmc_clock_gating_wa(struct drm_i915_private *i915, bool enable)
+{
+	if (DISPLAY_VER(i915) >= 14 && enable)
+		mtl_pipedmc_clock_gating_wa(i915);
+	else if (DISPLAY_VER(i915) == 13)
+		adlp_pipedmc_clock_gating_wa(i915, enable);
 }
 
 void intel_dmc_enable_pipe(struct drm_i915_private *i915, enum pipe pipe)
@@ -933,7 +948,7 @@ void intel_dmc_ucode_init(struct drm_i915_private *dev_priv)
 	if (IS_METEORLAKE(dev_priv)) {
 		dmc->fw_path = MTL_DMC_PATH;
 		dmc->required_version = MTL_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = MTL_DMC_MAX_FW_SIZE;
+		dmc->max_fw_size = XELPDP_DMC_MAX_FW_SIZE;
 	} else if (IS_DG2(dev_priv)) {
 		dmc->fw_path = DG2_DMC_PATH;
 		dmc->required_version = DG2_DMC_VERSION_REQUIRED;

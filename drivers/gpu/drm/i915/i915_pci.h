@@ -10,6 +10,15 @@
 
 struct pci_dev;
 
+#ifdef CONFIG_PCI_IOV
+struct pci_dev *i915_pci_pf_get_vf_dev(struct pci_dev *pdev, unsigned int id);
+#else
+static inline struct pci_dev *i915_pci_pf_get_vf_dev(struct pci_dev *pdev, unsigned int id)
+{
+	return ERR_PTR(-ENODEV);
+}
+#endif
+
 int i915_pci_register_driver(void);
 void i915_pci_unregister_driver(void);
 

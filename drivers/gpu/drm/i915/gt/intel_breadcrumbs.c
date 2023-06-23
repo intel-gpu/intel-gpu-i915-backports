@@ -356,6 +356,9 @@ void intel_breadcrumbs_remove_wait(struct intel_breadcrumbs *b,
 
 void __intel_breadcrumbs_park(struct intel_breadcrumbs *b)
 {
+	if (b->irq_enabled) /* last chance for a missed wakeup! */
+		wake_up_all(&b->wq);
+
 	if (!READ_ONCE(b->irq_armed))
 		return;
 
