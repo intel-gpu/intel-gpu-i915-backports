@@ -192,7 +192,7 @@ i915_gem_object_create_region(struct intel_memory_region *mem,
 	if (err)
 		goto err_object_free;
 
-	trace_i915_gem_object_create(obj);
+	trace_i915_gem_object_create(obj, 0);
 	return obj;
 
 err_object_free:

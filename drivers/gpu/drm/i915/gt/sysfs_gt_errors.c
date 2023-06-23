@@ -254,6 +254,9 @@ static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss3_4, SOC_ERR_INDEX(INTEL_GT_S
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss3_5, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_5));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss3_6, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_6));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss3_7, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_7));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_cd0_mdfi, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_CD0_MDFI));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_EAST));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_SOUTH));
 
 static I915_DEVICE_ATTR_RO(engine_reset, 0);
 static I915_DEVICE_ATTR_RO(eu_attention, 0);
@@ -431,6 +434,9 @@ static const struct attribute *pvc_soc_error_attrs[] = {
 	&dev_attr_pvc_soc_fatal_hbm_ss3_5.attr.attr,
 	&dev_attr_pvc_soc_fatal_hbm_ss3_6.attr.attr,
 	&dev_attr_pvc_soc_fatal_hbm_ss3_7.attr.attr,
+	&dev_attr_pvc_soc_nonfatal_cd0_mdfi.attr.attr,
+	&dev_attr_pvc_soc_nonfatal_mdfi_east.attr.attr,
+	&dev_attr_pvc_soc_nonfatal_mdfi_south.attr.attr,
 	NULL
 };
 void intel_gt_sysfs_register_errors(struct intel_gt *gt, struct kobject *parent)

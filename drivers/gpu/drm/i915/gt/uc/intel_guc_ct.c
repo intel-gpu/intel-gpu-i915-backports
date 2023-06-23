@@ -28,6 +28,7 @@ enum {
 	CT_DEAD_PROCESS_FAILED,
 };
 static void ct_dead_ct_worker_func(struct work_struct *w);
+static void ct_try_receive_message(struct intel_guc_ct *ct);
 
 static inline struct intel_guc *ct_to_guc(struct intel_guc_ct *ct)
 {
@@ -900,6 +901,9 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 	if (unlikely(ct->ctbs.send.broken))
 		return -EPIPE;
 
+	/* Drain the interrupt workqueue to prevent overfilling send/recv ct */
+	ct_try_receive_message(ct);
+
 	if (flags & INTEL_GUC_CT_SEND_NB)
 		return ct_send_nb(ct, action, len, flags);
 
@@ -1389,9 +1393,13 @@ static void ct_handle_msg(struct intel_guc_ct *ct, struct ct_incoming_msg *msg)
  */
 static int ct_receive(struct intel_guc_ct *ct)
 {
+	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
 	struct ct_incoming_msg *msg = NULL;
 	unsigned long flags;
 	int ret;
+
+	if (ctb->head == READ_ONCE(ctb->desc->tail))
+		return 0;
 
 retry:
 	spin_lock_irqsave(&ct->ctbs.recv.lock, flags);
@@ -1413,15 +1421,7 @@ retry:
 
 static void ct_try_receive_message(struct intel_guc_ct *ct)
 {
-	int ret;
-
-	if (!ct->enabled) {
-		CT_DEBUG(ct, "ct disabled\n");
-		return;
-	}
-
-	ret = ct_receive(ct);
-	if (ret > 0)
+	if (ct_receive(ct) > 0)
 		tasklet_hi_schedule(&ct->receive_tasklet);
 }
 
@@ -1429,7 +1429,11 @@ static noinline void ct_receive_tasklet_func(unsigned long data)
 {
 	struct intel_guc_ct *ct = (struct intel_guc_ct *)data;
 
-	ct_try_receive_message(ct);
+	if (!ct->enabled)
+		return;
+
+	while (ct_receive(ct) > 0)
+		;
 }
 
 /*

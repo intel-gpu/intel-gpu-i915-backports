@@ -2803,11 +2803,14 @@ soc_err_index_to_str(unsigned long index)
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0):
 		return "CD0";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI):
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_CD0_MDFI):
 		return "CD0 MDFI";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST):
-		return "MDFI EAST";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_EAST):
+		return "MDFI T2T";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH):
-		return "MDFI SOUTH";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_SOUTH):
+		return "MDFI T2C";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_PUNIT):
 		return "PUNIT";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_0):
@@ -2879,6 +2882,22 @@ soc_err_index_to_str(unsigned long index)
 	}
 }
 
+static void log_soc_hw_error(struct intel_gt *gt, unsigned long index,
+			     const enum hardware_error hw_err)
+{
+	const char *error_name;
+
+	if (!IS_PONTEVECCHIO(gt->i915))
+		return;
+
+	error_name = soc_err_index_to_str(index);
+	if (!strcmp(error_name, "UNKNOWN"))
+		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT, "UNKNOWN SOC %s error\n",
+					  hardware_error_type_to_str(hw_err));
+	else
+		log_gt_hw_err(gt, "%s SOC %s error\n", error_name, hardware_error_type_to_str(hw_err));
+}
+
 static void update_soc_hw_error_cnt(struct intel_gt *gt, unsigned long index)
 {
 	unsigned long flags;
@@ -2921,9 +2940,8 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 
 	log_gt_hw_err(gt, "SOC %s error\n", hardware_error_type_to_str(hw_err));
 
-	if ((hw_err == HARDWARE_ERROR_CORRECTABLE) || (hw_err ==
-						       HARDWARE_ERROR_NONFATAL))
-		{
+	if (hw_err == HARDWARE_ERROR_CORRECTABLE ||
+	    (hw_err == HARDWARE_ERROR_NONFATAL && !IS_PONTEVECCHIO(gt->i915))) {
 		for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
 			raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
 				      ~REG_BIT(hw_err));
@@ -2938,6 +2956,8 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 			      REG_GENMASK(31, 0));
 
 		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT, "UNKNOWN SOC %s error\n", hardware_error_type_to_str(hw_err));
+
+		goto unmask_gsysevtctl;
 	}
 
 	/*
@@ -2952,20 +2972,21 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 
 	mst_glb_errstat = raw_reg_read(regs,
 				       SOC_GLOBAL_ERR_STAT_MASTER_REG(base, hw_err));
-	log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_MASTER_REG_FATAL:0x%08lx\n", mst_glb_errstat);
+	log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_MASTER_REG_%s:0x%08lx\n",
+		      hardware_error_type_to_str(hw_err), mst_glb_errstat);
 	if (mst_glb_errstat & REG_BIT(SOC_SLAVE_IEH)) {
 		slv_glb_errstat = raw_reg_read(regs,
 					       SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base,
 									     hw_err));
-		log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_SLAVE_REG_FATAL:0x%08lx\n",
-			      slv_glb_errstat);
+		log_gt_hw_err(gt, "SOC_GLOBAL_ERR_STAT_SLAVE_REG_%s:0x%08lx\n",
+			      hardware_error_type_to_str(hw_err), slv_glb_errstat);
 
 		if (slv_glb_errstat & REG_BIT(SOC_IEH1_LOCAL_ERR_STATUS)) {
 			lcl_errstat = raw_reg_read(regs,
 						   SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base,
 										hw_err));
-			log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_SLAVE_REG_FATAL:0x%08lx\n",
-				      lcl_errstat);
+			log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_SLAVE_REG_%s:0x%08lx\n",
+				      hardware_error_type_to_str(hw_err), lcl_errstat);
 
 			for_each_set_bit(errbit, &lcl_errstat,
 					 SOC_HW_ERR_MAX_BITS) {
@@ -2977,20 +2998,20 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 				 */
 				index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 				update_soc_hw_error_cnt(gt, index);
-				if (IS_PONTEVECCHIO(gt->i915))
-					log_gt_hw_err(gt, "%s SOC FATAL error\n",
-						      soc_err_index_to_str(index));
+				log_soc_hw_error(gt, index, hw_err);
 			}
 			raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 				      lcl_errstat);
 		}
 
 		for_each_set_bit(errbit, &slv_glb_errstat, SOC_HW_ERR_MAX_BITS) {
+			/* Skip reprocessing of SOC_IEH1_LOCAL_ERR_STATUS bit */
+			if (errbit == SOC_IEH1_LOCAL_ERR_STATUS)
+				continue;
+
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
-			if (IS_PONTEVECCHIO(gt->i915))
-				log_gt_hw_err(gt, "%s SOC FATAL error\n",
-					      soc_err_index_to_str(index));
+			log_soc_hw_error(gt, index, hw_err);
 		}
 		raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 			      slv_glb_errstat);
@@ -2999,28 +3020,30 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 	if (mst_glb_errstat & REG_BIT(SOC_IEH0_LOCAL_ERR_STATUS)) {
 		lcl_errstat = raw_reg_read(regs,
 					   SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err));
-		log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_MASTER_REG_FATAL:0x%08lx\n", lcl_errstat);
+		log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_MASTER_REG_%s:0x%08lx\n",
+			      hardware_error_type_to_str(hw_err), lcl_errstat);
 		for_each_set_bit(errbit, &lcl_errstat, SOC_HW_ERR_MAX_BITS) {
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
-			if (IS_PONTEVECCHIO(gt->i915))
-				log_gt_hw_err(gt, "%s SOC FATAL error\n",
-					      soc_err_index_to_str(index));
+			log_soc_hw_error(gt, index, hw_err);
 		}
 		raw_reg_write(regs, SOC_LOCAL_ERR_STAT_MASTER_REG(base, hw_err),
 			      lcl_errstat);
 	}
 
 	for_each_set_bit(errbit, &mst_glb_errstat, SOC_HW_ERR_MAX_BITS) {
+		/* Skip reprocessing of SOC_SLAVE_IEH and SOC_IEH0_LOCAL_ERR_STATUS */
+		if (errbit == SOC_SLAVE_IEH || errbit == SOC_IEH0_LOCAL_ERR_STATUS)
+			continue;
+
 		index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, hw_err, errbit);
 		update_soc_hw_error_cnt(gt, index);
-		if (IS_PONTEVECCHIO(gt->i915))
-			log_gt_hw_err(gt, "%s SOC FATAL error\n",
-				      soc_err_index_to_str(index));
+		log_soc_hw_error(gt, index, hw_err);
 	}
 	raw_reg_write(regs, SOC_GLOBAL_ERR_STAT_MASTER_REG(base, hw_err),
 		      mst_glb_errstat);
 
+unmask_gsysevtctl:
 	for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
 		raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
 			      (HARDWARE_ERROR_MAX << 1) + 1);
@@ -3187,14 +3210,18 @@ static void gen12_mem_health_work(struct work_struct *work)
 			   "Error Cause: 0x%x\n", cause);
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
+		/* We get this correctable error notification only
+		 * after a threshold in the firmware for correctable
+		 * errors has been reached. Hence the recommendation
+		 * is to run through PPR which happens after the
+		 * card is reset.
+		 */
 		gt->mem_sparing.health_status = MEM_HEALTH_EC_PENDING;
 		sparing_event[event_idx++] = "RESET_REQUIRED=1 EC_PENDING=1";
 		dev_crit(gt->i915->drm.dev,
 			 "Memory Health Report: Error correction pending.\n"
-			 "Card need to be reset.\n"
-			 "Memory might now be functioning in unreliable state.\n"
+			 "Card needs to be reset.\n"
 			 "Error Cause: 0x%x\n", cause);
-		add_taint(TAINT_MACHINE_CHECK, LOCKDEP_STILL_OK);
 		break;
 	case BANK_SPARNG_ENA_PCLS_UNCORRECTABLE:
 		gt->mem_sparing.health_status = MEM_HEALTH_DEGRADED;
@@ -3217,6 +3244,113 @@ static void gen12_mem_health_work(struct work_struct *work)
 
 	kobject_uevent_env(&gt->i915->drm.primary->kdev->kobj, KOBJ_CHANGE,
 			   sparing_event);
+}
+
+static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
+			     u32 reg_swf0, u32 reg_swf1)
+{
+	struct swf0_bitfields {
+		u32 event_num:5;
+		u32 tile:1;
+		u32 channel:5;
+		u32 pseudochannel:1;
+		u32 row:18;
+	};
+
+	struct swf1_bitfields {
+		u32 column:10;
+		u32 bank:6;
+		u32 old_state:4;
+		u32 new_state:4;
+	};
+
+	bool report_state_change = false;
+	struct swf0_bitfields bfswf0;
+	struct swf1_bitfields bfswf1;
+	const char *event;
+
+	bfswf0.event_num = REG_FIELD_GET(EVENT_MASK, reg_swf0);
+	bfswf0.tile = REG_FIELD_GET(TILE_MASK, reg_swf0);
+	bfswf0.channel = REG_FIELD_GET(CHANNEL_MASK, reg_swf0);
+	bfswf0.pseudochannel = REG_FIELD_GET(PSEUDOCHANNEL_MASK, reg_swf0);
+	bfswf0.row = REG_FIELD_GET(ROW_MASK, reg_swf0);
+	bfswf1.column = REG_FIELD_GET(COLUMN_MASK, reg_swf1);
+	bfswf1.bank = REG_FIELD_GET(BANK_MASK, reg_swf1);
+	bfswf1.old_state = REG_FIELD_GET(OLDSTATE_MASK, reg_swf1);
+	bfswf1.new_state = REG_FIELD_GET(NEWSTATE_MASK, reg_swf1);
+
+	switch (cause) {
+	case BANK_CORRECTABLE_ERROR:
+		event = "Correctable Error Received on";
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "[HBM ERROR]: %s HBM Tile%u, Channel%u, Pseudo Channel %u, Bank%u, Row%u, Column%u\n",
+				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
+				    bfswf1.bank, bfswf0.row, bfswf1.column);
+
+		if (bfswf1.old_state != bfswf1.new_state)
+			report_state_change = true;
+
+		break;
+	case BANK_SPARNG_ERR_MITIGATION_DOWNGRADED:
+		event = "PCLS Applied";
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u, Column%u\n",
+				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
+				    bfswf1.bank, bfswf0.row, bfswf1.column);
+		break;
+	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
+		switch (bfswf0.event_num) {
+		case UC_DEMAND_ACCESS:
+			event = "Uncorrectable Error on Demand Access received";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u\n",
+					    event, bfswf0.tile, bfswf0.channel,
+					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row);
+			break;
+		case PATROL_SCRUB_ERROR:
+			event = "Uncorrectable Error on Patrol Scrub";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u\n",
+					    event, bfswf0.tile, bfswf0.channel,
+					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row);
+			break;
+		case PCLS_EXCEEDED:
+			event = "Exceeded PCLS Threshold";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
+					    event, bfswf0.tile, bfswf0.channel,
+					    bfswf0.pseudochannel);
+			if (bfswf1.old_state != bfswf1.new_state)
+				report_state_change = true;
+
+			break;
+		case PCLS_SAME_CACHELINE:
+			event = "Cannot Apply PCLS, PCLS Already Applied to This Line";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
+					    event, bfswf0.tile, bfswf0.channel,
+					    bfswf0.pseudochannel);
+			break;
+		default:
+			event = "Unknown event for Error Cause:";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR "%s 0x%x\n",
+					    event, cause);
+			break;
+		}
+		break;
+	case BANK_SPARNG_ENA_PCLS_UNCORRECTABLE:
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR "[HBM ERROR]: REPLACE\n");
+		break;
+	default:
+		event = "Unknown Error Cause";
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "%s: 0x%x\n", event, cause);
+		break;
+	}
+	if (report_state_change)
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "[HBM ERROR]: Old_State%u to New_State%u for HBM TILE%u\n",
+				    bfswf1.old_state, bfswf1.new_state, bfswf0.tile);
 }
 
 static void
@@ -3246,6 +3380,7 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 	case HARDWARE_ERROR_CORRECTABLE:
 		for_each_set_bit(errbit, &err_status, GSC_HW_ERROR_MAX_ERR_BITS) {
 			u32 err_type = GSC_HW_ERROR_MAX_ERR_BITS;
+			u32 sw0_reg, sw1_reg;
 			const char *name;
 
 			switch (errbit) {
@@ -3259,6 +3394,20 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 						     GSC_HEC_CORR_FW_ERR_DW0(base));
 				if (unlikely(!gt->mem_sparing.cause))
 					goto re_enable_interrupt;
+
+				if (IS_PONTEVECCHIO(gt->i915)) {
+					sw0_reg = raw_reg_read(regs, SWF_0);
+					sw1_reg = raw_reg_read(regs, SWF_1);
+					log_hbm_err_info(gt, sw0_reg,
+							 sw1_reg, gt->mem_sparing.cause);
+
+					/* These registers are written by FSP,
+					 * so write 0 to clear
+					 */
+					raw_reg_write(regs, SWF_0, 0);
+					raw_reg_write(regs, SWF_1, 0);
+				}
+
 				schedule_work(&gt->mem_sparing.mem_health_work);
 				break;
 			default:
@@ -3533,8 +3682,10 @@ gen12_hw_error_source_handler(struct intel_gt *gt,
 	if (errsrc & DEV_ERR_STAT_GT_ERROR)
 		gen12_gt_hw_error_handler(gt, hw_err);
 
-	if (errsrc & DEV_ERR_STAT_SGUNIT_ERROR)
+	if (errsrc & DEV_ERR_STAT_SGUNIT_ERROR) {
+		log_gt_hw_err(gt, "SGUNIT %s error\n", hardware_error_type_to_str(hw_err));
 		gt->errors.sgunit[hw_err]++;
+	}
 
 	if (errsrc & DEV_ERR_STAT_SOC_ERROR)
 		gen12_soc_hw_error_handler(gt, hw_err);

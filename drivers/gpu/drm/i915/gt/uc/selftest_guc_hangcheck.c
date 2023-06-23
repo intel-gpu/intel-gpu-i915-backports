@@ -66,6 +66,7 @@ static int intel_hang_guc(void *arg)
 		drm_err(&gt->i915->drm, "Failed to boost heatbeat interval: %d\n", ret);
 		goto err;
 	}
+	engine->props.preempt_timeout_ms = 0;
 
 	ret = igt_spinner_init(&spin, engine->gt);
 	if (ret) {
@@ -120,6 +121,7 @@ static int intel_hang_guc(void *arg)
 err_spin:
 	igt_spinner_end(&spin);
 	igt_spinner_fini(&spin);
+	engine->props.preempt_timeout_ms = engine->defaults.preempt_timeout_ms;
 	intel_engine_set_heartbeat(engine, old_beat);
 
 	if (ret == 0) {

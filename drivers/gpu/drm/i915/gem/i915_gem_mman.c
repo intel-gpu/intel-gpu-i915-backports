@@ -263,6 +263,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 	struct drm_i915_private *i915 = to_i915(dev);
 	pgoff_t page_offset = (vmf->address - area->vm_start) >> PAGE_SHIFT;
 	bool write = area->vm_flags & VM_WRITE;
+	unsigned long vm_start, vm_size;
 	struct i915_gem_ww_ctx ww;
 	resource_size_t iomap;
 	int err;
@@ -283,6 +284,17 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		     area->vm_flags & VM_WRITE)) {
 		ret = VM_FAULT_SIGBUS;
 		goto out;
+	}
+
+	/* for segmented BO, lookup and fill PTEs for just one segment */
+	if (i915_gem_object_has_segments(obj)) {
+		obj = i915_gem_object_lookup_segment(obj, page_offset << PAGE_SHIFT,
+						     NULL);
+		vm_start = area->vm_start + obj->segment_offset;
+		vm_size = obj->base.size;
+	} else {
+		vm_start = area->vm_start;
+		vm_size = area->vm_end - area->vm_start;
 	}
 
 	do for_i915_gem_ww(&ww, err, true) {
@@ -308,8 +320,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		}
 
 		/* PTEs are revoked in obj->ops->put_pages() */
-		err = remap_io_sg(area,
-				  area->vm_start, area->vm_end - area->vm_start,
+		err = remap_io_sg(area, vm_start, vm_size,
 				  obj->mm.pages->sgl, iomap);
 
 		if (area->vm_flags & VM_WRITE) {
@@ -479,6 +490,7 @@ vm_access(struct vm_area_struct *area, unsigned long addr,
 	struct i915_mmap_offset *mmo = area->vm_private_data;
 	struct drm_i915_gem_object *obj = mmo->obj;
 	struct i915_gem_ww_ctx ww;
+	unsigned long offset;
 	void *vaddr;
 	int err = 0;
 
@@ -488,6 +500,16 @@ vm_access(struct vm_area_struct *area, unsigned long addr,
 	addr -= area->vm_start;
 	if (range_overflows_t(u64, addr, len, obj->base.size))
 		return -EINVAL;
+
+	if (i915_gem_object_has_segments(obj)) {
+		obj = i915_gem_object_lookup_segment(obj, addr, &offset);
+		if (len > obj->base.size - offset) {
+			/*  XXX more work to support multiple segments */
+			return -ENXIO;
+		}
+	} else {
+		offset = addr;
+	}
 
 	i915_gem_ww_ctx_init(&ww, true);
 retry:
@@ -503,10 +525,10 @@ retry:
 	}
 
 	if (write) {
-		memcpy(vaddr + addr, buf, len);
-		__i915_gem_object_flush_map(obj, addr, len);
+		memcpy(vaddr + offset, buf, len);
+		__i915_gem_object_flush_map(obj, offset, len);
 	} else {
-		memcpy(buf, vaddr + addr, len);
+		memcpy(buf, vaddr + offset, len);
 	}
 
 	i915_gem_object_unpin_map(obj);
@@ -581,9 +603,40 @@ out:
 	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
 }
 
+static inline void
+drm_vma_node_unmap_range(struct drm_vma_offset_node *node,
+			 struct address_space *file_mapping,
+			 unsigned long offset,
+			 unsigned long length)
+{
+	unmap_mapping_range(file_mapping,
+			    drm_vma_node_offset_addr(node) + offset,
+			    length, 1);
+}
+
+/*
+ * For segmented BOs, this function will be called as needed directly
+ * for each BO segment to unmap only that segment which is known by
+ * caller to have backing store.  However, during object free of the
+ * parent BO, the parent BO is ultimately responsible to clear all of
+ * the mmaps as obj->parent for the segment BOs will be NULL.
+ */
 void i915_gem_object_release_mmap_offset(struct drm_i915_gem_object *obj)
 {
 	struct i915_mmap_offset *mmo, *mn;
+	unsigned long unmap_size = obj->base.size;
+	unsigned long vma_offset = 0;
+
+	if (i915_gem_object_is_segment(obj)) {
+		/*
+		 * Segmented BOs use single mmo in parent. If parent
+		 * is NULL, then just return (see comment above).
+		 */
+		if (!obj->parent)
+			return;
+		vma_offset = obj->segment_offset;
+		obj = obj->parent;
+	}
 
 	spin_lock(&obj->mmo.lock);
 	rbtree_postorder_for_each_entry_safe(mmo, mn,
@@ -596,8 +649,9 @@ void i915_gem_object_release_mmap_offset(struct drm_i915_gem_object *obj)
 			continue;
 
 		spin_unlock(&obj->mmo.lock);
-		drm_vma_node_unmap(&mmo->vma_node,
-				   obj->base.dev->anon_inode->i_mapping);
+		drm_vma_node_unmap_range(&mmo->vma_node,
+					 obj->base.dev->anon_inode->i_mapping,
+					 vma_offset, unmap_size);
 		spin_lock(&obj->mmo.lock);
 	}
 	spin_unlock(&obj->mmo.lock);
@@ -1068,6 +1122,58 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	return 0;
 }
 
+static void barrier_open(struct vm_area_struct *vma)
+{
+	drm_dev_get(vma->vm_private_data);
+}
+
+static void barrier_close(struct vm_area_struct *vma)
+{
+	drm_dev_put(vma->vm_private_data);
+}
+
+static const struct vm_operations_struct vm_ops_barrier = {
+	.open = barrier_open,
+	.close = barrier_close,
+};
+
+static int i915_pci_barrier_mmap(struct file *filp,
+				 struct vm_area_struct *vma)
+{
+	struct drm_file *priv = filp->private_data;
+	struct drm_device *dev = priv->minor->dev;
+	unsigned long pfn;
+	pgprot_t prot;
+
+	if (GRAPHICS_VER(to_i915(dev)) < 12)
+		return -ENODEV;
+
+	if (vma->vm_end - vma->vm_start > PAGE_SIZE)
+		return -EINVAL;
+
+	if (is_cow_mapping(vma->vm_flags))
+		return -EINVAL;
+
+	if (vma->vm_flags & (VM_READ | VM_EXEC))
+		return -EINVAL;
+
+	vma->vm_flags &= ~(VM_MAYREAD | VM_MAYEXEC);
+	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_IO;
+
+	prot = vm_get_page_prot(vma->vm_flags);
+#define LAST_DB_PAGE_OFFSET 0x7ff001
+	pfn = PHYS_PFN(pci_resource_start(to_pci_dev(dev->dev), 0) +
+		       LAST_DB_PAGE_OFFSET);
+	if (vmf_insert_pfn_prot(vma, vma->vm_start, pfn,
+				pgprot_noncached(prot)) != VM_FAULT_NOPAGE)
+		return -EFAULT;
+
+	vma->vm_ops = &vm_ops_barrier;
+	vma->vm_private_data = dev;
+	drm_dev_get(vma->vm_private_data);
+	return 0;
+}
+
 /*
  * This overcomes the limitation in drm_gem_mmap's assignment of a
  * drm_gem_object as the vma->vm_private_data. Since we need to
@@ -1085,6 +1191,11 @@ int i915_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	if (drm_dev_is_unplugged(dev))
 		return -ENODEV;
+
+	switch (vma->vm_pgoff) {
+	case PRELIM_I915_PCI_BARRIER_MMAP_OFFSET >> PAGE_SHIFT:
+		return i915_pci_barrier_mmap(filp, vma);
+	}
 
 	rcu_read_lock();
 	drm_vma_offset_lock_lookup(dev->vma_offset_manager);

@@ -206,8 +206,8 @@ void i915_vm_release(struct kref *kref)
 
 static void i915_vm_close_work(struct work_struct *wrk)
 {
-	struct i915_address_space *vm = container_of(wrk, typeof(*vm),
-						     close_work);
+	struct i915_address_space *vm =
+		container_of(wrk, typeof(*vm), close_work);
 
 	__i915_vm_close(vm);
 	i915_vm_put(vm);
@@ -417,7 +417,8 @@ static u32 poison_scratch_page(struct drm_i915_gem_object *scratch)
 	u32 val;
 
 	val = 0;
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
+	if (!HAS_NULL_PAGE(to_i915(scratch->base.dev)) &&
+	     IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
 		/*
 		 * Partially randomise the scratch page.
 		 *
@@ -595,7 +596,24 @@ void gtt_write_workarounds(struct intel_gt *gt)
 	}
 }
 
-static void mtl_setup_private_ppat(struct intel_gt *gt)
+static void xelpmp_setup_private_ppat(struct intel_uncore *uncore)
+{
+	intel_uncore_write(uncore, XELPMP_PAT_INDEX(0), MTL_PPAT_L4_0_WB);
+	intel_uncore_write(uncore, XELPMP_PAT_INDEX(1), MTL_PPAT_L4_1_WT);
+	intel_uncore_write(uncore, XELPMP_PAT_INDEX(2), MTL_PPAT_L4_3_UC);
+	intel_uncore_write(uncore, XELPMP_PAT_INDEX(3),
+			   MTL_PPAT_L4_0_WB | MTL_2_COH_1W);
+	intel_uncore_write(uncore, XELPMP_PAT_INDEX(4),
+			   MTL_PPAT_L4_0_WB | MTL_3_COH_2W);
+
+	/*
+	 * Remaining PAT entries are left at the hardware-default
+	 * fully-cached setting
+	 */
+
+}
+
+static void xelpg_setup_private_ppat(struct intel_gt *gt)
 {
 	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(0),
 				     MTL_PPAT_L4_0_WB);
@@ -645,14 +663,25 @@ static void tgl_setup_private_ppat(struct intel_uncore *uncore)
 
 static void xehp_setup_private_ppat(struct intel_gt *gt)
 {
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(0), GEN8_PPAT_WB);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(1), GEN8_PPAT_WC);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(2), GEN8_PPAT_WT);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(3), GEN8_PPAT_UC);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(4), GEN8_PPAT_WB);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(5), GEN8_PPAT_WB);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(6), GEN8_PPAT_WB);
-	intel_gt_mcr_multicast_write(gt, XEHP_PAT_INDEX(7), GEN8_PPAT_WB);
+	enum forcewake_domains fw;
+	unsigned long flags;
+
+	fw = intel_uncore_forcewake_for_reg(gt->uncore, _MMIO(XEHP_PAT_INDEX(0).reg),
+					    FW_REG_WRITE);
+	intel_uncore_forcewake_get(gt->uncore, fw);
+
+	intel_gt_mcr_lock(gt, &flags);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(0), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(1), GEN8_PPAT_WC);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(2), GEN8_PPAT_WT);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(3), GEN8_PPAT_UC);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(4), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(5), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(6), GEN8_PPAT_WB);
+	intel_gt_mcr_multicast_write_fw(gt, XEHP_PAT_INDEX(7), GEN8_PPAT_WB);
+	intel_gt_mcr_unlock(gt, flags);
+
+	intel_uncore_forcewake_put(gt->uncore, fw);
 }
 
 static void icl_setup_private_ppat(struct intel_uncore *uncore)
@@ -757,22 +786,27 @@ void setup_private_pat(struct intel_gt *gt)
 	if (IS_SRIOV_VF(i915))
 		return;
 
-	if (IS_METEORLAKE(i915))
-		mtl_setup_private_ppat(gt);
-	else if (IS_PONTEVECCHIO(i915))
-		pvc_setup_private_ppat(gt);
-	else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
-		xehp_setup_private_ppat(gt);
-	else if (GRAPHICS_VER(i915) >= 12)
-		tgl_setup_private_ppat(uncore);
-	else if (GRAPHICS_VER(i915) >= 11)
-		icl_setup_private_ppat(uncore);
-	else if (IS_CHERRYVIEW(i915) || IS_GEN9_LP(i915))
-		chv_setup_private_ppat(uncore);
-	else
-		bdw_setup_private_ppat(uncore);
+	if (gt->type == GT_MEDIA) {
+		xelpmp_setup_private_ppat(gt->uncore);
+	} else {
+		if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
+			xelpg_setup_private_ppat(gt);
+		else if (IS_PONTEVECCHIO(i915))
+			pvc_setup_private_ppat(gt);
+		else if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 50))
+			xehp_setup_private_ppat(gt);
+		else if (GRAPHICS_VER(i915) >= 12)
+			tgl_setup_private_ppat(uncore);
+		else if (GRAPHICS_VER(i915) >= 11)
+			icl_setup_private_ppat(uncore);
+		else if (IS_CHERRYVIEW(i915) || IS_GEN9_LP(i915))
+			chv_setup_private_ppat(uncore);
+		else
+			bdw_setup_private_ppat(uncore);
+	}
 }
 
+//TODO: fix memory leak for error cases
 int svm_bind_addr_prepare(struct i915_address_space *vm,
 			  struct i915_vm_pt_stash *stash,
 			  struct i915_gem_ww_ctx *ww,

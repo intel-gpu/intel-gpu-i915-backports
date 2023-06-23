@@ -606,11 +606,19 @@ static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
 	unsigned int id = kobj_to_id(kobj);
 	int err;
 
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	if (off > 0 || count < SZ_4K)
+#else
+	if (off > 0)
+#endif
 		return -EINVAL;
 
 	pvc_wa_disallow_rc6(iov_to_i915(iov));
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	err = intel_iov_state_save_vf(iov, id, buf);
+#else
+	err = intel_iov_state_save_vf(iov, id, buf, count);
+#endif
 	pvc_wa_allow_rc6(iov_to_i915(iov));
 
 	if (unlikely(err))
@@ -627,11 +635,19 @@ static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
 	unsigned int id = kobj_to_id(kobj);
 	int err;
 
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	if (off > 0 || count < SZ_4K)
+#else
+	if (off > 0)
+#endif
 		return -EINVAL;
 
 	pvc_wa_disallow_rc6(iov_to_i915(iov));
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	err = intel_iov_state_restore_vf(iov, id, buf);
+#else
+	err = intel_iov_state_restore_vf(iov, id, buf, count);
+#endif
 	pvc_wa_allow_rc6(iov_to_i915(iov));
 
 	if (unlikely(err))

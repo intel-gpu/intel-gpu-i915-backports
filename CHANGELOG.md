@@ -1,4 +1,24 @@
 # ChangeLog
+## Release SLES15SP3_23WW25.5_647.8_23.5.15_230406.13
+* i915: add support for SOC NONFATAL error handling
+* i915: add enhanced HBM error reporting for max
+* i915: fix in handling of soc global error processing seen on max
+* i915: fix for null pointer dereference in ubuntu kmd-backport on flex
+* i915: add wa for random gpu hang when eviction happens under high memory pressure seen on flex
+* i915: fix for deadlock in lmem_invalidation
+* i915: add initial mmap support for pci memory via mmap
+* i915: update to queue retry eviction after a failure
+* i915: fix to prevent eviction starvation with i915_gem_set_domain_ioctl
+* i915: update to queue retry eviction after a failure
+* i915: update to improve performance stability on ocl benchmark
+* i915: update to latest stable iaf driver version for max
+* i915: add support for SOC NONFATAL error handling
+* i915: add enhanced HBM error reporting for max
+* i915: fix in handling of soc global error processing seen on max
+* i915: update to retry eviction during clear-on-idle
+* i915: fix to avoid cat errors during page table clears seen on flex
+* i915: fix block pfn calculation for compute testing of system allocator
+
 ## Release SLES15SP3_23WW21.5_627.7_23.4.15.230307.14
 * i915: fix for reported list corruption on flex and ai issue seen on max
 * i915: fix for LMEM->SMEM migration

@@ -967,6 +967,8 @@ __i915_request_initialize(struct i915_request *rq,
 	rq->execution_mask = ce->engine->mask;
 	rq->has_user_fence = false;
 
+	RCU_INIT_POINTER(rq->timeline, tl);
+
 	kref_init(&rq->fence.refcount);
 	rq->fence.flags = flags;
 	rq->fence.error = 0;
@@ -978,8 +980,6 @@ __i915_request_initialize(struct i915_request *rq,
 
 	rq->fence.context = tl->fence_context;
 	rq->fence.seqno = seqno;
-
-	RCU_INIT_POINTER(rq->timeline, tl);
 	rq->hwsp_seqno = tl->hwsp_seqno;
 	GEM_BUG_ON(__i915_request_is_complete(rq));
 

@@ -2,6 +2,15 @@
 #define _BP_LINUX_BACKPORT_MACRO_H
 #include <linux/version.h>
 
+#if LINUX_VERSION_IS_LESS(5,15,46)
+
+/*
+ * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
+ */
+#define BPM_LIST_IS_HEAD_NOT_PRESENT 
+
+#endif 
+
 #if LINUX_VERSION_IS_LESS(5,15,0)
 
 /*
@@ -33,6 +42,11 @@
  */
 #define RB_FIND_NOT_PRESENT
 
+/*
+ * 97a7e4733b9b mm: introduce page_needs_cow_for_dma() for deciding whether cow
+ */
+#define BPM_IS_COW_MAPPING_NOT_PRESENT
+
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
@@ -50,6 +64,11 @@
  * 479da1f538a2 backlight: Add backlight_device_get_by_name()
  */
 #define BACKLIGHT_DEV_GET_BY_NAME_NOT_PRESENT
+
+/*
+ * 42fc541404f2 mmap locking API: add mmap_assert_locked() and mmap_assert_write_locked()
+ */
+#define BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT
 
 #endif
 
@@ -71,6 +90,13 @@
  * Disable RC6 support for SLES15SP3
  */
 #define RC6_NOT_SUPPORTED 
+
+/*
+ * upstream changes not landed in mainline kernel yet
+ * Introduced in DII_6042
+ * 9299148acf5422 VFIO - SR-IOV VF migration
+ */
+#define BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */
 

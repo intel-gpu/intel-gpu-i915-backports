@@ -244,6 +244,9 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
 {
 	int ret;
 
+	if (i915_gem_object_has_segments(obj))
+		return -ENXIO;
+
 	if (i915_gem_object_has_cache_level(obj, cache_level))
 		return 0;
 
@@ -521,6 +524,11 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 	obj = i915_gem_object_lookup(file, args->handle);
 	if (!obj)
 		return -ENOENT;
+
+	if (i915_gem_object_has_segments(obj)) {
+		err = -ENXIO;
+		goto out;
+	}
 
 	/*
 	 * Try to flush the object off the GPU without holding the lock.
