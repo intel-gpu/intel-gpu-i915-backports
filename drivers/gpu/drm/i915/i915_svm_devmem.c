@@ -287,6 +287,9 @@ static int i915_migrate_cpu_copy(struct i915_devmem_migrate *migrate)
 			return -ENOMEM;
 
 		page = migrate_pfn_to_page(src[i]);
+		if (unlikely(!page))
+			continue;
+
 		mem = i915->mm.regions[migrate->src_id];
 		src_addr = page_to_pfn(page);
 		if (migrate->src_id != INTEL_REGION_SMEM)
@@ -351,10 +354,12 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 	for (i = 0, cnt = 0; i < npages; i++) {
 		args->dst[i] = 0;
 		page = migrate_pfn_to_page(args->src[i]);
-		if (unlikely(!page || !(args->src[i] & MIGRATE_PFN_MIGRATE))) {
+		if (unlikely(!(args->src[i] & MIGRATE_PFN_MIGRATE))) {
 			migrate->blitter_copy = false;
 			continue;
 		}
+		if (unlikely(!page))
+			migrate->blitter_copy = false;
 
 		if (migrate->blitter_copy) {
 			migrate->host_dma[i] =
@@ -481,7 +486,7 @@ static int i915_devmem_migrate_chunk(struct i915_devmem_migrate *migrate,
 	return ret;
 }
 
-static int i915_devmem_migrate_vma(struct intel_memory_region *mem,
+int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 				   struct i915_gem_ww_ctx *ww,
 				   struct vm_area_struct *vma,
 				   unsigned long start,

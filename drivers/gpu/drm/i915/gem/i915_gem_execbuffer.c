@@ -471,8 +471,7 @@ eb_pin_vma(struct i915_execbuffer *eb,
 
 	/* Attempt to reuse the current location if available */
 	err = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
-	if (err == -EDEADLK ||
-	    err == -EINTR || err == -ERESTARTSYS)
+	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 		return err;
 
 	if (unlikely(err)) {
@@ -1003,6 +1002,15 @@ static struct i915_vma *eb_lookup_vma(struct i915_execbuffer *eb, u32 handle)
 			return ERR_PTR(-ENOENT);
 
 		/*
+		 * As main use case for segmented BOs is vm_bind and pagefault
+		 * mode, we don't support with exec_object. And we can't easily
+		 * support segmented BOs here without heavy refactoring as this
+		 * whole file assumes single VMA per exec_object.
+		 */
+		if (i915_gem_object_has_segments(obj))
+			return ERR_PTR(-ENXIO);
+
+		/*
 		 * If the user has opted-in for protected-object tracking, make
 		 * sure the object encryption can be used.
 		 * We only need to do this when the object is first used with
@@ -1251,9 +1259,11 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 		struct eb_vma *ev = &eb->vma[i];
 		struct i915_vma *vma = ev->vma;
 
+		if (signal_pending(current))
+			return -EINTR;
+
 		err = eb_pin_vma(eb, entry, ev);
-		if (err == -EDEADLK ||
-		    err == -EINTR || err == -ERESTARTSYS)
+		if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 			return err;
 
 		if (!err) {
@@ -1332,6 +1342,17 @@ static void eb_release_persistent_vmas(struct i915_execbuffer *eb, bool final)
 
 	eb->args->flags &= ~__EXEC_PERSIST_HAS_PIN;
 	if (!final)
+		return;
+
+	/*
+	 * FIXME: On ATS-M, random GPU hang is observed when eviction
+	 * happens under high memory pressure. It is suspected a race
+	 * condition exists here that a vma is being evicted while
+	 * being moved to vm_bound_list.
+	 * As a temporary workaround keep the vma in vm_bind_list, so
+	 * that it's guaranteed to be rebound when revalidating objects.
+	 */
+	if (IS_DG2(vm->i915))
 		return;
 
 	list_for_each_entry_safe(vma, vn, &vm->vm_bind_list, vm_bind_link)
@@ -2463,8 +2484,7 @@ repeat_validate:
 		}
 	}
 
-	if (err == -EDEADLK ||
-	    err == -EINTR || err == -ERESTARTSYS)
+	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 		goto err;
 
 	if (err && !have_copy)

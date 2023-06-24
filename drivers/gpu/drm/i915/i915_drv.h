@@ -1303,21 +1303,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	(IS_TIGERLAKE(__i915) && \
 	 IS_DISPLAY_STEP(__i915, since, until))
 
-#define IS_TGL_UY_GRAPHICS_STEP(__i915, since, until) \
-	(IS_TGL_UY(__i915) && \
-	 IS_GRAPHICS_STEP(__i915, since, until))
-
-#define IS_TGL_GRAPHICS_STEP(__i915, since, until) \
-	(IS_TIGERLAKE(__i915) && !IS_TGL_UY(__i915)) && \
-	 IS_GRAPHICS_STEP(__i915, since, until))
-
 #define IS_RKL_DISPLAY_STEP(p, since, until) \
 	(IS_ROCKETLAKE(p) && IS_DISPLAY_STEP(p, since, until))
-
-#define IS_DG1_GRAPHICS_STEP(p, since, until) \
-	(IS_DG1(p) && IS_GRAPHICS_STEP(p, since, until))
-#define IS_DG1_DISPLAY_STEP(p, since, until) \
-	(IS_DG1(p) && IS_DISPLAY_STEP(p, since, until))
 
 #define IS_ADLS_DISPLAY_STEP(__i915, since, until) \
 	(IS_ALDERLAKE_S(__i915) && \
@@ -1343,7 +1330,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	 IS_GRAPHICS_STEP(__i915, since, until))
 
 #define IS_MTL_DISPLAY_STEP(__i915, since, until) \
-	(DISPLAY_VER(__i915) == 14 && \
+	(IS_METEORLAKE(__i915) && \
 	 IS_DISPLAY_STEP(__i915, since, until))
 
 #define IS_MTL_MEDIA_STEP(__i915, since, until) \
@@ -1556,6 +1543,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_FLAT_CCS(dev_priv)   (INTEL_INFO(dev_priv)->has_flat_ccs)
 
 #define HAS_UM_QUEUES(dev_priv) (INTEL_INFO(dev_priv)->has_um_queues)
+
+#define HAS_NULL_PAGE(dev_priv) (INTEL_INFO(dev_priv)->has_null_page)
 
 #define HAS_GT_UC(dev_priv)	(INTEL_INFO(dev_priv)->has_gt_uc)
 

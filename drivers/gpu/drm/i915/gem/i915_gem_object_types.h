@@ -198,6 +198,16 @@ struct i915_gem_object_page_iter {
 	struct mutex lock; /* protects this cache */
 };
 
+struct i915_resv {
+	struct dma_resv base;
+	union {
+		unsigned long refcount;
+		struct rcu_head rcu;
+	};
+};
+
+#define I915_BO_MIN_CHUNK_SIZE	SZ_64K
+
 struct drm_i915_gem_object {
 	/*
 	 * We might have reason to revisit the below since it wastes
@@ -211,7 +221,11 @@ struct drm_i915_gem_object {
 	};
 
 	const struct drm_i915_gem_object_ops *ops;
-	struct drm_i915_gem_object *smem_obj;
+
+	struct rb_root_cached segments;
+	struct rb_node segment_node;
+	unsigned long segment_offset;
+	struct drm_i915_gem_object *parent;
 
 	/* VM pointer if the object is private to a VM; NULL otherwise */
 	struct i915_address_space *vm;
@@ -269,6 +283,7 @@ struct drm_i915_gem_object {
 	 * @shared_resv_from: The object shares the resv from this vm.
 	 */
 	struct i915_address_space *shares_resv_from;
+	struct i915_resv *shares_resv;
 
 	union {
 		struct rcu_head rcu;

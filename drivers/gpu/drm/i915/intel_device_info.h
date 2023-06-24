@@ -200,6 +200,7 @@ enum intel_ppgtt_type {
 	func(has_snoop); \
 	func(has_sriov); \
 	func(has_um_queues); \
+	func(has_null_page); \
 	func(tuning_thread_rr_after_dep); \
 	func(has_csc_uid);	\
 	func(has_lmem_max_bandwidth);	\

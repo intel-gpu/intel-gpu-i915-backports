@@ -11,30 +11,16 @@ OSV_VER = 0
 BASE_KERN = 0
 KERN_TYPE = ""
 BASE_KERNEL_NAME = ""
-BUILD_CONFIG ?=
 EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
-RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS FBK
+RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS
 DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_20.04_GENERIC VANILLA_5.15LTS UBUNTU_22.04_GENERIC
-
-#
-#FBK specific
-#
-#FBK_KERN_NAME = ""
-FBK_IDENTIFIER = ""
-FBK_MAJOR = ""
-FBK_MINOR = ""
-FBK_VER = ""
 
 ifeq ($(MAKECMDGOALS),i915dkmsdeb-pkg)
 	OS_DISTRIBUTION ?= UBUNTU_OEM_22.04
 else ifeq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),i915dkmsrpm-pkg binrpm-pkg))
 	OS_DISTRIBUTION ?= SLES15_SP4
-endif
-
-ifeq ($(BUILD_CONFIG), fbk)
-OS_DISTRIBUTION := FBK
 endif
 
 BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 6 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
@@ -54,14 +40,6 @@ else ifeq ($(DII_TAG_PREFIX) , DII)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
 else
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
-endif
-
-FBK_IDENTIFIER =$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "fbk")
-
-ifneq ($(FBK_IDENTIFIER),)
-FBK_VER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | cut -c 1-3 )
-FBK_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | sed 's/[^0    -9]//g')
-FBK_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4)
 endif
 
 ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
@@ -109,9 +87,6 @@ else ifeq ($(OSV_NAME),)
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 OSV_NAME = VANILLA_5.15LTS
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifneq ($(FBK_IDENTIFIER),)
-OSV_NAME := $(shell echo $(FBK_VER) | tr '[:lower:]' '[:upper:]')
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
 else ifeq ($(shell expr $(BASE_KERN) \== 5.19), 1)
 OSV_NAME = UBUNTU_22.04_GENERIC
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
@@ -264,15 +239,6 @@ define filechk_osv_version_generic.h
         expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256)'
 endef
 
-define filechk_osv_fbk.h
-        echo '#define FBK_VER $(FBK_VER)'; \
-        echo '#define FBK_MAJOR $(FBK_MAJOR)'; \
-        echo '#define FBK_MINOR $(FBK_MINOR)'; \
-        echo '#define FBK_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
-        echo '#define FBK_RELEASE_CODE $(shell \
-        expr $(FBK_MAJOR) \* 65536 + 0$(FBK_MINOR) \* 256)'
-endef
-
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
 ifeq ($(OSV_NAME), UBUNTU)
 ifeq ($(ADD_KV), )
@@ -293,12 +259,6 @@ ifeq ($(ADD_KV), )
 	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 endif
 	$(call filechk,osv_version_rhel.h)
-else ifneq ($(FBK_IDENTIFIER),)
-ifeq ($(OSV_KV_SUPPORTED), )
-	$(info "Kernel version"$(BASE_KERNEL_NAME))
-	@echo '$(OSV_NAME)_KERNEL_VERSION="$(BASE_KERNEL_NAME)_$(FBK_VER)$(FBK_MAJOR)_$(FBK_MINOR)"' >> versions
-endif
-	$(call filechk,osv_fbk.h)
 else
 ifeq ($(ADD_KV), )
 	@echo '$(OSV_NAME)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
@@ -384,8 +344,8 @@ I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
 	cp $(BACKPORT_DIR)/defconfigs/i915 .config
-	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(OS_DISTRIBUTION) > $(BACKPORT_DIR)/dkms.conf
-	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(OS_DISTRIBUTION) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
 	tar -cz $(RCS_TAR_IGNORE) -f $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
 		$(I915_TAR_CONTENT) $(I915_PKG_NAME).spec dkms.conf;
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \

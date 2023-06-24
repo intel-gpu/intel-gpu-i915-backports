@@ -214,6 +214,12 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	case PRELIM_I915_PARAM_EU_DEBUGGER_VERSION:
 		value = IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER) ? PRELIM_DRM_I915_DEBUG_VERSION : 0;
 		break;
+	case PRELIM_I915_PARAM_HAS_CHUNK_SIZE:
+		/* restrict to platforms where legacy mmap is not supported */
+		if (!(IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0)))
+			return -EINVAL;
+		value = 1;
+		break;
 	default:
 		DRM_DEBUG("Unknown parameter %d\n", param->param);
 		return -EINVAL;

@@ -84,8 +84,6 @@ static void idle_pulse(struct intel_engine_cs *engine, struct i915_request *rq)
 {
 	engine->wakeref_serial = READ_ONCE(engine->serial) + 1;
 	i915_request_add_active_barriers(rq);
-	if (!engine->heartbeat.systole && intel_engine_has_heartbeat(engine))
-		engine->heartbeat.systole = i915_request_get(rq);
 }
 
 static void heartbeat_commit(struct i915_request *rq, int prio)
@@ -137,6 +135,75 @@ reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 			      I915_ERROR_CAPTURE,
 			      reason,
 			      engine->name, ret);
+}
+
+static struct i915_request *get_next_heartbeat(struct intel_timeline *tl)
+{
+	struct i915_request *rq;
+
+	/*
+	 * The kernel context may be used for other preemption requests,
+	 * any of which may serve to track forward progress along the engine,
+	 * so use the next request to be executed along the timeline as
+	 * as the engine's heartbeat.
+	 */
+	rq = to_request(i915_active_fence_get(&tl->last_request));
+	if (!rq)
+		return NULL;
+
+	rcu_read_lock();
+	do {
+		struct i915_request *prev;
+
+		/*
+		 * Carefully walk backwards along the timeline.
+		 * Beware inflight requests may be retired at any time.
+		 */
+		prev = list_prev_entry(rq, link);
+		if (list_is_head(&prev->link, &tl->requests))
+			break;
+
+		/* Check that link.prev was still valid */
+		if (i915_request_signaled(rq))
+			break;
+
+		prev = i915_request_get_rcu(prev);
+		if (!prev)
+			break;
+
+		/* Check this request is still active on this timeline */
+		if (rcu_access_pointer(prev->timeline) != tl ||
+		    __i915_request_is_complete(prev)) {
+			i915_request_put(prev);
+			break;
+		}
+
+		i915_request_put(rq);
+		rq = prev;
+	} while(1);
+	rcu_read_unlock();
+
+	rq->emitted_jiffies = jiffies;
+	return rq;
+}
+
+static bool engine_was_active(struct intel_engine_cs *engine)
+{
+	unsigned long count;
+
+	count = READ_ONCE(engine->stats.irq_count);
+	if (count == engine->heartbeat.interrupts)
+		return false;
+
+	engine->heartbeat.interrupts = count;
+	return true;
+}
+
+static unsigned long preempt_timeout(const struct i915_request *rq)
+{
+	long delay = READ_ONCE(rq->engine->props.preempt_timeout_ms);
+
+	return rq->emitted_jiffies + msecs_to_jiffies_timeout(delay);
 }
 
 static void heartbeat(struct work_struct *wrk)
@@ -195,6 +262,12 @@ static void heartbeat(struct work_struct *wrk)
 			 * be skipped and emitted_jiffies updated.
 			 * This applies on active debugging session.
 			 */
+		} else if (engine_was_active(engine)) {
+			/*
+			 * The engine is still making forward progress, we
+			 * don't yet need to worry about our outstanding
+			 * heartbeat.
+			 */
 		} else if (!i915_sw_fence_signaled(&rq->submit)) {
 			/*
 			 * Not yet submitted, system is stalled.
@@ -224,6 +297,13 @@ static void heartbeat(struct work_struct *wrk)
 			local_bh_disable();
 			i915_request_set_priority(rq, prio);
 			local_bh_enable();
+		} else if (time_before(jiffies, preempt_timeout(rq))) {
+			/*
+			 * Give the engine-reset, triggered by a preemption
+			 * timeout, a chance to run before we force a full GT
+			 * reset.
+			 */
+			goto out;
 		} else {
 			reset_engine(engine, rq);
 		}
@@ -231,6 +311,15 @@ static void heartbeat(struct work_struct *wrk)
 		rq->emitted_jiffies = jiffies;
 		goto out;
 	}
+
+	/* Has the engine stalled since the last heartbeat? */
+	if (engine_was_active(engine))
+		goto out;
+
+	/* Reuse the next active pulse on our timeline as the next heartbeat */
+	engine->heartbeat.systole = get_next_heartbeat(ce->timeline);
+	if (engine->heartbeat.systole)
+		goto out;
 
 	serial = READ_ONCE(engine->serial);
 	if (engine->wakeref_serial == serial)
@@ -246,11 +335,16 @@ static void heartbeat(struct work_struct *wrk)
 		goto out;
 	}
 
-	rq = heartbeat_create(ce, GFP_NOWAIT | __GFP_NOWARN);
-	if (IS_ERR(rq))
-		goto unlock;
+	rq = get_next_heartbeat(ce->timeline);
+	if (!rq) {
+		rq = heartbeat_create(ce, GFP_NOWAIT | __GFP_NOWARN);
+		if (IS_ERR(rq))
+			goto unlock;
 
-	heartbeat_commit(rq, prio);
+		i915_request_get(rq);
+		heartbeat_commit(rq, prio);
+	}
+	engine->heartbeat.systole = rq;
 
 unlock:
 	mutex_unlock(&ce->timeline->mutex);
@@ -272,6 +366,9 @@ void intel_engine_park_heartbeat(struct intel_engine_cs *engine)
 {
 	if (cancel_delayed_work(&engine->heartbeat.work))
 		i915_request_put(fetch_and_zero(&engine->heartbeat.systole));
+
+	/* Wait until the engine is inactive again before sending a pulse */
+	engine->heartbeat.interrupts = 0;
 }
 
 void intel_gt_unpark_heartbeats(struct intel_gt *gt)
@@ -346,6 +443,26 @@ static int __intel_engine_pulse(struct intel_engine_cs *engine)
 	lockdep_assert_held(&ce->timeline->mutex);
 	GEM_BUG_ON(!intel_engine_has_preemption(engine));
 	GEM_BUG_ON(!intel_engine_pm_is_awake(engine));
+
+	/*
+	 * Reuse the last pulse if we know it hasn't already started.
+	 *
+	 * Before the pulse can start, it must perform the context switch,
+	 * forcing the active context away from the engine. As it has not
+	 * yet started, we know that we haven't yet flushed any other context,
+	 * thus the previously submitted pulse is still viable.
+	 */
+	rq = to_request(i915_active_fence_get(&ce->timeline->last_request));
+	if (rq) {
+		if (i915_request_has_sentinel(rq) &&
+		    !i915_request_started(rq)) {
+			i915_request_set_priority(rq, prio);
+			prio = 0;
+		}
+		i915_request_put(rq);
+		if (!prio)
+			return 0;
+	}
 
 	rq = heartbeat_create(ce, GFP_NOWAIT | __GFP_NOWARN);
 	if (IS_ERR(rq))

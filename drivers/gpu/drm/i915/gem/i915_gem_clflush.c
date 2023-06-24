@@ -104,7 +104,12 @@ bool i915_gem_clflush_object(struct drm_i915_gem_object *obj,
 	trace_i915_gem_object_clflush(obj);
 
 	clflush = NULL;
+#ifdef BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
+	if (!(flags & I915_CLFLUSH_SYNC) &&
+		dma_resv_reserve_fences(obj->base.resv, 1) == 0)
+#else
 	if (!(flags & I915_CLFLUSH_SYNC))
+#endif
 		clflush = clflush_work_create(obj);
 	if (clflush) {
 		i915_sw_fence_await_reservation(&clflush->base.chain,

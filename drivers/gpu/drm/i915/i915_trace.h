@@ -25,20 +25,23 @@
 /* object tracking */
 
 TRACE_EVENT(i915_gem_object_create,
-	    TP_PROTO(struct drm_i915_gem_object *obj),
-	    TP_ARGS(obj),
+	    TP_PROTO(struct drm_i915_gem_object *obj, u64 nsegments),
+	    TP_ARGS(obj, nsegments),
 
 	    TP_STRUCT__entry(
 			     __field(struct drm_i915_gem_object *, obj)
 			     __field(u64, size)
+			     __field(u64, nsegments)
 			     ),
 
 	    TP_fast_assign(
 			   __entry->obj = obj;
 			   __entry->size = obj->base.size;
+			   __entry->nsegments = nsegments;
 			   ),
 
-	    TP_printk("obj=%p, size=0x%llx", __entry->obj, __entry->size)
+	    TP_printk("obj=%p, segments=%llu size=0x%llx", __entry->obj,
+		      __entry->nsegments, __entry->size)
 );
 
 TRACE_EVENT(i915_dma_buf_attach,

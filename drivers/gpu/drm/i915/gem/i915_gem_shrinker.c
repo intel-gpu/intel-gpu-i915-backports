@@ -192,6 +192,9 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 						       mm.link))) {
 			list_move_tail(&obj->mm.link, &still_in_list);
 
+			/* only segment BOs should be in i915->mm.shrink.list */
+			GEM_BUG_ON(i915_gem_object_has_segments(obj));
+
 			if (shrink & I915_SHRINK_VMAPS &&
 			    !is_vmalloc_addr(obj->mm.mapping))
 				continue;

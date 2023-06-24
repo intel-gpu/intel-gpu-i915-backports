@@ -359,4 +359,10 @@
  */
 #define BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 
+/*
+ * Introduced in DII_6042
+ * 9299148acf5422 VFIO - SR-IOV VF migration
+ */
+#define BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

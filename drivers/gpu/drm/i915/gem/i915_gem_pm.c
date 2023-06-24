@@ -71,16 +71,20 @@ static int lmem_suspend(struct drm_i915_private *i915)
 
 	for_each_memory_region(mem, i915, id) {
 		struct drm_i915_gem_object *obj;
+		struct list_head *phases[] = {
+			&mem->objects.purgeable,
+			&mem->objects.list,
+			NULL,
+		}, **phase = phases;
 
 		if (mem->type != INTEL_MEMORY_LOCAL)
 			continue;
 
 		/* singlethreaded suspend; list immutable */
-		list_for_each_entry(obj, &mem->objects.list, mm.region.link) {
+		do list_for_each_entry(obj, *phase, mm.region.link) {
 			int err;
 
-			if (obj->swapto ||
-			    !i915_gem_object_has_pinned_pages(obj))
+			if (!i915_gem_object_has_pinned_pages(obj))
 				continue;
 
 			/* Skip dead objects, let their pages rot */
@@ -94,7 +98,7 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			i915_gem_object_put(obj);
 			if (err)
 				return err;
-		}
+		} while (*++phase);
 	}
 
 	return 0;
@@ -107,12 +111,17 @@ static int lmem_resume(struct drm_i915_private *i915)
 
 	for_each_memory_region(mem, i915, id) {
 		struct drm_i915_gem_object *obj;
+		struct list_head *phases[] = {
+			&mem->objects.purgeable,
+			&mem->objects.list,
+			NULL,
+		}, **phase = phases;
 
 		if (mem->type != INTEL_MEMORY_LOCAL)
 			continue;
 
 		/* singlethreaded resume; list immutable */
-		list_for_each_entry(obj, &mem->objects.list, mm.region.link) {
+		do list_for_each_entry(obj, *phase, mm.region.link) {
 			int err;
 
 			if (!obj->swapto ||
@@ -129,7 +138,7 @@ static int lmem_resume(struct drm_i915_private *i915)
 			i915_gem_object_put(obj);
 			if (err)
 				return err;
-		}
+		} while (*++phase);
 	}
 
 	return 0;
@@ -171,6 +180,8 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 
 	intel_wakeref_auto(&to_gt(i915)->ggtt->userfault_wakeref, 0);
 	flush_workqueue(i915->wq);
+
+	i915_sriov_suspend_prepare(i915);
 
 	/*
 	 * We have to flush all the executing contexts to main memory so
@@ -325,6 +336,8 @@ void i915_gem_resume(struct drm_i915_private *i915)
 		 */
 		intel_uc_init_hw_late(&gt->uc);
 	}
+
+	i915_sriov_resume(i915);
 
 	return;
 
