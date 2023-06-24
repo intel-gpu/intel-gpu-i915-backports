@@ -1927,7 +1927,11 @@ static bool intel_hdmi_sink_bpc_possible(struct drm_connector *connector,
 		if (ycbcr420_output)
 			return hdmi->y420_dc_modes & DRM_EDID_YCBCR420_DC_36;
 		else
+#ifdef BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
+			return info->edid_hdmi_dc_modes & DRM_EDID_HDMI_DC_36;
+#else
 			return info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_36;
+#endif
 	case 10:
 		if (!has_hdmi_sink)
 			return false;
@@ -1935,7 +1939,11 @@ static bool intel_hdmi_sink_bpc_possible(struct drm_connector *connector,
 		if (ycbcr420_output)
 			return hdmi->y420_dc_modes & DRM_EDID_YCBCR420_DC_30;
 		else
+#ifdef BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
+			return info->edid_hdmi_dc_modes & DRM_EDID_HDMI_DC_30;
+#else
 			return info->edid_hdmi_rgb444_dc_modes & DRM_EDID_HDMI_DC_30;
+#endif
 	case 8:
 		return true;
 	default:

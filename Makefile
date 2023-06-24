@@ -19,7 +19,7 @@ KLIB_BUILD ?= $(KLIB)/build/
 KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile.rhelver
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
-PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg
+PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg binrpm-pkg
 
 ARCH := x86_64
 export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH PKG_DISTRO_TARGETS
@@ -30,6 +30,9 @@ export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH PKG_DISTRO_TARGETS
 .PHONY: default
 default:
 	@$(MAKE) modules
+.PHONY:remove-drm-headers
+remove-drm-headers:
+	@$(MAKE) -f Makefile.real remove-drm-headers
 
 .PHONY: mrproper
 mrproper:
@@ -37,6 +40,7 @@ mrproper:
 	@rm -f .config
 	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
 	@rm -f backport-include/backport/autoconf.h
+	@git ls-files -z -d | xargs -0 git checkout --
 	@$(MAKE) -f Makefile.real mrproper
 
 
@@ -53,7 +57,7 @@ mrproper:
 	echo "| for more options."							;\
 	echo "\\--"									;\
 	false)
-ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
+ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	@set -e ; test -f $(KERNEL_CONFIG) || (						\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
@@ -129,30 +133,53 @@ defconfig-help:
 			echo "  defconfig-$${cfg##defconfigs/}"	;\
 		done
 	@echo ""
-.PHONY: dkmsrpm-pkg-help
-dkmsrpm-pkg-help:
-	$(info rpm package contains the default kernel version.)
-	$(info You can set this value by passing supported kernel name.)
-	$(info ###   List of supported osv kernel versions   ###)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-1 | grep FBK 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA 1>&2)
-	@echo "      Please provide supported kernel name to OS_DISTRIBUTION"
-	@echo "      ex: make dkmsrpm-pkg OS_DISTRIBUTION=FBK"
+
+.PHONY: common-help
+common-help:
+	@echo "Build Configurations:"
+	@echo "  KLIB 			: path/to/headers"
+	@echo "  KLIB_BUILD 		: path/to/headers/build "
+	@echo "  BUILD_VERSION		: Pass build version to be added to package name"
+	@echo "  RELEASE_TYPE 		: <opensource/prerelease/custom> Package release type created"
+	@echo "  				Example: make <Target> RELEASE_TYPE=test "
+	@echo "  				Package names would be intel-i915-dkms-test for DKMS or intel-i915-test for binary"
+	@echo "  				Note: If custom packages are created, tracking the conflicting package "
+	@echo "  				is difficult. Make sure no other package is already installed before "
+	@echo "  				you intalling current one."
+	@echo "  BUILD_CONFIG 		: Specifiv build config variant"
+	@echo "  				Ex: make <Target> BUILD_CONFIG=sp2 "
+	@echo "  OS_DISTRIBUTION 	: Distro targeted package"
+	@echo "  				You can set this value by passing supported kernel name"
+	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.7"
+	@echo "  				###   List of supported osv kernel versions   ### "
+	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep RHEL | tr '\n' '\t')"
+	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep VANILLA)"
+	@echo "  				Please provide supported kernel name to OS_DISTRIBUTION"
+	@echo ""
 
 .PHONY: dkms-help
-dkms-help:
+dkms-help: common-help
 	@echo "DKMS Targets:"
 	@echo "  dmadkmsrpm-pkg  - Build package RPM for dma dkms package"
 	@echo "  i915dkmsrpm-pkg - Build package RPM for i915 dkms package"
 	@echo "  dkmsrpm-pkg     - Build above two target dmadkmsrpm-pkg i915dkmsrpm-pkg"
 	@echo ""
 	@echo "DKMS Package creation using targets help:"
-	@echo "  make BUILD_VERSION=<Numeric> RELEASE_TYPE=<prerelease/opensource> <target>"
+	@echo "  Command:make  <Build Configurations> <target>"
+	@echo "  Ex: make BUILD_VERION=10 i915dkmsrpm-pkg"
+	@echo ""
+
+.PHONY: binrpm-help
+binrpm-help: common-help
+	@echo "Binary Targets:"
+	@echo "  binrpm-pkg  - Build binary package RPM"
+	@echo ""
+	@echo " Command:  make <Build Configurations> <target>"
+	@echo " Ex: make BUILD_CONFIG=sp2 binrpm-pkg"
 	@echo ""
 
 .PHONY: help
-help: dkms-help defconfig-help dkmsrpm-pkg-help
+help: common-help binrpm-help dkms-help defconfig-help
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"

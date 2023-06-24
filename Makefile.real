@@ -138,6 +138,10 @@ clean:
 	@$(MAKE) -C kconf clean
 	@$(MAKE) -f Makefile.backport clean
 
+.PHONY:remove-drm-headers
+remove-drm-headers:
+	@$(MAKE) -f Makefile.backport remove-drm-headers
+
 .PHONY: mrproper
 mrproper:
 	@$(MAKE) -f Makefile.backport mrproper
@@ -153,3 +157,7 @@ i915dkmsrpm-pkg:
 .PHONY: dkmsrpm-pkg
 dkmsrpm-pkg:
 	@$(MAKE) -f Makefile.backport dmadkmsrpm-pkg i915dkmsrpm-pkg
+
+.PHONY: binrpm-pkg
+binrpm-pkg:
+	@$(MAKE) -f Makefile.backport binrpm-pkg

@@ -35,6 +35,12 @@ do
 	esac
 done
 
+if [ "$BUILD_TYPE" != "nodrm" ]; then
+       NO_DRM=
+else
+       NO_DRM=DEL
+fi
+
 if [ "$REL_TYPE" = "opensource" ]; then
 	DEP_PKG_NAME="intel-dmabuf-dkms"
 else
@@ -45,7 +51,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	%define module $PKG_NAME
 	%define version $PKG_VER
 	%define release $REL_NAME
-	%define deppkg $DEP_PKG_NAME
+$NO_DRM	%define deppkg $DEP_PKG_NAME
 	%define deppmtpkg $DEP_PMT_PKG_NAME
 	%define _build_id_links none
 	
@@ -59,8 +65,8 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	Vendor: Intel
 	Provides: %{module}
 	Packager: linux-graphics@intel.com
-	Requires: dkms gcc bash sed intel-platform-cse-dkms
-	Requires: %{deppkg} = %{version} %{deppmtpkg}
+	Requires: dkms gcc bash sed intel-platform-cse-dkms %{deppmtpkg}
+$NO_DRM	Requires: %{deppkg} = %{version}
 	# There is no Source# line for dkms.conf since it has been placed
 	# into the source tarball of SOURCE0
 	Source0: %{module}-%{version}-src.tar.gz

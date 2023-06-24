@@ -391,6 +391,8 @@ static void intel_detect_preproduction_hw(struct drm_i915_private *dev_priv)
 	pre |= IS_KABYLAKE(dev_priv) && INTEL_REVID(dev_priv) < 0x1;
 	pre |= IS_GEMINILAKE(dev_priv) && INTEL_REVID(dev_priv) < 0x3;
 	pre |= IS_ICELAKE(dev_priv) && INTEL_REVID(dev_priv) < 0x7;
+	pre |= IS_TIGERLAKE(dev_priv) && INTEL_REVID(dev_priv) < 0x1;
+	pre |= IS_DG1(dev_priv) && INTEL_REVID(dev_priv) < 0x1;
 	pre |= IS_PONTEVECCHIO(dev_priv) &&
 		(IS_PVC_CT_STEP(dev_priv, STEP_A0, STEP_B0) ||
 		 IS_PVC_BD_STEP(dev_priv, STEP_A0, STEP_B0));
@@ -1112,8 +1114,12 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	ret = i915_ggtt_probe_hw(dev_priv);
 	if (ret)
 		goto err_perf;
-
+	
+#ifdef API_ARG_DRM_DRIVER_REMOVED
+	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, "inteldrmfb");
+#else
 	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, dev_priv->drm.driver);
+#endif
 	if (ret)
 		goto err_ggtt;
 
@@ -1735,12 +1741,14 @@ static void i915_driver_lastclose(struct drm_device *dev)
 		vga_switcheroo_process_delayed_switch();
 }
 
+#ifdef CPTCFG_DRM_LEGACY
 static void i915_driver_preclose(struct drm_device *dev, struct drm_file *file)
 {
 	struct drm_i915_file_private *file_priv = file->driver_priv;
 
 	i915_drm_client_close(file_priv->client);
 }
+#endif
 
 static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
@@ -1850,12 +1858,17 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 
 	for_each_memory_region(mem, i915, id) {
 		struct intel_memory_region_link *pos, *next;
+		struct list_head *phases[] = {
+			&mem->objects.purgeable,
+			&mem->objects.list,
+			NULL,
+		}, **phase = phases;
 
 		if (mem->type != INTEL_MEMORY_LOCAL || !mem->total)
 			continue;
 
 		spin_lock(&mem->objects.lock);
-		list_for_each_entry_safe(pos, next, &mem->objects.list, link) {
+		do list_for_each_entry_safe(pos, next, *phase, link) {
 			struct drm_i915_gem_object *obj;
 			struct i915_gem_ww_ctx ww;
 			int err;
@@ -1864,7 +1877,11 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 				continue;
 
 			obj = container_of(pos, typeof(*obj), mm.region);
-			if (!i915_gem_object_has_pages(obj) || obj->swapto)
+
+			/* only segment BOs should be in mem->objects.list */
+			GEM_BUG_ON(i915_gem_object_has_segments(obj));
+
+			if (!i915_gem_object_has_pages(obj))
 				continue;
 
 			if (!kref_get_unless_zero(&obj->base.refcount))
@@ -1878,7 +1895,7 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 				if (err)
 					continue;
 
-				if (!i915_gem_object_has_pages(obj) || obj->swapto)
+				if (!i915_gem_object_has_pages(obj))
 					break;
 
 				if (!i915_gem_object_unbind(obj, &ww, 0))
@@ -1890,7 +1907,7 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 			spin_lock(&mem->objects.lock);
 			list_safe_reset_next(&bookmark, next, link);
 			__list_del_entry(&bookmark.link);
-		}
+		} while (*++phase);
 		spin_unlock(&mem->objects.lock);
 	}
 }
@@ -2607,8 +2624,6 @@ static int i915_gem_vm_bind_ioctl(struct drm_device *dev, void *data,
 
 	if (!(args->flags & PRELIM_I915_GEM_VM_BIND_FD))
 		ret = i915_gem_vm_bind_obj(vm, args, file);
-	else if (args->fd == -1)
-		ret = i915_gem_vm_bind_svm_buffer(vm, args);
 	else
 		ret = -EINVAL;
 
@@ -2629,8 +2644,6 @@ static int i915_gem_vm_unbind_ioctl(struct drm_device *dev, void *data,
 
 	if (!(args->flags & PRELIM_I915_GEM_VM_BIND_FD))
 		ret = i915_gem_vm_unbind_obj(vm, args);
-	else if (args->fd == -1)
-		ret = i915_gem_vm_unbind_svm_buffer(vm, args);
 	else
 		ret = -EINVAL;
 
@@ -2815,7 +2828,9 @@ static const struct drm_driver i915_drm_driver = {
 	.release = i915_driver_release,
 	.open = i915_driver_open,
 	.lastclose = i915_driver_lastclose,
+#ifdef CPTCFG_DRM_LEGACY
 	.preclose  = i915_driver_preclose,
+#endif
 	.postclose = i915_driver_postclose,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,

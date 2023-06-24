@@ -5177,6 +5177,8 @@ int intel_guc_deregister_done_process_msg(struct intel_guc *guc,
 		return -EPROTO;
 
 	trace_intel_context_deregister_done(ce);
+	WRITE_ONCE(ce->engine->stats.irq_count,
+		   READ_ONCE(ce->engine->stats.irq_count) + 1);
 
 #ifdef CPTCFG_DRM_I915_SELFTEST
 	if (unlikely(ce->drop_deregister)) {
@@ -5252,6 +5254,8 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 	}
 
 	trace_intel_context_sched_done(ce);
+	WRITE_ONCE(ce->engine->stats.irq_count,
+		   READ_ONCE(ce->engine->stats.irq_count) + 1);
 
 	if (context_pending_enable(ce)) {
 #ifdef CPTCFG_DRM_I915_SELFTEST

@@ -182,12 +182,10 @@ intel_memory_region_free_pages(struct intel_memory_region *mem,
 {
 	struct i915_buddy_block *block, *on;
 
-	mutex_lock(&mem->mm_lock);
 	list_for_each_entry_safe(block, on, blocks, link) {
 		mem->avail += i915_buddy_block_size(&mem->mm, block);
 		i915_buddy_free(&mem->mm, block);
 	}
-	mutex_unlock(&mem->mm_lock);
 
 	INIT_LIST_HEAD(blocks);
 }
@@ -196,7 +194,12 @@ void
 __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 				      struct list_head *blocks)
 {
+	if (unlikely(list_empty(blocks)))
+		return;
+
+	mutex_lock(&mem->mm_lock);
 	intel_memory_region_free_pages(mem, blocks);
+	mutex_unlock(&mem->mm_lock);
 }
 
 static void __intel_memory_region_put_block_work(struct work_struct *work)
@@ -224,11 +227,13 @@ __intel_memory_region_put_block_buddy(struct i915_buddy_block *block)
 		schedule_work(&mem->pd_put.work);
 }
 
-static void add_to_ww_evictions(struct intel_memory_region *mem,
-                               struct i915_gem_ww_ctx *ww,
-                               struct list_head *pos)
+int intel_memory_region_add_to_ww_evictions(struct intel_memory_region *mem,
+					    struct i915_gem_ww_ctx *ww,
+					    struct drm_i915_gem_object *obj)
 {
 	struct i915_gem_ww_region *r = &ww->region;
+
+	lockdep_assert_held(&mem->objects.lock);
 
 	do {
 		if (r->mem == mem)
@@ -245,7 +250,7 @@ static void add_to_ww_evictions(struct intel_memory_region *mem,
 
 	r->next = kmalloc(sizeof(*r), GFP_ATOMIC);
 	if (!r->next)
-		return;
+		return -ENOMEM;
 
 	r = r->next;
 	r->next = NULL;
@@ -254,7 +259,8 @@ set:
 	list_add_tail(&r->link, &mem->objects.locked);
 	INIT_LIST_HEAD(&r->locked);
 move:
-	list_move_tail(pos, &r->locked);
+	list_move_tail(&obj->mm.region.link, &r->locked);
+	return 0;
 }
 
 static int __i915_gem_object_lock_to_evict(struct drm_i915_gem_object *obj,
@@ -308,18 +314,34 @@ static int intel_memory_region_evict(struct intel_memory_region *mem,
 		NULL,
 	};
 	struct intel_memory_region_link bookmark = {};
-	struct intel_memory_region_link *pos, *next;
+	struct intel_memory_region_link *pos;
 	struct list_head **phase = phases;
-	struct list_head still_in_list;
 	bool wait = false, busy = true;
 	resource_size_t found = 0;
+	LIST_HEAD(still_in_list);
+	LIST_HEAD(blocks);
 	long timeout = 0;
 	int err = 0;
 
+	/*
+	 * Eviction uses a per-object mutex to reclaim pages, so how do
+	 * we ensure both deadlock avoidance and that all clients can
+	 * take a turn at evicting every object? ww_mutex.
+	 *
+	 * The deadlock avoidance algorithm built into ww_mutex essentially
+	 * provides each client with a ticket for the order in which
+	 * they can reclaim objects from the memory region. (If there's
+	 * a conflict between two clients, the lowest ticket holder has
+	 * priority.) And by ensuring that we never lose track of objects
+	 * that are known to the memory region, both objects that are in
+	 * the process of being allocated and of being evicted, all clients
+	 * that need eviction may scan all objects and in doing so provide
+	 * a fair ordering across all current evictions and future allocations.
+	 */
+
 next:
-	INIT_LIST_HEAD(&still_in_list);
 	spin_lock(&mem->objects.lock);
-	list_for_each_entry_safe(pos, next, *phase, link) {
+	list_for_each_entry(pos, *phase, link) {
 		struct drm_i915_gem_object *obj;
 
 		if (!pos->mem) /* skip over other bookmarks */
@@ -330,42 +352,35 @@ next:
 			break;
 		}
 
-		if (need_resched()) {
-			list_add_tail(&bookmark.link, &pos->link);
-			spin_unlock(&mem->objects.lock);
-
-			schedule();
-
-			spin_lock(&mem->objects.lock);
-			list_safe_reset_next(&bookmark, next, link);
-			__list_del_entry(&bookmark.link);
-			continue;
-		}
-
-		obj = container_of(pos, typeof(*obj), mm.region);
+		list_add_tail(&bookmark.link, &pos->link);
 
 		/* Already locked this object? */
+		obj = container_of(pos, typeof(*obj), mm.region);
 		if (ww && ww == i915_gem_get_locking_ctx(obj)) {
-			add_to_ww_evictions(mem, ww, &pos->link);
-			continue;
-		}
-
-		list_move_tail(&pos->link, &still_in_list);
-
-		if (!i915_gem_object_allows_eviction(obj))
-			continue;
-
-		if (i915_gem_object_is_framebuffer(obj))
-			continue;
-
-		obj = i915_gem_object_get_rcu(obj);
-		if (!obj) {
+			intel_memory_region_add_to_ww_evictions(mem, ww, obj);
+			obj = NULL;
+		} else if (!i915_gem_object_get_rcu(obj)) {
 			list_del_init(&pos->link);
-			continue;
+			list_replace_init(&obj->mm.blocks, &blocks);
+			found += obj->base.size;
+			obj = NULL;
+		} else {
+			list_move_tail(&pos->link, &still_in_list);
 		}
 
-		list_add_tail(&bookmark.link, &next->link);
 		spin_unlock(&mem->objects.lock);
+
+		if (!obj) {
+			__intel_memory_region_put_pages_buddy(mem, &blocks);
+			goto bookmark;
+		}
+
+		/* only segment BOs should be in mem->objects.list */
+		GEM_BUG_ON(i915_gem_object_has_segments(obj));
+
+		if (!i915_gem_object_allows_eviction(obj) ||
+		    i915_gem_object_is_framebuffer(obj))
+			goto put;
 
 		/* Flush activity prior to grabbing locks */
 		timeout = __i915_gem_object_wait(obj,
@@ -411,14 +426,17 @@ unlock:
 		i915_gem_object_unlock(obj);
 put:
 		i915_gem_object_put(obj);
+bookmark:
+		cond_resched();
 		spin_lock(&mem->objects.lock);
 
-		list_safe_reset_next(&bookmark, next, link);
 		__list_del_entry(&bookmark.link);
 		if (err || found >= target)
 			break;
+
+		pos = &bookmark;
 	}
-	list_splice_tail(&still_in_list, *phase);
+	list_splice_tail_init(&still_in_list, *phase);
 	spin_unlock(&mem->objects.lock);
 	if (err)
 		return err;
@@ -492,6 +510,23 @@ __max_order(const struct intel_memory_region *mem, unsigned long n_pages)
 	return __fls(n_pages);
 }
 
+static bool available_chunks(const struct intel_memory_region *mem,
+			     resource_size_t sz)
+{
+	/*
+	 * Only allow this client to take from the pool of freed chunks
+	 * only if there is enough memory available to satisfy all
+	 * current allocation requests. If there is not enough memory
+	 * available, we need to evict objects and we want to prevent
+	 * the next allocation stealing our reclaimed chunk before we
+	 * can use it for ourselves. So effectively when eviction
+	 * has been started, every allocation goes through the eviction
+	 * loop and will be ordered fairly by the ww_mutex, ensuring
+	 * all clients continue to make forward progress.
+	 */
+	return mem->avail >= mem->evict + sz;
+}
+
 int
 __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 				      struct i915_gem_ww_ctx *ww,
@@ -502,7 +537,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 	unsigned int min_order = 0;
 	unsigned long n_pages;
 	unsigned int order;
-	int err;
+	int err = 0;
 
 	GEM_BUG_ON(!IS_ALIGNED(size, mem->mm.chunk_size));
 	GEM_BUG_ON(!list_empty(blocks));
@@ -530,28 +565,22 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 	if (size > mem->mm.size)
 		return -E2BIG;
 
-	n_pages = READ_ONCE(mem->avail);
-	if (size > n_pages) {
-		err = intel_memory_region_evict(mem, ww, n_pages - size);
-		if (err)
-			return err;
-	}
-
 	n_pages = size >> ilog2(mem->mm.chunk_size);
 	order = __max_order(mem, n_pages);
 	GEM_BUG_ON(order < min_order);
 
 	mutex_lock(&mem->mm_lock);
 	do {
+		resource_size_t sz = mem->mm.chunk_size << order;
 		struct i915_buddy_block *block;
 
 		block = ERR_PTR(-ENXIO);
-		if (mem->avail >> order >= mem->mm.chunk_size)
+		if (available_chunks(mem, sz))
 			block = i915_buddy_alloc(&mem->mm, order);
 		if (!IS_ERR(block)) {
 			GEM_BUG_ON(i915_buddy_block_order(block) != order);
 			list_add_tail(&block->link, blocks);
-			mem->avail -= mem->mm.chunk_size << order;
+			mem->avail -= sz;
 			block->private = mem;
 
 			n_pages -= BIT(order);
@@ -561,22 +590,25 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			while (!(n_pages >> order))
 				order--;
 		} else if (order-- == min_order) {
+			sz = n_pages * mem->mm.chunk_size;
+
+			/* Reserve the memory we reclaim for ourselves! */
+			mem->evict += sz;
 			mutex_unlock(&mem->mm_lock);
 
-			err = intel_memory_region_evict(mem, ww, n_pages * mem->mm.chunk_size);
-			if (err)
-				goto err_free_blocks;
-
+			err = intel_memory_region_evict(mem, ww, sz);
 			order = __max_order(mem, n_pages);
+
 			mutex_lock(&mem->mm_lock);
+			mem->evict -= sz;
+			if (err) {
+				intel_memory_region_free_pages(mem, blocks);
+				break;
+			}
 		}
 	} while (1);
 	mutex_unlock(&mem->mm_lock);
 
-	return 0;
-
-err_free_blocks:
-	intel_memory_region_free_pages(mem, blocks);
 	return err;
 }
 

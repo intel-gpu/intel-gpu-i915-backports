@@ -37,12 +37,18 @@ endif
 obj-y += compat/
 
 ifeq (y,$(filter y,$(CPTCFG_ONLY_DMABUF) $(CPTCFG_BOTH_DMABUF_I915)))
+ifneq ("$(CPTCFG_I915_NO_DRM)", "y")
 obj-y += drivers/dma-buf/
+endif
 endif
 
 
 ifeq (y,$(filter y,$(CPTCFG_ONLY_I915) $(CPTCFG_BOTH_DMABUF_I915)))
+ifeq ("$(CPTCFG_I915_NO_DRM)", "y")
+obj-y += drivers/gpu/drm/i915/
+else
 obj-y += drivers/gpu/drm/
 
 obj-y += drivers/char/agp/
+endif
 endif

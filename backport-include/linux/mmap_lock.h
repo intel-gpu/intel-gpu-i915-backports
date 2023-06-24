@@ -33,4 +33,13 @@ static inline int mmap_write_lock_killable(struct mm_struct *mm)
 }
 #endif
 
+#ifdef BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT
+static inline void mmap_assert_locked(struct mm_struct *mm)
+{
+               lockdep_assert_held(&mm->mmap_sem);
+                       VM_BUG_ON_MM(!rwsem_is_locked(&mm->mmap_sem), mm);
+}
+
+#endif
+
 #endif /* __BACKPORT_MMAP_LOCK_H */

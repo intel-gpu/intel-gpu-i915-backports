@@ -1426,6 +1426,14 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 			 u32 align, unsigned int flags)
 {
+	GEM_BUG_ON(flags & (PIN_OFFSET_FIXED | PIN_OFFSET_GUARD));
+	GEM_BUG_ON(flags & PAGE_MASK);
+
+	/*
+	 * During execution we have to avoid certain address ranges,
+	 * as these are aliased into the GuC, and historically we
+	 * have seen problems with ring bufferss placed at offset 0.
+	 */
 	flags |= i915_ggtt_pin_bias(vma) | PIN_OFFSET_BIAS;
 	return i915_ggtt_pin(vma, ww, align, flags);
 }

@@ -2880,8 +2880,10 @@ void intel_edp_fixup_vbt_bpp(struct intel_encoder *encoder, int pipe_bpp)
 static void intel_edp_mso_init(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+#ifndef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
 	struct intel_connector *connector = intel_dp->attached_connector;
 	struct drm_display_info *info = &connector->base.display_info;
+#endif
 	u8 mso;
 
 	if (intel_dp->edp_dpcd[0] < DP_EDP_14)
@@ -2900,9 +2902,14 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	if (mso) {
+#ifdef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration\n",
+			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso);
+#else
 		drm_dbg_kms(&i915->drm, "Sink MSO %ux%u configuration, pixel overlap %u\n",
 			    mso, drm_dp_max_lane_count(intel_dp->dpcd) / mso,
 			    info->mso_pixel_overlap);
+#endif
 		if (!HAS_MSO(i915)) {
 			drm_err(&i915->drm, "No source MSO support, disabling\n");
 			mso = 0;
@@ -2910,7 +2917,11 @@ static void intel_edp_mso_init(struct intel_dp *intel_dp)
 	}
 
 	intel_dp->mso_link_count = mso;
+#ifdef MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+	intel_dp->mso_pixel_overlap = 0; /* FIXME: read from DisplayID v2.0 */
+#else
 	intel_dp->mso_pixel_overlap = mso ? info->mso_pixel_overlap : 0;
+#endif
 }
 
 static bool
@@ -3916,6 +3927,7 @@ update_status:
 			    "Could not write test response to sink\n");
 }
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
 static bool intel_dp_link_ok(struct intel_dp *intel_dp,
 			     u8 link_status[DP_LINK_STATUS_SIZE])
 {
@@ -3941,6 +3953,7 @@ static bool intel_dp_link_ok(struct intel_dp *intel_dp,
 
 	return false;
 }
+#endif
 
 static void
 intel_dp_mst_hpd_irq(struct intel_dp *intel_dp, u8 *esi, u8 *ack)
@@ -3972,7 +3985,18 @@ static bool intel_dp_mst_link_status(struct intel_dp *intel_dp)
 		return false;
 	}
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
 	return intel_dp_link_ok(intel_dp, link_status);
+#else
+	if (!drm_dp_channel_eq_ok(link_status, intel_dp->lane_count)) {
+		drm_dbg_kms(&i915->drm,
+				"[ENCODER:%d:%s] channel EQ not ok, retraining\n",
+				encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	return true;
+#endif
 }
 
 /**
@@ -4086,8 +4110,14 @@ intel_dp_needs_link_retrain(struct intel_dp *intel_dp)
 					intel_dp->lane_count))
 		return false;
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
 	/* Retrain if link not ok */
 	return !intel_dp_link_ok(intel_dp, link_status);
+#else
+	/* Retrain if Channel EQ or CR not ok */
+	return !drm_dp_channel_eq_ok(link_status, intel_dp->lane_count);
+#endif
+
 }
 
 static bool intel_dp_has_connector(struct intel_dp *intel_dp,
@@ -5374,6 +5404,10 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 
 	intel_panel_init(intel_connector);
 
+#ifdef DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
+	if (!(dev_priv->quirks & QUIRK_NO_PPS_BACKLIGHT_POWER_HOOK))
+		intel_connector->panel.backlight.power = intel_pps_backlight_power;
+#endif
 	intel_edp_backlight_setup(intel_dp, intel_connector);
 
 	intel_edp_add_properties(intel_dp);

@@ -14,11 +14,14 @@
  * To the call to the initfn we added the symbol dependency on compat
  * to make sure that compat.ko gets loaded for any compat modules.
  */
+#ifndef BPM_DISABLE_DRM_DMABUF
 #define dependency_symbol LINUX_DMABUF_BACKPORT(dependency_symbol)
 extern void dependency_symbol(void);
+#endif
 
 #ifdef MODULE
 #undef module_init
+#ifndef BPM_DISABLE_DRM_DMABUF
 #define module_init(initfn)						\
 	static int __init __init_backport(void)				\
 	{								\
@@ -27,6 +30,14 @@ extern void dependency_symbol(void);
 	}								\
 	int init_module(void) __attribute__((cold,alias("__init_backport")));
 
+#else
+#define module_init(initfn)						\
+	static int __init __init_backport(void)				\
+	{								\
+		return initfn();					\
+	}								\
+	int init_module(void) __attribute__((cold,alias("__init_backport")));
+#endif
 /*
  * The define overwriting module_exit is based on the original module_exit
  * which looks like this:

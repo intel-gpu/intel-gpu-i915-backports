@@ -24,10 +24,14 @@
  *
  */
 
-#ifndef _UAPI_I915_DRM_H_
-#define _UAPI_I915_DRM_H_
+#ifndef _BACKPORT_UAPI_I915_DRM_H_
+#define _BACKPORT_UAPI_I915_DRM_H_
 
+#ifdef BPM_DISABLE_DRM_DMABUF
+#include_next <uapi/drm/drm.h>
+#else
 #include "drm.h"
+#endif
 
 #if defined(__cplusplus)
 extern "C" {
@@ -3486,5 +3490,4 @@ struct drm_i915_gem_create_ext_protected_content {
 #if defined(__cplusplus)
 }
 #endif
-
-#endif /* _UAPI_I915_DRM_H_ */
+#endif /* _BACKPORT_UAPI_I915_DRM_H_ */

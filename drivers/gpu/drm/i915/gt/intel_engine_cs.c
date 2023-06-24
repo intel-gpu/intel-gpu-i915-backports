@@ -2406,8 +2406,11 @@ static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, 
 		   rq->context->lrc.lrca);
 	drm_printf(m, "\t\tce->lrc.ccid: 0x%08x\n",
 		   rq->context->lrc.ccid);
-	drm_printf(m, "\t\tvm->poison:   0x%08x\n",
-		   rq->context->vm->poison);
+	if (HAS_NULL_PAGE(rq->context->vm->i915))
+		drm_printf(m, "\t\tvm->poison:   NULL PTE\n");
+	else
+		drm_printf(m, "\t\tvm->poison:   0x%08x\n",
+			   rq->context->vm->poison);
 	drm_printf(m, "\t\tring->start:  0x%08x\n",
 		   i915_ggtt_offset(rq->ring->vma));
 	drm_printf(m, "\t\tring->head:   0x%08x\n",
@@ -2507,7 +2510,8 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		drm_printf(m, "\tHeartbeat: %d ms ago\n",
 			   jiffies_to_msecs(jiffies - rq->emitted_jiffies));
 	else if (work_pending(&engine->heartbeat.work.work))
-		drm_printf(m, "\tHeartbeat: pending\n");
+		drm_printf(m, "\tHeartbeat: pending @ %lu interrupts\n",
+			   engine->heartbeat.interrupts);
 	else
 		drm_printf(m, "\tHeartbeat: idle\n");
 	rcu_read_unlock();

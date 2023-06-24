@@ -13,6 +13,13 @@ struct drm_i915_gem_object;
 struct intel_gt;
 struct intel_guc;
 
+enum access_type {
+	ACCESS_TYPE_READ = 0,
+	ACCESS_TYPE_WRITE = 1,
+	ACCESS_TYPE_ATOMIC = 2,
+	ACCESS_TYPE_RESERVED = 3,
+};
+
 struct recoverable_page_fault_info {
 	u64 page_addr;
 	u32 asid;

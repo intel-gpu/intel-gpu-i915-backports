@@ -13,10 +13,11 @@ EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
 OSV_KV_SUPPORTED = ""
-RPM_DISTRIBUTIONS := RHEL_8.7 RHEL_8.6 RHEL_8.5 FBK VANILLA_5.10LTS
-BUILD_CONFIG_VARIANT := fbk sp2
+RPM_DISTRIBUTIONS := RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 VANILLA_5.10LTS
+BUILD_CONFIG_VARIANT := sp2 nodrm
+
 ifneq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	OS_DISTRIBUTION ?= RHEL_8.7
+	OS_DISTRIBUTION ?= RHEL_8.8
 endif
 
 ifneq (,$(filter $(BUILD_CONFIG_VARIANT), $(BUILD_CONFIG)))
@@ -77,14 +78,6 @@ SUSE_PATCHLEVEL = ""
 # Filtered Output: 0
 SUSE_AUXRELEASE = ""
 
-#
-#FBK specific
-#
-FBK_IDENTIFIER = ""
-FBK_MAJOR = ""
-FBK_MINOR = ""
-FBK_VER = ""
-
 # BKPT_VER consist of backported release version.
 # Expected input: 'BACKPORTS_RELEASE_TAG="BKPT_6365_PRERELEASE_221021.0"' (TBD: Need to change as per final unification tag)
 # Filtered output: 221021.0
@@ -113,13 +106,6 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 # Filtered output: 5.17.15 OR 5.14.21-150400.24.18-default
 UTS_RELEASE=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | tr -d '~+')
 
-FBK_IDENTIFIER =$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "fbk")
-
-ifneq ($(FBK_IDENTIFIER),)
-FBK_VER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | cut -c 1-3 2>/dev/null || echo 1)
-FBK_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
-FBK_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4 2>/dev/null || echo 1)
-endif
 
 # KER_VER Extract latest KV from version file,
 # Used for package name to append latest KV.
@@ -127,7 +113,8 @@ endif
 # Filtered output: 4.18.0-372.32.1
 KER_VER=$(shell cat versions | grep -F $(shell bash scripts/bp_get_latest_KV.sh) | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
 
-ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
+
+ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 # KERN_VER_XYZ consist of release kernel major.minor.extended version.
 # Expected input:  #define UTS_RELEASE "5.17.15" OR #define UTS_RELEASE "5.14.21-150400.24.18-default"
 # Filtered output: 5.17.15 OR 5.14.21
@@ -164,8 +151,8 @@ RHEL_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | 
 RHEL_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MINOR | cut -d ' ' -f3)
 OSV_VER = $(RHEL_MAJOR).$(RHEL_MINOR)
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f1)
-EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f2)
-EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f3)
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f2)
+EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f3)
 
 # OSV_KV_SUPPORTED consist of rhel kernel version available in versions file.
 # Expected input: RHEL_8.6_KERNEL_VERSION="4.18.0-372.32.1"
@@ -176,9 +163,9 @@ OSV_KV_SUPPORTED = $(shell cat versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_
 # Output: 4.18.0-372.32.1
 ifneq ($(EXTENDED_VERSION_Y),)
 BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Y)
+endif
 ifneq ($(EXTENDED_VERSION_Z),)
 BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Z)
-endif
 endif
 
 #else for RHEL /* ifeq ($(OSV_NAME), RHEL) */
@@ -196,9 +183,6 @@ else ifeq ($(shell expr $(KERN_VER_XY) \== 5.18), 1)
 OSV_NAME = VANILLA
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 
-else ifneq ($(FBK_IDENTIFIER),)
-OSV_NAME := $(shell echo $(FBK_VER) | tr '[:lower:]' '[:upper:]')
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
 else
 $(info "OSV_NOT SUPPORTED")
 endif # MAINLINE
@@ -346,7 +330,8 @@ define filechk
         fi
 endef
 
-ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
+ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
+
 define filechk_osv_version_ubuntu.h
         echo '#define UBUNTU_BACKPORT_MAJOR $(EXTENDED_VERSION_X)'; \
         echo '#define UBUNTU_BACKPORT_MINOR $(EXTENDED_VERSION_Y)'; \
@@ -383,15 +368,6 @@ define filechk_osv_version_generic.h
         expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256)'
 endef
 
-define filechk_osv_fbk.h
-	echo '#define FBK_VER $(FBK_VER)'; \
-        echo '#define FBK_MAJOR $(FBK_MAJOR)'; \
-        echo '#define FBK_MINOR $(FBK_MINOR)'; \
-        echo '#define FBK_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
-        echo '#define FBK_RELEASE_CODE $(shell \
-        expr $(FBK_MAJOR) \* 65536 + 0$(FBK_MINOR) \* 256)'
-endef
-
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
 ifeq ($(OSV_NAME), UBUNTU)
 
@@ -415,16 +391,18 @@ else ifeq ($(OSV_NAME), RHEL)
 
 ifneq ($(RHEL_MAJOR).$(RHEL_MINOR), 8.4)
 ifeq ($(OSV_KV_SUPPORTED), )
+ifneq ($(EXTENDED_VERSION_Y),)
+ifneq ($(EXTENDED_VERSION_Z),)
 	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y).$(EXTENDED_VERSION_Z)"' >> versions
+else
+        @echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
+endif
+else
+	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)"' >> versions
+endif
 endif
 endif
 	$(call filechk,osv_version_rhel.h)
-else ifneq ($(FBK_IDENTIFIER),)
-ifeq ($(OSV_KV_SUPPORTED), )
-	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER_XYZ).$(FBK_VER)$(FBK_MAJOR)"' >> versions
-endif
-	$(call filechk,osv_fbk.h)
-
 else
 ifeq ($(OSV_KV_SUPPORTED), )
 	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER_XYZ)"' >> versions
@@ -437,7 +415,11 @@ endif
 
 KER_VER = $(subst -,.,$(BASE_KERNEL_NAME))
 
+ifeq ($(BUILD_CONFIG), nodrm)
+VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER).$(BUILD_CONFIG)
+else
 VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+endif
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)
@@ -465,13 +447,12 @@ DMA_PKG_RELEASE := $(RELEASE)
 
 # dmadkmsrpm-pkg
 # Creates Backports dmabuf dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> dmadkmsrpm-pkg
 # Rpm generated can be copied to client machine and install
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE: <opensource/prerelease> package need to be created
-# will trigger source build and install on modules
 #------------------------------------------------------------------------------
+ifneq ($(BUILD_CONFIG), nodrm)
 export KBUILD_ONLYDMADIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf include scripts)
+endif
+
 DMA_TAR_CONTENT := $(KBUILD_ONLYDMADIRS) .config Makefile* local-symbols MAINTAINERS \
                Kconfig* COPYING versions defconfigs backport-include kconf compat
 DMA_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsspec
@@ -491,12 +472,14 @@ dmadkmsrpm-pkg:
 
 # i915dkmsrpm-pkg
 # Creates Backports i915 alone dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsrpm-pkg
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE : <opensource/prerelease> package need to be created
 # Depends on package generated by dmadkmsrpm-pkg
 #------------------------------------------------------------------------------
+ifeq ($(BUILD_CONFIG), nodrm)
+export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu/drm/i915 drivers/char drivers/platform drivers/pci drivers/iommu include/drm/i915_*  --exclude="include/drm/i915_component.h" include/drm/intel_iaf_platform.h include/linux/mei* include/linux/overflow.h include/linux/intel_vsec.h include/linux/iosys-map.h include/linux/dma-buf.h include/linux/string_helpers.h include/uapi/drm/i915_drm* scripts)
+else
 export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
+endif
+
 I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINTAINERS \
                Kconfig* COPYING versions defconfigs backport-include kconf compat
 I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
@@ -507,27 +490,61 @@ i915dkmsrpm-pkg:
 	cp $(BACKPORT_DIR)/defconfigs/i915 .config
 	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) > $(BACKPORT_DIR)/dkms.conf
 	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
+ifeq ($(BUILD_CONFIG), nodrm)
+	patch -p1 < $(BACKPORT_DIR)/scripts/disable_drm_kconfig.patch ;
+else
 	patch -p1 < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
+endif
 	tar -cz $(RCS_TAR_IGNORE) -f $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
 	        $(I915_TAR_CONTENT) $(I915_PKG_NAME).spec dkms.conf;
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
 	--define='_smp_mflags %{nil}'
+ifeq ($(BUILD_CONFIG), nodrm)
+	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_drm_kconfig.patch ;
+else
 	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_dma.patch ;
+endif
 
 # dkmsrpm-pkg
 # Creates Backports both dmabuf and i915 dkms packages
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/"custom"> dkmsrpm-pkg
-# RELEASE_TYPE=<custom> is used to create custome package.
-# Example: RELEASE_TYPE=test
-#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
-# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
-# already installed before you intalling current one.
+#------------------------------------------------------------------------------
 .PHONY: dkmsrpm-pkg
 dkmsrpm-pkg: dmadkmsrpm-pkg i915dkmsrpm-pkg
+
+# binrpm-pkg
+# Creates backport binary package for dmabuf, drm, i915 combined
+# Build machine should have kernel version and variant binary is targeted for.
+#------------------------------------------------------------------------------
+ifneq ($(BUILD_CONFIG), nodrm)
+export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
+endif
+
+MKBINSPEC := $(BACKPORT_DIR)/scripts/backport-mkbinspec
+BIN_PACKAGE_NAME := intel-i915$(PKG_SUFFIX)
+TAR_CONTENT := $(KBUILD_DIRS) Makefile* local-symbols MAINTAINERS \
+	Kconfig* COPYING versions defconfigs backport-include kconf compat
+
+.PHONY: binrpm-pkg
+binrpm-pkg:
+	$(CONFIG_SHELL) $(MKBINSPEC) -n $(BIN_PACKAGE_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) -k $(KLIB)> $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME).spec
+	tar -cz $(RCS_TAR_IGNORE) -f $(BIN_PACKAGE_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+		$(TAR_CONTENT) $(BIN_PACKAGE_NAME).spec;
+	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BIN_PACKAGE_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+		--define='_smp_mflags %{nil}' --define='_sourcedir $(PWD)'
 
 .PHONY: clean
 clean:
 	@rm -f $(version_h)
+.PHONY: remove-drm-headers
+remove-drm-headers:
+	@rm -rf include/drm/drm_* include/drm/bridge include/drm/i2c include/drm/ttm
+	@rm -rf include/drm/gma_drm.h include/drm/gpu_scheduler.h include/drm/gud.h include/drm/amd_asic_type.h include/drm/intel_lpe_audio.h include/drm/rename-symbols.h include/drm/task_barrier.h include/drm/spsc_queue.h include/drm/i915_component.h
+	@rm -rf include/media/ include/trace/ include/video/ include/linux/agp_backend.h include/linux/ascii85.h include/linux/bit*
+	@rm -rf include/linux/clocksource_ids.h include/linux/component.h include/linux/dma-fence* include/linux/dma-heap.h
+	@rm -rf  include/linux/dma-resv.h include/linux/fixp-arith.h include/linux/fortify-string.h include/linux/hashtable.h include/linux/io-64-nonatomic-lo-hi.h include/linux/log2.h include/linux/seqno-fence.h include/linux/sync_file.h include/linux/timekeeping.h include/linux/unaligned include/uapi/drm/amdgpu_drm.h include/uapi/drm/armada_drm.h include/uapi/drm/drm* include/uapi/drm/etnaviv_drm.h include/uapi/drm/exynos_drm.h include/uapi/drm/i810_drm.h include/uapi/drm/lima_drm.h include/uapi/drm/mga_drm.h
+	@rm -rf  include/uapi/drm/msm_drm.h include/uapi/drm/nouveau_drm.h include/uapi/drm/omap_drm.h include/uapi/drm/panfrost_drm.h include/uapi/drm/qxl_drm.h include/uapi/drm/r128_drm.h include/uapi/drm/radeon_drm.h include/uapi/drm/savage_drm.h
+	@rm -rf  include/uapi/drm/sis_drm.h include/uapi/drm/tegra_drm.h include/uapi/drm/v3d_drm.h include/uapi/drm/vc4_drm.h include/uapi/drm/vgem_drm.h include/uapi/drm/via_drm.h include/uapi/drm/virtgpu_drm.h include/uapi/drm/vmwgfx_drm.h include/uapi/linux/android
+	@rm -rf  include/uapi/linux/cec.h include/uapi/linux/dma-buf.h include/uapi/linux/dma-heap.h include/uapi/linux/media-bus-format.h include/uapi/linux/sync_file.h
 
 .PHONY: mrproper
 mrproper:
@@ -539,8 +556,8 @@ mrproper:
 	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.dkms.in
 	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.install.in
 	@rm -f debian/rules
-	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*.spec
-	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*-src.tar.gz
+	@rm -f $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME)*.spec
+	@rm -f $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME)*-src.tar.gz
 	@rm -f $(BACKPORT_DIR)/$(DMA_PKG_NAME_BASENAME)*.spec
 	@rm -f $(BACKPORT_DIR)/$(DMA_PKG_NAME_BASENAME)*-src.tar.gz
 	@rm -f $(BACKPORT_DIR)/dkms.conf

@@ -18,3 +18,5 @@
 selftest(sanitycheck, i915_wip_sanitycheck) /* keep first (igt selfcheck) */
 selftest(gt_gtt, intel_gtt_wip_selftests)
 selftest(lmem, i915_gem_lmem_wip_selftests)
+selftest(live_scheduler, i915_scheduler_live_selftests)
+selftest(perf_scheduler, i915_scheduler_perf_selftests)

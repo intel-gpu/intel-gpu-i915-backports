@@ -1,5 +1,5 @@
 diff --git a/Kconfig.sources b/Kconfig.sources
-index 83d9a0a..f7d7732 100644
+index ff7b0e4..c684ebb 100644
 --- a/Kconfig.sources
 +++ b/Kconfig.sources
 @@ -2,7 +2,7 @@
@@ -7,7 +7,7 @@ index 83d9a0a..f7d7732 100644
  
  # these are copied from the kernel
 -source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
-+# source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
++#source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
  
  source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
- 
+ source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"

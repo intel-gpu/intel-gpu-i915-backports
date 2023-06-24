@@ -374,7 +374,8 @@
 #define GEN7_TLB_RD_ADDR			_MMIO(0x4700)
 
 #define GEN12_PAT_INDEX(index)			_MMIO(0x4800 + (index) * 4)
-#define XEHP_PAT_INDEX(index)			MCR_REG(0x4800 + (index) * 4)
+#define XEHP_PAT_INDEX(index)			MCR_REG(0x4800 + (index) * 4 + ((index > 7) ? 0x28 : 0))
+#define XELPMP_PAT_INDEX(index)			_MMIO(0x4800 + (index) * 4 + ((index > 7) ? 0x28 : 0))
 
 #define XEHP_TILE0_ADDR_RANGE			MCR_REG(0x4900)
 #define XEHP_TILE1_ADDR_RANGE			MCR_REG(0x4904)

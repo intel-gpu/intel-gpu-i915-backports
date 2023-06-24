@@ -485,18 +485,8 @@ static ssize_t act_freq_mhz_show(struct device *dev,
 	 * intel_rps_read_actual_frequency is used in base_act_freq_mhz_show
 	 */
 	if (IS_PONTEVECCHIO(gt->i915)) {
-		struct intel_rps *rps = &gt->rps;
-		i915_reg_t rgadr = GEN12_RPSTAT1;
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-		u32 val = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, rgadr);
-#else
-		u32 val = _with_pm_intel_dev_read(dev, attr, rgadr);
-#endif
-
-		val = REG_FIELD_GET(PVC_RPSTAT1_CHIPLET_FREQ, val);
-		val = intel_gpu_freq(rps, val);
-
-		return sysfs_emit(buff, "%u\n", val);
+		return sysfs_emit(buff, "%d\n",
+				  intel_rps_read_chiplet_frequency(&gt->rps));
 	} else {
 		return sysfs_emit(buff, "%d\n",
 				  intel_rps_read_actual_frequency(&gt->rps));

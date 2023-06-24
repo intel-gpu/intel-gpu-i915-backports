@@ -1749,10 +1749,7 @@ static bool engine_supports_oa(struct drm_i915_private *i915,
 		return engine->class == COMPUTE_CLASS ||
 		       engine->class == VIDEO_DECODE_CLASS;
 	case INTEL_METEORLAKE:
-		return engine->class == RENDER_CLASS ||
-		       ((engine->class == VIDEO_DECODE_CLASS ||
-			 engine->class == VIDEO_ENHANCEMENT_CLASS) &&
-			engine->gt->type == GT_MEDIA);
+		return engine->class == RENDER_CLASS;
 	default:
 		return engine->class == RENDER_CLASS;
 	}

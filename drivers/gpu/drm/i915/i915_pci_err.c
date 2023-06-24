@@ -72,6 +72,51 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	return PCI_ERS_RESULT_NEED_RESET;
 }
 
+#ifdef BPM_DISABLE_DRM_DMABUF
+static void fake_devm_drm_release_action(struct device *dev, void *res)
+{
+	struct devres_node {
+		struct list_head		entry;
+		dr_release_t			release;
+#ifdef CONFIG_DEBUG_DEVRES
+		const char			*name;
+		size_t				size;
+#endif
+	} *node, *tmp;
+
+	struct devres {
+		struct devres_node		node;
+		/*
+		 * Some archs want to perform DMA into kmalloc caches
+		 * and need a guaranteed alignment larger than
+		 * the alignment of a 64-bit integer.
+		 * Thus we use ARCH_KMALLOC_MINALIGN here and get exactly the same
+		 * buffer alignment as if it was allocated by plain kmalloc().
+		 */
+		u8 __aligned(ARCH_KMALLOC_MINALIGN) data[];
+	} *dr;
+
+	struct action_devres {
+		void *data;
+		void (*action)(void *);
+	} *dres = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dev->devres_lock, flags);
+	list_for_each_entry_safe_reverse(node, tmp, &dev->devres_head, entry) {
+		dr = container_of(node, struct devres, node);
+		dres = (struct action_devres *)dr->data;
+
+		if (dres->data == res)
+			break;
+		dres = NULL;
+	}
+	spin_unlock_irqrestore(&dev->devres_lock, flags);
+
+	if (!WARN_ON(!dres))
+		devm_release_action(dev, dres->action, res);
+}
+#endif
 /**
  * i915_pci_slot_reset - Called after PCI slot is reset
  * @pdev: PCI device struct
@@ -107,7 +152,11 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	 */
 	i915_pci_error_clear_fault(i915);
 	pdev->driver->remove(pdev);
+#ifdef BPM_DISABLE_DRM_DMABUF
+	fake_devm_drm_release_action(&pdev->dev, &i915->drm);
+#else
 	devm_drm_release_action(&i915->drm);
+#endif
 	pci_disable_device(pdev);
 
 	if (!i915_driver_probe(pdev, ent)) {

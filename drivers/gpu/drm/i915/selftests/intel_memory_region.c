@@ -705,6 +705,9 @@ igt_create_migrate(struct intel_gt *gt,
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
+	/* Allow any and all migration [disable compression] */
+	obj->memory_mask = -1;
+
 	for_i915_gem_ww(&ww, err, true) {
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
@@ -1482,6 +1485,9 @@ __igt_lmem_pages_migrate(struct intel_gt *gt, struct intel_gt *bcs_gt)
 	obj = intel_gt_object_create_lmem(gt, SZ_2M, 0);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
+
+	/* Allow any and all migration [disable compression] */
+	obj->memory_mask = -1;
 
 	err = i915_gem_object_fill_blt(obj, ce, 0);
 	if (err)

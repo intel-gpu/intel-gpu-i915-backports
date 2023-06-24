@@ -2851,6 +2851,7 @@ void intel_iov_provisioning_restart(struct intel_iov *iov)
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 
 	iov->pf.provisioning.num_pushed = 0;
+	iov->pf.provisioning.self_done = false;
 
 	if (pf_get_status(iov) > 0)
 		pf_start_reprovisioning_worker(iov);
@@ -2866,6 +2867,7 @@ static void pf_reprovision_pf(struct intel_iov *iov)
 	pf_reprovision_sample_period(iov);
 	pf_reprovision_exec_quantum(iov, PFID);
 	pf_reprovision_preempt_timeout(iov, PFID);
+	iov->pf.provisioning.self_done = true;
 	mutex_unlock(pf_provisioning_mutex(iov));
 }
 

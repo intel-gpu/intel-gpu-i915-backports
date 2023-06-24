@@ -961,17 +961,25 @@ static u32 glk_plane_color_ctl(const struct intel_crtc_state *crtc_state,
 	struct intel_plane *plane = to_intel_plane(plane_state->uapi.plane);
 	u32 plane_color_ctl = 0;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/* FIXME needs hw.gamma_lut */
 	if (!plane_state->uapi.gamma_lut)
 		plane_color_ctl |= PLANE_COLOR_PLANE_GAMMA_DISABLE;
+#else
+	plane_color_ctl |= PLANE_COLOR_PLANE_GAMMA_DISABLE;
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/* FIXME needs hw.degamma_lut */
 	if (plane_state->uapi.degamma_lut)
 		plane_color_ctl |= PLANE_COLOR_PRE_CSC_GAMMA_ENABLE;
+#endif
 
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 	/* FIXME needs hw.ctm */
 	if (plane_state->uapi.ctm)
 		plane_color_ctl |= PLANE_COLOR_PLANE_CSC_ENABLE;
+#endif
 
 	plane_color_ctl |= glk_plane_color_ctl_alpha(plane_state);
 
@@ -1276,10 +1284,12 @@ icl_plane_update_noarm(struct intel_plane *plane,
 	if (plane_state->force_black)
 		icl_plane_csc_load_black(plane);
 
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 	if (plane_state->uapi.color_mgmt_changed) {
 		intel_color_load_plane_luts(&plane_state->uapi);
 		intel_color_load_plane_csc_matrix(&plane_state->uapi);
 	}
+#endif
 
 	intel_psr2_program_plane_sel_fetch_noarm(plane, crtc_state, plane_state, color_plane);
 }
@@ -2206,7 +2216,7 @@ static bool gen12_plane_has_mc_ccs(struct drm_i915_private *i915,
 	if (DISPLAY_VER(i915) < 12)
 		return false;
 
-	/* Wa_14010477008:tgl[a0..c0],rkl[all],dg1[all] */
+	/* Wa_14010477008 */
 	if (IS_DG1(i915) || IS_ROCKETLAKE(i915) ||
 	    IS_TGL_DISPLAY_STEP(i915, STEP_A0, STEP_D0))
 		return false;
@@ -2385,8 +2395,9 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 		drm_plane_create_scaling_filter_property(&plane->base,
 						BIT(DRM_SCALING_FILTER_DEFAULT) |
 						BIT(DRM_SCALING_FILTER_NEAREST_NEIGHBOR));
-
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	intel_color_plane_init(&plane->base);
+#endif
 
 	intel_plane_helper_add(plane);
 

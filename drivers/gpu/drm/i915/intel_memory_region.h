@@ -103,6 +103,7 @@ struct intel_memory_region {
 	resource_size_t min_page_size;
 	resource_size_t total;
 	resource_size_t avail;
+	resource_size_t evict;
 
 	resource_size_t acct_limit[2];
 	resource_size_t acct_user[2];
@@ -151,6 +152,10 @@ __intel_memory_region_get_block_buddy(struct intel_memory_region *mem,
 void __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 					   struct list_head *blocks);
 void __intel_memory_region_put_block_buddy(struct i915_buddy_block *block);
+
+int intel_memory_region_add_to_ww_evictions(struct intel_memory_region *mem,
+					    struct i915_gem_ww_ctx *ww,
+					    struct drm_i915_gem_object *obj);
 
 struct intel_memory_region *
 intel_memory_region_create(struct intel_gt *gt,

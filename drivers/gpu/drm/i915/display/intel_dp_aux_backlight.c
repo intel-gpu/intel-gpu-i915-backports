@@ -278,8 +278,10 @@ intel_dp_aux_hdr_setup_backlight(struct intel_connector *connector, enum pipe pi
 {
 	struct drm_i915_private *i915 = to_i915(connector->base.dev);
 	struct intel_panel *panel = &connector->panel;
+#ifndef DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
 	struct drm_luminance_range_info *luminance_range =
 		&connector->base.display_info.luminance_range;
+#endif
 	int ret;
 
 	if (panel->backlight.edp.intel.sdr_uses_aux) {
@@ -294,7 +296,10 @@ intel_dp_aux_hdr_setup_backlight(struct intel_connector *connector, enum pipe pi
 			return ret;
 		}
 	}
-
+#ifdef DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
+	panel->backlight.max = 512;
+	panel->backlight.min = 0;
+#else
 	if (luminance_range->max_luminance) {
 		panel->backlight.max = luminance_range->max_luminance;
 		panel->backlight.min = luminance_range->min_luminance;
@@ -305,6 +310,7 @@ intel_dp_aux_hdr_setup_backlight(struct intel_connector *connector, enum pipe pi
 
 	drm_dbg_kms(&i915->drm, "Using backlight range %d..%d\n", panel->backlight.min,
 		    panel->backlight.max);
+#endif
 
 	panel->backlight.level = intel_dp_aux_hdr_get_backlight(connector, pipe);
 	panel->backlight.enabled = panel->backlight.level != 0;

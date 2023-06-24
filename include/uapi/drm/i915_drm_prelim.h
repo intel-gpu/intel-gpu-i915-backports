@@ -3,10 +3,14 @@
  * Copyright © 2021 Intel Corporation
  */
 
-#ifndef __I915_DRM_PRELIM_H__
-#define __I915_DRM_PRELIM_H__
+#ifndef __BACKPORT_I915_DRM_PRELIM_H__
+#define __BACKPORT_I915_DRM_PRELIM_H__
 
+#ifdef BPM_DISABLE_DRM_DMABUF
+#include_next <uapi/drm/drm.h>
+#else
 #include "i915_drm.h"
+#endif
 
 /*
  * Modifications to structs/values defined here are subject to
@@ -166,6 +170,9 @@ struct prelim_i915_user_extension {
 #define PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3BANK             (122)
 #define PRELIM_I915_PMU_GT_ERROR_FATAL_SUBSLICE                 (123)
 #define PRELIM_I915_PMU_GT_ERROR_FATAL_L3BANK                   (124)
+#define PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_CD0_MDFI         (125)
+#define PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_EAST        (126)
+#define PRELIM_I915_PVC_PMU_SOC_ERROR_NONFATAL_MDFI_SOUTH       (127)
 
 #define PRELIM_I915_PMU_HW_ERROR(gt, id) \
 	((__PRELIM_I915_PMU_HW_ERROR_EVENT_ID_OFFSET + (id)) | \
@@ -263,6 +270,8 @@ struct prelim_i915_user_extension {
 /* EU Debugger support */
 #define PRELIM_I915_PARAM_EU_DEBUGGER_VERSION  (PRELIM_I915_PARAM | 9)
 
+/* BO chunk granularity support */
+#define PRELIM_I915_PARAM_HAS_CHUNK_SIZE	(PRELIM_I915_PARAM | 10)
 /* End getparam */
 
 struct prelim_drm_i915_gem_create_ext {
@@ -326,6 +335,18 @@ struct prelim_drm_i915_gem_object_param {
  * use two buffer objects with a single exported dma-buf file descriptor
  */
 #define PRELIM_I915_PARAM_SET_PAIR ((1 << 17) | 0x1)
+
+/*
+ * PRELIM_I915_PARAM_SET_CHUNK_SIZE:
+ *
+ * Specifies that this buffer object should support 'chunking' and chunk
+ * granularity. Allows internal KMD paging/migration/eviction handling to
+ * operate on a single chunk instead of the whole buffer object.
+ * Size specified in bytes and must be non-zero and a power of 2.
+ * KMD will return error (-ENOSPC) if CHUNK_SIZE is deemed to be too small
+ * to be supported.
+ */
+#define PRELIM_I915_PARAM_SET_CHUNK_SIZE ((1 << 18) | 1)
 	__u64 param;
 
 	/* Data value or pointer */
@@ -377,6 +398,11 @@ struct prelim_drm_i915_perf_oa_buffer_info {
 	__u64 size;   /* out */
 	__u64 offset; /* out */
 	__u64 rsvd;   /* mbz */
+};
+
+struct prelim_drm_i915_gem_mmap_offset {
+	/* Specific MMAP offset for PCI memory barrier */
+#define PRELIM_I915_PCI_BARRIER_MMAP_OFFSET (0x50 << PAGE_SHIFT)
 };
 
 enum prelim_drm_i915_eu_stall_property_id {
@@ -1200,7 +1226,7 @@ struct prelim_drm_i915_gem_vm_bind {
 	/** vm to [un]bind **/
 	__u32 vm_id;
 
-	/** BO handle or file descriptor. Set 'fd' to -1 for system pages **/
+	/** BO handle or file descriptor **/
 	union {
 		__u32 handle; /* For unbind, it is reserved and must be 0 */
 		__s32 fd;
@@ -1476,4 +1502,4 @@ struct prelim_drm_i915_gem_vm_param {
 	__u64 value;
 };
 
-#endif /* __I915_DRM_PRELIM_H__ */
+#endif /* __BACKPORT_I915_DRM_PRELIM_H__ */
