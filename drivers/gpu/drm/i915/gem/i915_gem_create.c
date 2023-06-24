@@ -16,6 +16,18 @@
 #include "i915_trace.h"
 #include "i915_user_extensions.h"
 
+struct create_ext {
+	struct drm_i915_private *i915;
+	struct drm_i915_gem_object *vanilla_object;
+	unsigned long flags;
+	u64 segment_size;
+	u32 vm_id;
+	u32 pair_id;
+};
+
+static u32 placement_mask(struct intel_memory_region **placements,
+			  int n_placements);
+
 u32 i915_gem_object_max_page_size(struct drm_i915_gem_object *obj)
 {
 	u32 max_page_size = I915_GTT_PAGE_SIZE_4K;
@@ -51,6 +63,8 @@ static void object_set_placements(struct drm_i915_gem_object *obj,
 		obj->mm.placements = placements;
 		obj->mm.n_placements = n_placements;
 	}
+
+	obj->memory_mask = placement_mask(obj->mm.placements, obj->mm.n_placements);
 }
 
 static u64 object_limit(struct drm_i915_gem_object *obj)
@@ -113,6 +127,21 @@ static int i915_gem_publish(struct drm_i915_gem_object *obj,
 	return 0;
 }
 
+/*
+ * This routine will determined if BO segmentation will be enabled,
+ * based on user supplied ext->segment_size and object size.
+ * Must be larger than the minimum chunk size and need 2 chunks.
+ * We do not require any alignment to chunk size, and so the last chunk can
+ * be partial.
+ */
+static u64 get_object_segment_size(u64 obj_size, u64 requested_size)
+{
+	/* require 2+ chunks */
+	if  (!(requested_size && obj_size >= requested_size << 1))
+		return 0;
+	return requested_size;
+}
+
 static u32 placement_mask(struct intel_memory_region **placements,
 			  int n_placements)
 {
@@ -128,9 +157,12 @@ static u32 placement_mask(struct intel_memory_region **placements,
 }
 
 static int
-setup_object(struct drm_i915_gem_object *obj, u64 size)
+setup_object(struct drm_i915_gem_object *obj, u64 size,
+	     struct create_ext *ext)
 {
 	struct intel_memory_region *mr = obj->mm.placements[0];
+	u64 obj_min_size, obj_segment_size = 0;
+	u64 nsegments = 0;
 	u32 alloc_flags;
 	int ret;
 
@@ -143,24 +175,64 @@ setup_object(struct drm_i915_gem_object *obj, u64 size)
 	/* For most of the ABI (e.g. mmap) we think in system pages */
 	GEM_BUG_ON(!IS_ALIGNED(size, PAGE_SIZE));
 
-	if (overflows_type(size, obj->base.size) || size > object_limit(obj))
+	if (ext)
+		obj_segment_size = get_object_segment_size(size,
+							   ext->segment_size);
+	obj_min_size = obj_segment_size ?: size;
+
+	if (overflows_type(size, obj->base.size) || obj_min_size > object_limit(obj))
 		return -E2BIG;
 
 	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
 		I915_BO_ALLOC_CONTIGUOUS : 0;
 
 	size = object_size_align(mr, size, &alloc_flags);
-	ret = mr->ops->init_object(mr, obj, size, alloc_flags | I915_BO_ALLOC_USER);
+	alloc_flags |= I915_BO_ALLOC_USER;
+	ret = mr->ops->init_object(mr, obj, size, alloc_flags);
 	if (ret)
 		return ret;
 
 	GEM_BUG_ON(size != obj->base.size);
 
-	obj->memory_mask = placement_mask(obj->mm.placements, obj->mm.n_placements);
+	if (obj_segment_size) {
+		struct drm_i915_gem_object *sobj, *prev_obj = NULL;
+		u64 segment_offset = 0;
+		u64 segment_size;
 
-	trace_i915_gem_object_create(obj);
+		while (size) {
+			sobj = i915_gem_object_alloc();
+			if (!sobj) {
+				ret = -ENOMEM;
+				break;
+			}
 
-	return i915_gem_object_account(obj);
+			/* point to same placement array as parent */
+			object_set_placements(sobj, obj->mm.placements,
+					      obj->mm.n_placements);
+			segment_size = min_t(u64, obj_segment_size, size);
+			ret = mr->ops->init_object(mr, sobj, segment_size, alloc_flags);
+			if (ret) {
+				i915_gem_object_free(sobj);
+				break;
+			}
+
+			i915_gem_object_add_segment(obj, sobj, prev_obj, segment_offset);
+			segment_offset += sobj->base.size;
+			size -= sobj->base.size;
+			prev_obj = sobj;
+			nsegments++;
+		}
+
+		if (ret)
+			goto err_segments;
+	}
+
+	ret = i915_gem_object_account(obj);
+err_segments:
+	if (ret)
+		i915_gem_object_release_segments(obj);
+	trace_i915_gem_object_create(obj, nsegments);
+	return ret;
 }
 
 static int account_size(struct drm_i915_private *i915, unsigned long
@@ -269,7 +341,7 @@ i915_gem_dumb_create(struct drm_file *file,
 	mr = intel_memory_region_by_type(to_i915(dev), mem_type);
 	object_set_placements(obj, &mr, 1);
 
-	ret = setup_object(obj, args->size);
+	ret = setup_object(obj, args->size, NULL);
 	if (ret)
 		goto object_free;
 
@@ -279,14 +351,6 @@ object_free:
 	i915_gem_object_free(obj);
 	return ret;
 }
-
-struct create_ext {
-	struct drm_i915_private *i915;
-	struct drm_i915_gem_object *vanilla_object;
-	unsigned long flags;
-	u32 vm_id;
-	u32 pair_id;
-};
 
 static void repr_placements(char *buf, size_t size,
 			    struct intel_memory_region **placements,
@@ -320,11 +384,6 @@ static int prelim_set_placements(struct prelim_drm_i915_gem_object_param *args,
 	struct intel_memory_region **placements;
 	u32 mask;
 	int i, ret = 0;
-
-	if (args->handle) {
-		DRM_DEBUG("Handle should be zero\n");
-		ret = -EINVAL;
-	}
 
 	if (!args->size) {
 		DRM_DEBUG("Size is zero\n");
@@ -420,11 +479,6 @@ static int prelim_set_pair(struct prelim_drm_i915_gem_object_param *args,
 	/* start with no pairing */
 	ext_data->pair_id = 0;
 
-	if (args->handle) {
-		DRM_DEBUG("Handle should be zero\n");
-		ret = -EINVAL;
-	}
-
 	if (!args->data) {
 		DRM_DEBUG("Data should be non-zero\n");
 		ret = -EINVAL;
@@ -442,6 +496,25 @@ static int prelim_set_pair(struct prelim_drm_i915_gem_object_param *args,
 	return 0;
 }
 
+static int prelim_set_chunk_size(struct prelim_drm_i915_gem_object_param *args,
+				 struct create_ext *ext_data)
+{
+	struct drm_i915_private *i915 = ext_data->i915;
+	u64 segment_size = args->data;
+
+	/* enabled on platforms where legacy mmap is no longer supported */
+	if (!(IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0)))
+		return -EOPNOTSUPP;
+
+	if (!segment_size || !is_power_of_2(segment_size))
+		return -EINVAL;
+	if (segment_size < I915_BO_MIN_CHUNK_SIZE)
+		return -ENOSPC;
+
+	ext_data->segment_size = segment_size;
+	return 0;
+}
+
 static int __create_setparam(struct prelim_drm_i915_gem_object_param *args,
 			     struct create_ext *ext_data)
 {
@@ -450,11 +523,18 @@ static int __create_setparam(struct prelim_drm_i915_gem_object_param *args,
 		return -EINVAL;
 	}
 
+	if (args->handle) {
+		DRM_DEBUG("Handle should be zero\n");
+		return -EINVAL;
+	}
+
 	switch (lower_32_bits(args->param)) {
 	case PRELIM_I915_PARAM_MEMORY_REGIONS:
 		return prelim_set_placements(args, ext_data);
 	case PRELIM_I915_PARAM_SET_PAIR:
 		return prelim_set_pair(args, ext_data);
+	case PRELIM_I915_PARAM_SET_CHUNK_SIZE:
+		return prelim_set_chunk_size(args, ext_data);
 	}
 
 	return -EINVAL;
@@ -602,7 +682,7 @@ i915_gem_create_ioctl(struct drm_device *dev, void *data,
 		object_set_placements(obj, stack, 1);
 	}
 
-	ret = setup_object(obj, args->size);
+	ret = setup_object(obj, args->size, &ext_data);
 	if (ret)
 		goto vm_put;
 
@@ -611,8 +691,10 @@ i915_gem_create_ioctl(struct drm_device *dev, void *data,
 		goto vm_put;
 
 	if (obj->vm) {
+		i915_gem_object_lock(obj->vm->root_obj, NULL);
 		list_add_tail(&obj->priv_obj_link, &obj->vm->priv_obj_list);
-		obj->base.resv = obj->vm->root_obj->base.resv;
+		i915_gem_object_share_resv(obj->vm->root_obj, obj);
+		i915_gem_object_unlock(obj->vm->root_obj);
 		i915_vm_put(obj->vm);
 	}
 
@@ -821,13 +903,15 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 		object_set_placements(obj, &mr, 1);
 	}
 
-	ret = setup_object(obj, args->size);
+	ret = setup_object(obj, args->size, NULL);
 	if (ret)
 		goto vm_put;
 
 	if (obj->vm) {
+		i915_gem_object_lock(obj->vm->root_obj, NULL);
 		list_add_tail(&obj->priv_obj_link, &obj->vm->priv_obj_list);
-		obj->base.resv = obj->vm->root_obj->base.resv;
+		i915_gem_object_share_resv(obj->vm->root_obj, obj);
+		i915_gem_object_unlock(obj->vm->root_obj);
 		i915_vm_put(obj->vm);
 	}
 
@@ -880,7 +964,7 @@ i915_gem_object_create_user(struct drm_i915_private *i915, u64 size,
 	}
 
 	object_set_placements(obj, placements, n_placements);
-	ret = setup_object(obj, size);
+	ret = setup_object(obj, size, NULL);
 	if (ret)
 		goto placement_free;
 

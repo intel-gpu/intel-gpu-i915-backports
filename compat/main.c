@@ -60,7 +60,6 @@ struct kobj_attribute dkms_attr = __ATTR(dkms, 0440, dkms_i915_show, NULL);
 static ssize_t dkms_i915_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
-       printk(KERN_DEBUG "DKMS Sysfs-Read\n");
        return sprintf(buf, "%s\n", "dkms_i915");
 }
 

@@ -32,6 +32,9 @@ MODULE_IMPORT_NS(DMA_BUF);
 I915_SELFTEST_DECLARE(static bool force_different_devices;)
 
 static const struct drm_i915_gem_object_ops i915_gem_object_dmabuf_ops;
+static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
+				   struct sg_table *sgt,
+				   enum dma_data_direction dir);
 static int update_fabric(struct dma_buf *dma_buf,
 			 struct drm_i915_gem_object *obj);
 
@@ -40,16 +43,20 @@ static struct drm_i915_gem_object *dma_buf_to_obj(struct dma_buf *buf)
 	return to_intel_bo(buf->priv);
 }
 
-static void dmabuf_unmap_addr(struct device *dev, struct scatterlist *sgl,
-			      int nents, enum dma_data_direction dir,
-			      unsigned long attrs)
+static void dmabuf_unmap_addr(struct device *dev,
+			      struct drm_i915_gem_object *obj,
+			      struct scatterlist *sgl, int nents,
+			      enum dma_data_direction dir, unsigned long attrs)
 {
 	struct scatterlist *sg;
 	int i;
 
-	for_each_sg(sgl, sg, nents, i)
-		dma_unmap_resource(dev, sg_dma_address(sg), sg_dma_len(sg),
-				   dir, attrs);
+	if (i915_gem_object_is_lmem(obj))
+		for_each_sg(sgl, sg, nents, i)
+			dma_unmap_resource(dev, sg_dma_address(sg), sg_dma_len(sg),
+					   dir, attrs);
+	else
+		dma_unmap_sg_attrs(dev, sgl, nents, dir, attrs);
 }
 
 /**
@@ -60,44 +67,52 @@ static void dmabuf_unmap_addr(struct device *dev, struct scatterlist *sgl,
  * @sgt: scatter gather table to apply mapping to
  * @dir: DMA direction
  *
+ * For LMEM objects:
  * The dma_address of the scatter list is the LMEM "address".  From this the
  * actual physical address can be determined.
  *
+ * Returns the number of mapped entries (which can be less than nents) on success,
+ * or a negative error code on error.
  */
 static int dmabuf_map_addr(struct device *dev, struct drm_i915_gem_object *obj,
-			   struct sg_table *sgt, enum dma_data_direction dir,
-			   unsigned long attrs)
+			   struct scatterlist *sgl, int nents,
+			   enum dma_data_direction dir, unsigned long attrs)
 {
 	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct scatterlist *sg;
 	phys_addr_t addr;
-	int i;
+	int ret = 0, i;
 
-	for_each_sg(sgt->sgl, sg, sgt->orig_nents, i) {
-		if (obj->pair && i == obj->mm.pages->orig_nents)
-			mem = obj->pair->mm.region.mem;
-		addr = sg_dma_address(sg) - mem->region.start + mem->io_start;
-		sg->dma_address = dma_map_resource(dev, addr, sg->length, dir,
-						   attrs);
-		if (dma_mapping_error(dev, sg->dma_address))
-			goto unmap;
-		sg->dma_length = sg->length;
+	if (i915_gem_object_is_lmem(obj)) {
+		for_each_sg(sgl, sg, nents, i) {
+			addr = sg_dma_address(sg) - mem->region.start + mem->io_start;
+			sg->dma_address = dma_map_resource(dev, addr, sg->length, dir,
+							   attrs);
+			if (dma_mapping_error(dev, sg->dma_address)) {
+				dmabuf_unmap_addr(dev, obj, sgl, i, dir, attrs);
+				ret = -ENOMEM;
+				break;
+			}
+			sg->dma_length = sg->length;
+		}
+		if (!ret)
+			ret = nents;
+	} else {
+		ret = dma_map_sg_attrs(dev, sgl, nents, dir, attrs);
 	}
 
-	return 0;
-
-unmap:
-	dmabuf_unmap_addr(dev, sgt->sgl, i, dir, attrs);
-	return -ENOMEM;
+	return ret;
 }
 
-static struct sg_table *i915_gem_copy_pages(struct drm_i915_gem_object *obj)
+static struct sg_table *
+i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
+			  enum dma_data_direction map_dir)
 {
-	struct scatterlist *src;
-	struct scatterlist *dst;
+	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
+	unsigned int nents, count = 0, mapped_ents = 0;
+	struct scatterlist *src, *dst;
 	struct sg_table *sgt;
-	unsigned int nents;
-	int i;
+	int ret, i, sidx = 0;
 
 	/*
 	 * Make a copy of the object's sgt, so that we can make an independent
@@ -106,65 +121,73 @@ static struct sg_table *i915_gem_copy_pages(struct drm_i915_gem_object *obj)
 	 * address information.  This will get overwritten by dma-buf-map
 	 */
 	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
-	if (!sgt)
-		return NULL;
-
-	nents = obj->mm.pages->orig_nents;
-	if (obj->pair)
-		nents += obj->pair->mm.pages->orig_nents;
-
-	if (sg_alloc_table(sgt, nents, GFP_KERNEL)) {
-		kfree(sgt);
-		return NULL;
-	}
-
-	dst = sgt->sgl;
-	for_each_sg(obj->mm.pages->sgl, src, obj->mm.pages->orig_nents, i) {
-		sg_set_page(dst, sg_page(src), src->length, 0);
-		sg_dma_address(dst) = sg_dma_address(src);
-		sg_dma_len(dst) = sg_dma_len(src);
-		dst = sg_next(dst);
-	}
-
-	/* If object is paired, add the pair's page info */
-	if (obj->pair) {
-		for_each_sg(obj->pair->mm.pages->sgl, src, obj->pair->mm.pages->orig_nents, i) {
-			sg_set_page(dst, sg_page(src), src->length, 0);
-			sg_dma_address(dst) = sg_dma_address(src);
-			sg_dma_len(dst) = sg_dma_len(src);
-			dst = sg_next(dst);
-		}
-	}
-
-	return sgt;
-}
-
-static struct sg_table *i915_gem_map_dma_buf(struct dma_buf_attachment *attach,
-					     enum dma_data_direction dir)
-{
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
-	struct sg_table *sgt;
-	int ret;
-
-	sgt = i915_gem_copy_pages(obj);
 	if (!sgt) {
 		ret = -ENOMEM;
 		goto err;
 	}
 
-	if (i915_gem_object_is_lmem(obj))
-		ret = dmabuf_map_addr(attach->dev, obj, sgt, dir,
-				      DMA_ATTR_SKIP_CPU_SYNC);
-	else
-		ret = dma_map_sgtable(attach->dev, sgt, dir,
-				      DMA_ATTR_SKIP_CPU_SYNC);
-	if (ret)
-		goto err_free_sgt;
+	if (i915_gem_object_has_segments(obj)) {
+		struct drm_i915_gem_object *sobj;
+
+		nents = 0;
+		for_each_object_segment(sobj, obj)
+			nents += sobj->mm.pages->orig_nents;
+	} else {
+		nents = obj->mm.pages->orig_nents;
+		if (obj->pair)
+			nents += obj->pair->mm.pages->orig_nents;
+	}
+
+	if (sg_alloc_table(sgt, nents, GFP_KERNEL)) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+
+	dst = sgt->sgl;
+
+	/* if segmented BO, obj starts as the first segment's BO */
+	if (i915_gem_object_has_segments(obj))
+		obj = rb_entry(rb_first_cached(&obj->segments), typeof(*obj), segment_node);
+
+	while (count < nents && obj) {
+		struct scatterlist *dst_start = dst;
+
+		for_each_sg(obj->mm.pages->sgl, src, obj->mm.pages->orig_nents, i) {
+			sg_set_page(dst, sg_page(src), src->length, 0);
+			sg_dma_address(dst) = sg_dma_address(src);
+			sg_dma_len(dst) = sg_dma_len(src);
+			dst = sg_next(dst);
+		}
+		count += obj->mm.pages->orig_nents;
+
+		if (map_dir != DMA_NONE) {
+			ret = dmabuf_map_addr(attach->dev, obj, dst_start,
+					      obj->mm.pages->orig_nents,
+					      map_dir, DMA_ATTR_SKIP_CPU_SYNC);
+			if (ret < 0) {
+				i915_gem_unmap_dma_buf(attach, sgt, map_dir);
+				goto err;
+			}
+			mapped_ents += ret;
+		}
+
+		/* advance to next segment object, or to the object's pair */
+		if (i915_gem_object_is_segment(obj)) {
+			obj = rb_entry_safe(rb_next(&obj->segment_node),
+					    typeof(*obj), segment_node);
+			sidx++;
+		} else {
+			obj = obj->pair;
+		}
+	}
+	GEM_BUG_ON(count != nents);
+
+	if (mapped_ents)
+		sgt->nents = mapped_ents;
 
 	return sgt;
 
-err_free_sgt:
-	sg_free_table(sgt);
+err_free:
 	kfree(sgt);
 err:
 	return ERR_PTR(ret);
@@ -176,13 +199,20 @@ static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
 
-	if (i915_gem_object_is_lmem(obj))
-		dmabuf_unmap_addr(attach->dev, sgt->sgl, sgt->nents, dir,
-				  DMA_ATTR_SKIP_CPU_SYNC);
-	else
-		dma_unmap_sgtable(attach->dev, sgt, dir,
-				  DMA_ATTR_SKIP_CPU_SYNC);
+	if (i915_gem_object_has_segments(obj)) {
+		struct scatterlist *sgl = sgt->sgl;
+		struct drm_i915_gem_object *sobj;
 
+		for_each_object_segment(sobj, obj) {
+			dmabuf_unmap_addr(attach->dev, sobj, sgl,
+					  sobj->mm.pages->orig_nents, dir,
+					  DMA_ATTR_SKIP_CPU_SYNC);
+			sgl += sobj->mm.pages->orig_nents;
+		}
+	} else {
+		dmabuf_unmap_addr(attach->dev, obj, sgt->sgl,
+				  sgt->orig_nents, dir, DMA_ATTR_SKIP_CPU_SYNC);
+	}
 	sg_free_table(sgt);
 	kfree(sgt);
 }
@@ -363,7 +393,7 @@ static int object_to_attachment_p2p_distance(struct drm_i915_gem_object *obj,
 static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 				  struct dma_buf_attachment *attach)
 {
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
+	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(dmabuf);
 	struct intel_gt *gt = obj->mm.region.mem->gt;
 	enum intel_engine_id id = gt->rsvd_bcs;
 	struct intel_context *ce = gt->engine[id]->blitter_context;
@@ -399,18 +429,62 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 		}
 
 		if (!fabric && p2p_distance < 0) {
-			GEM_BUG_ON(obj->pair);
-			err = i915_gem_object_migrate(obj, &ww, ce,
-						      INTEL_REGION_SMEM, false);
+			if (i915_gem_object_has_segments(obj)) {
+				for_each_object_segment(sobj, obj) {
+					err = i915_gem_object_lock(sobj, &ww);
+					if (err)
+						break;
+
+					/*
+					 * can_migrate() above tested that placement
+					 * list allows migration.
+					 * Here we perform the missed step from that
+					 * function and test that pin_count for this
+					 * segment is zero.
+					 */
+					if (!i915_gem_object_evictable(sobj)) {
+						err = -EOPNOTSUPP;
+						break;
+					}
+
+					err = i915_gem_object_migrate(sobj, &ww, ce,
+								      INTEL_REGION_SMEM,
+								      false);
+					if (err)
+						break;
+				}
+			} else {
+				GEM_BUG_ON(obj->pair);
+				err = i915_gem_object_migrate(obj, &ww, ce,
+							      INTEL_REGION_SMEM, false);
+			}
 			if (err)
 				continue;
 		}
 
-		err = i915_gem_object_pin_pages(obj);
-		if (!err && obj->pair) {
-			err = i915_gem_object_pin_pages(obj->pair);
-			if (err)
-				i915_gem_object_unpin_pages(obj);
+		if (i915_gem_object_has_segments(obj)) {
+			for_each_object_segment(sobj, obj) {
+				struct rb_node *node;
+
+				err = i915_gem_object_pin_pages(sobj);
+				if (!err)
+					continue;
+
+				for (node = rb_prev(&sobj->segment_node);
+				     node; node = rb_prev(node)) {
+					sobj = rb_entry(node, typeof(*sobj),
+							segment_node);
+					i915_gem_object_unpin_pages(sobj);
+				}
+				break;
+			}
+		} else {
+			err = i915_gem_object_pin_pages(obj);
+			if (!err && obj->pair) {
+				err = i915_gem_object_pin_pages(obj->pair);
+				if (err)
+					i915_gem_object_unpin_pages(obj);
+			}
 		}
 	}
 
@@ -420,20 +494,25 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 static void i915_gem_dmabuf_detach(struct dma_buf *dmabuf,
 				   struct dma_buf_attachment *attach)
 {
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
+	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(dmabuf);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
-	if (obj->pair)
-		i915_gem_object_unpin_pages(obj->pair);
+	if (i915_gem_object_has_segments(obj)) {
+		for_each_object_segment(sobj, obj)
+			i915_gem_object_unpin_pages(sobj);
+	} else {
+		if (obj->pair)
+			i915_gem_object_unpin_pages(obj->pair);
+		i915_gem_object_unpin_pages(obj);
+	}
 
-	i915_gem_object_unpin_pages(obj);
 	pvc_wa_allow_rc6(i915);
 }
 
 static const struct dma_buf_ops i915_dmabuf_ops =  {
 	.attach = i915_gem_dmabuf_attach,
 	.detach = i915_gem_dmabuf_detach,
-	.map_dma_buf = i915_gem_map_dma_buf,
+	.map_dma_buf = i915_gem_copy_map_dma_buf,
 	.unmap_dma_buf = i915_gem_unmap_dma_buf,
 	.release = drm_gem_dmabuf_release,
 	.mmap = i915_gem_dmabuf_mmap,
@@ -545,26 +624,25 @@ static int update_fabric(struct dma_buf *dma_buf,
  * available
  * @obj: object to check fabric connectivity
  *
- * NULL indicates no fabric connectivity.
- *
+ * Returns sgt or -errno on error, -EIO indicates no fabric connectivity.
  */
 static struct sg_table *map_fabric_connectivity(struct drm_i915_gem_object *obj)
 {
-	struct dma_buf *dma_buf = obj->base.import_attach->dmabuf;
+	struct dma_buf_attachment *attach = obj->base.import_attach;
 	struct drm_i915_gem_object *import;
 
 	if (!i915_gem_object_has_fabric(obj))
-		return NULL;
+		return ERR_PTR(-EIO);
 
-	import = dma_buf_to_obj(dma_buf);
+	import = dma_buf_to_obj(attach->dmabuf);
 
 	/* Make sure the object didn't migrate */
 	if (!i915_gem_object_is_lmem(import)) {
 		i915_gem_object_clear_fabric(obj);
-		return NULL;
+		return ERR_PTR(-EIO);
 	}
 
-	return i915_gem_copy_pages(import);
+	return i915_gem_copy_map_dma_buf(attach, DMA_NONE);
 }
 
 /**
@@ -585,7 +663,7 @@ static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 	/* See if there is a fabric, and set things up. */
 	sgt = map_fabric_connectivity(obj);
 
-	if (!sgt)
+	if (IS_ERR(sgt) && PTR_ERR(sgt) == -EIO)
 		sgt = dma_buf_map_attachment(obj->base.import_attach,
 					     DMA_BIDIRECTIONAL);
 	if (IS_ERR(sgt))

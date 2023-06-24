@@ -214,7 +214,8 @@ i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
 
 	memcpy(map, data, size);
 
-	i915_gem_object_unpin_map(obj);
+	i915_gem_object_flush_map(obj);
+	__i915_gem_object_release_map(obj);
 
 	return obj;
 }
@@ -298,31 +299,47 @@ emit_ccs_clear(struct i915_request *rq, u64 offset, u32 length)
 	return emit_flush(rq, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
 }
 
+static bool object_needs_flat_ccs(const struct drm_i915_gem_object *obj)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
+	return HAS_FLAT_CCS(i915) && !(obj->memory_mask & BIT(INTEL_REGION_SMEM));
+}
+
 static int
 lmem_swapout(struct drm_i915_gem_object *obj,
 	     struct sg_table *pages, unsigned int sizes)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	const bool swap_ccs = object_needs_flat_ccs(obj);
 	struct i915_mm_swap_stat *stat = NULL;
 	struct drm_i915_gem_object *dst, *src;
 	ktime_t start = ktime_get();
 	int err = -EINVAL;
-	u64 size;
 
-	GEM_BUG_ON(obj->swapto);
 	assert_object_held(obj);
 
-	/* create a shadow object on smem region */
-	size = obj->base.size;
-	if (HAS_FLAT_CCS(i915))
-		size += size >> 8;
-	dst = i915_gem_object_create_shmem(i915, size);
-	if (IS_ERR(dst))
-		return PTR_ERR(dst);
+	dst = fetch_and_zero(&obj->swapto);
+	if (dst && dst->mm.madv == __I915_MADV_PURGED) {
+		i915_gem_object_put(dst);
+		dst = NULL;
+	}
+	if (!dst) {
+		u64 size;
 
-	/* Share the dma-resv between the shadow- and the parent object */
-	dst->base.resv = obj->base.resv;
+		/* create a shadow object on smem region */
+		size = obj->base.size;
+		if (swap_ccs)
+			size += size >> 8;
+		dst = i915_gem_object_create_shmem(i915, size);
+		if (IS_ERR(dst))
+			return PTR_ERR(dst);
+
+		/* Share the dma-resv between with the parent object */
+		i915_gem_object_share_resv(obj, dst);
+	}
 	assert_object_held(dst);
+	GEM_BUG_ON(dst->base.size < obj->base.size);
 
 	/*
 	 * create working object on the same region as 'obj',
@@ -344,14 +361,14 @@ lmem_swapout(struct drm_i915_gem_object *obj,
 	/* copying the pages */
 	if (i915->params.enable_eviction >= 2 &&
 	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
-		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
+		err = i915_window_blt_copy(dst, src, swap_ccs);
 		if (!err)
 			stat = &i915->mm.blt_swap_stats.out;
 	}
 
 	if (err &&
 	    err != -ERESTARTSYS && err != -EINTR &&
-	    !HAS_FLAT_CCS(i915) &&
+	    !swap_ccs &&
 	    i915->params.enable_eviction != 2) {
 		err = i915_gem_object_memcpy(dst, src);
 		if (!err)
@@ -364,12 +381,13 @@ lmem_swapout(struct drm_i915_gem_object *obj,
 	i915_gem_object_put(src);
 
 	if (!err) {
-		obj->swapto = dst;
+		dst->mm.madv = I915_MADV_WILLNEED;
 	} else {
 		if (err != -EINTR && err != -ERESTARTSYS)
 			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
-		i915_gem_object_put(dst);
+		dst->mm.madv = I915_MADV_DONTNEED;
 	}
+	obj->swapto = dst;
 
 	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
 
@@ -381,12 +399,14 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 	    struct sg_table *pages, unsigned int sizes)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	const bool swap_ccs = object_needs_flat_ccs(obj);
 	struct drm_i915_gem_object *dst, *src = obj->swapto;
 	struct i915_mm_swap_stat *stat = NULL;
 	ktime_t start = ktime_get();
 	int err = -EINVAL;
 
 	assert_object_held(obj);
+	GEM_BUG_ON(src->mm.madv != I915_MADV_WILLNEED);
 
 	/*
 	 * create working object on the same region as 'obj',
@@ -395,10 +415,8 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 	 */
 	dst = i915_gem_object_create_region(obj->mm.region.mem,
 					    obj->base.size, 0);
-	if (IS_ERR(dst)) {
-		err = PTR_ERR(dst);
-		return err;
-	}
+	if (IS_ERR(dst))
+		return PTR_ERR(dst);
 
 	/* @scr is sharing @obj's reservation object */
 	assert_object_held(src);
@@ -411,14 +429,14 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 	/* copying the pages */
 	if (i915->params.enable_eviction >= 2 &&
 	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
-		err = i915_window_blt_copy(dst, src, HAS_FLAT_CCS(i915));
+		err = i915_window_blt_copy(dst, src, swap_ccs);
 		if (!err)
 			stat = &i915->mm.blt_swap_stats.in;
 	}
 
 	if (err &&
 	    err != -ERESTARTSYS && err != -EINTR &&
-	    !HAS_FLAT_CCS(i915) &&
+	    !swap_ccs &&
 	    i915->params.enable_eviction != 2) {
 		err = i915_gem_object_memcpy(dst, src);
 		if (!err)
@@ -431,8 +449,7 @@ lmem_swapin(struct drm_i915_gem_object *obj,
 	i915_gem_object_put(dst);
 
 	if (!err) {
-		obj->swapto = NULL;
-		i915_gem_object_put(src);
+		src->mm.madv = I915_MADV_DONTNEED;
 	} else {
 		if (err != -EINTR && err != -ERESTARTSYS)
 			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);

@@ -50,12 +50,9 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 		obj->cache_dirty = false;
 	}
 
-	obj->mm.get_page.sg_pos = pages->sgl;
-	obj->mm.get_page.sg_idx = 0;
-	obj->mm.get_dma_page.sg_pos = pages->sgl;
-	obj->mm.get_dma_page.sg_idx = 0;
-
 	obj->mm.pages = pages;
+	obj->mm.get_page.sg_pos = pages->sgl;
+	obj->mm.get_dma_page.sg_pos = pages->sgl;
 
 	GEM_BUG_ON(!sg_page_sizes);
 	obj->mm.page_sizes.phys = sg_page_sizes;
@@ -121,6 +118,30 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 	}
 }
 
+static int add_to_ww_evictions(struct drm_i915_gem_object *obj)
+{
+	struct intel_memory_region *mem;
+	struct i915_gem_ww_ctx *ww;
+	int err;
+
+	if (obj->base.resv != &obj->base._resv)
+		return 0;
+
+	ww = i915_gem_get_locking_ctx(obj);
+	if (!ww)
+		return 0;
+
+	mem = obj->mm.region.mem;
+	if (!mem)
+		return 0;
+
+	spin_lock(&mem->objects.lock);
+	err = intel_memory_region_add_to_ww_evictions(mem, ww, obj);
+	spin_unlock(&mem->objects.lock);
+
+	return err;
+}
+
 int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 {
 	int err;
@@ -132,6 +153,10 @@ int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 			"Attempting to obtain a purgeable object\n");
 		return -EFAULT;
 	}
+
+	err = add_to_ww_evictions(obj);
+	if (err)
+		return err;
 
 	err = obj->ops->get_pages(obj);
 	GEM_BUG_ON(!err && !i915_gem_object_has_pages(obj));
@@ -227,7 +252,8 @@ void i915_gem_object_writeback(struct drm_i915_gem_object *obj)
 		obj->ops->writeback(obj);
 }
 
-void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj)
+void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj,
+				       struct sg_table *pages)
 {
 	struct radix_tree_iter iter;
 	void __rcu **slot;
@@ -238,6 +264,11 @@ void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj)
 	radix_tree_for_each_slot(slot, &obj->mm.get_dma_page.radix, &iter, 0)
 		radix_tree_delete(&obj->mm.get_dma_page.radix, iter.index);
 	rcu_read_unlock();
+
+	obj->mm.get_page.sg_pos = pages ? pages->sgl : NULL;
+	obj->mm.get_page.sg_idx = 0;
+	obj->mm.get_dma_page.sg_pos = pages ? pages->sgl : NULL;
+	obj->mm.get_dma_page.sg_idx = 0;
 }
 
 static bool is_iomap_addr(struct drm_i915_gem_object *obj, void *ptr)
@@ -278,7 +309,6 @@ static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
 struct sg_table *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct sg_table *pages;
 
 	assert_object_held_shared(obj);
@@ -292,7 +322,9 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	i915_gem_object_make_unshrinkable(obj);
 
-	if (mem) {
+	if (!list_empty(&obj->mm.region.link)) {
+		struct intel_memory_region *mem = obj->mm.region.mem;
+
 		spin_lock(&mem->objects.lock);
 		list_del_init(&obj->mm.region.link);
 		spin_unlock(&mem->objects.lock);
@@ -303,7 +335,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 		obj->mm.mapping = NULL;
 	}
 
-	__i915_gem_object_reset_page_iter(obj);
+	__i915_gem_object_reset_page_iter(obj, NULL);
 
 	flush_tlb_invalidate(obj);
 
@@ -378,8 +410,10 @@ static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 		 * So if the page is beyond the 32b boundary, make an explicit
 		 * vmap.
 		 */
-		if (n_pages == 1 && !PageHighMem(sg_page(obj->mm.pages->sgl)))
+		if (sg_is_last(obj->mm.pages->sgl) &&
+		    !PageHighMem(sg_page(obj->mm.pages->sgl)))
 			return page_address(sg_page(obj->mm.pages->sgl));
+
 		pgprot = PAGE_KERNEL;
 		break;
 	case I915_MAP_WC:

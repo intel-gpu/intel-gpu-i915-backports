@@ -33,22 +33,29 @@ static void i915_gem_ww_ctx_remove_regions(struct i915_gem_ww_ctx *ww)
 
 	do {
 		struct i915_gem_ww_region *next = r->next;
-		struct intel_memory_region *mr = r->mem;
+		struct intel_memory_region *mem = r->mem;
 		struct drm_i915_gem_object *obj, *on;
 
-		spin_lock(&mr->objects.lock);
+		spin_lock(&mem->objects.lock);
 		list_del(&r->link);
 		list_for_each_entry_safe(obj, on, &r->locked, mm.region.link) {
 			struct list_head *list;
 
-			if (obj->mm.madv == I915_MADV_WILLNEED)
-				list = &mr->objects.list;
+			GEM_BUG_ON(i915_gem_get_locking_ctx(obj) != ww);
+
+			if (!i915_gem_object_has_pages(obj)) {
+				INIT_LIST_HEAD(&obj->mm.region.link);
+				continue;
+			}
+
+			if (obj->mm.madv != I915_MADV_WILLNEED)
+				list = &mem->objects.purgeable;
 			else
-				list = &mr->objects.purgeable;
+				list = &mem->objects.list;
 
 			list_add_tail(&obj->mm.region.link, list);
 		}
-		spin_unlock(&mr->objects.lock);
+		spin_unlock(&mem->objects.lock);
 		if (r != &ww->region)
 			kfree(r);
 

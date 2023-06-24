@@ -1815,6 +1815,22 @@ static int gen8_init_scratch(struct i915_address_space *vm)
 						      I915_CACHE_NONE),
 			       pte_flags);
 
+	/*
+	 * FIXME: the null page support started from pre-gen12, but
+	 * only enabled here for PVC since it is the only one which
+	 * has atomic support. For any atomic invalid access, the
+	 * existing scratch page cannot handle it since it is in
+	 * system memory.
+	 *
+	 * Null page is only for leaf page table, non-leaf scratch
+	 * page tables are still required.
+	 *
+	 * The write to NULL pte will be dropped by HW, and read
+	 * returns 0, no TLB impact.
+	 */
+	if (HAS_NULL_PAGE(gt->i915))
+		vm->scratch[0]->encode |= PTE_NULL_PAGE;
+
 	wakeref = l4wa_pm_get(gt);
 	if (wakeref) {
 		bo = get_next_batch(&gt->fpp);

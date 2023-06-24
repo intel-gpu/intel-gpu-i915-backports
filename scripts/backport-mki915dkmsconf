@@ -16,18 +16,16 @@ helpFunction()
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p prerelease/opensource"
-	echo -e "\t-s buildversion"
 	exit 1
 }
 
-while getopts "n:v:r:p:s:" opt
+while getopts "n:v:r:p:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
-		s ) BUILD_TYPE="$OPTARG" ;;
 		? ) helpFunction ;;
 	esac
 done

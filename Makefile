@@ -154,7 +154,6 @@ i915dkmsrpm-pkg-help:
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
 	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1 | grep FBK 1>&2)
 	$(info )
 	$(info Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4)
 	@echo ""
