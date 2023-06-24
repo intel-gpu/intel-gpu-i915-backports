@@ -22,15 +22,22 @@
  *
  */
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 #include <drm/drm_plane.h>
+#endif
 
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 #include "intel_atomic_plane.h"
+#endif
+
 #include "intel_color.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
 #include "intel_dpll.h"
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 #include "intel_sprite.h"
 #include "skl_universal_plane.h"
+#endif
 #include "vlv_dsi_pll.h"
 
 struct intel_color_funcs {
@@ -59,9 +66,11 @@ struct intel_color_funcs {
 	 */
 	void (*load_luts)(const struct intel_crtc_state *crtc_state);
 	void (*read_luts)(struct intel_crtc_state *crtc_state);
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/* Add Plane Color callbacks */
 	void (*load_plane_csc_matrix)(const struct drm_plane_state *plane_state);
 	void (*load_plane_luts)(const struct drm_plane_state *plane_state);
+#endif
 };
 
 #define CTM_COEFF_SIGN	(1ULL << 63)
@@ -113,15 +122,20 @@ struct intel_color_funcs {
 
 #define ILK_CSC_POSTOFF_LIMITED_RANGE (16 * (1 << 12) / 255)
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 #define GAMMA_MODE_LEGACY_PALETTE_8BIT		BIT(0)
 #define GAMMA_MODE_PRECISION_PALETTE_10BIT	BIT(1)
 #define GAMMA_MODE_INTERPOLATED_12BIT		BIT(2)
 #define GAMMA_MODE_MULTI_SEGMENTED_12BIT	BIT(3)
 #define GAMMA_MODE_SPLIT_12BIT			BIT(4)
 #define GAMMA_MODE_LOGARITHMIC_12BIT		BIT(5) /* XELPD+ */
+#endif
 
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 #define DEGAMMA_MODE_24BIT			BIT(0) /* MTL/D14+ */
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 #define INTEL_GAMMA_MODE_MASK (\
 		GAMMA_MODE_LEGACY_PALETTE_8BIT | \
 		GAMMA_MODE_PRECISION_PALETTE_10BIT | \
@@ -129,6 +143,7 @@ struct intel_color_funcs {
 		GAMMA_MODE_MULTI_SEGMENTED_12BIT | \
 		GAMMA_MODE_SPLIT_12BIT \
 		GAMMA_MODE_LOGARITHMIC_12BIT)
+#endif
 
 /* Nop pre/post offsets */
 static const u16 ilk_csc_off_zero[3] = {};
@@ -179,6 +194,7 @@ static bool crtc_state_is_legacy_gamma(const struct intel_crtc_state *crtc_state
 		lut_is_legacy(crtc_state->hw.gamma_lut);
 }
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 /*
  * Added to accommodate enhanced LUT precision.
  * Max LUT precision is 32 bits.
@@ -201,6 +217,7 @@ static u64 drm_color_lut_extract_ext(u64 user_input, u32 bit_precision)
 	return ((user_input & 0xffffffff00000000) |
 		clamp_val(val, 0, max));
 }
+#endif
 
 /*
  * When using limited range, multiply the matrix given by userspace by
@@ -987,6 +1004,7 @@ static void glk_load_luts(const struct intel_crtc_state *crtc_state)
 	}
 }
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static void mtl_load_legacy_lut(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
@@ -1059,6 +1077,7 @@ static void mtl_load_degamma_lut(const struct intel_crtc_state *crtc_state)
 
 	intel_de_write_fw(i915, PRE_CSC_GAMC_INDEX(pipe), 0);
 }
+#endif
 
 /* ilk+ "12.4" interpolated format (high 10 bits) */
 static u32 ilk_lut_12p4_udw(const struct drm_color_lut *color)
@@ -1079,9 +1098,12 @@ icl_load_gcmax(const struct intel_crtc_state *crtc_state,
 	       const struct drm_color_lut *color)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	struct drm_i915_private *i915 = to_i915(crtc_state->uapi.crtc->dev);
+#endif
 	enum pipe pipe = crtc->pipe;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	if (DISPLAY_VER(i915) >= 13) {
 		/* MAx val from UAPI is 16bit only, so setting fixed for GC max */
 		intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 0), 1 << 16);
@@ -1093,6 +1115,12 @@ icl_load_gcmax(const struct intel_crtc_state *crtc_state,
 		intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 1), color->green);
 		intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 2), color->blue);
 	}
+#else
+	/* FIXME LUT entries are 16 bit only, so we can prog 0xFFFF max */
+	intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 0), color->red);
+	intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 1), color->green);
+	intel_dsb_reg_write(crtc_state, PREC_PAL_GC_MAX(pipe, 2), color->blue);
+#endif
 }
 
 static void
@@ -1208,13 +1236,18 @@ static void icl_load_luts(const struct intel_crtc_state *crtc_state)
 	intel_dsb_commit(crtc_state);
 }
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static void
 xelpd_program_logarithmic_gamma_lut(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	const struct drm_property_blob *blob = crtc_state->hw.gamma_lut;
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	u32 lut_size;
+#else
+	const u32 lut_size = INTEL_INFO(dev_priv)->color.gamma_lut_size;
+#endif
 	const struct drm_color_lut *lut;
 	enum pipe pipe = crtc->pipe;
 	u32 i;
@@ -1222,6 +1255,7 @@ xelpd_program_logarithmic_gamma_lut(const struct intel_crtc_state *crtc_state)
 	if (!blob || !blob->data)
 		return;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/*
 	 * In case of advance gamma i.e logarithmic, lut size
 	 * is 513. Till the new UAPI is merged, we need to have
@@ -1232,7 +1266,7 @@ xelpd_program_logarithmic_gamma_lut(const struct intel_crtc_state *crtc_state)
 		lut_size = drm_color_lut_size(blob);
 	else
 		lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
-
+#endif
 	lut = blob->data;
 	intel_dsb_reg_write(crtc_state, PREC_PAL_INDEX(pipe),
 			    PAL_PREC_AUTO_INCREMENT);
@@ -1275,6 +1309,7 @@ static void xelpd_load_luts(const struct intel_crtc_state *crtc_state)
 
 	intel_dsb_commit(crtc_state);
 }
+#endif
 
 static u32 chv_cgm_degamma_ldw(const struct drm_color_lut *color)
 {
@@ -1360,6 +1395,7 @@ static void chv_load_luts(const struct intel_crtc_state *crtc_state)
 			  crtc_state->cgm_mode);
 }
 
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 void intel_color_load_plane_csc_matrix(const struct drm_plane_state *plane_state)
 {
 	struct drm_i915_private *dev_priv = to_i915(plane_state->plane->dev);
@@ -1375,6 +1411,7 @@ void intel_color_load_plane_luts(const struct drm_plane_state *plane_state)
 	if (dev_priv->color_funcs->load_plane_luts)
 		dev_priv->color_funcs->load_plane_luts(plane_state);
 }
+#endif
 
 void intel_color_load_luts(const struct intel_crtc_state *crtc_state)
 {
@@ -1512,6 +1549,7 @@ intel_color_add_affected_planes(struct intel_crtc_state *new_crtc_state)
 	return 0;
 }
 
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 static int check_lut_ext_size(const struct drm_property_blob *lut, int expected)
 {
 	int len;
@@ -1528,6 +1566,7 @@ static int check_lut_ext_size(const struct drm_property_blob *lut, int expected)
 
 	return 0;
 }
+#endif
 
 static int check_lut_size(const struct drm_property_blob *lut, int expected)
 {
@@ -1567,6 +1606,7 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 
 	degamma_length = INTEL_INFO(dev_priv)->display.color.degamma_lut_size;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/*
 	 * In case of advance gamma i.e logarithmic, lut size
 	 * is 513. Till the new UAPI is merged, we need to have
@@ -1577,10 +1617,21 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 		gamma_length = drm_color_lut_size(gamma_lut);
 	else
 		gamma_length = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
-
+#else
+	gamma_length = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
+#endif
 	degamma_tests = INTEL_INFO(dev_priv)->display.color.degamma_lut_tests;
 	gamma_tests = INTEL_INFO(dev_priv)->display.color.gamma_lut_tests;
 
+#ifdef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
+       if (check_lut_size(degamma_lut, degamma_length) ||
+           check_lut_size(gamma_lut, gamma_length))
+               return -EINVAL;
+
+       if (drm_color_lut_check(degamma_lut, degamma_tests) ||
+           drm_color_lut_check(gamma_lut, gamma_tests))
+               return -EINVAL;
+#else
 	if (check_lut_size(gamma_lut, gamma_length) ||
 	    drm_color_lut_check(gamma_lut, gamma_tests))
 		return -EINVAL;
@@ -1596,9 +1647,11 @@ static int check_luts(const struct intel_crtc_state *crtc_state)
 			return -EINVAL;
 	}
 
+#endif
 	return 0;
 }
 
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 static int mtl_check_degamma_lut(const struct intel_crtc_state *crtc_state)
 {
 	const struct drm_property_blob *degamma_lut_blob = crtc_state->hw.gamma_lut;
@@ -1618,6 +1671,7 @@ static int mtl_check_degamma_lut(const struct intel_crtc_state *crtc_state)
 
 	return -EINVAL;
 }
+#endif
 
 static u32 i9xx_gamma_mode(struct intel_crtc_state *crtc_state)
 {
@@ -1878,7 +1932,9 @@ static int glk_color_check(struct intel_crtc_state *crtc_state)
 
 static u32 icl_gamma_mode(const struct intel_crtc_state *crtc_state)
 {
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	struct drm_i915_private *i915 = to_i915(crtc_state->uapi.crtc->dev);
+#endif
 	u32 gamma_mode = 0;
 
 	if (crtc_state->hw.degamma_lut)
@@ -1888,6 +1944,7 @@ static u32 icl_gamma_mode(const struct intel_crtc_state *crtc_state)
 	    !crtc_state->c8_planes)
 		gamma_mode |= POST_CSC_GAMMA_ENABLE;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	if (!crtc_state->hw.gamma_lut ||
 	    crtc_state_is_legacy_gamma(crtc_state)) {
 		gamma_mode |= GAMMA_MODE_MODE_8BIT;
@@ -1901,6 +1958,13 @@ static u32 icl_gamma_mode(const struct intel_crtc_state *crtc_state)
 	} else {
 		gamma_mode |= GAMMA_MODE_MODE_12BIT_MULTI_SEGMENTED;
 	}
+#else
+        if (!crtc_state->hw.gamma_lut ||
+             crtc_state_is_legacy_gamma(crtc_state))
+                 gamma_mode |= GAMMA_MODE_MODE_8BIT;
+         else
+                 gamma_mode |= GAMMA_MODE_MODE_12BIT_MULTI_SEGMENTED;
+#endif
 
 	return gamma_mode;
 }
@@ -1935,18 +1999,22 @@ static u32 dither_after_cc1_12bpc(const struct intel_crtc_state *crtc_state)
 
 static int icl_color_check(struct intel_crtc_state *crtc_state)
 {
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 	struct drm_device *dev = crtc_state->uapi.crtc->dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
-	struct drm_property *gamma_mode_property = crtc_state->uapi.crtc->gamma_mode_property;
 	struct drm_property *degamma_mode_property = crtc_state->uapi.crtc->degamma_mode_property;
 	struct drm_property_enum *prop_enum;
+#endif
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+	struct drm_property *gamma_mode_property = crtc_state->uapi.crtc->gamma_mode_property;
 	u32 index = 0;
+#endif
 	int ret;
 
 	ret = check_luts(crtc_state);
 	if (ret)
 		return ret;
-
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 	if (DISPLAY_VER(dev_priv) >= 14) {
 		list_for_each_entry(prop_enum, &degamma_mode_property->enum_list, head) {
 			if (prop_enum->value == crtc_state->uapi.degamma_mode) {
@@ -1969,7 +2037,9 @@ static int icl_color_check(struct intel_crtc_state *crtc_state)
 		if (ret)
 			return ret;
 	}
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	if (DISPLAY_VER(dev_priv) >= 13) {
 		list_for_each_entry(prop_enum, &gamma_mode_property->enum_list, head) {
 			if (prop_enum->value == crtc_state->uapi.gamma_mode) {
@@ -1985,6 +2055,7 @@ static int icl_color_check(struct intel_crtc_state *crtc_state)
 			index++;
 		}
 	}
+#endif
 
 	crtc_state->gamma_mode = icl_gamma_mode(crtc_state);
 
@@ -2468,6 +2539,7 @@ static void icl_read_luts(struct intel_crtc_state *crtc_state)
 	}
 }
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static void xelpd_lut_logarithmic_pack(struct drm_color_lut *entry,
 				       u32 ldw, u32 udw)
 {
@@ -2483,15 +2555,20 @@ static struct drm_property_blob *
 xelpd_read_lut_logarithmic(struct intel_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	struct intel_crtc_state *crtc_state =
 		to_intel_crtc_state(crtc->base.state);
 	const struct drm_property_blob *gamma_lut = crtc_state->hw.gamma_lut;
 	int i, lut_size;
+#else
+	int i, lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
+#endif
 	enum pipe pipe = crtc->pipe;
 	struct drm_property_blob *blob;
 	struct drm_color_lut *lut;
 	u32 gamma_max_val = 0xFFFF;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/*
 	 * In case of advance gamma i.e logarithmic, lut size
 	 * is 513. Till the new UAPI is merged, we need to have
@@ -2503,6 +2580,7 @@ xelpd_read_lut_logarithmic(struct intel_crtc *crtc)
 	else
 		lut_size = INTEL_INFO(dev_priv)->display.color.gamma_lut_size;
 
+#endif
 	blob = drm_property_create_blob(&dev_priv->drm,
 					sizeof(struct drm_color_lut) * lut_size,
 					NULL);
@@ -2552,7 +2630,9 @@ static void xelpd_read_luts(struct intel_crtc_state *crtc_state)
 		crtc_state->hw.gamma_lut = bdw_read_lut_10(crtc, PAL_PREC_INDEX_VALUE(0));
 	}
 }
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 #define XELPD_GAMMA_CAPABILITY_FLAG	(DRM_MODE_LUT_GAMMA | \
 					 DRM_MODE_LUT_REFLECT_NEGATIVE | \
 					 DRM_MODE_LUT_INTERPOLATE | \
@@ -2784,7 +2864,9 @@ static const struct drm_color_lut_range xelpd_logarithmic_gamma[] = {
 		.min = 0, .max = (8 << 16) - 1,
 	},
 };
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static void xelpd_program_plane_degamma_lut(const struct drm_plane_state *state,
 					    struct drm_color_lut_ext *degamma_lut,
 					    u32 offset)
@@ -2941,26 +3023,36 @@ static void xelpd_program_plane_gamma_lut(const struct drm_plane_state *state,
 		intel_de_write_fw(dev_priv, PLANE_POST_CSC_GAMC_INDEX(pipe, plane, 0), 0);
 	}
 }
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static void xelpd_plane_load_luts(const struct drm_plane_state *plane_state)
 {
 	const struct drm_property_blob *degamma_lut_blob =
 					plane_state->degamma_lut;
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	const struct drm_property_blob *gamma_lut_blob =
 					plane_state->gamma_lut;
 	struct drm_color_lut_ext *degamma_lut, *gamma_lut;
+#else
+	struct drm_color_lut_ext *degamma_lut = NULL;
+#endif
 
 	if (degamma_lut_blob) {
 		degamma_lut = degamma_lut_blob->data;
 		xelpd_program_plane_degamma_lut(plane_state, degamma_lut, 0);
 	}
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	if (gamma_lut_blob) {
 		gamma_lut = gamma_lut_blob->data;
 		xelpd_program_plane_gamma_lut(plane_state, gamma_lut, 0);
 	}
+#endif
 }
+#endif
 
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 static void xelpd_load_plane_csc_matrix(const struct drm_plane_state *state)
 {
 	struct drm_i915_private *dev_priv = to_i915(state->plane->dev);
@@ -3037,6 +3129,7 @@ static void xelpd_load_plane_csc_matrix(const struct drm_plane_state *state)
 	intel_de_write_fw(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 1), postoff);
 	intel_de_write_fw(dev_priv, PLANE_CSC_POSTOFF(pipe, plane, 2), postoff);
 }
+#endif
 
 static const struct intel_color_funcs chv_color_funcs = {
 	.color_check = chv_color_check,
@@ -3059,15 +3152,25 @@ static const struct intel_color_funcs i9xx_color_funcs = {
 	.read_luts = i9xx_read_luts,
 };
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 static const struct intel_color_funcs xelpd_color_funcs = {
 	.color_check = icl_color_check,
 	.color_commit_noarm = icl_color_commit_noarm,
 	.color_commit_arm = skl_color_commit_arm,
 	.load_luts = xelpd_load_luts,
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	.read_luts = xelpd_read_luts,
+#else
+	.read_luts = icl_read_luts,
+#endif
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	.load_plane_luts = xelpd_plane_load_luts,
+#endif
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 	.load_plane_csc_matrix = xelpd_load_plane_csc_matrix,
+#endif
 };
+#endif
 
 static const struct intel_color_funcs icl_color_funcs = {
 	.color_check = icl_color_check,
@@ -3125,6 +3228,8 @@ static const struct intel_color_funcs ilk_color_funcs = {
 	.read_luts = ilk_read_luts,
 };
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+__maybe_unused
  /* FIXME input bpc? */
 static const struct drm_color_lut_range xelpd_degamma_hdr[] = {
 	/* segment 1 */
@@ -3175,9 +3280,11 @@ static const struct drm_color_lut_range xelpd_degamma_hdr[] = {
 		.min = 0, .max = (1 << 27) - 1,
 	},
 };
+#endif
 
  /* FIXME input bpc? */
-static const struct drm_color_lut_range xelpd_gamma_degamma_sdr[] = {
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+static const struct drm_color_lut_range xelpd_degamma_sdr[] = {
 	/* segment 1 */
 	{
 		.flags = (DRM_MODE_LUT_GAMMA |
@@ -3283,7 +3390,9 @@ static const struct drm_color_lut_range xelpd_gamma_hdr[] = {
 		.min = 0, .max = (7 << 24),
 	},
 };
+#endif
 
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 static const struct drm_color_lut_range mtl_24bit_degamma[] = {
 	/* segment 0 */
 	{
@@ -3298,7 +3407,9 @@ static const struct drm_color_lut_range mtl_24bit_degamma[] = {
 		.min = 0, .max = (1 << 24) - 1,
 	}
 };
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 int intel_color_plane_init(struct drm_plane *plane)
 {
 	struct drm_i915_private *dev_priv = to_i915(plane->dev);
@@ -3312,12 +3423,15 @@ int intel_color_plane_init(struct drm_plane *plane)
 		if (ret)
 			return ret;
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 		ret = drm_plane_color_add_gamma_degamma_mode_range(plane, "no gamma",
 								   NULL, 0,
 								   LUT_TYPE_GAMMA);
 		if (ret)
 			return ret;
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 		if (icl_is_hdr_plane(dev_priv, to_intel_plane(plane)->id)) {
 			ret = drm_plane_color_add_gamma_degamma_mode_range(plane, "plane degamma",
 									   xelpd_degamma_hdr,
@@ -3348,16 +3462,31 @@ int intel_color_plane_init(struct drm_plane *plane)
 				return ret;
 		}
 	}
+#else
+	ret = drm_plane_color_add_gamma_degamma_mode_range(plane, "plane degamma",
+							   xelpd_degamma_hdr,
+							   sizeof(xelpd_degamma_hdr),
+							   LUT_TYPE_DEGAMMA);
+#endif
 
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	drm_plane_attach_degamma_properties(plane);
 
 	if (icl_is_hdr_plane(dev_priv, to_intel_plane(plane)->id))
 		drm_plane_attach_ctm_property(plane);
 
 	drm_plane_attach_gamma_properties(plane);
+#else
+	drm_plane_attach_degamma_properties(plane);
+#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
+	if (icl_is_hdr_plane(dev_priv, to_intel_plane(plane)->id))
+		drm_plane_attach_ctm_property(plane);
+#endif
+#endif
 
 	return ret;
 }
+#endif
 
 void intel_color_init(struct intel_crtc *crtc)
 {
@@ -3375,6 +3504,7 @@ void intel_color_init(struct intel_crtc *crtc)
 			dev_priv->color_funcs = &i9xx_color_funcs;
 		}
 	} else {
+#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 		if (DISPLAY_VER(dev_priv) >= 13) {
 			dev_priv->color_funcs = &xelpd_color_funcs;
 			drm_color_create_gamma_mode_property(&crtc->base, 2);
@@ -3419,7 +3549,42 @@ void intel_color_init(struct intel_crtc *crtc)
 			dev_priv->color_funcs = &ilk_color_funcs;
 		}
 	}
+#else
+#ifndef BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
+        if (DISPLAY_VER(dev_priv) >= 14) {
+                drm_color_create_degamma_mode_property(&crtc->base, 2);
+                drm_color_add_gamma_degamma_mode_range(&crtc->base,
+                                                       "no degamma", NULL, 0,
+                                                       LUT_TYPE_DEGAMMA);
+                drm_color_add_gamma_degamma_mode_range(&crtc->base,
+                                                       "extended degamma",
+                                                       mtl_24bit_degamma,
+                                                       sizeof(mtl_24bit_degamma),
+                                                       LUT_TYPE_DEGAMMA);
+                drm_crtc_attach_gamma_degamma_mode_property(&crtc->base,
+                                                            LUT_TYPE_DEGAMMA);
+        }
+#endif
+        if (DISPLAY_VER(dev_priv) >= 11)
+                dev_priv->color_funcs = &icl_color_funcs;
+        else if (DISPLAY_VER(dev_priv) == 10)
+                dev_priv->color_funcs = &glk_color_funcs;
+        else if (DISPLAY_VER(dev_priv) == 9)
+                dev_priv->color_funcs = &skl_color_funcs;
+        else if (DISPLAY_VER(dev_priv) == 8)
+                dev_priv->color_funcs = &bdw_color_funcs;
+        else if (DISPLAY_VER(dev_priv) == 7) {
+                if (IS_HASWELL(dev_priv))
+                        dev_priv->color_funcs = &hsw_color_funcs;
+                else
+                        dev_priv->color_funcs = &ivb_color_funcs;
+        } else
+                dev_priv->color_funcs = &ilk_color_funcs;
 
+        }
+
+	
+#endif
 	drm_crtc_enable_color_mgmt(&crtc->base,
 				   INTEL_INFO(dev_priv)->display.color.degamma_lut_size,
 				   has_ctm,

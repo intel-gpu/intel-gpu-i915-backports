@@ -25,6 +25,7 @@ i915-compat-$(CPTCFG_KERNEL_5_10) += slub.o slab.o i915_gem_mmu_notifier.o
 i915-compat-$(CPTCFG_KERNEL_5_12) += ptrace.o
 i915-compat-$(CPTCFG_KERNEL_5_13) += backport-5.13.o
 i915-compat-$(CPTCFG_KERNEL_5_15) += backport-5.15.o
+i915-compat-$(CPTCFG_I915_NO_DRM) += backport-nodrm.o
 
 # Enable shims for the RHEL DRM backport
 ccflags-y += -DRH_DRM_BACKPORT

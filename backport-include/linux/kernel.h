@@ -27,7 +27,6 @@
 #define _BACKPORT_LINUX_KERNEL_H
 
 #include <linux/version.h>
-#include <linux/kstrtox.h>
 
 #include_next <linux/kernel.h>
 

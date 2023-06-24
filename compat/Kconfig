@@ -155,6 +155,8 @@ config BACKPORT_INTERVAL_TREE
 	depends on m
 	depends on KERNEL_3_12
 
+config I915_NO_DRM
+	bool "Build i915 with out DRM"
 
 choice
 	prompt "Backports Mode"

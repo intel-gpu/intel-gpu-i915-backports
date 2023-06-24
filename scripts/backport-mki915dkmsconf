@@ -67,6 +67,13 @@ else
        I915_CONFIG="i915_disable_svm"
 fi
 
+if [ "$BUILD_TYPE" != "nodrm" ]; then
+       NO_DRM=
+else
+       I915_CONFIG="i915_only"
+       NO_DRM=DEL
+fi
+
 # We can label the here-doc lines for conditional output to the conf file
 #
 # Labels:
@@ -81,41 +88,41 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BUILT_MODULE_LOCATION[0]="compat"
 	DEST_MODULE_LOCATION[0]="/updates"
 
-	BUILT_MODULE_NAME[1]="intel-gtt"
-	BUILT_MODULE_LOCATION[1]="drivers/char/agp/"
+	BUILT_MODULE_NAME[1]="i915"
+	BUILT_MODULE_LOCATION[1]="drivers/gpu/drm/i915"
 	DEST_MODULE_LOCATION[1]="/updates"
 
-	BUILT_MODULE_NAME[2]="drm_kms_helper"
-	BUILT_MODULE_LOCATION[2]="drivers/gpu/drm/"
+	BUILT_MODULE_NAME[2]="i915_spi"
+	BUILT_MODULE_LOCATION[2]="drivers/gpu/drm/i915"
 	DEST_MODULE_LOCATION[2]="/updates"
 
-	BUILT_MODULE_NAME[3]="drm"
-	BUILT_MODULE_LOCATION[3]="drivers/gpu/drm/"
+	BUILT_MODULE_NAME[3]="iaf"
+	BUILT_MODULE_LOCATION[3]="drivers/gpu/drm/i915/fabric"
 	DEST_MODULE_LOCATION[3]="/updates"
 
-	BUILT_MODULE_NAME[4]="drm_panel_orientation_quirks"
-	BUILT_MODULE_LOCATION[4]="drivers/gpu/drm/"
-	DEST_MODULE_LOCATION[4]="/updates"
+$NO_DRM	BUILT_MODULE_NAME[4]="intel-gtt"
+$NO_DRM	BUILT_MODULE_LOCATION[4]="drivers/char/agp/"
+$NO_DRM	DEST_MODULE_LOCATION[4]="/updates"
 
-	BUILT_MODULE_NAME[5]="i915"
-	BUILT_MODULE_LOCATION[5]="drivers/gpu/drm/i915"
-	DEST_MODULE_LOCATION[5]="/updates"
+$NO_DRM	BUILT_MODULE_NAME[5]="drm_kms_helper"
+$NO_DRM	BUILT_MODULE_LOCATION[5]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[5]="/updates"
 
-	BUILT_MODULE_NAME[6]="vgem"
-	BUILT_MODULE_LOCATION[6]="drivers/gpu/drm/vgem"
-	DEST_MODULE_LOCATION[6]="/updates"
+$NO_DRM	BUILT_MODULE_NAME[6]="drm"
+$NO_DRM	BUILT_MODULE_LOCATION[6]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[6]="/updates"
 
-	BUILT_MODULE_NAME[7]="i915_spi"
-	BUILT_MODULE_LOCATION[7]="drivers/gpu/drm/i915"
-	DEST_MODULE_LOCATION[7]="/updates"
+$NO_DRM	BUILT_MODULE_NAME[7]="drm_panel_orientation_quirks"
+$NO_DRM	BUILT_MODULE_LOCATION[7]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[7]="/updates"
 
-	BUILT_MODULE_NAME[8]="iaf"
-	BUILT_MODULE_LOCATION[8]="drivers/gpu/drm/i915/fabric"
-	DEST_MODULE_LOCATION[8]="/updates"
+$NO_DRM	BUILT_MODULE_NAME[8]="vgem"
+$NO_DRM	BUILT_MODULE_LOCATION[8]="drivers/gpu/drm/vgem"
+$NO_DRM	DEST_MODULE_LOCATION[8]="/updates"
 
-$ST	BUILT_MODULE_NAME[9]="test-drm_mm"
-$ST	BUILT_MODULE_LOCATION[9]="drivers/gpu/drm/selftests"
-$ST	DEST_MODULE_LOCATION[9]="/updates"
+$ST	BUILT_MODULE_NAME[20]="test-drm_mm"
+$ST	BUILT_MODULE_LOCATION[20]="drivers/gpu/drm/selftests"
+$ST	DEST_MODULE_LOCATION[20]="/updates"
 $ST
 $ST	BUILT_MODULE_NAME[10]="test-drm_cmdline_parser"
 $ST	BUILT_MODULE_LOCATION[10]="drivers/gpu/drm/selftests"

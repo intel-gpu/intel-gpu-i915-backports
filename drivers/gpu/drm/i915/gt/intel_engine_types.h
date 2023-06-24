@@ -420,6 +420,7 @@ struct intel_engine_cs {
 	struct {
 		struct delayed_work work;
 		struct i915_request *systole;
+		unsigned long interrupts;
 		unsigned long blocked;
 	} heartbeat;
 

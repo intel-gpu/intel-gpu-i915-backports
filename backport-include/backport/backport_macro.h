@@ -5,7 +5,7 @@
 
 #if LINUX_VERSION_IS_LESS(6,0,0)
 
-#if !((REDHAT_RELEASE_VERSION_IS_GEQ(8,4)) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
 /*
  * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
  */
@@ -13,8 +13,26 @@
 #endif
 #endif
 
+#if LINUX_VERSION_IS_GEQ(5,19,0)
+
+/*
+ * 0192c25c03cd2f drm/dp: add 128b/132b link status helpers from DP 2.0 E11
+ */
+
+#define BPM_DRM_DP_128B132B_API_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(5,16,0)
+/* DP 2.0 E11 feature */
+/*
+ * d6c6a76f80a1c9 drm: Update MST First Link Slot Information
+ * Based on Encoding Format
+ */
+#define BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
+#endif
+
 #if (LINUX_VERSION_IS_GEQ(5,17,0) || \
-               REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  * 6a2d2ddf2c345e0 drm: Move nomodeset kernel parameter to the DRM subsystem
  */
@@ -22,16 +40,26 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
-               REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  *12235da8c80a1 kernel/locking: Add context to ww_mutex_trylock()
  */
 #define BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
-
+ 
 /* c921ff373b469 dma-buf: add dma_resv_for_each_fence_unlocked v8
  *
  */
 #define BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,15,46)
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
+	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+/*
+ * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
+ */
+#define BPM_LIST_IS_HEAD_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,15,0)
@@ -116,6 +144,18 @@
 #endif
 #endif /*#if LINUX_VERSION_IS_LESS(5,15,0) */
 
+#if LINUX_VERSION_IS_LESS(5,14,19)
+#if !(LINUX_VERSION_IN_RANGE(5,10,80, 5,11,0) || \
+		REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+/*
+ * 74ba917cfddd
+ * arch/cc: Introduce a function to check for confidential computing features
+ */
+#define BPM_CC_PLATFORM_H_NOT_PRESENT
+#endif
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,14,0)
 /* 
  * Use kernel.h incase of math.h is not available
@@ -126,13 +166,6 @@
 /* TBD: Need to check if its generic or controllable with version */
 #define BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
 
-#if !LINUX_VERSION_IN_RANGE(5,10,80, 5,11,0)
-/*
- * 438153d5ba7f
- * arch/cc: Introduce a function to check for confidential computing features
- */
-#define BPM_CC_PLATFORM_H_NOT_PRESENT
-#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,13,0)
@@ -164,7 +197,7 @@
 #endif
 #endif
 
-#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
+#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0))
 /*
  * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
  *
@@ -193,6 +226,11 @@
  * 2d24dd5798d0 rbtree: Add generic add and find helpers
  */
 #define RB_FIND_NOT_PRESENT
+
+/*
+ * 97a7e4733b9b mm: introduce page_needs_cow_for_dma() for deciding whether cow
+ */
+#define BPM_IS_COW_MAPPING_NOT_PRESENT
 
 #endif
 
@@ -225,7 +263,9 @@
  * 295992fb815e7 mm: introduce vma_set_file function v5
  *
  */
+#ifndef CPTCFG_I915_NO_DRM
 #define BPM_VMA_SET_FILE_NOT_PRESENT
+#endif
 
 /*
  * ab22dd46b60 Backport "drm/i915: Change shrink ordering to use locking
@@ -315,7 +355,10 @@
  * 48e2e013dc71602 drm/i915: Expose list of clients in sysfs
  *
  */
+#ifndef CPTCFG_I915_NO_DRM
 #define BPM_SYSFS_EMIT_NOT_PRESENT
+#endif
+
 #endif
 
 /*
@@ -470,15 +513,12 @@
  */
 #define BPM_ASM_PGTABLE_H_NOT_PRESENT
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
 
-/*
- * 2733ea144dcc mm/hmm: remove the customizable
- * pfn format from hmm_range_fault
- *
+/* 
+ * 42fc541404f2 mmap locking API: add mmap_assert_locked() and mmap_assert_write_locked()
  */
-#define BPM_HMM_RANGE_HMM_PFNS_NOT_PRESENT
+#define BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT
 #endif
 
 #endif
@@ -490,15 +530,6 @@
  * c111566bea7c PM: runtime: Add pm_runtime_get_if_active()
  */
 #define BPM_PM_RUNTIME_GET_IF_ACTIVE_NOT_PRESENT
-#endif
-
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
-/*
- * be957c886d92a mm/hmm: make hmm_range_fault return 0 or -1
- *
- */
-#define BPM_HMM_RANGE_FAULT_ARG_PRESENT
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
@@ -662,9 +693,8 @@
 #endif
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,2,0) && \
-	!(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+#if LINUX_VERSION_IS_LESS(5,2,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
 
 /*
  * a49294eac27c7 Add wait_var_event_interruptible()
@@ -672,6 +702,16 @@
  */
 #define BPM_WAIT_VAR_EVENT_INTERRUPTIBLE_NOT_PRESENT
 #endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+
+/*
+ * bf198b2b34bf mm/mmu_notifier: pass down vma and reasons why mmu notifier is happening
+ */
+#define BPM_MMU_NOTIFIER_RANGE_VMA_MEMBER_NOT_PRESENT
+#endif
+
+#endif 
 
 #if LINUX_VERSION_IS_LESS(5,0,0) && \
 	!(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
@@ -700,13 +740,11 @@
 #ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
 #if REDHAT_RELEASE_VERSION_IS_LEQ(8,5)
 #define BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1
-#elif REDHAT_RELEASE_VERSION_IS_GEQ(8,6)
-#define BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_2
 #endif
 #endif
 #endif
 
-#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || FBK_RELEASE_VERSION_IS_GEQ(8,6656))
+#if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
 /* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif
@@ -766,8 +804,9 @@
  */
 
 /* Add backport Macro for all the symbols of dma-buf. */
-
+#ifndef CPTCFG_I915_NO_DRM
 #define BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#endif
 
 /* Resolve issues of dma-buf and add to compat module */
 
@@ -782,6 +821,30 @@
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #define CONFIG_INTEL_VSEC
+#endif
+
+#ifdef CPTCFG_I915_NO_DRM
+#define BPM_DISABLE_DRM_DMABUF
+#define INTEL_GMCH_GTT_RENAMED
+/*
+ * f58a435311672 drm/dp, drm/i915: Add support for VESA backlights using PWM for brightness control
+ *
+ */
+#define DRM_EDP_BACKLIGHT_NOT_PRESENT
+#define API_ARG_DRM_DRIVER_REMOVED
+/*
+ * Introduced in DII_5943
+ * 00b5f7aad3d989: Post-migration driver recovery
+ */
+#define DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
+#define DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
+#define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
+#define DP_LINK_TRAINING_CR_DELAY_PRESENT
+#define MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+#define BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
+#define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
+#define DRM_DP_GET_ADJUST_NOT_PRESENT
+#define DRM_EDP_BACKLIGHT_NOT_PRESENT
 #endif
 
 #endif /* BP_LINUX_BACKPORT_MACRO_H */

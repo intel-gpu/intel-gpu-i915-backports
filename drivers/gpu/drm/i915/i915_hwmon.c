@@ -460,16 +460,18 @@ hwm_power_max_write(struct hwm_drvdata *ddat, long val)
 	intel_wakeref_t wakeref;
 	u32 nval;
 
+	/* Disable PL1 limit and verify, because the limit cannot be disabled on all platforms */
 	if (val == PL1_DISABLE) {
-		/* Disable PL1 limit */
-		hwm_locked_with_pm_intel_uncore_rmw(ddat, hwmon->rg.pkg_rapl_limit,
-						    PKG_PWR_LIM_1_EN, 0);
-
-		/* Verify, because PL1 limit cannot be disabled on all platforms */
-		with_intel_runtime_pm(ddat->uncore->rpm, wakeref)
+		mutex_lock(&hwmon->hwmon_lock);
+		with_intel_runtime_pm(ddat->uncore->rpm, wakeref) {
+			intel_uncore_rmw(ddat->uncore, hwmon->rg.pkg_rapl_limit,
+					 PKG_PWR_LIM_1_EN, 0);
 			nval = intel_uncore_read(ddat->uncore, hwmon->rg.pkg_rapl_limit);
+		}
+		mutex_unlock(&hwmon->hwmon_lock);
+
 		if (nval & PKG_PWR_LIM_1_EN)
-			return -EPERM;
+			return -ENODEV;
 		return 0;
 	}
 

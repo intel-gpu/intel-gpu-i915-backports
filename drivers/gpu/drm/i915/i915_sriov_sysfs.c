@@ -4,6 +4,7 @@
  */
 
 #include "i915_drv.h"
+#include "i915_pci.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_sriov_sysfs_types.h"
 #include "i915_sysfs.h"
@@ -559,26 +560,6 @@ void i915_sriov_sysfs_teardown(struct drm_i915_private *i915)
 	pf_goodbye(i915);
 }
 
-/* our Gen12 SR-IOV platforms are simple */
-#define GEN12_VF_OFFSET 1
-#define GEN12_VF_STRIDE 1
-#define GEN12_VF_ROUTING_OFFSET(id) (GEN12_VF_OFFSET + ((id) - 1) * GEN12_VF_STRIDE)
-
-static struct pci_dev *pf_get_vf_pci_dev(struct drm_i915_private *i915, unsigned int id)
-{
-	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
-	u16 vf_devid = pci_dev_id(pdev) + GEN12_VF_ROUTING_OFFSET(id);
-
-	GEM_BUG_ON(!dev_is_pf(&pdev->dev));
-	GEM_BUG_ON(!id);
-
-	/* caller must use pci_dev_put() */
-	return pci_get_domain_bus_and_slot(pci_domain_nr(pdev->bus),
-					   PCI_BUS_NUM(vf_devid),
-					   PCI_DEVFN(PCI_SLOT(vf_devid),
-						     PCI_FUNC(vf_devid)));
-}
-
 static int pf_add_vfs_device_links(struct drm_i915_private *i915)
 {
 	struct i915_sriov_pf *pf = &i915->sriov.pf;
@@ -602,7 +583,7 @@ static int pf_add_vfs_device_links(struct drm_i915_private *i915)
 			goto failed_n;
 		}
 
-		vf_pdev = pf_get_vf_pci_dev(i915, n);
+		vf_pdev = i915_pci_pf_get_vf_dev(pf_pdev, n);
 		if (unlikely(!vf_pdev)) {
 			err = -ENODEV;
 			goto failed_n;
@@ -617,7 +598,7 @@ static int pf_add_vfs_device_links(struct drm_i915_private *i915)
 		if (unlikely(err))
 			goto failed_n;
 
-		/* balance pf_get_vf_pci_dev() */
+		/* balance i915_pci_pf_get_vf_dev */
 		pci_dev_put(vf_pdev);
 	}
 

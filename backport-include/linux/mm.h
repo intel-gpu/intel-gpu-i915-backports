@@ -36,4 +36,11 @@
 void vma_set_file(struct vm_area_struct *vma, struct file *file);
 #endif
 
+#ifdef BPM_IS_COW_MAPPING_NOT_PRESENT
+static inline bool is_cow_mapping(vm_flags_t flags)
+{
+	return (flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
+}
+#endif
+
 #endif /* _BACKPORT_LINUX_MM_H */

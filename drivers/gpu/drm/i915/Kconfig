@@ -2,7 +2,8 @@
 config DRM_I915
 	tristate "Intel 8xx/9xx/G3x/G4x/HD Graphics"
 	depends on m
-	depends on DRM
+	depends on m
+	depends on DRM || I915_NO_DRM
 	depends on X86 && PCI
 	select INTEL_GTT if X86
 	depends on INTERVAL_TREE
@@ -10,9 +11,9 @@ config DRM_I915
 	# the shmem_readpage() which depends upon tmpfs
 	depends on SHMEM
 	depends on TMPFS
-	select DRM_KMS_HELPER
+	select DRM_KMS_HELPER if DRM
 	depends on DRM_PANEL
-	select DRM_MIPI_DSI
+	select DRM_MIPI_DSI if DRM
 	depends on RELAY
 	depends on IRQ_WORK
 	# i915 depends on ACPI_VIDEO when ACPI is enabled
@@ -124,6 +125,7 @@ config DRM_I915_GVT
 
 config DRM_I915_GVT_KVMGT
 	tristate "Enable KVM/VFIO support for Intel GVT-g"
+	depends on m
 	depends on m
 	depends on DRM_I915_GVT
 	depends on KVM
