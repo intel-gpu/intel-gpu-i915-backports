@@ -39,8 +39,10 @@
 #include <drm/drm_cache.h>
 #include <drm/drm_vma_manager.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_display.h"
 #include "display/intel_frontbuffer.h"
+#endif
 
 #include "gem/i915_gem_clflush.h"
 #include "gem/i915_gem_context.h"
@@ -1193,7 +1195,9 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	 *
 	 * FIXME: break up the workarounds and apply them at the right time!
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_init_clock_gating(dev_priv);
+#endif
 
 	if (HAS_UM_QUEUES(dev_priv))
 		xa_init_flags(&dev_priv->asid_resv.xa, XA_FLAGS_ALLOC);
@@ -1238,7 +1242,9 @@ err_unlock:
 		/* Minimal basic recovery for KMS */
 		ret = i915_ggtt_enable_hw(dev_priv);
 		i915_ggtt_resume(to_gt(dev_priv)->ggtt);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		intel_init_clock_gating(dev_priv);
+#endif
 	}
 
 	i915_gem_drain_freed_objects(dev_priv);

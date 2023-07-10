@@ -121,6 +121,7 @@
 #include "vlv_dsi_regs.h"
 #include "vlv_sideband.h"
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void intel_set_transcoder_timings(const struct intel_crtc_state *crtc_state);
 static void intel_set_pipe_src_size(const struct intel_crtc_state *crtc_state);
 static void hsw_set_transconf(const struct intel_crtc_state *crtc_state);
@@ -221,6 +222,7 @@ static int intel_compute_global_watermarks(struct intel_atomic_state *state)
 		return dev_priv->wm_disp->compute_global_watermarks(state);
 	return 0;
 }
+#endif
 
 /* returns HPLL frequency in kHz */
 int vlv_get_hpll_vco(struct drm_i915_private *dev_priv)
@@ -267,6 +269,7 @@ int vlv_get_cck_clock_hpll(struct drm_i915_private *dev_priv,
 	return hpll;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void intel_update_czclk(struct drm_i915_private *dev_priv)
 {
 	if (!(IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)))
@@ -639,6 +642,7 @@ unsigned int intel_rotation_info_size(const struct intel_rotation_info *rot_info
 
 	return size;
 }
+#endif
 
 unsigned int intel_remapped_info_size(const struct intel_remapped_info *rem_info)
 {
@@ -665,6 +669,7 @@ unsigned int intel_remapped_info_size(const struct intel_remapped_info *rem_info
 	return size;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 bool intel_plane_uses_fence(const struct intel_plane_state *plane_state)
 {
 	struct intel_plane *plane = to_intel_plane(plane_state->uapi.plane);
@@ -9178,6 +9183,7 @@ void intel_display_driver_unregister(struct drm_i915_private *i915)
 	acpi_video_unregister();
 	intel_opregion_unregister(i915);
 }
+#endif
 
 bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915)
 {

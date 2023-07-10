@@ -99,6 +99,16 @@ config DRM_I915_USERPTR
 
 	  If in doubt, say "Y".
 
+config DRM_I915_DISPLAY
+	bool "Enable display support"
+	depends on DRM_I915
+	default n
+	help
+	  Choose this option if you want to enable display support.
+	  Say "N" for headless support.
+
+	  If in doubt, say "Y".
+
 config DRM_I915_GVT
 	bool "Enable Intel GVT-g graphics virtualization host support"
 	depends on DRM_I915

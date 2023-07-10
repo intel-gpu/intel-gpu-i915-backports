@@ -309,7 +309,9 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 #endif
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
 	bool use_polling = false;
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	bool forcewake_needed = false;
+#endif
 	int ret;
 
 	intf->irq = -1;

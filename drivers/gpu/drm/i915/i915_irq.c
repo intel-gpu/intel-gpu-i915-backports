@@ -35,6 +35,7 @@
 
 #include <drm/drm_drv.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/icl_dsi_regs.h"
 #include "display/intel_de.h"
 #include "display/intel_display_trace.h"
@@ -43,6 +44,7 @@
 #include "display/intel_hotplug.h"
 #include "display/intel_lpe_audio.h"
 #include "display/intel_psr.h"
+#endif
 
 #include "gt/intel_breadcrumbs.h"
 #include "gt/intel_gt.h"
@@ -83,6 +85,7 @@ static inline void pmu_irq_stats(struct drm_i915_private *i915,
 	WRITE_ONCE(i915->pmu.irq_count, i915->pmu.irq_count + 1);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 typedef bool (*long_pulse_detect_func)(enum hpd_pin pin, u32 val);
 typedef u32 (*hotplug_enables_func)(struct drm_i915_private *i915,
 				    enum hpd_pin pin);
@@ -255,6 +258,7 @@ intel_handle_vblank(struct drm_i915_private *dev_priv, enum pipe pipe)
 
 	drm_crtc_handle_vblank(&crtc->base);
 }
+#endif
 
 void gen3_irq_reset(struct intel_uncore *uncore, i915_reg_t imr,
 		    i915_reg_t iir, i915_reg_t ier)
@@ -422,6 +426,7 @@ void ilk_disable_display_irq(struct drm_i915_private *i915, u32 bits)
  * @interrupt_mask: mask of interrupt bits to update
  * @enabled_irq_mask: mask of interrupt bits to enable
  */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void bdw_update_port_irq(struct drm_i915_private *dev_priv,
 				u32 interrupt_mask,
 				u32 enabled_irq_mask)
@@ -447,6 +452,7 @@ static void bdw_update_port_irq(struct drm_i915_private *dev_priv,
 		intel_uncore_posting_read(&dev_priv->uncore, GEN8_DE_PORT_IMR);
 	}
 }
+#endif
 
 /**
  * bdw_update_pipe_irq - update DE pipe interrupt
@@ -696,6 +702,7 @@ static void i915_enable_asle_pipestat(struct drm_i915_private *dev_priv)
 /* Called from drm generic code, passed a 'crtc', which
  * we use as a pipe index
  */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 u32 i915_get_vblank_counter(struct drm_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->dev);
@@ -1050,6 +1057,7 @@ int intel_get_crtc_scanline(struct intel_crtc *crtc)
 
 	return position;
 }
+#endif
 
 /**
  * ivb_parity_work - Workqueue called when a parity error interrupt
@@ -1134,6 +1142,7 @@ out:
 	mutex_unlock(&dev_priv->drm.struct_mutex);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static bool gen11_port_hotplug_long_detect(enum hpd_pin pin, u32 val)
 {
 	switch (pin) {
@@ -1324,6 +1333,7 @@ static u32 intel_hpd_hotplug_enables(struct drm_i915_private *i915,
 
 	return hotplug;
 }
+#endif
 
 static void gmbus_irq_handler(struct drm_i915_private *dev_priv)
 {
@@ -1335,6 +1345,7 @@ static void dp_aux_irq_handler(struct drm_i915_private *dev_priv)
 	wake_up_all(&dev_priv->gmbus_wait_queue);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #if defined(CONFIG_DEBUG_FS)
 static void display_pipe_crc_irq_handler(struct drm_i915_private *dev_priv,
 					 enum pipe pipe,
@@ -1438,6 +1449,7 @@ static void i9xx_pipe_crc_irq_handler(struct drm_i915_private *dev_priv,
 				     intel_uncore_read(&dev_priv->uncore, PIPE_CRC_RES_BLUE(pipe)),
 				     res1, res2);
 }
+#endif
 
 static void i9xx_pipestat_irq_reset(struct drm_i915_private *dev_priv)
 {
@@ -1518,6 +1530,7 @@ static void i9xx_pipestat_irq_ack(struct drm_i915_private *dev_priv,
 	spin_unlock(&dev_priv->irq_lock);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void i8xx_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 				      u16 iir, u32 pipe_stats[I915_MAX_PIPES])
 {
@@ -1558,10 +1571,12 @@ static void i915_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 	if (blc_event || (iir & I915_ASLE_INTERRUPT))
 		intel_opregion_asle_intr(dev_priv);
 }
+#endif
 
 static void i965_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 				      u32 iir, u32 pipe_stats[I915_MAX_PIPES])
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	bool blc_event = false;
 	enum pipe pipe;
 
@@ -1581,6 +1596,7 @@ static void i965_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 
 	if (blc_event || (iir & I915_ASLE_INTERRUPT))
 		intel_opregion_asle_intr(dev_priv);
+#endif
 
 	if (pipe_stats[0] & PIPE_GMBUS_INTERRUPT_STATUS)
 		gmbus_irq_handler(dev_priv);
@@ -1589,6 +1605,7 @@ static void i965_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 static void valleyview_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 					    u32 pipe_stats[I915_MAX_PIPES])
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	enum pipe pipe;
 
 	for_each_pipe(dev_priv, pipe) {
@@ -1604,11 +1621,13 @@ static void valleyview_pipestat_irq_handler(struct drm_i915_private *dev_priv,
 		if (pipe_stats[pipe] & PIPE_FIFO_UNDERRUN_STATUS)
 			intel_cpu_fifo_underrun_irq_handler(dev_priv, pipe);
 	}
+#endif
 
 	if (pipe_stats[0] & PIPE_GMBUS_INTERRUPT_STATUS)
 		gmbus_irq_handler(dev_priv);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static u32 i9xx_hpd_irq_ack(struct drm_i915_private *dev_priv)
 {
 	u32 hotplug_status = 0, hotplug_status_mask;
@@ -1673,6 +1692,16 @@ static void i9xx_hpd_irq_handler(struct drm_i915_private *dev_priv,
 	    hotplug_status & DP_AUX_CHANNEL_MASK_INT_STATUS_G4X)
 		dp_aux_irq_handler(dev_priv);
 }
+#else
+static u32 i9xx_hpd_irq_ack(struct drm_i915_private *dev_priv)
+{
+	return 0;
+}
+static void i9xx_hpd_irq_handler(struct drm_i915_private *dev_priv,
+				 u32 hotplug_status)
+{
+}
+#endif
 
 static irqreturn_t valleyview_irq_handler(int irq, void *arg)
 {
@@ -1729,9 +1758,11 @@ static irqreturn_t valleyview_irq_handler(int irq, void *arg)
 		 * signalled in iir */
 		i9xx_pipestat_irq_ack(dev_priv, iir, pipe_stats);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		if (iir & (I915_LPE_PIPE_A_INTERRUPT |
 			   I915_LPE_PIPE_B_INTERRUPT))
 			intel_lpe_audio_irq_handler(dev_priv);
+#endif
 
 		/*
 		 * VLV_IIR is single buffered, and reflects the level
@@ -1812,10 +1843,12 @@ static irqreturn_t cherryview_irq_handler(int irq, void *arg)
 		 * signalled in iir */
 		i9xx_pipestat_irq_ack(dev_priv, iir, pipe_stats);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		if (iir & (I915_LPE_PIPE_A_INTERRUPT |
 			   I915_LPE_PIPE_B_INTERRUPT |
 			   I915_LPE_PIPE_C_INTERRUPT))
 			intel_lpe_audio_irq_handler(dev_priv);
+#endif
 
 		/*
 		 * VLV_IIR is single buffered, and reflects the level
@@ -1843,6 +1876,7 @@ static irqreturn_t cherryview_irq_handler(int irq, void *arg)
 static void ibx_hpd_irq_handler(struct drm_i915_private *dev_priv,
 				u32 hotplug_trigger)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	u32 dig_hotplug_reg, pin_mask = 0, long_mask = 0;
 
 	/*
@@ -1870,6 +1904,7 @@ static void ibx_hpd_irq_handler(struct drm_i915_private *dev_priv,
 			   pch_port_hotplug_long_detect);
 
 	intel_hpd_irq_handler(dev_priv, pin_mask, long_mask);
+#endif
 }
 
 static void ibx_irq_handler(struct drm_i915_private *dev_priv, u32 pch_iir)
@@ -1915,21 +1950,26 @@ static void ibx_irq_handler(struct drm_i915_private *dev_priv, u32 pch_iir)
 		drm_dbg(&dev_priv->drm,
 			"PCH transcoder CRC error interrupt\n");
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (pch_iir & SDE_TRANSA_FIFO_UNDER)
 		intel_pch_fifo_underrun_irq_handler(dev_priv, PIPE_A);
 
 	if (pch_iir & SDE_TRANSB_FIFO_UNDER)
 		intel_pch_fifo_underrun_irq_handler(dev_priv, PIPE_B);
+#endif
 }
 
 static void ivb_err_int_handler(struct drm_i915_private *dev_priv)
 {
 	u32 err_int = intel_uncore_read(&dev_priv->uncore, GEN7_ERR_INT);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	enum pipe pipe;
+#endif
 
 	if (err_int & ERR_INT_POISON)
 		drm_err(&dev_priv->drm, "Poison interrupt\n");
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	for_each_pipe(dev_priv, pipe) {
 		if (err_int & ERR_INT_FIFO_UNDERRUN(pipe))
 			intel_cpu_fifo_underrun_irq_handler(dev_priv, pipe);
@@ -1941,6 +1981,7 @@ static void ivb_err_int_handler(struct drm_i915_private *dev_priv)
 				hsw_pipe_crc_irq_handler(dev_priv, pipe);
 		}
 	}
+#endif
 
 	intel_uncore_write(&dev_priv->uncore, GEN7_ERR_INT, err_int);
 }
@@ -1948,14 +1989,18 @@ static void ivb_err_int_handler(struct drm_i915_private *dev_priv)
 static void cpt_serr_int_handler(struct drm_i915_private *dev_priv)
 {
 	u32 serr_int = intel_uncore_read(&dev_priv->uncore, SERR_INT);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	enum pipe pipe;
+#endif
 
 	if (serr_int & SERR_INT_POISON)
 		drm_err(&dev_priv->drm, "PCH poison interrupt\n");
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	for_each_pipe(dev_priv, pipe)
 		if (serr_int & SERR_INT_TRANS_FIFO_UNDERRUN(pipe))
 			intel_pch_fifo_underrun_irq_handler(dev_priv, pipe);
+#endif
 
 	intel_uncore_write(&dev_priv->uncore, SERR_INT, serr_int);
 }
@@ -1997,6 +2042,7 @@ static void cpt_irq_handler(struct drm_i915_private *dev_priv, u32 pch_iir)
 		cpt_serr_int_handler(dev_priv);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void xelpdp_pica_irq_handler(struct drm_i915_private *dev_priv, u32 iir)
 {
 	enum hpd_pin pin;
@@ -2125,25 +2171,31 @@ static void ilk_hpd_irq_handler(struct drm_i915_private *dev_priv,
 
 	intel_hpd_irq_handler(dev_priv, pin_mask, long_mask);
 }
+#endif
 
 static void ilk_display_irq_handler(struct drm_i915_private *dev_priv,
 				    u32 de_iir)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	enum pipe pipe;
 	u32 hotplug_trigger = de_iir & DE_DP_A_HOTPLUG;
 
 	if (hotplug_trigger)
 		ilk_hpd_irq_handler(dev_priv, hotplug_trigger);
+#endif
 
 	if (de_iir & DE_AUX_CHANNEL_A)
 		dp_aux_irq_handler(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (de_iir & DE_GSE)
 		intel_opregion_asle_intr(dev_priv);
+#endif
 
 	if (de_iir & DE_POISON)
 		drm_err(&dev_priv->drm, "Poison interrupt\n");
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	for_each_pipe(dev_priv, pipe) {
 		if (de_iir & DE_PIPE_VBLANK(pipe))
 			intel_handle_vblank(dev_priv, pipe);
@@ -2157,6 +2209,7 @@ static void ilk_display_irq_handler(struct drm_i915_private *dev_priv,
 		if (de_iir & DE_PIPE_CRC_DONE(pipe))
 			i9xx_pipe_crc_irq_handler(dev_priv, pipe);
 	}
+#endif
 
 	/* check event from PCH */
 	if (de_iir & DE_PCH_EVENT) {
@@ -2178,11 +2231,13 @@ static void ilk_display_irq_handler(struct drm_i915_private *dev_priv,
 static void ivb_display_irq_handler(struct drm_i915_private *dev_priv,
 				    u32 de_iir)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	enum pipe pipe;
 	u32 hotplug_trigger = de_iir & DE_DP_A_HOTPLUG_IVB;
 
 	if (hotplug_trigger)
 		ilk_hpd_irq_handler(dev_priv, hotplug_trigger);
+#endif
 
 	if (de_iir & DE_ERR_INT_IVB)
 		ivb_err_int_handler(dev_priv);
@@ -2190,6 +2245,7 @@ static void ivb_display_irq_handler(struct drm_i915_private *dev_priv,
 	if (de_iir & DE_AUX_CHANNEL_A_IVB)
 		dp_aux_irq_handler(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (de_iir & DE_GSE_IVB)
 		intel_opregion_asle_intr(dev_priv);
 
@@ -2200,6 +2256,7 @@ static void ivb_display_irq_handler(struct drm_i915_private *dev_priv,
 		if (de_iir & DE_PLANE_FLIP_DONE_IVB(pipe))
 			flip_done_handler(dev_priv, pipe);
 	}
+#endif
 
 	/* check event from PCH */
 	if (!HAS_PCH_NOP(dev_priv) && (de_iir & DE_PCH_EVENT_IVB)) {
@@ -2290,6 +2347,7 @@ static irqreturn_t ilk_irq_handler(int irq, void *arg)
 	return ret;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void bxt_hpd_irq_handler(struct drm_i915_private *dev_priv,
 				u32 hotplug_trigger)
 {
@@ -2716,6 +2774,7 @@ gen8_de_irq_handler(struct drm_i915_private *dev_priv, u32 master_ctl)
 
 	return ret;
 }
+#endif
 
 static inline u32 gen8_master_intr_disable(void __iomem * const regs)
 {
@@ -2756,7 +2815,9 @@ static irqreturn_t gen8_irq_handler(int irq, void *arg)
 	/* IRQs are synced during runtime_suspend, we don't require a wakeref */
 	if (master_ctl & ~GEN8_GT_IRQS) {
 		disable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		gen8_de_irq_handler(dev_priv, master_ctl);
+#endif
 		enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 	}
 
@@ -3758,8 +3819,10 @@ gen11_gu_misc_irq_ack(struct drm_i915_private *i915, const u32 master_ctl)
 static void
 gen11_gu_misc_irq_handler(struct drm_i915_private *i915, const u32 iir)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (iir & GEN11_GU_MISC_GSE)
 		intel_opregion_asle_intr(i915);
+#endif
 }
 
 static inline u32 gen11_master_intr_disable(void __iomem * const regs)
@@ -3780,6 +3843,7 @@ static inline void gen11_master_intr_enable(void __iomem * const regs)
 	raw_reg_write(regs, GEN11_GFX_MSTR_IRQ, GEN11_MASTER_IRQ);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void
 gen11_display_irq_handler(struct drm_i915_private *i915)
 {
@@ -3798,6 +3862,7 @@ gen11_display_irq_handler(struct drm_i915_private *i915)
 
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
 }
+#endif
 
 static irqreturn_t gen11_irq_handler(int irq, void *arg)
 {
@@ -3820,8 +3885,10 @@ static irqreturn_t gen11_irq_handler(int irq, void *arg)
 	gen11_gt_irq_handler(gt, master_ctl);
 
 	/* IRQs are synced during runtime_suspend, we don't require a wakeref */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (master_ctl & GEN11_DISPLAY_IRQ)
 		gen11_display_irq_handler(i915);
+#endif
 
 	gu_misc_iir = gen11_gu_misc_irq_ack(i915, master_ctl);
 
@@ -3911,8 +3978,10 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 		 * it doesn't hurt to check the bit on each tile just to be
 		 * safe.
 		 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		if (master_ctl & GEN11_DISPLAY_IRQ)
 			gen11_display_irq_handler(i915);
+#endif
 
 		gu_misc_iir |= gen11_gu_misc_irq_ack(i915, master_ctl);
 	}
@@ -3966,6 +4035,7 @@ static int vf_mem_irq_postinstall(struct drm_i915_private *i915)
 /* Called from drm generic code, passed 'crtc' which
  * we use as a pipe index
  */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 int i8xx_enable_vblank(struct drm_crtc *crtc)
 {
 	struct drm_i915_private *dev_priv = to_i915(crtc->dev);
@@ -4147,6 +4217,7 @@ void bdw_disable_vblank(struct drm_crtc *_crtc)
 	bdw_disable_pipe_irq(dev_priv, pipe, GEN8_PIPE_VBLANK);
 	spin_unlock_irqrestore(&dev_priv->irq_lock, irqflags);
 }
+#endif
 
 static void ibx_irq_reset(struct drm_i915_private *dev_priv)
 {
@@ -4245,6 +4316,7 @@ static void valleyview_irq_reset(struct drm_i915_private *dev_priv)
 	spin_unlock_irq(&dev_priv->irq_lock);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void gen8_display_irq_reset(struct drm_i915_private *dev_priv)
 {
 	struct intel_uncore *uncore = &dev_priv->uncore;
@@ -4264,6 +4336,7 @@ static void gen8_display_irq_reset(struct drm_i915_private *dev_priv)
 	GEN3_IRQ_RESET(uncore, GEN8_DE_PORT_);
 	GEN3_IRQ_RESET(uncore, GEN8_DE_MISC_);
 }
+#endif
 
 static void gen8_irq_reset(struct drm_i915_private *dev_priv)
 {
@@ -4272,7 +4345,9 @@ static void gen8_irq_reset(struct drm_i915_private *dev_priv)
 	gen8_master_intr_disable(dev_priv->uncore.regs);
 
 	gen8_gt_irq_reset(to_gt(dev_priv));
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gen8_display_irq_reset(dev_priv);
+#endif
 	GEN3_IRQ_RESET(uncore, GEN8_PCU_);
 
 	if (HAS_PCH_SPLIT(dev_priv))
@@ -4280,6 +4355,8 @@ static void gen8_irq_reset(struct drm_i915_private *dev_priv)
 
 }
 
+
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void gen11_display_irq_reset(struct drm_i915_private *dev_priv)
 {
 	struct intel_uncore *uncore = &dev_priv->uncore;
@@ -4326,6 +4403,7 @@ static void gen11_display_irq_reset(struct drm_i915_private *dev_priv)
 	if (INTEL_PCH_TYPE(dev_priv) >= PCH_ICP)
 		GEN3_IRQ_RESET(uncore, SDE);
 }
+#endif
 
 static void gen11_irq_reset(struct drm_i915_private *dev_priv)
 {
@@ -4335,7 +4413,9 @@ static void gen11_irq_reset(struct drm_i915_private *dev_priv)
 	gen11_master_intr_disable(dev_priv->uncore.regs);
 
 	gen11_gt_irq_reset(gt);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gen11_display_irq_reset(dev_priv);
+#endif
 
 	if (!IS_SRIOV_VF(dev_priv)) {
 		GEN3_IRQ_RESET(uncore, GEN11_GU_MISC_);
@@ -4359,9 +4439,12 @@ static void dg1_irq_reset(struct drm_i915_private *dev_priv)
 		GEN3_IRQ_RESET(uncore, GEN8_PCU_);
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gen11_display_irq_reset(dev_priv);
+#endif
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 void gen8_irq_power_well_post_enable(struct drm_i915_private *dev_priv,
 				     u8 pipe_mask)
 {
@@ -4385,6 +4468,7 @@ void gen8_irq_power_well_post_enable(struct drm_i915_private *dev_priv,
 
 	spin_unlock_irq(&dev_priv->irq_lock);
 }
+#endif
 
 void gen8_irq_power_well_pre_disable(struct drm_i915_private *dev_priv,
 				     u8 pipe_mask)
@@ -4425,6 +4509,7 @@ static void cherryview_irq_reset(struct drm_i915_private *dev_priv)
 	spin_unlock_irq(&dev_priv->irq_lock);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static u32 ibx_hotplug_enables(struct drm_i915_private *i915,
 			       enum hpd_pin pin)
 {
@@ -4931,6 +5016,7 @@ static void bxt_hpd_irq_setup(struct drm_i915_private *dev_priv)
 
 	bxt_hpd_detection_setup(dev_priv);
 }
+#endif
 
 /*
  * SDEIER is also touched by the interrupt handler to work around missed PCH
@@ -5046,6 +5132,7 @@ static void valleyview_irq_postinstall(struct drm_i915_private *dev_priv)
 	intel_uncore_posting_read(&dev_priv->uncore, VLV_MASTER_IER);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void gen8_de_irq_postinstall(struct drm_i915_private *dev_priv)
 {
 	struct intel_uncore *uncore = &dev_priv->uncore;
@@ -5142,6 +5229,7 @@ static void mtp_irq_postinstall(struct drm_i915_private *dev_priv)
 
 	GEN3_IRQ_INIT(uncore, SDE, ~sde_mask, 0xffffffff);
 }
+#endif
 
 static void icp_irq_postinstall(struct drm_i915_private *dev_priv)
 {
@@ -5159,11 +5247,14 @@ static void gen8_irq_postinstall(struct drm_i915_private *dev_priv)
 		ibx_irq_postinstall(dev_priv);
 
 	gen8_gt_irq_postinstall(to_gt(dev_priv));
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gen8_de_irq_postinstall(dev_priv);
+#endif
 
 	gen8_master_intr_enable(dev_priv->uncore.regs);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void gen11_de_irq_postinstall(struct drm_i915_private *dev_priv)
 {
 	if (!HAS_DISPLAY(dev_priv))
@@ -5174,6 +5265,7 @@ static void gen11_de_irq_postinstall(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, GEN11_DISPLAY_INT_CTL,
 			   GEN11_DISPLAY_IRQ_ENABLE);
 }
+#endif
 
 static void gen11_irq_postinstall(struct drm_i915_private *dev_priv)
 {
@@ -5185,7 +5277,9 @@ static void gen11_irq_postinstall(struct drm_i915_private *dev_priv)
 		icp_irq_postinstall(dev_priv);
 
 	gen11_gt_irq_postinstall(gt);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gen11_de_irq_postinstall(dev_priv);
+#endif
 
 	if (!IS_SRIOV_VF(dev_priv))
 		GEN3_IRQ_INIT(uncore, GEN11_GU_MISC_, ~gu_misc_masked, gu_misc_masked);
@@ -5253,6 +5347,7 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 		intel_uncore_write(gt->uncore, GEN11_GFX_MSTR_IRQ, REG_GENMASK(30, 0));
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (HAS_DISPLAY(dev_priv)) {
 		if (DISPLAY_VER(dev_priv) >= 14)
 			mtp_irq_postinstall(dev_priv);
@@ -5263,6 +5358,7 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 		intel_uncore_write(&dev_priv->uncore, GEN11_DISPLAY_INT_CTL,
 				   GEN11_DISPLAY_IRQ_ENABLE);
 	}
+#endif
 
 	intel_uncore_write(&dev_priv->uncore, DG1_MSTR_TILE_INTR, REG_GENMASK(3, 0));
 	dg1_master_intr_enable(to_gt(dev_priv)->uncore->regs);
@@ -5439,7 +5535,9 @@ static irqreturn_t i8xx_irq_handler(int irq, void *arg)
 		if (iir & I915_MASTER_ERROR_INTERRUPT)
 			i8xx_error_irq_handler(dev_priv, eir, eir_stuck);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		i8xx_pipestat_irq_handler(dev_priv, iir, pipe_stats);
+#endif
 	} while (0);
 
 	pmu_irq_stats(dev_priv, ret);
@@ -5550,7 +5648,9 @@ static irqreturn_t i915_irq_handler(int irq, void *arg)
 		if (hotplug_status)
 			i9xx_hpd_irq_handler(dev_priv, hotplug_status);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		i915_pipestat_irq_handler(dev_priv, iir, pipe_stats);
+#endif
 	} while (0);
 
 	pmu_irq_stats(dev_priv, ret);
@@ -5626,6 +5726,7 @@ static void i965_irq_postinstall(struct drm_i915_private *dev_priv)
 	i915_enable_asle_pipestat(dev_priv);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void i915_hpd_irq_setup(struct drm_i915_private *dev_priv)
 {
 	u32 hotplug_en;
@@ -5650,6 +5751,7 @@ static void i915_hpd_irq_setup(struct drm_i915_private *dev_priv)
 					     CRT_HOTPLUG_ACTIVATION_PERIOD_64,
 					     hotplug_en);
 }
+#endif
 
 static irqreturn_t i965_irq_handler(int irq, void *arg)
 {
@@ -5710,6 +5812,7 @@ static irqreturn_t i965_irq_handler(int irq, void *arg)
 	return ret;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 struct intel_hotplug_funcs {
 	void (*hpd_irq_setup)(struct drm_i915_private *i915);
 };
@@ -5734,6 +5837,7 @@ void intel_hpd_irq_setup(struct drm_i915_private *i915)
 	if (i915->display_irqs_enabled && i915->hotplug_funcs)
 		i915->hotplug_funcs->hpd_irq_setup(i915);
 }
+#endif
 
 /**
  * intel_irq_init - initializes irq support
@@ -5744,7 +5848,9 @@ void intel_hpd_irq_setup(struct drm_i915_private *i915)
  */
 void intel_irq_init(struct drm_i915_private *dev_priv)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	struct drm_device *dev = &dev_priv->drm;
+#endif
 	struct intel_gt *gt = to_root_gt(dev_priv);
 	int i;
 
@@ -5764,6 +5870,7 @@ void intel_irq_init(struct drm_i915_private *dev_priv)
 	if (HAS_GT_UC(dev_priv) && GRAPHICS_VER(dev_priv) < 11)
 		gt->pm_guc_events = GUC_INTR_GUC2HOST << 16;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (!HAS_DISPLAY(dev_priv))
 		return;
 
@@ -5813,6 +5920,7 @@ void intel_irq_init(struct drm_i915_private *dev_priv)
 		else
 			dev_priv->hotplug_funcs = &ilk_hpd_funcs;
 	}
+#endif
 }
 
 /**
@@ -6012,7 +6120,9 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
 
 	free_irq(irq, dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_hpd_cancel_work(dev_priv);
+#endif
 	dev_priv->runtime_pm.irqs_enabled = false;
 }
 

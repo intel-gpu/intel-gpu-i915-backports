@@ -547,8 +547,16 @@ void intel_link_compute_m_n(u16 bpp, int nlanes,
 			    int pixel_clock, int link_clock,
 			    struct intel_link_m_n *m_n,
 			    bool constant_n, bool fec_enable);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
 			      u32 pixel_format, u64 modifier);
+#else
+static inline u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
+			      u32 pixel_format, u64 modifier)
+{
+	return 0;
+}
+#endif
 enum drm_mode_status
 intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
 				const struct drm_display_mode *mode,

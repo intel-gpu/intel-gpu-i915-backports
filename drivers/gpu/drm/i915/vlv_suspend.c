@@ -462,8 +462,10 @@ int vlv_resume_prepare(struct drm_i915_private *dev_priv, bool rpm_resume)
 
 	vlv_check_no_gt_access(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (rpm_resume)
 		intel_init_clock_gating(dev_priv);
+#endif
 
 	return ret;
 }

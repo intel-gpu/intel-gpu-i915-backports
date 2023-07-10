@@ -39,8 +39,10 @@
 #include <drm/drm_cache.h>
 #include <drm/drm_print.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_dmc.h"
 #include "display/intel_overlay.h"
+#endif
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_lmem.h"
@@ -963,7 +965,9 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 
 	err_printf(m, "IOMMU enabled?: %d\n", error->iommu);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_dmc_print_error_state(m, m->i915);
+#endif
 
 	err_printf(m, "RPM wakelock: %s\n", str_yes_no(error->wakelock));
 	err_printf(m, "PM suspended: %s\n", str_yes_no(error->suspended));
@@ -1003,8 +1007,10 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 		err_print_gt_attentions(m, error->gt);
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (error->overlay)
 		intel_overlay_print_error_state(m, error->overlay);
+#endif
 
 	err_print_capabilities(m, error);
 	err_print_params(m, &error->params);
@@ -1219,7 +1225,9 @@ void __i915_gpu_coredump_free(struct kref *error_ref)
 		cleanup_gt(gt);
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	kfree(error->overlay);
+#endif
 
 	cleanup_params(error);
 
@@ -2502,7 +2510,9 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask, u32 dump
 		error->simulated |= error->gt->simulated;
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	error->overlay = intel_overlay_capture_error_state(i915);
+#endif
 
 	return error;
 }

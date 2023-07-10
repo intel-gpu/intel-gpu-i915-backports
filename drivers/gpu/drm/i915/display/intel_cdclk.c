@@ -38,6 +38,7 @@
 #include "intel_psr.h"
 #include "vlv_sideband.h"
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #define MTL_CDCLK_THRESHOLD	307200
 
 #define HAS_SQUASH_AND_CRAWL(i915)	(has_cdclk_squasher(i915) && HAS_CDCLK_CRAWL(i915))
@@ -3191,6 +3192,7 @@ void intel_update_cdclk(struct drm_i915_private *dev_priv)
 		intel_de_write(dev_priv, GMBUSFREQ_VLV,
 			       DIV_ROUND_UP(dev_priv->cdclk.hw.cdclk, 1000));
 }
+#endif
 
 static int dg1_rawclk(struct drm_i915_private *dev_priv)
 {
@@ -3336,6 +3338,7 @@ u32 intel_read_rawclk(struct drm_i915_private *dev_priv)
 	return freq;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static const struct intel_cdclk_funcs mtl_cdclk_funcs = {
 	.get_cdclk = mtl_get_cdclk,
 	.set_cdclk = mtl_set_cdclk,
@@ -3556,3 +3559,4 @@ void intel_init_cdclk_hooks(struct drm_i915_private *dev_priv)
 		     "Unknown platform. Assuming i830\n"))
 		dev_priv->cdclk_funcs = &i830_cdclk_funcs;
 }
+#endif

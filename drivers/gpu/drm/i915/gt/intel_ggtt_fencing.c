@@ -351,8 +351,10 @@ static struct i915_fence_reg *fence_find(struct i915_ggtt *ggtt)
 	}
 
 	/* Wait for completion of pending flips which consume fences */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (intel_has_pending_fb_unpin(ggtt->vm.i915))
 		return ERR_PTR(-EAGAIN);
+#endif
 
 	return ERR_PTR(-EDEADLK);
 }

@@ -91,7 +91,9 @@ static void runtime_end(struct intel_gt *gt)
 static int __gt_unpark(struct intel_wakeref *wf)
 {
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	struct drm_i915_private *i915 = gt->i915;
+#endif
 
 	GT_TRACE(gt, "\n");
 
@@ -109,8 +111,10 @@ static int __gt_unpark(struct intel_wakeref *wf)
 	 * Work around it by grabbing a GT IRQ power domain whilst there is any
 	 * GT activity, preventing any DC state transitions.
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	gt->awake = intel_display_power_get(i915, POWER_DOMAIN_GT_IRQ);
 	GEM_BUG_ON(!gt->awake);
+#endif
 
 	i915_vma_unpark(gt);
 	intel_rc6_unpark(&gt->rc6);
@@ -127,7 +131,9 @@ static int __gt_unpark(struct intel_wakeref *wf)
 static int __gt_park(struct intel_wakeref *wf)
 {
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_wakeref_t wakeref = fetch_and_zero(&gt->awake);
+#endif
 	struct drm_i915_private *i915 = gt->i915;
 
 	GT_TRACE(gt, "\n");
@@ -148,8 +154,10 @@ static int __gt_park(struct intel_wakeref *wf)
 	intel_synchronize_irq(i915);
 
 	/* Defer dropping the display power well for 100ms, it's slow! */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	GEM_BUG_ON(!wakeref);
 	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ, wakeref);
+#endif
 
 	/* Wa_14017210380: mtl */
 	mtl_mc6_wa_media_not_busy(gt);

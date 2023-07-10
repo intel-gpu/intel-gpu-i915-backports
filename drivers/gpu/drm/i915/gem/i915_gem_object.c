@@ -29,7 +29,9 @@
 #include <drm/drm_cache.h>
 #include <drm/drm_print.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_frontbuffer.h"
+#endif
 #include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
@@ -1263,6 +1265,7 @@ finish_src:
 void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 					 enum fb_op_origin origin)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	struct intel_frontbuffer *front;
 
 	front = __intel_frontbuffer_get(obj);
@@ -1270,11 +1273,13 @@ void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 		intel_frontbuffer_flush(front, origin);
 		intel_frontbuffer_put(front);
 	}
+#endif
 }
 
 void __i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
 					      enum fb_op_origin origin)
 {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	struct intel_frontbuffer *front;
 
 	front = __intel_frontbuffer_get(obj);
@@ -1282,6 +1287,7 @@ void __i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
 		intel_frontbuffer_invalidate(front, origin);
 		intel_frontbuffer_put(front);
 	}
+#endif
 }
 
 static void

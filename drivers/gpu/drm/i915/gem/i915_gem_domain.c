@@ -4,7 +4,9 @@
  * Copyright © 2014-2016 Intel Corporation
  */
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_frontbuffer.h"
+#endif
 #include "gt/intel_gt.h"
 
 #include "i915_drv.h"

@@ -34,6 +34,7 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_plane_helper.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_atomic.h"
 #include "display/intel_atomic_plane.h"
 #include "display/intel_bw.h"
@@ -46,6 +47,7 @@
 #include "display/intel_sprite.h"
 #include "display/skl_universal_plane.h"
 #include "display/intel_cx0_phy.h"
+#endif
 
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
@@ -4307,7 +4309,9 @@ skl_crtc_allocate_ddb(struct intel_atomic_state *state, struct intel_crtc *crtc)
 		intel_atomic_get_old_dbuf_state(state);
 	struct intel_dbuf_state *new_dbuf_state =
 		intel_atomic_get_new_dbuf_state(state);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	struct intel_crtc_state *crtc_state;
+#endif
 	struct skl_ddb_entry ddb_slices;
 	enum pipe pipe = crtc->pipe;
 	unsigned int mbus_offset = 0;
@@ -4347,6 +4351,7 @@ out:
 	if (ret)
 		return ret;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	crtc_state = intel_atomic_get_crtc_state(&state->base, crtc);
 	if (IS_ERR(crtc_state))
 		return PTR_ERR(crtc_state);
@@ -4357,6 +4362,7 @@ out:
 	 */
 	crtc_state->wm.skl.ddb.start = mbus_offset + new_dbuf_state->ddb[pipe].start;
 	crtc_state->wm.skl.ddb.end = mbus_offset + new_dbuf_state->ddb[pipe].end;
+#endif
 
 	drm_dbg_kms(&dev_priv->drm,
 		    "[CRTC:%d:%s] dbuf slices 0x%x -> 0x%x, ddb (%d - %d) -> (%d - %d), active pipes 0x%x -> 0x%x\n",

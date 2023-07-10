@@ -25,7 +25,9 @@
 #include <linux/sched/mm.h>
 #include <drm/drm_gem.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_frontbuffer.h"
+#endif
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_tiling.h"
 #include "gem/i915_gem_vm_bind.h"
@@ -175,6 +177,7 @@ vma_create(struct drm_i915_gem_object *obj,
 	INIT_LIST_HEAD(&vma->closed_link);
 	vma->pool = NULL;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (view && view->type != I915_GGTT_VIEW_NORMAL) {
 		vma->ggtt_view = *view;
 		if (view->type == I915_GGTT_VIEW_PARTIAL) {
@@ -193,6 +196,9 @@ vma_create(struct drm_i915_gem_object *obj,
 			vma->size <<= PAGE_SHIFT;
 		}
 	}
+#else
+	GEM_BUG_ON(view && view->type != I915_GGTT_VIEW_NORMAL);
+#endif
 
 	if (unlikely(vma->size > vm->total))
 		goto err_vma;
@@ -1715,6 +1721,7 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 	}
 
 	if (flags & EXEC_OBJECT_WRITE) {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		struct intel_frontbuffer *front;
 
 		front = __intel_frontbuffer_get(obj);
@@ -1723,6 +1730,7 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 				i915_active_add_request(&front->write, rq);
 			intel_frontbuffer_put(front);
 		}
+#endif
 
 		if (fence) {
 			dma_resv_add_excl_fence(vma->resv, fence);
