@@ -1,4 +1,17 @@
 # ChangeLog
+## Release SLES15SP3_23WW28.5_647.21_23.5.19_230406.17
+* i915: fix for 6942. fix for eudebug to ensure device is awake when connecting new debugger
+* i915: fix to ensure debugger checkpoints are restored following engine reset
+* i915: update anr firmware for xelink on max
+* i915: fix for race condition in mid-batch preemption
+* i915: fix for memory leak when doing coredump memory capture
+* i915: update in mei outside of i915 to suppress warn message only in specific scenarios
+* i915: update to queue retry eviction after a failure
+* i915: fix to prevent eviction starvation with i915_gem_set_domain_ioctl
+* i915: update to queue retry eviction after a failure
+* i915: update to improve performance stability on ocl benchmark
+* i915: update to latest stable iaf driver version for max
+
 ## Release SLES15SP3_23WW25.5_647.8_23.5.15_230406.13
 * i915: add support for SOC NONFATAL error handling
 * i915: add enhanced HBM error reporting for max
