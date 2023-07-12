@@ -49,6 +49,14 @@
 
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,11,0)
+
+/*
+ *  aa6159ab99a9ab kernel.h: split out mathematical helpers
+ */
+#define BPM_MATH_H_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,10,0)
 
 /*
