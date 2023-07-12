@@ -288,6 +288,10 @@
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
 #endif
 
+/*
+ * aa6159ab99a9ab kernel.h: split out mathematical helpers
+ */
+#define BPM_MATH_H_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
