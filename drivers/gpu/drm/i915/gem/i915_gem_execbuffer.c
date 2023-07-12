@@ -1344,17 +1344,6 @@ static void eb_release_persistent_vmas(struct i915_execbuffer *eb, bool final)
 	if (!final)
 		return;
 
-	/*
-	 * FIXME: On ATS-M, random GPU hang is observed when eviction
-	 * happens under high memory pressure. It is suspected a race
-	 * condition exists here that a vma is being evicted while
-	 * being moved to vm_bound_list.
-	 * As a temporary workaround keep the vma in vm_bind_list, so
-	 * that it's guaranteed to be rebound when revalidating objects.
-	 */
-	if (IS_DG2(vm->i915))
-		return;
-
 	list_for_each_entry_safe(vma, vn, &vm->vm_bind_list, vm_bind_link)
 		if (i915_vma_is_bind_complete(vma))
 			list_move_tail(&vma->vm_bind_link, &vm->vm_bound_list);
