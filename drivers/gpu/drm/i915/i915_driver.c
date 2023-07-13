@@ -51,6 +51,7 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_probe_helper.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_acpi.h"
 #include "display/intel_bw.h"
 #include "display/intel_cdclk.h"
@@ -66,6 +67,7 @@
 #include "display/intel_pps.h"
 #include "display/intel_sprite.h"
 #include "display/intel_vga.h"
+#endif
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_create.h"
@@ -674,13 +676,17 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	/* This must be called before any calls to HAS_PCH_* */
 	intel_detect_pch(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_pm_setup(dev_priv);
 	ret = intel_power_domains_init(dev_priv);
 	if (ret < 0)
 		goto err_gem;
+#endif
 	intel_irq_init(dev_priv);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_init_display_hooks(dev_priv);
 	intel_init_clock_gating_hooks(dev_priv);
+#endif
 
 	intel_iaf_init_early(dev_priv);
 
@@ -691,7 +697,9 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 
 	return 0;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 err_gem:
+#endif
 	i915_gem_cleanup_early(dev_priv);
 	intel_gt_driver_late_release_all(dev_priv);
 err_rootgt:
@@ -812,7 +820,9 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 {
 	intel_irq_fini(dev_priv);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_cleanup(dev_priv);
+#endif
 	i915_gem_cleanup_early(dev_priv);
 	i915_debugger_fini(dev_priv);
 	intel_gt_driver_late_release_all(dev_priv);
@@ -1175,7 +1185,9 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	if (ret)
 		goto err_msi;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_opregion_init(dev_priv);
+#endif
 
 	/*
 	 * Fill the dram structure to get the system dram info. This will be
@@ -1183,7 +1195,9 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	 */
 	intel_dram_detect(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_bw_init_hw(dev_priv);
+#endif
 
 	/*
 	 * FIXME: Temporary hammer to avoid freezing the machine on our DGFX
@@ -1282,11 +1296,13 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	if (!IS_SRIOV_VF(dev_priv))
 		i915_hwmon_register(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_driver_register(dev_priv);
 
 	intel_power_domains_enable(dev_priv);
 
 	intel_register_dsm_handler();
+#endif
 
 	if (i915_switcheroo_register(dev_priv))
 		drm_err(&dev_priv->drm, "Failed to register vga switcheroo!\n");
@@ -1309,10 +1325,14 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 
 	i915_switcheroo_unregister(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_unregister_dsm_handler();
+#endif
 
 	intel_runtime_pm_disable(&dev_priv->runtime_pm);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_disable(dev_priv);
+#endif
 
 #if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	/*
@@ -1321,7 +1341,9 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 	 */
 	mfd_remove_devices(dev_priv->drm.dev);
 #endif
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_driver_unregister(dev_priv);
+#endif
 
 	i915_hwmon_unregister(dev_priv);
 
@@ -1550,17 +1572,21 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret < 0)
 		goto out_cleanup_mmio;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	ret = intel_modeset_init_noirq(i915);
 	if (ret < 0)
 		goto out_cleanup_hw;
+#endif
 
 	ret = intel_irq_install(i915);
 	if (ret)
 		goto out_cleanup_modeset;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	ret = intel_modeset_init_nogem(i915);
 	if (ret)
 		goto out_cleanup_irq;
+#endif
 
 	ret = i915_gem_init(i915);
 	if (ret)
@@ -1572,9 +1598,11 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			goto out_cleanup_gem;
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	ret = intel_modeset_init(i915);
 	if (ret)
 		goto out_cleanup_blt_windows;
+#endif
 
 	intel_runtime_pm_enable(&i915->runtime_pm);
 
@@ -1596,23 +1624,33 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	return 0;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 out_cleanup_blt_windows:
 	i915_teardown_blt_windows(i915);
+#endif
 out_cleanup_gem:
 	i915_gem_suspend(i915);
 	i915_gem_driver_remove(i915);
 	i915_gem_driver_release(i915);
 out_cleanup_modeset2:
 	/* FIXME clean up the error path */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove(i915);
+#endif
 	intel_irq_uninstall(i915);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove_noirq(i915);
+#endif
 	goto out_cleanup_modeset;
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 out_cleanup_irq:
+#endif
 	intel_irq_uninstall(i915);
 out_cleanup_modeset:
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove_nogem(i915);
 out_cleanup_hw:
+#endif
 	i915_driver_hw_remove(i915);
 	intel_memory_regions_driver_release(i915);
 	i915_ggtt_driver_release(i915);
@@ -1663,16 +1701,22 @@ void i915_driver_remove(struct drm_i915_private *i915)
 
 	intel_gvt_driver_remove(i915);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove(i915);
+#endif
 
 	intel_irq_uninstall(i915);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove_noirq(i915);
+#endif
 
 	i915_reset_error_state(i915);
 	i915_gem_driver_remove(i915);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_driver_remove_nogem(i915);
+#endif
 
 	i915_driver_hw_remove(i915);
 
@@ -1735,7 +1779,9 @@ static void i915_driver_lastclose(struct drm_device *dev)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_fbdev_restore_mode(dev);
+#endif
 
 	if (HAS_DISPLAY(i915))
 		vga_switcheroo_process_delayed_switch();
@@ -1764,6 +1810,7 @@ static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 	i915_gem_flush_free_objects(to_i915(dev));
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static void intel_suspend_encoders(struct drm_i915_private *dev_priv)
 {
 	struct drm_device *dev = &dev_priv->drm;
@@ -1793,6 +1840,7 @@ static void intel_shutdown_encoders(struct drm_i915_private *dev_priv)
 			encoder->shutdown(encoder);
 	drm_modeset_unlock_all(dev);
 }
+#endif
 
 void i915_driver_shutdown(struct drm_i915_private *i915)
 {
@@ -1801,6 +1849,7 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 
 	disable_rpm_wakeref_asserts(&i915->runtime_pm);
 	intel_runtime_pm_disable(&i915->runtime_pm);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_disable(i915);
 
 	if (HAS_DISPLAY(i915)) {
@@ -1810,14 +1859,17 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 	}
 
 	intel_dp_mst_suspend(i915);
+#endif
 
 	intel_runtime_pm_disable_interrupts(i915);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_hpd_cancel_work(i915);
 
 	intel_suspend_encoders(i915);
 	intel_shutdown_encoders(i915);
 
 	intel_dmc_ucode_suspend(i915);
+#endif
 
 	i915_gem_suspend(i915);
 
@@ -1835,12 +1887,15 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 	 * - unify the driver remove and system/runtime suspend sequences with
 	 *   the above unified shutdown/poweroff sequence.
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_driver_remove(i915);
+#endif
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
 
 	intel_runtime_pm_driver_release(&i915->runtime_pm);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static bool suspend_to_idle(struct drm_i915_private *dev_priv)
 {
 #if IS_ENABLED(CONFIG_ACPI_SLEEP)
@@ -1849,6 +1904,7 @@ static bool suspend_to_idle(struct drm_i915_private *dev_priv)
 #endif
 	return false;
 }
+#endif
 
 static void intel_evict_lmem(struct drm_i915_private *i915)
 {
@@ -1939,24 +1995,31 @@ static int i915_drm_suspend(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	pci_power_t opregion_target_state;
+#endif
 
 	disable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
 	/* We do a lot of poking in a lot of registers, make sure they work
 	 * properly.
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_disable(dev_priv);
 	if (HAS_DISPLAY(dev_priv))
 		drm_kms_helper_poll_disable(dev);
+#endif
 
 	i915_save_pci_state(pdev);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_suspend(dev);
 
 	intel_dp_mst_suspend(dev_priv);
+#endif
 
 	intel_runtime_pm_disable_interrupts(dev_priv);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_hpd_cancel_work(dev_priv);
 
 	intel_suspend_encoders(dev_priv);
@@ -1969,10 +2032,13 @@ static int i915_drm_suspend(struct drm_device *dev)
 	intel_opregion_suspend(dev_priv, opregion_target_state);
 
 	intel_fbdev_set_suspend(dev, FBINFO_STATE_SUSPENDED, true);
+#endif
 
 	dev_priv->suspend_count++;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_dmc_ucode_suspend(dev_priv);
+#endif
 
 	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
@@ -1981,6 +2047,7 @@ static int i915_drm_suspend(struct drm_device *dev)
 	return 0;
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static enum i915_drm_suspend_mode
 get_suspend_mode(struct drm_i915_private *dev_priv, bool hibernate)
 {
@@ -1992,6 +2059,7 @@ get_suspend_mode(struct drm_i915_private *dev_priv, bool hibernate)
 
 	return I915_DRM_SUSPEND_MEM;
 }
+#endif
 
 static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 {
@@ -2006,7 +2074,9 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 	i915_sriov_suspend_late(dev_priv);
 
 	/* Must be called before GGTT is suspended. */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_dpt_suspend(dev_priv);
+#endif
 	ret = i915_gem_suspend_late(dev_priv);
 
 	/*
@@ -2022,15 +2092,19 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 	for_each_gt(gt, dev_priv, i)
 		intel_uncore_suspend(gt->uncore);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_power_domains_suspend(dev_priv,
 				    get_suspend_mode(dev_priv, hibernation));
 
 	intel_display_power_suspend_late(dev_priv);
+#endif
 
 	ret = vlv_suspend_complete(dev_priv);
 	if (ret) {
 		drm_err(&dev_priv->drm, "Suspend complete failed: %d\n", ret);
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		intel_power_domains_resume(dev_priv);
+#endif
 
 		goto out;
 	}
@@ -2089,12 +2163,14 @@ static int i915_drm_resume(struct drm_device *dev)
 	if (ret)
 		return ret;
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_dmc_ucode_resume(dev_priv);
 
 	i915_restore_display(dev_priv);
 	intel_pps_unlock_regs_wa(dev_priv);
 
 	intel_init_pch_refclk(dev_priv);
+#endif
 
 	/*
 	 * Interrupts have to be enabled before any batches are run. If not the
@@ -2113,6 +2189,7 @@ static int i915_drm_resume(struct drm_device *dev)
 
 	i915_gem_resume(dev_priv);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_modeset_init_hw(dev_priv);
 	intel_init_clock_gating(dev_priv);
 	intel_hpd_init(dev_priv);
@@ -2130,6 +2207,7 @@ static int i915_drm_resume(struct drm_device *dev)
 	intel_fbdev_set_suspend(dev, FBINFO_STATE_RUNNING, false);
 
 	intel_power_domains_enable(dev_priv);
+#endif
 
 	intel_gvt_resume(dev_priv);
 
@@ -2222,9 +2300,11 @@ static int i915_drm_resume_early(struct drm_device *dev)
 		intel_gt_check_and_clear_faults(gt);
 	}
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_power_resume_early(dev_priv);
 
 	intel_power_domains_resume(dev_priv);
+#endif
 
 	sanitize_gpu(dev_priv);
 
@@ -2234,7 +2314,9 @@ static int i915_drm_resume_early(struct drm_device *dev)
 
 	i915_gem_resume_early(dev_priv);
 	/* Must be called after GGTT is resumed. */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_dpt_resume(dev_priv);
+#endif
 
 	i915_sriov_resume_early(dev_priv);
 
@@ -2428,7 +2510,9 @@ static int intel_runtime_suspend(struct device *kdev)
 	for_each_gt(gt, dev_priv, i)
 		intel_uncore_suspend(gt->uncore);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_power_suspend(dev_priv);
+#endif
 
 	ret = vlv_suspend_complete(dev_priv);
 	if (ret) {
@@ -2460,6 +2544,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	 * FIXME: We really should find a document that references the arguments
 	 * used below!
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (IS_BROADWELL(dev_priv)) {
 		/*
 		 * On Broadwell, if we use PCI_D1 the PCH DDI ports will stop
@@ -2478,11 +2563,14 @@ static int intel_runtime_suspend(struct device *kdev)
 		 */
 		intel_opregion_notify_adapter(dev_priv, PCI_D1);
 	}
+#endif
 
 	assert_forcewakes_inactive(&dev_priv->uncore);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (!IS_VALLEYVIEW(dev_priv) && !IS_CHERRYVIEW(dev_priv))
 		intel_hpd_poll_enable(dev_priv);
+#endif
 
 	drm_dbg(&dev_priv->drm, "Device suspended\n");
 	return 0;
@@ -2503,13 +2591,17 @@ static int intel_runtime_resume(struct device *kdev)
 	drm_WARN_ON_ONCE(&dev_priv->drm, atomic_read(&rpm->wakeref_count));
 	disable_rpm_wakeref_asserts(rpm);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_opregion_notify_adapter(dev_priv, PCI_D0);
+#endif
 	rpm->suspended = false;
 	if (intel_uncore_unclaimed_mmio(&dev_priv->uncore))
 		drm_dbg(&dev_priv->drm,
 			"Unclaimed access during suspend, bios?\n");
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_display_power_resume(dev_priv);
+#endif
 
 	ret = vlv_resume_prepare(dev_priv, true);
 
@@ -2532,12 +2624,14 @@ static int intel_runtime_resume(struct device *kdev)
 	 * power well, so hpd is reinitialized from there. For
 	 * everyone else do it here.
 	 */
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	if (!IS_VALLEYVIEW(dev_priv) && !IS_CHERRYVIEW(dev_priv)) {
 		intel_hpd_init(dev_priv);
 		intel_hpd_poll_disable(dev_priv);
 	}
 
 	intel_enable_ipc(dev_priv);
+#endif
 
 	pvc_wa_allow_rc6_if_awake(dev_priv);
 
@@ -2767,11 +2861,15 @@ static const struct drm_ioctl_desc i915_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(I915_GEM_SET_TILING, i915_gem_set_tiling_ioctl, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_GET_TILING, i915_gem_get_tiling_ioctl, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_GET_APERTURE, i915_gem_get_aperture_ioctl, DRM_RENDER_ALLOW),
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	DRM_IOCTL_DEF_DRV(I915_GET_PIPE_FROM_CRTC_ID, intel_get_pipe_from_crtc_id_ioctl, 0),
+#endif
 	DRM_IOCTL_DEF_DRV(I915_GEM_MADVISE, i915_gem_madvise_ioctl, DRM_RENDER_ALLOW),
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	DRM_IOCTL_DEF_DRV(I915_OVERLAY_PUT_IMAGE, intel_overlay_put_image_ioctl, DRM_MASTER),
 	DRM_IOCTL_DEF_DRV(I915_OVERLAY_ATTRS, intel_overlay_attrs_ioctl, DRM_MASTER),
 	DRM_IOCTL_DEF_DRV(I915_SET_SPRITE_COLORKEY, intel_sprite_set_colorkey_ioctl, DRM_MASTER),
+#endif
 	DRM_IOCTL_DEF_DRV(I915_GET_SPRITE_COLORKEY, drm_noop, DRM_MASTER),
 	DRM_IOCTL_DEF_DRV(I915_GEM_WAIT, i915_gem_wait_ioctl, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(I915_GEM_CONTEXT_CREATE_EXT, i915_gem_context_create_ioctl, DRM_RENDER_ALLOW),

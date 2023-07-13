@@ -7,8 +7,10 @@
 #include <linux/stop_machine.h>
 #include <linux/string_helpers.h>
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 #include "display/intel_display.h"
 #include "display/intel_overlay.h"
+#endif
 
 #include "gem/i915_gem_context.h"
 
@@ -1315,7 +1317,9 @@ void intel_gt_reset(struct intel_gt *gt,
 	if (INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
 		intel_runtime_pm_enable_interrupts(gt->i915);
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 	intel_overlay_reset(gt->i915);
+#endif
 
 	/*
 	 * Next we need to restore the context, but we don't use those
@@ -1460,11 +1464,13 @@ static void intel_gt_reset_global(struct intel_gt *gt,
 
 	/* Use a watchdog to ensure that our reset completes */
 	intel_wedge_on_timeout(&w, gt, 60 * HZ) {
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		intel_display_prepare_reset(gt->i915);
-
 		intel_gt_reset(gt, engine_mask, reason);
-
 		intel_display_finish_reset(gt->i915);
+#else
+		intel_gt_reset(gt, engine_mask, reason);
+#endif
 	}
 
 	if (!test_bit(I915_WEDGED, &gt->reset.flags))

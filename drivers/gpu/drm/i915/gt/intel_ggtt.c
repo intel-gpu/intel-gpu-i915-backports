@@ -1811,6 +1811,7 @@ void i915_ggtt_resume(struct i915_ggtt *ggtt)
 	intel_ggtt_restore_fences(ggtt);
 }
 
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 static struct scatterlist *
 rotate_pages(struct drm_i915_gem_object *obj, unsigned int offset,
 	     unsigned int width, unsigned int height,
@@ -1902,6 +1903,7 @@ err_st_alloc:
 
 	return ERR_PTR(ret);
 }
+#endif
 
 static struct scatterlist *
 add_padding_pages(unsigned int count,
@@ -2177,8 +2179,12 @@ i915_get_ggtt_vma_pages(struct i915_vma *vma)
 		return 0;
 
 	case I915_GGTT_VIEW_ROTATED:
+#if IS_ENABLED (CPTCFG_DRM_I915_DISPLAY)
 		vma->pages =
 			intel_rotate_pages(&vma->ggtt_view.rotated, vma->obj);
+#else
+		drm_err(&vma->vm->i915->drm, "NO DISPLAY!\n");
+#endif
 		break;
 
 	case I915_GGTT_VIEW_REMAPPED:

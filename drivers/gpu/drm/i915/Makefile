@@ -44,7 +44,6 @@ i915-y += i915_driver.o \
 	  i915_pci.o \
 	  i915_pci_err.o \
 	  i915_scatterlist.o \
-	  i915_suspend.o \
 	  i915_switcheroo.o \
 	  i915_sysfs.o \
 	  i915_sysrq.o \
@@ -55,7 +54,6 @@ i915-y += i915_driver.o \
 	  intel_memory_region.o \
 	  intel_pch.o \
 	  intel_pcode.o \
-	  intel_pm.o \
 	  intel_runtime_pm.o \
 	  intel_sbi.o \
 	  intel_step.o \
@@ -65,6 +63,9 @@ i915-y += i915_driver.o \
 	  intel_wakeref.o \
 	  vlv_sideband.o \
 	  vlv_suspend.o
+i915-$(CPTCFG_DRM_I915_DISPLAY) += \
+	  i915_suspend.o \
+	  intel_pm.o
 
 # core library code
 i915-y += \
@@ -79,9 +80,13 @@ i915-y += \
 i915-$(CONFIG_COMPAT)   += i915_ioc32.o
 i915-$(CONFIG_DEBUG_FS) += \
 	i915_debugfs.o \
-	i915_debugfs_params.o \
+	i915_debugfs_params.o
+
+ifeq ($(CPTCFG_DRM_I915_DISPLAY),y)
+i915-$(CONFIG_DEBUG_FS) += \
 	display/intel_display_debugfs.o \
 	display/intel_pipe_crc.o
+endif
 
 i915-$(CONFIG_PERF_EVENTS) += i915_pmu.o
 i915-$(CPTCFG_DRM_I915_DEBUGGER) += i915_debugger.o
@@ -266,20 +271,22 @@ i915-$(CONFIG_HWMON) += i915_hwmon.o
 
 # modesetting core code
 i915-y += \
+	display/intel_cdclk.o \
+	display/intel_display.o
+
+i915-$(CPTCFG_DRM_I915_DISPLAY) += \
 	display/hsw_ips.o \
 	display/intel_atomic.o \
 	display/intel_atomic_plane.o \
 	display/intel_audio.o \
 	display/intel_bios.o \
 	display/intel_bw.o \
-	display/intel_cdclk.o \
 	display/intel_color.o \
 	display/intel_combo_phy.o \
 	display/intel_connector.o \
 	display/intel_crtc.o \
 	display/intel_crtc_state_dump.o \
 	display/intel_cursor.o \
-	display/intel_display.o \
 	display/intel_display_power.o \
 	display/intel_display_power_map.o \
 	display/intel_display_power_well.o \
@@ -315,14 +322,17 @@ i915-y += \
 	display/i9xx_plane.o \
 	display/skl_scaler.o \
 	display/skl_universal_plane.o
+
+ifeq ($(CPTCFG_DRM_I915_DISPLAY),y)
 i915-$(CONFIG_ACPI) += \
 	display/intel_acpi.o \
 	display/intel_opregion.o
 i915-$(CPTCFG_DRM_FBDEV_EMULATION) += \
 	display/intel_fbdev.o
+endif
 
-# modesetting output/encoder code
-i915-y += \
+## modesetting output/encoder code
+i915-$(CPTCFG_DRM_I915_DISPLAY) += \
 	display/dvo_ch7017.o \
 	display/dvo_ch7xxx.o \
 	display/dvo_ivch.o \
@@ -392,8 +402,11 @@ i915-$(CPTCFG_DRM_I915_SELFTEST) += \
 	selftests/igt_mmap.o \
 	selftests/igt_reset.o \
 	selftests/igt_spinner.o \
-	selftests/librapl.o \
+	selftests/librapl.o
+ifeq ($(CPTCFG_DRM_I915_DISPLAY),y)
+i915-$(CPTCFG_DRM_I915_SELFTEST) += \
 	display/selftests/selftest_display.o
+endif
 
 # virtual gpu code
 i915-y += i915_vgpu.o
