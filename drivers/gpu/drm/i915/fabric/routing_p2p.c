@@ -740,7 +740,7 @@ struct debugfs_p2p_iter {
  */
 static void debugfs_p2p_iter_end(struct debugfs_p2p_iter *iter)
 {
-	unlock_shared(&routable_lock);
+	up_read(&routable_lock);
 	kfree(iter);
 }
 
@@ -767,7 +767,7 @@ static void *debugfs_p2p_seq_start(struct seq_file *s, loff_t *pos)
 	if (!iter)
 		return NULL;
 
-	lock_shared(&routable_lock);
+	down_read(&routable_lock); /* shared lock */
 
 	iter->src = routing_sd_iter(0);
 	if (!iter->src) {

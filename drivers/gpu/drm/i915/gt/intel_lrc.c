@@ -1107,6 +1107,8 @@ check_redzone(struct intel_context *ce)
 	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
 		return;
 
+	GEM_BUG_ON(!i915_gem_object_mem_idle(ce->state->obj));
+
 	vaddr += engine->context_size;
 	last = (void *)vaddr + len;
 
@@ -1162,6 +1164,8 @@ void lrc_init_state(struct intel_context *ce,
 		    void *state)
 {
 	bool inhibit = true;
+
+	GEM_BUG_ON(!i915_gem_object_mem_idle(ce->state->obj));
 
 	set_redzone(state, engine);
 

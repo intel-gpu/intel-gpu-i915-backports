@@ -1696,6 +1696,14 @@ static int __lrc_cross(struct intel_engine_cs *a,
 	pr_debug("Context on %s, poisoning from %s with %08x\n",
 		 a->name, b->name, poison);
 
+	/* Wa_14014475959 */
+	if (intel_engine_uses_wa_hold_ccs_switchout(a) &&
+	    intel_engine_uses_wa_hold_ccs_switchout(b)) {
+		pr_debug("Cannot perform test with engines %s and %s on platform with hold ccs switchout wa. Skipping.\n",
+			 a->name, b->name);
+		return 0;
+	}
+
 	A = intel_context_create(a);
 	if (IS_ERR(A))
 		return PTR_ERR(A);

@@ -52,3 +52,8 @@ obj-$(CPTCFG_DRM_I915) += drivers/gpu/drm/i915/
 #obj-$(CPTCFG_USB_USBNET) += drivers/net/usb/
 #
 #obj-$(CPTCFG_STAGING) += drivers/staging/
+
+obj-$(CPTCFG_INTEL_VSEC) += drivers/platform/x86/intel/
+
+obj-$(CPTCFG_INTEL_MEI) += drivers/misc/mei/
+obj-$(CPTCFG_WATCHDOG) += drivers/watchdog/

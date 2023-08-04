@@ -1,0 +1,34 @@
+config DRM_I915_CHICKEN_ASYNC_GET_PAGES
+	bool "Asynchronous backing store fetch (get_pages)"
+	default y
+	help
+	  Acquire and clear the backing store (chunks of local memory or pages
+	  of system memory) in a background thread, returning to userspace
+	  without blocking. Access or execution of the object is deferred
+	  instead.
+
+config DRM_I915_CHICKEN_PARALLEL_USERPTR
+       bool "Parallelised backing store fetch of get_user_pages"
+       default y
+       help
+         Allow the userptr backing store acquire to parallelise its work over
+	 multiple threads.
+
+config DRM_I915_CHICKEN_CLEAR_ON_CREATE
+	bool "Clear backing store immediately upon create"
+	default n
+	help
+	  Queue the clear of all objects at the point of creation (GEM_CREATE
+	  ioctl), ahead of first use.
+
+config DRM_I915_CHICKEN_CLEAR_ON_FREE
+	bool "Clear backing store on release"
+	default y
+	help
+	  Clear pages on release, ahead of reuse. Only applies to local memory.
+
+config DRM_I915_CHICKEN_CLEAR_ON_IDLE
+	bool "Clear backing store on idle (boot)"
+	default y
+	help
+	  Clear local memory on idling, and upon boot.

@@ -25,6 +25,7 @@
 
 #ifdef BPM_DRM_DP_HELPER_DIR_DISPLAY_PRESENT
 #include_next <drm/display/drm_dp_mst_helper.h>
+#include <drm/drm_dp_helper.h>
 #elif defined(BPM_DRM_DP_HELPER_DIR_DP_PRESENT)
 #include_next <drm/dp/drm_dp_mst_helper.h>
 #else

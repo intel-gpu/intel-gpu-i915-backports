@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2022 Intel Corporation.
+ * Copyright(c) 2019 - 2023 Intel Corporation.
  *
  */
 
@@ -22,7 +22,7 @@
 #include "trace.h"
 
 #define IAF_ATTR_MAX (_IAF_ATTR_COUNT - 1)
-#define MSG_ENLARGE_RETRIES 2
+#define MSG_ENLARGE_RETRIES 4
 
 /*
  * Prefix definitions:
@@ -138,6 +138,7 @@ static enum cmd_rsp nl_process_op_req(struct genl_info *info, nl_process_op_cb_t
 	/* If we run out of space in the message, try to enlarge it */
 	for (msg_sz = NLMSG_GOODSIZE, retries = MSG_ENLARGE_RETRIES; retries; retries--,
 	     msg_sz += NLMSG_GOODSIZE) {
+		pr_debug("netlink response message buffer size is %lu\n", msg_sz);
 		ret = nl_alloc_process_and_send_reply(info, msg_sz, op_cb);
 		if (ret == IAF_CMD_RSP_SUCCESS)
 			return ret;
@@ -927,7 +928,7 @@ static enum cmd_rsp nl_process_fport_properties_query(struct sk_buff *msg,
 		 * Otherwise, only lpns specified in the message are examined
 		 * and added to the response.
 		 */
-		lock_shared(&routable_lock);
+		down_write(&routable_lock); /* exclusive lock */
 
 		if (bitmap_empty(port_mask, PORT_COUNT)) {
 			for_each_fabric_lpn(lpn, sd) {
@@ -943,20 +944,18 @@ static enum cmd_rsp nl_process_fport_properties_query(struct sk_buff *msg,
 			}
 		}
 
-		unlock_shared(&routable_lock);
+		up_write(&routable_lock);
 	}
 
 	fdev_put(sd->fdev);
 	return ret;
 }
 
-static enum cmd_rsp nl_process_fport_xmit_recv_counts(struct sk_buff *msg,
-						      struct genl_info *info)
+static enum cmd_rsp nl_get_throughput(struct sk_buff *msg, struct fsubdev *sd, u8 lpn)
 {
-	struct fsubdev *sd;
-	enum cmd_rsp ret;
 	struct fport *port;
-	struct mbdb_op_port_status_get_rsp *rsp = NULL;
+	u64 rsp_area[3];
+	struct mbdb_op_port_status_get_rsp *rsp = (struct mbdb_op_port_status_get_rsp *)rsp_area;
 	static struct mbdb_op_csr_range csr_ranges[] = {
 		{ .offset = O_FPC_PORTRCV_DATA_CNT,
 		  .num_csrs = 1
@@ -966,35 +965,13 @@ static enum cmd_rsp nl_process_fport_xmit_recv_counts(struct sk_buff *msg,
 		},
 	};
 
-	/* Get the sd to access */
-	ret = nl_get_sd(info, &sd);
-	if (ret != IAF_CMD_RSP_SUCCESS)
-		return ret;
+	port = get_fport_handle(sd, lpn);
+	if (!port)
+		return IAF_CMD_RSP_PORT_RANGE_ERROR;
 
-	if (!info->attrs[IAF_ATTR_FABRIC_PORT_NUMBER]) {
-		ret = IAF_CMD_RSP_MISSING_PORT_NUMBER;
-		goto exit;
-	}
-
-	port = get_fport_handle
-		(sd, nla_get_u8(info->attrs[IAF_ATTR_FABRIC_PORT_NUMBER]));
-	if (!port) {
-		ret = IAF_CMD_RSP_PORT_RANGE_ERROR;
-		goto exit;
-	}
-
-	rsp = kzalloc(sizeof(*rsp) + CSR_SIZE * ARRAY_SIZE(csr_ranges),
-		      GFP_KERNEL);
-	if (!rsp) {
-		ret = IAF_CMD_RSP_NOMEM;
-		goto exit;
-	}
-
-	if (ops_port_status_get(sd, port->lpn, ARRAY_SIZE(csr_ranges),
-				csr_ranges, rsp)) {
-		ret = IAF_CMD_RSP_MAIL_BOX_ERROR;
-		goto exit;
-	}
+	if (ops_port_status_get(sd, lpn, ARRAY_SIZE(csr_ranges),
+				csr_ranges, rsp))
+		return IAF_CMD_RSP_MAIL_BOX_ERROR;
 
 	if (nla_put_u64_64bit(msg, IAF_ATTR_TIMESTAMP, rsp->cp_free_run_rtc,
 			      IAF_ATTR_PAD) ||
@@ -1002,12 +979,115 @@ static enum cmd_rsp nl_process_fport_xmit_recv_counts(struct sk_buff *msg,
 			      flits_to_bytes(rsp->regs[0]), IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_FPORT_TX_BYTES,
 			      flits_to_bytes(rsp->regs[1]), IAF_ATTR_PAD))
-		ret = IAF_CMD_RSP_MSGSIZE;
+		return IAF_CMD_RSP_MSGSIZE;
 
-exit:
-	kfree(rsp);
+	return IAF_CMD_RSP_SUCCESS;
+}
+
+static enum cmd_rsp nl_process_fport_xmit_recv_counts(struct sk_buff *msg,
+						      struct genl_info *info)
+{
+	struct fsubdev *sd;
+	enum cmd_rsp ret;
+
+	if (!info->attrs[IAF_ATTR_FABRIC_PORT_NUMBER])
+		return IAF_CMD_RSP_MISSING_PORT_NUMBER;
+
+	/* Get the sd to access */
+	ret = nl_get_sd(info, &sd);
+	if (ret != IAF_CMD_RSP_SUCCESS)
+		return ret;
+
+	ret = nl_get_throughput(msg, sd, nla_get_u8(info->attrs[IAF_ATTR_FABRIC_PORT_NUMBER]));
+
 	fdev_put(sd->fdev);
+
 	return ret;
+}
+
+static enum cmd_rsp nl_process_fport_throughput(struct sk_buff *msg, struct genl_info *info)
+{
+	struct nlattr *nla;
+	int remaining;
+	int remaining_nested;
+	enum cmd_rsp ret = IAF_CMD_RSP_SUCCESS;
+	struct fsubdev *sd;
+
+	nlmsg_for_each_attr(nla, info->nlhdr, GENL_HDRLEN, remaining) {
+		if (nla_type(nla) == IAF_ATTR_FABRIC_PORT) {
+			struct nlattr *fabric_id_attr;
+			struct nlattr *sd_idx_attr;
+			struct nlattr *lpn_attr;
+			struct nlattr *cur;
+			struct nlattr *nested_attr;
+
+			fabric_id_attr = NULL;
+			sd_idx_attr = NULL;
+			lpn_attr = NULL;
+
+			nla_for_each_nested(cur, nla, remaining_nested) {
+				switch (nla_type(cur)) {
+				case IAF_ATTR_FABRIC_ID:
+					fabric_id_attr = cur;
+					break;
+				case IAF_ATTR_SD_INDEX:
+					sd_idx_attr = cur;
+					break;
+				case IAF_ATTR_FABRIC_PORT_NUMBER:
+					lpn_attr = cur;
+					break;
+				default:
+					break;
+				}
+			}
+
+			if (!fabric_id_attr)
+				return IAF_CMD_RSP_MISSING_FABRIC_ID;
+
+			if (!sd_idx_attr)
+				return IAF_CMD_RSP_MISSING_SD_INDEX;
+
+			if (!lpn_attr)
+				return IAF_CMD_RSP_MISSING_PORT_NUMBER;
+
+			sd = find_sd_id(nla_get_u32(fabric_id_attr), nla_get_u8(sd_idx_attr));
+			if (IS_ERR(sd)) {
+				if (PTR_ERR(sd) == -ENODEV)
+					return IAF_CMD_RSP_UNKNOWN_FABRIC_ID;
+
+				return IAF_CMD_RSP_SD_INDEX_OUT_OF_RANGE;
+			}
+
+			nested_attr = nla_nest_start(msg, IAF_ATTR_FABRIC_PORT_THROUGHPUT);
+			if (!nested_attr) {
+				fdev_put(sd->fdev);
+				return IAF_CMD_RSP_MSGSIZE;
+			}
+
+			if (nla_put_u32(msg, IAF_ATTR_FABRIC_ID,
+					nla_get_u32(fabric_id_attr)) ||
+				nla_put_u8(msg, IAF_ATTR_SD_INDEX, nla_get_u8(sd_idx_attr)) ||
+				nla_put_u8(msg, IAF_ATTR_FABRIC_PORT_NUMBER,
+					   nla_get_u8(lpn_attr))) {
+				fdev_put(sd->fdev);
+				nla_nest_cancel(msg, nested_attr);
+				return IAF_CMD_RSP_MSGSIZE;
+			}
+
+			ret = nl_get_throughput(msg, sd, nla_get_u8(lpn_attr));
+
+			fdev_put(sd->fdev);
+
+			if (ret) {
+				nla_nest_cancel(msg, nested_attr);
+				return ret;
+			}
+
+			nla_nest_end(msg, nested_attr);
+		}
+	}
+
+	return IAF_CMD_RSP_SUCCESS;
 }
 
 static const struct nla_policy nl_iaf_policy_basic[IAF_ATTR_MAX + 1] = {
@@ -1031,6 +1111,15 @@ static const struct nla_policy nl_iaf_policy_fabric_id_sd_index[IAF_ATTR_MAX + 1
 static const struct nla_policy nl_iaf_policy_fabric_id_sd_index_port[IAF_ATTR_MAX + 1] = {
 	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
 	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
+	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
+	[IAF_ATTR_FABRIC_PORT_NUMBER] = { .type = NLA_U8 },
+};
+
+static const struct nla_policy nl_iaf_policy_fabric_id_sd_index_nested_port[IAF_ATTR_MAX + 1] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_PORT] = { .type = NLA_NESTED},
 	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
 	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
 	[IAF_ATTR_FABRIC_PORT_NUMBER] = { .type = NLA_U8 },
@@ -1129,6 +1218,11 @@ static int nl_fport_properties_op(struct sk_buff *msg, struct genl_info *info)
 static int nl_fport_xmit_recv_counts_op(struct sk_buff *msg, struct genl_info *info)
 {
 	return nl_process_query(msg, info, nl_process_fport_xmit_recv_counts);
+}
+
+static int nl_fport_throughput_op(struct sk_buff *msg, struct genl_info *info)
+{
+	return nl_process_query(msg, info, nl_process_fport_throughput);
 }
 
 static const struct genl_ops nl_iaf_cmds[] = {
@@ -1232,6 +1326,11 @@ static const struct genl_ops nl_iaf_cmds[] = {
 	{ .cmd = IAF_CMD_OP_FPORT_XMIT_RECV_COUNTS,
 	  .doit = nl_fport_xmit_recv_counts_op,
 	  .policy = nl_iaf_policy_fabric_id_sd_index_port,
+	},
+
+	{ .cmd = IAF_CMD_OP_FPORT_THROUGHPUT,
+	  .doit = nl_fport_throughput_op,
+	  .policy = nl_iaf_policy_fabric_id_sd_index_nested_port,
 	},
 };
 

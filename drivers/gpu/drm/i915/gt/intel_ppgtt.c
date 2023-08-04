@@ -114,12 +114,11 @@ __set_pd_entry(struct i915_page_directory * const pd,
 
 void
 clear_pd_entry(struct i915_page_directory * const pd,
-	       const unsigned short idx,
-	       const struct drm_i915_gem_object * const scratch)
+	       const unsigned short idx, u64 scratch_encode)
 {
 	GEM_BUG_ON(atomic_read(px_used(pd)) == 0);
 
-	write_dma_entry(px_base(pd), idx, scratch->encode);
+	write_dma_entry(px_base(pd), idx, scratch_encode);
 	pd->entry[idx] = NULL;
 	atomic_dec(px_used(pd));
 }
@@ -128,7 +127,7 @@ bool
 release_pd_entry(struct i915_page_directory * const pd,
 		 const unsigned short idx,
 		 struct i915_page_table * const pt,
-		 const struct drm_i915_gem_object * const scratch)
+		 u64 scratch_encode)
 {
 	bool free = false;
 
@@ -137,7 +136,7 @@ release_pd_entry(struct i915_page_directory * const pd,
 
 	spin_lock(&pd->lock);
 	if (atomic_dec_and_test(&pt->used)) {
-		clear_pd_entry(pd, idx, scratch);
+		clear_pd_entry(pd, idx, scratch_encode);
 		free = true;
 	}
 	spin_unlock(&pd->lock);
@@ -432,7 +431,6 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	else
 		ppgtt->vm.top = 1;
 
-	dma_resv_init(&ppgtt->vm._resv);
 	err = i915_address_space_init(&ppgtt->vm, VM_CLASS_PPGTT);
 	if (err)
 		return err;

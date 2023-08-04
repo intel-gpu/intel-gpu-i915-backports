@@ -34,15 +34,6 @@ config IAF_DEBUG_SELFTESTS
 	  Enable Intel Accelerator Fabric driver self-tests to be triggered
 	  by the 'selftests' module parameter
 
-config IAF_DEBUG_FIRMWARE_ROPTION
-	bool "Enable Intel Accelerator Fabric firmware roptions"
-	depends on IAF_DEBUG_ENABLE
-	default y
-	help
-	  DO NOT UPSTREAM:
-	  Allow firmware_roption to specify the value of the firmware roption
-	  debug register
-
 config IAF_DEBUG_MBOX_ACCESS
 	bool "Enable Intel Accelerator Fabric mbox access interface"
 	depends on IAF_DEBUG_ENABLE

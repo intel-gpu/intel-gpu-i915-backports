@@ -44,7 +44,8 @@ static void free_pool(struct intel_flat_ppgtt_request_pool *pool)
 
 void intel_flat_ppgtt_request_pool_clean(struct i915_vma *vma)
 {
-	free_pool(xchg(&vma->pool, NULL));
+	if (vma->pool)
+		free_pool(xchg(&vma->pool, NULL));
 }
 
 static void binder_throttle(struct intel_context *ce)

@@ -1,8 +1,13 @@
-#postrm script for intel-i915-dkms-prerelease
+#!/bin/sh
+#
+#postrm script for intel-i915-prerelease
+
+set -e
 
 #update initramfs
 case "$1" in
     remove)
+	depmod -a
 	if [ -x /usr/sbin/update-initramfs ]; then
   	    /usr/sbin/update-initramfs -u
 	fi
@@ -13,7 +18,8 @@ case "$1" in
 
     *)
 	echo "postrm called with unknown argument \`$1'" >&2
-	exit 0
+	exit 1
     ;;
 esac
 
+exit 0

@@ -337,12 +337,8 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	 *
 	 * It is also used for periodic low-priority events, such as
 	 * idle-timers and recording error state.
-	 *
-	 * All tasks on the workqueue are expected to acquire the dev mutex
-	 * so there is no point in running more than one instance of the
-	 * workqueue at any time.  Use an ordered one.
 	 */
-	dev_priv->wq = alloc_ordered_workqueue("i915", 0);
+	dev_priv->wq = alloc_workqueue("%s", WQ_UNBOUND, 0, "i915");
 	if (dev_priv->wq == NULL)
 		goto out_err;
 
@@ -681,8 +677,6 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 
 	intel_detect_preproduction_hw(dev_priv);
 	init_waitqueue_head(&dev_priv->user_fence_wq);
-
-	spin_lock_init(&dev_priv->vm_priv_obj_lock);
 
 	return 0;
 
@@ -1352,6 +1346,29 @@ i915_print_iommu_status(struct drm_i915_private *i915, struct drm_printer *p)
 		   str_enabled_disabled(i915_vtd_active(i915)));
 }
 
+__maybe_unused
+static void print_chickens(struct drm_i915_private *i915)
+{
+	static const struct {
+		const char *name;
+		bool state;
+	} chickens[] = {
+#define C(x) { __stringify(DRM_I915_CHICKEN_##x), IS_ENABLED(CONFIG_DRM_I915_CHICKEN_##x) }
+		C(ASYNC_GET_PAGES),
+		C(CLEAR_ON_CREATE),
+		C(CLEAR_ON_FREE),
+		C(CLEAR_ON_IDLE),
+		C(PARALLEL_USERPTR),
+#undef C
+		{},
+	};
+	const typeof(*chickens) *c;
+
+	for (c = chickens; c->name; c++)
+		drm_info(&i915->drm, "  %s: %s\n",
+			 c->name, str_enabled_disabled(c->state));
+}
+
 static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 {
 	if (drm_debug_enabled(DRM_UT_DRIVER)) {
@@ -1376,8 +1393,10 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 		drm_printf(&p, "mode: %s\n", i915_iov_mode_to_string(IOV_MODE(dev_priv)));
 	}
 
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG))
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG)) {
 		drm_info(&dev_priv->drm, "DRM_I915_DEBUG enabled\n");
+		print_chickens(dev_priv);
+	}
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
 		drm_info(&dev_priv->drm, "DRM_I915_DEBUG_GEM enabled\n");
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM))
@@ -1737,6 +1756,13 @@ static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
 	struct drm_i915_file_private *file_priv = file->driver_priv;
 
+	/*
+	 * Before changing anything wait for EU Debugger's discovery thread.
+	 * Mark this client as being closed.
+	 */
+	i915_debugger_wait_on_discovery(to_i915(dev), file_priv->client);
+	i915_drm_client_close(file_priv->client);
+
 	i915_gem_context_close(file);
 	i915_drm_client_cleanup(file_priv->client);
 
@@ -1879,10 +1905,11 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 					continue;
 
 				if (!i915_gem_object_has_pages(obj))
-					break;
+					continue;
 
-				if (!i915_gem_object_unbind(obj, &ww, 0))
-					__i915_gem_object_put_pages(obj);
+				err = i915_gem_object_unbind(obj, &ww, 0);
+				if (err == 0)
+					err = __i915_gem_object_put_pages(obj);
 			}
 
 			i915_gem_object_put(obj);
@@ -2811,9 +2838,6 @@ static const struct drm_driver i915_drm_driver = {
 	.release = i915_driver_release,
 	.open = i915_driver_open,
 	.lastclose = i915_driver_lastclose,
-#ifdef CONFIG_DRM_LEGACY
-	.preclose  = i915_driver_preclose,
-#endif
 	.postclose = i915_driver_postclose,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,

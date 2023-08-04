@@ -1,4 +1,22 @@
 # ChangeLog
+## Release I915_23WW31.5_682.14_23.6.24_230425.29
+* i915: updates to improve GuC error reporting
+* i915: fix to avoid incorrect reporting of max errors on flex
+* i915: update to enhance RAS error logging on max
+* i915: fix parameters for hbm error logging on max
+* i915: fix to avoid spurious error message on iaf startup on max
+* i915: fix to maintain lmem accounting across migration
+* i915: fix for exec buffer lock warn on max
+* i915: fix to align with hw's minimum invalidation page size requirement
+* i915: fix for IAF page fault seen during module load/unload on max
+* i915: fix for eudebug to purge deferred vm-bind on unbind
+* i915: fix for race condition related to decoupling gt parking and vma close
+* i915: update to load and use guc fw v70.7.0
+* i915: fix to avoid deadlock with concurrent eviction
+* i915: fix for race between eviction and revalidation
+* i915: fix for handling error during construction of vma bind work
+* i915: fix to prevent deadlock due to reuse of fences
+
 ## Release I915_23WW28.5_647.21_23.5.19_230406.21
 * i915: fix for 6942. fix for eudebug to ensure device is awake when connecting new debugger
 * i915: fix to ensure debugger checkpoints are restored following engine reset

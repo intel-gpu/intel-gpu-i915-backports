@@ -100,7 +100,6 @@ static int fake_put_pages(struct drm_i915_gem_object *obj,
 			   struct sg_table *pages)
 {
 	fake_free_pages(obj, pages);
-	obj->mm.dirty = false;
 	return 0;
 }
 

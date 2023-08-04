@@ -1770,6 +1770,12 @@ static int check_scratch_page(struct i915_gem_context *ctx,
 	if (!vm)
 		return -ENODEV;
 
+	if (i915_vm_scratch0_encode(vm) & PTE_NULL_PAGE) {
+		if (out)
+			*out = 0;
+		return 0;
+	}
+
 	if (!vm->scratch[0]) {
 		pr_err("No scratch page!\n");
 		return -EINVAL;

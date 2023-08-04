@@ -6,6 +6,7 @@
 
 #include <linux/dma-buf.h>
 #include <linux/highmem.h>
+#include <linux/list.h>
 #include <linux/pci-p2pdma.h>
 #include <linux/scatterlist.h>
 #ifdef MODULE_IMPORT_NS_SUPPORT
@@ -43,65 +44,17 @@ static struct drm_i915_gem_object *dma_buf_to_obj(struct dma_buf *buf)
 	return to_intel_bo(buf->priv);
 }
 
-static void dmabuf_unmap_addr(struct device *dev,
-			      struct drm_i915_gem_object *obj,
-			      struct scatterlist *sgl, int nents,
-			      enum dma_data_direction dir, unsigned long attrs)
+static void unmap_sg(struct device *dev,
+		     struct scatterlist *sg,
+		     enum dma_data_direction dir,
+		     unsigned long attrs)
 {
-	struct scatterlist *sg;
-	int i;
-
-	if (i915_gem_object_is_lmem(obj))
-		for_each_sg(sgl, sg, nents, i)
-			dma_unmap_resource(dev, sg_dma_address(sg), sg_dma_len(sg),
-					   dir, attrs);
-	else
-		dma_unmap_sg_attrs(dev, sgl, nents, dir, attrs);
-}
-
-/**
- * dmabuf_map_addr - Update LMEM address to a physical address and map the
- * resource.
- * @dev: valid device
- * @obj: valid i915 GEM object
- * @sgt: scatter gather table to apply mapping to
- * @dir: DMA direction
- *
- * For LMEM objects:
- * The dma_address of the scatter list is the LMEM "address".  From this the
- * actual physical address can be determined.
- *
- * Returns the number of mapped entries (which can be less than nents) on success,
- * or a negative error code on error.
- */
-static int dmabuf_map_addr(struct device *dev, struct drm_i915_gem_object *obj,
-			   struct scatterlist *sgl, int nents,
-			   enum dma_data_direction dir, unsigned long attrs)
-{
-	struct intel_memory_region *mem = obj->mm.region.mem;
-	struct scatterlist *sg;
-	phys_addr_t addr;
-	int ret = 0, i;
-
-	if (i915_gem_object_is_lmem(obj)) {
-		for_each_sg(sgl, sg, nents, i) {
-			addr = sg_dma_address(sg) - mem->region.start + mem->io_start;
-			sg->dma_address = dma_map_resource(dev, addr, sg->length, dir,
-							   attrs);
-			if (dma_mapping_error(dev, sg->dma_address)) {
-				dmabuf_unmap_addr(dev, obj, sgl, i, dir, attrs);
-				ret = -ENOMEM;
-				break;
-			}
-			sg->dma_length = sg->length;
-		}
-		if (!ret)
-			ret = nents;
-	} else {
-		ret = dma_map_sg_attrs(dev, sgl, nents, dir, attrs);
+	while (sg) {
+		dma_unmap_resource(dev,
+				   sg_dma_address(sg), sg_dma_len(sg),
+				   dir, attrs);
+		sg = __sg_next(sg);
 	}
-
-	return ret;
 }
 
 static struct sg_table *
@@ -109,10 +62,10 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 			  enum dma_data_direction map_dir)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
-	unsigned int nents, count = 0, mapped_ents = 0;
-	struct scatterlist *src, *dst;
+	struct scatterlist *dst, *end = NULL;
 	struct sg_table *sgt;
-	int ret, i, sidx = 0;
+	unsigned int nents;
+	int ret;
 
 	/*
 	 * Make a copy of the object's sgt, so that we can make an independent
@@ -132,61 +85,88 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 		nents = 0;
 		for_each_object_segment(sobj, obj)
 			nents += sobj->mm.pages->orig_nents;
+
+		obj = i915_gem_object_first_segment(obj);
 	} else {
 		nents = obj->mm.pages->orig_nents;
 		if (obj->pair)
 			nents += obj->pair->mm.pages->orig_nents;
 	}
 
-	if (sg_alloc_table(sgt, nents, GFP_KERNEL)) {
+	if (sg_alloc_table(sgt, nents, I915_GFP_ALLOW_FAIL)) {
 		ret = -ENOMEM;
 		goto err_free;
 	}
 
+	sgt->nents = 0;
 	dst = sgt->sgl;
+	do {
+		struct intel_memory_region *mem = obj->mm.region.mem;
+		struct scatterlist *src;
+		u64 dma_offset;
 
-	/* if segmented BO, obj starts as the first segment's BO */
-	if (i915_gem_object_has_segments(obj))
-		obj = rb_entry(rb_first_cached(&obj->segments), typeof(*obj), segment_node);
+		dma_offset = 0;
+		if (i915_gem_object_is_lmem(obj))
+			dma_offset = mem->io_start - mem->region.start;
 
-	while (count < nents && obj) {
-		struct scatterlist *dst_start = dst;
+		ret = i915_gem_object_migrate_sync(obj);
+		if (ret)
+			goto err_unmap;
 
-		for_each_sg(obj->mm.pages->sgl, src, obj->mm.pages->orig_nents, i) {
+		for (src = obj->mm.pages->sgl; src; src = __sg_next(src)) {
+			dma_addr_t addr, len;
+
 			sg_set_page(dst, sg_page(src), src->length, 0);
-			sg_dma_address(dst) = sg_dma_address(src);
-			sg_dma_len(dst) = sg_dma_len(src);
-			dst = sg_next(dst);
-		}
-		count += obj->mm.pages->orig_nents;
 
-		if (map_dir != DMA_NONE) {
-			ret = dmabuf_map_addr(attach->dev, obj, dst_start,
-					      obj->mm.pages->orig_nents,
-					      map_dir, DMA_ATTR_SKIP_CPU_SYNC);
-			if (ret < 0) {
-				i915_gem_unmap_dma_buf(attach, sgt, map_dir);
-				goto err;
+			if (map_dir == DMA_NONE) {
+				addr = sg_dma_address(src);
+				len = sg_dma_len(src);
+			} else if (dma_offset) {
+				len = sg_dma_len(src);
+				addr = dma_map_resource(attach->dev,
+							sg_dma_address(src) + dma_offset,
+							len,
+							map_dir,
+							DMA_ATTR_SKIP_CPU_SYNC);
+			} else {
+				len = src->length;
+				addr = dma_map_page_attrs(attach->dev,
+							  sg_page(src), 0, len,
+							  map_dir,
+							  DMA_ATTR_SKIP_CPU_SYNC);
 			}
-			mapped_ents += ret;
+			if (dma_mapping_error(obj->base.dev->dev, addr)) {
+				ret = -ENOMEM;
+				goto err_unmap;
+			}
+
+			sg_dma_address(dst) = addr;
+			sg_dma_len(dst) = len;
+
+			end = dst;
+			dst = __sg_next(dst);
+			sgt->nents++;
 		}
 
 		/* advance to next segment object, or to the object's pair */
-		if (i915_gem_object_is_segment(obj)) {
+		if (i915_gem_object_is_segment(obj))
 			obj = rb_entry_safe(rb_next(&obj->segment_node),
 					    typeof(*obj), segment_node);
-			sidx++;
-		} else {
+		else
 			obj = obj->pair;
-		}
-	}
-	GEM_BUG_ON(count != nents);
-
-	if (mapped_ents)
-		sgt->nents = mapped_ents;
+	} while (obj);
+	sg_mark_end(end);
 
 	return sgt;
 
+err_unmap:
+	if (end) {
+		sg_mark_end(end);
+		unmap_sg(attach->dev,
+			 sgt->sgl, map_dir,
+			 DMA_ATTR_SKIP_CPU_SYNC);
+	}
+	sg_free_table(sgt);
 err_free:
 	kfree(sgt);
 err:
@@ -197,22 +177,7 @@ static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
 				   struct sg_table *sgt,
 				   enum dma_data_direction dir)
 {
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
-
-	if (i915_gem_object_has_segments(obj)) {
-		struct scatterlist *sgl = sgt->sgl;
-		struct drm_i915_gem_object *sobj;
-
-		for_each_object_segment(sobj, obj) {
-			dmabuf_unmap_addr(attach->dev, sobj, sgl,
-					  sobj->mm.pages->orig_nents, dir,
-					  DMA_ATTR_SKIP_CPU_SYNC);
-			sgl += sobj->mm.pages->orig_nents;
-		}
-	} else {
-		dmabuf_unmap_addr(attach->dev, obj, sgt->sgl,
-				  sgt->orig_nents, dir, DMA_ATTR_SKIP_CPU_SYNC);
-	}
+	unmap_sg(attach->dev, sgt->sgl, dir, DMA_ATTR_SKIP_CPU_SYNC);
 	sg_free_table(sgt);
 	kfree(sgt);
 }
@@ -313,7 +278,7 @@ static int i915_gem_begin_cpu_access(struct dma_buf *dma_buf, enum dma_data_dire
 retry:
 	err = i915_gem_object_lock(obj, &ww);
 	if (!err)
-		err = i915_gem_object_pin_pages(obj);
+		err = i915_gem_object_pin_pages_sync(obj);
 	if (!err) {
 		if (i915_gem_object_is_lmem(obj))
 			err = i915_gem_object_set_to_wc_domain(obj, write);
@@ -354,6 +319,37 @@ retry:
 	return err;
 }
 
+static const struct pci_device_id supported_ids[] = {
+	{ PCI_VDEVICE(INTEL, 0x09a2), 256 },
+	{ 0 }
+};
+
+/*
+ * It is possible that the necessary bridge ID has not made it to the p2pdma
+ * list.  Double check.
+ * NOTE: this is modeled after pci_p2pdma_distance_many function.  Only the bridge
+ * verification path is "followed".
+ */
+static int local_distance_check(struct pci_dev *pci_dev)
+{
+	const struct pci_device_id *match = NULL;
+	struct pci_host_bridge *host;
+	struct pci_dev *root;
+
+	host = pci_find_host_bridge(pci_dev->bus);
+	if (!host)
+		goto exit;
+
+	root = pci_get_slot(host->bus, 0);
+	if (!root)
+		goto exit;
+
+	match = pci_match_id(supported_ids, root);
+
+exit:
+	return match ? match->driver_data : -1;
+}
+
 #define I915_P2PDMA_OVERRIDE BIT(0)
 #define I915_FABRIC_ONLY BIT(1)
 
@@ -374,6 +370,10 @@ static int i915_p2p_distance(struct drm_i915_private *i915, struct device *dev)
 	if (!p2pdma_override(i915))
 		distance = pci_p2pdma_distance(to_pci_dev(i915->drm.dev), dev,
 					       false);
+
+	/* double check the PCI bridge info (WA for missing ID) */
+	if (distance == -1)
+		distance = local_distance_check(to_pci_dev(i915->drm.dev));
 
 	return distance;
 }
@@ -403,7 +403,6 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 	int err;
 
 	fabric = update_fabric(dmabuf, attach->importer_priv);
-
 	p2p_distance = object_to_attachment_p2p_distance(obj, attach);
 
 	if (fabric < 0)
@@ -415,7 +414,7 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 
 	trace_i915_dma_buf_attach(obj, fabric, p2p_distance);
 
-	pvc_wa_disallow_rc6(ce->engine->i915);
+	pvc_wa_disallow_rc6(gt->i915);
 	for_i915_gem_ww(&ww, err, true) {
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)

@@ -10,6 +10,7 @@
 #include "intel_gt.h"
 #include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_tlb.h"
 #include "uc/intel_guc.h"
@@ -139,8 +140,7 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 		return;
 	}
 
-	if (drm_WARN_ONCE(&i915->drm, !num,
-			  "Platform does not implement TLB invalidation!"))
+	if (gt_WARN_ONCE(gt, !num, "Platform does not implement TLB invalidation!"))
 		return;
 
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_ALL);
@@ -207,9 +207,8 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 		GEM_BUG_ON(!i915_mmio_reg_offset(rb.reg));
 
 		if (wait_for_invalidate(gt, rb))
-			drm_err_ratelimited(&gt->i915->drm,
-					    "%s TLB invalidation did not complete in %ums!\n",
-					    engine->name, TLB_INVAL_TIMEOUT_MS);
+			gt_err_ratelimited(gt, "%s TLB invalidation did not complete in %ums!\n",
+					   engine->name, TLB_INVAL_TIMEOUT_MS);
 	}
 
 	/*
@@ -303,12 +302,16 @@ static bool mmio_invalidate_range(struct intel_gt *gt, u64 start, u64 length)
 
 static u64 tlb_page_selective_size(u64 *addr, u64 length)
 {
-	u64 start, end, align;
+	const u64 end = *addr + length;
+	u64 start;
 
-	if (length < SZ_4K)
-		length = SZ_4K;
-
-	align = roundup_pow_of_two(length);
+	/*
+	 * Minimum invalidation size for a 2MB page that the hardware expects is
+	 * 16MB
+	 */
+	length = max_t(u64, roundup_pow_of_two(length), SZ_4K);
+	if (length >= SZ_2M)
+		length = max_t(u64, SZ_16M, length);
 
 	/*
 	 * We need to invalidate a higher granularity if start address is not
@@ -316,24 +319,13 @@ static u64 tlb_page_selective_size(u64 *addr, u64 length)
 	 * find the length large enough to create an address mask covering the
 	 * required range.
 	 */
-	start = ALIGN_DOWN(*addr, align);
-	end = ALIGN(*addr + length, align);
-	length = align;
+	start = round_down(*addr, length);
 	while (start + length < end) {
 		length <<= 1;
-		start = ALIGN_DOWN(*addr, length);
+		start = round_down(*addr, length);
 	}
 
-	/*
-	 * Minimum invalidation size for a 2MB page that the hardware expects is
-	 * 16MB
-	 */
-	if (length >= SZ_2M) {
-		length = max_t(u64, SZ_16M, length);
-		start = ALIGN_DOWN(*addr, length);
-	}
 	*addr = start;
-
 	return length;
 }
 

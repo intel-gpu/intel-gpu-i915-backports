@@ -30,7 +30,6 @@
 #include <drm/drm_print.h>
 
 #include "display/intel_frontbuffer.h"
-#include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
@@ -57,11 +56,49 @@ static struct kmem_cache *slab_objects;
 
 static const struct drm_gem_object_funcs i915_gem_object_funcs;
 
+struct object_advise_hints {
+	struct intel_memory_region *preferred_region;
+	u32 madv_atomic;
+};
+
 void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,
-				     struct i915_request *rq)
+				     struct dma_fence *f)
 {
 	/* Trust that the caller has always chained up correctly */
-	__i915_active_fence_set(&obj->mm.migrate, &rq->fence);
+	__i915_active_fence_set(&obj->mm.migrate, f);
+}
+
+int i915_gem_object_migrate_await(struct drm_i915_gem_object *obj,
+				  struct i915_request *rq)
+{
+	struct dma_fence *fence;
+	int err;
+
+	fence = i915_active_fence_get_or_error(&obj->mm.migrate);
+	if (likely(!fence))
+		return 0;
+
+	if (IS_ERR(fence))
+		return PTR_ERR(fence);
+
+	err = i915_request_await_dma_fence(rq, fence);
+	dma_fence_put(fence);
+
+	return err;
+}
+
+void i915_gem_object_migrate_boost(struct drm_i915_gem_object *obj, int prio)
+{
+	struct dma_fence *fence;
+
+	fence = i915_active_fence_get(&obj->mm.migrate);
+	if (!fence)
+		return;
+
+	if (dma_fence_is_i915(fence))
+		i915_request_set_priority(to_request(fence), prio);
+
+	dma_fence_put(fence);
 }
 
 long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
@@ -69,6 +106,7 @@ long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 				  long timeout)
 {
 	struct dma_fence *fence;
+	ktime_t start;
 
 	fence = i915_active_fence_get_or_error(&obj->mm.migrate);
 	if (likely(!fence))
@@ -77,7 +115,20 @@ long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 	if (IS_ERR(fence))
 		return PTR_ERR(fence);
 
-	timeout = i915_request_wait(to_request(fence), flags, timeout);
+	if (dma_fence_is_i915(fence)) {
+		start = ktime_get_raw();
+		timeout = i915_request_wait(to_request(fence), flags, timeout);
+		local64_add(ktime_get_raw() - start,
+			    &obj->mm.region.mem->gt->stats.migration_stall);
+	} else {
+		timeout = dma_fence_wait_timeout(fence,
+						 flags & I915_WAIT_INTERRUPTIBLE,
+						 timeout);
+		if (timeout == 0)
+			timeout = -ETIME;
+		if (timeout == 1)
+			timeout = 0;
+	}
 	if (fence->error)
 		timeout = fence->error;
 
@@ -96,10 +147,33 @@ int i915_gem_object_migrate_sync(struct drm_i915_gem_object *obj)
 	return timeout < 0 ? timeout : 0;
 }
 
-void i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj)
+void i915_gem_object_migrate_decouple(struct drm_i915_gem_object *obj)
 {
-	i915_gem_object_migrate_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
+	struct dma_fence *f;
+
+	if (!i915_active_fence_isset(&obj->mm.migrate))
+		return;
+
+	rcu_read_lock();
+	f = xchg(&obj->mm.migrate.fence, NULL);
+	if (unlikely(!IS_ERR_OR_NULL(f))) {
+		unsigned long flags;
+
+		spin_lock_irqsave(f->lock, flags);
+		list_del_init(&obj->mm.migrate.cb.node);
+		spin_unlock_irqrestore(f->lock, flags);
+	}
+	rcu_read_unlock();
+}
+
+int i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj)
+{
+	int ret;
+
+	ret = i915_gem_object_migrate_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
 	obj->mm.migrate.fence = NULL;
+
+	return ret;
 }
 
 unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
@@ -126,40 +200,33 @@ static struct i915_resv *i915_resv_alloc(void)
 		return NULL;
 
 	dma_resv_init(&resv->base);
-	resv->refcount = 1;
+	kref_init(&resv->refcount);
 	return resv;
 }
 
 static struct i915_resv *i915_resv_get(struct i915_resv *resv)
 {
-	dma_resv_assert_held(&resv->base);
-	resv->refcount++;
-
+	kref_get(&resv->refcount);
 	return resv;
+}
+
+static void i915_resv_free(struct kref *ref)
+{
+	struct i915_resv *resv = container_of(ref, typeof(*resv), refcount);
+
+	dma_resv_fini(&resv->base);
+	kfree_rcu(resv, rcu);
 }
 
 static void i915_resv_put(struct i915_resv *resv)
 {
-	bool last;
-
-	if (likely(READ_ONCE(resv->refcount) == 1))
-		goto free;
-
-	dma_resv_lock(&resv->base, NULL);
-	last = --resv->refcount == 0;
-	dma_resv_unlock(&resv->base);
-	if (!last)
-		return;
-
-free:
-	dma_resv_fini(&resv->base);
-	kfree_rcu(resv, rcu);
+	kref_put(&resv->refcount, i915_resv_free);
 }
 
 void i915_gem_object_share_resv(struct drm_i915_gem_object *parent,
 				struct drm_i915_gem_object *child)
 {
-	assert_object_held(parent);
+	GEM_BUG_ON(child->shares_resv == parent->shares_resv);
 	i915_resv_put(child->shares_resv);
 
 	GEM_BUG_ON(parent->base.resv != &parent->shares_resv->base);
@@ -183,6 +250,7 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 	}
 	obj->base.resv = &obj->shares_resv->base;
 
+	INIT_LIST_HEAD(&obj->mm.region.link);
 	INIT_ACTIVE_FENCE(&obj->mm.migrate);
 
 	/* below could be used prior to i915_gem_object_init */
@@ -194,7 +262,9 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 
 void i915_gem_object_free(struct drm_i915_gem_object *obj)
 {
-	GEM_WARN_ON(i915_gem_object_has_segments(obj));
+	GEM_BUG_ON(obj->mm.region.mem);
+	GEM_BUG_ON(i915_gem_object_has_segments(obj));
+
 	return kmem_cache_free(slab_objects, obj);
 }
 
@@ -213,7 +283,6 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	INIT_LIST_HEAD(&obj->vma.list);
 
 	INIT_LIST_HEAD(&obj->mm.link);
-	INIT_LIST_HEAD(&obj->mm.region.link);
 
 	INIT_LIST_HEAD(&obj->lut_list);
 	spin_lock_init(&obj->lut_lock);
@@ -231,7 +300,6 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	mutex_init(&obj->mm.get_page.lock);
 	INIT_RADIX_TREE(&obj->mm.get_dma_page.radix, GFP_KERNEL | __GFP_NOWARN);
 	mutex_init(&obj->mm.get_dma_page.lock);
-	INIT_LIST_HEAD(&obj->priv_obj_link);
 
 	i915_drm_client_init_bo(obj);
 }
@@ -262,6 +330,36 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 						cache_level);
 
 	if (cache_level != I915_CACHE_NONE)
+		obj->cache_coherent = (I915_BO_CACHE_COHERENT_FOR_READ |
+				       I915_BO_CACHE_COHERENT_FOR_WRITE);
+	else if (i915_gem_object_use_llc(obj))
+		obj->cache_coherent = I915_BO_CACHE_COHERENT_FOR_READ;
+	else
+		obj->cache_coherent = 0;
+
+	obj->cache_dirty =
+		!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
+}
+
+/**
+ * i915_gem_object_set_pat_index - set PAT index to be used in PTE encode
+ * @obj: #drm_i915_gem_object
+ * @pat_index: PAT index
+ *
+ * This is a clone of i915_gem_object_set_cache_coherency taking pat index
+ * instead of cache_level as its second argument.
+ */
+void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
+				   unsigned int pat_index)
+{
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
+	if (obj->pat_index == pat_index)
+		return;
+
+	obj->pat_index = pat_index;
+
+	if (pat_index != i915_gem_get_pat_index(i915, I915_CACHE_NONE))
 		obj->cache_coherent = (I915_BO_CACHE_COHERENT_FOR_READ |
 				       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
@@ -334,11 +432,10 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 		return true;
 
 	/*
-	 * No backing store: we won't migrate but still want
-	 * i915_gem_object_migrate() to reassign the BO's placment to
-	 * the faulting GT's memory region (first touch policy).
+	 * first touch policy:
+	 * Migration to reassign the BO's placment to the faulting GT's memory region.
 	 */
-	if (!(i915_gem_object_has_pages(obj) || obj->base.filp))
+	if (!i915_gem_object_has_backing_store(obj))
 		return true;
 
 	return false;
@@ -420,67 +517,160 @@ static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 	return err;
 }
 
+static void object_revert_hints(struct drm_i915_gem_object *obj,
+				struct object_advise_hints *hints)
+{
+	obj->mm.madv_atomic = hints->madv_atomic;
+	obj->mm.preferred_region = hints->preferred_region;
+}
+
+static void object_store_old_hints(struct drm_i915_gem_object *obj,
+				   struct object_advise_hints *hints)
+{
+	hints->madv_atomic = obj->mm.madv_atomic;
+	hints->preferred_region = obj->mm.preferred_region;
+}
+
+static
+int object_validate_set_segment_hint(struct drm_i915_gem_object *obj,
+				     struct prelim_drm_i915_gem_vm_advise *args,
+				     struct drm_i915_gem_object **sobj,
+				     unsigned long *num_segments)
+{
+	struct drm_i915_gem_object *tmp_obj;
+	unsigned long offset, count = 0;
+	struct rb_node *node;
+	long remaining;
+
+	if (!i915_gem_object_has_segments(obj) || !args->length)
+		return -EINVAL;
+
+	/*
+	 * Returned sobj is first segment to apply hints; verify that
+	 * start is aligned to segment boundary (offset == 0).
+	 */
+	*sobj = i915_gem_object_lookup_segment(obj, args->start, &offset);
+	if (!*sobj || offset != 0)
+		return -EINVAL;
+
+	/*
+	 * Verify length is aligned to segment boundary (remaining == 0).
+	 * Can legally end at last segment or any intermediate segment.
+	 */
+	remaining = args->length;
+	for (node = &(*sobj)->segment_node; node; node = rb_next(node)) {
+		tmp_obj = rb_entry(node, typeof(*tmp_obj), segment_node);
+		remaining -= tmp_obj->base.size;
+		count++;
+		if (remaining <= 0)
+			break;
+	}
+
+	if (remaining != 0)
+		return -EINVAL;
+
+	*num_segments = count;
+	return 0;
+}
+
 /* Similar to system madvise, we convert hints to stored flags */
 int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 			     struct prelim_drm_i915_gem_vm_advise *args)
 {
-	struct intel_memory_region *old_preferred_region;
-	unsigned int old_madv_atomic;
+	struct object_advise_hints parent_hints, *segment_hints = NULL;
+	struct drm_i915_gem_object *start_sobj = NULL;
 	struct i915_gem_ww_ctx ww;
 	int err = 0;
+
+	/* Object chunk-granular hints specified with args->[start,length] */
+	if (args->start || args->length) {
+		unsigned long num_segments;
+
+		err = object_validate_set_segment_hint(obj, args, &start_sobj,
+						       &num_segments);
+		if (err)
+			return err;
+		/* Storage needed for storing old hints (revert to on error) */
+		segment_hints = kmalloc_array(num_segments,
+					      sizeof(*segment_hints),
+					      GFP_KERNEL);
+		if (!segment_hints)
+			return -ENOMEM;
+	} else {
+		start_sobj = i915_gem_object_first_segment(obj);
+		/* for normal BO w/o segments, start_sobj is NULL */
+	}
 
 	for_i915_gem_ww(&ww, err, true) {
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
 
-		/*
-		 * Revert to these values if unable to update all
-		 * segments to the requested hint
-		 */
-		old_madv_atomic = obj->mm.madv_atomic;
-		old_preferred_region = obj->mm.preferred_region;
+		/* If not chunk-granular hints, set hints in parent first. */
+		if (!segment_hints) {
+			/*
+			 * Revert to these values if unable to update all
+			 * segments to the requested hint
+			 */
+			object_store_old_hints(obj, &parent_hints);
 
-		err = __i915_gem_object_set_hint(obj, &ww, args);
+			err = __i915_gem_object_set_hint(obj, &ww, args);
+		}
 
 		/*
-		 * Propagate hints to child segments for now; next step
-		 * is to add support for chunk granular hints
+		 * Propagate hints to child segments (whole BO) or set hints
+		 * for specified subset of chunks starting with start_sobj.
 		 */
-		if (!err && i915_gem_object_has_segments(obj)) {
+		if (!err && start_sobj) {
+			struct object_advise_hints *revert_to;
 			struct drm_i915_gem_object *sobj;
+			unsigned long remaining;
+			struct rb_node *node;
+			long idx;
 
-			for_each_object_segment(sobj, obj) {
+			remaining = args->length ?: obj->base.size;
+			for (idx = 0, node = &start_sobj->segment_node;
+			     node && remaining;
+			     idx++, node = rb_next(node)) {
+				sobj = rb_entry(node, typeof(*sobj), segment_node);
 				err = i915_gem_object_lock(sobj, &ww);
 				if (!err) {
+					if (segment_hints)
+						object_store_old_hints(sobj,
+								       &segment_hints[idx]);
 					err = __i915_gem_object_set_hint(sobj, &ww, args);
-					i915_gem_object_unlock(sobj);
+					i915_gem_ww_unlock_single(sobj);
 				}
+				remaining -= sobj->base.size;
+
+				if (!err)
+					continue;
 
 				/*
-				 * On -EDEADLK error, i915_gem_ww will unwind
-				 * and retry. For other errors, we will break
-				 * and return error to user. In both cases, we
-				 * first rollback hints to the prior value.
+				 * On EDEADLK error, i915_gem_ww will unwind and
+				 * retry. For other errors, we will break and
+				 * return error to user. In both cases, we first
+				 * rollback hints to the prior value. It is
+				 * sufficient to just hold the parent object
+				 * lock while reverting hints in segment BOs.
 				 */
-				if (err) {
-					struct rb_node *node;
-
-					for (node = rb_prev(&sobj->segment_node);
-					     node; node = rb_prev(node)) {
-						sobj = rb_entry(node, typeof(*sobj),
-								segment_node);
-						sobj->mm.madv_atomic = old_madv_atomic;
-						sobj->mm.preferred_region = old_preferred_region;
-					}
-					obj->mm.madv_atomic = old_madv_atomic;
-					obj->mm.preferred_region = old_preferred_region;
-					break;
+				for (node = rb_prev(&sobj->segment_node), idx--;
+				     node && idx >= 0;
+				     node = rb_prev(node), idx--) {
+					sobj = rb_entry(node, typeof(*sobj),
+							segment_node);
+					revert_to = segment_hints ? &segment_hints[idx] :
+								    &parent_hints;
+					object_revert_hints(sobj, revert_to);
 				}
+				if (!segment_hints)
+					object_revert_hints(obj, &parent_hints);
+				break;
 			}
 		}
 	}
 
+	kfree(segment_hints);
 	return err;
 }
 
@@ -643,6 +833,21 @@ static void __i915_gem_object_free_vma(struct drm_i915_gem_object *obj)
 	spin_unlock(&obj->vma.lock);
 }
 
+static void detach_vm(struct drm_i915_gem_object *obj)
+{
+	struct i915_address_space *vm;
+
+	rcu_read_lock();
+	vm = READ_ONCE(obj->vm);
+	if (!IS_ERR_OR_NULL(vm)) {
+		spin_lock(&vm->priv_obj_lock);
+		if (READ_ONCE(obj->vm) == vm)
+			list_del(&obj->priv_obj_link);
+		spin_unlock(&vm->priv_obj_lock);
+	}
+	rcu_read_unlock();
+}
+
 void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 {
 	trace_i915_gem_object_destroy(obj);
@@ -659,9 +864,10 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	atomic_set(&obj->mm.pages_pin_count, 0);
 	__i915_gem_object_put_pages(obj);
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-	GEM_BUG_ON(!list_empty(&obj->mm.region.link));
 	GEM_BUG_ON(!list_empty(&obj->mm.link));
 	bitmap_free(obj->bit_17);
+
+	detach_vm(obj);
 
 	if (obj->base.import_attach)
 		drm_prime_gem_destroy(&obj->base, NULL);
@@ -672,8 +878,6 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	if (obj->mm.n_placements > 1)
 		kfree(obj->mm.placements);
 
-	if (obj->shares_resv_from)
-		i915_vm_resv_put(obj->shares_resv_from);
 	i915_resv_put(obj->shares_resv);
 }
 
@@ -688,11 +892,6 @@ static void __i915_gem_free_objects(struct drm_i915_private *i915,
 			obj->ops->delayed_free(obj);
 			continue;
 		}
-
-		spin_lock(&i915->vm_priv_obj_lock);
-		if (obj->vm && obj->vm != I915_BO_INVALID_PRIV_VM)
-			list_del_init(&obj->priv_obj_link);
-		spin_unlock(&i915->vm_priv_obj_lock);
 
 		__i915_gem_free_object(obj);
 
@@ -722,11 +921,12 @@ struct drm_i915_gem_object *
 i915_gem_object_lookup_segment(struct drm_i915_gem_object *obj, unsigned long offset,
 			       unsigned long *adjusted_offset)
 {
-	struct drm_i915_gem_object *sobj;
+	struct drm_i915_gem_object *found = NULL;
 	struct rb_node *node;
-	bool found = false;
 
 	if (offset) {
+		struct drm_i915_gem_object *sobj;
+
 		node = obj->segments.rb_root.rb_node;
 		while (node) {
 			sobj = rb_entry(node, typeof(*sobj), segment_node);
@@ -736,7 +936,7 @@ i915_gem_object_lookup_segment(struct drm_i915_gem_object *obj, unsigned long of
 			} else if (offset >= sobj->segment_offset + sobj->base.size) {
 				node = node->rb_right;
 			} else {
-				found = true;
+				found = sobj;
 				break;
 			}
 		}
@@ -746,18 +946,16 @@ i915_gem_object_lookup_segment(struct drm_i915_gem_object *obj, unsigned long of
 		 * so use the optimized lookup
 		 */
 		node = rb_first_cached(&obj->segments);
-		sobj = rb_entry_safe(node, typeof(*sobj), segment_node);
-		found = sobj;
+		found = rb_entry_safe(node, typeof(*found), segment_node);
 	}
 
-	GEM_BUG_ON(!found);
-	if (adjusted_offset) {
-		GEM_BUG_ON(sobj->segment_offset > offset);
+	if (found && adjusted_offset) {
+		GEM_BUG_ON(found->segment_offset > offset);
 		/* return the (smaller) offset into this segment */
-		*adjusted_offset = offset - sobj->segment_offset;
+		*adjusted_offset = offset - found->segment_offset;
 	}
 
-	return sobj;
+	return found;
 }
 
 void i915_gem_object_add_segment(struct drm_i915_gem_object *obj,
@@ -935,20 +1133,7 @@ static void lists_swap(struct list_head *a, struct list_head *b)
 static void
 swap_blocks(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 {
-	struct intel_memory_region *a = obj->mm.region.mem;
-	struct intel_memory_region *b = donor->mm.region.mem;
-
-	GEM_BUG_ON(a == b);
-	if (a->id > b->id)
-		swap(a, b);
-
-	mutex_lock(&a->mm_lock);
-	mutex_lock_nested(&b->mm_lock, SINGLE_DEPTH_NESTING);
-
 	lists_swap(&obj->mm.blocks, &donor->mm.blocks);
-
-	mutex_unlock(&b->mm_lock);
-	mutex_unlock(&a->mm_lock);
 }
 
 static void
@@ -986,6 +1171,8 @@ swap_shrinker(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor
 static void
 swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 {
+	__i915_active_fence_replace(&donor->mm.migrate, &obj->mm.migrate);
+
 	swap(obj->mm.pages, donor->mm.pages);
 	swap(obj->mm.mapping, donor->mm.mapping);
 	swap(obj->mm.page_sizes, donor->mm.page_sizes);
@@ -1053,7 +1240,6 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 			i915_gem_object_put(obj->swapto);
 			obj->swapto = NULL;
 		}
-		obj->mm.dirty = true;
 		madv = I915_MADV_WILLNEED;
 	} else if (i915_gem_object_has_pages(obj)) { /* lmem <-> lmem */
 		err = i915_gem_object_ww_copy_blt(obj, donor, ww, ce, nowait);
@@ -1082,6 +1268,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 
 	trace_i915_gem_object_migrate(obj, id);
 
+	i915_gem_object_unaccount(obj);
 	swap(obj->base.size, donor->base.size);
 	swap(obj->base.filp, donor->base.filp);
 	swap(obj->flags, donor->flags);
@@ -1091,6 +1278,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	swap_region(obj, donor);
 	swap_shrinker(obj, donor);
 	swap_pages(obj, donor);
+	i915_gem_object_account(obj);
 
 	GEM_BUG_ON(obj->mm.region.mem->id != id);
 	GEM_BUG_ON(obj->swapto && id == INTEL_REGION_SMEM);
@@ -1170,7 +1358,7 @@ i915_gem_object_prepare_memcpy(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_pin_pages_sync(obj);
 	if (ret)
 		return ret;
 
@@ -1215,11 +1403,9 @@ i915_gem_object_finish_memcpy(struct object_memcpy_info *info)
 	if (i915_gem_object_is_lmem(info->obj)) {
 		intel_runtime_pm_put(&i915->runtime_pm, info->wakeref);
 	} else {
-		if (info->write) {
+		if (info->write)
 			i915_gem_object_flush_frontbuffer(info->obj,
 							  ORIGIN_CPU);
-			info->obj->mm.dirty = true;
-		}
 	}
 	i915_gem_object_unpin_pages(info->obj);
 }
@@ -1510,14 +1696,12 @@ static int i915_alloc_vm_range(struct i915_vma *vma)
 		if (err)
 			continue;
 
-		intel_flat_ppgtt_allocate_requests(vma, false);
 		vma->vm->allocate_va_range(vma->vm, &stash,
 					   i915_vma_offset(vma),
 					   vma->size);
 
 		set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
 		/* Implicit unlock */
-		intel_flat_ppgtt_request_pool_clean(vma);
 	}
 
 	i915_vm_free_pt_stash(vma->vm, &stash);
@@ -1527,13 +1711,10 @@ static int i915_alloc_vm_range(struct i915_vma *vma)
 
 static inline void i915_insert_vma_pages(struct i915_vma *vma, bool is_lmem)
 {
-	intel_flat_ppgtt_allocate_requests(vma, false);
 	vma->vm->insert_entries(vma->vm, NULL, vma,
 				i915_gem_get_pat_index(vma->vm->i915,
 						       I915_CACHE_NONE),
 				is_lmem ? PTE_LM : 0);
-	intel_flat_ppgtt_request_pool_clean(vma);
-
 	wmb();
 }
 
@@ -1989,7 +2170,6 @@ request:
 	wake_up_locked(&i915->mm.window_queue);
 	spin_unlock(&i915->mm.window_queue.lock);
 
-	dst->mm.dirty = true;
 	i915_gem_object_unpin_pages(src);
 	i915_gem_object_unpin_pages(dst);
 

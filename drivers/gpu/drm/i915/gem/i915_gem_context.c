@@ -255,9 +255,6 @@ static void intel_context_set_gem(struct intel_context *ce,
 	if (i915_gem_context_has_sip(ctx))
 		__set_bit(CONTEXT_DEBUG, &ce->flags);
 
-	/* XXX this should be set only with context that have sip */
-	ce->dbg_id.gem_context_id = ctx->id;
-
 	if (test_bit(UCONTEXT_RUNALONE, &ctx->user_flags))
 		__set_bit(CONTEXT_RUNALONE, &ce->flags);
 }
@@ -451,8 +448,15 @@ static void __reset_context(struct i915_gem_context *ctx,
 			      "context closure in %s", ctx->name);
 }
 
-static bool __cancel_engine(struct intel_engine_cs *engine)
+static bool __cancel_engine(struct intel_context *ce, struct intel_engine_cs *engine)
 {
+	/*
+	 * If the debugger is active, we can't trust our engine reset mechanism to do
+	 * a full GT reset required to clear residual ATTN.
+	 */
+	if (i915_debugger_active_on_context(ce))
+		return false;
+
 	/*
 	 * Send a "high priority pulse" down the engine to cause the
 	 * current request to be momentarily preempted. (If it fails to
@@ -536,7 +540,7 @@ static void kill_engines(struct i915_gem_engines *engines, bool ban)
 		engine = active_engine(ce);
 
 		/* First attempt to gracefully cancel the context */
-		if (engine && !__cancel_engine(engine) && ban)
+		if (engine && !__cancel_engine(ce, engine) && ban)
 			/*
 			 * If we are unable to send a preemptive pulse to bump
 			 * the context from the GPU, we have to resort to a full
@@ -635,6 +639,10 @@ static void context_close(struct i915_gem_context *ctx)
 	struct i915_address_space *vm;
 	struct i915_drm_client *client;
 
+	client = ctx->client;
+	if (client)
+		i915_debugger_wait_on_discovery(ctx->i915, client);
+
 	/* Flush any concurrent set_engines() */
 	mutex_lock(&ctx->engines_mutex);
 	unpin_engines(__context_engines_static(ctx));
@@ -642,11 +650,8 @@ static void context_close(struct i915_gem_context *ctx)
 	i915_gem_context_set_closed(ctx);
 	mutex_unlock(&ctx->engines_mutex);
 
-	client = ctx->client;
-	if (client) {
-		i915_debugger_wait_on_discovery(ctx->i915, client);
+	if (client)
 		i915_debugger_context_destroy(ctx);
-	}
 
 	mutex_lock(&ctx->mutex);
 
@@ -660,11 +665,6 @@ static void context_close(struct i915_gem_context *ctx)
 	lut_close(ctx);
 
 	vm = i915_gem_context_vm(ctx);
-	if (vm) {
-		if (client)
-			i915_debugger_vm_destroy(client, vm);
-		i915_vm_close(vm);
-	}
 
 	if (ctx->syncobj)
 		drm_syncobj_put(ctx->syncobj);
@@ -678,6 +678,12 @@ static void context_close(struct i915_gem_context *ctx)
 	}
 
 	mutex_unlock(&ctx->mutex);
+
+	if (vm) {
+		if (client)
+			i915_debugger_vm_destroy(client, vm);
+		i915_vm_close(vm);
+	}
 
 	/* WA for VLK-20104 */
 	if (ctx->bcs0_pm_disabled) {
@@ -697,6 +703,7 @@ static void context_close(struct i915_gem_context *ctx)
 	 */
 	kill_context(ctx);
 
+	wake_up_all(&ctx->user_fence_wq);
 	i915_gem_context_put(ctx);
 }
 
@@ -846,6 +853,8 @@ static struct i915_gem_context *__create_context(struct intel_gt *gt)
 
 	spin_lock_init(&ctx->stale.lock);
 	INIT_LIST_HEAD(&ctx->stale.engines);
+
+	init_waitqueue_head(&ctx->user_fence_wq);
 
 	mutex_init(&ctx->engines_mutex);
 	e = default_engines(ctx);
@@ -1133,15 +1142,9 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	/* And finally expose ourselves to userspace via the idr */
 	i915_gem_context_get(ctx);
 	ret = xa_alloc(&fpriv->context_xa, id, ctx, xa_limit_32b, GFP_KERNEL);
-	if (!ret) {
-		ctx->id = *id;
+	if (!ret)
 		i915_debugger_context_create(ctx);
-		if (vm) {
-			i915_debugger_vm_create(client, vm);
-			i915_debugger_context_param_vm(client, ctx, vm);
-		}
-		i915_debugger_context_param_engines(ctx);
-	}
+
 	i915_gem_context_put(ctx);
 	if (!ret)
 		return 0;
@@ -1469,8 +1472,10 @@ static int set_ppgtt(struct drm_i915_file_private *file_priv,
 		goto unlock;
 	}
 
-	if (vm == rcu_access_pointer(ctx->vm))
-		goto unlock;
+	if (vm == rcu_access_pointer(ctx->vm)) {
+		mutex_unlock(&ctx->mutex);
+		goto out;
+	}
 
 	old = __set_ppgtt(ctx, vm);
 	if (!old) {
@@ -1478,8 +1483,6 @@ static int set_ppgtt(struct drm_i915_file_private *file_priv,
 		goto unlock;
 	}
 
-	if (!is_ctx_create)
-		i915_debugger_vm_destroy(file_priv->client, old);
 	/* Teardown the existing obj:vma cache, it will have to be rebuilt. */
 	lut_close(ctx);
 
@@ -1490,13 +1493,16 @@ static int set_ppgtt(struct drm_i915_file_private *file_priv,
 	 */
 	context_apply_all(ctx, __apply_ppgtt, vm);
 
-	i915_vm_close(old);
-
-	if (!is_ctx_create)
-		i915_debugger_context_param_vm(file_priv->client, ctx, vm);
-
 unlock:
 	mutex_unlock(&ctx->mutex);
+
+	if (!err) {
+		if (!is_ctx_create) {
+			i915_debugger_vm_destroy(file_priv->client, old);
+			i915_debugger_context_param_vm(file_priv->client, ctx, vm);
+		}
+		i915_vm_close(old);
+	}
 out:
 	i915_vm_put(vm);
 	return err;
@@ -1955,7 +1961,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 			n = i * num_siblings + j;
 			if (copy_from_user(&ci, &ext->engines[n], sizeof(ci))) {
 				err = -EFAULT;
-				goto out_err;
+				goto out;
 			}
 
 			siblings[n] =
@@ -1966,7 +1972,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 					"Invalid sibling[%d]: { class:%d, inst:%d }\n",
 					n, ci.engine_class, ci.engine_instance);
 				err = -EINVAL;
-				goto out_err;
+				goto out;
 			}
 
 			/*
@@ -1976,7 +1982,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 			if (siblings[n]->class == RENDER_CLASS ||
 			    siblings[n]->class == COMPUTE_CLASS) {
 				err = -EINVAL;
-				goto out_err;
+				goto out;
 			}
 
 			if (n) {
@@ -1987,7 +1993,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 						prev_engine.engine_class,
 						ci.engine_class);
 					err = -EINVAL;
-					goto out_err;
+					goto out;
 				}
 			}
 
@@ -2001,7 +2007,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 					"Non contiguous logical mask 0x%x, 0x%x\n",
 					prev_mask, current_mask);
 				err = -EINVAL;
-				goto out_err;
+				goto out;
 			}
 		}
 		prev_mask = current_mask;
@@ -2010,7 +2016,7 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 	ce = intel_engine_create_parallel(siblings, num_siblings, width);
 	if (IS_ERR(ce)) {
 		err = PTR_ERR(ce);
-		goto out_err;
+		goto out;
 	}
 
 	intel_context_set_gem(ce, set->ctx);
@@ -2020,20 +2026,17 @@ set_engines__parallel_submit(struct i915_user_extension __user *base, void *data
 	err = perma_pin_contexts(ce);
 	if (err) {
 		intel_context_put(ce);
-		goto out_err;
+		goto out;
 	}
 
 	if (cmpxchg(&set->engines->engines[slot], NULL, ce)) {
 		intel_context_put(ce);
 		err = -EEXIST;
-		goto out_err;
+		goto out;
 	}
 
-	return 0;
-
-out_err:
+out:
 	kfree(siblings);
-
 	return err;
 }
 

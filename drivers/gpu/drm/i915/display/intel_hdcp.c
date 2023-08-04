@@ -2222,7 +2222,7 @@ static int initialize_hdcp_port_data(struct intel_connector *connector,
 
 static bool is_hdcp2_supported(struct drm_i915_private *dev_priv)
 {
-	if (DISPLAY_VER(dev_priv) < 14 && !IS_ENABLED(CONFIG_INTEL_MEI_HDCP))
+	if (DISPLAY_VER(dev_priv) < 14 && !IS_ENABLED(CPTCFG_INTEL_MEI_HDCP))
 		return false;
 
 	return (DISPLAY_VER(dev_priv) >= 10 ||

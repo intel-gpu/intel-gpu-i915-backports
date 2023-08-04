@@ -947,7 +947,7 @@ TRACE_EVENT(i915_mm_fault,
 				   __entry->region = !vma->obj->mm.region.mem ?
 				   	INTEL_REGION_UNKNOWN :
 				   	vma->obj->mm.region.mem->id;
-				   __entry->pg_sz_mask = vma->page_sizes.gtt;
+				   __entry->pg_sz_mask = vma->page_sizes;
 				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   } else {
 				   __entry->obj = NULL;
@@ -1003,8 +1003,8 @@ TRACE_EVENT(intel_tlb_invalidate,
 );
 
 TRACE_EVENT(intel_access_counter,
-	    TP_PROTO(struct intel_gt *gt, struct acc_info *info),
-	    TP_ARGS(gt, info),
+	    TP_PROTO(struct intel_gt *gt, struct acc_info *info, int err),
+	    TP_ARGS(gt, info, err),
 
 	    TP_STRUCT__entry(
 			     __field(u32, dev)
@@ -1014,6 +1014,7 @@ TRACE_EVENT(intel_access_counter,
 			     __field(u32, asid)
 			     __field(u32, engine_class)
 			     __field(u32, engine_instance)
+			     __field(u32, err)
 			     __field(u64, vaddr_base)
 			     ),
 
@@ -1025,11 +1026,12 @@ TRACE_EVENT(intel_access_counter,
 			   __entry->asid = info->asid;
 			   __entry->engine_class = info->engine_class;
 			   __entry->engine_instance = info->engine_instance;
+			   __entry->err = err;
 			   __entry->vaddr_base = info->va_range_base;
 			   ),
 
-	    TP_printk("dev%u gt%u asid%d %d KB Region/%d KB sub-region %s[%d], VA_BASE: %llx, sub-region hit vector %x",
-		      __entry->dev, __entry->id, __entry->asid,
+	    TP_printk("%s dev%u gt%u asid%d %d KB Region/%d KB sub-region %s[%d], VA_BASE: %llx, sub-region hit vector %x",
+		      intel_acc_err2str(__entry->err), __entry->dev, __entry->id, __entry->asid,
 		      granularity_in_byte(__entry->region_type) / SZ_1K,
 		      sub_granularity_in_byte(__entry->region_type) / SZ_1K,
 		      intel_engine_class_repr(__entry->engine_class),

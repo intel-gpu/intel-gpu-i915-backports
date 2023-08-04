@@ -98,9 +98,9 @@ pte_tlbinv(struct intel_context *ce,
 					 i915_vma_offset(va) + i915_vma_size(va),
 					 4, 4);
 
-	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x), invalidate:%llx+%llx\n",
+	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x, invalidate:%llx+%llx\n",
 		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg,
+		addr, align, va->page_sizes,
 		addr & -length, length);
 
 	cs = i915_gem_object_pin_map_unlocked(batch, I915_MAP_WC);
@@ -280,7 +280,7 @@ mem_tlbinv(struct intel_gt *gt,
 	}
 
 	GEM_BUG_ON(A->base.size != B->base.size);
-	if ((A->mm.page_sizes.phys | B->mm.page_sizes.phys) & (A->base.size - 1))
+	if (!sg_is_last(A->mm.pages->sgl) || !sg_is_last(B->mm.pages->sgl))
 		pr_warn("Failed to allocate contiguous pages for size %zx\n",
 			A->base.size);
 

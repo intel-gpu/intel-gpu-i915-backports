@@ -7,13 +7,6 @@
 extern "C" {
 #endif
 
-#ifdef DRM_FORMAT_MAX_PLANES_ADDED
-/**
- * DRM_FORMAT_MAX_PLANES - maximum number of planes a DRM format can have
- */
-#define DRM_FORMAT_MAX_PLANES   4u
-#endif /* DRM_FORMAT_MAX_PLANES_ADDED */
-
 /*
  * Intel modifiers for new platforms should be added using the PRELIM_ prefix
  * and the intel_prelim_fourcc_mod_code macro, while the upstreaming of the

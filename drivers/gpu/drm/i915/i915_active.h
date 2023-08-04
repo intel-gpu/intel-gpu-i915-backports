@@ -73,9 +73,16 @@ __i915_active_fence_init(struct i915_active_fence *active,
 
 void i915_active_fence_fini(struct i915_active_fence *active);
 
-struct dma_fence *
+bool
 __i915_active_fence_set(struct i915_active_fence *active,
 			struct dma_fence *fence);
+
+struct dma_fence *
+__i915_active_fence_fetch_set(struct i915_active_fence *active,
+			      struct dma_fence *fence);
+
+void __i915_active_fence_replace(struct i915_active_fence *src,
+				 struct i915_active_fence *dst);
 
 /**
  * i915_active_fence_set - updates the tracker to watch the current fence
@@ -100,6 +107,11 @@ __i915_active_fence_get(struct dma_fence __rcu **fencep)
 		fence = rcu_dereference(*fencep);
 		if (IS_ERR_OR_NULL(fence))
 			return fence;
+
+		if (!test_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
+			      &fence->flags) &&
+		    dma_fence_is_signaled(fence))
+			continue;
 
 		if (!dma_fence_get_rcu(fence))
 			continue;
@@ -132,6 +144,9 @@ static inline struct dma_fence *
 i915_active_fence_get_or_error(struct i915_active_fence *active)
 {
 	struct dma_fence *fence;
+
+	if (!rcu_access_pointer(active->fence))
+		return NULL;
 
 	rcu_read_lock();
 	fence = __i915_active_fence_get(&active->fence);
@@ -170,6 +185,21 @@ static inline bool
 i915_active_fence_isset(const struct i915_active_fence *active)
 {
 	return !IS_ERR_OR_NULL(rcu_access_pointer(active->fence));
+}
+
+static inline bool
+i915_active_fence_is_signaled(struct i915_active_fence *active)
+{
+	bool signaled = true;
+	struct dma_fence *f;
+
+	f = i915_active_fence_get(active);
+	if (f) {
+		signaled = dma_fence_is_signaled(f);
+		dma_fence_put(f);
+	}
+
+	return signaled;
 }
 
 /*
@@ -218,9 +248,7 @@ int i915_active_ref(struct i915_active *ref, u64 idx, struct dma_fence *fence);
 static inline int
 i915_active_add_request(struct i915_active *ref, struct i915_request *rq)
 {
-	return i915_active_ref(ref,
-			       i915_request_timeline(rq)->fence_context,
-			       &rq->fence);
+	return i915_active_ref(ref, rq->fence.context, &rq->fence);
 }
 
 int i915_active_add_suspend_fence(struct i915_active *ref,

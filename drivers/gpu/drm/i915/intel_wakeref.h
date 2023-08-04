@@ -262,6 +262,16 @@ __intel_wakeref_defer_park(struct intel_wakeref *wf)
 }
 
 /**
+ * __intel_wakeref_resume_park: Resume the current park callback after deferment
+ * @wf: the wakeref
+ */
+static inline bool
+__intel_wakeref_resume_park(struct intel_wakeref *wf)
+{
+	return atomic_dec_return(&wf->count) > 0;
+}
+
+/**
  * intel_wakeref_wait_for_idle: Wait until the wakeref is idle
  * @wf: the wakeref
  *

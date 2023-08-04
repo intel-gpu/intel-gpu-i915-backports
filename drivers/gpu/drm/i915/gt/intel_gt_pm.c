@@ -15,6 +15,7 @@
 #include "intel_gt_ccs_mode.h"
 #include "intel_gt_clock_utils.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_print.h"
 #include "intel_gt_requests.h"
 #include "intel_llc.h"
 #include "intel_pm.h"
@@ -127,10 +128,12 @@ static int __gt_unpark(struct intel_wakeref *wf)
 static int __gt_park(struct intel_wakeref *wf)
 {
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
-	intel_wakeref_t wakeref = fetch_and_zero(&gt->awake);
 	struct drm_i915_private *i915 = gt->i915;
 
 	GT_TRACE(gt, "\n");
+
+	if (gt->lmem && i915_gem_lmem_park(gt->lmem))
+		return -EBUSY;
 
 	runtime_end(gt);
 	intel_gt_park_requests(gt);
@@ -148,8 +151,8 @@ static int __gt_park(struct intel_wakeref *wf)
 	intel_synchronize_irq(i915);
 
 	/* Defer dropping the display power well for 100ms, it's slow! */
-	GEM_BUG_ON(!wakeref);
-	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ, wakeref);
+	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ,
+				      fetch_and_zero(&gt->awake));
 
 	/* Wa_14017210380: mtl */
 	mtl_mc6_wa_media_not_busy(gt);
@@ -299,8 +302,7 @@ int intel_gt_resume(struct intel_gt *gt)
 	/* Only when the HW is re-initialised, can we replay the requests */
 	err = intel_gt_init_hw(gt);
 	if (err) {
-		i915_probe_error(gt->i915,
-				 "Failed to initialize GPU, declaring it wedged!\n");
+		gt_probe_error(gt, "Failed to initialize GPU, declaring it wedged!\n");
 		goto err_wedged;
 	}
 
@@ -331,6 +333,7 @@ int intel_gt_resume(struct intel_gt *gt)
 	intel_pxp_resume(&gt->pxp);
 
 	user_forcewake(gt, false);
+	WRITE_ONCE(gt->suspend, false);
 
 out_fw:
 	intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_ALL);
@@ -363,6 +366,7 @@ void intel_gt_suspend_prepare(struct intel_gt *gt)
 {
 	user_forcewake(gt, true);
 	wait_for_suspend(gt);
+	intel_gt_retire_requests(gt);
 
 	intel_pxp_suspend(&gt->pxp, false);
 }
@@ -379,6 +383,8 @@ static suspend_state_t pm_suspend_target(void)
 void intel_gt_suspend_late(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
+
+	WRITE_ONCE(gt->suspend, true);
 
 	/* We expect to be idle already; but also want to be independent */
 	wait_for_suspend(gt);

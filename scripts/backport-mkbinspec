@@ -8,6 +8,11 @@ PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
 DEP_PKG_NAME=""
+CUSTOM_KERN_ID=""
+KER_VER=""
+OS_DISTRO_NAME=""
+RHEL=""
+SUSE=""
 
 helpFunction()
 {
@@ -17,28 +22,48 @@ helpFunction()
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
+	echo -e "\t-k KLIB Path"
+	echo -e "\t-s OSV name SUSE/RHEL"
+	echo -e "\t-t Custom Kernel ID"
 	exit 1
 }
 
-while getopts "n:v:r:p:" opt
+while getopts "n:v:r:p:k:s:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
+                k )
+			KLIB="$OPTARG"
+			KER_VER=`basename $KLIB`
+			;;
+		s ) OS_DISTRO_NAME="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done
+
+if [ "$OS_DISTRO_NAME" != "SUSE" ]; then
+        SUSE=DEL
+elif [ "$OS_DISTRO_NAME" != "RHEL" ] || [ "$OS_DISTRO_NAME" != "CUSTOM_KERN_1" ]; then
+        RHEL=DEL
+fi
 
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	%define module $PKG_NAME
 	%define version $PKG_VER
 	%define release $REL_NAME
 	
-	%define _flavor %{?FLAVOR}%{?!FLAVOR:default}
-	%define _kobj %(realpath %{_usrsrc}/linux-obj/x86_64/%{_flavor}/)
-	%define _krel %(make -si -C %{_kobj} %linux_make_arch kernelrelease)
+$SUSE	%define _flavor %{?FLAVOR}%{?!FLAVOR:default}
+$SUSE	%define _kobj %(realpath %{_usrsrc}/linux-obj/x86_64/%{_flavor}/)
+$SUSE	%define _krel %(make -si -C %{_kobj} %linux_make_arch kernelrelease)
+
+$RHEL	%define _krel $KER_VER
+$RHEL	%define kernel_module_directory /lib/modules
+$RHEL	%define kernel_module_package_moddir updates
+$RHEL	%define original_module original_module
 
 	Summary: I915 Backports Kernel Module Package
 	Name: %{module}
@@ -52,12 +77,15 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	Packager: linux-graphics@intel.com
 	Source0: %{module}-%{version}-src.tar.gz
 	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
-	BuildRequires:  %kernel_module_package_buildreqs
+$SUSE	BuildRequires:  %kernel_module_package_buildreqs
+$SUSE	%kernel_module_package %{_flavor}
 
-	%kernel_module_package %{_flavor}
 
 	%description
-	Out of tree i915 driver modules for SLES15SP4 kernel Version 5.14.xx
+	Out of tree i915 driver modules for SLES15SP4 and RHEL9.x
+
+$RHEL	%global debug_package %{nil}
+$RHEL	%global _build_id_links none
 
 	%prep
 	%setup -q -c
@@ -65,17 +93,24 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 
 	%build
 	export LEX=flex
+$RHEL	export YACC=bison
+	np=`nproc`
+	npc=\$(( \$np > 64 ? 64 : \$np ))
 	make KLIB=%{kernel_module_directory}/%{_krel} olddefconfig
-	make KLIB=%{kernel_module_directory}/%{_krel}
+	make -j\$npc KLIB=%{kernel_module_directory}/%{_krel}
 
 	%install
 	if [ "%{buildroot}" != "/" ]; then
 		rm -rf %{buildroot}
 	fi
-	mkdir -p %{buildroot}/lib/modules/%{_krel}/%{kernel_module_package_moddir}/
+	mkdir -p %{buildroot}%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}
 	find . -name "*.ko" -exec strip -g {} \;
 	find . -name "*.ko" -exec xz -z {} \;
-	find . -name "*.ko.xz" -exec install -m 0500 {} %{buildroot}/lib/modules/%{_krel}/%{kernel_module_package_moddir}/ \;
+	find . -name "*.ko.xz" -exec install -m 0500 {} %{buildroot}%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name} \;
+
+$RHEL	%files
+$RHEL	%defattr(644,root,root)
+$RHEL	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/
 
 	%clean
 	if [ "%{buildroot}" != "/" ]; then
@@ -83,9 +118,24 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	fi
 
 	%pre
+$RHEL	if find %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir} -mindepth 1 -maxdepth 1 | read; then
+$RHEL		mkdir -p %{kernel_module_directory}/%{_krel}/%{original_module}/
+$RHEL		mv -f %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/* %{kernel_module_directory}/%{_krel}/%{original_module}/
+$RHEL	fi
 
 	%post
+$RHEL	echo "Post Installation"
+$RHEL	depmod -a
+$RHEL	%{_bindir}/dracut -f --kver "\$(uname -r)"
 
 	%preun
+$RHEL	%{_bindir}/dracut -f --kver "\$(uname -r)"
+
+$RHEL	%postun
+$RHEL	echo "Post Uninstalling"
+$RHEL	if [ -d "%{kernel_module_directory}/%{_krel}/%{original_module}" ]; then
+$RHEL		cp %{kernel_module_directory}/%{_krel}/%{original_module}/* %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/
+$RHEL		rm -rf %{kernel_module_directory}/%{_krel}/%{original_module}/
+$RHEL	fi
 EOF
 

@@ -39,8 +39,8 @@ static bool can_release_pages(struct drm_i915_gem_object *obj)
 }
 
 static int drop_pages(struct drm_i915_gem_object *obj,
-		      struct i915_gem_ww_ctx *ww, unsigned long shrink,
-		      bool trylock_vm)
+		      struct i915_gem_ww_ctx *ww,
+		      unsigned long shrink, bool trylock_vm)
 {
 	unsigned long flags;
 
@@ -58,15 +58,7 @@ static int drop_pages(struct drm_i915_gem_object *obj,
 static void try_to_writeback(struct drm_i915_gem_object *obj,
 			     unsigned int flags)
 {
-	switch (obj->mm.madv) {
-	case I915_MADV_DONTNEED:
-		i915_gem_object_truncate(obj);
-		return;
-	case __I915_MADV_PURGED:
-		return;
-	}
-
-	if (flags & I915_SHRINK_WRITEBACK)
+	if (flags & I915_SHRINK_WRITEBACK && obj->mm.madv == I915_MADV_WILLNEED)
 		i915_gem_object_writeback(obj);
 }
 
@@ -190,6 +182,11 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 		       (obj = list_first_entry_or_null(phase->list,
 						       typeof(*obj),
 						       mm.link))) {
+			if (signal_pending(current)) {
+				err = -EINTR;
+				break;
+			}
+
 			list_move_tail(&obj->mm.link, &still_in_list);
 
 			/* only segment BOs should be in i915->mm.shrink.list */
@@ -199,12 +196,13 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 			    !is_vmalloc_addr(obj->mm.mapping))
 				continue;
 
-			if (!(shrink & I915_SHRINK_ACTIVE) &&
-			    i915_gem_object_is_framebuffer(obj))
-				continue;
+			if (!(shrink & I915_SHRINK_ACTIVE)) {
+				if (i915_gem_object_is_framebuffer(obj))
+					continue;
 
-			if (!can_release_pages(obj))
-				continue;
+				if (!can_release_pages(obj))
+					continue;
+			}
 
 			/* Already locked this object? */
 			if (ww && ww == i915_gem_get_locking_ctx(obj))
@@ -214,49 +212,36 @@ i915_gem_shrink(struct i915_gem_ww_ctx *ww,
 				continue;
 
 			spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
-			if (ww) {
-				err = i915_gem_object_lock_to_evict(obj, ww);
-				if (err && err != -EALREADY)
-					goto skip;
-			} else {
-				if (!i915_gem_object_trylock(obj))
-					goto skip;
-			}
+
+			err = __i915_gem_object_lock_to_evict(obj, ww);
+			if (err)
+				goto skip;
 
 			err = drop_pages(obj, ww, shrink, trylock_vm);
-			if (!err) {
-				if (!__i915_gem_object_put_pages(obj)) {
-					try_to_writeback(obj, shrink);
-					count += obj->base.size >> PAGE_SHIFT;
-				}
+			if (err == 0)
+				err = __i915_gem_object_put_pages(obj);
+			if (err == 0) {
+				try_to_writeback(obj, shrink);
+				count += obj->base.size >> PAGE_SHIFT;
 			}
 
-			/* If error is not EDEADLK or EINTR, skip object */
-			if (err != -EDEADLK && err != -EINTR)
-				err = 0;
-
-			if (!ww)
-				i915_gem_object_unlock(obj);
-
-#ifndef BPM_DMA_RESV_PRUNE_NOT_PRESENT
-			dma_resv_prune(obj->base.resv);
-#endif
-
+			i915_gem_object_unlock(obj);
 			scanned += obj->base.size >> PAGE_SHIFT;
+
 skip:
 			i915_gem_object_put(obj);
-
 			spin_lock_irqsave(&i915->mm.obj_lock, flags);
-			if (err)
+
+			if (err == -EDEADLK)
 				break;
+
+			err = 0;
 		}
 		list_splice_tail(&still_in_list, phase->list);
 		spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
 		if (err)
 			break;
 	}
-	if (ww)
-		i915_gem_ww_ctx_unlock_evictions(ww);
 
 	if (shrink & I915_SHRINK_BOUND)
 		intel_runtime_pm_put(&i915->runtime_pm, wakeref);
@@ -291,7 +276,8 @@ unsigned long i915_gem_shrink_all(struct drm_i915_private *i915)
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
 		freed = i915_gem_shrink(NULL, i915, -1UL, NULL,
 					I915_SHRINK_BOUND |
-					I915_SHRINK_UNBOUND);
+					I915_SHRINK_UNBOUND |
+					I915_SHRINK_ACTIVE);
 	}
 
 	return freed;

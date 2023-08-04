@@ -1,40 +1,39 @@
 
-#  Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
+# Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
 
-Contains the backported i915 Source Code of intel GPUs on various OSV Kernels. You can create Dynamic Kernel Module Support(DKMS) based packages, which can be installed on supported OS distributions.
+Contains the backported kernel module source code of intel GPUs on various OS distributions and LTS Kernels. You can create Dynamic Kernel Module Support (DKMS) as well as precompiled Out of Tree modules packages, which can be installed on supported OS distributions.
 
 We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out of tree i915 kernel module source codes.
 
-This repo is a code snapshot of particular version of backports and does not contain individual git change history.
+This repo is a code snapshot of version of backports and does not contain individual git change history.
 
-# Dependencies
+## Out of tree kernel drivers
+This repository contains following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(cse) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
 
-This driver is part of a collection of kernel-mode drivers that enable support for Intel graphics. The backports collection within https://github.com/intel-gpu includes:
+## Dependencies
 
-- [Intel® Graphics Driver Backports for Linux](https://github.com/intel-gpu/intel-gpu-i915-backports) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-- [Intel® Converged Security Engine Backports](https://github.com/intel-gpu/intel-gpu-cse-backports) - Converged Security Engine
-- [Intel® Platform Monitoring Technology Backports](https://github.com/intel-gpu/intel-gpu-pmt-backports/) - Intel Platform Telemetry
+  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
+## Branches
+backport/main will point to the currently supported version of Ubuntu®, SLES® 15 SP4 and RHEL® onwards.
 
-# Branches
-backport/main will point to the currently supported version of Ubuntu® and SLES.
-
-
-# Supported OS Kernel/Distribution
+## Supported OS Kernel/Distribution
   Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| Ubuntu® | 22.04 | Kernel 5.19 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| | 22.04 |  Kernel 5.17 oem | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| | 20.04 |  Kernel 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| | Mainline LTS |  Kernel 5.15 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
-| SLES | 15SP4 | Kernel 5.14 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md) |
+| Ubuntu® Desktop | 22.04 | 5.19 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
+| Ubuntu® Server | 22.04 | 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md) |
+| SLES® | 15SP4 |  5.14.21.150400 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md) |
+| RHEL® | 9.2 |  5.14.0-284 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md) |
+| Vanilla LTS|  |  5.15 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md) |
 
-
-# Product Releases:
+## Product Releases:
 Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
-

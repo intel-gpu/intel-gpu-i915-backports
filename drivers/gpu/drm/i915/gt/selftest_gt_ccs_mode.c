@@ -445,6 +445,7 @@ static int live_ccs_sim_reset(void *arg)
 
 	with_intel_gt_pm(gt, wf)
 		expected = apply_ccs_mode(gt, engine->mask);
+	intel_gt_pm_wait_for_idle(gt);
 	GEM_BUG_ON(gt->ccs.config | gt->ccs.active); /* no cheating! */
 
 	intel_engine_pm_get(engine);

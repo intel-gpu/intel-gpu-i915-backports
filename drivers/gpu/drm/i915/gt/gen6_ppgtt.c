@@ -76,7 +76,7 @@ static void gen6_ppgtt_clear_range(struct i915_address_space *vm,
 {
 	struct gen6_ppgtt * const ppgtt = to_gen6_ppgtt(i915_vm_to_ppgtt(vm));
 	const unsigned int first_entry = start / I915_GTT_PAGE_SIZE;
-	const gen6_pte_t scratch_pte = vm->scratch[0]->encode;
+	const gen6_pte_t scratch_pte = i915_vm_scratch0_encode(vm);
 	unsigned int pde = first_entry / GEN6_PTES;
 	unsigned int pte = first_entry % GEN6_PTES;
 	unsigned int num_entries = length / I915_GTT_PAGE_SIZE;
@@ -145,7 +145,7 @@ static void gen6_ppgtt_insert_entries(struct i915_address_space *vm,
 		}
 	} while (1);
 
-	vma->page_sizes.gtt = I915_GTT_PAGE_SIZE;
+	vma->page_sizes = I915_GTT_PAGE_SIZE;
 }
 
 static void gen6_flush_pd(struct gen6_ppgtt *ppgtt, u64 start, u64 end)
@@ -191,7 +191,7 @@ static void gen6_alloc_va_range(struct i915_address_space *vm,
 			pt = stash->pt[0];
 			__i915_gem_object_pin_pages(pt->base);
 
-			fill32_px(pt, vm->scratch[0]->encode);
+			fill32_px(pt, i915_vm_scratch0_encode(vm));
 
 			spin_lock(&pd->lock);
 			if (!pd->entry[pde]) {
@@ -222,35 +222,26 @@ static int gen6_ppgtt_init_scratch(struct gen6_ppgtt *ppgtt)
 	struct i915_address_space * const vm = &ppgtt->base.vm;
 	int ret;
 
-	ret = setup_scratch_page(vm);
+	ret = i915_vm_setup_scratch0(vm);
 	if (ret)
 		return ret;
-
-	vm->scratch[0]->encode =
-		vm->pte_encode(px_dma(vm->scratch[0]),
-			       i915_gem_get_pat_index(vm->i915,
-						      I915_CACHE_NONE),
-			       PTE_READ_ONLY);
 
 	vm->scratch[1] = vm->alloc_pt_dma(vm, I915_GTT_PAGE_SIZE_4K);
 	if (IS_ERR(vm->scratch[1])) {
 		ret = PTR_ERR(vm->scratch[1]);
-		goto err_scratch0;
+		goto err_scratch;
 	}
 
 	ret = map_pt_dma(vm, vm->scratch[1]);
 	if (ret)
-		goto err_scratch1;
+		goto err_scratch;
 
-	fill32_px(vm->scratch[1], vm->scratch[0]->encode);
+	fill32_px(vm->scratch[1], i915_vm_scratch0_encode(vm));
 
 	return 0;
 
-err_scratch1:
-	i915_gem_object_put(vm->scratch[1]);
-err_scratch0:
-	i915_gem_object_put(vm->scratch[0]);
-	vm->scratch[0] = NULL;
+err_scratch:
+	i915_vm_free_scratch(vm);
 	return ret;
 }
 
@@ -273,7 +264,7 @@ static void gen6_ppgtt_cleanup(struct i915_address_space *vm)
 		__i915_vma_put(ppgtt->vma);
 
 	gen6_ppgtt_free_pd(ppgtt);
-	free_scratch(vm);
+	i915_vm_free_scratch(vm);
 
 	if (ppgtt->base.pd)
 		free_pd(&ppgtt->base.vm, ppgtt->base.pd);
