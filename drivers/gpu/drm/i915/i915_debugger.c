@@ -110,6 +110,12 @@ static void __i915_debugger_print(const struct i915_debugger * const debugger,
 #define DD_WARN(debugger, fmt, ...) __DD(debugger, DD_DEBUG_LEVEL_WARN, fmt, ##__VA_ARGS__)
 #define DD_ERR(debugger, fmt, ...) __DD(debugger, DD_DEBUG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 
+#define DD_WARN_ON_CONNECTED(debugger, err, fmt, ...) do {	\
+		if (err && err != -ENOTCONN) {					\
+			__DD(debugger, DD_DEBUG_LEVEL_WARN, fmt, ##__VA_ARGS__); \
+		}							\
+	} while (0)
+
 #if I915_DEBUGGER_BUILD_DEBUG_LEVEL >= DD_DEBUG_LEVEL_VERBOSE
 #define ND_VERBOSE(i915, fmt, ...) DRM_DEV_DEBUG_DRIVER((i915)->drm.dev, fmt, ##__VA_ARGS__)
 #define DD_VERBOSE(debugger, fmt, ...) __DD(debugger, DD_DEBUG_LEVEL_VERBOSE, fmt, ##__VA_ARGS__)
@@ -464,9 +470,113 @@ i915_debugger_restore_ctx_schedule_params(struct i915_debugger *debugger)
 	rcu_read_unlock();
 }
 
+static inline u64 debugger_get_seqno(struct i915_debugger *debugger)
+{
+	return atomic_long_inc_return(&debugger->event_seqno);
+}
+
+static void handle_vm_bind_ack(struct i915_debug_ack *ack)
+{
+	i915_sw_fence_complete(ack->event.ack_data);
+}
+
+static void
+handle_ack(struct i915_debugger *debugger, struct i915_debug_ack *ack)
+{
+	switch (ack->event.type) {
+	case PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND:
+		handle_vm_bind_ack(ack);
+		break;
+	}
+
+	DEBUG_ACK(debugger, ack);
+}
+
+/*
+ * A i915_debugger_resource represents tracked i915 entity such as
+ * DRM Client, GEM Context, VM, VM_BIND, UUID.
+ *
+ * Due to the fact that EU Debugger cannot stop whole i915 for it's
+ * discovery or resource manipulation we keep track of what already
+ * has been registered (discovered or created).
+ *
+ * Manipulating resources is behind xa_lock.
+ *
+ * While registering resource *_get() is called so the reference
+ * is valid.
+ */
+struct i915_debugger_resource {
+#define I915_DEBUGGER_RES_CLIENT    0
+#define I915_DEBUGGER_RES_UUID      1
+#define I915_DEBUGGER_RES_CONTEXT   2
+#define I915_DEBUGGER_RES_VM        3
+#define I915_DEBUGGER_RES_VM_BIND   4
+#define I915_DEBUGGER_RES_INVALID   5
+	u32 type;
+	void *ptr;
+
+	union {
+		struct {
+			/*
+			 * VM_BIND is split into preallocation - fill - send phases.
+			 * In a fill phase due to vm->mutex being held debugger
+			 * cannot alloc resource under it's own lock.
+			 * Can use GFP_ATOMIC but it is better not to overuse it.
+			 */
+			struct i915_debug_event *event;
+			struct i915_debug_ack *ack;
+		} vma;
+		struct {
+			u64 class_handle;
+		} uuid;
+	};
+};
+
+static void debugger_resource_free(struct i915_debugger *debugger,
+				   struct i915_debugger_resource *res)
+{
+	switch (res->type) {
+	case I915_DEBUGGER_RES_CLIENT: {
+		struct i915_drm_client *client = res->ptr;
+
+		WRITE_ONCE(client->debugger_session, 0);
+		i915_drm_client_put(client);
+		break;
+	}
+	case I915_DEBUGGER_RES_UUID:
+		i915_uuid_put(res->ptr);
+		break;
+
+	case I915_DEBUGGER_RES_CONTEXT:
+		i915_gem_context_put(res->ptr);
+		break;
+
+	case I915_DEBUGGER_RES_VM:
+		i915_vm_put(res->ptr);
+		break;
+
+	case I915_DEBUGGER_RES_VM_BIND:
+		/* No reference is being hold */
+		kfree(res->vma.event);
+		if (!IS_ERR_OR_NULL(res->vma.ack)) {
+			handle_ack(debugger, res->vma.ack);
+			kfree(res->vma.ack);
+		}
+
+		break;
+
+	default:
+		DD_WARN(debugger, "Unknown resource type %u\n", res->type);
+	}
+
+	kfree(res);
+}
+
 static void _i915_debugger_free(struct kref *ref)
 {
 	struct i915_debugger *debugger = container_of(ref, typeof(*debugger), ref);
+	struct i915_debugger_resource *res;
+	unsigned long idx;
 
 	i915_debugger_detach(debugger);
 
@@ -476,6 +586,9 @@ static void _i915_debugger_free(struct kref *ref)
 	i915_debugger_restore_ctx_schedule_params(debugger);
 
 	put_task_struct(debugger->target_task);
+	xa_for_each(&debugger->resources_xa, idx, res)
+		debugger_resource_free(debugger, res);
+
 	xa_destroy(&debugger->resources_xa);
 	kfree_rcu(debugger, rcu);
 }
@@ -609,11 +722,6 @@ prepare_vm_bind_ack(const struct i915_debug_ack *ack,
 	return &f->chain;
 }
 
-static void handle_vm_bind_ack(struct i915_debug_ack *ack)
-{
-	i915_sw_fence_complete(ack->event.ack_data);
-}
-
 static inline int ack_lookup_cmp(const void *key, const struct rb_node *node)
 {
 	return compare_ack(*(const u64 *)key,
@@ -633,18 +741,6 @@ remove_ack(struct i915_debugger *debugger, u64 seqno)
 	spin_unlock(&debugger->ack_lock);
 
 	return rb_entry_safe(node, struct i915_debug_ack, rb_node);
-}
-
-static void
-handle_ack(struct i915_debugger *debugger, struct i915_debug_ack *ack)
-{
-	switch (ack->event.type) {
-	case PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND:
-		handle_vm_bind_ack(ack);
-		break;
-	}
-
-	DEBUG_ACK(debugger, ack);
 }
 
 static struct i915_debug_ack *
@@ -784,8 +880,28 @@ static ssize_t i915_debugger_read(struct file *file,
 #define for_each_debugger(debugger, head) \
 	list_for_each_entry(debugger, head, connection_link)
 
+static void wait_on_discovery(struct i915_debugger *debugger)
+{
+	const unsigned long waitjiffs = msecs_to_jiffies(5000);
+	long timeleft;
+
+	timeleft = wait_for_completion_interruptible_timeout(&debugger->discovery,
+							     waitjiffs);
+	if (timeleft == -ERESTARTSYS) {
+		DD_WARN(debugger,
+			"task %d interrupted while waited during debugger discovery process\n",
+			task_pid_nr(current));
+	} else if (!timeleft) {
+		DD_WARN(debugger,
+			"task %d waited too long for discovery to complete. Ignoring barrier.\n",
+			task_pid_nr(current));
+	}
+
+	might_lock(&debugger->discovery_lockdep);
+}
+
 static struct i915_debugger *
-i915_debugger_get(const struct i915_drm_client * const client)
+__debugger_get(const struct i915_drm_client * const client, bool wait)
 {
 	struct drm_i915_private *i915;
 	const u64 session = client_session(client);
@@ -810,7 +926,16 @@ i915_debugger_get(const struct i915_drm_client * const client)
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 
+	if (debugger && wait)
+		wait_on_discovery(debugger);
+
 	return debugger;
+}
+
+static struct i915_debugger *
+i915_debugger_get(const struct i915_drm_client * const client)
+{
+	return __debugger_get(client, true);
 }
 
 static struct i915_debugger *
@@ -835,21 +960,48 @@ i915_debugger_find_task_get(struct drm_i915_private *i915,
 	}
 	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
 
+	if (debugger)
+		wait_on_discovery(debugger);
+
 	return debugger;
 }
 
-static inline bool client_debugged(const struct i915_drm_client * const client)
+static int debugger_resource_find__locked(struct i915_debugger *debugger,
+					  const void *data,
+					  struct i915_debugger_resource **res,
+					  u32 *handle)
 {
-	struct i915_debugger *debugger;
+	struct i915_debugger_resource *entry;
+	unsigned long idx;
+	int ret = -ENOENT;
 
-	if (likely(!client_session(client)))
-		return false;
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
 
-	debugger = i915_debugger_get(client);
-	if (debugger)
-		i915_debugger_put(debugger);
+	xa_for_each(&debugger->resources_xa, idx, entry) {
+		if (entry->ptr == data) {
+			if (handle)
+				*handle = idx;
+			if (res)
+				*res = entry;
+			ret = 0;
+			break;
+		}
+	}
+	return ret;
+}
 
-	return debugger != NULL;
+static int debugger_resource_find(struct i915_debugger *debugger,
+				  const void *data,
+				  struct i915_debugger_resource **res,
+				  u32 *handle)
+{
+	int ret;
+
+	xa_lock(&debugger->resources_xa);
+	ret = debugger_resource_find__locked(debugger, data, res, handle);
+	xa_unlock(&debugger->resources_xa);
+	return ret;
 }
 
 static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
@@ -870,10 +1022,17 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 	GEM_BUG_ON(event->type == PRELIM_DRM_I915_DEBUG_EVENT_READ);
 
 	if (event->flags & PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK) {
-		ack = create_ack(debugger, event, ack_data, gfp);
-		if (IS_ERR(ack)) {
-			i915_debugger_disconnect_err(debugger);
-			goto free;
+		struct i915_debugger_resource *res;
+		int err;
+
+		err = debugger_resource_find(debugger, ack_data, &res, NULL);
+		if (err || IS_ERR_OR_NULL(res->vma.ack)) {
+			/* We just can't ignore not having ACK which was requested */
+			mutex_lock(&debugger->lock);
+			goto disconnect_err;
+		} else {
+			ack = res->vma.ack;
+			res->vma.ack = NULL;
 		}
 	}
 
@@ -967,7 +1126,8 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 	return 0;
 
 disconnect_err:
-	i915_debugger_disconnect__locked(debugger, DISCONNECT_INTERNAL_ERR);
+	if (!is_debugger_closed(debugger))
+		i915_debugger_disconnect__locked(debugger, DISCONNECT_INTERNAL_ERR);
 closed:
 	mutex_unlock(&debugger->lock);
 
@@ -975,7 +1135,7 @@ closed:
 		handle_ack(debugger, ack);
 		kfree(ack);
 	}
-free:
+
 	/* If ownership was transferred, kfree(NULL) is valid */
 	kfree(event);
 
@@ -989,8 +1149,8 @@ static int i915_debugger_queue_event(struct i915_debugger * const debugger,
 }
 
 static struct i915_debug_event *
-__i915_debugger_create_event(struct i915_debugger * const debugger,
-			     u32 type, u32 flags, u32 size, gfp_t gfp)
+debugger_create_event(struct i915_debugger * const debugger,
+		      u64 seqno, u32 type, u32 flags, u32 size, gfp_t gfp)
 {
 	struct i915_debug_event *event;
 
@@ -1006,19 +1166,7 @@ __i915_debugger_create_event(struct i915_debugger * const debugger,
 	event->type = type;
 	event->flags = flags;
 	event->size = size;
-
-	return event;
-}
-
-static struct i915_debug_event *
-i915_debugger_create_event(struct i915_debugger * const debugger,
-			   u32 type, u32 flags, u32 size, gfp_t gfp)
-{
-	struct i915_debug_event *event;
-
-	event = __i915_debugger_create_event(debugger, type, flags, size, gfp);
-	if (event)
-		event->seqno = atomic_long_inc_return(&debugger->event_seqno);
+	event->seqno = seqno;
 
 	return event;
 }
@@ -1115,6 +1263,57 @@ unlock:
 	goto out;
 }
 
+static struct i915_debugger_resource *
+debugger_resource_load(struct i915_debugger *debugger, u32 handle)
+{
+	struct i915_debugger_resource *res;
+
+	if (is_debugger_closed(debugger))
+		return ERR_PTR(-ENOTCONN);
+
+	xa_lock(&debugger->resources_xa);
+	res = xa_load(&debugger->resources_xa, handle);
+	xa_unlock(&debugger->resources_xa);
+
+	return res ? res : ERR_PTR(-ENOENT);
+}
+
+static void *
+debugger_resource_load_type(struct i915_debugger *debugger, u32 handle, u32 type)
+{
+	struct i915_debugger_resource *res;
+
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res))
+		return res;
+
+	if (res->type != type)
+		return ERR_PTR(-EINVAL);
+
+	return res->ptr ? res->ptr : ERR_PTR(-EINVAL);
+}
+
+static inline struct i915_drm_client *
+debugger_resource_client_load(struct i915_debugger *debugger, u32 handle)
+{
+	return debugger_resource_load_type(debugger, handle,
+					   I915_DEBUGGER_RES_CLIENT);
+}
+
+static inline struct i915_uuid_resource *
+debugger_resource_uuid_load(struct i915_debugger *debugger, u32 handle)
+{
+	return debugger_resource_load_type(debugger, handle,
+					   I915_DEBUGGER_RES_UUID);
+}
+
+static inline struct i915_address_space *
+debugger_resource_vm_load(struct i915_debugger *debugger, u32 handle)
+{
+	return debugger_resource_load_type(debugger, handle,
+					   I915_DEBUGGER_RES_VM);
+}
+
 static long i915_debugger_read_uuid_ioctl(struct i915_debugger *debugger,
 					  unsigned int cmd,
 					  const u64 arg)
@@ -1150,19 +1349,26 @@ static long i915_debugger_read_uuid_ioctl(struct i915_debugger *debugger,
 		read_arg.client_handle, read_arg.handle, read_arg.flags);
 
 	uuid = NULL;
-	rcu_read_lock();
-	client = xa_load(&debugger->i915->clients.xarray,
-			 read_arg.client_handle);
-	if (client) {
-		xa_lock(&client->uuids_xa);
-		uuid = xa_load(&client->uuids_xa, read_arg.handle);
-		if (uuid)
-			i915_uuid_get(uuid);
-		xa_unlock(&client->uuids_xa);
-	}
-	rcu_read_unlock();
-	if (!uuid)
-		return -ENOENT;
+
+	client = debugger_resource_client_load(debugger,
+					       read_arg.client_handle);
+	if (IS_ERR(client))
+		return -EINVAL;
+
+	uuid = debugger_resource_uuid_load(debugger, read_arg.handle);
+	if (IS_ERR(uuid))
+		return -EINVAL;
+
+	xa_lock(&client->uuids_xa);
+	/* Less than 2: race with unregister/client close */
+	if (kref_read(&uuid->ref) < 2)
+		ret = -ENOENT;
+	else
+		i915_uuid_get(uuid);
+	xa_unlock(&client->uuids_xa);
+
+	if (ret)
+		return ret;
 
 	if (read_arg.payload_size) {
 		if (read_arg.payload_size < uuid->size) {
@@ -1453,7 +1659,7 @@ static ssize_t access_page_in_vm(struct i915_address_space *vm,
 		if (ret)
 			continue;
 
-		vma_offset = vm_offset - vma->start;
+		vma_offset = vm_offset - vma->node.start;
 
 		len = min_t(ssize_t, len, PAGE_SIZE - offset_in_page(vma_offset));
 
@@ -1689,6 +1895,9 @@ static bool context_runalone_is_active(struct intel_engine_cs *engine)
 	u32 val, engine_status, engine_shift;
 	int id;
 
+	if (GRAPHICS_VER(engine->i915) < 12)
+		return true;
+
 	val = intel_uncore_read(engine->gt->uncore, GEN12_RCU_DEBUG_1);
 
 	if (engine->class == RENDER_CLASS)
@@ -1721,6 +1930,10 @@ static bool context_lrc_match(struct intel_engine_cs *engine,
 {
 	u32 lrc_ggtt, lrc_reg, lrc_hw;
 
+	/* We can't do better than this on older gens */
+	if (GRAPHICS_VER(engine->i915) < 11)
+		return true;
+
 	lrc_ggtt = ce->lrc.lrca & GENMASK(31, 12);
 	lrc_reg = ENGINE_READ(engine, RING_CURRENT_LRCA);
 	lrc_hw = lrc_reg & GENMASK(31, 12);
@@ -1731,37 +1944,30 @@ static bool context_lrc_match(struct intel_engine_cs *engine,
 	return false;
 }
 
-static bool context_verify_active(struct intel_engine_cs *engine,
-				  struct intel_context *ce)
-{
-	/* We can't do better than this on older gens */
-	if (GRAPHICS_VER(engine->i915) < 11)
-		return true;
-
-	if (!context_lrc_match(engine, ce))
-		return false;
-
-	if (GRAPHICS_VER(engine->i915) < 12)
-		return true;
-
-	if (!context_runalone_is_active(engine))
-		return false;
-
-	return true;
-}
-
 static struct intel_context *engine_active_context_get(struct intel_engine_cs *engine)
 {
 	struct intel_context *ce = NULL;
 	struct i915_request *rq;
+	bool runalone;
 
 	rcu_read_lock();
 	rq = intel_engine_find_active_request(engine);
-	if (rq && context_verify_active(engine, rq->context))
+	if (rq)
 		ce = intel_context_get(rq->context);
 	rcu_read_unlock();
 
-	return ce;
+	runalone = context_runalone_is_active(engine);
+	if (ce && runalone && context_lrc_match(engine, ce))
+		return ce;
+
+	if (ce)
+		intel_context_put(ce);
+
+	/* Active, but gt occupied by other engine or not in runalone mode. */
+	if (!runalone)
+		return ERR_PTR(-EACCES);
+
+	return ERR_PTR(-ENOENT);
 }
 
 static bool client_has_vm(struct i915_drm_client *client,
@@ -1781,10 +1987,18 @@ static bool client_has_vm(struct i915_drm_client *client,
 	return false;
 }
 
-static void *__i915_debugger_load_handle(struct i915_debugger *debugger,
-					 u32 handle)
+static struct i915_debugger_resource *debugger_alloc_resource(u32 type,
+							      void *data,
+							      gfp_t gfp)
 {
-	return xa_load(&debugger->resources_xa, handle);
+	struct i915_debugger_resource *res;
+
+	res = kzalloc(sizeof(*res), gfp);
+	if (res) {
+		res->type = type;
+		res->ptr = data;
+	}
+	return res;
 }
 
 static struct i915_address_space *
@@ -1799,10 +2013,23 @@ __get_vm_from_handle(struct i915_debugger *debugger,
 
 	rcu_read_lock();
 
-	vm = __i915_debugger_load_handle(debugger, lower_32_bits(vmo->handle));
+	vm = debugger_resource_vm_load(debugger,
+				       lower_32_bits(vmo->handle));
 
-	client = xa_load(&debugger->i915->clients.xarray, vmo->client_handle);
-	if (client && client_has_vm(client, vm))
+	if (IS_ERR(vm)) {
+		rcu_read_unlock();
+		return vm;
+	}
+
+	client = debugger_resource_client_load(debugger,
+					       vmo->client_handle);
+
+	if (IS_ERR(client)) {
+		rcu_read_unlock();
+		return ERR_CAST(client);
+	}
+
+	if (client_has_vm(client, vm))
 		vm = i915_vm_tryget(vm);
 	else
 		vm = NULL;
@@ -1880,7 +2107,7 @@ err_vm:
 err_fd:
 	put_unused_fd(fd);
 
-	DD_WARN(debugger, "vm_open: client_handle=%llu, handle=%llu, flags=0x%llx, ret=%ld",
+	DD_INFO(debugger, "vm_open: client_handle=%llu, handle=%llu, flags=0x%llx, ret=%ld",
 		vmo.client_handle, vmo.handle, vmo.flags, ret);
 
 	return ret;
@@ -1904,8 +2131,8 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 		return -EINVAL;
 
 	active_ctx = engine_active_context_get(engine);
-	if (!active_ctx)
-		return -ENOENT;
+	if (IS_ERR(active_ctx))
+		return PTR_ERR(active_ctx);
 
 	if (!active_ctx->client) {
 		intel_context_put(active_ctx);
@@ -1918,7 +2145,11 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	context_lrca = active_ctx->lrc.lrca & GENMASK(31, 12);
 	intel_context_put(active_ctx);
 
-	if (client_id != client_handle)
+	client = debugger_resource_client_load(debugger, client_handle);
+	if (IS_ERR(client))
+		return PTR_ERR(client);
+
+	if (client_id != client->id)
 		return -EBUSY;
 
 	/* Additional check just before issuing MMIO writes */
@@ -2054,9 +2285,9 @@ static int clear_attn_ss_fw(struct intel_gt *gt, void *data,
 }
 
 static int eu_control_resume(struct i915_debugger *debugger,
-			      struct intel_engine_cs *engine,
-			      u8 *bits,
-			      unsigned int bitmask_size)
+			     struct intel_engine_cs *engine,
+			     u8 *bits,
+			     unsigned int bitmask_size)
 {
 	struct ss_iter iter = {
 		.debugger = debugger,
@@ -2174,7 +2405,7 @@ static int do_eu_control(struct i915_debugger * debugger,
 	}
 
 	if (ret == 0)
-		seqno = atomic_long_inc_return(&debugger->event_seqno);
+		seqno = debugger_get_seqno(debugger);
 
 	write_unlock(&debugger->eu_lock);
 
@@ -2217,25 +2448,6 @@ out_free:
 	return ret;
 }
 
-static struct i915_drm_client *
-find_client_get(struct i915_debugger *debugger, unsigned long handle)
-{
-	struct i915_drm_client *client;
-
-	rcu_read_lock();
-	client = xa_load(&debugger->i915->clients.xarray, handle);
-	if (client) {
-		if (client_session(client) == debugger->session)
-			client = i915_drm_client_get_rcu(client);
-		else
-			client = NULL;
-	}
-
-	rcu_read_unlock();
-
-	return client;
-}
-
 static long i915_debugger_eu_control(struct i915_debugger *debugger,
 				     const unsigned int cmd,
 				     const u64 arg)
@@ -2274,13 +2486,13 @@ static long i915_debugger_eu_control(struct i915_debugger *debugger,
 		user_arg.client_handle, user_arg.cmd, user_arg.flags, user_arg.ci.engine_class,
 		user_arg.ci.engine_instance, user_arg.bitmask_size);
 
-	client = find_client_get(debugger, user_arg.client_handle);
-	if (!client) {
-		DD_INFO(debugger, "eu_control: no client found for %llu\n", user_arg.client_handle);
-		return -EINVAL;
+	client = debugger_resource_client_load(debugger,
+					       user_arg.client_handle);
+	if (IS_ERR(client)) {
+		if (PTR_ERR(client) == -ENOENT)
+			return -EINVAL; /* As this is user input */
+		return PTR_ERR(client);
 	}
-
-	GEM_BUG_ON(client->id != user_arg.client_handle);
 
 	ret = do_eu_control(debugger, &user_arg, user_ptr);
 
@@ -2288,8 +2500,6 @@ static long i915_debugger_eu_control(struct i915_debugger *debugger,
 		"eu_control: client_handle=%llu, cmd=%u, flags=0x%x, ci.engine_class=%hu, ci.engine_instance=%hu, bitmask_size=%u, ret=%d\n",
 		user_arg.client_handle, user_arg.cmd, user_arg.flags, user_arg.ci.engine_class, user_arg.ci.engine_instance,
 		user_arg.bitmask_size, ret);
-
-	i915_drm_client_put(client);
 
 	return ret;
 }
@@ -2370,126 +2580,742 @@ static long i915_debugger_ioctl(struct file *file,
 	return ret;
 }
 
-static void
-i915_debugger_discover_uuids(struct i915_drm_client *client)
+static int __debugger_resource_alloc(struct i915_debugger *debugger,
+				     u32 type, void *data, u32 *handle,
+				     u64 *seqno, gfp_t gfp, int skip_check)
 {
+	struct i915_debugger_resource *entry = NULL;
+	struct i915_debugger_resource *res;
 	unsigned long idx;
-	struct i915_uuid_resource *uuid;
-
-	/*
-	 * Lock not needed since i915_debugger_wait_in_discovery
-	 * prevents from changing the set.
-	 */
-	xa_for_each(&client->uuids_xa, idx, uuid)
-		i915_debugger_uuid_create(client, uuid);
-}
-
-static void
-__i915_debugger_vm_send_event(struct i915_debugger *debugger,
-			      const struct i915_drm_client *client,
-			      u32 flags, u64 handle, gfp_t gfp)
-{
-	struct i915_debug_event_vm *vm_event;
-	struct i915_debug_event *event;
-
-	event = i915_debugger_create_event(debugger,
-					   PRELIM_DRM_I915_DEBUG_EVENT_VM,
-					   flags,
-					   sizeof(*vm_event),
-					   gfp);
-	if (event) {
-		vm_event = from_event(vm_event, event);
-		vm_event->client_handle = client->id;
-		vm_event->handle = handle;
-
-		i915_debugger_queue_event(debugger, event);
-	}
-}
-
-static int __i915_debugger_alloc_handle(struct i915_debugger *debugger,
-					void *data, u32 *handle)
-{
 	int ret;
 
-	ret = xa_alloc_cyclic(&debugger->resources_xa, handle, data,
-			      xa_limit_32b, &debugger->next_handle,
-			      GFP_KERNEL);
-	if (ret == 1)
-		ret = 0;
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
 
-	if (ret) {
-		DD_ERR(debugger, "xa_alloc_cyclic failed %d, disconnecting\n", ret);
-		i915_debugger_disconnect_err(debugger);
+	lockdep_assert_not_held(&debugger->lock);
+
+	if (type >= I915_DEBUGGER_RES_INVALID)
+		return -EINVAL;
+
+	/* Alloc in front */
+	res = debugger_alloc_resource(type, data, gfp);
+	if (!res)
+		return -ENOMEM;
+
+	xa_lock(&debugger->resources_xa);
+	if (!skip_check) {
+		xa_for_each(&debugger->resources_xa, idx, entry) {
+			if (entry->ptr == data)
+				break;
+		}
+	}
+	if (entry) {
+		xa_unlock(&debugger->resources_xa);
+		kfree(res);
+		*handle = idx;
+		return -EEXIST;
 	}
 
+	ret = __xa_alloc_cyclic(&debugger->resources_xa, handle, res,
+				xa_limit_32b, &debugger->next_handle,
+				gfp);
+	if (ret == 1)
+		ret = 0;
+	if (!ret && seqno)
+		*seqno = debugger_get_seqno(debugger);
+	xa_unlock(&debugger->resources_xa);
+
+	if (ret) {
+		kfree(res);
+		DD_ERR(debugger, "Resource allocation failed %d\n", ret);
+	}
 	return ret;
 }
 
-static int __i915_debugger_get_handle(struct i915_debugger *debugger,
-				      const void *data, u32 *handle)
+static int debugger_resource_del(struct i915_debugger *debugger,
+				 u32 handle, u64 *seqno)
 {
-	unsigned long idx;
+	struct i915_debugger_resource *res;
+
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
+
+	xa_lock(&debugger->resources_xa);
+	res = __xa_erase(&debugger->resources_xa, handle);
+	if (res) {
+		if (seqno)
+			*seqno = debugger_get_seqno(debugger);
+		debugger_resource_free(debugger, res);
+	}
+	xa_unlock(&debugger->resources_xa);
+	return res ? 0 : -ENOENT;
+}
+
+static int
+debugger_resource_client_handle(struct i915_debugger *debugger,
+				const void *data,
+				u32 *handle)
+{
+	struct i915_debugger_resource *res;
+	int err;
+
+	xa_lock(&debugger->resources_xa);
+	err = debugger_resource_find__locked(debugger, data, &res, handle);
+	if (err)
+		goto out;
+
+	if (res->type != I915_DEBUGGER_RES_CLIENT)
+		err = -EINVAL;
+out:
+	xa_unlock(&debugger->resources_xa);
+	return err;
+}
+
+static int
+debugger_resource_uuid_handle(struct i915_debugger *debugger,
+			      const void *data,
+			      u32 *handle)
+{
+	struct i915_debugger_resource *res;
+	int err;
+
+	xa_lock(&debugger->resources_xa);
+	err = debugger_resource_find__locked(debugger, data, &res, handle);
+	if (err)
+		goto out;
+
+	if (res->type != I915_DEBUGGER_RES_UUID)
+		err = -EINVAL;
+
+out:
+	xa_unlock(&debugger->resources_xa);
+	return err;
+}
+
+static int
+debugger_resource_context_handle(struct i915_debugger *debugger,
+				 const void *data,
+				 u32 *handle)
+{
+	struct i915_debugger_resource *res;
+	int err;
+
+	xa_lock(&debugger->resources_xa);
+	err = debugger_resource_find__locked(debugger, data, &res, handle);
+	if (err)
+		goto out;
+
+	if (res->type != I915_DEBUGGER_RES_CONTEXT)
+		err = -EINVAL;
+
+out:
+	xa_unlock(&debugger->resources_xa);
+	return err;
+}
+
+static int
+debugger_resource_vm_handle(struct i915_debugger *debugger,
+			    const void *data,
+			    u32 *handle)
+{
+	struct i915_debugger_resource *res;
+	int err;
+
+	xa_lock(&debugger->resources_xa);
+	err = debugger_resource_find__locked(debugger, data, &res, handle);
+	if (err)
+		goto out;
+
+	if (res->type != I915_DEBUGGER_RES_VM)
+		err = -EINVAL;
+
+out:
+	xa_unlock(&debugger->resources_xa);
+	return err;
+}
+
+static int
+debugger_resource_vma_handle(struct i915_debugger *debugger,
+			     const void *data,
+			     u32 *handle)
+{
+	struct i915_debugger_resource *res;
+	int err;
+
+	xa_lock(&debugger->resources_xa);
+	err = debugger_resource_find__locked(debugger, data, &res, handle);
+	if (err)
+		goto out;
+
+	if (res->type != I915_DEBUGGER_RES_VM_BIND)
+		err = -EINVAL;
+
+ out:
+	xa_unlock(&debugger->resources_xa);
+	return err;
+}
+
+static int debugger_resource_find_del(struct i915_debugger *debugger,
+				      void *data,
+				      u32 *handle, u64 *seqno)
+{
+	struct i915_debugger_resource *entry, *res = NULL;
 	int ret = -ENOENT;
-	void *entry;
+	unsigned long idx;
+	u32 res_handle;
+
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
 
 	xa_lock(&debugger->resources_xa);
 	xa_for_each(&debugger->resources_xa, idx, entry) {
-		if (entry == data) {
+		if (entry->ptr == data) {
+			res_handle = idx;
 			if (handle)
 				*handle = idx;
 			ret = 0;
 			break;
 		}
 	}
+	if (!ret)
+		res = __xa_erase(&debugger->resources_xa, res_handle);
+
+	if (res) {
+		if (seqno)
+			*seqno = debugger_get_seqno(debugger);
+		debugger_resource_free(debugger, res);
+	}
 	xa_unlock(&debugger->resources_xa);
-	return ret;
+	return res ? 0 : -ENOENT;
 }
 
-static inline bool
-__i915_debugger_has_resource(struct i915_debugger *debugger, const void *data)
+/*
+ * On -EEXIST the *handle will be a handle of previously
+ * stored 'data'.
+ */
+static inline int debugger_resource_alloc(struct i915_debugger *debugger,
+					  u32 type, void *data, u32 *handle,
+					  u64 *seqno, gfp_t gfp)
 {
-	return __i915_debugger_get_handle(debugger, data, NULL) == 0;
+	return __debugger_resource_alloc(debugger, type, data,
+					 handle, seqno, gfp, false);
 }
 
-static int __i915_debugger_del_handle(struct i915_debugger *debugger, u32 id)
-{
-	return xa_erase(&debugger->resources_xa, id) ? 0 : -ENOENT;
+#define write_member(T_out, ptr, member, value) {			\
+		BUILD_BUG_ON(sizeof(*ptr) != sizeof(T_out));		\
+		BUILD_BUG_ON(offsetof(typeof(*ptr), member) !=		\
+			     offsetof(typeof(T_out), member));		\
+		BUILD_BUG_ON(sizeof(ptr->member) != sizeof(value));	\
+		BUILD_BUG_ON(sizeof(struct_member(T_out, member)) != sizeof(value)); \
+		BUILD_BUG_ON(!typecheck(typeof((ptr)->member), value));	\
+		memcpy(&ptr->member, &value, sizeof(ptr->member));	\
 }
 
-static void __i915_debugger_vm_create(struct i915_debugger *debugger,
-				      struct i915_drm_client *client,
-				      struct i915_address_space *vm)
+struct uuid_event_param {
+	u64 client_handle;
+	u64 handle;
+	u64 class_handle;
+	u64 payload_size;
+};
+
+static void uuid_event_ctor(struct i915_debug_event *event, const void *data)
 {
+	const struct uuid_event_param *p = data;
+	struct i915_debug_event_uuid *ec = from_event(ec, event);
+
+	write_member(struct prelim_drm_i915_debug_event_uuid, ec, client_handle, p->client_handle);
+	write_member(struct prelim_drm_i915_debug_event_uuid, ec, handle, p->handle);
+	write_member(struct prelim_drm_i915_debug_event_uuid, ec, class_handle, p->class_handle);
+	write_member(struct prelim_drm_i915_debug_event_uuid, ec, payload_size, p->payload_size);
+}
+
+static void
+i915_debugger_queue_client_event_ctor(struct i915_debugger *debugger,
+				      u32 type, u32 flags, u64 seqno, u64 size,
+				      void (*constructor)(struct i915_debug_event *,
+							  const void *),
+				      const void *data, gfp_t gfp)
+{
+	struct i915_debug_event *event;
+
+	if (is_debugger_closed(debugger))
+		return;
+
+	event = debugger_create_event(debugger, seqno, type, flags, size, gfp);
+	if (event) {
+		constructor(event, data);
+		i915_debugger_queue_event(debugger, event);
+	}
+}
+
+static struct i915_uuid_resource *
+get_class_uuid(struct i915_drm_client *client, struct i915_uuid_resource *uuid)
+{
+	struct i915_uuid_resource *class;
+
+	if (READ_ONCE(client->closed))
+		return NULL;
+
+	/* This is then the predefined class which points to itself. */
+	if (uuid->handle == PRELIM_I915_UUID_CLASS_STRING)
+		return uuid;
+
+	xa_lock(&client->uuids_xa);
+	class = xa_load(&client->uuids_xa, uuid->uuid_class);
+	if (class)
+		i915_uuid_get(class);
+	xa_unlock(&client->uuids_xa);
+
+	return class;
+}
+
+static void queue_uuid_event(struct i915_debugger *debugger,
+			     u32 client_handle,
+			     u32 uuid_handle,
+			     u32 uuid_class_handle,
+			     u64 uuid_payload_size,
+			     u64 seqno,
+			     u32 flags)
+{
+	struct uuid_event_param p = {
+		.client_handle = client_handle,
+		.handle = uuid_handle,
+		.class_handle = uuid_class_handle,
+	};
+
+	if (flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE)
+		p.payload_size = uuid_payload_size;
+
+	i915_debugger_queue_client_event_ctor(debugger,
+					      PRELIM_DRM_I915_DEBUG_EVENT_UUID,
+					      flags,
+					      seqno,
+					      sizeof(struct prelim_drm_i915_debug_event_uuid),
+					      uuid_event_ctor, &p, GFP_KERNEL);
+}
+
+static int debugger_uuid_create(struct i915_debugger *debugger,
+				struct i915_drm_client *client,
+				u32 client_handle,
+				struct i915_uuid_resource *uuid,
+				u32 *uuid_handle);
+
+static int debugger_resource_uuid_assure_class_handle(struct i915_debugger *debugger,
+						      struct i915_drm_client *client,
+						      u32 client_handle,
+						      struct i915_uuid_resource *uuid,
+						      u32 *uuid_class_handle)
+{
+	struct i915_uuid_resource *class_uuid;
+	int err = 0;
+
+	class_uuid = get_class_uuid(client, uuid);
+	if (!class_uuid)
+		return -ENOENT;
+
+	err = debugger_resource_find(debugger, class_uuid, NULL, uuid_class_handle);
+	if (err == -ENOTCONN) {
+		i915_uuid_put(class_uuid);
+		return err;
+	}
+
+	/* Can be only -ENOENT. Base class does not exist in resources yet */
+	if (err)
+		err = debugger_uuid_create(debugger, client, client_handle,
+					   class_uuid, uuid_class_handle);
+	i915_uuid_put(class_uuid);
+	return err;
+}
+
+static int debugger_resource_uuid_fetch_class_handle(struct i915_debugger *debugger,
+						     struct i915_drm_client *client,
+						     struct i915_uuid_resource *uuid,
+						     u32 *uuid_class_handle)
+{
+	struct i915_uuid_resource *class_uuid;
+	int err = -ENOENT;
+
+	class_uuid = get_class_uuid(client, uuid);
+	if (!class_uuid)
+		return err;
+
+	err = debugger_resource_find(debugger, class_uuid,
+				     NULL, uuid_class_handle);
+	i915_uuid_put(class_uuid);
+	return err;
+}
+
+/**
+ * debugger_uuid_create
+ *
+ * This function if needed recursively creates underlying UUID resources for
+ * discovery thread.
+ *
+ * It calls debugger_resource_uuid_assure_class_handle which calls this function.
+ *
+ * Stops when: PRELIM_I915_UUID_CLASS_STRING is reached or when first class in
+ * a chain already exist (further must exist too).
+ */
+
+static int debugger_uuid_create(struct i915_debugger *debugger,
+				struct i915_drm_client *client,
+				u32 client_handle,
+				struct i915_uuid_resource *uuid,
+				u32 *uuid_handle)
+{
+	struct i915_debugger_resource *res;
+	u32 class_handle;
 	u32 handle;
+	u64 seqno;
+	int err = -ENOTCONN;
 
-	if (__i915_debugger_alloc_handle(debugger, vm, &handle)) {
-		DD_ERR(debugger,
-		       "unable to allocate vm handle for client %u, disconnecting\n",
-		       client->id);
+	err = debugger_resource_find(debugger, uuid, NULL, NULL);
+	if (!err)
+		return -EEXIST;
+
+	if (err == -ENOTCONN)
+		return err;
+
+	/*
+	 * Base class (predefined) does not have dependency.
+	 * For other it is necessary to check the chain
+	 * of class dependency.
+	 */
+	if (uuid->handle != PRELIM_I915_UUID_CLASS_STRING) {
+		err = debugger_resource_uuid_assure_class_handle(debugger,
+								 client,
+								 client_handle,
+								 uuid,
+								 &class_handle);
+		if (err)
+			goto out;
+	}
+
+	i915_uuid_get(uuid);
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_UUID,
+				      uuid, &handle, &seqno, GFP_KERNEL);
+	if (err) {
+		i915_uuid_put(uuid);
+		goto out;
+	}
+
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res)) {
+		err = PTR_ERR(res);
+		if (err != -ENOTCONN)
+			i915_uuid_put(uuid);
+		goto out;
+	}
+
+	if (uuid->handle != PRELIM_I915_UUID_CLASS_STRING) {
+		res->uuid.class_handle = class_handle;
+	} else {
+		class_handle = handle;
+		res->uuid.class_handle = handle;
+	}
+
+	queue_uuid_event(debugger, client_handle, handle, class_handle,
+			 uuid->size, seqno, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+
+	if (uuid_handle)
+		*uuid_handle = handle;
+
+	return 0;
+out:
+	if (err != -EEXIST && err != -ENOTCONN)
 		i915_debugger_disconnect_err(debugger);
+	return err;
+}
+
+static void debugger_discover_uuids(struct i915_debugger *debugger,
+				    struct i915_drm_client *client,
+				    u32 client_handle)
+{
+	struct i915_uuid_resource *uuid;
+	unsigned long idx;
+	int err;
+
+	if (is_debugger_closed(debugger))
+		return;
+
+	xa_lock(&client->uuids_xa);
+	xa_for_each(&client->uuids_xa, idx, uuid) {
+		i915_uuid_get(uuid);
+		xa_unlock(&client->uuids_xa);
+		err = debugger_uuid_create(debugger, client,
+					   client_handle, uuid, NULL);
+		xa_lock(&client->uuids_xa);
+		i915_uuid_put(uuid);
+		if (err && err != -EEXIST)
+			break;
+	}
+	xa_unlock(&client->uuids_xa);
+}
+
+static void debugger_uuid_destroy(struct i915_debugger *debugger,
+				  u32 client_handle,
+				  struct i915_uuid_resource *uuid)
+{
+	struct i915_debugger_resource *res;
+	u32 handle, class_handle;
+	u64 seqno;
+	int err;
+
+	/* Don't probe for client. Is has been already removed */
+
+	err = debugger_resource_find(debugger, uuid, &res, &handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger,
+				     err,
+				     "Failed to fetch uuid %px for client handle %u. Err %d\n",
+				     uuid, client_handle, err);
 		return;
 	}
 
-	__i915_debugger_vm_send_event(debugger, client,
-				      PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-				      handle,
-				      GFP_KERNEL);
+	class_handle = res->uuid.class_handle;
+
+	if (!debugger_resource_del(debugger, handle, &seqno))
+		queue_uuid_event(debugger, client_handle, handle, class_handle,
+				 uuid->size, seqno, PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
 }
 
-static void i915_debugger_discover_vma(struct i915_debugger *debugger,
-				       struct i915_address_space *vm)
+static void
+vm_queue_event(struct i915_debugger *debugger, u32 client_handle, u32 handle,
+	      u64 seqno, u32 flags, gfp_t gfp)
 {
-	unsigned long count;
+	struct i915_debug_event_vm *vm_event;
+	struct i915_debug_event *event;
+
+	event = debugger_create_event(debugger,
+				      seqno,
+				      PRELIM_DRM_I915_DEBUG_EVENT_VM,
+				      flags,
+				      sizeof(*vm_event),
+				      gfp);
+	if (event) {
+		vm_event = from_event(vm_event, event);
+		vm_event->client_handle = client_handle;
+		vm_event->handle = handle;
+
+		i915_debugger_queue_event(debugger, event);
+	}
+}
+
+static u32 debugger_vm_create(struct i915_debugger *debugger, u32 client_handle,
+			      struct i915_address_space *vm, gfp_t gfp)
+{
+	u32 handle = 0;
+	u64 seqno;
+	int err;
+
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_VM, vm,
+				      &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
+
+	vm_queue_event(debugger, client_handle, handle, seqno,
+		       PRELIM_DRM_I915_DEBUG_EVENT_CREATE, gfp);
+
+	return handle;
+out:
+	if (err != -ENOTCONN && err != -EEXIST) {
+		DD_WARN(debugger, "Resource allocation failed: %d\n", err);
+		i915_debugger_disconnect_err(debugger);
+	}
+	return handle;
+}
+
+static bool is_discovery_done(struct i915_debugger *debugger)
+{
+	return completion_done(&debugger->discovery);
+}
+
+static int assign_vma_event(struct i915_debugger *debugger,
+			    u32 client_handle,
+			    u32 vm_handle,
+			    struct i915_address_space *vm,
+			    struct i915_vma *vma,
+			    u32 vma_handle,
+			    struct i915_debug_event_vm_bind *e)
+{
+	struct i915_debugger_resource *res;
+	struct i915_vma_metadata *metadata;
+	u32 uuid_handle, tmp_handle;
+	int err;
+
+	err = debugger_resource_find(debugger, vma, NULL, &tmp_handle);
+	if (err == -ENOTCONN)
+		return err;
+
+	if (!err) {
+		/* IOCTL was first. */
+		e->base.type = PRELIM_DRM_I915_DEBUG_EVENT_NONE;
+		err = debugger_resource_del(debugger, vma_handle, NULL);
+		if (err == -ENOTCONN)
+			return err;
+
+		vma_handle = tmp_handle;
+	} else {
+		/* VMA not found in resources. Good, proceed */
+		e->base.type = PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND;
+		err = 0;
+	}
+
+	if (e->base.type == PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND) {
+		/* Cannot get lock here, don't use debugger_resource_load */
+		res = xa_load(&debugger->resources_xa, vma_handle);
+		if (!res) {
+			if (is_debugger_closed(debugger))
+				return -ENOTCONN;
+			else
+				return -EINVAL;
+		}
+
+		GEM_BUG_ON(res->ptr);
+		res->ptr = vma;
+
+		e->base.flags    = PRELIM_DRM_I915_DEBUG_EVENT_CREATE;
+		e->base.seqno    = debugger_get_seqno(debugger);
+		e->client_handle = client_handle;
+		e->vm_handle     = vm_handle;
+		e->va_start      = i915_vma_offset(vma);
+		e->va_length     = i915_vma_size(vma);
+		e->num_uuids	 = 0;
+		e->flags         = 0;
+		e->num_uuids     = 0;
+	}
+
+	e->base.size = sizeof(*e);
+
+	list_for_each_entry(metadata, &vma->metadata_list, vma_link) {
+		if (e->base.type == PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND) {
+			err = debugger_resource_uuid_handle(debugger, metadata->uuid, &uuid_handle);
+			if (err) {
+				DD_WARN_ON_CONNECTED(debugger,
+						     err,
+						     "Unknown uuid %u/%.36s in metadata. Err %d\n",
+						     metadata->uuid->handle,
+						     metadata->uuid->uuid,
+						     err);
+				break;
+			}
+			e->uuids[e->num_uuids++] = uuid_handle;
+		}
+		e->base.size += sizeof(e->uuids[0]);
+	}
+	return err;
+}
+
+static int discover_vma_alloc_res(struct i915_debugger *debugger,
+				  unsigned long count,
+				  u32 **vma_handles)
+{
+	u32 *handles;
+	int i, err = 0;
+
+	handles = kcalloc(count, sizeof(*handles), GFP_ATOMIC);
+	if (!handles)
+		return -ENOMEM;
+
+	for (i = 0; i < count; i++) {
+		/*
+		 * Allocation without data - this will not be reachable
+		 * without handle.
+		 */
+		err = __debugger_resource_alloc(debugger,
+						I915_DEBUGGER_RES_VM_BIND,
+						NULL,
+						&handles[i], NULL,
+						GFP_KERNEL, true);
+		if (err)
+			break;
+	}
+
+	if (err) {
+		/* Resources will be free on debugger close */
+		kfree(handles);
+		*vma_handles = ERR_PTR(err);
+	} else {
+		*vma_handles = handles;
+	}
+	return err;
+}
+
+static int discover_vma_send_events(struct i915_debugger *debugger,
+				    void *events,
+				    unsigned long count)
+{
+	struct i915_debug_event *e, *event;
+	int err = 0;
+
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
+
+	while (count--) {
+		event = events;
+		if (event->type != PRELIM_DRM_I915_DEBUG_EVENT_NONE) {
+
+			e = kmemdup(event, event->size, GFP_KERNEL);
+			if (!e) {
+				DD_ERR(debugger, "could not allocate bind event, disconnecting\n");
+				err = -ENOMEM;
+				break;
+			}
+			err = i915_debugger_queue_event(debugger, e);
+			if (err)
+				break;
+		}
+		events += event->size;
+	}
+	return err;
+}
+
+static unsigned long discover_vma_count_ev_size(struct i915_vma *vma)
+{
+	struct i915_debug_event_vm_bind *e;
+	struct i915_vma_metadata *metadata;
+	size_t used = sizeof(*e);
+
+	list_for_each_entry(metadata, &vma->metadata_list, vma_link)
+		used += sizeof(e->uuids[0]);
+
+	return used;
+}
+
+static void debugger_discover_vma(struct i915_debugger *debugger,
+				  struct i915_address_space *vm)
+{
+	u32 vm_handle, client_handle, *vma_handles;
+	unsigned long count, res_count;
 	void *ev = NULL, *__ev;
-	u32 vm_handle;
+	int err = 0;
 	size_t size;
 
-	if (__i915_debugger_get_handle(debugger, vm, &vm_handle)) {
-		DD_WARN(debugger, "discover_vm did not found handle for vm %p\n", vm);
+	if (is_debugger_closed(debugger))
 		return;
+
+	err = debugger_resource_vm_handle(debugger, vm, &vm_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger,
+				     err,
+				     "Handle for vm %p not found. Err %d\n",
+				     vm, err);
+		goto out_err;
 	}
 
+	err = debugger_resource_client_handle(debugger, vm->client,
+					      &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger,
+				     err,
+				     "Handle for client %p not found. Err %d\n",
+				     vm->client, err);
+		goto out_err;
+	}
+
+	vma_handles = NULL;
 	size = 0;
+	res_count = 0;
 	do {
 		struct drm_mm_node *node;
 		size_t used = 0;
@@ -2497,234 +3323,523 @@ static void i915_debugger_discover_vma(struct i915_debugger *debugger,
 		count = 0;
 		__ev = ev;
 		mutex_lock(&vm->mutex);
+
 		drm_mm_for_each_node(node, &vm->mm) {
 			struct i915_vma *vma = container_of(node, typeof(*vma), node);
-			struct i915_debug_event_vm_bind *e = __ev;
-			struct i915_vma_metadata *metadata;
 
 			if (!i915_vma_is_persistent(vma))
 				continue;
 
-			used += sizeof(*e);
-			list_for_each_entry(metadata, &vma->metadata_list, vma_link)
-				used += sizeof(e->uuids[0]);
+			used += discover_vma_count_ev_size(vma);
 
 			if (used <= size) {
-				e->base.type     = PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND;
-				e->base.flags    = PRELIM_DRM_I915_DEBUG_EVENT_CREATE;
-				e->base.size     = sizeof(*e);
-				e->client_handle = vm->client->id;
-				e->vm_handle     = vm_handle;
-				e->va_start      = i915_vma_offset(vma);
-				e->va_length     = i915_vma_size(vma);
-				e->num_uuids	 = 0;
-				e->flags         = 0;
+				struct i915_debug_event *e = __ev;
 
-				list_for_each_entry(metadata,
-						    &vma->metadata_list, vma_link) {
-					e->uuids[e->num_uuids++] = metadata->uuid->handle;
-					e->base.size += sizeof(e->uuids[0]);
+				if (count > res_count) {
+					/* This is where it must stop */
+					DD_WARN(debugger, "Number of VM_BINDs increased during discovery. Data may be inconsistent!\n");
+					break;
 				}
+				err = assign_vma_event(debugger, client_handle, vm_handle, vm,
+						       vma, vma_handles[count], __ev);
+				if (err)
+					break;
 
-				__ev += e->base.size;
-				count++;
+				__ev += e->size;
 			}
+			count++;
 		}
 		mutex_unlock(&vm->mutex);
-		if (size >= used)
+		if (err)
 			break;
 
-		__ev = krealloc(ev, used, GFP_KERNEL);
-		if (!__ev) {
-			DD_ERR(debugger, "could not allocate bind event, disconnecting\n");
-			goto err;
+		if (!used || size) {
+			if (size != used)
+				DD_WARN(debugger, "Number of VM_BINDs changed during discovery. Data may be inconsistent!\n");
+			break;
 		}
+
+		__ev = kmalloc(used, GFP_KERNEL);
+		if (!__ev) {
+			DD_WARN(debugger, "Could not allocate bind event, disconnecting\n");
+			err = -ENOMEM;
+			break;
+		}
+
+		/* Pre-allocate resources for usage under mutex */
+		err = discover_vma_alloc_res(debugger, count, &vma_handles);
+		if (err) {
+			ev = __ev;
+			vma_handles = NULL;
+			break;
+		}
+		res_count = count;
 		ev = __ev;
 		size = used;
 	} while (1);
 
-	for (__ev = ev; count--; ) {
-		struct i915_debug_event_vm_bind *e = __ev;
-		struct i915_debug_event *event;
-
-		event = kmemdup(e, e->base.size, GFP_KERNEL);
-		if (!event) {
-			DD_ERR(debugger, "could not allocate bind event, disconnecting\n");
-			goto err;
-		}
-
-		event->seqno = atomic_long_inc_return(&debugger->event_seqno);
-		i915_debugger_queue_event(debugger, event);
-
-		__ev += e->base.size;
+	if (!err) {
+		err = discover_vma_send_events(debugger, ev, count);
+	} else {
+		if (err != -ENOTCONN)
+			i915_debugger_disconnect_err(debugger);
 	}
-	goto out;
 
-err:
-	i915_debugger_disconnect_err(debugger);
-out:
+	kfree(vma_handles);
 	kfree(ev);
+	return;
+
+out_err:
+	if (err)
+		i915_debugger_disconnect_err(debugger);
 }
 
-static void i915_debugger_discover_vm(struct i915_debugger *debugger,
-				      struct i915_drm_client *client)
+static void debugger_discover_vm(struct i915_debugger *debugger,
+				 struct i915_drm_client *client,
+				 u32 client_handle)
 {
-	u64 session = client_session(client);
 	struct i915_address_space *vm;
 	unsigned long i;
+	u32 vm_handle;
 
 	if (!client->file) /* protect kernel internals */
 		return;
 
-	if (GEM_WARN_ON(session &&
-			debugger->session != session))
+	if (is_debugger_closed(debugger))
 		return;
 
+	rcu_read_lock();
 	xa_for_each(&client->file->vm_xa, i, vm) {
-		if (__i915_debugger_has_resource(debugger, vm))
+		vm = i915_vm_tryget(vm);
+		if (!vm)
 			continue;
+		rcu_read_unlock();
+		vm_handle = debugger_vm_create(debugger, client_handle, vm, GFP_KERNEL);
+		if (vm_handle)
+			debugger_discover_vma(debugger, vm);
+		rcu_read_lock();
 
-		__i915_debugger_vm_create(debugger, client, vm);
-		i915_debugger_discover_vma(debugger, vm);
+		/* keep i915_vm_put in rcu_read_lock section */
+		if (!vm_handle)
+			i915_vm_put(vm);
+
+		/* On success keep vm reference as debugger resource */
 	}
+	rcu_read_unlock();
 }
 
 static void i915_debugger_ctx_vm_def(struct i915_debugger *debugger,
-				     const struct i915_drm_client *client,
-				     u32 ctx_id,
-				     const struct i915_address_space *vm)
+				     u32 client_handle,
+				     u32 ctx_handle,
+				     u32 vm_handle,
+				     u64 seqno)
 {
 	struct i915_debug_event *event;
 	struct i915_debug_event_context_param *ep;
-	u32 vm_handle;
 
-	if (__i915_debugger_get_handle(debugger, vm, &vm_handle))
+	if (is_debugger_closed(debugger))
 		return;
 
-	event = i915_debugger_create_event(debugger,
-					   PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT_PARAM,
-					   PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-					   sizeof(*ep),
-					   GFP_KERNEL);
+	event = debugger_create_event(debugger, seqno,
+				      PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT_PARAM,
+				      PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
+				      sizeof(*ep), GFP_KERNEL);
 	if (!event)
 		return;
 
 	ep = from_event(ep, event);
-	ep->client_handle = client->id;
-	ep->ctx_handle = ctx_id;
-	ep->param.ctx_id = ctx_id;
+	ep->client_handle = client_handle;
+	ep->ctx_handle = ctx_handle;
+	ep->param.ctx_id = ctx_handle;
 	ep->param.param = I915_CONTEXT_PARAM_VM;
 	ep->param.value = vm_handle;
 
 	i915_debugger_queue_event(debugger, event);
 }
 
-static void i915_debugger_ctx_vm_create(struct i915_debugger *debugger,
-					struct i915_gem_context *ctx)
+static void debugger_ctx_vm_create(struct i915_debugger *debugger,
+				   u32 client_handle,
+				   u32 ctx_handle,
+				   struct i915_gem_context *ctx)
 {
-	struct i915_address_space *vm = i915_gem_context_get_eb_vm(ctx);
-	bool vm_found;
+	struct i915_address_space *vm;
+	u64 seqno[2];
+	u32 vm_handle = 0;
+	int err = 0;
 
-	vm_found = __i915_debugger_has_resource(debugger, vm);
-	if (!vm_found)
-		__i915_debugger_vm_create(debugger, ctx->client, vm);
+	/* It mirrors the gem_context_register way */
+	mutex_lock(&ctx->mutex);
+	vm = i915_gem_context_vm(ctx);
+	if (vm)
+		vm = i915_vm_tryget(vm);
+	mutex_unlock(&ctx->mutex);
+	if (!vm)
+		return;
 
-	i915_debugger_ctx_vm_def(debugger, ctx->client, ctx->id, vm);
+	if (is_debugger_closed(debugger)) {
+		i915_vm_put(vm);
+		goto out;
+	}
 
-	if (!vm_found)
-		i915_debugger_discover_vma(debugger, vm);
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_VM,
+				      vm, &vm_handle, &seqno[0], GFP_KERNEL);
+	if (err) {
+		i915_vm_put(vm);
+		/* VM may or may not exist. EEXIST is not an issue here. */
+		if (err != -EEXIST)
+			goto out;
+	}
 
-	i915_vm_put(vm);
+	/* For CTX_SETPARAM_VM event */
+	seqno[1] = debugger_get_seqno(debugger);
+
+	/* If VM was not registered yet, send event */
+	if (!err)
+		vm_queue_event(debugger, client_handle, vm_handle, seqno[0],
+			       PRELIM_DRM_I915_DEBUG_EVENT_CREATE, GFP_KERNEL);
+
+	if (vm_handle) {
+		i915_debugger_ctx_vm_def(debugger, client_handle,
+					 ctx_handle, vm_handle, seqno[1]);
+		debugger_discover_vma(debugger, vm);
+	}
+	/* Hold reference to vm as debugger resource */
+	return;
+
+out:
+	if (err && err != -EEXIST && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
 }
 
+struct ctx_event_param {
+	u64 client_handle;
+	u64 handle;
+};
+
+static void ctx_event_ctor(struct i915_debug_event *event, const void *data)
+{
+	const struct ctx_event_param *p = data;
+	struct i915_debug_event_context *ec = from_event(ec, event);
+
+	write_member(struct prelim_drm_i915_debug_event_context, ec, client_handle, p->client_handle);
+	write_member(struct prelim_drm_i915_debug_event_context, ec, handle, p->handle);
+}
+
+static void queue_context_event(struct i915_debugger *debugger,
+				u32 client_handle, u32 handle,
+				u64 seqno, u32 flags)
+{
+	const struct ctx_event_param p = {
+		.client_handle = client_handle,
+		.handle = handle,
+	};
+
+	i915_debugger_queue_client_event_ctor(debugger,
+					      PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT,
+					      flags,
+					      seqno,
+					      sizeof(struct prelim_drm_i915_debug_event_context),
+					      ctx_event_ctor, &p, GFP_KERNEL);
+}
+
+static u32 debugger_context_create(struct i915_debugger *debugger,
+				   u32 client_handle,
+				   struct i915_gem_context *ctx)
+{
+	u32 handle = 0;
+	u64 seqno;
+	int err = 0;
+
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_CONTEXT,
+				      ctx, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
+
+	queue_context_event(debugger, client_handle, handle, seqno,
+			    PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+	return handle;
+out:
+	if (err != -ENOTCONN && err != -EEXIST)
+		i915_debugger_disconnect_err(debugger);
+	return 0;
+}
+
+struct client_event_param {
+	u64 handle;
+};
+
+static void client_event_ctor(struct i915_debug_event *event, const void *data)
+{
+	const struct client_event_param *p = data;
+	struct i915_debug_event_client *ec = from_event(ec, event);
+
+	write_member(struct prelim_drm_i915_debug_event_client, ec, handle, p->handle);
+}
+
+static void queue_client_event(struct i915_debugger *debugger,
+			       u32 handle, u64 seqno, u32 flags)
+{
+	const struct client_event_param p = {
+		.handle = handle,
+	};
+
+	i915_debugger_queue_client_event_ctor(debugger,
+					      PRELIM_DRM_I915_DEBUG_EVENT_CLIENT,
+					      flags,
+					      seqno,
+					      sizeof(struct prelim_drm_i915_debug_event_client),
+					      client_event_ctor, &p, GFP_KERNEL);
+}
+
+static u32 debugger_client_create(struct i915_debugger *debugger,
+				  struct i915_drm_client *client)
+{
+	u32 handle, err = 0;
+	u64 seqno;
+
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_CLIENT,
+				client, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
+
+	WRITE_ONCE(client->debugger_session, debugger->session);
+
+	queue_client_event(debugger, handle, seqno,
+			   PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+	return handle;
+
+out:
+	if (err != -ENOTCONN && err != -EEXIST)
+		i915_debugger_disconnect_err(debugger);
+	return 0;
+}
+
+static int
+debugger_alloc_ctx_param_eng_events(struct i915_debugger *debugger,
+				    u32 client_handle,
+				    u32 ctx_handle,
+				    struct i915_gem_context *ctx,
+				    struct i915_debug_event_engines **ee,
+				    struct i915_debug_event_context_param **ep)
+{
+	struct i915_debug_event_context_param *event_param;
+	struct i915_debug_event_engines *event_engine;
+	struct i915_context_param_engines *e;
+	struct i915_gem_engines *gem_engines;
+	struct i915_debug_event *event;
+	size_t event_size, count, n;
+	int ret;
+
+	if (is_debugger_closed(debugger))
+		return -ENOTCONN;
+
+	gem_engines = i915_gem_context_engines_get(ctx, NULL);
+	if (!gem_engines)
+		return -EINVAL;
+
+	count = gem_engines->num_engines;
+
+	if (!check_struct_size(e, engines, count, &event_size)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* param.value is like data[] thus don't count it */
+	event_size += (sizeof(*event_param) - sizeof(event_param->param.value));
+
+	event = debugger_create_event(debugger,
+				      0,
+				      PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT_PARAM,
+				      PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
+				      event_size,
+				      GFP_KERNEL);
+	if (!event) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	event_param = from_event(event_param, event);
+	event_param->client_handle = client_handle;
+	event_param->ctx_handle = ctx_handle;
+
+	event_param->param.ctx_id = ctx_handle;
+	event_param->param.param = I915_CONTEXT_PARAM_ENGINES;
+	event_param->param.size = struct_size(e, engines, count);
+
+	if (count) {
+		event_size = sizeof(*event_engine) +
+			count * sizeof(struct i915_debug_engine_info);
+
+		event = debugger_create_event(debugger,
+					      0,
+					      PRELIM_DRM_I915_DEBUG_EVENT_ENGINES,
+					      PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
+					      event_size, GFP_KERNEL);
+		if (!event) {
+			ret = -ENOMEM;
+			kfree(event_param);
+			goto out;
+		}
+
+		event_engine = from_event(event_engine, event);
+		event_engine->client_handle = client_handle;
+		event_engine->ctx_handle    = ctx_handle;
+		event_engine->num_engines   = count;
+	} else {
+		event_engine = NULL;
+	}
+
+	e = (struct i915_context_param_engines *)&event_param->param.value;
+
+	for (n = 0; n < count; n++) {
+		struct i915_engine_class_instance *ci = &e->engines[n];
+		struct i915_debug_engine_info *engines =
+			&event_engine->engines[n];
+
+		if (gem_engines->engines[n]) {
+			ci->engine_class =
+				gem_engines->engines[n]->engine->uabi_class;
+			ci->engine_instance =
+				gem_engines->engines[n]->engine->uabi_instance;
+
+			engines->engine.engine_class = ci->engine_class;
+			engines->engine.engine_instance = ci->engine_instance;
+			engines->lrc_handle = gem_engines->engines[n]->debugger_lrc_id;
+		} else {
+			ci->engine_class = I915_ENGINE_CLASS_INVALID;
+			ci->engine_instance = I915_ENGINE_CLASS_INVALID_NONE;
+		}
+	}
+	ret = 0;
+	*ee = event_engine;
+	*ep = event_param;
+out:
+	i915_gem_context_engines_put(gem_engines);
+	return ret;
+}
+
+static void debugger_ctx_param_engines(struct i915_debugger *debugger,
+				       u32 client_handle,
+				       u32 ctx_handle,
+				       struct i915_gem_context *ctx)
+{
+	struct i915_debug_event_context_param *event_param;
+	struct i915_debug_event_engines *event_engine;
+	int err;
+
+	if (is_debugger_closed(debugger))
+		return;
+
+	err = debugger_alloc_ctx_param_eng_events(debugger, client_handle,
+						  ctx_handle, ctx,
+						  &event_engine, &event_param);
+	if (err) {
+		if (err != -ENOTCONN)
+			i915_debugger_disconnect_err(debugger);
+		return;
+	}
+
+	event_param->base.seqno = debugger_get_seqno(debugger);
+	if (event_engine)
+		event_engine->base.seqno = debugger_get_seqno(debugger);
+
+	i915_debugger_queue_event(debugger, to_event(event_param));
+
+	if (event_engine)
+		i915_debugger_queue_event(debugger, to_event(event_engine));
+}
+
+
 static void
-i915_debugger_discover_contexts(struct i915_debugger *debugger,
-				struct i915_drm_client *client)
+debugger_discover_contexts(struct i915_debugger *debugger,
+			   struct i915_drm_client *client,
+			   u32 client_handle)
 {
 	struct i915_gem_context *ctx;
+	u32 handle;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ctx, &client->ctx_list, client_link) {
-		if (!i915_gem_context_get_rcu(ctx))
+
+		if (is_debugger_closed(debugger))
+			break;
+
+		ctx = i915_gem_context_get_rcu(ctx);
+		if (!ctx)
 			continue;
 
-		if (!i915_gem_context_is_closed(ctx)) {
-			rcu_read_unlock();
-
-			i915_debugger_ctx_process_callback(ctx,
-				intel_context_disable_preemption_timeout);
-
-			i915_debugger_context_create(ctx);
-			i915_debugger_ctx_vm_create(debugger, ctx);
-			i915_debugger_context_param_engines(ctx);
-
-			rcu_read_lock();
+		if (i915_gem_context_is_closed(ctx)) {
+			i915_gem_context_put(ctx);
+			continue;
 		}
 
-		i915_gem_context_put(ctx);
+		rcu_read_unlock();
+
+		handle = debugger_context_create(debugger, client_handle, ctx);
+		if (handle) {
+			debugger_ctx_vm_create(debugger, client_handle,
+					       handle, ctx);
+			debugger_ctx_param_engines(debugger, client_handle,
+						   handle, ctx);
+
+			if (!is_debugger_closed(debugger))
+				i915_debugger_ctx_process_callback(ctx,
+								   intel_context_disable_preemption_timeout);
+		}
+		rcu_read_lock();
+
+		/*
+		 * Hold ctx reference on success as debugger resource.
+		 */
+		if (!handle)
+			/*
+			 * Need to keep the rcu_read_lock here to protect
+			 * iterator on free that may occur
+			 */
+			i915_gem_context_put(ctx);
+
 	}
 	rcu_read_unlock();
 }
 
 static bool
-i915_debugger_client_task_register(const struct i915_debugger * const debugger,
-				   struct i915_drm_client * const client,
-				   struct task_struct * const task)
-{
-	bool registered = false;
-
-	rcu_read_lock();
-	if (!READ_ONCE(client->closed) &&
-	    !is_debugger_closed(debugger) &&
-	    same_thread_group(debugger->target_task, task)) {
-		GEM_WARN_ON(client_session(client) >= debugger->session);
-		WRITE_ONCE(client->debugger_session, debugger->session);
-		registered = true;
-	}
-	rcu_read_unlock();
-
-	return registered;
-}
-
-static bool
-i915_debugger_register_client(const struct i915_debugger * const debugger,
+debugger_is_client_target_rcu(struct i915_debugger * const debugger,
 			      struct i915_drm_client * const client)
 {
 	const struct i915_drm_client_name *name;
 	struct task_struct *client_task = NULL;
-	bool registered;
+	bool match = false;
 
-	rcu_read_lock();
 	name = __i915_drm_client_name(client);
 	if (name) {
 		client_task = get_pid_task(name->pid, PIDTYPE_PID);
 	} else {
-		/* XXX: clients->xarray can contain unregistered clients, should we wait or lock? */
-		DD_WARN(debugger, "client %u with no pid, will not be found by discovery\n",
-			 client->id);
+		/*
+		 * Note: clients->xarray can contain uninitialized clients
+		 * which are pending registration.
+		 */
 	}
-	rcu_read_unlock();
-
 	if (!client_task)
 		return false;
 
-	registered = i915_debugger_client_task_register(debugger, client, client_task);
-	DD_INFO(debugger, "client %u, pid %d, session %llu, %s registered\n",
-		client->id, client_task->pid, client_session(client), registered ? "was" : "not");
-
+	match = same_thread_group(debugger->target_task, client_task);
 	put_task_struct(client_task);
-
-	return registered;
+	return match;
 }
 
 static void
 i915_debugger_client_discovery(struct i915_debugger *debugger)
 {
 	struct i915_drm_client *client;
+	u32 client_handle;
 	unsigned long idx;
 
 	rcu_read_lock();
 	xa_for_each(&debugger->i915->clients.xarray, idx, client) {
+
+		if (is_debugger_closed(debugger))
+			break;
+
 		if (READ_ONCE(client->closed))
 			continue;
 
@@ -2732,24 +3847,36 @@ i915_debugger_client_discovery(struct i915_debugger *debugger)
 		if (!client)
 			continue;
 
+		if (!debugger_is_client_target_rcu(debugger, client)) {
+			i915_drm_client_put(client);
+			continue;
+		}
 		rcu_read_unlock();
 
-		if (i915_debugger_register_client(debugger, client)) {
-			DD_INFO(debugger, "client %u registered, discovery start", client->id);
-
-			i915_debugger_client_create(client);
-			i915_debugger_discover_uuids(client);
-			i915_debugger_discover_contexts(debugger, client);
-			i915_debugger_discover_vm(debugger, client);
-
-			DD_INFO(debugger, "client %u discovery done", client->id);
+		client_handle = debugger_client_create(debugger, client);
+		if (client_handle) {
+			debugger_discover_uuids(debugger, client, client_handle);
+			debugger_discover_contexts(debugger, client,
+						   client_handle);
+			debugger_discover_vm(debugger, client, client_handle);
 		}
-
-		i915_drm_client_put(client);
-
 		rcu_read_lock();
-	}
 
+		if (!client_handle)
+			i915_drm_client_put(client);
+
+		DD_INFO(debugger, "Debugger:%llu, client:%u - discovery done",
+			debugger->session, client->id);
+
+		/*
+		 * Note: In case of successful client registration
+		 * in the debugger's resource tracking keep the
+		 * reference! Debugger will access that data
+		 * therefore it needs it.
+		 * It will be *_put() on proper Destroy event or
+		 * debugger disconnect.
+		 */
+	}
 	rcu_read_unlock();
 }
 
@@ -2780,6 +3907,7 @@ static int i915_debugger_discovery_worker(void *data)
 	if (kthread_should_stop())
 		goto out;
 
+	mutex_lock(&debugger->discovery_lockdep);
 	if (is_debugger_closed(debugger))
 		goto out;
 
@@ -2787,6 +3915,8 @@ static int i915_debugger_discovery_worker(void *data)
 
 out:
 	complete_all(&debugger->discovery);
+	mutex_unlock(&debugger->discovery_lockdep);
+
 	i915_debugger_put(debugger);
 	return 0;
 }
@@ -2892,12 +4022,13 @@ i915_debugger_open(struct drm_i915_private * const i915,
 
 	kref_init(&debugger->ref);
 	mutex_init(&debugger->lock);
+	mutex_init(&debugger->discovery_lockdep);
 	INIT_LIST_HEAD(&debugger->connection_link);
 	atomic_long_set(&debugger->event_seqno, 0);
 
 	rwlock_init(&debugger->eu_lock);
-
 	spin_lock_init(&debugger->ack_lock);
+
 	debugger->ack_tree = RB_ROOT;
 
 	init_completion(&debugger->read_done);
@@ -2920,7 +4051,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 
 	kref_get(&debugger->ref); /* +1 for worker thread */
 	discovery_task = kthread_create(i915_debugger_discovery_worker, debugger,
-					"[i915_debugger_discover]");
+					"i915_debugger_discovery");
 	if (IS_ERR(discovery_task)) {
 		ret = PTR_ERR(discovery_task);
 		goto err_put_task;
@@ -3047,111 +4178,100 @@ void i915_debugger_fini(struct drm_i915_private *i915)
 void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
 				     struct i915_drm_client *client)
 {
-	const unsigned long waitjiffs = msecs_to_jiffies(5000);
 	struct i915_debugger *debugger;
-	long timeleft;
-	u64 session;
 
-	session = client_session(client);
-	if (!session)
-		return;
+	if (client)
+		debugger = i915_debugger_get(client);
+	else
+		debugger = i915_debugger_find_task_get(i915, current);
 
-	debugger = i915_debugger_find_task_get(i915, current);
 	if (!debugger)
 		return;
 
 	GEM_WARN_ON(!same_thread_group(debugger->target_task, current));
-	GEM_WARN_ON(debugger->session != session);
-
-	timeleft = wait_for_completion_interruptible_timeout(&debugger->discovery,
-							     waitjiffs);
-	if (timeleft == -ERESTARTSYS) {
-		DD_WARN(debugger,
-			"task %d interrupted while waited during debugger discovery process\n",
-			task_pid_nr(current));
-	} else if (!timeleft) {
-		DD_WARN(debugger,
-			"task %d waited too long for discovery to complete. Ignoring barrier.\n",
-			task_pid_nr(current));
-	}
+	if (client && READ_ONCE(client->debugger_session))
+		GEM_WARN_ON(client->debugger_session != debugger->session);
 
 	i915_debugger_put(debugger);
 }
 
-void i915_debugger_client_register(struct i915_drm_client *client,
-				   struct task_struct *task)
-{
-	struct drm_i915_private * const i915 = client->clients->i915;
-	struct i915_debugger *iter;
-	unsigned long flags;
-
-	/*
-	 * Session count only grows and we cannot connect to
-	 * the same pid twice.
-	 */
-	spin_lock_irqsave(&i915->debuggers.lock, flags);
-	for_each_debugger(iter, &i915->debuggers.list) {
-		if (is_debugger_closed(iter) ||
-		    !same_thread_group(iter->target_task, task))
-			continue;
-
-		if (kref_read(&iter->ref))
-			WRITE_ONCE(client->debugger_session, iter->session);
-		break;
-	}
-	spin_unlock_irqrestore(&i915->debuggers.lock, flags);
-}
-
-void i915_debugger_client_release(struct i915_drm_client *client)
-{
-	WRITE_ONCE(client->debugger_session, 0);
-}
-
-static int send_engine_attentions(struct i915_debugger *debugger,
-				  struct intel_engine_cs *engine,
-				  struct i915_drm_client *client,
-				  struct intel_context *ce)
+static int queue_engine_attentions(struct i915_debugger *debugger,
+				   struct intel_engine_cs *engine,
+				   struct i915_drm_client *client,
+				   struct intel_context *ce)
 {
 	struct i915_debug_event_eu_attention *ea;
+	struct i915_gem_context *ctx;
 	struct i915_debug_event *event;
 	unsigned int size;
+	u32 client_handle, ctx_handle;
+	int ret;
 
-	if (is_debugger_closed(debugger))
-		return -ENODEV;
+	ret = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (ret)
+		goto err;
 
-	if (!intel_engine_pm_get_if_awake(engine))
-		return -ENOENT;
+	rcu_read_lock();
+	ctx = rcu_dereference(ce->gem_context);
+	if (ctx)
+		ctx = i915_gem_context_get_rcu(ctx);
+	rcu_read_unlock();
+	if (!ctx) {
+		ret = -EINVAL;
+		goto err;
+	}
+
+	ret = debugger_resource_context_handle(debugger, ctx, &ctx_handle);
+	if (ret)
+		goto err_ctx;
+
+	if (!intel_engine_pm_get_if_awake(engine)) {
+		ret = -ENOENT;
+		goto err_ctx;
+	}
 
 	/* XXX test for CONTEXT_DEBUG when igt/umd is there */
 
 	size = struct_size(ea, bitmask, intel_gt_eu_attention_bitmap_size(engine->gt));
-	event = __i915_debugger_create_event(debugger,
-					     PRELIM_DRM_I915_DEBUG_EVENT_EU_ATTENTION,
-					     PRELIM_DRM_I915_DEBUG_EVENT_STATE_CHANGE,
-					     size,
-					     GFP_KERNEL);
-	if (!event)
-		return -ENOMEM;
+
+	/* seqno set holding eu->lock */
+	event = debugger_create_event(debugger, 0,
+				      PRELIM_DRM_I915_DEBUG_EVENT_EU_ATTENTION,
+				      PRELIM_DRM_I915_DEBUG_EVENT_STATE_CHANGE,
+				      size, GFP_ATOMIC);
+	if (!event) {
+		ret = -ENOMEM;
+		goto err_put;
+	}
 
 	ea = from_event(ea, event);
-	ea->client_handle = client->id;
+	ea->client_handle = client_handle;
 
 	ea->ci.engine_class = engine->uabi_class;
 	ea->ci.engine_instance = engine->uabi_instance;
 	ea->bitmask_size = intel_gt_eu_attention_bitmap_size(engine->gt);
-	ea->ctx_handle = ce->dbg_id.gem_context_id;
-	ea->lrc_handle = ce->dbg_id.lrc_id;
+	ea->ctx_handle = ctx_handle;
+	ea->lrc_handle = ce->debugger_lrc_id;
 
 	read_lock(&debugger->eu_lock);
 	intel_gt_eu_attention_bitmap(engine->gt, &ea->bitmask[0], ea->bitmask_size);
-	event->seqno = atomic_long_inc_return(&debugger->event_seqno);
+	event->seqno = debugger_get_seqno(debugger);
 	read_unlock(&debugger->eu_lock);
+
 	intel_engine_pm_put(engine);
+	i915_gem_context_put(ctx);
 
 	return i915_debugger_queue_event(debugger, event);
+
+err_put:
+	intel_engine_pm_put(engine);
+err_ctx:
+	i915_gem_context_put(ctx);
+err:
+	return ret;
 }
 
-static int i915_debugger_send_engine_attention(struct intel_engine_cs *engine)
+static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 {
 	struct i915_debugger *debugger;
 	struct i915_drm_client *client;
@@ -3164,8 +4284,8 @@ static int i915_debugger_send_engine_attention(struct intel_engine_cs *engine)
 
 	/* Find the client seeking attention */
 	ce = engine_active_context_get(engine);
-	if (!ce)
-		return -ENOENT;
+	if (IS_ERR(ce))
+		return PTR_ERR(ce);
 
 	if (!ce->client) {
 		intel_context_put(ce);
@@ -3192,11 +4312,11 @@ static int i915_debugger_send_engine_attention(struct intel_engine_cs *engine)
 		DD_INFO(debugger, "%s: discovery not yet done\n", engine->name);
 		ret = -EBUSY;
 	} else {
-		ret = send_engine_attentions(debugger, engine, client, ce);
+		ret = queue_engine_attentions(debugger, engine, client, ce);
 	}
 
 	if (debugger) {
-		DD_INFO(debugger, "%s: i915_send_engine_attention: %d\n", engine->name, ret);
+		DD_INFO(debugger, "%s: i915_queue_engine_attention: %d\n", engine->name, ret);
 		i915_debugger_put(debugger);
 	}
 
@@ -3206,211 +4326,326 @@ static int i915_debugger_send_engine_attention(struct intel_engine_cs *engine)
 	return ret;
 }
 
-static void
-i915_debugger_send_client_event_ctor(const struct i915_drm_client *client,
-				     u32 type, u32 flags, u64 size,
-				     void (*constructor)(struct i915_debug_event *,
-							 const void *),
-				     const void *data,
-				     gfp_t gfp)
+void i915_debugger_client_create(struct i915_drm_client *client)
 {
 	struct i915_debugger *debugger;
-	struct i915_debug_event *event;
+	u32 handle;
+	u64 seqno;
+	int err = 0;
 
-	debugger = i915_debugger_get(client);
+	debugger = i915_debugger_find_task_get(client->clients->i915, current);
 	if (!debugger)
 		return;
 
-	event = i915_debugger_create_event(debugger, type, flags, size, gfp);
-	if (event) {
-		constructor(event, data);
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_CLIENT,
+				      client, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
 
-		i915_debugger_queue_event(debugger, event);
-	}
+	/* Get the reference and hold it for debugger */
+	client = i915_drm_client_get(client);
+	WRITE_ONCE(client->debugger_session, debugger->session);
+
+	queue_client_event(debugger, handle, seqno,
+			   PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
 
 	i915_debugger_put(debugger);
-}
-
-#define write_member(T_out, ptr, member, value) { \
-	BUILD_BUG_ON(sizeof(*ptr) != sizeof(T_out)); \
-	BUILD_BUG_ON(offsetof(typeof(*ptr), member) != \
-		     offsetof(typeof(T_out), member)); \
-	BUILD_BUG_ON(sizeof(ptr->member) != sizeof(value)); \
-	BUILD_BUG_ON(sizeof(struct_member(T_out, member)) != sizeof(value)); \
-	BUILD_BUG_ON(!typecheck(typeof((ptr)->member), value));	\
-	memcpy(&ptr->member, &value, sizeof(ptr->member)); \
-}
-
-struct client_event_param {
-	u64 handle;
-};
-
-static void client_event_ctor(struct i915_debug_event *event, const void *data)
-{
-	const struct client_event_param *p = data;
-	struct i915_debug_event_client *ec = from_event(ec, event);
-
-	write_member(struct prelim_drm_i915_debug_event_client, ec, handle, p->handle);
-}
-
-static void send_client_event(const struct i915_drm_client *client, u32 flags)
-{
-	const struct client_event_param p = {
-		.handle = client->id,
-	};
-
-	i915_debugger_send_client_event_ctor(client,
-					     PRELIM_DRM_I915_DEBUG_EVENT_CLIENT,
-					     flags,
-					     sizeof(struct prelim_drm_i915_debug_event_client),
-					     client_event_ctor, &p,
-					     GFP_KERNEL);
-}
-
-void i915_debugger_client_create(const struct i915_drm_client *client)
-{
-	if (!client_debugged(client))
-		return;
-
-	send_client_event(client, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+	return;
+out:
+	if (err != -EEXIST && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
 }
 
 void i915_debugger_client_destroy(struct i915_drm_client *client)
 {
 	struct i915_uuid_resource *uuid_res;
+	struct i915_debugger *debugger;
 	unsigned long idx;
+	u32 handle;
+	u64 seqno;
+	int err;
 
-	if (!client_debugged(client))
+	debugger = i915_debugger_find_task_get(client->clients->i915, current);
+	if (!debugger)
 		return;
 
-	xa_for_each(&client->uuids_xa, idx, uuid_res)
-		i915_debugger_uuid_destroy(client, uuid_res);
+	/* Client will be unreachable but handle is safe */
+	err = debugger_resource_find_del(debugger, client, &handle, NULL);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Trying to delete not registered DRM Client %px. Err %d\n",
+				     client, err);
+		goto out;
+	}
 
-	send_client_event(client, PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+	xa_lock(&client->uuids_xa);
+	xa_for_each(&client->uuids_xa, idx, uuid_res) {
+		i915_uuid_get(uuid_res);
+		xa_unlock(&client->uuids_xa);
+		debugger_uuid_destroy(debugger, handle, uuid_res);
+		xa_lock(&client->uuids_xa);
+		i915_uuid_put(uuid_res);
+	}
+	xa_unlock(&client->uuids_xa);
 
-	i915_debugger_client_release(client);
+	/* Seqno here, after UUID Destroy seqence */
+	seqno = debugger_get_seqno(debugger);
+	queue_client_event(debugger, handle, seqno,
+			   PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+out:
+	i915_debugger_put(debugger);
+	return;
 }
 
-struct ctx_event_param {
-	u64 client_handle;
-	u64 handle;
-};
-
-static void ctx_event_ctor(struct i915_debug_event *event, const void *data)
+void i915_debugger_context_create(struct i915_gem_context *ctx)
 {
-	const struct ctx_event_param *p = data;
-	struct i915_debug_event_context *ec = from_event(ec, event);
+	struct i915_debugger *debugger;
+	u32 client_handle, handle;
+	u64 seqno;
+	int err = 0;
 
-	write_member(struct prelim_drm_i915_debug_event_context, ec, client_handle, p->client_handle);
-	write_member(struct prelim_drm_i915_debug_event_context, ec, handle, p->handle);
-}
-
-static void send_context_event(const struct i915_gem_context *ctx, u32 flags)
-{
-	const struct ctx_event_param p = {
-		.client_handle = ctx->client->id,
-		.handle = ctx->id
-	};
-
-	i915_debugger_send_client_event_ctor(ctx->client,
-					     PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT,
-					     flags,
-					     sizeof(struct prelim_drm_i915_debug_event_context),
-					     ctx_event_ctor, &p,
-					     GFP_KERNEL);
-}
-
-void i915_debugger_context_create(const struct i915_gem_context *ctx)
-{
-	if (!client_debugged(ctx->client))
+	if (!ctx->client)
 		return;
 
-	send_context_event(ctx, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
-}
-
-void i915_debugger_context_destroy(const struct i915_gem_context *ctx)
-{
-	if (!client_debugged(ctx->client))
+	debugger = i915_debugger_find_task_get(ctx->i915, current);
+	if (!debugger)
 		return;
 
-	send_context_event(ctx, PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+	err = debugger_resource_client_handle(debugger, ctx->client,
+					      &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", ctx->client, err);
+		goto out;
+	}
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_CONTEXT,
+				ctx, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
+
+	/* Get the lock and hold it for debugger until destroy or close. */
+	ctx = i915_gem_context_get(ctx);
+
+	queue_context_event(debugger, client_handle, handle, seqno,
+			    PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+	debugger_ctx_vm_create(debugger, client_handle, handle, ctx);
+	debugger_ctx_param_engines(debugger, client_handle, handle, ctx);
+
+	i915_debugger_put(debugger);
+	return;
+out:
+	if (err != -EEXIST && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
 }
 
-struct uuid_event_param {
-	u64 client_handle;
-	u64 handle;
-	u64 class_handle;
-	u64 payload_size;
-};
-
-static void uuid_event_ctor(struct i915_debug_event *event, const void *data)
+void i915_debugger_context_destroy(struct i915_gem_context *ctx)
 {
-	const struct uuid_event_param *p = data;
-	struct i915_debug_event_uuid *ec = from_event(ec, event);
+	struct i915_debugger *debugger;
+	u32 client_handle, handle;
+	u64 seqno;
+	int err = 0;
 
-	write_member(struct prelim_drm_i915_debug_event_uuid, ec, client_handle, p->client_handle);
-	write_member(struct prelim_drm_i915_debug_event_uuid, ec, handle, p->handle);
-	write_member(struct prelim_drm_i915_debug_event_uuid, ec, class_handle, p->class_handle);
-	write_member(struct prelim_drm_i915_debug_event_uuid, ec, payload_size, p->payload_size);
-}
-
-static void send_uuid_event(const struct i915_drm_client *client,
-			    const struct i915_uuid_resource *uuid,
-			    u32 flags)
-{
-	struct uuid_event_param p = {
-		.client_handle = client->id,
-		.handle = uuid->handle,
-		.class_handle = uuid->uuid_class,
-		.payload_size = 0,
-	};
-
-	if (flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE)
-		p.payload_size = uuid->size;
-
-	i915_debugger_send_client_event_ctor(client,
-					     PRELIM_DRM_I915_DEBUG_EVENT_UUID,
-					     flags,
-					     sizeof(struct prelim_drm_i915_debug_event_uuid),
-					     uuid_event_ctor, &p,
-					     GFP_KERNEL);
-}
-
-void i915_debugger_uuid_create(const struct i915_drm_client *client,
-			       const struct i915_uuid_resource *uuid)
-{
-	if (!client_debugged(client))
+	if (!ctx->client)
 		return;
 
-	send_uuid_event(client, uuid, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
-}
-
-void i915_debugger_uuid_destroy(const struct i915_drm_client *client,
-				const struct i915_uuid_resource *uuid)
-{
-	if (!client_debugged(client))
+	debugger = i915_debugger_find_task_get(ctx->i915, current);
+	if (!debugger)
 		return;
 
-	send_uuid_event(client, uuid, PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+	err = debugger_resource_client_handle(debugger, ctx->client,
+					      &client_handle);
+	if (err)
+		goto out;
+
+	/*
+	 * Race: basic-close test revelead following scenario:
+	 * 1.   Debugger was closing while client opening.
+	 * 1.1  Context Create event failed - no debugger attached
+	 * 2.   New debugger was opened and immediately client was closed
+	 * 2.1  Context Destroy is being called after ctx is marked as 'closed'
+	 *      and was not detected by discovery.
+	 * 2.2  Context Destroy proceeds after discovery not finding this ctx
+	 *      which already is marked as closed and not registered by discovery.
+	 * So it is valid not to fail if err is -ENOENT.
+	 */
+	err = debugger_resource_find_del(debugger, ctx, &handle, &seqno);
+	if (err) {
+		if (err == -ENOENT)
+			err = 0;
+		goto out;
+	}
+
+	queue_context_event(debugger, client_handle, handle, seqno,
+			    PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+
+	i915_debugger_put(debugger);
+	return;
+out:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
 }
 
-static void __i915_debugger_vma_send_event(struct i915_debugger *debugger,
-					   struct i915_drm_client *client,
-					   struct i915_vma *vma,
-					   u32 flags,
-					   gfp_t gfp)
+void i915_debugger_uuid_create(struct i915_drm_client *client,
+			       struct i915_uuid_resource *uuid)
 {
-	struct i915_vma_metadata *metadata;
+	struct i915_debugger_resource *res;
+	struct i915_debugger *debugger;
+	u32 client_handle, handle, class_handle;
+	u64 seqno;
+	int err = 0;
+
+	debugger = i915_debugger_find_task_get(client->clients->i915, current);
+	if (!debugger)
+		return;
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	if (uuid->handle != PRELIM_I915_UUID_CLASS_STRING) {
+		err = debugger_resource_uuid_fetch_class_handle(debugger,
+								client,
+								uuid,
+								&class_handle);
+		if (err) {
+			DD_WARN_ON_CONNECTED(debugger, err,
+					     "Failed to fetch class UUID %u for UUID %px. Err %d\n",
+					     uuid->uuid_class, uuid, err);
+			goto out;
+		}
+	}
+
+	/* Get the reference for debugger as debugger resource */
+	i915_uuid_get(uuid);
+
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_UUID,
+				      uuid, &handle, &seqno, GFP_KERNEL);
+	if (err) {
+		i915_uuid_put(uuid);
+		goto out;
+	}
+
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res)) {
+		err = PTR_ERR(res);
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to load debugger resource UUID %llu. Err %d\n",
+				     handle, err);
+		if (err != -ENOTCONN)
+			i915_uuid_put(uuid);
+		goto out;
+	}
+
+	if (uuid->handle != PRELIM_I915_UUID_CLASS_STRING) {
+		res->uuid.class_handle = class_handle;
+	} else {
+		class_handle = handle;
+		res->uuid.class_handle = handle;
+	}
+
+	queue_uuid_event(debugger, client_handle, handle, class_handle,
+			 uuid->size, seqno, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+
+	i915_debugger_put(debugger);
+	return;
+out:
+	if (err != -EEXIST && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+}
+
+void i915_debugger_uuid_destroy(struct i915_drm_client *client,
+				struct i915_uuid_resource *uuid)
+{
+	struct i915_debugger *debugger;
+	struct i915_debugger_resource *res;
+	u32 client_handle, class_handle, handle;
+	u64 seqno;
+	int err = 0;
+
+	if (!client)
+		return;
+
+	debugger = i915_debugger_get(client);
+	if (!debugger)
+		return;
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err)
+		goto out;
+
+	err = debugger_resource_find(debugger, uuid, &res, &handle);
+	if (err)
+		goto out;
+
+	class_handle = res->uuid.class_handle;
+
+	if (!debugger_resource_del(debugger, handle, &seqno))
+		queue_uuid_event(debugger, client_handle, handle, class_handle,
+				 uuid->size, seqno, PRELIM_DRM_I915_DEBUG_EVENT_DESTROY);
+
+	i915_debugger_put(debugger);
+	return;
+out:
+	if (err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+}
+
+/*
+ * This needs to be called in VM_BIND IOCTL *AFTER* extensions
+ * has been processed so that metadata is present in vma structure.
+ * The idea is to pre-allocate event for further processing because
+ * it will be hard to do any alloc under vm->mutex.
+ */
+void i915_debugger_vma_prepare(struct i915_drm_client *client,
+			       struct i915_vma *vma,
+			       u32 flags)
+{
+	u32 handle, client_handle, vm_handle, uuid_handle;
 	struct i915_debug_event_vm_bind *ev;
-	struct i915_debug_event *event;
-	u32 vm_handle;
-	u64 size;
+	struct i915_vma_metadata *metadata;
+	struct i915_debugger_resource *res;
+	struct i915_debug_event *event = NULL;
+	struct i915_debugger *debugger;
+	u64 size, seqno;
+	int err = 0;
 
-	if (GEM_WARN_ON(!vma))
+	if (!i915_vma_is_persistent(vma))
 		return;
 
-	if (__i915_debugger_get_handle(debugger, vma->vm, &vm_handle))
+	if (!client)
 		return;
+
+	debugger = i915_debugger_get(client);
+	if (!debugger)
+		return;
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	err = debugger_resource_vm_handle(debugger, vma->vm, &vm_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vm %px. Err %d\n", vma->vm, err);
+		goto out;
+	}
+
+	/* This is actually pre-allocation since vma is not fully populated */
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_VM_BIND,
+				      vma, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
 
 	size = sizeof(*ev);
 	list_for_each_entry(metadata, &vma->metadata_list, vma_link)
@@ -3419,54 +4654,338 @@ static void __i915_debugger_vma_send_event(struct i915_debugger *debugger,
 	if (flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE)
 		flags |= PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK;
 
-	event = i915_debugger_create_event(debugger,
-					   PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND,
-					   flags,
-					   size,
-					   gfp);
+	event = debugger_create_event(debugger,
+				      seqno,
+				      PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND,
+				      flags,
+				      size,
+				      GFP_KERNEL);
 	if (!event) {
-		DD_ERR(debugger, "debugger: vma: alloc fail, bailing out\n");
-		return;
+		DD_ERR(debugger, "Alloc fail, bailing out\n");
+		err = -ENOMEM;
+		goto out;
 	}
 
 	ev = from_event(ev, event);
 
-	ev->client_handle = client->id;
+	ev->client_handle = client_handle;
+	ev->vm_handle     = vm_handle;
+	ev->va_start      = 0; /* To be filled */
+	ev->va_length     = 0; /* To be filled */
+	ev->flags         = 0;
+	ev->num_uuids     = 0;
+
+	list_for_each_entry(metadata, &vma->metadata_list, vma_link) {
+		err = debugger_resource_uuid_handle(debugger, metadata->uuid, &uuid_handle);
+		if (err) {
+			DD_WARN_ON_CONNECTED(debugger, err,
+					     "Failed to fetch vma metadata (uuid): %d\n", err);
+			kfree(event);
+			goto out;
+		}
+		ev->uuids[ev->num_uuids++] = uuid_handle;
+	}
+
+	res = xa_load(&debugger->resources_xa, handle);
+	if (!res) {
+		/* Debugger may got closed */
+		kfree(event);
+		err = -ENOENT;
+		if (!is_debugger_closed(debugger))
+			DD_WARN(debugger, "Failed to get allocated resource for VMA. Closing.\n");
+	} else {
+		res->vma.event = event;
+	}
+
+out:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+}
+
+/*
+ * Process the pre-allocated event.
+ * On error - clears it and removes the vm-bind resource
+ * On !error - sends the event.
+ */
+void i915_debugger_vma_finalize(struct i915_drm_client *client,
+				struct i915_vma *vma,
+				int error)
+{
+	u32 handle, client_handle, vm_handle;
+	struct i915_debugger_resource *res;
+	struct i915_debugger *debugger;
+	int err = 0;
+
+	/*
+	 * Sometimes we can have this in i915_vma_pin_www
+	 * after that it will be called again
+	 */
+	if (error == -EDEADLK)
+		return;
+
+	if (!i915_vma_is_persistent(vma))
+		return;
+
+	if (!client)
+		return;
+
+	debugger = i915_debugger_get(client);
+	if (!debugger)
+		return;
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out_err;
+	}
+
+	err = debugger_resource_vm_handle(debugger, vma->vm, &vm_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vm %px. Err %d\n", vma->vm, err);
+		goto out_err;
+	}
+
+	/* Error occurred on the vm-bind path */
+	if (error) {
+		debugger_resource_find_del(debugger, vma, &handle, NULL);
+		goto out; /* careful, this is not an error */
+	}
+
+	err = debugger_resource_vma_handle(debugger, vma, &handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vma %px. Err %d\n", vma->vm, err);
+		goto out_err;
+	}
+
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res)) {
+		err = PTR_ERR(res);
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Debugger resource not found for vma %px. Err %d\n",
+				     vma->vm, err);
+		goto out_err;
+	}
+
+	/*
+	 * if by any chance it races against discovery:
+	 * assign_vma_event + discover_vma_send_events
+	 * then there will not be event assigned to resource.
+	 */
+	if (res->vma.event) {
+		/*
+		 * _i915_debugger_queue_event will close debugger on error.
+		 * No need to double it by setting the err.
+		 * In any case event is handled by queue_event function.
+		 */
+		_i915_debugger_queue_event(debugger, res->vma.event, vma, GFP_KERNEL);
+		res->vma.event = NULL;
+	} else {
+		DD_WARN(debugger, "Resource VMA %px handle %u without an event!\n", vma, handle);
+	}
+
+	i915_debugger_put(debugger);
+	return;
+
+out_err:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+out:
+	i915_debugger_put(debugger);
+}
+
+static int vma_queue_event(struct i915_debugger *debugger,
+			   u32 client_handle,
+			   u32 vm_handle,
+			   struct i915_vma *vma,
+			   u64 seqno,
+			   u32 flags, gfp_t gfp)
+{
+	struct i915_vma_metadata *metadata;
+	struct i915_debug_event_vm_bind *ev;
+	struct i915_debug_event *event;
+	struct i915_drm_client *client;
+	u32 uuid_handle;
+	u64 size;
+	int err = 0;
+
+	if (GEM_WARN_ON(!vma))
+		return -EINVAL;
+
+	client = debugger_resource_client_load(debugger, client_handle);
+	if (IS_ERR(client))
+		return PTR_ERR(client);
+
+	size = sizeof(*ev);
+	list_for_each_entry(metadata, &vma->metadata_list, vma_link)
+		size += sizeof(ev->uuids[0]);
+
+	if (flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE)
+		flags |= PRELIM_DRM_I915_DEBUG_EVENT_NEED_ACK;
+
+	event = debugger_create_event(debugger,
+				      seqno,
+				      PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND,
+				      flags,
+				      size,
+				      gfp);
+	if (!event) {
+		DD_ERR(debugger, "Alloc fail, bailing out\n");
+		i915_debugger_client_close(debugger);
+		return -ENOMEM;
+	}
+
+	ev = from_event(ev, event);
+
+	ev->client_handle = client_handle;
 	ev->vm_handle     = vm_handle;
 	ev->va_start      = i915_vma_offset(vma);
 	ev->va_length     = i915_vma_size(vma);
 	ev->flags         = 0;
 	ev->num_uuids     = 0;
 
-	list_for_each_entry(metadata, &vma->metadata_list, vma_link)
-		ev->uuids[ev->num_uuids++] = metadata->uuid->handle;
+	list_for_each_entry(metadata, &vma->metadata_list, vma_link) {
+		err = debugger_resource_uuid_handle(debugger, metadata->uuid, &uuid_handle);
+		if (err) {
+			DD_WARN_ON_CONNECTED(debugger, err,
+					     "Failed to fetch vma metadata (uuid). Err %d\n", err);
+			break;
+		}
+		ev->uuids[ev->num_uuids++] = uuid_handle;
+	}
 
-	_i915_debugger_queue_event(debugger, event, vma, gfp);
+	if (!err)
+		_i915_debugger_queue_event(debugger, event, vma, gfp);
+	else
+		kfree(event);
+	return err;
 }
 
 void i915_debugger_vma_insert(struct i915_drm_client *client,
 			      struct i915_vma *vma)
 {
 	struct i915_debugger *debugger;
+	struct i915_debugger_resource *res;
+	struct i915_debug_event_vm_bind *ev;
+	u32 handle, client_handle, vm_handle;
+	int err = 0;
 
-	debugger = i915_debugger_get(client);
+	if (!i915_vma_is_persistent(vma))
+		return;
+
+	if (!client)
+		return;
+
+	/**
+	 * Do not wait for discovery since in this function
+	 * vm->mutex is held. The same mutex the
+	 * debugger_discover_vma tries to take. Will cause
+	 * a deadlock.
+	 */
+	debugger = __debugger_get(client, false);
 	if (!debugger)
 		return;
 
-	if (i915_vma_is_persistent(vma))
-		__i915_debugger_vma_send_event(debugger, client, vma,
-					       PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-					       GFP_ATOMIC);
+	/*
+	 * Debugger attached after i915_debugger_vma_prepare.
+	 * No work here
+	 */
+	if (!is_discovery_done(debugger))
+		goto out;
+
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	err = debugger_resource_vm_handle(debugger, vma->vm, &vm_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vm %px. Err %d\n", vma->vm, err);
+		goto out;
+	}
+
+	err = debugger_resource_vma_handle(debugger, vma, &handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vma %px. Err %d\n", vma->vm, err);
+		goto out;
+	}
+
+	/*
+	 * called in the middle of IOCTL and VMA has not yet
+	 * been anounced. No need to protect res here.
+	 * Well maybe if there is a debugger close race...
+	 */
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res)) {
+		err = PTR_ERR(res);
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Debugger resource not found: handle %u (VMA). Err %d\n",
+				     handle, err);
+		goto out;
+	}
+	if (!res->vma.event) {
+		if (!is_debugger_closed(debugger))
+			DD_WARN(debugger, "Debugger resource handle %u (VMA) - incomplete", handle);
+		err = -ENOENT;
+		goto out;
+	}
+
+	ev = from_event(ev, res->vma.event);
+
+	ev->va_start  = i915_vma_offset(vma);
+	ev->va_length = i915_vma_size(vma);
+
+	res->vma.ack = create_ack(debugger, res->vma.event, vma, GFP_ATOMIC);
+	if (IS_ERR(res->vma.ack)) {
+		err = PTR_ERR(res->vma.ack);
+		goto out;
+	}
 
 	i915_debugger_put(debugger);
+	return;
+out:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+}
+
+static int debugger_vma_evict(struct i915_debugger *debugger,
+			      u32 client_handle,
+			      u32 vm_handle,
+			      struct i915_vma *vma)
+{
+	u64 seqno;
+	int err;
+
+	err = debugger_resource_find_del(debugger, vma, NULL, &seqno);
+	if (err)
+		return err;
+
+	return vma_queue_event(debugger, client_handle, vm_handle, vma, seqno,
+			       PRELIM_DRM_I915_DEBUG_EVENT_DESTROY, GFP_ATOMIC);
 }
 
 void i915_debugger_vma_evict(struct i915_drm_client *client,
 			     struct i915_vma *vma)
 {
 	struct i915_debugger *debugger;
+	u32 client_handle, vm_handle;
+	bool in_discovery;
+	int err = 0;
 
-	debugger = i915_debugger_get(client);
+	if (!client)
+		return;
+
+	/* Cannot use lock, cannot wait for discovery. */
+	debugger = __debugger_get(client, false);
 	if (!debugger)
 		return;
 
@@ -3474,11 +4993,156 @@ void i915_debugger_vma_evict(struct i915_drm_client *client,
 			    vma->node.start, vma->node.size,
 			    1);
 
-	if (i915_vma_is_persistent(vma))
-		__i915_debugger_vma_send_event(debugger, client, vma,
-					       PRELIM_DRM_I915_DEBUG_EVENT_DESTROY,
-					       GFP_ATOMIC);
+	if (!i915_vma_is_persistent(vma)) {
+		i915_debugger_put(debugger);
+		return;
+	}
 
+	/*
+	 * Cannot wait for discovery as it triggers dependency locks.
+	 * This function is called inside
+	 *    __i915_vma_evict
+	 * which always is under vm->mutex.
+	 * debugger_discover_vma in
+	 * i915_debugger_discovery_worker tries to get vm->mutex so if it
+	 * tries to wait it may wait till shutdown.
+	 * However they are mutually exclusive
+	 * which leads to conclusion:
+	 * 1. vma_evict is called before discover_vma registers
+	 *    vma preventing debugger to publish this vma and it's
+	 *    safe to remove it without event.
+	 * 2. vma_evict is called after discover_vma in which
+	 *    case the vma create event has been sent.
+	 *
+	 * In (1) any of the debugger_resource_* function may return error.
+	 * In (2) all should go smooth.
+	 *
+	 * Bottom line: if called while discovery worker is working
+	 *              accept errors from debugger_resource_* and
+	 *              exit without complain.
+	 */
+
+	in_discovery = !is_discovery_done(debugger);
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err == -ENOTCONN)
+		goto out;
+
+	if (err) {
+		if (in_discovery && err == -ENOENT)
+			err = 0;
+		goto out;
+	}
+
+	/*
+	 * Note: can be called while i915_vm_close_work()
+	 * No VM in this case. VMAs has been also removed actually.
+	 * Just exit without error.
+	 */
+	err = debugger_resource_vm_handle(debugger, vma->vm, &vm_handle);
+	if (err) {
+		err = 0;
+		goto out;
+	}
+
+	if (!err) {
+		err = debugger_vma_evict(debugger, client_handle, vm_handle, vma);
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to remove VMA, err %d\n", err);
+	}
+
+	i915_debugger_put(debugger);
+	return;
+out:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+}
+
+/*
+ * In case of deferred VM BIND it may happen that
+ * VM_UNBIND will be called before deferred work.
+ * However pre-event and debugger resource has been already
+ * added to the Resource tracker but event was not sent.
+ * Purge the hanging resource.
+ */
+void i915_debugger_vma_purge(struct i915_drm_client *client,
+			     struct i915_vma *vma)
+{
+	struct i915_debugger_resource *res;
+	struct i915_debugger *debugger;
+	struct i915_debug_event_vm_bind *ev;
+	u32 client_handle, vm_handle, handle;
+	int err = 0;
+
+	if (!client)
+		return;
+
+	if (!vma)
+		return;
+
+	debugger = i915_debugger_get(client);
+	if (!debugger)
+		return;
+
+	if (!i915_vma_is_persistent(vma)) {
+		i915_debugger_put(debugger);
+		return;
+	}
+
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err)
+		goto out;
+
+	err = debugger_resource_vm_handle(debugger, vma->vm, &vm_handle);
+	if (err)
+		goto out;
+
+	/* Perfectly fine to have this VMA missing! Not that good if it still there! */
+	err = debugger_resource_vma_handle(debugger, vma, &handle);
+	if (err == -ENOENT) {
+		err = 0;
+		goto out;
+	}
+
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Handle not found for vma %px. Err %d\n", vma, err);
+		goto out;
+	}
+
+	res = debugger_resource_load(debugger, handle);
+	if (IS_ERR(res)) {
+		err = PTR_ERR(res);
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Debugger resource not found: handle %u (VMA). Err %d\n",
+				     handle, err);
+		goto out;
+	}
+
+	if (!res->vma.event) {
+		if (!is_debugger_closed(debugger))
+			DD_WARN(debugger, "Debugger resource handle %u (VMA %px) - expected event allocated!", handle, vma);
+		err = -ENOENT;
+		goto out;
+	}
+
+	ev = from_event(ev, res->vma.event);
+
+	if (ev->va_start || ev->va_length) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	err = debugger_resource_find_del(debugger, vma, NULL, NULL);
+	if (err)
+		goto out;
+
+	i915_debugger_put(debugger);
+	return;
+ out:
+	if (err && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
 	i915_debugger_put(debugger);
 }
 
@@ -3486,6 +5150,9 @@ void i915_debugger_vm_create(struct i915_drm_client *client,
 			     struct i915_address_space *vm)
 {
 	struct i915_debugger *debugger;
+	u32 client_handle, handle;
+	u64 seqno;
+	int err = 0;
 
 	if (!client)
 		return;
@@ -3493,21 +5160,94 @@ void i915_debugger_vm_create(struct i915_drm_client *client,
 	if (GEM_WARN_ON(!vm))
 		return;
 
-	debugger = i915_debugger_get(client);
+	debugger = i915_debugger_find_task_get(client->clients->i915, current);
 	if (!debugger)
 		return;
 
-	if (!__i915_debugger_has_resource(debugger, vm))
-		__i915_debugger_vm_create(debugger, client, vm);
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	err = debugger_resource_alloc(debugger, I915_DEBUGGER_RES_VM,
+				      vm, &handle, &seqno, GFP_KERNEL);
+	if (err)
+		goto out;
+
+	vm = i915_vm_get(vm);
+
+	vm_queue_event(debugger, client_handle, handle, seqno,
+		       PRELIM_DRM_I915_DEBUG_EVENT_CREATE, GFP_KERNEL);
 
 	i915_debugger_put(debugger);
+	return;
+out:
+	if (err != -EEXIST && err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+	i915_debugger_put(debugger);
+
 }
 
+static int debugger_vm_vma_destroy(struct i915_debugger *debugger,
+				   struct i915_address_space *vm,
+				   u32 client_handle,
+				   u32 vm_handle)
+{
+	struct i915_vma *vma, *vn;
+	int err = 0;
+
+	mutex_lock(&vm->mutex);
+	/*
+	 * Cannot take i915_gem_vm_bind_lock(vm) for list traversing
+	 * due to lock dep. Need to proceed without it.
+	 * It is called on i915_vm_close_work().
+	 */
+
+	list_for_each_entry_safe(vma, vn, &vm->vm_bind_list, vm_bind_link) {
+		if (!drm_mm_node_allocated(&vma->node))
+			continue;
+
+		if (i915_active_acquire(&vma->active))
+			continue;
+
+		err = debugger_vma_evict(debugger, client_handle, vm_handle, vma);
+		i915_active_release(&vma->active);
+		if (err) {
+			DD_WARN_ON_CONNECTED(debugger, err,
+					     "Failed to evict from bind. Err %d", err);
+			goto out;
+		}
+	}
+
+	list_for_each_entry_safe(vma, vn, &vm->vm_bound_list, vm_bind_link) {
+		if (!drm_mm_node_allocated(&vma->node))
+			continue;
+
+		if (i915_active_acquire(&vma->active))
+			continue;
+
+		err = debugger_vma_evict(debugger, client_handle, vm_handle, vma);
+		i915_active_release(&vma->active);
+		if (err) {
+			DD_WARN_ON_CONNECTED(debugger, err,
+					     "Failed to evict from bind. Err %d", err);
+			break;
+		}
+	}
+
+out:
+	mutex_unlock(&vm->mutex);
+	return err;
+}
 void i915_debugger_vm_destroy(struct i915_drm_client *client,
 			      struct i915_address_space *vm)
 {
 	struct i915_debugger *debugger;
-	u32 handle;
+	u32 client_handle, handle;
+	u64 seqno;
+	int err = 0;
 
 	if (!client)
 		return;
@@ -3515,23 +5255,44 @@ void i915_debugger_vm_destroy(struct i915_drm_client *client,
 	if (GEM_WARN_ON(!vm))
 		return;
 
-	debugger = i915_debugger_get(client);
+	if (atomic_read(&vm->open) > 1)
+		return;
+
+	debugger = i915_debugger_find_task_get(client->clients->i915, current);
 	if (!debugger)
 		return;
 
-	if (atomic_read(&vm->open) > 1)
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	err = debugger_resource_find(debugger, vm, NULL, &handle);
+	if (err)
 		goto out;
 
-	if (__i915_debugger_get_handle(debugger, vm, &handle))
+	/* Report all VM -> VMAs as destroyed first */
+	err = debugger_vm_vma_destroy(debugger, vm, client_handle, handle);
+	if (err)
 		goto out;
 
-	__i915_debugger_del_handle(debugger, handle);
-	__i915_debugger_vm_send_event(debugger, client,
-				      PRELIM_DRM_I915_DEBUG_EVENT_DESTROY,
-				      handle,
-				      GFP_KERNEL);
+	err = debugger_resource_del(debugger, handle, &seqno);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Trying to delete not registered VM %px. Err %d\n", vm, err);
+		goto out;
+	}
 
+	vm_queue_event(debugger, client_handle, handle, seqno,
+		       PRELIM_DRM_I915_DEBUG_EVENT_DESTROY, GFP_KERNEL);
+
+	i915_debugger_put(debugger);
+	return;
 out:
+	if (err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
 	i915_debugger_put(debugger);
 }
 
@@ -3540,6 +5301,9 @@ void i915_debugger_context_param_vm(const struct i915_drm_client *client,
 				    struct i915_address_space *vm)
 {
 	struct i915_debugger *debugger;
+	u32 client_handle, ctx_handle, vm_handle;
+	u64 seqno;
+	int err = 0;
 
 	if (!client)
 		return;
@@ -3554,24 +5318,52 @@ void i915_debugger_context_param_vm(const struct i915_drm_client *client,
 		return;
 	}
 
-	debugger = i915_debugger_get(client);
+	debugger = i915_debugger_find_task_get(ctx->i915, current);
 	if (!debugger)
 		return;
 
-	i915_debugger_ctx_vm_def(debugger, client, ctx->id, vm);
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out;
+	}
+
+	err = debugger_resource_vm_handle(debugger, vm, &vm_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch vm %px. Err %d\n", vm, err);
+		goto out;
+	}
+
+	err = debugger_resource_context_handle(debugger, ctx, &ctx_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch ctx %px. Err %d\n", ctx, err);
+		goto out;
+	}
+
+	seqno = debugger_get_seqno(debugger);
+
+	i915_debugger_ctx_vm_def(debugger, client_handle,
+				 ctx_handle, vm_handle, seqno);
+	i915_debugger_put(debugger);
+	return;
+
+out:
+	if (err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
 	i915_debugger_put(debugger);
 }
 
 void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
 {
-	struct i915_debugger *debugger;
-	struct i915_context_param_engines *e;
-	struct i915_gem_engines *gem_engines;
-	struct i915_debug_event_engines *event_engine;
 	struct i915_debug_event_context_param *event_param;
-	struct i915_debug_event *event;
+	struct i915_debug_event_engines *event_engine;
+	struct i915_debugger *debugger;
+	u32 client_handle, ctx_handle;
 	struct i915_drm_client *client = ctx->client;
-	size_t event_size, count, n;
+	int err = 0;
 
 	/* Can land here during the i915_gem_context_create_ioctl twice:
 	 * during the extension phase and later on in gem_context_register.
@@ -3581,93 +5373,36 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
 	if (!client)
 		return;
 
-	debugger = i915_debugger_get(client);
+	debugger = i915_debugger_find_task_get(ctx->i915, current);
 	if (!debugger)
 		return;
 
-	gem_engines = i915_gem_context_engines_get(ctx, NULL);
-	if (!gem_engines) {
-		i915_debugger_put(debugger);
-		return;
+	err = debugger_resource_client_handle(debugger, client, &client_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch client %px. Err %d\n", client, err);
+		goto out_err;
 	}
 
-	count = gem_engines->num_engines;
-
-	if (!check_struct_size(e, engines, count, &event_size)) {
-		i915_gem_context_engines_put(gem_engines);
-		i915_debugger_put(debugger);
-		return;
+	err = debugger_resource_context_handle(debugger, ctx, &ctx_handle);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to fetch ctx %px. Err %d\n", ctx, err);
+		goto out_err;
 	}
 
-	/* param.value is like data[] thus don't count it */
-	event_size += (sizeof(*event_param) - sizeof(event_param->param.value));
-
-	event = i915_debugger_create_event(debugger,
-					   PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT_PARAM,
-					   PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-					   event_size,
-					   GFP_KERNEL);
-	if (!event) {
-		i915_gem_context_engines_put(gem_engines);
-		i915_debugger_put(debugger);
-		return;
+	err = debugger_alloc_ctx_param_eng_events(debugger, client_handle,
+						  ctx_handle, ctx,
+						  &event_engine, &event_param);
+	if (err) {
+		DD_WARN_ON_CONNECTED(debugger, err,
+				     "Failed to get ctx param engines events. Err %d\n", err);
+		goto out_err;
 	}
 
-	event_param = from_event(event_param, event);
-	event_param->client_handle = client->id;
-	event_param->ctx_handle = ctx->id;
-
-	event_param->param.ctx_id = ctx->id;
-	event_param->param.param = I915_CONTEXT_PARAM_ENGINES;
-	event_param->param.size = struct_size(e, engines, count);
-
-	if (count) {
-		event_size = sizeof(*event_engine) +
-			     count * sizeof(struct i915_debug_engine_info);
-
-		event = i915_debugger_create_event(debugger,
-						   PRELIM_DRM_I915_DEBUG_EVENT_ENGINES,
-						   PRELIM_DRM_I915_DEBUG_EVENT_CREATE,
-						   event_size,
-						   GFP_KERNEL);
-		if (!event) {
-			i915_gem_context_engines_put(gem_engines);
-			i915_debugger_put(debugger);
-			kfree(event_param);
-
-			return;
-		}
-
-		event_engine = from_event(event_engine, event);
-		event_engine->client_handle = client->id;
-		event_engine->ctx_handle    = ctx->id;
-		event_engine->num_engines   = count;
-	} else {
-		event_engine = NULL;
-	}
-
-	e = (struct i915_context_param_engines *)&event_param->param.value;
-
-	for (n = 0; n < count; n++) {
-		struct i915_engine_class_instance *ci = &e->engines[n];
-		struct i915_debug_engine_info *engines =
-			&event_engine->engines[n];
-
-		if (gem_engines->engines[n]) {
-			ci->engine_class =
-				gem_engines->engines[n]->engine->uabi_class;
-			ci->engine_instance =
-				gem_engines->engines[n]->engine->uabi_instance;
-
-			engines->engine.engine_class = ci->engine_class;
-			engines->engine.engine_instance = ci->engine_instance;
-			engines->lrc_handle = gem_engines->engines[n]->dbg_id.lrc_id;
-		} else {
-			ci->engine_class = I915_ENGINE_CLASS_INVALID;
-			ci->engine_instance = I915_ENGINE_CLASS_INVALID_NONE;
-		}
-	}
-	i915_gem_context_engines_put(gem_engines);
+	event_param->base.seqno = debugger_get_seqno(debugger);
+	if (event_engine)
+		event_engine->base.seqno = debugger_get_seqno(debugger);
 
 	i915_debugger_queue_event(debugger, to_event(event_param));
 
@@ -3675,6 +5410,14 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
 		i915_debugger_queue_event(debugger, to_event(event_engine));
 
 	i915_debugger_put(debugger);
+	return;
+
+ out_err:
+	if (err != -ENOTCONN)
+		i915_debugger_disconnect_err(debugger);
+
+	i915_debugger_put(debugger);
+	return;
 }
 
 /**
@@ -3684,11 +5427,11 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx)
  * Check if there are eu thread attentions in engine and if so
  * pass a message to debugger to handle them.
  *
- * Returns: number of attentions present or negative on error
+ * Returns: 0 or negative on error
  */
 int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 {
-	int ret, attentions;
+	int ret;
 
 	if (!intel_engine_has_eu_attention(engine))
 		return 0;
@@ -3697,21 +5440,20 @@ int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 	if (ret <= 0)
 		return ret;
 
-	attentions = ret;
-
 	atomic_inc(&engine->gt->reset.eu_attention_count);
 
-	/* We dont care if it fails reach this debugger at this time */
-	ret = i915_debugger_send_engine_attention(engine);
-	if (ret == -EBUSY)
-		return attentions; /* Discovery in progress, fake it */
+	ret = i915_debugger_queue_engine_attention(engine);
 
-	return ret ?: attentions;
+	/* Discovery in progress or different engine lit the attention, fake it */
+	if (ret == -EBUSY || ret == -EACCES)
+		return 0;
+
+	return ret;
 }
 
 static bool i915_debugger_active_on_client(struct i915_drm_client *client)
 {
-	struct i915_debugger *debugger = i915_debugger_get(client);
+	struct i915_debugger *debugger = __debugger_get(client, false);
 
 	if (debugger)
 		i915_debugger_put(debugger);
@@ -3834,6 +5576,11 @@ int i915_debugger_allow(struct drm_i915_private *i915)
 int i915_debugger_disallow(struct drm_i915_private *i915)
 {
 	return __i915_debugger_allow(i915, false);
+}
+
+void i915_debugger_gpu_flush_engines(struct drm_i915_private *i915, u32 mask)
+{
+	gpu_flush_engines(i915, mask);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

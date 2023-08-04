@@ -15,6 +15,7 @@
 #include "intel_guc_ads.h"
 #include "intel_guc_capture.h"
 #include "intel_guc_fwif.h"
+#include "intel_guc_print.h"
 #include "intel_uc.h"
 #include "i915_drv.h"
 
@@ -506,6 +507,7 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_BASE, false);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_BASE_UPPER, false);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, XEHPC_EUSTALL_CTRL, true);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, GEN8_ROW_CHICKEN2, true);
 	}
 
 	return ret ? -1 : 0;
@@ -533,7 +535,7 @@ static long guc_mmio_reg_state_create(struct intel_guc *guc)
 
 	guc->ads_regset = temp_set.storage;
 
-	drm_dbg(&guc_to_gt(guc)->i915->drm, "Used %zu KB for temporary ADS regset\n",
+	guc_dbg(guc, "Used %zu KB for temporary ADS regset\n",
 		(temp_set.storage_max * sizeof(struct guc_mmio_reg)) >> 10);
 
 	return total * sizeof(struct guc_mmio_reg);
@@ -778,11 +780,43 @@ static void guc_init_golden_context(struct intel_guc *guc)
 	GEM_BUG_ON(guc->ads_golden_ctxt_size != total_size);
 }
 
+static u32 guc_get_capture_engine_mask(struct iosys_map *info_map, u32 capture_class)
+{
+	u32 mask;
+
+	switch (capture_class) {
+	case GUC_CAPTURE_LIST_CLASS_RENDER_COMPUTE:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_RENDER_CLASS]);
+		mask |= info_map_read(info_map, engine_enabled_masks[GUC_COMPUTE_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_VIDEO:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_VIDEO_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_VIDEOENHANCE:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_VIDEOENHANCE_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_BLITTER:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_BLITTER_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_GSC_OTHER:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_GSC_OTHER_CLASS]);
+		break;
+
+	default:
+		mask = 0;
+	}
+
+	return mask;
+}
+
 static int
 guc_capture_prep_lists(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	u32 ads_ggtt, capture_offset, null_ggtt, total_size = 0;
 	struct guc_gt_system_info local_info;
 	struct iosys_map info_map;
@@ -814,9 +848,10 @@ guc_capture_prep_lists(struct intel_guc *guc)
 
 	for (i = 0; i < GUC_CAPTURE_LIST_INDEX_MAX; i++) {
 		for (j = 0; j < GUC_MAX_ENGINE_CLASSES; j++) {
+			u32 engine_mask = guc_get_capture_engine_mask(&info_map, j);
 
 			/* null list if we dont have said engine or list */
-			if (!info_map_read(&info_map, engine_enabled_masks[j])) {
+			if (!engine_mask) {
 				if (ads_is_mapped) {
 					ads_blob_write(guc, ads.capture_class[i][j], null_ggtt);
 					ads_blob_write(guc, ads.capture_instance[i][j], null_ggtt);
@@ -887,7 +922,7 @@ engine_instance_list:
 	}
 
 	if (guc->ads_capture_size && guc->ads_capture_size != PAGE_ALIGN(total_size))
-		drm_warn(&i915->drm, "GuC->ADS->Capture alloc size changed from %d to %d\n",
+		guc_warn(guc, "ADS capture alloc size changed from %d to %d\n",
 			 guc->ads_capture_size, PAGE_ALIGN(total_size));
 
 	return PAGE_ALIGN(total_size);

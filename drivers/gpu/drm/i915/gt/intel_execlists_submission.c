@@ -2172,6 +2172,10 @@ static void __execlists_unhold(struct i915_request *rq)
 			if (p->flags & I915_DEPENDENCY_WEAK)
 				continue;
 
+			/* Propagate any change in error status */
+			if (rq->fence.error)
+				i915_request_set_error_once(w, rq->fence.error);
+
 			if (w->engine != rq->engine)
 				continue;
 
@@ -4235,6 +4239,9 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 		struct i915_request *rq = READ_ONCE(ve->request);
 
 		if (rq) {
+			if (!(rq->execution_mask & engine->mask))
+				continue;
+
 			if (count++ < max - 1)
 				show_request(m, rq, "\t\t", 0);
 			else

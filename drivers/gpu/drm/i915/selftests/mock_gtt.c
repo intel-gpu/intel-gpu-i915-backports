@@ -65,6 +65,7 @@ static void mock_clear_range(struct i915_address_space *vm,
 struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 {
 	struct i915_ppgtt *ppgtt;
+	int err;
 
 	ppgtt = kzalloc(sizeof(*ppgtt), GFP_KERNEL);
 	if (!ppgtt)
@@ -75,7 +76,11 @@ struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 	ppgtt->vm.total = round_down(U64_MAX, PAGE_SIZE);
 	ppgtt->vm.dma = i915->drm.dev;
 
-	i915_address_space_init(&ppgtt->vm, VM_CLASS_PPGTT);
+	err = i915_address_space_init(&ppgtt->vm, VM_CLASS_PPGTT);
+	if (err) {
+		kfree(ppgtt);
+		return ERR_PTR(err);
+	}
 
 	ppgtt->vm.alloc_pt_dma = alloc_pt_dma;
 	ppgtt->vm.alloc_scratch_dma = alloc_pt_dma;

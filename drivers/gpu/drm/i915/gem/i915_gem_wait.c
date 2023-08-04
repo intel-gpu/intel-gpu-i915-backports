@@ -215,7 +215,7 @@ __i915_gem_object_wait(struct drm_i915_gem_object *obj,
 		       unsigned int flags,
 		       long timeout)
 {
-	might_sleep();
+	might_sleep_if(timeout > 0);
 	if (GEM_WARN_ON(timeout < 0))
 		return timeout;
 
@@ -233,6 +233,14 @@ i915_gem_object_wait(struct drm_i915_gem_object *obj,
 {
 	timeout = __i915_gem_object_wait(obj, flags, timeout);
 	return timeout < 0 ? timeout : 0;
+}
+
+bool i915_gem_object_is_active(struct drm_i915_gem_object *obj)
+{
+	if (i915_gem_object_has_migrate(obj))
+		return true;
+
+	return !dma_resv_test_signaled(obj->base.resv, true);
 }
 
 static inline unsigned long nsecs_to_jiffies_timeout(const u64 n)

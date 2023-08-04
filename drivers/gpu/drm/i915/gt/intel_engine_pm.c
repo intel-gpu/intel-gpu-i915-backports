@@ -234,18 +234,20 @@ static bool switch_to_kernel_context(struct intel_engine_cs *engine)
 
 	/* Install ourselves as a preemption barrier */
 	rq->sched.attr.priority = I915_PRIORITY_BARRIER;
-	if (likely(!__i915_request_commit(rq))) { /* engine should be idle! */
-		/*
-		 * Use an interrupt for precise measurement of duration,
-		 * otherwise we rely on someone else retiring all the requests
-		 * which may delay the signaling (i.e. we will likely wait
-		 * until the background request retirement running every
-		 * second or two).
-		 */
-		BUILD_BUG_ON(sizeof(rq->duration) > sizeof(rq->submitq));
-		dma_fence_add_callback(&rq->fence, &rq->duration.cb, duration);
-		rq->duration.emitted = ktime_get();
-	}
+
+	GEM_BUG_ON(i915_active_fence_isset(&ce->timeline->last_request));
+	__i915_request_commit(rq); /* engine should be idle! */
+
+	/*
+	 * Use an interrupt for precise measurement of duration,
+	 * otherwise we rely on someone else retiring all the requests
+	 * which may delay the signaling (i.e. we will likely wait
+	 * until the background request retirement running every
+	 * second or two).
+	 */
+	BUILD_BUG_ON(sizeof(rq->duration) > sizeof(rq->submitq));
+	dma_fence_add_callback(&rq->fence, &rq->duration.cb, duration);
+	rq->duration.emitted = ktime_get();
 
 	/* Expose ourselves to the world */
 	__queue_and_release_pm(rq, ce->timeline, engine);

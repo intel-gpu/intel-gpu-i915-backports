@@ -20,11 +20,13 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
-PKG_DISTRO_TARGETS := i915dkmsdeb-pkg i915dkmsrpm-pkg binrpm-pkg
+DEB_PKG_DISTRO_TARGETS := i915dkmsdeb-pkg bindeb-pkg
+RPM_PKG_DISTRO_TARGETS := i915dkmsrpm-pkg
+PKG_DISTRO_TARGETS := $(DEB_PKG_DISTRO_TARGETS) $(RPM_PKG_DISTRO_TARGETS)
 
 ARCH := x86_64
 
-export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH KBUILD_MODPOST_WARN PKG_DISTRO_TARGETS
+export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH KBUILD_MODPOST_WARN PKG_DISTRO_TARGETS DEB_PKG_DISTRO_TARGETS RPM_PKG_DISTRO_TARGETS
 
 # disable built-in rules for this file
 .SUFFIXES:
@@ -131,35 +133,61 @@ defconfig-help:
 		done
 	@echo ""
 
-.PHONY: i915dkmsdeb-pkg-help
-i915dkmsdeb-pkg-help:
-	$(info Debian package contains the default kernel version (KV of UBUNTU_OEM_22.04))
-	$(info To create the package with specific kernel version, \
-		pass the supported kernel name to OS_DISTRIBUTION option)
-	$(info )
-	$(info ##### List of supported osv kernel versions #####)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC_KERNEL" 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
-	$(info )
-	$(info Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_GENERIC)
+.PHONY: common-help
+common-help:
+	@echo "Build Configurations:"
+	@echo "  KLIB   : path/to/headers"
+	@echo "  KLIB_BUILD     : path/to/headers/build "
+	@echo "  BUILD_VERSION  : Pass build version to be added to package name"
+	@echo "  RELEASE_TYPE   : <opensource/prerelease/custom> Package release type created"
+	@echo " 			Example: make <Target> RELEASE_TYPE=test "
+	@echo " 			Package names would be intel-i915-dkms-test for DKMS or intel-i915-test for binary"
+	@echo " 			Note: If custom packages are created, tracking the conflicting package "
+	@echo " 			is difficult. Make sure no other package is already installed before "
+	@echo " 			you intalling current one."
+	@echo "  OS_DISTRIBUTION: Distro targeted package"
+	@echo " 			You can set this value by passing supported kernel name"
+	@echo " 			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_GENERIC"
 	@echo ""
 
-.PHONY: i915dkmsrpm-pkg-help
-i915dkmsrpm-pkg-help:
-	$(info Rpm package contains the default kernel version (KV of SLES15_SP4))
-	$(info To create the package with specific kernel version, \
-		pass the supported kernel name to OS_DISTRIBUTION option)
-	$(info )
-	$(info ##### List of supported osv kernel versions #####)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS 1>&2)
-	$(shell cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL 1>&2)
-	$(info )
-	$(info Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4)
+.PHONY: dkms-pkg-help
+dkms-pkg-help: common-help
+	@echo "--------------------------------------------------------------------------------------"
+	@echo " DKMS Targets: "
+	@echo "   i915dkmsdeb-pkg  -  Build DKMS debian package"
+	@echo "   i915dkmsrpm-pkg  -  Build DKMS rpm package "
 	@echo ""
+	@echo " Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4 "
+	@echo " Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_GENERIC "
+	@echo ""
+	@echo " ##### List of Debian supported osv kernel versions ##### "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "GENERIC_KERNEL"| tr '\n' '\t') "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS | tr '\n' '\t')"
+	@echo ""
+	@echo " ##### List of RPM supported osv kernel versions ##### "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES | tr '\n' '\t') "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS | tr '\n' '\t') "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL | tr '\n' '\t') "
+	@echo ""
+	@echo "For Specific OSV's, pass the supported kernel name to OS_DISTRIBUTION option "
+	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
+
+.PHONY: bin-pkg-help
+bin-pkg-help: common-help
+	@echo "--------------------------------------------------------------------------------------"
+	@echo " Binary Targets: "
+	@echo "   bindeb-pkg  -  Build binary debian package for respective kernel "
+	@echo "   binrpm-pkg  -  Build binary rpm package for respective kernel "
+	@echo ""
+	@echo "   Command:  make <Build Configurations> <target> "
+	@echo " 	 Ex: make RELEASE_TYPE=prerelease binrpm-pkg "
+	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
 
 .PHONY: help
-help: defconfig-help i915dkmsdeb-pkg-help i915dkmsrpm-pkg-help
+help: defconfig-help common-help dkms-pkg-help bin-pkg-help
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"
@@ -194,6 +222,7 @@ help: defconfig-help i915dkmsdeb-pkg-help i915dkmsrpm-pkg-help
 	@echo "  uninstall       - Uninstall modules"
 	@echo ""
 	@echo "Execute "make" or "make all" to build all targets marked with [*]"
+	@echo "--------------------------------------------------------------------------------------"
 else
 include $(BACKPORT_DIR)/Makefile.backport
 endif

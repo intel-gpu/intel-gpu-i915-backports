@@ -10,7 +10,6 @@
 
 struct drm_i915_private;
 struct drm_i915_gem_object;
-struct drm_printer;
 struct intel_gt;
 struct intel_memory_region;
 
@@ -44,8 +43,10 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 				unsigned int flags);
 
 int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj);
-int i915_gem_clear_all_lmem(struct intel_gt *gt, struct drm_printer *p);
 
 void i915_gem_init_lmem(struct intel_gt *gt);
+bool i915_gem_lmem_park(struct intel_memory_region *mem);
+
+int i915_gem_lmemtest(struct intel_gt *gt, u64 *error);
 
 #endif /* !__I915_GEM_LMEM_H */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2020 - 2022 Intel Corporation.
+ * Copyright(c) 2020 - 2023 Intel Corporation.
  */
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
@@ -17,6 +17,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/rwsem.h>
 #include <linux/sizes.h>
+#include <linux/slab.h>
 #include <linux/xarray.h>
 #include <generated/utsrelease.h>
 
@@ -56,6 +57,8 @@ LIST_HEAD(routable_list);
  * in the intel_iaf_platform.h file.
  */
 #define PRODUCT_SHIFT 16
+
+static bool suppress_noisy_logging;
 
 static enum iaf_startup_mode param_startup_mode = STARTUP_MODE_DEFAULT;
 
@@ -275,8 +278,17 @@ struct fsubdev *find_sd_id(u32 fabric_id, u8 sd_index)
 	if (!dev)
 		return ERR_PTR(-ENODEV);
 
-	if (sd_index < dev->pd->sd_cnt)
-		return &dev->sd[sd_index];
+	if (sd_index < dev->pd->sd_cnt) {
+		struct fsubdev *sd = &dev->sd[sd_index];
+
+		/* prevents aggressive netlink use from accessing sd before we are ready */
+		if (READ_ONCE(sd->fw_running))
+			return sd;
+
+		fdev_put(dev);
+
+		return ERR_PTR(-EAGAIN);
+	}
 
 	fdev_put(dev);
 
@@ -346,7 +358,7 @@ static struct query_info *handle_query(void *handle, u32 fabric_id)
 static int mappings_ref_get(struct fdev *dev)
 {
 	/* protect port_unroute_list read */
-	lock_shared(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 	mutex_lock(&dev->mappings_ref.lock);
 
 	dev_dbg(fdev_dev(dev), "count: %d\n", dev->mappings_ref.count);
@@ -354,14 +366,14 @@ static int mappings_ref_get(struct fdev *dev)
 	if (!list_empty(&dev->port_unroute_list) ||
 	    dev->mappings_ref.remove_in_progress) {
 		mutex_unlock(&dev->mappings_ref.lock);
-		unlock_shared(&routable_lock);
+		up_write(&routable_lock);
 		return -EBUSY;
 	}
 
 	dev->mappings_ref.count++;
 
 	mutex_unlock(&dev->mappings_ref.lock);
-	unlock_shared(&routable_lock);
+	up_write(&routable_lock);
 
 	return 0;
 }
@@ -544,7 +556,7 @@ static int add_subdevice(struct fsubdev *sd, struct fdev *dev, int index)
 		return err;
 	}
 
-	sd->fw_running = false;
+	WRITE_ONCE(sd->fw_running, false);
 
 	mutex_init(&sd->pm_work_lock);
 	sd->ok_to_schedule_pm_work = false;
@@ -648,6 +660,12 @@ static int iaf_remove(struct platform_device *pdev)
 
 	dev_dbg(&pdev->dev, "Removing %s\n", dev_name(&pdev->dev));
 
+	/*
+	 * let the parent know an unregister is coming and allow it
+	 * to do some pre-cleanup if possible
+	 */
+	pd->dev_event(pd->parent, dev, IAF_DEV_REMOVE, NULL);
+
 	mappings_ref_wait(dev);
 
 	/*
@@ -696,6 +714,7 @@ static int iaf_remove(struct platform_device *pdev)
 		if (!dev->psc.ini_buf[i].do_not_free)
 			kfree(dev->psc.ini_buf[i].data);
 	kfree(dev->psc.presence_rules);
+	kfree(dev->psc.txcal);
 	kfree(dev);
 #if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	return 0;
@@ -945,8 +964,15 @@ static void fw_abort(void)
 	xa_unlock(&intel_fdevs);
 }
 
+bool noisy_logging_allowed(void)
+{
+	return !READ_ONCE(suppress_noisy_logging);
+}
+
 static void __exit iaf_unload_module(void)
 {
+	WRITE_ONCE(suppress_noisy_logging, true);
+
 	pr_notice("Unloading %s\n", MODULEDETAILS);
 
 	mbox_term_module();

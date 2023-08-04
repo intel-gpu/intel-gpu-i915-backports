@@ -15,7 +15,7 @@
 static int mock_region_put_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages)
 {
-	return i915_gem_object_put_pages_buddy(obj, pages);
+	return i915_gem_object_put_pages_buddy(obj, pages, true);
 }
 
 static int mock_region_get_pages(struct drm_i915_gem_object *obj)

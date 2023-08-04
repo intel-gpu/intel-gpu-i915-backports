@@ -304,9 +304,13 @@ static int live_noa_gpr(void *arg)
 		goto out;
 	}
 
-	/* Poison the ce->vm so we detect writes not to the GGTT gt->scratch */
-	scratch = __px_vaddr(ce->vm->scratch[0], NULL);
-	memset(scratch, POISON_FREE, PAGE_SIZE);
+	if (ce->vm->scratch[0]) {
+		/* Poison the ce->vm so we detect writes not to the GGTT gt->scratch */
+		scratch = __px_vaddr(ce->vm->scratch[0], NULL);
+		memset(scratch, POISON_FREE, PAGE_SIZE);
+	} else {
+		scratch = NULL;
+	}
 
 	rq = intel_context_create_request(ce);
 	if (IS_ERR(rq)) {
@@ -394,7 +398,7 @@ static int live_noa_gpr(void *arg)
 	}
 
 	/* Verify that the user's scratch page was not used for GPR storage */
-	if (memchr_inv(scratch, POISON_FREE, PAGE_SIZE)) {
+	if (scratch && memchr_inv(scratch, POISON_FREE, PAGE_SIZE)) {
 		pr_err("Scratch page overwritten!\n");
 		igt_hexdump(scratch, 4096);
 		err = -EINVAL;

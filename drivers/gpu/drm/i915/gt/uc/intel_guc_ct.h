@@ -88,9 +88,11 @@ struct intel_guc_ct {
 	/** @stall_time: time of first time a CTB submission is stalled */
 	ktime_t stall_time;
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 	int dead_ct_reason;
 	bool dead_ct_reported;
 	struct work_struct dead_ct_worker;
+#endif
 
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
 	struct {

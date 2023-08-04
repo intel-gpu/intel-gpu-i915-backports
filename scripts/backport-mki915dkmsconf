@@ -6,7 +6,6 @@ PKG_NAME="intel-i915-dkms-prerelease"
 PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
-DEP_PMT_PKG_NAME="intel-platform-vsec-dkms"
 
 helpFunction()
 {
@@ -16,16 +15,20 @@ helpFunction()
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p prerelease/opensource"
+	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:" opt
+while getopts "n:v:r:p:s:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;;
 	esac
 done
@@ -56,6 +59,50 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BUILT_MODULE_LOCATION[3]="drivers/gpu/drm/i915/fabric"
 	DEST_MODULE_LOCATION[3]="/updates"
 
+	BUILT_MODULE_NAME[4]="mei"
+	BUILT_MODULE_LOCATION[4]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[4]="/updates"
+
+	BUILT_MODULE_NAME[5]="mei-me"
+	BUILT_MODULE_LOCATION[5]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[5]="/updates"
+
+	BUILT_MODULE_NAME[6]="mei-gsc"
+	BUILT_MODULE_LOCATION[6]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[6]="/updates"
+
+	BUILT_MODULE_NAME[7]="mei_wdt"
+	BUILT_MODULE_LOCATION[7]="drivers/watchdog/"
+	DEST_MODULE_LOCATION[7]="/updates"
+
+	BUILT_MODULE_NAME[8]="mei_hdcp"
+	BUILT_MODULE_LOCATION[8]="drivers/misc/mei/hdcp/"
+	DEST_MODULE_LOCATION[8]="/updates"
+
+	BUILT_MODULE_NAME[9]="mei_pxp"
+	BUILT_MODULE_LOCATION[9]="drivers/misc/mei/pxp/"
+	DEST_MODULE_LOCATION[9]="/updates"
+
+	BUILT_MODULE_NAME[10]="mei_iaf"
+	BUILT_MODULE_LOCATION[10]="drivers/misc/mei/iaf/"
+	DEST_MODULE_LOCATION[10]="/updates"
+
+	BUILT_MODULE_NAME[11]="intel_vsec"
+	BUILT_MODULE_LOCATION[11]="drivers/platform/x86/intel"
+	DEST_MODULE_LOCATION[11]="/updates"
+
+	BUILT_MODULE_NAME[12]="pmt_class"
+	BUILT_MODULE_LOCATION[12]="drivers/platform/x86/intel/pmt"
+	DEST_MODULE_LOCATION[12]="/updates"
+
+	BUILT_MODULE_NAME[13]="pmt_telemetry"
+	BUILT_MODULE_LOCATION[13]="drivers/platform/x86/intel/pmt"
+	DEST_MODULE_LOCATION[13]="/updates"
+
+	BUILT_MODULE_NAME[14]="pmt_crashlog"
+	BUILT_MODULE_LOCATION[14]="drivers/platform/x86/intel/pmt"
+	DEST_MODULE_LOCATION[14]="/updates"
+
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
 	# DKMS could use all cores on multicore systems to build the kernel module.
 	num_cpu_cores()
@@ -72,6 +119,10 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		fi
 	}
 
-	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PMT_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver"
+	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ]; then
+	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID"
+	else
+	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/i915 .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver"
+	fi
 	CLEAN="export LEX=flex; 'make' clean"
 EOF

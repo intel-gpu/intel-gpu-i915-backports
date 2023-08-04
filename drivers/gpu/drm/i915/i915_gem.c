@@ -49,8 +49,6 @@
 #include "gem/i915_gem_mman.h"
 #include "gem/i915_gem_pm.h"
 #include "gem/i915_gem_region.h"
-#include "gem/i915_gem_userptr.h"
-#include "gem/i915_gem_vm_bind.h"
 #include "gt/intel_engine_user.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
@@ -124,38 +122,6 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
-static int i915_vma_unbind_persistent(struct i915_vma *vma,
-				      struct i915_gem_ww_ctx *ww,
-				      unsigned long flags)
-{
-	int ret;
-
-	/* VM already locked */
-	if (ww && ww == i915_gem_get_locking_ctx(vma->vm->root_obj)) {
-		/* locked for other than unbinding? */
-		if (!(flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
-		    (!vma->vm->root_obj->evict_locked))
-			return -EBUSY;
-
-		/* locked for unbinding */
-		goto already_locked;
-	}
-
-	if (!ww)
-		ret = i915_gem_vm_priv_trylock(vma->vm);
-	else
-		ret = i915_gem_vm_priv_lock_to_evict(vma->vm, ww);
-	if (ret)
-		return ret;
-
-already_locked:
-	ret = i915_vma_unbind(vma);
-	if (!ww)
-		i915_gem_vm_priv_unlock(vma->vm);
-
-	return ret;
-}
-
 /*
  * For segmented BOs, this routine should be called for just the individual
  * segments and not the parent BO. As only the individual segments have
@@ -170,28 +136,14 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 			   struct i915_gem_ww_ctx *ww,
 			   unsigned long flags)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct intel_runtime_pm *rpm = &i915->runtime_pm;
+	struct intel_runtime_pm *rpm = &to_i915(obj->base.dev)->runtime_pm;
 	intel_wakeref_t wakeref = 0;
 	LIST_HEAD(still_in_list);
 	struct i915_vma *vma;
 	int ret;
 
-	spin_lock(&obj->vma.lock);
-	if (list_empty(&obj->vma.list)) {
-		spin_unlock(&obj->vma.lock);
+	if (list_empty(&obj->vma.list))
 		return 0;
-	}
-	spin_unlock(&obj->vma.lock);
-
-	/*
-	 * As some machines use ACPI to handle runtime-resume callbacks, and
-	 * ACPI is quite kmalloc happy, we cannot resume beneath the vm->mutex
-	 * as they are required by the shrinker. Ergo, we wake the device up
-	 * first just in case.
-	 */
-	if (!(flags & I915_GEM_OBJECT_UNBIND_TEST))
-		wakeref = intel_runtime_pm_get(rpm);
 
 try_again:
 	ret = 0;
@@ -200,6 +152,7 @@ try_again:
 						       struct i915_vma,
 						       obj_link))) {
 		struct i915_address_space *vm = vma->vm;
+		struct drm_i915_gem_object *unlock = NULL;
 
 		list_move_tail(&vma->obj_link, &still_in_list);
 		if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
@@ -231,19 +184,41 @@ try_again:
 			goto put_vma;
 		}
 
-		if (i915_vma_is_persistent(vma) &&
-		    !i915->params.enable_non_private_objects) {
-			ret = i915_vma_unbind_persistent(vma, ww, flags);
-		} else if (flags & I915_GEM_OBJECT_UNBIND_VM_TRYLOCK) {
-			if (mutex_trylock(&vma->vm->mutex)) {
-				ret = __i915_vma_unbind(vma);
-				mutex_unlock(&vma->vm->mutex);
-			} else {
-				ret = -EBUSY;
+		/*
+		 * As some machines use ACPI to handle runtime-resume
+		 * callbacks, and ACPI is quite kmalloc happy, we cannot resume
+		 * beneath the vm->mutex as they are required by the shrinker.
+		 * Ergo, we wake the device up first just in case.
+		 */
+		if (!wakeref && i915_vma_is_ggtt(vma))
+			wakeref = intel_runtime_pm_get(rpm);
+
+		if (i915_vma_is_persistent(vma)) {
+			ret = __i915_gem_object_lock_to_evict(vm->root_obj, ww);
+			switch (ret) {
+			case 0:
+				unlock = vm->root_obj;
+				break;
+
+			case -EALREADY:
+				if (flags & I915_GEM_OBJECT_UNBIND_ACTIVE)
+					break;
+				fallthrough;
+			default:
+				goto put_vma;
 			}
-		} else {
-			ret = i915_vma_unbind(vma);
 		}
+
+		ret = -EAGAIN;
+		if (mutex_trylock(&vm->mutex)) {
+			if (flags & I915_GEM_OBJECT_UNBIND_ACTIVE ||
+			    !i915_vma_is_active(vma))
+				ret = __i915_vma_unbind(vma);
+			mutex_unlock(&vm->mutex);
+		}
+
+		if (unlock)
+			i915_gem_object_unlock(unlock);
 put_vma:
 		__i915_vma_put(vma);
 close_vm:
@@ -298,15 +273,10 @@ i915_gem_shmem_pread(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_prepare_read(obj, &needs_clflush);
 	if (ret)
 		goto err_unlock;
 
-	ret = i915_gem_object_prepare_read(obj, &needs_clflush);
-	if (ret)
-		goto err_unpin;
-
-	i915_gem_object_finish_access(obj);
 	i915_gem_object_unlock(obj);
 
 	remain = args->size;
@@ -326,11 +296,9 @@ i915_gem_shmem_pread(struct drm_i915_gem_object *obj,
 		offset = 0;
 	}
 
-	i915_gem_object_unpin_pages(obj);
+	i915_gem_object_finish_access(obj);
 	return ret;
 
-err_unpin:
-	i915_gem_object_unpin_pages(obj);
 err_unlock:
 	i915_gem_object_unlock(obj);
 	return ret;
@@ -737,15 +705,10 @@ i915_gem_shmem_pwrite(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_prepare_write(obj, &needs_clflush);
 	if (ret)
 		goto err_unlock;
 
-	ret = i915_gem_object_prepare_write(obj, &needs_clflush);
-	if (ret)
-		goto err_unpin;
-
-	i915_gem_object_finish_access(obj);
 	i915_gem_object_unlock(obj);
 
 	/* If we don't overwrite a cacheline completely we need to be
@@ -776,11 +739,9 @@ i915_gem_shmem_pwrite(struct drm_i915_gem_object *obj,
 
 	i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
 
-	i915_gem_object_unpin_pages(obj);
+	i915_gem_object_finish_access(obj);
 	return ret;
 
-err_unpin:
-	i915_gem_object_unpin_pages(obj);
 err_unlock:
 	i915_gem_object_unlock(obj);
 	return ret;
@@ -1139,18 +1100,26 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 			args->retained = i915_gem_object_madvise(obj, args);
 		} else {
 			struct drm_i915_gem_object *sobj;
-			int retained = 0;
+			int retained = 1;
 
+			/*
+			 * The backing store of the user object (the parent)
+			 * is comprised of the backing store of all segments.
+			 * Apply madvise to every segment. If any segment is
+			 * not retained, then the user object (in its entirety)
+			 * is not retained and so we must inform the user if
+			 * even a single chunk of their data was discarded.
+			 */
 			for_each_object_segment(sobj, obj) {
 				err = i915_gem_object_lock(sobj, &ww);
 				if (err)
 					break;
-				retained += i915_gem_object_madvise(sobj, args);
+				retained &= i915_gem_object_madvise(sobj, args);
 			}
 			if (err)
 				continue;
 
-			args->retained = retained > 0;
+			args->retained = retained;
 		}
 	}
 
@@ -1168,10 +1137,6 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	if (intel_vgpu_active(dev_priv) && !intel_vgpu_has_huge_gtt(dev_priv))
 		mkwrite_device_info(dev_priv)->page_sizes =
 			I915_GTT_PAGE_SIZE_4K;
-
-	ret = i915_gem_init_userptr(dev_priv);
-	if (ret)
-		return ret;
 
 	for_each_gt(gt, dev_priv, i) {
 		intel_uc_fetch_firmwares(&gt->uc);

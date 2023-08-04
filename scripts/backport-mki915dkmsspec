@@ -8,7 +8,8 @@ PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
 DEP_PKG_NAME=""
-DEP_PMT_PKG_NAME="intel-platform-vsec-dkms"
+BUILD_TYPE=""
+CUSTOM_KERN_ID=""
 
 helpFunction()
 {
@@ -18,25 +19,34 @@ helpFunction()
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
+	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:" opt
+while getopts "n:v:r:p:s:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done
 
+if [ "$BUILD_TYPE" != "CUSTOM_KERN_1" ]; then
+       kerver="5.14"
+else
+       kerver="5.19"
+fi
+$(info "kerver "$kerver)
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	%define module $PKG_NAME
 	%define version $PKG_VER
 	%define release $REL_NAME
-	%define deppmtpkg $DEP_PMT_PKG_NAME
 
 	Summary: I915 Backports Module DKMS Package
 	Name: %{module}
@@ -48,7 +58,8 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	Vendor: Intel
 	Provides: %{module}
 	Packager: linux-graphics@intel.com
-	Requires: dkms gcc bash sed intel-platform-cse-dkms lsb-release %{deppmtpkg}
+	Requires: dkms gcc bash sed lsb-release
+	Obsoletes: intel-platform-vsec-dkms intel-platform-cse-dkms
 	# There is no Source# line for dkms.conf since it has been placed
 	# into the source tarball of SOURCE0
 	Source0: %{module}-%{version}-src.tar.gz
@@ -84,7 +95,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 
 	%post
 	/usr/sbin/dkms add -m %module -v %version --rpm_safe_upgrade
-	for i in /lib/modules/5.14*; do
+	for i in /lib/modules/$kerver*; do
 		H="\$i/build";
 		K=\$(echo \$i | cut -d '/' -f 4);
 		if [ -d \$H ]; then
@@ -95,27 +106,45 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	done
 	echo -e
 	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ] || [ -e /etc/redhat-release ]; then
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ] && [ -x %{_bindir}/dracut ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		%{_bindir}/dracut -f --kver "\$(uname -r)"
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
+	else
 	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ]; then
 		/sbin/depmod -a "\$(uname -r)"
 		/sbin/mkinitrd
 	else
 		echo -e "Unable to create initramfs for :\$(uname -r)"
 	fi
+	fi
 	exit 0
 
 	%preun
 	echo -e
 	echo -e "Uninstall of %{module} module (version %{version}) beginning:"
-	for i in /var/lib/dkms/%{module}/%{version}/5.14*; do
+	for i in /var/lib/dkms/%{module}/%{version}/$kerver*; do
 		K=\$(echo \$i | cut -d '/' -f 7);
 		/usr/sbin/dkms remove -m %{module} -v %{version} -k \$K --rpm_safe_upgrade
 	done
 	echo -e "Creating initramfs for :\$(uname -r)"
+	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ] || [ -e /etc/redhat-release ]; then
+	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ] && [ -x %{_bindir}/dracut ]; then
+		/sbin/depmod -a "\$(uname -r)"
+		%{_bindir}/dracut -f --kver "\$(uname -r)"
+	else
+		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
+	else
 	if [ -e /boot/vmlinuz-\$(uname -r) ] && [ -e /sbin/depmod ]; then
 		/sbin/depmod -a "\$(uname -r)"
 		/sbin/mkinitrd
 	else
 		echo -e "Unable to create initramfs for :\$(uname -r)"
+	fi
 	fi
 	exit 0
 EOF

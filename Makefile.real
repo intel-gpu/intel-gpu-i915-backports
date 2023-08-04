@@ -142,6 +142,10 @@ clean:
 mrproper:
 	@$(MAKE) -f Makefile.backport mrproper
 
+.PHONY: bindeb-pkg
+bindeb-pkg:
+	@$(MAKE) -f Makefile.backport bindeb-pkg
+
 .PHONY: i915dkmsdeb-pkg
 i915dkmsdeb-pkg:
 	@$(MAKE) -f Makefile.backport i915dkmsdeb-pkg

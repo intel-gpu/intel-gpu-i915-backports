@@ -2401,9 +2401,13 @@ static void fw_domain_fini(struct intel_uncore *uncore,
 	if (!d)
 		return;
 
-	uncore->fw_domains &= ~BIT(domain_id);
-	drm_WARN_ON(&uncore->i915->drm, d->wake_count && !uncore->i915->quiesce_gpu);
-	drm_WARN_ON(&uncore->i915->drm, hrtimer_cancel(&d->timer));
+	uncore->fw_domains &= ~d->mask;
+
+	/* Sanitize and disable the domain */
+	smp_store_mb(d->active, false);
+	hrtimer_cancel(&d->timer);
+	fw_domain_put(d);
+
 	kfree(d);
 }
 

@@ -2,25 +2,29 @@
 /*
  * Copyright © 2022 Intel Corporation
  */
+
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_mman.h"
-#include "gem/i915_gem_userptr.h"
 #include "gem/i915_gem_vm_bind.h"
 
 #include "i915_drv.h"
+#include "i915_driver.h"
 #include "i915_trace.h"
 
 #include "gen8_ppgtt.h"
 #include "intel_context.h"
+#include "intel_engine_heartbeat.h"
 #include "intel_gt.h"
 #include "intel_gt_debug.h"
 #include "intel_gt_mcr.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_tlb.h"
 #include "intel_pagefault.h"
 #include "uc/intel_guc.h"
 #include "uc/intel_guc_fwif.h"
 #include "i915_svm.h"
+#include "i915_debugger.h"
 
 /**
  * DOC: Recoverable page fault implications
@@ -59,22 +63,17 @@ enum fault_type {
 
 void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_id)
 {
-	struct drm_device *drm = &gt->i915->drm;
-	struct intel_guc *guc = &gt->uc.guc;
+	char name[TASK_COMM_LEN + 8] = "[" DRIVER_NAME "]";
 	struct intel_context *ce;
-	char buf[11];
 
-	ce = xa_load(&guc->context_lookup, guc_ctx_id);
-	if (ce) {
-		snprintf(buf, sizeof(buf), "%#04x", guc_ctx_id);
+	ce = xa_load(&gt->uc.guc.context_lookup, guc_ctx_id);
+	if (ce && ce->gem_context) {
+		memcpy(name, ce->gem_context->name, sizeof(name));
 		intel_context_ban(ce, NULL);
-	} else {
-		snprintf(buf, sizeof(buf), "n/a");
 	}
 
-	trace_intel_gt_cat_error(gt, buf);
-
-	drm_err(drm, "GPU catastrophic memory error. GT: %d, GuC context: %s\n", gt->info.id, buf);
+	trace_intel_gt_cat_error(gt, name);
+	gt_err(gt, "catastrophic memory error in context %s\n", name);
 }
 
 static u64 fault_va(u32 fault_data1, u32 fault_data0)
@@ -151,20 +150,6 @@ static void print_recoverable_fault(struct recoverable_page_fault_info *info,
 			 info->fault_level,
 			 info->engine_class,
 			 info->engine_instance);
-}
-
-static bool userptr_needs_rebind(struct drm_i915_gem_object *obj)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	bool ret = false;
-
-	if (!i915_gem_object_is_userptr(obj))
-		return ret;
-	i915_gem_userptr_lock_mmu_notifier(i915);
-	if (i915_gem_object_userptr_submit_done(obj))
-		ret = true;
-	i915_gem_userptr_unlock_mmu_notifier(i915);
-	return ret;
 }
 
 static int migrate_to_lmem(struct drm_i915_gem_object *obj,
@@ -420,7 +405,7 @@ handle_i915_mm_fault(struct intel_guc *guc,
 			return NULL;
 		}
 
-		return ERR_PTR(-ENOENT);
+		return ERR_PTR(-EFAULT);
 	}
 
 	mark_engine_as_active(gt, info->engine_class, info->engine_instance);
@@ -436,13 +421,6 @@ handle_i915_mm_fault(struct intel_guc *guc,
 	 */
 	if (i915_vma_is_bound(vma, PIN_RESIDENT))
 		goto put_vma;
-
- retry_userptr:
-	if (i915_gem_object_is_userptr(vma->obj)) {
-		err = i915_gem_object_userptr_submit_init(vma->obj);
-		if (err)
-			goto put_vma;
-	}
 
 	i915_gem_ww_ctx_init(&ww, false);
 
@@ -469,10 +447,6 @@ handle_i915_mm_fault(struct intel_guc *guc,
 	}
 
 	err = i915_vma_bind(vma, &ww);
-	if (!err && userptr_needs_rebind(vma->obj)) {
-		i915_gem_ww_ctx_fini(&ww);
-		goto retry_userptr;
-	}
  err_ww:
 	if (err == -EDEADLK) {
 		err = i915_gem_ww_ctx_backoff(&ww);
@@ -482,12 +456,7 @@ handle_i915_mm_fault(struct intel_guc *guc,
 
 	i915_gem_ww_ctx_fini(&ww);
 put_vma:
-	if (i915_gem_object_is_userptr(vma->obj)) {
-		if (err == -EAGAIN)
-			/* Need to try again in the next page fault. */
-			err = 0;
-	}
-
+	i915_gem_object_migrate_boost(vma->obj, I915_PRIORITY_MAX);
 	fence = i915_active_fence_get_or_error(&vma->active.excl);
 
 	i915_vma_put(vma);
@@ -574,8 +543,11 @@ static void coredump_add_request(struct i915_gpu_coredump *dump,
 		return;
 
 	vma = intel_engine_coredump_add_request(gt->engine, rq, gfp, compress);
-	if (vma)
+	if (vma) {
+		i915_debugger_gpu_flush_engines(dump->i915,
+						GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 		intel_engine_coredump_add_vma(gt->engine, vma, compress);
+	}
 
 	i915_vma_capture_finish(gt, compress);
 }
@@ -602,9 +574,16 @@ static void fault_complete(struct dma_fence_work *work)
 			i915_request_put(dump->private);
 		}
 
-		if (intel_gt_mcr_read_any(f->gt, TD_CTL))
+		if (intel_gt_mcr_read_any(f->gt, TD_CTL)) {
+			struct intel_engine_cs *engine =
+				(struct intel_engine_cs *)gt->engine->engine;
+
 			intel_eu_attentions_read(f->gt, &gt->attentions.resolved,
 						 INTEL_GT_ATTENTION_TIMEOUT_MS);
+
+			/* Reset and cleanup if there are any ATTN leftover */
+			intel_engine_schedule_heartbeat(engine);
+		}
 
 		i915_error_state_store(dump);
 		i915_gpu_coredump_put(dump);
@@ -697,61 +676,43 @@ static struct i915_vma *get_acc_vma(struct intel_guc *guc,
 	return i915_find_vma(vm, page_va);
 }
 
+const char *intel_acc_err2str(unsigned int err)
+{
+	static const char * const faults[] = {
+		[ACCESS_ERR_OK] = "",
+		[ACCESS_ERR_NOSUP] = "not supported",
+		[ACCESS_ERR_NULLVMA] = "null vma",
+		[ACCESS_ERR_USERPTR] = "userptr",
+	};
+
+	if (err >= ARRAY_SIZE(faults) || !faults[err])
+		return "invalid acc err!";
+
+	return faults[err];
+}
+
 static int acc_migrate_to_lmem(struct intel_gt *gt, struct i915_vma *vma)
 {
 	struct i915_gem_ww_ctx ww;
+	enum intel_region_id lmem_id;
 	int err = 0;
 
-	i915_gem_vm_bind_lock(vma->vm);
-
-	if (!i915_vma_is_bound(vma, PIN_RESIDENT)) {
-		i915_gem_vm_bind_unlock(vma->vm);
+	if (!i915_vma_is_bound(vma, PIN_RESIDENT))
 		return 0;
+
+	lmem_id = get_lmem_region_id(vma->obj, gt);
+	if (!lmem_id)
+		return 0;
+
+	for_i915_gem_ww(&ww, err, false) {
+		err = i915_gem_object_lock(vma->obj, &ww);
+		if (err)
+			continue;
+
+		err = migrate_to_lmem(vma->obj, gt, lmem_id, &ww);
 	}
-
-	i915_gem_ww_ctx_init(&ww, false);
-
-retry:
-	err = i915_gem_object_lock(vma->obj, &ww);
-	if (!err) {
-		enum intel_region_id lmem_id;
-
-		lmem_id = get_lmem_region_id(vma->obj, gt);
-		if (lmem_id)
-			err = migrate_to_lmem(vma->obj, gt, lmem_id, &ww);
-	}
-
-	if (err == -EDEADLK) {
-		err = i915_gem_ww_ctx_backoff(&ww);
-		if (!err)
-			goto retry;
-	}
-
-	i915_gem_ww_ctx_fini(&ww);
-	i915_gem_vm_bind_unlock(vma->vm);
 
 	return err;
-}
-
-static void print_access_counter(struct acc_info *info)
-{
-	DRM_DEBUG_DRIVER("Access counter request:\n"
-			"\tType: %s\n"
-			"\tASID: %d\n"
-			"\tVFID: %d\n"
-			"\tEngine: %s[%d]\n"
-			"\tGranularity: 0x%x KB Region/ %d KB sub-granularity\n"
-			"\tSub_Granularity Vector: 0x%08x\n"
-			"\tVA Range base: 0x%016llx\n",
-			info->access_type ? "AC_NTFY_VAL" : "AC_TRIG_VAL",
-			info->asid, info->vfid,
-			intel_engine_class_repr(info->engine_class),
-			info->engine_instance,
-			granularity_in_byte(info->granularity) / SZ_1K,
-			sub_granularity_in_byte(info->granularity) / SZ_1K,
-			info->sub_granularity,
-			info->va_range_base
-			);
 }
 
 static int handle_i915_acc(struct intel_guc *guc,
@@ -763,33 +724,24 @@ static int handle_i915_acc(struct intel_guc *guc,
 	mark_engine_as_active(gt, info->engine_class, info->engine_instance);
 
 	if (info->access_type) {
-		print_access_counter(info);
+		trace_intel_access_counter(gt, info, ACCESS_ERR_NOSUP);
 		return 0;
 	}
 
 	vma = get_acc_vma(guc, info);
 	if (!vma) {
-		print_access_counter(info);
-		DRM_DEBUG_DRIVER("get_acc_vma failed\n");
+		trace_intel_access_counter(gt, info, ACCESS_ERR_NULLVMA);
 		return 0;
 	}
 
 	if (i915_gem_object_is_userptr(vma->obj)) {
-		int err = i915_gem_object_userptr_submit_init(vma->obj);
-
-		if (err) {
-			print_access_counter(info);
-			DRM_DEBUG_DRIVER("userptr_submit_init failed %d\n", err);
-			goto put_vma;
-		}
+		trace_intel_access_counter(gt, info, ACCESS_ERR_USERPTR);
+		goto put_vma;
 	}
 
 	acc_migrate_to_lmem(gt, vma);
 
-	if (i915_gem_object_is_userptr(vma->obj))
-		i915_gem_object_userptr_submit_done(vma->obj);
-
-	trace_intel_access_counter(gt, info);
+	trace_intel_access_counter(gt, info, ACCESS_ERR_OK);
 put_vma:
 	i915_vma_put(vma);
 	__i915_vma_put(vma);

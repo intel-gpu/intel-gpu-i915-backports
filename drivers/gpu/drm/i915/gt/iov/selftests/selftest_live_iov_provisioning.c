@@ -3,7 +3,6 @@
  * Copyright(c) 2022 Intel Corporation. All rights reserved.
  */
 
-#include "gt/iov/intel_iov_utils.h"
 #include "selftests/i915_random.h"
 
 /* XXX pick policy key that is safe to use */

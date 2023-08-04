@@ -64,8 +64,9 @@ void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
 		/* Wait a bit, in the hope it avoids the hang */
 		usleep_range(100, 250);
 
-	dma_unmap_sg(i915->drm.dev, pages->sgl, pages->nents,
-		     DMA_BIDIRECTIONAL);
+	dma_unmap_sg_attrs(i915->drm.dev, pages->sgl, pages->nents,
+			DMA_BIDIRECTIONAL,
+			DMA_ATTR_SKIP_CPU_SYNC);
 }
 
 /**

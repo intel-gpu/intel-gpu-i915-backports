@@ -4,29 +4,26 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| SLES | 15SP4 | Kernel 5.14 |
+| SLES | 15SP4 | 5.14.21.150400 |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to get information on the kernel version being used during backporting.
 
-  In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+  In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
-For SLES15SP4:
 ```
-sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP4_KERNEL_VERSION> \
+$sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP4_KERNEL_VERSION> \
 kernel-syms-<SLES15_SP4_KERNEL_VERSION>
 
-example:
-       sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150400.24.11 \
+Example:
+       $sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150400.24.11 \
        kernel-syms-5.14.21-150400.24.11
 ```
 
 Please note that dkms installation will skip if the kernel headers are not installed.
 
 # Prerequisite
-we have dependencies on the following packages
-
-For SLES
+We have dependencies on the following packages
   - make
   - linux-glibc-devel
   - lsb-release
@@ -35,20 +32,25 @@ For SLES
   - bison
   - awk
 ```
-sudo zypper install make linux-glibc-devel lsb-release rpm-build bison flex awk
+$sudo zypper install make linux-glibc-devel lsb-release rpm-build bison flex awk
 ```
-For dkms packages, we need to install `dkms` package along with above packages.
+For dkms modules, we need to install `dkms` package also.
 
 ```
-sudo zypper install dkms
+$sudo zypper install dkms
 ```
+
+# Out of tree kernel drivers
+This repository contains following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(cse) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
+
+
 # Dependencies
 
-This driver is part of a collection of kernel-mode drivers that enable support for Intel graphics. The backports collection within https://github.com/intel-gpu includes:
+  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
 
-- [Intel® Graphics Driver Backports for Linux](https://github.com/intel-gpu/intel-gpu-i915-backports) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-- [Intel® Converged Security Engine Backports](https://github.com/intel-gpu/intel-gpu-cse-backports) - Converged Security Engine
-- [Intel® Platform Monitoring Technology Backports](https://github.com/intel-gpu/intel-gpu-pmt-backports/) - Intel Platform Telemetry
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
@@ -56,71 +58,69 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 # Package creation
 
-## Dynamic Kernel Module Support(DKMS) 
+## Dynamic Kernel Module Support(DKMS)
 There are two ways to create i915 dkms packages.
 1. Using default command:
 ```
 $make i915dkmsrpm-pkg
-example:
+Example:
         $make i915dkmsrpm-pkg
-        generated package name :
-                intel-i915-dkms-0.6411.221110.0.5.14.21.150400.24.21-1.x86_64.rpm
+
+    Generated package name :
+                 intel-i915-dkms-1.23.6.24.230425.29-1.x86_64.rpm
 ```
 
-2. Using os_distribution as an option :
+2. OS distribution option:
+
+    Adds OS kernel version as part of dkms pacakge name.
+
 ```
-$make i915dkmsrpm-pkg OS_DISTRIBUTION=<os-distribution>
-example:
-        $make i915dkmsrpm-pkg OS_DISTRIBUTION=VANILLA_5.15LTS
-        generated package name :
-                intel-i915-dkms-0.6411.221110.0.5.15.74-1.x86_64.rpm
+$make i915dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
+Example:
+        $make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4
+
+      Generated package name :
+        intel-i915-dkms-1.23.6.24.230425.29.5.14.21.150400.24.69-1.x86_64.rpm
 ```
-  Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
-
- Use below help command to get the list of supported os distributions.
-
-       $make i915dkmsrpm-pkg-help
-       Rpm package contains the default kernel version (KV of SLES15_SP4)
-       To create the package with specific kernel version, pass the supported kernel name to OS_DISTRIBUTION option
-
-       ##### List of supported osv kernel versions #####
-       SLES15_SP4
-       VANILLA_5.15LTS
-       VANILLA
-
-       Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4
-
-### DKMS Installation
+  Use below help command to get the list of supported os distributions.
 ```
-sudo rpm -ivh intel-i915-dkms*.rpm
-# Reboot the device after installation of all packages.
-sudo reboot
+$make dkms-pkg-help
+
+Generated outout:
+   DKMS Targets:
+    i915dkmsrpm-pkg  -  Build DKMS rpm package
+
+   ##### List of RPM supported osv kernel versions #####
+   SLES15_SP4
 ```
+Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
 ## Binary RPM
-Creation of binary rpm can be done using the below command.
+Creation of binary rpm can be done using the below command. By default it will use header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguement
 ```
-make binrpm-pkg
-```
+$make KLIB=<Header Path> KLIB_BUILD=<Header Path> binrpm-pkg
+
+Exmaple:
+$make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r) binrpm-pkg
+
 Generated Files:
-intel-i915-kmp-default-<version>-1.x86_64.rpm
-
-### Binary Installation
+intel-i915-<version>.$(uname -r)-1.x86_64.rpm
 ```
-sudo rpm -ivh intel-i915-kmp-default*.rpm
+
+# Installation
+```
+$sudo rpm -ivh intel-i915*.rpm
 # Reboot the device after installation of all packages.
-sudo reboot
+$sudo reboot
 ```
 
-## Installation verification
+# Installation verification
 
-Please grep **backport**  from dmesg after reboot. you should see something like below
+Please grep **backport** from dmesg after reboot. you should see something like below
 ```
 > sudo dmesg |grep -i backport
 [    5.963854] COMPAT BACKPORTED INIT
-[    5.968761] Loading modules backported from DII_6068_prerelease
-[    5.976154] Backport generated by backports.git I915_6068_PRERELEASE_220812.0
+[    5.968761] Loading modules backported from I915-23.6.24
+[    5.976154] Backport generated by backports.git I915_23.6.24_PSB_230425.29
 [    6.069699] [drm] I915 BACKPORTED INIT
 ```
-
-

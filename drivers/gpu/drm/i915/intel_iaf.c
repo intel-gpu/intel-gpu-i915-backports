@@ -79,9 +79,16 @@ static void unregister_dev(void *parent, const void *handle)
 	mutex_unlock(&i915->intel_iaf.power_mutex);
 }
 
-static int dev_event(void *parent, void *handle, enum iaf_dev_event event,
+static int dev_event(void *parent, const void *handle, const enum iaf_dev_event event,
 		     void *event_data)
 {
+	struct drm_i915_private *i915 = parent;
+
+	WARN(i915->intel_iaf.handle != handle, "IAF: invalid handle");
+
+	if (event == IAF_DEV_REMOVE)
+		i915_gem_flush_free_objects(i915);
+
 	return 0;
 }
 

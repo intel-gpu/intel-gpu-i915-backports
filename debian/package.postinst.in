@@ -1,8 +1,13 @@
-#postinst script for intel-i915-dkms-prerelease
+#!/bin/sh
+#
+#postinst script for intel-i915
+
+set -e
 
 #update initramfs
 case "$1" in
     configure)
+	depmod -a
 	if [ -x /usr/sbin/update-initramfs ]; then
    	    /usr/sbin/update-initramfs -u 
 	fi
@@ -17,3 +22,4 @@ case "$1" in
     ;;
 esac
 
+exit 0

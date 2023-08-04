@@ -1045,7 +1045,7 @@ static int pf_alloc_vf_ctxs_range(struct intel_iov *iov, unsigned int id, u16 nu
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 #ifdef BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
 #endif
@@ -1234,7 +1234,7 @@ static u16 pf_get_ctxs_free(struct intel_iov *iov)
 		return 0;
 
 #ifdef BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
 #endif
@@ -1278,7 +1278,7 @@ static u16 pf_get_ctxs_max_quota(struct intel_iov *iov)
 		return 0;
 
 #ifdef BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange_from(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
+	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
 #endif
@@ -1591,7 +1591,7 @@ static u16 pf_get_max_dbs(struct intel_iov *iov)
 		return 0;
 
 #ifdef BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange_from(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
+	for_each_clear_bitrange(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
 #else
 	bitmap_for_each_clear_region(dbs_bitmap, rs, re, 0, GUC_NUM_DOORBELLS) {
 #endif
@@ -2060,7 +2060,7 @@ static u64 pf_query_free_lmem(struct intel_iov *iov)
 	intel_gt_flush_buffer_pool(gt);
 	i915_gem_drain_workqueue(gt->i915);
 
-	return gt->lmem->avail;
+	return atomic64_read(&gt->lmem->avail);
 }
 
 /**
@@ -2876,13 +2876,14 @@ static void pf_reprovision_pf(struct intel_iov *iov)
 {
 	IOV_DEBUG(iov, "reprovisioning PF\n");
 
+	intel_iov_provisioning_force_vgt_mode(iov);
+
 	mutex_lock(pf_provisioning_mutex(iov));
 	pf_reprovision_sched_if_idle(iov);
 	pf_reprovision_reset_engine(iov);
 	pf_reprovision_sample_period(iov);
 	pf_reprovision_exec_quantum(iov, PFID);
 	pf_reprovision_preempt_timeout(iov, PFID);
-	iov->pf.provisioning.self_done = true;
 	mutex_unlock(pf_provisioning_mutex(iov));
 }
 
@@ -3272,4 +3273,4 @@ int intel_iov_provisioning_force_vgt_mode(struct intel_iov *iov)
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/selftest_live_iov_provisioning.c"
-#endif
+#endif /* CPTCFG_DRM_I915_SELFTEST */

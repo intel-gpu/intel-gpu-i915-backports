@@ -175,7 +175,7 @@ static int igt_mock_reserve(void *arg)
 	LIST_HEAD(objects);
 	int err = 0;
 
-	count = mem->avail / chunk_size;
+	count = atomic64_read(&mem->avail) / chunk_size;
 	order = i915_random_order(count, &prng);
 	if (!order)
 		return 0;
@@ -212,7 +212,7 @@ static int igt_mock_reserve(void *arg)
 
 	/* Try to see if we can allocate from the remaining space */
 	allocated = 0;
-	cur_avail = mem->avail;
+	cur_avail = atomic64_read(&mem->avail);
 	while (cur_avail) {
 		u32 size = i915_prandom_u32_max_state(cur_avail, &prng);
 
@@ -237,8 +237,8 @@ retry:
 		allocated += size;
 	}
 
-	if (mem->avail) {
-		pr_err("%s mismatch between allocation:%lld and remaining free space:%lld/%pa", __func__, allocated, cur_avail, &mem->avail);
+	if (atomic64_read(&mem->avail)) {
+		pr_err("%s mismatch between allocation:%lld and remaining free space:%lld/%lld", __func__, allocated, cur_avail, atomic64_read(&mem->avail));
 		err = -EINVAL;
 	}
 

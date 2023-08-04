@@ -11,15 +11,26 @@ OSV_VER = 0
 BASE_KERN = 0
 KERN_TYPE = ""
 BASE_KERNEL_NAME = ""
+BUILD_CONFIG ?=
+CUSTOM_KERN_ID ?=
 EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
-RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS
+RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_9.2 RHEL_9.0 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS CUSTOM_KERN_1
 DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_20.04_GENERIC VANILLA_5.15LTS UBUNTU_22.04_GENERIC
+OS_DISTRO_NAME ?=
+#
+#Custom kernel specific
+#
+CUSTOM_KERN_1_NAME = ""
+CUSTOM_KERN_1_VER = ""
+CUSTOM_KERN_1_MAJOR = ""
+CUSTOM_KERN_1_MINOR = ""
+CUSTOM_ARG = ""
 
-ifeq ($(MAKECMDGOALS),i915dkmsdeb-pkg)
+ifneq (,$(filter $(DEB_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= UBUNTU_OEM_22.04
-else ifeq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),i915dkmsrpm-pkg binrpm-pkg))
+else ifneq (,$(filter $(RPM_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= SLES15_SP4
 endif
 
@@ -40,6 +51,19 @@ else ifeq ($(DII_TAG_PREFIX) , DII)
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
 else
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
+endif
+
+ifneq ($(CUSTOM_KERN_ID), )
+CUSTOM_KERN_1_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '_' -f3 | cut -c 1-3 )
+ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
+CUSTOM_KERN_1_VER = $(BUILD_CONFIG)
+CUSTOM_KERN_1_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | sed 's/[^0    -9]//g')
+CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4)
+OS_DISTRIBUTION = $(CUSTOM_KERN_1_VER)
+CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
+else
+$(error "Please provide valid BUILD_CONFIG value. Use BUILD_CONFIG=CUSTOM_KERN_1")
+endif
 endif
 
 ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
@@ -72,8 +96,8 @@ RHEL_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | 
 RHEL_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep RHEL_MINOR | cut -d ' ' -f3)
 OSV_VER = $(RHEL_MAJOR).$(RHEL_MINOR)
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f1)
-EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f2)
-EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f3)
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -s -d "." -f2)
+EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -s -d "." -f3)
 ADD_KV = $(shell cat versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
 BASE_KERNEL_NAME = $(KERN_VER)-$(EXTENDED_VERSION_X)
 ifneq ($(EXTENDED_VERSION_Y),)
@@ -87,6 +111,9 @@ else ifeq ($(OSV_NAME),)
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 OSV_NAME = VANILLA_5.15LTS
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifneq ($(CUSTOM_KERN_1_VER),)
+OSV_NAME := $(shell echo $(CUSTOM_KERN_1_VER) | tr '[:lower:]' '[:upper:]')
+OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
 else ifeq ($(shell expr $(BASE_KERN) \== 5.19), 1)
 OSV_NAME = UBUNTU_22.04_GENERIC
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
@@ -117,7 +144,9 @@ else
 ADD_KV = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_GENERIC_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 endif
+
 else
+
 # Read suse version info
 SUSE_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_VERSION | cut -d " " -f3)
 SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_PATCHLEVEL | cut -d " " -f3)
@@ -130,18 +159,24 @@ BASE_KERNEL_NAME = $(KERN_VER)-$(OSV_VER).$(EXTENDED_VERSION_X)
 ifneq ($(EXTENDED_VERSION_Y),)
 BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Y)
 endif
+
 endif #end of suse
-else
+
+else ifneq ($(BUILD_CONFIG), CUSTOM_KERN_1)
 BASE_KERNEL_NAME = $(shell cat versions | grep -w "$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
 ifeq ($(BASE_KERNEL_NAME),)
-$(error "Unsupported os. Please see i915dkmsdeb-pkg-help (or) i915dkmsrpm-pkg-help and provide supported kernel name")
-else ifeq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),i915dkmsrpm-pkg binrpm-pkg))
+
+$(error "Unsupported os. Please see dkms-pkg-help bin-pkg-help and provide supported kernel name")
+else ifeq ($(MAKECMDGOALS),$(filter $(MAKECMDGOALS),$(RPM_PKG_DISTRO_TARGETS)))
+
 ifeq (,$(filter $(RPM_DISTRIBUTIONS), $(OS_DISTRIBUTION)))
 $(error rpm package cannot be generated for $(OS_DISTRIBUTION), please use i915dkmsdeb-pkg)
 endif
+
 else ifeq (,$(filter $(DEB_DISTRIBUTIONS), $(OS_DISTRIBUTION)))
 $(error deb package cannot be generated for $(OS_DISTRIBUTION), please use i915dkmsrpm-pkg/binrpm-pkg)
 endif
+
 endif
 
 ifeq ($(KERNELRELEASE),)
@@ -239,6 +274,15 @@ define filechk_osv_version_generic.h
         expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256)'
 endef
 
+define filechk_osv_custom_kernel_1.h
+        echo '#define CUSTOM_KERN_1_VER $(CUSTOM_KERN_1_VER)'; \
+        echo '#define CUSTOM_KERN_1_MAJOR $(CUSTOM_KERN_1_MAJOR)'; \
+        echo '#define CUSTOM_KERN_1_MINOR $(CUSTOM_KERN_1_MINOR)'; \
+        echo '#define CUSTOM_KERN_1_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define CUSTOM_KERN_1_RELEASE_CODE $(shell \
+        expr $(CUSTOM_KERN_1_MAJOR) \* 65536 + 0$(CUSTOM_KERN_1_MINOR) \* 256)'
+endef
+
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
 ifeq ($(OSV_NAME), UBUNTU)
 ifeq ($(ADD_KV), )
@@ -255,10 +299,14 @@ ifeq ($(ADD_KV), )
 endif
 	$(call filechk,osv_version_sles.h)
 else ifeq ($(OSV_NAME), RHEL)
+ifneq (,$(filter $(OSV_NAME)_$(OSV_VER), $(RPM_DISTRIBUTIONS)))
 ifeq ($(ADD_KV), )
 	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 endif
+endif
 	$(call filechk,osv_version_rhel.h)
+else ifeq ($(CUSTOM_KERN_1_VER), CUSTOM_KERN_1)
+	$(call filechk,osv_custom_kernel_1.h)
 else
 ifeq ($(ADD_KV), )
 	@echo '$(OSV_NAME)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
@@ -267,12 +315,8 @@ endif
 endif
 endif
 
-#Reads BASE_KERNEL_NAME and replace the '-' to '.'
-#This will be used for package generation.
-KER_VER = $(subst -,.,$(BASE_KERNEL_NAME))
-
-# VERSION is generated as 0.DII_TAG.BACKPORT_RELEASE_TAG.KERNEL_BASE_VERSION
-VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+# VERSION is generated as 1.DII_TAG.BACKPORT_RELEASE_TAG
+VERSION := 1.$(DII_TAG).$(BKPT_VER)
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)
@@ -298,14 +342,6 @@ DEF_VER = $(shell cat debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d '
 
 # i915dkmsdeb-pkg
 # Creates Backports i915 alone dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsdeb-pkg
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE : <opensource/prerelease> package need to be createdi
-# RELEASE_TYPE=<custom> is used to create custome package.
-# Example: RELEASE_TYPE=test
-#         Package names would be intel-dmabuf-dkms-test, intel-i915-dkms-test
-# Note: If custom packages are created, tracking the conflicting package is difficult. Make sure no other package is
-# already installed before you intalling current one.
 # ------------------------------------------------------------------------------
 I915DKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
 I915DKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
@@ -316,8 +352,8 @@ I915DKMSMK_COPYRIGHT := $(BACKPORT_DIR)/scripts/backport-mkdebcopyright
 
 .PHONY: i915dkmsdeb-pkg
 i915dkmsdeb-pkg:
-	$(CONFIG_SHELL) $(I915DKMSMK_CONTROL) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/control
-	$(CONFIG_SHELL) $(I915DKMSMK_RULES) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/rules
+	$(CONFIG_SHELL) $(I915DKMSMK_CONTROL) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -z dkms > $(BACKPORT_DIR)/debian/control
+	$(CONFIG_SHELL) $(I915DKMSMK_RULES) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -z dkms > $(BACKPORT_DIR)/debian/rules
 	cp $(BACKPORT_DIR)/debian/changelog.in $(BACKPORT_DIR)/debian/changelog
 	sed -i 's/pkg-name/$(I915_PKG_NAME)/g' $(BACKPORT_DIR)/debian/changelog
 	sed -i 's/$(DEF_VER)/$(I915_PKG_VERSION)/g' $(BACKPORT_DIR)/debian/changelog
@@ -328,15 +364,42 @@ i915dkmsdeb-pkg:
 	+dch -l "+i${I915_PKG_RELEASE}-" -m "build ${I915_PKG_RELEASE}"
 	+dpkg-buildpackage -j`nproc --all` -us -uc -b -rfakeroot
 
+
+# bindeb-pkg
+# Creates Backports i915 binary package
+# ------------------------------------------------------------------------------
+I915_BIN_PKG_NAME_BASENAME=intel-i915
+I915_BIN_PKG_NAME := $(I915_BIN_PKG_NAME_BASENAME)$(PKG_SUFFIX)
+MK_DEB_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
+MK_DEB_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
+MK_DEB_README := $(BACKPORT_DIR)/scripts/backport-mkdebreadme
+MK_DEB_COPYRIGHT := $(BACKPORT_DIR)/scripts/backport-mkdebcopyright
+
+#Reads BASE_KERNEL_NAME and replace the '-' to '.'
+#This will be used for package generation.
+KER_VER_BIN := $(subst -,.,$(BASE_KERNEL_NAME))
+I915_BIN_PKG_VERSION := $(I915_PKG_VERSION).$(KER_VER_BIN)
+
+.PHONY: bindeb-pkg
+bindeb-pkg:
+	$(CONFIG_SHELL) $(MK_DEB_CONTROL) -n $(I915_BIN_PKG_NAME) -v $(I915_BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -z binary > $(BACKPORT_DIR)/debian/control
+	$(CONFIG_SHELL) $(MK_DEB_RULES) -n $(I915_BIN_PKG_NAME) -v $(I915_BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -z binary -k $(KLIB) -s $(OS_DISTRIBUTION) > $(BACKPORT_DIR)/debian/rules
+	cp $(BACKPORT_DIR)/debian/changelog.in $(BACKPORT_DIR)/debian/changelog
+	sed -i 's/pkg-name/$(I915_BIN_PKG_NAME)/g' $(BACKPORT_DIR)/debian/changelog
+	sed -i 's/$(DEF_VER)/$(I915_BIN_PKG_VERSION)/g' $(BACKPORT_DIR)/debian/changelog
+	$(CONFIG_SHELL) $(MK_DEB_README) -n $(I915_BIN_PKG_NAME) -v $(I915_BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/README.Debian
+	$(CONFIG_SHELL) $(MK_DEB_COPYRIGHT) -n $(I915_BIN_PKG_NAME) -v $(I915_BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/debian/copyright
+	+dch -l "+i${I915_PKG_RELEASE}-" -m "build ${I915_PKG_RELEASE}"
+	+dpkg-buildpackage -j`nproc --all` -nc -uc -b
+
 # i915dkmsrpm-pkg
 # Creates Backports i915 alone dkms package
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> i915dkmsrpm-pkg
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE : <opensource/prerelease> package need to be created
 # Depends on package generated by dmadkmsrpm-pkg
 #------------------------------------------------------------------------------
 export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/platform drivers/pci drivers/iommu include scripts)
-I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) .config Makefile* local-symbols MAINTAINERS \
+export KBUILD_ONLYVSECDIRS := drivers/platform/x86/intel
+export KBUILD_ONLYMEIDIRS := drivers/misc drivers/watchdog
+I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYMEIDIRS) .config Makefile* local-symbols MAINTAINERS \
 		    Kconfig* COPYING versions defconfigs backport-include kconf compat
 I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
 I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
@@ -344,8 +407,8 @@ I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
 	cp $(BACKPORT_DIR)/defconfigs/i915 .config
-	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/dkms.conf
-	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKCONF) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(OS_DISTRIBUTION) $(CUSTOM_ARG) > $(BACKPORT_DIR)/dkms.conf
+	$(CONFIG_SHELL) $(I915_DKMS_RPM_MKSPEC) -n $(I915_PKG_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(OS_DISTRIBUTION) $(CUSTOM_ARG) > $(BACKPORT_DIR)/$(I915_PKG_NAME).spec
 	tar -cz $(RCS_TAR_IGNORE) -f $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
 		$(I915_TAR_CONTENT) $(I915_PKG_NAME).spec dkms.conf;
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(I915_PKG_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
@@ -353,21 +416,27 @@ i915dkmsrpm-pkg:
 
 # binrpm-pkg
 # Creates Backport binary package for i915 modules
-# command: make BUILD_VERSION=<build version> RELEASE_TYPE=<opensource/prerelease/custom> binrpm-pkg
-# BUILD_VERSION : pass build version to be added to package name
-# RELEASE_TYPE : <opensource/prerelease> package need to be created
-# Build machine should have kernel version and variant binary is targeted for.
 #------------------------------------------------------------------------------
 BINMKSPEC := $(BACKPORT_DIR)/scripts/backport-mkbinspec
 BINMODULE_NAME := intel-i915$(PKG_SUFFIX)
+RHEL_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d " " -f2 | cut -d "_" -f1)
+SLES_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
+ifeq ($(RHEL_OSV_NAME), RHEL)
+	OS_DISTRO_NAME := $(RHEL_OSV_NAME)
+else ifneq ($(CUSTOM_KERN_1_VER),)
+	OS_DISTRO_NAME := $(CUSTOM_KERN_1_VER)
+else ifeq ($(SLES_OSV_NAME), SUSE)
+	OS_DISTRO_NAME := $(SLES_OSV_NAME)
+	I915_BIN_PKG_VERSION := $(I915_PKG_VERSION)
+endif
 
 .PHONY: binrpm-pkg
 binrpm-pkg:
 	cp $(BACKPORT_DIR)/defconfigs/i915 .config
-	$(CONFIG_SHELL) $(BINMKSPEC) -n $(BINMODULE_NAME) -v $(I915_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) > $(BACKPORT_DIR)/$(BINMODULE_NAME).spec
-	tar -cz $(RCS_TAR_IGNORE) -f $(BINMODULE_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+	$(CONFIG_SHELL) $(BINMKSPEC) -n $(BINMODULE_NAME) -v $(I915_BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -k $(KLIB) -s $(OS_DISTRO_NAME) $(CUSTOM_ARG) > $(BACKPORT_DIR)/$(BINMODULE_NAME).spec
+	tar -cz $(RCS_TAR_IGNORE) -f $(BINMODULE_NAME)-$(I915_BIN_PKG_VERSION)-src.tar.gz \
 		$(I915_TAR_CONTENT) $(BINMODULE_NAME).spec;
-	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BINMODULE_NAME)-$(I915_PKG_VERSION)-src.tar.gz \
+	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BINMODULE_NAME)-$(I915_BIN_PKG_VERSION)-src.tar.gz \
 		--define='_smp_mflags %{nil}' --define='_sourcedir $(PWD)'
 
 .PHONY: clean
@@ -381,11 +450,13 @@ mrproper:
 	@rm -f debian/changelog
 	@rm -f debian/control
 	@rm -f debian/copyright
-	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.dkms.in
-	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.install.in
+	@rm -f debian/$(I915_BIN_PKG_NAME_BASENAME)*.dkms.in
+	@rm -f debian/$(I915_BIN_PKG_NAME_BASENAME)*.install.in
+	@rm -rf debian/$(I915_BIN_PKG_NAME_BASENAME)*
+	@rm -rf debian/$(I915_BIN_PKG_NAME_BASENAME)
 	@rm -f debian/rules
-	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*.spec
-	@rm -f $(BACKPORT_DIR)/$(I915_PKG_NAME_BASENAME)*-src.tar.gz
+	@rm -f $(BACKPORT_DIR)/$(I915_BIN_PKG_NAME_BASENAME)*.spec
+	@rm -f $(BACKPORT_DIR)/$(I915_BIN_PKG_NAME_BASENAME)*-src.tar.gz
 	@rm -f $(BACKPORT_DIR)/dkms.conf
 	@test -f .config && $(MAKE) clean || true
 

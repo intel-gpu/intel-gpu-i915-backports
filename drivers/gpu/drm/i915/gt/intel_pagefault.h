@@ -13,6 +13,13 @@ struct drm_i915_gem_object;
 struct intel_gt;
 struct intel_guc;
 
+enum access_err {
+	ACCESS_ERR_OK = 0,
+	ACCESS_ERR_NOSUP = 1,
+	ACCESS_ERR_NULLVMA = 2,
+	ACCESS_ERR_USERPTR = 3,
+};
+
 enum access_type {
 	ACCESS_TYPE_READ = 0,
 	ACCESS_TYPE_WRITE = 1,
@@ -68,6 +75,7 @@ static inline int sub_granularity_in_byte(int val)
 const char *intel_pagefault_type2str(unsigned int type);
 
 const char *intel_access_type2str(unsigned int type);
+const char *intel_acc_err2str(unsigned int err);
 
 void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_id);
 int intel_gt_pagefault_process_page_fault_msg(struct intel_gt *gt, const u32 *msg, u32 len);
