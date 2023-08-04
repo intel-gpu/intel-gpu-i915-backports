@@ -105,7 +105,7 @@ i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
 
 	__i915_gem_object_release_shmem(obj, pages, false);
 
-	if (obj->mm.dirty) {
+	if (obj->mm.madv == I915_MADV_WILLNEED) {
 		struct address_space *mapping = obj->base.filp->f_mapping;
 		void *src = vaddr;
 		int i;
@@ -130,7 +130,6 @@ i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
 
 			src += PAGE_SIZE;
 		}
-		obj->mm.dirty = false;
 	}
 
 	sg_free_table(pages);

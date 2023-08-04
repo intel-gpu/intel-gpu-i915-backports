@@ -624,11 +624,10 @@ pte_write_tearing(struct intel_context *ce,
 	i915_request_get(rq);
 	i915_request_add(rq);
 
-	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x)\n",
+	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x\n",
 		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg);
-	if (va->page_sizes.gtt != align &&
-	    va->page_sizes.gtt > va->size) {
+		addr, align, va->page_sizes);
+	if (va->page_sizes != align && va->page_sizes > va->size) {
 		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
 
 		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
@@ -762,11 +761,10 @@ pte_invalid_read(struct intel_context *ce,
 					 i915_vma_offset(va) + i915_vma_size(va),
 					 4, 4);
 
-	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x (phys %x, sg %x)\n",
+	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x\n",
 		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes.gtt, va->page_sizes.phys, va->page_sizes.sg);
-	if (va->page_sizes.gtt != align &&
-	    va->page_sizes.gtt > va->size) {
+		addr, align, va->page_sizes);
+	if (va->page_sizes != align && va->page_sizes > va->size) {
 		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
 
 		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
@@ -930,7 +928,7 @@ mem_write_tearing(struct intel_gt *gt,
 
 	GEM_BUG_ON(!is_power_of_2(A->base.size));
 	GEM_BUG_ON(A->base.size != B->base.size);
-	if ((A->mm.page_sizes.phys | B->mm.page_sizes.phys) & (A->base.size - 1))
+	if (!sg_is_last(A->mm.pages->sgl) || !sg_is_last(B->mm.pages->sgl))
 		pr_warn("Failed to allocate contiguous pages for size %zx\n",
 			A->base.size);
 
@@ -939,7 +937,7 @@ mem_write_tearing(struct intel_gt *gt,
 		err = PTR_ERR(ppgtt);
 		goto out_b;
 	}
-	if (ppgtt->vm.poison != -1) {
+	if (ppgtt->vm.poison != -1 && ppgtt->vm.scratch[0]) {
 		struct drm_i915_gem_object *scratch = ppgtt->vm.scratch[0];
 
 		ppgtt->vm.poison = 0xffffffff;

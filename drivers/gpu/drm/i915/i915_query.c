@@ -365,7 +365,7 @@ static int query_fabric_connectivity(struct drm_i915_private *i915,
 	info.bandwidth = 0;
 	info.latency = 0;
 
-	/* "Local" access will be on chip, not fabric (bandwith = 0) */
+	/* "Local" access will be on chip, not fabric (bandwidth = 0) */
 	if (info.fabric_id == i915->intel_iaf.fabric_id)
 		goto done;
 
@@ -375,7 +375,7 @@ static int query_fabric_connectivity(struct drm_i915_private *i915,
 		goto done;
 	/*
 	 * Examine the query information for connectivity.
-	 * Minimum bandwidth value is the bandwith, 0 == no connectivity
+	 * Minimum bandwidth value is the bandwidth, 0 == no connectivity
 	 * Latency is averaged.
 	 */
 	cnt = qi->src_cnt * qi->dst_cnt;
@@ -869,7 +869,7 @@ static int query_memregion_info(struct drm_i915_private *i915,
 		info.region.memory_class = mr->type;
 		info.region.memory_instance = mr->instance;
 		info.probed_size = mr->total;
-		info.unallocated_size = mr->avail;
+		info.unallocated_size = atomic64_read(&mr->avail);
 
 		if (__copy_to_user(info_ptr, &info, sizeof(info)))
 			return -EFAULT;
@@ -958,7 +958,7 @@ static int prelim_query_memregion_info(struct drm_i915_private *dev_priv,
 		info.region.memory_class = region->type;
 		info.region.memory_instance = region->instance;
 		info.probed_size = region->total;
-		info.unallocated_size = region->avail;
+		info.unallocated_size = atomic64_read(&region->avail);
 
 		if (__copy_to_user(info_ptr, &info, sizeof(info)))
 			return -EFAULT;
@@ -1035,9 +1035,9 @@ static int prelim_query_lmem_memregion_info(struct drm_i915_private *i915,
 		info.region.memory_instance = region->instance;
 		if (capable(CAP_SYS_ADMIN)) {
 			info.unallocated_usr_lmem_size =
-				region->acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM];
+				READ_ONCE(region->acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM]);
 			info.unallocated_usr_shared_size =
-				region->acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED];
+				READ_ONCE(region->acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED]);
 		}
 
 		if (__copy_to_user(info_ptr, &info, sizeof(info)))

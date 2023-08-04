@@ -19,6 +19,25 @@ void intel_gt_init_ccs_mode(struct intel_gt *gt)
 	mutex_init(&gt->ccs.mutex);
 }
 
+__maybe_unused static bool assert_compute_idle(struct intel_gt *gt)
+{
+	int subslice;
+	int slice;
+	int iter;
+
+	/*
+	 * Check IC done on all DSS. IC done indicates EU is
+	 * done executing WL.
+	 */
+	for_each_ss_steering(iter, gt, slice, subslice) {
+		if ((intel_gt_mcr_read(gt, XEHPC_ROW_INSTDONE,
+				       slice, subslice) & XEHPC_IC_DONE) == 0)
+			return false;
+	}
+
+	return true;
+}
+
 static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
 {
 	u32 mode = XEHP_CCS_MODE_CSLICE_0_3_MASK; /* disable all by default */
@@ -77,10 +96,15 @@ static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t c
 	}
 	GEM_BUG_ON(cslice > PVC_NUM_CSLICES_PER_TILE);
 
-	GT_TRACE(gt,
-		 "CCS_MODE=%x for config:%08x, num_engines:%d, num_slices:%d\n",
-		 mode, config, num_engines, num_slices);
-	intel_uncore_write(gt->uncore, XEHP_CCS_MODE, mode);
+	if (mode != gt->ccs.mode) {
+		GT_TRACE(gt,
+			 "CCS_MODE=%x for config:%08x, num_engines:%d, num_slices:%d\n",
+			 mode, config, num_engines, num_slices);
+
+		GEM_BUG_ON(!assert_compute_idle(gt));
+		intel_uncore_write(gt->uncore, XEHP_CCS_MODE, mode);
+		gt->ccs.mode = mode;
+	}
 
 	gt->ccs.config = config;
 }
@@ -107,29 +131,11 @@ void intel_gt_apply_ccs_mode(struct intel_gt *gt)
 	if (IS_SRIOV_PF(gt->i915) && IS_PONTEVECCHIO(gt->i915))
 		config = ALL_CCS(gt);
 
+	gt->ccs.mode = -1;
 	if (config)
 		__intel_gt_apply_ccs_mode(gt, config);
 
 	mutex_unlock(&gt->ccs.mutex);
-}
-
-static bool wait_for_compute_idle(struct intel_gt *gt)
-{
-	int subslice;
-	int slice;
-	int iter;
-
-	/*
-	 * Check IC done on all DSS. IC done indicates EU is
-	 * done executing WL.
-	 */
-	for_each_ss_steering(iter, gt, slice, subslice) {
-		if ((intel_gt_mcr_read(gt, XEHPC_ROW_INSTDONE,
-				       slice, subslice) & XEHPC_IC_DONE) == 0)
-			return false;
-	}
-
-	return true;
 }
 
 static bool needs_ccs_mode(struct intel_gt *gt)
@@ -189,10 +195,10 @@ int intel_gt_configure_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
 
 	mutex_lock(&gt->ccs.mutex);
 	if (config & ~gt->ccs.config) {
-		if (gt->ccs.active || GEM_WARN_ON(!wait_for_compute_idle(gt)))
-			err = -EBUSY;
-		else
+		if (!gt->ccs.active)
 			__intel_gt_apply_ccs_mode(gt, config);
+		else
+			err = -EBUSY;
 	}
 	if (err == 0)
 		gt->ccs.active = gt->ccs.config;

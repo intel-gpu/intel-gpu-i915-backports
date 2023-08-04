@@ -940,6 +940,7 @@ static const struct intel_device_info jsl_info = {
 	TGL_CURSOR_OFFSETS, \
 	TGL_CACHELEVEL, \
 	.has_global_mocs = 1, \
+	.has_null_page = 1, \
 	.has_pxp = 1, \
 	.display.has_dsb = 0 /* FIXME: LUT load is broken with DSB */
 
@@ -1083,6 +1084,7 @@ static const struct intel_device_info adl_p_info = {
 	.has_oa_buf_128m = 1, \
 	.has_oa_mmio_trigger = 1, \
 	.has_oa_slice_contrib_limits = 1, \
+	.has_null_page = 1, \
 	.has_rc6 = 1, \
 	.has_reset_engine = 1, \
 	.has_rps = 1, \
@@ -1258,7 +1260,6 @@ static const struct intel_device_info pvc_info = {
 	 * Runtime Suspend D3, therefore disabling Runtime PM.
 	 */
 	.has_runtime_pm = 0,
-	.has_null_page = 1,
 	.require_force_probe = 1,
 	PVC_CACHELEVEL,
 };

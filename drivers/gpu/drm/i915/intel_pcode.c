@@ -236,7 +236,7 @@ int intel_pcode_init(struct intel_uncore *uncore)
 	if (pcode_init_wait(uncore, 10000)) {
 		drm_notice(&uncore->i915->drm,
 			   "Waiting for HW initialisation...\n");
-		err = pcode_init_wait(uncore, 6 * 60 * 1000 /* 6 minutes! */);
+		err = pcode_init_wait(uncore, 3 * 60 * 1000 /* 3 minutes! */);
 	}
 
 	return err;

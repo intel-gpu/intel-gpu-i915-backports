@@ -1674,7 +1674,7 @@ mtl_get_cx0_buf_trans(struct intel_encoder *encoder,
 	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
 	enum phy phy = intel_port_to_phy(i915, encoder->port);
 
-	if (intel_crtc_has_dp_encoder(crtc_state) && crtc_state->port_clock > 1000000)
+	if (intel_crtc_has_dp_encoder(crtc_state) && crtc_state->port_clock >= 1000000)
 		return intel_get_buf_trans(&mtl_c20_trans_uhbr, n_entries);
 	else if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_HDMI) && !(intel_is_c10phy(i915, phy)))
 		return intel_get_buf_trans(&mtl_c20_trans_hdmi, n_entries);

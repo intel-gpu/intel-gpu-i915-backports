@@ -30,14 +30,45 @@ static const struct pci_device_id clear_bandwidth[] = {
 static int igt_lmem_touch(void *arg)
 {
 	struct drm_i915_private *i915 = arg;
-	struct drm_printer p = drm_info_printer(i915->drm.dev);
 	struct intel_gt *gt;
-	int id, err;
+	int id, ret = 0;
 
 	for_each_gt(gt, i915, id) {
-		err = i915_gem_clear_all_lmem(gt, &p);
-		if (err)
-			return err;
+		u64 bits = 0;
+		int err;
+
+		err = i915_gem_lmemtest(gt, &bits);
+		if (bits) {
+			char prefix[80];
+
+			snprintf(prefix, sizeof(prefix), "%s%d memory error: ",
+				 gt->name, gt->info.id);
+			print_hex_dump(KERN_ERR, prefix, DUMP_PREFIX_NONE,
+					16, 1, &bits, sizeof(bits), false);
+			err = -EINVAL;
+		}
+		if (err && !ret)
+			ret = err;
+	}
+
+	return ret;
+}
+
+static int sync_blocks(struct list_head *blocks, long timeout)
+{
+	struct i915_buddy_block *block;
+
+	list_for_each_entry(block, blocks, link) {
+		struct dma_fence *f;
+
+		f = i915_active_fence_get(&block->active);
+		if (!f)
+			continue;
+
+		timeout = i915_request_wait(to_request(f), I915_WAIT_INTERRUPTIBLE, timeout);
+		dma_fence_put(f);
+		if (timeout < 0)
+			return timeout;
 	}
 
 	return 0;
@@ -47,20 +78,10 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 {
 	const u64 poison = make_u64(0xc5c55c5c, 0xa3a33a3a);
 	struct pm_qos_request qos;
-	struct sg_table *pages;
 	struct intel_gt *gt;
 	I915_RND_STATE(prng);
 	int err = 0;
 	int id;
-
-	pages = kmalloc(sizeof(*pages), GFP_KERNEL);
-	if (!pages)
-		return -ENOMEM;
-
-	if (sg_alloc_table(pages, 1, GFP_KERNEL)) {
-		kfree(pages);
-		return -ENOMEM;
-	}
 
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_add_request(&qos, CPU_LATENCY);
@@ -81,12 +102,10 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 		wf = intel_gt_pm_get(gt);
 		intel_rps_boost(&gt->rps);
 
-		for (size = SZ_4K; size <= min_t(u64, gt->lmem->total / 2, SZ_2G); size <<= 1) {
-			struct i915_buddy_block *block;
-			struct i915_request *rq;
+		for (size = gt->lmem->min_page_size; size <= min_t(u64, gt->lmem->total / 2, SZ_2G); size <<= 1) {
+			struct i915_request *rq = NULL;
 			ktime_t cpu, gpu, sync;
 			LIST_HEAD(blocks);
-			u64 offset;
 
 			err = __intel_memory_region_get_pages_buddy(gt->lmem,
 								    NULL,
@@ -99,19 +118,19 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 				break;
 			}
 
-			block = list_first_entry(&blocks, typeof(*block), link);
-			offset = i915_buddy_block_offset(block);
-
-			sg_dma_address(pages->sgl) = offset;
-			sg_dma_len(pages->sgl) = i915_buddy_block_size(&gt->lmem->mm, block);
+			err = sync_blocks(&blocks, HZ);
+			if (err)
+				break;
 
 			cpu = -ktime_get();
-			clear_cpu(gt->lmem, pages, poison);
+			clear_cpu(gt->lmem, &blocks, poison);
 			cpu += ktime_get();
 
-			gpu = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+			gpu = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
 			sync = -ktime_get();
-			err = clear_blt(ce, NULL, pages, size, 0, &rq);
+			err = clear_blt(ce, NULL, &gt->lmem->mm, &blocks,
+					INTEL_GT_CLEAR_ALLOC_CYCLES, true,
+					&rq);
 			if (rq) {
 				i915_sw_fence_complete(&rq->submit);
 				if (i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, HZ) < 0)
@@ -121,32 +140,37 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 				i915_request_put(rq);
 			}
 			sync += ktime_get();
-			gpu += READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+			gpu += READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
 
 			gpu = intel_gt_clock_interval_to_ns(gt, gpu);
 			if (gpu) {
-				unsigned int sz = sg_dma_len(pages->sgl);
 				unsigned int cpu_bw , gpu_bw;
 
-				cpu_bw = div_u64(mul_u64_u32_shr(sz, NSEC_PER_SEC, 20), cpu);
-				gpu_bw = div_u64(mul_u64_u32_shr(sz, NSEC_PER_SEC, 20), gpu);
+				cpu_bw = div_u64(mul_u64_u32_shr(size, NSEC_PER_SEC, 20), cpu);
+				gpu_bw = div_u64(mul_u64_u32_shr(size, NSEC_PER_SEC, 20), gpu);
 
 				dev_info(gt->i915->drm.dev,
-					 "GT%d: checked with size:%x, CPU write:%dMiB/s, GPU write:%dMiB/s, overhead:%lldns, freq:%dMHz\n",
-					 id, sz, cpu_bw, gpu_bw, sync - gpu,
+					 "GT%d: checked with size:%llx, CPU write:%dMiB/s, GPU write:%dMiB/s, overhead:%lldns (%d%%), freq:%dMHz\n",
+					 id, size, cpu_bw, gpu_bw, sync - gpu,
+					 (int)div_u64((sync - gpu) * 100, sync),
 					 intel_rps_read_actual_frequency(&gt->rps));
 
 				max_bw = max(max_bw, gpu_bw);
 			}
 
 			if (err == 0) {
+				struct i915_buddy_block *block;
+				u64 sample, offset, sz;
 				void * __iomem iova;
-				u64 sample;
+
+				block = list_first_entry(&blocks, typeof(*block), link);
+				offset = i915_buddy_block_offset(block);
+				sz = i915_buddy_block_size(&gt->lmem->mm, block);
 
 				offset -= gt->lmem->region.start;
 				iova = io_mapping_map_wc(&gt->lmem->iomap, offset, size);
 
-				offset = igt_random_offset(&prng, 0, sg_dma_len(pages->sgl), sizeof(sample), 1);
+				offset = igt_random_offset(&prng, 0, sz, sizeof(sample), 1);
 				memcpy_fromio(&sample, iova + offset, sizeof(sample));
 				io_mapping_unmap(iova);
 
@@ -154,13 +178,12 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 					pr_err("GT%d: read @%llx of [%llx + %llx] and found %llx instead of zero!\n",
 					       id, offset,
 					       i915_buddy_block_offset(block),
-					       i915_buddy_block_size(&gt->lmem->mm, block),
-					       sample);
+					       sz, sample);
 					err = -EINVAL;
 				}
 			}
 
-			__intel_memory_region_put_pages_buddy(gt->lmem, &blocks);
+			__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, false);
 			if (err)
 				break;
 		}
@@ -218,9 +241,6 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_remove_request(&qos);
-
-	sg_free_table(pages);
-	kfree(pages);
 
 	if (igt_flush_test(i915))
 		err = -EIO;

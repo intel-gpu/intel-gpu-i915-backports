@@ -278,6 +278,14 @@ struct intel_guc {
 		unsigned long last_stat_jiffies;
 	} timestamp;
 
+	/**
+	 * @dead_guc_worker: Asynchronous worker thread for forcing a GuC reset.
+	 * Specifically used when the G2H handler wants to issue a reset. Resets
+	 * require flushing the G2H queue. So, the G2H processing itself must not
+	 * trigger a reset directly. Instead, go via this worker.
+	 */
+	struct work_struct dead_guc_worker;
+
 	/* @stall_ms: To insert GuC stalls */
 	u32  stall_ms;
 
@@ -531,6 +539,7 @@ int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 					 const u32 *msg, u32 len);
 int intel_guc_error_capture_process_msg(struct intel_guc *guc,
 					const u32 *msg, u32 len);
+int intel_guc_crash_process_msg(struct intel_guc *guc, u32 action);
 void intel_guc_tlb_invalidation_done(struct intel_guc *guc, u32 seqno);
 int intel_guc_engine_sched_done_process_msg(struct intel_guc *guc,
 					    const u32 *msg, u32 len);

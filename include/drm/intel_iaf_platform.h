@@ -30,15 +30,13 @@ enum product_type {
 
 /**
  * enum iaf_dev_event - events generated to the parent device
- * @IAF_DEV_CONNECTIVITY: Connectivity event occurred
- * @IAF_DEV_ERROR: An error occurred
+ * @IAF_DEV_REMOVE: Notify parent that device is being removed
  * @IAF_DEV_EVENTS: end of list
  *
  * Connectivity events, possible errors, etc.
  */
 enum iaf_dev_event {
-	IAF_DEV_CONNECTIVITY,
-	IAF_DEV_ERROR,
+	IAF_DEV_REMOVE,
 	IAF_DEV_EVENTS
 };
 
@@ -140,8 +138,8 @@ struct iaf_pdata {
 	int (*register_dev)(void *parent, void *handle, u32 fabric_id,
 			    const struct iaf_ops *ops);
 	void (*unregister_dev)(void *parent, const void *handle);
-	int (*dev_event)(void *parent, void *handle,
-			 enum iaf_dev_event event, void *event_data);
+	int (*dev_event)(void *parent, const void *handle,
+			 const enum iaf_dev_event event, void *event_data);
 };
 
 #endif /* __INTEL_IAF_PLATFORM_H */

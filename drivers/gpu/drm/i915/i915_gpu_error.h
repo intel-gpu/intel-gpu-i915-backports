@@ -155,6 +155,7 @@ struct intel_engine_coredump {
 		int active;
 		int guilty;
 		struct i915_sched_attr sched_attr;
+		u32 hwsp_seqno;
 		bool sip_installed;
 
 		struct i915_uuid_resource_coredump *uuid_dump;
@@ -346,11 +347,17 @@ static inline int i915_reset_engine_count(const struct intel_engine_cs *engine)
 #define CORE_DUMP_FLAG_NONE           0x0
 #define CORE_DUMP_FLAG_IS_GUC_CAPTURE BIT(0)
 
-
-#if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
-
+#if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) && IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 void intel_klog_error_capture(struct intel_gt *gt,
 			      intel_engine_mask_t engine_mask);
+#else
+static inline void intel_klog_error_capture(struct intel_gt *gt,
+					    intel_engine_mask_t engine_mask)
+{
+}
+#endif
+
+#if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
 
 __printf(2, 3)
 void i915_error_printf(struct drm_i915_error_state_buf *e, const char *f, ...);
@@ -428,17 +435,14 @@ static inline void i915_uuid_get(struct i915_uuid_resource *uuid_res)
 {
 	kref_get(&uuid_res->ref);
 }
+
 void __i915_uuid_free(struct kref *ref);
 static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
 {
 	kref_put(&uuid_res->ref, __i915_uuid_free);
 }
-#else
 
-static inline void intel_klog_error_capture(struct intel_gt *gt,
-					    intel_engine_mask_t engine_mask)
-{
-}
+#else
 
 __printf(2, 3)
 static inline void

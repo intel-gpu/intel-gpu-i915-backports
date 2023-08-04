@@ -392,7 +392,7 @@ void __i915_request_skip(struct i915_request *rq);
 bool i915_request_set_error_once(struct i915_request *rq, int error);
 struct i915_request *i915_request_mark_eio(struct i915_request *rq);
 
-struct i915_request *__i915_request_commit(struct i915_request *request);
+void __i915_request_commit(struct i915_request *rq);
 void __i915_request_queue(struct i915_request *rq, int prio);
 void __i915_request_queue_bh(struct i915_request *rq);
 
@@ -574,13 +574,11 @@ static inline bool i915_request_started(const struct i915_request *rq)
 	if (i915_request_signaled(rq))
 		return true;
 
-	result = true;
 	rcu_read_lock(); /* the HWSP may be freed at runtime */
-	if (likely(!i915_request_signaled(rq)))
-		/* Remember: started but may have since been preempted! */
-		result = __i915_request_has_started(rq);
+	result = __i915_request_has_started(rq);
 	rcu_read_unlock();
 
+	/* Remember: started but may have since been preempted! */
 	return result;
 }
 
@@ -639,10 +637,8 @@ static inline bool i915_request_completed(const struct i915_request *rq)
 	if (i915_request_signaled(rq))
 		return true;
 
-	result = true;
 	rcu_read_lock(); /* the HWSP may be freed at runtime */
-	if (likely(!i915_request_signaled(rq)))
-		result = __i915_request_is_complete(rq);
+	result = __i915_request_is_complete(rq);
 	rcu_read_unlock();
 
 	return result;

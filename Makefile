@@ -57,8 +57,6 @@ else
 DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
 endif
 
-KER_VER := $(shell cat versions | grep BASE_KERNEL_NAME | cut -d "\"" -f 2 | cut -d "-" -f 1-|sed "s/-/./g" 2>/dev/null || echo 1)
-
 ifneq ($(MAKECMDGOALS) , dkmsrpm-pkg)
 BASE_KER_VER=$(shell cat $(KLIB_BUILD)/include/config/kernel.release | cut -d '-' -f 1-2 2> /dev/null)
 
@@ -119,8 +117,8 @@ endif
 	$(call filechk,osv_version.h)
 endif
 
-# VERSION is generated as 1.DII_TAG.BackportVersion
-VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+# VERSION is generated as 1.DII_TAG
+VERSION := 1.$(DII_TAG).$(BKPT_VER)
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)

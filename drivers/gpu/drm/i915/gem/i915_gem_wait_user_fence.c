@@ -91,19 +91,22 @@ static bool ufence_compare(const struct ufence_wake *wake)
 
 struct engine_wait {
 	struct wait_queue_entry wq_entry;
-	struct intel_breadcrumbs *breadcrumbs;
+	union {
+		struct wait_queue_head *wq;
+		struct intel_breadcrumbs *breadcrumbs;
+	};
 	struct engine_wait *next;
 };
 
 static void
-add_soft_wait(struct drm_i915_private *i915, struct engine_wait *wait)
+add_soft_wait(struct wait_queue_head *wq, struct engine_wait *wait)
 {
 	wait->next = NULL;
-	wait->breadcrumbs = NULL;
+	wait->wq = wq;
 	wait->wq_entry.flags = 0;
 	wait->wq_entry.private = current;
 	wait->wq_entry.func = default_wake_function;
-	add_wait_queue(&i915->user_fence_wq, &wait->wq_entry);
+	add_wait_queue(wq, &wait->wq_entry);
 }
 
 static bool wait_exists(struct engine_wait *wait, struct intel_breadcrumbs *b)
@@ -169,10 +172,14 @@ static int add_gt_wait(struct i915_gem_context *ctx, struct engine_wait **head)
 	return err;
 }
 
-static void
-remove_waits(struct drm_i915_private *i915, struct engine_wait *wait)
+static void remove_waits(struct engine_wait *wait)
 {
-	remove_wait_queue(&i915->user_fence_wq, &wait->wq_entry);
+	remove_wait_queue(wait->wq, &wait->wq_entry);
+	wait = wait->next;
+	if (!wait)
+		return;
+
+	remove_wait_queue(wait->wq, &wait->wq_entry);
 	wait = wait->next;
 
 	while (wait) {
@@ -279,7 +286,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 {
 	struct prelim_drm_i915_gem_wait_user_fence *arg = data;
 	struct i915_gem_context *ctx = NULL;
-	struct engine_wait wait;
+	struct engine_wait g_wait, c_wait;
 	struct ufence_wake wake;
 	unsigned long timeout;
 	ktime_t start;
@@ -316,29 +323,27 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	GEM_BUG_ON(arg->addr >> PAGE_SHIFT !=
 		   (arg->addr + wake.width - 1) >> PAGE_SHIFT);
 
-	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_SOFT)) {
-		ctx = i915_gem_context_lookup(file->driver_priv, arg->ctx_id);
-		if (!ctx)
-			return -ENOENT;
-	}
-
 	wake.tsk = current;
 	wake.value = arg->value;
 	wake.mask = arg->mask;
 	wake.op = arg->op;
 	wake.ptr = u64_to_user_ptr(arg->addr);
 
+	if (ufence_fault(&wake))
+		return -EFAULT;
+
+	if (ufence_compare(&wake))
+		return 0;
+
+	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_SOFT)) {
+		ctx = i915_gem_context_lookup(file->driver_priv, arg->ctx_id);
+		if (!ctx)
+			return -ENOENT;
+	}
+
 	err = i915_user_extensions(u64_to_user_ptr(arg->extensions),
 				   NULL, 0, &wake);
 	if (err)
-		goto out_ctx;
-
-	if (ufence_fault(&wake)) {
-		err = -EFAULT;
-		goto out_ctx;
-	}
-
-	if (ufence_compare(&wake))
 		goto out_ctx;
 
 	timeout = to_wait_timeout(arg);
@@ -369,9 +374,12 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	if (busy_wait(&wake, jiffies_to_nsecs(min(2ul, timeout))))
 		goto out_time;
 
-	add_soft_wait(to_i915(dev), &wait);
+	add_soft_wait(&to_i915(dev)->user_fence_wq, &g_wait);
 	if (ctx) {
-		err = add_gt_wait(ctx, &wait.next);
+		add_soft_wait(&ctx->user_fence_wq, &c_wait);
+		g_wait.next = &c_wait;
+
+		err = add_gt_wait(ctx, &c_wait.next);
 		if (err)
 			goto out_wait;
 	}
@@ -384,6 +392,11 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 
 		if (ctx && i915_gem_context_is_banned(ctx)) {
 			err = -EIO;
+			break;
+		}
+
+		if (ctx && i915_gem_context_is_closed(ctx)) {
+			err = -ENOENT;
 			break;
 		}
 
@@ -407,7 +420,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	__set_current_state(TASK_RUNNING);
 
 out_wait:
-	remove_waits(to_i915(dev), &wait);
+	remove_waits(&g_wait);
 out_time:
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_ABSTIME) && arg->timeout > 0) {
 		arg->timeout -= ktime_to_ns(ktime_sub(ktime_get(), start));

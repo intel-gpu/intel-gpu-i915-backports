@@ -17,7 +17,9 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	struct pci_dev *pdev = to_pci_dev(dev->dev);
 	const struct sseu_dev_info *sseu = &to_gt(i915)->info.sseu;
 	drm_i915_getparam_t *param = data;
+	struct intel_memory_region *mr;
 	int value = 0;
+	int id;
 
 	switch (param->param) {
 	case I915_PARAM_IRQ_ACTIVE:
@@ -191,13 +193,19 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		if (!HAS_LMEM(i915))
 			return -ENODEV;
 
-		value = to_gt(i915)->lmem->total;
+		value = 0; /* overflow! */
+		for_each_memory_region(mr, i915, id)
+			if (mr->type == INTEL_MEMORY_LOCAL)
+				value += mr->total;
 		break;
 	case PRELIM_I915_PARAM_LMEM_AVAIL_BYTES:
 		if (!HAS_LMEM(i915))
 			return -ENODEV;
 
-		value = to_gt(i915)->lmem->avail;
+		value = 0; /* overflow! */
+		for_each_memory_region(mr, i915, id)
+			if (mr->type == INTEL_MEMORY_LOCAL)
+				value += atomic64_read(&mr->avail);
 		break;
 	case PRELIM_I915_PARAM_HAS_SVM:
 		value = i915_has_svm(i915);

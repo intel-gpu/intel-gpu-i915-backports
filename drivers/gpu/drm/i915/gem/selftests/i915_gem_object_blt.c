@@ -33,7 +33,7 @@ perf_object_create(struct drm_i915_private *i915, unsigned long sz)
 {
 	struct drm_i915_gem_object *obj;
 
-	obj = i915_gem_object_create_lmem(i915, sz, 0);
+	obj = i915_gem_object_create_lmem(i915, sz, I915_BO_ALLOC_USER);
 	if (IS_ERR(obj))
 		obj = i915_gem_object_create_internal(i915, sz);
 
@@ -618,7 +618,7 @@ static int __igt_obj_window_blt_copy_with_ccs(struct drm_i915_private *i915,
 
 	i915_gem_ww_ctx_init(&ww, true);
 	/* Firts Create all LMEM buf as pages size may be greated than SMEM */
-	src = i915_gem_object_create_region(lmem, size, 0);
+	src = i915_gem_object_create_region(lmem, size, I915_BO_ALLOC_USER);
 	if (IS_ERR(src)) {
 		err = PTR_ERR(src);
 		pr_err("create region failed. %d\n", err);
@@ -637,7 +637,7 @@ static int __igt_obj_window_blt_copy_with_ccs(struct drm_i915_private *i915,
 		pr_err("create region failed. %d\n", err);
 		goto err_put_in;
 	}
-	dst = i915_gem_object_create_region(lmem, size, 0);
+	dst = i915_gem_object_create_region(lmem, size, I915_BO_ALLOC_USER);
 	if (IS_ERR(dst)) {
 		err = PTR_ERR(dst);
 		pr_err("create region failed. %d\n", err);

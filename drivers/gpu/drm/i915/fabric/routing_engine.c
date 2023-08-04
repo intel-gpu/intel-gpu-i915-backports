@@ -79,7 +79,7 @@ static int debugfs_routing_status_open(struct inode *inode, struct file *file)
 	if (!info)
 		return -ENOMEM;
 
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 
 	info->blob.size = scnprintf(info->buf, ARRAY_SIZE(info->buf),
 				    "gs %d ge %d err %d d %u s %u %u p %u %u %u %u pl %u req %llu tl %llu ti %llu tp %llu\n",
@@ -92,7 +92,7 @@ static int debugfs_routing_status_open(struct inode *inode, struct file *file)
 				    status->num_planes, status->serviced_requests,
 				    status->usec_logic, status->usec_io, status->usec_p2p);
 
-	unlock_exclusive(&routable_lock);
+	up_write(&routable_lock);
 
 	info->blob.data = info->buf;
 	file->private_data = info;
@@ -315,9 +315,10 @@ void routing_sweep(u64 serviced_requests)
 	int gen_start;
 	int err;
 
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 
 	gen_start = atomic_inc_return(&routing_context.gen_start);
+
 	pr_debug("routing start: gen %u\n", gen_start);
 
 	routing_topo_reset_sd_error(&routing_context.topo);
@@ -326,7 +327,7 @@ void routing_sweep(u64 serviced_requests)
 	err = routing_logic_run(&routing_context.topo);
 	logic_nsecs = local_clock() - ref;
 
-	lock_downgrade_to_shared(&routable_lock);
+	downgrade_write(&routable_lock); /* downgrade to shared/read lock */
 
 	if (err) {
 		pr_err("failed to route fabric: %d\n", err);
@@ -369,7 +370,7 @@ finalize:
 	}
 
 	print_status(err, serviced_requests, logic_nsecs, io_nsecs, p2p_nsecs);
-	unlock_shared(&routable_lock);
+	up_read(&routable_lock);
 }
 
 /**
@@ -465,9 +466,9 @@ int routing_sd_once(struct fsubdev *sd)
 	if (err)
 		return err;
 
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 	list_add(&sd->routable_link, &routable_list);
-	unlock_exclusive(&routable_lock);
+	up_write(&routable_lock);
 
 	return 0;
 }
@@ -528,13 +529,13 @@ void routing_dev_unroute(struct fdev *dev)
  */
 void routing_sd_destroy(struct fsubdev *sd)
 {
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 
 	list_del_init(&sd->routable_link);
 	routing_sd_transition_error(sd);
 	memset(&sd->routing, 0, sizeof(sd->routing));
 
-	unlock_exclusive(&routable_lock);
+	up_write(&routable_lock);
 }
 
 /**

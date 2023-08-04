@@ -146,7 +146,6 @@ i915_gem_object_set_to_wc_domain(struct drm_i915_gem_object *obj, bool write)
 	if (write) {
 		obj->read_domains = I915_GEM_DOMAIN_WC;
 		obj->write_domain = I915_GEM_DOMAIN_WC;
-		obj->mm.dirty = true;
 	}
 
 	i915_gem_object_unpin_pages(obj);
@@ -209,7 +208,6 @@ i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write)
 
 		obj->read_domains = I915_GEM_DOMAIN_GTT;
 		obj->write_domain = I915_GEM_DOMAIN_GTT;
-		obj->mm.dirty = true;
 
 		spin_lock(&obj->vma.lock);
 		for_each_ggtt_vma(vma, obj)
@@ -225,7 +223,6 @@ i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write)
 /**
  * Changes the cache-level of an object across all VMA.
  * @obj: object to act on
- * @ww: locking context
  * @cache_level: new cache level to set for the object
  *
  * After this function returns, the object will be in the new cache-level
@@ -239,7 +236,6 @@ i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write)
  * that all direct access to the scanout remains coherent.
  */
 int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
-				    struct i915_gem_ww_ctx *ww,
 				    enum i915_cache_level cache_level)
 {
 	int ret;
@@ -262,7 +258,7 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
 	obj->cache_dirty = true;
 
 	/* The cache-level will be applied when each vma is rebound. */
-	return i915_gem_object_unbind(obj, ww,
+	return i915_gem_object_unbind(obj, NULL,
 				      I915_GEM_OBJECT_UNBIND_ACTIVE |
 				      I915_GEM_OBJECT_UNBIND_BARRIER);
 }
@@ -337,14 +333,7 @@ int i915_gem_set_caching_ioctl(struct drm_device *dev, void *data,
 	 * not allowed to be changed by userspace.
 	 */
 	if (i915_gem_object_is_proxy(obj)) {
-		/*
-		 * Silently allow cached for userptr; the vulkan driver
-		 * sets all objects to cached
-		 */
-		if (!i915_gem_object_is_userptr(obj) ||
-		    args->caching != I915_CACHING_CACHED)
-			ret = -ENXIO;
-
+		ret = -ENXIO;
 		goto out;
 	}
 
@@ -357,7 +346,7 @@ int i915_gem_set_caching_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		goto out;
 
-	ret = i915_gem_object_set_cache_level(obj, NULL, level);
+	ret = i915_gem_object_set_cache_level(obj, level);
 	i915_gem_object_unlock(obj);
 
 out:
@@ -397,7 +386,7 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 	 * of uncaching, which would allow us to flush all the LLC-cached data
 	 * with that bit in the PTE to main memory with just one PIPE_CONTROL.
 	 */
-	ret = i915_gem_object_set_cache_level(obj, NULL,
+	ret = i915_gem_object_set_cache_level(obj,
 					      HAS_WT(i915) ?
 					      I915_CACHE_WT : I915_CACHE_NONE);
 	if (ret)
@@ -505,6 +494,7 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 	struct drm_i915_gem_object *obj;
 	u32 read_domains = args->read_domains;
 	u32 write_domain = args->write_domain;
+	struct i915_gem_ww_ctx ww;
 	int err;
 
 	/* Only handle setting domains to types used by the CPU. */
@@ -543,21 +533,6 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 	if (err)
 		goto out;
 
-	if (i915_gem_object_is_userptr(obj)) {
-		/*
-		 * Try to grab userptr pages, iris uses set_domain to check
-		 * userptr validity
-		 */
-		err = i915_gem_object_userptr_validate(obj);
-		if (!err)
-			err = i915_gem_object_wait(obj,
-						   I915_WAIT_INTERRUPTIBLE |
-						   I915_WAIT_PRIORITY |
-						   (write_domain ? I915_WAIT_ALL : 0),
-						   MAX_SCHEDULE_TIMEOUT);
-		goto out;
-	}
-
 	/*
 	 * Proxy objects do not control access to the backing storage, ergo
 	 * they cannot be used as a means to manipulate the cache domain
@@ -569,48 +544,48 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 
-	err = i915_gem_object_lock_interruptible(obj, NULL);
-	if (err)
-		goto out;
+	for_i915_gem_ww(&ww, err, true) {
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
 
-	/*
-	 * Flush and acquire obj->pages so that we are coherent through
-	 * direct access in memory with previous cached writes through
-	 * shmemfs and that our cache domain tracking remains valid.
-	 * For example, if the obj->filp was moved to swap without us
-	 * being notified and releasing the pages, we would mistakenly
-	 * continue to assume that the obj remained out of the CPU cached
-	 * domain.
-	 */
-	err = i915_gem_object_pin_pages_sync(obj);
-	if (err)
-		goto out_unlock;
+		/*
+		 * Flush and acquire obj->pages so that we are coherent through
+		 * direct access in memory with previous cached writes through
+		 * shmemfs and that our cache domain tracking remains valid.
+		 * For example, if the obj->filp was moved to swap without us
+		 * being notified and releasing the pages, we would mistakenly
+		 * continue to assume that the obj remained out of the CPU
+		 * cached domain.
+		 */
+		err = i915_gem_object_pin_pages_sync(obj);
+		if (err)
+			continue;
 
-	/*
-	 * Already in the desired write domain? Nothing for us to do!
-	 *
-	 * We apply a little bit of cunning here to catch a broader set of
-	 * no-ops. If obj->write_domain is set, we must be in the same
-	 * obj->read_domains, and only that domain. Therefore, if that
-	 * obj->write_domain matches the request read_domains, we are
-	 * already in the same read/write domain and can skip the operation,
-	 * without having to further check the requested write_domain.
-	 */
-	if (READ_ONCE(obj->write_domain) == read_domains)
-		goto out_unpin;
+		/*
+		 * Already in the desired write domain? Nothing for us to do!
+		 *
+		 * We apply a little bit of cunning here to catch a broader set
+		 * of no-ops. If obj->write_domain is set, we must be in the
+		 * same obj->read_domains, and only that domain. Therefore, if
+		 * that obj->write_domain matches the request read_domains, we
+		 * are already in the same read/write domain and can skip the
+		 * operation, without having to further check the requested
+		 * write_domain.
+		 */
+		if (READ_ONCE(obj->write_domain) == read_domains)
+			goto out_unpin;
 
-	if (read_domains & I915_GEM_DOMAIN_WC)
-		err = i915_gem_object_set_to_wc_domain(obj, write_domain);
-	else if (read_domains & I915_GEM_DOMAIN_GTT)
-		err = i915_gem_object_set_to_gtt_domain(obj, write_domain);
-	else
-		err = i915_gem_object_set_to_cpu_domain(obj, write_domain);
+		if (read_domains & I915_GEM_DOMAIN_WC)
+			err = i915_gem_object_set_to_wc_domain(obj, write_domain);
+		else if (read_domains & I915_GEM_DOMAIN_GTT)
+			err = i915_gem_object_set_to_gtt_domain(obj, write_domain);
+		else
+			err = i915_gem_object_set_to_cpu_domain(obj, write_domain);
 
 out_unpin:
-	i915_gem_object_unpin_pages(obj);
-
-out_unlock:
-	i915_gem_object_unlock(obj);
+		i915_gem_object_unpin_pages(obj);
+	}
 
 	if (!err && write_domain)
 		i915_gem_object_invalidate_frontbuffer(obj, ORIGIN_CPU);
@@ -642,7 +617,7 @@ int i915_gem_object_prepare_read(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_pin_pages_sync(obj);
 	if (ret)
 		return ret;
 
@@ -693,7 +668,7 @@ int i915_gem_object_prepare_write(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages(obj);
+	ret = i915_gem_object_pin_pages_sync(obj);
 	if (ret)
 		return ret;
 
@@ -726,7 +701,6 @@ int i915_gem_object_prepare_write(struct drm_i915_gem_object *obj,
 
 out:
 	i915_gem_object_invalidate_frontbuffer(obj, ORIGIN_CPU);
-	obj->mm.dirty = true;
 	/* return with the pages pinned */
 	return 0;
 

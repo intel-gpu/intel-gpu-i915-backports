@@ -65,6 +65,9 @@ i915-y += i915_driver.o \
 	  vlv_sideband.o \
 	  vlv_suspend.o
 
+# automagic Kconfig dependency defeated by magic macro hell
+$(obj)/i915_driver.o: $(wildcard include/config/DRM_I915_CHICKEN_*)
+
 # core library code
 i915-y += \
 	dma_resv_utils.o \
