@@ -90,8 +90,7 @@ static void dpt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= PTE_LM;
 
 	vma->vm->insert_entries(vma->vm, stash, vma, pat_index, pte_flags);
-
-	vma->page_sizes.gtt = I915_GTT_PAGE_SIZE;
+	vma->page_sizes = I915_GTT_PAGE_SIZE;
 
 	/*
 	 * Without aliasing PPGTT there's no difference between
@@ -237,7 +236,7 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	struct i915_address_space *vm;
 	struct i915_dpt *dpt;
 	size_t size;
-	int ret;
+	int err;
 
 	if (intel_fb_needs_pot_stride_remap(fb))
 		size = intel_remapped_info_size(&fb->remapped_view.gtt.remapped);
@@ -256,15 +255,7 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	if (IS_ERR(dpt_obj))
 		return ERR_CAST(dpt_obj);
 
-	ret = i915_gem_object_lock_interruptible(dpt_obj, NULL);
-	if (!ret) {
-		ret = i915_gem_object_set_cache_level(dpt_obj, NULL, I915_CACHE_NONE);
-		i915_gem_object_unlock(dpt_obj);
-	}
-	if (ret) {
-		i915_gem_object_put(dpt_obj);
-		return ERR_PTR(ret);
-	}
+	i915_gem_object_set_cache_coherency(dpt_obj, I915_CACHE_NONE);
 
 	dpt = kzalloc(sizeof(*dpt), GFP_KERNEL);
 	if (!dpt) {
@@ -280,7 +271,11 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	vm->total = (size / sizeof(gen8_pte_t)) * I915_GTT_PAGE_SIZE;
 	vm->is_dpt = true;
 
-	i915_address_space_init(vm, VM_CLASS_DPT);
+	err = i915_address_space_init(vm, VM_CLASS_DPT);
+	if (err) {
+		i915_gem_object_put(dpt_obj);
+		return ERR_PTR(err);
+	}
 
 	vm->insert_page = dpt_insert_page;
 	vm->clear_range = dpt_clear_range;

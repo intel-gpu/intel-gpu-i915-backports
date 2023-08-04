@@ -161,3 +161,19 @@ dkmsrpm-pkg:
 .PHONY: binrpm-pkg
 binrpm-pkg:
 	@$(MAKE) -f Makefile.backport binrpm-pkg
+
+.PHONY: dmadkmsdeb-pkg
+dmadkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport dmadkmsdeb-pkg
+
+.PHONY: i915dkmsdeb-pkg
+i915dkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport i915dkmsdeb-pkg
+
+.PHONY: dkmsdeb-pkg
+dkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport dkmsdeb-pkg
+
+.PHONY: bindeb-pkg
+bindeb-pkg:
+	@$(MAKE) -f Makefile.backport bindeb-pkg

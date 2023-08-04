@@ -138,9 +138,6 @@ struct i915_gem_context {
 	/** client: struct i915_drm_client */
 	struct i915_drm_client *client;
 
-	/** id: id we passed to userspace, for debugger */
-	u32 id;
-
 	/** link: &drm_client.context_list */
 	struct list_head client_link;
 
@@ -258,6 +255,8 @@ struct i915_gem_context {
 		/** @engines: list of stale engines */
 		struct list_head engines;
 	} stale;
+
+	struct wait_queue_head user_fence_wq;
 
 	/* WA for VLK-20104 */
 	bool  bcs0_pm_disabled;

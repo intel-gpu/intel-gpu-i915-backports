@@ -7,6 +7,7 @@
 #define __INTEL_GT_REGS__
 
 #include "i915_reg_defs.h"
+#include "display/intel_display_reg_defs.h"	/* VLV_DISPLAY_BASE */
 
 #define MCR_REG(offset)	((const i915_mcr_reg_t){ .reg = (offset) })
 
@@ -1244,6 +1245,7 @@
 #define   ENABLE_SMALLPL			REG_BIT(15)
 #define   SC_DISABLE_POWER_OPTIMIZATION_EBB	REG_BIT(9)
 #define   GEN11_SAMPLER_ENABLE_HEADLESS_MSG	REG_BIT(5)
+#define   GEN11_INDIRECT_STATE_BASE_ADDR_OVERRIDE	REG_BIT(0)
 
 #define GEN9_HALF_SLICE_CHICKEN7		MCR_REG(0xe194)
 #define   DG2_DISABLE_ROUND_ENABLE_ALLOW_FOR_SSLA	REG_BIT(15)

@@ -84,4 +84,8 @@ static inline bool i2c_client_has_driver(struct i2c_client *client)
 }
 #endif
 
+#ifdef BPM_I2C_NEW_CLIENT_DEVICE_NOT_PRESENT
+#define i2c_new_client_device i2c_new_device
+#endif
+
 #endif /*_BACKPORT_LINUX_I2C_H */

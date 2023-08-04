@@ -504,15 +504,40 @@ EXPORT_SYMBOL(drm_dev_unplug);
 static int drm_fs_cnt;
 static struct vfsmount *drm_fs_mnt;
 
+
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+static const struct dentry_operations drm_fs_dops = {
+        .d_dname        = simple_dname,
+};
+
+static const struct super_operations drm_fs_sops = {
+        .statfs         = simple_statfs,
+};
+
+static struct dentry *drm_fs_mount(struct file_system_type *fs_type, int flags,
+                                   const char *dev_name, void *data)
+{
+        return mount_pseudo(fs_type,
+                            "drm:",
+                            &drm_fs_sops,
+                            &drm_fs_dops,
+                            0x010203ff);
+}
+#else
 static int drm_fs_init_fs_context(struct fs_context *fc)
 {
 	return init_pseudo(fc, 0x010203ff) ? 0 : -ENOMEM;
 }
+#endif
 
 static struct file_system_type drm_fs_type = {
 	.name		= "drm",
 	.owner		= THIS_MODULE,
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+	.mount          = drm_fs_mount,
+#else
 	.init_fs_context = drm_fs_init_fs_context,
+#endif
 	.kill_sb	= kill_anon_super,
 };
 

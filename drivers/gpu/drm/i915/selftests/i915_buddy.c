@@ -10,15 +10,18 @@
 #include "../i915_selftest.h"
 #include "i915_random.h"
 
+static struct i915_buddy_block *
+get_buddy(struct i915_buddy_block *block)
+{
+	return block->parent ? __get_buddy(block, block->parent) : NULL;
+}
+
 static void __igt_dump_block(struct i915_buddy_mm *mm,
 			     struct i915_buddy_block *block,
 			     bool buddy)
 {
-	pr_err("block info: header=%llx, state=%u, order=%d, offset=%llx size=%llx root=%s buddy=%s\n",
+	pr_err("block info: header=%llx, size=%llx root=%s buddy=%s\n",
 	       block->header,
-	       i915_buddy_block_state(block),
-	       i915_buddy_block_order(block),
-	       i915_buddy_block_offset(block),
 	       i915_buddy_block_size(mm, block),
 	       str_yes_no(!block->parent),
 	       str_yes_no(buddy));
@@ -40,19 +43,9 @@ static int igt_check_block(struct i915_buddy_mm *mm,
 			   struct i915_buddy_block *block)
 {
 	struct i915_buddy_block *buddy;
-	unsigned int block_state;
 	u64 block_size;
 	u64 offset;
 	int err = 0;
-
-	block_state = i915_buddy_block_state(block);
-
-	if (block_state != I915_BUDDY_ALLOCATED &&
-	    block_state != I915_BUDDY_FREE &&
-	    block_state != I915_BUDDY_SPLIT) {
-		pr_err("block state mismatch\n");
-		err = -EINVAL;
-	}
 
 	block_size = i915_buddy_block_size(mm, block);
 	offset = i915_buddy_block_offset(block);
@@ -99,12 +92,6 @@ static int igt_check_block(struct i915_buddy_mm *mm,
 			pr_err("buddy size mismatch\n");
 			err = -EINVAL;
 		}
-
-		if (i915_buddy_block_state(buddy) == block_state &&
-		    block_state == I915_BUDDY_FREE) {
-			pr_err("block and its buddy are free\n");
-			err = -EINVAL;
-		}
 	}
 
 	return err;
@@ -127,8 +114,8 @@ static int igt_check_blocks(struct i915_buddy_mm *mm,
 	list_for_each_entry(block, blocks, link) {
 		err = igt_check_block(mm, block);
 
-		if (!i915_buddy_block_is_allocated(block)) {
-			pr_err("block not allocated\n"),
+		if (i915_buddy_block_is_free(block)) {
+			pr_err("block is still on a freelist\n"),
 			err = -EINVAL;
 		}
 
@@ -241,9 +228,9 @@ static int igt_check_mm(struct i915_buddy_mm *mm)
 			}
 		}
 
-		block = list_first_entry_or_null(&mm->free_list[order],
+		block = list_first_entry_or_null(&mm->dirty_list[order].list,
 						 struct i915_buddy_block,
-						 link);
+						 node.link);
 		if (block != root) {
 			pr_err("root mismatch at order=%u\n", order);
 			err = -EINVAL;
@@ -428,8 +415,7 @@ static int igt_buddy_alloc_alignment(void *arg)
 		 __func__, start, size, chunk);
 
 	err = i915_buddy_init(&mm,
-			      start, start + BIT_ULL(size),
-			      BIT_ULL(chunk));
+			      start, start + BIT_ULL(size), BIT_ULL(chunk));
 	if (err)
 		return err;
 

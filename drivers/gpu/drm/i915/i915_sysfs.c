@@ -257,16 +257,30 @@ static ssize_t
 lmem_total_bytes_show(struct device *kdev, struct device_attribute *attr, char *buf)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-	u64 lmem_total = to_gt(i915)->lmem->total;
-	return sysfs_emit(buf, "%llu\n", lmem_total);
+	struct intel_memory_region *mr;
+	u64 value = 0;
+	int id;
+
+	for_each_memory_region(mr, i915, id)
+		if (mr->type == INTEL_MEMORY_LOCAL)
+			value += mr->total;
+
+	return sysfs_emit(buf, "%llu\n", value);
 }
 
 static ssize_t
 lmem_avail_bytes_show(struct device *kdev, struct device_attribute *attr, char *buf)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-	u64 lmem_avail = to_gt(i915)->lmem->avail;
-	return sysfs_emit(buf, "%llu\n", lmem_avail);
+	struct intel_memory_region *mr;
+	u64 value = 0;
+	int id;
+
+	for_each_memory_region(mr, i915, id)
+		if (mr->type == INTEL_MEMORY_LOCAL)
+			value += atomic64_read(&mr->avail);
+
+	return sysfs_emit(buf, "%llu\n", value);
 }
 
 #define I915_DEVICE_ATTR_RO(_name, _show) \
@@ -281,49 +295,65 @@ lmem_avail_bytes_show(struct device *kdev, struct device_attribute *attr, char *
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store), _show, _store}
 
-static I915_DEVICE_ATTR_RO(lmem_total_bytes, lmem_total_bytes_show);
-static I915_DEVICE_ATTR_RO(lmem_avail_bytes, lmem_avail_bytes_show);
+static DEVICE_ATTR_RO(lmem_total_bytes);
+static DEVICE_ATTR_RO(lmem_avail_bytes);
 
 static const struct attribute *lmem_attrs[] = {
-	&dev_attr_lmem_total_bytes.attr.attr,
-	&dev_attr_lmem_avail_bytes.attr.attr,
+	&dev_attr_lmem_total_bytes.attr,
+	&dev_attr_lmem_avail_bytes.attr,
 	NULL
 };
 
-static int i915_set_mem_region_acct_limit(struct drm_i915_private *i915,
-					  u32 index)
+static int
+__i915_set_mem_region_acct_limit(struct drm_i915_private *i915,
+				 u32 index, u8 val)
 {
 	struct intel_memory_region *mem;
-	int id, ret = 0;
-
-	i915_gem_drain_freed_objects(i915);
+	int id;
 
 	for_each_memory_region(mem, i915, id) {
+		resource_size_t limit;
+		int err = 0;
+
 		if (mem->type != INTEL_MEMORY_LOCAL)
 			continue;
 
-		mutex_lock(&mem->mm_lock);
-		mem->acct_limit[index] =
-			min_t(resource_size_t, mem->total,
-			      div_u64(i915->mm.user_acct_limit[index] *
-				      mem->total, 100));
+		limit = min_t(resource_size_t,
+			      mem->total, div_u64(val * mem->total, 100));
 
-		if (mem->acct_limit[index] < mem->acct_user[index])
-			ret = -EINVAL;
+		spin_lock(&mem->acct_lock);
+		if (limit >= mem->acct_user[index])
+			mem->acct_limit[index] = limit - mem->acct_user[index];
 		else
-			mem->acct_limit[index] = mem->acct_limit[index] -
-				mem->acct_user[index];
-		mutex_unlock(&mem->mm_lock);
-
-		if (ret)
-			break;
+			err = -EINVAL;
+		spin_unlock(&mem->acct_lock);
+		if (err)
+			return err;
 	}
+
+	return 0;
+}
+
+static int
+i915_set_mem_region_acct_limit(struct drm_i915_private *i915, u32 index, u8 val)
+{
+	int ret;
+
+	if (i915->mm.user_acct_limit[index] == val)
+		return 0;
+
+	i915_gem_drain_freed_objects(i915);
+
+	ret = __i915_set_mem_region_acct_limit(i915, index, val);
+	if (!ret)
+		WRITE_ONCE(i915->mm.user_acct_limit[index], val);
+	else
+		__i915_set_mem_region_acct_limit(i915, index, i915->mm.user_acct_limit[index]);
 
 	return ret;
 }
 
-static ssize_t i915_get_mem_region_acct_limit(struct device *dev, char *buf,
-					      u32 index)
+static ssize_t alloc_limit_show(struct device *dev, char *buf, u32 index)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
 
@@ -335,47 +365,8 @@ static void reset_alloc_limit(struct drm_i915_private *i915)
 	memset(i915->mm.user_acct_limit, 0, sizeof(i915->mm.user_acct_limit));
 }
 
-static ssize_t lmem_alloc_limit_store(struct device *dev,
-				      struct device_attribute *attr,
-				      const char *buf, size_t count)
-{
-	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
-	int ret = 0;
-	u8 val;
-
-	ret = kstrtou8(buf, 0, &val);
-	if (ret)
-		return ret;
-
-	if (val >= 100)
-		return -EINVAL;
-
-	if (val + i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED] > 100)
-		return -EINVAL;
-
-	if (!val) {
-		reset_alloc_limit(i915);
-		goto out;
-	} else {
-		i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM] = val;
-	}
-
-	ret = i915_set_mem_region_acct_limit(i915, INTEL_MEMORY_OVERCOMMIT_LMEM);
-
-out:
-	return ret ?: count;
-}
-
-static ssize_t lmem_alloc_limit_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	return i915_get_mem_region_acct_limit(dev, buf,
-					      INTEL_MEMORY_OVERCOMMIT_LMEM);
-}
-
-static ssize_t sharedmem_alloc_limit_store(struct device *dev,
-					   struct device_attribute *attr,
-					   const char *buf, size_t count)
+static ssize_t
+alloc_limit_store(struct device *dev, int id, const char *buf, size_t count)
 {
 	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
 	int ret;
@@ -388,39 +379,59 @@ static ssize_t sharedmem_alloc_limit_store(struct device *dev,
 	if (val >= 100)
 		return -EINVAL;
 
-	if (val + i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM] > 100)
+	if (val + i915->mm.user_acct_limit[!id] > 100)
 		return -EINVAL;
 
 	if (!val) {
 		reset_alloc_limit(i915);
 		goto out;
-	} else {
-		i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_SHARED] = val;
 	}
 
-	i915_set_mem_region_acct_limit(i915, INTEL_MEMORY_OVERCOMMIT_SHARED);
-
+	ret = i915_set_mem_region_acct_limit(i915, id, val);
 out:
-	return count;
+	return ret ?: count;
 }
 
-static ssize_t sharedmem_alloc_limit_show(struct device *dev,
-					  struct device_attribute *attr,
-					  char *buf)
+static ssize_t
+prelim_lmem_alloc_limit_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t count)
 {
-	return i915_get_mem_region_acct_limit(dev, buf,
-					      INTEL_MEMORY_OVERCOMMIT_SHARED);
+	return alloc_limit_store(dev, INTEL_MEMORY_OVERCOMMIT_LMEM,
+				 buf, count);
 }
 
-static I915_DEVICE_ATTR_RW(prelim_lmem_alloc_limit, 0644,
-			    lmem_alloc_limit_show, lmem_alloc_limit_store);
-static I915_DEVICE_ATTR_RW(prelim_sharedmem_alloc_limit, 0644,
-			   sharedmem_alloc_limit_show,
-			   sharedmem_alloc_limit_store);
+static ssize_t
+prelim_lmem_alloc_limit_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	return alloc_limit_show(dev, buf, INTEL_MEMORY_OVERCOMMIT_LMEM);
+}
+
+static ssize_t
+prelim_sharedmem_alloc_limit_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	return alloc_limit_store(dev, INTEL_MEMORY_OVERCOMMIT_SHARED,
+				 buf, count);
+}
+
+static ssize_t
+prelim_sharedmem_alloc_limit_show(struct device *dev,
+				  struct device_attribute *attr,
+				  char *buf)
+{
+	return alloc_limit_show(dev, buf, INTEL_MEMORY_OVERCOMMIT_SHARED);
+}
+
+static DEVICE_ATTR_RW(prelim_lmem_alloc_limit);
+static DEVICE_ATTR_RW(prelim_sharedmem_alloc_limit);
 
 static const struct attribute *alloc_limit_attrs[] = {
-	&dev_attr_prelim_lmem_alloc_limit.attr.attr,
-	&dev_attr_prelim_sharedmem_alloc_limit.attr.attr,
+	&dev_attr_prelim_lmem_alloc_limit.attr,
+	&dev_attr_prelim_sharedmem_alloc_limit.attr,
 	NULL
 };
 
@@ -502,7 +513,7 @@ prelim_csc_unique_id_show(struct device *kdev, struct device_attribute *attr, ch
 	return sysfs_emit(buf, "%llx\n", RUNTIME_INFO(i915)->uid);
 }
 
-static I915_DEVICE_ATTR_RO(prelim_csc_unique_id, prelim_csc_unique_id_show);
+static DEVICE_ATTR_RO(prelim_csc_unique_id);
 
 static ssize_t
 prelim_lmem_max_bw_Mbps_show(struct device *dev, struct device_attribute *attr, char *buff)
@@ -949,7 +960,7 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 		dev_err(kdev, "Failed adding prelim_uapi_version to sysfs\n");
 
 	if (INTEL_INFO(dev_priv)->has_csc_uid) {
-		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_csc_unique_id.attr.attr);
+		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_csc_unique_id.attr);
 		if (ret)
 			drm_warn(&dev_priv->drm, "UID sysfs setup failed\n");
 	}

@@ -295,6 +295,11 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 	if (i915_gem_object_has_segments(obj)) {
 		obj = i915_gem_object_lookup_segment(obj, page_offset << PAGE_SHIFT,
 						     NULL);
+		if (!obj) {
+			ret = VM_FAULT_SIGBUS;
+			goto out;
+		}
+
 		vm_start = area->vm_start + obj->segment_offset;
 		vm_size = obj->base.size;
 	} else {
@@ -328,10 +333,8 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		err = remap_io_sg(area, vm_start, vm_size,
 				  obj->mm.pages->sgl, iomap);
 
-		if (area->vm_flags & VM_WRITE) {
+		if (area->vm_flags & VM_WRITE)
 			GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
-			obj->mm.dirty = true;
-		}
 
 		i915_gem_object_unpin_pages(obj);
 	} while (err == -ENXIO);
@@ -466,7 +469,6 @@ retry:
 	if (write) {
 		GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
 		i915_vma_set_ggtt_write(vma);
-		obj->mm.dirty = true;
 	}
 
 err_fence:
@@ -508,6 +510,9 @@ vm_access(struct vm_area_struct *area, unsigned long addr,
 
 	if (i915_gem_object_has_segments(obj)) {
 		obj = i915_gem_object_lookup_segment(obj, addr, &offset);
+		if (!obj)
+			return -EINVAL;
+
 		if (len > obj->base.size - offset) {
 			/*  XXX more work to support multiple segments */
 			return -ENXIO;

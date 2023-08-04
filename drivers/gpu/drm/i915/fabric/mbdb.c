@@ -542,22 +542,41 @@ static void mbdb_ibox_handle_request(struct fsubdev *sd, u64 cw)
 /**
  * mbdb_seq_reset - Resets sequence numbers on a successful bootloader<->fw
  * transition, and unblocks the outbox.
- * @mbdb: The mailbox to operate on.
- * @cw: The inbound control word in flight
+ * @ibox: inbox to operate on
+ * @cw: inbound control word in flight
  */
-static void mbdb_seq_reset(struct mbdb *mbdb, u64 cw)
+static void mbdb_seq_reset(struct mbdb_ibox *ibox, u64 cw)
 {
-	/* This only applies to FW_START and RESET responses */
+	struct mbdb *mbdb = ibox->mbdb;
 
+	/* This only applies to FW_START and RESET responses */
 	if (mbdb_mbox_op_code(cw) != MBOX_OP_CODE_RESET &&
 	    mbdb_mbox_op_code(cw) != MBOX_OP_CODE_FW_START)
 		return;
 
-	if (mbdb_mbox_rsp_status(cw) == MBOX_RSP_STATUS_OK) {
+	if (mbdb_mbox_rsp_status(cw) != MBOX_RSP_STATUS_OK) {
+		/* don't reset seqs if the ops were rejected */
+	} else if (mbdb_mbox_op_code(cw) == MBOX_OP_CODE_FW_START) {
+		/*
+		 * FW_START encodes the result of the start attempt as a U32 in
+		 * the response payload.  only reset seqs if this succeeded
+		 */
+		u32 result = *(u32 *)ibox->response;
+
+		if (!result) {
+			mbdb->inbox_seqno = 0;
+			mbdb->outbox_seqno = 0;
+		}
+	} else {
+		/* RESET has no payload */
 		mbdb->inbox_seqno = 0;
 		mbdb->outbox_seqno = 0;
 	}
 
+	/*
+	 * whether pass or fail, we're no longer pending a new seq and can
+	 * release the outbox to other users
+	 */
 	if (atomic_cmpxchg(&mbdb->pending_new_seq, 1, 0))
 		up(&mbdb->outbox_sem);
 }
@@ -594,6 +613,7 @@ static void mbdb_update_response_counters(struct mbdb *mbdb, u8 rsp_status, u64 
 		mbdb->counters[RETRY_RESPONSES]++;
 		break;
 	case MBOX_RSP_STATUS_SEQ_NO_ERROR:
+		mbdb->counters[OUTBOUND_SEQNUM_MISMATCHES]++;
 		sd_warn(mbdb->sd, "Synchronizing outbound sequence number\n");
 		break;
 	case MBOX_RSP_STATUS_OP_CODE_ERROR:
@@ -630,7 +650,7 @@ static void mbdb_ibox_handle_response(struct mbdb *mbdb, u64 cw)
 
 		mbdb_update_response_counters(mbdb, ibox->rsp_status, cw);
 
-		mbdb_seq_reset(mbdb, cw);
+		mbdb_seq_reset(ibox, cw);
 
 		complete(&ibox->ibox_full);
 	} else {
@@ -691,6 +711,7 @@ static void mbdb_inbox_full_fn(struct work_struct *inbox_full)
 
 	/* Check that the "inbound" sequence number in the cw matches what we expect to receive */
 	if (mbdb_mbox_seqno_error(mbdb_mbox_seq_no(cw), mbdb->inbox_seqno)) {
+		mbdb->counters[INBOUND_SEQNUM_MISMATCHES]++;
 		sd_warn(mbdb->sd, "Synchronizing inbound sequence number\n");
 	}
 

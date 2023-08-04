@@ -33,7 +33,6 @@
 #include <drm/drm_debugfs.h>
 
 #include "gem/i915_gem_context.h"
-#include "gem/i915_gem_lmem.h"
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
@@ -207,7 +206,7 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 	struct i915_vma *vma;
 	int pin_count = 0;
 
-	seq_printf(m, "%pK: %c%c%c %8zdKiB %02x %02x %s%s%s",
+	seq_printf(m, "%pK: %c%c%c %8zdKiB %02x %02x %s%s",
 		   &obj->base,
 		   get_tiling_flag(obj),
 		   get_global_flag(obj),
@@ -216,7 +215,6 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 		   obj->read_domains,
 		   obj->write_domain,
 		   i915_cache_level_str(obj),
-		   obj->mm.dirty ? " dirty" : "",
 		   obj->mm.madv == I915_MADV_DONTNEED ? " purgeable" : "");
 	if (obj->base.name)
 		seq_printf(m, " (name: %d)", obj->base.name);
@@ -236,7 +234,7 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 			   vma->vm->gt->info.id,
 			   i915_vma_offset(vma),
 			   i915_vma_size(vma),
-			   stringify_page_sizes(vma->page_sizes.gtt, NULL, 0));
+			   stringify_page_sizes(vma->page_sizes, NULL, 0));
 		if (i915_vma_is_ggtt(vma) || i915_vma_is_dpt(vma)) {
 			switch (vma->ggtt_view.type) {
 			case I915_GGTT_VIEW_NORMAL:
@@ -307,7 +305,7 @@ static void show_xfer(struct seq_file *m,
 	if (!time)
 		return;
 
-	seq_printf(m, "GT%d %s: %llu MiB in %llums, %llu MiB/s\n",
+	seq_printf(m, "GT%d %-12s: %llu MiB in %llums, %llu MiB/s\n",
 		   gt->info.id, name,
 		   bytes >> 20,
 		   div_u64(time, NSEC_PER_MSEC),
@@ -354,6 +352,7 @@ evict_stats(struct seq_file *m,
 static int i915_gem_object_info_show(struct seq_file *m, void *data)
 {
 	struct drm_i915_private *i915 = m->private;
+	struct drm_printer p = drm_seq_file_printer(m);
 	struct intel_memory_region *mr;
 	enum intel_region_id id;
 	struct intel_gt *gt;
@@ -363,16 +362,28 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		   atomic_read(&i915->mm.free_count),
 		   i915->mm.shrink_memory);
 	for_each_memory_region(mr, i915, id)
-		seq_printf(m, "%s: total:%pa, available:%pa, evicting:%pa bytes\n",
-			   mr->name, &mr->total, &mr->avail, &mr->evict);
+		intel_memory_region_print(mr, 0, &p);
 
 	for_each_gt(gt, i915, id) {
+		u64 t;
+
+		t = local64_read(&gt->stats.migration_stall);
+		if (t >> 20)
+			seq_printf(m, "GT%d migration stalls: %lldms\n",
+				   id, div_u64(t, NSEC_PER_MSEC));
+
 		if (!gt->counters.map)
 			continue;
 
-		show_xfer(m, gt, "clear",
-			  gt->counters.map[INTEL_GT_CLEAR_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_CYCLES]);
+		show_xfer(m, gt, "clear-on-alloc",
+			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
+			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
+		show_xfer(m, gt, "clear-on-free",
+			  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
+			  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES]);
+		show_xfer(m, gt, "clear-on-idle",
+			  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
+			  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
 	}
 
 	evict_stats(m, "Blitter", &i915->mm.blt_swap_stats);
@@ -391,14 +402,11 @@ i915_get_mem_region_acct_limit(struct seq_file *m, void *data, u32 index)
 	seq_printf(m, "usr_acct_limit:%u\n", i915->mm.user_acct_limit[index]);
 
 	for_each_memory_region(mr, i915, id) {
-		u64 mem_available;
-
 		if (mr->type != INTEL_MEMORY_LOCAL)
 			continue;
 
-		mem_available = mr->acct_limit[index];
-		seq_printf(m, "%s: available:%llu bytes\n", mr->name,
-			   mem_available);
+		seq_printf(m, "%s: available:%pa bytes\n",
+			   mr->name, &mr->acct_limit[index]);
 	}
 
 	return 0;
@@ -833,22 +841,6 @@ static int workarounds_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
-static int clear_lmem_show(struct seq_file *m, void *unused)
-{
-	struct drm_i915_private *i915 = m->private;
-	struct drm_printer p = drm_seq_file_printer(m);
-	struct intel_gt *gt;
-	int err, id;
-
-	for_each_gt(gt, i915, id) {
-		err = i915_gem_clear_all_lmem(gt, &p);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
-
 static int i915_l4wa_open(struct inode *inode, struct file *file)
 {
 	struct drm_i915_private *i915 = inode->i_private;
@@ -913,6 +905,40 @@ static int i915_wedged_set(void *data, u64 val)
 DEFINE_I915_SIMPLE_ATTRIBUTE(i915_wedged_fops,
 			     i915_wedged_get, i915_wedged_set,
 			     "%llu\n");
+
+static int lmemtest_get(void *data, u64 *val)
+{
+	struct drm_i915_private *i915 = data;
+	struct intel_gt *gt;
+	unsigned int i;
+
+	*val = 0;
+	for_each_gt(gt, i915, i)
+		if (gt->lmem)
+			*val |= gt->lmem->memtest;
+
+	return 0;
+}
+
+static int lmemtest_set(void *data, u64 val)
+{
+	struct drm_i915_private *i915 = data;
+	struct intel_gt *gt;
+	unsigned int i;
+	int err = 0;
+
+	for_each_gt(gt, i915, i) {
+		err = i915_gem_lmemtest(gt, &gt->lmem->memtest);
+		if (err)
+			break;
+	}
+
+	return err;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(lmemtest_fops,
+			lmemtest_get, lmemtest_set,
+			"0x%016llx\n");
 
 static int
 i915_perf_noa_delay_set(void *data, u64 val)
@@ -1263,7 +1289,6 @@ DEFINE_I915_SHOW_ATTRIBUTE(i915_sseu_status);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_rps_boost_info);
 DEFINE_I915_SHOW_ATTRIBUTE(sriov_info);
 DEFINE_I915_SHOW_ATTRIBUTE(workarounds);
-DEFINE_I915_SHOW_ATTRIBUTE(clear_lmem);
 DEFINE_I915_SHOW_ATTRIBUTE(lmem_alloc_limit_info);
 DEFINE_I915_SHOW_ATTRIBUTE(sharedmem_alloc_limit_info);
 
@@ -1278,7 +1303,6 @@ static struct i915_debugfs_file i915_debugfs_list[] = {
 	{"i915_rps_boost_info", &i915_rps_boost_info_fops, NULL},
 	{"i915_sriov_info", &sriov_info_fops, NULL},
 	{"i915_workarounds", &workarounds_fops, NULL},
-	{"i915_clear_lmem", &clear_lmem_fops, NULL},
 	{"lmem_alloc_limit_info", &lmem_alloc_limit_info_fops, NULL},
 	{"sharedmem_alloc_limit_info", &sharedmem_alloc_limit_info_fops, NULL},
 };
@@ -1298,6 +1322,7 @@ static struct i915_debugfs_file i915_debugfs_files[] = {
 	{"i915_error_state", &i915_error_state_fops},
 	{"i915_gpu_info", &i915_gpu_info_fops},
 #endif
+	{"lmemtest", &lmemtest_fops},
 };
 
 static const struct i915_debugfs_file i915_vf_debugfs_files[] = {

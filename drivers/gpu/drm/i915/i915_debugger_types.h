@@ -114,6 +114,7 @@ struct i915_debugger {
 	struct kref ref;
 	struct rcu_head rcu;
 	struct mutex lock;
+	struct mutex discovery_lockdep;
 	struct drm_i915_private *i915;
 	int debug_lvl;
 	struct task_struct *target_task;

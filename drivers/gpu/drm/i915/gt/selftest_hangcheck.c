@@ -473,6 +473,8 @@ static int igt_reset_nop_engine(void *arg)
 			continue;
 		}
 
+		intel_gt_pm_wait_for_idle(gt);
+
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
 			pr_err("[%s] Create context failed: %pe!\n", engine->name, ce);
@@ -587,6 +589,8 @@ static int igt_reset_fail_engine(void *arg)
 		/* Can't manually break the reset if i915 doesn't perform it */
 		if (intel_engine_uses_guc(engine))
 			continue;
+
+		intel_gt_pm_wait_for_idle(gt);
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -717,6 +721,8 @@ static int __igt_reset_engine(struct intel_gt *gt, bool active)
 
 	if (!intel_has_reset_engine(gt))
 		return 0;
+
+	intel_gt_pm_wait_for_idle(gt);
 
 	if (active) {
 		err = hang_init(&h, gt);
@@ -1032,6 +1038,8 @@ static int __igt_reset_engines(struct intel_gt *gt,
 				continue;
 		} else if (using_guc)
 			continue;
+
+		intel_gt_pm_wait_for_idle(gt);
 
 		if (!wait_for_idle(engine)) {
 			pr_err("i915_reset_engine(%s:%s): failed to idle before reset\n",
@@ -1681,6 +1689,8 @@ static int igt_reset_queue(void *arg)
 	/* Check that we replay pending requests following a hang */
 
 	igt_global_reset_lock(gt);
+
+	intel_gt_pm_wait_for_idle(gt);
 
 	err = hang_init(&h, gt);
 	if (err)

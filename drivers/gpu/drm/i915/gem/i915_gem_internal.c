@@ -95,11 +95,19 @@ create_st:
 					   order);
 			if (page)
 				break;
-			if (!order--)
+
+			if (obj->flags & I915_BO_ALLOC_CONTIGUOUS || !order) {
+				if (i915_gem_shrink(NULL, i915, npages, NULL,
+						    I915_SHRINK_BOUND |
+						    I915_SHRINK_UNBOUND |
+						    I915_SHRINK_ACTIVE))
+					continue;
+
 				goto err;
+			}
 
 			/* Limit subsequent allocations as well */
-			max_order = order;
+			max_order = --order;
 		} while (1);
 
 		sg_set_page(sg, page, PAGE_SIZE << order, 0);
@@ -142,8 +150,6 @@ static int i915_gem_object_put_pages_internal(struct drm_i915_gem_object *obj,
 {
 	i915_gem_gtt_finish_pages(obj, pages);
 	internal_free_pages(pages);
-
-	obj->mm.dirty = false;
 
 	__start_cpu_write(obj);
 

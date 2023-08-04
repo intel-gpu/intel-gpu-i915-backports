@@ -158,11 +158,14 @@ config BACKPORT_INTERVAL_TREE
 config I915_NO_DRM
 	bool "Build i915 with out DRM"
 
+config DISABLE_RH_DRM_BACKPORT
+	bool "Disable rhel drm backport"
+
 choice
 	prompt "Backports Mode"
 
-config BOTH_DMABUF_I915
-	bool "Build both DMABUF and I915"
+config BUILD_DMABUF_I915_MEI
+	bool "Build DMABUF, I915 and MEI combined"
 
 config ONLY_DMABUF
 	bool "Build only DMABUF"

@@ -111,6 +111,14 @@ static const struct dentry_operations dma_buf_dentry_ops = {
 
 static struct vfsmount *dma_buf_mnt;
 
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+static struct dentry *dma_buf_fs_mount(struct file_system_type *fs_type,
+                                int flags, const char *name, void *data)
+{
+        return mount_pseudo(fs_type, "dmabuf:", NULL, &dma_buf_dentry_ops,
+                        DMA_BUF_MAGIC);
+}
+#else
 static int dma_buf_fs_init_context(struct fs_context *fc)
 {
 	struct pseudo_fs_context *ctx;
@@ -121,10 +129,15 @@ static int dma_buf_fs_init_context(struct fs_context *fc)
 	ctx->dops = &dma_buf_dentry_ops;
 	return 0;
 }
+#endif
 
 static struct file_system_type dma_buf_fs_type = {
 	.name = "dmabuf",
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+	.mount = dma_buf_fs_mount,
+#else
 	.init_fs_context = dma_buf_fs_init_context,
+#endif
 	.kill_sb = kill_anon_super,
 };
 
@@ -422,7 +435,13 @@ static const struct file_operations dma_buf_fops = {
 	.llseek		= dma_buf_llseek,
 	.poll		= dma_buf_poll,
 	.unlocked_ioctl	= dma_buf_ioctl,
+#ifdef BPM_COMPAT_PTR_IOCTL_NOT_PRESENT
+#ifdef CONFIG_COMPAT
+	.compat_ioctl   = dma_buf_ioctl,
+#endif
+#else
 	.compat_ioctl	= compat_ptr_ioctl,
+#endif
 	.show_fdinfo	= dma_buf_show_fdinfo,
 };
 

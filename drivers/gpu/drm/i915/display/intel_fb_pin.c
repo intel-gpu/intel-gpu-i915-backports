@@ -39,7 +39,7 @@ intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
 
 	ret = i915_gem_object_lock_interruptible(obj, NULL);
 	if (!ret) {
-		ret = i915_gem_object_set_cache_level(obj, NULL, I915_CACHE_NONE);
+		ret = i915_gem_object_set_cache_level(obj, I915_CACHE_NONE);
 		i915_gem_object_unlock(obj);
 	}
 	if (ret) {

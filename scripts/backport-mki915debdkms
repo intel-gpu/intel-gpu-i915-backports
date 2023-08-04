@@ -1,0 +1,223 @@
+#!/bin/sh
+#
+# Creates a dkms.conf file
+
+PKG_NAME="intel-i915-dkms-prerelease"
+PKG_VER="1.0"
+REL_NAME="1"
+REL_TYPE=""
+BUILD_TYPE=""
+DEP_PKG_NAME=""
+I915_CONFIG=""
+PMT_VSEC_SELECTION="auto"
+RHEL_84_KV="4.18.0-305"
+
+helpFunction()
+{
+	echo ""
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion"
+	echo -e "\t-n packagename"
+	echo -e "\t-v packageversion"
+	echo -e "\t-r releaseversion"
+	echo -e "\t-p prerelease/opensource"
+	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
+	exit 1
+}
+
+while getopts "n:v:r:p:s:t:" opt
+do
+	case "$opt" in
+		n ) PKG_NAME="$OPTARG" ;;
+		v ) PKG_VER="$OPTARG" ;;
+		r ) REL_NAME="$OPTARG" ;;
+		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
+		? ) helpFunction ;;
+	esac
+done
+
+if [ "$REL_TYPE" = "opensource" ]; then
+	DEP_PKG_NAME="intel-dmabuf-dkms"
+else
+	DEP_PKG_NAME="intel-dmabuf-dkms-$REL_TYPE"
+fi
+
+if [ "$BUILD_TYPE" != "nodrm" ]; then
+	NO_DRM=
+	if [ "$BUILD_TYPE" = "pmt" ]; then
+		PMT_VSEC_SELECTION="pmt"
+	fi
+else
+	NO_DRM=DEL
+fi
+
+# Control below line by conditionally adding DEL at the beginning of line
+# those lines will be disabled by sed
+#
+sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
+	PACKAGE_NAME="$PKG_NAME"
+	PACKAGE_VERSION="$PKG_VER-$REL_NAME"
+	AUTOINSTALL="yes"
+	BUILD_EXCLUSIVE_KERNEL="^(5\.10\.*)"
+
+	BUILT_MODULE_NAME[0]="i915-compat"
+	BUILT_MODULE_LOCATION[0]="compat"
+	DEST_MODULE_LOCATION[0]="/updates"
+
+	BUILT_MODULE_NAME[1]="i915"
+	BUILT_MODULE_LOCATION[1]="drivers/gpu/drm/i915"
+	DEST_MODULE_LOCATION[1]="/updates"
+
+	BUILT_MODULE_NAME[2]="i915_spi"
+	BUILT_MODULE_LOCATION[2]="drivers/gpu/drm/i915"
+	DEST_MODULE_LOCATION[2]="/updates"
+
+	BUILT_MODULE_NAME[3]="iaf"
+	BUILT_MODULE_LOCATION[3]="drivers/gpu/drm/i915/fabric"
+	DEST_MODULE_LOCATION[3]="/updates"
+
+	BUILT_MODULE_NAME[4]="mei"
+	BUILT_MODULE_LOCATION[4]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[4]="/updates"
+
+	BUILT_MODULE_NAME[5]="mei-me"
+	BUILT_MODULE_LOCATION[5]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[5]="/updates"
+
+	BUILT_MODULE_NAME[6]="mei-gsc"
+	BUILT_MODULE_LOCATION[6]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[6]="/updates"
+
+	BUILT_MODULE_NAME[7]="mei_wdt"
+	BUILT_MODULE_LOCATION[7]="drivers/watchdog/"
+	DEST_MODULE_LOCATION[7]="/updates"
+
+	BUILT_MODULE_NAME[8]="mei_hdcp"
+	BUILT_MODULE_LOCATION[8]="drivers/misc/mei/hdcp/"
+	DEST_MODULE_LOCATION[8]="/updates"
+
+	BUILT_MODULE_NAME[9]="mei_pxp"
+	BUILT_MODULE_LOCATION[9]="drivers/misc/mei/pxp/"
+	DEST_MODULE_LOCATION[9]="/updates"
+
+	BUILT_MODULE_NAME[10]="mei_iaf"
+	BUILT_MODULE_LOCATION[10]="drivers/misc/mei/iaf/"
+	DEST_MODULE_LOCATION[10]="/updates"
+
+	# Determine if AUXBUS is available to choose correct PMT/VSEC driver.
+	is_auxbus_available()
+	{
+		cat /boot/config-\$kernelver | grep -q 'CONFIG_AUXILIARY_BUS=y'
+		return \$?
+	}
+	
+	select_pmt_vsec() {
+		case "$PMT_VSEC_SELECTION" in
+			"pmt" ) echo pmt ;;
+			"auto" ) if is_auxbus_available ; then echo vsec; else echo pmt; fi ;;
+		esac
+	}
+	
+	if [ "\$(select_pmt_vsec)" = "vsec" ];
+	then
+		BUILT_MODULE_NAME[11]="intel_vsec"
+		BUILT_MODULE_LOCATION[11]="drivers/platform/x86/intel"
+		DEST_MODULE_LOCATION[11]="/updates"
+
+		BUILT_MODULE_NAME[12]="pmt_class"
+		BUILT_MODULE_LOCATION[12]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[12]="/updates"
+
+		BUILT_MODULE_NAME[13]="pmt_telemetry"
+		BUILT_MODULE_LOCATION[13]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[13]="/updates"
+
+		BUILT_MODULE_NAME[14]="pmt_crashlog"
+		BUILT_MODULE_LOCATION[14]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[14]="/updates"
+	else
+		BUILT_MODULE_NAME[11]="intel_pmt"
+		BUILT_MODULE_LOCATION[11]="drivers/mfd"
+		DEST_MODULE_LOCATION[11]="/updates"
+		
+		BUILT_MODULE_NAME[12]="intel_pmt_class"
+		BUILT_MODULE_LOCATION[12]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[12]="/updates"
+	
+		BUILT_MODULE_NAME[13]="intel_pmt_telemetry"
+		BUILT_MODULE_LOCATION[13]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[13]="/updates"
+	
+		BUILT_MODULE_NAME[14]="intel_pmt_crashlog"
+		BUILT_MODULE_LOCATION[14]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[14]="/updates"
+	fi
+
+$NO_DRM	BUILT_MODULE_NAME[15]="intel-gtt"
+$NO_DRM	BUILT_MODULE_LOCATION[15]="drivers/char/agp/"
+$NO_DRM	DEST_MODULE_LOCATION[15]="/updates"
+
+$NO_DRM	BUILT_MODULE_NAME[16]="drm_kms_helper"
+$NO_DRM	BUILT_MODULE_LOCATION[16]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[16]="/updates"
+
+$NO_DRM	BUILT_MODULE_NAME[17]="drm"
+$NO_DRM	BUILT_MODULE_LOCATION[17]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[17]="/updates"
+
+$NO_DRM	BUILT_MODULE_NAME[18]="drm_panel_orientation_quirks"
+$NO_DRM	BUILT_MODULE_LOCATION[18]="drivers/gpu/drm/"
+$NO_DRM	DEST_MODULE_LOCATION[18]="/updates"
+
+$NO_DRM	BUILT_MODULE_NAME[19]="vgem"
+$NO_DRM	BUILT_MODULE_LOCATION[19]="drivers/gpu/drm/vgem"
+$NO_DRM	DEST_MODULE_LOCATION[19]="/updates"
+
+	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
+       	# DKMS could use all cores on multicore systems to build the kernel module.
+       	num_cpu_cores()
+       	{
+		if [ -x /usr/bin/nproc ]; then
+			np=`nproc`
+			if [ "\$np" -le "64" ]; then
+				echo "\$np"
+			else
+				echo "64"
+			fi
+		else
+			echo "1"
+		fi
+	}
+	
+	select_kernel_version()
+	{
+		echo "\$kernelver" | cut -d '.' -f 1-3
+		return \$?
+	}
+	
+	select_sles_15sp2_kv()
+	{
+		cat /boot/config-\$kernelver | grep 'CONFIG_SUSE_PATCHLEVEL=2' | cut -d '=' -f 2
+		return \$?
+	}
+	if [ "$BUILD_TYPE" == "nodrm" ]; then
+		I915_CONFIG="i915_only"
+	else
+		if [ "\$(select_kernel_version)" != "$RHEL_84_KV" ] && [ "\$(select_sles_15sp2_kv)" != "2" ]; then
+			I915_CONFIG="i915"
+		else
+			I915_CONFIG="i915_disable_svm"
+		fi
+	fi
+	
+	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ]; then
+	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/\$I915_CONFIG .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID"
+	else
+	MAKE="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers'; export LEX=flex; export YACC=bison; cp defconfigs/\$I915_CONFIG .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE"
+	fi
+
+	CLEAN="export LEX=flex; export YACC=bison; 'make' clean"
+
+EOF

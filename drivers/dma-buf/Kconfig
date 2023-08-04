@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menu "DMABUF options"
-	depends on BOTH_DMABUF_I915 || ONLY_DMABUF
+	depends on BUILD_DMABUF_I915_MEI || ONLY_DMABUF
 
 config SYNC_FILE
 	bool "Explicit Synchronization Framework"

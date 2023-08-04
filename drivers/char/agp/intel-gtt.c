@@ -28,7 +28,7 @@
 #include <drm/intel-gtt.h>
 #include <asm/set_memory.h>
 
-#ifndef INTEL_GMCH_GTT_RENAMED
+#ifndef BPM_INTEL_GMCH_GTT_RENAMED
 /*
  * If we have Intel graphics, we're not going to have anything other than
  * an Intel IOMMU. So make the correct use of the PCI DMA API contingent

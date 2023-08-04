@@ -218,10 +218,12 @@ struct intel_gt;
 struct i915_page_table {
 	struct drm_i915_gem_object *base;
 	union {
-		atomic_t used;
+		struct {
+			atomic_t used;
+			bool is_compact:1;
+		};
 		struct i915_page_table *stash;
 	};
-	bool is_compact;
 };
 
 struct i915_page_directory {
@@ -332,13 +334,12 @@ struct i915_address_space {
 
 	struct mutex mutex; /* protects vma and our lists */
 
-	struct kref resv_ref; /* kref to keep the reservation lock alive. */
-	struct dma_resv _resv; /* reservation lock for all pd objects, and buffer pool */
 #define VM_CLASS_GGTT 0
 #define VM_CLASS_PPGTT 1
 #define VM_CLASS_DPT 2
 
-	struct drm_i915_gem_object *scratch[5];
+#define I915_MAX_PD_LVL 5
+	struct drm_i915_gem_object *scratch[I915_MAX_PD_LVL];
 
 	/**
 	 * List of vma currently bound.
@@ -352,16 +353,14 @@ struct i915_address_space {
 	struct list_head vm_bind_list;
 	struct list_head vm_bound_list;
 	struct list_head vm_capture_list;
-	struct list_head vm_rebind_list;
 	spinlock_t vm_capture_lock;  /* Protects vm_capture_list */
-	spinlock_t vm_rebind_lock;   /* Protects vm_rebind_list */
 	/* va tree of persistent vmas */
 	struct rb_root_cached va;
-	struct list_head non_priv_vm_bind_list;
 	struct drm_i915_gem_object *root_obj;
+
+	spinlock_t priv_obj_lock;
 	struct list_head priv_obj_list;
 	struct i915_active_fence user_fence;
-	atomic_t invalidations;
 
 	struct {
 		struct i915_vma *vma;
@@ -531,8 +530,9 @@ struct i915_ppgtt {
 
 bool intel_vm_no_concurrent_access_wa(struct drm_i915_private *i915);
 
-int __must_check
-i915_vm_lock_objects(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww);
+/* lock the vm into the current ww, if we lock one, we lock all */
+int i915_vm_lock_objects(const struct i915_address_space *vm,
+			 struct i915_gem_ww_ctx *ww);
 
 static inline unsigned int
 i915_vm_lvl(const struct i915_address_space * const vm)
@@ -593,18 +593,6 @@ i915_vm_get(struct i915_address_space *vm)
 	return vm;
 }
 
-/**
- * i915_vm_resv_get - Obtain a reference on the vm's reservation lock
- * @vm: The vm whose reservation lock we want to share.
- *
- * Return: A pointer to the vm's reservation lock.
- */
-static inline struct dma_resv *i915_vm_resv_get(struct i915_address_space *vm)
-{
-	kref_get(&vm->resv_ref);
-	return &vm->_resv;
-}
-
 static inline struct i915_address_space *
 i915_vm_tryget(struct i915_address_space *vm)
 {
@@ -616,20 +604,9 @@ i915_vm_tryget(struct i915_address_space *vm)
 
 void i915_vm_release(struct kref *kref);
 
-void i915_vm_resv_release(struct kref *kref);
-
 static inline void i915_vm_put(struct i915_address_space *vm)
 {
 	kref_put(&vm->ref, i915_vm_release);
-}
-
-/**
- * i915_vm_resv_put - Release a reference on the vm's reservation lock
- * @resv: Pointer to a reservation lock obtained from i915_vm_resv_get()
- */
-static inline void i915_vm_resv_put(struct i915_address_space *vm)
-{
-	kref_put(&vm->resv_ref, i915_vm_resv_release);
 }
 
 static inline struct i915_address_space *
@@ -739,7 +716,7 @@ int i915_ggtt_balloon(struct i915_ggtt *ggtt, u64 start, u64 end,
 		      struct drm_mm_node *node);
 void i915_ggtt_deballoon(struct i915_ggtt *ggtt, struct drm_mm_node *node);
 
-inline bool i915_ggtt_has_xehpsdv_pte_vfid_mask(struct i915_ggtt *ggtt);
+bool i915_ggtt_has_xehpsdv_pte_vfid_mask(struct i915_ggtt *ggtt);
 
 void i915_ggtt_set_space_owner(struct i915_ggtt *ggtt, u16 vfid,
 			       const struct drm_mm_node *node);
@@ -773,8 +750,15 @@ fill_page_dma(struct drm_i915_gem_object *p, const u64 val, unsigned int count);
 	fill_px((px), v__ << 32 | v__);					\
 } while (0)
 
-int setup_scratch_page(struct i915_address_space *vm);
-void free_scratch(struct i915_address_space *vm);
+#define INVALID_PTE	0xAAAAAAAAAAAAAAAA
+
+u64 gen8_pde_encode(const dma_addr_t addr, const enum i915_cache_level level);
+int i915_vm_setup_scratch0(struct i915_address_space *vm);
+void i915_vm_free_scratch(struct i915_address_space *vm);
+u64 i915_vm_fault_encode(struct i915_address_space *vm, int lvl, bool valid);
+u64 i915_vm_scratch_encode(struct i915_address_space *vm, int lvl);
+#define i915_vm_scratch0_encode(vm) i915_vm_scratch_encode(vm, 0)
+#define i915_vm_ggtt_scratch0_encode(vm) i915_vm_scratch0_encode(vm)
 
 struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz);
 struct drm_i915_gem_object *alloc_pt_lmem(struct i915_address_space *vm, int sz);
@@ -801,14 +785,13 @@ __set_pd_entry(struct i915_page_directory * const pd,
 
 void
 clear_pd_entry(struct i915_page_directory * const pd,
-	       const unsigned short idx,
-	       const struct drm_i915_gem_object * const scratch);
+	       const unsigned short idx, u64 scratch_encode);
 
 bool
 release_pd_entry(struct i915_page_directory * const pd,
 		 const unsigned short idx,
 		 struct i915_page_table * const pt,
-		 const struct drm_i915_gem_object * const scratch);
+		 u64 scratch_encode);
 void gen6_ggtt_invalidate(struct i915_ggtt *ggtt);
 
 void gen8_set_pte(void __iomem *addr, gen8_pte_t pte);

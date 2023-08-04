@@ -245,7 +245,7 @@ void intel_timeline_reset_seqno(const struct intel_timeline *tl)
 	u32 *hwsp_seqno = (u32 *)tl->hwsp_seqno;
 
 	/* Must be pinned to be writable, and no requests in flight. */
-	GEM_BUG_ON(!&tl->hwsp_map);
+	GEM_BUG_ON(!tl->hwsp_map);
 
 	memset(hwsp_seqno + 1, 0, TIMELINE_SEQNO_BYTES - sizeof(*hwsp_seqno));
 	WRITE_ONCE(*hwsp_seqno, tl->seqno);

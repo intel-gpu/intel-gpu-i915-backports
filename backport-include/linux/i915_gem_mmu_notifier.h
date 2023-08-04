@@ -6,6 +6,33 @@
 #include <linux/kref.h>
 #include <linux/mmu_notifier.h>
 
+#ifdef BPM_MMU_NOTIFIER_EVENT_NOT_PRESENT
+enum mmu_notifier_event {
+        MMU_NOTIFY_UNMAP = 0,
+        MMU_NOTIFY_CLEAR,
+        MMU_NOTIFY_PROTECTION_VMA,
+        MMU_NOTIFY_PROTECTION_PAGE,
+        MMU_NOTIFY_SOFT_DIRTY,
+        MMU_NOTIFY_RELEASE,
+};
+#define MMU_NOTIFIER_RANGE_BLOCKABLE (1 << 0)
+#define mmu_notifier_range LINUX_I915_BACKPORT(mmu_notifier_range)
+struct mmu_notifier_range {
+        struct mm_struct *mm;
+        unsigned long start;
+        unsigned long end;
+        unsigned flags;
+        enum mmu_notifier_event event;
+};
+
+#define mmu_notifier_range_blockable LINUX_I915_BACKPORT(mmu_notifier_range_blockable)
+static inline bool
+mmu_notifier_range_blockable(const struct mmu_notifier_range *range)
+{
+        return true;
+}
+#endif
+
 struct mmu_notifier_subscriptions {
 	/* all mmu notifiers registered in this mm are queued in this list */
 	struct hlist_head list;

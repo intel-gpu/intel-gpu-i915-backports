@@ -28,6 +28,8 @@ mock_context(struct drm_i915_private *i915,
 	spin_lock_init(&ctx->stale.lock);
 	INIT_LIST_HEAD(&ctx->stale.engines);
 
+	init_waitqueue_head(&ctx->user_fence_wq);
+
 	i915_gem_context_set_persistence(ctx);
 
 	mutex_init(&ctx->engines_mutex);

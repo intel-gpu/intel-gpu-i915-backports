@@ -69,20 +69,15 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	engine = READ_ONCE(rq->engine);
 	/* We have our request executing, now suspend it. */
 
-	i915_gem_vm_bind_lock(vm);
+	i915_vm_lock_objects(vm, NULL);
 
 	fs_reclaim_acquire(GFP_KERNEL);
 	timeout = dma_fence_wait_timeout(&ce->sfence->base.dma, true, delay);
 	fs_reclaim_release(GFP_KERNEL);
-	if (timeout == 0) {
+	if (timeout <= 0) {
 		pr_err("%s: Suspend running request timeout.\n", engine->name);
-		err = -ETIME;
-		i915_gem_vm_bind_unlock(vm);
-		goto out;
-	}
-	if (timeout < 0) {
-		i915_gem_vm_bind_unlock(vm);
-		err = timeout;
+		i915_gem_object_unlock(vm->root_obj);
+		err = timeout ?: -ETIME;
 		goto out;
 	}
 
@@ -98,13 +93,13 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	if (i915_request_completed(rq)) {
 		pr_err("%s: suspended request completed!\n",
 		       engine->name);
-		i915_gem_vm_bind_unlock(vm);
+		i915_gem_object_unlock(vm->root_obj);
 		err = -EIO;
 		goto out;
 	}
 
 	/* But completes on resume */
-	i915_gem_vm_bind_unlock(vm);
+	i915_gem_object_unlock(vm->root_obj);
 	if (i915_request_wait(rq, 0, delay) < 0) {
 		pr_err("%s: resumed request did not complete!\n",
 		       engine->name);

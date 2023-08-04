@@ -15,6 +15,9 @@ config BASE_KERNEL_NAME
 config DII_KERNEL_TAG
 	string
 	option env="DII_KERNEL_TAG"
+config INTEL_PMT_FORCED
+        bool
+        option env="INTEL_PMT_FORCED"
 
 # Packaging hacks
 source "$BACKPORT_DIR/Kconfig.package.hacks"

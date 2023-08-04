@@ -6,7 +6,6 @@
 #include "i915_drv.h"
 #include "gt/intel_context.h"
 #include "gt/intel_engine_pm.h"
-#include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"
@@ -422,8 +421,6 @@ out_batch:
 	i915_gem_ww_unlock_single(batch->obj);
 	intel_emit_vma_release(ce, batch);
 out_vma:
-	/* Rollback on error */
-	intel_flat_ppgtt_request_pool_clean(vma);
 	i915_vma_unpin(vma);
 out_ctx:
 	intel_context_unpin(ce);
@@ -805,6 +802,10 @@ static int __i915_gem_object_ww_copy_blt(struct drm_i915_gem_object *src,
 	if (IS_ERR(vma[1]))
 		return PTR_ERR(vma[1]);
 
+	/** Mark the vmas as persistent to bypass deferred vma closing */
+	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma[0]));
+	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma[1]));
+
 	if (src->base.size >= dst->base.size)
 		dst->flags |= I915_BO_SKIP_CLEAR;
 
@@ -887,11 +888,8 @@ out_batch:
 	i915_gem_ww_unlock_single(batch->obj);
 	intel_emit_vma_release(ce, batch);
 out_unpin_dst:
-	/* Rollback on error */
-	intel_flat_ppgtt_request_pool_clean(vma[1]);
 	i915_vma_unpin(vma[1]);
 out_unpin_src:
-	intel_flat_ppgtt_request_pool_clean(vma[0]);
 	i915_vma_unpin(vma[0]);
 out_ctx:
 	intel_context_unpin(ce);

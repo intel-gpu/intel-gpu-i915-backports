@@ -1248,8 +1248,9 @@ static bool report_errors(struct fport *port, const u64 *errors,
 		if (!is_error(port, errors[i], regs + i, armed))
 			continue;
 
-		fport_info(port, "sticky hw error: %s 0x%016llx (%llu)\n",
-			   regs[i].name, errors[i], errors[i]);
+		if (noisy_logging_allowed())
+			fport_info(port, "sticky hw error: %s 0x%016llx (%llu)\n",
+				   regs[i].name, errors[i], errors[i]);
 
 		if (test_bit(port->lpn, port->sd->fport_lpns))
 			report_fabric_error(port, regs[i].offset, errors[i]);

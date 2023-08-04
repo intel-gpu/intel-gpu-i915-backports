@@ -89,7 +89,7 @@ static inline struct intel_vsec_device *auxdev_to_ivdev(struct auxiliary_device 
 	return container_of(auxdev, struct intel_vsec_device, auxdev);
 }
 
-#ifdef CONFIG_INTEL_VSEC
+#ifdef CPTCFG_INTEL_VSEC
 void intel_vsec_register(struct pci_dev *pdev,
                         struct intel_vsec_platform_info *info);
 #else

@@ -6,6 +6,8 @@
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_pm.h"
 
+#include "gt/intel_lrc.h"
+
 #include "i915_drv.h"
 #include "i915_trace.h"
 #include "i915_suspend_fence.h"
@@ -13,6 +15,7 @@
 #include "intel_context.h"
 #include "intel_engine.h"
 #include "intel_engine_pm.h"
+#include "intel_lrc_reg.h"
 #include "intel_ring.h"
 
 static struct kmem_cache *slab_ce;
@@ -117,8 +120,6 @@ static int __context_pin_state(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
 	 * it cannot reclaim the object until we release it.
 	 */
 	i915_vma_make_unshrinkable(vma);
-	vma->obj->mm.dirty = true;
-
 	return 0;
 
 err_unpin:
@@ -441,7 +442,7 @@ intel_context_init(struct intel_context *ce, struct intel_engine_cs *engine)
 	ce->sseu = engine->sseu;
 	ce->ring = NULL;
 	ce->ring_size = SZ_4K;
-	get_random_bytes(&ce->dbg_id.lrc_id, sizeof(ce->dbg_id.lrc_id));
+	get_random_bytes(&ce->debugger_lrc_id, sizeof(ce->debugger_lrc_id));
 
 	ewma_runtime_init(&ce->stats.runtime.avg);
 
@@ -519,7 +520,7 @@ void intel_context_enter_engine(struct intel_context *ce)
 void intel_context_exit_engine(struct intel_context *ce)
 {
 	intel_timeline_exit(ce->timeline);
-	intel_engine_pm_put(ce->engine);
+	intel_engine_pm_put_delay(ce->engine, 2); /* short keepalive */
 }
 
 int intel_context_prepare_remote_request(struct intel_context *ce,
@@ -608,7 +609,7 @@ __intel_context_find_active_request(struct intel_context *ce,
 		if (__i915_request_is_complete(rq))
 			break;
 
-		if (__i915_request_has_started(rq))
+		if (i915_request_is_active(rq))
 			active = rq;
 	}
 
@@ -664,7 +665,7 @@ u64 intel_context_get_avg_runtime_ns(struct intel_context *ce)
 	return avg;
 }
 
-int intel_context_throttle(const struct intel_context *ce)
+int intel_context_throttle(const struct intel_context *ce, long timeout)
 {
 	const struct intel_timeline *tl = ce->timeline;
 	const struct intel_ring *ring = ce->ring;
@@ -676,7 +677,7 @@ int intel_context_throttle(const struct intel_context *ce)
 
 	rcu_read_lock();
 	list_for_each_entry_reverse(rq, &tl->requests, link) {
-		if (__i915_request_is_complete(rq))
+		if (i915_request_signaled(rq))
 			break;
 
 		if (rq->ring != ring)
@@ -686,13 +687,15 @@ int intel_context_throttle(const struct intel_context *ce)
 		if (__intel_ring_space(rq->postfix,
 				       ring->emit,
 				       ring->size) < ring->size / 2) {
-			if (i915_request_get_rcu(rq)) {
+			if (!__i915_request_is_complete(rq) &&
+			    i915_request_get_rcu(rq)) {
 				rcu_read_unlock();
 
-				if (i915_request_wait(rq,
-						      I915_WAIT_INTERRUPTIBLE,
-						      MAX_SCHEDULE_TIMEOUT) < 0)
-					err = -EINTR;
+				timeout = i915_request_wait(rq,
+							    I915_WAIT_INTERRUPTIBLE,
+							    timeout);
+				if (timeout < 0)
+					err = timeout;
 
 				rcu_read_lock();
 				i915_request_put(rq);
@@ -724,6 +727,71 @@ bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
 	}
 
 	return ret;
+}
+
+void intel_context_rebase_hwsp(struct intel_context *ce)
+{
+	if (!intel_context_is_pinned(ce))
+		return;
+	intel_timeline_rebase_hwsp(ce->timeline);
+	/*
+	 * The below is part of ce->ops->reset(ce) = lrc_reset(ce), but
+	 * without changing ring positions
+	 */
+	lrc_init_regs(ce, ce->engine, true);
+	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
+}
+
+/**
+ * intel_context_revert_ring_heads - Set ring heads to the start of scheduled submissions.
+ * @ce: Intel Context instance struct
+ */
+void intel_context_revert_ring_heads(struct intel_context *ce)
+{
+	struct intel_timeline *tl;
+	struct i915_request *rq;
+	u32 *regs;
+
+	if (unlikely(!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)))
+		return;
+
+	tl = ce->timeline;
+
+	while (!mutex_trylock(&tl->mutex))
+		udelay(1);
+
+	list_for_each_entry_rcu(rq, &tl->requests, link) {
+		u32 head, size;
+
+		if (i915_request_completed(rq))
+			continue;
+
+		head = READ_ONCE(rq->ring->head);
+		size = rq->ring->size;
+
+		/*
+		 * We need to revert the ring head to the beginning of a request.
+		 * Sounds simple, but it's a ring - it might have wrapped, either
+		 * within a request, or between requests. Assuming that a single
+		 * request is always smaller that 1/8 of the ring, we can
+		 * revert the head with high accuracy.
+		 */
+		if (((rq->tail > rq->head) && ((head > rq->head) ||
+		     ((head < size/4) && (rq->head > 3*size/4)))) ||
+		    ((rq->tail < rq->head) && ((head > rq->head) ||
+		     (head < rq->tail) || (head < size/4)))) {
+
+			WRITE_ONCE(rq->ring->head, rq->head);
+		}
+	}
+	intel_ring_set_tail(ce->ring, ce->ring->head);
+	regs = ce->lrc_reg_state;
+	if (regs) {
+		regs[CTX_RING_HEAD] = ce->ring->head;
+		regs[CTX_RING_TAIL] = ce->ring->tail;
+	}
+
+	mutex_unlock(&tl->mutex);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

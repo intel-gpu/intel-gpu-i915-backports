@@ -241,6 +241,10 @@ struct port_var_data {
 	u8 tx_tuning[LANES];
 } __packed;
 
+struct tx_dcc_margin_error_rsp {
+	u32 sub_op;
+} __packed;
+
 struct tx_dcc_margin_param_get_rsp {
 	u32 sub_op;
 	u16 value;

@@ -11,6 +11,7 @@ KER_VER=""
 DEP_PKG_NAME=""
 DRM_CONFIG="drm"
 BUILD_TYPE=""
+CUSTOM_KERN_ID=""
 
 helpFunction()
 {
@@ -22,10 +23,11 @@ helpFunction()
 	echo -e "\t-p Release Type : prerelease/opensource"
 	echo -e "\t-s buildversion"
 	echo -e "\t-k KLIB Path"
+	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:s:k:" opt
+while getopts "n:v:r:p:s:k:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
@@ -37,6 +39,7 @@ do
 			KLIB="$OPTARG"
 			KER_VER=`basename $KLIB`
 			;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done
@@ -81,6 +84,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 
 	%build
 	export LEX=flex
+	export YACC=bison
 	np=`nproc`
 	npc=\$(( \$np > 64 ? 64 : \$np ))
 	make KLIB=%{kernel_module_directory}/%{_krel} olddefconfig

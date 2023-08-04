@@ -50,15 +50,12 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 		return -E2BIG;
 
 	/*
-	 * Assert that when recoverable page faults are not supported,
-	 * object is not currently in any GPU domain. As it wasn't in
-	 * the GTT, there shouldn't be any way it could have been in
+	 * Assert that the object is not currently in any GPU domain. As it
+	 * wasn't in the GTT, there shouldn't be any way it could have been in
 	 * a GPU cache
 	 */
-	if (!HAS_RECOVERABLE_PAGE_FAULT(i915)) {
-		GEM_BUG_ON(obj->read_domains & I915_GEM_GPU_DOMAINS);
-		GEM_BUG_ON(obj->write_domain & I915_GEM_GPU_DOMAINS);
-	}
+	GEM_BUG_ON(obj->read_domains & I915_GEM_GPU_DOMAINS);
+	GEM_BUG_ON(obj->write_domain & I915_GEM_GPU_DOMAINS);
 
 	/*
 	 * If there's no chance of allocating enough pages for the whole
@@ -196,8 +193,7 @@ rebuild_st:
 		obj->cache_dirty = true;
 
 	__i915_gem_object_set_pages(obj, st, sg_page_sizes);
-
-	mem->avail -= size;
+	atomic64_sub(size, &mem->avail);
 
 	return 0;
 
@@ -244,8 +240,6 @@ shmem_truncate(struct drm_i915_gem_object *obj)
 	 * backing pages, *now*.
 	 */
 	shmem_truncate_range(file_inode(obj->base.filp), 0, (loff_t)-1);
-	obj->mm.madv = __I915_MADV_PURGED;
-	obj->mm.pages = ERR_PTR(-EFAULT);
 }
 
 static void
@@ -302,9 +296,6 @@ __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 
 	GEM_BUG_ON(obj->mm.madv == __I915_MADV_PURGED);
 
-	if (obj->mm.madv == I915_MADV_DONTNEED)
-		obj->mm.dirty = false;
-
 	if (needs_clflush &&
 	    (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0 &&
 	    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ))
@@ -343,20 +334,18 @@ void i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_
 
 	pagevec_init(&pvec);
 	for_each_sgt_page(page, sgt_iter, pages) {
-		if (obj->mm.dirty)
+		if (obj->mm.madv == I915_MADV_WILLNEED) {
 			set_page_dirty(page);
-
-		if (obj->mm.madv == I915_MADV_WILLNEED)
 			mark_page_accessed(page);
+		}
 
 		if (!pagevec_add(&pvec, page))
 			check_release_pagevec(&pvec);
 	}
 	if (pagevec_count(&pvec))
 		check_release_pagevec(&pvec);
-	obj->mm.dirty = false;
 
-	mem->avail += size;
+	atomic64_add(size, &mem->avail);
 
 	sg_free_table(pages);
 	kfree(pages);

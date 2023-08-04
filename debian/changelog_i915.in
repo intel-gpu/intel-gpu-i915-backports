@@ -1,0 +1,5 @@
+pkg-name (0.6821.230502.1) UNRELEASED; urgency=low
+
+  New driver source to DII_6821_prerelease against 5.10
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 04 May 2023 14:10:09 +0530

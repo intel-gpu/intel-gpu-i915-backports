@@ -281,7 +281,7 @@ static const struct engine_info intel_engines[] = {
 		.instance = OTHER_GSC_INSTANCE,
 		.irq_offset = GEN11_CSME,
 		.mmio_bases = {
-			{ .graphics_ver = 12, .base = GEN12_GSC_RING_BASE }
+			{ .graphics_ver = 12, .base = MTL_GSC_RING_BASE }
 		}
 	},
 };
@@ -361,12 +361,10 @@ u32 intel_engine_context_size(struct intel_gt *gt, u8 class)
 	default:
 		MISSING_CASE(class);
 		fallthrough;
-	case OTHER_CLASS:
-		GEM_BUG_ON(!HAS_ENGINE(gt, GSC0));
-		fallthrough;
 	case VIDEO_DECODE_CLASS:
 	case VIDEO_ENHANCEMENT_CLASS:
 	case COPY_ENGINE_CLASS:
+	case OTHER_CLASS:
 		if (GRAPHICS_VER(gt->i915) < 8)
 			return 0;
 		return GEN8_LR_CONTEXT_OTHER_SIZE;
@@ -2406,7 +2404,7 @@ static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, 
 		   rq->context->lrc.lrca);
 	drm_printf(m, "\t\tce->lrc.ccid: 0x%08x\n",
 		   rq->context->lrc.ccid);
-	if (HAS_NULL_PAGE(rq->context->vm->i915))
+	if (i915_vm_scratch0_encode(rq->context->vm) & PTE_NULL_PAGE)
 		drm_printf(m, "\t\tvm->poison:   NULL PTE\n");
 	else
 		drm_printf(m, "\t\tvm->poison:   0x%08x\n",

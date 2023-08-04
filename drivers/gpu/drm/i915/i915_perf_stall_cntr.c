@@ -594,6 +594,15 @@ i915_eu_stall_stream_enable(struct i915_eu_stall_cntr_stream *stream)
 		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_RENDER);
 
+		/*
+		 * Wa_22016596838:pvc
+		 * GPU may hang if EU DOP gating is enabled during stall sampling.
+		 * Disable EU DOP gating.
+		 */
+		if (IS_PONTEVECCHIO(gt->i915))
+			intel_gt_mcr_multicast_write(gt, GEN8_ROW_CHICKEN2,
+						     _MASKED_BIT_ENABLE(GEN12_DISABLE_DOP_GATING));
+
 		set_mcr_multicast(gt->uncore);
 		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE,
 					     gen_eustall_base(stream, true));
@@ -628,6 +637,11 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 		set_mcr_multicast(gt->uncore);
 		intel_gt_mcr_multicast_write(gt, XEHPC_EUSTALL_BASE,
 					     gen_eustall_base(stream, false));
+
+		/* Wa_22016596838:pvc */
+		if (IS_PONTEVECCHIO(gt->i915))
+			intel_gt_mcr_multicast_write(gt, GEN8_ROW_CHICKEN2,
+						     _MASKED_BIT_DISABLE(GEN12_DISABLE_DOP_GATING));
 
 		/* Wa_22012878696:pvc */
 		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))

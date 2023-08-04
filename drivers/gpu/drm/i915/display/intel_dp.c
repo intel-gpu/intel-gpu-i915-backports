@@ -74,6 +74,7 @@
 #include "intel_tc.h"
 #include "intel_vdsc.h"
 #include "intel_vrr.h"
+#include "intel_crtc_state_dump.h"
 
 /* DP DSC throughput values used for slice count calculations KPixels/s */
 #define DP_DSC_PEAK_PIXEL_RATE			2720000
@@ -729,6 +730,12 @@ u16 intel_dp_dsc_get_output_bpp(struct drm_i915_private *i915,
 	/* From XE_LPD onwards we support from bpc upto uncompressed bpp-1 BPPs */
 	if (DISPLAY_VER(i915) >= 13) {
 		bits_per_pixel = min(bits_per_pixel, pipe_bpp - 1);
+
+		/*
+                 * According to BSpec, 27 is the max DSC output bpp,
+                 * 8 is the min DSC output bpp
+                 */
+                bits_per_pixel = clamp_t(u32, bits_per_pixel, 8, 27);
 	} else {
 		/* Find the nearest match in the array of known BPPs from VESA */
 		for (i = 0; i < ARRAY_SIZE(valid_dsc_bpp) - 1; i++) {
@@ -759,6 +766,13 @@ u8 intel_dp_dsc_get_slice_count(struct intel_dp *intel_dp,
 	else
 		min_slice_count = DIV_ROUND_UP(mode_clock,
 					       DP_DSC_MAX_ENC_THROUGHPUT_1);
+
+	/*
+	 * Due to some DSC engine BW limitations, we need to enable second
+	 * slice and VDSC engine, whenever we approach close enough to max CDCLK
+	 */
+	if (mode_clock >= ((i915->max_cdclk_freq * 85) / 100))
+		min_slice_count = max_t(u8, min_slice_count, 2);
 
 	max_slice_width = drm_dp_dsc_sink_max_slice_width(intel_dp->dsc_dpcd);
 	if (max_slice_width < DP_DSC_MIN_SLICE_WIDTH_VALUE) {
@@ -798,6 +812,9 @@ intel_dp_output_format(struct intel_connector *connector,
 		       bool ycbcr_420_output)
 {
 	struct intel_dp *intel_dp = intel_attached_dp(connector);
+
+	if (intel_dp->force_dsc_output_format)
+		return intel_dp->force_dsc_output_format;
 
 	if (!connector->base.ycbcr_420_allowed || !ycbcr_420_output)
 		return INTEL_OUTPUT_FORMAT_RGB;
@@ -1383,6 +1400,28 @@ static int intel_dp_sink_dsc_version_minor(struct intel_dp *intel_dp)
 		DP_DSC_MINOR_SHIFT;
 }
 
+static int intel_dp_get_slice_height(int vactive)
+{
+	int slice_height;
+
+	/*
+	 * VDSC 1.2a spec in Section 3.8 Options for Slices implies that 108
+	 * lines is an optimal slice height, but any size can be used as long as
+	 * vertical active integer multiple and maximum vertical slice count
+	 * requirements are met.
+	 */
+	for (slice_height = 108; slice_height <= vactive; slice_height += 2)
+		if (vactive % slice_height == 0)
+			return slice_height;
+
+	/*
+	 * Highly unlikely we reach here as most of the resolutions will end up
+	 * finding appropriate slice_height in above loop but returning
+	 * slice_height as 2 here as it should work with all resolutions.
+	 */
+	return 2;
+}
+
 static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 				       struct intel_crtc_state *crtc_state)
 {
@@ -1401,17 +1440,7 @@ static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 	vdsc_cfg->rc_model_size = DSC_RC_MODEL_SIZE_CONST;
 	vdsc_cfg->pic_height = crtc_state->hw.adjusted_mode.crtc_vdisplay;
 
-	/*
-	 * Slice Height of 8 works for all currently available panels. So start
-	 * with that if pic_height is an integral multiple of 8. Eventually add
-	 * logic to try multiple slice heights.
-	 */
-	if (vdsc_cfg->pic_height % 8 == 0)
-		vdsc_cfg->slice_height = 8;
-	else if (vdsc_cfg->pic_height % 4 == 0)
-		vdsc_cfg->slice_height = 4;
-	else
-		vdsc_cfg->slice_height = 2;
+	vdsc_cfg->slice_height = intel_dp_get_slice_height(vdsc_cfg->pic_height);
 
 	ret = intel_dsc_compute_params(crtc_state);
 	if (ret)
@@ -1423,9 +1452,10 @@ static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 	vdsc_cfg->dsc_version_minor =
 		min(intel_dp_source_dsc_version_minor(intel_dp),
 		    intel_dp_sink_dsc_version_minor(intel_dp));
-
-	vdsc_cfg->convert_rgb = intel_dp->dsc_dpcd[DP_DSC_DEC_COLOR_FORMAT_CAP - DP_DSC_SUPPORT] &
-		DP_DSC_RGB;
+	if (vdsc_cfg->convert_rgb)
+		vdsc_cfg->convert_rgb =
+			intel_dp->dsc_dpcd[DP_DSC_DEC_COLOR_FORMAT_CAP - DP_DSC_SUPPORT] &
+			DP_DSC_RGB;
 
 	line_buf_depth = drm_dp_dsc_sink_line_buf_depth(intel_dp->dsc_dpcd);
 	if (!line_buf_depth) {
@@ -1448,6 +1478,31 @@ static int intel_dp_dsc_compute_params(struct intel_encoder *encoder,
 	return drm_dsc_compute_rc_parameters(vdsc_cfg);
 }
 
+static bool intel_dp_dsc_supports_format(struct intel_dp *intel_dp,
+					 enum intel_output_format output_format)
+{
+	u8 sink_dsc_format;
+
+	switch (output_format) {
+	case INTEL_OUTPUT_FORMAT_RGB:
+		sink_dsc_format = DP_DSC_RGB;
+		break;
+	case INTEL_OUTPUT_FORMAT_YCBCR444:
+		sink_dsc_format = DP_DSC_YCbCr444;
+		break;
+	case INTEL_OUTPUT_FORMAT_YCBCR420:
+		if (min(intel_dp_source_dsc_version_minor(intel_dp),
+			intel_dp_sink_dsc_version_minor(intel_dp)) < 2)
+			return false;
+		sink_dsc_format = DP_DSC_YCbCr420_Native;
+		break;
+	default:
+		return false;
+	}
+
+	return drm_dp_dsc_sink_supports_format(intel_dp->dsc_dpcd, sink_dsc_format);
+}
+
 static int intel_dp_dsc_compute_config(struct intel_dp *intel_dp,
 				       struct intel_crtc_state *pipe_config,
 				       struct drm_connector_state *conn_state,
@@ -1464,6 +1519,9 @@ static int intel_dp_dsc_compute_config(struct intel_dp *intel_dp,
 		intel_dp_supports_fec(intel_dp, pipe_config);
 
 	if (!intel_dp_supports_dsc(intel_dp, pipe_config))
+		return -EINVAL;
+
+	if (!intel_dp_dsc_supports_format(intel_dp, pipe_config->output_format))
 		return -EINVAL;
 
 	pipe_bpp = intel_dp_dsc_compute_bpp(intel_dp, conn_state->max_requested_bpc);
@@ -1532,15 +1590,8 @@ static int intel_dp_dsc_compute_config(struct intel_dp *intel_dp,
 	 * is greater than the maximum Cdclock and if slice count is even
 	 * then we need to use 2 VDSC instances.
 	 */
-	if (adjusted_mode->crtc_clock > dev_priv->max_cdclk_freq) {
-		if (pipe_config->dsc.slice_count > 1) {
-			pipe_config->dsc.dsc_split = true;
-		} else {
-			drm_dbg_kms(&dev_priv->drm,
-				    "Cannot split stream to use 2 VDSC instances\n");
-			return -EINVAL;
-		}
-	}
+	if (pipe_config->bigjoiner_pipes || pipe_config->dsc.slice_count > 1)
+		pipe_config->dsc.dsc_split = true;
 
 	ret = intel_dp_dsc_compute_params(&dig_port->base, pipe_config);
 	if (ret < 0) {

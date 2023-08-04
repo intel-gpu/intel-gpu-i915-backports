@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2022 Intel Corporation.
+ * Copyright(c) 2019 - 2023 Intel Corporation.
  */
 
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
+#include <linux/dcache.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/timekeeping.h>
 
+#include "debugfs.h"
 #include "fw.h"
 #include "port.h"
 #include "port_diag.h"
@@ -488,10 +490,11 @@ static void port_isolate(struct fsubdev *sd, struct fport *p, struct fsm_io *fio
 
 	loopback = test_bit(FPORT_ERROR_LOOPBACK, sd->next_port_status[p->lpn].errors);
 
-	fport_warn(p, "isolated: neighbor 0x%016llx port %u%s\n",
-		   p->portinfo->neighbor_guid,
-		   p->portinfo->neighbor_port_number,
-		   loopback ? " (loopback)" : "");
+	if (noisy_logging_allowed())
+		fport_warn(p, "isolated: neighbor 0x%016llx port %u%s\n",
+			   p->portinfo->neighbor_guid,
+			   p->portinfo->neighbor_port_number,
+			   loopback ? " (loopback)" : "");
 
 	return;
 
@@ -581,7 +584,8 @@ static void port_did_not_train(struct fsubdev *sd, struct fport *p, struct fsm_i
 {
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_DID_NOT_TRAIN);
 	fio->status_changed = true;
-	fport_warn(p, "port failed to train in %u seconds\n", linkup_timeout);
+	if (noisy_logging_allowed())
+		fport_warn(p, "port failed to train in %u seconds\n", linkup_timeout);
 }
 
 static void port_linkup_timedout(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
@@ -818,8 +822,9 @@ static void port_arm_or_isolate(struct fsubdev *sd, struct fport *p, struct fsm_
 
 static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	/* downed port. retry by re-init and re-arm */
-	fport_warn(p, "link went down, attempting to reconnect\n");
+	if (noisy_logging_allowed())
+		/* downed port. retry by re-init and re-arm */
+		fport_warn(p, "link went down, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -830,8 +835,9 @@ static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	/* port reverted to INIT. retry by re-arm */
-	fport_warn(p, "link reinitialized itself, attempting to reconnect\n");
+	if (noisy_logging_allowed())
+		/* port reverted to INIT. retry by re-arm */
+		fport_warn(p, "link reinitialized itself, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -841,7 +847,8 @@ static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_retry_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	fport_warn(p, "active link went down...\n");
+	if (noisy_logging_allowed())
+		fport_warn(p, "active link went down...\n");
 
 	port_retry(sd, p, fio);
 	fio->routing_changed = true;
@@ -849,7 +856,8 @@ static void port_retry_active(struct fsubdev *sd, struct fport *p, struct fsm_io
 
 static void port_rearm_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	fport_warn(p, "active link reinitialized itself...\n");
+	if (noisy_logging_allowed())
+		fport_warn(p, "active link reinitialized itself...\n");
 
 	port_rearm(sd, p, fio);
 	fio->routing_changed = true;
@@ -1203,7 +1211,7 @@ static void update_ports_work(struct work_struct *work)
 	fio.status_changed = false;
 
 	/* lock may take a while to acquire if routing is running */
-	lock_shared(&routable_lock);
+	down_read(&routable_lock); /* shared lock */
 
 	/*
 	 * Note that it is possible that update_ports could be queued again
@@ -1361,7 +1369,7 @@ static void update_ports_work(struct work_struct *work)
 	if (fio.request_deisolation)
 		deisolate_all_ports();
 
-	unlock_shared(&routable_lock);
+	up_read(&routable_lock);
 
 	if (initializing || fio.status_changed)
 		publish_status_updates(sd);
@@ -1476,6 +1484,7 @@ static int initial_port_state(struct fsubdev *sd)
 	struct fport *p;
 	u8 port_cnt;
 	u8 lpn;
+	int err;
 
 	p = sd->port + PORT_PHYSICAL_START;
 	port_cnt = 0;
@@ -1497,10 +1506,8 @@ static int initial_port_state(struct fsubdev *sd)
 		p->portinfo = curr_portinfo;
 		p->sd = sd;
 		p->port_type = type;
-		for (lane = 0; lane < LANES; lane++) {
-			p->ports_lanes[lane].port = p;
-			p->ports_lanes[lane].lane_number = lane;
-		}
+		for (lane = 0; lane < LANES; lane++)
+			p->lanes_port[lane] = p;
 		timer_setup(&p->linkup_timer, linkup_timer_expired, 0);
 
 		INIT_LIST_HEAD(&p->unroute_link);
@@ -1511,6 +1518,13 @@ static int initial_port_state(struct fsubdev *sd)
 		case IAF_FW_PORT_LINK_MODE_FABRIC:
 			if (port_cnt >= PORT_FABRIC_COUNT)
 				return -ENOENT;
+
+			if (lpn > TXCAL_PORT_COUNT) {
+				sd_err(sd, "p.%u: fabric port numbers cannot exceed %u\n",
+				       lpn, TXCAL_PORT_COUNT);
+
+				return -EINVAL;
+			}
 
 			bitmap_zero(p->controls, NUM_PORT_CONTROLS);
 
@@ -1532,11 +1546,27 @@ static int initial_port_state(struct fsubdev *sd)
 
 			create_fabric_port_debugfs_files(sd, p);
 
+			if (sd->txcal[lpn]) {
+				err = ops_tx_dcc_margin_param_set(sd, lpn, sd->txcal[lpn], true);
+				if (err) {
+					sd_err(sd, "p.%u: TX calibration write failed\n", lpn);
+					return err;
+				}
+			} else if (type != IAF_FW_PORT_TYPE_DISCONNECTED &&
+				   type != IAF_FW_PORT_TYPE_UNKNOWN) {
+				if (noisy_logging_allowed())
+					sd_warn(sd, "p.%u: missing TX calibration data\n", lpn);
+			}
+
 			break;
 
 		case IAF_FW_PORT_LINK_MODE_FLIT_BUS:
 			set_bit(lpn, sd->bport_lpns);
 			create_bridge_port_debugfs_files(sd, p);
+
+			if (sd->txcal[lpn])
+				sd_warn(sd, "p.%u: has unexpected TX calibration data\n", lpn);
+
 			break;
 
 		default:
@@ -1560,7 +1590,9 @@ static int initial_port_state(struct fsubdev *sd)
 
 void initialize_fports(struct fsubdev *sd)
 {
+	struct fdev *dev = sd->fdev;
 	int err;
+	u32 i;
 
 	bitmap_zero(sd->pm_triggers, NUM_PM_TRIGGERS);
 
@@ -1584,6 +1616,17 @@ void initialize_fports(struct fsubdev *sd)
 
 	sd->guid = sd->switchinfo.guid;
 	sd_dbg(sd, "guid 0x%016llx\n", sd->guid);
+
+	/*
+	 * Look for this subdevice's GUID in TX calibration blob data and extract settings for
+	 * all fabric ports. No need to warn on failure: ports warn when initialized
+	 */
+	if (dev->psc.txcal)
+		for (i = 0; i < dev->psc.txcal->num_settings; ++i)
+			if (dev->psc.txcal->data[i].guid == sd->guid)
+				memcpy(&sd->txcal[PORT_PHYSICAL_START],
+				       dev->psc.txcal->data[i].port_settings,
+				       sizeof(dev->psc.txcal->data[i].port_settings));
 
 	err = initial_switchinfo_state(sd);
 	if (err)
@@ -1648,7 +1691,7 @@ void destroy_fports(struct fsubdev *sd)
 	}
 	/* else INIT_WORK calls were not completed */
 
-	if (sd->fw_running) {
+	if (READ_ONCE(sd->fw_running)) {
 		/* ignore MBDB errors here */
 		ops_linkmgr_port_lqi_trap_ena_set(sd, false, true);
 		ops_linkmgr_port_lwd_trap_ena_set(sd, false, true);
@@ -1686,9 +1729,9 @@ int disable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 	u8 lpn;
 
 	/* routing lock, then mappings lock */
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 	if (mappings_ref_check(sd->fdev)) {
-		unlock_exclusive(&routable_lock);
+		up_write(&routable_lock);
 		return -EAGAIN;
 	}
 
@@ -1700,7 +1743,7 @@ int disable_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_ports)
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
 		any_was_enabled |= enabled;
 	}
-	unlock_exclusive(&routable_lock);
+	up_write(&routable_lock);
 
 	return any_was_enabled ? signal_pm_thread(sd, NL_PM_CMD_EVENT) : 0;
 }
@@ -1726,9 +1769,9 @@ int disable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_port
 	struct fport *p;
 	u8 lpn;
 
-	lock_exclusive(&routable_lock);
+	down_write(&routable_lock); /* exclusive lock */
 	if (mappings_ref_check(sd->fdev)) {
-		unlock_exclusive(&routable_lock);
+		up_write(&routable_lock);
 		return -EAGAIN;
 	}
 
@@ -1739,7 +1782,7 @@ int disable_usage_fports(struct fsubdev *sd, unsigned long *lpnmask, u8 max_port
 			list_add_tail(&p->unroute_link, &sd->fdev->port_unroute_list);
 		any_was_routable |= routable;
 	}
-	unlock_exclusive(&routable_lock);
+	up_write(&routable_lock);
 
 	if (any_was_routable)
 		rem_request();
