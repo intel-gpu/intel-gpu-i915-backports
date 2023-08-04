@@ -19,10 +19,16 @@ KLIB_BUILD ?= $(KLIB)/build/
 KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile.rhelver
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
-PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg binrpm-pkg
+PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg binrpm-pkg dmadkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg bindeb-pkg
 
 ARCH := x86_64
 export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH PKG_DISTRO_TARGETS
+
+ifeq ($(BUILD_CONFIG),pmt)
+export INTEL_PMT_FORCED=1
+else
+export INTEL_PMT_FORCED=0
+endif
 
 # disable built-in rules for this file
 .SUFFIXES:
@@ -136,6 +142,7 @@ defconfig-help:
 
 .PHONY: common-help
 common-help:
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "Build Configurations:"
 	@echo "  KLIB 			: path/to/headers"
 	@echo "  KLIB_BUILD 		: path/to/headers/build "
@@ -150,36 +157,47 @@ common-help:
 	@echo "  				Ex: make <Target> BUILD_CONFIG=sp2 "
 	@echo "  OS_DISTRIBUTION 	: Distro targeted package"
 	@echo "  				You can set this value by passing supported kernel name"
-	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.7"
+	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.8"
 	@echo "  				###   List of supported osv kernel versions   ### "
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep RHEL | tr '\n' '\t')"
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep VANILLA)"
 	@echo "  				Please provide supported kernel name to OS_DISTRIBUTION"
 	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
 
-.PHONY: dkms-help
-dkms-help: common-help
+.PHONY: dkms-pkg-help
+dkms-pkg-help: common-help
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "DKMS Targets:"
 	@echo "  dmadkmsrpm-pkg  - Build package RPM for dma dkms package"
 	@echo "  i915dkmsrpm-pkg - Build package RPM for i915 dkms package"
 	@echo "  dkmsrpm-pkg     - Build above two target dmadkmsrpm-pkg i915dkmsrpm-pkg"
 	@echo ""
+	@echo "  dmadkmsdeb-pkg  - Build package debian for dma dkms package"
+	@echo "  i915dkmsdeb-pkg - Build package debian for i915 dkms package"
+	@echo "  dkmsdeb-pkg     - Build above two target dmadkmsdeb-pkg i915dkmsdeb-pkg"
+	@echo ""
 	@echo "DKMS Package creation using targets help:"
 	@echo "  Command:make  <Build Configurations> <target>"
 	@echo "  Ex: make BUILD_VERION=10 i915dkmsrpm-pkg"
 	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
 
-.PHONY: binrpm-help
-binrpm-help: common-help
+.PHONY: bin-pkg-help
+bin-pkg-help: common-help
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "Binary Targets:"
-	@echo "  binrpm-pkg  - Build binary package RPM"
+	@echo "   bindeb-pkg  -  Build binary debian package for respective kernel "
+	@echo "  binrpm-pkg  - Build binary rpm package for respective kernel"
 	@echo ""
 	@echo " Command:  make <Build Configurations> <target>"
 	@echo " Ex: make BUILD_CONFIG=sp2 binrpm-pkg"
 	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
 
 .PHONY: help
-help: common-help binrpm-help dkms-help defconfig-help
+help: defconfig-help common-help dkms-pkg-help bin-pkg-help
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "Cleaning targets:"
 	@echo "  clean           - Remove most generated files but keep the config and"
 	@echo "                    enough build support to build external modules"
@@ -214,6 +232,7 @@ help: common-help binrpm-help dkms-help defconfig-help
 	@echo "  uninstall       - Uninstall modules"
 	@echo ""
 	@echo "Execute "make" or "make all" to build all targets marked with [*]"
+	@echo "--------------------------------------------------------------------------------------"
 else
 include $(BACKPORT_DIR)/Makefile.backport
 endif

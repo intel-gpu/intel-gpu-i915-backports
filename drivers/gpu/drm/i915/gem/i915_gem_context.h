@@ -27,7 +27,7 @@ static inline bool i915_gem_context_is_banned(const struct i915_gem_context *ctx
 static inline void i915_gem_context_set_banned(struct i915_gem_context *ctx)
 {
 	set_bit(CONTEXT_BAN, &ctx->flags);
-	wake_up_all(&ctx->i915->user_fence_wq);
+	wake_up_all(&ctx->user_fence_wq);
 }
 
 static inline bool i915_gem_context_is_closed(const struct i915_gem_context *ctx)

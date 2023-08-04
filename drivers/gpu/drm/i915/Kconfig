@@ -138,7 +138,7 @@ config DRM_I915_GVT_KVMGT
 config DRM_I915_PXP
 	bool "Enable Intel PXP support for Intel Gen12 and newer platform"
 	depends on DRM_I915
-	depends on INTEL_MEI
+	depends on INTEL_MEI && INTEL_MEI_PXP
 	default n
 	help
 	  PXP (Protected Xe Path) is an i915 component, available on GEN12 and
@@ -211,6 +211,12 @@ menu "drm/i915 Unstable Evolution"
 	visible if EXPERT && STAGING && BROKEN
 	depends on DRM_I915
 	source "drivers/gpu/drm/i915/Kconfig.unstable"
+endmenu
+
+menu "drm/i915 Chickens"
+	visible if EXPERT && STAGING
+	depends on DRM_I915
+	source "drivers/gpu/drm/i915/Kconfig.chicken"
 endmenu
 
 menu "drm/i915/fabric Intel Fabric Connectivity driver support"

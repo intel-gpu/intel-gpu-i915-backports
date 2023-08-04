@@ -70,11 +70,6 @@ static void i915_ggtt_color_adjust(const struct drm_mm_node *node,
 static int ggtt_init_hw(struct i915_ggtt *ggtt)
 {
 	struct drm_i915_private *i915 = ggtt->vm.i915;
-	int err;
-
-	err = i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
-	if (err)
-		return err;
 
 	ggtt->vm.is_ggtt = true;
 
@@ -439,7 +434,7 @@ static void gen8_ggtt_insert_entries(struct i915_address_space *vm,
 
 	end = gte + vma->guard / I915_GTT_PAGE_SIZE;
 	while (gte < end)
-		gen8_set_pte(gte++, vm->scratch[0]->encode);
+		gen8_set_pte(gte++, i915_vm_ggtt_scratch0_encode(vm));
 
 	end += (vma->node.size - vma->guard) / I915_GTT_PAGE_SIZE;
 	for_each_sgt_daddr(addr, iter, vma->pages)
@@ -448,7 +443,7 @@ static void gen8_ggtt_insert_entries(struct i915_address_space *vm,
 
 	/* Fill the allocated but "unused" space beyond the end of the buffer */
 	while (gte < end)
-		gen8_set_pte(gte++, vm->scratch[0]->encode);
+		gen8_set_pte(gte++, i915_vm_ggtt_scratch0_encode(vm));
 
 	/*
 	 * We want to flush the TLBs only after we're certain all the PTE
@@ -521,7 +516,7 @@ static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
 		}
 		*cs++ = MI_UPDATE_GTT | (2 * num_entries);
 		*cs++ = start;
-		memset64((u64 *)cs, vm->scratch[0]->encode, num_entries);
+		memset64((u64 *)cs, i915_vm_ggtt_scratch0_encode(vm), num_entries);
 		cs += num_entries * 2;
 		intel_ring_advance(rq, cs);
 
@@ -567,8 +562,8 @@ static void gen8_ggtt_insert_entries_wa_bcs(struct i915_address_space *vm,
 		}
 
 		for (;count < num_entries; count++) {
-			*cs++ = lower_32_bits(vm->scratch[0]->encode);
-			*cs++ = upper_32_bits(vm->scratch[0]->encode);
+			*cs++ = lower_32_bits(i915_vm_ggtt_scratch0_encode(vm));
+			*cs++ = upper_32_bits(i915_vm_ggtt_scratch0_encode(vm));
 		}
 		intel_ring_advance(rq, cs);
 
@@ -703,7 +698,7 @@ static void gen6_ggtt_insert_entries(struct i915_address_space *vm,
 
 	end = gte + vma->guard / I915_GTT_PAGE_SIZE;
 	while (gte < end)
-		gen8_set_pte(gte++, vm->scratch[0]->encode);
+		gen8_set_pte(gte++, i915_vm_ggtt_scratch0_encode(vm));
 
 	end += (vma->node.size - vma->guard) / I915_GTT_PAGE_SIZE;
 	for_each_sgt_daddr(addr, iter, vma->pages)
@@ -712,7 +707,7 @@ static void gen6_ggtt_insert_entries(struct i915_address_space *vm,
 
 	/* Fill the allocated but "unused" space beyond the end of the buffer */
 	while (gte < end)
-		iowrite32(vm->scratch[0]->encode, gte++);
+		iowrite32(i915_vm_ggtt_scratch0_encode(vm), gte++);
 
 	/*
 	 * We want to flush the TLBs only after we're certain all the PTE
@@ -729,7 +724,7 @@ static void gen8_ggtt_clear_range(struct i915_address_space *vm,
 	unsigned long num_entries = length / I915_GTT_PAGE_SIZE;
 	gen8_pte_t __iomem *pte =
 		(gen8_pte_t __iomem *)ggtt->gsm + first_entry;
-	const gen8_pte_t scratch = vm->scratch[0]->encode;
+	const gen8_pte_t scratch = i915_vm_ggtt_scratch0_encode(vm);
 
 	while (num_entries--)
 		iowrite32(scratch, pte++);
@@ -826,7 +821,7 @@ static void gen6_ggtt_clear_range(struct i915_address_space *vm,
 		 first_entry, num_entries, max_entries))
 		num_entries = max_entries;
 
-	scratch_pte = vm->scratch[0]->encode;
+	scratch_pte = i915_vm_ggtt_scratch0_encode(vm);
 	for (i = 0; i < num_entries; i++)
 		iowrite32(scratch_pte, &gtt_base[i]);
 }
@@ -851,7 +846,7 @@ void intel_ggtt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= PTE_LM;
 
 	vm->insert_entries(vm, stash, vma, pat_index, pte_flags);
-	vma->page_sizes.gtt = I915_GTT_PAGE_SIZE;
+	vma->page_sizes = I915_GTT_PAGE_SIZE;
 }
 
 static void ggtt_bind_vma_wa(struct i915_address_space *vm,
@@ -957,6 +952,10 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 		 * paths, and we trust that 0 will remain reserved. However,
 		 * the only likely reason for failure to insert is a driver
 		 * bug, which we expect to cause other failures...
+		 *
+		 * Since CPU can perform speculative reads on error capture
+		 * (write-combining allows it) add scratch page after error
+		 * capture to avoid DMAR errors.
 		 */
 		ggtt->error_capture.size = 2 * I915_GTT_PAGE_SIZE;
 		ggtt->error_capture.color = I915_COLOR_UNEVICTABLE;
@@ -970,17 +969,12 @@ static int init_ggtt(struct i915_ggtt *ggtt)
 	}
 	if (drm_mm_node_allocated(&ggtt->error_capture)) {
 		u64 start = ggtt->error_capture.start;
-		u64 end = ggtt->error_capture.start + ggtt->error_capture.size;
+		u64 size = ggtt->error_capture.size;
 
+		ggtt->vm.scratch_range(&ggtt->vm, start, size);
 		drm_dbg(&ggtt->vm.i915->drm,
 			"Reserved GGTT:[%llx, %llx] for use by error capture\n",
-			start, end);
-
-		/*
-		 * During error capture, memcpying from the GGTT is triggering a
-		 * prefetch of the following PTE, so fill it with a guard page.
-		 */
-		ggtt->vm.scratch_range(&ggtt->vm, start, end);
+			start, start + size);
 	}
 
 	/*
@@ -1061,9 +1055,9 @@ static int init_aliasing_ppgtt(struct i915_ggtt *ggtt)
 	if (err)
 		goto err_ppgtt;
 
-	i915_gem_object_lock(ppgtt->vm.scratch[0], NULL);
+	i915_gem_object_lock(ppgtt->pd->pt.base, NULL);
 	err = i915_vm_map_pt_stash(&ppgtt->vm, &stash);
-	i915_gem_object_unlock(ppgtt->vm.scratch[0]);
+	i915_gem_object_unlock(ppgtt->pd->pt.base);
 	if (err)
 		goto err_stash;
 
@@ -1217,9 +1211,6 @@ void i915_ggtt_driver_late_release(struct drm_i915_private *i915)
 		if (gt->type == GT_MEDIA)
 			continue;
 
-		GEM_WARN_ON(kref_read(&ggtt->vm.resv_ref) != 1);
-		dma_resv_fini(&ggtt->vm._resv);
-
 		kfree(ggtt);
 	}
 }
@@ -1277,8 +1268,11 @@ static int ggtt_probe_common(struct i915_ggtt *ggtt, u64 size)
 {
 	struct drm_i915_private *i915 = ggtt->vm.i915;
 	phys_addr_t phys_addr;
-	u32 pte_flags;
 	int ret;
+
+	ret = i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
+	if (ret)
+		return ret;
 
 	phys_addr = ggtt->vm.gt->phys_addr + gen6_gttadr_offset(i915);
 
@@ -1298,8 +1292,7 @@ static int ggtt_probe_common(struct i915_ggtt *ggtt, u64 size)
 		return -ENOMEM;
 	}
 
-	kref_init(&ggtt->vm.resv_ref);
-	ret = setup_scratch_page(&ggtt->vm);
+	ret = i915_vm_setup_scratch0(&ggtt->vm);
 	if (ret) {
 		drm_err(&i915->drm, "Scratch setup failed\n");
 		/* iounmap will also get called at remove, but meh */
@@ -1307,18 +1300,9 @@ static int ggtt_probe_common(struct i915_ggtt *ggtt, u64 size)
 		return ret;
 	}
 
-	pte_flags = 0;
-	if (i915_gem_object_is_lmem(ggtt->vm.scratch[0])) {
+	if (ggtt->vm.scratch[0] && i915_gem_object_is_lmem(ggtt->vm.scratch[0]))
 		/* we rely on scratch in SMEM to clean stale LMEM for the WA */
 		GEM_DEBUG_WARN_ON(intel_ggtt_needs_same_mem_type_within_cl_wa(i915));
-		pte_flags |= PTE_LM;
-	}
-
-	ggtt->vm.scratch[0]->encode =
-		ggtt->vm.pte_encode(px_dma(ggtt->vm.scratch[0]),
-				    i915_gem_get_pat_index(i915,
-							   I915_CACHE_NONE),
-				    pte_flags);
 
 	return 0;
 }
@@ -1343,7 +1327,7 @@ static void gen6_gmch_remove(struct i915_address_space *vm)
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
 
 	iounmap(ggtt->gsm);
-	free_scratch(vm);
+	i915_vm_free_scratch(vm);
 }
 
 static struct resource pci_resource(struct pci_dev *pdev, int bar)
@@ -1634,7 +1618,6 @@ static int ggtt_probe_hw(struct i915_ggtt *ggtt, struct intel_gt *gt)
 	ggtt->vm.gt = gt;
 	ggtt->vm.i915 = i915;
 	ggtt->vm.dma = i915->drm.dev;
-	dma_resv_init(&ggtt->vm._resv);
 
 	if (IS_SRIOV_VF(i915))
 		ret = gen12vf_ggtt_probe(ggtt);
@@ -1644,11 +1627,8 @@ static int ggtt_probe_hw(struct i915_ggtt *ggtt, struct intel_gt *gt)
 		ret = gen6_gmch_probe(ggtt);
 	else
 		ret = intel_ggtt_gmch_probe(ggtt);
-
-	if (ret) {
-		dma_resv_fini(&ggtt->vm._resv);
+	if (ret)
 		return ret;
-	}
 
 	if ((ggtt->vm.total - 1) >> 32) {
 		drm_err(&i915->drm,
@@ -1803,6 +1783,10 @@ void i915_ggtt_resume(struct i915_ggtt *ggtt)
 
 	flush = i915_ggtt_resume_vm(&ggtt->vm);
 
+	if (drm_mm_node_allocated(&ggtt->error_capture))
+		ggtt->vm.scratch_range(&ggtt->vm, ggtt->error_capture.start,
+				       ggtt->error_capture.size);
+
 	ggtt->invalidate(ggtt);
 
 	if (flush)
@@ -1815,7 +1799,9 @@ static struct scatterlist *
 rotate_pages(struct drm_i915_gem_object *obj, unsigned int offset,
 	     unsigned int width, unsigned int height,
 	     unsigned int src_stride, unsigned int dst_stride,
-	     struct sg_table *st, struct scatterlist *sg)
+	     struct sg_table *st,
+	     struct scatterlist *sg,
+	     struct scatterlist **end)
 {
 	unsigned int column, row;
 	pgoff_t src_idx;
@@ -1825,7 +1811,6 @@ rotate_pages(struct drm_i915_gem_object *obj, unsigned int offset,
 
 		src_idx = src_stride * (height - 1) + column + offset;
 		for (row = 0; row < height; row++) {
-			st->nents++;
 			/*
 			 * We don't need the pages, but need to initialize
 			 * the entries so the sg list can be happily traversed.
@@ -1835,16 +1820,17 @@ rotate_pages(struct drm_i915_gem_object *obj, unsigned int offset,
 			sg_dma_address(sg) =
 				i915_gem_object_get_dma_address(obj, src_idx);
 			sg_dma_len(sg) = I915_GTT_PAGE_SIZE;
+
+			*end = sg;
 			sg = sg_next(sg);
+			st->nents++;
+
 			src_idx -= src_stride;
 		}
 
 		left = (dst_stride - height) * I915_GTT_PAGE_SIZE;
-
 		if (!left)
 			continue;
-
-		st->nents++;
 
 		/*
 		 * The DE ignores the PTEs for the padding tiles, the sg entry
@@ -1854,7 +1840,10 @@ rotate_pages(struct drm_i915_gem_object *obj, unsigned int offset,
 		sg_set_page(sg, NULL, left, 0);
 		sg_dma_address(sg) = 0;
 		sg_dma_len(sg) = left;
+
+		*end = sg;
 		sg = sg_next(sg);
+		st->nents++;
 	}
 
 	return sg;
@@ -1866,8 +1855,8 @@ intel_rotate_pages(struct intel_rotation_info *rot_info,
 {
 	unsigned int size = intel_rotation_info_size(rot_info);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct scatterlist *sg, *end;
 	struct sg_table *st;
-	struct scatterlist *sg;
 	int ret = -ENOMEM;
 	int i;
 
@@ -1881,15 +1870,16 @@ intel_rotate_pages(struct intel_rotation_info *rot_info,
 		goto err_sg_alloc;
 
 	st->nents = 0;
-	sg = st->sgl;
+	end = sg = st->sgl;
 
 	for (i = 0 ; i < ARRAY_SIZE(rot_info->plane); i++)
 		sg = rotate_pages(obj, rot_info->plane[i].offset,
 				  rot_info->plane[i].width, rot_info->plane[i].height,
 				  rot_info->plane[i].src_stride,
 				  rot_info->plane[i].dst_stride,
-				  st, sg);
+				  st, sg, &end);
 
+	sg_mark_end(end);
 	return st;
 
 err_sg_alloc:
@@ -1905,10 +1895,10 @@ err_st_alloc:
 
 static struct scatterlist *
 add_padding_pages(unsigned int count,
-		  struct sg_table *st, struct scatterlist *sg)
+		  struct sg_table *st,
+		  struct scatterlist *sg,
+		  struct scatterlist **end)
 {
-	st->nents++;
-
 	/*
 	 * The DE ignores the PTEs for the padding tiles, the sg entry
 	 * here is just a convenience to indicate how many padding PTEs
@@ -1917,7 +1907,10 @@ add_padding_pages(unsigned int count,
 	sg_set_page(sg, NULL, count * I915_GTT_PAGE_SIZE, 0);
 	sg_dma_address(sg) = 0;
 	sg_dma_len(sg) = count * I915_GTT_PAGE_SIZE;
+
+	*end = sg;
 	sg = sg_next(sg);
+	st->nents++;
 
 	return sg;
 }
@@ -1927,7 +1920,9 @@ remap_tiled_color_plane_pages(struct drm_i915_gem_object *obj,
 			      unsigned long offset, unsigned int alignment_pad,
 			      unsigned int width, unsigned int height,
 			      unsigned int src_stride, unsigned int dst_stride,
-			      struct sg_table *st, struct scatterlist *sg,
+			      struct sg_table *st,
+			      struct scatterlist *sg,
+			      struct scatterlist **end,
 			      unsigned int *gtt_offset)
 {
 	unsigned int row;
@@ -1936,7 +1931,7 @@ remap_tiled_color_plane_pages(struct drm_i915_gem_object *obj,
 		return sg;
 
 	if (alignment_pad)
-		sg = add_padding_pages(alignment_pad, st, sg);
+		sg = add_padding_pages(alignment_pad, st, sg, end);
 
 	for (row = 0; row < height; row++) {
 		unsigned int left = width * I915_GTT_PAGE_SIZE;
@@ -1952,15 +1947,15 @@ remap_tiled_color_plane_pages(struct drm_i915_gem_object *obj,
 			 */
 
 			addr = i915_gem_object_get_dma_address_len(obj, offset, &length);
-
 			length = min(left, length);
-
-			st->nents++;
 
 			sg_set_page(sg, NULL, length, 0);
 			sg_dma_address(sg) = addr;
 			sg_dma_len(sg) = length;
+
+			*end = sg;
 			sg = sg_next(sg);
+			st->nents++;
 
 			offset += length / I915_GTT_PAGE_SIZE;
 			left -= length;
@@ -1969,11 +1964,10 @@ remap_tiled_color_plane_pages(struct drm_i915_gem_object *obj,
 		offset += src_stride - width;
 
 		left = (dst_stride - width) * I915_GTT_PAGE_SIZE;
-
 		if (!left)
 			continue;
 
-		sg = add_padding_pages(left >> PAGE_SHIFT, st, sg);
+		sg = add_padding_pages(left >> PAGE_SHIFT, st, sg, end);
 	}
 
 	*gtt_offset += alignment_pad + dst_stride * height;
@@ -1985,7 +1979,8 @@ static struct scatterlist *
 remap_contiguous_pages(struct drm_i915_gem_object *obj,
 		       pgoff_t obj_offset,
 		       pgoff_t page_count,
-		       struct sg_table *st, struct scatterlist *sg)
+		       struct sg_table *st,
+		       struct scatterlist *sg)
 {
 	struct scatterlist *iter;
 	unsigned int offset;
@@ -2038,20 +2033,23 @@ static struct scatterlist *
 remap_linear_color_plane_pages(struct drm_i915_gem_object *obj,
 			       pgoff_t obj_offset, unsigned int alignment_pad,
 			       unsigned int size,
-			       struct sg_table *st, struct scatterlist *sg,
+			       struct sg_table *st,
+			       struct scatterlist *sg,
+			       struct scatterlist **end,
 			       unsigned int *gtt_offset)
 {
 	if (!size)
 		return sg;
 
 	if (alignment_pad)
-		sg = add_padding_pages(alignment_pad, st, sg);
+		sg = add_padding_pages(alignment_pad, st, sg, end);
 
 	sg = remap_contiguous_pages(obj, obj_offset, size, st, sg);
+
+	*end = sg;
 	sg = sg_next(sg);
 
 	*gtt_offset += alignment_pad + size;
-
 	return sg;
 }
 
@@ -2059,7 +2057,9 @@ static struct scatterlist *
 remap_color_plane_pages(const struct intel_remapped_info *rem_info,
 			struct drm_i915_gem_object *obj,
 			int color_plane,
-			struct sg_table *st, struct scatterlist *sg,
+			struct sg_table *st,
+			struct scatterlist *sg,
+			struct scatterlist **end,
 			unsigned int *gtt_offset)
 {
 	unsigned int alignment_pad = 0;
@@ -2072,7 +2072,7 @@ remap_color_plane_pages(const struct intel_remapped_info *rem_info,
 						    rem_info->plane[color_plane].offset,
 						    alignment_pad,
 						    rem_info->plane[color_plane].size,
-						    st, sg,
+						    st, sg, end,
 						    gtt_offset);
 
 	else
@@ -2083,7 +2083,7 @@ remap_color_plane_pages(const struct intel_remapped_info *rem_info,
 						   rem_info->plane[color_plane].height,
 						   rem_info->plane[color_plane].src_stride,
 						   rem_info->plane[color_plane].dst_stride,
-						   st, sg,
+						   st, sg, end,
 						   gtt_offset);
 
 	return sg;
@@ -2095,9 +2095,9 @@ intel_remap_pages(struct intel_remapped_info *rem_info,
 {
 	unsigned int size = intel_remapped_info_size(rem_info);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct sg_table *st;
-	struct scatterlist *sg;
+	struct scatterlist *sg, *end;
 	unsigned int gtt_offset = 0;
+	struct sg_table *st;
 	int ret = -ENOMEM;
 	int i;
 
@@ -2111,11 +2111,12 @@ intel_remap_pages(struct intel_remapped_info *rem_info,
 		goto err_sg_alloc;
 
 	st->nents = 0;
-	sg = st->sgl;
+	end = sg = st->sgl;
 
 	for (i = 0 ; i < ARRAY_SIZE(rem_info->plane); i++)
-		sg = remap_color_plane_pages(rem_info, obj, i, st, sg, &gtt_offset);
+		sg = remap_color_plane_pages(rem_info, obj, i, st, sg, &end, &gtt_offset);
 
+	sg_mark_end(end);
 	i915_sg_trim(st);
 
 	return st;
@@ -2240,7 +2241,7 @@ int i915_ggtt_balloon(struct i915_ggtt *ggtt, u64 start, u64 end,
 	return 0;
 }
 
-inline bool i915_ggtt_has_xehpsdv_pte_vfid_mask(struct i915_ggtt *ggtt)
+bool i915_ggtt_has_xehpsdv_pte_vfid_mask(struct i915_ggtt *ggtt)
 {
 	return GRAPHICS_VER_FULL(ggtt->vm.i915) < IP_VER(12, 50);
 }

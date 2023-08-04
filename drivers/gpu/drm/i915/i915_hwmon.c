@@ -51,6 +51,8 @@ struct hwm_drvdata {
 	struct hwm_energy_info ei;		/*  Energy info for energy1_input */
 	char name[12];
 	int gt_n;
+	bool reset_in_progress;
+	wait_queue_head_t waitq;
 };
 
 struct i915_hwmon {
@@ -323,6 +325,62 @@ static const struct attribute_group *hwm_groups[] = {
 	NULL
 };
 
+#ifdef BPM_HWMON_CHANNEL_INFO_NOT_PRESENT
+static const u32 hwmon_in_config[] = {
+        HWMON_I_INPUT,
+        0
+};
+static const struct hwmon_channel_info hwm_in = {
+        .type = hwmon_in,
+        .config = hwmon_in_config,
+};
+#ifdef POWER1_RATED_MAX_NOT_PRESENT
+static const u32 hwmon_power_config[] = {
+        HWMON_P_MAX | HWMON_P_CRIT,
+        0
+};
+static const struct hwmon_channel_info hwm_power = {
+        .type = hwmon_power,
+        .config = hwmon_power_config,
+};
+#else
+static const u32 hwmon_power_config[] = {
+        HWMON_P_MAX | HWMON_P_CRIT | HWMON_P_CRIT,
+        0
+};
+static const struct hwmon_channel_info hwm_power = {
+        .type = hwmon_power,
+        .config = hwmon_power_config,
+};
+#endif
+static const u32 hwmon_energy_config[] = {
+        HWMON_E_INPUT,
+        0
+};
+static const struct hwmon_channel_info hwm_energy_test = {
+        .type = hwmon_energy,
+        .config = hwmon_energy_config,
+};
+static const u32 hwmon_curr_config[] = {
+        HWMON_C_CRIT,
+        0
+};
+static const struct hwmon_channel_info hwm_curr = {
+        .type = hwmon_curr,
+        .config = hwmon_curr_config,
+};
+static const struct hwmon_channel_info *hwm_info[] = {
+        &hwm_in,
+        &hwm_power,
+        &hwm_energy_test,
+        &hwm_curr,
+        NULL
+};
+static const struct hwmon_channel_info *hwm_gt_info[] = {
+        &hwm_energy_test,
+        NULL
+};
+#else
 static const struct hwmon_channel_info *hwm_info[] = {
 	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT),
 #ifdef POWER1_RATED_MAX_NOT_PRESENT
@@ -339,7 +397,7 @@ static const struct hwmon_channel_info *hwm_gt_info[] = {
 	HWMON_CHANNEL_INFO(energy, HWMON_E_INPUT),
 	NULL
 };
-
+#endif
 /* I1 is exposed as power_crit or as curr_crit depending on bit 31 */
 static int hwm_pcode_read_i1(struct drm_i915_private *i915, u32 *uval)
 {
@@ -458,31 +516,56 @@ hwm_power_max_write(struct hwm_drvdata *ddat, long val)
 {
 	struct i915_hwmon *hwmon = ddat->hwmon;
 	intel_wakeref_t wakeref;
+	DEFINE_WAIT(wait);
+	int ret = 0;
 	u32 nval;
+
+	/* Block waiting for GuC reset to complete when needed */
+	for (;;) {
+		mutex_lock(&hwmon->hwmon_lock);
+
+		prepare_to_wait(&ddat->waitq, &wait, TASK_INTERRUPTIBLE);
+
+		if (!hwmon->ddat.reset_in_progress)
+			break;
+
+		if (signal_pending(current)) {
+			ret = -EINTR;
+			break;
+		}
+
+		mutex_unlock(&hwmon->hwmon_lock);
+
+		schedule();
+	}
+	finish_wait(&ddat->waitq, &wait);
+	if (ret)
+		goto unlock;
+
+	wakeref = intel_runtime_pm_get(ddat->uncore->rpm);
 
 	/* Disable PL1 limit and verify, because the limit cannot be disabled on all platforms */
 	if (val == PL1_DISABLE) {
-		mutex_lock(&hwmon->hwmon_lock);
-		with_intel_runtime_pm(ddat->uncore->rpm, wakeref) {
-			intel_uncore_rmw(ddat->uncore, hwmon->rg.pkg_rapl_limit,
-					 PKG_PWR_LIM_1_EN, 0);
-			nval = intel_uncore_read(ddat->uncore, hwmon->rg.pkg_rapl_limit);
-		}
-		mutex_unlock(&hwmon->hwmon_lock);
+		intel_uncore_rmw(ddat->uncore, hwmon->rg.pkg_rapl_limit,
+				 PKG_PWR_LIM_1_EN, 0);
+		nval = intel_uncore_read(ddat->uncore, hwmon->rg.pkg_rapl_limit);
 
 		if (nval & PKG_PWR_LIM_1_EN)
-			return -ENODEV;
-		return 0;
+			ret = -ENODEV;
+		goto exit;
 	}
 
 	/* Computation in 64-bits to avoid overflow. Round to nearest. */
 	nval = DIV_ROUND_CLOSEST_ULL((u64)val << hwmon->scl_shift_power, SF_POWER);
 	nval = PKG_PWR_LIM_1_EN | REG_FIELD_PREP(PKG_PWR_LIM_1, nval);
 
-	hwm_locked_with_pm_intel_uncore_rmw(ddat, hwmon->rg.pkg_rapl_limit,
-					    PKG_PWR_LIM_1_EN | PKG_PWR_LIM_1,
-					    nval);
-	return 0;
+	intel_uncore_rmw(ddat->uncore, hwmon->rg.pkg_rapl_limit,
+			 PKG_PWR_LIM_1_EN | PKG_PWR_LIM_1, nval);
+exit:
+	intel_runtime_pm_put(ddat->uncore->rpm, wakeref);
+unlock:
+	mutex_unlock(&hwmon->hwmon_lock);
+	return ret;
 }
 
 static int
@@ -534,6 +617,41 @@ hwm_power_write(struct hwm_drvdata *ddat, u32 attr, int chan, long val)
 	default:
 		return -EOPNOTSUPP;
 	}
+}
+
+void i915_hwmon_power_max_disable(struct drm_i915_private *i915, bool *old)
+{
+	struct i915_hwmon *hwmon = i915->hwmon;
+	u32 r;
+
+	if (!hwmon || !i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit))
+		return;
+
+	mutex_lock(&hwmon->hwmon_lock);
+
+	hwmon->ddat.reset_in_progress = true;
+	r = intel_uncore_rmw(hwmon->ddat.uncore, hwmon->rg.pkg_rapl_limit,
+			     PKG_PWR_LIM_1_EN, 0);
+	*old = !!(r & PKG_PWR_LIM_1_EN);
+
+	mutex_unlock(&hwmon->hwmon_lock);
+}
+
+void i915_hwmon_power_max_restore(struct drm_i915_private *i915, bool old)
+{
+	struct i915_hwmon *hwmon = i915->hwmon;
+
+	if (!hwmon || !i915_mmio_reg_valid(hwmon->rg.pkg_rapl_limit))
+		return;
+
+	mutex_lock(&hwmon->hwmon_lock);
+
+	intel_uncore_rmw(hwmon->ddat.uncore, hwmon->rg.pkg_rapl_limit,
+			 PKG_PWR_LIM_1_EN, old ? PKG_PWR_LIM_1_EN : 0);
+	hwmon->ddat.reset_in_progress = false;
+	wake_up_all(&hwmon->ddat.waitq);
+
+	mutex_unlock(&hwmon->hwmon_lock);
 }
 
 static umode_t
@@ -813,6 +931,7 @@ void i915_hwmon_register(struct drm_i915_private *i915)
 	ddat->uncore = &i915->uncore;
 	snprintf(ddat->name, sizeof(ddat->name), "i915");
 	ddat->gt_n = -1;
+	init_waitqueue_head(&ddat->waitq);
 
 	for_each_gt(gt, i915, i) {
 		ddat_gt = hwmon->ddat_gt + i;

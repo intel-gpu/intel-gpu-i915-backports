@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Copyright(c) 2020 - 2022 Intel Corporation.
+ * Copyright(c) 2020 - 2023 Intel Corporation.
  */
 
 #ifndef IAF_DRV_H_INCLUDED
@@ -11,6 +11,7 @@
 #else
 #include <linux/platform_device.h>
 #endif
+#include <linux/dcache.h>
 #include <linux/irqreturn.h>
 #include <linux/mtd/mtd.h>
 #include <linux/rwsem.h>
@@ -46,9 +47,29 @@
  */
 #define MAX_PSCBIN_VERSION 64
 
-#define PORT_COUNT            13
-#define PORT_FABRIC_COUNT      8
-#define PORT_PHYSICAL_START    1
+/*
+ * Currently, ports are numbered as follows (port numbers come from PSCBIN/INIBIN data):
+ * 0 : reserved/CPORT
+ * 1-8 : fabric ports
+ * 9-11 : bridge ports
+ *
+ * The driver uses sd->fport_lpns and sd->bport_lpns to avoid hardcoding the numbering scheme,
+ * although some external interfaces such as the TX calibration blob rely on it.
+ */
+
+/* current device/firmware allows only 3 bridge ports, historically up to 4 were supported */
+#define PORT_PHYSICAL_START	(1)
+#define PORT_FABRIC_COUNT	(8)
+#define PORT_BRIDGE_COUNT	(4)
+#define PORT_COUNT		(PORT_PHYSICAL_START + PORT_FABRIC_COUNT + PORT_BRIDGE_COUNT)
+
+/* This limits the range of fabric port numbers to [PORT_PHYSICAL_START..TXCAL_PORT_COUNT]. */
+#define TXCAL_PORT_COUNT	(8)
+
+/* prevent overruns when calibration data is copied into sd->txcal[] */
+#if TXCAL_PORT_COUNT + PORT_PHYSICAL_START >= PORT_COUNT
+#error TXCAL_PORT_COUNT cannot exceed largest port number
+#endif
 
 #define CPORT_LPN_MASK BIT(0)
 
@@ -466,7 +487,6 @@ enum iaf_startup_mode {
 #endif
 };
 
-struct fport; /* from this file */
 struct fsubdev; /* from this file */
 
 /**
@@ -484,11 +504,6 @@ enum PORT_CONTROL {
 	PORT_CONTROL_ROUTABLE,
 	PORT_CONTROL_BEACONING,
 	NUM_PORT_CONTROLS
-};
-
-struct port_lane {
-	struct fport *port;
-	u32 lane_number;
 };
 
 /*
@@ -513,7 +528,7 @@ struct fport_routing {
  * @link_degrades: attribute for link_degrades sysfs file
  * @lpn: logical port number in firmware
  * @port_type: type of port (hardwired, QFSP, etc.)
- * @ports_lanes: used by debugfs code to match a port/lane combination
+ * @lanes_port: for each lane the port to which it belongs
  * @log_state: firmware logical state (DOWN, INIT, ARMED, ACTIVE)
  * @phys_state: firmware physical state (DISABLED, POLLING, ..., LINKUP)
  * @state: driver-abstracted high level view of port state
@@ -544,7 +559,7 @@ struct fport {
 	/* values const after async probe */
 	u8 lpn;
 	u8 port_type;
-	struct port_lane ports_lanes[LANES];
+	struct fport *lanes_port[LANES];
 
 	/* protected by routable_lock, written by PM thread with shared lock */
 	u8 log_state;
@@ -794,10 +809,11 @@ struct fsubdev_routing_info {
  * @sd_failure: attribute for sd_failure sysfs file
  * @firmware_version: attribute for firmware_version sysfs file
  * @guid: GUID retrieved from firmware
+ * @txcal: TX calibration data for all fabric ports
  * @switchinfo: switch information read directly from firmware
  * @extended_port_cnt: count of all ports including CPORT and bridge ports
  * @port_cnt: count of all fabric ports
- * @PORT_COUNT: number of supported fabric ports
+ * @PORT_COUNT: number of supported ports
  * @fport_lpns: bitmap of which logical ports are fabric ports
  * @bport_lpns: bitmap of which logical ports are bridge ports
  * @fw_version: version information of firmware
@@ -855,6 +871,7 @@ struct fsubdev {
 	struct device_attribute firmware_version;
 
 	u64 guid;
+	u16 txcal[PORT_COUNT];
 	struct mbdb_op_switchinfo switchinfo;
 	u8 extended_port_cnt;
 	u8 port_cnt;
@@ -996,6 +1013,73 @@ struct psc_presence_rule {
 	u32 port_map;
 };
 
+/*
+ * TX calibration blob, optionally found after PSC
+ */
+
+/*
+ * TXCAL BLOB magic number: corresponds to the string "Xe Tx Cal Blob\0\0"
+ */
+#define TXCAL_BLOB_MAGIC_0 (0x54206558)
+#define TXCAL_BLOB_MAGIC_1 (0x61432078)
+#define TXCAL_BLOB_MAGIC_2 (0x6c42206c)
+#define TXCAL_BLOB_MAGIC_3 (0x0000626f)
+
+/*
+ * Format of struct txcal_blob being used
+ */
+#define TXCAL_VERSION_CURRENT (1)
+#define TXCAL_VERSION_MIN (1)
+#define TXCAL_VERSION_MAX (1)
+
+/**
+ * struct txcal_settings - TX calibration settings for a subdevice
+ * @guid: GUID of subdevice
+ * @port_settings: array of settings for each possible fabric port
+ *
+ * Identifies the SERDES TX DCC MARGIN parameters for each possible fabric
+ * port on a subdevice. @port_settings[lpn] == 0 means there is no calibration
+ * data for that fabric port. These are applied before bringing any ports up
+ * via the TX_DCC_MARGIN_PARAM subopcode of the SERDES_MARGIN opcode.
+ */
+struct txcal_settings {
+	u64 guid;
+	u16 port_settings[TXCAL_PORT_COUNT];
+};
+
+/**
+ * struct txcal_blob - TX calibration settings for all subdevices
+ * @magic: must be 0x54206558, 0x61432078, 0x6c42206c, 0x0000626f ("Xe Tx Cal Blob\0\0")
+ * @format_version: must be in range [TXCAL_VERSION_MIN : TXCAL_VERSION_MAX]
+ * @cfg_version: configuration version, if specified
+ * @date: UTC generation date in BCD (YYYYMMDD)
+ * @time: UTC generation time in BCD (HHMMSS)
+ * @size: size of entire structure including @data array
+ * @num_settings: number of elements in @data array
+ * @crc32c_data: CRC covering @data array
+ * @crc32c_hdr: CRC covering all other header fields
+ * @data: Array of per-subdevice TX calibration settings
+ *
+ * Identifies all TX calibration settings for a set of subdevices. The set
+ * must include all subdevices for the device from which this blob was read
+ * and will typically include all subdevices in the system (like the binary
+ * PSC blob). This blob is normally located in SPI flash immediately after
+ * the PSC blob, and is only used if present (as indicated by valid magic
+ * and CRC fields).
+ */
+struct txcal_blob {
+	u32 magic[4];
+	u32 format_version;
+	u32 cfg_version;
+	u32 date;
+	u32 time;
+	u32 size;
+	u32 num_settings;
+	u32 crc32c_data;
+	u32 crc32c_hdr;
+	struct txcal_settings data[];
+};
+
 /**
  * struct fdev - Device structure for IAF/fabric device component
  * @sd: subdevice structures
@@ -1100,6 +1184,7 @@ struct fdev {
 		} ini_buf[IAF_MAX_SUB_DEVS];
 		size_t n_presence_rules;
 		struct psc_presence_rule *presence_rules;
+		struct txcal_blob *txcal;
 	} psc;
 	struct routing_p2p_entry __rcu *p2p;
 	struct routing_p2p_entry *p2p_next;
@@ -1181,46 +1266,30 @@ static inline bool dev_is_preload(struct fdev *dev)
 }
 
 /*
- * The routing lock protects data structures that must not change during
- * routing, specifically all routing fields of all elements in the routable
- * list.
+ * routable_lock affects ALL devices in the system and protects data structures that must not
+ * change during routing, specifically all routing fields of all elements in the routable list. It
+ * also protects port state written by port manager instances that affect routing. Individual port
+ * managers must be blocked from updating their state while they are being used by routing but must
+ * not be blocked from updating their own state by port managers working on other tiles.
  *
- * Individual port manager instances can update state FOR THEIR TILE ONLY while
- * holding a shared lock, since the routing engine will always use an exclusive
- * lock.
+ * rw_semaphore down_write operations take the lock exclusively (traditionally protecting the data
+ * for writing) and down_read operations take it in a shared manner (traditionally protecting the
+ * data for reading). Port managers exclusively access their own data in single threads are thus
+ * allowed to update their own data while using a shared read lock. All other consumers must use an
+ * exclusive write lock to access that data.
+ *
+ * Routing and general consumers must use down_write and treat routable_lock as a mutex to acquire
+ * read/write access to all data protected by the lock. Port managers (only) may use down_read to
+ * access ONE tile's data and must be guaranteed to be race free independent of the lock.
+ *
+ * Routing data structures that are not written by port managers can be protected for read-only
+ * access using down_read() to obtain a shared lock in the traditional manner. During a routing
+ * sweep, after routing has computed new routing state, that state is frozen and the exclusive
+ * write lock is downgraded to a shared read lock for remaining device programming. A shared lock is
+ * also used to protect debugfs read access of frozen routing state.
  */
 extern struct rw_semaphore routable_lock;
 extern struct list_head routable_list;
-
-/*
- * The following map r/w semaphore operations to exclusive/shared lock
- * operations. Thus, the routing engine and any agent that is updating the
- * overall structure of routing-affecting data structures must protect them
- * with:
- *	lock_exclusive(&routable_lock);
- * and
- *	unlock_exclusive(&routable_lock);
- *
- * Readers of these data structures and port manager agents that are writing
- * port state data solely for consumption by the routing engine can instead
- * use:
- *	lock_shared(&routable_lock);
- * and
- *	unlock_shared(&routable_lock);
- *
- * Trylock versions are available as well as an operation that can downgrade
- * the lock from exclusive to shared. The latter prevents the structure from
- * being changed (e.g., addition or removal of subdevices or devices) but
- * allows other agents to get the shared lock.
- */
-
-#define lock_exclusive			down_write
-#define lock_exclusive_trylock		down_write_trylock
-#define lock_shared			down_read
-#define lock_shared_trylock		down_read_trylock
-#define lock_downgrade_to_shared	downgrade_write
-#define unlock_exclusive		up_write
-#define unlock_shared			up_read
 
 static inline struct device *sd_dev(const struct fsubdev *sd)
 {
@@ -1246,6 +1315,11 @@ static inline u64 flits_to_bytes(u64 flits)
 	return __builtin_umulll_overflow(flits, BYTES_PER_FLIT, &bytes) ? ULLONG_MAX : bytes;
 }
 
+static inline u32 lane_number(struct fport **port)
+{
+	return port - (*port)->lanes_port;
+}
+
 void indicate_subdevice_error(struct fsubdev *sd, enum sd_error err);
 
 /* The following two functions increase device reference count: */
@@ -1256,6 +1330,8 @@ struct fsubdev *find_sd_id(u32 fabric_id, u8 sd_index);
 struct fsubdev *find_routable_sd(u64 guid);
 
 void iaf_complete_init_dev(struct fdev *dev);
+
+bool noisy_logging_allowed(void);
 
 bool mappings_ref_check(struct fdev *dev);
 

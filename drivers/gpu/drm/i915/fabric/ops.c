@@ -110,11 +110,12 @@ int ops_tx_dcc_interp_override_enable_set(struct fsubdev *sd, u32 port, u32 lane
 		u32 lane;
 		u32 enable;
 	} __packed req = {};
+	struct tx_dcc_margin_error_rsp rsp;
 	struct mbdb_op_param op_param;
 	u64 cw;
 
-	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), NULL, 0, &cw,
-						 POSTED_CHECK_OP(posted));
+	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), posted ? NULL : &rsp,
+						 sizeof(rsp), &cw, POSTED_CHECK_OP(posted));
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
 
@@ -167,10 +168,12 @@ int ops_tx_dcc_interp_override_set(struct fsubdev *sd, u32 port, u32 lane, u32 v
 		u32 lane;
 		u32 value;
 	} __packed req = {};
+	struct tx_dcc_margin_error_rsp rsp;
 	struct mbdb_op_param op_param;
 	u64 cw;
 
-	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), NULL, 0, &cw,
+	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), posted ? NULL : &rsp,
+						 posted ? 0 : sizeof(rsp), &cw,
 						 POSTED_CHECK_OP(posted));
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
@@ -223,10 +226,12 @@ int ops_maint_mode_set(struct fsubdev *sd, u32 port, u32 mode, bool posted)
 		u32 port;
 		u32 mode;
 	} __packed req = {};
+	struct tx_dcc_margin_error_rsp rsp;
 	struct mbdb_op_param op_param;
 	u64 cw;
 
-	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), NULL, 0, &cw,
+	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), posted ? NULL : &rsp,
+						 posted ? 0 : sizeof(rsp), &cw,
 						 POSTED_CHECK_OP(posted));
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
@@ -276,10 +281,12 @@ int ops_tx_dcc_index_set(struct fsubdev *sd, u32 port, u32 lane, u32 index, bool
 		u32 lane;
 		u32 index;
 	} __packed req = {};
+	struct tx_dcc_margin_error_rsp rsp;
 	struct mbdb_op_param op_param;
 	u64 cw;
 
-	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), NULL, 0, &cw,
+	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), posted ? NULL : &rsp,
+						 posted ? 0 : sizeof(rsp), &cw,
 						 POSTED_CHECK_OP(posted));
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
@@ -331,10 +338,12 @@ int ops_tx_dcc_margin_param_set(struct fsubdev *sd, u32 port, u16 value, bool po
 		u32 port;
 		u16 value;
 	} __packed req = {};
+	struct tx_dcc_margin_error_rsp rsp;
 	struct mbdb_op_param op_param;
 	u64 cw;
 
-	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), NULL, 0, &cw,
+	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, sizeof(req), posted ? NULL : &rsp,
+						 posted ? 0 : sizeof(rsp), &cw,
 						 POSTED_CHECK_OP(posted));
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
@@ -1185,13 +1194,19 @@ int ops_fw_start(struct fsubdev *sd)
 	struct mbdb_ibox *ibox;
 	u32 result = 0;
 	u64 cw;
+	int err;
 
 	ibox = mbdb_op_build_cw_and_acquire_ibox(sd, op_code, 0, &result, sizeof(result), &cw,
 						 NON_POSTED_CHECK_OP);
 	if (IS_ERR(ibox))
 		return PTR_ERR(ibox);
 
-	return ops_execute(sd, &cw, 0, NULL, ibox);
+	err = ops_execute(sd, &cw, 0, NULL, ibox);
+	if (err)
+		return err;
+
+	/* map fw start failures to an op status error */
+	return result ? MBOX_RSP_STATUS_LOGICAL_ERROR : 0;
 }
 
 int ops_csr_raw_write(struct fsubdev *sd, u32 addr, const void *data, u32 len,

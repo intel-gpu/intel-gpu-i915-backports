@@ -31,6 +31,10 @@
 
 #include_next <linux/mm.h>
 
+#ifdef BPM_TOTALRAM_PAGES_FUNC_NOT_PRESENT
+#define totalram_pages() totalram_pages
+#endif
+
 #ifdef BPM_VMA_SET_FILE_NOT_PRESENT
 #define vma_set_file LINUX_DMABUF_BACKPORT(vma_set_file)
 void vma_set_file(struct vm_area_struct *vma, struct file *file);

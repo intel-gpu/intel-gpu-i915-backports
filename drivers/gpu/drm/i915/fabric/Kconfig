@@ -3,7 +3,7 @@ config DRM_I915_INTEL_FABRIC
 	tristate "Intel Fabric Connectivity driver support"
 	depends on m
 	depends on m
-	depends on BOTH_DMABUF_I915 || ONLY_I915
+	depends on BUILD_DMABUF_I915_MEI || ONLY_I915
 	depends on 64BIT
 	depends on NET
 	depends on LIBCRC32C
@@ -35,15 +35,6 @@ config IAF_DEBUG_SELFTESTS
 	help
 	  Enable Intel Accelerator Fabric driver self-tests to be triggered
 	  by the 'selftests' module parameter
-
-config IAF_DEBUG_FIRMWARE_ROPTION
-	bool "Enable Intel Accelerator Fabric firmware roptions"
-	depends on IAF_DEBUG_ENABLE
-	default y
-	help
-	  DO NOT UPSTREAM:
-	  Allow firmware_roption to specify the value of the firmware roption
-	  debug register
 
 config IAF_DEBUG_MBOX_ACCESS
 	bool "Enable Intel Accelerator Fabric mbox access interface"

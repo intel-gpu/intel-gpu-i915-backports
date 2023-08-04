@@ -5,11 +5,11 @@
 
 #if LINUX_VERSION_IS_LESS(6,0,0)
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+#if !((REDHAT_RELEASE_VERSION_IS_LEQ(9,0)) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
 /*
  * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
  */
-#define INTEL_GMCH_GTT_RENAMED
+#define BPM_INTEL_GMCH_GTT_RENAMED
 #endif
 #endif
 
@@ -20,6 +20,13 @@
  */
 
 #define BPM_DRM_DP_128B132B_API_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,19,0)
+/*
+ * 6a99099 drm/display: Move HDCP helpers into display-helper module
+ */
+#define BPM_HDCP_HELPERS_NOT_IN_DISPLAY_DIRECTORY
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,16,0)
@@ -62,6 +69,18 @@
 #endif
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,17,0)
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+
+/*
+ * 365481e42a8a driver core: auxiliary bus: Add driver data helpers
+ */
+#define BPM_AUXILIARY_BUS_HELPERS_NOT_PRESENT
+
+#endif
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 
@@ -70,6 +89,14 @@
  * 621f7e354fd8 PCI: Make pci_set_of_node(), etc private
  */
 #define BPM_PCI_INTERFACES_NOT_PRESENT
+
+/*
+ * fc7a620 bus: Make remove callback return void
+ *
+ * In file bus.h in bus_type sturct, return type of remove function 
+ * changed from int to void
+ */
+#define BPM_BUS_REMOVE_FUNCTION_RETURN_TYPE_CHANGED
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
@@ -135,10 +162,11 @@
  */
 #define BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+#if !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
- * Add macro to export pci_find_host_bridge()
- * 59dc33252ee7 PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus 
+ * 59dc33252ee7
+ * PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus
  */
 #define BPM_PCI_FIND_HOST_BRIDGE_NOT_EXPORTED
 #endif
@@ -197,7 +225,7 @@
 #endif
 #endif
 
-#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0))
+#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
 /*
  * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
  *
@@ -275,7 +303,8 @@
 #define BPM_MIGHT_ALLOC_NOT_PRESENT
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
+		REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
 /*
  * ab440b2c604b seqlock: Rename __seqprop() users
  */
@@ -323,6 +352,7 @@
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+	REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
         SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
 /*
  * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
@@ -370,6 +400,15 @@
  */
 
 #define POWER1_RATED_MAX_NOT_PRESENT
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+/*
+ * e130816164e include/linux/list.h: add a macro to test if entry is pointing to the head
+ */
+#define BPM_LIST_ENTRY_IS_HEAD_NOT_PRESENT
+#endif
+
 #endif /* LINUX_VERSION_IS_LESS(5,10,0) */
 
 
@@ -577,6 +616,11 @@
  *
  */
 #define BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+
+/*
+ * f1f6a7dd9b53 mm, tree-wide: rename put_user_page*() to unpin_user_page*()
+ */
+#define BPM_PIN_OR_UNPIN_USER_PAGE_NOT_PRESENT
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
@@ -659,15 +703,43 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,4,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+/*
+ * 4495dfd drivers: Introduce device lookup variants by device type
+ */
+#define BPM_FIND_BY_DEVICE_TYPE_NOT_AVAILABLE
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
+/*
+ * 8896dd968 compat_ioctl: add compat_ptr_ioctl()
+ */
+#define BPM_COMPAT_PTR_IOCTL_NOT_PRESENT
+
+/*
+ * 8973ea47901c driver core: platform: Introduce platform_get_irq_optional()
+ */
+#define BPM_PLATFORM_GET_IRQ_OPTIONAL_NOT_PRESENT
+
+/*
+ * 315cc066b8ae augmented rbtree: add new RB_DECLARE_CALLBACKS_MAX macro
+ */
+#define BPM_RB_DECLARE_CALLBACKS_MAX_NOT_PRESENT
+
+/*
+ * 2d15eb31b50 mm/gup: add make_dirty arg to put_user_pages_dirty_lock()
+ */
+#define BPM_PUT_USER_PAGES_DIRTY_LOCK_ARG_NOT_PRESENT
+
+#endif
 
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) && \
 	SUSE_LOCAL_VERSION_IS_GEQ(24,46))
-/*
- * a3f8a30f3f00 Compiler Attributes: use feature
- * checks instead of version checks
+/* 294f69e662d1 compiler_attributes.h:
+ *Add 'fallthrough' pseudo keyword for switch/case use
  */
-
-#define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#define BPM_FALLTHROUGH_API_NOT_PRESENT
 #endif
 
 /*
@@ -695,16 +767,34 @@
  */
 #define BPM_I2C_ACPI_FIND_ADAPTER_BY_HANDLE_EXPORT_NOT_PRESENT
 #endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,3))
+
+/* 31d6d5ce5340 vfs: Provide a mount_pseudo-replacement
+ * for the new mount API
+ */
+#define BPM_PSEUDO_H_NOT_PRESENT
+
+
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,2,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+
+/* f3a09c92018a introduce fs_context methods */
+#define BPM_INIT_FS_CONTEXT_NOT_PRESENT
 
 /*
  * a49294eac27c7 Add wait_var_event_interruptible()
  *
  */
 #define BPM_WAIT_VAR_EVENT_INTERRUPTIBLE_NOT_PRESENT
+
+/*
+ * aa30f47cf66 kobject: Add support for default attribute groups to kobj_type
+ */
+#define BPM_DEFAULT_GROUPS_NOT_PRESENT
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
@@ -713,6 +803,26 @@
  * bf198b2b34bf mm/mmu_notifier: pass down vma and reasons why mmu notifier is happening
  */
 #define BPM_MMU_NOTIFIER_RANGE_VMA_MEMBER_NOT_PRESENT
+#endif
+
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,3))
+
+/*
+ * 54d50897d544 linux/kernel.h: split *_MAX and *_MIN macros into <linux/limits.h>
+ */
+#define BPM_LIMITS_H_NOT_PRESENT
+
+/*
+ * 7159dbdae3 i2c: core: improve return value handling of
+ * i2c_new_device and i2c_new_dummy
+ */
+#define BPM_I2C_NEW_CLIENT_DEVICE_NOT_PRESENT
+
+/*
+ * c43a113ca2c hwmon: Add convience macro to define simple static sensors
+ */
+#define BPM_HWMON_CHANNEL_INFO_NOT_PRESENT
 #endif
 
 #endif 
@@ -725,6 +835,25 @@
  *
  */
 #define BPM_I2C_ACPI_GET_I2C_RESOURCE_NOT_PRESENT
+
+/*
+ * 72921427d46 string.h: Add str_has_prefix() helper function
+ */
+#define BPM_STR_HAS_PREFIX_NOT_PRESENT
+/*
+ * ca79b0c211af mm: convert totalram_pages and totalhigh_pages
+ * variables to atomic
+ */
+#define BPM_TOTALRAM_PAGES_FUNC_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_LESS(4,20,0)
+
+/*
+ * a3f8a30f3f00 Compiler Attributes: use feature
+ * checks instead of version checks
+ */
+#define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,19,0)
@@ -748,7 +877,7 @@
 #endif
 #endif
 
-#if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
+#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
 /* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif
@@ -773,7 +902,8 @@
 #define BPM_RC6_DISABLED
 #endif
 
-#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0))
+#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0) || \
+	REDHAT_RELEASE_VERSION_IS_LEQ(8,3))
 /*
  * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
  *
@@ -781,17 +911,26 @@
 #define BPM_SEQCOUNT_MUTEX_INIT_NOT_PRESENT
 #endif
 
-/*sp2 only section */
-#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,3,0))
+#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,3,0) || \
+	REDHAT_RELEASE_VERSION_IS_LEQ(8,3))
 #define BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-/* Declaring traces are causing issue during macro expansion.
-   Temporarily disable traces for SP2. */
-#define BPM_DISABLE_TRACES
 #define BPM_DRM_MIPI_DSI_DISABLED
 /* __kmalloc is not exported only in sp2 */
 #define BPM_KMALLOC_TRACK_CALLER_NOT_EXPORTED
+
 #endif
 
+/*sp2 only section */
+#if (SUSE_RELEASE_VERSION_IS_LESS(1,15,3,0))
+/* Declaring traces are causing issue during macro expansion.
+   Temporarily disable traces for SP2. */
+#define BPM_DISABLE_TRACES
+#endif
+
+#if (REDHAT_RELEASE_VERSION_IS_LEQ(8,3))
+#define BPM_MMU_NOTIFIER_EVENT_NOT_PRESENT
+#define BPM_I915_MMU_OBJECT_NOT_PRESENT
+#endif
 /* upstream changes not landed in mainline kernel yet.
  *
  * c1a01f290103d drm: constify sysrq_key_op
@@ -824,12 +963,18 @@
 #define BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
-#define CONFIG_INTEL_VSEC
+#define CPTCFG_INTEL_VSEC
+
+/* 
+ * Added macro for MEI to switch between <linux/mei_aux.h> and  
+ * <linux/platform_device.h> depending on which one is available 
+ */
+#define BPM_MEI_AUX_BUS_AVAILABLE
 #endif
 
 #ifdef CPTCFG_I915_NO_DRM
 #define BPM_DISABLE_DRM_DMABUF
-#define INTEL_GMCH_GTT_RENAMED
+#define BPM_INTEL_GMCH_GTT_RENAMED
 /*
  * f58a435311672 drm/dp, drm/i915: Add support for VESA backlights using PWM for brightness control
  *
@@ -849,6 +994,7 @@
 #define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 #define DRM_DP_GET_ADJUST_NOT_PRESENT
 #define DRM_EDP_BACKLIGHT_NOT_PRESENT
+#define BPM_DRM_DP_DSC_SINK_SUPPORTS_FORMAT_NOT_PRESENT
 #endif
 
 #endif /* BP_LINUX_BACKPORT_MACRO_H */

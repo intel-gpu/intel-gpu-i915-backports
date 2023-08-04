@@ -112,7 +112,7 @@ static void __ipi_add(struct i915_request *rq)
 	 * coalesce multiple ipi_add into a single pass using the final
 	 * property value.
 	 */
-	if (__i915_request_is_complete(rq) ||
+	if (i915_request_signaled(rq) ||
 	    cmpxchg(&rq->sched.ipi_link, NULL, STUB)) { /* already queued */
 		i915_request_put(rq);
 		return;
@@ -147,7 +147,7 @@ node_to_request(const struct i915_sched_node *node)
 
 static inline bool node_signaled(const struct i915_sched_node *node)
 {
-	return i915_request_completed(node_to_request(node));
+	return i915_request_signaled(node_to_request(node));
 }
 
 static inline struct i915_priolist *to_priolist(struct rb_node *rb)
@@ -309,7 +309,7 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 			if (rq_prio(s) >= prio)
 				continue;
 
-			if (__i915_request_is_complete(s))
+			if (i915_request_signaled(s))
 				continue;
 
 			if (s->engine->sched_engine != se) {
@@ -378,7 +378,7 @@ void i915_request_set_priority(struct i915_request *rq, int prio)
 			if (rq_prio(s) >= prio)
 				continue;
 
-			if (__i915_request_is_complete(s))
+			if (i915_request_signaled(s))
 				continue;
 
 			break;
@@ -397,7 +397,7 @@ void i915_request_set_priority(struct i915_request *rq, int prio)
 	if (prio <= rq_prio(rq))
 		goto unlock;
 
-	if (__i915_request_is_complete(rq))
+	if (i915_request_signaled(rq))
 		goto unlock;
 
 	if (!i915_request_use_scheduler(rq)) {
@@ -565,7 +565,7 @@ void i915_request_show_with_schedule(struct drm_printer *m,
 		if (signaler->timeline == rq->timeline)
 			continue;
 
-		if (__i915_request_is_complete(signaler))
+		if (i915_request_signaled(signaler))
 			continue;
 
 		i915_request_show(m, signaler, prefix, indent + 2);

@@ -3,7 +3,11 @@
 #define __LINUX_OVERFLOW_H
 
 #include <linux/compiler.h>
+#ifdef BPM_LIMITS_H_NOT_PRESENT
+#include <linux/kernel.h>
+#else
 #include <linux/limits.h>
+#endif
 
 /*
  * We need to compute the minimum and maximum values representable in a given

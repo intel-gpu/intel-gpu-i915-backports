@@ -1,106 +1,40 @@
-#  Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
+# Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
 
-This branch provides i915 driver source code backported for Red Hat® Enterprise Linux® to enable intel discrete GPUs support.
+Contains the backported kernel module source code of intel GPUs on various OS distributions and LTS Kernels. You can create Dynamic Kernel Module Support (DKMS) as well as precompiled Out of Tree modules packages, which can be installed on supported OS distributions.
 
 We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out of tree i915 kernel module source codes.
 
-This repo is a code snapshot of particular version of backports and does not contain individual git change history.
+This repo is a code snapshot of version of backports and does not contain individual git change history.
 
-# Branches
- redhat/main will point to the currently supported version of Red Hat® Enterprise Linux®.
- 
- We will add a new branch redhat/rhel<x.y> whenever a version is deprecated or moved to the maintenance phase.
-  
-# Supported Version/kernel
-  Our current backport is based on Red Hat® Enterprise Linux® 8.8. We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/versions)
-  file to check the RHEL_8.8_KERNEL_VERSION. It will point to the kernel version which is being used during backporting.
 
-  In case of an issue with the latest kernel, please install the kernel version pointed by RHEL_8.8_KERNEL_VERSION.
+## Out of tree kernel drivers
+This repository contains following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(cse) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
 
-    sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.8_KERNEL_VERSION>.el8.x86_64 \
-    kernel-devel-<RHEL_8.8_KERNEL_VERSION>.el8.x86_64
-    example:
-	 sudo dnf check-update; sudo dnf install -y kernel-4.18.0-477.el8.x86_64 \
-	 kernel-devel-4.18.0-477.el8.x86_64
 
-# Product Releases:
-Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
+## Dependencies
 
-# Prerequisite
-we have dependencies on the following packages
-  - dkms
-  - make
-  - lsb-release
-  - rpm-build
+  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
 
-        sudo dnf install -y dkms make lsb-release rpm-build
-
-# Dependencies
-
-This driver is part of a collection of kernel-mode drivers that enable support for Intel graphics. The backports collection within https://github.com/intel-gpu includes:
-
-- [Intel® Graphics Driver Backports for Linux](https://github.com/intel-gpu/intel-gpu-i915-backports) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-- [Intel® Converged Security Engine Backports](https://github.com/intel-gpu/intel-gpu-cse-backports) - Converged Security Engine
-- [Intel® Platform Monitoring Technology Backports](https://github.com/intel-gpu/intel-gpu-pmt-backports/) - Intel Platform Telemetry
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
-# Dynamic Kernel Module Support(DKMS) based package creation
+## Branches
+redhat/main will point to the currently supported version of RED HAT® 8.x and Vanilla 5.10 LTS.
 
-We need to create dmabuf and i915 dkms packages using the below command.
+## Supported OS Kernel/Distribution
+  Our current backport supports the following OS Distribution.
 
-    make dkmsrpm-pkg
-
-Above will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
-
-## Binary Packages Creation
-
-Binary rpm's consists of pre-built ko modules for particular kernel version and flavor.
-To create binary packages, Build system should be having kernel and respective headers installed.
-
-### Command to build single binary rpm (combination of dmabuf,drm and i915)
-```
-  make binrpm-pkg
-```
-Generated Files:
-        intel-i915-<version>-1.x86_64.rpm
-        intel-dmabuf-<version>-1.x86_64.rpm
-
-Check "make binrpm-pkg-help" for detailed usage.
-
-### Binary package Installation
-use below command to install binary rpm
-```
- rpm -ivh <rpm>
-```
-
-# Installation
-
-i915 driver has dependency on [VSEC(PMT)](https://github.com/intel-gpu/intel-gpu-pmt-backports/) and [MEI(CSE)](https://github.com/intel-gpu/intel-gpu-cse-backports), Please install VSEC and MEI before installting i915 driver.
-
-    sudo rpm -ivh intel-dmabuf-dkms*.rpm intel-i915-dkms*.rpm
-    # Reboot the device after installation of all packages.
-    sudo reboot
-
-## Blacklist base kernel dmabuf:
-On redhat/main, along with i915 we are backporting dmabuf and drm. Since dmabuf is part of base kernel, we need to blacklist dmabuf by adding
-"initcall_blacklist=sync_debugfs_init,dma_buf_init" in kernel command line.
-
-## Installation varification
-Please grep **backport**  from dmesg after reboot. you should see something like below
-
-      > sudo dmesg |grep -i backport
-    [sudo] password for gta:
-    [2.684355] DMABUF-COMPAT BACKPORTED INIT
-    [2.684371] Loading dma-buf modules backported from I915-23.5.15
-    [2.684372] DMA BUF backport generated by backports.git RHEL_88_23.5.15_PSB_230406.17
-    [2.684910] I915 COMPAT BACKPORTED INIT
-    [2.684911] Loading I915 modules backported from I915-23.5.15
-    [2.684912] I915 Backport generated by backports.git RHEL_88_23.5.15_PSB_230406.17
-    [2.702432] [drm] DRM BACKPORTED INIT
-    [2.724641] [drm] DRM_KMS_HELPER BACKPORTED INIT
-    [2.838672] [drm] I915 BACKPORTED INIT
+| OS Distribution | OS Version | Kernel Version  | Installation Instructions |
+|---  |---  |---  |--- |
+| REDHAT® | 8.8 | 4.18.0-477 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
+| | 8.7|   4.18.0-425 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
+| | 8.6 | 4.18.0-372 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
+| Vanilla LTS |  | 5.10  |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_vanilla.md) |
 
 
+## Product Releases:
+Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)

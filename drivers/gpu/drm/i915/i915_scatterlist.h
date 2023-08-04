@@ -13,6 +13,8 @@
 
 #include "i915_gem.h"
 
+#define I915_MAX_CHAIN_ALLOC (SG_MAX_SINGLE_ALLOC - 1)
+
 struct drm_mm_node;
 struct ttm_resource;
 
@@ -151,7 +153,8 @@ static inline unsigned int i915_sg_segment_size(void)
 	return size;
 }
 
-bool i915_sg_trim(struct sg_table *orig_st);
+void i915_sg_trim(struct sg_table *sgt);
+unsigned long i915_sg_compact(struct sg_table *st, unsigned long max);
 
 /* Wrap scatterlist.h to sanity check for integer truncation */
 typedef unsigned int __sg_size_t; /* see linux/scatterlist.h */

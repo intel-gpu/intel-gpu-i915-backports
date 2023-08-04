@@ -140,7 +140,11 @@ static bool i915_fence_signaled(struct dma_fence *fence)
 	if (!i915_request_is_active(rq))
 		return false;
 
-	return i915_request_completed(rq);
+	if (!__i915_request_is_complete(rq))
+		return false;
+
+	i915_request_mark_complete(rq);
+	return true;
 }
 
 static bool i915_fence_enable_signaling(struct dma_fence *fence)
@@ -1159,7 +1163,8 @@ _i915_request_create(struct intel_context *ce, gfp_t gfp)
 	struct intel_timeline *tl;
 	struct i915_request *rq;
 
-	if (gfpflags_allow_blocking(gfp) && intel_context_throttle(ce))
+	if (gfpflags_allow_blocking(gfp) &&
+	    intel_context_throttle(ce, MAX_SCHEDULE_TIMEOUT))
 		return ERR_PTR(-EINTR);
 
 	tl = intel_context_timeline_lock(ce);
@@ -1582,8 +1587,10 @@ i915_request_await_execution(struct i915_request *rq,
 
 	do {
 		fence = *child++;
-		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
+		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+			i915_sw_fence_set_error_once(&rq->submit, fence->error);
 			continue;
+		}
 
 		if (fence->context == rq->fence.context)
 			continue;
@@ -1636,7 +1643,7 @@ i915_request_await_request(struct i915_request *to, struct i915_request *from)
 	GEM_BUG_ON(to == from);
 	GEM_BUG_ON(to->timeline == from->timeline);
 
-	if (i915_request_completed(from)) {
+	if (i915_request_signaled(from)) {
 		i915_sw_fence_set_error_once(&to->submit, from->fence.error);
 		return 0;
 	}
@@ -1685,8 +1692,10 @@ i915_request_await_dma_fence(struct i915_request *rq, struct dma_fence *fence)
 
 	do {
 		fence = *child++;
-		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
+		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+			i915_sw_fence_set_error_once(&rq->submit, fence->error);
 			continue;
+		}
 
 		if (dma_fence_is_lr(fence) || dma_fence_is_suspend(fence))
 			return -EBUSY;
@@ -1749,44 +1758,38 @@ i915_request_await_object(struct i915_request *to,
 			  struct drm_i915_gem_object *obj,
 			  bool write)
 {
-	struct dma_fence *excl;
+	struct dma_fence *excl, **shared = &excl;
+	unsigned int count;
 	int ret = 0;
 
+	ret = i915_gem_object_migrate_await(obj, to);
+	if (ret)
+		return ret;
+
 	if (write) {
-		struct dma_fence **shared;
-		unsigned int count, i;
-
-		ret = dma_resv_get_fences(obj->base.resv, &excl, &count,
-					  &shared);
-		if (ret)
-			return ret;
-
-		for (i = 0; i < count; i++) {
-			ret = i915_request_await_dma_fence(to, shared[i]);
-			if (ret)
-				break;
-
-			dma_fence_put(shared[i]);
-		}
-
-		for (; i < count; i++)
-			dma_fence_put(shared[i]);
-		kfree(shared);
+		ret = dma_resv_get_fences(obj->base.resv,
+					  NULL, &count, &shared);
 	} else {
 		excl = dma_resv_get_excl_unlocked(obj->base.resv);
+		count = !!excl;
 	}
 
-	if (excl) {
-		if (ret == 0)
-			ret = i915_request_await_dma_fence(to, excl);
+	while (count--) {
+		struct dma_fence *fence = shared[count];
 
-		dma_fence_put(excl);
+		if (ret == 0 && !dma_fence_is_signaled(fence))
+			ret = i915_request_await_dma_fence(to, fence);
+
+		dma_fence_put(fence);
 	}
+
+	if (shared != &excl)
+		kfree(shared);
 
 	return ret;
 }
 
-static struct i915_request *
+static void
 __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 					struct intel_timeline *timeline)
 {
@@ -1796,7 +1799,7 @@ __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 
 	prev = request_to_parent(rq)->parallel.last_rq;
 	if (prev) {
-		if (!__i915_request_is_complete(prev)) {
+		if (!i915_request_signaled(prev)) {
 			i915_sw_fence_await_sw_fence(&rq->submit,
 						     &prev->submit,
 						     &rq->submitq);
@@ -1811,26 +1814,23 @@ __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 	}
 
 	request_to_parent(rq)->parallel.last_rq = i915_request_get(rq);
-
-	return to_request(__i915_active_fence_set(&timeline->last_request,
-						  &rq->fence));
 }
 
-static struct i915_request *
+static void
 __i915_request_ensure_ordering(struct i915_request *rq,
 			       struct intel_timeline *timeline)
 {
-	struct i915_request *prev;
+	struct dma_fence *pf;
 
 	GEM_BUG_ON(is_parallel_rq(rq));
 
-	prev = to_request(__i915_active_fence_set(&timeline->last_request,
-						  &rq->fence));
+	pf = __i915_active_fence_fetch_set(&timeline->last_request, &rq->fence);
+	if (!pf)
+		return;
 
-	if (prev && !__i915_request_is_complete(prev)) {
-		bool uses_guc = intel_engine_uses_guc(rq->engine);
-		bool pow2 = is_power_of_2(READ_ONCE(prev->engine)->mask |
-					  rq->engine->mask);
+	if (likely(!test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &pf->flags))) {
+		const bool uses_guc = intel_engine_uses_guc(rq->engine);
+		struct i915_request *prev = to_request(pf);
 		bool same_context = prev->context == rq->context;
 
 		/*
@@ -1843,7 +1843,9 @@ __i915_request_ensure_ordering(struct i915_request *rq,
 			   i915_seqno_passed(i915_request_seqno(prev),
 					     i915_request_seqno(rq)));
 
-		if ((same_context && uses_guc) || (!uses_guc && pow2))
+		if ((uses_guc && same_context) ||
+		    (!uses_guc && is_power_of_2(READ_ONCE(prev->engine)->mask |
+						rq->engine->mask)))
 			i915_sw_fence_await_sw_fence(&rq->submit,
 						     &prev->submit,
 						     &rq->submitq);
@@ -1858,14 +1860,13 @@ __i915_request_ensure_ordering(struct i915_request *rq,
 							 0);
 	}
 
-	return prev;
+	dma_fence_put(pf);
 }
 
-static struct i915_request *
+static void
 __i915_request_add_to_timeline(struct i915_request *rq)
 {
 	struct intel_timeline *timeline = i915_request_timeline(rq);
-	struct i915_request *prev;
 
 	/*
 	 * Dependency tracking and request ordering along the timeline
@@ -1898,9 +1899,9 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 	 * timeline and this is the first submission of an execbuf IOCTL.
 	 */
 	if (likely(!is_parallel_rq(rq)))
-		prev = __i915_request_ensure_ordering(rq, timeline);
+		__i915_request_ensure_ordering(rq, timeline);
 	else
-		prev = __i915_request_ensure_parallel_ordering(rq, timeline);
+		__i915_request_ensure_parallel_ordering(rq, timeline);
 
 	/*
 	 * Make sure that no request gazumped us - if it was allocated after
@@ -1908,8 +1909,6 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 	 * us, the timeline will hold its seqno which is later than ours.
 	 */
 	GEM_BUG_ON(timeline->seqno != i915_request_seqno(rq));
-
-	return prev;
 }
 
 /*
@@ -1917,7 +1916,7 @@ __i915_request_add_to_timeline(struct i915_request *rq)
  * request is not being tracked for completion but the work itself is
  * going to happen on the hardware. This would be a Bad Thing(tm).
  */
-struct i915_request *__i915_request_commit(struct i915_request *rq)
+void __i915_request_commit(struct i915_request *rq)
 {
 	struct intel_engine_cs *engine = rq->engine;
 	struct intel_ring *ring = rq->ring;
@@ -2229,7 +2228,7 @@ long i915_request_wait(struct i915_request *rq,
 		       unsigned int flags,
 		       long timeout)
 {
-	might_sleep();
+	might_sleep_if(timeout > 0);
 	GEM_BUG_ON(timeout < 0);
 	i915_fence_check_lr_lockdep(&rq->fence);
 

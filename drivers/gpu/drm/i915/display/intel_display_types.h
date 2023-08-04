@@ -968,12 +968,15 @@ struct intel_mpllb_state {
 	u32 mpllb_sscstep;
 };
 
-struct intel_c10mpllb_state {
+struct intel_c10pll_state {
 	u32 clock; /* in KHz */
+	u8 tx;
+	u8 cmn;
 	u8 pll[20];
 };
 
 struct intel_c20pll_state {
+	u32 link_bit_rate;
 	u32 clock; /* in kHz */
 	u16 tx[3];
 	u16 cmn[4];
@@ -985,9 +988,10 @@ struct intel_c20pll_state {
 
 struct intel_cx0pll_state {
 	union {
-		struct intel_c10mpllb_state c10mpllb_state;
-		struct intel_c20pll_state c20pll_state;
+		struct intel_c10pll_state c10;
+		struct intel_c20pll_state c20;
 	};
+	bool ssc_enabled;
 };
 
 struct intel_crtc_state {
@@ -1738,6 +1742,7 @@ struct intel_dp {
 
 	/* Display stream compression testing */
 	bool force_dsc_en;
+	int force_dsc_output_format;
 	int force_dsc_bpc;
 
 	bool hobl_failed;

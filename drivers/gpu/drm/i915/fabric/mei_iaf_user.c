@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright(c) 2019 - 2022 Intel Corporation.
+ * Copyright(c) 2019 - 2023 Intel Corporation.
  */
 
 #include <linux/device.h>
@@ -418,7 +418,8 @@ void iaf_mei_indicate_device_ok(struct fdev *dev)
 		if (err && err != -ENOENT)
 			dev_err(fdev_dev(dev), "unable to commit FW version, error %d\n", err);
 	} else {
-		pr_info_once("FW version not automatically committed\n");
+		if (noisy_logging_allowed())
+			pr_info_once("FW version not automatically committed\n");
 	}
 }
 

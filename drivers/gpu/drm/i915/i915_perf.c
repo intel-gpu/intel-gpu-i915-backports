@@ -509,14 +509,12 @@ static u32 gen7_oa_hw_tail_read(struct i915_perf_stream *stream)
 #define oa_report_header_64bit(__s) \
 	((__s)->oa_buffer.format->header == HDR_64_BIT)
 
-static inline u64
-oa_report_id(struct i915_perf_stream *stream, void *report)
+static u64 oa_report_id(struct i915_perf_stream *stream, void *report)
 {
 	return oa_report_header_64bit(stream) ? *(u64 *)report : *(u32 *)report;
 }
 
-static inline u64
-oa_report_reason(struct i915_perf_stream *stream, void *report)
+static u64 oa_report_reason(struct i915_perf_stream *stream, void *report)
 {
 	return (oa_report_id(stream, report) >> OAREPORT_REASON_SHIFT) &
 	       (GRAPHICS_VER(stream->perf->i915) == 12 ?
@@ -524,8 +522,7 @@ oa_report_reason(struct i915_perf_stream *stream, void *report)
 		OAREPORT_REASON_MASK);
 }
 
-static inline void
-oa_report_id_clear(struct i915_perf_stream *stream, u32 *report)
+static void oa_report_id_clear(struct i915_perf_stream *stream, u32 *report)
 {
 	if (oa_report_header_64bit(stream))
 		*(u64 *)report = 0;
@@ -533,24 +530,21 @@ oa_report_id_clear(struct i915_perf_stream *stream, u32 *report)
 		*report = 0;
 }
 
-static inline bool
-oa_report_ctx_invalid(struct i915_perf_stream *stream, void *report)
+static bool oa_report_ctx_invalid(struct i915_perf_stream *stream, void *report)
 {
 	return !(oa_report_id(stream, report) &
 	       stream->perf->gen8_valid_ctx_bit) &&
 	       GRAPHICS_VER(stream->perf->i915) <= 11;
 }
 
-static inline u64
-oa_timestamp(struct i915_perf_stream *stream, void *report)
+static u64 oa_timestamp(struct i915_perf_stream *stream, void *report)
 {
 	return oa_report_header_64bit(stream) ?
 		*((u64 *)report + 1) :
 		*((u32 *)report + 1);
 }
 
-static inline void
-oa_timestamp_clear(struct i915_perf_stream *stream, u32 *report)
+static void oa_timestamp_clear(struct i915_perf_stream *stream, u32 *report)
 {
 	if (oa_report_header_64bit(stream))
 		*(u64 *)&report[2] = 0;
@@ -558,16 +552,14 @@ oa_timestamp_clear(struct i915_perf_stream *stream, u32 *report)
 		report[1] = 0;
 }
 
-static inline u32
-oa_context_id(struct i915_perf_stream *stream, u32 *report)
+static u32 oa_context_id(struct i915_perf_stream *stream, u32 *report)
 {
 	u32 ctx_id = oa_report_header_64bit(stream) ? report[4] : report[2];
 
 	return ctx_id & stream->specific_ctx_id_mask;
 }
 
-static inline void
-oa_context_id_squash(struct i915_perf_stream *stream, u32 *report)
+static void oa_context_id_squash(struct i915_perf_stream *stream, u32 *report)
 {
 	if (oa_report_header_64bit(stream))
 		report[4] = INVALID_CTX_ID;
@@ -590,8 +582,7 @@ oa_context_id_squash(struct i915_perf_stream *stream, u32 *report)
  * (See description of OA_TAIL_MARGIN_NSEC above for further details.)
  *
  * Besides returning true when there is data available to read() this function
- * also updates the tail, aging_tail and aging_timestamp in the oa_buffer
- * object.
+ * also updates the tail in the oa_buffer object.
  *
  * Note: It's safe to read OA config state here unlocked, assuming that this is
  * only called while the stream is enabled, while the global OA configuration
@@ -603,10 +594,10 @@ static bool oa_buffer_check_unlocked(struct i915_perf_stream *stream)
 {
 	u32 gtt_offset = i915_ggtt_offset(stream->oa_buffer.vma);
 	int report_size = stream->oa_buffer.format->size;
+	u32 head, tail, read_tail;
 	unsigned long flags;
 	bool pollin;
 	u32 hw_tail;
-	u64 now;
 	u32 partial_report_size;
 
 	/* We have to consider the (unlikely) possibility that read() errors
@@ -617,72 +608,56 @@ static bool oa_buffer_check_unlocked(struct i915_perf_stream *stream)
 
 	hw_tail = stream->perf->ops.oa_hw_tail_read(stream);
 
-	/* The tail pointer increases in 64 byte increments, whereas report
-	 * sizes need not be integral multiples or 64 or powers of 2.
-	 * Compute potentially partially landed report in the OA buffer
+	/* The tail pointer increases in 64 byte increments, not in report_size
+	 * steps. Also the report size may not be a power of 2. Compute
+	 * potentially partially landed report in the OA buffer
 	 */
 	partial_report_size =
 		_oa_taken(stream, hw_tail, stream->oa_buffer.tail);
 	partial_report_size %= report_size;
 
 	/* Subtract partial amount off the tail */
-	hw_tail = gtt_offset + _rewind_tail(stream,
-					    hw_tail - gtt_offset,
-					    partial_report_size);
+	hw_tail = _rewind_tail(stream,
+			       hw_tail - gtt_offset,
+			       partial_report_size);
 
-	now = ktime_get_mono_fast_ns();
+	/* NB: The head we observe here might effectively be a little
+	 * out of date. If a read() is in progress, the head could be
+	 * anywhere between this head and stream->oa_buffer.tail.
+	 */
+	head = stream->oa_buffer.head - gtt_offset;
+	read_tail = stream->oa_buffer.tail - gtt_offset;
 
-	if (hw_tail == stream->oa_buffer.aging_tail &&
-	    (now - stream->oa_buffer.aging_timestamp) > OA_TAIL_MARGIN_NSEC) {
-		/* If the HW tail hasn't move since the last check and the HW
-		 * tail has been aging for long enough, declare it the new
-		 * tail.
-		 */
-		stream->oa_buffer.tail = stream->oa_buffer.aging_tail;
-	} else {
-		u32 head, tail, aged_tail;
+	tail = hw_tail;
 
-		/* NB: The head we observe here might effectively be a little
-		 * out of date. If a read() is in progress, the head could be
-		 * anywhere between this head and stream->oa_buffer.tail.
-		 */
-		head = stream->oa_buffer.head - gtt_offset;
-		aged_tail = stream->oa_buffer.tail - gtt_offset;
+	/* Walk the stream backward until we find a report with report
+	 * id and timestmap not at 0. Since the circular buffer pointers
+	 * progress by increments of 64 bytes and that reports can be up
+	 * to 256 bytes long, we can't tell whether a report has fully
+	 * landed in memory before the report id and timestamp of the
+	 * following report have effectively landed.
+	 *
+	 * This is assuming that the writes of the OA unit land in
+	 * memory in the order they were written to.
+	 * If not : (╯°□°）╯︵ ┻━┻
+	 */
+	while (_oa_taken(stream, tail, read_tail) >= report_size) {
+		void *report = stream->oa_buffer.vaddr + tail;
 
-		hw_tail -= gtt_offset;
-		tail = hw_tail;
+		if (oa_report_id(stream, report) ||
+		    oa_timestamp(stream, report))
+			break;
 
-		/* Walk the stream backward until we find a report with dword 0
-		 * & 1 not at 0. Since the circular buffer pointers progress by
-		 * increments of 64 bytes and that reports can be up to 256
-		 * bytes long, we can't tell whether a report has fully landed
-		 * in memory before the first 2 dwords of the following report
-		 * have effectively landed.
-		 *
-		 * This is assuming that the writes of the OA unit land in
-		 * memory in the order they were written to.
-		 * If not : (╯°□°）╯︵ ┻━┻
-		 */
-		while (_oa_taken(stream, tail, aged_tail) >= report_size) {
-			void *report = stream->oa_buffer.vaddr + tail;
-
-			if (oa_report_id(stream, report) ||
-			    oa_timestamp(stream, report))
-				break;
-
-			tail = _rewind_tail(stream, tail, report_size);
-		}
-
-		if (_oa_taken(stream, hw_tail, tail) > report_size &&
-		    __ratelimit(&stream->perf->tail_pointer_race))
-			DRM_NOTE("unlanded report(s) head=0x%x "
-				 "tail=0x%x hw_tail=0x%x\n",
-				 head, tail, hw_tail);
-
-		stream->oa_buffer.tail = gtt_offset + tail;
-		stream->oa_buffer.aging_tail = gtt_offset + hw_tail;
-		stream->oa_buffer.aging_timestamp = now;
+		tail = _rewind_tail(stream, tail, report_size);
 	}
+
+	if (_oa_taken(stream, hw_tail, tail) > report_size &&
+	    __ratelimit(&stream->perf->tail_pointer_race))
+		DRM_NOTE("unlanded report(s) head=0x%x "
+			 "tail=0x%x hw_tail=0x%x\n",
+			 head, tail, hw_tail);
+
+	stream->oa_buffer.tail = gtt_offset + tail;
 
 	pollin = _oa_taken(stream,
 			   stream->oa_buffer.tail,
@@ -767,8 +742,7 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 		return -EFAULT;
 	buf += sizeof(header);
 
-	oa_buf_end = stream->oa_buffer.vaddr +
-		     stream->oa_buffer.vma->size;
+	oa_buf_end = stream->oa_buffer.vaddr + stream->oa_buffer.vma->size;
 	report_size_partial = oa_buf_end - report;
 
 	if (report_size_partial < report_size) {
@@ -779,8 +753,9 @@ static int append_oa_sample(struct i915_perf_stream *stream,
 		if(copy_to_user(buf, stream->oa_buffer.vaddr,
 				report_size - report_size_partial))
 			return -EFAULT;
-	} else if (copy_to_user(buf, report, report_size))
+	} else if (copy_to_user(buf, report, report_size)) {
 		return -EFAULT;
+	}
 
 	(*offset) += header.size;
 
@@ -844,8 +819,7 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 	 * An out of bounds or misaligned head or tail pointer implies a driver
 	 * bug since we validate + align the tail pointers we read from the
 	 * hardware and we are in full control of the head pointer which should
-	 * only be incremented by multiples of the report size (notably also
-	 * all a power of two).
+	 * only be incremented by multiples of the report size.
 	 */
 	if (drm_WARN_ONCE(&uncore->i915->drm,
 			  head > size || tail > size,
@@ -940,12 +914,26 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 			stream->oa_buffer.last_ctx_id = ctx_id;
 		}
 
-		/*
-		 * Clear out the report id and timestamp as a means to detect unlanded
-		 * reports.
-		 */
-		oa_report_id_clear(stream, report32);
-		oa_timestamp_clear(stream, report32);
+		if (is_power_of_2(report_size)) {
+			/*
+			 * Clear out the report id and timestamp as a means
+			 * to detect unlanded reports.
+			 */
+			oa_report_id_clear(stream, report32);
+			oa_timestamp_clear(stream, report32);
+		} else {
+			u8 *oa_buf_end = stream->oa_buffer.vaddr +
+					 stream->oa_buffer.vma->size;
+			u32 part = (u32) ((void *)oa_buf_end - (void *)report32);
+
+			/* Zero out the entire report */
+			if (report_size <= part) {
+				memset(report32, 0, report_size);
+			} else {
+				memset(report32, 0, part);
+				memset(oa_buf_base, 0, report_size - part);
+			}
+		}
 	}
 
 	if (start_offset != *offset) {
@@ -1998,7 +1986,6 @@ static void gen7_init_oa_buffer(struct i915_perf_stream *stream)
 			   GEN7_OASTATUS1_BUFFER_SIZE_SHIFT)); /* tail */
 
 	/* Mark that we need updated tail pointers to read from... */
-	stream->oa_buffer.aging_tail = INVALID_TAIL_PTR;
 	stream->oa_buffer.tail = gtt_offset;
 
 	spin_unlock_irqrestore(&stream->oa_buffer.ptr_lock, flags);
@@ -2052,7 +2039,6 @@ static void gen8_init_oa_buffer(struct i915_perf_stream *stream)
 	intel_uncore_write(uncore, GEN8_OATAILPTR, gtt_offset & GEN8_OATAILPTR_MASK);
 
 	/* Mark that we need updated tail pointers to read from... */
-	stream->oa_buffer.aging_tail = INVALID_TAIL_PTR;
 	stream->oa_buffer.tail = gtt_offset;
 
 	/*
@@ -2115,7 +2101,6 @@ static void gen12_init_oa_buffer(struct i915_perf_stream *stream)
 			   gtt_offset & GEN12_OAG_OATAILPTR_MASK);
 
 	/* Mark that we need updated tail pointers to read from... */
-	stream->oa_buffer.aging_tail = INVALID_TAIL_PTR;
 	stream->oa_buffer.tail = gtt_offset;
 
 	/*

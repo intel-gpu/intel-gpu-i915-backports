@@ -46,8 +46,12 @@ struct intel_engine_cs;
 struct intel_uncore;
 
 enum intel_gt_counters { /* u64 indices into gt->counters */
-	INTEL_GT_CLEAR_CYCLES = 0,
-	INTEL_GT_CLEAR_BYTES,
+	INTEL_GT_CLEAR_ALLOC_CYCLES = 0,
+	INTEL_GT_CLEAR_ALLOC_BYTES,
+	INTEL_GT_CLEAR_FREE_CYCLES,
+	INTEL_GT_CLEAR_FREE_BYTES,
+	INTEL_GT_CLEAR_IDLE_CYCLES,
+	INTEL_GT_CLEAR_IDLE_BYTES,
 };
 
 /* Count of GT Correctable and FATAL HW ERRORS */
@@ -264,6 +268,7 @@ struct intel_gt {
 	 * is a slight delay before we do so.
 	 */
 	intel_wakeref_t awake;
+	bool suspend;
 
 	u32 clock_frequency;
 	u32 clock_period_ns;
@@ -306,6 +311,8 @@ struct intel_gt {
 		 * Idle is defined as active == 0, active is active > 0.
 		 */
 		ktime_t start;
+
+		local64_t migration_stall;
 	} stats;
 
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
@@ -341,12 +348,10 @@ struct intel_gt {
 	 * kernels so does not require any allocation of compute slices.
 	 */
 	struct {
-		/* Serialize CCS mode access */
-		struct mutex mutex;
-		/* Active CCS engines */
-		intel_engine_mask_t active;
-		/* CCS context -> C-slice */
-		intel_engine_mask_t config;
+		struct mutex mutex; /* Serialize CCS mode access */
+		intel_engine_mask_t active; /* Active CCS engines */
+		intel_engine_mask_t config; /* CCS context -> C-slice */
+		u32 mode; /* CCS_MODE shadow */
 	} ccs;
 
 	enum intel_submission_method submission_method;
@@ -378,7 +383,6 @@ struct intel_gt {
 
 	const struct intel_mmio_range *steering_table[NUM_STEERING_TYPES];
 	struct intel_migrate migrate;
-	unsigned long lmem_clear_chunk; /* XXX find me a better home! */
 
 	struct {
 		u8 groupid;

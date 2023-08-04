@@ -205,7 +205,7 @@ struct i915_gem_object_page_iter {
 struct i915_resv {
 	struct dma_resv base;
 	union {
-		unsigned long refcount;
+		struct kref refcount;
 		struct rcu_head rcu;
 	};
 };
@@ -233,8 +233,6 @@ struct drm_i915_gem_object {
 
 	/* VM pointer if the object is private to a VM; NULL otherwise */
 	struct i915_address_space *vm;
-/* Invalid VM pointer value if VM is released */
-#define I915_BO_INVALID_PRIV_VM		ERR_PTR(-EACCES)
 	struct list_head priv_obj_link;
 
 	struct {
@@ -283,10 +281,6 @@ struct drm_i915_gem_object {
 	 * when i915_gem_ww_ctx_backoff() or i915_gem_ww_ctx_fini() are called.
 	 */
 	struct list_head obj_link;
-	/**
-	 * @shared_resv_from: The object shares the resv from this vm.
-	 */
-	struct i915_address_space *shares_resv_from;
 	struct i915_resv *shares_resv;
 
 	union {
@@ -333,6 +327,7 @@ struct drm_i915_gem_object {
 #define I915_BO_FAULT_CLEAR	BIT(14)
 #define I915_BO_SYNC_HINT	BIT(15)
 #define I915_BO_FABRIC		BIT(16)
+#define I915_BO_HAS_BACKING_STORE	BIT(18)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -574,31 +569,7 @@ struct drm_i915_gem_object {
 		struct sg_table *pages;
 		void *mapping;
 
-		struct i915_page_sizes {
-			/**
-			 * The sg mask of the pages sg_table. i.e the mask of
-			 * of the lengths for each sg entry.
-			 */
-			unsigned int phys;
-
-			/**
-			 * The gtt page sizes we are allowed to use given the
-			 * sg mask and the supported page sizes. This will
-			 * express the smallest unit we can use for the whole
-			 * object, as well as the larger sizes we may be able
-			 * to use opportunistically.
-			 */
-			unsigned int sg;
-
-			/**
-			 * The actual gtt page size usage. Since we can have
-			 * multiple vma associated with this object we need to
-			 * prevent any trampling of state, hence a copy of this
-			 * struct also lives in each vma, therefore the gtt
-			 * value here should only be read/write through the vma.
-			 */
-			unsigned int gtt;
-		} page_sizes;
+		unsigned int page_sizes;
 
 		I915_SELFTEST_DECLARE(unsigned int page_mask);
 
@@ -619,12 +590,6 @@ struct drm_i915_gem_object {
 #define I915_BO_ATOMIC_NONE	0
 #define I915_BO_ATOMIC_SYSTEM	1
 #define I915_BO_ATOMIC_DEVICE	2
-
-		/**
-		 * This is set if the object has been written to since the
-		 * pages were last acquired.
-		 */
-		bool dirty:1;
 
 		/*
 		 * Track the completion of the page construction if using the
@@ -660,39 +625,26 @@ struct drm_i915_gem_object {
 	unsigned long *bit_17;
 
 	union {
-#ifdef CONFIG_MMU_NOTIFIER
 		struct i915_gem_userptr {
 			uintptr_t ptr;
 #ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
 			struct i915_mm_struct *mm;
 #endif
-			unsigned long notifier_seq;
-
 			struct mmu_interval_notifier notifier;
-			struct page **pvec;
-			int page_ref;
-			/**
-			 * Worker used to unbind object from faultable VM,
-			 * triggered by mmu notifier callback. We can't
-			 * unbind in the mmu notifier callback directly because
-			 * unbind takes object resv lock, and the mmu notifier
-			 * callback can be triggered by memory allocation,
-			 * direct_reclaim holding the same object resv lock, thus
-			 * it is a deadlock. Thus use a worker to unbind object.
-			 */
-			struct work_struct invalidate_work;
 		} userptr;
-#endif
 
 		struct drm_mm_node *stolen;
 
 		unsigned long scratch;
-		u64 fault_encode[2];
-		u64 encode;
 
 		void *gvt_info;
 	};
 
+	/*
+	 * To store the memory mask which represents the user preference about
+	 * which memory region the object should reside in
+	 */
+	u32 memory_mask;
 	struct drm_i915_gem_object *swapto;
 
 	struct {
@@ -704,12 +656,6 @@ struct drm_i915_gem_object {
 		/* Whether this object currently resides in local memory */
 		bool resident:1;
 	} client;
-
-	/*
-	 * To store the memory mask which represents the user preference about
-	 * which memory region the object should reside in
-	 */
-	u32 memory_mask;
 
 	/*
 	 * Implicity scaling uses two objects, allow them to be connected

@@ -20,6 +20,7 @@
 #include "i915_utils.h"
 #include "intel_gt.h"
 #include "intel_gt_mcr.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_gtt.h"
 
@@ -45,10 +46,8 @@ struct drm_i915_gem_object *alloc_pt_lmem(struct i915_address_space *vm, int sz)
 	 * object underneath, with the idea that one object_lock() will lock
 	 * them all at once.
 	 */
-	if (!IS_ERR(obj)) {
-		obj->base.resv = i915_vm_resv_get(vm);
-		obj->shares_resv_from = vm;
-	}
+	if (!IS_ERR(obj))
+		i915_gem_object_share_resv(vm->root_obj, obj);
 
 	return obj;
 }
@@ -67,8 +66,8 @@ struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz)
 	 * them all at once.
 	 */
 	if (!IS_ERR(obj)) {
-		obj->base.resv = i915_vm_resv_get(vm);
-		obj->shares_resv_from = vm;
+		obj->flags |= I915_BO_ALLOC_CONTIGUOUS;
+		i915_gem_object_share_resv(vm->root_obj, obj);
 	}
 
 	return obj;
@@ -104,15 +103,13 @@ int map_pt_dma_locked(struct i915_address_space *vm, struct drm_i915_gem_object 
 
 static void __i915_vm_close(struct i915_address_space *vm)
 {
-	struct drm_i915_gem_object *obj, *on;
+	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma, *vn;
 
-	spin_lock(&vm->i915->vm_priv_obj_lock);
-	list_for_each_entry_safe(obj, on, &vm->priv_obj_list, priv_obj_link) {
-		list_del_init(&obj->priv_obj_link);
-		obj->vm = I915_BO_INVALID_PRIV_VM;
-	}
-	spin_unlock(&vm->i915->vm_priv_obj_lock);
+	spin_lock(&vm->priv_obj_lock);
+	list_for_each_entry(obj, &vm->priv_obj_list, priv_obj_link)
+		obj->vm = ERR_PTR(-EACCES);
+	spin_unlock(&vm->priv_obj_lock);
 
 	i915_gem_vm_unbind_all(vm);
 
@@ -128,18 +125,10 @@ static void __i915_vm_close(struct i915_address_space *vm)
 	}
 }
 
-/* lock the vm into the current ww, if we lock one, we lock all */
-int i915_vm_lock_objects(struct i915_address_space *vm,
+int i915_vm_lock_objects(const struct i915_address_space *vm,
 			 struct i915_gem_ww_ctx *ww)
 {
-	if (vm->scratch[0]->base.resv == &vm->_resv) {
-		return i915_gem_object_lock(vm->scratch[0], ww);
-	} else {
-		struct i915_ppgtt *ppgtt = i915_vm_to_ppgtt(vm);
-
-		/* We borrowed the scratch page from ggtt, take the top level object */
-		return i915_gem_object_lock(ppgtt->pd->pt.base, ww);
-	}
+	return i915_gem_object_lock(vm->root_obj, ww);
 }
 
 void i915_address_space_fini(struct i915_address_space *vm)
@@ -164,22 +153,6 @@ void i915_address_space_fini(struct i915_address_space *vm)
 	iput(vm->inode);
 }
 
-/**
- * i915_vm_resv_release - Final struct i915_address_space destructor
- * @kref: Pointer to the &i915_address_space.resv_ref member.
- *
- * This function is called when the last lock sharer no longer shares the
- * &i915_address_space._resv lock.
- */
-void i915_vm_resv_release(struct kref *kref)
-{
-	struct i915_address_space *vm =
-		container_of(kref, typeof(*vm), resv_ref);
-
-	dma_resv_fini(&vm->_resv);
-	kfree(vm);
-}
-
 static void __i915_vm_release(struct work_struct *work)
 {
 	struct i915_address_space *vm =
@@ -189,8 +162,6 @@ static void __i915_vm_release(struct work_struct *work)
 	i915_svm_unbind_mm(vm);
 	vm->cleanup(vm);
 	i915_address_space_fini(vm);
-
-	i915_vm_resv_put(vm);
 }
 
 void i915_vm_release(struct kref *kref)
@@ -245,13 +216,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	kref_init(&vm->ref);
 
-	/*
-	 * Special case for GGTT that has already done an early
-	 * kref_init here.
-	 */
-	if (!kref_read(&vm->resv_ref))
-		kref_init(&vm->resv_ref);
-
 	INIT_RCU_WORK(&vm->rcu, __i915_vm_release);
 	atomic_set(&vm->open, 1);
 	INIT_WORK(&vm->close_work, i915_vm_close_work);
@@ -284,7 +248,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 		mutex_release(&vm->mutex.dep_map, _THIS_IP_);
 #endif
 	}
-	dma_resv_init(&vm->_resv);
 
 	vm->inode = alloc_anon_inode(vm->i915->drm.anon_inode->i_sb);
 	if (IS_ERR(vm->inode))
@@ -319,14 +282,15 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	INIT_LIST_HEAD(&vm->vm_bind_list);
 	INIT_LIST_HEAD(&vm->vm_bound_list);
 	mutex_init(&vm->vm_bind_lock);
-	INIT_LIST_HEAD(&vm->non_priv_vm_bind_list);
+
 	vm->root_obj = i915_gem_object_create_internal(vm->i915, PAGE_SIZE);
-	GEM_BUG_ON(IS_ERR(vm->root_obj));
+	if (IS_ERR_OR_NULL(vm->root_obj))
+		return -ENOMEM;
+
+	spin_lock_init(&vm->priv_obj_lock);
 	INIT_LIST_HEAD(&vm->priv_obj_list);
 	INIT_LIST_HEAD(&vm->vm_capture_list);
 	spin_lock_init(&vm->vm_capture_lock);
-	INIT_LIST_HEAD(&vm->vm_rebind_list);
-	spin_lock_init(&vm->vm_rebind_lock);
 	INIT_ACTIVE_FENCE(&vm->user_fence);
 
 	vm->has_scratch = true;
@@ -363,8 +327,7 @@ void clear_pages(struct i915_vma *vma)
 		kfree(vma->pages);
 	}
 	vma->pages = NULL;
-
-	memset(&vma->page_sizes, 0, sizeof(vma->page_sizes));
+	vma->page_sizes = 0;
 }
 
 void *__px_vaddr(struct drm_i915_gem_object *p, bool *needs_flush)
@@ -421,8 +384,7 @@ static u32 poison_scratch_page(struct drm_i915_gem_object *scratch)
 	u32 val;
 
 	val = 0;
-	if (!HAS_NULL_PAGE(to_i915(scratch->base.dev)) &&
-	     IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
 		/*
 		 * Partially randomise the scratch page.
 		 *
@@ -443,9 +405,19 @@ static u32 poison_scratch_page(struct drm_i915_gem_object *scratch)
 	return val;
 }
 
-int setup_scratch_page(struct i915_address_space *vm)
+int i915_vm_setup_scratch0(struct i915_address_space *vm)
 {
 	unsigned long size;
+
+	/*
+	 * NULL PTE is only for leaf page table, non-leaf scratch
+	 * page tables are still required.
+	 *
+	 * The write to NULL pte will be dropped by HW, and read
+	 * returns 0, no TLB impact.
+	 */
+	if (HAS_NULL_PAGE(vm->i915))
+		return 0;
 
 	/*
 	 * In order to utilize 64K pages for an object with a size < 2M, we will
@@ -474,7 +446,7 @@ int setup_scratch_page(struct i915_address_space *vm)
 			goto skip_obj;
 
 		/* We need a single contiguous page for our scratch */
-		if (obj->mm.page_sizes.sg < size)
+		if (!sg_is_last(obj->mm.pages->sgl))
 			goto skip_obj;
 
 		/* And it needs to be correspondingly aligned */
@@ -494,6 +466,7 @@ int setup_scratch_page(struct i915_address_space *vm)
 
 		vm->scratch[0] = obj;
 		vm->scratch_order = get_order(size);
+
 		return 0;
 
 skip_obj:
@@ -518,15 +491,69 @@ skip:
 	} while (1);
 }
 
-void free_scratch(struct i915_address_space *vm)
+static u64 _vm_scratch0_encode(struct i915_address_space *vm)
+{
+	if (HAS_NULL_PAGE(vm->i915))
+		return (PTE_NULL_PAGE | GEN8_PAGE_PRESENT);
+	else {
+		u32 pte_flags = 0;
+
+		if (!i915_is_ggtt(vm) && vm->has_read_only)
+			pte_flags |= PTE_READ_ONLY;
+		if (i915_gem_object_is_lmem(vm->scratch[0]))
+			pte_flags |= PTE_LM;
+		return vm->pte_encode(px_dma(vm->scratch[0]),
+				      i915_gem_get_pat_index(vm->i915,
+							     I915_CACHE_NONE),
+				      pte_flags);
+	}
+}
+
+static u64 _vm_scratch_encode(struct i915_address_space *vm, int lvl)
+{
+	if (lvl)
+		return gen8_pde_encode(px_dma(vm->scratch[lvl]), I915_CACHE_NONE);
+
+	return _vm_scratch0_encode(vm);
+}
+
+u64 i915_vm_fault_encode(struct i915_address_space *vm, int lvl, bool valid)
+{
+	if (!valid)
+		return INVALID_PTE;
+	else
+		return _vm_scratch_encode(vm, lvl);
+}
+
+u64 i915_vm_scratch_encode(struct i915_address_space *vm, int lvl)
+{
+	bool valid = true;
+
+	/*
+	 * Irrespective of vm->has_scratch, for systems with recoverable
+	 * pagefaults enabled, we should not map the entire address space to
+	 * valid scratch while initializing the vm. Doing so, would  prevent from
+	 * generating any faults at all. On such platforms, mapping to scratch
+	 * page is handled in the page fault handler itself.
+	 */
+	if (!vm->has_scratch ||
+	    is_vm_pasid_active(vm) ||
+	    i915_vm_page_fault_enabled(vm))
+		valid = false;
+
+	return i915_vm_fault_encode(vm, lvl, valid);
+}
+
+void i915_vm_free_scratch(struct i915_address_space *vm)
 {
 	int i;
 
-	if (!vm->scratch[0])
-		return;
-
-	for (i = 0; i <= vm->top; i++)
-		i915_gem_object_put(vm->scratch[i]);
+	for (i = 0; i <= vm->top; i++) {
+		if (vm->scratch[i]) {
+			i915_gem_object_put(vm->scratch[i]);
+			vm->scratch[i] = NULL;
+		}
+	}
 }
 
 void gtt_write_workarounds(struct intel_gt *gt)
@@ -594,9 +621,9 @@ void gtt_write_workarounds(struct intel_gt *gt)
 		intel_uncore_write(uncore,
 				   HSW_GTT_CACHE_EN,
 				   can_use_gtt_cache ? GTT_CACHE_EN_ALL : 0);
-		drm_WARN_ON_ONCE(&i915->drm, can_use_gtt_cache &&
-				 intel_uncore_read(uncore,
-						   HSW_GTT_CACHE_EN) == 0);
+		gt_WARN_ON_ONCE(gt, can_use_gtt_cache &&
+				intel_uncore_read(uncore,
+						  HSW_GTT_CACHE_EN) == 0);
 	}
 }
 
@@ -848,7 +875,7 @@ int svm_bind_addr_commit(struct i915_address_space *vm,
 	if (!vma)
 		return -ENOMEM;
 
-	vma->page_sizes.sg = sg_page_sizes;
+	vma->page_sizes = sg_page_sizes;
 	vma->node.start = start;
 	vma->node.size = size;
 	__set_bit(DRM_MM_NODE_ALLOCATED_BIT, &vma->node.flags);

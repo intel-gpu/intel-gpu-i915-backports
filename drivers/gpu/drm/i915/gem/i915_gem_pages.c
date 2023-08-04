@@ -32,10 +32,8 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 unsigned int sg_page_sizes)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	unsigned long supported = INTEL_INFO(i915)->page_sizes;
 	struct intel_memory_region *mem;
 	bool shrinkable;
-	int i;
 
 	assert_object_held_shared(obj);
 
@@ -50,27 +48,13 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 		obj->cache_dirty = false;
 	}
 
+	i915_gem_object_set_backing_store(obj);
 	obj->mm.pages = pages;
 	obj->mm.get_page.sg_pos = pages->sgl;
 	obj->mm.get_dma_page.sg_pos = pages->sgl;
 
 	GEM_BUG_ON(!sg_page_sizes);
-	obj->mm.page_sizes.phys = sg_page_sizes;
-
-	/*
-	 * Calculate the supported page-sizes which fit into the given
-	 * sg_page_sizes. This will give us the page-sizes which we may be able
-	 * to use opportunistically when later inserting into the GTT. For
-	 * example if phys=2G, then in theory we should be able to use 1G, 2M,
-	 * 64K or 4K pages, although in practice this will depend on a number of
-	 * other factors.
-	 */
-	obj->mm.page_sizes.sg = 0;
-	for_each_set_bit(i, &supported, ilog2(I915_GTT_MAX_PAGE_SIZE) + 1) {
-		if (obj->mm.page_sizes.phys & ~0u << i)
-			obj->mm.page_sizes.sg |= BIT(i);
-	}
-	GEM_BUG_ON(!HAS_PAGE_SIZES(i915, obj->mm.page_sizes.sg));
+	obj->mm.page_sizes = sg_page_sizes;
 
 	shrinkable = i915_gem_object_is_shrinkable(obj);
 
@@ -124,9 +108,6 @@ static int add_to_ww_evictions(struct drm_i915_gem_object *obj)
 	struct i915_gem_ww_ctx *ww;
 	int err;
 
-	if (obj->base.resv != &obj->base._resv)
-		return 0;
-
 	ww = i915_gem_get_locking_ctx(obj);
 	if (!ww)
 		return 0;
@@ -161,6 +142,9 @@ int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 	err = obj->ops->get_pages(obj);
 	GEM_BUG_ON(!err && !i915_gem_object_has_pages(obj));
 
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ASYNC_GET_PAGES) && err == 0)
+		err = i915_gem_object_migrate_sync(obj);
+
 	return err;
 }
 
@@ -193,26 +177,6 @@ int __i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 	return 0;
 }
 
-int i915_gem_object_pin_pages_unlocked(struct drm_i915_gem_object *obj)
-{
-	struct i915_gem_ww_ctx ww;
-	int err;
-
-	i915_gem_ww_ctx_init(&ww, true);
-retry:
-	err = i915_gem_object_lock(obj, &ww);
-	if (!err)
-		err = i915_gem_object_pin_pages(obj);
-
-	if (err == -EDEADLK) {
-		err = i915_gem_ww_ctx_backoff(&ww);
-		if (!err)
-			goto retry;
-	}
-	i915_gem_ww_ctx_fini(&ww);
-	return err;
-}
-
 int i915_gem_object_pin_pages_sync(struct drm_i915_gem_object *obj)
 {
 	int err;
@@ -235,11 +199,34 @@ err:
 	return err;
 }
 
+int i915_gem_object_pin_pages_unlocked(struct drm_i915_gem_object *obj)
+{
+	struct i915_gem_ww_ctx ww;
+	int err;
+
+	i915_gem_ww_ctx_init(&ww, true);
+retry:
+	err = i915_gem_object_lock(obj, &ww);
+	if (!err)
+		err = i915_gem_object_pin_pages_sync(obj);
+
+	if (err == -EDEADLK) {
+		err = i915_gem_ww_ctx_backoff(&ww);
+		if (!err)
+			goto retry;
+	}
+	i915_gem_ww_ctx_fini(&ww);
+	return err;
+}
+
 /* Immediately discard the backing storage */
 void i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 {
 	if (obj->ops->truncate)
 		obj->ops->truncate(obj);
+
+	obj->mm.madv = __I915_MADV_PURGED;
+	obj->mm.pages = ERR_PTR(-EFAULT);
 }
 
 /* Try to discard unwanted pages */
@@ -350,17 +337,16 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	if (i915_gem_object_has_pinned_pages(obj))
 		return -EBUSY;
 
-	/* May be called by shrinker from within get_pages() (on another bo) */
-	assert_object_held_shared(obj);
-
-	i915_gem_object_release_mmap_offset(obj);
-
 	/*
 	 * ->put_pages might need to allocate memory for the bit17 swizzle
 	 * array, hence protect them from being reaped by removing them from gtt
 	 * lists early.
 	 */
 	pages = __i915_gem_object_unset_pages(obj);
+	if (IS_ERR_OR_NULL(pages))
+		return 0;
+
+	i915_gem_object_release_mmap_offset(obj);
 
 	/*
 	 * XXX Temporary hijinx to avoid updating all backends to handle
@@ -370,12 +356,19 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	 */
 	if (!IS_ERR_OR_NULL(pages))
 		err = obj->ops->put_pages(obj, pages);
+	if (err) {
+		__i915_gem_object_set_pages(obj, pages, obj->mm.page_sizes);
+		return err;
+	}
 
-	if (err)
-		__i915_gem_object_set_pages(obj, pages,
-			obj->mm.page_sizes.phys);
+	if (obj->mm.madv != I915_MADV_WILLNEED)
+		i915_gem_object_truncate(obj);
 
-	return err;
+	/* delete stale fences */
+	if (kref_read(&obj->base.refcount))
+		dma_resv_add_excl_fence(obj->base.resv, NULL);
+
+	return 0;
 }
 
 #ifndef BPM_VMAP_PFN_NOT_PRESENT
@@ -454,7 +447,7 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 		return ERR_PTR(-ENODEV);
 
 	/* A single contiguous block of lmem? Reuse the io_mapping */
-	if (obj->flags & I915_BO_ALLOC_CONTIGUOUS)
+	if (sg_is_last(obj->mm.pages->sgl))
 		return (void __force *)i915_gem_object_lmem_io_map(obj, 0, obj->base.size);
 
 	if (n_pfn > ARRAY_SIZE(stack)) {
@@ -623,6 +616,12 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 		ptr = obj->mm.mapping = NULL;
 	}
 
+	err = i915_gem_object_migrate_sync(obj);
+	if (err) {
+		ptr = ERR_PTR(err);
+		goto err_unpin;
+	}
+
 	if (!ptr) {
 #ifndef BPM_VMAP_PFN_NOT_PRESENT
 		if (GEM_WARN_ON(type == I915_MAP_WC && !pat_enabled()))
@@ -644,16 +643,13 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 		obj->mm.mapping = page_pack_bits(ptr, type);
 	}
 
-	err = i915_gem_object_migrate_sync(obj);
-	if (err) {
-		ptr = ERR_PTR(err);
-		goto err_unpin;
-	}
-
+	GEM_BUG_ON(i915_gem_object_has_migrate(obj));
+	GEM_BUG_ON(!i915_gem_object_mem_idle(obj));
 	return ptr;
 
 err_unpin:
 	atomic_dec(&obj->mm.pages_pin_count);
+	GEM_BUG_ON(!IS_ERR(ptr));
 	return ptr;
 }
 
@@ -692,7 +688,6 @@ void __i915_gem_object_flush_map(struct drm_i915_gem_object *obj,
 				     offset, size, obj->base.size));
 
 	wmb(); /* let all previous writes be visible to coherent partners */
-	obj->mm.dirty = true;
 
 	if (obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE)
 		return;
@@ -856,19 +851,6 @@ struct page *
 
 	sg = i915_gem_object_get_sg(obj, n, &offset);
 	return nth_page(sg_page(sg), offset);
-}
-
-/* Like i915_gem_object_get_page(), but mark the returned page dirty */
-struct page *
-(i915_gem_object_get_dirty_page)(struct drm_i915_gem_object *obj, pgoff_t n)
-{
-	struct page *page;
-
-	page = i915_gem_object_get_page(obj, n);
-	if (!obj->mm.dirty)
-		set_page_dirty(page);
-
-	return page;
 }
 
 dma_addr_t

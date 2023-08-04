@@ -7,7 +7,7 @@
 #include <linux/scatterlist.h>
 #include_next <drm/intel-gtt.h>
 
-#ifdef INTEL_GMCH_GTT_RENAMED
+#ifdef BPM_INTEL_GMCH_GTT_RENAMED
 #define intel_gmch_gtt_get intel_gtt_get
 #define intel_gmch_enable_gtt intel_enable_gtt
 #define intel_gmch_gtt_flush intel_gtt_chipset_flush

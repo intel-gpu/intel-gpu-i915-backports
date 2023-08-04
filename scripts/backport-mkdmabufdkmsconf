@@ -2,17 +2,12 @@
 #
 # Creates a dkms.conf file
 
-if grep -q CPTCFG_DMABUF_SELFTESTS=m .config; then
-	ST=
-else
-	ST=DEL
-fi
-
 PKG_NAME="intel-dmabuf-dkms-prerelease"
 PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
 BUILD_TYPE=""
+CUSTOM_KERN_ID=""
 
 helpFunction()
 {
@@ -23,10 +18,11 @@ helpFunction()
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release type  prerelease/opensource"
 	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:s:" opt
+while getopts "n:v:r:p:s:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
@@ -34,6 +30,7 @@ do
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
 		s ) BUILD_TYPE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done
@@ -52,11 +49,6 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BUILT_MODULE_LOCATION[0]="drivers/dma-buf/"
 	DEST_MODULE_LOCATION[0]="/updates"
 
-$ST	BUILT_MODULE_NAME[1]="dmabuf_selftests"
-$ST	BUILT_MODULE_LOCATION[1]="drivers/dma-buf/"
-$ST	DEST_MODULE_LOCATION[1]="/updates"
-$ST
-	
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
        	# DKMS could use all cores on multicore systems to build the kernel module.
        	num_cpu_cores()
@@ -72,7 +64,11 @@ $ST
 			echo "1"
 		fi
 	}
-	
+
+	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ]; then
+	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/dmabuf .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/"
+	else
 	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/dmabuf .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/"
+	fi
 	CLEAN="export LEX=flex; export YACC=bison; 'make' clean"
 EOF

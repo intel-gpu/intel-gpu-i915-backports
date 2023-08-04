@@ -26,9 +26,11 @@
 #ifndef _BACKPORT_LINUX_COMPILER_ATTRIBUTES_H
 #define _BACKPORT_LINUX_COMPILER_ATTRIBUTES_H
 #include <linux/version.h>
+#ifndef BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
 #include_next <linux/compiler_attributes.h>
-#ifdef BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#endif
 
+#ifdef BPM_FALLTHROUGH_API_NOT_PRESENT
 #ifndef __has_attribute
 # define __GCC4_has_attribute___fallthrough__	0
 #endif

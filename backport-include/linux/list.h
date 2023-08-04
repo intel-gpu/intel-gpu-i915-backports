@@ -32,5 +32,10 @@ static inline int list_is_head(const struct list_head *list, const struct list_h
 }
 #endif
 
+#ifdef BPM_LIST_ENTRY_IS_HEAD_NOT_PRESENT
+#define list_entry_is_head(pos, head, member)                           \
+	(&pos->member == (head))
+#endif
+
 #endif /* _BACKPORT_LINUX_LIST_H */
 

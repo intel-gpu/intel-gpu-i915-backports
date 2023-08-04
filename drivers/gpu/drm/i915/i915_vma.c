@@ -119,7 +119,7 @@ i915_alloc_window_vma(struct drm_i915_private *i915,
 	vma->resv = NULL;
 	vma->size = size;
 	vma->display_alignment = I915_GTT_MIN_ALIGNMENT;
-	vma->page_sizes.sg = min_page_size;
+	vma->page_sizes = min_page_size;
 
 	i915_active_init(&vma->active, __i915_vma_active, __i915_vma_retire, 0);
 	INIT_LIST_HEAD(&vma->closed_link);
@@ -267,9 +267,7 @@ skip_rb_insert:
 	spin_lock_init(&vma->metadata_lock);
 	INIT_LIST_HEAD(&vma->metadata_list);
 	INIT_LIST_HEAD(&vma->vm_bind_link);
-	INIT_LIST_HEAD(&vma->non_priv_vm_bind_link);
 	INIT_LIST_HEAD(&vma->vm_capture_link);
-	INIT_LIST_HEAD(&vma->vm_rebind_link);
 	return vma;
 
 err_unlock:
@@ -407,7 +405,7 @@ static void __vma_complete(struct dma_fence_work *work)
 	if (!vma)
 		return;
 
-	if (work->dma.error) {
+	if (work->dma.error && work->dma.error != -EAGAIN) {
 		GEM_BUG_ON(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &work->dma.flags));
 		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
 		if (vma->vm->scratch_range)
@@ -548,9 +546,6 @@ int __i915_vma_bind(struct i915_vma *vma,
 	} else {
 		vma->ops->bind_vma(vma->vm, NULL, vma, pat_index, bind_flags);
 	}
-
-	if (bind_flags & PIN_RESIDENT && vma->obj)
-		vma->obj->mm.dirty = true;
 
 	atomic_or(bind_flags, &vma->flags);
 	return 0;
@@ -905,8 +900,7 @@ i915_vma_insert(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 		 * Note that we assume that GGTT are limited to 4GiB for the
 		 * forseeable future. See also i915_ggtt_offset().
 		 */
-		if (upper_32_bits(end - 1) &&
-		    vma->page_sizes.sg > I915_GTT_PAGE_SIZE) {
+		if (upper_32_bits(end - 1) && vma->size > I915_GTT_PAGE_SIZE) {
 			u64 page_alignment;
 
 			/*
@@ -924,12 +918,10 @@ i915_vma_insert(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 			 * GTT pages.
 			 */
 			if (HAS_64K_PAGES(vma->vm->i915) &&
-			    vma->page_sizes.sg < I915_GTT_PAGE_SIZE_2M)
+			    vma->size < I915_GTT_PAGE_SIZE_2M)
 				page_alignment = I915_GTT_PAGE_SIZE_64K;
 			else
-				page_alignment = rounddown_pow_of_two(
-						vma->page_sizes.sg |
-						I915_GTT_PAGE_SIZE_2M);
+				page_alignment = rounddown_pow_of_two(vma->size);
 
 			/*
 			 * Check we don't expand for the limited Global GTT
@@ -952,8 +944,7 @@ i915_vma_insert(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 			 * system memory, the whole idea of adding 2M padding
 			 * is completely irrelevant.
 			 */
-			if (!HAS_64K_PAGES(vma->vm->i915) &&
-			    vma->page_sizes.sg & I915_GTT_PAGE_SIZE_64K)
+			if (!HAS_64K_PAGES(vma->vm->i915))
 				size = round_up(size, I915_GTT_PAGE_SIZE_2M);
 		}
 
@@ -1217,9 +1208,6 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	if (try_qad_pin(vma, flags & I915_VMA_BIND_MASK))
 		return 0;
 
-	i915_debugger_wait_on_discovery(vma->vm->i915, /* wait for vm event */
-					vma->vm->client);
-
 	/*
 	 * Restrict faults to persistent vmas unless faults are enabled using
 	 * modparam enable_pagefault.
@@ -1371,6 +1359,7 @@ err_rpm:
 	if (make_resident)
 		vma_put_pages(vma);
 
+	i915_debugger_vma_finalize(vma->vm->client, vma, err);
 	return err;
 }
 
@@ -1438,11 +1427,6 @@ int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	return i915_ggtt_pin(vma, ww, align, flags);
 }
 
-static bool object_inuse(struct drm_i915_gem_object *obj)
-{
-	return READ_ONCE(obj->base.handle_count);
-}
-
 void i915_vma_close(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
@@ -1468,7 +1452,7 @@ void i915_vma_close(struct i915_vma *vma)
 		struct drm_i915_gem_object *obj = vma->obj;
 		bool inuse =
 			!i915_vma_is_persistent(vma) &&
-			object_inuse(obj) &&
+			i915_gem_object_inuse(obj) &&
 			!i915_is_ggtt_or_dpt(vm);
 
 		if (inuse) {
@@ -1543,12 +1527,13 @@ struct i915_vma *i915_vma_open(struct i915_vma *vma)
 
 		spin_lock_irqsave(&clock->lock, flags);
 		if (!atomic_add_unless(&vma->open_count, 1, 0)) {
-			if (i915_vma_is_purged(vma) ||
-			    !i915_vm_tryopen(vma->vm)) {
+			if (!i915_vma_tryget(vma)) {
+				vma = NULL;
+			} else if (!i915_vm_tryopen(vma->vm)) {
+				i915_vma_put(vma);
 				vma = NULL;
 			} else {
 				__i915_vma_get(vma);
-				i915_vma_get(vma);
 				if (!list_empty(&vma->closed_link)) {
 					list_del_init(&vma->closed_link);
 					__i915_vma_put(vma);
@@ -1746,16 +1731,17 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 		i915_active_add_request(&vma->fence->active, rq);
 
 	obj->read_domains |= I915_GEM_GPU_DOMAINS;
-	obj->mm.dirty = true;
 
 	return 0;
 }
 
 void __i915_vma_evict(struct i915_vma *vma)
 {
+	struct i915_address_space *vm = vma->vm;
+
 	GEM_BUG_ON(i915_vma_is_pinned(vma));
 
-	i915_debugger_vma_evict(vma->vm->client, vma);
+	i915_debugger_vma_evict(vm->client, vma);
 
 	if (i915_vma_is_map_and_fenceable(vma)) {
 		/* Force a pagefault for domain tracking on next user access */
@@ -1787,16 +1773,24 @@ void __i915_vma_evict(struct i915_vma *vma)
 	GEM_BUG_ON(vma->fence);
 	GEM_BUG_ON(i915_vma_has_userfault(vma));
 
-	if (likely(atomic_read(&vma->vm->open))) {
+	if (likely(atomic_read(&vm->open))) {
 		trace_i915_vma_unbind(vma);
-		vma->ops->unbind_vma(vma->vm, vma);
+		vma->ops->unbind_vma(vm, vma);
+
+		if (!list_empty(&vma->vm_bind_link)) {
+			GEM_BUG_ON(!i915_vma_is_persistent(vma));
+			assert_object_held(vm->root_obj);
+			list_move_tail(&vma->vm_bind_link, &vm->vm_bind_list);
+		}
 	}
 	atomic_and(~(I915_VMA_BIND_MASK | I915_VMA_ERROR | I915_VMA_GGTT_WRITE),
 		   &vma->flags);
 
-	if(!i915_vm_page_fault_enabled(vma->vm) || i915_vma_is_purged(vma) ||
-	   !i915_vma_is_persistent(vma))
+	if (!i915_vm_page_fault_enabled(vm) ||
+	    i915_vma_is_purged(vma) ||
+	    !i915_vma_is_persistent(vma))
 		i915_vma_detach(vma);
+
 	vma_unbind_pages(vma);
 }
 
@@ -1824,28 +1818,11 @@ int __i915_vma_unbind(struct i915_vma *vma)
 	if (ret)
 		return ret;
 
-	GEM_BUG_ON(i915_vma_is_active(vma));
 	__i915_vma_evict(vma);
 
-	if(!i915_vm_page_fault_enabled(vm) || i915_vma_is_purged(vma) ||
-	   !i915_vma_is_persistent(vma))
+	if (!i915_vm_page_fault_enabled(vm) || i915_vma_is_purged(vma) ||
+	    !i915_vma_is_persistent(vma))
 		drm_mm_remove_node(&vma->node);
-
-	if (i915_vma_is_persistent(vma)) {
-		spin_lock(&vm->vm_rebind_lock);
-
-		/*
-		 * Confirm this vma is still alive after acquiring the spinlock
-		 * to serialize with i915_gem_vm_bind_remove(). Otherwise, we
-		 * may re-add the vma onto the rebind list /after/ the vma has
-		 * already been marked as freed.
-		 */
-		if (list_empty(&vma->vm_rebind_link))
-			list_add_tail(&vma->vm_rebind_link,
-				      &vm->vm_rebind_list);
-
-		spin_unlock(&vm->vm_rebind_lock);
-	}
 
 	return 0;
 }
@@ -1908,27 +1885,24 @@ int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem)
 	if (i915_gem_object_is_userptr(vma->obj))
 		return -EINVAL;
 
-	i915_gem_ww_ctx_init(&ww, true);
+	for_i915_gem_ww(&ww, err, true) {
+		err = i915_gem_object_lock(vma->vm->root_obj, &ww);
+		if (err)
+			continue;
 
-retry:
-	err = i915_gem_object_lock(vma->obj, &ww);
-	if (err)
-		goto err_ww;
+		err = i915_gem_object_lock(vma->obj, &ww);
+		if (err)
+			continue;
 
-	if (vma->obj->mm.region.mem->id != mem->id)
-		err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
-	if (err)
-		goto err_ww;
+		if (vma->obj->mm.region.mem->id != mem->id)
+			err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
+		if (err)
+			continue;
 
-	err = i915_vma_bind(vma, &ww);
-err_ww:
-	if (err == -EDEADLK) {
-		err = i915_gem_ww_ctx_backoff(&ww);
-		if (!err)
-			goto retry;
+		if (!i915_vma_is_bound(vma, PIN_RESIDENT))
+			err = i915_vma_bind(vma, &ww);
 	}
 
-	i915_gem_ww_ctx_fini(&ww);
 	return err;
 }
 

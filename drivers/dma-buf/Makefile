@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-ifeq (y,$(filter y,$(CPTCFG_ONLY_DMABUF) $(CPTCFG_BOTH_DMABUF_I915)))
+ifeq (y,$(filter y,$(CPTCFG_ONLY_DMABUF) $(CPTCFG_BUILD_DMABUF_I915_MEI)))
 	ccflags-y += -I$(src)
 ifeq ($(CONFIG_BACKPORT_INTEGRATE),)
 	obj-m += dmabuf.o

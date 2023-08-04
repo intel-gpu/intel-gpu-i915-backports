@@ -30,8 +30,9 @@
 
 #include_next <linux/kernel.h>
 
-
+#ifdef BPM_LIMITS_H_NOT_PRESENT
 #define SIZE_MAX        (~(size_t)0)
+#endif
 
 #ifndef DIV_ROUND_CLOSEST_ULL
 /*

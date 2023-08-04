@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+#postrm script for intel-i915-prerelease
+
+set -e
+
+#update initramfs
+case "$1" in
+    remove)
+	depmod -a
+	if [ -x /usr/sbin/update-initramfs ]; then
+	    /usr/sbin/update-initramfs -u
+	fi
+    ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+    *)
+	echo "postrm called with unknown argument \`$1'" >&2
+	exit 1
+    ;;
+esac
+
+exit 0

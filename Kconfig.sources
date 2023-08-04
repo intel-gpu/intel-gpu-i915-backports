@@ -27,3 +27,11 @@ source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
 #source "$BACKPORT_DIR/drivers/net/ieee802154/Kconfig"
 
 #source "$BACKPORT_DIR/drivers/usb/class/Kconfig"
+
+# PMT
+source "$BACKPORT_DIR/drivers/mfd/Kconfig"
+source "$BACKPORT_DIR/drivers/platform/x86/intel/Kconfig"
+
+# MEI
+source "$BACKPORT_DIR/drivers/misc/mei/Kconfig"
+source "$BACKPORT_DIR/drivers/watchdog/Kconfig"

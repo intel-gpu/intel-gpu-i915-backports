@@ -123,12 +123,16 @@ int intel_wakeref_wait_for_idle(struct intel_wakeref *wf)
 
 	might_sleep();
 
-	err = wait_var_event_killable(&wf->wakeref,
-				      !intel_wakeref_is_active(wf));
-	if (err)
-		return err;
+	/* Beware re-arming wakerefs; recheck after flushing the callback */
+	do {
+		err = wait_var_event_killable(&wf->wakeref,
+					      !intel_wakeref_is_active(wf));
+		if (err)
+			return err;
 
-	intel_wakeref_unlock_wait(wf);
+		intel_wakeref_unlock_wait(wf);
+	} while (intel_wakeref_is_active(wf));
+
 	return 0;
 }
 

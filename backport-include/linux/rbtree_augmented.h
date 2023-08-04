@@ -28,6 +28,10 @@
 #include <linux/version.h>
 #include_next <linux/rbtree_augmented.h>
 
+#ifdef BPM_RB_DECLARE_CALLBACKS_MAX_NOT_PRESENT
+#define RB_DECLARE_CALLBACKS_MAX RB_DECLARE_CALLBACKS
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
 static inline void
 rb_insert_augmented_cached(struct rb_node *node,

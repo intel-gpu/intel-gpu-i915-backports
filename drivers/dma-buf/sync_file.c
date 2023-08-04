@@ -480,5 +480,11 @@ static const struct file_operations sync_file_fops = {
 	.release = sync_file_release,
 	.poll = sync_file_poll,
 	.unlocked_ioctl = sync_file_ioctl,
+#ifdef BPM_COMPAT_PTR_IOCTL_NOT_PRESENT
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = sync_file_ioctl,
+#endif
+#else
 	.compat_ioctl = compat_ptr_ioctl,
+#endif
 };

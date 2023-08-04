@@ -231,7 +231,7 @@ static bool has_fake_table(struct drm_i915_private *i915)
 	return fake_hwconfig_get_table(i915, &size) != NULL;
 }
 
-/**
+/*
  * intel_guc_hwconfig_init - Initialize the HWConfig
  *
  * Retrieve the HWConfig table from the GuC and save it locally.
@@ -281,7 +281,7 @@ err:
 	return ret;
 }
 
-/**
+/*
  * intel_gt_init_hwconfig - Initialize the HWConfig if available
  *
  * Retrieve the HWConfig table if available on the current platform.
@@ -294,7 +294,7 @@ int intel_gt_init_hwconfig(struct intel_gt *gt)
 	return guc_hwconfig_init(gt);
 }
 
-/**
+/*
  * intel_gt_fini_hwconfig - Finalize the HWConfig
  *
  * Free up the memory allocation holding the table.

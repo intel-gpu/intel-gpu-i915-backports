@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Multifunction miscellaneous devices
+#
+
+if HAS_IOMEM
+menu "Multifunction device drivers"
+
+config MFD_CORE
+	tristate
+	depends on m
+	depends on IRQ_DOMAIN
+	default n
+
+config MFD_INTEL_PMT
+	tristate "Intel Platform Monitoring Technology (PMT) support"
+	depends on m
+	depends on PCI
+	depends on (AUXILIARY_BUS != y) || INTEL_PMT_FORCED
+	select MFD_CORE
+	help
+	  The Intel Platform Monitoring Technology (PMT) is an interface that
+	  provides access to hardware monitor registers. This driver supports
+	  Telemetry, Watcher, and Crashlog PMT capabilities/devices for
+	  platforms starting from Tiger Lake.
+
+endmenu
+endif

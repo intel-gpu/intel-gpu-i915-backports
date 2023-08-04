@@ -174,6 +174,16 @@ static void pf_clear_vf_lmem_obj(struct intel_iov *iov, u32 vfid)
 			  vfid, ERR_PTR(err));
 }
 
+static void pf_reset_vf_guc_migration_state(struct intel_iov *iov, u32 vfid)
+{
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+	void *guc_state = fetch_and_zero(&data->guc_state);
+
+	lockdep_assert_held(pf_provisioning_mutex(iov));
+
+	kfree(guc_state);
+}
+
 static bool pf_vfs_flr_enabled(struct intel_iov *iov, u32 vfid)
 {
 	return iov_to_i915(iov)->params.vfs_flr_mask & BIT(vfid);
@@ -190,6 +200,7 @@ static int pf_process_vf_flr_finish(struct intel_iov *iov, u32 vfid)
 	intel_iov_event_reset(iov, vfid);
 
 	mutex_lock(pf_provisioning_mutex(iov));
+	pf_reset_vf_guc_migration_state(iov, vfid);
 	pf_clear_vf_ggtt_entries(iov, vfid);
 	if (HAS_LMEM(iov_to_i915(iov)))
 		pf_clear_vf_lmem_obj(iov, vfid);
@@ -485,13 +496,29 @@ int intel_iov_state_pause_vf(struct intel_iov *iov, u32 vfid)
  */
 int intel_iov_state_resume_vf(struct intel_iov *iov, u32 vfid)
 {
-	int err = pf_control_vf(iov, vfid, GUC_PF_TRIGGER_VF_RESUME);
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+	void *guc_state;
+	int ret;
 
-	if (err < 0)
-		return err;
+	ret = pf_control_vf(iov, vfid, GUC_PF_TRIGGER_VF_RESUME);
+	if (ret)
+		return ret;
 
-	iov->pf.state.data[vfid].paused = false;
-	return 0;
+	data->paused = false;
+
+	guc_state = fetch_and_zero(&data->guc_state);
+	if (guc_state) {
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+		ret = intel_iov_state_restore_vf(iov, vfid, guc_state);
+#else
+		ret = intel_iov_state_restore_vf(iov, vfid, guc_state,
+						 PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
+#endif
+		kfree(guc_state);
+		return ret;
+	}
+
+	return ret;
 }
 
 /**
@@ -660,6 +687,34 @@ failed:
 	return ret;
 }
 
+int intel_iov_state_store_guc_migration_state(struct intel_iov *iov, u32 vfid,
+					      const void *buf, size_t size)
+{
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+	void *guc_state;
+
+#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
+	if (size != SZ_4K)
+#else
+	if (size != PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
+#endif
+		return -EINVAL;
+
+	mutex_lock(pf_provisioning_mutex(iov));
+	guc_state = kzalloc(size, GFP_KERNEL);
+	if (!guc_state) {
+		mutex_unlock(pf_provisioning_mutex(iov));
+		return -ENOMEM;
+	}
+
+	memcpy(guc_state, buf, size);
+
+	data->guc_state = guc_state;
+	mutex_unlock(pf_provisioning_mutex(iov));
+
+	return 0;
+}
+
 /**
  * intel_iov_state_restore_vf - Restore VF state.
  * @iov: the IOV struct
@@ -760,8 +815,7 @@ int intel_iov_state_restore_ggtt(struct intel_iov *iov, u32 vfid, const void *bu
 	return ret;
 }
 
-static void *
-pf_map_vf_lmem(struct intel_iov *iov, u32 vfid, loff_t offset, size_t size)
+void *intel_iov_state_map_lmem(struct intel_iov *iov, u32 vfid)
 {
 	struct drm_i915_private *i915 = iov_to_i915(iov);
 	struct drm_i915_gem_object *obj = iov->pf.provisioning.configs[vfid].lmem_obj;
@@ -769,7 +823,7 @@ pf_map_vf_lmem(struct intel_iov *iov, u32 vfid, loff_t offset, size_t size)
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 
-	if (!obj || offset + size > obj->base.size)
+	if (!obj)
 		return ERR_PTR(-EINVAL);
 
 	vaddr = i915_gem_object_pin_map_unlocked(obj,
@@ -777,85 +831,15 @@ pf_map_vf_lmem(struct intel_iov *iov, u32 vfid, loff_t offset, size_t size)
 	if (IS_ERR(vaddr))
 		return vaddr;
 
-	return vaddr + offset;
+	return vaddr;
 }
 
-static void pf_unmap_vf_lmem(struct intel_iov *iov, u32 vfid)
+void intel_iov_state_unmap_lmem(struct intel_iov *iov, u32 vfid)
 {
 	struct drm_i915_gem_object *obj = iov->pf.provisioning.configs[vfid].lmem_obj;
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 
 	i915_gem_object_unpin_map(obj);
-}
-
-/**
- * intel_iov_state_save_lmem - Save VF Local Memory.
- * @iov: the IOV struct
- * @vfid: VF identifier
- * @buf: buffer to save VF LMEM
- * @offset: offset from the start of VF LMEM
- * @size: size of buffer to save VF LMEM
- *
- * This function is for PF only.
- *
- * Return: Size of data written on success or a negative error code on failure.
- */
-ssize_t intel_iov_state_save_lmem(struct intel_iov *iov, u32 vfid, void *buf,
-				  loff_t offset, size_t size)
-{
-	void *vaddr;
-
-	GEM_BUG_ON(!intel_iov_is_pf(iov));
-
-	mutex_lock(pf_provisioning_mutex(iov));
-	vaddr = pf_map_vf_lmem(iov, vfid, offset, size);
-	if (IS_ERR(vaddr)) {
-		mutex_unlock(pf_provisioning_mutex(iov));
-		return PTR_ERR(vaddr);
-	}
-
-	memcpy_fromio(buf, vaddr, size);
-
-	pf_unmap_vf_lmem(iov, vfid);
-
-	mutex_unlock(pf_provisioning_mutex(iov));
-
-	return size;
-}
-
-/**
- * intel_iov_state_restore_lmem - Restore VF Local Memory.
- * @iov: the IOV struct
- * @vfid: VF identifier
- * @buf: buffer with VF LMEM to restore
- * @offset: offset from the start of VF LMEM
- * @size: size of buffer with VF LMEM
- *
- * This function is for PF only.
- *
- * Return: 0 on success or a negative error code on failure.
- */
-int intel_iov_state_restore_lmem(struct intel_iov *iov, u32 vfid, const void *buf,
-				 loff_t offset, size_t size)
-{
-	void *vaddr;
-
-	GEM_BUG_ON(!intel_iov_is_pf(iov));
-
-	mutex_lock(pf_provisioning_mutex(iov));
-	vaddr = pf_map_vf_lmem(iov, vfid, offset, size);
-	if (IS_ERR(vaddr)) {
-		mutex_unlock(pf_provisioning_mutex(iov));
-		return PTR_ERR(vaddr);
-	}
-
-	memcpy_toio(vaddr, buf, size);
-
-	pf_unmap_vf_lmem(iov, vfid);
-
-	mutex_unlock(pf_provisioning_mutex(iov));
-
-	return 0;
 }
 #endif

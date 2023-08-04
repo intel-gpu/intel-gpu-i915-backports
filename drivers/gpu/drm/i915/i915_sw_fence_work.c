@@ -4,6 +4,8 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <linux/sched/signal.h>
+
 #include "i915_sw_fence_work.h"
 
 static void fence_complete(struct dma_fence_work *f)
@@ -36,7 +38,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 
 	switch (state) {
 	case FENCE_COMPLETE:
-		if (fence->error)
+		if (fence->error && !f->ops->no_error_propagation)
 			dma_fence_set_error(&f->dma, fence->error);
 
 		dma_fence_get(&f->dma);

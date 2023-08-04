@@ -1,0 +1,96 @@
+#!/bin/sh
+# Common autopkgtest script for testing a dkms source package.
+# Author: Martin Pitt <martin.pitt@ubuntu.com>
+# Copyright: (C) 2014 Canonical Ltd.
+set -eu
+
+run_pkg() {
+    pkg="$1"
+
+    echo "I: Installing binary package $pkg"
+    export DEBIAN_FRONTEND=noninteractive
+    RC=0
+    (set +e; apt-get install -yq $pkg </dev/null) || RC=$?
+
+    # collect build logs as artifacts
+    if [ -d /var/lib/dkms ]; then
+        (cd /var/lib/dkms; find -name "make.log" -print0 | xargs -0 tar c) > "$AUTOPKGTEST_ARTIFACTS/$pkg-make-logs.tar"
+    fi
+
+    if [ "$RC" -ne 0 ]; then
+        echo "E: Package $pkg failed to install" >&2
+        exit 1
+    fi
+
+    echo "I: Testing binary package $pkg"
+
+    if ! dkms_conf=$(dpkg -L $pkg | grep 'dkms.conf$'); then
+        echo "I: Package $pkg has no dkms.conf, skipping"
+        return
+    fi
+    dkms_pkg=$(bash -c ". $dkms_conf; echo \$PACKAGE_NAME" 2>/dev/null)
+    dkms_version=$(bash -c ". $dkms_conf; echo \$PACKAGE_VERSION" 2>/dev/null)
+
+    echo "I: Testing if $dkms_pkg modules are correctly installed"
+    dkmsstatus="$(dkms status $dkms_pkg)"
+    if [ -z "$dkmsstatus" ]; then
+        echo "E: dkms status output is empty!" >&2
+        exit 1
+    fi
+    echo "$dkmsstatus"
+
+    if ! echo "$dkmsstatus" | grep -q "installed$"; then
+        echo "E: not installed" >&2
+        exit 1
+    fi
+
+    modaliases=$(dpkg-query --show -f '${Modaliases}' $pkg)
+    if test -n "$modaliases"; then
+        echo "I: Checking modaliases in debian/control ..."
+
+        modaliases_dpkg=$AUTOPKGTEST_ARTIFACTS/$pkg.modaliases.dpkg
+        echo "$modaliases" | \
+            sed -e 's/\([^(]\+\)(\([^)]\+\))\(, \)\?/\1 \2\n/g' | \
+            sed -e '/,/bx' -e 's/\([^ ]\+\) \([^ ]\+\)/alias \2 \1/' \
+                -e 'bend' -e ':x' -e 's/\([^ ]\+\) \([^ ]\+\), \(.*\)/alias \2 \1\n\1 \3/' -e 'P;D' -e ':end' | \
+            grep -v '^$' | \
+            sort > "$modaliases_dpkg"
+
+        diff -Nu debian/$pkg.modaliases "$modaliases_dpkg";
+    fi
+
+    modaliases_modinfo=$AUTOPKGTEST_ARTIFACTS/$pkg.modaliases.modinfo
+    for build in $(find /var/lib/dkms/$dkms_pkg/$dkms_version -mindepth 3 -maxdepth 3 -type d -name module); do
+        echo "I: Checking modaliases for $build ..."
+
+        for module in $(find $build -type f -name \*.ko | sort); do
+            /sbin/modinfo ${module} | perl -nae "print \"alias \$1 $(basename --suffix=.ko ${module})\\n\" if /^alias:\\s+(.*)\$/";
+        done | sort > "$modaliases_modinfo";
+
+        diff -Nu debian/$pkg.modaliases "$modaliases_modinfo";
+    done
+
+    # skip modprobing for now; this fails too often (needs particular
+    # hardware/firmware/etc)
+    # for mod in $(awk -F '"' '/^BUILT_MODULE_NAME/ {print $2}' $dkms_conf); do
+    #     echo "I: modprobe $mod"
+    #     if ! modprobe $mod; then
+    #         echo "E: Failed to modprobe module $mod" >&2
+    #         exit 1
+    #     else
+    #         echo "I: $modname loaded"
+    #     fi
+    # done
+}
+
+for pkg in $(awk '/^Package:/ { print $2 }' debian/control); do
+    # package might be arch: restriction or udeb etc.
+    if ! apt-cache show $pkg >/dev/null 2>&1; then
+        echo "I: Skipping unavailable package $pkg"
+        continue
+    fi
+    run_pkg $pkg
+done
+
+# Try and remove dkms to spot packages which miss a dkms dependency
+dpkg --remove dkms || true

@@ -62,10 +62,12 @@ static const struct attribute_group sriov_attr_group = {
 	.attrs = sriov_attrs,
 };
 
+#ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
 static const struct attribute_group *default_sriov_attr_groups[] = {
 	&sriov_attr_group,
 	NULL
 };
+#endif
 
 /* extended (PF and VFs) SR-IOV attributes */
 
@@ -180,12 +182,14 @@ static const struct attribute_group vf_ext_attr_group = {
 	.is_visible = vf_ext_attr_is_visible,
 };
 
+#ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
 static const struct attribute_group *default_sriov_ext_attr_groups[] = {
 	&sriov_ext_attr_group,
 	&pf_ext_attr_group,
 	&vf_ext_attr_group,
 	NULL,
 };
+#endif
 
 /* no user serviceable parts below */
 
@@ -235,7 +239,11 @@ static void sriov_kobj_release(struct kobject *kobj)
 static struct kobj_type sriov_ktype = {
 	.release = sriov_kobj_release,
 	.sysfs_ops = &sriov_sysfs_ops,
+#ifdef BPM_DEFAULT_GROUPS_NOT_PRESENT
+	.default_attrs = sriov_attrs,
+#else
 	.default_groups = default_sriov_attr_groups,
+#endif
 };
 
 static ssize_t sriov_ext_attr_show(struct kobject *kobj, struct attribute *attr,
@@ -289,7 +297,13 @@ static void sriov_ext_kobj_release(struct kobject *kobj)
 static struct kobj_type sriov_ext_ktype = {
 	.release = sriov_ext_kobj_release,
 	.sysfs_ops = &sriov_ext_sysfs_ops,
+#ifdef BPM_DEFAULT_GROUPS_NOT_PRESENT
+	.default_attrs = sriov_ext_attrs,
+	.default_attrs = pf_ext_attrs,
+	.default_attrs = vf_ext_attrs,
+#else
 	.default_groups = default_sriov_ext_attr_groups,
+#endif
 };
 
 static unsigned int pf_nodes_count(struct drm_i915_private *i915)
