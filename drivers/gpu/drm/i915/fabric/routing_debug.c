@@ -38,7 +38,7 @@ struct uft_iter {
 
 static void uft_iter_end(struct uft_iter *iter)
 {
-	unlock_shared(&routable_lock);
+	up_read(&routable_lock);
 	kfree(iter);
 }
 
@@ -98,7 +98,7 @@ static void *uft_seq_start(struct seq_file *s, loff_t *pos)
 
 	iter->block = BLOCK_UNINITIALIZED;
 
-	lock_shared(&routable_lock);
+	down_read(&routable_lock); /* shared lock */
 
 	/*
 	 * from this point on, we must either next() to a final state, or
@@ -311,7 +311,7 @@ struct dpa_iter {
 
 static void dpa_iter_end(struct dpa_iter *iter)
 {
-	unlock_shared(&routable_lock);
+	up_read(&routable_lock);
 	kfree(iter);
 }
 
@@ -361,7 +361,7 @@ static void *dpa_seq_start(struct seq_file *s, loff_t *pos)
 		return ERR_PTR(-EINVAL);
 	}
 
-	lock_shared(&routable_lock);
+	down_read(&routable_lock); /* shared lock */
 
 	/*
 	 * from this point on, we must either next() to a final state, or

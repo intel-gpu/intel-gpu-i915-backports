@@ -30,7 +30,6 @@ void intel_guc_submission_print_context_info(struct intel_guc *guc,
 					     struct drm_printer *p);
 void guc_submission_status_page_sanitization_disable(struct intel_guc *guc);
 void guc_submission_status_page_sanitization_enable(struct intel_guc *guc);
-void guc_submission_revert_ring_heads(struct intel_guc *guc);
 void intel_guc_busyness_park(struct intel_gt *gt);
 void intel_guc_busyness_unpark(struct intel_gt *gt);
 

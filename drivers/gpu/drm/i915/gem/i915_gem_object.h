@@ -12,7 +12,7 @@
 #include <drm/drm_device.h>
 
 #include "display/intel_frontbuffer.h"
-#include "intel_memory_region.h"
+#include "i915_buddy.h"
 #include "i915_gem_object_types.h"
 #include "i915_gem_gtt.h"
 #include "i915_vma_types.h"
@@ -22,8 +22,11 @@
 
 #define obj_to_i915(obj__) to_i915((obj__)->base.dev)
 
+#define i915_gem_object_first_segment(obj__) \
+	rb_entry_safe(rb_first_cached(&(obj__)->segments), typeof(*(obj__)), segment_node)
+
 #define for_each_object_segment(sobj__, obj__) \
-	for ((sobj__) = rb_entry_safe(rb_first_cached(&(obj__)->segments), typeof(*(sobj__)), segment_node); \
+	for ((sobj__) = i915_gem_object_first_segment((obj__)); \
 	     (sobj__); \
 	     (sobj__) = rb_entry_safe(rb_next(&(sobj__)->segment_node), typeof(*(sobj__)), segment_node))
 
@@ -42,7 +45,7 @@ unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
 bool i915_gem_object_has_cache_level(const struct drm_i915_gem_object *obj,
 				     enum i915_cache_level lvl);
 void i915_gem_init__objects(struct drm_i915_private *i915);
-u32 i915_gem_object_max_page_size(struct drm_i915_gem_object *obj);
+u32 i915_gem_object_max_page_size(const struct drm_i915_gem_object *obj);
 
 void i915_objects_module_exit(void);
 int i915_objects_module_init(void);
@@ -211,32 +214,6 @@ static inline void assert_object_held_shared(struct drm_i915_gem_object *obj)
 		assert_object_held(obj);
 }
 
-static inline int
-i915_gem_object_lock_to_evict(struct drm_i915_gem_object *obj,
-			      struct i915_gem_ww_ctx *ww)
-{
-	int ret;
-
-	if (ww->intr)
-		ret = dma_resv_lock_interruptible(obj->base.resv, &ww->ctx);
-	else
-		ret = dma_resv_lock(obj->base.resv, &ww->ctx);
-
-	if (!ret) {
-		list_add_tail(&obj->obj_link, &ww->eviction_list);
-		i915_gem_object_get(obj);
-		obj->evict_locked = true;
-	}
-
-	GEM_WARN_ON(ret == -EALREADY);
-	if (ret == -EDEADLK) {
-		ww->contended_evict = true;
-		ww->contended = i915_gem_object_get(obj);
-	}
-
-	return ret;
-}
-
 static inline int __i915_gem_object_lock(struct drm_i915_gem_object *obj,
 					 struct i915_gem_ww_ctx *ww,
 					 bool intr)
@@ -308,15 +285,27 @@ static inline void i915_gem_object_unlock(struct drm_i915_gem_object *obj)
 }
 
 static inline bool
-i915_gem_object_has_segments(struct drm_i915_gem_object *obj)
+i915_gem_object_has_segments(const struct drm_i915_gem_object *obj)
 {
 	return !RB_EMPTY_ROOT(&obj->segments.rb_root);
 }
 
 static inline bool
-i915_gem_object_is_segment(struct drm_i915_gem_object *obj)
+i915_gem_object_is_segment(const struct drm_i915_gem_object *obj)
 {
 	return !RB_EMPTY_NODE(&obj->segment_node);
+}
+
+static inline void
+i915_gem_object_set_backing_store(struct drm_i915_gem_object *obj)
+{
+	obj->flags |= I915_BO_HAS_BACKING_STORE;
+}
+
+static inline bool
+i915_gem_object_has_backing_store(const struct drm_i915_gem_object *obj)
+{
+	return obj->flags & I915_BO_HAS_BACKING_STORE;
 }
 
 static inline void
@@ -693,6 +682,8 @@ i915_gem_object_finish_access(struct drm_i915_gem_object *obj)
 
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
+void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
+				   unsigned int pat_index);
 bool i915_gem_object_can_bypass_llc(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj);
@@ -750,6 +741,8 @@ int i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 				  unsigned int flags,
 				  int prio);
 
+bool i915_gem_object_is_active(struct drm_i915_gem_object *obj);
+
 void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 					 enum fb_op_origin origin);
 void __i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
@@ -799,7 +792,7 @@ i915_gem_get_locking_ctx(const struct drm_i915_gem_object *obj)
 {
 	struct ww_acquire_ctx *ctx;
 
-	ctx = obj->base.resv->lock.ctx;
+	ctx = READ_ONCE(obj->base.resv->lock.ctx);
 	if (!ctx)
 		return NULL;
 
@@ -812,46 +805,74 @@ i915_gem_object_is_userptr(struct drm_i915_gem_object *obj)
 {
 	return obj->userptr.notifier.mm;
 }
-
-int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj);
-int i915_gem_object_userptr_submit_done(struct drm_i915_gem_object *obj);
-int i915_gem_object_userptr_validate(struct drm_i915_gem_object *obj);
 #else
 static inline bool i915_gem_object_is_userptr(struct drm_i915_gem_object *obj) { return false; }
-
-static inline int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj) { GEM_BUG_ON(1); return -ENODEV; }
-static inline int i915_gem_object_userptr_submit_done(struct drm_i915_gem_object *obj) { GEM_BUG_ON(1); return -ENODEV; }
-static inline int i915_gem_object_userptr_validate(struct drm_i915_gem_object *obj) { GEM_BUG_ON(1); return -ENODEV; }
-
 #endif
 
 int i915_window_blt_copy(struct drm_i915_gem_object *dst,
 			 struct drm_i915_gem_object *src, bool compressed);
 int i915_setup_blt_windows(struct drm_i915_private *i915);
 void i915_teardown_blt_windows(struct drm_i915_private *i915);
+
 bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj);
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 					 enum intel_region_id dst_region_id,
 					 bool is_atomic_fault);
 
 void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,
-				     struct i915_request *rq);
+				     struct dma_fence *f);
+int i915_gem_object_migrate_await(struct drm_i915_gem_object *obj,
+				  struct i915_request *rq);
+void i915_gem_object_migrate_boost(struct drm_i915_gem_object *obj, int prio);
 long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 				  unsigned int flags,
 				  long timeout);
 int i915_gem_object_migrate_sync(struct drm_i915_gem_object *obj);
-void i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj);
+void i915_gem_object_migrate_decouple(struct drm_i915_gem_object *obj);
+int i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj);
 
 static inline bool
-i915_gem_object_has_migrate(const struct drm_i915_gem_object *obj)
+i915_gem_object_has_migrate(struct drm_i915_gem_object *obj)
 {
-	return i915_active_fence_isset(&obj->mm.migrate);
+	return !i915_active_fence_is_signaled(&obj->mm.migrate);
 }
 
 static inline int
 i915_gem_object_migrate_has_error(const struct drm_i915_gem_object *obj)
 {
 	return i915_active_fence_has_error(&obj->mm.migrate);
+}
+
+static inline bool
+i915_gem_object_mem_idle(const struct drm_i915_gem_object *obj)
+{
+	struct i915_buddy_block *block;
+
+	if (!obj->mm.region.mem)
+		return true;
+
+	list_for_each_entry(block, &obj->mm.blocks, link) {
+		if (!i915_active_fence_is_signaled(&block->active))
+			return false;
+	}
+
+	return true;
+}
+
+/**
+ * i915_gem_object_inuse - Is this object accessible by userspace?
+ *
+ * An object may be published (accessible by others and userspace)
+ * only if either a GEM handle to this object exists, or if this
+ * object has been exported via dma-buf.
+ * For BO segments, we have to test if parent BO is accessible.
+ */
+static inline bool
+i915_gem_object_inuse(const struct drm_i915_gem_object *obj)
+{
+	if (obj->parent)
+		obj = obj->parent;
+	return READ_ONCE(obj->base.handle_count) || obj->base.dma_buf;
 }
 
 void i915_gem_object_share_resv(struct drm_i915_gem_object *parent,

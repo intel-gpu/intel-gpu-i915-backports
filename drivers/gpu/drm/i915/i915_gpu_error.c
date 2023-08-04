@@ -107,7 +107,7 @@ static bool __i915_error_grow(struct drm_i915_error_state_buf *e, size_t len)
 		}
 
 		e->cur = sgl;
-		e->end = sgl + SG_MAX_SINGLE_ALLOC - 1;
+		e->end = sgl + I915_MAX_CHAIN_ALLOC;
 	}
 
 	e->size = ALIGN(len + 1, SZ_64K);
@@ -555,6 +555,13 @@ static void error_print_context(struct drm_i915_error_state_buf *m,
 		   ctx->guilty, ctx->active, ctx->sip_installed ? "true" : "false",
 		   ctx->total_runtime, ctx->avg_runtime);
 
+	/*
+	 * FIXME: igt@gem_exec_offlinedebug@context_save_area can't cope with
+	 * extra information being added to the context dump. So comment out
+	 * this upstraem addition until the IGT test has been fixed.
+	 */
+//	err_printf(m, "  context timeline seqno %u\n", ctx->hwsp_seqno);
+
 	i915_uuid_resources_dump(ctx, m);
 }
 
@@ -696,7 +703,8 @@ void intel_gpu_error_print_vma(struct drm_i915_error_state_buf *m,
 		err_printf(m, "gtt_page_sizes = 0x%08x\n", vma->gtt_page_sizes);
 
 	i915_vma_metadata_coredump_print(m, vma->metadata);
-	compress_print_pages(m, vma->cpages);
+	if (vma->cpages)
+		compress_print_pages(m, vma->cpages);
 }
 
 static void err_print_capabilities(struct drm_i915_error_state_buf *m,
@@ -906,10 +914,15 @@ static void err_print_gt_engines(struct drm_i915_error_state_buf *m,
 	for (ee = gt->engine; ee; ee = ee->next) {
 		const struct i915_vma_coredump *vma;
 
-		if (ee->guc_capture_node)
-			intel_guc_capture_print_engine_node(m, ee);
-		else
+		if (gt->uc && gt->uc->guc.is_guc_capture) {
+			if (ee->guc_capture_node)
+				intel_guc_capture_print_engine_node(m, ee);
+			else
+				err_printf(m, "  Missing GuC capture node for %s\n",
+					   ee->engine->name);
+		} else {
 			error_print_engine(m, ee);
+		}
 
 		err_printf(m, "  hung: %u\n", ee->hung);
 		err_printf(m, "  engine reset count: %d\n", ee->reset_count);
@@ -1127,12 +1140,15 @@ static void i915_vma_coredump_free(struct i915_vma_coredump *vma)
 {
 	while (vma) {
 		struct i915_vma_coredump *next = vma->next;
-		struct i915_compressed_pages *cpages = vma->cpages;
+		struct i915_compressed_pages *cpages;
 		int page;
 
-		for (page = 0; page < cpages->page_count; page++)
-			free_page((unsigned long)cpages->pages[page]);
-		kfree(cpages);
+		cpages = vma->cpages;
+		if (cpages) {
+			for (page = 0; page < cpages->page_count; page++)
+				free_page((unsigned long)cpages->pages[page]);
+			kfree(cpages);
+		}
 
 		if (vma->metadata)
 			i915_vma_metadata_coredump_free(vma->metadata);
@@ -1253,10 +1269,12 @@ static struct i915_vma_coredump *
 i915_vma_coredump_create(const struct intel_gt *gt,
 			 const struct i915_vma *vma,
 			 const char *name,
+			 struct sg_table *pages,
 			 struct i915_page_compress *compress)
 {
 	struct i915_ggtt *ggtt = gt->ggtt;
 	const u64 slot = ggtt->error_capture.start;
+	struct drm_i915_gem_object *obj = NULL;
 	struct i915_vma_coredump *dst;
 	unsigned long num_pages;
 	struct sgt_iter iter;
@@ -1265,49 +1283,75 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 
 	might_sleep();
 
-	if (!vma || !vma->pages || !compress)
+	if (!vma)
 		return NULL;
 
-	num_pages = min_t(u64, vma->size, vma->obj->base.size) >> PAGE_SHIFT;
-	num_pages = DIV_ROUND_UP(10 * num_pages, 8); /* worstcase zlib growth */
-	dst = kmalloc(sizeof(*dst), I915_GFP_ALLOW_FAIL);
+	dst = kzalloc(sizeof(*dst), I915_GFP_ALLOW_FAIL);
 	if (!dst)
 		return NULL;
 
-	dst->cpages = kmalloc(sizeof(*dst->cpages) + num_pages * sizeof(u32 *),
-			      I915_GFP_ALLOW_FAIL);
-	if (!dst->cpages) {
-		kfree(dst);
-		return NULL;
-	}
-
-	if (!compress_start(compress)) {
-		kfree(dst->cpages);
-		kfree(dst);
-		return NULL;
-	}
-
 	strcpy(dst->name, name);
 	dst->next = NULL;
+	dst->gtt_offset = vma->node.start;
+	dst->gtt_size = vma->node.size;
+	dst->gtt_page_sizes = vma->page_sizes;
+	dst->metadata = i915_vma_metadata_coredump_create(vma);
 
-	dst->gtt_offset = i915_vma_offset(vma);
-	dst->gtt_size = i915_vma_size(vma);
-	dst->gtt_page_sizes = vma->page_sizes.gtt;
+	if (!compress)
+		return dst;
+
+	if (!pages) {
+		obj = i915_gem_object_get_rcu(vma->obj);
+		if (!obj)
+			return dst;
+
+		if (!atomic_add_unless(&obj->mm.pages_pin_count, 1, 0)) {
+			int err = -EBUSY;
+
+			if (i915_gem_object_trylock(obj)) {
+				err = i915_gem_object_pin_pages_sync(obj);
+				i915_gem_object_unlock(obj);
+			}
+
+			if (err) {
+				i915_gem_object_put(obj);
+				return dst;
+			}
+		}
+
+		if (i915_gem_object_migrate_sync(obj))
+			goto out;
+
+		pages = obj->mm.pages;
+	}
+
+	num_pages = vma->size >> PAGE_SHIFT;
+	num_pages = DIV_ROUND_UP(10 * num_pages, 8); /* worstcase zlib growth */
+
+	dst->cpages = kmalloc(sizeof(*dst->cpages) + num_pages * sizeof(u32 *),
+			      I915_GFP_ALLOW_FAIL);
+	if (!dst->cpages)
+		goto out;
+
 	dst->cpages->num_pages = num_pages;
 	dst->cpages->page_count = 0;
 	dst->cpages->unused = 0;
 
+	if (!compress_start(compress)) {
+		kfree(dst->cpages);
+		dst->cpages = NULL;
+		goto out;
+	}
+
 	offset = (vma->ggtt_view.type == I915_GGTT_VIEW_PARTIAL) ?
 		 vma->ggtt_view.partial.offset : 0;
-
-	dst->metadata = i915_vma_metadata_coredump_create(vma);
 
 	ret = -EINVAL;
 	if (drm_mm_node_allocated(&ggtt->error_capture)) {
 		void __iomem *s;
 		dma_addr_t dma;
 
-		for_each_sgt_daddr(dma, iter, vma->pages) {
+		for_each_sgt_daddr(dma, iter, pages) {
 			if (n++ < offset)
 				continue;
 
@@ -1335,7 +1379,7 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 		struct intel_memory_region *mem = vma->obj->mm.region.mem;
 		dma_addr_t dma;
 
-		for_each_sgt_daddr(dma, iter, vma->pages) {
+		for_each_sgt_daddr(dma, iter, pages) {
 			void __iomem *s;
 
 			if (n++ < offset)
@@ -1354,7 +1398,7 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 	} else {
 		struct page *page;
 
-		for_each_sgt_page(page, iter, vma->pages) {
+		for_each_sgt_page(page, iter, pages) {
 			void *s;
 
 			if (n++ < offset)
@@ -1378,13 +1422,15 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 			pool_free(&compress->pool,
 				  dst->cpages->pages[dst->cpages->page_count]);
 		kfree(dst->cpages);
-		if (dst->metadata)
-			i915_vma_metadata_coredump_free(dst->metadata);
-		kfree(dst);
-		dst = NULL;
+		dst->cpages = NULL;
 	}
 	compress_finish(compress);
 
+out:
+	if (obj) {
+		__i915_gem_object_unpin_pages(obj);
+		i915_gem_object_put(obj);
+	}
 	return dst;
 }
 
@@ -1751,6 +1797,8 @@ static bool record_context(struct i915_gem_context_coredump *e,
 	e->sched_attr = ctx->sched;
 	e->guilty = atomic_read(&ctx->guilty_count);
 	e->active = atomic_read(&ctx->active_count);
+	e->hwsp_seqno = (rq->context->timeline && rq->context->timeline->hwsp_seqno) ?
+				*rq->context->timeline->hwsp_seqno : ~0U;
 
 	e->total_runtime = intel_context_get_total_runtime_ns(rq->context);
 	e->avg_runtime = intel_context_get_avg_runtime_ns(rq->context);
@@ -1770,6 +1818,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 struct intel_engine_capture_vma {
 	struct intel_engine_capture_vma *next;
 	struct i915_vma *vma;
+	struct sg_table *pages;
 	char name[16];
 };
 
@@ -1784,14 +1833,20 @@ capture_vma(struct intel_engine_capture_vma *next,
 	if (!vma)
 		return next;
 
-	c = kmalloc(sizeof(*c), gfp);
+	c = kzalloc(sizeof(*c), gfp);
 	if (!c)
 		return next;
 
-	if (!i915_vma_active_acquire_if_busy(vma)) {
+	if (!__i915_vma_get(vma)) {
 		kfree(c);
 		return next;
 	}
+
+	i915_gem_object_get(vma->obj);
+
+	if (!i915_gem_object_has_migrate(vma->obj) &&
+	    i915_vma_active_acquire_if_busy(vma))
+		c->pages = vma->pages;
 
 	strcpy(c->name, name);
 	c->vma = vma; /* reference held while active */
@@ -1892,6 +1947,11 @@ intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 	return vma;
 }
 
+static struct sg_table *__vma_pages(struct i915_vma *vma)
+{
+	return vma ? vma->pages : NULL;
+}
+
 void
 intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 			      struct intel_engine_capture_vma *capture,
@@ -1906,9 +1966,12 @@ intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 		add_vma(ee,
 			i915_vma_coredump_create(engine->gt,
 						 vma, this->name,
+						 capture->pages,
 						 compress));
-
-		i915_vma_active_release(vma);
+		if (capture->pages)
+			i915_vma_active_release(vma);
+		i915_gem_object_put(vma->obj);
+		__i915_vma_put(vma);
 
 		capture = this->next;
 		kfree(this);
@@ -1918,12 +1981,14 @@ intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 		i915_vma_coredump_create(engine->gt,
 					 engine->status_page.vma,
 					 "HW Status",
+					 __vma_pages(engine->status_page.vma),
 					 compress));
 
 	add_vma(ee,
 		i915_vma_coredump_create(engine->gt,
 					 engine->wa_ctx.vma,
 					 "WA context",
+					 __vma_pages(engine->wa_ctx.vma),
 					 compress));
 }
 
@@ -2052,11 +2117,19 @@ gt_record_uc(struct intel_gt_coredump *gt,
 	 */
 	if (!IS_SRIOV_VF(gt->_gt->i915)) {
 		error_uc->guc.timestamp = intel_uncore_read(gt->_gt->uncore, GUCPMTIMESTAMP);
-		error_uc->guc.vma_log = i915_vma_coredump_create(gt->_gt, uc->guc.log.vma,
-								 "GuC log buffer", compress);
+		error_uc->guc.vma_log =
+			i915_vma_coredump_create(gt->_gt,
+						 uc->guc.log.vma,
+						 "GuC log buffer",
+						 __vma_pages(uc->guc.log.vma),
+						 compress);
 	}
-	error_uc->guc.vma_ctb = i915_vma_coredump_create(gt->_gt, uc->guc.ct.vma,
-							 "GuC CT buffer", compress);
+	error_uc->guc.vma_ctb =
+		i915_vma_coredump_create(gt->_gt,
+					 uc->guc.ct.vma,
+					 "GuC CT buffer",
+					 __vma_pages(uc->guc.ct.vma),
+					 compress);
 	error_uc->guc.last_fence = uc->guc.ct.requests.last_fence;
 	gt_record_guc_ctb(error_uc->guc.ctb + 0, &uc->guc.ct.ctbs.send,
 			  uc->guc.ct.ctbs.send.desc, (struct intel_guc *)&uc->guc);
@@ -2570,7 +2643,7 @@ void i915_error_state_store(struct i915_gpu_coredump *error)
  * i915_capture_error_state - capture an error record for later analysis
  * @gt: intel_gt which originated the hang
  * @engine_mask: hung engines
- *
+ * @dump_flags: dump flags
  *
  * Should be called when an error is detected (either a hang or an error
  * interrupt) to capture error state from the time of the error.  Fills
@@ -2888,7 +2961,6 @@ err:
 
 void i915_uuid_init(struct i915_drm_client *client)
 {
-	xa_init_flags(&client->uuids_xa, XA_FLAGS_ALLOC);
 	__uuid_init_classes(client);
 }
 
@@ -2897,16 +2969,22 @@ void i915_uuid_cleanup(struct i915_drm_client *client)
 	struct i915_uuid_resource *uuid_res = NULL;
 	unsigned long idx;
 
+	/*
+	 * Generaly lock should not be needed but EU Debugger
+	 * discovery thread scans this table
+	 */
+	xa_lock(&client->uuids_xa);
 	xa_for_each(&client->uuids_xa, idx, uuid_res)
 		i915_uuid_put(uuid_res);
-
+	xa_unlock(&client->uuids_xa);
 	xa_destroy(&client->uuids_xa);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 void intel_klog_error_capture(struct intel_gt *gt,
 			      intel_engine_mask_t engine_mask)
 {
-	static int g_count = 0;
+	static int g_count;
 	struct drm_i915_private *i915 = gt->i915;
 	struct i915_gpu_coredump *error;
 	intel_wakeref_t wakeref;
@@ -2918,7 +2996,8 @@ void intel_klog_error_capture(struct intel_gt *gt,
 
 	/* Can't allocate memory during a reset */
 	if (test_bit(I915_RESET_BACKOFF, &gt->reset.flags)) {
-		drm_err(&gt->i915->drm, "[Capture/%d.%d] Inside GT reset, skipping error capture :(\n", l_count, line++);
+		drm_err(&gt->i915->drm, "[Capture/%d.%d] Inside GT reset, skipping error capture :(\n",
+			l_count, line++);
 		return;
 	}
 
@@ -2929,7 +3008,8 @@ void intel_klog_error_capture(struct intel_gt *gt,
 
 	error = READ_ONCE(i915->gpu_error.first_error);
 	if (error) {
-		drm_err(&i915->drm, "[Capture/%d.%d] Clearing existing error capture first...\n", l_count, line++);
+		drm_err(&i915->drm, "[Capture/%d.%d] Clearing existing error capture first...\n",
+			l_count, line++);
 		i915_reset_error_state(i915);
 	}
 
@@ -2937,19 +3017,21 @@ void intel_klog_error_capture(struct intel_gt *gt,
 		error = i915_gpu_coredump(gt, engine_mask, CORE_DUMP_FLAG_NONE);
 
 	if (IS_ERR(error)) {
-		drm_err(&i915->drm, "[Capture/%d.%d] Failed to capture error capture: %ld!\n", l_count, line++, PTR_ERR(error));
+		drm_err(&i915->drm, "[Capture/%d.%d] Failed to capture error capture: %ld!\n",
+			l_count, line++, PTR_ERR(error));
 		return;
 	}
 
 	buf = kvmalloc(buf_size, GFP_KERNEL);
 	if (!buf) {
-		drm_err(&i915->drm, "[Capture/%d.%d] Failed to allocate buffer for error capture!\n", l_count, line++);
+		drm_err(&i915->drm, "[Capture/%d.%d] Failed to allocate buffer for error capture!\n",
+			l_count, line++);
 		i915_gpu_coredump_put(error);
 		return;
 	}
 
-	drm_info(&i915->drm, "[Capture/%d.%d] Dumping i915 error capture for %ps...\n", l_count, line++,
-		 __builtin_return_address(0));
+	drm_info(&i915->drm, "[Capture/%d.%d] Dumping i915 error capture for %ps...\n",
+		 l_count, line++, __builtin_return_address(0));
 
 	/* Largest string length safe to print via dmesg */
 #	define MAX_CHUNK	800
@@ -2957,6 +3039,7 @@ void intel_klog_error_capture(struct intel_gt *gt,
 	pos_err = 0;
 	while (1) {
 		ssize_t got = i915_gpu_coredump_copy_to_buffer(error, buf, pos_err, buf_size - 1);
+
 		if (got <= 0)
 			break;
 
@@ -2986,8 +3069,10 @@ void intel_klog_error_capture(struct intel_gt *gt,
 
 				for (pos = MAX_CHUNK; pos < count; pos += MAX_CHUNK) {
 					char chr = ptr[pos];
+
 					ptr[pos] = 0;
-					drm_info(&i915->drm, "[Capture/%d.%d] }%s{\n", l_count, line++, ptr2);
+					drm_info(&i915->drm, "[Capture/%d.%d] }%s{\n",
+						 l_count, line++, ptr2);
 					ptr[pos] = chr;
 					ptr2 = ptr + pos;
 
@@ -3000,11 +3085,15 @@ void intel_klog_error_capture(struct intel_gt *gt,
 				}
 
 				if (ptr2 < (ptr + count))
-					drm_info(&i915->drm, "[Capture/%d.%d] %c%s%c\n", l_count, line++, tag[0], ptr2, tag[1]);
+					drm_info(&i915->drm, "[Capture/%d.%d] %c%s%c\n",
+						 l_count, line++, tag[0], ptr2, tag[1]);
 				else if (tag[0] == '>')
-					drm_info(&i915->drm, "[Capture/%d.%d] ><\n", l_count, line++);
-			} else
-				drm_info(&i915->drm, "[Capture/%d.%d] %c%s%c\n", l_count, line++, tag[0], ptr, tag[1]);
+					drm_info(&i915->drm, "[Capture/%d.%d] ><\n",
+						 l_count, line++);
+			} else {
+				drm_info(&i915->drm, "[Capture/%d.%d] %c%s%c\n",
+					 l_count, line++, tag[0], ptr, tag[1]);
+			}
 
 			ptr = next;
 			got -= count;
@@ -3018,13 +3107,15 @@ void intel_klog_error_capture(struct intel_gt *gt,
 		}
 
 		if (got)
-			drm_info(&i915->drm, "[Capture/%d.%d] Got %zd bytes remaining!\n", l_count, line++, got);
+			drm_info(&i915->drm, "[Capture/%d.%d] Got %zd bytes remaining!\n",
+				 l_count, line++, got);
 	}
 
 	kvfree(buf);
 
 	drm_info(&i915->drm, "[Capture/%d.%d] Dumped %zd bytes\n", l_count, line++, pos_err);
 }
+#endif
 
 void intel_eu_attentions_read(struct intel_gt *gt,
 			      struct intel_eu_attentions *a,

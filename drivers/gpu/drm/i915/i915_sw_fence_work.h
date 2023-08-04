@@ -21,6 +21,8 @@ struct dma_fence_work_ops {
 	bool (*enable_signaling)(struct dma_fence_work *f);
 	void (*complete)(struct dma_fence_work *f);
 	void (*release)(struct dma_fence_work *f);
+
+	bool no_error_propagation:1;
 };
 
 struct dma_fence_work {
@@ -50,7 +52,8 @@ static inline void dma_fence_work_commit(struct dma_fence_work *f)
 	i915_sw_fence_commit(&f->chain);
 }
 
-static inline void dma_fence_work_commit_imm_if(struct dma_fence_work *f, bool cond)
+static inline void
+dma_fence_work_commit_imm_if(struct dma_fence_work *f, bool cond)
 {
 	if (atomic_read(&f->chain.pending) <= cond)
 		__set_bit(DMA_FENCE_WORK_IMM, &f->dma.flags);

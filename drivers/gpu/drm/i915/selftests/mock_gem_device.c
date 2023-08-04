@@ -31,6 +31,7 @@
 #include "gt/intel_gt_requests.h"
 #include "gt/mock_engine.h"
 #include "intel_memory_region.h"
+#include "i915_debugger.h"
 
 #include "mock_request.h"
 #include "mock_gem_device.h"
@@ -60,6 +61,8 @@ static void mock_device_release(struct drm_device *dev)
 
 	if (!i915->do_release)
 		goto out;
+
+	i915_debugger_fini(i915);
 
 	mock_device_flush(i915);
 	intel_gt_driver_remove(to_gt(i915));
@@ -207,7 +210,7 @@ struct drm_i915_private *mock_gem_device(void)
 	ggtt = drmm_kzalloc(&i915->drm, sizeof(*ggtt), GFP_KERNEL);
 	if (!ggtt)
 		goto err_unlock;
-	
+
 	to_gt(i915)->ggtt = ggtt;
 
 	mock_init_ggtt(to_gt(i915));
@@ -226,11 +229,10 @@ struct drm_i915_private *mock_gem_device(void)
 	__clear_bit(I915_WEDGED, &to_gt(i915)->reset.flags);
 	intel_engines_driver_register(i915);
 
-	spin_lock_init(&i915->vm_priv_obj_lock);
-
 	i915->do_release = true;
 	ida_init(&i915->selftest.mock_region_instances);
 
+	i915_debugger_init(i915);
 	return i915;
 
 err_context:

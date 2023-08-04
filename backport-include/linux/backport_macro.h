@@ -80,6 +80,15 @@
 
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,6,0)
+
+/*
+ * f1f6a7dd9b53 mm, tree-wide: rename put_user_page*() to unpin_user_page*()
+ */
+#define BPM_PIN_OR_UNPIN_USER_PAGE_NOT_PRESENT
+
+#endif
+
 /*
  * 64fa30f9ffc0ed Backport and fix intel-gtt split
  * intl_gtt Api name has been changed to intel_gmch_gtt

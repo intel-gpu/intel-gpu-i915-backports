@@ -33,6 +33,11 @@ struct i915_vma;
 struct intel_context;
 struct intel_engine_cs;
 
+enum report_header {
+	HDR_32_BIT = 0,
+	HDR_64_BIT,
+};
+
 enum {
 	PERF_GROUP_OAG = 0,
 	PERF_GROUP_OAM_SAMEDIA_0 = 0,
@@ -60,11 +65,6 @@ struct i915_perf_regs {
 enum {
 	TYPE_OAG,
 	TYPE_OAM,
-};
-
-enum report_header {
-	HDR_32_BIT = 0,
-	HDR_64_BIT,
 };
 
 struct i915_oa_format {
@@ -316,18 +316,6 @@ struct i915_perf_stream {
 		 * callbacks won't represent any partial consumption of data.
 		 */
 		spinlock_t ptr_lock;
-
-		/**
-		 * @aging_tail: The last HW tail reported by HW. The data
-		 * might not have made it to memory yet though.
-		 */
-		u32 aging_tail;
-
-		/**
-		 * @aging_timestamp: A monotonic timestamp for when the current aging tail pointer
-		 * was read; used to determine when it is old enough to trust.
-		 */
-		u64 aging_timestamp;
 
 		/**
 		 * @head: Although we can always read back the head pointer register,

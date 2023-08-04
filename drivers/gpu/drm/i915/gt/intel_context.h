@@ -212,6 +212,11 @@ static inline void intel_context_unpin(struct intel_context *ce)
 void intel_context_enter_engine(struct intel_context *ce);
 void intel_context_exit_engine(struct intel_context *ce);
 
+static inline bool intel_context_is_active(const struct intel_context *ce)
+{
+	return READ_ONCE(ce->active_count);
+}
+
 static inline void intel_context_enter(struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->timeline->mutex);
@@ -244,12 +249,7 @@ static inline void intel_context_exit(struct intel_context *ce)
 	ce->ops->exit(ce);
 }
 
-int intel_context_throttle(const struct intel_context *ce);
-
-static inline bool intel_context_is_active(const struct intel_context *ce)
-{
-	return !i915_active_is_idle(&ce->active);
-}
+int intel_context_throttle(const struct intel_context *ce, long timeout);
 
 static inline void intel_context_suspend_fence_set(struct intel_context *ce,
 						   struct dma_fence *fence)
@@ -382,6 +382,9 @@ static inline bool intel_context_set_banned(struct intel_context *ce)
 }
 
 bool intel_context_ban(struct intel_context *ce, struct i915_request *rq);
+
+void intel_context_rebase_hwsp(struct intel_context *ce);
+void intel_context_revert_ring_heads(struct intel_context *ce);
 
 /**
  * intel_context_suspend - suspend a context

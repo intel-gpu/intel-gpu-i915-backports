@@ -525,28 +525,11 @@ __i915_drm_client_register(struct i915_drm_client *client,
 			   struct task_struct *task)
 {
 	struct i915_drm_clients *clients = client->clients;
-	struct i915_drm_client_name *name;
-	int ret;
-
-	name = get_name(client, task);
-	if (!name)
-		return -ENOMEM;
-
-	RCU_INIT_POINTER(client->name, name);
 
 	if (!clients->root)
 		return 0; /* intel_fbdev_init registers a client before sysfs */
 
-	ret = __client_register_sysfs(client);
-	if (ret)
-		goto err_sysfs;
-
-	return 0;
-
-err_sysfs:
-	RCU_INIT_POINTER(client->name, NULL);
-	call_rcu(&name->rcu, free_name);
-	return ret;
+	return __client_register_sysfs(client);
 }
 
 static void __i915_drm_client_unregister(struct i915_drm_client *client)
@@ -583,6 +566,7 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 		    struct drm_i915_file_private *file)
 {
 	struct drm_i915_private *i915 = clients->i915;
+	struct i915_drm_client_name *name;
 	struct i915_drm_client *client;
 	int ret;
 
@@ -594,6 +578,7 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	mutex_init(&client->update_lock);
 	spin_lock_init(&client->ctx_lock);
 	INIT_LIST_HEAD(&client->ctx_list);
+	xa_init_flags(&client->uuids_xa, XA_FLAGS_ALLOC);
 
 	client->file = file;
 
@@ -601,29 +586,46 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	INIT_RCU_WORK(&client->rcu, __rcu_i915_drm_client_free);
 	pvc_wa_disallow_rc6(i915);
 
+	name = get_name(client, task);
+	if (!name) {
+		ret = -ENOMEM;
+		goto err_id;
+	}
+	RCU_INIT_POINTER(client->name, name);
+
 	i915_debugger_wait_on_discovery(clients->i915, NULL);
 
 	ret = xa_alloc_cyclic(&clients->xarray, &client->id, client,
 			      xa_limit_32b, &clients->next_id, GFP_KERNEL);
 	if (ret < 0)
-		goto err_id;
+		goto err_xa;
 
+	/*
+	 * Once the client is published via the clients->xarray,
+	 * any third party, such as the debugger, may obtain a
+	 * reference to the client; thus we can no longer immediately
+	 * free the client, but must drop the reference instead.
+	 */
 	ret = __i915_drm_client_register(client, task);
 	if (ret)
-		goto err_register;
+		goto err_reg;
 
 	GEM_WARN_ON(task != current);
-	i915_debugger_client_register(client, current);
-	i915_debugger_client_create(client);
 
+	i915_debugger_client_create(client);
 	i915_uuid_init(client);
 	return client;
 
-err_register:
-	xa_erase(&clients->xarray, client->id);
+err_xa:
+	RCU_INIT_POINTER(client->name, NULL);
+	call_rcu(&name->rcu, free_name);
 err_id:
 	kfree(client);
+	return ERR_PTR(ret);
 
+err_reg:
+	i915_drm_client_close(client);
+	i915_drm_client_put(client);
 	return ERR_PTR(ret);
 }
 

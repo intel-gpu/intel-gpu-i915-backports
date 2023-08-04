@@ -82,8 +82,6 @@ static int huge_put_pages(struct drm_i915_gem_object *obj,
 	i915_gem_gtt_finish_pages(obj, pages);
 	huge_free_pages(obj, pages);
 
-	obj->mm.dirty = false;
-
 	return 0;
 }
 

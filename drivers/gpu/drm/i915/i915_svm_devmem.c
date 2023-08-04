@@ -27,13 +27,6 @@ struct i915_devmem_migrate {
 	struct dma_fence *fence;
 };
 
-struct i915_devmem {
-	struct intel_memory_region *mem;
-	struct dev_pagemap pagemap;
-	unsigned long pfn_first;
-	unsigned long pfn_last;
-};
-
 static int
 i915_devmem_page_alloc_locked(struct intel_memory_region *mem,
 			      unsigned long npages,
@@ -51,8 +44,7 @@ i915_devmem_page_alloc_locked(struct intel_memory_region *mem,
 
 	list_for_each_entry(block, blocks, link) {
 		block->pfn_first = mem->devmem->pfn_first;
-		block->pfn_first += i915_buddy_block_offset(block) /
-				    PAGE_SIZE;
+		block->pfn_first += PHYS_PFN(i915_buddy_block_offset(block) - mem->region.start);
 		bitmap_zero(block->bitmap, I915_BUDDY_MAX_PAGES);
 		DRM_DEBUG_DRIVER("%s pfn_first 0x%lx off 0x%llx size 0x%llx\n",
 				 "Allocated block", block->pfn_first,
@@ -496,6 +488,8 @@ int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 	unsigned long c, i;
 	int ret = 0;
 
+	GEM_BUG_ON(mem->id >= INTEL_REGION_UNKNOWN);
+
 	/* XXX: Opportunistically migrate additional pages? */
 	DRM_DEBUG_DRIVER("start 0x%lx end 0x%lx\n", start, end);
 	args.src = kcalloc(max, sizeof(args.src), GFP_KERNEL);
@@ -635,6 +629,7 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 	unsigned long src = 0, dst = 0;
 	dma_addr_t dma_addr = 0;
 	vm_fault_t ret;
+
 	struct migrate_vma args = {
 		.vma		= vmf->vma,
 		.start		= vmf->address,
@@ -645,12 +640,14 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 		.flags		= MIGRATE_VMA_SELECT_DEVICE_PRIVATE,
 	};
 
+	GEM_BUG_ON(devmem->mem->id >= INTEL_REGION_UNKNOWN);
+
 	/* XXX: Opportunistically migrate more pages? */
 	DRM_DEBUG_DRIVER("addr 0x%lx\n", args.start);
 	migrate.i915 = i915;
 	migrate.args = &args;
 	migrate.host_dma = &dma_addr;
-	migrate.src_id = INTEL_REGION_LMEM_0;
+	migrate.src_id = devmem->mem->id;
 	migrate.dst_id = INTEL_REGION_SMEM;
 	if (migrate_vma_setup(&args) < 0)
 		return VM_FAULT_SIGBUS;
@@ -739,6 +736,8 @@ int i915_svm_devmem_add(struct intel_memory_region *mem)
 	devmem->pfn_first = res->start >> PAGE_SHIFT;
 	devmem->pfn_last = res->end >> PAGE_SHIFT;
 	mem->devmem = devmem;
+	DRM_DEBUG_DRIVER("Added memory of gt %s start %llx to devmem. Remapped start %llx, pfn_first %lx\n",
+			mem->gt->name, mem->region.start, res->start, devmem->pfn_first);
 	return 0;
 devm_err:
 	kfree(devmem);

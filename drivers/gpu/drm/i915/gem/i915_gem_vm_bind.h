@@ -6,7 +6,6 @@
 #ifndef __I915_GEM_VM_BIND_H
 #define __I915_GEM_VM_BIND_H
 
-#include <linux/dma-resv.h>
 #include "i915_drv.h"
 
 #define assert_vm_bind_held(vm)   lockdep_assert_held(&(vm)->vm_bind_lock)
@@ -25,30 +24,6 @@ i915_gem_vm_bind_lock_interruptible(struct i915_address_space *vm)
 static inline void i915_gem_vm_bind_unlock(struct i915_address_space *vm)
 {
 	mutex_unlock(&vm->vm_bind_lock);
-}
-
-#define assert_vm_priv_held(vm)   assert_object_held((vm)->root_obj)
-
-static inline int i915_gem_vm_priv_lock(struct i915_address_space *vm,
-					struct i915_gem_ww_ctx *ww)
-{
-	return i915_gem_object_lock(vm->root_obj, ww);
-}
-
-static inline int i915_gem_vm_priv_trylock(struct i915_address_space *vm)
-{
-	return i915_gem_object_trylock(vm->root_obj) ? 0 : -EBUSY;
-}
-
-static inline int i915_gem_vm_priv_lock_to_evict(struct i915_address_space *vm,
-						 struct i915_gem_ww_ctx *ww)
-{
-	return i915_gem_object_lock_to_evict(vm->root_obj, ww);
-}
-
-static inline void i915_gem_vm_priv_unlock(struct i915_address_space *vm)
-{
-	i915_gem_object_unlock(vm->root_obj);
 }
 
 struct i915_vma *
