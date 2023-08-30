@@ -423,7 +423,7 @@ RHEL_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h
 SLES_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
 ifeq ($(RHEL_OSV_NAME), RHEL)
 	OS_DISTRO_NAME := $(RHEL_OSV_NAME)
-else ifneq ($(CUSTOM_KERN_1_VER),)
+else ifneq ($(CUSTOM_KERN_1_VER), "")
 	OS_DISTRO_NAME := $(CUSTOM_KERN_1_VER)
 else ifeq ($(SLES_OSV_NAME), SUSE)
 	OS_DISTRO_NAME := $(SLES_OSV_NAME)
