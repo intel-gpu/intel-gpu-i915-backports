@@ -225,25 +225,10 @@ $NO_DRM	DEST_MODULE_LOCATION[19]="/updates"
 		echo "\$rhel_release_val"
 	}
 
-	disable_svm()
-	{
-		if [[ "\$(get_rhel_release_version)" -le "\$(rhel_release_version "8" "4")" ]] && \
-			[[ "\$(get_suse_release_version)" -le "\$(suse_release_version "15" "2")" ]]; then
-			disable_svm_config="true"
-		else
-			disable_svm_config="false"
-		fi
-		echo "\$disable_svm_config"
-	}
-
 	if [ "$BUILD_TYPE" == "nodrm" ]; then
 		I915_CONFIG="i915_only"
 	else
-		if "\$(disable_svm)" ; then
-			I915_CONFIG="i915_disable_svm"
-		else
-			I915_CONFIG="i915"
-		fi
+		I915_CONFIG="i915"
 	fi
 	
 	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ]; then

@@ -31,6 +31,11 @@ static inline int mmap_write_lock_killable(struct mm_struct *mm)
 {
        return down_write_killable(&mm->mmap_sem);
 }
+
+static inline bool mmap_read_trylock(struct mm_struct *mm)
+{
+       return down_read_trylock(&mm->mmap_sem) != 0;
+}
 #endif
 
 #ifdef BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT

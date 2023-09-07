@@ -162,6 +162,8 @@ static void __i915_vm_release(struct work_struct *work)
 	i915_svm_unbind_mm(vm);
 	vm->cleanup(vm);
 	i915_address_space_fini(vm);
+
+	kfree(vm);
 }
 
 void i915_vm_release(struct kref *kref)
@@ -172,7 +174,7 @@ void i915_vm_release(struct kref *kref)
 	GEM_BUG_ON(i915_is_ggtt(vm));
 	trace_i915_ppgtt_release(vm);
 
-	queue_rcu_work(system_unbound_wq, &vm->rcu);
+	queue_rcu_work(vm->i915->wq, &vm->rcu);
 }
 
 static void i915_vm_close_work(struct work_struct *wrk)

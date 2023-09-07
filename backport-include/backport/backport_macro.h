@@ -506,7 +506,11 @@
 
 /* e07515563d010d8b PM: sleep: core: Rename DPM_FLAG_NEVER_SKIP */
 #define BPM_DPM_FLAG_NEVER_SKIP_RENAMED
+#endif
 
+#if !(LINUX_VERSION_IN_RANGE(5,4,207, 5,5,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
+			SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 /* 9740ca4e95b43b mmap locking API: initial implementation as rwsem wrappers */
 #define BPM_MMAP_WRITE_LOCK_NOT_PRESENT
 #endif
@@ -877,7 +881,7 @@
 #endif
 #endif
 
-#if (REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+#if (REDHAT_RELEASE_VERSION_IS_LESS(9,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
 /* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif
