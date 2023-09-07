@@ -552,7 +552,7 @@ static int userptr_work(struct dma_fence_work *base)
 
 	addr = obj->userptr.ptr;
 	if (!i915_gem_object_is_readonly(obj))
-		addr |= FOLL_WRITE;
+		addr |= FOLL_WRITE | FOLL_FORCE;
 	BUILD_BUG_ON(FOLL_WRITE & PAGE_MASK);
 
 	if (!mmget_not_zero(obj->userptr.notifier.mm))
@@ -636,6 +636,35 @@ static const struct dma_fence_work_ops userptr_ops = {
 	.work = userptr_work,
 };
 
+static int
+probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
+{
+	const unsigned long end = addr + len;
+	struct vm_area_struct *vma;
+	int ret = -EFAULT;
+
+	if (!mmap_read_trylock(mm))
+		return 0;
+
+	for (vma = find_vma(mm, addr); vma; vma = vma->vm_next) {
+		if (vma->vm_start > addr)
+			break;
+
+		if (vma->vm_flags & (VM_IO | VM_PFNMAP))
+			break;
+
+		if (vma->vm_end >= end) {
+			ret = 0;
+			break;
+		}
+
+		addr = vma->vm_end;
+	}
+
+	mmap_read_unlock(mm);
+	return ret;
+}
+
 static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
 	unsigned int num_pages; /* limited by sg_alloc_table */
@@ -645,6 +674,12 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	struct scatterlist *sg;
 #endif
 	int err;
+
+	err = probe_range(obj->userptr.notifier.mm,
+			  obj->userptr.ptr,
+			  obj->base.size);
+	if (err)
+		return err;
 
 	if (!safe_conversion(&num_pages, obj->base.size >> PAGE_SHIFT))
 		return -E2BIG;
