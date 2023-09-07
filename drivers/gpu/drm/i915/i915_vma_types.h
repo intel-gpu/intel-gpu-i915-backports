@@ -171,6 +171,7 @@ struct i915_ggtt_view {
 struct i915_vma_clock {
 	spinlock_t lock;
 	struct list_head age[2];
+	struct rw_semaphore sem;
 	struct delayed_work work;
 };
 

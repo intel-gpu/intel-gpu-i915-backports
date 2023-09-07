@@ -18,6 +18,7 @@ void i915_sg_trim(struct sg_table *sgt)
 	struct scatterlist *sg;
 	unsigned int n, end;
 
+	GEM_BUG_ON(sgt->nents > sgt->orig_nents);
 	if (sgt->nents == sgt->orig_nents)
 		return;
 
@@ -44,7 +45,6 @@ void i915_sg_trim(struct sg_table *sgt)
 			sg[I915_MAX_CHAIN_ALLOC] = *chain;
 			GEM_BUG_ON(!sg_is_last(sg + I915_MAX_CHAIN_ALLOC));
 			GEM_BUG_ON(end != sgt->nents);
-			n++;
 		}
 
 		sg = chain;

@@ -583,16 +583,13 @@ static int __eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb,
 					       struct i915_request *rq)
 {
 	struct i915_address_space *vm = eb->context->vm;
+	struct i915_vma *vma;
+	int err;
 
-	if (eb->args->flags & __EXEC_LOCK_PERSISTENT) {
-		struct i915_vma *vma;
-		int err;
-
-		list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
-			err = __i915_request_await_bind(rq, vma);
-			if (err)
-				return err;
-		}
+	list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
+		err = __i915_request_await_bind(rq, vma);
+		if (err)
+			return err;
 	}
 
 	return i915_vm_move_to_active(vm, rq->context, rq);
@@ -960,8 +957,10 @@ eb_lookup_vma(struct i915_execbuffer *eb,
 		 * support segmented BOs here without heavy refactoring as this
 		 * whole file assumes single VMA per exec_object.
 		 */
-		if (i915_gem_object_has_segments(obj))
+		if (i915_gem_object_has_segments(obj)) {
+			i915_gem_object_put(obj);
 			return ERR_PTR(-ENXIO);
+		}
 
 		/*
 		 * If the user has opted-in for protected-object tracking, make
@@ -1000,35 +999,38 @@ eb_lookup_vma(struct i915_execbuffer *eb,
 
 static int eb_lookup_vmas(struct i915_execbuffer *eb)
 {
+	struct i915_vma_clock *clock = &eb->context->vm->gt->vma_clock;
 	unsigned int i, current_batch = 0;
+	struct i915_vma *vma = NULL;
 	int err = 0;
 
 	INIT_LIST_HEAD(&eb->relocs);
 
+	down_read(&clock->sem);
 	for (i = 0; i < eb->buffer_count; i++) {
 		struct drm_i915_gem_exec_object2 *entry = &eb->exec[i];
-		struct i915_vma *vma;
 
 		vma = eb_lookup_vma(eb, entry);
 		if (IS_ERR(vma)) {
 			err = PTR_ERR(vma);
-			goto err;
+			vma = NULL;
+			break;
 		}
 
 		err = eb_validate_vma(eb, entry, vma);
-		if (unlikely(err)) {
-			i915_vma_put(vma);
-			goto err;
-		}
+		if (unlikely(err))
+			break;
 
 		err = eb_add_vma(eb, &current_batch, i, vma);
-		if (err)
-			return err;
+		if (unlikely(err))
+			break;
+
+		vma = NULL;
 	}
+	up_read(&clock->sem);
 
-	return 0;
-
-err:
+	if (vma)
+		i915_vma_put(vma);
 	eb->vma[i].vma = NULL;
 	return err;
 }
@@ -2457,6 +2459,9 @@ slow:
 static int eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb)
 {
 	int i, err;
+
+	if (!(eb->args->flags & __EXEC_LOCK_PERSISTENT))
+		return 0;
 
 	for_each_batch_create_order(eb, i) {
 		if (!eb->requests[i])

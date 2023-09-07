@@ -184,17 +184,39 @@ static void i915_fence_release(struct dma_fence *fence)
 	i915_sw_fence_fini(&rq->semaphore);
 
 	/*
-	 * Keep one request on each engine for reserved use under mempressure,
-	 * do not use with virtual engines as this really is only needed for
-	 * kernel contexts.
+	 * Keep one request on each engine for reserved use under mempressure
+	 *
+	 * We do not hold a reference to the engine here and so have to be
+	 * very careful in what rq->engine we poke. The virtual engine is
+	 * referenced via the rq->context and we released that ref during
+	 * i915_request_retire(), ergo we must not dereference a virtual
+	 * engine here. Not that we would want to, as the only consumer of
+	 * the reserved engine->request_pool is the power management parking,
+	 * which must-not-fail, and that is only run on the physical engines.
+	 *
+	 * Since the request must have been executed to be have completed,
+	 * we know that it will have been processed by the HW and will
+	 * not be unsubmitted again, so rq->engine and rq->execution_mask
+	 * at this point is stable. rq->execution_mask will be a single
+	 * bit if the last and _only_ engine it could execution on was a
+	 * physical engine, if it's multiple bits then it started on and
+	 * could still be on a virtual engine. Thus if the mask is not a
+	 * power-of-two we assume that rq->engine may still be a virtual
+	 * engine and so a dangling invalid pointer that we cannot dereference
+	 *
+	 * For example, consider the flow of a bonded request through a virtual
+	 * engine. The request is created with a wide engine mask (all engines
+	 * that we might execute on). On processing the bond, the request mask
+	 * is reduced to one or more engines. If the request is subsequently
+	 * bound to a single engine, it will then be constrained to only
+	 * execute on that engine and never returned to the virtual engine
+	 * after timeslicing away, see __unwind_incomplete_requests(). Thus we
+	 * know that if the rq->execution_mask is a single bit, rq->engine
+	 * can be a physical engine with the exact corresponding mask.
 	 */
-	if (!intel_engine_is_virtual(rq->engine) &&
-	    !cmpxchg(&rq->engine->request_pool, NULL, rq)) {
-		intel_context_put(rq->context);
+	if (is_power_of_2(rq->execution_mask) &&
+	    !cmpxchg(&rq->engine->request_pool, NULL, rq))
 		return;
-	}
-
-	intel_context_put(rq->context);
 
 	kmem_cache_free(slab_requests, rq);
 }
@@ -965,7 +987,7 @@ __i915_request_initialize(struct i915_request *rq,
 	/* Check that the caller provided an already pinned context */
 	__intel_context_pin(ce);
 
-	rq->context = intel_context_get(ce);
+	rq->context = ce;
 	rq->engine = ce->engine;
 	rq->ring = ce->ring;
 	rq->execution_mask = ce->engine->mask;
@@ -1046,7 +1068,6 @@ err_unwind:
 
 err_free:
 	intel_context_unpin(ce);
-	intel_context_put(ce);
 	return ret;
 }
 
@@ -1100,18 +1121,6 @@ __i915_request_create(struct intel_context *ce, gfp_t gfp)
 			return ERR_PTR(-ENOMEM);
 	}
 
-	/*
-	 * Hold a reference to the intel_context over life of an i915_request.
-	 * Without this an i915_request can exist after the context has been
-	 * destroyed (e.g. request retired, context closed, but user space holds
-	 * a reference to the request from an out fence). In the case of GuC
-	 * submission + virtual engine, the engine that the request references
-	 * is also destroyed which can trigger bad pointer dref in fence ops
-	 * (e.g. i915_fence_get_driver_name). We could likely change these
-	 * functions to avoid touching the engine but let's just be safe and
-	 * hold the intel_context reference. In execlist mode the request always
-	 * eventually points to a physical engine so this isn't an issue.
-	 */
 	ret = __i915_request_initialize(rq, ce, flags);
 	if (ret)
 		goto err_free;
@@ -2218,6 +2227,10 @@ long i915_request_wait(struct i915_request *rq,
 		       unsigned int flags,
 		       long timeout)
 {
+	struct mutex *mtx =
+		IS_ENABLED(CONFIG_LOCKDEP) && rq->engine ?
+		&READ_ONCE(rq->engine)->gt->reset.mutex : NULL;
+
 	might_sleep_if(timeout > 0);
 	GEM_BUG_ON(timeout < 0);
 	i915_fence_check_lr_lockdep(&rq->fence);
@@ -2228,20 +2241,23 @@ long i915_request_wait(struct i915_request *rq,
 	if (!timeout)
 		return -ETIME;
 
-	trace_i915_request_wait_begin(rq, flags);
-
 	/*
 	 * We must never wait on the GPU while holding a lock as we
 	 * may need to perform a GPU reset. So while we don't need to
 	 * serialise wait/reset with an explicit lock, we do want
 	 * lockdep to detect potential dependency cycles.
 	 */
-	mutex_acquire(&rq->engine->gt->reset.mutex.dep_map, 0, 0, _THIS_IP_);
+	if (mtx)
+		mutex_acquire(&mtx->dep_map, 0, 0, _THIS_IP_);
 
+	trace_i915_request_wait_begin(rq, flags);
 	timeout = __i915_request_wait(rq, flags, timeout);
 
-	mutex_release(&rq->engine->gt->reset.mutex.dep_map, _THIS_IP_);
 	trace_i915_request_wait_end(rq);
+
+	if (mtx)
+		mutex_release(&mtx->dep_map, _THIS_IP_);
+
 	return timeout;
 }
 
