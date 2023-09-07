@@ -568,18 +568,24 @@ static void fault_complete(struct dma_fence_work *work)
 	if (f->dump) {
 		struct i915_gpu_coredump *dump = f->dump;
 		struct intel_gt_coredump *gt = dump->gt;
+		u32 td_ctl;
 
 		if (dump->private) {
 			coredump_add_request(dump, dump->private, GFP_KERNEL);
 			i915_request_put(dump->private);
 		}
 
-		if (intel_gt_mcr_read_any(f->gt, TD_CTL)) {
+		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
+		if (td_ctl) {
 			struct intel_engine_cs *engine =
 				(struct intel_engine_cs *)gt->engine->engine;
 
 			intel_eu_attentions_read(f->gt, &gt->attentions.resolved,
 						 INTEL_GT_ATTENTION_TIMEOUT_MS);
+
+			/* No more exceptions, stop raising new ATTN */
+			td_ctl &= ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION);
+			intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl);
 
 			/* Reset and cleanup if there are any ATTN leftover */
 			intel_engine_schedule_heartbeat(engine);

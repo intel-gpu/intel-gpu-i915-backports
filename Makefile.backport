@@ -10,6 +10,8 @@ OSV_NAME = ""
 OSV_VER = 0
 BASE_KERN = 0
 KERN_TYPE = ""
+KER_VER = ""
+ADD_KER_VER = 0
 BASE_KERNEL_NAME = ""
 BUILD_CONFIG ?=
 CUSTOM_KERN_ID ?=
@@ -17,7 +19,7 @@ EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
 RPM_DISTRIBUTIONS := SLES15_SP4 RHEL_9.2 RHEL_9.0 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS CUSTOM_KERN_1
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_20.04_GENERIC VANILLA_5.15LTS UBUNTU_22.04_GENERIC
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS UBUNTU_22.04_DESKTOP
 OS_DISTRO_NAME ?=
 #
 #Custom kernel specific
@@ -28,8 +30,13 @@ CUSTOM_KERN_1_MAJOR = ""
 CUSTOM_KERN_1_MINOR = ""
 CUSTOM_ARG = ""
 
+#Add Kernel version to dkms package name only when OS_DISTRIBUTION argument is set
+ifneq (, $(OS_DISTRIBUTION))
+	ADD_KER_VER = 1
+endif
+
 ifneq (,$(filter $(DEB_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	OS_DISTRIBUTION ?= UBUNTU_OEM_22.04
+	OS_DISTRIBUTION ?= UBUNTU_22.04_SERVER
 else ifneq (,$(filter $(RPM_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= SLES15_SP4
 endif
@@ -57,8 +64,12 @@ ifneq ($(CUSTOM_KERN_ID), )
 CUSTOM_KERN_1_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '_' -f3 | cut -c 1-3 )
 ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
 CUSTOM_KERN_1_VER = $(BUILD_CONFIG)
-CUSTOM_KERN_1_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | sed 's/[^0    -9]//g')
-CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4)
+CUSTOM_KERN_1_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | cut -d '-' -f1 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
+CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
+
+ifeq ($(CUSTOM_KERN_1_MINOR),)
+CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f5 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
+endif
 OS_DISTRIBUTION = $(CUSTOM_KERN_1_VER)
 CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
 else
@@ -115,7 +126,7 @@ else ifneq ($(CUSTOM_KERN_1_VER),)
 OSV_NAME := $(shell echo $(CUSTOM_KERN_1_VER) | tr '[:lower:]' '[:upper:]')
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
 else ifeq ($(shell expr $(BASE_KERN) \== 5.19), 1)
-OSV_NAME = UBUNTU_22.04_GENERIC
+OSV_NAME = UBUNTU_22.04_SERVER
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else
 $(info "OSV_NOT SUPPORTED")
@@ -130,18 +141,24 @@ OSV_NAME := $(shell echo $(OSV_NAME) | tr '[:lower:]' '[:upper:]')
 KERN_VER := $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f2 | cut -d ' ' -f2 | cut -d '-' -f1)
 KERN_TYPE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d "-" -f3 | cut -d ' ' -f1 | tr -d "\"")
 # get the osv version by comparing the kernel versions
-ifeq ($(shell expr $(BASE_KERN) \<= 5.16), 1)
-OSV_VER = 20.04
-else ifeq ($(shell expr $(BASE_KERN) \>= 5.17), 1)
+ifeq ($(shell expr $(BASE_KERN) \>= 5.15), 1)
 OSV_VER = 22.04
 endif
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$1}' 2> /dev/null)
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$2}' 2> /dev/null)
 BASE_KERNEL_NAME = $(KERN_VER)-$(EXTENDED_VERSION_X)
 ifeq ($(KERN_TYPE), oem)
-ADD_KV = $(shell cat versions | grep "UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION" | cut -d '"' -f 2)
+ifeq ($(shell expr $(BASE_KERN) \== 5.14), 1)
+ADD_KV = $(shell cat versions | grep "UBUNTU_OEM_20.04_KERNEL_VERSION" | cut -d '"' -f 2)
 else
-ADD_KV = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_GENERIC_KERNEL_VERSION" | cut -d '"' -f 2)
+ADD_KV = $(shell cat versions | grep "UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION" | cut -d '"' -f 2)
+endif
+else 
+ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
+ADD_KV = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \> 5.15), 1)
+ADD_KV = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION" | cut -d '"' -f 2)
+endif
 endif
 endif
 
@@ -278,18 +295,26 @@ define filechk_osv_custom_kernel_1.h
         echo '#define CUSTOM_KERN_1_VER $(CUSTOM_KERN_1_VER)'; \
         echo '#define CUSTOM_KERN_1_MAJOR $(CUSTOM_KERN_1_MAJOR)'; \
         echo '#define CUSTOM_KERN_1_MINOR $(CUSTOM_KERN_1_MINOR)'; \
-        echo '#define CUSTOM_KERN_1_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+	echo '#define CUSTOM_KERN_1_RELEASE_VERSION(a,b) (((a) << 16) + (b))'; \
         echo '#define CUSTOM_KERN_1_RELEASE_CODE $(shell \
-        expr $(CUSTOM_KERN_1_MAJOR) \* 65536 + 0$(CUSTOM_KERN_1_MINOR) \* 256)'
+	expr $(CUSTOM_KERN_1_MAJOR) \* 65536 + 0$(CUSTOM_KERN_1_MINOR))'
 endef
 
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
 ifeq ($(OSV_NAME), UBUNTU)
 ifeq ($(ADD_KV), )
 ifeq ($(KERN_TYPE), oem)
-	@echo 'UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+ifeq ($(shell expr $(BASE_KERN) \== 5.14), 1)
+	@echo 'UBUNTU_OEM_20.04_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 else
-	@echo 'UBUNTU_$(OSV_VER)_GENERIC_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+	@echo 'UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+endif
+else
+ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
+	@echo 'UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+else ifeq ($(shell expr $(BASE_KERN) \> 5.15), 1)
+	@echo 'UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+endif
 endif
 endif
 	$(call filechk,osv_version_ubuntu.h)
@@ -315,8 +340,14 @@ endif
 endif
 endif
 
-# VERSION is generated as 1.DII_TAG.BACKPORT_RELEASE_TAG
-VERSION := 1.$(DII_TAG).$(BKPT_VER)
+KER_VER = $(subst -,.,$(BASE_KERNEL_NAME))
+
+# VERSION is generated as 0.DII_TAG.BACKPORT_RELEASE_TAG
+ifeq ($(ADD_KER_VER), 1)
+	VERSION := 1.$(DII_TAG).$(BKPT_VER).$(KER_VER)
+else
+	VERSION := 1.$(DII_TAG).$(BKPT_VER)
+endif
 
 ifneq ($(BUILD_VERSION), )
 RELEASE := $(BUILD_VERSION)
