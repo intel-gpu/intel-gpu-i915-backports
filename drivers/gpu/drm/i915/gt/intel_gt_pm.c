@@ -113,7 +113,6 @@ static int __gt_unpark(struct intel_wakeref *wf)
 	gt->awake = intel_display_power_get(i915, POWER_DOMAIN_GT_IRQ);
 	GEM_BUG_ON(!gt->awake);
 
-	i915_vma_unpark(gt);
 	intel_rc6_unpark(&gt->rc6);
 	intel_rps_unpark(&gt->rps);
 	i915_pmu_gt_unparked(gt);
@@ -143,7 +142,6 @@ static int __gt_park(struct intel_wakeref *wf)
 	i915_pmu_gt_parked(gt);
 	intel_rps_park(&gt->rps);
 	intel_rc6_park(&gt->rc6);
-	i915_vma_park(gt);
 
 	intel_gt_park_ccs_mode(gt, NULL);
 

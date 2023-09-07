@@ -1,4 +1,14 @@
 # ChangeLog
+## Release SLES15SP3_23WW35.5_682.20_23.6.28_230425.28
+* i915: fix to prevent invalid eu stall data after RC6 on max
+* i915: fix for spechpc hang seen on max
+* i915: fix for ze_peak and ze_peek hangs seen on max
+* i915: fix for memory leak seen on flex
+* i915: fix to properly clean up exceptions after misbehaving application seen on max
+* i915: fix to avoid workloads visible after host process has ended
+* i915: fix for race condition related to decoupling gt parking and vma close
+* i915: fix with eudebug to reset gt when application is terminated at breakpoint
+
 ## Release SLES15SP3_23WW31.5_682.14_23.6.24_230425.24
 * i915: updates to improve GuC error reporting
 * i915: fix to avoid incorrect reporting of max errors on flex
