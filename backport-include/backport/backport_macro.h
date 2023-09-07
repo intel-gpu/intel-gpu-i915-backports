@@ -5,7 +5,8 @@
 #include <backport/autoconf.h>
 
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
-                REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
+                REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /*
  * 2585a2790e7f
@@ -37,7 +38,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /*
  * da68386d9edb1f57a drm: Rename dp/ to display/
@@ -90,6 +92,10 @@
  */
 #define BPM_DISPLAY_DRM_HDMI_HELPER_PRESENT
 
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+                REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
 /*
  * c4f135d64382 workqueue: Wrap flush_workqueue() using a macro
  */
@@ -115,7 +121,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,18,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /*
  * 4a46e5d251a39e7c10
@@ -132,6 +139,10 @@
  */
 #define BPM_PCI_DMA_COMPAT_H_NOT_PRESENT
 
+#endif
+
+#if LINUX_VERSION_IS_GEQ(5,18,0) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
 /*
  * 730ff52194cdb324
  * mm: remove pointless includes from <linux/hmm.h>
@@ -143,7 +154,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,18,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 7938f4218168ae9f
  * dma-buf-map: Rename to iosys-map
@@ -166,7 +178,8 @@
 	(LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
 	LINUX_VERSION_IN_RANGE(5,15,33, 5,16,0) || \
 	(LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1035,38)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /*
  * 662b372a8a72695d drm/edid: Split deep color modes between RGB and YUV444
@@ -179,13 +192,13 @@
 #endif
 
 #if (LINUX_VERSION_IS_LESS(5,18,0) && \
-		!(REDHAT_RELEASE_VERSION_IS_GEQ(9,1)))
+		!(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)))
 /*
  * 398d06216ff27b7 iosys-map: Add offset to iosys_map_memcpy_to()
  *
  */
 #define BPM_IOSYS_MAP_MEMCPY_TO_ARG_OFFSET_ADDED
-
 /*
  * 210d0b65d94f5f iosys-map: Add a few more helpers
  *
@@ -195,7 +208,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,17,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 6a2d2ddf2c345e0 drm: Move nomodeset kernel parameter to the DRM subsystem
  */
@@ -266,7 +280,8 @@
 #endif
 #endif
 
-#if LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,0)
+#if LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,0) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
 
 /*
  * 16b0314aa746be dma-buf: move dma-buf symbols into the DMA_BUF module namespace
@@ -275,7 +290,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * d6c6a76f80a1c drm: Update MST First Link Slot Information Based on Encoding Format
  */ 
@@ -284,7 +300,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * ab09243aa95a7 mm/migrate.c: remove MIGRATE_PFN_LOCKED
  */
@@ -321,7 +338,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,15,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /* 
  * ac1723c16b drm/i915: Track IRQ state in local device state.
@@ -330,7 +348,8 @@
 
 #endif
 
-#if (LINUX_VERSION_IS_GEQ(5,15,0) || REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+#if (LINUX_VERSION_IS_GEQ(5,15,0) || REDHAT_RELEASE_VERSION_IS_GEQ(8,7) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 279cc2e9543eb drm: Define DRM_FORMAT_MAX_PLANES
  *
@@ -343,7 +362,8 @@
 
 #if LINUX_VERSION_IS_LESS(5,15,0)
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 
 /* 
  * bf44e8cecc03 vgaarb: don't pass a cookie to vga_client_register
@@ -413,7 +433,8 @@
 #endif
 
 #if !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,7) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 59dc33252ee7 PCI: VMD: ACPI: Make ACPI companion lookup work for VMD bus
  */
@@ -442,7 +463,8 @@
  * as on DII tag 5899
  */
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 64fa30f9ffc0ed Backport and fix intel-gtt split
  */

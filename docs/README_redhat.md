@@ -25,13 +25,12 @@ Please note that dkms installation will skip if the kernel headers are not insta
 We have dependencies on the following packages
   - make
   - linux-glibc-devel
-  - lsb-release
   - rpm-build
   - flex
   - bison
   - awk
 ```
-$sudo dnf install make linux-glibc-devel lsb-release rpm-build bison flex awk
+$sudo dnf install make linux-glibc-devel rpm-build bison flex awk
 ```
 For dkms modules, we need to install `dkms` package also.
 

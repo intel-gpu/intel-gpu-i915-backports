@@ -26,18 +26,17 @@ Please note that dkms installation will skip if the kernel headers are not insta
 We have dependencies on the following packages
   - make
   - linux-glibc-devel
-  - lsb-release
   - rpm-build
   - flex
   - bison
   - awk
 ```
-$sudo zypper install make linux-glibc-devel lsb-release rpm-build bison flex awk
+$sudo zypper install make linux-glibc-devel rpm-build bison flex awk
 ```
-For dkms modules, we need to install `dkms` package also.
+For dkms modules, we need to install `dkms` and `lsb-release` packages also.
 
 ```
-$sudo zypper install dkms
+$sudo zypper install dkms lsb-release
 ```
 
 # Out of tree kernel drivers
