@@ -32,3 +32,22 @@ config DRM_I915_CHICKEN_CLEAR_ON_IDLE
 	default y
 	help
 	  Clear local memory on idling, and upon boot.
+
+config DRM_I915_CHICKEN_ULL_DMA_BOOST
+	bool "Disable processor C-states to minimise DMA latency"
+	default y
+	help
+	  Set the CPU-DMA latency requirement to 0 to disable processor C-states
+	  as we wait for an interrupt on user-fences for ULL compute contexts.
+
+config DRM_I915_CHICKEN_SOFT_PG
+	bool "Manually disable/enable powergating around execution"
+	default y
+	help
+	  Powergating is used to put the GT completely asleep by turning the
+	  clocks off when idle. This is normally driven by a HW hysteresis
+	  monitoring when all engines are idle. However, this can incur a large
+	  exit latency delaying the start of subsequeny execution, and in any
+	  sitations the client will remain active for the entire duration that
+	  the GT is awake, and so we can effectively disable powergating upon
+	  wakeup, restoring the power saving when we know all clients are idle.

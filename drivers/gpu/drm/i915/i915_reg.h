@@ -943,6 +943,7 @@
 
 #define HECI_CONTROL_AND_STATUS(base)	_MMIO(base + 0x4)
 #define HECI_GENERAL_STATUS(base)	_MMIO(base + 0xc4c)
+#define HECI_FW_STATUS_2(base)		_MMIO(base + 0xc48)
 
 #define HSW_GTT_CACHE_EN	_MMIO(0x4024)
 #define   GTT_CACHE_EN_ALL	0xF0007FFF

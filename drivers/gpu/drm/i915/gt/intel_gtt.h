@@ -759,6 +759,7 @@ u64 i915_vm_fault_encode(struct i915_address_space *vm, int lvl, bool valid);
 u64 i915_vm_scratch_encode(struct i915_address_space *vm, int lvl);
 #define i915_vm_scratch0_encode(vm) i915_vm_scratch_encode(vm, 0)
 #define i915_vm_ggtt_scratch0_encode(vm) i915_vm_scratch0_encode(vm)
+#define has_null_page(vm) (i915_vm_scratch0_encode(vm) & PTE_NULL_PAGE)
 
 struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz);
 struct drm_i915_gem_object *alloc_pt_lmem(struct i915_address_space *vm, int sz);

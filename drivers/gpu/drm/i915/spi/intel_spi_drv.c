@@ -700,8 +700,13 @@ static void i915_spi_put_device(struct mtd_info *mtd)
 	kref_put(&spi->refcnt, i915_spi_release);
 }
 
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 			     unsigned int nparts)
+#else
+static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
+			     unsigned int nparts, bool writeable_override)
+#endif
 {
 	unsigned int i;
 	unsigned int n;
@@ -736,7 +741,11 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 		parts[n].name = spi->regions[i].name;
 		parts[n].offset  = spi->regions[i].offset;
 		parts[n].size = spi->regions[i].size;
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
 		if (!spi->regions[i].is_writable)
+#else
+		if (!spi->regions[i].is_writable && !writeable_override)
+#endif
 			parts[n].mask_flags = MTD_WRITEABLE;
 		n++;
 	}
@@ -879,7 +888,11 @@ static int i915_spi_probe(struct platform_device *platdev)
 		goto err;
 	}
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	ret = i915_spi_init_mtd(spi, device, ret);
+#else
+	ret = i915_spi_init_mtd(spi, device, ret, ispi->writeable_override);
+#endif
 	if (ret) {
 		dev_err(device, "i915-spi failed init mtd %d\n", ret);
 		goto err;

@@ -174,7 +174,7 @@
 
 #if LINUX_VERSION_IS_LESS(5,14,19)
 #if !(LINUX_VERSION_IN_RANGE(5,10,80, 5,11,0) || \
-		REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || \
+		REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 9,0) || \
 		REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
 /*
  * 74ba917cfddd
@@ -349,6 +349,12 @@
 *48526a0f4ca2b4 genetlink: bring back per op policy
 */
 #define BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
+
+/*
+ * 07da1223ec93 lib/scatterlist: Add support in dynamic allocation of SG table from pages
+ */
+#define BPM_SG_CHAIN_NOT_PRESENT
+
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
