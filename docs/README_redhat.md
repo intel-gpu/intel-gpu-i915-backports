@@ -99,7 +99,6 @@ Generated outout:
    
    ##### List of RPM supported osv kernel versions #####
    RHEL_8.8
-   RHEL_8.7
    RHEL_8.6
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/

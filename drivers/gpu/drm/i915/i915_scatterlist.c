@@ -76,6 +76,9 @@ unsigned long i915_sg_compact(struct sg_table *st, unsigned long max)
 
 	st->nents = 0;
 	for (sg = st->sgl; sg; sg = __sg_next(sg)) {
+		if (!sg->length)
+			continue;
+
 		if (page_to_pfn(sg_page(sg)) == pfn && cur->length < max) {
 			cur->length += PAGE_SIZE;
 		} else {
@@ -94,7 +97,8 @@ unsigned long i915_sg_compact(struct sg_table *st, unsigned long max)
 		}
 		pfn++;
 	}
-	GEM_BUG_ON(!cur);
+	if (unlikely(!cur))
+		cur = memset(st->sgl, 0, sizeof(*cur));
 	sizes |= cur->length;
 	sg_mark_end(cur);
 
