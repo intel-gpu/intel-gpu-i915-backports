@@ -4,6 +4,7 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
+| SLES | 15SP5 | 5.14.21.150500 |
 | SLES | 15SP4 | 5.14.21.150400 |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
@@ -12,12 +13,12 @@
   In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
 ```
-$sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP4_KERNEL_VERSION> \
-kernel-syms-<SLES15_SP4_KERNEL_VERSION>
+$sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP5_KERNEL_VERSION> \
+kernel-syms-<SLES15_SP5_KERNEL_VERSION>
 
 Example:
-       $sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150400.24.11 \
-       kernel-syms-5.14.21-150400.24.11
+       $sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150500.55.19 \
+       kernel-syms-5.14.21-150500.55.19
 ```
 
 Please note that dkms installation will skip if the kernel headers are not installed.
@@ -90,6 +91,7 @@ Generated outout:
     i915dkmsrpm-pkg  -  Build DKMS rpm package
 
    ##### List of RPM supported osv kernel versions #####
+   SLES15_SP5
    SLES15_SP4
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/

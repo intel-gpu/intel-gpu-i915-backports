@@ -432,8 +432,10 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 	 * by a static engine->wa_list, and so requires manual addition
 	 * to the reset list.
 	 */
-	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
+	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE) {
 		ret |= GUC_MCR_REG_ADD(gt, regset, TD_CTL, false);
+		ret |= GUC_MCR_REG_ADD(gt, regset, GEN8_ROW_CHICKEN, true);
+	}
 
 	for (i = 0, wa = wal->list; i < wal->count; i++, wa++) {
 		/* Wa_1607720814 - dummy write must be last not sorted! */

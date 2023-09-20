@@ -683,7 +683,7 @@ static void i915_spi_put_device(struct mtd_info *mtd)
 }
 
 static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
-			     unsigned int nparts)
+			     unsigned int nparts, bool writeable_override)
 {
 	unsigned int i;
 	unsigned int n;
@@ -716,7 +716,7 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 		parts[n].name = spi->regions[i].name;
 		parts[n].offset  = spi->regions[i].offset;
 		parts[n].size = spi->regions[i].size;
-		if (!spi->regions[i].is_writable)
+		if (!spi->regions[i].is_writable && !writeable_override)
 			parts[n].mask_flags = MTD_WRITEABLE;
 		n++;
 	}
@@ -803,7 +803,7 @@ static int i915_spi_probe(struct auxiliary_device *aux_dev,
 		goto err;
 	}
 
-	ret = i915_spi_init_mtd(spi, device, ret);
+	ret = i915_spi_init_mtd(spi, device, ret, ispi->writeable_override);
 	if (ret) {
 		dev_err(device, "i915-spi failed init mtd %d\n", ret);
 		goto err;

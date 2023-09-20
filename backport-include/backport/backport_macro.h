@@ -4,6 +4,25 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if (LINUX_VERSION_IS_GEQ(6,4,5) || \
+		LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12)))
+/*
+ * 104d79eb58aa
+ * drm/dp_mst: Clear MSG_RDY flag before sending new message
+ */
+#define BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
+#endif
+
+#if (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12))
+
+/*
+ * 4d07b0bc40
+ * drm/display/dp_mst: Move all payload info into the atomic state
+ */
+#define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
+#endif
+
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
                 REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
 		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
@@ -512,6 +531,15 @@
  * <linux/platform_device.h> depending on which one is available 
  */
 #define BPM_MEI_AUX_BUS_AVAILABLE
+#endif
+
+/* SLES15SP5 section only */
+#if SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
+/*
+ * 4dea97f8636d
+ * lib/bitmap: change type of bitmap_weight to unsigned long
+ */
+#define BPM_BITMAP_WEIGHT_RETURN_TYPE_CHANGED
 #endif
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

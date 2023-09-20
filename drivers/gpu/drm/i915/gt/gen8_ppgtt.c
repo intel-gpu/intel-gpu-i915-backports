@@ -1781,6 +1781,27 @@ static void init_scratch_blt(struct i915_address_space *vm, struct intel_pte_bo 
 			 PAGE_SIZE >> 3);
 }
 
+static inline bool can_share_scratch(struct i915_address_space const *vm)
+{
+	struct i915_address_space *src = vm->gt->vm;
+
+	/*
+	 * Reuse scratch page for all vm
+	 *
+	 * The writes are dropped because the page is either read-only or null page.
+	 * This helps to reduce memory pressure, and reduce startup latency.
+	 *
+	 */
+	if (src && !i915_is_ggtt(src) &&
+	    (has_null_page(src) || vm->has_read_only)) {
+
+		if (!has_null_page(src))
+			GEM_BUG_ON(!src->has_read_only);
+		return true;
+	}
+	return false;
+}
+
 static int gen8_init_scratch(struct i915_address_space *vm)
 {
 	struct intel_gt *gt = vm->gt;
@@ -1790,14 +1811,8 @@ static int gen8_init_scratch(struct i915_address_space *vm)
 	int ret;
 	int i;
 
-	/*
-	 * If everybody agrees to not to write into the scratch page,
-	 * we can reuse it for all vm, keeping contexts and processes separate.
-	 */
-	if (vm->has_read_only && vm->gt->vm && !i915_is_ggtt(vm->gt->vm)) {
+	if (can_share_scratch(vm)) {
 		struct i915_address_space *clone = vm->gt->vm;
-
-		GEM_BUG_ON(!clone->has_read_only);
 
 		vm->scratch_order = clone->scratch_order;
 		for (i = 0; i <= vm->top; i++) {
@@ -2112,12 +2127,14 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	/*
 	 * From bdw, there is hw support for read-only pages in the PPGTT.
 	 *
-	 * Gen11 has HSDES#:1807136187 unresolved. Disable ro support
-	 * for now.
+	 * From Gen11, there is HSDES#:1807136187 issue. Disable ro support.
 	 *
-	 * Gen12 has inherited the same read-only fault issue from gen11.
+	 * Recoverable page fault support can recover from this fault issue.
+	 * FIXME: revert the read_only support with Recoverable page fault
+	 * support and will enable back once the GuC CAT error type is in
+	 * place.
 	 */
-	ppgtt->vm.has_read_only = !IS_GRAPHICS_VER(gt->i915, 11, 12);
+	ppgtt->vm.has_read_only = GRAPHICS_VER(gt->i915) < 11;
 
 	if (HAS_LMEM(gt->i915))
 		ppgtt->vm.alloc_pt_dma = alloc_pt_lmem;

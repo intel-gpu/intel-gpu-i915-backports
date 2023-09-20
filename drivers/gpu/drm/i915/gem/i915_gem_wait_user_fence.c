@@ -3,6 +3,7 @@
  * Copyright © 2020 Intel Corporation
  */
 
+#include <linux/pm_qos.h>
 #include <linux/wait.h>
 
 #include <drm/drm_file.h>
@@ -15,6 +16,40 @@
 #include "i915_drv.h"
 #include "i915_gem_ioctls.h"
 #include "i915_user_extensions.h"
+
+#if IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ULL_DMA_BOOST)
+static atomic_t dma_latency_num_waiters;
+
+static void dma_latency_change(struct work_struct *wrk)
+{
+	static struct pm_qos_request qos = {};
+
+	if (atomic_read(&dma_latency_num_waiters)) {
+		if (!cpu_latency_qos_request_active(&qos))
+			cpu_latency_qos_add_request(&qos, 0);
+	} else {
+		if (cpu_latency_qos_request_active(&qos))
+			cpu_latency_qos_remove_request(&qos);
+	}
+}
+
+static DECLARE_DELAYED_WORK(dma_latency_work, dma_latency_change);
+
+static void dma_latency_boost(void)
+{
+	if (atomic_fetch_inc(&dma_latency_num_waiters) == 0)
+		queue_delayed_work(system_highpri_wq, &dma_latency_work, 0);
+}
+
+static void dma_latency_cancel_boost(void)
+{
+	if (atomic_dec_and_test(&dma_latency_num_waiters))
+		mod_delayed_work(system_highpri_wq, &dma_latency_work, 5);
+}
+#else
+static inline void dma_latency_boost(void) {}
+static inline void dma_latency_cancel_boost(void) {}
+#endif
 
 struct ufence_wake {
 	struct task_struct *tsk;
@@ -382,6 +417,8 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		err = add_gt_wait(ctx, &c_wait.next);
 		if (err)
 			goto out_wait;
+
+		dma_latency_boost();
 	}
 
 	for (;;) {
@@ -419,6 +456,8 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	}
 	__set_current_state(TASK_RUNNING);
 
+	if (ctx)
+		dma_latency_cancel_boost();
 out_wait:
 	remove_waits(&g_wait);
 out_time:

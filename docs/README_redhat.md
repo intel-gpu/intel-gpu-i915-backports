@@ -4,6 +4,7 @@
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
 | RHEL | 9.2 | 5.14.0-284 |
+| RHEL | 9.0 | 5.14.0-70 |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
   Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to get information on the kernel version being used during backporting.
@@ -90,6 +91,7 @@ Generated outout:
 
    ##### List of RPM supported osv kernel versions #####
    RHEL_9.2
+   RHEL_9.0
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
