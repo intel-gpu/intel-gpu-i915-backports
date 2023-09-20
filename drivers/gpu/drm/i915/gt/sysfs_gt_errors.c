@@ -334,6 +334,14 @@ static const struct attribute *pvc_gt_error_attrs[] = {
 	&dev_attr_fatal_guc.attr.attr,
 	&dev_attr_fatal_slm.attr.attr,
 	&dev_attr_fatal_eu_grf.attr.attr,
+	&dev_attr_eu_attention.attr.attr,
+	&dev_attr_engine_reset.attr.attr,
+	&dev_attr_driver_ggtt.attr.attr,
+	&dev_attr_driver_engine_other.attr.attr,
+	&dev_attr_driver_guc_communication.attr.attr,
+	&dev_attr_driver_rps.attr.attr,
+	&dev_attr_driver_gt_other.attr.attr,
+	&dev_attr_driver_gt_interrupt.attr.attr,
 	NULL
 };
 

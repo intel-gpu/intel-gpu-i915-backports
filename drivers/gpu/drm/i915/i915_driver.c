@@ -75,6 +75,7 @@
 #include "gem/i915_gem_pm.h"
 #include "gem/i915_gem_vm_bind.h"
 #include "gt/intel_clos.h"
+#include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
@@ -1359,6 +1360,8 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(CLEAR_ON_FREE),
 		C(CLEAR_ON_IDLE),
 		C(PARALLEL_USERPTR),
+		C(ULL_DMA_BOOST),
+		C(SOFT_PG),
 #undef C
 		{},
 	};
@@ -2692,6 +2695,7 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 	struct i915_vma *vma;
 	u16 class, instance;
 	int err = 0;
+	u64 start;
 
 	class = args->region >> 16;
 	instance = args->region & 0xffff;
@@ -2703,10 +2707,16 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 	if (unlikely(!vm))
 		return -ENOENT;
 
-	trace_i915_vm_prefetch(i915, args->vm_id, args->start, args->length, mem->id);
+	start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
+					args->start);
+	if (range_overflows(start, args->length, vm->total))
+		return -EINVAL;
 
-	drm_mm_for_each_node_in_range(node, &vm->mm, args->start,
-					args->start + args->length) {
+	trace_i915_vm_prefetch(i915, args->vm_id, start, args->length, mem->id);
+
+	/* FIXME: should protect against concurrent binds/unbinds */
+	drm_mm_for_each_node_in_range(node, &vm->mm, start,
+					start + args->length) {
 		GEM_BUG_ON(!drm_mm_node_allocated(node));
 		vma = container_of(node, typeof(*vma), node);
 		vma = __i915_vma_get(vma);

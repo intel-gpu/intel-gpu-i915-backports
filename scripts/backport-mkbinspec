@@ -118,10 +118,10 @@ $RHEL	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name
 	fi
 
 	%pre
-$RHEL	if find %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir} -mindepth 1 -maxdepth 1 | read; then
+$RHEL   if find %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir} -mindepth 1 -maxdepth 1 | read; then
 $RHEL		mkdir -p %{kernel_module_directory}/%{_krel}/%{original_module}/
-$RHEL		mv -f %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/* %{kernel_module_directory}/%{_krel}/%{original_module}/
-$RHEL	fi
+$RHEL		mv %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/* %{kernel_module_directory}/%{_krel}/%{original_module}/
+$RHEL 	fi
 
 	%post
 $RHEL	echo "Post Installation"
@@ -137,5 +137,6 @@ $RHEL	if [ -d "%{kernel_module_directory}/%{_krel}/%{original_module}" ]; then
 $RHEL		cp %{kernel_module_directory}/%{_krel}/%{original_module}/* %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/
 $RHEL		rm -rf %{kernel_module_directory}/%{_krel}/%{original_module}/
 $RHEL	fi
+
 EOF
 

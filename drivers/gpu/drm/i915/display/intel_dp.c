@@ -4002,9 +4002,13 @@ intel_dp_mst_hpd_irq(struct intel_dp *intel_dp, u8 *esi, u8 *ack)
 {
 	bool handled = false;
 
+#ifdef BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
+	drm_dp_mst_hpd_irq_handle_event(&intel_dp->mst_mgr, esi, ack, &handled);
+#else
 	drm_dp_mst_hpd_irq(&intel_dp->mst_mgr, esi, &handled);
 	if (handled)
 		ack[1] |= esi[1] & (DP_DOWN_REP_MSG_RDY | DP_UP_REQ_MSG_RDY);
+#endif
 
 	if (esi[1] & DP_CP_IRQ) {
 		intel_hdcp_handle_cp_irq(intel_dp->attached_connector);

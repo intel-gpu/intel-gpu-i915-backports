@@ -591,7 +591,7 @@ i915_eu_stall_stream_enable(struct i915_eu_stall_cntr_stream *stream)
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
 		/* Wa_22012878696:pvc */
-		if (IS_PONTEVECCHIO(gt->i915))
+		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_RENDER);
 
 		/*
@@ -644,7 +644,7 @@ i915_eu_stall_stream_disable(struct i915_eu_stall_cntr_stream *stream)
 						     _MASKED_BIT_DISABLE(GEN12_DISABLE_DOP_GATING));
 
 		/* Wa_22012878696:pvc */
-		if (IS_PONTEVECCHIO(gt->i915))
+		if (IS_PVC_CT_STEP(gt->i915, STEP_A0, STEP_B0))
 			intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_RENDER);
 	}
 }

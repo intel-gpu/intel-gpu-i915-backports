@@ -2394,7 +2394,7 @@ static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, 
 		   rq->context->lrc.lrca);
 	drm_printf(m, "\t\tce->lrc.ccid: 0x%08x\n",
 		   rq->context->lrc.ccid);
-	if (i915_vm_scratch0_encode(rq->context->vm) & PTE_NULL_PAGE)
+	if (has_null_page(rq->context->vm))
 		drm_printf(m, "\t\tvm->poison:   NULL PTE\n");
 	else
 		drm_printf(m, "\t\tvm->poison:   0x%08x\n",

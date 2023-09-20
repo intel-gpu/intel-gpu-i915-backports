@@ -48,19 +48,21 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 	pgoff_t num_pages; /* implicitly limited by sg_alloc_table */
 	int ret;
 
-	if (!safe_conversion(&num_pages,
-			     round_up(obj->base.size, mem->min_page_size) >>
+	if (!safe_conversion(&num_pages, /* worst case number of sg required */
+			     round_up(size, mem->min_page_size) >>
 			     ilog2(mem->min_page_size)))
 		 return ERR_PTR(-E2BIG);
 
-	if (obj->base.size > mem->total)
+	if (size > mem->total)
 		return ERR_PTR(-E2BIG);
 
 	st = kmalloc(sizeof(*st), GFP_KERNEL);
 	if (!st)
 		return ERR_PTR(-ENOMEM);
 
-	if (sg_alloc_table(st, num_pages, I915_GFP_ALLOW_FAIL)) {
+	if (sg_alloc_table(st,
+			   min_t(unsigned int, num_pages, SG_MAX_SINGLE_ALLOC),
+			   I915_GFP_ALLOW_FAIL)) {
 		kfree(st);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -109,13 +111,29 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 			u64 len;
 
 			if (offset != prev_end || sg->length >= max_segment) {
-				/* Check we have not overflown our prealloc */
-				GEM_BUG_ON(st->nents >= num_pages);
-
 				if (st->nents) {
 					sg_dma_len(sg) = sg->length;
 					sg_page_sizes |= sg->length;
-					sg = __sg_next(sg);
+
+					if (sg_is_last(sg)) {
+						struct scatterlist *chain;
+
+						chain = (void *)__get_free_page(I915_GFP_ALLOW_FAIL);
+						if (!chain) {
+							ret = -ENOMEM;
+							goto err_free_sg;
+						}
+						sg_init_table(chain, SG_MAX_SINGLE_ALLOC);
+
+						sg_unmark_end(memcpy(chain, sg, sizeof(*sg)));
+						__sg_chain(sg, chain);
+						st->orig_nents += I915_MAX_CHAIN_ALLOC;
+
+						GEM_BUG_ON(sg_chain_ptr(sg) != chain);
+						sg = chain;
+					}
+					GEM_BUG_ON(sg_is_last(sg));
+					sg++;
 				}
 
 				sg_dma_address(sg) = offset;
@@ -136,7 +154,6 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 	sg_dma_len(sg) = sg->length;
 	sg_page_sizes |= sg->length;
 	sg_mark_end(sg);
-	i915_sg_trim(st);
 
 	i915_drm_client_make_resident(obj, true);
 

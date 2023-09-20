@@ -1,4 +1,31 @@
 # ChangeLog
+## Release I915_23WW37.5_704.30_23.7.17_230608.25
+* i915: Update to load and use GuC fw v70.9.1
+* i915: fix for memory leak seen with eudebug on max
+* i915: fix to restore wa after eudebugger use leading to gpu hang on flex
+* i915: fix for spechpc hang seen on max
+* i915: fix for ze_peak and ze_peek hangs seen on max
+* i915: fix to avoid workloads visible after host process has ended
+* i915: fix for memory leak seen on flex
+* i915: fix to properly clean up exceptions after misbehaving application seen on max
+* i915: add support to report reset_count and report low level driver error counters via sysfs on max
+* i915: fix for race condition related to decoupling gt parking and vma close
+* i915: fix with eudebug to reset gt when application is terminated at breakpoint
+* i915: updates to improve GuC error reporting
+* i915: fix parameters for hbm error logging on max
+* i915: fix to avoid incorrect reporting of max errors on flex
+* i915: fix to avoid spurious error message on iaf startup on max
+* i915: update to enhance RAS error logging on max
+* i915: fix to restore default hardware power gating behaviour for performance
+* i915: fix to maintain lmem accounting across migration
+* i915: fix for IAF page fault seen during module load/unload on max
+* i915: update for mei outside of i915 to enable async suspend for devices on mei bus
+* i915: fix for exec buffer lock warn on max
+* i915: update to minimize dma wakeup latency seen on flex
+* i915: update to have more migration performed in the background to improve performance
+* i915: fix for eudebug to purge deferred vm-bind on unbind
+* i915: fix to align with hw's minimum invalidation page size requirement
+
 ## Release I915_23WW35.5_682.20_23.6.28_230425.37
 * i915: fix to prevent invalid eu stall data after RC6 on max
 * i915: fix for spechpc hang seen on max

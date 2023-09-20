@@ -2599,6 +2599,33 @@ err_ctx:
 	return ret;
 }
 
+static void retire_requests(const struct intel_timeline *tl)
+{
+	struct i915_request *rq, *rn;
+
+	list_for_each_entry_safe(rq, rn, &tl->requests, link)
+		if (!i915_request_retire(rq))
+			return;
+}
+
+static void timeline_retire(struct intel_context *ce, void *data)
+{
+	struct intel_timeline *tl = ce->timeline;
+
+	if (!tl || list_empty(&tl->requests))
+		return;
+
+	if (mutex_trylock(&tl->mutex)) {
+		retire_requests(tl);
+		mutex_unlock(&tl->mutex);
+	}
+}
+
+static void context_retire(struct i915_gem_context *ctx)
+{
+	context_apply_all(ctx, timeline_retire, NULL);
+}
+
 int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 				   struct drm_file *file)
 {
@@ -2619,6 +2646,7 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 	if (!ctx)
 		return -ENOENT;
 
+	context_retire(ctx);
 	context_close(ctx);
 
 	i915_gem_flush_free_objects(to_i915(dev));

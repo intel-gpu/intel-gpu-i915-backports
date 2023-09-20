@@ -18,6 +18,7 @@ struct i915_spi_region {
 struct intel_spi {
 	struct auxiliary_device aux_dev;
 	struct drm_i915_private *i915;
+	bool writeable_override;
 	struct resource bar;
 	const struct i915_spi_region *regions;
 };

@@ -1585,7 +1585,7 @@ static int gen12vf_ggtt_probe(struct i915_ggtt *ggtt)
 	/* safe guess as native expects the same minimum */
 	ggtt->vm.total = 1ULL << (ilog2(GUC_GGTT_TOP - 1) + 1); /* roundup_pow_of_two(GUC_GGTT_TOP); */
 
-	if (IS_METEORLAKE(i915))
+	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
 		ggtt->vm.pte_encode = mtl_ggtt_pte_encode;
 	else
 		ggtt->vm.pte_encode = gen8_ggtt_pte_encode;

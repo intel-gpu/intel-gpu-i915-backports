@@ -235,10 +235,8 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 			GEN6_RC_CTL_EI_MODE(1);
 
 	/* Wa_22012237902 - disable coarse PG for PVC BD A0 */
-	if (IS_PVC_BD_STEP(rc6_to_i915(rc6), STEP_A0, STEP_B0)) {
-		set(uncore, GEN9_PG_ENABLE, 0);
+	if (IS_PVC_BD_STEP(rc6_to_i915(rc6), STEP_A0, STEP_B0))
 		return;
-	}
 
 	/* Wa_16011777198 - Render powergating must remain disabled */
 	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
@@ -257,6 +255,13 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 			if (HAS_ENGINE(gt, _VCS(i)))
 				pg_enable |= (VDN_HCP_POWERGATE_ENABLE(i) |
 					      VDN_MFX_POWERGATE_ENABLE(i));
+	}
+
+	/* Manually switch powergating off/on around GPU client activity */
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG) &&
+	    gt->i915->params.enable_softpg) {
+		rc6->pg_enable = pg_enable;
+		return;
 	}
 
 	set(uncore, GEN9_PG_ENABLE, pg_enable);
@@ -775,6 +780,8 @@ void intel_rc6_enable(struct intel_rc6 *rc6)
 	rc6->manual = rc6->ctl_enable & GEN6_RC_CTL_RC6_ENABLE;
 	if (NEEDS_RC6_CTX_CORRUPTION_WA(i915))
 		rc6->ctl_enable = 0;
+	if (pvc_needs_rc6_wa(i915))
+		rc6->ctl_enable = 0;
 
 	intel_uncore_forcewake_put(uncore, FORCEWAKE_ALL);
 
@@ -789,25 +796,27 @@ void intel_rc6_enable(struct intel_rc6 *rc6)
 void intel_rc6_unpark(struct intel_rc6 *rc6)
 {
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 
-	pvc_wa_disallow_rc6_if_awake(i915);
 	if (!rc6->enabled)
 		return;
 
 	/* Restore HW timers for automatic RC6 entry while busy */
 	set(uncore, GEN6_RC_CONTROL, rc6->ctl_enable);
+
+	if (rc6->pg_enable)
+		set(uncore, GEN9_PG_ENABLE, 0);
 }
 
 void intel_rc6_park(struct intel_rc6 *rc6)
 {
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 	unsigned int target;
 
-	pvc_wa_allow_rc6_if_awake(i915);
 	if (!rc6->enabled)
 		return;
+
+	if (rc6->pg_enable)
+		set(uncore, GEN9_PG_ENABLE, rc6->pg_enable);
 
 	if (unlikely(pctx_corrupted(rc6))) {
 		intel_rc6_disable(rc6);
