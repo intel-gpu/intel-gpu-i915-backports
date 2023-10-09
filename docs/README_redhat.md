@@ -14,7 +14,7 @@ This repo is a code snapshot of particular version of backports and does not con
 
 ## Supported Version/kernel
   Our current backport is based on Red Hat® Enterprise Linux® 8.8. We are using the header of the latest available kernel at the time of backporting. However, it may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/versions)
+  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/versions)
   file to check the RHEL_8.8_KERNEL_VERSION. It will point to the kernel version which is being used during backporting.
 
   In case of an issue with the latest kernel, please install the kernel version pointed by RHEL_8.8_KERNEL_VERSION.
@@ -99,7 +99,6 @@ Generated outout:
    
    ##### List of RPM supported osv kernel versions #####
    RHEL_8.8
-   RHEL_8.7
    RHEL_8.6
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/

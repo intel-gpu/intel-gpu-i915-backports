@@ -31,6 +31,14 @@
 
 #include_next <linux/mm.h>
 
+#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+#define pin_user_pages_fast get_user_pages_fast
+#endif
+
+#ifdef BPM_FOLL_FAST_ONLY_NOT_PRESENT
+#define FOLL_FAST_ONLY 0x80000 /* gup_fast: prevent fall-back to slow gup */
+#endif
+
 #ifdef BPM_TOTALRAM_PAGES_FUNC_NOT_PRESENT
 #define totalram_pages() totalram_pages
 #endif

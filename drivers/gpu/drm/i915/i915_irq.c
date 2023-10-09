@@ -3001,6 +3001,7 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 {
 	void __iomem * const regs = gt->uncore->regs;
 	unsigned long mst_glb_errstat, slv_glb_errstat, lcl_errstat, index;
+	u32 ieh_header;
 	u32 errbit;
 	u32 base = SOC_XEHPSDV_BASE;
 	u32 slave_base = SOC_XEHPSDV_SLAVE_BASE;
@@ -3105,6 +3106,16 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 		log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_MASTER_REG_%s:0x%08lx\n",
 			      hardware_error_type_to_str(hw_err), lcl_errstat);
 		for_each_set_bit(errbit, &lcl_errstat, SOC_HW_ERR_MAX_BITS) {
+			if (errbit == PVC_SOC_MDFI_EAST || errbit == PVC_SOC_MDFI_SOUTH) {
+			       ieh_header = raw_reg_read(regs, LOCAL_FIRST_IEH_HEADER_LOG_REG);
+			       log_gt_hw_err(gt, "LOCAL_FIRST_IEH_HEADER_LOG_REG:0x%08x\n",
+					     ieh_header);
+
+			       if (ieh_header != MDFI_SEVERITY(hw_err)) {
+				       lcl_errstat &= ~REG_BIT(errbit);
+				       continue;
+			       }
+			}
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
 			log_soc_hw_error(gt, index, hw_err);

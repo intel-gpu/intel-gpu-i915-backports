@@ -384,7 +384,7 @@ define filechk_osv_version_rhel.h
         echo '#define RHEL_BACKPORT_MAJOR $(EXTENDED_VERSION_X)'; \
         echo '#define RHEL_BACKPORT_MINOR_XX_P $(EXTENDED_VERSION_Y)'; \
         echo '#define RHEL_BACKPORT_MINOR_YY_Q $(EXTENDED_VERSION_Z)'; \
-        echo '#define RHEL_BACKPORT_RELEASE_VERSION(a,b,c) ((a) << 16 + (b) << 8 + (c))'; \
+        echo '#define RHEL_BACKPORT_RELEASE_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + (c))'; \
         echo '#define RHEL_BACKPORT_RELEASE_CODE \
 	$(shell expr $(EXTENDED_VERSION_X) \* 65536 + 0$(EXTENDED_VERSION_Y) \* 256 + 0$(EXTENDED_VERSION_Z))'
 endef
