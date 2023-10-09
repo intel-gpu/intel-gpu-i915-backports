@@ -178,6 +178,13 @@ try_again:
 		if (!vma)
 			goto close_vm;
 
+		/* Always wait for a pending unbind before checking activity */
+		if (!ww_mutex_is_locked(&vm->root_obj->base.resv->lock)) {
+			ret = i915_vma_wait_for_bind(vma);
+			if (ret)
+				goto put_vma;
+		}
+
 		if (!(flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
 		    i915_vma_is_active(vma)) {
 			ret = -EBUSY;

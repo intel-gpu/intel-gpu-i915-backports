@@ -5,12 +5,12 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 Desktop | 5.19 generic |
+| Ubuntu® | 22.04 Desktop | 6.2 generic |
 | | 22.04 Server| 5.15 generic |
 
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu. It will point to the kernel version which is being used during backporting.
+  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/versions) file to check value of UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu. It will point to the kernel version which is being used during backporting.
 
   In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
@@ -20,8 +20,8 @@ $sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
 linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
 
 Example:
-       $sudo apt install linux-headers-5.19.0-50-generic \
-       linux-image-unsigned-5.19.0-50-generic
+       $sudo apt install linux-headers-6.2.0-26-generic \
+       linux-image-unsigned-6.2.0-26-generic
 ```
   Ubuntu 22.04 Server:
 ```

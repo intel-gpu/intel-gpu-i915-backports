@@ -2391,10 +2391,16 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector, bool has_edid)
 		/* An overridden EDID imply that we want this port for testing.
 		 * Make sure not to set limits for that port.
 		 */
+#ifdef BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
+               if (has_edid && !connector->force &&
+                   intel_bios_is_port_dp_dual_mode(dev_priv, port))
+#else
 		if (has_edid && !connector->override_edid &&
-		    intel_bios_is_port_dp_dual_mode(dev_priv, port)) {
+		    intel_bios_is_port_dp_dual_mode(dev_priv, port))
+#endif
+		{
 			drm_dbg_kms(&dev_priv->drm,
-				    "Assuming DP dual mode adaptor presence based on VBT\n");
+					"Assuming DP dual mode adaptor presence based on VBT\n");
 			type = DRM_DP_DUAL_MODE_TYPE1_DVI;
 		} else {
 			type = DRM_DP_DUAL_MODE_NONE;

@@ -6,7 +6,7 @@
 | RHEL | 9.2 | 5.14.0-284 |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to get information on the kernel version being used during backporting.
+  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/versions) file to get information on the kernel version being used during backporting.
 
   In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 

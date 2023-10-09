@@ -632,7 +632,11 @@ void intel_fbdev_set_suspend(struct drm_device *dev, int state, bool synchronous
 	if (!ifbdev || !ifbdev->vma)
 		return;
 
+#ifdef BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
+	info = ifbdev->helper.info;
+#else
 	info = ifbdev->helper.fbdev;
+#endif
 
 	if (synchronous) {
 		/* Flush any pending work to turn the console on, and then

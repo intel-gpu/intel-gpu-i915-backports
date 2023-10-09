@@ -7,6 +7,11 @@
 #define dma_resv_reserve_shared dma_resv_reserve_fences
 #endif
 
+#ifdef BPM_DMA_RESV_TEST_SIGNALED_BOOLEAN_ARG_NOT_PRESENT
+bool backport_dma_resv_test_signaled(struct dma_resv *obj, bool test_all);
+#define dma_resv_test_signaled backport_dma_resv_test_signaled
+#endif
+
 #ifdef DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
 
 /**
