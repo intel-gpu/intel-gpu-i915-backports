@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __BACKPORT_MM_H
 #define __BACKPORT_MM_H
 #include_next <linux/mm.h>
@@ -77,6 +78,11 @@ static inline void *folio_address(const struct folio *folio)
 {
 	return page_address(&folio->page);
 }
+
+#ifdef BPM_REGISTER_SHRINKER_SECOND_ARG_NOT_PRESENT
+int backport_register_shrinker(struct shrinker *shrinker);
+#define register_shrinker backport_register_shrinker
+#endif
 
 #endif /* FOLIO_ADDRESS_PRESENT */
 #endif /* __BACKPORT_MM_H */

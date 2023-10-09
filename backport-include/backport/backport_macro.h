@@ -4,6 +4,96 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if (LINUX_VERSION_IS_GEQ(6,4,5) || \
+		LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12)))
+/*
+ * 104d79eb58aa
+ * drm/dp_mst: Clear MSG_RDY flag before sending new message
+ */
+#define BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0))
+/*
+ * 4b21d25bf519c9
+ *  overflow: Introduce overflows_type() and castable_to_type()
+ */
+#define BPM_OVERFLOWS_TYPE_AVAILABLE
+
+/*
+ * e3c92eb4a84fb
+ * drm/ttm: rework on ttm_resource to use size_t type
+ */
+#define BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
+
+/*
+ * 3c202d14a9d73
+ * prandom: remove prandom_u32_max()
+ */
+#define BPM_PRANDOM_U32_MAX_NOT_PRESENT
+
+/*
+ * 6e1ca48d0669b
+ * folio-compat: remove lru_cache_add()
+ */
+#define BPM_LRU_CACHE_ADD_API_NOT_PRESENT
+
+/*
+ * afb0ff78c13c51
+ * drm/fb-helper: Rename drm_fb_helper_unregister_fbi() to use _info postfix
+ */
+#define BPM_DRM_FB_HELPER_ALLOC_UNREGISTER_FBI_NOT_PRESENT
+
+/*
+ * 9877d8f6bc
+ *  drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
+ */
+#define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
+
+/*
+ * 90b575f52c6
+ * drm/edid: detach debugfs EDID override from EDID property update
+ */
+#define BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,1,0))
+/*
+ * cce32e4e38c6
+ * drm/atomic-helper: Remove _HELPER_ infix from DRM_PLANE_HELPER_NO_SCALING
+ */
+#define BPM_DRM_PLANE_HELPER_NO_SCALING_NOT_PRESENT
+
+/*
+ * de492c83cae prandom: remove unused functions
+ */
+#define BPM_GET_RANDOM_INT_NOT_PRESENT
+
+/*
+ * f683b9d61319 i915: use the VMA iterator
+ */
+#define BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12)))
+/*
+ * 4d07b0bc40
+ * drm/display/dp_mst: Move all payload info into the atomic state
+ */
+#define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,0,0))
+
+/*
+ * e33c267ab70d
+ * mm: shrinkers: provide shrinkers with names
+ */
+#define BPM_REGISTER_SHRINKER_SECOND_ARG_NOT_PRESENT
+
+#endif
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
                 REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
 		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
@@ -35,6 +125,18 @@
  */
 #define BPM_BACKLIGHT_H_NOT_INCLUDED_IN_DRM_CRTC_H
 
+#endif
+
+#if (LINUX_VERSION_IS_LESS(6,0,0))
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+
+/*
+ * 64e06652e348 agp/intel: Rename intel-gtt symbols
+ */
+#define BPM_INTEL_GMCH_GTT_RENAMED
+
+#endif
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
@@ -109,6 +211,16 @@
  * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
  */
 #define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
+
+/*
+ * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
+ */
+#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
+
+/*
+ * 7bc80a5462c3 dma-buf: add enum dma_resv_usage v4
+ */
+#define BPM_DMA_RESV_TEST_SIGNALED_BOOLEAN_ARG_NOT_PRESENT
 
 #elif (LINUX_VERSION_IN_RANGE(5,18,0, 5,19,0) || \
 		REDHAT_RELEASE_VERSION_IS_EQL(9,1))
@@ -459,21 +571,6 @@
  */
 
 /*
- * DII changes outside i915 yet to upstream. 
- * as on DII tag 5899
- */
-
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
-		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
-/*
- * 64fa30f9ffc0ed Backport and fix intel-gtt split
- */
-
-#define INTEL_GMCH_GTT_RENAMED
-
-#endif
-
-/*
  * Introduced in DII_5943
  * 00b5f7aad3d989: Post-migration driver recovery
  */
@@ -512,6 +609,15 @@
  * <linux/platform_device.h> depending on which one is available 
  */
 #define BPM_MEI_AUX_BUS_AVAILABLE
+#endif
+
+/* SLES15SP5 section only */
+#if SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
+/*
+ * 4dea97f8636d
+ * lib/bitmap: change type of bitmap_weight to unsigned long
+ */
+#define BPM_BITMAP_WEIGHT_RETURN_TYPE_CHANGED
 #endif
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

@@ -52,8 +52,13 @@ int i915_user_extensions(struct i915_user_extension __user *ext,
 		if (err)
 			return err;
 
+#ifdef BPM_OVERFLOWS_TYPE_AVAILABLE
+		if (get_user(next, &ext->next_extension) ||
+		    overflows_type(next, uintptr_t))
+#else
 		if (get_user(next, &ext->next_extension) ||
 		    overflows_type(next, ext))
+#endif
 			return -EFAULT;
 
 		ext = u64_to_user_ptr(next);

@@ -113,8 +113,8 @@ static int vf_handshake_with_guc(struct intel_iov *iov)
 		return -EREMCHG;
 	}
 
-	/* XXX we only support one version, there must be a match */
-	if (major != GUC_VF_VERSION_LATEST_MAJOR || minor != GUC_VF_VERSION_LATEST_MINOR)
+	/* XXX backwards breaking changes are not supported */
+	if (major != GUC_VF_VERSION_LATEST_MAJOR || minor < GUC_VF_VERSION_LATEST_MINOR)
 		goto fail;
 
 	dev_info(iov_to_dev(iov), "%s interface version %u.%u.%u.%u\n",

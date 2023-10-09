@@ -185,7 +185,11 @@ struct sg_table *i915_sg_from_buddy_resource(struct ttm_resource *res,
 					     u64 region_start)
 {
 	struct i915_ttm_buddy_resource *bman_res = to_ttm_buddy_resource(res);
+#ifdef BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
+	const u64 size = res->size;
+#else
 	const u64 size = res->num_pages << PAGE_SHIFT;
+#endif
 	const u64 max_segment = rounddown(UINT_MAX, PAGE_SIZE);
 	struct i915_buddy_mm *mm = bman_res->mm;
 	struct list_head *blocks = &bman_res->blocks;
@@ -200,7 +204,12 @@ struct sg_table *i915_sg_from_buddy_resource(struct ttm_resource *res,
 	if (!st)
 		return ERR_PTR(-ENOMEM);
 
-	if (sg_alloc_table(st, res->num_pages, GFP_KERNEL)) {
+#ifdef BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
+	if (sg_alloc_table(st, PFN_UP(res->size), GFP_KERNEL))
+#else
+	if (sg_alloc_table(st, res->num_pages, GFP_KERNEL))
+#endif
+	{
 		kfree(st);
 		return ERR_PTR(-ENOMEM);
 	}

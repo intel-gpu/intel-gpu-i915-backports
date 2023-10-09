@@ -1,4 +1,17 @@
 # ChangeLog
+## Release I915_23WW39.5_682.38_23.6.37_230425.49
+* i915: Support SLES 15 SP5
+* i915: Support RHEL 9.0
+* i915: Fix the issue that L3 Fabric/PUNIT FATAL error injection during WL leads to MCE but Host didn’t Reboot.
+* i915: Fix RHEL 8.6 DKMS build issue
+* i915: Fix performance drop seen with pt-cosmic tagger on max
+* i915: Update to enhance mdfi error severity reporting
+* i915: Update behavior of PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT while VM_BIND is held by user
+* i915: Fix for deadlock between vm_unbind and memory eviction
+* i915: Fix for circular locking in gem object unbind
+* i915: Fix for crash when allocating huge memory seen on max
+* i915: Update to load and use GuC fw v70.9.1
+
 ## Release I915_23WW35.5_682.20_23.6.28_230425.37
 * i915: fix to prevent invalid eu stall data after RC6 on max
 * i915: fix for spechpc hang seen on max

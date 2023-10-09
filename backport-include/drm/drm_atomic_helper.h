@@ -1,5 +1,6 @@
 /*
- * Copyright © 2022 Intel Corporation
+ * Copyright (C) 2014 Red Hat
+ * Copyright (C) 2014 Intel Corp.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -18,22 +19,16 @@
  * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * Authors:
+ * Rob Clark <robdclark@gmail.com>
+ * Daniel Vetter <daniel.vetter@ffwll.ch>
  */
 
-#ifndef _BACKPORT_DRM_DP_MST_HELPER_H_
-#define _BACKPORT_DRM_DP_MST_HELPER_H_
-
-#ifdef BPM_DRM_DP_HELPER_DIR_DISPLAY_PRESENT
-#include_next <drm/display/drm_dp_mst_helper.h>
-#include <drm/drm_dp_helper.h>
-
-#ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
-#define drm_dp_atomic_release_vcpi_slots drm_dp_atomic_release_time_slots
+#ifndef _BPM_DRM_ATOMIC_HELPER_H_
+#define _BPM_DRM_ATOMIC_HELPER_H_
+#include_next <drm/drm_atomic_helper.h>
+#ifdef BPM_DRM_PLANE_HELPER_NO_SCALING_NOT_PRESENT
+#define DRM_PLANE_HELPER_NO_SCALING DRM_PLANE_NO_SCALING
 #endif
-
-#elif defined(BPM_DRM_DP_HELPER_DIR_DP_PRESENT)
-#include_next <drm/dp/drm_dp_mst_helper.h>
-#else
-#include_next <drm/drm_dp_mst_helper.h>
 #endif
-#endif /* _BACKPORT_DRM_DP_MST_HELPER_H_ */
