@@ -163,6 +163,7 @@
 #define BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
 
 #if !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) || \
+		(REDHAT_RELEASE_VERSION_IS_RANGE(8,6, 8,7) && REDHAT_BACKPORT_MINOR_VERSION_IS_GEQ(372,70,1)) || \
 		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  * 59dc33252ee7
@@ -566,6 +567,18 @@
  * 42fc541404f2 mmap locking API: add mmap_assert_locked() and mmap_assert_write_locked()
  */
 #define BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+
+/*
+ * 6058eaec816f mm: fold and remove lru_cache_add_anon() and lru_cache_add_file()
+ */
+#define BPM_LRU_CACHE_ADD_NOT_PRESENT
+/*
+ * 376a34efa4ee mm/gup: refactor and de-duplicate gup_fast() code
+ */
+#define BPM_FOLL_FAST_ONLY_NOT_PRESENT
 #endif
 
 #endif

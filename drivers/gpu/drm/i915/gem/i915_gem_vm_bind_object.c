@@ -700,11 +700,13 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 	int ret = 0;
 
 	for_i915_gem_ww(&ww, ret, true) {
-		ret = i915_gem_object_lock(vm->root_obj, &ww);
-		if (ret)
-			continue;
-
 		if (pin_flags) {
+			if (!i915_vm_page_fault_enabled(vm)) {
+				ret = i915_gem_object_lock(vm->root_obj, &ww);
+				if (ret)
+					continue;
+			}
+
 			ret = i915_gem_object_lock(vma->obj, &ww);
 			if (ret)
 				continue;
@@ -716,6 +718,10 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 
 			__i915_vma_unpin(vma);
 		}
+
+		ret = i915_gem_object_lock(vm->root_obj, &ww);
+		if (ret)
+			continue;
 
 		list_move_tail(&vma->vm_bind_link, &vm->vm_bind_list);
 		i915_vm_bind_it_insert(vma, &vm->va);

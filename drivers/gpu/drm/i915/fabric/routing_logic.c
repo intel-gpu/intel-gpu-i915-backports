@@ -6,6 +6,7 @@
 
 #include <linux/bitmap.h>
 #include <linux/bitfield.h>
+#include <linux/version.h>
 
 #include "csr.h"
 #include "routing_logic.h"
@@ -785,6 +786,7 @@ static int unicast_route_pair(struct routing_uft *uft,
 	return unicast_route_pair_via(uft, sd_src, sd_dst, ports, num_ports);
 }
 
+#if KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE
 static int find_nth_bit(unsigned long *mask, unsigned long len, unsigned long n)
 {
 	int bit = find_first_bit(mask, len);
@@ -800,6 +802,7 @@ static int find_nth_bit(unsigned long *mask, unsigned long len, unsigned long n)
 
 	return bit;
 }
+#endif
 
 /**
  * unicast_route_local - Route the FIDs local to the sd via the bridge ports.

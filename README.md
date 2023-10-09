@@ -23,17 +23,16 @@ This repository contains following drivers.
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
 ## Branches
-redhat/main will point to the currently supported version of RED HAT® 8.x and Vanilla 5.10 LTS.
+redhat/RELEASE_2335_23.6 will point to the currently supported version of RED HAT® 8.x and Vanilla 5.10 LTS.
 
 ## Supported OS Kernel/Distribution
   Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| REDHAT® | 8.8 | 4.18.0-477 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
-| | 8.7|   4.18.0-425 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
-| | 8.6 | 4.18.0-372 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
-| Vanilla LTS |  | 5.10  |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_vanilla.md) |
+| REDHAT® | 8.8 | 4.18.0-477 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/docs/README_redhat.md) |
+| | 8.6 | 4.18.0-372 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/docs/README_redhat.md) |
+| Vanilla LTS |  | 5.10  |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/docs/README_vanilla.md) |
 
 
 ## Product Releases:

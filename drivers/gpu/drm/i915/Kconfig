@@ -26,7 +26,7 @@ config DRM_I915
 	depends on CRC32
 	select SND_HDA_I915 if SND_HDA_CORE
 	select CEC_CORE if CEC_NOTIFIER
-	select VMAP_PFN if (BACKPORT_RHEL_KERNEL_8_5 || BACKPORT_RHEL_KERNEL_8_6)
+	depends on VMAP_PFN
 	depends on AUXILIARY_BUS || MFD_CORE
 	depends on MTD
 	help
