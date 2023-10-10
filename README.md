@@ -36,4 +36,22 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 | Vanilla Kernel (5.10 LTS)       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_vanilla.md)| Yes | No |
 
 ## Product Releases:
-Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
+
+Two types of release streams are available:
+
+1. Production/LTS release:
+   - Use Production/LTS releases for stability. Intel recommends production streams for most uses. Features, hardware support, major OS version support, etc. available  at launch remain locked. Targeted fixes for critical bugs/security issues will be provided through the lifetime of the release. New OS minor version support will be provided with updates.
+2. Rolling Stable Releases:
+   - Use Rolling Stable releases for early access to new features/new hardware. Rolling updates include a mix of feature changes and bug/security fixes. Risks of new bugs and regressions are higher for rolling stable than for production. Customers must install the next release for any updates, including bug fixes. Major and minor OS version support are locked.
+
+
+## Active Production release:
+
+| Release | Branch| Tag|
+|---    |---    |--- |
+| 2328.38:update released 20230929 | backport |[I915_23WW39.5_682.38_23.6.37_230425.49](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)|
+| | redhat | [RHEL88_23WW39.5_682.38_23.6.37_230425.47](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md)|
+
+Please select appropriate tag for a praticular branch based on the supported OS table [Supported OS Distributions](#supported-os-distributions)
+
+Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html) for more details.
