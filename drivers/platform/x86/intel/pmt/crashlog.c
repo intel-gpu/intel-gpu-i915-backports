@@ -19,6 +19,10 @@
 
 #include "class.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+#include <backport/bp_module_version.h>
+#endif
+
 /* Crashlog discovery header types */
 #define CRASH_TYPE_OOBMSM	1
 
@@ -328,3 +332,6 @@ module_exit(pmt_crashlog_exit);
 MODULE_AUTHOR("Alexander Duyck <alexander.h.duyck@linux.intel.com>");
 MODULE_DESCRIPTION("Intel PMT Crashlog driver");
 MODULE_LICENSE("GPL v2");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
