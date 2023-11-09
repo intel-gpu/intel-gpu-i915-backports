@@ -60,7 +60,7 @@ static int __init dmabuf_backport_init(void)
 	sync_debugfs_init();
 #endif
 	dma_buf_init();
-#if !IS_ENABLED(CPTCFG_DMABUF_HEAPS)
+#if IS_ENABLED(CPTCFG_DMABUF_HEAPS)
 	dma_heap_init();
 #endif
 
