@@ -2,6 +2,16 @@
 menu "DMABUF options"
 	depends on BUILD_DMABUF_I915_MEI || ONLY_DMABUF
 
+config DMA_SHARED_BUFFER
+	bool
+	default y
+	depends on IRQ_WORK
+	help
+	  This option enables the framework for buffer-sharing between
+	  multiple drivers. A buffer is associated with a file using driver
+	  APIs extension; the file's descriptor can then be passed on to other
+	  driver.
+
 config SYNC_FILE
 	bool "Explicit Synchronization Framework"
 	default n
