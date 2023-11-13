@@ -73,6 +73,18 @@ struct i915_ext_attr {
 	store i915_store;
 };
 
+#define I915_DEVICE_ATTR_RO(_name, _show) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show, NULL}
+
+#define I915_DEVICE_ATTR_WO(_name, _store) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0200, NULL, i915_sysfs_store), NULL, _store}
+
+#define I915_DEVICE_ATTR_RW(_name, _mode, _show, _store) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store),  _show, _store}
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 /*Introduced kobj attributes to adopt to access sysnode under <dev>/gt/gt<i>/ */
 
@@ -248,19 +260,6 @@ static ssize_t media_rc6_residency_ms_show(struct device *dev,
 
 	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6_residency);
 }
-
-#define I915_DEVICE_ATTR_RO(_name, _show) \
-	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show, NULL}
-
-#define I915_DEVICE_ATTR_WO(_name, _store) \
-	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0200, NULL, i915_sysfs_store), NULL, _store}
-
-
-#define I915_DEVICE_ATTR_RW(_name, _mode, _show, _store) \
-	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store),  _show, _store}
 
 /* sysfs dual-location rc6 files under directories <dev>/power/ and <dev>/gt/gt<i>/ */
 
@@ -1543,6 +1542,39 @@ static const struct attribute *media_perf_power_attrs[] = {
 	NULL
 };
 
+static ssize_t throttle_reason_thermal_swing_show(struct device *dev,
+						  struct device_attribute *attr,
+						  char *buff)
+{
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	struct kobject *kobj = &dev->kobj;
+#endif
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	u32 en8 = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, PVC_CR_RMID_ENERGY_8);
+	u32 en9 = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, PVC_CR_RMID_ENERGY_9);
+#else
+	u32 en8 = _with_pm_intel_dev_read(dev, attr, PVC_CR_RMID_ENERGY_8);
+	u32 en9 = _with_pm_intel_dev_read(dev, attr, PVC_CR_RMID_ENERGY_9);
+#endif
+
+	/*
+	 * Whenever these counters are out of sync, thermal swing throttling
+	 * is active
+	 */
+	bool thermal_swing = en8 - en9;
+
+	return scnprintf(buff, PAGE_SIZE, "%u\n", thermal_swing);
+}
+
+static I915_DEVICE_ATTR_RO(throttle_reason_thermal_swing,
+			   throttle_reason_thermal_swing_show);
+
+static const struct attribute *pvc_thermal_attrs[] = {
+	&dev_attr_throttle_reason_thermal_swing.attr.attr,
+	NULL
+};
+
 static ssize_t sys_pwr_balance_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
@@ -1778,6 +1810,10 @@ static int intel_sysfs_rps_init_gt(struct intel_gt *gt, struct kobject *kobj)
 
 	if (IS_PONTEVECCHIO(gt->i915)) {
 #if IS_ENABLED(CONFIG_PM)
+		ret = sysfs_create_files(kobj, pvc_thermal_attrs);
+		if (ret)
+			return ret;
+
 		ret = sysfs_create_files(kobj, pvc_perf_power_attrs);
 		if (ret)
 			return ret;

@@ -81,9 +81,9 @@ Example:
     Adds OS kernel version as part of dkms pacakge name.
 
 ```
-$make i915dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
+$make dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
 Example:
-        $make i915dkmsrpm-pkg OS_DISTRIBUTION=RHEL_8.8
+        $make dkmsrpm-pkg OS_DISTRIBUTION=RHEL_8.8
       
        Generated package name :
 		intel-dmabuf-dkms-1.23.6.24.230425.33.4.18.0-477.13.1-71.x86_64.rpm
@@ -95,10 +95,11 @@ $make dkms-pkg-help
 
 Generated outout:
    DKMS Targets:
-    i915dkmsrpm-pkg  -  Build DKMS rpm package
+    dkmsrpm-pkg  -  Build DKMS rpm package
    
    ##### List of RPM supported osv kernel versions #####
    RHEL_8.8
+   RHEL_8.7
    RHEL_8.6
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
@@ -120,7 +121,7 @@ Exmaple:
 ## Installation
 
 ```
-$sudo rpm -ivh intel-i915*.rpm
+$sudo rpm -ivh intel-*.rpm
 ### Reboot the device after installation of all packages.
 $sudo reboot
 ```

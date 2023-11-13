@@ -301,6 +301,7 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 	struct mei_aux_device *adev;
 	struct auxiliary_device *aux_dev;
 	const struct gsc_def *def;
+	bool forcewake_needed = false;
 #else
 	const struct mfd_cell *cells;
 	struct mfd_cell cell;
@@ -309,7 +310,6 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 #endif
 	struct intel_gsc_intf *intf = &gsc->intf[intf_id];
 	bool use_polling = false;
-	bool forcewake_needed = false;
 	int ret;
 
 	intf->irq = -1;

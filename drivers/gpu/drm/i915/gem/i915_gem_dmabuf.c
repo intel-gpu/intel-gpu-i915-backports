@@ -50,6 +50,37 @@ static void unmap_sg(struct device *dev,
 	}
 }
 
+/*
+ * Objects may not have any pages.  Pinning is the usual method to allocate
+ * the backing store, however dma-buf would like to avoid pinning.  Since
+ * the caller holds the dma-resv, go straight to _get_pages.
+ */
+static int check_get_pages(struct drm_i915_gem_object *obj)
+{
+	int ret = 0;
+
+	if (i915_gem_object_has_segments(obj)) {
+		struct drm_i915_gem_object *sobj;
+
+		for_each_object_segment(sobj, obj) {
+			if (!i915_gem_object_has_pages(sobj))
+				ret = ____i915_gem_object_get_pages(sobj);
+			if (ret)
+				break;
+		}
+	} else {
+		if (!i915_gem_object_has_pages(obj)) {
+			ret = ____i915_gem_object_get_pages(obj);
+
+			if (!ret && obj->pair)
+				if (!i915_gem_object_has_pages(obj->pair))
+					ret = ____i915_gem_object_get_pages(obj->pair);
+		}
+	}
+
+	return ret;
+}
+
 static struct sg_table *
 i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 			  enum dma_data_direction map_dir)
@@ -59,6 +90,10 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 	struct sg_table *sgt;
 	unsigned int nents;
 	int ret;
+
+	ret = check_get_pages(obj);
+	if (ret)
+		goto err;
 
 	/*
 	 * Make a copy of the object's sgt, so that we can make an independent
@@ -109,6 +144,7 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 		for (src = obj->mm.pages->sgl; src; src = __sg_next(src)) {
 			dma_addr_t addr, len;
 
+			GEM_BUG_ON(!dst);
 			sg_set_page(dst, sg_page(src), src->length, 0);
 
 			if (map_dir == DMA_NONE) {
@@ -201,20 +237,15 @@ static void i915_gem_dmabuf_vunmap(struct dma_buf *dma_buf,
 	i915_gem_object_unpin_map(obj);
 }
 
-/**
- * i915_gem_dmabuf_update_vma - Setup VMA information for exported LMEM
- * objects
- * @obj: valid LMEM object
- * @vma: va;od vma
- *
- * NOTE: on success, the final _object_put() will be done by the VMA
- * vm_close() callback.
- */
-static int i915_gem_dmabuf_update_vma(struct drm_i915_gem_object *obj,
-				      struct vm_area_struct *vma)
+static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
+				struct vm_area_struct *vma)
 {
+	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
 	struct i915_mmap_offset *mmo;
 	int err;
+
+	if (obj->base.size < vma->vm_end - vma->vm_start)
+		return -EINVAL;
 
 	i915_gem_object_get(obj);
 	mmo = i915_gem_mmap_offset_attach(obj, I915_MMAP_TYPE_WC, NULL);
@@ -232,32 +263,6 @@ static int i915_gem_dmabuf_update_vma(struct drm_i915_gem_object *obj,
 out:
 	i915_gem_object_put(obj);
 	return err;
-}
-
-static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
-				struct vm_area_struct *vma)
-{
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
-	int ret;
-
-	if (obj->base.size < vma->vm_end - vma->vm_start)
-		return -EINVAL;
-
-	/* shmem */
-	if (obj->base.filp) {
-		ret = call_mmap(obj->base.filp, vma);
-		if (ret)
-			return ret;
-
-		vma_set_file(vma, obj->base.filp);
-
-		return 0;
-	}
-
-	if (i915_gem_object_is_lmem(obj))
-		return i915_gem_dmabuf_update_vma(obj, vma);
-
-	return -ENODEV;
 }
 
 static int i915_gem_begin_cpu_access(struct dma_buf *dma_buf, enum dma_data_direction direction)
@@ -377,6 +382,53 @@ static int object_to_attachment_p2p_distance(struct drm_i915_gem_object *obj,
 	return i915_p2p_distance(to_i915(obj->base.dev), attach->dev);
 }
 
+static int i915_gem_dmabuf_pin(struct dma_buf_attachment *attach)
+{
+	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(attach->dmabuf);
+	int err = 0;
+
+	if (i915_gem_object_has_segments(obj)) {
+		for_each_object_segment(sobj, obj) {
+			struct rb_node *node;
+
+			err = i915_gem_object_pin_pages(sobj);
+			if (!err)
+				continue;
+
+			for (node = rb_prev(&sobj->segment_node);
+			     node; node = rb_prev(node)) {
+				sobj = rb_entry(node, typeof(*sobj),
+						segment_node);
+				i915_gem_object_unpin_pages(sobj);
+			}
+			break;
+		}
+	} else {
+		err = i915_gem_object_pin_pages(obj);
+		if (!err && obj->pair) {
+			err = i915_gem_object_pin_pages(obj->pair);
+			if (err)
+				i915_gem_object_unpin_pages(obj);
+		}
+	}
+
+	return err;
+}
+
+static void i915_gem_dmabuf_unpin(struct dma_buf_attachment *attach)
+{
+	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(attach->dmabuf);
+
+	if (i915_gem_object_has_segments(obj)) {
+		for_each_object_segment(sobj, obj)
+			i915_gem_object_unpin_pages(sobj);
+	} else {
+		if (obj->pair)
+			i915_gem_object_unpin_pages(obj->pair);
+		i915_gem_object_unpin_pages(obj);
+	}
+}
+
 /*
  * Order of communication path is
  *    fabric
@@ -387,9 +439,6 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 				  struct dma_buf_attachment *attach)
 {
 	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(dmabuf);
-	struct intel_gt *gt = obj->mm.region.mem->gt;
-	enum intel_engine_id id = gt->rsvd_bcs;
-	struct intel_context *ce = gt->engine[id]->blitter_context;
 	struct i915_gem_ww_ctx ww;
 	int p2p_distance;
 	int fabric;
@@ -407,7 +456,7 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 
 	trace_i915_dma_buf_attach(obj, fabric, p2p_distance);
 
-	pvc_wa_disallow_rc6(gt->i915);
+	pvc_wa_disallow_rc6(to_i915(obj->base.dev));
 	for_i915_gem_ww(&ww, err, true) {
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
@@ -439,7 +488,7 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 						break;
 					}
 
-					err = i915_gem_object_migrate(sobj, &ww, ce,
+					err = i915_gem_object_migrate(sobj,
 								      INTEL_REGION_SMEM,
 								      false);
 					if (err)
@@ -447,36 +496,10 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 				}
 			} else {
 				GEM_BUG_ON(obj->pair);
-				err = i915_gem_object_migrate(obj, &ww, ce,
-							      INTEL_REGION_SMEM, false);
+				err = i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false);
 			}
 			if (err)
 				continue;
-		}
-
-		if (i915_gem_object_has_segments(obj)) {
-			for_each_object_segment(sobj, obj) {
-				struct rb_node *node;
-
-				err = i915_gem_object_pin_pages(sobj);
-				if (!err)
-					continue;
-
-				for (node = rb_prev(&sobj->segment_node);
-				     node; node = rb_prev(node)) {
-					sobj = rb_entry(node, typeof(*sobj),
-							segment_node);
-					i915_gem_object_unpin_pages(sobj);
-				}
-				break;
-			}
-		} else {
-			err = i915_gem_object_pin_pages(obj);
-			if (!err && obj->pair) {
-				err = i915_gem_object_pin_pages(obj->pair);
-				if (err)
-					i915_gem_object_unpin_pages(obj);
-			}
 		}
 	}
 
@@ -486,17 +509,8 @@ static int i915_gem_dmabuf_attach(struct dma_buf *dmabuf,
 static void i915_gem_dmabuf_detach(struct dma_buf *dmabuf,
 				   struct dma_buf_attachment *attach)
 {
-	struct drm_i915_gem_object *sobj, *obj = dma_buf_to_obj(dmabuf);
+	struct drm_i915_gem_object *obj = dma_buf_to_obj(dmabuf);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-
-	if (i915_gem_object_has_segments(obj)) {
-		for_each_object_segment(sobj, obj)
-			i915_gem_object_unpin_pages(sobj);
-	} else {
-		if (obj->pair)
-			i915_gem_object_unpin_pages(obj->pair);
-		i915_gem_object_unpin_pages(obj);
-	}
 
 	pvc_wa_allow_rc6(i915);
 }
@@ -512,12 +526,17 @@ static const struct dma_buf_ops i915_dmabuf_ops =  {
 	.vunmap = i915_gem_dmabuf_vunmap,
 	.begin_cpu_access = i915_gem_begin_cpu_access,
 	.end_cpu_access = i915_gem_end_cpu_access,
+	.pin = i915_gem_dmabuf_pin,
+	.unpin = i915_gem_dmabuf_unpin,
 };
 
 struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 {
 	struct drm_i915_gem_object *obj = to_intel_bo(gem_obj);
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+	struct i915_gem_ww_ctx ww;
+	struct dma_buf *dmabuf = NULL;
+	int err;
 
 	if (obj->vm) {
 		drm_dbg(obj->base.dev,
@@ -525,21 +544,58 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 		return ERR_PTR(-EINVAL);
 	}
 
-	exp_info.ops = &i915_dmabuf_ops;
-	exp_info.size = gem_obj->size;
-	if (obj->pair)
-		exp_info.size += obj->pair->base.size;
-	exp_info.flags = flags;
-	exp_info.priv = gem_obj;
-	exp_info.resv = obj->base.resv;
+	/*
+	 * Hold the object lock so the EPERM check below is not circumvented
+	 * by concurrent prime_export and vm_madvise usage.
+	 */
+	for_i915_gem_ww(&ww, err, true) {
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
 
-	if (obj->ops->dmabuf_export) {
-		int ret = obj->ops->dmabuf_export(obj);
-		if (ret)
-			return ERR_PTR(ret);
+		/*
+		 * We don't allow exporting BOs if LMEM + SMEM placement and
+		 * the ATOMIC_SYSTEM hint is set. The complexity of supporting
+		 * migration with multi-device atomics has not been solved.
+		 */
+		if (i915_gem_object_allows_atomic_system(obj) &&
+		    obj->memory_mask & REGION_LMEM &&
+		    obj->memory_mask & REGION_SMEM) {
+			err = -EPERM;
+			continue;
+		}
+
+		exp_info.ops = &i915_dmabuf_ops;
+		exp_info.size = gem_obj->size;
+		if (obj->pair)
+			exp_info.size += obj->pair->base.size;
+		exp_info.flags = flags;
+		exp_info.priv = gem_obj;
+		exp_info.resv = obj->base.resv;
+
+		if (obj->ops->dmabuf_export) {
+			err = obj->ops->dmabuf_export(obj);
+			if (err)
+				continue;
+		}
+
+		dmabuf = drm_gem_dmabuf_export(gem_obj->dev, &exp_info);
+		/*
+		 * gem_obj->dma_buf is set in the caller upon return, but we
+		 * set here with the object lock held, so that the check for
+		 * gem_object_is_exported() in __i915_gem_object_set_hint()
+		 * correctly sees if BO is exported or not.
+		 */
+		if (!IS_ERR(dmabuf))
+			gem_obj->dma_buf = dmabuf;
 	}
 
-	return drm_gem_dmabuf_export(gem_obj->dev, &exp_info);
+	if (err)
+		dmabuf =  ERR_PTR(err);
+	/* not possible, placed here so static checker doesn't complain */
+	GEM_BUG_ON(!dmabuf);
+
+	return dmabuf;
 }
 
 /*
@@ -669,7 +725,7 @@ static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 }
 
 static int i915_gem_object_put_pages_dmabuf(struct drm_i915_gem_object *obj,
-					     struct sg_table *sgt)
+					     struct sg_table *pages)
 {
 	if (i915_gem_object_has_fabric(obj)) {
 		struct drm_i915_gem_object *export;
@@ -679,14 +735,13 @@ static int i915_gem_object_put_pages_dmabuf(struct drm_i915_gem_object *obj,
 		intel_iaf_mapping_put(to_i915(obj->base.dev));
 
 		i915_gem_object_clear_fabric(obj);
-		sg_free_table(sgt);
-		kfree(sgt);
+		sg_free_table(pages);
+		kfree(pages);
 		return 0;
 	}
 
-	dma_buf_unmap_attachment(obj->base.import_attach, sgt,
+	dma_buf_unmap_attachment(obj->base.import_attach, pages,
 				 DMA_BIDIRECTIONAL);
-
 	return 0;
 }
 
@@ -694,6 +749,38 @@ static const struct drm_i915_gem_object_ops i915_gem_object_dmabuf_ops = {
 	.name = "i915_gem_object_dmabuf",
 	.get_pages = i915_gem_object_get_pages_dmabuf,
 	.put_pages = i915_gem_object_put_pages_dmabuf,
+};
+
+/*
+ * The exporter has moved or evicted its pages associatd with this dma-buf.
+ * As the importer, release any mappings that have been done on this imported
+ * buffer.
+ *
+ * NOTE: the exporter is calling this function while holding the dma-resv
+ *
+ */
+static void i915_dmabuf_move_notify(struct dma_buf_attachment *attach)
+{
+	struct drm_i915_gem_object *obj = attach->importer_priv;
+
+	if (!obj)
+		return;
+
+	GEM_WARN_ON(i915_gem_object_has_segments(obj));
+	GEM_WARN_ON(obj->pair);
+
+	i915_gem_object_wait(obj, 0, MAX_SCHEDULE_TIMEOUT);
+
+	if (i915_gem_object_unbind(obj, NULL, I915_GEM_OBJECT_UNBIND_ACTIVE |
+				   I915_GEM_OBJECT_UNBIND_BARRIER) == 0)
+		__i915_gem_object_put_pages(obj);
+
+	GEM_WARN_ON(i915_gem_object_has_pages(obj));
+}
+
+static const struct dma_buf_attach_ops i915_dmabuf_attach_ops = {
+	.allow_peer2peer = true,
+	.move_notify = i915_dmabuf_move_notify,
 };
 
 struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
@@ -741,7 +828,8 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	obj->write_domain = 0;
 
 	/* and attach the object */
-	attach = dma_buf_dynamic_attach(dma_buf, dev->dev, NULL, obj);
+	attach = dma_buf_dynamic_attach(dma_buf, dev->dev,
+					&i915_dmabuf_attach_ops, obj);
 	if (IS_ERR(attach)) {
 		i915_gem_object_put(obj);
 		return ERR_CAST(attach);

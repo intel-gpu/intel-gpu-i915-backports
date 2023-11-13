@@ -1193,7 +1193,7 @@ static int igt_shrink_thp(void *arg)
 	 * sure that when later checking get_nr_swap_pages() that some random
 	 * leftover object doesn't steal the remaining swap space.
 	 */
-	i915_gem_shrink(NULL, i915, -1UL, NULL,
+	i915_gem_shrink(i915, -1UL, NULL,
 			I915_SHRINK_BOUND |
 			I915_SHRINK_UNBOUND |
 			I915_SHRINK_ACTIVE);
@@ -1206,7 +1206,7 @@ static int igt_shrink_thp(void *arg)
 	 * shmem to truncate our pages, if we have available swap.
 	 */
 	should_swap = get_nr_swap_pages() > 0;
-	i915_gem_shrink(NULL, i915, -1UL, NULL,
+	i915_gem_shrink(i915, -1UL, NULL,
 			I915_SHRINK_BOUND |
 			I915_SHRINK_UNBOUND |
 			I915_SHRINK_ACTIVE |

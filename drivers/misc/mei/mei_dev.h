@@ -558,6 +558,7 @@ struct mei_dev_timeouts {
  *
  * @forcewake_needed     : forcewake should be asserted before operations
  * @forcewake_count      : forcewake status counter
+ * @forcewake_wait_done  : wait for reset after forcewake performed
  * @gt_forcewake_init_on : the GT forcewake is on in init flow
  *
  * @ops:        : hw specific operations
@@ -664,6 +665,7 @@ struct mei_device {
 
 	bool forcewake_needed;
 	int forcewake_count;
+	bool forcewake_wait_done;
 	bool gt_forcewake_init_on;
 
 	const struct mei_hw_ops *ops;

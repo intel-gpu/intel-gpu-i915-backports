@@ -418,7 +418,7 @@ void iaf_mei_indicate_device_ok(struct fdev *dev)
 		if (err && err != -ENOENT)
 			dev_err(fdev_dev(dev), "unable to commit FW version, error %d\n", err);
 	} else {
-		if (noisy_logging_allowed())
+		if (is_fdev_registered(dev))
 			pr_info_once("FW version not automatically committed\n");
 	}
 }

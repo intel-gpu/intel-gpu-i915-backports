@@ -490,11 +490,16 @@ static void port_isolate(struct fsubdev *sd, struct fport *p, struct fsm_io *fio
 
 	loopback = test_bit(FPORT_ERROR_LOOPBACK, sd->next_port_status[p->lpn].errors);
 
-	if (noisy_logging_allowed())
+	if (is_fport_registered(p))
 		fport_warn(p, "isolated: neighbor 0x%016llx port %u%s\n",
 			   p->portinfo->neighbor_guid,
 			   p->portinfo->neighbor_port_number,
 			   loopback ? " (loopback)" : "");
+	else
+		fport_dbg(p, "isolated: neighbor 0x%016llx port %u%s\n",
+			  p->portinfo->neighbor_guid,
+			  p->portinfo->neighbor_port_number,
+			  loopback ? " (loopback)" : "");
 
 	return;
 
@@ -584,8 +589,10 @@ static void port_did_not_train(struct fsubdev *sd, struct fport *p, struct fsm_i
 {
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_DID_NOT_TRAIN);
 	fio->status_changed = true;
-	if (noisy_logging_allowed())
+	if (is_fport_registered(p))
 		fport_warn(p, "port failed to train in %u seconds\n", linkup_timeout);
+	else
+		fport_dbg(p, "port failed to train in %u seconds\n", linkup_timeout);
 }
 
 static void port_linkup_timedout(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
@@ -822,9 +829,11 @@ static void port_arm_or_isolate(struct fsubdev *sd, struct fport *p, struct fsm_
 
 static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	if (noisy_logging_allowed())
-		/* downed port. retry by re-init and re-arm */
+	/* downed port. retry by re-init and re-arm */
+	if (is_fport_registered(p))
 		fport_warn(p, "link went down, attempting to reconnect\n");
+	else
+		fport_dbg(p, "link went down, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -835,9 +844,11 @@ static void port_retry(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	if (noisy_logging_allowed())
-		/* port reverted to INIT. retry by re-arm */
+	/* port reverted to INIT. retry by re-arm */
+	if (is_fport_registered(p))
 		fport_warn(p, "link reinitialized itself, attempting to reconnect\n");
+	else
+		fport_dbg(p, "link reinitialized itself, attempting to reconnect\n");
 
 	set_health_failed(&sd->next_port_status[p->lpn], FPORT_ERROR_LINK_DOWN);
 	fio->status_changed = true;
@@ -847,8 +858,10 @@ static void port_rearm(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 
 static void port_retry_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	if (noisy_logging_allowed())
+	if (is_fport_registered(p))
 		fport_warn(p, "active link went down...\n");
+	else
+		fport_dbg(p, "active link went down...\n");
 
 	port_retry(sd, p, fio);
 	fio->routing_changed = true;
@@ -856,8 +869,10 @@ static void port_retry_active(struct fsubdev *sd, struct fport *p, struct fsm_io
 
 static void port_rearm_active(struct fsubdev *sd, struct fport *p, struct fsm_io *fio)
 {
-	if (noisy_logging_allowed())
+	if (is_fport_registered(p))
 		fport_warn(p, "active link reinitialized itself...\n");
+	else
+		fport_dbg(p, "active link reinitialized itself...\n");
 
 	port_rearm(sd, p, fio);
 	fio->routing_changed = true;
@@ -1100,6 +1115,11 @@ static void issue_sub_device_trap_count_work(struct work_struct *work)
 	static char *type_msg = "TYPE=PORT_CHANGE";
 	char fabric_id_msg[21];
 	char sd_index_msg[11];
+	u64 psc_trap_count = atomic64_read(&sd->psc_trap_count);
+	u64 lwd_trap_count = atomic64_read(&sd->lwd_trap_count);
+	u64 lqi_trap_count = atomic64_read(&sd->lqi_trap_count);
+	u64 qsfp_fault_trap_count = atomic64_read(&sd->qsfp_fault_trap_count);
+	u64 qsfp_present_trap_count = atomic64_read(&sd->qsfp_present_trap_count);
 	char trap_count_msg[32];
 	char psc_trap_count_msg[36];
 	char lwd_trap_count_msg[36];
@@ -1113,17 +1133,18 @@ static void issue_sub_device_trap_count_work(struct work_struct *work)
 	snprintf(fabric_id_msg, sizeof(fabric_id_msg), "FABRIC_ID=0x%x", sd->fdev->fabric_id);
 	snprintf(sd_index_msg, sizeof(sd_index_msg), "SD_INDEX=%u", sd_index(sd));
 	snprintf(trap_count_msg, sizeof(trap_count_msg), "TRAP_COUNT=%llu",
-		 (u64)atomic64_read(&sd->total_trap_count));
-	snprintf(psc_trap_count_msg, sizeof(psc_trap_count_msg), "PSC_TRAP_COUNT=%llu",
-		 (u64)atomic64_read(&sd->psc_trap_count));
-	snprintf(lwd_trap_count_msg, sizeof(lwd_trap_count_msg), "LWD_TRAP_COUNT=%llu",
-		 (u64)atomic64_read(&sd->lwd_trap_count));
-	snprintf(lqi_trap_count_msg, sizeof(lqi_trap_count_msg), "LQI_TRAP_COUNT=%llu",
-		 (u64)atomic64_read(&sd->lqi_trap_count));
+		 psc_trap_count + lwd_trap_count + lqi_trap_count +
+		 qsfp_fault_trap_count + qsfp_present_trap_count);
+	snprintf(psc_trap_count_msg, sizeof(psc_trap_count_msg),
+		 "PSC_TRAP_COUNT=%llu", psc_trap_count);
+	snprintf(lwd_trap_count_msg, sizeof(lwd_trap_count_msg),
+		 "LWD_TRAP_COUNT=%llu", lwd_trap_count);
+	snprintf(lqi_trap_count_msg, sizeof(lqi_trap_count_msg),
+		 "LQI_TRAP_COUNT=%llu", lqi_trap_count);
 	snprintf(qsfp_fault_trap_count_msg, sizeof(qsfp_fault_trap_count_msg),
-		 "QSFP_FAULT_TRAP_COUNT=%llu", (u64)atomic64_read(&sd->qsfp_fault_trap_count));
+		 "QSFP_FAULT_TRAP_COUNT=%llu", qsfp_fault_trap_count);
 	snprintf(qsfp_present_trap_count_msg, sizeof(qsfp_present_trap_count_msg),
-		 "QSFP_PRESENT_TRAP_COUNT=%llu", (u64)atomic64_read(&sd->qsfp_present_trap_count));
+		 "QSFP_PRESENT_TRAP_COUNT=%llu", qsfp_present_trap_count);
 
 	kobject_uevent_env(&sd->fdev->pdev->dev.kobj, KOBJ_CHANGE, envp);
 }
@@ -1253,7 +1274,6 @@ static void update_ports_work(struct work_struct *work)
 		if (err)
 			sd_err(sd, "failed to ACK PSC trap\n");
 		atomic64_inc(&sd->psc_trap_count);
-		atomic64_inc(&sd->total_trap_count);
 	}
 
 	if (test_and_clear_bit(LWD_TRAP, sd->pm_triggers)) {
@@ -1262,7 +1282,6 @@ static void update_ports_work(struct work_struct *work)
 		if (err)
 			sd_err(sd, "failed to ACK LWD trap\n");
 		atomic64_inc(&sd->lwd_trap_count);
-		atomic64_inc(&sd->total_trap_count);
 	}
 
 	if (test_and_clear_bit(LQI_TRAP, sd->pm_triggers)) {
@@ -1271,7 +1290,6 @@ static void update_ports_work(struct work_struct *work)
 		if (err)
 			sd_err(sd, "failed to ACK LQI trap\n");
 		atomic64_inc(&sd->lqi_trap_count);
-		atomic64_inc(&sd->total_trap_count);
 	}
 
 	if (test_and_clear_bit(QSFP_PRESENCE_TRAP, sd->pm_triggers)) {
@@ -1283,7 +1301,6 @@ static void update_ports_work(struct work_struct *work)
 		 * if (err)
 		 *	sd_err(sd, "failed to ACK QSFP presence trap\n");
 		 * atomic64_inc(&sd->qsfp_present_trap_count);
-		 * atomic64_inc(&sd->total_trap_count);
 		 */
 	}
 
@@ -1291,9 +1308,8 @@ static void update_ports_work(struct work_struct *work)
 		qsfp_change = true;
 		err = ops_qsfpmgr_fault_trap_ack(sd, false);
 		if (err)
-			sd_err(sd, "failed to ACK QSFP fault trap\n");
+			sd_err(sd, "failed to ACK qsfp fault trap\n");
 		atomic64_inc(&sd->qsfp_fault_trap_count);
-		atomic64_inc(&sd->total_trap_count);
 	}
 
 	if (test_and_clear_bit(RESCAN_EVENT, sd->pm_triggers)) {
@@ -1546,16 +1562,21 @@ static int initial_port_state(struct fsubdev *sd)
 
 			create_fabric_port_debugfs_files(sd, p);
 
-			if (sd->txcal[lpn]) {
-				err = ops_tx_dcc_margin_param_set(sd, lpn, sd->txcal[lpn], true);
-				if (err) {
-					sd_err(sd, "p.%u: TX calibration write failed\n", lpn);
-					return err;
+			if (sd->fdev->psc.txcal) {
+				if (sd->txcal[lpn]) {
+					err = ops_tx_dcc_margin_param_set(sd, lpn, sd->txcal[lpn],
+									  true);
+					if (err) {
+						sd_err(sd, "p.%u: TX calibration write failed\n",
+						       lpn);
+						return err;
+					}
+				} else if (type != IAF_FW_PORT_TYPE_DISCONNECTED &&
+					type != IAF_FW_PORT_TYPE_UNKNOWN) {
+					if (is_fdev_registered(sd->fdev))
+						sd_warn(sd, "p.%u: missing TX calibration data\n",
+							lpn);
 				}
-			} else if (type != IAF_FW_PORT_TYPE_DISCONNECTED &&
-				   type != IAF_FW_PORT_TYPE_UNKNOWN) {
-				if (noisy_logging_allowed())
-					sd_warn(sd, "p.%u: missing TX calibration data\n", lpn);
 			}
 
 			break;
@@ -1588,7 +1609,7 @@ static int initial_port_state(struct fsubdev *sd)
 	return 0;
 }
 
-void initialize_fports(struct fsubdev *sd)
+int initialize_fports(struct fsubdev *sd)
 {
 	struct fdev *dev = sd->fdev;
 	int err;
@@ -1603,7 +1624,6 @@ void initialize_fports(struct fsubdev *sd)
 	sd->ok_to_schedule_pm_work = true;
 	mutex_unlock(&sd->pm_work_lock);
 
-	atomic64_set(&sd->total_trap_count, 0);
 	atomic64_set(&sd->psc_trap_count, 0);
 	atomic64_set(&sd->lwd_trap_count, 0);
 	atomic64_set(&sd->lqi_trap_count, 0);
@@ -1656,11 +1676,12 @@ void initialize_fports(struct fsubdev *sd)
 
 	signal_pm_thread(sd, INIT_EVENT);
 
-	return;
+	return 0;
 
 init_failed:
 
-	sd_err(sd, "Could not initialize ports\n");
+	sd_err(sd, "Could not initialize ports: %d\n", err);
+	return err;
 }
 
 void destroy_fports(struct fsubdev *sd)

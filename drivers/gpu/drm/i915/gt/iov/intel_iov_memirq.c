@@ -7,10 +7,10 @@
 #include "intel_iov_memirq.h"
 #include "intel_iov_reg.h"
 #include "intel_iov_utils.h"
-#include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_breadcrumbs.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_irq.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/uc/abi/guc_actions_vf_abi.h"
 
@@ -51,6 +51,7 @@ static int vf_create_memirq_data(struct intel_iov *iov)
 	struct drm_i915_private *i915 = iov_to_i915(iov);
 	struct intel_gt *gt = iov_to_gt(iov);
 	struct drm_i915_gem_object *obj;
+	struct intel_memory_region *mem;
 	void *vaddr;
 	int err;
 	u32 *enable_vector;
@@ -59,7 +60,10 @@ static int vf_create_memirq_data(struct intel_iov *iov)
 	GEM_BUG_ON(!HAS_MEMORY_IRQ_STATUS(i915));
 	GEM_BUG_ON(iov->vf.irq.obj);
 
-	obj = i915_gem_object_create_shmem(i915, SZ_4K);
+	mem = i915->mm.regions[INTEL_REGION_SMEM];
+	obj = i915_gem_object_create_region(mem, SZ_4K,
+					    I915_BO_ALLOC_VOLATILE |
+					    I915_BO_CPU_CLEAR);
 	if (IS_ERR(obj)) {
 		err = PTR_ERR(obj);
 		goto out;
@@ -255,8 +259,7 @@ static void __engine_mem_irq_handler(struct intel_engine_cs *engine, u8 *status)
 
 	if (READ_ONCE(status[ilog2(GT_RENDER_USER_INTERRUPT)]) == 0xFF) {
 		WRITE_ONCE(status[ilog2(GT_RENDER_USER_INTERRUPT)], 0x00);
-		intel_engine_signal_breadcrumbs(engine);
-		tasklet_hi_schedule(&engine->sched_engine->tasklet);
+		intel_engine_cs_irq(engine, -1);
 	}
 }
 

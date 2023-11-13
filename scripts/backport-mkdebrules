@@ -7,28 +7,36 @@ PKG_NAME="intel-i915-prerelease"
 PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
-DEP_PKG_NAME=""
 PKG_TYPE=""
 KER_VER=""
+KREL=""
+KLIB_BUILD=""
+KLIB_BUILD_BASE=""
+KLIB_BUILD_DIR=""
+KLIB_BUILD_DIR_BASE=""
 BUILD_TYPE=""
+UTS_RELEASE=""
+
 NP=`nproc`
 NPC=$(( $NP > 64 ? 64 : $NP ))
 
 helpFunction()
 {
 	echo ""
-	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -z Package Type -k KLIB -s buildversion"
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -z Package Type -k KLIB_BUILD -a uts release -s buildversion -t custom kernel id"
 	echo -e "\t-n packagename"
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
 	echo -e "\t-z Package Type : binary/dkms"
-	echo -e "\t-k KLIB Path"
+	echo -e "\t-k KLIB_BUILD Path"
+	echo -e "\t-a UTS RELEASE"
 	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:z:k:s:" opt
+while getopts "n:v:r:p:z:k:s:a:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
@@ -46,13 +54,27 @@ do
 			fi
 			;;
 		k )
-			 KLIB="$OPTARG"
-			 KER_VER=`basename $KLIB`
+			 KLIB_BUILD="$OPTARG"
+			 KLIB_BUILD_BASE=`basename $KLIB_BUILD`
+			 KLIB_BUILD_DIR=`dirname $KLIB_BUILD`
+			 KLIB_BUILD_DIR_BASE=`basename $KLIB_BUILD_DIR`
 			 ;;
 		s) BUILD_TYPE="$OPTARG" ;;
+		a ) UTS_RELEASE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		?) helpFunction ;; # Print helpFunction
 	esac
 done
+
+if [ "$KLIB_BUILD_BASE" = "build" ]; then
+	KREL=$KLIB_BUILD_DIR_BASE
+	ST_HDR=
+	LC_HDR=DEL
+else
+	KREL=$UTS_RELEASE
+	ST_HDR=DEL
+	LC_HDR=
+fi
 
 sed -e '/^DEL/d' -e 's/^\t//' <<EOF
 	#!/usr/bin/make -f
@@ -60,7 +82,7 @@ sed -e '/^DEL/d' -e 's/^\t//' <<EOF
 	# export DH_VERBOSE = 1
 	include /usr/share/dpkg/pkg-info.mk
 
-	_krel=$KER_VER
+	_krel=$KREL
 	tmpdir=debian/$PKG_NAME
 
 	BACKPORT_PACKAGE_NAME=$PKG_NAME
@@ -75,9 +97,11 @@ $DKMS		dh \$@ --with dkms
 $BIN		dh \$@
 
 $BIN	build:
-$BIN		cp defconfigs/i915 .config;
-$BIN		\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel) olddefconfig;
-$BIN		\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel)
+$BIN		cp defconfigs/drm .config;
+$BIN$ST_HDR	\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel) olddefconfig;
+$BIN$ST_HDR	\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel) BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
+$BIN$LC_HDR	\$(MAKE) -j$NPC KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD olddefconfig
+$BIN$LC_HDR     \$(MAKE) -j$NPC KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
 
 $BIN	clean:
 $BIN		\$(MAKE) clean

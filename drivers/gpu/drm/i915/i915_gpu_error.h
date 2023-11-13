@@ -201,10 +201,6 @@ intel_eu_attentions_count(const struct intel_eu_attentions *a)
 	return bitmap_weight((void *)a->att, a->size * BITS_PER_BYTE);
 }
 
-void intel_eu_attentions_read(struct intel_gt *gt,
-			      struct intel_eu_attentions *a,
-			      const unsigned int settle_time_ms);
-
 struct intel_gt_coredump {
 	const struct intel_gt *_gt;
 	bool awake;
@@ -442,6 +438,10 @@ static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
 	kref_put(&uuid_res->ref, __i915_uuid_free);
 }
 
+void intel_eu_attentions_read(struct intel_gt *gt,
+			      struct intel_eu_attentions *a,
+			      const unsigned int settle_time_ms);
+
 #else
 
 __printf(2, 3)
@@ -461,7 +461,7 @@ i915_gpu_coredump_alloc(struct drm_i915_private *i915, gfp_t gfp)
 	return NULL;
 }
 
-struct i915_gpu_coredump *
+static inline struct i915_gpu_coredump *
 i915_gpu_coredump_create_for_engine(struct intel_engine_cs *engine, gfp_t gfp)
 {
 	return NULL;
@@ -559,6 +559,13 @@ static inline void i915_uuid_get(struct i915_uuid_resource *uuid_res)
 }
 
 static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
+{
+}
+
+static inline void
+intel_eu_attentions_read(struct intel_gt *gt,
+			 struct intel_eu_attentions *a,
+			 const unsigned int settle_time_ms)
 {
 }
 

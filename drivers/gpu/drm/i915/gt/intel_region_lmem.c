@@ -152,8 +152,7 @@ static inline bool lmembar_is_igpu_stolen(struct drm_i915_private *i915)
 	if (regions & REGION_LMEM)
 		return false;
 
-	drm_WARN_ON(&i915->drm, (regions & REGION_STOLEN_LMEM) == 0);
-
+	drm_WARN_ON(&i915->drm, (regions & REGION_STOLEN) == 0);
 	return true;
 }
 

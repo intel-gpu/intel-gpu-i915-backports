@@ -432,6 +432,7 @@ i915_gem_userptr_release(struct drm_i915_gem_object *obj)
 struct userptr_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *obj;
+	struct sg_table *pages;
 };
 
 struct userptr_chunk {
@@ -444,11 +445,22 @@ struct userptr_chunk {
 static int __userptr_chunk(struct mmu_interval_notifier *notifier,
 			   struct scatterlist *sg,
 			   unsigned long start,
-			   unsigned long max)
+			   unsigned long max,
+			   unsigned long flags)
 {
 	struct page *pages[MAX_STACK_ALLOC / sizeof(struct page *)];
 	unsigned long count = 0;
 	int err;
+
+	/*
+	 * Currently when we break out of multi-threaded mode (FOLL_FAST_ONLY)
+	 * we completely replay in single-threaded mode, clearing any
+	 * in-progress chunking.
+	 *
+	 * A possible optimization here would be to keep the chunking that has
+	 * already happened to this point and only replay the pages which
+	 * haven't yet been pinned. For now, take the brute force approach.
+	 */
 
 #ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
 	use_mm(notifier->mm);
@@ -459,19 +471,16 @@ static int __userptr_chunk(struct mmu_interval_notifier *notifier,
 		unsigned long addr = start + (count << PAGE_SHIFT);
 		int n = min_t(int, max - count, ARRAY_SIZE(pages));
 
-#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
-		err = get_user_pages_fast(addr & PAGE_MASK, n,
-					  addr & ~PAGE_MASK,
-					  pages);
-#else
-		err = pin_user_pages_fast(addr & PAGE_MASK, n,
-					  addr & ~PAGE_MASK,
-					  pages);
-#endif
-		if (err < 0)
+		err = pin_user_pages_fast(addr, n, flags, pages);
+		if (err <= 0) {
+			if (flags & FOLL_FAST_ONLY)
+				err = -EAGAIN;
+			GEM_BUG_ON(err == 0);
 			goto out;
+		}
 
 		for (n = 0; n < err; n++) {
+			GEM_BUG_ON(!sg || !pages[n]);
 			sg_set_page(sg, pages[n], PAGE_SIZE, 0);
 			sg = __sg_next(sg);
 		}
@@ -499,16 +508,16 @@ static void userptr_chunk(struct work_struct *wrk)
 
 	err = __userptr_chunk(notifier,
 			      memset(chunk, 0, sizeof(*chunk)),
-			      addr, count);
+			      addr & PAGE_MASK, count,
+			      (addr & ~PAGE_MASK) | FOLL_FAST_ONLY);
 	i915_sw_fence_set_error_once(fence, err);
 	i915_sw_fence_complete(fence);
 }
 
-static void userptr_queue(struct userptr_chunk *chunk,
-			  struct workqueue_struct *wq)
+static void userptr_queue(struct userptr_chunk *chunk)
 {
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
-		queue_work(wq, &chunk->work);
+		queue_work(system_unbound_wq, &chunk->work);
 	else
 		userptr_chunk(&chunk->work);
 }
@@ -518,22 +527,19 @@ static void unpin_sg(struct sg_table *sgt)
 	struct scatterlist *sg;
 
 	for (sg = sgt->sgl; sg; sg = __sg_next(sg)) {
-		unsigned long pfn, end;
+		unsigned long pfn;
 		struct page *page;
 
 		page = sg_page(sg);
 		if (!page)
 			continue;
 
-		pfn = 0;
-		end = sg->length >> PAGE_SHIFT;
-		do {
+		for (pfn = 0; pfn < sg->length >> PAGE_SHIFT; pfn++)
 #ifdef BPM_PIN_OR_UNPIN_USER_PAGE_NOT_PRESENT
-			put_user_page(pfn_to_page(page_to_pfn(page) + pfn));
+			put_user_page(nth_page(page, pfn));
 #else
-			unpin_user_page(pfn_to_page(page_to_pfn(page) + pfn));
+			unpin_user_page(nth_page(page, pfn));
 #endif
-		} while (++pfn < end);
 
 		sg_set_page(sg, NULL, 0, 0);
 	}
@@ -543,8 +549,9 @@ static int userptr_work(struct dma_fence_work *base)
 {
 	struct userptr_work *wrk = container_of(base, typeof(*wrk), base);
 	struct drm_i915_gem_object *obj = wrk->obj;
-	struct sg_table *sgt = obj->mm.pages;
-	struct userptr_chunk *chunk = NULL;
+	unsigned long use_threads = FOLL_FAST_ONLY;
+	struct sg_table *sgt = wrk->pages;
+	struct userptr_chunk *chunk;
 	struct i915_sw_fence fence;
 	unsigned long seq, addr, n;
 	struct scatterlist *sg;
@@ -553,16 +560,17 @@ static int userptr_work(struct dma_fence_work *base)
 	addr = obj->userptr.ptr;
 	if (!i915_gem_object_is_readonly(obj))
 		addr |= FOLL_WRITE | FOLL_FORCE;
-	BUILD_BUG_ON(FOLL_WRITE & PAGE_MASK);
+	BUILD_BUG_ON((FOLL_WRITE | FOLL_FORCE) & PAGE_MASK);
 
 	if (!mmget_not_zero(obj->userptr.notifier.mm))
 		return -EFAULT;
 
 restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 	err = 0;
+	chunk = NULL;
 	i915_sw_fence_init_onstack(&fence);
 	seq = mmu_interval_read_begin(&obj->userptr.notifier);
-	for (n = 0, sg = sgt->sgl; n + SG_MAX_SINGLE_ALLOC < sgt->orig_nents;) {
+	for (n = 0, sg = sgt->sgl; use_threads && n + SG_MAX_SINGLE_ALLOC < sgt->orig_nents;) {
 		if (chunk == NULL) {
 			chunk = memset(sg, 0, sizeof(*chunk));
 
@@ -582,21 +590,30 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 		n += I915_MAX_CHAIN_ALLOC;
 		if (((addr + (n << PAGE_SHIFT) - 1) ^ chunk->addr) & SZ_4M) {
 			chunk->count += n;
-			userptr_queue(chunk, to_i915(obj->base.dev)->wq);
+			userptr_queue(chunk);
 			chunk = NULL;
 		}
+
+		if (READ_ONCE(fence.error))
+			break;
 	}
 	i915_sw_fence_commit(&fence);
 
 	/* Leaving the last chunk for ourselves */
-	if (chunk) {
+	if (READ_ONCE(fence.error)) {
+		/* Do nothing more if already in error */
+		if (chunk) {
+			memset(chunk, 0, sizeof(*chunk));
+			i915_sw_fence_complete(&fence);
+		}
+	} else if (chunk) {
 		chunk->count += sgt->orig_nents;
 		userptr_chunk(&chunk->work);
-		chunk = NULL;
 	} else {
 		err = __userptr_chunk(&obj->userptr.notifier, sg,
-				      addr + (n << PAGE_SHIFT),
-				      sgt->orig_nents - n);
+				      (addr & PAGE_MASK) + (n << PAGE_SHIFT),
+				      sgt->orig_nents - n,
+				      (addr & ~PAGE_MASK) | use_threads);
 	}
 
 	if (n) {
@@ -611,7 +628,8 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 	if (err)
 		goto err;
 
-	obj->mm.page_sizes = i915_sg_compact(sgt, i915_sg_segment_size());
+	obj->mm.page_sizes =
+		i915_sg_compact(sgt, i915_gem_sg_segment_size(obj));
 
 	if (i915_gem_object_can_bypass_llc(obj))
 		drm_clflush_sg(sgt);
@@ -620,8 +638,10 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 	if (err) {
 err:		unpin_sg(sgt);
 
-		if (err == -EAGAIN)
+		if (err == -EAGAIN) {
+			use_threads = 0;
 			goto restart;
+		}
 
 		sg_mark_end(sgt->sgl);
 		sgt->nents = 0;
@@ -697,14 +717,16 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 		err = -ENOMEM;
 		goto err_sg;
 	}
-	dma_fence_work_init(&wrk->base, &userptr_ops);
+	dma_fence_work_init(&wrk->base, &userptr_ops,
+			    to_i915(obj->base.dev)->mm.sched);
 	wrk->obj = obj;
+	wrk->pages = st;
 
 	obj->cache_dirty = false;
 	__i915_gem_object_set_pages(obj, st, PAGE_SIZE); /* placeholder */
 	atomic64_sub(obj->base.size, &obj->mm.region.mem->avail);
 
-	i915_gem_object_migrate_prepare(obj, &wrk->base.dma);
+	i915_gem_object_migrate_prepare(obj, &wrk->base.rq.fence);
 	dma_fence_work_commit(&wrk->base);
 	return 0;
 
@@ -776,7 +798,6 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 
 	sg_free_table(pages);
 	kfree(pages);
-
 	return 0;
 }
 

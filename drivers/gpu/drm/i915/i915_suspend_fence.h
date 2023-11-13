@@ -51,7 +51,7 @@ struct i915_suspend_fence {
 
 static inline bool dma_fence_is_suspend(const struct dma_fence *fence)
 {
-	return fence->ops == &sw_fence_work_ops &&
+	return fence->ops == &i915_cpu_fence_ops &&
 		test_bit(I915_SUSPEND_FENCE, &fence->flags);
 }
 

@@ -7,27 +7,32 @@ PKG_NAME="intel-i915"
 PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
-KER_VER=""
-DEP_PKG_NAME=""
+KREL=""
+KLIB_BUILD=""
+KLIB_BUILD_BASE=""
+KLIB_BUILD_DIR=""
+KLIB_BUILD_DIR_BASE=""
 DRM_CONFIG="drm"
 BUILD_TYPE=""
 CUSTOM_KERN_ID=""
+UTS_RELEASE=""
 
 helpFunction()
 {
 	echo ""
-	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion -k KLIB Path"
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion -k KLIB_BUILD Path -a uts release"
 	echo -e "\t-n packagename"
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
 	echo -e "\t-s buildversion"
-	echo -e "\t-k KLIB Path"
+	echo -e "\t-k KLIB_BUILD Path"
+	echo -e "\t-a UTS RELEASE"
 	echo -e "\t-t custom kernel id"
 	exit 1
 }
 
-while getopts "n:v:r:p:s:k:t:" opt
+while getopts "n:v:r:p:s:k:a:t:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
@@ -36,9 +41,12 @@ do
 		p ) REL_TYPE="$OPTARG" ;;
 		s ) BUILD_TYPE="$OPTARG" ;;
 		k )
-			KLIB="$OPTARG"
-			KER_VER=`basename $KLIB`
+			KLIB_BUILD="$OPTARG"
+			KLIB_BUILD_BASE=`basename $KLIB_BUILD`
+			KLIB_BUILD_DIR=`dirname $KLIB_BUILD`
+			KLIB_BUILD_DIR_BASE=`basename $KLIB_BUILD_DIR`
 			;;
+		a ) UTS_RELEASE="$OPTARG" ;;
 		t ) CUSTOM_KERN_ID="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
@@ -48,12 +56,22 @@ if [ "$BUILD_TYPE" = "sp2" ]; then
 	DRM_CONFIG="drm_disable_svm"
 fi
 
+if [ "$KLIB_BUILD_BASE" = "build" ]; then
+	KREL=$KLIB_BUILD_DIR_BASE
+	ST_HDR=
+	LC_HDR=DEL
+else
+	KREL=$UTS_RELEASE
+	ST_HDR=DEL
+	LC_HDR=
+fi
+
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	%define package_name $PKG_NAME
 	%define version $PKG_VER
 	%define release $REL_NAME
 
-	%define _krel $KER_VER
+	%define _krel $KREL
 	%define kernel_module_directory /lib/modules
 	%define kernel_module_package_moddir updates
 
@@ -87,8 +105,10 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	export YACC=bison
 	np=`nproc`
 	npc=\$(( \$np > 64 ? 64 : \$np ))
-	make KLIB=%{kernel_module_directory}/%{_krel} olddefconfig
-	make -j\$npc KLIB=%{kernel_module_directory}/%{_krel} BUILD_CONFIG=$BUILD_TYPE
+$ST_HDR make KLIB=%{kernel_module_directory}/%{_krel} olddefconfig
+$ST_HDR make -j\$npc KLIB=%{kernel_module_directory}/%{_krel} BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
+$LC_HDR make KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD olddefconfig
+$LC_HDR make -j\$npc KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
 
 	%install
 	if [ "%{buildroot}" != "/" ]; then

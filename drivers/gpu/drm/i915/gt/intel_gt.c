@@ -94,6 +94,8 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	init_llist_head(&gt->watchdog.list);
 	INIT_WORK(&gt->watchdog.work, intel_gt_watchdog_work);
 
+	mutex_init(&gt->eu_debug.lock);
+	INIT_ACTIVE_FENCE(&gt->eu_debug.fault);
 	xa_init(&gt->errors.soc);
 
 	intel_gt_init_buffer_pool(gt);
@@ -574,10 +576,16 @@ static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
 	if (ret)
 		goto err_unref;
 
+	ret = i915_vma_wait_for_bind(vma);
+	if (ret)
+		goto err_unpin;
+
 	gt->scratch = i915_vma_make_unshrinkable(vma);
 
 	return 0;
 
+err_unpin:
+	i915_vma_unpin(vma);
 err_unref:
 	i915_gem_object_put(obj);
 	return ret;
@@ -619,10 +627,16 @@ static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
 	if (err)
 		goto err_unref;
 
+	err = i915_vma_wait_for_bind(vma);
+	if (err)
+		goto err_unpin;
+
 	gt->counters.vma = i915_vma_make_unshrinkable(vma);
 	gt->counters.map = addr;
 	return 0;
 
+err_unpin:
+	i915_vma_unpin(vma);
 err_unref:
 	i915_gem_object_put(obj);
 	return err;
@@ -683,6 +697,9 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 	if (i915_ggtt_pin_for_gt(vma, NULL, 0, PIN_HIGH))
 		goto err_unref;
 
+	if (i915_vma_wait_for_bind(vma))
+		goto err_unpin;
+
 	gt->dbg = i915_vma_make_unshrinkable(vma);
 
 	drm_dbg(&i915->drm,
@@ -695,6 +712,8 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 
 	return;
 
+err_unpin:
+	i915_vma_unpin(vma);
 err_unref:
 	i915_gem_object_put(obj);
 	drm_err(&i915->drm, "Failed to init debug pages\n");
@@ -1113,9 +1132,8 @@ out_fw:
 void intel_gt_driver_remove(struct intel_gt *gt)
 {
 	intel_gt_fini_clock_frequency(gt);
-
-	i915_vma_clock_fini(&gt->vma_clock);
 	intel_flat_ppgtt_pool_fini(&gt->fpp);
+	i915_vma_clock_flush(&gt->vma_clock);
 	intel_iov_fini_hw(&gt->iov);
 
 	__intel_gt_disable(gt);
@@ -1168,6 +1186,7 @@ void intel_gt_driver_release(struct intel_gt *gt)
 	intel_gt_fini_buffer_pool(gt);
 	intel_gt_fini_hwconfig(gt);
 	intel_iov_fini(&gt->iov);
+	i915_vma_clock_fini(&gt->vma_clock);
 }
 
 void intel_gt_driver_late_release_all(struct drm_i915_private *i915)

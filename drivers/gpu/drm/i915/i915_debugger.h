@@ -17,6 +17,7 @@ struct i915_address_space;
 struct i915_vma;
 struct intel_engine_cs;
 struct intel_context;
+struct intel_gt;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 
@@ -52,11 +53,8 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 			      struct i915_vma *vma);
 void i915_debugger_vma_evict(struct i915_drm_client *client,
 			     struct i915_vma *vma);
-void i915_debugger_vma_purge(struct i915_drm_client *client,
-			     struct i915_vma *vma);
 void i915_debugger_vma_prepare(struct i915_drm_client *client,
-			       struct i915_vma *vma,
-			       u32 flags);
+			       struct i915_vma *vma);
 void i915_debugger_vma_finalize(struct i915_drm_client *client,
 				struct i915_vma *vma,
 				int error);
@@ -69,8 +67,14 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx);
 
 int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine);
 
+int i915_debugger_handle_engine_page_fault(struct intel_engine_cs *engine,
+					   struct i915_debugger_pagefault *pagefault);
+int i915_debugger_add_pagefault_list(struct intel_engine_cs *engine,
+				     struct i915_debugger_pagefault *pagefault);
+
 bool i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine);
 bool i915_debugger_active_on_context(struct intel_context *context);
+bool i915_debugger_active_on_engine(struct intel_engine_cs *engine);
 
 bool i915_debugger_context_guc_debugged(struct intel_context *context);
 
@@ -80,7 +84,7 @@ int i915_debugger_enable(struct drm_i915_private *i915, bool enable);
 int i915_debugger_allow(struct drm_i915_private *i915);
 int i915_debugger_disallow(struct drm_i915_private *i915);
 
-void i915_debugger_gpu_flush_engines(struct drm_i915_private *i915, u32 mask);
+void i915_debugger_gpu_flush_engines(struct intel_gt *gt, u32 mask);
 
 #else /* CPTCFG_DRM_I915_DEBUGGER */
 
@@ -116,14 +120,11 @@ static inline void i915_debugger_vm_destroy(struct i915_drm_client *client,
 
 static inline void i915_debugger_vma_insert(struct i915_drm_client *client,
 					    struct i915_vma *vma) { }
-static inline void i915_debugger_vma_purge(struct i915_drm_client *client,
-					   struct i915_vma *vma) { }
 static inline void i915_debugger_vma_evict(struct i915_drm_client *client,
 					   struct i915_vma *vma) { }
 
 static inline void i915_debugger_vma_prepare(struct i915_drm_client *client,
-					     struct i915_vma *vma,
-					     u32 flags) { }
+					     struct i915_vma *vma) { }
 static inline void i915_debugger_vma_finalize(struct i915_drm_client *client,
 					      struct i915_vma *vma,
 					      int error) { }
@@ -140,6 +141,20 @@ i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 	return 0;
 }
 
+static inline int
+i915_debugger_handle_engine_page_fault(struct intel_engine_cs *engine,
+				       struct i915_debugger_pagefault *pagefault)
+{
+	return 0;
+}
+
+static inline int
+i915_debugger_add_pagefault_list(struct intel_engine_cs *engine,
+				 struct i915_debugger_pagefault *pagefault)
+{
+	return 0;
+}
+
 static inline bool
 i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine)
 {
@@ -147,6 +162,11 @@ i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine)
 }
 
 static inline bool i915_debugger_active_on_context(struct intel_context *context)
+{
+	return false;
+}
+
+static inline bool i915_debugger_active_on_engine(struct intel_engine_cs *engine)
 {
 	return false;
 }
@@ -174,7 +194,7 @@ i915_debugger_disallow(struct drm_i915_private *i915)
 	return 0;
 }
 
-static inline void i915_debugger_gpu_flush_engines(struct drm_i915_private *i915,
+static inline void i915_debugger_gpu_flush_engines(struct intel_gt *gt,
 						   u32 mask) { }
 
 #endif /* CPTCFG_DRM_I915_DEBUGGER */

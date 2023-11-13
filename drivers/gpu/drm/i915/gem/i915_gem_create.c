@@ -299,7 +299,7 @@ int i915_gem_object_account(struct drm_i915_gem_object *obj)
 		return 0;
 
 	return account_size(to_i915(obj->base.dev),
-			    obj->memory_mask & REGION_LMEM_MASK,
+			    obj->memory_mask & REGION_LMEM,
 			    i915_gem_object_get_accounting(obj),
 			    obj->base.size);
 }
@@ -310,7 +310,7 @@ void i915_gem_object_unaccount(struct drm_i915_gem_object *obj)
 		return;
 
 	account_size(to_i915(obj->base.dev),
-		     obj->memory_mask & REGION_LMEM_MASK,
+		     obj->memory_mask & REGION_LMEM,
 		     i915_gem_object_get_accounting(obj),
 		     -obj->base.size);
 }

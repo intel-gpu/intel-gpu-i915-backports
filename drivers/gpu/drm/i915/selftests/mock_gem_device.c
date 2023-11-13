@@ -72,6 +72,7 @@ static void mock_device_release(struct drm_device *dev)
 	i915_gem_drain_freed_objects(i915);
 
 	mock_fini_ggtt(to_gt(i915)->ggtt);
+	i915_sched_engine_put(i915->sched);
 
 	intel_gt_driver_late_release_all(i915);
 	intel_memory_regions_driver_release(i915);
@@ -205,9 +206,16 @@ struct drm_i915_private *mock_gem_device(void)
 
 	i915_gem_init__mm(i915);
 
-	i915->wq = alloc_ordered_workqueue("mock", 0);
+	i915->wq = alloc_workqueue("%s", WQ_UNBOUND, 0, "mock");
 	if (!i915->wq)
 		goto err_uncore;
+
+	i915->sched = i915_sched_engine_create(3);
+	if (!i915->sched)
+		goto err_free_wq;
+	i915->sched->private_data = i915->wq;
+	i915->mm.sched = i915->sched;
+	i915->mm.wq = i915->wq;
 
 	mock_init_contexts(i915);
 
@@ -242,6 +250,8 @@ struct drm_i915_private *mock_gem_device(void)
 err_context:
 	intel_gt_driver_remove(to_gt(i915));
 err_unlock:
+	i915_sched_engine_put(i915->sched);
+err_free_wq:
 	destroy_workqueue(i915->wq);
 err_uncore:
 	mock_uncore_uninit(&i915->uncore, i915);

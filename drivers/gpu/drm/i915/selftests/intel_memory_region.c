@@ -14,9 +14,7 @@
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_lmem.h"
-#include "gem/i915_gem_object_blt.h"
 #include "gem/i915_gem_region.h"
-#include "gem/i915_gem_object_blt.h"
 #include "gem/selftests/igt_gem_utils.h"
 #include "gem/selftests/mock_context.h"
 #include "gt/intel_engine_user.h"
@@ -686,22 +684,17 @@ random_engine_class(struct intel_gt *gt,
 
 static int
 igt_create_migrate(struct intel_gt *gt,
-		   struct intel_gt *bcs_gt,
 		   struct intel_memory_region *src,
 		   struct intel_memory_region *dst)
 {
-	I915_RND_STATE(prng);
-	struct intel_engine_cs *engine =
-		random_engine_class(bcs_gt, COPY_ENGINE_CLASS, &prng);
 	struct drm_i915_gem_object *obj;
 	struct i915_gem_ww_ctx ww;
 	int err = 0;
 
-	pr_info("%s: migrating %x->%x using %s\n",
-		__func__, src->id, dst->id, engine->name);
+	pr_info("%s: migrating %x->%x\n", __func__, src->id, dst->id);
 
 	/* Switch object backing-store on create */
-	obj = i915_gem_object_create_region(src, PAGE_SIZE, 0);
+	obj = i915_gem_object_create_region(src, max(src->min_page_size, dst->min_page_size), 0);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -713,16 +706,11 @@ igt_create_migrate(struct intel_gt *gt,
 		if (err)
 			continue;
 
-		err = i915_gem_object_migrate(obj, &ww, engine->kernel_context,
-					      dst->id, false);
+		err = i915_gem_object_prepare_move(obj, &ww);
 		if (err)
 			continue;
 
-		err = i915_gem_object_pin_pages(obj);
-		if (err)
-			continue;
-
-		i915_gem_object_unpin_pages(obj);
+		err = i915_gem_object_migrate(obj, dst->id, false);
 	}
 
 	i915_gem_object_put(obj);
@@ -736,7 +724,7 @@ static int igt_smem_create_migrate(void *arg)
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_memory_region *smem = i915->mm.regions[INTEL_REGION_SMEM];
 
-	return igt_create_migrate(gt, gt, smem, gt->lmem);
+	return igt_create_migrate(gt, smem, gt->lmem);
 }
 
 static int igt_lmem_create_migrate(void *arg)
@@ -745,32 +733,24 @@ static int igt_lmem_create_migrate(void *arg)
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_memory_region *smem = i915->mm.regions[INTEL_REGION_SMEM];
 
-	return igt_create_migrate(gt, gt, gt->lmem, smem);
+	return igt_create_migrate(gt, gt->lmem, smem);
 }
 
 static int igt_smem_create_migrate_cross_tile(void *arg)
 {
 	struct drm_i915_private *i915 = arg;
 	struct intel_memory_region *smem = i915->mm.regions[INTEL_REGION_SMEM];
-	struct intel_gt *gt, *gt2;
-	unsigned int i, j;
-	int ret;
+	struct intel_gt *gt;
+	unsigned int i;
+	int err;
 
 	for_each_gt(gt, i915, i) {
-		for_each_gt(gt2, i915, j) {
-			if (gt == gt2)
-				continue;
-
-			ret = igt_create_migrate(gt, gt2, smem, gt->lmem);
-			if (ret)
-				break;
-		}
-
-		if (ret)
-			break;
+		err = igt_create_migrate(gt, smem, gt->lmem);
+		if (err)
+			return err;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int igt_lmem_create_cleared_cpu(void *arg)
@@ -860,25 +840,17 @@ static int igt_lmem_create_migrate_cross_tile(void *arg)
 {
 	struct drm_i915_private *i915 = arg;
 	struct intel_memory_region *smem = i915->mm.regions[INTEL_REGION_SMEM];
-	struct intel_gt *gt, *gt2;
-	unsigned int i, j;
-	int ret;
+	struct intel_gt *gt;
+	unsigned int i;
+	int err;
 
 	for_each_gt(gt, i915, i) {
-		for_each_gt(gt2, i915, j) {
-			if (gt == gt2)
-				continue;
-
-			ret = igt_create_migrate(gt, gt2, gt->lmem, smem);
-			if (ret)
-				break;
-		}
-
-		if (ret)
-			break;
+		err = igt_create_migrate(gt, gt->lmem, smem);
+		if (err)
+			return err;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int
@@ -944,23 +916,21 @@ static int igt_lmem_write_gpu_cross_tile(void *arg)
 	struct drm_i915_private *i915 = arg;
 	struct intel_gt *gt, *gt2;
 	unsigned int i, j;
-	int ret;
 
 	for_each_gt(gt, i915, i) {
 		for_each_gt(gt2, i915, j) {
+			int ret;
+
 			if (gt == gt2)
 				continue;
 
 			ret = __igt_lmem_write_gpu(gt, gt2, gt2);
 			if (ret)
-				break;
+				return ret;
 		}
-
-		if (ret)
-			break;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int igt_lmem_write_gpu_cross_tile_cross_vm(void *arg)
@@ -969,23 +939,21 @@ static int igt_lmem_write_gpu_cross_tile_cross_vm(void *arg)
 	struct drm_i915_private *i915 = arg;
 	struct intel_gt *gt, *gt2;
 	unsigned int i, j;
-	int ret;
 
 	for_each_gt(gt, i915, i) {
 		for_each_gt(gt2, i915, j) {
+			int ret;
+
 			if (gt == gt2)
 				continue;
 
 			ret = __igt_lmem_write_gpu(gt, gt2, gt);
 			if (ret)
-				break;
+				return ret;
 		}
-
-		if (ret)
-			break;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int __igt_lmem_write_cpu(struct intel_gt *gt, struct intel_gt *bcs_gt)
@@ -1031,13 +999,7 @@ static int __igt_lmem_write_cpu(struct intel_gt *gt, struct intel_gt *bcs_gt)
 	}
 
 	/* Put the pages into a known state -- from the gpu for added fun */
-	intel_engine_pm_get(engine);
-	if (HAS_LINK_COPY_ENGINES(gt->i915))
-		err = i915_gem_object_fill_blt(obj, engine->kernel_context, 0xab);
-	else
-		err = i915_gem_object_fill_blt(obj, engine->kernel_context, 0xdeadbeaf);
-
-	intel_engine_pm_put(engine);
+	err = i915_gem_object_clear_lmem(obj);
 	if (err)
 		goto out_unpin;
 
@@ -1078,7 +1040,7 @@ static int __igt_lmem_write_cpu(struct intel_gt *gt, struct intel_gt *bcs_gt)
 					   size, align);
 
 		val = prandom_u32_state(&prng);
-		memset32(vaddr + offset / sizeof(u32), val ^ 0xdeadbeaf,
+		memset32(vaddr + offset / sizeof(u32), val,
 			 size / sizeof(u32));
 
 		/*
@@ -1089,9 +1051,9 @@ static int __igt_lmem_write_cpu(struct intel_gt *gt, struct intel_gt *bcs_gt)
 					  offset + size,
 					  sizeof(u32), sizeof(u32));
 		dword /= sizeof(u32);
-		if (vaddr[dword] != (val ^ 0xdeadbeaf)) {
+		if (vaddr[dword] != val) {
 			pr_err("%s vaddr[%u]=%u, val=%u, size=%u, align=%u, offset=%u\n",
-			       __func__, dword, vaddr[dword], val ^ 0xdeadbeaf,
+			       __func__, dword, vaddr[dword], val,
 			       size, align, offset);
 			err = -EINVAL;
 			break;
@@ -1269,11 +1231,12 @@ static int perf_memcpy(void *arg)
 	struct intel_memory_region *smem = i915->mm.regions[INTEL_REGION_SMEM];
 	struct intel_memory_region *mr;
 	int i, j, id;
-	int ret;
 
 	for_each_memory_region(mr, i915, id) {
 		for (i = 0; i < ARRAY_SIZE(sizes); ++i) {
 			for (j = 0; j < ARRAY_SIZE(types); ++j) {
+				int ret;
+
 				ret = _perf_memcpy(smem, mr, sizes[i],
 						   I915_MAP_WB, types[j]);
 				if (ret)
@@ -1303,23 +1266,21 @@ static int igt_lmem_write_cpu_cross_tile(void *arg)
 	struct drm_i915_private *i915 = arg;
 	struct intel_gt *gt, *gt2;
 	unsigned int i, j;
-	int ret;
 
 	for_each_gt(gt, i915, i) {
 		for_each_gt(gt2, i915, j) {
+			int ret;
+
 			if (gt == gt2)
 				continue;
 
 			ret = __igt_lmem_write_cpu(gt, gt2);
 			if (ret)
-				break;
+				return ret;
 		}
-
-		if (ret)
-			break;
 	}
 
-	return ret;
+	return 0;
 }
 
 static void igt_mark_evictable(struct drm_i915_gem_object *obj)
@@ -1403,7 +1364,6 @@ err_close_objects:
 }
 
 static int lmem_pages_migrate_one(struct i915_gem_ww_ctx *ww,
-				  struct intel_context *ce,
 				  struct drm_i915_gem_object *obj,
 				  struct intel_gt *gt)
 {
@@ -1426,7 +1386,7 @@ static int lmem_pages_migrate_one(struct i915_gem_ww_ctx *ww,
 		return err;
 
 	if (i915_gem_object_is_lmem(obj)) {
-		err = i915_gem_object_migrate(obj, ww, ce, INTEL_REGION_SMEM, false);
+		err = i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false);
 		if (err)
 			return err;
 
@@ -1444,9 +1404,8 @@ static int lmem_pages_migrate_one(struct i915_gem_ww_ctx *ww,
 			pr_err("object not backed by struct page\n");
 			err = -EINVAL;
 		}
-
 	} else {
-		err = i915_gem_object_migrate(obj, ww, ce, gt->lmem->id, false);
+		err = i915_gem_object_migrate(obj, gt->lmem->id, false);
 		if (err)
 			return err;
 
@@ -1468,17 +1427,9 @@ static int
 __igt_lmem_pages_migrate(struct intel_gt *gt, struct intel_gt *bcs_gt)
 {
 	struct drm_i915_gem_object *obj;
-	struct intel_engine_cs *engine;
-	struct intel_context *ce;
 	struct i915_gem_ww_ctx ww;
-	I915_RND_STATE(prng);
 	int err;
 	int i;
-
-	engine = random_engine_class(bcs_gt, COPY_ENGINE_CLASS, &prng);
-	ce = engine->kernel_context;
-
-	pr_info("%s: using %s on gt%u\n", __func__, engine->name, gt->info.id);
 
 	/* From LMEM to shmem and back again */
 
@@ -1489,21 +1440,13 @@ __igt_lmem_pages_migrate(struct intel_gt *gt, struct intel_gt *bcs_gt)
 	/* Allow any and all migration [disable compression] */
 	obj->memory_mask = -1;
 
-	err = i915_gem_object_fill_blt(obj, ce, 0);
+	err = i915_gem_object_clear_lmem(obj);
 	if (err)
 		goto out_put;
 
 	for (i = 1; i <= 4; ++i) {
 		for_i915_gem_ww(&ww, err, true)
-			err = lmem_pages_migrate_one(&ww, ce, obj, gt);
-		if (err)
-			break;
-
-		if (HAS_LINK_COPY_ENGINES(gt->i915))
-			err = i915_gem_object_fill_blt(obj, ce, 0xab);
-		else
-			err = i915_gem_object_fill_blt(obj, ce, 0xdeadbeaf);
-
+			err = lmem_pages_migrate_one(&ww, obj, gt);
 		if (err)
 			break;
 	}
@@ -1526,23 +1469,21 @@ static int igt_lmem_pages_migrate_cross_tile(void *arg)
 	struct drm_i915_private *i915 = arg;
 	struct intel_gt *gt, *gt2;
 	unsigned int i, j;
-	int ret;
 
 	for_each_gt(gt, i915, i) {
 		for_each_gt(gt2, i915, j) {
+			int ret;
+
 			if (gt == gt2)
 				continue;
 
 			ret = __igt_lmem_pages_migrate(gt, gt2);
 			if (ret)
-				break;
+				return ret;
 		}
-
-		if (ret)
-			break;
 	}
 
-	return ret;
+	return 0;
 }
 
 static int mock_selftests(struct intel_gt *gt,

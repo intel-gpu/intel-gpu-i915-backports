@@ -78,7 +78,7 @@ $make dkmsdeb-pkg #debian package
 or
 $make dkmsrpm-pkg #rpm package
 Example:
-        $make i915dkmsdeb-pkg
+        $make dkmsdeb-pkg
 
       Generated package name :
 		intel-dmabuf-dkms_1.23.6.24.230425.33+i1-1_all.deb
@@ -90,11 +90,11 @@ Example:
     Adds OS kernel version as part of dkms pacakge name.
 
 ```
-$make i915dkmsdeb-pkg OS_DISTRIBUTION=<os_distribution> #debian package
+$make dkmsdeb-pkg OS_DISTRIBUTION=<os_distribution> #debian package
 or
-$make i915dkmsrpm-pkg OS_DISTRIBUTION=<os_distribution> #rpm package
+$make dkmsrpm-pkg OS_DISTRIBUTION=<os_distribution> #rpm package
 Example:
-	$make i915dkmsdeb-pkg OS_DISTRIBUTION=VANILLA_5.10LTS
+	$make dkmsdeb-pkg OS_DISTRIBUTION=VANILLA_5.10LTS
       
       Generated package name : 
 		intel-dmabuf-dkms_1.23.6.24.230425.5.10.186.33+i1-1_all.deb

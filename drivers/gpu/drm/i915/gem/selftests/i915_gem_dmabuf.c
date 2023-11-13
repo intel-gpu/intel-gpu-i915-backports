@@ -10,13 +10,25 @@
 #include "mock_dmabuf.h"
 #include "selftests/mock_gem_device.h"
 
+static struct drm_i915_gem_object *
+user_object_create(struct drm_i915_private *i915, size_t sz)
+{
+	struct drm_i915_gem_object *obj;
+
+	obj = i915_gem_object_create_shmem(i915, sz);
+	if (!IS_ERR(obj))
+		obj->flags |= I915_BO_ALLOC_USER;
+
+	return obj;
+}
+
 static int igt_dmabuf_export(void *arg)
 {
 	struct drm_i915_private *i915 = arg;
 	struct drm_i915_gem_object *obj;
 	struct dma_buf *dmabuf;
 
-	obj = i915_gem_object_create_shmem(i915, PAGE_SIZE);
+	obj = user_object_create(i915, PAGE_SIZE);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -40,7 +52,7 @@ static int igt_dmabuf_import_self(void *arg)
 	struct dma_buf *dmabuf;
 	int err;
 
-	obj = i915_gem_object_create_shmem(i915, PAGE_SIZE);
+	obj = user_object_create(i915, PAGE_SIZE);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -426,7 +438,7 @@ static int igt_dmabuf_export_vmap(void *arg)
 	void *ptr;
 	int err;
 
-	obj = i915_gem_object_create_shmem(i915, PAGE_SIZE);
+	obj = user_object_create(i915, PAGE_SIZE);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 

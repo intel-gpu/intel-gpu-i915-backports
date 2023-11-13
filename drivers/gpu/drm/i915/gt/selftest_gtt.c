@@ -6,7 +6,6 @@
 #include "i915_selftest.h"
 
 #include "gem/i915_gem_region.h"
-#include "gem/i915_gem_object_blt.h"
 
 #include "gen8_engine_cs.h"
 #include "i915_gem_ww.h"
@@ -80,6 +79,72 @@ static int emit_write_elaspsed(struct i915_request *rq, u64 addr)
 	*cs++ = upper_32_bits(addr);
 
 	*cs++ = MI_NOOP;
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static int emit_memset(struct i915_request *rq, struct i915_vma *vma)
+{
+	u64 offset = i915_vma_offset(vma);
+	u32 *cs;
+	int len;
+
+	if (HAS_LINK_COPY_ENGINES(rq->engine->i915))
+		len = 8;
+	else if (GRAPHICS_VER_FULL(rq->engine->i915) >= IP_VER(12, 50))
+		len = 16;
+	else
+		len = 12;
+
+	cs = intel_ring_begin(rq, len);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	if (HAS_LINK_COPY_ENGINES(rq->engine->i915)) {
+		*cs++ = PVC_MEM_SET_CMD | MS_MATRIX | (7 - 2);
+		*cs++ = PAGE_SIZE - 1;
+		*cs++ = (vma->size >> 12) - 1;
+		*cs++ = PAGE_SIZE - 1;
+		*cs++ = lower_32_bits(offset);
+		*cs++ = upper_32_bits(offset);
+		*cs++ = 0;
+		*cs++ = MI_NOOP;
+	} else if (GRAPHICS_VER_FULL(rq->engine->i915) >= IP_VER(12, 50)) {
+		*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+			XY_FAST_COLOR_BLT_DEPTH_32 |
+			(16 - 2);
+		*cs++ = PAGE_SIZE - 1;
+		*cs++ = 0;
+		*cs++ = vma->size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
+		*cs++ = lower_32_bits(offset);
+		*cs++ = upper_32_bits(offset);
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+	} else {
+		*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD |
+			XY_FAST_COLOR_BLT_DEPTH_32 |
+			(11 - 2);
+		*cs++ = PAGE_SIZE - 1;
+		*cs++ = 0;
+		*cs++ = vma->size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
+		*cs++ = lower_32_bits(offset);
+		*cs++ = upper_32_bits(offset);
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+		*cs++ = 0;
+	}
 
 	intel_ring_advance(rq, cs);
 	return 0;
@@ -1087,8 +1152,8 @@ static int __pat_speed(struct intel_context *ce,
 		       struct drm_i915_gem_object *obj)
 {
 	struct intel_gt *gt = ce->engine->gt;
-	struct i915_vma *vma, *batch;
 	struct i915_gem_ww_ctx ww;
+	struct i915_vma *vma;
 	intel_wakeref_t wf;
 	int cache_level;
 	u64 *cycles;
@@ -1107,14 +1172,6 @@ static int __pat_speed(struct intel_context *ce,
 	err = i915_vma_pin(vma, 0, obj->base.size, PIN_USER);
 	if (err)
 		goto out_map;
-
-	for_i915_gem_ww(&ww, err, false) {
-		batch = intel_emit_vma_fill_blt(ce, vma, &ww, 0x0);
-		if (IS_ERR(batch))
-			err = PTR_ERR(batch);
-	}
-	if (err)
-		goto out_vma;
 
 	wf = intel_gt_pm_get(gt);
 	intel_rps_boost(&gt->rps);
@@ -1160,10 +1217,7 @@ static int __pat_speed(struct intel_context *ce,
 
 		err = emit_start_timestamp(rq);
 		if (err == 0)
-			err = ce->engine->emit_bb_start(rq,
-							i915_vma_offset(batch),
-							i915_vma_size(batch),
-							0);
+			err = emit_memset(rq, vma);
 		if (err == 0)
 			err = emit_write_elaspsed(rq, i915_vma_offset(vma));
 
@@ -1191,8 +1245,6 @@ static int __pat_speed(struct intel_context *ce,
 	intel_rps_cancel_boost(&gt->rps);
 	intel_gt_pm_put(gt, wf);
 
-	intel_emit_vma_release(ce, batch);
-out_vma:
 	i915_vma_unpin(vma);
 out_map:
 	i915_gem_object_unpin_map(obj);
@@ -1206,7 +1258,7 @@ static int pat_speed(void *arg)
 	struct intel_context *ce;
 	int err = 0;
 
-	if (GRAPHICS_VER(gt->i915) < 8)
+	if (GRAPHICS_VER(gt->i915) < 9)
 		return 0;
 
 	ce = NULL;

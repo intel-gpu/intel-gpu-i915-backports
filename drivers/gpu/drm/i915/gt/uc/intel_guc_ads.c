@@ -701,6 +701,9 @@ static int guc_prep_golden_context(struct intel_guc *guc)
 		addr_ggtt += alloc_size;
 	}
 
+	drm_dbg(&gt->i915->drm, "total_size:%d, previous:%d\n",
+		total_size, guc->ads_golden_ctxt_size);
+
 	/* Make sure current size matches what we calculated previously */
 	if (guc->ads_golden_ctxt_size)
 		GEM_BUG_ON(guc->ads_golden_ctxt_size != total_size);

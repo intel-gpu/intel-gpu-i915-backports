@@ -362,6 +362,8 @@ static const struct mei_hw_ops mei_gsc_hw_ops_null = {
 #define MEI_GSC_RESET_END_TIMEOUT 700
 #define MEI_GSC_RESET_STEP 20
 
+#ifdef BPM_MEI_AUX_BUS_AVAILABLE
+
 static int mei_gsc_forcewake_get_and_wait(struct mei_device *dev, bool need_runtime_pm)
 {
 	struct mei_fw_status fw_status;
@@ -442,8 +444,6 @@ static void mei_gsc_forcewake_put(struct mei_device *dev, bool need_runtime_pm)
 
 	mutex_unlock(&dev->device_lock);
 }
-
-#ifdef BPM_MEI_AUX_BUS_AVAILABLE
 
 static int mei_gsc_probe(struct auxiliary_device *aux_dev,
 			 const struct auxiliary_device_id *aux_dev_id)

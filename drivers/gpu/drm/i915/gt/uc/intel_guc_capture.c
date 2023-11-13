@@ -301,7 +301,6 @@ guc_capture_alloc_steered_lists(struct intel_guc *guc,
 	const struct __guc_mmio_reg_descr_group *list;
 	struct __guc_mmio_reg_descr_group *extlists;
 	struct __guc_mmio_reg_descr *extarray;
-	struct sseu_dev_info *sseu;
 	bool has_xehpg_extregs;
 
 	/* steered registers currently only exist for the render-class */
@@ -318,7 +317,6 @@ guc_capture_alloc_steered_lists(struct intel_guc *guc,
 	if (has_xehpg_extregs)
 		num_steer_regs += ARRAY_SIZE(xehpg_extregs);
 
-	sseu = &gt->info.sseu;
 	for_each_ss_steering(iter, gt, slice, subslice)
 		num_tot_regs += num_steer_regs;
 
@@ -1599,12 +1597,8 @@ void intel_guc_capture_get_matching_node(struct intel_gt *gt,
 		}
 	}
 
-	/*
-	 * FIXME: This should be a warning but that produces CI test failures. So until
-	 * the underlying cause has been fixed, revert back to being a dbg only message.
-	 */
-	guc_dbg(guc, "No register capture node found for 0x%04X / 0x%08X\n",
-		ce->guc_id.id, ce->lrc.lrca);
+	guc_warn(guc, "No register capture node found for 0x%04X / 0x%08X\n",
+		 ce->guc_id.id, ce->lrc.lrca);
 }
 
 void intel_guc_capture_process(struct intel_guc *guc)

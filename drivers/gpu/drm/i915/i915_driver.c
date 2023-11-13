@@ -123,6 +123,7 @@
 #include "intel_pcode.h"
 #include "intel_pm.h"
 #include "intel_vsec.h"
+#include "pvc_ras.h"
 #include "vlv_suspend.h"
 #include "i915_addr_trans_svc.h"
 
@@ -348,23 +349,47 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	if (dev_priv->wq == NULL)
 		goto out_err;
 
+	dev_priv->sched = i915_sched_engine_create(3);
+	if (!dev_priv->sched)
+		goto out_free_wq;
+	dev_priv->sched->private_data = dev_priv->wq;
+
+	dev_priv->mm.wq = alloc_workqueue("%s", WQ_UNBOUND, 0, "i915-smem");
+	if (dev_priv->mm.wq == NULL)
+		goto out_free_sched;
+
+	dev_priv->mm.sched = i915_sched_engine_create(4);
+	if (!dev_priv->mm.sched)
+		goto out_free_mm_wq;
+	dev_priv->mm.sched->private_data = dev_priv->mm.wq;
+
 	dev_priv->hotplug.dp_wq = alloc_ordered_workqueue("i915-dp", 0);
 	if (dev_priv->hotplug.dp_wq == NULL)
-		goto out_free_wq;
+		goto out_free_mm_sched;
 
 	return 0;
 
+out_free_mm_sched:
+	i915_sched_engine_put(dev_priv->mm.sched);
+out_free_mm_wq:
+	destroy_workqueue(dev_priv->mm.wq);
+out_free_sched:
+	i915_sched_engine_put(dev_priv->sched);
 out_free_wq:
 	destroy_workqueue(dev_priv->wq);
 out_err:
 	drm_err(&dev_priv->drm, "Failed to allocate workqueues.\n");
-
 	return -ENOMEM;
 }
 
 static void i915_workqueues_cleanup(struct drm_i915_private *dev_priv)
 {
 	destroy_workqueue(dev_priv->hotplug.dp_wq);
+
+	i915_sched_engine_put(dev_priv->mm.sched);
+	destroy_workqueue(dev_priv->mm.wq);
+
+	i915_sched_engine_put(dev_priv->sched);
 	destroy_workqueue(dev_priv->wq);
 }
 
@@ -1364,9 +1389,14 @@ static void print_chickens(struct drm_i915_private *i915)
 	} chickens[] = {
 #define C(x) { __stringify(DRM_I915_CHICKEN_##x), IS_ENABLED(CONFIG_DRM_I915_CHICKEN_##x) }
 		C(ASYNC_GET_PAGES),
+		C(ASYNC_PAGEFAULTS),
 		C(CLEAR_ON_CREATE),
 		C(CLEAR_ON_FREE),
 		C(CLEAR_ON_IDLE),
+		C(MMAP_SWAP),
+		C(MMAP_SWAP_CREATE),
+		C(NUMA_ALLOC),
+		C(PARALLEL_SHMEMFS),
 		C(PARALLEL_USERPTR),
 		C(ULL_DMA_BOOST),
 		C(SOFT_PG),
@@ -1382,6 +1412,9 @@ static void print_chickens(struct drm_i915_private *i915)
 
 static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 {
+	if (IS_SRIOV_VF(dev_priv))
+		return;
+
 	if (drm_debug_enabled(DRM_UT_DRIVER)) {
 		struct drm_printer p = drm_debug_printer("i915 device info:");
 		struct intel_gt *gt;
@@ -1415,6 +1448,17 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 			 "DRM_I915_DEBUG_RUNTIME_PM enabled\n");
 }
 
+static void fixup_mm(struct drm_mm *mm, unsigned long start, unsigned long size)
+{
+	struct drm_mm_node *head = &mm->head_node;
+
+	head->start = start + size;
+	head->size = -size;
+
+	head->hole_size = size;
+	head->subtree_max_hole = size;
+}
+
 static struct drm_i915_private *
 i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
@@ -1437,6 +1481,11 @@ i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
 	device_info = mkwrite_device_info(i915);
 	memcpy(device_info, match_info, sizeof(*device_info));
 	RUNTIME_INFO(i915)->device_id = pdev->device;
+
+	/* Fixup mmap support for 2TiB+ objects */
+	fixup_mm(&i915->drm.vma_offset_manager->vm_addr_space_mm,
+		 DRM_FILE_PAGE_OFFSET_START,
+		 ULONG_MAX - DRM_FILE_PAGE_OFFSET_START);
 
 	return i915;
 }
@@ -1556,6 +1605,10 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret < 0)
 		goto out_runtime_pm_put;
 
+	ret = pvc_ras_telemetry_probe(i915);
+	if (ret)
+		goto out_runtime_pm_put;
+
 	ret = intel_pcode_probe(i915);
 	if (ret)
 		goto out_runtime_pm_put;
@@ -1588,15 +1641,9 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		goto out_cleanup_modeset2;
 
-	if (HAS_LMEM(i915)) {
-		ret = i915_setup_blt_windows(i915);
-		if (ret)
-			goto out_cleanup_gem;
-	}
-
 	ret = intel_modeset_init(i915);
 	if (ret)
-		goto out_cleanup_blt_windows;
+		goto out_cleanup_gem;
 
 	intel_runtime_pm_enable(&i915->runtime_pm);
 
@@ -1618,8 +1665,6 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	return 0;
 
-out_cleanup_blt_windows:
-	i915_teardown_blt_windows(i915);
 out_cleanup_gem:
 	i915_gem_suspend(i915);
 	i915_gem_driver_remove(i915);
@@ -1679,8 +1724,6 @@ void i915_driver_remove(struct drm_i915_private *i915)
 	/* Disable Address Translation Services */
 	i915_disable_ats(i915);
 
-	if (HAS_LMEM(i915))
-		i915_teardown_blt_windows(i915);
 	uninit_device_clos(i915);
 
 	intel_gvt_driver_remove(i915);
@@ -1856,9 +1899,6 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 	 *   the above unified shutdown/poweroff sequence.
 	 */
 	intel_power_domains_driver_remove(i915);
-	enable_rpm_wakeref_asserts(&i915->runtime_pm);
-
-	intel_runtime_pm_driver_release(&i915->runtime_pm);
 }
 
 static bool suspend_to_idle(struct drm_i915_private *dev_priv)
@@ -1917,6 +1957,8 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 
 				if (!i915_gem_object_has_pages(obj))
 					continue;
+
+				i915_gem_object_move_notify(obj);
 
 				err = i915_gem_object_unbind(obj, &ww, 0);
 				if (err == 0)
@@ -2431,7 +2473,7 @@ static int intel_runtime_suspend(struct device *kdev)
 
 	disable_rpm_wakeref_asserts(rpm);
 
-	pvc_wa_disallow_rc6_if_awake(dev_priv);
+	pvc_wa_disallow_rc6(dev_priv);
 
 	/*
 	 * We are safe here against re-faults, since the fault handler takes
@@ -2442,7 +2484,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	for_each_gt(gt, dev_priv, i)
 		intel_gt_runtime_suspend(gt);
 
-	pvc_wa_allow_rc6_if_awake(dev_priv);
+	pvc_wa_allow_rc6(dev_priv);
 
 	intel_runtime_pm_disable_interrupts(dev_priv);
 
@@ -2539,7 +2581,7 @@ static int intel_runtime_resume(struct device *kdev)
 
 	intel_runtime_pm_enable_interrupts(dev_priv);
 
-	pvc_wa_disallow_rc6_if_awake(dev_priv);
+	pvc_wa_disallow_rc6(dev_priv);
 
 	/*
 	 * No point of rolling back things in case of an error, as the best
@@ -2560,7 +2602,7 @@ static int intel_runtime_resume(struct device *kdev)
 
 	intel_enable_ipc(dev_priv);
 
-	pvc_wa_allow_rc6_if_awake(dev_priv);
+	pvc_wa_allow_rc6(dev_priv);
 
 	enable_rpm_wakeref_asserts(rpm);
 
@@ -2702,8 +2744,8 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 	struct drm_mm_node *node;
 	struct i915_vma *vma;
 	u16 class, instance;
+	u64 start, end;
 	int err = 0;
-	u64 start;
 
 	class = args->region >> 16;
 	instance = args->region & 0xffff;
@@ -2720,12 +2762,15 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 	if (range_overflows(start, args->length, vm->total))
 		return -EINVAL;
 
-	trace_i915_vm_prefetch(i915, args->vm_id, start, args->length, mem->id);
+	end = start + args->length;
+	trace_i915_vm_prefetch(mem, args->vm_id, start, args->length);
 
-	/* FIXME: should protect against concurrent binds/unbinds */
-	drm_mm_for_each_node_in_range(node, &vm->mm, start,
-					start + args->length) {
+	mutex_lock(&vm->mutex);
+	node = __drm_mm_interval_first(&vm->mm, start, end-1);
+	while (node->start < end) {
 		GEM_BUG_ON(!drm_mm_node_allocated(node));
+		start = node->start + node->size;
+
 		vma = container_of(node, typeof(*vma), node);
 		vma = __i915_vma_get(vma);
 		if (!vma)
@@ -2735,10 +2780,15 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 		 * Prefetch is best effort. Even if we fail to prefetch one vma, we will
 		 * proceed with other vmas.
 		 */
+		mutex_unlock(&vm->mutex);
 		i915_vma_prefetch(vma, mem);
+		mutex_lock(&vm->mutex);
 		i915_vma_put(vma);
 		__i915_vma_put(vma);
+
+		node = __drm_mm_interval_first(&vm->mm, start, end-1);
 	}
+	mutex_unlock(&vm->mutex);
 
 	i915_vm_put(vm);
 	return err;

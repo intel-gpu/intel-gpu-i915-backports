@@ -33,6 +33,7 @@ static void internal_free_pages(struct sg_table *st)
 static int i915_gem_object_get_pages_internal(struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	const int nid = dev_to_node(i915->drm.dev);
 	struct sg_table *st;
 	struct scatterlist *sg;
 	unsigned int sg_page_sizes;
@@ -91,13 +92,14 @@ create_st:
 		struct page *page;
 
 		do {
-			page = alloc_pages(gfp | (order ? QUIET : I915_GFP_ALLOW_FAIL),
-					   order);
+			page = alloc_pages_node(nid,
+						gfp | (order ? QUIET : I915_GFP_ALLOW_FAIL),
+						order);
 			if (page)
 				break;
 
 			if (obj->flags & I915_BO_ALLOC_CONTIGUOUS || !order) {
-				if (i915_gem_shrink(NULL, i915, npages, NULL,
+				if (i915_gem_shrink(i915, npages, NULL,
 						    I915_SHRINK_BOUND |
 						    I915_SHRINK_UNBOUND |
 						    I915_SHRINK_ACTIVE))

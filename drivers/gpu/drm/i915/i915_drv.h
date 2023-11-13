@@ -40,7 +40,6 @@
 #include <linux/intel-iommu.h>
 #include <linux/pm_qos.h>
 #include <linux/xarray.h>
-#include <linux/seqlock.h>
 
 #include <drm/drm_connector.h>
 #include <drm/i915_cp_fw_hdcp_interface.h>
@@ -99,6 +98,7 @@ struct drm_i915_clock_gating_funcs;
 struct drm_i915_gem_object;
 struct drm_i915_private;
 struct i915_ggtt;
+struct i915_sched_engine;
 struct intel_atomic_state;
 struct intel_audio_funcs;
 struct intel_cdclk_config;
@@ -292,17 +292,6 @@ struct intel_l3_parity {
 	int which_slice;
 };
 
-struct i915_mm_swap_stat {
-	seqlock_t lock;
-	unsigned long pages;
-	ktime_t time;
-};
-
-struct i915_mm_swap_stats {
-	struct i915_mm_swap_stat in;
-	struct i915_mm_swap_stat out;
-};
-
 struct i915_gem_mm {
 	/*
 	 * Shortcut for the stolen region. This points to either
@@ -359,16 +348,6 @@ struct i915_gem_mm {
 	/* lmemovercommit limit in %, set through sysfs */
 	u8 user_acct_limit[2];
 
-	struct i915_vma *lmem_window[2];
-	struct i915_vma *smem_window[2];
-	struct i915_vma *ccs_window[2];
-
-	/* To protect above sets of vmas */
-	wait_queue_head_t window_queue;
-
-	struct i915_mm_swap_stats blt_swap_stats;
-	struct i915_mm_swap_stats memcpy_swap_stats;
-
 	/* background task for returning bound system pages */
 	struct {
 		struct task_struct *tsk; /* our kswapd equivalent */
@@ -383,6 +362,9 @@ struct i915_gem_mm {
 		 */
 		atomic_long_t target;
 	} swapper;
+
+	struct workqueue_struct *wq;
+	struct i915_sched_engine *sched;
 };
 
 #define I915_IDLE_ENGINES_TIMEOUT (500) /* in ms */
@@ -631,6 +613,7 @@ struct drm_i915_private {
 	 * result in deadlocks.
 	 */
 	struct workqueue_struct *wq;
+	struct i915_sched_engine *sched;
 
 	/* ordered wq for modesets */
 	struct workqueue_struct *modeset_wq;
@@ -1721,7 +1704,7 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 #define I915_GEM_OBJECT_UNBIND_ACTIVE BIT(0)
 #define I915_GEM_OBJECT_UNBIND_BARRIER BIT(1)
 #define I915_GEM_OBJECT_UNBIND_TEST BIT(2)
-#define I915_GEM_OBJECT_UNBIND_VM_TRYLOCK BIT(3)
+#define I915_GEM_OBJECT_UNBIND_KEEP_RESIDENT BIT(3)
 
 void i915_gem_runtime_suspend(struct drm_i915_private *dev_priv);
 

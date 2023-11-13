@@ -14,6 +14,7 @@
 #include <linux/wait.h>
 #include <linux/xarray.h>
 #include <linux/rbtree.h>
+#include "i915_gpu_error.h"
 
 struct task_struct;
 struct drm_i915_private;
@@ -99,6 +100,20 @@ struct i915_debug_event_eu_attention {
 	u8  bitmask[0];
 } __packed;
 
+struct i915_debug_event_pagefault {
+	struct i915_debug_event base;
+	u64 client_handle;
+	u64 ctx_handle;
+	u64 lrc_handle;
+	u64 pagefault_address;
+
+	u32 flags;
+	u32 bitmask_size;
+	struct i915_engine_class_instance ci;
+
+	u8  bitmask[0];
+} __packed;
+
 struct i915_debug_vm_open {
 	u64 client_handle;
 	u64 handle;
@@ -135,9 +150,31 @@ struct i915_debugger {
 	spinlock_t ack_lock;
 	struct rb_root ack_tree;
 
+	struct mutex pf_lock;
+	struct list_head pagefaults;
+
 	DECLARE_KFIFO(event_fifo,
 		      struct i915_debug_event *,
 		      CPTCFG_DRM_I915_DEBUGGER_KFIFO);
+};
+
+struct i915_debugger_pagefault {
+	struct list_head list;
+	struct intel_context *ce;
+	struct intel_engine_cs *engine;
+
+	struct {
+		u64 addr;
+		int type;
+		int level;
+		int access;
+	} fault;
+
+	struct {
+		struct intel_eu_attentions before;
+		struct intel_eu_attentions after;
+		struct intel_eu_attentions resolved;
+	} attentions;
 };
 
 #endif /* __I915_DEBUGGER_TYPES_H__ */

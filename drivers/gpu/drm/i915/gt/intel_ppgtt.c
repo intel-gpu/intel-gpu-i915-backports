@@ -188,6 +188,10 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 {
 	u32 pte_flags;
 
+	/* Paper over race with vm_unbind */
+	if (!drm_mm_node_allocated(&vma->node))
+		return;
+
 	if (!(flags & PIN_RESIDENT)) {
 		/*
 		 * Force the next access to this vam to trigger a pagefault. This
