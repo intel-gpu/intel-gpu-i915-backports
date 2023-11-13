@@ -221,7 +221,7 @@ static void i915_fence_release(struct dma_fence *fence)
 	kmem_cache_free(slab_requests, rq);
 }
 
-const struct dma_fence_ops i915_fence_ops = {
+const struct dma_fence_ops i915_dma_fence_ops = {
 	.get_driver_name = i915_fence_get_driver_name,
 	.get_timeline_name = i915_fence_get_timeline_name,
 	.enable_signaling = i915_fence_enable_signaling,
@@ -456,9 +456,9 @@ bool i915_request_retire(struct i915_request *rq)
 	rq->ring->head = rq->postfix;
 
 	if (!i915_request_signaled(rq)) {
-		spin_lock_irq(&rq->lock);
+		spin_lock_irq(&rq->sched.lock);
 		dma_fence_signal_locked(&rq->fence);
-		spin_unlock_irq(&rq->lock);
+		spin_unlock_irq(&rq->sched.lock);
 	}
 
 	if (test_and_set_bit(I915_FENCE_FLAG_BOOST, &rq->fence.flags))
@@ -641,8 +641,6 @@ static bool fatal_error(int error)
 
 void __i915_request_skip(struct i915_request *rq)
 {
-	GEM_BUG_ON(!fatal_error(rq->fence.error));
-
 	if (rq->infix == rq->postfix)
 		return;
 
@@ -963,12 +961,11 @@ static void __i915_request_ctor(void *arg)
 {
 	struct i915_request *rq = arg;
 
-	spin_lock_init(&rq->lock);
 	i915_sched_node_init(&rq->sched);
 	i915_sw_fence_init(&rq->submit, submit_notify);
 	i915_sw_fence_init(&rq->semaphore, semaphore_notify);
 
-	dma_fence_init(&rq->fence, &i915_fence_ops, &rq->lock, 0, 0);
+	dma_fence_init(&rq->fence, &i915_dma_fence_ops, &rq->sched.lock, 0, 0);
 
 	rq->capture_list = NULL;
 
@@ -988,6 +985,7 @@ __i915_request_initialize(struct i915_request *rq,
 	__intel_context_pin(ce);
 
 	rq->context = ce;
+	rq->sched_engine = ce->engine->sched_engine;
 	rq->engine = ce->engine;
 	rq->ring = ce->ring;
 	rq->execution_mask = ce->engine->mask;
@@ -1056,6 +1054,17 @@ __i915_request_initialize(struct i915_request *rq,
 
 	intel_context_mark_active(ce);
 	list_add_tail_rcu(&rq->link, &tl->requests);
+
+	if (!intel_context_is_barrier(ce)) {
+		if (ce->state)
+			ret = __i915_request_await_bind(rq, ce->state);
+		if (ret == 0)
+			ret = __i915_request_await_bind(rq, ce->ring->vma);
+		if (ret == 0)
+			ret = __i915_request_await_bind(rq, ce->timeline->hwsp_ggtt);
+		if (ret)
+			i915_request_set_error_once(rq, ret);
+	}
 
 	return 0;
 
@@ -1366,14 +1375,7 @@ emit_semaphore_wait(struct i915_request *to,
 		    struct i915_request *from,
 		    gfp_t gfp)
 {
-	const intel_engine_mask_t mask = READ_ONCE(from->engine)->mask;
 	struct i915_sw_fence *wait = &to->submit;
-
-	if (!can_use_semaphore_wait(to, from))
-		goto await_fence;
-
-	if (!intel_context_use_semaphores(to->context))
-		goto await_fence;
 
 	/*
 	 * If this or its dependents are waiting on an external fence
@@ -1384,8 +1386,14 @@ emit_semaphore_wait(struct i915_request *to,
 	if (from->sched.flags & I915_SCHED_HAS_EXTERNAL_CHAIN)
 		goto await_fence;
 
+	if (!can_use_semaphore_wait(to, from))
+		goto await_fence;
+
+	if (!intel_context_use_semaphores(to->context))
+		goto await_fence;
+
 	/* Just emit the first semaphore we see as request space is limited. */
-	if (already_busywaiting(to) & mask)
+	if (already_busywaiting(to) & from->execution_mask)
 		goto await_fence;
 
 	if (i915_request_await_start(to, from) < 0)
@@ -1398,7 +1406,7 @@ emit_semaphore_wait(struct i915_request *to,
 	if (__emit_semaphore_wait(to, from, i915_request_seqno(from)))
 		goto await_fence;
 
-	to->sched.semaphores |= mask;
+	to->sched.semaphores |= from->execution_mask;
 	wait = &to->semaphore;
 
 await_fence:
@@ -1558,10 +1566,10 @@ static inline struct intel_context *request_to_parent(struct i915_request *rq)
 static bool is_same_parallel_context(struct i915_request *to,
 				     struct i915_request *from)
 {
-	if (is_parallel_rq(to))
-		return request_to_parent(to) == request_to_parent(from);
+	if (!is_parallel_rq(to) || !from->context)
+		return false;
 
-	return false;
+	return request_to_parent(to) == request_to_parent(from);
 }
 
 int
@@ -2266,7 +2274,6 @@ long i915_request_wait(struct i915_request *rq,
 
 	trace_i915_request_wait_begin(rq, flags);
 	timeout = __i915_request_wait(rq, flags, timeout);
-
 	trace_i915_request_wait_end(rq);
 
 	if (mtx)
@@ -2373,47 +2380,6 @@ void i915_request_show(struct drm_printer *m,
 		   buf,
 		   jiffies_to_msecs(jiffies - rq->emitted_jiffies),
 		   name);
-}
-
-static bool engine_match_ring(struct intel_engine_cs *engine, struct i915_request *rq)
-{
-	u32 ring = ENGINE_READ(engine, RING_START);
-
-	return ring == i915_ggtt_offset(rq->ring->vma);
-}
-
-static bool match_ring(struct i915_request *rq)
-{
-	struct intel_engine_cs *engine;
-	bool found;
-	int i;
-
-	if (!intel_engine_is_virtual(rq->engine))
-		return engine_match_ring(rq->engine, rq);
-
-	found = false;
-	i = 0;
-	while ((engine = intel_engine_get_sibling(rq->engine, i++))) {
-		found = engine_match_ring(engine, rq);
-		if (found)
-			break;
-	}
-
-	return found;
-}
-
-enum i915_request_state i915_test_request_state(struct i915_request *rq)
-{
-	if (i915_request_completed(rq))
-		return I915_REQUEST_COMPLETE;
-
-	if (!i915_request_started(rq))
-		return I915_REQUEST_PENDING;
-
-	if (IS_SRIOV_VF(rq->engine->i915) ? i915_request_is_active(rq) : match_ring(rq))
-		return I915_REQUEST_ACTIVE;
-
-	return I915_REQUEST_QUEUED;
 }
 
 struct i915_request *

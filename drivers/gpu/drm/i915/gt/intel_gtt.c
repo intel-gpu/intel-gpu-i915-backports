@@ -263,7 +263,7 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	if (HAS_64K_PAGES(vm->i915)) {
 		vm->min_alignment[INTEL_MEMORY_LOCAL] = I915_GTT_PAGE_SIZE_64K;
-		vm->min_alignment[INTEL_MEMORY_STOLEN_LOCAL] = I915_GTT_PAGE_SIZE_64K;
+		vm->min_alignment[INTEL_MEMORY_STOLEN] = I915_GTT_PAGE_SIZE_64K;
 	}
 
 	/* Wa_1409502670:xehpsdv */

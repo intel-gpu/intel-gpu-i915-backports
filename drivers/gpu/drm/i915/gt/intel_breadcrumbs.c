@@ -262,14 +262,14 @@ static void signal_irq_work(struct irq_work *work)
 
 		i915_request_mark_complete(rq);
 
-		if (rq->engine->sched_engine->retire_inflight_request_prio)
-			rq->engine->sched_engine->retire_inflight_request_prio(rq);
+		if (rq->sched_engine->retire_inflight_request_prio)
+			rq->sched_engine->retire_inflight_request_prio(rq);
 
-		spin_lock(&rq->lock);
+		spin_lock(&rq->sched.lock);
 		list_replace(&rq->fence.cb_list, &cb_list);
 		__dma_fence_signal__timestamp(&rq->fence, timestamp);
 		__dma_fence_signal__notify(&rq->fence, &cb_list);
-		spin_unlock(&rq->lock);
+		spin_unlock(&rq->sched.lock);
 
 		i915_request_put(rq);
 	}

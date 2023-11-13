@@ -312,9 +312,9 @@ TRACE_EVENT(i915_request_queue,
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = rq->engine->i915->drm.primary->index;
-			   __entry->class = rq->engine->uabi_class;
-			   __entry->instance = rq->engine->uabi_instance;
+			   __entry->dev = rq->engine ? rq->engine->i915->drm.primary->index : 0;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : 0;
+			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
 			   __entry->flags = flags;
@@ -883,51 +883,49 @@ TRACE_EVENT(intel_gt_pagefault,
 
 TRACE_EVENT(i915_gem_object_migrate,
 	    TP_PROTO(struct drm_i915_gem_object *obj,
-			enum intel_region_id region),
+		     struct intel_memory_region *region),
 	    TP_ARGS(obj, region),
 
 	    TP_STRUCT__entry(
-			     __field(struct drm_i915_private*, dev)
-			     __field(struct drm_i915_gem_object*, obj)
+			     __field(int, dev)
+			     __field(struct drm_i915_gem_object *, obj)
 			     __field(u64, size)
-			     __field(u32, src)
-			     __field(u32, dst)
+			     __array(char, src, sizeof(((struct intel_memory_region *)0)->name))
+			     __array(char, dst, sizeof(((struct intel_memory_region *)0)->name))
 			     __field(bool, has_pages)
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = to_i915(obj->base.dev);
+			   __entry->dev = obj->base.dev->primary->index;
 			   __entry->obj = obj;
 			   __entry->size = obj->base.size;
-			   __entry->src = obj->mm.region.mem->id;
-			   __entry->dst = region;
+			   strcpy(__entry->src, obj->mm.region.mem->name);
+			   strcpy(__entry->dst, region->name);
 			   __entry->has_pages = i915_gem_object_has_pages(obj);
 			   ),
 
-	    TP_printk("dev %p migrate object %p [size %llx] %s %s from %s to %s",
+	    TP_printk("dev %d migrate object %p [size %llx] %s %s from %s to %s",
 		      __entry->dev, __entry->obj, __entry->size,
 		      __entry->has_pages ? "with" : "without", "backing storage",
-		      intel_memory_region_id2str(__entry->src),
-		      intel_memory_region_id2str(__entry->dst))
+		      __entry->src, __entry->dst)
 );
 
 TRACE_EVENT(i915_mm_fault,
-	    TP_PROTO(struct drm_i915_private *i915,
-			struct i915_address_space *vm,
-			struct i915_vma *vma,
-			struct recoverable_page_fault_info *info),
-	    TP_ARGS(i915, vm, vma, info),
+	    TP_PROTO(struct i915_address_space *vm,
+		     struct i915_vma *vma,
+		     struct recoverable_page_fault_info *info),
+	    TP_ARGS(vm, vma, info),
 
 	    TP_STRUCT__entry(
-			     __field(struct drm_i915_private*, dev)
-			     __field(struct i915_address_space*, vm)
-			     __field(struct drm_i915_gem_object*, obj)
+			     __field(int, dev)
+			     __field(const struct i915_address_space *, vm)
+			     __field(const struct drm_i915_gem_object *, obj)
+			     __array(char, region, sizeof(((struct intel_memory_region *)0)->name))
 			     __field(u64, obj_size)
 			     __field(u64, addr)
 			     __field(u64, vma_size)
 			     __field(u32, asid)
 			     __field(u32, pg_sz_mask)
-			     __field(u32, region)
 			     __field(u16, pdata)
 			     __field(u8, access_type)
 			     __field(u8, fault_type)
@@ -938,24 +936,22 @@ TRACE_EVENT(i915_mm_fault,
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = i915;
+			   __entry->dev = vm->i915->drm.primary->index;
 			   __entry->vm = vm;
 			   if (vma) {
 				   __entry->obj = vma->obj;
 				   __entry->obj_size = vma->obj->base.size;
+				   strcpy(__entry->region, vma->obj->mm.region.mem->name);
 				   __entry->vma_size = i915_vma_size(vma);
-				   __entry->region = !vma->obj->mm.region.mem ?
-				   	INTEL_REGION_UNKNOWN :
-				   	vma->obj->mm.region.mem->id;
 				   __entry->pg_sz_mask = vma->page_sizes;
 				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   } else {
 				   __entry->obj = NULL;
 				   __entry->obj_size = 0;
 				   __entry->vma_size = 0;
-				   __entry->region = INTEL_REGION_UNKNOWN;
 				   __entry->pg_sz_mask = 0;
 				   __entry->is_bound = false;
+				   strcpy(__entry->region, "none");
 			   }
 			   __entry->addr = info->page_addr;
 			   __entry->asid = info->asid;
@@ -967,10 +963,10 @@ TRACE_EVENT(i915_mm_fault,
 			   __entry->pdata = info->pdata;
 			   ),
 
-	    TP_printk("dev %p vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx pgsz %x, %s[%d] %d: %s (0x%x)",
+	    TP_printk("dev %d vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx pgsz %x, %s[%d] %d: %s (0x%x)",
 		      __entry->dev, __entry->vm, __entry->asid,
 		      intel_access_type2str(__entry->access_type),
-		      intel_memory_region_id2str(__entry->region),
+		      __entry->region,
 		      __entry->obj, __entry->obj_size, __entry->addr,
 		      __entry->is_bound ? " bound" : "", __entry->vma_size, __entry->pg_sz_mask,
 		      intel_engine_class_repr(__entry->engine_class),
@@ -1039,29 +1035,30 @@ TRACE_EVENT(intel_access_counter,
 );
 
 TRACE_EVENT(i915_vm_prefetch,
-	    TP_PROTO(struct drm_i915_private *i915, u32 vm_id, u64 start, u64 len, enum intel_region_id region),
-	    TP_ARGS(i915, vm_id, start, len, region),
+	    TP_PROTO(struct intel_memory_region *region, u32 vm_id, u64 start, u64 len),
+	    TP_ARGS(region, vm_id, start, len),
 
 	    TP_STRUCT__entry(
-			     __field(struct drm_i915_private*, dev)
+			     __field(int, dev)
 			     __field(u32, vm_id)
 			     __field(u64, start)
 			     __field(u64, len)
-			     __field(enum intel_region_id, region)
+			     __array(char, region, sizeof(((struct intel_memory_region *)0)->name))
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = i915;
+			   __entry->dev = region->i915->drm.primary->index;
 			   __entry->vm_id = vm_id;
 			   __entry->start = start;
 			   __entry->len = len;
-			   __entry->region = region;
+			   strcpy(__entry->region, region->name);
 			   ),
 
-	    TP_printk("dev %p prefetch va start %llx (len %llx) to region %s for vm %d",
+	    TP_printk("dev %d prefetch va start %llx (len %llx) to region %s for vm %d",
 		      __entry->dev,
 		      __entry->start, __entry->len,
-		      intel_memory_region_id2str(__entry->region), __entry->vm_id)
+		      __entry->region,
+		      __entry->vm_id)
 );
 #endif /* _I915_TRACE_H_ */
 

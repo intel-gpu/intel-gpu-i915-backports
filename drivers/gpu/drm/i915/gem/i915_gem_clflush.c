@@ -64,7 +64,7 @@ static struct clflush *clflush_work_create(struct drm_i915_gem_object *obj)
 		return NULL;
 	}
 
-	dma_fence_work_init(&clflush->base, &clflush_ops);
+	dma_fence_work_init(&clflush->base, &clflush_ops, to_i915(obj->base.dev)->sched);
 	clflush->obj = i915_gem_object_get(obj); /* obj <-> clflush cycle */
 
 	return clflush;
@@ -112,15 +112,16 @@ bool i915_gem_clflush_object(struct drm_i915_gem_object *obj,
 #endif
 		clflush = clflush_work_create(obj);
 	if (clflush) {
-		i915_sw_fence_await_reservation(&clflush->base.chain,
+		i915_sw_fence_await_reservation(&clflush->base.rq.submit,
 						obj->base.resv, NULL, true,
 						i915_fence_timeout(to_i915(obj->base.dev)),
 						I915_FENCE_GFP);
 #ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
-		dma_resv_add_fence(obj->base.resv, &clflush->base.dma,
+		dma_resv_add_fence(obj->base.resv, &clflush->base.rq.fence,
 				   DMA_RESV_USAGE_WRITE);
 #else
-		dma_resv_add_excl_fence(obj->base.resv, &clflush->base.dma);
+		dma_resv_add_excl_fence(obj->base.resv,
+					&clflush->base.rq.fence);
 #endif
 		dma_fence_work_commit(&clflush->base);
 		/*

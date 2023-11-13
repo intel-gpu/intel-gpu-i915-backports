@@ -10,6 +10,7 @@
 
 #include "i915_drv.h"
 #include "i915_vma.h"
+#include "intel_context.h"
 #include "intel_engine.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
@@ -51,14 +52,7 @@ int intel_ring_pin(struct intel_ring *ring, struct i915_gem_ww_ctx *ww)
 	if (unlikely(ret))
 		goto err_unpin;
 
-	if (i915_vma_is_map_and_fenceable(vma) && !HAS_LLC(vma->vm->i915)) {
-		addr = (void __force *)i915_vma_pin_iomap(vma);
-	} else {
-		int type = i915_coherent_map_type(vma->vm->i915, vma->obj, false);
-
-		addr = i915_gem_object_pin_map(vma->obj, type);
-	}
-
+	addr = (void __force *)i915_vma_pin_iomap(vma);
 	if (IS_ERR(addr)) {
 		ret = PTR_ERR(addr);
 		goto err_ring;
@@ -96,10 +90,7 @@ void intel_ring_unpin(struct intel_ring *ring)
 		return;
 
 	i915_vma_unset_ggtt_write(vma);
-	if (i915_vma_is_map_and_fenceable(vma) && !HAS_LLC(vma->vm->i915))
-		i915_vma_unpin_iomap(vma);
-	else
-		i915_gem_object_unpin_map(vma->obj);
+	i915_vma_unpin_iomap(vma);
 
 	i915_vma_make_purgeable(vma);
 	i915_vma_unpin(vma);
@@ -217,6 +208,10 @@ wait_for_space(struct intel_ring *ring,
 	if (!__i915_request_is_complete(target)) {
 		if (i915_request_is_nonblocking(rq))
 			return -EAGAIN;
+
+		if (intel_context_is_barrier(rq->context))
+			i915_request_set_priority(target,
+						  I915_PRIORITY_BARRIER);
 
 		timeout = i915_request_wait(target,
 					    I915_WAIT_INTERRUPTIBLE,

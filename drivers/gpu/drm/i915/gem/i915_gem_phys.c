@@ -96,7 +96,7 @@ err_pci:
 	return -ENOMEM;
 }
 
-void
+int
 i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
 			       struct sg_table *pages)
 {
@@ -138,6 +138,7 @@ i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
 	dma_free_coherent(obj->base.dev->dev,
 			  roundup_pow_of_two(obj->base.size),
 			  vaddr, dma);
+	return 0;
 }
 
 int i915_gem_object_pwrite_phys(struct drm_i915_gem_object *obj,
@@ -205,8 +206,11 @@ static int i915_gem_object_shmem_to_phys(struct drm_i915_gem_object *obj)
 	/* Perma-pin (until release) the physical set of pages */
 	__i915_gem_object_pin_pages(obj);
 
-	if (!IS_ERR_OR_NULL(pages))
-		i915_gem_object_put_pages_shmem(obj, pages);
+	if (!IS_ERR_OR_NULL(pages)) {
+		err = i915_gem_object_put_pages_shmem(obj, pages);
+		if (err)
+			goto err_xfer;
+	}
 
 	i915_gem_object_release_memory_region(obj);
 	return 0;

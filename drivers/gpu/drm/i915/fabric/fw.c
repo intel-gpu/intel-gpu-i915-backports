@@ -1644,7 +1644,7 @@ static void fw_initialization_complete(struct fdev *dev)
 	complete_all(&dev->psc.abort);
 	wait_for_completion(&dev->psc.done);
 
-	if (noisy_logging_allowed())
+	if (is_fdev_registered(dev))
 		dev_info(fdev_dev(dev), "Firmware Version: %s\n",
 			 dev->sd[0].fw_version.fw_version_string);
 
@@ -1716,10 +1716,13 @@ static void load_and_init_subdev(struct fsubdev *sd)
 
 	WRITE_ONCE(sd->fw_running, true);
 
-	if (!dev_is_runtime_debug(sd->fdev))
-		initialize_fports(sd);
-	else
+	if (!dev_is_runtime_debug(sd->fdev)) {
+		err = initialize_fports(sd);
+		if (err)
+			goto cleanup;
+	} else {
 		sd_dbg(sd, "debug mode: skipping port init\n");
+	}
 
 	reset_errors(sd);
 

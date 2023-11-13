@@ -123,8 +123,10 @@ bool i915_error_injected(void);
 #endif
 
 /* Note we don't consider signbits :| */
+#ifndef overflows_type
 #define overflows_type(x, T) \
 	(sizeof(x) > sizeof(T) && (x) >> BITS_PER_TYPE(T))
+#endif
 
 static inline bool
 __check_struct_size(size_t base, size_t arr, size_t count, size_t *size)

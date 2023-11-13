@@ -43,6 +43,10 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	return value;
 }
 
+#define I915_DEVICE_ATTR_RO(_name, _show) \
+	struct i915_ext_attr dev_attr_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show}
+
 struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 					    const char *name)
 {
@@ -78,10 +82,6 @@ addr_range_show(struct device *kdev, struct device_attribute *attr, char *buf)
 
 	return sysfs_emit(buf, "%pa\n", &gt->lmem->actual_physical_mem);
 }
-
-#define I915_DEVICE_ATTR_RO(_name, _show) \
-	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show}
 
 static I915_DEVICE_ATTR_RO(addr_range, addr_range_show);
 

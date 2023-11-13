@@ -163,6 +163,12 @@ try_again:
 			break;
 		}
 
+		if (flags & I915_GEM_OBJECT_UNBIND_KEEP_RESIDENT &&
+		    test_bit(I915_VMA_RESIDENT_BIT, __i915_vma_flags(vma))) {
+			ret = -EBUSY;
+			break;
+		}
+
 		if (flags & I915_GEM_OBJECT_UNBIND_TEST) {
 			ret = -EBUSY;
 			break;
@@ -177,6 +183,13 @@ try_again:
 		spin_unlock(&obj->vma.lock);
 		if (!vma)
 			goto close_vm;
+
+		/* Always wait for a pending unbind before checking activity */
+		if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma))) {
+			ret = i915_vma_wait_for_bind(vma);
+			if (ret)
+				goto put_vma;
+		}
 
 		if (!(flags & I915_GEM_OBJECT_UNBIND_ACTIVE) &&
 		    i915_vma_is_active(vma)) {
@@ -1184,6 +1197,7 @@ err_unlock:
 
 	if (ret != -EIO) {
 		for_each_gt(gt, dev_priv, i) {
+			i915_gem_fini_lmem(gt);
 			intel_gt_driver_remove(gt);
 			intel_gt_driver_release(gt);
 			intel_uc_cleanup_firmwares(&gt->uc);
@@ -1233,6 +1247,7 @@ void i915_gem_driver_remove(struct drm_i915_private *dev_priv)
 
 	for_each_gt(gt, dev_priv, i) {
 		intel_gt_suspend_late(gt);
+		i915_gem_fini_lmem(gt);
 		intel_gt_driver_remove(gt);
 	}
 	dev_priv->uabi_engines = RB_ROOT;
@@ -1247,6 +1262,7 @@ void i915_gem_driver_release(struct drm_i915_private *dev_priv)
 	unsigned int i;
 
 	for_each_gt(gt, dev_priv, i) {
+		i915_gem_fini_lmem(gt);
 		intel_gt_driver_release(gt);
 		intel_uc_cleanup_firmwares(&gt->uc);
 	}
@@ -1264,11 +1280,6 @@ static void i915_gem_init__mm(struct drm_i915_private *i915)
 
 	INIT_LIST_HEAD(&i915->mm.purge_list);
 	INIT_LIST_HEAD(&i915->mm.shrink_list);
-
-	seqlock_init(&i915->mm.blt_swap_stats.in.lock);
-	seqlock_init(&i915->mm.blt_swap_stats.out.lock);
-	seqlock_init(&i915->mm.memcpy_swap_stats.in.lock);
-	seqlock_init(&i915->mm.memcpy_swap_stats.out.lock);
 
 	i915_gem_init__objects(i915);
 }

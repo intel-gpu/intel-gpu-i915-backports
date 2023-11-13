@@ -2889,10 +2889,15 @@ static int gen8_configure_context(struct i915_perf_stream *stream,
 				  struct flex *flex, unsigned int count)
 {
 	struct i915_gem_engines_iter it;
+	struct i915_gem_engines *e;
 	struct intel_context *ce;
 	int err = 0;
 
-	for_each_gem_engine(ce, i915_gem_context_lock_engines(ctx), it) {
+	e = i915_gem_context_engines_get(ctx, NULL);
+	if (!e)
+		return 0;
+
+	for_each_gem_engine(ce, e, it) {
 		GEM_BUG_ON(ce == ce->engine->kernel_context);
 
 		if (!engine_supports_oa(ce->engine->i915, ce->engine) ||
@@ -2910,7 +2915,7 @@ static int gen8_configure_context(struct i915_perf_stream *stream,
 		if (err)
 			break;
 	}
-	i915_gem_context_unlock_engines(ctx);
+	i915_gem_context_engines_put(e);
 
 	return err;
 }
@@ -4313,7 +4318,7 @@ static vm_fault_t vm_fault_oa(struct vm_fault *vmf)
 
 	err = remap_io_sg(vma,
 			  vma->vm_start, vma->vm_end - vma->vm_start,
-			  stream->oa_buffer.vma->pages->sgl, -1);
+			  stream->oa_buffer.vma->pages->sgl, 0, -1);
 
 	return i915_error_to_vmf_fault(err);
 }

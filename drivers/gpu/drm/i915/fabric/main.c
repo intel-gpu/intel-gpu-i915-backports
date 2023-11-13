@@ -58,8 +58,6 @@ LIST_HEAD(routable_list);
  */
 #define PRODUCT_SHIFT 16
 
-static bool suppress_noisy_logging;
-
 static enum iaf_startup_mode param_startup_mode = STARTUP_MODE_DEFAULT;
 
 struct workqueue_struct *iaf_unbound_wq;
@@ -687,6 +685,8 @@ static int iaf_remove(struct platform_device *pdev)
 
 	pd->unregister_dev(pd->parent, dev);
 
+	WRITE_ONCE(dev->registered, false);
+
 	fdev_wait_on_release(dev);
 
 	/*
@@ -878,6 +878,8 @@ static int iaf_probe(struct platform_device *pdev)
 		goto sysfs_error;
 	}
 
+	WRITE_ONCE(dev->registered, true);
+
 	init_debugfs(dev);
 
 	for (sds_added = 0; sds_added < pd->sd_cnt; ++sds_added) {
@@ -964,15 +966,32 @@ static void fw_abort(void)
 	xa_unlock(&intel_fdevs);
 }
 
-bool noisy_logging_allowed(void)
+bool is_fdev_registered(struct fdev *dev)
 {
-	return !READ_ONCE(suppress_noisy_logging);
+	return READ_ONCE(dev->registered);
+}
+
+/*
+ * Check that both ends of the port pair are registered.
+ */
+bool is_fport_registered(struct fport *port)
+{
+	if (is_fdev_registered(port->sd->fdev)) {
+		struct fdev *neighbor_dev = fdev_find_by_sd_guid(port->portinfo->neighbor_guid);
+
+		if (neighbor_dev) {
+			bool registered = is_fdev_registered(neighbor_dev);
+
+			fdev_put(neighbor_dev);
+			return registered;
+		}
+	}
+
+	return false;
 }
 
 static void __exit iaf_unload_module(void)
 {
-	WRITE_ONCE(suppress_noisy_logging, true);
-
 	pr_notice("Unloading %s\n", MODULEDETAILS);
 
 	mbox_term_module();

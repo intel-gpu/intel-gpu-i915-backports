@@ -502,7 +502,7 @@ static bool wa_1209644611_applies(int gen, u32 size)
  * {lmem, smem}, objects are treated as non Flat-CCS capable objects.
  */
 
-u32 *i915_flush_dw(u32 *cmd, u32 flags)
+static inline u32 *i915_flush_dw(u32 *cmd, u32 flags)
 {
 	*cmd++ = MI_FLUSH_DW | flags;
 	*cmd++ = 0;

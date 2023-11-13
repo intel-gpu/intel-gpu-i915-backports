@@ -2169,6 +2169,12 @@ i915_get_ggtt_vma_pages(struct i915_vma *vma)
 	 */
 	GEM_BUG_ON(!i915_gem_object_has_pinned_pages(vma->obj));
 
+	if (vma->ggtt_view.type != I915_GGTT_VIEW_NORMAL) {
+		ret = i915_gem_object_migrate_sync(vma->obj);
+		if(ret)
+			return ret;
+	}
+
 	switch (vma->ggtt_view.type) {
 	default:
 		GEM_BUG_ON(vma->ggtt_view.type);

@@ -16,13 +16,16 @@
 #include "intel_rps.h"
 #include "pxp/intel_pxp_irq.h"
 
-static noinline void guc_irq_handler(struct intel_guc *guc, u16 iir)
+static noinline void guc_irq_handler(struct intel_guc *guc, u16 iir, u64 t0)
 {
 	if (unlikely(!guc->interrupts.enabled))
 		return;
 
 	if (iir & GUC_INTR_GUC2HOST)
 		intel_guc_to_host_event_handler(guc);
+
+	if (t0)
+		intel_gt_stats_irq_time(&guc->stats.irq, t0);
 }
 
 static u32
@@ -30,28 +33,35 @@ gen11_gt_engine_identity(struct intel_gt *gt,
 			 const unsigned int bank, const unsigned int bit)
 {
 	void __iomem * const regs = gt->uncore->regs;
-	u32 timeout_ts;
 	u32 ident;
 
 	lockdep_assert_held(gt->irq_lock);
 
 	raw_reg_write(regs, GEN11_IIR_REG_SELECTOR(bank), BIT(bit));
 
-	/*
-	 * NB: Specs do not specify how long to spin wait,
-	 * so we do ~100us as an educated guess.
-	 */
-	timeout_ts = (local_clock() >> 10) + 100;
-	do {
-		ident = raw_reg_read(regs, GEN11_INTR_IDENTITY_REG(bank));
-	} while (!(ident & GEN11_INTR_DATA_VALID) &&
-		 !time_after32(local_clock() >> 10, timeout_ts));
-
+	ident = raw_reg_read(regs, GEN11_INTR_IDENTITY_REG(bank));
 	if (unlikely(!(ident & GEN11_INTR_DATA_VALID))) {
-		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
-					  "Invalid Engine Interrupt reported INTR_IDENTITY_REG%u:%u 0x%08x not valid!\n",
-					  bank, bit, ident);
-		return 0;
+		u32 timeout_ts;
+
+		/*
+		 * NB: Specs do not specify how long to spin wait,
+		 * so we do ~100us as an educated guess.
+		 */
+		timeout_ts = (local_clock() >> 10) + 100;
+		do {
+			ident = raw_reg_read(regs, GEN11_INTR_IDENTITY_REG(bank));
+			if (ident & GEN11_INTR_DATA_VALID)
+				break;
+
+			if (time_after32(local_clock() >> 10, timeout_ts)) {
+				intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
+							  "Invalid Engine Interrupt reported INTR_IDENTITY_REG%u:%u 0x%08x not valid!\n",
+							  bank, bit, ident);
+				return 0;
+			}
+
+			cpu_relax();
+		} while (1);
 	}
 
 	/*
@@ -69,14 +79,14 @@ gen11_gt_engine_identity(struct intel_gt *gt,
 
 static void
 gen11_other_irq_handler(struct intel_gt *gt, const u8 instance,
-			const u16 iir)
+			const u16 iir, u64 t0)
 {
 	struct intel_gt *media_gt = gt->i915->media_gt;
 
 	if (instance == OTHER_GUC_INSTANCE)
-		return guc_irq_handler(&gt->uc.guc, iir);
+		return guc_irq_handler(&gt->uc.guc, iir, t0);
 	if (instance == OTHER_MEDIA_GUC_INSTANCE && media_gt)
-		return guc_irq_handler(&media_gt->uc.guc, iir);
+		return guc_irq_handler(&media_gt->uc.guc, iir, t0);
 
 	if (instance == OTHER_GTPM_INSTANCE)
 		return gen11_rps_irq_handler(&gt->rps, iir);
@@ -118,7 +128,7 @@ static struct intel_gt *pick_gt(struct intel_gt *gt, u8 class, u8 instance)
 }
 
 static void
-gen11_gt_identity_handler(struct intel_gt *gt, const u32 identity)
+gen11_gt_identity_handler(struct intel_gt *gt, const u32 identity, ktime_t t0)
 {
 	const u8 class = GEN11_INTR_ENGINE_CLASS(identity);
 	const u8 instance = GEN11_INTR_ENGINE_INSTANCE(identity);
@@ -140,10 +150,10 @@ gen11_gt_identity_handler(struct intel_gt *gt, const u32 identity)
 		engine = NULL;
 
 	if (engine)
-		return intel_engine_cs_irq(engine, intr);
+		return intel_engine_cs_irq_time(engine, intr, t0);
 
 	if (class == OTHER_CLASS)
-		return gen11_other_irq_handler(gt, instance, intr);
+		return gen11_other_irq_handler(gt, instance, intr, t0);
 
 	intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
 				  "unknown interrupt class=0x%x, instance=0x%x, intr=0x%x\n",
@@ -162,9 +172,11 @@ gen11_gt_bank_handler(struct intel_gt *gt, const unsigned int bank)
 	intr_dw = raw_reg_read(regs, GEN11_GT_INTR_DW(bank));
 
 	for_each_set_bit(bit, &intr_dw, 32) {
-		const u32 ident = gen11_gt_engine_identity(gt, bank, bit);
+		u64 t0 = local_clock();
+		u32 ident;
 
-		gen11_gt_identity_handler(gt, ident);
+		ident = gen11_gt_engine_identity(gt, bank, bit);
+		gen11_gt_identity_handler(gt, ident, t0);
 	}
 
 	/* Clear must be after shared has been served for engine */
@@ -173,18 +185,17 @@ gen11_gt_bank_handler(struct intel_gt *gt, const unsigned int bank)
 
 void gen11_gt_irq_handler(struct intel_gt *gt, const u32 master_ctl)
 {
+	u64 t = local_clock();
 	unsigned int bank;
 
 	spin_lock(gt->irq_lock);
-
 	for (bank = 0; bank < 2; bank++) {
 		if (master_ctl & GEN11_GT_DW_IRQ(bank))
 			gen11_gt_bank_handler(gt, bank);
 	}
-
 	spin_unlock(gt->irq_lock);
 
-	WRITE_ONCE(gt->irq_count, gt->irq_count + 1);
+	intel_gt_stats_irq_time(&gt->stats.irq, t);
 }
 
 bool gen11_gt_reset_one_iir(struct intel_gt *gt,
@@ -456,7 +467,7 @@ void gen8_gt_irq_handler(struct intel_gt *gt, u32 master_ctl)
 		iir = raw_reg_read(regs, GEN8_GT_IIR(2));
 		if (likely(iir)) {
 			gen6_rps_irq_handler(&gt->rps, iir);
-			guc_irq_handler(&gt->uc.guc, iir >> 16);
+			guc_irq_handler(&gt->uc.guc, iir >> 16, 0);
 			raw_reg_write(regs, GEN8_GT_IIR(2), iir);
 		}
 	}

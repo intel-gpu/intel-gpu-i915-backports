@@ -1856,6 +1856,8 @@
 #define PVC_GT0_PACKAGE_POWER_SKU_UNIT		_MMIO(0x281068)
 #define PVC_GT0_PLATFORM_ENERGY_STATUS		_MMIO(0x28106c)
 #define PVC_GT0_PACKAGE_POWER_SKU		_MMIO(0x281080)
+#define PVC_CR_RMID_ENERGY_8			_MMIO(0x281ac0)
+#define PVC_CR_RMID_ENERGY_9			_MMIO(0x281ac8)
 
 /*
  * Standalone Media's non-engine GT registers are located at their regular GT

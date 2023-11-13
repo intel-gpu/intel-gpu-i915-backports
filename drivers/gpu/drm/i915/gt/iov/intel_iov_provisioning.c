@@ -6,7 +6,6 @@
 #include "intel_iov.h"
 #include "intel_iov_provisioning.h"
 #include "intel_iov_utils.h"
-#include "gem/i915_gem_object_blt.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_buffer_pool.h"

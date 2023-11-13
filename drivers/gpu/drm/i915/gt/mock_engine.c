@@ -163,6 +163,7 @@ static int mock_context_alloc(struct intel_context *ce)
 		return err;
 	}
 
+	__set_bit(CONTEXT_BARRIER_BIT, &ce->flags);
 	return 0;
 }
 

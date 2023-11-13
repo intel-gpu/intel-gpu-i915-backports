@@ -132,6 +132,9 @@ static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 	if (!i915->params.enable_rc6)
 		return false;
 
+	if (IS_SRIOV_VF(i915))
+		return false;
+
 	if (i915->quiesce_gpu)
 		return false;
 	/*
@@ -145,49 +148,32 @@ static inline bool pvc_needs_rc6_wa(struct drm_i915_private *i915)
 }
 
 /* Wa_16015496043 Hold forcewake on GT0 & GT1 to disallow rc6 */
-static inline void _pvc_wa_disallow_rc6(struct drm_i915_private *i915, bool enable, bool rpm_awake)
+static inline void
+_pvc_wa_disallow_rc6(struct drm_i915_private *i915,
+		     void (*fn)(struct intel_uncore *uncore,
+				enum forcewake_domains fw_domains))
 {
-	unsigned int id;
-	struct intel_gt *gt;
 	intel_wakeref_t wakeref;
-	void (*intel_uncore_forcewake)(struct intel_uncore *uncore,
-				       enum forcewake_domains fw_domains);
+	struct intel_gt *gt;
+	unsigned int id;
 
 	if (!pvc_needs_rc6_wa(i915))
 		return;
 
-	intel_uncore_forcewake = enable ? intel_uncore_forcewake_get :
-						intel_uncore_forcewake_put;
-
-	for_each_gt(gt, i915, id) {
-		/* FIXME Remove static check and add dynamic check to avoid rpm helper */
-		if (!rpm_awake) {
-			with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-				intel_uncore_forcewake(gt->uncore, FORCEWAKE_GT);
-		} else {
-			intel_uncore_forcewake(gt->uncore, FORCEWAKE_GT);
-		}
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		for_each_gt(gt, i915, id)
+			fn(gt->uncore, FORCEWAKE_GT);
 	}
 }
 
 static inline void pvc_wa_disallow_rc6(struct drm_i915_private *i915)
 {
-	_pvc_wa_disallow_rc6(i915, true, false);
+	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_get);
 }
 
 static inline void pvc_wa_allow_rc6(struct drm_i915_private *i915)
 {
-	_pvc_wa_disallow_rc6(i915, false, false);
-}
-
-static inline void pvc_wa_disallow_rc6_if_awake(struct drm_i915_private *i915)
-{
-	_pvc_wa_disallow_rc6(i915, true, true);
-}
-
-static inline void pvc_wa_allow_rc6_if_awake(struct drm_i915_private *i915)
-{
-	_pvc_wa_disallow_rc6(i915, false, true);
+	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_put);
 }
 
 void intel_gt_info_print(const struct intel_gt_info *info,

@@ -586,8 +586,12 @@ static int mei_me_hw_ready_wait(struct mei_device *dev)
 static void mei_me_check_fw_reset(struct mei_device *dev)
 {
 	struct mei_fw_status fw_status;
+	char fw_sts_str[MEI_FW_STATUS_STR_SZ] = {0};
 	int ret;
 	u32 fw_pm_event = 0;
+
+	if (!dev->saved_fw_status_flag)
+		goto end;
 
 	if (dev->gsc_reset_to_pxp == MEI_DEV_RESET_TO_PXP_PERFORMED || dev->forcewake_needed) {
 		ret = mei_fw_status(dev, &fw_status);
@@ -600,37 +604,14 @@ static void mei_me_check_fw_reset(struct mei_device *dev)
 			dev_err(dev->dev, "failed to read firmware status: %d\n", ret);
 		}
 	}
-	if (dev->saved_fw_status_flag) {
-		char fw_sts_str[MEI_FW_STATUS_STR_SZ] = {0};
 
-		mei_fw_status2str(&dev->saved_fw_status, fw_sts_str, sizeof(fw_sts_str));
-		dev_warn(dev->dev, "unexpected reset: fw_pm_event = 0x%x, dev_state = %u fw status = %s\n",
-			 fw_pm_event, dev->saved_dev_state, fw_sts_str);
-	} else {
-		dev_warn(dev->dev, "unexpected reset: fw_pm_event = 0x%x\n", fw_pm_event);
-	}
+	mei_fw_status2str(&dev->saved_fw_status, fw_sts_str, sizeof(fw_sts_str));
+	dev_warn(dev->dev, "unexpected reset: fw_pm_event = 0x%x, dev_state = %u fw status = %s\n",
+		 fw_pm_event, dev->saved_dev_state, fw_sts_str);
 
 end:
 	if (dev->gsc_reset_to_pxp == MEI_DEV_RESET_TO_PXP_PERFORMED)
 		dev->gsc_reset_to_pxp = MEI_DEV_RESET_TO_PXP_DONE;
-	dev->saved_fw_status_flag = false;
-}
-
-/**
- * mei_me_print_reset_info - print reset info, if available
- *
- * @dev: mei device
- */
-static void mei_me_print_reset_info(struct mei_device *dev)
-{
-	char fw_sts_str[MEI_FW_STATUS_STR_SZ] = {0};
-
-	if (!dev->saved_fw_status_flag)
-		return;
-
-	mei_fw_status2str(&dev->saved_fw_status, fw_sts_str, sizeof(fw_sts_str));
-	dev_warn(dev->dev, "link reset: dev_state = %u fw status = %s\n",
-		 dev->saved_dev_state, fw_sts_str);
 	dev->saved_fw_status_flag = false;
 }
 
@@ -650,10 +631,8 @@ static int mei_me_hw_start(struct mei_device *dev)
 	ret = mei_me_hw_ready_wait(dev);
 	if (kind_is_gsc(dev) || kind_is_gscfi(dev))
 		mei_me_check_fw_reset(dev);
-	if (ret) {
-		mei_me_print_reset_info(dev);
+	if (ret)
 		return ret;
-	}
 	dev_dbg(dev->dev, "hw is ready\n");
 
 	mei_me_host_set_ready(dev);
@@ -1483,6 +1462,8 @@ static int mei_gt_forcewake_put(struct mei_device *dev)
 	dev_dbg(dev->dev, "Forcewake put %d\n", dev->forcewake_count);
 	if (dev->forcewake_count <= 0)
 		return 0;
+	if (dev->forcewake_count <= 1)
+		dev->forcewake_wait_done = false;
 	hw->forcewake_put(hw->gsc);
 	return dev->forcewake_count--;
 }

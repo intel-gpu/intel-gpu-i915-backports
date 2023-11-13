@@ -825,8 +825,8 @@ static int get_mtl_gms_size(struct intel_uncore *uncore)
 	}
 }
 
-struct intel_memory_region *
-i915_gem_stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
+static struct intel_memory_region *
+stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 {
 	struct intel_uncore *uncore = gt->uncore;
 	struct drm_i915_private *i915 = gt->i915;
@@ -908,12 +908,11 @@ i915_gem_stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 	intel_memory_region_set_name(mem, "stolen-local");
 
 	mem->private = true;
-
 	return mem;
 }
 
-struct intel_memory_region*
-i915_gem_stolen_smem_setup(struct intel_gt *gt, u16 type, u16 instance)
+static struct intel_memory_region*
+stolen_smem_setup(struct intel_gt *gt, u16 type, u16 instance)
 {
 	struct intel_memory_region *mem;
 
@@ -929,6 +928,15 @@ i915_gem_stolen_smem_setup(struct intel_gt *gt, u16 type, u16 instance)
 
 	mem->private = true;
 	return mem;
+}
+
+struct intel_memory_region*
+i915_gem_stolen_setup(struct intel_gt *gt, u16 type, u16 instance)
+{
+	if (IS_DGFX(gt->i915))
+		return stolen_lmem_setup(gt, type, instance);
+
+	return stolen_smem_setup(gt, type, instance);
 }
 
 struct drm_i915_gem_object *

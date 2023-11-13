@@ -28,7 +28,6 @@
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
-#include "gem/i915_gem_object_blt.h"
 #include "gem/selftests/mock_context.h"
 #include "gt/intel_context.h"
 #include "gt/intel_gpu_commands.h"
@@ -1163,178 +1162,6 @@ static int igt_ppgtt_shrink_boom(void *arg)
 	return exercise_ppgtt(arg, shrink_boom);
 }
 
-static int igt_ppgtt_flat(void *arg)
-{
-	struct drm_i915_private *i915 = arg;
-	struct intel_memory_region *mr = to_gt(i915)->lmem;
-	struct drm_i915_gem_object *obj;
-	struct i915_address_space *vm;
-	struct i915_gem_context *ctx;
-	struct i915_vma *vma, *batch;
-	struct i915_gem_ww_ctx ww;
-	struct intel_context *ce;
-	struct i915_request *rq;
-	struct drm_mm_node flat;
-	I915_RND_STATE(prng);
-	struct file *file;
-	long timeout;
-	u32 *vaddr;
-	u32 val;
-	int ret;
-	u64 va;
-	u32 i;
-
-	if (!mr) {
-		pr_info("skipping...\n");
-		return 0;
-	}
-
-	file = mock_file(i915);
-	if (IS_ERR(file))
-		return PTR_ERR(file);
-
-	ctx = live_context(i915, file);
-	if (IS_ERR(ctx)) {
-		ret = PTR_ERR(ctx);
-		goto out_put;
-	}
-
-	memset(&flat, 0, sizeof(flat));
-	flat.start = round_down(mr->region.start, SZ_1G);
-	flat.size = round_up(mr->region.end, SZ_1G) - flat.start;
-	flat.color = I915_COLOR_UNEVICTABLE;
-
-	vm = i915_gem_context_get_eb_vm(ctx);
-
-	ret = intel_flat_lmem_ppgtt_init(vm, &flat);
-	if (ret)
-		goto out_vm;
-
-	obj = i915_gem_object_create_lmem(i915, SZ_64M,
-					  I915_BO_ALLOC_CONTIGUOUS);
-	if (IS_ERR(obj)) {
-		ret = PTR_ERR(obj);
-		goto out_fini;
-	}
-
-	vaddr = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
-	if (IS_ERR(vaddr)) {
-		ret = PTR_ERR(vaddr);
-		goto out_unpin;
-	}
-
-	val = prandom_u32_state(&prng);
-	/* sending one byte of data as per PVC_MEM_SET_CMD in PVC */
-	if (HAS_LINK_COPY_ENGINES(i915))
-		val = val & 0xff;
-
-	memset32(vaddr, val ^ 0xdeadbeaf, obj->base.size / sizeof(u32));
-
-	va = igt_random_offset(&prng,
-			       flat.start + flat.size, vm->total,
-			       obj->base.size,
-			       I915_GTT_PAGE_SIZE_64K);
-
-	vma = i915_vma_instance(obj, vm, NULL);
-	ret = i915_vma_pin(vma, 0, 0,
-			   PIN_USER |
-			   PIN_OFFSET_FIXED |
-			   va);
-	if (ret)
-		goto out_unpin;
-
-	GEM_BUG_ON(vma->node.start != va);
-
-	ce = i915_gem_context_get_engine(ctx, BCS0);
-	GEM_BUG_ON(IS_ERR(ce));
-
-	i915_gem_ww_ctx_init(&ww, false);
-	intel_engine_pm_get(ce->engine);
-retry:
-	ret = intel_context_pin_ww(ce, &ww);
-	if (ret)
-		goto out_ce;
-
-	batch = intel_emit_vma_fill_blt(ce, vma, &ww, val);
-	if (IS_ERR(batch)){
-		ret = PTR_ERR(batch);
-		goto out_ctx;
-	}
-
-	rq = i915_request_create(ce);
-	if (IS_ERR(rq)) {
-		ret = PTR_ERR(rq);
-		goto out_batch;
-	}
-
-	ret = intel_emit_vma_mark_active(batch, rq);
-	if (unlikely(ret))
-		goto out_request;
-
-	if (ce->engine->emit_init_breadcrumb)
-		ret = ce->engine->emit_init_breadcrumb(rq);
-
-	if (likely(!ret))
-		ret = ce->engine->emit_bb_start(rq,
-						i915_vma_offset(batch),
-						i915_vma_size(batch),
-						0);
-out_request:
-	if (unlikely(ret))
-		i915_request_set_error_once(rq, ret);
-
-	i915_request_get(rq);
-	i915_request_add(rq);
-
-	timeout = i915_request_wait(rq, 0, HZ / 2);
-	i915_request_put(rq);
-	if (timeout < 0) {
-		ret = -EIO;
-		goto out_batch;
-	}
-
-	if (HAS_LINK_COPY_ENGINES(i915))
-		val = val << 24 | val << 16 | val << 8 | val;
-
-	for (i = 0; i < obj->base.size; i += 17 * PAGE_SIZE) {
-		int j = (i + (i >> PAGE_SHIFT) % PAGE_SIZE) / sizeof(*vaddr);
-
-		if (vaddr[j] != val) {
-			pr_err("vaddr[%u]=%u\n", j, vaddr[j]);
-			ret = -EINVAL;
-			break;
-		}
-	}
-
-out_batch:
-	intel_emit_vma_release(ce, batch);
-out_ctx:
-	intel_context_unpin(ce);
-out_ce:
-	if (ret == -EDEADLK) {
-		ret = i915_gem_ww_ctx_backoff(&ww);
-		if(!ret)
-			goto retry;
-	}
-	i915_gem_ww_ctx_fini(&ww);
-	intel_context_put(ce);
-	intel_engine_pm_put(ce->engine);
-out_unpin:
-	i915_gem_object_put(obj);
-
-out_fini:
-	intel_flat_lmem_ppgtt_fini(vm, &flat);
-out_vm:
-	i915_vm_put(vm);
-out_put:
-	fput(file);
-
-	if (igt_flush_test(i915))
-		ret = -EIO;
-
-	return ret;
-}
-
 static int sort_holes(void *priv, const struct list_head *A,
 		      const struct list_head *B)
 {
@@ -1995,7 +1822,6 @@ int i915_gem_gtt_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(igt_ppgtt_fill),
 		SUBTEST(igt_ppgtt_shrink),
 		SUBTEST(igt_ppgtt_shrink_boom),
-		SUBTEST(igt_ppgtt_flat),
 		SUBTEST(igt_ggtt_lowlevel),
 		SUBTEST(igt_ggtt_drunk),
 		SUBTEST(igt_ggtt_walk),

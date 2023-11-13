@@ -1348,6 +1348,9 @@ static int __igt_mmap_revoke(struct drm_i915_private *i915,
 		goto out_unmap;
 	}
 
+	if (!i915_gem_object_has_pages(obj)) /* mapped via obj->swapto */
+		goto out_unmap;
+
 	/*
 	 * After unbinding the object from the GGTT, its address may be reused
 	 * for other objects. Ergo we have to revoke the previous mmap PTE

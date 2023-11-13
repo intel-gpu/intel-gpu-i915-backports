@@ -260,11 +260,167 @@ static int igt_lmem_speed(void *arg)
 	return __igt_lmem_clear(arg, true);
 }
 
+static int swap_blt_sync(struct intel_context *ce,
+			 struct i915_buddy_mm *mm,
+			 struct list_head *blocks,
+			 struct drm_i915_gem_object *smem,
+			 bool to_smem)
+{
+	struct i915_request *rq = NULL;
+	int err;
+
+	err = swap_blt(ce, smem /* dummy */,
+		       mm, blocks,
+		       smem, to_smem, MAX_SCHEDULE_TIMEOUT,
+		       &rq);
+	if (rq) {
+		i915_sw_fence_complete(&rq->submit);
+		if (i915_request_wait(rq, 0, HZ) < 0)
+			err = -ETIME;
+		else
+			err = rq->fence.error;
+		i915_request_put(rq);
+	}
+
+	return err;
+}
+
+static int igt_lmem_swap(void *arg)
+{
+	struct drm_i915_private *i915 = arg;
+	struct pm_qos_request qos;
+	struct intel_gt *gt;
+	I915_RND_STATE(prng);
+	int err = 0;
+	int id;
+
+	if (CPU_LATENCY >= 0)
+		cpu_latency_qos_add_request(&qos, CPU_LATENCY);
+
+	for_each_gt(gt, i915, id) {
+		struct intel_context *ce;
+		intel_wakeref_t wf;
+		u64 size;
+
+		if (!gt->lmem)
+			continue;
+
+		ce = get_blitter_context(gt, BCS0);
+		if (!ce)
+			continue;
+
+		wf = intel_gt_pm_get(gt);
+		intel_rps_boost(&gt->rps);
+
+		for (size = SZ_4K; size <= min_t(u64, gt->lmem->total / 2, SZ_2G); size <<= 1) {
+			struct drm_i915_gem_object *smem;
+			struct i915_buddy_block *block;
+			u64 sample, cookie, poison;
+			ktime_t in, out, sync = 0;
+			void * __iomem iova;
+			LIST_HEAD(blocks);
+			u64 offset, sz;
+
+			smem = create_smem(gt, size);
+			if (IS_ERR(smem))
+				break;
+
+			err = __intel_memory_region_get_pages_buddy(gt->lmem,
+								    NULL,
+								    size,
+								    0,
+								    &blocks);
+			if (err) {
+				pr_err("GT%d: failed to allocate %llx\n",
+				       id, size);
+				goto err;
+			}
+
+			err = sync_blocks(&blocks, HZ);
+			if (err)
+				goto err;
+
+			cookie = i915_prandom_u64_state(&prng);
+			poison = i915_prandom_u64_state(&prng);
+
+			block = list_first_entry(&blocks, typeof(*block), link);
+			offset = i915_buddy_block_offset(block);
+			sz = i915_buddy_block_size(&gt->lmem->mm, block);
+
+			offset -= gt->lmem->region.start;
+			iova = io_mapping_map_wc(&gt->lmem->iomap, offset, sz);
+
+			offset = igt_random_offset(&prng, 0, sz, sizeof(cookie), 1);
+			memcpy(iova + offset, &cookie, sizeof(cookie));
+
+			out = -READ_ONCE(gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+			sync -= ktime_get();
+			err = swap_blt_sync(ce, &gt->lmem->mm, &blocks, smem, true);
+			sync += ktime_get();
+			out += READ_ONCE(gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+			if (err)
+				goto err_buddy;
+
+			memcpy(iova + offset, &poison, sizeof(poison));
+
+			in = -READ_ONCE(gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
+			sync -= ktime_get();
+			err = swap_blt_sync(ce, &gt->lmem->mm, &blocks, smem, false);
+			sync += ktime_get();
+			in += READ_ONCE(gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
+			if (err)
+				goto err_buddy;
+
+			out = intel_gt_clock_interval_to_ns(gt, out);
+			in = intel_gt_clock_interval_to_ns(gt, in);
+			if (out && in) {
+				unsigned int out_bw, in_bw;
+
+				out_bw = div_u64(mul_u64_u32_shr(2ull * size, NSEC_PER_SEC, 20), out);
+				in_bw = div_u64(mul_u64_u32_shr(2ull * size, NSEC_PER_SEC, 20), in);
+
+				dev_info(gt->i915->drm.dev,
+					 "GT%d: checked with size:%llx, swap out:%dMiB/s, swap in:%dMiB/s, total:%lldns, overhead:%lldns (%d%%), freq:%dMHz\n",
+					 id, size, out_bw, in_bw, sync, sync - out - in,
+					 (int)div_u64((sync - out - in) * 100, sync),
+					 intel_rps_read_actual_frequency(&gt->rps));
+			}
+
+			memcpy(&sample, iova + offset, sizeof(sample));
+			if (sample != cookie) {
+				pr_err("GT%d: failed to swap in&out offset %llx of [%llx + %llx], cookie:%llx, sample:%llx [poison:%llx]\n",
+				       id, offset,
+				       i915_buddy_block_offset(block), sz,
+				       cookie, sample, poison);
+				err = -EINVAL;
+			}
+
+err_buddy:
+			__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, true);
+err:
+			i915_gem_object_put(smem);
+			if (err)
+				break;
+		}
+
+		intel_rps_cancel_boost(&gt->rps);
+		intel_gt_pm_put(gt, wf);
+		if (err)
+			break;
+	}
+
+	if (CPU_LATENCY >= 0)
+		cpu_latency_qos_remove_request(&qos);
+
+	return err;
+}
+
 int i915_gem_lmem_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
 		SUBTEST(igt_lmem_touch),
 		SUBTEST(igt_lmem_clear),
+		SUBTEST(igt_lmem_swap),
 	};
 
 	return i915_live_subtests(tests, i915);

@@ -76,26 +76,25 @@ int i915_gem_object_pread_phys(struct drm_i915_gem_object *obj,
 			       const struct drm_i915_gem_pread *args);
 
 int i915_gem_object_attach_phys(struct drm_i915_gem_object *obj, int align);
-void i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj,
-				     struct sg_table *pages);
-void i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
+int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj,
 				    struct sg_table *pages);
+int i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
+				   struct sg_table *pages);
 
 enum intel_region_id;
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 				 struct i915_gem_ww_ctx *ww);
 bool i915_gem_object_can_migrate(struct drm_i915_gem_object *obj,
 				 enum intel_region_id id);
+void i915_gem_object_move_notify(struct drm_i915_gem_object *obj);
 int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
-			    struct i915_gem_ww_ctx *ww,
-			    struct intel_context *ce,
 			    enum intel_region_id id,
 			    bool nowait);
 int i915_gem_object_memcpy(struct drm_i915_gem_object *dst,
 			   struct drm_i915_gem_object *src);
 int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 				   struct i915_gem_ww_ctx *ww,
-				   struct intel_memory_region **regions,
+				   struct intel_memory_region *const *regions,
 				   int size);
 int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
 				    struct i915_gem_ww_ctx *ww,
@@ -194,12 +193,6 @@ i915_gem_object_get_accounting(const struct drm_i915_gem_object *obj)
 
 #define assert_object_held(obj) dma_resv_assert_held((obj)->base.resv)
 
-#define object_is_isolated(obj)					\
-	(!IS_ENABLED(CONFIG_LOCKDEP) ||				\
-	 ((kref_read(&obj->base.refcount) == 0) ||		\
-	  ((kref_read(&obj->base.refcount) == 1) &&		\
-	   list_empty_careful(&obj->mm.link) &&			\
-	   list_empty_careful(&obj->vma.list))))
 /*
  * If more than one potential simultaneous locker, assert held.
  */
@@ -267,15 +260,6 @@ static inline bool i915_gem_object_trylock(struct drm_i915_gem_object *obj)
 	return dma_resv_trylock(obj->base.resv);
 }
 
-static inline void i915_gem_object_lock_isolated(struct drm_i915_gem_object *obj)
-{
-	int ret;
-
-	WARN_ON(!object_is_isolated(obj));
-	ret = dma_resv_trylock(obj->base.resv);
-	GEM_WARN_ON(!ret);
-}
-
 static inline void i915_gem_object_unlock(struct drm_i915_gem_object *obj)
 {
 	if (obj->ops->adjust_lru)
@@ -306,6 +290,12 @@ static inline bool
 i915_gem_object_has_backing_store(const struct drm_i915_gem_object *obj)
 {
 	return obj->flags & I915_BO_HAS_BACKING_STORE;
+}
+
+static inline bool
+i915_gem_object_is_exported(struct drm_i915_gem_object *obj)
+{
+	return obj->base.dma_buf;
 }
 
 static inline void
@@ -809,12 +799,8 @@ i915_gem_object_is_userptr(struct drm_i915_gem_object *obj)
 static inline bool i915_gem_object_is_userptr(struct drm_i915_gem_object *obj) { return false; }
 #endif
 
-int i915_window_blt_copy(struct drm_i915_gem_object *dst,
-			 struct drm_i915_gem_object *src, bool compressed);
-int i915_setup_blt_windows(struct drm_i915_private *i915);
-void i915_teardown_blt_windows(struct drm_i915_private *i915);
-
-bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj);
+bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj,
+					 bool *required);
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 					 enum intel_region_id dst_region_id,
 					 bool is_atomic_fault);
@@ -823,7 +809,6 @@ void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,
 				     struct dma_fence *f);
 int i915_gem_object_migrate_await(struct drm_i915_gem_object *obj,
 				  struct i915_request *rq);
-void i915_gem_object_migrate_boost(struct drm_i915_gem_object *obj, int prio);
 long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 				  unsigned int flags,
 				  long timeout);
@@ -843,22 +828,6 @@ i915_gem_object_migrate_has_error(const struct drm_i915_gem_object *obj)
 	return i915_active_fence_has_error(&obj->mm.migrate);
 }
 
-static inline bool
-i915_gem_object_mem_idle(const struct drm_i915_gem_object *obj)
-{
-	struct i915_buddy_block *block;
-
-	if (!obj->mm.region.mem)
-		return true;
-
-	list_for_each_entry(block, &obj->mm.blocks, link) {
-		if (!i915_active_fence_is_signaled(&block->active))
-			return false;
-	}
-
-	return true;
-}
-
 /**
  * i915_gem_object_inuse - Is this object accessible by userspace?
  *
@@ -873,6 +842,22 @@ i915_gem_object_inuse(const struct drm_i915_gem_object *obj)
 	if (obj->parent)
 		obj = obj->parent;
 	return READ_ONCE(obj->base.handle_count) || obj->base.dma_buf;
+}
+
+static inline bool
+i915_gem_object_mem_idle(const struct drm_i915_gem_object *obj)
+{
+	struct i915_buddy_block *block;
+
+	if (!obj->mm.region.mem)
+		return true;
+
+	list_for_each_entry(block, &obj->mm.blocks, link) {
+		if (!i915_active_fence_is_signaled(&block->active))
+			return false;
+	}
+
+	return true;
 }
 
 void i915_gem_object_share_resv(struct drm_i915_gem_object *parent,

@@ -49,4 +49,12 @@ static inline u32 get_random_u32(void)
 }
 #endif
 
+#ifdef BPM_GET_RANDOM_INT_NOT_PRESENT
+#define get_random_int get_random_long
+#endif
+
+#ifdef BPM_PRANDOM_U32_MAX_NOT_PRESENT
+#define prandom_u32_max get_random_u32_below
+#endif
+
 #endif /* __BACKPORT_RANDOM_H */

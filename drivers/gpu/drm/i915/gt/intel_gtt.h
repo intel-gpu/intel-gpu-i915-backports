@@ -318,7 +318,7 @@ struct i915_address_space {
 
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
-	u64 min_alignment[INTEL_MEMORY_STOLEN_LOCAL + 1];
+	u64 min_alignment[INTEL_REGION_UNKNOWN];
 
 	unsigned int bind_async_flags;
 

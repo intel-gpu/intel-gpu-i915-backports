@@ -468,19 +468,19 @@ eb_pin_vma(struct i915_execbuffer *eb,
 
 	/* Attempt to reuse the current location if available */
 	err = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
-	if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
-		return err;
-
 	if (unlikely(err)) {
+		if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
+			return err;
+
 		if (entry->flags & EXEC_OBJECT_PINNED)
 			return err;
 
 		/* Failing that pick any _free_ space if suitable */
 		err = i915_vma_pin_ww(vma, &eb->ww,
-					     entry->pad_to_size,
-					     entry->alignment,
-					     eb_pin_flags(entry, ev->flags) |
-					     PIN_USER | PIN_NOEVICT);
+				      entry->pad_to_size,
+				      entry->alignment,
+				      eb_pin_flags(entry, ev->flags) |
+				      PIN_USER | PIN_NOEVICT);
 		if (unlikely(err))
 			return err;
 	}
@@ -708,8 +708,8 @@ static int eb_reserve_vma(struct i915_execbuffer *eb,
 	}
 
 	err = i915_vma_pin_ww(vma, &eb->ww,
-			   entry->pad_to_size, entry->alignment,
-			   eb_pin_flags(entry, ev->flags) | pin_flags);
+			      entry->pad_to_size, entry->alignment,
+			      eb_pin_flags(entry, ev->flags) | pin_flags);
 	if (err)
 		return err;
 
@@ -901,6 +901,9 @@ eb_check_for_persistent_vma(struct i915_execbuffer *eb,
 	u64 va;
 
 	if (!test_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags))
+		return NULL;
+
+	if (!(entry->flags & EXEC_OBJECT_PINNED))
 		return NULL;
 
 	va = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
@@ -1185,15 +1188,16 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 			return -EINTR;
 
 		err = eb_pin_vma(eb, entry, ev);
-		if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
-			return err;
-
 		if (!err) {
 			if (entry->offset != i915_vma_offset(vma)) {
 				entry->offset = i915_vma_offset(vma) | UPDATE;
 				eb->args->flags |= __EXEC_HAS_RELOC;
 			}
+			GEM_BUG_ON(eb_vma_misplaced(entry, vma, ev->flags));
 		} else {
+			if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
+				return err;
+
 			eb_unreserve_vma(ev);
 
 			list_add_tail(&ev->bind_link, &eb->unbound);
@@ -1202,6 +1206,8 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 				if (err)
 					return err;
 			}
+
+			GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
 		}
 
 #ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
@@ -4337,7 +4343,7 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	}
 
 	/* If signaled, replace the suspend fence under the timeline lock */
-	if (dma_fence_is_signaled(&ce->sfence->base.dma)) {
+	if (dma_fence_is_signaled(&ce->sfence->base.rq.fence)) {
 		fence = i915_suspend_fence_init(sfence, ce,
 						&execbuf_suspend_ops);
 		intel_context_suspend_fence_replace(eb->context, fence);
@@ -4364,7 +4370,7 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 err_resume:
 	if (err == -EAGAIN || err == -EINTR || err == -ERESTARTSYS) {
 		/* Triggers a rerun once we've unlocked the vm_bind lock. */
-		dma_fence_enable_sw_signaling(&ce->sfence->base.dma);
+		dma_fence_enable_sw_signaling(&ce->sfence->base.rq.fence);
 		err = 0;
 	}
 err_unlock:

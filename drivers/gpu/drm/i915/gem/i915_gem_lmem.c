@@ -8,6 +8,7 @@
 #include <uapi/drm/i915_drm.h>
 
 #include "gt/gen8_engine_cs.h"
+#include "gt/gen8_ppgtt.h"
 #include "gt/intel_context.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_engine_regs.h"
@@ -15,17 +16,19 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_clock_utils.h"
 #include "gt/intel_gt_pm.h"
+#include "gt/intel_lrc.h"
 #include "gt/intel_ring.h"
 #include "gt/intel_rps.h"
 
 #include "i915_driver.h"
+#include "i915_gem_internal.h"
 #include "i915_gem_lmem.h"
+#include "i915_gem_mman.h"
 #include "i915_gem_region.h"
+#include "i915_memcpy.h"
 #include "i915_sw_fence.h"
 #include "i915_sw_fence_work.h"
 #include "intel_memory_region.h"
-
-#define ALLOC_PRIORITY I915_PRIORITY_BARRIER
 
 static inline bool use_flat_ccs(const struct intel_gt *gt)
 {
@@ -51,10 +54,11 @@ static int block_wait(struct i915_buddy_block *block)
 
 	f = i915_active_fence_get(&block->active);
 	if (unlikely(f)) {
-		i915_request_set_priority(to_request(f), ALLOC_PRIORITY);
-		if (i915_request_wait(to_request(f),
-				      I915_WAIT_INTERRUPTIBLE,
-				      MAX_SCHEDULE_TIMEOUT) < 0)
+		if (dma_fence_is_i915(f))
+			i915_request_set_priority(to_request(f),
+						  I915_PRIORITY_MAX);
+
+		if (dma_fence_wait(f, true) < 0)
 			err = -EINTR;
 
 		dma_fence_put(f);
@@ -64,51 +68,52 @@ static int block_wait(struct i915_buddy_block *block)
 }
 
 struct await_fences {
-	struct dma_fence dma;
-	struct i915_sw_fence chain;
-	struct spinlock lock;
-	unsigned int flags;
+	struct dma_fence_work base;
+	struct await_chain {
+		struct i915_sw_dma_fence_cb cb;
+		struct i915_dependency dep;
+	} cb[];
+};
+
+static void __await_fence(struct i915_request *rq,
+			  struct dma_fence *f,
+			  struct i915_sw_dma_fence_cb *cb,
+			  struct i915_dependency *dep)
+{
+	if (!__i915_sw_fence_await_dma_fence(&rq->submit, f, cb))
+		return;
+
+	if (dma_fence_is_i915(f))
+		__i915_sched_node_add_dependency(&rq->sched,
+						 &to_request(f)->sched,
+						 dep,
+						 0);
+}
+
+static void __await_chain(struct i915_request *rq,
+			  struct dma_fence *f,
+			  struct await_chain *c)
+{
+	__await_fence(rq, f, &c->cb, &c->dep);
+}
+
+static void await_chain(struct await_fences *a, struct dma_fence *f, int slot)
+{
+	__await_chain(&a->base.rq, f, &a->cb[slot]);
+}
+
+static const struct dma_fence_work_ops await_ops = {
+	.name = "await",
+};
+
+static const struct dma_fence_work_ops await_noerror_ops = {
+	.name = "await",
+	.no_error_propagation = true,
+};
+
+static struct await_fences *
+await_create(struct i915_sched_engine *se, int count, unsigned int flags)
 #define AWAIT_NO_ERROR BIT(0)
-	struct i915_sw_dma_fence_cb cb[];
-};
-
-static const char *get_driver_name(struct dma_fence *fence)
-{
-	return "[" DRIVER_NAME "]";
-}
-
-static const char *get_timeline_name(struct dma_fence *fence)
-{
-	return "await";
-}
-
-static const struct dma_fence_ops await_ops = {
-	.get_driver_name = get_driver_name,
-	.get_timeline_name = get_timeline_name,
-};
-
-static int
-await_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
-{
-	struct await_fences *a = container_of(fence, typeof(*a), chain);
-
-	switch (state) {
-	case FENCE_COMPLETE:
-		if (fence->error && !(a->flags & AWAIT_NO_ERROR))
-			a->dma.error = fence->error;
-		dma_fence_signal(&a->dma);
-		break;
-
-	case FENCE_FREE:
-		i915_sw_fence_fini(&a->chain);
-		dma_fence_put(&a->dma);
-		break;
-	}
-
-	return NOTIFY_DONE;
-}
-
-static struct await_fences *await_create(int count, unsigned int flags)
 {
 	struct await_fences *a;
 
@@ -116,26 +121,25 @@ static struct await_fences *await_create(int count, unsigned int flags)
 	if (!a)
 		return a;
 
-	spin_lock_init(&a->lock);
-	dma_fence_init(&a->dma, &await_ops, &a->lock, 0, 0);
-	i915_sw_fence_init(&a->chain, await_notify);
-	a->flags = flags;
+	dma_fence_work_init(&a->base,
+			    flags & AWAIT_NO_ERROR ? &await_noerror_ops : &await_ops,
+			    se);
 
 	return a;
 }
 
-static int blocks_wait(struct list_head *list)
+static int
+await_migration(struct dma_fence_work *wrk, struct drm_i915_gem_object *obj)
 {
-	struct i915_buddy_block *block;
-	int err = 0;
+	struct dma_fence *f;
 
-	list_for_each_entry(block, list, link) {
-		err = block_wait(block);
-		if (err)
-			break;
-	}
+	f = i915_active_fence_get_or_error(&obj->mm.migrate);
+	if (IS_ERR_OR_NULL(f))
+		return PTR_ERR(f);
 
-	return err;
+	dma_fence_work_chain(wrk, f);
+	dma_fence_put(f);
+	return 0;
 }
 
 static u32 *emit_timestamp(struct i915_request *rq, u32 *cs, int gpr)
@@ -216,12 +220,24 @@ static int emit_update_counters(struct i915_request *rq, u64 size, int idx)
 }
 
 static struct intel_context *
+__get_blitter_context(const struct intel_gt *gt, int idx)
+{
+	return gt->engine[idx] ? gt->engine[idx]->blitter_context : NULL;
+}
+
+static struct intel_context *
 get_blitter_context(const struct intel_gt *gt, int idx)
 {
+	struct intel_context *ce;
+
 	if (intel_gt_is_wedged(gt) || gt->suspend)
 		return NULL;
 
-	return gt->engine[idx] ? gt->engine[idx]->blitter_context : NULL;
+	ce = __get_blitter_context(gt, idx);
+	if (!ce || !ce->private)
+		return NULL;
+
+	return ce;
 }
 
 static struct intel_context *get_clear_alloc_context(const struct intel_gt *gt)
@@ -254,10 +270,21 @@ static struct intel_context *get_clear_idle_context(const struct intel_gt *gt)
 	return get_blitter_context(gt, BCS0);
 }
 
+static struct intel_context *get_swapin_context(const struct intel_gt *gt)
+{
+	return get_blitter_context(gt, gt->rsvd_bcs);
+}
+
+static struct intel_context *get_swapout_context(const struct intel_gt *gt)
+{
+	return get_blitter_context(gt, gt->rsvd_bcs);
+}
+
 static struct i915_request *
 chain_request(struct i915_request *rq, struct i915_request *chain)
 {
 	struct intel_timeline *tl = rq->context->timeline;
+	int prio;
 
 	GEM_BUG_ON(rq == chain);
 
@@ -275,9 +302,13 @@ chain_request(struct i915_request *rq, struct i915_request *chain)
 	i915_sw_fence_await(&rq->submit);
 	i915_request_get(rq);
 
+	prio = I915_PRIORITY_MIN; /* run in the background */
+	if (rq->engine->instance) /* isolated copy engine */
+		prio = I915_PRIORITY_MAX; /* guc: global prio across engines! */
+
 	trace_i915_request_add(rq);
 	__i915_request_commit(rq);
-	__i915_request_queue(rq, I915_PRIORITY_MIN); /* run in the background */
+	__i915_request_queue(rq, prio);
 
 	if (chain) {
 		i915_sw_fence_complete(&chain->submit);
@@ -365,7 +396,7 @@ bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
 
 	return !i915_gem_object_migratable(obj) &&
 		mr && (mr->type == INTEL_MEMORY_LOCAL ||
-		       mr->type == INTEL_MEMORY_STOLEN_LOCAL);
+		       mr->type == INTEL_MEMORY_STOLEN);
 }
 
 /**
@@ -393,7 +424,7 @@ bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 #endif
 #endif
 	return mr && (mr->type == INTEL_MEMORY_LOCAL ||
-		      mr->type == INTEL_MEMORY_STOLEN_LOCAL);
+		      mr->type == INTEL_MEMORY_STOLEN);
 }
 
 struct drm_i915_gem_object *
@@ -451,27 +482,13 @@ update_active_blocks(struct i915_request *rq,
 	} while (1);
 }
 
-static void
-__update_stat(struct i915_mm_swap_stat *stat,
-	      unsigned long pages,
-	      ktime_t start)
-{
-	if (stat) {
-		start = ktime_get() - start;
-
-		write_seqlock(&stat->lock);
-		stat->time = ktime_add(stat->time, start);
-		stat->pages += pages;
-		write_sequnlock(&stat->lock);
-	}
-}
-
 static u32 *__emit_flush(u32 *cs, unsigned int flags)
 {
 	*cs++ = (MI_FLUSH_DW + 1) | flags;
+	*cs++ = LRC_PPHWSP_SCRATCH_ADDR;
 	*cs++ = 0;
 	*cs++ = 0;
-	*cs++ = 0;
+
 	return cs;
 }
 
@@ -489,10 +506,923 @@ static int emit_flush(struct i915_request *rq, unsigned int flags)
 	return 0;
 }
 
+static int emit_tlb_invalidate(struct i915_request *rq)
+{
+	return emit_flush(rq,
+			  MI_INVALIDATE_TLB |
+			  MI_FLUSH_DW_STORE_INDEX |
+			  MI_FLUSH_DW_OP_STOREDW);
+}
+
+static int
+pvc_emit_swap(struct i915_request *rq,
+	      u64 lmem_offset, u64 smem_offset, u32 size,
+	      bool to_smem)
+{
+	struct intel_gt *gt = rq->engine->gt;
+	u64 dst_offset, src_offset;
+	int src_mocs, dst_mocs;
+	u32 mocs;
+	u32 *cs;
+
+	cs = intel_ring_begin(rq, 10);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	*cs++ = PVC_MEM_COPY_CMD | MS_MATRIX | (10 - 2);
+
+	*cs++ = PAGE_SIZE - 1;
+	*cs++ = (size >> PAGE_SHIFT) - 1;
+	*cs++ = PAGE_SIZE - 1;
+	*cs++ = PAGE_SIZE - 1;
+
+	dst_offset = lmem_offset;
+	src_offset = smem_offset;
+	if (to_smem)
+		swap(dst_offset, src_offset);
+	*cs++ = lower_32_bits(src_offset);
+	*cs++ = upper_32_bits(src_offset);
+	*cs++ = lower_32_bits(dst_offset);
+	*cs++ = upper_32_bits(dst_offset);
+
+	src_mocs = gt->mocs.wb_index;
+	dst_mocs = gt->mocs.uc_index;
+	if (to_smem)
+		swap(src_mocs, dst_mocs);
+
+	mocs = 0;
+	mocs |= FIELD_PREP(MC_SRC_MOCS_INDEX_MASK, src_mocs);
+	mocs |= FIELD_PREP(MC_DST_MOCS_INDEX_MASK, dst_mocs);
+	*cs++ = mocs;
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static int
+xy_emit_swap(struct i915_request *rq,
+	     u64 lmem_offset, u64 smem_offset, u32 size,
+	     bool to_smem)
+{
+	u64 dst_offset, src_offset;
+	u32 *cs;
+
+	dst_offset = lmem_offset;
+	src_offset = smem_offset;
+	if (to_smem)
+		swap(dst_offset, src_offset);
+
+	cs = intel_ring_begin(rq, 10);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	*cs++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
+	*cs++ = BLT_DEPTH_32 | PAGE_SIZE;
+	*cs++ = 0;
+	*cs++ = (size >> PAGE_SHIFT) << 16 | PAGE_SIZE / 4;
+	*cs++ = lower_32_bits(dst_offset);
+	*cs++ = upper_32_bits(dst_offset);
+	*cs++ = 0;
+	*cs++ = PAGE_SIZE;
+	*cs++ = lower_32_bits(src_offset);
+	*cs++ = upper_32_bits(src_offset);
+
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static int
+emit_pte(struct i915_request *rq,
+	 struct sgt_iter *pte,
+	 u64 pd_offset,
+	 u64 encode,
+	 int count)
+{
+	int pkt;
+	u32 *cs;
+
+	GEM_BUG_ON(!count);
+	GEM_BUG_ON(!pte->sgp);
+	GEM_BUG_ON(!pte->dma);
+
+	pkt = 2 * count + 3 * DIV_ROUND_UP(count, 256);
+	pkt = ALIGN(pkt, 2);
+	cs = intel_ring_begin(rq, pkt);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	for (pkt = 0; pkt < count; pkt += 256) {
+		int len = min(count - pkt, 256);
+		u32 *head = cs++, hdr = len;
+
+		*cs++ = lower_32_bits(pd_offset + 8 * pkt);
+		*cs++ = upper_32_bits(pd_offset + 8 * pkt);
+		while (len--) {
+			u64 dma = encode | (pte->dma + pte->curr);
+
+			GEM_BUG_ON(!pte->sgp);
+			GEM_BUG_ON(!pte->dma);
+
+			*cs++ = lower_32_bits(dma);
+			*cs++ = upper_32_bits(dma);
+
+			pte->curr += SZ_4K;
+			if (pte->curr < pte->max)
+				continue;
+
+			*pte = __sgt_iter(__sg_next(pte->sgp), true);
+			if (unlikely(!pte->dma)) {
+				hdr -= len;
+				count = 0;
+				break;
+			}
+		}
+
+		*head = MI_STORE_DATA_IMM | REG_BIT(21) | MI_POSTED | (2 * hdr + 1);
+	}
+
+	if (offset_in_page(cs) & 4)
+		*cs++ = MI_NOOP;
+
+	GEM_BUG_ON(ptrdiff(cs, rq->ring->vaddr) > rq->ring->emit);
+	rq->ring->emit = ptrdiff(cs, rq->ring->vaddr);
+	intel_ring_advance(rq, cs);
+	return 0;
+}
+
+static struct lmem_iter {
+	struct i915_buddy_mm *mm;
+	struct list_head *blocks;
+	struct i915_buddy_block *block;
+	u64 curr, dma, max;
+} __lmem_iter(struct i915_buddy_mm *mm, struct list_head *blocks)
+{
+	struct i915_buddy_block *block =
+		list_first_entry(blocks, struct i915_buddy_block, link);
+
+	return (struct lmem_iter){
+		.mm = mm,
+		.blocks = blocks,
+		.block = block,
+		.max = i915_buddy_block_size(mm, block),
+		.dma = i915_buddy_block_offset(block),
+	};
+}
+
+static int __lmem_iter_next(struct lmem_iter *it, struct i915_request *rq)
+{
+	it->block = list_next_entry(it->block, link);
+	if (unlikely(list_is_head(&it->block->link, it->blocks)))
+		return 0;
+
+	it->curr = 0;
+	it->max = i915_buddy_block_size(it->mm, it->block);
+	it->dma = i915_buddy_block_offset(it->block);
+
+	return i915_active_fence_set(&it->block->active, rq) ?: 1;
+}
+
+static int
+emit_lmem_pte(struct i915_request *rq,
+	      struct lmem_iter *pte,
+	      u64 pd_offset,
+	      u64 encode,
+	      int count,
+	      int *length)
+{
+	int err = 0;
+	int pkt;
+	u32 *cs;
+
+	GEM_BUG_ON(!IS_ALIGNED(pd_offset, SZ_4K));
+	GEM_BUG_ON(list_is_head(&pte->block->link, pte->blocks));
+
+	pkt = 2 * count + 3 * DIV_ROUND_UP(count, 256);
+	pkt = ALIGN(pkt, 2);
+	cs = intel_ring_begin(rq, pkt);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	*length = 0;
+
+	for (pkt = 0; pkt < count; pkt += 256) {
+		int len = min(count - pkt, 256);
+		u32 *head = cs++, hdr = len;
+
+		*cs++ = lower_32_bits(pd_offset + 8 * pkt);
+		*cs++ = upper_32_bits(pd_offset + 8 * pkt);
+		while (len--) {
+			u64 dma = encode | (pte->dma + pte->curr);
+
+			*cs++ = lower_32_bits(dma);
+			*cs++ = upper_32_bits(dma);
+
+			pte->curr += SZ_4K;
+			if (pte->curr < pte->max)
+				continue;
+
+			err = __lmem_iter_next(pte, rq);
+			if (err <= 0) {
+				hdr -= len;
+				count = 0;
+				break;
+			}
+		}
+
+		*length += hdr;
+		*head = MI_STORE_DATA_IMM | REG_BIT(21) | MI_POSTED | (2 * hdr + 1);
+	}
+
+	if (offset_in_page(cs) & 4)
+		*cs++ = MI_NOOP;
+
+	GEM_BUG_ON(ptrdiff(cs, rq->ring->vaddr) > rq->ring->emit);
+	rq->ring->emit = ptrdiff(cs, rq->ring->vaddr);
+	intel_ring_advance(rq, cs);
+	return err;
+}
+
+static u32 ccs_direction(bool to_smem)
+{
+	u32 src_access, dst_access;
+
+	src_access = DIRECT_ACCESS;
+	dst_access = INDIRECT_ACCESS;
+	if (to_smem)
+		swap(dst_access, src_access);
+
+	return src_access << SRC_ACCESS_TYPE_SHIFT | dst_access << DST_ACCESS_TYPE_SHIFT;
+}
+
 static int num_ccs_blocks(unsigned int size)
 {
 	GEM_BUG_ON(!IS_ALIGNED(size, SZ_64K));
 	return size >> 16;
+}
+
+static int
+ccs_emit_swap(struct i915_request *rq,
+	      u64 lmem_offset, u64 smem_offset, u32 size,
+	      bool to_smem)
+{
+	const u32 mocs = REG_FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK_XEHP,
+					rq->engine->gt->mocs.uc_index);
+	u64 dst_offset, src_offset;
+	u32 *cs;
+
+	GEM_BUG_ON(!size);
+	GEM_BUG_ON(size > SZ_64M);
+
+	cs = intel_ring_begin(rq, 6);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	*cs++ = XY_CTRL_SURF_COPY_BLT |
+		REG_FIELD_PREP(CCS_SIZE_MASK_XEHP, num_ccs_blocks(size) - 1) |
+		ccs_direction(to_smem);
+
+	dst_offset = lmem_offset;
+	src_offset = smem_offset;
+	if (to_smem)
+		swap(dst_offset, src_offset);
+
+	*cs++ = lower_32_bits(src_offset);
+	*cs++ = upper_32_bits(src_offset) | mocs;
+	*cs++ = lower_32_bits(dst_offset);
+	*cs++ = upper_32_bits(dst_offset) | mocs;
+
+	*cs++ = MI_NOOP;
+
+	intel_ring_advance(rq, cs);
+	return emit_flush(rq, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
+}
+
+static unsigned int pte_pkt(u32 len)
+{
+	return 2 * len + 3 * DIV_ROUND_UP(len, 256);
+}
+
+static unsigned int swap_pkt(u32 len)
+{
+	unsigned int pkt = SZ_4K;
+
+	pkt += pte_pkt(len >> PAGE_SHIFT);
+
+	return pkt << 2;
+}
+
+static unsigned int ccs_pkt(u32 len)
+{
+	unsigned int pkt = SZ_4K;
+
+	pkt += pte_pkt(len);
+	len = ALIGN(len, 256) >> 8;
+	pkt += pte_pkt(len);
+
+	return pkt << 2;
+}
+
+static int
+swap_blt(struct intel_context *ce,
+	 struct drm_i915_gem_object *lmem,
+	 struct i915_buddy_mm *mm,
+	 struct list_head *blocks,
+	 struct drm_i915_gem_object *smem,
+	 bool to_smem,
+	 bool throttle,
+	 struct i915_request **out)
+{
+	const bool use_pvc_memcpy = HAS_LINK_COPY_ENGINES(ce->engine->i915);
+	const bool use_flat_ccs = !use_pvc_memcpy && object_needs_flat_ccs(lmem);
+	const struct intel_migrate_window *w = ce->private;
+	const u64 encode = ce->vm->pte_encode(0, smem->pat_index, 0);
+	u64 pte_window, pte_end, pd_offset;
+	const u32 step = w->swap_chunk;
+	struct i915_buddy_block *block;
+	u64 remain = lmem->base.size;
+	struct i915_request *rq;
+	struct sgt_iter it_smem;
+	int err;
+
+	GEM_BUG_ON(ce->ring->size < SZ_256K);
+	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
+	GEM_BUG_ON(!drm_mm_node_allocated(&ce->engine->gt->flat));
+	GEM_BUG_ON(!IS_ALIGNED(step, PAGE_SIZE));
+
+	if (throttle) { /* fallback to CPU to avoid heavy contention */
+		err = intel_context_throttle(ce, 0);
+		if (err)
+			return err;
+	}
+
+	GEM_BUG_ON(smem->base.size < remain);
+	it_smem = __sgt_iter(smem->mm.pages->sgl, true);
+	GEM_BUG_ON(!it_smem.dma);
+
+	mutex_lock(&ce->timeline->mutex);
+	intel_context_enter(ce);
+
+	rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto exit;
+	}
+
+	pte_end = w->node.start + w->node.size;
+	pte_window = pte_end;
+
+	list_for_each_entry(block, blocks, link) {
+		u64 sz = i915_buddy_block_size(mm, block);
+		u64 offset = i915_buddy_block_offset(block);
+
+		do { /* re-coalesce split blocks */
+			struct i915_buddy_block *next =
+				list_next_entry(block, link);
+
+			err = i915_active_fence_set(&block->active, rq);
+			if (err < 0)
+				goto skip;
+
+			if (list_is_head(&next->link, blocks))
+				break;
+
+			if (i915_buddy_block_offset(next) != offset + sz)
+				break;
+
+			sz += i915_buddy_block_size(mm, next);
+			block = next;
+		} while (1);
+
+		sz = min(remain, sz);
+		remain -= sz;
+
+		do {
+			u32 length = min_t(u64, sz, step);
+
+			GEM_BUG_ON(offset < ce->engine->gt->flat.start);
+			GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
+			GEM_BUG_ON(!IS_ALIGNED(length, PAGE_SHIFT));
+
+			if (submit_request(rq, out, swap_pkt(length))) {
+				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+				if (IS_ERR(rq)) {
+					err = PTR_ERR(rq);
+					goto exit;
+				}
+
+				err = update_active_blocks(rq,
+							   mm, block,
+							   offset);
+				if (err)
+					goto skip;
+			}
+
+			err = emit_start_timestamp(rq);
+			if (err)
+				goto skip;
+
+			if (pte_window + length > pte_end) {
+				pd_offset = w->pd_offset;
+				pte_window = w->node.start;
+				GEM_BUG_ON(pte_window + length > pte_end);
+
+				err = emit_tlb_invalidate(rq);
+				if (err)
+					goto skip;
+			}
+
+			err = emit_pte(rq, &it_smem,
+				       pd_offset, encode,
+				       length >> PAGE_SHIFT);
+			if (err)
+				goto skip;
+
+			if (use_pvc_memcpy)
+				err = pvc_emit_swap(rq,
+						    offset, pte_window, length,
+						    to_smem);
+			else
+				err = xy_emit_swap(rq,
+						   offset, pte_window, length,
+						   to_smem);
+			if (err)
+				goto skip;
+
+			err = emit_update_counters(rq, length, INTEL_GT_SWAPIN_CYCLES + 2 * to_smem);
+			if (err)
+				goto skip;
+
+			pte_window += length;
+			pd_offset += length >> PAGE_SHIFT << 3;
+			GEM_BUG_ON(pte_window > pte_end);
+			GEM_BUG_ON(pd_offset > w->pd_offset + sg_dma_len(w->obj->mm.pages->sgl));
+
+			offset += length;
+			sz -= length;
+		} while (sz);
+	}
+	GEM_BUG_ON(remain);
+
+	if (use_flat_ccs) {
+		struct lmem_iter it_lmem = __lmem_iter(mm, blocks);
+		const u64 lmem_encode =
+			ce->vm->pte_encode(0, i915_gem_get_pat_index(ce->engine->i915, I915_CACHING_NONE), PTE_LM);
+		const int count =
+			ALIGN(min_t(u32, step, w->node.size / 2) >> PAGE_SHIFT,
+			      512);
+		const u64 ccs_pte_offset = w->node.size / 2;
+		const u64 ccs_pd_offset = ccs_pte_offset >> PAGE_SHIFT << 3;
+
+		pd_offset = w->pd_offset;
+		pte_end = w->node.start + ccs_pte_offset;
+		pte_window = pte_end;
+		remain = lmem->base.size >> PAGE_SHIFT;
+
+		err = i915_active_fence_set(&it_lmem.block->active, rq);
+		if (err < 0)
+			goto skip;
+
+		do {
+			u64 lmem_window;
+			int length;
+
+			if (submit_request(rq, out, ccs_pkt(count))) {
+				struct i915_buddy_block *block = it_lmem.block;
+
+				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+				if (IS_ERR(rq)) {
+					err = PTR_ERR(rq);
+					goto exit;
+				}
+
+				err = i915_active_fence_set(&block->active, rq);
+				if (err < 0)
+					goto skip;
+			}
+
+			err = emit_start_timestamp(rq);
+			if (err)
+				goto skip;
+
+			if (pte_window + (count << PAGE_SHIFT) > pte_end) {
+				pd_offset = w->pd_offset;
+				pte_window = w->node.start;
+
+				err = emit_tlb_invalidate(rq);
+				if (err)
+					goto skip;
+			}
+			GEM_BUG_ON(pd_offset - w->pd_offset > ccs_pd_offset);
+
+			/* XY_CSC needs 1M contiguous blocks */
+			if (IS_ALIGNED(it_lmem.dma + it_lmem.curr, SZ_1M) &&
+			    it_lmem.max - it_lmem.curr > SZ_1M) {
+				length = round_down(it_lmem.max - it_lmem.curr, SZ_1M) >> PAGE_SHIFT;
+				length = min(length, count);
+				if (!length)
+					goto lmem_pte;
+
+				lmem_window = it_lmem.dma + it_lmem.curr;
+				it_lmem.curr += length << PAGE_SHIFT;
+				GEM_BUG_ON(it_lmem.curr > it_lmem.max);
+
+				if (it_lmem.curr == it_lmem.max) {
+					err = __lmem_iter_next(&it_lmem, rq);
+					if (err < 0)
+						goto skip;
+				}
+			} else {
+lmem_pte:
+				err = emit_lmem_pte(rq, &it_lmem,
+						    pd_offset + ccs_pd_offset,
+						    lmem_encode,
+						    count, &length);
+				if (err < 0)
+					goto skip;
+
+				lmem_window = pte_window + ccs_pte_offset;
+			}
+
+			length = min_t(u64, length, remain);
+			remain -= length;
+
+			err = emit_pte(rq, &it_smem,
+				       pd_offset, encode,
+				       ALIGN(length, 256) >> 8);
+			if (err)
+				goto skip;
+
+			err = ccs_emit_swap(rq,
+					    lmem_window,
+					    pte_window,
+					    length << PAGE_SHIFT,
+					    to_smem);
+			if (err)
+				goto skip;
+
+			err = emit_update_counters(rq, 0, INTEL_GT_SWAPIN_CYCLES + 2 * to_smem);
+			if (err)
+				goto skip;
+
+			pd_offset += length << 3;
+			pte_window += length << PAGE_SHIFT;
+			GEM_BUG_ON(pte_window > pte_end);
+		} while (!list_is_head(&it_lmem.block->link, blocks));
+	}
+skip:
+	*out = chain_request(rq, *out);
+exit:
+	if (*out) {
+		struct i915_vma *ref;
+
+		ref = i915_vma_instance(smem, ce->vm, NULL);
+		if (!IS_ERR(ref))
+			i915_active_add_request(&ref->active, *out);
+
+		i915_gem_object_migrate_prepare(smem, &(*out)->fence);
+	}
+
+	intel_context_exit(ce);
+	mutex_unlock(&ce->timeline->mutex);
+
+	return err;
+}
+
+static void
+swap_cpu_block(struct intel_memory_region *mem,
+	       struct i915_buddy_block *block,
+	       struct sgt_iter *it,
+	       bool to_smem)
+{
+	u64 length = i915_buddy_block_size(&mem->mm, block);
+	void __iomem *iova;
+	dma_addr_t daddr;
+	u64 offset;
+
+	GEM_BUG_ON(!it->sgp);
+
+	daddr = i915_buddy_block_offset(block);
+	daddr -= mem->region.start;
+
+	iova = io_mapping_map_wc(&mem->iomap, daddr, length);
+	for (offset = 0; offset < length; offset += PAGE_SIZE) {
+		struct page *page = pfn_to_page(it->pfn + (it->curr >> PAGE_SHIFT));
+		void *va;
+
+		va = kmap_atomic(page);
+		if (to_smem)
+			i915_memcpy_from_wc(va, iova + offset, PAGE_SIZE);
+		else
+			memcpy(iova + offset, va, PAGE_SIZE);
+		kunmap_atomic(va);
+		cond_resched();
+
+		it->curr += PAGE_SIZE;
+		if (it->curr >= it->max) {
+			*it = __sgt_iter(__sg_next(it->sgp), false);
+			if (unlikely(!it->sgp))
+				break;
+		}
+	}
+	io_mapping_unmap(iova);
+}
+
+struct swap_cpu_work {
+	struct dma_fence_work base;
+	struct intel_memory_region *mem;
+	struct drm_i915_gem_object *smem;
+	long count;
+	bool dir;
+	struct swap_block {
+		struct i915_buddy_block *block;
+		struct await_chain chain;
+	} blocks[];
+};
+
+static int swap_cpu_work(struct dma_fence_work *base)
+{
+	struct swap_cpu_work *wrk = container_of(base, typeof(*wrk), base);
+	struct sgt_iter it = __sgt_iter(wrk->smem->mm.pages->sgl, false);
+	long n;
+
+	for (n = 0; n < wrk->count; n++)
+		swap_cpu_block(wrk->mem, wrk->blocks[n].block, &it, wrk->dir);
+
+	wmb();
+	return 0;
+}
+
+static void swap_cpu_release(struct dma_fence_work *base)
+{
+	struct swap_cpu_work *wrk = container_of(base, typeof(*wrk), base);
+
+	i915_gem_object_unpin_pages(wrk->smem);
+	i915_gem_object_put(wrk->smem);
+	intel_memory_region_put(wrk->mem);
+}
+
+static const struct dma_fence_work_ops swap_cpu_ops = {
+	.name = "swap",
+	.work = swap_cpu_work,
+	.release = swap_cpu_release,
+};
+
+static int
+async_swap(struct drm_i915_gem_object *lmem,
+	   struct drm_i915_gem_object *smem,
+	   bool to_smem,
+	   struct dma_fence_work **out)
+{
+	struct i915_buddy_block *block;
+	struct swap_cpu_work *wrk;
+	long count;
+
+	GEM_BUG_ON(!i915_gem_object_has_pinned_pages(smem));
+
+	count = 0;
+	list_for_each_entry(block, &lmem->mm.blocks, link)
+		count++;
+
+	wrk = kmalloc(struct_size(wrk, blocks, count), I915_GFP_ALLOW_FAIL);
+	if (!wrk)
+		return -ENOMEM;
+
+	dma_fence_work_init(&wrk->base, &swap_cpu_ops,
+			    to_i915(lmem->base.dev)->mm.sched);
+	wrk->mem = intel_memory_region_get(lmem->mm.region.mem);
+	wrk->smem = i915_gem_object_get(smem);
+	__i915_gem_object_pin_pages(wrk->smem);
+	wrk->count = count;
+	wrk->dir = to_smem;
+
+	count = 0;
+	list_for_each_entry(block, &lmem->mm.blocks, link) {
+		struct swap_block *b = &wrk->blocks[count++];
+		struct dma_fence *f;
+
+		b->block = block;
+
+		f = __i915_active_fence_fetch_set(&block->active,
+						  &wrk->base.rq.fence);
+		if (!f)
+			continue;
+
+		__await_chain(&wrk->base.rq, f, &b->chain);
+		dma_fence_put(f);
+	}
+
+	i915_gem_object_migrate_prepare(smem, &wrk->base.rq.fence);
+	*out = &wrk->base;
+	return 0;
+}
+
+static void ras_error(struct drm_i915_private *i915, int err)
+{
+	if (err != -EINTR && err != -ERESTARTSYS)
+		i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
+}
+
+static int lmem_swapout(struct drm_i915_gem_object *lmem)
+{
+	struct drm_i915_private *i915 = to_i915(lmem->base.dev);
+	const bool use_flat_ccs = object_needs_flat_ccs(lmem);
+	struct drm_i915_gem_object *smem;
+	struct intel_context *ce;
+	int err;
+
+	smem = fetch_and_zero(&lmem->swapto);
+	if (smem && smem->mm.madv == __I915_MADV_PURGED)
+		i915_gem_object_put(fetch_and_zero(&smem));
+	if (!smem) {
+		u64 size;
+
+		size = lmem->base.size;
+		if (use_flat_ccs)
+			size += size >> 8;
+
+		smem = i915_gem_object_create_shmem(i915, size);
+		if (IS_ERR(smem))
+			return PTR_ERR(smem);
+
+		i915_gem_object_share_resv(lmem, smem);
+	}
+
+	assert_object_held(smem);
+	smem->mm.madv = I915_MADV_WILLNEED;
+	lmem->swapto = smem;
+
+	err = i915_gem_object_pin_pages_sync(smem); /* XXX defer? */
+	if (err)
+		goto err;
+
+	err = -EIO;
+	ce = get_swapout_context(lmem->mm.region.mem->gt);
+	if (ce) {
+		struct i915_request *rq = NULL;
+
+		err = swap_blt(ce, lmem,
+			       &lmem->mm.region.mem->mm, &lmem->mm.blocks,
+			       smem, true, !use_flat_ccs /* backoff under load */,
+			       &rq);
+		if (rq) {
+			i915_sw_fence_complete(&rq->submit);
+			i915_request_put(rq);
+		}
+	}
+	if (err && !use_flat_ccs) {
+		struct dma_fence_work *f = NULL;
+
+		err = async_swap(lmem, smem, true, &f);
+		if (f)
+			dma_fence_work_commit(f);
+	}
+
+	i915_gem_object_unpin_pages(smem);
+
+	if (err) {
+err:
+		ras_error(i915, err);
+		smem->mm.madv = I915_MADV_DONTNEED;
+		__i915_gem_object_put_pages(smem);
+		i915_gem_object_put(smem);
+		lmem->swapto = NULL;
+	}
+
+	return err;
+}
+
+static inline bool
+small_sync_swapin(const struct drm_i915_gem_object *obj,
+		  unsigned int flags,
+		  const struct intel_context *ce)
+{
+	/*
+	 * Prefer to use the CPU where copying the data directly will take
+	 * less time than constructing a request and submitting it to the
+	 * GPU to do the same (and waiting synchronously for it).
+	 */
+	if (!(flags & I915_BO_SYNC_HINT) && intel_context_is_active(ce))
+		return obj->base.size <= SZ_64K;
+	else
+		return obj->base.size <= SZ_8M;
+}
+
+struct swap_work {
+	struct dma_fence_work base;
+	struct await_fences *proxy;
+	struct drm_i915_gem_object *lmem;
+	struct drm_i915_gem_object *smem;
+};
+
+static int swap_work(struct dma_fence_work *base)
+{
+	struct swap_work *wrk = container_of(base, typeof(*wrk), base);
+	const bool use_flat_ccs = object_needs_flat_ccs(wrk->lmem);
+	struct drm_i915_gem_object *lmem = wrk->lmem;
+	struct drm_i915_gem_object *smem = wrk->smem;
+	struct intel_context *ce;
+	int err = -EIO;
+
+	GEM_BUG_ON(!i915_gem_object_has_pages(smem));
+
+	ce = get_swapin_context(lmem->mm.region.mem->gt);
+	if (ce && !use_flat_ccs && small_sync_swapin(lmem, lmem->flags, ce))
+		ce = NULL;
+	if (ce) {
+		struct i915_request *rq = NULL;
+
+		err = swap_blt(ce, lmem,
+			       &lmem->mm.region.mem->mm, &lmem->mm.blocks,
+			       smem, false, !use_flat_ccs,
+			       &rq);
+		if (rq) {
+			await_chain(wrk->proxy, &rq->fence, 0);
+			i915_gem_object_migrate_prepare(lmem, &rq->fence);
+			i915_sw_fence_complete(&rq->submit);
+			i915_request_put(rq);
+		}
+	}
+	if (err && !use_flat_ccs) {
+		struct dma_fence_work *f = NULL;
+
+		err = async_swap(lmem, smem, false, &f);
+		if (f) {
+			await_chain(wrk->proxy, &f->rq.fence, 0);
+			i915_gem_object_migrate_prepare(lmem, &f->rq.fence);
+			dma_fence_work_commit_imm(f);
+		}
+	}
+
+	return err;
+}
+
+static void swap_release(struct dma_fence_work *base)
+{
+	struct swap_work *wrk = container_of(base, typeof(*wrk), base);
+	struct drm_i915_gem_object *smem = wrk->smem;
+
+	i915_gem_object_unpin_pages(smem);
+	i915_gem_object_put(smem);
+}
+
+static const struct dma_fence_work_ops swap_ops = {
+	.name = "swap",
+	.work = swap_work,
+	.release = swap_release,
+};
+
+static int lmem_swapin(struct drm_i915_gem_object *lmem)
+{
+	struct i915_sched_engine *se = to_i915(lmem->base.dev)->mm.sched;
+	struct drm_i915_gem_object *smem = lmem->swapto;
+	struct swap_work *sw;
+	int err;
+
+	GEM_BUG_ON(smem->mm.madv != I915_MADV_WILLNEED);
+
+	sw = kmalloc(sizeof(*sw), GFP_KERNEL);
+	if (!sw)
+		return -ENOMEM;
+
+	sw->proxy = await_create(se, 1, 0);
+	if (!sw->proxy) {
+		err = -ENOMEM;
+		goto err;
+	}
+
+	dma_fence_work_init(&sw->base, &swap_ops, se);
+	sw->lmem = lmem;
+	sw->smem = smem;
+
+	err = i915_gem_object_pin_pages(smem);
+	if (err)
+		goto err;
+
+	err = await_migration(&sw->base, smem);
+	if (err)
+		goto err_unpin;
+
+	i915_gem_object_migrate_prepare(lmem, &sw->proxy->base.rq.fence);
+	i915_gem_object_migrate_prepare(smem, &sw->proxy->base.rq.fence);
+
+	dma_fence_work_chain(&sw->proxy->base, &sw->base.rq.fence);
+	dma_fence_work_commit(&sw->proxy->base);
+
+	smem->mm.madv = I915_MADV_DONTNEED;
+	lmem->swapto = want_init_on_alloc(0) ? i915_gem_object_get(smem) : NULL;
+	i915_gem_object_release_mmap(lmem);
+
+	dma_fence_work_commit_imm_if(&sw->base,
+				     lmem->flags & I915_BO_SYNC_HINT);
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin_pages(smem);
+err:
+	kfree(sw->proxy);
+	kfree(sw);
+	ras_error(to_i915(lmem->base.dev), err);
+	return err;
 }
 
 static int
@@ -537,164 +1467,6 @@ emit_ccs_clear(struct i915_request *rq, u64 offset, u32 length)
 }
 
 #define MAX_PAGE_SHIFT 16ul
-
-static int
-lmem_swapout(struct drm_i915_gem_object *obj,
-	     struct sg_table *pages, unsigned int sizes)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	const bool swap_ccs = object_needs_flat_ccs(obj);
-	struct i915_mm_swap_stat *stat = NULL;
-	struct drm_i915_gem_object *dst, *src;
-	ktime_t start = ktime_get();
-	int err = -EINVAL;
-
-	assert_object_held(obj);
-
-	dst = fetch_and_zero(&obj->swapto);
-	if (dst && dst->mm.madv == __I915_MADV_PURGED) {
-		i915_gem_object_put(dst);
-		dst = NULL;
-	}
-	if (!dst) {
-		u64 size;
-
-		/* create a shadow object on smem region */
-		size = obj->base.size;
-		if (swap_ccs)
-			size += size >> 8;
-		dst = i915_gem_object_create_shmem(i915, size);
-		if (IS_ERR(dst))
-			return PTR_ERR(dst);
-
-		/* Share the dma-resv between with the parent object */
-		i915_gem_object_share_resv(obj, dst);
-	}
-	assert_object_held(dst);
-	GEM_BUG_ON(dst->base.size < obj->base.size);
-
-	/*
-	 * create working object on the same region as 'obj',
-	 * if 'obj' is used directly, it is set pages and is pinned
-	 * again, other thread may wrongly use 'obj' pages.
-	 */
-	src = i915_gem_object_create_region(obj->mm.region.mem,
-					    obj->base.size, 0);
-	if (IS_ERR(src)) {
-		i915_gem_object_put(dst);
-		return PTR_ERR(src);
-	}
-
-	/* set and pin working object pages */
-	i915_gem_object_lock_isolated(src);
-	__i915_gem_object_set_pages(src, pages, sizes);
-	__i915_gem_object_pin_pages(src);
-
-	/* copying the pages */
-	if (i915->params.enable_eviction >= 2 &&
-	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
-		err = i915_window_blt_copy(dst, src, swap_ccs);
-		if (!err)
-			stat = &i915->mm.blt_swap_stats.out;
-	}
-
-	if (err &&
-	    err != -ERESTARTSYS && err != -EINTR &&
-	    !swap_ccs &&
-	    i915->params.enable_eviction != 2) {
-		err = i915_gem_object_memcpy(dst, src);
-		if (!err)
-			stat = &i915->mm.memcpy_swap_stats.out;
-	}
-
-	__i915_gem_object_unpin_pages(src);
-	__i915_gem_object_unset_pages(src);
-	i915_gem_object_unlock(src);
-	i915_gem_object_put(src);
-
-	if (!err) {
-		dst->mm.madv = I915_MADV_WILLNEED;
-	} else {
-		if (err != -EINTR && err != -ERESTARTSYS)
-			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
-		dst->mm.madv = I915_MADV_DONTNEED;
-	}
-	obj->swapto = dst;
-
-	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
-
-	return err;
-}
-
-static int
-lmem_swapin(struct drm_i915_gem_object *obj,
-	    struct sg_table *pages, unsigned int sizes)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	const bool swap_ccs = object_needs_flat_ccs(obj);
-	struct drm_i915_gem_object *dst, *src = obj->swapto;
-	struct i915_mm_swap_stat *stat = NULL;
-	ktime_t start = ktime_get();
-	int err = -EINVAL;
-
-	assert_object_held(obj);
-	GEM_BUG_ON(src->mm.madv != I915_MADV_WILLNEED);
-
-	err = blocks_wait(&obj->mm.blocks); /* XXX replace with async evict! */
-	if(err)
-		return err;
-
-	/*
-	 * create working object on the same region as 'obj',
-	 * if 'obj' is used directly, it is set pages and is pinned
-	 * again, other thread may wrongly use 'obj' pages.
-	 */
-	dst = i915_gem_object_create_region(obj->mm.region.mem,
-					    obj->base.size, 0);
-	if (IS_ERR(dst))
-		return PTR_ERR(dst);
-
-	/* @scr is sharing @obj's reservation object */
-	assert_object_held(src);
-
-	/* set and pin working object pages */
-	i915_gem_object_lock_isolated(dst);
-	__i915_gem_object_set_pages(dst, pages, sizes);
-	__i915_gem_object_pin_pages(dst);
-
-	/* copying the pages */
-	if (i915->params.enable_eviction >= 2 &&
-	    !intel_gt_is_wedged(obj->mm.region.mem->gt)) {
-		err = i915_window_blt_copy(dst, src, swap_ccs);
-		if (!err)
-			stat = &i915->mm.blt_swap_stats.in;
-	}
-
-	if (err &&
-	    err != -ERESTARTSYS && err != -EINTR &&
-	    !swap_ccs &&
-	    i915->params.enable_eviction != 2) {
-		err = i915_gem_object_memcpy(dst, src);
-		if (!err)
-			stat = &i915->mm.memcpy_swap_stats.in;
-	}
-
-	__i915_gem_object_unpin_pages(dst);
-	__i915_gem_object_unset_pages(dst);
-	i915_gem_object_unlock(dst);
-	i915_gem_object_put(dst);
-
-	if (!err) {
-		src->mm.madv = I915_MADV_DONTNEED;
-	} else {
-		if (err != -EINTR && err != -ERESTARTSYS)
-			i915_silent_driver_error(i915, I915_DRIVER_ERROR_OBJECT_MIGRATION);
-	}
-
-	__update_stat(stat, obj->base.size >> PAGE_SHIFT, start);
-
-	return err;
-}
 
 static int
 pvc_emit_clear(struct i915_request *rq, u64 offset, u32 size, u32 page_shift)
@@ -788,10 +1560,11 @@ clear_blt(struct intel_context *ce,
 	  bool dirty,
 	  struct i915_request **out)
 {
-	const u32 step = ce->engine->gt->migrate.clear_chunk;
 	const bool use_pvc_memset = HAS_LINK_COPY_ENGINES(ce->engine->i915);
 	const bool use_ccs_clear =
 		!use_pvc_memset && HAS_FLAT_CCS(ce->engine->i915);
+	const struct intel_migrate_window *w = ce->private;
+	const u32 step = w->clear_chunk;
 	struct i915_buddy_block *block;
 	struct i915_request *rq;
 	int err;
@@ -832,6 +1605,14 @@ clear_blt(struct intel_context *ce,
 			if (err < 0)
 				goto skip;
 
+			/*
+			 * We track both the clear flag and any persistent
+			 * errors from the request stored in block->active.
+			 * If the blt request does not complete the clear, we
+			 * disregard the flag in i915_buddy_block_is_clear().
+			 */
+			__i915_buddy_block_set_clear(block);
+
 			if (list_is_head(&next->link, blocks))
 				break;
 
@@ -851,6 +1632,7 @@ clear_blt(struct intel_context *ce,
 
 			GEM_BUG_ON(offset < ce->engine->gt->flat.start);
 			GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
+			GEM_BUG_ON(!IS_ALIGNED(length, PAGE_SHIFT));
 
 			if (length >> page_shift > S16_MAX) {
 				page_shift = min(__ffs(sz), MAX_PAGE_SHIFT);
@@ -900,8 +1682,6 @@ clear_blt(struct intel_context *ce,
 			sz -= length;
 			offset += length;
 		} while (sz);
-
-		__i915_buddy_block_set_clear(block);
 	}
 skip:
 	*out = chain_request(rq, *out);
@@ -984,7 +1764,7 @@ use_cpu_clear(struct drm_i915_gem_object *obj, unsigned int flags)
 struct clear_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *lmem;
-	struct i915_sw_dma_fence_cb cb[];
+	struct await_chain cb[];
 };
 
 static int clear_work(struct dma_fence_work *base)
@@ -1015,7 +1795,8 @@ static int async_clear(struct drm_i915_gem_object *obj)
 	if (!c)
 		return -ENOMEM;
 
-	dma_fence_work_init(&c->base, &clear_ops);
+	dma_fence_work_init(&c->base, &clear_ops,
+			    to_i915(obj->base.dev)->mm.sched);
 	c->lmem = obj;
 
 	count = 0;
@@ -1026,13 +1807,11 @@ static int async_clear(struct drm_i915_gem_object *obj)
 		if (!f)
 			continue;
 
-		i915_request_set_priority(to_request(f), ALLOC_PRIORITY);
-		__i915_sw_fence_await_dma_fence(&c->base.chain, f,
-						&c->cb[count++]);
+		__await_chain(&c->base.rq, f, &c->cb[count++]);
 		dma_fence_put(f);
 	}
 
-	i915_gem_object_migrate_prepare(obj, &c->base.dma);
+	i915_gem_object_migrate_prepare(obj, &c->base.rq.fence);
 	dma_fence_work_commit_imm_if(&c->base,
 				     obj->flags & I915_BO_SYNC_HINT ||
 				     obj->base.size <= SZ_64K);
@@ -1051,7 +1830,6 @@ static int async_blt(struct drm_i915_gem_object *obj, struct intel_context *ce)
 			INTEL_GT_CLEAR_ALLOC_CYCLES, false,
 			&rq);
 	if (rq) {
-		i915_request_set_priority(rq, ALLOC_PRIORITY);
 		i915_gem_object_migrate_prepare(obj, &rq->fence);
 		i915_sw_fence_complete(&rq->submit);
 		i915_request_put(rq);
@@ -1063,7 +1841,8 @@ static int async_blt(struct drm_i915_gem_object *obj, struct intel_context *ce)
 }
 
 static int
-blocks_await(const struct list_head *blocks,
+blocks_await(struct i915_sched_engine *se,
+	     const struct list_head *blocks,
 	     unsigned int flags,
 	     struct await_fences **out)
 {
@@ -1077,7 +1856,7 @@ blocks_await(const struct list_head *blocks,
 	if (!count)
 		return 0;
 
-	a = await_create(count, flags);
+	a = await_create(se, count, flags);
 	if (!a)
 		return -ENOMEM;
 
@@ -1089,8 +1868,7 @@ blocks_await(const struct list_head *blocks,
 		if (!f)
 			continue;
 
-		i915_request_set_priority(to_request(f), ALLOC_PRIORITY);
-		__i915_sw_fence_await_dma_fence(&a->chain, f, &a->cb[count++]);
+		await_chain(a, f, count++);
 		dma_fence_put(f);
 	}
 	if (!count) {
@@ -1107,10 +1885,11 @@ static int await_blt(struct drm_i915_gem_object *obj, unsigned int flags)
 	struct await_fences *f = NULL;
 	int err;
 
-	err = blocks_await(&obj->mm.blocks, flags, &f);
+	err = blocks_await(to_i915(obj->base.dev)->mm.sched,
+			   &obj->mm.blocks, flags, &f);
 	if (f) {
-		i915_gem_object_migrate_prepare(obj, &f->dma);
-		i915_sw_fence_commit(&f->chain);
+		i915_gem_object_migrate_prepare(obj, &f->base.rq.fence);
+		dma_fence_work_commit(&f->base);
 	}
 
 	return err;
@@ -1228,6 +2007,24 @@ int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj)
 	return err;
 }
 
+static bool is_swapped(struct drm_i915_gem_object *obj)
+{
+	struct drm_i915_gem_object *swp;
+
+	swp = obj->swapto;
+	if (!swp)
+		return false;
+
+	if (swp->mm.madv != I915_MADV_WILLNEED ||
+	    i915_gem_object_migrate_has_error(swp)) {
+		i915_gem_object_put(swp);
+		obj->swapto = NULL;
+		return false;
+	}
+
+	return true;
+}
+
 static int lmem_get_pages(struct drm_i915_gem_object *obj)
 {
 	unsigned int page_sizes;
@@ -1238,8 +2035,8 @@ static int lmem_get_pages(struct drm_i915_gem_object *obj)
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
 
-	if (obj->swapto)
-		err = lmem_swapin(obj, pages, page_sizes);
+	if (is_swapped(obj))
+		err = lmem_swapin(obj);
 	else
 		err = lmem_clear(obj);
 	if (err)
@@ -1286,10 +2083,9 @@ lmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 	bool dirty;
 
 	if (need_swap(obj)) {
-		unsigned int sizes = obj->mm.page_sizes;
 		int err;
 
-		err = lmem_swapout(obj, pages, sizes);
+		err = lmem_swapout(obj);
 		if (err)
 			return err;
 
@@ -1662,11 +2458,8 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_CLEAR_ON_IDLE))
 		return false;
 
-	if (!mem->gt->migrate.clear_chunk)
-		return false;
-
 	ce = get_clear_idle_context(mem->gt);
-	if (!ce)
+	if (!ce || !ce->private)
 		return false;
 
 	i915_buddy_defrag(&mem->mm, 0, UINT_MAX);
@@ -1684,8 +2477,8 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	}
 
 	__intel_wakeref_defer_park(&mem->gt->wakeref);
-	mutex_unlock(&mem->gt->wakeref.mutex);
 	reinit_completion(&mem->parking);
+	mutex_unlock(&mem->gt->wakeref.mutex);
 
 	if (clear_blt(ce, NULL,
 		      &mem->mm, &dirty,
@@ -1706,10 +2499,105 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	return __intel_wakeref_resume_park(&mem->gt->wakeref);
 }
 
+static void attach_window(struct intel_gt *gt, struct intel_migrate_window *w)
+{
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+
+	for_each_engine(engine, gt, id) {
+		struct intel_context *ce;
+
+		ce = engine->blitter_context;
+		if (ce)
+			ce->private = w;
+	}
+}
+
+static int setup_pte_window(struct intel_gt *gt, struct intel_migrate_window *w)
+{
+	struct drm_i915_gem_object *obj;
+	int err;
+
+	w->clear_chunk = SZ_64M;
+	w->swap_chunk = SZ_32M;
+
+	obj = i915_gem_object_create_region(gt->lmem,
+					    w->swap_chunk >> (PAGE_SHIFT - 3),
+					    I915_BO_ALLOC_CONTIGUOUS |
+					    I915_BO_ALLOC_VOLATILE);
+	if (IS_ERR(obj))
+		return PTR_ERR(obj);
+
+	err = i915_gem_object_pin_pages_unlocked(obj);
+	if (err)
+		goto err;
+
+	err = intel_flat_lmem_ppgtt_insert_window(gt->vm, obj, &w->node);
+	if (err)
+		goto err;
+
+	w->obj = obj;
+	w->pd_offset = sg_dma_address(obj->mm.pages->sgl);
+	drm_dbg(&gt->i915->drm,
+		"GT%d created %zdKiB PTE [%lldMiB] window @ lmem:%llx, gtt:%llx\n",
+		gt->info.id,
+		w->obj->base.size >> 10,
+		w->node.size >> 20,
+		w->pd_offset, w->node.start);
+
+	GEM_BUG_ON(w->node.size > sg_dma_len(obj->mm.pages->sgl) << PAGE_SHIFT >> 3);
+	GEM_BUG_ON(w->swap_chunk > w->node.size);
+
+	attach_window(gt, w);
+	return 0;
+
+err:
+	i915_gem_object_put(obj);
+	return err;
+}
+
+static void cleanup_pte_window(struct intel_migrate_window *w)
+{
+	struct drm_i915_gem_object *obj;
+
+	obj = fetch_and_zero(&w->obj);
+	if (!obj)
+		return;
+
+	if (drm_mm_node_allocated(&w->node))
+		drm_mm_remove_node(&w->node);
+
+	i915_gem_object_unpin_pages(obj);
+	i915_gem_object_put(obj);
+}
+
+static struct drm_i915_gem_object *
+create_smem(struct intel_gt *gt, unsigned long sz)
+{
+	struct drm_i915_gem_object *obj;
+	int err;
+
+	obj = i915_gem_object_create_internal(gt->i915, sz);
+	if (IS_ERR(obj))
+		return obj;
+
+	err = i915_gem_object_pin_pages_unlocked(obj);
+	if (err)
+		goto err;
+
+	return obj;
+
+err:
+	i915_gem_object_put(obj);
+	return ERR_PTR(err);
+}
+
 void i915_gem_init_lmem(struct intel_gt *gt)
 {
 	const long quantum_ns = 1000000; /* 1ms */
 	struct intel_migrate *m = &gt->migrate;
+	struct drm_i915_gem_object *smem;
+	struct intel_migrate_window *w;
 	struct i915_request *rq = NULL;
 	struct intel_context *ce;
 	intel_wakeref_t wf;
@@ -1720,11 +2608,15 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 	if (!gt->lmem)
 		return;
 
+	w = &m->window;
+	if (setup_pte_window(gt, w))
+		return;
+
 	ce = get_clear_alloc_context(gt);
 	if (!ce)
 		return;
 
-	m->clear_chunk = -4096;
+	GEM_BUG_ON(ce->private != w);
 
 	wf = intel_gt_pm_get(gt);
 	intel_rps_boost(&gt->rps);
@@ -1761,11 +2653,52 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 		chunk_size = div_u64(mul_u32_u32(quantum_ns, SZ_16M), cycles);
 		chunk_size = max_t(u64, chunk_size, SZ_64K);
 		chunk_size = roundup_pow_of_two(chunk_size + 1);
-		m->clear_chunk = min_t(u64, chunk_size, SZ_2G);
+		w->clear_chunk = min_t(u64, chunk_size, SZ_2G);
 		drm_dbg(&gt->i915->drm,
 			"GT%d: %s %s clear chunk size:%luKiB\n",
 			gt->info.id, gt->lmem->name, ce->engine->name,
-			m->clear_chunk >> 10);
+			w->clear_chunk >> 10);
+	}
+
+	smem = ERR_PTR(-ENODEV);
+	if (w->obj)
+		smem = create_smem(gt, SZ_16M);
+	if (!IS_ERR(smem)) {
+		cycles = -READ_ONCE(gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+		err = swap_blt(ce, smem /* dummy */,
+			       &gt->lmem->mm, &blocks,
+			       smem, true, false,
+			       &rq);
+		if (rq) {
+			i915_sw_fence_complete(&rq->submit);
+			if (i915_request_wait(rq, 0, HZ) < 0)
+				err = -ETIME;
+			else
+				err = err ?: rq->fence.error;
+			i915_request_put(rq);
+			rq = NULL;
+		}
+		cycles += READ_ONCE(gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+		cycles = intel_gt_clock_interval_to_ns(gt, cycles);
+		if (err == 0 && cycles) {
+			u64 chunk_size;
+
+			dev_info(gt->i915->drm.dev,
+				 "GT%d: %s %s swap bandwidth:%lld MB/s\n",
+				 gt->info.id, gt->lmem->name, ce->engine->name,
+				 div_u64(mul_u32_u32(1000, SZ_16M), cycles));
+
+			chunk_size =
+				div_u64(mul_u32_u32(quantum_ns, SZ_16M), cycles);
+			chunk_size = max_t(u64, chunk_size, SZ_64K);
+			chunk_size = roundup_pow_of_two(chunk_size);
+			w->swap_chunk = min_t(u64, chunk_size, w->node.size);
+			drm_dbg(&gt->i915->drm,
+				"GT%d: %s %s swap chunk size:%luKiB\n",
+				gt->info.id, gt->lmem->name, ce->engine->name,
+				w->swap_chunk >> 10);
+		}
+		i915_gem_object_put(smem);
 	}
 
 	__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, false);
@@ -2232,6 +3165,240 @@ err_wf:
 	intel_rps_cancel_boost(&gt->rps);
 	intel_gt_pm_put(gt, wf);
 	return err;
+}
+
+void i915_gem_fini_lmem(struct intel_gt *gt)
+{
+	struct intel_migrate *m = &gt->migrate;
+
+	cleanup_pte_window(&m->window);
+}
+
+static struct i915_request *
+copy_blt(struct intel_context *ce,
+	 struct drm_i915_gem_object *lmem,
+	 struct drm_i915_gem_object *other,
+	 bool to_other,
+	 bool nowait)
+{
+	const bool use_pvc_memcpy = HAS_LINK_COPY_ENGINES(ce->engine->i915);
+	const bool use_flat_ccs =
+		!use_pvc_memcpy &&
+		object_needs_flat_ccs(lmem) &&
+		object_needs_flat_ccs(other);
+	const u64 encode =
+		ce->vm->pte_encode(0,
+				   i915_gem_get_pat_index(ce->engine->i915, I915_CACHING_NONE),
+				   i915_gem_object_is_lmem(other) ? PTE_LM : 0);
+	struct i915_buddy_mm *mm = &lmem->mm.region.mem->mm;
+	const struct intel_migrate_window *w = ce->private;
+	struct i915_request *last = NULL, *rq;
+	u64 pd_offset, pte_window, pte_end;
+	const u32 step = w->swap_chunk;
+	struct i915_buddy_block *block;
+	struct sgt_iter it_pte;
+	struct i915_vma *ref;
+	int err;
+
+	GEM_BUG_ON(ce->ring->size < SZ_256K);
+	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
+	GEM_BUG_ON(!drm_mm_node_allocated(&ce->engine->gt->flat));
+	GEM_BUG_ON(!IS_ALIGNED(step, PAGE_SIZE));
+
+	if (GEM_WARN_ON(use_flat_ccs))
+		return ERR_PTR(-EINVAL);
+
+	if (GEM_WARN_ON(other->base.size < lmem->base.size))
+		return ERR_PTR(-EINVAL);
+
+	err = intel_context_throttle(ce, MAX_SCHEDULE_TIMEOUT);
+	if (err)
+		return ERR_PTR(err);
+
+	ref = i915_vma_instance(other, ce->vm, NULL);
+	if (IS_ERR(ref))
+		return ERR_CAST(ref);
+
+	it_pte = __sgt_iter(other->mm.pages->sgl, true);
+	GEM_BUG_ON(!it_pte.dma);
+
+	mutex_lock(&ce->timeline->mutex);
+	intel_context_enter(ce);
+
+	rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto exit;
+	}
+
+	if (!nowait) {
+		err = i915_request_await_object(rq, lmem, !to_other);
+		if (err)
+			goto skip;
+
+		err = i915_request_await_object(rq, other, to_other);
+		if (err)
+			goto skip;
+	}
+
+	pte_end = w->node.start + w->node.size;
+	pte_window = pte_end;
+
+	list_for_each_entry(block, &lmem->mm.blocks, link) {
+		u64 sz = i915_buddy_block_size(mm, block);
+		u64 offset = i915_buddy_block_offset(block);
+
+		do { /* re-coalesce split blocks */
+			struct i915_buddy_block *next =
+				list_next_entry(block, link);
+
+			err = i915_active_fence_set(&block->active, rq);
+			if (err < 0)
+				goto skip;
+
+			if (list_is_head(&next->link, &lmem->mm.blocks))
+				break;
+
+			if (i915_buddy_block_offset(next) != offset + sz)
+				break;
+
+			sz += i915_buddy_block_size(mm, next);
+			block = next;
+		} while (1);
+
+		do {
+			u32 length = min_t(u64, sz, step);
+
+			GEM_BUG_ON(offset < ce->engine->gt->flat.start);
+			GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
+
+			if (submit_request(rq, &last, swap_pkt(length))) {
+				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+				if (IS_ERR(rq)) {
+					err = PTR_ERR(rq);
+					goto exit;
+				}
+
+				err = update_active_blocks(rq,
+							   mm, block,
+							   offset);
+				if (err)
+					goto skip;
+			}
+
+			err = emit_start_timestamp(rq);
+			if (err)
+				goto skip;
+
+			if (pte_window + length > pte_end) {
+				pd_offset = w->pd_offset;
+				pte_window = w->node.start;
+
+				err = emit_tlb_invalidate(rq);
+				if (err)
+					goto skip;
+			}
+
+			err = emit_pte(rq, &it_pte,
+				       pd_offset, encode,
+				       length >> PAGE_SHIFT);
+			if (err)
+				goto skip;
+
+			if (use_pvc_memcpy)
+				err = pvc_emit_swap(rq,
+						    offset, pte_window, length,
+						    to_other);
+			else
+				err = xy_emit_swap(rq,
+						   offset, pte_window, length,
+						   to_other);
+			if (err)
+				goto skip;
+
+			err = emit_update_counters(rq, length, INTEL_GT_COPY_CYCLES);
+			if (err)
+				goto skip;
+
+			pte_window += length;
+			pd_offset += length >> PAGE_SHIFT << 3;
+			GEM_BUG_ON(pte_window > pte_end);
+
+			offset += length;
+			sz -= length;
+		} while (sz);
+	}
+skip:
+	last = chain_request(rq, last);
+exit:
+	if (last) {
+		i915_gem_object_migrate_prepare(other, &last->fence);
+		i915_active_add_request(&ref->active, last);
+		i915_sw_fence_complete(&last->submit);
+	}
+
+	intel_context_exit(ce);
+	mutex_unlock(&ce->timeline->mutex);
+
+	if (err) {
+		if (last)
+			i915_request_put(last);
+		last = ERR_PTR(err);
+	}
+
+	return last;
+}
+
+struct i915_request *
+i915_gem_object_copy_lmem(struct drm_i915_gem_object *lmem,
+			  struct drm_i915_gem_object *other,
+			  bool to_other,
+			  bool nowait)
+{
+	struct intel_context *ce;
+	struct i915_request *rq;
+	int err;
+
+	assert_object_held(lmem);
+	assert_object_held(other);
+
+	GEM_BUG_ON(!i915_gem_object_has_pages(lmem));
+
+	if (!i915_gem_object_is_lmem(lmem)) {
+		to_other = !to_other;
+		swap(lmem, other);
+	}
+	if (GEM_WARN_ON(!i915_gem_object_is_lmem(lmem)))
+		return ERR_PTR(-EINVAL);
+
+	ce = get_swapin_context(lmem->mm.region.mem->gt);
+	if (!ce)
+		return ERR_PTR(-EIO);
+
+	if (lmem->base.size == other->base.size) {
+		if (to_other)
+			other->flags |= I915_BO_SKIP_CLEAR;
+		else
+			lmem->flags |= I915_BO_SKIP_CLEAR;
+	}
+
+	err = i915_gem_object_pin_pages(lmem);
+	if (err)
+		return ERR_PTR(err);
+
+	err = i915_gem_object_pin_pages_sync(other); /* XXX defer? */
+	if (err) {
+		rq = ERR_PTR(err);
+		goto unpin;
+	}
+
+	rq = copy_blt(ce, lmem, other, to_other, nowait);
+
+	i915_gem_object_unpin_pages(other);
+unpin:
+	i915_gem_object_unpin_pages(lmem);
+
+	return rq;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

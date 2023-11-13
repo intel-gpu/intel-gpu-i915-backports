@@ -314,9 +314,8 @@ static int __live_heartbeat_off(struct intel_engine_cs *engine)
 	engine->serial++;
 	flush_delayed_work(&engine->heartbeat.work);
 	if (!delayed_work_pending(&engine->heartbeat.work)) {
-		pr_err("%s: heartbeat not running\n",
-		       engine->name);
-		err = -EINVAL;
+		pr_debug("%s: heartbeat not running\n", engine->name);
+		err = 0;
 		goto err_pm;
 	}
 

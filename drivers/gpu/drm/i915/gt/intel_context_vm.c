@@ -109,9 +109,9 @@ static int pin_ppgtt_barrier(struct i915_request *rq,
        cb->base.func = set_ppgtt_barrier;
        cb->old = i915_vm_get(ce->vm);
 
-       spin_lock_irq(&rq->lock);
+       spin_lock_irq(&rq->sched.lock);
        list_add_tail(&cb->base.node, &rq->fence.cb_list);
-       spin_unlock_irq(&rq->lock);
+       spin_unlock_irq(&rq->sched.lock);
 
        return 0;
 }

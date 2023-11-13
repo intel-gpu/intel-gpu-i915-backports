@@ -5,7 +5,7 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 Desktop | 5.19 generic |
+| Ubuntu® | 22.04 Desktop | 6.2 generic |
 | | 22.04 Server| 5.15 generic |
 
 
@@ -20,8 +20,8 @@ $sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
 linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
 
 Example:
-       $sudo apt install linux-headers-5.19.0-50-generic \
-       linux-image-unsigned-5.19.0-50-generic
+       $sudo apt install linux-headers-6.2.0-26-generic \
+       linux-image-unsigned-6.2.0-26-generic
 ```
   Ubuntu 22.04 Server:
 ```

@@ -3,7 +3,6 @@
  * Copyright © 2021 Intel Corporation
  */
 
-#include "gem/i915_gem_object_blt.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_engine_pm.h"
