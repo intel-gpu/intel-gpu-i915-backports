@@ -59,7 +59,7 @@ struct i915_perf_group;
 
 typedef u32 intel_engine_mask_t;
 #define ALL_ENGINES ((intel_engine_mask_t)~0ul)
-#define VIRTUAL_ENGINES  BIT(BITS_PER_TYPE(intel_engine_mask_t) - 1);
+#define VIRTUAL_ENGINES  BIT(BITS_PER_TYPE(intel_engine_mask_t) - 1)
 
 struct intel_hw_status_page {
 	struct list_head timelines;
@@ -269,8 +269,6 @@ struct intel_engine_execlists {
 	 */
 	struct rb_root_cached virtual;
 
-	struct i915_sched_ipi ipi;
-
 	/**
 	 * @csb_write: control register for Context Switch buffer
 	 *
@@ -344,6 +342,8 @@ struct intel_engine_guc_stats {
 	u64 start_gt_clk;
 };
 
+DECLARE_EWMA(irq_time, 3, 8);
+
 struct intel_engine_cs {
 	struct drm_i915_private *i915;
 	struct intel_gt *gt;
@@ -406,7 +406,6 @@ struct intel_engine_cs {
 
 	struct intel_context *kernel_context; /* pinned */
 	struct intel_context *blitter_context; /* pinned; exists for BCS only */
-	struct intel_context *evict_context; /* pinned; exists for BCS only */
 	struct intel_context *bind_context; /* Only for bcs used for bind */
 
 	/**
@@ -615,7 +614,12 @@ struct intel_engine_cs {
 		 */
 		ktime_t rps;
 
-		unsigned long irq_count;
+		struct intel_gt_stats_irq_time {
+			u64 total;
+			unsigned long count;
+			unsigned long max;
+			struct ewma_irq_time avg;
+		} irq;
 	} stats;
 
 	struct {

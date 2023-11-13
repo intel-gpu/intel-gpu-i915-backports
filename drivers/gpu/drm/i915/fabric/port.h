@@ -17,7 +17,7 @@
 #define LINK_FEC_MODE_F528    2
 #define LINK_FEC_MODE_UNKNOWN 3
 
-void initialize_fports(struct fsubdev *sd);
+int initialize_fports(struct fsubdev *sd);
 void destroy_fports(struct fsubdev *sd);
 
 int enable_port(struct fport *p);

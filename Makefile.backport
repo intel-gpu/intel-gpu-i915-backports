@@ -18,8 +18,8 @@ CUSTOM_KERN_ID ?=
 EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
-RPM_DISTRIBUTIONS := SLES15_SP5 SLES15_SP4 RHEL_9.2 RHEL_9.0 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS CUSTOM_KERN_1
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS UBUNTU_22.04_DESKTOP
+RPM_DISTRIBUTIONS := SLES15_SP5 SLES15_SP4 RHEL_9.2 RHEL_9.0 RHEL_8.6 RHEL_8.5 VANILLA_5.15LTS VANILLA_6.1LTS CUSTOM_KERN_1
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS UBUNTU_22.04_DESKTOP
 OS_DISTRO_NAME ?=
 #
 #Custom kernel specific
@@ -35,6 +35,7 @@ ifneq (, $(OS_DISTRIBUTION))
 	ADD_KER_VER = 1
 endif
 
+get_kernel_version = $(strip $(shell expr $(1).$(2)))
 ifneq (,$(filter $(DEB_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= UBUNTU_22.04_SERVER
 else ifneq (,$(filter $(RPM_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
@@ -119,13 +120,16 @@ endif
 endif
 else ifeq ($(OSV_NAME),)
 # check for mainline and vanilla kernels using kernel versions
-ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
+ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,1)), 1)
+OSV_NAME = VANILLA_6.1LTS
+ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,5,15)), 1)
 OSV_NAME = VANILLA_5.15LTS
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_1_VER),)
 OSV_NAME := $(shell echo $(CUSTOM_KERN_1_VER) | tr '[:lower:]' '[:upper:]')
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d "\"" -f 2 2>/dev/null || echo 1)
-else ifeq ($(shell expr $(BASE_KERN) \== 5.19), 1)
+else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,5,19)), 1)
 OSV_NAME = UBUNTU_22.04_SERVER
 ADD_KV = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else
@@ -313,7 +317,9 @@ else
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 	@echo 'UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 else ifeq ($(shell expr $(BASE_KERN) \> 5.15), 1)
+ifeq ($(shell expr $(BASE_KERN) \!= $(call  get_kernel_version,5,19)), 1)
 	@echo 'UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+endif
 endif
 endif
 endif

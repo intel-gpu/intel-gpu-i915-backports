@@ -1837,12 +1837,11 @@ capture_vma(struct intel_engine_capture_vma *next,
 	if (!c)
 		return next;
 
-	if (!__i915_vma_get(vma)) {
-		kfree(c);
-		return next;
-	}
+	if (!__i915_vma_get(vma))
+		goto err_free;
 
-	i915_gem_object_get(vma->obj);
+	if (!i915_gem_object_get_rcu(vma->obj))
+		goto err_vma;
 
 	if (!i915_gem_object_has_migrate(vma->obj) &&
 	    i915_vma_active_acquire_if_busy(vma))
@@ -1853,6 +1852,12 @@ capture_vma(struct intel_engine_capture_vma *next,
 
 	c->next = next;
 	return c;
+
+err_vma:
+	__i915_vma_put(vma);
+err_free:
+	kfree(c);
+	return next;
 }
 
 static struct intel_engine_capture_vma *
@@ -2349,7 +2354,8 @@ static void gt_record_attentions(struct intel_gt_coredump *gt_dump)
 	intel_eu_attentions_read(gt, &gt_dump->attentions.after,
 				 INTEL_GT_ATTENTION_TIMEOUT_MS);
 
-	intel_gt_invalidate_l3_mmio(gt);
+	i915_debugger_gpu_flush_engines(gt,
+					GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
 }
 
 /*
@@ -2836,6 +2842,7 @@ int i915_uuid_unregister_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 
 	i915_debugger_wait_on_discovery(to_i915(dev), client);
+	flush_workqueue(to_i915(dev)->wq);
 
 	xa_lock(&client->uuids_xa);
 	uuid_res = xa_load(&client->uuids_xa, uuid_arg->handle);

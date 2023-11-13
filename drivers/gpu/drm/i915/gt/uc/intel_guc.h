@@ -286,6 +286,10 @@ struct intel_guc {
 	 */
 	struct work_struct dead_guc_worker;
 
+	struct {
+		struct intel_gt_stats_irq_time irq;
+	} stats;
+
 	/* @stall_ms: To insert GuC stalls */
 	u32  stall_ms;
 

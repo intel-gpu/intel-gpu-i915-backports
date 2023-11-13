@@ -26,15 +26,39 @@
 #include "i915_gem_ttm.h"
 #include "i915_vma.h"
 
-static inline bool
-__vma_matches(struct vm_area_struct *vma, struct file *filp,
-	      unsigned long addr, unsigned long size)
+static int
+__assign_mmap_offset(struct drm_i915_gem_object *obj,
+		     enum i915_mmap_type mmap_type,
+		     u64 *offset, struct drm_file *file)
 {
-	if (vma->vm_file != filp)
-		return false;
+	struct i915_mmap_offset *mmo;
 
-	return vma->vm_start == addr &&
-	       (vma->vm_end - vma->vm_start) == PAGE_ALIGN(size);
+	if (i915_gem_object_never_mmap(obj))
+		return -ENODEV;
+
+	if (obj->ops->mmap_offset) {
+		*offset = obj->ops->mmap_offset(obj);
+		return 0;
+	}
+
+	if (mmap_type != I915_MMAP_TYPE_GTT &&
+	    !i915_gem_object_has_struct_page(obj) &&
+	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
+		return -ENODEV;
+
+	if (i915_gem_object_is_lmem(obj) &&
+	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
+	    !i915_gem_object_should_migrate_smem(obj, NULL) &&
+	    obj->mm.region.mem->instance > 0)
+		drm_dbg(obj->base.dev,
+			"Trying to mmap lmem1 when L4wa is enabled\n");
+
+	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
+	if (IS_ERR(mmo))
+		return PTR_ERR(mmo);
+
+	*offset = drm_vma_node_offset_addr(&mmo->vma_node);
+	return 0;
 }
 
 /**
@@ -61,17 +85,11 @@ int
 i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 		    struct drm_file *file)
 {
-	struct drm_i915_private *i915 = to_i915(dev);
 	struct drm_i915_gem_mmap *args = data;
 	struct drm_i915_gem_object *obj;
+	enum i915_mmap_type mmap_type;
 	unsigned long addr;
-
-	/*
-	 * mmap ioctl is disallowed for all discrete platforms,
-	 * and for all platforms with GRAPHICS_VER > 12.
-	 */
-	if (IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0))
-		return -EOPNOTSUPP;
+	u64 offset;
 
 	if (args->flags & ~(I915_MMAP_WC))
 		return -EINVAL;
@@ -83,53 +101,26 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 	if (!obj)
 		return -ENOENT;
 
-	/* prime objects have no backing filp to GEM mmap
-	 * pages from.
-	 */
-	if (!obj->base.filp) {
-		addr = -ENXIO;
-		goto err;
-	}
-
 	if (range_overflows(args->offset, args->size, (u64)obj->base.size)) {
 		addr = -EINVAL;
 		goto err;
 	}
 
-	if (i915_gem_object_is_lmem(obj) &&
-	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
-	    !i915_gem_object_should_migrate_smem(obj) &&
-	    obj->mm.region.mem->instance > 0)
-		drm_dbg(dev, "Trying to mmap lmem1 when L4wa is enabled\n");
+	mmap_type = I915_MMAP_TYPE_WB;
+	if (args->flags & I915_MMAP_WC)
+		mmap_type = I915_MMAP_TYPE_WC;
 
-	addr = vm_mmap(obj->base.filp, 0, args->size,
-		       PROT_READ | PROT_WRITE, MAP_SHARED,
-		       args->offset);
-	if (IS_ERR_VALUE(addr))
+	addr = __assign_mmap_offset(obj, mmap_type, &offset, file);
+	if (addr)
 		goto err;
 
-	if (args->flags & I915_MMAP_WC) {
-		struct mm_struct *mm = current->mm;
-		struct vm_area_struct *vma;
-
-		if (mmap_write_lock_killable(mm)) {
-			addr = -EINTR;
-			goto err;
-		}
-		vma = find_vma(mm, addr);
-		if (vma && __vma_matches(vma, obj->base.filp, addr, args->size))
-			vma->vm_page_prot =
-				pgprot_writecombine(vm_get_page_prot(vma->vm_flags));
-		else
-			addr = -ENOMEM;
-		mmap_write_unlock(mm);
-		if (IS_ERR_VALUE(addr))
-			goto err;
+	addr = vm_mmap(file->filp, 0, args->size,
+		       PROT_READ | PROT_WRITE, MAP_SHARED,
+		       offset + args->offset);
+	if (!IS_ERR_VALUE(addr)) {
+		args->addr_ptr = (u64)addr;
+		addr = 0;
 	}
-	i915_gem_object_put(obj);
-
-	args->addr_ptr = (u64)addr;
-	return 0;
 
 err:
 	i915_gem_object_put(obj);
@@ -254,22 +245,81 @@ vm_fault_t i915_error_to_vmf_fault(int err)
 	}
 }
 
+static struct drm_i915_gem_object *
+create_swapto(struct drm_i915_gem_object *obj, bool write)
+{
+	struct drm_i915_gem_object *swp;
+	u64 size;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_MMAP_SWAP_CREATE))
+		return obj;
+
+	if (!i915_gem_object_is_lmem(obj))
+		return obj;
+
+	if (i915_gem_object_has_pages(obj) ||
+	    obj->mm.madv == __I915_MADV_PURGED)
+		return obj;
+
+	i915_gem_flush_free_objects(to_i915(obj->base.dev));
+
+	/* Prefer to write directly to lmem unless we will evict */
+	size = obj->base.size;
+	if (write && 2 * size < atomic64_read(&obj->mm.region.mem->avail))
+		return obj;
+
+	if (HAS_FLAT_CCS(to_i915(obj->base.dev)) &&
+	    !intel_gt_is_wedged(obj->mm.region.mem->gt))
+		size += size >> 8;
+
+	swp = i915_gem_object_create_shmem(to_i915(obj->base.dev), size);
+	if (IS_ERR(swp))
+		return obj;
+
+	swp->flags |= I915_BO_CPU_CLEAR;
+	i915_gem_object_share_resv(obj, swp);
+
+	GEM_BUG_ON(obj->swapto);
+	obj->swapto = swp;
+
+	return swp;
+}
+
+static struct drm_i915_gem_object *
+use_swapto(struct drm_i915_gem_object *obj, bool write)
+{
+	struct drm_i915_gem_object *swp = obj->swapto;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_MMAP_SWAP))
+		return obj;
+
+	if (!swp || swp->mm.madv != I915_MADV_WILLNEED)
+		return create_swapto(obj, write);
+
+	GEM_BUG_ON(swp->base.resv != obj->base.resv);
+	return swp;
+}
+
 static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 {
 	struct vm_area_struct *area = vmf->vma;
 	struct i915_mmap_offset *mmo = area->vm_private_data;
-	struct drm_i915_gem_object *obj = mmo->obj;
-	struct drm_device *dev = obj->base.dev;
-	struct drm_i915_private *i915 = to_i915(dev);
+	struct drm_i915_gem_object *obj = mmo->obj, *pg;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	pgoff_t page_offset = (vmf->address - area->vm_start) >> PAGE_SHIFT;
+	long obj_offset = area->vm_pgoff - drm_vma_node_start(&mmo->vma_node);
 	bool write = area->vm_flags & VM_WRITE;
 	unsigned long vm_start, vm_size;
 	struct i915_gem_ww_ctx ww;
 	resource_size_t iomap;
-	int err;
 	vm_fault_t ret;
+	int err;
 
-	trace_i915_gem_object_fault(obj, vmf->address, page_offset, false, write);
+	/* Sanity check that we allow writing into this object */
+	if (unlikely(i915_gem_object_is_readonly(obj) && write))
+		return VM_FAULT_SIGBUS;
+
+	trace_i915_gem_object_fault(obj, vmf->address, obj_offset + page_offset, false, write);
 
 	atomic_inc(&i915->active_fault_handlers);
 
@@ -279,60 +329,82 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		goto out;
 	}
 
-	/* Sanity check that we allow writing into this object */
-	if (unlikely(i915_gem_object_is_readonly(obj) &&
-		     area->vm_flags & VM_WRITE)) {
-		ret = VM_FAULT_SIGBUS;
-		goto out;
-	}
-
 	/* for segmented BO, lookup and fill PTEs for just one segment */
+	vm_start = area->vm_start;
+	vm_size = area->vm_end;
 	if (i915_gem_object_has_segments(obj)) {
-		obj = i915_gem_object_lookup_segment(obj, page_offset << PAGE_SHIFT,
+		obj = i915_gem_object_lookup_segment(obj,
+						     (obj_offset + page_offset) << PAGE_SHIFT,
 						     NULL);
 		if (!obj) {
 			ret = VM_FAULT_SIGBUS;
 			goto out;
 		}
 
-		vm_start = area->vm_start + obj->segment_offset;
 		vm_size = obj->base.size;
-	} else {
-		vm_start = area->vm_start;
-		vm_size = area->vm_end - area->vm_start;
+		if (obj_offset > obj->segment_offset >> PAGE_SHIFT) {
+			obj_offset -= obj->segment_offset >> PAGE_SHIFT;
+			vm_size -= obj_offset << PAGE_SHIFT;
+		} else {
+			vm_start = area->vm_start + obj->segment_offset - (obj_offset << PAGE_SHIFT);
+			obj_offset = 0;
+		}
+		vm_size = min(area->vm_end, vm_start + vm_size);
 	}
+	vm_size -= vm_start;
 
 	do for_i915_gem_ww(&ww, err, true) {
+		bool required = false;
+
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
 
+		pg = use_swapto(obj, write);
+
 		/* Implicitly migrate BO to SMEM if criteria met */
-		if (i915_gem_object_should_migrate_smem(obj)) {
-			err = i915_gem_object_migrate_to_smem(obj, &ww, false);
-			if (err)
+		if (i915_gem_object_should_migrate_smem(pg, &required)) {
+			if (i915_gem_object_has_pinned_pages(pg))
+				/*
+				 * If pinned pages, migrate will fail with
+				 * -EBUSY. A retry of fault/migration will
+				 * not succeed and will retry indefinitely,
+				 * so fail the fault (SIGBUS) if required to
+				 * migrate.
+				 */
+				err = -EFAULT;
+			else
+				err = i915_gem_object_migrate_to_smem(pg, &ww, false);
+			if (err && required)
+				/*
+				 * Atomic hint requires migration, but we
+				 * cannot. Depending on error, fail or retry.
+				 */
 				continue;
+			else if (err == -EDEADLK)
+				continue;
+			else
+				/* Migration not required, just best effort. */
+				err = 0;
 		}
 
-		err = i915_gem_object_pin_pages_sync(obj);
+		err = i915_gem_object_pin_pages_sync(pg);
 		if (err)
 			continue;
 
 		iomap = -1;
-		if (!i915_gem_object_has_struct_page(obj)) {
-			iomap = obj->mm.region.mem->iomap.base;
-			iomap -= obj->mm.region.mem->region.start;
+		if (!i915_gem_object_has_struct_page(pg)) {
+			iomap = pg->mm.region.mem->iomap.base;
+			iomap -= pg->mm.region.mem->region.start;
 		}
 
 		/* PTEs are revoked in obj->ops->put_pages() */
 		err = remap_io_sg(area, vm_start, vm_size,
-				  obj->mm.pages->sgl, iomap);
+				  pg->mm.pages->sgl, obj_offset,
+				  iomap);
 
-		if (area->vm_flags & VM_WRITE)
-			GEM_BUG_ON(!i915_gem_object_has_pinned_pages(obj));
-
-		i915_gem_object_unpin_pages(obj);
-	} while (err == -ENXIO);
+		i915_gem_object_unpin_pages(pg);
+	} while (err == -ENXIO || err == -ENOMEM);
 
 	ret = i915_error_to_vmf_fault(err);
 out:
@@ -835,41 +907,6 @@ err:
 }
 
 static int
-__assign_mmap_offset(struct drm_i915_gem_object *obj,
-		     enum i915_mmap_type mmap_type,
-		     u64 *offset, struct drm_file *file)
-{
-	struct i915_mmap_offset *mmo;
-
-	if (i915_gem_object_never_mmap(obj))
-		return -ENODEV;
-
-	if (obj->ops->mmap_offset)  {
-		*offset = obj->ops->mmap_offset(obj);
-		return 0;
-	}
-
-	if (mmap_type != I915_MMAP_TYPE_GTT &&
-	    !i915_gem_object_has_struct_page(obj) &&
-	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
-		return -ENODEV;
-
-	if (i915_gem_object_is_lmem(obj) &&
-	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
-	    !i915_gem_object_should_migrate_smem(obj) &&
-	    obj->mm.region.mem->instance > 0)
-		drm_dbg(obj->base.dev,
-			"Trying to mmap lmem1 when L4wa is enabled\n");
-
-	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
-	if (IS_ERR(mmo))
-		return PTR_ERR(mmo);
-
-	*offset = drm_vma_node_offset_addr(&mmo->vma_node);
-	return 0;
-}
-
-static int
 __assign_mmap_offset_handle(struct drm_file *file,
 			    u32 handle,
 			    enum i915_mmap_type mmap_type,
@@ -1062,7 +1099,7 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	if (i915_gem_object_is_readonly(obj)) {
 		if (vma->vm_flags & VM_WRITE)
 			return -EINVAL;
-		
+
 		vma->vm_flags &= ~VM_MAYWRITE;
 	}
 
@@ -1073,6 +1110,7 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	pvc_wa_disallow_rc6(i915);
 	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
 	vma->vm_private_data = mmo;
+	vma->vm_pgoff = drm_vma_node_start(&mmo->vma_node);
 
 	if (i915_gem_object_has_iomem(obj))
 		vma->vm_flags |= VM_IO;

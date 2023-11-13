@@ -25,8 +25,8 @@ struct ttm_resource;
 enum intel_memory_type {
 	INTEL_MEMORY_SYSTEM = I915_MEMORY_CLASS_SYSTEM,
 	INTEL_MEMORY_LOCAL = I915_MEMORY_CLASS_DEVICE,
-	INTEL_MEMORY_STOLEN_SYSTEM,
-	INTEL_MEMORY_STOLEN_LOCAL,
+	INTEL_MEMORY_SHARED_LOCAL,
+	INTEL_MEMORY_STOLEN,
 	INTEL_MEMORY_MOCK,
 };
 
@@ -34,22 +34,13 @@ enum intel_region_id {
 	INTEL_REGION_SMEM = 0,
 	INTEL_REGION_LMEM_0,
 	INTEL_REGION_LMEM_1,
-	INTEL_REGION_LMEM_2,
-	INTEL_REGION_LMEM_3,
-	INTEL_REGION_STOLEN_SMEM,
-	INTEL_REGION_STOLEN_LMEM,
+	INTEL_REGION_STOLEN,
 	INTEL_REGION_UNKNOWN, /* Should be last */
 };
 
 #define REGION_SMEM     BIT(INTEL_REGION_SMEM)
-#define REGION_LMEM     BIT(INTEL_REGION_LMEM_0)
-#define REGION_LMEM1     BIT(INTEL_REGION_LMEM_1)
-#define REGION_LMEM2     BIT(INTEL_REGION_LMEM_2)
-#define REGION_LMEM3     BIT(INTEL_REGION_LMEM_3)
-#define REGION_STOLEN_SMEM   BIT(INTEL_REGION_STOLEN_SMEM)
-#define REGION_STOLEN_LMEM   BIT(INTEL_REGION_STOLEN_LMEM)
-
-#define REGION_LMEM_MASK (REGION_LMEM | REGION_LMEM1 | REGION_LMEM2 | REGION_LMEM3)
+#define REGION_LMEM     (BIT(INTEL_REGION_LMEM_0) | BIT(INTEL_REGION_LMEM_1))
+#define REGION_STOLEN	BIT(INTEL_REGION_STOLEN)
 
 enum {  /* Extends i915_buddy_mm */
 	I915_ALLOC_CONTIGUOUS_BIT = __I915_BUDDY_ALLOC_USER_BITS,
@@ -138,7 +129,6 @@ struct intel_memory_region {
 		spinlock_t lock; /* Protects access to objects */
 		struct list_head list;
 		struct list_head purgeable;
-		struct list_head locked;
 	} objects;
 
 	struct completion parking;
@@ -171,9 +161,10 @@ void __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 					   bool dirty);
 void __intel_memory_region_put_block_buddy(struct i915_buddy_block *block);
 
-int intel_memory_region_add_to_ww_evictions(struct intel_memory_region *mem,
-					    struct i915_gem_ww_ctx *ww,
-					    struct drm_i915_gem_object *obj);
+int intel_memory_region_evict(struct intel_memory_region *mem,
+			      struct i915_gem_ww_ctx *ww,
+			      resource_size_t target,
+			      int chunk);
 
 struct intel_memory_region *
 intel_memory_region_create(struct intel_gt *gt,
@@ -216,7 +207,5 @@ static inline void intel_memory_region_flush(struct intel_memory_region *mem)
 	/* Flush any pending work to free blocks region */
 	flush_work(&mem->pd_put.work);
 }
-
-const char *intel_memory_region_id2str(enum intel_region_id id);
 
 #endif

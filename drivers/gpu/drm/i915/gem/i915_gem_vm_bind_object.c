@@ -40,7 +40,6 @@ INTERVAL_TREE_DEFINE(struct i915_vma, rb, u64, __subtree_last,
 
 struct vm_bind_user_fence {
 	struct dma_fence_work base;
-	struct i915_sw_dma_fence_cb cb;
 	struct user_fence user_fence;
 	struct wait_queue_head *wq;
 };
@@ -83,6 +82,8 @@ static const struct dma_fence_work_ops ufence_ops = {
 	.name = "ufence",
 	.work = ufence_work,
 	.release = ufence_release,
+	.no_error_propagation = true,
+	.rcu_release = true,
 };
 
 static struct i915_sw_fence *
@@ -95,24 +96,25 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 	if (!vb)
 		return NULL;
 
-	dma_fence_work_init(&vb->base, &ufence_ops);
+	dma_fence_work_init(&vb->base, &ufence_ops, vm->i915->sched);
 	if (arg->bind_fence.mm) {
 		vb->user_fence = arg->bind_fence;
 		mmgrab(vb->user_fence.mm);
 	}
 	vb->wq = &vm->i915->user_fence_wq;
 
-	i915_sw_fence_await(&vb->base.chain); /* signaled by vma_bind */
+	i915_sw_fence_await(&vb->base.rq.submit); /* signaled by vma_bind */
 
 	/* Preserve the user's write ordering of the user fence seqno */
-	prev = __i915_active_fence_fetch_set(&vm->user_fence, &vb->base.dma);
+	prev = __i915_active_fence_fetch_set(&vm->user_fence,
+					     &vb->base.rq.fence);
 	if (prev) {
-		__i915_sw_fence_await_dma_fence(&vb->base.chain, prev, &vb->cb);
+		dma_fence_work_chain(&vb->base, prev);
 		dma_fence_put(prev);
 	}
 
 	dma_fence_work_commit(&vb->base);
-	return &vb->base.chain;
+	return &vb->base.rq.submit;
 }
 
 static int __vm_bind_fence(struct vm_bind_user_ext *arg, u64 addr, u64 val)
@@ -334,7 +336,6 @@ struct unbind_work {
 	struct dma_fence_work base;
 	struct list_head unbind_link;
 	struct i915_vma *vma;
-	struct i915_sw_dma_fence_cb cb;
 };
 
 static int unbind(struct dma_fence_work *work)
@@ -353,7 +354,6 @@ static void release(struct dma_fence_work *work)
 {
 	struct unbind_work *w = container_of(work, typeof(*w), base);
 
-	i915_debugger_vma_purge(w->vma->vm->client, w->vma);
 	__i915_vma_put(w->vma);
 }
 
@@ -373,14 +373,14 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 	if (!w)
 		return NULL;
 
-	dma_fence_work_init(&w->base, &unbind_ops);
+	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->i915->sched);
 	w->vma = __i915_vma_get(vma);
 	INIT_LIST_HEAD(&w->unbind_link);
 	list_add_tail(&w->unbind_link, unbind_head);
 
-	prev = i915_active_set_exclusive(&vma->active, &w->base.dma);
+	prev = i915_active_set_exclusive(&vma->active, &w->base.rq.fence);
 	if (!IS_ERR_OR_NULL(prev)) {
-		__i915_sw_fence_await_dma_fence(&w->base.chain, prev, &w->cb);
+		dma_fence_work_chain(&w->base, prev);
 		dma_fence_put(prev);
 	}
 
@@ -395,10 +395,10 @@ static int verify_adjacent_segments(struct i915_vma *vma, u64 length)
 	int ret;
 
 	/*
-	 * If obj->segment_offset is non-zero, we are not at the start of a
-	 * segmented BO. Partial unbinds are not supported, so this is error.
+	 * We have to unbind from the start of the mapping.
+	 * Partial unbinds are not supported.
 	 */
-	if (vma->obj->segment_offset)
+	if (vma->adjacent_start != vma)
 		return -EINVAL;
 
 	/*
@@ -546,6 +546,7 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 
 	i915_gem_object_lock(vm->root_obj, NULL);
 	for (vma = vma_head; vma; vma = vma_next) {
+		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
 		i915_active_release(&vma->active);
 		vma_next = vma->adjacent_next;
 		if (!ret) {
@@ -558,17 +559,9 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 
 out_unlock:
 	i915_gem_vm_bind_unlock(vm);
-
 	list_for_each_entry_safe(uw, uwn, &unbind_head, unbind_link) {
-		struct dma_fence_work *work = &uw->base;
-
-		i915_sw_fence_set_error_once(&work->chain, ret);
-
-		dma_fence_get(&work->dma);
-		dma_fence_work_commit_imm(work);
-		if (!vm->i915->params.async_vm_unbind)
-			dma_fence_wait(&work->dma, false);
-		dma_fence_put(&work->dma);
+		i915_sw_fence_set_error_once(&uw->base.rq.submit, ret);
+		dma_fence_work_commit(&uw->base);
 	}
 
 	return ret;
@@ -593,6 +586,58 @@ static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
 
 	return __i915_vma_get(vma);
+}
+
+static struct dma_fence *get_unbind_fence(struct drm_mm_node *node)
+{
+	struct i915_vma *vma;
+
+	if (node->color == I915_COLOR_UNEVICTABLE)
+		return NULL;
+
+	vma = container_of(node, typeof(*vma), node);
+	return i915_active_fence_get(&vma->active.excl);
+}
+
+static int wait_on_unbind(struct i915_address_space *vm, u64 start, u64 end)
+{
+	int err;
+
+	/*
+	 * XXX Wait for old evictions before grabbing locks.
+	 */
+
+	err = mutex_lock_interruptible(&vm->mutex);
+	if (err)
+		return err;
+
+	do {
+		struct drm_mm_node *node;
+		struct dma_fence *fence;
+
+		node = __drm_mm_interval_first(&vm->mm, start, end - 1);
+		if (node->start >= end)
+			break;
+
+		start = node->start + node->size;
+
+		fence = get_unbind_fence(node);
+		if (likely(!fence))
+			continue;
+
+		mutex_unlock(&vm->mutex);
+
+		err = dma_fence_wait(fence, true);
+		dma_fence_put(fence);
+
+		if (start >= end || err)
+			return err;
+
+		mutex_lock(&vm->mutex);
+	} while (1);
+
+	mutex_unlock(&vm->mutex);
+	return 0;
 }
 
 /*
@@ -689,11 +734,13 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 	int ret = 0;
 
 	for_i915_gem_ww(&ww, ret, true) {
-		ret = i915_gem_object_lock(vm->root_obj, &ww);
-		if (ret)
-			continue;
-
 		if (pin_flags) {
+			if (!i915_vm_page_fault_enabled(vm)) {
+				ret = i915_gem_object_lock(vm->root_obj, &ww);
+				if (ret)
+					continue;
+			}
+
 			ret = i915_gem_object_lock(vma->obj, &ww);
 			if (ret)
 				continue;
@@ -703,8 +750,34 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 			if (ret)
 				continue;
 
+			/*
+			 * ULLs may be busyspinning waiting for the new buffer,
+			 * preventing our blitter clear, unless we preempt it
+			 * ahead.  Since there's no dependency between the
+			 * immediate bind, and the existing running context, we
+			 * have to generate our own priority-inheritance.
+			 */
+			if (vma->bind_fence) {
+				struct dma_fence *f;
+
+				f = i915_active_fence_get(&vma->active.excl);
+				if (f) {
+					if (dma_fence_is_i915(f))
+						i915_request_set_priority(to_request(f),
+									  I915_PRIORITY_MAX);
+					dma_fence_put(f);
+				}
+			}
+
+			if (pin_flags & PIN_RESIDENT)
+				set_bit(I915_VMA_RESIDENT_BIT, __i915_vma_flags(vma));
+
 			__i915_vma_unpin(vma);
 		}
+
+		ret = i915_gem_object_lock(vm->root_obj, &ww);
+		if (ret)
+			continue;
 
 		list_move_tail(&vma->vm_bind_link, &vm->vm_bind_list);
 		i915_vm_bind_it_insert(vma, &vm->va);
@@ -725,6 +798,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	struct i915_sw_fence *bind_fence = NULL;
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma, *vma_next;
+	struct i915_vma *first_vma = NULL;
 	LIST_HEAD(vma_head);
 	u64 pin_flags = 0;
 	int ret;
@@ -754,14 +828,18 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	if (ret)
 		goto put_obj;
 
+	va->start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
+					    va->start);
+	ret = wait_on_unbind(vm, va->start, va->start + va->length);
+	if (ret)
+		goto put_obj;
+
 	i915_debugger_wait_on_discovery(vm->i915, vm->client);
 
 	ret = i915_gem_vm_bind_lock_interruptible(vm);
 	if (ret)
 		goto put_obj;
 
-	va->start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
-					    va->start);
 	/*
 	 * Verify VA isn't already in use (bound) for this VM.
 	 * FIXME: This only tests start address and should be checking
@@ -805,14 +883,19 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	 * TODO: follow-on work needed for debugger integration,
 	 * for now put the metadata_list in first VMA.
 	 */
-	vma = list_first_entry(&vma_head, typeof(*vma), vm_bind_link);
+	first_vma = vma = list_first_entry(&vma_head, typeof(*vma), vm_bind_link);
 	if (!list_empty(&ext.metadata_list)) {
 		spin_lock(&vma->metadata_lock);
 		list_splice_tail_init(&ext.metadata_list, &vma->metadata_list);
 		spin_unlock(&vma->metadata_lock);
 	}
-	/* The metadata is in VMA so debugger can prepare the event properly */
-	i915_debugger_vma_prepare(vm->client, vma, PRELIM_DRM_I915_DEBUG_EVENT_CREATE);
+	/*
+	 * The metadata is in VMA so debugger can prepare the event properly
+	 * for the IMMEDIATE binds.
+	 * Deferred VM-BINDs is not supported by EU Debugger
+	 */
+	if (va->flags & PRELIM_I915_GEM_VM_BIND_IMMEDIATE)
+		i915_debugger_vma_prepare(vm->client, vma);
 
 	list_for_each_entry_safe(vma, vma_next, &vma_head, vm_bind_link) {
 		/* Hold object reference until vm_unbind */
@@ -820,6 +903,9 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 		/* apply pat_index from parent */
 		vma->obj->pat_index = obj->pat_index;
+
+		/* store first vma to prevent partial unbinds */
+		vma->adjacent_start = first_vma;
 
 		ret = vma_bind_insert(vma, pin_flags);
 		if (ret)
@@ -865,6 +951,9 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 unlock_vm:
 	/* after dropping this lock, user can vm_unbind_obj */
 	i915_gem_vm_bind_unlock(vm);
+	if (va->flags & PRELIM_I915_GEM_VM_BIND_IMMEDIATE)
+		i915_debugger_vma_finalize(vm->client, first_vma, ret);
+
 put_obj:
 	i915_gem_object_put(obj);
 	metadata_list_free(&ext.metadata_list);

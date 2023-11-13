@@ -62,6 +62,19 @@ clear_free(struct i915_buddy_block *block, struct i915_buddy_list *bl)
 	return ret;
 }
 
+static struct i915_buddy_block *
+__get_buddy(const struct i915_buddy_block *block,
+	    const struct i915_buddy_block *parent)
+{
+	return parent->left == block ? parent->right : parent->left;
+}
+
+static bool needs_defrag(const struct i915_buddy_block *block,
+			 const struct i915_buddy_list *bl)
+{
+	return __get_buddy(block, block->parent)->node.list == bl;
+}
+
 static void __mark_free(struct i915_buddy_list *bl,
 			struct i915_buddy_block *block)
 {
@@ -71,7 +84,9 @@ static void __mark_free(struct i915_buddy_list *bl,
 	GEM_BUG_ON(block->node.list);
 	head = &bl->list;
 	if (i915_buddy_block_is_active(block)) {
-		WRITE_ONCE(bl->defrag, true);
+		if (!bl->defrag && block->parent && needs_defrag(block, bl))
+			WRITE_ONCE(bl->defrag, true);
+
 		head = head->prev;
 	}
 	list_add(&block->node.link, head);
@@ -102,6 +117,7 @@ static struct i915_buddy_list *create_lists(int count)
 	for (i = 0; i < count; ++i) {
 		INIT_LIST_HEAD(&lists[i].list);
 		spin_lock_init(&lists[i].lock);
+		lists[i].defrag = false;
 	}
 
 	return lists;
@@ -240,12 +256,6 @@ split_block(struct i915_buddy_mm *mm, struct i915_buddy_block *block)
 	i915_buddy_mark_free(mm, block->right);
 
 	return block->left;
-}
-
-static struct i915_buddy_block *
-__get_buddy(struct i915_buddy_block *block, struct i915_buddy_block *parent)
-{
-	return parent->left == block ? parent->right : parent->left;
 }
 
 static const struct dma_fence *block_fence(const struct i915_buddy_block *block)

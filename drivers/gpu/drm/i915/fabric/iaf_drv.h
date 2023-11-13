@@ -829,7 +829,6 @@ struct fsubdev_routing_info {
  * @_portstatus: logical port status, access via @port_status/@next_port_status
  * @port_status: for querying port status via RCU (organized by lpn)
  * @next_port_status: for updating port status via RCU (organized by lpn)
- * @total_trap_count: total number of trap notifications reported
  * @psc_trap_count: number of port state change trap notifications reported
  * @lwd_trap_count: number of link width degrade trap notifications reported
  * @lqi_trap_count: number of link quality issue trap notifications reported
@@ -910,10 +909,8 @@ struct fsubdev {
 	struct fport_status *next_port_status; /* written by PM thread */
 
 	/*
-	 * atomic, incremented by PM thread: total_trap_count can trail the total of individual
-	 * trap counts due to their implementation as independent atomics
+	 * atomic, incremented by PM thread
 	 */
-	atomic64_t total_trap_count;
 	atomic64_t psc_trap_count;
 	atomic64_t lwd_trap_count;
 	atomic64_t lqi_trap_count;
@@ -1082,6 +1079,7 @@ struct txcal_blob {
 
 /**
  * struct fdev - Device structure for IAF/fabric device component
+ * @registered: Registered with platform device
  * @sd: subdevice structures
  * @dev_disabled: On a PCIe error, disable access to the PCI bus
  * @fwinit_refcnt: number of subdevices needing firmware initialization
@@ -1134,6 +1132,7 @@ struct txcal_blob {
  * Used throughout the driver to maintain information about a given device.
  */
 struct fdev {
+	bool registered;
 	struct fsubdev sd[IAF_MAX_SUB_DEVS];
 	bool dev_disabled;
 	atomic_t fwinit_refcnt;
@@ -1331,7 +1330,9 @@ struct fsubdev *find_routable_sd(u64 guid);
 
 void iaf_complete_init_dev(struct fdev *dev);
 
-bool noisy_logging_allowed(void);
+bool is_fdev_registered(struct fdev *dev);
+
+bool is_fport_registered(struct fport *port);
 
 bool mappings_ref_check(struct fdev *dev);
 

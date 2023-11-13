@@ -202,7 +202,7 @@
 	.page_sizes = I915_GTT_PAGE_SIZE_4K
 
 #define GEN_DEFAULT_REGIONS \
-	.memory_regions = REGION_SMEM | REGION_STOLEN_SMEM
+	.memory_regions = REGION_SMEM | REGION_STOLEN
 
 #define I830_FEATURES \
 	GEN(2), \
@@ -967,7 +967,7 @@ static const struct intel_device_info rkl_info = {
 };
 
 #define DGFX_FEATURES \
-	.memory_regions = REGION_SMEM | REGION_LMEM | REGION_STOLEN_LMEM, \
+	.memory_regions = REGION_SMEM | REGION_LMEM | REGION_STOLEN, \
 	.has_llc = 0, \
 	.has_pxp = 0, \
 	.has_snoop = 1, \
@@ -1104,8 +1104,7 @@ static const struct intel_device_info adl_p_info = {
 
 #define REMOTE_TILE_FEATURES \
 	.has_remote_tiles = 1, \
-	.memory_regions = REGION_SMEM | REGION_STOLEN_LMEM | REGION_LMEM | \
-			  REGION_LMEM1 | REGION_LMEM2 | REGION_LMEM3
+	.memory_regions = (REGION_SMEM | REGION_STOLEN | REGION_LMEM)
 
 #define XE_HP_SDV_ENGINES \
 	BIT(BCS0) | \
@@ -1302,7 +1301,7 @@ static const struct intel_device_info mtl_info = {
 	.has_mslice_steering = 0,
 	.has_snoop = 1,
 	.has_sriov = 1,
-	.memory_regions = REGION_SMEM | REGION_STOLEN_LMEM,
+	.memory_regions = REGION_SMEM | REGION_STOLEN,
 	MTL_CACHELEVEL,
 	.platform_engine_mask = BIT(RCS0) | BIT(BCS0) | BIT(CCS0),
 	.require_force_probe = 1,
@@ -1572,7 +1571,7 @@ static void i915_pci_shutdown(struct pci_dev *pdev)
 	 * may leave the driver in an inconsistent state. Make sure we no longer
 	 * access the device again.
 	 */
-	i915->do_release = false;
+	i915->do_release = IS_SRIOV_VF(i915);
 	pci_set_drvdata(pdev, NULL);
 }
 

@@ -864,7 +864,7 @@ assert_pending_valid(const struct intel_engine_execlists *execlists,
 		}
 
 		/* Hold tightly onto the lock to prevent concurrent retires! */
-		if (!spin_trylock_irqsave(&rq->lock, flags))
+		if (!spin_trylock_irqsave(&rq->sched.lock, flags))
 			continue;
 
 		if (__i915_request_is_complete(rq))
@@ -899,7 +899,7 @@ assert_pending_valid(const struct intel_engine_execlists *execlists,
 		}
 
 unlock:
-		spin_unlock_irqrestore(&rq->lock, flags);
+		spin_unlock_irqrestore(&rq->sched.lock, flags);
 		if (!ok)
 			return false;
 	}
@@ -2059,8 +2059,7 @@ static void __execlists_hold(struct i915_request *rq)
 			__i915_request_unsubmit(rq);
 
 		clear_bit(I915_FENCE_FLAG_PQUEUE, &rq->fence.flags);
-		list_move_tail(&rq->sched.link,
-			       &rq->engine->sched_engine->hold);
+		list_move_tail(&rq->sched.link, &rq->sched_engine->hold);
 		i915_request_set_hold(rq);
 		RQ_TRACE(rq, "on hold\n");
 
@@ -2160,7 +2159,7 @@ static void __execlists_unhold(struct i915_request *rq)
 
 		i915_request_clear_hold(rq);
 		list_move_tail(&rq->sched.link,
-			       i915_sched_lookup_priolist(rq->engine->sched_engine,
+			       i915_sched_lookup_priolist(rq->sched_engine,
 							  rq_prio(rq)));
 		set_bit(I915_FENCE_FLAG_PQUEUE, &rq->fence.flags);
 

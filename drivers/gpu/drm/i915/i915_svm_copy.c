@@ -3,7 +3,7 @@
  * Copyright © 2019 Intel Corporation
  */
 
-#include "gem/i915_gem_object_blt.h"
+#include "gt/intel_context.h"
 #include "gt/intel_engine_pm.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
@@ -11,6 +11,28 @@
 
 #include "i915_drv.h"
 #include "i915_svm.h"
+
+static int intel_emit_vma_mark_active(struct i915_vma *vma,
+				      struct i915_request *rq)
+{
+	int err;
+
+	err = i915_request_await_object(rq, vma->obj, false);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, 0);
+	if (unlikely(err))
+		return err;
+
+	return intel_gt_buffer_pool_mark_active(vma->private, rq);
+}
+
+static void intel_emit_vma_release(struct intel_context *ce,
+				   struct i915_vma *vma)
+{
+	i915_vma_unpin(vma);
+	intel_gt_buffer_pool_put(vma->private);
+	intel_engine_pm_put(ce->engine);
+}
 
 static struct i915_vma *
 intel_emit_svm_copy_blt(struct intel_context *ce,

@@ -241,7 +241,7 @@ static inline void intel_context_exit(struct intel_context *ce)
 		return;
 
 	if (ce->sfence) {
-		i915_suspend_fence_retire_dma_fence(&ce->sfence->base.dma);
+		i915_suspend_fence_retire_dma_fence(&ce->sfence->base.rq.fence);
 		ce->sfence = NULL;
 	}
 
@@ -255,7 +255,7 @@ static inline void intel_context_suspend_fence_set(struct intel_context *ce,
 						   struct dma_fence *fence)
 {
 	struct i915_suspend_fence *sfence =
-		container_of(fence, typeof(*sfence), base.dma);
+		container_of(fence, typeof(*sfence), base.rq.fence);
 
 	lockdep_assert_held(&ce->timeline->mutex);
 
@@ -268,14 +268,14 @@ static inline void
 intel_context_suspend_fence_replace(struct intel_context *ce,
 				    struct dma_fence *fence)
 {
-	struct dma_fence *prev;
 	struct i915_suspend_fence *sfence =
-		container_of(fence, typeof(*sfence), base.dma);
+		container_of(fence, typeof(*sfence), base.rq.fence);
+	struct dma_fence *prev;
 
 	lockdep_assert_held(&ce->timeline->mutex);
 	GEM_BUG_ON(!ce->sfence);
 
-	prev = &ce->sfence->base.dma;
+	prev = &ce->sfence->base.rq.fence;
 	dma_fence_get(fence);
 	ce->sfence = sfence;
 	dma_fence_put(prev);
@@ -285,6 +285,14 @@ static inline struct intel_context *intel_context_get(struct intel_context *ce)
 {
 	kref_get(&ce->ref);
 	return ce;
+}
+
+static inline struct intel_context *intel_context_get_rcu(struct intel_context *ce)
+{
+	if (kref_get_unless_zero(&ce->ref))
+		return ce;
+	else
+		return NULL;
 }
 
 static inline void intel_context_put(struct intel_context *ce)

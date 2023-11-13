@@ -347,6 +347,9 @@ static void wait_for_suspend(struct intel_gt *gt)
 {
 	intel_wakeref_t wf;
 
+	/* Flush all pending page workers */
+	flush_workqueue(gt->i915->mm.wq);
+
 	if (gt->i915->quiesce_gpu)
 		return;
 
@@ -378,11 +381,31 @@ static suspend_state_t pm_suspend_target(void)
 #endif
 }
 
+static void flush_clear_on_idle(struct intel_gt *gt)
+{
+	struct intel_memory_region *mem;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_CLEAR_ON_IDLE))
+		return;
+
+	mem = gt->lmem;
+	if (!mem)
+		return;
+
+	/* Wait for the suspend flag to be visible in i915_gem_lmem_park() */
+	mutex_lock(&gt->wakeref.mutex);
+	mutex_unlock(&gt->wakeref.mutex);
+
+	/* Wait for any workers started before the flag became visible */
+	wait_for_completion(&mem->parking);
+}
+
 void intel_gt_suspend_late(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
 
 	WRITE_ONCE(gt->suspend, true);
+	flush_clear_on_idle(gt);
 
 	/* We expect to be idle already; but also want to be independent */
 	wait_for_suspend(gt);

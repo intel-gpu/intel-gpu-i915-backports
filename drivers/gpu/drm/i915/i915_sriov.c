@@ -308,8 +308,7 @@ static void vf_tweak_device_info(struct drm_i915_private *i915)
 	/* Force PCH_NOOP. We have no access to display */
 	i915->pch_type = PCH_NOP;
 	memset(&info->display, 0, sizeof(info->display));
-	info->memory_regions &= ~(REGION_STOLEN_SMEM |
-				  REGION_STOLEN_LMEM);
+	info->memory_regions &= ~REGION_STOLEN;
 }
 
 /**
@@ -1236,6 +1235,24 @@ int i915_sriov_wait_vf_flr_done(struct pci_dev *pdev, unsigned int vfid)
 #ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 EXPORT_SYMBOL_NS_GPL(i915_sriov_wait_vf_flr_done, I915);
 
+static struct intel_gt *
+sriov_to_gt(struct pci_dev *pdev, unsigned int tile, bool standalone)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct intel_gt *gt;
+
+	if (!i915 || !IS_SRIOV_PF(i915))
+		return NULL;
+
+	if (!standalone && !HAS_REMOTE_TILES(i915) && tile > 0)
+               return NULL;
+
+	gt = NULL;
+	if (tile < ARRAY_SIZE(i915->gt))
+		gt = i915->gt[tile];
+
+	return gt;
+}
 
 /**
  * i915_sriov_ggtt_size - Get size needed to store VF GGTT.
@@ -1250,17 +1267,11 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_wait_vf_flr_done, I915);
 size_t
 i915_sriov_ggtt_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 	ssize_t size;
 
-	if (!IS_SRIOV_PF(i915))
-		return 0;
-
+	gt = sriov_to_gt(pdev, tile, false);
 	if (!gt)
-		return 0;
-
-	if (!HAS_REMOTE_TILES(i915) && tile > 0)
 		return 0;
 
 	size = intel_iov_state_save_ggtt(&gt->iov, vfid, NULL, 0);
@@ -1285,12 +1296,9 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_ggtt_size, I915);
 ssize_t i915_sriov_ggtt_save(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
 			     void *buf, size_t size)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return -ENODEV;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return -ENODEV;
 
@@ -1316,12 +1324,9 @@ int
 i915_sriov_ggtt_load(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
 		     const void *buf, size_t size)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return -ENODEV;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return -ENODEV;
 
@@ -1342,16 +1347,10 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_ggtt_load, I915);
 size_t
 i915_sriov_lmem_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return 0;
-
+	gt = sriov_to_gt(pdev, tile, false);
 	if (!gt)
-		return 0;
-
-	if (!HAS_REMOTE_TILES(i915) && tile > 0)
 		return 0;
 
 	return intel_iov_provisioning_get_lmem(&gt->iov, vfid);
@@ -1370,12 +1369,9 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_size, I915);
  */
 void *i915_sriov_lmem_map(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return NULL;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return NULL;
 
@@ -1394,12 +1390,9 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_map, I915);
 void
 i915_sriov_lmem_unmap(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return;
 
@@ -1420,12 +1413,9 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_unmap, I915);
 size_t
 i915_sriov_fw_state_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return 0;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return 0;
 
@@ -1449,13 +1439,10 @@ ssize_t
 i915_sriov_fw_state_save(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
 			 void *buf, size_t size)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 	int ret;
 
-	if (!IS_SRIOV_PF(i915))
-		return -ENODEV;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return -ENODEV;
 
@@ -1483,12 +1470,9 @@ int
 i915_sriov_fw_state_load(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
 			 const void *buf, size_t size)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
-	struct intel_gt *gt = i915->gt[tile];
+	struct intel_gt *gt;
 
-	if (!IS_SRIOV_PF(i915))
-		return -ENODEV;
-
+	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
 		return -ENODEV;
 

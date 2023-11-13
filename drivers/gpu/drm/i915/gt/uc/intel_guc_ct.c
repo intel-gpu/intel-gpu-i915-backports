@@ -89,8 +89,7 @@ static inline struct intel_guc *ct_to_guc(struct intel_guc_ct *ct)
  */
 #define CTB_DESC_SIZE		ALIGN(sizeof(struct guc_ct_buffer_desc), SZ_2K)
 #define CTB_H2G_BUFFER_SIZE	(SZ_4K)
-#define CTB_G2H_BUFFER_SIZE	(4 * CTB_H2G_BUFFER_SIZE)
-#define G2H_ROOM_BUFFER_SIZE	(CTB_G2H_BUFFER_SIZE / 4)
+#define PVC_CTB_H2G_BUFFER_SIZE	(SZ_32K) /* concurrent pagefault replies */
 
 struct ct_request {
 	struct list_head link;
@@ -132,6 +131,7 @@ void intel_guc_ct_init_early(struct intel_guc_ct *ct)
 	INIT_WORK(&ct->requests.worker, ct_incoming_request_worker_func);
 	tasklet_setup(&ct->receive_tasklet, ct_receive_tasklet_func);
 	init_waitqueue_head(&ct->wq);
+	mutex_init(&ct->send_mutex);
 
 	/* FIXME: MTL cache coherency issue - HSD 22016122933 */
 	if (IS_METEORLAKE(guc_to_gt(ct_to_guc(ct))->i915)) {
@@ -247,6 +247,7 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 {
 	struct intel_guc *guc = ct_to_guc(ct);
 	struct guc_ct_buffer_desc *desc;
+	u32 h2g_bufsz, g2h_bufsz;
 	u32 blob_size;
 	u32 cmds_size;
 	u32 resv_space;
@@ -260,7 +261,12 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 
 	GEM_BUG_ON(ct->vma);
 
-	blob_size = 2 * CTB_DESC_SIZE + CTB_H2G_BUFFER_SIZE + CTB_G2H_BUFFER_SIZE;
+	h2g_bufsz = CTB_H2G_BUFFER_SIZE;
+	if (HAS_RECOVERABLE_PAGE_FAULT(guc_to_gt(guc)->i915))
+		h2g_bufsz = max_t(u32, h2g_bufsz, PVC_CTB_H2G_BUFFER_SIZE);
+	g2h_bufsz = 4 * h2g_bufsz; /* expect each h2g to generate a reply */
+
+	blob_size = 2 * CTB_DESC_SIZE + h2g_bufsz + g2h_bufsz;
 	err = __intel_guc_allocate_and_map_vma(guc, blob_size, true, &ct->vma, &blob);
 	if (unlikely(err)) {
 		CT_PROBE_ERROR(ct, "Failed to allocate %u for CTB data (%pe)\n",
@@ -273,7 +279,7 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 	/* store pointers to desc and cmds for send ctb */
 	desc = blob;
 	cmds = blob + 2 * CTB_DESC_SIZE;
-	cmds_size = CTB_H2G_BUFFER_SIZE;
+	cmds_size = h2g_bufsz;
 	resv_space = 0;
 	CT_DEBUG(ct, "%s desc %#tx cmds %#tx size %u/%u\n", "send",
 		 ptrdiff(desc, blob), ptrdiff(cmds, blob), cmds_size,
@@ -283,9 +289,9 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 
 	/* store pointers to desc and cmds for recv ctb */
 	desc = blob + CTB_DESC_SIZE;
-	cmds = blob + 2 * CTB_DESC_SIZE + CTB_H2G_BUFFER_SIZE;
-	cmds_size = CTB_G2H_BUFFER_SIZE;
-	resv_space = G2H_ROOM_BUFFER_SIZE;
+	cmds = blob + 2 * CTB_DESC_SIZE + h2g_bufsz;
+	cmds_size = g2h_bufsz;
+	resv_space = cmds_size / 4;
 	CT_DEBUG(ct, "%s desc %#tx cmds %#tx size %u/%u\n", "recv",
 		 ptrdiff(desc, blob), ptrdiff(cmds, blob), cmds_size,
 		 resv_space);
@@ -413,6 +419,24 @@ void intel_guc_ct_disable(struct intel_guc_ct *ct)
 	}
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+static void ct_track_lost_and_found(struct intel_guc_ct *ct, u32 fence, u32 action)
+{
+	unsigned int lost = fence % ARRAY_SIZE(ct->requests.lost_and_found);
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
+	unsigned long entries[SZ_32];
+	unsigned int n;
+
+	n = stack_trace_save(entries, ARRAY_SIZE(entries), 1);
+
+	/* May be called under spinlock, so avoid sleeping */
+	ct->requests.lost_and_found[lost].stack = stack_depot_save(entries, n, GFP_NOWAIT);
+#endif
+	ct->requests.lost_and_found[lost].fence = fence;
+	ct->requests.lost_and_found[lost].action = action;
+}
+#endif
+
 static u32 ct_get_next_fence(struct intel_guc_ct *ct)
 {
 	/* For now it's trivial */
@@ -479,11 +503,15 @@ static int ct_write(struct intel_guc_ct *ct,
 		 FIELD_PREP(GUC_CTB_MSG_0_NUM_DWORDS, len) |
 		 FIELD_PREP(GUC_CTB_MSG_0_FENCE, fence);
 
-	type = (flags & INTEL_GUC_CT_SEND_NB) ? GUC_HXG_TYPE_EVENT :
+/* Disable fast request temporarily as it is exposing a bug */
+#undef GUC_HXG_TYPE_FAST_REQUEST
+#define GUC_HXG_TYPE_FAST_REQUEST	GUC_HXG_TYPE_EVENT
+
+	type = (flags & INTEL_GUC_CT_SEND_NB) ? GUC_HXG_TYPE_FAST_REQUEST :
 		GUC_HXG_TYPE_REQUEST;
 	hxg = FIELD_PREP(GUC_HXG_MSG_0_TYPE, type) |
-		FIELD_PREP(GUC_HXG_EVENT_MSG_0_ACTION |
-			   GUC_HXG_EVENT_MSG_0_DATA0, action[0]);
+		FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION |
+			   GUC_HXG_REQUEST_MSG_0_DATA0, action[0]);
 
 	CT_DEBUG(ct, "writing (tail %u) %*ph %*ph %*ph\n",
 		 tail, 4, &header, 4, &hxg, 4 * (len - 1), &action[1]);
@@ -499,6 +527,11 @@ static int ct_write(struct intel_guc_ct *ct,
 		tail = (tail + 1) % size;
 	}
 	GEM_BUG_ON(tail > size);
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+	ct_track_lost_and_found(ct, fence,
+				FIELD_GET(GUC_HXG_EVENT_MSG_0_ACTION, action[0]));
+#endif
 
 	/*
 	 * make sure H2G buffer update and LRC tail update (if this triggering a
@@ -748,9 +781,9 @@ static int ct_send(struct intel_guc_ct *ct,
 		   u32 *status)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
+	unsigned int sleep_period_us = 1;
 	struct ct_request request;
 	unsigned long flags;
-	unsigned int sleep_period_ms = 1;
 	bool send_again;
 	u32 fence;
 	int err;
@@ -763,6 +796,9 @@ static int ct_send(struct intel_guc_ct *ct,
 
 resend:
 	send_again = false;
+
+	if (mutex_lock_interruptible(&ct->send_mutex))
+		return -EINTR;
 
 	/*
 	 * We use a lazy spin wait loop here as we believe that if the CT
@@ -778,13 +814,18 @@ retry:
 			ct->stall_time = ktime_get();
 		spin_unlock_irqrestore(&ctb->lock, flags);
 
-		if (unlikely(ct_deadlocked(ct)))
+		if (unlikely(ct_deadlocked(ct))) {
+			mutex_unlock(&ct->send_mutex);
 			return -EPIPE;
+		}
 
-		if (msleep_interruptible(sleep_period_ms))
+		if (signal_pending(current)) {
+			mutex_unlock(&ct->send_mutex);
 			return -EINTR;
-		sleep_period_ms = sleep_period_ms << 1;
+		}
 
+		usleep_range(sleep_period_us, 2 * sleep_period_us);
+		sleep_period_us = min(sleep_period_us << 1, 1000u);
 		goto retry;
 	}
 
@@ -853,6 +894,8 @@ unlink:
 	spin_lock_irqsave(&ct->requests.lock, flags);
 	list_del(&request.link);
 	spin_unlock_irqrestore(&ct->requests.lock, flags);
+
+	mutex_unlock(&ct->send_mutex);
 
 	if (unlikely(err == -EREMCHG)) {
 		/*
@@ -1070,6 +1113,43 @@ corrupted:
 	return -EPIPE;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+static bool ct_check_lost_and_found(struct intel_guc_ct *ct, u32 fence)
+{
+	unsigned int n;
+	char *buf = NULL;
+	bool found = false;
+
+	lockdep_assert_held(&ct->requests.lock);
+
+	for (n = 0; n < ARRAY_SIZE(ct->requests.lost_and_found); n++) {
+		if (ct->requests.lost_and_found[n].fence != fence)
+			continue;
+		found = true;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
+		buf = kmalloc(SZ_4K, GFP_NOWAIT);
+		if (buf && stack_depot_snprint(ct->requests.lost_and_found[n].stack,
+					       buf, SZ_4K, 0)) {
+			CT_ERROR(ct, "Fence %u was used by action %#04x sent at\n%s",
+				 fence, ct->requests.lost_and_found[n].action, buf);
+			break;
+		}
+#endif
+		CT_ERROR(ct, "Fence %u was used by action %#04x\n",
+			 fence, ct->requests.lost_and_found[n].action);
+		break;
+	}
+	kfree(buf);
+	return found;
+}
+#else
+static bool ct_check_lost_and_found(struct intel_guc_ct *ct, u32 fence)
+{
+	return false;
+}
+#endif
+
 static int ct_handle_response(struct intel_guc_ct *ct, struct ct_incoming_msg *response)
 {
 	u32 len = FIELD_GET(GUC_CTB_MSG_0_NUM_DWORDS, response->msg[0]);
@@ -1111,12 +1191,13 @@ static int ct_handle_response(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 		break;
 	}
 	if (!found) {
-		CT_ERROR(ct, "Unsolicited response message %#x (fence %u len %u)\n",
-			 hxg[0], fence, len);
-		CT_ERROR(ct, "Last used fence was %u\n", ct->requests.last_fence);
-		list_for_each_entry(req, &ct->requests.pending, link)
-			CT_ERROR(ct, "request %u awaits response\n",
-				 req->fence);
+		CT_ERROR(ct, "Unsolicited response message: len %u, data %#x (fence %u, last %u)\n",
+			 len, hxg[0], fence, ct->requests.last_fence);
+		if (!ct_check_lost_and_found(ct, fence)) {
+			list_for_each_entry(req, &ct->requests.pending, link)
+				CT_ERROR(ct, "request %u awaits response\n",
+					 req->fence);
+		}
 		err = -ENOKEY;
 	}
 	spin_unlock_irqrestore(&ct->requests.lock, flags);

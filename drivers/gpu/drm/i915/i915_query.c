@@ -176,8 +176,7 @@ query_distance_info(struct drm_i915_private *i915,
 			distance += tile_hop_distance;
 		if (engine->gt->info.id > 2)
 			distance += tile_hop_distance;
-	} else if (mem_type == INTEL_MEMORY_STOLEN_SYSTEM ||
-		   mem_type == INTEL_MEMORY_STOLEN_LOCAL) {
+	} else if (mem_type == INTEL_MEMORY_STOLEN) {
 		/* FIXME determine the appropriate value */
 		distance = 0;
 	} else {

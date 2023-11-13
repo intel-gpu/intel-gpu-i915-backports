@@ -7,17 +7,9 @@
 
 #include <drm/drm_drv.h>
 
-struct intel_memory_region;
-
 struct i915_gem_ww_ctx {
 	struct ww_acquire_ctx ctx;
 	struct list_head obj_list;
-	struct i915_gem_ww_region {
-		struct list_head link;
-		struct list_head locked;
-		struct intel_memory_region *mem;
-		struct i915_gem_ww_region *next;
-	} region;
 	struct drm_i915_gem_object *contended;
 	bool intr:1;
 	bool loop:1;

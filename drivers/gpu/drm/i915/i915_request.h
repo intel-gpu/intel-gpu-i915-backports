@@ -56,6 +56,10 @@ struct i915_capture_list {
 
 #define RQ_TRACE(rq, fmt, ...) do {					\
 	const struct i915_request *rq__ = (rq);				\
+	if (!rq__->engine) {						\
+		GEM_TRACE(fmt,	##__VA_ARGS__);				\
+		break;							\
+	}								\
 	ENGINE_TRACE(rq__->engine, "fence %llx:%lld, current %d " fmt,	\
 		     rq__->fence.context, rq__->fence.seqno,		\
 		     hwsp_seqno(rq__), ##__VA_ARGS__);			\
@@ -173,6 +177,8 @@ enum {
 	 * is done, and is thus different from a preempt fence.
 	 */
 	I915_FENCE_FLAG_LR,
+
+	__I915_FENCE_FLAG_LAST__
 };
 
 /**
@@ -197,7 +203,8 @@ enum {
  */
 struct i915_request {
 	struct dma_fence fence;
-	spinlock_t lock;
+
+	struct i915_sched_engine *sched_engine;
 
 	/**
 	 * Context and ring buffer related to this request
@@ -361,11 +368,12 @@ struct i915_request {
 
 #define I915_FENCE_GFP I915_GFP_ALLOW_FAIL
 
-extern const struct dma_fence_ops i915_fence_ops;
+extern const struct dma_fence_ops i915_dma_fence_ops;
+extern const struct dma_fence_ops i915_cpu_fence_ops;
 
 static inline bool dma_fence_is_i915(const struct dma_fence *fence)
 {
-	return fence->ops == &i915_fence_ops;
+	return fence->ops == &i915_dma_fence_ops || fence->ops == &i915_cpu_fence_ops;
 }
 
 static inline bool dma_fence_is_lr(const struct dma_fence *fence)
@@ -705,12 +713,12 @@ i915_request_active_timeline(const struct i915_request *rq)
 	 * this submission.
 	 */
 	return rcu_dereference_protected(rq->timeline,
-					 lockdep_is_held(&rq->engine->sched_engine->lock));
+					 lockdep_is_held(&rq->sched_engine->lock));
 }
 
 static inline bool i915_request_use_scheduler(const struct i915_request *rq)
 {
-	return intel_engine_has_scheduler(rq->engine);
+	return !rq->engine || intel_engine_has_scheduler(rq->engine);
 }
 
 static inline u32
@@ -756,16 +764,6 @@ i915_request_get_active_client_rcu(const struct i915_request *rq)
 bool
 i915_request_active_engine(struct i915_request *rq,
 			   struct intel_engine_cs **active);
-
-enum i915_request_state {
-	I915_REQUEST_UNKNOWN = 0,
-	I915_REQUEST_COMPLETE,
-	I915_REQUEST_PENDING,
-	I915_REQUEST_QUEUED,
-	I915_REQUEST_ACTIVE,
-};
-
-enum i915_request_state i915_test_request_state(struct i915_request *rq);
 
 void i915_request_module_exit(void);
 int i915_request_module_init(void);

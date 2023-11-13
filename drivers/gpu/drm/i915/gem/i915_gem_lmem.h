@@ -43,9 +43,15 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 				unsigned int flags);
 
 int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj);
+struct i915_request *
+i915_gem_object_copy_lmem(struct drm_i915_gem_object *lmem,
+			  struct drm_i915_gem_object *other,
+			  bool to_other,
+			  bool nowait);
 
 void i915_gem_init_lmem(struct intel_gt *gt);
 bool i915_gem_lmem_park(struct intel_memory_region *mem);
+void i915_gem_fini_lmem(struct intel_gt *gt);
 
 int i915_gem_lmemtest(struct intel_gt *gt, u64 *error);
 

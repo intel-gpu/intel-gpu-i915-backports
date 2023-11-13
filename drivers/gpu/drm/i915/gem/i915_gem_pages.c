@@ -102,25 +102,32 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 	}
 }
 
-static int add_to_ww_evictions(struct drm_i915_gem_object *obj)
+static void add_to_evictions(struct drm_i915_gem_object *obj)
 {
 	struct intel_memory_region *mem;
-	struct i915_gem_ww_ctx *ww;
-	int err;
-
-	ww = i915_gem_get_locking_ctx(obj);
-	if (!ww)
-		return 0;
 
 	mem = obj->mm.region.mem;
 	if (!mem)
-		return 0;
+		return;
 
+	GEM_BUG_ON(i915_gem_object_has_pages(obj));
 	spin_lock(&mem->objects.lock);
-	err = intel_memory_region_add_to_ww_evictions(mem, ww, obj);
+	list_add_tail(&obj->mm.region.link, &mem->objects.list);
 	spin_unlock(&mem->objects.lock);
+}
 
-	return err;
+static void remove_from_evictions(struct drm_i915_gem_object *obj)
+{
+	struct intel_memory_region *mem;
+
+	mem = obj->mm.region.mem;
+	if (!mem)
+		return;
+
+	GEM_BUG_ON(i915_gem_object_has_pages(obj));
+	spin_lock(&mem->objects.lock);
+	list_del_init(&obj->mm.region.link);
+	spin_unlock(&mem->objects.lock);
 }
 
 int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
@@ -135,12 +142,11 @@ int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 		return -EFAULT;
 	}
 
-	err = add_to_ww_evictions(obj);
-	if (err)
-		return err;
+	add_to_evictions(obj);
 
 	err = obj->ops->get_pages(obj);
-	GEM_BUG_ON(!err && !i915_gem_object_has_pages(obj));
+	if (err)
+		remove_from_evictions(obj);
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ASYNC_GET_PAGES) && err == 0)
 		err = i915_gem_object_migrate_sync(obj);
@@ -332,7 +338,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 {
 	struct sg_table *pages;
-	int err = 0;
+	int err;
 
 	if (i915_gem_object_has_pinned_pages(obj))
 		return -EBUSY;
@@ -348,14 +354,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 
 	i915_gem_object_release_mmap_offset(obj);
 
-	/*
-	 * XXX Temporary hijinx to avoid updating all backends to handle
-	 * NULL pages. In the future, when we have more asynchronous
-	 * get_pages backends we should be better able to handle the
-	 * cancellation of the async task in a more uniform manner.
-	 */
-	if (!IS_ERR_OR_NULL(pages))
-		err = obj->ops->put_pages(obj, pages);
+	err = obj->ops->put_pages(obj, pages);
 	if (err) {
 		__i915_gem_object_set_pages(obj, pages, obj->mm.page_sizes);
 		return err;
@@ -365,8 +364,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 		i915_gem_object_truncate(obj);
 
 #ifndef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
-	/* delete stale fences */
-	if (kref_read(&obj->base.refcount))
+	if (kref_read(&obj->base.refcount)) /* prune stale fences */
 		dma_resv_add_excl_fence(obj->base.resv, NULL);
 #endif
 

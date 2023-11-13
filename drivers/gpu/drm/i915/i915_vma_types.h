@@ -278,8 +278,9 @@ struct i915_vma {
 #define I915_VMA_SCANOUT	((int)BIT(I915_VMA_SCANOUT_BIT))
 
 #define I915_VMA_PERSISTENT_BIT	19
-#define I915_VMA_PURGED_BIT	20
-#define I915_VMA_HAS_LUT_BIT	21
+#define I915_VMA_RESIDENT_BIT	20
+#define I915_VMA_PURGED_BIT	21
+#define I915_VMA_HAS_LUT_BIT	22
 
 	struct i915_active active;
 
@@ -305,6 +306,7 @@ struct i915_vma {
 	struct i915_sw_fence *bind_fence;
 	/* (segmented BO) walk adjacent VMAs at unbind or during capture_vma */
 	struct i915_vma *adjacent_next;
+	struct i915_vma *adjacent_start;
 
 	/** Interval tree structures for persistent vma */
 	struct rb_node rb;

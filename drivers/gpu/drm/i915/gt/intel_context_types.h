@@ -117,6 +117,7 @@ struct intel_context {
 	struct list_head signals; /* Guarded by signal_lock */
 	spinlock_t signal_lock; /* protects signals, the list of requests */
 
+	void *private;
 	struct i915_vma *state;
 	u32 ring_size;
 	struct intel_ring *ring;

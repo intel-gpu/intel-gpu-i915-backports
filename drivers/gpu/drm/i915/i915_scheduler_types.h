@@ -174,6 +174,8 @@ struct i915_sched_engine {
 	 */
 	bool no_priolist;
 
+	struct i915_sched_ipi ipi;
+
 	/**
 	 * @private_data: private data of the submission backend
 	 */

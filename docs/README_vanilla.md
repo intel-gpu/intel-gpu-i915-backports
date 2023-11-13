@@ -5,11 +5,12 @@
 
 | OS Distribution | Kernel Version  |
 |---  |---  |
+| Vanilla | 6.1 LTS  |
 | Vanilla | 5.15 LTS |
 
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of VANILLA_5.15LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
+  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
 
   In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 

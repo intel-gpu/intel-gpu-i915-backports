@@ -780,24 +780,36 @@ static enum cmd_rsp nl_process_sub_device_trap_count_query(struct sk_buff *msg,
 {
 	struct fsubdev *sd;
 	enum cmd_rsp ret;
+	u64 psc_trap_count;
+	u64 lwd_trap_count;
+	u64 lqi_trap_count;
+	u64 qsfp_fault_trap_count;
+	u64 qsfp_present_trap_count;
 
 	/* Get the sd to access */
 	ret = nl_get_sd(info, &sd);
 	if (ret != IAF_CMD_RSP_SUCCESS)
 		return ret;
 
+	psc_trap_count = atomic64_read(&sd->psc_trap_count);
+	lwd_trap_count = atomic64_read(&sd->lwd_trap_count);
+	lqi_trap_count = atomic64_read(&sd->lqi_trap_count);
+	qsfp_fault_trap_count = atomic64_read(&sd->qsfp_fault_trap_count);
+	qsfp_present_trap_count = atomic64_read(&sd->qsfp_present_trap_count);
+
 	if (nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->total_trap_count), IAF_ATTR_PAD) ||
+			      psc_trap_count + lwd_trap_count + lqi_trap_count +
+			      qsfp_fault_trap_count + qsfp_present_trap_count, IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_PORT_STATE_CHANGE_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->psc_trap_count), IAF_ATTR_PAD) ||
+			      psc_trap_count, IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_PORT_LWD_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->lwd_trap_count), IAF_ATTR_PAD) ||
+			      lwd_trap_count, IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_PORT_LQI_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->lqi_trap_count), IAF_ATTR_PAD) ||
+			      lqi_trap_count, IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_QSFP_MGR_FAULT_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->qsfp_fault_trap_count), IAF_ATTR_PAD) ||
+			      qsfp_fault_trap_count, IAF_ATTR_PAD) ||
 	    nla_put_u64_64bit(msg, IAF_ATTR_SUB_DEVICE_QSFP_MGR_PORT_PRESENT_TRAP_COUNT,
-			      (u64)atomic64_read(&sd->qsfp_present_trap_count), IAF_ATTR_PAD))
+			      qsfp_present_trap_count, IAF_ATTR_PAD))
 		ret = IAF_CMD_RSP_MSGSIZE;
 
 	fdev_put(sd->fdev);
