@@ -96,9 +96,6 @@ i915_param_named(error_capture, bool, 0400,
 	"triaging and debugging hangs.");
 #endif
 
-i915_param_named(async_vm_unbind, bool, 0600,
-	"Enable asynchronous vm_unbind. (default: false)");
-
 i915_param_named_unsafe(enable_hangcheck, bool, 0400,
 	"Periodically check GPU activity for detecting hangs. "
 	"WARNING: Disabling this can cause system wide hangs. "
@@ -247,11 +244,6 @@ i915_param_named_unsafe(request_timeout_ms, uint, 0600,
 
 i915_param_named_unsafe(lmem_size, uint, 0400,
 			"Set the lmem size(in MiB) for each region. (default: 0, all memory)");
-
-i915_param_named_unsafe(enable_eviction, uint, 0600,
-	"Enable eviction which does not rely on DMA resv refactoring "
-	"0=disabled, 1=memcpy based only, 2=blt based only, "
-	"3=blt based but fallsback to memcpy based [default])");
 
 i915_param_named(max_vfs, uint, 0400,
 	"Limit number of virtual functions to allocate. "

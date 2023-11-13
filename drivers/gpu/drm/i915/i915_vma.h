@@ -46,12 +46,6 @@ i915_vma_instance(struct drm_i915_gem_object *obj,
 		  struct i915_address_space *vm,
 		  const struct i915_ggtt_view *view);
 
-struct i915_vma *
-i915_alloc_window_vma(struct drm_i915_private *i915,
-		      struct i915_address_space *vm, u64 size,
-		      u64 min_page_size);
-void i915_destroy_window_vma(struct i915_vma *vma);
-
 void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags);
 #define I915_VMA_RELEASE_MAP BIT(0)
 /* do not reserve memory to prevent deadlocks */

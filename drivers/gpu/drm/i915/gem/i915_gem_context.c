@@ -1330,6 +1330,7 @@ int i915_gem_vm_destroy_ioctl(struct drm_device *dev, void *data,
 	i915_vm_close(vm);
 
 	i915_gem_flush_free_objects(to_i915(dev));
+	flush_workqueue(to_i915(dev)->wq);
 	return 0;
 }
 
@@ -2650,6 +2651,7 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 	context_close(ctx);
 
 	i915_gem_flush_free_objects(to_i915(dev));
+	flush_workqueue(to_i915(dev)->wq);
 	return 0;
 }
 

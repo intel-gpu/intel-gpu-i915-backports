@@ -19,11 +19,25 @@ KLIB_BUILD ?= $(KLIB)/build/
 KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile.rhelver
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
-PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg binrpm-pkg dmadkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg bindeb-pkg
+
+#
+# Packaging targets Available
+#
+
+#
+# PKG_DISTRO_TARGETS
+# DKMS Package Targets
+PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg dmadkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
+
+#
+# BIN_PKG_TARGETS
+# Binary Package Targets
+BIN_PKG_TARGETS := binrpm-pkg bindeb-pkg
 
 ARCH := x86_64
 export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH PKG_DISTRO_TARGETS
 
+## TBD: Move to Backport.Makefile
 ifeq ($(BUILD_CONFIG),pmt)
 export INTEL_PMT_FORCED=1
 else
@@ -36,6 +50,9 @@ endif
 .PHONY: default
 default:
 	@$(MAKE) modules
+
+# TBD : Move this target to Makefile.backport, Removing this will also work
+# as unknown targets are called in DEFAULT target.
 .PHONY:remove-drm-headers
 remove-drm-headers:
 	@$(MAKE) -f Makefile.real remove-drm-headers
@@ -127,7 +144,7 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 		echo " done."								;\
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
-endif
+endif ### ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	@$(MAKE) -f Makefile.real "$@"
 
 .PHONY: defconfig-help
@@ -140,6 +157,9 @@ defconfig-help:
 		done
 	@echo ""
 
+# TBD: Move help of backports to Makefile.backport
+# Includes macros from BUILD_VERSION in common-help
+# dkms-help binrpm-help
 .PHONY: common-help
 common-help:
 	@echo "--------------------------------------------------------------------------------------"

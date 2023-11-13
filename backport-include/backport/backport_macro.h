@@ -5,7 +5,8 @@
 
 #if LINUX_VERSION_IS_LESS(6,0,0)
 
-#if !((REDHAT_RELEASE_VERSION_IS_LEQ(9,0)) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+#if !((REDHAT_RELEASE_VERSION_IS_LEQ(9,0)) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
+		LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0))
 /*
  * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
  */
@@ -27,6 +28,20 @@
  * 6a99099 drm/display: Move HDCP helpers into display-helper module
  */
 #define BPM_HDCP_HELPERS_NOT_IN_DISPLAY_DIRECTORY
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,17,0)
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
+/*
+ * 9dd3d069406c mm/filemap: Add filemap_add_folio()
+ */
+#define BPM_ADD_PAGE_CACHE_LOCKED_NOT_PRESENT
+/*
+ * 97cecb5a254f mm: introduce delete_from_page_cache()
+ */
+#define BPM_DELETE_FROM_PAGE_CACHE_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,16,0)
@@ -127,7 +142,8 @@
 #define BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #if !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4) || \
-         SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
+         SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) || \
+	 LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 /*
  * 89d8589cd72c6 Introduce and export __sg_alloc_table_from_pages
  */
@@ -163,6 +179,7 @@
 #define BPM_AUX_BACKLIGHT_SUPPORT_TO_DRM_DP_NOT_PRESENT
 
 #if !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) || \
+		(REDHAT_RELEASE_VERSION_IS_RANGE(8,6, 8,7) && REDHAT_BACKPORT_MINOR_VERSION_IS_GEQ(372,70,1)) || \
 		REDHAT_RELEASE_VERSION_IS_GEQ(8,7))
 /*
  * 59dc33252ee7
@@ -304,7 +321,8 @@
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
 		REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
-		SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) || \
+		LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 /*
  * ab440b2c604b seqlock: Rename __seqprop() users
  */
@@ -321,6 +339,13 @@
  * aa6159ab99a9ab kernel.h: split out mathematical helpers
  */
 #define BPM_MATH_H_NOT_PRESENT
+
+#if (REDHAT_RELEASE_VERSION_IS_GEQ(8,4) && REDHAT_RELEASE_VERSION_IS_LESS(8,5))
+/*
+ * f0c0c115fb81 mm: memcontrol: account pagetables per node
+ */
+#define BPM_MOD_LRUVEC_PAGE_STATE_NOT_EXPORTED
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
@@ -359,7 +384,8 @@
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
 	REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) || \
+	LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 /*
  * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
  *
@@ -389,6 +415,16 @@
  * 8af2fa888eaf0e Show slab cache occupancy for debug
  */
 #define BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT
+
+#if (LINUX_VERSION_IN_RANGE(4,19,249, 4,20,0) || \
+                LINUX_VERSION_IN_RANGE(5,4,200, 5,5,0) || \
+                LINUX_VERSION_IN_RANGE(5,10,119, 5,11,0) || \
+                LINUX_VERSION_IN_RANGE(5,15,44, 5,16,0))
+/*
+ *0cc41e2c73f70 x86/tsc: Use fallback for random_get_entropy() instead of zero
+ */
+#define BPM_INCLUDE_CPUFEATURE_IN_TSC
+#endif
 
 #if !(LINUX_VERSION_IN_RANGE(5,4,103, 5,4,224) || LINUX_VERSION_IN_RANGE(4,19,179, 4,19,266))
 /*
@@ -431,6 +467,13 @@
 #define BPM_PM_RUNTIME_RESUME_AND_GET_NOT_PRESENT
 #endif
 
+#endif
+
+#if LINUX_VERSION_IN_RANGE(5,9,0, 5,11,0)
+/*
+ * c47d5032ed30 mm: move lruvec stats update functions to vmstat.h
+ */
+#define BPM_MOD_LRUVEC_STATE_NOT_EXPORTED
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,9,0)
@@ -479,6 +522,13 @@
  *
  */
 #define BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,2))
+/*
+ * eedc4e5a142c
+ * mm: memcg: factor out memcg- and lruvec-level changes out of __mod_lruvec_state()
+ */
+#define BPM_MOD_MEMCG_LRUVEC_STATE_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,8,0)
@@ -486,11 +536,17 @@
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
         SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
+#if !(LINUX_VERSION_IS_GEQ(5,4,0))
 /*
  * 709d6d73c7561 scatterlist: add generic wrappers for iterating over sgtable objects
  *
  */
 #define BPM_FOR_EACH_SGTABLE_PAGE_NOT_PRESENT
+/* d9d200bcebc1f6e dma-mapping: add generic helpers
+ * for mapping sgtable objects
+ */
+#define BPM_DMA_MAP_UNMAP_SGTABLE_NOT_PRESENT
+#endif
 
 /*
  * 999a22890cb1 uaccess: Add user_read_access_begin/end and
@@ -505,15 +561,9 @@
 /* dc5bdb68b5b drm/fb-helper: Fix vt restore */
 #define BPM_FB_ACTIVATE_KD_TEXT_NOT_PRESENT
 
-/* d9d200bcebc1f6e dma-mapping: add generic helpers
- * for mapping sgtable objects
- */
-#define BPM_DMA_MAP_UNMAP_SGTABLE_NOT_PRESENT
-
 /* e07515563d010d8b PM: sleep: core: Rename DPM_FLAG_NEVER_SKIP */
 #define BPM_DPM_FLAG_NEVER_SKIP_RENAMED
 #endif
-
 #if !(LINUX_VERSION_IN_RANGE(5,4,207, 5,5,0) || \
 		REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
 			SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
@@ -572,6 +622,18 @@
  * 42fc541404f2 mmap locking API: add mmap_assert_locked() and mmap_assert_write_locked()
  */
 #define BPM_MMAP_ASSERT_LOCKED_NOT_PRESENT
+#endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+
+/*
+ * 6058eaec816f mm: fold and remove lru_cache_add_anon() and lru_cache_add_file()
+ */
+#define BPM_LRU_CACHE_ADD_NOT_PRESENT
+/*
+ * 376a34efa4ee mm/gup: refactor and de-duplicate gup_fast() code
+ */
+#define BPM_FOLL_FAST_ONLY_NOT_PRESENT
 #endif
 
 #endif
@@ -776,6 +838,11 @@
  *
  */
 #define BPM_I2C_ACPI_FIND_ADAPTER_BY_HANDLE_EXPORT_NOT_PRESENT
+
+/*
+ * 6471384af2a6 mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options
+ */
+#define BPM_WANT_INIT_ON_ALLOC_NOT_PRESENT
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,3))
@@ -784,7 +851,6 @@
  * for the new mount API
  */
 #define BPM_PSEUDO_H_NOT_PRESENT
-
 
 #endif
 #endif
@@ -913,7 +979,8 @@
 #endif
 
 #if (SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0) || \
-	REDHAT_RELEASE_VERSION_IS_LEQ(8,3))
+	REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
+	LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 /*
  * 8117ab508f9c476 seqlock: seqcount_LOCKNAME_t: Introduce PREEMPT_RT support
  *
@@ -922,7 +989,8 @@
 #endif
 
 #if (SUSE_RELEASE_VERSION_IS_LESS(1,15,3,0) || \
-	REDHAT_RELEASE_VERSION_IS_LEQ(8,3))
+        REDHAT_RELEASE_VERSION_IS_LEQ(8,3) || \
+	LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 #define BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
 #define BPM_DRM_MIPI_DSI_DISABLED
 /* __kmalloc is not exported only in sp2 */

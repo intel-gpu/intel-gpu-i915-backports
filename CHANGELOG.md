@@ -1,4 +1,46 @@
 # ChangeLog
+## Release RHEL88_23WW43.5_736.25_23.8.20_230810.24
+* i915: Fix for deadlock in vm_unbind
+* i915: Fix for eudebug finalize error seen during L0 conformance tests
+* i915: Fix serialise blocking CT sends to avoid exponential backoff
+* i915: Fix for eudebug active request breakpoint detection affecting multi-kernel program
+* i915: Fix to avoid warning seen during suspend on flex
+* i915: Add support for online eudebug support on page fault
+* i915: Update to iaf driver to reduce redundant and overly verbose diagnostic messaging on max
+* i915: Update to enhance mdfi error severity reporting
+* i915: Fix for eudebug to avoid discovering the same vm twice
+* i915: Fix performance drop seen with pt-cosmic tagger on max
+* i915: Add sysfs entry for exposing thermal swing throttling reason on max
+* i915: Fix for memory leak seen with eudebug on max
+* i915: Fix for deadlock between vm_unbind and memory eviction
+* i915: Fix for performance regression seen during memory swapping on max
+* i915: Fix to restore wa after eudebugger use leading to gpu hang on flex
+* i915: Fix to avoid stray mei warning
+* i915: Update to load and use GuC fw v70.9.1
+* i915: Update behavior of PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT while VM_BIND is held by user
+* i915: Fix for timeout on suspend seen on flex
+* i915: Fix for circular locking in gem object unbind
+* i915: Fix infinite loop for atomic_system object imported via dma buf
+* i915: Fix for crash when allocating huge memory seen on max
+* i915: Fix to avoid deadlock in page fault handling
+* i915: Update to load and use guc fw v70.9.0
+* i915: Fix to prevent invalid eu stall data after RC6 on max
+* i915: Fix to avoid a deadlock seen with eu debug
+* i915: Update to enable async vm_unbind for pytorch performance and eu debug
+* i915: Fix for eu debug corrupted page fault error capture file
+* i915: Fix to avoid writing userfence for an aborted vm_bind
+* i915: Fix for spechpc hang seen on max
+* i915: Fix to avoid deadlock in page fault handling
+* i915: Update to load and use GuC fw v70.9.1
+* i915: Update to load and use guc fw v70.9.0
+* i915: Fix for performance regression seen during memory swapping on max
+* i915: Update to load and use GuC fw v70.9.1
+* i915: Fix for memory leak seen with eudebug on max
+* i915: Fix to restore wa after eudebugger use leading to gpu hang on flex
+* i915: Fix for eu debug corrupted page fault error capture file
+* i915: Fix to prevent invalid eu stall data after RC6 on max
+* i915: Fix to avoid a deadlock seen with eu debug
+
 ## Release RHEL88_23WW37.5_704.30_23.7.17_230608.20
 * i915: Update to load and use GuC fw v70.9.1
 * i915: fix for memory leak seen with eudebug on max

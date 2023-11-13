@@ -84,7 +84,6 @@ struct drm_printer;
 	param(char *, force_probe, CPTCFG_DRM_I915_FORCE_PROBE, 0400) \
 	param(unsigned int, request_timeout_ms, CPTCFG_DRM_I915_REQUEST_TIMEOUT, CPTCFG_DRM_I915_REQUEST_TIMEOUT ? 0600 : 0) \
 	param(unsigned int, lmem_size, 0, 0400) \
-	param(unsigned int, enable_eviction, 3, 0600) \
 	param(unsigned int, max_vfs, 0, 0400) \
 	param(unsigned long, vfs_flr_mask, ~0, IS_ENABLED(CPTCFG_DRM_I915_DEBUG_IOV) ? 0600 : 0) \
 	param(int, force_alloc_contig, 0, 0400) \
@@ -107,7 +106,6 @@ struct drm_printer;
 	param(bool, load_detect_test, false, 0600) \
 	param(bool, force_reset_modeset_test, false, 0600) \
 	param(bool, error_capture, true, IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) ? 0600 : 0) \
-	param(bool, async_vm_unbind, false, 0600) \
 	param(bool, disable_display, false, 0400) \
 	param(bool, verbose_state_checks, true, 0) \
 	param(bool, nuclear_pageflip, false, 0400) \

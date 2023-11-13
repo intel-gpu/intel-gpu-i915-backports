@@ -52,6 +52,12 @@ enum intel_gt_counters { /* u64 indices into gt->counters */
 	INTEL_GT_CLEAR_FREE_BYTES,
 	INTEL_GT_CLEAR_IDLE_CYCLES,
 	INTEL_GT_CLEAR_IDLE_BYTES,
+	INTEL_GT_SWAPIN_CYCLES,
+	INTEL_GT_SWAPIN_BYTES,
+	INTEL_GT_SWAPOUT_CYCLES,
+	INTEL_GT_SWAPOUT_BYTES,
+	INTEL_GT_COPY_CYCLES,
+	INTEL_GT_COPY_BYTES,
 };
 
 /* Count of GT Correctable and FATAL HW ERRORS */
@@ -289,7 +295,6 @@ struct intel_gt {
 	struct i915_vma *dbg;
 
 	spinlock_t *irq_lock;
-	unsigned long irq_count;
 	u32 gt_imr;
 	u32 pm_ier;
 	u32 pm_imr;
@@ -313,6 +318,8 @@ struct intel_gt {
 		ktime_t start;
 
 		local64_t migration_stall;
+
+		struct intel_gt_stats_irq_time irq;
 	} stats;
 
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
@@ -442,6 +449,11 @@ struct intel_gt {
 		u8 uc_index;
 		u8 wb_index; /* Only used on HAS_L3_CCS_READ() platforms */
 	} mocs;
+
+	struct {
+		struct mutex lock;
+		struct i915_active_fence fault;
+	} eu_debug;
 
 	struct intel_pxp pxp;
 

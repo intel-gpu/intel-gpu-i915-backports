@@ -8,6 +8,7 @@
 
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
+#include <linux/stackdepot.h>
 #include <linux/workqueue.h>
 #include <linux/ktime.h>
 #include <linux/wait.h>
@@ -69,6 +70,7 @@ struct intel_guc_ct {
 	} ctbs;
 
 	struct tasklet_struct receive_tasklet;
+	struct mutex send_mutex;
 
 	/** @wq: wait queue for g2h chanenl */
 	wait_queue_head_t wq;
@@ -81,6 +83,16 @@ struct intel_guc_ct {
 
 		struct list_head incoming; /* incoming requests */
 		struct work_struct worker; /* handler for incoming requests */
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+		struct {
+			u16 fence;
+			u16 action;
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
+			depot_stack_handle_t stack;
+#endif
+		} lost_and_found[SZ_16];
+#endif
 	} requests;
 
 	I915_SELFTEST_DECLARE(int (*rcv_override)(struct intel_guc_ct *ct, const u32 *msg));

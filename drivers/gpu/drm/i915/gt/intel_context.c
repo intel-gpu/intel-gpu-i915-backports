@@ -691,6 +691,9 @@ int intel_context_throttle(const struct intel_context *ce, long timeout)
 			    i915_request_get_rcu(rq)) {
 				rcu_read_unlock();
 
+				if (timeout && intel_context_is_barrier(ce))
+					i915_request_set_priority(rq, I915_PRIORITY_BARRIER);
+
 				timeout = i915_request_wait(rq,
 							    I915_WAIT_INTERRUPTIBLE,
 							    timeout);

@@ -221,6 +221,8 @@ static int i915_ttm_move_notify(struct ttm_buffer_object *bo)
 	struct drm_i915_gem_object *obj = i915_ttm_to_gem(bo);
 	int ret;
 
+	i915_gem_object_move_notify(obj);
+
 	ret = i915_gem_object_unbind(obj, NULL, I915_GEM_OBJECT_UNBIND_ACTIVE);
 	if (ret)
 		return ret;

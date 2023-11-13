@@ -320,14 +320,14 @@ struct drm_i915_gem_object {
 			     I915_BO_ALLOC_CHUNK_1G)
 #define I915_BO_STRUCT_PAGE	BIT(8)
 #define I915_BO_READONLY	BIT(9)
-#define I915_TILING_QUIRK_BIT	10 /* unknown swizzling; do not release! */
-#define I915_BO_PROTECTED	BIT(11)
-#define I915_BO_SKIP_CLEAR	BIT(12)
-#define I915_BO_CPU_CLEAR	BIT(13)
-#define I915_BO_FAULT_CLEAR	BIT(14)
-#define I915_BO_SYNC_HINT	BIT(15)
-#define I915_BO_FABRIC		BIT(16)
-#define I915_BO_HAS_BACKING_STORE	BIT(18)
+#define I915_BO_HAS_BACKING_STORE	BIT(10)
+#define I915_TILING_QUIRK_BIT	11 /* unknown swizzling; do not release! */
+#define I915_BO_PROTECTED	BIT(12)
+#define I915_BO_SKIP_CLEAR	BIT(13)
+#define I915_BO_CPU_CLEAR	BIT(14)
+#define I915_BO_FAULT_CLEAR	BIT(15)
+#define I915_BO_SYNC_HINT	BIT(16)
+#define I915_BO_FABRIC		BIT(17)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -640,12 +640,13 @@ struct drm_i915_gem_object {
 		void *gvt_info;
 	};
 
+	struct drm_i915_gem_object *swapto;
+
 	/*
 	 * To store the memory mask which represents the user preference about
 	 * which memory region the object should reside in
 	 */
 	u32 memory_mask;
-	struct drm_i915_gem_object *swapto;
 
 	struct {
 		spinlock_t lock;

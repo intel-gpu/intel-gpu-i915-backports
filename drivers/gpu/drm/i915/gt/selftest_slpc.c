@@ -3,11 +3,18 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#include "gt/uc/intel_guc_print.h"
+
 #define NUM_STEPS 5
 #define H2G_DELAY 50000
 #define delay_for_h2g() usleep_range(H2G_DELAY, H2G_DELAY + 10000)
 #define FREQUENCY_REQ_UNIT	DIV_ROUND_CLOSEST(GT_FREQUENCY_MULTIPLIER, \
 						  GEN9_FREQ_SCALER)
+
+static inline struct intel_guc *slpc_to_guc(struct intel_guc_slpc *slpc)
+{
+	return container_of(slpc, struct intel_guc, slpc);
+}
 
 static int slpc_set_min_freq(struct intel_guc_slpc *slpc, u32 freq)
 {
@@ -161,9 +168,12 @@ static int live_slpc_clamp_min(void *arg)
 
 			/* Actual frequency should rise above min */
 			if (max_act_freq == slpc_min_freq) {
-				pr_err("Actual freq did not rise above min, Perf Limit Reasons: %x\n",
-					intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS));
-				err = -EINVAL;
+				u32 throttle_reasons = intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS);
+				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", throttle_reasons);
+				if (!(throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK)) {
+					err = -EINVAL;
+					pr_err("Actual freq did not rise above min!");
+				}
 			}
 
 			igt_spinner_end(&spin);
@@ -322,9 +332,12 @@ static int live_slpc_clamp_max(void *arg)
 
 			/* Actual frequency should rise above min */
 			if (max_act_freq == slpc_min_freq) {
-				pr_err("Actual freq did not rise above min, Perf Limit Reasons: %x\n",
-					intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS));
-				err = -EINVAL;
+				u32 throttle_reasons = intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS);
+				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", throttle_reasons);
+				if (!(throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK)) {
+					err = -EINVAL;
+					pr_err("Actual freq did not rise above min!");
+				}
 			}
 
 			igt_spinner_end(&spin);

@@ -140,7 +140,7 @@ gen12_fill_value_blt(struct intel_gt *gt, u32 *cmd,
 	}
 
 	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0))
-		mem = MEM_TYPE_SYS << 31;
+		mem = REG_BIT(XY_FAST_COLOR_BLT_MEM_TYPE_SHIFT);
 
 	*cmd++ = GEN9_XY_FAST_COLOR_BLT_CMD |
 		XY_FAST_COLOR_BLT_DEPTH_64 |
@@ -1132,8 +1132,7 @@ pvc_ppgtt_insert_huge(struct i915_vma *vma,
 
 		nent = 1;
 
-		if (stash &&
-		    IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
+		if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
 		    rem >= I915_GTT_PAGE_SIZE_1G &&
 		    !(__gen8_pte_index(start, 0) | __gen8_pte_index(start, 1))) {
 			leaf = 2;
@@ -1142,8 +1141,7 @@ pvc_ppgtt_insert_huge(struct i915_vma *vma,
 			page_size = I915_GTT_PAGE_SIZE_1G;
 			vaddr = px_vaddr(pdp, &needs_flush);
 			daddr = px_dma(pdp);
-		} else if (stash &&
-			   IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
+		} else if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
 			   rem >= I915_GTT_PAGE_SIZE_2M &&
 			   !__gen8_pte_index(start, 0)) {
 			leaf = 1;
@@ -1310,8 +1308,7 @@ xehpsdv_ppgtt_insert_huge(struct i915_vma *vma,
 		max = I915_PDES;
 		nent = 1;
 
-		if (stash &&
-		    IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
+		if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
 		    rem >= I915_GTT_PAGE_SIZE_1G &&
 		    !(__gen8_pte_index(start, 0) | __gen8_pte_index(start, 1))) {
 			index = __gen8_pte_index(start, 2);
@@ -1319,8 +1316,7 @@ xehpsdv_ppgtt_insert_huge(struct i915_vma *vma,
 			page_size = I915_GTT_PAGE_SIZE_1G;
 			vaddr = px_vaddr(pdp, &needs_flush);
 			daddr = px_dma(pdp);
-		} else if (stash &&
-			   IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
+		} else if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
 			   rem >= I915_GTT_PAGE_SIZE_2M &&
 			   !__gen8_pte_index(start, 0)) {
 			index = __gen8_pte_index(start, 1);
@@ -1470,8 +1466,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 		bool needs_flush;
 		u16 index;
 
-		if (stash &&
-		    IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
+		if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_1G) &&
 		    rem >= I915_GTT_PAGE_SIZE_1G &&
 		    !(__gen8_pte_index(start, 0) | __gen8_pte_index(start, 1))) {
 			index = __gen8_pte_index(start, 2);
@@ -1479,8 +1474,7 @@ static void gen8_ppgtt_insert_huge(struct i915_vma *vma,
 			page_size = I915_GTT_PAGE_SIZE_1G;
 			vaddr = px_vaddr(pdp, &needs_flush);
 
-		} else if (stash &&
-			   IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
+		} else if (IS_ALIGNED(iter->dma, I915_GTT_PAGE_SIZE_2M) &&
 			   rem >= I915_GTT_PAGE_SIZE_2M &&
 			   !__gen8_pte_index(start, 0)) {
 			index = __gen8_pte_index(start, 1);
@@ -2080,6 +2074,87 @@ int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,
 	do {
 		vaddr[idx++] = encode;
 		encode += SZ_1G;
+	} while (--count);
+
+	return 0;
+
+err_out:
+	drm_mm_remove_node(node);
+	return err;
+}
+
+int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
+					struct drm_i915_gem_object *obj,
+					struct drm_mm_node *node)
+{
+	struct i915_page_directory *pd = i915_vm_to_ppgtt(vm)->pd;
+	gen8_pte_t *vaddr, encode;
+	unsigned int idx, count;
+	struct scatterlist *sg;
+	bool needs_flush;
+	u64 start, end;
+	int lvl;
+	int err;
+
+	if (!i915_gem_object_has_pinned_pages(obj))
+		return -EINVAL;
+
+	sg = obj->mm.pages->sgl;
+	if (!sg_is_last(sg))
+		return -EINVAL;
+
+	node->size = sg_dma_len(sg) >> 3 << GEN8_PTE_SHIFT;
+	if (GEM_WARN_ON(node->size < SZ_2M || node->size > SZ_1G))
+		return -EINVAL;
+
+	err = drm_mm_insert_node_in_range(&vm->mm, node,
+					  node->size, SZ_1G,
+					  I915_COLOR_UNEVICTABLE,
+					  0, U64_MAX,
+					  DRM_MM_INSERT_LOW);
+	if (err)
+		return err;
+
+	start = node->start >> GEN8_PTE_SHIFT;
+	end = start + (node->size >> GEN8_PTE_SHIFT);
+
+	lvl = vm->top;
+	while (lvl >= 2) {
+		struct i915_page_directory *pde;
+
+		/* Check we don't cross into the next page directory */
+		GEM_BUG_ON(gen8_pd_range(start, end, lvl, &idx) != 1);
+
+		idx = gen8_pd_index(start, lvl);
+		pde = pd->entry[idx];
+		if (!pde) {
+			pde = alloc_pd(vm);
+			if (IS_ERR(pde)) {
+				err = PTR_ERR(pde);
+				goto err_out;
+			}
+
+			err = map_pt_dma(vm, pde->pt.base);
+			if (err) {
+				free_pd(vm, pde);
+				goto err_out;
+			}
+
+			fill_px(pde, i915_vm_scratch_encode(vm, lvl));
+		}
+
+		atomic_inc(&pde->pt.used); /* alive until vm is gone */
+		set_pd_entry(pd, idx, pde);
+		pd = pde;
+		lvl--;
+	}
+
+	encode = gen8_pde_encode(sg_dma_address(sg), I915_CACHE_LLC);
+	vaddr = px_vaddr(pd, &needs_flush);
+	count = gen8_pd_range(start, end, lvl, &idx);
+	do {
+		vaddr[idx++] = encode;
+		encode += SZ_4K;
 	} while (--count);
 
 	return 0;

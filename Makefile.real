@@ -83,22 +83,6 @@ backport-include/backport/autoconf.h: .config Kconfig.versions Kconfig.kernel
 	) > backport-include/backport/autoconf.h
 	@echo " done."
 
-backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kernel
-	@echo -n "Building backport-include/backport/backport_path.h ..."
-	@grep -f local-symbols .config | (				\
-		echo "#ifndef COMPAT_BACKPORTED_PATH_INCLUDED"		;\
-		echo "#define COMPAT_BACKPORTED_PATH_INCLUDED"		;\
-		echo "/*"						;\
-		echo " * Automatically generated file, don't edit!"	;\
-		echo " * Changes will be overwritten"			;\
-		echo " */"						;\
-		echo ""							;\
-		echo "#define BACKPORT_PATH $(shell pwd)"		;\
-		echo ""							;\
-		echo "#endif /* BACKPORTED_PATH_INCLUDED */"		;\
-	) > backport-include/backport/backport_path.h
-	@echo " done."
-
 .PHONY: modules
 modules: backport-include/backport/autoconf.h
 	@$(MAKE) -f Makefile.backport modules

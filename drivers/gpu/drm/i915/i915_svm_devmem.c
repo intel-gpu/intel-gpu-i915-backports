@@ -801,7 +801,7 @@ int i915_svm_vm_prefetch(struct drm_i915_private *i915,
 
 	i915_gem_ww_ctx_init(&ww, true);
 
-	trace_i915_vm_prefetch(i915, 0, args->start, args->length, mem->id);
+	trace_i915_vm_prefetch(mem, 0, args->start, args->length);
 retry:
 	for (addr = args->start, end = args->start + size; addr < end;) {
 		struct vm_area_struct *vma;

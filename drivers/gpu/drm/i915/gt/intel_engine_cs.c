@@ -1144,8 +1144,6 @@ void intel_engine_init_execlists(struct intel_engine_cs *engine)
 	memset(execlists->pending, 0, sizeof(execlists->pending));
 	execlists->active =
 		memset(execlists->inflight, 0, sizeof(execlists->inflight));
-
-	i915_sched_init_ipi(&execlists->ipi);
 }
 
 static void cleanup_status_page(struct intel_engine_cs *engine)
@@ -1243,6 +1241,7 @@ retry:
 	engine->status_page.addr = memset(vaddr, 0, PAGE_SIZE);
 	engine->status_page.vma = vma;
 
+	ret = i915_vma_wait_for_bind(vma);
 err_unpin:
 	if (ret)
 		i915_vma_unpin(vma);
@@ -1446,16 +1445,6 @@ create_blitter_context(struct intel_engine_cs *engine)
 }
 
 static struct intel_context *
-create_evict_context(struct intel_engine_cs *engine)
-{
-	static struct lock_class_key evict;
-
-	return intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_4K,
-						  I915_GEM_HWS_EVICT_ADDR,
-						  &evict, "evict_context");
-}
-
-static struct intel_context *
 create_bind_context(struct intel_engine_cs *engine)
 {
 	static struct lock_class_key bind;
@@ -1531,8 +1520,8 @@ static int engine_init_common(struct intel_engine_cs *engine)
 	engine->emit_fini_breadcrumb_dw = ret;
 
 	/*
-	 * The blitter and evict contexts are used to clear and migrate objects
-	 * in local memory so they have to always be available.
+	 * The blitter context is used to quickly memset or migrate objects
+	 * in local memory, so it has to always be available.
 	 */
 	if (engine->class == COPY_ENGINE_CLASS &&
 	    ce->timeline != engine->legacy.timeline) {
@@ -1546,31 +1535,17 @@ static int engine_init_common(struct intel_engine_cs *engine)
 		ce = create_blitter_context(engine);
 		if (IS_ERR(ce)) {
 			ret = PTR_ERR(ce);
-			goto err_blitter;
+			goto err_context;
 		}
 
 		engine->blitter_context = ce;
-
-		if (HAS_LMEM(engine->i915)) {
-			ce = create_evict_context(engine);
-			if (IS_ERR(ce)) {
-				ret = PTR_ERR(ce);
-				goto err_evict;
-			}
-
-			engine->evict_context = ce;
-		}
 	}
 
 	return 0;
 
-err_evict:
-	destroy_pinned_context(fetch_and_zero(&engine->blitter_context));
-err_blitter:
-	destroy_pinned_context(fetch_and_zero(&engine->bind_context));
 err_flat:
 err_context:
-	destroy_pinned_context(fetch_and_zero(&engine->kernel_context));
+	intel_engine_destroy_pinned_context(ce);
 	return ret;
 }
 
@@ -1625,7 +1600,6 @@ int intel_engines_init(struct intel_gt *gt)
 
 void intel_engine_quiesce(struct intel_engine_cs *engine)
 {
-	destroy_pinned_context(engine->evict_context);
 	destroy_pinned_context(engine->blitter_context);
 	destroy_pinned_context(engine->bind_context);
 	destroy_pinned_context(engine->kernel_context);
@@ -2490,7 +2464,11 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		drm_printf(m, "*** WEDGED ***\n");
 
 	drm_printf(m, "\tAwake? %d\n", atomic_read(&engine->wakeref.count));
-	drm_printf(m, "\tInterrupts: %lu\n", engine->stats.irq_count);
+	drm_printf(m, "\tInterrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+		   READ_ONCE(engine->stats.irq.count),
+		   READ_ONCE(engine->stats.irq.total),
+		   ewma_irq_time_read(&engine->stats.irq.avg),
+		   READ_ONCE(engine->stats.irq.max));
 	drm_printf(m, "\tBarriers?: %s\n",
 		   str_yes_no(!list_empty(&engine->barrier_tasks)));
 	drm_printf(m, "\tLatency: %luus\n",
@@ -2611,12 +2589,16 @@ intel_engine_find_active_request(struct intel_engine_cs *engine)
 
 	spin_lock_irqsave(&se->lock, flags);
 	list_for_each_entry(request, &se->requests, sched.link) {
-		if (i915_test_request_state(request) != I915_REQUEST_ACTIVE)
+		if (!(request->execution_mask & engine->mask))
 			continue;
 
-		if (request->execution_mask & engine->mask)
+		if (__i915_request_is_complete(request))
+			continue;
+
+		if (__i915_request_has_started(request)) {
 			active = request;
-		break;
+			break;
+		}
 	}
 	spin_unlock_irqrestore(&se->lock, flags);
 

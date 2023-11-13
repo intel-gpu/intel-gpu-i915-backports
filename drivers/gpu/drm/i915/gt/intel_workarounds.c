@@ -2573,6 +2573,12 @@ static void pvc_whitelist_build(struct intel_engine_cs *engine)
 {
 	/* Wa_16014440446:pvc */
 	blacklist_trtt(engine);
+
+	/* Wa_16017236439 - Blacklist BCS_SWCTRL */
+	if (engine->class == COPY_ENGINE_CLASS)
+		whitelist_reg_ext(&engine->whitelist,
+				  BCS_ENGINE_SWCTL(engine->mmio_base),
+				  RING_FORCE_TO_NONPRIV_DENY);
 }
 
 static void mtl_whitelist_build(struct intel_engine_cs *engine)

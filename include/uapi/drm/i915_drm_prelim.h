@@ -782,7 +782,8 @@ struct prelim_drm_i915_debug_event {
 #define PRELIM_DRM_I915_DEBUG_EVENT_CONTEXT_PARAM 7
 #define PRELIM_DRM_I915_DEBUG_EVENT_EU_ATTENTION 8
 #define PRELIM_DRM_I915_DEBUG_EVENT_ENGINES 9
-#define PRELIM_DRM_I915_DEBUG_EVENT_MAX_EVENT PRELIM_DRM_I915_DEBUG_EVENT_ENGINES
+#define PRELIM_DRM_I915_DEBUG_EVENT_PAGE_FAULT 10
+#define PRELIM_DRM_I915_DEBUG_EVENT_MAX_EVENT PRELIM_DRM_I915_DEBUG_EVENT_PAGE_FAULT
 
 	__u32 flags;
 #define PRELIM_DRM_I915_DEBUG_EVENT_CREATE	(1 << 31)
@@ -875,6 +876,34 @@ struct prelim_drm_i915_debug_event_eu_attention {
 	 * the bitmask includu only half of logical EU count
 	 * provided by topology query as we only control the
 	 * 'pair' instead of individual EUs.
+	 */
+
+	__u8 bitmask[0];
+} __attribute__((packed));
+
+struct prelim_drm_i915_debug_event_page_fault {
+	struct prelim_drm_i915_debug_event base;
+	__u64 client_handle;
+	__u64 ctx_handle;
+	__u64 lrc_handle;
+
+	__u32 flags;
+
+	struct i915_engine_class_instance ci;
+
+	__u64 page_fault_address;
+
+	/**
+	 * Size of one bitmask: sum of size before/after/resolved att bits.
+	 * It has three times the size of prelim_drm_i915_debug_event_eu_attention.bitmask_size.
+	 */
+	__u32 bitmask_size;
+
+	/**
+	 * Bitmask of thread attentions starting from natural
+	 * hardware order of slice=0,subslice=0,eu=0, 8 attention
+	 * bits per eu.
+	 * The order of the bitmask array is before, after, resolved.
 	 */
 
 	__u8 bitmask[0];
@@ -1245,6 +1274,29 @@ struct prelim_drm_i915_gem_vm_bind {
 #define PRELIM_I915_GEM_VM_BIND_IMMEDIATE	(1ull << 63)
 #define PRELIM_I915_GEM_VM_BIND_READONLY	(1ull << 62)
 #define PRELIM_I915_GEM_VM_BIND_CAPTURE		(1ull << 61)
+
+/*
+ * PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT
+ *
+ * The legacy behaviour of a VM_BIND is that it is resident whenever the
+ * context/vm is active on the GPU. That is when the user is executing their
+ * batch, all current VM_BIND objects are accessible via their defined user
+ * virtual addresses. This is relaxed for pagefaultable vm, where the virtual
+ * address may be faulted and loaded upon demand, thus not all the user objects
+ * are bound at the time of user execution.
+ *
+ * PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT changes the behaviour of the faultable
+ * VM_BIND such that is resident in memory and bound to that virtual address
+ * for the duration of the binding (until the equivalent VM_UNBIND). Like with
+ * the non-faultable vm, a resident object is always accessible by user
+ * execution without generating pagefaults. The exception being that if the
+ * object is marked for atomic access, the buffer has to be faulted in and out
+ * of device memory for CPU access. It is also possible for the buffer to be
+ * migrated via its preferred placement hint.
+ *
+ * If the entire resident set cannot fit within memory, an out of memory error
+ * is immediately reported from the ioctl.
+ */
 #define PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT	(1ull << 60)
 #define PRELIM_I915_GEM_VM_BIND_FD		(1ull << 59)
 
@@ -1288,10 +1340,17 @@ struct prelim_drm_i915_gem_vm_advise {
 	/**
 	 * Attributes to apply to address range or buffer object
 	 *
+	 * For object hints, hints may not be set on imported (prime_import)
+	 * objects and will return error (-EPERM). Hints may only be set against
+	 * the exported object,
+	 *
 	 * ATOMIC_SYSTEM
 	 *      inform that atomic access is enabled for both CPU and GPU.
 	 *      For some platforms, this may be required for correctness
 	 *      and this hint will influence migration policy.
+	 *      This hint is not allowed unless placement list includes SMEM,
+	 *      and is not allowed for exported buffer objects (prime_export)
+	 *	with placement list of LMEM + SMEM and returns error (-EPERM).
 	 * ATOMIC_DEVICE
 	 *      inform that atomic access is enabled for GPU devices. For
 	 *      some platforms, this may be required for correctness and

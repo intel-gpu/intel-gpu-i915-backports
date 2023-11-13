@@ -12,7 +12,7 @@ static void suspend_fence_complete(struct dma_fence_work *f)
 	struct i915_suspend_fence *sfence =
 		container_of(f, typeof(*sfence), base);
 
-	dma_fence_signal(&f->dma);
+	dma_fence_signal(&f->rq.fence);
 
 	if (sfence->block_requested) {
 		if (intel_context_is_active(sfence->ce))
@@ -47,14 +47,14 @@ static void suspend_fence_suspend(struct i915_suspend_fence *sfence,
 			return;
 		}
 
-		ret = i915_sw_fence_await_sw_fence(&sfence->base.chain,
+		ret = i915_sw_fence_await_sw_fence(&sfence->base.rq.submit,
 						   block_completed,
 						   &sfence->block_wq);
 		GEM_BUG_ON(ret < 0);
 		sfence->block_requested = true;
 	}
 
-	i915_sw_fence_complete(&sfence->base.chain);
+	i915_sw_fence_complete(&sfence->base.rq.submit);
 }
 
 static void suspend_fence_suspend_work(struct work_struct *work)
@@ -103,21 +103,21 @@ i915_suspend_fence_init(struct i915_suspend_fence *sfence,
 	int ret;
 
 	/* Make sure fence_free works. */
-	BUILD_BUG_ON(offsetof(struct i915_suspend_fence, base.dma) != 0);
+	BUILD_BUG_ON(offsetof(struct i915_suspend_fence, base) != 0);
 
 	lockdep_assert_held(&ce->timeline->mutex);
 	INIT_WORK(&sfence->suspend_work, suspend_fence_suspend_work);
-	dma_fence_work_init(base, &suspend_fence_ops);
-	__set_bit(I915_SUSPEND_FENCE, &base->dma.flags);
+	dma_fence_work_init(base, &suspend_fence_ops, ce->engine->i915->sched);
+	__set_bit(I915_SUSPEND_FENCE, &base->rq.fence.flags);
 	sfence->ops = ops;
 
 	sfence->ce = intel_context_get(ce);
-	ret = i915_sw_fence_await(&sfence->base.chain);
+	ret = i915_sw_fence_await(&sfence->base.rq.submit);
 	GEM_BUG_ON(!ret);
 
 	dma_fence_work_commit(base);
 
-	return &base->dma;
+	return &base->rq.fence;
 }
 
 /**

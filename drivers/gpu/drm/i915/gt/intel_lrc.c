@@ -2130,6 +2130,10 @@ retry:
 	if (err)
 		goto err;
 
+	err = i915_vma_wait_for_bind(wa_ctx->vma);
+	if (err)
+		goto err_unpin;
+
 	batch = i915_gem_object_pin_map(wa_ctx->vma->obj, I915_MAP_WB);
 	if (IS_ERR(batch)) {
 		err = PTR_ERR(batch);

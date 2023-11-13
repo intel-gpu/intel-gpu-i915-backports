@@ -15,9 +15,6 @@ void i915_gem_ww_ctx_init(struct i915_gem_ww_ctx *ww, bool intr)
 	ww_acquire_init(&ww->ctx, &reservation_ww_class);
 	INIT_LIST_HEAD(&ww->obj_list);
 
-	ww->region.mem = NULL;
-	ww->region.next = NULL;
-
 	ww->intr = intr;
 	ww->contended = NULL;
 	ww->contended_evict = false;
@@ -55,35 +52,6 @@ static void update_lru(struct drm_i915_gem_object *obj)
 	spin_unlock(&mem->objects.lock);
 }
 
-static void i915_gem_ww_ctx_remove_regions(struct i915_gem_ww_ctx *ww)
-{
-	struct i915_gem_ww_region *r = &ww->region;
-
-	if (!r->mem)
-		return;
-
-	do {
-		struct i915_gem_ww_region *next = r->next;
-		struct intel_memory_region *mem = r->mem;
-		struct drm_i915_gem_object *obj, *on;
-
-		spin_lock(&mem->objects.lock);
-		list_del(&r->link);
-		list_for_each_entry_safe(obj, on, &r->locked, mm.region.link) {
-			GEM_BUG_ON(i915_gem_get_locking_ctx(obj) != ww);
-			__update_lru(obj, mem);
-		}
-		spin_unlock(&mem->objects.lock);
-		if (r != &ww->region)
-			kfree(r);
-
-		r = next;
-	} while (r);
-
-	ww->region.mem = NULL;
-	ww->region.next = NULL;
-}
-
 static void put_obj_list(struct list_head *list)
 {
 	struct drm_i915_gem_object *obj, *next;
@@ -97,8 +65,6 @@ static void put_obj_list(struct list_head *list)
 
 static void i915_gem_ww_ctx_unlock_all(struct i915_gem_ww_ctx *ww)
 {
-	i915_gem_ww_ctx_remove_regions(ww);
-
 	put_obj_list(&ww->obj_list);
 }
 

@@ -1228,11 +1228,9 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 
 	if (HAS_LMEM(gt->i915) && !force_smem)
 		obj = intel_gt_object_create_lmem(gt, size,
-						  I915_BO_CPU_CLEAR |
 						  I915_BO_ALLOC_CONTIGUOUS);
 	else
 		obj = i915_gem_object_create_shmem(gt->i915, size);
-
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
@@ -1243,6 +1241,7 @@ struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 	if (IS_METEORLAKE(gt->i915))
 		i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
+	obj->flags |= I915_BO_CPU_CLEAR;
 	vma = guc_vma_from_obj(guc, obj, bias);
 	if (IS_ERR(vma))
 		i915_gem_object_put(obj);
@@ -1647,6 +1646,11 @@ void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p)
 	intel_guc_load_status(guc, p);
 
 	if (intel_guc_submission_is_used(guc)) {
+		drm_printf(p, "GuC Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+			   READ_ONCE(guc->stats.irq.count),
+			   READ_ONCE(guc->stats.irq.total),
+			   ewma_irq_time_read(&guc->stats.irq.avg),
+			   READ_ONCE(guc->stats.irq.max));
 		intel_guc_ct_print_info(&guc->ct, p);
 		intel_guc_submission_print_info(guc, p);
 		intel_guc_ads_print_policy_info(guc, p);

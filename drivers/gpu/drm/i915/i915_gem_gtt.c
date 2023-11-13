@@ -44,8 +44,7 @@ int i915_gem_gtt_prepare_pages(struct drm_i915_gem_object *obj,
 		 * try again - if there are no more pages to remove from
 		 * the DMA remapper, i915_gem_shrink will return 0.
 		 */
-		GEM_BUG_ON(obj->mm.pages == pages);
-	} while (i915_gem_shrink(NULL, to_i915(obj->base.dev),
+	} while (i915_gem_shrink(to_i915(obj->base.dev),
 				 obj->base.size >> PAGE_SHIFT, NULL,
 				 I915_SHRINK_BOUND |
 				 I915_SHRINK_UNBOUND));

@@ -37,7 +37,6 @@ void i915_drm_clients_init(struct i915_drm_clients *clients,
 			   struct drm_i915_private *i915)
 {
 	clients->i915 = i915;
-	clients->wq = create_workqueue("i915_drm_clients");
 
 	clients->next_id = 0;
 	xa_init_flags(&clients->xarray, XA_FLAGS_ALLOC);
@@ -547,12 +546,10 @@ static void __rcu_i915_drm_client_free(struct work_struct *wrk)
 {
 	struct i915_drm_client *client =
 		container_of(wrk, typeof(*client), rcu.work);
-	struct drm_i915_private *i915 = client->clients->i915;
 
 	__i915_drm_client_unregister(client);
 
 	xa_erase(&client->clients->xarray, client->id);
-	pvc_wa_allow_rc6(i915);
 	i915_uuid_cleanup(client);
 
 	kfree(client);
@@ -632,13 +629,14 @@ void __i915_drm_client_free(struct kref *kref)
 	struct i915_drm_client *client =
 		container_of(kref, typeof(*client), kref);
 
-	queue_rcu_work(client->clients->wq, &client->rcu);
+	queue_rcu_work(client->clients->i915->wq, &client->rcu);
 }
 
 void i915_drm_client_close(struct i915_drm_client *client)
 {
 	GEM_BUG_ON(READ_ONCE(client->closed));
 	WRITE_ONCE(client->closed, true);
+	pvc_wa_allow_rc6(client->clients->i915);
 }
 
 void i915_drm_client_cleanup(struct i915_drm_client *client)
@@ -668,13 +666,13 @@ i915_drm_client_update(struct i915_drm_client *client,
 
 void i915_drm_clients_fini(struct i915_drm_clients *clients)
 {
-	flush_workqueue(clients->wq);
-
-	if (!xa_empty(&clients->xarray)) {
+	do {
+		flush_workqueue(clients->i915->wq);
+		if (xa_empty(&clients->xarray))
+			break;
 		rcu_barrier();
-		flush_workqueue(clients->wq);
-	}
+	} while (1);
 
+	GEM_BUG_ON(!xa_empty(&clients->xarray));
 	xa_destroy(&clients->xarray);
-	destroy_workqueue(clients->wq);
 }

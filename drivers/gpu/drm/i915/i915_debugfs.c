@@ -312,43 +312,6 @@ static void show_xfer(struct seq_file *m,
 		   div64_u64(mul_u64_u32_shr(bytes, NSEC_PER_SEC, 20), time));
 }
 
-static void
-evict_stat(struct seq_file *m,
-	   const char *name,
-	   const char *direction,
-	   struct i915_mm_swap_stat *stat)
-{
-	unsigned long pages;
-	unsigned int seq;
-	u64 time, rate, size;
-	ktime_t ktime;
-
-	do {
-		seq = read_seqbegin(&stat->lock);
-		pages = stat->pages;
-		ktime = stat->time;
-	} while (read_seqretry(&stat->lock, seq));
-
-	time = ktime_to_us(ktime);
-	size = (u64)pages * PAGE_SIZE;
-	rate = time ? div64_u64(size, time) : 0;
-	rate = div64_ul(rate * USEC_PER_SEC, 1024 * 1024);
-	size = div64_ul(size, 1024 * 1024);
-
-	seq_printf(m, "%s swap %s %llu MiB in %llums, %llu MiB/s.\n",
-		   name, direction, size, ktime_to_ms(ktime),
-		   rate);
-}
-
-static void
-evict_stats(struct seq_file *m,
-	    const char *name,
-	    struct i915_mm_swap_stats *stats)
-{
-	evict_stat(m, name, "in", &stats->in);
-	evict_stat(m, name, "out", &stats->out);
-}
-
 static int i915_gem_object_info_show(struct seq_file *m, void *data)
 {
 	struct drm_i915_private *i915 = m->private;
@@ -384,10 +347,16 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		show_xfer(m, gt, "clear-on-idle",
 			  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
 			  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
+		show_xfer(m, gt, "swap-in",
+			  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
+			  gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
+		show_xfer(m, gt, "swap-out",
+			  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
+			  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+		show_xfer(m, gt, "copy",
+			  gt->counters.map[INTEL_GT_COPY_BYTES],
+			  gt->counters.map[INTEL_GT_COPY_CYCLES]);
 	}
-
-	evict_stats(m, "Blitter", &i915->mm.blt_swap_stats);
-	evict_stats(m, "Memcpy", &i915->mm.memcpy_swap_stats);
 
 	return 0;
 }
@@ -666,7 +635,8 @@ static int i915_runtime_dump_child_status(struct device *dev, void *data)
 	return 0;
 }
 
-static void config_pm_dump(struct seq_file *m) {
+static void config_pm_dump(struct seq_file *m)
+{
 	struct drm_i915_private *i915 = m->private;
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
 
@@ -679,7 +649,8 @@ static void config_pm_dump(struct seq_file *m) {
 
 #else /* !CONFIG_PM */
 
-static int config_pm_dump(struct seq_file *m) {
+static int config_pm_dump(struct seq_file *m)
+{
 	seq_printf(m, "Device Power Management (CONFIG_PM) disabled\n");
 	return 0;
 }
@@ -726,12 +697,16 @@ static int i915_engine_info_show(struct seq_file *m, void *unused)
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 
 	for_each_gt(gt, i915, id) {
-		seq_printf(m, "GT%d awake? %s [%d], %llums, interrupts: %lu\n",
+		seq_printf(m, "GT%d awake? %s [%d], %llums\n",
 			   gt->info.id,
 			   str_yes_no(gt->awake),
 			   atomic_read(&gt->wakeref.count),
-			   ktime_to_ms(intel_gt_get_awake_time(gt)),
-			   gt->irq_count);
+			   ktime_to_ms(intel_gt_get_awake_time(gt)));
+		seq_printf(m, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+			   READ_ONCE(gt->stats.irq.count),
+			   READ_ONCE(gt->stats.irq.total),
+			   ewma_irq_time_read(&gt->stats.irq.avg),
+			   READ_ONCE(gt->stats.irq.max));
 		seq_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
 			   gt->clock_frequency,
 			   gt->clock_period_ns);
@@ -1114,10 +1089,10 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 		fs_reclaim_acquire(GFP_KERNEL);
 
 		if (val & DROP_BOUND)
-			i915_gem_shrink(NULL, i915, LONG_MAX, NULL, I915_SHRINK_BOUND);
+			i915_gem_shrink(i915, LONG_MAX, NULL, I915_SHRINK_BOUND);
 
 		if (val & DROP_UNBOUND)
-			i915_gem_shrink(NULL, i915, LONG_MAX, NULL, I915_SHRINK_UNBOUND);
+			i915_gem_shrink(i915, LONG_MAX, NULL, I915_SHRINK_UNBOUND);
 
 		if (val & DROP_SHRINK_ALL)
 			i915_gem_shrink_all(i915);
@@ -1130,6 +1105,9 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 
 	if (val & DROP_FREED)
 		i915_gem_drain_freed_objects(i915);
+
+	if (val & DROP_IDLE)
+		flush_workqueue(i915->wq);
 
 	return 0;
 }

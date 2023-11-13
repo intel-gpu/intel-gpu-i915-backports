@@ -41,8 +41,8 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	sfence = NULL;
 	i915_request_get(rq);
 
-	dma_fence_enable_sw_signaling(&ce->sfence->base.dma);
-	fence = dma_fence_get(&ce->sfence->base.dma);
+	dma_fence_enable_sw_signaling(&ce->sfence->base.rq.fence);
+	fence = dma_fence_get(&ce->sfence->base.rq.fence);
 	i915_request_add(rq);
 
 	timeout = dma_fence_wait_timeout(fence, true, delay);
@@ -72,7 +72,7 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	i915_vm_lock_objects(vm, NULL);
 
 	fs_reclaim_acquire(GFP_KERNEL);
-	timeout = dma_fence_wait_timeout(&ce->sfence->base.dma, true, delay);
+	timeout = dma_fence_wait_timeout(&ce->sfence->base.rq.fence, true, delay);
 	fs_reclaim_release(GFP_KERNEL);
 	if (timeout <= 0) {
 		pr_err("%s: Suspend running request timeout.\n", engine->name);

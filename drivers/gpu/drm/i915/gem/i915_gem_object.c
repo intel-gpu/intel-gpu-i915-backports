@@ -22,19 +22,16 @@
  *
  */
 
+#include <linux/dma-buf.h>
 #include <linux/highmem.h>
 #include <linux/sched/mm.h>
 #include <linux/iosys-map.h>
 
 #include <drm/drm_cache.h>
-#include <drm/drm_print.h>
 
 #include "display/intel_frontbuffer.h"
-#include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
-#include "gt/intel_migrate.h"
-#include "gt/intel_ring.h"
 #include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
@@ -44,7 +41,6 @@
 #include "i915_gem_lmem.h"
 #include "i915_gem_mman.h"
 #include "i915_gem_object.h"
-#include "i915_gem_object_blt.h"
 #include "i915_gem_region.h"
 #include "i915_gem_tiling.h"
 #include "i915_gem_vm_bind.h"
@@ -87,20 +83,6 @@ int i915_gem_object_migrate_await(struct drm_i915_gem_object *obj,
 	return err;
 }
 
-void i915_gem_object_migrate_boost(struct drm_i915_gem_object *obj, int prio)
-{
-	struct dma_fence *fence;
-
-	fence = i915_active_fence_get(&obj->mm.migrate);
-	if (!fence)
-		return;
-
-	if (dma_fence_is_i915(fence))
-		i915_request_set_priority(to_request(fence), prio);
-
-	dma_fence_put(fence);
-}
-
 long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 				  unsigned int flags,
 				  long timeout)
@@ -116,6 +98,10 @@ long i915_gem_object_migrate_wait(struct drm_i915_gem_object *obj,
 		return PTR_ERR(fence);
 
 	if (dma_fence_is_i915(fence)) {
+		if (flags & I915_WAIT_PRIORITY)
+			i915_request_set_priority(to_request(fence),
+						  I915_PRIORITY_MAX);
+
 		start = ktime_get_raw();
 		timeout = i915_request_wait(to_request(fence), flags, timeout);
 		local64_add(ktime_get_raw() - start,
@@ -397,8 +383,18 @@ bool i915_gem_object_can_bypass_llc(struct drm_i915_gem_object *obj)
 	return IS_JSL_EHL(i915);
 }
 
-bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj)
+bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj, bool *required)
 {
+	bool migration_is_required;
+
+	if (required)
+		*required = 0;
+
+	/*
+	 * If below return false, then hints do not apply as we are
+	 * either already in SMEM, or SMEM is not a valid placement.
+	 */
+
 	if (!i915_gem_object_migratable(obj) ||
 	    obj->mm.region.mem->id == INTEL_REGION_SMEM)
 		return false;
@@ -407,7 +403,16 @@ bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj)
 	if (!(obj->memory_mask & BIT(INTEL_REGION_SMEM)))
 		return false;
 
-	return i915_gem_object_allows_atomic_system(obj) ||
+	/*
+	 * If atomic hint, we need to alert the caller that migration is no
+	 * longer considered best effort, but is required. If object is not
+	 * migrated, then the fault handler should fail the page fault.
+	 */
+	migration_is_required = i915_gem_object_allows_atomic_system(obj);
+	if (required)
+		*required = migration_is_required;
+
+	return migration_is_required ||
 	       i915_gem_object_test_preferred_location(obj, INTEL_REGION_SMEM);
 }
 
@@ -468,6 +473,23 @@ static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 		obj->mm.madv_atomic = I915_BO_ATOMIC_DEVICE;
 		break;
 	case PRELIM_I915_VM_ADVISE_ATOMIC_SYSTEM:
+		/* if LMEM only, should be requesting ATOMIC_DEVICE */
+		if (!(obj->memory_mask & REGION_SMEM))
+			return -EPERM;
+
+		/*
+		 * With exported BO and multiple devices, we cannot support
+		 * the case when 2nd device does atomic access and needs the
+		 * exporter to migrate buffer from SMEM back into LMEM.
+		 * Thus for exported BOs with LMEM + SMEM placment, we don't
+		 * allow migration into SMEM, so don't allow ATOMIC_SYSTEM.
+		 */
+		if (i915_gem_object_is_exported(obj) &&
+		    obj->memory_mask & REGION_LMEM) {
+			err = -EPERM;
+			break;
+		}
+
 		/*
 		 * clear mappings such that we will migrate local to the
 		 * faulting device on the next GPU or CPU access
@@ -581,6 +603,13 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 	struct drm_i915_gem_object *start_sobj = NULL;
 	struct i915_gem_ww_ctx ww;
 	int err = 0;
+
+	/*
+	 * Don't allow hints for imported objects (backing store decisions
+	 * owned by the export side).
+	 */
+	if (obj->base.import_attach)
+		return -EPERM;
 
 	/* Object chunk-granular hints specified with args->[start,length] */
 	if (args->start || args->length) {
@@ -862,7 +891,16 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	GEM_BUG_ON(!list_empty(&obj->lut_list));
 
 	atomic_set(&obj->mm.pages_pin_count, 0);
+
+	/* dma-buf require the lock to be taken for unattach */
+	if (obj->base.import_attach)
+		i915_gem_object_lock(obj, NULL);
+
 	__i915_gem_object_put_pages(obj);
+
+	if (obj->base.import_attach)
+		i915_gem_object_unlock(obj);
+
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
 	GEM_BUG_ON(!list_empty(&obj->mm.link));
 	bitmap_free(obj->bit_17);
@@ -1181,9 +1219,17 @@ swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 	__i915_gem_object_reset_page_iter(donor, donor->mm.pages);
 }
 
+void i915_gem_object_move_notify(struct drm_i915_gem_object *obj)
+{
+	/* Segmented objects do not have any dma-buf info, the parent does */
+	if (obj->parent)
+		obj = obj->parent;
+
+	if (obj->base.dma_buf)
+		dma_buf_move_notify(obj->base.dma_buf);
+}
+
 int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
-			    struct i915_gem_ww_ctx *ww,
-			    struct intel_context *ce,
 			    enum intel_region_id id,
 			    bool nowait)
 {
@@ -1211,6 +1257,12 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		if (err)
 			return err;
 	}
+
+	/*
+	 * Notify anyone who is interested that the pages will need to be
+	 * re-mapped
+	 */
+	i915_gem_object_move_notify(obj);
 
 	if (obj->swapto && id == INTEL_REGION_SMEM) {
 		donor = fetch_and_zero(&obj->swapto);
@@ -1242,31 +1294,18 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		}
 		madv = I915_MADV_WILLNEED;
 	} else if (i915_gem_object_has_pages(obj)) { /* lmem <-> lmem */
-		err = i915_gem_object_ww_copy_blt(obj, donor, ww, ce, nowait);
-		if (err)
-			goto out;
+		struct i915_request *rq;
 
-		/*
-		 * Occasionally i915_gem_object_wait() called inside
-		 * i915_gem_object_set_to_cpu_domain() get interrupted
-		 * and return -ERESTARTSYS, this will make migration
-		 * operation fail. So adding a non-interruptible wait
-		 * before changing the object domain.
-		 */
-		err = i915_gem_object_wait(donor, 0, MAX_SCHEDULE_TIMEOUT);
-		if (err)
+		rq = i915_gem_object_copy_lmem(obj, donor, true, nowait);
+		if (IS_ERR(rq)) {
+			err = PTR_ERR(rq);
 			goto out;
+		}
 
-		err = i915_gem_object_unbind(donor, ww, 0);
-		if (err)
-			goto out;
-
-		err = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
-		if (err)
-			goto out;
+		i915_request_put(rq);
 	}
 
-	trace_i915_gem_object_migrate(obj, id);
+	trace_i915_gem_object_migrate(obj, donor->mm.region.mem);
 
 	i915_gem_object_unaccount(obj);
 	swap(obj->base.size, donor->base.size);
@@ -1619,35 +1658,21 @@ static const struct drm_gem_object_funcs i915_gem_object_funcs = {
 
 int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 				   struct i915_gem_ww_ctx *ww,
-				   struct intel_memory_region **regions,
+				   struct intel_memory_region *const *regions,
 				   int size)
 {
-	struct intel_gt *gt = obj->mm.region.mem->gt;
-	enum intel_engine_id id = gt->rsvd_bcs;
-	struct intel_context *ce;
 	int i, ret;
 
-	ce = NULL;
-	if (gt->engine[id])
-		ce = gt->engine[id]->blitter_context;
-	if (!ce)
-		return -ENODEV;
-
 	ret = i915_gem_object_prepare_move(obj, ww);
-	if (ret) {
-		if (ret != -EDEADLK)
-			DRM_ERROR("Cannot set memory region, object in use(%d)\n", ret);
-	        goto err;
-	}
+	if (ret)
+		return ret;
 
 	for (i = 0; i < size; i++) {
-		struct intel_memory_region *region = regions[i];
-
-		ret = i915_gem_object_migrate(obj, ww, ce, region->id, false);
+		ret = i915_gem_object_migrate(obj, regions[i]->id, false);
 		if (!ret)
 			break;
 	}
-err:
+
 	return ret;
 }
 
@@ -1664,516 +1689,13 @@ int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
 				    bool check_placement)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct intel_memory_region *regions[] = {
-		i915->mm.regions[INTEL_REGION_SMEM],
-	};
-	u32 mask = obj->memory_mask;
 
-	if (check_placement && !(mask & REGION_SMEM))
+	if (check_placement && !(obj->memory_mask & REGION_SMEM))
 		return -EINVAL;
 
-	return i915_gem_object_migrate_region(obj, ww, regions,
-					      ARRAY_SIZE(regions));
-}
-
-#define BLT_WINDOW_SZ SZ_4M
-static int i915_alloc_vm_range(struct i915_vma *vma)
-{
-	struct i915_vm_pt_stash stash = {};
-	int err;
-	struct i915_gem_ww_ctx ww;
-
-	err = i915_vm_alloc_pt_stash(vma->vm, &stash, vma->size);
-	if (err)
-		return err;
-
-	for_i915_gem_ww(&ww, err, false) {
-		err = i915_vm_lock_objects(vma->vm, &ww);
-		if (err)
-			continue;
-
-		err = i915_vm_map_pt_stash(vma->vm, &stash);
-		if (err)
-			continue;
-
-		vma->vm->allocate_va_range(vma->vm, &stash,
-					   i915_vma_offset(vma),
-					   vma->size);
-
-		set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
-		/* Implicit unlock */
-	}
-
-	i915_vm_free_pt_stash(vma->vm, &stash);
-
-	return err;
-}
-
-static inline void i915_insert_vma_pages(struct i915_vma *vma, bool is_lmem)
-{
-	vma->vm->insert_entries(vma->vm, NULL, vma,
-				i915_gem_get_pat_index(vma->vm->i915,
-						       I915_CACHE_NONE),
-				is_lmem ? PTE_LM : 0);
-	wmb();
-}
-
-static struct i915_vma *
-i915_window_vma_init(struct drm_i915_private *i915,
-		     struct intel_memory_region *mem, u64 size)
-{
-	enum intel_engine_id id = to_gt(i915)->rsvd_bcs;
-	struct intel_context *ce = to_gt(i915)->engine[id]->evict_context;
-	struct i915_address_space *vm = ce->vm;
-	struct i915_vma *vma;
-	int ret;
-
-	ret = i915_inject_probe_error(i915, -ENOMEM);
-	if (ret)
-		return ERR_PTR(-ENOMEM);
-
-	vma = i915_alloc_window_vma(i915, vm, size, mem->min_page_size);
-	if (IS_ERR(vma)) {
-		DRM_ERROR("window vma alloc failed(%ld)\n", PTR_ERR(vma));
-		return vma;
-	}
-
-	vma->pages = kmalloc(sizeof(*vma->pages), GFP_KERNEL);
-	if (!vma->pages) {
-		ret = -ENOMEM;
-		DRM_ERROR("page alloc failed. %d", ret);
-		goto err_page;
-	}
-
-	ret = sg_alloc_table(vma->pages, size / PAGE_SIZE, GFP_KERNEL);
-	if (ret) {
-		DRM_ERROR("sg alloc table failed(%d)", ret);
-		goto err_sg_table;
-	}
-
-	mutex_lock(&vm->mutex);
-	ret = drm_mm_insert_node_in_range(&vm->mm, &vma->node,
-					  size, size,
-					  I915_COLOR_UNEVICTABLE,
-					  0, vm->total,
-					  DRM_MM_INSERT_LOW);
-	mutex_unlock(&vm->mutex);
-	if (ret) {
-		DRM_ERROR("drm_mm_insert_node_in_range failed. %d\n", ret);
-		goto err_mm_node;
-	}
-
-	ret = i915_alloc_vm_range(vma);
-	if (ret) {
-		DRM_ERROR("src: Page table alloc failed(%d)\n", ret);
-		goto err_alloc;
-	}
-
-	return vma;
-
-err_alloc:
-	mutex_lock(&vm->mutex);
-	drm_mm_remove_node(&vma->node);
-	mutex_unlock(&vm->mutex);
-err_mm_node:
-	sg_free_table(vma->pages);
-err_sg_table:
-	kfree(vma->pages);
-err_page:
-	i915_destroy_window_vma(vma);
-
-	return ERR_PTR(ret);
-}
-
-static void i915_window_vma_teardown(struct i915_vma *vma)
-{
-	if (!vma)
-		return;
-
-	if (!vma->vm->i915->quiesce_gpu)
-		vma->vm->clear_range(vma->vm, i915_vma_offset(vma), vma->size);
-
-	drm_mm_remove_node(&vma->node);
-	sg_free_table(vma->pages);
-	kfree(vma->pages);
-	i915_destroy_window_vma(vma);
-}
-
-int i915_setup_blt_windows(struct drm_i915_private *i915)
-{
-	enum intel_engine_id id = to_gt(i915)->rsvd_bcs;
-	struct intel_memory_region *region;
-	unsigned int size = BLT_WINDOW_SZ;
-	struct i915_vma *vma;
-	int i;
-
-	if (intel_gt_is_wedged(to_gt(i915)) || i915->params.enable_eviction < 2)
-		return 0;
-
-	if (!to_gt(i915)->engine[id]) {
-		drm_dbg(&i915->drm,
-			"No blitter engine, hence blt evict is not setup\n");
-		return 0;
-	}
-
-	init_waitqueue_head(&i915->mm.window_queue);
-
-	region = intel_memory_region_by_type(i915, INTEL_MEMORY_LOCAL);
-
-	for (i = 0; i < ARRAY_SIZE(i915->mm.lmem_window); i++) {
-		vma = i915_window_vma_init(i915, region, size);
-		GEM_BUG_ON(!vma);
-		if (IS_ERR(vma))
-			goto err;
-		i915->mm.lmem_window[i] = vma;
-	}
-
-	region = intel_memory_region_by_type(i915, INTEL_MEMORY_SYSTEM);
-
-	for (i = 0; i < ARRAY_SIZE(i915->mm.smem_window); i++) {
-		vma = i915_window_vma_init(i915, region, size);
-		GEM_BUG_ON(!vma);
-		if (IS_ERR(vma))
-			goto err;
-		i915->mm.smem_window[i] = vma;
-	}
-
-	if (HAS_FLAT_CCS(i915)) {
-		size = BLT_WINDOW_SZ >> 8;
-
-		for (i = 0; i < ARRAY_SIZE(i915->mm.ccs_window); i++) {
-			vma = i915_window_vma_init(i915, region, size);
-			GEM_BUG_ON(!vma);
-			if (IS_ERR(vma))
-				goto err;
-			i915->mm.ccs_window[i] = vma;
-		}
-	}
-
-	return 0;
-
-err:
-	i915_teardown_blt_windows(i915);
-
-	i915_probe_error(i915,
-			 "Failed to create %u byte VMA window %u at %s! (%ld)\n",
-			 size, i, region->name, PTR_ERR(vma));
-
-	intel_gt_set_wedged(to_gt(i915));
-
-	return 0;
-}
-
-void i915_teardown_blt_windows(struct drm_i915_private *i915)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(i915->mm.lmem_window); i++)
-		i915_window_vma_teardown(fetch_and_zero(&i915->mm.lmem_window[i]));
-
-	for (i = 0; i < ARRAY_SIZE(i915->mm.smem_window); i++)
-		i915_window_vma_teardown(fetch_and_zero(&i915->mm.smem_window[i]));
-
-	for (i = 0; i < ARRAY_SIZE(i915->mm.ccs_window); i++)
-		i915_window_vma_teardown(fetch_and_zero(&i915->mm.ccs_window[i]));
-}
-
-static int i915_window_blt_copy_prepare_obj(struct drm_i915_gem_object *obj)
-{
-	int ret;
-
-	ret = i915_gem_object_wait(obj,
-				   I915_WAIT_INTERRUPTIBLE,
-				   MAX_SCHEDULE_TIMEOUT);
-	if (ret)
-		return ret;
-
-	return i915_gem_object_pin_pages(obj);
-}
-
-static u32
-comp_surface_flag(struct i915_vma *vma, bool compressed)
-{
-	if (HAS_LINK_COPY_ENGINES(vma->vm->i915) && compressed &&
-	    i915_gem_object_is_lmem(vma->obj))
-		return PVC_ENABLE_COMPRESSED_SURFACE;
-
-	return 0;
-}
-
-static int
-i915_window_blt_copy_batch_prepare(struct i915_request *rq,
-				   struct i915_vma *src,
-				   struct i915_vma *dst,
-				   size_t size,
-				   bool compressed)
-{
-	u32 *cmd;
-
-	GEM_BUG_ON(size > BLT_WINDOW_SZ);
-	cmd = intel_ring_begin(rq, 10);
-	if (IS_ERR(cmd))
-		return PTR_ERR(cmd);
-
-	GEM_BUG_ON(size >> PAGE_SHIFT > S16_MAX);
-	GEM_BUG_ON(GRAPHICS_VER(rq->engine->i915) < 9);
-
-	*cmd++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
-	*cmd++ = BLT_DEPTH_32 | PAGE_SIZE | comp_surface_flag(dst, compressed);
-	*cmd++ = 0;
-	*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
-	*cmd++ = lower_32_bits(i915_vma_offset(dst));
-	*cmd++ = upper_32_bits(i915_vma_offset(dst));
-	*cmd++ = 0;
-	*cmd++ = PAGE_SIZE | comp_surface_flag(src, compressed);
-	*cmd++ = lower_32_bits(i915_vma_offset(src));
-	*cmd++ = upper_32_bits(i915_vma_offset(src));
-	intel_ring_advance(rq, cmd);
-
-	return 0;
-}
-
-static void prepare_vma(struct i915_vma *vma,
-			struct drm_i915_gem_object *obj,
-			u32 offset,
-			u32 chunk,
-			bool is_lmem)
-{
-	struct scatterlist *sgl;
-	u32 size;
-
-	/*
-	 * Source obj size could be smaller than the dst obj size,
-	 * due to the varying min_page_size of the mem regions the
-	 * obj belongs to. But when we insert the pages into vm,
-	 * the total size of the pages supposed to be multiples of
-	 * the min page size of that mem region.
-	 */
-	size = ALIGN(chunk, obj->mm.region.mem->min_page_size) >> PAGE_SHIFT;
-	intel_partial_pages_for_sg_table(obj, vma->pages, offset, size, &sgl);
-
-	/*
-	 * Insert pages into vm, expects the pages to the full
-	 * length of VMA. But we may have the pages of <= vma_size.
-	 * Hence altering the vma size to match the total size of
-	 * the pages attached.
-	 */
-	vma->size = size << PAGE_SHIFT;
-	i915_insert_vma_pages(vma, is_lmem);
-	sg_unmark_end(sgl);
-}
-
-static int
-i915_ccs_batch_prepare(struct i915_request *rq,
-		       struct i915_vma *lmem,
-		       struct i915_vma *ccs, size_t size, bool src_is_lmem)
-{
-	u32 *cmd;
-	int cmdsize = i915_calc_ctrl_surf_instr_dwords(rq->engine->i915, size);
-	int src_mem_access, dst_mem_access;
-	struct i915_vma *src, *dst;
-
-	GEM_BUG_ON(size > BLT_WINDOW_SZ);
-
-	cmd = intel_ring_begin(rq, cmdsize);
-	if (IS_ERR(cmd))
-		return PTR_ERR(cmd);
-
-	if (src_is_lmem) {
-		src_mem_access = INDIRECT_ACCESS;
-		dst_mem_access = DIRECT_ACCESS;
-		src = lmem;
-		dst = ccs;
-	} else {
-		src_mem_access = DIRECT_ACCESS;
-		dst_mem_access = INDIRECT_ACCESS;
-		src = ccs;
-		dst = lmem;
-	}
-
-	cmd = xehp_emit_ccs_copy(cmd, rq->engine->gt,
-				 i915_vma_offset(src), src_mem_access,
-				 i915_vma_offset(dst), dst_mem_access,
-				 size);
-
-	intel_ring_advance(rq, cmd);
-
-	return 0;
-}
-
-int i915_window_blt_copy(struct drm_i915_gem_object *dst,
-			 struct drm_i915_gem_object *src, bool compressed)
-{
-	struct drm_i915_private *i915 = to_i915(src->base.dev);
-	enum intel_engine_id id = to_gt(i915)->rsvd_bcs;
-	struct intel_context *ce = to_gt(i915)->engine[id]->evict_context;
-	bool src_is_lmem = i915_gem_object_is_lmem(src);
-	bool dst_is_lmem = i915_gem_object_is_lmem(dst);
-	bool ccs_handling;
-	u64 ccs_offset, offset = 0;
-	u64 remain = min(src->base.size, dst->base.size);
-	struct i915_vma *src_vma, *dst_vma, *ccs_vma, **ps, **pd, **pccs;
-	int err;
-
-	/*
-	 * We will handle CCS data only if source
-	 * and destination memory region are different
-	 */
-	ccs_handling = compressed && HAS_FLAT_CCS(i915);
-	if (ccs_handling)
-		GEM_BUG_ON(src_is_lmem == dst_is_lmem);
-
-	err = i915_window_blt_copy_prepare_obj(src);
-	if (err)
-		return err;
-
-	err = i915_window_blt_copy_prepare_obj(dst);
-	if (err) {
-		i915_gem_object_unpin_pages(src);
-		return err;
-	}
-	ccs_offset = remain >> PAGE_SHIFT;
-
-	ps = src_is_lmem ? &i915->mm.lmem_window[0] :
-			   &i915->mm.smem_window[0];
-	pd = dst_is_lmem ? &i915->mm.lmem_window[1] :
-			   &i915->mm.smem_window[1];
-	if (ccs_handling) {
-		if (src_is_lmem) {
-			GEM_BUG_ON(dst->base.size <
-				(src->base.size + (src->base.size >> 8)));
-			pccs = &i915->mm.ccs_window[1];
-		} else {
-			GEM_BUG_ON(src->base.size <
-				(dst->base.size + (dst->base.size >> 8)));
-			pccs = &i915->mm.ccs_window[0];
-		}
-	}
-
-	spin_lock(&i915->mm.window_queue.lock);
-
-	if (ccs_handling)
-		err = wait_event_interruptible_locked(i915->mm.window_queue,
-						*ps && *pd && *pccs);
-	else
-		err = wait_event_interruptible_locked(i915->mm.window_queue,
-					      *ps && *pd);
-	if (err) {
-		spin_unlock(&i915->mm.window_queue.lock);
-		i915_gem_object_unpin_pages(src);
-		i915_gem_object_unpin_pages(dst);
-		return err;
-	}
-
-	src_vma = *ps;
-	dst_vma = *pd;
-
-	src_vma->obj = src;
-	dst_vma->obj = dst;
-
-	*ps = NULL;
-	*pd = NULL;
-	if (ccs_handling) {
-		ccs_vma = *pccs;
-		ccs_vma->obj = src_is_lmem ? dst : src;
-		*pccs = NULL;
-	}
-
-	spin_unlock(&i915->mm.window_queue.lock);
-
-	intel_engine_pm_get(ce->engine);
-
-	do {
-		struct i915_request *rq;
-		long timeout;
-		u32 chunk;
-
-		chunk = min_t(u64, BLT_WINDOW_SZ, remain);
-
-		prepare_vma(src_vma, src, offset, chunk, src_is_lmem);
-		prepare_vma(dst_vma, dst, offset, chunk, dst_is_lmem);
-		if (ccs_handling)
-			prepare_vma(ccs_vma, src_is_lmem ? dst : src, ccs_offset,
-				chunk >> 8, false);
-
-		rq = i915_request_create(ce);
-		if (IS_ERR(rq)) {
-			err = PTR_ERR(rq);
-			break;
-		}
-		if (rq->engine->emit_init_breadcrumb) {
-			err = rq->engine->emit_init_breadcrumb(rq);
-			if (unlikely(err)) {
-				DRM_ERROR("init_breadcrumb failed. %d\n", err);
-				i915_request_set_error_once(rq, err);
-				__i915_request_skip(rq);
-				i915_request_add(rq);
-				break;
-			}
-		}
-		err = i915_window_blt_copy_batch_prepare(rq, src_vma, dst_vma,
-							 chunk, ccs_handling);
-		if (err) {
-			DRM_ERROR("Batch preparation failed. %d\n", err);
-			i915_request_set_error_once(rq, -EIO);
-			goto request;
-		}
-
-		if (ccs_handling) {
-			err = i915_ccs_batch_prepare(rq, (src_is_lmem) ? src_vma : dst_vma,
-						     ccs_vma, chunk, src_is_lmem);
-			if (err) {
-				DRM_ERROR("CCS Batch preparation failed. %d\n", err);
-				i915_request_set_error_once(rq, -EIO);
-			}
-		}
-request:
-
-		i915_request_get(rq);
-		/* Avoid a GuC deadlock while scheduling inside pagefaults */
-		i915_request_set_priority(rq, I915_PRIORITY_MAX);
-		i915_request_add(rq);
-
-		if (!err)
-			timeout = i915_request_wait(rq, 0,
-						    MAX_SCHEDULE_TIMEOUT);
-		i915_request_put(rq);
-		if (!err && timeout < 0) {
-			DRM_ERROR("BLT Request is not completed. %ld\n",
-				  timeout);
-			err = timeout;
-			break;
-		}
-
-		remain -= chunk;
-		offset += chunk >> PAGE_SHIFT;
-		ccs_offset += (chunk >> 8) >> PAGE_SHIFT;
-
-		flush_work(&ce->engine->retire_work);
-	} while (remain);
-
-	intel_engine_pm_put(ce->engine);
-
-	spin_lock(&i915->mm.window_queue.lock);
-	src_vma->size = BLT_WINDOW_SZ;
-	dst_vma->size = BLT_WINDOW_SZ;
-	src_vma->obj = NULL;
-	dst_vma->obj = NULL;
-	*ps = src_vma;
-	*pd = dst_vma;
-	if (ccs_handling) {
-		ccs_vma->size = BLT_WINDOW_SZ >> 8;
-		ccs_vma->obj = NULL;
-		*pccs = ccs_vma;
-	}
-
-	wake_up_locked(&i915->mm.window_queue);
-	spin_unlock(&i915->mm.window_queue.lock);
-
-	i915_gem_object_unpin_pages(src);
-	i915_gem_object_unpin_pages(dst);
-
-	return err;
+	return i915_gem_object_migrate_region(obj, ww,
+					      &i915->mm.regions[INTEL_REGION_SMEM],
+					      1);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

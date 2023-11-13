@@ -3001,6 +3001,7 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 {
 	void __iomem * const regs = gt->uncore->regs;
 	unsigned long mst_glb_errstat, slv_glb_errstat, lcl_errstat, index;
+	u32 ieh_header;
 	u32 errbit;
 	u32 base = SOC_XEHPSDV_BASE;
 	u32 slave_base = SOC_XEHPSDV_SLAVE_BASE;
@@ -3105,6 +3106,16 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 		log_gt_hw_err(gt, "SOC_LOCAL_ERR_STAT_MASTER_REG_%s:0x%08lx\n",
 			      hardware_error_type_to_str(hw_err), lcl_errstat);
 		for_each_set_bit(errbit, &lcl_errstat, SOC_HW_ERR_MAX_BITS) {
+			if (errbit == PVC_SOC_MDFI_EAST || errbit == PVC_SOC_MDFI_SOUTH) {
+			       ieh_header = raw_reg_read(regs, LOCAL_FIRST_IEH_HEADER_LOG_REG);
+			       log_gt_hw_err(gt, "LOCAL_FIRST_IEH_HEADER_LOG_REG:0x%08x\n",
+					     ieh_header);
+
+			       if (ieh_header != MDFI_SEVERITY(hw_err)) {
+				       lcl_errstat &= ~REG_BIT(errbit);
+				       continue;
+			       }
+			}
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
 			log_soc_hw_error(gt, index, hw_err);
@@ -3596,6 +3607,14 @@ re_enable_interrupt:
 }
 
 static void
+log_correctable_err(struct intel_gt *gt, const char *name, int i, u32 err)
+{
+	log_gt_hw_err(gt,
+		      "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08x\n",
+		      name, i, err);
+}
+
+static void
 gen12_gt_hw_error_handler(struct intel_gt *gt,
 			  const enum hardware_error hw_err)
 {
@@ -3624,8 +3643,7 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 			errstat = 0;
 			for (i = 0; i < ERR_STAT_GT_COR_VCTR_LEN; i++) {
 				u32 err_type = ERR_STAT_GT_COR_VCTR_LEN;
-				unsigned long vctr;
-				const char *name;
+				u32 vctr;
 
 				vctr = raw_reg_read(regs, ERR_STAT_GT_COR_VCTR_REG(i));
 				if (!vctr)
@@ -3636,9 +3654,7 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 				case ERR_STAT_GT_VCTR1:
 					err_type = INTEL_GT_HW_ERROR_COR_SUBSLICE;
 					gt->errors.hw[err_type] += hweight32(vctr);
-					name = "SUBSLICE";
-					log_gt_hw_err(gt, "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08lx\n",
-						      name, i, vctr);
+					log_correctable_err(gt, "SUBSLICE", i, vctr);
 
 					/* Avoid second read/write to error status register*/
 					if (errstat)
@@ -3656,21 +3672,16 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 				case ERR_STAT_GT_VCTR3:
 					err_type = INTEL_GT_HW_ERROR_COR_L3BANK;
 					gt->errors.hw[err_type] += hweight32(vctr);
-					name = "L3 BANK";
+					log_correctable_err(gt, "L3 BANK", i, vctr);
 					break;
+
 				default:
-					name = "Undefined";
+					intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
+								  "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08x\n",
+								  "Undefined", i, vctr);
 					break;
 				}
 				raw_reg_write(regs, ERR_STAT_GT_COR_VCTR_REG(i), vctr);
-
-				if (!strcmp(name, "Undefined"))
-					intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
-								  "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08lx\n",
-								  name, i, vctr);
-				else if (strcmp(name, "SUBSLICE"))
-					log_gt_hw_err(gt, "%s CORRECTABLE error, ERR_VECT_GT_CORRECTABLE_%d:0x%08lx\n",
-						      name, i, vctr);
 				error = true;
 			}
 

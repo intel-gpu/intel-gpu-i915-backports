@@ -530,7 +530,7 @@ void i915_active_release(struct i915_active *ref)
 	active_retire(ref);
 }
 
-static void enable_signaling(struct i915_active_fence *active)
+static void enable_signaling(struct i915_active_fence *active, bool boost)
 {
 	struct dma_fence *fence;
 
@@ -543,6 +543,8 @@ static void enable_signaling(struct i915_active_fence *active)
 
 	i915_fence_check_lr_lockdep(fence);
 	dma_fence_enable_sw_signaling(fence);
+	if (boost && dma_fence_is_i915(fence))
+		i915_request_set_priority(to_request(fence), I915_PRIORITY_MAX);
 	dma_fence_put(fence);
 }
 
@@ -559,13 +561,13 @@ static int flush_lazy_signals(struct i915_active *ref)
 	struct active_node *it, *n;
 	int err = 0;
 
-	enable_signaling(&ref->excl);
+	enable_signaling(&ref->excl, true);
 	rbtree_postorder_for_each_entry_safe(it, n, &ref->tree, node) {
 		err = flush_barrier(it); /* unconnected idle barrier? */
 		if (err)
 			break;
 
-		enable_signaling(&it->base);
+		enable_signaling(&it->base, false);
 	}
 
 	return err;
@@ -977,7 +979,7 @@ void i915_request_add_active_barriers(struct i915_request *rq)
 	 * that the parent i915_active will be released when this request
 	 * is retired.
 	 */
-	spin_lock_irqsave(&rq->lock, flags);
+	spin_lock_irqsave(&rq->sched.lock, flags);
 	spin_lock(&engine->barrier_lock);
 	list_for_each_safe(node, next, &engine->barrier_tasks) {
 		rcu_assign_pointer(barrier_from_task(node)->base.fence,
@@ -986,7 +988,7 @@ void i915_request_add_active_barriers(struct i915_request *rq)
 	}
 	INIT_LIST_HEAD(&engine->barrier_tasks);
 	spin_unlock(&engine->barrier_lock);
-	spin_unlock_irqrestore(&rq->lock, flags);
+	spin_unlock_irqrestore(&rq->sched.lock, flags);
 }
 
 static void __active_fence_clear(struct i915_active_fence *ref)
@@ -1198,12 +1200,10 @@ int i915_active_add_suspend_fence(struct i915_active *ref,
 	if (!ce || !(ce->sfence || rq))
 		return -EINVAL;
 
-	fence = ce->sfence ? &ce->sfence->base.dma : &rq->fence;
+	fence = ce->sfence ? &ce->sfence->base.rq.fence : &rq->fence;
 
 	lockdep_assert_held(&ce->timeline->mutex);
-	return i915_active_ref(ref,
-			       ce->timeline->fence_context,
-			       fence);
+	return i915_active_ref(ref, ce->timeline->fence_context, fence);
 }
 
 void i915_active_noop(struct dma_fence *fence, struct dma_fence_cb *cb)
