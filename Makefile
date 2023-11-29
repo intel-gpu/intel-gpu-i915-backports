@@ -93,13 +93,14 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 			done								\
 		) > Kconfig.kernel							;\
 		kver=$$($(MAKE) --no-print-directory -C $(KLIB_BUILD) kernelversion |	\
-			sed 's/^\(\([3-5]\|2\.6\)\.[0-9]\+\).*/\1/;t;d')		;\
+			sed 's/^\(\([3-6]\|2\.6\)\.[0-9]\+\).*/\1/;t;d')		;\
 		test "$$kver" != "" || echo "Kernel version parse failed!"		;\
 		test "$$kver" != ""							;\
 		kvers="$$(seq 14 39 | sed 's/^/2.6./')"					;\
 		kvers="$$kvers $$(seq 0 19 | sed 's/^/3./')"				;\
 		kvers="$$kvers $$(seq 0 20 | sed 's/^/4./')"				;\
-		kvers="$$kvers $$(seq 0 99 | sed 's/^/5./')"				;\
+		kvers="$$kvers $$(seq 0 20 | sed 's/^/5./')"				;\
+		kvers="$$kvers $$(seq 0 99 | sed 's/^/6./')"				;\
 		print=0									;\
 		for v in $$kvers ; do							\
 			if [ "$$print" = "1" ] ; then					\
