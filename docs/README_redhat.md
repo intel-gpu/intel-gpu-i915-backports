@@ -31,16 +31,16 @@ We have dependencies on the following packages
   - bison
   - awk
 ```
-$sudo dnf install make linux-glibc-devel rpm-build bison flex awk
+$sudo dnf install make glibc-devel rpm-build bison flex gawk
 ```
-For dkms modules, we need to install `dkms` package also.
+For DKMS modules, we need to install `dkms` package too.
 
 ```
 $sudo dnf install dkms
 ```
 
 ## Out of tree kernel drivers
-This repository contains following drivers.
+This repository contains the following drivers.
 1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
 2. Intel® Converged Security Engine(cse) - Converged Security Engine
 3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
@@ -48,7 +48,7 @@ This repository contains following drivers.
 
 ## Dependencies
 
-  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+  These drivers have a dependency on Intel® GPU firmware and a few more kernel mode drivers may be needed based on specific use cases, platforms, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
 
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
@@ -58,7 +58,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 ## Package creation
 
 ### Dynamic Kernel Module Support(DKMS)
-There are two ways to create i915 dkms packages.
+There are two ways to create i915 DKMS packages.
 1. Using default command:
 ```
 $make i915dkmsrpm-pkg
@@ -71,7 +71,7 @@ Example:
 
 2. OS distribution option:
 
-    Adds OS kernel version as part of dkms pacakge name.
+    Adds OS kernel version as part of DKMS pacakge name.
 
 ```
 $make i915dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
@@ -81,11 +81,11 @@ Example:
       Generated package name :
         intel-i915-dkms-1.23.6.24.5.14.0-284.11.1.29-1.x86_64.rpm
 ```
-  Use below help command to get the list of supported os distributions.
+  Use the below help command to get the list of supported OS distributions.
 ```
 $make dkms-pkg-help
 
-Generated outout:
+Generated output:
    DKMS Targets:
     i915dkmsrpm-pkg  -  Build DKMS rpm package
 
@@ -96,11 +96,11 @@ Generated outout:
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
 ### Binary RPM
-Creation of binary rpm can be done using the below command. By default it will use header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguement
+Creation of binary rpm can be done using the below command. By default it will use the header of the booted kernel, However, it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments
 ```
 $make KLIB=<Header Path> KLIB_BUILD=<Header Path> binrpm-pkg
 
-Exmaple:
+Example:
 $make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r) binrpm-pkg
 
 Generated Files:
@@ -115,7 +115,7 @@ $sudo reboot
 ```
 ## Known limitation
 KVGMT is not supported on Server Gfx cards so we need to blacklist KVGMT, on later version due to KVMGT refactoring
-we may have unknown symbol warning during dkms installation.
+we may have an unknown symbol warning during DKMS installation.
 
 Example:
 ```
