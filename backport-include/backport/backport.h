@@ -7,7 +7,8 @@
 #endif
 #include <linux/kconfig.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLY_
+#define LINUX_DMABUF_BACKPORT(__sym) dmabufbkpt_ ##__sym_
 #define LINUX_I915_BACKPORT(__sym) i915bkpt_ ##__sym
 #ifndef CONFIG_BACKPORT_INTEGRATE
 #include <backport/checks.h>

@@ -321,40 +321,6 @@ int intel_iov_init_late(struct intel_iov *iov)
 	return 0;
 }
 
-/**
- * intel_iov_vf_get_wakeref_wa - get global wakeref for VF.
- * @iov: the IOV struct
- *
- * WA for VLK-20398.
- * To avoid "deadlock on idling" on VF, when we use L4 WA, we want to get global
- * GT wakeref.
- *
- */
-void intel_iov_vf_get_wakeref_wa(struct intel_iov *iov)
-{
-	struct drm_i915_private *i915 = iov_to_i915(iov);
-
-	if (intel_iov_is_vf(iov) && i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE))
-		intel_gt_pm_get_untracked(iov_to_gt(iov));
-}
-
-/**
- * intel_iov_vf_put_wakeref_wa - put global wakeref for VF.
- * @iov: the IOV struct
- *
- * WA for VLK-20398.
- * To avoid "deadlock on idling" on VF, when we use L4 WA, we want to get global
- * GT wakeref.
- *
- */
-void intel_iov_vf_put_wakeref_wa(struct intel_iov *iov)
-{
-	struct drm_i915_private *i915 = iov_to_i915(iov);
-
-	if (intel_iov_is_vf(iov) && i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE))
-		intel_gt_pm_put_untracked(iov_to_gt(iov));
-}
-
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/selftest_live_iov_ggtt.c"
 #endif

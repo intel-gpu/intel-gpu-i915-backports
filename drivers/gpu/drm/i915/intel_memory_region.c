@@ -233,12 +233,12 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	drm_printf(p, "memory region: %s\n", mem->name);
 	drm_printf(p, "  parking: %s\n", str_yes_no(!completion_done(&mem->parking)));
 	drm_printf(p, "  clear-on-free: %s\n", str_enabled_disabled(test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)));
-	drm_printf(p, "  total:  %llu\n", mem->total);
+	drm_printf(p, "  total:  %pa\n", &mem->total);
 	drm_printf(p, "  avail:  %llu\n", atomic64_read(&mem->avail));
 	if (atomic64_read(&mem->evict))
 		drm_printf(p, "  evict:  %llu\n", atomic64_read(&mem->evict));
 	if (target)
-		drm_printf(p, "  target: %llu\n", target);
+		drm_printf(p, "  target: %pa\n", &target);
 
 	for (o = objects; o->name; o++) {
 		resource_size_t active = 0, pinned = 0, avail = 0;
@@ -272,8 +272,8 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			continue;
 
 		drm_printf(p,
-			   "  %s: { bookmark:%lu, empty:%lu, count:%lu, active:%llu, pinned:%llu, avail:%llu }\n",
-			   o->name, bookmark, empty, count, active, pinned, avail);
+			   "  %s: { bookmark:%lu, empty:%lu, count:%lu, active:%pa, pinned:%pa, avail:%pa }\n",
+			   o->name, bookmark, empty, count, &active, &pinned, &avail);
 	}
 
 	if (mem->mm.size) {
@@ -335,6 +335,8 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 			      resource_size_t target,
 			      int chunk)
 {
+	const unsigned long end_time =
+		jiffies +  msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
 	struct list_head *phases[] = {
 		/*
 		 * Purgeable objects are deemed to be free by userspace
@@ -360,8 +362,8 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct intel_memory_region_link *pos;
 	struct list_head **phase = phases;
 	resource_size_t found = 0;
+	bool keepalive, scan;
 	LIST_HEAD(blocks);
-	bool keepalive;
 	long timeout;
 	int err = 0;
 
@@ -382,6 +384,7 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	 */
 next:
 	timeout = 0;
+	scan = false;
 	keepalive = ww && *phase == &mem->objects.list;
 	if (ww && phase > phases && !keepalive)
 		timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
@@ -425,6 +428,17 @@ next:
 
 			if (i915_gem_object_is_active(obj))
 				goto delete_bookmark;
+
+			/*
+			 * On the first pass, be picky with our evictions
+			 * and try to limit to only evicting just enough
+			 * to satisfy our request. Everything we evict
+			 * is likely to try and make space for itself,
+			 * perpetuating the problem and multiplying the
+			 * swap bandwidth required.
+			 */
+			if (obj->base.size > 2 * (target - found))
+				goto delete_bookmark;
 		}
 
 		if (!i915_gem_object_get_rcu(obj)) {
@@ -460,6 +474,7 @@ next:
 		if (!i915_gem_object_has_pages(obj))
 			goto unlock;
 
+		scan = true;
 		if (i915_gem_object_is_active(obj))
 			goto unlock;
 
@@ -514,6 +529,13 @@ delete_bookmark:
 	 */
 	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
 		return 0;
+
+	/* XXX optimistic busy wait for transient pins */
+	if (scan && time_before(jiffies, end_time)) {
+		yield();
+		phase = phases;
+		goto next;
+	}
 
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG)) {
 		struct drm_printer p = drm_info_printer(mem->gt->i915->drm.dev);
@@ -843,6 +865,10 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 			pcie_capability_set_word(to_pci_dev(i915->drm.dev), PCI_EXP_DEVCTL,
 						 PCI_EXP_DEVCTL_RELAX_EN);
 	}
+
+	if (i915->params.enable_compression != (uint)~0)
+		mkwrite_device_info(i915)->has_flat_ccs =
+			!!i915->params.enable_compression;
 
 	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); i++) {
 		struct intel_memory_region *mem = ERR_PTR(-ENODEV);

@@ -27,24 +27,7 @@
 
 #include <linux/types.h>
 
-#include "intel_wakeref.h"
-
-/*FIXME: Move this to a more appropriate place. */
-#define abs_diff(a, b) ({			\
-	typeof(a) __a = (a);			\
-	typeof(b) __b = (b);			\
-	(void) (&__a == &__b);			\
-	__a > __b ? (__a - __b) : (__b - __a); })
-
-enum tc_port;
-struct drm_i915_private;
-struct intel_atomic_state;
-struct intel_crtc;
-struct intel_crtc_state;
-struct intel_encoder;
-struct intel_shared_dpll;
-struct intel_shared_dpll_funcs;
-
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 /**
  * enum intel_dpll_id - possible DPLL ids
  *
@@ -172,6 +155,24 @@ enum intel_dpll_id {
 	 */
 	DPLL_ID_DG1_DPLL3 = 3,
 };
+
+#include "intel_wakeref.h"
+
+/*FIXME: Move this to a more appropriate place. */
+#define abs_diff(a, b) ({			\
+	typeof(a) __a = (a);			\
+	typeof(b) __b = (b);			\
+	(void) (&__a == &__b);			\
+	__a > __b ? (__a - __b) : (__b - __a); })
+
+enum tc_port;
+struct drm_i915_private;
+struct intel_atomic_state;
+struct intel_crtc;
+struct intel_crtc_state;
+struct intel_encoder;
+struct intel_shared_dpll;
+struct intel_shared_dpll_funcs;
 
 #define I915_NUM_PLLS 9
 
@@ -373,4 +374,5 @@ void intel_shared_dpll_state_verify(struct intel_crtc *crtc,
 				    struct intel_crtc_state *new_crtc_state);
 void intel_shared_dpll_verify_disabled(struct drm_i915_private *i915);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* _INTEL_DPLL_MGR_H_ */

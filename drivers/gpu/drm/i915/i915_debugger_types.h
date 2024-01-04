@@ -18,15 +18,13 @@
 
 struct task_struct;
 struct drm_i915_private;
+struct debugger_fence;
 
 struct i915_debug_event {
 	u32 type;
 	u32 flags;
 	u64 seqno;
-	union {
-		void *ack_data;
-		u64 size;
-	};
+	u64 size;
 	u8 data[0];
 } __packed;
 
@@ -122,6 +120,7 @@ struct i915_debug_vm_open {
 
 struct i915_debug_ack {
 	struct rb_node rb_node;
+	struct debugger_fence *fence;
 	struct i915_debug_event event;
 };
 

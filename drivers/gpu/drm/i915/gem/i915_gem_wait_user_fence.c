@@ -311,6 +311,8 @@ static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
 	do {
 		if (ufence_compare(wake))
 			return true;
+
+		usleep_range_state(0, 1, TASK_INTERRUPTIBLE);
 	} while (!busy_wait_stop(wake->tsk, timeout_ns, cpu));
 
 	return false;
@@ -406,8 +408,6 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	 * to any other work ready to run to try to avoid stealing the CPU
 	 * from useful work.
 	 */
-	if (busy_wait(&wake, jiffies_to_nsecs(min(2ul, timeout))))
-		goto out_time;
 
 	add_soft_wait(&to_i915(dev)->user_fence_wq, &g_wait);
 	if (ctx) {
@@ -416,6 +416,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 
 		err = add_gt_wait(ctx, &c_wait.next);
 		if (err)
+			goto out_wait;
+
+		if (busy_wait(&wake, jiffies_to_nsecs(min(2ul, timeout))))
 			goto out_wait;
 
 		dma_latency_boost();
@@ -460,7 +463,6 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		dma_latency_cancel_boost();
 out_wait:
 	remove_waits(&g_wait);
-out_time:
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_ABSTIME) && arg->timeout > 0) {
 		arg->timeout -= ktime_to_ns(ktime_sub(ktime_get(), start));
 		if (arg->timeout < 0)

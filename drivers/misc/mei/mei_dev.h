@@ -895,7 +895,8 @@ ssize_t mei_fw_status2str(struct mei_fw_status *fw_sts, char *buf, size_t len);
  *
  * Return: number of bytes written or < 0 on failure
  */
-static inline ssize_t mei_fw_status_str(struct mei_device *dev, char *buf, size_t len)
+static inline ssize_t mei_fw_status_str(struct mei_device *dev,
+					char *buf, size_t len)
 {
 	struct mei_fw_status fw_status;
 	int ret;

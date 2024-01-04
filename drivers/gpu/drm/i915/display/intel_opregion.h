@@ -25,10 +25,12 @@
 #ifndef _INTEL_OPREGION_H_
 #define _INTEL_OPREGION_H_
 
-#include <linux/workqueue.h>
 #include <linux/pci.h>
-
 struct drm_i915_private;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+#include <linux/workqueue.h>
+
 struct intel_encoder;
 
 struct opregion_header;
@@ -128,5 +130,14 @@ static inline bool intel_opregion_headless_sku(struct drm_i915_private *i915)
 }
 
 #endif /* CONFIG_ACPI */
+#else
+static inline int intel_opregion_init(struct drm_i915_private *i915) { return 0; }
+static inline void intel_opregion_resume(struct drm_i915_private *dev_priv) { return; }
+static inline int intel_opregion_notify_adapter(struct drm_i915_private *dev_priv,
+				  pci_power_t state) { return 0; }
+static inline void intel_opregion_asle_intr(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_opregion_suspend(struct drm_i915_private *dev_priv,
+					  pci_power_t state) { return; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 
 #endif

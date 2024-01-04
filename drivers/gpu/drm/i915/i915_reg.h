@@ -1502,10 +1502,12 @@
 /*
  * Clock control & power management
  */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define _DPLL_A (DISPLAY_MMIO_BASE(dev_priv) + 0x6014)
 #define _DPLL_B (DISPLAY_MMIO_BASE(dev_priv) + 0x6018)
 #define _CHV_DPLL_C (DISPLAY_MMIO_BASE(dev_priv) + 0x6030)
 #define DPLL(pipe) _MMIO_PIPE3((pipe), _DPLL_A, _DPLL_B, _CHV_DPLL_C)
+#endif
 
 #define VGA0	_MMIO(0x6000)
 #define VGA1	_MMIO(0x6004)
@@ -1601,11 +1603,13 @@
 #define   SDVO_MULTIPLIER_SHIFT_HIRES		4
 #define   SDVO_MULTIPLIER_SHIFT_VGA		0
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define _DPLL_A_MD (DISPLAY_MMIO_BASE(dev_priv) + 0x601c)
 #define _DPLL_B_MD (DISPLAY_MMIO_BASE(dev_priv) + 0x6020)
 #define _CHV_DPLL_C_MD (DISPLAY_MMIO_BASE(dev_priv) + 0x603c)
 #define DPLL_MD(pipe) _MMIO_PIPE3((pipe), _DPLL_A_MD, _DPLL_B_MD, _CHV_DPLL_C_MD)
 
+#endif
 /*
  * UDI pixel divider, controlling how many pixels are stuffed into a packet.
  *
@@ -1675,7 +1679,9 @@
 #define  DSTATE_PLL_D3_OFF			(1 << 3)
 #define  DSTATE_GFX_CLOCK_GATING		(1 << 1)
 #define  DSTATE_DOT_CLOCK_GATING		(1 << 0)
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define DSPCLK_GATE_D	_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x6200)
+#endif
 # define DPUNIT_B_CLOCK_GATE_DISABLE		(1 << 30) /* 965 */
 # define VSUNIT_CLOCK_GATE_DISABLE		(1 << 29) /* 965 */
 # define VRHUNIT_CLOCK_GATE_DISABLE		(1 << 28) /* 965 */
@@ -1812,6 +1818,7 @@
 /*
  * Palette regs
  */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define _PALETTE_A		0xa000
 #define _PALETTE_B		0xa800
 #define _CHV_PALETTE_C		0xc000
@@ -1823,6 +1830,7 @@
 					    _PALETTE_B, _CHV_PALETTE_C) + \
 				      (i) * 4)
 
+#endif
 #define PEG_BAND_GAP_DATA	_MMIO(0x14d68)
 
 #define BXT_RP_STATE_CAP        _MMIO(0x138170)
@@ -2432,7 +2440,9 @@
 
 
 /* Hotplug control (945+ only) */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define PORT_HOTPLUG_EN		_MMIO(DISPLAY_MMIO_BASE(dev_priv) + 0x61110)
+#endif
 #define   PORTB_HOTPLUG_INT_EN			(1 << 29)
 #define   PORTC_HOTPLUG_INT_EN			(1 << 28)
 #define   PORTD_HOTPLUG_INT_EN			(1 << 27)

@@ -100,11 +100,13 @@ drm_edp_backlight_supported(const u8 edp_dpcd[EDP_DISPLAY_CTL_CAP_SIZE])
 #endif /* DRM_EDP_BACKLIGHT_SUPPORT_PRESENT */
 #endif /* DRM_EDP_BACKLIGHT_NOT_PRESENT */
 
+#ifdef BPM_DISABLE_DRM_DMABUF
 #define drm_hdmi_sink_max_frl_rate LINUX_I915_BACKPORT(drm_hdmi_sink_max_frl_rate)
 int drm_hdmi_sink_max_frl_rate(struct drm_connector *connector);
 
 #define drm_hdmi_sink_dsc_max_frl_rate LINUX_I915_BACKPORT(drm_hdmi_sink_dsc_max_frl_rate)
 int drm_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector);
+#endif
 
 #ifdef BPM_DRM_DP_DSC_SINK_SUPPORTS_FORMAT_NOT_PRESENT
 /**

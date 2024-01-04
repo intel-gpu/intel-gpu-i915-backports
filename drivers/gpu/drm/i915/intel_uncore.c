@@ -182,8 +182,8 @@ __wait_for_ack(const struct intel_uncore_forcewake_domain *d,
 	    d->uncore->gt->rc6.supported)
 		ret = _wait_for_atomic((fw_ack(d) & ack) == value, 500000, 1);
 	else
-		ret =  wait_for_atomic((fw_ack(d) & ack) == value,
-				       FORCEWAKE_ACK_TIMEOUT_MS);
+		ret = wait_for_atomic((fw_ack(d) & ack) == value,
+				      FORCEWAKE_ACK_TIMEOUT_MS);
 	return ret;
 }
 
@@ -585,6 +585,7 @@ fpga_check_for_unclaimed_mmio(struct intel_uncore *uncore)
 	return true;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static bool
 vlv_check_for_unclaimed_mmio(struct intel_uncore *uncore)
 {
@@ -598,6 +599,10 @@ vlv_check_for_unclaimed_mmio(struct intel_uncore *uncore)
 
 	return true;
 }
+#else
+static bool vlv_check_for_unclaimed_mmio(struct intel_uncore *uncore)
+{ return 0; }
+#endif
 
 static bool
 gen6_check_for_fifo_debug(struct intel_uncore *uncore)

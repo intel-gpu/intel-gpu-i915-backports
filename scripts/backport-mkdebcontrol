@@ -62,6 +62,7 @@ $DKMS	 dkms,
 	 flex,
 	 bison,
 	 libc6-dev | libc-dev,
+	 mawk,
 	Provides:
 	 i915-modules,
 	 intel-platform-vsec-dkms,

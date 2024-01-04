@@ -18,6 +18,33 @@ struct i915_vma;
 struct i915_syncmap;
 struct intel_gt;
 
+/*
+ * Every context has a flow of requests that we track using breadcrumbs
+ * written by the individual requests that show their current status:
+ * whether they have finished waiting for all other requests and have
+ * started the user payload, or wheter that request has finished
+ * the user payload and has signaled its completion. This sequence of
+ * requests and their breadcrumbs forms the timeline.
+ *
+ * Each context is independent of any other context, and we wish to
+ * easily reorder the execution of the contexts, so we want to
+ * store the breadcrumb of each context in a separate location. The most
+ * flexible approach is to allocate each timeline a slot in a common
+ * page (that we reallocate upon demand), as we can then move the
+ * timeline whenever we need (such as restarting the breadcrumb sequence
+ * after a wrap). Sometimes we do not need the flexibilty to reallocate
+ * upon demand, and can use a static slot, for which we can utilise
+ * the ppHWSP inside logical ring contexts (gen8+). For perma-pinned
+ * kernel contexts, we cannot reallocate a timeline / status page
+ * on demand, and so must always use a static slot. Here, we use
+ * the per-engine global HWSP available on all generations.
+ */
+enum intel_timeline_mode {
+	INTEL_TIMELINE_ABSOLUTE = 0, /* stored in a common page */
+	INTEL_TIMELINE_RELATIVE_CONTEXT = BIT(0), /* stored in ppHWSP */
+	INTEL_TIMELINE_RELATIVE_ENGINE  = BIT(1), /* stored in the HWSP */
+};
+
 struct intel_timeline {
 	u64 fence_context;
 	u32 seqno;
@@ -43,12 +70,12 @@ struct intel_timeline {
 	atomic_t pin_count;
 	atomic_t active_count;
 
+	enum intel_timeline_mode mode;
+
 	void *hwsp_map;
 	const u32 *hwsp_seqno;
 	struct i915_vma *hwsp_ggtt;
 	u32 hwsp_offset;
-
-	bool has_initial_breadcrumb;
 
 	/**
 	 * List of breadcrumbs associated with GPU requests currently

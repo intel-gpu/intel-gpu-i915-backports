@@ -175,12 +175,14 @@ static void vlv_save_gunit_s0ix_state(struct drm_i915_private *i915)
 	s->gtlc_survive = intel_uncore_read(uncore, VLV_GTLC_SURVIVABILITY_REG);
 	s->pmwgicz = intel_uncore_read(uncore, VLV_PMWGICZ);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	/* Gunit-Display CZ domain, 0x182028-0x1821CF */
 	s->gu_ctl0 = intel_uncore_read(uncore, VLV_GU_CTL0);
 	s->gu_ctl1 = intel_uncore_read(uncore, VLV_GU_CTL1);
 	s->pcbr = intel_uncore_read(uncore, VLV_PCBR);
 	s->clock_gate_dis2 = intel_uncore_read(uncore, VLV_GUNIT_CLOCK_GATE2);
 
+#endif
 	/*
 	 * Not saving any of:
 	 * DFT,		0x9800-0x9EC0
@@ -274,11 +276,13 @@ static void vlv_restore_gunit_s0ix_state(struct drm_i915_private *i915)
 
 	intel_uncore_write(uncore, VLV_PMWGICZ, s->pmwgicz);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	/* Gunit-Display CZ domain, 0x182028-0x1821CF */
 	intel_uncore_write(uncore, VLV_GU_CTL0, s->gu_ctl0);
 	intel_uncore_write(uncore, VLV_GU_CTL1, s->gu_ctl1);
 	intel_uncore_write(uncore, VLV_PCBR, s->pcbr);
 	intel_uncore_write(uncore, VLV_GUNIT_CLOCK_GATE2, s->clock_gate_dis2);
+#endif
 }
 
 static int vlv_wait_for_pw_status(struct drm_i915_private *i915,

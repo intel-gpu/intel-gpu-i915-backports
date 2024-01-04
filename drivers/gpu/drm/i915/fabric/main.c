@@ -40,8 +40,9 @@
 #include "selftests/selftest.h"
 #endif
 #include "sysfs.h"
-
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 #define MODULEDETAILS "Intel Corp. Intel fabric Driver"
 
@@ -1081,7 +1082,9 @@ module_init(iaf_load_module);
 MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION(MODULEDETAILS);
 MODULE_LICENSE("GPL and additional rights");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 MODULE_ALIAS("auxiliary:i915.iaf");
 #else

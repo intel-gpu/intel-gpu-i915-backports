@@ -41,7 +41,11 @@ static void *i915_sw_fence_debug_hint(void *addr)
 
 #ifdef CPTCFG_DRM_I915_SW_FENCE_DEBUG_OBJECTS
 
+#ifdef BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
+static struct debug_obj_descr i915_sw_fence_debug_descr = {
+#else
 static const struct debug_obj_descr i915_sw_fence_debug_descr = {
+#endif
 	.name = "i915_sw_fence",
 	.debug_hint = i915_sw_fence_debug_hint,
 };
@@ -621,12 +625,12 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 	dma_resv_iter_begin(&cursor, resv, dma_resv_usage_rw(write));
 	dma_resv_for_each_fence_unlocked(&cursor, f) {
 		 pending = i915_sw_fence_await_dma_fence(fence, f, timeout,
-				 			 gfp);
+				 gfp);
 		 if (pending < 0) {
 			 ret = pending;
 			 break;
 		 }
-		 
+
 		 ret |= pending;
 	}
 	dma_resv_iter_end(&cursor);
@@ -675,6 +679,7 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 
 	dma_fence_put(excl);
 #endif
+
 	return ret;
 }
 

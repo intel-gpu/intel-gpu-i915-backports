@@ -874,7 +874,8 @@ static void pvc_ctx_workarounds_init(struct intel_engine_cs *engine,
 
 	pvc_ctx_gt_tuning_init(engine, wal);
 
-	if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0) &&
+	if ((!i915->params.enable_256B ||
+	     IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0)) &&
 	    engine->class == COPY_ENGINE_CLASS) {
 		/*
 		 * Wa_16011062782:pvc - WA applies only to Link Copy
@@ -1767,15 +1768,17 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 {
 	pvc_init_mcr(gt, wal);
 
-	/* Wa_18018781329 */
-	wa_mcr_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
-	wa_mcr_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
-	wa_mcr_write_or(wal, BLT_MOD_CTRL, FORCE_MISS_FTLB);
+	if (i915_modparams.enable_force_miss_ftlb) {
+		/* Wa_18018781329 */
+		wa_mcr_write_or(wal, RENDER_MOD_CTRL, FORCE_MISS_FTLB);
+		wa_mcr_write_or(wal, COMP_MOD_CTRL, FORCE_MISS_FTLB);
+		wa_mcr_write_or(wal, BLT_MOD_CTRL, FORCE_MISS_FTLB);
 
-	if (VDBOX_MASK(gt))
-		wa_mcr_write_or(wal, XEHP_VDBX_MOD_CTRL, FORCE_MISS_FTLB);
-	if (VEBOX_MASK(gt))
-		wa_mcr_write_or(wal, XEHP_VEBX_MOD_CTRL, FORCE_MISS_FTLB);
+		if (VDBOX_MASK(gt))
+			wa_mcr_write_or(wal, XEHP_VDBX_MOD_CTRL, FORCE_MISS_FTLB);
+		if (VEBOX_MASK(gt))
+			wa_mcr_write_or(wal, XEHP_VEBX_MOD_CTRL, FORCE_MISS_FTLB);
+	}
 
 	/* Wa_16016694945 */
 	wa_mcr_masked_en(wal, XEHPC_LNCFMISCCFGREG0, XEHPC_OVRLSCCC);
@@ -2835,6 +2838,13 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 		wa_mcr_masked_en(wal, GEN9_HALF_SLICE_CHICKEN7,
 				 DG2_DISABLE_ROUND_ENABLE_ALLOW_FOR_SSLA);
 
+	if (IS_DG2(i915)) {
+		/* Wa_14015150844 */
+		wa_mcr_add(wal, XEHP_HDC_CHICKEN0, 0,
+			   _MASKED_BIT_ENABLE(DIS_ATOMIC_CHAINING_TYPED_WRITES),
+			   0, true);
+	}
+
 	if (IS_DG2_GRAPHICS_STEP(i915, G11, STEP_B0, STEP_FOREVER) ||
 	    IS_DG2_G10(i915)) {
 		/* Wa_22014600077:dg2 */
@@ -3415,6 +3425,10 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 			     XEHP_RCU_MODE_FIXED_SLICE_CCS_MODE);
 	}
 
+	if (IS_DG2_G10(i915) || IS_DG2_G12(i915)) {
+		/* Wa_18028616096 */
+		wa_mcr_write_or(wal, LSC_CHICKEN_BIT_0_UDW, UGM_FRAGMENT_THRESHOLD_TO_3);
+	}
 	if (IS_XEHPSDV(i915)) {
 		/* Wa_1409954639 */
 		wa_mcr_masked_en(wal,

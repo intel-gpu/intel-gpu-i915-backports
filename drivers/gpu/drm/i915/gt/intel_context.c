@@ -6,8 +6,6 @@
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_pm.h"
 
-#include "gt/intel_lrc.h"
-
 #include "i915_drv.h"
 #include "i915_trace.h"
 #include "i915_suspend_fence.h"
@@ -726,19 +724,6 @@ bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
 	}
 
 	return ret;
-}
-
-void intel_context_rebase_hwsp(struct intel_context *ce)
-{
-	if (!intel_context_is_pinned(ce))
-		return;
-	intel_timeline_rebase_hwsp(ce->timeline);
-	/*
-	 * The below is part of ce->ops->reset(ce) = lrc_reset(ce), but
-	 * without changing ring positions
-	 */
-	lrc_init_regs(ce, ce->engine, true);
-	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
 }
 
 /**

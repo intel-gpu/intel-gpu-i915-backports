@@ -351,6 +351,11 @@ void i915_buddy_free_list(struct i915_buddy_mm *mm, struct list_head *objects)
 	__i915_buddy_free_list(mm, objects, true);
 }
 
+static bool buddy_is_free(struct i915_buddy_block *block)
+{
+	return i915_buddy_block_is_free(__get_buddy(block, block->parent));
+}
+
 bool i915_buddy_defrag(struct i915_buddy_mm *mm,
 		       unsigned int min_order,
 		       unsigned int max_order)
@@ -385,11 +390,14 @@ bool i915_buddy_defrag(struct i915_buddy_mm *mm,
 				if (unlikely(!block->node.list))
 					continue;
 
+				if (i915_buddy_block_is_active(block))
+					break;
+
 				if (unlikely(!block->parent))
 					continue;
 
-				if (i915_buddy_block_is_active(block))
-					break;
+				if (i >= min_order && !buddy_is_free(block))
+					continue;
 
 				GEM_BUG_ON(block->node.list != list);
 				list_add(&bookmark.link, &block->node.link);

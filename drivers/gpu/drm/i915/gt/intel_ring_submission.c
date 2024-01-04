@@ -317,8 +317,6 @@ static void xcs_sanitize(struct intel_engine_cs *engine)
 
 	/* And scrub the dirty cachelines for the HWSP */
 	drm_clflush_virt_range(engine->status_page.addr, PAGE_SIZE);
-
-	intel_engine_reset_pinned_contexts(engine);
 }
 
 static void reset_prepare(struct intel_engine_cs *engine)
@@ -982,7 +980,6 @@ static int ring_request_alloc(struct i915_request *request)
 	int ret;
 
 	GEM_BUG_ON(!intel_context_is_pinned(request->context));
-	GEM_BUG_ON(i915_request_timeline(request)->has_initial_breadcrumb);
 
 	/*
 	 * Flush enough space to reduce the likelihood of waiting after
@@ -1324,7 +1321,6 @@ int intel_ring_submission_setup(struct intel_engine_cs *engine)
 		err = PTR_ERR(timeline);
 		goto err;
 	}
-	GEM_BUG_ON(timeline->has_initial_breadcrumb);
 
 	ring = intel_engine_create_ring(engine, SZ_16K);
 	if (IS_ERR(ring)) {

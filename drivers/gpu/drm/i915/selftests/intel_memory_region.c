@@ -187,7 +187,7 @@ static int igt_mock_reserve(void *arg)
 
 	/* Reserve a bunch of ranges within the region */
 	for (i = 0; i < count; ++i) {
-		u64 start = order[i] * chunk_size;
+		u64 start = mul_u32_u32(order[i], chunk_size);
 		u64 size = i915_prandom_u32_max_state(chunk_size, &prng);
 
 		/* Allow for some really big holes */

@@ -330,11 +330,6 @@ static bool has_pat(struct intel_iov *iov)
 	return GRAPHICS_VER_FULL(iov_to_i915(iov)) >= IP_VER(12, 70);
 }
 
-static bool uses_l4wa(struct intel_iov *iov)
-{
-	return i915_is_mem_wa_enabled(iov_to_i915(iov), I915_WA_USE_FLAT_PPGTT_UPDATE);
-}
-
 static bool run_test_on_pte(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_addr,
 			    const struct pte_testcase *tc, u16 vfid)
 {
@@ -494,11 +489,6 @@ static int igt_vf_iov_own_ggtt(struct intel_iov *iov, bool sanitycheck)
 
 	GEM_BUG_ON(!intel_iov_is_vf(iov));
 
-	if (uses_l4wa(iov)) {
-		IOV_DEBUG(iov, "Skip test %s, L4WA is active.\n", __func__);
-		return 0;
-	}
-
 	ggtt_block.start = iov->vf.config.ggtt_base;
 	ggtt_block.size = iov->vf.config.ggtt_size;
 
@@ -552,11 +542,6 @@ static int igt_vf_iov_own_ggtt_via_pf(struct intel_iov *iov)
 	};
 	int failed = 0, err;
 	struct pte_testcase *tc;
-
-	if (uses_l4wa(iov)) {
-		IOV_DEBUG(iov, "Skip test %s, L4WA is active.\n", __func__);
-		return 0;
-	}
 
 	BUILD_BUG_ON(!IS_ALIGNED(size_ggtt_block, I915_GTT_PAGE_SIZE_4K));
 	GEM_BUG_ON(!intel_iov_is_vf(iov));
@@ -702,11 +687,6 @@ static int igt_vf_iov_other_ggtt(struct intel_iov *iov, bool check_via_pf)
 	int failed = 0;
 	gen8_pte_t __iomem *gsm;
 	struct drm_mm_node test_region;
-
-	if (uses_l4wa(iov)) {
-		IOV_DEBUG(iov, "Skip test %s, L4WA is active.\n", __func__);
-		return 0;
-	}
 
 	GEM_BUG_ON(!IS_ALIGNED(offset_vf, I915_GTT_PAGE_SIZE_4K));
 	GEM_BUG_ON(!IS_ALIGNED(size_vf, I915_GTT_PAGE_SIZE_4K));

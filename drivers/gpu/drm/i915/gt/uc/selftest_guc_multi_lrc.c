@@ -23,8 +23,7 @@ static void logical_sort(struct intel_engine_cs **engines, int num_engines)
 			}
 		}
 
-	memcpy(*engines, *sorted,
-	       sizeof(struct intel_engine_cs *) * num_engines);
+	memcpy(*engines, *sorted, sizeof(*engines) * num_engines);
 }
 
 static struct intel_context *

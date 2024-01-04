@@ -4,28 +4,16 @@ config DRM_I915
 	depends on m
 	depends on DRM
 	depends on X86 && PCI
-	select INTEL_GTT if X86
 	depends on INTERVAL_TREE
 	# we need shmfs for the swappable backing store, and in particular
 	# the shmem_readpage() which depends upon tmpfs
 	depends on SHMEM
 	depends on TMPFS
-	depends on DRM_KMS_HELPER
-	depends on DRM_PANEL
-	depends on DRM_MIPI_DSI
 	depends on RELAY
 	depends on IRQ_WORK
-	# i915 depends on ACPI_VIDEO when ACPI is enabled
-	# but for select to work, need to select ACPI_VIDEO's dependencies, ick
-	select BACKLIGHT_CLASS_DEVICE if ACPI
-	select INPUT if ACPI
-	select ACPI_VIDEO if ACPI
-	select ACPI_BUTTON if ACPI
 	depends on SYNC_FILE
 	select IOSF_MBI if X86
 	depends on CRC32
-	select SND_HDA_I915 if SND_HDA_CORE
-	select CEC_CORE if CEC_NOTIFIER
 	depends on VMAP_PFN
 	depends on AUXILIARY_BUS || MFD_CORE
 	depends on MTD
@@ -99,6 +87,24 @@ config DRM_I915_USERPTR
 
 	  If in doubt, say "Y".
 
+config DRM_I915_DISPLAY
+	bool "Enable display support"
+	depends on DRM_I915
+	depends on DRM_KMS_HELPER
+	depends on DRM_PANEL
+	depends on DRM_MIPI_DSI
+	# i915 depends on ACPI_VIDEO when ACPI is enabled
+	# but for select to work, need to select ACPI_VIDEO's dependencies, ick
+	select BACKLIGHT_CLASS_DEVICE if ACPI
+	select INPUT if ACPI
+	select ACPI_VIDEO if ACPI
+	select ACPI_BUTTON if ACPI
+	select SND_HDA_I915 if SND_HDA_CORE
+	select CEC_CORE if CEC_NOTIFIER
+	default y
+	help
+	   Disable this option only if you want to compile out display support.
+
 config DRM_I915_GVT
 	bool "Enable Intel GVT-g graphics virtualization host support"
 	depends on DRM_I915
@@ -137,8 +143,8 @@ config DRM_I915_GVT_KVMGT
 config DRM_I915_PXP
 	bool "Enable Intel PXP support for Intel Gen12 and newer platform"
 	depends on DRM_I915
-	depends on INTEL_MEI
-	default y
+	depends on INTEL_MEI && INTEL_MEI_PXP
+	default n
 	help
 	  PXP (Protected Xe Path) is an i915 component, available on GEN12 and
 	  newer GPUs, that helps to establish the hardware protected session and
@@ -163,7 +169,7 @@ config DRM_I915_SVM
 	depends on ARCH_ENABLE_MEMORY_HOTREMOVE
 	depends on MEMORY_HOTPLUG
 	depends on MEMORY_HOTREMOVE
-	depends on ARCH_HAS_PTE_DEVMAP
+	depends on (ARCH_HAS_ZONE_DEVICE || ARCH_HAS_PTE_DEVMAP)
 	depends on SPARSEMEM_VMEMMAP
 	depends on ZONE_DEVICE
 	depends on DEVICE_PRIVATE

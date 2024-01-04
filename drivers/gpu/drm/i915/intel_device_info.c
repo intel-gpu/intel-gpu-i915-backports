@@ -104,9 +104,11 @@ void intel_device_info_print_static(const struct intel_device_info *info,
 	DEV_INFO_FOR_EACH_FLAG(PRINT_FLAG);
 #undef PRINT_FLAG
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define PRINT_FLAG(name) drm_printf(p, "%s: %s\n", #name, str_yes_no(info->display.name))
 	DEV_INFO_DISPLAY_FOR_EACH_FLAG(PRINT_FLAG);
 #undef PRINT_FLAG
+#endif
 }
 
 void intel_device_info_print_runtime(const struct intel_runtime_info *info,
@@ -294,6 +296,7 @@ void intel_device_info_subplatform_init(struct drm_i915_private *i915)
  *   - after the PCH has been detected,
  *   - before the first usage of the fields it can tweak.
  */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 {
 	struct intel_device_info *info = mkwrite_device_info(dev_priv);
@@ -438,6 +441,7 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 		info->has_guc_deprivilege = 0;
 }
 
+#endif
 void intel_driver_caps_print(const struct intel_driver_caps *caps,
 			     struct drm_printer *p)
 {

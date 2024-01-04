@@ -87,6 +87,9 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			if (!i915_gem_object_has_pinned_pages(obj))
 				continue;
 
+			if (obj->flags & I915_BO_ALLOC_VOLATILE)
+				continue;
+
 			/* Skip dead objects, let their pages rot */
 			if (!kref_get_unless_zero(&obj->base.refcount))
 				continue;
@@ -353,47 +356,4 @@ err_wedged:
 		if (j == i)
 			break;
 	}
-}
-
-int i915_gem_idle_engines(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int i;
-	int ret = 0;
-
-	if (!i915_is_mem_wa_enabled(i915, I915_WA_IDLE_GPU_BEFORE_UPDATE))
-		return 0;
-
-	/* Disable scheduling on engines */
-	for_each_gt(gt, i915, i) {
-		ret = intel_gt_idle_engines_start(gt, false);
-		if (ret)
-			break;
-	}
-
-	if (!ret) {
-		for_each_gt(gt, i915, i)
-			intel_gt_idle_engines_wait(gt);
-	}
-
-	return ret;
-}
-
-int i915_gem_resume_engines(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int i;
-	int ret = 0;
-
-	if (!i915_is_mem_wa_enabled(i915, I915_WA_IDLE_GPU_BEFORE_UPDATE))
-		return 0;
-
-	/* Enable scheduling on engines */
-	for_each_gt(gt, i915, i) {
-		ret = intel_gt_idle_engines_start(gt, true);
-		if (ret)
-			break;
-	}
-
-	return ret;
 }

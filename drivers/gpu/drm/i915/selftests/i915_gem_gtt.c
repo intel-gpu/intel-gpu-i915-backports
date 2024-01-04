@@ -189,12 +189,12 @@ retry:
 
 		err = i915_vm_alloc_pt_stash(&ppgtt->vm, &stash, size);
 		if (err)
-			goto err_ppgtt_cleanup;
+			goto err_ww;
 
 		err = i915_vm_map_pt_stash(&ppgtt->vm, &stash);
 		if (err) {
 			i915_vm_free_pt_stash(&ppgtt->vm, &stash);
-			goto err_ppgtt_cleanup;
+			goto err_ww;
 		}
 
 		ppgtt->vm.allocate_va_range(&ppgtt->vm, &stash, 0, size);
@@ -211,12 +211,12 @@ retry:
 
 		err = i915_vm_alloc_pt_stash(&ppgtt->vm, &stash, size - last);
 		if (err)
-			goto err_ppgtt_cleanup;
+			goto err_ww;
 
 		err = i915_vm_map_pt_stash(&ppgtt->vm, &stash);
 		if (err) {
 			i915_vm_free_pt_stash(&ppgtt->vm, &stash);
-			goto err_ppgtt_cleanup;
+			goto err_ww;
 		}
 
 		ppgtt->vm.allocate_va_range(&ppgtt->vm, &stash,
@@ -226,7 +226,7 @@ retry:
 		i915_vm_free_pt_stash(&ppgtt->vm, &stash);
 	}
 
-err_ppgtt_cleanup:
+err_ww:
 	if (err == -EDEADLK) {
 		err = i915_gem_ww_ctx_backoff(&ww);
 		if (!err)
@@ -234,6 +234,7 @@ err_ppgtt_cleanup:
 	}
 	i915_gem_ww_ctx_fini(&ww);
 
+err_ppgtt_cleanup:
 	i915_vm_put(&ppgtt->vm);
 	return err;
 }

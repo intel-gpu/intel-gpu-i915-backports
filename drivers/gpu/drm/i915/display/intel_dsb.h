@@ -6,6 +6,7 @@
 #ifndef _INTEL_DSB_H
 #define _INTEL_DSB_H
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/types.h>
 
 #include "i915_reg_defs.h"
@@ -48,4 +49,5 @@ void intel_dsb_indexed_reg_write(const struct intel_crtc_state *crtc_state,
 				 i915_reg_t reg, u32 val);
 void intel_dsb_commit(const struct intel_crtc_state *crtc_state);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif

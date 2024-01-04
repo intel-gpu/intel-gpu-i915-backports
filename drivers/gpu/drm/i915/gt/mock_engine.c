@@ -287,9 +287,6 @@ static void mock_engine_release(struct intel_engine_cs *engine)
 	i915_sched_engine_put(engine->sched_engine);
 	intel_breadcrumbs_put(engine->breadcrumbs);
 
-	intel_context_unpin(engine->kernel_context);
-	intel_context_put(engine->kernel_context);
-
 	intel_engine_fini_retire(engine);
 }
 
@@ -349,8 +346,6 @@ int mock_engine_init(struct intel_engine_cs *engine)
 
 	spin_lock_init(&engine->barrier_lock);
 	INIT_LIST_HEAD(&engine->barrier_tasks);
-
-	INIT_LIST_HEAD(&engine->pinned_contexts_list);
 
 	engine->sched_engine = i915_sched_engine_create(ENGINE_MOCK);
 	if (!engine->sched_engine)

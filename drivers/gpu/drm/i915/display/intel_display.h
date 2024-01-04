@@ -27,55 +27,69 @@
 
 #include <drm/drm_util.h>
 
-#include "i915_reg_defs.h"
-
-enum drm_scaling_filter;
-struct dpll;
-struct drm_connector;
-struct drm_device;
-struct drm_display_mode;
-struct drm_encoder;
-struct drm_file;
-struct drm_format_info;
-struct drm_framebuffer;
-struct drm_i915_gem_object;
 struct drm_i915_private;
-struct drm_mode_fb_cmd2;
-struct drm_modeset_acquire_ctx;
-struct drm_plane;
-struct drm_plane_state;
-struct i915_address_space;
-struct i915_ggtt_view;
-struct intel_atomic_state;
-struct intel_crtc;
-struct intel_crtc_state;
-struct intel_digital_port;
-struct intel_dp;
-struct intel_encoder;
-struct intel_initial_plane_config;
-struct intel_load_detect_pipe;
-struct intel_plane;
-struct intel_plane_state;
-struct intel_power_domain_mask;
+struct drm_device;
+struct drm_file;
 struct intel_remapped_info;
 struct intel_rotation_info;
 
-enum i915_gpio {
-	GPIOA,
-	GPIOB,
-	GPIOC,
-	GPIOD,
-	GPIOE,
-	GPIOF,
-	GPIOG,
-	GPIOH,
-	__GPIOI_UNUSED,
-	GPIOJ,
-	GPIOK,
-	GPIOL,
-	GPIOM,
-	GPION,
-	GPIOO,
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+enum dpio_channel {
+	DPIO_CH0,
+	DPIO_CH1
+};
+
+enum dpio_phy {
+	DPIO_PHY0,
+	DPIO_PHY1,
+	DPIO_PHY2,
+};
+
+enum aux_ch {
+	AUX_CH_A,
+	AUX_CH_B,
+	AUX_CH_C,
+	AUX_CH_D,
+	AUX_CH_E, /* ICL+ */
+	AUX_CH_F,
+	AUX_CH_G,
+	AUX_CH_H,
+	AUX_CH_I,
+
+	/* tgl+ */
+	AUX_CH_USBC1 = AUX_CH_D,
+	AUX_CH_USBC2,
+	AUX_CH_USBC3,
+	AUX_CH_USBC4,
+	AUX_CH_USBC5,
+	AUX_CH_USBC6,
+
+	/* XE_LPD repositions D/E offsets and bitfields */
+	AUX_CH_D_XELPD = AUX_CH_USBC5,
+	AUX_CH_E_XELPD,
+};
+
+#define aux_ch_name(a) ((a) + 'A')
+
+enum hpd_pin {
+	HPD_NONE = 0,
+	HPD_TV = HPD_NONE,     /* TV is known to be unreliable */
+	HPD_CRT,
+	HPD_SDVO_B,
+	HPD_SDVO_C,
+	HPD_PORT_A,
+	HPD_PORT_B,
+	HPD_PORT_C,
+	HPD_PORT_D,
+	HPD_PORT_E,
+	HPD_PORT_TC1,
+	HPD_PORT_TC2,
+	HPD_PORT_TC3,
+	HPD_PORT_TC4,
+	HPD_PORT_TC5,
+	HPD_PORT_TC6,
+
+	HPD_NUM_PINS
 };
 
 /*
@@ -96,6 +110,28 @@ enum pipe {
 };
 
 #define pipe_name(p) ((p) + 'A')
+/*
+ * Per-pipe plane identifier.
+ * I915_MAX_PLANES in the enum below is the maximum (across all platforms)
+ * number of planes per CRTC.  Not all platforms really have this many planes,
+ * which means some arrays of size I915_MAX_PLANES may have unused entries
+ * between the topmost sprite plane and the cursor plane.
+ *
+ * This is expected to be passed to various register macros
+ * (eg. PLANE_CTL(), PS_PLANE_SEL(), etc.) so adjust with care.
+ */
+enum plane_id {
+	PLANE_PRIMARY,
+	PLANE_SPRITE0,
+	PLANE_SPRITE1,
+	PLANE_SPRITE2,
+	PLANE_SPRITE3,
+	PLANE_SPRITE4,
+	PLANE_SPRITE5,
+	PLANE_CURSOR,
+
+	I915_MAX_PLANES,
+};
 
 enum transcoder {
 	INVALID_TRANSCODER = -1,
@@ -123,33 +159,6 @@ enum transcoder {
 	I915_MAX_TRANSCODERS
 };
 
-static inline const char *transcoder_name(enum transcoder transcoder)
-{
-	switch (transcoder) {
-	case TRANSCODER_A:
-		return "A";
-	case TRANSCODER_B:
-		return "B";
-	case TRANSCODER_C:
-		return "C";
-	case TRANSCODER_D:
-		return "D";
-	case TRANSCODER_EDP:
-		return "EDP";
-	case TRANSCODER_DSI_A:
-		return "DSI A";
-	case TRANSCODER_DSI_C:
-		return "DSI C";
-	default:
-		return "<invalid>";
-	}
-}
-
-static inline bool transcoder_is_dsi(enum transcoder transcoder)
-{
-	return transcoder == TRANSCODER_DSI_A || transcoder == TRANSCODER_DSI_C;
-}
-
 /*
  * Global legacy plane identifier. Valid only for primary/sprite
  * planes on pre-g4x, and only for primary planes on g4x-bdw.
@@ -159,44 +168,6 @@ enum i9xx_plane_id {
 	PLANE_B,
 	PLANE_C,
 };
-
-#define plane_name(p) ((p) + 'A')
-#define sprite_name(p, s) ((p) * RUNTIME_INFO(dev_priv)->num_sprites[(p)] + (s) + 'A')
-
-/*
- * Per-pipe plane identifier.
- * I915_MAX_PLANES in the enum below is the maximum (across all platforms)
- * number of planes per CRTC.  Not all platforms really have this many planes,
- * which means some arrays of size I915_MAX_PLANES may have unused entries
- * between the topmost sprite plane and the cursor plane.
- *
- * This is expected to be passed to various register macros
- * (eg. PLANE_CTL(), PS_PLANE_SEL(), etc.) so adjust with care.
- */
-enum plane_id {
-	PLANE_PRIMARY,
-	PLANE_SPRITE0,
-	PLANE_SPRITE1,
-	PLANE_SPRITE2,
-	PLANE_SPRITE3,
-	PLANE_SPRITE4,
-	PLANE_SPRITE5,
-	PLANE_CURSOR,
-
-	I915_MAX_PLANES,
-};
-
-#define for_each_plane_id_on_crtc(__crtc, __p) \
-	for ((__p) = PLANE_PRIMARY; (__p) < I915_MAX_PLANES; (__p)++) \
-		for_each_if((__crtc)->plane_ids_mask & BIT(__p))
-
-#define for_each_dbuf_slice(__dev_priv, __slice) \
-	for ((__slice) = DBUF_S1; (__slice) < I915_MAX_DBUF_SLICES; (__slice)++) \
-		for_each_if(INTEL_INFO(__dev_priv)->display.dbuf.slice_mask & BIT(__slice))
-
-#define for_each_dbuf_slice_in_mask(__dev_priv, __slice, __mask) \
-	for_each_dbuf_slice((__dev_priv), (__slice)) \
-		for_each_if((__mask) & BIT(__slice))
 
 enum port {
 	PORT_NONE = -1,
@@ -227,6 +198,96 @@ enum port {
 };
 
 #define port_name(p) ((p) + 'A')
+
+#include "i915_reg_defs.h"
+
+enum drm_scaling_filter;
+struct dpll;
+struct drm_connector;
+struct drm_display_mode;
+struct drm_encoder;
+struct drm_format_info;
+struct drm_framebuffer;
+struct drm_i915_gem_object;
+struct drm_mode_fb_cmd2;
+struct drm_modeset_acquire_ctx;
+struct drm_plane;
+struct drm_plane_state;
+struct i915_address_space;
+struct i915_ggtt_view;
+struct intel_atomic_state;
+struct intel_crtc;
+struct intel_crtc_state;
+struct intel_digital_port;
+struct intel_dp;
+struct intel_encoder;
+struct intel_initial_plane_config;
+struct intel_load_detect_pipe;
+struct intel_plane;
+struct intel_plane_state;
+struct intel_power_domain_mask;
+
+enum i915_gpio {
+	GPIOA,
+	GPIOB,
+	GPIOC,
+	GPIOD,
+	GPIOE,
+	GPIOF,
+	GPIOG,
+	GPIOH,
+	__GPIOI_UNUSED,
+	GPIOJ,
+	GPIOK,
+	GPIOL,
+	GPIOM,
+	GPION,
+	GPIOO,
+};
+
+
+static inline const char *transcoder_name(enum transcoder transcoder)
+{
+	switch (transcoder) {
+	case TRANSCODER_A:
+		return "A";
+	case TRANSCODER_B:
+		return "B";
+	case TRANSCODER_C:
+		return "C";
+	case TRANSCODER_D:
+		return "D";
+	case TRANSCODER_EDP:
+		return "EDP";
+	case TRANSCODER_DSI_A:
+		return "DSI A";
+	case TRANSCODER_DSI_C:
+		return "DSI C";
+	default:
+		return "<invalid>";
+	}
+}
+
+static inline bool transcoder_is_dsi(enum transcoder transcoder)
+{
+	return transcoder == TRANSCODER_DSI_A || transcoder == TRANSCODER_DSI_C;
+}
+
+#define plane_name(p) ((p) + 'A')
+#define sprite_name(p, s) ((p) * RUNTIME_INFO(dev_priv)->num_sprites[(p)] + (s) + 'A')
+
+#define for_each_plane_id_on_crtc(__crtc, __p) \
+	for ((__p) = PLANE_PRIMARY; (__p) < I915_MAX_PLANES; (__p)++) \
+		for_each_if((__crtc)->plane_ids_mask & BIT(__p))
+
+#define for_each_dbuf_slice(__dev_priv, __slice) \
+	for ((__slice) = DBUF_S1; (__slice) < I915_MAX_DBUF_SLICES; (__slice)++) \
+		for_each_if(INTEL_INFO(__dev_priv)->display.dbuf.slice_mask & BIT(__slice))
+
+#define for_each_dbuf_slice_in_mask(__dev_priv, __slice, __mask) \
+	for_each_dbuf_slice((__dev_priv), (__slice)) \
+		for_each_if((__mask) & BIT(__slice))
+
 
 /*
  * Ports identifier referenced from other drivers.
@@ -278,42 +339,6 @@ enum tc_port_mode {
 	TC_PORT_LEGACY,
 };
 
-enum dpio_channel {
-	DPIO_CH0,
-	DPIO_CH1
-};
-
-enum dpio_phy {
-	DPIO_PHY0,
-	DPIO_PHY1,
-	DPIO_PHY2,
-};
-
-enum aux_ch {
-	AUX_CH_A,
-	AUX_CH_B,
-	AUX_CH_C,
-	AUX_CH_D,
-	AUX_CH_E, /* ICL+ */
-	AUX_CH_F,
-	AUX_CH_G,
-	AUX_CH_H,
-	AUX_CH_I,
-
-	/* tgl+ */
-	AUX_CH_USBC1 = AUX_CH_D,
-	AUX_CH_USBC2,
-	AUX_CH_USBC3,
-	AUX_CH_USBC4,
-	AUX_CH_USBC5,
-	AUX_CH_USBC6,
-
-	/* XE_LPD repositions D/E offsets and bitfields */
-	AUX_CH_D_XELPD = AUX_CH_USBC5,
-	AUX_CH_E_XELPD,
-};
-
-#define aux_ch_name(a) ((a) + 'A')
 
 /* Used by dp and fdi links */
 struct intel_link_m_n {
@@ -346,27 +371,6 @@ enum phy_fia {
 	FIA1,
 	FIA2,
 	FIA3,
-};
-
-enum hpd_pin {
-	HPD_NONE = 0,
-	HPD_TV = HPD_NONE,     /* TV is known to be unreliable */
-	HPD_CRT,
-	HPD_SDVO_B,
-	HPD_SDVO_C,
-	HPD_PORT_A,
-	HPD_PORT_B,
-	HPD_PORT_C,
-	HPD_PORT_D,
-	HPD_PORT_E,
-	HPD_PORT_TC1,
-	HPD_PORT_TC2,
-	HPD_PORT_TC3,
-	HPD_PORT_TC4,
-	HPD_PORT_TC5,
-	HPD_PORT_TC6,
-
-	HPD_NUM_PINS
 };
 
 #define for_each_hpd_pin(__pin) \
@@ -712,5 +716,40 @@ void assert_transcoder(struct drm_i915_private *dev_priv,
 	I915_STATE_WARN((x), "%s", "WARN_ON(" __stringify(x) ")")
 
 bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915);
+#else
+static inline int vlv_get_cck_clock(struct drm_i915_private *dev_priv,
+		      const char *name, u32 reg, int ref_freq){ return 0; }
+static inline u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
+			      u32 pixel_format, u64 modifier)
+{
+	return 0;
+}
+static inline unsigned int intel_rotation_info_size(const struct intel_rotation_info *rot_info)
+{
+	return 0;
+}
+static inline void intel_init_display_hooks(struct drm_i915_private *dev_priv) { return; }
+static inline bool intel_has_pending_fb_unpin(struct drm_i915_private *dev_priv) { return 0; }
+static inline int intel_display_suspend(struct drm_device *dev) { return 0; }
+static inline int intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data,
+				      struct drm_file *file_priv) { return 0; }
+static inline void intel_display_prepare_reset(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_display_finish_reset(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_display_driver_register(struct drm_i915_private *i915) { return; }
+static inline void intel_display_driver_unregister(struct drm_i915_private *i915) { return; }
+static inline void intel_modeset_init_hw(struct drm_i915_private *i915) { return; }
+static inline int intel_modeset_init_noirq(struct drm_i915_private *i915) { return 0; }
+static inline int intel_modeset_init_nogem(struct drm_i915_private *i915) { return 0; }
+static inline int intel_modeset_init(struct drm_i915_private *i915) { return 0; }
+static inline void intel_modeset_driver_remove(struct drm_i915_private *i915) { return; }
+static inline void intel_modeset_driver_remove_noirq(struct drm_i915_private *i915)  { return; }
+static inline void intel_modeset_driver_remove_nogem(struct drm_i915_private *i915) { return; }
+static inline void intel_display_resume(struct drm_device *dev) { return; }
+static inline bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915) { return 0; }
+static inline unsigned int intel_remapped_info_size(const struct intel_remapped_info *rem_info)
+{
+	return 0;
+}
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif

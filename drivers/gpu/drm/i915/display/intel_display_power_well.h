@@ -7,6 +7,7 @@
 
 #include <linux/types.h>
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "intel_display.h"
 #include "intel_display_power.h"
 
@@ -174,4 +175,5 @@ extern const struct i915_power_well_ops icl_ddi_power_well_ops;
 extern const struct i915_power_well_ops tgl_tc_cold_off_ops;
 extern const struct i915_power_well_ops xelpdp_aux_power_well_ops;
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif

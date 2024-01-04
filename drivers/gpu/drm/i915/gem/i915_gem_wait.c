@@ -85,7 +85,7 @@ i915_gem_object_wait_reservation(struct dma_resv *resv,
 		for (; i < count; i++)
 			dma_fence_put(shared[i]);
 		kfree(shared);
-		
+
 		/*
 		 * If both shared fences and an exclusive fence exist,
 		 * then by construction the shared fences must be later

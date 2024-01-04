@@ -78,7 +78,11 @@ static void *active_debug_hint(void *addr)
 	return (void *)ref->active ?: (void *)ref->retire ?: (void *)ref;
 }
 
+#ifdef BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
+static struct debug_obj_descr active_debug_desc = {
+#else
 static const struct debug_obj_descr active_debug_desc = {
+#endif
 	.name = "i915_active",
 	.debug_hint = active_debug_hint,
 };

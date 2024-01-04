@@ -30,6 +30,8 @@ int i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file);
 int i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file);
+int i915_gem_object_setparam_ioctl(struct drm_device *dev, void *data,
+				   struct drm_file *file_priv);
 int i915_gem_pread_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file);
 int i915_gem_pwrite_ioctl(struct drm_device *dev, void *data,

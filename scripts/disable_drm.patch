@@ -1,0 +1,32 @@
+diff --git a/Kconfig.sources b/Kconfig.sources
+index ff7b0e4..39a8d76 100644
+--- a/Kconfig.sources
++++ b/Kconfig.sources
+@@ -4,10 +4,10 @@ source "$BACKPORT_DIR/compat/Kconfig"
+ # these are copied from the kernel
+ source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
+ 
+-source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
+-source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
++#source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
++#source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
+ 
+-source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
++#source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
+ 
+ #source "$BACKPORT_DIR/net/bluetooth/Kconfig"
+ #source "$BACKPORT_DIR/drivers/net/wireless/Kconfig"
+@@ -28,9 +28,9 @@ source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
+ #source "$BACKPORT_DIR/drivers/usb/class/Kconfig"
+ 
+ # PMT
+-source "$BACKPORT_DIR/drivers/mfd/Kconfig"
+-source "$BACKPORT_DIR/drivers/platform/x86/intel/Kconfig"
++#source "$BACKPORT_DIR/drivers/mfd/Kconfig"
++#source "$BACKPORT_DIR/drivers/platform/x86/intel/Kconfig"
+ 
+ # MEI
+-source "$BACKPORT_DIR/drivers/misc/mei/Kconfig"
+-source "$BACKPORT_DIR/drivers/watchdog/Kconfig"
++#source "$BACKPORT_DIR/drivers/misc/mei/Kconfig"
++#source "$BACKPORT_DIR/drivers/watchdog/Kconfig"

@@ -78,17 +78,28 @@ i915_gem_userptr_release(struct drm_i915_gem_object *obj)
 struct userptr_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *obj;
+	struct mempolicy *policy;
 	struct sg_table *pages;
 };
 
 struct userptr_chunk {
 	struct work_struct work;
 	struct mmu_interval_notifier *notifier;
+	struct mempolicy *policy;
 	struct i915_sw_fence *fence;
 	unsigned long addr, count;
 };
 
+#if IS_ENABLED(CONFIG_NUMA)
+#define set_mempolicy(tsk, pol) (tsk)->mempolicy = (pol)
+#define get_mempolicy(tsk) ((tsk)->mempolicy)
+#else
+#define set_mempolicy(tsk, pol)
+#define get_mempolicy(tsk) NULL
+#endif
+
 static int __userptr_chunk(struct mmu_interval_notifier *notifier,
+			   struct mempolicy *mempolicy,
 			   struct scatterlist *sg,
 			   unsigned long start,
 			   unsigned long max,
@@ -109,6 +120,8 @@ static int __userptr_chunk(struct mmu_interval_notifier *notifier,
 	 */
 
 	kthread_use_mm(notifier->mm);
+	set_mempolicy(current, mempolicy);
+
 	do {
 		unsigned long addr = start + (count << PAGE_SHIFT);
 		int n = min_t(int, max - count, ARRAY_SIZE(pages));
@@ -131,6 +144,7 @@ static int __userptr_chunk(struct mmu_interval_notifier *notifier,
 
 	err = 0;
 out:
+	set_mempolicy(current, NULL);
 	kthread_unuse_mm(notifier->mm);
 	return err;
 }
@@ -139,12 +153,13 @@ static void userptr_chunk(struct work_struct *wrk)
 {
 	struct userptr_chunk *chunk = container_of(wrk, typeof(*chunk), work);
 	struct mmu_interval_notifier *notifier = chunk->notifier;
+	struct mempolicy *policy = chunk->policy;
 	struct i915_sw_fence *fence = chunk->fence;
 	unsigned long count = chunk->count;
 	unsigned long addr = chunk->addr;
 	int err;
 
-	err = __userptr_chunk(notifier,
+	err = __userptr_chunk(notifier, policy,
 			      memset(chunk, 0, sizeof(*chunk)),
 			      addr & PAGE_MASK, count,
 			      (addr & ~PAGE_MASK) | FOLL_FAST_ONLY);
@@ -152,10 +167,13 @@ static void userptr_chunk(struct work_struct *wrk)
 	i915_sw_fence_complete(fence);
 }
 
-static void userptr_queue(struct userptr_chunk *chunk)
+static void
+userptr_queue(struct userptr_chunk *chunk, struct drm_i915_private *i915)
 {
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
-		queue_work(system_unbound_wq, &chunk->work);
+		queue_work_on(i915_next_online_cpu(i915),
+			      system_unbound_wq,
+			      &chunk->work);
 	else
 		userptr_chunk(&chunk->work);
 }
@@ -213,6 +231,7 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 			chunk->addr = addr + (n << PAGE_SHIFT);
 			chunk->count = -n;
 			chunk->notifier = &obj->userptr.notifier;
+			chunk->policy = wrk->policy;
 			INIT_WORK(&chunk->work, userptr_chunk);
 		}
 
@@ -224,7 +243,7 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 		n += I915_MAX_CHAIN_ALLOC;
 		if (((addr + (n << PAGE_SHIFT) - 1) ^ chunk->addr) & SZ_4M) {
 			chunk->count += n;
-			userptr_queue(chunk);
+			userptr_queue(chunk, to_i915(obj->base.dev));
 			chunk = NULL;
 		}
 
@@ -244,7 +263,7 @@ restart: /* Spread the pagefaulting across the cores (~4MiB per core) */
 		chunk->count += sgt->orig_nents;
 		userptr_chunk(&chunk->work);
 	} else {
-		err = __userptr_chunk(&obj->userptr.notifier, sg,
+		err = __userptr_chunk(&obj->userptr.notifier, wrk->policy, sg,
 				      (addr & PAGE_MASK) + (n << PAGE_SHIFT),
 				      sgt->orig_nents - n,
 				      (addr & ~PAGE_MASK) | use_threads);
@@ -370,6 +389,7 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 			    to_i915(obj->base.dev)->mm.sched);
 	wrk->obj = obj;
 	wrk->pages = st;
+	wrk->policy = get_mempolicy(current);
 
 	obj->cache_dirty = false;
 	__i915_gem_object_set_pages(obj, st, PAGE_SIZE); /* placeholder */
@@ -412,14 +432,14 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 		if (!pagevec_add(&pvec, page)) {
 			unpin_user_pages_dirty_lock(pvec.pages,
 						    pagevec_count(&pvec),
-						    true);
+						    dirty);
 			pagevec_reinit(&pvec);
 		}
 	}
 	if (pagevec_count(&pvec))
 		unpin_user_pages_dirty_lock(pvec.pages,
 					    pagevec_count(&pvec),
-					    true);
+					    dirty);
 
 	atomic64_add(obj->base.size, &obj->mm.region.mem->avail);
 

@@ -45,6 +45,7 @@
 #include "gt/intel_gt_pm_debugfs.h"
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_gt_requests.h"
+#include "gt/intel_mocs.h"
 #include "gt/intel_rc6.h"
 #include "gt/intel_reset.h"
 #include "gt/intel_ring.h"
@@ -58,6 +59,18 @@
 #include "i915_scheduler.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pm.h"
+
+static int i915_mocs_table_show(struct seq_file *m, void *data)
+{
+	struct drm_i915_private *i915 = m->private;
+	int ret;
+
+	ret = intel_mocs_seq_write(i915, m);
+	if (ret)
+		return ret;
+
+	return 0;
+}
 
 static int i915_capabilities_show(struct seq_file *m, void *data)
 {
@@ -665,8 +678,10 @@ static int i915_runtime_pm_status_show(struct seq_file *m, void *unused)
 	if (!HAS_RUNTIME_PM(dev_priv))
 		seq_puts(m, "Runtime power management not supported\n");
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	seq_printf(m, "Runtime power status: %s\n",
 		   str_enabled_disabled(!dev_priv->power_domains.init_wakeref));
+#endif
 
 	seq_printf(m, "GPU idle: %s\n", str_yes_no(!to_gt(dev_priv)->awake));
 	seq_printf(m, "IRQs disabled: %s\n",
@@ -815,30 +830,6 @@ static int workarounds_show(struct seq_file *m, void *unused)
 
 	return 0;
 }
-
-static int i915_l4wa_open(struct inode *inode, struct file *file)
-{
-	struct drm_i915_private *i915 = inode->i_private;
-
-	atomic_inc(&i915->level4_wa_disabled);
-
-	drm_info(&i915->drm, "Disabling level-4 wa\n");
-	return 0;
-}
-
-static int i915_l4wa_release(struct inode *inode, struct file *file)
-{
-	struct drm_i915_private *i915 = inode->i_private;
-
-	atomic_dec(&i915->level4_wa_disabled);
-
-	if (!atomic_read(&i915->level4_wa_disabled))
-			drm_info(&i915->drm, "Enabling level-4 wa\n");
-	return 0;
-}
-
-DEFINE_I915_RAW_ATTRIBUTE(i915_l4wa_fops, i915_l4wa_open,
-			  i915_l4wa_release, NULL, NULL, NULL);
 
 static int i915_wedged_get(void *data, u64 *val)
 {
@@ -1257,6 +1248,7 @@ int i915_debugfs_simple_attr_release(struct inode *inode, struct file *file)
 
 DEFINE_I915_RAW_ATTRIBUTE(i915_forcewake_fops, i915_forcewake_open,
 			  i915_forcewake_release, NULL, NULL, NULL);
+DEFINE_I915_SHOW_ATTRIBUTE(i915_mocs_table);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_capabilities);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_gem_object_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_frequency_info);
@@ -1271,6 +1263,7 @@ DEFINE_I915_SHOW_ATTRIBUTE(lmem_alloc_limit_info);
 DEFINE_I915_SHOW_ATTRIBUTE(sharedmem_alloc_limit_info);
 
 static struct i915_debugfs_file i915_debugfs_list[] = {
+	{"i915_mocs_table", &i915_mocs_table_fops, NULL},
 	{"i915_capabilities", &i915_capabilities_fops, NULL},
 	{"i915_gem_objects", &i915_gem_object_info_fops, NULL},
 	{"i915_frequency_info", &i915_frequency_info_fops, NULL},
@@ -1354,8 +1347,4 @@ void i915_debugfs_register(struct drm_i915_private *dev_priv)
 
 	i915_register_debugfs_show_files(minor->debugfs_root, debugfs_list,
 					 debugfs_list_size, to_i915(minor->dev));
-
-	if (i915_is_mem_wa_enabled(dev_priv, I915_WA_USE_FLAT_PPGTT_UPDATE))
-		debugfs_create_file("i915_l4wa_disable", S_IWUSR | S_IRUGO, minor->debugfs_root,
-				    to_i915(minor->dev), &i915_l4wa_fops);
 }

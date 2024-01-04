@@ -42,9 +42,14 @@ void i915_hotplug_interrupt_update(struct drm_i915_private *dev_priv,
 				   u32 mask,
 				   u32 bits);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void ilk_enable_display_irq(struct drm_i915_private *i915, u32 bits);
 void ilk_disable_display_irq(struct drm_i915_private *i915, u32 bits);
 
+#else
+static inline void ilk_enable_display_irq(struct drm_i915_private *i915, u32 bits) { return; }
+static inline void ilk_disable_display_irq(struct drm_i915_private *i915, u32 bits) { return; }
+#endif
 void bdw_enable_pipe_irq(struct drm_i915_private *i915, enum pipe pipe, u32 bits);
 void bdw_disable_pipe_irq(struct drm_i915_private *i915, enum pipe pipe, u32 bits);
 
@@ -66,18 +71,26 @@ bool intel_irqs_enabled(struct drm_i915_private *dev_priv);
 void intel_synchronize_irq(struct drm_i915_private *i915);
 void intel_synchronize_hardirq(struct drm_i915_private *i915);
 
-int intel_get_crtc_scanline(struct intel_crtc *crtc);
 void gen8_irq_power_well_post_enable(struct drm_i915_private *dev_priv,
 				     u8 pipe_mask);
 void gen8_irq_power_well_pre_disable(struct drm_i915_private *dev_priv,
 				     u8 pipe_mask);
 u32 gen8_de_pipe_underrun_mask(struct drm_i915_private *dev_priv);
 
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+int intel_get_crtc_scanline(struct intel_crtc *crtc);
 bool intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int *max_error,
 				     ktime_t *vblank_time, bool in_vblank_irq);
-
 u32 i915_get_vblank_counter(struct drm_crtc *crtc);
 u32 g4x_get_vblank_counter(struct drm_crtc *crtc);
+#else
+static inline int intel_get_crtc_scanline(struct intel_crtc *crtc) { return 0; }
+static inline bool intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int *max_error,
+				     ktime_t *vblank_time, bool in_vblank_irq) { return 0; }
+static inline u32 i915_get_vblank_counter(struct drm_crtc *crtc) { return 0; }
+static inline u32 g4x_get_vblank_counter(struct drm_crtc *crtc) { return 0; }
+#endif
 
 int i8xx_enable_vblank(struct drm_crtc *crtc);
 int i915gm_enable_vblank(struct drm_crtc *crtc);

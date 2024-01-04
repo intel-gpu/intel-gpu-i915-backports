@@ -89,7 +89,7 @@ $RHEL	%global _build_id_links none
 
 	%prep
 	%setup -q -c
-	cp defconfigs/i915 .config
+	cp defconfigs/i915_only .config
 
 	%build
 	export LEX=flex

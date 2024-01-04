@@ -14,4 +14,8 @@
 #define PMSG_IS_AUTO(msg)	(((msg).event & PM_EVENT_AUTO) != 0)
 #endif
 
+#ifdef BPM_DPM_FLAG_NEVER_SKIP_RENAMED
+#define DPM_FLAG_NO_DIRECT_COMPLETE DPM_FLAG_NEVER_SKIP
+#endif
+
 #endif /* __BACKPORT_PM_H */

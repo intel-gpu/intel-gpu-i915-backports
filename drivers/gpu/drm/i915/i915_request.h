@@ -330,12 +330,6 @@ struct i915_request {
 	/** timeline->request entry for this request */
 	struct list_head link;
 
-	/** Watchdog support fields. */
-	struct i915_request_watchdog {
-		struct llist_node link;
-		struct hrtimer timer;
-	} watchdog;
-
 	/**
 	 * @guc_fence_link: Requests may need to be stalled when using GuC
 	 * submission waiting for certain GuC operations to complete. If that is
@@ -456,9 +450,6 @@ void i915_request_unsubmit(struct i915_request *request);
 
 void i915_request_cancel(struct i915_request *rq, int error);
 
-long __i915_request_wait(struct i915_request *rq,
-			 unsigned int flags,
-			 long timeout);
 long i915_request_wait(struct i915_request *rq,
 		       unsigned int flags,
 		       long timeout)

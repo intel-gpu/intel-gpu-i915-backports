@@ -245,19 +245,6 @@ void ppgtt_bind_vma(struct i915_address_space *vm,
 	}
 }
 
-static void ppgtt_bind_vma_wa(struct i915_address_space *vm,
-			      struct i915_vm_pt_stash *stash,
-			      struct i915_vma *vma,
-			      unsigned int pat_index,
-			      u32 flags)
-{
-	GEM_WARN_ON(i915_gem_idle_engines(vm->i915));
-
-	ppgtt_bind_vma(vm, stash, vma, pat_index, flags);
-
-	GEM_WARN_ON(i915_gem_resume_engines(vm->i915));
-}
-
 static void vma_invalidate_tlb(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
@@ -297,16 +284,6 @@ void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 
 	vm->clear_range(vm, i915_vma_offset(vma), vma->size);
 	vma_invalidate_tlb(vma);
-}
-
-static void ppgtt_unbind_vma_wa(struct i915_address_space *vm,
-				struct i915_vma *vma)
-{
-	GEM_WARN_ON(i915_gem_idle_engines(vma->vm->i915));
-
-	ppgtt_unbind_vma(vm, vma);
-
-	GEM_WARN_ON(i915_gem_resume_engines(vma->vm->i915));
 }
 
 static unsigned long pd_count(u64 size, int shift)
@@ -417,9 +394,11 @@ int ppgtt_set_pages(struct i915_vma *vma)
 int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
-	bool enable_wa = i915_is_mem_wa_enabled(i915, I915_WA_IDLE_GPU_BEFORE_UPDATE);
 	unsigned int ppgtt_size = INTEL_INFO(i915)->ppgtt_size;
 	int err;
+
+	if (i915->params.ppgtt_size && IS_PONTEVECCHIO(i915))
+		ppgtt_size = i915->params.ppgtt_size;
 
 	ppgtt->vm.gt = gt;
 	ppgtt->vm.i915 = i915;
@@ -439,8 +418,8 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	if (err)
 		return err;
 
-	ppgtt->vm.vma_ops.bind_vma    = enable_wa ? ppgtt_bind_vma_wa : ppgtt_bind_vma;
-	ppgtt->vm.vma_ops.unbind_vma  = enable_wa ? ppgtt_unbind_vma_wa : ppgtt_unbind_vma;
+	ppgtt->vm.vma_ops.bind_vma    = ppgtt_bind_vma;
+	ppgtt->vm.vma_ops.unbind_vma  = ppgtt_unbind_vma;
 	ppgtt->vm.vma_ops.set_pages   = ppgtt_set_pages;
 	ppgtt->vm.vma_ops.clear_pages = clear_pages;
 

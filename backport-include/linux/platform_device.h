@@ -53,6 +53,10 @@ static inline void __iomem *devm_platform_ioremap_resource(struct platform_devic
 	return devm_ioremap_resource(&pdev->dev, res);
 }
 #endif /* CONFIG_HAS_IOMEM */
+#endif /* LINUX_VERSION_IS_LESS(5,1,0) */
+
+#ifdef BPM_PLATFORM_GET_IRQ_OPTIONAL_NOT_PRESENT
+#define platform_get_irq_optional platform_get_irq
 #endif
 
 #endif /* __BACKPORT_PLATFORM_DEVICE_H */

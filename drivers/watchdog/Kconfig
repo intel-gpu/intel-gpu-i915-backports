@@ -1368,7 +1368,7 @@ config IE6XX_WDT
 	depends on m
 	depends on X86 && PCI
 	select WATCHDOG_CORE
-	depends on MFD_CORE
+	select MFD_CORE
 	depends on LPC_SCH
 	help
 	  Hardware driver for the watchdog timer built into the Intel

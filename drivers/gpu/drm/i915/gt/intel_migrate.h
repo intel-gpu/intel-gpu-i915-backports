@@ -59,6 +59,4 @@ intel_context_migrate_clear(struct intel_context *ce,
 			    u32 value,
 			    struct i915_request **out);
 
-void intel_migrate_fini(struct intel_migrate *m);
-
 #endif /* __INTEL_MIGRATE__ */

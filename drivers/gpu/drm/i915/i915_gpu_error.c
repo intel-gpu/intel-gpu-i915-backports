@@ -1777,7 +1777,9 @@ static bool record_context(struct i915_gem_context_coredump *e,
 
 	rcu_read_lock();
 
-	ctx = rcu_dereference(rq->context->gem_context);
+	ctx = NULL;
+	if (!intel_context_is_banned(rq->context))
+		ctx = rcu_dereference(rq->context->gem_context);
 	if (ctx && !kref_get_unless_zero(&ctx->ref))
 		ctx = NULL;
 	if (!ctx) {
@@ -1803,7 +1805,9 @@ static bool record_context(struct i915_gem_context_coredump *e,
 	e->total_runtime = intel_context_get_total_runtime_ns(rq->context);
 	e->avg_runtime = intel_context_get_avg_runtime_ns(rq->context);
 
-	simulated = i915_gem_context_no_error_capture(ctx);
+	simulated =
+		i915_gem_context_no_error_capture(ctx) ||
+		i915_gem_context_is_closed(ctx);
 
 	e->sip_installed = i915_gem_context_has_sip(ctx);
 
@@ -2145,6 +2149,7 @@ gt_record_uc(struct intel_gt_coredump *gt,
 }
 
 /* Capture display registers. */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void gt_record_display_regs(struct intel_gt_coredump *gt)
 {
 	struct intel_uncore *uncore = gt->_gt->uncore;
@@ -2164,6 +2169,9 @@ static void gt_record_display_regs(struct intel_gt_coredump *gt)
 	else
 		gt->ier = intel_uncore_read(uncore, GEN2_IER);
 }
+#else
+static void gt_record_display_regs(struct intel_gt_coredump *gt) { return; }
+#endif
 
 /* Capture all other registers that GuC doesn't capture. */
 static void gt_record_global_nonguc_regs(struct intel_gt_coredump *gt)
@@ -2618,16 +2626,14 @@ void i915_error_state_store(struct i915_gpu_coredump *error)
 	struct drm_i915_private *i915;
 	static bool warned;
 
-	if (IS_ERR_OR_NULL(error))
+	if (IS_ERR_OR_NULL(error) || error->simulated)
 		return;
 
 	i915 = error->i915;
 	dev_info(i915->drm.dev, "%s\n", error_msg(error));
 
 	i915_gpu_coredump_get(error);
-
-	if (error->simulated ||
-	    cmpxchg(&i915->gpu_error.first_error, NULL, error)) {
+	if (cmpxchg(&i915->gpu_error.first_error, NULL, error)) {
 		i915_gpu_coredump_put(error);
 		return;
 	}

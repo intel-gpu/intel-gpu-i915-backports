@@ -61,6 +61,9 @@ void intel_spi_init(struct intel_spi *spi, struct drm_i915_private *dev_priv)
 	if (IS_SRIOV_VF(dev_priv))
 		return;
 
+	if (!dev_priv->params.enable_spi)
+		return;
+
 	spi->writeable_override = i915_spi_writeable_override(dev_priv);
 	spi->bar.parent = &pdev->resource[0];
 	spi->bar.start = GEN12_GUNIT_SPI_BASE + pdev->resource[0].start;

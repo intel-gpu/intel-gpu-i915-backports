@@ -37,4 +37,12 @@ char *strreplace(char *s, char old, char new);
 int match_string(const char * const *array, size_t n, const char *string);
 #endif /* LINUX_VERSION_IS_LESS(4,5,0) */
 
+#ifdef BPM_STR_HAS_PREFIX_NOT_PRESENT
+static __always_inline size_t str_has_prefix(const char *str, const char *prefix)
+{
+	size_t len = strlen(prefix);
+	return strncmp(str, prefix, len) == 0 ? len : 0;
+}
+#endif
+
 #endif /* __BACKPORT_LINUX_STRING_H */

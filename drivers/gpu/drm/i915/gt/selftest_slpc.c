@@ -105,9 +105,14 @@ static int live_slpc_clamp_min(void *arg)
 			struct i915_request *rq;
 			u32 step, min_freq, req_freq;
 			u32 act_freq, max_act_freq;
+			u32 throttle_reasons, saved_throttle_reasons;
 
 			if (!intel_engine_can_store_dword(engine))
 				continue;
+
+			/* Clear throttle reasons */
+			intel_uncore_rmw(gt->uncore, intel_gt_perf_limit_reasons_reg(gt),
+					 GT0_PERF_LIMIT_REASONS_LOG_MASK, 0);
 
 			st_engine_heartbeat_disable(engine);
 
@@ -135,6 +140,7 @@ static int live_slpc_clamp_min(void *arg)
 			/* Go from min to max in 5 steps */
 			step = (slpc_max_freq - slpc_min_freq) / NUM_STEPS;
 			max_act_freq = slpc_min_freq;
+			saved_throttle_reasons = 0;
 			for (min_freq = slpc_min_freq; min_freq < slpc_max_freq;
 						min_freq += step) {
 				err = slpc_set_min_freq(slpc, min_freq);
@@ -155,6 +161,12 @@ static int live_slpc_clamp_min(void *arg)
 					err = -EINVAL;
 				}
 
+				throttle_reasons = intel_uncore_rmw(gt->uncore, intel_gt_perf_limit_reasons_reg(gt),
+								    GT0_PERF_LIMIT_REASONS_LOG_MASK, 0);
+				if (throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK ||
+				    throttle_reasons & GT0_PERF_LIMIT_REASONS_LOG_MASK)
+					saved_throttle_reasons |= throttle_reasons;
+
 				act_freq =  intel_rps_read_actual_frequency(rps);
 				if (act_freq > max_act_freq)
 					max_act_freq = act_freq;
@@ -168,9 +180,8 @@ static int live_slpc_clamp_min(void *arg)
 
 			/* Actual frequency should rise above min */
 			if (max_act_freq == slpc_min_freq) {
-				u32 throttle_reasons = intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS);
-				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", throttle_reasons);
-				if (!(throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK)) {
+				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", saved_throttle_reasons);
+				if (!saved_throttle_reasons) {
 					err = -EINVAL;
 					pr_err("Actual freq did not rise above min!");
 				}
@@ -268,9 +279,14 @@ static int live_slpc_clamp_max(void *arg)
 			u32 max_freq, req_freq;
 			u32 act_freq, max_act_freq;
 			u32 step;
+			u32 throttle_reasons, saved_throttle_reasons;
 
 			if (!intel_engine_can_store_dword(engine))
 				continue;
+
+			/* Clear throttle reasons */
+			intel_uncore_rmw(gt->uncore, intel_gt_perf_limit_reasons_reg(gt),
+					 GT0_PERF_LIMIT_REASONS_LOG_MASK, 0);
 
 			st_engine_heartbeat_disable(engine);
 
@@ -298,6 +314,7 @@ static int live_slpc_clamp_max(void *arg)
 			/* Go from max to min in 5 steps */
 			step = (slpc_max_freq - slpc_min_freq) / NUM_STEPS;
 			max_act_freq = slpc_min_freq;
+			saved_throttle_reasons = 0;
 			for (max_freq = slpc_max_freq; max_freq > slpc_min_freq;
 						max_freq -= step) {
 				err = slpc_set_max_freq(slpc, max_freq);
@@ -319,6 +336,12 @@ static int live_slpc_clamp_max(void *arg)
 					err = -EINVAL;
 				}
 
+				throttle_reasons = intel_uncore_rmw(gt->uncore, intel_gt_perf_limit_reasons_reg(gt),
+								    GT0_PERF_LIMIT_REASONS_LOG_MASK, 0);
+				if (throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK ||
+				    throttle_reasons & GT0_PERF_LIMIT_REASONS_LOG_MASK)
+					saved_throttle_reasons |= throttle_reasons;
+
 				act_freq =  intel_rps_read_actual_frequency(rps);
 				if (act_freq > max_act_freq)
 					max_act_freq = act_freq;
@@ -332,9 +355,8 @@ static int live_slpc_clamp_max(void *arg)
 
 			/* Actual frequency should rise above min */
 			if (max_act_freq == slpc_min_freq) {
-				u32 throttle_reasons = intel_uncore_read(gt->uncore, GT0_PERF_LIMIT_REASONS);
-				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", throttle_reasons);
-				if (!(throttle_reasons & GT0_PERF_LIMIT_REASONS_MASK)) {
+				guc_dbg(slpc_to_guc(slpc), "Perf Limit Reasons: 0x%x", saved_throttle_reasons);
+				if (!saved_throttle_reasons) {
 					err = -EINVAL;
 					pr_err("Actual freq did not rise above min!");
 				}

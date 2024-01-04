@@ -49,6 +49,7 @@ config DRM_I915_DEBUG
 	select DRM_I915_DEBUG_GEM
 	select DRM_I915_DEBUG_GEM_ONCE
 	select DRM_I915_DEBUG_MMIO
+	select DRM_I915_DEBUG_MOCS
 	select DRM_I915_DEBUG_RUNTIME_PM
 	select DRM_I915_DEBUG_WAKEREF
 	select DRM_I915_SW_FENCE_DEBUG_OBJECTS
@@ -69,6 +70,31 @@ config DRM_I915_DEBUG
 	  performance but will catch some internal issues.
 
 	  Recommended for driver developers only.
+
+	  If in doubt, say "N".
+
+config DRM_I915_DEBUG_MOCS
+	bool "Allow to specify customized MOCS table"
+	depends on DRM_I915
+	default n
+	help
+	  Choose this option if you want customised MOCS table to be loaded
+	  from the /lib/firmware directory. It can be useful when you want
+	  to provide your own MOCS table for debugging. MOCS table can be
+	  provided via module parameter i915.mocs_table_path. Current MOCS
+	  table in use can be viewed from 'i915_mocs_table' debugfs file.
+	  Each line in 'i915_mocs_table' represents one mocs table entry.
+	  Ex: 0x0001003300000099
+	  0001 represents if entry is being used
+	  0033 represents L3CC Value
+	  00000099 represents Control Value
+
+	  There is a special case for path 'uncached.bin' which write all
+	  hw mocs entries by using the drivers internal uncached entry without
+	  the need to provide a file in /lib/firmware directory.
+
+	  Note: Need to follow the same MOCS enrty format while providing
+	  customized MOCS table.
 
 	  If in doubt, say "N".
 

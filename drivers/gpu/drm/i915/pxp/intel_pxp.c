@@ -137,7 +137,9 @@ void intel_pxp_init(struct intel_pxp *pxp)
 {
 	struct intel_gt *gt = pxp_to_gt(pxp);
 
-	/*DKMS I915 assumes CPTCFG_INTEL_MEI_PXP is enabled always*/
+	/* on pre-MTL we rely on the mei PXP module; on MTL+ we own the GSC uC */
+	if (!IS_ENABLED(CPTCFG_INTEL_MEI_PXP) && !intel_uc_uses_gsc_uc(&gt->uc))
+		return;
 
 	/*
 	 * If HuC is loaded by GSC but PXP is disabled, we can skip the init of

@@ -9,6 +9,7 @@
 #include <linux/types.h>
 
 struct drm_device;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 struct drm_i915_private;
 struct intel_fbdev;
 struct intel_framebuffer;
@@ -57,4 +58,10 @@ static inline struct intel_framebuffer *intel_fbdev_framebuffer(struct intel_fbd
 }
 #endif
 
+#else
+static inline void intel_fbdev_restore_mode(struct drm_device *dev) { return; }
+static inline void intel_fbdev_set_suspend(struct drm_device *dev,
+					int state, bool synchronous) { return; }
+
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_FBDEV_H__ */

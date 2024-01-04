@@ -118,7 +118,7 @@ bool i915_gem_clflush_object(struct drm_i915_gem_object *obj,
 						I915_FENCE_GFP);
 #ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
 		dma_resv_add_fence(obj->base.resv, &clflush->base.rq.fence,
-				   DMA_RESV_USAGE_WRITE);
+				DMA_RESV_USAGE_WRITE);
 #else
 		dma_resv_add_excl_fence(obj->base.resv,
 					&clflush->base.rq.fence);

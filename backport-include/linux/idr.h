@@ -71,4 +71,6 @@ static inline void *backport_idr_remove(struct idr *idr, int id)
 #define idr_remove	backport_idr_remove
 #endif
 
+void *idr_remove_ext(struct idr *idr, int id);
+
 #endif /* __BACKPORT_IDR_H */

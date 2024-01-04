@@ -25,13 +25,6 @@
 #include <linux/types.h>
 #include <uapi/drm/drm_fourcc.h>
 
-#ifdef DRM_FORMAT_MAX_PLANES_ADDED
-/**
- * DRM_FORMAT_MAX_PLANES - maximum number of planes a DRM format can have
- */
-#define DRM_FORMAT_MAX_PLANES   4u
-#endif /* DRM_FORMAT_MAX_PLANES_ADDED */
-
 /*
  * DRM formats are little endian.  Define host endian variants for the
  * most common formats here, to reduce the #ifdefs needed in drivers.
@@ -40,6 +33,12 @@
  * case the format can't be specified otherwise, so we don't end up
  * with two values describing the same format.
  */
+
+/**
+ * DRM_FORMAT_MAX_PLANES - maximum number of planes a DRM format can have
+ */
+#define DRM_FORMAT_MAX_PLANES   4u
+
 #ifdef __BIG_ENDIAN
 # define DRM_FORMAT_HOST_XRGB1555     (DRM_FORMAT_XRGB1555         |	\
 				       DRM_FORMAT_BIG_ENDIAN)

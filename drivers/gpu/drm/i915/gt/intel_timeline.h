@@ -42,6 +42,24 @@ static inline void intel_timeline_put(struct intel_timeline *timeline)
 	kref_put(&timeline->kref, __intel_timeline_free);
 }
 
+static inline bool
+intel_timeline_has_initial_breadcrumb(const struct intel_timeline *tl)
+{
+	return true;
+}
+
+static inline bool
+intel_timeline_is_relative(const struct intel_timeline *tl)
+{
+	return tl->mode != INTEL_TIMELINE_ABSOLUTE;
+}
+
+static inline bool
+intel_timeline_in_context(const struct intel_timeline *tl)
+{
+	return tl->mode == INTEL_TIMELINE_RELATIVE_CONTEXT;
+}
+
 static inline int __intel_timeline_sync_set(struct intel_timeline *tl,
 					    u64 context, u32 seqno)
 {
@@ -84,7 +102,6 @@ void intel_timeline_reset_seqno(const struct intel_timeline *tl);
 int intel_timeline_read_hwsp(struct i915_request *from,
 			     struct i915_request *until,
 			     u32 *hwsp_offset);
-void intel_timeline_rebase_hwsp(struct intel_timeline *tl);
 
 void intel_gt_init_timelines(struct intel_gt *gt);
 void intel_gt_fini_timelines(struct intel_gt *gt);

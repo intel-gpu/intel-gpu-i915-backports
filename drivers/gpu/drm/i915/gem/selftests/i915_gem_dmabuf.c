@@ -149,15 +149,13 @@ static int igt_dmabuf_import_same_driver_lmem(void *arg)
 		 * we can use lmem inplace.
 		 */
 		if (object_to_attachment_p2p_distance(obj, attach) >= 0) {
-			pr_err("this is unexpected!\n");
+			pr_err("this is unexpected, but ok!\n");
 			err = 0;
 		} else {
 			pr_err("i915_gem_prime_import succeeded when it shouldn't have\n");
 			err = -EINVAL;
 		}
 		drm_gem_object_put(import);
-		pr_err("i915_gem_prime_import succeeded when it shouldn't have\n");
-		err = -EINVAL;
 	} else if (PTR_ERR(import) != -EOPNOTSUPP) {
 		pr_err("i915_gem_prime_import failed with the wrong err=%ld\n",
 		       PTR_ERR(import));
@@ -226,16 +224,6 @@ static int igt_dmabuf_import_same_driver(struct drm_i915_private *i915,
 		pr_err("Different objects dma-buf get_pages failed!\n");
 		i915_gem_object_unlock(import_obj);
 		goto out_import;
-	}
-
-	/*
-	 * If the exported object is not in system memory, something
-	 * weird is going on. TODO: When p2p is supported, this is no
-	 * longer considered weird.
-	 */
-	if (obj->mm.region.mem != i915->mm.regions[INTEL_REGION_SMEM]) {
-		pr_err("Exported dma-buf is not in system memory\n");
-		err = -EINVAL;
 	}
 
 	i915_gem_object_unlock(import_obj);

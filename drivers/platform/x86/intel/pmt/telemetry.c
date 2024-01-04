@@ -18,11 +18,11 @@
 #include <linux/uaccess.h>
 #include <linux/overflow.h>
 
-#include "class.h"
-
 #ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
 #endif
+
+#include "class.h"
 
 #define TELEM_SIZE_OFFSET	0x0
 #define TELEM_GUID_OFFSET	0x4
@@ -368,6 +368,7 @@ static struct auxiliary_driver pmt_telem_aux_driver = {
 
 static int __init pmt_telem_init(void)
 {
+	printk(KERN_INFO "BACKPORTED VSEC TELEMETRY INIT\n");
 	return auxiliary_driver_register(&pmt_telem_aux_driver);
 }
 module_init(pmt_telem_init);
@@ -381,8 +382,8 @@ static void __exit pmt_telem_exit(void)
 module_exit(pmt_telem_exit);
 
 MODULE_AUTHOR("David E. Box <david.e.box@linux.intel.com>");
-MODULE_DESCRIPTION("Intel PMT Telemetry driver");
-MODULE_LICENSE("GPL v2");
 #ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
 #endif
+MODULE_DESCRIPTION("Intel PMT Telemetry driver");
+MODULE_LICENSE("GPL v2");

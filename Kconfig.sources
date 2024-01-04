@@ -5,6 +5,7 @@ source "$BACKPORT_DIR/compat/Kconfig"
 source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
 
 # PMT
+source "$BACKPORT_DIR/drivers/mfd/Kconfig"
 source "$BACKPORT_DIR/drivers/platform/x86/intel/Kconfig"
 
 # MEI
