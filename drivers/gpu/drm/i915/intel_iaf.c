@@ -113,7 +113,7 @@ static struct iaf_pdata *init_pd(struct drm_i915_private *i915)
 	pd->parent = i915;
 	pd->product = IAF_PONTEVECCHIO;
 	pd->index = i915->intel_iaf.index & 0xFFFF;
-	pd->sd_cnt = i915->remote_tiles + 1;
+	pd->sd_cnt = i915->enabled_remote_tiles + 1;
 	pd->socket_id = i915->intel_iaf.socket_id;
 	pd->slot = PCI_SLOT(to_pci_dev(i915->drm.dev)->devfn);
 
@@ -163,7 +163,7 @@ static struct resource *init_resource(struct drm_i915_private *i915,
 {
 	struct intel_gt *gt;
 	struct resource *res_base, *res;
-	u32 cnt = (i915->remote_tiles + 1) * 2;
+	u32 cnt = (i915->enabled_remote_tiles + 1) * 2;
 	unsigned int i;
 
 	/* Each sd gets one resource for IRQ and one for MEM */
@@ -228,7 +228,7 @@ static struct irq_chip iaf_irq_chip = {
  */
 static int init_irq_desc(struct drm_i915_private *i915)
 {
-	unsigned int num_subdevs = i915->remote_tiles + 1;
+	unsigned int num_subdevs = i915->enabled_remote_tiles + 1;
 	int err;
 	int irq;
 	int irq_base;
@@ -377,7 +377,7 @@ void intel_iaf_init(struct drm_i915_private *i915)
 				"IAF: Failed to allocate fabric index: %d\n",
 				err);
 			irq_free_descs(i915->intel_iaf.irq_base,
-				       i915->remote_tiles + 1);
+				       i915->enabled_remote_tiles + 1);
 			goto set_range;
 		}
 		i915->intel_iaf.index = index;
@@ -476,7 +476,7 @@ void intel_iaf_init_aux(struct drm_i915_private *i915)
 
 cleanup:
 	xa_erase(&intel_fdevs, i915->intel_iaf.index);
-	irq_free_descs(i915->intel_iaf.irq_base, i915->remote_tiles + 1);
+	irq_free_descs(i915->intel_iaf.irq_base, i915->enabled_remote_tiles + 1);
 	kfree(res);
 	kfree(pd);
 	i915->intel_iaf.index = err;
@@ -540,7 +540,7 @@ void intel_iaf_init_mfd(struct drm_i915_private *i915)
 
 cleanup:
 	xa_erase(&intel_fdevs, i915->intel_iaf.index);
-	irq_free_descs(i915->intel_iaf.irq_base, i915->remote_tiles + 1);
+	irq_free_descs(i915->intel_iaf.irq_base, i915->enabled_remote_tiles + 1);
 	kfree(res);
 	kfree(pd);
 	i915->intel_iaf.index = err;
@@ -559,7 +559,7 @@ void intel_iaf_remove(struct drm_i915_private *i915)
 	auxiliary_device_uninit(&i915->intel_iaf.pd->aux_dev);
 #endif
 	xa_erase(&intel_fdevs, i915->intel_iaf.index);
-	irq_free_descs(i915->intel_iaf.irq_base, i915->remote_tiles + 1);
+	irq_free_descs(i915->intel_iaf.irq_base, i915->enabled_remote_tiles + 1);
 
 	i915->intel_iaf.ops = &default_ops;
 }

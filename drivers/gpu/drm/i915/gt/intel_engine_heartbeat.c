@@ -73,18 +73,12 @@ static void show_heartbeat(const struct i915_request *rq,
 
 	intel_guc_print_info(&engine->gt->uc.guc, &p);
 
-	if (!rq) {
-		intel_engine_dump(engine, &p,
-				  "%s heartbeat not ticking\n",
-				  engine->name);
-	} else {
-		intel_engine_dump(engine, &p,
-				  "%s heartbeat {seqno:%llx:%lld, prio:%d} not ticking\n",
-				  engine->name,
-				  rq->fence.context,
-				  rq->fence.seqno,
-				  rq->sched.attr.priority);
-	}
+	intel_engine_dump(engine, &p,
+			  "%s heartbeat {seqno:%llx:%lld, prio:%d} not ticking\n",
+			  engine->name,
+			  rq->fence.context,
+			  rq->fence.seqno,
+			  rq->sched.attr.priority);
 
 	intel_gt_show_timelines(engine->gt, &p, i915_request_show_with_schedule);
 }
@@ -95,6 +89,9 @@ reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM) &&
 	    !atomic_read(&engine->i915->gpu_error.reset_count))
 		show_heartbeat(rq, engine);
+
+	if (xchg(&rq->fence.error, -ENXIO) == -ENXIO)
+		intel_gt_set_wedged(engine->gt);
 
 	intel_gt_handle_error(engine->gt, engine->mask,
 			      I915_ERROR_CAPTURE,
@@ -156,6 +153,9 @@ static bool engine_was_active(struct intel_engine_cs *engine)
 {
 	unsigned long count;
 
+	if (i915_sched_engine_disabled(engine->sched_engine))
+		return true;
+
 	count = READ_ONCE(engine->stats.irq.count);
 	if (count == engine->heartbeat.interrupts)
 		return false;
@@ -209,11 +209,6 @@ static void heartbeat(struct work_struct *wrk)
 	/* Hangcheck disabled so do not check for systole. */
 	if (!engine->i915->params.enable_hangcheck)
 		goto out;
-
-	if (i915_sched_engine_disabled(engine->sched_engine)) {
-		reset_engine(engine, engine->heartbeat.systole);
-		goto out;
-	}
 
 	rq = READ_ONCE(engine->heartbeat.systole);
 	if (rq) {

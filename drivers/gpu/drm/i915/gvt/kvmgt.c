@@ -44,7 +44,9 @@
 #include <linux/mdev.h>
 #include <linux/debugfs.h>
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 #include <backport/bp_module_version.h>
+#endif
 
 #include <linux/nospec.h>
 
@@ -2247,4 +2249,6 @@ module_exit(kvmgt_exit);
 
 MODULE_LICENSE("GPL and additional rights");
 MODULE_AUTHOR("Intel Corporation");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
+#endif

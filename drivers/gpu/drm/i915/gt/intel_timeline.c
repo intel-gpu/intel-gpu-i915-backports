@@ -60,8 +60,14 @@ intel_timeline_pin_map(struct intel_timeline *timeline)
 	struct drm_i915_gem_object *obj = timeline->hwsp_ggtt->obj;
 	u32 ofs = offset_in_page(timeline->hwsp_offset);
 	void *vaddr;
+	int type;
 
-	vaddr = i915_gem_object_pin_map(obj, I915_MAP_WB);
+	if (obj->mm.mapping) /* must preserve the page protection */
+		type = page_unmask_bits(obj->mm.mapping);
+	else
+		type = i915_coherent_map_type(to_i915(obj->base.dev), obj, true);
+
+	vaddr = i915_gem_object_pin_map(obj, type);
 	if (IS_ERR(vaddr))
 		return PTR_ERR(vaddr);
 
@@ -79,14 +85,20 @@ static int intel_timeline_init(struct intel_timeline *timeline,
 {
 	kref_init(&timeline->kref);
 	atomic_set(&timeline->pin_count, 0);
+	INIT_LIST_HEAD(&timeline->engine_link);
 
 	timeline->gt = gt;
 
 	if (hwsp) {
+		timeline->mode = INTEL_TIMELINE_RELATIVE_ENGINE;
+		if (offset & INTEL_TIMELINE_RELATIVE_CONTEXT) {
+			timeline->mode = INTEL_TIMELINE_RELATIVE_CONTEXT;
+			offset &= ~INTEL_TIMELINE_RELATIVE_CONTEXT;
+		}
 		timeline->hwsp_offset = offset;
 		timeline->hwsp_ggtt = i915_vma_get(hwsp);
 	} else {
-		timeline->has_initial_breadcrumb = true;
+		timeline->mode = INTEL_TIMELINE_ABSOLUTE;
 		hwsp = hwsp_alloc(gt);
 		if (IS_ERR(hwsp))
 			return PTR_ERR(hwsp);
@@ -221,25 +233,6 @@ int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww)
 	return 0;
 }
 
-/**
- * intel_timeline_rebase_hwsp - Recompute hwsp_offset cached within the pinned timeline.
- * @tl: context timeline instance struct
- */
-void intel_timeline_rebase_hwsp(struct intel_timeline *tl)
-{
-	if (!atomic_read(&tl->pin_count))
-		return; /* the offset will get updated while pinning */
-
-	GEM_BUG_ON(!tl->hwsp_map);
-	GEM_BUG_ON(!tl->hwsp_ggtt);
-
-	tl->hwsp_offset =
-		i915_ggtt_offset(tl->hwsp_ggtt) +
-		offset_in_page(tl->hwsp_offset);
-	GT_TRACE(tl->gt, "timeline:%llx using HWSP offset:%x\n",
-		 tl->fence_context, tl->hwsp_offset);
-}
-
 void intel_timeline_reset_seqno(const struct intel_timeline *tl)
 {
 	u32 *hwsp_seqno = (u32 *)tl->hwsp_seqno;
@@ -283,15 +276,6 @@ void intel_timeline_enter(struct intel_timeline *tl)
 	if (!atomic_fetch_inc(&tl->active_count))
 		list_add_tail_rcu(&tl->link, &timelines->active_list);
 	spin_unlock(&timelines->lock);
-
-	/*
-	 * The HWSP is volatile, and may have been lost while inactive,
-	 * e.g. across suspend/resume. Be paranoid, and ensure that
-	 * the HWSP value matches our seqno so we don't proclaim
-	 * the next request as already complete.
-	 */
-	if (tl->hwsp_map)
-		intel_timeline_reset_seqno(tl);
 }
 
 bool intel_timeline_get_if_active(struct intel_timeline *tl)
@@ -344,9 +328,9 @@ void intel_timeline_exit(struct intel_timeline *tl)
 static u32 timeline_advance(struct intel_timeline *tl)
 {
 	GEM_BUG_ON(!atomic_read(&tl->pin_count));
-	GEM_BUG_ON(tl->seqno & tl->has_initial_breadcrumb);
+	GEM_BUG_ON(tl->seqno & intel_timeline_has_initial_breadcrumb(tl));
 
-	return tl->seqno += 1 + tl->has_initial_breadcrumb;
+	return tl->seqno += 1 + intel_timeline_has_initial_breadcrumb(tl);
 }
 
 static noinline int
@@ -377,7 +361,7 @@ int intel_timeline_get_seqno(struct intel_timeline *tl,
 	*seqno = timeline_advance(tl);
 
 	/* Replace the HWSP on wraparound for HW semaphores */
-	if (unlikely(!*seqno && tl->has_initial_breadcrumb))
+	if (unlikely(!*seqno && intel_timeline_has_initial_breadcrumb(tl)))
 		return __intel_timeline_get_seqno(tl, seqno);
 
 	return 0;
@@ -412,8 +396,8 @@ int intel_timeline_read_hwsp(struct i915_request *from,
 	if (!tl)
 		return 1;
 
-	/* Can't do semaphore waits on kernel context */
-	if (!tl->has_initial_breadcrumb) {
+	/* Can't do semaphore waits on pinned context */
+	if (intel_timeline_is_relative(tl)) {
 		err = -EINVAL;
 		goto out;
 	}

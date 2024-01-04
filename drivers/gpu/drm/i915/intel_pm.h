@@ -6,6 +6,7 @@
 #ifndef __INTEL_PM_H__
 #define __INTEL_PM_H__
 
+struct drm_i915_private;
 #include <linux/types.h>
 
 #include "display/intel_display.h"
@@ -14,7 +15,6 @@
 #include "i915_drv.h"
 
 struct drm_device;
-struct drm_i915_private;
 struct i915_request;
 struct intel_atomic_state;
 struct intel_bw_state;
@@ -28,10 +28,11 @@ struct skl_wm_level;
 void intel_init_clock_gating(struct drm_i915_private *dev_priv);
 void intel_suspend_hw(struct drm_i915_private *dev_priv);
 int ilk_wm_max_level(const struct drm_i915_private *dev_priv);
-void intel_init_pmdemand(struct drm_i915_private *dev_priv);
 void intel_init_pm(struct drm_i915_private *dev_priv);
 void intel_init_clock_gating_hooks(struct drm_i915_private *dev_priv);
 void intel_pm_setup(struct drm_i915_private *dev_priv);
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+void intel_init_pmdemand(struct drm_i915_private *dev_priv);
 void g4x_wm_get_hw_state(struct drm_i915_private *dev_priv);
 void vlv_wm_get_hw_state(struct drm_i915_private *dev_priv);
 void ilk_wm_get_hw_state(struct drm_i915_private *dev_priv);
@@ -57,9 +58,11 @@ void skl_write_plane_wm(struct intel_plane *plane,
 void skl_write_cursor_wm(struct intel_plane *plane,
 			 const struct intel_crtc_state *crtc_state);
 bool ilk_disable_lp_wm(struct drm_i915_private *dev_priv);
+#endif
 void intel_init_ipc(struct drm_i915_private *dev_priv);
 void intel_enable_ipc(struct drm_i915_private *dev_priv);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 bool intel_set_memory_cxsr(struct drm_i915_private *dev_priv, bool enable);
 
 struct intel_dbuf_state {
@@ -118,5 +121,5 @@ void intel_program_dbuf_pmdemand(struct drm_i915_private *dev_priv,
 void intel_pmdemand_pre_plane_update(struct intel_atomic_state *state);
 void intel_pmdemand_post_plane_update(struct intel_atomic_state *state);
 int intel_pmdemand_atomic_check(struct intel_atomic_state *state);
-
+#endif
 #endif /* __INTEL_PM_H__ */

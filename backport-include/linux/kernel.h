@@ -228,7 +228,21 @@ static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
 extern char *bin2hex(char *dst, const void *src, size_t count);
 #endif
 
-#endif /* __BACKPORT_KERNEL_H */
+#ifdef BPM_TYPEOF_MEMBER_NOT_PRESENT
+#define typeof_member(T, m)     typeof(((T*)0)->m)
+#endif
+
+#ifdef BPM_PTR_ALIGN_DOWN_NOT_PRESENT
+#define PTR_ALIGN_DOWN(p, a)    ((typeof(p))ALIGN_DOWN((unsigned long)(p), (a)))
+#endif
+
+#ifdef BPM_LIMITS_H_NOT_PRESENT
+#define SIZE_MAX        (~(size_t)0)
+#endif
+
+#ifndef U64_MAX
+#define U64_MAX         ((u64)~0ULL)
+#endif
 
 /*
  * We have to do this outside the include guard, because
@@ -240,3 +254,5 @@ extern char *bin2hex(char *dst, const void *src, size_t count);
 #ifndef pr_fmt
 #define pr_fmt(msg) msg
 #endif
+
+#endif /* __BACKPORT_KERNEL_H */

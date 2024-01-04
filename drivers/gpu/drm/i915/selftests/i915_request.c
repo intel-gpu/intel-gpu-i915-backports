@@ -392,7 +392,7 @@ static int __igt_breadcrumbs_smoketest(void *arg)
 
 		if (!wait_event_timeout(wait->wait,
 					i915_sw_fence_done(wait),
-					5 * HZ)) {
+					ADJUST_TIMEOUT(5 *  HZ))) {
 			struct i915_request *rq = requests[count - 1];
 
 			pr_err("waiting for %d/%d fences (last %llx:%lld) on %s timed out!\n",
@@ -1088,9 +1088,6 @@ static int live_all_engines(void *arg)
 	for_each_uabi_engine(engine, i915) {
 		struct i915_vma *batch;
 
-		if (engine->bind_context)
-			continue;
-
 		batch = recursive_batch(engine->gt);
 		if (IS_ERR(batch)) {
 			err = PTR_ERR(batch);
@@ -1129,9 +1126,6 @@ out_unlock:
 
 	idx = 0;
 	for_each_uabi_engine(engine, i915) {
-		if (engine->bind_context)
-			continue;
-
 		if (i915_request_completed(request[idx])) {
 			pr_err("%s(%s): request completed too early!\n",
 			       __func__, engine->name);
@@ -1143,9 +1137,6 @@ out_unlock:
 
 	idx = 0;
 	for_each_uabi_engine(engine, i915) {
-		if (engine->bind_context)
-			continue;
-
 		err = recursive_batch_resolve(request[idx]->batch);
 		if (err) {
 			pr_err("%s: failed to resolve batch, err=%d\n",
@@ -1159,9 +1150,6 @@ out_unlock:
 	for_each_uabi_engine(engine, i915) {
 		struct i915_request *rq = request[idx];
 		long timeout;
-
-		if (engine->bind_context)
-			continue;
 
 		timeout = i915_request_wait(rq, 0, MAX_SCHEDULE_TIMEOUT);
 		if (timeout < 0) {
@@ -1231,9 +1219,6 @@ static int live_sequential_engines(void *arg)
 	for_each_uabi_engine(engine, i915) {
 		struct i915_vma *batch;
 
-		if (engine->bind_context)
-			continue;
-
 		batch = recursive_batch(engine->gt);
 		if (IS_ERR(batch)) {
 			err = PTR_ERR(batch);
@@ -1289,9 +1274,6 @@ out_unlock:
 	for_each_uabi_engine(engine, i915) {
 		long timeout;
 
-		if (engine->bind_context)
-			continue;
-
 		if (i915_request_completed(request[idx])) {
 			pr_err("%s(%s): request completed too early!\n",
 			       __func__, engine->name);
@@ -1325,9 +1307,6 @@ out_request:
 	idx = 0;
 	for_each_uabi_engine(engine, i915) {
 		u32 *cmd;
-
-		if (engine->bind_context)
-			continue;
 
 		if (!request[idx])
 			break;
@@ -1428,12 +1407,14 @@ static bool wake_all(struct drm_i915_private *i915)
 
 static int wait_for_all(struct drm_i915_private *i915)
 {
+	u32 mul = GET_MULTIPLIER(i915_selftest.timeout_jiffies);
+
 	if (wake_all(i915))
 		return 0;
 
 	if (wait_var_event_timeout(&i915->selftest.counter,
 				   !atomic_read(&i915->selftest.counter),
-				   i915_selftest.timeout_jiffies))
+				   i915_selftest.timeout_jiffies * mul))
 		return 0;
 
 	return -ETIME;
@@ -1528,9 +1509,6 @@ static int live_parallel_engines(void *arg)
 
 		idx = 0;
 		for_each_uabi_engine(engine, i915) {
-			if (*fn == __live_parallel_spin && engine->bind_context)
-				continue;
-
 			atomic_inc(&i915->selftest.counter);
 			tsk[idx] = kthread_run(*fn, engine,
 					       "igt/parallel:%s",
@@ -1547,9 +1525,6 @@ static int live_parallel_engines(void *arg)
 		idx = 0;
 		for_each_uabi_engine(engine, i915) {
 			int status;
-
-			if (*fn == __live_parallel_spin && engine->bind_context)
-				continue;
 
 			if (IS_ERR(tsk[idx]))
 				break;
@@ -1677,7 +1652,8 @@ static int live_breadcrumbs_smoketest(void *arg)
 		smoke[idx] = smoke[0];
 		smoke[idx].engine = engine;
 		smoke[idx].max_batch =
-			max_batches(smoke[0].contexts[0], engine);
+			max_batches(smoke[0].contexts[0], engine) /
+			GET_MULTIPLIER(0);
 		if (smoke[idx].max_batch < 0) {
 			ret = smoke[idx].max_batch;
 			goto out_flush;
@@ -1761,6 +1737,9 @@ int i915_request_live_selftests(struct drm_i915_private *i915)
 	};
 
 	if (intel_gt_is_wedged(to_gt(i915)))
+		return 0;
+
+	if (!num_uabi_engines(i915))
 		return 0;
 
 	return i915_live_subtests(tests, i915);

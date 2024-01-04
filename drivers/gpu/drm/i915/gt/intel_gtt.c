@@ -382,7 +382,8 @@ static u32 poison_scratch_page(struct drm_i915_gem_object *scratch)
 	u32 val;
 
 	val = 0;
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
+	if (to_i915(scratch->base.dev)->params.poison_scratch ||
+	     IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)) {
 		/*
 		 * Partially randomise the scratch page.
 		 *
@@ -963,5 +964,4 @@ __vm_create_scratch_for_read_pinned(struct i915_address_space *vm, unsigned long
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/mock_gtt.c"
 #include "selftest_gtt.c"
-#include "selftest_l4wa.c"
 #endif

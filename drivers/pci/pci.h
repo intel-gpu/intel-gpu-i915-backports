@@ -38,7 +38,7 @@ void pci_init_reset_methods(struct pci_dev *dev);
 int pci_bridge_secondary_bus_reset(struct pci_dev *dev);
 int pci_bus_error_reset(struct pci_dev *dev);
 
-#ifndef PCI_INTERFACES_NOT_PRESENT
+#ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 struct pci_cap_saved_data {
 	u16		cap_nr;
 	bool		cap_extended;
@@ -58,7 +58,7 @@ int pci_add_cap_save_buffer(struct pci_dev *dev, char cap, unsigned int size);
 int pci_add_ext_cap_save_buffer(struct pci_dev *dev,
 				u16 cap, unsigned int size);
 
-#ifndef PCI_INTERFACES_NOT_PRESENT
+#ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 struct pci_cap_saved_state *pci_find_saved_cap(struct pci_dev *dev, char cap);
 struct pci_cap_saved_state *pci_find_saved_ext_cap(struct pci_dev *dev,
 						   u16 cap);
@@ -616,8 +616,11 @@ static inline void pcie_aspm_powersave_config_link(struct pci_dev *pdev) { }
 void pcie_set_ecrc_checking(struct pci_dev *dev);
 void pcie_ecrc_get_policy(char *str);
 #else
+
+#ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 static inline void pcie_set_ecrc_checking(struct pci_dev *dev) { }
 static inline void pcie_ecrc_get_policy(char *str) { }
+#endif
 #endif
 
 #ifdef CONFIG_PCIE_PTM
@@ -696,10 +699,12 @@ of_pci_get_max_link_speed(struct device_node *node)
 	return -EINVAL;
 }
 
+#ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 static inline void pci_set_of_node(struct pci_dev *dev) { }
 static inline void pci_release_of_node(struct pci_dev *dev) { }
 static inline void pci_set_bus_of_node(struct pci_bus *bus) { }
 static inline void pci_release_bus_of_node(struct pci_bus *bus) { }
+#endif
 
 static inline int devm_of_pci_bridge_init(struct device *dev, struct pci_host_bridge *bridge)
 {

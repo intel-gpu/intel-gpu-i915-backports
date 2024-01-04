@@ -77,8 +77,10 @@ static int live_mocs_init(struct live_mocs *arg, struct intel_gt *gt)
 
 	arg->scratch =
 		__vm_create_scratch_for_read_pinned(&gt->ggtt->vm, PAGE_SIZE);
-	if (IS_ERR(arg->scratch))
-		return PTR_ERR(arg->scratch);
+	if (IS_ERR(arg->scratch)) {
+		err = PTR_ERR(arg->scratch);
+		goto err_mocs;
+	}
 
 	arg->vaddr = i915_gem_object_pin_map_unlocked(arg->scratch->obj, I915_MAP_WB);
 	if (IS_ERR(arg->vaddr)) {
@@ -86,10 +88,14 @@ static int live_mocs_init(struct live_mocs *arg, struct intel_gt *gt)
 		goto err_scratch;
 	}
 
+	free_mocs_settings(&arg->table);
 	return 0;
 
 err_scratch:
 	i915_vma_unpin_and_release(&arg->scratch, 0);
+
+err_mocs:
+	free_mocs_settings(&arg->table);
 	return err;
 }
 

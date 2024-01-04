@@ -20,7 +20,6 @@
 #include "intel_engine_regs.h"
 #include "intel_engine_user.h"
 #include "intel_execlists_submission.h"
-#include "intel_flat_ppgtt_pool.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gt_mcr.h"
@@ -515,7 +514,6 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 
 	BUILD_BUG_ON(BITS_PER_TYPE(engine->mask) < I915_NUM_ENGINES);
 
-	INIT_LIST_HEAD(&engine->pinned_contexts_list);
 	engine->id = id;
 	engine->legacy_idx = INVALID_ENGINE;
 	engine->mask = BIT(id);
@@ -560,15 +558,15 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	}
 
 	engine->props.heartbeat_interval_ms =
-		CPTCFG_DRM_I915_HEARTBEAT_INTERVAL;
+		ADJUST_TIMEOUT(CPTCFG_DRM_I915_HEARTBEAT_INTERVAL);
 	engine->props.max_busywait_duration_ns =
-		CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT;
+		ADJUST_TIMEOUT(CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT);
 	engine->props.preempt_timeout_ms =
-		CPTCFG_DRM_I915_PREEMPT_TIMEOUT;
+		ADJUST_TIMEOUT(CPTCFG_DRM_I915_PREEMPT_TIMEOUT);
 	engine->props.stop_timeout_ms =
 		CPTCFG_DRM_I915_STOP_TIMEOUT;
 	engine->props.timeslice_duration_ms =
-		CPTCFG_DRM_I915_TIMESLICE_DURATION;
+		ADJUST_TIMEOUT(CPTCFG_DRM_I915_TIMESLICE_DURATION);
 
 	/* FIXME: Balancer IGT test starts to fail below 5ms timeslice */
 	if (intel_guc_submission_is_wanted(&gt->uc.guc) &&
@@ -582,7 +580,8 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	 * pre-emption timeout value to be much higher for compute engines.
 	 */
 	if (GRAPHICS_VER(i915) == 12 && (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE))
-		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE;
+		engine->props.preempt_timeout_ms =
+			ADJUST_TIMEOUT(CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE);
 
 	/*
 	 * With their many BCS engines (and CCS engines), PVC systems can overload
@@ -593,7 +592,8 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	 */
 	if (GRAPHICS_VER(i915) == 12 && engine->class == COPY_ENGINE_CLASS &&
 	    (hweight32(BCS_MASK(gt)) >= 2))
-		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE_COPY;
+		engine->props.preempt_timeout_ms =
+			ADJUST_TIMEOUT(CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE_COPY);
 
 	/* Cap properties according to any system limits */
 #define CLAMP_PROP(field) \
@@ -764,6 +764,7 @@ static void intel_setup_engine_capabilities(struct intel_gt *gt)
 void intel_engines_release(struct intel_gt *gt)
 {
 	struct intel_engine_cs *engine;
+	struct intel_context *ce, *cn;
 	enum intel_engine_id id;
 
 	/*
@@ -779,18 +780,28 @@ void intel_engines_release(struct intel_gt *gt)
 	if (!INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
 		__intel_gt_reset(gt, ALL_ENGINES);
 
-	/* Decouple the backend; but keep the layout for late GPU resets */
+	/* Disable any further use of the engines */
 	for_each_engine(engine, gt, id) {
-		if (!engine->release)
+		if (!engine->kernel_context)
 			continue;
 
 		intel_wakeref_wait_for_idle(&engine->wakeref);
 		GEM_BUG_ON(intel_engine_pm_is_awake(engine));
 
+		memset(&engine->reset, 0, sizeof(engine->reset));
+		engine->kernel_context = NULL;
+	}
+
+	list_for_each_entry_safe(ce, cn, &gt->pinned_contexts, pinned_contexts_link)
+		intel_engine_destroy_pinned_context(ce);
+
+	/* Decouple the backend; but keep the layout for late GPU resets */
+	for_each_engine(engine, gt, id) {
+		if (!engine->release)
+			continue;
+
 		engine->release(engine);
 		engine->release = NULL;
-
-		memset(&engine->reset, 0, sizeof(engine->reset));
 	}
 }
 
@@ -905,7 +916,8 @@ static void engine_mask_apply_media_fuses(struct intel_gt *gt)
 	}
 	drm_dbg(&i915->drm, "vdbox enable: %04x, instances: %04lx\n",
 		vdbox_mask, VDBOX_MASK(gt));
-	GEM_BUG_ON(vdbox_mask != VDBOX_MASK(gt));
+	if (vdbox_mask != VDBOX_MASK(gt))
+		DRM_WARN("%s: unexpected VDbox fuse value\n", __func__);
 
 	for (i = 0; i < I915_MAX_VECS; i++) {
 		if (!HAS_ENGINE(gt, _VECS(i))) {
@@ -920,7 +932,8 @@ static void engine_mask_apply_media_fuses(struct intel_gt *gt)
 	}
 	drm_dbg(&i915->drm, "vebox enable: %04x, instances: %04lx\n",
 		vebox_mask, VEBOX_MASK(gt));
-	GEM_BUG_ON(vebox_mask != VEBOX_MASK(gt));
+	if (vebox_mask != VEBOX_MASK(gt))
+		DRM_WARN("%s: unexpected VEbox fuse value\n", __func__);
 }
 
 static void engine_mask_apply_compute_fuses(struct intel_gt *gt)
@@ -933,6 +946,12 @@ static void engine_mask_apply_compute_fuses(struct intel_gt *gt)
 
 	if (GRAPHICS_VER(i915) < 11)
 		return;
+
+	if (!i915->params.enable_compute_engines) {
+		drm_dbg(&i915->drm, "Compute engines disabled via modparam\n");
+		info->engine_mask &= ~GENMASK(CCS_MAX, CCS0);
+		return;
+	}
 
 	if (hweight32(CCS_MASK(gt)) <= 1)
 		return;
@@ -1007,9 +1026,18 @@ static void engine_mask_apply_copy_fuses(struct intel_gt *gt)
  */
 static intel_engine_mask_t init_engine_mask(struct intel_gt *gt)
 {
+	struct drm_i915_private *i915 = gt->i915;
 	struct intel_gt_info *info = &gt->info;
 
 	GEM_BUG_ON(!info->engine_mask);
+
+	info->engine_mask &= i915->params.ring_mask;
+
+	/* only print the message once for GT0 */
+	if (gt->info.id == 0 &&
+	    info->engine_mask != INTEL_INFO(i915)->platform_engine_mask)
+		DRM_INFO("loading with reduced engine mask 0x%x\n",
+			 info->engine_mask);
 
 	engine_mask_apply_media_fuses(gt);
 	engine_mask_apply_compute_fuses(gt);
@@ -1084,7 +1112,8 @@ int intel_engines_init_mmio(struct intel_gt *gt)
 	u8 logical_ids[MAX_ENGINE_INSTANCE + 1];
 	int err;
 
-	drm_WARN_ON(&i915->drm, engine_mask == 0);
+	if (engine_mask == 0)
+		DRM_WARN("%s: no engines enabled\n", __func__);
 	drm_WARN_ON(&i915->drm, engine_mask &
 		    GENMASK(BITS_PER_TYPE(mask) - 1, I915_NUM_ENGINES));
 
@@ -1387,7 +1416,9 @@ intel_engine_create_pinned_context(struct intel_engine_cs *engine,
 		return ERR_PTR(err);
 	}
 
-	list_add_tail(&ce->pinned_contexts_link, &engine->pinned_contexts_list);
+	list_add_tail(&ce->pinned_contexts_link, &engine->gt->pinned_contexts);
+	if (ce->state)
+		ce->state->obj->flags |= I915_BO_ALLOC_VOLATILE;
 
 	/*
 	 * Give our perma-pinned kernel timelines a separate lockdep class,
@@ -1402,24 +1433,18 @@ intel_engine_create_pinned_context(struct intel_engine_cs *engine,
 
 void intel_engine_destroy_pinned_context(struct intel_context *ce)
 {
-	struct intel_engine_cs *engine = ce->engine;
-	struct i915_vma *hwsp = engine->status_page.vma;
+	if (!list_empty(&ce->timeline->engine_link)) {
+		struct intel_engine_cs *engine = ce->engine;
+		struct i915_vma *hwsp = engine->status_page.vma;
 
-	GEM_BUG_ON(ce->timeline->hwsp_ggtt != hwsp);
-
-	mutex_lock(&hwsp->vm->mutex);
-	list_del(&ce->timeline->engine_link);
-	mutex_unlock(&hwsp->vm->mutex);
+		mutex_lock(&hwsp->vm->mutex);
+		list_del(&ce->timeline->engine_link);
+		mutex_unlock(&hwsp->vm->mutex);
+	}
 
 	list_del(&ce->pinned_contexts_link);
 	intel_context_unpin(ce);
 	intel_context_put(ce);
-}
-
-static void destroy_pinned_context(struct intel_context *ce)
-{
-	if (ce)
-		intel_engine_destroy_pinned_context(ce);
 }
 
 static struct intel_context *
@@ -1430,54 +1455,6 @@ create_kernel_context(struct intel_engine_cs *engine)
 	return intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_4K,
 						  I915_GEM_HWS_SEQNO_ADDR,
 						  &kernel, "kernel_context");
-}
-
-static struct intel_context *
-create_blitter_context(struct intel_engine_cs *engine)
-{
-	static struct lock_class_key blitter;
-
-	return intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_512K,
-						  I915_GEM_HWS_BLITTER_ADDR,
-						  &blitter, "blitter_context");
-}
-
-static struct intel_context *
-create_bind_context(struct intel_engine_cs *engine)
-{
-	static struct lock_class_key bind;
-
-	return intel_engine_create_pinned_context(engine,
-						  engine->gt->vm, SZ_256K,
-						  I915_GEM_HWS_BIND_ADDR,
-						  &bind, "bind_context");
-}
-
-static int
-setup_flat_ppgtt(struct intel_engine_cs *engine)
-{
-	struct intel_gt *gt = engine->gt;
-	struct intel_context *ce;
-	int ret;
-
-	if (!gt->lmem)
-		return 0;
-
-	ce = create_bind_context(engine);
-	if (IS_ERR(ce))
-		return PTR_ERR(ce);
-
-	ret = intel_flat_ppgtt_pool_init(&gt->fpp, ce->vm);
-	if (ret)
-		goto err;
-
-	engine->bind_context = ce;
-	atomic_set(&engine->i915->level4_wa_disabled, 0);
-	return 0;
-
-err:
-	destroy_pinned_context(ce);
-	return ret;
 }
 
 /**
@@ -1513,38 +1490,10 @@ static int engine_init_common(struct intel_engine_cs *engine)
 	engine->kernel_context = ce;
 	ret = measure_breadcrumb_dw(ce);
 	if (ret < 0)
-		goto err_context;
+		return ret;
 
 	engine->emit_fini_breadcrumb_dw = ret;
-
-	/*
-	 * The blitter context is used to quickly memset or migrate objects
-	 * in local memory, so it has to always be available.
-	 */
-	if (engine->class == COPY_ENGINE_CLASS &&
-	    ce->timeline != engine->legacy.timeline) {
-		if (i915_is_mem_wa_enabled(engine->i915, I915_WA_USE_FLAT_PPGTT_UPDATE) &&
-		    engine->id == engine->gt->rsvd_bcs) {
-			ret = setup_flat_ppgtt(engine);
-			if (ret)
-				goto err_flat;
-		}
-
-		ce = create_blitter_context(engine);
-		if (IS_ERR(ce)) {
-			ret = PTR_ERR(ce);
-			goto err_context;
-		}
-
-		engine->blitter_context = ce;
-	}
-
 	return 0;
-
-err_flat:
-err_context:
-	intel_engine_destroy_pinned_context(ce);
-	return ret;
 }
 
 int intel_engines_init(struct intel_gt *gt)
@@ -1598,9 +1547,6 @@ int intel_engines_init(struct intel_gt *gt)
 
 void intel_engine_quiesce(struct intel_engine_cs *engine)
 {
-	destroy_pinned_context(engine->blitter_context);
-	destroy_pinned_context(engine->bind_context);
-	destroy_pinned_context(engine->kernel_context);
 	cleanup_status_page(engine);
 }
 

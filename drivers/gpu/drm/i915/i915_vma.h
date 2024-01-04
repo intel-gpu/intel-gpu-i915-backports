@@ -190,6 +190,37 @@ static inline bool i915_vma_is_active(const struct i915_vma *vma)
 	return !i915_active_is_idle(&vma->active);
 }
 
+/*
+ * True if maps a segmented BO; and thus there might be multiple 'adjacent'
+ * vmas, where we have a vma per each mapped chunk of the BO in this mapping.
+ */
+static inline bool i915_vma_is_segment(struct i915_vma *vma) {
+	return vma->adjacent_start;
+}
+
+/* True if maps a segmented BO and is not the head of the adjacent vmas */
+static inline bool i915_vma_is_trailing_segment(struct i915_vma *vma) {
+	return vma->adjacent_start && vma->adjacent_start != vma;
+}
+
+static inline u64 i915_vma_size_from_segments(struct i915_vma *vma)
+{
+	struct i915_vma *adj_vma;
+	u64 size = 0;
+
+	if (!i915_vma_is_segment(vma))
+		return i915_vma_size(vma);
+
+	/* intended to be used only with head vma */
+	GEM_BUG_ON(vma->adjacent_start != vma);
+
+	for (adj_vma = vma->adjacent_start; adj_vma;
+		adj_vma = adj_vma->adjacent_next)
+		size += i915_vma_size(adj_vma);
+
+	return size;
+}
+
 static inline struct i915_vma *i915_vma_get(struct i915_vma *vma)
 {
 	i915_gem_object_get(vma->obj);

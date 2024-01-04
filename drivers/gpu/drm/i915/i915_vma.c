@@ -35,13 +35,13 @@
 #include "gt/gen8_ppgtt.h"
 #include "gt/intel_engine.h"
 #include "gt/intel_engine_heartbeat.h"
-#include "gt/intel_flat_ppgtt_pool.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_tlb.h"
 
 #include "i915_debugger.h"
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_gem_evict.h"
 #include "i915_sw_fence_work.h"
@@ -346,6 +346,8 @@ static int __vma_bind(struct dma_fence_work *work)
 	struct i915_vma *vma = vw->vma;
 
 	vma->ops->bind_vma(vw->vm, &vw->stash, vma, vw->pat_index, vw->flags);
+	if (i915_userspace_is_blocked(vma->vm->i915))
+		vw->base.rq.fence.error = -EREMCHG;
 
 	return 0;
 }
@@ -383,7 +385,6 @@ static void __vma_complete(struct dma_fence_work *work)
 	}
 
 	__vma_user_fence_signal(vma, work->rq.fence.error);
-	intel_flat_ppgtt_request_pool_clean(vma);
 
 	i915_active_release(&vma->active);
 }
@@ -515,6 +516,12 @@ int __i915_vma_bind(struct i915_vma *vma,
 		work->base.rq.fence.error = 0; /* enable the queue_work() */
 	} else {
 		vma->ops->bind_vma(vma->vm, NULL, vma, pat_index, bind_flags);
+		if (i915_userspace_is_blocked(vma->vm->i915)) {
+			set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
+			if (vma->vm->scratch_range)
+				vma->vm->scratch_range(vma->vm, vma->node.start, vma->node.size);
+			return -EAGAIN;
+		}
 	}
 
 	atomic_or(bind_flags, &vma->flags);
@@ -1200,8 +1207,6 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	if (flags & PIN_GLOBAL)
 		wakeref = intel_runtime_pm_get(&vma->vm->i915->runtime_pm);
 
-	intel_flat_ppgtt_allocate_requests(vma, false);
-
 	work = i915_vma_work(vma->vm);
 	if (!work) {
 		err = -ENOMEM;
@@ -1493,7 +1498,6 @@ void i915_vma_release(struct kref *ref)
 		i915_sw_fence_complete(vma->bind_fence);
 	}
 
-	intel_flat_ppgtt_request_pool_clean(vma);
 	i915_vm_put(vma->vm);
 
 	i915_active_fini(&vma->active);
@@ -1653,6 +1657,24 @@ int __i915_vma_move_to_active(struct i915_vma *vma, struct i915_request *rq)
 
 	return i915_active_add_request(&vma->active, rq);
 }
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static void  display_i915_vma_move_to_active(struct drm_i915_gem_object *obj,
+			struct i915_request *rq)
+{
+		struct intel_frontbuffer *front;
+
+		front = __intel_frontbuffer_get(obj);
+		if (unlikely(front)) {
+			if (intel_frontbuffer_invalidate(front, ORIGIN_CS))
+				i915_active_add_request(&front->write, rq);
+			intel_frontbuffer_put(front);
+		}
+}
+#else
+static void  display_i915_vma_move_to_active(struct drm_i915_gem_object *obj,
+			struct i915_request *rq)
+{ return; }
+#endif
 
 int _i915_vma_move_to_active(struct i915_vma *vma,
 			     struct i915_request *rq,
@@ -1671,50 +1693,23 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 
 		GEM_BUG_ON(!i915_vma_is_active(vma));
 	}
-
 #ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
-        /*
-         * Reserve fences slot early to prevent an allocation after preparing
-         * the workload and associating fences with dma_resv.
-         */
-        if (fence && !(flags & __EXEC_OBJECT_NO_RESERVE)) {
-                struct dma_fence *curr;
-                int idx;
+	/*
+	 * Reserve fences slot early to prevent an allocation after preparing
+	 * the workload and associating fences with dma_resv.
+	 */
 
-                dma_fence_array_for_each(curr, idx, fence)
-                        ;
-                err = dma_resv_reserve_fences(vma->obj->base.resv, idx);
-                if (unlikely(err))
-                        return err;
-        }
+	if (fence && !(flags & __EXEC_OBJECT_NO_RESERVE)) {
+		struct dma_fence *curr;
+		int idx;
 
-        if (flags & EXEC_OBJECT_WRITE) {
-                struct intel_frontbuffer *front;
+		dma_fence_array_for_each(curr, idx, fence)
+			;
+		err = dma_resv_reserve_fences(vma->obj->base.resv, idx);
+		if (unlikely(err))
+			return err;
 
-                front = __intel_frontbuffer_get(obj);
-                if (unlikely(front)) {
-                        if (intel_frontbuffer_invalidate(front, ORIGIN_CS))
-                                i915_active_add_request(&front->write, rq);
-                        intel_frontbuffer_put(front);
-                }
-        }
-
-        if (fence) {
-                struct dma_fence *curr;
-                enum dma_resv_usage usage;
-                int idx;
-
-                obj->read_domains = 0;
-                if (flags & EXEC_OBJECT_WRITE) {
-                        usage = DMA_RESV_USAGE_WRITE;
-                        obj->write_domain = I915_GEM_DOMAIN_RENDER;
-                } else {
-                        usage = DMA_RESV_USAGE_READ;
-                }
-                dma_fence_array_for_each(curr, idx, fence)
-                        dma_resv_add_fence(vma->obj->base.resv, curr, usage);
-        }
-#else
+	}
 
 	if (flags & EXEC_OBJECT_WRITE) {
 		struct intel_frontbuffer *front;
@@ -1725,9 +1720,34 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 				i915_active_add_request(&front->write, rq);
 			intel_frontbuffer_put(front);
 		}
+	}
 
+	if (fence) {
+		struct dma_fence *curr;
+		enum dma_resv_usage usage;
+		int idx;
+
+		obj->read_domains = 0;
+		if (flags & EXEC_OBJECT_WRITE) {
+			usage = DMA_RESV_USAGE_WRITE;
+			obj->write_domain = I915_GEM_DOMAIN_RENDER;
+		} else {
+			usage = DMA_RESV_USAGE_READ;
+		}
+		dma_fence_array_for_each(curr, idx, fence)
+			dma_resv_add_fence(vma->obj->base.resv, curr, usage);
+	}
+#else
+
+	if (flags & EXEC_OBJECT_WRITE) {
+		display_i915_vma_move_to_active(obj, rq);
 		if (fence) {
+#ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
+			dma_resv_add_fence(vma->resv, fence,
+					DMA_RESV_USAGE_WRITE);
+#else
 			dma_resv_add_excl_fence(vma->resv, fence);
+#endif
 			obj->write_domain = I915_GEM_DOMAIN_RENDER;
 			obj->read_domains = 0;
 		}
@@ -1739,7 +1759,12 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 		}
 
 		if (fence) {
+#ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
+			dma_resv_add_fence(vma->resv, fence,
+					DMA_RESV_USAGE_READ);
+#else
 			dma_resv_add_shared_fence(vma->resv, fence);
+#endif
 			obj->write_domain = 0;
 		}
 	}
@@ -1869,7 +1894,6 @@ int i915_vma_unbind(struct i915_vma *vma)
 		/* XXX not always required: nop_clear_range */
 		wakeref = intel_runtime_pm_get(&vm->i915->runtime_pm);
 
-	intel_flat_ppgtt_allocate_requests(vma, true);
 	err = mutex_lock_interruptible_nested(&vma->vm->mutex, !wakeref);
 	if (err)
 		goto out_rpm;
@@ -1880,8 +1904,6 @@ int i915_vma_unbind(struct i915_vma *vma)
 out_rpm:
 	if (wakeref)
 		intel_runtime_pm_put(&vm->i915->runtime_pm, wakeref);
-
-	intel_flat_ppgtt_request_pool_clean(vma);
 	return err;
 }
 

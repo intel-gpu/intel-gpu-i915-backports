@@ -26,6 +26,7 @@
 #ifndef __INTEL_DISPLAY_TYPES_H__
 #define __INTEL_DISPLAY_TYPES_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/i2c.h>
 #include <linux/pm_qos.h>
 #include <linux/pwm.h>
@@ -2099,4 +2100,5 @@ to_intel_frontbuffer(struct drm_framebuffer *fb)
 	return fb ? to_intel_framebuffer(fb)->frontbuffer : NULL;
 }
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /*  __INTEL_DISPLAY_TYPES_H__ */

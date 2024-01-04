@@ -56,12 +56,6 @@ void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
 			       struct sg_table *pages)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
-
-	/* XXX This does not prevent more requests being submitted! */
-	if (unlikely(ggtt->do_idle_maps))
-		/* Wait a bit, in the hope it avoids the hang */
-		usleep_range(100, 250);
 
 	dma_unmap_sg_attrs(i915->drm.dev, pages->sgl, pages->nents,
 			DMA_BIDIRECTIONAL,

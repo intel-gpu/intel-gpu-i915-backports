@@ -27,4 +27,15 @@
 extern unsigned long nsecs_to_jiffies(u64 n);
 #endif /* 3.17 */
 
+#ifdef BPM_JIFFIES_DELTA_TO_MSECS_NOT_PRESENT
+
+#ifndef time_is_before_eq_jiffies
+#define time_is_before_eq_jiffies(a) time_after_eq(jiffies, a)
+#endif
+static inline unsigned int jiffies_delta_to_msecs(long delta)
+{
+	return jiffies_to_msecs(max(0L, delta));
+}
+#endif /* BPM_JIFFIES_DELTA_TO_MSECS_NOT_PRESENT */
+
 #endif /* __BACKPORT_LNIUX_JIFFIES_H */

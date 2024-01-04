@@ -289,6 +289,8 @@ static struct intel_context *__migrate_engines(struct intel_gt *gt)
 		if (engine_supports_migration(engine))
 			engines[count++] = engine;
 	}
+	if (count == 0)
+		return ERR_PTR(-ENODEV);
 
 	return intel_context_create(engines[random_index(count)]);
 }
@@ -1109,17 +1111,6 @@ intel_migrate_clear(struct intel_migrate *m,
 out:
 	intel_context_put(ce);
 	return err;
-}
-
-void __maybe_unused intel_migrate_fini(struct intel_migrate *m)
-{
-	struct intel_context *ce;
-
-	ce = fetch_and_zero(&m->context);
-	if (!ce)
-		return;
-
-	intel_engine_destroy_pinned_context(ce);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

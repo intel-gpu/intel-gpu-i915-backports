@@ -3,6 +3,7 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM i915
 
@@ -589,3 +590,4 @@ TRACE_EVENT(intel_frontbuffer_flush,
 #define TRACE_INCLUDE_PATH BACKPORT_PATH/drivers/gpu/drm/i915/display
 #define TRACE_INCLUDE_FILE intel_display_trace
 #include <trace/define_trace.h>
+#endif /* CPTCFG_DRM_I915_DISPLAY */

@@ -8,6 +8,10 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 
+#ifdef BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
+#define cancel_dirty_page(X) folio_cancel_dirty(page_folio(X))
+#endif
+
 #if LINUX_VERSION_IS_LESS(3,15,0)
 #define kvfree LINUX_I915_BACKPORT(kvfree)
 void kvfree(const void *addr);

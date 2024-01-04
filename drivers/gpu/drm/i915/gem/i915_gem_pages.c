@@ -362,7 +362,6 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 
 	if (obj->mm.madv != I915_MADV_WILLNEED)
 		i915_gem_object_truncate(obj);
-
 #ifndef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
 	if (kref_read(&obj->base.refcount)) /* prune stale fences */
 		dma_resv_add_excl_fence(obj->base.resv, NULL);

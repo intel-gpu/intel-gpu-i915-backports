@@ -46,13 +46,6 @@ __assign_mmap_offset(struct drm_i915_gem_object *obj,
 	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
 		return -ENODEV;
 
-	if (i915_gem_object_is_lmem(obj) &&
-	    i915_is_level4_wa_active(obj->mm.region.mem->gt) &&
-	    !i915_gem_object_should_migrate_smem(obj, NULL) &&
-	    obj->mm.region.mem->instance > 0)
-		drm_dbg(obj->base.dev,
-			"Trying to mmap lmem1 when L4wa is enabled\n");
-
 	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
 	if (IS_ERR(mmo))
 		return PTR_ERR(mmo);
@@ -381,11 +374,11 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 				 * cannot. Depending on error, fail or retry.
 				 */
 				continue;
-			else if (err == -EDEADLK)
+
+			if (err == -EDEADLK)
 				continue;
-			else
-				/* Migration not required, just best effort. */
-				err = 0;
+
+			/* Migration not required, just best effort. */
 		}
 
 		err = i915_gem_object_pin_pages_sync(pg);
@@ -427,14 +420,16 @@ static vm_fault_t vm_fault_gtt(struct vm_fault *vmf)
 	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
 	bool write = area->vm_flags & VM_WRITE;
 	struct i915_gem_ww_ctx ww;
+	unsigned long obj_offset;
 	intel_wakeref_t wakeref;
 	struct i915_vma *vma;
 	pgoff_t page_offset;
 	int srcu;
 	int ret;
 
-	/* We don't use vmf->pgoff since that has the fake offset */
+	obj_offset = area->vm_pgoff - drm_vma_node_start(&mmo->vma_node);
 	page_offset = (vmf->address - area->vm_start) >> PAGE_SHIFT;
+	page_offset += obj_offset;
 
 	trace_i915_gem_object_fault(obj, vmf->address, page_offset, true, write);
 
@@ -511,7 +506,7 @@ retry:
 
 	/* Finally, remap it using the new GTT offset */
 	ret = remap_io_mapping(area,
-			       area->vm_start + (vma->ggtt_view.partial.offset << PAGE_SHIFT),
+			       area->vm_start + ((vma->ggtt_view.partial.offset - obj_offset) << PAGE_SHIFT),
 			       (ggtt->gmadr.start + i915_ggtt_offset(vma)) >> PAGE_SHIFT,
 			       min_t(u64, vma->size, area->vm_end - area->vm_start),
 			       &ggtt->iomap);
@@ -1110,10 +1105,6 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 	pvc_wa_disallow_rc6(i915);
 	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
 	vma->vm_private_data = mmo;
-	vma->vm_pgoff = drm_vma_node_start(&mmo->vma_node);
-
-	if (i915_gem_object_has_iomem(obj))
-		vma->vm_flags |= VM_IO;
 
 	/*
 	 * We keep the ref on mmo->obj, not vm_file, but we require
@@ -1242,9 +1233,9 @@ int i915_gem_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	rcu_read_lock();
 	drm_vma_offset_lock_lookup(dev->vma_offset_manager);
-	node = drm_vma_offset_exact_lookup_locked(dev->vma_offset_manager,
-						  vma->vm_pgoff,
-						  vma_pages(vma));
+	node = drm_vma_offset_lookup_locked(dev->vma_offset_manager,
+					    vma->vm_pgoff,
+					    vma_pages(vma));
 	if (node && drm_vma_node_is_allowed(node, priv)) {
 		/*
 		 * Skip 0-refcnted objects as it is in the process of being

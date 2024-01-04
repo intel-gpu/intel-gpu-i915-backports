@@ -640,6 +640,8 @@ int intel_guc_wait_for_pending_msg(struct intel_guc *guc,
 	if (!timeout)
 		return -ETIME;
 
+	timeout = ADJUST_TIMEOUT(timeout);
+
 	intel_boost_fake_int_timer(guc_to_gt(guc), true);
 	for (;;) {
 		prepare_to_wait(&guc->ct.wq, &wait, state);
@@ -718,7 +720,7 @@ static int __guc_add_request(struct intel_guc *guc, struct i915_request *rq)
 	if (unlikely(context_blocked(ce) && !intel_context_is_parent(ce)))
 		goto out;
 
-	enabled = context_enabled(ce) || context_blocked(ce);
+	enabled = context_enabled(ce) || context_blocked(ce) || context_pending_enable(ce);
 
 	if (!enabled) {
 		action[len++] = INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET;
@@ -1914,8 +1916,10 @@ void intel_guc_submission_reset(struct intel_guc *guc, intel_engine_mask_t stall
 	 * The full GT reset will have cleared the TLB caches and flushed the
 	 * G2H message queue; we can release all the blocked waiters.
 	 */
+	xa_lock_irq(&guc->tlb_lookup);
 	xa_for_each(&guc->tlb_lookup, i, wait)
 		wake_up_tlb_invalidate(wait);
+	xa_unlock_irq(&guc->tlb_lookup);
 }
 
 static void guc_cancel_context_requests(struct intel_context *ce)
@@ -4453,41 +4457,6 @@ static void guc_retire_inflight_request_prio(struct i915_request *rq)
 	spin_unlock(&ce->guc_state.lock);
 }
 
-static void sanitize_hwsp(struct intel_engine_cs *engine)
-{
-	struct intel_timeline *tl;
-
-	list_for_each_entry(tl, &engine->status_page.timelines, engine_link)
-		intel_timeline_reset_seqno(tl);
-}
-
-static void guc_sanitize(struct intel_engine_cs *engine)
-{
-	/*
-	 * Poison residual state on resume, in case the suspend didn't!
-	 *
-	 * We have to assume that across suspend/resume (or other loss
-	 * of control) that the contents of our pinned buffers has been
-	 * lost, replaced by garbage. Since this doesn't always happen,
-	 * let's poison such state so that we more quickly spot when
-	 * we falsely assume it has been preserved.
-	 */
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
-		memset(engine->status_page.addr, POISON_INUSE, PAGE_SIZE);
-
-	/*
-	 * The kernel_context HWSP is stored in the status_page. As above,
-	 * that may be lost on resume/initialisation, and so we need to
-	 * reset the value in the HWSP.
-	 */
-	sanitize_hwsp(engine);
-
-	/* And scrub the dirty cachelines for the HWSP */
-	drm_clflush_virt_range(engine->status_page.addr, PAGE_SIZE);
-
-	intel_engine_reset_pinned_contexts(engine);
-}
-
 static void setup_hwsp(struct intel_engine_cs *engine)
 {
 	intel_engine_set_hwsp_writemask(engine, ~0u); /* HWSTAM */
@@ -4572,8 +4541,7 @@ static inline int guc_kernel_context_pin(struct intel_guc *guc,
 static inline int guc_init_submission(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
+	struct intel_context *ce;
 
 	/* make sure all descriptors are clean... */
 	xa_destroy(&guc->context_lookup);
@@ -4593,16 +4561,11 @@ static inline int guc_init_submission(struct intel_guc *guc)
 	 * not attached to the gem_context, so they need to be added separately.
 	 */
 
-	for_each_engine(engine, gt, id) {
-		struct intel_context *ce;
-
-		list_for_each_entry(ce, &engine->pinned_contexts_list,
-				    pinned_contexts_link) {
-			int ret = guc_kernel_context_pin(guc, ce);
-			if (ret) {
-				/* No point in trying to clean up as i915 will wedge on failure */
-				return ret;
-			}
+	list_for_each_entry(ce, &gt->pinned_contexts, pinned_contexts_link) {
+		int ret = guc_kernel_context_pin(guc, ce);
+		if (ret) {
+			/* No point in trying to clean up as i915 will wedge on failure */
+			return ret;
 		}
 	}
 
@@ -4791,38 +4754,9 @@ int intel_guc_submission_setup(struct intel_engine_cs *engine)
 	lrc_init_wa_ctx(engine);
 
 	/* Finally, take ownership and responsibility for cleanup! */
-	engine->status_page.sanitize = guc_sanitize;
 	engine->release = guc_release;
 
 	return 0;
-}
-
-/**
- * guc_submission_status_page_sanitization_disable - Disable the status page sanitization call.
- * @guc: Graphics uC instance struct
- */
-void guc_submission_status_page_sanitization_disable(struct intel_guc *guc)
-{
-	struct intel_gt *gt = guc_to_gt(guc);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	for_each_engine(engine, gt, id)
-		engine->status_page.sanitize = 0;
-}
-
-/**
- * guc_submission_status_page_sanitization_disable - Re-enable the status page sanitization call.
- * @guc: Graphics uC instance struct
- */
-void guc_submission_status_page_sanitization_enable(struct intel_guc *guc)
-{
-	struct intel_gt *gt = guc_to_gt(guc);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	for_each_engine(engine, gt, id)
-		engine->status_page.sanitize = guc_sanitize;
 }
 
 struct scheduling_policy {
@@ -5161,13 +5095,14 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 {
 	struct intel_context *ce;
 	unsigned long flags;
-	u32 ctx_id;
+	u32 ctx_id, state;
 
 	if (unlikely(len < 2)) {
 		guc_err(guc, "Invalid length %u\n", len);
 		return -EPROTO;
 	}
 	ctx_id = msg[0];
+	state = msg[1];
 
 	ce = g2h_context_lookup(guc, ctx_id);
 	if (unlikely(!ce))
@@ -5176,8 +5111,8 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 	if (unlikely(context_destroyed(ce) ||
 		     (!context_pending_enable(ce) &&
 		     !context_pending_disable(ce)))) {
-		guc_err(guc, "Bad context sched_state 0x%x, ctx_id %u\n",
-			ce->guc_state.sched_state, ctx_id);
+		guc_err(guc, "Bad context sched_state 0x%x, ctx_id %u, state %u\n",
+			ce->guc_state.sched_state, ctx_id, state);
 		return -EPROTO;
 	}
 
@@ -5185,7 +5120,13 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 	WRITE_ONCE(ce->engine->stats.irq.count,
 		   READ_ONCE(ce->engine->stats.irq.count) + 1);
 
-	if (context_pending_enable(ce)) {
+	if (state == GUC_CONTEXT_ENABLE) {
+		if (!context_pending_enable(ce)) {
+			guc_err(guc, "Unexpected context enable done: sched_state 0x%x, ctx_id %u\n",
+				ce->guc_state.sched_state, ctx_id);
+			return -EPROTO;
+		}
+
 #ifdef CPTCFG_DRM_I915_SELFTEST
 		if (unlikely(ce->drop_schedule_enable)) {
 			ce->drop_schedule_enable = false;
@@ -5196,8 +5137,14 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 		spin_lock_irqsave(&ce->guc_state.lock, flags);
 		clr_context_pending_enable(ce);
 		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
-	} else if (context_pending_disable(ce)) {
+	} else if (state == GUC_CONTEXT_DISABLE) {
 		bool banned;
+
+		if (!context_pending_disable(ce)) {
+			guc_err(guc, "Unexpected context disable done: sched_state 0x%x, ctx_id %u\n",
+				ce->guc_state.sched_state, ctx_id);
+			return -EPROTO;
+		}
 
 #ifdef CPTCFG_DRM_I915_SELFTEST
 		if (unlikely(ce->drop_schedule_disable)) {
@@ -5227,6 +5174,10 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 			guc_cancel_context_requests(ce);
 			intel_engine_signal_breadcrumbs(ce->engine);
 		}
+	} else {
+		guc_err(guc, "Unexpected context state done: sched_state 0x%x, ctx_id %u, state %u\n",
+			ce->guc_state.sched_state, ctx_id, state);
+		return -EPROTO;
 	}
 
 	decr_outstanding_submission_g2h(guc, true);
@@ -5295,14 +5246,9 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 	 * XXX: Racey if request cancellation has occurred, see comment in
 	 * __guc_reset_context().
 	 */
-	if (likely(!intel_context_is_banned(ce) &&
-		   !context_blocked(ce))) {
+	if (likely(!intel_context_is_banned(ce) && !context_blocked(ce))) {
 		capture_error_state(guc, ce);
 		guc_context_replay(ce);
-	} else {
-		guc_info(guc, "Ignoring context reset notification for 0x%04X on %s: banned = %d, blocked = %d",
-			 ce->guc_id.id, ce->engine->name, intel_context_is_banned(ce),
-			 context_blocked(ce));
 	}
 }
 

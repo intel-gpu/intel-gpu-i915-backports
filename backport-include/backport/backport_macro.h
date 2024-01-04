@@ -6,12 +6,64 @@
 
 #if (LINUX_VERSION_IS_GEQ(6,4,5) || \
 		LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
-		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,19)))
+		(LINUX_VERSION_IN_RANGE(6,2,16, 6,3,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(36,37)) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,19)) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 104d79eb58aa
  * drm/dp_mst: Clear MSG_RDY flag before sending new message
  */
 #define BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * a3185f91d057 drm/ttm: merge ttm_bo_api.h and ttm_bo_driver.h v2
+ */
+#define BPM_TTM_BO_API_H_NOT_PRESENT
+
+/*
+ * 5e7b9a6ae8c3 swiotlb: remove swiotlb_max_segment
+ */
+#define BPM_SWIOTLB_MAX_SEGMENT_NOT_PRESENT
+
+/*
+ * 80ed86d4b6d7 drm/connector: Rename drm_mode_create_tv_properties
+ */
+#define BPM_DRM_MODE_CREATE_TV_PROP_NOT_PRESENT
+
+/*
+ * 6c80a93be62d drm/fb-helper: Initialize fb-helper's preferred BPP in prepare function
+ */
+#define BPM_DRM_FB_PREPARE_AND_INITIAL_CFG_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * e3c92eb4a84fb
+ * drm/ttm: rework on ttm_resource to use size_t type
+ */
+#define BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
+
+/*
+ * afb0ff78c13c51
+ * drm/fb-helper: Rename drm_fb_helper_unregister_fbi() to use _info postfix
+ */
+#define BPM_DRM_FB_HELPER_ALLOC_UNREGISTER_FBI_NOT_PRESENT
+
+/*
+ * 90b575f52c6
+ * drm/edid: detach debugfs EDID override from EDID property update
+ */
+#define BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
+
+/*
+ * 9877d8f6bc
+ *  drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
+ */
+#define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,2,0))
@@ -20,12 +72,6 @@
  *  overflow: Introduce overflows_type() and castable_to_type()
  */
 #define BPM_OVERFLOWS_TYPE_AVAILABLE
-
-/*
- * e3c92eb4a84fb
- * drm/ttm: rework on ttm_resource to use size_t type
- */
-#define BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
 
 /*
  * 3c202d14a9d73
@@ -38,33 +84,18 @@
  * folio-compat: remove lru_cache_add()
  */
 #define BPM_LRU_CACHE_ADD_API_NOT_PRESENT
-
-/*
- * afb0ff78c13c51
- * drm/fb-helper: Rename drm_fb_helper_unregister_fbi() to use _info postfix
- */
-#define BPM_DRM_FB_HELPER_ALLOC_UNREGISTER_FBI_NOT_PRESENT
-
-/*
- * 9877d8f6bc
- *  drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
- */
-#define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
-
-/*
- * 90b575f52c6
- * drm/edid: detach debugfs EDID override from EDID property update
- */
-#define BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
 #endif
 
-#if (LINUX_VERSION_IS_GEQ(6,1,0))
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * cce32e4e38c6
  * drm/atomic-helper: Remove _HELPER_ infix from DRM_PLANE_HELPER_NO_SCALING
  */
 #define BPM_DRM_PLANE_HELPER_NO_SCALING_NOT_PRESENT
+#endif
 
+#if (LINUX_VERSION_IS_GEQ(6,1,0))
 /*
  * de492c83cae prandom: remove unused functions
  */
@@ -77,7 +108,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
-		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,7)))
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,7)) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 4d07b0bc40
  * drm/display/dp_mst: Move all payload info into the atomic state
@@ -85,13 +117,32 @@
 #define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 #endif
 
-#if (LINUX_VERSION_IS_GEQ(6,0,0))
+#if (LINUX_VERSION_IS_LESS(6,1,0))
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+
+/*
+ * 3cea8d4753 lib: add find_nth{,_and,_andnot}_bit()
+ */
+#define BPM_FIND_NTH_BIT_PRESENT
+#endif
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,0,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * e33c267ab70d
  * mm: shrinkers: provide shrinkers with names
  */
 #define BPM_REGISTER_SHRINKER_SECOND_ARG_NOT_PRESENT
+#endif 
+
+#if (LINUX_VERSION_IS_GEQ(6,0,0))
+
+/*
+ * 92d23c6e9415 overflow, tracing: Define the is_signed_type() macro once
+ */
+#define BPM_IS_SIGNED_TYPE_COMPILER_H_NOT_PRESENT
 
 #endif
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
@@ -127,16 +178,17 @@
 
 #endif
 
-#if (LINUX_VERSION_IS_LESS(6,0,0))
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
-		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
+ */
+#define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
 
 /*
- * 64e06652e348 agp/intel: Rename intel-gtt symbols
+ * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
  */
-#define BPM_INTEL_GMCH_GTT_RENAMED
-
-#endif
+#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
@@ -157,11 +209,6 @@
  * 6a99099fe1d6 drm/display: Move HDCP helpers into display-helper module
  */
 #define BPM_DISPLAY_DRM_HDCP_PRESENT
-
-/*
- * f7fd7814f34c drm/i915: Remove dma_resv_prune
- */
-#define BPM_DMA_RESV_PRUNE_NOT_PRESENT
 
 /*
  * 2a64b147350f drm/display: Move DSC header and helpers into display-helper module
@@ -206,16 +253,6 @@
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,19,0)
-
-/*
- * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
- */
-#define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
-
-/*
- * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
- */
-#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 
 /*
  * 7bc80a5462c3 dma-buf: add enum dma_resv_usage v4
@@ -410,7 +447,7 @@
 /*
  * 16b0314aa746be dma-buf: move dma-buf symbols into the DMA_BUF module namespace
  */ 
-#define MODULE_IMPORT_NS_SUPPORT
+#define BPM_MODULE_IMPORT_NS_SUPPORT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
@@ -429,14 +466,16 @@
 /*
  * ab09243aa95a7 mm/migrate.c: remove MIGRATE_PFN_LOCKED
  */
-#define MIGRATE_PFN_LOCKED_REMOVED
+/* TBD: Need to reverify the patch as there is no issue */
+#define BPM_MIGRATE_PFN_LOCKED_REMOVED
 
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,15,46)
 #if !((SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && \
 	!(SUSE_LOCAL_VERSION_IS_LESS(24,11))) || \
-        UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+        UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
  */
@@ -468,7 +507,7 @@
 /* 
  * ac1723c16b drm/i915: Track IRQ state in local device state.
  */
-#define DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
+#define BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 
 #endif
 
@@ -481,6 +520,18 @@
  * Maintaining header drm_fourcc.h to compat,So add this feature to support KV >5.15.
  */
 #define DRM_FORMAT_MAX_PLANES_ADDED
+
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,15,8)
+
+#if !((REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1)) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && SUSE_LOCAL_VERSION_IS_GEQ(24,41)))
+/*
+ * e4779015fd5d timers: implement usleep_idle_range()
+ */
+#define BPM_USLEEP_RANGE_STATE_NOT_PRESENT
+#endif 
 
 #endif
 
@@ -531,20 +582,22 @@
 
 #endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,0))
+/*
+ * f0ab00174eb7 PCI: Make saved capability state private to core
+ */
+#define BPM_PCI_INTERFACES_NOT_PRESENT
+#endif
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
 
 /*
  *6f2beb268a5d swiotlb: Update is_swiotlb_active to add a struct device argument
  *
  */
-#define IS_SWIOTLB_ACTIVE_ARG_DEV_NOT_PRESENT
+#define BPM_IS_SWIOTLB_ACTIVE_ARG_DEV_NOT_PRESENT
 
 #endif
-
-/*
- * f0ab00174eb7 PCI: Make saved capability state private to core
- */
-#define PCI_INTERFACES_NOT_PRESENT
 
 #endif
 
@@ -578,6 +631,61 @@
 #define BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
 #endif
 
+#if LINUX_VERSION_IS_LESS(5,13,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+
+/*
+ * f21ffe9f6da6d swiotlb: Expose swiotlb_nr_tlb function to modules
+ *
+ */
+#define BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+#endif
+#endif /* LINUX_VERSION_IS_LESS(5,13,0) */
+
+#if LINUX_VERSION_IS_LESS(5,10,0)
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+
+/*
+ * b7b3c01b19159 mm/memremap_pages: support multiple ranges per invocation
+ *
+ */
+#define BPM_PAGEMAP_RANGE_START_NOT_PRESENT
+#endif
+
+/*
+ * aedcade6f4fa debugobjects: Allow debug_obj_descr to be const
+ *
+ */
+#define BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
+
+#endif /* LINUX_VERSION_IS_LESS(5,10,0) */
+
+#if LINUX_VERSION_IS_LESS(5,9,0)
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+
+/*
+ * 5143192cd410c mm/migrate: add a flags parameter to migrate_vma
+ */
+#define BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
+#endif
+
+#endif /* LINUX_VERSION_IS_LESS(5,9,0) */
+
+#if LINUX_VERSION_IS_LESS(5,2,0)
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+
+/*
+ * bf198b2b34bf mm/mmu_notifier: pass down vma and reasons why mmu notifier is happening
+ */
+#define BPM_MMU_NOTIFIER_RANGE_VMA_MEMBER_NOT_PRESENT
+#endif
+
+#endif /* LINUX_VERSION_IS_LESS(5,2,0) */
 /*
  *  Upstream Patches not merged in any kernel yet
  */
@@ -630,6 +738,21 @@
  * lib/bitmap: change type of bitmap_weight to unsigned long
  */
 #define BPM_BITMAP_WEIGHT_RETURN_TYPE_CHANGED
+#endif
+
+#define BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+
+#define BPM_DISABLE_DRM_DMABUF
+
+/* Align Header path between i915-include and drm-include */
+#define BPM_HEADER_PATH_ALIGN
+
+/*
+ * REDHAT
+ */
+#if (REDHAT_RELEASE_VERSION_IS_LESS(9,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+/* TBD : Need to check further need of ATTR Macro */
+#define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif
 
 #endif /* _BP_LINUX_BACKPORT_MACRO_H */

@@ -75,7 +75,7 @@ $DKMS		dh \$@ --with dkms
 $BIN		dh \$@
 
 $BIN	build:
-$BIN		cp defconfigs/i915 .config;
+$BIN		cp defconfigs/i915_only .config;
 $BIN		\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel) olddefconfig;
 $BIN		\$(MAKE) -j$NPC KLIB=/lib/modules/\$(_krel)
 

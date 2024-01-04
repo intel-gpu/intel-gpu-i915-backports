@@ -2,6 +2,7 @@
 #define __BACKPORT_I915_COMPONENT_H
 #include_next <drm/i915_component.h>
 
+#ifdef BPM_DISABLE_DRM_DMABUF
 #define i915_component_type LINUX_I915_BACKPORT(i915_component_type)
 #define I915_COMPONENT_AUDIO LINUX_I915_BACKPORT(I915_COMPONENT_AUDIO)
 #define I915_COMPONENT_HDCP LINUX_I915_BACKPORT(I915_COMPONENT_HDCP)
@@ -13,5 +14,6 @@ enum i915_component_type {
 	I915_COMPONENT_PXP,
 	I915_COMPONENT_IAF,
 };
+#endif
 
 #endif /* __BACKPORT_I915_COMPONENT_H */

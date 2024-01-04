@@ -264,6 +264,7 @@ struct intel_device_info {
 	DEV_INFO_FOR_EACH_FLAG(DEFINE_FLAG);
 #undef DEFINE_FLAG
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct {
 		u8 ver;
 		u8 rel;
@@ -297,6 +298,7 @@ struct intel_device_info {
 			u32 gamma_lut_tests;
 		} color;
 	} display;
+#endif
 
 	unsigned int cachelevel_to_pat[I915_MAX_CACHE_LEVEL];
 };
@@ -328,9 +330,11 @@ struct intel_runtime_info {
 
 	u64 uid; /* device uid, used for generating uuid */
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	u8 num_sprites[I915_MAX_PIPES];
 	u8 num_scalers[I915_MAX_PIPES];
 
+#endif
 	u32 rawclk_freq;
 
 	struct intel_step_info step;
@@ -344,8 +348,12 @@ struct intel_driver_caps {
 const char *intel_platform_name(enum intel_platform platform);
 
 void intel_device_info_subplatform_init(struct drm_i915_private *dev_priv);
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void intel_device_info_runtime_init(struct drm_i915_private *dev_priv);
 
+#else
+static inline void intel_device_info_runtime_init(struct drm_i915_private *dev_priv) { return; }
+#endif
 void intel_device_info_print_static(const struct intel_device_info *info,
 				    struct drm_printer *p);
 void intel_device_info_print_runtime(const struct intel_runtime_info *info,

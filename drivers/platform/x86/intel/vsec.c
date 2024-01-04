@@ -315,6 +315,7 @@ static bool intel_vsec_walk_vsec(struct pci_dev *pdev,
 void intel_vsec_register(struct pci_dev *pdev,
 			 struct intel_vsec_platform_info *info)
 {
+	printk(KERN_INFO "BACKPORTED INTEL VSEC REGISTER\n");
 	if (!pdev || !info)
 		return;
 
@@ -328,6 +329,7 @@ static int intel_vsec_pci_probe(struct pci_dev *pdev, const struct pci_device_id
 	bool have_devices = false;
 	int ret;
 
+	printk(KERN_INFO "BACKPORTED INTEL VSEC PCI PROBE\n");
 	ret = pcim_enable_device(pdev);
 	if (ret)
 		return ret;
@@ -360,6 +362,7 @@ static int intel_vsec_pci_probe(struct pci_dev *pdev, const struct pci_device_id
 
 static void intel_vsec_pci_remove(struct pci_dev *pdev)
 {
+	printk(KERN_INFO "BACKPORTED INTEL VSEC PCI REMOVE\n");
 	pm_runtime_forbid(&pdev->dev);
 	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_get(&pdev->dev);
@@ -503,8 +506,8 @@ static struct pci_driver intel_vsec_pci_driver = {
 module_pci_driver(intel_vsec_pci_driver);
 
 MODULE_AUTHOR("David E. Box <david.e.box@linux.intel.com>");
-MODULE_DESCRIPTION("Intel Extended Capabilities auxiliary bus driver");
-MODULE_LICENSE("GPL v2");
 #ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 MODULE_VERSION(BACKPORT_MOD_VER);
 #endif
+MODULE_DESCRIPTION("Intel Extended Capabilities auxiliary bus driver");
+MODULE_LICENSE("GPL v2");

@@ -2,6 +2,27 @@
 #define __BACKPORT_LIST_H
 #include_next <linux/list.h>
 #include <linux/version.h>
+#include <linux/types.h>
+#include <linux/kernel.h>
+
+
+#ifdef BPM_LIST_FOR_EACH_CONTINUE_NOT_PRESENT
+/**
+ * list_for_each_continue - continue iteration over a list
+ * @pos:        the &struct list_head to use as a loop cursor.
+ * @head:       the head for your list.
+ *
+ * Continue to iterate over a list, continuing after the current position.
+ */
+#define list_for_each_continue(pos, head) \
+	        for (pos = pos->next; pos != (head); pos = pos->next)
+#endif
+
+
+#ifdef BPM_LIST_ENTRY_IS_HEAD_NOT_PRESENT
+#define list_entry_is_head(pos, head, member)
+       (&pos->member == (head))
+#endif
 
 #if LINUX_VERSION_IS_LESS(3,9,0)
 /**

@@ -39,8 +39,8 @@ static inline struct i915_address_space *ctx_vm(struct i915_gem_context *ctx)
 
 static int live_nop_switch(void *arg)
 {
-	const unsigned int nctx = 1024;
 	struct drm_i915_private *i915 = arg;
+	const unsigned int nctx = 1024 / GET_MULTIPLIER(0);
 	struct intel_engine_cs *engine;
 	struct i915_gem_context **ctx;
 	struct igt_live_test t;
@@ -182,6 +182,7 @@ static int live_nop_switch(void *arg)
 
 out_file:
 	fput(file);
+	kfree(ctx);
 	return err;
 }
 
@@ -972,7 +973,7 @@ retry:
 	if (!err)
 		err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_USER);
 	if (err)
-		goto err_put;
+		goto err_ww;
 
 	err = i915_vma_pin_ww(batch, &ww, 0, 0, PIN_USER | PIN_ZONE_48);
 	if (err)
@@ -1023,13 +1024,14 @@ err_batch:
 	i915_vma_unpin(batch);
 err_vma:
 	i915_vma_unpin(vma);
-err_put:
+err_ww:
 	if (err == -EDEADLK) {
 		err = i915_gem_ww_ctx_backoff(&ww);
 		if (!err)
 			goto retry;
 	}
 	i915_gem_ww_ctx_fini(&ww);
+err_put:
 	i915_gem_object_put(rpcs);
 	return err;
 }

@@ -1,6 +1,13 @@
 #ifndef __BACKPORT_GENERATED_UTS_RELEASE_H
 #define __BACKPORT_GENERATED_UTS_RELEASE_H
+
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
+#define UTS_RELEASE "2.6.32"
+#else
 #include_next <generated/utsrelease.h>
+#endif
 
 /*
  * We only want the UTS_UBUNTU_RELEASE_ABI var when we are on a normal

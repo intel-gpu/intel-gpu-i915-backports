@@ -95,7 +95,7 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 		if (!gt->lmem)
 			continue;
 
-		ce = get_blitter_context(gt, BCS0);
+		ce = get_clear_alloc_context(gt);
 		if (!ce)
 			continue;
 
@@ -305,7 +305,7 @@ static int igt_lmem_swap(void *arg)
 		if (!gt->lmem)
 			continue;
 
-		ce = get_blitter_context(gt, BCS0);
+		ce = get_swapin_context(gt);
 		if (!ce)
 			continue;
 

@@ -24,4 +24,19 @@ extern u64 div64_u64_rem(u64 dividend, u64 divisor, u64 *remainder);
 #endif /* BITS_PER_LONG */
 #endif /* < 3.12 */
 
+/**
+ * div64_u64_rem - unsigned 64bit divide with 64bit divisor and remainder
+ * DIV64_U64_ROUND_CLOSEST - unsigned 64bit divide with 64bit divisor rounded to nearest integer
+ * @dividend: unsigned 64bit dividend
+ * @divisor: unsigned 64bit divisor
+ *
+ * Divide unsigned 64bit dividend by unsigned 64bit divisor
+ * and round to closest integer.
+ *
+ * Return: dividend / divisor rounded to nearest integer
+ */
+
+#define DIV64_U64_ROUND_CLOSEST(dividend, divisor)      \
+	({ u64 _tmp = (divisor); div64_u64((dividend) + _tmp / 2, _tmp); })
+
 #endif /* __BACKPORT_LINUX_MATH64_H */

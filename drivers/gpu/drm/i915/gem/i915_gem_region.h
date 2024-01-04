@@ -10,8 +10,9 @@
 
 #include "gt/intel_gt_types.h"
 
-struct intel_memory_region;
 struct drm_i915_gem_object;
+struct intel_memory_region;
+struct kobject;
 struct sg_table;
 
 struct sg_table *
@@ -37,6 +38,9 @@ intel_gt_object_create_lmem(struct intel_gt *gt,
 {
 	return i915_gem_object_create_region(gt->lmem, size, flags);
 }
+
+bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
+				   struct kobject *errors);
 
 /* i915_modparams.force_alloc_contig flags */
 #define ALLOC_CONTIGUOUS_SMEM BIT(0)

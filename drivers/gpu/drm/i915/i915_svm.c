@@ -53,7 +53,11 @@ static bool i915_svm_range_invalidate(struct mmu_interval_notifier *mni,
 	svm_unbind_addr(svm->vm, range->start, length);
 	mutex_unlock(&svm->mutex);
 
+#ifdef BPM_MMU_NOTIFIER_RANGE_VMA_MEMBER_NOT_PRESENT
+	if (range->event == MMU_NOTIFY_UNMAP && vma_to_sn(svm->mm->mmap))
+#else
 	if (range->event == MMU_NOTIFY_UNMAP && vma_to_sn(range->vma))
+#endif
 		queue_work(system_unbound_wq, &sn->unregister_notifier_work);
 
 	return true;

@@ -412,14 +412,12 @@ static void gen6_rc6_enable(struct intel_rc6 *rc6)
 	}
 }
 
-/* Check that the pcbr address is not empty. */
-static int chv_rc6_init(struct intel_rc6 *rc6)
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static void display_chv_rc6_init(struct intel_uncore *uncore, struct drm_i915_private *i915)
 {
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
+	u32 pcbr;
 	resource_size_t pctx_paddr, paddr;
 	resource_size_t pctx_size = 32 * SZ_1K;
-	u32 pcbr;
 
 	pcbr = intel_uncore_read(uncore, VLV_PCBR);
 	if ((pcbr >> VLV_PCBR_ADDR_SHIFT) == 0) {
@@ -430,10 +428,25 @@ static int chv_rc6_init(struct intel_rc6 *rc6)
 		pctx_paddr = (paddr & ~4095);
 		intel_uncore_write(uncore, VLV_PCBR, pctx_paddr);
 	}
+}
+#else
+static void display_chv_rc6_init(struct intel_uncore *uncore,
+		struct drm_i915_private *i915)
+{ return; }
+#endif
+
+/* Check that the pcbr address is not empty. */
+static int chv_rc6_init(struct intel_rc6 *rc6)
+{
+	struct intel_uncore *uncore = rc6_to_uncore(rc6);
+	struct drm_i915_private *i915 = rc6_to_i915(rc6);
+
+	display_chv_rc6_init(uncore, i915);
 
 	return 0;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static int vlv_rc6_init(struct intel_rc6 *rc6)
 {
 	struct drm_i915_private *i915 = rc6_to_i915(rc6);
@@ -486,6 +499,9 @@ out:
 	rc6->pctx = pctx;
 	return 0;
 }
+#else
+static int vlv_rc6_init(struct intel_rc6 *rc6) { return 0; }
+#endif
 
 static void chv_rc6_enable(struct intel_rc6 *rc6)
 {
@@ -958,7 +974,9 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	/* On VLV and CHV, residency time is in CZ units rather than 1.28us */
 	if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915)) {
 		mul = 1000000;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 		div = i915->czclk_freq;
+#endif
 		overflow_hw = BIT_ULL(40);
 		time_hw = vlv_residency_raw(uncore, reg);
 	} else {
@@ -1003,6 +1021,23 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 u64 intel_rc6_residency_us(struct intel_rc6 *rc6, i915_reg_t reg)
 {
 	return DIV_ROUND_UP_ULL(intel_rc6_residency_ns(rc6, reg), 1000);
+}
+
+u64 intel_rc6_rpm_unit_residency(struct intel_rc6 *rc6)
+{
+	struct intel_gt *gt = rc6_to_gt(rc6);
+	intel_wakeref_t wakeref;
+	u64 lsb, msb, counter;
+
+	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
+		lsb = intel_uncore_read(gt->uncore, GEN12_GT_GFX_RC6_LSB);
+		msb = intel_uncore_read(gt->uncore, GEN12_GT_GFX_RC6_MSB);
+	}
+
+	msb = REG_FIELD_GET(GEN12_GT_GFX_RC6_MSB_MASK, (u32)msb);
+	counter = msb << 32 | lsb;
+
+	return counter;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

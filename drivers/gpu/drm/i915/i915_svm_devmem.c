@@ -90,7 +90,7 @@ i915_devmem_page_get_locked(struct intel_memory_region *mem,
 	return NULL;
 }
 
-#ifndef MIGRATE_PFN_LOCKED_REMOVED
+#ifndef BPM_MIGRATE_PFN_LOCKED_REMOVED
 static void
 i915_devmem_page_free_locked(struct drm_i915_private *dev_priv,
 			     struct page *page)
@@ -216,12 +216,11 @@ static int i915_migrate_blitter_copy(struct i915_devmem_migrate *migrate,
 {
 	struct drm_i915_private *i915 = migrate->i915;
 	struct intel_memory_region *mem;
-	enum intel_engine_id id;
 	int ret;
 
 	mem = i915->mm.regions[migrate->src_id];
-	id = mem->gt->rsvd_bcs;
-	migrate->ce = mem->gt->engine[id]->blitter_context;
+	migrate->ce = mem->gt->migrate.context;
+
 	ret = i915_devmem_bind_addr(migrate, ww, true);
 	if (unlikely(ret))
 		return ret;
@@ -392,7 +391,7 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 		}
 
 		cnt++;
-#ifdef MIGRATE_PFN_LOCKED_REMOVED
+#ifdef BPM_MIGRATE_PFN_LOCKED_REMOVED
 		args->dst[i] = migrate_pfn(page_to_pfn(page));
 #else
 		args->dst[i] = migrate_pfn(page_to_pfn(page)) |
@@ -416,7 +415,7 @@ i915_devmem_migrate_alloc_and_copy(struct i915_devmem_migrate *migrate,
 migrate_out:
 	if (unlikely(ret)) {
 		for (i = 0; i < npages; i++) {
-#ifndef MIGRATE_PFN_LOCKED_REMOVED
+#ifndef BPM_MIGRATE_PFN_LOCKED_REMOVED
 			if (args->dst[i] & MIGRATE_PFN_LOCKED) {
 				page = migrate_pfn_to_page(args->dst[i]);
 				i915_devmem_page_free_locked(i915, page);
@@ -490,8 +489,12 @@ int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 	struct migrate_vma args = {
 		.vma		= vma,
 		.start		= start,
+#ifdef BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
+		.src_owner      = mem->i915->drm.dev,
+#else
 		.pgmap_owner    = mem->i915->drm.dev,
 		.flags          = MIGRATE_VMA_SELECT_SYSTEM,
+#endif
 	};
 	unsigned long c, i;
 	int ret = 0;
@@ -500,11 +503,11 @@ int i915_devmem_migrate_vma(struct intel_memory_region *mem,
 
 	/* XXX: Opportunistically migrate additional pages? */
 	DRM_DEBUG_DRIVER("start 0x%lx end 0x%lx\n", start, end);
-	args.src = kcalloc(max, sizeof(args.src), GFP_KERNEL);
+	args.src = kcalloc(max, sizeof(*args.src), GFP_KERNEL);
 	if (unlikely(!args.src))
 		return -ENOMEM;
 
-	args.dst = kcalloc(max, sizeof(args.dst), GFP_KERNEL);
+	args.dst = kcalloc(max, sizeof(*args.dst), GFP_KERNEL);
 	if (unlikely(!args.dst)) {
 		kfree(args.src);
 		return -ENOMEM;
@@ -574,7 +577,7 @@ i915_devmem_fault_alloc_and_copy(struct i915_devmem_migrate *migrate)
 		}
 	}
 
-#ifdef MIGRATE_PFN_LOCKED_REMOVED
+#ifdef BPM_MIGRATE_PFN_LOCKED_REMOVED
 	args->dst[0] = migrate_pfn(page_to_pfn(dpage));
 #else
 	args->dst[0] = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
@@ -648,8 +651,12 @@ static vm_fault_t i915_devmem_migrate_to_ram(struct vm_fault *vmf)
 		.end		= vmf->address + PAGE_SIZE,
 		.src		= &src,
 		.dst		= &dst,
+#ifdef BPM_MIGRATE_VMA_PAGE_OWNER_NOT_PRESENT
+		.src_owner      = i915->drm.dev,
+#else
 		.pgmap_owner	= i915->drm.dev,
 		.flags		= MIGRATE_VMA_SELECT_DEVICE_PRIVATE,
+#endif
 	};
 
 	GEM_BUG_ON(devmem->mem->id >= INTEL_REGION_UNKNOWN);
@@ -724,9 +731,15 @@ int i915_svm_devmem_add(struct intel_memory_region *mem)
 	}
 
 	devmem->pagemap.type = MEMORY_DEVICE_PRIVATE;
+
+#ifdef BPM_PAGEMAP_RANGE_START_NOT_PRESENT
+	devmem->pagemap.res.start = res->start;
+	devmem->pagemap.res.end = res->end;
+#else
 	devmem->pagemap.range.start = res->start;
 	devmem->pagemap.range.end = res->end;
 	devmem->pagemap.nr_range = 1;
+#endif
 	devmem->pagemap.ops = &i915_devmem_pagemap_ops;
 	devmem->pagemap.owner = mem->i915->drm.dev;
 	addr = devm_memremap_pages(dev, &devmem->pagemap);

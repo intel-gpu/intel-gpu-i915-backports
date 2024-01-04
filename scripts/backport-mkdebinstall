@@ -40,7 +40,7 @@ backport-include	$DEST
 compat			$DEST
 defconfigs		$DEST
 drivers			$DEST
-include			$DEST
+i915-include		$DEST
 kconf			$DEST
 local-symbols		$DEST
 scripts			$DEST

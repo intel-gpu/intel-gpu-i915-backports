@@ -7,9 +7,9 @@ backport-cc-disable-warning = $(call try-run,\
 NOSTDINC_FLAGS := \
 	-I$(M)/backport-include/ \
 	-I$(M)/backport-include/uapi \
-	-I$(M)/include/ \
-	-I$(M)/include/uapi \
-	-I$(M)/include/drm \
+	-I$(M)/i915-include/ \
+	-I$(M)/i915-include/uapi \
+	-I$(M)/i915-include/drm \
 	-include $(M)/backport-include/backport/backport.h \
 	$(call backport-cc-disable-warning, unused-but-set-variable) \
 	-DCPTCFG_BACKPORTS_RELEASE_TAG=\"$(BACKPORTS_RELEASE_TAG)\" \
@@ -54,6 +54,8 @@ obj-$(CPTCFG_DRM_I915) += drivers/gpu/drm/i915/
 #obj-$(CPTCFG_STAGING) += drivers/staging/
 
 obj-$(CPTCFG_INTEL_VSEC) += drivers/platform/x86/intel/
+obj-$(CPTCFG_MFD_INTEL_PMT) += drivers/platform/x86/intel/
+obj-$(CPTCFG_MFD_INTEL_PMT) += drivers/mfd/
 
 obj-$(CPTCFG_INTEL_MEI) += drivers/misc/mei/
 obj-$(CPTCFG_WATCHDOG) += drivers/watchdog/

@@ -3,6 +3,7 @@
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
+| RHEL | 9.3 | 5.14.0-362 |
 | RHEL | 9.2 | 5.14.0-284 |
 | RHEL | 9.0 | 5.14.0-70 |
 
@@ -12,11 +13,11 @@
   In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
 ```
-$sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.2_KERNEL_VERSION>.el9_2.x86_64 \
-kernel-devel-<RHEL_9.2_KERNEL_VERSION>.el9_2.x86_64
+$sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
+kernel-devel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64
 Example:
-     $sudo dnf check-update; sudo dnf install -y kernel-5.14.0-284.11.1.el9_2.x86_64 \
-     kernel-devel-5.14.0-284.11.1.el9_2.x86_64
+     $sudo dnf check-update; sudo dnf install -y kernel-5.14.0-362.2.1.el9_3.x86_64 \
+     kernel-devel-5.14.0-362.2.1.el9_3.x86_64
 
 ```
 
@@ -25,11 +26,11 @@ Please note that dkms installation will skip if the kernel headers are not insta
 ## Prerequisite
 We have dependencies on the following packages
   - make
-  - linux-glibc-devel
+  - glibc-devel
   - rpm-build
   - flex
   - bison
-  - awk
+  - gawk
 ```
 $sudo dnf install make glibc-devel rpm-build bison flex gawk
 ```
@@ -76,10 +77,10 @@ Example:
 ```
 $make i915dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
 Example:
-        $make i915dkmsrpm-pkg OS_DISTRIBUTION=RHEL_9.2
+        $make i915dkmsrpm-pkg OS_DISTRIBUTION=RHEL_9.3
 
       Generated package name :
-        intel-i915-dkms-1.23.6.24.5.14.0-284.11.1.29-1.x86_64.rpm
+        intel-i915-dkms-1.23.6.24.5.14.0-362.2.1-1.x86_64.rpm
 ```
   Use the below help command to get the list of supported OS distributions.
 ```
@@ -90,8 +91,7 @@ Generated output:
     i915dkmsrpm-pkg  -  Build DKMS rpm package
 
    ##### List of RPM supported osv kernel versions #####
-   RHEL_9.2
-   RHEL_9.0
+   RHEL_9.3
 ```
 Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 

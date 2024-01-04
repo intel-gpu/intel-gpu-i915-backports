@@ -14,6 +14,8 @@ static bool __guc_rc_supported(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
+	if (i915_modparams.force_host_pm)
+		return false;
 	/*
 	 * Wa_14017210380: mtl
 	 * Do not enable gucrc to avoid additional interrupts which

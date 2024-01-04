@@ -186,6 +186,7 @@ retry:
 	if (args->busy && read_seqcount_retry(&obj->base.resv->seq, seq))
 		goto retry;
 #endif
+
 	err = 0;
 out:
 	rcu_read_unlock();

@@ -203,7 +203,6 @@ static int intel_guc_steal_guc_ids(void *arg)
 		rq = nop_user_request(ce[context_index], spin_rq);
 		if (IS_ERR(rq)) {
 			ret = PTR_ERR(rq);
-			rq = NULL;
 			if ((ret != -EAGAIN) || !last) {
 				guc_err(guc, "Failed to create %srequest %d: %pe\n",
 					last ? "" : "first ", context_index, ERR_PTR(ret));

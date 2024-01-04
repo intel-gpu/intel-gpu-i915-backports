@@ -6,6 +6,7 @@
 #ifndef __INTEL_GMBUS_H__
 #define __INTEL_GMBUS_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/types.h>
 
 struct drm_i915_private;
@@ -47,4 +48,5 @@ void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit);
 bool intel_gmbus_is_forced_bit(struct i2c_adapter *adapter);
 void intel_gmbus_reset(struct drm_i915_private *dev_priv);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_GMBUS_H__ */

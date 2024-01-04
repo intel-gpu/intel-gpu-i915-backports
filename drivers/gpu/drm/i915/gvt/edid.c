@@ -78,6 +78,7 @@ static unsigned char edid_get_byte(struct intel_vgpu *vgpu)
 	return chr;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static inline int cnp_get_port_from_gmbus0(u32 gmbus0)
 {
 	int port_select = gmbus0 & _GMBUS_PIN_SEL_MASK;
@@ -123,6 +124,7 @@ static inline int get_port_from_gmbus0(u32 gmbus0)
 		port = PORT_D;
 	return port;
 }
+#endif
 
 static void reset_gmbus_controller(struct intel_vgpu *vgpu)
 {
@@ -136,7 +138,9 @@ static void reset_gmbus_controller(struct intel_vgpu *vgpu)
 static int gmbus0_mmio_write(struct intel_vgpu *vgpu,
 			unsigned int offset, void *p_data, unsigned int bytes)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct drm_i915_private *i915 = vgpu->gvt->gt->i915;
+#endif
 	int port, pin_select;
 
 	memcpy(&vgpu_vreg(vgpu, offset), p_data, bytes);
@@ -147,7 +151,7 @@ static int gmbus0_mmio_write(struct intel_vgpu *vgpu,
 
 	if (pin_select == 0)
 		return 0;
-
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	if (IS_BROXTON(i915))
 		port = bxt_get_port_from_gmbus0(pin_select);
 	else if (IS_COFFEELAKE(i915) || IS_COMETLAKE(i915))
@@ -156,7 +160,7 @@ static int gmbus0_mmio_write(struct intel_vgpu *vgpu,
 		port = get_port_from_gmbus0(pin_select);
 	if (drm_WARN_ON(&i915->drm, port < 0))
 		return 0;
-
+#endif
 	vgpu->display.i2c_edid.state = I2C_GMBUS;
 	vgpu->display.i2c_edid.gmbus.phase = GMBUS_IDLE_PHASE;
 

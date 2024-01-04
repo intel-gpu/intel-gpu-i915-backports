@@ -860,10 +860,10 @@ stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 		}
 
 		dsm_base = 0;
-		dsm_size = (resource_size_t)(ret * SZ_1M);
+		dsm_size = mul_u32_u32(ret, SZ_1M);
 
-		GEM_BUG_ON(pci_resource_len(pdev, GFXMEM_BAR) != 256 * SZ_1M);
-		GEM_BUG_ON((dsm_size + 8 * SZ_1M) > lmem_size);
+		GEM_BUG_ON(pci_resource_len(pdev, GFXMEM_BAR) != SZ_256M);
+		GEM_BUG_ON((dsm_size + SZ_8M) > lmem_size);
 	} else {
 		/* Use DSM base address instead for stolen memory */
 		dsm_base = intel_uncore_read64(uncore, GEN12_DSMBASE);
@@ -877,7 +877,7 @@ stolen_lmem_setup(struct intel_gt *gt, u16 type,  u16 instance)
 		io_start = 0;
 		io_size = 0;
 	} else if (HAS_BAR2_SMEM_STOLEN(i915)) {
-		io_start = pci_resource_start(pdev, GFXMEM_BAR) + 8 * SZ_1M;
+		io_start = pci_resource_start(pdev, GFXMEM_BAR) + SZ_8M;
 	} else {
 		io_start = pci_resource_start(pdev, GFXMEM_BAR) + dsm_base;
 	}
