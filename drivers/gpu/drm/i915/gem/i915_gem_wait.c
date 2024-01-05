@@ -42,6 +42,25 @@ i915_gem_object_wait_reservation(struct dma_resv *resv,
 				 unsigned int flags,
 				 long timeout)
 {
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *fence;
+	long ret = timeout ?: 1;
+
+	dma_resv_iter_begin(&cursor, resv,
+			    dma_resv_usage_rw(flags & I915_WAIT_ALL));
+	dma_resv_for_each_fence_unlocked(&cursor, fence) {
+		ret = i915_gem_object_wait_fence(fence, flags, timeout);
+		if (ret <= 0)
+			break;
+
+		if (timeout)
+			timeout = ret;
+
+	}
+	dma_resv_iter_end(&cursor);
+	return ret;
+#else
 	struct dma_fence *excl;
 	bool prune_fences = false;
 
@@ -94,6 +113,7 @@ i915_gem_object_wait_reservation(struct dma_resv *resv,
 		dma_resv_prune(resv);
 
 	return timeout;
+#endif
 }
 
 static void fence_set_priority(struct dma_fence *fence, int prio)
@@ -145,6 +165,15 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 			      unsigned int flags,
 			      int prio)
 {
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *fence;
+
+	dma_resv_iter_begin(&cursor, obj->base.resv, flags & I915_WAIT_ALL);
+	dma_resv_for_each_fence_unlocked(&cursor, fence)
+		i915_gem_fence_wait_priority(fence, prio);
+	dma_resv_iter_end(&cursor);
+#else
 	struct dma_fence *excl;
 
 	if (flags & I915_WAIT_ALL) {
@@ -171,6 +200,7 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 		i915_gem_fence_wait_priority(excl, prio);
 		dma_fence_put(excl);
 	}
+#endif
 	return 0;
 }
 

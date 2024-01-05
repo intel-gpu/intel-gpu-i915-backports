@@ -326,7 +326,8 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
  * check the condition before the timeout.
  */
 #define __wait_for(OP, COND, US, Wmin, Wmax) ({ \
-	const ktime_t end__ = ktime_add_ns(ktime_get_raw(), 1000ll * (US)); \
+	const ktime_t end__ = ktime_add_ns(ktime_get_raw(),		\
+			1000ll * ADJUST_TIMEOUT(US));			\
 	long wait__ = (Wmin); /* recommended min for usleep is 10 us */	\
 	int ret__;							\
 	might_sleep();							\
@@ -363,8 +364,8 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 
 #define _wait_for_atomic(COND, US, ATOMIC) \
 ({ \
-	int cpu, ret, timeout = (US) * 1000; \
-	u64 base; \
+	int cpu, ret; \
+	u64 base, timeout = ADJUST_TIMEOUT(US) * 1000; \
 	_WAIT_FOR_ATOMIC_CHECK(ATOMIC); \
 	if (!(ATOMIC)) { \
 		preempt_disable(); \

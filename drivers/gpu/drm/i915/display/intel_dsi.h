@@ -24,6 +24,7 @@
 #ifndef _INTEL_DSI_H
 #define _INTEL_DSI_H
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <drm/drm_crtc.h>
 #include <drm/drm_mipi_dsi.h>
 
@@ -176,4 +177,5 @@ struct intel_dsi_host *intel_dsi_host_init(struct intel_dsi *intel_dsi,
 					   const struct mipi_dsi_host_ops *funcs,
 					   enum port port);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* _INTEL_DSI_H */

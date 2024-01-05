@@ -220,23 +220,12 @@ static int emit_update_counters(struct i915_request *rq, u64 size, int idx)
 }
 
 static struct intel_context *
-__get_blitter_context(const struct intel_gt *gt, int idx)
+__get_context(const struct intel_gt *gt, struct intel_context *ce)
 {
-	return gt->engine[idx] ? gt->engine[idx]->blitter_context : NULL;
-}
-
-static struct intel_context *
-get_blitter_context(const struct intel_gt *gt, int idx)
-{
-	struct intel_context *ce;
-
 	if (intel_gt_is_wedged(gt) || gt->suspend)
 		return NULL;
 
-	ce = __get_blitter_context(gt, idx);
-	if (!ce || !ce->private)
-		return NULL;
-
+	GEM_BUG_ON(ce && !ce->private);
 	return ce;
 }
 
@@ -250,34 +239,50 @@ static struct intel_context *get_clear_alloc_context(const struct intel_gt *gt)
 	 * are required for immediate use. This should allow us to
 	 * reschedule that work ahead of the background clears.
 	 */
-	return get_blitter_context(gt, BCS0);
-}
-
-static struct intel_context *get_clear_free_context(const struct intel_gt *gt)
-{
-	/* Use for lower priority background clears */
-	return get_blitter_context(gt, gt->rsvd_bcs);
-}
-
-static struct intel_context *get_clear_fault_context(const struct intel_gt *gt)
-{
-	return get_clear_free_context(gt);
+	return __get_context(gt, gt->migrate.clear[CLEAR_ALLOC]);
 }
 
 static struct intel_context *get_clear_idle_context(const struct intel_gt *gt)
 {
 	/* On idle, we should see no contention and can use any engine */
-	return get_blitter_context(gt, BCS0);
+	return __get_context(gt, gt->migrate.clear[CLEAR_IDLE]);
 }
 
-static struct intel_context *get_swapin_context(const struct intel_gt *gt)
+static struct intel_context *__get_clear_free_context(const struct intel_gt *gt)
 {
-	return get_blitter_context(gt, gt->rsvd_bcs);
+	/* Use for lower priority background clears */
+	return __get_context(gt, gt->migrate.clear[CLEAR_FREE]);
 }
 
-static struct intel_context *get_swapout_context(const struct intel_gt *gt)
+static struct intel_context *get_clear_free_context(const struct intel_gt *gt)
 {
-	return get_blitter_context(gt, gt->rsvd_bcs);
+	struct intel_context *ce;
+
+	/* Poor man's load balancing; steal bcs0 if unused */
+	ce = __get_clear_free_context(gt);
+	if (ce && !intel_context_is_active(ce) && !(gt->ccs.active & BIT(BCS0)))
+		ce = get_clear_idle_context(gt);
+
+	return ce;
+}
+
+static struct intel_context *get_clear_fault_context(const struct intel_gt *gt)
+{
+	return __get_clear_free_context(gt);
+}
+
+static struct intel_context *get_swapin_context(struct intel_gt *gt)
+{
+	int idx = atomic_fetch_inc(&gt->migrate.next_swapin) % ARRAY_SIZE(gt->migrate.swapin);
+
+	return __get_context(gt, gt->migrate.swapin[idx].context);
+}
+
+static struct intel_context *get_swapout_context(struct intel_gt *gt)
+{
+	int idx = atomic_fetch_inc(&gt->migrate.next_swapout) % ARRAY_SIZE(gt->migrate.swapout);
+
+	return __get_context(gt, gt->migrate.swapout[idx].context);
 }
 
 static struct i915_request *
@@ -1567,7 +1572,7 @@ clear_blt(struct intel_context *ce,
 	const u32 step = w->clear_chunk;
 	struct i915_buddy_block *block;
 	struct i915_request *rq;
-	int err;
+	int err = 0;
 
 	GEM_BUG_ON(ce->ring->size < SZ_64K);
 	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
@@ -2499,18 +2504,47 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	return __intel_wakeref_resume_park(&mem->gt->wakeref);
 }
 
-static void attach_window(struct intel_gt *gt, struct intel_migrate_window *w)
+static struct intel_context *
+create_pinned(struct intel_engine_cs *engine, struct intel_migrate_window *w)
 {
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
+	struct intel_context *ce;
+	int err;
 
-	for_each_engine(engine, gt, id) {
-		struct intel_context *ce;
+	ce = intel_context_create(engine);
+	if (IS_ERR(ce))
+		return ce;
 
-		ce = engine->blitter_context;
-		if (ce)
-			ce->private = w;
-	}
+	ce->private = w;
+	ce->ring_size = SZ_512K;
+	ce->timeline = page_pack_bits(NULL,
+				      I915_GEM_HWS_SEQNO_ADDR |
+				      INTEL_TIMELINE_RELATIVE_CONTEXT);
+	__set_bit(CONTEXT_BARRIER_BIT, &ce->flags);
+
+	err = intel_context_pin(ce);
+	if (err)
+		goto err_put;
+
+	list_add(&ce->pinned_contexts_link, &engine->gt->pinned_contexts);
+	ce->state->obj->flags |= I915_BO_ALLOC_VOLATILE;
+
+	GEM_BUG_ON(ce->timeline->mode != INTEL_TIMELINE_RELATIVE_CONTEXT);
+	GEM_BUG_ON(ce->vm != engine->gt->vm);
+	return ce;
+
+err_put:
+	intel_context_put(ce);
+	return ERR_PTR(err);
+}
+
+static struct intel_engine_cs *main_copy_engine(struct intel_gt *gt)
+{
+	return gt->engine[BCS0];
+}
+
+static struct intel_engine_cs *rsvd_copy_engine(struct intel_gt *gt)
+{
+	return gt->engine[gt->rsvd_bcs];
 }
 
 static int setup_pte_window(struct intel_gt *gt, struct intel_migrate_window *w)
@@ -2520,6 +2554,11 @@ static int setup_pte_window(struct intel_gt *gt, struct intel_migrate_window *w)
 
 	w->clear_chunk = SZ_64M;
 	w->swap_chunk = SZ_32M;
+	w->context = create_pinned(rsvd_copy_engine(gt), w);
+	if (IS_ERR(w->context)) {
+		err = PTR_ERR(w->context);
+		goto err;
+	}
 
 	obj = i915_gem_object_create_region(gt->lmem,
 					    w->swap_chunk >> (PAGE_SHIFT - 3),
@@ -2530,11 +2569,11 @@ static int setup_pte_window(struct intel_gt *gt, struct intel_migrate_window *w)
 
 	err = i915_gem_object_pin_pages_unlocked(obj);
 	if (err)
-		goto err;
+		goto err_put;
 
 	err = intel_flat_lmem_ppgtt_insert_window(gt->vm, obj, &w->node);
 	if (err)
-		goto err;
+		goto err_put;
 
 	w->obj = obj;
 	w->pd_offset = sg_dma_address(obj->mm.pages->sgl);
@@ -2547,12 +2586,12 @@ static int setup_pte_window(struct intel_gt *gt, struct intel_migrate_window *w)
 
 	GEM_BUG_ON(w->node.size > sg_dma_len(obj->mm.pages->sgl) << PAGE_SHIFT >> 3);
 	GEM_BUG_ON(w->swap_chunk > w->node.size);
-
-	attach_window(gt, w);
 	return 0;
 
-err:
+err_put:
 	i915_gem_object_put(obj);
+err:
+	w->context = NULL;
 	return err;
 }
 
@@ -2596,21 +2635,41 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 {
 	const long quantum_ns = 1000000; /* 1ms */
 	struct intel_migrate *m = &gt->migrate;
+	struct intel_migrate_window *w = &m->swapin[0];
 	struct drm_i915_gem_object *smem;
-	struct intel_migrate_window *w;
 	struct i915_request *rq = NULL;
 	struct intel_context *ce;
 	intel_wakeref_t wf;
 	LIST_HEAD(blocks);
 	u64 cycles;
 	int err = 0;
+	int i;
 
 	if (!gt->lmem)
 		return;
 
-	w = &m->window;
-	if (setup_pte_window(gt, w))
+	/* We need at least one engine/context to clear with */
+	m->clear[CLEAR_ALLOC] = create_pinned(main_copy_engine(gt), w);
+	if (IS_ERR(m->clear[CLEAR_ALLOC])) {
+		m->clear[CLEAR_ALLOC] = NULL;
 		return;
+	}
+
+	/* Secondarly clear contexts are optional and can fallback to primary */
+	m->clear[CLEAR_IDLE]  = create_pinned(main_copy_engine(gt), w);
+	m->clear[CLEAR_FREE]  = create_pinned(rsvd_copy_engine(gt), w);
+	for (i = 1; i < ARRAY_SIZE(m->clear); i++) {
+		if (IS_ERR(m->clear[i]))
+			m->clear[i] = m->clear[0];
+	}
+
+	for (i = 0; i < ARRAY_SIZE(m->swapin); i++)
+		if (setup_pte_window(gt, &m->swapin[i]))
+			return;
+
+	for (i = 0; i < ARRAY_SIZE(m->swapout); i++)
+		if (setup_pte_window(gt, &m->swapout[i]))
+			return;
 
 	ce = get_clear_alloc_context(gt);
 	if (!ce)
@@ -2699,6 +2758,16 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 				w->swap_chunk >> 10);
 		}
 		i915_gem_object_put(smem);
+	}
+
+	for (i = 1; i < ARRAY_SIZE(m->swapin); i++) {
+		m->swapin[i].clear_chunk = w->clear_chunk;
+		m->swapin[i].swap_chunk  = w->swap_chunk;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(m->swapout); i++) {
+		m->swapout[i].clear_chunk = w->clear_chunk;
+		m->swapout[i].swap_chunk =  w->swap_chunk;
 	}
 
 	__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, false);
@@ -2958,7 +3027,7 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 	wf = intel_gt_pm_get(gt);
 	intel_rps_boost(&gt->rps);
 
-	ce = get_blitter_context(gt, BCS0); /* use the fastest engine */
+	ce = get_clear_alloc_context(gt); /* use the fastest engine */
 	if (!ce) {
 		err = -EIO;
 		goto err_wf;
@@ -3170,8 +3239,12 @@ err_wf:
 void i915_gem_fini_lmem(struct intel_gt *gt)
 {
 	struct intel_migrate *m = &gt->migrate;
+	int i;
 
-	cleanup_pte_window(&m->window);
+	for (i = 0; i < ARRAY_SIZE(m->swapin); i++)
+		cleanup_pte_window(&m->swapin[i]);
+	for (i = 0; i < ARRAY_SIZE(m->swapout); i++)
+		cleanup_pte_window(&m->swapout[i]);
 }
 
 static struct i915_request *

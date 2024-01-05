@@ -485,8 +485,6 @@ struct i915_ggtt {
 	/** PPGTT used for aliasing the PPGTT with the GTT */
 	struct i915_ppgtt *alias;
 
-	bool do_idle_maps;
-
 	int mtrr;
 
 	/** Bit 6 swizzling required for X tiling */
@@ -691,13 +689,12 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt);
 void intel_ggtt_bind_vma(struct i915_address_space *vm,
 			 struct i915_vm_pt_stash *stash,
 			 struct i915_vma *vma,
-			 enum i915_cache_level cache_level,
+			 unsigned int pat_index,
 			 u32 flags);
 void intel_ggtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma);
 
 int i915_ggtt_probe_hw(struct drm_i915_private *i915);
 int i915_ggtt_init_hw(struct drm_i915_private *i915);
-int i915_ggtt_enable_hw(struct drm_i915_private *i915);
 int i915_init_ggtt(struct drm_i915_private *i915);
 void i915_ggtt_driver_release(struct drm_i915_private *i915);
 void i915_ggtt_driver_late_release(struct drm_i915_private *i915);
@@ -800,10 +797,6 @@ gen8_pte_t gen8_get_pte(void __iomem *addr);
 
 u64 ggtt_addr_to_pte_offset(u64 ggtt_addr);
 
-void __gen8_ggtt_insert_page_wa_bcs(struct i915_ggtt *ggtt, u32 vfid,
-				    dma_addr_t addr, u64 offset,
-				    unsigned int pat_index, u32 flags);
-
 int ggtt_set_pages(struct i915_vma *vma);
 int ppgtt_set_pages(struct i915_vma *vma);
 void clear_pages(struct i915_vma *vma);
@@ -859,17 +852,12 @@ static inline struct sgt_dma {
 	return (struct sgt_dma) { sg, addr, max, vma->size };
 }
 
-#ifdef CPTCFG_DRM_I915_DUMP_PPGTT
 static inline void ppgtt_dump(struct i915_address_space *vm,
 			      u64 start, u64 length)
 {
-	if (vm->dump_va_range)
+	if (vm->dump_va_range && i915_modparams.dump_ppgtt)
 		vm->dump_va_range(vm, start, length);
 }
-#else
-static inline void ppgtt_dump(struct i915_address_space *vm,
-			      u64 start, u64 length) { }
-#endif
 
 /* SVM UAPI */
 #define I915_GTT_SVM_READONLY  BIT(0)

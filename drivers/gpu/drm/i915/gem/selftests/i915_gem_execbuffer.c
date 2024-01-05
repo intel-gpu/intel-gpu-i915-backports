@@ -22,7 +22,7 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	struct i915_address_space *vm = ce->vm;
 	int err = 0;
 	struct dma_fence *fence;
-	unsigned long delay = HZ / 2;
+	unsigned long delay = ADJUST_TIMEOUT(HZ / 2);
 
 	pr_info("Running suspend test on engine %s.\n", engine->name);
 	sfence = kzalloc(sizeof(*sfence), GFP_KERNEL);

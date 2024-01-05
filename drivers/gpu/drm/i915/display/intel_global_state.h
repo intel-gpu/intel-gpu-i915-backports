@@ -6,6 +6,7 @@
 #ifndef __INTEL_GLOBAL_STATE_H__
 #define __INTEL_GLOBAL_STATE_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/kref.h>
 #include <linux/list.h>
 
@@ -87,4 +88,5 @@ void intel_atomic_clear_global_state(struct intel_atomic_state *state);
 int intel_atomic_lock_global_state(struct intel_global_state *obj_state);
 int intel_atomic_serialize_global_state(struct intel_global_state *obj_state);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif

@@ -6,6 +6,7 @@
 #ifndef __INTEL_DISPLAY_REG_DEFS_H__
 #define __INTEL_DISPLAY_REG_DEFS_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "i915_reg_defs.h"
 
 #define DISPLAY_MMIO_BASE(dev_priv)	(INTEL_INFO(dev_priv)->display.mmio_offset)
@@ -50,4 +51,5 @@
 					      INTEL_INFO(dev_priv)->display.cursor_offsets[PIPE_A] + \
 					      DISPLAY_MMIO_BASE(dev_priv) + (reg))
 
+#endif
 #endif /* __INTEL_DISPLAY_REG_DEFS_H__ */

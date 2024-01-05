@@ -1215,7 +1215,6 @@ err_unlock:
 			intel_gt_set_wedged_on_init(gt);
 
 		/* Minimal basic recovery for KMS */
-		ret = i915_ggtt_enable_hw(dev_priv);
 		i915_ggtt_resume(to_gt(dev_priv)->ggtt);
 		intel_init_clock_gating(dev_priv);
 	}
@@ -1289,7 +1288,9 @@ void i915_gem_init_early(struct drm_i915_private *dev_priv)
 	i915_gem_init__mm(dev_priv);
 	i915_gem_init__contexts(dev_priv);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	spin_lock_init(&dev_priv->fb_tracking.lock);
+#endif
 }
 
 void i915_gem_cleanup_early(struct drm_i915_private *dev_priv)

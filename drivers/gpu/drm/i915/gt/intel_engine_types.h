@@ -141,6 +141,7 @@ enum intel_engine_id {
 	CCS1,
 	CCS2,
 	CCS3,
+	CCS_MAX = CCS3,
 #define _CCS(n) (CCS0 + (n))
 	GSC0,
 	I915_NUM_ENGINES
@@ -405,15 +406,6 @@ struct intel_engine_cs {
 	struct list_head barrier_tasks;
 
 	struct intel_context *kernel_context; /* pinned */
-	struct intel_context *blitter_context; /* pinned; exists for BCS only */
-	struct intel_context *bind_context; /* Only for bcs used for bind */
-
-	/**
-	 * pinned_contexts_list: List of pinned contexts. This list is only
-	 * assumed to be manipulated during driver load- or unload time and
-	 * does therefore not have any additional protection.
-	 */
-	struct list_head pinned_contexts_list;
 
 	intel_engine_mask_t saturated; /* submitting semaphores too late? */
 

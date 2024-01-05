@@ -1123,13 +1123,6 @@ static ssize_t dev_state_show(struct device *device,
 }
 static DEVICE_ATTR_RO(dev_state);
 
-#ifdef BPM_FIND_BY_DEVICE_TYPE_NOT_AVAILABLE
-int device_match_devt(struct device *dev, const void *pdevt)
-{
-	return dev->devt == *(dev_t *)pdevt;
-}
-#endif
-
 /**
  * mei_set_devstate: set to new device state and notify sysfs file.
  *
@@ -1146,11 +1139,7 @@ void mei_set_devstate(struct mei_device *dev, enum mei_dev_state state)
 	dev->dev_state = state;
 	wake_up(&dev->wait_dev_state);
 
-#ifdef BPM_FIND_BY_DEVICE_TYPE_NOT_AVAILABLE
-	clsdev = class_find_device(mei_class, NULL, &dev->cdev.dev, device_match_devt);
-#else
 	clsdev = class_find_device_by_devt(mei_class, dev->cdev.dev);
-#endif
 	if (clsdev) {
 		sysfs_notify(&clsdev->kobj, NULL, "dev_state");
 		put_device(clsdev);

@@ -8,6 +8,7 @@
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_debugger.h"
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_pci.h"
@@ -16,7 +17,6 @@
 #include "gem/i915_gem_pm.h"
 #include "gem/i915_gem_context.h"
 
-#include "gt/intel_context.h"
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
@@ -303,7 +303,9 @@ static void vf_tweak_device_info(struct drm_i915_private *i915)
 
 	/* Force PCH_NOOP. We have no access to display */
 	i915->pch_type = PCH_NOP;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	memset(&info->display, 0, sizeof(info->display));
+#endif
 	info->memory_regions &= ~REGION_STOLEN;
 }
 
@@ -1594,16 +1596,10 @@ int i915_sriov_resume(struct drm_i915_private *i915)
 
 static void intel_gt_default_contexts_ring_restore(struct intel_gt *gt)
 {
-	struct intel_engine_cs *engine;
-	enum intel_engine_id eid;
+	struct intel_context *ce;
 
-	for_each_engine(engine, gt, eid) {
-		struct intel_context *ce;
-
-		list_for_each_entry(ce, &engine->pinned_contexts_list,
-				    pinned_contexts_link)
-			intel_context_revert_ring_heads(ce);
-	}
+	list_for_each_entry(ce, &gt->pinned_contexts, pinned_contexts_link)
+		intel_context_revert_ring_heads(ce);
 }
 
 static void default_contexts_ring_restore(struct drm_i915_private *i915)
@@ -1611,9 +1607,8 @@ static void default_contexts_ring_restore(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_gt_default_contexts_ring_restore(gt);
-	}
 }
 
 static void user_contexts_ring_restore(struct drm_i915_private *i915)
@@ -1629,67 +1624,17 @@ static void user_contexts_ring_restore(struct drm_i915_private *i915)
 		if (!kref_get_unless_zero(&ctx->ref))
 			continue;
 
-		for_each_gem_engine(ce, rcu_dereference(ctx->engines), it) {
-			intel_context_revert_ring_heads(ce);
-		}
-
-		i915_gem_context_put(ctx);
-	}
-	rcu_read_unlock();
-	spin_unlock_irq(&i915->gem.contexts.lock);
-}
-
-static void user_contexts_hwsp_rebase(struct drm_i915_private *i915)
-{
-	struct i915_gem_context *ctx;
-
-	spin_lock_irq(&i915->gem.contexts.lock);
-	rcu_read_lock();
-	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
-		struct i915_gem_engines_iter it;
-		struct intel_context *ce;
-
-		if (!kref_get_unless_zero(&ctx->ref))
-			continue;
-		spin_unlock_irq(&i915->gem.contexts.lock);
-
 		for_each_gem_engine(ce, rcu_dereference(ctx->engines), it)
-			intel_context_rebase_hwsp(ce);
+			intel_context_revert_ring_heads(ce);
 
-		spin_lock_irq(&i915->gem.contexts.lock);
 		i915_gem_context_put(ctx);
 	}
 	rcu_read_unlock();
 	spin_unlock_irq(&i915->gem.contexts.lock);
-}
-
-static void intel_gt_default_contexts_hwsp_rebase(struct intel_gt *gt)
-{
-	struct intel_engine_cs *engine;
-	enum intel_engine_id eid;
-
-	for_each_engine(engine, gt, eid) {
-		struct intel_context *ce;
-
-		list_for_each_entry(ce, &engine->pinned_contexts_list,
-				    pinned_contexts_link)
-			intel_context_rebase_hwsp(ce);
-	}
-}
-
-static void default_contexts_hwsp_rebase(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int id;
-
-	for_each_gt(gt, i915, id)
-		intel_gt_default_contexts_hwsp_rebase(gt);
 }
 
 static void vf_post_migration_fixup_contexts(struct drm_i915_private *i915)
 {
-	default_contexts_hwsp_rebase(i915);
-	user_contexts_hwsp_rebase(i915);
 	default_contexts_ring_restore(i915);
 	user_contexts_ring_restore(i915);
 }
@@ -1699,9 +1644,8 @@ static void heartbeats_disable(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_gt_heartbeats_disable(gt);
-	}
 }
 
 static void heartbeats_restore(struct drm_i915_private *i915, bool unpark)
@@ -1709,9 +1653,8 @@ static void heartbeats_restore(struct drm_i915_private *i915, bool unpark)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_gt_heartbeats_restore(gt, unpark);
-	}
 }
 
 /**
@@ -1728,9 +1671,8 @@ static void submissions_disable(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_guc_submission_pause(&gt->uc.guc);
-	}
 }
 
 /**
@@ -1745,40 +1687,8 @@ static void submissions_restore(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_guc_submission_restore(&gt->uc.guc);
-	}
-}
-
-/**
- * vf_post_migration_status_page_sanitization_disable - Disable sanitization of status pages.
- * @i915: the i915 struct
- *
- * The post-migration recovery uses gt sanitization code to prepare the driver re-enabling.
- * This code however clears status pages of contexts, as it assumes they were damaged
- * by suspend. Migration is not suspend, and it keeps the status pages content intact.
- * In fact, we need the values within to recover unfinished submissions.
- */
-static void vf_post_migration_status_page_sanitization_disable(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int id;
-
-	for_each_gt(gt, i915, id)
-		guc_submission_status_page_sanitization_disable(&gt->uc.guc);
-}
-
-/**
- * vf_post_migration_status_page_sanitization_enable - Re-enable sanitization of status pages.
- * @i915: the i915 struct
- */
-static void vf_post_migration_status_page_sanitization_enable(struct drm_i915_private *i915)
-{
-	struct intel_gt *gt;
-	unsigned int id;
-
-	for_each_gt(gt, i915, id)
-		guc_submission_status_page_sanitization_enable(&gt->uc.guc);
 }
 
 /**
@@ -1803,7 +1713,6 @@ static void vf_post_migration_shutdown(struct drm_i915_private *i915)
 	i915_gem_drain_freed_objects(i915);
 	for_each_gt(gt, i915, id)
 		intel_uc_suspend(&gt->uc);
-	vf_post_migration_status_page_sanitization_disable(i915);
 }
 
 /**
@@ -1821,9 +1730,8 @@ static void vf_post_migration_reset_guc_state(struct drm_i915_private *i915)
 		struct intel_gt *gt;
 		unsigned int id;
 
-		for_each_gt(gt, i915, id) {
+		for_each_gt(gt, i915, id)
 			__intel_gt_reset(gt, ALL_ENGINES);
-		}
 	}
 }
 
@@ -1879,7 +1787,6 @@ static void vf_post_migration_kickstart(struct drm_i915_private *i915)
 		intel_uc_resume_early(&gt->uc);
 	intel_runtime_pm_enable_interrupts(i915);
 	i915_gem_resume(i915);
-	vf_post_migration_status_page_sanitization_enable(i915);
 	submissions_restore(i915);
 	heartbeats_restore(i915, true);
 }
@@ -1909,9 +1816,8 @@ static void i915_reset_backoff_leave(struct drm_i915_private *i915)
 	struct intel_gt *gt;
 	unsigned int id;
 
-	for_each_gt(gt, i915, id) {
+	for_each_gt(gt, i915, id)
 		intel_gt_reset_backoff_clear(gt);
-	}
 }
 
 static void vf_post_migration_recovery(struct drm_i915_private *i915)
@@ -1933,6 +1839,7 @@ static void vf_post_migration_recovery(struct drm_i915_private *i915)
 	vf_post_migration_reset_guc_state(i915);
 	if (vf_post_migration_is_scheduled(i915))
 		goto defer;
+	i915_userspace_blocking_secure(i915);
 	err = vf_post_migration_reinit_guc(i915);
 	if (unlikely(err))
 		goto fail;
@@ -1941,6 +1848,8 @@ static void vf_post_migration_recovery(struct drm_i915_private *i915)
 	vf_post_migration_fixup_contexts(i915);
 
 	vf_post_migration_kickstart(i915);
+	if (!vf_post_migration_is_scheduled(i915))
+		i915_userspace_blocking_finish(i915);
 	i915_reset_backoff_leave(i915);
 	drm_notice(&i915->drm, "migration recovery completed\n");
 	return;
@@ -1955,6 +1864,8 @@ defer:
 fail:
 	drm_err(&i915->drm, "migration recovery failed (%pe)\n", ERR_PTR(err));
 	intel_gt_set_wedged(to_gt(i915));
+	if (!vf_post_migration_is_scheduled(i915))
+		i915_userspace_blocking_finish(i915);
 	i915_reset_backoff_leave(i915);
 }
 
@@ -1978,6 +1889,7 @@ void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
+	i915_userspace_blocking_begin(i915);
 	started = queue_work(system_unbound_wq, &i915->sriov.vf.migration_worker);
 	dev_info(i915->drm.dev, "VF migration recovery %s\n", started ?
 		 "scheduled" : "already in progress");

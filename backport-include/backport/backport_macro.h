@@ -3,15 +3,26 @@
 #include <linux/version.h>
 #include <backport/autoconf.h>
 
-#if LINUX_VERSION_IS_LESS(6,0,0)
-
-#if !((REDHAT_RELEASE_VERSION_IS_LEQ(9,0)) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
-		LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0))
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || \
+		LINUX_VERSION_IS_LESS(4,10,0) || \
+			REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
- * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
+ * 5e7b9a6ae8c3 swiotlb: remove swiotlb_max_segment
  */
-#define BPM_INTEL_GMCH_GTT_RENAMED
+#define BPM_SWIOTLB_MAX_SEGMENT_NOT_PRESENT
 #endif
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
+/*
+ * ff62b8e6588fb driver core: make struct class.devnode() take a const *
+ */
+#define BPM_DMA_HEAP_AND_DRM_DEVNODE_CONST_ARG_NOT_PRESENT
+
+/*
+ * 9a758d8756da drm: Move nomodeset kernel parameter to drivers/video
+ */
+#define BPM_VIDEO_FIRMWARE_DRIVERS_ONLY_NOT_EXPORTED
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,19,0)
@@ -21,6 +32,25 @@
  */
 
 #define BPM_DRM_DP_128B132B_API_PRESENT
+/*
+ * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
+ */
+#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+                REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+                SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+/*
+ * 912ff2ebd695 drm/i915: use the new iterator in i915_gem_busy_ioctl v2
+ */
+#define BPM_DMA_RESV_ITER_BEGIN_PRESENT
+
+/*
+ * 73511edf8b19 dma-buf: specify usage while adding fences to dma_resv obj v7
+ * 842d9346b2fd drm/i915: Individualize fences before adding to dma_resv obj
+ */
+#define BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,19,0)
@@ -74,9 +104,29 @@
 #define BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
 #endif
 
+#if LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,0) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
+
+/*
+ * 16b0314aa746be dma-buf: move dma-buf symbols into the DMA_BUF module namespace
+ */
+#define BPM_MODULE_IMPORT_NS_SUPPORT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(5,16,0) || \
+                REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+                SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+/*
+ * ab09243aa95a7 mm/migrate.c: remove MIGRATE_PFN_LOCKED
+ */
+#define BPM_MIGRATE_PFN_LOCKED_REMOVED
+
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,15,46)
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
-	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04)|| \
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
  * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
  */
@@ -96,6 +146,29 @@
 #endif
 #endif
 
+#if (LINUX_VERSION_IS_GEQ(5,15,0) || \
+                REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+                SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+
+/*
+ * ac1723c16b drm/i915: Track IRQ state in local device state.
+ */
+#define BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
+
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,15,8)
+
+#if !((REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1)) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && SUSE_LOCAL_VERSION_IS_GEQ(24,41)))
+/*
+ * e4779015fd5d timers: implement usleep_idle_range()
+ */
+#define BPM_USLEEP_RANGE_STATE_NOT_PRESENT
+#endif
+
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 
@@ -105,6 +178,7 @@
  */
 #define BPM_PCI_INTERFACES_NOT_PRESENT
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
 /*
  * fc7a620 bus: Make remove callback return void
  *
@@ -112,6 +186,7 @@
  * changed from int to void
  */
 #define BPM_BUS_REMOVE_FUNCTION_RETURN_TYPE_CHANGED
+#endif
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
@@ -161,8 +236,7 @@
 
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
-		UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
 
 /*
  * 6f2beb268a5d swiotlb: Update is_swiotlb_active to add a struct device argument
@@ -202,11 +276,6 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,14,0)
-/* 
- * Use kernel.h incase of math.h is not available
- * aa6159ab99a9ab kernel.h: split out mathematical helpers
- */
-#define BPM_INCLUDE_KERNEL_H_IN_ASCII85_H
 
 /* TBD: Need to check if its generic or controllable with version */
 #define BPM_PTRACE_MAY_ACCESS_NOT_PRESENT
@@ -242,13 +311,21 @@
 #endif
 #endif
 
-#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+#if !(LINUX_VERSION_IN_RANGE(5,10,70, 5,11,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || CUSTOM_KERN_3_RELEASE_VERSION_IS_GEQ(136,12,0))
 /*
  * 4f0f586bf0c8 treewide: Change list_sort to use const pointers
  *
  */
 #define BPM_LIST_CMP_FUNC_T_NOT_PRESENT
 #endif
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(5,12,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
+/*
+ * a28a6e860c6c string.h: move fortified functions definitions in a dedicated header
+ */
+#define BPM_FORTIFY_STRING_H_NOT_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,12,0)
@@ -283,6 +360,14 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,11,0)
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
+/*
+ * aa6159ab99a9ab kernel.h: split out mathematical helpers
+ */
+#define BPM_MATH_H_NOT_PRESENT
+#endif
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
 
 /*
@@ -334,11 +419,6 @@
 /* Need to check the need of panel_orientatio_quirks */
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
 #endif
-
-/*
- * aa6159ab99a9ab kernel.h: split out mathematical helpers
- */
-#define BPM_MATH_H_NOT_PRESENT
 
 #if (REDHAT_RELEASE_VERSION_IS_GEQ(8,4) && REDHAT_RELEASE_VERSION_IS_LESS(8,5))
 /*
@@ -451,6 +531,12 @@
 #define BPM_LIST_ENTRY_IS_HEAD_NOT_PRESENT
 #endif
 
+/*
+ * aedcade6f4fa debugobjects: Allow debug_obj_descr to be const
+ *
+ */
+#define BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
+
 #endif /* LINUX_VERSION_IS_LESS(5,10,0) */
 
 
@@ -469,7 +555,7 @@
 
 #endif
 
-#if LINUX_VERSION_IN_RANGE(5,9,0, 5,11,0)
+#if LINUX_VERSION_IN_RANGE(5,9,0, 5,11,0) && !(CUSTOM_KERN_3_RELEASE_VERSION_IS_GEQ(136,12,0))
 /*
  * c47d5032ed30 mm: move lruvec stats update functions to vmstat.h
  */
@@ -516,12 +602,6 @@
  *
  */
 #define BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-
-/*
- * aedcade6f4fa debugobjects: Allow debug_obj_descr to be const
- *
- */
-#define BPM_DEBUG_OBJECT_ACTIVATE_NO_CONST_ARG
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,2))
 /*
  * eedc4e5a142c
@@ -536,7 +616,7 @@
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || \
         SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
-#if !(LINUX_VERSION_IS_GEQ(5,4,0))
+#if !(LINUX_VERSION_IS_GEQ(5,4,0)) 
 /*
  * 709d6d73c7561 scatterlist: add generic wrappers for iterating over sgtable objects
  *
@@ -648,7 +728,8 @@
 #endif
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-        SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) || \
+	LINUX_VERSION_IN_RANGE(5,4,57, 5,5,0))
 /*
  * c0842fbc1b18 random32: move the pseudo-random 32-bit
  * definitions to prandom.h
@@ -924,12 +1005,13 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,20,0)
-
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
  * a3f8a30f3f00 Compiler Attributes: use feature
  * checks instead of version checks
  */
 #define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,19,0)
@@ -966,7 +1048,6 @@
         SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
 
 #define BPM_BP_MTD_MAGIC_NUMBER
-#define BPM_INCLUDE_KERNEL_H_IN_ASCII85_H
 #endif
 
 /* Hack section */
@@ -1024,6 +1105,9 @@
  * MISCELLANEOUS
  */
 
+/* Align Header path between i915-include and drm-include */
+#define BPM_HEADER_PATH_ALIGN
+
 /* Add backport Macro for all the symbols of dma-buf. */
 #ifndef CPTCFG_I915_NO_DRM
 #define BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
@@ -1052,7 +1136,6 @@
 
 #ifdef CPTCFG_I915_NO_DRM
 #define BPM_DISABLE_DRM_DMABUF
-#define BPM_INTEL_GMCH_GTT_RENAMED
 /*
  * f58a435311672 drm/dp, drm/i915: Add support for VESA backlights using PWM for brightness control
  *

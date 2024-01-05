@@ -65,7 +65,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		fi
 	}
 
-	if [ "$BUILD_TYPE" == "CUSTOM_KERN_1" ]; then
+	if [ -n "$CUSTOM_KERN_ID" ]; then
 	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/dmabuf .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/"
 	else
 	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/dmabuf .config; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/x86_64/build/"

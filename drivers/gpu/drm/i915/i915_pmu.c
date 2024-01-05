@@ -907,7 +907,7 @@ config_status(struct drm_i915_private *i915, u64 config)
 
 	unsigned int gt_id = config_gt_id(config);
 
-	if (gt_id > i915->remote_tiles)
+	if (!i915->gt[gt_id])
 		return -ENOENT;
 
 	if (is_hw_error_config(config)) {

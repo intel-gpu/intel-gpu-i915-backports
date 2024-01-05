@@ -395,8 +395,7 @@ static int live_ccs_gt_reset(struct intel_gt *gt, bool active)
 	}
 
 	/* A new submission after the reset should always restore CCS_MODE */
-	err = intel_gt_configure_ccs_mode(gt, config);
-	if (err) {
+	if (intel_gt_configure_ccs_mode(gt, config)) {
 		pr_err("Failed to reapply config:%08x after reset, ccs.config:%08x, ccs.active:%08x\n",
 		       config, gt->ccs.config, gt->ccs.active);
 		err = -EINVAL;

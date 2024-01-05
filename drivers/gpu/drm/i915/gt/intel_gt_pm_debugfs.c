@@ -192,6 +192,17 @@ static int gen6_drpc(struct seq_file *m)
 	print_rc6_res(m, "RC6 \"Locked to RPn\" residency since boot:",
 		      GEN6_GT_GFX_RC6_LOCKED);
 	print_rc6_res(m, "RC6 residency since boot:", GEN6_GT_GFX_RC6);
+
+	/*
+	 * TODO:As per BSpec:52453 GT RPM unit residency NS should be equal to
+	 * intel_rc6_rpm_unit_residency(&gt->rc6) * gt->clock_period_ns
+	 * But that is no where equivlent to GEN6_GT_GFX_RC6 NS on actual HW.
+	 * Need to figure out correct counter increment frequency from HW Team.
+	 */
+	if (GRAPHICS_VER(i915) >= 12)
+		seq_printf(m, "GT RC6 RPM Unit Residency since last RC6 exit: 0x%llx\n",
+			   intel_rc6_rpm_unit_residency(&gt->rc6));
+
 	print_rc6_res(m, "RC6+ residency since boot:", GEN6_GT_GFX_RC6p);
 	print_rc6_res(m, "RC6++ residency since boot:", GEN6_GT_GFX_RC6pp);
 
@@ -342,6 +353,20 @@ static int drpc_show(struct seq_file *m, void *unused)
 }
 DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(drpc);
 
+static int gt_c6_residency_show(struct seq_file *m, void *unused)
+{
+	struct intel_gt *gt = m->private;
+	struct drm_i915_private *i915 = gt->i915;
+
+	if (GRAPHICS_VER(i915) < 12)
+		return -ENODEV;
+
+	seq_printf(m, "0x%llx\n", intel_rc6_rpm_unit_residency(&gt->rc6));
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(gt_c6_residency);
+
 void intel_gt_pm_frequency_dump(struct intel_gt *gt, struct drm_printer *p)
 {
 	struct drm_i915_private *i915 = gt->i915;
@@ -402,7 +427,9 @@ void intel_gt_pm_frequency_dump(struct intel_gt *gt, struct drm_printer *p)
 		drm_puts(p, "no P-state info available\n");
 	}
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	drm_printf(p, "Current CD clock frequency: %d kHz\n", i915->cdclk.hw.cdclk);
+#endif
 	drm_printf(p, "Max CD clock frequency: %d kHz\n", i915->max_cdclk_freq);
 	drm_printf(p, "Max pixel clock frequency: %d kHz\n", i915->max_dotclk_freq);
 
@@ -596,4 +623,7 @@ void intel_gt_pm_debugfs_register(struct intel_gt *gt, struct dentry *root)
 		return;
 
 	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);
+
+	debugfs_create_file("gt_c6_residency", 0444, root,
+			    gt, &gt_c6_residency_fops);
 }

@@ -2862,7 +2862,7 @@ static void reset_csb_pointers(struct intel_engine_cs *engine)
 	memset(execlists->csb_status, -1, (reset_value + 1) * sizeof(u64));
 	drm_clflush_virt_range(execlists->csb_status,
 			       execlists->csb_size *
-			       sizeof(execlists->csb_status));
+			       sizeof(*execlists->csb_status));
 
 	/* Once more for luck and our trusty paranoia */
 	ENGINE_WRITE(engine, RING_CONTEXT_STATUS_PTR,
@@ -2870,14 +2870,6 @@ static void reset_csb_pointers(struct intel_engine_cs *engine)
 	ENGINE_POSTING_READ(engine, RING_CONTEXT_STATUS_PTR);
 
 	GEM_BUG_ON(READ_ONCE(*execlists->csb_write) != reset_value);
-}
-
-static void sanitize_hwsp(struct intel_engine_cs *engine)
-{
-	struct intel_timeline *tl;
-
-	list_for_each_entry(tl, &engine->status_page.timelines, engine_link)
-		intel_timeline_reset_seqno(tl);
 }
 
 static void execlists_sanitize(struct intel_engine_cs *engine)
@@ -2898,17 +2890,8 @@ static void execlists_sanitize(struct intel_engine_cs *engine)
 
 	reset_csb_pointers(engine);
 
-	/*
-	 * The kernel_context HWSP is stored in the status_page. As above,
-	 * that may be lost on resume/initialisation, and so we need to
-	 * reset the value in the HWSP.
-	 */
-	sanitize_hwsp(engine);
-
 	/* And scrub the dirty cachelines for the HWSP */
 	drm_clflush_virt_range(engine->status_page.addr, PAGE_SIZE);
-
-	intel_engine_reset_pinned_contexts(engine);
 }
 
 static void enable_error_interrupt(struct intel_engine_cs *engine)
@@ -3672,8 +3655,7 @@ static void rcu_virtual_context_destroy(struct work_struct *wrk)
 
 	if (ve->base.breadcrumbs)
 		intel_breadcrumbs_put(ve->base.breadcrumbs);
-	if (ve->base.sched_engine)
-		i915_sched_engine_put(ve->base.sched_engine);
+	i915_sched_engine_put(ve->base.sched_engine);
 	intel_engine_free_request_pool(&ve->base);
 
 	kfree(ve->bonds);

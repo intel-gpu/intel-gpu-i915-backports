@@ -354,54 +354,6 @@ i915_request_active_engine(struct i915_request *rq,
 	return ret;
 }
 
-static void __rq_init_watchdog(struct i915_request *rq)
-{
-	rq->watchdog.timer.function = NULL;
-}
-
-static enum hrtimer_restart __rq_watchdog_expired(struct hrtimer *hrtimer)
-{
-	struct i915_request *rq =
-		container_of(hrtimer, struct i915_request, watchdog.timer);
-	struct intel_gt *gt = rq->engine->gt;
-
-	if (!i915_request_completed(rq)) {
-		if (llist_add(&rq->watchdog.link, &gt->watchdog.list))
-			schedule_work(&gt->watchdog.work);
-	} else {
-		i915_request_put(rq);
-	}
-
-	return HRTIMER_NORESTART;
-}
-
-static void __rq_arm_watchdog(struct i915_request *rq)
-{
-	struct i915_request_watchdog *wdg = &rq->watchdog;
-	struct intel_context *ce = rq->context;
-
-	if (!ce->watchdog.timeout_us)
-		return;
-
-	i915_request_get(rq);
-
-	hrtimer_init(&wdg->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	wdg->timer.function = __rq_watchdog_expired;
-	hrtimer_start_range_ns(&wdg->timer,
-			       ns_to_ktime(ce->watchdog.timeout_us *
-					   NSEC_PER_USEC),
-			       NSEC_PER_MSEC,
-			       HRTIMER_MODE_REL);
-}
-
-static void __rq_cancel_watchdog(struct i915_request *rq)
-{
-	struct i915_request_watchdog *wdg = &rq->watchdog;
-
-	if (wdg->timer.function && hrtimer_try_to_cancel(&wdg->timer) > 0)
-		i915_request_put(rq);
-}
-
 static void remove_from_engine(struct i915_request *rq)
 {
 	struct i915_sched_engine *engine, *locked;
@@ -442,8 +394,6 @@ bool i915_request_retire(struct i915_request *rq)
 	GEM_BUG_ON(!i915_sw_fence_signaled(&rq->submit));
 	trace_i915_request_retire(rq);
 	i915_request_mark_complete(rq);
-
-	__rq_cancel_watchdog(rq);
 
 	/*
 	 * We know the GPU must have read the request to have
@@ -504,12 +454,12 @@ void i915_request_retire_upto(struct i915_request *rq)
 	struct i915_request *tmp;
 
 	RQ_TRACE(rq, "\n");
-	GEM_BUG_ON(!__i915_request_is_complete(rq));
 
 	do {
 		tmp = list_first_entry(&tl->requests, typeof(*tmp), link);
-		GEM_BUG_ON(!i915_request_completed(tmp));
 	} while (i915_request_retire(tmp) && tmp != rq);
+
+	GEM_BUG_ON(tmp != rq);
 }
 
 static struct i915_request * const *
@@ -685,10 +635,9 @@ bool i915_request_set_error_once(struct i915_request *rq, int error)
 
 struct i915_request *i915_request_mark_eio(struct i915_request *rq)
 {
+	/* Beware the caller may not have serialised the GPU's completions! */
 	if (__i915_request_is_complete(rq))
 		return NULL;
-
-	GEM_BUG_ON(i915_request_signaled(rq));
 
 	/* As soon as the request is completed, it may be retired */
 	rq = i915_request_get(rq);
@@ -725,7 +674,7 @@ bool __i915_request_submit(struct i915_request *request)
 	 * dropped upon retiring. (Otherwise if resubmit a *retired*
 	 * request, this would be a horrible use-after-free.)
 	 */
-	if (__i915_request_is_complete(request)) {
+	if (unlikely(i915_request_signaled(request))) {
 		list_del_init(&request->sched.link);
 		goto active;
 	}
@@ -878,8 +827,6 @@ submit_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 
 		if (unlikely(fence->error))
 			i915_request_set_error_once(request, fence->error);
-		else
-			__rq_arm_watchdog(request);
 
 		/*
 		 * We need to serialize use of the submit_request() callback
@@ -1029,7 +976,6 @@ __i915_request_initialize(struct i915_request *rq,
 
 	/* No zalloc, everything must be cleared after use */
 	rq->batch = NULL;
-	__rq_init_watchdog(rq);
 	GEM_BUG_ON(rq->capture_list);
 	GEM_BUG_ON(!llist_empty(&rq->execute_cb));
 
@@ -1158,11 +1104,6 @@ i915_request_create_locked(struct intel_context *ce, gfp_t gfp)
 	struct i915_request *rq;
 
 	lockdep_assert_held(&tl->mutex);
-
-	/* Move our oldest request to the slab-cache (if not in use!) */
-	rq = list_first_entry(&tl->requests, typeof(*rq), link);
-	if (!list_is_last(&rq->link, &tl->requests))
-		i915_request_retire(rq);
 
 	intel_context_enter(ce);
 	rq = __i915_request_create(ce, gfp);
@@ -1775,7 +1716,12 @@ i915_request_await_object(struct i915_request *to,
 			  struct drm_i915_gem_object *obj,
 			  bool write)
 {
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *fence;
+#else
 	struct dma_fence *excl, **shared = &excl;
+#endif
 	unsigned int count;
 	int ret = 0;
 
@@ -1783,6 +1729,14 @@ i915_request_await_object(struct i915_request *to,
 	if (ret)
 		return ret;
 
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	dma_resv_for_each_fence(&cursor, obj->base.resv,
+			dma_resv_usage_rw(write), fence) {
+		ret = i915_request_await_dma_fence(to, fence);
+		if (ret)
+			break;
+	}
+#else
 	if (write) {
 		ret = dma_resv_get_fences(obj->base.resv,
 					  NULL, &count, &shared);
@@ -1802,6 +1756,7 @@ i915_request_await_object(struct i915_request *to,
 
 	if (shared != &excl)
 		kfree(shared);
+#endif
 
 	return ret;
 }
@@ -2124,13 +2079,15 @@ static void request_wait_wake(struct dma_fence *fence, struct dma_fence_cb *cb)
  * May return -EINTR is called with I915_WAIT_INTERRUPTIBLE and a signal is
  * pending before the request completes.
  */
-long __i915_request_wait(struct i915_request *rq,
-			 unsigned int flags,
-			 long timeout)
+static long __i915_request_wait(struct i915_request *rq,
+				unsigned int flags,
+				long timeout)
 {
 	const int state = flags & I915_WAIT_INTERRUPTIBLE ?
 		TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
 	struct request_wait wait;
+
+	timeout = ADJUST_TIMEOUT(timeout);
 
 	/*
 	 * Optimistic spin before touching IRQs.
@@ -2207,6 +2164,11 @@ long __i915_request_wait(struct i915_request *rq,
 			break;
 		}
 
+		if (rq->engine && i915_userspace_is_blocked(rq->engine->i915)) {
+			timeout = -EAGAIN;
+			break;
+		}
+
 		if (!timeout) {
 			timeout = -ETIME;
 			break;
@@ -2221,6 +2183,13 @@ long __i915_request_wait(struct i915_request *rq,
 	GEM_BUG_ON(!list_empty(&wait.cb.node));
 
 out:
+	/*
+	 * Since the timeout is adjusted in this routine,
+	 * reset it before returning
+	 */
+	if (timeout > 0)
+		timeout /= GET_MULTIPLIER(timeout);
+
 	return timeout;
 }
 

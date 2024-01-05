@@ -63,17 +63,27 @@ enum fault_type {
 
 void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_id)
 {
-	char name[TASK_COMM_LEN + 8] = "[" DRIVER_NAME "]";
+	char name[TASK_COMM_LEN + 16] = "[" DRIVER_NAME "]";
+	struct i915_gem_context *ctx;
 	struct intel_context *ce;
 
+	rcu_read_lock();
+	ctx = NULL;
 	ce = xa_load(&gt->uc.guc.context_lookup, guc_ctx_id);
-	if (ce && ce->gem_context) {
-		memcpy(name, ce->gem_context->name, sizeof(name));
+	if (ce)
+		ctx = rcu_dereference(ce->gem_context);
+	if (ctx) {
+		snprintf(name, sizeof(name),
+			 "%s (%s)", ctx->name, ce->engine->name);
+		atomic_inc(&ctx->guilty_count);
 		intel_context_ban(ce, NULL);
 	}
+	rcu_read_unlock();
 
 	trace_intel_gt_cat_error(gt, name);
-	gt_err(gt, "catastrophic memory error in context %s\n", name);
+	dev_notice(gt->i915->drm.dev,
+		   "Catastrophic memory error in context %s\n",
+		   name);
 }
 
 static u64 fault_va(u32 fault_data1, u32 fault_data0)
@@ -285,7 +295,7 @@ lookup_engine(struct intel_gt *gt, u8 class, u8 instance)
 	return gt->engine_class[class][instance];
 }
 
-static void
+static struct intel_engine_cs *
 mark_engine_as_active(struct intel_gt *gt,
 		      int engine_class, int engine_instance)
 {
@@ -293,22 +303,18 @@ mark_engine_as_active(struct intel_gt *gt,
 
 	engine = lookup_engine(gt, engine_class, engine_instance);
 	if (!engine)
-		return;
+		return NULL;
 
 	WRITE_ONCE(engine->stats.irq.count,
 		   READ_ONCE(engine->stats.irq.count) + 1);
+
+	return engine;
 }
 
 static struct i915_gpu_coredump *
-pf_coredump(struct intel_gt *gt, struct recoverable_page_fault_info *info)
+pf_coredump(struct intel_engine_cs *engine, struct recoverable_page_fault_info *info)
 {
 	struct i915_gpu_coredump *error;
-	struct intel_engine_cs *engine;
-
-	engine = lookup_engine(gt, info->engine_class, info->engine_instance);
-	if (!engine)
-		return NULL;
-	GEM_BUG_ON(engine->gt != gt);
 
 	error = i915_gpu_coredump_create_for_engine(engine, GFP_KERNEL);
 	if (!error)
@@ -328,31 +334,36 @@ pf_coredump(struct intel_gt *gt, struct recoverable_page_fault_info *info)
 	return error;
 }
 
+struct fault_reply {
+	struct dma_fence_work base;
+	struct recoverable_page_fault_info info;
+	struct i915_debugger_pagefault *debugger;
+	struct i915_gpu_coredump *dump;
+	struct intel_engine_cs *engine;
+	struct intel_guc *guc;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
+};
+
 static struct i915_debugger_pagefault *
-pf_eu_debugger(struct intel_gt *gt, struct recoverable_page_fault_info *info,
+pf_eu_debugger(struct intel_engine_cs *engine,
+	       struct recoverable_page_fault_info *info,
 	       struct dma_fence *fence)
 {
-	struct i915_debugger_pagefault *debugger_pagefault;
-	struct intel_engine_cs *engine;
-
+	struct i915_debugger_pagefault *pf;
+	struct intel_gt *gt = engine->gt;
 	u32 td_ctl;
 
-	engine = lookup_engine(gt, info->engine_class, info->engine_instance);
-	if (!engine)
-		return NULL;
-
-	GEM_BUG_ON(engine->gt != gt);
-
-	td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
 	/*
 	 * If there is no debug functionality (TD_CTL_GLOBAL_DEBUG_ENABLE, etc.),
 	 * don't proceed pagefault routine for eu debugger.
 	 */
+	td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
 	if (!td_ctl)
 		return NULL;
 
-	debugger_pagefault = kzalloc(sizeof(*debugger_pagefault), GFP_KERNEL);
-	if (!debugger_pagefault)
+	pf = kzalloc(sizeof(*pf), GFP_KERNEL);
+	if (!pf)
 		return NULL;
 
 	/*
@@ -376,15 +387,15 @@ pf_eu_debugger(struct intel_gt *gt, struct recoverable_page_fault_info *info,
 	mutex_lock(&gt->eu_debug.lock);
 	if (i915_active_fence_isset(&gt->eu_debug.fault)) {
 		mutex_unlock(&gt->eu_debug.lock);
-		kfree(debugger_pagefault);
+		kfree(pf);
 		return NULL;
 	}
 	__i915_active_fence_set(&gt->eu_debug.fault, fence);
 	mutex_unlock(&gt->eu_debug.lock);
 
-	INIT_LIST_HEAD(&debugger_pagefault->list);
+	INIT_LIST_HEAD(&pf->list);
 
-	intel_eu_attentions_read(gt, &debugger_pagefault->attentions.before, 0);
+	intel_eu_attentions_read(gt, &pf->attentions.before, 0);
 
 	/* Halt on next thread dispatch */
 	while (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT)) {
@@ -409,18 +420,18 @@ pf_eu_debugger(struct intel_gt *gt, struct recoverable_page_fault_info *info,
 		td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
 	}
 
-	intel_eu_attentions_read(gt, &debugger_pagefault->attentions.after,
+	intel_eu_attentions_read(gt, &pf->attentions.after,
 				 INTEL_GT_ATTENTION_TIMEOUT_MS);
 
 	intel_gt_invalidate_l3_mmio(gt);
 
-	debugger_pagefault->engine = engine;
-	debugger_pagefault->fault.addr = info->page_addr;
-	debugger_pagefault->fault.type = info->fault_type;
-	debugger_pagefault->fault.level = info->fault_level;
-	debugger_pagefault->fault.access = info->access_type;
+	pf->engine = engine;
+	pf->fault.addr = info->page_addr;
+	pf->fault.type = info->fault_type;
+	pf->fault.level = info->fault_level;
+	pf->fault.access = info->access_type;
 
-	return debugger_pagefault;
+	return pf;
 }
 
 static bool has_debug_sip(struct intel_gt *gt)
@@ -439,13 +450,11 @@ static bool has_debug_sip(struct intel_gt *gt)
 	return intel_gt_mcr_read_any(gt, TD_CTL);
 }
 
+
 static struct dma_fence *
-handle_i915_mm_fault(struct intel_guc *guc,
-		     struct recoverable_page_fault_info *info,
-		     struct i915_gpu_coredump **dump,
-		     struct i915_debugger_pagefault **debugger_pagefault,
-		     struct dma_fence *reply_fence)
+handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 {
+	struct recoverable_page_fault_info *info = &reply->info;
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct dma_fence *fence = NULL;
 	struct i915_address_space *vm;
@@ -484,13 +493,8 @@ handle_i915_mm_fault(struct intel_guc *guc,
 
 		/* Each EU thread may trigger its own pf to the same address! */
 		if (!vm->invalidate_tlb_scratch) {
-			struct intel_engine_cs *engine;
-			bool debugger_active = false;
-
-			engine = lookup_engine(gt, info->engine_class, info->engine_instance);
-			if (engine)
-				debugger_active = i915_debugger_active_on_engine(engine);
-			/* The crux of this code is the same for offline/online.
+			/*
+			 * The crux of this code is the same for offline/online.
 			 *
 			 * The current differences are that for offline we record
 			 * a few more registers (not a bit deal of online) and
@@ -503,13 +507,10 @@ handle_i915_mm_fault(struct intel_guc *guc,
 			 * a debugger attached to send the event, or if not
 			 * we complete and save the coredump for posterity.
 			 */
-			if (debugger_active) {
-				*debugger_pagefault = pf_eu_debugger(gt, info, reply_fence);
-				if (!*debugger_pagefault)
-					return NULL;
-			} else {
-				*dump = pf_coredump(gt, info);
-			}
+			if (i915_debugger_active_on_engine(reply->engine))
+				reply->debugger = pf_eu_debugger(reply->engine, info, &reply->base.rq.fence);
+			else
+				reply->dump = pf_coredump(reply->engine, info);
 		}
 
 		if (vm->has_scratch || has_debug_sip(gt)) {
@@ -535,8 +536,6 @@ handle_i915_mm_fault(struct intel_guc *guc,
 
 		return ERR_PTR(-EFAULT);
 	}
-
-	mark_engine_as_active(gt, info->engine_class, info->engine_instance);
 
 	err = validate_fault(gt->i915, vma, info);
 	if (err)
@@ -617,16 +616,6 @@ static void get_fault_info(const u32 *payload, struct recoverable_page_fault_inf
 				     desc->dw2) << PAGE_FAULT_DESC_VIRTUAL_ADDR_LO_SHIFT;
 }
 
-struct fault_reply {
-	struct dma_fence_work base;
-	struct recoverable_page_fault_info info;
-	struct i915_gpu_coredump *dump;
-	struct i915_debugger_pagefault *debugger_pagefault;
-	struct intel_guc *guc;
-	struct intel_gt *gt;
-	intel_wakeref_t wakeref;
-};
-
 static int fault_work(struct dma_fence_work *work)
 {
 	return 0;
@@ -660,32 +649,20 @@ static int send_fault_reply(const struct fault_reply *f)
 	return intel_guc_send(f->guc, action, ARRAY_SIZE(action));
 }
 
-static void coredump_add_request(struct i915_gpu_coredump *dump,
-				 struct i915_request *rq,
-				 gfp_t gfp)
-{
-	struct intel_gt_coredump *gt = dump->gt;
-	struct intel_engine_capture_vma *vma;
-	struct i915_page_compress *compress;
-
-	compress = i915_vma_capture_prepare(gt);
-	if (!compress)
-		return;
-
-	vma = intel_engine_coredump_add_request(gt->engine, rq, gfp, compress);
-	if (vma)
-		intel_engine_coredump_add_vma(gt->engine, vma, compress);
-
-	i915_vma_capture_finish(gt, compress);
-}
-
 static void fault_complete(struct dma_fence_work *work)
 {
 	struct fault_reply *f = container_of(work, typeof(*f), base);
+	struct intel_engine_capture_vma *vma = NULL;
+	struct i915_page_compress *compress = NULL;
 	struct i915_gpu_coredump *dump = f->dump;
 
 	if (dump && dump->private) {
-		coredump_add_request(dump, dump->private, GFP_KERNEL);
+		struct intel_gt_coredump *gt = dump->gt;
+
+		compress = i915_vma_capture_prepare(gt);
+		if (compress)
+			vma = intel_engine_coredump_add_request(gt->engine, dump->private, GFP_KERNEL, compress);
+
 		i915_request_put(dump->private);
 	}
 
@@ -704,14 +681,11 @@ static void fault_complete(struct dma_fence_work *work)
 	GEM_WARN_ON(send_fault_reply(f));
 
 	if (dump) {
+		struct intel_gt_coredump *gt = dump->gt;
 		u32 td_ctl;
 
 		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
 		if (td_ctl) {
-			struct intel_gt_coredump *gt = dump->gt;
-			struct intel_engine_cs *engine =
-				(struct intel_engine_cs *)gt->engine->engine;
-
 			intel_eu_attentions_read(f->gt, &gt->attentions.resolved,
 						 INTEL_GT_ATTENTION_TIMEOUT_MS);
 
@@ -720,16 +694,20 @@ static void fault_complete(struct dma_fence_work *work)
 			intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl);
 
 			/* Reset and cleanup if there are any ATTN leftover */
-			intel_engine_schedule_heartbeat(engine);
+			intel_engine_schedule_heartbeat(f->engine);
 		}
+
+		if (vma)
+			intel_engine_coredump_add_vma(gt->engine, vma, compress);
+
+		if (compress)
+			i915_vma_capture_finish(gt, compress);
 
 		i915_error_state_store(dump);
 		i915_gpu_coredump_put(dump);
-	} else if (f->debugger_pagefault) {
+	} else if (f->debugger) {
 		struct i915_address_space *vm = faulted_vm(f->guc, f->info.asid);
-		struct i915_debugger_pagefault *debugger_pagefault
-			= f->debugger_pagefault;
-		struct intel_engine_cs *engine = debugger_pagefault->engine;
+		struct i915_debugger_pagefault *pf = f->debugger;
 		struct intel_gt *gt;
 		u64 start, length;
 		u32 td_ctl;
@@ -740,7 +718,7 @@ static void fault_complete(struct dma_fence_work *work)
 			goto err_dbg_cleanup;
 
 		intel_eu_attentions_read(f->gt,
-					 &debugger_pagefault->attentions.resolved,
+					 &pf->attentions.resolved,
 					 INTEL_GT_ATTENTION_TIMEOUT_MS);
 		/*
 		 * Install the fault PTE;
@@ -770,7 +748,7 @@ err_dbg_cleanup:
 		intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl &
 					     ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION));
 
-		i915_debugger_handle_engine_page_fault(engine, debugger_pagefault);
+		i915_debugger_handle_engine_page_fault(f->engine, pf);
 	}
 
 	intel_gt_pm_put(f->gt, f->wakeref);
@@ -801,6 +779,14 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	get_fault_info(payload, &reply->info);
 	reply->guc = guc;
 
+	reply->engine =
+		mark_engine_as_active(gt,
+				      reply->info.engine_class,
+				      reply->info.engine_instance);
+	if (!reply->engine)
+		return -EINVAL;
+	GEM_BUG_ON(reply->engine->gt != gt);
+
 	reply->gt = gt;
 	reply->wakeref = intel_gt_pm_get(gt);
 
@@ -826,9 +812,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	 * sufficiently larger send (H2G) buffer to accommodate a typical
 	 * number of messages (assuming the buffer is not already backlogged).
 	 */
-	fence = handle_i915_mm_fault(guc, &reply->info, &reply->dump,
-				     &reply->debugger_pagefault,
-				     &reply->base.rq.fence);
+	fence = handle_i915_mm_fault(guc, reply);
 	if (IS_ERR(fence)) {
 		i915_sw_fence_set_error_once(&reply->base.rq.submit,
 					     PTR_ERR(fence));

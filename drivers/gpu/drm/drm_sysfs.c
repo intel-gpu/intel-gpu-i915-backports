@@ -52,7 +52,11 @@ static struct device_type drm_sysfs_device_minor = {
 
 struct class *drm_class;
 
+#ifdef BPM_DMA_HEAP_AND_DRM_DEVNODE_CONST_ARG_NOT_PRESENT
+static char *drm_devnode(const struct device *dev, umode_t *mode)
+#else
 static char *drm_devnode(struct device *dev, umode_t *mode)
+#endif
 {
 	return kasprintf(GFP_KERNEL, "dri/%s", dev_name(dev));
 }

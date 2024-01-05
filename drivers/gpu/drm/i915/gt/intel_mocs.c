@@ -3,6 +3,8 @@
  * Copyright © 2015 Intel Corporation
  */
 
+#include <linux/firmware.h>
+
 #include "i915_drv.h"
 
 #include "intel_engine.h"
@@ -17,7 +19,7 @@ struct drm_i915_mocs_entry {
 	u32 control_value;
 	u16 l3cc_value;
 	u16 used;
-};
+} __packed;  /* Packed to document intel_mocs_override usage */
 
 struct drm_i915_mocs_table {
 	unsigned int size;
@@ -26,6 +28,8 @@ struct drm_i915_mocs_table {
 	u8 uc_index;
 	u8 wb_index; /* Only used on HAS_L3_CCS_READ() platforms */
 	u8 unused_entries_index;
+	bool is_dynamic;
+	bool force_uncached;
 };
 
 /* Defines for the tables (XXX_MOCS_0 - XXX_MOCS_63) */
@@ -90,6 +94,11 @@ struct drm_i915_mocs_table {
 		.l3cc_value = __l3cc_value, \
 		.used = 1, \
 	}
+
+#define HEX_PREFIX		2
+#define BYTE			8
+#define NIBBLE			4
+#define HEX_BASE		16
 
 /*
  * MOCS tables
@@ -491,6 +500,135 @@ static bool has_mocs(const struct drm_i915_private *i915)
 	return !IS_DGFX(i915);
 }
 
+#ifdef CPTCFG_DRM_I915_DEBUG_MOCS
+
+static void intel_mocs_override(const struct drm_i915_private *i915,
+				struct drm_i915_mocs_table *table)
+{
+	struct drm_i915_mocs_entry *mocs_entries;
+	const struct firmware *fw = NULL;
+	const u8 *fwdata;
+	char *entry, *entry_start, *entry_end;
+	int fwsize, entry_len, i, err;
+	unsigned int mocs_entries_total, num_dbg_entries = 0;
+
+	if (!i915->params.mocs_table_path)
+		return;
+
+	if (!strcmp(i915->params.mocs_table_path, "uncached.bin")) {
+		table->force_uncached = true;
+		drm_info(&i915->drm, "MOCS forced uncached on all entries\n");
+		return;
+	}
+
+	err = request_firmware_direct(&fw, i915->params.mocs_table_path, i915->drm.dev);
+	if (err) {
+		drm_warn(&i915->drm, "MOCS firmware loading failed (err=%d)\n", err);
+		return;
+	}
+
+	fwdata = fw->data;
+	fwsize = fw->size;
+
+	/* Calculate length of a text line representing one mocs entry */
+	entry_len = (sizeof(struct drm_i915_mocs_entry) * BYTE) / NIBBLE + HEX_PREFIX;
+
+	entry_start = (char *)fwdata;
+	while ((entry_end = strnchr(entry_start, fwsize, '\n'))) {
+		if ((entry_end - entry_start) == entry_len) {
+			num_dbg_entries++;
+			fwsize -= entry_len + 1;
+			if (!fwsize)
+				break;
+			entry_start = entry_end + 1;
+			GEM_BUG_ON(entry_start >= (char *)fwdata + fw->size);
+		} else {
+			drm_warn(&i915->drm, "Invalid sized MOCS entries provided, override failed\n");
+			goto out_release_firmware;
+		}
+	}
+
+	/* If last entry is not newline terminated */
+	if (fwsize) {
+		if (fwsize == entry_len) {
+			num_dbg_entries++;
+		} else {
+			drm_warn(&i915->drm, "Invalid sized MOCS entries provided, override failed\n");
+			goto out_release_firmware;
+		}
+	}
+
+	/*
+	 * Calculate total number of MOCS entries that finally needs to be in MOCS entry table based
+	 * on platform, default entries and number of debug entries provided by user to over-write
+	 */
+	if (num_dbg_entries > table->n_entries) {
+		drm_warn(&i915->drm,
+			 "MOCS entries provided exceeds max platform limit (%d), override failed\n",
+			 table->n_entries);
+		goto out_release_firmware;
+	} else {
+		/* Total mocs entries will be max of default entries and user provided entries */
+		mocs_entries_total = max(num_dbg_entries, table->size);
+	}
+
+	entry = kzalloc(sizeof(char) * (entry_len + 1), GFP_KERNEL);
+	if (!entry)
+		goto out_release_firmware;
+
+	/* Allocate memory to hold total MOCS entries*/
+	mocs_entries = kcalloc(mocs_entries_total, sizeof(struct drm_i915_mocs_entry), GFP_KERNEL);
+	if (!mocs_entries)
+		goto out;
+
+	/* Fill the default entries first */
+	for (i = 0; i < table->size; i++)
+		memcpy(&mocs_entries[i], &table->table[i], sizeof(struct drm_i915_mocs_entry));
+
+	entry_start = (char *)fwdata;
+	/* Over-write with user provided entries */
+	for (i = 0; i < num_dbg_entries; i++) {
+		memcpy(entry, entry_start, entry_len);
+		entry[entry_len] = '\0';
+		err = kstrtou64(entry, HEX_BASE, (u64 *)&mocs_entries[i]);
+		if (err) {
+			drm_warn(&i915->drm,
+				 "Invalid MOCS entry provided at index %d, override failed\n", i);
+			kfree(mocs_entries);
+			goto out;
+		}
+		entry_start += entry_len + 1;
+	}
+
+	table->table = mocs_entries;
+	table->size = mocs_entries_total;
+	table->is_dynamic = 1;
+	drm_info(&i915->drm, "MOCS table updated successfully using %s\n",
+		 i915->params.mocs_table_path);
+
+out:
+	kfree(entry);
+
+out_release_firmware:
+	release_firmware(fw);
+}
+
+static void free_mocs_settings(struct drm_i915_mocs_table *table)
+{
+	if (table->is_dynamic) {
+		kfree(table->table);
+		table->table = NULL;
+	}
+}
+
+#else
+static void intel_mocs_override(const struct drm_i915_private *i915,
+				struct drm_i915_mocs_table *table)
+{}
+static void free_mocs_settings(struct drm_i915_mocs_table *table) {}
+
+#endif
+
 static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 				      struct drm_i915_mocs_table *table)
 {
@@ -565,6 +703,7 @@ static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 			      "Platform that should have a MOCS table does not.\n");
 		return 0;
 	}
+	table->is_dynamic = 0;
 
 	if (GEM_DEBUG_WARN_ON(table->size > table->n_entries))
 		return 0;
@@ -592,6 +731,10 @@ static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 	if (has_l3cc(i915))
 		flags |= HAS_RENDER_L3CC;
 
+	/* Overriding MOCS table entries */
+	if (flags)
+		intel_mocs_override(i915, table);
+
 	return flags;
 }
 
@@ -603,8 +746,12 @@ static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 static u32 get_entry_control(const struct drm_i915_mocs_table *table,
 			     unsigned int index)
 {
+	if (table->force_uncached)
+		return table->table[table->uc_index].control_value;
+
 	if (index < table->size && table->table[index].used)
 		return table->table[index].control_value;
+
 	return table->table[table->unused_entries_index].control_value;
 }
 
@@ -655,8 +802,12 @@ static void init_mocs_table(struct intel_engine_cs *engine,
 static u16 get_entry_l3cc(const struct drm_i915_mocs_table *table,
 			  unsigned int index)
 {
+	if (table->force_uncached)
+		return table->table[table->uc_index].l3cc_value;
+
 	if (index < table->size && table->table[index].used)
 		return table->table[index].l3cc_value;
+
 	return table->table[table->unused_entries_index].l3cc_value;
 }
 
@@ -720,8 +871,13 @@ void intel_set_mocs_index(struct intel_gt *gt)
 
 	get_mocs_settings(gt->i915, &table);
 	gt->mocs.uc_index = table.uc_index;
-	if (HAS_L3_CCS_READ(gt->i915))
-		gt->mocs.wb_index = table.wb_index;
+
+	if (HAS_L3_CCS_READ(gt->i915)) {
+		if (gt->i915->params.engine_mocs_uncacheable)
+			gt->mocs.wb_index = table.uc_index;
+		else
+			gt->mocs.wb_index = table.wb_index;
+	}
 }
 
 void intel_mocs_init(struct intel_gt *gt)
@@ -743,6 +899,27 @@ void intel_mocs_init(struct intel_gt *gt)
 	 */
 	if (flags & HAS_RENDER_L3CC)
 		init_l3cc_table(gt, &table);
+	free_mocs_settings(&table);
+}
+
+int intel_mocs_seq_write(struct drm_i915_private *i915, struct seq_file *m)
+{
+	struct drm_i915_mocs_table table;
+	int i;
+	unsigned int flags;
+
+	flags = get_mocs_settings(i915, &table);
+	if (!flags) {
+		drm_dbg(&i915->drm, "MOCS settings are unavailable\n");
+		return -ENOENT;
+	}
+
+	for (i = 0; i < table.size; i++) {
+		seq_printf(m, "0x%04x%04x%08x\n", table.table[i].used, table.table[i].l3cc_value,
+			   table.table[i].control_value);
+	}
+	free_mocs_settings(&table);
+	return 0;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

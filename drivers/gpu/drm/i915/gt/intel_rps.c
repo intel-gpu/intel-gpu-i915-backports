@@ -57,6 +57,13 @@ static bool rps_uses_slpc(struct intel_rps *rps)
 	return intel_uc_uses_guc_slpc(&gt->uc);
 }
 
+static bool rps_supported(struct intel_rps *rps)
+{
+	struct drm_i915_private *i915 = rps_to_i915(rps);
+
+	return i915->params.enable_rps;
+}
+
 static u32 rps_pm_sanitize_mask(struct intel_rps *rps, u32 mask)
 {
 	return mask & ~rps->pm_intrmsk_mbz;
@@ -1475,11 +1482,11 @@ static unsigned long __ips_gfx_val(struct intel_ips *ips)
 	/* Correction factor in 1/100000 units */
 	t = ips_mch_val(uncore);
 	if (t > 80)
-		corr = t * 2349 + 135940;
+		corr = t * 2349ull + 135940;
 	else if (t >= 50)
-		corr = t * 964 + 29317;
+		corr = t * 964ull + 29317;
 	else /* < 50 */
-		corr = t * 301 + 1004;
+		corr = t * 301ull + 1004;
 
 	corr = div_u64(corr * 150142 * state1, 10000) - 78642;
 	corr2 = div_u64(corr, 100000) * ips->corr;
@@ -1643,7 +1650,7 @@ int intel_freq_opcode(struct intel_rps *rps, int val)
 	else
 		return val;
 }
-
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void vlv_init_gpll_ref_freq(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
@@ -1656,7 +1663,9 @@ static void vlv_init_gpll_ref_freq(struct intel_rps *rps)
 	drm_dbg(&i915->drm, "GPLL reference freq: %d kHz\n",
 		rps->gpll_ref_freq);
 }
-
+#else
+static void vlv_init_gpll_ref_freq(struct intel_rps *rps) { return; }
+#endif
 static void vlv_rps_init(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
@@ -1783,7 +1792,9 @@ static u32 vlv_wa_c0_ei(struct intel_rps *rps, u32 pm_iir)
 
 		time = ktime_us_delta(now.ktime, prev->ktime);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 		time *= rps_to_i915(rps)->czclk_freq;
+#endif
 
 		/* Workload can be split between render + media,
 		 * e.g. SwapBuffers being blitted in X after being rendered in
@@ -1993,6 +2004,9 @@ void intel_rps_init(struct intel_rps *rps)
 	if (IS_SRIOV_VF(i915))
 		return;
 
+	if (!rps_supported(rps))
+		return;
+
 	if (rps_uses_slpc(rps))
 		return;
 
@@ -2057,6 +2071,9 @@ void intel_rps_sanitize(struct intel_rps *rps)
 	if (IS_SRIOV_VF(rps_to_i915(rps)))
 		return;
 
+	if (!rps_supported(rps))
+		return;
+
 	if (rps_uses_slpc(rps))
 		return;
 
@@ -2064,7 +2081,7 @@ void intel_rps_sanitize(struct intel_rps *rps)
 		rps_disable_interrupts(rps);
 }
 
-u32 intel_rps_read_rpstat(struct intel_rps *rps)
+static u32 intel_rps_read_rpstat(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	i915_reg_t rpstat;
@@ -2620,6 +2637,9 @@ void intel_rps_raise_unslice(struct intel_rps *rps)
 {
 	struct intel_uncore *uncore = rps_to_uncore(rps);
 
+	if (!rps_supported(rps))
+		return;
+
 	mutex_lock(&rps->lock);
 
 	if (rps_uses_slpc(rps)) {
@@ -2644,6 +2664,9 @@ void intel_rps_raise_unslice(struct intel_rps *rps)
 void intel_rps_lower_unslice(struct intel_rps *rps)
 {
 	struct intel_uncore *uncore = rps_to_uncore(rps);
+
+	if (!rps_supported(rps))
+		return;
 
 	mutex_lock(&rps->lock);
 

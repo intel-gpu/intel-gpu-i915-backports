@@ -10,7 +10,6 @@
 #include "i915_params.h"
 #include "intel_context.h"
 #include "intel_engine_pm.h"
-#include "intel_flat_ppgtt_pool.h"
 #include "intel_gt.h"
 #include "intel_gt_ccs_mode.h"
 #include "intel_gt_clock_utils.h"
@@ -25,6 +24,57 @@
 #include "intel_pcode.h"
 
 #include "pxp/intel_pxp_pm.h"
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static void display__gt_unpark(struct drm_i915_private *i915, struct intel_gt *gt)
+{
+	gt->awake = intel_display_power_get(i915, POWER_DOMAIN_GT_IRQ);
+	GEM_BUG_ON(!gt->awake);
+}
+
+static void display__gt_park(struct drm_i915_private *i915, struct intel_gt *gt)
+{
+	/* Defer dropping the display power well for 100ms, it's slow! */
+	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ,
+				      fetch_and_zero(&gt->awake));
+}
+#else
+static void display__gt_unpark(struct drm_i915_private *i915, struct intel_gt *gt) {}
+static void display__gt_park(struct drm_i915_private *i915, struct intel_gt *gt) {}
+#endif
+
+static void dbg_poison_ce(struct intel_context *ce)
+{
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
+		return;
+
+	if (ce->state) {
+		struct drm_i915_gem_object *obj = ce->state->obj;
+		int type = page_unmask_bits(obj->mm.mapping);
+		void *map;
+
+		if (!i915_gem_object_trylock(obj))
+			return;
+
+		map = i915_gem_object_pin_map(obj, type);
+		if (!IS_ERR(map)) {
+			memset(map, CONTEXT_REDZONE, obj->base.size);
+			i915_gem_object_flush_map(obj);
+			i915_gem_object_unpin_map(obj);
+		}
+		i915_gem_object_unlock(obj);
+	}
+}
+
+static void reset_pinned_contexts(struct intel_gt *gt)
+{
+	struct intel_context *ce;
+
+	list_for_each_entry(ce, &gt->pinned_contexts, pinned_contexts_link) {
+		dbg_poison_ce(ce);
+		ce->ops->reset(ce);
+	}
+}
 
 /*
  * Wa_14017210380: mtl
@@ -110,8 +160,7 @@ static int __gt_unpark(struct intel_wakeref *wf)
 	 * Work around it by grabbing a GT IRQ power domain whilst there is any
 	 * GT activity, preventing any DC state transitions.
 	 */
-	gt->awake = intel_display_power_get(i915, POWER_DOMAIN_GT_IRQ);
-	GEM_BUG_ON(!gt->awake);
+	display__gt_unpark(i915, gt);
 
 	intel_rc6_unpark(&gt->rc6);
 	intel_rps_unpark(&gt->rps);
@@ -136,7 +185,6 @@ static int __gt_park(struct intel_wakeref *wf)
 
 	runtime_end(gt);
 	intel_gt_park_requests(gt);
-	intel_flat_ppgtt_pool_park(&gt->fpp);
 
 	intel_guc_busyness_park(gt);
 	i915_pmu_gt_parked(gt);
@@ -148,10 +196,7 @@ static int __gt_park(struct intel_wakeref *wf)
 	/* Everything switched off, flush any residual interrupt just in case */
 	intel_synchronize_irq(i915);
 
-	/* Defer dropping the display power well for 100ms, it's slow! */
-	intel_display_power_put_async(i915, POWER_DOMAIN_GT_IRQ,
-				      fetch_and_zero(&gt->awake));
-
+	display__gt_park(i915, gt);
 	/* Wa_14017210380: mtl */
 	mtl_mc6_wa_media_not_busy(gt);
 
@@ -240,6 +285,8 @@ static void gt_sanitize(struct intel_gt *gt, bool force)
 	}
 
 	intel_uc_reset(&gt->uc, false);
+	intel_gt_retire_requests(gt);
+	reset_pinned_contexts(gt);
 
 	for_each_engine(engine, gt, id)
 		if (engine->reset.finish)

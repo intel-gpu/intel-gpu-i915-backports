@@ -71,6 +71,7 @@ void vlv_iosf_sb_put(struct drm_i915_private *i915, unsigned long ports)
 		__vlv_punit_put(i915);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static int vlv_sideband_rw(struct drm_i915_private *i915,
 			   u32 devfn, u32 port, u32 opcode,
 			   u32 addr, u32 *val)
@@ -120,6 +121,12 @@ static int vlv_sideband_rw(struct drm_i915_private *i915,
 
 	return err;
 }
+#else
+static int vlv_sideband_rw(struct drm_i915_private *i915,
+			   u32 devfn, u32 port, u32 opcode,
+			   u32 addr, u32 *val)
+{ return 0; }
+#endif
 
 u32 vlv_punit_read(struct drm_i915_private *i915, u32 addr)
 {
@@ -212,6 +219,7 @@ void vlv_ccu_write(struct drm_i915_private *i915, u32 reg, u32 val)
 			SB_CRWRDA_NP, reg, &val);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static u32 vlv_dpio_phy_iosf_port(struct drm_i915_private *i915, enum dpio_phy phy)
 {
 	/*
@@ -250,6 +258,7 @@ void vlv_dpio_write(struct drm_i915_private *i915,
 	vlv_sideband_rw(i915, DPIO_DEVFN, port, SB_MWR_NP, reg, &val);
 }
 
+#endif
 u32 vlv_flisdsi_read(struct drm_i915_private *i915, u32 reg)
 {
 	u32 val = 0;

@@ -137,8 +137,8 @@ static int mi_store_dw__ppgtt(void *arg)
 	struct i915_ppgtt *ppgtt;
 	enum intel_engine_id id;
 	struct i915_vma *vma;
+	int err = 0;
 	u32 *map;
-	int err;
 
 	if (!HAS_FULL_PPGTT(gt->i915))
 		return 0;
@@ -284,8 +284,8 @@ static int mi_bb_start__ppgtt(void *arg)
 	struct i915_ppgtt *ppgtt;
 	enum intel_engine_id id;
 	struct i915_vma *vma;
+	int err = 0;
 	u32 *map;
-	int err;
 
 	if (!HAS_FULL_PPGTT(gt->i915))
 		return 0;

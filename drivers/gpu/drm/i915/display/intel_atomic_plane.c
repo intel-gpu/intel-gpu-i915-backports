@@ -1094,6 +1094,9 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	i915_gem_object_wait_priority(obj, 0, I915_PRIORITY_DISPLAY);
 
 	if (!new_plane_state->uapi.fence) { /* implicit fencing */
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+		struct dma_resv_iter cursor;
+#endif
 		struct dma_fence *fence;
 
 		ret = i915_sw_fence_await_reservation(&state->commit_ready,
@@ -1104,12 +1107,22 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 		if (ret < 0)
 			goto unpin_fb;
 
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+		dma_resv_iter_begin(&cursor, obj->base.resv,
+				    DMA_RESV_USAGE_WRITE);
+		dma_resv_for_each_fence_unlocked(&cursor, fence) {
+			add_rps_boost_after_vblank(new_plane_state->hw.crtc,
+						   fence);
+		}
+		dma_resv_iter_end(&cursor);
+#else
 		fence = dma_resv_get_excl_unlocked(obj->base.resv);
 		if (fence) {
 			add_rps_boost_after_vblank(new_plane_state->hw.crtc,
 						   fence);
 			dma_fence_put(fence);
 		}
+#endif
 	} else {
 		add_rps_boost_after_vblank(new_plane_state->hw.crtc,
 					   new_plane_state->uapi.fence);

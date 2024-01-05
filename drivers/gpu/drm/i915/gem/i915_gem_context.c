@@ -245,13 +245,6 @@ static void intel_context_set_gem(struct intel_context *ce,
 	    intel_engine_has_semaphores(ce->engine))
 		__set_bit(CONTEXT_USE_SEMAPHORES, &ce->flags);
 
-	if (CPTCFG_DRM_I915_REQUEST_TIMEOUT &&
-	    ctx->i915->params.request_timeout_ms) {
-		unsigned int timeout_ms = ctx->i915->params.request_timeout_ms;
-
-		intel_context_set_watchdog_us(ce, (u64)timeout_ms * 1000);
-	}
-
 	if (i915_gem_context_has_sip(ctx))
 		__set_bit(CONTEXT_DEBUG, &ce->flags);
 
@@ -685,15 +678,6 @@ static void context_close(struct i915_gem_context *ctx)
 		i915_vm_close(vm);
 	}
 
-	/* WA for VLK-20104 */
-	if (ctx->bcs0_pm_disabled) {
-		struct intel_gt *gt;
-		unsigned int i;
-
-		for_each_gt(gt, ctx->i915, i)
-			intel_engine_pm_put(gt->engine[gt->rsvd_bcs]);
-	}
-
 	/*
 	 * If the user has disabled hangchecking, we can not be sure that
 	 * the batches will ever complete after the context is closed,
@@ -1042,30 +1026,6 @@ i915_gem_context_create_for_gt(struct intel_gt *gt, unsigned int flags)
 		}
 
 		i915_gem_context_set_lr(ctx);
-
-		/*
-		 * WA for VLK-20104: Never park BCS0 of each tile if
-		 * PCIE L4 WA is enabled.
-		 * XXX: Optimize by disabling BCS0 PM only on required
-		 * tile (check for tiles in ctx->engines?).
-		 * XXX: On pvc, we are now using last instance of blitter
-		 * engine and not BCS0. This workaround may be absorbed in to a
-		 * general requirement that we need to hold fw whenever a client
-		 * access lmem.
-		 */
-		if (i915->params.ulls_bcs0_pm_wa &&
-		    i915_is_mem_wa_enabled(i915,
-					   I915_WA_USE_FLAT_PPGTT_UPDATE)) {
-			struct intel_gt *t;
-			unsigned int i;
-
-			drm_dbg(&i915->drm,
-				"Disabling PM for reserved bcs on each tile for ULLS ctx\n");
-			for_each_gt(t, ctx->i915, i)
-				intel_engine_pm_get(t->engine[t->rsvd_bcs]);
-
-			ctx->bcs0_pm_disabled = true;
-		}
 	}
 
 	trace_i915_context_create(ctx);
@@ -2900,6 +2860,8 @@ int i915_gem_setparam_ioctl(struct drm_device *dev, void *data,
 	switch (class) {
 	case 0:
 		return i915_gem_context_setparam_ioctl(dev, data, file);
+	case upper_32_bits(PRELIM_I915_OBJECT_PARAM):
+		return i915_gem_object_setparam_ioctl(dev, data, file);
 	case upper_32_bits(PRELIM_I915_VM_PARAM):
 		return i915_gem_vm_setparam_ioctl(dev, data, file);
 	}

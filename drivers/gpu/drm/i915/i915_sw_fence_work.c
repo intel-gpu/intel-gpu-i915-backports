@@ -7,9 +7,15 @@
 #include "i915_drv.h"
 #include "i915_sw_fence_work.h"
 
+static int next_cpu(struct dma_fence_work *f)
+{
+	return __i915_next_online_cpu(f->rq.sched_engine->cpumask,
+				      &f->rq.sched_engine->cpu);
+}
+
 static struct workqueue_struct *get_wq(struct dma_fence_work *f)
 {
-	return f->rq.sched_engine->private_data;
+	return f->rq.sched_engine->wq;
 }
 
 static void fence_complete(struct dma_fence_work *f)
@@ -51,7 +57,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags))
 			fence_work(&f->work);
 		else
-			queue_work(get_wq(f), &f->work);
+			queue_work_on(next_cpu(f), get_wq(f), &f->work);
 		break;
 
 	case FENCE_FREE:

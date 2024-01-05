@@ -871,7 +871,8 @@ static void init_common_regs(u32 * const regs,
 					   CTX_CTRL_RS_CTX_ENABLE);
 	if (engine->flags & I915_ENGINE_HAS_RUN_ALONE_MODE) {
 		ctl |= _MASKED_BIT_DISABLE(CTX_CTRL_RUN_ALONE);
-		if (test_bit(CONTEXT_RUNALONE, &ce->flags))
+		if (test_bit(CONTEXT_RUNALONE, &ce->flags) ||
+		     engine->i915->params.ctx_run_alone)
 			ctl |= CTX_CTRL_RUN_ALONE;
 	}
 	regs[CTX_CONTEXT_CONTROL] = ctl;
@@ -1169,15 +1170,18 @@ void lrc_init_state(struct intel_context *ce,
 
 	set_redzone(state, engine);
 
+	/* Clear the ppHWSP (inc. per-context counters) */
+	if (!test_bit(CONTEXT_VALID_BIT, &ce->flags))
+		memset(state, 0, LRC_STATE_OFFSET);
+
 	if (engine->default_state) {
-		shmem_read(engine->default_state, 0,
-			   state, engine->context_size);
+		shmem_read(engine->default_state, /* exclude ppHWSP */
+			   LRC_STATE_OFFSET,
+			   state + LRC_STATE_OFFSET,
+			   engine->context_size - LRC_STATE_OFFSET);
 		__set_bit(CONTEXT_VALID_BIT, &ce->flags);
 		inhibit = false;
 	}
-
-	/* Clear the ppHWSP (inc. per-context counters) */
-	memset(state, 0, PAGE_SIZE);
 
 	/* Clear the indirect wa and storage */
 	if (ce->wa_bb_page)
@@ -1242,8 +1246,7 @@ __lrc_alloc_state(struct intel_context *ce, struct intel_engine_cs *engine)
 		context_size += PARENT_SCRATCH_SIZE;
 	}
 
-	if (HAS_LMEM(engine->i915) &&
-	    !i915_is_mem_wa_enabled(engine->i915, I915_WA_FORCE_SMEM_OBJECT))
+	if (HAS_LMEM(engine->i915))
 		obj = intel_gt_object_create_lmem(engine->gt, context_size, 0);
 	else
 		obj = i915_gem_object_create_shmem(engine->i915, context_size);
@@ -1260,11 +1263,36 @@ __lrc_alloc_state(struct intel_context *ce, struct intel_engine_cs *engine)
 }
 
 static struct intel_timeline *
-pinned_timeline(struct intel_context *ce, struct intel_engine_cs *engine)
+pphwsp_timeline(struct intel_engine_cs *engine,
+		struct i915_vma *state,
+		u32 addr)
+{
+	return __intel_timeline_create(engine->gt, state,
+				       addr | INTEL_TIMELINE_RELATIVE_CONTEXT);
+}
+
+static struct intel_timeline *
+pinned_timeline(struct intel_context *ce,
+		struct intel_engine_cs *engine,
+		struct i915_vma *state)
 {
 	struct intel_timeline *tl = fetch_and_zero(&ce->timeline);
 
-	return intel_timeline_create_from_engine(engine, page_unmask_bits(tl));
+	return pphwsp_timeline(engine, state, page_unmask_bits(tl));
+}
+
+static bool use_pphwsp(struct intel_engine_cs *engine, struct i915_vma *state)
+{
+	if (IS_SRIOV_VF(engine->i915))
+		return true;
+
+	if (intel_engine_has_semaphores(engine))
+		return false;
+
+	if (i915_gem_object_is_lmem(state->obj))
+		return false;
+
+	return true;
 }
 
 int lrc_alloc(struct intel_context *ce, struct intel_engine_cs *engine)
@@ -1289,11 +1317,14 @@ int lrc_alloc(struct intel_context *ce, struct intel_engine_cs *engine)
 		struct intel_timeline *tl;
 
 		/*
-		 * Use the static global HWSP for the kernel context, and
-		 * a dynamically allocated cacheline for everyone else.
+		 * Use a dynamically allocated cacheline for sharing breadcrumbs
+		 * with HW semapphores, and ppHWSP for everything else
+		 * including perma-pinned kernel contexts.
 		 */
 		if (unlikely(ce->timeline))
-			tl = pinned_timeline(ce, engine);
+			tl = pinned_timeline(ce, engine, vma);
+		else if (use_pphwsp(engine, vma))
+			tl = pphwsp_timeline(engine, vma, I915_GEM_HWS_SEQNO_ADDR);
 		else
 			tl = intel_timeline_create(engine->gt);
 		if (IS_ERR(tl)) {
@@ -1347,12 +1378,26 @@ err_vma:
 
 void lrc_reset(struct intel_context *ce)
 {
+	void *vaddr;
+
 	GEM_BUG_ON(!intel_context_is_pinned(ce));
 
-	intel_ring_reset(ce->ring, ce->ring->emit);
+	/*
+	 * The HWSP is volatile, and may have been lost while inactive,
+	 * e.g. across suspend/resume. Be paranoid, and ensure that
+	 * the HWSP value matches our seqno so we don't proclaim
+	 * the next request as already complete.
+	 */
+	intel_timeline_reset_seqno(ce->timeline);
+	intel_ring_reset(ce->ring, 0);
+
+	vaddr = ce->lrc_reg_state;
+	vaddr -= LRC_STATE_OFFSET;
 
 	/* Scrub away the garbage */
-	lrc_init_regs(ce, ce->engine, true);
+	__clear_bit(CONTEXT_VALID_BIT, &ce->flags);
+	lrc_init_state(ce, ce->engine, vaddr);
+
 	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
 }
 

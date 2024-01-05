@@ -9,6 +9,9 @@
 #include <linux/list.h>
 #include <linux/pci-p2pdma.h>
 #include <linux/scatterlist.h>
+#ifdef BPM_MODULE_IMPORT_NS_SUPPORT
+#include <linux/module.h>
+#endif
 #include <drm/intel_iaf_platform.h>
 
 #include "gem/i915_gem_dmabuf.h"
@@ -22,6 +25,10 @@
 #include "i915_scatterlist.h"
 #include "i915_trace.h"
 #include "intel_iaf.h"
+
+#ifdef BPM_MODULE_IMPORT_NS_SUPPORT
+MODULE_IMPORT_NS(DMA_BUF);
+#endif
 
 I915_SELFTEST_DECLARE(static bool force_different_devices;)
 
@@ -52,33 +59,43 @@ static void unmap_sg(struct device *dev,
 
 /*
  * Objects may not have any pages.  Pinning is the usual method to allocate
- * the backing store, however dma-buf would like to avoid pinning.  Since
- * the caller holds the dma-resv, go straight to _get_pages.
+ * the backing store, however dma-buf would like to avoid pinning.  So after
+ * pinning the backing store (synchronously as the caller wishes to immediately
+ * traverse the obj->mm.pages scatterlists), release the pin. The pages are
+ * kept resident as the caller holds the dma-resv, and the objects remain
+ * locked.
  */
 static int check_get_pages(struct drm_i915_gem_object *obj)
 {
-	int ret = 0;
+	int ret;
 
 	if (i915_gem_object_has_segments(obj)) {
 		struct drm_i915_gem_object *sobj;
 
 		for_each_object_segment(sobj, obj) {
-			if (!i915_gem_object_has_pages(sobj))
-				ret = ____i915_gem_object_get_pages(sobj);
+			ret = i915_gem_object_pin_pages_sync(sobj);
 			if (ret)
 				break;
+
+			i915_gem_object_unpin_pages(sobj);
 		}
 	} else {
-		if (!i915_gem_object_has_pages(obj)) {
-			ret = ____i915_gem_object_get_pages(obj);
+		ret = i915_gem_object_pin_pages_sync(obj);
+		if (ret)
+			return ret;
 
-			if (!ret && obj->pair)
-				if (!i915_gem_object_has_pages(obj->pair))
-					ret = ____i915_gem_object_get_pages(obj->pair);
+		i915_gem_object_unpin_pages(obj);
+
+		if (obj->pair) {
+			ret = i915_gem_object_pin_pages_sync(obj->pair);
+			if (ret)
+				return ret;
+
+			i915_gem_object_unpin_pages(obj->pair);
 		}
 	}
 
-	return ret;
+	return 0;
 }
 
 static struct sg_table *
@@ -254,6 +271,7 @@ static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
 		goto out;
 	}
 
+	vma->vm_pgoff = drm_vma_node_start(&mmo->vma_node);
 	err = i915_gem_update_vma_info(obj, mmo, vma);
 	if (err)
 		goto out;

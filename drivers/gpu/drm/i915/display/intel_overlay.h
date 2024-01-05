@@ -10,8 +10,10 @@ struct drm_device;
 struct drm_file;
 struct drm_i915_error_state_buf;
 struct drm_i915_private;
-struct intel_overlay;
 struct intel_overlay_error_state;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+struct intel_overlay;
 
 void intel_overlay_setup(struct drm_i915_private *dev_priv);
 void intel_overlay_cleanup(struct drm_i915_private *dev_priv);
@@ -25,5 +27,16 @@ struct intel_overlay_error_state *
 intel_overlay_capture_error_state(struct drm_i915_private *dev_priv);
 void intel_overlay_print_error_state(struct drm_i915_error_state_buf *e,
 				     struct intel_overlay_error_state *error);
+#else
+static inline int intel_overlay_put_image_ioctl(struct drm_device *dev, void *data,
+				  struct drm_file *file_priv) { return 0; }
+static inline int intel_overlay_attrs_ioctl(struct drm_device *dev, void *data,
+			      struct drm_file *file_priv) { return 0; }
+static inline void intel_overlay_print_error_state(struct drm_i915_error_state_buf *e,
+				     struct intel_overlay_error_state *error) { return; }
+static inline void intel_overlay_reset(struct drm_i915_private *dev_priv) { return; }
+static inline struct intel_overlay_error_state *intel_overlay_capture_error_state(
+					struct drm_i915_private *dev_priv) { return 0; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 
 #endif /* __INTEL_OVERLAY_H__ */

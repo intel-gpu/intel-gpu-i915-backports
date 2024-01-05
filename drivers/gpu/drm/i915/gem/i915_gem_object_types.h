@@ -226,6 +226,10 @@ struct drm_i915_gem_object {
 
 	const struct drm_i915_gem_object_ops *ops;
 
+	unsigned long *nodes;
+	unsigned long mempol;
+	int maxnode;
+
 	struct rb_root_cached segments;
 	struct rb_node segment_node;
 	unsigned long segment_offset;

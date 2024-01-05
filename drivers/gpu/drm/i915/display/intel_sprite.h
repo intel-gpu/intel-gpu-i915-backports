@@ -8,11 +8,12 @@
 
 #include <linux/types.h>
 
+struct drm_device;
+struct drm_file;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "intel_display.h"
 
-struct drm_device;
 struct drm_display_mode;
-struct drm_file;
 struct drm_i915_private;
 struct intel_crtc_state;
 struct intel_plane_state;
@@ -46,5 +47,9 @@ int hsw_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
 			const struct intel_plane_state *plane_state);
 int vlv_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
 			const struct intel_plane_state *plane_state);
+#else
+static inline int intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data,
+				    struct drm_file *file_priv) { return 0; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 
 #endif /* __INTEL_SPRITE_H__ */

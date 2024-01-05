@@ -293,12 +293,34 @@ i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va)
 	return vma;
 }
 
+static void i915_vma_clear_adjacents(struct i915_vma *vma)
+{
+	/*
+	 * The head vma holds a reference on adjacent vmas, thus
+	 * release references here and unlink adjacency list.
+	 */
+	if (vma->adjacent_start == vma) {
+		struct i915_vma *adj_vma, *next;
+
+		adj_vma = vma->adjacent_next;
+		while (adj_vma) {
+			next = adj_vma->adjacent_next;
+			adj_vma->adjacent_next = NULL;
+			__i915_vma_put(adj_vma);
+			adj_vma = next;
+		}
+		vma->adjacent_next = NULL;
+	}
+	vma->adjacent_start = NULL;
+}
+
 static void i915_gem_vm_bind_unpublish(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
 
 	mutex_lock_nested(&vm->mutex, SINGLE_DEPTH_NESTING);
 	i915_vma_unpublish(vma);
+	i915_vma_clear_adjacents(vma);
 	mutex_unlock(&vm->mutex);
 }
 
@@ -561,7 +583,6 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 		i915_active_release(&vma->active);
 		vma_next = vma->adjacent_next;
 		if (!ret) {
-			vma->adjacent_next = NULL;
 			i915_gem_vm_bind_remove(vma);
 			i915_gem_vm_bind_release(vma);
 		}
@@ -588,15 +609,20 @@ static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 	view.type = I915_GGTT_VIEW_PARTIAL;
 	view.partial.offset = offset >> PAGE_SHIFT;
 	view.partial.size = size >> PAGE_SHIFT;
+	i915_gem_object_get(obj);  /* Hold object reference until vm_unbind */
 	vma = i915_vma_instance(obj, vm, &view);
-	if (IS_ERR(vma))
+	if (IS_ERR(vma)) {
+		i915_gem_object_put(obj);
 		return vma;
+	}
 
 	vma->node.start = start;
 	vma->node.size = size;
 	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
 
-	return __i915_vma_get(vma);
+	vma = __i915_vma_get(vma);
+	GEM_BUG_ON(!vma);
+	return vma;
 }
 
 static struct dma_fence *get_unbind_fence(struct drm_mm_node *node)
@@ -721,7 +747,7 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 		if (err) {
 			list_for_each_entry_safe(vma, vn, vma_head, vm_bind_link) {
 				list_del_init(&vma->vm_bind_link);
-				__i915_vma_put(vma);
+				i915_gem_vm_bind_release(vma);
 			}
 		}
 	} else {
@@ -805,10 +831,9 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		.metadata_list = LIST_HEAD_INIT(ext.metadata_list),
 		.vm = vm,
 	};
-	struct i915_vma *adjacency_start = NULL, *vma_prev = NULL;
 	struct i915_sw_fence *bind_fence = NULL;
 	struct drm_i915_gem_object *obj;
-	struct i915_vma *vma, *vma_next;
+	struct i915_vma *vma, *vma_next, *vma_prev = NULL;
 	struct i915_vma *first_vma = NULL;
 	LIST_HEAD(vma_head);
 	u64 pin_flags = 0;
@@ -884,16 +909,13 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	 * of segmented BO which has VMA per segment.
 	 * For the normal case of non-segmented BO, @vma_head will
 	 * just contain one VMA.
+	 * On success, we hold a reference on vma->obj for each VMA.
 	 */
 	ret = vm_bind_get_vmas(vm, obj, va, bind_fence, &vma_head);
 	if (ret)
 		goto unlock_vm;
 	GEM_BUG_ON(list_empty(&vma_head));
 
-	/*
-	 * TODO: follow-on work needed for debugger integration,
-	 * for now put the metadata_list in first VMA.
-	 */
 	first_vma = vma = list_first_entry(&vma_head, typeof(*vma), vm_bind_link);
 	if (!list_empty(&ext.metadata_list)) {
 		spin_lock(&vma->metadata_lock);
@@ -909,18 +931,38 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		i915_debugger_vma_prepare(vm->client, vma);
 
 	list_for_each_entry_safe(vma, vma_next, &vma_head, vm_bind_link) {
-		/* Hold object reference until vm_unbind */
-		i915_gem_object_get(vma->obj);
-
 		/* apply pat_index from parent */
 		vma->obj->pat_index = obj->pat_index;
 
-		/* store first vma to prevent partial unbinds */
-		vma->adjacent_start = first_vma;
+		/*
+		 * Store first vma to prevent partial unbinds and set adjacency
+		 * list fields for use in unbind and in sending EU debugger
+		 * events. We set here prior to vma_bind_insert() as that sends
+		 * the vma create event.  Additionally, acquire reference on
+		 * vma->adjacent_next so adjacency list is valid for vma destroy
+		 * event during unbind.
+		 */
+		if (i915_gem_object_is_segment(vma->obj)) {
+			vma->adjacent_start = first_vma;
+			vma->adjacent_next = NULL;
+			if (!list_is_last(&vma->vm_bind_link, &vma_head)) {
+				vma->adjacent_next = vma_next;
+				__i915_vma_get(vma_next);
+			}
+		}
 
 		ret = vma_bind_insert(vma, pin_flags);
-		if (ret)
+		if (ret) {
+			/* on error, make sure vma is not in adjacency list */
+			if (vma_prev)
+				vma_prev->adjacent_next = NULL;
+			if (vma->adjacent_next)
+				__i915_vma_put(vma->adjacent_next);
+			vma->adjacent_start = NULL;
+			vma->adjacent_next = NULL;
 			break;
+		}
+		vma_prev = vma;
 
 		/* TODO: capture should contain single aggregated address range */
 		if (va->flags & PRELIM_I915_GEM_VM_BIND_CAPTURE) {
@@ -928,13 +970,6 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 			list_add_tail(&vma->vm_capture_link, &vm->vm_capture_list);
 			spin_unlock(&vm->vm_capture_lock);
 		}
-
-		/* adjacency list is for use in unbind and capture_vma */
-		if (vma_prev)
-			vma_prev->adjacent_next = vma;
-		else
-			adjacency_start = vma;
-		vma_prev = vma;
 	}
 
 	set_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags);
@@ -943,7 +978,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		i915_gem_object_lock(vm->root_obj, NULL);
 
 		/* cleanup VMAs where vma_bind_insert() succeeded */
-		for (vma = adjacency_start; vma; vma = vma_next) {
+		for (vma = first_vma->adjacent_start; vma; vma = vma_next) {
 			vma_next = vma->adjacent_next;
 			i915_gem_vm_bind_remove(vma);
 			i915_gem_vm_bind_release(vma);

@@ -117,8 +117,10 @@ struct intel_vgpu_cfg_space {
 
 struct intel_vgpu_irq {
 	bool irq_warn_once[INTEL_GVT_EVENT_MAX];
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	DECLARE_BITMAP(flip_done_event[I915_MAX_PIPES],
 		       INTEL_GVT_EVENT_MAX);
+#endif
 };
 
 struct intel_vgpu_opregion {
@@ -129,12 +131,14 @@ struct intel_vgpu_opregion {
 
 #define vgpu_opregion(vgpu) (&(vgpu->opregion))
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 struct intel_vgpu_display {
 	struct intel_vgpu_i2c_edid i2c_edid;
 	struct intel_vgpu_port ports[I915_MAX_PORTS];
 	struct intel_vgpu_sbi sbi;
 	enum port port_num;
 };
+#endif
 
 struct vgpu_sched_ctl {
 	int weight;
@@ -200,7 +204,9 @@ struct intel_vgpu {
 	struct intel_vgpu_irq irq;
 	struct intel_vgpu_gtt gtt;
 	struct intel_vgpu_opregion opregion;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct intel_vgpu_display display;
+#endif
 	struct intel_vgpu_submission submission;
 	struct radix_tree_root page_track_tree;
 	u32 hws_pga[I915_NUM_ENGINES];
@@ -539,7 +545,11 @@ int intel_vgpu_emulate_cfg_read(struct intel_vgpu *vgpu, unsigned int offset,
 int intel_vgpu_emulate_cfg_write(struct intel_vgpu *vgpu, unsigned int offset,
 		void *p_data, unsigned int bytes);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void intel_vgpu_emulate_hotplug(struct intel_vgpu *vgpu, bool connected);
+#else
+static inline void intel_vgpu_emulate_hotplug(struct intel_vgpu *vgpu, bool connected) { return; }
+#endif
 
 static inline u64 intel_vgpu_get_bar_gpa(struct intel_vgpu *vgpu, int bar)
 {

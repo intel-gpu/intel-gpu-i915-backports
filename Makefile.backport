@@ -55,11 +55,12 @@ MODULES_VARIANT := pmt
 
 BUILD_CONFIG ?=
 
-BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 sp2 nodrm nosvm $(MODULES_VARIANT)
+BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm nosvm $(MODULES_VARIANT) disabledisplay
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS
+
+RPM_DISTRIBUTIONS := RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS
 
 RELEASE_TYPE ?= opensource
 
@@ -86,7 +87,7 @@ endif
 
 
 ifneq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	OS_DISTRIBUTION ?= RHEL_8.8
+	OS_DISTRIBUTION ?= RHEL_8.9
 endif
 
 ifneq (,$(filter $(filter-out $(MODULES_VARIANT), $(BUILD_CONFIG_VARIANT)), $(BUILD_CONFIG)))
@@ -150,6 +151,19 @@ CUSTOM_KERN_1_MAJOR = ""
 CUSTOM_KERN_1_MINOR = ""
 
 CUSTOM_ARG = ""
+
+#
+#Custom kernel 3 specific
+#
+CUSTOM_KERN_3_NAME = ""
+
+CUSTOM_KERN_3_VER = ""
+
+CUSTOM_KERN_3_MAJOR = ""
+
+CUSTOM_KERN_3_MINOR_XX_P = ""
+
+CUSTOM_KERN_3_MINOR_XX_Q = ""
 
 #------------------------------------------------------------------------------
 # Start Variable Extraction
@@ -351,7 +365,6 @@ BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Z)
 endif
 
 else ifeq ($(OSV_NAME),)
-
 #
 # Extract Vanilla/Mainline Variables
 #
@@ -359,7 +372,7 @@ else ifeq ($(OSV_NAME),)
 ifeq ($(shell expr $(KERN_VER_XY) \== $(call  get_kernel_version,5,4)), 1)
 OSV_NAME = VANILLA_5.4LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifeq ($(shell expr $(KERN_VER_XY) \== 5.10), 1)
+else ifeq ($(shell test $(KERN_VER_XY) = 5.10 && test "$(BUILD_CONFIG)" != CUSTOM_KERN_3 && echo 1), 1) 
 OSV_NAME = VANILLA_5.10LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(KERN_VER_XY) \== 5.15), 1)
@@ -371,25 +384,37 @@ OSV_NAME = VANILLA
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_ID), )
 
-CUSTOM_KERN_1_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '_' -f3 | cut -c 1-3 2>/dev/null || echo 1)
-ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
+CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
 
+ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
+CUSTOM_KERN_1_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '_' -f3 | cut -c 1-3 2>/dev/null || echo 1)
 CUSTOM_KERN_1_VER = $(BUILD_CONFIG)
 
 CUSTOM_KERN_1_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f3 | cut -d '-' -f1 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
-
 CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f4 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
-
 ifeq ($(CUSTOM_KERN_1_MINOR),)
 CUSTOM_KERN_1_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '_' -f5 | sed 's/[^0-9]//g' 2>/dev/null || echo 1)
 endif
-OS_DISTRIBUTION = $(CUSTOM_KERN_1_VER)
-CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
-else
-$(error "Please provide valid BUILD_CONFIG value. Use BUILD_CONFIG=CUSTOM_KERN_1")
-endif
 
+OS_DISTRIBUTION = $(CUSTOM_KERN_1_VER)
 OSV_NAME := $(shell echo $(CUSTOM_KERN_1_VER) | tr '[:lower:]' '[:upper:]')
+
+else ifeq ($(BUILD_CONFIG), CUSTOM_KERN_3)
+#check for CUSTOM_KERN_3
+CUSTOM_KERN_3_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '.' -f8 | cut -c1-2)
+
+ifneq ($(CUSTOM_KERN_3_NAME),)
+CUSTOM_KERN_3_VER = $(BUILD_CONFIG)
+CUSTOM_KERN_3_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | cut -d '.' -f 3 | cut -d '-' -f 2)
+CUSTOM_KERN_3_MINOR_XX_P = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | cut -d '.' -f 4)
+CUSTOM_KERN_3_MINOR_XX_Q = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | cut -d '.' -f 5)
+
+OS_DISTRIBUTION = $(CUSTOM_KERN_3_VER)
+OSV_NAME := $(shell echo $(CUSTOM_KERN_3_VER) | tr '[:lower:]' '[:upper:]')
+endif
+else
+$(error "Please provide valid BUILD_CONFIG value.")
+endif
 else
 $(info "OSV_NOT SUPPORTED")
 endif
@@ -410,6 +435,10 @@ BUILD_CONFIG_DISTRO := $(shell echo $(BUILD_CONFIG_DISTRO) | tr '[:lower:]' '[:u
 BASE_KERNEL_NAME = $(shell cat versions | grep -w "SLES15_$(BUILD_CONFIG_DISTRO)_KERNEL_VERSION" | cut -d '"' -f 2)
 else
 BASE_KERNEL_NAME = $(shell cat versions | grep -w "$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
+endif
+
+ifneq ($(CUSTOM_KERN_ID), )
+CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
 endif
 
 ifeq ($(BASE_KERNEL_NAME),)
@@ -550,6 +579,15 @@ define filechk_osv_custom_kernel_1.h
         expr $(CUSTOM_KERN_1_MAJOR) \* 65536 + 0$(CUSTOM_KERN_1_MINOR))'
 endef
 
+define filechk_osv_custom_kernel_3.h
+        echo '#define CUSTOM_KERN_3_MAJOR $(CUSTOM_KERN_3_MAJOR)'; \
+        echo '#define CUSTOM_KERN_3_MINOR_XX_P $(CUSTOM_KERN_3_MINOR_XX_P)'; \
+        echo '#define CUSTOM_KERN_3_MINOR_YY_Q $(CUSTOM_KERN_3_MINOR_YY_Q)'; \
+        echo '#define CUSTOM_KERN_3_RELEASE_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + (c))'; \
+        echo '#define CUSTOM_KERN_3_RELEASE_CODE \
+	$(shell expr $(CUSTOM_KERN_3_MAJOR) \* 65536 + 0$(CUSTOM_KERN_3_MINOR_XX_P) \* 256 + 0$(CUSTOM_KERN_3_MINOR_YY_Q))'
+endef
+
 # version_h
 # Creates Backports dmabuf dkms package
 # Rpm generated can be copied to client machine and install
@@ -563,6 +601,8 @@ else ifeq ($(OSV_NAME), RHEL)
 	$(call filechk,osv_version_rhel.h)
 else ifeq ($(CUSTOM_KERN_1_VER), CUSTOM_KERN_1)
 	$(call filechk,osv_custom_kernel_1.h)
+else ifeq ($(CUSTOM_KERN_3_VER), CUSTOM_KERN_3)
+	$(call filechk,osv_custom_kernel_3.h)
 else
 	$(call filechk,osv_version_generic.h)
 endif
@@ -646,7 +686,7 @@ endif
 # Rpm generated can be copied to client machine and install
 #------------------------------------------------------------------------------
 ifneq ($(BUILD_CONFIG), nodrm)
-export KBUILD_ONLYDMADIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf include scripts)
+export KBUILD_ONLYDMADIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drm-include i915-include scripts)
 endif
 
 DMA_TAR_CONTENT := $(KBUILD_ONLYDMADIRS) .config Makefile* local-symbols MAINTAINERS \
@@ -672,9 +712,9 @@ dmadkmsrpm-pkg:
 # Depends on package generated by dmadkmsrpm-pkg
 #------------------------------------------------------------------------------
 ifeq ($(BUILD_CONFIG), nodrm)
-export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu/drm/i915 drivers/char drivers/platform drivers/pci drivers/iommu include/drm/i915_*  --exclude="include/drm/i915_component.h" include/drm/intel_iaf_platform.h include/linux/mei* include/linux/overflow.h include/linux/intel_vsec.h include/linux/iosys-map.h include/linux/dma-buf.h include/linux/string_helpers.h include/uapi/drm/i915_drm* include/uapi/linux/mei.h include/uapi/linux/pci_regs.h scripts)
+export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu/drm/i915 drivers/platform drivers/pci drivers/iommu i915-include scripts)
 else
-export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
+export KBUILD_ONLYI915DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu drivers/platform drivers/pci drivers/iommu drm-include i915-include scripts)
 endif
 
 
@@ -720,8 +760,10 @@ dkmsrpm-pkg: dmadkmsrpm-pkg i915dkmsrpm-pkg
 # Creates backport binary package for dmabuf, drm, i915 combined
 # Build machine should have kernel version and variant binary is targeted for.
 #------------------------------------------------------------------------------
-ifneq ($(BUILD_CONFIG), nodrm)
-export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
+ifeq ($(BUILD_CONFIG), nodrm)
+export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/gpu/drm/i915 drivers/platform drivers/pci drivers/iommu i915-include scripts)
+else
+export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/platform drivers/pci drivers/iommu drm-include i915-include scripts)
 endif
 ##TBD: will this work for nodrm?
 
@@ -736,11 +778,17 @@ BIN_PKG_VERSION:= $(I915_PKG_VERSION).$(KER_VER_BIN)
 
 .PHONY: binrpm-pkg
 binrpm-pkg:
-	$(CONFIG_SHELL) $(MKBINSPEC) -n $(BIN_PACKAGE_NAME) -v $(BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) -k $(KLIB_BUILD) -a $(UTS_RELEASE) $(CUSTOM_ARG)> $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME).spec
+	$(CONFIG_SHELL) $(MKBINSPEC) -n $(BIN_PACKAGE_NAME) -v $(BIN_PKG_VERSION) -r $(I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) -k $(KLIB_BUILD) -a $(UTS_RELEASE) $(CUSTOM_ARG) > $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME).spec
+ifeq ($(BUILD_CONFIG), nodrm)
+	patch -p1 < $(BACKPORT_DIR)/scripts/disable_drm_kconfig.patch ;
+endif
 	tar -cz $(RCS_TAR_IGNORE) -f $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
 		$(TAR_CONTENT) $(BIN_PACKAGE_NAME).spec;
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
 		--define='_smp_mflags %{nil}' --define='_sourcedir $(PWD)'
+ifeq ($(BUILD_CONFIG), nodrm)
+	patch -p1 -R < $(BACKPORT_DIR)/scripts/disable_drm_kconfig.patch ;
+endif
 
 
 # dmadkmsdeb-pkg
@@ -841,7 +889,7 @@ dkmsdeb-pkg: dmadkmsdeb-pkg i915dkmsdeb-pkg
 # Build machine should have kernel version and variant binary is targeted for.
 #------------------------------------------------------------------------------
 ifneq ($(BUILD_CONFIG), nodrm)
-export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/char drivers/platform drivers/pci drivers/iommu include scripts)
+export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/platform drivers/pci drivers/iommu drm-include i915-include scripts)
 endif
 
 TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
@@ -893,20 +941,6 @@ bindeb-pkg:
 .PHONY: clean
 clean:
 	@rm -f $(version_h)
-
-# Remove drm headers for nodrm target generation.
-#------------------------------------------------------------------------------
-.PHONY: remove-drm-headers
-remove-drm-headers:
-	@rm -rf include/drm/drm_* include/drm/bridge include/drm/i2c include/drm/ttm
-	@rm -rf include/drm/gma_drm.h include/drm/gpu_scheduler.h include/drm/gud.h include/drm/amd_asic_type.h include/drm/intel_lpe_audio.h include/drm/rename-symbols.h include/drm/task_barrier.h include/drm/spsc_queue.h include/drm/i915_component.h
-	@rm -rf include/media/ include/trace/ include/video/ include/linux/agp_backend.h include/linux/ascii85.h include/linux/bit*
-	@rm -rf include/linux/clocksource_ids.h include/linux/component.h include/linux/dma-fence* include/linux/dma-heap.h
-	@rm -rf  include/linux/dma-resv.h include/linux/fixp-arith.h include/linux/fortify-string.h include/linux/hashtable.h include/linux/io-64-nonatomic-lo-hi.h include/linux/log2.h include/linux/seqno-fence.h include/linux/sync_file.h include/linux/timekeeping.h include/linux/unaligned include/uapi/drm/amdgpu_drm.h include/uapi/drm/armada_drm.h include/uapi/drm/drm* include/uapi/drm/etnaviv_drm.h include/uapi/drm/exynos_drm.h include/uapi/drm/i810_drm.h include/uapi/drm/lima_drm.h include/uapi/drm/mga_drm.h
-	@rm -rf  include/uapi/drm/msm_drm.h include/uapi/drm/nouveau_drm.h include/uapi/drm/omap_drm.h include/uapi/drm/panfrost_drm.h include/uapi/drm/qxl_drm.h include/uapi/drm/r128_drm.h include/uapi/drm/radeon_drm.h include/uapi/drm/savage_drm.h
-	@rm -rf  include/uapi/drm/sis_drm.h include/uapi/drm/tegra_drm.h include/uapi/drm/v3d_drm.h include/uapi/drm/vc4_drm.h include/uapi/drm/vgem_drm.h include/uapi/drm/via_drm.h include/uapi/drm/virtgpu_drm.h include/uapi/drm/vmwgfx_drm.h include/uapi/linux/android
-	@rm -rf  include/uapi/linux/cec.h include/uapi/linux/dma-buf.h include/uapi/linux/dma-heap.h include/uapi/linux/media-bus-format.h include/uapi/linux/sync_file.h
-
 
 
 # Make Mr proper to clean-up all generated files.

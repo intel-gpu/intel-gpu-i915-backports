@@ -31,6 +31,7 @@
 #include <linux/sysfs.h>
 
 #include "gem/i915_gem_mman.h"
+#include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
@@ -555,7 +556,7 @@ static ssize_t i915_driver_error_show(struct device *dev,
 	struct ext_attr *ea = container_of(attr, struct ext_attr, attr);
 #endif
 
-	if (GEM_WARN_ON(ea->id > ARRAY_SIZE(i915->errors)))
+	if (GEM_WARN_ON(ea->id >= ARRAY_SIZE(i915->errors)))
 		return -ENOENT;
 
 	return scnprintf(buf, PAGE_SIZE, "%lu\n", i915->errors[ea->id]);
@@ -613,20 +614,20 @@ static void i915_setup_error_counter(struct drm_i915_private *i915)
 {
 	struct device *kdev = i915->drm.primary->kdev;
 	struct kobject *kobj;
-	int ret;
 
 	kobj = kobject_create_and_add("error_counter", &kdev->kobj);
 	if (!kobj)
+		return;
+
+	if (sysfs_create_files(kobj, i915_error_counter_attrs))
 		goto err;
 
-	ret = sysfs_create_files(kobj, i915_error_counter_attrs);
-	if (ret)
+	if (!i915_gem_shmem_register_sysfs(i915, kobj))
 		goto err;
 
 	return;
-
 err:
-	drm_notice(&i915->drm, "Failed to create error_counter sysfs files at device level\n");
+	drm_notice(&i915->drm, "Failed to create sysfs::error_counter\n");
 	kobject_put(kobj);
 }
 
