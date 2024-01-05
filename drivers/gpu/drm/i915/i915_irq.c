@@ -3605,11 +3605,72 @@ re_enable_interrupt:
 }
 
 static void
+gt_l3fabric_error_handler(struct intel_gt *gt, unsigned long l3fabric_vctr_reg)
+{
+	const char *l3bankout_prel3_srcs = "\tlbi_lbcf_ras_event_cmd\n"
+					   "\tlbi_lbcf_ras_event_data_be\n"
+					   "\tlbi_lbcf_ras_event_memrdrtn_data\n"
+					   "\tlbi_lbcf_ras_event_memrdrtn_tag\n"
+					   "\tSQDB buffer parity err";
+
+	const char *lnep_error_srcs = "\tSQIDI: CMI parity errors, CMI poison, Memory"
+				      " completion error code, CC->SQ parity errors\n"
+				      " \tLCUnit: ccs_update_fifo_parity_error,"
+				      " csc_parity_error, sq_cc_rtn_parity_error,"
+				      " lcint_cs_miss_lat_fifo_rd_parity_error,"
+				      " lnep_lcunit_cmd_error,"
+				      " lnep_lcunit_data_parity_error, sq_0_fatal"
+				      " sq_1_fatal";
+
+	const char *bmcb_blce_srcs = "\ttag/data error";
+	const u32 max_l3_nodepair = 8;
+
+	const char *lnep_err_srcs_mdfit2t;
+	const char *lnep_err_srcs_mdfit2c;
+	const char *lnep_err_srcs_mert;
+	u32 errbit;
+
+	for_each_set_bit(errbit, &l3fabric_vctr_reg, max_l3_nodepair) {
+		lnep_err_srcs_mdfit2t = "";
+		lnep_err_srcs_mdfit2c = "";
+		lnep_err_srcs_mert = "";
+
+		/* mert LNEP error valid only on 0th L3 Nodepair */
+		if (errbit == 0)
+			lnep_err_srcs_mert = "\tMERT: IOSF Poison, IOSF UR/CA\n";
+
+		/*
+		 * T2T LNEP error valid only on 0th and
+		 * 2nd L3 Nodepair.
+		 */
+		if (errbit == 0 || errbit == 2)
+			lnep_err_srcs_mdfit2t = "\tMDFI T2T: MDFI poison/writefail/rsppktparity\n";
+
+		/* T2C LNEP error valid only on 6th L3 Nodepair */
+		if (errbit == 6)
+			lnep_err_srcs_mdfit2c = "\tMDFI T2C: MDFI poison/writefail/rsppktparity\n";
+
+		log_gt_hw_err(gt, "L3 Fabric Error seen on L3Nodepair[%d].\n"
+				  "Possible causes of errors are:\n"
+				  "lngp_rdrtn_parity_error.\n"
+				  "l3bankout_prel3_fatal_error. Sources\n[%s\n]\n"
+				  "rr_fatal_error.\n"
+				  "lnep_fatal_error. Sources\n[%s %s %s %s\n]\n"
+				  "bmcb. Sources\n[%s\n]\n"
+				  "blce. Sources\n[%s\n]\n",
+				  errbit, l3bankout_prel3_srcs, lnep_err_srcs_mdfit2t,
+				  lnep_err_srcs_mdfit2c, lnep_err_srcs_mert, lnep_error_srcs,
+				  bmcb_blce_srcs, bmcb_blce_srcs);
+	}
+}
+
+static void
 gen12_gt_hw_error_handler(struct intel_gt *gt,
 			  const enum hardware_error hw_err)
 {
 	void __iomem * const regs = gt->uncore->regs;
 	const char *hw_err_str = hardware_error_type_to_str(hw_err);
+
 	unsigned long errstat;
 
 	lockdep_assert_held(gt->irq_lock);
@@ -3749,6 +3810,10 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 				case ERR_STAT_GT_VCTR7:
 					gt->errors.hw[INTEL_GT_HW_ERROR_FAT_L3_FABRIC] += hweight8(vctr);
 					name = "L3 FABRIC";
+					log_gt_hw_err(gt, "%s FATAL error, ERR_VECT_GT_FATAL_%d:0x%08lx.\n",
+						      name, i, vctr);
+					gt_l3fabric_error_handler(gt, vctr);
+
 					break;
 				default:
 					name = "Undefined";
@@ -3760,7 +3825,7 @@ gen12_gt_hw_error_handler(struct intel_gt *gt,
 					intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
 								  "%s FATAL error, ERR_VECT_GT_FATAL_%d:0x%08lx\n",
 								  name, i, vctr);
-				else if (strcmp(name, "SUBSLICE"))
+				else if (strcmp(name, "SUBSLICE") && strcmp(name, "L3 FABRIC"))
 					log_gt_hw_err(gt, "%s FATAL error, ERR_VECT_GT_FATAL_%d:0x%08lx\n",
 						      name, i, vctr);
 				error = true;

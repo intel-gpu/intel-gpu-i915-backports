@@ -13,6 +13,7 @@
 #define PVC_NUM_CSLICES_PER_TILE 4
 
 #define ALL_CCS(gt) (CCS_MASK(gt) << CCS0)
+#define ONE_CCS(gt) FIRST_ENGINE_MASK((gt), CCS)
 
 void intel_gt_init_ccs_mode(struct intel_gt *gt)
 {
@@ -125,11 +126,11 @@ void intel_gt_apply_ccs_mode(struct intel_gt *gt)
 		config = gt->ccs.config;
 
 	/*
-	 * SRIOV PF will always use ccs-4 mode from init/reset onwards
+	 * SRIOV PF will always use ccs-1 mode from init/reset onwards
 	 * as we have asked GUC to restore CCS_MODE for engine resets
 	 */
 	if (IS_SRIOV_PF(gt->i915) && IS_PONTEVECCHIO(gt->i915))
-		config = ALL_CCS(gt);
+		config = ONE_CCS(gt);
 
 	gt->ccs.mode = -1;
 	if (config)
@@ -148,7 +149,7 @@ static bool needs_ccs_mode(struct intel_gt *gt)
 	 * appropriate engine:slice mapping. However, the PF doesn't know
 	 * the user's requested configuration and so cannot allocate
 	 * precise mappings ahead of time. Instead we opt to apply a static
-	 * 1:1 mapping between CCS engines and compute slices -- we never
+	 * mapping between single CCS engine and all compute slices -- we never
 	 * need to reconfigure.
 	 */
 	if (IS_SRIOV(gt->i915))

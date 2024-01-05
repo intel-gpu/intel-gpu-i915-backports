@@ -1615,6 +1615,15 @@ int intel_engines_init(struct intel_gt *gt)
 		if (engine->id == gt->rsvd_bcs && engine->instance)
 			continue;
 
+		/*
+		 * As per HSD:16016805146 on SR-IOV PF/VF we only have CCS-1 mode
+		 * thus only first ccs engine will be operational and can be exposed.
+		 */
+		if (IS_PONTEVECCHIO(gt->i915) && IS_SRIOV(gt->i915) &&
+		    engine->class == COMPUTE_CLASS &&
+		    engine->mask != FIRST_ENGINE_MASK(gt, CCS))
+			continue;
+
 		intel_engine_add_user(engine);
 	}
 

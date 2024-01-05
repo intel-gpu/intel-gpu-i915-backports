@@ -6,12 +6,64 @@
 
 #if (LINUX_VERSION_IS_GEQ(6,4,5) || \
 		LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
-		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12)))
+		(LINUX_VERSION_IN_RANGE(6,2,16, 6,3,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(36,37)) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,19)) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 104d79eb58aa
  * drm/dp_mst: Clear MSG_RDY flag before sending new message
  */
 #define BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * a3185f91d057 drm/ttm: merge ttm_bo_api.h and ttm_bo_driver.h v2
+ */
+#define BPM_TTM_BO_API_H_NOT_PRESENT
+
+/*
+ * 5e7b9a6ae8c3 swiotlb: remove swiotlb_max_segment
+ */
+#define BPM_SWIOTLB_MAX_SEGMENT_NOT_PRESENT
+
+/*
+ * 80ed86d4b6d7 drm/connector: Rename drm_mode_create_tv_properties
+ */
+#define BPM_DRM_MODE_CREATE_TV_PROP_NOT_PRESENT
+
+/*
+ * 6c80a93be62d drm/fb-helper: Initialize fb-helper's preferred BPP in prepare function
+ */
+#define BPM_DRM_FB_PREPARE_AND_INITIAL_CFG_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * e3c92eb4a84fb
+ * drm/ttm: rework on ttm_resource to use size_t type
+ */
+#define BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
+
+/*
+ * afb0ff78c13c51
+ * drm/fb-helper: Rename drm_fb_helper_unregister_fbi() to use _info postfix
+ */
+#define BPM_DRM_FB_HELPER_ALLOC_UNREGISTER_FBI_NOT_PRESENT
+
+/*
+ * 90b575f52c6
+ * drm/edid: detach debugfs EDID override from EDID property update
+ */
+#define BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
+
+/*
+ * 9877d8f6bc
+ *  drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
+ */
+#define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,2,0))
@@ -20,12 +72,6 @@
  *  overflow: Introduce overflows_type() and castable_to_type()
  */
 #define BPM_OVERFLOWS_TYPE_AVAILABLE
-
-/*
- * e3c92eb4a84fb
- * drm/ttm: rework on ttm_resource to use size_t type
- */
-#define BPM_STRUCT_TTM_RESOURCE_NUM_PAGES_NOT_PRESENT
 
 /*
  * 3c202d14a9d73
@@ -38,33 +84,18 @@
  * folio-compat: remove lru_cache_add()
  */
 #define BPM_LRU_CACHE_ADD_API_NOT_PRESENT
-
-/*
- * afb0ff78c13c51
- * drm/fb-helper: Rename drm_fb_helper_unregister_fbi() to use _info postfix
- */
-#define BPM_DRM_FB_HELPER_ALLOC_UNREGISTER_FBI_NOT_PRESENT
-
-/*
- * 9877d8f6bc
- *  drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
- */
-#define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
-
-/*
- * 90b575f52c6
- * drm/edid: detach debugfs EDID override from EDID property update
- */
-#define BPM_STRUCT_DRM_CONNECTOR_OVERRIDE_EDID_NOT_PRESENT
 #endif
 
-#if (LINUX_VERSION_IS_GEQ(6,1,0))
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * cce32e4e38c6
  * drm/atomic-helper: Remove _HELPER_ infix from DRM_PLANE_HELPER_NO_SCALING
  */
 #define BPM_DRM_PLANE_HELPER_NO_SCALING_NOT_PRESENT
+#endif
 
+#if (LINUX_VERSION_IS_GEQ(6,1,0))
 /*
  * de492c83cae prandom: remove unused functions
  */
@@ -77,7 +108,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
-		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,12)))
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,7)) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 4d07b0bc40
  * drm/display/dp_mst: Move all payload info into the atomic state
@@ -85,13 +117,27 @@
 #define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 #endif
 
-#if (LINUX_VERSION_IS_GEQ(6,0,0))
+#if (LINUX_VERSION_IS_LESS(6,1,0))
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+
+/*
+ * 3cea8d4753 lib: add find_nth{,_and,_andnot}_bit()
+ */
+#define BPM_FIND_NTH_BIT_PRESENT
+#endif
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,0,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * e33c267ab70d
  * mm: shrinkers: provide shrinkers with names
  */
 #define BPM_REGISTER_SHRINKER_SECOND_ARG_NOT_PRESENT
+#endif 
+
+#if (LINUX_VERSION_IS_GEQ(6,0,0))
 
 #endif
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
@@ -127,16 +173,17 @@
 
 #endif
 
-#if (LINUX_VERSION_IS_LESS(6,0,0))
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
-		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+/*
+ * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
+ */
+#define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
 
 /*
- * 64e06652e348 agp/intel: Rename intel-gtt symbols
+ * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
  */
-#define BPM_INTEL_GMCH_GTT_RENAMED
-
-#endif
+#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
@@ -206,16 +253,6 @@
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,19,0)
-
-/*
- * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
- */
-#define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
-
-/*
- * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
- */
-#define BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 
 /*
  * 7bc80a5462c3 dma-buf: add enum dma_resv_usage v4
@@ -424,7 +461,8 @@
 #if LINUX_VERSION_IS_LESS(5,15,46)
 #if !((SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && \
 	!(SUSE_LOCAL_VERSION_IS_LESS(24,11))) || \
-        UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+        UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
  */
