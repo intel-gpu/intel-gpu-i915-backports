@@ -52,14 +52,14 @@ static unsigned int get_largest_page_size(struct drm_i915_private *i915,
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(page_sizes); ++i) {
+	for (i = 0; i < ARRAY_SIZE(page_sizes) - 1; ++i) {
 		unsigned int page_size = page_sizes[i];
 
 		if (HAS_PAGE_SIZES(i915, page_size) && rem >= page_size)
 			return page_size;
 	}
 
-	return 0;
+	return I915_GTT_PAGE_SIZE_4K;
 }
 
 static void huge_pages_free_pages(struct sg_table *st)

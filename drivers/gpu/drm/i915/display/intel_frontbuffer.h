@@ -24,30 +24,39 @@
 #ifndef __INTEL_FRONTBUFFER_H__
 #define __INTEL_FRONTBUFFER_H__
 
+#include "i915_active_types.h"
+struct drm_i915_private;
+
+
+enum fb_op_origin {
+	ORIGIN_CPU = 0,
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+	ORIGIN_CS,
+	ORIGIN_FLIP,
+	ORIGIN_DIRTYFB,
+	ORIGIN_CURSOR_UPDATE,
+#endif
+};
+
+struct intel_frontbuffer {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+	struct kref ref;
+	atomic_t bits;
+	struct i915_active write;
+#endif
+	struct drm_i915_gem_object *obj;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+	struct rcu_head rcu;
+#endif
+};
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+
 #include <linux/atomic.h>
 #include <linux/bits.h>
 #include <linux/kref.h>
 
 #include "gem/i915_gem_object_types.h"
-#include "i915_active_types.h"
-
-struct drm_i915_private;
-
-enum fb_op_origin {
-	ORIGIN_CPU = 0,
-	ORIGIN_CS,
-	ORIGIN_FLIP,
-	ORIGIN_DIRTYFB,
-	ORIGIN_CURSOR_UPDATE,
-};
-
-struct intel_frontbuffer {
-	struct kref ref;
-	atomic_t bits;
-	struct i915_active write;
-	struct drm_i915_gem_object *obj;
-	struct rcu_head rcu;
-};
 
 /*
  * Frontbuffer tracking bits. Set in obj->frontbuffer_bits while a gem bo is
@@ -166,5 +175,14 @@ static inline void intel_frontbuffer_flush(struct intel_frontbuffer *front,
 void intel_frontbuffer_track(struct intel_frontbuffer *old,
 			     struct intel_frontbuffer *new,
 			     unsigned int frontbuffer_bits);
+#else
 
+static inline void intel_frontbuffer_put(struct intel_frontbuffer *front) { return; }
+static inline struct intel_frontbuffer *__intel_frontbuffer_get(
+		const struct drm_i915_gem_object *obj) { return 0; }
+static inline bool intel_frontbuffer_invalidate(struct intel_frontbuffer *front,
+						enum fb_op_origin origin) { return 0; }
+static inline void intel_frontbuffer_flush(struct intel_frontbuffer *front,
+					   enum fb_op_origin origin) { return; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_FRONTBUFFER_H__ */

@@ -33,9 +33,12 @@
 
 struct intel_engine_cs;
 struct intel_gt;
+struct drm_i915_private;
+struct seq_file;
 
 void intel_mocs_init(struct intel_gt *gt);
 void intel_mocs_init_engine(struct intel_engine_cs *engine);
 void intel_set_mocs_index(struct intel_gt *gt);
+int intel_mocs_seq_write(struct drm_i915_private *i915, struct seq_file *m);
 
 #endif

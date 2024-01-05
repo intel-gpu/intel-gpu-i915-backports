@@ -535,7 +535,8 @@ static int __gen11_reset_engines(struct intel_gt *gt,
 	u32 reset_mask, unlock_mask = 0;
 	int ret;
 
-	if (engine_mask == ALL_ENGINES) {
+	if (gt->i915->params.enable_gt_reset &&
+	    engine_mask == ALL_ENGINES) {
 		reset_mask = GEN11_GRDOM_FULL;
 	} else {
 		reset_mask = 0;
@@ -960,15 +961,6 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
-	int err;
-
-	/*
-	 * Everything depends on having the GTT running, so we need to start
-	 * there.
-	 */
-	err = i915_ggtt_enable_hw(gt->i915);
-	if (err)
-		return err;
 
 	local_bh_disable();
 	for_each_engine(engine, gt, id)
@@ -979,7 +971,7 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 
 	intel_ggtt_restore_fences(gt->ggtt);
 
-	return err;
+	return 0;
 }
 
 static void reset_finish_engine(struct intel_engine_cs *engine)
@@ -1072,6 +1064,7 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 		return;
 
 	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
+	intel_gt_retire_requests(gt);
 	mutex_lock(&gt->reset.mutex);
 
 	if (GEM_SHOW_DEBUG() &&
@@ -1093,7 +1086,6 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	__intel_gt_set_wedged(gt);
 
 	mutex_unlock(&gt->reset.mutex);
-
 	intel_gt_retire_requests(gt);
 	intel_runtime_pm_put(gt->uncore->rpm, wakeref);
 }
@@ -1390,7 +1382,19 @@ int __intel_engine_reset_bh(struct intel_engine_cs *engine, const char *msg)
 	atomic_inc(&engine->reset.count);
 	atomic_inc(&gt->reset.engines_reset_count);
 
-	ret = intel_gt_reset_engine(engine);
+	/*
+	 * If we have CCS on the platform we can't reset RCS/CCS because all
+	 * RCS and CCS engines will be reset at the same time and we don't
+	 * handle that
+	 */
+	if (CCS_MASK(gt) &&
+	    (engine->class == RENDER_CLASS || engine->class == COMPUTE_CLASS)) {
+		DRM_INFO("Skipping %s reset due to missing dual-ctx reset "
+			 "support\n", engine->name);
+		ret = -ENODEV;
+	} else {
+		ret = intel_gt_reset_engine(engine);
+	}
 	if (ret) {
 		/* If we fail here, we expect to fallback to a global reset */
 		ENGINE_TRACE(engine, "Failed to reset %s, err: %d\n", engine->name, ret);

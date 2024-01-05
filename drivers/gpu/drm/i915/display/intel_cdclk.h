@@ -6,6 +6,7 @@
 #ifndef __INTEL_CDCLK_H__
 #define __INTEL_CDCLK_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/types.h>
 
 #include "intel_display.h"
@@ -83,4 +84,5 @@ intel_atomic_get_cdclk_state(struct intel_atomic_state *state);
 
 int intel_cdclk_init(struct drm_i915_private *dev_priv);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_CDCLK_H__ */

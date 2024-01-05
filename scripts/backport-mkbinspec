@@ -16,6 +16,7 @@ DRM_CONFIG="drm"
 BUILD_TYPE=""
 CUSTOM_KERN_ID=""
 UTS_RELEASE=""
+NODRM=
 
 helpFunction()
 {
@@ -52,8 +53,9 @@ do
 	esac
 done
 
-if [ "$BUILD_TYPE" = "sp2" ]; then
-	DRM_CONFIG="drm_disable_svm"
+if [ "$BUILD_TYPE" = "nodrm" ]; then
+	DRM_CONFIG="i915_only"
+	NODRM=DEL
 fi
 
 if [ "$KLIB_BUILD_BASE" = "build" ]; then
@@ -91,7 +93,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
 
 	%description
-	Out of tree prebuilt drm, i915 driver modules.
+	Out of tree prebuilt intel GPU driver modules.
 
 	%global debug_package %{nil}
 	%global _build_id_links none
@@ -120,20 +122,20 @@ $LC_HDR make -j\$npc KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD BUILD_CONFIG=$BUILD
 	find . -name "*.ko.xz" -exec install -m 0500 {} %{buildroot}%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name} \;
 
 
-	%package -n intel-dmabuf
-	Summary: DMA-BUF Backports Kernel Module Package
-	Group: System Environment/Base
-	%description -n intel-dmabuf
-	Out of tree prebuilt dmabuf driver modules
+$NODRM	%package -n intel-dmabuf
+$NODRM	Summary: DMA-BUF Backports Kernel Module Package
+$NODRM	Group: System Environment/Base
+$NODRM	%description -n intel-dmabuf
+$NODRM	Out of tree prebuilt dmabuf driver modules
 
 	%files
 	%defattr(644,root,root)
-	%exclude %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/dmabuf*
+$NODRM	%exclude %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/dmabuf*
 	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/
 
-	%files -n intel-dmabuf
-	%defattr(644,root,root)
-	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/dmabuf*
+$NODRM	%files -n intel-dmabuf
+$NODRM	%defattr(644,root,root)
+$NODRM	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}/dmabuf*
 
 	%clean
 	if [ "%{buildroot}" != "/" ]; then

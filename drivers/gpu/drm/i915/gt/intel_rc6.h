@@ -26,5 +26,6 @@ void intel_rc6_disable(struct intel_rc6 *rc6);
 
 u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, i915_reg_t reg);
 u64 intel_rc6_residency_us(struct intel_rc6 *rc6, i915_reg_t reg);
+u64 intel_rc6_rpm_unit_residency(struct intel_rc6 *rc6);
 
 #endif /* INTEL_RC6_H */

@@ -137,7 +137,7 @@ pte_tlbinv(struct intel_context *ce,
 	i915_request_add(rq);
 
 	/* Short sleep to sanitycheck the batch is spinning before we begin */
-	msleep(10);
+	msleep(ADJUST_TIMEOUT(10));
 	if (va == vb) {
 		if (!i915_request_completed(rq)) {
 			pr_err("Semaphore sanitycheck failed\n");

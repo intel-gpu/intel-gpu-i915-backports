@@ -8,13 +8,19 @@
 
 #include "intel_runtime_pm.h"
 
-enum aux_ch;
-enum dpio_channel;
-enum dpio_phy;
-enum port;
 struct drm_i915_private;
-struct i915_power_well;
-struct intel_encoder;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+/*
+ * FIXME: We should probably switch this to a 0-based scheme to be consistent
+ * with how we now name/number DBUF_CTL instances.
+ */
+enum dbuf_slice {
+	DBUF_S1,
+	DBUF_S2,
+	DBUF_S3,
+	DBUF_S4,
+	I915_MAX_DBUF_SLICES
+};
 
 /*
  * Keep the pipe, transcoder, port (DDI_LANES,DDI_IO,AUX) domain instances
@@ -109,6 +115,13 @@ enum intel_display_power_domain {
 	POWER_DOMAIN_NUM,
 	POWER_DOMAIN_INVALID = POWER_DOMAIN_NUM,
 };
+
+enum aux_ch;
+enum dpio_channel;
+enum dpio_phy;
+enum port;
+struct i915_power_well;
+struct intel_encoder;
 
 #define POWER_DOMAIN_PIPE(pipe) ((pipe) + POWER_DOMAIN_PIPE_A)
 #define POWER_DOMAIN_PIPE_PANEL_FITTER(pipe) \
@@ -253,18 +266,6 @@ intel_display_power_legacy_aux_domain(struct drm_i915_private *i915, enum aux_ch
 enum intel_display_power_domain
 intel_display_power_tbt_aux_domain(struct drm_i915_private *i915, enum aux_ch aux_ch);
 
-/*
- * FIXME: We should probably switch this to a 0-based scheme to be consistent
- * with how we now name/number DBUF_CTL instances.
- */
-enum dbuf_slice {
-	DBUF_S1,
-	DBUF_S2,
-	DBUF_S3,
-	DBUF_S4,
-	I915_MAX_DBUF_SLICES
-};
-
 void gen9_dbuf_slices_update(struct drm_i915_private *dev_priv,
 			     u8 req_slices);
 
@@ -275,5 +276,40 @@ void gen9_dbuf_slices_update(struct drm_i915_private *dev_priv,
 #define with_intel_display_power_if_enabled(i915, domain, wf) \
 	for ((wf) = intel_display_power_get_if_enabled((i915), (domain)); (wf); \
 	     intel_display_power_put_async((i915), (domain), (wf)), (wf) = 0)
+#else
+static inline int intel_power_domains_init(struct drm_i915_private *dev_priv) { return 0; }
+static inline void intel_power_domains_cleanup(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_power_domains_enable(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_power_domains_disable(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_power_domains_driver_remove(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_display_power_suspend_late(struct drm_i915_private *i915) { return; }
+static inline void intel_power_domains_resume(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_display_power_resume_early(struct drm_i915_private *i915) { return; }
+static inline void intel_display_power_suspend(struct drm_i915_private *i915) { return; }
+static inline void intel_display_power_resume(struct drm_i915_private *i915) { return; }
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static inline intel_wakeref_t intel_display_power_get(struct drm_i915_private *dev_priv,
+					enum intel_display_power_domain domain){ return 1; }
+#endif
+static inline void intel_power_domains_suspend(struct drm_i915_private *dev_priv,
+				 enum i915_drm_suspend_mode mode) { return; }
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static inline void
+intel_display_power_put_async(struct drm_i915_private *i915,
+			      enum intel_display_power_domain domain,
+			      intel_wakeref_t wakeref)
+{
+}
+static inline void intel_display_power_put_unchecked(struct drm_i915_private *dev_priv,
+				       enum intel_display_power_domain domain) { return; }
 
+static inline void
+intel_display_power_put(struct drm_i915_private *i915,
+			enum intel_display_power_domain domain,
+			intel_wakeref_t wakeref)
+{
+	intel_display_power_put_unchecked(i915, domain);
+}
+#endif
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_DISPLAY_POWER_H__ */

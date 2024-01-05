@@ -4,6 +4,8 @@
  * Copyright © 2014-2016 Intel Corporation
  */
 
+#include <linux/device.h>
+#include <linux/numa.h>
 #include <linux/pagevec.h>
 #include <linux/shmem_fs.h>
 #include <linux/swap.h>
@@ -21,9 +23,19 @@
 #include "i915_sw_fence_work.h"
 #include "i915_trace.h"
 
+struct ras_errors {
+	int max;
+	struct ras_error {
+		struct dev_ext_attribute attr;
+		unsigned long count;
+		char *name;
+	} errors[0];
+};
+
 struct shmem_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *obj;
+	struct mempolicy *policy;
 	struct sg_table *pages;
 };
 
@@ -33,11 +45,24 @@ struct shmem_chunk {
 	struct intel_memory_region *mem;
 	struct address_space *mapping;
 	struct i915_sw_fence *fence;
+	struct mempolicy *policy;
 	unsigned long idx, end;
 	unsigned long flags;
 #define SHMEM_CLEAR	BIT(0)
 #define SHMEM_CLFLUSH	BIT(1)
 };
+
+#if IS_ENABLED(CONFIG_NUMA)
+#define swap_mempolicy(tsk, pol) ({ \
+	struct mempolicy *old__ = (tsk)->mempolicy; \
+	(tsk)->mempolicy = (pol); \
+	(pol) = old__; \
+})
+#define get_mempolicy(tsk) ((tsk)->mempolicy)
+#else
+#define swap_mempolicy(tsk, pol)
+#define get_mempolicy(tsk) NULL
+#endif
 
 static struct page *
 shmem_get_page(struct intel_memory_region *mem,
@@ -85,25 +110,32 @@ shmem_get_page(struct intel_memory_region *mem,
 static int __shmem_chunk(struct scatterlist *sg,
 			 struct intel_memory_region *mem,
 			 struct address_space *mapping,
+			 struct mempolicy *mempolicy,
 			 unsigned long idx,
 			 unsigned long end,
 			 unsigned long flags,
 			 int *error)
 {
+	int err = 0;
+
 	GEM_BUG_ON(idx >= end);
 
+	swap_mempolicy(current, mempolicy);
 	do {
 		struct page *page = sg_page(sg);
 
 		if (!page) {
 			/* try to backoff quickly if any of our threads fail */
-			if (READ_ONCE(*error))
-				return *error;
+			err = READ_ONCE(*error);
+			if (err)
+				break;
 
 			GEM_BUG_ON(!mapping);
 			page = shmem_get_page(mem, mapping, idx);
-			if (IS_ERR(page))
-				return PTR_ERR(page);
+			if (IS_ERR(page)) {
+				err = PTR_ERR(page);
+				break;
+			}
 
 			sg_set_page(sg, page, PAGE_SIZE, 0);
 		}
@@ -120,11 +152,14 @@ static int __shmem_chunk(struct scatterlist *sg,
 		}
 
 		if (++idx == end)
-			return 0;
+			break;
 
 		sg = __sg_next(sg);
 		GEM_BUG_ON(!sg);
 	} while (1);
+	swap_mempolicy(current, mempolicy);
+
+	return err;
 }
 
 static void shmem_chunk(struct work_struct *wrk)
@@ -133,6 +168,7 @@ static void shmem_chunk(struct work_struct *wrk)
 	struct intel_memory_region *mem = chunk->mem;
 	struct address_space *mapping = chunk->mapping;
 	struct i915_sw_fence *fence = chunk->fence;
+	struct mempolicy *policy = chunk->policy;
 	struct scatterlist *sg = chunk->sg;
 	unsigned long flags = chunk->flags;
 	unsigned long idx = chunk->idx;
@@ -146,7 +182,7 @@ static void shmem_chunk(struct work_struct *wrk)
 	if (!READ_ONCE(fence->error)) {
 		int err;
 
-		err = __shmem_chunk(sg, mem, mapping,
+		err = __shmem_chunk(sg, mem, mapping, policy,
 				    idx, end, flags,
 				    &fence->error);
 		i915_sw_fence_set_error_once(fence, err);
@@ -155,30 +191,93 @@ static void shmem_chunk(struct work_struct *wrk)
 	i915_sw_fence_complete(fence);
 }
 
-static void shmem_queue(struct shmem_chunk *chunk)
+static void
+shmem_queue(struct shmem_chunk *chunk, struct drm_i915_private *i915)
 {
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_SHMEMFS))
-		queue_work(system_unbound_wq, &chunk->work);
+		queue_work_on(i915_next_online_cpu(i915),
+			      system_unbound_wq,
+			      &chunk->work);
 	else
 		shmem_chunk(&chunk->work);
 }
 
-static int shmem_create(struct shmem_work *wrk)
+static int preferred_node(const struct drm_i915_gem_object *obj)
 {
-	const unsigned int limit = boot_cpu_data.x86_cache_size << 9 ?: SZ_8M;
-	const uint32_t max_segment = i915_sg_segment_size();
-	struct drm_i915_gem_object *obj = wrk->obj;
-	const int nid = dev_to_node(obj->base.dev->dev);
-	u64 remain = obj->base.size, start;
-	struct sg_table *sgt = wrk->pages;
-	struct shmem_chunk *chunk = NULL;
-	struct i915_sw_fence fence;
-	int min_order = MAX_ORDER;
-	struct scatterlist *sg;
+	int nid = NUMA_NO_NODE;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		return NUMA_NO_NODE;
+
+	if (obj->mempol == I915_GEM_CREATE_MPOL_LOCAL) {
+	} else if (!obj->maxnode) {
+		nid = dev_to_node(obj->base.dev->dev);
+	} else {
+		nid = find_first_bit(obj->nodes, obj->maxnode);
+		if (nid == obj->maxnode)
+			nid = NUMA_NO_NODE;
+	}
+
+	if (nid == NUMA_NO_NODE)
+		nid = numa_node_id();
+
+	return nid;
+}
+
+static void ras_error(struct drm_i915_gem_object *obj)
+{
+	struct ras_errors *e = obj->mm.region.mem->region_private;
+	int nid = preferred_node(obj);
+
+	if (!e || nid >= e->max)
+		return;
+
+	WRITE_ONCE(e->errors[nid].count, READ_ONCE(e->errors[nid].count) + 1);
+}
+
+static struct page *
+alloc_pages_for_object(struct drm_i915_gem_object *obj,
+		       int *interleave,
+		       gfp_t gfp,
+		       int order)
+{
+	struct page *page;
+
+	if (obj->mempol == I915_GEM_CREATE_MPOL_LOCAL)
+		return alloc_pages_node(numa_node_id(), gfp | __GFP_THISNODE, order);
+
+	if (obj->mempol && obj->maxnode) {
+		int max = READ_ONCE(*interleave);
+		int nid = max;
+
+		for_each_set_bit_from(nid, obj->nodes, obj->maxnode) {
+			page = alloc_pages_node(nid, gfp | __GFP_THISNODE, order);
+			if (page) {
+				if (obj->mempol == I915_GEM_CREATE_MPOL_INTERLEAVED)
+					WRITE_ONCE(*interleave, nid + 1);
+				return page;
+			}
+		}
+
+		for_each_set_bit(nid, obj->nodes, max) {
+			page = alloc_pages_node(nid, gfp | __GFP_THISNODE, order);
+			if (page) {
+				if (obj->mempol == I915_GEM_CREATE_MPOL_INTERLEAVED)
+					WRITE_ONCE(*interleave, nid + 1);
+				return page;
+			}
+		}
+	}
+
+	if (obj->mempol != I915_GEM_CREATE_MPOL_BIND)
+		page = alloc_pages_node(dev_to_node(obj->base.dev->dev), gfp, order);
+
+	return page;
+}
+
+static unsigned long shmem_create_mode(const struct drm_i915_gem_object *obj)
+{
 	unsigned long flags;
-	unsigned long n;
-	gfp_t gfp;
-	int err;
 
 	flags = 0;
 	if ((obj->flags & (I915_BO_ALLOC_USER | I915_BO_CPU_CLEAR)) &&
@@ -188,6 +287,25 @@ static int shmem_create(struct shmem_work *wrk)
 		    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
 			flags |= SHMEM_CLFLUSH;
 	}
+
+	return flags;
+}
+
+static int shmem_create(struct shmem_work *wrk)
+{
+	const unsigned int limit = boot_cpu_data.x86_cache_size << 9 ?: SZ_8M;
+	const uint32_t max_segment = i915_sg_segment_size();
+	struct drm_i915_gem_object *obj = wrk->obj;
+	unsigned long flags = shmem_create_mode(obj);
+	u64 remain = obj->base.size, start;
+	struct sg_table *sgt = wrk->pages;
+	struct shmem_chunk *chunk = NULL;
+	struct i915_sw_fence fence;
+	int min_order = MAX_ORDER;
+	struct scatterlist *sg;
+	unsigned long n;
+	gfp_t gfp;
+	int err;
 
 	i915_sw_fence_init_onstack(&fence);
 
@@ -202,7 +320,7 @@ static int shmem_create(struct shmem_work *wrk)
 
 		order = min(order, min_order);
 		do {
-			page = alloc_pages_node(nid, gfp, order);
+			page = alloc_pages_for_object(obj, &obj->mm.region.mem->interleave, gfp, order);
 			if (page || gfp & __GFP_DIRECT_RECLAIM)
 				break;
 
@@ -216,6 +334,7 @@ static int shmem_create(struct shmem_work *wrk)
 			if (order <= PAGE_ALLOC_COSTLY_ORDER)
 				gfp |= __GFP_KSWAPD_RECLAIM;
 			if (order == 0) {
+				/* XXX eviction does not consider node equivalence */
 				intel_memory_region_evict(obj->mm.region.mem,
 							  NULL, SZ_2M, PAGE_SIZE);
 				gfp |= __GFP_DIRECT_RECLAIM;
@@ -225,8 +344,14 @@ static int shmem_create(struct shmem_work *wrk)
 		} while (1);
 		if (!page) {
 			i915_sw_fence_set_error_once(&fence, -ENOMEM);
+			ras_error(obj);
 			break;
 		}
+
+		if (obj->maxnode &&
+		    (page_to_nid(page) >= obj->maxnode ||
+		     !test_bit(page_to_nid(page), obj->nodes)))
+			ras_error(obj);
 
 		SetPagePrivate2(page);
 		sg_set_page(sg, page, BIT(order + PAGE_SHIFT), 0);
@@ -282,7 +407,7 @@ static int shmem_create(struct shmem_work *wrk)
 
 		if (chunk && start - remain > limit) {
 			chunk->end = n;
-			shmem_queue(chunk);
+			shmem_queue(chunk, to_i915(obj->base.dev));
 			chunk = NULL;
 		}
 	} while (1);
@@ -360,6 +485,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 			chunk->fence = &fence;
 			chunk->mem = obj->mm.region.mem;
 			chunk->mapping = mapping;
+			chunk->policy = wrk->policy;
 			chunk->idx = n;
 			chunk->flags = flags;
 			INIT_WORK(&chunk->work, shmem_chunk);
@@ -382,7 +508,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 		n += I915_MAX_CHAIN_ALLOC;
 		if (n - chunk->idx > SZ_2M >> PAGE_SHIFT) {
 			chunk->end = n;
-			shmem_queue(chunk);
+			shmem_queue(chunk, to_i915(obj->base.dev));
 			chunk = NULL;
 		}
 
@@ -395,7 +521,8 @@ static int shmem_swapin(struct shmem_work *wrk)
 		chunk->end = num_pages;
 		shmem_chunk(&chunk->work);
 	} else {
-		err = __shmem_chunk(sg, obj->mm.region.mem, mapping,
+		err = __shmem_chunk(sg, obj->mm.region.mem,
+				    mapping, wrk->policy,
 				    n, num_pages, flags,
 				    &fence.error);
 	}
@@ -518,6 +645,7 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 			    to_i915(obj->base.dev)->mm.sched);
 	wrk->obj = i915_gem_object_get(obj);
 	wrk->pages = st;
+	wrk->policy = get_mempolicy(current);
 
 	i915_gem_object_migrate_prepare(obj, &wrk->base.rq.fence);
 	atomic64_sub(obj->base.size, &mem->avail);
@@ -528,7 +656,8 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 
 	dma_fence_work_commit_imm_if(&wrk->base,
 				     obj->flags & I915_BO_SYNC_HINT ||
-				     obj->base.size <= SZ_64K);
+				     obj->base.size <= SZ_64K ||
+				     !obj->base.filp->f_inode->i_blocks);
 	return 0;
 
 err_sg:
@@ -1149,6 +1278,19 @@ fail:
 	return ERR_PTR(err);
 }
 
+static void free_errors(struct ras_errors *e)
+{
+	int n;
+
+	if (!e)
+		return;
+
+	for (n = 0; n < e->max; n++)
+		kfree(e->errors[n].attr.attr.attr.name);
+
+	kfree(e);
+}
+
 static int init_shmem(struct intel_memory_region *mem)
 {
 	i915_gemfs_init(mem->i915);
@@ -1159,6 +1301,7 @@ static int init_shmem(struct intel_memory_region *mem)
 
 static void release_shmem(struct intel_memory_region *mem)
 {
+	free_errors(mem->region_private);
 	i915_gemfs_fini(mem->i915);
 }
 
@@ -1197,6 +1340,43 @@ struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt,
 bool i915_gem_object_is_shmem(const struct drm_i915_gem_object *obj)
 {
 	return obj->ops == &i915_gem_shmem_ops;
+}
+
+bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
+				   struct kobject *kobj)
+{
+	struct ras_errors *errors;
+	int max, n;
+
+	if (!IS_ENABLED(CONFIG_NUMA))
+		return true;
+
+	max = num_possible_nodes();
+	errors = kzalloc(struct_size(errors, errors, max), GFP_KERNEL);
+	if (!errors)
+		return false;
+
+	errors->max = max;
+	for (n = 0; n < max; n++) {
+		struct ras_error *e = &errors->errors[n];
+
+		sysfs_attr_init(&e->attr.attr.attr);
+
+		e->attr.attr.attr.name =
+			kasprintf(GFP_KERNEL, "numa%04d_allocation", n);
+		if (!e->attr.attr.attr.name)
+			break;
+
+		e->attr.attr.attr.mode = 0444;
+		e->attr.attr.show = device_show_ulong;
+		e->attr.var = &e->count;
+
+		if (sysfs_create_file(kobj, &e->attr.attr.attr))
+			break;
+	}
+
+	i915->mm.regions[REGION_SMEM]->region_private = errors;
+	return true;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

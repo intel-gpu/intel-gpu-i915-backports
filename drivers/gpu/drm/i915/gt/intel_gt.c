@@ -15,8 +15,6 @@
 #include "i915_drv.h"
 #include "intel_context.h"
 #include "intel_engine_regs.h"
-#include "intel_flat_ppgtt_pool.h"
-#include "intel_ggtt_gmch.h"
 #include "intel_gt.h"
 #include "intel_gt_buffer_pool.h"
 #include "intel_gt_ccs_mode.h"
@@ -91,11 +89,11 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 
 	spin_lock_init(gt->irq_lock);
 
-	init_llist_head(&gt->watchdog.list);
-	INIT_WORK(&gt->watchdog.work, intel_gt_watchdog_work);
+	INIT_LIST_HEAD(&gt->pinned_contexts);
 
 	mutex_init(&gt->eu_debug.lock);
 	INIT_ACTIVE_FENCE(&gt->eu_debug.fault);
+
 	xa_init(&gt->errors.soc);
 
 	intel_gt_init_buffer_pool(gt);
@@ -110,7 +108,6 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	intel_gt_pm_init_early(gt);
 
 	intel_wopcm_init_early(&gt->wopcm);
-	intel_flat_ppgtt_pool_init_early(&gt->fpp);
 	intel_uc_init_early(&gt->uc);
 	intel_rps_init_early(&gt->rps);
 
@@ -530,13 +527,6 @@ void intel_gt_flush_ggtt_writes(struct intel_gt *gt)
 	}
 }
 
-void intel_gt_chipset_flush(struct intel_gt *gt)
-{
-	wmb();
-	if (GRAPHICS_VER(gt->i915) < 6)
-		intel_ggtt_gmch_flush();
-}
-
 void intel_gt_driver_register(struct intel_gt *gt)
 {
 	intel_gsc_init(&gt->gsc, gt->i915);
@@ -546,7 +536,6 @@ void intel_gt_driver_register(struct intel_gt *gt)
 	intel_gt_debugfs_register(gt);
 	intel_gt_sysfs_register(gt);
 	intel_iov_sysfs_setup(&gt->iov);
-	intel_iov_vf_get_wakeref_wa(&gt->iov);
 }
 
 static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
@@ -886,6 +875,7 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	struct i915_request *requests[I915_NUM_ENGINES] = {};
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
+	long timeout = I915_GEM_IDLE_TIMEOUT;
 	int err = 0;
 
 	/*
@@ -913,7 +903,7 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	}
 
 	/* Flush the default context image to memory, and enable powersaving. */
-	if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT)) {
+	if (intel_gt_wait_for_idle(gt, timeout)) {
 		if (!i915_error_injected())
 			intel_klog_error_capture(gt, (intel_engine_mask_t) ~0U);
 		err = -EIO;
@@ -1132,7 +1122,6 @@ out_fw:
 void intel_gt_driver_remove(struct intel_gt *gt)
 {
 	intel_gt_fini_clock_frequency(gt);
-	intel_flat_ppgtt_pool_fini(&gt->fpp);
 	i915_vma_clock_flush(&gt->vma_clock);
 	intel_iov_fini_hw(&gt->iov);
 
@@ -1148,8 +1137,6 @@ void intel_gt_driver_remove(struct intel_gt *gt)
 void intel_gt_driver_unregister(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
-
-	intel_iov_vf_put_wakeref_wa(&gt->iov);
 
 	if (!gt->i915->drm.unplugged)
 		intel_iov_sysfs_teardown(&gt->iov);
@@ -1267,11 +1254,6 @@ static int driver_flr_init(struct intel_gt *gt)
 		return ret;
 
 	return drmm_add_action(&gt->i915->drm, driver_flr_fini, gt);
-}
-
-void intel_gt_shutdown(struct intel_gt *gt)
-{
-	intel_iov_vf_put_wakeref_wa(&gt->iov);
 }
 
 static int intel_gt_tile_setup(struct intel_gt *gt,
@@ -1409,6 +1391,25 @@ static unsigned int gt_mask(struct drm_i915_private *i915)
 	else
 		mask = GENMASK(gt_count(i915) - 1, 0);
 
+	if (i915_modparams.max_tiles > 0) {
+		unsigned int count, limit;
+		int i;
+
+		count = hweight_long(mask);
+		limit = i915_modparams.max_tiles;
+
+		if (limit >= count)
+			goto out;
+
+		count = 0;
+		for_each_set_bit(i, &mask, I915_MAX_GT) {
+			count++;
+			if (count > limit)
+				clear_bit(i, &mask);
+		}
+	}
+
+out:
 	return mask;
 }
 
@@ -1499,6 +1500,7 @@ int intel_gt_probe_all(struct drm_i915_private *i915)
 	}
 
 	i915->remote_tiles = num_gt - 1;
+	i915->enabled_remote_tiles = num_enabled_gt - 1;
 
 	return 0;
 

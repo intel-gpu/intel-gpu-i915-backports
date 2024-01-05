@@ -115,8 +115,13 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_i915_gem_busy *args = data;
 	struct drm_i915_gem_object *obj;
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	struct dma_resv_iter cursor;
+	struct dma_fence *fence;
+#else
 	struct dma_resv_list *list;
 	unsigned int seq;
+#endif
 	int err;
 
 	err = -ENOENT;
@@ -142,6 +147,23 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 	 * to report the overall busyness. This is what the wait-ioctl does.
 	 *
 	 */
+#ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
+	args->busy = 0;
+	dma_resv_iter_begin(&cursor, obj->base.resv, DMA_RESV_USAGE_READ);
+	dma_resv_for_each_fence_unlocked(&cursor, fence) {
+		if (dma_resv_iter_is_restarted(&cursor))
+			 args->busy = 0;
+
+		if (dma_resv_iter_usage(&cursor) <= DMA_RESV_USAGE_WRITE)
+			/* Translate the write fences to the READ *and* WRITE engine */
+			args->busy |= busy_check_writer(fence);
+		else
+			/* Translate read fences to READ set of engines */
+			args->busy |= busy_check_reader(fence);
+	}
+
+	dma_resv_iter_end(&cursor);
+#else
 retry:
 	seq = raw_read_seqcount(&obj->base.resv->seq);
 
@@ -163,6 +185,7 @@ retry:
 
 	if (args->busy && read_seqcount_retry(&obj->base.resv->seq, seq))
 		goto retry;
+#endif
 
 	err = 0;
 out:

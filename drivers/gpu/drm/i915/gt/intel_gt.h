@@ -72,7 +72,11 @@ void intel_gt_clear_error_registers(struct intel_gt *gt,
 				    intel_engine_mask_t engine_mask);
 
 void intel_gt_flush_ggtt_writes(struct intel_gt *gt);
-void intel_gt_chipset_flush(struct intel_gt *gt);
+
+static inline void intel_gt_chipset_flush(struct intel_gt *gt)
+{
+	wmb(); /* flush any chipset caches */
+}
 
 static inline u32 intel_gt_scratch_offset(const struct intel_gt *gt,
 					  enum intel_gt_scratch_field field)
@@ -101,18 +105,6 @@ i915_reg_t intel_gt_perf_limit_reasons_reg(struct intel_gt *gt)
 		return MTL_MEDIA_PERF_LIMIT_REASONS;
 
 	return GT0_PERF_LIMIT_REASONS;
-}
-
-static inline bool
-i915_is_level4_wa_active(struct intel_gt *gt)
-{
-	struct drm_i915_private *i915 = gt->i915;
-	bool guc_ready = (!intel_guc_submission_is_wanted(&gt->uc.guc) ||
-			  intel_guc_is_ready(&gt->uc.guc));
-
-	return i915_is_mem_wa_enabled(i915, I915_WA_USE_FLAT_PPGTT_UPDATE) &&
-		i915->bind_ctxt_ready && guc_ready &&
-		!atomic_read(&i915->level4_wa_disabled);
 }
 
 int intel_count_l3_banks(struct drm_i915_private *i915,
@@ -178,8 +170,6 @@ static inline void pvc_wa_allow_rc6(struct drm_i915_private *i915)
 
 void intel_gt_info_print(const struct intel_gt_info *info,
 			 struct drm_printer *p);
-
-void intel_gt_watchdog_work(struct work_struct *work);
 
 void intel_boost_fake_int_timer(struct intel_gt *gt, bool on_off);
 

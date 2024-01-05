@@ -9,6 +9,9 @@
 #include <linux/types.h>
 
 struct drm_i915_private;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+
 struct intel_connector;
 struct intel_digital_port;
 struct intel_encoder;
@@ -29,4 +32,11 @@ enum hpd_pin intel_hpd_pin_default(struct drm_i915_private *dev_priv,
 bool intel_hpd_disable(struct drm_i915_private *dev_priv, enum hpd_pin pin);
 void intel_hpd_enable(struct drm_i915_private *dev_priv, enum hpd_pin pin);
 
+#else
+static inline void intel_hpd_init_work(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_hpd_poll_enable(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_hpd_cancel_work(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_hpd_init(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_hpd_poll_disable(struct drm_i915_private *dev_priv) { return; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_HOTPLUG_H__ */

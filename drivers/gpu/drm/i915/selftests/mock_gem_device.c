@@ -213,7 +213,8 @@ struct drm_i915_private *mock_gem_device(void)
 	i915->sched = i915_sched_engine_create(3);
 	if (!i915->sched)
 		goto err_free_wq;
-	i915->sched->private_data = i915->wq;
+	i915->sched->cpumask = cpu_online_mask;
+	i915->sched->wq = i915->wq;
 	i915->mm.sched = i915->sched;
 	i915->mm.wq = i915->wq;
 

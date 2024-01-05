@@ -39,6 +39,10 @@
 #define FOLL_FAST_ONLY 0x80000 /* gup_fast: prevent fall-back to slow gup */
 #endif
 
+#ifdef BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
+#define cancel_dirty_page(X) folio_cancel_dirty(page_folio(X))
+#endif
+
 #ifdef BPM_TOTALRAM_PAGES_FUNC_NOT_PRESENT
 #define totalram_pages() totalram_pages
 #endif
@@ -69,6 +73,15 @@ static inline bool want_init_on_alloc(gfp_t flags)
                return true;
        return flags & __GFP_ZERO;
 }
+#endif
+
+#ifdef BPM_PIN_OR_UNPIN_USER_PAGE_NOT_PRESENT
+#ifdef BPM_PUT_USER_PAGES_DIRTY_LOCK_ARG_NOT_PRESENT
+#define unpin_user_pages_dirty_lock(X,Y,Z) put_user_pages_dirty_lock(X,Y)
+#else
+#define unpin_user_pages_dirty_lock(X,Y,Z) put_user_pages_dirty_lock(X,Y,Z)
+#endif
+#define unpin_user_page(X) put_user_page(X)
 #endif
 
 #endif /* _BACKPORT_LINUX_MM_H */

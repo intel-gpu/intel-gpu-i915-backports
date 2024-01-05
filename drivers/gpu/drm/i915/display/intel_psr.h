@@ -8,6 +8,7 @@
 
 #include <linux/types.h>
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 enum fb_op_origin;
 struct drm_connector;
 struct drm_connector_state;
@@ -62,4 +63,5 @@ void intel_psr_resume(struct intel_dp *intel_dp);
 void intel_psr_lock(const struct intel_crtc_state *crtc_state);
 void intel_psr_unlock(const struct intel_crtc_state *crtc_state);
 
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_PSR_H__ */

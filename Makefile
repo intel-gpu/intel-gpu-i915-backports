@@ -51,12 +51,6 @@ endif
 default:
 	@$(MAKE) modules
 
-# TBD : Move this target to Makefile.backport, Removing this will also work
-# as unknown targets are called in DEFAULT target.
-.PHONY:remove-drm-headers
-remove-drm-headers:
-	@$(MAKE) -f Makefile.real remove-drm-headers
-
 .PHONY: mrproper
 mrproper:
 	@test -f .config && $(MAKE) clean || true
@@ -145,6 +139,9 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
 endif ### ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
+ifneq ("$(wildcard .config)","")
+	@$(MAKE) -f Makefile.real updateconfig
+endif
 	@$(MAKE) -f Makefile.real "$@"
 
 .PHONY: defconfig-help
@@ -177,7 +174,7 @@ common-help:
 	@echo "  				Ex: make <Target> BUILD_CONFIG=sp2 "
 	@echo "  OS_DISTRIBUTION 	: Distro targeted package"
 	@echo "  				You can set this value by passing supported kernel name"
-	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.8"
+	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.9"
 	@echo "  				###   List of supported osv kernel versions   ### "
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep RHEL | tr '\n' '\t')"
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep VANILLA)"

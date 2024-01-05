@@ -32,6 +32,12 @@ usedefconfig:
 	@$(MAKE) -C kconf conf
 	@./kconf/conf --defconfig=defconfig Kconfig
 
+.PHONY:updateconfig
+updateconfig:
+ifeq ($(BUILD_CONFIG), disabledisplay)
+	sed -i 's/CPTCFG_DRM_I915_DISPLAY=y/CPTCFG_DRM_I915_DISPLAY=n/g' .config
+endif
+
 .PHONY: savedefconfig
 savedefconfig:
 	@$(MAKE) -C kconf conf
@@ -121,10 +127,6 @@ clean:
 	@$(MAKE) -f Makefile.build clean
 	@$(MAKE) -C kconf clean
 	@$(MAKE) -f Makefile.backport clean
-
-.PHONY:remove-drm-headers
-remove-drm-headers:
-	@$(MAKE) -f Makefile.backport remove-drm-headers
 
 .PHONY: mrproper
 mrproper:

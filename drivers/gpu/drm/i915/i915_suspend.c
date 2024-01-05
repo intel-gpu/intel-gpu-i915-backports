@@ -33,6 +33,7 @@
 #include "i915_suspend.h"
 #include "intel_pci_config.h"
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void intel_save_swf(struct drm_i915_private *dev_priv)
 {
 	int i;
@@ -122,3 +123,4 @@ void i915_restore_display(struct drm_i915_private *dev_priv)
 
 	intel_gmbus_reset(dev_priv);
 }
+#endif

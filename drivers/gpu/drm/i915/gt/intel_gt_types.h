@@ -24,7 +24,6 @@
 
 #include "i915_perf_types.h"
 #include "intel_engine_types.h"
-#include "intel_flat_ppgtt_pool_types.h"
 #include "intel_gt_buffer_pool_types.h"
 #include "intel_hwconfig.h"
 #include "intel_llc_types.h"
@@ -243,10 +242,12 @@ struct intel_gt {
 		struct delayed_work retire_work;
 	} requests;
 
-	struct {
-		struct llist_head list;
-		struct work_struct work;
-	} watchdog;
+	/**
+	 * pinned_contexts: List of pinned contexts. This list is only
+	 * assumed to be manipulated during driver load- or unload time and
+	 * does therefore not have any additional protection.
+	 */
+	struct list_head pinned_contexts;
 
 	struct {
 		bool enabled;
@@ -256,9 +257,6 @@ struct intel_gt {
 		u32 delay_fast, delay_slow;
 		bool int_enabled;
 	} fake_int;
-
-	/* Maintain a per-gt pool */
-	struct intel_flat_ppgtt_pool fpp;
 
 	struct intel_wakeref wakeref;
 	atomic_t user_wakeref;

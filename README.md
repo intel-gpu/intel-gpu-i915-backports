@@ -30,7 +30,8 @@ redhat/main will point to the currently supported version of RED HAT® 8.x and V
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| REDHAT® | 8.8 | 4.18.0-477 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
+| REDHAT® | 8.9 | 4.18.0-513 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
+| | 8.8|   4.18.0-477 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
 | | 8.6 | 4.18.0-372 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md) |
 | Vanilla LTS |  | 5.10  |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_vanilla.md) |
 

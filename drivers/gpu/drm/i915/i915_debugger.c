@@ -532,9 +532,17 @@ static inline u64 debugger_get_seqno(struct i915_debugger *debugger)
 	return atomic_long_inc_return(&debugger->event_seqno);
 }
 
+struct debugger_fence {
+	struct dma_fence_work base;
+	int vma_count;
+};
+
 static void handle_vm_bind_ack(struct i915_debug_ack *ack)
 {
-	i915_sw_fence_complete(ack->event.ack_data);
+	struct debugger_fence *f = ack->fence;
+
+	while (f->vma_count--)
+		i915_sw_fence_complete(&f->base.rq.submit);
 }
 
 static void
@@ -674,10 +682,6 @@ static const struct dma_fence_ops debugger_fence_ops = {
 	.get_timeline_name = get_timeline_name,
 };
 
-struct debugger_fence {
-	struct dma_fence_work base;
-};
-
 static const struct dma_fence_work_ops ack_ops = {
 	.name = "debugger",
 };
@@ -731,23 +735,10 @@ vma_await_ack(struct i915_vma *vma, struct dma_fence *fence)
 	return i915_active_set_exclusive(&vma->active, fence) ?: i915_active_fence_get_or_error(&vma->obj->mm.migrate);
 }
 
-static void *
-prepare_vm_bind_ack(const struct i915_debug_ack *ack,
-		    struct i915_vma *vma,
-		    gfp_t gfp)
+static void
+vma_prepare_ack(struct debugger_fence *f, struct i915_vma *vma)
 {
-	struct debugger_fence *f;
 	struct dma_fence *prev;
-
-	if (!(ack->event.flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE))
-		return ERR_PTR(-EINVAL);
-
-	if (!vma)
-		return ERR_PTR(-EINVAL);
-
-	f = create_debugger_fence(vma->vm->i915, gfp);
-	if (!f)
-		return ERR_PTR(-ENOMEM);
 
 	prev = vma_await_ack(vma, &f->base.rq.fence);
 	if (IS_ERR(prev)) {
@@ -758,9 +749,7 @@ prepare_vm_bind_ack(const struct i915_debug_ack *ack,
 	}
 
 	i915_sw_fence_await(&f->base.rq.submit);
-	dma_fence_work_commit(&f->base);
-
-	return &f->base.rq.submit;
+	f->vma_count++;
 }
 
 static inline int ack_lookup_cmp(const void *key, const struct rb_node *node)
@@ -786,10 +775,11 @@ remove_ack(struct i915_debugger *debugger, u64 seqno)
 static struct i915_debug_ack *
 create_ack(struct i915_debugger *debugger,
 	   const struct i915_debug_event *event,
-	   void *data,
+	   struct i915_vma *vma,
 	   gfp_t gfp)
 {
 	struct i915_debug_ack *ack;
+	int err = 0;
 
 	ack = kzalloc(sizeof(*ack), gfp);
 	if (!ack)
@@ -801,19 +791,31 @@ create_ack(struct i915_debugger *debugger,
 
 	switch (ack->event.type) {
 	case PRELIM_DRM_I915_DEBUG_EVENT_VM_BIND:
-		data = prepare_vm_bind_ack(ack, data, gfp);
+		if (!(ack->event.flags & PRELIM_DRM_I915_DEBUG_EVENT_CREATE)) {
+			err = -EINVAL;
+		} else {
+			struct debugger_fence *fence;
+
+			fence = create_debugger_fence(vma->vm->i915, gfp);
+			if (!fence) {
+				err = -ENOMEM;
+			} else {
+				vma_prepare_ack(fence, vma);
+				dma_fence_work_commit(&fence->base);
+				ack->fence = fence;
+			}
+		}
 		break;
 	default:
 		GEM_WARN_ON(ack->event.type);
-		data = ERR_PTR(-EINVAL);
+		err = -EINVAL;
 		break;
 	}
-	if (IS_ERR(data)) {
-		kfree(ack);
-		return data;
-	}
 
-	ack->event.ack_data = data;
+	if (err) {
+		kfree(ack);
+		ack = ERR_PTR(err);
+	}
 	return ack;
 }
 
@@ -1050,7 +1052,7 @@ static int debugger_resource_find(struct i915_debugger *debugger,
 
 static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 				      const struct i915_debug_event *event,
-				      void *ack_data,
+				      struct i915_vma *vma,
 				      gfp_t gfp)
 {
 	struct drm_i915_private * const i915 = debugger->i915;
@@ -1069,7 +1071,7 @@ static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
 		struct i915_debugger_resource *res;
 		int err;
 
-		err = debugger_resource_find(debugger, ack_data, &res, NULL);
+		err = debugger_resource_find(debugger, vma, &res, NULL);
 		if (err || IS_ERR_OR_NULL(res->vma.ack)) {
 			/* We just can't ignore not having ACK which was requested */
 			mutex_lock(&debugger->lock);
@@ -3192,7 +3194,7 @@ static int assign_vma_event(struct i915_debugger *debugger,
 		e->client_handle = client_handle;
 		e->vm_handle     = vm_handle;
 		e->va_start      = i915_vma_offset(vma);
-		e->va_length     = i915_vma_size(vma);
+		e->va_length     = i915_vma_size_from_segments(vma);
 		e->num_uuids	 = 0;
 		e->flags         = 0;
 		e->num_uuids     = 0;
@@ -3287,8 +3289,16 @@ static unsigned long discover_vma_count_ev_size(struct i915_vma *vma)
 {
 	struct i915_debug_event_vm_bind *e;
 	struct i915_vma_metadata *metadata;
-	size_t used = sizeof(*e);
+	size_t used;
 
+	/*
+	 * For segmented BO, discovery will only send single event
+	 * which is associated with the head vma only.
+	 */
+	if (i915_vma_is_trailing_segment(vma))
+		return 0;
+
+	used = sizeof(*e);
 	list_for_each_entry(metadata, &vma->metadata_list, vma_link)
 		used += sizeof(e->uuids[0]);
 
@@ -3339,11 +3349,15 @@ static void debugger_discover_vma(struct i915_debugger *debugger,
 
 		drm_mm_for_each_node(node, &vm->mm) {
 			struct i915_vma *vma = container_of(node, typeof(*vma), node);
+			size_t vma_used;
 
 			if (!i915_vma_is_persistent(vma))
 				continue;
 
-			used += discover_vma_count_ev_size(vma);
+			vma_used = discover_vma_count_ev_size(vma);
+			if (!vma_used)
+				continue;
+			used += vma_used;
 
 			if (used <= size) {
 				struct i915_debug_event *e = __ev;
@@ -3777,8 +3791,7 @@ debugger_discover_contexts(struct i915_debugger *debugger,
 		if (is_debugger_closed(debugger))
 			break;
 
-		ctx = i915_gem_context_get_rcu(ctx);
-		if (!ctx)
+		if (!i915_gem_context_get_rcu(ctx))
 			continue;
 
 		if (i915_gem_context_is_closed(ctx)) {
@@ -4967,6 +4980,7 @@ void i915_debugger_vma_finalize(struct i915_drm_client *client,
 
 		ev = from_event(ev, res->vma.event);
 
+		ev->va_length = i915_vma_size_from_segments(vma);
 		if (!ev->va_length || !ev->va_start)
 			goto out;
 
@@ -5046,7 +5060,7 @@ static int vma_queue_event(struct i915_debugger *debugger,
 	ev->client_handle = client_handle;
 	ev->vm_handle     = vm_handle;
 	ev->va_start      = i915_vma_offset(vma);
-	ev->va_length     = i915_vma_size(vma);
+	ev->va_length     = i915_vma_size_from_segments(vma);
 	ev->flags         = 0;
 	ev->num_uuids     = 0;
 
@@ -5074,11 +5088,20 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 	struct i915_debugger *debugger;
 	struct i915_debugger_resource *res;
 	struct i915_debug_event_vm_bind *ev;
+	struct i915_vma *event_vma = vma;
 	u32 handle;
 	int err = 0;
 
 	if (!i915_vma_is_persistent(vma))
 		return;
+
+	/*
+	 * For segmented BOs, we only send single create event. sub-vmas are
+	 * processed serially in vm_bind_ioctl, and the debugger resources
+	 * are associated with the head vma, which is vma->adjacent_start.
+	 */
+	if (i915_vma_is_segment(vma))
+		event_vma = vma->adjacent_start;
 
 	/**
 	 * Do not wait for discovery since in this function
@@ -5090,7 +5113,7 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 	if (!debugger)
 		return;
 
-	err = debugger_resource_vma_handle(debugger, vma, &handle);
+	err = debugger_resource_vma_handle(debugger, event_vma, &handle);
 	if (err == -ENOENT) {
 		err = 0;
                 goto out;
@@ -5098,7 +5121,7 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 
 	if (err) {
 		DD_WARN_ON_CONNECTED(debugger, err,
-				     "Handle not found for vma %px. Err %d\n", vma->vm, err);
+				     "Handle not found for vma %px. Err %d\n", event_vma->vm, err);
 		goto out;
 	}
 
@@ -5123,13 +5146,18 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 
 	ev = from_event(ev, res->vma.event);
 
-	ev->va_start  = i915_vma_offset(vma);
-	ev->va_length = i915_vma_size(vma);
+	if (event_vma == vma) {
+		ev->va_start  = i915_vma_offset(vma);
 
-	res->vma.ack = create_ack(debugger, res->vma.event, vma, GFP_ATOMIC);
-	if (IS_ERR(res->vma.ack)) {
-		err = PTR_ERR(res->vma.ack);
-		goto out;
+		res->vma.ack = create_ack(debugger, res->vma.event, vma,
+					  GFP_ATOMIC);
+		if (IS_ERR(res->vma.ack)) {
+			err = PTR_ERR(res->vma.ack);
+			goto out;
+		}
+	} else {
+		GEM_BUG_ON(!res->vma.ack);
+		vma_prepare_ack(res->vma.ack->fence, vma);
 	}
 
 	i915_debugger_put(debugger);
@@ -5147,6 +5175,10 @@ static int debugger_vma_evict(struct i915_debugger *debugger,
 {
 	u64 seqno;
 	int err;
+
+	/* For segmented BO, only head vma sends destroy event */
+	if (i915_vma_is_trailing_segment(vma))
+		return 0;
 
 	err = debugger_resource_find_del(debugger, vma, NULL, &seqno);
 	if (err)
@@ -5710,7 +5742,7 @@ long i915_debugger_attention_poll_interval(struct intel_engine_cs *engine)
 
 	if (intel_engine_has_eu_attention(engine) &&
 	    !list_empty(&engine->i915->debuggers.list))
-		delay = i915_DEBUGGER_ATTENTION_INTERVAL;
+		delay = ADJUST_TIMEOUT(i915_DEBUGGER_ATTENTION_INTERVAL);
 
 	return delay;
 }

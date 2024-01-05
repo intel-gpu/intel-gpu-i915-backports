@@ -8,12 +8,14 @@
 
 #include <linux/types.h>
 
+struct drm_i915_private;
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+
 enum intel_output_format;
 enum pipe;
 enum port;
 struct drm_connector_state;
 struct drm_encoder;
-struct drm_i915_private;
 struct drm_modeset_acquire_ctx;
 struct drm_dp_vsc_sdp;
 struct intel_atomic_state;
@@ -137,5 +139,8 @@ void intel_dp_pcon_dsc_configure(struct intel_dp *intel_dp,
 void intel_dp_phy_test(struct intel_encoder *encoder);
 
 void intel_dp_wait_source_oui(struct intel_dp *intel_dp);
-
+#else
+static inline void intel_dp_mst_suspend(struct drm_i915_private *dev_priv) { return; }
+static inline void intel_dp_mst_resume(struct drm_i915_private *dev_priv) { return; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_DP_H__ */

@@ -143,6 +143,9 @@ static inline const char *hxg_type_to_string(u32 type)
 #define	  GUC_LOG_VERBOSITY_MIN		0
 #define	  GUC_LOG_VERBOSITY_MAX		3
 #define	  GUC_LOG_VERBOSITY_MASK	0x0000000f
+#define	  GUC_LOG_DESTINATION_MEM		0
+#define	  GUC_LOG_DESTINATION_NPK		1
+#define	  GUC_LOG_DESTINATION_MEM_AND_NPK	2
 #define	  GUC_LOG_DESTINATION_MASK	(3 << 4)
 #define   GUC_LOG_DISABLED		(1 << 6)
 #define   GUC_PROFILE_ENABLED		(1 << 7)

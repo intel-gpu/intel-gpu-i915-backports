@@ -48,6 +48,7 @@
 #include "display/intel_fbc.h"
 #include "display/vlv_dsi_pll_regs.h"
 #include "gt/intel_gt_regs.h"
+#include "display/intel_dpll_mgr.h"
 
 /* XXX FIXME i915 has changed PP_XXX definition */
 #define PCH_PP_STATUS  _MMIO(0xc7200)
@@ -468,6 +469,7 @@ static int dpy_reg_mmio_read(struct intel_vgpu *vgpu, unsigned int offset,
  *   Link M/N = strm_clk / ls_clk
  */
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static u32 bdw_vgpu_get_dp_bitrate(struct intel_vgpu *vgpu, enum port port)
 {
 	u32 dp_br = 0;
@@ -724,6 +726,7 @@ static int pipeconf_mmio_write(struct intel_vgpu *vgpu, unsigned int offset,
 	return 0;
 }
 
+#endif
 /* sorted in ascending order */
 static i915_reg_t force_nonpriv_white_list[] = {
 	_MMIO(0xd80),
@@ -2300,11 +2303,13 @@ static int init_generic_mmio_info(struct intel_gvt *gvt)
 	MMIO_D(PIPEDSL(PIPE_C), D_ALL);
 	MMIO_D(PIPEDSL(_PIPE_EDP), D_ALL);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	MMIO_DH(PIPECONF(PIPE_A), D_ALL, NULL, pipeconf_mmio_write);
 	MMIO_DH(PIPECONF(PIPE_B), D_ALL, NULL, pipeconf_mmio_write);
 	MMIO_DH(PIPECONF(PIPE_C), D_ALL, NULL, pipeconf_mmio_write);
 	MMIO_DH(PIPECONF(_PIPE_EDP), D_ALL, NULL, pipeconf_mmio_write);
 
+#endif
 	MMIO_D(PIPESTAT(PIPE_A), D_ALL);
 	MMIO_D(PIPESTAT(PIPE_B), D_ALL);
 	MMIO_D(PIPESTAT(PIPE_C), D_ALL);

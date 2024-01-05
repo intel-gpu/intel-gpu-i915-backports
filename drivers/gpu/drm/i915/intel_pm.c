@@ -62,12 +62,17 @@
 #include "vlv_sideband.h"
 #include "../../../platform/x86/intel_ips.h"
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void skl_sagv_disable(struct drm_i915_private *dev_priv);
+#else
+static void skl_sagv_disable(struct drm_i915_private *dev_priv) {}
+#endif
 
 struct drm_i915_clock_gating_funcs {
 	void (*init_clock_gating)(struct drm_i915_private *i915);
 };
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 /* Stores plane specific WM parameters */
 struct skl_wm_params {
 	bool x_tiled, y_tiled;
@@ -90,6 +95,8 @@ struct intel_wm_config {
 	bool sprites_enabled;
 	bool sprites_scaled;
 };
+#endif
+
 
 static void gen9_init_clock_gating(struct drm_i915_private *dev_priv)
 {
@@ -122,6 +129,190 @@ static void gen9_init_clock_gating(struct drm_i915_private *dev_priv)
 		   DISP_FBC_MEMORY_WAKE);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+static void display_bxt_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * WaFbcTurnOffFbcWatermark:bxt
+	 * Display WA #0562: bxt
+	 */
+	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore,
+				DISP_ARB_CTL) | DISP_FBC_WM_DIS);
+
+	/*
+	 * WaFbcHighMemBwCorruptionAvoidance:bxt
+	 * Display WA #0883: bxt
+	 */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
+			   DPFC_DISABLE_DUMMY0);
+}
+
+static void display_lpt_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/* WADPOClockGatingDisable:hsw */
+	intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN1(PIPE_A),
+		   intel_uncore_read(&dev_priv->uncore, TRANS_CHICKEN1(PIPE_A)) |
+		   TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
+}
+
+static void display_icl_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/* Wa_1409120013:icl,ehl */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   DPFC_CHICKEN_COMP_DUMMY_PIXEL);
+}
+
+static void display_cfl_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * WaFbcTurnOffFbcWatermark:cfl
+	 * Display WA #0562: cfl
+	 */
+	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore,
+			DISP_ARB_CTL) | DISP_FBC_WM_DIS);
+
+	/*
+	 * WaFbcNukeOnHostModify:cfl
+	 * Display WA #0873: cfl
+	 */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
+			   DPFC_NUKE_ON_ANY_MODIFICATION);
+
+}
+
+static void display_kbl_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * WaFbcTurnOffFbcWatermark:kbl
+	 * Display WA #0562: kbl
+	 */
+	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore,
+			DISP_ARB_CTL) | DISP_FBC_WM_DIS);
+
+	/*
+	 * WaFbcNukeOnHostModify:kbl
+	 * Display WA #0873: kbl
+	 */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
+			   DPFC_NUKE_ON_ANY_MODIFICATION);
+}
+
+static void display_skl_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * WaFbcTurnOffFbcWatermark:skl
+	 * Display WA #0562: skl
+	 */
+	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore,
+				DISP_ARB_CTL) | DISP_FBC_WM_DIS);
+
+	/*
+	 * WaFbcNukeOnHostModify:skl
+	 * Display WA #0873: skl
+	 */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
+			   DPFC_NUKE_ON_ANY_MODIFICATION);
+
+	/*
+	 * WaFbcHighMemBwCorruptionAvoidance:skl
+	 * Display WA #0883: skl
+	 */
+	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
+			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
+			   DPFC_DISABLE_DUMMY0);
+}
+
+static void display_hsw_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/* WaFbcAsynchFlipDisableFbcQueue:hsw,bdw */
+	intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A),
+		   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A)) |
+		   HSW_FBCQ_DIS);
+}
+
+static void display_vlv_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * WaDisableVLVClockGating_VBIIssue:vlv
+	 * Disable clock gating on th GCFG unit to prevent a delay
+	 * in the reporting of vblank events.
+	 */
+	intel_uncore_write(&dev_priv->uncore, VLV_GUNIT_CLOCK_GATE, GCFG_DIS);
+}
+
+static void display_g4x_init_clock_gating(struct drm_i915_private *dev_priv, u32 dspclk_gate)
+{
+	intel_uncore_write(&dev_priv->uncore, DSPCLK_GATE_D, dspclk_gate);
+}
+
+static void display_cpt_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	enum pipe pipe;
+	u32 val;
+
+	for_each_pipe(dev_priv, pipe) {
+		val = intel_uncore_read(&dev_priv->uncore, TRANS_CHICKEN2(pipe));
+		val |= TRANS_CHICKEN2_TIMING_OVERRIDE;
+		val &= ~TRANS_CHICKEN2_FDI_POLARITY_REVERSED;
+		if (dev_priv->vbt.fdi_rx_polarity_inverted)
+			val |= TRANS_CHICKEN2_FDI_POLARITY_REVERSED;
+		val &= ~TRANS_CHICKEN2_DISABLE_DEEP_COLOR_COUNTER;
+		val &= ~TRANS_CHICKEN2_DISABLE_DEEP_COLOR_MODESWITCH;
+		intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN2(pipe), val);
+	}
+	/* WADP0ClockGatingDisable */
+	for_each_pipe(dev_priv, pipe) {
+		intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN1(pipe),
+			   TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
+	}
+}
+
+static void display_bdw_init_clock_gating_b(struct drm_i915_private *dev_priv)
+{
+	enum pipe pipe;
+
+	for_each_pipe(dev_priv, pipe) {
+		/* WaPsrDPRSUnmaskVBlankInSRD:bdw */
+		intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(pipe),
+			   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(pipe)) |
+			   BDW_DPRS_MASK_VBLANK_SRD);
+	}
+}
+
+static void display_bdw_init_clock_gating_a(struct drm_i915_private *dev_priv)
+{
+	/* WaFbcAsynchFlipDisableFbcQueue:hsw,bdw */
+	intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A),
+		   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A)) |
+		   HSW_FBCQ_DIS);
+}
+
+static void display_i965gm_init_clock_gating(struct drm_i915_private *dev_priv)
+{
+	struct intel_uncore *uncore = &dev_priv->uncore;
+
+	intel_uncore_write(uncore, DSPCLK_GATE_D, 0);
+}
+#else
+static void display_bxt_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_lpt_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_icl_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_cfl_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_kbl_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_skl_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_hsw_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_vlv_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_g4x_init_clock_gating(struct drm_i915_private *dev_priv, u32 dspclk_gate) {}
+static void display_cpt_init_clock_gating(struct drm_i915_private *dev_priv) {}
+static void display_bdw_init_clock_gating_a(struct drm_i915_private *dev_priv) {}
+static void display_bdw_init_clock_gating_b(struct drm_i915_private *dev_priv) {}
+static void display_i965gm_init_clock_gating(struct drm_i915_private *dev_priv) {}
+#endif
+
 static void bxt_init_clock_gating(struct drm_i915_private *dev_priv)
 {
 	gen9_init_clock_gating(dev_priv);
@@ -152,20 +343,7 @@ static void bxt_init_clock_gating(struct drm_i915_private *dev_priv)
 	 */
 	intel_uncore_write(&dev_priv->uncore, RM_TIMEOUT, MMIO_TIMEOUT_US(950));
 
-	/*
-	 * WaFbcTurnOffFbcWatermark:bxt
-	 * Display WA #0562: bxt
-	 */
-	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore, DISP_ARB_CTL) |
-		   DISP_FBC_WM_DIS);
-
-	/*
-	 * WaFbcHighMemBwCorruptionAvoidance:bxt
-	 * Display WA #0883: bxt
-	 */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
-			   DPFC_DISABLE_DUMMY0);
+	display_bxt_init_clock_gating(dev_priv);
 }
 
 static void glk_init_clock_gating(struct drm_i915_private *dev_priv)
@@ -276,6 +454,7 @@ static void ilk_get_mem_freq(struct drm_i915_private *dev_priv)
 	}
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static const struct cxsr_latency cxsr_latency_table[] = {
 	{1, 0, 800, 400, 3382, 33382, 3983, 33983},    /* DDR2-400 SC */
 	{1, 0, 800, 667, 3354, 33354, 3807, 33807},    /* DDR2-667 SC */
@@ -2603,6 +2782,7 @@ struct ilk_wm_maximums {
  * For both WM_PIPE and WM_LP.
  * mem_value must be in 0.1us units.
  */
+
 static u32 ilk_compute_pri_wm(const struct intel_crtc_state *crtc_state,
 			      const struct intel_plane_state *plane_state,
 			      u32 mem_value, bool is_lp)
@@ -2630,7 +2810,6 @@ static u32 ilk_compute_pri_wm(const struct intel_crtc_state *crtc_state,
 
 	return min(method1, method2);
 }
-
 /*
  * For both WM_PIPE and WM_LP.
  * mem_value must be in 0.1us units.
@@ -3712,15 +3891,16 @@ u8 intel_enabled_dbuf_slices_mask(struct drm_i915_private *dev_priv)
 
 	return enabled_slices;
 }
-
 /*
  * FIXME: We still don't have the proper code detect if we need to apply the WA,
  * so assume we'll always need it in order to avoid underruns.
  */
+
 static bool skl_needs_memory_bw_wa(struct drm_i915_private *dev_priv)
 {
 	return DISPLAY_VER(dev_priv) == 9;
 }
+#endif
 
 static bool
 intel_has_sagv(struct drm_i915_private *dev_priv)
@@ -3800,6 +3980,7 @@ static void intel_sagv_init(struct drm_i915_private *i915)
  *  - All planes can enable watermarks for latencies >= SAGV engine block time
  *  - We're not using an interlaced display configuration
  */
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void skl_sagv_enable(struct drm_i915_private *dev_priv)
 {
 	int ret;
@@ -7645,6 +7826,7 @@ void intel_pmdemand_post_plane_update(struct intel_atomic_state *state)
 
 	intel_program_pmdemand(dev_priv, new_pmdmnd_state, NULL);
 }
+#endif
 
 void intel_enable_ipc(struct drm_i915_private *dev_priv)
 {
@@ -7663,6 +7845,7 @@ void intel_enable_ipc(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL2, val);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static bool intel_can_enable_ipc(struct drm_i915_private *dev_priv)
 {
 	/* Display WA #0477 WaDisableIPC: skl */
@@ -7677,6 +7860,9 @@ static bool intel_can_enable_ipc(struct drm_i915_private *dev_priv)
 
 	return true;
 }
+#else
+static bool intel_can_enable_ipc(struct drm_i915_private *dev_priv) { return false; }
+#endif
 
 void intel_init_ipc(struct drm_i915_private *dev_priv)
 {
@@ -7698,6 +7884,7 @@ static void ibx_init_clock_gating(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, SOUTH_DSPCLK_GATE_D, PCH_DPLSUNIT_CLOCK_GATE_DISABLE);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void g4x_disable_trickle_feed(struct drm_i915_private *dev_priv)
 {
 	enum pipe pipe;
@@ -7711,6 +7898,10 @@ static void g4x_disable_trickle_feed(struct drm_i915_private *dev_priv)
 		intel_uncore_posting_read(&dev_priv->uncore, DSPSURF(pipe));
 	}
 }
+
+#else
+static void g4x_disable_trickle_feed(struct drm_i915_private *dev_priv) {}
+#endif
 
 static void ilk_init_clock_gating(struct drm_i915_private *dev_priv)
 {
@@ -7775,8 +7966,6 @@ static void ilk_init_clock_gating(struct drm_i915_private *dev_priv)
 
 static void cpt_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	enum pipe pipe;
-	u32 val;
 
 	/*
 	 * On Ibex Peak and Cougar Point, we need to disable clock
@@ -7791,21 +7980,7 @@ static void cpt_init_clock_gating(struct drm_i915_private *dev_priv)
 	/* The below fixes the weird display corruption, a few pixels shifted
 	 * downward, on (only) LVDS of some HP laptops with IVY.
 	 */
-	for_each_pipe(dev_priv, pipe) {
-		val = intel_uncore_read(&dev_priv->uncore, TRANS_CHICKEN2(pipe));
-		val |= TRANS_CHICKEN2_TIMING_OVERRIDE;
-		val &= ~TRANS_CHICKEN2_FDI_POLARITY_REVERSED;
-		if (dev_priv->vbt.fdi_rx_polarity_inverted)
-			val |= TRANS_CHICKEN2_FDI_POLARITY_REVERSED;
-		val &= ~TRANS_CHICKEN2_DISABLE_DEEP_COLOR_COUNTER;
-		val &= ~TRANS_CHICKEN2_DISABLE_DEEP_COLOR_MODESWITCH;
-		intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN2(pipe), val);
-	}
-	/* WADP0ClockGatingDisable */
-	for_each_pipe(dev_priv, pipe) {
-		intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN1(pipe),
-			   TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
-	}
+	display_cpt_init_clock_gating(dev_priv);
 }
 
 static void gen6_check_mch_setup(struct drm_i915_private *dev_priv)
@@ -7891,10 +8066,7 @@ static void lpt_init_clock_gating(struct drm_i915_private *dev_priv)
 			   intel_uncore_read(&dev_priv->uncore, SOUTH_DSPCLK_GATE_D) |
 			   PCH_LP_PARTITION_LEVEL_DISABLE);
 
-	/* WADPOClockGatingDisable:hsw */
-	intel_uncore_write(&dev_priv->uncore, TRANS_CHICKEN1(PIPE_A),
-		   intel_uncore_read(&dev_priv->uncore, TRANS_CHICKEN1(PIPE_A)) |
-		   TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
+	display_lpt_init_clock_gating(dev_priv);
 }
 
 static void lpt_suspend_hw(struct drm_i915_private *dev_priv)
@@ -7935,15 +8107,15 @@ static void gen8_set_l3sqc_credits(struct drm_i915_private *dev_priv,
 
 static void icl_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	/* Wa_1409120013:icl,ehl */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   DPFC_CHICKEN_COMP_DUMMY_PIXEL);
+
+	display_icl_init_clock_gating(dev_priv);
 
 	/*Wa_14010594013:icl, ehl */
 	intel_uncore_rmw(&dev_priv->uncore, GEN8_CHICKEN_DCPR_1,
 			 0, ICL_DELAY_PMRSP);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void gen12lp_init_clock_gating(struct drm_i915_private *dev_priv)
 {
 	/* Wa_1409120013 */
@@ -7956,6 +8128,9 @@ static void gen12lp_init_clock_gating(struct drm_i915_private *dev_priv)
 		intel_uncore_rmw(&dev_priv->uncore, CLKREQ_POLICY,
 				 CLKREQ_POLICY_MEM_UP_OVRD, 0);
 }
+#else
+static void gen12lp_init_clock_gating(struct drm_i915_private *dev_priv) {}
+#endif
 
 static void adlp_init_clock_gating(struct drm_i915_private *dev_priv)
 {
@@ -8020,20 +8195,7 @@ static void cfl_init_clock_gating(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, FBC_LLC_READ_CTRL, intel_uncore_read(&dev_priv->uncore, FBC_LLC_READ_CTRL) |
 		   FBC_LLC_FULLY_OPEN);
 
-	/*
-	 * WaFbcTurnOffFbcWatermark:cfl
-	 * Display WA #0562: cfl
-	 */
-	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore, DISP_ARB_CTL) |
-		   DISP_FBC_WM_DIS);
-
-	/*
-	 * WaFbcNukeOnHostModify:cfl
-	 * Display WA #0873: cfl
-	 */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
-			   DPFC_NUKE_ON_ANY_MODIFICATION);
+	display_cfl_init_clock_gating(dev_priv);
 }
 
 static void kbl_init_clock_gating(struct drm_i915_private *dev_priv)
@@ -8054,20 +8216,7 @@ static void kbl_init_clock_gating(struct drm_i915_private *dev_priv)
 		intel_uncore_write(&dev_priv->uncore, GEN6_UCGCTL1, intel_uncore_read(&dev_priv->uncore, GEN6_UCGCTL1) |
 			   GEN6_GAMUNIT_CLOCK_GATE_DISABLE);
 
-	/*
-	 * WaFbcTurnOffFbcWatermark:kbl
-	 * Display WA #0562: kbl
-	 */
-	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore, DISP_ARB_CTL) |
-		   DISP_FBC_WM_DIS);
-
-	/*
-	 * WaFbcNukeOnHostModify:kbl
-	 * Display WA #0873: kbl
-	 */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
-			   DPFC_NUKE_ON_ANY_MODIFICATION);
+	display_kbl_init_clock_gating(dev_priv);
 }
 
 static void skl_init_clock_gating(struct drm_i915_private *dev_priv)
@@ -8082,52 +8231,21 @@ static void skl_init_clock_gating(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, FBC_LLC_READ_CTRL, intel_uncore_read(&dev_priv->uncore, FBC_LLC_READ_CTRL) |
 		   FBC_LLC_FULLY_OPEN);
 
-	/*
-	 * WaFbcTurnOffFbcWatermark:skl
-	 * Display WA #0562: skl
-	 */
-	intel_uncore_write(&dev_priv->uncore, DISP_ARB_CTL, intel_uncore_read(&dev_priv->uncore, DISP_ARB_CTL) |
-		   DISP_FBC_WM_DIS);
-
-	/*
-	 * WaFbcNukeOnHostModify:skl
-	 * Display WA #0873: skl
-	 */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
-			   DPFC_NUKE_ON_ANY_MODIFICATION);
-
-	/*
-	 * WaFbcHighMemBwCorruptionAvoidance:skl
-	 * Display WA #0883: skl
-	 */
-	intel_uncore_write(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A),
-			   intel_uncore_read(&dev_priv->uncore, ILK_DPFC_CHICKEN(INTEL_FBC_A)) |
-			   DPFC_DISABLE_DUMMY0);
+	display_skl_init_clock_gating(dev_priv);
 }
 
 static void bdw_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	enum pipe pipe;
-
-	/* WaFbcAsynchFlipDisableFbcQueue:hsw,bdw */
-	intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A),
-		   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A)) |
-		   HSW_FBCQ_DIS);
+	display_bdw_init_clock_gating_a(dev_priv);
 
 	/* WaSwitchSolVfFArbitrationPriority:bdw */
 	intel_uncore_write(&dev_priv->uncore, GAM_ECOCHK, intel_uncore_read(&dev_priv->uncore, GAM_ECOCHK) | HSW_ECOCHK_ARB_PRIO_SOL);
 
 	/* WaPsrDPAMaskVBlankInSRD:bdw */
 	intel_uncore_write(&dev_priv->uncore, CHICKEN_PAR1_1,
-		   intel_uncore_read(&dev_priv->uncore, CHICKEN_PAR1_1) | DPA_MASK_VBLANK_SRD);
+	intel_uncore_read(&dev_priv->uncore, CHICKEN_PAR1_1) | DPA_MASK_VBLANK_SRD);
 
-	for_each_pipe(dev_priv, pipe) {
-		/* WaPsrDPRSUnmaskVBlankInSRD:bdw */
-		intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(pipe),
-			   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(pipe)) |
-			   BDW_DPRS_MASK_VBLANK_SRD);
-	}
+	display_bdw_init_clock_gating_b(dev_priv);
 
 	/* WaVSRefCountFullforceMissDisable:bdw */
 	/* WaDSRefCountFullforceMissDisable:bdw */
@@ -8162,10 +8280,7 @@ static void bdw_init_clock_gating(struct drm_i915_private *dev_priv)
 
 static void hsw_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	/* WaFbcAsynchFlipDisableFbcQueue:hsw,bdw */
-	intel_uncore_write(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A),
-		   intel_uncore_read(&dev_priv->uncore, CHICKEN_PIPESL_1(PIPE_A)) |
-		   HSW_FBCQ_DIS);
+	display_hsw_init_clock_gating(dev_priv);
 
 	/* This is required by WaCatErrorRejectionIssue:hsw */
 	intel_uncore_write(&dev_priv->uncore, GEN7_SQ_CHICKEN_MBCUNIT_CONFIG,
@@ -8259,12 +8374,7 @@ static void vlv_init_clock_gating(struct drm_i915_private *dev_priv)
 	intel_uncore_write(&dev_priv->uncore, GEN7_UCGCTL4,
 		   intel_uncore_read(&dev_priv->uncore, GEN7_UCGCTL4) | GEN7_L3BANK2X_CLOCK_GATE_DISABLE);
 
-	/*
-	 * WaDisableVLVClockGating_VBIIssue:vlv
-	 * Disable clock gating on th GCFG unit to prevent a delay
-	 * in the reporting of vblank events.
-	 */
-	intel_uncore_write(&dev_priv->uncore, VLV_GUNIT_CLOCK_GATE, GCFG_DIS);
+	display_vlv_init_clock_gating(dev_priv);
 }
 
 static void chv_init_clock_gating(struct drm_i915_private *dev_priv)
@@ -8309,8 +8419,7 @@ static void g4x_init_clock_gating(struct drm_i915_private *dev_priv)
 		OVCUNIT_CLOCK_GATE_DISABLE;
 	if (IS_GM45(dev_priv))
 		dspclk_gate |= DSSUNIT_CLOCK_GATE_DISABLE;
-	intel_uncore_write(&dev_priv->uncore, DSPCLK_GATE_D, dspclk_gate);
-
+	display_g4x_init_clock_gating(dev_priv, dspclk_gate);
 	g4x_disable_trickle_feed(dev_priv);
 }
 
@@ -8320,7 +8429,7 @@ static void i965gm_init_clock_gating(struct drm_i915_private *dev_priv)
 
 	intel_uncore_write(uncore, RENCLK_GATE_D1, I965_RCC_CLOCK_GATE_DISABLE);
 	intel_uncore_write(uncore, RENCLK_GATE_D2, 0);
-	intel_uncore_write(uncore, DSPCLK_GATE_D, 0);
+	display_i965gm_init_clock_gating(dev_priv);
 	intel_uncore_write(uncore, RAMCLK_GATE_D, 0);
 	intel_uncore_write16(uncore, DEUC, 0);
 	intel_uncore_write(uncore,
@@ -8511,6 +8620,7 @@ void intel_init_clock_gating_hooks(struct drm_i915_private *dev_priv)
 	}
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static const struct drm_i915_wm_disp_funcs skl_wm_funcs = {
 	.compute_global_watermarks = skl_compute_wm,
 };
@@ -8556,23 +8666,8 @@ static const struct drm_i915_wm_disp_funcs i845_wm_funcs = {
 static const struct drm_i915_wm_disp_funcs nop_funcs = {
 };
 
-/* Set up chip specific power management-related functions */
-void intel_init_pm(struct drm_i915_private *dev_priv)
+static void display_intel_init_pm(struct drm_i915_private *dev_priv)
 {
-	if (IS_SRIOV_VF(dev_priv)) {
-		/* XXX */
-		dev_priv->wm_disp = &skl_wm_funcs;
-		return;
-	}
-
-	/* For cxsr */
-	if (IS_PINEVIEW(dev_priv))
-		pnv_get_mem_freq(dev_priv);
-	else if (GRAPHICS_VER(dev_priv) == 5)
-		ilk_get_mem_freq(dev_priv);
-
-	intel_sagv_init(dev_priv);
-
 	/* For FIFO watermark updates */
 	if (DISPLAY_VER(dev_priv) >= 9) {
 		skl_setup_wm_latency(dev_priv);
@@ -8628,6 +8723,31 @@ void intel_init_pm(struct drm_i915_private *dev_priv)
 		dev_priv->wm_disp = &nop_funcs;
 	}
 }
+#else
+static void display_intel_init_pm(struct drm_i915_private *dev_priv) {}
+#endif
+
+/* Set up chip specific power management-related functions */
+void intel_init_pm(struct drm_i915_private *dev_priv)
+{
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+	if (IS_SRIOV_VF(dev_priv)) {
+		/* XXX */
+		dev_priv->wm_disp = &skl_wm_funcs;
+		return;
+	}
+#endif
+
+	/* For cxsr */
+	if (IS_PINEVIEW(dev_priv))
+		pnv_get_mem_freq(dev_priv);
+	else if (GRAPHICS_VER(dev_priv) == 5)
+		ilk_get_mem_freq(dev_priv);
+
+	intel_sagv_init(dev_priv);
+
+	display_intel_init_pm(dev_priv);
+}
 
 void intel_pm_setup(struct drm_i915_private *dev_priv)
 {
@@ -8635,6 +8755,7 @@ void intel_pm_setup(struct drm_i915_private *dev_priv)
 	atomic_set(&dev_priv->runtime_pm.wakeref_count, 0);
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static struct intel_global_state *intel_dbuf_duplicate_state(struct intel_global_obj *obj)
 {
 	struct intel_dbuf_state *dbuf_state;
@@ -8783,7 +8904,6 @@ static bool xelpdp_is_one_pipe_per_dbuf_bank(enum pipe pipe, u8 active_pipes)
 
 	return false;
 }
-
 void intel_mbus_dbox_update(struct intel_atomic_state *state)
 {
 	struct drm_i915_private *i915 = to_i915(state->base.dev);
@@ -8853,3 +8973,4 @@ void intel_mbus_dbox_update(struct intel_atomic_state *state)
 		intel_de_write(i915, PIPE_MBUS_DBOX_CTL(crtc->pipe), pipe_val);
 	}
 }
+#endif

@@ -350,8 +350,8 @@ static int igt_partial_tiling(void *arg)
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 
 	if (1) {
+		struct tile tile = {};
 		IGT_TIMEOUT(end);
-		struct tile tile;
 
 		tile.height = 1;
 		tile.width = 1;
@@ -366,10 +366,10 @@ static int igt_partial_tiling(void *arg)
 	}
 
 	for (tiling = I915_TILING_X; tiling <= I915_TILING_Y; tiling++) {
-		IGT_TIMEOUT(end);
+		struct tile tile = {};
 		unsigned int max_pitch;
 		unsigned int pitch;
-		struct tile tile;
+		IGT_TIMEOUT(end);
 
 		if (i915->gem_quirks & GEM_QUIRK_PIN_SWIZZLED_PAGES)
 			/*
@@ -488,7 +488,7 @@ static int igt_smoke_tiling(void *arg)
 
 	count = 0;
 	do {
-		struct tile tile;
+		struct tile tile = {};
 
 		tile.tiling =
 			i915_prandom_u32_max_state(I915_TILING_Y + 1, &prng);
@@ -496,8 +496,6 @@ static int igt_smoke_tiling(void *arg)
 		case I915_TILING_NONE:
 			tile.height = 1;
 			tile.width = 1;
-			tile.size = 0;
-			tile.stride = 0;
 			tile.swizzle = I915_BIT_6_SWIZZLE_NONE;
 			break;
 
@@ -1199,8 +1197,8 @@ retry:
 		err = i915_request_await_object(rq, vma->obj, false);
 		if (err == 0)
 			err = i915_vma_move_to_active(vma, rq, 0);
-
-		err = engine->emit_bb_start(rq, i915_vma_offset(vma), 0, 0);
+		if (err == 0)
+			err = engine->emit_bb_start(rq, i915_vma_offset(vma), 0, 0);
 		i915_request_get(rq);
 		i915_request_add(rq);
 

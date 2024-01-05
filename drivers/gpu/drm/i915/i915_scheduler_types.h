@@ -181,6 +181,18 @@ struct i915_sched_engine {
 	 */
 	void *private_data;
 
+	/*
+	 * Keep track of an unordered wq for each engine, and restrict it a
+	 * subset of CPUs. For example, when used on a NUMA system we want to
+	 * keep our work close to the device, on the same cores attached to
+	 * the same pci domain as the device. Both the cpu, system memory and
+	 * device will all be within the same NUMA node, limiting the amount
+	 * of slower cross-node traffic.
+	 */
+	struct workqueue_struct *wq;
+	const struct cpumask *cpumask;
+	int cpu;
+
 	/**
 	 * @destroy: destroy schedule engine / cleanup in backend
 	 */

@@ -31,9 +31,17 @@ static inline struct drm_i915_private *slpc_to_i915(struct intel_guc_slpc *slpc)
 
 static bool __detect_slpc_supported(struct intel_guc *guc)
 {
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+
+	if (!i915->params.enable_rps)
+		return false;
+
+	if (i915_modparams.force_host_pm)
+		return false;
+
 	/* GuC SLPC is unavailable for pre-Gen12 */
 	return guc->submission_supported &&
-		GRAPHICS_VER(guc_to_gt(guc)->i915) >= 12;
+		GRAPHICS_VER(i915) >= 12;
 }
 
 static bool __guc_slpc_selected(struct intel_guc *guc)

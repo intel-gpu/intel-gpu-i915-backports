@@ -121,6 +121,7 @@ struct intel_memory_region {
 	enum intel_region_id id;
 	char name[16];
 	struct intel_gt *gt; /* GT closest to this region. */
+	int interleave;
 	u64 memtest;
 
 	struct list_head reserved;

@@ -627,7 +627,7 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 		err = -ENODEV;
 
 	if (unlikely(err))
-		DRM_ERROR("CT: fence %u err %d\n", req->fence, err);
+		CT_ERROR(ct, "fence %u err %d\n", req->fence, err);
 
 	intel_boost_fake_int_timer(guc_to_gt(ct_to_guc(ct)), false);
 
@@ -638,7 +638,7 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 #define GUC_CTB_TIMEOUT_MS	1500
 static inline bool ct_deadlocked(struct intel_guc_ct *ct)
 {
-	long timeout = GUC_CTB_TIMEOUT_MS;
+	long timeout = GUC_CTB_TIMEOUT_MS * GET_MULTIPLIER(1);
 	bool ret = ktime_ms_delta(ktime_get(), ct->stall_time) > timeout;
 
 	if (unlikely(ret)) {

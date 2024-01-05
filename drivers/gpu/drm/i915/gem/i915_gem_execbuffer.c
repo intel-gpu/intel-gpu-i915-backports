@@ -257,7 +257,6 @@ struct i915_execbuffer {
 	struct intel_gt *gt; /* gt for the execbuf */
 	struct intel_context *context; /* logical state for the request */
 	struct i915_gem_context *gem_context; /** caller's context */
-	intel_wakeref_t wakeref;
 
 	/** our requests to build */
 	struct i915_request *requests[MAX_ENGINE_INSTANCE + 1];
@@ -1209,12 +1208,19 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 
 			GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
 		}
+#ifdef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
+		/* Reserve enough slots to accommodate composite fences */
+		err = dma_resv_reserve_shared(vma->resv, eb->num_batches);
+		if (err)
+			return err;
+#else
 
 		if (!(ev->flags & EXEC_OBJECT_WRITE)) {
 			err = dma_resv_reserve_shared(vma->resv, 1);
 			if (err)
 				return err;
 		}
+#endif
 
 		GEM_BUG_ON(drm_mm_node_allocated(&vma->node) &&
 			   eb_vma_misplaced(&eb->exec[i], vma, ev->flags));
@@ -2933,6 +2939,14 @@ static const enum intel_engine_id user_ring_map_wo_rcs[] = {
 	[I915_EXEC_VEBOX]	= VECS0
 };
 
+static const enum intel_engine_id user_ring_map_wo_rcs_ccs[] = {
+	[I915_EXEC_DEFAULT]	= BCS0,
+	[I915_EXEC_RENDER]	= INVALID_ENGINE,
+	[I915_EXEC_BLT]		= BCS0,
+	[I915_EXEC_BSD]		= VCS0,
+	[I915_EXEC_VEBOX]	= VECS0
+};
+
 static struct i915_request *eb_throttle(struct intel_context *ce)
 {
 	struct intel_ring *ring = ce->ring;
@@ -3139,6 +3153,8 @@ eb_select_legacy_ring(struct i915_execbuffer *eb)
 		}
 
 		idx =  _VCS(bsd_idx);
+	} else if (!CCS_MASK(to_gt(i915)) && !RCS_MASK(to_gt(i915))) {
+		idx = user_ring_map_wo_rcs_ccs[user_ring_id];
 	} else if (!RCS_MASK(to_gt(i915))) {
 		idx = user_ring_map_wo_rcs[user_ring_id];
 	} else {
@@ -3208,7 +3224,6 @@ eb_select_engine(struct i915_execbuffer *eb)
 
 	for_each_child(ce, child)
 		intel_context_get(child);
-	eb->wakeref = intel_gt_pm_get(ce->engine->gt);
 
 	if (!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)) {
 		err = intel_context_alloc_state(ce);
@@ -3247,7 +3262,6 @@ eb_select_engine(struct i915_execbuffer *eb)
 	return err;
 
 err:
-	intel_gt_pm_put(ce->engine->gt, eb->wakeref);
 	for_each_child(ce, child)
 		intel_context_put(child);
 	intel_context_put(ce);
@@ -3260,7 +3274,6 @@ eb_put_engine(struct i915_execbuffer *eb)
 	struct intel_context *child;
 
 	i915_vm_close(eb->context->vm);
-	intel_gt_pm_put(eb->context->engine->gt, eb->wakeref);
 	for_each_child(eb->context, child)
 		intel_context_put(child);
 	intel_context_put(eb->context);

@@ -6,12 +6,14 @@
 #ifndef __INTEL_DMC_H__
 #define __INTEL_DMC_H__
 
+struct drm_i915_error_state_buf;
+struct drm_i915_private;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "i915_reg_defs.h"
 #include "intel_wakeref.h"
 #include <linux/workqueue.h>
 
-struct drm_i915_error_state_buf;
-struct drm_i915_private;
 
 enum pipe;
 
@@ -62,4 +64,10 @@ void intel_dmc_print_error_state(struct drm_i915_error_state_buf *m,
 
 void assert_dmc_loaded(struct drm_i915_private *i915);
 
+#else
+static inline void intel_dmc_ucode_suspend(struct drm_i915_private *i915) { return; }
+static inline void intel_dmc_ucode_resume(struct drm_i915_private *i915) { return; }
+static inline void intel_dmc_print_error_state(struct drm_i915_error_state_buf *m,
+				 struct drm_i915_private *i915) { return; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_DMC_H__ */

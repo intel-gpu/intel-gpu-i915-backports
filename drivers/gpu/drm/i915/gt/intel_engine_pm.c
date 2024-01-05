@@ -18,61 +18,16 @@
 #include "shmem_utils.h"
 #include "intel_gt_regs.h"
 
-static void dbg_poison_ce(struct intel_context *ce)
-{
-	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
-		return;
-
-	if (ce->state) {
-		struct drm_i915_gem_object *obj = ce->state->obj;
-		int type = i915_coherent_map_type(ce->engine->i915, obj, true);
-		void *map;
-
-		if (!i915_gem_object_trylock(obj))
-			return;
-
-		map = i915_gem_object_pin_map(obj, type);
-		if (!IS_ERR(map)) {
-			memset(map, CONTEXT_REDZONE, obj->base.size);
-			i915_gem_object_flush_map(obj);
-			i915_gem_object_unpin_map(obj);
-		}
-		i915_gem_object_unlock(obj);
-	}
-}
-
 static int __engine_unpark(struct intel_wakeref *wf)
 {
 	struct intel_engine_cs *engine =
 		container_of(wf, typeof(*engine), wakeref);
-	struct intel_context *ce;
 
 	ENGINE_TRACE(engine, "\n");
 
 	GEM_BUG_ON(engine->i915->quiesce_gpu);
 
 	engine->wakeref_track = intel_gt_pm_get(engine->gt);
-
-	/* Discard stale context state from across idling */
-	ce = engine->kernel_context;
-	if (ce) {
-		GEM_BUG_ON(test_bit(CONTEXT_VALID_BIT, &ce->flags));
-
-		/* Flush all pending HW writes before we touch the context */
-		while (unlikely(intel_context_inflight(ce)))
-			intel_engine_flush_submission(engine);
-
-		/* First poison the image to verify we never fully trust it */
-		dbg_poison_ce(ce);
-
-		/* Scrub the context image after our loss of control */
-		ce->ops->reset(ce);
-
-		CE_TRACE(ce, "reset { seqno:%x, *hwsp:%x, ring:%x }\n",
-			 ce->timeline->seqno,
-			 READ_ONCE(*ce->timeline->hwsp_seqno),
-			 ce->ring->emit);
-	}
 
 	if (engine->unpark)
 		engine->unpark(engine);
@@ -190,7 +145,6 @@ static bool switch_to_kernel_context(struct intel_engine_cs *engine)
 		return true;
 
 	GEM_BUG_ON(!intel_context_is_barrier(ce));
-	GEM_BUG_ON(ce->timeline->hwsp_ggtt != engine->status_page.vma);
 
 	/* Already inside the kernel context, safe to power down. */
 	if (engine->wakeref_serial == engine->serial)
@@ -331,25 +285,6 @@ void intel_engine_init__pm(struct intel_engine_cs *engine)
 			intel_uncore_read(engine->gt->uncore, RC_PSMI_CTRL_GSCCS));
 	}
 
-}
-
-/**
- * intel_engine_reset_pinned_contexts - Reset the pinned contexts of
- * an engine.
- * @engine: The engine whose pinned contexts we want to reset.
- *
- * Typically the pinned context LMEM images lose or get their content
- * corrupted on suspend. This function resets their images.
- */
-void intel_engine_reset_pinned_contexts(struct intel_engine_cs *engine)
-{
-	struct intel_context *ce;
-
-	list_for_each_entry(ce, &engine->pinned_contexts_list,
-			    pinned_contexts_link) {
-		dbg_poison_ce(ce);
-		ce->ops->reset(ce);
-	}
 }
 
 struct i915_request *

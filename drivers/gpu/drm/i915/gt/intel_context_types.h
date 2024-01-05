@@ -140,10 +140,6 @@ struct intel_context {
 #define CONTEXT_DEBUG			12
 #define CONTEXT_RUNALONE		13
 
-	struct {
-		u64 timeout_us;
-	} watchdog;
-
 	u32 *lrc_reg_state;
 	union {
 		struct {

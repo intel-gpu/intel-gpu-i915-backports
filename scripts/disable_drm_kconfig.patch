@@ -12,5 +12,3 @@ index ff7b0e4..f1d66bb 100644
 -source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
 +#source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
  source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
- 
- source "$BACKPORT_DIR/drivers/char/agp/Kconfig"

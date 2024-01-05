@@ -168,6 +168,7 @@ static u8 dpcd_fix_data[DPCD_HEADER_SIZE] = {
 	0x12, 0x014, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void emulate_monitor_status_change(struct intel_vgpu *vgpu)
 {
 	struct drm_i915_private *dev_priv = vgpu->gvt->gt->i915;
@@ -506,6 +507,7 @@ static void emulate_monitor_status_change(struct intel_vgpu *vgpu)
 	vgpu_vreg_t(vgpu, PIPECONF(PIPE_A)) |= PIPECONF_ENABLE;
 }
 
+#endif
 static void clean_virtual_dp_monitor(struct intel_vgpu *vgpu, int port_num)
 {
 	struct intel_vgpu_port *port = intel_vgpu_port(vgpu, port_num);
@@ -570,7 +572,9 @@ static int setup_virtual_dp_monitor(struct intel_vgpu *vgpu, int port_num,
 	vblank_timer->vrefresh_k = port->vrefresh_k;
 	vblank_timer->period = DIV64_U64_ROUND_CLOSEST(NSEC_PER_SEC * MSEC_PER_SEC, vblank_timer->vrefresh_k);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	emulate_monitor_status_change(vgpu);
+#endif
 
 	return 0;
 }
@@ -616,6 +620,7 @@ void vgpu_update_vblank_emulation(struct intel_vgpu *vgpu, bool turnon)
 	}
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void emulate_vblank_on_pipe(struct intel_vgpu *vgpu, int pipe)
 {
 	struct drm_i915_private *dev_priv = vgpu->gvt->gt->i915;
@@ -645,14 +650,17 @@ static void emulate_vblank_on_pipe(struct intel_vgpu *vgpu, int pipe)
 	}
 }
 
+#endif
 void intel_vgpu_emulate_vblank(struct intel_vgpu *vgpu)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	int pipe;
 
 	mutex_lock(&vgpu->vgpu_lock);
 	for_each_pipe(vgpu->gvt->gt->i915, pipe)
 		emulate_vblank_on_pipe(vgpu, pipe);
 	mutex_unlock(&vgpu->vgpu_lock);
+#endif
 }
 
 /**
@@ -804,5 +812,7 @@ int intel_vgpu_init_display(struct intel_vgpu *vgpu, u64 resolution)
  */
 void intel_vgpu_reset_display(struct intel_vgpu *vgpu)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	emulate_monitor_status_change(vgpu);
+#endif
 }

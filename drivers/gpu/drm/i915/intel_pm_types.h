@@ -15,6 +15,7 @@ enum intel_ddb_partitioning {
 	INTEL_DDB_PART_5_6, /* IVB+ */
 };
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 struct ilk_wm_values {
 	u32 wm_pipe[3];
 	u32 wm_lp[3];
@@ -54,6 +55,7 @@ struct g4x_wm_values {
 	bool hpll_en;
 	bool fbc_en;
 };
+#endif
 
 struct skl_ddb_entry {
 	u16 start, end;	/* in number of blocks, 'end' is exclusive */

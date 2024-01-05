@@ -1,4 +1,40 @@
 # ChangeLog
+## Release RHEL89_23WW49.5_775.20_23.9.11_231003.14
+* i915: add sriov force fixed CCS-1 mode for max
+* i915: update to allow user to specify mempolicy in numa configurations
+* i915: fix to ensure dmabuf read targets are valid
+* i915: add new device id for flex
+* i915: add new PCI ID for max
+* i915: fix for use after free in coredump buffer capture
+* i915: update to enhance GT FATAL error log for max
+* i915: update for ocl walker latence performance improvement on flex
+* i915: update to allow partial mmaps
+* i915: fix for race in guc context enable/disable
+* i915: fix for race during tlb waits on resets
+* i915: update to balance cpu usage vs wake latency for performance seen on flex
+* i915: update to gracefully handle case of numa node with no memory installed
+* i915: fix for sriov to avoid double blocking in gem mmap ioctl
+* i915: fix for deadlock in vm_unbind
+* i915: deprecate broken DRM_I915_REQUEST_TIMEOUT config option so does not accidentally get invoked on certain compiled OSV kernels
+* i915: update for improvement in execution latency
+* i915: add kmd-umd interface for VM_SET_ATOMIC APIs
+* i915: fix for out of bounds array access
+* i915: fix for sriov to avoid SYNCOBJ IOCTLs from blocking during migration
+* i915: add wa_18028616096 for flex
+* i915: fix to avoid falsely reported gpu hang errors
+* i915: for for eudebug finalize error seen during L0 conformance tests
+* i915: fix to avoid null pointer dereference in numa configurations
+* i915: update to optimize eviction swapping algorithm performance
+* i915: fix to consider numa domain placement in get_pages for improved performance seen on max
+* i915: add sriov user space blocking functionality for vf
+* i915: update to propagate CAT error notification to userspace
+* i915: fix to address gpu hang on suspend/resume seen on flex
+* i915: add wa_14015150844 for flex
+* i915: fix serialise blocking CT sends to avoid exponential backoff
+* i915: ingore. Later reverted. update to load and use guc fw v70.11.0
+* i915: fix for eudebug active request breakpoint detection affecting multi-kernel program
+* i915: fix to avoid warning seen during suspend on flex
+
 ## Release RHEL88_23WW43.5_736.25_23.8.20_230810.24
 * i915: Fix for deadlock in vm_unbind
 * i915: Fix for eudebug finalize error seen during L0 conformance tests

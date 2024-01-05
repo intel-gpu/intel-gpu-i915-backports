@@ -49,6 +49,7 @@ struct drm_printer;
 #define I915_PARAMS_FOR_EACH(param) \
 	param(char *, vbt_firmware, NULL, 0400) \
 	param(int, modeset, -1, 0400) \
+	param(int, timeout_multiplier, 1, 0600) \
 	param(int, force_pch, -1, 0400) \
 	param(int, lvds_channel_mode, 0, 0400) \
 	param(int, panel_use_ssc, -1, 0600) \
@@ -73,48 +74,66 @@ struct drm_printer;
 	param(char *, gsc_firmware_path, NULL, 0400) \
 	param(bool, memtest, false, 0400) \
 	param(int, mmio_debug, -IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO), 0600) \
+	param(char *, mocs_table_path, NULL, IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MOCS) ? 0400 : 0) \
 	param(int, edp_vswing, 0, 0400) \
 	param(unsigned int, reset, 3, 0600) \
 	param(int, inject_probe_failure, 0, 0) \
 	param(unsigned int, debug_eu, 0, 0400) \
 	param(unsigned int, debugger_timeout_ms, 3000, 0400) \
 	param(int, debugger_log_level, -1, 0600) \
+	param(unsigned int, ppgtt_size, 57, 0400) \
 	param(int, fastboot, -1, 0600) \
 	param(int, enable_dpcd_backlight, -1, 0600) \
 	param(char *, force_probe, CPTCFG_DRM_I915_FORCE_PROBE, 0400) \
-	param(unsigned int, request_timeout_ms, CPTCFG_DRM_I915_REQUEST_TIMEOUT, CPTCFG_DRM_I915_REQUEST_TIMEOUT ? 0600 : 0) \
 	param(unsigned int, lmem_size, 0, 0400) \
 	param(unsigned int, max_vfs, 0, 0400) \
 	param(unsigned long, vfs_flr_mask, ~0, IS_ENABLED(CPTCFG_DRM_I915_DEBUG_IOV) ? 0600 : 0) \
 	param(int, force_alloc_contig, 0, 0400) \
-	param(int, smem_access_control, I915_SMEM_ACCESS_CONTROL_DEFAULT, 0600) \
 	param(unsigned int, page_sz_mask, 0, 0600) \
 	param(unsigned int, debug_pages, 0, 0400) \
 	param(unsigned int, prelim_override_p2p_dist, 0, 0400)	\
+	param(unsigned int, guc_log_destination, 0, 0400) \
+	param(unsigned int, ring_mask, (unsigned int)~0, 0400) \
+	param(int, max_tiles, -1, 0400) \
+	param(unsigned int, enable_compression, (unsigned int)~0, 0400) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, allow_non_persist_without_reset, false, 0400) \
 	param(bool, enable_fake_int_wa, true, 0400) \
+	param(bool, enable_full_ps64, true, 0400) \
 	param(bool, enable_pagefault, false, 0600) \
 	param(bool, enable_iaf, true, 0400) \
 	param(bool, address_translation_services, false, IS_ENABLED(CPTCFG_DRM_I915_ATS) ? 0400 : 0) \
 	param(bool, enable_secure_batch, false, 0400) \
 	param(bool, enable_hw_throttle_blt, false, 0400) \
+	param(bool, enable_compute_engines, true, 0400) \
+	param(bool, ctx_run_alone, false, 0600) \
 	param(bool, enable_rc6, true, 0400) \
+	param(bool, enable_rps, true, 0400) \
+	param(bool, force_host_pm, false, 0400) \
 	param(bool, rc6_ignore_steppings, false, 0400) \
 	param(bool, enable_softpg, false, 0400) \
 	param(bool, enable_hangcheck, true, 0600) \
 	param(bool, load_detect_test, false, 0600) \
 	param(bool, force_reset_modeset_test, false, 0600) \
 	param(bool, error_capture, true, IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) ? 0600 : 0) \
-	param(bool, disable_display, false, 0400) \
+	param(bool, disable_display, IS_ENABLED(CPTCFG_DRM_I915_DISPLAY) ? false : true, 0400) \
 	param(bool, verbose_state_checks, true, 0) \
 	param(bool, nuclear_pageflip, false, 0400) \
 	param(bool, enable_dp_mst, true, 0600) \
 	param(bool, enable_gvt, false, IS_ENABLED(CPTCFG_DRM_I915_GVT) ? 0400 : 0) \
 	param(bool, enable_mem_fence, false, 0400) \
-	param(bool, ulls_bcs0_pm_wa, true, 0600) \
 	param(int, force_driver_flr, -1, 0400) \
-	param(bool, disable_bo_chunking, false, 0600)
+	param(bool, disable_bo_chunking, false, 0600) \
+	param(bool, enable_force_miss_ftlb, true, 0600) \
+	param(bool, engine_mocs_uncacheable, false, 0600) \
+	param(bool, dump_ppgtt, false, 0600) \
+	param(bool, enable_resizeable_bar, true, 0400) \
+	param(bool, enable_gsc, true, 0400) \
+	param(bool, enable_pcode_handshake, true, 0400) \
+	param(bool, enable_256B, true, 0400) \
+	param(bool, enable_gt_reset, true, 0400) \
+	param(bool, poison_scratch, false, 0400) \
+	param(bool, enable_spi, true, 0400)
 
 #define MEMBER(T, member, ...) T member;
 struct i915_params {

@@ -137,13 +137,12 @@
 #define MI_STORE_DATA_IMM	MI_INSTR(0x20, 0)
 #define MI_STORE_DWORD_IMM	MI_INSTR(0x20, 1)
 #define MI_STORE_DWORD_IMM_GEN4	MI_INSTR(0x20, 2)
-#define MI_STORE_QWORD_IMM_GEN8_POSTED (MI_INSTR(0x20, 3) | (1 << 21))
-#define MI_STORE_QWORD_IMM_GEN8 (MI_INSTR(0x20, 3) | (1 << 10) | (1 << 21))
+#define MI_STORE_QWORD_IMM_GEN8 (MI_INSTR(0x20, 3) | REG_BIT(21))
 #define   MI_MEM_VIRTUAL	(1 << 22) /* 945,g33,965 */
 #define   MI_USE_GGTT		(1 << 22) /* g4x+ */
 #define   MI_POSTED		REG_BIT(10)
 #define MI_STORE_DWORD_INDEX	MI_INSTR(0x21, 1)
-#define   MI_USE_PPHWSP		REG_BIT(21)
+#define   MI_USE_PPHWSP			REG_BIT(21)
 #define MI_ATOMIC		MI_INSTR(0x2f, 1)
 #define MI_ATOMIC_INLINE	(MI_INSTR(0x2f, 9) | MI_ATOMIC_INLINE_DATA)
 #define   MI_ATOMIC32                  (0 << 19)

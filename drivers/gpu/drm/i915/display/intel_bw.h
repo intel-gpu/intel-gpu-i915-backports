@@ -8,11 +8,13 @@
 
 #include <drm/drm_atomic.h>
 
+struct drm_i915_private;
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "intel_display.h"
 #include "intel_display_power.h"
 #include "intel_global_state.h"
 
-struct drm_i915_private;
 struct intel_atomic_state;
 struct intel_crtc_state;
 
@@ -79,5 +81,8 @@ int intel_bw_min_cdclk(struct drm_i915_private *i915,
 int intel_read_qgv_point_info(struct drm_i915_private *dev_priv,
 			      struct intel_qgv_point *sp,
 			      int point);
+#else
+static inline void intel_bw_init_hw(struct drm_i915_private *dev_priv) { return; }
+#endif
 
 #endif /* __INTEL_BW_H__ */

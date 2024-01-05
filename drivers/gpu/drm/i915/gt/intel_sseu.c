@@ -331,10 +331,12 @@ static void gen11_sseu_info_init(struct intel_gt *gt)
 static void cherryview_sseu_info_init(struct intel_gt *gt)
 {
 	struct sseu_dev_info *sseu = &gt->info.sseu;
-	u32 fuse;
+	u32 fuse = 0;
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	fuse = intel_uncore_read(gt->uncore, CHV_FUSE_GT);
 
+#endif
 	sseu->slice_mask = BIT(0);
 	intel_sseu_set_info(sseu, 1, 2, 8);
 

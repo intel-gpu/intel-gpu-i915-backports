@@ -6,6 +6,7 @@
 #ifndef __INTEL_CX0_PHY_H__
 #define __INTEL_CX0_PHY_H__
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include <linux/types.h>
 #include <linux/bitfield.h>
 #include <linux/bits.h>
@@ -43,4 +44,5 @@ void intel_cx0_phy_ddi_vswing_sequence(struct intel_encoder *encoder,
 				       const struct intel_crtc_state *crtc_state,
 				       u32 level);
 int intel_mtl_tbt_calc_port_clock(struct intel_encoder *encoder);
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_CX0_PHY_H__ */

@@ -25,6 +25,7 @@
 
 static int i915_check_nomodeset(void)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	bool use_kms = true;
 
 	/*
@@ -45,6 +46,7 @@ static int i915_check_nomodeset(void)
 		return 1;
 	}
 
+#endif
 	return 0;
 }
 

@@ -30,6 +30,11 @@ int i915_driver_suspend_switcheroo(struct drm_i915_private *i915, pm_message_t s
 bool i915_save_pci_state(struct pci_dev *pdev);
 void i915_load_pci_state(struct pci_dev *pdev);
 
+void i915_userspace_blocking_begin(struct drm_i915_private *i915);
+void i915_userspace_blocking_secure(struct drm_i915_private *i915);
+void i915_userspace_blocking_finish(struct drm_i915_private *i915);
+int i915_userspace_is_blocked(struct drm_i915_private *i915);
+
 void
 i915_print_iommu_status(struct drm_i915_private *i915, struct drm_printer *p);
 

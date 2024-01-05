@@ -288,14 +288,23 @@ void intel_guc_init_late(struct intel_guc *guc)
 
 static u32 guc_ctl_debug_flags(struct intel_guc *guc)
 {
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	u32 level = intel_guc_log_get_level(&guc->log);
 	u32 flags = 0;
+	u32 guc_log_destination = i915->params.guc_log_destination;
+
+	if (guc_log_destination > GUC_LOG_DESTINATION_MEM_AND_NPK) {
+		drm_err(&i915->drm, "Invalid GuC log destination. Defaulting to memory.\n");
+		guc_log_destination = GUC_LOG_DESTINATION_MEM;
+	}
 
 	if (!GUC_LOG_LEVEL_IS_VERBOSE(level))
 		flags |= GUC_LOG_DISABLED;
 	else
 		flags |= GUC_LOG_LEVEL_TO_VERBOSITY(level) <<
 			 GUC_LOG_VERBOSITY_SHIFT;
+
+	flags |= REG_FIELD_PREP(GUC_LOG_DESTINATION_MASK, guc_log_destination);
 
 	return flags;
 }
@@ -1208,15 +1217,7 @@ static struct i915_vma *guc_vma_from_obj(struct intel_guc *guc,
 struct i915_vma *intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
 						  u32 size, u32 bias)
 {
-	/*
-	 * All objects may trigger the I915_WA_FORCE_SMEM_OBJECT depending on
-	 * the platform. For the few cases this isn't desired,
-	 * __intel_guc_allocate_vma_with_bias() has to be used directly
-	 */
-	bool force_smem = i915_is_mem_wa_enabled(guc_to_gt(guc)->i915,
-						 I915_WA_FORCE_SMEM_OBJECT);
-
-	return __intel_guc_allocate_vma_with_bias(guc, size, bias, force_smem);
+	return __intel_guc_allocate_vma_with_bias(guc, size, bias, false);
 }
 
 struct i915_vma *__intel_guc_allocate_vma_with_bias(struct intel_guc *guc,
@@ -1282,10 +1283,7 @@ struct i915_vma *intel_guc_allocate_vma(struct intel_guc *guc, u32 size)
 int intel_guc_allocate_and_map_vma(struct intel_guc *guc, u32 size,
 				   struct i915_vma **out_vma, void **out_vaddr)
 {
-	bool force_smem = i915_is_mem_wa_enabled(guc_to_gt(guc)->i915,
-						 I915_WA_FORCE_SMEM_OBJECT);
-
-	return __intel_guc_allocate_and_map_vma(guc, size, force_smem,
+	return __intel_guc_allocate_and_map_vma(guc, size, false,
 						out_vma, out_vaddr);
 }
 
@@ -1447,7 +1445,8 @@ static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
  * queued in CT buffer.
  */
 #define OUTSTANDING_GUC_TIMEOUT_PERIOD  (HZ)
-	if (!must_wait_woken(&wait, OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
+	if (!must_wait_woken(&wait,
+			ADJUST_TIMEOUT(OUTSTANDING_GUC_TIMEOUT_PERIOD))) {
 		/*
 		 * XXX: Failure of tlb invalidation is critical and would
 		 * warrant a gt reset.

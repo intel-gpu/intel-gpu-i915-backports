@@ -7,6 +7,7 @@
 #define __INTEL_DE_H__
 
 #include "i915_drv.h"
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #include "i915_trace.h"
 #include "intel_uncore.h"
 
@@ -116,4 +117,9 @@ intel_de_write_notrace(struct drm_i915_private *i915, i915_reg_t reg, u32 val)
 	intel_uncore_write_notrace(&i915->uncore, reg, val);
 }
 
+#else
+static inline u32
+intel_de_rmw(struct drm_i915_private *i915, i915_reg_t reg, u32 clear, u32 set)
+{ return 0; }
+#endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_DE_H__ */

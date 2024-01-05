@@ -30,6 +30,7 @@
 #include <drm/drm_cache.h>
 
 #include "display/intel_frontbuffer.h"
+#include "gem/i915_gem_ioctls.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 #include "pxp/intel_pxp.h"
@@ -357,7 +358,7 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 		!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
-bool i915_gem_object_can_bypass_llc(struct drm_i915_gem_object *obj)
+bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
@@ -915,6 +916,8 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 
 	if (obj->mm.n_placements > 1)
 		kfree(obj->mm.placements);
+
+	kfree(obj->nodes);
 
 	i915_resv_put(obj->shares_resv);
 }
@@ -1696,6 +1699,99 @@ int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
 	return i915_gem_object_migrate_region(obj, ww,
 					      &i915->mm.regions[INTEL_REGION_SMEM],
 					      1);
+}
+
+static int
+i915_gem_object_region_select(struct drm_i915_private *dev_priv,
+			      struct prelim_drm_i915_gem_object_param *args,
+			      struct drm_file *file,
+			      struct drm_i915_gem_object *obj)
+{
+	u16 __user *uregions = u64_to_user_ptr(args->data);
+	struct intel_memory_region *regions[ARRAY_SIZE(dev_priv->mm.regions)];
+	u32 mask = obj->memory_mask;
+	struct i915_gem_ww_ctx ww;
+	int i, ret;
+
+	GEM_BUG_ON(!obj->mm.placements);
+	GEM_BUG_ON(!obj->mm.n_placements);
+
+	if (args->size > ARRAY_SIZE(dev_priv->mm.regions))
+		return -EINVAL;
+
+	for (i = 0; i < args->size; i++) {
+		struct intel_memory_region *region;
+		u16 class, instance;
+
+		ret = get_user(class, uregions);
+		if (ret)
+			return ret;
+
+		++uregions;
+
+		ret = get_user(instance, uregions);
+		if (ret)
+			return ret;
+
+		++uregions;
+
+		region = intel_memory_region_lookup(dev_priv, class, instance);
+		if (!region)
+			return -EINVAL;
+
+		/*
+		 * Let them in effect re-order the placements, if so desired,
+		 * but no new placements are allowed.
+		 */
+		if (!(mask & BIT(region->id)))
+			return -EINVAL;
+
+		regions[i] = region;
+	}
+
+	for_i915_gem_ww(&ww, ret, true) {
+		ret = i915_gem_object_lock(obj, &ww);
+		if (ret)
+			continue;
+
+		ret = i915_gem_object_migrate_region(obj, &ww,
+						     regions, args->size);
+	}
+
+	return ret;
+}
+
+int i915_gem_object_setparam_ioctl(struct drm_device *dev, void *data,
+				   struct drm_file *file)
+{
+	struct prelim_drm_i915_gem_object_param *args = data;
+	struct drm_i915_private *dev_priv = to_i915(dev);
+	struct drm_i915_gem_object *obj;
+	int ret;
+
+	obj = i915_gem_object_lookup(file, args->handle);
+	if (!obj)
+		return -ENOENT;
+
+	switch (lower_32_bits(args->param)) {
+	case PRELIM_I915_PARAM_MEMORY_REGIONS:
+		ret = i915_gem_object_region_select(dev_priv, args, file, obj);
+		if (ret) {
+			drm_dbg(dev,
+				"Cannot set memory region, migration failed(%d)\n",
+				ret);
+			goto err;
+		}
+
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+err:
+	i915_gem_object_put(obj);
+	return ret;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

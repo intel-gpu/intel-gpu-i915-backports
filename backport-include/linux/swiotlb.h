@@ -28,7 +28,14 @@
 #include <linux/version.h>
 #include_next <linux/swiotlb.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
+#ifdef BPM_SWIOTLB_MAX_SEGMENT_NOT_PRESENT
 static inline unsigned int swiotlb_max_segment(void) { return 0; }
 #endif
+
+#ifdef BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+#define is_swiotlb_active(X) swiotlb_nr_tbl()
+#elif defined(BPM_IS_SWIOTLB_ACTIVE_ARG_DEV_NOT_PRESENT)
+#define is_swiotlb_active(X) is_swiotlb_active()
+#endif
+
 #endif

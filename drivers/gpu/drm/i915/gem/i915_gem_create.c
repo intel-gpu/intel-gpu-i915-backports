@@ -19,8 +19,11 @@
 struct create_ext {
 	struct drm_i915_private *i915;
 	struct drm_i915_gem_object *vanilla_object;
+	unsigned long mempol;
+	unsigned long *nodes;
 	unsigned long flags;
 	u64 segment_size;
+	int maxnode;
 	u32 vm_id;
 	u32 pair_id;
 };
@@ -140,6 +143,27 @@ static int i915_gem_publish(struct drm_i915_gem_object *obj,
 }
 
 /*
+ * Determine the memory region for object segment at given @offset. For a
+ * multi-tile device allocation, we want the first of set of chunks in
+ * placement[0], the second set of chunks in placement[1], etc.
+ * This is default placement expected by UMD and is needed to that VM_BIND
+ * w/MAKE_RESIDENT will distribute chunks across tiles as expected. UMD
+ * should use PREFETCH or VM_ADVISE hints if another placement is desired.
+ * In future we might expand to accept a placement policy choice from user.
+ */
+static struct intel_memory_region *
+get_object_segment_mr(struct drm_i915_gem_object *sobj, u64 offset, u64 obj_size)
+{
+	struct intel_memory_region **mr = sobj->mm.placements;
+
+	GEM_BUG_ON(offset >= obj_size);
+	if (!(sobj->memory_mask & ~REGION_LMEM))
+		mr += div64_u64(sobj->mm.n_placements * offset, obj_size);
+
+	return *mr;
+}
+
+/*
  * This routine will determined if BO segmentation will be enabled,
  * based on user supplied ext->segment_size and object size.
  * Must be larger than the minimum chunk size and need 2 chunks.
@@ -159,8 +183,7 @@ static u64 get_object_segment_size(u64 obj_size, u64 requested_size)
 }
 
 static int
-setup_object(struct drm_i915_gem_object *obj, u64 size,
-	     struct create_ext *ext)
+setup_object(struct drm_i915_gem_object *obj, u64 size, struct create_ext *ext)
 {
 	struct intel_memory_region *mr = obj->mm.placements[0];
 	u64 obj_min_size, obj_segment_size = 0;
@@ -185,6 +208,12 @@ setup_object(struct drm_i915_gem_object *obj, u64 size,
 	if (overflows_type(size, obj->base.size) || obj_min_size > object_limit(obj))
 		return -E2BIG;
 
+	if (ext) {
+		obj->mempol = ext->mempol;
+		obj->nodes = fetch_and_zero(&ext->nodes);
+		obj->maxnode = ext->maxnode;
+	}
+
 	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?
 		I915_BO_ALLOC_CONTIGUOUS : 0;
 
@@ -198,6 +227,7 @@ setup_object(struct drm_i915_gem_object *obj, u64 size,
 
 	if (obj_segment_size) {
 		struct drm_i915_gem_object *sobj, *prev_obj = NULL;
+		struct intel_memory_region *sobj_mr;
 		u64 segment_offset = 0;
 		u64 segment_size;
 
@@ -211,8 +241,10 @@ setup_object(struct drm_i915_gem_object *obj, u64 size,
 			/* point to same placement array as parent */
 			object_set_placements(sobj, obj->mm.placements,
 					      obj->mm.n_placements);
+			sobj_mr = get_object_segment_mr(sobj, segment_offset, obj->base.size);
+
 			segment_size = min_t(u64, obj_segment_size, size);
-			ret = mr->ops->init_object(mr, sobj, segment_size, alloc_flags);
+			ret = sobj_mr->ops->init_object(sobj_mr, sobj, segment_size, alloc_flags);
 			if (ret) {
 				i915_gem_object_free(sobj);
 				break;
@@ -399,7 +431,7 @@ static void repr_placements(char *buf, size_t size,
 }
 
 static int prelim_set_placements(struct prelim_drm_i915_gem_object_param *args,
-			  struct create_ext *ext_data)
+				 struct create_ext *ext_data)
 {
 	struct drm_i915_private *i915 = ext_data->i915;
 	struct prelim_drm_i915_gem_memory_class_instance __user *uregions =
@@ -590,11 +622,66 @@ static int ext_set_vm_private(struct i915_user_extension __user *base,
 	return 0;
 }
 
+static int ext_mempolicy(struct i915_user_extension __user *base, void *_data)
+{
+	struct prelim_drm_i915_gem_create_ext_memory_policy ext;
+	struct create_ext *data = _data;
+
+	if (data->nodes)
+		return -EINVAL;
+
+	if (copy_from_user(&ext, base, sizeof(ext)))
+		return -EFAULT;
+
+	if (ext.flags)
+		return -EINVAL;
+
+	data->mempol = ext.mode;
+	data->maxnode = 0;
+
+	if (ext.mode >= I915_GEM_CREATE_MPOL_PREFERRED_MANY)
+		return -EINVAL;
+	else switch (ext.mode) {
+	case I915_GEM_CREATE_MPOL_DEFAULT:
+	case I915_GEM_CREATE_MPOL_LOCAL:
+		return 0;
+
+	case I915_GEM_CREATE_MPOL_BIND:
+		if (!ext.nodemask_max)
+			return -EINVAL;
+		break;
+	}
+
+	if (ext.nodemask_max) {
+		unsigned long *nodes;
+		int len;
+
+		len = min_t(int,
+			    BITS_TO_LONGS(ext.nodemask_max) * sizeof(long),
+			    MAX_NUMNODES);
+
+		nodes = memdup_user(u64_to_user_ptr(ext.nodemask_ptr), len);
+		if (IS_ERR(nodes))
+			return PTR_ERR(nodes);
+
+		data->nodes = nodes;
+		data->maxnode = ext.nodemask_max;
+
+		if (!__nodes_subset((nodemask_t*)nodes,
+				    &node_states[N_MEMORY],
+				    ext.nodemask_max))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int ext_set_protected(struct i915_user_extension __user *base, void *data);
 static const i915_user_extension_fn prelim_create_extensions[] = {
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_SETPARAM)] = create_setparam,
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_VM_PRIVATE)] = ext_set_vm_private,
 	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_PROTECTED_CONTENT)] = ext_set_protected,
+	[PRELIM_I915_USER_EXT_MASK(PRELIM_I915_GEM_CREATE_EXT_MEMORY_POLICY)] = ext_mempolicy,
 };
 
 static int attach_vm(struct drm_i915_gem_object *obj)
@@ -753,6 +840,7 @@ object_free:
 		kfree(placements_ext);
 
 	i915_gem_object_free(obj);
+	kfree(ext_data.nodes);
 	return ret;
 
 obj_put:
@@ -947,7 +1035,7 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 		object_set_placements(obj, &mr, 1);
 	}
 
-	ret = setup_object(obj, args->size, NULL);
+	ret = setup_object(obj, args->size, &ext_data);
 	if (ret)
 		goto vm_put;
 
@@ -967,6 +1055,7 @@ object_free:
 	if (obj->mm.n_placements > 1)
 		kfree(placements_ext);
 	i915_gem_object_free(obj);
+	kfree(ext_data.nodes);
 	return ret;
 
 obj_put:

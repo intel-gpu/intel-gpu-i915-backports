@@ -2589,6 +2589,7 @@ static int live_chain_preempt(void *arg)
 		if (ring_size < 0)
 			ring_size += rq->ring->size;
 		ring_size = rq->ring->size / ring_size;
+		ring_size /= GET_MULTIPLIER(0);
 		pr_debug("%s(%s): Using maximum of %d requests\n",
 			 __func__, engine->name, ring_size);
 

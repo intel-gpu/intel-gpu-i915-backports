@@ -46,7 +46,7 @@ static ssize_t gt_driver_error_show(struct device *dev,
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
-	if (GEM_WARN_ON(ea->id > ARRAY_SIZE(gt->errors.driver)))
+	if (GEM_WARN_ON(ea->id >= ARRAY_SIZE(gt->errors.driver)))
 		return -ENOENT;
 
 	return sysfs_emit(buf, "%lu\n", gt->errors.driver[ea->id]);

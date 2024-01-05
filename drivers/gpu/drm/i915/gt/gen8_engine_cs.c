@@ -355,7 +355,7 @@ int gen8_emit_init_breadcrumb(struct i915_request *rq)
 	u32 *cs;
 
 	GEM_BUG_ON(i915_request_has_initial_breadcrumb(rq));
-	if (!i915_request_timeline(rq)->has_initial_breadcrumb)
+	if (!intel_timeline_has_initial_breadcrumb(i915_request_timeline(rq)))
 		return 0;
 
 	cs = intel_ring_begin(rq, 6);
@@ -566,12 +566,8 @@ static u32 *emit_preempt_busywait(struct i915_request *rq, u32 *cs)
 
 static u32 *emit_user_fence_store(struct i915_request *rq, u32 *cs)
 {
-	/* user fence feature not supported pre-gen9*/
-	if (GRAPHICS_VER(rq->engine->i915) < 9)
-		return cs;
-
 	if (rq->has_user_fence) {
-		*cs++ = MI_STORE_QWORD_IMM_GEN8_POSTED;
+		*cs++ = MI_STORE_QWORD_IMM_GEN8;
 		*cs++ = lower_32_bits(rq->user_fence.addr);
 		*cs++ = upper_32_bits(rq->user_fence.addr);
 		*cs++ = lower_32_bits(rq->user_fence.value);
@@ -591,9 +587,40 @@ static u32 *emit_user_fence_store(struct i915_request *rq, u32 *cs)
 	return cs;
 }
 
+static u32 *emit_breadcrumb(struct i915_request *rq, u32 *cs)
+{
+	struct intel_timeline *tl = rcu_dereference_protected(rq->timeline, 1);
+	u32 offset = hwsp_offset(rq);
+
+	/* Signal the user fence first (after flushing memory/GO) */
+	cs = emit_user_fence_store(rq, cs);
+
+	/* so that the user fence itself can be guarded by the completion. */
+	if (intel_timeline_is_relative(tl)) {
+		u32 cmd;
+
+		cmd = MI_STORE_DWORD_INDEX;
+		if (intel_timeline_in_context(tl))
+			cmd |= MI_USE_PPHWSP;
+
+		*cs++ = cmd;
+		*cs++ = offset_in_page(offset);
+		*cs++ = i915_request_seqno(rq);
+		*cs++ = MI_NOOP;
+	} else {
+		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | MI_POSTED;
+		*cs++ = offset;
+		*cs++ = 0;
+		*cs++ = i915_request_seqno(rq);
+	}
+
+	return cs;
+}
+
 static __always_inline u32*
 gen8_emit_fini_breadcrumb_tail(struct i915_request *rq, u32 *cs)
 {
+	cs = emit_breadcrumb(rq, cs);
 	*cs++ = MI_USER_INTERRUPT;
 
 	*cs++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
@@ -607,19 +634,14 @@ gen8_emit_fini_breadcrumb_tail(struct i915_request *rq, u32 *cs)
 	return gen8_emit_wa_tail(rq, cs);
 }
 
-static u32 *emit_xcs_breadcrumb(struct i915_request *rq, u32 *cs)
-{
-	cs = emit_user_fence_store(rq, cs);
-	return gen8_emit_ggtt_write(cs, i915_request_seqno(rq), hwsp_offset(rq), 0);
-}
-
 u32 *gen8_emit_fini_breadcrumb_xcs(struct i915_request *rq, u32 *cs)
 {
-	return gen8_emit_fini_breadcrumb_tail(rq, emit_xcs_breadcrumb(rq, cs));
+	return gen8_emit_fini_breadcrumb_tail(rq, cs);
 }
 
 u32 *gen8_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 {
+	/* XXX flush+write+CS_STALL all in one upsets gem_concurrent_blt:kbl */
 	cs = gen8_emit_pipe_control(cs,
 				    PIPE_CONTROL_CS_STALL |
 				    PIPE_CONTROL_TLB_INVALIDATE |
@@ -627,13 +649,6 @@ u32 *gen8_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 				    PIPE_CONTROL_DEPTH_CACHE_FLUSH |
 				    PIPE_CONTROL_DC_FLUSH_ENABLE,
 				    0);
-
-	/* XXX flush+write+CS_STALL all in one upsets gem_concurrent_blt:kbl */
-	cs = gen8_emit_ggtt_write_rcs(cs,
-				      i915_request_seqno(rq),
-				      hwsp_offset(rq),
-				      PIPE_CONTROL_FLUSH_ENABLE |
-				      PIPE_CONTROL_CS_STALL);
 
 	return gen8_emit_fini_breadcrumb_tail(rq, cs);
 }
@@ -648,14 +663,6 @@ u32 *gen11_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 				    PIPE_CONTROL_DEPTH_CACHE_FLUSH |
 				    PIPE_CONTROL_DC_FLUSH_ENABLE,
 				    0);
-
-	cs = emit_user_fence_store(rq, cs);
-	/*XXX: Look at gen8_emit_fini_breadcrumb_rcs */
-	cs = gen8_emit_ggtt_write_rcs(cs,
-				      i915_request_seqno(rq),
-				      hwsp_offset(rq),
-				      PIPE_CONTROL_FLUSH_ENABLE |
-				      PIPE_CONTROL_CS_STALL);
 
 	return gen8_emit_fini_breadcrumb_tail(rq, cs);
 }
@@ -734,6 +741,7 @@ static u32 *ccs_emit_wa_busywait(struct i915_request *rq, u32 *cs)
 static __always_inline u32*
 gen12_emit_fini_breadcrumb_tail(struct i915_request *rq, u32 *cs)
 {
+	cs = emit_breadcrumb(rq, cs);
 	*cs++ = MI_USER_INTERRUPT;
 
 	*cs++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
@@ -754,7 +762,7 @@ gen12_emit_fini_breadcrumb_tail(struct i915_request *rq, u32 *cs)
 u32 *gen12_emit_fini_breadcrumb_xcs(struct i915_request *rq, u32 *cs)
 {
 	/* XXX Stalling flush before seqno write; post-sync not */
-	cs = emit_xcs_breadcrumb(rq, __gen8_emit_flush_dw(cs, 0, 0, 0));
+	cs = __gen8_emit_flush_dw(cs, 0, 0, 0);
 	return gen12_emit_fini_breadcrumb_tail(rq, cs);
 }
 
@@ -804,16 +812,6 @@ u32 *gen12_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 	}
 
 	cs = gen12_emit_pipe_control(cs, PIPE_CONTROL0_HDC_PIPELINE_FLUSH, flags, 0);
-
-	cs = emit_user_fence_store(rq, cs);
-
-	/*XXX: Look at gen8_emit_fini_breadcrumb_rcs */
-	cs = gen12_emit_ggtt_write_rcs(cs,
-				       i915_request_seqno(rq),
-				       hwsp_offset(rq),
-				       0,
-				       PIPE_CONTROL_FLUSH_ENABLE |
-				       PIPE_CONTROL_CS_STALL);
 
 	return gen12_emit_fini_breadcrumb_tail(rq, cs);
 }
