@@ -28,7 +28,10 @@
 #define _BACKPORT_DRM_DRV_H
 #include_next <drm/drm_drv.h>
 
-#ifdef BPM_VGACON_TEXT_FORCE_NOT_PRESENT
+#ifdef BPM_VIDEO_FIRMWARE_DRIVERS_ONLY_NOT_EXPORTED
+#define vgacon_text_force video_firmware_drivers_only
+extern bool video_firmware_drivers_only(void);
+#elif defined(BPM_VGACON_TEXT_FORCE_NOT_PRESENT)
 #define vgacon_text_force drm_firmware_drivers_only
 extern bool drm_firmware_drivers_only(void);
 #endif

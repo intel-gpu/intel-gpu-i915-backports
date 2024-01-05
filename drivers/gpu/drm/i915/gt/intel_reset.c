@@ -960,15 +960,6 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
-	int err;
-
-	/*
-	 * Everything depends on having the GTT running, so we need to start
-	 * there.
-	 */
-	err = i915_ggtt_enable_hw(gt->i915);
-	if (err)
-		return err;
 
 	local_bh_disable();
 	for_each_engine(engine, gt, id)
@@ -979,7 +970,7 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 
 	intel_ggtt_restore_fences(gt->ggtt);
 
-	return err;
+	return 0;
 }
 
 static void reset_finish_engine(struct intel_engine_cs *engine)

@@ -456,8 +456,11 @@ i915_debugger_restore_ctx_schedule_params(struct i915_debugger *debugger)
 		struct i915_gem_context *ctx;
 
 		client = i915_drm_client_get_rcu(client);
-		if (client_session(client) != debugger->session)
+		if (client_session(client) != debugger->session) {
+			if (client)
+				i915_drm_client_put(client);
 			continue;
+		}
 
 		list_for_each_entry_rcu(ctx, &client->ctx_list, client_link) {
 			rcu_read_unlock();
@@ -3123,7 +3126,7 @@ out:
 		DD_WARN(debugger, "Resource allocation failed: %d\n", err);
 		i915_debugger_disconnect_err(debugger);
 	}
-	return handle;
+	return 0;
 }
 
 static bool is_discovery_done(struct i915_debugger *debugger)

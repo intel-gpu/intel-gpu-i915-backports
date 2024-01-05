@@ -122,6 +122,7 @@
 #include "intel_pcode.h"
 #include "intel_pm.h"
 #include "intel_vsec.h"
+#include "pvc_ras.h"
 #include "vlv_suspend.h"
 #include "i915_addr_trans_svc.h"
 
@@ -1129,12 +1130,6 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	if (ret)
 		goto err_mem_regions;
 
-	ret = i915_ggtt_enable_hw(dev_priv);
-	if (ret) {
-		drm_err(&dev_priv->drm, "failed to enable GGTT\n");
-		goto err_mem_regions;
-	}
-
 	pci_set_master(pdev);
 
 	/* Assume that VF is up, otherwise we may end with unknown state */
@@ -1551,6 +1546,10 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	ret = intel_gt_probe_all(i915);
 	if (ret < 0)
+		goto out_runtime_pm_put;
+
+	ret = pvc_ras_telemetry_probe(i915);
+	if (ret)
 		goto out_runtime_pm_put;
 
 	ret = intel_pcode_probe(i915);
@@ -2245,10 +2244,6 @@ static int i915_drm_resume_early(struct drm_device *dev)
 	intel_power_domains_resume(dev_priv);
 
 	sanitize_gpu(dev_priv);
-
-	ret = i915_ggtt_enable_hw(dev_priv);
-	if (ret)
-		drm_err(&dev_priv->drm, "failed to re-enable GGTT\n");
 
 	i915_gem_resume_early(dev_priv);
 	/* Must be called after GGTT is resumed. */

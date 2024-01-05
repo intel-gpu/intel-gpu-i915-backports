@@ -619,7 +619,7 @@ static int compat_drm_dma(struct file *file, unsigned int cmd,
 #endif
 
 #if IS_ENABLED(CPTCFG_DRM_LEGACY)
-#if IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CONFIG_AGP)
 typedef struct drm_agp_mode32 {
 	u32 mode;	/**< AGP mode */
 } drm_agp_mode32_t;
@@ -760,7 +760,7 @@ static int compat_drm_agp_unbind(struct file *file, unsigned int cmd,
 	return drm_ioctl_kernel(file, drm_legacy_agp_unbind_ioctl, &request,
 				DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY);
 }
-#endif /* CPTCFG_AGP */
+#endif /* CONFIG_AGP */
 
 typedef struct drm_scatter_gather32 {
 	u32 size;	/**< In bytes -- will round to page boundary */
@@ -932,7 +932,7 @@ static struct {
 	DRM_IOCTL32_DEF(DRM_IOCTL_GET_SAREA_CTX, compat_drm_getsareactx),
 	DRM_IOCTL32_DEF(DRM_IOCTL_RES_CTX, compat_drm_resctx),
 	DRM_IOCTL32_DEF(DRM_IOCTL_DMA, compat_drm_dma),
-#if IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CONFIG_AGP)
 	DRM_IOCTL32_DEF(DRM_IOCTL_AGP_ENABLE, compat_drm_agp_enable),
 	DRM_IOCTL32_DEF(DRM_IOCTL_AGP_INFO, compat_drm_agp_info),
 	DRM_IOCTL32_DEF(DRM_IOCTL_AGP_ALLOC, compat_drm_agp_alloc),

@@ -157,7 +157,7 @@ common-help:
 	@echo "  				Ex: make <Target> BUILD_CONFIG=sp2 "
 	@echo "  OS_DISTRIBUTION 	: Distro targeted package"
 	@echo "  				You can set this value by passing supported kernel name"
-	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.8"
+	@echo "  				Ex: make <Target> OS_DISTRIBUTION=RHEL_8.9"
 	@echo "  				###   List of supported osv kernel versions   ### "
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep RHEL | tr '\n' '\t')"
 	@echo "  				$$(cat versions |& tail -n +4 | cut -d '_' -f 1-2 | grep VANILLA)"

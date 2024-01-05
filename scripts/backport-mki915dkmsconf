@@ -154,25 +154,21 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		DEST_MODULE_LOCATION[14]="/updates"
 	fi
 
-$NO_DRM	BUILT_MODULE_NAME[15]="intel-gtt"
-$NO_DRM	BUILT_MODULE_LOCATION[15]="drivers/char/agp/"
+$NO_DRM	BUILT_MODULE_NAME[15]="drm_kms_helper"
+$NO_DRM	BUILT_MODULE_LOCATION[15]="drivers/gpu/drm/"
 $NO_DRM	DEST_MODULE_LOCATION[15]="/updates"
 
-$NO_DRM	BUILT_MODULE_NAME[16]="drm_kms_helper"
+$NO_DRM	BUILT_MODULE_NAME[16]="drm"
 $NO_DRM	BUILT_MODULE_LOCATION[16]="drivers/gpu/drm/"
 $NO_DRM	DEST_MODULE_LOCATION[16]="/updates"
 
-$NO_DRM	BUILT_MODULE_NAME[17]="drm"
+$NO_DRM	BUILT_MODULE_NAME[17]="drm_panel_orientation_quirks"
 $NO_DRM	BUILT_MODULE_LOCATION[17]="drivers/gpu/drm/"
 $NO_DRM	DEST_MODULE_LOCATION[17]="/updates"
 
-$NO_DRM	BUILT_MODULE_NAME[18]="drm_panel_orientation_quirks"
-$NO_DRM	BUILT_MODULE_LOCATION[18]="drivers/gpu/drm/"
+$NO_DRM	BUILT_MODULE_NAME[18]="vgem"
+$NO_DRM	BUILT_MODULE_LOCATION[18]="drivers/gpu/drm/vgem"
 $NO_DRM	DEST_MODULE_LOCATION[18]="/updates"
-
-$NO_DRM	BUILT_MODULE_NAME[19]="vgem"
-$NO_DRM	BUILT_MODULE_LOCATION[19]="drivers/gpu/drm/vgem"
-$NO_DRM	DEST_MODULE_LOCATION[19]="/updates"
 
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
        	# DKMS could use all cores on multicore systems to build the kernel module.

@@ -9,7 +9,7 @@ menuconfig DRM
 	tristate "Direct Rendering Manager (XFree86 4.1.0 and higher DRI support)"
 	depends on m
 	depends on BUILD_DMABUF_I915_MEI || ONLY_I915
-	depends on (AGP || AGP=n) && !EMULATED_CMPXCHG && HAS_DMA
+	depends on !EMULATED_CMPXCHG && HAS_DMA
 	select DRM_PANEL_ORIENTATION_QUIRKS
 	select BPAUTO_HDMI
 	depends on FB_CMDLINE

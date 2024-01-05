@@ -43,7 +43,7 @@
 
 #include "drm_legacy.h"
 
-#if IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CONFIG_AGP)
 
 #ifdef HAVE_PAGE_AGP
 # include <asm/agp.h>
@@ -98,14 +98,14 @@ static void *agp_remap(unsigned long offset, unsigned long size,
 	return addr;
 }
 
-#else /*  CPTCFG_AGP  */
+#else /*  CONFIG_AGP  */
 static inline void *agp_remap(unsigned long offset, unsigned long size,
 			      struct drm_device *dev)
 {
 	return NULL;
 }
 
-#endif /* CPTCFG_AGP */
+#endif /* CONFIG_AGP */
 
 void drm_legacy_ioremap(struct drm_local_map *map, struct drm_device *dev)
 {
