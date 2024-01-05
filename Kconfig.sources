@@ -7,8 +7,6 @@ source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
 source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
 source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"
 
-source "$BACKPORT_DIR/drivers/char/agp/Kconfig"
-
 #source "$BACKPORT_DIR/net/bluetooth/Kconfig"
 #source "$BACKPORT_DIR/drivers/net/wireless/Kconfig"
 #source "$BACKPORT_DIR/drivers/net/ethernet/Kconfig"

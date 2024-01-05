@@ -149,7 +149,7 @@ struct drm_agp_mem {
 };
 
 /* drm_agpsupport.c */
-#if IS_ENABLED(CPTCFG_DRM_LEGACY) && IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY) && IS_ENABLED(CONFIG_AGP)
 void drm_legacy_agp_clear(struct drm_device *dev);
 
 int drm_legacy_agp_acquire_ioctl(struct drm_device *dev, void *data,

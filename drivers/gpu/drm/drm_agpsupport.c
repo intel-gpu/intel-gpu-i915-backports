@@ -35,7 +35,7 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 
-#if IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CONFIG_AGP)
 #include <asm/agp.h>
 #endif
 
@@ -46,7 +46,7 @@
 
 #include "drm_legacy.h"
 
-#if IS_ENABLED(CPTCFG_AGP)
+#if IS_ENABLED(CONFIG_AGP)
 
 /*
  * Get AGP information.

@@ -3,14 +3,26 @@
 #include <linux/version.h>
 #include <backport/autoconf.h>
 
-#if LINUX_VERSION_IS_LESS(6,0,0)
-
-#if !((REDHAT_RELEASE_VERSION_IS_LEQ(9,0)) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || \
+		LINUX_VERSION_IS_LESS(4,10,0) || \
+			REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
- * 0ade638655f0 intel-gtt: introduce drm/intel-gtt.h
+ * 5e7b9a6ae8c3 swiotlb: remove swiotlb_max_segment
  */
-#define BPM_INTEL_GMCH_GTT_RENAMED
+#define BPM_SWIOTLB_MAX_SEGMENT_NOT_PRESENT
 #endif
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
+/*
+ * ff62b8e6588fb driver core: make struct class.devnode() take a const *
+ */
+#define BPM_DMA_HEAP_AND_DRM_DEVNODE_CONST_ARG_NOT_PRESENT
+
+/*
+ * 9a758d8756da drm: Move nomodeset kernel parameter to drivers/video
+ */
+#define BPM_VIDEO_FIRMWARE_DRIVERS_ONLY_NOT_EXPORTED
 #endif
 
 #if LINUX_VERSION_IS_GEQ(5,19,0)
@@ -61,7 +73,8 @@
 
 #if LINUX_VERSION_IS_LESS(5,15,46)
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
-	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04))
+	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04)|| \
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
  * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
  */
@@ -235,6 +248,14 @@
 #endif
 #endif
 
+#if (LINUX_VERSION_IS_GEQ(5,12,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
+/*
+ * a28a6e860c6c string.h: move fortified functions definitions in a dedicated header
+ */
+#define BPM_FORTIFY_STRING_H_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,12,0)
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
@@ -318,10 +339,12 @@
 #define BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
 #endif
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
  * aa6159ab99a9ab kernel.h: split out mathematical helpers
  */
 #define BPM_MATH_H_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
@@ -865,12 +888,13 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,20,0)
-
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,9))
 /*
  * a3f8a30f3f00 Compiler Attributes: use feature
  * checks instead of version checks
  */
 #define BPM_COMPILER_ATTRIBUTES_HEADER_NOT_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,19,0)
@@ -991,7 +1015,6 @@
 
 #ifdef CPTCFG_I915_NO_DRM
 #define BPM_DISABLE_DRM_DMABUF
-#define BPM_INTEL_GMCH_GTT_RENAMED
 /*
  * f58a435311672 drm/dp, drm/i915: Add support for VESA backlights using PWM for brightness control
  *

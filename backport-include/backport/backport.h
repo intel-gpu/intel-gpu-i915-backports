@@ -25,7 +25,6 @@
 
 #ifndef _BACKPORT_BACKPORT_H
 #define _BACKPORT_BACKPORT_H
-//#include <generated/autoconf.h>
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 #include <backport/backport_macro.h>
@@ -33,34 +32,6 @@
 #ifndef __ASSEMBLY__
 #define LINUX_I915_BACKPORT(__sym) i915bkpt_ ##__sym
 #define LINUX_DMABUF_BACKPORT(__sym) dmabufbkpt_ ##__sym
-#endif
-
-#ifndef CONFIG_BACKPORT_SYNC
-#define CONFIG_BACKPORT_SYNC 1
-#endif
-
-#ifndef CPTCFG_DRM_FBDEV_EMULATION
-#define CPTCFG_DRM_FBDEV_EMULATION 1
-#endif
-
-#ifndef CPTCFG_AGP
-//#define CPTCFG_AGP 1
-#endif
-
-#ifndef CPTCFG_DRM_I915_FBDEV
-#define CPTCFG_DRM_I915_FBDEV 1
-#endif
-
-#ifndef CPTCFG_DRM_MIPI_DSI
-#define CPTCFG_DRM_MIPI_DSI 1
-#endif
-
-#ifndef CPTCFG_DRM_I915_KMS
-#define CPTCFG_DRM_I915_KMS 1
-#endif
-
-#ifndef CPTCFG_DRM_I915_CAPTURE_ERROR
-#define CPTCFG_DRM_I915_CAPTURE_ERROR 1
 #endif
 
 #endif

@@ -299,7 +299,11 @@ err0:
 	return err_ret;
 }
 
+#ifdef BPM_DMA_HEAP_AND_DRM_DEVNODE_CONST_ARG_NOT_PRESENT
+static char *dma_heap_devnode(const struct device *dev, umode_t *mode)
+#else
 static char *dma_heap_devnode(struct device *dev, umode_t *mode)
+#endif
 {
 	return kasprintf(GFP_KERNEL, "dma_heap/%s", dev_name(dev));
 }
