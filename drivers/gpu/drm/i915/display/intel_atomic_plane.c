@@ -1110,7 +1110,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 						   fence);
 		}
 		dma_resv_iter_end(&cursor);
-#else		
+#else
 		fence = dma_resv_get_excl_unlocked(obj->base.resv);
 		if (fence) {
 			add_rps_boost_after_vblank(new_plane_state->hw.crtc,
@@ -1122,6 +1122,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 		add_rps_boost_after_vblank(new_plane_state->hw.crtc,
 					   new_plane_state->uapi.fence);
 	}
+
 	/*
 	 * We declare pageflips to be interactive and so merit a small bias
 	 * towards upclocking to deliver the frame on time. By only changing

@@ -1208,7 +1208,6 @@ err_unlock:
 			intel_gt_set_wedged_on_init(gt);
 
 		/* Minimal basic recovery for KMS */
-		ret = i915_ggtt_enable_hw(dev_priv);
 		i915_ggtt_resume(to_gt(dev_priv)->ggtt);
 		intel_init_clock_gating(dev_priv);
 	}

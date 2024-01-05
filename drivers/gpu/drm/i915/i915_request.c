@@ -1762,8 +1762,8 @@ i915_request_await_object(struct i915_request *to,
 	struct dma_fence *fence;
 #else
 	struct dma_fence *excl, **shared = &excl;
-#endif
 	unsigned int count;
+#endif
 	int ret = 0;
 
 	ret = i915_gem_object_migrate_await(obj, to);

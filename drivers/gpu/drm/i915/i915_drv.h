@@ -1381,6 +1381,11 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define CCS_MASK(gt) \
 	ENGINE_INSTANCES_MASK(gt, CCS0, I915_MAX_CCS)
 
+#define FIRST_ENGINE_MASK(gt, CLASS) ({					\
+	int first_in_class__ = ffs(CLASS##_MASK(gt));			\
+	first_in_class__ ? BIT(CLASS##0 + first_in_class__ - 1) : 0;	\
+})
+
 #define HAS_MEDIA_RATIO_MODE(dev_priv) (INTEL_INFO(dev_priv)->has_media_ratio_mode)
 
 #define HAS_LINK_COPY_ENGINES(dev_priv) (INTEL_INFO(dev_priv)->has_link_copy_engines)

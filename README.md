@@ -33,6 +33,7 @@ backport/RELEASE_2335_23.6 will point to the currently supported version of Ubun
 | Ubuntu® Server | 22.04 | 5.15 generic | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_ubuntu.md) |
 | SLES® | 15SP5 |  5.14.21.150500 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_sles.md) |
 | SLES® | 15SP4 |  5.14.21.150400 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_sles.md) |
+| RHEL® | 9.3 |  5.14.0-362 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_redhat.md) |
 | RHEL® | 9.2 |  5.14.0-284 |  [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_redhat.md) |
 | Vanilla LTS|  |  6.1  | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_vanilla.md) |
 | Vanilla LTS|  |  5.15 | [README](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/docs/README_vanilla.md) |

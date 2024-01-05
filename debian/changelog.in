@@ -1,3 +1,39 @@
+pkg-name (1.23.6.42.230425.56.6.2.0-39) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Fri, 15 Dec 2023 14:14:40 +0530 
+ 
+pkg-name (1.23.6.42.230425.55.6.2.0-34) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Wed, 13 Dec 2023 16:10:01 +0530 
+ 
+pkg-name (1.23.6.41.230425.54.6.2.0-34) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Fri, 08 Dec 2023 19:10:01 +0530 
+ 
+pkg-name (1.23.6.40.230425.53.6.2.0-34) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Thu, 16 Nov 2023 15:44:49 +0530 
+ 
+pkg-name (1.23.6.39.230425.52.6.2.0-34) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Wed, 08 Nov 2023 13:55:04 +0530 
+ 
+pkg-name (1.23.6.38.230425.51.6.2.0-34) UNRELEASED; urgency=low
+
+  New driver source to I915_23.6 against 6.2-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Fri, 27 Oct 2023 17:39:10 +0530 
+ 
 pkg-name (0.5629.220421.1.5.14.0.1034) UNRELEASED; urgency=low
 
   * New driver source to 5629_prerelease against 5.14-OEM.

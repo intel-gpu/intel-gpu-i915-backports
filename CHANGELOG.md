@@ -1,4 +1,10 @@
 # ChangeLog
+## Release I915_23WW51.5_682.48_23.6.42_230425.56
+* i915: fix for eudebug to avoid discovering the same vm twice
+* i915: fix for memory leak seen with eudebug on max
+* i915: add sriov force fixed CCS-1 mode for max
+* i915: update to enhance GT FATAL error log for max
+
 ## Release I915_23WW39.5_682.38_23.6.37_230425.49
 * i915: Support SLES 15 SP5
 * i915: Support RHEL 9.0
