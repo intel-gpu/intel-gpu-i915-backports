@@ -45,8 +45,6 @@ region_lmem_init(struct intel_memory_region *mem)
 	 * being allocated.
 	 */
 	start = mem->region.start;
-	if (IS_XEHPSDV_GRAPHICS_STEP(mem->i915, STEP_A0, STEP_B0))
-		start = max_t(u64, start, SZ_64K);
 	end = mem->region.end + 1;
 
 	ret = intel_memory_region_init_buddy(mem, start, end, PAGE_SIZE);
@@ -65,39 +63,7 @@ static const struct intel_memory_region_ops intel_region_lmem_ops = {
 	.init_object = __i915_gem_lmem_object_init,
 };
 
-/*
- * Don't allow LMEM allocation for first few megabytes reserved for
- * per tile debug trace data. Make sure to maintain alignment by using
- * buddy_alloc_range.
- */
-static bool get_tracedebug_region(struct intel_uncore *uncore,
-				  u64 *start, u32 *size)
-{
-	/* TODO: bspec says this is for XEHPSDV debug only */
-	if (!IS_XEHPSDV(uncore->i915))
-		return false;
-
-	if (IS_SRIOV_VF(uncore->i915))
-		return false;
-
-	*size = intel_uncore_read(uncore, XEHP_DBGTRACEMEM_SZ);
-	if (!*size)
-		return false;
-
-	if (WARN_ON(*size > 255))
-		*size = 255;
-
-	*size *= SZ_1M;
-	*start = intel_uncore_read64_2x32(uncore,
-					  XEHP_DBGTRACEMEMBASE_LDW,
-					  XEHP_DBGTRACEMEMBASE_UDW);
-
-	DRM_DEBUG_DRIVER("LMEM: debug trace data region: [0x%llx-0x%llx]\n",
-			 *start, *start + *size);
-
-	return true;
-}
-
+#ifndef BPM_LOWMEM_FOR_DG1_NOT_SUPPORTED
 static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 				     u64 *start, u32 *size)
 {
@@ -112,6 +78,7 @@ static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 
 	return true;
 }
+#endif
 
 static int reserve_lowmem_region(struct intel_uncore *uncore,
 				 struct intel_memory_region *mem)
@@ -122,16 +89,12 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 	u32 region_size;
 	int ret;
 
+#ifndef BPM_LOWMEM_FOR_DG1_NOT_SUPPORTED
 	if (get_legacy_lowmem_region(uncore, &region_start, &region_size)) {
 		reserve_start = region_start;
 		reserve_size = region_size;
 	}
-
-	if (get_tracedebug_region(uncore, &region_start, &region_size)) {
-		reserve_start = 0;
-		reserve_size = region_size;
-	}
-
+#endif
 	if (!reserve_size)
 		return 0;
 
@@ -174,14 +137,7 @@ int intel_get_tile_range(struct intel_gt *gt,
 
 	root_lmembar_size = pci_resource_len(pdev, GEN12_LMEM_BAR);
 
-	/*
-	 * XEHPSDV A step single tile doesn't support the tile range
-	 * registers.
-	 * https://gfxspecs.intel.com/Predator/Home/Index/43880
-	 */
-	if (!lmembar_is_igpu_stolen(i915) && !IS_DG1(i915) &&
-	    !(IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) &&
-	      !i915->remote_tiles)) {
+	if (!lmembar_is_igpu_stolen(i915) && !IS_DG1(i915)) {
 		/* We should take the size and range of the tiles from
 		 * the tile range register intead of assigning the offsets
 		 * manually. The tile ranges are divided into 1GB granularity
@@ -239,6 +195,7 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 	resource_size_t actual_mem;
 	resource_size_t lmem_size, lmem_base;
 	resource_size_t root_lmembar_size;
+	resource_size_t rsvd = 0;
 	bool is_degraded = false;
 	int err;
 
@@ -331,6 +288,7 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 		lmem_size = intel_uncore_read64(uncore, GEN12_GSMBASE) - lmem_base;
 
 	}
+	rsvd = lmem_size;
 
 create_region:
 	/*
@@ -369,7 +327,7 @@ create_region:
 					 lmem_size,
 					 min_page_size,
 					 io_start,
-					 lmem_size,
+					 actual_mem,
 					 INTEL_MEMORY_LOCAL,
 					 0,
 					 &intel_region_lmem_ops);
@@ -396,6 +354,7 @@ create_region:
 		else
 			sparing->health_status = MEM_HEALTH_OKAY;
 	}
+	mem->stolen = rsvd;
 
 	return mem;
 

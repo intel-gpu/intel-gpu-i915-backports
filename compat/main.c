@@ -2,7 +2,6 @@
 #include <linux/init.h>
 #include <linux/pm_qos.h>
 #include <linux/workqueue.h>
-#include "backports.h"
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
 #include <backport/bp_module_version.h>
@@ -63,17 +62,10 @@ static ssize_t dkms_i915_show(struct kobject *kobj,
        return sprintf(buf, "%s\n", "dkms_i915");
 }
 
-void dependency_symbol(void)
-{
-}
-EXPORT_SYMBOL_GPL(dependency_symbol);
-
 static int __init backport_init(void)
 {
-	int ret = devcoredump_init();
-	if (ret)
-		return ret;
-
+	int ret = 0;
+	
 	printk(KERN_INFO "COMPAT BACKPORTED INIT\n");
 	printk(KERN_INFO "Loading modules backported from " CPTCFG_DII_KERNEL_TAG "\n");
 
@@ -105,8 +97,8 @@ subsys_initcall(backport_init);
 
 static void __exit backport_exit(void)
 {
-	devcoredump_exit();
 	kobject_put(kobj_ref);
 	sysfs_remove_file(kernel_kobj, &dkms_attr.attr);
+	printk(KERN_INFO "COMPAT BACKPORTED EXIT\n");
 }
 module_exit(backport_exit);

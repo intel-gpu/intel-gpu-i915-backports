@@ -44,9 +44,6 @@
 #include "intel_display_types.h"
 #include "intel_dsi.h"
 #include "intel_dsi_vbt.h"
-#include "vlv_dsi.h"
-#include "vlv_dsi_regs.h"
-#include "vlv_sideband.h"
 
 #define MIPI_TRANSFER_MODE_SHIFT	0
 #define MIPI_VIRTUAL_CHANNEL_SHIFT	1
@@ -72,21 +69,6 @@
 struct gpio_map {
 	u16 base_offset;
 	bool init;
-};
-
-static struct gpio_map vlv_gpio_table[] = {
-	{ VLV_GPIO_NC_0_HV_DDI0_HPD },
-	{ VLV_GPIO_NC_1_HV_DDI0_DDC_SDA },
-	{ VLV_GPIO_NC_2_HV_DDI0_DDC_SCL },
-	{ VLV_GPIO_NC_3_PANEL0_VDDEN },
-	{ VLV_GPIO_NC_4_PANEL0_BKLTEN },
-	{ VLV_GPIO_NC_5_PANEL0_BKLTCTL },
-	{ VLV_GPIO_NC_6_HV_DDI1_HPD },
-	{ VLV_GPIO_NC_7_HV_DDI1_DDC_SDA },
-	{ VLV_GPIO_NC_8_HV_DDI1_DDC_SCL },
-	{ VLV_GPIO_NC_9_PANEL1_VDDEN },
-	{ VLV_GPIO_NC_10_PANEL1_BKLTEN },
-	{ VLV_GPIO_NC_11_PANEL1_BKLTCTL },
 };
 
 struct i2c_adapter_lookup {
@@ -218,9 +200,6 @@ static const u8 *mipi_exec_send_packet(struct intel_dsi *intel_dsi,
 		break;
 	}
 
-	if (DISPLAY_VER(dev_priv) < 11)
-		vlv_dsi_wait_for_fifo_empty(intel_dsi, port);
-
 out:
 	data += len;
 
@@ -238,135 +217,6 @@ static const u8 *mipi_exec_delay(struct intel_dsi *intel_dsi, const u8 *data)
 	data += 4;
 
 	return data;
-}
-
-static void vlv_exec_gpio(struct intel_connector *connector,
-			  u8 gpio_source, u8 gpio_index, bool value)
-{
-	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
-	struct gpio_map *map;
-	u16 pconf0, padval;
-	u32 tmp;
-	u8 port;
-
-	if (gpio_index >= ARRAY_SIZE(vlv_gpio_table)) {
-		drm_dbg_kms(&dev_priv->drm, "unknown gpio index %u\n",
-			    gpio_index);
-		return;
-	}
-
-	map = &vlv_gpio_table[gpio_index];
-
-	if (connector->panel.vbt.dsi.seq_version >= 3) {
-		/* XXX: this assumes vlv_gpio_table only has NC GPIOs. */
-		port = IOSF_PORT_GPIO_NC;
-	} else {
-		if (gpio_source == 0) {
-			port = IOSF_PORT_GPIO_NC;
-		} else if (gpio_source == 1) {
-			drm_dbg_kms(&dev_priv->drm, "SC gpio not supported\n");
-			return;
-		} else {
-			drm_dbg_kms(&dev_priv->drm,
-				    "unknown gpio source %u\n", gpio_source);
-			return;
-		}
-	}
-
-	pconf0 = VLV_GPIO_PCONF0(map->base_offset);
-	padval = VLV_GPIO_PAD_VAL(map->base_offset);
-
-	vlv_iosf_sb_get(dev_priv, BIT(VLV_IOSF_SB_GPIO));
-	if (!map->init) {
-		/* FIXME: remove constant below */
-		vlv_iosf_sb_write(dev_priv, port, pconf0, 0x2000CC00);
-		map->init = true;
-	}
-
-	tmp = 0x4 | value;
-	vlv_iosf_sb_write(dev_priv, port, padval, tmp);
-	vlv_iosf_sb_put(dev_priv, BIT(VLV_IOSF_SB_GPIO));
-}
-
-static void chv_exec_gpio(struct intel_connector *connector,
-			  u8 gpio_source, u8 gpio_index, bool value)
-{
-	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
-	u16 cfg0, cfg1;
-	u16 family_num;
-	u8 port;
-
-	if (connector->panel.vbt.dsi.seq_version >= 3) {
-		if (gpio_index >= CHV_GPIO_IDX_START_SE) {
-			/* XXX: it's unclear whether 255->57 is part of SE. */
-			gpio_index -= CHV_GPIO_IDX_START_SE;
-			port = CHV_IOSF_PORT_GPIO_SE;
-		} else if (gpio_index >= CHV_GPIO_IDX_START_SW) {
-			gpio_index -= CHV_GPIO_IDX_START_SW;
-			port = CHV_IOSF_PORT_GPIO_SW;
-		} else if (gpio_index >= CHV_GPIO_IDX_START_E) {
-			gpio_index -= CHV_GPIO_IDX_START_E;
-			port = CHV_IOSF_PORT_GPIO_E;
-		} else {
-			port = CHV_IOSF_PORT_GPIO_N;
-		}
-	} else {
-		/* XXX: The spec is unclear about CHV GPIO on seq v2 */
-		if (gpio_source != 0) {
-			drm_dbg_kms(&dev_priv->drm,
-				    "unknown gpio source %u\n", gpio_source);
-			return;
-		}
-
-		if (gpio_index >= CHV_GPIO_IDX_START_E) {
-			drm_dbg_kms(&dev_priv->drm,
-				    "invalid gpio index %u for GPIO N\n",
-				    gpio_index);
-			return;
-		}
-
-		port = CHV_IOSF_PORT_GPIO_N;
-	}
-
-	family_num = gpio_index / CHV_VBT_MAX_PINS_PER_FMLY;
-	gpio_index = gpio_index % CHV_VBT_MAX_PINS_PER_FMLY;
-
-	cfg0 = CHV_GPIO_PAD_CFG0(family_num, gpio_index);
-	cfg1 = CHV_GPIO_PAD_CFG1(family_num, gpio_index);
-
-	vlv_iosf_sb_get(dev_priv, BIT(VLV_IOSF_SB_GPIO));
-	vlv_iosf_sb_write(dev_priv, port, cfg1, 0);
-	vlv_iosf_sb_write(dev_priv, port, cfg0,
-			  CHV_GPIO_GPIOEN | CHV_GPIO_GPIOCFG_GPO |
-			  CHV_GPIO_GPIOTXSTATE(value));
-	vlv_iosf_sb_put(dev_priv, BIT(VLV_IOSF_SB_GPIO));
-}
-
-static void bxt_exec_gpio(struct intel_connector *connector,
-			  u8 gpio_source, u8 gpio_index, bool value)
-{
-	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
-	/* XXX: this table is a quick ugly hack. */
-	static struct gpio_desc *bxt_gpio_table[U8_MAX + 1];
-	struct gpio_desc *gpio_desc = bxt_gpio_table[gpio_index];
-
-	if (!gpio_desc) {
-		gpio_desc = devm_gpiod_get_index(dev_priv->drm.dev,
-						 NULL, gpio_index,
-						 value ? GPIOD_OUT_LOW :
-						 GPIOD_OUT_HIGH);
-
-		if (IS_ERR_OR_NULL(gpio_desc)) {
-			drm_err(&dev_priv->drm,
-				"GPIO index %u request failed (%ld)\n",
-				gpio_index, PTR_ERR(gpio_desc));
-			return;
-		}
-
-		bxt_gpio_table[gpio_index] = gpio_desc;
-	}
-
-	gpiod_set_value(gpio_desc, value);
 }
 
 static void icl_exec_gpio(struct intel_connector *connector,
@@ -401,14 +251,7 @@ static const u8 *mipi_exec_gpio(struct intel_dsi *intel_dsi, const u8 *data)
 	/* pull up/down */
 	value = *data++ & 1;
 
-	if (DISPLAY_VER(dev_priv) >= 11)
-		icl_exec_gpio(connector, gpio_source, gpio_index, value);
-	else if (IS_VALLEYVIEW(dev_priv))
-		vlv_exec_gpio(connector, gpio_source, gpio_number, value);
-	else if (IS_CHERRYVIEW(dev_priv))
-		chv_exec_gpio(connector, gpio_source, gpio_number, value);
-	else
-		bxt_exec_gpio(connector, gpio_source, gpio_index, value);
+	icl_exec_gpio(connector, gpio_source, gpio_index, value);
 
 	return data;
 }
@@ -741,8 +584,31 @@ void intel_dsi_log_params(struct intel_dsi *intel_dsi)
 		    intel_dsi->clk_lp_to_hs_count);
 	drm_dbg_kms(&i915->drm, "HS to LP Clock Count 0x%x\n",
 		    intel_dsi->clk_hs_to_lp_count);
-	drm_dbg_kms(&i915->drm, "BTA %s\n",
-		    str_enabled_disabled(!(intel_dsi->video_frmt_cfg_bits & DISABLE_VIDEO_BTA)));
+}
+
+static enum mipi_dsi_pixel_format pixel_format_from_register_bits(u32 fmt)
+{
+#define  VID_MODE_FORMAT_MASK                          (0xf << 7)
+#define  VID_MODE_NOT_SUPPORTED                                (0 << 7)
+#define  VID_MODE_FORMAT_RGB565                                (1 << 7)
+#define  VID_MODE_FORMAT_RGB666_PACKED                 (2 << 7)
+#define  VID_MODE_FORMAT_RGB666                                (3 << 7)
+#define  VID_MODE_FORMAT_RGB888                                (4 << 7)
+
+	/* It just so happens the VBT matches register contents. */
+	switch (fmt) {
+	case VID_MODE_FORMAT_RGB888:
+		return MIPI_DSI_FMT_RGB888;
+	case VID_MODE_FORMAT_RGB666:
+		return MIPI_DSI_FMT_RGB666;
+	case VID_MODE_FORMAT_RGB666_PACKED:
+		return MIPI_DSI_FMT_RGB666_PACKED;
+	case VID_MODE_FORMAT_RGB565:
+		return MIPI_DSI_FMT_RGB565;
+	default:
+		MISSING_CASE(fmt);
+		return MIPI_DSI_FMT_RGB666;
+	}
 }
 
 bool intel_dsi_vbt_init(struct intel_dsi *intel_dsi, u16 panel_id)
@@ -776,8 +642,7 @@ bool intel_dsi_vbt_init(struct intel_dsi *intel_dsi, u16 panel_id)
 	intel_dsi->rst_timer_val = mipi_config->device_reset_timer;
 	intel_dsi->init_count = mipi_config->master_init_timer;
 	intel_dsi->bw_timer = mipi_config->dbi_bw_timer;
-	intel_dsi->video_frmt_cfg_bits =
-		mipi_config->bta_enabled ? DISABLE_VIDEO_BTA : 0;
+	intel_dsi->video_frmt_cfg_bits = 0;
 	intel_dsi->bgr_enabled = mipi_config->rgb_flip;
 
 	/* Starting point, adjusted depending on dual link and burst mode */
@@ -852,117 +717,4 @@ bool intel_dsi_vbt_init(struct intel_dsi *intel_dsi, u16 panel_id)
 	}
 
 	return true;
-}
-
-/*
- * On some BYT/CHT devs some sequences are incomplete and we need to manually
- * control some GPIOs. We need to add a GPIO lookup table before we get these.
- * If the GOP did not initialize the panel (HDMI inserted) we may need to also
- * change the pinmux for the SoC's PWM0 pin from GPIO to PWM.
- */
-static struct gpiod_lookup_table pmic_panel_gpio_table = {
-	/* Intel GFX is consumer */
-	.dev_id = "0000:00:02.0",
-	.table = {
-		/* Panel EN/DISABLE */
-		GPIO_LOOKUP("gpio_crystalcove", 94, "panel", GPIO_ACTIVE_HIGH),
-		{ }
-	},
-};
-
-static struct gpiod_lookup_table soc_panel_gpio_table = {
-	.dev_id = "0000:00:02.0",
-	.table = {
-		GPIO_LOOKUP("INT33FC:01", 10, "backlight", GPIO_ACTIVE_HIGH),
-		GPIO_LOOKUP("INT33FC:01", 11, "panel", GPIO_ACTIVE_HIGH),
-		{ }
-	},
-};
-
-static const struct pinctrl_map soc_pwm_pinctrl_map[] = {
-	PIN_MAP_MUX_GROUP("0000:00:02.0", "soc_pwm0", "INT33FC:00",
-			  "pwm0_grp", "pwm"),
-};
-
-void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on)
-{
-	struct drm_device *dev = intel_dsi->base.base.dev;
-	struct drm_i915_private *dev_priv = to_i915(dev);
-	struct intel_connector *connector = intel_dsi->attached_connector;
-	struct mipi_config *mipi_config = connector->panel.vbt.dsi.config;
-	enum gpiod_flags flags = panel_is_on ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW;
-	bool want_backlight_gpio = false;
-	bool want_panel_gpio = false;
-	struct pinctrl *pinctrl;
-	int ret;
-
-	if ((IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) &&
-	    mipi_config->pwm_blc == PPS_BLC_PMIC) {
-		gpiod_add_lookup_table(&pmic_panel_gpio_table);
-		want_panel_gpio = true;
-	}
-
-	if (IS_VALLEYVIEW(dev_priv) && mipi_config->pwm_blc == PPS_BLC_SOC) {
-		gpiod_add_lookup_table(&soc_panel_gpio_table);
-		want_panel_gpio = true;
-		want_backlight_gpio = true;
-
-		/* Ensure PWM0 pin is muxed as PWM instead of GPIO */
-		ret = pinctrl_register_mappings(soc_pwm_pinctrl_map,
-					     ARRAY_SIZE(soc_pwm_pinctrl_map));
-		if (ret)
-			drm_err(&dev_priv->drm,
-				"Failed to register pwm0 pinmux mapping\n");
-
-		pinctrl = devm_pinctrl_get_select(dev->dev, "soc_pwm0");
-		if (IS_ERR(pinctrl))
-			drm_err(&dev_priv->drm,
-				"Failed to set pinmux to PWM\n");
-	}
-
-	if (want_panel_gpio) {
-		intel_dsi->gpio_panel = gpiod_get(dev->dev, "panel", flags);
-		if (IS_ERR(intel_dsi->gpio_panel)) {
-			drm_err(&dev_priv->drm,
-				"Failed to own gpio for panel control\n");
-			intel_dsi->gpio_panel = NULL;
-		}
-	}
-
-	if (want_backlight_gpio) {
-		intel_dsi->gpio_backlight =
-			gpiod_get(dev->dev, "backlight", flags);
-		if (IS_ERR(intel_dsi->gpio_backlight)) {
-			drm_err(&dev_priv->drm,
-				"Failed to own gpio for backlight control\n");
-			intel_dsi->gpio_backlight = NULL;
-		}
-	}
-}
-
-void intel_dsi_vbt_gpio_cleanup(struct intel_dsi *intel_dsi)
-{
-	struct drm_device *dev = intel_dsi->base.base.dev;
-	struct drm_i915_private *dev_priv = to_i915(dev);
-	struct intel_connector *connector = intel_dsi->attached_connector;
-	struct mipi_config *mipi_config = connector->panel.vbt.dsi.config;
-
-	if (intel_dsi->gpio_panel) {
-		gpiod_put(intel_dsi->gpio_panel);
-		intel_dsi->gpio_panel = NULL;
-	}
-
-	if (intel_dsi->gpio_backlight) {
-		gpiod_put(intel_dsi->gpio_backlight);
-		intel_dsi->gpio_backlight = NULL;
-	}
-
-	if ((IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) &&
-	    mipi_config->pwm_blc == PPS_BLC_PMIC)
-		gpiod_remove_lookup_table(&pmic_panel_gpio_table);
-
-	if (IS_VALLEYVIEW(dev_priv) && mipi_config->pwm_blc == PPS_BLC_SOC) {
-		pinctrl_unregister_mappings(soc_pwm_pinctrl_map);
-		gpiod_remove_lookup_table(&soc_panel_gpio_table);
-	}
 }

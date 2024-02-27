@@ -1,23 +1,23 @@
-
 # Supported Vanilla LTS kernels
-  Our current backport supports the following Vanilla LTS kernels.
 
+This repository contains the following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(CSE) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(PMT/VSEC) - Intel® Platform Telemetry
 
-| OS Distribution | Kernel Version  |
-|---  |---  |
+Our current backport supports the following Vanilla LTS kernels.
+
+| OS Distribution | Kernel Version |
+|---|---|
 | Vanilla | 6.1 LTS  |
 | Vanilla | 5.15 LTS |
-
+| Vanilla | 5.10 LTS |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
-
-  In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
-
-
-Please note that dkms installation will skip if the kernel headers are not installed.
+  Please refer [Version](../versions) file to check value of VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
 
 ## Prerequisite
+
 ### Debian based package:
 We have dependencies on the following packages
   - make
@@ -26,112 +26,123 @@ We have dependencies on the following packages
   - build-essential
   - flex
   - bison
-  - awk
+  - mawk
 
 ```
-$sudo apt install make debhelper devscripts build-essential flex bison awk
+$ sudo apt install make debhelper devscripts build-essential flex bison mawk
 ```
 ### RPM based package:
 We have dependencies on the following packages:
   - make
   - lsb-release
   - rpm-build
-  - linux-glibc-devel
+  - glibc-devel
   - flex
   - bison
-  - awk
+  - gawk
 
 ```
-$sudo dnf install make linux-glibc-devel lsb-release rpm-build bison flex awk
+$ sudo dnf install make glibc-devel lsb-release rpm-build bison flex gawk
 
 ```
-For dkms modules, we need to install `dkms` package also.
+For DKMS modules, we need to install `dkms` package too.
 ```
-$sudo apt install dkms
+$ sudo apt install dkms
 or
-$sudo dnf install dkms
+$ sudo dnf install dkms
 ```
-
-## Out of tree kernel drivers
-This repository contains following drivers.
-1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-2. Intel® Converged Security Engine(cse) - Converged Security Engine
-3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
-
 
 ## Dependencies
 
-  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+ These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
-- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
 ## Package creation
-Both debian based and rpm based packages are supported.
+
+We have 2 kind of backport packages, depending on the target OS Kernel version
+ - Build with i915 and drm. Ex: RH9.x
+ - Build with i915 alone. Ex: 8.x
+
+Both Debian based and rpm based packages are supported.
+
+| OS Distribution | Kernel Version | DKMS Package Target (RPM/Debian) | Binary Package Target (RPM/Debian) |
+|---|---|---|---|
+| Vanilla | 6.1 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
+| Vanilla | 5.15 LTS | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
+| Vanilla | 5.10 LTS | dkmsrpm-pkg / dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 
 ### Dynamic Kernel Module Support(DKMS)
-There are two ways to create i915 dkms packages.
-1. Using default command :
+Creating i915 DKMS packages
 ```
-$make i915dkmsdeb-pkg #debian package
-or
-$make i915dkmsrpm-pkg #rpm package
-Example:
-        $make i915dkmsdeb-pkg
-
-      Generated package name :
-                intel-i915-dkms_1.23.6.24.230425.29+i1-1_all.deb
-```
-
-2. OS distribution option:
-
-    Adds OS kernel version as part of dkms pacakge name.
-```
-$make i915dkmsdeb-pkg OS_DISTRIBUTION=<os_distribution> #debian package
-or
-$make i915dkmsrpm-pkg OS_DISTRIBUTION=<os_distribution> #rpm package
+$ make <Build Options> <DKMS Package Target>
 
 Example:
-        $make i915dkmsdeb-pkg OS_DISTRIBUTION=VANILLA_5.15LTS
+	$ make i915dkmsdeb-pkg
 
-      Generated package name :
-                intel-i915-dkms_1.23.6.24.230425.29.5.15.123.53+i1-1_all.deb
+	Generated package name :
+		intel-i915-dkms_1.23.6.24.230425.29+i1-1_all.deb
 ```
-Above cmd will create debain package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
+Above command will create Debian package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
 
+Please note that DKMS installation will skip if the kernel headers are not installed.
+
+In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
 
 ### Binary package creation:
-Creation of binary rpm can be done using the below command. By default it will use header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguement
+Creation of binary rpm or debian can be done using the below command.
+By default it will use the header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 
 ```
-$make KLIB=<Header Path> KLIB_BUILD=<Header Path> binrpm-pkg
+$ make KLIB=<Header Path> KLIB_BUILD=<Header Path>/build/ <Binary Package Target>
+
+Example:
+	$ make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r)/build bindeb-pkg
+
+	Generated Files:
+		intel-i915-<version>.$(uname -r)+i1-1.x86_64.deb
+```
+Above command will create Debian package in parent folder. **intel-i915-<**release version**>.<**kernel-version**>.deb**
+
+### Build Options
+Build options provides list of different arguments which can be passed during package creation or build.
+i
+Please refer to [README_common](README_common.md) for full list of Build options.
+
+## Installation and Verification
+```
+$ sudo dpkg -i intel-i915*.deb
+```
 or
-$make KLIB=<Header Path> KLIB_BUILD=<Header Path> bindeb-pkg
-
-Exmaple:
-$make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r) binrpm-pkg
-
-Generated Files:
-intel-i915-<version>.$(uname -r)-1.x86_64.rpm
 ```
-## Package installation
+$ sudo rpm -ivh intel-i915*.rpm
 ```
-$sudo dpkg -i intel-i915*.deb
-or
-$sudo rpm -ivh intel-i915*.rpm
+Reboot the device after installation of all packages.
 ```
-#### Reboot the device after installation of all packages.
+$ sudo reboot
 ```
-$sudo reboot
+For verification, Please grep **backport** from dmesg after reboot. You should see something like below
 ```
-## Installation verification
-
-Please grep **backport**  from dmesg after reboot. you should see something like below
-```
-> sudo dmesg |grep -i backport
+$ sudo dmesg |grep -i backport
 [    5.963854] COMPAT BACKPORTED INIT
-[    5.968761] Loading modules backported from I915_23.6.24
+[    5.968761] Loading modules backported from I915-23.6.24
 [    5.976154] Backport generated by backports.git I915_23.6.24_PSB_230425.29
 [    6.069699] [drm] I915 BACKPORTED INIT
+```
+
+Please refer to [README_backport_version](README_backport_version.md) for different verification processes.
+
+## Uninstallation
+```
+$ sudo dpkg -r intel-i915*
+```
+or
+```
+$ sudo rpm -e intel-i915*
+```
+Reboot the device after uninstallation of all packages.
+```
+$ sudo reboot
 ```

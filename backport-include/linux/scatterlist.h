@@ -1,3 +1,25 @@
+/*
+ * Copyright _ 2019 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
 #ifndef __BACKPORT_SCATTERLIST_H
 #define __BACKPORT_SCATTERLIST_H
 #include_next <linux/scatterlist.h>
@@ -124,5 +146,63 @@ static inline void sg_init_marker(struct scatterlist *sgl,
 }
 
 #endif /* LINUX_VERSION_IS_LESS(4, 17, 0) */
+
+#ifdef BPM_FOR_EACH_SGTABLE_PAGE_NOT_PRESENT
+/*
+ * for_each_sgtable_page - iterate over all pages in the sg_table object
+ * @sgt:        sg_table object to iterate over
+ * @piter:      page iterator to hold current page
+ * @pgoffset:   starting page offset (in pages)
+ *
+ * Iterates over the all memory pages in the buffer described by
+ * a scatterlist stored in the given sg_table object.
+ * See also for_each_sg_page(). In each loop it operates on PAGE_SIZE unit.
+ */
+#define for_each_sgtable_page(sgt, piter, pgoffset)    \
+       for_each_sg_page((sgt)->sgl, piter, (sgt)->orig_nents, pgoffset)
+
+
+/*
+ * for_each_sgtable_dma_page - iterate over the DMA mapped sg_table object
+ * @sgt:       sg_table object to iterate over
+ * @dma_iter:   DMA page iterator to hold current page
+ * @pgoffset:   starting page offset (in pages)
+ *
+ * Iterates over the all DMA mapped pages in the buffer described by
+ * a scatterlist stored in the given sg_table object.
+ * See also for_each_sg_dma_page(). In each loop it operates on PAGE_SIZE
+ * unit.
+ */
+#define for_each_sgtable_dma_page(sgt, dma_iter, pgoffset)     \
+       for_each_sg_dma_page((sgt)->sgl, dma_iter, (sgt)->nents, pgoffset)
+
+/*
+ * Loop over each sg element in the given *DMA mapped* sg_table object.
+ * Please use sg_dma_address(sg) and sg_dma_len(sg) to extract DMA addresses
+ * of the each element.
+ */
+
+#define for_each_sgtable_dma_sg(sgt, sg, i)     \
+                for_each_sg(sgt->sgl, sg, sgt->nents, i)
+
+#endif
+
+#ifdef BPM_SG_CHAIN_NOT_PRESENT
+static inline void __sg_chain(struct scatterlist *chain_sg,
+                              struct scatterlist *sgl)
+{
+        /*
+         * offset and length are unused for chain entry. Clear them.
+         */
+        chain_sg->offset = 0;
+        chain_sg->length = 0;
+
+        /*
+         * Set lowest bit to indicate a link pointer, and make sure to clear
+         * the termination bit if it happens to be set.
+         */
+        chain_sg->page_link = ((unsigned long) sgl | SG_CHAIN) & ~SG_END;
+}
+#endif
 
 #endif /* __BACKPORT_SCATTERLIST_H */

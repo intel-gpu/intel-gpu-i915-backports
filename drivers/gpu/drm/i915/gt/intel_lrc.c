@@ -830,6 +830,18 @@ lrc_ring_indirect_offset_default(const struct intel_engine_cs *engine)
 }
 
 static void
+lrc_setup_bb_per_ctx(u32 *regs,
+		     const struct intel_engine_cs *engine,
+		     u32 ctx_bb_ggtt_addr)
+{
+	GEM_BUG_ON(lrc_ring_wa_bb_per_ctx(engine) == -1);
+	regs[lrc_ring_wa_bb_per_ctx(engine) + 1] =
+		ctx_bb_ggtt_addr |
+		PER_CTX_BB_FORCE |
+		PER_CTX_BB_VALID;
+}
+
+static void
 lrc_setup_indirect_ctx(u32 *regs,
 		       const struct intel_engine_cs *engine,
 		       u32 ctx_bb_ggtt_addr,
@@ -871,8 +883,7 @@ static void init_common_regs(u32 * const regs,
 					   CTX_CTRL_RS_CTX_ENABLE);
 	if (engine->flags & I915_ENGINE_HAS_RUN_ALONE_MODE) {
 		ctl |= _MASKED_BIT_DISABLE(CTX_CTRL_RUN_ALONE);
-		if (test_bit(CONTEXT_RUNALONE, &ce->flags) ||
-		     engine->i915->params.ctx_run_alone)
+		if (test_bit(CONTEXT_RUNALONE, &ce->flags))
 			ctl |= CTX_CTRL_RUN_ALONE;
 	}
 	regs[CTX_CONTEXT_CONTROL] = ctl;
@@ -903,14 +914,6 @@ static void init_wa_bb_regs(u32 * const regs,
 				       wa_ctx->indirect_ctx.offset,
 				       wa_ctx->indirect_ctx.size);
 	}
-}
-
-static struct i915_ppgtt *vm_alias(struct i915_address_space *vm)
-{
-	if (i915_is_ggtt(vm))
-		return i915_vm_to_ggtt(vm)->alias;
-	else
-		return i915_vm_to_ppgtt(vm);
 }
 
 static void
@@ -1108,6 +1111,9 @@ check_redzone(struct intel_context *ce)
 	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
 		return;
 
+	if (i915_is_pci_faulted(engine->i915))
+		return;
+
 	GEM_BUG_ON(!i915_gem_object_mem_idle(ce->state->obj));
 
 	vaddr += engine->context_size;
@@ -1147,7 +1153,13 @@ static u32 context_wa_bb_offset(const struct intel_context *ce)
 	return PAGE_SIZE * ce->wa_bb_page;
 }
 
-static u32 *context_indirect_bb(const struct intel_context *ce)
+/*
+ * per_ctx below determines which WABB section is used.
+ * When true, the function returns the location of the
+ * PER_CTX_BB.  When false, the function returns the
+ * location of the INDIRECT_CTX.
+ */
+static u32 *context_wabb(const struct intel_context *ce, bool per_ctx)
 {
 	void *ptr;
 
@@ -1156,6 +1168,7 @@ static u32 *context_indirect_bb(const struct intel_context *ce)
 	ptr = ce->lrc_reg_state;
 	ptr -= LRC_STATE_OFFSET; /* back to start of context image */
 	ptr += context_wa_bb_offset(ce);
+	ptr += per_ctx ? PAGE_SIZE : 0;
 
 	return ptr;
 }
@@ -1238,7 +1251,8 @@ __lrc_alloc_state(struct intel_context *ce, struct intel_engine_cs *engine)
 	if (GRAPHICS_VER(engine->i915) >= 12) {
 		ce->wa_bb_page = context_size / PAGE_SIZE;
 		GEM_BUG_ON(context_wa_bb_offset(ce) != context_size);
-		context_size += PAGE_SIZE;
+		/* INDIRECT_CTX and PER_CTX_BB need separate pages. */
+		context_size += PAGE_SIZE * 2;
 	}
 
 	if (intel_context_is_parent(ce) && intel_engine_uses_guc(engine)) {
@@ -1382,13 +1396,6 @@ void lrc_reset(struct intel_context *ce)
 
 	GEM_BUG_ON(!intel_context_is_pinned(ce));
 
-	/*
-	 * The HWSP is volatile, and may have been lost while inactive,
-	 * e.g. across suspend/resume. Be paranoid, and ensure that
-	 * the HWSP value matches our seqno so we don't proclaim
-	 * the next request as already complete.
-	 */
-	intel_timeline_reset_seqno(ce->timeline);
 	intel_ring_reset(ce->ring, 0);
 
 	vaddr = ce->lrc_reg_state;
@@ -1397,6 +1404,14 @@ void lrc_reset(struct intel_context *ce)
 	/* Scrub away the garbage */
 	__clear_bit(CONTEXT_VALID_BIT, &ce->flags);
 	lrc_init_state(ce, ce->engine, vaddr);
+
+	/*
+	 * The HWSP is volatile, and may have been lost while inactive,
+	 * e.g. across suspend/resume. Be paranoid, and ensure that
+	 * the HWSP value matches our seqno so we don't proclaim
+	 * the next request as already complete.
+	 */
+	intel_timeline_reset_seqno(ce->timeline);
 
 	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
 }
@@ -1605,27 +1620,6 @@ gen12_emit_indirect_ctx_rcs(const struct intel_context *ce, u32 *cs)
 }
 
 /*
- * Set memory fence address and call MI_MEM_FENCE as part of context
- * restore to ensure that all the writes are flushed and the ring and
- * batches in there are properly visible to the GPU.
- */
-static u32 *gen12_emit_indirectctx_bb(const struct intel_context *ce, u32 *cs)
-{
-	u64 mfence_addr;
-
-	if (!HAS_MEM_FENCE_SUPPORT(ce->engine->i915) || !ce->vm->mfence.vma)
-		return cs;
-
-	mfence_addr = ce->vm->mfence.vma->node.start;
-	*cs++ = STATE_SYSTEM_MEM_FENCE_ADDRESS;
-	*cs++ = lower_32_bits(mfence_addr);
-	*cs++ = upper_32_bits(mfence_addr);
-	*cs++ = MI_MEM_FENCE | MI_ACQUIRE_ENABLE;
-
-	return cs;
-}
-
-/*
  * Once we're done with our own work, we need to explicitly re-load GPR regs
  * from the context image again to put GPR regs back at their original values.
  */
@@ -1751,7 +1745,6 @@ gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 {
 	cs = gen12_emit_timestamp_wa(ce, cs);
 	cs = gen12_emit_restore_scratch(ce, cs);
-	cs = gen12_emit_indirectctx_bb(ce, cs);
 
 	/* Wa_16017236439:pvc */
 	if (need_credits_wa(ce->engine))
@@ -1778,12 +1771,128 @@ gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 	return cs;
 }
 
+static u32 *xehp_emit_fastcolor_blt_wabb(const struct intel_context *ce, u32 *cs)
+{
+	struct intel_gt *gt = ce->engine->gt;
+	u32 mocs = gt->mocs.uc_index << 1;
+
+	/*
+	 * Wa_16018031267 / Wa_16018063123 requires that SW forces the
+	 * main copy engine arbitration into round robin mode.  We
+	 * additionally need to submit the following WABB blt command
+	 * to produce 4 subblits with each subblit generating 0 byte
+	 * write requests as WABB:
+	 *
+	 * XY_FASTCOLOR_BLT
+	 *  BG0    -> 5100000E
+	 *  BG1    -> 0000003F (Dest pitch)
+	 *  BG2    -> 00000000 (X1, Y1) = (0, 0)
+	 *  BG3    -> 00040001 (X2, Y2) = (1, 4)
+	 *  BG4    -> scratch
+	 *  BG5    -> scratch
+	 *  BG6-12 -> 00000000
+	 *  BG13   -> 20004004 (Surf. Width = 2,Surf. Height = 5)
+	 *  BG14   -> 00000010 (Qpitch = 4)
+	 *  BG15   -> 00000000
+	 */
+	*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD | (16 - 2);
+	*cs++ = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs) | 0x3f;
+	*cs++ = 0;
+	*cs++ = 4 << 16 | 1;
+	*cs++ = lower_32_bits(ce->vm->total); /* top is reserved */
+	*cs++ = upper_32_bits(ce->vm->total);
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0x20004004;
+	*cs++ = 0x10;
+	*cs++ = 0;
+
+	return cs;
+}
+
+static u32 *pvc_emit_fastcolor_blt_wabb(const struct intel_context *ce, u32 *cs)
+{
+	enum { ID = 0, SHIFT, __NUM_GPR };
+
+	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRR_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(RING_ID(0));
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
+
+	*cs++ = MI_LOAD_REGISTER_IMM(3) | MI_LRI_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, ID));
+	*cs++ = 0;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, SHIFT));
+	*cs++ = 4;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, SHIFT));
+	*cs++ = 0;
+
+	*cs++ = MI_MATH(4);
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
+	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(SHIFT));
+	*cs++ = MI_MATH_SHR;
+	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
+
+	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRR_DEST_CS_MMIO;
+	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
+	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_2(0));
+
+	*cs++ = MI_SET_PREDICATE | 2; /* skip if RESULT_2(engine id) != 0 */
+
+	cs = xehp_emit_fastcolor_blt_wabb(ce, cs);
+
+	*cs++ = MI_SET_PREDICATE | MI_SET_PREDICATE_DISABLE;
+
+	return emit_restore_gpr(ce, cs, __NUM_GPR);
+}
+
+static u32 *
+xehp_emit_per_ctx_bb(const struct intel_context *ce,
+		     const struct intel_engine_cs *engine,
+		     u32 *cs)
+{
+	/* Wa_16018031267, Wa_16018063123 */
+	if (ce->engine->mask == BIT(BCS0))
+		cs = xehp_emit_fastcolor_blt_wabb(ce, cs);
+	else if (ce->engine->mask & BIT(BCS0))
+		cs = pvc_emit_fastcolor_blt_wabb(ce, cs);
+
+	return cs;
+}
+
+static void
+setup_per_ctx_bb(const struct intel_context *ce,
+		 const struct intel_engine_cs *engine,
+		 u32 *(*emit)(const struct intel_context *ce,
+			      const struct intel_engine_cs *engine,
+			      u32 *cs))
+{
+	/* Place PER_CTX_BB on next page after INDIRECT_CTX */
+	u32 * const start = context_wabb(ce, true);
+	u32 *cs;
+
+	cs = emit(ce, engine, start);
+	if (cs == start)
+		return;
+
+	/* PER_CTX_BB must manually terminate */
+	*cs++ = MI_BATCH_BUFFER_END;
+
+	GEM_BUG_ON(cs - start > I915_GTT_PAGE_SIZE / sizeof(*cs));
+	lrc_setup_bb_per_ctx(ce->lrc_reg_state, engine,
+			     lrc_indirect_bb(ce) + PAGE_SIZE);
+}
+
 static void
 setup_indirect_ctx_bb(const struct intel_context *ce,
 		      const struct intel_engine_cs *engine,
 		      u32 *(*emit)(const struct intel_context *, u32 *))
 {
-	u32 * const start = context_indirect_bb(ce);
+	u32 * const start = context_wabb(ce, false);
 	u32 *cs;
 
 	cs = emit(ce, start);
@@ -1880,7 +1989,7 @@ u32 lrc_update_regs(const struct intel_context *ce,
 	regs[CTX_RING_TAIL] = ring->tail;
 	regs[CTX_RING_CTL] = RING_CTL_SIZE(ring->size) | RING_VALID;
 
-	set_ppgtt_regs(regs, vm_alias(ce->vm));
+	set_ppgtt_regs(regs, i915_vm_to_ppgtt(ce->vm));
 
 	/* RPCS */
 	if (engine->class == RENDER_CLASS) {
@@ -1900,6 +2009,7 @@ u32 lrc_update_regs(const struct intel_context *ce,
 		/* Mutually exclusive wrt to global indirect bb */
 		GEM_BUG_ON(engine->wa_ctx.indirect_ctx.size);
 		setup_indirect_ctx_bb(ce, engine, fn);
+		setup_per_ctx_bb(ce, engine, xehp_emit_per_ctx_bb);
 	}
 
 	return lrc_descriptor(ce) | CTX_DESC_FORCE_RESTORE;

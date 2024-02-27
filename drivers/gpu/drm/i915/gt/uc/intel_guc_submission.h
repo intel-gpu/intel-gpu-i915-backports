@@ -30,6 +30,8 @@ void intel_guc_submission_print_context_info(struct intel_guc *guc,
 					     struct drm_printer *p);
 void intel_guc_busyness_park(struct intel_gt *gt);
 void intel_guc_busyness_unpark(struct intel_gt *gt);
+u64 intel_guc_total_active_ticks(struct intel_gt *gt, unsigned int vf_id);
+void intel_guc_init_busy_free(struct intel_gt *gt);
 
 bool intel_guc_virtual_engine_has_heartbeat(const struct intel_engine_cs *ve);
 

@@ -132,8 +132,8 @@
 
 /* GuC Virtual Engine */
 struct guc_virtual_engine {
-	struct intel_engine_cs base;
 	struct intel_context context;
+	struct intel_engine_cs base;
 };
 
 static struct intel_context *
@@ -640,8 +640,6 @@ int intel_guc_wait_for_pending_msg(struct intel_guc *guc,
 	if (!timeout)
 		return -ETIME;
 
-	timeout = ADJUST_TIMEOUT(timeout);
-
 	intel_boost_fake_int_timer(guc_to_gt(guc), true);
 	for (;;) {
 		prepare_to_wait(&guc->ct.wq, &wait, state);
@@ -913,8 +911,11 @@ static bool multi_lrc_submit(struct i915_request *rq)
 	return test_bit(I915_FENCE_FLAG_SUBMIT_PARALLEL, &rq->fence.flags) ||
 		intel_context_is_banned(ce);
 }
-
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+static void nop_submission_tasklet(unsigned long data)
+#else
 static void nop_submission_tasklet(struct tasklet_struct *t)
+#endif
 {
 }
 
@@ -1028,7 +1029,11 @@ add_request:
 	return submit;
 
 deadlk:
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	sched_engine->tasklet.func = nop_submission_tasklet;
+#else
 	sched_engine->tasklet.callback = nop_submission_tasklet;
+#endif
 	tasklet_disable_nosync(&sched_engine->tasklet);
 	return false;
 
@@ -1037,20 +1042,41 @@ schedule_tasklet:
 	return false;
 }
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+static void guc_submission_tasklet(unsigned long data)
+#else
 static void guc_submission_tasklet(struct tasklet_struct *t)
+#endif
 {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	struct intel_guc *guc = (struct intel_guc *)data;
+#else
 	struct i915_sched_engine *sched_engine =
 		from_tasklet(sched_engine, t, tasklet);
+#endif
 	unsigned long flags;
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	spin_lock_irqsave(&guc->sched_engine->lock, flags);
+#else
 	spin_lock_irqsave(&sched_engine->lock, flags);
-
+#endif
+	
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	while(guc_dequeue_one_context(guc));
+#else
 	while (guc_dequeue_one_context(sched_engine->private_data))
 		;
+#endif
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	i915_sched_engine_reset_on_empty(guc->sched_engine);
+	spin_unlock_irqrestore(&guc->sched_engine->lock, flags);
+#else
 	i915_sched_engine_reset_on_empty(sched_engine);
 
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
+#endif
 }
 
 static void cs_irq_handler(struct intel_engine_cs *engine, u16 iir)
@@ -1146,9 +1172,23 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
 	xa_unlock_irqrestore(&guc->context_lookup, flags);
 }
 
+static bool busy_type_is_v1(struct intel_guc *guc)
+{
+	/* Must not call this before the submit version is determined! */
+	GEM_BUG_ON(guc->submission_version.major == 0);
+
+	if (!guc_to_gt(guc)->i915->params.enable_busy_v2)
+		return true;
+
+	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 3, 1))
+		return true;
+
+	return false;
+}
+
 /*
- * GuC stores busyness stats for each engine at context in/out boundaries. A
- * context 'in' logs execution start time, 'out' adds in -> out delta to total.
+ * GuC < 70.11.1 stores busyness stats for each engine at context in/out boundaries.
+ * A context 'in' logs execution start time, 'out' adds in -> out delta to total.
  * i915/kmd accesses 'start', 'total' and 'context id' from memory shared with
  * GuC.
  *
@@ -1169,23 +1209,23 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
  * 27 seconds for a gt clock frequency of 19.2 MHz).
  */
 
-#define WRAP_TIME_CLKS U32_MAX
-#define POLL_TIME_CLKS (WRAP_TIME_CLKS >> 3)
+#define BUSY_V1_WRAP_TIME_CLKS U32_MAX
+#define BUSY_V1_POLL_TIME_CLKS (BUSY_V1_WRAP_TIME_CLKS >> 3)
 
 static void
-__extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_start)
+__busy_v1_extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_start)
 {
-	u32 gt_stamp_hi = upper_32_bits(guc->timestamp.gt_stamp);
-	u32 gt_stamp_last = lower_32_bits(guc->timestamp.gt_stamp);
+	u32 gt_stamp_hi = upper_32_bits(guc->busy.v1.gt_stamp);
+	u32 gt_stamp_last = lower_32_bits(guc->busy.v1.gt_stamp);
 
 	if (new_start == lower_32_bits(*prev_start))
 		return;
 
 	/*
 	 * When gt is unparked, we update the gt timestamp and start the ping
-	 * worker that updates the gt_stamp every POLL_TIME_CLKS. As long as gt
+	 * worker that updates the gt_stamp every BUSY_V1_POLL_TIME_CLKS. As long as gt
 	 * is unparked, all switched in contexts will have a start time that is
-	 * within +/- POLL_TIME_CLKS of the most recent gt_stamp.
+	 * within +/- BUSY_V1_POLL_TIME_CLKS of the most recent gt_stamp.
 	 *
 	 * If neither gt_stamp nor new_start has rolled over, then the
 	 * gt_stamp_hi does not need to be adjusted, however if one of them has
@@ -1195,18 +1235,15 @@ __extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_start)
 	 * gt_stamp_last rollover respectively.
 	 */
 	if (new_start < gt_stamp_last &&
-	    (new_start - gt_stamp_last) <= POLL_TIME_CLKS)
+	    (new_start - gt_stamp_last) <= BUSY_V1_POLL_TIME_CLKS)
 		gt_stamp_hi++;
 
 	if (new_start > gt_stamp_last &&
-	    (gt_stamp_last - new_start) <= POLL_TIME_CLKS && gt_stamp_hi)
+	    (gt_stamp_last - new_start) <= BUSY_V1_POLL_TIME_CLKS && gt_stamp_hi)
 		gt_stamp_hi--;
 
 	*prev_start = ((u64)gt_stamp_hi << 32) | new_start;
 }
-
-#define record_read(map_, field_) \
-	iosys_map_rd_field(map_, 0, struct guc_engine_usage_record, field_)
 
 /*
  * GuC updates shared memory and KMD reads it. Since this is not synchronized,
@@ -1219,11 +1256,14 @@ __extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_start)
  * values. The upper bound is set to 6 attempts and may need to be tuned as per
  * any new occurences.
  */
-static void __get_engine_usage_record(struct intel_engine_cs *engine,
-				      u32 *last_in, u32 *id, u32 *total)
+static void __busy_v1_get_engine_usage_record(struct intel_engine_cs *engine,
+					      u32 *last_in, u32 *id, u32 *total)
 {
-	struct iosys_map rec_map = intel_guc_engine_usage_record_map(engine);
+	struct iosys_map rec_map = intel_guc_engine_usage_record_map_v1(engine);
 	int i = 0;
+
+#define record_read(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_usage_record, field_)
 
 	do {
 		*last_in = record_read(&rec_map, last_switch_in_stamp);
@@ -1235,21 +1275,23 @@ static void __get_engine_usage_record(struct intel_engine_cs *engine,
 		    record_read(&rec_map, total_runtime) == *total)
 			break;
 	} while (++i < 6);
+
+#undef record_read
 }
 
-static void guc_update_engine_gt_clks(struct intel_engine_cs *engine)
+static void busy_v1_guc_update_engine_gt_clks(struct intel_engine_cs *engine)
 {
-	struct intel_engine_guc_stats *stats = &engine->stats.guc;
+	struct intel_engine_guc_stats_v1 *stats = &engine->stats.guc_v1;
 	struct intel_guc *guc = &engine->gt->uc.guc;
 	u32 last_switch, ctx_id, total;
 
-	lockdep_assert_held(&guc->timestamp.lock);
+	lockdep_assert_held(&guc->busy.v1.lock);
 
-	__get_engine_usage_record(engine, &last_switch, &ctx_id, &total);
+	__busy_v1_get_engine_usage_record(engine, &last_switch, &ctx_id, &total);
 
 	stats->running = ctx_id != ~0U && last_switch;
 	if (stats->running)
-		__extend_last_switch(guc, &stats->start_gt_clk, last_switch);
+		__busy_v1_extend_last_switch(guc, &stats->start_gt_clk, last_switch);
 
 	/*
 	 * Instead of adjusting the total for overflow, just add the
@@ -1261,7 +1303,7 @@ static void guc_update_engine_gt_clks(struct intel_engine_cs *engine)
 	}
 }
 
-static u32 gpm_timestamp_shift(struct intel_gt *gt)
+static u32 busy_v1_gpm_timestamp_shift(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
 	u32 reg, shift;
@@ -1275,34 +1317,30 @@ static u32 gpm_timestamp_shift(struct intel_gt *gt)
 	return 3 - shift;
 }
 
-static void guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
+static void busy_v1_guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	u32 gt_stamp_lo, gt_stamp_hi;
 	u64 gpm_ts;
 
-	lockdep_assert_held(&guc->timestamp.lock);
+	lockdep_assert_held(&guc->busy.v1.lock);
 
-	gt_stamp_hi = upper_32_bits(guc->timestamp.gt_stamp);
+	gt_stamp_hi = upper_32_bits(guc->busy.v1.gt_stamp);
 	gpm_ts = intel_uncore_read64_2x32(gt->uncore, MISC_STATUS0,
-					  MISC_STATUS1) >> guc->timestamp.shift;
+					  MISC_STATUS1) >> guc->busy.v1.shift;
 	gt_stamp_lo = lower_32_bits(gpm_ts);
-	*now = ktime_get();
+	if (now)
+		*now = ktime_get();
 
-	if (gt_stamp_lo < lower_32_bits(guc->timestamp.gt_stamp))
+	if (gt_stamp_lo < lower_32_bits(guc->busy.v1.gt_stamp))
 		gt_stamp_hi++;
 
-	guc->timestamp.gt_stamp = ((u64)gt_stamp_hi << 32) | gt_stamp_lo;
+	guc->busy.v1.gt_stamp = ((u64)gt_stamp_hi << 32) | gt_stamp_lo;
 }
 
-/*
- * Unlike the execlist mode of submission total and active times are in terms of
- * gt clocks. The *now parameter is retained to return the cpu time at which the
- * busyness was sampled.
- */
-static ktime_t guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
+static u64 __busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine, ktime_t *now_out)
 {
-	struct intel_engine_guc_stats stats_saved, *stats = &engine->stats.guc;
+	struct intel_engine_guc_stats_v1 stats_saved, *stats = &engine->stats.guc_v1;
 	struct i915_gpu_error *gpu_error = &engine->i915->gpu_error;
 	struct intel_gt *gt = engine->gt;
 	struct intel_guc *guc = &gt->uc.guc;
@@ -1311,8 +1349,9 @@ static ktime_t guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
 	u32 reset_count;
 	bool in_reset;
 	intel_wakeref_t wakeref;
+	ktime_t now;
 
-	spin_lock_irqsave(&guc->timestamp.lock, flags);
+	spin_lock_irqsave(&guc->busy.v1.lock, flags);
 
 	/*
 	 * If a reset happened, we risk reading partially updated engine
@@ -1325,7 +1364,7 @@ static ktime_t guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
 	reset_count = i915_reset_count(gpu_error);
 	in_reset = test_bit(I915_RESET_BACKOFF, &gt->reset.flags);
 
-	*now = ktime_get();
+	now = ktime_get();
 
 	/*
 	 * The active busyness depends on start_gt_clk and gt_stamp.
@@ -1336,90 +1375,149 @@ static ktime_t guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
 	if (!in_reset && !IS_SRIOV_VF(gt->i915) &&
 	    (wakeref = intel_gt_pm_get_if_awake(gt))) {
 		stats_saved = *stats;
-		gt_stamp_saved = guc->timestamp.gt_stamp;
+		gt_stamp_saved = guc->busy.v1.gt_stamp;
 		/*
 		 * Update gt_clks, then gt timestamp to simplify the 'gt_stamp -
 		 * start_gt_clk' calculation below for active engines.
 		 */
-		guc_update_engine_gt_clks(engine);
-		guc_update_pm_timestamp(guc, now);
+		busy_v1_guc_update_engine_gt_clks(engine);
+		busy_v1_guc_update_pm_timestamp(guc, &now);
 		intel_gt_pm_put_async(gt, wakeref);
 		if (i915_reset_count(gpu_error) != reset_count) {
 			*stats = stats_saved;
-			guc->timestamp.gt_stamp = gt_stamp_saved;
+			guc->busy.v1.gt_stamp = gt_stamp_saved;
 		}
 	}
 
-	total = intel_gt_clock_interval_to_ns(gt, stats->total_gt_clks);
+	total = stats->total_gt_clks;
 	if (stats->running) {
-		u64 clk = guc->timestamp.gt_stamp - stats->start_gt_clk;
+		u64 clk = guc->busy.v1.gt_stamp - stats->start_gt_clk;
 
-		total += intel_gt_clock_interval_to_ns(gt, clk);
+		total += clk;
 	}
 
-	spin_unlock_irqrestore(&guc->timestamp.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 
-	return ns_to_ktime(total);
+	if (now_out)
+		*now_out = now;
+
+	return total;
 }
 
-static void guc_enable_busyness_worker(struct intel_guc *guc)
+/*
+ * Unlike the execlist mode of submission total and active times are in terms of
+ * gt clocks. The *now parameter is retained to return the cpu time at which the
+ * busyness was sampled.
+ */
+static ktime_t busy_v1_guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
 {
-	mod_delayed_work(system_highpri_wq, &guc->timestamp.work, guc->timestamp.ping_delay);
+	u64 ticks = __busy_v1_guc_engine_busyness_ticks(engine, now);
+	u64 ns = intel_gt_clock_interval_to_ns(engine->gt, ticks);
+
+	return ns_to_ktime(ns);
 }
 
-static void guc_cancel_busyness_worker(struct intel_guc *guc)
+static u64 busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
+					     unsigned int vf_id)
 {
-	cancel_delayed_work_sync(&guc->timestamp.work);
+	if (vf_id > 1) {
+		/*
+		 * VF specific counter is not available with v1 interface, but
+		 * PF specific counter is available. Since 0 is global and 1 is
+		 * PF, we support those values of vf_id here.
+		 */
+		return 0;
+	}
+
+	return __busy_v1_guc_engine_busyness_ticks(engine, NULL);
 }
 
-static void __reset_guc_busyness_stats(struct intel_guc *guc)
+static void busy_v1_guc_enable_worker(struct intel_guc *guc)
+{
+	mod_delayed_work(system_highpri_wq, &guc->busy.v1.work, guc->busy.v1.ping_delay);
+}
+
+static void busy_v1_guc_cancel_worker(struct intel_guc *guc)
+{
+	cancel_delayed_work_sync(&guc->busy.v1.work);
+}
+
+static void __busy_v1_reset_guc_busyness_stats(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
 	unsigned long flags;
-	ktime_t unused;
 
-	guc_cancel_busyness_worker(guc);
+	busy_v1_guc_cancel_worker(guc);
 
-	spin_lock_irqsave(&guc->timestamp.lock, flags);
+	spin_lock_irqsave(&guc->busy.v1.lock, flags);
 
-	guc_update_pm_timestamp(guc, &unused);
+	busy_v1_guc_update_pm_timestamp(guc, NULL);
 	for_each_engine(engine, gt, id) {
-		guc_update_engine_gt_clks(engine);
-		engine->stats.guc.prev_total = 0;
+		busy_v1_guc_update_engine_gt_clks(engine);
+		engine->stats.guc_v1.prev_total = 0;
 	}
 
-	spin_unlock_irqrestore(&guc->timestamp.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 }
 
-static void __update_guc_busyness_stats(struct intel_guc *guc)
+static void __busy_v1_update_guc_busyness_stats(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
 	unsigned long flags;
-	ktime_t unused;
 
-	guc->timestamp.last_stat_jiffies = jiffies;
+	guc->busy.v1.last_stat_jiffies = jiffies;
 
-	spin_lock_irqsave(&guc->timestamp.lock, flags);
+	spin_lock_irqsave(&guc->busy.v1.lock, flags);
 
-	guc_update_pm_timestamp(guc, &unused);
+	busy_v1_guc_update_pm_timestamp(guc, NULL);
 	for_each_engine(engine, gt, id)
-		guc_update_engine_gt_clks(engine);
+		busy_v1_guc_update_engine_gt_clks(engine);
 
-	spin_unlock_irqrestore(&guc->timestamp.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 }
 
-static void guc_timestamp_ping(struct work_struct *wrk)
+static void busy_v1_guc_timestamp_ping(struct work_struct *wrk)
 {
 	struct intel_guc *guc = container_of(wrk, typeof(*guc),
-					     timestamp.work.work);
+					     busy.v1.work.work);
 	struct intel_uc *uc = container_of(guc, typeof(*uc), guc);
 	struct intel_gt *gt = guc_to_gt(guc);
 	intel_wakeref_t wakeref;
 	int srcu, ret;
+
+	/*
+	 * Ideally the busyness worker should take a gt pm wakeref because the
+	 * worker only needs to be active while gt is awake. However, the
+	 * gt_park path cancels the worker synchronously and this complicates
+	 * the flow if the worker is also running at the same time. The cancel
+	 * waits for the worker and when the worker releases the wakeref, that
+	 * would call gt_park and would lead to a deadlock.
+	 *
+	 * The resolution is to take the global pm wakeref if runtime pm is
+	 * already active. If not, we don't need to update the busyness stats as
+	 * the stats would already be updated when the gt was parked.
+	 *
+	 * Note:
+	 * - We do not requeue the worker if we cannot take a reference to runtime
+	 *   pm since intel_guc_busyness_unpark would requeue the worker in the
+	 *   resume path.
+	 *
+	 * - If the gt was parked longer than time taken for GT timestamp to roll
+	 *   over, we ignore those rollovers since we don't care about tracking
+	 *   the exact GT time. We only care about roll overs when the gt is
+	 *   active and running workloads.
+	 *
+	 * - There is a window of time between gt_park and runtime suspend,
+	 *   where the worker may run. This is acceptable since the worker will
+	 *   not find any new data to update busyness.
+	 */
+	wakeref = intel_runtime_pm_get_if_active(&gt->i915->runtime_pm);
+	if (!wakeref)
+		return;
 
 	/*
 	 * Synchronize with gt reset to make sure the worker does not
@@ -1429,21 +1527,357 @@ static void guc_timestamp_ping(struct work_struct *wrk)
 	 */
 	ret = intel_gt_reset_trylock(gt, &srcu);
 	if (ret)
-		return;
+		goto err_trylock;
 
-	with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref)
-		__update_guc_busyness_stats(guc);
+	__busy_v1_update_guc_busyness_stats(guc);
 
 	intel_gt_reset_unlock(gt, srcu);
 
-	guc_enable_busyness_worker(guc);
+	busy_v1_guc_enable_worker(guc);
+
+err_trylock:
+	intel_runtime_pm_put(&gt->i915->runtime_pm, wakeref);
 }
 
-static int guc_action_enable_usage_stats(struct intel_guc *guc)
+static int busy_v1_guc_action_enable_usage_stats(struct intel_guc *guc)
 {
-	u32 offset = intel_guc_engine_usage_offset(guc);
+	u32 offset = intel_guc_engine_usage_offset_global(guc);
 	u32 action[] = {
-		INTEL_GUC_ACTION_SET_ENG_UTIL_BUFF,
+		INTEL_GUC_ACTION_SET_ENG_UTIL_BUFF_V1,
+		offset,
+		0,
+	};
+
+	return intel_guc_send(guc, action, ARRAY_SIZE(action));
+}
+
+/*
+ * GuC >= 70.11.1 maintains busyness counters in a shared memory buffer for each
+ * engine on a continuous basis. The counters are all 64bits and count in clock
+ * ticks. The values are updated on context switch events and periodically on a
+ * timer internal to GuC. The update rate is guaranteed to be at least 2Hz (but
+ * with the caveat that GuC is not a real-time OS so best effort only).
+ *
+ * In addition to an engine active time count, there is also a total time count.
+ * For native, this is only a free-running GT timestamp counter. For PF/VF,
+ * there is also a function active counter - how many ticks the VF or PF has had
+ * available for execution.
+ *
+ * Note that the counters should only be used as ratios of each other for
+ * a calculating a percentage. No guarantees are made about frequencies for
+ * conversions to wall time, etc.
+ *
+ * ticks_engine:   clock ticks for which engine was active
+ * ticks_function: clock ticks owned by this VF
+ * ticks_gt:       total clock ticks
+ *
+ * native engine busyness: ticks_engine / ticks_gt
+ * VF/PF engine busyness:  ticks_engine / ticks_function
+ * VF/PF engine ownership: ticks_function / ticks_gt
+ */
+
+static u32 guc_engine_usage_offset_v2_device(struct intel_guc *guc)
+{
+	return intel_guc_ggtt_offset(guc, guc->busy.v2.device_vma);
+}
+
+static int guc_busy_v2_alloc_device(struct intel_guc *guc)
+{
+	size_t size = sizeof(struct guc_engine_observation_data);
+	void *busy_v2_ptr;
+	int ret;
+
+	ret = intel_guc_allocate_and_map_vma(guc, size, &guc->busy.v2.device_vma, &busy_v2_ptr);
+	if (ret)
+		return ret;
+
+	if (i915_gem_object_is_lmem(guc->busy.v2.device_vma->obj))
+		iosys_map_set_vaddr_iomem(&guc->busy.v2.device_map, (void __iomem *)busy_v2_ptr);
+	else
+		iosys_map_set_vaddr(&guc->busy.v2.device_map, busy_v2_ptr);
+
+	return 0;
+}
+
+static void guc_busy_v2_free_device(struct intel_guc *guc)
+{
+	i915_vma_unpin_and_release(&guc->busy.v2.device_vma, I915_VMA_RELEASE_MAP);
+	iosys_map_clear(&guc->busy.v2.device_map);
+
+	guc->busy.v2.device_vma = NULL;
+}
+
+static void __busy_v2_get_engine_usage_record(struct intel_guc *guc,
+					      struct intel_engine_cs *engine,
+					      u32 guc_vf,
+					      u64 *_ticks_engine, u64 *_ticks_function,
+					      u64 *_ticks_gt)
+{
+	struct iosys_map rec_map_engine, rec_map_global;
+	u64 ticks_engine, ticks_function, ticks_gt;
+	int i = 0, ret;
+
+	ret = intel_guc_engine_usage_record_map_v2(guc, engine, guc_vf,
+						   &rec_map_engine, &rec_map_global);
+	if (ret) {
+		ticks_engine = 0;
+		ticks_function = 0;
+		ticks_gt = 0;
+		goto done;
+	}
+
+#define record_read_engine(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_data, field_)
+#define record_read_global(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_observation_data, field_)
+
+	do {
+		if (engine)
+			ticks_engine = record_read_engine(&rec_map_engine, total_execution_ticks);
+		ticks_function = record_read_global(&rec_map_global, total_active_ticks);
+		ticks_gt = record_read_global(&rec_map_global, gt_timestamp);
+
+		if (engine && (record_read_engine(&rec_map_engine, total_execution_ticks) !=
+			       ticks_engine))
+			continue;
+
+		if (record_read_global(&rec_map_global, total_active_ticks) == ticks_function &&
+		    record_read_global(&rec_map_global, gt_timestamp) == ticks_gt)
+			break;
+	} while (++i < 6);
+
+#undef record_read_engine
+#undef record_read_global
+
+done:
+	if (_ticks_engine)
+		*_ticks_engine = ticks_engine;
+	if (_ticks_function)
+		*_ticks_function = ticks_function;
+	if (_ticks_gt)
+		*_ticks_gt = ticks_gt;
+}
+
+static ktime_t busy_v2_guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
+{
+	struct intel_gt *gt = engine->gt;
+	struct intel_guc *guc = &gt->uc.guc;
+	u64 ticks_engine;
+	u64 total;
+
+	/* Completely fake time stamp :( */
+	if (now) {
+		guc_dbg(guc, "Warning, deprecated interface. Kernel time stamp is not accurate.\n");
+		*now = ktime_get();
+	}
+
+	__busy_v2_get_engine_usage_record(guc, engine, GUC_BUSYNESS_VF_GLOBAL,
+					  &ticks_engine, NULL, NULL);
+
+	total = intel_gt_clock_interval_to_ns(gt, ticks_engine);
+
+	return ns_to_ktime(total);
+}
+
+static u32 pmu_vfid_to_guc_vfid(unsigned int vf_id)
+{
+	/*
+	 * PMU vf_id is VF# + 1, i.e. zero => global, 1 => PF, 2+ => VF 1+
+	 * So substract 1 and ~0U => global, else it is the GuC VF#
+	 * (where the PF is VF#0)
+	 */
+
+	if (vf_id > GUC_MAX_VF_COUNT)
+		return GUC_MAX_VF_COUNT;
+
+	return vf_id - 1;
+}
+
+static u64 busy_v2_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
+					     unsigned int vf_id)
+{
+	struct intel_guc *guc = &engine->gt->uc.guc;
+	u64 ticks_engine;
+	u32 guc_vf;
+
+	guc_vf = pmu_vfid_to_guc_vfid(vf_id);
+	if (guc_vf == GUC_MAX_VF_COUNT)
+		return 0;
+
+	__busy_v2_get_engine_usage_record(guc, engine, guc_vf, &ticks_engine, NULL, NULL);
+
+	return ticks_engine;
+}
+
+static u64 busy_v1_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned int vf_id)
+{
+	struct intel_gt *gt = guc_to_gt(guc);
+	intel_wakeref_t wakeref;
+	unsigned long flags;
+
+	if (vf_id > 1) {
+		/*
+		 * VF specific counter is not available with v1 interface, but
+		 * PF specific counter is available. Since 0 is global and 1 is
+		 * PF, we support those values of vf_id here.
+		 */
+		return 0;
+	}
+
+	spin_lock_irqsave(&guc->busy.v1.lock, flags);
+	if ((wakeref = intel_gt_pm_get_if_awake(gt))) {
+		busy_v1_guc_update_pm_timestamp(guc, NULL);
+		intel_gt_pm_put_async(gt, wakeref);
+	}
+	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+
+	return guc->busy.v1.gt_stamp;
+}
+
+static u64 busy_v2_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned int vf_id)
+{
+	u64 ticks_function, ticks_gt;
+	u32 guc_vf;
+
+	guc_vf = pmu_vfid_to_guc_vfid(vf_id);
+	if (guc_vf == GUC_MAX_VF_COUNT)
+		return 0;
+
+	__busy_v2_get_engine_usage_record(guc, NULL, guc_vf, NULL, &ticks_function, &ticks_gt);
+
+	if (IS_SRIOV(guc_to_gt(guc)->i915))
+		return ticks_function;
+
+	return ticks_gt;
+}
+
+u64 intel_guc_total_active_ticks(struct intel_gt *gt, unsigned int vf_id)
+{
+	struct intel_guc *guc = &gt->uc.guc;
+
+	if (!guc_submission_initialized(guc))
+		return 0;
+
+	if (busy_type_is_v1(guc))
+		return busy_v1_intel_guc_total_active_ticks(guc, vf_id);
+	else
+		return busy_v2_intel_guc_total_active_ticks(guc, vf_id);
+}
+
+static u64 __busy_v2_busy_free_ticks(struct intel_gt *gt, unsigned int vf_id, u32 counter)
+{
+	struct intel_guc *guc = &gt->uc.guc;
+	struct iosys_map rec_map_global;
+	u64 ticks_busy_free;
+	int i = 0, ret;
+	u32 guc_vf;
+
+	if (!guc_submission_initialized(guc) || busy_type_is_v1(guc))
+		return 0;
+
+	guc_vf = pmu_vfid_to_guc_vfid(vf_id);
+	if (guc_vf == GUC_MAX_VF_COUNT)
+		return 0;
+
+	ret = intel_guc_engine_usage_record_map_v2(guc, NULL, guc_vf, NULL,
+						   &rec_map_global);
+	if (ret)
+		return 0;
+
+#define record_read_global(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_observation_data, field_)
+
+	do {
+		ticks_busy_free = record_read_global(&rec_map_global, oag_busy_free_data[counter]);
+
+		if (record_read_global(&rec_map_global, oag_busy_free_data[counter]) == ticks_busy_free)
+			break;
+	} while (++i < 6);
+
+#undef record_read_global
+
+	return ticks_busy_free;
+}
+
+static u64 busy_v2_busy_free_ticks(struct intel_gt *gt, u64 config, unsigned int vf_id)
+{
+	u64 val;
+
+	switch (config) {
+	case PRELIM_I915_PMU_RENDER_GROUP_BUSY:
+	case PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS:
+		val = __busy_v2_busy_free_ticks(gt, vf_id, OAG_RENDER_BUSY_COUNTER_INDEX);
+		break;
+	case PRELIM_I915_PMU_COPY_GROUP_BUSY:
+	case PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS:
+		val = __busy_v2_busy_free_ticks(gt, vf_id, OAG_BLT_BUSY_COUNTER_INDEX);
+		break;
+	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY:
+	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS:
+		val = __busy_v2_busy_free_ticks(gt, vf_id, OAG_ANY_MEDIA_FF_BUSY_COUNTER_INDEX);
+		break;
+	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
+	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS:
+		val = __busy_v2_busy_free_ticks(gt, vf_id, OAG_RC0_ANY_ENGINE_BUSY_COUNTER_INDEX);
+		break;
+	default:
+		MISSING_CASE(config);
+		return 0;
+	}
+
+	/*
+	 * These counters ignore some lower bits compared to standard timestamp
+	 * TSC. Adjust for that using a multiplier.
+	 */
+	return val << 4;
+}
+
+static u64 busy_v2_busy_free_ns(struct intel_gt *gt, u64 config, unsigned int vf_id)
+{
+	u64 val = busy_v2_busy_free_ticks(gt, config, vf_id);
+
+	return intel_gt_clock_interval_to_ns(gt, val);
+}
+
+void intel_guc_init_busy_free(struct intel_gt *gt)
+{
+	struct intel_guc *guc = &gt->uc.guc;
+
+	if (!guc_submission_initialized(guc))
+		return;
+
+	/* v1 is implemented at i915_pmu level */
+	if (busy_type_is_v1(guc))
+		return;
+
+	gt->stats.busy_free = busy_v2_busy_free_ns;
+	gt->stats.busy_free_ticks = busy_v2_busy_free_ticks;
+
+	/*
+	 * In busyness v2, a periodic timer updates the group busy counters, so
+	 * we don't need to save the last value of the counter on gt park.
+	 * Instead a query will fetch the latest value from the GuC interface.
+	 */
+	gt->stats.busy_free_park = NULL;
+}
+
+static int busy_v2_guc_action_enable_usage_stats_device(struct intel_guc *guc)
+{
+	u32 offset = guc_engine_usage_offset_v2_device(guc);
+	u32 action[] = {
+		INTEL_GUC_ACTION_SET_DEVICE_ENGINE_UTILIZATION_V2,
+		offset,
+		0,
+	};
+
+	return intel_guc_send(guc, action, ARRAY_SIZE(action));
+}
+
+static int busy_v2_guc_action_enable_usage_stats_function(struct intel_guc *guc)
+{
+	u32 offset = intel_guc_engine_usage_offset_global(guc);
+	u32 action[] = {
+		INTEL_GUC_ACTION_SET_FUNCTION_ENGINE_UTILIZATION_V2,
 		offset,
 		0,
 	};
@@ -1457,20 +1891,33 @@ static int guc_init_engine_stats(struct intel_guc *guc)
 	intel_wakeref_t wakeref;
 	int ret;
 
-	with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref)
-		ret = guc_action_enable_usage_stats(guc);
+	if (busy_type_is_v1(guc)) {
+		if (!IS_SRIOV_VF(gt->i915)) {
+			with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref)
+				ret = busy_v1_guc_action_enable_usage_stats(guc);
+
+			if (ret == 0)
+				busy_v1_guc_enable_worker(guc);
+		}
+	} else {
+		with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref) {
+			ret = busy_v2_guc_action_enable_usage_stats_device(guc);
+
+			if (ret == 0 && !IS_SRIOV_VF(gt->i915))
+				ret = busy_v2_guc_action_enable_usage_stats_function(guc);
+		}
+	}
 
 	if (ret)
 		guc_probe_error(guc, "Failed to enable usage stats: %pe\n", ERR_PTR(ret));
-	else
-		guc_enable_busyness_worker(guc);
 
 	return ret;
 }
 
 static void guc_fini_engine_stats(struct intel_guc *guc)
 {
-	guc_cancel_busyness_worker(guc);
+	if (busy_type_is_v1(guc))
+		busy_v1_guc_cancel_worker(guc);
 }
 
 void intel_guc_busyness_park(struct intel_gt *gt)
@@ -1483,31 +1930,33 @@ void intel_guc_busyness_park(struct intel_gt *gt)
 	if (!guc_submission_initialized(guc))
 		return;
 
+	if (!busy_type_is_v1(guc))
+		return;
+
 	/*
 	 * There is a race with suspend flow where the worker runs after suspend
 	 * and causes an unclaimed register access warning. Cancel the worker
 	 * synchronously here.
 	 */
-	guc_cancel_busyness_worker(guc);
+	busy_v1_guc_cancel_worker(guc);
 
 	/*
 	 * Before parking, we should sample engine busyness stats if we need to.
 	 * We can skip it if we are less than half a ping from the last time we
 	 * sampled the busyness stats.
 	 */
-	if (guc->timestamp.last_stat_jiffies &&
-	    !time_after(jiffies, guc->timestamp.last_stat_jiffies +
-			(guc->timestamp.ping_delay / 2)))
+	if (guc->busy.v1.last_stat_jiffies &&
+	    !time_after(jiffies, guc->busy.v1.last_stat_jiffies +
+			(guc->busy.v1.ping_delay / 2)))
 		return;
 
-	__update_guc_busyness_stats(guc);
+	__busy_v1_update_guc_busyness_stats(guc);
 }
 
 void intel_guc_busyness_unpark(struct intel_gt *gt)
 {
 	struct intel_guc *guc = &gt->uc.guc;
 	unsigned long flags;
-	ktime_t unused;
 
 	if (IS_SRIOV_VF(gt->i915))
 		return;
@@ -1515,10 +1964,13 @@ void intel_guc_busyness_unpark(struct intel_gt *gt)
 	if (!guc_submission_initialized(guc))
 		return;
 
-	spin_lock_irqsave(&guc->timestamp.lock, flags);
-	guc_update_pm_timestamp(guc, &unused);
-	spin_unlock_irqrestore(&guc->timestamp.lock, flags);
-	guc_enable_busyness_worker(guc);
+	if (!busy_type_is_v1(guc))
+		return;
+
+	spin_lock_irqsave(&guc->busy.v1.lock, flags);
+	busy_v1_guc_update_pm_timestamp(guc, NULL);
+	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+	busy_v1_guc_enable_worker(guc);
 }
 
 static inline bool
@@ -1538,7 +1990,11 @@ static void disable_submission(struct intel_guc *guc)
 	if (__tasklet_is_enabled(&sched_engine->tasklet)) {
 		GEM_BUG_ON(!guc->ct.enabled);
 		__tasklet_disable_sync_once(&sched_engine->tasklet);
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		sched_engine->tasklet.func = nop_submission_tasklet;
+#else
 		sched_engine->tasklet.callback = nop_submission_tasklet;
+#endif
 	}
 }
 
@@ -1555,11 +2011,18 @@ static void enable_submission(struct intel_guc *guc)
 	unsigned long flags;
 
 	spin_lock_irqsave(&guc->sched_engine->lock, flags);
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	sched_engine->tasklet.func = guc_submission_tasklet;
+#else
 	sched_engine->tasklet.callback = guc_submission_tasklet;
+#endif
 	wmb();	/* Make sure callback visible */
 	if (__enable_submission_tasklet(sched_engine)) {
 		GEM_BUG_ON(!guc->ct.enabled);
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		sched_engine->tasklet.func = guc_submission_tasklet;
+#endif
 		/* And kick in case we missed a new request submission. */
 		tasklet_hi_schedule(&sched_engine->tasklet);
 	}
@@ -1573,6 +2036,20 @@ static void guc_flush_submissions(struct intel_guc *guc)
 
 	spin_lock_irqsave(&sched_engine->lock, flags);
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
+}
+
+/* FIXME: External entities should not need to know */
+int intel_guc_busyness_type(struct intel_gt *gt)
+{
+	struct intel_guc *guc = &gt->uc.guc;
+
+	if (!guc_submission_initialized(guc))
+		return 0;
+
+	if (busy_type_is_v1(guc))
+		return 1;
+
+	return 2;
 }
 
 static void guc_flush_destroyed_contexts(struct intel_guc *guc);
@@ -1632,8 +2109,9 @@ void intel_guc_submission_reset_prepare(struct intel_guc *guc)
 	disable_submission(guc);
 	guc->interrupts.disable(guc);
 
-	if (!IS_SRIOV_VF(guc_to_gt(guc)->i915))
-		__reset_guc_busyness_stats(guc);
+	if (busy_type_is_v1(guc))
+		if (!IS_SRIOV_VF(guc_to_gt(guc)->i915))
+			__busy_v1_reset_guc_busyness_stats(guc);
 
 	/* Flush IRQ handler */
 	spin_lock_irq(guc_to_gt(guc)->irq_lock);
@@ -1680,7 +2158,7 @@ guc_submission_unwind_all(struct intel_guc *guc, intel_engine_mask_t stalled)
 	spin_unlock_irqrestore(&se->lock, flags);
 }
 
-/**
+/*
  * intel_guc_submission_pause - temporarily stop GuC submission mechanics
  */
 void intel_guc_submission_pause(struct intel_guc *guc)
@@ -1691,7 +2169,7 @@ void intel_guc_submission_pause(struct intel_guc *guc)
 	guc_submission_unwind_all(guc, 0);
 }
 
-/**
+/*
  * intel_guc_submission_restore - unpause GuC submission mechanics
  */
 void intel_guc_submission_restore(struct intel_guc *guc)
@@ -2041,7 +2519,11 @@ void intel_guc_submission_reset_finish(struct intel_guc *guc)
 	 * pending scheduled run.
 	 */
 	if (intel_gt_is_wedged(guc_to_gt(guc)) || !intel_guc_is_fw_running(guc)) {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		guc->sched_engine->tasklet.func = nop_submission_tasklet;
+#else
 		guc->sched_engine->tasklet.callback = nop_submission_tasklet;
+#endif
 		wmb(); /* Make sure callback visible */
 		__enable_submission_tasklet(guc->sched_engine);
 		return;
@@ -2123,11 +2605,16 @@ static void fini_tlb_lookup(struct intel_guc *guc)
  */
 int intel_guc_submission_init(struct intel_guc *guc)
 {
-	struct intel_gt *gt = guc_to_gt(guc);
 	int ret;
 
 	if (guc->submission_initialized)
 		return 0;
+
+	/* Can't do this initialisation in init_early as the submission version is not yet known */
+	if (busy_type_is_v1(guc)) {
+		spin_lock_init(&guc->busy.v1.lock);
+		INIT_DELAYED_WORK(&guc->busy.v1.work, busy_v1_guc_timestamp_ping);
+	}
 
 	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 0, 0)) {
 		ret = guc_lrc_desc_pool_create_v69(guc);
@@ -2146,12 +2633,23 @@ int intel_guc_submission_init(struct intel_guc *guc)
 		goto destroy_tlb;
 	}
 
-	guc->timestamp.ping_delay = (POLL_TIME_CLKS / gt->clock_frequency + 1) * HZ;
-	guc->timestamp.shift = gpm_timestamp_shift(gt);
+	if (busy_type_is_v1(guc)) {
+		struct intel_gt *gt = guc_to_gt(guc);
+
+		guc->busy.v1.ping_delay = (BUSY_V1_POLL_TIME_CLKS / gt->clock_frequency + 1) * HZ;
+		guc->busy.v1.shift = busy_v1_gpm_timestamp_shift(gt);
+	} else {
+		ret = guc_busy_v2_alloc_device(guc);
+		if (ret)
+			goto destroy_bitmap;
+	}
+
 	guc->submission_initialized = true;
 
 	return 0;
 
+destroy_bitmap:
+	bitmap_free(guc->submission_state.guc_ids_bitmap);
 destroy_tlb:
 	fini_tlb_lookup(guc);
 destroy_pool:
@@ -2168,6 +2666,8 @@ void intel_guc_submission_fini(struct intel_guc *guc)
 	guc_lrc_desc_pool_destroy_v69(guc);
 	i915_sched_engine_put(fetch_and_zero(&guc->sched_engine));
 	bitmap_free(guc->submission_state.guc_ids_bitmap);
+	if (!busy_type_is_v1(guc))
+		guc_busy_v2_free_device(guc);
 	fini_tlb_lookup(guc);
 	guc->submission_initialized = false;
 }
@@ -3950,22 +4450,24 @@ static int guc_request_alloc(struct i915_request *rq)
 	 * we start building the request - in which case we will just
 	 * have to repeat work.
 	 */
-	rq->reserved_space += GUC_REQUEST_SIZE;
+	if (!intel_context_is_barrier(ce)) {
+		rq->reserved_space += GUC_REQUEST_SIZE;
 
-	/*
-	 * Note that after this point, we have committed to using
-	 * this request as it is being used to both track the
-	 * state of engine initialisation and liveness of the
-	 * golden renderstate above. Think twice before you try
-	 * to cancel/unwind this request now.
-	 */
+		/*
+		 * Note that after this point, we have committed to using
+		 * this request as it is being used to both track the
+		 * state of engine initialisation and liveness of the
+		 * golden renderstate above. Think twice before you try
+		 * to cancel/unwind this request now.
+		 */
 
-	/* Unconditionally invalidate GPU caches and TLBs. */
-	ret = rq->engine->emit_flush(rq, EMIT_INVALIDATE);
-	if (ret)
-		return ret;
+		/* Unconditionally invalidate GPU caches and TLBs. */
+		ret = rq->engine->emit_flush(rq, EMIT_INVALIDATE);
+		if (ret)
+			return ret;
 
-	rq->reserved_space -= GUC_REQUEST_SIZE;
+		rq->reserved_space -= GUC_REQUEST_SIZE;
+	}
 
 	if (unlikely(!test_bit(CONTEXT_GUC_INIT, &ce->flags)))
 		guc_context_init(ce);
@@ -4495,7 +4997,11 @@ static int guc_resume(struct intel_engine_cs *engine)
 
 static bool guc_sched_engine_disabled(struct i915_sched_engine *sched_engine)
 {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	return sched_engine->tasklet.func != guc_submission_tasklet;
+#else
 	return sched_engine->tasklet.callback != guc_submission_tasklet;
+#endif
 }
 
 static int vf_guc_resume(struct intel_engine_cs *engine)
@@ -4645,13 +5151,31 @@ static void guc_default_vfuncs(struct intel_engine_cs *engine)
 		engine->emit_flush = gen12_emit_flush_xcs;
 	}
 	engine->set_default_submission = guc_set_default_submission;
-	engine->busyness = guc_engine_busyness;
+	if (busy_type_is_v1(&engine->gt->uc.guc)) {
+		/*
+		 * v1 busyness in VF is not supported, so prevent the counters
+		 * from getting created in sysfs.
+		 */
+		if (!IS_SRIOV_VF(engine->i915)) {
+			engine->busyness = busy_v1_guc_engine_busyness;
+			engine->busyness_ticks = busy_v1_guc_engine_busyness_ticks;
+		}
+	} else {
+		engine->busyness = busy_v2_guc_engine_busyness;
+		engine->busyness_ticks = busy_v2_guc_engine_busyness_ticks;
+	}
 
 	/* Wa:16014207253 */
 	if (engine->gt->fake_int.enabled) {
 		engine->irq_enable = guc_fake_irq_enable;
 		engine->irq_disable = guc_fake_irq_disable;
 	}
+
+	if (engine->busyness)
+		engine->flags |= I915_ENGINE_SUPPORTS_STATS;
+
+	if (engine->busyness_ticks)
+		engine->flags |= I915_ENGINE_SUPPORTS_TICKS_STATS;
 
 	engine->flags |= I915_ENGINE_HAS_SCHEDULER;
 	engine->flags |= I915_ENGINE_HAS_PREEMPTION;
@@ -4705,8 +5229,11 @@ static void guc_sched_engine_destroy(struct kref *kref)
 {
 	struct i915_sched_engine *sched_engine =
 		container_of(kref, typeof(*sched_engine), ref);
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	struct intel_guc *guc = (struct intel_guc *)sched_engine->tasklet.data;
+#else
 	struct intel_guc *guc = sched_engine->private_data;
-
+#endif
 	guc->sched_engine = NULL;
 	tasklet_kill(&sched_engine->tasklet); /* flush the callback */
 	kfree(sched_engine);
@@ -4729,14 +5256,22 @@ int intel_guc_submission_setup(struct intel_engine_cs *engine)
 			return -ENOMEM;
 
 		guc->sched_engine->disabled = guc_sched_engine_disabled;
+#ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 		guc->sched_engine->private_data = guc;
+#endif
 		guc->sched_engine->destroy = guc_sched_engine_destroy;
 		guc->sched_engine->bump_inflight_request_prio =
 			guc_bump_inflight_request_prio;
 		guc->sched_engine->retire_inflight_request_prio =
 			guc_retire_inflight_request_prio;
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		guc->sched_engine->tasklet.func = guc_submission_tasklet;
+		guc->sched_engine->tasklet.data = (uintptr_t) guc;
+#else
 		tasklet_setup(&guc->sched_engine->tasklet,
-			      guc_submission_tasklet);
+				guc_submission_tasklet);
+#endif
+
 	}
 	i915_sched_engine_put(engine->sched_engine);
 	engine->sched_engine = i915_sched_engine_get(guc->sched_engine);
@@ -4884,11 +5419,9 @@ int intel_guc_submission_enable(struct intel_guc *guc)
 	if (ret)
 		goto fail_sem;
 
-	if (!IS_SRIOV_VF(guc_to_gt(guc)->i915)) {
-		ret = guc_init_engine_stats(guc);
-		if (ret)
-			goto fail_sem;
-	}
+	ret = guc_init_engine_stats(guc);
+	if (ret)
+		goto fail_sem;
 
 	ret = guc_init_global_schedule_policy(guc);
 	if (ret)
@@ -4909,7 +5442,7 @@ void intel_guc_submission_disable(struct intel_guc *guc)
 	if (guc_to_gt(guc)->i915->quiesce_gpu)
 		return;
 
-	guc_cancel_busyness_worker(guc);
+	guc_fini_engine_stats(guc);
 
 	/* Semaphore interrupt disable and route to host */
 	guc_route_semaphores(guc, false);
@@ -4962,9 +5495,6 @@ void intel_guc_submission_init_early(struct intel_guc *guc)
 	INIT_LIST_HEAD(&guc->submission_state.destroyed_contexts);
 	INIT_WORK(&guc->submission_state.destroyed_worker,
 		  destroyed_worker_func);
-
-	spin_lock_init(&guc->timestamp.lock);
-	INIT_DELAYED_WORK(&guc->timestamp.work, guc_timestamp_ping);
 
 	guc->submission_state.sched_disable_delay_ms = SCHED_DISABLE_DELAY_MS;
 	guc->submission_state.num_guc_ids = GUC_MAX_CONTEXT_ID;

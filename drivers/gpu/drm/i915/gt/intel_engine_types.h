@@ -321,7 +321,7 @@ struct intel_engine_execlists_stats {
 	ktime_t start;
 };
 
-struct intel_engine_guc_stats {
+struct intel_engine_guc_stats_v1 {
 	/**
 	 * @running: Active state of the engine when busyness was last sampled.
 	 */
@@ -540,6 +540,11 @@ struct intel_engine_cs {
 	ktime_t		(*busyness)(struct intel_engine_cs *engine,
 				    ktime_t *now);
 
+	/*
+	 * Get engine busyness ticks
+	 */
+	u64		(*busyness_ticks)(struct intel_engine_cs *engine, unsigned int vf_id);
+
 	struct intel_engine_execlists execlists;
 
 	/*
@@ -549,9 +554,6 @@ struct intel_engine_cs {
 	 */
 	struct intel_timeline *retire;
 	struct work_struct retire_work;
-
-	/* status_notifier: list of callbacks for context-switch changes */
-	struct atomic_notifier_head context_status_notifier;
 
 #define I915_ENGINE_USING_CMD_PARSER BIT(0)
 #define I915_ENGINE_SUPPORTS_STATS   BIT(1)
@@ -569,6 +571,7 @@ struct intel_engine_cs {
 #define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT BIT(13)
 #define I915_ENGINE_HAS_EU_ATTENTION   BIT(14)
 #define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(15)
+#define I915_ENGINE_SUPPORTS_TICKS_STATS   BIT(16)
 	unsigned int flags;
 
 	/*
@@ -598,7 +601,7 @@ struct intel_engine_cs {
 	struct {
 		union {
 			struct intel_engine_execlists_stats execlists;
-			struct intel_engine_guc_stats guc;
+			struct intel_engine_guc_stats_v1 guc_v1;
 		};
 
 		/**
@@ -613,6 +616,9 @@ struct intel_engine_cs {
 			struct ewma_irq_time avg;
 		} irq;
 	} stats;
+
+	ktime_t pagefault_start;
+	atomic_t in_pagefault;
 
 	struct {
 		unsigned long heartbeat_interval_ms;
@@ -643,6 +649,12 @@ static inline bool
 intel_engine_supports_stats(const struct intel_engine_cs *engine)
 {
 	return engine->flags & I915_ENGINE_SUPPORTS_STATS;
+}
+
+static inline bool
+intel_engine_supports_tick_stats(const struct intel_engine_cs *engine)
+{
+	return engine->flags & I915_ENGINE_SUPPORTS_TICKS_STATS;
 }
 
 static inline bool

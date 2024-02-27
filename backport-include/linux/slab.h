@@ -39,16 +39,16 @@
 
 #define slabinfo LINUX_I915_BACKPORT(slabinfo)
 struct slabinfo {
-       unsigned long active_objs;
-       unsigned long num_objs;
-       unsigned long active_slabs;
-       unsigned long num_slabs;
-       unsigned long shared_avail;
-       unsigned int limit;
-       unsigned int batchcount;
-       unsigned int shared;
-       unsigned int objects_per_slab;
-       unsigned int cache_order;
+	unsigned long active_objs;
+	unsigned long num_objs;
+	unsigned long active_slabs;
+	unsigned long num_slabs;
+	unsigned long shared_avail;
+	unsigned int limit;
+	unsigned int batchcount;
+	unsigned int shared;
+	unsigned int objects_per_slab;
+	unsigned int cache_order;
 };
 
 #ifdef CONFIG_SLAB
@@ -66,15 +66,15 @@ struct slabinfo {
  */
 #define array_cache LINUX_I915_BACKPORT(array_cache)
 struct array_cache {
-        unsigned int avail;
-        unsigned int limit;
-        unsigned int batchcount;
-        unsigned int touched;
-        void *entry[];  /*
-                         * Must have this definition in here for the proper
-                         * alignment of array_cache. Also simplifies accessing
-                         * the entries.
-                         */
+	unsigned int avail;
+	unsigned int limit;
+	unsigned int batchcount;
+	unsigned int touched;
+	void *entry[];	/*
+			 * Must have this definition in here for the proper
+			 * alignment of array_cache. Also simplifies accessing
+			 * the entries.
+			 */
 };
 #endif /* CONFIG_SLAB */
 
@@ -95,36 +95,37 @@ static inline int kmem_cache_get_slabinfo(struct kmem_cache *cachep,
 #define kmem_cache_node LINUX_I915_BACKPORT(kmem_cache_node)
 
 #ifndef CONFIG_SLOB
+
 /*
  * The slab lists for all objects.
  */
 struct kmem_cache_node {
-        spinlock_t list_lock;
+	spinlock_t list_lock;
 
 #ifdef CONFIG_SLAB
-        struct list_head slabs_partial; /* partial list first, better asm code */
-        struct list_head slabs_full;
-        struct list_head slabs_free;
-        unsigned long total_slabs;      /* length of all slab lists */
-        unsigned long free_slabs;       /* length of free slab list only */
-        unsigned long free_objects;
-        unsigned int free_limit;
-        unsigned int colour_next;       /* Per-node cache coloring */
-        struct array_cache *shared;     /* shared per node */
-        struct alien_cache **alien;     /* on other nodes */
-        unsigned long next_reap;        /* updated without locking */
-        int free_touched;               /* updated without locking */
-#endif
+	struct list_head slabs_partial; /* partial list first, better asm code */
+	struct list_head slabs_full;
+	struct list_head slabs_free;
+	unsigned long total_slabs;	/* length of all slab lists */
+	unsigned long free_slabs;	/* length of free slab list only */
+	unsigned long free_objects;
+	unsigned int free_limit;
+	unsigned int colour_next;	/* Per-node cache coloring */
+	struct array_cache *shared;	/* shared per node */
+	struct alien_cache **alien;	/* on other nodes */
+	unsigned long next_reap;	/* updated without locking */
+	int free_touched;		/* updated without locking */
+#endif /* CONFIG_SLAB */
 
 #ifdef CONFIG_SLUB
-        unsigned long nr_partial;
-        struct list_head partial;
+	unsigned long nr_partial;
+	struct list_head partial;
 #ifdef CONFIG_SLUB_DEBUG
-        atomic_long_t nr_slabs;
-        atomic_long_t total_objects;
-        struct list_head full;
-#endif
-#endif
+	atomic_long_t nr_slabs;
+	atomic_long_t total_objects;
+	struct list_head full;
+#endif /* CONFIG_SLUB_DEBUG */
+#endif /* CONFIG_SLUB */
 
 };
 
@@ -134,8 +135,8 @@ struct kmem_cache_node {
  */
 
 #define for_each_kmem_cache_node(__s, __node, __n) \
-        for (__node = 0; __node < nr_node_ids; __node++) \
-                 if ((__n = get_node(__s, __node)))
+	for (__node = 0; __node < nr_node_ids; __node++) \
+		if ((__n = get_node(__s, __node)))
 
 /* struct memcg_cache_params is deprecated */
 #define memcg_cache_params LINUX_I915_BACKPORT(memcg_cache_params)

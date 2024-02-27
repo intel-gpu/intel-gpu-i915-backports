@@ -1102,6 +1102,106 @@ static enum cmd_rsp nl_process_fport_throughput(struct sk_buff *msg, struct genl
 	return IAF_CMD_RSP_SUCCESS;
 }
 
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
+static const struct nla_policy nl_iaf_policy[] = {
+	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
+	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
+	[IAF_ATTR_CMD_OP_RESULT] = { .type = NLA_U8 },
+
+	[IAF_ATTR_FABRIC_ID] = { .type = NLA_U32 },
+	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
+
+	[IAF_ATTR_ENTRIES] = { .type = NLA_U16 },
+
+	[IAF_ATTR_FABRIC_DEVICE] = { .type = NLA_NESTED },
+	[IAF_ATTR_DEV_NAME] = { .type = NLA_NUL_STRING },
+	[IAF_ATTR_PARENT_DEV_NAME] = { .type = NLA_NUL_STRING },
+	[IAF_ATTR_PCI_SLOT_NUM] = { .type = NLA_U8 },
+	[IAF_ATTR_SOCKET_ID] = { .type = NLA_U8 },
+	[IAF_ATTR_SUBDEVICE_COUNT] = { .type = NLA_U8 },
+	[IAF_ATTR_VERSION] = { .type = NLA_U8 },
+	[IAF_ATTR_PRODUCT_TYPE] = { .type = NLA_U8 },
+
+	[IAF_ATTR_SUB_DEVICE] = { .type = NLA_NESTED },
+
+	[IAF_ATTR_GUID] = { .type = NLA_U64 },
+	[IAF_ATTR_EXTENDED_PORT_COUNT] = { .type = NLA_U8 },
+	[IAF_ATTR_FABRIC_PORT_COUNT] = { .type = NLA_U8 },
+	[IAF_ATTR_SWITCH_LIFETIME] = { .type = NLA_U8 },
+	[IAF_ATTR_ROUTING_MODE_SUPPORTED] = { .type = NLA_U8 },
+	[IAF_ATTR_ROUTING_MODE_ENABLED] = { .type = NLA_U8 },
+	[IAF_ATTR_EHHANCED_PORT_0_PRESENT] = { .type = NLA_U8 },
+
+	[IAF_ATTR_FABRIC_PORT] = { .type = NLA_NESTED },
+
+	[IAF_ATTR_FABRIC_PORT_NUMBER] = { .type = NLA_U8 },
+	[IAF_ATTR_FABRIC_PORT_TYPE] = { .type = NLA_U8 },
+
+	[IAF_ATTR_BRIDGE_PORT_NUMBER] = { .type = NLA_U8 },
+
+	[IAF_ATTR_ENABLED_STATE] = { .type = NLA_U8 },
+
+	[IAF_ATTR_ROUTING_GEN_START] = { .type = NLA_U32 },
+	[IAF_ATTR_ROUTING_GEN_END] = { .type = NLA_U32 },
+
+	[IAF_ATTR_FPORT_HEALTH] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ISSUE_LQI] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ISSUE_LWD] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ISSUE_RATE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ERROR_FAILED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ERROR_ISOLATED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ERROR_FLAPPING] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ERROR_LINK_DOWN] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ERROR_DID_NOT_TRAIN] = { .type = NLA_U8 },
+
+	[IAF_ATTR_SUB_DEVICE_TRAP_COUNT] = { .type = NLA_U64 },
+
+	[IAF_ATTR_FPORT_PM_PORT_STATE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_ROUTED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LOGICAL_STATE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_PHYSICAL_STATE] = { .type = NLA_U8 },
+
+	[IAF_ATTR_FPORT_FID] = { .type = NLA_U32 },
+	[IAF_ATTR_FPORT_LINK_DOWN_COUNT] = { .type = NLA_U32 },
+	[IAF_ATTR_FPORT_NEIGHBOR_GUID] = { .type = NLA_U64 },
+	[IAF_ATTR_FPORT_PORT_ERROR_ACTION] = { .type = NLA_U32 },
+	[IAF_ATTR_FPORT_NEIGHBOR_PORT_NUMBER] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_PORT_LINK_MODE_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_NEIGHBOR_LINK_DOWN_REASON] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_H_O_Q_LIFETIME] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_VL_CAP] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_OPERATIONAL_VLS] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_NEIGHBOR_MTU] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LTP_CRC_MODE_SUPPORTED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LTP_CRC_MODE_ENABLED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LTP_CRC_MODE_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_WIDTH_SUPPORTED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_WIDTH_ENABLED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_WIDTH_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_SPEED_SUPPORTED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_SPEED_ENABLED] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_SPEED_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_WIDTH_DOWNGRADE_RX_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_WIDTH_DOWNGRADE_TX_ACTIVE] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_INIT_REASON] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_DOWN_REASON] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LQI_OFFLINE_DISABLED_REASON] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LQI_NEIGHBOR_NORMAL] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_LINK_QUALITY_INDICATOR] = { .type = NLA_U8 },
+	[IAF_ATTR_FPORT_BPS_LINK_SPEED_ACTIVE] = { .type = NLA_U64 },
+	[IAF_ATTR_TIMESTAMP] = { .type = NLA_U64 },
+	[IAF_ATTR_FPORT_RX_BYTES] = { .type = NLA_U64 },
+	[IAF_ATTR_FPORT_TX_BYTES] = { .type = NLA_U64 },
+	[IAF_ATTR_FPORT_BPS_LINK_SPEED_MAX] = { .type = NLA_U64 },
+	[IAF_ATTR_FPORT_LQI_CHANGE_COUNT] = { .type = NLA_U32 },
+	[IAF_ATTR_SUB_DEVICE_PORT_STATE_CHANGE_TRAP_COUNT] = { .type = NLA_U64 },
+	[IAF_ATTR_SUB_DEVICE_PORT_LWD_TRAP_COUNT] = { .type = NLA_U64 },
+	[IAF_ATTR_SUB_DEVICE_PORT_LQI_TRAP_COUNT] = { .type = NLA_U64 },
+	[IAF_ATTR_SUB_DEVICE_QSFP_MGR_FAULT_TRAP_COUNT] = { .type = NLA_U64 },
+	[IAF_ATTR_SUB_DEVICE_QSFP_MGR_PORT_PRESENT_TRAP_COUNT] = { .type = NLA_U64 },
+	[IAF_ATTR_FABRIC_PORT_THROUGHPUT] = { .type = NLA_NESTED },
+};
+#else
 static const struct nla_policy nl_iaf_policy_basic[IAF_ATTR_MAX + 1] = {
 	[IAF_ATTR_CMD_OP_MSG_TYPE] = { .type = NLA_U8 },
 	[IAF_ATTR_CMD_OP_CONTEXT] = { .type = NLA_U64 },
@@ -1136,6 +1236,8 @@ static const struct nla_policy nl_iaf_policy_fabric_id_sd_index_nested_port[IAF_
 	[IAF_ATTR_SD_INDEX] = { .type = NLA_U8 },
 	[IAF_ATTR_FABRIC_PORT_NUMBER] = { .type = NLA_U8 },
 };
+#endif
+
 
 static int nl_device_enum_op(struct sk_buff *msg, struct genl_info *info)
 {
@@ -1237,6 +1339,37 @@ static int nl_fport_throughput_op(struct sk_buff *msg, struct genl_info *info)
 	return nl_process_query(msg, info, nl_process_fport_throughput);
 }
 
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
+static const struct genl_ops nl_iaf_cmds[] = {
+	{ .cmd = IAF_CMD_OP_DEVICE_ENUM, .doit = nl_device_enum_op, },
+	{ .cmd = IAF_CMD_OP_PORT_ENABLE, .doit = nl_port_enable_op, .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_DISABLE, .doit = nl_port_disable_op,
+	  .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_STATE_QUERY, .doit = nl_port_state_query_op, },
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_ENABLE, .doit = nl_port_usage_enable_op,
+	  .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_DISABLE, .doit = nl_port_usage_disable_op,
+	  .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_USAGE_STATE_QUERY, .doit = nl_port_usage_state_query_op, },
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_ENABLE, .doit = nl_port_beacon_enable_op,
+	  .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_DISABLE, .doit = nl_port_beacon_disable_op,
+	  .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_PORT_BEACON_STATE_QUERY, .doit = nl_port_beacon_state_query_op, },
+	{ .cmd = IAF_CMD_OP_PORT_ROUTED_QUERY, .doit = nl_port_routed_query_op, },
+	{ .cmd = IAF_CMD_OP_REM_REQUEST, .doit = nl_rem_request_op, .flags = GENL_UNS_ADMIN_PERM, },
+	{ .cmd = IAF_CMD_OP_ROUTING_GEN_QUERY, .doit = nl_routing_gen_query_op, },
+	{ .cmd = IAF_CMD_OP_FABRIC_DEVICE_PROPERTIES, .doit = nl_fabric_device_properties_op, },
+	{ .cmd = IAF_CMD_OP_SUB_DEVICE_PROPERTIES_GET,
+	  .doit = nl_fabric_sub_device_properties_get_op, },
+	{ .cmd = IAF_CMD_OP_FPORT_STATUS_QUERY, .doit = nl_fport_status_query_op, },
+	{ .cmd = IAF_CMD_OP_SUB_DEVICE_TRAP_COUNT_QUERY,
+	  .doit = nl_sub_device_trap_count_query_op, },
+	{ .cmd = IAF_CMD_OP_FPORT_PROPERTIES, .doit = nl_fport_properties_op, },
+	{ .cmd = IAF_CMD_OP_FPORT_XMIT_RECV_COUNTS, .doit = nl_fport_xmit_recv_counts_op, },
+	{ .cmd = IAF_CMD_OP_FPORT_THROUGHPUT, .doit = nl_fport_throughput_op, },
+};
+#else
 static const struct genl_ops nl_iaf_cmds[] = {
 	{ .cmd = IAF_CMD_OP_DEVICE_ENUM,
 	  .doit = nl_device_enum_op,
@@ -1345,6 +1478,7 @@ static const struct genl_ops nl_iaf_cmds[] = {
 	  .policy = nl_iaf_policy_fabric_id_sd_index_nested_port,
 	},
 };
+#endif
 
 static struct genl_family nl_iaf_family = {
 	.name = "iaf_ze",
@@ -1352,6 +1486,9 @@ static struct genl_family nl_iaf_family = {
 	.maxattr = IAF_ATTR_MAX,
 	.ops = nl_iaf_cmds,
 	.n_ops = ARRAY_SIZE(nl_iaf_cmds),
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
+	.policy = nl_iaf_policy,
+#endif
 	.parallel_ops = true,
 };
 
@@ -1380,6 +1517,9 @@ int nl_init(void)
 {
 	int err;
 
+#ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
+        BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_policy) != _IAF_ATTR_COUNT);
+#endif
 	/* IAF_CMD_OP_UNSPEC is not included so-1 */
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_cmds) != _IAF_CMD_OP_COUNT - 1);
 

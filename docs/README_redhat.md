@@ -1,27 +1,19 @@
-# Red Hat Supported OS Kernel/Distribution
-  Our current backport supports the following OS Distribution.
+# Redhat® Supported OS Kernel/Distribution
 
-| OS Distribution | OS Version | Kernel Version  |
-|---  |---  |---  |
-| RHEL | 9.3 | 5.14.0-362 |
-| RHEL | 9.2 | 5.14.0-284 |
-| RHEL | 9.0 | 5.14.0-70 |
+This repository contains the following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(CSE) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(PMT/VSEC) - Intel® Platform Telemetry
 
-  The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to get information on the kernel version being used during backporting.
+Our current backport supports the following OS Distributions.
 
-  In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+| OS Distribution | OS Version |
+|---|---|
+| RHEL® | 9.x |
+| RHEL® | 8.x |
 
-```
-$sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
-kernel-devel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64
-Example:
-     $sudo dnf check-update; sudo dnf install -y kernel-5.14.0-362.2.1.el9_3.x86_64 \
-     kernel-devel-5.14.0-362.2.1.el9_3.x86_64
-
-```
-
-Please note that dkms installation will skip if the kernel headers are not installed.
+The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
+Please refer [version](../versions) file to get information on the kernel version being used during backporting.
 
 ## Prerequisite
 We have dependencies on the following packages
@@ -31,90 +23,125 @@ We have dependencies on the following packages
   - flex
   - bison
   - gawk
+
 ```
-$sudo dnf install make glibc-devel rpm-build bison flex gawk
+$ sudo dnf install make glibc-devel rpm-build bison flex gawk
 ```
 For DKMS modules, we need to install `dkms` package too.
 
 ```
-$sudo dnf install dkms
+$ sudo dnf install dkms
 ```
-
-## Out of tree kernel drivers
-This repository contains the following drivers.
-1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-2. Intel® Converged Security Engine(cse) - Converged Security Engine
-3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
-
 
 ## Dependencies
 
-  These drivers have a dependency on Intel® GPU firmware and a few more kernel mode drivers may be needed based on specific use cases, platforms, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+ These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
-- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
-
 ## Package creation
 
+We have 2 kind of backport packages, depending on the target OS Kernel version
+ - Build with i915 and drm. Ex: RHEL® 8.x
+ - Build with i915 alone. Ex: RHEL® 9.x
+
+| OS Distribution | OS Version | DKMS Package Target | Binary Package Target|
+|---|---|---|---|
+| RHEL® | 9.3 | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.2 | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.0 | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.9 | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.8 | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.6 | dkmsrpm-pkg | binrpm-pkg |
+
 ### Dynamic Kernel Module Support(DKMS)
-There are two ways to create i915 DKMS packages.
-1. Using default command:
+Creating i915 DKMS packages
 ```
-$make i915dkmsrpm-pkg
+$ make <Build Options> <DKMS Package Target>
+Example: For RHEL9.3
+	$ make i915dkmsrpm-pkg
+
+	Generated package name :
+		intel-i915-dkms-1.23.6.24.230425.29-1.x86_64.rpm
+```
+
+Above command will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
+
+Please note that DKMS installation will skip if the kernel headers are not installed.
+
+In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+
+```
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
+kernel-devel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64
+
 Example:
-        $make i915dkmsrpm-pkg
-
-    Generated package name :
-                 intel-i915-dkms-1.23.6.24.230425.29-1.x86_64.rpm
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-362.2.1.el9_3.x86_64 \
+     kernel-devel-5.14.0-362.2.1.el9_3.x86_64
 ```
 
-2. OS distribution option:
-
-    Adds OS kernel version as part of DKMS pacakge name.
-
 ```
-$make i915dkmsrpm-pkg OS_DISTRIBUTION=<OS Distribution>
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.9_KERNEL_VERSION>.el8_9.x86_64 \
+kernel-devel-<RHEL_8.9_KERNEL_VERSION>.el8_9.x86_64
+
 Example:
-        $make i915dkmsrpm-pkg OS_DISTRIBUTION=RHEL_9.3
-
-      Generated package name :
-        intel-i915-dkms-1.23.6.24.5.14.0-362.2.1-1.x86_64.rpm
+     $ sudo dnf check-update; sudo dnf install -y kernel-4.18.0-513.1.1.el8_9.x86_64 \
+     kernel-devel-4.18.0-513.1.1.el8_9.x86_64
 ```
-  Use the below help command to get the list of supported OS distributions.
-```
-$make dkms-pkg-help
-
-Generated output:
-   DKMS Targets:
-    i915dkmsrpm-pkg  -  Build DKMS rpm package
-
-   ##### List of RPM supported osv kernel versions #####
-   RHEL_9.3
-```
-Above  will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
 ### Binary RPM
-Creation of binary rpm can be done using the below command. By default it will use the header of the booted kernel, However, it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments
+Creation of binary rpm can be done using the below command. By default it will use the header of booted kernel, However, it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 ```
-$make KLIB=<Header Path> KLIB_BUILD=<Header Path> binrpm-pkg
+$ make <Build Options> KLIB=<Header Path> KLIB_BUILD=<Header Path>/build binrpm-pkg
 
 Example:
-$make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r) binrpm-pkg
+	$ make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r)/build binrpm-pkg
 
-Generated Files:
-intel-i915-<version>.$(uname -r)-1.x86_64.rpm
+	Generated Files:
+		intel-i915-<version>.$(uname -r)-1.x86_64.rpm
+```
+Above commands will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
+
+
+### Build Options
+
+Build options provides list of different arguments which can be passed during package creation or build.
+
+Please refer to [README_common](README_common.md) for full list of Build options.
+
+
+## Installation and Verification
+
+```
+$ sudo rpm -ivh intel-[dmabuf-drm-]i915*.rpm
+```
+Reboot the device after installation of all packages.
+```
+$ sudo reboot
 ```
 
-## Installation
+For verification, please grep **backport** from dmesg after reboot. You should see something like below
 ```
-$sudo rpm -ivh intel-i915*.rpm
-# Reboot the device after installation of all packages.
-$sudo reboot
+$ sudo dmesg |grep -i backport
+[    5.963854] COMPAT BACKPORTED INIT
+[    5.968761] Loading modules backported from I915-23.6.24
+[    5.976154] Backport generated by backports.git I915_23.6.24_PSB_230425.29
+[    6.069699] [drm] I915 BACKPORTED INIT
+```
+Please refer to [README_backport_version](README_backport_version.md) for different verification processes.
+
+## Uninstallation
+```
+$ sudo rpm -e intel-i915*
+```
+Reboot the device after uninstallation of all packages.
+```
+$ sudo reboot
 ```
 ## Known limitation
-KVGMT is not supported on Server Gfx cards so we need to blacklist KVGMT, on later version due to KVMGT refactoring
+KVMGT is not supported on Server Gfx cards so we need to blacklist KVMGT, on later version due to KVMGT refactoring
 we may have an unknown symbol warning during DKMS installation.
 
 Example:
@@ -122,18 +149,7 @@ Example:
 depmod: WARNING: /lib/modules/$(uname -r)/kernel/drivers/gpu/drm/i915/kvmgt.ko.xz needs unknown symbol intel_gvt_set_ops
 depmod: WARNING: /lib/modules/$(uname -r)/kernel/drivers/gpu/drm/i915/kvmgt.ko.xz needs unknown symbol intel_gvt_clear_ops
 ```
-Blacklist kvmgt to avoid kvmgt module load during kernel boot.
+Blacklist 'kvmgt' to avoid KVMGT module load during kernel boot.
 ```
 sudo grubby --update-kernel=/boot/vmlinuz-$(uname -r) --args="modprobe.blacklist=kvmgt"
-```
-
-## Installation verification
-
-Please grep **backport** from dmesg after reboot. you should see something like below
-```
-> sudo dmesg |grep -i backport
-[    5.963854] COMPAT BACKPORTED INIT
-[    5.968761] Loading modules backported from I915-23.6.24
-[    5.976154] Backport generated by backports.git I915_23.6.24_PSB_230425.29
-[    6.069699] [drm] I915 BACKPORTED INIT
 ```

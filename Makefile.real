@@ -1,5 +1,5 @@
 include versions
-export BACKPORTS_RELEASE_TAG DII_KERNEL_HEAD BASE_KERNEL_NAME DII_KERNEL_TAG
+export BACKPORTS_RELEASE_TAG DII_KERNEL_HEAD BASE_KERNEL_NAME DII_KERNEL_TAG MODULE_I915
 ifdef BACKPORTS_GIT_TRACKED
 export BACKPORTS_GIT_TRACKER_DEF=-DBACKPORTS_GIT_TRACKED=\"$(BACKPORTS_GIT_TRACKED)\"
 else
@@ -31,6 +31,12 @@ alldefconfig randconfig:
 usedefconfig:
 	@$(MAKE) -C kconf conf
 	@./kconf/conf --defconfig=defconfig Kconfig
+
+.PHONY:updateconfig
+updateconfig:
+ifeq ($(BUILD_CONFIG), disabledisplay)
+	sed -i 's/CPTCFG_DRM_I915_DISPLAY=y/CPTCFG_DRM_I915_DISPLAY=n/g' .config
+endif
 
 .PHONY: savedefconfig
 savedefconfig:
@@ -83,22 +89,6 @@ backport-include/backport/autoconf.h: .config Kconfig.versions Kconfig.kernel
 	) > backport-include/backport/autoconf.h
 	@echo " done."
 
-backport-include/backport/backport_path.h: .config Kconfig.versions Kconfig.kernel
-	@echo -n "Building backport-include/backport/backport_path.h ..."
-	@grep -f local-symbols .config | (				\
-		echo "#ifndef COMPAT_BACKPORTED_PATH_INCLUDED"		;\
-		echo "#define COMPAT_BACKPORTED_PATH_INCLUDED"		;\
-		echo "/*"						;\
-		echo " * Automatically generated file, don't edit!"	;\
-		echo " * Changes will be overwritten"			;\
-		echo " */"						;\
-		echo ""							;\
-		echo "#define BACKPORT_PATH $(shell pwd)"		;\
-		echo ""							;\
-		echo "#endif /* BACKPORTED_PATH_INCLUDED */"		;\
-	) > backport-include/backport/backport_path.h
-	@echo " done."
-
 .PHONY: modules
 modules: backport-include/backport/autoconf.h
 	@$(MAKE) -f Makefile.backport modules
@@ -142,18 +132,34 @@ clean:
 mrproper:
 	@$(MAKE) -f Makefile.backport mrproper
 
-.PHONY: bindeb-pkg
-bindeb-pkg:
-	@$(MAKE) -f Makefile.backport bindeb-pkg
-
-.PHONY: i915dkmsdeb-pkg
-i915dkmsdeb-pkg:
-	@$(MAKE) -f Makefile.backport i915dkmsdeb-pkg
+.PHONY: dmadkmsrpm-pkg
+dmadkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport dmadkmsrpm-pkg
 
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
 	@$(MAKE) -f Makefile.backport i915dkmsrpm-pkg
 
+.PHONY: dkmsrpm-pkg
+dkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport dkmsrpm-pkg
+
 .PHONY: binrpm-pkg
 binrpm-pkg:
 	@$(MAKE) -f Makefile.backport binrpm-pkg
+
+.PHONY: dmadkmsdeb-pkg
+dmadkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport dmadkmsdeb-pkg
+
+.PHONY: i915dkmsdeb-pkg
+i915dkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport i915dkmsdeb-pkg
+
+.PHONY: dkmsdeb-pkg
+dkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport dkmsdeb-pkg
+
+.PHONY: i915bindeb-pkg
+i915bindeb-pkg:
+	@$(MAKE) -f Makefile.backport i915bindeb-pkg

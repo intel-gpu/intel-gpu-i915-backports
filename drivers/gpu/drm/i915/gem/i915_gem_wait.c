@@ -204,7 +204,7 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 	return 0;
 }
 
-/**
+/*
  * Waits for rendering to the object to be completed
  * @obj: i915 gem object
  * @flags: how to wait (under a lock, for all rendering or just for writes etc)

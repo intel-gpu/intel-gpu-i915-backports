@@ -43,7 +43,6 @@
 #include "i915_gem_mman.h"
 #include "i915_gem_object.h"
 #include "i915_gem_region.h"
-#include "i915_gem_tiling.h"
 #include "i915_gem_vm_bind.h"
 #include "i915_memcpy.h"
 #include "i915_svm.h"
@@ -237,6 +236,7 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 	}
 	obj->base.resv = &obj->shares_resv->base;
 
+	obj->mm.region.age = jiffies;
 	INIT_LIST_HEAD(&obj->mm.region.link);
 	INIT_ACTIVE_FENCE(&obj->mm.migrate);
 
@@ -259,13 +259,6 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 			  const struct drm_i915_gem_object_ops *ops,
 			  struct lock_class_key *key, unsigned flags)
 {
-	/*
-	 * A gem object is embedded both in a struct ttm_buffer_object :/ and
-	 * in a drm_i915_gem_object. Make sure they are aliased.
-	 */
-	BUILD_BUG_ON(offsetof(typeof(*obj), base) !=
-		     offsetof(typeof(*obj), __do_not_access.base));
-
 	spin_lock_init(&obj->vma.lock);
 	INIT_LIST_HEAD(&obj->vma.list);
 
@@ -305,7 +298,7 @@ static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
 	return false;
 }
 
-/**
+/*
  * Mark up the object's coherency levels for a given cache_level
  * @obj: #drm_i915_gem_object
  * @cache_level: cache level
@@ -313,19 +306,18 @@ static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level)
 {
-	obj->pat_index = i915_gem_get_pat_index(obj_to_i915(obj),
-						cache_level);
+	obj->pat_index =
+		i915_gem_get_pat_index(obj_to_i915(obj), cache_level);
 
+	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
+			I915_BO_CACHE_COHERENT_FOR_WRITE);
 	if (cache_level != I915_CACHE_NONE)
-		obj->cache_coherent = (I915_BO_CACHE_COHERENT_FOR_READ |
-				       I915_BO_CACHE_COHERENT_FOR_WRITE);
+		obj->flags |= (I915_BO_CACHE_COHERENT_FOR_READ |
+			       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
-		obj->cache_coherent = I915_BO_CACHE_COHERENT_FOR_READ;
-	else
-		obj->cache_coherent = 0;
+		obj->flags |= I915_BO_CACHE_COHERENT_FOR_READ;
 
-	obj->cache_dirty =
-		!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
+	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
 /**
@@ -346,22 +338,19 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 
 	obj->pat_index = pat_index;
 
+	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
+			I915_BO_CACHE_COHERENT_FOR_WRITE);
 	if (pat_index != i915_gem_get_pat_index(i915, I915_CACHE_NONE))
-		obj->cache_coherent = (I915_BO_CACHE_COHERENT_FOR_READ |
-				       I915_BO_CACHE_COHERENT_FOR_WRITE);
+		obj->flags |= (I915_BO_CACHE_COHERENT_FOR_READ |
+			       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
-		obj->cache_coherent = I915_BO_CACHE_COHERENT_FOR_READ;
-	else
-		obj->cache_coherent = 0;
+		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
 
-	obj->cache_dirty =
-		!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
+	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
 bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-
 	/*
 	 * This is purely from a security perspective, so we simply don't care
 	 * about non-userspace objects being able to bypass the LLC.
@@ -381,51 +370,17 @@ bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 	 * it, but since i915 takes the stance of always zeroing memory before
 	 * handing it to userspace, we need to prevent this.
 	 */
-	return IS_JSL_EHL(i915);
-}
-
-bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj, bool *required)
-{
-	bool migration_is_required;
-
-	if (required)
-		*required = 0;
-
-	/*
-	 * If below return false, then hints do not apply as we are
-	 * either already in SMEM, or SMEM is not a valid placement.
-	 */
-
-	if (!i915_gem_object_migratable(obj) ||
-	    obj->mm.region.mem->id == INTEL_REGION_SMEM)
-		return false;
-
-	/* reject migration if smem not contained in placement list */
-	if (!(obj->memory_mask & BIT(INTEL_REGION_SMEM)))
-		return false;
-
-	/*
-	 * If atomic hint, we need to alert the caller that migration is no
-	 * longer considered best effort, but is required. If object is not
-	 * migrated, then the fault handler should fail the page fault.
-	 */
-	migration_is_required = i915_gem_object_allows_atomic_system(obj);
-	if (required)
-		*required = migration_is_required;
-
-	return migration_is_required ||
-	       i915_gem_object_test_preferred_location(obj, INTEL_REGION_SMEM);
+	return IS_JSL_EHL(to_i915(obj->base.dev));
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 					 enum intel_region_id dst_region_id,
 					 bool is_atomic_fault)
 {
-	if (!dst_region_id)
+	if (!dst_region_id || !(obj->memory_mask & BIT(dst_region_id)))
 		return false;
 
-	if (!i915_gem_object_migratable(obj) ||
-	    obj->mm.region.mem->id == dst_region_id)
+	if (obj->mm.region.mem->id == dst_region_id)
 		return false;
 
 	/* HW support cross-tile atomic access, so no need to
@@ -775,7 +730,7 @@ static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *f
 	}
 }
 
-void __i915_gem_free_object_rcu(struct rcu_head *head)
+static void __i915_gem_free_object_rcu(struct rcu_head *head)
 {
 	struct drm_i915_gem_object *obj =
 		container_of(head, typeof(*obj), rcu);
@@ -810,13 +765,10 @@ void __i915_gem_object_free_mmaps(struct drm_i915_gem_object *obj)
 {
 	/* Skip serialisation and waking the device if known to be not used. */
 
-	if (obj->userfault_count)
-		i915_gem_object_release_mmap_gtt(obj);
-
 	if (!RB_EMPTY_ROOT(&obj->mmo.offsets)) {
 		struct i915_mmap_offset *mmo, *mn;
 
-		i915_gem_object_release_mmap_offset(obj);
+		i915_gem_object_release_mmap(obj);
 
 		rbtree_postorder_for_each_entry_safe(mmo, mn,
 						     &obj->mmo.offsets,
@@ -878,9 +830,10 @@ static void detach_vm(struct drm_i915_gem_object *obj)
 	rcu_read_unlock();
 }
 
-void __i915_gem_free_object(struct drm_i915_gem_object *obj)
+static void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 {
 	trace_i915_gem_object_destroy(obj);
+	GEM_BUG_ON(obj->base.funcs != &i915_gem_object_funcs);
 	GEM_BUG_ON(obj->swapto);
 
 	i915_drm_client_fini_bo(obj);
@@ -920,6 +873,9 @@ void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	kfree(obj->nodes);
 
 	i915_resv_put(obj->shares_resv);
+
+	/* But keep the pointer alive for RCU-protected lookups */
+	call_rcu(&obj->rcu, __i915_gem_free_object_rcu);
 }
 
 static void __i915_gem_free_objects(struct drm_i915_private *i915,
@@ -927,17 +883,10 @@ static void __i915_gem_free_objects(struct drm_i915_private *i915,
 {
 	struct drm_i915_gem_object *obj, *on;
 
+	might_sleep();
+
 	llist_for_each_entry_safe(obj, on, freed, freed) {
-		might_sleep();
-		if (obj->ops->delayed_free) {
-			obj->ops->delayed_free(obj);
-			continue;
-		}
-
 		__i915_gem_free_object(obj);
-
-		/* But keep the pointer alive for RCU-protected lookups */
-		call_rcu(&obj->rcu, __i915_gem_free_object_rcu);
 		cond_resched();
 	}
 }
@@ -1093,9 +1042,6 @@ int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 	if (obj->mm.madv != I915_MADV_WILLNEED)
 		return -EINVAL;
 
-	if (i915_gem_object_needs_bit17_swizzle(obj))
-		return -EINVAL;
-
 	if (i915_gem_object_is_framebuffer(obj))
 		return -EBUSY;
 
@@ -1133,33 +1079,15 @@ int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 bool i915_gem_object_can_migrate(struct drm_i915_gem_object *obj,
 				 enum intel_region_id id)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	unsigned int num_allowed = obj->mm.n_placements;
-	struct intel_memory_region *mr;
-	unsigned int i;
-
-	GEM_BUG_ON(id >= INTEL_REGION_UNKNOWN);
 	GEM_BUG_ON(obj->mm.madv != I915_MADV_WILLNEED);
 
-	mr = i915->mm.regions[id];
-	if (!mr)
+	if (!(obj->memory_mask & BIT(id)))
 		return false;
 
-	if (obj->mm.region.mem == mr)
+	if (obj->mm.region.mem->id == id)
 		return true;
 
-	if (num_allowed <= 1)
-		return false;
-
-	if (!i915_gem_object_evictable(obj))
-		return false;
-
-	for (i = 0; i < num_allowed; ++i) {
-		if (mr == obj->mm.placements[i])
-			return true;
-	}
-
-	return false;
+	return i915_gem_object_evictable(obj);
 }
 
 static void lists_swap(struct list_head *a, struct list_head *b)
@@ -1230,6 +1158,17 @@ void i915_gem_object_move_notify(struct drm_i915_gem_object *obj)
 
 	if (obj->base.dma_buf)
 		dma_buf_move_notify(obj->base.dma_buf);
+}
+
+static bool shmem_used(const struct drm_i915_gem_object *obj)
+{
+	if (!obj->base.filp)
+		return false;
+
+	if (i915_gem_object_has_backing_store(obj))
+		return true;
+
+	return obj->base.filp->f_inode->i_blocks;
 }
 
 int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
@@ -1325,7 +1264,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	GEM_BUG_ON(obj->mm.region.mem->id != id);
 	GEM_BUG_ON(obj->swapto && id == INTEL_REGION_SMEM);
 
-	if (!obj->swapto && donor->base.filp) {
+	if (!obj->swapto && shmem_used(donor)) {
 		GEM_BUG_ON(donor->mm.region.mem->id != INTEL_REGION_SMEM);
 		obj->swapto = i915_gem_object_get(donor);
 	}
@@ -1522,7 +1461,7 @@ i915_gem_object_read_from_page_kmap(struct drm_i915_gem_object *obj, u64 offset,
 	src_map = kmap_atomic(i915_gem_object_get_page(obj, idx));
 
 	src_ptr = src_map + offset_in_page(offset);
-	if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ))
+	if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
 		drm_clflush_virt_range(src_ptr, size);
 	memcpy(dst, src_ptr, size);
 
@@ -1595,8 +1534,9 @@ int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, 
 bool i915_gem_object_evictable(struct drm_i915_gem_object *obj)
 {
 	struct i915_vma *vma;
-	int pin_count = atomic_read(&obj->mm.pages_pin_count);
+	int pin_count;
 
+	pin_count = atomic_read(&obj->mm.pages_pin_count);
 	if (!pin_count)
 		return true;
 
@@ -1610,27 +1550,8 @@ bool i915_gem_object_evictable(struct drm_i915_gem_object *obj)
 			pin_count--;
 	}
 	spin_unlock(&obj->vma.lock);
-	GEM_WARN_ON(pin_count < 0);
 
 	return pin_count == 0;
-}
-
-/**
- * i915_gem_object_migratable - Whether the object is migratable out of the
- * current region.
- * @obj: Pointer to the object.
- *
- * Return: Whether the object is allowed to be resident in other
- * regions than the current while pages are present.
- */
-bool i915_gem_object_migratable(struct drm_i915_gem_object *obj)
-{
-	struct intel_memory_region *mr = READ_ONCE(obj->mm.region.mem);
-
-	if (!mr)
-		return false;
-
-	return obj->mm.n_placements > 1;
 }
 
 void i915_gem_init__objects(struct drm_i915_private *i915)
@@ -1679,7 +1600,7 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 	return ret;
 }
 
-/**
+/*
  * i915_gem_object_migrate_to_smem - Migrate to SMEM
  * @obj: valid i915 gem object
  * @check_placement: If true, verify placement

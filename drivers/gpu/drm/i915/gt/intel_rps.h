@@ -15,9 +15,6 @@ void intel_rps_init_early(struct intel_rps *rps);
 void intel_rps_init(struct intel_rps *rps);
 void intel_rps_sanitize(struct intel_rps *rps);
 
-void intel_rps_driver_register(struct intel_rps *rps);
-void intel_rps_driver_unregister(struct intel_rps *rps);
-
 void intel_rps_enable(struct intel_rps *rps);
 void intel_rps_disable(struct intel_rps *rps);
 

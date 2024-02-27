@@ -53,6 +53,9 @@ __i915_printk(struct drm_i915_private *dev_priv, const char *level,
 	}
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
+static int i915_probe_fail_count;
+
 void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint)
 {
 	__i915_printk(i915, KERN_NOTICE, "CI tainted:%#x by %pS\n",
@@ -62,9 +65,6 @@ void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint)
 	if (!i915_error_injected())
 		__add_taint_for_CI(taint);
 }
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
-static int i915_probe_fail_count;
 
 int __i915_inject_probe_error(struct drm_i915_private *i915, int err,
 			      const char *func, int line)
@@ -136,7 +136,11 @@ void fs_reclaim_taints_mutex(struct mutex *mutex)
 	fs_reclaim_acquire(GFP_KERNEL);
 
 	mutex_acquire(&mutex->dep_map, 0, 0, _RET_IP_);
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	mutex_release(&mutex->dep_map, 0, _RET_IP_);
+#else
 	mutex_release(&mutex->dep_map, _RET_IP_);
+#endif
 
 	fs_reclaim_release(GFP_KERNEL);
 }

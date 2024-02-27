@@ -140,9 +140,6 @@ static int mi_store_dw__ppgtt(void *arg)
 	int err = 0;
 	u32 *map;
 
-	if (!HAS_FULL_PPGTT(gt->i915))
-		return 0;
-
 	ppgtt = i915_ppgtt_create(gt, 0);
 	if (IS_ERR(ppgtt))
 		return PTR_ERR(ppgtt);
@@ -287,9 +284,6 @@ static int mi_bb_start__ppgtt(void *arg)
 	int err = 0;
 	u32 *map;
 
-	if (!HAS_FULL_PPGTT(gt->i915))
-		return 0;
-
 	ppgtt = i915_ppgtt_create(gt, 0);
 	if (IS_ERR(ppgtt))
 		return PTR_ERR(ppgtt);
@@ -361,12 +355,171 @@ out_vm:
 	return err;
 }
 
+static int
+__xy_fast_color(struct intel_context *ce,
+		struct i915_vma *vma,
+		u8 *map,
+		u64 addr)
+{
+	struct i915_request *rq;
+	u32 result;
+	int err;
+
+	err = i915_vma_pin(vma, 0, 0, PIN_USER | PIN_OFFSET_FIXED | addr);
+	if (err) {
+		if (err == -ENOSPC)
+			return 0;
+
+		pr_err("Failed to pin vma @ %llx\n", addr);
+		return err;
+	}
+	GEM_BUG_ON(i915_vma_offset(vma) != addr);
+
+	addr = sign_extend64(addr, fls64(vma->vm->total) - 1);
+	memset32((void *)map, STACK_MAGIC, SZ_4K / sizeof(u32));
+
+	rq = intel_context_create_request(ce);
+	if (IS_ERR(rq)) {
+	i915_vma_unpin(vma);
+		return PTR_ERR(rq);
+	}
+
+	err = __i915_vma_move_to_active(vma, rq);
+	i915_vma_unpin(vma);
+	if (err == 0 && rq->engine->emit_init_breadcrumb)
+		err = rq->engine->emit_init_breadcrumb(rq);
+	if (err == 0) {
+		u32 mocs = rq->engine->gt->mocs.uc_index << 1;
+		u32 *cs;
+
+		cs = intel_ring_begin(rq, 16);
+		if (IS_ERR(cs)) {
+			err = PTR_ERR(cs);
+		} else {
+			*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD | (16 - 2);
+			*cs++ = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs) | 0x3f;
+			*cs++ = 0;
+			*cs++ = 4 << 16 | 1;
+			*cs++ = lower_32_bits(addr);
+			*cs++ = upper_32_bits(addr);
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0;
+			*cs++ = 0x20004004;
+			*cs++ = 0x10;
+			*cs++ = 0;
+			intel_ring_advance(rq, cs);
+		}
+	}
+	if (err) {
+		i915_request_add(rq);
+		return err;
+	}
+
+	i915_request_get(rq);
+	i915_request_add(rq);
+	if (i915_request_wait(rq, 0, HZ) < 0) {
+		i915_request_put(rq);
+		return -EIO;
+	}
+	i915_request_put(rq);
+
+	result = READ_ONCE(map[0]);
+	if (result) {
+		pr_err("%s: Invalid XY_FAST_COLOR(%llx) execution, found %x, expected %x\n",
+		       ce->engine->name, addr, result, 0);
+		return -EINVAL;
+	}
+
+	return i915_vma_unbind(vma);
+}
+
+static int xy_fast_color(void *arg)
+{
+	struct intel_gt *gt = arg;
+	struct drm_i915_gem_object *obj;
+	struct intel_engine_cs *engine;
+	struct i915_ppgtt *ppgtt;
+	struct intel_context *ce;
+	struct i915_vma *vma;
+	int bit, max;
+	int err = 0;
+	void *map;
+
+	engine = gt->engine[BCS0];
+	if (!engine)
+		return 0;
+
+	if (!NEEDS_FASTCOLOR_BLT_WABB(engine) || engine->instance)
+		return 0;
+
+	ppgtt = i915_ppgtt_create(gt, 0);
+	if (IS_ERR(ppgtt))
+		return PTR_ERR(ppgtt);
+
+	obj = i915_gem_object_create_internal(gt->i915, SZ_4K);
+	if (IS_ERR(obj)) {
+		err = PTR_ERR(obj);
+		goto out_vm;
+	}
+
+	vma = i915_vma_instance(obj, &ppgtt->vm, NULL);
+	if (IS_ERR(vma)) {
+		err = PTR_ERR(vma);
+		goto out_obj;
+	}
+
+	map = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
+	if (IS_ERR(map)) {
+		err = PTR_ERR(map);
+		goto out_obj;
+	}
+
+	ce = intel_context_create(engine);
+	if (IS_ERR(ce)) {
+		err = PTR_ERR(ce);
+		goto out_obj;
+	}
+
+	i915_vm_put(ce->vm);
+	ce->vm = i915_vm_get(&ppgtt->vm);
+
+	max = address_limit(ce, false);
+	for (bit = __ffs(vma->size); bit < max; bit++) {
+		u64 addr = BIT_ULL(bit);
+
+		if (addr + vma->size <= ce->vm->total) {
+			err = __xy_fast_color(ce, vma, map, addr);
+			if (err)
+				break;
+		}
+
+		err = __xy_fast_color(ce, vma, map, addr - vma->size);
+		if (err)
+			break;
+	}
+
+	intel_context_put(ce);
+	if (igt_flush_test(gt->i915))
+		err = -EIO;
+out_obj:
+	i915_gem_object_put(obj);
+out_vm:
+	i915_vm_put(&ppgtt->vm);
+	return err;
+}
+
 int live_engine_mi_selftests(struct intel_gt *gt)
 {
 	static const struct i915_subtest tests[] = {
 		SUBTEST(mi_store_dw__ggtt),
 		SUBTEST(mi_store_dw__ppgtt),
 		SUBTEST(mi_bb_start__ppgtt),
+		SUBTEST(xy_fast_color),
 	};
 
 	return intel_gt_live_subtests(tests, gt);

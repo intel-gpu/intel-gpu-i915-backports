@@ -30,4 +30,50 @@
 #include <linux/types.h>
 #include_next <linux/pagevec.h>
 
+#ifdef BPM_PAGEVEC_NOT_PRESENT
+
+struct pagevec {
+        unsigned char nr;
+        bool percpu_pvec_drained;
+        struct page *pages[PAGEVEC_SIZE];
+};
+
+void __pagevec_release(struct pagevec *pvec);
+
+static inline void pagevec_init(struct pagevec *pvec)
+{
+        pvec->nr = 0;
+        pvec->percpu_pvec_drained = false;
+}
+
+static inline void pagevec_reinit(struct pagevec *pvec)
+{
+        pvec->nr = 0;
+}
+
+static inline unsigned pagevec_count(struct pagevec *pvec)
+{
+        return pvec->nr;
+}
+
+static inline unsigned pagevec_space(struct pagevec *pvec)
+{
+        return PAGEVEC_SIZE - pvec->nr;
+}
+
+/*
+ * Add a page to a pagevec.  Returns the number of slots still available.
+ */
+static inline unsigned pagevec_add(struct pagevec *pvec, struct page *page)
+{
+        pvec->pages[pvec->nr++] = page;
+        return pagevec_space(pvec);
+}
+
+static inline void pagevec_release(struct pagevec *pvec)
+{
+        if (pagevec_count(pvec))
+                __pagevec_release(pvec);
+}
+#endif
 #endif

@@ -3,7 +3,7 @@
 #define __DRM_OF_H__
 
 #include <linux/of_graph.h>
-#if IS_ENABLED(CONFIG_OF) && IS_ENABLED(CONFIG_DRM_PANEL_BRIDGE)
+#if IS_ENABLED(CONFIG_OF) && IS_ENABLED(CPTCFG_DRM_PANEL_BRIDGE)
 #include <drm/drm_bridge.h>
 #endif
 
@@ -111,7 +111,7 @@ drm_of_lvds_get_dual_link_pixel_order(const struct device_node *port1,
 static inline int drm_of_panel_bridge_remove(const struct device_node *np,
 					     int port, int endpoint)
 {
-#if IS_ENABLED(CONFIG_OF) && IS_ENABLED(CONFIG_DRM_PANEL_BRIDGE)
+#if IS_ENABLED(CONFIG_OF) && IS_ENABLED(CPTCFG_DRM_PANEL_BRIDGE)
 	struct drm_bridge *bridge;
 	struct device_node *remote;
 

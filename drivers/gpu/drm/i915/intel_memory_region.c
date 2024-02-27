@@ -106,10 +106,11 @@ static int iomemtest(struct intel_memory_region *mem,
 	resource_size_t last, page;
 	int err;
 
-	if (mem->io_size < PAGE_SIZE)
+	last = min(mem->io_size, mem->total);
+	if (last < PAGE_SIZE)
 		return 0;
 
-	last = mem->io_size - PAGE_SIZE;
+	last -= PAGE_SIZE;
 
 	/*
 	 * Quick test to check read/write access to the iomap (backing store).
@@ -225,7 +226,9 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 		struct list_head *list;
 	} objects[] = {
 		{ "purgeable", &mem->objects.purgeable },
+		{ "migratable", &mem->objects.migratable },
 		{ "evictable", &mem->objects.list },
+		{ "pagetables", &mem->objects.pt },
 		{}
 	}, *o;
 	int i;
@@ -333,6 +336,7 @@ static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
 int intel_memory_region_evict(struct intel_memory_region *mem,
 			      struct i915_gem_ww_ctx *ww,
 			      resource_size_t target,
+			      unsigned long age,
 			      int chunk)
 {
 	const unsigned long end_time =
@@ -354,11 +358,13 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 		 * to waiting for work completion on the purgeable lists.
 		 */
 		&mem->objects.purgeable,
+		&mem->objects.migratable,
 		&mem->objects.list,
 		&mem->objects.purgeable,
 		NULL,
 	};
-	struct intel_memory_region_link bookmark = {};
+	struct intel_memory_region_link bookmark = { .age = jiffies };
+	struct intel_memory_region_link end = { .age = age };
 	struct intel_memory_region_link *pos;
 	struct list_head **phase = phases;
 	resource_size_t found = 0;
@@ -389,6 +395,7 @@ next:
 	if (ww && phase > phases && !keepalive)
 		timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
 	spin_lock(&mem->objects.lock);
+	list_add_tail(&end.link, *phase);
 	list_for_each_entry(pos, *phase, link) {
 		struct drm_i915_gem_object *obj;
 
@@ -397,8 +404,19 @@ next:
 			break;
 		}
 
-		if (unlikely(!pos->mem)) /* skip over other bookmarks */
+		if (unlikely(!pos->mem)) { /* skip over other bookmarks */
+			if (pos == &end) {
+				if (time_before(age, bookmark.age)) {
+					pos = list_prev_entry(pos, link);
+					list_move_tail(&end.link, *phase);
+					age = bookmark.age;
+				} else {
+					timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
+					keepalive = false;
+				}
+			}
 			continue;
+		}
 
 		/* only segment BOs should be in mem->objects.list */
 		obj = container_of(pos, typeof(*obj), mm.region);
@@ -410,14 +428,8 @@ next:
 		if (!i915_gem_object_allows_eviction(obj))
 			continue;
 
-		if (ww && ww == i915_gem_get_locking_ctx(obj)) {
-			/* Repeat, waiting for the active objects */
-			if (keepalive) {
-				timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
-				keepalive = false;
-			}
+		if (ww && ww == i915_gem_get_locking_ctx(obj))
 			continue;
-		}
 
 		list_add(&bookmark.link, &pos->link);
 		if (keepalive) {
@@ -427,6 +439,9 @@ next:
 				goto delete_bookmark;
 
 			if (i915_gem_object_is_active(obj))
+				goto delete_bookmark;
+
+			if (!time_before(obj->mm.region.age, age))
 				goto delete_bookmark;
 
 			/*
@@ -484,6 +499,10 @@ next:
 		if (err == 0)
 			err = __i915_gem_object_put_pages(obj);
 		if (err == 0) {
+			/* After eviction, try to keep using it from its new backing store */
+			if (obj->swapto && obj->memory_mask & BIT(INTEL_REGION_SMEM))
+				i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false);
+
 			/* conservative estimate of reclaimed pages */
 			GEM_TRACE("%s:{ target:%pa, found:%pa, evicting:%zu, remaining timeout:%ld }\n",
 				  mem->name, &target, &found, obj->base.size, timeout);
@@ -508,6 +527,7 @@ delete_bookmark:
 
 		pos = &bookmark;
 	}
+	__list_del_entry(&end.link);
 	spin_unlock(&mem->objects.lock);
 	if (err || found >= target)
 		return err;
@@ -529,6 +549,8 @@ delete_bookmark:
 	 */
 	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
 		return 0;
+
+	scan |= i915_px_cache_release(&mem->gt->px_cache);
 
 	/* XXX optimistic busy wait for transient pins */
 	if (scan && time_before(jiffies, end_time)) {
@@ -576,6 +598,7 @@ int
 __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 				      struct i915_gem_ww_ctx *ww,
 				      resource_size_t size,
+				      unsigned long age,
 				      unsigned int flags,
 				      struct list_head *blocks)
 {
@@ -648,13 +671,13 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			break;
 		}
 
-		if (i915_buddy_defrag(&mem->mm, min_order, order))
+		if (order && i915_buddy_defrag(&mem->mm, min_order, order))
 			/* Merged a few blocks, try again */
 			continue;
 
 		if (order-- == min_order) {
 evict:			sz = n_pages * mem->mm.chunk_size;
-			err = intel_memory_region_evict(mem, ww, sz, min_order);
+			err = intel_memory_region_evict(mem, ww, sz, age, min_order);
 			if (err)
 				break;
 
@@ -684,7 +707,7 @@ __intel_memory_region_get_block_buddy(struct intel_memory_region *mem,
 	LIST_HEAD(blocks);
 	int ret;
 
-	ret = __intel_memory_region_get_pages_buddy(mem, NULL, size, flags, &blocks);
+	ret = __intel_memory_region_get_pages_buddy(mem, NULL, size, jiffies, flags, &blocks);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -783,6 +806,8 @@ intel_memory_region_create(struct intel_gt *gt,
 	spin_lock_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
 	INIT_LIST_HEAD(&mem->objects.purgeable);
+	INIT_LIST_HEAD(&mem->objects.migratable);
+	INIT_LIST_HEAD(&mem->objects.pt);
 
 	INIT_LIST_HEAD(&mem->reserved);
 
@@ -865,10 +890,6 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 			pcie_capability_set_word(to_pci_dev(i915->drm.dev), PCI_EXP_DEVCTL,
 						 PCI_EXP_DEVCTL_RELAX_EN);
 	}
-
-	if (i915->params.enable_compression != (uint)~0)
-		mkwrite_device_info(i915)->has_flat_ccs =
-			!!i915->params.enable_compression;
 
 	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); i++) {
 		struct intel_memory_region *mem = ERR_PTR(-ENODEV);

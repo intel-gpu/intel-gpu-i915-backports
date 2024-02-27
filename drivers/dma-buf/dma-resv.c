@@ -100,7 +100,11 @@ static void dma_resv_list_free(struct dma_resv_list *list)
 void dma_resv_init(struct dma_resv *obj)
 {
 	ww_mutex_init(&obj->lock, &reservation_ww_class);
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	seqcount_init(&obj->seq);
+#else
 	seqcount_ww_mutex_init(&obj->seq, &obj->lock);
+#endif
 
 	RCU_INIT_POINTER(obj->fence, NULL);
 	RCU_INIT_POINTER(obj->fence_excl, NULL);
@@ -249,7 +253,9 @@ void dma_resv_add_shared_fence(struct dma_resv *obj, struct dma_fence *fence)
 
 	fobj = dma_resv_shared_list(obj);
 	count = fobj->shared_count;
-
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	preempt_disable();
+#endif
 	write_seqcount_begin(&obj->seq);
 
 	for (i = 0; i < count; ++i) {
@@ -271,6 +277,9 @@ replace:
 	smp_store_mb(fobj->shared_count, count);
 
 	write_seqcount_end(&obj->seq);
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	preempt_enable();
+#endif
 	dma_fence_put(old);
 }
 EXPORT_SYMBOL(dma_resv_add_shared_fence);
@@ -296,13 +305,18 @@ void dma_resv_add_excl_fence(struct dma_resv *obj, struct dma_fence *fence)
 
 	if (fence)
 		dma_fence_get(fence);
-
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	preempt_disable();
+#endif
 	write_seqcount_begin(&obj->seq);
 	/* write_seqcount_begin provides the necessary memory barrier */
 	RCU_INIT_POINTER(obj->fence_excl, fence);
 	if (old)
 		old->shared_count = 0;
 	write_seqcount_end(&obj->seq);
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	preempt_enable();
+#endif
 
 	/* inplace update, no shared fences */
 	while (i--)

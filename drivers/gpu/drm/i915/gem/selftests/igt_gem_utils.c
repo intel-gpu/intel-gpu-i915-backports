@@ -114,7 +114,6 @@ int igt_gpu_fill_dw(struct intel_context *ce,
 {
 	struct i915_request *rq;
 	struct i915_vma *batch;
-	unsigned int flags;
 	int err;
 
 	GEM_BUG_ON(!intel_engine_can_store_dword(ce->engine));
@@ -146,14 +145,10 @@ int igt_gpu_fill_dw(struct intel_context *ce,
 	if (err)
 		goto skip_request;
 
-	flags = 0;
-	if (GRAPHICS_VER(ce->vm->i915) <= 5)
-		flags |= I915_DISPATCH_SECURE;
-
 	err = rq->engine->emit_bb_start(rq,
 					i915_vma_offset(batch),
 					i915_vma_size(batch),
-					flags);
+					0);
 
 skip_request:
 	if (err)

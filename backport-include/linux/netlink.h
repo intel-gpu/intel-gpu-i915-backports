@@ -58,7 +58,7 @@ struct netlink_ext_ack {
 } while (0)
 #endif /* NL_SET_BAD_ATTR */
 
-#if LINUX_VERSION_IS_LESS(5,0,0)
+#ifdef BPM_NL_SET_EXTACK_COOKIE_U64_PRESENT
 static inline void nl_set_extack_cookie_u64(struct netlink_ext_ack *extack,
 					    u64 cookie)
 {

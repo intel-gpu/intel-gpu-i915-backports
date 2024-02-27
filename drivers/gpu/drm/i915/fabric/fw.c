@@ -1529,7 +1529,6 @@ static int request_pscdata_from_spi(struct fdev *dev)
 	struct device *spi_dev;
 	struct mtd_info *mtd;
 	unsigned int offset;
-	size_t mtd_name_len;
 	char *mtd_name;
 	u8 *buf = NULL;
 	size_t size;
@@ -1540,19 +1539,10 @@ static int request_pscdata_from_spi(struct fdev *dev)
 	if (!spi_dev)
 		return -ENODEV;
 
-	/* sizeof() includes space for terminating NUL */
-	mtd_name_len = strlen(dev_name(spi_dev)) + sizeof(PSC_REGION_QUALIFIER);
-	mtd_name = kmalloc(mtd_name_len, GFP_KERNEL);
-	if (!mtd_name) {
-		put_device(spi_dev);
-		return -ENOMEM;
-	}
-
-	/* MTD region name matches SPI device name with ".PSC" appended */
-	mtd_name[0] = '\0';
-	strncat(mtd_name, dev_name(spi_dev), mtd_name_len);
+	mtd_name = kasprintf(GFP_KERNEL, "%s%s", dev_name(spi_dev), PSC_REGION_QUALIFIER);
 	put_device(spi_dev);
-	strncat(mtd_name, PSC_REGION_QUALIFIER, mtd_name_len);
+	if (!mtd_name)
+		return -ENOMEM;
 
 	/* get_mtd_device_nm returns -ENODEV if not found */
 	mtd = get_mtd_device_nm(mtd_name);

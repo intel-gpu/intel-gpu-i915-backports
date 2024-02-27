@@ -17,14 +17,13 @@
 #include "gem/i915_gem_region.h"
 #include "i915_drv.h"
 #include "i915_gem_object.h"
-#include "i915_gem_tiling.h"
 #include "i915_gemfs.h"
 #include "i915_scatterlist.h"
 #include "i915_sw_fence_work.h"
 #include "i915_trace.h"
 
 struct ras_errors {
-	int max;
+	unsigned int max;
 	struct ras_error {
 		struct dev_ext_attribute attr;
 		unsigned long count;
@@ -92,7 +91,7 @@ shmem_get_page(struct intel_memory_region *mem,
 		return page;
 
 	/* Preferentially reap our own buffer objects before swapping */
-	intel_memory_region_evict(mem, NULL, SZ_2M, PAGE_SIZE);
+	intel_memory_region_evict(mem, NULL, SZ_2M, jiffies - HZ, PAGE_SIZE);
 
 	/*
 	 * We've tried hard to allocate the memory by reaping
@@ -282,9 +281,11 @@ static unsigned long shmem_create_mode(const struct drm_i915_gem_object *obj)
 	flags = 0;
 	if ((obj->flags & (I915_BO_ALLOC_USER | I915_BO_CPU_CLEAR)) &&
 	    !(obj->flags & I915_BO_SKIP_CLEAR)) {
-		flags |= SHMEM_CLEAR;
+		if (!want_init_on_alloc(0))
+			flags |= SHMEM_CLEAR;
+
 		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
+		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
 			flags |= SHMEM_CLFLUSH;
 	}
 
@@ -335,8 +336,8 @@ static int shmem_create(struct shmem_work *wrk)
 				gfp |= __GFP_KSWAPD_RECLAIM;
 			if (order == 0) {
 				/* XXX eviction does not consider node equivalence */
-				intel_memory_region_evict(obj->mm.region.mem,
-							  NULL, SZ_2M, PAGE_SIZE);
+				intel_memory_region_evict(obj->mm.region.mem, NULL,
+							  SZ_2M, jiffies - HZ, PAGE_SIZE);
 				gfp |= __GFP_DIRECT_RECLAIM;
 			}
 
@@ -463,13 +464,17 @@ static int shmem_swapin(struct shmem_work *wrk)
 	struct shmem_chunk *chunk = NULL;
 	struct i915_sw_fence fence;
 	struct scatterlist *sg;
+	unsigned long spread;
 	unsigned long flags;
 	unsigned long n;
 	int err;
 
+	spread = div_u64(obj->base.size, cpumask_weight(to_i915(obj->base.dev)->mm.sched->cpumask) + 1);
+	spread = max_t(unsigned long, roundup_pow_of_two(spread), SZ_2M);
+
 	flags = 0;
 	if (i915_gem_object_can_bypass_llc(obj) ||
-	    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
+	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
 		flags |= SHMEM_CLFLUSH;
 
 	err = 0;
@@ -506,7 +511,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 		sg = chain;
 
 		n += I915_MAX_CHAIN_ALLOC;
-		if (n - chunk->idx > SZ_2M >> PAGE_SHIFT) {
+		if (n - chunk->idx > spread >> PAGE_SHIFT) {
 			chunk->end = n;
 			shmem_queue(chunk, to_i915(obj->base.dev));
 			chunk = NULL;
@@ -539,9 +544,6 @@ static int shmem_swapin(struct shmem_work *wrk)
 
 	obj->mm.page_sizes =
 		i915_sg_compact(sgt, i915_gem_sg_segment_size(obj));
-
-	if (i915_gem_object_needs_bit17_swizzle(obj))
-		i915_gem_object_do_bit_17_swizzle(obj, sgt);
 
 	err = i915_gem_gtt_prepare_pages(obj, sgt);
 	if (err)
@@ -679,51 +681,6 @@ shmem_truncate(struct drm_i915_gem_object *obj)
 	shmem_truncate_range(file_inode(obj->base.filp), 0, (loff_t)-1);
 }
 
-static void
-shmem_writeback(struct drm_i915_gem_object *obj)
-{
-	struct address_space *mapping;
-	struct writeback_control wbc = {
-		.sync_mode = WB_SYNC_NONE,
-		.nr_to_write = SWAP_CLUSTER_MAX,
-		.range_start = 0,
-		.range_end = LLONG_MAX,
-		.for_reclaim = 1,
-	};
-	unsigned long i;
-
-	/*
-	 * Leave mmapings intact (GTT will have been revoked on unbinding,
-	 * leaving only CPU mmapings around) and add those pages to the LRU
-	 * instead of invoking writeback so they are aged and paged out
-	 * as normal.
-	 */
-	mapping = obj->base.filp->f_mapping;
-
-	/* Begin writeback on each dirty page */
-	for (i = 0; i < obj->base.size >> PAGE_SHIFT; i++) {
-		struct page *page;
-
-		page = find_lock_page(mapping, i);
-		if (!page)
-			continue;
-
-		if (!page_mapped(page) && clear_page_dirty_for_io(page)) {
-			int ret;
-
-			SetPageReclaim(page);
-			ret = mapping->a_ops->writepage(page, &wbc);
-			if (!PageWriteback(page))
-				ClearPageReclaim(page);
-			if (!ret)
-				goto put;
-		}
-		unlock_page(page);
-put:
-		put_page(page);
-	}
-}
-
 void
 __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 				struct sg_table *pages,
@@ -733,7 +690,7 @@ __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 
 	if (needs_clflush &&
 	    (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0 &&
-	    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ))
+	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
 		drm_clflush_sg(pages);
 
 	__start_cpu_write(obj);
@@ -878,7 +835,8 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 	struct page *page;
 
 	mapping_clear_unevictable(mapping);
-	i915_gem_object_migrate_finish(obj);
+	if (!i915_gem_object_migrate_finish(obj))
+		i915_gem_gtt_finish_pages(obj, pages);
 
 	if (!pages->nents)
 		goto empty;
@@ -889,7 +847,7 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 
 		clflush = false;
 		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
+		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
 			clflush = true;
 
 		for_each_sgt_page(page, sgt_iter, pages) {
@@ -987,10 +945,6 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 	if (pagevec_count(&pvec))
 		check_release_pagevec(&pvec);
 
-	i915_gem_gtt_finish_pages(obj, pages);
-	if (do_swap && i915_gem_object_needs_bit17_swizzle(obj))
-		i915_gem_object_save_bit_17_swizzle(obj, pages);
-
 empty:
 	atomic64_add(obj->base.size, &mem->avail);
 
@@ -1002,10 +956,7 @@ empty:
 static int
 shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 {
-	if (likely(i915_gem_object_has_struct_page(obj)))
-		return i915_gem_object_put_pages_shmem(obj, pages);
-	else
-		return i915_gem_object_put_pages_phys(obj, pages);
+	return i915_gem_object_put_pages_shmem(obj, pages);
 }
 
 static int
@@ -1019,9 +970,6 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 
 	/* Caller already validated user args */
 	GEM_BUG_ON(!access_ok(user_data, arg->size));
-
-	if (!i915_gem_object_has_struct_page(obj))
-		return i915_gem_object_pwrite_phys(obj, arg);
 
 	/*
 	 * Before we instantiate/pin the backing store for our use, we
@@ -1105,9 +1053,6 @@ static int
 shmem_pread(struct drm_i915_gem_object *obj,
 	    const struct drm_i915_gem_pread *arg)
 {
-	if (!i915_gem_object_has_struct_page(obj))
-		return i915_gem_object_pread_phys(obj, arg);
-
 	return -ENODEV;
 }
 
@@ -1126,7 +1071,6 @@ const struct drm_i915_gem_object_ops i915_gem_shmem_ops = {
 	.get_pages = shmem_get_pages,
 	.put_pages = shmem_put_pages,
 	.truncate = shmem_truncate,
-	.writeback = shmem_writeback,
 
 	.pwrite = shmem_pwrite,
 	.pread = shmem_pread,
@@ -1346,7 +1290,7 @@ bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
 				   struct kobject *kobj)
 {
 	struct ras_errors *errors;
-	int max, n;
+	unsigned int max, n;
 
 	if (!IS_ENABLED(CONFIG_NUMA))
 		return true;
@@ -1375,7 +1319,7 @@ bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
 			break;
 	}
 
-	i915->mm.regions[REGION_SMEM]->region_private = errors;
+	i915->mm.regions[INTEL_REGION_SMEM]->region_private = errors;
 	return true;
 }
 

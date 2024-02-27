@@ -624,8 +624,11 @@ static int live_hold_reset(void *arg)
 		err = engine_lock_reset_tasklet(engine);
 		if (err)
 			goto out;
-
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		engine->sched_engine->tasklet.func(engine->sched_engine->tasklet.data);
+#else
 		engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
+#endif
 		GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
 
 		i915_request_get(rq);
@@ -2450,9 +2453,6 @@ static int live_suppress_self_preempt(void *arg)
 	if (intel_uc_uses_guc_submission(&gt->uc))
 		return 0; /* presume black blox */
 
-	if (intel_vgpu_active(gt->i915))
-		return 0; /* GVT forces single port & request submission */
-
 	if (preempt_client_init(gt, &a))
 		return -ENOMEM;
 	if (preempt_client_init(gt, &b))
@@ -2586,7 +2586,6 @@ static int live_chain_preempt(void *arg)
 		if (ring_size < 0)
 			ring_size += rq->ring->size;
 		ring_size = rq->ring->size / ring_size;
-		ring_size /= GET_MULTIPLIER(0);
 		pr_debug("%s(%s): Using maximum of %d requests\n",
 			 __func__, engine->name, ring_size);
 
@@ -4624,7 +4623,11 @@ static int reset_virtual_engine(struct intel_gt *gt,
 	if (err)
 		goto out_heartbeat;
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	engine->sched_engine->tasklet.func(engine->sched_engine->tasklet.data);
+#else
 	engine->sched_engine->tasklet.callback(&engine->sched_engine->tasklet);
+#endif
 	GEM_BUG_ON(execlists_active(&engine->execlists) != rq);
 
 	/* Fake a preemption event; failed of course */

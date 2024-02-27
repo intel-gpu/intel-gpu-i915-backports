@@ -20,6 +20,21 @@ struct drm_printer;
 		  ##__VA_ARGS__);					\
 } while (0)
 
+/*
+ * Check that the GT is a graphics GT and has an IP version within the
+ * specified range (inclusive).
+ */
+#define IS_GFX_GT_IP_RANGE(gt, from, until) ( \
+	BUILD_BUG_ON_ZERO((from) < IP_VER(2, 0)) + \
+	BUILD_BUG_ON_ZERO((until) < (from)) + \
+	((gt)->type != GT_MEDIA && \
+	 GRAPHICS_VER_FULL((gt)->i915) >= (from) && \
+	 GRAPHICS_VER_FULL((gt)->i915) <= (until)))
+
+#define NEEDS_FASTCOLOR_BLT_WABB(engine) ( \
+	IS_GFX_GT_IP_RANGE(engine->gt, IP_VER(12, 55), IP_VER(12, 71)) && \
+	engine->class == COPY_ENGINE_CLASS)
+
 static inline bool gt_is_root(struct intel_gt *gt)
 {
 	return !gt->info.id;
@@ -70,8 +85,6 @@ int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout);
 void intel_gt_check_and_clear_faults(struct intel_gt *gt);
 void intel_gt_clear_error_registers(struct intel_gt *gt,
 				    intel_engine_mask_t engine_mask);
-
-void intel_gt_flush_ggtt_writes(struct intel_gt *gt);
 
 static inline void intel_gt_chipset_flush(struct intel_gt *gt)
 {

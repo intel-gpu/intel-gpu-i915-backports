@@ -108,10 +108,8 @@ __i915_active_fence_get(struct dma_fence __rcu **fencep)
 		if (IS_ERR_OR_NULL(fence))
 			return fence;
 
-		if (!test_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,
-			      &fence->flags) &&
-		    dma_fence_is_signaled(fence))
-			continue;
+		if (dma_fence_is_signaled(fence))
+			return NULL;
 
 		if (!dma_fence_get_rcu(fence))
 			continue;

@@ -32,20 +32,20 @@ static void mock_insert_page(struct i915_address_space *vm,
 {
 }
 
-static void mock_insert_entries(struct i915_address_space *vm,
-				struct i915_vm_pt_stash *stash,
-				struct i915_vma *vma,
-				unsigned int pat_index,
-				u32 flags)
+static int mock_insert_entries(struct i915_address_space *vm,
+			       struct i915_vma *vma,
+			       unsigned int pat_index,
+			       u32 flags)
 {
+	return 0;
 }
 
-static void mock_bind_ppgtt(struct i915_address_space *vm,
-			    struct i915_vm_pt_stash *stash,
-			    struct i915_vma *vma,
-			    unsigned int pat_index,
-			    u32 flags)
+static int mock_bind_ppgtt(struct i915_address_space *vm,
+			   struct i915_vma *vma,
+			   unsigned int pat_index,
+			   u32 flags)
 {
+	return 0;
 }
 
 static void mock_unbind_ppgtt(struct i915_address_space *vm,
@@ -98,12 +98,12 @@ struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 	return ppgtt;
 }
 
-static void mock_bind_ggtt(struct i915_address_space *vm,
-			   struct i915_vm_pt_stash *stash,
-			   struct i915_vma *vma,
-			   unsigned int pat_index,
-			   u32 flags)
+static int mock_bind_ggtt(struct i915_address_space *vm,
+			  struct i915_vma *vma,
+			  unsigned int pat_index,
+			  u32 flags)
 {
+	return 0;
 }
 
 static void mock_unbind_ggtt(struct i915_address_space *vm,
@@ -119,8 +119,6 @@ void mock_init_ggtt(struct intel_gt *gt)
 	ggtt->vm.i915 = gt->i915;
 	ggtt->vm.is_ggtt = true;
 
-	ggtt->gmadr = (struct resource) DEFINE_RES_MEM(0, 2048 * PAGE_SIZE);
-	ggtt->mappable_end = resource_size(&ggtt->gmadr);
 	ggtt->vm.total = 4096 * PAGE_SIZE;
 
 	ggtt->vm.alloc_pt_dma = alloc_pt_dma;

@@ -118,34 +118,22 @@ static bool psr2_global_enabled(struct intel_dp *intel_dp)
 
 static u32 psr_irq_psr_error_bit_get(struct intel_dp *intel_dp)
 {
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-
-	return DISPLAY_VER(dev_priv) >= 12 ? TGL_PSR_ERROR :
-		EDP_PSR_ERROR(intel_dp->psr.transcoder);
+	return TGL_PSR_ERROR;
 }
 
 static u32 psr_irq_post_exit_bit_get(struct intel_dp *intel_dp)
 {
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-
-	return DISPLAY_VER(dev_priv) >= 12 ? TGL_PSR_POST_EXIT :
-		EDP_PSR_POST_EXIT(intel_dp->psr.transcoder);
+	return TGL_PSR_POST_EXIT;
 }
 
 static u32 psr_irq_pre_entry_bit_get(struct intel_dp *intel_dp)
 {
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-
-	return DISPLAY_VER(dev_priv) >= 12 ? TGL_PSR_PRE_ENTRY :
-		EDP_PSR_PRE_ENTRY(intel_dp->psr.transcoder);
+	return TGL_PSR_PRE_ENTRY;
 }
 
 static u32 psr_irq_mask_get(struct intel_dp *intel_dp)
 {
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-
-	return DISPLAY_VER(dev_priv) >= 12 ? TGL_PSR_MASK :
-		EDP_PSR_MASK(intel_dp->psr.transcoder);
+	return TGL_PSR_MASK;
 }
 
 static void psr_irq_control(struct intel_dp *intel_dp)
@@ -154,10 +142,7 @@ static void psr_irq_control(struct intel_dp *intel_dp)
 	i915_reg_t imr_reg;
 	u32 mask, val;
 
-	if (DISPLAY_VER(dev_priv) >= 12)
-		imr_reg = TRANS_PSR_IMR(intel_dp->psr.transcoder);
-	else
-		imr_reg = EDP_PSR_IMR;
+	imr_reg = TRANS_PSR_IMR(intel_dp->psr.transcoder);
 
 	mask = psr_irq_psr_error_bit_get(intel_dp);
 	if (intel_dp->psr.debug & I915_PSR_DEBUG_IRQ)
@@ -215,10 +200,7 @@ void intel_psr_irq_handler(struct intel_dp *intel_dp, u32 psr_iir)
 	ktime_t time_ns =  ktime_get();
 	i915_reg_t imr_reg;
 
-	if (DISPLAY_VER(dev_priv) >= 12)
-		imr_reg = TRANS_PSR_IMR(intel_dp->psr.transcoder);
-	else
-		imr_reg = EDP_PSR_IMR;
+	imr_reg = TRANS_PSR_IMR(intel_dp->psr.transcoder);
 
 	if (psr_iir & psr_irq_pre_entry_bit_get(intel_dp)) {
 		intel_dp->psr.last_entry_attempt = time_ns;
@@ -233,7 +215,7 @@ void intel_psr_irq_handler(struct intel_dp *intel_dp, u32 psr_iir)
 			    "[transcoder %s] PSR exit completed\n",
 			    transcoder_name(cpu_transcoder));
 
-		if (DISPLAY_VER(dev_priv) >= 9) {
+		{
 			u32 val = intel_de_read(dev_priv,
 						PSR_EVENT(cpu_transcoder));
 			bool psr2_enabled = intel_dp->psr.psr2_enabled;
@@ -337,8 +319,9 @@ void intel_psr_init_dpcd(struct intel_dp *intel_dp)
 	struct drm_i915_private *dev_priv =
 		to_i915(dp_to_dig_port(intel_dp)->base.base.dev);
 
-	drm_dp_dpcd_read(&intel_dp->aux, DP_PSR_SUPPORT, intel_dp->psr_dpcd,
-			 sizeof(intel_dp->psr_dpcd));
+	if (drm_dp_dpcd_read(&intel_dp->aux, DP_PSR_SUPPORT, intel_dp->psr_dpcd,
+			     sizeof(intel_dp->psr_dpcd)) != sizeof(intel_dp->psr_dpcd))
+		return;
 
 	if (!intel_dp->psr_dpcd[0])
 		return;
@@ -361,8 +344,7 @@ void intel_psr_init_dpcd(struct intel_dp *intel_dp)
 	intel_dp->psr.sink_sync_latency =
 		intel_dp_get_sink_sync_latency(intel_dp);
 
-	if (DISPLAY_VER(dev_priv) >= 9 &&
-	    (intel_dp->psr_dpcd[0] == DP_PSR2_WITH_Y_COORD_IS_SUPPORTED)) {
+	if (intel_dp->psr_dpcd[0] == DP_PSR2_WITH_Y_COORD_IS_SUPPORTED) {
 		bool y_req = intel_dp->psr_dpcd[1] &
 			     DP_PSR2_SU_Y_COORDINATE_REQUIRED;
 		bool alpm = intel_dp_get_alpm_status(intel_dp);
@@ -392,7 +374,6 @@ void intel_psr_init_dpcd(struct intel_dp *intel_dp)
 
 static void intel_psr_enable_sink(struct intel_dp *intel_dp)
 {
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
 	u8 dpcd_val = DP_PSR_ENABLE;
 
 	/* Enable ALPM at sink for psr2 */
@@ -406,8 +387,7 @@ static void intel_psr_enable_sink(struct intel_dp *intel_dp)
 		if (intel_dp->psr.link_standby)
 			dpcd_val |= DP_PSR_MAIN_LINK_ACTIVE;
 
-		if (DISPLAY_VER(dev_priv) >= 8)
-			dpcd_val |= DP_PSR_CRC_VERIFICATION;
+		dpcd_val |= DP_PSR_CRC_VERIFICATION;
 	}
 
 	if (intel_dp->psr.req_psr2_sdp_prior_scanline)
@@ -424,8 +404,7 @@ static u32 intel_psr1_get_tp_time(struct intel_dp *intel_dp)
 	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
 	u32 val = 0;
 
-	if (DISPLAY_VER(dev_priv) >= 11)
-		val |= EDP_PSR_TP4_TIME_0US;
+	val |= EDP_PSR_TP4_TIME_0US;
 
 	if (dev_priv->params.psr_safest_params) {
 		val |= EDP_PSR_TP1_TIME_2500us;
@@ -488,16 +467,13 @@ static void hsw_activate_psr1(struct intel_dp *intel_dp)
 	val |= psr_compute_idle_frames(intel_dp) << EDP_PSR_IDLE_FRAME_SHIFT;
 
 	val |= max_sleep_time << EDP_PSR_MAX_SLEEP_TIME_SHIFT;
-	if (IS_HASWELL(dev_priv))
-		val |= EDP_PSR_MIN_LINK_ENTRY_TIME_8_LINES;
 
 	if (intel_dp->psr.link_standby)
 		val |= EDP_PSR_LINK_STANDBY;
 
 	val |= intel_psr1_get_tp_time(intel_dp);
 
-	if (DISPLAY_VER(dev_priv) >= 8)
-		val |= EDP_PSR_CRC_ENABLE;
+	val |= EDP_PSR_CRC_ENABLE;
 
 	val |= (intel_de_read(dev_priv, EDP_PSR_CTL(intel_dp->psr.transcoder)) &
 		EDP_PSR_RESTORE_PSR_ACTIVE_CTX_MASK);
@@ -542,13 +518,11 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 	val |= EDP_PSR2_FRAME_BEFORE_SU(max_t(u8, intel_dp->psr.sink_sync_latency + 1, 2));
 	val |= intel_psr2_get_tp_time(intel_dp);
 
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		if (intel_dp->psr.io_wake_lines < 9 &&
-		    intel_dp->psr.fast_wake_lines < 9)
-			val |= TGL_EDP_PSR2_BLOCK_COUNT_NUM_2;
-		else
-			val |= TGL_EDP_PSR2_BLOCK_COUNT_NUM_3;
-	}
+	if (intel_dp->psr.io_wake_lines < 9 &&
+	    intel_dp->psr.fast_wake_lines < 9)
+		val |= TGL_EDP_PSR2_BLOCK_COUNT_NUM_2;
+	else
+		val |= TGL_EDP_PSR2_BLOCK_COUNT_NUM_3;
 
 	/* Wa_22012278275:adl-p */
 	if (IS_ADLP_DISPLAY_STEP(dev_priv, STEP_A0, STEP_E0)) {
@@ -575,11 +549,9 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 		tmp = map[intel_dp->psr.fast_wake_lines - TGL_EDP_PSR2_FAST_WAKE_MIN_LINES];
 		tmp = tmp << TGL_EDP_PSR2_FAST_WAKE_MIN_SHIFT;
 		val |= tmp;
-	} else if (DISPLAY_VER(dev_priv) >= 12) {
+	} else {
 		val |= TGL_EDP_PSR2_IO_BUFFER_WAKE(intel_dp->psr.io_wake_lines);
 		val |= TGL_EDP_PSR2_FAST_WAKE(intel_dp->psr.fast_wake_lines);
-	} else if (DISPLAY_VER(dev_priv) >= 9) {
-		val |= EDP_PSR2_IO_BUFFER_WAKE(intel_dp->psr.io_wake_lines);
 		val |= EDP_PSR2_FAST_WAKE(intel_dp->psr.fast_wake_lines);
 	}
 
@@ -610,19 +582,22 @@ transcoder_has_psr2(struct drm_i915_private *dev_priv, enum transcoder trans)
 {
 	if (IS_ALDERLAKE_P(dev_priv) || DISPLAY_VER(dev_priv) >= 14)
 		return trans == TRANSCODER_A || trans == TRANSCODER_B;
-	else if (DISPLAY_VER(dev_priv) >= 12)
-		return trans == TRANSCODER_A;
 	else
-		return trans == TRANSCODER_EDP;
+		return trans == TRANSCODER_A;
 }
 
 static u32 intel_get_frame_time_us(const struct intel_crtc_state *cstate)
 {
+	u32 rate;
+
 	if (!cstate || !cstate->hw.active)
 		return 0;
 
-	return DIV_ROUND_UP(1000 * 1000,
-			    drm_mode_vrefresh(&cstate->hw.adjusted_mode));
+	rate = drm_mode_vrefresh(&cstate->hw.adjusted_mode);
+	if (!rate)
+		return 0;
+
+	return DIV_ROUND_UP(1000 * 1000, rate);
 }
 
 static void psr2_program_idle_frames(struct intel_dp *intel_dp,
@@ -677,66 +652,6 @@ static void tgl_disallow_dc3co_on_psr2_exit(struct intel_dp *intel_dp)
 	cancel_delayed_work(&intel_dp->psr.dc3co_work);
 	/* Before PSR2 exit disallow dc3co*/
 	tgl_psr2_disable_dc3co(intel_dp);
-}
-
-static bool
-dc3co_is_pipe_port_compatible(struct intel_dp *intel_dp,
-			      struct intel_crtc_state *crtc_state)
-{
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum pipe pipe = to_intel_crtc(crtc_state->uapi.crtc)->pipe;
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	enum port port = dig_port->base.port;
-
-	if (IS_ALDERLAKE_P(dev_priv) || DISPLAY_VER(dev_priv) >= 14)
-		return pipe <= PIPE_B && port <= PORT_B;
-	else
-		return pipe == PIPE_A && port == PORT_A;
-}
-
-static void
-tgl_dc3co_exitline_compute_config(struct intel_dp *intel_dp,
-				  struct intel_crtc_state *crtc_state)
-{
-	const u32 crtc_vdisplay = crtc_state->uapi.adjusted_mode.crtc_vdisplay;
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	u32 exit_scanlines;
-
-	/*
-	 * FIXME: Due to the changed sequence of activating/deactivating DC3CO,
-	 * disable DC3CO until the changed dc3co activating/deactivating sequence
-	 * is applied. B.Specs:49196
-	 */
-	return;
-
-	/*
-	 * DMC's DC3CO exit mechanism has an issue with Selective Fecth
-	 * TODO: when the issue is addressed, this restriction should be removed.
-	 */
-	if (crtc_state->enable_psr2_sel_fetch)
-		return;
-
-	if (!(dev_priv->dmc.allowed_dc_mask & DC_STATE_EN_DC3CO))
-		return;
-
-	if (!dc3co_is_pipe_port_compatible(intel_dp, crtc_state))
-		return;
-
-	/* Wa_16011303918:adl-p */
-	if (IS_ADLP_DISPLAY_STEP(dev_priv, STEP_A0, STEP_B0))
-		return;
-
-	/*
-	 * DC3CO Exit time 200us B.Spec 49196
-	 * PSR2 transcoder Early Exit scanlines = ROUNDUP(200 / line time) + 1
-	 */
-	exit_scanlines =
-		intel_usecs_to_scanlines(&crtc_state->uapi.adjusted_mode, 200) + 1;
-
-	if (drm_WARN_ON(&dev_priv->drm, exit_scanlines > crtc_vdisplay))
-		return;
-
-	crtc_state->dc3co_exitline = crtc_vdisplay - exit_scanlines;
 }
 
 static bool intel_psr2_sel_fetch_config_valid(struct intel_dp *intel_dp,
@@ -834,19 +749,13 @@ static bool _compute_psr2_wake_times(struct intel_dp *intel_dp,
 	int io_wake_lines, io_wake_time, fast_wake_lines, fast_wake_time;
 	u8 max_wake_lines;
 
-	if (DISPLAY_VER(i915) >= 12) {
-		io_wake_time = 42;
-		/*
-		 * According to Bspec it's 42us, but based on testing
-		 * it is not enough -> use 45 us.
-		 */
-		fast_wake_time = 45;
-		max_wake_lines = 12;
-	} else {
-		io_wake_time = 50;
-		fast_wake_time = 32;
-		max_wake_lines = 8;
-	}
+	io_wake_time = 42;
+	/*
+	 * According to Bspec it's 42us, but based on testing
+	 * it is not enough -> use 45 us.
+	 */
+	fast_wake_time = 45;
+	max_wake_lines = 12;
 
 	io_wake_lines = intel_usecs_to_scanlines(
 		&crtc_state->uapi.adjusted_mode, io_wake_time);
@@ -877,12 +786,6 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 
 	if (!intel_dp->psr.sink_psr2_support)
 		return false;
-
-	/* JSL and EHL only supports eDP 1.3 */
-	if (IS_JSL_EHL(dev_priv)) {
-		drm_dbg_kms(&dev_priv->drm, "PSR2 not supported by phy\n");
-		return false;
-	}
 
 	/* Wa_16011181250 */
 	if (IS_ROCKETLAKE(dev_priv) || IS_ALDERLAKE_S(dev_priv) ||
@@ -926,19 +829,9 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 		return false;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		psr_max_h = 5120;
-		psr_max_v = 3200;
-		max_bpp = 30;
-	} else if (DISPLAY_VER(dev_priv) >= 10) {
-		psr_max_h = 4096;
-		psr_max_v = 2304;
-		max_bpp = 24;
-	} else if (DISPLAY_VER(dev_priv) == 9) {
-		psr_max_h = 3640;
-		psr_max_v = 2304;
-		max_bpp = 24;
-	}
+	psr_max_h = 5120;
+	psr_max_v = 3200;
+	max_bpp = 30;
 
 	if (crtc_state->pipe_bpp > max_bpp) {
 		drm_dbg_kms(&dev_priv->drm,
@@ -990,7 +883,11 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 		goto unsupported;
 	}
 
-	tgl_dc3co_exitline_compute_config(intel_dp, crtc_state);
+	/*
+	 * FIXME: Due to the changed sequence of activating/deactivating DC3CO,
+	 * disable DC3CO until the changed dc3co activating/deactivating sequence
+	 * is applied. B.Specs:49196
+	 */
 	return true;
 
 unsupported:
@@ -1094,11 +991,10 @@ void intel_psr_get_config(struct intel_encoder *encoder,
 			pipe_config->enable_psr2_sel_fetch = true;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		val = intel_de_read(dev_priv, EXITLINE(intel_dp->psr.transcoder));
-		val &= EXITLINE_MASK;
-		pipe_config->dc3co_exitline = val;
-	}
+	val = intel_de_read(dev_priv, EXITLINE(intel_dp->psr.transcoder));
+	val &= EXITLINE_MASK;
+	pipe_config->dc3co_exitline = val;
+
 unlock:
 	mutex_unlock(&intel_dp->psr.lock);
 }
@@ -1161,9 +1057,6 @@ static void intel_psr_enable_source(struct intel_dp *intel_dp,
 	       EDP_PSR_DEBUG_MASK_LPSP |
 	       EDP_PSR_DEBUG_MASK_MAX_SLEEP;
 
-	if (DISPLAY_VER(dev_priv) < 11)
-		mask |= EDP_PSR_DEBUG_MASK_DISP_REG_WRITE;
-
 	intel_de_write(dev_priv, EDP_PSR_DEBUG(intel_dp->psr.transcoder),
 		       mask);
 
@@ -1201,11 +1094,6 @@ static void intel_psr_enable_source(struct intel_dp *intel_dp,
 	}
 
 	if (intel_dp->psr.psr2_enabled) {
-		if (DISPLAY_VER(dev_priv) == 9)
-			intel_de_rmw(dev_priv, CHICKEN_TRANS(cpu_transcoder), 0,
-				     PSR2_VSC_ENABLE_PROG_HEADER |
-				     PSR2_ADD_VERTICAL_LINE_COUNT);
-
 		/*
 		 * Wa_16014451276:adlp,mtl[a0,b0]
 		 * All supported adlp panels have 1-based X granularity, this may
@@ -1249,11 +1137,7 @@ static bool psr_interrupt_error_check(struct intel_dp *intel_dp)
 	 * first time that PSR HW tries to activate so lets keep PSR disabled
 	 * to avoid any rendering problems.
 	 */
-	if (DISPLAY_VER(dev_priv) >= 12)
-		val = intel_de_read(dev_priv,
-				    TRANS_PSR_IIR(intel_dp->psr.transcoder));
-	else
-		val = intel_de_read(dev_priv, EDP_PSR_IIR);
+	val = intel_de_read(dev_priv, TRANS_PSR_IIR(intel_dp->psr.transcoder));
 	val &= psr_irq_psr_error_bit_get(intel_dp);
 	if (val) {
 		intel_dp->psr.sink_not_reliable = true;
@@ -2451,34 +2335,12 @@ unlock:
  */
 void intel_psr_init(struct intel_dp *intel_dp)
 {
-	struct intel_connector *connector = intel_dp->attached_connector;
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
 	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
 
 	if (!HAS_PSR(dev_priv))
 		return;
 
-	/*
-	 * HSW spec explicitly says PSR is tied to port A.
-	 * BDW+ platforms have a instance of PSR registers per transcoder but
-	 * BDW, GEN9 and GEN11 are not validated by HW team in other transcoder
-	 * than eDP one.
-	 * For now it only supports one instance of PSR for BDW, GEN9 and GEN11.
-	 * So lets keep it hardcoded to PORT_A for BDW, GEN9 and GEN11.
-	 * But GEN12 supports a instance of PSR registers per transcoder.
-	 */
-	if (DISPLAY_VER(dev_priv) < 12 && dig_port->base.port != PORT_A) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "PSR condition failed: Port not supported\n");
-		return;
-	}
-
 	intel_dp->psr.source_support = true;
-
-	/* Set link_standby x link_off defaults */
-	if (DISPLAY_VER(dev_priv) < 12)
-		/* For new platforms up to TGL let's respect VBT back again */
-		intel_dp->psr.link_standby = connector->panel.vbt.psr.full_link;
 
 	INIT_WORK(&intel_dp->psr.work, intel_psr_work);
 	INIT_DELAYED_WORK(&intel_dp->psr.dc3co_work, tgl_dc3co_disable_work);
@@ -2560,10 +2422,11 @@ void intel_psr_short_pulse(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
 	struct intel_psr *psr = &intel_dp->psr;
-	u8 status, error_status;
 	const u8 errors = DP_PSR_RFB_STORAGE_ERROR |
 			  DP_PSR_VSC_SDP_UNCORRECTABLE_ERROR |
 			  DP_PSR_LINK_CRC_ERROR;
+	u8 error_status = 0;
+	u8 status;
 
 	if (!CAN_PSR(intel_dp))
 		return;

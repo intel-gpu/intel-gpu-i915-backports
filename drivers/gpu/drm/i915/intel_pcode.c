@@ -7,26 +7,6 @@
 #include "i915_reg.h"
 #include "intel_pcode.h"
 
-static int gen6_check_mailbox_status(u32 mbox)
-{
-	switch (mbox & GEN6_PCODE_ERROR_MASK) {
-	case GEN6_PCODE_SUCCESS:
-		return 0;
-	case GEN6_PCODE_UNIMPLEMENTED_CMD:
-		return -ENODEV;
-	case GEN6_PCODE_ILLEGAL_CMD:
-		return -ENXIO;
-	case GEN6_PCODE_MIN_FREQ_TABLE_GT_RATIO_OUT_OF_RANGE:
-	case GEN7_PCODE_MIN_FREQ_TABLE_GT_RATIO_OUT_OF_RANGE:
-		return -EOVERFLOW;
-	case GEN6_PCODE_TIMEOUT:
-		return -ETIMEDOUT;
-	default:
-		MISSING_CASE(mbox & GEN6_PCODE_ERROR_MASK);
-		return 0;
-	}
-}
-
 static int gen7_check_mailbox_status(u32 mbox)
 {
 	switch (mbox & GEN6_PCODE_ERROR_MASK) {
@@ -86,10 +66,7 @@ static int __snb_pcode_rw(struct intel_uncore *uncore, u32 mbox,
 	if (is_read && val1)
 		*val1 = intel_uncore_read_fw(uncore, GEN6_PCODE_DATA1);
 
-	if (GRAPHICS_VER(uncore->i915) > 6)
-		return gen7_check_mailbox_status(mbox);
-	else
-		return gen6_check_mailbox_status(mbox);
+	return gen7_check_mailbox_status(mbox);
 }
 
 int snb_pcode_read(struct intel_uncore *uncore, u32 mbox, u32 *val, u32 *val1)

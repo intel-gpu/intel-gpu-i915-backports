@@ -105,7 +105,7 @@ static void fence_release(struct dma_fence *fence)
 	if (f->ops->rcu_release) {
 		GEM_BUG_ON(!f->ops->release);
 		INIT_RCU_WORK(&f->rcu_work, rcu_fence_free);
-		queue_rcu_work(get_wq(f), &f->rcu_work);
+		queue_rcu_work(system_wq, &f->rcu_work);
 		return;
 	}
 
@@ -144,6 +144,7 @@ void __dma_fence_work_init(struct dma_fence_work *f,
 
 	f->ops = ops;
 
+	f->rq.i915 = NULL;
 	f->rq.engine = NULL;
 	f->rq.sched_engine = se;
 	i915_sched_node_init(&f->rq.sched);

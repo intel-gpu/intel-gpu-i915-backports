@@ -59,7 +59,6 @@ static int igt_mock_fill(void *arg)
 
 	page_size = PAGE_SIZE;
 	rem = total;
-retry:
 	max_pages = div64_u64(rem, page_size);
 
 	for_each_prime_number_from(page_num, 1, max_pages) {
@@ -86,11 +85,6 @@ retry:
 		err = 0;
 	if (err == -ENXIO) {
 		if (page_num * page_size <= rem) {
-			if (mem->is_range_manager && max_pages > 1) {
-				max_pages >>= 1;
-				goto retry;
-			}
-
 			pr_err("%s failed, space still left in region\n",
 			       __func__);
 			err = -EINVAL;
@@ -214,18 +208,11 @@ static int igt_mock_reserve(void *arg)
 	while (cur_avail) {
 		u32 size = i915_prandom_u32_max_state(cur_avail, &prng);
 
-retry:
 		size = max_t(u32, round_up(size, PAGE_SIZE), PAGE_SIZE);
 		obj = igt_object_create(mem, &objects, size, 0);
 		if (IS_ERR(obj)) {
-			if (PTR_ERR(obj) == -ENXIO) {
-				if (mem->is_range_manager &&
-				    size > mem->mm.chunk_size) {
-					size >>= 1;
-					goto retry;
-				}
+			if (PTR_ERR(obj) == -ENXIO)
 				break;
-			}
 			err = PTR_ERR(obj);
 			pr_err("%s allocation { size: %d, avail : %lld / %pa } failed",
 			       __func__, size, cur_avail, &mem->avail);
@@ -345,16 +332,14 @@ static int igt_mock_contiguous(void *arg)
 	min = target;
 	target = max >> 1;
 
-	if (!mem->is_range_manager) {
-		/* Make sure we can still allocate all the fragmented space */
-		obj = igt_object_create(mem, &objects, target, 0);
-		if (IS_ERR(obj)) {
-			err = PTR_ERR(obj);
-			goto err_close_objects;
-		}
-
-		igt_object_release(obj);
+	/* Make sure we can still allocate all the fragmented space */
+	obj = igt_object_create(mem, &objects, target, 0);
+	if (IS_ERR(obj)) {
+		err = PTR_ERR(obj);
+		goto err_close_objects;
 	}
+
+	igt_object_release(obj);
 
 	/*
 	 * Even though we have enough free space, we don't have a big enough
@@ -427,15 +412,13 @@ static int igt_mock_splintered_region(void *arg)
 	 * sure that does indeed hold true.
 	 */
 
-	if (!mem->is_range_manager) {
-		obj = igt_object_create(mem, &objects, size,
-					I915_BO_ALLOC_CONTIGUOUS);
-		if (!IS_ERR(obj)) {
-			pr_err("%s too large contiguous allocation was not rejected\n",
-			       __func__);
-			err = -EINVAL;
-			goto out_close;
-		}
+	obj = igt_object_create(mem, &objects, size,
+				I915_BO_ALLOC_CONTIGUOUS);
+	if (!IS_ERR(obj)) {
+		pr_err("%s too large contiguous allocation was not rejected\n",
+		       __func__);
+		err = -EINVAL;
+		goto out_close;
 	}
 
 	obj = igt_object_create(mem, &objects, rounddown_pow_of_two(size),

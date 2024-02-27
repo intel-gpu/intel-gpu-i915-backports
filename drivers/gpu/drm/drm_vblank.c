@@ -210,7 +210,7 @@ static u32 __get_vblank_counter(struct drm_device *dev, unsigned int pipe)
 		if (crtc->funcs->get_vblank_counter)
 			return crtc->funcs->get_vblank_counter(crtc);
 	}
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 	else if (dev->driver->get_vblank_counter) {
 		return dev->driver->get_vblank_counter(dev, pipe);
 	}
@@ -433,7 +433,7 @@ static void __disable_vblank(struct drm_device *dev, unsigned int pipe)
 		if (crtc->funcs->disable_vblank)
 			crtc->funcs->disable_vblank(crtc);
 	}
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 	else {
 		dev->driver->disable_vblank(dev, pipe);
 	}
@@ -1110,7 +1110,7 @@ static int __enable_vblank(struct drm_device *dev, unsigned int pipe)
 		if (crtc->funcs->enable_vblank)
 			return crtc->funcs->enable_vblank(crtc);
 	}
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 	else if (dev->driver->enable_vblank) {
 		return dev->driver->enable_vblank(dev, pipe);
 	}
@@ -1739,7 +1739,7 @@ static void drm_wait_vblank_reply(struct drm_device *dev, unsigned int pipe,
 
 static bool drm_wait_vblank_supported(struct drm_device *dev)
 {
-	if  (IS_ENABLED(CONFIG_DRM_LEGACY)) {
+	if  (IS_ENABLED(CPTCFG_DRM_LEGACY)) {
 		if (unlikely(drm_core_check_feature(dev, DRIVER_LEGACY)))
 			return dev->irq_enabled;
 	}

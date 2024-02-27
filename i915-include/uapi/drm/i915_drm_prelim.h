@@ -70,10 +70,27 @@ struct prelim_i915_user_extension {
 #define PRELIM_UAPI_MINOR	1
 
 /*
- * Top 8 bits of every non-engine counter are GT id.
- * FIXME: __PRELIM_I915_PMU_GT_SHIFT will be changed to 56
+ * Top 4 bits of every non-engine counter are GT id.
  */
 #define __PRELIM_I915_PMU_GT_SHIFT (60)
+#define __PRELIM_I915_PMU_GT_MASK (0xfull << 60)
+#define __PRELIM_I915_PMU_FN_SHIFT (44)
+#define __PRELIM_I915_PMU_FN_MASK (0xffffull << 44)
+
+/*
+ * bits[59:44] are used to specify the function number for the event. Only a PF
+ * is allowed to specify function numbers. If there are N functions ranging from
+ * 0 through N - 1, the following definitions are used for the function numbers:
+ *
+ * 0 : PF
+ * 1 through (N - 1) : VFs
+ *
+ * Below macro can be used to convert an existing event config to a function
+ * event config.
+ */
+#define ___PRELIM_I915_PMU_FN_EVENT(event, function) \
+	(((event) & ~__PRELIM_I915_PMU_FN_MASK) | \
+	 ((function + 1) << __PRELIM_I915_PMU_FN_SHIFT))
 
 #define ___PRELIM_I915_PMU_OTHER(gt, x) \
 	(((__u64)__I915_PMU_ENGINE(0xff, 0xff, 0xf) + 1 + (x)) | \
@@ -92,16 +109,37 @@ struct prelim_i915_user_extension {
 #define __PRELIM_I915_PMU_COPY_GROUP_BUSY(gt)		___PRELIM_I915_PMU_OTHER(gt, 8)
 #define __PRELIM_I915_PMU_MEDIA_GROUP_BUSY(gt)		___PRELIM_I915_PMU_OTHER(gt, 9)
 #define __PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY(gt)	___PRELIM_I915_PMU_OTHER(gt, 10)
+#define __PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS(gt)	___PRELIM_I915_PMU_OTHER(gt, 11)
+#define __PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS(gt)		___PRELIM_I915_PMU_OTHER(gt, 12)
+#define __PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS(gt)		___PRELIM_I915_PMU_OTHER(gt, 13)
+#define __PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS(gt)		___PRELIM_I915_PMU_OTHER(gt, 14)
+#define __PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS(gt)	___PRELIM_I915_PMU_OTHER(gt, 15)
 
 
 #define __PRELIM_I915_PMU_HW_ERROR_EVENT_ID_OFFSET	(__I915_PMU_OTHER(0) + 1000)
 
 #define PRELIM_I915_PMU_ENGINE_RESET_COUNT	__PRELIM_I915_PMU_ENGINE_RESET_COUNT(0)
 #define PRELIM_I915_PMU_EU_ATTENTION_COUNT	__PRELIM_I915_PMU_EU_ATTENTION_COUNT(0)
-#define PRELIM_I915_PMU_RENDER_GROUP_BUSY              __PRELIM_I915_PMU_RENDER_GROUP_BUSY(0)
-#define PRELIM_I915_PMU_COPY_GROUP_BUSY                __PRELIM_I915_PMU_COPY_GROUP_BUSY(0)
-#define PRELIM_I915_PMU_MEDIA_GROUP_BUSY               __PRELIM_I915_PMU_MEDIA_GROUP_BUSY(0)
-#define PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY          __PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY(0)
+#define PRELIM_I915_PMU_RENDER_GROUP_BUSY		__PRELIM_I915_PMU_RENDER_GROUP_BUSY(0)
+#define PRELIM_I915_PMU_COPY_GROUP_BUSY			__PRELIM_I915_PMU_COPY_GROUP_BUSY(0)
+#define PRELIM_I915_PMU_MEDIA_GROUP_BUSY		__PRELIM_I915_PMU_MEDIA_GROUP_BUSY(0)
+#define PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY		__PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY(0)
+#define PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS		__PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS(0)
+#define PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS		__PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS(0)
+#define PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS		__PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS(0)
+#define PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS		__PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS(0)
+#define PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS	__PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS(0)
+
+/*
+ * Note that I915_PMU_SAMPLE_BITS is 4 so a max of 16 events can be sampled for
+ * an engine. For the PRELIM version start at half of that value.
+ */
+#define PRELIM_I915_SAMPLE_BUSY_TICKS 8
+
+#define PRELIM_I915_PMU_ENGINE_BUSY_TICKS(class, instance) \
+	__I915_PMU_ENGINE(class, instance, PRELIM_I915_SAMPLE_BUSY_TICKS)
+
+#define  PRELIM_I915_SCHEDULER_CAP_ENGINE_BUSY_TICKS_STATS	(1ul << 16)
 
 /*
  * HW error counters.
@@ -775,6 +813,15 @@ enum prelim_drm_i915_perf_property_id {
 	 * This property is available in perf revision 1002.
 	 */
 	PRELIM_DRM_I915_PERF_PROP_OA_ENGINE_INSTANCE = (PRELIM_DRM_I915_PERF_PROP | 3),
+
+	/**
+	 * Specify the number of reports that the driver will wait for before
+	 * returning data to the user. This value must be less than the number
+	 * of reports that the OA buffer can hold.
+	 *
+	 * This property is available in perf revision 1008.
+	 */
+	PRELIM_DRM_I915_PERF_PROP_OA_NOTIFY_NUM_REPORTS = (PRELIM_DRM_I915_PERF_PROP | 4),
 
 	PRELIM_DRM_I915_PERF_PROP_LAST,
 

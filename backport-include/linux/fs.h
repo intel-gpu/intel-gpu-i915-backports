@@ -29,6 +29,12 @@ static inline struct inode *file_inode(struct file *f)
 }
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
+static inline int call_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	return file->f_op->mmap(file, vma);
+}
+
 #ifndef replace_fops
 /*
  * This one is to be used *ONLY* from ->open() instances.
@@ -42,6 +48,11 @@ static inline struct inode *file_inode(struct file *f)
 		BUG_ON(!(__file->f_op = (fops))); \
 	} while(0)
 #endif /* replace_fops */
+static inline struct file *file_clone_open(struct file *file)
+{
+	return dentry_open(&file->f_path, file->f_flags, file->f_cred);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0) */
 
 #if (LINUX_VERSION_IS_LESS(4,5,0) && \
      LINUX_VERSION_IS_GEQ(3,2,0))
@@ -49,7 +60,7 @@ static inline struct inode *file_inode(struct file *f)
 extern loff_t no_seek_end_llseek(struct file *, loff_t, int);
 #endif /* < 4.5 && >= 3.2 */
 
-#if LINUX_VERSION_IS_LESS(5,5,0)
+#ifdef BPM_COMPAT_PTR_IOCTL_NOT_PRESENT
 #ifdef CONFIG_COMPAT
 #define compat_ptr_ioctl LINUX_I915_BACKPORT(compat_ptr_ioctl)
 extern long compat_ptr_ioctl(struct file *file, unsigned int cmd,
@@ -59,14 +70,14 @@ extern long compat_ptr_ioctl(struct file *file, unsigned int cmd,
 #endif
 #endif /* < 5.5 */
 
-#if LINUX_VERSION_IS_LESS(5,6,0)
+#ifdef BPM_STRUCT_PROC_OPS_NOT_PRESENT
 #define proc_ops file_operations
 #define proc_open open
 #define proc_read read
 #define proc_lseek llseek
 #define proc_release release
 #define proc_write write
-#endif /* < 5.6 */
+#endif /* BPM_STRUCT_PROC_OPS_NOT_PRESENT */
 
 #ifdef BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
 int pagecache_write_begin(struct file *, struct address_space *mapping,

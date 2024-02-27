@@ -36,14 +36,34 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef _LINUX_RESERVATION_H
-#define _LINUX_RESERVATION_H
+#ifndef _BACKPORT_LINUX_RESERVATION_H
+#define _BACKPORT_LINUX_RESERVATION_H
 
 #include <linux/ww_mutex.h>
 #include <linux/dma-fence.h>
 #include <linux/slab.h>
 #include <linux/seqlock.h>
 #include <linux/rcupdate.h>
+
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#define reservation_ww_class LINUX_DMABUF_BACKPORT(reservation_ww_class)
+#define reservation_seqcount_class LINUX_DMABUF_BACKPORT(reservation_seqcount_class)
+#define reservation_seqcount_string LINUX_DMABUF_BACKPORT(reservation_seqcount_string)
+#define dma_resv_init LINUX_DMABUF_BACKPORT(dma_resv_init)
+#define dma_resv_fini LINUX_DMABUF_BACKPORT(dma_resv_fini)
+#define dma_resv_reserve_shared LINUX_DMABUF_BACKPORT(dma_resv_reserve_shared)
+#define dma_resv_add_shared_fence LINUX_DMABUF_BACKPORT(dma_resv_add_shared_fence)
+#define dma_resv_add_excl_fence LINUX_DMABUF_BACKPORT(dma_resv_add_excl_fence)
+#define dma_resv_copy_fences LINUX_DMABUF_BACKPORT(dma_resv_copy_fences)
+#define dma_resv_get_fences LINUX_DMABUF_BACKPORT(dma_resv_get_fences)
+#define dma_resv_wait_timeout LINUX_DMABUF_BACKPORT(dma_resv_wait_timeout)
+#define dma_resv_test_signaled LINUX_DMABUF_BACKPORT(dma_resv_test_signaled)
+#endif
+
+#ifdef BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
+#define dma_resv_iter_first_unlocked LINUX_DMABUF_BACKPORT(dma_resv_iter_first_unlocked)
+#define dma_resv_iter_next_unlocked LINUX_DMABUF_BACKPORT(dma_resv_iter_next_unlocked)
+#endif
 
 extern struct ww_class reservation_ww_class;
 
@@ -69,8 +89,12 @@ struct dma_resv_list {
  */
 struct dma_resv {
 	struct ww_mutex lock;
+#ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
+	seqcount_t seq;
+#else
 	seqcount_ww_mutex_t seq;
-
+#endif
+	
 	struct dma_fence __rcu *fence_excl;
 	struct dma_resv_list __rcu *fence;
 };
@@ -268,7 +292,11 @@ static inline int dma_resv_lock_slow_interruptible(struct dma_resv *obj,
  */
 static inline bool __must_check dma_resv_trylock(struct dma_resv *obj)
 {
+#ifdef BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
+	return ww_mutex_trylock(&obj->lock, NULL);
+#else
 	return ww_mutex_trylock(&obj->lock);
+#endif
 }
 
 /**

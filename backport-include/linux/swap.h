@@ -15,4 +15,7 @@
 #ifdef BPM_LRU_CACHE_ADD_API_NOT_PRESENT
 void lru_cache_add(struct page *page);
 #endif
+#ifdef BPM_CHECK_MOVE_UNEVICTABLE_PAGES_NOT_PRESENT
+void check_move_unevictable_pages(struct pagevec *pvec);
+#endif
 #endif

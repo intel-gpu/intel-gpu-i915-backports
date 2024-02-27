@@ -39,7 +39,6 @@
 #include "intel_dp.h"
 #include "intel_dp_hdcp.h"
 #include "intel_dp_mst.h"
-#include "intel_dpio_phy.h"
 #include "intel_hdcp.h"
 #include "intel_hotplug.h"
 #include "skl_scaler.h"
@@ -148,10 +147,7 @@ static int intel_dp_dsc_mst_compute_link_config(struct intel_encoder *encoder,
 	crtc_state->port_clock = limits->max_rate;
 
 	/* Max DSC Input BPC for ICL is 10 and for TGL+ is 12 */
-	if (DISPLAY_VER(i915) >= 12)
-		dsc_max_bpc = min_t(u8, 12, conn_state->max_requested_bpc);
-	else
-		dsc_max_bpc = min_t(u8, 10, conn_state->max_requested_bpc);
+	dsc_max_bpc = min_t(u8, 12, conn_state->max_requested_bpc);
 
 	max_bpp = min_t(u8, dsc_max_bpc * 3, limits->max_bpp);
 	min_bpp = limits->min_bpp;
@@ -206,6 +202,31 @@ static int intel_dp_dsc_mst_compute_link_config(struct intel_encoder *encoder,
 	return 0;
 }
 
+#ifdef BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
+static int intel_dp_mst_update_slots(struct intel_encoder *encoder,
+				     struct intel_crtc_state *crtc_state,
+				     struct drm_connector_state *conn_state)
+{
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_dp_mst_encoder *intel_mst = enc_to_mst(encoder);
+	struct intel_dp *intel_dp = &intel_mst->primary->dp;
+	struct drm_dp_mst_topology_mgr *mgr = &intel_dp->mst_mgr;
+	struct drm_dp_mst_topology_state *topology_state;
+	u8 link_coding_cap = intel_dp_is_uhbr(crtc_state) ?
+		DP_CAP_ANSI_128B132B : DP_CAP_ANSI_8B10B;
+
+	topology_state = drm_atomic_get_mst_topology_state(conn_state->state, mgr);
+	if (IS_ERR(topology_state)) {
+		drm_dbg_kms(&i915->drm, "slot update failed\n");
+		return PTR_ERR(topology_state);
+	}
+
+	drm_dp_mst_update_slots(topology_state, link_coding_cap);
+
+	return 0;
+}
+#endif
+
 static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 				       struct intel_crtc_state *pipe_config,
 				       struct drm_connector_state *conn_state)
@@ -226,10 +247,13 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 		return -EINVAL;
 
 	pipe_config->output_format = INTEL_OUTPUT_FORMAT_RGB;
-	pipe_config->has_pch_encoder = false;
 
 	if (intel_conn_state->force_audio == HDMI_AUDIO_AUTO)
+#ifdef BPM_PORT_HAS_AUDIO_MEMBER_NOT_PRESENT
+		pipe_config->has_audio = connector->base.display_info.has_audio;
+#else
 		pipe_config->has_audio = connector->port->has_audio;
+#endif
 	else
 		pipe_config->has_audio =
 			intel_conn_state->force_audio == HDMI_AUDIO_ON;
@@ -283,12 +307,13 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 	if (ret)
 		return ret;
 
+#ifdef BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
+	ret = intel_dp_mst_update_slots(encoder, pipe_config, conn_state);
+	if (ret)
+		return ret;
+#endif
 	pipe_config->limited_color_range =
 		intel_dp_limited_color_range(pipe_config, conn_state);
-
-	if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
-		pipe_config->lane_lat_optim_mask =
-			bxt_ddi_phy_calc_lane_lat_optim_mask(pipe_config->lane_count);
 
 	intel_ddi_compute_min_voltage_level(dev_priv, pipe_config);
 
@@ -303,14 +328,10 @@ static unsigned int
 intel_dp_mst_transcoder_mask(struct intel_atomic_state *state,
 			     struct intel_dp *mst_port)
 {
-	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
 	const struct intel_digital_connector_state *conn_state;
 	struct intel_connector *connector;
 	u8 transcoders = 0;
 	int i;
-
-	if (DISPLAY_VER(dev_priv) < 12)
-		return 0;
 
 	for_each_new_intel_connector_in_state(state, connector, conn_state, i) {
 		const struct intel_crtc_state *crtc_state;
@@ -360,9 +381,6 @@ intel_dp_mst_atomic_master_trans_check(struct intel_connector *connector,
 	struct drm_connector_list_iter connector_list_iter;
 	struct intel_connector *connector_iter;
 	int ret = 0;
-
-	if (DISPLAY_VER(dev_priv) < 12)
-		return  0;
 
 	if (!intel_connector_needs_modeset(state, &connector->base))
 		return 0;
@@ -491,8 +509,12 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 	struct drm_dp_mst_atomic_payload *payload =
 		drm_atomic_get_mst_payload_state(mst_state, connector->port);
 #else
-	int ret;
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+	int start_slot = intel_dp_is_uhbr(old_crtc_state) ? 0 : 1;
 #endif
+#endif
+
+	int ret;
 
 	drm_dbg_kms(&i915->drm, "active links %d\n",
 		    intel_dp->active_mst_links);
@@ -501,19 +523,20 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	drm_dp_remove_payload(&intel_dp->mst_mgr, mst_state,
-					payload, payload);
+			payload, payload);
 #else
 	drm_dp_mst_reset_vcpi_slots(&intel_dp->mst_mgr, connector->port);
-#ifdef DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, 1);
+
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
 #else
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
+#endif
 #endif
 	if (ret) {
 		drm_dbg_kms(&i915->drm, "failed to update payload %d\n", ret);
 	}
 
-#endif
 
 	intel_audio_codec_disable(encoder, old_crtc_state, old_conn_state);
 }
@@ -534,7 +557,7 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 	intel_dp->active_mst_links--;
 	last_mst_stream = intel_dp->active_mst_links == 0;
 	drm_WARN_ON(&dev_priv->drm,
-		    DISPLAY_VER(dev_priv) >= 12 && last_mst_stream &&
+		    last_mst_stream &&
 		    !intel_dp_mst_is_master_trans(old_crtc_state));
 
 	intel_crtc_vblank_off(old_crtc_state);
@@ -558,10 +581,7 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 
 	intel_ddi_disable_transcoder_func(old_crtc_state);
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		skl_scaler_disable(old_crtc_state);
-	else
-		ilk_pfit_disable(old_crtc_state);
+	skl_scaler_disable(old_crtc_state);
 
 	/*
 	 * Power down mst path before disabling the port, otherwise we end
@@ -584,9 +604,8 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 	 * From older GENs spec: "Configure Transcoder Clock Select to direct
 	 * no clock to the transcoder"
 	 */
-	if (DISPLAY_VER(dev_priv) < 12 || !last_mst_stream)
+	if (!last_mst_stream)
 		intel_ddi_disable_transcoder_clock(old_crtc_state);
-
 
 	intel_mst->connector = NULL;
 	if (last_mst_stream)
@@ -623,9 +642,14 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 	struct intel_connector *connector =
 		to_intel_connector(conn_state->connector);
 	int ret;
+
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	struct drm_dp_mst_topology_state *mst_state =
 		drm_atomic_get_new_mst_topology_state(&state->base, &intel_dp->mst_mgr);
+#else
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+	int start_slot = intel_dp_is_uhbr(pipe_config) ? 0 : 1;
+#endif
 #endif
 	bool first_mst_stream;
 
@@ -636,7 +660,7 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 	intel_mst->connector = connector;
 	first_mst_stream = intel_dp->active_mst_links == 0;
 	drm_WARN_ON(&dev_priv->drm,
-		    DISPLAY_VER(dev_priv) >= 12 && first_mst_stream &&
+		    first_mst_stream &&
 		    !intel_dp_mst_is_master_trans(pipe_config));
 
 	drm_dbg_kms(&dev_priv->drm, "active links %d\n",
@@ -664,18 +688,17 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	ret = drm_dp_add_payload_part1(&intel_dp->mst_mgr, mst_state,
-				       drm_atomic_get_mst_payload_state(mst_state, connector->port));
+			drm_atomic_get_mst_payload_state(mst_state, connector->port));
 	if (ret < 0)
 		drm_err(&dev_priv->drm, "Failed to create MST payload for %s: %d\n",
-			connector->base.name, ret);
+				connector->base.name, ret);
 #else
-#ifdef DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, 1);
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
 #else
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
 #endif
 #endif
-
 
 	/*
 	 * Before Gen 12 this is not done as part of
@@ -684,7 +707,7 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 	 * first MST stream, so it's done on the DDI for the first stream and
 	 * here for the following ones.
 	 */
-	if (DISPLAY_VER(dev_priv) < 12 || !first_mst_stream)
+	if (!first_mst_stream)
 		intel_ddi_enable_transcoder_clock(encoder, pipe_config);
 
 	intel_ddi_set_dp_msa(pipe_config, conn_state);
@@ -705,8 +728,6 @@ static void intel_mst_enable_dp(struct intel_atomic_state *state,
 #endif
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	enum transcoder trans = pipe_config->cpu_transcoder;
-
-	drm_WARN_ON(&dev_priv->drm, pipe_config->has_pch_encoder);
 
 	clear_act_sent(encoder, pipe_config);
 
@@ -909,8 +930,7 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 		max_dotclk *= 2;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 10 &&
-	    drm_dp_sink_supports_dsc(intel_dp->dsc_dpcd)) {
+	if (drm_dp_sink_supports_dsc(intel_dp->dsc_dpcd)) {
 		/*
 		 * TBD pass the connector BPC,
 		 * for now U8_MAX so that max BPC on that platform would be picked
@@ -1181,20 +1201,13 @@ intel_dp_mst_encoder_init(struct intel_digital_port *dig_port, int conn_base_id)
 {
 	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
 	struct intel_dp *intel_dp = &dig_port->dp;
-	enum port port = dig_port->base.port;
 	int ret;
 #ifndef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	int max_source_rate =
 		intel_dp->source_rates[intel_dp->num_source_rates - 1];
 #endif
 
-	if (!HAS_DP_MST(i915) || intel_dp_is_edp(intel_dp))
-		return 0;
-
-	if (DISPLAY_VER(i915) < 12 && port == PORT_A)
-		return 0;
-
-	if (DISPLAY_VER(i915) < 11 && port == PORT_E)
+	if (intel_dp_is_edp(intel_dp))
 		return 0;
 
 	intel_dp->mst_mgr.cbs = &mst_cbs;

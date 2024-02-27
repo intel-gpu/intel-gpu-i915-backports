@@ -78,7 +78,7 @@
 
 static DEFINE_WW_CLASS(crtc_ww_class);
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_MODESET_LOCK)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_MODESET_LOCK)
 static noinline depot_stack_handle_t __drm_stack_depot_save(void)
 {
 	unsigned long entries[8];
@@ -107,7 +107,7 @@ static void __drm_stack_depot_print(depot_stack_handle_t stack_depot)
 
 	kfree(buf);
 }
-#else /* CONFIG_DRM_DEBUG_MODESET_LOCK */
+#else /* CPTCFG_DRM_DEBUG_MODESET_LOCK */
 static depot_stack_handle_t __drm_stack_depot_save(void)
 {
 	return 0;
@@ -115,7 +115,7 @@ static depot_stack_handle_t __drm_stack_depot_save(void)
 static void __drm_stack_depot_print(depot_stack_handle_t stack_depot)
 {
 }
-#endif /* CONFIG_DRM_DEBUG_MODESET_LOCK */
+#endif /* CPTCFG_DRM_DEBUG_MODESET_LOCK */
 
 /**
  * drm_modeset_lock_all - take all modeset locks
@@ -290,8 +290,11 @@ static inline int modeset_lock(struct drm_modeset_lock *lock,
 
 	if (ctx->trylock_only) {
 		lockdep_assert_held(&ctx->ww_ctx);
-
+#ifdef BPM_WW_MUTEX_TRYLOCK_WITH_CTX_PRESENT
+		if (!ww_mutex_trylock(&lock->mutex, NULL))
+#else
 		if (!ww_mutex_trylock(&lock->mutex))
+#endif
 			return -EBUSY;
 		else
 			return 0;

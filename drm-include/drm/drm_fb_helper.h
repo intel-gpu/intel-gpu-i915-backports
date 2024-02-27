@@ -209,7 +209,7 @@ drm_fb_helper_from_client(struct drm_client_dev *client)
 	.fb_debug_leave = drm_fb_helper_debug_leave, \
 	.fb_ioctl	= drm_fb_helper_ioctl
 
-#ifdef CONFIG_DRM_FBDEV_EMULATION
+#ifdef CPTCFG_DRM_FBDEV_EMULATION
 void drm_fb_helper_prepare(struct drm_device *dev, struct drm_fb_helper *helper,
 			   const struct drm_fb_helper_funcs *funcs);
 int drm_fb_helper_init(struct drm_device *dev, struct drm_fb_helper *helper);

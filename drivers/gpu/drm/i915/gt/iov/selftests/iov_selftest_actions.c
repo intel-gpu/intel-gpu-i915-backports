@@ -212,7 +212,5 @@ int intel_iov_service_perform_selftest_action(struct intel_iov *iov, u32 origin,
 		IOV_ERROR(iov, "Unsupported selftest opcode %#x from VF%u\n", opcode, origin);
 		return -EBADRQC;
 	}
-
-	return intel_iov_relay_reply_ack_to_vf(&iov->relay, origin, relay_id, 0);
 }
 #endif /* IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) */

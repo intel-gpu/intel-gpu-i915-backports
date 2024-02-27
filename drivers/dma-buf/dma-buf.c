@@ -111,6 +111,14 @@ static const struct dentry_operations dma_buf_dentry_ops = {
 
 static struct vfsmount *dma_buf_mnt;
 
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+static struct dentry *dma_buf_fs_mount(struct file_system_type *fs_type,
+                                int flags, const char *name, void *data)
+{
+        return mount_pseudo(fs_type, "dmabuf:", NULL, &dma_buf_dentry_ops,
+                        DMA_BUF_MAGIC);
+}
+#else
 static int dma_buf_fs_init_context(struct fs_context *fc)
 {
 	struct pseudo_fs_context *ctx;
@@ -121,10 +129,15 @@ static int dma_buf_fs_init_context(struct fs_context *fc)
 	ctx->dops = &dma_buf_dentry_ops;
 	return 0;
 }
+#endif
 
 static struct file_system_type dma_buf_fs_type = {
 	.name = "dmabuf",
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+	.mount = dma_buf_fs_mount,
+#else
 	.init_fs_context = dma_buf_fs_init_context,
+#endif
 	.kill_sb = kill_anon_super,
 };
 
@@ -422,7 +435,13 @@ static const struct file_operations dma_buf_fops = {
 	.llseek		= dma_buf_llseek,
 	.poll		= dma_buf_poll,
 	.unlocked_ioctl	= dma_buf_ioctl,
+#ifdef BPM_COMPAT_PTR_IOCTL_NOT_PRESENT
+#ifdef CONFIG_COMPAT
+	.compat_ioctl   = dma_buf_ioctl,
+#endif
+#else
 	.compat_ioctl	= compat_ptr_ioctl,
+#endif
 	.show_fdinfo	= dma_buf_show_fdinfo,
 };
 
@@ -680,7 +699,7 @@ EXPORT_SYMBOL_GPL(dma_buf_put);
 
 static void mangle_sg_table(struct sg_table *sg_table)
 {
-#ifdef CONFIG_DMABUF_DEBUG
+#ifdef CPTCFG_DMABUF_DEBUG
 	int i;
 	struct scatterlist *sg;
 
@@ -970,7 +989,7 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 
 	if (dma_buf_is_dynamic(attach->dmabuf)) {
 		dma_resv_assert_held(attach->dmabuf->resv);
-		if (!IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY)) {
+		if (!IS_ENABLED(CPTCFG_DMABUF_MOVE_NOTIFY)) {
 			r = attach->dmabuf->ops->pin(attach);
 			if (r)
 				return ERR_PTR(r);
@@ -982,7 +1001,7 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 		sg_table = ERR_PTR(-ENOMEM);
 
 	if (IS_ERR(sg_table) && dma_buf_is_dynamic(attach->dmabuf) &&
-	     !IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY))
+	     !IS_ENABLED(CPTCFG_DMABUF_MOVE_NOTIFY))
 		attach->dmabuf->ops->unpin(attach);
 
 	if (!IS_ERR(sg_table) && attach->dmabuf->ops->cache_sgt_mapping) {
@@ -1042,7 +1061,7 @@ void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
 	__unmap_dma_buf(attach, sg_table, direction);
 
 	if (dma_buf_is_dynamic(attach->dmabuf) &&
-	    !IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY))
+	    !IS_ENABLED(CPTCFG_DMABUF_MOVE_NOTIFY))
 		dma_buf_unpin(attach);
 }
 EXPORT_SYMBOL_GPL(dma_buf_unmap_attachment);
@@ -1481,7 +1500,11 @@ static inline void dma_buf_uninit_debugfs(void)
 }
 #endif
 
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+int __init dma_buf_init(void)
+#else
 static int __init dma_buf_init(void)
+#endif
 {
 	int ret;
 
@@ -1498,12 +1521,20 @@ static int __init dma_buf_init(void)
 	dma_buf_init_debugfs();
 	return 0;
 }
+#ifndef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 subsys_initcall(dma_buf_init);
+#endif
 
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+void __exit dma_buf_deinit(void)
+#else
 static void __exit dma_buf_deinit(void)
+#endif
 {
 	dma_buf_uninit_debugfs();
 	kern_unmount(dma_buf_mnt);
 	dma_buf_uninit_sysfs_statistics();
 }
+#ifndef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 __exitcall(dma_buf_deinit);
+#endif

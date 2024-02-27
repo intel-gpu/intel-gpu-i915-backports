@@ -524,7 +524,7 @@ static u64 pf_get_spare_ggtt(struct intel_iov *iov)
 	return spare;
 }
 
-/**
+/*
  * intel_iov_provisioning_set_spare_ggtt - Set size of the PF spare GGTT.
  * @iov: the IOV struct
  *
@@ -871,7 +871,7 @@ u16 intel_iov_provisioning_get_spare_ctxs(struct intel_iov *iov)
 	return spare;
 }
 
-/**
+/*
  * intel_iov_provisioning_set_spare_ctxs - Set number of the PF's spare contexts.
  * @iov: the IOV struct
  *
@@ -1043,7 +1043,7 @@ static int pf_alloc_vf_ctxs_range(struct intel_iov *iov, unsigned int id, u16 nu
 		return -ENOMEM;
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
-#ifdef BITMAP_FOR_REGION_NOT_PRESENT
+#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
@@ -1232,7 +1232,7 @@ static u16 pf_get_ctxs_free(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#ifdef BITMAP_FOR_REGION_NOT_PRESENT
+#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
@@ -1276,7 +1276,7 @@ static u16 pf_get_ctxs_max_quota(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#ifdef BITMAP_FOR_REGION_NOT_PRESENT
+#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
 #else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
@@ -1346,7 +1346,7 @@ u16 intel_iov_provisioning_get_spare_dbs(struct intel_iov *iov)
 	return spare;
 }
 
-/**
+/*
  * intel_iov_provisioning_set_spare_dbs - Set number of the PF's spare doorbells.
  * @iov: the IOV struct
  *
@@ -1589,7 +1589,7 @@ static u16 pf_get_max_dbs(struct intel_iov *iov)
 	if (unlikely(!dbs_bitmap))
 		return 0;
 
-#ifdef BITMAP_FOR_REGION_NOT_PRESENT
+#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
 	for_each_clear_bitrange(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
 #else
 	bitmap_for_each_clear_region(dbs_bitmap, rs, re, 0, GUC_NUM_DOORBELLS) {
@@ -1844,7 +1844,7 @@ u64 intel_iov_provisioning_get_spare_lmem(struct intel_iov *iov)
 	return spare;
 }
 
-/**
+/*
  * intel_iov_provisioning_set_spare_lmem - Set size of the PF spare LMEM.
  * @iov: the IOV struct
  *

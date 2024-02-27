@@ -29,7 +29,8 @@
 #define ENGINE_SAMPLE_MASK \
 	(BIT(I915_SAMPLE_BUSY) | \
 	 BIT(I915_SAMPLE_WAIT) | \
-	 BIT(I915_SAMPLE_SEMA))
+	 BIT(I915_SAMPLE_SEMA) | \
+	 BIT(PRELIM_I915_SAMPLE_BUSY_TICKS))
 
 static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3_SNG] = INTEL_GT_HW_ERROR_COR_L3_SNG,
@@ -201,7 +202,7 @@ static u8 engine_event_instance(struct perf_event *event)
 
 static bool is_engine_config(u64 config)
 {
-	return config < __I915_PMU_OTHER(0);
+	return (config & ~__PRELIM_I915_PMU_FN_MASK) < __I915_PMU_OTHER(0);
 }
 
 static unsigned int config_gt_id(const u64 config)
@@ -209,9 +210,14 @@ static unsigned int config_gt_id(const u64 config)
 	return config >> __PRELIM_I915_PMU_GT_SHIFT;
 }
 
+static unsigned int config_vf_id(const u64 config)
+{
+	return (config & __PRELIM_I915_PMU_FN_MASK) >> __PRELIM_I915_PMU_FN_SHIFT;
+}
+
 static u64 config_counter(const u64 config)
 {
-	return config & ~(~0ULL << __PRELIM_I915_PMU_GT_SHIFT);
+	return config & ~(__PRELIM_I915_PMU_GT_MASK | __PRELIM_I915_PMU_FN_MASK);
 }
 
 static unsigned int other_bit(const u64 config)
@@ -307,8 +313,11 @@ static bool pmu_needs_timer(struct i915_pmu *pmu, bool gpu_active)
 	 * Also there is software busyness tracking available we do not
 	 * need the timer for I915_SAMPLE_BUSY counter.
 	 */
-	else if (i915->caps.scheduler & I915_SCHEDULER_CAP_ENGINE_BUSY_STATS)
+	else if ((i915->caps.scheduler & I915_SCHEDULER_CAP_ENGINE_BUSY_STATS) ||
+		 (i915->caps.scheduler & PRELIM_I915_SCHEDULER_CAP_ENGINE_BUSY_TICKS_STATS)) {
 		enable &= ~BIT(I915_SAMPLE_BUSY);
+		enable &= ~BIT(PRELIM_I915_SAMPLE_BUSY_TICKS);
+	}
 
 	/*
 	 * If some bits remain it means we need the sampling timer running.
@@ -318,24 +327,14 @@ static bool pmu_needs_timer(struct i915_pmu *pmu, bool gpu_active)
 
 static u64 __get_rc6(struct intel_gt *gt)
 {
-	struct drm_i915_private *i915 = gt->i915;
 	i915_reg_t reg;
-	u64 val;
 
 	if (gt->type == GT_MEDIA)
 		reg = MTL_MEDIA_MC6;
 	else
 		reg = GEN6_GT_GFX_RC6;
 
-	val = intel_rc6_residency_ns(&gt->rc6, reg);
-
-	if (HAS_RC6p(i915))
-		val += intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6p);
-
-	if (HAS_RC6pp(i915))
-		val += intel_rc6_residency_ns(&gt->rc6, GEN6_GT_GFX_RC6pp);
-
-	return val;
+	return intel_rc6_residency_ns(&gt->rc6, reg);
 }
 
 static inline s64 ktime_since_raw(const ktime_t kt)
@@ -389,6 +388,18 @@ static int engine_busyness_sample_type(u64 config)
 	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
 		type = __I915_SAMPLE_ANY_ENGINE_GROUP_BUSY;
 		break;
+	case PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS:
+		type =  __I915_SAMPLE_RENDER_GROUP_BUSY_TICKS;
+		break;
+	case PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS:
+		type = __I915_SAMPLE_RENDER_COPY_GROUP_BUSY_TICKS;
+		break;
+	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS:
+		type = __I915_SAMPLE_MEDIA_GROUP_BUSY_TICKS;
+		break;
+	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS:
+		type = __I915_SAMPLE_ANY_ENGINE_GROUP_BUSY_TICKS;
+		break;
 	default:
 		MISSING_CASE(config);
 	}
@@ -403,26 +414,46 @@ static u64 __engine_group_busyness_read(struct intel_gt *gt, u64 config)
 	switch (config) {
 	case PRELIM_I915_PMU_RENDER_GROUP_BUSY:
 		val = intel_uncore_read(gt->uncore, GEN12_OAG_RENDER_BUSY_FREE);
+		val = intel_gt_clock_interval_to_ns(gt, val * 16);
 		break;
 	case PRELIM_I915_PMU_COPY_GROUP_BUSY:
 		val = intel_uncore_read(gt->uncore, GEN12_OAG_BLT_BUSY_FREE);
+		val = intel_gt_clock_interval_to_ns(gt, val * 16);
 		break;
 	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY:
 		val = intel_uncore_read(gt->uncore,
 					GEN12_OAG_ANY_MEDIA_FF_BUSY_FREE);
+		val = intel_gt_clock_interval_to_ns(gt, val * 16);
 		break;
 	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
 		val = intel_uncore_read(gt->uncore,
 					GEN12_OAG_RC0_ANY_ENGINE_BUSY_FREE);
+		val = intel_gt_clock_interval_to_ns(gt, val * 16);
+		break;
+	case PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS:
+		val = intel_uncore_read(gt->uncore,
+					GEN12_OAG_RENDER_BUSY_FREE) * 16;
+		break;
+	case PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS:
+		val = intel_uncore_read(gt->uncore,
+					GEN12_OAG_BLT_BUSY_FREE) * 16;
+		break;
+	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS:
+		val = intel_uncore_read(gt->uncore,
+					GEN12_OAG_ANY_MEDIA_FF_BUSY_FREE) * 16;
+		break;
+	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS:
+		val = intel_uncore_read(gt->uncore,
+					GEN12_OAG_RC0_ANY_ENGINE_BUSY_FREE) * 16;
 		break;
 	default:
 		MISSING_CASE(config);
 	}
 
-	return intel_gt_clock_interval_to_ns(gt, val * 16);
+	return val;
 }
 
-static u64 engine_group_busyness_read(struct intel_gt *gt, u64 config)
+static u64 engine_group_busyness_read(struct intel_gt *gt, u64 config, unsigned int vf_id)
 {
 	int sample_type = engine_busyness_sample_type(config);
 	struct drm_i915_private *i915 = gt->i915;
@@ -432,9 +463,21 @@ static u64 engine_group_busyness_read(struct intel_gt *gt, u64 config)
 	unsigned long flags;
 	u64 val;
 
+	/*
+	 * vf_id == 0 is global and it means user did not configure the vf_id in
+	 * the counter. This is the default for this counter and we support
+	 * that.
+	 *
+	 * vf_id == 1 is PF and that can happen if PF is querying the function
+	 * array to retrieve a specific counter. In this case we only support
+	 * the PF index in the function array.
+	 */
+	if (vf_id)
+		vf_id--;
+
 	wakeref = intel_gt_pm_get_if_awake(gt);
 	if (wakeref) {
-		val = __engine_group_busyness_read(gt, config);
+		val = !vf_id ? __engine_group_busyness_read(gt, config) : 0;
 		intel_gt_pm_put_async(gt, wakeref);
 	}
 
@@ -462,6 +505,14 @@ static void engine_group_busyness_store(struct intel_gt *gt)
 		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_MEDIA_GROUP_BUSY));
 	store_sample(pmu, gt->info.id, __I915_SAMPLE_ANY_ENGINE_GROUP_BUSY,
 		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY));
+	store_sample(pmu, gt->info.id, __I915_SAMPLE_RENDER_GROUP_BUSY_TICKS,
+		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS));
+	store_sample(pmu, gt->info.id, __I915_SAMPLE_RENDER_COPY_GROUP_BUSY_TICKS,
+		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS));
+	store_sample(pmu, gt->info.id, __I915_SAMPLE_MEDIA_GROUP_BUSY_TICKS,
+		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS));
+	store_sample(pmu, gt->info.id, __I915_SAMPLE_ANY_ENGINE_GROUP_BUSY_TICKS,
+		     __engine_group_busyness_read(gt, PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS));
 }
 
 static u64 get_rc6(struct intel_gt *gt)
@@ -521,7 +572,8 @@ static void init_samples(struct i915_pmu *pmu)
 			store_sample(pmu, i, __I915_SAMPLE_RC6_LAST_REPORTED,
 				     val);
 			pmu->sleep_last[i] = ktime_get_raw();
-			engine_group_busyness_store(gt);
+			if (gt->stats.busy_free_park)
+				gt->stats.busy_free_park(gt);
 		}
 	}
 }
@@ -554,8 +606,11 @@ void i915_pmu_gt_parked(struct intel_gt *gt)
 
 	spin_lock_irq(&pmu->lock);
 
-	park_rc6(gt);
-	engine_group_busyness_store(gt);
+	if (!IS_SRIOV_VF(gt->i915))
+		park_rc6(gt);
+
+	if (gt->stats.busy_free_park)
+		gt->stats.busy_free_park(gt);
 
 	/*
 	 * Signal sampling timer to stop if only engine events are enabled and
@@ -594,16 +649,6 @@ add_sample(struct i915_pmu_sample *sample, u32 val)
 	sample->cur += val;
 }
 
-static bool exclusive_mmio_access(const struct drm_i915_private *i915)
-{
-	/*
-	 * We have to avoid concurrent mmio cache line access on gen7 or
-	 * risk a machine hang. For a fun history lesson dig out the old
-	 * userspace intel_gpu_top and run it on Ivybridge or Haswell!
-	 */
-	return GRAPHICS_VER(i915) == 7;
-}
-
 static void engine_sample(struct intel_engine_cs *engine, unsigned int period_ns)
 {
 	struct intel_engine_pmu *pmu = &engine->pmu;
@@ -620,7 +665,8 @@ static void engine_sample(struct intel_engine_cs *engine, unsigned int period_ns
 		add_sample(&pmu->sample[I915_SAMPLE_SEMA], period_ns);
 
 	/* No need to sample when busy stats are supported. */
-	if (intel_engine_supports_stats(engine))
+	if (intel_engine_supports_stats(engine) ||
+	    intel_engine_supports_tick_stats(engine))
 		return;
 
 	/*
@@ -645,7 +691,6 @@ engines_sample(struct intel_gt *gt, unsigned int period_ns)
 	struct drm_i915_private *i915 = gt->i915;
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
-	unsigned long flags;
 
 	if ((i915->pmu.enable & ENGINE_SAMPLE_MASK) == 0)
 		return;
@@ -660,14 +705,7 @@ engines_sample(struct intel_gt *gt, unsigned int period_ns)
 		if (!intel_engine_pm_get_if_awake(engine))
 			continue;
 
-		if (exclusive_mmio_access(i915)) {
-			spin_lock_irqsave(&engine->uncore->lock, flags);
-			engine_sample(engine, period_ns);
-			spin_unlock_irqrestore(&engine->uncore->lock, flags);
-		} else {
-			engine_sample(engine, period_ns);
-		}
-
+		engine_sample(engine, period_ns);
 		intel_engine_pm_put_async(engine);
 	}
 }
@@ -778,14 +816,20 @@ static void i915_pmu_event_destroy(struct perf_event *event)
 
 static int
 engine_event_status(struct intel_engine_cs *engine,
-		    enum drm_i915_pmu_engine_sample sample)
+		    unsigned int sample)
 {
 	switch (sample) {
 	case I915_SAMPLE_BUSY:
-	case I915_SAMPLE_WAIT:
+		if (IS_SRIOV(engine->i915))
+			return -ENODEV;
 		break;
+	case PRELIM_I915_SAMPLE_BUSY_TICKS:
+		if (!intel_engine_supports_tick_stats(engine))
+			return -ENODEV;
+		break;
+	case I915_SAMPLE_WAIT:
 	case I915_SAMPLE_SEMA:
-		if (GRAPHICS_VER(engine->i915) < 6)
+		if (IS_SRIOV_VF(engine->i915))
 			return -ENODEV;
 		break;
 	default:
@@ -903,14 +947,25 @@ static unsigned int i915_driver_error_id(const u64 config)
 static int
 config_status(struct drm_i915_private *i915, u64 config)
 {
-	struct intel_gt *gt = to_gt(i915);
-
+	struct intel_gt *gt;
+	unsigned int vf_id = config_vf_id(config);
 	unsigned int gt_id = config_gt_id(config);
 
-	if (!i915->gt[gt_id])
+	if (gt_id > i915->remote_tiles || !i915->gt[gt_id])
 		return -ENOENT;
 
+	gt = i915->gt[gt_id];
+	if (vf_id && !IS_SRIOV_PF(i915))
+		return -ENODEV;
+
+#define GUC_MAX_VF_BUSYNESS_ARRAY_SIZE 64
+	if (vf_id > GUC_MAX_VF_BUSYNESS_ARRAY_SIZE)
+		return -ENODEV;
+
 	if (is_hw_error_config(config)) {
+		if (IS_SRIOV_VF(i915))
+			return -ENODEV;
+
 		if (!IS_DGFX(i915))
 			return -ENODEV;
 
@@ -921,7 +976,7 @@ config_status(struct drm_i915_private *i915, u64 config)
 			return -ENODEV;
 
 		/* SOC errors are present on XEHPSDV, PVC only */
-		if (is_xehpsdv_soc_error(config) && !IS_XEHPSDV(i915))
+		if (is_xehpsdv_soc_error(config))
 			return -ENODEV;
 
 		/* GT vectors error  are valid on Platforms supporting error vectors only */
@@ -940,8 +995,7 @@ config_status(struct drm_i915_private *i915, u64 config)
 		if (is_pvc_soc_error(config) && !IS_PONTEVECCHIO(i915))
 			return -ENODEV;
 
-		if (is_common_soc_error(config) && !IS_PONTEVECCHIO(i915) &&
-		    !IS_XEHPSDV(i915))
+		if (is_common_soc_error(config) && !IS_PONTEVECCHIO(i915))
 			return -ENODEV;
 
 		return (hw_error_id(config) >=
@@ -962,23 +1016,26 @@ config_status(struct drm_i915_private *i915, u64 config)
 
 	switch (config_counter(config)) {
 	case I915_PMU_ACTUAL_FREQUENCY:
-		if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915))
-			/* Requires a mutex for sampling! */
-			return -ENODEV;
-		fallthrough;
 	case I915_PMU_REQUESTED_FREQUENCY:
-		if (GRAPHICS_VER(i915) < 6)
+		if (IS_SRIOV_VF(i915))
 			return -ENODEV;
 		break;
 	case I915_PMU_INTERRUPTS:
+		if (IS_SRIOV_VF(i915))
+			return -ENODEV;
+
 		if (gt_id)
 			return -ENOENT;
 		break;
 	case I915_PMU_RC6_RESIDENCY:
+		if (IS_SRIOV_VF(i915))
+			return -ENODEV;
 		if (!gt->rc6.supported)
 			return -ENODEV;
 		break;
 	case I915_PMU_SOFTWARE_GT_AWAKE_TIME:
+		if (IS_SRIOV_VF(i915))
+			return -ENODEV;
 		break;
 	case PRELIM_I915_PMU_ENGINE_RESET_COUNT:
 	case PRELIM_I915_PMU_EU_ATTENTION_COUNT:
@@ -989,6 +1046,19 @@ config_status(struct drm_i915_private *i915, u64 config)
 	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
 		if (GRAPHICS_VER(i915) < 12)
 			return -ENOENT;
+		if (!gt->stats.busy_free)
+			return -ENODEV;
+		break;
+	case PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS:
+	case PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS:
+	case PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS:
+	case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS:
+		if (GRAPHICS_VER(i915) < 12)
+			return -ENOENT;
+		if (!gt->stats.busy_free_ticks)
+			return -ENODEV;
+		break;
+	case PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS:
 		break;
 	default:
 		return -ENOENT;
@@ -1058,6 +1128,7 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 	struct drm_i915_private *i915 =
 		container_of(event->pmu, typeof(*i915), pmu.base);
 	struct i915_pmu *pmu = &i915->pmu;
+	unsigned int vf_id = config_vf_id(event->attr.config);
 	u64 val = 0;
 
 	if (is_engine_event(event)) {
@@ -1076,6 +1147,9 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 
 			val = ktime_to_ns(intel_engine_get_busy_time(engine,
 								     &unused));
+		} else if (sample == PRELIM_I915_SAMPLE_BUSY_TICKS &&
+			   intel_engine_supports_tick_stats(engine)) {
+			val = intel_engine_get_busy_ticks(engine, vf_id);
 		} else {
 			val = engine->pmu.sample[sample].cur;
 		}
@@ -1110,7 +1184,9 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 		val = i915->errors[i915_driver_error_map[id]];
 	} else {
 		const unsigned int gt_id = config_gt_id(event->attr.config);
+		const unsigned int vf_id = config_vf_id(event->attr.config);
 		const u64 config = config_counter(event->attr.config);
+		struct intel_gt *gt = i915->gt[gt_id];
 
 		switch (config) {
 		case I915_PMU_ACTUAL_FREQUENCY:
@@ -1129,23 +1205,33 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 			val = READ_ONCE(pmu->irq_count);
 			break;
 		case I915_PMU_RC6_RESIDENCY:
-			val = get_rc6(i915->gt[gt_id]);
+			val = get_rc6(gt);
 			break;
 		case I915_PMU_SOFTWARE_GT_AWAKE_TIME:
-			val = ktime_to_ns(intel_gt_get_awake_time(to_gt(i915)));
+			val = ktime_to_ns(intel_gt_get_awake_time(gt));
 			break;
 		case PRELIM_I915_PMU_ENGINE_RESET_COUNT:
-			val = atomic_read(&i915->gt[gt_id]->reset.engines_reset_count);
+			val = atomic_read(&gt->reset.engines_reset_count);
 			break;
 		case PRELIM_I915_PMU_EU_ATTENTION_COUNT:
-			val = atomic_read(&i915->gt[gt_id]->reset.eu_attention_count);
+			val = atomic_read(&gt->reset.eu_attention_count);
 			break;
 		case PRELIM_I915_PMU_RENDER_GROUP_BUSY:
 		case PRELIM_I915_PMU_COPY_GROUP_BUSY:
 		case PRELIM_I915_PMU_MEDIA_GROUP_BUSY:
 		case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY:
-			val = engine_group_busyness_read(i915->gt[gt_id],
-							 config);
+			if (gt->stats.busy_free)
+				val = gt->stats.busy_free(gt, config, vf_id);
+			break;
+		case PRELIM_I915_PMU_RENDER_GROUP_BUSY_TICKS:
+		case PRELIM_I915_PMU_COPY_GROUP_BUSY_TICKS:
+		case PRELIM_I915_PMU_MEDIA_GROUP_BUSY_TICKS:
+		case PRELIM_I915_PMU_ANY_ENGINE_GROUP_BUSY_TICKS:
+			if (gt->stats.busy_free_ticks)
+				val = gt->stats.busy_free_ticks(gt, config, vf_id);
+			break;
+		case PRELIM_I915_PMU_TOTAL_ACTIVE_TICKS:
+			val = intel_guc_total_active_ticks(gt, vf_id);
 			break;
 		}
 	}
@@ -1312,9 +1398,18 @@ static void i915_pmu_event_start(struct perf_event *event, int flags)
 
 static void i915_pmu_event_stop(struct perf_event *event, int flags)
 {
+	struct drm_i915_private *i915 =
+		container_of(event->pmu, typeof(*i915), pmu.base);
+	struct i915_pmu *pmu = &i915->pmu;
+
+	if (pmu->closed)
+		goto out;
+
 	if (flags & PERF_EF_UPDATE)
 		i915_pmu_event_read(event);
 	i915_pmu_disable(event);
+
+out:
 	event->hw.state = PERF_HES_STOPPED;
 }
 
@@ -1491,6 +1586,11 @@ create_event_attributes(struct i915_pmu *pmu)
 		__event(8, "copy-group-busy", "ns"),
 		__event(9, "media-group-busy", "ns"),
 		__event(10, "any-engine-group-busy", "ns"),
+		__event(11, "total-active-ticks", NULL),
+		__event(12, "render-group-busy-ticks", NULL),
+		__event(13, "copy-group-busy-ticks", NULL),
+		__event(14, "media-group-busy-ticks", NULL),
+		__event(15, "any-engine-group-busy-ticks", NULL),
 	};
 	static const char *hw_error_events[] = {
 		[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3_SNG] = "correctable-l3-sng",
@@ -1638,12 +1738,13 @@ create_event_attributes(struct i915_pmu *pmu)
 		[PRELIM_I915_PMU_DRIVER_ERROR_OBJECT_MIGRATION] = "driver-object-migration",
 	};
 	static const struct {
-		enum drm_i915_pmu_engine_sample sample;
+		unsigned int sample;
 		char *name;
 	} engine_events[] = {
 		__engine_event(I915_SAMPLE_BUSY, "busy"),
 		__engine_event(I915_SAMPLE_SEMA, "sema"),
 		__engine_event(I915_SAMPLE_WAIT, "wait"),
+		__engine_event(PRELIM_I915_SAMPLE_BUSY_TICKS, "busy-ticks"),
 	};
 	unsigned int count = 0;
 	struct perf_pmu_events_attr *pmu_attr = NULL, *pmu_iter;
@@ -1837,6 +1938,9 @@ create_event_attributes(struct i915_pmu *pmu)
 								engine->uabi_instance,
 								engine_events[i].sample));
 
+			if (engine_events[i].sample == PRELIM_I915_SAMPLE_BUSY_TICKS)
+				continue;
+
 			str = kasprintf(GFP_KERNEL, "%s-%s.unit",
 					engine->name, engine_events[i].name);
 			if (!str)
@@ -1976,6 +2080,42 @@ static bool is_igp(struct drm_i915_private *i915)
 	       PCI_FUNC(pdev->devfn) == 0;
 }
 
+/*
+ *                  native        sriov_vf        sriov_pf
+ *                  ------        --------        --------
+ * v1 busyness      hw regs       ENODEV          hw_regs
+ * v2 busyness      GuC iface     GuC iface       GuC iface
+ *
+ * With v1 busyness, intel_guc_init_busy_free should just return without
+ * altering the vfuncs. This takes care of native and PF implementations
+ * in v1 mode. If we are in a VF, the vfuncs never get initialized. This
+ * causes config_status to return ENODEV since the vfuncs are NULL and
+ * this takes care of VF implementation in v1.
+ *
+ * With v2 busyness, intel_guc_init_busy_free would just override both the
+ * vfuncs to GuC versions. Note that v2 version implements both the ns and
+ * tick versions of the busy free counters. There are 2 separate vfuncs to
+ * take care of the different units.
+ */
+static void i915_pmu_init_busy_free(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int i;
+
+	/*
+	 * The default implementation is to read HW regs. When GuC is
+	 * initialized, it may override this implementation in v2 interface.
+	 */
+	for_each_gt(gt, i915, i) {
+		if (!IS_SRIOV_VF(i915)) {
+			gt->stats.busy_free = engine_group_busyness_read;
+			gt->stats.busy_free_ticks = engine_group_busyness_read;
+			gt->stats.busy_free_park = engine_group_busyness_store;
+		}
+		intel_guc_init_busy_free(gt);
+	}
+}
+
 void i915_pmu_register(struct drm_i915_private *i915)
 {
 	struct i915_pmu *pmu = &i915->pmu;
@@ -1988,16 +2128,14 @@ void i915_pmu_register(struct drm_i915_private *i915)
 
 	int ret = -ENOMEM;
 
-	if (GRAPHICS_VER(i915) <= 2 || IS_SRIOV_VF(i915)) {
-		drm_info(&i915->drm, "PMU not supported for this GPU.");
-		return;
-	}
-
 	spin_lock_init(&pmu->lock);
-	hrtimer_init(&pmu->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	pmu->timer.function = i915_sample;
+	if (!IS_SRIOV_VF(i915)) {
+		hrtimer_init(&pmu->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		pmu->timer.function = i915_sample;
+		init_samples(pmu);
+	}
 	pmu->cpuhp.cpu = -1;
-	init_samples(pmu);
+	i915_pmu_init_busy_free(i915);
 
 	if (!is_igp(i915)) {
 		pmu->name = kasprintf(GFP_KERNEL,
@@ -2072,7 +2210,8 @@ void i915_pmu_unregister(struct drm_i915_private *i915)
 	pmu->closed = true;
 	synchronize_rcu();
 
-	hrtimer_cancel(&pmu->timer);
+	if (!IS_SRIOV_VF(i915))
+		hrtimer_cancel(&pmu->timer);
 
 	i915_pmu_unregister_cpuhp_state(pmu);
 

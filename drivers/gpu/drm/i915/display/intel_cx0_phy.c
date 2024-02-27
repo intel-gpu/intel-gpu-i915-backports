@@ -289,18 +289,18 @@ static void intel_c20_sram_write(struct drm_i915_private *i915, enum port port,
 static u16 intel_c20_sram_read(struct drm_i915_private *i915, enum port port,
 			       int lane, u16 addr)
 {
-       u16 val;
+	u16 val;
 
-       assert_dc_off(i915);
+	assert_dc_off(i915);
 
-       intel_cx0_write(i915, port, lane, PHY_C20_RD_ADDRESS_H, addr >> 8, 0);
-       intel_cx0_write(i915, port, lane, PHY_C20_RD_ADDRESS_L, addr & 0xff, 1);
+	intel_cx0_write(i915, port, lane, PHY_C20_RD_ADDRESS_H, addr >> 8, 0);
+	intel_cx0_write(i915, port, lane, PHY_C20_RD_ADDRESS_L, addr & 0xff, 1);
 
-       val = intel_cx0_read(i915, port, lane, PHY_C20_RD_DATA_H);
-       val <<= 8;
-       val |= intel_cx0_read(i915, port, lane, PHY_C20_RD_DATA_L);
+	val = intel_cx0_read(i915, port, lane, PHY_C20_RD_DATA_H);
+	val <<= 8;
+	val |= intel_cx0_read(i915, port, lane, PHY_C20_RD_DATA_L);
 
-        return val;
+	return val;
 }
 
 static void __intel_cx0_rmw(struct drm_i915_private *i915, enum port port,

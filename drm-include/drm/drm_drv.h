@@ -500,7 +500,7 @@ struct drm_driver {
 
 	void (*preclose) (struct drm_device *, struct drm_file *file_priv);
 
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 	/* Everything below here is for legacy driver, never use! */
 	/* private: */
 

@@ -10,8 +10,8 @@
  * Maarten Lankhorst <maarten.lankhorst@canonical.com>
  */
 
-#ifndef __LINUX_DMA_FENCE_H
-#define __LINUX_DMA_FENCE_H
+#ifndef __BACKPORT_LINUX_DMA_FENCE_H
+#define __BACKPORT_LINUX_DMA_FENCE_H
 
 #include <linux/err.h>
 #include <linux/wait.h>
@@ -21,6 +21,23 @@
 #include <linux/sched.h>
 #include <linux/printk.h>
 #include <linux/rcupdate.h>
+
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#define dma_fence_get_stub LINUX_DMABUF_BACKPORT(dma_fence_get_stub)
+#define dma_fence_context_alloc LINUX_DMABUF_BACKPORT(dma_fence_context_alloc)
+#define dma_fence_signal_locked LINUX_DMABUF_BACKPORT(dma_fence_signal_locked)
+#define dma_fence_signal LINUX_DMABUF_BACKPORT(dma_fence_signal)
+#define dma_fence_wait_timeout LINUX_DMABUF_BACKPORT(dma_fence_wait_timeout)
+#define dma_fence_release LINUX_DMABUF_BACKPORT(dma_fence_release)
+#define dma_fence_free LINUX_DMABUF_BACKPORT(dma_fence_free)
+#define dma_fence_enable_sw_signaling LINUX_DMABUF_BACKPORT(dma_fence_enable_sw_signaling)
+#define dma_fence_add_callback LINUX_DMABUF_BACKPORT(dma_fence_add_callback)
+#define dma_fence_get_status LINUX_DMABUF_BACKPORT(dma_fence_get_status)
+#define dma_fence_remove_callback LINUX_DMABUF_BACKPORT(dma_fence_remove_callback)
+#define dma_fence_default_wait LINUX_DMABUF_BACKPORT(dma_fence_default_wait)
+#define dma_fence_wait_any_timeout LINUX_DMABUF_BACKPORT(dma_fence_wait_any_timeout)
+#define dma_fence_init LINUX_DMABUF_BACKPORT(dma_fence_init)
+#endif
 
 struct dma_fence;
 struct dma_fence_ops;

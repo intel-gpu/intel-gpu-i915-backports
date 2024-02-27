@@ -28,7 +28,6 @@
 struct drm_i915_private;
 struct i915_page_compress;
 struct intel_engine_capture_vma;
-struct intel_overlay_error_state;
 
 struct i915_compressed_pages {
 	int num_pages;
@@ -168,10 +167,7 @@ struct intel_engine_coredump {
 
 	struct {
 		u32 gfx_mode;
-		union {
-			u64 pdp[4];
-			u32 pp_dir_base;
-		};
+		u64 pdp;
 	} vm_info;
 
 	struct intel_engine_coredump *next;
@@ -235,9 +231,6 @@ struct intel_gt_coredump {
 	u32 derrmr;
 	u32 sfc_done[I915_MAX_SFC]; /* gen12 */
 
-	u32 nfence;
-	u64 fence[I915_MAX_NUM_FENCES];
-
 	struct intel_engine_coredump *engine;
 
 	struct intel_uc_coredump {
@@ -294,8 +287,6 @@ struct i915_gpu_coredump {
 	struct intel_runtime_info runtime_info;
 	struct intel_driver_caps driver_caps;
 	struct i915_params params;
-
-	struct intel_overlay_error_state *overlay;
 
 	struct scatterlist *sgl, *fit;
 
@@ -383,12 +374,20 @@ i915_gpu_coredump_create_for_engine(struct intel_engine_cs *engine, gfp_t gfp);
 struct intel_engine_capture_vma *
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  struct i915_request *rq,
+				  struct intel_engine_capture_vma *vma,
 				  gfp_t gfp,
 				  struct i915_page_compress *compress);
 
 void intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 				   struct intel_engine_capture_vma *capture,
 				   struct i915_page_compress *compress);
+
+struct intel_engine_capture_vma *
+intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
+				    struct i915_request *rq,
+				    struct intel_engine_capture_vma *capture,
+				    gfp_t gfp,
+				    struct i915_page_compress *compress);
 
 struct i915_page_compress *
 i915_vma_capture_prepare(struct intel_gt_coredump *gt);
@@ -482,10 +481,11 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_
 static inline struct intel_engine_capture_vma *
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  struct i915_request *rq,
+				  struct intel_engine_capture_vma *capture,
 				  gfp_t gfp,
 				  struct i915_page_compress *compress)
 {
-	return NULL;
+	return capture;
 }
 
 static inline void
@@ -493,6 +493,16 @@ intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 			      struct intel_engine_capture_vma *capture,
 			      struct i915_page_compress *compress)
 {
+}
+
+static inline struct intel_engine_capture_vma *
+intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
+				    struct i915_request *rq,
+				    struct intel_engine_capture_vma *capture,
+				    gfp_t gfp,
+				    struct i915_page_compress *compress)
+{
+	return capture;
 }
 
 static inline struct i915_page_compress *

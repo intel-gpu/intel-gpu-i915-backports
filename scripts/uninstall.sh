@@ -4,9 +4,9 @@ set -e
 
 source ./scripts/mod_helpers.sh
 
-if test "$(mod_filename compat)" = "compat.ko.gz" ; then
+if test "$(mod_filename compat)" = "i915-compat.ko.gz" ; then
 	compr=".gz"
-elif test "$(mod_filename compat)" = "compat.ko.xz" ; then
+elif test "$(mod_filename compat)" = "i915-compat.ko.xz" ; then
 	compr=".xz"
 else
 	compr=""

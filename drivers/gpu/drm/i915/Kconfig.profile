@@ -10,20 +10,6 @@ config DRM_I915_FENCE_TIMEOUT
 	  May be 0 to disable the timeout, and rely on the foreign fence being
 	  eventually signaled.
 
-config DRM_I915_USERFAULT_AUTOSUSPEND
-	int "Runtime autosuspend delay for userspace GGTT mmaps (ms)"
-	default 250 # milliseconds
-	help
-	  On runtime suspend, as we suspend the device, we have to revoke
-	  userspace GGTT mmaps and force userspace to take a pagefault on
-	  their next access. The revocation and subsequent recreation of
-	  the GGTT mmap can be very slow and so we impose a small hysteris
-	  that complements the runtime-pm autosuspend and provides a lower
-	  floor on the autosuspend delay.
-
-	  May be 0 to disable the extra delay and solely use the device level
-	  runtime pm autosuspend delay tunable.
-
 config DRM_I915_HEARTBEAT_INTERVAL
 	int "Interval between heartbeat pulses (ms)"
 	default 2500 # milliseconds

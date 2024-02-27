@@ -8,7 +8,6 @@
 #include <linux/string_helpers.h>
 
 #include "display/intel_display.h"
-#include "display/intel_overlay.h"
 
 #include "gem/i915_gem_context.h"
 
@@ -869,7 +868,7 @@ bool intel_has_reset_engine(const struct intel_gt *gt)
 	if (gt->i915->params.reset < 2)
 		return false;
 
-	return INTEL_INFO(gt->i915)->has_reset_engine;
+	return true;
 }
 
 int intel_reset_guc(struct intel_gt *gt)
@@ -903,37 +902,6 @@ static void reset_prepare_engine(struct intel_engine_cs *engine)
 		engine->reset.prepare(engine);
 }
 
-static void revoke_mmaps(struct intel_gt *gt)
-{
-	int i;
-
-	for (i = 0; i < gt->ggtt->num_fences; i++) {
-		struct drm_vma_offset_node *node;
-		struct i915_vma *vma;
-		u64 vma_offset;
-
-		vma = READ_ONCE(gt->ggtt->fence_regs[i].vma);
-		if (!vma)
-			continue;
-
-		if (!i915_vma_has_userfault(vma))
-			continue;
-
-		GEM_BUG_ON(vma->fence != &gt->ggtt->fence_regs[i]);
-
-		if (!vma->mmo)
-			continue;
-
-		node = &vma->mmo->vma_node;
-		vma_offset = vma->ggtt_view.partial.offset << PAGE_SHIFT;
-
-		unmap_mapping_range(gt->i915->drm.anon_inode->i_mapping,
-				    drm_vma_node_offset_addr(node) + vma_offset,
-				    vma->size,
-				    1);
-	}
-}
-
 static intel_engine_mask_t reset_prepare(struct intel_gt *gt)
 {
 	struct intel_engine_cs *engine;
@@ -952,11 +920,6 @@ static intel_engine_mask_t reset_prepare(struct intel_gt *gt)
 	return awake;
 }
 
-static void gt_revoke(struct intel_gt *gt)
-{
-	revoke_mmaps(gt);
-}
-
 static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 {
 	struct intel_engine_cs *engine;
@@ -968,8 +931,6 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 	local_bh_enable();
 
 	intel_uc_reset(&gt->uc, ALL_ENGINES);
-
-	intel_ggtt_restore_fences(gt->ggtt);
 
 	return 0;
 }
@@ -1029,8 +990,7 @@ static void __intel_gt_set_wedged(struct intel_gt *gt)
 	awake = reset_prepare(gt);
 
 	/* Even if the GPU reset fails, it should still stop the engines */
-	if (!INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
-		__intel_gt_reset(gt, ALL_ENGINES);
+	__intel_gt_reset(gt, ALL_ENGINES);
 
 	for_each_engine(engine, gt, id)
 		engine->submit_request = nop_submit_request;
@@ -1094,7 +1054,6 @@ static bool __intel_gt_unset_wedged(struct intel_gt *gt)
 {
 	struct intel_gt_timelines *timelines = &gt->timelines;
 	struct intel_timeline *tl;
-	bool ok;
 
 	if (!test_bit(I915_WEDGED, &gt->reset.flags))
 		return true;
@@ -1142,10 +1101,7 @@ static bool __intel_gt_unset_wedged(struct intel_gt *gt)
 	spin_unlock(&timelines->lock);
 
 	/* We must reset pending GPU events before restoring our submission */
-	ok = !HAS_EXECLISTS(gt->i915); /* XXX better agnosticism desired */
-	if (!INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
-		ok = __intel_gt_reset(gt, ALL_ENGINES) == 0;
-	if (!ok) {
+	if (__intel_gt_reset(gt, ALL_ENGINES)) {
 		/*
 		 * Warn CI about the unrecoverable wedged condition.
 		 * Time for a reboot.
@@ -1268,12 +1224,6 @@ void intel_gt_reset(struct intel_gt *gt,
 	might_sleep();
 	GEM_BUG_ON(!test_bit(I915_RESET_BACKOFF, &gt->reset.flags));
 
-	/*
-	 * FIXME: Revoking cpu mmap ptes cannot be done from a dma_fence
-	 * critical section like gpu reset.
-	 */
-	gt_revoke(gt);
-
 	mutex_lock(&gt->reset.mutex);
 
 	/* Clear any previous failed attempts at recovery. Time to try again. */
@@ -1296,18 +1246,10 @@ void intel_gt_reset(struct intel_gt *gt,
 		goto error;
 	}
 
-	if (INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
-		intel_runtime_pm_disable_interrupts(gt->i915);
-
 	if (do_reset(gt, stalled_mask)) {
 		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_GT_OTHER, "Failed to reset chip\n");
 		goto taint;
 	}
-
-	if (INTEL_INFO(gt->i915)->gpu_reset_clobbers_display)
-		intel_runtime_pm_enable_interrupts(gt->i915);
-
-	intel_overlay_reset(gt->i915);
 
 	/*
 	 * Next we need to restore the context, but we don't use those
@@ -1463,13 +1405,8 @@ static void intel_gt_reset_global(struct intel_gt *gt,
 	kobject_uevent_env(kobj, KOBJ_CHANGE, reset_event);
 
 	/* Use a watchdog to ensure that our reset completes */
-	intel_wedge_on_timeout(&w, gt, 60 * HZ) {
-		intel_display_prepare_reset(gt->i915);
-
+	intel_wedge_on_timeout(&w, gt, 60 * HZ)
 		intel_gt_reset(gt, engine_mask, reason);
-
-		intel_display_finish_reset(gt->i915);
-	}
 
 	if (!test_bit(I915_WEDGED, &gt->reset.flags))
 		kobject_uevent_env(kobj, KOBJ_CHANGE, reset_done_event);

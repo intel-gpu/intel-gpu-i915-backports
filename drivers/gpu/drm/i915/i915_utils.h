@@ -60,10 +60,14 @@ int __i915_inject_probe_error(struct drm_i915_private *i915, int err,
 	__i915_inject_probe_error((_i915), (_err), __func__, __LINE__)
 bool i915_error_injected(void);
 
+void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint);
+
 #else
 
 #define i915_inject_probe_error(i915, e) ({ BUILD_BUG_ON_INVALID(i915); 0; })
 #define i915_error_injected() false
+
+static inline void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint) {}
 
 #endif
 
@@ -328,8 +332,7 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
  * check the condition before the timeout.
  */
 #define __wait_for(OP, COND, US, Wmin, Wmax) ({ \
-	const ktime_t end__ = ktime_add_ns(ktime_get_raw(),		\
-			1000ll * ADJUST_TIMEOUT(US));			\
+	const ktime_t end__ = ktime_add_ns(ktime_get_raw(), 1000ll * (US)); \
 	long wait__ = (Wmin); /* recommended min for usleep is 10 us */	\
 	int ret__;							\
 	might_sleep();							\
@@ -366,8 +369,8 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 
 #define _wait_for_atomic(COND, US, ATOMIC) \
 ({ \
-	int cpu, ret; \
-	u64 base, timeout = ADJUST_TIMEOUT(US) * 1000; \
+	int cpu, ret, timeout = (US) * 1000; \
+	u64 base; \
 	_WAIT_FOR_ATOMIC_CHECK(ATOMIC); \
 	if (!(ATOMIC)) { \
 		preempt_disable(); \
@@ -424,7 +427,6 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 #define KHz(x) (1000 * (x))
 #define MHz(x) KHz(1000 * (x))
 
-void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint);
 static inline void __add_taint_for_CI(unsigned int taint)
 {
 	/*

@@ -201,6 +201,9 @@ struct intel_gt {
 	struct intel_uncore *uncore;
 	struct i915_ggtt *ggtt;
 
+	struct workqueue_struct *wq;
+	struct i915_sched_engine *sched;
+
 	struct intel_uc uc;
 	struct intel_gsc gsc;
 	struct intel_wopcm wopcm;
@@ -317,7 +320,15 @@ struct intel_gt {
 
 		local64_t migration_stall;
 
+		local64_t pagefault_stall;
+		local_t pagefault_major;
+		local_t pagefault_minor;
+
 		struct intel_gt_stats_irq_time irq;
+
+		u64 (*busy_free)(struct intel_gt *gt, u64 config, unsigned int vf_id);
+		u64 (*busy_free_ticks)(struct intel_gt *gt, u64 config, unsigned int vf_id);
+		void (*busy_free_park)(struct intel_gt *gt);
 	} stats;
 
 	struct intel_engine_cs *engine[I915_NUM_ENGINES];
@@ -368,6 +379,12 @@ struct intel_gt {
 	 */
 	struct i915_address_space *vm;
 	struct drm_mm_node flat; /* 1:1 mapping of lmem reserved in vm */
+
+	struct i915_px_cache {
+		struct llist_head px;
+		spinlock_t lock;
+		bool closed:1;
+	} px_cache;
 
 	/*
 	 * A pool of objects to use as shadow copies of client batch buffers

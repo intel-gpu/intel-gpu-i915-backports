@@ -68,11 +68,6 @@ struct intel_connector;
    external chips are via DVO or SDVO output */
 enum intel_output_type {
 	INTEL_OUTPUT_UNUSED = 0,
-	INTEL_OUTPUT_ANALOG = 1,
-	INTEL_OUTPUT_DVO = 2,
-	INTEL_OUTPUT_SDVO = 3,
-	INTEL_OUTPUT_LVDS = 4,
-	INTEL_OUTPUT_TVOUT = 5,
 	INTEL_OUTPUT_HDMI = 6,
 	INTEL_OUTPUT_DP = 7,
 	INTEL_OUTPUT_EDP = 8,
@@ -680,8 +675,6 @@ struct intel_plane_state {
 
 	struct i915_vma *ggtt_vma;
 	struct i915_vma *dpt_vma;
-	unsigned long flags;
-#define PLANE_HAS_FENCE BIT(0)
 
 	struct intel_fb_view view;
 
@@ -886,61 +879,41 @@ struct g4x_wm_state {
 };
 
 struct intel_crtc_wm_state {
-	union {
+	/*
+	 * raw:
+	 * The "raw" watermark values produced by the formula
+	 * given the plane's current state. They do not consider
+	 * how much FIFO is actually allocated for each plane.
+	 *
+	 * optimal:
+	 * The "optimal" watermark values given the current
+	 * state of the planes and the amount of FIFO
+	 * allocated to each, ignoring any previous state
+	 * of the planes.
+	 *
+	 * intermediate:
+	 * The "intermediate" watermark values when transitioning
+	 * between the old and new "optimal" values. Used when
+	 * the watermark registers are single buffered and hence
+	 * their state changes asynchronously with regards to the
+	 * actual plane registers. These are essentially the
+	 * worst case combination of the old and new "optimal"
+	 * watermarks, which are therefore safe to use when the
+	 * plane is in either its old or new state.
+	 */
+	struct {
+		struct skl_pipe_wm raw;
+		/* gen9+ only needs 1-step wm programming */
+		struct skl_pipe_wm optimal;
+		struct skl_ddb_entry ddb;
 		/*
-		 * raw:
-		 * The "raw" watermark values produced by the formula
-		 * given the plane's current state. They do not consider
-		 * how much FIFO is actually allocated for each plane.
-		 *
-		 * optimal:
-		 * The "optimal" watermark values given the current
-		 * state of the planes and the amount of FIFO
-		 * allocated to each, ignoring any previous state
-		 * of the planes.
-		 *
-		 * intermediate:
-		 * The "intermediate" watermark values when transitioning
-		 * between the old and new "optimal" values. Used when
-		 * the watermark registers are single buffered and hence
-		 * their state changes asynchronously with regards to the
-		 * actual plane registers. These are essentially the
-		 * worst case combination of the old and new "optimal"
-		 * watermarks, which are therefore safe to use when the
-		 * plane is in either its old or new state.
+		 * pre-icl: for packed/planar CbCr
+		 * icl+: for everything
 		 */
-		struct {
-			struct intel_pipe_wm intermediate;
-			struct intel_pipe_wm optimal;
-		} ilk;
-
-		struct {
-			struct skl_pipe_wm raw;
-			/* gen9+ only needs 1-step wm programming */
-			struct skl_pipe_wm optimal;
-			struct skl_ddb_entry ddb;
-			/*
-			 * pre-icl: for packed/planar CbCr
-			 * icl+: for everything
-			 */
-			struct skl_ddb_entry plane_ddb[I915_MAX_PLANES];
-			/* pre-icl: for planar Y */
-			struct skl_ddb_entry plane_ddb_y[I915_MAX_PLANES];
-		} skl;
-
-		struct {
-			struct g4x_pipe_wm raw[NUM_VLV_WM_LEVELS]; /* not inverted */
-			struct vlv_wm_state intermediate; /* inverted */
-			struct vlv_wm_state optimal; /* inverted */
-			struct vlv_fifo_state fifo_state;
-		} vlv;
-
-		struct {
-			struct g4x_pipe_wm raw[NUM_G4X_WM_LEVELS];
-			struct g4x_wm_state intermediate;
-			struct g4x_wm_state optimal;
-		} g4x;
-	};
+		struct skl_ddb_entry plane_ddb[I915_MAX_PLANES];
+		/* pre-icl: for planar Y */
+		struct skl_ddb_entry plane_ddb_y[I915_MAX_PLANES];
+	} skl;
 
 	/*
 	 * Platforms with two-step watermark programming will need to
@@ -1064,10 +1037,6 @@ struct intel_crtc_state {
 	 * panel fitter/pipe scaler downscaling.
 	 */
 	unsigned int pixel_rate;
-
-	/* Whether to set up the PCH/FDI. Note that we never allow sharing
-	 * between pch encoders and cpu encoders. */
-	bool has_pch_encoder;
 
 	/* Are we sending infoframes on the attached port */
 	bool has_infoframe;
@@ -1204,12 +1173,6 @@ struct intel_crtc_state {
 		bool enabled;
 		bool force_thru;
 	} pch_pfit;
-
-	/* FDI configuration, only valid if has_pch_encoder is set. */
-	int fdi_lanes;
-	struct intel_link_m_n fdi_m_n;
-
-	bool ips_enabled;
 
 	bool crc_enabled;
 
@@ -1388,23 +1351,8 @@ struct intel_crtc {
 	u16 vmax_vblank_start;
 
 	struct intel_display_power_domain_set enabled_power_domains;
-	struct intel_overlay *overlay;
 
 	struct intel_crtc_state *config;
-
-	/* Access to these should be protected by dev_priv->irq_lock. */
-	bool cpu_fifo_underrun_disabled;
-	bool pch_fifo_underrun_disabled;
-
-	/* per-pipe watermark state */
-	struct {
-		/* watermarks currently being used  */
-		union {
-			struct intel_pipe_wm ilk;
-			struct vlv_wm_state vlv;
-			struct g4x_wm_state g4x;
-		} active;
-	} wm;
 
 	struct {
 		struct mutex mutex;
@@ -1442,14 +1390,11 @@ struct intel_crtc {
 
 #ifdef CONFIG_DEBUG_FS
 	struct intel_pipe_crc pipe_crc;
-	u32 cpu_fifo_underrun_count;
-	u32 pch_fifo_underrun_count;
 #endif
 };
 
 struct intel_plane {
 	struct drm_plane base;
-	enum i9xx_plane_id i9xx_plane;
 	enum plane_id id;
 	enum pipe pipe;
 	bool need_async_flip_disable_wa;
@@ -1828,55 +1773,6 @@ struct intel_dp_mst_encoder {
 	enum pipe pipe;
 	struct intel_digital_port *primary;
 	struct intel_connector *connector;
-};
-
-static inline enum dpio_channel
-vlv_dig_port_to_channel(struct intel_digital_port *dig_port)
-{
-	switch (dig_port->base.port) {
-	default:
-		MISSING_CASE(dig_port->base.port);
-		fallthrough;
-	case PORT_B:
-	case PORT_D:
-		return DPIO_CH0;
-	case PORT_C:
-		return DPIO_CH1;
-	}
-}
-
-static inline enum dpio_phy
-vlv_dig_port_to_phy(struct intel_digital_port *dig_port)
-{
-	switch (dig_port->base.port) {
-	default:
-		MISSING_CASE(dig_port->base.port);
-		fallthrough;
-	case PORT_B:
-	case PORT_C:
-		return DPIO_PHY0;
-	case PORT_D:
-		return DPIO_PHY1;
-	}
-}
-
-static inline enum dpio_channel
-vlv_pipe_to_channel(enum pipe pipe)
-{
-	switch (pipe) {
-	default:
-		MISSING_CASE(pipe);
-		fallthrough;
-	case PIPE_A:
-	case PIPE_C:
-		return DPIO_CH0;
-	case PIPE_B:
-		return DPIO_CH1;
-	}
-}
-
-struct intel_load_detect_pipe {
-	struct drm_atomic_state *restore_state;
 };
 
 static inline struct intel_encoder *

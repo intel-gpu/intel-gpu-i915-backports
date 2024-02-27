@@ -21,10 +21,6 @@
 
 #include "mei-trace.h"
 
-#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
-#include <backport/bp_module_version.h>
-#endif
-
 #define MEI_GSC_RPM_TIMEOUT 500
 
 static inline bool mei_gsc_hw_is_unavailable(const struct device *dev)
@@ -978,9 +974,6 @@ module_exit(mei_gsc_exit);
 
 MODULE_AUTHOR("Intel Corporation");
 MODULE_LICENSE("GPL");
-#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
-MODULE_VERSION(BACKPORT_MOD_VER);
-#endif
 
 #ifdef BPM_MEI_AUX_BUS_AVAILABLE
 MODULE_ALIAS("auxiliary:i915.mei-gsc");

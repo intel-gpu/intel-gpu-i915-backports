@@ -50,8 +50,13 @@ static const u8 uabi_classes[] = {
 	[COMPUTE_CLASS] = I915_ENGINE_CLASS_COMPUTE,
 };
 
+#ifdef BPM_LIST_CMP_FUNC_T_NOT_PRESENT
+static int engine_cmp(void *priv, struct list_head *A,
+		       struct list_head *B)
+#else
 static int engine_cmp(void *priv, const struct list_head *A,
 		      const struct list_head *B)
+#endif
 {
 	const struct intel_engine_cs *a =
 		container_of((struct rb_node *)A, typeof(*a), uabi_node);
@@ -102,9 +107,11 @@ static void set_scheduler_caps(struct drm_i915_private *i915)
 		u8 sched;
 	} map[] = {
 #define MAP(x, y) { ilog2(I915_ENGINE_##x), ilog2(I915_SCHEDULER_CAP_##y) }
+#define PRELIM_MAP(x, y) { ilog2(I915_ENGINE_##x), ilog2(PRELIM_I915_SCHEDULER_CAP_##y) }
 		MAP(HAS_PREEMPTION, PREEMPTION),
 		MAP(HAS_SEMAPHORES, SEMAPHORES),
 		MAP(SUPPORTS_STATS, ENGINE_BUSY_STATS),
+		PRELIM_MAP(SUPPORTS_TICKS_STATS, ENGINE_BUSY_TICKS_STATS),
 #undef MAP
 	};
 	struct intel_engine_cs *engine;

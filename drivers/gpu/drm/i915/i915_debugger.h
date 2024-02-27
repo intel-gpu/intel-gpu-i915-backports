@@ -10,16 +10,19 @@
 
 struct drm_device;
 struct drm_file;
+struct i915_address_space;
 struct i915_drm_client;
 struct i915_gem_context;
+struct i915_gpu_coredump;
 struct i915_uuid_resource;
-struct i915_address_space;
 struct i915_vma;
-struct intel_engine_cs;
 struct intel_context;
+struct intel_engine_cs;
 struct intel_gt;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
+
+void i915_debugger_pagefault_notify(struct i915_gpu_coredump *error);
 
 int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file);
@@ -27,8 +30,7 @@ int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 void i915_debugger_init(struct drm_i915_private *i915);
 void i915_debugger_fini(struct drm_i915_private *i915);
 
-void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
-				     struct i915_drm_client *client);
+void i915_debugger_wait_on_discovery(struct i915_drm_client *client);
 
 void i915_debugger_client_create(struct i915_drm_client *client);
 void i915_debugger_client_destroy(struct i915_drm_client *client);
@@ -45,7 +47,8 @@ void i915_debugger_uuid_destroy(struct i915_drm_client *client,
 void i915_debugger_vm_create(struct i915_drm_client *client,
 			     struct i915_address_space *vm);
 void i915_debugger_vm_destroy(struct i915_drm_client *client,
-			      struct i915_address_space *vm);
+			      struct i915_address_space *vm,
+			      bool force);
 
 void i915_debugger_vma_insert(struct i915_drm_client *client,
 			      struct i915_vma *vma);
@@ -86,6 +89,8 @@ void i915_debugger_gpu_flush_engines(struct intel_gt *gt, u32 mask);
 
 #else /* CPTCFG_DRM_I915_DEBUGGER */
 
+static inline void i915_debugger_pagefault_notify(struct i915_gpu_coredump *error) {}
+
 static inline int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 					   struct drm_file *file)
 {
@@ -95,8 +100,7 @@ static inline int i915_debugger_open_ioctl(struct drm_device *dev, void *data,
 static inline void i915_debugger_init(struct drm_i915_private *i915) { }
 static inline void i915_debugger_fini(struct drm_i915_private *i915) { }
 
-static inline void i915_debugger_wait_on_discovery(struct drm_i915_private *i915,
-						   struct i915_drm_client *client) { }
+static inline void i915_debugger_wait_on_discovery(struct i915_drm_client *client) { }
 
 static inline void i915_debugger_client_create(struct i915_drm_client *client) { }
 static inline void i915_debugger_client_destroy(struct i915_drm_client *client) { }
@@ -112,7 +116,8 @@ static inline void i915_debugger_uuid_destroy(struct i915_drm_client *client,
 static inline void i915_debugger_vm_create(struct i915_drm_client *client,
 					   struct i915_address_space *vm) { }
 static inline void i915_debugger_vm_destroy(struct i915_drm_client *client,
-					    struct i915_address_space *vm) { }
+					    struct i915_address_space *vm,
+					    bool force) { }
 
 static inline void i915_debugger_vma_insert(struct i915_drm_client *client,
 					    struct i915_vma *vma) { }

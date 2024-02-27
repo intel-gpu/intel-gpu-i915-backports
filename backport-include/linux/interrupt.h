@@ -33,10 +33,12 @@ static inline void backport_hrtimer_start(struct hrtimer *timer, s64 time,
 #define hrtimer_start LINUX_I915_BACKPORT(hrtimer_start)
 #endif
 
+#ifdef BPM_TASKLET_UNLOCK_SPIN_WAIT_NOT_PRESENT
 #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
 void tasklet_unlock_spin_wait(struct tasklet_struct *t);
 #else
 static inline void tasklet_unlock_spin_wait(struct tasklet_struct *t) { }
+#endif
 #endif
 
 #endif /* _BP_LINUX_INTERRUPT_H */

@@ -3,9 +3,20 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
+/* Enable redhat backport to support mmu notifer wrapper */
+#define RH_DRM_BACKPORT
+#include <linux/mmu_notifier.h>
+#endif
+
 #include <linux/mm_types.h>
 #include <linux/sched/mm.h>
 #include <linux/mm.h>
+
+#ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
+#include <linux/mmap_lock.h>
+#endif
+
 
 #include "i915_svm.h"
 #include "intel_memory_region.h"
@@ -324,9 +335,7 @@ static int svm_bind_range_to_gpu(struct i915_svm *svm,
 	u64 npages = ((range->end - 1) >> PAGE_SHIFT) - (range->start >> PAGE_SHIFT) + 1;
 	struct i915_address_space *vm = svm->vm;
 	__u64 length = range->end - range->start;
-	struct i915_vm_pt_stash stash = { 0 };
 	__u64 start = range->start;
-	struct i915_gem_ww_ctx ww;
 	struct sg_table st;
 	u32 sg_page_sizes;
 	int regions;
@@ -345,12 +354,6 @@ static int svm_bind_range_to_gpu(struct i915_svm *svm,
 
 	sg_page_sizes = i915_svm_build_sg(vm, range, &st);
 
-	/* XXX: Not an elegant solution, revisit */
-	i915_gem_ww_ctx_init(&ww, true);
-	ret = svm_bind_addr_prepare(vm, &stash, &ww, start, length);
-	if (ret)
-	    goto fault_done;
-
 	mutex_lock(&svm->mutex);
 	if (mmu_interval_read_retry(range->notifier,
 		    range->notifier_seq)) {
@@ -361,13 +364,10 @@ static int svm_bind_range_to_gpu(struct i915_svm *svm,
 
 	flags |= (regions & REGION_LMEM) ? I915_GTT_SVM_LMEM : 0;
 	//TODO: handle atomic fault - AE bit in page table
-	ret = svm_bind_addr_commit(vm, &stash, start, length,
+	ret = svm_bind_addr_commit(vm, start, length,
 				   flags, &st, sg_page_sizes);
 unlock_svm:
 	mutex_unlock(&svm->mutex);
-	i915_vm_free_pt_stash(vm, &stash);
-fault_done:
-	i915_gem_ww_ctx_fini(&ww);
 free_sg:
 	sg_free_table(&st);
 	return ret;
@@ -529,8 +529,6 @@ mmap_unlock:
 	if (!mmap_unlocked)
 		mmap_read_unlock(mm);
 	vm_put_svm(vm);
-	if (length)
-		ppgtt_dump(vm, start, length);
 	return ret;
 }
 

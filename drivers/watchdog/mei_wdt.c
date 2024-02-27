@@ -14,10 +14,6 @@
 #include <linux/uuid.h>
 #include <linux/mei_cl_bus.h>
 
-#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
-#include <backport/bp_module_version.h>
-#endif
-
 /*
  * iAMT Watchdog Device
  */
@@ -666,6 +662,3 @@ module_mei_cl_driver(mei_wdt_driver);
 MODULE_AUTHOR("Intel Corporation");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Device driver for Intel MEI iAMT watchdog");
-#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
-MODULE_VERSION(BACKPORT_MOD_VER);
-#endif

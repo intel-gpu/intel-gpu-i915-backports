@@ -442,12 +442,12 @@ static int prelim_set_placements(struct prelim_drm_i915_gem_object_param *args,
 	int i, ret = 0;
 
 	if (!args->size) {
-		DRM_DEBUG("Size is zero\n");
+		drm_dbg(&i915->drm, "Size is zero\n");
 		ret = -EINVAL;
 	}
 
 	if (args->size > ARRAY_SIZE(i915->mm.regions)) {
-		DRM_DEBUG("Too many placements\n");
+		drm_dbg(&i915->drm, "Too many placements\n");
 		ret = -EINVAL;
 	}
 
@@ -474,16 +474,18 @@ static int prelim_set_placements(struct prelim_drm_i915_gem_object_param *args,
 						region.memory_class,
 						region.memory_instance);
 		if (!mr || mr->private) {
-			DRM_DEBUG("Device is missing region { class: %d, inst: %d } at index = %d\n",
-				  region.memory_class, region.memory_instance, i);
+			drm_dbg(&i915->drm,
+				"Device is missing region { class: %d, inst: %d } at index = %d\n",
+				region.memory_class, region.memory_instance, i);
 			ret = -EINVAL;
 			goto out_dump;
 		}
 
 		if (mask & BIT(mr->id)) {
-			DRM_DEBUG("Found duplicate placement %s -> { class: %d, inst: %d } at index = %d\n",
-				  mr->name, region.memory_class,
-				  region.memory_instance, i);
+			drm_dbg(&i915->drm,
+				"Found duplicate placement %s -> { class: %d, inst: %d } at index = %d\n",
+				mr->name, region.memory_class,
+				region.memory_instance, i);
 			ret = -EINVAL;
 			goto out_dump;
 		}
@@ -514,12 +516,13 @@ out_dump:
 					sizeof(buf),
 					obj->mm.placements,
 					obj->mm.n_placements);
-			DRM_DEBUG("Placements were already set in previous SETPARAM. Existing placements: %s\n",
-				  buf);
+			drm_dbg(&i915->drm,
+				"Placements were already set in previous SETPARAM. Existing placements: %s\n",
+				buf);
 		}
 
 		repr_placements(buf, sizeof(buf), placements, i);
-		DRM_DEBUG("New placements(so far validated): %s\n", buf);
+		drm_dbg(&i915->drm, "New placements(so far validated): %s\n", buf);
 	}
 
 out_free:
@@ -530,18 +533,11 @@ out_free:
 static int prelim_set_pair(struct prelim_drm_i915_gem_object_param *args,
 			   struct create_ext *ext_data)
 {
-	int ret = 0;
-
 	/* start with no pairing */
 	ext_data->pair_id = 0;
 
-	if (!args->data) {
-		DRM_DEBUG("Data should be non-zero\n");
-		ret = -EINVAL;
-	}
-
-	if (ret)
-		return ret;
+	if (!args->data)
+		return -EINVAL;
 
 	/*
 	 * data is the "handle" of the object we are going to pair
@@ -555,12 +551,7 @@ static int prelim_set_pair(struct prelim_drm_i915_gem_object_param *args,
 static int prelim_set_chunk_size(struct prelim_drm_i915_gem_object_param *args,
 				 struct create_ext *ext_data)
 {
-	struct drm_i915_private *i915 = ext_data->i915;
 	u64 segment_size = args->data;
-
-	/* enabled on platforms where legacy mmap is no longer supported */
-	if (!(IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0)))
-		return -EOPNOTSUPP;
 
 	if (!segment_size)
 		return -EINVAL;
@@ -576,15 +567,11 @@ static int prelim_set_chunk_size(struct prelim_drm_i915_gem_object_param *args,
 static int __create_setparam(struct prelim_drm_i915_gem_object_param *args,
 			     struct create_ext *ext_data)
 {
-	if (!(args->param & PRELIM_I915_OBJECT_PARAM)) {
-		DRM_DEBUG("Missing I915_OBJECT_PARAM namespace\n");
+	if (!(args->param & PRELIM_I915_OBJECT_PARAM))
 		return -EINVAL;
-	}
 
-	if (args->handle) {
-		DRM_DEBUG("Handle should be zero\n");
+	if (args->handle)
 		return -EINVAL;
-	}
 
 	switch (lower_32_bits(args->param)) {
 	case PRELIM_I915_PARAM_MEMORY_REGIONS:
@@ -768,7 +755,7 @@ err_out:
 	return -EINVAL;
 }
 
-/**
+/*
  * Creates a new mm object and returns a handle to it.
  * @dev: drm device pointer
  * @data: ioctl data blob
@@ -986,7 +973,7 @@ static const i915_user_extension_fn create_extensions[] = {
 	[I915_GEM_CREATE_EXT_PROTECTED_CONTENT] = ext_set_protected,
 };
 
-/**
+/*
  * Creates a new mm object and returns a handle to it.
  * @dev: drm device pointer
  * @data: ioctl data blob

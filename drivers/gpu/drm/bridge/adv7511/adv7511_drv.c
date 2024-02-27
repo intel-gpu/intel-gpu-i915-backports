@@ -490,7 +490,7 @@ static int adv7511_irq_process(struct adv7511 *adv7511, bool process_hpd)
 			wake_up_all(&adv7511->wq);
 	}
 
-#ifdef CONFIG_DRM_I2C_ADV7511_CEC
+#ifdef CPTCFG_DRM_I2C_ADV7511_CEC
 	adv7511_cec_irq_process(adv7511, irq1);
 #endif
 
@@ -1378,7 +1378,7 @@ static struct i2c_driver adv7511_driver = {
 
 static int __init adv7511_init(void)
 {
-	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI))
+	if (IS_ENABLED(CPTCFG_DRM_MIPI_DSI))
 		mipi_dsi_driver_register(&adv7533_dsi_driver);
 
 	return i2c_add_driver(&adv7511_driver);
@@ -1389,7 +1389,7 @@ static void __exit adv7511_exit(void)
 {
 	i2c_del_driver(&adv7511_driver);
 
-	if (IS_ENABLED(CONFIG_DRM_MIPI_DSI))
+	if (IS_ENABLED(CPTCFG_DRM_MIPI_DSI))
 		mipi_dsi_driver_unregister(&adv7533_dsi_driver);
 }
 module_exit(adv7511_exit);

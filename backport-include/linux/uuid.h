@@ -3,6 +3,14 @@
 #include <linux/version.h>
 #include_next <linux/uuid.h>
 
+#ifdef BPM_UUID_LE_CMP_NOT_PRESENT
+#include <uapi/linux/mei_uuid.h>
+static inline int uuid_le_cmp(const uuid_le u1, const uuid_le u2)
+{
+        return memcmp(&u1, &u2, sizeof(uuid_le));
+}
+#endif
+
 #ifndef UUID_STRING_LEN
 /*
  * The length of a UUID string ("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")

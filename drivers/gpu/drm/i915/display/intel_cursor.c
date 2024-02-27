@@ -30,16 +30,7 @@ static const u32 intel_cursor_formats[] = {
 
 static u32 intel_cursor_base(const struct intel_plane_state *plane_state)
 {
-	struct drm_i915_private *dev_priv =
-		to_i915(plane_state->uapi.plane->dev);
-	const struct drm_framebuffer *fb = plane_state->hw.fb;
-	const struct drm_i915_gem_object *obj = intel_fb_obj(fb);
-	u32 base;
-
-	if (INTEL_INFO(dev_priv)->display.cursor_needs_physical)
-		base = sg_dma_address(obj->mm.pages->sgl);
-	else
-		base = intel_plane_ggtt_offset(plane_state);
+	u32 base = intel_plane_ggtt_offset(plane_state);
 
 	return base + plane_state->view.color_plane[0].offset;
 }
@@ -80,7 +71,6 @@ static int intel_cursor_check_surface(struct intel_plane_state *plane_state)
 {
 	struct drm_i915_private *dev_priv =
 		to_i915(plane_state->uapi.plane->dev);
-	unsigned int rotation = plane_state->hw.rotation;
 	int src_x, src_y;
 	u32 offset;
 	int ret;
@@ -111,15 +101,6 @@ static int intel_cursor_check_surface(struct intel_plane_state *plane_state)
 	 */
 	drm_rect_translate_to(&plane_state->uapi.src,
 			      src_x << 16, src_y << 16);
-
-	/* ILK+ do this automagically in hardware */
-	if (HAS_GMCH(dev_priv) && rotation & DRM_MODE_ROTATE_180) {
-		const struct drm_framebuffer *fb = plane_state->hw.fb;
-		int src_w = drm_rect_width(&plane_state->uapi.src) >> 16;
-		int src_h = drm_rect_height(&plane_state->uapi.src) >> 16;
-
-		offset += (src_h * src_w - 1) * fb->format->cpp[0];
-	}
 
 	plane_state->view.color_plane[0].offset = offset;
 	plane_state->view.color_plane[0].x = src_x;
@@ -173,156 +154,6 @@ static int intel_check_cursor(struct intel_crtc_state *crtc_state,
 }
 
 static unsigned int
-i845_cursor_max_stride(struct intel_plane *plane,
-		       u32 pixel_format, u64 modifier,
-		       unsigned int rotation)
-{
-	return 2048;
-}
-
-static u32 i845_cursor_ctl_crtc(const struct intel_crtc_state *crtc_state)
-{
-	u32 cntl = 0;
-
-	if (crtc_state->gamma_enable)
-		cntl |= CURSOR_PIPE_GAMMA_ENABLE;
-
-	return cntl;
-}
-
-static u32 i845_cursor_ctl(const struct intel_crtc_state *crtc_state,
-			   const struct intel_plane_state *plane_state)
-{
-	return CURSOR_ENABLE |
-		CURSOR_FORMAT_ARGB |
-		CURSOR_STRIDE(plane_state->view.color_plane[0].mapping_stride);
-}
-
-static bool i845_cursor_size_ok(const struct intel_plane_state *plane_state)
-{
-	int width = drm_rect_width(&plane_state->uapi.dst);
-
-	/*
-	 * 845g/865g are only limited by the width of their cursors,
-	 * the height is arbitrary up to the precision of the register.
-	 */
-	return intel_cursor_size_ok(plane_state) && IS_ALIGNED(width, 64);
-}
-
-static int i845_check_cursor(struct intel_crtc_state *crtc_state,
-			     struct intel_plane_state *plane_state)
-{
-	const struct drm_framebuffer *fb = plane_state->hw.fb;
-	struct drm_i915_private *i915 = to_i915(plane_state->uapi.plane->dev);
-	int ret;
-
-	ret = intel_check_cursor(crtc_state, plane_state);
-	if (ret)
-		return ret;
-
-	/* if we want to turn off the cursor ignore width and height */
-	if (!fb)
-		return 0;
-
-	/* Check for which cursor types we support */
-	if (!i845_cursor_size_ok(plane_state)) {
-		drm_dbg_kms(&i915->drm,
-			    "Cursor dimension %dx%d not supported\n",
-			    drm_rect_width(&plane_state->uapi.dst),
-			    drm_rect_height(&plane_state->uapi.dst));
-		return -EINVAL;
-	}
-
-	drm_WARN_ON(&i915->drm, plane_state->uapi.visible &&
-		    plane_state->view.color_plane[0].mapping_stride != fb->pitches[0]);
-
-	switch (fb->pitches[0]) {
-	case 256:
-	case 512:
-	case 1024:
-	case 2048:
-		break;
-	default:
-		 drm_dbg_kms(&i915->drm, "Invalid cursor stride (%u)\n",
-			     fb->pitches[0]);
-		return -EINVAL;
-	}
-
-	plane_state->ctl = i845_cursor_ctl(crtc_state, plane_state);
-
-	return 0;
-}
-
-/* TODO: split into noarm+arm pair */
-static void i845_cursor_update_arm(struct intel_plane *plane,
-				   const struct intel_crtc_state *crtc_state,
-				   const struct intel_plane_state *plane_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(plane->base.dev);
-	u32 cntl = 0, base = 0, pos = 0, size = 0;
-
-	if (plane_state && plane_state->uapi.visible) {
-		unsigned int width = drm_rect_width(&plane_state->uapi.dst);
-		unsigned int height = drm_rect_height(&plane_state->uapi.dst);
-
-		cntl = plane_state->ctl |
-			i845_cursor_ctl_crtc(crtc_state);
-
-		size = CURSOR_HEIGHT(height) | CURSOR_WIDTH(width);
-
-		base = intel_cursor_base(plane_state);
-		pos = intel_cursor_position(plane_state);
-	}
-
-	/* On these chipsets we can only modify the base/size/stride
-	 * whilst the cursor is disabled.
-	 */
-	if (plane->cursor.base != base ||
-	    plane->cursor.size != size ||
-	    plane->cursor.cntl != cntl) {
-		intel_de_write_fw(dev_priv, CURCNTR(PIPE_A), 0);
-		intel_de_write_fw(dev_priv, CURBASE(PIPE_A), base);
-		intel_de_write_fw(dev_priv, CURSIZE(PIPE_A), size);
-		intel_de_write_fw(dev_priv, CURPOS(PIPE_A), pos);
-		intel_de_write_fw(dev_priv, CURCNTR(PIPE_A), cntl);
-
-		plane->cursor.base = base;
-		plane->cursor.size = size;
-		plane->cursor.cntl = cntl;
-	} else {
-		intel_de_write_fw(dev_priv, CURPOS(PIPE_A), pos);
-	}
-}
-
-static void i845_cursor_disable_arm(struct intel_plane *plane,
-				    const struct intel_crtc_state *crtc_state)
-{
-	i845_cursor_update_arm(plane, crtc_state, NULL);
-}
-
-static bool i845_cursor_get_hw_state(struct intel_plane *plane,
-				     enum pipe *pipe)
-{
-	struct drm_i915_private *dev_priv = to_i915(plane->base.dev);
-	enum intel_display_power_domain power_domain;
-	intel_wakeref_t wakeref;
-	bool ret;
-
-	power_domain = POWER_DOMAIN_PIPE(PIPE_A);
-	wakeref = intel_display_power_get_if_enabled(dev_priv, power_domain);
-	if (!wakeref)
-		return false;
-
-	ret = intel_de_read(dev_priv, CURCNTR(PIPE_A)) & CURSOR_ENABLE;
-
-	*pipe = PIPE_A;
-
-	intel_display_power_put(dev_priv, power_domain, wakeref);
-
-	return ret;
-}
-
-static unsigned int
 i9xx_cursor_max_stride(struct intel_plane *plane,
 		       u32 pixel_format, u64 modifier,
 		       unsigned int rotation)
@@ -332,23 +163,7 @@ i9xx_cursor_max_stride(struct intel_plane *plane,
 
 static u32 i9xx_cursor_ctl_crtc(const struct intel_crtc_state *crtc_state)
 {
-	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
-	u32 cntl = 0;
-
-	if (DISPLAY_VER(dev_priv) >= 11)
-		return cntl;
-
-	if (crtc_state->gamma_enable)
-		cntl = MCURSOR_PIPE_GAMMA_ENABLE;
-
-	if (crtc_state->csc_enable)
-		cntl |= MCURSOR_PIPE_CSC_ENABLE;
-
-	if (DISPLAY_VER(dev_priv) < 5 && !IS_G4X(dev_priv))
-		cntl |= MCURSOR_PIPE_SEL(crtc->pipe);
-
-	return cntl;
+	return 0;
 }
 
 static u32 i9xx_cursor_ctl(const struct intel_crtc_state *crtc_state,
@@ -357,9 +172,6 @@ static u32 i9xx_cursor_ctl(const struct intel_crtc_state *crtc_state,
 	struct drm_i915_private *dev_priv =
 		to_i915(plane_state->uapi.plane->dev);
 	u32 cntl = 0;
-
-	if (IS_SANDYBRIDGE(dev_priv) || IS_IVYBRIDGE(dev_priv))
-		cntl |= MCURSOR_TRICKLE_FEED_DISABLE;
 
 	switch (drm_rect_width(&plane_state->uapi.dst)) {
 	case 64:
@@ -388,8 +200,6 @@ static u32 i9xx_cursor_ctl(const struct intel_crtc_state *crtc_state,
 
 static bool i9xx_cursor_size_ok(const struct intel_plane_state *plane_state)
 {
-	struct drm_i915_private *dev_priv =
-		to_i915(plane_state->uapi.plane->dev);
 	int width = drm_rect_width(&plane_state->uapi.dst);
 	int height = drm_rect_height(&plane_state->uapi.dst);
 
@@ -412,8 +222,7 @@ static bool i9xx_cursor_size_ok(const struct intel_plane_state *plane_state)
 	 * cursor is not rotated. Everything else requires square
 	 * cursors.
 	 */
-	if (HAS_CUR_FBC(dev_priv) &&
-	    plane_state->hw.rotation & DRM_MODE_ROTATE_0) {
+	if (plane_state->hw.rotation & DRM_MODE_ROTATE_0) {
 		if (height < 8 || height > width)
 			return false;
 	} else {
@@ -430,7 +239,6 @@ static int i9xx_check_cursor(struct intel_crtc_state *crtc_state,
 	struct intel_plane *plane = to_intel_plane(plane_state->uapi.plane);
 	struct drm_i915_private *dev_priv = to_i915(plane->base.dev);
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
-	enum pipe pipe = plane->pipe;
 	int ret;
 
 	ret = intel_check_cursor(crtc_state, plane_state);
@@ -459,23 +267,6 @@ static int i9xx_check_cursor(struct intel_crtc_state *crtc_state,
 			    "Invalid cursor stride (%u) (cursor width %d)\n",
 			    fb->pitches[0],
 			    drm_rect_width(&plane_state->uapi.dst));
-		return -EINVAL;
-	}
-
-	/*
-	 * There's something wrong with the cursor on CHV pipe C.
-	 * If it straddles the left edge of the screen then
-	 * moving it away from the edge or disabling it often
-	 * results in a pipe underrun, and often that can lead to
-	 * dead pipe (constant underrun reported, and it scans
-	 * out just a solid color). To recover from that, the
-	 * display power well must be turned off and on again.
-	 * Refuse the put the cursor into that compromised position.
-	 */
-	if (IS_CHERRYVIEW(dev_priv) && pipe == PIPE_C &&
-	    plane_state->uapi.visible && plane_state->uapi.dst.x1 < 0) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "CHV cursor C not allowed to straddle the left screen edge\n");
 		return -EINVAL;
 	}
 
@@ -527,8 +318,7 @@ static void i9xx_cursor_update_arm(struct intel_plane *plane,
 	 * the CURCNTR write arms the update.
 	 */
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		skl_write_cursor_wm(plane, crtc_state);
+	skl_write_cursor_wm(plane, crtc_state);
 
 	if (plane_state)
 		intel_psr2_program_plane_sel_fetch_arm(plane, crtc_state,
@@ -539,9 +329,7 @@ static void i9xx_cursor_update_arm(struct intel_plane *plane,
 	if (plane->cursor.base != base ||
 	    plane->cursor.size != fbc_ctl ||
 	    plane->cursor.cntl != cntl) {
-		if (HAS_CUR_FBC(dev_priv))
-			intel_de_write_fw(dev_priv, CUR_FBC_CTL(pipe),
-					  fbc_ctl);
+		intel_de_write_fw(dev_priv, CUR_FBC_CTL(pipe), fbc_ctl);
 		intel_de_write_fw(dev_priv, CURCNTR(pipe), cntl);
 		intel_de_write_fw(dev_priv, CURPOS(pipe), pos);
 		intel_de_write_fw(dev_priv, CURBASE(pipe), base);
@@ -584,10 +372,7 @@ static bool i9xx_cursor_get_hw_state(struct intel_plane *plane,
 
 	ret = val & MCURSOR_MODE_MASK;
 
-	if (DISPLAY_VER(dev_priv) >= 5 || IS_G4X(dev_priv))
-		*pipe = plane->pipe;
-	else
-		*pipe = REG_FIELD_GET(MCURSOR_PIPE_SEL_MASK, val);
+	*pipe = plane->pipe;
 
 	intel_display_power_put(dev_priv, power_domain, wakeref);
 
@@ -771,29 +556,18 @@ intel_cursor_plane_create(struct drm_i915_private *dev_priv,
 		return cursor;
 
 	cursor->pipe = pipe;
-	cursor->i9xx_plane = (enum i9xx_plane_id) pipe;
 	cursor->id = PLANE_CURSOR;
 	cursor->frontbuffer_bit = INTEL_FRONTBUFFER(pipe, cursor->id);
 
-	if (IS_I845G(dev_priv) || IS_I865G(dev_priv)) {
-		cursor->max_stride = i845_cursor_max_stride;
-		cursor->update_arm = i845_cursor_update_arm;
-		cursor->disable_arm = i845_cursor_disable_arm;
-		cursor->get_hw_state = i845_cursor_get_hw_state;
-		cursor->check_plane = i845_check_cursor;
-	} else {
-		cursor->max_stride = i9xx_cursor_max_stride;
-		cursor->update_arm = i9xx_cursor_update_arm;
-		cursor->disable_arm = i9xx_cursor_disable_arm;
-		cursor->get_hw_state = i9xx_cursor_get_hw_state;
-		cursor->check_plane = i9xx_check_cursor;
-	}
+	cursor->max_stride = i9xx_cursor_max_stride;
+	cursor->update_arm = i9xx_cursor_update_arm;
+	cursor->disable_arm = i9xx_cursor_disable_arm;
+	cursor->get_hw_state = i9xx_cursor_get_hw_state;
+	cursor->check_plane = i9xx_check_cursor;
 
 	cursor->cursor.base = ~0;
 	cursor->cursor.cntl = ~0;
-
-	if (IS_I845G(dev_priv) || IS_I865G(dev_priv) || HAS_CUR_FBC(dev_priv))
-		cursor->cursor.size = ~0;
+	cursor->cursor.size = ~0;
 
 	modifiers = intel_fb_plane_get_modifiers(dev_priv, INTEL_PLANE_CAP_NONE);
 
@@ -810,17 +584,14 @@ intel_cursor_plane_create(struct drm_i915_private *dev_priv,
 	if (ret)
 		goto fail;
 
-	if (DISPLAY_VER(dev_priv) >= 4)
-		drm_plane_create_rotation_property(&cursor->base,
-						   DRM_MODE_ROTATE_0,
-						   DRM_MODE_ROTATE_0 |
-						   DRM_MODE_ROTATE_180);
+	drm_plane_create_rotation_property(&cursor->base,
+					   DRM_MODE_ROTATE_0,
+					   DRM_MODE_ROTATE_0 |
+					   DRM_MODE_ROTATE_180);
 
 	zpos = RUNTIME_INFO(dev_priv)->num_sprites[pipe] + 1;
 	drm_plane_create_zpos_immutable_property(&cursor->base, zpos);
-
-	if (DISPLAY_VER(dev_priv) >= 12)
-		drm_plane_enable_fb_damage_clips(&cursor->base);
+	drm_plane_enable_fb_damage_clips(&cursor->base);
 
 	intel_plane_helper_add(cursor);
 

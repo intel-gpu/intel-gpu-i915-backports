@@ -110,6 +110,7 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 			err = __intel_memory_region_get_pages_buddy(gt->lmem,
 								    NULL,
 								    size,
+								    jiffies,
 								    0,
 								    &blocks);
 			if (err) {
@@ -123,7 +124,7 @@ static int __igt_lmem_clear(struct drm_i915_private *i915, bool measure)
 				break;
 
 			cpu = -ktime_get();
-			clear_cpu(gt->lmem, &blocks, poison);
+			clear_cpu(NULL, gt->lmem, &blocks, poison);
 			cpu += ktime_get();
 
 			gpu = -READ_ONCE(gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
@@ -328,6 +329,7 @@ static int igt_lmem_swap(void *arg)
 			err = __intel_memory_region_get_pages_buddy(gt->lmem,
 								    NULL,
 								    size,
+								    jiffies,
 								    0,
 								    &blocks);
 			if (err) {

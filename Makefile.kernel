@@ -5,19 +5,31 @@ backport-cc-disable-warning = $(call try-run,\
 	$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_CFLAGS) -W$(strip $(1)) -c -x c /dev/null -o "$$TMP",-Wno-$(strip $(1)))
 
 NOSTDINC_FLAGS := \
-	-I$(M)/backport-include/ \
+	-I$(M)/backport-include \
 	-I$(M)/backport-include/uapi \
-	-I$(M)/i915-include/ \
-	-I$(M)/i915-include/uapi \
-	-I$(M)/i915-include/drm \
-	-include $(M)/backport-include/backport/backport.h \
 	$(call backport-cc-disable-warning, unused-but-set-variable) \
 	-DCPTCFG_BACKPORTS_RELEASE_TAG=\"$(BACKPORTS_RELEASE_TAG)\" \
 	-DCPTCFG_DII_KERNEL_HEAD=\"$(DII_KERNEL_HEAD)\" \
 	-DCPTCFG_BASE_KERNEL_NAME=\"$(BASE_KERNEL_NAME)\" \
 	-DCPTCFG_DII_KERNEL_TAG=\"$(DII_KERNEL_TAG)\" \
+	-DCPTCFG_MODULE_I915=\"$(MODULE_I915)\" \
 	$(BACKPORTS_GIT_TRACKER_DEF) \
+
+ifneq ("$(CPTCFG_BUILD_I915)", "y")
+NOSTDINC_FLAGS += \
+	-I$(M)/i915-include \
+	-I$(M)/drm-include \
+	-I$(M)/i915-include/uapi \
+	-I$(M)/drm-include/uapi \
+	-include $(M)/backport-include/backport/backport.h \
 	$(CFLAGS)
+else
+NOSTDINC_FLAGS += \
+	-I$(M)/i915-include \
+	-I$(M)/i915-include/uapi \
+	-include $(M)/backport-include/backport/backport.h \
+	$(CFLAGS)
+endif
 
 export backport_srctree = $(M)
 else
@@ -27,35 +39,34 @@ NOSTDINC_FLAGS := \
 	-I$(BACKPORT_DIR)/backport-include/ \
 	-I$(BACKPORT_DIR)/backport-include/uapi \
 	-I$(BACKPORT_DIR)/include/ \
-	-I$(BACKPORT_DIR)/include/uapi \
 	-I$(BACKPORT_DIR)/include/drm \
+	-I$(BACKPORT_DIR)/include/uapi \
 	-include $(BACKPORT_DIR)/backport-include/backport/backport.h \
 	$(CFLAGS)
 endif
 
-subdir-ccflags-y := $(call cc-option, -fno-pie) $(call cc-option, -no-pie)
-ifeq ($(CPTCFG_KERNEL_4_3),y)
-subdir-ccflags-y += -Wno-pointer-sign
-endif
 
 obj-y += compat/
 
-obj-$(CPTCFG_DRM_I915) += drivers/gpu/drm/i915/
-#obj-$(CPTCFG_CFG80211) += net/wireless/
-#obj-$(CPTCFG_MAC80211) += net/mac80211/
-#obj-$(CPTCFG_WLAN) += drivers/net/wireless/
-#obj-$(CPTCFG_SSB) += drivers/ssb/
-#obj-$(CPTCFG_BCMA) += drivers/bcma/
-#obj-$(CPTCFG_USB_NET_RNDIS_WLAN) += drivers/net/usb/
-#
-#obj-$(CPTCFG_USB_WDM) += drivers/usb/class/
-#obj-$(CPTCFG_USB_USBNET) += drivers/net/usb/
-#
-#obj-$(CPTCFG_STAGING) += drivers/staging/
+ifeq (y,$(filter y,$(CPTCFG_BUILD_DMABUF) $(CPTCFG_BUILD_ALL_MODULES)))
+obj-y += drivers/dma-buf/
+endif
 
+ifeq (y,$(filter y,$(CPTCFG_BUILD_DRM) $(CPTCFG_BUILD_ALL_MODULES) $(CPTCFG_BUILD_I915)))
+ifeq ("$(CPTCFG_BUILD_I915)", "y")
+obj-$(CPTCFG_DRM_I915) += drivers/gpu/drm/i915/
+else
+obj-$(CPTCFG_DRM) += drivers/gpu/drm/
+endif
+endif
+
+ifeq (y,$(filter y,$(CPTCFG_BUILD_DRM) $(CPTCFG_BUILD_ALL_MODULES) $(CPTCFG_BUILD_I915)))
+# Telemetry
 obj-$(CPTCFG_INTEL_VSEC) += drivers/platform/x86/intel/
 obj-$(CPTCFG_MFD_INTEL_PMT) += drivers/platform/x86/intel/
 obj-$(CPTCFG_MFD_INTEL_PMT) += drivers/mfd/
 
+# MEI
 obj-$(CPTCFG_INTEL_MEI) += drivers/misc/mei/
 obj-$(CPTCFG_WATCHDOG) += drivers/watchdog/
+endif

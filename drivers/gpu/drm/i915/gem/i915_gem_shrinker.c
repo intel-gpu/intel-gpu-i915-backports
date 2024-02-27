@@ -13,11 +13,11 @@
 #include <linux/dma-buf.h>
 #include <linux/vmalloc.h>
 
+#include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
 #include "dma_resv_utils.h"
 #include "i915_trace.h"
-#include "gt/intel_gt_requests.h"
 
 static bool swap_available(void)
 {
@@ -53,13 +53,6 @@ static bool drop_pages(struct drm_i915_gem_object *obj,
 		err = __i915_gem_object_put_pages(obj);
 
 	return err == 0;
-}
-
-static void try_to_writeback(struct drm_i915_gem_object *obj,
-			     unsigned int flags)
-{
-	if (flags & I915_SHRINK_WRITEBACK && obj->mm.madv == I915_MADV_WILLNEED)
-		i915_gem_object_writeback(obj);
 }
 
 /**
@@ -132,9 +125,14 @@ i915_gem_shrink(struct drm_i915_private *i915,
 	 * what we can do is give them a kick so that we do not keep idle
 	 * contexts around longer than is necessary.
 	 */
-	if (shrink & I915_SHRINK_ACTIVE)
+	if (shrink & I915_SHRINK_ACTIVE) {
+		struct intel_gt *gt;
+		int id;
+
 		/* Retire requests to unpin all idle contexts */
-		intel_gt_retire_requests(to_gt(i915));
+		for_each_gt(gt, i915, id)
+			intel_gt_retire_requests(gt);
+	}
 
 	/*
 	 * As we may completely rewrite the (un)bound list whilst unbinding
@@ -218,10 +216,8 @@ i915_gem_shrink(struct drm_i915_private *i915,
 
 			i915_gem_object_move_notify(obj);
 
-			if (drop_pages(obj, shrink)) {
-				try_to_writeback(obj, shrink);
+			if (drop_pages(obj, shrink))
 				count += obj->base.size >> PAGE_SHIFT;
-			}
 
 			i915_gem_object_unlock(obj);
 

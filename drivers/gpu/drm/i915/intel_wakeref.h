@@ -372,33 +372,4 @@ static inline void intel_wakeref_show(struct intel_wakeref *wf,
 
 #endif
 
-struct intel_wakeref_auto {
-	struct intel_runtime_pm *rpm;
-	struct timer_list timer;
-	intel_wakeref_t wakeref;
-	spinlock_t lock;
-	refcount_t count;
-};
-
-/**
- * intel_wakeref_auto: Delay the runtime-pm autosuspend
- * @wf: the wakeref
- * @timeout: relative timeout in jiffies
- *
- * The runtime-pm core uses a suspend delay after the last wakeref
- * is released before triggering runtime suspend of the device. That
- * delay is configurable via sysfs with little regard to the device
- * characteristics. Instead, we want to tune the autosuspend based on our
- * HW knowledge. intel_wakeref_auto() delays the sleep by the supplied
- * timeout.
- *
- * Pass @timeout = 0 to cancel a previous autosuspend by executing the
- * suspend immediately.
- */
-void intel_wakeref_auto(struct intel_wakeref_auto *wf, unsigned long timeout);
-
-void intel_wakeref_auto_init(struct intel_wakeref_auto *wf,
-			     struct intel_runtime_pm *rpm);
-void intel_wakeref_auto_fini(struct intel_wakeref_auto *wf);
-
 #endif /* INTEL_WAKEREF_H */

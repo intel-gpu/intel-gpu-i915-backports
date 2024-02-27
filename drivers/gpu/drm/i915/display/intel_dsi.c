@@ -44,7 +44,6 @@ enum drm_mode_status intel_dsi_mode_valid(struct drm_connector *connector,
 	struct intel_connector *intel_connector = to_intel_connector(connector);
 	const struct drm_display_mode *fixed_mode =
 		intel_panel_fixed_mode(intel_connector, mode);
-	int max_dotclk = to_i915(connector->dev)->max_dotclk_freq;
 	enum drm_mode_status status;
 
 	drm_dbg_kms(&dev_priv->drm, "\n");
@@ -56,7 +55,7 @@ enum drm_mode_status intel_dsi_mode_valid(struct drm_connector *connector,
 	if (status != MODE_OK)
 		return status;
 
-	if (fixed_mode->clock > max_dotclk)
+	if (fixed_mode && fixed_mode->clock > dev_priv->max_dotclk_freq)
 		return MODE_CLOCK_HIGH;
 
 	return intel_mode_valid_max_plane_size(dev_priv, mode, false);

@@ -3,7 +3,7 @@
 #include_next <linux/pci.h>
 #include <linux/version.h>
 
-#if LINUX_VERSION_IS_LESS(5,4,0)
+#ifdef BPM_PCI_ASPM_H_NOT_PRESENT
 #include <linux/pci-aspm.h>
 #endif
 

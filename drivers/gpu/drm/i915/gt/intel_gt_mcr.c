@@ -63,18 +63,6 @@ static const struct intel_mmio_range xehpsdv_mslice_steering_table[] = {
 	{},
 };
 
-static const struct intel_mmio_range xehpsdv_gam_steering_table[] = {
-	{ 0x004000, 0x004AFF },
-	{ 0x00C800, 0x00CFFF },
-	{},
-};
-
-static const struct intel_mmio_range xehpsdv_lncf_steering_table[] = {
-	{ 0x00B000, 0x00B0FF },
-	{ 0x00D800, 0x00D8FF },
-	{},
-};
-
 static const struct intel_mmio_range dg2_lncf_steering_table[] = {
 	{ 0x00B000, 0x00B0FF },
 	{ 0x00D880, 0x00D8FF },
@@ -195,10 +183,6 @@ void intel_gt_mcr_init(struct intel_gt *gt)
 		 * steering control register on DG2 and can use implicit
 		 * steering.
 		 */
-	} else if (IS_XEHPSDV(i915)) {
-		gt->steering_table[MSLICE] = xehpsdv_mslice_steering_table;
-		gt->steering_table[LNCF] = xehpsdv_lncf_steering_table;
-		gt->steering_table[GAM] = xehpsdv_gam_steering_table;
 	} else if (GRAPHICS_VER(i915) >= 11 &&
 		   GRAPHICS_VER_FULL(i915) < IP_VER(12, 50)) {
 		gt->steering_table[L3BANK] = icl_l3bank_steering_table;
@@ -447,7 +431,6 @@ u32 intel_gt_mcr_read(struct intel_gt *gt,
  * group/instance.  This function assumes the caller is already holding any
  * necessary forcewake domains; use intel_gt_mcr_read() in cases where
  * forcewake should be obtained automatically.
-
  */
 u32 intel_gt_mcr_read_fw(struct intel_gt *gt,
 			 i915_mcr_reg_t reg,

@@ -477,8 +477,8 @@ __i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int fl
 			if (block) {
 				GEM_BUG_ON(block->node.list != bl);
 
-				if (!i915_buddy_block_is_active(block) ||
-				    flags & I915_BUDDY_ALLOC_ALLOW_ACTIVE) {
+				if (flags & I915_BUDDY_ALLOC_ALLOW_ACTIVE ||
+				    !i915_buddy_block_is_active(block)) {
 					__clear_free(block);
 					spin_unlock(&bl->lock);
 					if (active)

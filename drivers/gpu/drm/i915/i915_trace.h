@@ -107,9 +107,8 @@ TRACE_EVENT(i915_vma_bind,
 			   __entry->flags = flags;
 			   ),
 
-	    TP_printk("obj=%p, offset=0x%016llx size=0x%llx%s vm=%p",
+	    TP_printk("obj=%p, offset=0x%016llx size=0x%llx vm=%p",
 		      __entry->obj, __entry->offset, __entry->size,
-		      __entry->flags & PIN_MAPPABLE ? ", mappable" : "",
 		      __entry->vm)
 );
 
@@ -248,9 +247,8 @@ TRACE_EVENT(i915_gem_evict,
 			   __entry->flags = flags;
 			  ),
 
-	    TP_printk("dev=%d, vm=%p, size=0x%llx, align=0x%llx %s",
-		      __entry->dev, __entry->vm, __entry->size, __entry->align,
-		      __entry->flags & PIN_MAPPABLE ? ", mappable" : "")
+	    TP_printk("dev=%d, vm=%p, size=0x%llx, align=0x%llx",
+		      __entry->dev, __entry->vm, __entry->size, __entry->align)
 );
 
 TRACE_EVENT(i915_gem_evict_node,

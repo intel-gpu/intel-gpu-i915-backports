@@ -392,7 +392,7 @@ static int __igt_breadcrumbs_smoketest(void *arg)
 
 		if (!wait_event_timeout(wait->wait,
 					i915_sw_fence_done(wait),
-					ADJUST_TIMEOUT(5 *  HZ))) {
+					5 * HZ)) {
 			struct i915_request *rq = requests[count - 1];
 
 			pr_err("waiting for %d/%d fences (last %llx:%lld) on %s timed out!\n",
@@ -1407,14 +1407,12 @@ static bool wake_all(struct drm_i915_private *i915)
 
 static int wait_for_all(struct drm_i915_private *i915)
 {
-	u32 mul = GET_MULTIPLIER(i915_selftest.timeout_jiffies);
-
 	if (wake_all(i915))
 		return 0;
 
 	if (wait_var_event_timeout(&i915->selftest.counter,
 				   !atomic_read(&i915->selftest.counter),
-				   i915_selftest.timeout_jiffies * mul))
+				   i915_selftest.timeout_jiffies))
 		return 0;
 
 	return -ETIME;
@@ -1652,8 +1650,7 @@ static int live_breadcrumbs_smoketest(void *arg)
 		smoke[idx] = smoke[0];
 		smoke[idx].engine = engine;
 		smoke[idx].max_batch =
-			max_batches(smoke[0].contexts[0], engine) /
-			GET_MULTIPLIER(0);
+			max_batches(smoke[0].contexts[0], engine);
 		if (smoke[idx].max_batch < 0) {
 			ret = smoke[idx].max_batch;
 			goto out_flush;

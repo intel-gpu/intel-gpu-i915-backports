@@ -396,10 +396,6 @@ int intel_opregion_notify_encoder(struct intel_encoder *intel_encoder,
 	u32 port;
 	int ret;
 
-	/* don't care about old stuff for now */
-	if (!HAS_DDI(dev_priv))
-		return 0;
-
 	/* Avoid port out of bounds checks if SWSCI isn't there. */
 	ret = check_swsci_function(dev_priv, SWSCI_SBCB_DISPLAY_POWER_STATE);
 	if (ret)
@@ -436,9 +432,6 @@ int intel_opregion_notify_encoder(struct intel_encoder *intel_encoder,
 		parm |= 4 << 8;
 
 	switch (intel_encoder->type) {
-	case INTEL_OUTPUT_ANALOG:
-		type = DISPLAY_TYPE_CRT;
-		break;
 	case INTEL_OUTPUT_DDI:
 	case INTEL_OUTPUT_DP:
 	case INTEL_OUTPUT_HDMI:
@@ -476,9 +469,6 @@ int intel_opregion_notify_adapter(struct drm_i915_private *dev_priv,
 				  pci_power_t state)
 {
 	int i;
-
-	if (!HAS_DDI(dev_priv))
-		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(power_state_map); i++) {
 		if (state == power_state_map[i].pci_power_state)
@@ -974,7 +964,7 @@ static int intel_verify_css(struct drm_i915_private *i915,
 	return 0;
 }
 
-/**
+/*
  * intel_spi_get_oprom_opreg() get OPROM OpRegion image.
  * @i915: pointer to i915 device.
  *
@@ -1616,7 +1606,7 @@ static const struct i915_opregion_func dgfx_opregion_func = {
 	.free_opregion = intel_dgfx_free_opregion,
 };
 
-/**
+/*
  * intel_opregion_init() - Init ACPI opregion.
  * @i915 i915 device priv data.
  * It initialize the dgfx/igfx opregion function pointers

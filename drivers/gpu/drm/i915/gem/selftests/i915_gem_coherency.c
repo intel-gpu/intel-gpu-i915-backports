@@ -83,78 +83,6 @@ out:
 	return err;
 }
 
-static int gtt_set(struct context *ctx, unsigned long offset, u32 v)
-{
-	struct intel_gt *gt = ctx->engine->gt;
-	intel_wakeref_t wakeref;
-	struct i915_vma *vma;
-	u32 __iomem *map;
-	int err = 0;
-
-	i915_gem_object_lock(ctx->obj, NULL);
-	err = i915_gem_object_set_to_gtt_domain(ctx->obj, true);
-	i915_gem_object_unlock(ctx->obj);
-	if (err)
-		return err;
-
-	vma = i915_gem_object_ggtt_pin(ctx->obj, gt->ggtt,
-				       NULL, 0, 0, PIN_MAPPABLE);
-	if (IS_ERR(vma))
-		return PTR_ERR(vma);
-
-	wakeref = intel_gt_pm_get(gt);
-
-	map = i915_vma_pin_iomap(vma);
-	i915_vma_unpin(vma);
-	if (IS_ERR(map)) {
-		err = PTR_ERR(map);
-		goto out_rpm;
-	}
-
-	iowrite32(v, &map[offset / sizeof(*map)]);
-	i915_vma_unpin_iomap(vma);
-
-out_rpm:
-	intel_gt_pm_put(gt, wakeref);
-	return err;
-}
-
-static int gtt_get(struct context *ctx, unsigned long offset, u32 *v)
-{
-	struct intel_gt *gt = ctx->engine->gt;
-	intel_wakeref_t wakeref;
-	struct i915_vma *vma;
-	u32 __iomem *map;
-	int err = 0;
-
-	i915_gem_object_lock(ctx->obj, NULL);
-	err = i915_gem_object_set_to_gtt_domain(ctx->obj, false);
-	i915_gem_object_unlock(ctx->obj);
-	if (err)
-		return err;
-
-	vma = i915_gem_object_ggtt_pin(ctx->obj, gt->ggtt,
-				       NULL, 0, 0, PIN_MAPPABLE);
-	if (IS_ERR(vma))
-		return PTR_ERR(vma);
-
-	wakeref = intel_gt_pm_get(gt);
-
-	map = i915_vma_pin_iomap(vma);
-	i915_vma_unpin(vma);
-	if (IS_ERR(map)) {
-		err = PTR_ERR(map);
-		goto out_rpm;
-	}
-
-	*v = ioread32(&map[offset / sizeof(*map)]);
-	i915_vma_unpin_iomap(vma);
-
-out_rpm:
-	intel_gt_pm_put(gt, wakeref);
-	return err;
-}
-
 static int wc_set(struct context *ctx, unsigned long offset, u32 v)
 {
 	u32 *map;
@@ -228,22 +156,10 @@ static int gpu_set(struct context *ctx, unsigned long offset, u32 v)
 		goto out_rq;
 	}
 
-	if (GRAPHICS_VER(ctx->engine->i915) >= 8) {
-		*cs++ = MI_STORE_DWORD_IMM_GEN4 | 1 << 22;
-		*cs++ = lower_32_bits(i915_ggtt_offset(vma) + offset);
-		*cs++ = upper_32_bits(i915_ggtt_offset(vma) + offset);
-		*cs++ = v;
-	} else if (GRAPHICS_VER(ctx->engine->i915) >= 4) {
-		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-		*cs++ = 0;
-		*cs++ = i915_ggtt_offset(vma) + offset;
-		*cs++ = v;
-	} else {
-		*cs++ = MI_STORE_DWORD_IMM | MI_MEM_VIRTUAL;
-		*cs++ = i915_ggtt_offset(vma) + offset;
-		*cs++ = v;
-		*cs++ = MI_NOOP;
-	}
+	*cs++ = MI_STORE_DWORD_IMM_GEN4 | 1 << 22;
+	*cs++ = lower_32_bits(i915_ggtt_offset(vma) + offset);
+	*cs++ = upper_32_bits(i915_ggtt_offset(vma) + offset);
+	*cs++ = v;
 	intel_ring_advance(rq, cs);
 
 	err = i915_request_await_object(rq, vma->obj, true);
@@ -265,16 +181,6 @@ static bool always_valid(struct context *ctx)
 	return true;
 }
 
-static bool needs_fence_registers(struct context *ctx)
-{
-	struct intel_gt *gt = ctx->engine->gt;
-
-	if (intel_gt_is_wedged(gt))
-		return false;
-
-	return gt->ggtt->num_fences;
-}
-
 static bool needs_mi_store_dword(struct context *ctx)
 {
 	if (intel_gt_is_wedged(ctx->engine->gt))
@@ -290,7 +196,6 @@ static const struct igt_coherency_mode {
 	bool (*valid)(struct context *ctx);
 } igt_coherency_mode[] = {
 	{ "cpu", cpu_set, cpu_get, always_valid },
-	{ "gtt", gtt_set, gtt_get, needs_fence_registers },
 	{ "wc", wc_set, wc_get, always_valid },
 	{ "gpu", gpu_set, NULL, needs_mi_store_dword },
 	{ },

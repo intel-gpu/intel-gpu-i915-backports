@@ -13,7 +13,7 @@ struct pci_device_id;
 struct drm_i915_private;
 struct drm_printer;
 
-#define DRIVER_NAME		"i915"
+#define DRIVER_NAME		CPTCFG_MODULE_I915
 #define DRIVER_DESC		"Intel Graphics"
 #define DRIVER_DATE		"20201103"
 #define DRIVER_TIMESTAMP	1604406085

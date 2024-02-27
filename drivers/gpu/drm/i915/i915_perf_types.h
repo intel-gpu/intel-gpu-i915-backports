@@ -276,6 +276,11 @@ struct i915_perf_stream {
 	bool pollin;
 
 	/**
+	 * @notify_num_reports: Number of reports to capture before signaling read/poll
+	 */
+	u32 notify_num_reports;
+
+	/**
 	 * @periodic: Whether periodic sampling is currently enabled.
 	 */
 	bool periodic;

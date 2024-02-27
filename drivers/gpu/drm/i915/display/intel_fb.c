@@ -16,31 +16,6 @@
 #define check_array_bounds(i915, a, i) drm_WARN_ON(&(i915)->drm, (i) >= ARRAY_SIZE(a))
 
 /*
- * From the Sky Lake PRM:
- * "The Color Control Surface (CCS) contains the compression status of
- *  the cache-line pairs. The compression state of the cache-line pair
- *  is specified by 2 bits in the CCS. Each CCS cache-line represents
- *  an area on the main surface of 16 x16 sets of 128 byte Y-tiled
- *  cache-line-pairs. CCS is always Y tiled."
- *
- * Since cache line pairs refers to horizontally adjacent cache lines,
- * each cache line in the CCS corresponds to an area of 32x16 cache
- * lines on the main surface. Since each pixel is 4 bytes, this gives
- * us a ratio of one byte in the CCS for each 8x16 pixels in the
- * main surface.
- */
-static const struct drm_format_info skl_ccs_formats[] = {
-	{ .format = DRM_FORMAT_XRGB8888, .depth = 24, .num_planes = 2,
-	  .cpp = { 4, 1, }, .hsub = 8, .vsub = 16, },
-	{ .format = DRM_FORMAT_XBGR8888, .depth = 24, .num_planes = 2,
-	  .cpp = { 4, 1, }, .hsub = 8, .vsub = 16, },
-	{ .format = DRM_FORMAT_ARGB8888, .depth = 32, .num_planes = 2,
-	  .cpp = { 4, 1, }, .hsub = 8, .vsub = 16, .has_alpha = true, },
-	{ .format = DRM_FORMAT_ABGR8888, .depth = 32, .num_planes = 2,
-	  .cpp = { 4, 1, }, .hsub = 8, .vsub = 16, .has_alpha = true, },
-};
-
-/*
  * Gen-12 compression uses 4 bits of CCS data for each cache line pair in the
  * main surface. And each 64B CCS cache line represents an area of 4x1 Y-tiles
  * in the main surface. With 4 byte pixels and each Y-tile having dimensions of
@@ -244,26 +219,6 @@ static const struct intel_modifier_desc intel_modifiers[] = {
 		.ccs.packed_aux_planes = BIT(1),
 
 		FORMAT_OVERRIDE(gen12_ccs_cc_formats),
-	}, {
-		.modifier = I915_FORMAT_MOD_Yf_TILED_CCS,
-		.display_ver = { 9, 11 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_Yf | INTEL_PLANE_CAP_CCS_RC,
-
-		.ccs.packed_aux_planes = BIT(1),
-
-		FORMAT_OVERRIDE(skl_ccs_formats),
-	}, {
-		.modifier = I915_FORMAT_MOD_Y_TILED_CCS,
-		.display_ver = { 9, 11 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_Y | INTEL_PLANE_CAP_CCS_RC,
-
-		.ccs.packed_aux_planes = BIT(1),
-
-		FORMAT_OVERRIDE(skl_ccs_formats),
-	}, {
-		.modifier = I915_FORMAT_MOD_Yf_TILED,
-		.display_ver = { 9, 11 },
-		.plane_caps = INTEL_PLANE_CAP_TILING_Yf,
 	}, {
 		.modifier = I915_FORMAT_MOD_Y_TILED,
 		.display_ver = { 9, 13 },
@@ -599,20 +554,16 @@ static unsigned int gen12_ccs_aux_stride(struct intel_framebuffer *fb, int ccs_p
 int skl_main_to_aux_plane(const struct drm_framebuffer *fb, int main_plane)
 {
 	const struct intel_modifier_desc *md = lookup_modifier(fb->modifier);
-	struct drm_i915_private *i915 = to_i915(fb->dev);
 
 	if (md->ccs.packed_aux_planes | md->ccs.planar_aux_planes)
 		return main_to_ccs_plane(fb, main_plane);
-	else if (DISPLAY_VER(i915) < 11 &&
-		 format_is_yuv_semiplanar(md, fb->format))
-		return 1;
 	else
 		return 0;
 }
 
 unsigned int intel_tile_size(const struct drm_i915_private *i915)
 {
-	return DISPLAY_VER(i915) == 2 ? 2048 : 4096;
+	return 4096;
 }
 
 unsigned int
@@ -625,10 +576,7 @@ intel_tile_width_bytes(const struct drm_framebuffer *fb, int color_plane)
 	case DRM_FORMAT_MOD_LINEAR:
 		return intel_tile_size(dev_priv);
 	case I915_FORMAT_MOD_X_TILED:
-		if (DISPLAY_VER(dev_priv) == 2)
-			return 128;
-		else
-			return 512;
+		return 512;
 	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
 	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
 	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
@@ -656,7 +604,7 @@ intel_tile_width_bytes(const struct drm_framebuffer *fb, int color_plane)
 			return 64;
 		fallthrough;
 	case I915_FORMAT_MOD_Y_TILED:
-		if (DISPLAY_VER(dev_priv) == 2 || HAS_128_BYTE_Y_TILING(dev_priv))
+		if (HAS_128_BYTE_Y_TILING(dev_priv))
 			return 128;
 		else
 			return 512;
@@ -739,26 +687,6 @@ intel_fb_align_height(const struct drm_framebuffer *fb,
 	return ALIGN(height, tile_height);
 }
 
-static unsigned int intel_fb_modifier_to_tiling(u64 fb_modifier)
-{
-	u8 tiling_caps = lookup_modifier(fb_modifier)->plane_caps &
-			 INTEL_PLANE_CAP_TILING_MASK;
-
-	switch (tiling_caps) {
-	case INTEL_PLANE_CAP_TILING_Y:
-		return I915_TILING_Y;
-	case INTEL_PLANE_CAP_TILING_X:
-		return I915_TILING_X;
-	case INTEL_PLANE_CAP_TILING_4:
-	case INTEL_PLANE_CAP_TILING_Yf:
-	case INTEL_PLANE_CAP_TILING_NONE:
-		return I915_TILING_NONE;
-	default:
-		MISSING_CASE(tiling_caps);
-		return I915_TILING_NONE;
-	}
-}
-
 static bool intel_modifier_uses_dpt(struct drm_i915_private *i915, u64 modifier)
 {
 	return DISPLAY_VER(i915) >= 13 && modifier != DRM_FORMAT_MOD_LINEAR;
@@ -771,27 +699,12 @@ bool intel_fb_uses_dpt(const struct drm_framebuffer *fb)
 
 unsigned int intel_cursor_alignment(const struct drm_i915_private *i915)
 {
-	if (IS_I830(i915))
-		return 16 * 1024;
-	else if (IS_I85X(i915))
-		return 256;
-	else if (IS_I845G(i915) || IS_I865G(i915))
-		return 32;
-	else
-		return 4 * 1024;
+	return 4 * 1024;
 }
 
 static unsigned int intel_linear_alignment(const struct drm_i915_private *dev_priv)
 {
-	if (DISPLAY_VER(dev_priv) >= 9)
-		return 256 * 1024;
-	else if (IS_I965G(dev_priv) || IS_I965GM(dev_priv) ||
-		 IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
-		return 128 * 1024;
-	else if (DISPLAY_VER(dev_priv) >= 4)
-		return 4 * 1024;
-	else
-		return 0;
+	return 256 * 1024;
 }
 
 unsigned int intel_surf_alignment(const struct drm_framebuffer *fb,
@@ -811,14 +724,10 @@ unsigned int intel_surf_alignment(const struct drm_framebuffer *fb,
 		 * TODO: cross-check wrt. the bspec stride in bytes * 64 bytes
 		 * alignment for linear UV planes on all platforms.
 		 */
-		if (DISPLAY_VER(dev_priv) >= 12) {
-			if (fb->modifier == DRM_FORMAT_MOD_LINEAR)
-				return intel_linear_alignment(dev_priv);
+		if (fb->modifier == DRM_FORMAT_MOD_LINEAR)
+			return intel_linear_alignment(dev_priv);
 
-			return intel_tile_row_size(fb, color_plane);
-		}
-
-		return 4096;
+		return intel_tile_row_size(fb, color_plane);
 	}
 
 	drm_WARN_ON(&dev_priv->drm, color_plane != 0);
@@ -860,6 +769,7 @@ void intel_fb_plane_get_subsampling(int *hsub, int *vsub,
 				    const struct drm_framebuffer *fb,
 				    int color_plane)
 {
+	unsigned int bw[2];
 	int main_plane;
 
 	if (color_plane == 0) {
@@ -881,8 +791,14 @@ void intel_fb_plane_get_subsampling(int *hsub, int *vsub,
 	}
 
 	main_plane = skl_ccs_to_main_plane(fb, color_plane);
-	*hsub = drm_format_info_block_width(fb->format, color_plane) /
-		drm_format_info_block_width(fb->format, main_plane);
+	bw[0] = drm_format_info_block_width(fb->format, color_plane);
+	bw[1] = drm_format_info_block_width(fb->format, main_plane);
+	if (unlikely(bw[1] >= bw[0])) {
+		*hsub = fb->format->hsub;
+		*vsub = fb->format->vsub;
+
+		return;
+	}
 
 	/*
 	 * The min stride check in the core framebuffer_check() function
@@ -892,6 +808,7 @@ void intel_fb_plane_get_subsampling(int *hsub, int *vsub,
 	 * width with that subsampling applied to it. Adjust the width here
 	 * accordingly, so we can calculate the actual subsampling factor.
 	 */
+	*hsub = bw[0] / bw[1];
 	if (main_plane == 0)
 		*hsub *= fb->format->hsub;
 
@@ -1105,8 +1022,7 @@ static int intel_fb_offset_to_xy(int *x, int *y,
 	unsigned int height;
 	u32 alignment;
 
-	if (DISPLAY_VER(i915) >= 12 &&
-	    !intel_fb_needs_pot_stride_remap(to_intel_framebuffer(fb)) &&
+	if (!intel_fb_needs_pot_stride_remap(to_intel_framebuffer(fb)) &&
 	    is_semiplanar_uv_plane(fb, color_plane))
 		alignment = intel_tile_row_size(fb, color_plane);
 	else if (fb->modifier != DRM_FORMAT_MOD_LINEAR)
@@ -1206,15 +1122,6 @@ static bool intel_plane_can_remap(const struct intel_plane_state *plane_state)
 		return false;
 
 	/*
-	 * The display engine limits already match/exceed the
-	 * render engine limits, so not much point in remapping.
-	 * Would also need to deal with the fence POT alignment
-	 * and gen2 2KiB GTT tile size.
-	 */
-	if (DISPLAY_VER(i915) < 4)
-		return false;
-
-	/*
 	 * The new CCS hash mode isn't compatible with remapping as
 	 * the virtual address of the pages affects the compressed data.
 	 */
@@ -1283,7 +1190,6 @@ static bool intel_plane_needs_remap(const struct intel_plane_state *plane_state)
 static int convert_plane_offset_to_xy(const struct intel_framebuffer *fb, int color_plane,
 				      int plane_width, int *x, int *y)
 {
-	struct drm_i915_gem_object *obj = intel_fb_obj(&fb->base);
 	int ret;
 
 	ret = intel_fb_offset_to_xy(x, y, &fb->base, color_plane);
@@ -1297,23 +1203,6 @@ static int convert_plane_offset_to_xy(const struct intel_framebuffer *fb, int co
 	ret = intel_fb_check_ccs_xy(&fb->base, color_plane, *x, *y);
 	if (ret)
 		return ret;
-
-	/*
-	 * The fence (if used) is aligned to the start of the object
-	 * so having the framebuffer wrap around across the edge of the
-	 * fenced region doesn't really work. We have no API to configure
-	 * the fence start offset within the object (nor could we probably
-	 * on gen2/3). So it's just easier if we just require that the
-	 * fb layout agrees with the fence layout. We already check that the
-	 * fb stride matches the fence stride elsewhere.
-	 */
-	if (color_plane == 0 && i915_gem_object_is_tiled(obj) &&
-	    (*x + plane_width) * fb->base.format->cpp[color_plane] > fb->base.pitches[color_plane]) {
-		drm_dbg_kms(fb->base.dev,
-			    "bad fb plane %d offset: 0x%x\n",
-			    color_plane, fb->base.offsets[color_plane]);
-		return -EINVAL;
-	}
 
 	return 0;
 }
@@ -1756,13 +1645,11 @@ u32 intel_fb_max_stride(struct drm_i915_private *dev_priv,
 	 *
 	 * The new CCS hash mode makes remapping impossible
 	 */
-	if (DISPLAY_VER(dev_priv) < 4 || intel_fb_is_ccs_modifier(modifier) ||
+	if (intel_fb_is_ccs_modifier(modifier) ||
 	    intel_modifier_uses_dpt(dev_priv, modifier))
 		return intel_plane_fb_max_stride(dev_priv, pixel_format, modifier);
-	else if (DISPLAY_VER(dev_priv) >= 7)
-		return 256 * 1024;
 	else
-		return 128 * 1024;
+		return 256 * 1024;
 }
 
 static u32
@@ -1793,20 +1680,7 @@ intel_fb_stride_alignment(const struct drm_framebuffer *fb, int color_plane)
 		 * On TGL the surface stride must be 4 tile aligned, mapped by
 		 * one 64 byte cacheline on the CCS AUX surface.
 		 */
-		if (DISPLAY_VER(dev_priv) >= 12)
-			tile_width *= 4;
-		/*
-		 * Display WA #0531: skl,bxt,kbl,glk
-		 *
-		 * Render decompression and plane width > 3840
-		 * combined with horizontal panning requires the
-		 * plane stride to be a multiple of 4. We'll just
-		 * require the entire fb to accommodate that to avoid
-		 * potential runtime errors at plane configuration time.
-		 */
-		else if ((DISPLAY_VER(dev_priv) == 9 || IS_GEMINILAKE(dev_priv)) &&
-			 color_plane == 0 && fb->width > 3840)
-			tile_width *= 4;
+		tile_width *= 4;
 	}
 	return tile_width;
 }
@@ -1932,7 +1806,6 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 	struct drm_i915_private *dev_priv = to_i915(obj->base.dev);
 	struct drm_framebuffer *fb = &intel_fb->base;
 	u32 max_stride;
-	unsigned int tiling, stride;
 	int ret = -EINVAL;
 	int i;
 
@@ -1940,49 +1813,12 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 	if (!intel_fb->frontbuffer)
 		return -ENOMEM;
 
-	i915_gem_object_lock(obj, NULL);
-	tiling = i915_gem_object_get_tiling(obj);
-	stride = i915_gem_object_get_stride(obj);
-	i915_gem_object_unlock(obj);
-
-	if (mode_cmd->flags & DRM_MODE_FB_MODIFIERS) {
-		/*
-		 * If there's a fence, enforce that
-		 * the fb modifier and tiling mode match.
-		 */
-		if (tiling != I915_TILING_NONE &&
-		    tiling != intel_fb_modifier_to_tiling(mode_cmd->modifier[0])) {
-			drm_dbg_kms(&dev_priv->drm,
-				    "tiling_mode doesn't match fb modifier\n");
-			goto err;
-		}
-	} else {
-		if (tiling == I915_TILING_X) {
-			mode_cmd->modifier[0] = I915_FORMAT_MOD_X_TILED;
-		} else if (tiling == I915_TILING_Y) {
-			drm_dbg_kms(&dev_priv->drm,
-				    "No Y tiling for legacy addfb\n");
-			goto err;
-		}
-	}
-
 	if (!drm_any_plane_has_format(&dev_priv->drm,
 				      mode_cmd->pixel_format,
 				      mode_cmd->modifier[0])) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "unsupported pixel format %p4cc / modifier 0x%llx\n",
 			    &mode_cmd->pixel_format, mode_cmd->modifier[0]);
-		goto err;
-	}
-
-	/*
-	 * gen2/3 display engine uses the fence if present,
-	 * so the tiling mode must match the fb modifier exactly.
-	 */
-	if (DISPLAY_VER(dev_priv) < 4 &&
-	    tiling != intel_fb_modifier_to_tiling(mode_cmd->modifier[0])) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "tiling_mode must match fb modifier exactly on gen2/3\n");
 		goto err;
 	}
 
@@ -1994,17 +1830,6 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 			    mode_cmd->modifier[0] != DRM_FORMAT_MOD_LINEAR ?
 			    "tiled" : "linear",
 			    mode_cmd->pitches[0], max_stride);
-		goto err;
-	}
-
-	/*
-	 * If there's a fence, enforce that
-	 * the fb pitch and fence stride match.
-	 */
-	if (tiling != I915_TILING_NONE && mode_cmd->pitches[0] != stride) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "pitch (%d) must match tiling stride (%d)\n",
-			    mode_cmd->pitches[0], stride);
 		goto err;
 	}
 

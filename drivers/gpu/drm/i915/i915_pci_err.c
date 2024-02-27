@@ -4,6 +4,10 @@
  */
 #include <linux/pci.h>
 
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
+#include <linux/mfd/core.h>
+#endif
+
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
@@ -55,6 +59,10 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 */
 	i915_pci_set_offline(pdev);
 	intel_iaf_pcie_error_notify(i915);
+
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
+	mfd_remove_devices(&pdev->dev);
+#endif
 
 	for_each_gt(gt, i915, i) {
 		intel_gt_set_wedged(gt);
@@ -155,8 +163,8 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	return PCI_ERS_RESULT_DISCONNECT;
 }
 
-/**
- * i915_pci_resume - called when device start IO again
+/*
+ * i915_pci_err_resume - called when device start IO again
  * @pdev PCI device struct
  *
  * This callback is called when the error recovery driver tells us that

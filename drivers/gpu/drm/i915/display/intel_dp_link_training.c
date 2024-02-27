@@ -80,16 +80,8 @@ static void intel_dp_read_lttpr_phy_caps(struct intel_dp *intel_dp,
 static bool intel_dp_read_lttpr_common_caps(struct intel_dp *intel_dp)
 {
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
 
 	if (intel_dp_is_edp(intel_dp))
-		return false;
-
-	/*
-	 * Detecting LTTPRs must be avoided on platforms with an AUX timeout
-	 * period < 3.2ms. (see DP Standard v2.0, 2.11.2, 3.6.6.1).
-	 */
-	if (DISPLAY_VER(i915) < 10 || IS_GEMINILAKE(i915))
 		return false;
 
 	if (drm_dp_read_lttpr_common_caps(&intel_dp->aux,
@@ -301,10 +293,7 @@ static u8 intel_dp_phy_preemph_max(struct intel_dp *intel_dp,
 static bool has_per_lane_signal_levels(struct intel_dp *intel_dp,
 				       enum drm_dp_phy dp_phy)
 {
-	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
-
-	return !intel_dp_phy_is_downstream_of_source(intel_dp, dp_phy) ||
-		DISPLAY_VER(i915) >= 11;
+	return true;
 }
 
 /* 128b/132b */
@@ -708,7 +697,7 @@ intel_dp_prepare_link_train(struct intel_dp *intel_dp,
 	return true;
 }
 
-#ifdef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 static void intel_dp_link_training_clock_recovery_delay(struct intel_dp *intel_dp,
                                                         enum drm_dp_phy dp_phy)
 {
@@ -745,9 +734,16 @@ static bool intel_dp_adjust_request_changed(const struct intel_crtc_state *crtc_
 	return false;
 }
 
+#ifndef BPM_DRM_DP_128B132B_API_PRESENT
 static void
 intel_dp_dump_link_status(struct intel_dp *intel_dp, enum drm_dp_phy dp_phy,
 			  const u8 link_status[DP_LINK_STATUS_SIZE])
+#else
+void
+intel_dp_dump_link_status(struct intel_dp *intel_dp, enum drm_dp_phy dp_phy,
+			  const u8 link_status[DP_LINK_STATUS_SIZE])
+#endif
+
 {
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
 	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
@@ -777,7 +773,7 @@ intel_dp_link_training_clock_recovery(struct intel_dp *intel_dp,
 	u8 link_status[DP_LINK_STATUS_SIZE];
 	bool max_vswing_reached = false;
 	char phy_name[10];
-#ifndef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifndef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 	int delay_us;
 
 	delay_us = drm_dp_read_clock_recovery_delay(&intel_dp->aux,
@@ -811,7 +807,7 @@ intel_dp_link_training_clock_recovery(struct intel_dp *intel_dp,
 
 	voltage_tries = 1;
 	for (cr_tries = 0; cr_tries < max_cr_tries; ++cr_tries) {
-#ifdef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 		intel_dp_link_training_clock_recovery_delay(intel_dp, dp_phy);
 #else
 		usleep_range(delay_us, 2 * delay_us);
@@ -932,7 +928,7 @@ static u32 intel_dp_training_pattern(struct intel_dp *intel_dp,
 	return DP_TRAINING_PATTERN_2;
 }
 
-#ifdef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 static void
 intel_dp_link_training_channel_equalization_delay(struct intel_dp *intel_dp,
                                                  enum drm_dp_phy dp_phy)
@@ -964,7 +960,7 @@ intel_dp_link_training_channel_equalization(struct intel_dp *intel_dp,
 	u8 link_status[DP_LINK_STATUS_SIZE];
 	bool channel_eq = false;
 	char phy_name[10];
-#ifndef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifndef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 	int delay_us;
 
 	delay_us = drm_dp_read_channel_eq_delay(&intel_dp->aux,
@@ -990,7 +986,7 @@ intel_dp_link_training_channel_equalization(struct intel_dp *intel_dp,
 	}
 
 	for (tries = 0; tries < 5; tries++) {
-#ifdef DP_LINK_TRAINING_CR_DELAY_PRESENT
+#ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 		intel_dp_link_training_channel_equalization_delay(intel_dp,
                                                   dp_phy);
 #else
@@ -1056,6 +1052,25 @@ static bool intel_dp_disable_dpcd_training_pattern(struct intel_dp *intel_dp,
 	return drm_dp_dpcd_write(&intel_dp->aux, reg, &val, 1) == 1;
 }
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+static int
+intel_dp_128b132b_intra_hop(struct intel_dp *intel_dp,
+			    const struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+	u8 sink_status;
+	int ret;
+
+	ret = drm_dp_dpcd_readb(&intel_dp->aux, DP_SINK_STATUS, &sink_status);
+	if (ret != 1) {
+		drm_dbg_kms(&i915->drm, "Failed to read sink status\n");
+		return ret < 0 ? ret : -EIO;
+	}
+
+	return sink_status & DP_INTRA_HOP_AUX_REPLY_INDICATION ? 1 : 0;
+}
+#endif
+
 /**
  * intel_dp_stop_link_train - stop link training
  * @intel_dp: DP struct
@@ -1075,12 +1090,25 @@ static bool intel_dp_disable_dpcd_training_pattern(struct intel_dp *intel_dp,
 void intel_dp_stop_link_train(struct intel_dp *intel_dp,
 			      const struct intel_crtc_state *crtc_state)
 {
+
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+#endif
 	intel_dp->link_trained = true;
 
 	intel_dp_disable_dpcd_training_pattern(intel_dp, DP_PHY_DPRX);
 	intel_dp_program_link_training_pattern(intel_dp, crtc_state, DP_PHY_DPRX,
 					       DP_TRAINING_PATTERN_DISABLE);
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	if (intel_dp_is_uhbr(crtc_state) &&
+	    wait_for(intel_dp_128b132b_intra_hop(intel_dp, crtc_state) == 0, 500)) {
+		drm_dbg_kms(&i915->drm,
+			    "[ENCODER:%d:%s] 128b/132b intra-hop not clearing\n",
+			    encoder->base.base.id, encoder->base.name);
+	}
+#endif
 }
 
 static bool
@@ -1144,7 +1172,9 @@ intel_dp_link_train_all_phys(struct intel_dp *intel_dp,
 	bool ret = true;
 	int i;
 
+#ifndef DRM_DP_128B132B_API_NOT_PRESENT
 	intel_dp_prepare_link_train(intel_dp, crtc_state);
+#endif
 
 	for (i = lttpr_count - 1; i >= 0; i--) {
 		enum drm_dp_phy dp_phy = DP_PHY_LTTPR(i);
@@ -1165,6 +1195,274 @@ intel_dp_link_train_all_phys(struct intel_dp *intel_dp,
 	return ret;
 }
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+/*
+ * 128b/132b DP LANEx_EQ_DONE Sequence (DP 2.0 E11 3.5.2.16.1)
+ */
+static bool
+intel_dp_128b132b_lane_eq(struct intel_dp *intel_dp,
+			  const struct intel_crtc_state *crtc_state)
+{
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	u8 link_status[DP_LINK_STATUS_SIZE];
+	int delay_us;
+	int try, max_tries = 20;
+	unsigned long deadline;
+	bool timeout = false;
+
+	/*
+	 * Reset signal levels. Start transmitting 128b/132b TPS1.
+	 *
+	 * Put DPRX and LTTPRs (if any) into intra-hop AUX mode by writing TPS1
+	 * in DP_TRAINING_PATTERN_SET.
+	 */
+	if (!intel_dp_reset_link_train(intel_dp, crtc_state, DP_PHY_DPRX,
+				       DP_TRAINING_PATTERN_1)) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Failed to start 128b/132b TPS1\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	delay_us = drm_dp_128b132b_read_aux_rd_interval(&intel_dp->aux);
+
+	/* Read the initial TX FFE settings. */
+	if (drm_dp_dpcd_read_link_status(&intel_dp->aux, link_status) < 0) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Failed to read TX FFE presets\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	/* Update signal levels and training set as requested. */
+	intel_dp_get_adjust_train(intel_dp, crtc_state, DP_PHY_DPRX, link_status);
+	if (!intel_dp_update_link_train(intel_dp, crtc_state, DP_PHY_DPRX)) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Failed to set initial TX FFE settings\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	/* Start transmitting 128b/132b TPS2. */
+	if (!intel_dp_set_link_train(intel_dp, crtc_state, DP_PHY_DPRX,
+				     DP_TRAINING_PATTERN_2)) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Failed to start 128b/132b TPS2\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	/* Time budget for the LANEx_EQ_DONE Sequence */
+	deadline = jiffies + msecs_to_jiffies_timeout(400);
+
+	for (try = 0; try < max_tries; try++) {
+		usleep_range(delay_us, 2 * delay_us);
+
+		/*
+		 * The delay may get updated. The transmitter shall read the
+		 * delay before link status during link training.
+		 */
+		delay_us = drm_dp_128b132b_read_aux_rd_interval(&intel_dp->aux);
+
+		if (drm_dp_dpcd_read_link_status(&intel_dp->aux, link_status) < 0) {
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Failed to read link status\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (drm_dp_128b132b_link_training_failed(link_status)) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Downstream link training failure\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (drm_dp_128b132b_lane_channel_eq_done(link_status, crtc_state->lane_count)) {
+			drm_dbg_kms(&i915->drm,
+				    "[ENCODER:%d:%s] Lane channel eq done\n",
+				    encoder->base.base.id, encoder->base.name);
+			break;
+		}
+
+		if (timeout) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Lane channel eq timeout\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (time_after(jiffies, deadline))
+			timeout = true; /* try one last time after deadline */
+
+		/* Update signal levels and training set as requested. */
+		intel_dp_get_adjust_train(intel_dp, crtc_state, DP_PHY_DPRX, link_status);
+		if (!intel_dp_update_link_train(intel_dp, crtc_state, DP_PHY_DPRX)) {
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Failed to update TX FFE settings\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+	}
+
+	if (try == max_tries) {
+		intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Max loop count reached\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	for (;;) {
+		if (time_after(jiffies, deadline))
+			timeout = true; /* try one last time after deadline */
+
+		if (drm_dp_dpcd_read_link_status(&intel_dp->aux, link_status) < 0) {
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Failed to read link status\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (drm_dp_128b132b_link_training_failed(link_status)) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Downstream link training failure\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (drm_dp_128b132b_eq_interlane_align_done(link_status)) {
+			drm_dbg_kms(&i915->drm,
+				    "[ENCODER:%d:%s] Interlane align done\n",
+				    encoder->base.base.id, encoder->base.name);
+			break;
+		}
+
+		if (timeout) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Interlane align timeout\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		usleep_range(2000, 3000);
+	}
+
+	return true;
+}
+
+/*
+ * 128b/132b DP LANEx_CDS_DONE Sequence (DP 2.0 E11 3.5.2.16.2)
+ */
+static bool
+intel_dp_128b132b_lane_cds(struct intel_dp *intel_dp,
+			   const struct intel_crtc_state *crtc_state,
+			   int lttpr_count)
+{
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	u8 link_status[DP_LINK_STATUS_SIZE];
+	unsigned long deadline;
+
+	if (drm_dp_dpcd_writeb(&intel_dp->aux, DP_TRAINING_PATTERN_SET,
+			       DP_TRAINING_PATTERN_2_CDS) != 1) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] Failed to start 128b/132b TPS2 CDS\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	/* Time budget for the LANEx_CDS_DONE Sequence */
+	deadline = jiffies + msecs_to_jiffies_timeout((lttpr_count + 1) * 20);
+
+	for (;;) {
+		bool timeout = false;
+
+		if (time_after(jiffies, deadline))
+			timeout = true; /* try one last time after deadline */
+
+		usleep_range(2000, 3000);
+
+		if (drm_dp_dpcd_read_link_status(&intel_dp->aux, link_status) < 0) {
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Failed to read link status\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (drm_dp_128b132b_eq_interlane_align_done(link_status) &&
+		    drm_dp_128b132b_cds_interlane_align_done(link_status) &&
+		    drm_dp_128b132b_lane_symbol_locked(link_status, crtc_state->lane_count)) {
+			drm_dbg_kms(&i915->drm,
+				    "[ENCODER:%d:%s] CDS interlane align done\n",
+				    encoder->base.base.id, encoder->base.name);
+			break;
+		}
+
+		if (drm_dp_128b132b_link_training_failed(link_status)) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] Downstream link training failure\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+
+		if (timeout) {
+			intel_dp_dump_link_status(intel_dp, DP_PHY_DPRX, link_status);
+			drm_err(&i915->drm,
+				"[ENCODER:%d:%s] CDS timeout\n",
+				encoder->base.base.id, encoder->base.name);
+			return false;
+		}
+	}
+
+	/* FIXME: Should DP_TRAINING_PATTERN_DISABLE be written first? */
+	if (intel_dp->set_idle_link_train)
+		intel_dp->set_idle_link_train(intel_dp, crtc_state);
+
+	return true;
+}
+
+/*
+ * 128b/132b link training sequence. (DP 2.0 E11 SCR on link training.)
+ */
+static bool
+intel_dp_128b132b_link_train(struct intel_dp *intel_dp,
+			     const struct intel_crtc_state *crtc_state,
+			     int lttpr_count)
+{
+	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
+	struct intel_connector *connector = intel_dp->attached_connector;
+	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+	bool passed = false;
+
+	if (wait_for(intel_dp_128b132b_intra_hop(intel_dp, crtc_state) == 0, 500)) {
+		drm_err(&i915->drm,
+			"[ENCODER:%d:%s] 128b/132b intra-hop not clear\n",
+			encoder->base.base.id, encoder->base.name);
+		return false;
+	}
+
+	if (intel_dp_128b132b_lane_eq(intel_dp, crtc_state) &&
+	    intel_dp_128b132b_lane_cds(intel_dp, crtc_state, lttpr_count))
+		passed = true;
+
+	drm_dbg_kms(&i915->drm,
+		    "[CONNECTOR:%d:%s][ENCODER:%d:%s] 128b/132b Link Training %s at link rate = %d, lane count = %d\n",
+		    connector->base.base.id, connector->base.name,
+		    encoder->base.base.id, encoder->base.name,
+		    passed ? "passed" : "failed",
+		    crtc_state->port_clock, crtc_state->lane_count);
+
+	return passed;
+}
+#endif
+
 /**
  * intel_dp_start_link_train - start link training
  * @intel_dp: DP struct
@@ -1181,7 +1479,9 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
-	
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	bool passed;
+#endif
 	/*
 	 * TODO: Reiniting LTTPRs here won't be needed once proper connector
 	 * HW state readout is added.
@@ -1191,6 +1491,15 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 	if (lttpr_count < 0)
 		/* Still continue with enabling the port and link training. */
 		lttpr_count = 0;
+
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	intel_dp_prepare_link_train(intel_dp, crtc_state);
+
+	if (intel_dp_is_uhbr(crtc_state))
+		passed = intel_dp_128b132b_link_train(intel_dp, crtc_state, lttpr_count);
+	else
+		passed = intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count);
+#endif
 
 	/*
 	 * Ignore the link failure in CI
@@ -1209,7 +1518,11 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 	 * For test cases which rely on the link training or processing of HPDs
 	 * ignore_long_hpd flag can unset from the testcase.
 	 */
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	if (!passed && i915->hotplug.ignore_long_hpd) {
+#else
 	if (!intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count) && i915->hotplug.ignore_long_hpd) {
+#endif
 		drm_dbg_kms(&i915->drm,
 			    "[CONNECTOR:%d:%s][ENCODER:%d:%s] Ignore the link failure\n",
 			    connector->base.base.id, connector->base.name,
@@ -1217,6 +1530,10 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 		return;
 	}
 
+#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+	if (!passed)
+#else
 	if (!intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count))
+#endif
 		intel_dp_schedule_fallback_link_training(intel_dp, crtc_state);
 }

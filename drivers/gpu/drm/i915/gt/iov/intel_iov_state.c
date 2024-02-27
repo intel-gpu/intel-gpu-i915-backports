@@ -613,7 +613,7 @@ failed:
 	return ret;
 }
 
-/**
+/*
  * intel_iov_state_save_vf - Save VF state.
  * @iov: the IOV struct
  * @vfid: VF identifier
@@ -716,7 +716,7 @@ int intel_iov_state_store_guc_migration_state(struct intel_iov *iov, u32 vfid,
 	return 0;
 }
 
-/**
+/*
  * intel_iov_state_restore_vf - Restore VF state.
  * @iov: the IOV struct
  * @vfid: VF identifier

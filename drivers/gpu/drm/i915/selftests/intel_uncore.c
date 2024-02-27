@@ -65,8 +65,6 @@ static int intel_shadow_table_check(void)
 		const struct i915_range *regs;
 		unsigned int size;
 	} range_lists[] = {
-		{ gen8_shadowed_regs, ARRAY_SIZE(gen8_shadowed_regs) },
-		{ gen11_shadowed_regs, ARRAY_SIZE(gen11_shadowed_regs) },
 		{ gen12_shadowed_regs, ARRAY_SIZE(gen12_shadowed_regs) },
 		{ dg2_shadowed_regs, ARRAY_SIZE(dg2_shadowed_regs) },
 		{ pvc_shadowed_regs, ARRAY_SIZE(pvc_shadowed_regs) },
@@ -112,10 +110,6 @@ int intel_uncore_mock_selftests(void)
 		unsigned int num_ranges;
 		bool is_watertight;
 	} fw[] = {
-		{ __vlv_fw_ranges, ARRAY_SIZE(__vlv_fw_ranges), false },
-		{ __chv_fw_ranges, ARRAY_SIZE(__chv_fw_ranges), false },
-		{ __gen9_fw_ranges, ARRAY_SIZE(__gen9_fw_ranges), true },
-		{ __gen11_fw_ranges, ARRAY_SIZE(__gen11_fw_ranges), true },
 		{ __gen12_fw_ranges, ARRAY_SIZE(__gen12_fw_ranges), true },
 		{ __xehp_fw_ranges, ARRAY_SIZE(__xehp_fw_ranges), true },
 		{ __pvc_fw_ranges, ARRAY_SIZE(__pvc_fw_ranges), true },
@@ -170,12 +164,6 @@ static int live_forcewake_ops(void *arg)
 	int err = 0;
 
 	GEM_BUG_ON(gt->awake);
-
-	/* vlv/chv with their pcu behave differently wrt reads */
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915)) {
-		pr_debug("PCU fakes forcewake badly; skipping\n");
-		return 0;
-	}
 
 	/*
 	 * Not quite as reliable across the gen as one would hope.
@@ -282,9 +270,7 @@ static int live_forcewake_domains(void *arg)
 	u32 offset;
 	int err;
 
-	if (!HAS_FPGA_DBG_UNCLAIMED(gt->i915) &&
-	    !IS_VALLEYVIEW(gt->i915) &&
-	    !IS_CHERRYVIEW(gt->i915))
+	if (!HAS_FPGA_DBG_UNCLAIMED(gt->i915))
 		return 0;
 
 	/*

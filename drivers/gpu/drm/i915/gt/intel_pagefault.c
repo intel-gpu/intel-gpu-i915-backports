@@ -163,25 +163,15 @@ static void print_recoverable_fault(struct recoverable_page_fault_info *info,
 }
 
 static int migrate_to_lmem(struct drm_i915_gem_object *obj,
-			   enum intel_region_id lmem_id,
+			   enum intel_region_id lmem,
 			   struct i915_gem_ww_ctx *ww)
 {
 	int ret;
 
-	/* return if object has single placement or already in lmem_id */
-	if (!i915_gem_object_migratable(obj) ||
-	    obj->mm.region.mem->id == lmem_id)
-		return 0;
+	GEM_BUG_ON(!(obj->memory_mask & BIT(lmem)));
 
-	/*
-	 * FIXME: Move this to BUG_ON later when uapi enforces object alignment
-	 * to 64K for objects that can reside on both SMEM and LMEM.
-	 */
-	if (HAS_64K_PAGES(to_i915(obj->base.dev)) &&
-	    !IS_ALIGNED(obj->base.size, I915_GTT_PAGE_SIZE_64K)) {
-		DRM_DEBUG_DRIVER("Cannot migrate objects of different page sizes\n");
-		return -ENOTSUPP;
-	}
+	if (obj->mm.region.mem->id == lmem)
+		return 0;
 
 	i915_gem_object_release_mmap(obj);
 	GEM_BUG_ON(obj->mm.mapping);
@@ -192,7 +182,7 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	return i915_gem_object_migrate(obj, lmem_id, true);
+	return i915_gem_object_migrate(obj, lmem, true);
 }
 
 static inline bool access_is_atomic(struct recoverable_page_fault_info *info)
@@ -450,7 +440,6 @@ static bool has_debug_sip(struct intel_gt *gt)
 	return intel_gt_mcr_read_any(gt, TD_CTL);
 }
 
-
 static struct dma_fence *
 handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 {
@@ -458,7 +447,6 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct dma_fence *fence = NULL;
 	struct i915_address_space *vm;
-	enum intel_region_id lmem_id;
 	struct i915_gem_ww_ctx ww;
 	struct i915_vma *vma;
 	int err = 0;
@@ -514,7 +502,8 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 		}
 
 		if (vm->has_scratch || has_debug_sip(gt)) {
-			/* Map the out-of-bound access to scratch page.
+			/*
+			 * Map the out-of-bound access to scratch page.
 			 *
 			 * Out-of-bound virtual address range is not tracked,
 			 * so whenever we bind a new vma we do not know if it
@@ -527,11 +516,10 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 			 * Once user space fixes all the out-of-bound access, this
 			 * logic will be removed.
 			 */
-			gen12_init_fault_scratch(vm,
-						 info->page_addr,
-						 BIT(vm->scratch_order + PAGE_SHIFT),
-						 true);
-			return NULL;
+			vm->invalidate_tlb_scratch = true;
+			return ERR_PTR(pvc_ppgtt_fault(vm,
+						       info->page_addr, SZ_4K,
+						       true));
 		}
 
 		return ERR_PTR(-EFAULT);
@@ -541,53 +529,50 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 	if (err)
 		goto put_vma;
 
+	if (unlikely(test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))) {
+		err = -EFAULT;
+		goto put_vma;
+	}
+
 	/*
 	 * With lots of concurrency to the same unbound VMA, HW will generate a storm
 	 * of page faults. Test this upfront so that the redundant fault requests
 	 * return as early as possible.
 	 */
-	if (i915_vma_is_bound(vma, PIN_RESIDENT))
+	if (i915_vma_is_bound(vma, PIN_RESIDENT) && i915_gem_object_is_lmem(vma->obj))
 		goto put_vma;
 
-	i915_gem_ww_ctx_init(&ww, false);
+	for_i915_gem_ww(&ww, err, false) {
+		struct drm_i915_gem_object *obj = vma->obj;
+		enum intel_region_id lmem;
 
- retry:
-	err = i915_gem_object_lock(vma->obj, &ww);
-	if (err)
-		goto err_ww;
+		err = i915_gem_object_lock(obj, &ww);
+		if (err)
+			continue;
 
-	if (i915_vma_is_bound(vma, PIN_RESIDENT))
-		goto err_ww;
+		obj->flags |= I915_BO_FAULT_CLEAR | I915_BO_SYNC_HINT;
 
-	vma->obj->flags |= I915_BO_FAULT_CLEAR | I915_BO_SYNC_HINT;
+		lmem = get_lmem_region_id(obj, gt);
+		if (i915_gem_object_should_migrate_lmem(obj, lmem, access_is_atomic(info))) {
+			/*
+			 * Migration is best effort.
+			 * if we see -EDEADLK handle that with proper backoff. Otherwise
+			 * for scenarios like atomic operation, if migration fails,
+			 * gpu will fault again and we can retry.
+			 */
+			err = migrate_to_lmem(obj, lmem, &ww);
+			if (err == -EDEADLK)
+				continue;
+		}
 
-	lmem_id = get_lmem_region_id(vma->obj, gt);
-	if (i915_gem_object_should_migrate_lmem(vma->obj, lmem_id,
-						access_is_atomic(info))) {
-		err = migrate_to_lmem(vma->obj, lmem_id, &ww);
-		/*
-		 * Migration is best effort.
-		 * if we see -EDEADLK handle that with proper backoff. Otherwise
-		 * for scenarios like atomic operation, if migration fails,
-		 * gpu will fault again and we can retry.
-		 */
-		if (err == -EDEADLK)
-			goto err_ww;
-
+		err = 0;
+		if (!i915_vma_is_bound(vma, PIN_RESIDENT))
+			err = i915_vma_bind(vma);
 	}
-
-	err = i915_vma_bind(vma, &ww);
- err_ww:
-	if (err == -EDEADLK) {
-		err = i915_gem_ww_ctx_backoff(&ww);
-		if (!err)
-			goto retry;
-	}
-
-	fence = i915_active_fence_get_or_error(&vma->active.excl);
-	i915_gem_ww_ctx_fini(&ww);
+	local_inc(&gt->stats.pagefault_major);
 
 put_vma:
+	fence = i915_active_fence_get_or_error(&vma->active.excl);
 	i915_vma_put(vma);
 	__i915_vma_put(vma);
 
@@ -645,8 +630,30 @@ static int send_fault_reply(const struct fault_reply *f)
 		 FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
 			    f->info.pdata)),
 	};
+	unsigned int flags;
 
-	return intel_guc_send(f->guc, action, ARRAY_SIZE(action));
+	/*
+	 * Fire and forget secondary page fault replies, only
+	 * waiting for the completion response from the outermost
+	 * pagefaults. This lets us blast all the redundant
+	 * replies (each pagefault may generate a message/reply for
+	 * each EU thread), but still see the final result of
+	 * resolving the fault in HW.
+	 */
+	flags = 0;
+	if (test_bit(DMA_FENCE_WORK_IMM, &f->base.rq.fence.flags))
+		flags = MAKE_SEND_FLAGS(0);
+
+	do {
+		int ret;
+
+		ret = intel_guc_ct_send(&f->guc->ct, action, ARRAY_SIZE(action),
+					NULL, 0, flags);
+		if (!ret || !flags)
+			return ret;
+
+		flags = 0;
+	} while (1);
 }
 
 static void fault_complete(struct dma_fence_work *work)
@@ -655,13 +662,16 @@ static void fault_complete(struct dma_fence_work *work)
 	struct intel_engine_capture_vma *vma = NULL;
 	struct i915_page_compress *compress = NULL;
 	struct i915_gpu_coredump *dump = f->dump;
+	ktime_t start;
 
 	if (dump && dump->private) {
 		struct intel_gt_coredump *gt = dump->gt;
 
 		compress = i915_vma_capture_prepare(gt);
-		if (compress)
-			vma = intel_engine_coredump_add_request(gt->engine, dump->private, GFP_KERNEL, compress);
+		if (compress) {
+			vma = intel_engine_coredump_add_request(gt->engine, dump->private, vma, GFP_KERNEL, compress);
+			vma = intel_gt_coredump_add_other_engines(gt, dump->private, vma, GFP_KERNEL, compress);
+		}
 
 		i915_request_put(dump->private);
 	}
@@ -678,7 +688,12 @@ static void fault_complete(struct dma_fence_work *work)
 	 * first, then i915 can read properly the thread attentions (resolved
 	 * -attentions) that SIP turns on.
 	 */
-	GEM_WARN_ON(send_fault_reply(f));
+	if (GEM_WARN_ON(send_fault_reply(f)))
+		intel_gt_set_wedged(f->gt);
+
+	start = READ_ONCE(f->engine->pagefault_start);
+	if (atomic_dec_and_test(&f->engine->in_pagefault))
+		local64_add(ktime_get() - start, &f->gt->stats.pagefault_stall);
 
 	if (dump) {
 		struct intel_gt_coredump *gt = dump->gt;
@@ -708,10 +723,7 @@ static void fault_complete(struct dma_fence_work *work)
 	} else if (f->debugger) {
 		struct i915_address_space *vm = faulted_vm(f->guc, f->info.asid);
 		struct i915_debugger_pagefault *pf = f->debugger;
-		struct intel_gt *gt;
-		u64 start, length;
 		u32 td_ctl;
-		int i;
 
 		/* The active context [asid] is protected while servicing a fault */
 		if (GEM_WARN_ON(!vm))
@@ -728,18 +740,9 @@ static void fault_complete(struct dma_fence_work *work)
 		 * and this code causes a pagefault, then this can cause
 		 * a pagefault flood in the worst case.
 		 */
-		start = f->info.page_addr;
-		length = BIT(vm->scratch_order + PAGE_SHIFT);
+
 		/* clear the PTE of pagefault address */
-		vm->clear_range(vm, start, length);
-
-		/* invalidate tlb range for the pagefault address range*/
-		for_each_gt(gt, vm->i915, i) {
-			if (!atomic_read(&vm->active_contexts_gt[i]))
-				continue;
-
-			intel_gt_invalidate_tlb_range(gt, vm, start, length);
-		}
+		vm->clear_range(vm, f->info.page_addr, SZ_4K);
 		vm->invalidate_tlb_scratch = false;
 
 err_dbg_cleanup:
@@ -767,6 +770,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct fault_reply *reply;
 	struct dma_fence *fence;
+	bool imm = true;
 
 	if (unlikely(len != 4))
 		return -EPROTO;
@@ -786,6 +790,12 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	if (!reply->engine)
 		return -EINVAL;
 	GEM_BUG_ON(reply->engine->gt != gt);
+
+	local_inc(&gt->stats.pagefault_minor);
+	if (!atomic_fetch_inc(&reply->engine->in_pagefault)) {
+		reply->engine->pagefault_start = ktime_get();
+		imm = false;
+	}
 
 	reply->gt = gt;
 	reply->wakeref = intel_gt_pm_get(gt);
@@ -819,10 +829,11 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	} else if (fence) {
 		dma_fence_work_chain(&reply->base, fence);
 		dma_fence_put(fence);
+		imm = false;
 	}
 
 	i915_request_set_priority(&reply->base.rq, I915_PRIORITY_BARRIER);
-	dma_fence_work_commit_imm_if(&reply->base, !IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ASYNC_PAGEFAULTS));
+	dma_fence_work_commit_imm_if(&reply->base, imm && !reply->dump);
 
 	/* Serialise each pagefault with its reply? */
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ASYNC_PAGEFAULTS))
@@ -904,15 +915,16 @@ static int acc_migrate_to_lmem(struct intel_gt *gt, struct i915_vma *vma)
 	}
 
 	for_i915_gem_ww(&ww, err, false) {
-		enum intel_region_id lmem_id;
+		struct drm_i915_gem_object *obj = vma->obj;
+		enum intel_region_id lmem;
 
-		err = i915_gem_object_lock(vma->obj, &ww);
+		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
 
-		lmem_id = get_lmem_region_id(vma->obj, gt);
-		if (lmem_id)
-			err = migrate_to_lmem(vma->obj,lmem_id, &ww);
+		lmem = get_lmem_region_id(obj, gt);
+		if (lmem)
+			err = migrate_to_lmem(obj, lmem, &ww);
 	}
 
 	i915_gem_vm_bind_unlock(vma->vm);

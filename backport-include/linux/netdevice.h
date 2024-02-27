@@ -372,7 +372,7 @@ static inline int _bp_netdev_upper_dev_link(struct net_device *dev,
 	macro_dispatcher(netdev_upper_dev_link, __VA_ARGS__)(__VA_ARGS__)
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,0,0)
+#ifdef BPM_BACKPORT_DEV_OPEN_NOT_PRESENT
 static inline int backport_dev_open(struct net_device *dev, struct netlink_ext_ack *extack)
 {
 	return dev_open(dev);

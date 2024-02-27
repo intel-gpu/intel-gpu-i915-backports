@@ -69,8 +69,12 @@ static inline const char *hxg_type_to_string(u32 type)
 #define GUC_LAST_ENGINE_CLASS		GUC_GSC_OTHER_CLASS
 #define GUC_MAX_ENGINE_CLASSES		16
 #define GUC_MAX_INSTANCES_PER_CLASS	32
+#define GUC_MAX_OAG_COUNTERS		8
 
 #define GUC_DOORBELL_INVALID		256
+
+#define GUC_MAX_VF_COUNT		64
+#define GUC_BUSYNESS_VF_GLOBAL		~0U	/* Driver only value, not part of GuC API */
 
 /*
  * Work queue item header definitions
@@ -507,7 +511,7 @@ struct guc_ads {
 	u32 reserved[14];
 } __packed;
 
-/* Engine usage stats */
+/* Engine usage stats - v1 */
 struct guc_engine_usage_record {
 	u32 current_context_index;
 	u32 last_switch_in_stamp;
@@ -518,6 +522,31 @@ struct guc_engine_usage_record {
 
 struct guc_engine_usage {
 	struct guc_engine_usage_record engines[GUC_MAX_ENGINE_CLASSES][GUC_MAX_INSTANCES_PER_CLASS];
+} __packed;
+
+/* Engine usage stats - v2 */
+struct guc_engine_data {
+	u64 total_execution_ticks;
+	u64 reserved;
+} __packed;
+
+enum oag_busy_free_data_index {
+	OAG_RENDER_BUSY_COUNTER_INDEX = 0,
+	OAG_ANY_MEDIA_FF_BUSY_COUNTER_INDEX = 1,
+	OAG_BLT_BUSY_COUNTER_INDEX = 2,
+	OAG_RC0_ANY_ENGINE_BUSY_COUNTER_INDEX = 3,
+};
+
+struct guc_engine_observation_data {
+	struct guc_engine_data engine_data[GUC_MAX_ENGINE_CLASSES][GUC_MAX_INSTANCES_PER_CLASS];
+	u64 oag_busy_free_data[GUC_MAX_OAG_COUNTERS];
+	u64 total_active_ticks;
+	u64 gt_timestamp;
+	u64 reserved1;
+} __packed;
+
+struct guc_function_observation_data {
+	struct guc_engine_observation_data function_data[GUC_MAX_VF_COUNT];
 } __packed;
 
 /* GuC logging structures */

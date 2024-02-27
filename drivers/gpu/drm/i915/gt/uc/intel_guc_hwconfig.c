@@ -171,11 +171,13 @@ static int intel_hwconf_apply_overrides(struct intel_hwconfig *hwconfig)
 static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
 					  u32 *size)
 {
-	if (IS_XEHPSDV(i915)) {
-		*size = ARRAY_SIZE(hwinfo_xehpsdv) * sizeof(u32);
-		return hwinfo_xehpsdv;
+#ifndef BPM_ADLP_A0_PART_DISABLE
+	if (IS_ALDERLAKE_P(i915)) {
+		*size = ARRAY_SIZE(hwinfo_adlp) * sizeof(u32);
+		return hwinfo_adlp;
 	}
-
+#endif
+	
 	return NULL;
 }
 

@@ -373,18 +373,18 @@ static inline void skb_put_u8(struct sk_buff *skb, u8 val)
 }
 #endif
 
-#if LINUX_VERSION_IS_LESS(4,20,0)
+#ifdef BPM_SKB_PEEK_PRESENT
 static inline struct sk_buff *__skb_peek(const struct sk_buff_head *list_)
 {
 	return list_->next;
 }
+#endif
 
-#if !LINUX_VERSION_IN_RANGE(4,19,10, 4,20,0)
+#ifdef BPM_SKB_MARK_NOT_ON_LIST_PRESENT
 static inline void skb_mark_not_on_list(struct sk_buff *skb)
 {
 	skb->next = NULL;
 }
-#endif /* 4.19.10 <= x < 4.20 */
 #endif
 
 #if LINUX_VERSION_IS_LESS(4,11,0)
@@ -395,7 +395,7 @@ static inline int skb_mac_offset(const struct sk_buff *skb)
 }
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,4,0)
+#ifdef BPM_SKB_FRAG_OFF_PRESENT
 /**
  * skb_frag_off() - Returns the offset of a skb fragment
  * @frag: the paged fragment
@@ -405,7 +405,9 @@ static inline unsigned int skb_frag_off(const skb_frag_t *frag)
 {
 	return frag->page_offset;
 }
+#endif
 
+#ifdef BPM_NF_RESET_CT_PRESENT
 #define nf_reset_ct LINUX_I915_BACKPORT(nf_reset_ct)
 static inline void nf_reset_ct(struct sk_buff *skb)
 {

@@ -96,12 +96,6 @@ static int create_vcs_context(struct intel_pxp *pxp)
 	return 0;
 }
 
-static void destroy_vcs_context(struct intel_pxp *pxp)
-{
-	if (pxp->ce)
-		intel_engine_destroy_pinned_context(fetch_and_zero(&pxp->ce));
-}
-
 static void pxp_init_full(struct intel_pxp *pxp)
 {
 	struct intel_gt *gt = pxp_to_gt(pxp);
@@ -123,14 +117,9 @@ static void pxp_init_full(struct intel_pxp *pxp)
 
 	ret = intel_pxp_tee_component_init(pxp);
 	if (ret)
-		goto out_context;
+		return;
 
 	drm_info(&gt->i915->drm, "Protected Xe Path (PXP) protected content support initialized\n");
-
-	return;
-
-out_context:
-	destroy_vcs_context(pxp);
 }
 
 void intel_pxp_init(struct intel_pxp *pxp)
@@ -156,8 +145,6 @@ void intel_pxp_fini(struct intel_pxp *pxp)
 	pxp->arb_is_valid = false;
 
 	intel_pxp_tee_component_fini(pxp);
-
-	destroy_vcs_context(pxp);
 }
 
 void intel_pxp_mark_termination_in_progress(struct intel_pxp *pxp)

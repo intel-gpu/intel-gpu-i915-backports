@@ -45,8 +45,6 @@ int ivb_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
 			const struct intel_plane_state *plane_state);
 int hsw_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
 			const struct intel_plane_state *plane_state);
-int vlv_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
-			const struct intel_plane_state *plane_state);
 #else
 static inline int intel_sprite_set_colorkey_ioctl(struct drm_device *dev, void *data,
 				    struct drm_file *file_priv) { return 0; }

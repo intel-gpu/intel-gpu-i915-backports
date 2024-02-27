@@ -19,8 +19,6 @@
 static struct i915_vma *
 intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
 		     const struct i915_ggtt_view *view,
-		     bool uses_fence,
-		     unsigned long *out_flags,
 		     struct i915_address_space *vm)
 {
 	struct drm_device *dev = fb->dev;
@@ -70,10 +68,7 @@ err:
 
 struct i915_vma *
 intel_pin_and_fence_fb_obj(struct drm_framebuffer *fb,
-			   bool phys_cursor,
-			   const struct i915_ggtt_view *view,
-			   bool uses_fence,
-			   unsigned long *out_flags)
+			   const struct i915_ggtt_view *view)
 {
 	struct drm_device *dev = fb->dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
@@ -89,10 +84,7 @@ intel_pin_and_fence_fb_obj(struct drm_framebuffer *fb,
 	if (drm_WARN_ON(dev, !i915_gem_object_is_framebuffer(obj)))
 		return ERR_PTR(-EINVAL);
 
-	if (phys_cursor)
-		alignment = intel_cursor_alignment(dev_priv);
-	else
-		alignment = intel_surf_alignment(fb, 0);
+	alignment = intel_surf_alignment(fb, 0);
 	if (drm_WARN_ON(dev, alignment && !is_power_of_2(alignment)))
 		return ERR_PTR(-EINVAL);
 
@@ -124,14 +116,10 @@ intel_pin_and_fence_fb_obj(struct drm_framebuffer *fb,
 	 * happy to scanout from anywhere within its global aperture.
 	 */
 	pinctl = 0;
-	if (HAS_GMCH(dev_priv))
-		pinctl |= PIN_MAPPABLE;
 
 	i915_gem_ww_ctx_init(&ww, true);
 retry:
 	ret = i915_gem_object_lock(obj, &ww);
-	if (!ret && phys_cursor)
-		ret = i915_gem_object_attach_phys(obj, alignment);
 	if (!ret)
 		ret = i915_gem_object_pin_pages(obj);
 	if (ret)
@@ -145,35 +133,6 @@ retry:
 			ret = PTR_ERR(vma);
 			goto err_unpin;
 		}
-	}
-
-	if (uses_fence && i915_vma_is_map_and_fenceable(vma)) {
-		/*
-		 * Install a fence for tiled scan-out. Pre-i965 always needs a
-		 * fence, whereas 965+ only requires a fence if using
-		 * framebuffer compression.  For simplicity, we always, when
-		 * possible, install a fence as the cost is not that onerous.
-		 *
-		 * If we fail to fence the tiled scanout, then either the
-		 * modeset will reject the change (which is highly unlikely as
-		 * the affected systems, all but one, do not have unmappable
-		 * space) or we will not be able to enable full powersaving
-		 * techniques (also likely not to apply due to various limits
-		 * FBC and the like impose on the size of the buffer, which
-		 * presumably we violated anyway with this unmappable buffer).
-		 * Anyway, it is presumably better to stumble onwards with
-		 * something and try to run the system in a "less than optimal"
-		 * mode that matches the user configuration.
-		 */
-		ret = i915_vma_pin_fence(vma);
-		if (ret != 0 && DISPLAY_VER(dev_priv) < 4) {
-			i915_vma_unpin(vma);
-			goto err_unpin;
-		}
-		ret = 0;
-
-		if (vma->fence)
-			*out_flags |= PLANE_HAS_FENCE;
 	}
 
 	i915_vma_get(vma);
@@ -195,29 +154,19 @@ err:
 	return vma;
 }
 
-void intel_unpin_fb_vma(struct i915_vma *vma, unsigned long flags)
+void intel_unpin_fb_vma(struct i915_vma *vma)
 {
-	if (flags & PLANE_HAS_FENCE)
-		i915_vma_unpin_fence(vma);
 	i915_vma_unpin(vma);
 	i915_vma_put(vma);
 }
 
 int intel_plane_pin_fb(struct intel_plane_state *plane_state)
 {
-	struct intel_plane *plane = to_intel_plane(plane_state->uapi.plane);
-	struct drm_i915_private *dev_priv = to_i915(plane->base.dev);
 	struct drm_framebuffer *fb = plane_state->hw.fb;
 	struct i915_vma *vma;
-	bool phys_cursor =
-		plane->id == PLANE_CURSOR &&
-		INTEL_INFO(dev_priv)->display.cursor_needs_physical;
 
 	if (!intel_fb_uses_dpt(fb)) {
-		vma = intel_pin_and_fence_fb_obj(fb, phys_cursor,
-						 &plane_state->view.gtt,
-						 intel_plane_uses_fence(plane_state),
-						 &plane_state->flags);
+		vma = intel_pin_and_fence_fb_obj(fb, &plane_state->view.gtt);
 		if (IS_ERR(vma))
 			return PTR_ERR(vma);
 
@@ -231,8 +180,9 @@ int intel_plane_pin_fb(struct intel_plane_state *plane_state)
 
 		plane_state->ggtt_vma = vma;
 
-		vma = intel_pin_fb_obj_dpt(fb, &plane_state->view.gtt, false,
-					   &plane_state->flags, intel_fb->dpt_vm);
+		vma = intel_pin_fb_obj_dpt(fb,
+					   &plane_state->view.gtt,
+					   intel_fb->dpt_vm);
 		if (IS_ERR(vma)) {
 			intel_dpt_unpin(intel_fb->dpt_vm);
 			plane_state->ggtt_vma = NULL;
@@ -280,13 +230,13 @@ void intel_plane_unpin_fb(struct intel_plane_state *old_plane_state)
 	if (!intel_fb_uses_dpt(fb)) {
 		vma = fetch_and_zero(&old_plane_state->ggtt_vma);
 		if (vma)
-			intel_unpin_fb_vma(vma, old_plane_state->flags);
+			intel_unpin_fb_vma(vma);
 	} else {
 		struct intel_framebuffer *intel_fb = to_intel_framebuffer(fb);
 
 		vma = fetch_and_zero(&old_plane_state->dpt_vma);
 		if (vma)
-			intel_unpin_fb_vma(vma, old_plane_state->flags);
+			intel_unpin_fb_vma(vma);
 
 		vma = fetch_and_zero(&old_plane_state->ggtt_vma);
 		if (vma)

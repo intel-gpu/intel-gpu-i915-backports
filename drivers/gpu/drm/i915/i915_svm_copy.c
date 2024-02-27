@@ -39,7 +39,6 @@ intel_emit_svm_copy_blt(struct intel_context *ce,
 			struct i915_gem_ww_ctx *ww,
 			u64 src_start, u64 dst_start, u64 buff_size)
 {
-	struct drm_i915_private *i915 = ce->vm->i915;
 	const u32 block_size = SZ_8M; /* ~1ms at 8GiB/s preemption delay */
 	struct intel_gt_buffer_pool_node *pool;
 	struct i915_vma *batch;
@@ -49,9 +48,6 @@ intel_emit_svm_copy_blt(struct intel_context *ce,
 
 	GEM_BUG_ON(intel_engine_is_virtual(ce->engine));
 	intel_engine_pm_get(ce->engine);
-
-	if (GRAPHICS_VER(i915) < 8)
-		return ERR_PTR(-ENOTSUPP);
 
 	count = div_u64(round_up(buff_size, block_size), block_size);
 	size = (1 + 11 * count) * sizeof(u32);
@@ -90,30 +86,16 @@ intel_emit_svm_copy_blt(struct intel_context *ce,
 		size = min_t(u64, rem, block_size);
 		GEM_BUG_ON(size >> PAGE_SHIFT > S16_MAX);
 
-		if (GRAPHICS_VER(i915) >= 9) {
-			*cmd++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
-			*cmd++ = BLT_DEPTH_32 | PAGE_SIZE;
-			*cmd++ = 0;
-			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
-			*cmd++ = lower_32_bits(dst_start);
-			*cmd++ = upper_32_bits(dst_start);
-			*cmd++ = 0;
-			*cmd++ = PAGE_SIZE;
-			*cmd++ = lower_32_bits(src_start);
-			*cmd++ = upper_32_bits(src_start);
-		} else if (GRAPHICS_VER(i915) >= 8) {
-			*cmd++ = XY_SRC_COPY_BLT_CMD |
-				 BLT_WRITE_RGBA | (10 - 2);
-			*cmd++ = BLT_DEPTH_32 | BLT_ROP_SRC_COPY | PAGE_SIZE;
-			*cmd++ = 0;
-			*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
-			*cmd++ = lower_32_bits(dst_start);
-			*cmd++ = upper_32_bits(dst_start);
-			*cmd++ = 0;
-			*cmd++ = PAGE_SIZE;
-			*cmd++ = lower_32_bits(src_start);
-			*cmd++ = upper_32_bits(src_start);
-		}
+		*cmd++ = GEN9_XY_FAST_COPY_BLT_CMD | (10 - 2);
+		*cmd++ = BLT_DEPTH_32 | PAGE_SIZE;
+		*cmd++ = 0;
+		*cmd++ = size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
+		*cmd++ = lower_32_bits(dst_start);
+		*cmd++ = upper_32_bits(dst_start);
+		*cmd++ = 0;
+		*cmd++ = PAGE_SIZE;
+		*cmd++ = lower_32_bits(src_start);
+		*cmd++ = upper_32_bits(src_start);
 
 		/* Allow ourselves to be preempted in between blocks */
 		*cmd++ = MI_ARB_CHECK;

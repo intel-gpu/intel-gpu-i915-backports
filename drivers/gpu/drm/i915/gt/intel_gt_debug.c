@@ -51,7 +51,6 @@ static int intel_gt_for_each_compute_slice_subslice_fw(struct intel_gt *gt,
  * intel_gt_for_each_compute_slice_subslice - Walk slices and sublices with MCR
  *
  * @gt: pointer to struct intel_gt
- * @write: if writes are going to be done
  * @fn: callback function for each slice/subslice with flag if present
  * @data: arbitrary data to be used by the callback
  *

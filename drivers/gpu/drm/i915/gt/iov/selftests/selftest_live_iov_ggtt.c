@@ -143,14 +143,14 @@ pte_gpa_not_modifiable(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_a
 static bool
 pte_valid_modifiable(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_addr, gen8_pte_t *out)
 {
-	return pte_is_value_modifiable(iov, pte_addr, ggtt_addr, GEN6_PTE_VALID, out);
+	return pte_is_value_modifiable(iov, pte_addr, ggtt_addr, GEN8_PAGE_PRESENT, out);
 }
 
 static bool
 pte_valid_not_modifiable(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_addr,
 			 gen8_pte_t *out)
 {
-	const u64 mask = GEN6_PTE_VALID;
+	const u64 mask = GEN8_PAGE_PRESENT;
 	bool ret = false;
 	gen8_pte_t original_pte;
 	gen8_pte_t read_pte;
@@ -262,7 +262,7 @@ static bool
 pte_valid_not_modifiable_check_via_pf(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_addr,
 				      gen8_pte_t *out)
 {
-	const u64 mask = GEN6_PTE_VALID;
+	const u64 mask = GEN8_PAGE_PRESENT;
 
 	return vf_pte_is_value_not_modifiable(iov, pte_addr, ggtt_addr, FIELD_MAX(mask),
 					      __bf_shf(mask), out);
@@ -272,7 +272,7 @@ static bool
 pte_valid_readable_check_via_pf(struct intel_iov *iov, void __iomem *pte_addr, u64 ggtt_addr,
 				gen8_pte_t *out)
 {
-	const u64 mask = GEN6_PTE_VALID;
+	const u64 mask = GEN8_PAGE_PRESENT;
 	int err;
 	gen8_pte_t pte;
 	gen8_pte_t new_pte;
@@ -316,8 +316,7 @@ pte_valid_readable_check_via_pf(struct intel_iov *iov, void __iomem *pte_addr, u
 
 static bool wa_1808546409(struct intel_iov *iov)
 {
-	return !IS_TIGERLAKE(iov_to_i915(iov)) &&
-	       !IS_XEHPSDV(iov_to_i915(iov));
+	return !IS_TIGERLAKE(iov_to_i915(iov));
 }
 
 static bool has_lmem(struct intel_iov *iov)

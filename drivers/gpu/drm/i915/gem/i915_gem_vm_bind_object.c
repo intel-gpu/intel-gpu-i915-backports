@@ -15,6 +15,9 @@
 #include "i915_sw_fence_work.h"
 #include "i915_user_extensions.h"
 #include "i915_debugger.h"
+#ifdef BPM_KTHREAD_HEADER_NOT_PRESENT
+#include <linux/mmu_context.h>
+#endif
 
 struct user_fence {
 	struct mm_struct *mm;
@@ -49,20 +52,25 @@ static int ufence_work(struct dma_fence_work *work)
 	struct vm_bind_user_fence *vb =
 		container_of(work, struct vm_bind_user_fence, base);
 	struct user_fence *ufence = &vb->user_fence;
-	struct mm_struct *mm;
+	struct mm_struct *mm = ufence->mm;
 	int ret = -EFAULT;
 
-	mm = ufence->mm;
-	if (!mm)
-		return 0;
-
 	if (mmget_not_zero(mm)) {
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
+               use_mm(mm);
+#else
 		kthread_use_mm(mm);
+#endif
 		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
+			wmb();
 			wake_up_all(vb->wq);
 			ret = 0;
 		}
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
+		unuse_mm(mm);
+#else
 		kthread_unuse_mm(mm);
+#endif
 		mmput(mm);
 	}
 
@@ -74,8 +82,7 @@ static void ufence_release(struct dma_fence_work *work)
 	struct user_fence *ufence =
 		&container_of(work, struct vm_bind_user_fence, base)->user_fence;
 
-	if (ufence->mm)
-		mmdrop(ufence->mm);
+	mmdrop(ufence->mm);
 }
 
 static const struct dma_fence_work_ops ufence_ops = {
@@ -86,9 +93,15 @@ static const struct dma_fence_work_ops ufence_ops = {
 	.rcu_release = true,
 };
 
+static const struct dma_fence_work_ops ufence_nops = {
+	.name = "ufence",
+	.no_error_propagation = true,
+};
+
 static struct i915_sw_fence *
 ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 {
+	const struct dma_fence_work_ops *ops = &ufence_nops;
 	struct vm_bind_user_fence *vb;
 	struct dma_fence *prev;
 
@@ -96,12 +109,13 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 	if (!vb)
 		return NULL;
 
-	dma_fence_work_init(&vb->base, &ufence_ops, vm->i915->sched);
 	if (arg->bind_fence.mm) {
 		vb->user_fence = arg->bind_fence;
 		mmgrab(vb->user_fence.mm);
+		ops = &ufence_ops;
 	}
 	vb->wq = &vm->i915->user_fence_wq;
+	dma_fence_work_init(&vb->base, ops, vm->i915->sched);
 
 	i915_sw_fence_await(&vb->base.rq.submit); /* signaled by vma_bind */
 
@@ -109,11 +123,16 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 	prev = __i915_active_fence_fetch_set(&vm->user_fence,
 					     &vb->base.rq.fence);
 	if (prev) {
-		dma_fence_work_chain(&vb->base, prev);
+		if (arg->bind_fence.mm)
+			dma_fence_work_chain(&vb->base, prev);
+		else
+			i915_sw_fence_await_sw_fence(&vb->base.rq.submit,
+						     &to_request(prev)->submit,
+						     &vb->base.rq.submitq);
 		dma_fence_put(prev);
 	}
 
-	dma_fence_work_commit(&vb->base);
+	dma_fence_work_commit_imm_if(&vb->base, !prev);
 	return &vb->base.rq.submit;
 }
 
@@ -250,7 +269,6 @@ static void metadata_list_free(struct list_head *list)
 	struct i915_vma_metadata *metadata, *next;
 
 	list_for_each_entry_safe(metadata, next, list, vma_link) {
-		list_del_init(&metadata->vma_link);
 		atomic_dec(&metadata->uuid->bind_count);
 		i915_uuid_put(metadata->uuid);
 		kfree(metadata);
@@ -262,10 +280,7 @@ void i915_vma_metadata_free(struct i915_vma *vma)
 	if (list_empty(&vma->metadata_list))
 		return;
 
-	spin_lock(&vma->metadata_lock);
 	metadata_list_free(&vma->metadata_list);
-	INIT_LIST_HEAD(&vma->metadata_list);
-	spin_unlock(&vma->metadata_lock);
 }
 
 struct i915_vma *
@@ -282,34 +297,12 @@ i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va)
 	return vma;
 }
 
-static void i915_vma_clear_adjacents(struct i915_vma *vma)
-{
-	/*
-	 * The head vma holds a reference on adjacent vmas, thus
-	 * release references here and unlink adjacency list.
-	 */
-	if (vma->adjacent_start == vma) {
-		struct i915_vma *adj_vma, *next;
-
-		adj_vma = vma->adjacent_next;
-		while (adj_vma) {
-			next = adj_vma->adjacent_next;
-			adj_vma->adjacent_next = NULL;
-			__i915_vma_put(adj_vma);
-			adj_vma = next;
-		}
-		vma->adjacent_next = NULL;
-	}
-	vma->adjacent_start = NULL;
-}
-
 static void i915_gem_vm_bind_unpublish(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
 
 	mutex_lock_nested(&vm->mutex, SINGLE_DEPTH_NESTING);
 	i915_vma_unpublish(vma);
-	i915_vma_clear_adjacents(vma);
 	mutex_unlock(&vm->mutex);
 }
 
@@ -383,6 +376,7 @@ static const struct dma_fence_work_ops unbind_ops = {
 	.name = "unbind",
 	.work = unbind,
 	.release = release,
+	.no_error_propagation = true,
 };
 
 static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
@@ -395,7 +389,7 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 	if (!w)
 		return NULL;
 
-	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->i915->sched);
+	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->gt->sched);
 	w->vma = __i915_vma_get(vma);
 	INIT_LIST_HEAD(&w->unbind_link);
 	list_add_tail(&w->unbind_link, unbind_head);
@@ -403,6 +397,7 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 	prev = i915_active_set_exclusive(&vma->active, &w->base.rq.fence);
 	if (!IS_ERR_OR_NULL(prev)) {
 		dma_fence_work_chain(&w->base, prev);
+		WRITE_ONCE(prev->error, -EINTR);
 		dma_fence_put(prev);
 	}
 
@@ -513,7 +508,7 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 	if (va->handle)
 		return -EINVAL;
 
-	i915_debugger_wait_on_discovery(vm->i915, vm->client);
+	i915_debugger_wait_on_discovery(vm->client);
 
 	va->start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
 					    va->start);
@@ -582,7 +577,7 @@ out_unlock:
 	i915_gem_vm_bind_unlock(vm);
 	list_for_each_entry_safe(uw, uwn, &unbind_head, unbind_link) {
 		i915_sw_fence_set_error_once(&uw->base.rq.submit, ret);
-		dma_fence_work_commit(&uw->base);
+		dma_fence_work_commit_imm(&uw->base);
 	}
 
 	return ret;
@@ -686,6 +681,8 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 	 */
 	if (i915_gem_object_has_segments(obj)) {
 		unsigned long offset, remaining, start, vma_size;
+		struct i915_vma *first_vma;
+		struct i915_vma **prev = NULL;
 		struct rb_node *node;
 
 		start = va->start;
@@ -727,6 +724,23 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 				vma->bind_fence = bind_fence;
 			}
 			list_add_tail(&vma->vm_bind_link, vma_head);
+
+			/*
+			 * Store first vma to prevent partial unbinds and set adjacency
+			 * list fields for use in unbind and in sending EU debugger
+			 * events. We set here prior to vma_bind_insert() as that sends
+			 * the vma create event.  Additionally, acquire reference on
+			 * vma->adjacent_next so adjacency list is valid for vma destroy
+			 * event during unbind.
+			 */
+			if (prev)
+				*prev = vma;
+			else
+				first_vma = vma;
+			vma->adjacent_start = first_vma;
+			vma->adjacent_next = NULL;
+			vma->adjacent_size = va->length;
+			prev = &vma->adjacent_next;
 
 			remaining -= vma_size;
 			start += vma_size;
@@ -859,7 +873,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	if (ret)
 		goto put_obj;
 
-	i915_debugger_wait_on_discovery(vm->i915, vm->client);
+	i915_debugger_wait_on_discovery(vm->client);
 
 	ret = i915_gem_vm_bind_lock_interruptible(vm);
 	if (ret)
@@ -923,30 +937,11 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		/* apply pat_index from parent */
 		vma->obj->pat_index = obj->pat_index;
 
-		/*
-		 * Store first vma to prevent partial unbinds and set adjacency
-		 * list fields for use in unbind and in sending EU debugger
-		 * events. We set here prior to vma_bind_insert() as that sends
-		 * the vma create event.  Additionally, acquire reference on
-		 * vma->adjacent_next so adjacency list is valid for vma destroy
-		 * event during unbind.
-		 */
-		if (i915_gem_object_is_segment(vma->obj)) {
-			vma->adjacent_start = first_vma;
-			vma->adjacent_next = NULL;
-			if (!list_is_last(&vma->vm_bind_link, &vma_head)) {
-				vma->adjacent_next = vma_next;
-				__i915_vma_get(vma_next);
-			}
-		}
-
 		ret = vma_bind_insert(vma, pin_flags);
 		if (ret) {
 			/* on error, make sure vma is not in adjacency list */
 			if (vma_prev)
 				vma_prev->adjacent_next = NULL;
-			if (vma->adjacent_next)
-				__i915_vma_put(vma->adjacent_next);
 			vma->adjacent_start = NULL;
 			vma->adjacent_next = NULL;
 			break;

@@ -36,7 +36,7 @@ struct rb_root_cached {
 #endif
 #define RB_ROOT_CACHED (struct rb_root_cached) { {NULL, }, NULL }
 
-#ifdef RB_FIND_NOT_PRESENT
+#ifdef BPM_RB_FIND_NOT_PRESENT
 #define rb_find_add LINUX_I915_BACKPORT(rb_find_add)
 /**
  * rb_find_add() - find equivalent @node in @tree, or add @node
@@ -101,5 +101,5 @@ rb_find(const void *key, const struct rb_root *tree,
         return NULL;
 }
 
-#endif /* RB_FIND_NOT_PRESENT */
+#endif /* BPM_RB_FIND_NOT_PRESENT */
 #endif

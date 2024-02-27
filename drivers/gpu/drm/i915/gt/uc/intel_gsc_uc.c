@@ -82,9 +82,6 @@ void intel_gsc_uc_fini(struct intel_gsc_uc *gsc)
 	if (!intel_uc_fw_is_loadable(&gsc->fw))
 		return;
 
-	if (gsc->ce)
-		intel_engine_destroy_pinned_context(fetch_and_zero(&gsc->ce));
-
 	i915_vma_unpin_and_release(&gsc->local, 0);
 	intel_uc_fw_fini(&gsc->fw);
 }

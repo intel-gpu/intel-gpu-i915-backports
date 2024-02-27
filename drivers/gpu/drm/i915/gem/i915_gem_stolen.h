@@ -26,9 +26,6 @@ struct intel_memory_region *
 i915_gem_stolen_setup(struct intel_gt *gt, u16 type, u16 instance);
 
 struct drm_i915_gem_object *
-i915_gem_object_create_stolen(struct drm_i915_private *dev_priv,
-			      resource_size_t size);
-struct drm_i915_gem_object *
 i915_gem_object_create_stolen_for_preallocated(struct drm_i915_private *dev_priv,
 					       resource_size_t stolen_offset,
 					       resource_size_t size);

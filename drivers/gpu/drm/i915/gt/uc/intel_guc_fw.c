@@ -43,20 +43,7 @@ static void guc_prepare_xfer(struct intel_gt *gt)
 		intel_uncore_rmw(uncore, GUC_SHIM_CONTROL2, 0, ENABLE_EIP);
 #endif
 
-	if (IS_GEN9_LP(uncore->i915))
-		intel_uncore_write(uncore, GEN9LP_GT_PM_CONFIG, GT_DOORBELL_ENABLE);
-	else
-		intel_uncore_write(uncore, GEN9_GT_PM_CONFIG, GT_DOORBELL_ENABLE);
-
-	if (GRAPHICS_VER(uncore->i915) == 9) {
-		/* DOP Clock Gating Enable for GuC clocks */
-		intel_gt_mcr_multicast_write(gt, GEN8_MISCCPCTL,
-					     GEN8_DOP_CLOCK_GATE_GUC_ENABLE |
-					     intel_gt_mcr_read_any(gt, GEN8_MISCCPCTL));
-
-		/* allows for 5us (in 10ns units) before GT can go to RC6 */
-		intel_uncore_write(uncore, GUC_ARAT_C6DIS, 0x1FF);
-	}
+	intel_uncore_write(uncore, GEN9_GT_PM_CONFIG, GT_DOORBELL_ENABLE);
 }
 
 static int guc_xfer_rsa_mmio(struct intel_uc_fw *guc_fw,

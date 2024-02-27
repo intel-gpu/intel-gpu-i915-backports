@@ -231,43 +231,10 @@ static ssize_t rc6_residency_ms_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6_residency);
 }
 
-static ssize_t rc6p_residency_ms_show(struct device *dev,
-				      struct device_attribute *attr,
-				      char *buff)
-{
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	u32 rc6p_residency = get_residency(gt, GEN6_GT_GFX_RC6p);
-
-	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6p_residency);
-}
-
-static ssize_t rc6pp_residency_ms_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buff)
-{
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	u32 rc6pp_residency = get_residency(gt, GEN6_GT_GFX_RC6pp);
-
-	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6pp_residency);
-}
-
-static ssize_t media_rc6_residency_ms_show(struct device *dev,
-					   struct device_attribute *attr,
-					   char *buff)
-{
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	u32 rc6_residency = get_residency(gt, VLV_GT_MEDIA_RC6);
-
-	return scnprintf(buff, PAGE_SIZE, "%u\n", rc6_residency);
-}
-
 /* sysfs dual-location rc6 files under directories <dev>/power/ and <dev>/gt/gt<i>/ */
 
 static I915_DEVICE_ATTR_RW(rc6_enable, 0644, rc6_enable_show, rc6_enable_store);
 static I915_DEVICE_ATTR_RO(rc6_residency_ms, rc6_residency_ms_show);
-static I915_DEVICE_ATTR_RO(rc6p_residency_ms, rc6p_residency_ms_show);
-static I915_DEVICE_ATTR_RO(rc6pp_residency_ms, rc6pp_residency_ms_show);
-static I915_DEVICE_ATTR_RO(media_rc6_residency_ms, media_rc6_residency_ms_show);
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t gt_rc6_enable_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -294,30 +261,6 @@ static ssize_t gt_rc6_residency_ms_show(struct kobject *kobj, struct kobj_attrib
 	return rc6_residency_ms_show(dev, (struct device_attribute *)attr, buff);
 }
 
-static ssize_t gt_rc6p_residency_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
-				      char *buff)
-{
-	struct device *dev = kobj_to_dev(kobj);
-
-	return rc6p_residency_ms_show(dev, (struct device_attribute *)attr, buff);
-}
-
-static ssize_t gt_rc6pp_residency_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
-				       char *buff)
-{
-	struct device *dev = kobj_to_dev(kobj);
-
-	return rc6pp_residency_ms_show(dev, (struct device_attribute *)attr, buff);
-}
-
-static ssize_t gt_media_rc6_residency_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
-					   char *buff)
-{
-	struct device *dev = kobj_to_dev(kobj);
-
-	return media_rc6_residency_ms_show(dev, (struct device_attribute *)attr, buff);
-}
-
 #define INTEL_KOBJ_GT_ATTR(_name, __mode, __show, __store, i915_show_kobj, i915_store_kobj) \
 	static struct i915_ext_attr_kobj dev_attr_gt_##_name =    \
 	{__ATTR(_name, __mode, __show, __store), i915_show_kobj, i915_store_kobj};    \
@@ -332,9 +275,6 @@ static ssize_t gt_media_rc6_residency_ms_show(struct kobject *kobj, struct kobj_
 
 INTEL_KOBJ_GT_ATTR_RW(rc6_enable);
 INTEL_KOBJ_GT_ATTR_RO(rc6_residency_ms);
-INTEL_KOBJ_GT_ATTR_RO(rc6p_residency_ms);
-INTEL_KOBJ_GT_ATTR_RO(rc6pp_residency_ms);
-INTEL_KOBJ_GT_ATTR_RO(media_rc6_residency_ms);
 
 static struct attribute *gt_rc6_attrs[] = {
 	&dev_attr_gt_rc6_enable.attr.attr,
@@ -342,32 +282,11 @@ static struct attribute *gt_rc6_attrs[] = {
 	NULL
 };
 
-static struct attribute *gt_rc6p_attrs[] = {
-	&dev_attr_gt_rc6p_residency_ms.attr.attr,
-	&dev_attr_gt_rc6pp_residency_ms.attr.attr,
-	NULL
-};
-
-static struct attribute *gt_media_rc6_attrs[] = {
-	&dev_attr_gt_media_rc6_residency_ms.attr.attr,
-	NULL
-};
 #endif /* BPM_DEVICE_ATTR_NOT_PRESENT */
 
 static struct attribute *rc6_attrs[] = {
 	&dev_attr_rc6_enable.attr.attr,
 	&dev_attr_rc6_residency_ms.attr.attr,
-	NULL
-};
-
-static struct attribute *rc6p_attrs[] = {
-	&dev_attr_rc6p_residency_ms.attr.attr,
-	&dev_attr_rc6pp_residency_ms.attr.attr,
-	NULL
-};
-
-static struct attribute *media_rc6_attrs[] = {
-	&dev_attr_media_rc6_residency_ms.attr.attr,
 	NULL
 };
 
@@ -377,26 +296,6 @@ static const struct attribute_group rc6_attr_group[] = {
 	{ .attrs = gt_rc6_attrs }
 #else
 	{ .attrs = rc6_attrs }
-#endif
-};
-
-static const struct attribute_group rc6p_attr_group[] = {
-	{ .name = power_group_name, .attrs = rc6p_attrs },
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	{ .attrs = gt_rc6p_attrs }
-#else
-	{ .attrs = rc6p_attrs }
-#endif
-
-};
-
-static const struct attribute_group media_rc6_attr_group[] = {
-	{ .name = power_group_name, .attrs = media_rc6_attrs },
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	{ .attrs = gt_media_rc6_attrs }
-#else
-	{ .attrs = media_rc6_attrs }
-
 #endif
 };
 
@@ -430,45 +329,16 @@ static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
 {
 	int ret;
 
-	if (!HAS_RC6(gt->i915))
-		return;
-
 	ret = __intel_gt_sysfs_create_group(kobj, rc6_attr_group);
 	if (ret)
 		drm_err(&gt->i915->drm,
 			"failed to create gt%u RC6 sysfs files\n", gt->info.id);
-
-	if (HAS_RC6p(gt->i915)) {
-		ret = __intel_gt_sysfs_create_group(kobj, rc6p_attr_group);
-		if (ret)
-			drm_err(&gt->i915->drm,
-				"failed to create gt%u RC6p sysfs files\n",
-				gt->info.id);
-	}
-
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915)) {
-		ret = __intel_gt_sysfs_create_group(kobj, media_rc6_attr_group);
-		if (ret)
-			drm_err(&gt->i915->drm,
-				"failed to create media %u RC6 sysfs files\n",
-				gt->info.id);
-	}
 }
 #else
 static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
 {
 }
 #endif /* CONFIG_PM */
-
-static ssize_t vlv_rpe_freq_mhz_show(struct device *dev,
-				     struct device_attribute *attr, char *buff)
-{
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	struct intel_rps *rps = &gt->rps;
-
-	return scnprintf(buff, PAGE_SIZE, "%d\n",
-			intel_gpu_freq(rps, rps->efficient_freq));
-}
 
 
 static ssize_t act_freq_mhz_show(struct device *dev,
@@ -642,14 +512,14 @@ static ssize_t RPn_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t rps_act_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
 	return act_freq_mhz_show(dev, (struct device_attribute *)attr, buff);
 }
 static ssize_t rps_cur_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -665,7 +535,7 @@ static ssize_t rps_boost_freq_mhz_show(struct kobject *kobj, struct kobj_attribu
 }
 
 static ssize_t rps_boost_freq_mhz_store(struct kobject *kobj, struct kobj_attribute *attr,
-					const char *buff, size_t count)
+				      const char *buff, size_t count)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -673,7 +543,7 @@ static ssize_t rps_boost_freq_mhz_store(struct kobject *kobj, struct kobj_attrib
 }
 
 static ssize_t rps_max_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -681,7 +551,7 @@ static ssize_t rps_max_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 
 static ssize_t rps_max_freq_mhz_store(struct kobject *kobj, struct kobj_attribute *attr,
-					const char *buff, size_t count)
+				      const char *buff, size_t count)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -689,7 +559,7 @@ static ssize_t rps_max_freq_mhz_store(struct kobject *kobj, struct kobj_attribut
 }
 
 static ssize_t rps_min_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -697,15 +567,15 @@ static ssize_t rps_min_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 
 static ssize_t rps_min_freq_mhz_store(struct kobject *kobj, struct kobj_attribute *attr,
-					const char *buff, size_t count)
+                                       const char *buff, size_t count)
 {
-	struct device *dev = kobj_to_dev(kobj);
+       struct device *dev = kobj_to_dev(kobj);
 
-	return min_freq_mhz_store(dev, (struct device_attribute *)attr, buff, count);
+       return min_freq_mhz_store(dev, (struct device_attribute *)attr, buff, count);
 }
 
 static ssize_t rps_RP0_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -713,7 +583,7 @@ static ssize_t rps_RP0_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 
 static ssize_t rps_RP1_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -721,7 +591,7 @@ static ssize_t rps_RP1_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 
 static ssize_t rps_RPn_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
-					char *buff)
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 
@@ -729,14 +599,7 @@ static ssize_t rps_RPn_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 #endif
 
-/*
- * sysfs dual-location files <dev>/vlv_rpe_freq_mhz and
- * <dev>/gt/gt0/vlv_rpe_freq_mhz
- */
-static I915_DEVICE_ATTR_RO(vlv_rpe_freq_mhz, vlv_rpe_freq_mhz_show);
-
 /* sysfs dual-location files <dev>/gt_* and <dev>/gt/gt<i>/rps_* */
-
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 #define INTEL_GT_RPS_SYSFS_ATTR(_name, __mode, __show, __store, i915_show, i915_store) \
 	static struct i915_ext_attr dev_attr_gt_##_name =    \
@@ -1320,38 +1183,27 @@ static u32 media_ratio_mode_to_factor(u32 mode)
 }
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_freq_factor_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+                               struct kobj_attribute *attr,
+                               char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_freq_factor_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
+	                              struct device_attribute *attr,
+				      char *buff)
 {
 #endif
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-	struct intel_guc_slpc *slpc = &gt->uc.guc.slpc;
 	u32 mode;
 
-	if (IS_XEHPSDV(gt->i915) &&
-	    slpc->media_ratio_mode == SLPC_MEDIA_RATIO_MODE_DYNAMIC_CONTROL) {
-		/*
-		 * For PVC/XEHPSDV dynamic mode 0xA008:13 does not contain the
-		 * actual media ratio, just return the cached media ratio
-		*/
-		mode = slpc->media_ratio_mode;
-	} else {
-		/* 0xA008:13 value 0 represents 1:2 and 1 represents 1:1 */
+	/* 0xA008:13 value 0 represents 1:2 and 1 represents 1:1 */
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-		mode = _with_pm_intel_dev_read(kobj, attr, GEN6_RPNSWREQ);
+        mode = _with_pm_intel_dev_read(kobj, attr, GEN6_RPNSWREQ);
 #else
-		mode = _with_pm_intel_dev_read(dev, attr, GEN6_RPNSWREQ);
+	mode = _with_pm_intel_dev_read(dev, attr, GEN6_RPNSWREQ);
 #endif
-		mode = REG_FIELD_GET(GEN12_MEDIA_FREQ_RATIO, mode) ?
-			SLPC_MEDIA_RATIO_MODE_FIXED_ONE_TO_ONE :
-			SLPC_MEDIA_RATIO_MODE_FIXED_ONE_TO_TWO;
-	}
+	mode = REG_FIELD_GET(GEN12_MEDIA_FREQ_RATIO, mode) ?
+		SLPC_MEDIA_RATIO_MODE_FIXED_ONE_TO_ONE :
+		SLPC_MEDIA_RATIO_MODE_FIXED_ONE_TO_TWO;
 
 	return sysfs_emit(buff, "%u\n", media_ratio_mode_to_factor(mode));
 }
@@ -1962,12 +1814,6 @@ static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
 	ret = sysfs_create_files(kobj, attrs);
 	if (ret)
 		return ret;
-
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915)) {
-		ret = sysfs_create_file(kobj, &dev_attr_vlv_rpe_freq_mhz.attr.attr);
-		if (ret)
-			return ret;
-	}
 
 	if (is_object_gt(kobj)) {
 		/* attributes for only directory gt/gt<i> */

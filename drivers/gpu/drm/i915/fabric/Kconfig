@@ -2,6 +2,8 @@
 config DRM_I915_INTEL_FABRIC
 	tristate "Intel Fabric Connectivity driver support"
 	depends on m
+	depends on m
+	depends on BUILD_ALL_MODULES || BUILD_DRM || BUILD_I915
 	depends on 64BIT
 	depends on NET
 	depends on LIBCRC32C

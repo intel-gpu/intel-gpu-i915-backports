@@ -60,11 +60,6 @@ intel_dump_dp_vsc_sdp(struct drm_i915_private *i915,
 
 static const char * const output_type_str[] = {
 	OUTPUT_TYPE(UNUSED),
-	OUTPUT_TYPE(ANALOG),
-	OUTPUT_TYPE(DVO),
-	OUTPUT_TYPE(SDVO),
-	OUTPUT_TYPE(LVDS),
-	OUTPUT_TYPE(TVOUT),
 	OUTPUT_TYPE(HDMI),
 	OUTPUT_TYPE(DP),
 	OUTPUT_TYPE(EDP),
@@ -191,11 +186,6 @@ void intel_crtc_state_dump(const struct intel_crtc_state *pipe_config,
 		    pipe_config->splitter.link_count,
 		    pipe_config->splitter.pixel_overlap);
 
-	if (pipe_config->has_pch_encoder)
-		intel_dump_m_n_config(pipe_config, "fdi",
-				      pipe_config->fdi_lanes,
-				      &pipe_config->fdi_m_n);
-
 	if (intel_crtc_has_dp_encoder(pipe_config)) {
 		intel_dump_m_n_config(pipe_config, "dp m_n",
 				      pipe_config->lane_count,
@@ -260,42 +250,28 @@ void intel_crtc_state_dump(const struct intel_crtc_state *pipe_config,
 	drm_dbg_kms(&i915->drm, "linetime: %d, ips linetime: %d\n",
 		    pipe_config->linetime, pipe_config->ips_linetime);
 
-	if (DISPLAY_VER(i915) >= 9)
-		drm_dbg_kms(&i915->drm,
-			    "num_scalers: %d, scaler_users: 0x%x, scaler_id: %d\n",
-			    crtc->num_scalers,
-			    pipe_config->scaler_state.scaler_users,
-			    pipe_config->scaler_state.scaler_id);
+	drm_dbg_kms(&i915->drm,
+		    "num_scalers: %d, scaler_users: 0x%x, scaler_id: %d\n",
+		    crtc->num_scalers,
+		    pipe_config->scaler_state.scaler_users,
+		    pipe_config->scaler_state.scaler_id);
 
-	if (HAS_GMCH(i915))
-		drm_dbg_kms(&i915->drm,
-			    "gmch pfit: control: 0x%08x, ratios: 0x%08x, lvds border: 0x%08x\n",
-			    pipe_config->gmch_pfit.control,
-			    pipe_config->gmch_pfit.pgm_ratios,
-			    pipe_config->gmch_pfit.lvds_border_bits);
-	else
-		drm_dbg_kms(&i915->drm,
-			    "pch pfit: " DRM_RECT_FMT ", %s, force thru: %s\n",
-			    DRM_RECT_ARG(&pipe_config->pch_pfit.dst),
-			    str_enabled_disabled(pipe_config->pch_pfit.enabled),
-			    str_yes_no(pipe_config->pch_pfit.force_thru));
+	drm_dbg_kms(&i915->drm,
+		    "pch pfit: " DRM_RECT_FMT ", %s, force thru: %s\n",
+		    DRM_RECT_ARG(&pipe_config->pch_pfit.dst),
+		    str_enabled_disabled(pipe_config->pch_pfit.enabled),
+		    str_yes_no(pipe_config->pch_pfit.force_thru));
 
-	drm_dbg_kms(&i915->drm, "ips: %i, double wide: %i, drrs: %i\n",
-		    pipe_config->ips_enabled, pipe_config->double_wide,
+	drm_dbg_kms(&i915->drm, "double wide: %i, drrs: %i\n",
+		    pipe_config->double_wide,
 		    pipe_config->has_drrs);
 
 	intel_dpll_dump_hw_state(i915, &pipe_config->dpll_hw_state);
 
-	if (IS_CHERRYVIEW(i915))
-		drm_dbg_kms(&i915->drm,
-			    "cgm_mode: 0x%x gamma_mode: 0x%x gamma_enable: %d csc_enable: %d\n",
-			    pipe_config->cgm_mode, pipe_config->gamma_mode,
-			    pipe_config->gamma_enable, pipe_config->csc_enable);
-	else
-		drm_dbg_kms(&i915->drm,
-			    "csc_mode: 0x%x gamma_mode: 0x%x gamma_enable: %d csc_enable: %d\n",
-			    pipe_config->csc_mode, pipe_config->gamma_mode,
-			    pipe_config->gamma_enable, pipe_config->csc_enable);
+	drm_dbg_kms(&i915->drm,
+		    "csc_mode: 0x%x gamma_mode: 0x%x gamma_enable: %d csc_enable: %d\n",
+		    pipe_config->csc_mode, pipe_config->gamma_mode,
+		    pipe_config->gamma_enable, pipe_config->csc_enable);
 
 	drm_dbg_kms(&i915->drm, "degamma lut: %d entries, gamma lut: %d entries\n",
 		    pipe_config->hw.degamma_lut ?

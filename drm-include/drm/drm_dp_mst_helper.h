@@ -26,7 +26,7 @@
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_atomic.h>
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 #include <linux/stackdepot.h>
 #include <linux/timekeeping.h>
 
@@ -44,7 +44,7 @@ struct drm_dp_mst_topology_ref_history {
 	} *entries;
 	int len;
 };
-#endif /* IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS) */
+#endif /* IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS) */
 
 struct drm_dp_mst_branch;
 
@@ -109,10 +109,10 @@ struct drm_dp_mst_port {
 	 */
 	struct kref malloc_kref;
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 	/**
 	 * @topology_ref_history: A history of each topology
-	 * reference/dereference. See CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
+	 * reference/dereference. See CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
 	 */
 	struct drm_dp_mst_topology_ref_history topology_ref_history;
 #endif
@@ -218,10 +218,10 @@ struct drm_dp_mst_branch {
 	 */
 	struct kref malloc_kref;
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 	/**
 	 * @topology_ref_history: A history of each topology
-	 * reference/dereference. See CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
+	 * reference/dereference. See CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
 	 */
 	struct drm_dp_mst_topology_ref_history topology_ref_history;
 #endif
@@ -762,7 +762,7 @@ struct drm_dp_mst_topology_mgr {
 	 */
 	struct work_struct up_req_work;
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 	/**
 	 * @topology_ref_history_lock: protects
 	 * &drm_dp_mst_port.topology_ref_history and

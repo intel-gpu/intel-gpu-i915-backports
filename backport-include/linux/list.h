@@ -20,7 +20,7 @@
 
 
 #ifdef BPM_LIST_ENTRY_IS_HEAD_NOT_PRESENT
-#define list_entry_is_head(pos, head, member)
+#define list_entry_is_head(pos, head, member) \
        (&pos->member == (head))
 #endif
 

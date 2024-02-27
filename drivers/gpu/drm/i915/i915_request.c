@@ -257,9 +257,15 @@ __notify_execute_cb(struct i915_request *rq, bool (*fn)(struct irq_work *wrk))
 	if (llist_empty(&rq->execute_cb))
 		return;
 
+#ifdef BPM_IRQ_WORK_NODE_LLIST_NOT_PRESENT
+	llist_for_each_entry_safe(cb, cn,
+				  llist_del_all(&rq->execute_cb),
+				  work.llnode)
+#else
 	llist_for_each_entry_safe(cb, cn,
 				  llist_del_all(&rq->execute_cb),
 				  work.node.llist)
+#endif
 		fn(&cb->work);
 }
 
@@ -403,7 +409,9 @@ bool i915_request_retire(struct i915_request *rq)
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
 		/* Poison before we release our space in the ring */
 		__i915_request_fill(rq, POISON_FREE);
+
 	rq->ring->head = rq->postfix;
+	intel_ring_update_space(rq->ring);
 
 	if (!i915_request_signaled(rq)) {
 		spin_lock_irq(&rq->sched.lock);
@@ -568,7 +576,11 @@ __await_execution(struct i915_request *rq,
 	 * callback first, then checking the ACTIVE bit, we serialise with
 	 * the completed/retired request.
 	 */
+#ifdef BPM_IRQ_WORK_NODE_LLIST_NOT_PRESENT
+	if (llist_add(&cb->work.llnode, &signal->execute_cb)) {
+#else
 	if (llist_add(&cb->work.node.llist, &signal->execute_cb)) {
+#endif
 		if (i915_request_is_active(signal) ||
 		    __request_in_flight(signal))
 			__notify_execute_cb_imm(signal);
@@ -919,6 +931,17 @@ static void __i915_request_ctor(void *arg)
 	init_llist_head(&rq->execute_cb);
 }
 
+static int wait_for_space(struct i915_request *rq)
+{
+	void *ptr;
+
+	ptr = intel_ring_begin(rq, 0);
+	if (IS_ERR(ptr))
+		return PTR_ERR(ptr);
+
+	return 0;
+}
+
 static int
 __i915_request_initialize(struct i915_request *rq,
 			  struct intel_context *ce,
@@ -931,6 +954,7 @@ __i915_request_initialize(struct i915_request *rq,
 	/* Check that the caller provided an already pinned context */
 	__intel_context_pin(ce);
 
+	rq->i915 = ce->engine->i915;
 	rq->context = ce;
 	rq->sched_engine = ce->engine->sched_engine;
 	rq->engine = ce->engine;
@@ -983,6 +1007,10 @@ __i915_request_initialize(struct i915_request *rq,
 	 */
 	rq->reserved_space =
 		2 * rq->engine->emit_fini_breadcrumb_dw * sizeof(u32);
+
+	ret = wait_for_space(rq);
+	if (unlikely(ret))
+		goto err_free;
 
 	/*
 	 * Record the position of the start of the request so that
@@ -1256,12 +1284,10 @@ __emit_semaphore_wait(struct i915_request *to,
 		      struct i915_request *from,
 		      u32 seqno)
 {
-	const int has_token = GRAPHICS_VER(to->engine->i915) >= 12;
 	u32 hwsp_offset;
 	int len, err;
 	u32 *cs;
 
-	GEM_BUG_ON(GRAPHICS_VER(to->engine->i915) < 8);
 	GEM_BUG_ON(i915_request_has_initial_breadcrumb(to));
 
 	/* We need to pin the signaler's HWSP until we are finished reading. */
@@ -1269,9 +1295,7 @@ __emit_semaphore_wait(struct i915_request *to,
 	if (err)
 		return err;
 
-	len = 4;
-	if (has_token)
-		len += 2;
+	len = 6;
 
 	cs = intel_ring_begin(to, len);
 	if (IS_ERR(cs))
@@ -1288,15 +1312,12 @@ __emit_semaphore_wait(struct i915_request *to,
 	*cs++ = (MI_SEMAPHORE_WAIT |
 		 MI_SEMAPHORE_GLOBAL_GTT |
 		 MI_SEMAPHORE_POLL |
-		 MI_SEMAPHORE_SAD_GTE_SDD) +
-		has_token;
+		 MI_SEMAPHORE_SAD_GTE_SDD) + 1;
 	*cs++ = seqno;
 	*cs++ = hwsp_offset;
 	*cs++ = 0;
-	if (has_token) {
-		*cs++ = 0;
-		*cs++ = MI_NOOP;
-	}
+	*cs++ = 0;
+	*cs++ = MI_NOOP;
 
 	intel_ring_advance(to, cs);
 	return 0;
@@ -2052,32 +2073,14 @@ static void request_wait_wake(struct dma_fence *fence, struct dma_fence_cb *cb)
 	wake_up_process(fetch_and_zero(&wait->tsk));
 }
 
-/**
- * i915_request_wait - wait until execution of request has finished
- * @rq: the request to wait upon
- * @flags: how to wait
- * @timeout: how long to wait in jiffies
- *
- * i915_request_wait() waits for the request to be completed, for a
- * maximum of @timeout jiffies (with MAX_SCHEDULE_TIMEOUT implying an
- * unbounded wait).
- *
- * Returns the remaining time (in jiffies) if the request completed, which may
- * be zero if the request is unfinished after the timeout expires.
- * If the timeout is 0, it will return 1 if the fence is signaled.
- *
- * May return -EINTR is called with I915_WAIT_INTERRUPTIBLE and a signal is
- * pending before the request completes.
- */
 static long __i915_request_wait(struct i915_request *rq,
 				unsigned int flags,
 				long timeout)
 {
 	const int state = flags & I915_WAIT_INTERRUPTIBLE ?
 		TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
+	struct wait_queue_entry block;
 	struct request_wait wait;
-
-	timeout = ADJUST_TIMEOUT(timeout);
 
 	/*
 	 * Optimistic spin before touching IRQs.
@@ -2143,6 +2146,11 @@ static long __i915_request_wait(struct i915_request *rq,
 	if (i915_request_is_ready(rq))
 		__intel_engine_flush_submission(rq->engine, false);
 
+	if (rq->i915) {
+		init_waitqueue_entry(&block, wait.tsk);
+		add_wait_queue(&rq->i915->userspace.queue, &block);
+	}
+
 	for (;;) {
 		set_current_state(state);
 
@@ -2154,7 +2162,7 @@ static long __i915_request_wait(struct i915_request *rq,
 			break;
 		}
 
-		if (rq->engine && i915_userspace_is_blocked(rq->engine->i915)) {
+		if (rq->i915 && i915_userspace_is_blocked(rq->i915)) {
 			timeout = -EAGAIN;
 			break;
 		}
@@ -2168,18 +2176,13 @@ static long __i915_request_wait(struct i915_request *rq,
 	}
 	__set_current_state(TASK_RUNNING);
 
+	if (rq->i915)
+		remove_wait_queue(&rq->i915->userspace.queue, &block);
 	if (READ_ONCE(wait.tsk))
 		dma_fence_remove_callback(&rq->fence, &wait.cb);
 	GEM_BUG_ON(!list_empty(&wait.cb.node));
 
 out:
-	/*
-	 * Since the timeout is adjusted in this routine,
-	 * reset it before returning
-	 */
-	if (timeout > 0)
-		timeout /= GET_MULTIPLIER(timeout);
-
 	return timeout;
 }
 
@@ -2232,7 +2235,11 @@ long i915_request_wait(struct i915_request *rq,
 	trace_i915_request_wait_end(rq);
 
 	if (mtx)
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+		mutex_release(&mtx->dep_map, 0, _THIS_IP_);
+#else
 		mutex_release(&mtx->dep_map, _THIS_IP_);
+#endif
 
 	return timeout;
 }

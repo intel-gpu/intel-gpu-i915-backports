@@ -30,7 +30,6 @@
 
 #include <drm/drm_mm.h>
 
-#include "gt/intel_ggtt_fencing.h"
 #include "gem/i915_gem_object.h"
 
 #include "i915_gem_gtt.h"
@@ -48,8 +47,6 @@ i915_vma_instance(struct drm_i915_gem_object *obj,
 
 void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags);
 #define I915_VMA_RELEASE_MAP BIT(0)
-/* do not reserve memory to prevent deadlocks */
-#define __EXEC_OBJECT_NO_RESERVE BIT(31)
 
 int __must_check __i915_vma_move_to_active(struct i915_vma *vma,
 					   struct i915_request *rq);
@@ -76,45 +73,7 @@ static inline bool i915_vma_is_dpt(const struct i915_vma *vma)
 	return i915_is_dpt(vma->vm);
 }
 
-static inline bool i915_vma_has_ggtt_write(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_GGTT_WRITE_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_set_ggtt_write(struct i915_vma *vma)
-{
-	GEM_BUG_ON(!i915_vma_is_ggtt(vma));
-	set_bit(I915_VMA_GGTT_WRITE_BIT, __i915_vma_flags(vma));
-}
-
-static inline bool i915_vma_unset_ggtt_write(struct i915_vma *vma)
-{
-	return test_and_clear_bit(I915_VMA_GGTT_WRITE_BIT,
-				  __i915_vma_flags(vma));
-}
-
 void i915_vma_flush_writes(struct i915_vma *vma);
-
-static inline bool i915_vma_is_map_and_fenceable(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_CAN_FENCE_BIT, __i915_vma_flags(vma));
-}
-
-static inline bool i915_vma_set_userfault(struct i915_vma *vma)
-{
-	GEM_BUG_ON(!i915_vma_is_map_and_fenceable(vma));
-	return test_and_set_bit(I915_VMA_USERFAULT_BIT, __i915_vma_flags(vma));
-}
-
-static inline void i915_vma_unset_userfault(struct i915_vma *vma)
-{
-	return clear_bit(I915_VMA_USERFAULT_BIT, __i915_vma_flags(vma));
-}
-
-static inline bool i915_vma_has_userfault(const struct i915_vma *vma)
-{
-	return test_bit(I915_VMA_USERFAULT_BIT, __i915_vma_flags(vma));
-}
 
 static inline bool i915_vma_is_closed(const struct i915_vma *vma)
 {
@@ -205,20 +164,10 @@ static inline bool i915_vma_is_trailing_segment(struct i915_vma *vma) {
 
 static inline u64 i915_vma_size_from_segments(struct i915_vma *vma)
 {
-	struct i915_vma *adj_vma;
-	u64 size = 0;
-
 	if (!i915_vma_is_segment(vma))
 		return i915_vma_size(vma);
-
-	/* intended to be used only with head vma */
-	GEM_BUG_ON(vma->adjacent_start != vma);
-
-	for (adj_vma = vma->adjacent_start; adj_vma;
-		adj_vma = adj_vma->adjacent_next)
-		size += i915_vma_size(adj_vma);
-
-	return size;
+	else
+		return vma->adjacent_size;
 }
 
 static inline struct i915_vma *i915_vma_get(struct i915_vma *vma)
@@ -285,17 +234,11 @@ i915_vma_compare(struct i915_vma *vma,
 	return memcmp(&vma->ggtt_view.partial, &view->partial, view->type);
 }
 
-int __i915_vma_bind(struct i915_vma *vma,
-		    unsigned int pat_index,
-		    u32 flags,
-		    struct i915_vma_work *work);
-int i915_vma_bind(struct i915_vma *vma, struct i915_gem_ww_ctx *ww);
+int i915_vma_bind(struct i915_vma *vma);
 
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags);
-void __i915_vma_set_map_and_fenceable(struct i915_vma *vma);
-void i915_vma_revoke_mmap(struct i915_vma *vma);
 void __i915_vma_evict(struct i915_vma *vma);
 int __i915_vma_unbind(struct i915_vma *vma);
 int __must_check i915_vma_unbind(struct i915_vma *vma);
@@ -430,43 +373,6 @@ static inline struct page *i915_vma_first_page(struct i915_vma *vma)
 {
 	GEM_BUG_ON(!vma->pages);
 	return sg_page(vma->pages->sgl);
-}
-
-/**
- * i915_vma_pin_fence - pin fencing state
- * @vma: vma to pin fencing for
- *
- * This pins the fencing state (whether tiled or untiled) to make sure the
- * vma (and its object) is ready to be used as a scanout target. Fencing
- * status must be synchronize first by calling i915_vma_get_fence():
- *
- * The resulting fence pin reference must be released again with
- * i915_vma_unpin_fence().
- *
- * Returns:
- *
- * True if the vma has a fence, false otherwise.
- */
-int __must_check i915_vma_pin_fence(struct i915_vma *vma);
-int __must_check i915_vma_pin_fence_wait(struct i915_vma *vma);
-void i915_vma_revoke_fence(struct i915_vma *vma);
-
-int __i915_vma_pin_fence(struct i915_vma *vma);
-void __i915_vma_unpin_fence(struct i915_vma *vma);
-
-/**
- * i915_vma_unpin_fence - unpin fencing state
- * @vma: vma to unpin fencing for
- *
- * This releases the fence pin reference acquired through
- * i915_vma_pin_fence. It will handle both objects with and without an
- * attached fence correctly, callers do not need to distinguish this.
- */
-static inline void
-i915_vma_unpin_fence(struct i915_vma *vma)
-{
-	if (vma->fence)
-		__i915_vma_unpin_fence(vma);
 }
 
 static inline bool i915_vma_is_scanout(const struct i915_vma *vma)

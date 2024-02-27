@@ -49,29 +49,7 @@ static int i915_frontbuffer_tracking(struct seq_file *m, void *unused)
 
 static int i915_ips_status(struct seq_file *m, void *unused)
 {
-	struct drm_i915_private *dev_priv = node_to_i915(m->private);
-	intel_wakeref_t wakeref;
-
-	if (!HAS_IPS(dev_priv))
-		return -ENODEV;
-
-	wakeref = intel_runtime_pm_get(&dev_priv->runtime_pm);
-
-	seq_printf(m, "Enabled by kernel parameter: %s\n",
-		   str_yes_no(dev_priv->params.enable_ips));
-
-	if (DISPLAY_VER(dev_priv) >= 8) {
-		seq_puts(m, "Currently: unknown\n");
-	} else {
-		if (intel_de_read(dev_priv, IPS_CTL) & IPS_ENABLE)
-			seq_puts(m, "Currently: enabled\n");
-		else
-			seq_puts(m, "Currently: disabled\n");
-	}
-
-	intel_runtime_pm_put(&dev_priv->runtime_pm, wakeref);
-
-	return 0;
+	return -ENODEV;
 }
 
 static int i915_sr_status(struct seq_file *m, void *unused)
@@ -82,19 +60,7 @@ static int i915_sr_status(struct seq_file *m, void *unused)
 
 	wakeref = intel_display_power_get(dev_priv, POWER_DOMAIN_INIT);
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		/* no global SR status; inspect per-plane WM */;
-	else if (HAS_PCH_SPLIT(dev_priv))
-		sr_enabled = intel_de_read(dev_priv, WM1_LP_ILK) & WM_LP_ENABLE;
-	else if (IS_I965GM(dev_priv) || IS_G4X(dev_priv) ||
-		 IS_I945G(dev_priv) || IS_I945GM(dev_priv))
-		sr_enabled = intel_de_read(dev_priv, FW_BLC_SELF) & FW_BLC_SELF_EN;
-	else if (IS_I915GM(dev_priv))
-		sr_enabled = intel_de_read(dev_priv, INSTPM) & INSTPM_SELF_EN;
-	else if (IS_PINEVIEW(dev_priv))
-		sr_enabled = intel_de_read(dev_priv, DSPFW3) & PINEVIEW_SELF_REFRESH_EN;
-	else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
-		sr_enabled = intel_de_read(dev_priv, FW_BLC_SELF_VLV) & FW_CSPWRDWNEN;
+	/* no global SR status; inspect per-plane WM */;
 
 	intel_display_power_put(dev_priv, POWER_DOMAIN_INIT, wakeref);
 
@@ -130,7 +96,7 @@ static int i915_gem_framebuffer_info(struct seq_file *m, void *data)
 	struct intel_framebuffer *fbdev_fb = NULL;
 	struct drm_framebuffer *drm_fb;
 
-#ifdef CONFIG_DRM_FBDEV_EMULATION
+#ifdef CPTCFG_DRM_FBDEV_EMULATION
 	fbdev_fb = intel_fbdev_framebuffer(dev_priv->fbdev);
 	if (fbdev_fb) {
 		seq_printf(m, "fbcon size: %d x %d, depth %d, %d bpp, modifier 0x%llx, refcount %d, obj ",
@@ -304,16 +270,6 @@ static int intel_psr_status(struct seq_file *m, struct intel_dp *intel_dp)
 	psr_source_status(intel_dp, m);
 	seq_printf(m, "Busy frontbuffer bits: 0x%08x\n",
 		   psr->busy_frontbuffer_bits);
-
-	/*
-	 * SKL+ Perf counter is reset to 0 everytime DC state is entered
-	 */
-	if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv)) {
-		val = intel_de_read(dev_priv,
-				    EDP_PSR_PERF_CNT(intel_dp->psr.transcoder));
-		val &= EDP_PSR_PERF_CNT_MASK;
-		seq_printf(m, "Performance counter: %u\n", val);
-	}
 
 	if (psr->debug & I915_PSR_DEBUG_IRQ) {
 		seq_printf(m, "Last attempted entry at: %lld\n",
@@ -531,7 +487,11 @@ static void intel_dp_info(struct seq_file *m,
 static void intel_dp_mst_info(struct seq_file *m,
 			      struct intel_connector *intel_connector)
 {
+#ifdef BPM_PORT_HAS_AUDIO_MEMBER_NOT_PRESENT
+	bool has_audio = intel_connector->base.display_info.has_audio;
+#else
 	bool has_audio = intel_connector->port->has_audio;
+#endif
 
 	seq_printf(m, "\taudio support: %s\n", str_yes_no(has_audio));
 }
@@ -885,10 +845,6 @@ static void intel_crtc_info(struct seq_file *m, struct intel_crtc *crtc)
 
 	intel_plane_info(m, crtc);
 
-	seq_printf(m, "\tunderrun reporting: cpu=%s pch=%s\n",
-		   str_yes_no(!crtc->cpu_fifo_underrun_disabled),
-		   str_yes_no(!crtc->pch_fifo_underrun_disabled));
-
 	crtc_updates_info(m, crtc, "\t");
 }
 
@@ -1040,9 +996,6 @@ static int i915_ddb_info(struct seq_file *m, void *unused)
 	struct skl_ddb_entry *entry;
 	struct intel_crtc *crtc;
 
-	if (DISPLAY_VER(dev_priv) < 9)
-		return -ENODEV;
-
 	drm_modeset_lock_all(dev);
 
 	seq_printf(m, "%-15s%8s%8s%8s\n", "", "Start", "End", "Size");
@@ -1136,47 +1089,14 @@ intel_lpsp_power_well_enabled(struct drm_i915_private *i915,
 static int i915_lpsp_status(struct seq_file *m, void *unused)
 {
 	struct drm_i915_private *i915 = node_to_i915(m->private);
-	bool lpsp_enabled = false;
+	bool lpsp_enabled;
 
-	if (DISPLAY_VER(i915) >= 13 || IS_DISPLAY_VER(i915, 9, 10)) {
+	if (DISPLAY_VER(i915) >= 13)
 		lpsp_enabled = !intel_lpsp_power_well_enabled(i915, SKL_DISP_PW_2);
-	} else if (IS_DISPLAY_VER(i915, 11, 12)) {
+	else
 		lpsp_enabled = !intel_lpsp_power_well_enabled(i915, ICL_DISP_PW_3);
-	} else if (IS_HASWELL(i915) || IS_BROADWELL(i915)) {
-		lpsp_enabled = !intel_lpsp_power_well_enabled(i915, HSW_DISP_PW_GLOBAL);
-	} else {
-		seq_puts(m, "LPSP: not supported\n");
-		return 0;
-	}
 
 	seq_printf(m, "LPSP: %s\n", str_enabled_disabled(lpsp_enabled));
-
-	return 0;
-}
-
-static int i915_fifo_underruns(struct seq_file *m, void *unused)
-{
-	struct drm_i915_private *dev_priv = node_to_i915(m->private);
-	struct intel_crtc *crtc;
-	enum pipe pipe;
-	unsigned long flags;
-	u32 cpu_fifo_underrun_count[I915_MAX_PIPES];
-	u32 pch_fifo_underrun_count[I915_MAX_PIPES];
-
-
-	spin_lock_irqsave(&dev_priv->irq_lock, flags);
-	for_each_pipe(dev_priv, pipe) {
-		crtc = intel_crtc_for_pipe(dev_priv, pipe);
-		cpu_fifo_underrun_count[pipe] = crtc->cpu_fifo_underrun_count;
-		pch_fifo_underrun_count[pipe] = crtc->pch_fifo_underrun_count;
-	}
-	spin_unlock_irqrestore(&dev_priv->irq_lock, flags);
-
-	seq_printf(m, "\t%-10s \t%10s\n", "cpu fifounderruns", "pch fifounderruns");
-	for_each_pipe(dev_priv, pipe)
-		seq_printf(m, "pipe:%c %10u %20u\n", pipe_name(pipe),
-			   cpu_fifo_underrun_count[pipe],
-			   pch_fifo_underrun_count[pipe]);
 
 	return 0;
 }
@@ -1417,14 +1337,7 @@ static void wm_latency_show(struct seq_file *m, const u16 wm[8])
 	int level;
 	int num_levels;
 
-	if (IS_CHERRYVIEW(dev_priv))
-		num_levels = 3;
-	else if (IS_VALLEYVIEW(dev_priv))
-		num_levels = 1;
-	else if (IS_G4X(dev_priv))
-		num_levels = 3;
-	else
-		num_levels = ilk_wm_max_level(dev_priv) + 1;
+	num_levels = ilk_wm_max_level(dev_priv) + 1;
 
 	drm_modeset_lock_all(dev);
 
@@ -1435,13 +1348,7 @@ static void wm_latency_show(struct seq_file *m, const u16 wm[8])
 		 * - WM1+ latency values in 0.5us units
 		 * - latencies are in us on gen9/vlv/chv
 		 */
-		if (DISPLAY_VER(dev_priv) >= 9 ||
-		    IS_VALLEYVIEW(dev_priv) ||
-		    IS_CHERRYVIEW(dev_priv) ||
-		    IS_G4X(dev_priv))
-			latency *= 10;
-		else if (level > 0)
-			latency *= 5;
+		latency *= 10;
 
 		seq_printf(m, "WM%d %u (%u.%u usec)\n",
 			   level, wm[level], latency / 10, latency % 10);
@@ -1453,14 +1360,8 @@ static void wm_latency_show(struct seq_file *m, const u16 wm[8])
 static int pri_wm_latency_show(struct seq_file *m, void *data)
 {
 	struct drm_i915_private *dev_priv = m->private;
-	const u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.pri_latency;
-
-	wm_latency_show(m, latencies);
+	wm_latency_show(m, dev_priv->wm.skl_latency);
 
 	return 0;
 }
@@ -1468,14 +1369,8 @@ static int pri_wm_latency_show(struct seq_file *m, void *data)
 static int spr_wm_latency_show(struct seq_file *m, void *data)
 {
 	struct drm_i915_private *dev_priv = m->private;
-	const u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.spr_latency;
-
-	wm_latency_show(m, latencies);
+	wm_latency_show(m, dev_priv->wm.skl_latency);
 
 	return 0;
 }
@@ -1483,14 +1378,8 @@ static int spr_wm_latency_show(struct seq_file *m, void *data)
 static int cur_wm_latency_show(struct seq_file *m, void *data)
 {
 	struct drm_i915_private *dev_priv = m->private;
-	const u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.cur_latency;
-
-	wm_latency_show(m, latencies);
+	wm_latency_show(m, dev_priv->wm.skl_latency);
 
 	return 0;
 }
@@ -1499,9 +1388,6 @@ static int pri_wm_latency_open(struct inode *inode, struct file *file)
 {
 	struct drm_i915_private *dev_priv = inode->i_private;
 
-	if (DISPLAY_VER(dev_priv) < 5 && !IS_G4X(dev_priv))
-		return -ENODEV;
-
 	return single_open(file, pri_wm_latency_show, dev_priv);
 }
 
@@ -1509,18 +1395,12 @@ static int spr_wm_latency_open(struct inode *inode, struct file *file)
 {
 	struct drm_i915_private *dev_priv = inode->i_private;
 
-	if (HAS_GMCH(dev_priv))
-		return -ENODEV;
-
 	return single_open(file, spr_wm_latency_show, dev_priv);
 }
 
 static int cur_wm_latency_open(struct inode *inode, struct file *file)
 {
 	struct drm_i915_private *dev_priv = inode->i_private;
-
-	if (HAS_GMCH(dev_priv))
-		return -ENODEV;
 
 	return single_open(file, cur_wm_latency_show, dev_priv);
 }
@@ -1537,14 +1417,7 @@ static ssize_t wm_latency_write(struct file *file, const char __user *ubuf,
 	int ret;
 	char tmp[32];
 
-	if (IS_CHERRYVIEW(dev_priv))
-		num_levels = 3;
-	else if (IS_VALLEYVIEW(dev_priv))
-		num_levels = 1;
-	else if (IS_G4X(dev_priv))
-		num_levels = 3;
-	else
-		num_levels = ilk_wm_max_level(dev_priv) + 1;
+	num_levels = ilk_wm_max_level(dev_priv) + 1;
 
 	if (len >= sizeof(tmp))
 		return -EINVAL;
@@ -1576,14 +1449,8 @@ static ssize_t pri_wm_latency_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct drm_i915_private *dev_priv = m->private;
-	u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.pri_latency;
-
-	return wm_latency_write(file, ubuf, len, offp, latencies);
+	return wm_latency_write(file, ubuf, len, offp, dev_priv->wm.skl_latency);
 }
 
 static ssize_t spr_wm_latency_write(struct file *file, const char __user *ubuf,
@@ -1591,14 +1458,8 @@ static ssize_t spr_wm_latency_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct drm_i915_private *dev_priv = m->private;
-	u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.spr_latency;
-
-	return wm_latency_write(file, ubuf, len, offp, latencies);
+	return wm_latency_write(file, ubuf, len, offp, dev_priv->wm.skl_latency);
 }
 
 static ssize_t cur_wm_latency_write(struct file *file, const char __user *ubuf,
@@ -1606,14 +1467,8 @@ static ssize_t cur_wm_latency_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct drm_i915_private *dev_priv = m->private;
-	u16 *latencies;
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		latencies = dev_priv->wm.skl_latency;
-	else
-		latencies = dev_priv->wm.cur_latency;
-
-	return wm_latency_write(file, ubuf, len, offp, latencies);
+	return wm_latency_write(file, ubuf, len, offp, dev_priv->wm.skl_latency);
 }
 
 static const struct file_operations i915_pri_wm_latency_fops = {
@@ -1770,7 +1625,7 @@ static ssize_t i915_hpd_short_storm_ctl_write(struct file *file,
 
 	/* Reset to the "default" state for this system */
 	if (strcmp(tmp, "reset") == 0)
-		new_state = !HAS_DP_MST(dev_priv);
+		new_state = true;
 	else if (kstrtobool(tmp, &new_state) != 0)
 		return -EINVAL;
 
@@ -1880,14 +1735,6 @@ i915_fifo_underrun_reset_write(struct file *filp,
 				ret = wait_for_completion_interruptible(&commit->flip_done);
 		}
 
-		if (!ret && crtc_state->hw.active) {
-			drm_dbg_kms(&dev_priv->drm,
-				    "Re-arming FIFO underruns on pipe %c\n",
-				    pipe_name(crtc->pipe));
-
-			intel_crtc_arm_fifo_underrun(crtc, crtc_state);
-		}
-
 		drm_modeset_unlock(&crtc->base.mutex);
 
 		if (ret)
@@ -1945,7 +1792,6 @@ static const struct drm_info_list intel_display_debugfs_list[] = {
 	{"i915_ddb_info", i915_ddb_info, 0},
 	{"i915_drrs_status", i915_drrs_status, 0},
 	{"i915_lpsp_status", i915_lpsp_status, 0},
-	{"i915_fifo_underruns", i915_fifo_underruns, 0},
 };
 
 static const struct {
@@ -2095,23 +1941,13 @@ static int i915_lpsp_capability_show(struct seq_file *m, void *data)
 
 	if (DISPLAY_VER(i915) >= 13)
 		lpsp_capable = encoder->port <= PORT_B;
-	else if (DISPLAY_VER(i915) >= 12)
+	else
 		/*
 		 * Actually TGL can drive LPSP on port till DDI_C
 		 * but there is no physical connected DDI_C on TGL sku's,
 		 * even driver is not initilizing DDI_C port for gen12.
 		 */
 		lpsp_capable = encoder->port <= PORT_B;
-	else if (DISPLAY_VER(i915) == 11)
-		lpsp_capable = (connector->connector_type == DRM_MODE_CONNECTOR_DSI ||
-				connector->connector_type == DRM_MODE_CONNECTOR_eDP);
-	else if (IS_DISPLAY_VER(i915, 9, 10))
-		lpsp_capable = (encoder->port == PORT_A &&
-				(connector->connector_type == DRM_MODE_CONNECTOR_DSI ||
-				 connector->connector_type == DRM_MODE_CONNECTOR_eDP ||
-				 connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort));
-	else if (IS_HASWELL(i915) || IS_BROADWELL(i915))
-		lpsp_capable = connector->connector_type == DRM_MODE_CONNECTOR_eDP;
 
 	seq_printf(m, "LPSP: %s\n", lpsp_capable ? "capable" : "incapable");
 
@@ -2389,7 +2225,7 @@ DEFINE_SHOW_ATTRIBUTE(i915_current_bpc);
 
 /**
  * intel_connector_debugfs_add - add i915 specific connector debugfs files
- * @connector: pointer to a registered drm_connector
+ * @intel_connector: pointer to a registered drm_connector
  *
  * Cleanup will be done by drm_connector_unregister() through a call to
  * drm_debugfs_connector_remove().
@@ -2424,10 +2260,9 @@ void intel_connector_debugfs_add(struct intel_connector *intel_connector)
 				    connector, &i915_hdcp_sink_capability_fops);
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 11 &&
-	    ((connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort &&
-	    !to_intel_connector(connector)->mst_port) ||
-	    connector->connector_type == DRM_MODE_CONNECTOR_eDP)) {
+	if ((connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort &&
+	     !to_intel_connector(connector)->mst_port) ||
+	    connector->connector_type == DRM_MODE_CONNECTOR_eDP) {
 		debugfs_create_file("i915_dsc_fec_support", 0644, root,
 				    connector, &i915_dsc_fec_support_fops);
 

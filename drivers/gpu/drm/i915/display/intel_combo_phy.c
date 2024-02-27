@@ -143,10 +143,6 @@ static bool has_phy_misc(struct drm_i915_private *i915, enum phy phy)
 
 	if (IS_ALDERLAKE_S(i915))
 		return phy == PHY_A;
-	else if (IS_JSL_EHL(i915) ||
-		 IS_ROCKETLAKE(i915) ||
-		 IS_DG1(i915))
-		return phy < PHY_C;
 
 	return true;
 }
@@ -161,33 +157,6 @@ static bool icl_combo_phy_enabled(struct drm_i915_private *dev_priv,
 		return !(intel_de_read(dev_priv, ICL_PHY_MISC(phy)) &
 			 ICL_PHY_MISC_DE_IO_COMP_PWR_DOWN) &&
 			(intel_de_read(dev_priv, ICL_PORT_COMP_DW0(phy)) & COMP_INIT);
-}
-
-static bool ehl_vbt_ddi_d_present(struct drm_i915_private *i915)
-{
-	bool ddi_a_present = intel_bios_is_port_present(i915, PORT_A);
-	bool ddi_d_present = intel_bios_is_port_present(i915, PORT_D);
-	bool dsi_present = intel_bios_is_dsi_present(i915, NULL);
-
-	/*
-	 * VBT's 'dvo port' field for child devices references the DDI, not
-	 * the PHY.  So if combo PHY A is wired up to drive an external
-	 * display, we should see a child device present on PORT_D and
-	 * nothing on PORT_A and no DSI.
-	 */
-	if (ddi_d_present && !ddi_a_present && !dsi_present)
-		return true;
-
-	/*
-	 * If we encounter a VBT that claims to have an external display on
-	 * DDI-D _and_ an internal display on DDI-A/DSI leave an error message
-	 * in the log and let the internal display win.
-	 */
-	if (ddi_d_present)
-		drm_err(&i915->drm,
-			"VBT claims to have both internal and external displays on PHY A.  Configuring for internal.\n");
-
-	return false;
 }
 
 static bool phy_is_master(struct drm_i915_private *dev_priv, enum phy phy)
@@ -222,36 +191,24 @@ static bool icl_combo_phy_verify_state(struct drm_i915_private *dev_priv,
 				       enum phy phy)
 {
 	bool ret = true;
-	u32 expected_val = 0;
 
 	if (!icl_combo_phy_enabled(dev_priv, phy))
 		return false;
 
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		ret &= check_phy_reg(dev_priv, phy, ICL_PORT_TX_DW8_LN(0, phy),
-				     ICL_PORT_TX_DW8_ODCC_CLK_SEL |
-				     ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_MASK,
-				     ICL_PORT_TX_DW8_ODCC_CLK_SEL |
-				     ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_DIV2);
+	ret &= check_phy_reg(dev_priv, phy, ICL_PORT_TX_DW8_LN(0, phy),
+			     ICL_PORT_TX_DW8_ODCC_CLK_SEL |
+			     ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_MASK,
+			     ICL_PORT_TX_DW8_ODCC_CLK_SEL |
+			     ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_DIV2);
 
-		ret &= check_phy_reg(dev_priv, phy, ICL_PORT_PCS_DW1_LN(0, phy),
-				     DCC_MODE_SELECT_MASK, RUN_DCC_ONCE);
-	}
+	ret &= check_phy_reg(dev_priv, phy, ICL_PORT_PCS_DW1_LN(0, phy),
+			     DCC_MODE_SELECT_MASK, RUN_DCC_ONCE);
 
 	ret &= icl_verify_procmon_ref_values(dev_priv, phy);
 
 	if (phy_is_master(dev_priv, phy)) {
 		ret &= check_phy_reg(dev_priv, phy, ICL_PORT_COMP_DW8(phy),
 				     IREFGEN, IREFGEN);
-
-		if (IS_JSL_EHL(dev_priv)) {
-			if (ehl_vbt_ddi_d_present(dev_priv))
-				expected_val = ICL_PHY_MISC_MUX_DDID;
-
-			ret &= check_phy_reg(dev_priv, phy, ICL_PHY_MISC(phy),
-					     ICL_PHY_MISC_MUX_DDID,
-					     expected_val);
-		}
 	}
 
 	ret &= check_phy_reg(dev_priv, phy, ICL_PORT_CL_DW5(phy),
@@ -338,29 +295,21 @@ static void icl_combo_phys_init(struct drm_i915_private *dev_priv)
 		 * "internal" child devices.
 		 */
 		val = intel_de_read(dev_priv, ICL_PHY_MISC(phy));
-		if (IS_JSL_EHL(dev_priv) && phy == PHY_A) {
-			val &= ~ICL_PHY_MISC_MUX_DDID;
-
-			if (ehl_vbt_ddi_d_present(dev_priv))
-				val |= ICL_PHY_MISC_MUX_DDID;
-		}
 
 		val &= ~ICL_PHY_MISC_DE_IO_COMP_PWR_DOWN;
 		intel_de_write(dev_priv, ICL_PHY_MISC(phy), val);
 
 skip_phy_misc:
-		if (DISPLAY_VER(dev_priv) >= 12) {
-			val = intel_de_read(dev_priv, ICL_PORT_TX_DW8_LN(0, phy));
-			val &= ~ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_MASK;
-			val |= ICL_PORT_TX_DW8_ODCC_CLK_SEL;
-			val |= ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_DIV2;
-			intel_de_write(dev_priv, ICL_PORT_TX_DW8_GRP(phy), val);
+		val = intel_de_read(dev_priv, ICL_PORT_TX_DW8_LN(0, phy));
+		val &= ~ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_MASK;
+		val |= ICL_PORT_TX_DW8_ODCC_CLK_SEL;
+		val |= ICL_PORT_TX_DW8_ODCC_CLK_DIV_SEL_DIV2;
+		intel_de_write(dev_priv, ICL_PORT_TX_DW8_GRP(phy), val);
 
-			val = intel_de_read(dev_priv, ICL_PORT_PCS_DW1_LN(0, phy));
-			val &= ~DCC_MODE_SELECT_MASK;
-			val |= RUN_DCC_ONCE;
-			intel_de_write(dev_priv, ICL_PORT_PCS_DW1_GRP(phy), val);
-		}
+		val = intel_de_read(dev_priv, ICL_PORT_PCS_DW1_LN(0, phy));
+		val &= ~DCC_MODE_SELECT_MASK;
+		val |= RUN_DCC_ONCE;
+		intel_de_write(dev_priv, ICL_PORT_PCS_DW1_GRP(phy), val);
 
 		icl_set_procmon_ref_values(dev_priv, phy);
 

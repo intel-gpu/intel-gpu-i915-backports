@@ -102,15 +102,12 @@
 #define GEN12_DISPLAY_FEATURES \
 	.display.dbuf.size = 2048, \
 	.display.dbuf.slice_mask = BIT(DBUF_S1) | BIT(DBUF_S2), \
-	.display.has_ddi = 1, \
 	.display.has_fpga_dbg = 1, \
 	.display.fbc_mask = BIT(INTEL_FBC_A), \
 	.display.has_hdcp = 1, \
 	.display.has_psr = 1, \
 	.display.has_psr_hw_tracking = 1, \
 	.display.has_dmc = 1, \
-	.display.has_dp_mst = 1, \
-	.display.has_ipc = 1, \
 	.display.has_dsc = 1, \
 	.display.abox_mask = GENMASK(2, 1), \
 	.display.pipe_mask = BIT(PIPE_A) | BIT(PIPE_B) | BIT(PIPE_C) | BIT(PIPE_D), \
@@ -146,27 +143,18 @@
 
 #define GEN12_NO_DISPLAY_FEATURES \
 	GEN(12), \
-	.has_logical_ring_contexts = 1, \
 	.dma_mask_size = 39, \
-	.ppgtt_type = INTEL_PPGTT_FULL, \
 	.ppgtt_size = 48, \
 	.ppgtt_msb = 47, \
 	GEN12_DEFAULT_PAGE_SIZES, \
 	GEN_DEFAULT_REGIONS, \
 	.has_3d_pipeline = 1, \
-	.has_coherent_ggtt = false, \
 	.has_llc = 1, \
 	.is_lp = 1, \
-	.has_64bit_reloc = 1, \
 	.has_runtime_pm = 1, \
-	.has_rc6 = 1, \
-	.has_rps = true, \
 	.has_gt_uc = 1, \
-	.has_reset_engine = 1, \
 	.has_snoop = true, \
-	.has_logical_ring_elsq = 1, \
 	.has_global_mocs = 1, \
-	.has_null_page = 1, \
 	.has_pxp = 1
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
@@ -179,7 +167,6 @@
 #endif
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-
 static const struct intel_device_info tgl_info = {
 	GEN12_FEATURES,
 	PLATFORM(INTEL_TIGERLAKE),
@@ -198,22 +185,6 @@ static const struct intel_device_info rkl_info = {
 		BIT(TRANSCODER_C),
 	.display.has_hti = 1,
 	.display.has_psr_hw_tracking = 0,
-	.platform_engine_mask =
-		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0),
-};
-
-#else
-static const struct intel_device_info tgl_info = {
-	GEN12_FEATURES,
-	PLATFORM(INTEL_TIGERLAKE),
-	.platform_engine_mask =
-		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0) | BIT(VCS2),
-	.has_sriov = 1,
-};
-
-static const struct intel_device_info rkl_info = {
-	GEN12_FEATURES,
-	PLATFORM(INTEL_ROCKETLAKE),
 	.platform_engine_mask =
 		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0),
 };
@@ -263,16 +234,12 @@ static const struct intel_device_info adl_s_info = {
 	.display.dbuf.size = 4096,						\
 	.display.dbuf.slice_mask = BIT(DBUF_S1) | BIT(DBUF_S2) | BIT(DBUF_S3) |	\
 		BIT(DBUF_S4),							\
-	.display.has_ddi = 1,							\
 	.display.has_dmc = 1,							\
-	.display.has_dp_mst = 1,						\
 	.display.has_dsb = 1,							\
 	.display.has_dsc = 1,							\
 	.display.fbc_mask = BIT(INTEL_FBC_A),					\
 	.display.has_fpga_dbg = 1,						\
 	.display.has_hdcp = 1,							\
-	.display.has_hotplug = 1,						\
-	.display.has_ipc = 1,							\
 	.display.has_psr = 1,							\
 	.display.ver = 13,							\
 	.display.pipe_mask = BIT(PIPE_A) | BIT(PIPE_B) | BIT(PIPE_C) | BIT(PIPE_D),	\
@@ -323,24 +290,6 @@ static const struct intel_device_info dg1_info = {
 	.ppgtt_size = 47,
 };
 
-static const struct intel_device_info adl_s_info = {
-	GEN12_FEATURES,
-	PLATFORM(INTEL_ALDERLAKE_S),
-	.platform_engine_mask =
-		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0) | BIT(VCS2),
-	.dma_mask_size = 39,
-	.has_sriov = 1,
-};
-
-static const struct intel_device_info adl_p_info = {
-	GEN12_FEATURES,
-	PLATFORM(INTEL_ALDERLAKE_P),
-	.platform_engine_mask =
-		BIT(RCS0) | BIT(BCS0) | BIT(VECS0) | BIT(VCS0) | BIT(VCS2),
-	.ppgtt_size = 48,
-	.dma_mask_size = 39,
-	.has_sriov = 1,
-};
 #endif
 #undef GEN
 
@@ -356,29 +305,21 @@ static const struct intel_device_info adl_p_info = {
 	XE_HP_PAGE_SIZES, \
 	.dma_mask_size = 46, \
 	.has_3d_pipeline = 1, \
-	.has_64bit_reloc = 1, \
 	.has_flat_ccs = 1, \
 	.has_4tile = 1, \
 	.has_global_mocs = 1, \
 	.has_gt_uc = 1, \
 	.has_llc = 1, \
-	.has_logical_ring_contexts = 1, \
-	.has_logical_ring_elsq = 1, \
 	.has_mslice_steering = 1, \
 	.has_oa_bpc_reporting = 1, \
 	.has_oa_buf_128m = 1, \
 	.has_oa_mmio_trigger = 1, \
 	.has_oa_slice_contrib_limits = 1, \
-	.has_null_page = 1, \
-	.has_rc6 = 1, \
-	.has_reset_engine = 1, \
-	.has_rps = 1, \
 	.has_runtime_pm = 1, \
 	.has_selective_tlb_invalidation = 1, \
 	.has_semaphore_xehpsdv = 1, \
 	.ppgtt_msb = 47, \
 	.ppgtt_size = 48, \
-	.ppgtt_type = INTEL_PPGTT_FULL, \
 	.has_oam = 1, \
 	.oam_uses_vdbox0_channel = 1
 
@@ -396,52 +337,6 @@ static const struct intel_device_info adl_p_info = {
 	BIT(VCS0) | BIT(VCS1) | BIT(VCS2) | BIT(VCS3) | \
 	BIT(VCS4) | BIT(VCS5) | BIT(VCS6) | BIT(VCS7) | \
 	BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3) \
-
-static const struct intel_gt_definition xehp_sdv_extra_gt[] = {
-	{
-		.type = GT_TILE,
-		.name = "Remote Tile GT 1",
-		.mapping_base = SZ_16M,
-		.engine_mask = XE_HP_SDV_ENGINES,
-
-	},
-	{
-		.type = GT_TILE,
-		.name = "Remote Tile GT 2",
-		.mapping_base = SZ_16M * 2,
-		.engine_mask = XE_HP_SDV_ENGINES,
-
-	},
-	{
-		.type = GT_TILE,
-		.name = "Remote Tile GT 3",
-		.mapping_base = SZ_16M * 3,
-		.engine_mask = XE_HP_SDV_ENGINES,
-
-	},
-	{}
-};
-
-__maybe_unused
-static const struct intel_device_info xehpsdv_info = {
-	XE_HP_FEATURES,
-	XE_HPM_FEATURES,
-	DGFX_FEATURES,
-	REMOTE_TILE_FEATURES,
-	PLATFORM(INTEL_XEHPSDV),
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-	TGL_CACHELEVEL,
-	.display = { },
-#endif
-	.extra_gt_list = xehp_sdv_extra_gt,
-	.has_64k_pages = 1,
-	.has_media_ratio_mode = 1,
-	.has_sriov = 1,
-	.has_iov_memirq = 1,
-	.has_mem_sparing = 1,
-	.platform_engine_mask = XE_HP_SDV_ENGINES,
-	.require_force_probe = 1,
-};
 
 #define DG2_FEATURES \
 	XE_HP_FEATURES, \
@@ -555,7 +450,6 @@ static const struct intel_device_info pvc_info = {
 	 * Runtime Suspend D3, therefore disabling Runtime PM.
 	 */
 	.has_runtime_pm = 0,
-	.require_force_probe = 1,
 	PVC_CACHELEVEL,
 };
 
@@ -607,7 +501,6 @@ static const struct intel_device_info mtl_info = {
 	.memory_regions = REGION_SMEM | REGION_STOLEN,
 	MTL_CACHELEVEL,
 	.platform_engine_mask = BIT(RCS0) | BIT(BCS0) | BIT(CCS0),
-	.require_force_probe = 1,
 	.needs_driver_flr = 0, /* FIXME: IFWI still has issues with FLR */
 };
 
@@ -657,37 +550,6 @@ static void i915_pci_remove(struct pci_dev *pdev)
 	intel_memory_regions_remove(i915);
 }
 
-/* is device_id present in comma separated list of ids */
-static bool force_probe(u16 device_id, const char *devices)
-{
-	char *s, *p, *tok;
-	bool ret;
-
-	if (!devices || !*devices)
-		return false;
-
-	/* match everything */
-	if (strcmp(devices, "*") == 0)
-		return true;
-
-	s = kstrdup(devices, GFP_KERNEL);
-	if (!s)
-		return false;
-
-	for (p = s, ret = false; (tok = strsep(&p, ",")) != NULL; ) {
-		u16 val;
-
-		if (kstrtou16(tok, 16, &val) == 0 && val == device_id) {
-			ret = true;
-			break;
-		}
-	}
-
-	kfree(s);
-
-	return ret;
-}
-
 bool i915_pci_resource_valid(struct pci_dev *pdev, int bar)
 {
 	if (!pci_resource_flags(pdev, bar))
@@ -731,17 +593,6 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/* If we've already injected a fault into an earlier device, bail */
 	if (i915_error_injected() && !i915_modparams.inject_probe_failure)
 		return -ENODEV;
-
-	if (intel_info->require_force_probe &&
-	    !force_probe(pdev->device, i915_modparams.force_probe)) {
-		dev_info(&pdev->dev,
-			 "Your graphics device %04x is not properly supported by the driver in this\n"
-			 "kernel version. To force driver probe anyway, use i915.force_probe=%04x\n"
-			 "module parameter or CPTCFG_DRM_I915_FORCE_PROBE=%04x configuration option,\n"
-			 "or (recommended) check for kernel updates.\n",
-			 pdev->device, pdev->device, pdev->device);
-		return -ENODEV;
-	}
 
 	/*
 	 * Don't bind to non-zero function, unless it is a virtual function.

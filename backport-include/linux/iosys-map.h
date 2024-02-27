@@ -5,11 +5,19 @@
 #include_next <linux/iosys-map.h>
 #else
 #include <linux/dma-buf-map.h>
+#define iosys_map dma_buf_map
+#define IOSYS_MAP_INIT_VADDR DMA_BUF_MAP_INIT_VADDR
+#define iosys_map_set_vaddr dma_buf_map_set_vaddr
+#define iosys_map_set_vaddr_iomem dma_buf_map_set_vaddr_iomem
+#define iosys_map_is_equal dma_buf_map_is_equal
+#define iosys_map_is_null dma_buf_map_is_null
+#define iosys_map_is_set dma_buf_map_is_set
+#define iosys_map_clear dma_buf_map_clear
+#define iosys_map_incr dma_buf_map_incr
 #endif
 
 #ifdef BPM_IOSYS_MAP_MEMCPY_TO_ARG_OFFSET_ADDED
 #define iosys_map_memcpy_to LINUX_I915_BACKPORT(iosys_map_memcpy_to)
-#define iosys_map dma_buf_map
 
 /**
  * iosys_map_memcpy_to - Memcpy into offset of iosys_map
@@ -187,7 +195,6 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
         copy;                                                           \
 })
 
-
 /**
  * iosys_map_rd_field - Read a member from a struct in the iosys_map
  *
@@ -279,17 +286,5 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
                      typeof(s->field__), val__);                                        \
 })
 #endif /* BPM_IOSYS_MAP_FEW_MORE_HELPER_APIS */
-
-#ifdef BPM_IOSYS_MAP_RENAME_APIS
-
-#define IOSYS_MAP_INIT_VADDR DMA_BUF_MAP_INIT_VADDR
-#define iosys_map_set_vaddr dma_buf_map_set_vaddr
-#define iosys_map_set_vaddr_iomem dma_buf_map_set_vaddr_iomem
-#define iosys_map_is_equal dma_buf_map_is_equal
-#define iosys_map_is_null dma_buf_map_is_null
-#define iosys_map_is_set dma_buf_map_is_set
-#define iosys_map_clear dma_buf_map_clear
-#define iosys_map_incr dma_buf_map_incr
-#endif
 
 #endif /* __BACKPORT_LINUX_IOSYS_MAP_H */

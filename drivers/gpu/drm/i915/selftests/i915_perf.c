@@ -306,7 +306,7 @@ static int live_noa_gpr(void *arg)
 
 	if (ce->vm->scratch[0]) {
 		/* Poison the ce->vm so we detect writes not to the GGTT gt->scratch */
-		scratch = __px_vaddr(ce->vm->scratch[0], NULL);
+		scratch = __px_vaddr(ce->vm->scratch[0]);
 		memset(scratch, POISON_FREE, PAGE_SIZE);
 	} else {
 		scratch = NULL;

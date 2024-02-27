@@ -7,6 +7,9 @@
 #include <linux/overflow.h>
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
+#include <linux/version.h>
+#include <linux/pagevec.h>
+#include <linux/kref.h>
 
 #ifdef BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 #define cancel_dirty_page(X) folio_cancel_dirty(page_folio(X))
@@ -53,7 +56,7 @@ static inline void *kvzalloc(size_t size, gfp_t flags)
 {
 	return kvmalloc(size, flags | __GFP_ZERO);
 }
-#endif
+#endif /* < 4.12 */
 
 #if LINUX_VERSION_IS_LESS(4,18,0)
 #define kvcalloc LINUX_I915_BACKPORT(kvcalloc)
@@ -63,7 +66,12 @@ static inline void *kvcalloc(size_t n, size_t size, gfp_t flags)
 }
 #endif /* < 4.18 */
 
-#ifdef FOLIO_ADDRESS_PRESENT
+#ifdef BPM_VMA_SET_FILE_NOT_PRESENT
+#define vma_set_file LINUX_DMABUF_BACKPORT(vma_set_file)
+void vma_set_file(struct vm_area_struct *vma, struct file *file);
+#endif
+
+#ifdef BPM_FOLIO_ADDRESS_PRESENT
 
 #if defined(HASHED_PAGE_VIRTUAL)
 void *page_address(const struct page *page);
@@ -88,5 +96,51 @@ int backport_register_shrinker(struct shrinker *shrinker);
 #define register_shrinker backport_register_shrinker
 #endif
 
-#endif /* FOLIO_ADDRESS_PRESENT */
+#endif /* BPM_FOLIO_ADDRESS_PRESENT */
+
+#ifdef BPM_PIN_USER_PAGES_FAST_NOT_PRESENT
+#define pin_user_pages_fast get_user_pages_fast
+#endif
+
+#ifdef BPM_FOLL_FAST_ONLY_NOT_PRESENT
+#define FOLL_FAST_ONLY 0x80000 /* gup_fast: prevent fall-back to slow gup */
+#endif
+
+#ifdef BPM_TOTALRAM_PAGES_FUNC_NOT_PRESENT
+#define totalram_pages() totalram_pages
+#endif
+
+#ifdef BPM_IS_COW_MAPPING_NOT_PRESENT
+static inline bool is_cow_mapping(vm_flags_t flags)
+{
+	return (flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
+}
+#endif
+
+#ifdef BPM_WANT_INIT_ON_ALLOC_NOT_PRESENT
+
+#ifdef CONFIG_INIT_ON_ALLOC_DEFAULT_ON
+DECLARE_STATIC_KEY_TRUE(init_on_alloc);
+#else
+DECLARE_STATIC_KEY_FALSE(init_on_alloc);
+#endif
+static inline bool want_init_on_alloc(gfp_t flags)
+{
+       if (static_branch_unlikely(&init_on_alloc) &&
+           !page_poisoning_enabled())
+               return true;
+       return flags & __GFP_ZERO;
+}
+#endif
+
+
+#ifdef BPM_PIN_OR_UNPIN_USER_PAGE_NOT_PRESENT
+#ifdef BPM_PUT_USER_PAGES_DIRTY_LOCK_ARG_NOT_PRESENT
+#define unpin_user_pages_dirty_lock(X,Y,Z) put_user_pages_dirty_lock(X,Y)
+#else
+#define unpin_user_pages_dirty_lock(X,Y,Z) put_user_pages_dirty_lock(X,Y,Z)
+#endif
+#define unpin_user_page(X) put_user_page(X)
+#endif
+
 #endif /* __BACKPORT_MM_H */

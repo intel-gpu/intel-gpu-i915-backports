@@ -8,7 +8,7 @@
 #ifndef _DMA_BUF_SYSFS_STATS_H
 #define _DMA_BUF_SYSFS_STATS_H
 
-#ifdef CONFIG_DMABUF_SYSFS_STATS
+#ifdef CPTCFG_DMABUF_SYSFS_STATS
 
 int dma_buf_init_sysfs_statistics(void);
 void dma_buf_uninit_sysfs_statistics(void);

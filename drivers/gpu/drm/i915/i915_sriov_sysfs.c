@@ -21,7 +21,8 @@
  */
 
 #define SRIOV_PRELIMINARY "prelim_"
-#define SRIOV_KOBJ_HOME_NAME SRIOV_PRELIMINARY "iov"
+#define SRIOV_KOBJ_BASE_NAME "iov"
+#define SRIOV_KOBJ_HOME_NAME SRIOV_PRELIMINARY SRIOV_KOBJ_BASE_NAME
 #define SRIOV_EXT_KOBJ_PF_NAME "pf"
 #define SRIOV_EXT_KOBJ_VFn_NAME "vf%u"
 #define SRIOV_DEVICE_LINK_NAME "device"
@@ -62,10 +63,12 @@ static const struct attribute_group sriov_attr_group = {
 	.attrs = sriov_attrs,
 };
 
+#ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
 static const struct attribute_group *default_sriov_attr_groups[] = {
 	&sriov_attr_group,
 	NULL
 };
+#endif
 
 /* extended (PF and VFs) SR-IOV attributes */
 
@@ -180,12 +183,14 @@ static const struct attribute_group vf_ext_attr_group = {
 	.is_visible = vf_ext_attr_is_visible,
 };
 
+#ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
 static const struct attribute_group *default_sriov_ext_attr_groups[] = {
 	&sriov_ext_attr_group,
 	&pf_ext_attr_group,
 	&vf_ext_attr_group,
 	NULL,
 };
+#endif
 
 /* no user serviceable parts below */
 
@@ -235,7 +240,11 @@ static void sriov_kobj_release(struct kobject *kobj)
 static struct kobj_type sriov_ktype = {
 	.release = sriov_kobj_release,
 	.sysfs_ops = &sriov_sysfs_ops,
+#ifdef BPM_DEFAULT_GROUPS_NOT_PRESENT
+	.default_attrs = sriov_attrs,
+#else
 	.default_groups = default_sriov_attr_groups,
+#endif
 };
 
 static ssize_t sriov_ext_attr_show(struct kobject *kobj, struct attribute *attr,
@@ -289,7 +298,13 @@ static void sriov_ext_kobj_release(struct kobject *kobj)
 static struct kobj_type sriov_ext_ktype = {
 	.release = sriov_ext_kobj_release,
 	.sysfs_ops = &sriov_ext_sysfs_ops,
+#ifdef BPM_DEFAULT_GROUPS_NOT_PRESENT
+	.default_attrs = sriov_ext_attrs,
+	.default_attrs = pf_ext_attrs,
+	.default_attrs = vf_ext_attrs,
+#else
 	.default_groups = default_sriov_ext_attr_groups,
+#endif
 };
 
 static unsigned int pf_nodes_count(struct drm_i915_private *i915)
@@ -403,6 +418,7 @@ failed_kobj_n:
 		kobject_put(&kobj->base);
 	while (n--)
 		kobject_put(&kobjs[n]->base);
+	kfree(kobjs);
 failed:
 	return pf_setup_failed(i915, err, "tree");
 }
@@ -457,8 +473,7 @@ static int pf_setup_prelim_link(struct drm_i915_private *i915)
 	struct i915_sriov_kobj *home = pf->sysfs.home;
 	int err;
 
-	err = sysfs_create_link(home->base.parent, &home->base,
-				SRIOV_KOBJ_HOME_NAME + sizeof(SRIOV_PRELIMINARY) - 1);
+	err = sysfs_create_link(home->base.parent, &home->base, SRIOV_KOBJ_BASE_NAME);
 	return err;
 }
 
@@ -467,8 +482,7 @@ static void pf_teardown_prelim_link(struct drm_i915_private *i915)
 	struct i915_sriov_pf *pf = &i915->sriov.pf;
 	struct i915_sriov_kobj *home = pf->sysfs.home;
 
-	sysfs_remove_link(home->base.parent,
-			  SRIOV_KOBJ_HOME_NAME + sizeof(SRIOV_PRELIMINARY) - 1);
+	sysfs_remove_link(home->base.parent, SRIOV_KOBJ_BASE_NAME);
 }
 
 static void pf_welcome(struct drm_i915_private *i915)
@@ -630,7 +644,7 @@ static void pf_remove_vfs_device_links(struct drm_i915_private *i915)
 		sysfs_remove_link(&kobjs[n]->base, SRIOV_DEVICE_LINK_NAME);
 }
 
-/**
+/*
  * i915_sriov_sysfs_update_links - Update links in SR-IOV sysfs tree.
  * @i915: the i915 struct
  *

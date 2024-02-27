@@ -70,16 +70,8 @@ void __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 				     struct sg_table *pages,
 				     bool needs_clflush);
 
-int i915_gem_object_pwrite_phys(struct drm_i915_gem_object *obj,
-				const struct drm_i915_gem_pwrite *args);
-int i915_gem_object_pread_phys(struct drm_i915_gem_object *obj,
-			       const struct drm_i915_gem_pread *args);
-
-int i915_gem_object_attach_phys(struct drm_i915_gem_object *obj, int align);
 int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj,
 				    struct sg_table *pages);
-int i915_gem_object_put_pages_phys(struct drm_i915_gem_object *obj,
-				   struct sg_table *pages);
 
 enum intel_region_id;
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
@@ -99,6 +91,8 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
 				    struct i915_gem_ww_ctx *ww,
 				    bool check_placement);
+
+bool i915_gem_object_evictable(struct drm_i915_gem_object *obj);
 
 void i915_gem_flush_free_objects(struct drm_i915_private *i915);
 
@@ -221,17 +215,10 @@ static inline int __i915_gem_object_lock(struct drm_i915_gem_object *obj,
 	if (!ret && ww) {
 		i915_gem_object_get(obj);
 		list_add_tail(&obj->obj_link, &ww->obj_list);
-		obj->evict_locked = false;
 	}
 
-	if (ret == -EALREADY) {
+	if (ret == -EALREADY)
 		ret = 0;
-		/* We've already evicted an object needed for this batch. */
-		if (obj->evict_locked) {
-			list_move_tail(&obj->obj_link, &ww->obj_list);
-			obj->evict_locked = false;
-		}
-	}
 
 	if (ret == -EDEADLK) {
 		ww->contended_evict = false;
@@ -251,7 +238,7 @@ static inline int i915_gem_object_lock(struct drm_i915_gem_object *obj,
 static inline int i915_gem_object_lock_interruptible(struct drm_i915_gem_object *obj,
 						     struct i915_gem_ww_ctx *ww)
 {
-	WARN_ON(ww && !ww->intr);
+	GEM_BUG_ON(ww && !ww->intr);
 	return __i915_gem_object_lock(obj, ww, true);
 }
 
@@ -262,9 +249,6 @@ static inline bool i915_gem_object_trylock(struct drm_i915_gem_object *obj)
 
 static inline void i915_gem_object_unlock(struct drm_i915_gem_object *obj)
 {
-	if (obj->ops->adjust_lru)
-		obj->ops->adjust_lru(obj);
-
 	dma_resv_unlock(obj->base.resv);
 }
 
@@ -329,7 +313,7 @@ i915_gem_object_is_readonly(const struct drm_i915_gem_object *obj)
 }
 
 static inline bool
-i915_gem_object_allows_atomic_system(struct drm_i915_gem_object *obj)
+i915_gem_object_allows_atomic_system(const struct drm_i915_gem_object *obj)
 {
 	return obj->mm.madv_atomic == I915_BO_ATOMIC_SYSTEM;
 }
@@ -343,7 +327,7 @@ i915_gem_object_allows_atomic_device(struct drm_i915_gem_object *obj)
 }
 
 static inline bool
-i915_gem_object_test_preferred_location(struct drm_i915_gem_object *obj,
+i915_gem_object_test_preferred_location(const struct drm_i915_gem_object *obj,
 					enum intel_region_id region_id)
 {
 
@@ -437,47 +421,6 @@ i915_gem_object_is_framebuffer(const struct drm_i915_gem_object *obj)
 {
 	return READ_ONCE(obj->frontbuffer);
 }
-
-static inline unsigned int
-i915_gem_object_get_tiling(const struct drm_i915_gem_object *obj)
-{
-	return obj->tiling_and_stride & TILING_MASK;
-}
-
-static inline bool
-i915_gem_object_is_tiled(const struct drm_i915_gem_object *obj)
-{
-	return i915_gem_object_get_tiling(obj) != I915_TILING_NONE;
-}
-
-static inline unsigned int
-i915_gem_object_get_stride(const struct drm_i915_gem_object *obj)
-{
-	return obj->tiling_and_stride & STRIDE_MASK;
-}
-
-static inline unsigned int
-i915_gem_tile_height(unsigned int tiling)
-{
-	GEM_BUG_ON(!tiling);
-	return tiling == I915_TILING_Y ? 32 : 8;
-}
-
-static inline unsigned int
-i915_gem_object_get_tile_height(const struct drm_i915_gem_object *obj)
-{
-	return i915_gem_tile_height(i915_gem_object_get_tiling(obj));
-}
-
-static inline unsigned int
-i915_gem_object_get_tile_row_size(const struct drm_i915_gem_object *obj)
-{
-	return (i915_gem_object_get_stride(obj) *
-		i915_gem_object_get_tile_height(obj));
-}
-
-int i915_gem_object_set_tiling(struct drm_i915_gem_object *obj,
-			       unsigned int tiling, unsigned int stride);
 
 struct scatterlist *
 __i915_gem_object_get_sg(struct drm_i915_gem_object *obj,
@@ -608,7 +551,6 @@ i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj)
 
 int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj);
 void i915_gem_object_truncate(struct drm_i915_gem_object *obj);
-void i915_gem_object_writeback(struct drm_i915_gem_object *obj);
 
 /**
  * i915_gem_object_pin_map - return a contiguous mapping of the entire object
@@ -703,7 +645,7 @@ static inline bool cpu_write_needs_clflush(struct drm_i915_gem_object *obj)
 	if (obj->cache_dirty)
 		return false;
 
-	if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE))
+	if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
 		return true;
 
 	/* Currently in use by HW (display engine)? Keep flushed. */
@@ -758,16 +700,6 @@ int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, 
 
 bool i915_gem_object_is_shmem(const struct drm_i915_gem_object *obj);
 
-void __i915_gem_free_object_rcu(struct rcu_head *head);
-
-void __i915_gem_free_object(struct drm_i915_gem_object *obj);
-
-bool i915_gem_object_evictable(struct drm_i915_gem_object *obj);
-
-bool i915_gem_object_migratable(struct drm_i915_gem_object *obj);
-
-bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj);
-
 /**
  * i915_gem_get_locking_ctx - Get the locking context of a locked object
  * if any.
@@ -799,8 +731,6 @@ i915_gem_object_is_userptr(struct drm_i915_gem_object *obj)
 static inline bool i915_gem_object_is_userptr(struct drm_i915_gem_object *obj) { return false; }
 #endif
 
-bool i915_gem_object_should_migrate_smem(struct drm_i915_gem_object *obj,
-					 bool *required);
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 					 enum intel_region_id dst_region_id,
 					 bool is_atomic_fault);

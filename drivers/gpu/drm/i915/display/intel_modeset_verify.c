@@ -14,7 +14,6 @@
 #include "intel_cx0_phy.h"
 #include "intel_display.h"
 #include "intel_display_types.h"
-#include "intel_fdi.h"
 #include "intel_modeset_verify.h"
 #include "intel_pm.h"
 #include "intel_snps_phy.h"
@@ -82,25 +81,6 @@ verify_connector_state(struct intel_atomic_state *state,
 
 		I915_STATE_WARN(new_conn_state->best_encoder != encoder,
 				"connector's atomic encoder doesn't match legacy encoder\n");
-	}
-}
-
-static void intel_pipe_config_sanity_check(struct drm_i915_private *dev_priv,
-					   const struct intel_crtc_state *pipe_config)
-{
-	if (pipe_config->has_pch_encoder) {
-		int fdi_dotclock = intel_dotclock_calculate(intel_fdi_link_freq(dev_priv, pipe_config),
-							    &pipe_config->fdi_m_n);
-		int dotclock = pipe_config->hw.adjusted_mode.crtc_clock;
-
-		/*
-		 * FDI already provided one idea for the dotclock.
-		 * Yell if the encoder disagrees.
-		 */
-		drm_WARN(&dev_priv->drm,
-			 !intel_fuzzy_clock_check(fdi_dotclock, dotclock),
-			 "FDI dotclock and encoder dotclock mismatch, fdi: %i, encoder: %i\n",
-			 fdi_dotclock, dotclock);
 	}
 }
 
@@ -178,10 +158,6 @@ verify_crtc_state(struct intel_crtc *crtc,
 
 	intel_crtc_get_pipe_config(pipe_config);
 
-	/* we keep both pipes enabled on 830 */
-	if (IS_I830(dev_priv) && pipe_config->hw.active)
-		pipe_config->hw.active = new_crtc_state->hw.active;
-
 	I915_STATE_WARN(new_crtc_state->hw.active != pipe_config->hw.active,
 			"crtc active state doesn't match with hw state (expected %i, found %i)\n",
 			new_crtc_state->hw.active, pipe_config->hw.active);
@@ -212,8 +188,6 @@ verify_crtc_state(struct intel_crtc *crtc,
 
 	if (!new_crtc_state->hw.active)
 		return;
-
-	intel_pipe_config_sanity_check(dev_priv, pipe_config);
 
 	if (!intel_pipe_config_compare(new_crtc_state,
 				       pipe_config, false)) {

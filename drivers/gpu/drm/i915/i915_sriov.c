@@ -408,7 +408,7 @@ void i915_sriov_pf_confirm(struct drm_i915_private *i915)
 		intel_iov_provisioning_force_vgt_mode(&gt->iov);
 }
 
-/**
+/*
  * i915_sriov_pf_abort - Abort PF initialization.
  * @i915: the i915 struct
  *
@@ -426,7 +426,7 @@ void i915_sriov_pf_abort(struct drm_i915_private *i915, int err)
 	pf_set_status(i915, err);
 }
 
-/**
+/*
  * i915_sriov_pf_aborted - Check if PF initialization was aborted.
  * @i915: the i915 struct
  *
@@ -498,7 +498,7 @@ set:
 	return 0;
 }
 
-/**
+/*
  * i915_sriov_print_info - Print SR-IOV information.
  * @iov: the i915 struct
  * @p: the DRM printer

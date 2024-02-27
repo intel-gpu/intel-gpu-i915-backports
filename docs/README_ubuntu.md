@@ -1,39 +1,22 @@
 
-# Ubuntu Supported OS Kernel/Distribution
-  Our current backport supports the following OS Distribution.
+# Ubuntu® Supported OS Kernel/Distribution
+
+This repository contains the following drivers.
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+2. Intel® Converged Security Engine(CSE) - Converged Security Engine
+3. Intel® Platform Monitoring Technology(PMT/VSEC) - Intel® Platform Telemetry
+
+Our current backport supports the following OS Distribution.
 
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 Desktop | 6.2 generic |
+| Ubuntu® | 22.04 Desktop | 6.5 generic |
 | | 22.04 Server| 5.15 generic |
 
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/versions) file to check value of UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu. It will point to the kernel version which is being used during backporting.
-
-  In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
-
-  Ubuntu 22.04 Desktop:
-```
-$sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
-linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
-
-Example:
-       $sudo apt install linux-headers-6.2.0-26-generic \
-       linux-image-unsigned-6.2.0-26-generic
-```
-  Ubuntu 22.04 Server:
-```
-$sudo apt install linux-headers-<UBUNTU_22.04_SERVER_KERNEL_VERSION>\
-linux-image-unsigned-<UBUNTU_22.04_SERVER_KERNEL_VERSION>
-
-Example:
-       $sudo apt install linux-headers-5.15.0-41-generic\
-       linux-image-unsigned-5.15.0-41-generic
-```
-
-Please note that dkms installation will skip if the kernel headers are not installed.
+  Please refer [Version](../versions) file to check value of UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu®. It will point to the kernel version which is being used during backporting.
 
 ## Prerequisite
 We have dependencies on the following packages
@@ -47,93 +30,95 @@ We have dependencies on the following packages
   - mawk
 
 ```
-$sudo apt install dkms make debhelper devscripts build-essential flex bison mawk
+$ sudo apt install dkms make debhelper devscripts build-essential flex bison mawk
 ```
-For dkms modules, we need to install `dkms` package also.
+For DKMS modules, we need to install `dkms` package too.
 ```
-$sudo apt install dkms
+$ sudo apt install dkms
 ```
-## Out of tree kernel drivers
-This repository contains following drivers.
-1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
-2. Intel® Converged Security Engine(cse) - Converged Security Engine
-3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
-
 
 ## Dependencies
 
-  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+ These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
-- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
+
 ## Package creation
+
 ### Dynamic Kernel Module Support(DKMS)
 
-There are two ways to create i915 dkms packages.
-1. Using default command :
+Creating i915 DKMS packages
 ```
-$make i915dkmsdeb-pkg
+$ make <Build Options> <DKMS Package Target>
+
 Example:
-        $make i915dkmsdeb-pkg
+	$ make i915dkmsdeb-pkg
 
-      Generated package name :
-                intel-i915-dkms_1.23.6.24.230425.29+i1-1_all.deb
+	Generated package name :
+		intel-i915-dkms_1.23.6.24.230425.29+i1-1_all.deb
 ```
+Above command will create Debian package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
 
-2. OS distribution option:
+Please note that DKMS installation will skip if the kernel headers are not installed.
 
-    Adds OS kernel version as part of dkms pacakge name.
+In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+
+  Ubuntu® 22.04 Desktop:
 ```
-$make i915dkmsdeb-pkg OS_DISTRIBUTION=<os_distribution>
+$ sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
+linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
+
 Example:
-        $make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_SERVER
-
-      Generated package name :
-		intel-i915-dkms_1.23.6.24.230425.29.5.15.0.53+i1-1_all.deb
-```
-Above cmd will create debain package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
-
-Use below help command to get the list of supported os distributions.
-```
-$make dkms-pkg-help
-To create the package with specific kernel version, pass the supported kernel name to OS_DISTRIBUTION option
-
-##### List of supported osv kernel versions #####
-UBUNTU_22.04_SERVER
-UBUNTU_22.04_DESKTOP
-
+       $ sudo apt install linux-headers-6.5.0-15-generic \
+       linux-image-unsigned-6.5.0-15-generic
 ```
 
 ### Binary Package
-Creation of binary debian can be done using the below command. By default it will use header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguement
+Creation of binary Debian can be done using the below command. By default it will use the header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 ```
-$make KLIB=<Header Path> KLIB_BUILD=<Header Path> bindeb-pkg
+$ make KLIB=<Header Path> KLIB_BUILD=<Header Path>/build i915bindeb-pkg
 
-Exmaple:
-$make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r) bindeb-pkg
+Example:
+	$ make KLIB=/lib/modules/$(uname -r) KLIB_BUILD=/lib/modules/$(uname -r)/build i915bindeb-pkg
 
-Generated Files:
-intel-i915-<version>.$(uname -r)-1.x86_64.deb
+	Generated Files:
+		intel-i915-<version>.$(uname -r)-1.x86_64.deb
 ```
+Above command will create Debian package in parent folder.
 
-## Installation
-```
-$sudo dpkg -i intel-i915*.deb
-```
-#### Reboot the device after installation of all packages.
-```
-$sudo reboot
-```
+### Build Options
+Build options provides list of different arguments which can be passed during package creation or build.
 
-## Installation verification
+Please refer to [README_common](README_common.md) for full list of Build options.
 
-Please grep **backport**  from dmesg after reboot. you should see something like below
+## Installation and verification
 ```
-> sudo dmesg |grep -i backport
+$ sudo dpkg -i intel-i915*.deb
+```
+Reboot the device after installation of all packages.
+```
+$ sudo reboot
+```
+Please refer to [README_common](README_common.md) for Installation verification process.
+
+For verification, Please grep **backport** from dmesg after reboot. You should see something like below
+```
+$ sudo dmesg |grep -i backport
 [    5.963854] COMPAT BACKPORTED INIT
-[    5.968761] Loading modules backported from I915_23.6.24
+[    5.968761] Loading modules backported from I915-23.6.24
 [    5.976154] Backport generated by backports.git I915_23.6.24_PSB_230425.29
 [    6.069699] [drm] I915 BACKPORTED INIT
+```
+Please refer to [README_backport_version](README_backport_version.md) for different verification processes.
+
+## Uninstallation
+```
+$ sudo dpkg -r intel-i915*
+```
+Reboot the device after uninstallation of all packages.
+```
+$ sudo reboot
 ```

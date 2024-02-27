@@ -37,7 +37,7 @@ static inline struct netlink_ext_ack *genl_info_extack(struct genl_info *info)
 /* this is for patches we apply */
 static inline struct netlink_ext_ack *genl_callback_extack(struct netlink_callback *cb)
 {
-#if LINUX_VERSION_IS_GEQ(4,20,0)
+#ifdef BPM_CB_EXTRACK_NOT_PRESENT
 	return cb->extack;
 #else
 	return NULL;
@@ -101,7 +101,7 @@ void backport_genl_dump_check_consistent(struct netlink_callback *cb,
 #endif
 #endif /* LINUX_VERSION_IS_LESS(4,15,0) */
 
-#if LINUX_VERSION_IS_LESS(5,2,0)
+#ifdef BPM_GENL_VALIDATE_FLAGS_PRESENT
 enum genl_validate_flags {
 	GENL_DONT_VALIDATE_STRICT		= BIT(0),
 	GENL_DONT_VALIDATE_DUMP			= BIT(1),
