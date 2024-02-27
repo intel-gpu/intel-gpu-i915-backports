@@ -16,12 +16,6 @@ struct i915_address_space;
 struct intel_gt;
 
 struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags);
-u64 gen8_ggtt_pte_encode(dma_addr_t addr,
-			 unsigned int pat_index,
-			 u32 flags);
-u64 mtl_ggtt_pte_encode(dma_addr_t addr,
-			unsigned int pat_index,
-			u32 flags);
 
 int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,
 			       struct drm_mm_node *node);
@@ -31,7 +25,7 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 void intel_flat_lmem_ppgtt_fini(struct i915_address_space *vm,
 				struct drm_mm_node *node);
 
-void gen12_init_fault_scratch(struct i915_address_space *vm, u64 start, u64 length,
-			      bool valid);
+int pvc_ppgtt_fault(struct i915_address_space *vm,
+		    u64 start, u64 length, bool valid);
 
 #endif

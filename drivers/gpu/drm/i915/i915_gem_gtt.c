@@ -23,7 +23,6 @@
 #include "i915_gem_evict.h"
 #include "i915_scatterlist.h"
 #include "i915_trace.h"
-#include "i915_vgpu.h"
 
 int i915_gem_gtt_prepare_pages(struct drm_i915_gem_object *obj,
 			       struct sg_table *pages)
@@ -98,7 +97,6 @@ int i915_gem_gtt_reserve(struct i915_address_space *vm,
 	GEM_BUG_ON(!IS_ALIGNED(size, I915_GTT_PAGE_SIZE));
 	GEM_BUG_ON(!IS_ALIGNED(offset, I915_GTT_MIN_ALIGNMENT));
 	GEM_BUG_ON(range_overflows(offset, size, vm->total));
-	GEM_BUG_ON(vm == &to_gt(vm->i915)->ggtt->alias->vm);
 	GEM_BUG_ON(drm_mm_node_allocated(node));
 
 	node->size = size;
@@ -196,7 +194,6 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 	GEM_BUG_ON(start >= end);
 	GEM_BUG_ON(start > 0  && !IS_ALIGNED(start, I915_GTT_PAGE_SIZE));
 	GEM_BUG_ON(end < U64_MAX && !IS_ALIGNED(end, I915_GTT_PAGE_SIZE));
-	GEM_BUG_ON(vm == &to_gt(vm->i915)->ggtt->alias->vm);
 	GEM_BUG_ON(drm_mm_node_allocated(node));
 
 	if (unlikely(range_overflows(start, size, end)))
@@ -208,8 +205,6 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 	mode = DRM_MM_INSERT_BEST;
 	if (flags & PIN_HIGH)
 		mode = DRM_MM_INSERT_HIGHEST;
-	if (flags & PIN_MAPPABLE)
-		mode = DRM_MM_INSERT_LOW;
 
 	/* We only allocate in PAGE_SIZE/GTT_PAGE_SIZE (4096) chunks,
 	 * so we know that we always have a minimum alignment of 4096.

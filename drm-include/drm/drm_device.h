@@ -314,7 +314,7 @@ struct drm_device {
 
 	/* Everything below here is for legacy driver, never use! */
 	/* private: */
-#if IS_ENABLED(CONFIG_DRM_LEGACY)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY)
 	/* List of devices per driver for stealth attach cleanup */
 	struct list_head legacy_dev_list;
 

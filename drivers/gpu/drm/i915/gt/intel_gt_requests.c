@@ -146,8 +146,8 @@ void intel_engine_fini_retire(struct intel_engine_cs *engine)
 
 /**
  * intel_gt_retire_requests_timeout - try to retire all completed requests
- * @gt - the GT from which to retire outstanding requests
- * @remain - How long we should wait in total for any outstanding request
+ * @gt: the GT from which to retire outstanding requests
+ * @remain: How long we should wait in total for any outstanding request
  *
  * Look through all the active timelines/contexts on the GT, and try to
  * retire all the requests. If @remain is provided, any incomplete

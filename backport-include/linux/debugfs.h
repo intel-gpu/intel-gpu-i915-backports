@@ -74,16 +74,4 @@ debugfs_create_ulong(const char *name, umode_t mode,
 }
 #endif
 
-#if LINUX_VERSION_IS_LESS(5,5,0)
-static inline void debugfs_create_xul(const char *name, umode_t mode,
-				      struct dentry *parent,
-				      unsigned long *value)
-{
-	if (sizeof(*value) == sizeof(u32))
-		debugfs_create_x32(name, mode, parent, (u32 *)value);
-	else
-		debugfs_create_x64(name, mode, parent, (u64 *)value);
-}
-#endif
-
 #endif /* __BACKPORT_DEBUGFS_H_ */

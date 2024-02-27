@@ -46,5 +46,6 @@ void intel_fbc_handle_fifo_underrun_irq(struct drm_i915_private *i915);
 void intel_fbc_reset_underrun(struct drm_i915_private *i915);
 void intel_fbc_crtc_debugfs_add(struct intel_crtc *crtc);
 void intel_fbc_debugfs_register(struct drm_i915_private *i915);
+
 #endif /* CPTCFG_DRM_I915_DISPLAY */
 #endif /* __INTEL_FBC_H__ */

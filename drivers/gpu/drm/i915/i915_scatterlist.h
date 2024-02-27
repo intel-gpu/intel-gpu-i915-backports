@@ -15,9 +15,6 @@
 
 #define I915_MAX_CHAIN_ALLOC (SG_MAX_SINGLE_ALLOC - 1)
 
-struct drm_mm_node;
-struct ttm_resource;
-
 /*
  * Optimised SGL iterator for GEM objects
  */
@@ -161,17 +158,12 @@ typedef unsigned int __sg_size_t; /* see linux/scatterlist.h */
 #define sg_alloc_table(sgt, nents, gfp) \
 	overflows_type(nents, __sg_size_t) ? -E2BIG : (sg_alloc_table)(sgt, (__sg_size_t)(nents), gfp)
 
+#ifndef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #define __sg_alloc_table_from_pages(sgt, pages, npages, offset, size, max_segment, prv, left, gfp) \
 	overflows_type(npages, __sg_size_t) ? ERR_PTR(-E2BIG) : (__sg_alloc_table_from_pages)(sgt, pages, (__sg_size_t)(npages), offset, size, max_segment, prv, left, gfp)
+#endif
 
 #define sg_alloc_table_from_pages(sgt, pages, npages, offset, size, gfp) \
 	overflows_type(npages, __sg_size_t) ? -E2BIG : (sg_alloc_table_from_pages)(sgt, pages, (__sg_size_t)(npages), offset, size, gfp)
-
-
-struct sg_table *i915_sg_from_mm_node(const struct drm_mm_node *node,
-				      u64 region_start);
-
-struct sg_table *i915_sg_from_buddy_resource(struct ttm_resource *res,
-					     u64 region_start);
 
 #endif

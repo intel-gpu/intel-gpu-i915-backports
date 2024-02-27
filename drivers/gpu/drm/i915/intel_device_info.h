@@ -134,27 +134,15 @@ enum intel_platform {
 #define INTEL_SUBPLATFORM_M	0
 #define INTEL_SUBPLATFORM_P	1
 
-enum intel_ppgtt_type {
-	INTEL_PPGTT_NONE = I915_GEM_PPGTT_NONE,
-	INTEL_PPGTT_ALIASING = I915_GEM_PPGTT_ALIASING,
-	INTEL_PPGTT_FULL = I915_GEM_PPGTT_FULL,
-};
-
 #define DEV_INFO_FOR_EACH_FLAG(func) \
-	func(is_mobile); \
 	func(is_lp); \
-	func(require_force_probe); \
 	func(is_dgfx); \
 	/* Keep has_* in alphabetical order */ \
-	func(has_64bit_reloc); \
 	func(has_64k_pages); \
 	func(has_access_counter); \
 	func(has_asid_tlb_invalidation); \
 	func(has_cache_clos); \
-	func(has_coherent_ggtt); \
 	func(has_gmd_id); \
-	func(gpu_reset_clobbers_display); \
-	func(has_reset_engine); \
 	func(has_3d_pipeline); \
 	func(has_4tile); \
 	func(has_eu_stall_sampling); \
@@ -174,8 +162,6 @@ enum intel_ppgtt_type {
 	func(has_link_copy_engines); \
 	func(has_llc); \
 	func(has_lmtt_lvl2); \
-	func(has_logical_ring_contexts); \
-	func(has_logical_ring_elsq); \
 	func(has_media_ratio_mode); \
 	func(has_mem_sparing); \
 	func(has_mslice_steering); \
@@ -188,11 +174,8 @@ enum intel_ppgtt_type {
 	func(has_one_eu_per_fuse_bit); \
 	func(has_pooled_eu); \
 	func(has_pxp); \
-	func(has_rc6); \
-	func(has_rc6p); \
 	func(has_recoverable_page_fault); \
 	func(has_remote_tiles); \
-	func(has_rps); \
 	func(has_runtime_pm); \
 	func(has_selective_tlb_invalidation); \
 	func(has_semaphore_xehpsdv); \
@@ -200,7 +183,6 @@ enum intel_ppgtt_type {
 	func(has_snoop); \
 	func(has_sriov); \
 	func(has_um_queues); \
-	func(has_null_page); \
 	func(tuning_thread_rr_after_dep); \
 	func(has_csc_uid);	\
 	func(has_lmem_max_bandwidth);	\
@@ -211,25 +193,17 @@ enum intel_ppgtt_type {
 
 #define DEV_INFO_DISPLAY_FOR_EACH_FLAG(func) \
 	/* Keep in alphabetical order */ \
-	func(cursor_needs_physical); \
 	func(has_cdclk_crawl); \
 	func(has_dmc); \
 	func(has_ddi); \
-	func(has_dp_mst); \
 	func(has_dsb); \
 	func(has_dsc); \
 	func(has_fpga_dbg); \
-	func(has_gmch); \
 	func(has_hdcp); \
-	func(has_hotplug); \
 	func(has_hti); \
-	func(has_ipc); \
 	func(has_modular_fia); \
-	func(has_overlay); \
 	func(has_psr); \
-	func(has_psr_hw_tracking); \
-	func(overlay_needs_physical); \
-	func(supports_tv);
+	func(has_psr_hw_tracking);
 
 struct ip_version {
 	u8 ver;
@@ -247,7 +221,6 @@ struct intel_device_info {
 
 	unsigned int dma_mask_size; /* available DMA address bits */
 
-	enum intel_ppgtt_type ppgtt_type;
 	unsigned int ppgtt_size; /* log2, e.g. 31/32/48 bits */
 
 	unsigned int ppgtt_msb; /* Virtual Addresss msb supported by the HW */

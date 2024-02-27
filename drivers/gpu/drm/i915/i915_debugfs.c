@@ -105,21 +105,6 @@ static int sriov_info_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-static char get_tiling_flag(struct drm_i915_gem_object *obj)
-{
-	switch (i915_gem_object_get_tiling(obj)) {
-	default:
-	case I915_TILING_NONE: return ' ';
-	case I915_TILING_X: return 'X';
-	case I915_TILING_Y: return 'Y';
-	}
-}
-
-static char get_global_flag(struct drm_i915_gem_object *obj)
-{
-	return READ_ONCE(obj->userfault_count) ? 'g' : ' ';
-}
-
 static char get_pin_mapped_flag(struct drm_i915_gem_object *obj)
 {
 	return obj->mm.mapping ? 'M' : ' ';
@@ -219,10 +204,8 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 	struct i915_vma *vma;
 	int pin_count = 0;
 
-	seq_printf(m, "%pK: %c%c%c %8zdKiB %02x %02x %s%s",
+	seq_printf(m, "%pK: %c %8zdKiB %02x %02x %s%s",
 		   &obj->base,
-		   get_tiling_flag(obj),
-		   get_global_flag(obj),
 		   get_pin_mapped_flag(obj),
 		   obj->base.size / 1024,
 		   obj->read_domains,
@@ -293,8 +276,6 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 				break;
 			}
 		}
-		if (vma->fence)
-			seq_printf(m, " , fence: %d", vma->fence->id);
 		seq_puts(m, ")");
 
 		spin_lock(&obj->vma.lock);
@@ -504,83 +485,6 @@ static int i915_frequency_info_show(struct seq_file *m, void *unused)
 	struct drm_printer p = drm_seq_file_printer(m);
 
 	intel_gt_pm_frequency_dump(gt, &p);
-
-	return 0;
-}
-
-static const char *swizzle_string(unsigned swizzle)
-{
-	switch (swizzle) {
-	case I915_BIT_6_SWIZZLE_NONE:
-		return "none";
-	case I915_BIT_6_SWIZZLE_9:
-		return "bit9";
-	case I915_BIT_6_SWIZZLE_9_10:
-		return "bit9/bit10";
-	case I915_BIT_6_SWIZZLE_9_11:
-		return "bit9/bit11";
-	case I915_BIT_6_SWIZZLE_9_10_11:
-		return "bit9/bit10/bit11";
-	case I915_BIT_6_SWIZZLE_9_17:
-		return "bit9/bit17";
-	case I915_BIT_6_SWIZZLE_9_10_17:
-		return "bit9/bit10/bit17";
-	case I915_BIT_6_SWIZZLE_UNKNOWN:
-		return "unknown";
-	}
-
-	return "bug";
-}
-
-static int i915_swizzle_info_show(struct seq_file *m, void *data)
-{
-	struct drm_i915_private *dev_priv = m->private;
-	struct intel_uncore *uncore = &dev_priv->uncore;
-	intel_wakeref_t wakeref;
-
-	seq_printf(m, "bit6 swizzle for X-tiling = %s\n",
-		   swizzle_string(to_gt(dev_priv)->ggtt->bit_6_swizzle_x));
-	seq_printf(m, "bit6 swizzle for Y-tiling = %s\n",
-		   swizzle_string(to_gt(dev_priv)->ggtt->bit_6_swizzle_y));
-
-	if (dev_priv->gem_quirks & GEM_QUIRK_PIN_SWIZZLED_PAGES)
-		seq_puts(m, "L-shaped memory detected\n");
-
-	/* On BDW+, swizzling is not used. See detect_bit_6_swizzle() */
-	if (GRAPHICS_VER(dev_priv) >= 8 || IS_VALLEYVIEW(dev_priv))
-		return 0;
-
-	wakeref = intel_runtime_pm_get(&dev_priv->runtime_pm);
-
-	if (IS_GRAPHICS_VER(dev_priv, 3, 4)) {
-		seq_printf(m, "DDC = 0x%08x\n",
-			   intel_uncore_read(uncore, DCC));
-		seq_printf(m, "DDC2 = 0x%08x\n",
-			   intel_uncore_read(uncore, DCC2));
-		seq_printf(m, "C0DRB3 = 0x%04x\n",
-			   intel_uncore_read16(uncore, C0DRB3_BW));
-		seq_printf(m, "C1DRB3 = 0x%04x\n",
-			   intel_uncore_read16(uncore, C1DRB3_BW));
-	} else if (GRAPHICS_VER(dev_priv) >= 6) {
-		seq_printf(m, "MAD_DIMM_C0 = 0x%08x\n",
-			   intel_uncore_read(uncore, MAD_DIMM_C0));
-		seq_printf(m, "MAD_DIMM_C1 = 0x%08x\n",
-			   intel_uncore_read(uncore, MAD_DIMM_C1));
-		seq_printf(m, "MAD_DIMM_C2 = 0x%08x\n",
-			   intel_uncore_read(uncore, MAD_DIMM_C2));
-		seq_printf(m, "TILECTL = 0x%08x\n",
-			   intel_uncore_read(uncore, TILECTL));
-		if (GRAPHICS_VER(dev_priv) >= 8)
-			seq_printf(m, "GAMTARBMODE = 0x%08x\n",
-				   intel_uncore_read(uncore, GAMTARBMODE));
-		else
-			seq_printf(m, "ARB_MODE = 0x%08x\n",
-				   intel_uncore_read(uncore, ARB_MODE));
-		seq_printf(m, "DISP_ARB_CTL = 0x%08x\n",
-			   intel_uncore_read(uncore, DISP_ARB_CTL));
-	}
-
-	intel_runtime_pm_put(&dev_priv->runtime_pm, wakeref);
 
 	return 0;
 }
@@ -1045,6 +949,8 @@ gt_drop_caches(struct intel_gt *gt, u64 val)
 	if (val & DROP_FREED)
 		intel_gt_flush_buffer_pool(gt);
 
+	if (gt->wq)
+		flush_workqueue(gt->wq);
 	return 0;
 }
 
@@ -1252,7 +1158,6 @@ DEFINE_I915_SHOW_ATTRIBUTE(i915_mocs_table);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_capabilities);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_gem_object_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_frequency_info);
-DEFINE_I915_SHOW_ATTRIBUTE(i915_swizzle_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_runtime_pm_status);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_engine_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_sseu_status);
@@ -1267,7 +1172,6 @@ static struct i915_debugfs_file i915_debugfs_list[] = {
 	{"i915_capabilities", &i915_capabilities_fops, NULL},
 	{"i915_gem_objects", &i915_gem_object_info_fops, NULL},
 	{"i915_frequency_info", &i915_frequency_info_fops, NULL},
-	{"i915_swizzle_info", &i915_swizzle_info_fops, NULL},
 	{"i915_runtime_pm_status", &i915_runtime_pm_status_fops, NULL},
 	{"i915_engine_info", &i915_engine_info_fops, NULL},
 	{"i915_sseu_status", &i915_sseu_status_fops, NULL},

@@ -25,12 +25,10 @@
 #include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
-#include "intel_migrate.h"
 #include "intel_mocs.h"
 #include "intel_pci_config.h"
 #include "intel_pm.h"
 #include "intel_rc6.h"
-#include "intel_renderstate.h"
 #include "intel_rps.h"
 #include "intel_sa_media.h"
 #include "intel_tlb.h"
@@ -88,6 +86,7 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	gt->suspend = true;
 
 	spin_lock_init(gt->irq_lock);
+	i915_px_cache_init(&gt->px_cache);
 
 	INIT_LIST_HEAD(&gt->pinned_contexts);
 
@@ -190,35 +189,6 @@ int intel_gt_init_mmio(struct intel_gt *gt)
 	return intel_engines_init_mmio(gt);
 }
 
-static void init_unused_ring(struct intel_gt *gt, u32 base)
-{
-	struct intel_uncore *uncore = gt->uncore;
-
-	intel_uncore_write(uncore, RING_CTL(base), 0);
-	intel_uncore_write(uncore, RING_HEAD(base), 0);
-	intel_uncore_write(uncore, RING_TAIL(base), 0);
-	intel_uncore_write(uncore, RING_START(base), 0);
-}
-
-static void init_unused_rings(struct intel_gt *gt)
-{
-	struct drm_i915_private *i915 = gt->i915;
-
-	if (IS_I830(i915)) {
-		init_unused_ring(gt, PRB1_BASE);
-		init_unused_ring(gt, SRB0_BASE);
-		init_unused_ring(gt, SRB1_BASE);
-		init_unused_ring(gt, SRB2_BASE);
-		init_unused_ring(gt, SRB3_BASE);
-	} else if (GRAPHICS_VER(i915) == 2) {
-		init_unused_ring(gt, SRB0_BASE);
-		init_unused_ring(gt, SRB1_BASE);
-	} else if (GRAPHICS_VER(i915) == 3) {
-		init_unused_ring(gt, PRB1_BASE);
-		init_unused_ring(gt, PRB2_BASE);
-	}
-}
-
 int intel_gt_init_hw(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
@@ -230,38 +200,13 @@ int intel_gt_init_hw(struct intel_gt *gt)
 	/* Double layer security blanket, see i915_gem_init() */
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_ALL);
 
-	if (HAS_EDRAM(i915) && GRAPHICS_VER(i915) < 9)
-		intel_uncore_rmw(uncore, HSW_IDICR, 0, IDIHASHMSK(0xf));
-
-	if (IS_HASWELL(i915))
-		intel_uncore_write(uncore,
-				   HSW_MI_PREDICATE_RESULT_2,
-				   IS_HSW_GT3(i915) ?
-				   LOWER_SLICE_ENABLED : LOWER_SLICE_DISABLED);
-
 	/* Apply the GT workarounds... */
 	intel_gt_apply_workarounds(gt);
 	/* ...and determine whether they are sticking. */
 	intel_gt_verify_workarounds(gt, "init");
 
-	intel_gt_init_swizzling(gt);
-
 	/* get CCS mode in sync between sw/hw */
 	intel_gt_apply_ccs_mode(gt);
-
-	/*
-	 * At least 830 can leave some of the unused rings
-	 * "active" (ie. head != tail) after resume which
-	 * will prevent c3 entry. Makes sure all unused rings
-	 * are totally idle.
-	 */
-	init_unused_rings(gt);
-
-	ret = i915_ppgtt_init_hw(gt);
-	if (ret) {
-		gt_err(gt, "Enabling PPGTT failed (%d)\n", ret);
-		goto out;
-	}
 
 	/*
 	 * GuC DMA transfers are affected by MOCS programming on some
@@ -486,52 +431,9 @@ void intel_gt_check_and_clear_faults(struct intel_gt *gt)
 	intel_gt_clear_error_registers(gt, ALL_ENGINES);
 }
 
-void intel_gt_flush_ggtt_writes(struct intel_gt *gt)
-{
-	struct intel_uncore *uncore = gt->uncore;
-	intel_wakeref_t wakeref;
-
-	/*
-	 * No actual flushing is required for the GTT write domain for reads
-	 * from the GTT domain. Writes to it "immediately" go to main memory
-	 * as far as we know, so there's no chipset flush. It also doesn't
-	 * land in the GPU render cache.
-	 *
-	 * However, we do have to enforce the order so that all writes through
-	 * the GTT land before any writes to the device, such as updates to
-	 * the GATT itself.
-	 *
-	 * We also have to wait a bit for the writes to land from the GTT.
-	 * An uncached read (i.e. mmio) seems to be ideal for the round-trip
-	 * timing. This issue has only been observed when switching quickly
-	 * between GTT writes and CPU reads from inside the kernel on recent hw,
-	 * and it appears to only affect discrete GTT blocks (i.e. on LLC
-	 * system agents we cannot reproduce this behaviour, until Cannonlake
-	 * that was!).
-	 */
-
-	wmb();
-
-	if (INTEL_INFO(gt->i915)->has_coherent_ggtt)
-		return;
-
-	intel_gt_chipset_flush(gt);
-
-	with_intel_runtime_pm_if_in_use(uncore->rpm, wakeref) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&uncore->lock, flags);
-		intel_uncore_posting_read_fw(uncore,
-					     RING_HEAD(RENDER_RING_BASE));
-		spin_unlock_irqrestore(&uncore->lock, flags);
-	}
-}
-
 void intel_gt_driver_register(struct intel_gt *gt)
 {
 	intel_gsc_init(&gt->gsc, gt->i915);
-
-	intel_rps_driver_register(&gt->rps);
 
 	intel_gt_debugfs_register(gt);
 	intel_gt_sysfs_register(gt);
@@ -546,8 +448,6 @@ static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
 	int ret;
 
 	obj = intel_gt_object_create_lmem(gt, size, I915_BO_ALLOC_VOLATILE);
-	if (IS_ERR(obj))
-		obj = i915_gem_object_create_stolen(i915, size);
 	if (IS_ERR(obj))
 		obj = i915_gem_object_create_internal(i915, size);
 	if (IS_ERR(obj)) {
@@ -720,17 +620,15 @@ static struct i915_address_space *kernel_vm(struct intel_gt *gt)
 	struct i915_ppgtt *ppgtt;
 	int err;
 
-	if (INTEL_PPGTT(gt->i915) <= INTEL_PPGTT_ALIASING)
-		return i915_vm_get(&gt->ggtt->vm);
-
 	ppgtt = i915_ppgtt_create(gt, 0);
 	if (IS_ERR(ppgtt))
 		return ERR_CAST(ppgtt);
 
 	/* Setup a 1:1 mapping into our portion of lmem */
 	if (gt->lmem) {
-		gt->flat.start = round_down(gt->lmem->region.start, SZ_1G);
-		gt->flat.size  = round_up(gt->lmem->region.end, SZ_1G);
+		if (gt->lmem->region.start)
+			gt->flat.start = round_down(gt->lmem->region.start, SZ_1G);
+		gt->flat.size  = round_up(gt->lmem->region.end + 1, SZ_1G);
 		gt->flat.size -= gt->flat.start;
 		gt->flat.color = I915_COLOR_UNEVICTABLE;
 		drm_dbg(&gt->i915->drm,
@@ -759,7 +657,6 @@ static void release_vm(struct intel_gt *gt)
 	i915_vm_put(vm);
 }
 
-/* FIXME Add documentation to API */
 static struct i915_request *
 switch_context_to(struct intel_context *ce, struct i915_request *from)
 {
@@ -782,16 +679,10 @@ switch_context_to(struct intel_context *ce, struct i915_request *from)
 	return rq;
 }
 
-/* FIXME Add documentation to API */
 static struct i915_request *load_default_context(struct intel_context *ce)
 {
-	struct intel_renderstate so;
 	struct i915_request *rq;
 	int err;
-
-	err = intel_renderstate_init(&so, ce);
-	if (err)
-		return ERR_PTR(err);
 
 	rq = i915_request_create(ce);
 	if (IS_ERR(rq)) {
@@ -803,19 +694,13 @@ static struct i915_request *load_default_context(struct intel_context *ce)
 	if (err)
 		goto err_rq;
 
-	err = intel_renderstate_emit(&so, rq);
-	if (err)
-		goto err_rq;
-
 	rq = i915_request_get(rq);
 err_rq:
 	i915_request_add(rq);
 err_fini:
-	intel_renderstate_fini(&so, ce);
 	return err ? ERR_PTR(err) : rq;
 }
 
-/* FIXME Add documentation to API */
 static struct i915_request *
 record_default_context(struct intel_engine_cs *engine)
 {
@@ -857,6 +742,11 @@ record_default_context(struct intel_engine_cs *engine)
 	if (IS_ERR(rq[0]))
 		goto out_unpin;
 
+	/* Queue a switch away from the dummy context */
+	rq[1] = switch_context_to(engine->kernel_context, rq[0]);
+	if (!IS_ERR(rq[1]))
+		i915_request_put(rq[1]);
+
 	/*
 	 * Keep the context referenced until after we read back the
 	 * HW image. The reference is returned to the caller via
@@ -875,7 +765,6 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	struct i915_request *requests[I915_NUM_ENGINES] = {};
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
-	long timeout = I915_GEM_IDLE_TIMEOUT;
 	int err = 0;
 
 	/*
@@ -890,9 +779,6 @@ static int __engines_record_defaults(struct intel_gt *gt)
 	for_each_engine(engine, gt, id) {
 		struct i915_request *rq;
 
-		drm_dbg(&gt->i915->drm,
-			"Record default context on %s", engine->name);
-
 		rq = record_default_context(engine);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
@@ -900,14 +786,6 @@ static int __engines_record_defaults(struct intel_gt *gt)
 		}
 
 		requests[id] = rq;
-	}
-
-	/* Flush the default context image to memory, and enable powersaving. */
-	if (intel_gt_wait_for_idle(gt, timeout)) {
-		if (!i915_error_injected())
-			intel_klog_error_capture(gt, (intel_engine_mask_t) ~0U);
-		err = -EIO;
-		goto out;
 	}
 
 	for (id = 0; id < ARRAY_SIZE(requests); id++) {
@@ -918,7 +796,17 @@ static int __engines_record_defaults(struct intel_gt *gt)
 		if (!rq)
 			continue;
 
+		if (i915_request_wait(rq,
+				      I915_WAIT_INTERRUPTIBLE,
+				      MAX_SCHEDULE_TIMEOUT) < 0) {
+			err = -EINTR;
+			goto out;
+		}
+
 		if (rq->fence.error) {
+			drm_err(&gt->i915->drm,
+				"Error detected trying to record the default context on %s\n",
+				rq->engine->name);
 			err = -EIO;
 			goto out;
 		}
@@ -952,6 +840,7 @@ out:
 		intel_context_put(rq->context);
 		i915_request_put(rq);
 	}
+	intel_gt_retire_requests(gt);
 	return err;
 }
 
@@ -979,6 +868,7 @@ static int __engines_verify_workarounds(struct intel_gt *gt)
 static void __intel_gt_disable(struct intel_gt *gt)
 {
 	intel_gt_set_wedged_on_fini(gt);
+	i915_px_cache_fini(&gt->px_cache);
 
 	if (!gt->i915->quiesce_gpu) {
 		intel_gt_suspend_prepare(gt);
@@ -1007,12 +897,63 @@ int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
 	return intel_uc_wait_for_idle(&gt->uc, timeout);
 }
 
+static struct i915_sched_engine *
+create_sched_engine(int class,
+		    struct workqueue_struct *wq,
+		    const struct cpumask *cpumask)
+{
+	struct i915_sched_engine *se;
+
+	se = i915_sched_engine_create(class);
+	if (!se)
+		return NULL;
+
+	se->wq = wq;
+	se->cpumask = cpumask;
+	se->cpu = __i915_first_online_cpu(cpumask);
+
+	return se;
+}
+
+static const struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
+{
+	int nid;
+
+	nid = dev_to_node(i915->drm.dev);
+	if (nid == NUMA_NO_NODE)
+		return cpu_all_mask;
+
+	return cpumask_of_node(nid);
+}
+
+static int init_wq(struct intel_gt *gt)
+{
+	gt->wq = alloc_workqueue("i915-gt%d", WQ_UNBOUND, 0, gt->info.id);
+	if (!gt->wq)
+		return -ENOMEM;
+
+	gt->sched = create_sched_engine(5, gt->wq, cpumask_of_i915(gt->i915));
+	if (!gt->sched)
+		goto out_free_wq;
+
+	return 0;
+
+out_free_wq:
+	destroy_workqueue(gt->wq);
+	gt->wq = NULL;
+	return -ENOMEM;
+}
+
 int intel_gt_init(struct intel_gt *gt)
 {
 	struct i915_address_space *vm;
 	int err;
 
 	err = i915_inject_probe_error(gt->i915, -ENODEV);
+	if (err)
+		return err;
+
+	err = init_wq(gt);
 	if (err)
 		return err;
 
@@ -1029,7 +970,7 @@ int intel_gt_init(struct intel_gt *gt)
 
 	err = intel_iov_init(&gt->iov);
 	if (unlikely(err))
-		goto out_fw;
+		goto out_wq;
 
 	err = intel_gt_init_scratch(gt,
 				    GRAPHICS_VER(gt->i915) == 2 ? SZ_256K : SZ_4K);
@@ -1112,6 +1053,12 @@ err_scratch:
 	intel_gt_fini_scratch(gt);
 err_iov:
 	intel_iov_fini(&gt->iov);
+out_wq:
+	if (gt->wq) {
+		i915_sched_engine_put(gt->sched);
+		destroy_workqueue(gt->wq);
+		gt->wq = NULL;
+	}
 out_fw:
 	if (err)
 		intel_gt_set_wedged_on_init(gt);
@@ -1142,7 +1089,6 @@ void intel_gt_driver_unregister(struct intel_gt *gt)
 		intel_iov_sysfs_teardown(&gt->iov);
 
 	intel_gt_sysfs_unregister(gt);
-	intel_rps_driver_unregister(&gt->rps);
 	intel_gsc_fini(&gt->gsc);
 
 	intel_pxp_fini(&gt->pxp);
@@ -1193,6 +1139,12 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 		intel_gt_fini_timelines(gt);
 		intel_gt_fini_tlb(gt);
 		intel_engines_free(gt);
+
+		if (gt->wq) {
+			i915_sched_engine_put(gt->sched);
+			destroy_workqueue(gt->wq);
+			gt->wq = NULL;
+		}
 	}
 }
 

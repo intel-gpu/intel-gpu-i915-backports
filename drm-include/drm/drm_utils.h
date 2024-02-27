@@ -12,6 +12,13 @@
 
 #include <linux/types.h>
 
+#ifdef BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_RENAME
+
+#define drm_get_panel_orientation_quirk \
+	LINUX_I915_BACKPORT(drm_get_panel_orientation_quirk)
+
+#endif
+
 int drm_get_panel_orientation_quirk(int width, int height);
 
 signed long drm_timeout_abs_to_jiffies(int64_t timeout_nsec);

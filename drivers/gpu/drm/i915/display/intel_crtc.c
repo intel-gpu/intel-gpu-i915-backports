@@ -13,8 +13,6 @@
 #include <drm/drm_vblank_work.h>
 
 #include "i915_irq.h"
-#include "i915_vgpu.h"
-#include "i9xx_plane.h"
 #include "icl_dsi.h"
 #include "intel_atomic.h"
 #include "intel_atomic_plane.h"
@@ -86,8 +84,6 @@ u32 intel_crtc_get_vblank_counter(struct intel_crtc *crtc)
 
 u32 intel_crtc_max_vblank_count(const struct intel_crtc_state *crtc_state)
 {
-	struct drm_i915_private *dev_priv = to_i915(crtc_state->uapi.crtc->dev);
-
 	/*
 	 * From Gen 11, In case of dsi cmd mode, frame counter wouldnt
 	 * have updated at the beginning of TE, if we want to use
@@ -98,20 +94,8 @@ u32 intel_crtc_max_vblank_count(const struct intel_crtc_state *crtc_state)
 				      I915_MODE_FLAG_DSI_USE_TE1))
 		return 0;
 
-	/*
-	 * On i965gm the hardware frame counter reads
-	 * zero when the TV encoder is enabled :(
-	 */
-	if (IS_I965GM(dev_priv) &&
-	    (crtc_state->output_types & BIT(INTEL_OUTPUT_TVOUT)))
-		return 0;
 
-	if (DISPLAY_VER(dev_priv) >= 5 || IS_G4X(dev_priv))
-		return 0xffffffff; /* full 32 bit counter */
-	else if (DISPLAY_VER(dev_priv) >= 3)
-		return 0xffffff; /* only 24 bits of frame count */
-	else
-		return 0; /* Gen2 doesn't have a hardware frame counter */
+	return 0xffffffff; /* full 32 bit counter */
 }
 
 void intel_crtc_vblank_on(const struct intel_crtc_state *crtc_state)
@@ -235,64 +219,9 @@ static const struct drm_crtc_funcs bdw_crtc_funcs = {
 	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
 };
 
-static const struct drm_crtc_funcs ilk_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	.get_vblank_counter = g4x_get_vblank_counter,
-	.enable_vblank = ilk_enable_vblank,
-	.disable_vblank = ilk_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
-static const struct drm_crtc_funcs g4x_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	.get_vblank_counter = g4x_get_vblank_counter,
-	.enable_vblank = i965_enable_vblank,
-	.disable_vblank = i965_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
-static const struct drm_crtc_funcs i965_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	.get_vblank_counter = i915_get_vblank_counter,
-	.enable_vblank = i965_enable_vblank,
-	.disable_vblank = i965_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
-static const struct drm_crtc_funcs i915gm_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	.get_vblank_counter = i915_get_vblank_counter,
-	.enable_vblank = i915gm_enable_vblank,
-	.disable_vblank = i915gm_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
-static const struct drm_crtc_funcs i915_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	.get_vblank_counter = i915_get_vblank_counter,
-	.enable_vblank = i8xx_enable_vblank,
-	.disable_vblank = i8xx_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
-static const struct drm_crtc_funcs i8xx_crtc_funcs = {
-	INTEL_CRTC_FUNCS,
-
-	/* no hw vblank counter */
-	.enable_vblank = i8xx_enable_vblank,
-	.disable_vblank = i8xx_disable_vblank,
-	.get_vblank_timestamp = intel_crtc_get_vblank_timestamp,
-};
-
 int intel_crtc_init(struct drm_i915_private *dev_priv, enum pipe pipe)
 {
 	struct intel_plane *primary, *cursor;
-	const struct drm_crtc_funcs *funcs;
 	struct intel_crtc *crtc;
 	int sprite, ret;
 
@@ -303,11 +232,7 @@ int intel_crtc_init(struct drm_i915_private *dev_priv, enum pipe pipe)
 	crtc->pipe = pipe;
 	crtc->num_scalers = RUNTIME_INFO(dev_priv)->num_scalers[pipe];
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		primary = skl_universal_plane_create(dev_priv, pipe,
-						     PLANE_PRIMARY);
-	else
-		primary = intel_primary_plane_create(dev_priv, pipe);
+	primary = skl_universal_plane_create(dev_priv, pipe, PLANE_PRIMARY);
 	if (IS_ERR(primary)) {
 		ret = PTR_ERR(primary);
 		goto fail;
@@ -317,11 +242,7 @@ int intel_crtc_init(struct drm_i915_private *dev_priv, enum pipe pipe)
 	for_each_sprite(dev_priv, pipe, sprite) {
 		struct intel_plane *plane;
 
-		if (DISPLAY_VER(dev_priv) >= 9)
-			plane = skl_universal_plane_create(dev_priv, pipe,
-							   PLANE_SPRITE0 + sprite);
-		else
-			plane = intel_sprite_plane_create(dev_priv, pipe, sprite);
+		plane = skl_universal_plane_create(dev_priv, pipe, PLANE_SPRITE0 + sprite);
 		if (IS_ERR(plane)) {
 			ret = PTR_ERR(plane);
 			goto fail;
@@ -336,33 +257,13 @@ int intel_crtc_init(struct drm_i915_private *dev_priv, enum pipe pipe)
 	}
 	crtc->plane_ids_mask |= BIT(cursor->id);
 
-	if (HAS_GMCH(dev_priv)) {
-		if (IS_CHERRYVIEW(dev_priv) ||
-		    IS_VALLEYVIEW(dev_priv) || IS_G4X(dev_priv))
-			funcs = &g4x_crtc_funcs;
-		else if (DISPLAY_VER(dev_priv) == 4)
-			funcs = &i965_crtc_funcs;
-		else if (IS_I945GM(dev_priv) || IS_I915GM(dev_priv))
-			funcs = &i915gm_crtc_funcs;
-		else if (DISPLAY_VER(dev_priv) == 3)
-			funcs = &i915_crtc_funcs;
-		else
-			funcs = &i8xx_crtc_funcs;
-	} else {
-		if (DISPLAY_VER(dev_priv) >= 8)
-			funcs = &bdw_crtc_funcs;
-		else
-			funcs = &ilk_crtc_funcs;
-	}
-
 	ret = drm_crtc_init_with_planes(&dev_priv->drm, &crtc->base,
 					&primary->base, &cursor->base,
-					funcs, "pipe %c", pipe_name(pipe));
+					&bdw_crtc_funcs, "pipe %c", pipe_name(pipe));
 	if (ret)
 		goto fail;
 
-	if (DISPLAY_VER(dev_priv) >= 11)
-		drm_crtc_create_scaling_filter_property(&crtc->base,
+	drm_crtc_create_scaling_filter_property(&crtc->base,
 						BIT(DRM_SCALING_FILTER_DEFAULT) |
 						BIT(DRM_SCALING_FILTER_NEAREST_NEIGHBOR));
 
@@ -483,8 +384,6 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 	long timeout = msecs_to_jiffies_timeout(1);
 	int scanline, min, max, vblank_start;
 	wait_queue_head_t *wq = drm_crtc_vblank_waitqueue(&crtc->base);
-	bool need_vlv_dsi_wa = (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) &&
-		intel_crtc_has_type(new_crtc_state, INTEL_OUTPUT_DSI);
 	DEFINE_WAIT(wait);
 
 	intel_psr_lock(new_crtc_state);
@@ -558,24 +457,6 @@ void intel_pipe_update_start(struct intel_crtc_state *new_crtc_state)
 
 	drm_crtc_vblank_put(&crtc->base);
 
-	/*
-	 * On VLV/CHV DSI the scanline counter would appear to
-	 * increment approx. 1/3 of a scanline before start of vblank.
-	 * The registers still get latched at start of vblank however.
-	 * This means we must not write any registers on the first
-	 * line of vblank (since not the whole line is actually in
-	 * vblank). And unfortunately we can't use the interrupt to
-	 * wait here since it will fire too soon. We could use the
-	 * frame start interrupt instead since it will fire after the
-	 * critical scanline, but that would require more changes
-	 * in the interrupt code. So for now we'll just do the nasty
-	 * thing and poll for the bad scanline to pass us by.
-	 *
-	 * FIXME figure out if BXT+ DSI suffers from this as well
-	 */
-	while (need_vlv_dsi_wa && scanline == vblank_start)
-		scanline = intel_get_crtc_scanline(crtc);
-
 	crtc->debug.scanline_start = scanline;
 	crtc->debug.start_vbl_time = ktime_get();
 	crtc->debug.start_vbl_count = intel_crtc_get_vblank_counter(crtc);
@@ -645,8 +526,7 @@ void intel_pipe_update_end(struct intel_crtc_state *new_crtc_state)
 	 * Incase of mipi dsi command mode, we need to set frame update
 	 * request for every commit.
 	 */
-	if (DISPLAY_VER(dev_priv) >= 11 &&
-	    intel_crtc_has_type(new_crtc_state, INTEL_OUTPUT_DSI))
+	if (intel_crtc_has_type(new_crtc_state, INTEL_OUTPUT_DSI))
 		icl_dsi_frame_update(new_crtc_state);
 
 	/* We're still in the vblank-evade critical section, this can't race.
@@ -686,9 +566,6 @@ void intel_pipe_update_end(struct intel_crtc_state *new_crtc_state)
 	intel_vrr_send_push(new_crtc_state);
 
 	local_irq_enable();
-
-	if (intel_vgpu_active(dev_priv))
-		return;
 
 	if (crtc->debug.start_vbl_count &&
 	    crtc->debug.start_vbl_count != end_vbl_count) {

@@ -36,19 +36,13 @@ void __intel_ring_pin(struct intel_ring *ring)
 int intel_ring_pin(struct intel_ring *ring, struct i915_gem_ww_ctx *ww)
 {
 	struct i915_vma *vma = ring->vma;
-	unsigned int flags;
 	void *addr;
 	int ret;
 
 	if (atomic_fetch_inc(&ring->pin_count))
 		return 0;
 
-	if (i915_gem_object_is_stolen(vma->obj))
-		flags = PIN_MAPPABLE;
-	else
-		flags = PIN_HIGH;
-
-	ret = i915_ggtt_pin_for_gt(vma, ww, 0, flags);
+	ret = i915_ggtt_pin_for_gt(vma, ww, 0, PIN_HIGH);
 	if (unlikely(ret))
 		goto err_unpin;
 
@@ -89,7 +83,6 @@ void intel_ring_unpin(struct intel_ring *ring)
 	if (!atomic_dec_and_test(&ring->pin_count))
 		return;
 
-	i915_vma_unset_ggtt_write(vma);
 	i915_vma_unpin_iomap(vma);
 
 	i915_vma_make_purgeable(vma);
@@ -105,8 +98,6 @@ static struct i915_vma *create_ring_vma(struct i915_ggtt *ggtt, int size)
 
 	obj = intel_gt_object_create_lmem(ggtt->vm.gt, size,
 					  I915_BO_ALLOC_VOLATILE);
-	if (IS_ERR(obj) && i915_ggtt_has_aperture(ggtt) && !HAS_LLC(i915))
-		obj = i915_gem_object_create_stolen(i915, size);
 	if (IS_ERR(obj))
 		obj = i915_gem_object_create_internal(i915, size);
 	if (IS_ERR(obj))
@@ -133,7 +124,6 @@ err:
 struct intel_ring *
 intel_engine_create_ring(struct intel_engine_cs *engine, int size)
 {
-	struct drm_i915_private *i915 = engine->i915;
 	struct intel_ring *ring;
 	struct i915_vma *vma;
 
@@ -219,8 +209,6 @@ wait_for_space(struct intel_ring *ring,
 	}
 
 	i915_request_retire_upto(target);
-
-	intel_ring_update_space(ring);
 	GEM_BUG_ON(ring->space < bytes);
 	return 0;
 }

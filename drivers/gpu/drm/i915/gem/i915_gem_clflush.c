@@ -98,7 +98,7 @@ bool i915_gem_clflush_object(struct drm_i915_gem_object *obj,
 	 * tracking.
 	 */
 	if (!(flags & I915_CLFLUSH_FORCE) &&
-	    obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ)
+	    obj->flags & I915_BO_CACHE_COHERENT_FOR_READ)
 		return false;
 
 	trace_i915_gem_object_clflush(obj);

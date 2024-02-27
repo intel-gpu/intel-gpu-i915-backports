@@ -86,44 +86,23 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_maj, guc_mmp) \
 	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 6, 8)) \
-	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 9, 1)) \
-	fw_def(DG2,          0, guc_mmp(dg2,  70, 9, 1)) \
-	fw_def(XEHPSDV,  0, guc_mmp(xehpsdv,  70, 9, 1)) \
-	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 9, 1)) \
-	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 9, 1)) \
-	fw_def(DG1,          0, guc_mmp(dg1,  70, 9, 1)) \
-	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 9, 1)) \
-	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 9, 1)) \
-	fw_def(JASPERLAKE,   0, guc_mmp(ehl,  70, 9, 1)) \
-	fw_def(ELKHARTLAKE,  0, guc_mmp(ehl,  70, 9, 1)) \
-	fw_def(ICELAKE,      0, guc_mmp(icl,  70, 9, 1)) \
-	fw_def(COMETLAKE,    5, guc_mmp(cml,  70, 9, 1)) \
-	fw_def(COMETLAKE,    0, guc_mmp(kbl,  70, 9, 1)) \
-	fw_def(COFFEELAKE,   0, guc_mmp(kbl,  70, 9, 1)) \
-	fw_def(GEMINILAKE,   0, guc_mmp(glk,  70, 9, 1)) \
-	fw_def(KABYLAKE,     0, guc_mmp(kbl,  70, 9, 1)) \
-	fw_def(BROXTON,      0, guc_mmp(bxt,  70, 9, 1)) \
-	fw_def(SKYLAKE,      0, guc_mmp(skl,  70, 9, 1))
+	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 13, 1)) \
+	fw_def(DG2,          0, guc_mmp(dg2,  70, 13, 1)) \
+	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 13, 1)) \
+	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 13, 1)) \
+	fw_def(DG1,          0, guc_mmp(dg1,  70, 13, 1)) \
+	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 13, 1)) \
+	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 13, 1))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_raw, huc_mmp, huc_gsc) \
 	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 7)) \
 	fw_def(PONTEVECCHIO, 0, huc_mmp(pvc,  7, 8, 7)) \
-	fw_def(DG2,          0, huc_gsc(dg2,  7, 10, 3)) \
+	fw_def(DG2,          0, huc_gsc(dg2,  7, 10, 10)) \
 	fw_def(ALDERLAKE_P,  0, huc_mmp(tgl,  7, 9, 3)) \
 	fw_def(ALDERLAKE_S,  0, huc_mmp(tgl,  7, 9, 3)) \
 	fw_def(DG1,          0, huc_mmp(dg1,  7, 9, 3)) \
 	fw_def(ROCKETLAKE,   0, huc_mmp(tgl,  7, 9, 3)) \
-	fw_def(TIGERLAKE,    0, huc_mmp(tgl,  7, 9, 3)) \
-	fw_def(JASPERLAKE,   0, huc_mmp(ehl,  9, 0, 0)) \
-	fw_def(ELKHARTLAKE,  0, huc_mmp(ehl,  9, 0, 0)) \
-	fw_def(ICELAKE,      0, huc_mmp(icl,  9, 0, 0)) \
-	fw_def(COMETLAKE,    5, huc_mmp(cml,  4, 0, 0)) \
-	fw_def(COMETLAKE,    0, huc_mmp(kbl,  4, 0, 0)) \
-	fw_def(COFFEELAKE,   0, huc_mmp(kbl,  4, 0, 0)) \
-	fw_def(GEMINILAKE,   0, huc_mmp(glk,  4, 0, 0)) \
-	fw_def(KABYLAKE,     0, huc_mmp(kbl,  4, 0, 0)) \
-	fw_def(BROXTON,      0, huc_mmp(bxt,  2, 0, 0)) \
-	fw_def(SKYLAKE,      0, huc_mmp(skl,  2, 0, 0))
+	fw_def(TIGERLAKE,    0, huc_mmp(tgl,  7, 9, 3))
 
 #define INTEL_GSC_FIRMWARE_DEFS(fw_def, gsc_def) \
 	fw_def(METEORLAKE,   0, gsc_def(mtl, 102, 0, 0, 7366))
@@ -538,22 +517,21 @@ void intel_uc_fw_init_early(struct intel_uc_fw *uc_fw,
  * @uc_fw: uC firmware structure
  * @major: major version of the pre-loaded firmware
  * @minor: minor version of the pre-loaded firmware
+ * @patch: patch version of the pre-loaded firmware
  *
  * If the uC firmware was loaded to h/w by other entity, just
  * mark it as loaded.
  */
-void intel_uc_fw_set_preloaded(struct intel_uc_fw *uc_fw, u16 major, u16 minor)
+void intel_uc_fw_set_preloaded(struct intel_uc_fw *uc_fw, u32 major, u32 minor, u32 patch)
 {
 	uc_fw->file_selected.path = "PRELOADED";
-	uc_fw->file_selected.ver.major = major;
-	uc_fw->file_selected.ver.minor = minor;
 
 	if (uc_fw->type == INTEL_UC_FW_TYPE_GUC) {
 		struct intel_guc *guc = container_of(uc_fw, struct intel_guc, fw);
 
 		guc->submission_version.major = major;
 		guc->submission_version.minor = minor;
-		guc->submission_version.patch = 0;
+		guc->submission_version.patch = patch;
 	}
 
 	intel_uc_fw_change_status(uc_fw, INTEL_UC_FIRMWARE_PRELOADED);
@@ -1148,7 +1126,7 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
 
-	ggtt->vm.insert_entries(&ggtt->vm, NULL, dummy,
+	ggtt->vm.insert_entries(&ggtt->vm, dummy,
 				i915_gem_get_pat_index(ggtt->vm.i915,
 						       I915_CACHE_NONE),
 				pte_flags);
@@ -1325,6 +1303,15 @@ void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 
 	drm_printf(p, "%s firmware: %s\n",
 		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path);
+
+	/*
+	 * The pre-loaded status indicates that GuC is loaded by something else,
+	 * and we do not directly manage GUC, so the below values are not
+	 * applicable.
+	 */
+	if (uc_fw->status == INTEL_UC_FIRMWARE_PRELOADED)
+		return;
+
 	if (uc_fw->file_selected.path != uc_fw->file_wanted.path)
 		drm_printf(p, "%s firmware wanted: %s\n",
 			   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_wanted.path);

@@ -20,7 +20,6 @@ struct drm_i915_private;
 struct drm_i915_gem_object;
 struct intel_memory_region;
 struct sg_table;
-struct ttm_resource;
 
 enum intel_memory_type {
 	INTEL_MEMORY_SYSTEM = I915_MEMORY_CLASS_SYSTEM,
@@ -104,6 +103,7 @@ struct intel_memory_region {
 	resource_size_t io_size;
 	resource_size_t min_page_size;
 	resource_size_t total;
+	resource_size_t stolen;
 	atomic64_t avail;
 	atomic64_t evict;
 
@@ -129,12 +129,13 @@ struct intel_memory_region {
 	struct {
 		spinlock_t lock; /* Protects access to objects */
 		struct list_head list;
+		struct list_head migratable;
 		struct list_head purgeable;
+		struct list_head pt;
 	} objects;
 
 	struct completion parking;
 
-	bool is_range_manager;
 	bool private; /* not for userspace */
 
 	void *region_private;
@@ -151,6 +152,7 @@ void intel_memory_region_release_buddy(struct intel_memory_region *mem);
 int __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 					  struct i915_gem_ww_ctx *ww,
 					  resource_size_t size,
+					  unsigned long age,
 					  unsigned int flags,
 					  struct list_head *blocks);
 struct i915_buddy_block *
@@ -165,6 +167,7 @@ void __intel_memory_region_put_block_buddy(struct i915_buddy_block *block);
 int intel_memory_region_evict(struct intel_memory_region *mem,
 			      struct i915_gem_ww_ctx *ww,
 			      resource_size_t target,
+			      unsigned long age,
 			      int chunk);
 
 struct intel_memory_region *

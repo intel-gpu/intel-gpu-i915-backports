@@ -126,7 +126,7 @@ skl_update_scaler(struct intel_crtc_state *crtc_state, bool force_detach,
 	 * Once NV12 is enabled, handle it here while allocating scaler
 	 * for NV12.
 	 */
-	if (DISPLAY_VER(dev_priv) >= 9 && crtc_state->hw.enable &&
+	if (crtc_state->hw.enable &&
 	    need_scaler && adjusted_mode->flags & DRM_MODE_FLAG_INTERLACE) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "Pipe/Plane scaling not supported with IF-ID mode\n");
@@ -170,17 +170,7 @@ skl_update_scaler(struct intel_crtc_state *crtc_state, bool force_detach,
 	min_dst_w = SKL_MIN_DST_W;
 	min_dst_h = SKL_MIN_DST_H;
 
-	if (DISPLAY_VER(dev_priv) < 11) {
-		max_src_w = SKL_MAX_SRC_W;
-		max_src_h = SKL_MAX_SRC_H;
-		max_dst_w = SKL_MAX_DST_W;
-		max_dst_h = SKL_MAX_DST_H;
-	} else if (DISPLAY_VER(dev_priv) < 12) {
-		max_src_w = ICL_MAX_SRC_W;
-		max_src_h = ICL_MAX_SRC_H;
-		max_dst_w = ICL_MAX_DST_W;
-		max_dst_h = ICL_MAX_DST_H;
-	} else if (DISPLAY_VER(dev_priv) < 14) {
+	if (DISPLAY_VER(dev_priv) < 14) {
 		max_src_w = TGL_MAX_SRC_W;
 		max_src_h = TGL_MAX_SRC_H;
 		max_dst_w = TGL_MAX_DST_W;
@@ -310,14 +300,11 @@ int skl_update_scaler_plane(struct intel_crtc_state *crtc_state,
 	case DRM_FORMAT_XVYU2101010:
 	case DRM_FORMAT_XVYU12_16161616:
 	case DRM_FORMAT_XVYU16161616:
-		break;
 	case DRM_FORMAT_XBGR16161616F:
 	case DRM_FORMAT_ABGR16161616F:
 	case DRM_FORMAT_XRGB16161616F:
 	case DRM_FORMAT_ARGB16161616F:
-		if (DISPLAY_VER(dev_priv) >= 11)
-			break;
-		fallthrough;
+		break;
 	default:
 		drm_dbg_kms(&dev_priv->drm,
 			    "[PLANE:%d:%s] FB:%d unsupported scaling format 0x%x\n",

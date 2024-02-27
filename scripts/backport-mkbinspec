@@ -3,101 +3,139 @@
 #	Output a RPM spec file to generate intel-i915 binary package
 #
 
-PKG_NAME="intel-i915"
+PKG_NAME="intel-dmabuf-drm-i915"
 PKG_VER="1.0"
 REL_NAME="1"
 REL_TYPE=""
-DEP_PKG_NAME=""
+KREL=""
+KLIB_BUILD=""
+KLIB_BUILD_BASE=""
+KLIB_BUILD_DIR=""
+KLIB_BUILD_DIR_BASE=""
+MAKE_DEFCONFIG="drm"
+BUILD_TYPE=""
 CUSTOM_KERN_ID=""
-KER_VER=""
-OS_DISTRO_NAME=""
-RHEL=""
-SUSE=""
+UTS_RELEASE=""
+NODRM=
 
 helpFunction()
 {
 	echo ""
-	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource"
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion -k KLIB_BUILD Path -a uts release -t custom kernel id -o OSV name SUSE/RHEL"
 	echo -e "\t-n packagename"
 	echo -e "\t-v packageversion"
 	echo -e "\t-r releaseversion"
 	echo -e "\t-p Release Type : prerelease/opensource"
-	echo -e "\t-k KLIB Path"
-	echo -e "\t-s OSV name SUSE/RHEL"
-	echo -e "\t-t Custom Kernel ID"
+	echo -e "\t-s buildversion"
+	echo -e "\t-k KLIB_BUILD Path"
+	echo -e "\t-a UTS RELEASE"
+	echo -e "\t-t custom kernel id"
+	echo -e "\t-o OSV name SUSE/RHEL"
 	exit 1
 }
 
-while getopts "n:v:r:p:k:s:t:" opt
+while getopts "n:v:r:p:s:k:a:t:o:" opt
 do
 	case "$opt" in
 		n ) PKG_NAME="$OPTARG" ;;
 		v ) PKG_VER="$OPTARG" ;;
 		r ) REL_NAME="$OPTARG" ;;
 		p ) REL_TYPE="$OPTARG" ;;
-                k )
-			KLIB="$OPTARG"
-			KER_VER=`basename $KLIB`
+		s ) BUILD_TYPE="$OPTARG" ;;
+		k )
+			KLIB_BUILD="$OPTARG"
+			KLIB_BUILD_BASE=`basename $KLIB_BUILD`
+			KLIB_BUILD_DIR=`dirname $KLIB_BUILD`
+			KLIB_BUILD_DIR_BASE=`basename $KLIB_BUILD_DIR`
 			;;
-		s ) OS_DISTRO_NAME="$OPTARG" ;;
+		a ) UTS_RELEASE="$OPTARG" ;;
 		t ) CUSTOM_KERN_ID="$OPTARG" ;;
+		o ) OS_DISTRO_NAME="$OPTARG" ;;
 		? ) helpFunction ;; # Print helpFunction
 	esac
 done
 
+NODRM_KV="5.14"
+NODRM_KV_MAJ="$(echo $NODRM_KV | cut -d . -f 1)"
+NODRM_KV_MIN="$(echo $NODRM_KV | cut -d . -f 2)"
+NODRM_KV_CODE=$(expr $NODRM_KV_MAJ \* 256 + 0$NODRM_KV_MIN \* 8)
+BASE_KV_MAJ="$(echo $UTS_RELEASE | cut -d . -f 1)"
+BASE_KV_MIN="$(echo $UTS_RELEASE | cut -d . -f 2)"
+BASE_KV_CODE=$(expr $BASE_KV_MAJ \* 256 + 0$BASE_KV_MIN \* 8)
+if [ $BASE_KV_CODE -ge $NODRM_KV_CODE ] || [ "$BUILD_TYPE" = "nodrm" ]; then
+	PKG_NAME="intel-i915"
+	MAKE_DEFCONFIG="i915_only"
+	NODRM=DEL
+fi
+
+if [ "$KLIB_BUILD_BASE" = "build" ]; then
+	KREL=$KLIB_BUILD_DIR_BASE
+	ST_HDR=
+	LC_HDR=DEL
+else
+	KREL=$UTS_RELEASE
+	ST_HDR=DEL
+	LC_HDR=
+fi
+
 if [ "$OS_DISTRO_NAME" != "SUSE" ]; then
-        SUSE=DEL
+	SUSE=DEL
 elif [ "$OS_DISTRO_NAME" != "RHEL" ] || [ "$OS_DISTRO_NAME" != "CUSTOM_KERN_1" ]; then
-        RHEL=DEL
+	RHEL=DEL
 fi
 
 sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
-	%define module $PKG_NAME
+	%define package_name $PKG_NAME
 	%define version $PKG_VER
 	%define release $REL_NAME
-	
+
 $SUSE	%define _flavor %{?FLAVOR}%{?!FLAVOR:default}
 $SUSE	%define _kobj %(realpath %{_usrsrc}/linux-obj/x86_64/%{_flavor}/)
 $SUSE	%define _krel %(make -si -C %{_kobj} %linux_make_arch kernelrelease)
 
-$RHEL	%define _krel $KER_VER
+$RHEL	%define _krel $KREL
 $RHEL	%define kernel_module_directory /lib/modules
 $RHEL	%define kernel_module_package_moddir updates
 $RHEL	%define original_module original_module
 
 	Summary: I915 Backports Kernel Module Package
-	Name: %{module}
+	Name: %{package_name}
 	Version: %{version}
 	Release: %{release}
 	License: GPL
 	Group: System Environment/Base
 	BuildArch: x86_64
 	Vendor: Intel
-	Provides: %{module}
+	Provides: %{package_name} intel-i915
+$NODRM	Provides: intel-dmabuf
 	Packager: linux-graphics@intel.com
-	Source0: %{module}-%{version}-src.tar.gz
+	Conflicts: intel-i915-dkms intel-dmabuf-dkms
+	Source0: %{package_name}-%{version}-src.tar.gz
 	BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root/
 $SUSE	BuildRequires:  %kernel_module_package_buildreqs
+
 $SUSE	%kernel_module_package %{_flavor}
 
 
 	%description
-	Out of tree i915 driver modules for SLES15SP4 and RHEL9.x
+	Out of tree prebuilt intel GPU driver modules.
 
 $RHEL	%global debug_package %{nil}
 $RHEL	%global _build_id_links none
 
 	%prep
 	%setup -q -c
-	cp defconfigs/i915_only .config
+	cp defconfigs/$MAKE_DEFCONFIG .config
 
 	%build
 	export LEX=flex
 $RHEL	export YACC=bison
 	np=`nproc`
 	npc=\$(( \$np > 64 ? 64 : \$np ))
-	make KLIB=%{kernel_module_directory}/%{_krel} olddefconfig
-	make -j\$npc KLIB=%{kernel_module_directory}/%{_krel}
+$ST_HDR	make BUILD_CONFIG=$BUILD_TYPE KLIB=%{kernel_module_directory}/%{_krel} olddefconfig
+$ST_HDR	make -j\$npc KLIB=%{kernel_module_directory}/%{_krel} BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
+$LC_HDR	make BUILD_CONFIG=$BUILD_TYPE KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD olddefconfig
+$LC_HDR	make -j\$npc KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID
 
 	%install
 	if [ "%{buildroot}" != "/" ]; then
@@ -115,13 +153,14 @@ $RHEL	%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name
 	%clean
 	if [ "%{buildroot}" != "/" ]; then
 		rm -rf %{buildroot}
+	echo "clean"
 	fi
 
 	%pre
-$RHEL   if find %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir} -mindepth 1 -maxdepth 1 | read; then
+$RHEL	if find %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir} -mindepth 1 -maxdepth 1 | read; then
 $RHEL		mkdir -p %{kernel_module_directory}/%{_krel}/%{original_module}/
 $RHEL		mv %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/* %{kernel_module_directory}/%{_krel}/%{original_module}/
-$RHEL 	fi
+$RHEL	fi
 
 	%post
 $RHEL	echo "Post Installation"
@@ -137,6 +176,4 @@ $RHEL	if [ -d "%{kernel_module_directory}/%{_krel}/%{original_module}" ]; then
 $RHEL		cp %{kernel_module_directory}/%{_krel}/%{original_module}/* %{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/
 $RHEL		rm -rf %{kernel_module_directory}/%{_krel}/%{original_module}/
 $RHEL	fi
-
 EOF
-

@@ -172,8 +172,13 @@ static int emit_start_timestamp(struct i915_request *rq)
 static u32 *emit_mem_fence(struct i915_request *rq, u32 *cs)
 {
 	u32 scratch = i915_ggtt_offset(rq->engine->gt->scratch);
+	u32 flags;
 
-	return gen8_emit_ggtt_write(cs, 0, scratch, 0);
+	flags = 0;
+	if (HAS_FLAT_CCS(rq->engine->i915))
+		flags = MI_FLUSH_DW_CCS;
+
+	return gen8_emit_ggtt_write(cs, 0, scratch, flags);
 }
 
 static int emit_update_counters(struct i915_request *rq, u64 size, int idx)
@@ -333,12 +338,33 @@ static bool __submit_request(const struct i915_request *rq, unsigned int pkt)
 	return intel_ring_direction(ring, ring->emit + pkt, rq->head) < 0;
 }
 
+static bool retire_requests(struct intel_timeline *tl)
+{
+	struct i915_request *rq, *rn;
+	bool result = false;
+
+	list_for_each_entry_safe(rq, rn, &tl->requests, link) {
+		if (!i915_request_retire(rq))
+			break;
+
+		result = true;
+	}
+
+	return result;
+}
+
 static bool
 submit_request(struct i915_request *rq,
 	       struct i915_request **chain,
+	       u64 length, int counter,
 	       unsigned int pkt)
 {
-	if (!__submit_request(rq, pkt) && rq->ring->space > pkt)
+	do {
+		if (!__submit_request(rq, pkt) && rq->ring->space > pkt)
+			return false;
+	} while (retire_requests(rq->context->timeline));
+
+	if (emit_update_counters(rq, length, counter))
 		return false;
 
 	*chain = chain_request(rq, *chain);
@@ -384,27 +410,6 @@ unsigned long i915_gem_object_lmem_offset(struct drm_i915_gem_object *obj)
 }
 
 /**
- * i915_gem_object_validates_to_lmem - Whether the object is resident in
- * lmem when pages are present.
- * @obj: The object to check.
- *
- * Migratable objects residency may change from under us if the object is
- * not pinned or locked. This function is intended to be used to check whether
- * the object can only reside in lmem when pages are present.
- *
- * Return: Whether the object is always resident in lmem when pages are
- * present.
- */
-bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
-{
-	struct intel_memory_region *mr = READ_ONCE(obj->mm.region.mem);
-
-	return !i915_gem_object_migratable(obj) &&
-		mr && (mr->type == INTEL_MEMORY_LOCAL ||
-		       mr->type == INTEL_MEMORY_STOLEN);
-}
-
-/**
  * i915_gem_object_is_lmem - Whether the object is resident in
  * lmem
  * @obj: The object to check.
@@ -421,13 +426,7 @@ bool i915_gem_object_validates_to_lmem(struct drm_i915_gem_object *obj)
 bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 {
 	struct intel_memory_region *mr = READ_ONCE(obj->mm.region.mem);
-#if 0
-#ifdef CONFIG_LOCKDEP
-	if (i915_gem_object_migratable(obj) &&
-	    i915_gem_object_evictable(obj))
-		assert_object_held(obj);
-#endif
-#endif
+
 	return mr && (mr->type == INTEL_MEMORY_LOCAL ||
 		      mr->type == INTEL_MEMORY_STOLEN);
 }
@@ -497,7 +496,7 @@ static u32 *__emit_flush(u32 *cs, unsigned int flags)
 	return cs;
 }
 
-static int emit_flush(struct i915_request *rq, unsigned int flags)
+static int emit_tlb_invalidate(struct i915_request *rq)
 {
 	u32 *cs;
 
@@ -505,18 +504,13 @@ static int emit_flush(struct i915_request *rq, unsigned int flags)
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
-	cs = __emit_flush(cs, flags);
-	intel_ring_advance(rq, cs);
-
-	return 0;
-}
-
-static int emit_tlb_invalidate(struct i915_request *rq)
-{
-	return emit_flush(rq,
+	cs = __emit_flush(cs,
 			  MI_INVALIDATE_TLB |
 			  MI_FLUSH_DW_STORE_INDEX |
 			  MI_FLUSH_DW_OP_STOREDW);
+	intel_ring_advance(rq, cs);
+
+	return 0;
 }
 
 static int
@@ -627,6 +621,7 @@ emit_pte(struct i915_request *rq,
 
 			GEM_BUG_ON(!pte->sgp);
 			GEM_BUG_ON(!pte->dma);
+			GEM_BUG_ON(pte->curr >= pte->max);
 
 			*cs++ = lower_32_bits(dma);
 			*cs++ = upper_32_bits(dma);
@@ -643,6 +638,7 @@ emit_pte(struct i915_request *rq,
 			}
 		}
 
+		GEM_BUG_ON(!hdr);
 		*head = MI_STORE_DATA_IMM | REG_BIT(21) | MI_POSTED | (2 * hdr + 1);
 	}
 
@@ -799,7 +795,7 @@ ccs_emit_swap(struct i915_request *rq,
 	*cs++ = MI_NOOP;
 
 	intel_ring_advance(rq, cs);
-	return emit_flush(rq, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
+	return 0;
 }
 
 static unsigned int pte_pkt(u32 len)
@@ -841,12 +837,14 @@ swap_blt(struct intel_context *ce,
 	const bool use_flat_ccs = !use_pvc_memcpy && object_needs_flat_ccs(lmem);
 	const struct intel_migrate_window *w = ce->private;
 	const u64 encode = ce->vm->pte_encode(0, smem->pat_index, 0);
+	const int counter = INTEL_GT_SWAPIN_CYCLES + 2 * to_smem;
 	u64 pte_window, pte_end, pd_offset;
 	const u32 step = w->swap_chunk;
 	struct i915_buddy_block *block;
 	u64 remain = lmem->base.size;
 	struct i915_request *rq;
 	struct sgt_iter it_smem;
+	u64 total = 0;
 	int err;
 
 	GEM_BUG_ON(ce->ring->size < SZ_256K);
@@ -872,6 +870,12 @@ swap_blt(struct intel_context *ce,
 		err = PTR_ERR(rq);
 		goto exit;
 	}
+
+	err = emit_start_timestamp(rq);
+	if (err)
+		goto skip;
+
+	total = 0;
 
 	pte_end = w->node.start + w->node.size;
 	pte_window = pte_end;
@@ -908,7 +912,7 @@ swap_blt(struct intel_context *ce,
 			GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
 			GEM_BUG_ON(!IS_ALIGNED(length, PAGE_SHIFT));
 
-			if (submit_request(rq, out, swap_pkt(length))) {
+			if (submit_request(rq, out, total, counter, swap_pkt(length))) {
 				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
 				if (IS_ERR(rq)) {
 					err = PTR_ERR(rq);
@@ -920,11 +924,13 @@ swap_blt(struct intel_context *ce,
 							   offset);
 				if (err)
 					goto skip;
-			}
 
-			err = emit_start_timestamp(rq);
-			if (err)
-				goto skip;
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
+
+				total = 0;
+			}
 
 			if (pte_window + length > pte_end) {
 				pd_offset = w->pd_offset;
@@ -953,17 +959,23 @@ swap_blt(struct intel_context *ce,
 			if (err)
 				goto skip;
 
-			err = emit_update_counters(rq, length, INTEL_GT_SWAPIN_CYCLES + 2 * to_smem);
-			if (err)
-				goto skip;
+			total += length;
+			if (total >= step && /* inject arbitration point */
+			    emit_update_counters(rq, total, counter) == 0) {
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
 
-			pte_window += length;
-			pd_offset += length >> PAGE_SHIFT << 3;
-			GEM_BUG_ON(pte_window > pte_end);
-			GEM_BUG_ON(pd_offset > w->pd_offset + sg_dma_len(w->obj->mm.pages->sgl));
+				total = 0;
+			}
 
 			offset += length;
 			sz -= length;
+
+			length = round_up(length, SZ_32K);
+			pte_window += length;
+			pd_offset += length >> PAGE_SHIFT << 3;
+			GEM_BUG_ON(pte_window > pte_end);
 		} while (sz);
 	}
 	GEM_BUG_ON(remain);
@@ -991,7 +1003,7 @@ swap_blt(struct intel_context *ce,
 			u64 lmem_window;
 			int length;
 
-			if (submit_request(rq, out, ccs_pkt(count))) {
+			if (submit_request(rq, out, total, counter, ccs_pkt(count))) {
 				struct i915_buddy_block *block = it_lmem.block;
 
 				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
@@ -1003,11 +1015,13 @@ swap_blt(struct intel_context *ce,
 				err = i915_active_fence_set(&block->active, rq);
 				if (err < 0)
 					goto skip;
-			}
 
-			err = emit_start_timestamp(rq);
-			if (err)
-				goto skip;
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
+
+				total = 0;
+			}
 
 			if (pte_window + (count << PAGE_SHIFT) > pte_end) {
 				pd_offset = w->pd_offset;
@@ -1065,15 +1079,12 @@ lmem_pte:
 			if (err)
 				goto skip;
 
-			err = emit_update_counters(rq, 0, INTEL_GT_SWAPIN_CYCLES + 2 * to_smem);
-			if (err)
-				goto skip;
-
 			pd_offset += length << 3;
 			pte_window += length << PAGE_SHIFT;
 			GEM_BUG_ON(pte_window > pte_end);
 		} while (!list_is_head(&it_lmem.block->link, blocks));
 	}
+	emit_update_counters(rq, total, counter);
 skip:
 	*out = chain_request(rq, *out);
 exit:
@@ -1136,6 +1147,7 @@ struct swap_cpu_work {
 	struct dma_fence_work base;
 	struct intel_memory_region *mem;
 	struct drm_i915_gem_object *smem;
+	struct scatterlist *sgl;
 	long count;
 	bool dir;
 	struct swap_block {
@@ -1147,7 +1159,7 @@ struct swap_cpu_work {
 static int swap_cpu_work(struct dma_fence_work *base)
 {
 	struct swap_cpu_work *wrk = container_of(base, typeof(*wrk), base);
-	struct sgt_iter it = __sgt_iter(wrk->smem->mm.pages->sgl, false);
+	struct sgt_iter it = __sgt_iter(wrk->sgl, false);
 	long n;
 
 	for (n = 0; n < wrk->count; n++)
@@ -1161,7 +1173,6 @@ static void swap_cpu_release(struct dma_fence_work *base)
 {
 	struct swap_cpu_work *wrk = container_of(base, typeof(*wrk), base);
 
-	i915_gem_object_unpin_pages(wrk->smem);
 	i915_gem_object_put(wrk->smem);
 	intel_memory_region_put(wrk->mem);
 }
@@ -1196,7 +1207,7 @@ async_swap(struct drm_i915_gem_object *lmem,
 			    to_i915(lmem->base.dev)->mm.sched);
 	wrk->mem = intel_memory_region_get(lmem->mm.region.mem);
 	wrk->smem = i915_gem_object_get(smem);
-	__i915_gem_object_pin_pages(wrk->smem);
+	wrk->sgl = smem->mm.pages->sgl;
 	wrk->count = count;
 	wrk->dir = to_smem;
 
@@ -1329,6 +1340,7 @@ static int swap_work(struct dma_fence_work *base)
 	int err = -EIO;
 
 	GEM_BUG_ON(!i915_gem_object_has_pages(smem));
+	GEM_BUG_ON(!smem->mm.pages->sgl);
 
 	ce = get_swapin_context(lmem->mm.region.mem->gt);
 	if (ce && !use_flat_ccs && small_sync_swapin(lmem, lmem->flags, ce))
@@ -1430,47 +1442,6 @@ err:
 	return err;
 }
 
-static int
-emit_ccs_clear(struct i915_request *rq, u64 offset, u32 length)
-{
-	u32 mocs = REG_FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK_XEHP,
-				  rq->engine->gt->mocs.uc_index);
-	u64 zero = offset;
-	int err;
-
-	err = emit_flush(rq, 0);
-	if (err)
-		return err;
-
-	do {
-		u32 blocks = min_t(u32, length, SZ_64M);
-		u32 *cs;
-
-		cs = intel_ring_begin(rq, 6);
-		if (IS_ERR(cs))
-			return PTR_ERR(cs);
-
-		*cs++ = XY_CTRL_SURF_COPY_BLT |
-			DIRECT_ACCESS << SRC_ACCESS_TYPE_SHIFT |
-			INDIRECT_ACCESS << DST_ACCESS_TYPE_SHIFT |
-			REG_FIELD_PREP(CCS_SIZE_MASK_XEHP,
-				       num_ccs_blocks(blocks) - 1);
-
-		*cs++ = lower_32_bits(zero);
-		*cs++ = upper_32_bits(zero) | mocs;
-		*cs++ = lower_32_bits(offset);
-		*cs++ = upper_32_bits(offset) | mocs;
-		*cs++ = MI_NOOP;
-
-		intel_ring_advance(rq, cs);
-
-		offset += SZ_64M;
-		length -= blocks;
-	} while (length);
-
-	return emit_flush(rq, MI_FLUSH_DW_LLC | MI_FLUSH_DW_CCS);
-}
-
 #define MAX_PAGE_SHIFT 16ul
 
 static int
@@ -1547,13 +1518,59 @@ xy_emit_clear(struct i915_request *rq, u64 offset, u32 size, u32 page_shift)
 	return 0;
 }
 
-static void retire_requests(struct intel_timeline *tl)
+static int emit_flush(struct i915_request *rq, unsigned int flags)
 {
-	struct i915_request *rq, *rn;
+	u32 *cs;
 
-	list_for_each_entry_safe(rq, rn, &tl->requests, link)
-		if (!i915_request_retire(rq))
-			break;
+	cs = intel_ring_begin(rq, 4);
+	if (IS_ERR(cs))
+		return PTR_ERR(cs);
+
+	cs = __emit_flush(cs, flags);
+	intel_ring_advance(rq, cs);
+
+	return 0;
+}
+
+static int
+emit_ccs_clear(struct i915_request *rq, u64 offset, u32 length)
+{
+	u32 mocs = REG_FIELD_PREP(XY_CSC_BLT_MOCS_INDEX_MASK_XEHP,
+			rq->engine->gt->mocs.uc_index);
+	u64 zero = offset;
+	int err;
+
+	err = emit_flush(rq, 0);
+	if (err)
+		return err;
+
+	do {
+		u32 blocks = min_t(u32, length, SZ_64M);
+		u32 *cs;
+
+		cs = intel_ring_begin(rq, 6);
+		if (IS_ERR(cs))
+			return PTR_ERR(cs);
+
+		*cs++ = XY_CTRL_SURF_COPY_BLT |
+			DIRECT_ACCESS << SRC_ACCESS_TYPE_SHIFT |
+			INDIRECT_ACCESS << DST_ACCESS_TYPE_SHIFT |
+			REG_FIELD_PREP(CCS_SIZE_MASK_XEHP,
+					num_ccs_blocks(blocks) - 1);
+
+		*cs++ = lower_32_bits(zero);
+		*cs++ = upper_32_bits(zero) | mocs;
+		*cs++ = lower_32_bits(offset);
+		*cs++ = upper_32_bits(offset) | mocs;
+		*cs++ = MI_NOOP;
+
+		intel_ring_advance(rq, cs);
+
+		offset += SZ_64M;
+		length -= blocks;
+	} while (length);
+
+	return 0;
 }
 
 static int
@@ -1572,6 +1589,7 @@ clear_blt(struct intel_context *ce,
 	const u32 step = w->clear_chunk;
 	struct i915_buddy_block *block;
 	struct i915_request *rq;
+	u64 total;
 	int err = 0;
 
 	GEM_BUG_ON(ce->ring->size < SZ_64K);
@@ -1587,6 +1605,12 @@ clear_blt(struct intel_context *ce,
 		err = PTR_ERR(rq);
 		goto exit;
 	}
+
+	err = emit_start_timestamp(rq);
+	if (err)
+		goto skip;
+
+	total = 0;
 
 	list_for_each_entry(block, blocks, link) {
 		u64 sz = i915_buddy_block_size(mm, block);
@@ -1644,7 +1668,7 @@ clear_blt(struct intel_context *ce,
 				length = round_down(length, BIT(page_shift));
 			}
 
-			if (submit_request(rq, out, SZ_4K)) {
+			if (submit_request(rq, out, total, counter, SZ_4K)) {
 				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
 				if (IS_ERR(rq)) {
 					err = PTR_ERR(rq);
@@ -1664,11 +1688,13 @@ clear_blt(struct intel_context *ce,
 
 					fence = NULL;
 				}
-			}
 
-			err = emit_start_timestamp(rq);
-			if (err)
-				goto skip;
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
+
+				total = 0;
+			}
 
 			if (use_pvc_memset)
 				err = pvc_emit_clear(rq, offset, length, page_shift);
@@ -1679,15 +1705,22 @@ clear_blt(struct intel_context *ce,
 			if (err)
 				goto skip;
 
-			err = emit_update_counters(rq, length, counter);
-			if (err)
-				goto skip;
+			total += length;
+			if (total >= step && /* inject arbitration point */
+			    emit_update_counters(rq, total, counter) == 0) {
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
+
+				total = 0;
+			}
 
 			GEM_BUG_ON(__submit_request(rq, 0));
 			sz -= length;
 			offset += length;
 		} while (sz);
 	}
+	emit_update_counters(rq, total, counter);
 skip:
 	*out = chain_request(rq, *out);
 exit:
@@ -1699,9 +1732,10 @@ exit:
 }
 
 static int
-clear_cpu(struct intel_memory_region *mem, struct list_head *blocks, u64 value)
+clear_cpu(struct drm_i915_gem_object *obj, struct intel_memory_region *mem, struct list_head *blocks, u64 value)
 {
-	const bool is_clear = value == 0 && !use_flat_ccs(mem->gt);
+	const bool flat_ccs = obj && object_needs_flat_ccs(obj);
+	const bool is_clear = value == 0;
 	struct i915_buddy_block *block;
 
 	list_for_each_entry(block, blocks, link) {
@@ -1722,6 +1756,16 @@ clear_cpu(struct intel_memory_region *mem, struct list_head *blocks, u64 value)
 		memset64((void __force *)vaddr, value, length / sizeof(u64));
 		io_mapping_unmap(vaddr);
 
+		if (flat_ccs) {
+			length >>= 8;
+			daddr >>= 8;
+			daddr += mem->stolen;
+
+			vaddr = io_mapping_map_wc(&mem->iomap, daddr, length);
+			memset64((void __force *)vaddr, value, length / sizeof(u64));
+			io_mapping_unmap(vaddr);
+		}
+
 		i915_buddy_block_set_clear(block, is_clear);
 		cond_resched();
 	}
@@ -1735,11 +1779,15 @@ small_sync_clear(const struct drm_i915_gem_object *obj,
 		 unsigned int flags,
 		 const struct intel_context *ce)
 {
-	/* Assume exec + sync latency ~2ms and WC bw of ~4GiB/s */
+	const struct intel_migrate_window *w = ce->private;
+	const size_t chunk_sz = w->clear_chunk; /* ~2ms */
+
 	if (!(flags & I915_BO_SYNC_HINT) && intel_context_is_active(ce))
-		return obj->base.size <= SZ_64K;
+		/* Assume warm exec latency ~20us and WC bw of ~5-20GiB/s: 256KiB */
+		return obj->base.size <= max_t(size_t, SZ_256K, chunk_sz >> 8);
 	else
-		return obj->base.size <= SZ_32M;
+		/* Assume cold exec + sync latency ~400us and WC bw of ~5-20GiB/s: 2MiB */
+		return obj->base.size < min_t(size_t, SZ_2M, chunk_sz >> 4);
 }
 
 static inline bool
@@ -1777,7 +1825,7 @@ static int clear_work(struct dma_fence_work *base)
 	struct clear_work *wrk = container_of(base, typeof(*wrk), base);
 	struct drm_i915_gem_object *lmem = wrk->lmem;
 
-	return clear_cpu(lmem->mm.region.mem, &lmem->mm.blocks, 0);
+	return clear_cpu(lmem, lmem->mm.region.mem, &lmem->mm.blocks, 0);
 }
 
 static const struct dma_fence_work_ops clear_ops = {
@@ -1840,8 +1888,6 @@ static int async_blt(struct drm_i915_gem_object *obj, struct intel_context *ce)
 		i915_request_put(rq);
 	}
 
-	/* recycling dirty memory; proactively clear on release */
-	set_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
 	return err;
 }
 
@@ -1956,18 +2002,18 @@ static int lmem_clear(struct drm_i915_gem_object *obj)
 		err = async_clear(obj);
 	else if (ce)
 		err = async_blt(obj, ce);
-	else if (flags & I915_BO_CPU_CLEAR)
-		err = -EIO; /* clear required use of the blitter */
 	else
 		err = await_blt(obj, AWAIT_NO_ERROR);
 
 	if (wf)
 		intel_gt_pm_put(gt, wf);
 
+	/* recycling dirty memory; proactively clear on release */
+	set_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
 	return err;
 }
 
-/**
+/*
  * i915_gem_object_clear_lmem - Clear local memory using the bliter
  * @obj - the lmem object (and flat-ccs) to be cleared (fill with 0)
  *
@@ -2681,7 +2727,7 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 	intel_rps_boost(&gt->rps);
 
 	err = __intel_memory_region_get_pages_buddy(gt->lmem, NULL,
-						    SZ_16M, 0,
+						    SZ_16M, jiffies, 0,
 						    &blocks);
 	if (err)
 		goto err_wf;
@@ -3002,6 +3048,7 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 	static const u8 values[] = { 0, 0x0f, 0xa3, 0x5c, 0xf0, 0xff };
 	struct list_head *phases[] = {
 		&gt->lmem->objects.list,
+		&gt->lmem->objects.migratable,
 		&gt->lmem->objects.purgeable,
 		NULL
 	}, **phase = phases;
@@ -3042,8 +3089,11 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 	GEM_BUG_ON(i915_buddy_block_size(&mr->mm, swp) != SZ_16M);
 	swp_offset = i915_buddy_block_offset(swp);
 
+	GEM_BUG_ON(gt->lmem->region.start < gt->flat.start);
+	GEM_BUG_ON(gt->lmem->region.end > gt->flat.start + gt->flat.size - 1);
+
 	/* Track all pinned blocks in use by the kernel; these are vital */
-	drm_mm_init(&pinned, gt->flat.start, mr->total);
+	drm_mm_init(&pinned, gt->lmem->region.start, resource_size(&gt->lmem->region));
 	node = kzalloc(sizeof(*node), GFP_KERNEL);
 	if (!node) {
 		err = -ENOMEM;
@@ -3271,6 +3321,7 @@ copy_blt(struct intel_context *ce,
 	struct i915_buddy_block *block;
 	struct sgt_iter it_pte;
 	struct i915_vma *ref;
+	u64 total = 0;
 	int err;
 
 	GEM_BUG_ON(ce->ring->size < SZ_256K);
@@ -3342,10 +3393,11 @@ copy_blt(struct intel_context *ce,
 		do {
 			u32 length = min_t(u64, sz, step);
 
+			GEM_BUG_ON(length < PAGE_SIZE);
 			GEM_BUG_ON(offset < ce->engine->gt->flat.start);
 			GEM_BUG_ON(offset + length > ce->engine->gt->flat.start + ce->engine->gt->flat.size);
 
-			if (submit_request(rq, &last, swap_pkt(length))) {
+			if (submit_request(rq, &last, total, INTEL_GT_COPY_CYCLES, swap_pkt(length))) {
 				rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
 				if (IS_ERR(rq)) {
 					err = PTR_ERR(rq);
@@ -3357,11 +3409,13 @@ copy_blt(struct intel_context *ce,
 							   offset);
 				if (err)
 					goto skip;
-			}
 
-			err = emit_start_timestamp(rq);
-			if (err)
-				goto skip;
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
+
+				total = 0;
+			}
 
 			if (pte_window + length > pte_end) {
 				pd_offset = w->pd_offset;
@@ -3389,18 +3443,26 @@ copy_blt(struct intel_context *ce,
 			if (err)
 				goto skip;
 
-			err = emit_update_counters(rq, length, INTEL_GT_COPY_CYCLES);
-			if (err)
-				goto skip;
+			total += length;
+			if (total >= step && /* inject arbitration point */
+			    emit_update_counters(rq, total, INTEL_GT_COPY_CYCLES) == 0) {
+				err = emit_start_timestamp(rq);
+				if (err)
+					goto skip;
 
-			pte_window += length;
-			pd_offset += length >> PAGE_SHIFT << 3;
-			GEM_BUG_ON(pte_window > pte_end);
+				total = 0;
+			}
 
 			offset += length;
 			sz -= length;
+
+			length = round_up(length, SZ_32K);
+			pte_window += length;
+			pd_offset += length >> PAGE_SHIFT << 3;
+			GEM_BUG_ON(pte_window > pte_end);
 		} while (sz);
 	}
+	emit_update_counters(rq, total, INTEL_GT_COPY_CYCLES);
 skip:
 	last = chain_request(rq, last);
 exit:

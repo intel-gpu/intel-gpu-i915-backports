@@ -498,17 +498,6 @@ static const i915_reg_t tgl_early_regs[] = {
 	GEN11_HUC_KERNEL_LOAD_INFO,	/* _MMIO(0xC1DC) */
 };
 
-static const i915_reg_t xehpsdv_early_regs[] = {
-	RPM_CONFIG0,			/* _MMIO(0x0D00) */
-	GEN10_MIRROR_FUSE3,		/* _MMIO(0x9118) */
-	HSW_PAVP_FUSE1,			/* _MMIO(0x911C) */
-	XEHP_EU_ENABLE,			/* _MMIO(0x9134) */
-	GEN12_GT_GEOMETRY_DSS_ENABLE,	/* _MMIO(0x913C) */
-	GEN11_GT_VEBOX_VDBOX_DISABLE,	/* _MMIO(0x9140) */
-	GEN12_GT_COMPUTE_DSS_ENABLE,	/* _MMIO(0x9144) */
-	CTC_MODE,			/* _MMIO(0xA26C) */
-};
-
 static const i915_reg_t dg2_early_regs[] = {
 	RPM_CONFIG0,			/* _MMIO(0x0D00) */
 	GEN10_MIRROR_FUSE3,		/* _MMIO(0x9118) */
@@ -562,9 +551,6 @@ static const i915_reg_t *get_early_regs(struct drm_i915_private *i915,
 	} else if (IS_DG2(i915)) {
 		regs = dg2_early_regs;
 		*size = ARRAY_SIZE(dg2_early_regs);
-	} else if (IS_XEHPSDV(i915)) {
-		regs = xehpsdv_early_regs;
-		*size = ARRAY_SIZE(xehpsdv_early_regs);
 	} else if (IS_TIGERLAKE(i915) || IS_ALDERLAKE_S(i915) || IS_ALDERLAKE_P(i915)) {
 		regs = tgl_early_regs;
 		*size = ARRAY_SIZE(tgl_early_regs);

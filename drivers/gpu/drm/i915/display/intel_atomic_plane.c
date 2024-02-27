@@ -109,7 +109,6 @@ intel_plane_duplicate_state(struct drm_plane *plane)
 
 	intel_state->ggtt_vma = NULL;
 	intel_state->dpt_vma = NULL;
-	intel_state->flags = 0;
 
 	/* add reference to fb */
 	if (intel_state->hw.fb)
@@ -372,28 +371,6 @@ void intel_plane_set_invisible(struct intel_crtc_state *crtc_state,
 	plane_state->uapi.visible = false;
 }
 
-/* FIXME nuke when all wm code is atomic */
-static bool intel_wm_need_update(const struct intel_plane_state *cur,
-				 struct intel_plane_state *new)
-{
-	/* Update watermarks on tiling or size changes. */
-	if (new->uapi.visible != cur->uapi.visible)
-		return true;
-
-	if (!cur->hw.fb || !new->hw.fb)
-		return false;
-
-	if (cur->hw.fb->modifier != new->hw.fb->modifier ||
-	    cur->hw.rotation != new->hw.rotation ||
-	    drm_rect_width(&new->uapi.src) != drm_rect_width(&cur->uapi.src) ||
-	    drm_rect_height(&new->uapi.src) != drm_rect_height(&cur->uapi.src) ||
-	    drm_rect_width(&new->uapi.dst) != drm_rect_width(&cur->uapi.dst) ||
-	    drm_rect_height(&new->uapi.dst) != drm_rect_height(&cur->uapi.dst))
-		return true;
-
-	return false;
-}
-
 static bool intel_plane_is_scaled(const struct intel_plane_state *plane_state)
 {
 	int src_w = drm_rect_width(&plane_state->uapi.src) >> 16;
@@ -481,69 +458,17 @@ static int intel_plane_atomic_calc_changes(const struct intel_crtc_state *old_cr
 		       turn_off, turn_on, mode_changed);
 
 	if (turn_on) {
-		if (DISPLAY_VER(dev_priv) < 5 && !IS_G4X(dev_priv))
-			new_crtc_state->update_wm_pre = true;
-
 		/* must disable cxsr around plane enable/disable */
 		if (plane->id != PLANE_CURSOR)
 			new_crtc_state->disable_cxsr = true;
 	} else if (turn_off) {
-		if (DISPLAY_VER(dev_priv) < 5 && !IS_G4X(dev_priv))
-			new_crtc_state->update_wm_post = true;
-
 		/* must disable cxsr around plane enable/disable */
 		if (plane->id != PLANE_CURSOR)
 			new_crtc_state->disable_cxsr = true;
-	} else if (intel_wm_need_update(old_plane_state, new_plane_state)) {
-		if (DISPLAY_VER(dev_priv) < 5 && !IS_G4X(dev_priv)) {
-			/* FIXME bollocks */
-			new_crtc_state->update_wm_pre = true;
-			new_crtc_state->update_wm_post = true;
-		}
 	}
 
 	if (visible || was_visible)
 		new_crtc_state->fb_bits |= plane->frontbuffer_bit;
-
-	/*
-	 * ILK/SNB DVSACNTR/Sprite Enable
-	 * IVB SPR_CTL/Sprite Enable
-	 * "When in Self Refresh Big FIFO mode, a write to enable the
-	 *  plane will be internally buffered and delayed while Big FIFO
-	 *  mode is exiting."
-	 *
-	 * Which means that enabling the sprite can take an extra frame
-	 * when we start in big FIFO mode (LP1+). Thus we need to drop
-	 * down to LP0 and wait for vblank in order to make sure the
-	 * sprite gets enabled on the next vblank after the register write.
-	 * Doing otherwise would risk enabling the sprite one frame after
-	 * we've already signalled flip completion. We can resume LP1+
-	 * once the sprite has been enabled.
-	 *
-	 *
-	 * WaCxSRDisabledForSpriteScaling:ivb
-	 * IVB SPR_SCALE/Scaling Enable
-	 * "Low Power watermarks must be disabled for at least one
-	 *  frame before enabling sprite scaling, and kept disabled
-	 *  until sprite scaling is disabled."
-	 *
-	 * ILK/SNB DVSASCALE/Scaling Enable
-	 * "When in Self Refresh Big FIFO mode, scaling enable will be
-	 *  masked off while Big FIFO mode is exiting."
-	 *
-	 * Despite the w/a only being listed for IVB we assume that
-	 * the ILK/SNB note has similar ramifications, hence we apply
-	 * the w/a on all three platforms.
-	 *
-	 * With experimental results seems this is needed also for primary
-	 * plane, not only sprite plane.
-	 */
-	if (plane->id != PLANE_CURSOR &&
-	    (IS_IRONLAKE(dev_priv) || IS_SANDYBRIDGE(dev_priv) ||
-	     IS_IVYBRIDGE(dev_priv)) &&
-	    (turn_on || (!intel_plane_is_scaled(old_plane_state) &&
-			 intel_plane_is_scaled(new_plane_state))))
-		new_crtc_state->disable_lp_wm = true;
 
 	if (intel_plane_do_async_flip(plane, old_crtc_state, new_crtc_state))
 		new_crtc_state->do_async_flip = true;
@@ -812,41 +737,10 @@ static void skl_crtc_planes_update_arm(struct intel_atomic_state *state,
 	}
 }
 
-static void i9xx_crtc_planes_update_arm(struct intel_atomic_state *state,
-					struct intel_crtc *crtc)
-{
-	struct intel_crtc_state *new_crtc_state =
-		intel_atomic_get_new_crtc_state(state, crtc);
-	u32 update_mask = new_crtc_state->update_planes;
-	struct intel_plane_state *new_plane_state;
-	struct intel_plane *plane;
-	int i;
-
-	for_each_new_intel_plane_in_state(state, plane, new_plane_state, i) {
-		if (crtc->pipe != plane->pipe ||
-		    !(update_mask & BIT(plane->id)))
-			continue;
-
-		/*
-		 * TODO: for mailbox updates intel_plane_update_noarm()
-		 * would have to be called here as well.
-		 */
-		if (new_plane_state->uapi.visible)
-			intel_plane_update_arm(plane, new_crtc_state, new_plane_state);
-		else
-			intel_plane_disable_arm(plane, new_crtc_state);
-	}
-}
-
 void intel_crtc_planes_update_arm(struct intel_atomic_state *state,
 				  struct intel_crtc *crtc)
 {
-	struct drm_i915_private *i915 = to_i915(state->base.dev);
-
-	if (DISPLAY_VER(i915) >= 9)
-		skl_crtc_planes_update_arm(state, crtc);
-	else
-		i9xx_crtc_planes_update_arm(state, crtc);
+	skl_crtc_planes_update_arm(state, crtc);
 }
 
 int intel_atomic_plane_check_clipping(struct intel_plane_state *plane_state,
@@ -936,9 +830,6 @@ static void add_rps_boost_after_vblank(struct drm_crtc *crtc,
 	struct wait_rps_boost *wait;
 
 	if (!dma_fence_is_i915(fence))
-		return;
-
-	if (DISPLAY_VER(to_i915(crtc->dev)) < 6)
 		return;
 
 	if (drm_crtc_vblank_get(crtc))

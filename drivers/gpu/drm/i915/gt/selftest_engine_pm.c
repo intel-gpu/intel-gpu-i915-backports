@@ -9,6 +9,7 @@
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt_clock_utils.h"
+#include "intel_gt_print.h"
 #include "selftest_engine.h"
 #include "selftest_engine_heartbeat.h"
 #include "selftests/igt_atomic.h"
@@ -133,8 +134,8 @@ static int __measure_timestamps(struct intel_context *ce,
 	}
 	i915_request_put(rq);
 
-	pr_debug("%s CTX_TIMESTAMP: [%x, %x], RING_TIMESTAMP: [%x, %x]\n",
-		 engine->name, sema[1], sema[3], sema[0], sema[4]);
+	gt_dbg(engine->gt, "%s CTX_TIMESTAMP: [%x, %x], RING_TIMESTAMP: [%x, %x]\n",
+	       engine->name, sema[1], sema[3], sema[0], sema[4]);
 
 	*d_ctx = sema[3] - sema[1];
 	*d_ring = sema[4] - sema[0];
@@ -164,34 +165,34 @@ static int __live_engine_timestamps(struct intel_engine_cs *engine)
 	d_ring = trifilter(s_ring);
 	d_ctx = trifilter(s_ctx);
 
-	pr_info("%s elapsed:%lldns, CTX_TIMESTAMP:%lldns, RING_TIMESTAMP:%lldns\n",
+	gt_info(engine->gt, "%s elapsed:%lldns, CTX_TIMESTAMP:%lldns, RING_TIMESTAMP:%lldns\n",
 		engine->name, dt,
 		intel_gt_clock_interval_to_ns(engine->gt, d_ctx),
 		intel_gt_clock_interval_to_ns(engine->gt, d_ring));
 
 	d_ring = intel_gt_clock_interval_to_ns(engine->gt, d_ring);
 	if (3 * dt > 4 * d_ring || 4 * dt < 3 * d_ring) {
-		pr_err("%s Mismatch between ring timestamp and walltime!\n",
+		gt_err(engine->gt, "%s Mismatch between ring timestamp and walltime!\n",
 		       engine->name);
-		pr_info("walltime: [%lld, %lld, %lld, %lld, %lld] ns\n",
+		gt_info(engine->gt, "walltime: [%lld, %lld, %lld, %lld, %lld] ns\n",
 			st[0], st[1], st[2], st[3], st[4]);
-		pr_info("ring timestamp in ticks: [%lld, %lld, %lld, %lld, %lld]\n",
+		gt_info(engine->gt, "ring timestamp in ticks: [%lld, %lld, %lld, %lld, %lld]\n",
 			s_ring[0], s_ring[1], s_ring[2], s_ring[3], s_ring[4]);
-		pr_info("ring timestamp in ns: [%lld, %lld, %lld, %lld, %lld]\n",
+		gt_info(engine->gt, "ring timestamp in ns: [%lld, %lld, %lld, %lld, %lld]\n",
 			intel_gt_clock_interval_to_ns(engine->gt, s_ring[0]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ring[1]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ring[2]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ring[3]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ring[4]));
-		pr_info("ctx timestamp in ticks: [%lld, %lld, %lld, %lld, %lld]\n",
+		gt_info(engine->gt, "ctx timestamp in ticks: [%lld, %lld, %lld, %lld, %lld]\n",
 			s_ctx[0], s_ctx[1], s_ctx[2], s_ctx[3], s_ctx[4]);
-		pr_info("ctx timestamp in ns: [%lld, %lld, %lld, %lld, %lld]\n",
+		gt_info(engine->gt, "ctx timestamp in ns: [%lld, %lld, %lld, %lld, %lld]\n",
 			intel_gt_clock_interval_to_ns(engine->gt, s_ctx[0]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ctx[1]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ctx[2]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ctx[3]),
 			intel_gt_clock_interval_to_ns(engine->gt, s_ctx[4]));
-		pr_info("walltime in ns: [%lld, %lld, %lld, %lld, %lld] ns\n",
+		gt_info(engine->gt, "walltime in ns: [%lld, %lld, %lld, %lld, %lld] ns\n",
 			st[0], st[1], st[2], st[3], st[4]);
 		return -EINVAL;
 	}
@@ -206,7 +207,7 @@ static int __live_engine_timestamps(struct intel_engine_cs *engine)
 		d_ring *= engine->gt->clock_frequency;
 
 	if (3 * d_ctx > 4 * d_ring || 4 * d_ctx < 3 * d_ring) {
-		pr_err("%s Mismatch between ring and context timestamps!\n",
+		gt_err(engine->gt, "%s Mismatch between ring and context timestamps!\n",
 		       engine->name);
 		return -EINVAL;
 	}
@@ -244,21 +245,28 @@ static int live_engine_timestamps(void *arg)
 static int __spin_until_busier(struct intel_engine_cs *engine, ktime_t busyness)
 {
 	ktime_t start, unused, dt;
+	/* FIXME: v2 busyness is currently very coarse sampling */
+	u32 limit_ms = (intel_guc_busyness_type(engine->gt) == 2) ? 150 : 10;
 
 	if (!intel_engine_uses_guc(engine))
 		return 0;
 
 	/*
 	 * In GuC mode of submission, the busyness stats may get updated after
-	 * the batch starts running. Poll for a change in busyness and timeout
-	 * after 500 us.
+	 * the batch starts running which can have a latency of up to 500us.
+	 * However, the wait accesses an MMIO register and the uncore call to read
+	 * it takes up to 3ms in the worst case. So poll for a change in busyness
+	 * but with a timeout of 10ms.
+	 *
+	 * FIXME: v2 busyness is currently very coarse sampling, so bump the timeout
+	 * to allow a 100ms sample update period when v2 is enabled.
 	 */
 	start = ktime_get();
 	while (intel_engine_get_busy_time(engine, &unused) == busyness) {
-		dt = ktime_get() - start;
-		if (dt > 10000000) {
-			pr_err("active wait timed out %lld\n", dt);
-			ENGINE_TRACE(engine, "active wait time out %lld\n", dt);
+		dt = ktime_to_ms(ktime_get() - start);
+		if (dt > limit_ms) {
+			gt_err(engine->gt, "active wait timed out %lldms\n", dt);
+			ENGINE_TRACE(engine, "active wait time out %lldms\n", dt);
 			return -ETIME;
 		}
 	}
@@ -309,7 +317,7 @@ static int live_engine_busy_stats(void *arg)
 		preempt_enable();
 		dt = ktime_sub(t[1], t[0]);
 		if (de < 0 || de > 10) {
-			pr_err("%s: reported %lldns [%d%%] busyness while sleeping [for %lldns]\n",
+			gt_err(gt, "%s: reported %lldns [%d%%] busyness while sleeping [for %lldns]\n",
 			       engine->name,
 			       de, (int)div64_u64(100 * de, dt), dt);
 			GEM_TRACE_DUMP();
@@ -343,12 +351,16 @@ static int live_engine_busy_stats(void *arg)
 		ENGINE_TRACE(engine, "measuring busy time\n");
 		preempt_disable();
 		de = intel_engine_get_busy_time(engine, &t[0]);
-		mdelay(10);
+		/* FIXME: v2 busyness is currently very coarse sampling */
+		if (intel_guc_busyness_type(gt) == 2)
+			mdelay(2000);
+		else
+			mdelay(10);
 		de = ktime_sub(intel_engine_get_busy_time(engine, &t[1]), de);
 		preempt_enable();
 		dt = ktime_sub(t[1], t[0]);
 		if (100 * de < 95 * dt || 95 * de > 100 * dt) {
-			pr_err("%s: reported %lldns [%d%%] busyness while spinning [for %lldns]\n",
+			gt_err(gt, "%s: reported %lldns [%d%%] busyness while spinning [for %lldns]\n",
 			       engine->name,
 			       de, (int)div64_u64(100 * de, dt), dt);
 			GEM_TRACE_DUMP();
@@ -383,7 +395,7 @@ static int live_engine_pm(void *arg)
 	 * tell us.
 	 */
 	if (intel_gt_pm_wait_for_idle(gt)) {
-		pr_err("Unable to flush GT pm before test\n");
+		gt_err(gt, "Unable to flush GT pm before test\n");
 		return -EBUSY;
 	}
 
@@ -411,7 +423,7 @@ static int live_engine_pm(void *arg)
 
 			p->critical_section_begin();
 			if (!intel_engine_pm_get_if_awake(engine))
-				pr_err("intel_engine_pm_get_if_awake(%s) failed under %s\n",
+				gt_err(gt, "intel_engine_pm_get_if_awake(%s) failed under %s\n",
 				       engine->name, p->name);
 			else
 				intel_engine_pm_put_async(engine);
@@ -421,14 +433,14 @@ static int live_engine_pm(void *arg)
 			intel_engine_pm_flush(engine);
 
 			if (intel_engine_pm_is_awake(engine)) {
-				pr_err("%s is still awake after flushing pm\n",
+				gt_err(gt, "%s is still awake after flushing pm\n",
 				       engine->name);
 				return -EINVAL;
 			}
 
 			/* gt wakeref is async (deferred to workqueue) */
 			if (intel_gt_pm_wait_for_idle(gt)) {
-				pr_err("GT failed to idle\n");
+				gt_err(gt, "GT failed to idle\n");
 				return -EINVAL;
 			}
 		}

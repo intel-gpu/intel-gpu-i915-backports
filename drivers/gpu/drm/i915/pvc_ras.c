@@ -38,12 +38,6 @@ static const struct ras_reg32_info pvc_memory_cntrlr_reg32[] = {
 	{"CPGC_ERR_TEST_ERR_STAT in Pchnl1",	_MMIO(0x0028a6cc),		0x1000000},
 };
 
-static const struct ras_reg32_info pvc_ras_reg32[] = {
-	{"HEC_UNCORR_ERR_STATUS",	_MMIO(0x118),		0x0},
-	{"HEC_CORR_ERR_STATUS",		_MMIO(0x128),		0x0},
-	{"MERTCNTRL",			_MMIO(0x51f0),		0x19000000},
-};
-
 int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt = to_gt(i915);
@@ -60,6 +54,9 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 	int ret, id;
 	u32 num_regs;
 
+	bool hbm_error = false;
+	bool is_fsp2_hbm_training_failure = false;
+
 	ret = 0;
 
 	if (!IS_PONTEVECCHIO(i915) || IS_SRIOV_VF(i915))
@@ -67,8 +64,8 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 	errsrc = __raw_uncore_read32(gt->uncore, GT0_TELEMETRY_MSGREGADDR);
 
-	if (!(errsrc & REG_BIT(FSP2_SUCCSEFFUL))) {
-		drm_info(&i915->drm, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
+	if (!(errsrc & REG_BIT(FSP2_SUCCESSFUL))) {
+		drm_dbg(&i915->drm, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
 		for_each_set_bit(errbit, &errsrc, 32) {
 			switch (errbit) {
 			case RESETOUT_N_TIMED_OUT:
@@ -91,6 +88,7 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 				break;
 			case FSP2_HBM_TRAINING_FAILED:
 				name = "fsp2 hbm training failed";
+				is_fsp2_hbm_training_failure = true;
 				break;
 			case FSP2_PUNIT_INIT_FAILED:
 				name = "fsp2 punit init failed";
@@ -106,8 +104,10 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 				break;
 			}
 			drm_err(&i915->drm, "%s reported by GT0_TELEMETRY_MSGREGADDR\n", name);
-			ret = -ENXIO;
 		}
+
+		__i915_printk(i915, KERN_CRIT, "HW training failed; try a cold reboot.\n");
+		ret = -ENXIO;
 	}
 
 	for_each_gt(gt, i915, id) {
@@ -127,6 +127,28 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 		drm_dbg(&i915->drm, "GT%d: FUSE3_HBM_STACK_STATUS=[0x%08lx]\n",
 			gt->info.id, hbm_mask);
 
+		if (is_fsp2_hbm_training_failure) {
+			for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
+				u32 ctrl_reg = __raw_uncore_read32(gt->uncore,
+								   PVC_UC_BIOS_MAILBOX_CTL_REG(hbm_num));
+				u32 hbm_training_status = FIELD_GET(HBM_TRAINING_INFO, ctrl_reg);
+
+				drm_info(&i915->drm, "GT%d: uc_bios_mailbox_ctrl_creg[%d] = 0x%08x\n",
+					 gt->info.id, hbm_num, ctrl_reg);
+
+				if (hbm_training_status == HBM_TRAINING_FAILED) {
+					u32 data0_reg = __raw_uncore_read32(gt->uncore,
+									    PVC_UC_BIOS_MAILBOX_DATA0_REG_HBM(hbm_num));
+					u32 data1_reg = __raw_uncore_read32(gt->uncore,
+									    PVC_UC_BIOS_MAILBOX_DATA1_REG_HBM(hbm_num));
+					drm_err(&i915->drm,
+						"GT%d: Reported HBM training error on HBM%d."
+						" uc_bios_mailbox_data0_creg = 0x%08x, uc_bios_mailbox_data1_creg = 0x%08x\n",
+						gt->info.id, hbm_num, data0_reg, data1_reg);
+				}
+			}
+		}
+
 		for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
 			for (channel_num = 0; channel_num < CHANNEL_MAX; channel_num++) {
 				hbm_chnl_id = (CHANNEL_MAX * hbm_num) + channel_num;
@@ -143,6 +165,8 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 							gt->info.id, reg64_info->reg_name,
 							reg64_value, DEFAULT_VALUE_RAS_REG64,
 							hbm_num, channel_num);
+
+						hbm_error = true;
 						ret = -ENXIO;
 					}
 				}
@@ -159,24 +183,16 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 							reg32_value, reg32_info->default_value,
 							hbm_num, channel_num);
 
+						hbm_error = true;
 						ret = -ENXIO;
 					}
 				}
 			}
 		}
-
-		num_regs = ARRAY_SIZE(pvc_ras_reg32);
-		for (reg_id = 0; reg_id < num_regs; reg_id++) {
-			reg32_info = &pvc_ras_reg32[reg_id];
-			reg32_value = __raw_uncore_read32(gt->uncore, reg32_info->offset);
-			if (reg32_value != reg32_info->default_value) {
-				drm_err(&i915->drm, "GT%d - %s reg reported error. Read value=[0x%08x], expected value=[0x%08x]\n",
-					gt->info.id, reg32_info->reg_name, reg32_value,
-					reg32_info->default_value);
-				ret = -ENXIO;
-			}
-		}
 	}
+	if (hbm_error)
+		__i915_printk(i915, KERN_CRIT,
+			      "HBM is in an unreliable state; try a cold reboot.\n");
 
 	return ret;
 }

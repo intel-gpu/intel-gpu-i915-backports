@@ -17,10 +17,38 @@
 #include <linux/pagemap.h>
 #include <linux/swap.h>
 
-#ifdef BPM_LRU_CACHE_ADD_API_NOT_PRESENT
+#ifdef BPM_LRU_CACHE_ADD_API_NOT_PRESENT 
+
+#ifdef BPM_LRU_CACHE_ADD_NOT_PRESENT
+static DEFINE_PER_CPU(struct pagevec, lru_add_pvec);
+
+static void __lru_cache_add(struct page *page)
+{
+        struct pagevec *pvec = &get_cpu_var(lru_add_pvec);
+
+        get_page(page);
+        if (!pagevec_add(pvec, page) || PageCompound(page))
+                __pagevec_lru_add(pvec);
+        put_cpu_var(lru_add_pvec);
+}
+#endif
+
 void lru_cache_add(struct page *page)
 {
-       folio_add_lru(page_folio(page));
+#ifndef BPM_LRU_CACHE_ADD_NOT_PRESENT
+ 	folio_add_lru(page_folio(page));
+#else
+	VM_BUG_ON_PAGE(PageActive(page) && PageUnevictable(page), page);
+        VM_BUG_ON_PAGE(PageLRU(page), page);
+        __lru_cache_add(page);
+#endif
 }
-EXPORT_SYMBOL(lru_cache_add);
+EXPORT_SYMBOL_GPL(lru_cache_add);
+#endif
+#ifdef BPM_PAGEVEC_NOT_PRESENT
+void __pagevec_release(struct pagevec *pvec)
+{
+	__folio_batch_release((struct folio_batch*)pvec);
+}
+EXPORT_SYMBOL(__pagevec_release);
 #endif

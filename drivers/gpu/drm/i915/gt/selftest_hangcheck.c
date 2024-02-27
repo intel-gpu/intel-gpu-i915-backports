@@ -1415,38 +1415,6 @@ static int evict_vma(void *data)
 	return err;
 }
 
-static int evict_fence(void *data)
-{
-	struct evict_vma *arg = data;
-	int err;
-
-	complete(&arg->completion);
-
-	/* Mark the fence register as dirty to force the mmio update. */
-	err = i915_gem_object_set_tiling(arg->vma->obj, I915_TILING_Y, 512);
-	if (err) {
-		pr_err("Invalid Y-tiling settings; err:%d\n", err);
-		return err;
-	}
-
-	err = i915_vma_pin(arg->vma, 0, 0, PIN_GLOBAL | PIN_MAPPABLE);
-	if (err) {
-		pr_err("Unable to pin vma for Y-tiled fence; err:%d\n", err);
-		return err;
-	}
-
-	err = i915_vma_pin_fence(arg->vma);
-	i915_vma_unpin(arg->vma);
-	if (err) {
-		pr_err("Unable to pin Y-tiled fence; err:%d\n", err);
-		return err;
-	}
-
-	i915_vma_unpin_fence(arg->vma);
-
-	return 0;
-}
-
 static int __igt_reset_evict_vma(struct intel_gt *gt,
 				 struct i915_address_space *vm,
 				 int (*fn)(void *),
@@ -1460,9 +1428,6 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 	struct hang h;
 	unsigned int pin_flags;
 	int err;
-
-	if (!gt->ggtt->num_fences && flags & EXEC_OBJECT_NEEDS_FENCE)
-		return 0;
 
 	engine = intel_selftest_find_any_engine(gt);
 
@@ -1484,14 +1449,6 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 		goto fini;
 	}
 
-	if (flags & EXEC_OBJECT_NEEDS_FENCE) {
-		err = i915_gem_object_set_tiling(obj, I915_TILING_X, 512);
-		if (err) {
-			pr_err("Invalid X-tiling settings; err:%d\n", err);
-			goto out_obj;
-		}
-	}
-
 	arg.vma = i915_vma_instance(obj, vm, NULL);
 	if (IS_ERR(arg.vma)) {
 		err = PTR_ERR(arg.vma);
@@ -1508,24 +1465,11 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 
 	pin_flags = i915_vma_is_ggtt(arg.vma) ? PIN_GLOBAL : PIN_USER;
 
-	if (flags & EXEC_OBJECT_NEEDS_FENCE)
-		pin_flags |= PIN_MAPPABLE;
-
 	err = i915_vma_pin(arg.vma, 0, 0, pin_flags);
 	if (err) {
 		i915_request_add(rq);
 		pr_err("[%s] VMA pin failed: %d!\n", engine->name, err);
 		goto out_obj;
-	}
-
-	if (flags & EXEC_OBJECT_NEEDS_FENCE) {
-		err = i915_vma_pin_fence(arg.vma);
-		if (err) {
-			pr_err("Unable to pin X-tiled fence; err:%d\n", err);
-			i915_vma_unpin(arg.vma);
-			i915_request_add(rq);
-			goto out_obj;
-		}
 	}
 
 	i915_vma_lock(arg.vma);
@@ -1540,9 +1484,6 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 	}
 
 	i915_vma_unlock(arg.vma);
-
-	if (flags & EXEC_OBJECT_NEEDS_FENCE)
-		i915_vma_unpin_fence(arg.vma);
 	i915_vma_unpin(arg.vma);
 
 	i915_request_get(rq);
@@ -1625,10 +1566,6 @@ static int igt_reset_evict_ppgtt(void *arg)
 	struct i915_ppgtt *ppgtt;
 	int err;
 
-	/* aliasing == global gtt locking, covered above */
-	if (INTEL_PPGTT(gt->i915) < INTEL_PPGTT_FULL)
-		return 0;
-
 	ppgtt = i915_ppgtt_create(gt, 0);
 	if (IS_ERR(ppgtt))
 		return PTR_ERR(ppgtt);
@@ -1638,14 +1575,6 @@ static int igt_reset_evict_ppgtt(void *arg)
 	i915_vm_put(&ppgtt->vm);
 
 	return err;
-}
-
-static int igt_reset_evict_fence(void *arg)
-{
-	struct intel_gt *gt = arg;
-
-	return __igt_reset_evict_vma(gt, &gt->ggtt->vm,
-				     evict_fence, EXEC_OBJECT_NEEDS_FENCE);
 }
 
 static int wait_for_others(struct intel_gt *gt,
@@ -2054,7 +1983,6 @@ int intel_hangcheck_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(igt_reset_wait),
 		SUBTEST(igt_reset_evict_ggtt),
 		SUBTEST(igt_reset_evict_ppgtt),
-		SUBTEST(igt_reset_evict_fence),
 		SUBTEST(igt_handle_error),
 	};
 	struct intel_gt *gt = to_gt(i915);

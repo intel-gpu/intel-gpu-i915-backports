@@ -144,8 +144,6 @@ i915_gem_evict_something(struct i915_address_space *vm,
 	mode = DRM_MM_INSERT_BEST;
 	if (flags & PIN_HIGH)
 		mode = DRM_MM_INSERT_HIGH;
-	if (flags & PIN_MAPPABLE)
-		mode = DRM_MM_INSERT_LOW;
 	drm_mm_scan_init_with_range(&scan, &vm->mm,
 				    min_size, alignment, color,
 				    start, end, mode);
@@ -316,14 +314,7 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
 		intel_gt_retire_requests(vm->gt);
 	}
 
-	if (i915_vm_has_cache_coloring(vm)) {
-		/* Expand search to cover neighbouring guard pages (or lack!) */
-		if (start)
-			start -= I915_GTT_PAGE_SIZE;
-
-		/* Always look at the page afterwards to avoid the end-of-GTT */
-		end += I915_GTT_PAGE_SIZE;
-	} else if (i915_vm_has_memory_coloring(vm)) {
+	if (i915_vm_has_memory_coloring(vm)) {
 		/*
 		 * Expand the search the cover the page-table boundries, in
 		 * case we need to flip the color of the page-table(s).
@@ -343,23 +334,7 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
 		GEM_BUG_ON(!drm_mm_node_allocated(node));
 		vma = container_of(node, typeof(*vma), node);
 
-		/*
-		 * If we are using coloring to insert guard pages between
-		 * different cache domains within the address space, we have
-		 * to check whether the objects on either side of our range
-		 * abutt and conflict. If they are in conflict, then we evict
-		 * those as well to make room for our guard pages.
-		 */
-		if (i915_vm_has_cache_coloring(vm)) {
-			if (node->start + node->size == target->start) {
-				if (node->color == target->color)
-					continue;
-			}
-			if (node->start == target->start + target->size) {
-				if (node->color == target->color)
-					continue;
-			}
-		} else if (i915_vm_has_memory_coloring(vm)) {
+		if (i915_vm_has_memory_coloring(vm)) {
 			if (node->start + node->size <= target->start) {
 				if (node->color == target->color)
 					continue;

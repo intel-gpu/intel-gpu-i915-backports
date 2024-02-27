@@ -7,10 +7,13 @@
 #ifndef __I915_GEM_OBJECT_TYPES_H__
 #define __I915_GEM_OBJECT_TYPES_H__
 
+#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+#include <linux/i915_gem_mmu_notifier.h>
+#else
 #include <linux/mmu_notifier.h>
+#endif
 
 #include <drm/drm_gem.h>
-#include <drm/ttm/ttm_bo_api.h>
 #include <uapi/drm/i915_drm.h>
 
 #include "i915_active.h"
@@ -57,32 +60,16 @@ struct drm_i915_gem_object_ops {
 	int (*put_pages)(struct drm_i915_gem_object *obj,
 			 struct sg_table *pages);
 	void (*truncate)(struct drm_i915_gem_object *obj);
-	void (*writeback)(struct drm_i915_gem_object *obj);
 
 	int (*pread)(struct drm_i915_gem_object *obj,
 		     const struct drm_i915_gem_pread *arg);
 	int (*pwrite)(struct drm_i915_gem_object *obj,
 		      const struct drm_i915_gem_pwrite *arg);
-	u64 (*mmap_offset)(struct drm_i915_gem_object *obj);
 
 	int (*dmabuf_export)(struct drm_i915_gem_object *obj);
 
-	/**
-	 * adjust_lru - notify that the madvise value was updated
-	 * @obj: The gem object
-	 *
-	 * The madvise value may have been updated, or object was recently
-	 * referenced so act accordingly (Perhaps changing an LRU list etc).
-	 */
-	void (*adjust_lru)(struct drm_i915_gem_object *obj);
-
-	/**
-	 * delayed_free - Override the default delayed free implementation
-	 */
-	void (*delayed_free)(struct drm_i915_gem_object *obj);
 	void (*release)(struct drm_i915_gem_object *obj);
 
-	const struct vm_operations_struct *mmap_ops;
 	const char *name; /* friendly name for debug, e.g. lockdep classes */
 };
 
@@ -209,17 +196,7 @@ struct i915_resv {
 #define I915_BO_MIN_CHUNK_SIZE	SZ_64K
 
 struct drm_i915_gem_object {
-	/*
-	 * We might have reason to revisit the below since it wastes
-	 * a lot of space for non-ttm gem objects.
-	 * In any case, always use the accessors for the ttm_buffer_object
-	 * when accessing it.
-	 */
-	union {
-		struct drm_gem_object base;
-		struct ttm_buffer_object __do_not_access;
-	};
-
+	struct drm_gem_object base;
 	const struct drm_i915_gem_object_ops *ops;
 
 	unsigned long *nodes;
@@ -288,12 +265,6 @@ struct drm_i915_gem_object {
 		struct llist_node freed;
 	};
 
-	/**
-	 * Whether the object is currently in the GGTT mmap.
-	 */
-	unsigned int userfault_count;
-	struct list_head userfault_link;
-
 	struct {
 		spinlock_t lock; /* Protects access to mmo offsets */
 		struct rb_root offsets;
@@ -329,25 +300,7 @@ struct drm_i915_gem_object {
 #define I915_BO_SYNC_HINT	BIT(16)
 #define I915_BO_FABRIC		BIT(17)
 
-	/**
-	 * @pat_index: The desired PAT index.
-	 *
-	 * See hardware specification for valid PAT indices for each platform.
-	 * This field used to contain a value of enum i915_cache_level. It's
-	 * changed to an unsigned int because PAT indices are being used by
-	 * both UMD and KMD for caching policy control after GEN12.
-	 * For backward compatibility, this field will continue to contain
-	 * value of i915_cache_level for pre-GEN12 platforms so that the PTE
-	 * encode functions for these legacy platforms can stay the same.
-	 * In the meantime platform specific tables are created to translate
-	 * i915_cache_level into pat index, for more details check the macros
-	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
-	 */
-	unsigned int pat_index:4;
-
-	/**
-	 * @cache_coherent:
-	 *
+	/*
 	 * Track whether the pages are coherent with the GPU if reading or
 	 * writing through the CPU caches. The largely depends on the
 	 * @cache_level setting.
@@ -414,9 +367,24 @@ struct drm_i915_gem_object {
 	 * When writing through the CPU cache, the GPU is still coherent. Note
 	 * that this also implies I915_BO_CACHE_COHERENT_FOR_READ.
 	 */
-#define I915_BO_CACHE_COHERENT_FOR_READ BIT(0)
-#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(1)
-	unsigned int cache_coherent:2;
+#define I915_BO_CACHE_COHERENT_FOR_READ BIT(18)
+#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(19)
+
+	/**
+	 * @pat_index: The desired PAT index.
+	 *
+	 * See hardware specification for valid PAT indices for each platform.
+	 * This field used to contain a value of enum i915_cache_level. It's
+	 * changed to an unsigned int because PAT indices are being used by
+	 * both UMD and KMD for caching policy control after GEN12.
+	 * For backward compatibility, this field will continue to contain
+	 * value of i915_cache_level for pre-GEN12 platforms so that the PTE
+	 * encode functions for these legacy platforms can stay the same.
+	 * In the meantime platform specific tables are created to translate
+	 * i915_cache_level into pat index, for more details check the macros
+	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
+	 */
+	unsigned int pat_index:4;
 
 	/**
 	 * @cache_dirty:
@@ -481,11 +449,6 @@ struct drm_i915_gem_object {
 	unsigned int cache_dirty:1;
 
 	/**
-	 * @evict_locked: Whether @obj_link sits on the eviction_list
-	 */
-	bool evict_locked:1;
-
-	/**
 	 * @read_domains: Read memory domains.
 	 *
 	 * These monitor which caches contain read/write data related to the
@@ -501,12 +464,6 @@ struct drm_i915_gem_object {
 	u16 write_domain;
 
 	struct intel_frontbuffer __rcu *frontbuffer;
-
-	/** Current tiling stride for the object, if it's tiled. */
-	unsigned int tiling_and_stride;
-#define FENCE_MINIMUM_STRIDE 128 /* See i915_tiling_ok() */
-#define TILING_MASK (FENCE_MINIMUM_STRIDE - 1)
-#define STRIDE_MASK (~TILING_MASK)
 
 	struct {
 		/*
@@ -550,6 +507,8 @@ struct drm_i915_gem_object {
 			 * region->obj_lock.
 			 */
 			struct list_head link;
+
+			unsigned long age;
 		} region;
 
 		/**
@@ -559,11 +518,6 @@ struct drm_i915_gem_object {
 		struct intel_memory_region *preferred_region;
 		int n_placements;
 
-		/**
-		 * Memory manager resource allocated for this object. Only
-		 * needed for the mock region.
-		 */
-		struct ttm_resource *res;
 		struct list_head blocks;
 
 		struct sg_table *pages;
@@ -608,12 +562,6 @@ struct drm_i915_gem_object {
 		u32 tlb[I915_MAX_GT];
 	} mm;
 
-	struct {
-		struct sg_table *cached_io_st;
-		struct i915_gem_object_page_iter get_io_page;
-		bool created:1;
-	} ttm;
-
 	/*
 	 * Record which PXP key instance this object was created against (if
 	 * any), so we can use it to determine if the encryption is valid by
@@ -627,6 +575,9 @@ struct drm_i915_gem_object {
 	union {
 		struct i915_gem_userptr {
 			uintptr_t ptr;
+#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+			struct i915_mm_struct *mm;
+#endif
 			struct mmu_interval_notifier notifier;
 		} userptr;
 

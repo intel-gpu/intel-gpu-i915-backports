@@ -54,11 +54,11 @@ module_param_named(fbdev_emulation, drm_fbdev_emulation, bool, 0600);
 MODULE_PARM_DESC(fbdev_emulation,
 		 "Enable legacy fbdev emulation [default=true]");
 
-static int drm_fbdev_overalloc = CONFIG_DRM_FBDEV_OVERALLOC;
+static int drm_fbdev_overalloc = CPTCFG_DRM_FBDEV_OVERALLOC;
 module_param(drm_fbdev_overalloc, int, 0444);
 MODULE_PARM_DESC(drm_fbdev_overalloc,
 		 "Overallocation of the fbdev buffer (%) [default="
-		 __MODULE_STRING(CONFIG_DRM_FBDEV_OVERALLOC) "]");
+		 __MODULE_STRING(CPTCFG_DRM_FBDEV_OVERALLOC) "]");
 
 /*
  * In order to keep user-space compatibility, we want in certain use-cases
@@ -72,7 +72,7 @@ MODULE_PARM_DESC(drm_fbdev_overalloc,
  * This module_param *should* be removed as soon as possible and be
  * considered as a broken and legacy behaviour from a modern fbdev device.
  */
-#if IS_ENABLED(CONFIG_DRM_FBDEV_LEAK_PHYS_SMEM)
+#if IS_ENABLED(CPTCFG_DRM_FBDEV_LEAK_PHYS_SMEM)
 static bool drm_leak_fbdev_smem = false;
 module_param_unsafe(drm_leak_fbdev_smem, bool, 0600);
 MODULE_PARM_DESC(drm_leak_fbdev_smem,
@@ -307,13 +307,21 @@ static void drm_fb_helper_sysrq(int dummy1)
 	schedule_work(&drm_fb_helper_restore_work);
 }
 
+#ifdef BPM_CONST_SYSRQ_KEY_OP_NOT_PRESENT
+static struct sysrq_key_op sysrq_drm_fb_helper_restore_op = {
+#else
 static const struct sysrq_key_op sysrq_drm_fb_helper_restore_op = {
+#endif
 	.handler = drm_fb_helper_sysrq,
 	.help_msg = "force-fb(v)",
 	.action_msg = "Restore framebuffer console",
 };
 #else
+#ifdef BPM_CONST_SYSRQ_KEY_OP_NOT_PRESENT
+static struct sysrq_key_op sysrq_drm_fb_helper_restore_op = { };
+#else
 static const struct sysrq_key_op sysrq_drm_fb_helper_restore_op = { };
+#endif
 #endif
 
 static void drm_fb_helper_dpms(struct fb_info *info, int dpms_mode)
@@ -1853,7 +1861,7 @@ __drm_fb_helper_initial_config_and_unlock(struct drm_fb_helper *fb_helper,
 	info = fb_helper->fbdev;
 	info->var.pixclock = 0;
 	/* Shamelessly allow physical address leaking to userspace */
-#if IS_ENABLED(CONFIG_DRM_FBDEV_LEAK_PHYS_SMEM)
+#if IS_ENABLED(CPTCFG_DRM_FBDEV_LEAK_PHYS_SMEM)
 	if (!drm_leak_fbdev_smem)
 #endif
 		/* don't leak any physical addresses to userspace */
@@ -2288,7 +2296,11 @@ static void drm_fbdev_fb_imageblit(struct fb_info *info,
 		drm_fb_helper_sys_imageblit(info, image);
 }
 
+#ifdef BPM_CONST_STRUCT_FB_OPS_NOT_PRESENT
+static struct fb_ops drm_fbdev_fb_ops = {
+#else
 static const struct fb_ops drm_fbdev_fb_ops = {
+#endif
 	.owner		= THIS_MODULE,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_open	= drm_fbdev_fb_open,
@@ -2375,7 +2387,7 @@ static int drm_fb_helper_generic_probe(struct drm_fb_helper *fb_helper,
 		 * page_to_phys() is undefined for I/O memory, warn in this
 		 * case.
 		 */
-#if IS_ENABLED(CONFIG_DRM_FBDEV_LEAK_PHYS_SMEM)
+#if IS_ENABLED(CPTCFG_DRM_FBDEV_LEAK_PHYS_SMEM)
 		if (drm_leak_fbdev_smem && fbi->fix.smem_start == 0 &&
 		    !drm_WARN_ON_ONCE(dev, map.is_iomem))
 			fbi->fix.smem_start =

@@ -58,10 +58,7 @@ bool intel_tc_port_in_legacy_mode(struct intel_digital_port *dig_port)
 
 bool intel_tc_cold_requires_aux_pw(struct intel_digital_port *dig_port)
 {
-	struct drm_i915_private *i915 = to_i915(dig_port->base.base.dev);
-
-	return (DISPLAY_VER(i915) == 11 && dig_port->tc_legacy_port) ||
-		IS_ALDERLAKE_P(i915);
+	return false;
 }
 
 static enum intel_display_power_domain
@@ -993,7 +990,7 @@ void intel_tc_port_lock(struct intel_digital_port *dig_port)
 	__intel_tc_port_lock(dig_port, 1);
 }
 
-/**
+/*
  * intel_tc_port_disconnect_phy_work: disconnect TypeC PHY from display port
  * @dig_port: digital port
  *

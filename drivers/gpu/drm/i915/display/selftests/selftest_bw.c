@@ -24,11 +24,6 @@ int intel_pcode_read_qgv_points_test(void *arg)
 	bool fail = false;
 	intel_wakeref_t wakeref;
 
-	if (DISPLAY_VER(i915) < 11) {
-		drm_info(&i915->drm, "QGV doesn't support, skipping\n");
-		return 0;
-	}
-
 	wakeref = intel_runtime_pm_get(i915->uncore.rpm);
 	intel_dram_detect(i915);
 

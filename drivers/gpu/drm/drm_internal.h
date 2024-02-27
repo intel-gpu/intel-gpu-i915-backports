@@ -120,7 +120,7 @@ int drm_legacy_modeset_ctl_ioctl(struct drm_device *dev, void *data,
 /* drm_irq.c */
 
 /* IOCTLS */
-#if IS_ENABLED(CONFIG_DRM_LEGACY)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY)
 int drm_legacy_irq_control(struct drm_device *dev, void *data,
 			   struct drm_file *file_priv);
 #endif

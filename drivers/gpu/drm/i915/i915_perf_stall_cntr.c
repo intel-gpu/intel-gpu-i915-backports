@@ -18,7 +18,7 @@
 #define DEFAULT_POLL_FREQUENCY_HZ 100
 #define DEFAULT_POLL_PERIOD_NS (NSEC_PER_SEC / DEFAULT_POLL_FREQUENCY_HZ)
 
-/**
+/*
  * struct eu_stall_open_properties - properties given to open a stream
  *
  * @eu_stall_buf_sz: EU stall counters' data buffer size
@@ -84,7 +84,7 @@ static void set_mcr_multicast(struct intel_uncore *uncore)
 	spin_unlock_irq(&uncore->lock);
 }
 
-/**
+/*
  * read_eu_stall_properties - validate + copy userspace
  *			      stream open properties
  * @perf: i915 perf instance
@@ -203,7 +203,7 @@ static int read_eu_stall_properties(struct drm_i915_private *i915,
 	return 0;
 }
 
-/**
+/*
  * buf_data_size - Calculate the number of bytes in a circular buffer
  *		   of size buf_size given the read and write pointers
  *		   into the buffer.
@@ -447,7 +447,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	return ret;
 }
 
-/**
+/*
  * i915_eu_stall_buf_read_locked - copy EU stall counters data from the
  *				   per dss buffers to the userspace buffer
  * @stream: A stream opened for EU stall count metrics
@@ -918,7 +918,7 @@ static const struct file_operations fops_eu_stall = {
 	.compat_ioctl   = i915_eu_stall_cntr_ioctl,
 };
 
-/**
+/*
  * i915_open_eu_stall_cntr_locked - Open a EU stall counter stream FD.
  * @perf: i915 device instance
  * @param: The open parameters passed to 'DRM_I915_PERF_OPEN`

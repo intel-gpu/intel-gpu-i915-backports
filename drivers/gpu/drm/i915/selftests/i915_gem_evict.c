@@ -230,104 +230,6 @@ cleanup:
 	return err;
 }
 
-static void mock_color_adjust(const struct drm_mm_node *node,
-			      unsigned long color,
-			      u64 *start,
-			      u64 *end)
-{
-}
-
-static int igt_evict_for_cache_color(void *arg)
-{
-	struct intel_gt *gt = arg;
-	struct i915_ggtt *ggtt = gt->ggtt;
-	const unsigned long flags = PIN_OFFSET_FIXED;
-	struct drm_mm_node target = {
-		.start = I915_GTT_PAGE_SIZE * 2,
-		.size = I915_GTT_PAGE_SIZE,
-		.color = i915_gem_get_pat_index(gt->i915, I915_CACHE_LLC),
-	};
-	struct drm_i915_gem_object *obj;
-	struct i915_vma *vma;
-	LIST_HEAD(objects);
-	int err;
-
-	/*
-	 * Currently the use of color_adjust for the GGTT is limited to cache
-	 * coloring and guard pages, and so the presence of mm.color_adjust for
-	 * the GGTT is assumed to be i915_ggtt_color_adjust, hence using a mock
-	 * color adjust will work just fine for our purposes.
-	 */
-	ggtt->vm.mm.color_adjust = mock_color_adjust;
-	GEM_BUG_ON(!i915_vm_has_cache_coloring(&ggtt->vm));
-
-	obj = i915_gem_object_create_internal(gt->i915, I915_GTT_PAGE_SIZE);
-	if (IS_ERR(obj)) {
-		err = PTR_ERR(obj);
-		goto cleanup;
-	}
-	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
-	quirk_add(obj, &objects);
-
-	vma = i915_gem_object_ggtt_pin(obj, ggtt, NULL, 0, 0,
-				       I915_GTT_PAGE_SIZE | flags);
-	if (IS_ERR(vma)) {
-		pr_err("[0]i915_gem_object_ggtt_pin failed\n");
-		err = PTR_ERR(vma);
-		goto cleanup;
-	}
-
-	obj = i915_gem_object_create_internal(gt->i915, I915_GTT_PAGE_SIZE);
-	if (IS_ERR(obj)) {
-		err = PTR_ERR(obj);
-		goto cleanup;
-	}
-	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
-	quirk_add(obj, &objects);
-
-	/* Neighbouring; same colour - should fit */
-	vma = i915_gem_object_ggtt_pin(obj, ggtt, NULL, 0, 0,
-				       (I915_GTT_PAGE_SIZE * 2) | flags);
-	if (IS_ERR(vma)) {
-		pr_err("[1]i915_gem_object_ggtt_pin failed\n");
-		err = PTR_ERR(vma);
-		goto cleanup;
-	}
-
-	i915_vma_unpin(vma);
-
-	/* Remove just the second vma */
-	mutex_lock(&ggtt->vm.mutex);
-	err = i915_gem_evict_for_node(&ggtt->vm, &target, 0);
-	mutex_unlock(&ggtt->vm.mutex);
-	if (err) {
-		pr_err("[0]i915_gem_evict_for_node returned err=%d\n", err);
-		goto cleanup;
-	}
-
-	/* Attempt to remove the first *pinned* vma, by removing the (empty)
-	 * neighbour -- this should fail.
-	 */
-	target.color = i915_gem_get_pat_index(gt->i915, I915_CACHE_L3_LLC);
-
-	mutex_lock(&ggtt->vm.mutex);
-	err = i915_gem_evict_for_node(&ggtt->vm, &target, 0);
-	mutex_unlock(&ggtt->vm.mutex);
-	if (!err) {
-		pr_err("[1]i915_gem_evict_for_node returned err=%d\n", err);
-		err = -EINVAL;
-		goto cleanup;
-	}
-
-	err = 0;
-
-cleanup:
-	unpin_ggtt(ggtt);
-	cleanup_objects(ggtt, &objects);
-	ggtt->vm.mm.color_adjust = NULL;
-	return err;
-}
-
 static int igt_evict_vm(void *arg)
 {
 	struct intel_gt *gt = arg;
@@ -395,8 +297,6 @@ static int igt_evict_contexts(void *arg)
 	 * where the GTT space of the request is separate from the GGTT
 	 * allocation required to build the request.
 	 */
-	if (!HAS_FULL_PPGTT(i915))
-		return 0;
 
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 
@@ -533,7 +433,6 @@ int i915_gem_evict_mock_selftests(void)
 	static const struct i915_subtest tests[] = {
 		SUBTEST(igt_evict_something),
 		SUBTEST(igt_evict_for_vma),
-		SUBTEST(igt_evict_for_cache_color),
 		SUBTEST(igt_evict_vm),
 		SUBTEST(igt_overcommit),
 	};

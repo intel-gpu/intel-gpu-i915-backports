@@ -203,8 +203,6 @@ struct i915_vma {
 	void __iomem *iomap;
 	void *private; /* owned by creator */
 
-	struct i915_fence_reg *fence;
-
 	/* mmap-offset associated with fencing for this vma */
 	struct i915_mmap_offset	*mmo;
 
@@ -212,8 +210,6 @@ struct i915_vma {
 	u32 page_sizes;
 
 	u32 guard; /* padding allocated around vma->pages within the node */
-	u32 fence_size;
-	u32 fence_alignment;
 	u32 display_alignment;
 
 	/**
@@ -265,14 +261,7 @@ struct i915_vma {
 #define I915_VMA_ERROR		((int)BIT(I915_VMA_ERROR_BIT))
 
 #define I915_VMA_GGTT_BIT	14
-#define I915_VMA_CAN_FENCE_BIT	15
-#define I915_VMA_USERFAULT_BIT	16
-#define I915_VMA_GGTT_WRITE_BIT	17
-
 #define I915_VMA_GGTT		((int)BIT(I915_VMA_GGTT_BIT))
-#define I915_VMA_CAN_FENCE	((int)BIT(I915_VMA_CAN_FENCE_BIT))
-#define I915_VMA_USERFAULT	((int)BIT(I915_VMA_USERFAULT_BIT))
-#define I915_VMA_GGTT_WRITE	((int)BIT(I915_VMA_GGTT_WRITE_BIT))
 
 #define I915_VMA_SCANOUT_BIT	18
 #define I915_VMA_SCANOUT	((int)BIT(I915_VMA_SCANOUT_BIT))
@@ -307,6 +296,7 @@ struct i915_vma {
 	/* (segmented BO) walk adjacent VMAs at unbind or during capture_vma */
 	struct i915_vma *adjacent_next;
 	struct i915_vma *adjacent_start;
+	u64 adjacent_size;
 
 	/** Interval tree structures for persistent vma */
 	struct rb_node rb;
@@ -315,7 +305,6 @@ struct i915_vma {
 	struct list_head obj_link; /* Link in the object's VMA list */
 	struct rb_node obj_node;
 	struct hlist_node obj_hash;
-	struct intel_flat_ppgtt_request_pool *pool;
 
 	/** This vma's place in the eviction list */
 	struct list_head evict_link;

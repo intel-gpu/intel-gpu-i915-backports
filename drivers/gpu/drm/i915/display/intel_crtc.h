@@ -8,7 +8,6 @@
 
 #include <linux/types.h>
 
-enum i9xx_plane_id;
 enum pipe;
 struct drm_display_mode;
 struct drm_i915_private;

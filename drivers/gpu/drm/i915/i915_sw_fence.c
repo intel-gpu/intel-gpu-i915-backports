@@ -119,10 +119,6 @@ static inline void debug_fence_destroy(struct i915_sw_fence *fence)
 {
 }
 
-static inline void debug_fence_free(struct i915_sw_fence *fence)
-{
-}
-
 static inline void debug_fence_assert(struct i915_sw_fence *fence)
 {
 }

@@ -353,13 +353,13 @@ static int __intel_context_active(struct i915_active *active)
 	intel_context_get(ce);
 
 	/* everything should already be activated by intel_context_pre_pin() */
-	GEM_WARN_ON(!i915_active_acquire_if_busy(&ce->ring->vma->active));
+	__i915_active_acquire(&ce->ring->vma->active);
 	__intel_ring_pin(ce->ring);
 
 	__intel_timeline_pin(ce->timeline);
 
 	if (ce->state) {
-		GEM_WARN_ON(!i915_active_acquire_if_busy(&ce->state->active));
+		__i915_active_acquire(&ce->state->active);
 		__i915_vma_pin(ce->state);
 		i915_vma_make_unshrinkable(ce->state);
 	}
@@ -579,7 +579,11 @@ retry:
 	 * Hack around this to shut up lockdep in selftests..
 	 */
 	lockdep_unpin_lock(&ce->timeline->mutex, rq->cookie);
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	mutex_release(&ce->timeline->mutex.dep_map, 0, _RET_IP_);
+#else
 	mutex_release(&ce->timeline->mutex.dep_map, _RET_IP_);
+#endif
 	mutex_acquire(&ce->timeline->mutex.dep_map, SINGLE_DEPTH_NESTING, 0, _RET_IP_);
 	rq->cookie = lockdep_pin_lock(&ce->timeline->mutex);
 

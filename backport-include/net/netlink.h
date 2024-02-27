@@ -4,7 +4,7 @@
 #include <linux/version.h>
 #include <linux/in6.h>
 
-#if LINUX_VERSION_IS_LESS(5,2,0)
+#ifdef BPM_NLMSG_PARSE_NOT_PRESENT
 /* can't backport using the enum - need to override */
 #define NLA_UNSPEC		0
 #define NLA_U8			1
@@ -266,7 +266,7 @@ nla_validate_nested_deprecated(const struct nlattr *start, int maxtype,
 }
 #endif /* < 5.2 */
 
-#if LINUX_VERSION_IS_LESS(5,6,0)
+#ifdef BPM_NLA_VALIDATE_NESTED_NOT_PRESENT 
 #define nla_validate_nested LINUX_I915_BACKPORT(nla_validate_nested)
 static inline int
 nla_validate_nested(const struct nlattr *start, int maxtype,
@@ -276,9 +276,9 @@ nla_validate_nested(const struct nlattr *start, int maxtype,
 	return __nla_validate_nested(start, maxtype, policy,
 				     NL_VALIDATE_STRICT, extack);
 }
-#endif /* < 5.6 */
+#endif
 
-#if LINUX_VERSION_IS_LESS(5,1,0)
+#ifdef  BPM_NLA_POLICY_NESTED_ARRAY_NOT_PRESENT
 #undef NLA_POLICY_NESTED
 #undef NLA_POLICY_NESTED_ARRAY
 #define _NLA_POLICY_NESTED(maxattr, policy) \
@@ -289,9 +289,9 @@ nla_validate_nested(const struct nlattr *start, int maxtype,
 	_NLA_POLICY_NESTED(ARRAY_SIZE(policy) - 1, policy)
 #define NLA_POLICY_NESTED_ARRAY(policy) \
 	_NLA_POLICY_NESTED_ARRAY(ARRAY_SIZE(policy) - 1, policy)
-#endif /* < 5.1 */
+#endif 
 
-#if LINUX_VERSION_IS_LESS(4,20,0)
+#ifdef BPM_NLA_POLICY_VALIDATION_PRESENT
 enum nla_policy_validation {
 	NLA_VALIDATE_NONE,
 	NLA_VALIDATE_RANGE,
@@ -717,6 +717,6 @@ static inline void *nla_memdup(const struct nlattr *src, gfp_t gfp)
 {
 	return kmemdup(nla_data(src), nla_len(src), gfp);
 }
-#endif /* < 4.9 */
+#endif /* < 4.10 */
 
 #endif /* __BACKPORT_NET_NETLINK_H */

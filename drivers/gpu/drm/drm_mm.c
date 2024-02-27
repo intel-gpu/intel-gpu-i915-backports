@@ -98,7 +98,7 @@
  * locking would be fully redundant.
  */
 
-#ifdef CONFIG_DRM_DEBUG_MM
+#ifdef CPTCFG_DRM_DEBUG_MM
 #include <linux/stackdepot.h>
 
 #define STACKDEPTH 32

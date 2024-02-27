@@ -22,7 +22,6 @@
 #include "intel_rps.h"
 #include "intel_runtime_pm.h"
 #include "intel_uncore.h"
-#include "vlv_sideband.h"
 
 void intel_gt_pm_debugfs_forcewake_user_open(struct intel_gt *gt)
 {
@@ -91,31 +90,6 @@ static void print_rc6_res(struct seq_file *m,
 		seq_printf(m, "%s %u (%llu us)\n", title,
 			   intel_uncore_read(gt->uncore, reg),
 			   intel_rc6_residency_us(&gt->rc6, reg));
-}
-
-static int vlv_drpc(struct seq_file *m)
-{
-	struct intel_gt *gt = m->private;
-	struct intel_uncore *uncore = gt->uncore;
-	u32 rcctl1, pw_status, mt_fwake_req;
-
-	mt_fwake_req = intel_uncore_read_fw(uncore, FORCEWAKE_MT);
-	pw_status = intel_uncore_read(uncore, VLV_GTLC_PW_STATUS);
-	rcctl1 = intel_uncore_read(uncore, GEN6_RC_CONTROL);
-
-	seq_printf(m, "RC6 Enabled: %s\n",
-		   str_yes_no(rcctl1 & (GEN7_RC_CTL_TO_MODE |
-					GEN6_RC_CTL_EI_MODE(1))));
-	seq_printf(m, "Multi-threaded Forcewake Request: 0x%x\n", mt_fwake_req);
-	seq_printf(m, "Render Power Well: %s\n",
-		   (pw_status & VLV_GTLC_PW_RENDER_STATUS_MASK) ? "Up" : "Down");
-	seq_printf(m, "Media Power Well: %s\n",
-		   (pw_status & VLV_GTLC_PW_MEDIA_STATUS_MASK) ? "Up" : "Down");
-
-	print_rc6_res(m, "Render RC6 residency since boot:", GEN6_GT_GFX_RC6);
-	print_rc6_res(m, "Media RC6 residency since boot:", VLV_GT_MEDIA_RC6);
-
-	return fw_domains_show(m, NULL);
 }
 
 static int gen6_drpc(struct seq_file *m)
@@ -218,65 +192,6 @@ static int gen6_drpc(struct seq_file *m)
 	return fw_domains_show(m, NULL);
 }
 
-static int ilk_drpc(struct seq_file *m)
-{
-	struct intel_gt *gt = m->private;
-	struct intel_uncore *uncore = gt->uncore;
-	u32 rgvmodectl, rstdbyctl;
-	u16 crstandvid;
-
-	rgvmodectl = intel_uncore_read(uncore, MEMMODECTL);
-	rstdbyctl = intel_uncore_read(uncore, RSTDBYCTL);
-	crstandvid = intel_uncore_read16(uncore, CRSTANDVID);
-
-	seq_printf(m, "HD boost: %s\n",
-		   str_yes_no(rgvmodectl & MEMMODE_BOOST_EN));
-	seq_printf(m, "Boost freq: %d\n",
-		   (rgvmodectl & MEMMODE_BOOST_FREQ_MASK) >>
-		   MEMMODE_BOOST_FREQ_SHIFT);
-	seq_printf(m, "HW control enabled: %s\n",
-		   str_yes_no(rgvmodectl & MEMMODE_HWIDLE_EN));
-	seq_printf(m, "SW control enabled: %s\n",
-		   str_yes_no(rgvmodectl & MEMMODE_SWMODE_EN));
-	seq_printf(m, "Gated voltage change: %s\n",
-		   str_yes_no(rgvmodectl & MEMMODE_RCLK_GATE));
-	seq_printf(m, "Starting frequency: P%d\n",
-		   (rgvmodectl & MEMMODE_FSTART_MASK) >> MEMMODE_FSTART_SHIFT);
-	seq_printf(m, "Max P-state: P%d\n",
-		   (rgvmodectl & MEMMODE_FMAX_MASK) >> MEMMODE_FMAX_SHIFT);
-	seq_printf(m, "Min P-state: P%d\n", (rgvmodectl & MEMMODE_FMIN_MASK));
-	seq_printf(m, "RS1 VID: %d\n", (crstandvid & 0x3f));
-	seq_printf(m, "RS2 VID: %d\n", ((crstandvid >> 8) & 0x3f));
-	seq_printf(m, "Render standby enabled: %s\n",
-		   str_yes_no(!(rstdbyctl & RCX_SW_EXIT)));
-	seq_puts(m, "Current RS state: ");
-	switch (rstdbyctl & RSX_STATUS_MASK) {
-	case RSX_STATUS_ON:
-		seq_puts(m, "on\n");
-		break;
-	case RSX_STATUS_RC1:
-		seq_puts(m, "RC1\n");
-		break;
-	case RSX_STATUS_RC1E:
-		seq_puts(m, "RC1E\n");
-		break;
-	case RSX_STATUS_RS1:
-		seq_puts(m, "RS1\n");
-		break;
-	case RSX_STATUS_RS2:
-		seq_puts(m, "RS2 (RC6)\n");
-		break;
-	case RSX_STATUS_RS3:
-		seq_puts(m, "RC3 (RC6+)\n");
-		break;
-	default:
-		seq_puts(m, "unknown\n");
-		break;
-	}
-
-	return 0;
-}
-
 static int mtl_drpc(struct seq_file *m)
 {
 	struct intel_gt *gt = m->private;
@@ -339,14 +254,10 @@ static int drpc_show(struct seq_file *m, void *unused)
 	int err = -ENODEV;
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref) {
-		if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915))
-			err = vlv_drpc(m);
-		else if (MEDIA_VER(i915) >= 13)
+		if (MEDIA_VER(i915) >= 13)
 			err = mtl_drpc(m);
-		else if (GRAPHICS_VER(i915) >= 6)
-			err = gen6_drpc(m);
 		else
-			err = ilk_drpc(m);
+			err = gen6_drpc(m);
 	}
 
 	return err;
@@ -376,56 +287,7 @@ void intel_gt_pm_frequency_dump(struct intel_gt *gt, struct drm_printer *p)
 
 	wakeref = intel_runtime_pm_get(uncore->rpm);
 
-	if (GRAPHICS_VER(i915) == 5) {
-		u16 rgvswctl = intel_uncore_read16(uncore, MEMSWCTL);
-		u16 rgvstat = intel_uncore_read16(uncore, MEMSTAT_ILK);
-
-		drm_printf(p, "Requested P-state: %d\n", (rgvswctl >> 8) & 0xf);
-		drm_printf(p, "Requested VID: %d\n", rgvswctl & 0x3f);
-		drm_printf(p, "Current VID: %d\n", (rgvstat & MEMSTAT_VID_MASK) >>
-			   MEMSTAT_VID_SHIFT);
-		drm_printf(p, "Current P-state: %d\n",
-			   REG_FIELD_GET(MEMSTAT_PSTATE_MASK, rgvstat));
-	} else if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915)) {
-		u32 rpmodectl, freq_sts;
-
-		rpmodectl = intel_uncore_read(uncore, GEN6_RP_CONTROL);
-		drm_printf(p, "Video Turbo Mode: %s\n",
-			   str_yes_no(rpmodectl & GEN6_RP_MEDIA_TURBO));
-		drm_printf(p, "HW control enabled: %s\n",
-			   str_yes_no(rpmodectl & GEN6_RP_ENABLE));
-		drm_printf(p, "SW control enabled: %s\n",
-			   str_yes_no((rpmodectl & GEN6_RP_MEDIA_MODE_MASK) == GEN6_RP_MEDIA_SW_MODE));
-
-		vlv_punit_get(i915);
-		freq_sts = vlv_punit_read(i915, PUNIT_REG_GPU_FREQ_STS);
-		vlv_punit_put(i915);
-
-		drm_printf(p, "PUNIT_REG_GPU_FREQ_STS: 0x%08x\n", freq_sts);
-		drm_printf(p, "DDR freq: %d MHz\n", i915->mem_freq);
-
-		drm_printf(p, "actual GPU freq: %d MHz\n",
-			   intel_gpu_freq(rps, (freq_sts >> 8) & 0xff));
-
-		drm_printf(p, "current GPU freq: %d MHz\n",
-			   intel_gpu_freq(rps, rps->cur_freq));
-
-		drm_printf(p, "max GPU freq: %d MHz\n",
-			   intel_gpu_freq(rps, rps->max_freq));
-
-		drm_printf(p, "min GPU freq: %d MHz\n",
-			   intel_gpu_freq(rps, rps->min_freq));
-
-		drm_printf(p, "idle GPU freq: %d MHz\n",
-			   intel_gpu_freq(rps, rps->idle_freq));
-
-		drm_printf(p, "efficient (RPe) frequency: %d MHz\n",
-			   intel_gpu_freq(rps, rps->efficient_freq));
-	} else if (GRAPHICS_VER(i915) >= 6) {
-		gen6_rps_frequency_dump(rps, p);
-	} else {
-		drm_puts(p, "no P-state info available\n");
-	}
+	gen6_rps_frequency_dump(rps, p);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	drm_printf(p, "Current CD clock frequency: %d kHz\n", i915->cdclk.hw.cdclk);
@@ -451,23 +313,19 @@ static int llc_show(struct seq_file *m, void *data)
 {
 	struct intel_gt *gt = m->private;
 	struct drm_i915_private *i915 = gt->i915;
-	const bool edram = GRAPHICS_VER(i915) > 8;
 	struct intel_rps *rps = &gt->rps;
 	unsigned int max_gpu_freq, min_gpu_freq;
 	intel_wakeref_t wakeref;
 	int gpu_freq, ia_freq;
 
 	seq_printf(m, "LLC: %s\n", str_yes_no(HAS_LLC(i915)));
-	seq_printf(m, "%s: %uMB\n", edram ? "eDRAM" : "eLLC",
-		   i915->edram_size_mb);
 
 	min_gpu_freq = rps->min_freq;
 	max_gpu_freq = rps->max_freq;
-	if (IS_GEN9_BC(i915) || GRAPHICS_VER(i915) >= 11) {
-		/* Convert GT frequency to 50 HZ units */
-		min_gpu_freq /= GEN9_FREQ_SCALER;
-		max_gpu_freq /= GEN9_FREQ_SCALER;
-	}
+
+	/* Convert GT frequency to 50 HZ units */
+	min_gpu_freq /= GEN9_FREQ_SCALER;
+	max_gpu_freq /= GEN9_FREQ_SCALER;
 
 	seq_puts(m, "GPU freq (MHz)\tEffective CPU freq (MHz)\tEffective Ring freq (MHz)\n");
 
@@ -571,13 +429,6 @@ static int rps_boost_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-static bool rps_eval(void *data)
-{
-	struct intel_gt *gt = data;
-
-	return HAS_RPS(gt->i915);
-}
-
 DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(rps_boost);
 
 static int perf_limit_reasons_get(void *data, u64 *val)
@@ -615,7 +466,7 @@ void intel_gt_pm_debugfs_register(struct intel_gt *gt, struct dentry *root)
 		{ "forcewake", &fw_domains_fops, NULL },
 		{ "forcewake_user", &forcewake_user_fops, NULL},
 		{ "llc", &llc_fops, llc_eval },
-		{ "rps_boost", &rps_boost_fops, rps_eval },
+		{ "rps_boost", &rps_boost_fops },
 		{ "perf_limit_reasons", &perf_limit_reasons_fops, NULL },
 	};
 

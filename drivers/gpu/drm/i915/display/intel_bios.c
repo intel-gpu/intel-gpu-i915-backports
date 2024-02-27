@@ -422,7 +422,7 @@ static void *generate_lfp_data_ptrs(struct drm_i915_private *i915,
 		ptrs->lvds_entries++;
 
 	if (size != 0 || ptrs->lvds_entries != 3) {
-		kfree(ptrs);
+		kfree(ptrs_block);
 		return NULL;
 	}
 
@@ -1101,6 +1101,8 @@ parse_sdvo_panel_data(struct drm_i915_private *i915,
 			return;
 
 		index = sdvo_lvds_options->panel_type;
+		if (index >= ARRAY_SIZE(dtds->dtds))
+			return;
 	}
 
 	dtds = find_section(i915, BDB_SDVO_PANEL_DTDS);
@@ -1123,15 +1125,7 @@ parse_sdvo_panel_data(struct drm_i915_private *i915,
 static int intel_bios_ssc_frequency(struct drm_i915_private *i915,
 				    bool alternate)
 {
-	switch (DISPLAY_VER(i915)) {
-	case 2:
-		return alternate ? 66667 : 48000;
-	case 3:
-	case 4:
-		return alternate ? 100000 : 96000;
-	default:
-		return alternate ? 100000 : 120000;
-	}
+	return alternate ? 100000 : 120000;
 }
 
 static void
@@ -1145,8 +1139,7 @@ parse_general_features(struct drm_i915_private *i915)
 
 	i915->vbt.int_tv_support = general->int_tv_support;
 	/* int_crt_support can't be trusted on earlier platforms */
-	if (i915->vbt.version >= 155 &&
-	    (HAS_DDI(i915) || IS_VALLEYVIEW(i915)))
+	if (i915->vbt.version >= 155)
 		i915->vbt.int_crt_support = general->int_crt_support;
 	i915->vbt.lvds_use_ssc = general->enable_ssc;
 	i915->vbt.lvds_ssc_freq =
@@ -1183,82 +1176,6 @@ child_device_ptr(const struct bdb_general_definitions *defs, int i)
 }
 
 static void
-parse_sdvo_device_mapping(struct drm_i915_private *i915)
-{
-	struct sdvo_device_mapping *mapping;
-	const struct intel_bios_encoder_data *devdata;
-	const struct child_device_config *child;
-	int count = 0;
-
-	/*
-	 * Only parse SDVO mappings on gens that could have SDVO. This isn't
-	 * accurate and doesn't have to be, as long as it's not too strict.
-	 */
-	if (!IS_DISPLAY_VER(i915, 3, 7)) {
-		drm_dbg_kms(&i915->drm, "Skipping SDVO device mapping\n");
-		return;
-	}
-
-	list_for_each_entry(devdata, &i915->vbt.display_devices, node) {
-		child = &devdata->child;
-
-		if (child->slave_addr != SLAVE_ADDR1 &&
-		    child->slave_addr != SLAVE_ADDR2) {
-			/*
-			 * If the slave address is neither 0x70 nor 0x72,
-			 * it is not a SDVO device. Skip it.
-			 */
-			continue;
-		}
-		if (child->dvo_port != DEVICE_PORT_DVOB &&
-		    child->dvo_port != DEVICE_PORT_DVOC) {
-			/* skip the incorrect SDVO port */
-			drm_dbg_kms(&i915->drm,
-				    "Incorrect SDVO port. Skip it\n");
-			continue;
-		}
-		drm_dbg_kms(&i915->drm,
-			    "the SDVO device with slave addr %2x is found on"
-			    " %s port\n",
-			    child->slave_addr,
-			    (child->dvo_port == DEVICE_PORT_DVOB) ?
-			    "SDVOB" : "SDVOC");
-		mapping = &i915->vbt.sdvo_mappings[child->dvo_port - 1];
-		if (!mapping->initialized) {
-			mapping->dvo_port = child->dvo_port;
-			mapping->slave_addr = child->slave_addr;
-			mapping->dvo_wiring = child->dvo_wiring;
-			mapping->ddc_pin = child->ddc_pin;
-			mapping->i2c_pin = child->i2c_pin;
-			mapping->initialized = 1;
-			drm_dbg_kms(&i915->drm,
-				    "SDVO device: dvo=%x, addr=%x, wiring=%d, ddc_pin=%d, i2c_pin=%d\n",
-				    mapping->dvo_port, mapping->slave_addr,
-				    mapping->dvo_wiring, mapping->ddc_pin,
-				    mapping->i2c_pin);
-		} else {
-			drm_dbg_kms(&i915->drm,
-				    "Maybe one SDVO port is shared by "
-				    "two SDVO device.\n");
-		}
-		if (child->slave2_addr) {
-			/* Maybe this is a SDVO device with multiple inputs */
-			/* And the mapping info is not added */
-			drm_dbg_kms(&i915->drm,
-				    "there exists the slave2_addr. Maybe this"
-				    " is a SDVO device with multiple inputs.\n");
-		}
-		count++;
-	}
-
-	if (!count) {
-		/* No SDVO device info is found */
-		drm_dbg_kms(&i915->drm,
-			    "No SDVO device info is found in VBT\n");
-	}
-}
-
-static void
 parse_driver_features(struct drm_i915_private *i915)
 {
 	const struct bdb_driver_features *driver;
@@ -1267,31 +1184,13 @@ parse_driver_features(struct drm_i915_private *i915)
 	if (!driver)
 		return;
 
-	if (DISPLAY_VER(i915) >= 5) {
-		/*
-		 * Note that we consider BDB_DRIVER_FEATURE_INT_SDVO_LVDS
-		 * to mean "eDP". The VBT spec doesn't agree with that
-		 * interpretation, but real world VBTs seem to.
-		 */
-		if (driver->lvds_config != BDB_DRIVER_FEATURE_INT_LVDS)
-			i915->vbt.int_lvds_support = 0;
-	} else {
-		/*
-		 * FIXME it's not clear which BDB version has the LVDS config
-		 * bits defined. Revision history in the VBT spec says:
-		 * "0.92 | Add two definitions for VBT value of LVDS Active
-		 *  Config (00b and 11b values defined) | 06/13/2005"
-		 * but does not the specify the BDB version.
-		 *
-		 * So far version 134 (on i945gm) is the oldest VBT observed
-		 * in the wild with the bits correctly populated. Version
-		 * 108 (on i85x) does not have the bits correctly populated.
-		 */
-		if (i915->vbt.version >= 134 &&
-		    driver->lvds_config != BDB_DRIVER_FEATURE_INT_LVDS &&
-		    driver->lvds_config != BDB_DRIVER_FEATURE_INT_SDVO_LVDS)
-			i915->vbt.int_lvds_support = 0;
-	}
+	/*
+	 * Note that we consider BDB_DRIVER_FEATURE_INT_SDVO_LVDS
+	 * to mean "eDP". The VBT spec doesn't agree with that
+	 * interpretation, but real world VBTs seem to.
+	 */
+	if (driver->lvds_config != BDB_DRIVER_FEATURE_INT_LVDS)
+		i915->vbt.int_lvds_support = 0;
 }
 
 static void
@@ -1522,15 +1421,13 @@ parse_psr(struct drm_i915_private *i915,
 	panel->vbt.psr.require_aux_wakeup = psr_table->require_aux_to_wakeup;
 
 	/* Allowed VBT values goes from 0 to 15 */
-	panel->vbt.psr.idle_frames = psr_table->idle_frames < 0 ? 0 :
-		psr_table->idle_frames > 15 ? 15 : psr_table->idle_frames;
+	panel->vbt.psr.idle_frames = psr_table->idle_frames;
 
 	/*
 	 * New psr options 0=500us, 1=100us, 2=2500us, 3=0us
 	 * Old decimal value is wake up time in multiples of 100 us.
 	 */
-	if (i915->vbt.version >= 205 &&
-	    (DISPLAY_VER(i915) >= 9 && !IS_BROXTON(i915))) {
+	if (i915->vbt.version >= 205) {
 		switch (psr_table->tp1_wakeup_time) {
 		case 0:
 			panel->vbt.psr.tp1_wakeup_time_us = 500;
@@ -1605,7 +1502,7 @@ static void parse_dsi_backlight_ports(struct drm_i915_private *i915,
 				      struct intel_panel *panel,
 				      enum port port)
 {
-	enum port port_bc = DISPLAY_VER(i915) >= 11 ? PORT_B : PORT_C;
+	enum port port_bc = PORT_B;
 
 	if (!panel->vbt.dsi.config->dual_link || i915->vbt.version < 197) {
 		panel->vbt.dsi.bl_ports = BIT(port);
@@ -1884,90 +1781,6 @@ static int goto_next_sequence_v3(const u8 *data, int index, int total)
 	return 0;
 }
 
-/*
- * Get len of pre-fixed deassert fragment from a v1 init OTP sequence,
- * skip all delay + gpio operands and stop at the first DSI packet op.
- */
-static int get_init_otp_deassert_fragment_len(struct drm_i915_private *i915,
-					      struct intel_panel *panel)
-{
-	const u8 *data = panel->vbt.dsi.sequence[MIPI_SEQ_INIT_OTP];
-	int index, len;
-
-	if (drm_WARN_ON(&i915->drm,
-			!data || panel->vbt.dsi.seq_version != 1))
-		return 0;
-
-	/* index = 1 to skip sequence byte */
-	for (index = 1; data[index] != MIPI_SEQ_ELEM_END; index += len) {
-		switch (data[index]) {
-		case MIPI_SEQ_ELEM_SEND_PKT:
-			return index == 1 ? 0 : index;
-		case MIPI_SEQ_ELEM_DELAY:
-			len = 5; /* 1 byte for operand + uint32 */
-			break;
-		case MIPI_SEQ_ELEM_GPIO:
-			len = 3; /* 1 byte for op, 1 for gpio_nr, 1 for value */
-			break;
-		default:
-			return 0;
-		}
-	}
-
-	return 0;
-}
-
-/*
- * Some v1 VBT MIPI sequences do the deassert in the init OTP sequence.
- * The deassert must be done before calling intel_dsi_device_ready, so for
- * these devices we split the init OTP sequence into a deassert sequence and
- * the actual init OTP part.
- */
-static void fixup_mipi_sequences(struct drm_i915_private *i915,
-				 struct intel_panel *panel)
-{
-	u8 *init_otp;
-	int len;
-
-	/* Limit this to VLV for now. */
-	if (!IS_VALLEYVIEW(i915))
-		return;
-
-	/* Limit this to v1 vid-mode sequences */
-	if (panel->vbt.dsi.config->is_cmd_mode ||
-	    panel->vbt.dsi.seq_version != 1)
-		return;
-
-	/* Only do this if there are otp and assert seqs and no deassert seq */
-	if (!panel->vbt.dsi.sequence[MIPI_SEQ_INIT_OTP] ||
-	    !panel->vbt.dsi.sequence[MIPI_SEQ_ASSERT_RESET] ||
-	    panel->vbt.dsi.sequence[MIPI_SEQ_DEASSERT_RESET])
-		return;
-
-	/* The deassert-sequence ends at the first DSI packet */
-	len = get_init_otp_deassert_fragment_len(i915, panel);
-	if (!len)
-		return;
-
-	drm_dbg_kms(&i915->drm,
-		    "Using init OTP fragment to deassert reset\n");
-
-	/* Copy the fragment, update seq byte and terminate it */
-	init_otp = (u8 *)panel->vbt.dsi.sequence[MIPI_SEQ_INIT_OTP];
-	panel->vbt.dsi.deassert_seq = kmemdup(init_otp, len + 1, GFP_KERNEL);
-	if (!panel->vbt.dsi.deassert_seq)
-		return;
-	panel->vbt.dsi.deassert_seq[0] = MIPI_SEQ_DEASSERT_RESET;
-	panel->vbt.dsi.deassert_seq[len] = MIPI_SEQ_ELEM_END;
-	/* Use the copy for deassert */
-	panel->vbt.dsi.sequence[MIPI_SEQ_DEASSERT_RESET] =
-		panel->vbt.dsi.deassert_seq;
-	/* Replace the last byte of the fragment with init OTP seq byte */
-	init_otp[len - 1] = MIPI_SEQ_INIT_OTP;
-	/* And make MIPI_MIPI_SEQ_INIT_OTP point to it */
-	panel->vbt.dsi.sequence[MIPI_SEQ_INIT_OTP] = init_otp + len - 1;
-}
-
 static void
 parse_mipi_sequence(struct drm_i915_private *i915,
 		    struct intel_panel *panel)
@@ -2043,8 +1856,6 @@ parse_mipi_sequence(struct drm_i915_private *i915,
 	panel->vbt.dsi.size = seq_size;
 	panel->vbt.dsi.seq_version = sequence->version;
 
-	fixup_mipi_sequences(i915, panel);
-
 	drm_dbg(&i915->drm, "MIPI related VBT parsing complete\n");
 	return;
 
@@ -2118,14 +1929,6 @@ static u8 translate_iboost(u8 val)
 	return mapping[val];
 }
 
-static const u8 cnp_ddc_pin_map[] = {
-	[0] = 0, /* N/A */
-	[DDC_BUS_DDI_B] = GMBUS_PIN_1_BXT,
-	[DDC_BUS_DDI_C] = GMBUS_PIN_2_BXT,
-	[DDC_BUS_DDI_D] = GMBUS_PIN_4_CNP, /* sic */
-	[DDC_BUS_DDI_F] = GMBUS_PIN_3_BXT, /* sic */
-};
-
 static const u8 icp_ddc_pin_map[] = {
 	[ICL_DDC_BUS_DDI_A] = GMBUS_PIN_1_BXT,
 	[ICL_DDC_BUS_DDI_B] = GMBUS_PIN_2_BXT,
@@ -2151,12 +1954,6 @@ static const u8 adls_ddc_pin_map[] = {
 	[ADLS_DDC_BUS_PORT_TC2] = GMBUS_PIN_10_TC2_ICP,
 	[ADLS_DDC_BUS_PORT_TC3] = GMBUS_PIN_11_TC3_ICP,
 	[ADLS_DDC_BUS_PORT_TC4] = GMBUS_PIN_12_TC4_ICP,
-};
-
-static const u8 gen9bc_tgp_ddc_pin_map[] = {
-	[DDC_BUS_DDI_B] = GMBUS_PIN_2_BXT,
-	[DDC_BUS_DDI_C] = GMBUS_PIN_9_TC1_ICP,
-	[DDC_BUS_DDI_D] = GMBUS_PIN_10_TC2_ICP,
 };
 
 static const u8 adlp_ddc_pin_map[] = {
@@ -2185,18 +1982,9 @@ static u8 map_ddc_pin(struct drm_i915_private *i915, u8 vbt_pin)
 	} else if (IS_ROCKETLAKE(i915) && INTEL_PCH_TYPE(i915) == PCH_TGP) {
 		ddc_pin_map = rkl_pch_tgp_ddc_pin_map;
 		n_entries = ARRAY_SIZE(rkl_pch_tgp_ddc_pin_map);
-	} else if (HAS_PCH_TGP(i915) && DISPLAY_VER(i915) == 9) {
-		ddc_pin_map = gen9bc_tgp_ddc_pin_map;
-		n_entries = ARRAY_SIZE(gen9bc_tgp_ddc_pin_map);
-	} else if (INTEL_PCH_TYPE(i915) >= PCH_ICP) {
+	} else {
 		ddc_pin_map = icp_ddc_pin_map;
 		n_entries = ARRAY_SIZE(icp_ddc_pin_map);
-	} else if (HAS_PCH_CNP(i915)) {
-		ddc_pin_map = cnp_ddc_pin_map;
-		n_entries = ARRAY_SIZE(cnp_ddc_pin_map);
-	} else {
-		/* Assuming direct map */
-		return vbt_pin;
 	}
 
 	if (vbt_pin < n_entries && ddc_pin_map[vbt_pin] != 0)
@@ -2501,27 +2289,6 @@ static int _intel_bios_dp_max_link_rate(const struct intel_bios_encoder_data *de
 		return parse_bdb_216_dp_max_link_rate(devdata->child.dp_max_link_rate);
 }
 
-static void sanitize_device_type(struct intel_bios_encoder_data *devdata,
-				 enum port port)
-{
-	struct drm_i915_private *i915 = devdata->i915;
-	bool is_hdmi;
-
-	if (port != PORT_A || DISPLAY_VER(i915) >= 12)
-		return;
-
-	if (!intel_bios_encoder_supports_dvi(devdata))
-		return;
-
-	is_hdmi = intel_bios_encoder_supports_hdmi(devdata);
-
-	drm_dbg_kms(&i915->drm, "VBT claims port A supports DVI%s, ignoring\n",
-		    is_hdmi ? "/HDMI" : "");
-
-	devdata->child.device_type &= ~DEVICE_TYPE_TMDS_DVI_SIGNALING;
-	devdata->child.device_type |= DEVICE_TYPE_NOT_HDMI_OUTPUT;
-}
-
 static bool
 intel_bios_encoder_supports_crt(const struct intel_bios_encoder_data *devdata)
 {
@@ -2588,15 +2355,7 @@ static int _intel_bios_max_tmds_clock(const struct intel_bios_encoder_data *devd
 
 static bool is_port_valid(struct drm_i915_private *i915, enum port port)
 {
-	/*
-	 * On some ICL SKUs port F is not present, but broken VBTs mark
-	 * the port as present. Only try to initialize port F for the
-	 * SKUs that may actually have it.
-	 */
-	if (port == PORT_F && IS_ICELAKE(i915))
-		return IS_ICL_WITH_PORT_F(i915);
-
-	return true;
+	return port < ARRAY_SIZE(i915->vbt.ports);
 }
 
 static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
@@ -2619,7 +2378,7 @@ static void print_ddi_port(const struct intel_bios_encoder_data *devdata,
 	drm_dbg_kms(&i915->drm,
 		    "Port %c VBT info: CRT:%d DVI:%d HDMI:%d DP:%d eDP:%d LSPCON:%d USB-Type-C:%d TBT:%d DSC:%d\n",
 		    port_name(port), is_crt, is_dvi, is_hdmi, is_dp, is_edp,
-		    HAS_LSPCON(i915) && child->lspcon,
+		    false,
 		    supports_typec_usb, supports_tbt,
 		    devdata->dsc != NULL);
 
@@ -2688,8 +2447,6 @@ static void parse_ddi_port(struct intel_bios_encoder_data *devdata)
 		return;
 	}
 
-	sanitize_device_type(devdata, port);
-
 	if (intel_bios_encoder_supports_dvi(devdata))
 		sanitize_ddc_pin(devdata, port);
 
@@ -2701,7 +2458,7 @@ static void parse_ddi_port(struct intel_bios_encoder_data *devdata)
 
 static bool has_ddi_port_info(struct drm_i915_private *i915)
 {
-	return DISPLAY_VER(i915) >= 5 || IS_G4X(i915);
+	return true;
 }
 
 static void parse_ddi_ports(struct drm_i915_private *i915)
@@ -2863,9 +2620,6 @@ init_vbt_missing_defaults(struct drm_i915_private *i915)
 	enum port port;
 	int ports = BIT(PORT_A) | BIT(PORT_B) | BIT(PORT_C) |
 		    BIT(PORT_D) | BIT(PORT_E) | BIT(PORT_F);
-
-	if (!HAS_DDI(i915) && !IS_CHERRYVIEW(i915))
-		return;
 
 	for_each_port_masked(port, ports) {
 		struct intel_bios_encoder_data *devdata;
@@ -3155,7 +2909,6 @@ out:
 	}
 
 	/* Further processing on pre-parsed or generated child device data */
-	parse_sdvo_device_mapping(i915);
 	parse_ddi_ports(i915);
 
 	kfree(oprom_vbt);
@@ -3514,29 +3267,7 @@ bool
 intel_bios_is_port_hpd_inverted(const struct drm_i915_private *i915,
 				enum port port)
 {
-	const struct intel_bios_encoder_data *devdata = i915->vbt.ports[port];
-
-	if (drm_WARN_ON_ONCE(&i915->drm,
-			     !IS_GEMINILAKE(i915) && !IS_BROXTON(i915)))
-		return false;
-
-	return devdata && devdata->child.hpd_invert;
-}
-
-/**
- * intel_bios_is_lspcon_present - if LSPCON is attached on %port
- * @i915:	i915 device instance
- * @port:	port to check
- *
- * Return true if LSPCON is present on this port
- */
-bool
-intel_bios_is_lspcon_present(const struct drm_i915_private *i915,
-			     enum port port)
-{
-	const struct intel_bios_encoder_data *devdata = i915->vbt.ports[port];
-
-	return HAS_LSPCON(i915) && devdata && devdata->child.lspcon;
+	return false;
 }
 
 /**

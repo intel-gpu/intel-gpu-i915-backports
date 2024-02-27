@@ -10,27 +10,6 @@
 #include <linux/printk.h>
 
 /* This backports:
- * commit 229f5879facf96e5640c0385f62b8cb5f27b8a43
- * Author: Kishon Vijay Abraham I <kishon@ti.com>
- * Date:   Wed Jul 22 16:33:05 2020 +0530
- *
- *  linux/kernel.h: Add PTR_ALIGN_DOWN macro
- */
-#define PTR_ALIGN_DOWN(p, a)   ((typeof(p))ALIGN_DOWN((unsigned long)(p), (a)))
-
-/*
- * This backports:
- *
- *   From a3860c1c5dd1137db23d7786d284939c5761d517 Mon Sep 17 00:00:00 2001
- *   From: Xi Wang <xi.wang@gmail.com>
- *   Date: Thu, 31 May 2012 16:26:04 -0700
- *   Subject: [PATCH] introduce SIZE_MAX
- */
-#ifndef SIZE_MAX
-#define SIZE_MAX    (~(size_t)0)
-#endif
-
-/* This backports:
  *
  * commit 36a26c69b4c70396ef569c3452690fba0c1dec08
  * Author: Nicholas Bellinger <nab@linux-iscsi.org>
@@ -232,11 +211,11 @@ extern char *bin2hex(char *dst, const void *src, size_t count);
 #define typeof_member(T, m)     typeof(((T*)0)->m)
 #endif
 
-#ifdef BPM_PTR_ALIGN_DOWN_NOT_PRESENT
+#ifndef PTR_ALIGN_DOWN
 #define PTR_ALIGN_DOWN(p, a)    ((typeof(p))ALIGN_DOWN((unsigned long)(p), (a)))
 #endif
 
-#ifdef BPM_LIMITS_H_NOT_PRESENT
+#ifndef SIZE_MAX
 #define SIZE_MAX        (~(size_t)0)
 #endif
 

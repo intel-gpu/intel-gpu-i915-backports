@@ -374,7 +374,7 @@ struct drm_file {
 	struct drm_prime_file_private prime;
 
 	/* private: */
-#if IS_ENABLED(CONFIG_DRM_LEGACY)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY)
 	unsigned long lock_count; /* DRI1 legacy lock count */
 #endif
 };

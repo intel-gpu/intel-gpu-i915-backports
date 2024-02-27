@@ -84,12 +84,8 @@ initial_plane_vma(struct drm_i915_private *i915,
 
 	switch (plane_config->tiling) {
 	case I915_TILING_NONE:
-		break;
 	case I915_TILING_X:
 	case I915_TILING_Y:
-		obj->tiling_and_stride =
-			plane_config->fb->base.pitches[0] |
-			plane_config->tiling;
 		break;
 	default:
 		MISSING_CASE(plane_config->tiling);
@@ -101,13 +97,7 @@ initial_plane_vma(struct drm_i915_private *i915,
 		goto err_obj;
 
 	pinctl = PIN_GLOBAL | PIN_OFFSET_FIXED | base;
-	if (HAS_GMCH(i915))
-		pinctl |= PIN_MAPPABLE;
 	if (i915_vma_pin(vma, 0, 0, pinctl))
-		goto err_obj;
-
-	if (i915_gem_object_is_tiled(obj) &&
-	    !i915_vma_is_map_and_fenceable(vma))
 		goto err_obj;
 
 	return vma;
@@ -217,9 +207,6 @@ valid_fb:
 
 	__i915_vma_pin(vma);
 	plane_state->ggtt_vma = i915_vma_get(vma);
-	if (intel_plane_uses_fence(plane_state) &&
-	    i915_vma_pin_fence(vma) == 0 && vma->fence)
-		plane_state->flags |= PLANE_HAS_FENCE;
 
 	plane_state->uapi.src_x = 0;
 	plane_state->uapi.src_y = 0;
@@ -230,9 +217,6 @@ valid_fb:
 	plane_state->uapi.crtc_y = 0;
 	plane_state->uapi.crtc_w = fb->width;
 	plane_state->uapi.crtc_h = fb->height;
-
-	if (plane_config->tiling)
-		dev_priv->preserve_bios_swizzle = true;
 
 	plane_state->uapi.fb = fb;
 	drm_framebuffer_get(fb);

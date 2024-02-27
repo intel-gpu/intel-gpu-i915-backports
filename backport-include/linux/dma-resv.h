@@ -12,7 +12,7 @@ bool backport_dma_resv_test_signaled(struct dma_resv *obj, bool test_all);
 #define dma_resv_test_signaled backport_dma_resv_test_signaled
 #endif
 
-#ifdef DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
+#ifdef BPM_DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT
 
 /**
  * dma_resv_get_excl_unlocked - get the reservation object's
@@ -40,6 +40,6 @@ dma_resv_get_excl_unlocked(struct dma_resv *obj)
 
         return fence;
 }
-#endif /* DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT */
+#endif /* BPM_DMA_RESV_EXCL_UNLOCKED_NOT_PRESENT */
 
 #endif /* __BACKPORT_DMA_RESV_H */

@@ -61,3 +61,24 @@ config BP_MODULES
 	help
 	This symbol is necessary for the newer kconf tool, it looks
 	for the "option modules" to control the 'm' state.
+
+choice
+	prompt "Backports Mode"
+
+config BUILD_ALL_MODULES
+	bool "Build all modules"
+	depends on !BUILD_I915_ONLY
+
+config BUILD_DMABUF
+	bool "Build only DMABUF"
+	depends on !BUILD_I915_ONLY
+
+config BUILD_DRM
+	bool "Build all Modules except DMABUF"
+	depends on !BUILD_I915_ONLY
+
+config BUILD_I915
+	bool "Build all Modules Except DMABUF and DRM"
+	depends on BUILD_I915_ONLY
+
+endchoice

@@ -409,7 +409,7 @@ void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 		pm_runtime_allow(kdev);
 
 	/* Enable by default only for client platforms for now */
-	if (IS_XEHPSDV(i915) || IS_PONTEVECCHIO(i915))
+	if (IS_PONTEVECCHIO(i915))
 		pm_runtime_forbid(kdev);
 
 	/*

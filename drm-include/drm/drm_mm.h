@@ -43,12 +43,12 @@
 #include <linux/mm_types.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
-#ifdef CONFIG_DRM_DEBUG_MM
+#ifdef CPTCFG_DRM_DEBUG_MM
 #include <linux/stackdepot.h>
 #endif
 #include <drm/drm_print.h>
 
-#ifdef CONFIG_DRM_DEBUG_MM
+#ifdef CPTCFG_DRM_DEBUG_MM
 #define DRM_MM_BUG_ON(expr) BUG_ON(expr)
 #else
 #define DRM_MM_BUG_ON(expr) BUILD_BUG_ON_INVALID(expr)
@@ -172,7 +172,7 @@ struct drm_mm_node {
 	unsigned long flags;
 #define DRM_MM_NODE_ALLOCATED_BIT	0
 #define DRM_MM_NODE_SCANNED_BIT		1
-#ifdef CONFIG_DRM_DEBUG_MM
+#ifdef CPTCFG_DRM_DEBUG_MM
 	depot_stack_handle_t stack;
 #endif
 };

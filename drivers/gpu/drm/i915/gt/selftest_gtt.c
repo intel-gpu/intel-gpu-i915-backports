@@ -582,6 +582,13 @@ static void clear_dw(struct i915_vma *vma, u64 addr, u32 val)
 	       (addr - i915_vma_offset(vma)), val, 1);
 }
 
+static u64 min_page_size(const struct drm_i915_gem_object *obj)
+{
+	const struct intel_memory_region *mem = obj->mm.region.mem;
+
+	return mem ? mem->min_page_size : SZ_4K;
+}
+
 static int
 pte_write_tearing(struct intel_context *ce,
 		  struct i915_vma *va,
@@ -617,6 +624,11 @@ pte_write_tearing(struct intel_context *ce,
 	if (err)
 		goto out;
 
+	va->size = clamp_t(u64, align,
+			   min_page_size(va->obj),
+			   va->obj->base.size);
+	vb->size = va->size;
+
 	retries = 5;
 	do {
 		addr = igt_random_offset(prng,
@@ -631,6 +643,10 @@ pte_write_tearing(struct intel_context *ce,
 		err = 0;
 		goto out;
 	}
+	err = i915_vma_wait_for_bind(va);
+	if (err)
+		goto out_va;
+
 	GEM_BUG_ON(i915_vma_offset(va) != (addr & -align));
 	vb->node = va->node; /* overwrites the _same_ PTE  */
 
@@ -655,7 +671,7 @@ pte_write_tearing(struct intel_context *ce,
 					 4, 4);
 
 	cs = i915_gem_object_pin_map_unlocked(batch, I915_MAP_WC);
-	*cs++ = MI_NOOP; /* for later termination */
+	*cs++ = MI_NOOP | BIT(22) | 0x12345; /* for later termination */
 
 	/* Sample the target to see if we spot an incorrect page */
 	cs = __gen8_emit_flush_dw(cs, 0, i915_vma_offset(vma) + 4000,
@@ -686,6 +702,13 @@ pte_write_tearing(struct intel_context *ce,
 		goto out_va;
 	}
 
+	err = __i915_vma_move_to_active(vma, rq);
+	if (err) {
+		i915_request_set_error_once(rq, err);
+		i915_request_add(rq);
+		goto out_va;
+	}
+
 	i915_request_get(rq);
 	i915_request_add(rq);
 
@@ -701,43 +724,29 @@ pte_write_tearing(struct intel_context *ce,
 	}
 
 	/* Short sleep to sanitycheck the batch is spinning before we begin */
-	msleep(10);
-	if (!i915_request_completed(rq)) {
+	if (wait_for(ENGINE_READ(ce->engine, RING_NOPID) == 0x12345, 100)) {
+		struct drm_printer p = drm_err_printer(__func__);
+
+		intel_engine_dump(ce->engine, &p, "Spinner failed to start on %s\n", ce->engine->name);
+		GEM_TRACE_DUMP();
+		err = -EIO;
+	} else if (!i915_request_completed(rq)) {
 		struct i915_vma *vv[] = { va, vb };
 		IGT_TIMEOUT(end_time);
 
 		while (!__igt_timeout(end_time, NULL)) {
-			struct i915_vm_pt_stash stash = {};
 			unsigned int pte_flags = 0;
-			struct i915_gem_ww_ctx ww;
-
-			err = i915_vm_alloc_pt_stash(ce->vm, &stash, vv[0]->size);
-			if (err)
-				break;
-
-			for_i915_gem_ww(&ww, err, false) {
-				err = i915_vm_lock_objects(ce->vm, &ww);
-				if (err)
-					continue;
-
-				err = i915_vm_map_pt_stash(ce->vm, &stash);
-			}
-			if (err) {
-				i915_vm_free_pt_stash(ce->vm, &stash);
-				break;
-			}
 
 			/* Flip the PTE between A and B */
 			if (i915_gem_object_is_lmem(vv[0]->obj))
 				pte_flags |= PTE_LM;
-			ce->vm->insert_entries(ce->vm, &stash, vv[0], pat_index, pte_flags);
-
-			i915_vm_free_pt_stash(ce->vm, &stash);
+			ce->vm->insert_entries(ce->vm, vv[0], pat_index, pte_flags);
 
 			/* Check if the semaphore read anywhere other than A|B */
 			if (i915_request_completed(rq)) {
 				pr_err("Request completed early; invalid sample detected by %s with alignment 0x%llx\n",
 				       ce->engine->name, align);
+				GEM_TRACE_DUMP();
 				err = -EINVAL;
 				break;
 			}
@@ -748,166 +757,21 @@ pte_write_tearing(struct intel_context *ce,
 		pr_err("Spinner sanitycheck failed\n");
 		err = -EIO;
 	}
-	i915_request_put(rq);
 
 	cs = page_mask_bits(batch->mm.mapping);
 	*cs = MI_BATCH_BUFFER_END;
 	wmb();
+
+	if (i915_request_wait(rq, 0, HZ) < 0) {
+		pr_err("Spinner failed to terminate\n");
+		GEM_TRACE_DUMP();
+		intel_gt_set_wedged(ce->engine->gt);
+		err = -EIO;
+	}
+	i915_request_put(rq);
 
 out_va:
 	memset(&vb->node, 0, sizeof(vb->node));
-	i915_vma_unpin(va);
-	if (i915_vma_unbind(va))
-		err = -EIO;
-out:
-	i915_gem_object_put(batch);
-	return err;
-}
-
-static int
-pte_invalid_read(struct intel_context *ce,
-		 struct i915_vma *va,
-		 struct i915_vma *vb,
-		 u64 align,
-		 struct rnd_state *prng)
-{
-	const int use_64b = GRAPHICS_VER(ce->vm->i915) >= 8;
-	struct drm_i915_gem_object *batch;
-	struct i915_request *rq;
-	struct i915_vma *vma;
-	int retries;
-	u64 addr;
-	int err;
-	u32 *cs;
-
-	if (ce->engine->class != COPY_ENGINE_CLASS) /* MI invalidate TLB */
-		return 0;
-
-	batch = i915_gem_object_create_internal(ce->vm->i915, 4096);
-	if (IS_ERR(batch))
-		return PTR_ERR(batch);
-
-	vma = i915_vma_instance(batch, ce->vm, NULL);
-	if (IS_ERR(vma)) {
-		err = PTR_ERR(vma);
-		goto out;
-	}
-
-	err = i915_vma_pin(vma, 0, 0, PIN_USER);
-	if (err)
-		goto out;
-
-	retries = 5;
-	do {
-		addr = igt_random_offset(prng,
-					 i915_vma_offset(vma),
-					 /* upper limit for MI_BB_START */
-					 min(ce->vm->total, BIT_ULL(48)),
-					 va->size, 4);
-
-		err = i915_vma_pin(va,  0, 0, (addr & -align) | PIN_OFFSET_FIXED | PIN_USER);
-	} while (err == -ENOSPC && --retries);
-	if (err) {
-		err = 0;
-		goto out;
-	}
-	GEM_BUG_ON(i915_vma_offset(va) != (addr & -align));
-
-	if (align == SZ_64K) {
-		u64 end = addr + va->size;
-
-		addr = round_up(addr & -align, SZ_2M);
-		addr |=	igt_random_offset(prng, 0, end - addr, 4, 4);
-	}
-
-	if (addr - i915_vma_offset(va) >= i915_vma_size(va))
-		addr = igt_random_offset(prng,
-					 i915_vma_offset(va),
-					 i915_vma_offset(va) + i915_vma_size(va),
-					 4, 4);
-
-	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x\n",
-		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes);
-	if (va->page_sizes != align && va->page_sizes > va->size) {
-		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
-
-		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
-			ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-			&dma);
-	}
-
-	cs = i915_gem_object_pin_map_unlocked(batch, I915_MAP_WC);
-	*cs++ = MI_NOOP; /* for later termination */
-
-	/* Sample the target to see if we spot an incorrect page */
-	cs = __gen8_emit_flush_dw(cs, 0, i915_vma_offset(vma) + 4000,
-				  MI_INVALIDATE_TLB | MI_FLUSH_DW_OP_STOREDW);
-	*cs++ = MI_CONDITIONAL_BATCH_BUFFER_END | MI_DO_COMPARE | (1 + use_64b);
-	*cs++ = 0; /* end if *addr == 0 */
-	*cs++ = lower_32_bits(addr);
-	*cs++ = upper_32_bits(addr);
-	clear_dw(va, addr, va->vm->poison);
-
-	/* Keep sampling until we get bored */
-	*cs++ = MI_BATCH_BUFFER_START | BIT(8) | use_64b;
-	*cs++ = lower_32_bits(i915_vma_offset(vma));
-	*cs++ = upper_32_bits(i915_vma_offset(vma));
-
-	i915_gem_object_flush_map(batch);
-
-	i915_vma_unpin(va);
-	err = i915_vma_unbind(va);
-	if (err)
-		goto out;
-
-	rq = i915_request_create(ce);
-	if (IS_ERR(rq)) {
-		err = PTR_ERR(rq);
-		goto out;
-	}
-
-	err = rq->engine->emit_bb_start(rq, i915_vma_offset(vma), 0, 0);
-	if (err) {
-		i915_request_add(rq);
-		goto out;
-	}
-
-	i915_request_get(rq);
-	i915_request_add(rq);
-
-	/* Short sleep to sanitycheck the batch is spinning before we begin */
-	msleep(10);
-	if (!i915_request_completed(rq)) {
-		IGT_TIMEOUT(end_time);
-
-		while (err == 0 && !__igt_timeout(end_time, NULL)) {
-			err = i915_vma_pin(va, 0, 0, (addr & -align) | PIN_OFFSET_FIXED | PIN_USER);
-			if (err == 0) {
-				i915_vma_unpin(va);
-				err = i915_vma_unbind(va);
-			}
-
-			/* Check if the semaphore read anywhere else */
-			if (i915_request_completed(rq)) {
-				pr_err("Request completed early; invalid sample detected by %s with alignment 0x%llx\n",
-				       ce->engine->name, align);
-				err = -EINVAL;
-				break;
-			}
-		}
-	} else {
-		pr_err("Spinner sanitycheck failed\n");
-		err = -EIO;
-	}
-	i915_request_put(rq);
-
-	if (i915_vma_pin(va, 0, 0, (addr & -align) | PIN_OFFSET_FIXED | PIN_USER))
-		pr_err("%s: Failed to restore semaphore upon exit\n", ce->engine->name);
-	cs = page_mask_bits(batch->mm.mapping);
-	*cs = MI_BATCH_BUFFER_END;
-	wmb();
-
 	i915_vma_unpin(va);
 	if (i915_vma_unbind(va))
 		err = -EIO;
@@ -1006,7 +870,7 @@ mem_write_tearing(struct intel_gt *gt,
 		struct drm_i915_gem_object *scratch = ppgtt->vm.scratch[0];
 
 		ppgtt->vm.poison = 0xffffffff;
-		memset32(__px_vaddr(scratch, NULL), ppgtt->vm.poison, scratch->base.size / sizeof(u32));
+		memset32(__px_vaddr(scratch), ppgtt->vm.poison, scratch->base.size / sizeof(u32));
 	}
 
 	va = i915_vma_instance(A, &ppgtt->vm, NULL);
@@ -1102,57 +966,10 @@ static int write_tearing(void *arg)
 	return err;
 }
 
-static int invalid_read(void *arg)
-{
-	struct intel_gt *gt = arg;
-	int err;
-
-	/*
-	 * Try to sample an unbound address while simultaneusly binding
-	 * an object there. If we update the PTE in the GTT incorrectly,
-	 * it is possible for the HW to see an invalid entry during the
-	 * update and stray into the wilds.
-	 */
-
-	err = mem_write_tearing(gt, create_smem, pte_invalid_read, 0);
-	if (err == 0)
-		err = mem_write_tearing(gt, create_lmem, pte_invalid_read, 0);
-	if (err == -ENODEV || err == -ENXIO)
-		err = 0;
-
-	return err;
-}
-
-static int invalid_fault(void *arg)
-{
-	struct intel_gt *gt = arg;
-	int err;
-
-	/*
-	 * Similar to invalid_read, try to sample an unbound address
-	 * triggering a pagefault, while simultaneously attempting
-	 * to rebind that address.
-	 */
-
-	if (!HAS_RECOVERABLE_PAGE_FAULT(gt->i915))
-		return 0;
-
-	err = mem_write_tearing(gt, create_smem, pte_invalid_read,
-				PRELIM_I915_VM_CREATE_FLAGS_ENABLE_PAGE_FAULT);
-	if (err == 0)
-		err = mem_write_tearing(gt, create_lmem, pte_invalid_read,
-					PRELIM_I915_VM_CREATE_FLAGS_ENABLE_PAGE_FAULT);
-	if (err == -ENODEV || err == -ENXIO)
-		err = 0;
-
-	return err;
-}
-
 static int __pat_speed(struct intel_context *ce,
 		       struct drm_i915_gem_object *obj)
 {
 	struct intel_gt *gt = ce->engine->gt;
-	struct i915_gem_ww_ctx ww;
 	struct i915_vma *vma;
 	intel_wakeref_t wf;
 	int cache_level;
@@ -1177,28 +994,11 @@ static int __pat_speed(struct intel_context *ce,
 	intel_rps_boost(&gt->rps);
 
 	for (cache_level = 0; cache_level < I915_MAX_CACHE_LEVEL; cache_level++) {
-		struct i915_vm_pt_stash stash = {};
 		struct i915_request *rq;
 		unsigned int pte_flags;
 		unsigned int fill_bw;
 		uint64_t elapsed;
 		int pat_index;
-
-		err = i915_vm_alloc_pt_stash(ce->vm, &stash, vma->size);
-		if (err)
-			break;
-
-		for_i915_gem_ww(&ww, err, false) {
-			err = i915_vm_lock_objects(ce->vm, &ww);
-			if (err)
-				continue;
-
-			err = i915_vm_map_pt_stash(ce->vm, &stash);
-		}
-		if (err) {
-			i915_vm_free_pt_stash(ce->vm, &stash);
-			break;
-		}
 
 		pte_flags = 0;
 		if (i915_gem_object_is_lmem(obj))
@@ -1206,8 +1006,7 @@ static int __pat_speed(struct intel_context *ce,
 
 		pat_index = i915_gem_get_pat_index(gt->i915, cache_level);
 
-		ce->vm->insert_entries(ce->vm, &stash, vma, pat_index, pte_flags);
-		i915_vm_free_pt_stash(ce->vm, &stash);
+		ce->vm->insert_entries(ce->vm, vma, pat_index, pte_flags);
 
 		rq = i915_request_create(ce);
 		if (IS_ERR(rq)) {
@@ -1294,35 +1093,12 @@ out:
 int intel_gtt_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
+		SUBTEST(write_tearing),
 		SUBTEST(direct_store),
 		SUBTEST(direct_mov),
 		SUBTEST(direct_inc),
 		SUBTEST(direct_dec),
 		SUBTEST(pat_speed),
-	};
-	struct intel_gt *gt;
-	unsigned int i;
-
-	for_each_gt(gt, i915, i) {
-		int err;
-
-		if (intel_gt_is_wedged(gt))
-			continue;
-
-		err = intel_gt_live_subtests(tests, gt);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
-
-int intel_gtt_wip_selftests(struct drm_i915_private *i915)
-{
-	static const struct i915_subtest tests[] = {
-		SUBTEST(write_tearing),
-		SUBTEST(invalid_read),
-		SUBTEST(invalid_fault),
 	};
 	struct intel_gt *gt;
 	unsigned int i;

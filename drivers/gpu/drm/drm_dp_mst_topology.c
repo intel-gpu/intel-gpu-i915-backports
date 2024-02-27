@@ -31,7 +31,7 @@
 #include <linux/seq_file.h>
 #include <linux/iopoll.h>
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 #include <linux/stacktrace.h>
 #include <linux/sort.h>
 #include <linux/timekeeping.h>
@@ -1570,7 +1570,7 @@ drm_dp_mst_put_port_malloc(struct drm_dp_mst_port *port)
 }
 EXPORT_SYMBOL(drm_dp_mst_put_port_malloc);
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 
 #define STACK_DEPTH 8
 
@@ -5510,7 +5510,7 @@ int drm_dp_mst_topology_mgr_init(struct drm_dp_mst_topology_mgr *mgr,
 	mutex_init(&mgr->delayed_destroy_lock);
 	mutex_init(&mgr->up_req_lock);
 	mutex_init(&mgr->probe_lock);
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 	mutex_init(&mgr->topology_ref_history_lock);
 #endif
 	INIT_LIST_HEAD(&mgr->tx_msg_downq);
@@ -5597,7 +5597,7 @@ void drm_dp_mst_topology_mgr_destroy(struct drm_dp_mst_topology_mgr *mgr)
 	mutex_destroy(&mgr->lock);
 	mutex_destroy(&mgr->up_req_lock);
 	mutex_destroy(&mgr->probe_lock);
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
+#if IS_ENABLED(CPTCFG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
 	mutex_destroy(&mgr->topology_ref_history_lock);
 #endif
 }

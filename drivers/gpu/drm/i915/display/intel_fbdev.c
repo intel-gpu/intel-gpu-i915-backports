@@ -119,8 +119,11 @@ static int intel_fbdev_pan_display(struct fb_var_screeninfo *var,
 
 	return ret;
 }
-
+#ifdef BPM_CONST_STRUCT_FB_OPS_NOT_PRESENT
+static struct fb_ops intelfb_ops = {
+#else
 static const struct fb_ops intelfb_ops = {
+#endif
 	.owner = THIS_MODULE,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_set_par = intel_fbdev_set_par,
@@ -158,22 +161,9 @@ static int intelfb_alloc(struct drm_fb_helper *helper,
 	size = mode_cmd.pitches[0] * mode_cmd.height;
 	size = PAGE_ALIGN(size);
 
-	obj = ERR_PTR(-ENODEV);
-	if (HAS_LMEM(dev_priv)) {
-		obj = i915_gem_object_create_lmem(dev_priv, size, 0);
-	} else {
-		/*
-		 * If the FB is too big, just don't use it since fbdev is not very
-		 * important and we should probably use that space with FBC or other
-		 * features.
-		 */
-		if (size * 2 < dev_priv->stolen_usable_size &&
-		    i915_ggtt_has_aperture(to_gt(dev_priv)->ggtt))
-			obj = i915_gem_object_create_stolen(dev_priv, size);
-		if (IS_ERR(obj))
-			obj = i915_gem_object_create_shmem(dev_priv, size);
-	}
-
+	obj = i915_gem_object_create_lmem(dev_priv, size, 0);
+	if (IS_ERR(obj))
+		obj = i915_gem_object_create_shmem(dev_priv, size);
 	if (IS_ERR(obj)) {
 		drm_err(&dev_priv->drm, "failed to allocate framebuffer\n");
 		return PTR_ERR(obj);
@@ -197,7 +187,6 @@ static int intelfb_create(struct drm_fb_helper *helper,
 	struct drm_device *dev = helper->dev;
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
-	struct i915_ggtt *ggtt = to_gt(dev_priv)->ggtt;
 	const struct i915_ggtt_view view = {
 		.type = I915_GGTT_VIEW_NORMAL,
 	};
@@ -242,8 +231,7 @@ static int intelfb_create(struct drm_fb_helper *helper,
 	 * This also validates that any existing fb inherited from the
 	 * BIOS is suitable for own access.
 	 */
-	vma = intel_pin_and_fence_fb_obj(&ifbdev->fb->base, false,
-					 &view, false, &flags);
+	vma = intel_pin_and_fence_fb_obj(&ifbdev->fb->base, &view);
 	if (IS_ERR(vma)) {
 		ret = PTR_ERR(vma);
 		goto out_unlock;
@@ -274,13 +262,12 @@ static int intelfb_create(struct drm_fb_helper *helper,
 					i915_gem_object_get_dma_address(obj, 0));
 		info->fix.smem_len = obj->base.size;
 	} else {
-		info->apertures->ranges[0].base = ggtt->gmadr.start;
-		info->apertures->ranges[0].size = ggtt->mappable_end;
+		info->apertures->ranges[0].base = 0;
+		info->apertures->ranges[0].size = 0;
 
 		/* Our framebuffer is the entirety of fbdev's system memory */
-		info->fix.smem_start =
-			(unsigned long)(ggtt->gmadr.start + i915_ggtt_offset(vma));
-		info->fix.smem_len = vma->size;
+		info->fix.smem_start = 0;
+		info->fix.smem_len = 0;
 	}
 
 	for_i915_gem_ww(&ww, ret, false) {
@@ -321,7 +308,7 @@ static int intelfb_create(struct drm_fb_helper *helper,
 	return 0;
 
 out_unpin:
-	intel_unpin_fb_vma(vma, flags);
+	intel_unpin_fb_vma(vma);
 out_unlock:
 	intel_runtime_pm_put(&dev_priv->runtime_pm, wakeref);
 	return ret;
@@ -341,7 +328,7 @@ static void intel_fbdev_destroy(struct intel_fbdev *ifbdev)
 	drm_fb_helper_fini(&ifbdev->helper);
 
 	if (ifbdev->vma)
-		intel_unpin_fb_vma(ifbdev->vma, ifbdev->vma_flags);
+		intel_unpin_fb_vma(ifbdev->vma);
 
 	if (ifbdev->fb)
 		drm_framebuffer_remove(&ifbdev->fb->base);

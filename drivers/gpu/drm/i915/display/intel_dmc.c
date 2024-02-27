@@ -372,10 +372,6 @@ static void disable_all_event_handlers(struct drm_i915_private *i915)
 {
 	int id;
 
-	/* TODO: disable the event handlers on pre-GEN12 platforms as well */
-	if (DISPLAY_VER(i915) < 12)
-		return;
-
 	for (id = DMC_FW_MAIN; id < DMC_FW_MAX; id++) {
 		int handler;
 
@@ -609,12 +605,9 @@ static bool dmc_mmio_addr_sanity_check(struct intel_dmc *dmc,
 	} else if (DISPLAY_VER(i915) >= 13) {
 		start_range = ADLP_PIPE_MMIO_START;
 		end_range = ADLP_PIPE_MMIO_END;
-	} else if (DISPLAY_VER(i915) >= 12) {
+	} else {
 		start_range = TGL_PIPE_MMIO_START(dmc_id);
 		end_range = TGL_PIPE_MMIO_END(dmc_id);
-	} else {
-		drm_warn(&i915->drm, "Unknown mmio range for sanity check");
-		return false;
 	}
 
 	for (i = 0; i < mmio_count; i++) {
@@ -838,9 +831,6 @@ static void parse_dmc_fw(struct drm_i915_private *dev_priv,
 	u32 r, offset;
 	int id;
 
-	if (!fw)
-		return;
-
 	/* Extract CSS Header information */
 	css_header = (struct intel_css_header *)fw->data;
 	r = parse_dmc_fw_css(dmc, css_header, fw->size);
@@ -889,15 +879,15 @@ static void intel_dmc_runtime_pm_put(struct drm_i915_private *dev_priv)
 
 static void dmc_load_work_fn(struct work_struct *work)
 {
-	struct drm_i915_private *dev_priv;
-	struct intel_dmc *dmc;
-	const struct firmware *fw = NULL;
+	struct drm_i915_private *dev_priv =
+		container_of(work, typeof(*dev_priv), dmc.work);
+	struct intel_dmc *dmc = &dev_priv->dmc;
+	const struct firmware *fw;
 
-	dev_priv = container_of(work, typeof(*dev_priv), dmc.work);
-	dmc = &dev_priv->dmc;
-
-	request_firmware(&fw, dev_priv->dmc.fw_path, dev_priv->drm.dev);
-	parse_dmc_fw(dev_priv, fw);
+	if (!request_firmware(&fw, dev_priv->dmc.fw_path, dev_priv->drm.dev)) {
+		parse_dmc_fw(dev_priv, fw);
+		release_firmware(fw);
+	}
 
 	if (intel_dmc_has_payload(dev_priv)) {
 		intel_dmc_load_program(dev_priv);
@@ -915,8 +905,6 @@ static void dmc_load_work_fn(struct work_struct *work)
 		drm_notice(&dev_priv->drm, "DMC firmware homepage: %s",
 			   INTEL_UC_FIRMWARE_URL);
 	}
-
-	release_firmware(fw);
 }
 
 /**
@@ -973,28 +961,6 @@ void intel_dmc_ucode_init(struct drm_i915_private *dev_priv)
 		dmc->fw_path = TGL_DMC_PATH;
 		dmc->required_version = TGL_DMC_VERSION_REQUIRED;
 		dmc->max_fw_size = DISPLAY_VER12_DMC_MAX_FW_SIZE;
-	} else if (DISPLAY_VER(dev_priv) == 11) {
-		dmc->fw_path = ICL_DMC_PATH;
-		dmc->required_version = ICL_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = ICL_DMC_MAX_FW_SIZE;
-	} else if (IS_GEMINILAKE(dev_priv)) {
-		dmc->fw_path = GLK_DMC_PATH;
-		dmc->required_version = GLK_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = GLK_DMC_MAX_FW_SIZE;
-	} else if (IS_KABYLAKE(dev_priv) ||
-		   IS_COFFEELAKE(dev_priv) ||
-		   IS_COMETLAKE(dev_priv)) {
-		dmc->fw_path = KBL_DMC_PATH;
-		dmc->required_version = KBL_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = KBL_DMC_MAX_FW_SIZE;
-	} else if (IS_SKYLAKE(dev_priv)) {
-		dmc->fw_path = SKL_DMC_PATH;
-		dmc->required_version = SKL_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = SKL_DMC_MAX_FW_SIZE;
-	} else if (IS_BROXTON(dev_priv)) {
-		dmc->fw_path = BXT_DMC_PATH;
-		dmc->required_version = BXT_DMC_VERSION_REQUIRED;
-		dmc->max_fw_size = BXT_DMC_MAX_FW_SIZE;
 	}
 
 	if (dev_priv->params.dmc_firmware_path) {
@@ -1102,6 +1068,7 @@ static int intel_dmc_debugfs_status_show(struct seq_file *m, void *unused)
 	intel_wakeref_t wakeref;
 	struct intel_dmc *dmc;
 	i915_reg_t dc5_reg, dc6_reg = INVALID_MMIO_REG;
+	i915_reg_t dc3co_reg;
 
 	if (!HAS_DMC(i915))
 		return -ENODEV;
@@ -1129,26 +1096,17 @@ static int intel_dmc_debugfs_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "version: %d.%d\n", DMC_VERSION_MAJOR(dmc->version),
 		   DMC_VERSION_MINOR(dmc->version));
 
-	if (DISPLAY_VER(i915) >= 12) {
-		i915_reg_t dc3co_reg;
-
-		if (IS_DGFX(i915) || DISPLAY_VER(i915) >= 14) {
-			dc3co_reg = DG1_DMC_DEBUG3;
-			dc5_reg = DG1_DMC_DEBUG_DC5_COUNT;
-		} else {
-			dc3co_reg = TGL_DMC_DEBUG3;
-			dc5_reg = TGL_DMC_DEBUG_DC5_COUNT;
-			dc6_reg = TGL_DMC_DEBUG_DC6_COUNT;
-		}
-
-		seq_printf(m, "DC3CO count: %d\n",
-			   intel_de_read(i915, dc3co_reg));
+	if (IS_DGFX(i915) || DISPLAY_VER(i915) >= 14) {
+		dc3co_reg = DG1_DMC_DEBUG3;
+		dc5_reg = DG1_DMC_DEBUG_DC5_COUNT;
 	} else {
-		dc5_reg = IS_BROXTON(i915) ? BXT_DMC_DC3_DC5_COUNT :
-			SKL_DMC_DC3_DC5_COUNT;
-		if (!IS_GEMINILAKE(i915) && !IS_BROXTON(i915))
-			dc6_reg = SKL_DMC_DC5_DC6_COUNT;
+		dc3co_reg = TGL_DMC_DEBUG3;
+		dc5_reg = TGL_DMC_DEBUG_DC5_COUNT;
+		dc6_reg = TGL_DMC_DEBUG_DC6_COUNT;
 	}
+
+	seq_printf(m, "DC3CO count: %d\n",
+		   intel_de_read(i915, dc3co_reg));
 
 	seq_printf(m, "DC3 -> DC5 count: %d\n", intel_de_read(i915, dc5_reg));
 	if (i915_mmio_reg_valid(dc6_reg))

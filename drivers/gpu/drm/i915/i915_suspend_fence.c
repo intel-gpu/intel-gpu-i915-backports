@@ -120,7 +120,7 @@ i915_suspend_fence_init(struct i915_suspend_fence *sfence,
 	return &base->rq.fence;
 }
 
-/**
+/*
  * i915_suspend_fence_retire_dma_fence - Retire the suspend fence
  * @fence the struct dma_fence embedded in a i915_suspend_fence
  *

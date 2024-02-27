@@ -27,11 +27,6 @@ static u64 rc6_residency(struct intel_rc6 *rc6)
 		reg = GEN6_GT_GFX_RC6;
 
 	result = intel_rc6_residency_ns(rc6, reg);
-	if (HAS_RC6p(rc6_to_i915(rc6)))
-		result += intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6p);
-	if (HAS_RC6pp(rc6_to_i915(rc6)))
-		result += intel_rc6_residency_ns(rc6, GEN6_GT_GFX_RC6pp);
-
 	intel_uncore_forcewake_flush(rc6_to_uncore(rc6), FORCEWAKE_ALL);
 
 	return result;
@@ -180,10 +175,6 @@ int live_render_pg(void *arg)
 	u32 cpg_enable;
 	int err = 0;
 
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915) ||
-	    (GRAPHICS_VER(gt->i915) < 6))
-		return 0;
-
 	if (gt->type == GT_MEDIA)
 		return 0;
 
@@ -296,10 +287,6 @@ int live_media_pg(void *arg)
 	u32 cpg_enable;
 	int err = 0;
 
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915) ||
-	    (GRAPHICS_VER(gt->i915) < 6))
-		return 0;
-
 	if ((MEDIA_VER(gt->i915) >= 13) && (gt->type == GT_PRIMARY))
 		return 0;
 
@@ -374,9 +361,6 @@ int live_rc6_manual(void *arg)
 	if (!rc6->enabled)
 		return 0;
 
-	/* bsw/byt use a PCU and decouple RC6 from our manual control */
-	if (IS_VALLEYVIEW(gt->i915) || IS_CHERRYVIEW(gt->i915))
-		return 0;
 	/*
 	 * Wa_16015496043, Wa_16015476723 requires to hold forcewake (no rc6)
 	 * across all selftests, preventing this test from functioning.

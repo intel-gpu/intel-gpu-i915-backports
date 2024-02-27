@@ -18,6 +18,9 @@ config DII_KERNEL_TAG
 config INTEL_PMT_FORCED
         bool
         option env="INTEL_PMT_FORCED"
+config MODULE_I915
+	string
+	option env="MODULE_I915"
 
 # Packaging hacks
 source "$BACKPORT_DIR/Kconfig.package.hacks"
@@ -28,4 +31,3 @@ source "$BACKPORT_DIR/Kconfig.sources"
 # these will be generated
 source "$BACKPORT_DIR/Kconfig.kernel"
 source "$BACKPORT_DIR/Kconfig.versions"
-source "$BACKPORT_DIR/Kconfig.local"

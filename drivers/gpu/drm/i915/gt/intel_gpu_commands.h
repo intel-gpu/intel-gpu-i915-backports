@@ -59,8 +59,6 @@
 #define MI_ARB_ON_OFF		MI_INSTR(0x08, 0)
 #define   MI_ARB_ENABLE			(1<<0)
 #define   MI_ARB_DISABLE		(0<<0)
-#define MI_MEM_FENCE		MI_INSTR(0x09, 0)
-#define MI_ACQUIRE_ENABLE	(1 << 0)
 #define MI_BATCH_BUFFER_END	MI_INSTR(0x0a, 0)
 #define MI_SUSPEND_FLUSH	MI_INSTR(0x0b, 0)
 #define   MI_SUSPEND_FLUSH_EN	(1<<0)
@@ -463,8 +461,6 @@
 #define MI_CONDITIONAL_BATCH_BUFFER_END MI_INSTR(0x36, 0)
 #define  MI_DO_COMPARE		REG_BIT(21)
 
-#define STATE_SYSTEM_MEM_FENCE_ADDRESS \
-	((0x3 << 29) | (0x0 << 27) | (0x1 << 24) | (0x9 << 16) | 0x1)
 #define STATE_BASE_ADDRESS \
 	((0x3 << 29) | (0x0 << 27) | (0x1 << 24) | (0x1 << 16))
 #define BASE_ADDRESS_MODIFY		REG_BIT(0)

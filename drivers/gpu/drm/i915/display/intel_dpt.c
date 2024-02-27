@@ -45,11 +45,10 @@ static void dpt_insert_page(struct i915_address_space *vm,
 		     vm->pte_encode(addr, pat_index, flags));
 }
 
-static void dpt_insert_entries(struct i915_address_space *vm,
-			       struct i915_vm_pt_stash *stash,
-			       struct i915_vma *vma,
-			       unsigned int pat_index,
-			       u32 flags)
+static int dpt_insert_entries(struct i915_address_space *vm,
+			      struct i915_vma *vma,
+			      unsigned int pat_index,
+			      u32 flags)
 {
 	struct i915_dpt *dpt = i915_vm_to_dpt(vm);
 	gen8_pte_t __iomem *base = dpt->iomem;
@@ -66,6 +65,8 @@ static void dpt_insert_entries(struct i915_address_space *vm,
 	i = i915_vma_offset(vma) / I915_GTT_PAGE_SIZE;
 	for_each_sgt_daddr(addr, sgt_iter, vma->pages)
 		gen8_set_pte(&base[i++], pte_encode | addr);
+
+	return 0;
 }
 
 static void dpt_clear_range(struct i915_address_space *vm,
@@ -73,11 +74,10 @@ static void dpt_clear_range(struct i915_address_space *vm,
 {
 }
 
-static void dpt_bind_vma(struct i915_address_space *vm,
-			 struct i915_vm_pt_stash *stash,
-			 struct i915_vma *vma,
-			 unsigned int pat_index,
-			 u32 flags)
+static int dpt_bind_vma(struct i915_address_space *vm,
+			struct i915_vma *vma,
+			unsigned int pat_index,
+			u32 flags)
 {
 	struct drm_i915_gem_object *obj = vma->obj;
 	u32 pte_flags;
@@ -89,7 +89,7 @@ static void dpt_bind_vma(struct i915_address_space *vm,
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
 
-	vma->vm->insert_entries(vma->vm, stash, vma, pat_index, pte_flags);
+	vma->vm->insert_entries(vma->vm, vma, pat_index, pte_flags);
 	vma->page_sizes = I915_GTT_PAGE_SIZE;
 
 	/*
@@ -98,6 +98,7 @@ static void dpt_bind_vma(struct i915_address_space *vm,
 	 * upgrade to both bound if we bind either to avoid double-binding.
 	 */
 	atomic_or(I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND, &vma->flags);
+	return 0;
 }
 
 static void dpt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
@@ -122,9 +123,6 @@ struct i915_vma *intel_dpt_pin(struct i915_address_space *vm)
 	struct i915_gem_ww_ctx ww;
 	u64 pin_flags = 0;
 	int err;
-
-	if (i915_gem_object_is_stolen(dpt->obj))
-		pin_flags |= PIN_MAPPABLE;
 
 	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
 	atomic_inc(&i915->gpu_error.pending_fb_pin);
@@ -246,8 +244,6 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	size = round_up(size * sizeof(gen8_pte_t), I915_GTT_PAGE_SIZE);
 
 	dpt_obj = i915_gem_object_create_lmem(i915, size, 0);
-	if (IS_ERR(dpt_obj) && i915_ggtt_has_aperture(to_gt(i915)->ggtt))
-		dpt_obj = i915_gem_object_create_stolen(i915, size);
 	if (IS_ERR(dpt_obj) && !HAS_LMEM(i915)) {
 		drm_dbg_kms(&i915->drm, "Allocating dpt from smem\n");
 		dpt_obj = i915_gem_object_create_internal(i915, size);

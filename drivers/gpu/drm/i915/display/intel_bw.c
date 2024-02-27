@@ -80,7 +80,7 @@ static int icl_pcode_read_qgv_point_info(struct drm_i915_private *dev_priv,
 		return ret;
 
 	dclk = val & 0xffff;
-	sp->dclk = DIV_ROUND_UP((16667 * dclk) + (DISPLAY_VER(dev_priv) > 11 ? 500 : 0), 1000);
+	sp->dclk = DIV_ROUND_UP((16667 * dclk) + 500, 1000);
 	sp->t_rp = (val & 0xff0000) >> 16;
 	sp->t_rcd = (val & 0xff000000) >> 24;
 
@@ -203,7 +203,7 @@ static int icl_get_qgv_points(struct drm_i915_private *dev_priv,
 			MISSING_CASE(dram_info->type);
 			return -EINVAL;
 		}
-	} else if (DISPLAY_VER(dev_priv) >= 12) {
+	} else {
 		switch (dram_info->type) {
 		case INTEL_DRAM_DDR4:
 			qi->t_bl = is_y_tile ? 8 : 4;
@@ -237,9 +237,6 @@ static int icl_get_qgv_points(struct drm_i915_private *dev_priv,
 			qi->max_numchannels = 1;
 			break;
 		}
-	} else if (DISPLAY_VER(dev_priv) == 11) {
-		qi->t_bl = dev_priv->dram_info.type == INTEL_DRAM_DDR4 ? 4 : 8;
-		qi->max_numchannels = 1;
 	}
 
 	if (drm_WARN_ON(&dev_priv->drm,
@@ -301,13 +298,6 @@ struct intel_sa_info {
 	u8 deburst, deprogbwlimit, derating;
 };
 
-static const struct intel_sa_info icl_sa_info = {
-	.deburst = 8,
-	.deprogbwlimit = 25, /* GB/s */
-	.displayrtids = 128,
-	.derating = 10,
-};
-
 static const struct intel_sa_info tgl_sa_info = {
 	.deburst = 16,
 	.deprogbwlimit = 34, /* GB/s */
@@ -343,75 +333,6 @@ static const struct intel_sa_info mtl_sa_info = {
 	.derating = 20,
 };
 
-static int icl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel_sa_info *sa)
-{
-	struct intel_qgv_info qi = {};
-	bool is_y_tile = true; /* assume y tile may be used */
-	int num_channels = max_t(u8, 1, dev_priv->dram_info.num_channels);
-	int ipqdepth, ipqdepthpch = 16;
-	int dclk_max;
-	int maxdebw;
-	int num_groups = ARRAY_SIZE(dev_priv->max_bw);
-	int i, ret;
-
-	ret = icl_get_qgv_points(dev_priv, &qi, is_y_tile);
-	if (ret) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "Failed to get memory subsystem information, ignoring bandwidth limits");
-		return ret;
-	}
-
-	dclk_max = icl_sagv_max_dclk(&qi);
-	maxdebw = min(sa->deprogbwlimit * 1000, dclk_max * 16 * 6 / 10);
-	ipqdepth = min(ipqdepthpch, sa->displayrtids / num_channels);
-	qi.deinterleave = DIV_ROUND_UP(num_channels, is_y_tile ? 4 : 2);
-
-	for (i = 0; i < num_groups; i++) {
-		struct intel_bw_info *bi = &dev_priv->max_bw[i];
-		int clpchgroup;
-		int j;
-
-		clpchgroup = (sa->deburst * qi.deinterleave / num_channels) << i;
-		bi->num_planes = (ipqdepth - clpchgroup) / clpchgroup + 1;
-
-		bi->num_qgv_points = qi.num_points;
-		bi->num_psf_gv_points = qi.num_psf_points;
-
-		for (j = 0; j < qi.num_points; j++) {
-			const struct intel_qgv_point *sp = &qi.points[j];
-			int ct, bw;
-
-			/*
-			 * Max row cycle time
-			 *
-			 * FIXME what is the logic behind the
-			 * assumed burst length?
-			 */
-			ct = max_t(int, sp->t_rc, sp->t_rp + sp->t_rcd +
-				   (clpchgroup - 1) * qi.t_bl + sp->t_rdpre);
-			bw = DIV_ROUND_UP(sp->dclk * clpchgroup * 32 * num_channels, ct);
-
-			bi->deratedbw[j] = min(maxdebw,
-					       bw * (100 - sa->derating) / 100);
-
-			drm_dbg_kms(&dev_priv->drm,
-				    "BW%d / QGV %d: num_planes=%d deratedbw=%u\n",
-				    i, j, bi->num_planes, bi->deratedbw[j]);
-		}
-	}
-	/*
-	 * In case if SAGV is disabled in BIOS, we always get 1
-	 * SAGV point, but we can't send PCode commands to restrict it
-	 * as it will fail and pointless anyway.
-	 */
-	if (qi.num_points == 1)
-		dev_priv->sagv_status = I915_SAGV_NOT_CONTROLLED;
-	else
-		dev_priv->sagv_status = I915_SAGV_ENABLED;
-
-	return 0;
-}
-
 static int tgl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel_sa_info *sa)
 {
 	struct intel_qgv_info qi = {};
@@ -437,10 +358,10 @@ static int tgl_get_bw_info(struct drm_i915_private *dev_priv, const struct intel
 
 	qi.deinterleave = qi.deinterleave ? : DIV_ROUND_UP(num_channels, is_y_tile ? 4 : 2);
 
-	if (num_channels < qi.max_numchannels && DISPLAY_VER(dev_priv) >= 12)
+	if (num_channels < qi.max_numchannels)
 		qi.deinterleave = max(DIV_ROUND_UP(qi.deinterleave, 2), 1);
 
-	if (DISPLAY_VER(dev_priv) > 11 && num_channels > qi.max_numchannels)
+	if (num_channels > qi.max_numchannels)
 		drm_warn(&dev_priv->drm, "Number of channels exceeds max number of channels.");
 	if (qi.max_numchannels != 0)
 		num_channels = min_t(u8, num_channels, qi.max_numchannels);
@@ -549,34 +470,6 @@ static void dg2_get_bw_info(struct drm_i915_private *i915)
 	i915->sagv_status = I915_SAGV_NOT_CONTROLLED;
 }
 
-static unsigned int icl_max_bw(struct drm_i915_private *dev_priv,
-			       int num_planes, int qgv_point)
-{
-	int i;
-
-	/*
-	 * Let's return max bw for 0 planes
-	 */
-	num_planes = max(1, num_planes);
-
-	for (i = 0; i < ARRAY_SIZE(dev_priv->max_bw); i++) {
-		const struct intel_bw_info *bi =
-			&dev_priv->max_bw[i];
-
-		/*
-		 * Pcode will not expose all QGV points when
-		 * SAGV is forced to off/min/med/max.
-		 */
-		if (qgv_point >= bi->num_qgv_points)
-			return UINT_MAX;
-
-		if (num_planes >= bi->num_planes)
-			return bi->deratedbw[qgv_point];
-	}
-
-	return 0;
-}
-
 static unsigned int tgl_max_bw(struct drm_i915_private *dev_priv,
 			       int num_planes, int qgv_point)
 {
@@ -629,10 +522,8 @@ void intel_bw_init_hw(struct drm_i915_private *dev_priv)
 		tgl_get_bw_info(dev_priv, &adls_sa_info);
 	else if (IS_ROCKETLAKE(dev_priv))
 		tgl_get_bw_info(dev_priv, &rkl_sa_info);
-	else if (DISPLAY_VER(dev_priv) == 12)
+	else
 		tgl_get_bw_info(dev_priv, &tgl_sa_info);
-	else if (DISPLAY_VER(dev_priv) == 11)
-		icl_get_bw_info(dev_priv, &icl_sa_info);
 }
 
 static unsigned int intel_bw_crtc_num_active_planes(const struct intel_crtc_state *crtc_state)
@@ -647,7 +538,6 @@ static unsigned int intel_bw_crtc_num_active_planes(const struct intel_crtc_stat
 static unsigned int intel_bw_crtc_data_rate(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
 	unsigned int data_rate = 0;
 	enum plane_id plane_id;
 
@@ -660,9 +550,6 @@ static unsigned int intel_bw_crtc_data_rate(const struct intel_crtc_state *crtc_
 			continue;
 
 		data_rate += crtc_state->data_rate[plane_id];
-
-		if (DISPLAY_VER(i915) < 11)
-			data_rate += crtc_state->data_rate_y[plane_id];
 	}
 
 	return data_rate;
@@ -671,12 +558,6 @@ static unsigned int intel_bw_crtc_data_rate(const struct intel_crtc_state *crtc_
 /* "Maximum Pipe Read Bandwidth" */
 static int intel_bw_crtc_min_cdclk(const struct intel_crtc_state *crtc_state)
 {
-	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
-
-	if (DISPLAY_VER(i915) < 12)
-		return 0;
-
 	return DIV_ROUND_UP_ULL(mul_u32_u32(intel_bw_crtc_data_rate(crtc_state), 10), 512);
 }
 
@@ -810,7 +691,6 @@ static void skl_crtc_calc_dbuf_bw(struct intel_bw_state *bw_state,
 				  const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
 	struct intel_dbuf_bw *crtc_bw = &bw_state->dbuf_bw[crtc->pipe];
 	enum plane_id plane_id;
 
@@ -830,11 +710,6 @@ static void skl_crtc_calc_dbuf_bw(struct intel_bw_state *bw_state,
 		skl_plane_calc_dbuf_bw(bw_state, crtc, plane_id,
 				       &crtc_state->wm.skl.plane_ddb[plane_id],
 				       crtc_state->data_rate[plane_id]);
-
-		if (DISPLAY_VER(i915) < 11)
-			skl_plane_calc_dbuf_bw(bw_state, crtc, plane_id,
-					       &crtc_state->wm.skl.plane_ddb_y[plane_id],
-					       crtc_state->data_rate[plane_id]);
 	}
 }
 
@@ -894,9 +769,6 @@ int intel_bw_calc_min_cdclk(struct intel_atomic_state *state,
 	int old_min_cdclk, new_min_cdclk;
 	struct intel_crtc *crtc;
 	int i;
-
-	if (DISPLAY_VER(dev_priv) < 9)
-		return 0;
 
 	for_each_new_intel_crtc_in_state(state, crtc, crtc_state, i) {
 		new_bw_state = intel_atomic_get_bw_state(state);
@@ -1037,10 +909,6 @@ int intel_bw_atomic_check(struct intel_atomic_state *state)
 	unsigned int num_psf_gv_points = dev_priv->max_bw[0].num_psf_gv_points;
 	bool changed = false;
 
-	/* FIXME earlier gens need some checks too */
-	if (DISPLAY_VER(dev_priv) < 11)
-		return 0;
-
 	ret = intel_bw_check_data_rate(state, &changed);
 	if (ret)
 		return ret;
@@ -1072,10 +940,7 @@ int intel_bw_atomic_check(struct intel_atomic_state *state)
 	for (i = 0; i < num_qgv_points; i++) {
 		unsigned int max_data_rate;
 
-		if (DISPLAY_VER(dev_priv) > 11)
-			max_data_rate = tgl_max_bw(dev_priv, num_active_planes, i);
-		else
-			max_data_rate = icl_max_bw(dev_priv, num_active_planes, i);
+		max_data_rate = tgl_max_bw(dev_priv, num_active_planes, i);
 		/*
 		 * We need to know which qgv point gives us
 		 * maximum bandwidth in order to disable SAGV

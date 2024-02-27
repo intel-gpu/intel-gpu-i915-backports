@@ -73,7 +73,9 @@ static int lmem_suspend(struct drm_i915_private *i915)
 		struct drm_i915_gem_object *obj;
 		struct list_head *phases[] = {
 			&mem->objects.purgeable,
+			&mem->objects.migratable,
 			&mem->objects.list,
+			&mem->objects.pt,
 			NULL,
 		}, **phase = phases;
 
@@ -116,7 +118,9 @@ static int lmem_resume(struct drm_i915_private *i915)
 		struct drm_i915_gem_object *obj;
 		struct list_head *phases[] = {
 			&mem->objects.purgeable,
+			&mem->objects.migratable,
 			&mem->objects.list,
+			&mem->objects.pt,
 			NULL,
 		}, **phase = phases;
 
@@ -181,7 +185,6 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
-	intel_wakeref_auto(&to_gt(i915)->ggtt->userfault_wakeref, 0);
 	flush_workqueue(i915->wq);
 
 	i915_sriov_suspend_prepare(i915);
@@ -248,7 +251,7 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 	spin_lock_irqsave(&i915->mm.obj_lock, flags);
 	for (phase = phases; *phase; phase++) {
 		list_for_each_entry(obj, *phase, mm.link) {
-			if (!(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ))
+			if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
 				flush |= (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0;
 			__start_cpu_write(obj); /* presume auto-hibernate */
 		}

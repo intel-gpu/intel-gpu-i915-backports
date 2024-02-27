@@ -2,6 +2,7 @@
 /*
  * Copyright © 2022 Intel Corporation
  */
+#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
 #include <linux/intel_vsec.h>
 
 #include "i915_drv.h"
@@ -47,16 +48,16 @@ static struct intel_vsec_platform_info dg2_info = {
  * interface
  * @i915: valid i915 instance
  */
-void intel_vsec_init(struct drm_i915_private *dev_priv)
+void intel_vsec_init(struct drm_i915_private *i915)
 {
-	struct device *dev = dev_priv->drm.dev;
+	struct device *dev = i915->drm.dev;
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct resource res;
 	void __iomem *base;
 	u32 telem_offset;
 	u64 addr;
 
-	if (!IS_DG2(dev_priv))
+	if (!IS_DG2(i915))
 		return;
 
 	/*
@@ -96,4 +97,8 @@ void intel_vsec_init(struct drm_i915_private *dev_priv)
 	 */
 	intel_vsec_register(pdev, &dg2_info);
 }
+
+#ifndef BPM_MODULE_IMPORT_NS_NOT_PRESENT
 MODULE_IMPORT_NS(INTEL_VSEC);
+#endif
+#endif /* IS_ENABLED (CONFIG_AUXILIARY_BUS) */

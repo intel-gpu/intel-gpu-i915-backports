@@ -22,13 +22,15 @@ static inline u64 ktime_get_boottime_ns(void)
 {
 	return ktime_to_ns(ktime_get_boottime());
 }
-#elif LINUX_VERSION_IS_LESS(5,3,0)
+#endif /* < 3.17 */
+
+#ifdef BPM_KTIME_GET_BOOT_NS_NOT_PRESENT
 #define ktime_get_boottime_ns LINUX_I915_BACKPORT(ktime_get_boottime_ns)
 static inline u64 ktime_get_boottime_ns(void)
 {
 	return ktime_get_boot_ns();
 }
-#endif /* < 3.17 */
+#endif
 
 #if LINUX_VERSION_IS_LESS(4,18,0)
 extern time64_t ktime_get_boottime_seconds(void);

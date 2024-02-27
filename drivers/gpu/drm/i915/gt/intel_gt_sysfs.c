@@ -186,6 +186,46 @@ static ssize_t id_show(struct device *dev,
 
 static I915_DEVICE_ATTR_RO(id, id_show);
 
+static ssize_t pagefault_major_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+
+	return sysfs_emit(buf, "%lu\n", local_read(&gt->stats.pagefault_major));
+}
+
+static DEVICE_ATTR_RO(pagefault_major);
+
+static ssize_t pagefault_minor_show(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
+{
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+
+	return sysfs_emit(buf, "%lu\n", local_read(&gt->stats.pagefault_minor));
+}
+
+static DEVICE_ATTR_RO(pagefault_minor);
+
+static ssize_t pagefault_stall_ns_show(struct device *dev,
+				       struct device_attribute *attr,
+				       char *buf)
+{
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+
+	return sysfs_emit(buf, "%zu\n", local64_read(&gt->stats.pagefault_stall));
+}
+
+static DEVICE_ATTR_RO(pagefault_stall_ns);
+
+static const struct attribute *pagefault_attrs[] = {
+	&dev_attr_pagefault_major.attr,
+	&dev_attr_pagefault_minor.attr,
+	&dev_attr_pagefault_stall_ns.attr,
+	NULL
+};
+
 static void kobj_gt_release(struct kobject *kobj)
 {
 	kfree(kobj);
@@ -251,6 +291,11 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 	if (sysfs_create_file(dir, &dev_attr_id.attr.attr))
 		drm_err(&gt->i915->drm,
 			"failed to create sysfs %s info files\n", name);
+
+	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915) &&
+	    sysfs_create_files(dir, pagefault_attrs))
+		drm_err(&gt->i915->drm,
+			"failed to create sysfs %s pagefault attributes\n", name);
 
 	if (sysfs_create_file(dir, &dev_attr_prelim_reset.attr))
 		drm_warn(&gt->i915->drm,

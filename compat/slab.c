@@ -13,6 +13,8 @@
  * Since kmem_cache_get_slabinfo() got introduced in KV5.10.0,
  * added check here. May need to change in future.
  */
+#ifdef BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT
+
 #ifndef CONFIG_SLOB
 #ifdef CONFIG_SLAB
 #define get_node  LINUX_I915_BACKPORT(get_node)
@@ -86,3 +88,4 @@ int kmem_cache_get_slabinfo(struct kmem_cache *cachep, struct slabinfo *sinfo)
 }
 EXPORT_SYMBOL_GPL(kmem_cache_get_slabinfo);
 #endif /* CONFIG_SLAB */
+#endif /* BPM_KMEM_CACHE_SLABINFO_API_NOT_PRESENT */

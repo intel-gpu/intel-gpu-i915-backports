@@ -33,7 +33,7 @@
 #include <drm/drm_modes.h>
 
 /* drm_dp_aux_dev.c */
-#ifdef CONFIG_DRM_DP_AUX_CHARDEV
+#ifdef CPTCFG_DRM_DP_AUX_CHARDEV
 int drm_dp_aux_dev_init(void);
 void drm_dp_aux_dev_exit(void);
 int drm_dp_aux_register_devnode(struct drm_dp_aux *aux);

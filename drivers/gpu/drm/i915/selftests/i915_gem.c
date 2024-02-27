@@ -41,55 +41,15 @@ static int switch_to_context(struct i915_gem_context *ctx)
 	return err;
 }
 
-static void trash_stolen(struct drm_i915_private *i915)
-{
-	struct i915_ggtt *ggtt = to_gt(i915)->ggtt;
-	const u64 slot = ggtt->error_capture.start;
-	const resource_size_t size = resource_size(&i915->dsm);
-	unsigned long page;
-	u32 prng = 0x12345678;
-
-	/* XXX: fsck. needs some more thought... */
-	if (!i915_ggtt_has_aperture(ggtt))
-		return;
-
-	for (page = 0; page < size; page += PAGE_SIZE) {
-		const dma_addr_t dma = i915->dsm.start + page;
-		u32 __iomem *s;
-		int x;
-
-		ggtt->vm.insert_page(&ggtt->vm, dma, slot,
-				     i915_gem_get_pat_index(i915,
-							I915_CACHE_NONE),
-				     0);
-
-		s = io_mapping_map_atomic_wc(&ggtt->iomap, slot);
-		for (x = 0; x < PAGE_SIZE / sizeof(u32); x++) {
-			prng = next_pseudo_random32(prng);
-			iowrite32(prng, &s[x]);
-		}
-		io_mapping_unmap_atomic(s);
-	}
-
-	ggtt->vm.clear_range(&ggtt->vm, slot, PAGE_SIZE);
-}
-
 static void simulate_hibernate(struct drm_i915_private *i915)
 {
-	intel_wakeref_t wakeref;
-
-	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
-
-	/*
+	/* XXX
 	 * As a final sting in the tail, invalidate stolen. Under a real S4,
 	 * stolen is lost and needs to be refilled on resume. However, under
 	 * CI we merely do S4-device testing (as full S4 is too unreliable
 	 * for automated testing across a cluster), so to simulate the effect
 	 * of stolen being trashed across S4, we trash it ourselves.
 	 */
-	trash_stolen(i915);
-
-	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
 }
 
 static int do_prepare(struct drm_i915_private *i915)
@@ -101,7 +61,7 @@ static int do_prepare(struct drm_i915_private *i915)
 
 static suspend_state_t set_pm_target(suspend_state_t target)
 {
-#ifdef CONFIG_PM_SLEEP
+#if IS_ENABLED(CONFIG_SUSPEND) && IS_ENABLED(CONFIG_PM_SLEEP)
 	return xchg(&pm_suspend_target_state, target);
 #else
 	return PM_SUSPEND_ON;

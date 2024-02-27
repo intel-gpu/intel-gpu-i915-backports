@@ -14,7 +14,7 @@ struct drm_i915_private;
 struct intel_fbdev;
 struct intel_framebuffer;
 
-#ifdef CONFIG_DRM_FBDEV_EMULATION
+#ifdef CPTCFG_DRM_FBDEV_EMULATION
 int intel_fbdev_init(struct drm_device *dev);
 void intel_fbdev_initial_config_async(struct drm_device *dev);
 void intel_fbdev_unregister(struct drm_i915_private *dev_priv);

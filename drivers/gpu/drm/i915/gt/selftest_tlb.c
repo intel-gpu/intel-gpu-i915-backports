@@ -27,6 +27,13 @@ static void clear_dw(struct i915_vma *vma, u64 addr, u32 val)
 		 (addr - i915_vma_offset(vma)), val, 1);
 }
 
+static u64 min_page_size(const struct drm_i915_gem_object *obj)
+{
+	const struct intel_memory_region *mem = obj->mm.region.mem;
+
+	return mem ? mem->min_page_size : SZ_4K;
+}
+
 static int
 pte_tlbinv(struct intel_context *ce,
 	   struct i915_vma *va,
@@ -61,6 +68,11 @@ pte_tlbinv(struct intel_context *ce,
 	if (err)
 		goto out;
 
+	va->size = clamp_t(u64, align,
+			   min_page_size(va->obj),
+			   va->obj->base.size);
+	vb->size = va->size;
+
 	retries = 5;
 	do {
 		addr = igt_random_offset(prng,
@@ -75,6 +87,10 @@ pte_tlbinv(struct intel_context *ce,
 		err = 0;
 		goto out;
 	}
+	err = i915_vma_wait_for_bind(va);
+	if (err)
+		goto out_va;
+
 	GEM_BUG_ON(i915_vma_offset(va) != (addr & -align));
 	vb->node = va->node; /* overwrites the _same_ PTE  */
 
@@ -104,7 +120,7 @@ pte_tlbinv(struct intel_context *ce,
 		addr & -length, length);
 
 	cs = i915_gem_object_pin_map_unlocked(batch, I915_MAP_WC);
-	*cs++ = MI_NOOP; /* for later termination */
+	*cs++ = MI_NOOP | BIT(22) | 0x12345; /* for later termination */
 
 	/* Sample the target to see if we spot an incorrect page */
 	*cs++ = MI_CONDITIONAL_BATCH_BUFFER_END | MI_DO_COMPARE | (1 + use_64b);
@@ -133,41 +149,34 @@ pte_tlbinv(struct intel_context *ce,
 		goto out_va;
 	}
 
+	err = __i915_vma_move_to_active(vma, rq);
+	if (err) {
+		i915_request_set_error_once(rq, err);
+		i915_request_add(rq);
+		goto out_va;
+	}
+
 	i915_request_get(rq);
 	i915_request_add(rq);
 
 	/* Short sleep to sanitycheck the batch is spinning before we begin */
-	msleep(ADJUST_TIMEOUT(10));
-	if (va == vb) {
-		if (!i915_request_completed(rq)) {
+	if (wait_for(ENGINE_READ(ce->engine, RING_NOPID) == 0x12345, 100)) {
+		struct drm_printer p = drm_err_printer(__func__);
+
+		intel_engine_dump(ce->engine, &p, "Spinner failed to start on %s\n", ce->engine->name);
+		err = -EIO;
+	} else if (va == vb) {
+		if (i915_request_wait(rq, 0, HZ / 2) < 0) {
 			pr_err("Semaphore sanitycheck failed\n");
 			err = -EIO;
 		}
 	} else if (!i915_request_completed(rq)) {
-		struct i915_vm_pt_stash stash = {};
 		unsigned int pte_flags = 0;
-		struct i915_gem_ww_ctx ww;
-
-		err = i915_vm_alloc_pt_stash(ce->vm, &stash, vb->size);
-		if (err)
-			goto err;
-
-		for_i915_gem_ww(&ww, err, false) {
-			err = i915_vm_lock_objects(ce->vm, &ww);
-			if (err)
-				continue;
-
-			err = i915_vm_map_pt_stash(ce->vm, &stash);
-		}
-		if (err) {
-			i915_vm_free_pt_stash(ce->vm, &stash);
-			goto err;
-		}
 
 		/* Flip the PTE between A and B */
 		if (i915_gem_object_is_lmem(vb->obj))
 			pte_flags |= PTE_LM;
-		ce->vm->insert_entries(ce->vm, &stash, vb, pat_index, pte_flags);
+		ce->vm->insert_entries(ce->vm, vb, pat_index, pte_flags);
 
 		/* Flush the PTE update to concurrent HW */
 		tlbinv(ce->vm, addr & -length, length);
@@ -177,18 +186,21 @@ pte_tlbinv(struct intel_context *ce,
 			       ce->engine->name);
 			err = -EINVAL;
 		}
-
-		i915_vm_free_pt_stash(ce->vm, &stash);
 	} else {
 		pr_err("Spinner sanitycheck failed\n");
 		err = -EIO;
 	}
-err:
-	i915_request_put(rq);
 
 	cs = page_mask_bits(batch->mm.mapping);
 	*cs = MI_BATCH_BUFFER_END;
 	wmb();
+
+	if (i915_request_wait(rq, 0, HZ) < 0) {
+		pr_err("Spinner failed to terminate\n");
+		intel_gt_set_wedged(ce->engine->gt);
+		err = -EIO;
+	}
+	i915_request_put(rq);
 
 out_va:
 	if (vb != va)

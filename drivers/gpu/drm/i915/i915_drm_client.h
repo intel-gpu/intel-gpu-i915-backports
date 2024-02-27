@@ -89,10 +89,6 @@ struct i915_drm_client {
 	 * a single client.
 	 */
 	struct xarray uuids_xa;
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
-	u64 debugger_session;
-#endif
 };
 
 void i915_drm_clients_init(struct i915_drm_clients *clients,

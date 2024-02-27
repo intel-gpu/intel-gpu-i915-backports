@@ -51,15 +51,6 @@
 
 #endif /* atomic_try_cmpxchg_acquire */
 
-#if LINUX_VERSION_IS_LESS(4,19,0)
-#ifndef atomic_fetch_add_unless
-static inline int atomic_fetch_add_unless(atomic_t *v, int a, int u)
-{
-	return __atomic_add_unless(v, a, u);
-}
-#endif
-#endif
-
 #ifndef __atomic_pre_full_fence
 #define __atomic_pre_full_fence         smp_mb__before_atomic
 #endif

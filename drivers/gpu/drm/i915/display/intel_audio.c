@@ -35,7 +35,6 @@
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
-#include "intel_lpe_audio.h"
 
 /**
  * DOC: High Definition Audio over HDMI and Display Port
@@ -260,9 +259,6 @@ static u32 audio_config_hdmi_pixel_clock(const struct intel_crtc_state *crtc_sta
 			break;
 	}
 
-	if (DISPLAY_VER(dev_priv) < 12 && adjusted_mode->crtc_clock > 148500)
-		i = ARRAY_SIZE(hdmi_audio_clock);
-
 	if (i == ARRAY_SIZE(hdmi_audio_clock)) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "HDMI audio pixel clock setting for %d not found, falling back to defaults\n",
@@ -302,90 +298,6 @@ static int audio_config_hdmi_get_n(const struct intel_crtc_state *crtc_state,
 		}
 	}
 	return 0;
-}
-
-static bool intel_eld_uptodate(struct drm_connector *connector,
-			       i915_reg_t reg_eldv, u32 bits_eldv,
-			       i915_reg_t reg_elda, u32 bits_elda,
-			       i915_reg_t reg_edid)
-{
-	struct drm_i915_private *dev_priv = to_i915(connector->dev);
-	const u8 *eld = connector->eld;
-	u32 tmp;
-	int i;
-
-	tmp = intel_de_read(dev_priv, reg_eldv);
-	tmp &= bits_eldv;
-
-	if (!tmp)
-		return false;
-
-	tmp = intel_de_read(dev_priv, reg_elda);
-	tmp &= ~bits_elda;
-	intel_de_write(dev_priv, reg_elda, tmp);
-
-	for (i = 0; i < drm_eld_size(eld) / 4; i++)
-		if (intel_de_read(dev_priv, reg_edid) != *((const u32 *)eld + i))
-			return false;
-
-	return true;
-}
-
-static void g4x_audio_codec_disable(struct intel_encoder *encoder,
-				    const struct intel_crtc_state *old_crtc_state,
-				    const struct drm_connector_state *old_conn_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	u32 eldv, tmp;
-
-	tmp = intel_de_read(dev_priv, G4X_AUD_VID_DID);
-	if (tmp == INTEL_AUDIO_DEVBLC || tmp == INTEL_AUDIO_DEVCL)
-		eldv = G4X_ELDV_DEVCL_DEVBLC;
-	else
-		eldv = G4X_ELDV_DEVCTG;
-
-	/* Invalidate ELD */
-	tmp = intel_de_read(dev_priv, G4X_AUD_CNTL_ST);
-	tmp &= ~eldv;
-	intel_de_write(dev_priv, G4X_AUD_CNTL_ST, tmp);
-}
-
-static void g4x_audio_codec_enable(struct intel_encoder *encoder,
-				   const struct intel_crtc_state *crtc_state,
-				   const struct drm_connector_state *conn_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	struct drm_connector *connector = conn_state->connector;
-	const u8 *eld = connector->eld;
-	u32 eldv;
-	u32 tmp;
-	int len, i;
-
-	tmp = intel_de_read(dev_priv, G4X_AUD_VID_DID);
-	if (tmp == INTEL_AUDIO_DEVBLC || tmp == INTEL_AUDIO_DEVCL)
-		eldv = G4X_ELDV_DEVCL_DEVBLC;
-	else
-		eldv = G4X_ELDV_DEVCTG;
-
-	if (intel_eld_uptodate(connector,
-			       G4X_AUD_CNTL_ST, eldv,
-			       G4X_AUD_CNTL_ST, G4X_ELD_ADDR_MASK,
-			       G4X_HDMIW_HDMIEDID))
-		return;
-
-	tmp = intel_de_read(dev_priv, G4X_AUD_CNTL_ST);
-	tmp &= ~(eldv | G4X_ELD_ADDR_MASK);
-	len = (tmp >> 9) & 0x1f;		/* ELD buffer size */
-	intel_de_write(dev_priv, G4X_AUD_CNTL_ST, tmp);
-
-	len = min(drm_eld_size(eld) / 4, len);
-	for (i = 0; i < len; i++)
-		intel_de_write(dev_priv, G4X_HDMIW_HDMIEDID,
-			       *((const u32 *)eld + i));
-
-	tmp = intel_de_read(dev_priv, G4X_AUD_CNTL_ST);
-	tmp |= eldv;
-	intel_de_write(dev_priv, G4X_AUD_CNTL_ST, tmp);
 }
 
 static void
@@ -589,15 +501,8 @@ static void enable_audio_dsc_wa(struct intel_encoder *encoder,
 	unsigned int hblank_early_prog, samples_room;
 	unsigned int val;
 
-	if (DISPLAY_VER(i915) < 11)
-		return;
-
 	val = intel_de_read(i915, AUD_CONFIG_BE);
-
-	if (DISPLAY_VER(i915) == 11)
-		val |= HBLANK_EARLY_ENABLE_ICL(pipe);
-	else if (DISPLAY_VER(i915) >= 12)
-		val |= HBLANK_EARLY_ENABLE_TGL(pipe);
+	val |= HBLANK_EARLY_ENABLE_TGL(pipe);
 
 	if (crtc_state->dsc.compression_enable &&
 	    crtc_state->hw.adjusted_mode.hdisplay >= 3840 &&
@@ -680,126 +585,6 @@ static void hsw_audio_codec_enable(struct intel_encoder *encoder,
 	mutex_unlock(&dev_priv->audio.mutex);
 }
 
-static void ilk_audio_codec_disable(struct intel_encoder *encoder,
-				    const struct intel_crtc_state *old_crtc_state,
-				    const struct drm_connector_state *old_conn_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	struct intel_crtc *crtc = to_intel_crtc(old_crtc_state->uapi.crtc);
-	enum pipe pipe = crtc->pipe;
-	enum port port = encoder->port;
-	u32 tmp, eldv;
-	i915_reg_t aud_config, aud_cntrl_st2;
-
-	if (drm_WARN_ON(&dev_priv->drm, port == PORT_A))
-		return;
-
-	if (HAS_PCH_IBX(dev_priv)) {
-		aud_config = IBX_AUD_CFG(pipe);
-		aud_cntrl_st2 = IBX_AUD_CNTL_ST2;
-	} else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) {
-		aud_config = VLV_AUD_CFG(pipe);
-		aud_cntrl_st2 = VLV_AUD_CNTL_ST2;
-	} else {
-		aud_config = CPT_AUD_CFG(pipe);
-		aud_cntrl_st2 = CPT_AUD_CNTRL_ST2;
-	}
-
-	/* Disable timestamps */
-	tmp = intel_de_read(dev_priv, aud_config);
-	tmp &= ~AUD_CONFIG_N_VALUE_INDEX;
-	tmp |= AUD_CONFIG_N_PROG_ENABLE;
-	tmp &= ~AUD_CONFIG_UPPER_N_MASK;
-	tmp &= ~AUD_CONFIG_LOWER_N_MASK;
-	if (intel_crtc_has_dp_encoder(old_crtc_state))
-		tmp |= AUD_CONFIG_N_VALUE_INDEX;
-	intel_de_write(dev_priv, aud_config, tmp);
-
-	eldv = IBX_ELD_VALID(port);
-
-	/* Invalidate ELD */
-	tmp = intel_de_read(dev_priv, aud_cntrl_st2);
-	tmp &= ~eldv;
-	intel_de_write(dev_priv, aud_cntrl_st2, tmp);
-}
-
-static void ilk_audio_codec_enable(struct intel_encoder *encoder,
-				   const struct intel_crtc_state *crtc_state,
-				   const struct drm_connector_state *conn_state)
-{
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
-	struct drm_connector *connector = conn_state->connector;
-	enum pipe pipe = crtc->pipe;
-	enum port port = encoder->port;
-	const u8 *eld = connector->eld;
-	u32 tmp, eldv;
-	int len, i;
-	i915_reg_t hdmiw_hdmiedid, aud_config, aud_cntl_st, aud_cntrl_st2;
-
-	if (drm_WARN_ON(&dev_priv->drm, port == PORT_A))
-		return;
-
-	/*
-	 * FIXME: We're supposed to wait for vblank here, but we have vblanks
-	 * disabled during the mode set. The proper fix would be to push the
-	 * rest of the setup into a vblank work item, queued here, but the
-	 * infrastructure is not there yet.
-	 */
-
-	if (HAS_PCH_IBX(dev_priv)) {
-		hdmiw_hdmiedid = IBX_HDMIW_HDMIEDID(pipe);
-		aud_config = IBX_AUD_CFG(pipe);
-		aud_cntl_st = IBX_AUD_CNTL_ST(pipe);
-		aud_cntrl_st2 = IBX_AUD_CNTL_ST2;
-	} else if (IS_VALLEYVIEW(dev_priv) ||
-		   IS_CHERRYVIEW(dev_priv)) {
-		hdmiw_hdmiedid = VLV_HDMIW_HDMIEDID(pipe);
-		aud_config = VLV_AUD_CFG(pipe);
-		aud_cntl_st = VLV_AUD_CNTL_ST(pipe);
-		aud_cntrl_st2 = VLV_AUD_CNTL_ST2;
-	} else {
-		hdmiw_hdmiedid = CPT_HDMIW_HDMIEDID(pipe);
-		aud_config = CPT_AUD_CFG(pipe);
-		aud_cntl_st = CPT_AUD_CNTL_ST(pipe);
-		aud_cntrl_st2 = CPT_AUD_CNTRL_ST2;
-	}
-
-	eldv = IBX_ELD_VALID(port);
-
-	/* Invalidate ELD */
-	tmp = intel_de_read(dev_priv, aud_cntrl_st2);
-	tmp &= ~eldv;
-	intel_de_write(dev_priv, aud_cntrl_st2, tmp);
-
-	/* Reset ELD write address */
-	tmp = intel_de_read(dev_priv, aud_cntl_st);
-	tmp &= ~IBX_ELD_ADDRESS_MASK;
-	intel_de_write(dev_priv, aud_cntl_st, tmp);
-
-	/* Up to 84 bytes of hw ELD buffer */
-	len = min(drm_eld_size(eld), 84);
-	for (i = 0; i < len / 4; i++)
-		intel_de_write(dev_priv, hdmiw_hdmiedid,
-			       *((const u32 *)eld + i));
-
-	/* ELD valid */
-	tmp = intel_de_read(dev_priv, aud_cntrl_st2);
-	tmp |= eldv;
-	intel_de_write(dev_priv, aud_cntrl_st2, tmp);
-
-	/* Enable timestamps */
-	tmp = intel_de_read(dev_priv, aud_config);
-	tmp &= ~AUD_CONFIG_N_VALUE_INDEX;
-	tmp &= ~AUD_CONFIG_N_PROG_ENABLE;
-	tmp &= ~AUD_CONFIG_PIXEL_CLOCK_HDMI_MASK;
-	if (intel_crtc_has_dp_encoder(crtc_state))
-		tmp |= AUD_CONFIG_N_VALUE_INDEX;
-	else
-		tmp |= audio_config_hdmi_pixel_clock(crtc_state);
-	intel_de_write(dev_priv, aud_config, tmp);
-}
-
 /**
  * intel_audio_codec_enable - Enable the audio codec for HD audio
  * @encoder: encoder on which to enable audio
@@ -858,10 +643,6 @@ void intel_audio_codec_enable(struct intel_encoder *encoder,
 		acomp->base.audio_ops->pin_eld_notify(acomp->base.audio_ops->audio_ptr,
 						 (int) port, (int) pipe);
 	}
-
-	intel_lpe_audio_notify(dev_priv, pipe, port, connector->eld,
-			       crtc_state->port_clock,
-			       intel_crtc_has_dp_encoder(crtc_state));
 }
 
 /**
@@ -909,19 +690,7 @@ void intel_audio_codec_disable(struct intel_encoder *encoder,
 		acomp->base.audio_ops->pin_eld_notify(acomp->base.audio_ops->audio_ptr,
 						 (int) port, (int) pipe);
 	}
-
-	intel_lpe_audio_notify(dev_priv, pipe, port, NULL, 0, false);
 }
-
-static const struct intel_audio_funcs g4x_audio_funcs = {
-	.audio_codec_enable = g4x_audio_codec_enable,
-	.audio_codec_disable = g4x_audio_codec_disable,
-};
-
-static const struct intel_audio_funcs ilk_audio_funcs = {
-	.audio_codec_enable = ilk_audio_codec_enable,
-	.audio_codec_disable = ilk_audio_codec_disable,
-};
 
 static const struct intel_audio_funcs hsw_audio_funcs = {
 	.audio_codec_enable = hsw_audio_codec_enable,
@@ -934,15 +703,7 @@ static const struct intel_audio_funcs hsw_audio_funcs = {
  */
 void intel_audio_hooks_init(struct drm_i915_private *dev_priv)
 {
-	if (IS_G4X(dev_priv)) {
-		dev_priv->audio.funcs = &g4x_audio_funcs;
-	} else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) {
-		dev_priv->audio.funcs = &ilk_audio_funcs;
-	} else if (IS_HASWELL(dev_priv) || DISPLAY_VER(dev_priv) >= 8) {
-		dev_priv->audio.funcs = &hsw_audio_funcs;
-	} else if (HAS_PCH_SPLIT(dev_priv)) {
-		dev_priv->audio.funcs = &ilk_audio_funcs;
-	}
+	dev_priv->audio.funcs = &hsw_audio_funcs;
 }
 
 struct aud_ts_cdclk_m_n {
@@ -1043,21 +804,14 @@ static unsigned long i915_audio_component_get_power(struct device *kdev)
 	ret = intel_display_power_get(dev_priv, POWER_DOMAIN_AUDIO_PLAYBACK);
 
 	if (dev_priv->audio.power_refcount++ == 0) {
-		if (DISPLAY_VER(dev_priv) >= 9) {
-			intel_de_write(dev_priv, AUD_FREQ_CNTRL,
-				       dev_priv->audio.freq_cntrl);
-			drm_dbg_kms(&dev_priv->drm,
-				    "restored AUD_FREQ_CNTRL to 0x%x\n",
-				    dev_priv->audio.freq_cntrl);
-		}
+		intel_de_write(dev_priv, AUD_FREQ_CNTRL,
+			       dev_priv->audio.freq_cntrl);
+		drm_dbg_kms(&dev_priv->drm,
+			    "restored AUD_FREQ_CNTRL to 0x%x\n",
+			    dev_priv->audio.freq_cntrl);
 
-		/* Force CDCLK to 2*BCLK as long as we need audio powered. */
-		if (IS_GEMINILAKE(dev_priv))
-			glk_force_audio_cdclk(dev_priv, true);
-
-		if (DISPLAY_VER(dev_priv) >= 10)
-			intel_de_write(dev_priv, AUD_PIN_BUF_CTL,
-				       (intel_de_read(dev_priv, AUD_PIN_BUF_CTL) | AUD_PIN_BUF_ENABLE));
+		intel_de_write(dev_priv, AUD_PIN_BUF_CTL,
+			       (intel_de_read(dev_priv, AUD_PIN_BUF_CTL) | AUD_PIN_BUF_ENABLE));
 	}
 
 	return ret;
@@ -1082,9 +836,6 @@ static void i915_audio_component_codec_wake_override(struct device *kdev,
 	struct drm_i915_private *dev_priv = kdev_to_i915(kdev);
 	unsigned long cookie;
 	u32 tmp;
-
-	if (DISPLAY_VER(dev_priv) < 9)
-		return;
 
 	cookie = i915_audio_component_get_power(kdev);
 
@@ -1111,9 +862,6 @@ static void i915_audio_component_codec_wake_override(struct device *kdev,
 static int i915_audio_component_get_cdclk_freq(struct device *kdev)
 {
 	struct drm_i915_private *dev_priv = kdev_to_i915(kdev);
-
-	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_DDI(dev_priv)))
-		return -ENODEV;
 
 	return dev_priv->cdclk.hw.cdclk;
 }
@@ -1178,9 +926,6 @@ static int i915_audio_component_sync_audio_rate(struct device *kdev, int port,
 	struct intel_crtc *crtc;
 	unsigned long cookie;
 	int err = 0;
-
-	if (!HAS_DDI(dev_priv))
-		return 0;
 
 	cookie = i915_audio_component_get_power(kdev);
 	mutex_lock(&dev_priv->audio.mutex);
@@ -1339,23 +1084,17 @@ static void i915_audio_component_init(struct drm_i915_private *dev_priv)
 		return;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 9) {
-		aud_freq_init = intel_de_read(dev_priv, AUD_FREQ_CNTRL);
+	aud_freq_init = intel_de_read(dev_priv, AUD_FREQ_CNTRL);
+	aud_freq = AUD_FREQ_GEN12;
 
-		if (DISPLAY_VER(dev_priv) >= 12)
-			aud_freq = AUD_FREQ_GEN12;
-		else
-			aud_freq = aud_freq_init;
+	/* use BIOS provided value for TGL unless it is a known bad value */
+	if (IS_TIGERLAKE(dev_priv) && aud_freq_init != AUD_FREQ_TGL_BROKEN)
+		aud_freq = aud_freq_init;
 
-		/* use BIOS provided value for TGL unless it is a known bad value */
-		if (IS_TIGERLAKE(dev_priv) && aud_freq_init != AUD_FREQ_TGL_BROKEN)
-			aud_freq = aud_freq_init;
+	drm_dbg_kms(&dev_priv->drm, "use AUD_FREQ_CNTRL of 0x%x (init value 0x%x)\n",
+		    aud_freq, aud_freq_init);
 
-		drm_dbg_kms(&dev_priv->drm, "use AUD_FREQ_CNTRL of 0x%x (init value 0x%x)\n",
-			    aud_freq, aud_freq_init);
-
-		dev_priv->audio.freq_cntrl = aud_freq;
-	}
+	dev_priv->audio.freq_cntrl = aud_freq;
 
 	/* init with current cdclk */
 	intel_audio_cdclk_change_post(dev_priv);
@@ -1387,8 +1126,7 @@ static void i915_audio_component_cleanup(struct drm_i915_private *dev_priv)
  */
 void intel_audio_init(struct drm_i915_private *dev_priv)
 {
-	if (intel_lpe_audio_init(dev_priv) < 0)
-		i915_audio_component_init(dev_priv);
+	i915_audio_component_init(dev_priv);
 }
 
 /**
@@ -1398,8 +1136,5 @@ void intel_audio_init(struct drm_i915_private *dev_priv)
  */
 void intel_audio_deinit(struct drm_i915_private *dev_priv)
 {
-	if ((dev_priv)->audio.lpe.platdev != NULL)
-		intel_lpe_audio_teardown(dev_priv);
-	else
-		i915_audio_component_cleanup(dev_priv);
+	i915_audio_component_cleanup(dev_priv);
 }

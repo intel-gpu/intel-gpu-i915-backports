@@ -341,35 +341,12 @@ bool intel_dsc_source_support(const struct intel_crtc_state *crtc_state)
 {
 	const struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
-	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
 
-	if (!INTEL_INFO(i915)->display.has_dsc)
-		return false;
-
-	if (DISPLAY_VER(i915) >= 12)
-		return true;
-
-	if (DISPLAY_VER(i915) >= 11 && cpu_transcoder != TRANSCODER_A)
-		return true;
-
-	return false;
+	return INTEL_INFO(i915)->display.has_dsc;
 }
 
 static bool is_pipe_dsc(struct intel_crtc *crtc, enum transcoder cpu_transcoder)
 {
-	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
-
-	if (DISPLAY_VER(i915) >= 12)
-		return true;
-
-	if (cpu_transcoder == TRANSCODER_EDP ||
-	    cpu_transcoder == TRANSCODER_DSI_0 ||
-	    cpu_transcoder == TRANSCODER_DSI_1)
-		return false;
-
-	/* There's no pipe A DSC engine on ICL */
-	drm_WARN_ON(&i915->drm, crtc->pipe == PIPE_A);
-
 	return true;
 }
 
@@ -1170,9 +1147,10 @@ void intel_dsc_dsi_pps_write(struct intel_encoder *encoder,
 
 	for_each_dsi_port(port, intel_dsi->ports) {
 		dsi = intel_dsi->dsi_hosts[port]->device;
-
+#ifndef BPM_DRM_MIPI_DSI_DISABLED
 		mipi_dsi_picture_parameter_set(dsi, &pps);
 		mipi_dsi_compression_mode(dsi, true);
+#endif
 	}
 }
 

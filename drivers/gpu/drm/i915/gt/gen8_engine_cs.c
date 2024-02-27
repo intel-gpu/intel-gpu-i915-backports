@@ -408,7 +408,7 @@ static int __xehp_emit_bb_start(struct i915_request *rq,
 
 	GEM_BUG_ON(!ce->wa_bb_page);
 
-	cs = intel_ring_begin(rq, 14);
+	cs = intel_ring_begin(rq, 12);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
@@ -426,19 +426,12 @@ static int __xehp_emit_bb_start(struct i915_request *rq,
 	*cs++ = lower_32_bits(offset);
 	*cs++ = upper_32_bits(offset);
 
-	if (HAS_MEM_FENCE_SUPPORT(rq->engine->i915) &&
-	    rq->context->vm->mfence.vma)
-		*cs++ = MI_MEM_FENCE | MI_ACQUIRE_ENABLE;
-	else
-		*cs++ = MI_NOOP;
-
 	/* Fixup stray MI_SET_PREDICATE as it prevents us executing the ring */
 	*cs++ = MI_BATCH_BUFFER_START_GEN8;
 	*cs++ = wa_offset + DG2_PREDICATE_RESULT_BB;
 	*cs++ = 0;
 
 	*cs++ = MI_ARB_ON_OFF | MI_ARB_DISABLE;
-	*cs++ = MI_NOOP;
 
 	intel_ring_advance(rq, cs);
 

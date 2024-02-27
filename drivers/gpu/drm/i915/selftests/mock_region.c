@@ -5,8 +5,6 @@
 
 #include <linux/scatterlist.h>
 
-#include <drm/ttm/ttm_placement.h>
-
 #include "gem/i915_gem_region.h"
 #include "intel_memory_region.h"
 
@@ -60,17 +58,6 @@ static int mock_object_init(struct intel_memory_region *mem,
 
 	return 0;
 }
-
-#if 0
-static void mock_region_fini(struct intel_memory_region *mem)
-{
-	struct drm_i915_private *i915 = mem->i915;
-	int instance = mem->instance;
-
-	intel_region_ttm_fini(mem);
-	ida_free(&i915->selftest.mock_region_instances, instance);
-}
-#endif
 
 static int mock_init_region(struct intel_memory_region *mem)
 {

@@ -28,8 +28,6 @@ static bool gpu_write_needs_clflush(struct drm_i915_gem_object *obj)
 static void
 flush_write_domain(struct drm_i915_gem_object *obj, unsigned int flush_domains)
 {
-	struct i915_vma *vma;
-
 	assert_object_held(obj);
 
 	if (!(obj->write_domain & flush_domains))
@@ -37,13 +35,6 @@ flush_write_domain(struct drm_i915_gem_object *obj, unsigned int flush_domains)
 
 	switch (obj->write_domain) {
 	case I915_GEM_DOMAIN_GTT:
-		spin_lock(&obj->vma.lock);
-		for_each_ggtt_vma(vma, obj) {
-			if (i915_vma_unset_ggtt_write(vma))
-				intel_gt_flush_ggtt_writes(vma->vm->gt);
-		}
-		spin_unlock(&obj->vma.lock);
-
 		i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
 		break;
 
@@ -92,7 +83,7 @@ void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj)
 		__i915_gem_object_flush_for_display(obj);
 }
 
-/**
+/*
  * Moves a single object to the WC read, and possibly write domain.
  * @obj: object to act on
  * @write: ask for write access or read only
@@ -152,7 +143,7 @@ i915_gem_object_set_to_wc_domain(struct drm_i915_gem_object *obj, bool write)
 	return 0;
 }
 
-/**
+/*
  * Moves a single object to the GTT read, and possibly write domain.
  * @obj: object to act on
  * @write: ask for write access or read only
@@ -204,23 +195,15 @@ i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write)
 	GEM_BUG_ON((obj->write_domain & ~I915_GEM_DOMAIN_GTT) != 0);
 	obj->read_domains |= I915_GEM_DOMAIN_GTT;
 	if (write) {
-		struct i915_vma *vma;
-
 		obj->read_domains = I915_GEM_DOMAIN_GTT;
 		obj->write_domain = I915_GEM_DOMAIN_GTT;
-
-		spin_lock(&obj->vma.lock);
-		for_each_ggtt_vma(vma, obj)
-			if (i915_vma_is_bound(vma, I915_VMA_GLOBAL_BIND))
-				i915_vma_set_ggtt_write(vma);
-		spin_unlock(&obj->vma.lock);
 	}
 
 	i915_gem_object_unpin_pages(obj);
 	return 0;
 }
 
-/**
+/*
  * Changes the cache-level of an object across all VMA.
  * @obj: object to act on
  * @cache_level: new cache level to set for the object
@@ -393,15 +376,8 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 		return ERR_PTR(ret);
 
 	/* VT-d may overfetch before/after the vma, so pad with scratch */
-	if (intel_scanout_needs_vtd_wa(i915)) {
-		unsigned int guard = VTD_GUARD;
-
-		if (i915_gem_object_is_tiled(obj))
-			guard = max(guard,
-				    i915_gem_object_get_tile_row_size(obj));
-
-		flags |= PIN_OFFSET_GUARD | guard;
-	}
+	if (intel_scanout_needs_vtd_wa(i915))
+		flags |= PIN_OFFSET_GUARD | VTD_GUARD;
 
 	/*
 	 * As the user may map the buffer once pinned in the display plane
@@ -412,13 +388,11 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 	 * try to preserve the existing ABI).
 	 */
 	vma = ERR_PTR(-ENOSPC);
-	if ((flags & PIN_MAPPABLE) == 0 &&
-	    (!view || view->type == I915_GGTT_VIEW_NORMAL))
+	if (!view || view->type == I915_GGTT_VIEW_NORMAL)
 		vma = i915_gem_object_ggtt_pin_ww(obj, ww,
 						  ggtt, view,
 						  0, alignment,
-						  flags | PIN_MAPPABLE |
-						  PIN_NONBLOCK);
+						  flags | PIN_NONBLOCK);
 	if (IS_ERR(vma) && vma != ERR_PTR(-EDEADLK))
 		vma = i915_gem_object_ggtt_pin_ww(obj, ww,
 						  ggtt, view,
@@ -435,7 +409,7 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 	return vma;
 }
 
-/**
+/*
  * Moves a single object to the CPU read, and possibly write domain.
  * @obj: object to act on
  * @write: requesting write or read-only access
@@ -479,7 +453,7 @@ i915_gem_object_set_to_cpu_domain(struct drm_i915_gem_object *obj, bool write)
 	return 0;
 }
 
-/**
+/*
  * Called when user space prepares to use an object with the CPU, either
  * through the mmap ioctl's mapping or a GTT mapping.
  * @dev: drm device
@@ -621,7 +595,7 @@ int i915_gem_object_prepare_read(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	if (obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ ||
+	if (obj->flags & I915_BO_CACHE_COHERENT_FOR_READ ||
 	    !static_cpu_has(X86_FEATURE_CLFLUSH)) {
 		ret = i915_gem_object_set_to_cpu_domain(obj, false);
 		if (ret)
@@ -672,7 +646,7 @@ int i915_gem_object_prepare_write(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	if (obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE ||
+	if (obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE ||
 	    !static_cpu_has(X86_FEATURE_CLFLUSH)) {
 		ret = i915_gem_object_set_to_cpu_domain(obj, true);
 		if (ret)

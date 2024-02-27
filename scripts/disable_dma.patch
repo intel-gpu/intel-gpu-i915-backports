@@ -1,0 +1,13 @@
+diff --git a/Kconfig.sources b/Kconfig.sources
+index ff7b0e4..c684ebb 100644
+--- a/Kconfig.sources
++++ b/Kconfig.sources
+@@ -2,7 +2,7 @@
+ source "$BACKPORT_DIR/compat/Kconfig"
+ 
+ # these are copied from the kernel
+-source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
++#source "$BACKPORT_DIR/drivers/dma-buf/Kconfig"
+ 
+ source "$BACKPORT_DIR/drivers/gpu/drm/Kconfig"
+ source "$BACKPORT_DIR/drivers/gpu/drm/i915/Kconfig"

@@ -34,7 +34,7 @@ struct intel_migrate {
 		unsigned long swap_chunk;
 
 		uint64_t pd_offset;
-	} swapin[2], swapout[2];
+	} swapin[2], swapout[4];
 	atomic_t next_swapin, next_swapout;
 };
 

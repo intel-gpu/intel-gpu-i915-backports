@@ -8,7 +8,6 @@
 
 #include "i915_drv.h"
 #include "i915_reg.h"
-#include "i915_vgpu.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
@@ -60,111 +59,16 @@ static void set(struct intel_uncore *uncore, i915_reg_t reg, u32 val)
 	intel_uncore_write_fw(uncore, reg, val);
 }
 
-static void
-xehpsdv_dfd_restore_tile_addr_regs(struct intel_rc6 *rc6)
+static bool enable_softpg(struct intel_gt *gt)
 {
-	struct intel_gt *gt = rc6_to_gt(rc6);
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	u32 *dfd_restore_buf;
-	u64 phys_addr;
+	int p = gt->i915->params.enable_softpg;
 
-	if (rc6->dfd_restore_obj == NULL)
-		return;
-
-	dfd_restore_buf = rc6->dfd_restore_buf;
-
-	*dfd_restore_buf++ = MI_NOOP;
-	*dfd_restore_buf++ = MI_LOAD_REGISTER_IMM(4);
-
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE0_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE0_ADDR_RANGE);
-
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE1_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE1_ADDR_RANGE);
-
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE2_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE2_ADDR_RANGE);
-
-	*dfd_restore_buf++ = i915_mmio_reg_offset(XEHP_TILE3_ADDR_RANGE);
-	*dfd_restore_buf++ = intel_gt_mcr_read_any(gt, XEHP_TILE3_ADDR_RANGE);
-
-	/*
-	 * A write of any value to 0x80FC signals the end of the DFD restore
-	 * sequence.  This write must be submitted as its own standalone LRI
-	 * command.  We'll choose "915 915" as a semi-recognizable value.
-	 */
-	*dfd_restore_buf++ = MI_NOOP;
-	*dfd_restore_buf++ = MI_LOAD_REGISTER_IMM(1);
-	*dfd_restore_buf++ = 0x80FC;
-	*dfd_restore_buf++ = 0x09150915;
-
-	*dfd_restore_buf++ = MI_NOOP;
-	*dfd_restore_buf++ = MI_BATCH_BUFFER_END;
-
-	__i915_gem_object_flush_map(rc6->dfd_restore_obj, 0,
-				    rc6->dfd_restore_obj->base.size);
-
-	phys_addr = (u64)i915_gem_object_get_dma_address(rc6->dfd_restore_obj,
-							 0);
-
-	/*
-	 * Lowest six bits of address are ignored, LSB register takes
-	 * next 30 bits, and MSB hold remaining bits.
-	 *
-	 * Note that we do not want to set the 'lock' bit in the MSB register
-	 * since we want to be able to unprogram the DFD restore buffer
-	 * during intel_rc6_fini().
-	 */
-	phys_addr >>= 6;
-	intel_uncore_write(uncore, DFD_RESTORE_CFG_LSB,
-			   REG_FIELD_PREP(DFD_RESTORE_CFG_LSB_ADDR_MASK,
-					  phys_addr & GENMASK(29, 0)) |
-			   DFD_RESTORE_CFG_LSB_ENABLE);
-	phys_addr >>= 30;
-	intel_uncore_write(uncore, DFD_RESTORE_CFG_MSB,
-			   REG_FIELD_PREP(DFD_RESTORE_CFG_MSB_ADDR_MASK, phys_addr));
-}
-
-static int
-xehpsdv_rc6_init(struct intel_rc6 *rc6)
-{
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-	struct intel_gt *gt = rc6_to_gt(rc6);
-	struct drm_i915_gem_object *obj;
-	resource_size_t phys;
-
-	if ((i915->remote_tiles == 0) || /* 1T */
-	    (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_B0, STEP_FOREVER)))
-		return 0;
-
-	if (drm_WARN_ON(&i915->drm, rc6->dfd_restore_obj != NULL))
-		return -EINVAL;
-
-	/* SZ_1K > 10 * (CACHELINE_BYTES == 64), i.e. at least 10CL */
-	obj = intel_gt_object_create_lmem(gt, SZ_1K, 0);
-	if (IS_ERR(obj)) {
-		drm_err(&i915->drm, "Error creating gem object: %ld\n", PTR_ERR(obj));
-		return PTR_ERR(obj);
-	}
-
-	rc6->dfd_restore_buf = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
-	if (IS_ERR(rc6->dfd_restore_buf)) {
-		drm_err(&i915->drm, "Error pinning gem object to CPU VA space: %ld\n",
-			  PTR_ERR(rc6->dfd_restore_buf));
-		i915_gem_object_put(obj);
-		return PTR_ERR(rc6->dfd_restore_buf);
-	}
-
-	/*
-	 * make sure intel_gt_object_create_lmem() allocates CACHELINE_BYTES
-	 * aligned buffer.
-	 */
-	phys = i915_gem_object_get_dma_address(obj, 0);
-	GEM_BUG_ON(!IS_ALIGNED(phys, CACHELINE_BYTES));
-
-	rc6->dfd_restore_obj = obj;
-
-	return 0;
+	if (p > 0)
+		return true;
+	else if (p < 0)
+		return IS_PONTEVECCHIO(gt->i915);
+	else
+		return false;
 }
 
 static void gen11_rc6_enable(struct intel_rc6 *rc6)
@@ -217,9 +121,6 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 	set(uncore, GEN9_MEDIA_PG_IDLE_HYSTERESIS, 60);
 	set(uncore, GEN9_RENDER_PG_IDLE_HYSTERESIS, 60);
 
-	if (IS_XEHPSDV(rc6_to_i915(rc6)))
-		xehpsdv_dfd_restore_tile_addr_regs(rc6);
-
 	/* 3a: Enable RC6
 	 *
 	 * With GuCRC, we do not enable bit 31 of RC_CTL,
@@ -258,8 +159,7 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 	}
 
 	/* Manually switch powergating off/on around GPU client activity */
-	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG) &&
-	    gt->i915->params.enable_softpg) {
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG) && enable_softpg(gt)) {
 		rc6->pg_enable = pg_enable;
 		return;
 	}
@@ -267,370 +167,8 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 	set(uncore, GEN9_PG_ENABLE, pg_enable);
 }
 
-static void gen9_rc6_enable(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	/* 2b: Program RC6 thresholds.*/
-	if (GRAPHICS_VER(rc6_to_i915(rc6)) >= 11) {
-		set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 54 << 16 | 85);
-		set(uncore, GEN10_MEDIA_WAKE_RATE_LIMIT, 150);
-	} else if (IS_SKYLAKE(rc6_to_i915(rc6))) {
-		/*
-		 * WaRsDoubleRc6WrlWithCoarsePowerGating:skl Doubling WRL only
-		 * when CPG is enabled
-		 */
-		set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 108 << 16);
-	} else {
-		set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 54 << 16);
-	}
-
-	set(uncore, GEN6_RC_EVALUATION_INTERVAL, 125000); /* 12500 * 1280ns */
-	set(uncore, GEN6_RC_IDLE_HYSTERSIS, 25); /* 25 * 1280ns */
-	for_each_engine(engine, rc6_to_gt(rc6), id)
-		set(uncore, RING_MAX_IDLE(engine->mmio_base), 10);
-
-	set(uncore, GUC_MAX_IDLE_COUNT, 0xA);
-
-	set(uncore, GEN6_RC_SLEEP, 0);
-
-	/*
-	 * 2c: Program Coarse Power Gating Policies.
-	 *
-	 * Bspec's guidance is to use 25us (really 25 * 1280ns) here. What we
-	 * use instead is a more conservative estimate for the maximum time
-	 * it takes us to service a CS interrupt and submit a new ELSP - that
-	 * is the time which the GPU is idle waiting for the CPU to select the
-	 * next request to execute. If the idle hysteresis is less than that
-	 * interrupt service latency, the hardware will automatically gate
-	 * the power well and we will then incur the wake up cost on top of
-	 * the service latency. A similar guide from plane_state is that we
-	 * do not want the enable hysteresis to less than the wakeup latency.
-	 *
-	 * igt/gem_exec_nop/sequential provides a rough estimate for the
-	 * service latency, and puts it around 10us for Broadwell (and other
-	 * big core) and around 40us for Broxton (and other low power cores).
-	 * [Note that for legacy ringbuffer submission, this is less than 1us!]
-	 * However, the wakeup latency on Broxton is closer to 100us. To be
-	 * conservative, we have to factor in a context switch on top (due
-	 * to ksoftirqd).
-	 */
-	set(uncore, GEN9_MEDIA_PG_IDLE_HYSTERESIS, 250);
-	set(uncore, GEN9_RENDER_PG_IDLE_HYSTERESIS, 250);
-
-	/* 3a: Enable RC6 */
-	set(uncore, GEN6_RC6_THRESHOLD, 37500); /* 37.5/125ms per EI */
-
-	rc6->ctl_enable =
-		GEN6_RC_CTL_HW_ENABLE |
-		GEN6_RC_CTL_RC6_ENABLE |
-		GEN6_RC_CTL_EI_MODE(1);
-
-	/*
-	 * WaRsDisableCoarsePowerGating:skl,cnl
-	 *   - Render/Media PG need to be disabled with RC6.
-	 */
-	if (!NEEDS_WaRsDisableCoarsePowerGating(rc6_to_i915(rc6)))
-		set(uncore, GEN9_PG_ENABLE,
-		    GEN9_RENDER_PG_ENABLE | GEN9_MEDIA_PG_ENABLE);
-}
-
-static void gen8_rc6_enable(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	/* 2b: Program RC6 thresholds.*/
-	set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 40 << 16);
-	set(uncore, GEN6_RC_EVALUATION_INTERVAL, 125000); /* 12500 * 1280ns */
-	set(uncore, GEN6_RC_IDLE_HYSTERSIS, 25); /* 25 * 1280ns */
-	for_each_engine(engine, rc6_to_gt(rc6), id)
-		set(uncore, RING_MAX_IDLE(engine->mmio_base), 10);
-	set(uncore, GEN6_RC_SLEEP, 0);
-	set(uncore, GEN6_RC6_THRESHOLD, 625); /* 800us/1.28 for TO */
-
-	/* 3: Enable RC6 */
-	rc6->ctl_enable =
-	    GEN6_RC_CTL_HW_ENABLE |
-	    GEN7_RC_CTL_TO_MODE |
-	    GEN6_RC_CTL_RC6_ENABLE;
-}
-
-static void gen6_rc6_enable(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-	u32 rc6vids, rc6_mask;
-	int ret;
-
-	set(uncore, GEN6_RC1_WAKE_RATE_LIMIT, 1000 << 16);
-	set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 40 << 16 | 30);
-	set(uncore, GEN6_RC6pp_WAKE_RATE_LIMIT, 30);
-	set(uncore, GEN6_RC_EVALUATION_INTERVAL, 125000);
-	set(uncore, GEN6_RC_IDLE_HYSTERSIS, 25);
-
-	for_each_engine(engine, rc6_to_gt(rc6), id)
-		set(uncore, RING_MAX_IDLE(engine->mmio_base), 10);
-
-	set(uncore, GEN6_RC_SLEEP, 0);
-	set(uncore, GEN6_RC1e_THRESHOLD, 1000);
-	set(uncore, GEN6_RC6_THRESHOLD, 50000);
-	set(uncore, GEN6_RC6p_THRESHOLD, 150000);
-	set(uncore, GEN6_RC6pp_THRESHOLD, 64000); /* unused */
-
-	/* We don't use those on Haswell */
-	rc6_mask = GEN6_RC_CTL_RC6_ENABLE;
-	if (HAS_RC6p(i915))
-		rc6_mask |= GEN6_RC_CTL_RC6p_ENABLE;
-	if (HAS_RC6pp(i915))
-		rc6_mask |= GEN6_RC_CTL_RC6pp_ENABLE;
-	rc6->ctl_enable =
-	    rc6_mask |
-	    GEN6_RC_CTL_EI_MODE(1) |
-	    GEN6_RC_CTL_HW_ENABLE;
-
-	rc6vids = 0;
-	ret = snb_pcode_read(rc6_to_gt(rc6)->uncore, GEN6_PCODE_READ_RC6VIDS, &rc6vids, NULL);
-	if (GRAPHICS_VER(i915) == 6 && ret) {
-		drm_dbg(&i915->drm, "Couldn't check for BIOS workaround\n");
-	} else if (GRAPHICS_VER(i915) == 6 &&
-		   (GEN6_DECODE_RC6_VID(rc6vids & 0xff) < 450)) {
-		drm_dbg(&i915->drm,
-			"You should update your BIOS. Correcting minimum rc6 voltage (%dmV->%dmV)\n",
-			GEN6_DECODE_RC6_VID(rc6vids & 0xff), 450);
-		rc6vids &= 0xffff00;
-		rc6vids |= GEN6_ENCODE_RC6_VID(450);
-		ret = snb_pcode_write(rc6_to_gt(rc6)->uncore, GEN6_PCODE_WRITE_RC6VIDS, rc6vids);
-		if (ret)
-			drm_err(&i915->drm,
-				"Couldn't fix incorrect rc6 voltage\n");
-	}
-}
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-static void display_chv_rc6_init(struct intel_uncore *uncore, struct drm_i915_private *i915)
-{
-	u32 pcbr;
-	resource_size_t pctx_paddr, paddr;
-	resource_size_t pctx_size = 32 * SZ_1K;
-
-	pcbr = intel_uncore_read(uncore, VLV_PCBR);
-	if ((pcbr >> VLV_PCBR_ADDR_SHIFT) == 0) {
-		drm_dbg(&i915->drm, "BIOS didn't set up PCBR, fixing up\n");
-		paddr = i915->dsm.end + 1 - pctx_size;
-		GEM_BUG_ON(paddr > U32_MAX);
-
-		pctx_paddr = (paddr & ~4095);
-		intel_uncore_write(uncore, VLV_PCBR, pctx_paddr);
-	}
-}
-#else
-static void display_chv_rc6_init(struct intel_uncore *uncore,
-		struct drm_i915_private *i915)
-{ return; }
-#endif
-
-/* Check that the pcbr address is not empty. */
-static int chv_rc6_init(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-
-	display_chv_rc6_init(uncore, i915);
-
-	return 0;
-}
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-static int vlv_rc6_init(struct intel_rc6 *rc6)
-{
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_gem_object *pctx;
-	resource_size_t pctx_paddr;
-	resource_size_t pctx_size = 24 * SZ_1K;
-	u32 pcbr;
-
-	pcbr = intel_uncore_read(uncore, VLV_PCBR);
-	if (pcbr) {
-		/* BIOS set it up already, grab the pre-alloc'd space */
-		resource_size_t pcbr_offset;
-
-		pcbr_offset = (pcbr & ~4095) - i915->dsm.start;
-		pctx = i915_gem_object_create_stolen_for_preallocated(i915,
-								      pcbr_offset,
-								      pctx_size);
-		if (IS_ERR(pctx))
-			return PTR_ERR(pctx);
-
-		goto out;
-	}
-
-	drm_dbg(&i915->drm, "BIOS didn't set up PCBR, fixing up\n");
-
-	/*
-	 * From the Gunit register HAS:
-	 * The Gfx driver is expected to program this register and ensure
-	 * proper allocation within Gfx stolen memory.  For example, this
-	 * register should be programmed such than the PCBR range does not
-	 * overlap with other ranges, such as the frame buffer, protected
-	 * memory, or any other relevant ranges.
-	 */
-	pctx = i915_gem_object_create_stolen(i915, pctx_size);
-	if (IS_ERR(pctx)) {
-		drm_dbg(&i915->drm,
-			"not enough stolen space for PCTX, disabling\n");
-		return PTR_ERR(pctx);
-	}
-
-	GEM_BUG_ON(range_overflows_end_t(u64,
-					 i915->dsm.start,
-					 pctx->stolen->start,
-					 U32_MAX));
-	pctx_paddr = i915->dsm.start + pctx->stolen->start;
-	intel_uncore_write(uncore, VLV_PCBR, pctx_paddr);
-
-out:
-	rc6->pctx = pctx;
-	return 0;
-}
-#else
-static int vlv_rc6_init(struct intel_rc6 *rc6) { return 0; }
-#endif
-
-static void chv_rc6_enable(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	/* 2a: Program RC6 thresholds.*/
-	set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 40 << 16);
-	set(uncore, GEN6_RC_EVALUATION_INTERVAL, 125000); /* 12500 * 1280ns */
-	set(uncore, GEN6_RC_IDLE_HYSTERSIS, 25); /* 25 * 1280ns */
-
-	for_each_engine(engine, rc6_to_gt(rc6), id)
-		set(uncore, RING_MAX_IDLE(engine->mmio_base), 10);
-	set(uncore, GEN6_RC_SLEEP, 0);
-
-	/* TO threshold set to 500 us (0x186 * 1.28 us) */
-	set(uncore, GEN6_RC6_THRESHOLD, 0x186);
-
-	/* Allows RC6 residency counter to work */
-	set(uncore, VLV_COUNTER_CONTROL,
-	    _MASKED_BIT_ENABLE(VLV_COUNT_RANGE_HIGH |
-			       VLV_MEDIA_RC6_COUNT_EN |
-			       VLV_RENDER_RC6_COUNT_EN));
-
-	/* 3: Enable RC6 */
-	rc6->ctl_enable = GEN7_RC_CTL_TO_MODE;
-}
-
-static void vlv_rc6_enable(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct intel_engine_cs *engine;
-	enum intel_engine_id id;
-
-	set(uncore, GEN6_RC6_WAKE_RATE_LIMIT, 0x00280000);
-	set(uncore, GEN6_RC_EVALUATION_INTERVAL, 125000);
-	set(uncore, GEN6_RC_IDLE_HYSTERSIS, 25);
-
-	for_each_engine(engine, rc6_to_gt(rc6), id)
-		set(uncore, RING_MAX_IDLE(engine->mmio_base), 10);
-
-	set(uncore, GEN6_RC6_THRESHOLD, 0x557);
-
-	/* Allows RC6 residency counter to work */
-	set(uncore, VLV_COUNTER_CONTROL,
-	    _MASKED_BIT_ENABLE(VLV_COUNT_RANGE_HIGH |
-			       VLV_MEDIA_RC0_COUNT_EN |
-			       VLV_RENDER_RC0_COUNT_EN |
-			       VLV_MEDIA_RC6_COUNT_EN |
-			       VLV_RENDER_RC6_COUNT_EN));
-
-	rc6->ctl_enable =
-	    GEN7_RC_CTL_TO_MODE | VLV_RC_CTL_CTX_RST_PARALLEL;
-}
-
-static bool bxt_check_bios_rc6_setup(struct intel_rc6 *rc6)
-{
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-	u32 rc6_ctx_base, rc_ctl, rc_sw_target;
-	bool enable_rc6 = true;
-
-	rc_ctl = intel_uncore_read(uncore, GEN6_RC_CONTROL);
-	rc_sw_target = intel_uncore_read(uncore, GEN6_RC_STATE);
-	rc_sw_target &= RC_SW_TARGET_STATE_MASK;
-	rc_sw_target >>= RC_SW_TARGET_STATE_SHIFT;
-	drm_dbg(&i915->drm, "BIOS enabled RC states: "
-			 "HW_CTRL %s HW_RC6 %s SW_TARGET_STATE %x\n",
-			 str_on_off(rc_ctl & GEN6_RC_CTL_HW_ENABLE),
-			 str_on_off(rc_ctl & GEN6_RC_CTL_RC6_ENABLE),
-			 rc_sw_target);
-
-	if (!(intel_uncore_read(uncore, RC6_LOCATION) & RC6_CTX_IN_DRAM)) {
-		drm_dbg(&i915->drm, "RC6 Base location not set properly.\n");
-		enable_rc6 = false;
-	}
-
-	/*
-	 * The exact context size is not known for BXT, so assume a page size
-	 * for this check.
-	 */
-	rc6_ctx_base =
-		intel_uncore_read(uncore, RC6_CTX_BASE) & RC6_CTX_BASE_MASK;
-	if (!(rc6_ctx_base >= i915->dsm_reserved.start &&
-	      rc6_ctx_base + PAGE_SIZE < i915->dsm_reserved.end)) {
-		drm_dbg(&i915->drm, "RC6 Base address not as expected.\n");
-		enable_rc6 = false;
-	}
-
-	if (!((intel_uncore_read(uncore, PWRCTX_MAXCNT(RENDER_RING_BASE)) & IDLE_TIME_MASK) > 1 &&
-	      (intel_uncore_read(uncore, PWRCTX_MAXCNT(GEN6_BSD_RING_BASE)) & IDLE_TIME_MASK) > 1 &&
-	      (intel_uncore_read(uncore, PWRCTX_MAXCNT(BLT_RING_BASE)) & IDLE_TIME_MASK) > 1 &&
-	      (intel_uncore_read(uncore, PWRCTX_MAXCNT(VEBOX_RING_BASE)) & IDLE_TIME_MASK) > 1)) {
-		drm_dbg(&i915->drm,
-			"Engine Idle wait time not set properly.\n");
-		enable_rc6 = false;
-	}
-
-	if (!intel_uncore_read(uncore, GEN8_PUSHBUS_CONTROL) ||
-	    !intel_uncore_read(uncore, GEN8_PUSHBUS_ENABLE) ||
-	    !intel_uncore_read(uncore, GEN8_PUSHBUS_SHIFT)) {
-		drm_dbg(&i915->drm, "Pushbus not setup properly.\n");
-		enable_rc6 = false;
-	}
-
-	if (!intel_uncore_read(uncore, GEN6_GFXPAUSE)) {
-		drm_dbg(&i915->drm, "GFX pause not setup properly.\n");
-		enable_rc6 = false;
-	}
-
-	if (!intel_uncore_read(uncore, GEN8_MISC_CTRL0)) {
-		drm_dbg(&i915->drm, "GPM control not setup properly.\n");
-		enable_rc6 = false;
-	}
-
-	return enable_rc6;
-}
-
 static bool rc6_exists(struct intel_rc6 *rc6)
 {
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-
-	if (!HAS_RC6(i915))
-		return false;
-
-	if (intel_vgpu_active(i915))
-		return false;
-
 	if (is_mock_gt(rc6_to_gt(rc6)))
 		return false;
 
@@ -640,21 +178,6 @@ static bool rc6_exists(struct intel_rc6 *rc6)
 static bool rc6_supported(struct intel_rc6 *rc6)
 {
 	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-
-	if (IS_GEN9_LP(i915) && !bxt_check_bios_rc6_setup(rc6)) {
-		drm_notice(&i915->drm,
-			   "RC6 and powersaving disabled by BIOS\n");
-		return false;
-	}
-
-	/*
-	 * Wa_1409759559:xehpsdv[a*] + Wa_14011331455:xehpsdv[a0]
-	 * Wa_16011524941:xehpsdv[a1-a(last)]
-	 */
-	if (!i915->params.rc6_ignore_steppings &&
-	    IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0) &&
-	    i915->remote_tiles > 0)
-		return false;
 
 	/*
 	 * Wa_1509372804: pvc_ct[a*]
@@ -676,6 +199,15 @@ static bool rc6_supported(struct intel_rc6 *rc6)
 	    IS_PVC_CT_STEP(i915, STEP_B0, STEP_C0))
 		return false;
 
+#ifdef BPM_RC6_DISABLED
+	/*
+	 * Wa for HSD: 14015706335
+	 */
+	if (!i915->params.rc6_ignore_steppings &&
+			IS_PVC_BD_STEP(i915, STEP_B0, STEP_FOREVER))
+		return false;
+#endif
+
 	return i915->params.enable_rc6;
 }
 
@@ -691,21 +223,6 @@ void intel_rc6_rpm_put(struct intel_rc6 *rc6)
 	GEM_BUG_ON(!rc6->wakeref);
 	pm_runtime_put(rc6_to_i915(rc6)->drm.dev);
 	rc6->wakeref = false;
-}
-
-static bool pctx_corrupted(struct intel_rc6 *rc6)
-{
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
-
-	if (!NEEDS_RC6_CTX_CORRUPTION_WA(i915))
-		return false;
-
-	if (intel_uncore_read(rc6_to_uncore(rc6), GEN8_RC6_CTX_INFO))
-		return false;
-
-	drm_notice(&i915->drm,
-		   "RC6 context corruption, disabling runtime power management\n");
-	return true;
 }
 
 static void __intel_rc6_disable(struct intel_rc6 *rc6)
@@ -730,7 +247,6 @@ static void __intel_rc6_disable(struct intel_rc6 *rc6)
 
 void intel_rc6_init(struct intel_rc6 *rc6)
 {
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 	int err;
 
 	/* Disable runtime-pm until we can save the GPU state with rc6 pctx */
@@ -739,18 +255,10 @@ void intel_rc6_init(struct intel_rc6 *rc6)
 	if (!rc6_exists(rc6))
 		return;
 
-	if (IS_XEHPSDV(i915))
-		 err = xehpsdv_rc6_init(rc6);
-	else if (IS_CHERRYVIEW(i915))
-		err = chv_rc6_init(rc6);
-	else if (IS_VALLEYVIEW(i915))
-		err = vlv_rc6_init(rc6);
-	else
-		err = 0;
-
 	/* Sanitize rc6, ensure it is disabled before we are ready. */
 	__intel_rc6_disable(rc6);
 
+	err = 0;
 	if (!rc6_supported(rc6))
 		err = -ECANCELED;
 
@@ -780,29 +288,13 @@ void intel_rc6_enable(struct intel_rc6 *rc6)
 
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_ALL);
 
-	if (IS_CHERRYVIEW(i915))
-		chv_rc6_enable(rc6);
-	else if (IS_VALLEYVIEW(i915))
-		vlv_rc6_enable(rc6);
-	else if (GRAPHICS_VER(i915) >= 11)
-		gen11_rc6_enable(rc6);
-	else if (GRAPHICS_VER(i915) >= 9)
-		gen9_rc6_enable(rc6);
-	else if (IS_BROADWELL(i915))
-		gen8_rc6_enable(rc6);
-	else if (GRAPHICS_VER(i915) >= 6)
-		gen6_rc6_enable(rc6);
+	gen11_rc6_enable(rc6);
 
 	rc6->manual = rc6->ctl_enable & GEN6_RC_CTL_RC6_ENABLE;
-	if (NEEDS_RC6_CTX_CORRUPTION_WA(i915))
-		rc6->ctl_enable = 0;
 	if (pvc_needs_rc6_wa(i915))
 		rc6->ctl_enable = 0;
 
 	intel_uncore_forcewake_put(uncore, FORCEWAKE_ALL);
-
-	if (unlikely(pctx_corrupted(rc6)))
-		return;
 
 	/* rc6 is ready, runtime-pm is go! */
 	intel_rc6_rpm_put(rc6);
@@ -834,23 +326,13 @@ void intel_rc6_park(struct intel_rc6 *rc6)
 	if (rc6->pg_enable)
 		set(uncore, GEN9_PG_ENABLE, rc6->pg_enable);
 
-	if (unlikely(pctx_corrupted(rc6))) {
-		intel_rc6_disable(rc6);
-		return;
-	}
-
 	if (!rc6->manual)
 		return;
 
 	/* Turn off the HW timers and go directly to rc6 */
 	set(uncore, GEN6_RC_CONTROL, GEN6_RC_CTL_RC6_ENABLE);
 
-	if (HAS_RC6pp(rc6_to_i915(rc6)))
-		target = 0x6; /* deepest rc6 */
-	else if (HAS_RC6p(rc6_to_i915(rc6)))
-		target = 0x5; /* deep rc6 */
-	else
-		target = 0x4; /* normal rc6 */
+	target = 0x4; /* normal rc6 */
 	set(uncore, GEN6_RC_STATE, target << RC_SW_TARGET_STATE_SHIFT);
 }
 
@@ -893,51 +375,6 @@ void intel_rc6_fini(struct intel_rc6 *rc6)
 		intel_rc6_rpm_put(rc6);
 }
 
-static u64 vlv_residency_raw(struct intel_uncore *uncore, const i915_reg_t reg)
-{
-	u32 lower, upper, tmp;
-	int loop = 2;
-
-	/*
-	 * The register accessed do not need forcewake. We borrow
-	 * uncore lock to prevent concurrent access to range reg.
-	 */
-	lockdep_assert_held(&uncore->lock);
-
-	/*
-	 * vlv and chv residency counters are 40 bits in width.
-	 * With a control bit, we can choose between upper or lower
-	 * 32bit window into this counter.
-	 *
-	 * Although we always use the counter in high-range mode elsewhere,
-	 * userspace may attempt to read the value before rc6 is initialised,
-	 * before we have set the default VLV_COUNTER_CONTROL value. So always
-	 * set the high bit to be safe.
-	 */
-	set(uncore, VLV_COUNTER_CONTROL,
-	    _MASKED_BIT_ENABLE(VLV_COUNT_RANGE_HIGH));
-	upper = intel_uncore_read_fw(uncore, reg);
-	do {
-		tmp = upper;
-
-		set(uncore, VLV_COUNTER_CONTROL,
-		    _MASKED_BIT_DISABLE(VLV_COUNT_RANGE_HIGH));
-		lower = intel_uncore_read_fw(uncore, reg);
-
-		set(uncore, VLV_COUNTER_CONTROL,
-		    _MASKED_BIT_ENABLE(VLV_COUNT_RANGE_HIGH));
-		upper = intel_uncore_read_fw(uncore, reg);
-	} while (upper != tmp && --loop);
-
-	/*
-	 * Everywhere else we always use VLV_COUNTER_CONTROL with the
-	 * VLV_COUNT_RANGE_HIGH bit set - so it is safe to leave it set
-	 * now.
-	 */
-
-	return lower | (u64)upper << 8;
-}
-
 u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 {
 	struct drm_i915_private *i915 = rc6_to_i915(rc6);
@@ -971,27 +408,12 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	spin_lock_irqsave(&uncore->lock, flags);
 	intel_uncore_forcewake_get__locked(uncore, fw_domains);
 
-	/* On VLV and CHV, residency time is in CZ units rather than 1.28us */
-	if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915)) {
-		mul = 1000000;
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-		div = i915->czclk_freq;
-#endif
-		overflow_hw = BIT_ULL(40);
-		time_hw = vlv_residency_raw(uncore, reg);
-	} else {
-		/* 833.33ns units on Gen9LP, 1.28us elsewhere. */
-		if (IS_GEN9_LP(i915)) {
-			mul = 10000;
-			div = 12;
-		} else {
-			mul = 1280;
-			div = 1;
-		}
+	/* 833.33ns units on Gen9LP, 1.28us elsewhere. */
+	mul = 1280;
+	div = 1;
 
-		overflow_hw = BIT_ULL(32);
-		time_hw = intel_uncore_read_fw(uncore, reg);
-	}
+	overflow_hw = BIT_ULL(32);
+	time_hw = intel_uncore_read_fw(uncore, reg);
 
 	/*
 	 * Counter wrap handling.

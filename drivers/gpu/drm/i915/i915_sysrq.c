@@ -45,7 +45,11 @@ static void sysrq_handle_showgpu(int key)
 	rcu_read_unlock();
 }
 
+#ifdef BPM_CONST_SYSRQ_KEY_OP_NOT_PRESENT
+static struct sysrq_key_op sysrq_showgpu_op = {
+#else
 static const struct sysrq_key_op sysrq_showgpu_op = {
+#endif
         .handler        = sysrq_handle_showgpu,
         .help_msg       = "show-gpu(G)",
         .action_msg     = "Show GPU state",

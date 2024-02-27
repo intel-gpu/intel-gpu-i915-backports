@@ -171,7 +171,7 @@ void i915_memcpy_init_early(struct drm_i915_private *dev_priv)
 /**
  * i915_memcpy_iosys_map: perform a memcpy between address in smap to dmap
  * @dmap: destination iosys map pointer
- * @src: source iosysmap pointer
+ * @smap: source iosysmap pointer
  * @len: how many bytes to copy
  *
  * i915_memcpy_iosys_map copies @len bytes from adress in @smap to @dmap

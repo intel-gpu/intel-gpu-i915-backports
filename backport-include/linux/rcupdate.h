@@ -41,7 +41,7 @@
 #define rcu_dereference_raw(p)	rcu_dereference(p)
 #endif
 
-#if LINUX_VERSION_IS_LESS(4,20,0)
+#ifdef BPM_RCU_HEAD_INIT_NOT_PRESENT
 typedef void (*rcu_callback_t)(struct rcu_head *head);
 
 static inline void rcu_head_init(struct rcu_head *rhp)
@@ -57,7 +57,7 @@ rcu_head_after_call_rcu(struct rcu_head *rhp, rcu_callback_t f)
         WARN_ON_ONCE(READ_ONCE(rhp->func) != (rcu_callback_t)~0L);
         return false;
 }
-#endif /* < 4.20 */
+#endif /* BPM_RCU_HEAD_INIT_NOT_PRESENT */
 
 #ifndef rcu_swap_protected
 /**

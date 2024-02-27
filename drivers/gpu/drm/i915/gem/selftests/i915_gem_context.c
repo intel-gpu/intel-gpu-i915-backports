@@ -39,8 +39,8 @@ static inline struct i915_address_space *ctx_vm(struct i915_gem_context *ctx)
 
 static int live_nop_switch(void *arg)
 {
+	const unsigned int nctx = 1024;
 	struct drm_i915_private *i915 = arg;
-	const unsigned int nctx = 1024 / GET_MULTIPLIER(0);
 	struct intel_engine_cs *engine;
 	struct i915_gem_context **ctx;
 	struct igt_live_test t;
@@ -911,8 +911,6 @@ static int rpcs_query_batch(struct drm_i915_gem_object *rpcs,
 {
 	u32 *cmd;
 
-	GEM_BUG_ON(GRAPHICS_VER(vma->vm->i915) < 8);
-
 	cmd = i915_gem_object_pin_map(rpcs, I915_MAP_WB);
 	if (IS_ERR(cmd))
 		return PTR_ERR(cmd);
@@ -945,9 +943,6 @@ emit_rpcs_query(struct drm_i915_gem_object *obj,
 	int err;
 
 	GEM_BUG_ON(!intel_engine_can_store_dword(ce->engine));
-
-	if (GRAPHICS_VER(i915) < 8)
-		return -EINVAL;
 
 	vma = i915_vma_instance(obj, ce->vm, NULL);
 	if (IS_ERR(vma))
@@ -1093,7 +1088,6 @@ __read_slice_count(struct intel_context *ce,
 		   u32 *rpcs)
 {
 	struct i915_request *rq = NULL;
-	u32 s_mask, s_shift;
 	unsigned int cnt;
 	u32 *buf, val;
 	long ret;
@@ -1116,16 +1110,8 @@ __read_slice_count(struct intel_context *ce,
 		return ret;
 	}
 
-	if (GRAPHICS_VER(ce->engine->i915) >= 11) {
-		s_mask = GEN11_RPCS_S_CNT_MASK;
-		s_shift = GEN11_RPCS_S_CNT_SHIFT;
-	} else {
-		s_mask = GEN8_RPCS_S_CNT_MASK;
-		s_shift = GEN8_RPCS_S_CNT_SHIFT;
-	}
-
 	val = *buf;
-	cnt = (val & s_mask) >> s_shift;
+	cnt = (val & GEN11_RPCS_S_CNT_MASK) >> GEN11_RPCS_S_CNT_SHIFT;
 	*rpcs = val;
 
 	i915_gem_object_unpin_map(obj);
@@ -1245,9 +1231,6 @@ __igt_ctx_sseu(struct drm_i915_private *i915,
 	int inst = 0;
 	int ret = 0;
 
-	if (GRAPHICS_VER(i915) < 9)
-		return 0;
-
 	if (flags & TEST_RESET)
 		igt_global_reset_lock(to_gt(i915));
 
@@ -1363,130 +1346,6 @@ static int igt_ctx_sseu(void *arg)
 	return ret;
 }
 
-static int igt_ctx_readonly(void *arg)
-{
-	struct drm_i915_private *i915 = arg;
-	unsigned long idx, ndwords, dw, num_engines;
-	struct drm_i915_gem_object *obj = NULL;
-	struct i915_request *tq[5] = {};
-	struct i915_gem_engines_iter it;
-	struct i915_address_space *vm;
-	struct i915_gem_context *ctx;
-	struct intel_context *ce;
-	struct igt_live_test t;
-	I915_RND_STATE(prng);
-	IGT_TIMEOUT(end_time);
-	LIST_HEAD(objects);
-	struct file *file;
-	int err = -ENODEV;
-
-	/*
-	 * Create a few read-only objects (with the occasional writable object)
-	 * and try to write into these object checking that the GPU discards
-	 * any write to a read-only object.
-	 */
-
-	file = mock_file(i915);
-	if (IS_ERR(file))
-		return PTR_ERR(file);
-
-	err = igt_live_test_begin(&t, i915, __func__, "");
-	if (err)
-		goto out_file;
-
-	ctx = live_context(i915, file);
-	if (IS_ERR(ctx)) {
-		err = PTR_ERR(ctx);
-		goto out_file;
-	}
-
-	vm = ctx_vm(ctx) ?: &to_gt(i915)->ggtt->alias->vm;
-	if (!vm || !vm->has_read_only) {
-		err = 0;
-		goto out_file;
-	}
-
-	num_engines = 0;
-	for_each_gem_engine(ce, i915_gem_context_lock_engines(ctx), it)
-		if (intel_engine_can_store_dword(ce->engine))
-			num_engines++;
-	i915_gem_context_unlock_engines(ctx);
-
-	ndwords = 0;
-	dw = 0;
-	while (!time_after(jiffies, end_time)) {
-		for_each_gem_engine(ce,
-				    i915_gem_context_lock_engines(ctx), it) {
-			if (!intel_engine_can_store_dword(ce->engine))
-				continue;
-
-			if (!obj) {
-				obj = create_test_object(ce->vm, file, &objects);
-				if (IS_ERR(obj)) {
-					err = PTR_ERR(obj);
-					i915_gem_context_unlock_engines(ctx);
-					goto out_file;
-				}
-
-				if (prandom_u32_state(&prng) & 1)
-					i915_gem_object_set_readonly(obj);
-			}
-
-			err = gpu_fill(ce, obj, dw);
-			if (err) {
-				pr_err("Failed to fill dword %lu [%lu/%lu] with gpu (%s) [full-ppgtt? %s], err=%d\n",
-				       ndwords, dw, max_dwords(obj),
-				       ce->engine->name,
-				       str_yes_no(!!ctx_vm(ctx)),
-				       err);
-				i915_gem_context_unlock_engines(ctx);
-				goto out_file;
-			}
-
-			err = throttle(ce, tq, ARRAY_SIZE(tq));
-			if (err) {
-				i915_gem_context_unlock_engines(ctx);
-				goto out_file;
-			}
-
-			if (++dw == max_dwords(obj)) {
-				obj = NULL;
-				dw = 0;
-			}
-			ndwords++;
-		}
-		i915_gem_context_unlock_engines(ctx);
-	}
-	pr_info("Submitted %lu dwords (across %lu engines)\n",
-		ndwords, num_engines);
-
-	dw = 0;
-	idx = 0;
-	list_for_each_entry(obj, &objects, st_link) {
-		unsigned int rem =
-			min_t(unsigned int, ndwords - dw, max_dwords(obj));
-		unsigned int num_writes;
-
-		num_writes = rem;
-		if (i915_gem_object_is_readonly(obj))
-			num_writes = 0;
-
-		err = cpu_check(obj, idx++, num_writes);
-		if (err)
-			break;
-
-		dw += rem;
-	}
-
-out_file:
-	throttle_release(tq, ARRAY_SIZE(tq));
-	if (igt_live_test_end(&t))
-		err = -EIO;
-
-	fput(file);
-	return err;
-}
-
 static int check_scratch(struct i915_address_space *vm, u64 offset)
 {
 	struct drm_mm_node *node;
@@ -1534,13 +1393,8 @@ static int write_to_scratch(struct i915_gem_context *ctx,
 	}
 
 	*cmd++ = MI_STORE_DWORD_IMM_GEN4;
-	if (GRAPHICS_VER(i915) >= 8) {
-		*cmd++ = lower_32_bits(offset);
-		*cmd++ = upper_32_bits(offset);
-	} else {
-		*cmd++ = 0;
-		*cmd++ = offset;
-	}
+	*cmd++ = lower_32_bits(offset);
+	*cmd++ = upper_32_bits(offset);
 	*cmd++ = value;
 	*cmd = MI_BATCH_BUFFER_END;
 	__i915_gem_object_flush_map(obj, 0, 64);
@@ -1607,6 +1461,7 @@ static int read_from_scratch(struct i915_gem_context *ctx,
 			     struct intel_engine_cs *engine,
 			     u64 batch, u64 offset, u32 *value)
 {
+	const u32 GPR0 = engine->mmio_base + 0x600;
 	struct drm_i915_private *i915 = ctx->i915;
 	struct drm_i915_gem_object *obj;
 	struct i915_address_space *vm;
@@ -1627,77 +1482,39 @@ static int read_from_scratch(struct i915_gem_context *ctx,
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
-	if (GRAPHICS_VER(i915) >= 8) {
-		const u32 GPR0 = engine->mmio_base + 0x600;
-
-		vm = i915_gem_context_get_eb_vm(ctx);
-		vma = i915_vma_instance(obj, vm, NULL);
-		if (IS_ERR(vma)) {
-			err = PTR_ERR(vma);
-			goto out_vm;
-		}
-
-		err = i915_vma_pin(vma, 0, 0, PIN_USER |
-				   PIN_OFFSET_FIXED | batch);
-		if (err)
-			goto out_vm;
-
-		cmd = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
-		if (IS_ERR(cmd)) {
-			err = PTR_ERR(cmd);
-			goto out;
-		}
-
-		memset(cmd, POISON_INUSE, PAGE_SIZE);
-		*cmd++ = MI_LOAD_REGISTER_MEM_GEN8;
-		*cmd++ = GPR0;
-		*cmd++ = lower_32_bits(offset);
-		*cmd++ = upper_32_bits(offset);
-		*cmd++ = MI_STORE_REGISTER_MEM_GEN8;
-		*cmd++ = GPR0;
-		*cmd++ = lower_32_bits(i915_vma_offset(vma) + result);
-		*cmd++ = upper_32_bits(i915_vma_offset(vma));
-		*cmd = MI_BATCH_BUFFER_END;
-
-		i915_gem_object_flush_map(obj);
-		i915_gem_object_unpin_map(obj);
-
-		flags = 0;
-	} else {
-		const u32 reg = engine->mmio_base + 0x420;
-
-		/* hsw: register access even to 3DPRIM! is protected */
-		vm = i915_vm_get(&engine->gt->ggtt->vm);
-		vma = i915_vma_instance(obj, vm, NULL);
-		if (IS_ERR(vma)) {
-			err = PTR_ERR(vma);
-			goto out_vm;
-		}
-
-		err = i915_vma_pin(vma, 0, 0, PIN_GLOBAL);
-		if (err)
-			goto out_vm;
-
-		cmd = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
-		if (IS_ERR(cmd)) {
-			err = PTR_ERR(cmd);
-			goto out;
-		}
-
-		memset(cmd, POISON_INUSE, PAGE_SIZE);
-		*cmd++ = MI_LOAD_REGISTER_MEM;
-		*cmd++ = reg;
-		*cmd++ = offset;
-		*cmd++ = MI_STORE_REGISTER_MEM | MI_USE_GGTT;
-		*cmd++ = reg;
-		*cmd++ = i915_vma_offset(vma) + result;
-		*cmd = MI_BATCH_BUFFER_END;
-
-		i915_gem_object_flush_map(obj);
-		i915_gem_object_unpin_map(obj);
-
-		flags = I915_DISPATCH_SECURE;
+	vm = i915_gem_context_get_eb_vm(ctx);
+	vma = i915_vma_instance(obj, vm, NULL);
+	if (IS_ERR(vma)) {
+		err = PTR_ERR(vma);
+		goto out_vm;
 	}
+
+	err = i915_vma_pin(vma, 0, 0, PIN_USER |
+			   PIN_OFFSET_FIXED | batch);
+	if (err)
+		goto out_vm;
+
+	cmd = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
+	if (IS_ERR(cmd)) {
+		err = PTR_ERR(cmd);
+		goto out;
+	}
+
+	memset(cmd, POISON_INUSE, PAGE_SIZE);
+	*cmd++ = MI_LOAD_REGISTER_MEM_GEN8;
+	*cmd++ = GPR0;
+	*cmd++ = lower_32_bits(offset);
+	*cmd++ = upper_32_bits(offset);
+	*cmd++ = MI_STORE_REGISTER_MEM_GEN8;
+	*cmd++ = GPR0;
+	*cmd++ = lower_32_bits(i915_vma_offset(vma) + result);
+	*cmd++ = upper_32_bits(i915_vma_offset(vma));
+	*cmd = MI_BATCH_BUFFER_END;
+
+	i915_gem_object_flush_map(obj);
+	i915_gem_object_unpin_map(obj);
+
+	flags = 0;
 
 	intel_gt_chipset_flush(engine->gt);
 
@@ -1783,7 +1600,7 @@ static int check_scratch_page(struct i915_gem_context *ctx,
 		return -EINVAL;
 	}
 
-	vaddr = __px_vaddr(vm->scratch[0], NULL);
+	vaddr = __px_vaddr(vm->scratch[0]);
 
 	if (vaddr[0] != vm->poison ||
 	    vaddr[i915_prandom_u32_max_state(PAGE_SIZE / sizeof(u32), prng)] != vm->poison) {
@@ -1809,9 +1626,6 @@ static int igt_vm_isolation(void *arg)
 	u64 vm_total;
 	u32 expected;
 	int err;
-
-	if (GRAPHICS_VER(i915) < 7)
-		return 0;
 
 	/*
 	 * The simple goal here is that a write into one context is not
@@ -1865,15 +1679,7 @@ static int igt_vm_isolation(void *arg)
 		if (!intel_engine_can_store_dword(engine))
 			continue;
 
-		/* Not all engines have their own GPR! */
-		if (GRAPHICS_VER(i915) < 8 && engine->class != RENDER_CLASS)
-			continue;
-
-		/* Wa_1409502670:xehpsdv */
-		if (IS_XEHPSDV(i915))
-			start = I915_GTT_PAGE_SIZE_64K;
-		else
-			start = 0;
+		start = 0;
 		end = vm_total;
 
 		while (!__igt_timeout(end_time, NULL)) {
@@ -1947,7 +1753,6 @@ int i915_gem_context_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(live_nop_switch),
 		SUBTEST(live_parallel_switch),
 		SUBTEST(igt_ctx_exec),
-		SUBTEST(igt_ctx_readonly),
 		SUBTEST(igt_ctx_sseu),
 		SUBTEST(igt_shared_ctx_exec),
 		SUBTEST(igt_vm_isolation),

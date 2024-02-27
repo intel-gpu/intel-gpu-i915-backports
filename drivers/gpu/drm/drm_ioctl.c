@@ -577,7 +577,7 @@ EXPORT_SYMBOL(drm_ioctl_permit);
 		.name = #ioctl			\
 	}
 
-#if IS_ENABLED(CONFIG_DRM_LEGACY)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY)
 #define DRM_LEGACY_IOCTL_DEF(ioctl, _func, _flags)  DRM_IOCTL_DEF(ioctl, _func, _flags)
 #else
 #define DRM_LEGACY_IOCTL_DEF(ioctl, _func, _flags) DRM_IOCTL_DEF(ioctl, drm_invalid_op, _flags)

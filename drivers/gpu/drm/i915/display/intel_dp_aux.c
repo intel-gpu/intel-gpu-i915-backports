@@ -57,58 +57,6 @@ intel_dp_aux_wait_done(struct intel_dp *intel_dp)
 	return status;
 }
 
-static u32 g4x_get_aux_clock_divider(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-
-	if (index)
-		return 0;
-
-	/*
-	 * The clock divider is based off the hrawclk, and would like to run at
-	 * 2MHz.  So, take the hrawclk value and divide by 2000 and use that
-	 */
-	return DIV_ROUND_CLOSEST(RUNTIME_INFO(dev_priv)->rawclk_freq, 2000);
-}
-
-static u32 ilk_get_aux_clock_divider(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	u32 freq;
-
-	if (index)
-		return 0;
-
-	/*
-	 * The clock divider is based off the cdclk or PCH rawclk, and would
-	 * like to run at 2MHz.  So, take the cdclk or PCH rawclk value and
-	 * divide by 2000 and use that
-	 */
-	if (dig_port->aux_ch == AUX_CH_A)
-		freq = dev_priv->cdclk.hw.cdclk;
-	else
-		freq = RUNTIME_INFO(dev_priv)->rawclk_freq;
-	return DIV_ROUND_CLOSEST(freq, 2000);
-}
-
-static u32 hsw_get_aux_clock_divider(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-
-	if (dig_port->aux_ch != AUX_CH_A && HAS_PCH_LPT_H(dev_priv)) {
-		/* Workaround for non-ULT HSW */
-		switch (index) {
-		case 0: return 63;
-		case 1: return 72;
-		default: return 0;
-		}
-	}
-
-	return ilk_get_aux_clock_divider(intel_dp, index);
-}
-
 static u32 skl_get_aux_clock_divider(struct intel_dp *intel_dp, int index)
 {
 	/*
@@ -117,32 +65,6 @@ static u32 skl_get_aux_clock_divider(struct intel_dp *intel_dp, int index)
 	 * get_aux_clock_divider vfunc to plug-in into the existing code.
 	 */
 	return index ? 0 : 1;
-}
-
-static u32 g4x_get_aux_send_ctl(struct intel_dp *intel_dp,
-				int send_bytes,
-				u32 aux_clock_divider)
-{
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	struct drm_i915_private *dev_priv =
-			to_i915(dig_port->base.base.dev);
-	u32 timeout;
-
-	/* Max timeout value on G4x-BDW: 1.6ms */
-	if (IS_BROADWELL(dev_priv))
-		timeout = DP_AUX_CH_CTL_TIME_OUT_600us;
-	else
-		timeout = DP_AUX_CH_CTL_TIME_OUT_400us;
-
-	return DP_AUX_CH_CTL_SEND_BUSY |
-	       DP_AUX_CH_CTL_DONE |
-	       DP_AUX_CH_CTL_INTERRUPT |
-	       DP_AUX_CH_CTL_TIME_OUT_ERROR |
-	       timeout |
-	       DP_AUX_CH_CTL_RECEIVE_ERROR |
-	       (send_bytes << DP_AUX_CH_CTL_MESSAGE_SIZE_SHIFT) |
-	       (3 << DP_AUX_CH_CTL_PRECHARGE_2US_SHIFT) |
-	       (aux_clock_divider << DP_AUX_CH_CTL_BIT_CLOCK_2X_SHIFT);
 }
 
 static u32 skl_get_aux_send_ctl(struct intel_dp *intel_dp,
@@ -479,118 +401,6 @@ intel_dp_aux_transfer(struct drm_dp_aux *aux, struct drm_dp_aux_msg *msg)
 	return ret;
 }
 
-static i915_reg_t g4x_aux_ctl_reg(struct intel_dp *intel_dp)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-		return DP_AUX_CH_CTL(aux_ch);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_CTL(AUX_CH_B);
-	}
-}
-
-static i915_reg_t g4x_aux_data_reg(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-		return DP_AUX_CH_DATA(aux_ch, index);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_DATA(AUX_CH_B, index);
-	}
-}
-
-static i915_reg_t ilk_aux_ctl_reg(struct intel_dp *intel_dp)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_A:
-		return DP_AUX_CH_CTL(aux_ch);
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-		return PCH_DP_AUX_CH_CTL(aux_ch);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_CTL(AUX_CH_A);
-	}
-}
-
-static i915_reg_t ilk_aux_data_reg(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_A:
-		return DP_AUX_CH_DATA(aux_ch, index);
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-		return PCH_DP_AUX_CH_DATA(aux_ch, index);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_DATA(AUX_CH_A, index);
-	}
-}
-
-static i915_reg_t skl_aux_ctl_reg(struct intel_dp *intel_dp)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_A:
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-	case AUX_CH_E:
-	case AUX_CH_F:
-		return DP_AUX_CH_CTL(aux_ch);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_CTL(AUX_CH_A);
-	}
-}
-
-static i915_reg_t skl_aux_data_reg(struct intel_dp *intel_dp, int index)
-{
-	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
-	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
-	enum aux_ch aux_ch = dig_port->aux_ch;
-
-	switch (aux_ch) {
-	case AUX_CH_A:
-	case AUX_CH_B:
-	case AUX_CH_C:
-	case AUX_CH_D:
-	case AUX_CH_E:
-	case AUX_CH_F:
-		return DP_AUX_CH_DATA(aux_ch, index);
-	default:
-		MISSING_CASE(aux_ch);
-		return DP_AUX_CH_DATA(AUX_CH_A, index);
-	}
-}
-
 static i915_reg_t tgl_aux_ctl_reg(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
@@ -695,33 +505,13 @@ void intel_dp_aux_init(struct intel_dp *intel_dp)
 	if (DISPLAY_VER(dev_priv) >= 14) {
 		intel_dp->aux_ch_ctl_reg = xelpdp_aux_ctl_reg;
 		intel_dp->aux_ch_data_reg = xelpdp_aux_data_reg;
-	} else if (DISPLAY_VER(dev_priv) >= 12) {
+	} else {
 		intel_dp->aux_ch_ctl_reg = tgl_aux_ctl_reg;
 		intel_dp->aux_ch_data_reg = tgl_aux_data_reg;
-	} else if (DISPLAY_VER(dev_priv) >= 9) {
-		intel_dp->aux_ch_ctl_reg = skl_aux_ctl_reg;
-		intel_dp->aux_ch_data_reg = skl_aux_data_reg;
-	} else if (HAS_PCH_SPLIT(dev_priv)) {
-		intel_dp->aux_ch_ctl_reg = ilk_aux_ctl_reg;
-		intel_dp->aux_ch_data_reg = ilk_aux_data_reg;
-	} else {
-		intel_dp->aux_ch_ctl_reg = g4x_aux_ctl_reg;
-		intel_dp->aux_ch_data_reg = g4x_aux_data_reg;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 9)
-		intel_dp->get_aux_clock_divider = skl_get_aux_clock_divider;
-	else if (IS_BROADWELL(dev_priv) || IS_HASWELL(dev_priv))
-		intel_dp->get_aux_clock_divider = hsw_get_aux_clock_divider;
-	else if (HAS_PCH_SPLIT(dev_priv))
-		intel_dp->get_aux_clock_divider = ilk_get_aux_clock_divider;
-	else
-		intel_dp->get_aux_clock_divider = g4x_get_aux_clock_divider;
-
-	if (DISPLAY_VER(dev_priv) >= 9)
-		intel_dp->get_aux_send_ctl = skl_get_aux_send_ctl;
-	else
-		intel_dp->get_aux_send_ctl = g4x_get_aux_send_ctl;
+	intel_dp->get_aux_clock_divider = skl_get_aux_clock_divider;
+	intel_dp->get_aux_send_ctl = skl_get_aux_send_ctl;
 
 	intel_dp->aux.drm_dev = &dev_priv->drm;
 	drm_dp_aux_init(&intel_dp->aux);

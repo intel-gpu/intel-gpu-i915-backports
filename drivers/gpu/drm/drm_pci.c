@@ -36,7 +36,7 @@
 #include "drm_internal.h"
 #include "drm_legacy.h"
 
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 /* List of devices hanging off drivers with stealth attach. */
 static LIST_HEAD(legacy_dev_list);
 static DEFINE_MUTEX(legacy_dev_list_lock);
@@ -72,7 +72,7 @@ int drm_pci_set_busid(struct drm_device *dev, struct drm_master *master)
 	return 0;
 }
 
-#ifdef CONFIG_DRM_LEGACY
+#ifdef CPTCFG_DRM_LEGACY
 
 static int drm_legacy_pci_irq_by_busid(struct drm_device *dev, struct drm_irq_busid *p)
 {

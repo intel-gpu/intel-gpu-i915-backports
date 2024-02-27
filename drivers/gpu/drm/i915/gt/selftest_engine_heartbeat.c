@@ -208,10 +208,7 @@ static int cmp_u32(const void *_a, const void *_b)
 
 static int __live_heartbeat_fast(struct intel_engine_cs *engine)
 {
-	const unsigned int error_threshold =
-		max(20000u, max(20000u *
-				engine->i915->params.timeout_multiplier,
-				jiffies_to_usecs(6)));
+	const unsigned int error_threshold = max(20000u, jiffies_to_usecs(6));
 	struct intel_context *ce;
 	struct i915_request *rq;
 	u32 times[5];

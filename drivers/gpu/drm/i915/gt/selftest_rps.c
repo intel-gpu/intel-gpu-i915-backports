@@ -200,19 +200,6 @@ static u8 rps_set_check(struct intel_rps *rps, u8 freq)
 
 static void show_pstate_limits(struct intel_rps *rps)
 {
-	struct drm_i915_private *i915 = rps_to_i915(rps);
-
-	if (IS_BROXTON(i915)) {
-		pr_info("P_STATE_CAP[%x]: 0x%08x\n",
-			i915_mmio_reg_offset(BXT_RP_STATE_CAP),
-			intel_uncore_read(rps_to_uncore(rps),
-					  BXT_RP_STATE_CAP));
-	} else if (GRAPHICS_VER(i915) == 9) {
-		pr_info("P_STATE_LIMITS[%x]: 0x%08x\n",
-			i915_mmio_reg_offset(GEN9_RP_STATE_LIMITS),
-			intel_uncore_read(rps_to_uncore(rps),
-					  GEN9_RP_STATE_LIMITS));
-	}
 }
 
 int live_rps_clock_interval(void *arg)
@@ -387,9 +374,6 @@ int live_rps_control(void *arg)
 	 */
 
 	if (!intel_rps_is_enabled(rps))
-		return 0;
-
-	if (IS_CHERRYVIEW(gt->i915)) /* XXX fragile PCU */
 		return 0;
 
 	if (igt_spinner_init(&spin, gt))

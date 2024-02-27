@@ -112,7 +112,6 @@
 #include "i915_debugger.h"
 #include "i915_drv.h"
 #include "i915_trace.h"
-#include "i915_vgpu.h"
 #include "gen8_engine_cs.h"
 #include "intel_breadcrumbs.h"
 #include "intel_context.h"
@@ -422,20 +421,6 @@ execlists_unwind_incomplete_requests(struct intel_engine_execlists *execlists)
 	return __unwind_incomplete_requests(engine);
 }
 
-static void
-execlists_context_status_change(struct i915_request *rq, unsigned long status)
-{
-	/*
-	 * Only used when GVT-g is enabled now. When GVT-g is disabled,
-	 * The compiler should eliminate this function as dead-code.
-	 */
-	if (!IS_ENABLED(CPTCFG_DRM_I915_GVT))
-		return;
-
-	atomic_notifier_call_chain(&rq->engine->context_status_notifier,
-				   status, rq);
-}
-
 static void reset_active(struct i915_request *rq,
 			 struct intel_engine_cs *engine)
 {
@@ -524,7 +509,6 @@ __execlists_schedule_in(struct i915_request *rq)
 	__intel_gt_pm_get(engine->gt);
 	if (engine->fw_domain && !engine->fw_active++)
 		intel_uncore_forcewake_get(engine->uncore, engine->fw_domain);
-	execlists_context_status_change(rq, INTEL_CONTEXT_SCHEDULE_IN);
 	intel_engine_context_in(engine);
 
 	CE_TRACE(ce, "schedule-in, ccid:%x\n", ce->lrc.ccid);
@@ -629,7 +613,6 @@ static void __execlists_schedule_out(struct i915_request * const rq,
 		__set_bit(ccid - 1, &engine->context_tag);
 	}
 	intel_engine_context_out(engine);
-	execlists_context_status_change(rq, INTEL_CONTEXT_SCHEDULE_OUT);
 	if (engine->fw_domain && !--engine->fw_active)
 		intel_uncore_forcewake_put(engine->uncore, engine->fw_domain);
 	intel_gt_pm_put_async_untracked(engine->gt);
@@ -943,22 +926,10 @@ static void execlists_submit_ports(struct intel_engine_cs *engine)
 		writel(EL_CTRL_LOAD, execlists->ctrl_reg);
 }
 
-static bool ctx_single_port_submission(const struct intel_context *ce)
-{
-	return (IS_ENABLED(CPTCFG_DRM_I915_GVT) &&
-		intel_context_force_single_submission(ce));
-}
-
 static bool can_merge_ctx(const struct intel_context *prev,
 			  const struct intel_context *next)
 {
-	if (prev != next)
-		return false;
-
-	if (ctx_single_port_submission(prev))
-		return false;
-
-	return true;
+	return prev == next;
 }
 
 static unsigned long i915_request_flags(const struct i915_request *rq)
@@ -1536,17 +1507,6 @@ unlock:
 				 * rather than wait for the primary request.
 				 */
 				if (rq->execution_mask != engine->mask)
-					goto done;
-
-				/*
-				 * If GVT overrides us we only ever submit
-				 * port[0], leaving port[1] empty. Note that we
-				 * also have to be careful that we don't queue
-				 * the same context (even though a different
-				 * request) to the second port.
-				 */
-				if (ctx_single_port_submission(last->context) ||
-				    ctx_single_port_submission(rq->context))
 					goto done;
 
 				merge = false;
@@ -2228,9 +2188,8 @@ static void execlists_capture_work(struct work_struct *work)
 
 	if (compress) {
 		/* Compress all the objects attached to the request, slow! */
-		vma = intel_engine_coredump_add_request(gt->engine,
-							cap->rq, gfp,
-							compress);
+		vma = intel_engine_coredump_add_request(gt->engine, cap->rq, NULL,
+							gfp, compress);
 		if (vma)
 			intel_engine_coredump_add_vma(gt->engine,
 						      vma, compress);
@@ -2451,11 +2410,19 @@ static bool preempt_timeout(const struct intel_engine_cs *const engine)
  * Check the unread Context Status Buffers and manage the submission of new
  * contexts to the ELSP accordingly.
  */
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+static void execlists_submission_tasklet(unsigned long data)
+#else
 static void execlists_submission_tasklet(struct tasklet_struct *t)
+#endif
 {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	struct intel_engine_cs * const engine = (struct intel_engine_cs *)data;
+#else
 	struct i915_sched_engine *sched_engine =
 		from_tasklet(sched_engine, t, tasklet);
 	struct intel_engine_cs * const engine = sched_engine->private_data;
+#endif
 	struct i915_request *post[2 * EXECLIST_MAX_PORTS];
 	struct i915_request **inactive;
 
@@ -2736,8 +2703,6 @@ static int emit_pdps(struct i915_request *rq)
 	int err, i;
 	u32 *cs;
 
-	GEM_BUG_ON(intel_vgpu_active(rq->engine->i915));
-
 	/*
 	 * Beware ye of the dragons, this sequence is magic!
 	 *
@@ -2891,11 +2856,7 @@ static void enable_error_interrupt(struct intel_engine_cs *engine)
 	u32 status;
 
 	/* Flush ongoing GT interrupts before touching interrupt state */
-#ifdef SYNC_HRQ_NOT_PRESENT
 	intel_synchronize_hardirq(engine->i915);
-#else
-	synchronize_hardirq(engine->i915->drm.irq);
-#endif
 	engine->execlists.error_interrupt = 0;
 
 	ENGINE_WRITE(engine, RING_EMR, ~0u);
@@ -3144,11 +3105,19 @@ static void execlists_reset_rewind(struct intel_engine_cs *engine, bool stalled)
 	rcu_read_unlock();
 }
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+static void nop_submission_tasklet(unsigned long data)
+#else
 static void nop_submission_tasklet(struct tasklet_struct *t)
+#endif
 {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	struct intel_engine_cs * const engine = (struct intel_engine_cs *)data;
+#else
 	struct i915_sched_engine *sched_engine =
 		from_tasklet(sched_engine, t, tasklet);
 	struct intel_engine_cs * const engine = sched_engine->private_data;
+#endif
 
 	/* The driver is wedged; don't process any more events. */
 	WRITE_ONCE(engine->sched_engine->queue_priority_hint, INT_MIN);
@@ -3236,7 +3205,12 @@ static void execlists_reset_cancel(struct intel_engine_cs *engine)
 	sched_engine->queue = RB_ROOT_CACHED;
 
 	GEM_BUG_ON(__tasklet_is_enabled(&engine->sched_engine->tasklet));
+
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	sched_engine->tasklet.func = nop_submission_tasklet;
+#else
 	engine->sched_engine->tasklet.callback = nop_submission_tasklet;
+#endif
 
 	spin_unlock_irqrestore(&engine->sched_engine->lock, flags);
 	rcu_read_unlock();
@@ -3350,7 +3324,11 @@ static void execlists_set_default_submission(struct intel_engine_cs *engine)
 {
 	engine->submit_request = execlists_submit_request;
 	engine->sched_engine->kick_backend = kick_execlists;
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	engine->sched_engine->tasklet.func = execlists_submission_tasklet;
+#else
 	engine->sched_engine->tasklet.callback = execlists_submission_tasklet;
+#endif
 }
 
 static void execlists_shutdown(struct intel_engine_cs *engine)
@@ -3434,13 +3412,11 @@ logical_ring_default_vfuncs(struct intel_engine_cs *engine)
 
 	engine->flags |= I915_ENGINE_HAS_SCHEDULER;
 	engine->flags |= I915_ENGINE_SUPPORTS_STATS;
-	if (!intel_vgpu_active(engine->i915)) {
-		engine->flags |= I915_ENGINE_HAS_SEMAPHORES;
-		if (can_preempt(engine)) {
-			engine->flags |= I915_ENGINE_HAS_PREEMPTION;
-			if (CPTCFG_DRM_I915_TIMESLICE_DURATION)
-				engine->flags |= I915_ENGINE_HAS_TIMESLICES;
-		}
+	engine->flags |= I915_ENGINE_HAS_SEMAPHORES;
+	if (can_preempt(engine)) {
+		engine->flags |= I915_ENGINE_HAS_PREEMPTION;
+		if (CPTCFG_DRM_I915_TIMESLICE_DURATION)
+			engine->flags |= I915_ENGINE_HAS_TIMESLICES;
 	}
 
 	if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 50)) {
@@ -3505,7 +3481,12 @@ int intel_execlists_submission_setup(struct intel_engine_cs *engine)
 	struct intel_uncore *uncore = engine->uncore;
 	u32 base = engine->mmio_base;
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	tasklet_init(&engine->sched_engine->tasklet,
+                    execlists_submission_tasklet, (unsigned long)engine);
+#else
 	tasklet_setup(&engine->sched_engine->tasklet, execlists_submission_tasklet);
+#endif
 	timer_setup(&engine->execlists.timer, execlists_timeslice, 0);
 	timer_setup(&engine->execlists.preempt, execlists_preempt, 0);
 
@@ -3859,13 +3840,22 @@ static intel_engine_mask_t virtual_submission_mask(struct virtual_engine *ve)
 	return mask;
 }
 
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+static void virtual_submission_tasklet(unsigned long data)
+#else
 static void virtual_submission_tasklet(struct tasklet_struct *t)
+#endif
 {
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	struct virtual_engine * const ve = (struct virtual_engine *)data;
+	const int prio = READ_ONCE(ve->base.sched_engine->queue_priority_hint);
+#else
 	struct i915_sched_engine *sched_engine =
 		from_tasklet(sched_engine, t, tasklet);
 	struct virtual_engine * const ve =
 		(struct virtual_engine *)sched_engine->private_data;
 	const int prio = READ_ONCE(sched_engine->queue_priority_hint);
+#endif
 	intel_engine_mask_t mask;
 	unsigned int n;
 
@@ -4048,8 +4038,10 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 		err = -ENOMEM;
 		goto err_put;
 	}
-	ve->base.sched_engine->private_data = &ve->base;
 
+#ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	ve->base.sched_engine->private_data = &ve->base;
+#endif
 	ve->base.cops = &virtual_context_ops;
 	ve->base.request_alloc = execlists_request_alloc;
 
@@ -4058,8 +4050,13 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 	ve->base.bond_execute = virtual_bond_execute;
 
 	INIT_LIST_HEAD(virtual_queue(ve));
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+	tasklet_init(&ve->base.sched_engine->tasklet,
+			virtual_submission_tasklet,
+			(unsigned long)ve);
+#else
 	tasklet_setup(&ve->base.sched_engine->tasklet, virtual_submission_tasklet);
-
+#endif
 	intel_context_init(&ve->context, &ve->base);
 
 	ve->base.breadcrumbs = intel_breadcrumbs_create(NULL);
@@ -4086,11 +4083,19 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 		 * layering if we handle cloning of the requests and
 		 * submitting a copy into each backend.
 		 */
+#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
+		if (sibling->sched_engine->tasklet.func !=
+				execlists_submission_tasklet) {
+			err = -ENODEV;
+			goto err_put;
+		}
+#else
 		if (sibling->sched_engine->tasklet.callback !=
 		    execlists_submission_tasklet) {
 			err = -ENODEV;
 			goto err_put;
 		}
+#endif
 
 		GEM_BUG_ON(RB_EMPTY_NODE(&ve->nodes[sibling->id].rb));
 		RB_CLEAR_NODE(&ve->nodes[sibling->id].rb);

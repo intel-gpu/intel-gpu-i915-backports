@@ -12,6 +12,10 @@
  */
 #include <linux/string.h>
 
+#ifdef BPM_THIS_MODULE_ARG_NOT_PRESENT
+#define class_create(owner, name) class_create(name)
+#endif
+
 #if LINUX_VERSION_IS_LESS(3,9,0)
 /* backport
  * commit 9f3b795a626ee79574595e06d1437fe0c7d51d29
@@ -274,6 +278,33 @@ static inline struct device_node *dev_of_node(struct device *dev)
 #else
 	return dev->of_node;
 #endif
+}
+#endif
+
+#ifdef BPM_DEVICE_ATTR_ADMIN_RX_NOT_PRESENT
+#define DEVICE_ATTR_ADMIN_RW(_name) \
+              struct device_attribute dev_attr_##_name = __ATTR_RW_MODE(_name, 0600)
+#define DEVICE_ATTR_ADMIN_RO(_name) \
+       struct device_attribute dev_attr_##_name = __ATTR_RO_MODE(_name, 0400)
+#endif
+
+#ifdef BPM_FIND_BY_DEVICE_TYPE_NOT_AVAILABLE
+
+static inline int device_match_devt(struct device *dev, const void *pdevt)
+{
+       return dev->devt == *(dev_t *)pdevt;
+}
+
+/**
+ * class_find_device_by_devt : device iterator for locating a particular device
+ * matching the device type.
+ * @class: class type
+ * @devt: device type of the device to match.
+ */
+static inline struct device *class_find_device_by_devt(struct class *class,
+						       dev_t devt)
+{
+	return class_find_device(class, NULL, &devt, device_match_devt);
 }
 #endif
 

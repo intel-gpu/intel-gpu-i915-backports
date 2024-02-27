@@ -202,8 +202,6 @@ void intel_engine_quiesce(struct intel_engine_cs *engine);
 
 int intel_engine_resume(struct intel_engine_cs *engine);
 
-int intel_ring_submission_setup(struct intel_engine_cs *engine);
-
 int intel_engine_stop_cs(struct intel_engine_cs *engine);
 void intel_engine_cancel_stop_cs(struct intel_engine_cs *engine);
 
@@ -249,6 +247,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 
 ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine,
 				   ktime_t *now);
+u64 intel_engine_get_busy_ticks(struct intel_engine_cs *engine, unsigned int vf_id);
 
 struct i915_request *
 intel_engine_find_active_request(struct intel_engine_cs *engine);
@@ -261,8 +260,6 @@ intel_engine_create_pinned_context(struct intel_engine_cs *engine,
 				   unsigned int hwsp,
 				   struct lock_class_key *key,
 				   const char *name);
-
-void intel_engine_destroy_pinned_context(struct intel_context *ce);
 
 void xehp_enable_ccs_engines(struct intel_engine_cs *engine);
 

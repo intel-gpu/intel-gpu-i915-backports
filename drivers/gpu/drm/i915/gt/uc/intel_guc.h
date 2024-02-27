@@ -238,45 +238,61 @@ struct intel_guc {
 	struct mutex send_mutex;
 
 	/**
-	 * @timestamp: GT timestamp object that stores a copy of the timestamp
-	 * and adjusts it for overflow using a worker.
+	 * @busy: Data used by the different versions of engine busyness implementations.
 	 */
-	struct {
+	union {
 		/**
-		 * @lock: Lock protecting the below fields and the engine stats.
+		 * @v1: Data used by v1 engine busyness implementation. Mostly a copy
+		 * of the GT timestamp extended to 64 bits and the worker for maintaining it.
 		 */
-		spinlock_t lock;
+		struct {
+			/**
+			 * @lock: Lock protecting the below fields and the engine stats.
+			 */
+			spinlock_t lock;
+
+			/**
+			 * @gt_stamp: 64 bit extended value of the GT timestamp.
+			 */
+			u64 gt_stamp;
+
+			/**
+			 * @ping_delay: Period for polling the GT timestamp for
+			 * overflow.
+			 */
+			unsigned long ping_delay;
+
+			/**
+			 * @work: Periodic work to adjust GT timestamp, engine and
+			 * context usage for overflows.
+			 */
+			struct delayed_work work;
+
+			/**
+			 * @shift: Right shift value for the gpm timestamp
+			 */
+			u32 shift;
+
+			/**
+			 * @last_stat_jiffies: jiffies at last actual stats collection time
+			 * We use this timestamp to ensure we don't oversample the
+			 * stats because runtime power management events can trigger
+			 * stats collection at much higher rates than required.
+			 */
+			unsigned long last_stat_jiffies;
+		} v1;
 
 		/**
-		 * @gt_stamp: 64 bit extended value of the GT timestamp.
+		 * @v2: Data used by v2 engine busyness implementation - a memory object
+		 * that is filled in by the GuC and read by the driver.
 		 */
-		u64 gt_stamp;
-
-		/**
-		 * @ping_delay: Period for polling the GT timestamp for
-		 * overflow.
-		 */
-		unsigned long ping_delay;
-
-		/**
-		 * @work: Periodic work to adjust GT timestamp, engine and
-		 * context usage for overflows.
-		 */
-		struct delayed_work work;
-
-		/**
-		 * @shift: Right shift value for the gpm timestamp
-		 */
-		u32 shift;
-
-		/**
-		 * @last_stat_jiffies: jiffies at last actual stats collection time
-		 * We use this timestamp to ensure we don't oversample the
-		 * stats because runtime power management events can trigger
-		 * stats collection at much higher rates than required.
-		 */
-		unsigned long last_stat_jiffies;
-	} timestamp;
+		struct {
+			/** @device_vma: object allocated to hold the device level busyness data */
+			struct i915_vma *device_vma;
+			/** @device_map: access object for @device_vma */
+			struct iosys_map device_map;
+		} v2;
+	} busy;
 
 	/**
 	 * @dead_guc_worker: Asynchronous worker thread for forcing a GuC reset.
@@ -570,5 +586,8 @@ void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc);
 
 void intel_guc_init_fake_interrupts(struct intel_guc *guc);
+
+/* FIXME: External entities should not need to know */
+int intel_guc_busyness_type(struct intel_gt *gt);
 
 #endif

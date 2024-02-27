@@ -31,11 +31,18 @@
 
 #include "drm_crtc_helper_internal.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+#include <backport/bp_module_version.h>
+#endif
+
 MODULE_AUTHOR("David Airlie, Jesse Barnes");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION("DRM KMS helper");
 MODULE_LICENSE("GPL and additional rights");
 
-#if IS_ENABLED(CONFIG_DRM_LOAD_EDID_FIRMWARE)
+#if IS_ENABLED(CPTCFG_DRM_LOAD_EDID_FIRMWARE)
 
 /* Backward compatibility for drm_kms_helper.edid_firmware */
 static int edid_firmware_set(const char *val, const struct kernel_param *kp)
@@ -70,7 +77,10 @@ static int __init drm_kms_helper_init(void)
 	 * attempt to load fbcon to avoid leaving the system without a usable
 	 * console.
 	 */
-	if (IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION) &&
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+	DRM_INFO("DRM_KMS_HELPER BACKPORTED INIT\n");
+#endif
+	if (IS_ENABLED(CPTCFG_DRM_FBDEV_EMULATION) &&
 	    IS_MODULE(CONFIG_FRAMEBUFFER_CONSOLE) &&
 	    !IS_ENABLED(CPTCFG_EXPERT))
 		request_module_nowait("fbcon");

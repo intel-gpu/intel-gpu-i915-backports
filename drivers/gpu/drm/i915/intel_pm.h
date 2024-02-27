@@ -33,9 +33,6 @@ void intel_init_clock_gating_hooks(struct drm_i915_private *dev_priv);
 void intel_pm_setup(struct drm_i915_private *dev_priv);
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void intel_init_pmdemand(struct drm_i915_private *dev_priv);
-void g4x_wm_get_hw_state(struct drm_i915_private *dev_priv);
-void vlv_wm_get_hw_state(struct drm_i915_private *dev_priv);
-void ilk_wm_get_hw_state(struct drm_i915_private *dev_priv);
 void skl_wm_get_hw_state(struct drm_i915_private *dev_priv);
 void intel_wm_state_verify(struct intel_crtc *crtc,
 			   struct intel_crtc_state *new_crtc_state);
@@ -43,8 +40,6 @@ u8 intel_enabled_dbuf_slices_mask(struct drm_i915_private *dev_priv);
 void skl_ddb_get_hw_state(struct drm_i915_private *dev_priv);
 u32 skl_ddb_dbuf_slice_mask(struct drm_i915_private *dev_priv,
 			    const struct skl_ddb_entry *entry);
-void g4x_wm_sanitize(struct drm_i915_private *dev_priv);
-void vlv_wm_sanitize(struct drm_i915_private *dev_priv);
 void skl_wm_sanitize(struct drm_i915_private *dev_priv);
 bool intel_can_enable_sagv(struct drm_i915_private *dev_priv,
 			   const struct intel_bw_state *bw_state);
@@ -63,8 +58,6 @@ void intel_init_ipc(struct drm_i915_private *dev_priv);
 void intel_enable_ipc(struct drm_i915_private *dev_priv);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-bool intel_set_memory_cxsr(struct drm_i915_private *dev_priv, bool enable);
-
 struct intel_dbuf_state {
 	struct intel_global_state base;
 

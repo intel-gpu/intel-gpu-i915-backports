@@ -9,7 +9,7 @@ case "$1" in
     remove)
 	depmod -a
 	if [ -x /usr/sbin/update-initramfs ]; then
-  	    /usr/sbin/update-initramfs -u
+	    /usr/sbin/update-initramfs -u
 	fi
     ;;
 

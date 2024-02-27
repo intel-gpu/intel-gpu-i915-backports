@@ -283,10 +283,7 @@ static bool hdcp_key_loadable(struct drm_i915_private *dev_priv)
 	 * On HSW and BDW, Display HW loads the Key as soon as Display resumes.
 	 * On all BXT+, SW can load the keys only when the PW#1 is turned on.
 	 */
-	if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv))
-		id = HSW_DISP_PW_GLOBAL;
-	else
-		id = SKL_DISP_PW_1;
+	id = SKL_DISP_PW_1;
 
 	/* PG1 (power well #1) needs to be enabled */
 	with_intel_runtime_pm(&dev_priv->runtime_pm, wakeref)
@@ -318,32 +315,9 @@ static int intel_hdcp_load_keys(struct drm_i915_private *dev_priv)
 		return 0;
 
 	/*
-	 * On HSW and BDW HW loads the HDCP1.4 Key when Display comes
-	 * out of reset. So if Key is not already loaded, its an error state.
-	 */
-	if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv))
-		if (!(intel_de_read(dev_priv, HDCP_KEY_STATUS) & HDCP_KEY_LOAD_DONE))
-			return -ENXIO;
-
-	/*
 	 * Initiate loading the HDCP key from fuses.
-	 *
-	 * BXT+ platforms, HDCP key needs to be loaded by SW. Only display
-	 * version 9 platforms (minus BXT) differ in the key load trigger
-	 * process from other platforms. These platforms use the GT Driver
-	 * Mailbox interface.
 	 */
-	if (DISPLAY_VER(dev_priv) == 9 && !IS_BROXTON(dev_priv)) {
-		ret = snb_pcode_write(&dev_priv->uncore, SKL_PCODE_LOAD_HDCP_KEYS, 1);
-		if (ret) {
-			drm_err(&dev_priv->drm,
-				"Failed to initiate HDCP key load (%d)\n",
-				ret);
-			return ret;
-		}
-	} else {
-		intel_de_write(dev_priv, HDCP_KEY_CONF, HDCP_KEY_LOAD_TRIGGER);
-	}
+	intel_de_write(dev_priv, HDCP_KEY_CONF, HDCP_KEY_LOAD_TRIGGER);
 
 	/* Wait for the keys to load (500us) */
 	ret = __intel_wait_for_register(&dev_priv->uncore, HDCP_KEY_STATUS,
@@ -375,40 +349,22 @@ static
 u32 intel_hdcp_get_repeater_ctl(struct drm_i915_private *dev_priv,
 				enum transcoder cpu_transcoder, enum port port)
 {
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		switch (cpu_transcoder) {
-		case TRANSCODER_A:
-			return HDCP_TRANSA_REP_PRESENT |
-			       HDCP_TRANSA_SHA1_M0;
-		case TRANSCODER_B:
-			return HDCP_TRANSB_REP_PRESENT |
-			       HDCP_TRANSB_SHA1_M0;
-		case TRANSCODER_C:
-			return HDCP_TRANSC_REP_PRESENT |
-			       HDCP_TRANSC_SHA1_M0;
-		case TRANSCODER_D:
-			return HDCP_TRANSD_REP_PRESENT |
-			       HDCP_TRANSD_SHA1_M0;
-		default:
-			drm_err(&dev_priv->drm, "Unknown transcoder %d\n",
-				cpu_transcoder);
-			return -EINVAL;
-		}
-	}
-
-	switch (port) {
-	case PORT_A:
-		return HDCP_DDIA_REP_PRESENT | HDCP_DDIA_SHA1_M0;
-	case PORT_B:
-		return HDCP_DDIB_REP_PRESENT | HDCP_DDIB_SHA1_M0;
-	case PORT_C:
-		return HDCP_DDIC_REP_PRESENT | HDCP_DDIC_SHA1_M0;
-	case PORT_D:
-		return HDCP_DDID_REP_PRESENT | HDCP_DDID_SHA1_M0;
-	case PORT_E:
-		return HDCP_DDIE_REP_PRESENT | HDCP_DDIE_SHA1_M0;
+	switch (cpu_transcoder) {
+	case TRANSCODER_A:
+		return HDCP_TRANSA_REP_PRESENT |
+			HDCP_TRANSA_SHA1_M0;
+	case TRANSCODER_B:
+		return HDCP_TRANSB_REP_PRESENT |
+			HDCP_TRANSB_SHA1_M0;
+	case TRANSCODER_C:
+		return HDCP_TRANSC_REP_PRESENT |
+			HDCP_TRANSC_SHA1_M0;
+	case TRANSCODER_D:
+		return HDCP_TRANSD_REP_PRESENT |
+			HDCP_TRANSD_SHA1_M0;
 	default:
-		drm_err(&dev_priv->drm, "Unknown port %d\n", port);
+		drm_err(&dev_priv->drm, "Unknown transcoder %d\n",
+			cpu_transcoder);
 		return -EINVAL;
 	}
 }
@@ -1145,8 +1101,7 @@ static void intel_hdcp_prop_work(struct work_struct *work)
 
 bool is_hdcp_supported(struct drm_i915_private *dev_priv, enum port port)
 {
-	return INTEL_INFO(dev_priv)->display.has_hdcp &&
-			(DISPLAY_VER(dev_priv) >= 12 || port < PORT_E);
+	return INTEL_INFO(dev_priv)->display.has_hdcp;
 }
 
 static int
@@ -2181,18 +2136,6 @@ static const struct component_ops i915_hdcp_component_ops = {
 	.unbind = i915_hdcp_component_unbind,
 };
 
-static enum cp_fw_ddi intel_get_mei_fw_ddi_index(enum port port)
-{
-	switch (port) {
-	case PORT_A:
-		return FW_DDI_A;
-	case PORT_B ... PORT_F:
-		return (enum cp_fw_ddi)port;
-	default:
-		return FW_DDI_INVALID_PORT;
-	}
-}
-
 static enum cp_fw_tc intel_get_mei_fw_tc(enum transcoder cpu_transcoder)
 {
 	switch (cpu_transcoder) {
@@ -2210,16 +2153,12 @@ static int initialize_hdcp_port_data(struct intel_connector *connector,
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	struct hdcp_port_data *data = &dig_port->hdcp_port_data;
 	struct intel_hdcp *hdcp = &connector->hdcp;
-	enum port port = dig_port->base.port;
 
-	if (DISPLAY_VER(dev_priv) < 12)
-		data->fw_ddi = intel_get_mei_fw_ddi_index(port);
-	else
-		/*
-		 * As per ME FW API expectation, for GEN 12+, fw_ddi is filled
-		 * with zero(INVALID PORT index).
-		 */
-		data->fw_ddi = FW_DDI_INVALID_PORT;
+	/*
+	 * As per ME FW API expectation, for GEN 12+, fw_ddi is filled
+	 * with zero(INVALID PORT index).
+	 */
+	data->fw_ddi = FW_DDI_INVALID_PORT;
 
 	/*
 	 * As associated transcoder is set and modified at modeset, here fw_tc
@@ -2251,10 +2190,7 @@ static bool is_hdcp2_supported(struct drm_i915_private *dev_priv)
 	if (DISPLAY_VER(dev_priv) < 14 && !IS_ENABLED(CPTCFG_INTEL_MEI_HDCP))
 		return false;
 
-	return (DISPLAY_VER(dev_priv) >= 10 ||
-		IS_KABYLAKE(dev_priv) ||
-		IS_COFFEELAKE(dev_priv) ||
-		IS_COMETLAKE(dev_priv));
+	return true;
 }
 
 void intel_hdcp_component_init(struct drm_i915_private *dev_priv)
@@ -2346,12 +2282,6 @@ int intel_hdcp_enable(struct intel_connector *connector,
 	if (!hdcp->shim)
 		return -ENOENT;
 
-	if (!connector->encoder) {
-		drm_err(&dev_priv->drm, "[%s:%d] encoder is not initialized\n",
-			connector->base.name, connector->base.base.id);
-		return -ENODEV;
-	}
-
 	mutex_lock(&hdcp->mutex);
 	mutex_lock(&dig_port->hdcp_mutex);
 	drm_WARN_ON(&dev_priv->drm,
@@ -2366,8 +2296,7 @@ int intel_hdcp_enable(struct intel_connector *connector,
 		hdcp->stream_transcoder = INVALID_TRANSCODER;
 	}
 
-	if (DISPLAY_VER(dev_priv) >= 12)
-		dig_port->hdcp_port_data.fw_tc = intel_get_mei_fw_tc(hdcp->cpu_transcoder);
+	dig_port->hdcp_port_data.fw_tc = intel_get_mei_fw_tc(hdcp->cpu_transcoder);
 
 	/*
 	 * Considering that HDCP2.2 is more secure than HDCP1.4, If the setup

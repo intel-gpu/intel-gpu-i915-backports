@@ -467,21 +467,19 @@ static void gen11_dsi_config_phy_lanes_sequence(struct intel_encoder *encoder)
 		intel_de_write(dev_priv, ICL_PORT_TX_DW2_GRP(phy), tmp);
 
 		/* For EHL, TGL, set latency optimization for PCS_DW1 lanes */
-		if (IS_JSL_EHL(dev_priv) || (DISPLAY_VER(dev_priv) >= 12)) {
-			tmp = intel_de_read(dev_priv,
-					    ICL_PORT_PCS_DW1_AUX(phy));
-			tmp &= ~LATENCY_OPTIM_MASK;
-			tmp |= LATENCY_OPTIM_VAL(0);
-			intel_de_write(dev_priv, ICL_PORT_PCS_DW1_AUX(phy),
-				       tmp);
+		tmp = intel_de_read(dev_priv,
+				    ICL_PORT_PCS_DW1_AUX(phy));
+		tmp &= ~LATENCY_OPTIM_MASK;
+		tmp |= LATENCY_OPTIM_VAL(0);
+		intel_de_write(dev_priv, ICL_PORT_PCS_DW1_AUX(phy),
+			       tmp);
 
-			tmp = intel_de_read(dev_priv,
-					    ICL_PORT_PCS_DW1_LN(0, phy));
-			tmp &= ~LATENCY_OPTIM_MASK;
-			tmp |= LATENCY_OPTIM_VAL(0x1);
-			intel_de_write(dev_priv, ICL_PORT_PCS_DW1_GRP(phy),
-				       tmp);
-		}
+		tmp = intel_de_read(dev_priv,
+				    ICL_PORT_PCS_DW1_LN(0, phy));
+		tmp &= ~LATENCY_OPTIM_MASK;
+		tmp |= LATENCY_OPTIM_VAL(0x1);
+		intel_de_write(dev_priv, ICL_PORT_PCS_DW1_GRP(phy),
+			       tmp);
 	}
 
 }
@@ -566,7 +564,6 @@ gen11_dsi_setup_dphy_timings(struct intel_encoder *encoder,
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	u32 tmp;
 	enum port port;
-	enum phy phy;
 
 	/* Program T-INIT master registers */
 	for_each_dsi_port(port, intel_dsi->ports) {
@@ -594,42 +591,6 @@ gen11_dsi_setup_dphy_timings(struct intel_encoder *encoder,
 		/* shadow register inside display core */
 		intel_de_write(dev_priv, DSI_DATA_TIMING_PARAM(port),
 			       intel_dsi->dphy_data_lane_reg);
-	}
-
-	/*
-	 * If DSI link operating at or below an 800 MHz,
-	 * TA_SURE should be override and programmed to
-	 * a value '0' inside TA_PARAM_REGISTERS otherwise
-	 * leave all fields at HW default values.
-	 */
-	if (DISPLAY_VER(dev_priv) == 11) {
-		if (afe_clk(encoder, crtc_state) <= 800000) {
-			for_each_dsi_port(port, intel_dsi->ports) {
-				tmp = intel_de_read(dev_priv,
-						    DPHY_TA_TIMING_PARAM(port));
-				tmp &= ~TA_SURE_MASK;
-				tmp |= TA_SURE_OVERRIDE | TA_SURE(0);
-				intel_de_write(dev_priv,
-					       DPHY_TA_TIMING_PARAM(port),
-					       tmp);
-
-				/* shadow register inside display core */
-				tmp = intel_de_read(dev_priv,
-						    DSI_TA_TIMING_PARAM(port));
-				tmp &= ~TA_SURE_MASK;
-				tmp |= TA_SURE_OVERRIDE | TA_SURE(0);
-				intel_de_write(dev_priv,
-					       DSI_TA_TIMING_PARAM(port), tmp);
-			}
-		}
-	}
-
-	if (IS_JSL_EHL(dev_priv)) {
-		for_each_dsi_phy(phy, intel_dsi->phys) {
-			tmp = intel_de_read(dev_priv, ICL_DPHY_CHKN(phy));
-			tmp |= ICL_DPHY_CHKN_AFE_OVER_PPI_STRAP;
-			intel_de_write(dev_priv, ICL_DPHY_CHKN(phy), tmp);
-		}
 	}
 }
 
@@ -781,10 +742,8 @@ gen11_dsi_configure_transcoder(struct intel_encoder *encoder,
 			}
 		}
 
-		if (DISPLAY_VER(dev_priv) >= 12) {
-			if (is_vid_mode(intel_dsi))
-				tmp |= BLANKING_PACKET_ENABLE;
-		}
+		if (is_vid_mode(intel_dsi))
+			tmp |= BLANKING_PACKET_ENABLE;
 
 		/* program DSI operation mode */
 		if (is_vid_mode(intel_dsi)) {
@@ -1026,12 +985,10 @@ gen11_dsi_set_transcoder_timings(struct intel_encoder *encoder,
 	}
 
 	/* program TRANS_VBLANK register, should be same as vtotal programmed */
-	if (DISPLAY_VER(dev_priv) >= 12) {
-		for_each_dsi_port(port, intel_dsi->ports) {
-			dsi_trans = dsi_port_to_transcoder(port);
-			intel_de_write(dev_priv, VBLANK(dsi_trans),
-				       (vactive - 1) | ((vtotal - 1) << 16));
-		}
+	for_each_dsi_port(port, intel_dsi->ports) {
+		dsi_trans = dsi_port_to_transcoder(port);
+		intel_de_write(dev_priv, VBLANK(dsi_trans),
+			       (vactive - 1) | ((vtotal - 1) << 16));
 	}
 }
 
@@ -1247,12 +1204,6 @@ static void gen11_dsi_pre_enable(struct intel_atomic_state *state,
 static void icl_apply_kvmr_pipe_a_wa(struct intel_encoder *encoder,
 				     enum pipe pipe, bool enable)
 {
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-
-	if (DISPLAY_VER(dev_priv) == 11 && pipe == PIPE_B)
-		intel_de_rmw(dev_priv, CHICKEN_PAR1_1,
-			     IGNORE_KVMR_PIPE_A,
-			     enable ? IGNORE_KVMR_PIPE_A : 0);
 }
 
 /*
@@ -1282,8 +1233,6 @@ static void gen11_dsi_enable(struct intel_atomic_state *state,
 {
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	struct intel_crtc *crtc = to_intel_crtc(conn_state->crtc);
-
-	drm_WARN_ON(state->base.dev, crtc_state->has_pch_encoder);
 
 	/* Wa_1409054076:icl,jsl,ehl */
 	icl_apply_kvmr_pipe_a_wa(encoder, crtc->pipe, true);
@@ -1584,7 +1533,6 @@ static void gen11_dsi_get_config(struct intel_encoder *encoder,
 static void gen11_dsi_sync_state(struct intel_encoder *encoder,
 				 const struct intel_crtc_state *crtc_state)
 {
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_crtc *intel_crtc;
 	enum pipe pipe;
 
@@ -1593,14 +1541,6 @@ static void gen11_dsi_sync_state(struct intel_encoder *encoder,
 
 	intel_crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	pipe = intel_crtc->pipe;
-
-	/* wa verify 1409054076:icl,jsl,ehl */
-	if (DISPLAY_VER(dev_priv) == 11 && pipe == PIPE_B &&
-	    !(intel_de_read(dev_priv, CHICKEN_PAR1_1) & IGNORE_KVMR_PIPE_A))
-		drm_dbg_kms(&dev_priv->drm,
-			    "[ENCODER:%d:%s] BIOS left IGNORE_KVMR_PIPE_A cleared with pipe B enabled\n",
-			    encoder->base.base.id,
-			    encoder->base.name);
 }
 
 static int gen11_dsi_dsc_compute_config(struct intel_encoder *encoder,
@@ -1608,7 +1548,7 @@ static int gen11_dsi_dsc_compute_config(struct intel_encoder *encoder,
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct drm_dsc_config *vdsc_cfg = &crtc_state->dsc.config;
-	int dsc_max_bpc = DISPLAY_VER(dev_priv) >= 12 ? 12 : 10;
+	int dsc_max_bpc = 12;
 	bool use_dsc;
 	int ret;
 

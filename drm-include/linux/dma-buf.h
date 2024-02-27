@@ -10,8 +10,8 @@
  * Daniel Vetter <daniel@ffwll.ch> for their support in creation and
  * refining of this idea.
  */
-#ifndef __DMA_BUF_H__
-#define __DMA_BUF_H__
+#ifndef __BACKPORT_DMA_BUF_H__
+#define __BACKPORT_DMA_BUF_H__
 
 #include <linux/iosys-map.h>
 #include <linux/file.h>
@@ -22,6 +22,26 @@
 #include <linux/fs.h>
 #include <linux/dma-fence.h>
 #include <linux/wait.h>
+
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#define dma_buf_export LINUX_DMABUF_BACKPORT(dma_buf_export)
+#define dma_buf_fd LINUX_DMABUF_BACKPORT(dma_buf_fd)
+#define dma_buf_get LINUX_DMABUF_BACKPORT(dma_buf_get)
+#define dma_buf_put LINUX_DMABUF_BACKPORT(dma_buf_put)
+#define dma_buf_dynamic_attach LINUX_DMABUF_BACKPORT(dma_buf_dynamic_attach)
+#define dma_buf_attach LINUX_DMABUF_BACKPORT(dma_buf_attach)
+#define dma_buf_detach LINUX_DMABUF_BACKPORT(dma_buf_detach)
+#define dma_buf_map_attachment LINUX_DMABUF_BACKPORT(dma_buf_map_attachment)
+#define dma_buf_unmap_attachment LINUX_DMABUF_BACKPORT(dma_buf_unmap_attachment)
+#define dma_buf_begin_cpu_access LINUX_DMABUF_BACKPORT(dma_buf_begin_cpu_access)
+#define dma_buf_end_cpu_access LINUX_DMABUF_BACKPORT(dma_buf_end_cpu_access)
+#define dma_buf_mmap LINUX_DMABUF_BACKPORT(dma_buf_mmap)
+#define dma_buf_vmap LINUX_DMABUF_BACKPORT(dma_buf_vmap)
+#define dma_buf_vunmap LINUX_DMABUF_BACKPORT(dma_buf_vunmap)
+#define dma_buf_move_notify LINUX_DMABUF_BACKPORT(dma_buf_move_notify)
+#define dma_buf_pin LINUX_DMABUF_BACKPORT(dma_buf_pin)
+#define dma_buf_unpin LINUX_DMABUF_BACKPORT(dma_buf_unpin)
+#endif
 
 struct device;
 struct dma_buf;
@@ -434,7 +454,7 @@ struct dma_buf {
 
 		__poll_t active;
 	} cb_in, cb_out;
-#ifdef CONFIG_DMABUF_SYSFS_STATS
+#ifdef CPTCFG_DMABUF_SYSFS_STATS
 	/**
 	 * @sysfs_entry:
 	 *
@@ -623,4 +643,9 @@ int dma_buf_mmap(struct dma_buf *, struct vm_area_struct *,
 		 unsigned long);
 int dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map);
 void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map);
-#endif /* __DMA_BUF_H__ */
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+int __init dma_buf_init(void);
+void __exit dma_buf_deinit(void);
+#endif
+
+#endif /* __BACKPORT_DMA_BUF_H__  */

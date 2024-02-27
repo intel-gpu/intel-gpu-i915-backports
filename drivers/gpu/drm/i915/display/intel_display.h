@@ -159,16 +159,6 @@ enum transcoder {
 	I915_MAX_TRANSCODERS
 };
 
-/*
- * Global legacy plane identifier. Valid only for primary/sprite
- * planes on pre-g4x, and only for primary planes on g4x-bdw.
- */
-enum i9xx_plane_id {
-	PLANE_A,
-	PLANE_B,
-	PLANE_C,
-};
-
 enum port {
 	PORT_NONE = -1,
 
@@ -222,7 +212,6 @@ struct intel_digital_port;
 struct intel_dp;
 struct intel_encoder;
 struct intel_initial_plane_config;
-struct intel_load_detect_pipe;
 struct intel_plane;
 struct intel_plane_state;
 struct intel_power_domain_mask;
@@ -570,17 +559,8 @@ bool intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 void intel_crtc_update_active_timings(const struct intel_crtc_state *crtc_state);
 
 void intel_plane_destroy(struct drm_plane *plane);
-void i9xx_set_pipeconf(const struct intel_crtc_state *crtc_state);
-void ilk_set_pipeconf(const struct intel_crtc_state *crtc_state);
 void intel_enable_transcoder(const struct intel_crtc_state *new_crtc_state);
 void intel_disable_transcoder(const struct intel_crtc_state *old_crtc_state);
-void i830_enable_pipe(struct drm_i915_private *dev_priv, enum pipe pipe);
-void i830_disable_pipe(struct drm_i915_private *dev_priv, enum pipe pipe);
-int vlv_get_hpll_vco(struct drm_i915_private *dev_priv);
-int vlv_get_cck_clock(struct drm_i915_private *dev_priv,
-		      const char *name, u32 reg, int ref_freq);
-int vlv_get_cck_clock_hpll(struct drm_i915_private *dev_priv,
-			   const char *name, u32 reg);
 void intel_init_display_hooks(struct drm_i915_private *dev_priv);
 unsigned int intel_fb_xy_to_linear(int x, int y,
 				   const struct intel_plane_state *state,
@@ -604,24 +584,12 @@ enum tc_port intel_port_to_tc(struct drm_i915_private *dev_priv,
 int intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data,
 				      struct drm_file *file_priv);
 
-int ilk_get_lanes_required(int target_clock, int link_bw, int bpp);
-void vlv_wait_port_ready(struct drm_i915_private *dev_priv,
-			 struct intel_digital_port *dig_port,
-			 unsigned int expected_mask);
-int intel_get_load_detect_pipe(struct drm_connector *connector,
-			       struct intel_load_detect_pipe *old,
-			       struct drm_modeset_acquire_ctx *ctx);
-void intel_release_load_detect_pipe(struct drm_connector *connector,
-				    struct intel_load_detect_pipe *old,
-				    struct drm_modeset_acquire_ctx *ctx);
 struct drm_framebuffer *
 intel_framebuffer_create(struct drm_i915_gem_object *obj,
 			 struct drm_mode_fb_cmd2 *mode_cmd);
 
 bool intel_fuzzy_clock_check(int clock1, int clock2);
 
-void intel_display_prepare_reset(struct drm_i915_private *dev_priv);
-void intel_display_finish_reset(struct drm_i915_private *dev_priv);
 void intel_zero_m_n(struct intel_link_m_n *m_n);
 void intel_set_m_n(struct drm_i915_private *i915,
 		   const struct intel_link_m_n *m_n,
@@ -645,21 +613,14 @@ void intel_cpu_transcoder_get_m1_n1(struct intel_crtc *crtc,
 void intel_cpu_transcoder_get_m2_n2(struct intel_crtc *crtc,
 				    enum transcoder cpu_transcoder,
 				    struct intel_link_m_n *m_n);
-void i9xx_crtc_clock_get(struct intel_crtc *crtc,
-			 struct intel_crtc_state *pipe_config);
 int intel_dotclock_calculate(int link_freq, const struct intel_link_m_n *m_n);
 int intel_crtc_dotclock(const struct intel_crtc_state *pipe_config);
 enum intel_display_power_domain intel_port_to_power_domain(struct intel_digital_port *dig_port);
 enum intel_display_power_domain
 intel_aux_power_domain(struct intel_digital_port *dig_port);
-void intel_crtc_arm_fifo_underrun(struct intel_crtc *crtc,
-				  struct intel_crtc_state *crtc_state);
-void ilk_pfit_disable(const struct intel_crtc_state *old_crtc_state);
 
 int bdw_get_pipemisc_bpp(struct intel_crtc *crtc);
 unsigned int intel_plane_fence_y_offset(const struct intel_plane_state *plane_state);
-
-bool intel_plane_uses_fence(const struct intel_plane_state *plane_state);
 
 struct intel_encoder *
 intel_get_crtc_new_encoder(const struct intel_atomic_state *state,
@@ -707,8 +668,7 @@ void assert_transcoder(struct drm_i915_private *dev_priv,
 #define I915_STATE_WARN(condition, format...) ({			\
 	int __ret_warn_on = !!(condition);				\
 	if (unlikely(__ret_warn_on))					\
-		if (!WARN(i915_modparams.verbose_state_checks, format))	\
-			DRM_ERROR(format);				\
+		DRM_ERROR(format);					\
 	unlikely(__ret_warn_on);					\
 })
 
@@ -717,8 +677,6 @@ void assert_transcoder(struct drm_i915_private *dev_priv,
 
 bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915);
 #else
-static inline int vlv_get_cck_clock(struct drm_i915_private *dev_priv,
-		      const char *name, u32 reg, int ref_freq){ return 0; }
 static inline u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
 			      u32 pixel_format, u64 modifier)
 {
@@ -733,8 +691,6 @@ static inline bool intel_has_pending_fb_unpin(struct drm_i915_private *dev_priv)
 static inline int intel_display_suspend(struct drm_device *dev) { return 0; }
 static inline int intel_get_pipe_from_crtc_id_ioctl(struct drm_device *dev, void *data,
 				      struct drm_file *file_priv) { return 0; }
-static inline void intel_display_prepare_reset(struct drm_i915_private *dev_priv) { return; }
-static inline void intel_display_finish_reset(struct drm_i915_private *dev_priv) { return; }
 static inline void intel_display_driver_register(struct drm_i915_private *i915) { return; }
 static inline void intel_display_driver_unregister(struct drm_i915_private *i915) { return; }
 static inline void intel_modeset_init_hw(struct drm_i915_private *i915) { return; }

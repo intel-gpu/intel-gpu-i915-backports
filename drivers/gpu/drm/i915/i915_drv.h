@@ -32,6 +32,10 @@
 
 #include <uapi/drm/i915_drm.h>
 
+#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#include <linux/mfd/core.h>
+#endif
+
 #include <linux/i2c.h>
 #include <linux/intel-iommu.h>
 #include <linux/pm_qos.h>
@@ -39,7 +43,6 @@
 
 #include <drm/drm_connector.h>
 #include <drm/i915_cp_fw_hdcp_interface.h>
-#include <drm/ttm/ttm_device.h>
 
 #include "display/intel_cdclk.h"
 #include "display/intel_display.h"
@@ -108,14 +111,10 @@ struct intel_dp;
 struct intel_dpll_funcs;
 struct intel_encoder;
 struct intel_fbdev;
-struct intel_fdi_funcs;
 struct intel_gmbus;
 struct intel_hotplug_funcs;
 struct intel_initial_plane_config;
 struct intel_limit;
-struct intel_overlay;
-struct intel_overlay_error_state;
-struct vlv_s0ix_state;
 
 #define I915_GFP_ALLOW_FAIL (GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN)
 
@@ -223,15 +222,6 @@ struct drm_i915_file_private {
 	} clos_resv;
 };
 
-struct sdvo_device_mapping {
-	u8 initialized;
-	u8 dvo_port;
-	u8 slave_addr;
-	u8 dvo_wiring;
-	u8 i2c_pin;
-	u8 ddc_pin;
-};
-
 /* functions used for watermark calcs for display. */
 struct drm_i915_wm_disp_funcs {
 	/* update_wm is for legacy wm management */
@@ -268,22 +258,12 @@ struct drm_i915_display_funcs {
 
 #define I915_COLOR_UNEVICTABLE (-1) /* a non-vma sharing the address space */
 
-#define GEM_QUIRK_PIN_SWIZZLED_PAGES	BIT(0)
-
 #define QUIRK_LVDS_SSC_DISABLE (1<<1)
 #define QUIRK_INVERT_BRIGHTNESS (1<<2)
 #define QUIRK_BACKLIGHT_PRESENT (1<<3)
 #define QUIRK_INCREASE_T12_DELAY (1<<6)
 #define QUIRK_INCREASE_DDI_DISABLED_TIME (1<<7)
 #define QUIRK_NO_PPS_BACKLIGHT_POWER_HOOK (1<<8)
-
-struct i915_suspend_saved_registers {
-	u32 saveDSPARB;
-	u32 saveSWF0[16];
-	u32 saveSWF1[16];
-	u32 saveSWF3[3];
-	u16 saveGCDGMBUS;
-};
 
 #define MAX_L3_SLICES 2
 struct intel_l3_parity {
@@ -410,7 +390,6 @@ struct intel_vbt_data {
 	struct list_head bdb_blocks;
 
 	struct intel_bios_encoder_data *ports[I915_MAX_PORTS]; /* Non-NULL if port present. */
-	struct sdvo_device_mapping sdvo_mappings[2];
 };
 #endif
 
@@ -452,13 +431,7 @@ struct intel_audio_private {
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	/* Used to save the pipe-to-encoder mapping for audio */
 	struct intel_encoder *encoder_map[I915_MAX_PIPES];
-
 #endif
-	/* necessary resource sharing with HDMI LPE audio driver. */
-	struct {
-		struct platform_device *platdev;
-		int irq;
-	} lpe;
 };
 
 struct drm_i915_private {
@@ -521,9 +494,6 @@ struct drm_i915_private {
 	struct intel_uncore_mmio_debug mmio_debug;
 
 	struct i915_sriov sriov;
-	struct i915_virtual_gpu vgpu;
-
-	struct intel_gvt *gvt;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct intel_dmc dmc;
@@ -574,18 +544,11 @@ struct drm_i915_private {
 #endif
 	};
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-	u32 pipestat_irq_mask[I915_MAX_PIPES];
-
 	struct i915_hotplug hotplug;
 	struct intel_fbc *fbc[I915_MAX_FBCS];
 	struct intel_opregion opregion;
 	struct intel_vbt_data vbt;
 #endif
-
-	bool preserve_bios_swizzle;
-
-	/* overlay */
-	struct intel_overlay *overlay;
 
 	/* backlight registers and fields in struct intel_panel */
 	struct mutex backlight_lock;
@@ -600,9 +563,6 @@ struct drm_i915_private {
 	unsigned int max_dotclk_freq;
 	unsigned int hpll_freq;
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-	unsigned int fdi_pll_freq;
-	unsigned int czclk_freq;
-
 	struct {
 		/* The current hardware cdclk configuration */
 		struct intel_cdclk_config hw;
@@ -651,9 +611,6 @@ struct drm_i915_private {
 	/* irq display functions */
 	const struct intel_hotplug_funcs *hotplug_funcs;
 
-	/* fdi display functions */
-	const struct intel_fdi_funcs *fdi_funcs;
-
 	/* display pll funcs */
 	const struct intel_dpll_funcs *dpll_funcs;
 
@@ -672,11 +629,15 @@ struct drm_i915_private {
 	enum intel_pch pch_type;
 	unsigned short pch_id;
 
-	unsigned long gem_quirks;
 	unsigned long quirks;
 
 	struct drm_atomic_state *modeset_restore_state;
 	struct drm_modeset_acquire_ctx reset_ctx;
+
+#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+	DECLARE_HASHTABLE(mm_structs, 7);
+	spinlock_t mm_lock;
+#endif
 
 	struct i915_gem_mm mm;
 
@@ -724,12 +685,6 @@ struct drm_i915_private {
 	 */
 	u32 hti_state;
 
-	/*
-	 * edram size in MB.
-	 * Cannot be determined by PCIID. You must always read a register.
-	 */
-	u32 edram_size_mb;
-
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct i915_power_domains power_domains;
 #endif
@@ -742,8 +697,6 @@ struct drm_i915_private {
 
 	struct drm_property *broadcast_rgb_property;
 	struct drm_property *force_audio_property;
-
-	u32 fdi_rx_config;
 
 	/* Shadow for DISPLAY_PHY_CONTROL which can't be safely read */
 	u32 chv_phy_control;
@@ -758,8 +711,6 @@ struct drm_i915_private {
 	u32 bxt_phy_grc;
 
 	u32 suspend_count;
-	struct i915_suspend_saved_registers regfile;
-	struct vlv_s0ix_state *vlv_s0ix_state;
 
 	enum {
 		I915_SAGV_UNKNOWN = 0,
@@ -941,9 +892,6 @@ struct drm_i915_private {
 
 	/* Mutex to protect the above hdcp component related values. */
 	struct mutex hdcp_comp_mutex;
-
-	/* The TTM device structure. */
-	struct ttm_device bdev;
 
 	I915_SELFTEST_DECLARE(struct i915_selftest_stash selftest;)
 
@@ -1172,50 +1120,46 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	return ((mask << (msb - pb)) & (mask << (msb - s))) & BIT(msb);
 }
 
-#define IS_MOBILE(dev_priv)	(INTEL_INFO(dev_priv)->is_mobile)
 #define IS_DGFX(dev_priv)   (INTEL_INFO(dev_priv)->is_dgfx)
 
-#define IS_I830(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I830)
-#define IS_I845G(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I845G)
-#define IS_I85X(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I85X)
-#define IS_I865G(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I865G)
-#define IS_I915G(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I915G)
-#define IS_I915GM(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I915GM)
-#define IS_I945G(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I945G)
-#define IS_I945GM(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I945GM)
-#define IS_I965G(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I965G)
-#define IS_I965GM(dev_priv)	IS_PLATFORM(dev_priv, INTEL_I965GM)
-#define IS_G45(dev_priv)	IS_PLATFORM(dev_priv, INTEL_G45)
-#define IS_GM45(dev_priv)	IS_PLATFORM(dev_priv, INTEL_GM45)
-#define IS_G4X(dev_priv)	(IS_G45(dev_priv) || IS_GM45(dev_priv))
-#define IS_PINEVIEW(dev_priv)	IS_PLATFORM(dev_priv, INTEL_PINEVIEW)
-#define IS_G33(dev_priv)	IS_PLATFORM(dev_priv, INTEL_G33)
-#define IS_IRONLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_IRONLAKE)
-#define IS_IRONLAKE_M(dev_priv) \
-	(IS_PLATFORM(dev_priv, INTEL_IRONLAKE) && IS_MOBILE(dev_priv))
-#define IS_SANDYBRIDGE(dev_priv) IS_PLATFORM(dev_priv, INTEL_SANDYBRIDGE)
-#define IS_IVYBRIDGE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_IVYBRIDGE)
-#define IS_IVB_GT1(dev_priv)	(IS_IVYBRIDGE(dev_priv) && \
-				 INTEL_INFO(dev_priv)->gt == 1)
-#define IS_VALLEYVIEW(dev_priv)	IS_PLATFORM(dev_priv, INTEL_VALLEYVIEW)
-#define IS_CHERRYVIEW(dev_priv)	IS_PLATFORM(dev_priv, INTEL_CHERRYVIEW)
-#define IS_HASWELL(dev_priv)	IS_PLATFORM(dev_priv, INTEL_HASWELL)
-#define IS_BROADWELL(dev_priv)	IS_PLATFORM(dev_priv, INTEL_BROADWELL)
-#define IS_SKYLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_SKYLAKE)
-#define IS_BROXTON(dev_priv)	IS_PLATFORM(dev_priv, INTEL_BROXTON)
-#define IS_KABYLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_KABYLAKE)
-#define IS_GEMINILAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_GEMINILAKE)
-#define IS_COFFEELAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_COFFEELAKE)
-#define IS_COMETLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_COMETLAKE)
-#define IS_ICELAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_ICELAKE)
-#define IS_JSL_EHL(dev_priv)	(IS_PLATFORM(dev_priv, INTEL_JASPERLAKE) || \
-				IS_PLATFORM(dev_priv, INTEL_ELKHARTLAKE))
+#define IS_I830(dev_priv)	false
+#define IS_I845G(dev_priv)	false
+#define IS_I85X(dev_priv)	false
+#define IS_I865G(dev_priv)	false
+#define IS_I915G(dev_priv)	false
+#define IS_I915GM(dev_priv)	false
+#define IS_I945G(dev_priv)	false
+#define IS_I945GM(dev_priv)	false
+#define IS_I965G(dev_priv)	false
+#define IS_I965GM(dev_priv)	false
+#define IS_G45(dev_priv)	false
+#define IS_GM45(dev_priv)	false
+#define IS_G4X(dev_priv)	false
+#define IS_PINEVIEW(dev_priv)	false
+#define IS_G33(dev_priv)	false
+#define IS_IRONLAKE(dev_priv)	false
+#define IS_IRONLAKE_M(dev_priv) false
+#define IS_SANDYBRIDGE(dev_priv) false
+#define IS_IVYBRIDGE(dev_priv)	false
+#define IS_IVB_GT1(dev_priv)	false
+#define IS_VALLEYVIEW(dev_priv)	false
+#define IS_CHERRYVIEW(dev_priv)	false
+#define IS_HASWELL(dev_priv)	false
+#define IS_BROADWELL(dev_priv)	false
+#define IS_SKYLAKE(dev_priv)	false
+#define IS_BROXTON(dev_priv)	false
+#define IS_KABYLAKE(dev_priv)	false
+#define IS_GEMINILAKE(dev_priv)	false
+#define IS_COFFEELAKE(dev_priv)	false
+#define IS_COMETLAKE(dev_priv)	false
+#define IS_ICELAKE(dev_priv)	false
+#define IS_JSL_EHL(dev_priv)	false
 #define IS_TIGERLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_TIGERLAKE)
 #define IS_ROCKETLAKE(dev_priv)	IS_PLATFORM(dev_priv, INTEL_ROCKETLAKE)
 #define IS_DG1(dev_priv)        IS_PLATFORM(dev_priv, INTEL_DG1)
 #define IS_ALDERLAKE_S(dev_priv) IS_PLATFORM(dev_priv, INTEL_ALDERLAKE_S)
 #define IS_ALDERLAKE_P(dev_priv) IS_PLATFORM(dev_priv, INTEL_ALDERLAKE_P)
-#define IS_XEHPSDV(dev_priv) IS_PLATFORM(dev_priv, INTEL_XEHPSDV)
+#define IS_XEHPSDV(dev_priv) false
 #define IS_DG2(dev_priv)	IS_PLATFORM(dev_priv, INTEL_DG2)
 #define IS_PONTEVECCHIO(dev_priv) IS_PLATFORM(dev_priv, INTEL_PONTEVECCHIO)
 #define IS_METEORLAKE(dev_priv) IS_PLATFORM(dev_priv, INTEL_METEORLAKE)
@@ -1375,8 +1319,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	 IS_GRAPHICS_STEP(__i915, since, until))
 
 #define IS_LP(dev_priv)		(INTEL_INFO(dev_priv)->is_lp)
-#define IS_GEN9_LP(dev_priv)	(GRAPHICS_VER(dev_priv) == 9 && IS_LP(dev_priv))
-#define IS_GEN9_BC(dev_priv)	(GRAPHICS_VER(dev_priv) == 9 && !IS_LP(dev_priv))
+#define IS_GEN9_LP(dev_priv)	false
+#define IS_GEN9_BC(dev_priv)	false
 
 #define __HAS_ENGINE(engine_mask, id) ((engine_mask) & BIT(id))
 #define HAS_ENGINE(gt, id) __HAS_ENGINE((gt)->info.engine_mask, id)
@@ -1398,37 +1342,29 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define CCS_MASK(gt) \
 	ENGINE_INSTANCES_MASK(gt, CCS0, I915_MAX_CCS)
 
+#define FIRST_ENGINE_MASK(gt, CLASS) ({					\
+	int first_in_class__ = ffs(CLASS##_MASK(gt));			\
+	first_in_class__ ? BIT(CLASS##0 + first_in_class__ - 1) : 0;	\
+})
+
 #define HAS_MEDIA_RATIO_MODE(dev_priv) (INTEL_INFO(dev_priv)->has_media_ratio_mode)
 
 #define HAS_LINK_COPY_ENGINES(dev_priv) (INTEL_INFO(dev_priv)->has_link_copy_engines)
 
-/*
- * The Gen7 cmdparser copies the scanned buffer to the ggtt for execution
- * All later gens can run the final buffer from the ppgtt
- */
-#define CMDPARSER_USES_GGTT(dev_priv) (GRAPHICS_VER(dev_priv) == 7)
-
 #define HAS_LLC(dev_priv)	(INTEL_INFO(dev_priv)->has_llc)
 #define HAS_4TILE(dev_priv)	(INTEL_INFO(dev_priv)->has_4tile)
 #define HAS_SNOOP(dev_priv)	(INTEL_INFO(dev_priv)->has_snoop)
-#define HAS_EDRAM(dev_priv)	((dev_priv)->edram_size_mb)
-#define HAS_SECURE_BATCHES(dev_priv) (GRAPHICS_VER(dev_priv) < 6)
+#define HAS_EDRAM(dev_priv)	false
+#define HAS_SECURE_BATCHES(dev_priv) false
 #define HAS_WT(dev_priv)	HAS_EDRAM(dev_priv)
 
-#define HWS_NEEDS_PHYSICAL(dev_priv)	(INTEL_INFO(dev_priv)->hws_needs_physical)
+#define HWS_NEEDS_PHYSICAL(dev_priv) false
 
-#define HAS_LOGICAL_RING_CONTEXTS(dev_priv) \
-		(INTEL_INFO(dev_priv)->has_logical_ring_contexts)
-#define HAS_LOGICAL_RING_ELSQ(dev_priv) \
-		(INTEL_INFO(dev_priv)->has_logical_ring_elsq)
+#define HAS_LOGICAL_RING_CONTEXTS(dev_priv) true
+#define HAS_LOGICAL_RING_ELSQ(dev_priv) true
 
 #define HAS_EXECLISTS(dev_priv) HAS_LOGICAL_RING_CONTEXTS(dev_priv)
 
-#define INTEL_PPGTT(dev_priv) (INTEL_INFO(dev_priv)->ppgtt_type)
-#define HAS_PPGTT(dev_priv) \
-	(INTEL_PPGTT(dev_priv) != INTEL_PPGTT_NONE)
-#define HAS_FULL_PPGTT(dev_priv) \
-	(INTEL_PPGTT(dev_priv) >= INTEL_PPGTT_FULL)
 #define HAS_RECOVERABLE_PAGE_FAULT(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_recoverable_page_fault)
 
@@ -1437,71 +1373,34 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	((sizes) & ~INTEL_INFO(dev_priv)->page_sizes) == 0; \
 })
 
-#define HAS_OVERLAY(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_overlay)
-#define OVERLAY_NEEDS_PHYSICAL(dev_priv) \
-		(INTEL_INFO(dev_priv)->display.overlay_needs_physical)
-
-/* Early gen2 have a totally busted CS tlb and require pinned batches. */
-#define HAS_BROKEN_CS_TLB(dev_priv)	(IS_I830(dev_priv) || IS_I845G(dev_priv))
-
-#define NEEDS_RC6_CTX_CORRUPTION_WA(dev_priv)	\
-	(IS_BROADWELL(dev_priv) || GRAPHICS_VER(dev_priv) == 9)
-
-/* WaRsDisableCoarsePowerGating:skl,cnl */
-#define NEEDS_WaRsDisableCoarsePowerGating(dev_priv)			\
-	(IS_SKL_GT3(dev_priv) || IS_SKL_GT4(dev_priv))
-
-#define HAS_GMBUS_IRQ(dev_priv) (DISPLAY_VER(dev_priv) >= 4)
-#define HAS_GMBUS_BURST_READ(dev_priv) (DISPLAY_VER(dev_priv) >= 11 || \
-					IS_GEMINILAKE(dev_priv) || \
-					IS_KABYLAKE(dev_priv))
+#define HAS_GMBUS_IRQ(dev_priv) true
+#define HAS_GMBUS_BURST_READ(dev_priv) true
 
 /* With the 945 and later, Y tiling got adjusted so that it was 32 128-byte
  * rows, which changed the alignment requirements and fence programming.
  */
-#define HAS_128_BYTE_Y_TILING(dev_priv) (GRAPHICS_VER(dev_priv) != 2 && \
-					 !(IS_I915G(dev_priv) || IS_I915GM(dev_priv)))
-#define SUPPORTS_TV(dev_priv)		(INTEL_INFO(dev_priv)->display.supports_tv)
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-#define I915_HAS_HOTPLUG(dev_priv)	(INTEL_INFO(dev_priv)->display.has_hotplug)
-#else
-#define I915_HAS_HOTPLUG(dev_priv)	0
-#endif
-#define HAS_FW_BLC(dev_priv)	(DISPLAY_VER(dev_priv) > 2)
+#define HAS_128_BYTE_Y_TILING(dev_priv) true
 #define HAS_FBC(dev_priv)	(INTEL_INFO(dev_priv)->display.fbc_mask != 0)
-#define HAS_CUR_FBC(dev_priv)	(!HAS_GMCH(dev_priv) && DISPLAY_VER(dev_priv) >= 7)
 
-#define HAS_IPS(dev_priv)	(IS_HSW_ULT(dev_priv) || IS_BROADWELL(dev_priv))
-
-#define HAS_DP_MST(dev_priv)	(INTEL_INFO(dev_priv)->display.has_dp_mst)
 #define HAS_DP20(dev_priv)	(IS_DG2(dev_priv) || DISPLAY_VER(dev_priv) >= 14)
-
-#define HAS_DOUBLE_BUFFERED_M_N(dev_priv)	(DISPLAY_VER(dev_priv) >= 9 || IS_BROADWELL(dev_priv))
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #define HAS_CDCLK_CRAWL(dev_priv)	 (INTEL_INFO(dev_priv)->display.has_cdclk_crawl)
-#define HAS_DDI(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_ddi)
 #define HAS_FPGA_DBG_UNCLAIMED(dev_priv) (INTEL_INFO(dev_priv)->display.has_fpga_dbg)
 #define HAS_PSR(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_psr)
 #define HAS_PSR_HW_TRACKING(dev_priv) \
 	(INTEL_INFO(dev_priv)->display.has_psr_hw_tracking)
-#define HAS_PSR2_SEL_FETCH(dev_priv)	 (DISPLAY_VER(dev_priv) >= 12)
+#define HAS_PSR2_SEL_FETCH(dev_priv)	 true
 #define HAS_TRANSCODER(dev_priv, trans)	 ((INTEL_INFO(dev_priv)->display.cpu_transcoder_mask & BIT(trans)) != 0)
 
 #else
 #define HAS_CDCLK_CRAWL(dev_priv)        0
-#define HAS_DDI(dev_priv)                0
 #define HAS_FPGA_DBG_UNCLAIMED(dev_priv) 0
 #define HAS_PSR(dev_priv)                0
 #define HAS_PSR_HW_TRACKING(dev_priv)    0
 #define HAS_PSR2_SEL_FETCH(dev_priv)     0
 #define HAS_TRANSCODER(dev_priv, trans)  0
 #endif
-#define HAS_RC6(dev_priv)		 (INTEL_INFO(dev_priv)->has_rc6)
-#define HAS_RC6p(dev_priv)		 (INTEL_INFO(dev_priv)->has_rc6p)
-#define HAS_RC6pp(dev_priv)		 (false) /* HW was never validated */
-
-#define HAS_RPS(dev_priv)	(INTEL_INFO(dev_priv)->has_rps)
 
 #define HAS_DMC(dev_priv)	(INTEL_INFO(dev_priv)->display.has_dmc)
 
@@ -1513,10 +1412,10 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_HECI_GSC(dev_priv) (HAS_HECI_PXP(dev_priv) || HAS_HECI_GSCFI(dev_priv))
 
-#define HAS_MSO(i915)		(DISPLAY_VER(i915) >= 12)
+#define HAS_MSO(i915)		true
 
 #define HAS_RUNTIME_PM(dev_priv) (INTEL_INFO(dev_priv)->has_runtime_pm)
-#define HAS_64BIT_RELOC(dev_priv) (INTEL_INFO(dev_priv)->has_64bit_reloc)
+#define HAS_64BIT_RELOC(dev_priv) true
 
 #define HAS_SEMAPHORE_XEHPSDV(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_semaphore_xehpsdv)
@@ -1547,7 +1446,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_GMD_ID(i915)	INTEL_INFO(i915)->has_gmd_id
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-#define HAS_IPC(dev_priv)		 (INTEL_INFO(dev_priv)->display.has_ipc)
+#define HAS_IPC(dev_priv) true
 
 #else
 #define HAS_IPC(dev_priv) 0
@@ -1568,8 +1467,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_UM_QUEUES(dev_priv) (INTEL_INFO(dev_priv)->has_um_queues)
 
-#define HAS_NULL_PAGE(dev_priv) (INTEL_INFO(dev_priv)->has_null_page)
-
 #define HAS_GT_UC(dev_priv)	(INTEL_INFO(dev_priv)->has_gt_uc)
 
 #define HAS_SRIOV(dev_priv)	(INTEL_INFO(dev_priv)->has_sriov)
@@ -1587,14 +1484,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_MEMORY_IRQ_STATUS(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_iov_memirq && IS_SRIOV_VF(dev_priv))
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-#define HAS_GMCH(dev_priv) (INTEL_INFO(dev_priv)->display.has_gmch)
-
-#else
-#define HAS_GMCH(dev_priv) 0
-#endif
-#define HAS_LSPCON(dev_priv) (IS_DISPLAY_VER(dev_priv, 9, 10))
 
 #define HAS_L3_CCS_READ(i915) (INTEL_INFO(i915)->has_l3_ccs_read)
 
@@ -1615,9 +1504,9 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define INTEL_NUM_PIPES(dev_priv) 0
 #endif
 
-#define HAS_VRR(i915)	(DISPLAY_VER(i915) >= 11)
+#define HAS_VRR(i915)	true
 
-#define HAS_ASYNC_FLIPS(i915)		(DISPLAY_VER(i915) >= 5)
+#define HAS_ASYNC_FLIPS(i915)		true
 
 /* Only valid when HAS_DISPLAY() is true */
 #define INTEL_DISPLAY_ENABLED(dev_priv) \
@@ -1659,32 +1548,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define HAS_LMTT_LVL2(i915) (INTEL_INFO(i915)->has_lmtt_lvl2)
 
-extern int timeout_multiplier;
-
-#define TIMEOUT_IN_RANGE(timeout___) ({ \
-	GEM_BUG_ON(timeout___ * timeout_multiplier >= MAX_SCHEDULE_TIMEOUT); \
-	GEM_BUG_ON(timeout___ * timeout_multiplier != timeout___ * ((u64)timeout_multiplier)); \
-})
-
-/* If max timeout, no need to have a multiplier (e.g. set to 1) */
-#define GET_MULTIPLIER(timeout__) ({ \
-	u32 multiplier__ = 1; \
-	if (timeout__ != MAX_SCHEDULE_TIMEOUT) { \
-		TIMEOUT_IN_RANGE(timeout__); \
-		multiplier__ = timeout_multiplier; \
-	} \
-	multiplier__; \
-})
-
-/*
- * pre-si environments are slower, so we need to bump timeouts. Using a
- * large multiplier to rule out any environment speed issues when timeouts
- * occur.
- */
-#define ADJUST_TIMEOUT(timeout__) ({	\
-	timeout__ * GET_MULTIPLIER(timeout__);	\
-})
-
 static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
 {
 #ifdef CPTCFG_DRM_I915_SVM
@@ -1715,8 +1578,7 @@ intel_ggtt_needs_same_mem_type_within_cl_wa(struct drm_i915_private *dev_priv)
 	 * We can't mix LMEM and SMEM allocation within the same GGTT
 	 * cacheline (i.e. 16 PTEs, 64k address block).
 	 */
-	return IS_DG2_GRAPHICS_STEP(dev_priv, G10, STEP_A0, STEP_B0) ||
-		IS_XEHPSDV(dev_priv);
+	return IS_DG2_GRAPHICS_STEP(dev_priv, G10, STEP_A0, STEP_B0);
 }
 
 /* i915_gem.c */
@@ -1921,7 +1783,9 @@ static inline int __i915_first_online_cpu(const struct cpumask *mask)
 	int cpu;
 
 	cpu = cpumask_first_and(mask, cpu_online_mask);
-	if (cpu >= nr_cpu_ids)
+	if (cpu == raw_smp_processor_id())
+		cpu = cpumask_next_and(cpu, mask, cpu_online_mask);
+	if (unlikely(cpu >= nr_cpu_ids))
 		cpu = cpumask_first(mask);
 
 	return cpu;
@@ -1931,7 +1795,7 @@ static inline int __i915_next_online_cpu(const struct cpumask *mask, int *next)
 {
 	int cpu = READ_ONCE(*next);
 
-	if (unlikely(!cpu_online(cpu)))
+	if (unlikely(!cpu_online(cpu) || cpu == raw_smp_processor_id()))
 		cpu = cpumask_next_and(cpu, mask, cpu_online_mask);
 	if (unlikely(cpu >= nr_cpu_ids))
 		cpu = __i915_first_online_cpu(mask);

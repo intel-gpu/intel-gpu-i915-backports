@@ -1,3 +1,27 @@
+/*
+ * Copyright _ 2018 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ *
+ */
 #ifndef __BACKPORT_LINUX_WAIT_H
 #define __BACKPORT_LINUX_WAIT_H
 #include_next <linux/wait.h>
@@ -95,4 +119,26 @@ wait_on_bit_timeout(void *word, int bit, unsigned mode, unsigned long timeout)
 		      __ret = schedule_timeout(__ret))
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
+/*
+ * A single wait-queue entry structure:
+ */
+struct wait_queue_entry {
+	unsigned int		flags;
+	void			*private;
+	wait_queue_func_t	func;
+	struct list_head	entry;
+};
+typedef struct __wait_queue wait_queue_entry_t;
+
+static inline void __add_wait_queue_entry_tail( struct __wait_queue_head *wq_head, struct __wait_queue *wq_entry)
+{
+	list_add_tail(&wq_entry->task_list, &wq_head->task_list);
+}
+
+void init_wait_entry(struct __wait_queue *wq_entry, int flags);
+
+long prepare_to_wait_event(wait_queue_head_t *q, wait_queue_t *wait, int state);
+
+#endif
 #endif /* __BACKPORT_LINUX_WAIT_H */

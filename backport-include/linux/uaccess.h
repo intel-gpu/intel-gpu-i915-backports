@@ -38,4 +38,9 @@
 #define pagefault_disabled() in_atomic()
 #endif
 
+#ifdef BPM_USER_WRITE_ACCESS_BEGIN_NOT_PRESENT
+#define user_write_access_begin user_access_begin
+#define user_write_access_end user_access_end
+#endif
+
 #endif

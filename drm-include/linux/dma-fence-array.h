@@ -9,11 +9,17 @@
  *	Christian König <christian.koenig@amd.com>
  */
 
-#ifndef __LINUX_DMA_FENCE_ARRAY_H
-#define __LINUX_DMA_FENCE_ARRAY_H
+#ifndef __BACKPORT_LINUX_DMA_FENCE_ARRAY_H
+#define __BACKPORT_LINUX_DMA_FENCE_ARRAY_H
 
 #include <linux/dma-fence.h>
 #include <linux/irq_work.h>
+
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#define dma_fence_array_ops LINUX_DMABUF_BACKPORT(dma_fence_array_ops)
+#define dma_fence_array_create LINUX_DMABUF_BACKPORT(dma_fence_array_create)
+#define dma_fence_match_context LINUX_DMABUF_BACKPORT(dma_fence_match_context)
+#endif
 
 /**
  * struct dma_fence_array_cb - callback helper for fence array

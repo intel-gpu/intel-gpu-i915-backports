@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menu "DMABUF options"
+	depends on BUILD_ALL_MODULES || BUILD_DMABUF
 
 config SYNC_FILE
 	bool "Explicit Synchronization Framework"
 	default n
-	select DMA_SHARED_BUFFER
+	depends on DMA_SHARED_BUFFER
 	help
 	  The Sync File Framework adds explicit synchronization via
 	  userspace. It enables send/receive 'struct dma_fence' objects to/from
@@ -62,12 +63,13 @@ config DMABUF_DEBUG
 
 config DMABUF_SELFTESTS
 	tristate "Selftests for the dma-buf interfaces"
+	depends on m
 	default n
 	depends on DMA_SHARED_BUFFER
 
 menuconfig DMABUF_HEAPS
 	bool "DMA-BUF Userland Memory Heaps"
-	select DMA_SHARED_BUFFER
+	depends on DMA_SHARED_BUFFER
 	help
 	  Choose this option to enable the DMA-BUF userland memory heaps.
 	  This options creates per heap chardevs in /dev/dma_heap/ which

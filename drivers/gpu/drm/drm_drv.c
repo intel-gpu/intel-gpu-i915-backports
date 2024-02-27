@@ -48,7 +48,14 @@
 #include "drm_internal.h"
 #include "drm_legacy.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+#include <backport/bp_module_version.h>
+#endif
+
 MODULE_AUTHOR("Gareth Hughes, Leif Delgass, José Fonseca, Jon Smirl");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 MODULE_DESCRIPTION("DRM shared core routines");
 MODULE_LICENSE("GPL and additional rights");
 
@@ -497,15 +504,40 @@ EXPORT_SYMBOL(drm_dev_unplug);
 static int drm_fs_cnt;
 static struct vfsmount *drm_fs_mnt;
 
+
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+static const struct dentry_operations drm_fs_dops = {
+        .d_dname        = simple_dname,
+};
+
+static const struct super_operations drm_fs_sops = {
+        .statfs         = simple_statfs,
+};
+
+static struct dentry *drm_fs_mount(struct file_system_type *fs_type, int flags,
+                                   const char *dev_name, void *data)
+{
+        return mount_pseudo(fs_type,
+                            "drm:",
+                            &drm_fs_sops,
+                            &drm_fs_dops,
+                            0x010203ff);
+}
+#else
 static int drm_fs_init_fs_context(struct fs_context *fc)
 {
 	return init_pseudo(fc, 0x010203ff) ? 0 : -ENOMEM;
 }
+#endif
 
 static struct file_system_type drm_fs_type = {
 	.name		= "drm",
 	.owner		= THIS_MODULE,
+#ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
+	.mount          = drm_fs_mount,
+#else
 	.init_fs_context = drm_fs_init_fs_context,
+#endif
 	.kill_sb	= kill_anon_super,
 };
 
@@ -1049,6 +1081,9 @@ static int __init drm_core_init(void)
 {
 	int ret;
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+	DRM_INFO("DRM BACKPORTED INIT\n");
+#endif
 	drm_connector_ida_init();
 	idr_init(&drm_minors_idr);
 	drm_memcpy_init_early();

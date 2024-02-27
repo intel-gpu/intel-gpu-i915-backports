@@ -54,41 +54,6 @@ struct gmbus_pin {
 };
 
 /* Map gmbus pin pairs to names and registers. */
-static const struct gmbus_pin gmbus_pins[] = {
-	[GMBUS_PIN_SSC] = { "ssc", GPIOB },
-	[GMBUS_PIN_VGADDC] = { "vga", GPIOA },
-	[GMBUS_PIN_PANEL] = { "panel", GPIOC },
-	[GMBUS_PIN_DPC] = { "dpc", GPIOD },
-	[GMBUS_PIN_DPB] = { "dpb", GPIOE },
-	[GMBUS_PIN_DPD] = { "dpd", GPIOF },
-};
-
-static const struct gmbus_pin gmbus_pins_bdw[] = {
-	[GMBUS_PIN_VGADDC] = { "vga", GPIOA },
-	[GMBUS_PIN_DPC] = { "dpc", GPIOD },
-	[GMBUS_PIN_DPB] = { "dpb", GPIOE },
-	[GMBUS_PIN_DPD] = { "dpd", GPIOF },
-};
-
-static const struct gmbus_pin gmbus_pins_skl[] = {
-	[GMBUS_PIN_DPC] = { "dpc", GPIOD },
-	[GMBUS_PIN_DPB] = { "dpb", GPIOE },
-	[GMBUS_PIN_DPD] = { "dpd", GPIOF },
-};
-
-static const struct gmbus_pin gmbus_pins_bxt[] = {
-	[GMBUS_PIN_1_BXT] = { "dpb", GPIOB },
-	[GMBUS_PIN_2_BXT] = { "dpc", GPIOC },
-	[GMBUS_PIN_3_BXT] = { "misc", GPIOD },
-};
-
-static const struct gmbus_pin gmbus_pins_cnp[] = {
-	[GMBUS_PIN_1_BXT] = { "dpb", GPIOB },
-	[GMBUS_PIN_2_BXT] = { "dpc", GPIOC },
-	[GMBUS_PIN_3_BXT] = { "misc", GPIOD },
-	[GMBUS_PIN_4_CNP] = { "dpd", GPIOE },
-};
-
 static const struct gmbus_pin gmbus_pins_icp[] = {
 	[GMBUS_PIN_1_BXT] = { "dpa", GPIOB },
 	[GMBUS_PIN_2_BXT] = { "dpb", GPIOC },
@@ -145,24 +110,9 @@ static const struct gmbus_pin *get_gmbus_pin(struct drm_i915_private *i915,
 	} else if (INTEL_PCH_TYPE(i915) >= PCH_MTP) {
 		pins = gmbus_pins_mtp;
 		size = ARRAY_SIZE(gmbus_pins_mtp);
-	} else if (INTEL_PCH_TYPE(i915) >= PCH_ICP) {
+	} else {
 		pins = gmbus_pins_icp;
 		size = ARRAY_SIZE(gmbus_pins_icp);
-	} else if (HAS_PCH_CNP(i915)) {
-		pins = gmbus_pins_cnp;
-		size = ARRAY_SIZE(gmbus_pins_cnp);
-	} else if (IS_GEMINILAKE(i915) || IS_BROXTON(i915)) {
-		pins = gmbus_pins_bxt;
-		size = ARRAY_SIZE(gmbus_pins_bxt);
-	} else if (DISPLAY_VER(i915) == 9) {
-		pins = gmbus_pins_skl;
-		size = ARRAY_SIZE(gmbus_pins_skl);
-	} else if (IS_BROADWELL(i915)) {
-		pins = gmbus_pins_bdw;
-		size = ARRAY_SIZE(gmbus_pins_bdw);
-	} else {
-		pins = gmbus_pins;
-		size = ARRAY_SIZE(gmbus_pins);
 	}
 
 	if (pin >= size || !pins[pin].name)
@@ -207,32 +157,6 @@ static void pnv_gmbus_clock_gating(struct drm_i915_private *dev_priv,
 	intel_de_write(dev_priv, DSPCLK_GATE_D, val);
 }
 
-static void pch_gmbus_clock_gating(struct drm_i915_private *dev_priv,
-				   bool enable)
-{
-	u32 val;
-
-	val = intel_de_read(dev_priv, SOUTH_DSPCLK_GATE_D);
-	if (!enable)
-		val |= PCH_GMBUSUNIT_CLOCK_GATE_DISABLE;
-	else
-		val &= ~PCH_GMBUSUNIT_CLOCK_GATE_DISABLE;
-	intel_de_write(dev_priv, SOUTH_DSPCLK_GATE_D, val);
-}
-
-static void bxt_gmbus_clock_gating(struct drm_i915_private *dev_priv,
-				   bool enable)
-{
-	u32 val;
-
-	val = intel_de_read(dev_priv, GEN9_CLKGATE_DIS_4);
-	if (!enable)
-		val |= BXT_GMBUS_GATING_DIS;
-	else
-		val &= ~BXT_GMBUS_GATING_DIS;
-	intel_de_write(dev_priv, GEN9_CLKGATE_DIS_4, val);
-}
-
 static u32 get_reserved(struct intel_gmbus *bus)
 {
 	struct drm_i915_private *i915 = bus->dev_priv;
@@ -240,10 +164,9 @@ static u32 get_reserved(struct intel_gmbus *bus)
 	u32 reserved = 0;
 
 	/* On most chips, these bits must be preserved in software. */
-	if (!IS_I830(i915) && !IS_I845G(i915))
-		reserved = intel_uncore_read_notrace(uncore, bus->gpio_reg) &
-			   (GPIO_DATA_PULLUP_DISABLE |
-			    GPIO_CLOCK_PULLUP_DISABLE);
+	reserved = intel_uncore_read_notrace(uncore, bus->gpio_reg) &
+		(GPIO_DATA_PULLUP_DISABLE |
+		 GPIO_CLOCK_PULLUP_DISABLE);
 
 	return reserved;
 }
@@ -432,8 +355,7 @@ gmbus_wait_idle(struct drm_i915_private *dev_priv)
 
 static unsigned int gmbus_max_xfer_size(struct drm_i915_private *dev_priv)
 {
-	return DISPLAY_VER(dev_priv) >= 9 ? GEN9_GMBUS_BYTE_COUNT_MAX :
-	       GMBUS_BYTE_COUNT_MAX;
+	return GEN9_GMBUS_BYTE_COUNT_MAX;
 }
 
 static int
@@ -637,12 +559,6 @@ do_gmbus_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int num,
 	int i = 0, inc, try = 0;
 	int ret = 0;
 
-	/* Display WA #0868: skl,bxt,kbl,cfl,glk */
-	if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
-		bxt_gmbus_clock_gating(dev_priv, false);
-	else if (HAS_PCH_SPT(dev_priv) || HAS_PCH_CNP(dev_priv))
-		pch_gmbus_clock_gating(dev_priv, false);
-
 retry:
 	intel_de_write_fw(dev_priv, GMBUS0, gmbus0_source | bus->reg0);
 
@@ -750,12 +666,6 @@ timeout:
 	ret = -EAGAIN;
 
 out:
-	/* Display WA #0868: skl,bxt,kbl,cfl,glk */
-	if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
-		bxt_gmbus_clock_gating(dev_priv, true);
-	else if (HAS_PCH_SPT(dev_priv) || HAS_PCH_CNP(dev_priv))
-		pch_gmbus_clock_gating(dev_priv, true);
-
 	return ret;
 }
 
@@ -880,14 +790,11 @@ int intel_gmbus_setup(struct drm_i915_private *dev_priv)
 	unsigned int pin;
 	int ret;
 
-	if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
-		dev_priv->gpio_mmio_base = VLV_DISPLAY_BASE;
-	else if (!HAS_GMCH(dev_priv))
-		/*
-		 * Broxton uses the same PCH offsets for South Display Engine,
-		 * even though it doesn't have a PCH.
-		 */
-		dev_priv->gpio_mmio_base = PCH_DISPLAY_BASE;
+	/*
+	 * Broxton uses the same PCH offsets for South Display Engine,
+	 * even though it doesn't have a PCH.
+	 */
+	dev_priv->gpio_mmio_base = PCH_DISPLAY_BASE;
 
 	mutex_init(&dev_priv->gmbus_mutex);
 	init_waitqueue_head(&dev_priv->gmbus_wait_queue);
@@ -926,10 +833,6 @@ int intel_gmbus_setup(struct drm_i915_private *dev_priv)
 
 		/* By default use a conservative clock rate */
 		bus->reg0 = pin | GMBUS_RATE_100KHZ;
-
-		/* gmbus seems to be broken on i830 */
-		if (IS_I830(dev_priv))
-			bus->force_bit = 1;
 
 		intel_gpio_setup(bus, GPIO(gmbus_pin->gpio));
 

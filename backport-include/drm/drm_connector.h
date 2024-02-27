@@ -28,4 +28,12 @@
 #define drm_mode_create_tv_properties drm_mode_create_tv_properties_legacy
 #endif
 
+#ifdef BPM_SUPPORTED_COLORSPACES_ARG_NOT_PRESENT
+#define drm_mode_create_hdmi_colorspace_property(connector) \
+        drm_mode_create_hdmi_colorspace_property(connector, 0)
+
+#define drm_mode_create_dp_colorspace_property(connector) \
+        drm_mode_create_dp_colorspace_property(connector, 0)
+#endif
+
 #endif /* __BACKPORT_DRM_CONNECTOR_H__ */

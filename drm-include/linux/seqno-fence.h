@@ -9,11 +9,15 @@
  *   Maarten Lankhorst <maarten.lankhorst@canonical.com>
  */
 
-#ifndef __LINUX_SEQNO_FENCE_H
-#define __LINUX_SEQNO_FENCE_H
+#ifndef __BACKPORT_LINUX_SEQNO_FENCE_H
+#define __BACKPORT_LINUX_SEQNO_FENCE_H
 
 #include <linux/dma-fence.h>
 #include <linux/dma-buf.h>
+
+#ifdef BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS
+#define seqno_fence_ops LINUX_DMABUF_BACKPORT(seqno_fence_ops)
+#endif
 
 enum seqno_fence_condition {
 	SEQNO_FENCE_WAIT_GEQUAL,

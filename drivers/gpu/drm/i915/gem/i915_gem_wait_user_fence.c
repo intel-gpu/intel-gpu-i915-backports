@@ -312,7 +312,9 @@ static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
 		if (ufence_compare(wake))
 			return true;
 
+#ifdef BPM_USLEEP_RANGE_STATE_NOT_PRESENT
 		usleep_range_state(0, 1, TASK_INTERRUPTIBLE);
+#endif
 	} while (!busy_wait_stop(wake->tsk, timeout_ns, cpu));
 
 	return false;

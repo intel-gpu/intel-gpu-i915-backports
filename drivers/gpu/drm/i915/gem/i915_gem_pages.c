@@ -58,15 +58,6 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 
 	shrinkable = i915_gem_object_is_shrinkable(obj);
 
-	if (i915_gem_object_is_tiled(obj) &&
-	    i915->gem_quirks & GEM_QUIRK_PIN_SWIZZLED_PAGES) {
-		GEM_BUG_ON(i915_gem_object_has_tiling_quirk(obj));
-		i915_gem_object_set_tiling_quirk(obj);
-		GEM_BUG_ON(!list_empty(&obj->mm.link));
-		atomic_inc(&obj->mm.shrink_pin);
-		shrinkable = false;
-	}
-
 	if (shrinkable) {
 		struct list_head *list;
 		unsigned long flags;
@@ -93,6 +84,8 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 
 		if (obj->mm.madv != I915_MADV_WILLNEED)
 			list = &mem->objects.purgeable;
+		else if (obj->memory_mask & BIT(REGION_SMEM))
+			list = &mem->objects.migratable;
 		else
 			list = &mem->objects.list;
 
@@ -235,16 +228,6 @@ void i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 	obj->mm.pages = ERR_PTR(-EFAULT);
 }
 
-/* Try to discard unwanted pages */
-void i915_gem_object_writeback(struct drm_i915_gem_object *obj)
-{
-	assert_object_held_shared(obj);
-	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-
-	if (obj->ops->writeback)
-		obj->ops->writeback(obj);
-}
-
 void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj,
 				       struct sg_table *pages)
 {
@@ -352,7 +335,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	if (IS_ERR_OR_NULL(pages))
 		return 0;
 
-	i915_gem_object_release_mmap_offset(obj);
+	i915_gem_object_release_mmap(obj);
 
 	err = obj->ops->put_pages(obj, pages);
 	if (err) {
@@ -370,6 +353,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	return 0;
 }
 
+#ifndef BPM_VMAP_PFN_NOT_PRESENT
 /* The 'mapping' part of i915_gem_object_pin_map() below */
 static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 				      enum i915_map_type type)
@@ -465,6 +449,108 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 	return vaddr ?: ERR_PTR(-ENOMEM);
 }
 
+#else
+static inline pte_t iomap_pte(resource_size_t base,
+                              dma_addr_t offset,
+                              pgprot_t prot)
+{
+        return pte_mkspecial(pfn_pte((base + offset) >> PAGE_SHIFT, prot));
+}
+
+/* The 'mapping' part of i915_gem_object_pin_map() below */
+static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
+				      enum i915_map_type type)
+{
+	unsigned long n_pte = obj->base.size >> PAGE_SHIFT;
+	struct sg_table *sgt = obj->mm.pages;
+	pte_t *stack[32], **mem;
+	struct vm_struct *area;
+	pgprot_t pgprot;
+
+	if (!i915_gem_object_has_struct_page(obj) && type != I915_MAP_WC)
+		return ERR_PTR(-ENODEV);
+
+	if (GEM_WARN_ON(type == I915_MAP_WC &&
+			!static_cpu_has(X86_FEATURE_PAT)))
+		return ERR_PTR(-ENODEV);
+
+	/* A single page can always be kmapped */
+	if (n_pte == 1 && type == I915_MAP_WB) {
+		struct page *page = sg_page(sgt->sgl);
+
+		/*
+		 * On 32b, highmem using a finite set of indirect PTE (i.e.
+		 * vmap) to provide virtual mappings of the high pages.
+		 * As these are finite, map_new_virtual() must wait for some
+		 * other kmap() to finish when it runs out. If we map a large
+		 * number of objects, there is no method for it to tell us
+		 * to release the mappings, and we deadlock.
+		 *
+		 * However, if we make an explicit vmap of the page, that
+		 * uses a larger vmalloc arena, and also has the ability
+		 * to tell us to release unwanted mappings. Most importantly,
+		 * it will fail and propagate an error instead of waiting
+		 * forever.
+		 *
+		 * So if the page is beyond the 32b boundary, make an explicit
+		 * vmap.
+		 */
+                if (!PageHighMem(page))
+                        return page_address(page);
+        }
+
+        mem = stack;
+        if (n_pte > ARRAY_SIZE(stack)) {
+                 /* Too big for stack -- allocate temporary array instead */
+                mem = kvmalloc_array(n_pte, sizeof(*mem), GFP_KERNEL);
+                if (!mem)
+                        return NULL;
+        }
+
+        area = alloc_vm_area(obj->base.size, mem);
+        if (!area) {
+                if (mem != stack)
+                        kvfree(mem);
+                return NULL;
+        }
+
+        switch (type) {
+        default:
+                MISSING_CASE(type);
+                fallthrough;    /* to use PAGE_KERNEL anyway */
+        case I915_MAP_WB:
+		pgprot = PAGE_KERNEL;
+		break;
+	case I915_MAP_WC:
+		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
+		break;
+	}
+
+	if (i915_gem_object_has_struct_page(obj)) {
+                struct sgt_iter iter;
+                struct page *page;
+                pte_t **ptes = mem;
+                for_each_sgt_page(page, iter, sgt)
+                        **ptes++ = mk_pte(page, pgprot);
+        } else {
+                resource_size_t iomap;
+                struct sgt_iter iter;
+                pte_t **ptes = mem;
+                dma_addr_t addr;
+                iomap = obj->mm.region.mem->iomap.base;
+                iomap -= obj->mm.region.mem->region.start;
+                for_each_sgt_daddr(addr, iter, sgt)
+                        **ptes++ = iomap_pte(iomap, addr, pgprot);
+
+	}
+
+	if (mem != stack)
+		kvfree(mem);
+
+	return area->addr;
+}
+#endif
+
 /* get, pin, and map the pages of the object into kernel space */
 void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 			      enum i915_map_type type)
@@ -519,6 +605,7 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 	}
 
 	if (!ptr) {
+#ifndef BPM_VMAP_PFN_NOT_PRESENT
 		if (GEM_WARN_ON(type == I915_MAP_WC && !pat_enabled()))
 			ptr = ERR_PTR(-ENODEV);
 		else if (i915_gem_object_has_struct_page(obj))
@@ -527,6 +614,13 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 			ptr = i915_gem_object_map_pfn(obj, type);
 		if (IS_ERR(ptr))
 			goto err_unpin;
+#else
+		ptr = i915_gem_object_map(obj, type);
+		if (!ptr) {
+			ptr = ERR_PTR(-ENOMEM);
+			goto err_unpin;
+		}
+#endif
 
 		obj->mm.mapping = page_pack_bits(ptr, type);
 	}
@@ -577,7 +671,7 @@ void __i915_gem_object_flush_map(struct drm_i915_gem_object *obj,
 
 	wmb(); /* let all previous writes be visible to coherent partners */
 
-	if (obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE)
+	if (obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE)
 		return;
 
 	ptr = page_unpack_bits(obj->mm.mapping, &has_type);

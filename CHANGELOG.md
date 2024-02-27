@@ -1,4 +1,49 @@
 # ChangeLog
+## Release I915_24WW05.5_803.29_23.10.32_231129.32
+* i915: Add sriov force fixed CCS-1 mode for max
+* i915: Add support to dump multiple engines for offline debugging
+* i915: Add info dmesg to describe if eudebug enabled
+* i915: Add additional capability related to tracking engine busyness
+* i915: update for opportunistic migration back to lmem after eviction
+* i915: fix to improve responsiveness of memory eviction
+* i915: update timeslice back to 5ms for performance on lammps wl
+* i915: add Wa_16018031267 and Wa_16018063123 for flex and max
+* i915: fix to avoid warning race during dma_fence error propagation
+* i915: fix to avoid deadlock during wait-for-bind before eviction
+* i915: fix to correct packet length for send_fault_reply
+* i915: fix to avoid cat error due to off by one memory address
+* i915: fix to wa to correctly steer GuC writes after engine reset
+* i915: fix for gt wakeref handling
+* i915: fix for off by one in memory error handling
+* i915: fix to ensure pte writes from gpu are fully written
+* i915: Fix for issue seen during an L0 compliance test
+* i915: Add 1550vg PCIe Device ID for max
+* i915: add enable group busyness counters in a vf
+* i915: update to support 4K pages in lmem swapper
+* i915: fix for use after free during cleanup of pinned contexts
+* i915: fix for off by one error when clearing ppgtt error
+* i915: update to stop driver load and report if HBM training failures reported by fsp firmware
+* i915: fix to avoid handling ras errors that were already handled
+* i915: update the timeout for recording default contexts
+* i915: add sriov force fixed CCS-1 mode for max
+* i915: fix pf-coredump vma capturing w/o debugger
+* i915: add support to dump multiple engines for offline debugging
+* i915: fix eudebug to ensure pagefault dumping is async
+* i915: fix for eudebug to clean up on last vm destroy
+* i915: add info dmesg to describe if eudebug enabled
+* i915: update to enable softpg for improved small blitter latency on max
+* i915: fix invalid ref after request retired
+* i915: add additional capability related to tracking engine busyness
+* i915: fix to avoid evicting pagetables during suspend/resume
+* i915: fix for suspend/resume restoration to ensure correctness of completion status
+* i915: fix for eudebug race of client's PID when looking for debugger
+* i915: fix for debugger error message on vma evict
+* i915: fix for divide by zero error in OA
+* i915: fix to properly clean up vm reference on early process termination
+* i915: update to print error msg on unclean debugger shutdown
+* i915: fix race in debugger destruction path
+* i915: update to allow user to specify mempolicy in numa configurations
+
 ## Release I915_23WW49.5_775.20_23.9.11_231003.15
 * i915: add sriov force fixed CCS-1 mode for max
 * i915: update to allow user to specify mempolicy in numa configurations

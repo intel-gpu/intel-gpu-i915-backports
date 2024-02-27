@@ -5,6 +5,7 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/stackdepot.h>
 #include <linux/types.h>
 
 #include <drm/drm_print.h>
@@ -24,12 +25,47 @@
 struct i915_drm_client_bo {
 	struct rb_node node;
 	struct i915_drm_client *client;
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+	depot_stack_handle_t stack;
+#endif
 	unsigned int count;
 	bool shared;
 };
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+static noinline void save_stack(struct i915_drm_client_bo *cb)
+{
+	unsigned long entries[32];
+	unsigned int n;
+
+	n = stack_trace_save(entries, ARRAY_SIZE(entries), 1);
+	cb->stack = stack_depot_save(entries, n, GFP_KERNEL);
+}
+
+static void show_stacks(struct drm_i915_gem_object *obj)
+{
+	struct i915_drm_client_bo *cb, *n;
+	char buf[1024];
+
+	pr_err("obj:%px, handle_count:%d, resident:%s\n",
+	       obj, obj->base.handle_count, str_yes_no(obj->client.resident));
+	rbtree_postorder_for_each_entry_safe(cb, n, &obj->client.rb, node) {
+		pr_err("cb:%px, count:%d, shared:%d\n", cb, cb->count, cb->shared);
+		if (cb->stack) {
+			stack_depot_snprint(cb->stack, buf, sizeof(buf), 0);
+			pr_err("%s\n", buf);
+		}
+	}
+}
+#else
+#define save_stack(cb)
+#define show_stacks(obj)
+#endif
+
+#ifndef BPM_SYSFS_EMIT_NOT_PRESENT
 /* compat: 2efc459d06f1 ("sysfs: Add sysfs_emit and sysfs_emit_at to format sysfs output") */
 #define sysfs_emit(buf, fmt...) scnprintf(buf, PAGE_SIZE, fmt)
+#endif
 
 void i915_drm_clients_init(struct i915_drm_clients *clients,
 			   struct drm_i915_private *i915)
@@ -219,32 +255,41 @@ void i915_drm_client_init_bo(struct drm_i915_gem_object *obj)
 	obj->client.rb = RB_ROOT;
 }
 
-static bool object_has_lmem(const struct drm_i915_gem_object *obj)
+static inline bool object_has_lmem(const struct drm_i915_gem_object *obj)
 {
-	int i;
-
-	for (i = 0; i < obj->mm.n_placements; i++) {
-		struct intel_memory_region *placement = obj->mm.placements[i];
-
-		if (placement->type == INTEL_MEMORY_LOCAL)
-			return true;
-	}
-
-	return false;
+	return obj->memory_mask & REGION_LMEM;
 }
 
-static int sort_client_key(const void *key, const struct rb_node *node)
+static inline int sort_client_key(const void *key, const struct rb_node *node)
 {
 	const struct i915_drm_client_bo *cb = rb_entry(node, typeof(*cb), node);
 
 	return ptrdiff(key, cb->client);
 }
 
-static int sort_client(struct rb_node *node, const struct rb_node *parent)
+static inline int sort_client(struct rb_node *node, const struct rb_node *parent)
 {
 	const struct i915_drm_client_bo *cb = rb_entry(node, typeof(*cb), node);
 
 	return sort_client_key(cb->client, parent);
+}
+
+static void cb_account(struct i915_drm_client *client,
+		       const struct drm_i915_gem_object *obj,
+		       const struct i915_drm_client_bo *cb,
+		       s64 sz)
+{
+	if (cb->shared)
+		atomic64_add(sz, &client->imported_devm_bytes);
+	else
+		atomic64_add(sz, &client->created_devm_bytes);
+
+	if (obj->client.resident) {
+		if (cb->shared)
+			atomic64_add(sz, &client->resident_imported_devm_bytes);
+		else
+			atomic64_add(sz, &client->resident_created_devm_bytes);
+	}
 }
 
 int i915_drm_client_add_bo(struct i915_drm_client *client,
@@ -263,6 +308,7 @@ int i915_drm_client_add_bo(struct i915_drm_client *client,
 
 	cb->client = client;
 	cb->shared = obj->base.dma_buf;
+	save_stack(cb);
 
 	spin_lock(&obj->client.lock);
 
@@ -271,21 +317,7 @@ int i915_drm_client_add_bo(struct i915_drm_client *client,
 		kfree(cb);
 		cb = rb_entry(old, typeof(*cb), node);
 	} else {
-		if (cb->shared)
-			atomic64_add(obj->base.size,
-				     &client->imported_devm_bytes);
-		else
-			atomic64_add(obj->base.size,
-				     &client->created_devm_bytes);
-
-		if (obj->client.resident) {
-			if (cb->shared)
-				atomic64_add(obj->base.size,
-					     &client->resident_imported_devm_bytes);
-			else
-				atomic64_add(obj->base.size,
-					     &client->resident_created_devm_bytes);
-		}
+		cb_account(client, obj, cb, obj->base.size);
 	}
 
 	cb->count++;
@@ -297,7 +329,7 @@ int i915_drm_client_add_bo(struct i915_drm_client *client,
 void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
 				   bool resident)
 {
-	struct i915_drm_client_bo *cb, *n;
+	const struct i915_drm_client_bo *cb, *n;
 	int64_t sz;
 
 	sz = obj->base.size;
@@ -318,8 +350,8 @@ void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
 }
 
 static struct i915_drm_client_bo *
-lookup_client(struct i915_drm_client *client,
-	      struct drm_i915_gem_object *obj)
+lookup_client(const struct i915_drm_client *client,
+	      const struct drm_i915_gem_object *obj)
 {
 	struct rb_node *rb = rb_find(client, &obj->client.rb, sort_client_key);
 
@@ -332,26 +364,14 @@ void i915_drm_client_del_bo(struct i915_drm_client *client,
 {
 	struct i915_drm_client_bo *cb;
 
+	if (!object_has_lmem(obj))
+		return;
+
 	spin_lock(&obj->client.lock);
 	cb = lookup_client(client, obj);
 	if (cb && !--cb->count) {
-		if (cb->shared)
-			atomic64_sub(obj->base.size,
-				     &client->imported_devm_bytes);
-		else
-			atomic64_sub(obj->base.size,
-				     &client->created_devm_bytes);
-
-		if (obj->client.resident) {
-			if (cb->shared)
-				atomic64_sub(obj->base.size,
-					     &client->resident_imported_devm_bytes);
-			else
-				atomic64_sub(obj->base.size,
-					     &client->resident_created_devm_bytes);
-		}
-
 		rb_erase(&cb->node, &obj->client.rb);
+		cb_account(client, obj, cb, -obj->base.size);
 		kfree(cb);
 	}
 	spin_unlock(&obj->client.lock);
@@ -359,7 +379,15 @@ void i915_drm_client_del_bo(struct i915_drm_client *client,
 
 void i915_drm_client_fini_bo(struct drm_i915_gem_object *obj)
 {
-	GEM_BUG_ON(!RB_EMPTY_ROOT(&obj->client.rb));
+	struct i915_drm_client_bo *cb, *n;
+
+	if (!GEM_WARN_ON(!RB_EMPTY_ROOT(&obj->client.rb)))
+		return;
+
+	show_stacks(obj);
+	rbtree_postorder_for_each_entry_safe(cb, n, &obj->client.rb, node)
+		kfree(cb);
+	obj->client.rb = RB_ROOT;
 }
 
 static int
@@ -586,7 +614,7 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	}
 	RCU_INIT_POINTER(client->name, name);
 
-	i915_debugger_wait_on_discovery(clients->i915, NULL);
+	i915_debugger_wait_on_discovery(client);
 
 	ret = xa_alloc_cyclic(&clients->xarray, &client->id, client,
 			      xa_limit_32b, &clients->next_id, GFP_KERNEL);

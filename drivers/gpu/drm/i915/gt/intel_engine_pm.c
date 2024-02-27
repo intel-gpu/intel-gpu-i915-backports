@@ -52,7 +52,11 @@ static unsigned long __timeline_mark_lock(struct intel_context *ce)
 static void __timeline_mark_unlock(struct intel_context *ce,
 				   unsigned long flags)
 {
+#ifdef BPM_LOCKING_NESTED_ARG_NOT_PRESENT
+	mutex_release(&ce->timeline->mutex.dep_map, 0, _THIS_IP_);
+#else
 	mutex_release(&ce->timeline->mutex.dep_map, _THIS_IP_);
+#endif
 	local_irq_restore(flags);
 }
 

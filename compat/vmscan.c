@@ -20,3 +20,23 @@ int backport_register_shrinker(struct shrinker *shrinker)
 #define register_shrinker backport_register_shrinker
 EXPORT_SYMBOL(register_shrinker);
 #endif
+
+#ifdef BPM_CHECK_MOVE_UNEVICTABLE_PAGES_NOT_PRESENT
+#include<linux/swap.h>
+void check_move_unevictable_pages(struct pagevec *pvec)
+{
+       struct folio_batch fbatch;
+       unsigned i;
+
+       folio_batch_init(&fbatch);
+       for (i = 0; i < pvec->nr; i++) {
+               struct page *page = pvec->pages[i];
+
+               if (PageTransTail(page))
+                       continue;
+               folio_batch_add(&fbatch, page_folio(page));
+       }
+       check_move_unevictable_folios(&fbatch);
+}
+EXPORT_SYMBOL_GPL(check_move_unevictable_pages);
+#endif

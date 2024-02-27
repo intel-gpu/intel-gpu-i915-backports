@@ -168,7 +168,9 @@ ATTRIBUTE_GROUPS(intel_pmt);
 
 static struct class intel_pmt_class = {
 	.name = "intel_pmt",
+#ifndef BPM_STRUCT_CLASS_OWNER_MEMBER_NOT_PRESENT
 	.owner = THIS_MODULE,
+#endif
 	.dev_groups = intel_pmt_groups,
 };
 

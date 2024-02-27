@@ -21,7 +21,7 @@
 #define MEMIRQ_DEBUG(_gt, ...) typecheck(struct intel_gt *, _gt)
 #endif
 
-/**
+/*
  * Memory based irq page layout
  * We use a single page to contain the different objects used for memory
  * based irq (which are also called "page" in the specs, even if they
@@ -162,7 +162,7 @@ int intel_iov_memirq_init(struct intel_iov *iov)
 	return 0;
 }
 
-/**
+/*
  * intel_iov_irq_fini - Release data used by memory based interrupts.
  * @iov: the IOV struct
  *
@@ -176,7 +176,7 @@ void intel_iov_memirq_fini(struct intel_iov *iov)
 	vf_release_memirq_data(iov);
 }
 
-/**
+/*
  * intel_iov_memirq_prepare_guc - Prepare GuC to use memory based interrrupts.
  * @iov: the IOV struct
  *

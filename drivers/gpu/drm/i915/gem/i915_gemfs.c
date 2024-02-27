@@ -29,29 +29,19 @@ void i915_gemfs_init(struct drm_i915_private *i915)
 	 * regressions such a slow reads issue on Broadwell and Skylake.
 	 */
 
-	if (GRAPHICS_VER(i915) < 11 && !i915_vtd_active(i915))
-		return;
-
 	if (!IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE))
-		goto err;
+		return;
 
 	type = get_fs_type("tmpfs");
 	if (!type)
-		goto err;
+		return;
 
 	gemfs = vfs_kern_mount(type, SB_KERNMOUNT, type->name, huge_opt);
 	if (IS_ERR(gemfs))
-		goto err;
+		return;
 
 	i915->mm.gemfs = gemfs;
 	drm_info(&i915->drm, "Using Transparent Hugepages\n");
-	return;
-
-err:
-	drm_notice(&i915->drm,
-		   "Transparent Hugepage support is recommended for optimal performance%s\n",
-		   GRAPHICS_VER(i915) >= 11 ? " on this platform!" :
-					      " when IOMMU is enabled!");
 }
 
 void i915_gemfs_fini(struct drm_i915_private *i915)

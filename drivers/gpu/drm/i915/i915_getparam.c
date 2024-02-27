@@ -5,7 +5,6 @@
 #include "gem/i915_gem_mman.h"
 #include "gt/intel_engine_user.h"
 
-#include "i915_cmd_parser.h"
 #include "i915_drv.h"
 #include "i915_getparam.h"
 #include "i915_perf.h"
@@ -35,10 +34,10 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = pdev->revision;
 		break;
 	case I915_PARAM_NUM_FENCES_AVAIL:
-		value = to_gt(i915)->ggtt->num_fences;
+		value = 0;
 		break;
 	case I915_PARAM_HAS_OVERLAY:
-		value = !!i915->overlay;
+		value = false;
 		break;
 	case I915_PARAM_HAS_BSD:
 		value = !!intel_engine_lookup_user(i915,
@@ -63,7 +62,7 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = HAS_WT(i915);
 		break;
 	case I915_PARAM_HAS_ALIASING_PPGTT:
-		value = INTEL_PPGTT(i915);
+		value = 2;
 		break;
 	case I915_PARAM_HAS_SEMAPHORES:
 		value = !!(i915->caps.scheduler & I915_SCHEDULER_CAP_SEMAPHORES);
@@ -72,8 +71,7 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = HAS_SECURE_BATCHES(i915) && capable(CAP_SYS_ADMIN);
 		break;
 	case I915_PARAM_CMD_PARSER_VERSION:
-		value = i915_cmd_parser_get_version(i915);
-		break;
+		return -EINVAL;
 	case I915_PARAM_SUBSLICE_TOTAL:
 		value = intel_sseu_subslice_total(sseu);
 		if (!value)
@@ -142,6 +140,8 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_PARAM_HAS_EXEC_FENCE_ARRAY:
 	case I915_PARAM_HAS_EXEC_SUBMIT_FENCE:
 	case I915_PARAM_HAS_EXEC_TIMELINE_FENCES:
+	case PRELIM_I915_PARAM_HAS_VM_BIND:
+	case PRELIM_I915_PARAM_HAS_CHUNK_SIZE:
 		/* For the time being all of these are always true;
 		 * if some supported hardware does not have one of these
 		 * features this value needs to be provided from
@@ -175,16 +175,13 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		value = to_gt(i915)->clock_frequency;
 		break;
 	case I915_PARAM_MMAP_GTT_COHERENT:
-		value = INTEL_INFO(i915)->has_coherent_ggtt;
+		value = false;
 		break;
 	case I915_PARAM_PERF_REVISION:
 		value = i915_perf_ioctl_version();
 		break;
 	case I915_PARAM_OA_TIMESTAMP_FREQUENCY:
 		value = i915_perf_oa_timestamp_frequency(i915);
-		break;
-	case PRELIM_I915_PARAM_HAS_VM_BIND:
-		value = GRAPHICS_VER(i915) >= 12;
 		break;
 	case PRELIM_I915_PARAM_EXECBUF2_MAX_ENGINE:
 		value = 256;
@@ -221,12 +218,6 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 		break;
 	case PRELIM_I915_PARAM_EU_DEBUGGER_VERSION:
 		value = IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER) ? PRELIM_DRM_I915_DEBUG_VERSION : 0;
-		break;
-	case PRELIM_I915_PARAM_HAS_CHUNK_SIZE:
-		/* restrict to platforms where legacy mmap is not supported */
-		if (!(IS_DGFX(i915) || GRAPHICS_VER_FULL(i915) > IP_VER(12, 0)))
-			return -EINVAL;
-		value = 1;
 		break;
 	default:
 		DRM_DEBUG("Unknown parameter %d\n", param->param);

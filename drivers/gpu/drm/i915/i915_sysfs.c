@@ -672,6 +672,7 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 		struct intel_memory_region_link *pos;
 		struct list_head *phases[] = {
 			&mem->objects.purgeable,
+			&mem->objects.migratable,
 			&mem->objects.list,
 			NULL,
 		}, **phase = phases;

@@ -243,18 +243,6 @@ static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_csc_0, SOC_ERR_INDEX(INTEL_GT_SOC_I
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_csc_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_PSF_CSC_1));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_csc_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_PSF_CSC_2));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_punit, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_PUNIT));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_MDFI_EAST));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_west, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_MDFI_WEST));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_MDFI_SOUTH));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss0_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS0_0));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss0_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS0_1));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss0_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS0_2));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss0_3, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS0_3));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss1_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS1_0));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss1_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS1_1));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss1_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS1_2));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss1_3, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS1_3));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_fabric_ss1_4, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_FABRIC_SS1_4));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_0));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_1));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_2));
@@ -263,30 +251,6 @@ static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_4, SOC_ERR_INDEX(INTEL_GT_SOC_I
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_5, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_5));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_6, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_6));
 static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_7, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_7));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_8, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_8));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_9, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_9));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_10, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_10));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_11, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_11));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_12, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_12));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_13, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_13));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_14, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_14));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss0_15, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS0_15));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_0));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_1));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_2));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_3, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_3));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_4, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_4));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_5, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_5));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_6, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_6));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_7, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_7));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_8, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_8));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_9, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_9));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_10, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_10));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_11, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_11));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_12, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_12));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_13, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_13));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_14, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_14));
-static SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_15, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, SOC_HBM_SS1_15));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_0));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_1));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_psf_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2));
@@ -409,57 +373,6 @@ static const struct attribute *pvc_gt_error_attrs[] = {
 	NULL
 };
 
-static const struct attribute *soc_error_attrs[] = {
-	&dev_attr_soc_fatal_psf_csc_0.attr.attr,
-	&dev_attr_soc_fatal_psf_csc_1.attr.attr,
-	&dev_attr_soc_fatal_psf_csc_2.attr.attr,
-	&dev_attr_soc_fatal_punit.attr.attr,
-	&dev_attr_soc_fatal_mdfi_east.attr.attr,
-	&dev_attr_soc_fatal_mdfi_west.attr.attr,
-	&dev_attr_soc_fatal_mdfi_south.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss0_0.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss0_1.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss0_2.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss0_3.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss1_0.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss1_1.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss1_2.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss1_3.attr.attr,
-	&dev_attr_soc_fatal_fabric_ss1_4.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_0.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_1.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_2.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_3.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_4.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_5.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_6.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_7.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_8.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_9.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_10.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_11.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_12.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_13.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_14.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss0_15.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_0.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_1.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_2.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_3.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_4.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_5.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_6.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_7.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_8.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_9.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_10.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_11.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_12.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_13.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_14.attr.attr,
-	&dev_attr_soc_fatal_hbm_ss1_15.attr.attr,
-	NULL
-};
 static const struct attribute *pvc_soc_error_attrs[] = {
 	&dev_attr_soc_fatal_psf_csc_0.attr.attr,
 	&dev_attr_soc_fatal_psf_csc_1.attr.attr,
@@ -533,10 +446,6 @@ void intel_gt_sysfs_register_errors(struct intel_gt *gt, struct kobject *parent)
 	if ((HAS_MEM_SPARING_SUPPORT(gt->i915) && gt->info.id == 0) &&
 	    sysfs_create_files(dir, gsc_error_attrs))
 		drm_warn(&gt->i915->drm, "Failed to create gt%u gsc_error sysfs\n", gt->info.id);
-
-	if (IS_XEHPSDV(gt->i915) &&
-	    sysfs_create_files(dir, soc_error_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u soc_error sysfs\n", gt->info.id);
 
 	if (IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, pvc_gt_error_attrs))
 		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error sysfs\n", gt->info.id);

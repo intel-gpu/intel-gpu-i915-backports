@@ -125,10 +125,12 @@ static const struct attribute_group iov_attr_group = {
 	.attrs = iov_attrs,
 };
 
+#ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
 static const struct attribute_group *default_iov_attr_groups[] = {
 	&iov_attr_group,
 	NULL
 };
+#endif
 
 /* PF only attributes */
 
@@ -764,7 +766,11 @@ static void iov_kobj_release(struct kobject *kobj)
 static struct kobj_type iov_ktype = {
 	.release = iov_kobj_release,
 	.sysfs_ops = &iov_sysfs_ops,
+#ifdef BPM_DEFAULT_GROUPS_NOT_PRESENT
+	.default_attrs = iov_attrs,
+#else
 	.default_groups = default_iov_attr_groups,
+#endif
 };
 
 static int pf_setup_provisioning(struct intel_iov *iov)

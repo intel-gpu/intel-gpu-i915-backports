@@ -170,8 +170,11 @@ static int sync_info_debugfs_show(struct seq_file *s, void *unused)
 }
 
 DEFINE_SHOW_ATTRIBUTE(sync_info_debugfs);
-
+#ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
+__init int sync_debugfs_init(void)
+#else
 static __init int sync_debugfs_init(void)
+#endif
 {
 	dbgfs = debugfs_create_dir("sync", NULL);
 
@@ -187,4 +190,6 @@ static __init int sync_debugfs_init(void)
 
 	return 0;
 }
+#ifndef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 late_initcall(sync_debugfs_init);
+#endif

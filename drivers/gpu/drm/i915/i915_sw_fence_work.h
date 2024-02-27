@@ -47,17 +47,9 @@ void __dma_fence_work_init(struct dma_fence_work *f,
 			   struct i915_sched_engine *se,
 			   const char *name,
 			   struct lock_class_key *key);
-#ifdef CONFIG_LOCKDEP
 #define dma_fence_work_init(f, ops, se)				\
-do {								\
-	static struct lock_class_key __key;			\
-								\
-	__dma_fence_work_init((f), (ops), (se), #f, &__key);		\
-} while (0)
-#else
-#define dma_fence_work_init(f, ops, se)				\
-	__dma_fence_work_init((f), (ops), se, NULL, NULL)
-#endif
+	__dma_fence_work_init((f), (ops), (se), #f, (void *)(ops))
+
 void dma_fence_work_chain(struct dma_fence_work *f, struct dma_fence *signal);
 
 static inline void dma_fence_work_commit(struct dma_fence_work *f)

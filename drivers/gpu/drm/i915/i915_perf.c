@@ -338,14 +338,6 @@ static struct i915_oa_format oa_formats[PRELIM_I915_OA_FORMAT_MAX] = {
 	[PRELIM_I915_OAM_FORMAT_MPEC8u32_B8_C8]	= { 2, 128, TYPE_OAM, HDR_64_BIT },
 };
 
-static const u32 xehpsdv_oa_base[] = {
-	[PERF_GROUP_OAG] = 0,
-	[PERF_GROUP_OAM_0] = 0x14000,
-	[PERF_GROUP_OAM_1] = 0x14200,
-	[PERF_GROUP_OAM_2] = 0x14400,
-	[PERF_GROUP_OAM_3] = 0x14600,
-};
-
 static const u32 dg2_oa_base[] = {
 	[PERF_GROUP_OAG] = 0,
 	[PERF_GROUP_OAM_0] = 0x13000,
@@ -385,6 +377,8 @@ static const u32 mtl_oa_base[] = {
  * @poll_oa_period: The period in nanoseconds at which the CPU will check for OA
  * data availability
  * @oa_buffer_size_exponent: The OA buffer size is derived from this
+ * @notify_num_reports: The poll or read is unblocked when these many reports
+ * are captured
  *
  * As read_properties_unlocked() enumerates and validates the properties given
  * to open a stream of metrics the configuration is built up in the structure
@@ -410,6 +404,7 @@ struct perf_open_properties {
 	struct intel_sseu sseu;
 
 	u64 poll_oa_period;
+	u32 notify_num_reports;
 };
 
 struct i915_oa_config_bo {
@@ -533,8 +528,7 @@ static void oa_report_id_clear(struct i915_perf_stream *stream, u32 *report)
 static bool oa_report_ctx_invalid(struct i915_perf_stream *stream, void *report)
 {
 	return !(oa_report_id(stream, report) &
-	       stream->perf->gen8_valid_ctx_bit) &&
-	       GRAPHICS_VER(stream->perf->i915) <= 11;
+	       stream->perf->gen8_valid_ctx_bit);
 }
 
 static u64 oa_timestamp(struct i915_perf_stream *stream, void *report)
@@ -596,6 +590,7 @@ static bool oa_buffer_check_unlocked(struct i915_perf_stream *stream)
 	int report_size = stream->oa_buffer.format->size;
 	u32 head, tail, read_tail;
 	unsigned long flags;
+	u32 available;
 	bool pollin;
 	u32 hw_tail;
 	u32 partial_report_size;
@@ -659,9 +654,9 @@ static bool oa_buffer_check_unlocked(struct i915_perf_stream *stream)
 
 	stream->oa_buffer.tail = gtt_offset + tail;
 
-	pollin = _oa_taken(stream,
-			   stream->oa_buffer.tail,
-			   stream->oa_buffer.head) >= report_size;
+	available = _oa_taken(stream, stream->oa_buffer.tail,
+			      stream->oa_buffer.head);
+	pollin = available >= stream->notify_num_reports * report_size;
 
 	spin_unlock_irqrestore(&stream->oa_buffer.ptr_lock, flags);
 
@@ -840,10 +835,6 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		 * The reason field includes flags identifying what
 		 * triggered this specific report (mostly timer
 		 * triggered or e.g. due to a context switch).
-		 *
-		 * In MMIO triggered reports, some platforms do not set the
-		 * reason bit in this field and it is valid to have a reason
-		 * field of zero.
 		 */
 		reason = oa_report_reason(stream, report);
 		ctx_id = oa_context_id(stream, report32);
@@ -855,8 +846,41 @@ static int gen8_append_oa_reports(struct i915_perf_stream *stream,
 		 *
 		 * Note: that we don't clear the valid_ctx_bit so userspace can
 		 * understand that the ID has been squashed by the kernel.
+		 *
+		 * Update:
+		 *
+		 * On XEHP platforms the behavior of context id valid bit has
+		 * changed compared to prior platforms. To describe this, we
+		 * define a few terms:
+		 *
+		 * context-switch-report: This is a report with the reason type
+		 * being context-switch. It is generated when a context switches
+		 * out.
+		 *
+		 * context-valid-bit: A bit that is set in the report ID field
+		 * to indicate that a valid context has been loaded.
+		 *
+		 * gpu-idle: A condition characterized by a
+		 * context-switch-report with context-valid-bit set to 0.
+		 *
+		 * On prior platforms, context-id-valid bit is set to 0 only
+		 * when GPU goes idle. In all other reports, it is set to 1.
+		 *
+		 * On XEHP platforms, context-valid-bit is set to 1 in a context
+		 * switch report if a new context switched in. For all other
+		 * reports it is set to 0.
+		 *
+		 * This change in behavior causes an issue with MMIO triggered
+		 * reports. MMIO triggered reports have the markers in the
+		 * context ID field and the context-valid-bit is 0. The logic
+		 * below to squash the context ID would render the report
+		 * useless since the user will not be able to find it in the OA
+		 * buffer. Since MMIO triggered reports exist only on XEHP,
+		 * we should avoid squashing these for XEHP platforms.
 		 */
-		if (oa_report_ctx_invalid(stream, report)) {
+
+		if (oa_report_ctx_invalid(stream, report) &&
+		    GRAPHICS_VER_FULL(stream->engine->i915) < IP_VER(12, 50)) {
 			ctx_id = INVALID_CTX_ID;
 			oa_context_id_squash(stream, report32);
 		}
@@ -2143,17 +2167,6 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 	if (WARN_ON(size < SZ_128K || size > max_oa_buffer_size(gt->i915)))
 		return -EINVAL;
 
-	/*
-	 * Wa_1607390583:xehpsdv
-	 * XEHPSDV has new feature that supports upto 128Mb oa buffer. User can request
-	 * buffers sizes that are powers of 2 ranging from 128Kb to 128 Mb. On enabling
-	 * the feature, there is a bug that causes the actual OA buffer size to be less
-	 * by 896Kb when the user requests a size greater than 16Mb. To workaround the
-	 * issue, we adjust the OA buffer size accordingly before allocating.
-	 */
-	if (IS_XEHPSDV(gt->i915) && size > SZ_16M)
-		adjust = 896 * 1024;
-
 	bo = i915_gem_object_create_shmem(gt->i915, size - adjust);
 	if (IS_ERR(bo)) {
 		drm_err(&gt->i915->drm, "Failed to allocate OA buffer\n");
@@ -3311,8 +3324,7 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	 * EU NOA signals behave incorrectly if EU clock gating is enabled.
 	 * Disable thread stall DOP gating and EU DOP gating.
 	 */
-	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
-	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
+	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) || IS_DG2(i915)) {
 		intel_gt_mcr_multicast_write(uncore->gt, GEN8_ROW_CHICKEN,
 					     _MASKED_BIT_ENABLE(STALL_DOP_GATING_DISABLE));
 		intel_uncore_write(uncore, GEN7_ROW_CHICKEN2,
@@ -3408,8 +3420,7 @@ static void gen12_disable_metric_set(struct i915_perf_stream *stream)
 	 * Wa_1508761755:xehpsdv, dg2, pvc
 	 * Enable thread stall DOP gating and EU DOP gating.
 	 */
-	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) ||
-	    IS_XEHPSDV(i915) || IS_DG2(i915)) {
+	if (IS_PVC_CT_STEP(i915, STEP_A0, STEP_B0) || IS_DG2(i915)) {
 		intel_gt_mcr_multicast_write(uncore->gt, GEN8_ROW_CHICKEN,
 					     _MASKED_BIT_DISABLE(STALL_DOP_GATING_DISABLE));
 		intel_uncore_write(uncore, GEN7_ROW_CHICKEN2,
@@ -3759,12 +3770,7 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		return -EBUSY;
 	}
 
-	if (!props->oa_format) {
-		drm_dbg(&stream->perf->i915->drm,
-			"OA report format not specified\n");
-		return -EINVAL;
-	}
-
+	stream->notify_num_reports = props->notify_num_reports;
 	stream->engine = props->engine;
 	stream->uncore = stream->engine->gt->uncore;
 
@@ -4357,7 +4363,11 @@ static int i915_perf_mmap(struct file *file, struct vm_area_struct *vma)
 				     VM_SHARED | VM_MAYSHARE))
 			return -EINVAL;
 
+#ifdef BPM_VM_FLAGS_IS_READ_ONLY_FLAG
+		vm_flags_clear(vma, VM_MAYWRITE | VM_MAYEXEC);
+#else
 		vma->vm_flags &= ~(VM_MAYWRITE | VM_MAYEXEC);
+#endif
 
 		/*
 		 * If the privileged parent forks and child drops root
@@ -4365,8 +4375,13 @@ static int i915_perf_mmap(struct file *file, struct vm_area_struct *vma)
 		 * mapped OA buffer. Explicitly set VM_DONTCOPY to avoid such
 		 * cases.
 		 */
+#ifdef BPM_VM_FLAGS_IS_READ_ONLY_FLAG
+		vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND |
+				VM_DONTDUMP | VM_DONTCOPY);
+#else
 		vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND |
 				 VM_DONTDUMP | VM_DONTCOPY;
+#endif
 		break;
 
 	default:
@@ -4380,9 +4395,44 @@ static int i915_perf_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static loff_t i915_perf_llseek(struct file *file, loff_t offset, int whence)
+{
+	struct i915_perf_stream *stream = file->private_data;
+	i915_reg_t oaheadptr = GRAPHICS_VER(stream->perf->i915) == 12 ?
+			       __oa_regs(stream)->oa_head_ptr :
+			       GEN8_OAHEADPTR;
+	loff_t ret = -EINVAL;
+	unsigned long flags;
+
+	if (offset || !(stream->sample_flags & SAMPLE_OA_REPORT))
+		goto end;
+
+	switch (whence) {
+	case SEEK_END:
+		spin_lock_irqsave(&stream->oa_buffer.ptr_lock, flags);
+
+		ret = _oa_taken(stream,
+				stream->oa_buffer.tail,
+				stream->oa_buffer.head);
+		intel_uncore_write(stream->uncore, oaheadptr,
+				stream->oa_buffer.tail &
+				GEN12_OAG_OAHEADPTR_MASK);
+		stream->oa_buffer.head = stream->oa_buffer.tail;
+
+		spin_unlock_irqrestore(&stream->oa_buffer.ptr_lock, flags);
+		break;
+
+	default:
+		break;
+	}
+
+end:
+	return ret;
+}
+
 static const struct file_operations fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
+	.llseek		= i915_perf_llseek,
 	.release	= i915_perf_release,
 	.poll		= i915_perf_poll,
 	.read		= i915_perf_read,
@@ -4394,6 +4444,29 @@ static const struct file_operations fops = {
 	.mmap		= i915_perf_mmap,
 };
 
+static int
+oa_stream_fd(struct i915_perf_stream *stream, const char *name,
+	     const struct file_operations *fops, int flags)
+{
+	int ret, fd = get_unused_fd_flags(flags);
+	struct file *file;
+
+	file = anon_inode_getfile(name, fops, stream, flags);
+	if (IS_ERR(file)) {
+		ret = PTR_ERR(file);
+		goto err_fd;
+	}
+
+	file->f_mode |= FMODE_LSEEK;
+	fd_install(fd, file);
+
+	return fd;
+
+err_fd:
+	put_unused_fd(fd);
+
+	return ret;
+}
 
 /**
  * i915_perf_open_ioctl_locked - DRM ioctl() for userspace to open a stream FD
@@ -4555,7 +4628,7 @@ i915_perf_open_ioctl_locked(struct i915_perf *perf,
 	if (param->flags & I915_PERF_FLAG_FD_NONBLOCK)
 		f_flags |= O_NONBLOCK;
 
-	stream_fd = anon_inode_getfd("[i915_perf]", &fops, stream, f_flags);
+	stream_fd = oa_stream_fd(stream, "[i915_perf]", &fops, f_flags);
 	if (stream_fd < 0) {
 		ret = stream_fd;
 		goto err_flags;
@@ -4666,6 +4739,7 @@ static int read_properties_unlocked(struct i915_perf *perf,
 	bool config_sseu = false;
 	struct drm_i915_gem_context_param_sseu user_sseu;
 	const struct i915_oa_format *f;
+	u32 notify_num_reports = 1, max_reports;
 
 	memset(props, 0, sizeof(struct perf_open_properties));
 	props->poll_oa_period = DEFAULT_POLL_PERIOD_NS;
@@ -4814,12 +4888,25 @@ static int read_properties_unlocked(struct i915_perf *perf,
 		case PRELIM_DRM_I915_PERF_PROP_OA_ENGINE_INSTANCE:
 			instance = (u8)value;
 			break;
+		case PRELIM_DRM_I915_PERF_PROP_OA_NOTIFY_NUM_REPORTS:
+			if (!value) {
+				DRM_DEBUG("OA_NOTIFY_NUM_REPORTS must be a positive value %lld\n", value);
+				return -EINVAL;
+			}
+
+			notify_num_reports = (u32)value;
+			break;
 		default:
 			MISSING_CASE(id);
 			return -EINVAL;
 		}
 
 		uprop += 2;
+	}
+
+	if (!props->oa_format) {
+		drm_dbg(&perf->i915->drm, "OA report format not specified\n");
+		return -EINVAL;
 	}
 
 	/*
@@ -4866,6 +4953,15 @@ static int read_properties_unlocked(struct i915_perf *perf,
 		props->oa_buffer_size_exponent =
 			select_oa_buffer_exponent(perf->i915, 0);
 	}
+
+	max_reports = (1 << props->oa_buffer_size_exponent) /
+		      perf->oa_formats[props->oa_format].size;
+	if (notify_num_reports > max_reports) {
+		DRM_DEBUG("OA_NOTIFY_NUM_REPORTS %d exceeds %d\n", notify_num_reports, max_reports);
+		return -EINVAL;
+	}
+
+	props->notify_num_reports = notify_num_reports;
 
 	return 0;
 }
@@ -5534,16 +5630,19 @@ static struct ctl_table oa_table[] = {
 	{}
 };
 
+#ifndef BPM_REGISTER_SYSCTL_TABLE_NOT_PRESENT
 static struct ctl_table i915_root[] = {
 	{
-	 .procname = "i915",
+	 .procname = CPTCFG_MODULE_I915,
 	 .maxlen = 0,
 	 .mode = 0555,
 	 .child = oa_table,
 	 },
 	{}
 };
+#endif
 
+#ifndef BPM_REGISTER_SYSCTL_TABLE_NOT_PRESENT
 static struct ctl_table dev_root[] = {
 	{
 	 .procname = "dev",
@@ -5553,6 +5652,7 @@ static struct ctl_table dev_root[] = {
 	 },
 	{}
 };
+#endif
 
 static u32 __num_perf_groups_per_gt(struct intel_gt *gt)
 {
@@ -5701,8 +5801,6 @@ static void oa_init_regs(struct intel_gt *gt, u32 id)
 		*regs = __oam_regs(pvc_oa_base[id]);
 	else if (IS_DG2(gt->i915))
 		*regs = __oam_regs(dg2_oa_base[id]);
-	else if (IS_XEHPSDV(gt->i915))
-		*regs = __oam_regs(xehpsdv_oa_base[id]);
 	else
 		drm_WARN(&gt->i915->drm, 1, "Unsupported platform for OA\n");
 }
@@ -5985,6 +6083,7 @@ static void i915_perf_init_info(struct drm_i915_private *i915)
 		perf->gen8_valid_ctx_bit = BIT(16);
 		break;
 	case 12:
+		perf->gen8_valid_ctx_bit = BIT(16);
 		/*
 		 * Calculate offset at runtime in oa_pin_context for gen12 and
 		 * cache the value in perf->ctx_oactxctrl_offset array that is
@@ -6147,7 +6246,11 @@ static int destroy_config(int id, void *p, void *data)
 
 int i915_perf_sysctl_register(void)
 {
+#ifdef BPM_REGISTER_SYSCTL_TABLE_NOT_PRESENT
+	sysctl_header = register_sysctl("dev/i915", oa_table);
+#else
 	sysctl_header = register_sysctl_table(dev_root);
+#endif
 	return 0;
 }
 
@@ -6241,8 +6344,10 @@ int i915_perf_ioctl_version(void)
 	 * 1006: Added support for EU stall monitoring.
 	 *
 	 * 1007: Added support for MPES configuration.
+	 *
+	 * 1008: Added support for throttling poll.
 	 */
-	return 1007;
+	return 1008;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

@@ -328,7 +328,7 @@ static int relay_send_and_wait(struct intel_iov_relay *relay, u32 target,
 			       u32 relay_id, const u32 *msg, u32 len,
 			       u32 *buf, u32 buf_size)
 {
-	unsigned long timeout = msecs_to_jiffies(ADJUST_TIMEOUT(RELAY_TIMEOUT));
+	unsigned long timeout = msecs_to_jiffies(RELAY_TIMEOUT);
 	u32 action;
 	u32 data0;
 	struct pending_relay pending;
@@ -407,7 +407,7 @@ unlink:
 	return ret;
 }
 
-/**
+/*
  * intel_iov_relay_send_to_vf - Send message to VF.
  * @relay: the Relay struct
  * @target: target VF number

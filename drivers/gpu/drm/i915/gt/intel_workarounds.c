@@ -305,18 +305,6 @@ wa_mcr_masked_field_set(struct i915_wa_list *wal, i915_mcr_reg_t reg,
 	wa_mcr_add(wal, reg, 0, _MASKED_FIELD(mask, val), mask, true);
 }
 
-static void gen6_ctx_workarounds_init(struct intel_engine_cs *engine,
-				      struct i915_wa_list *wal)
-{
-	wa_masked_en(wal, INSTPM, INSTPM_FORCE_ORDERING);
-}
-
-static void gen7_ctx_workarounds_init(struct intel_engine_cs *engine,
-				      struct i915_wa_list *wal)
-{
-	wa_masked_en(wal, INSTPM, INSTPM_FORCE_ORDERING);
-}
-
 /* Returns true if global was enabled and nothing more needs to be done */
 static void gen9_debug_td_ctl_init(struct intel_engine_cs *engine,
 				   struct i915_wa_list *wal)
@@ -333,335 +321,6 @@ static void gen9_debug_td_ctl_init(struct intel_engine_cs *engine,
 		ctl_mask |= TD_CTL_GLOBAL_DEBUG_ENABLE;
 
 	wa_mcr_add(wal, TD_CTL, 0, ctl_mask, ctl_mask, false);
-}
-
-static void gen8_ctx_workarounds_init(struct intel_engine_cs *engine,
-				      struct i915_wa_list *wal)
-{
-	wa_masked_en(wal, INSTPM, INSTPM_FORCE_ORDERING);
-
-	/* WaDisableAsyncFlipPerfMode:bdw,chv */
-	wa_masked_en(wal, RING_MI_MODE(RENDER_RING_BASE), ASYNC_FLIP_PERF_DISABLE);
-
-	/* WaDisablePartialInstShootdown:bdw,chv */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN,
-			 PARTIAL_INSTRUCTION_SHOOTDOWN_DISABLE);
-
-	/* Use Force Non-Coherent whenever executing a 3D context. This is a
-	 * workaround for a possible hang in the unlikely event a TLB
-	 * invalidation occurs during a PSD flush.
-	 */
-	/* WaForceEnableNonCoherent:bdw,chv */
-	/* WaHdcDisableFetchWhenMasked:bdw,chv */
-	wa_masked_en(wal, HDC_CHICKEN0,
-		     HDC_DONOT_FETCH_MEM_WHEN_MASKED |
-		     HDC_FORCE_NON_COHERENT);
-
-	/* From the Haswell PRM, Command Reference: Registers, CACHE_MODE_0:
-	 * "The Hierarchical Z RAW Stall Optimization allows non-overlapping
-	 *  polygons in the same 8x4 pixel/sample area to be processed without
-	 *  stalling waiting for the earlier ones to write to Hierarchical Z
-	 *  buffer."
-	 *
-	 * This optimization is off by default for BDW and CHV; turn it on.
-	 */
-	wa_masked_dis(wal, CACHE_MODE_0_GEN7, HIZ_RAW_STALL_OPT_DISABLE);
-
-	/* Wa4x4STCOptimizationDisable:bdw,chv */
-	wa_masked_en(wal, CACHE_MODE_1, GEN8_4x4_STC_OPTIMIZATION_DISABLE);
-
-	/*
-	 * BSpec recommends 8x4 when MSAA is used,
-	 * however in practice 16x4 seems fastest.
-	 *
-	 * Note that PS/WM thread counts depend on the WIZ hashing
-	 * disable bit, which we don't touch here, but it's good
-	 * to keep in mind (see 3DSTATE_PS and 3DSTATE_WM).
-	 */
-	wa_masked_field_set(wal, GEN7_GT_MODE,
-			    GEN6_WIZ_HASHING_MASK,
-			    GEN6_WIZ_HASHING_16x4);
-}
-
-static void bdw_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	gen8_ctx_workarounds_init(engine, wal);
-
-	/* WaDisableThreadStallDopClockGating:bdw (pre-production) */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN, STALL_DOP_GATING_DISABLE);
-
-	/* WaDisableDopClockGating:bdw
-	 *
-	 * Also see the related UCGTCL1 write in bdw_init_clock_gating()
-	 * to disable EUTC clock gating.
-	 */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN2,
-			 DOP_CLOCK_GATING_DISABLE);
-
-	wa_mcr_masked_en(wal, GEN8_HALF_SLICE_CHICKEN3,
-			 GEN8_SAMPLER_POWER_BYPASS_DIS);
-
-	wa_masked_en(wal, HDC_CHICKEN0,
-		     /* WaForceContextSaveRestoreNonCoherent:bdw */
-		     HDC_FORCE_CONTEXT_SAVE_RESTORE_NON_COHERENT |
-		     /* WaDisableFenceDestinationToSLM:bdw (pre-prod) */
-		     (IS_BDW_GT3(i915) ? HDC_FENCE_DEST_SLM_DISABLE : 0));
-}
-
-static void chv_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	gen8_ctx_workarounds_init(engine, wal);
-
-	/* WaDisableThreadStallDopClockGating:chv */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN, STALL_DOP_GATING_DISABLE);
-
-	/* Improve HiZ throughput on CHV. */
-	wa_masked_en(wal, HIZ_CHICKEN, CHV_HZ_8X8_MODE_IN_1X);
-}
-
-static void gen9_ctx_workarounds_init(struct intel_engine_cs *engine,
-				      struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	if (HAS_LLC(i915)) {
-		/* WaCompressedResourceSamplerPbeMediaNewHashMode:skl,kbl
-		 *
-		 * Must match Display Engine. See
-		 * WaCompressedResourceDisplayNewHashMode.
-		 */
-		wa_masked_en(wal, COMMON_SLICE_CHICKEN2,
-			     GEN9_PBE_COMPRESSED_HASH_SELECTION);
-		wa_mcr_masked_en(wal, GEN9_HALF_SLICE_CHICKEN7,
-				 GEN9_SAMPLER_HASH_COMPRESSED_READ_ADDR);
-	}
-
-	/* WaClearFlowControlGpgpuContextSave:skl,bxt,kbl,glk,cfl */
-	/* WaDisablePartialInstShootdown:skl,bxt,kbl,glk,cfl */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN,
-			 FLOW_CONTROL_ENABLE |
-			 PARTIAL_INSTRUCTION_SHOOTDOWN_DISABLE);
-
-	/* WaEnableYV12BugFixInHalfSliceChicken7:skl,bxt,kbl,glk,cfl */
-	/* WaEnableSamplerGPGPUPreemptionSupport:skl,bxt,kbl,cfl */
-	wa_mcr_masked_en(wal, GEN9_HALF_SLICE_CHICKEN7,
-			 GEN9_ENABLE_YV12_BUGFIX |
-			 GEN9_ENABLE_GPGPU_PREEMPTION);
-
-	/* Wa4x4STCOptimizationDisable:skl,bxt,kbl,glk,cfl */
-	/* WaDisablePartialResolveInVc:skl,bxt,kbl,cfl */
-	wa_masked_en(wal, CACHE_MODE_1,
-		     GEN8_4x4_STC_OPTIMIZATION_DISABLE |
-		     GEN9_PARTIAL_RESOLVE_IN_VC_DISABLE);
-
-	/* WaCcsTlbPrefetchDisable:skl,bxt,kbl,glk,cfl */
-	wa_mcr_masked_dis(wal, GEN9_HALF_SLICE_CHICKEN5,
-			  GEN9_CCS_TLB_PREFETCH_ENABLE);
-
-	/* WaForceContextSaveRestoreNonCoherent:skl,bxt,kbl,cfl */
-	wa_masked_en(wal, HDC_CHICKEN0,
-		     HDC_FORCE_CONTEXT_SAVE_RESTORE_NON_COHERENT |
-		     HDC_FORCE_CSR_NON_COHERENT_OVR_DISABLE);
-
-	/* WaForceEnableNonCoherent and WaDisableHDCInvalidation are
-	 * both tied to WaForceContextSaveRestoreNonCoherent
-	 * in some hsds for skl. We keep the tie for all gen9. The
-	 * documentation is a bit hazy and so we want to get common behaviour,
-	 * even though there is no clear evidence we would need both on kbl/bxt.
-	 * This area has been source of system hangs so we play it safe
-	 * and mimic the skl regardless of what bspec says.
-	 *
-	 * Use Force Non-Coherent whenever executing a 3D context. This
-	 * is a workaround for a possible hang in the unlikely event
-	 * a TLB invalidation occurs during a PSD flush.
-	 */
-
-	/* WaForceEnableNonCoherent:skl,bxt,kbl,cfl */
-	wa_masked_en(wal, HDC_CHICKEN0,
-		     HDC_FORCE_NON_COHERENT);
-
-	/* WaDisableSamplerPowerBypassForSOPingPong:skl,bxt,kbl,cfl */
-	if (IS_SKYLAKE(i915) ||
-	    IS_KABYLAKE(i915) ||
-	    IS_COFFEELAKE(i915) ||
-	    IS_COMETLAKE(i915))
-		wa_mcr_masked_en(wal, GEN8_HALF_SLICE_CHICKEN3,
-				 GEN8_SAMPLER_POWER_BYPASS_DIS);
-
-	/* WaDisableSTUnitPowerOptimization:skl,bxt,kbl,glk,cfl */
-	wa_mcr_masked_en(wal, HALF_SLICE_CHICKEN2, GEN8_ST_PO_DISABLE);
-
-	/*
-	 * Supporting preemption with fine-granularity requires changes in the
-	 * batch buffer programming. Since we can't break old userspace, we
-	 * need to set our default preemption level to safe value. Userspace is
-	 * still able to use more fine-grained preemption levels, since in
-	 * WaEnablePreemptionGranularityControlByUMD we're whitelisting the
-	 * per-ctx register. As such, WaDisable{3D,GPGPU}MidCmdPreemption are
-	 * not real HW workarounds, but merely a way to start using preemption
-	 * while maintaining old contract with userspace.
-	 */
-
-	/* WaDisable3DMidCmdPreemption:skl,bxt,glk,cfl,[cnl] */
-	wa_masked_dis(wal, GEN8_CS_CHICKEN1, GEN9_PREEMPT_3D_OBJECT_LEVEL);
-
-	/* WaDisableGPGPUMidCmdPreemption:skl,bxt,blk,cfl,[cnl] */
-	wa_masked_field_set(wal, GEN8_CS_CHICKEN1,
-			    GEN9_PREEMPT_GPGPU_LEVEL_MASK,
-			    GEN9_PREEMPT_GPGPU_COMMAND_LEVEL);
-
-	/* WaClearHIZ_WM_CHICKEN3:bxt,glk */
-	if (IS_GEN9_LP(i915))
-		wa_masked_en(wal, GEN9_WM_CHICKEN3, GEN9_FACTOR_IN_CLR_VAL_HIZ);
-}
-
-static void skl_tune_iz_hashing(struct intel_engine_cs *engine,
-				struct i915_wa_list *wal)
-{
-	struct intel_gt *gt = engine->gt;
-	u8 vals[3] = { 0, 0, 0 };
-	unsigned int i;
-
-	for (i = 0; i < 3; i++) {
-		u8 ss;
-
-		/*
-		 * Only consider slices where one, and only one, subslice has 7
-		 * EUs
-		 */
-		if (!is_power_of_2(gt->info.sseu.subslice_7eu[i]))
-			continue;
-
-		/*
-		 * subslice_7eu[i] != 0 (because of the check above) and
-		 * ss_max == 4 (maximum number of subslices possible per slice)
-		 *
-		 * ->    0 <= ss <= 3;
-		 */
-		ss = ffs(gt->info.sseu.subslice_7eu[i]) - 1;
-		vals[i] = 3 - ss;
-	}
-
-	if (vals[0] == 0 && vals[1] == 0 && vals[2] == 0)
-		return;
-
-	/* Tune IZ hashing. See intel_device_info_runtime_init() */
-	wa_masked_field_set(wal, GEN7_GT_MODE,
-			    GEN9_IZ_HASHING_MASK(2) |
-			    GEN9_IZ_HASHING_MASK(1) |
-			    GEN9_IZ_HASHING_MASK(0),
-			    GEN9_IZ_HASHING(2, vals[2]) |
-			    GEN9_IZ_HASHING(1, vals[1]) |
-			    GEN9_IZ_HASHING(0, vals[0]));
-}
-
-static void skl_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	gen9_ctx_workarounds_init(engine, wal);
-	skl_tune_iz_hashing(engine, wal);
-}
-
-static void bxt_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	gen9_ctx_workarounds_init(engine, wal);
-
-	/* WaDisableThreadStallDopClockGating:bxt */
-	wa_mcr_masked_en(wal, GEN8_ROW_CHICKEN,
-			 STALL_DOP_GATING_DISABLE);
-
-	/* WaToEnableHwFixForPushConstHWBug:bxt */
-	wa_masked_en(wal, COMMON_SLICE_CHICKEN2,
-		     GEN8_SBE_DISABLE_REPLAY_BUF_OPTIMIZATION);
-}
-
-static void kbl_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = engine->i915;
-
-	gen9_ctx_workarounds_init(engine, wal);
-
-	/* WaToEnableHwFixForPushConstHWBug:kbl */
-	if (IS_KBL_GRAPHICS_STEP(i915, STEP_C0, STEP_FOREVER))
-		wa_masked_en(wal, COMMON_SLICE_CHICKEN2,
-			     GEN8_SBE_DISABLE_REPLAY_BUF_OPTIMIZATION);
-
-	/* WaDisableSbeCacheDispatchPortSharing:kbl */
-	wa_mcr_masked_en(wal, GEN8_HALF_SLICE_CHICKEN1,
-			 GEN7_SBE_SS_CACHE_DISPATCH_PORT_SHARING_DISABLE);
-}
-
-static void glk_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	gen9_ctx_workarounds_init(engine, wal);
-
-	/* WaToEnableHwFixForPushConstHWBug:glk */
-	wa_masked_en(wal, COMMON_SLICE_CHICKEN2,
-		     GEN8_SBE_DISABLE_REPLAY_BUF_OPTIMIZATION);
-}
-
-static void cfl_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	gen9_ctx_workarounds_init(engine, wal);
-
-	/* WaToEnableHwFixForPushConstHWBug:cfl */
-	wa_masked_en(wal, COMMON_SLICE_CHICKEN2,
-		     GEN8_SBE_DISABLE_REPLAY_BUF_OPTIMIZATION);
-
-	/* WaDisableSbeCacheDispatchPortSharing:cfl */
-	wa_mcr_masked_en(wal, GEN8_HALF_SLICE_CHICKEN1,
-			 GEN7_SBE_SS_CACHE_DISPATCH_PORT_SHARING_DISABLE);
-}
-
-static void icl_ctx_workarounds_init(struct intel_engine_cs *engine,
-				     struct i915_wa_list *wal)
-{
-	/* Wa_1406697149 (WaDisableBankHangMode:icl) */
-	wa_write(wal,
-		 GEN8_L3CNTLREG,
-		 intel_uncore_read(engine->uncore, GEN8_L3CNTLREG) |
-		 GEN8_ERRDETBCTRL);
-
-	/* WaForceEnableNonCoherent:icl
-	 * This is not the same workaround as in early Gen9 platforms, where
-	 * lacking this could cause system hangs, but coherency performance
-	 * overhead is high and only a few compute workloads really need it
-	 * (the register is whitelisted in hardware now, so UMDs can opt in
-	 * for coherency if they have a good reason).
-	 */
-	wa_mcr_masked_en(wal, ICL_HDC_MODE, HDC_FORCE_NON_COHERENT);
-
-	/* WaEnableFloatBlendOptimization:icl */
-	wa_mcr_add(wal, GEN10_CACHE_MODE_SS, 0,
-		   _MASKED_BIT_ENABLE(FLOAT_BLEND_OPTIMIZATION_ENABLE),
-		   0 /* write-only, so skip validation */,
-		   true);
-
-	/* WaDisableGPGPUMidThreadPreemption:icl */
-	wa_masked_field_set(wal, GEN8_CS_CHICKEN1,
-			    GEN9_PREEMPT_GPGPU_LEVEL_MASK,
-			    GEN9_PREEMPT_GPGPU_THREAD_GROUP_LEVEL);
-
-	/* allow headerless messages for preemptible GPGPU context */
-	wa_mcr_masked_en(wal, GEN10_SAMPLER_MODE,
-			 GEN11_SAMPLER_ENABLE_HEADLESS_MSG);
-
-	/* Wa_1604278689:icl,ehl */
-	wa_write(wal, IVB_FBC_RT_BASE, 0xFFFFFFFF & ~ILK_FBC_RT_VALID);
-	wa_write_clr_set(wal, IVB_FBC_RT_BASE_UPPER,
-			 0, /* write-only register; skip validation */
-			 0xFFFFFFFF);
-
-	/* Wa_1406306137:icl,ehl */
-	wa_mcr_masked_en(wal, GEN9_ROW_CHICKEN4, GEN11_DIS_PICK_2ND_EU);
 }
 
 /*
@@ -986,36 +645,10 @@ __intel_engine_init_ctx_wa(struct intel_engine_cs *engine,
 		pvc_ctx_workarounds_init(engine, wal);
 	else if (IS_DG2(i915))
 		dg2_ctx_workarounds_init(engine, wal);
-	else if (IS_XEHPSDV(i915))
-		; /* noop; none at this time */
 	else if (IS_DG1(i915))
 		dg1_ctx_workarounds_init(engine, wal);
-	else if (GRAPHICS_VER(i915) == 12)
-		gen12_ctx_workarounds_init(engine, wal);
-	else if (GRAPHICS_VER(i915) == 11)
-		icl_ctx_workarounds_init(engine, wal);
-	else if (IS_COFFEELAKE(i915) || IS_COMETLAKE(i915))
-		cfl_ctx_workarounds_init(engine, wal);
-	else if (IS_GEMINILAKE(i915))
-		glk_ctx_workarounds_init(engine, wal);
-	else if (IS_KABYLAKE(i915))
-		kbl_ctx_workarounds_init(engine, wal);
-	else if (IS_BROXTON(i915))
-		bxt_ctx_workarounds_init(engine, wal);
-	else if (IS_SKYLAKE(i915))
-		skl_ctx_workarounds_init(engine, wal);
-	else if (IS_CHERRYVIEW(i915))
-		chv_ctx_workarounds_init(engine, wal);
-	else if (IS_BROADWELL(i915))
-		bdw_ctx_workarounds_init(engine, wal);
-	else if (GRAPHICS_VER(i915) == 7)
-		gen7_ctx_workarounds_init(engine, wal);
-	else if (GRAPHICS_VER(i915) == 6)
-		gen6_ctx_workarounds_init(engine, wal);
-	else if (GRAPHICS_VER(i915) < 8)
-		;
 	else
-		MISSING_CASE(GRAPHICS_VER(i915));
+		gen12_ctx_workarounds_init(engine, wal);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (i915->debuggers.enable_eu_debug && IS_GRAPHICS_VER(i915, 9, 11))
@@ -1061,210 +694,6 @@ int intel_engine_emit_ctx_wa(struct i915_request *rq)
 		return ret;
 
 	return 0;
-}
-
-static void
-gen4_gt_workarounds_init(struct intel_gt *gt,
-			 struct i915_wa_list *wal)
-{
-	/* WaDisable_RenderCache_OperationalFlush:gen4,ilk */
-	wa_masked_dis(wal, CACHE_MODE_0, RC_OP_FLUSH_ENABLE);
-}
-
-static void
-g4x_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	gen4_gt_workarounds_init(gt, wal);
-
-	/* WaDisableRenderCachePipelinedFlush:g4x,ilk */
-	wa_masked_en(wal, CACHE_MODE_0, CM0_PIPELINED_RENDER_FLUSH_DISABLE);
-}
-
-static void
-ilk_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	g4x_gt_workarounds_init(gt, wal);
-
-	wa_masked_en(wal, _3D_CHICKEN2, _3D_CHICKEN2_WM_READ_PIPELINED);
-}
-
-static void
-snb_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-}
-
-static void
-ivb_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	/* Apply the WaDisableRHWOOptimizationForRenderHang:ivb workaround. */
-	wa_masked_dis(wal,
-		      GEN7_COMMON_SLICE_CHICKEN1,
-		      GEN7_CSC1_RHWO_OPT_DISABLE_IN_RCC);
-
-	/* WaApplyL3ControlAndL3ChickenMode:ivb */
-	wa_write(wal, GEN7_L3CNTLREG1, GEN7_WA_FOR_GEN7_L3_CONTROL);
-	wa_write(wal, GEN7_L3_CHICKEN_MODE_REGISTER, GEN7_WA_L3_CHICKEN_MODE);
-
-	/* WaForceL3Serialization:ivb */
-	wa_write_clr(wal, GEN7_L3SQCREG4, L3SQ_URB_READ_CAM_MATCH_DISABLE);
-}
-
-static void
-vlv_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	/* WaForceL3Serialization:vlv */
-	wa_write_clr(wal, GEN7_L3SQCREG4, L3SQ_URB_READ_CAM_MATCH_DISABLE);
-
-	/*
-	 * WaIncreaseL3CreditsForVLVB0:vlv
-	 * This is the hardware default actually.
-	 */
-	wa_write(wal, GEN7_L3SQCREG1, VLV_B0_WA_L3SQCREG1_VALUE);
-}
-
-static void
-hsw_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	/* L3 caching of data atomics doesn't work -- disable it. */
-	wa_write(wal, HSW_SCRATCH1, HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE);
-
-	wa_add(wal,
-	       HSW_ROW_CHICKEN3, 0,
-	       _MASKED_BIT_ENABLE(HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE),
-	       0 /* XXX does this reg exist? */, true);
-
-	/* WaVSRefCountFullforceMissDisable:hsw */
-	wa_write_clr(wal, GEN7_FF_THREAD_MODE, GEN7_FF_VS_REF_CNT_FFME);
-}
-
-static void
-gen9_wa_init_mcr(struct drm_i915_private *i915, struct i915_wa_list *wal)
-{
-	const struct sseu_dev_info *sseu = &to_gt(i915)->info.sseu;
-	unsigned int slice, subslice;
-	u32 mcr, mcr_mask;
-
-	GEM_BUG_ON(GRAPHICS_VER(i915) != 9);
-
-	/*
-	 * WaProgramMgsrForCorrectSliceSpecificMmioReads:gen9,glk,kbl,cml
-	 * Before any MMIO read into slice/subslice specific registers, MCR
-	 * packet control register needs to be programmed to point to any
-	 * enabled s/ss pair. Otherwise, incorrect values will be returned.
-	 * This means each subsequent MMIO read will be forwarded to an
-	 * specific s/ss combination, but this is OK since these registers
-	 * are consistent across s/ss in almost all cases. In the rare
-	 * occasions, such as INSTDONE, where this value is dependent
-	 * on s/ss combo, the read should be done with read_subslice_reg.
-	 */
-	slice = ffs(sseu->slice_mask) - 1;
-	GEM_BUG_ON(slice >= ARRAY_SIZE(sseu->subslice_mask.hsw));
-	subslice = ffs(intel_sseu_get_hsw_subslices(sseu, slice));
-	GEM_BUG_ON(!subslice);
-	subslice--;
-
-	/*
-	 * We use GEN8_MCR..() macros to calculate the |mcr| value for
-	 * Gen9 to address WaProgramMgsrForCorrectSliceSpecificMmioReads
-	 */
-	mcr = GEN8_MCR_SLICE(slice) | GEN8_MCR_SUBSLICE(subslice);
-	mcr_mask = GEN8_MCR_SLICE_MASK | GEN8_MCR_SUBSLICE_MASK;
-
-	drm_dbg(&i915->drm, "MCR slice:%d/subslice:%d = %x\n", slice, subslice, mcr);
-
-	wa_write_clr_set(wal, GEN8_MCR_SELECTOR, mcr_mask, mcr);
-}
-
-static void
-gen9_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = gt->i915;
-
-	/* WaProgramMgsrForCorrectSliceSpecificMmioReads:glk,kbl,cml,gen9 */
-	gen9_wa_init_mcr(i915, wal);
-
-	/* WaDisableKillLogic:bxt,skl,kbl */
-	if (!IS_COFFEELAKE(i915) && !IS_COMETLAKE(i915))
-		wa_write_or(wal,
-			    GAM_ECOCHK,
-			    ECOCHK_DIS_TLB);
-
-	if (HAS_LLC(i915)) {
-		/* WaCompressedResourceSamplerPbeMediaNewHashMode:skl,kbl
-		 *
-		 * Must match Display Engine. See
-		 * WaCompressedResourceDisplayNewHashMode.
-		 */
-		wa_write_or(wal,
-			    MMCD_MISC_CTRL,
-			    MMCD_PCLA | MMCD_HOTSPOT_EN);
-	}
-
-	/* WaDisableHDCInvalidation:skl,bxt,kbl,cfl */
-	wa_write_or(wal,
-		    GAM_ECOCHK,
-		    BDW_DISABLE_HDC_INVALIDATION);
-}
-
-static void
-skl_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	gen9_gt_workarounds_init(gt, wal);
-
-	/* WaDisableGafsUnitClkGating:skl */
-	wa_write_or(wal,
-		    GEN7_UCGCTL4,
-		    GEN8_EU_GAUNIT_CLOCK_GATE_DISABLE);
-
-	/* WaInPlaceDecompressionHang:skl */
-	if (IS_SKL_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_H0))
-		wa_write_or(wal,
-			    GEN9_GAMT_ECO_REG_RW_IA,
-			    GAMT_ECO_ENABLE_IN_PLACE_DECOMPRESS);
-}
-
-static void
-kbl_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	gen9_gt_workarounds_init(gt, wal);
-
-	/* WaDisableDynamicCreditSharing:kbl */
-	if (IS_KBL_GRAPHICS_STEP(gt->i915, 0, STEP_C0))
-		wa_write_or(wal,
-			    GAMT_CHKN_BIT_REG,
-			    GAMT_CHKN_DISABLE_DYNAMIC_CREDIT_SHARING);
-
-	/* WaDisableGafsUnitClkGating:kbl */
-	wa_write_or(wal,
-		    GEN7_UCGCTL4,
-		    GEN8_EU_GAUNIT_CLOCK_GATE_DISABLE);
-
-	/* WaInPlaceDecompressionHang:kbl */
-	wa_write_or(wal,
-		    GEN9_GAMT_ECO_REG_RW_IA,
-		    GAMT_ECO_ENABLE_IN_PLACE_DECOMPRESS);
-}
-
-static void
-glk_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	gen9_gt_workarounds_init(gt, wal);
-}
-
-static void
-cfl_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	gen9_gt_workarounds_init(gt, wal);
-
-	/* WaDisableGafsUnitClkGating:cfl */
-	wa_write_or(wal,
-		    GEN7_UCGCTL4,
-		    GEN8_EU_GAUNIT_CLOCK_GATE_DISABLE);
-
-	/* WaInPlaceDecompressionHang:cfl */
-	wa_write_or(wal,
-		    GEN9_GAMT_ECO_REG_RW_IA,
-		    GAMT_ECO_ENABLE_IN_PLACE_DECOMPRESS);
 }
 
 static void __set_mcr_steering(struct i915_wa_list *wal,
@@ -1389,9 +818,6 @@ xehp_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 		gt->steering_table[MSLICE] = NULL;
 	}
 
-	if (IS_XEHPSDV(gt->i915) && slice_mask & BIT(0))
-		gt->steering_table[GAM] = NULL;
-
 	slice = __ffs(slice_mask);
 	subslice = intel_sseu_find_first_xehp_dss(sseu, GEN_DSS_PER_GSLICE, slice) %
 		GEN_DSS_PER_GSLICE;
@@ -1430,71 +856,6 @@ pvc_init_mcr(struct intel_gt *gt, struct i915_wa_list *wal)
 	 */
 	dss = intel_sseu_find_first_xehp_dss(&gt->info.sseu, 0, 0);
 	__add_mcr_wa(gt, wal, dss / GEN_DSS_PER_CSLICE, dss % GEN_DSS_PER_CSLICE);
-}
-
-static void
-icl_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = gt->i915;
-
-	icl_wa_init_mcr(gt, wal);
-
-	/* WaModifyGamTlbPartitioning:icl */
-	wa_write_clr_set(wal,
-			 GEN11_GACB_PERF_CTRL,
-			 GEN11_HASH_CTRL_MASK,
-			 GEN11_HASH_CTRL_BIT0 | GEN11_HASH_CTRL_BIT4);
-
-	/* Wa_1405766107:icl
-	 * Formerly known as WaCL2SFHalfMaxAlloc
-	 */
-	wa_write_or(wal,
-		    GEN11_LSN_UNSLCVC,
-		    GEN11_LSN_UNSLCVC_GAFS_HALF_SF_MAXALLOC |
-		    GEN11_LSN_UNSLCVC_GAFS_HALF_CL2_MAXALLOC);
-
-	/* Wa_220166154:icl
-	 * Formerly known as WaDisCtxReload
-	 */
-	wa_write_or(wal,
-		    GEN8_GAMW_ECO_DEV_RW_IA,
-		    GAMW_ECO_DEV_CTX_RELOAD_DISABLE);
-
-	/* Wa_1406463099:icl
-	 * Formerly known as WaGamTlbPendError
-	 */
-	wa_write_or(wal,
-		    GAMT_CHKN_BIT_REG,
-		    GAMT_CHKN_DISABLE_L3_COH_PIPE);
-
-	/*
-	 * Wa_1408615072:icl,ehl  (vsunit)
-	 * Wa_1407596294:icl,ehl  (hsunit)
-	 */
-	wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE,
-		    VSUNIT_CLKGATE_DIS | HSUNIT_CLKGATE_DIS);
-
-	/* Wa_1407352427:icl,ehl */
-	wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE2,
-		    PSDUNIT_CLKGATE_DIS);
-
-	/* Wa_1406680159:icl,ehl */
-	wa_mcr_write_or(wal,
-			GEN11_SUBSLICE_UNIT_LEVEL_CLKGATE,
-			GWUNIT_CLKGATE_DIS);
-
-	/* Wa_1607087056:icl,ehl,jsl */
-	if (IS_ICELAKE(i915) ||
-	    IS_JSL_EHL_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-		wa_write_or(wal,
-			    GEN11_SLICE_UNIT_LEVEL_CLKGATE,
-			    L3_CLKGATE_DIS | L3_CR2X_CLKGATE_DIS);
-
-	/*
-	 * This is not a documented workaround, but rather an optimization
-	 * to reduce sampler power.
-	 */
-	wa_mcr_write_clr(wal, GEN10_DFR_RATIO_EN_AND_CHICKEN, DFR_DISABLE);
 }
 
 /*
@@ -1549,96 +910,6 @@ dg1_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 	if (IS_DG1(i915))
 		wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE2,
 			    VSUNIT_CLKGATE_DIS_TGL);
-}
-
-static void
-xehpsdv_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
-{
-	struct drm_i915_private *i915 = gt->i915;
-
-	xehp_init_mcr(gt, wal);
-
-	/* Wa_14010924592: xehpsdv */
-	if (i915->params.enable_hw_throttle_blt &&
-	    IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-		wa_write_clr_set(wal, MERT_TAGBITSONIOSFP,
-				 MERT_TAG_BITS_MASK | MERT_TAG_LOCK,
-				 MERT_TAG_BITS_TAG_10 | MERT_TAG_LOCK);
-
-	/* Wa_1409757795:xehpsdv */
-	wa_mcr_write_or(wal, SCCGCTL94DC, CG3DDISURB);
-
-	/* Wa_18011725039:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A1, STEP_B0)) {
-		wa_mcr_masked_dis(wal, MLTICTXCTL, TDONRENDER);
-		wa_mcr_write_or(wal, L3SQCREG1_CCS0, FLUSHALLNONCOH);
-	}
-
-	/* Wa_16011155590:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-		wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE,
-			    TSGUNIT_CLKGATE_DIS);
-
-	/* Wa_14011780169:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_B0, STEP_FOREVER)) {
-		wa_write_or(wal, UNSLCGCTL9440, GAMTLBOACS_CLKGATE_DIS |
-			    GAMTLBVDBOX7_CLKGATE_DIS |
-			    GAMTLBVDBOX6_CLKGATE_DIS |
-			    GAMTLBVDBOX5_CLKGATE_DIS |
-			    GAMTLBVDBOX4_CLKGATE_DIS |
-			    GAMTLBVDBOX3_CLKGATE_DIS |
-			    GAMTLBVDBOX2_CLKGATE_DIS |
-			    GAMTLBVDBOX1_CLKGATE_DIS |
-			    GAMTLBVDBOX0_CLKGATE_DIS |
-			    GAMTLBKCR_CLKGATE_DIS |
-			    GAMTLBGUC_CLKGATE_DIS |
-			    GAMTLBBLT_CLKGATE_DIS);
-		wa_write_or(wal, UNSLCGCTL9444, GAMTLBGFXA0_CLKGATE_DIS |
-			    GAMTLBGFXA1_CLKGATE_DIS |
-			    GAMTLBCOMPA0_CLKGATE_DIS |
-			    GAMTLBCOMPA1_CLKGATE_DIS |
-			    GAMTLBCOMPB0_CLKGATE_DIS |
-			    GAMTLBCOMPB1_CLKGATE_DIS |
-			    GAMTLBCOMPC0_CLKGATE_DIS |
-			    GAMTLBCOMPC1_CLKGATE_DIS |
-			    GAMTLBCOMPD0_CLKGATE_DIS |
-			    GAMTLBCOMPD1_CLKGATE_DIS |
-			    GAMTLBMERT_CLKGATE_DIS   |
-			    GAMTLBVEBOX3_CLKGATE_DIS |
-			    GAMTLBVEBOX2_CLKGATE_DIS |
-			    GAMTLBVEBOX1_CLKGATE_DIS |
-			    GAMTLBVEBOX0_CLKGATE_DIS);
-	}
-
-	/* Wa_16012725990:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A1, STEP_FOREVER))
-		wa_write_or(wal, UNSLICE_UNIT_LEVEL_CLKGATE, VFUNIT_CLKGATE_DIS);
-
-	/* Wa_14011060649:xehpsdv */
-	wa_14011060649(gt, wal);
-
-	/* Wa_14012362059:xehpsdv */
-	wa_mcr_write_or(wal, XEHP_MERT_MOD_CTRL, FORCE_MISS_FTLB);
-
-	/* Wa_14014368820:xehpsdv */
-	wa_mcr_write_or(wal, XEHP_GAMCNTRL_CTRL,
-			INVALIDATION_BROADCAST_MODE_DIS | GLOBAL_INVALIDATION_MODE);
-
-	/* Wa_14010670810:xehpsdv */
-	wa_mcr_write_or(wal, XEHP_L3NODEARBCFG, XEHP_LNESPARE);
-
-	/*
-	 * Wa_1409451116:xehpsdv[a*][multi-tile]
-	 *
-	 * Although the formal workaround description doesn't
-	 * specifically mention that it applies only to multi-tile
-	 * configurations, the bspec documentation for register
-	 * XEHPSDV_TILE0_ADDR_RANGE clarifies that A-step only supports
-	 * these bits on multi-tile configurations.
-	 */
-	if (IS_XEHPSDV_GRAPHICS_STEP(gt->i915, STEP_A0, STEP_B0) &&
-	    gt->i915->remote_tiles > 0)
-		wa_write_or(wal, GAMXB_CTRL, EN_TILE0_CHK | EN_WOPCM_GSM_CHK);
 }
 
 static void
@@ -1934,42 +1205,10 @@ gt_init_workarounds(struct intel_gt *gt, struct i915_wa_list *wal)
 		pvc_gt_workarounds_init(gt, wal);
 	else if (IS_DG2(i915))
 		dg2_gt_workarounds_init(gt, wal);
-	else if (IS_XEHPSDV(i915))
-		xehpsdv_gt_workarounds_init(gt, wal);
 	else if (IS_DG1(i915))
 		dg1_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) == 12)
-		gen12_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) == 11)
-		icl_gt_workarounds_init(gt, wal);
-	else if (IS_COFFEELAKE(i915) || IS_COMETLAKE(i915))
-		cfl_gt_workarounds_init(gt, wal);
-	else if (IS_GEMINILAKE(i915))
-		glk_gt_workarounds_init(gt, wal);
-	else if (IS_KABYLAKE(i915))
-		kbl_gt_workarounds_init(gt, wal);
-	else if (IS_BROXTON(i915))
-		gen9_gt_workarounds_init(gt, wal);
-	else if (IS_SKYLAKE(i915))
-		skl_gt_workarounds_init(gt, wal);
-	else if (IS_HASWELL(i915))
-		hsw_gt_workarounds_init(gt, wal);
-	else if (IS_VALLEYVIEW(i915))
-		vlv_gt_workarounds_init(gt, wal);
-	else if (IS_IVYBRIDGE(i915))
-		ivb_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) == 6)
-		snb_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) == 5)
-		ilk_gt_workarounds_init(gt, wal);
-	else if (IS_G4X(i915))
-		g4x_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) == 4)
-		gen4_gt_workarounds_init(gt, wal);
-	else if (GRAPHICS_VER(i915) <= 8)
-		;
 	else
-		MISSING_CASE(GRAPHICS_VER(i915));
+		gen12_gt_workarounds_init(gt, wal);
 }
 
 void intel_gt_init_workarounds(struct intel_gt *gt)
@@ -2045,103 +1284,6 @@ wa_verify(const struct i915_wa *wa, bool mcr,
 	return true;
 }
 
-/**
- * wa_find_addr - Find the index in wal where an address is or would be
- *
- * Example usage:
- *      i = wa_find_addr(wal, test_addr);
- *      if (i >= wal->count) {
- *              // entry not present, but would follow current last entry.
- *      } else if (i915_mmio_reg_offset(wal->list[i].reg == test_addr)) {
- *              // entry is present at index i.
- *      } else {
- *              // entry not present; i is where it would be inserted.
- *      }
- *
- */
-static int
-wa_find_addr(const struct i915_wa_list *wal, u32 test_addr)
-{
-        unsigned int start = 0;
-        unsigned int end = wal->count;
-        unsigned int mid = 0;
-        u32 wa_addr;
-
-        while (start < end) {
-                mid = start + (end - start) / 2;
-                wa_addr = i915_mmio_reg_offset(wal->list[mid].reg);
-
-                if (wa_addr < test_addr) {
-                        start = mid + 1;
-                } else if (wa_addr > test_addr) {
-                        end = mid;
-                } else {
-                        break;
-                }
-        }
-        mid = start + (end - start) / 2;
-
-	return mid;
-}
-
-/**
- * wa_addr_range_present - is an address range touched by wa list?
- * @wal: workaround list
- * @rn: number of address range pairs present in rt
- * @rt: Array of zero or more [addr_range_start, addr_range_end]
- *      The ranges are expected to be non-overlapping and in order.
- */
-static bool
-wa_addr_range_present(const struct i915_wa_list *wal, int rn, const u32 rt[][2])
-{
-	struct i915_wa *wa;
-	u32 test_addr;
-	int i;
-	int j;
-
-	/* As an optimization, find first entry of interest with a binary search.
-	   Thereafter, step through list linearly.
-	 */
-	i = wa_find_addr(wal, rt[0][0]);
-
-        for (wa = wal->list + i; i < wal->count; i++, wa++) {
-		test_addr = i915_mmio_reg_offset(wal->list[i].reg);
-		for (j = 0; j < rn; j++) {
-			if ((test_addr >= rt[j][0]) && test_addr <= rt[j][1])
-				return true;
-		}
-
-		if (test_addr > rt[rn-1][1])
-			break;
-	}
-
-	return false;
-}
-
-/**
- * xehpsdv_wa_1607720814() - Wa_1607720814:xehpsdv
- *
- * For XEHPSDV, writes to the ranges 0xb000-0xb01f and 0xb0a0-0xb0ff do not
- * take effect until a subsequent write is done within the same range.
- * Wa_1607720814 is known to write into the problematic range (at 0xb0b4).
- * A special write to a dummy register in this address range ensures that
- * these dangling writes are completed.
- */
-static void
-xehpsdv_wa_1607720814(struct intel_uncore *uncore, const struct i915_wa_list *wal)
-{
-	static const u32 rt[][2] = {
-		{ 0xb000, 0xb01f, },
-		{ 0xb0a0, 0xb0ff, },
-	};
-	const int rn = ARRAY_SIZE(rt);
-	i915_reg_t tgt_reg = _MMIO(0xb0cc);
-
-	if (wa_addr_range_present(wal, rn, rt)) {
-		intel_uncore_write(uncore, tgt_reg, 0);
-	}
-}
-
 static void
 wa_list_apply(struct intel_gt *gt, const struct i915_wa_list *wal)
 {
@@ -2193,9 +1335,6 @@ wa_list_apply(struct intel_gt *gt, const struct i915_wa_list *wal)
 void intel_gt_apply_workarounds(struct intel_gt *gt)
 {
 	wa_list_apply(gt, &gt->wa_list);
-
-	if (IS_XEHPSDV(gt->i915))
-		xehpsdv_wa_1607720814(gt->uncore, &gt->wa_list);
 }
 
 static int wa_list_verify(struct intel_gt *gt,
@@ -2311,91 +1450,6 @@ whitelist_mcr_reg(struct i915_wa_list *wal, i915_mcr_reg_t reg)
 	whitelist_mcr_reg_ext(wal, reg, RING_FORCE_TO_NONPRIV_ACCESS_RW);
 }
 
-static void gen9_whitelist_build(struct i915_wa_list *w)
-{
-	/* WaVFEStateAfterPipeControlwithMediaStateClear:skl,bxt,glk,cfl */
-	whitelist_reg(w, GEN9_CTX_PREEMPT_REG);
-
-	/* WaEnablePreemptionGranularityControlByUMD:skl,bxt,kbl,cfl,[cnl] */
-	whitelist_reg(w, GEN8_CS_CHICKEN1);
-
-	/* WaAllowUMDToModifyHDCChicken1:skl,bxt,kbl,glk,cfl */
-	whitelist_reg(w, GEN8_HDC_CHICKEN1);
-
-	/* WaSendPushConstantsFromMMIO:skl,bxt */
-	whitelist_reg(w, COMMON_SLICE_CHICKEN2);
-}
-
-static void skl_whitelist_build(struct intel_engine_cs *engine)
-{
-	struct i915_wa_list *w = &engine->whitelist;
-
-	if (engine->class != RENDER_CLASS)
-		return;
-
-	gen9_whitelist_build(w);
-
-	/* WaDisableLSQCROPERFforOCL:skl */
-	whitelist_mcr_reg(w, GEN8_L3SQCREG4);
-}
-
-static void bxt_whitelist_build(struct intel_engine_cs *engine)
-{
-	if (engine->class != RENDER_CLASS)
-		return;
-
-	gen9_whitelist_build(&engine->whitelist);
-}
-
-static void kbl_whitelist_build(struct intel_engine_cs *engine)
-{
-	struct i915_wa_list *w = &engine->whitelist;
-
-	if (engine->class != RENDER_CLASS)
-		return;
-
-	gen9_whitelist_build(w);
-
-	/* WaDisableLSQCROPERFforOCL:kbl */
-	whitelist_mcr_reg(w, GEN8_L3SQCREG4);
-}
-
-static void glk_whitelist_build(struct intel_engine_cs *engine)
-{
-	struct i915_wa_list *w = &engine->whitelist;
-
-	if (engine->class != RENDER_CLASS)
-		return;
-
-	gen9_whitelist_build(w);
-
-	/* WA #0862: Userspace has to set "Barrier Mode" to avoid hangs. */
-	whitelist_reg(w, GEN9_SLICE_COMMON_ECO_CHICKEN1);
-}
-
-static void cfl_whitelist_build(struct intel_engine_cs *engine)
-{
-	struct i915_wa_list *w = &engine->whitelist;
-
-	if (engine->class != RENDER_CLASS)
-		return;
-
-	gen9_whitelist_build(w);
-
-	/*
-	 * WaAllowPMDepthAndInvocationCountAccessFromUMD:cfl,whl,cml,aml
-	 *
-	 * This covers 4 register which are next to one another :
-	 *   - PS_INVOCATION_COUNT
-	 *   - PS_INVOCATION_COUNT_UDW
-	 *   - PS_DEPTH_COUNT
-	 *   - PS_DEPTH_COUNT_UDW
-	 */
-	whitelist_reg_ext(w, PS_INVOCATION_COUNT,
-			  RING_FORCE_TO_NONPRIV_ACCESS_RD |
-			  RING_FORCE_TO_NONPRIV_RANGE_4);
-}
-
 static void allow_read_ctx_timestamp(struct intel_engine_cs *engine)
 {
 	struct i915_wa_list *w = &engine->whitelist;
@@ -2404,61 +1458,6 @@ static void allow_read_ctx_timestamp(struct intel_engine_cs *engine)
 		whitelist_reg_ext(w,
 				  RING_CTX_TIMESTAMP(engine->mmio_base),
 				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
-}
-
-static void cml_whitelist_build(struct intel_engine_cs *engine)
-{
-	allow_read_ctx_timestamp(engine);
-
-	cfl_whitelist_build(engine);
-}
-
-static void icl_whitelist_build(struct intel_engine_cs *engine)
-{
-	struct i915_wa_list *w = &engine->whitelist;
-
-	allow_read_ctx_timestamp(engine);
-
-	switch (engine->class) {
-	case RENDER_CLASS:
-		/* WaAllowUMDToModifyHalfSliceChicken7:icl */
-		whitelist_mcr_reg(w, GEN9_HALF_SLICE_CHICKEN7);
-
-		/* WaAllowUMDToModifySamplerMode:icl */
-		whitelist_mcr_reg(w, GEN10_SAMPLER_MODE);
-
-		/* WaEnableStateCacheRedirectToCS:icl */
-		whitelist_reg(w, GEN9_SLICE_COMMON_ECO_CHICKEN1);
-
-		/*
-		 * WaAllowPMDepthAndInvocationCountAccessFromUMD:icl
-		 *
-		 * This covers 4 register which are next to one another :
-		 *   - PS_INVOCATION_COUNT
-		 *   - PS_INVOCATION_COUNT_UDW
-		 *   - PS_DEPTH_COUNT
-		 *   - PS_DEPTH_COUNT_UDW
-		 */
-		whitelist_reg_ext(w, PS_INVOCATION_COUNT,
-				  RING_FORCE_TO_NONPRIV_ACCESS_RD |
-				  RING_FORCE_TO_NONPRIV_RANGE_4);
-		break;
-
-	case VIDEO_DECODE_CLASS:
-		/* hucStatusRegOffset */
-		whitelist_reg_ext(w, _MMIO(0x2000 + engine->mmio_base),
-				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
-		/* hucUKernelHdrInfoRegOffset */
-		whitelist_reg_ext(w, _MMIO(0x2014 + engine->mmio_base),
-				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
-		/* hucStatus2RegOffset */
-		whitelist_reg_ext(w, _MMIO(0x23B0 + engine->mmio_base),
-				  RING_FORCE_TO_NONPRIV_ACCESS_RD);
-		break;
-
-	default:
-		break;
-	}
 }
 
 static void tgl_whitelist_build(struct intel_engine_cs *engine)
@@ -2505,19 +1504,11 @@ static void tgl_whitelist_build(struct intel_engine_cs *engine)
 static void engine_debug_init_whitelist(struct intel_engine_cs *engine,
 					struct i915_wa_list *wal)
 {
-	/* Wa_22011767781:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0) &&
-	    engine->class == COMPUTE_CLASS)
-		whitelist_mcr_reg(wal, EU_GLOBAL_SIP);
 }
 
 static void engine_debug_fini_whitelist(struct intel_engine_cs *engine,
 					struct i915_wa_list *wal)
 {
-	/* Wa_22011767781:xehpsdv */
-	if (IS_XEHPSDV_GRAPHICS_STEP(engine->i915, STEP_B0, STEP_C0) &&
-	    engine->class == COMPUTE_CLASS)
-		_wa_mcr_remove(wal, EU_GLOBAL_SIP, RING_FORCE_TO_NONPRIV_ACCESS_RW);
 }
 
 static void dg2_whitelist_build(struct intel_engine_cs *engine)
@@ -2614,28 +1605,8 @@ void intel_engine_init_whitelist(struct intel_engine_cs *engine)
 		pvc_whitelist_build(engine);
 	else if (IS_DG2(i915))
 		dg2_whitelist_build(engine);
-	else if (IS_XEHPSDV(i915))
-		; /* none needed */
-	else if (GRAPHICS_VER(i915) == 12)
-		tgl_whitelist_build(engine);
-	else if (GRAPHICS_VER(i915) == 11)
-		icl_whitelist_build(engine);
-	else if (IS_COMETLAKE(i915))
-		cml_whitelist_build(engine);
-	else if (IS_COFFEELAKE(i915))
-		cfl_whitelist_build(engine);
-	else if (IS_GEMINILAKE(i915))
-		glk_whitelist_build(engine);
-	else if (IS_KABYLAKE(i915))
-		kbl_whitelist_build(engine);
-	else if (IS_BROXTON(i915))
-		bxt_whitelist_build(engine);
-	else if (IS_SKYLAKE(i915))
-		skl_whitelist_build(engine);
-	else if (GRAPHICS_VER(i915) <= 8)
-		;
 	else
-		MISSING_CASE(GRAPHICS_VER(i915));
+		tgl_whitelist_build(engine);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUGGER)
 	if (i915->debuggers.enable_eu_debug)
@@ -2914,66 +1885,6 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 				 ENABLE_SMALLPL);
 	}
 
-	if (GRAPHICS_VER(i915) == 11) {
-		/* This is not an Wa. Enable for better image quality */
-		wa_masked_en(wal,
-			     _3D_CHICKEN3,
-			     _3D_CHICKEN3_AA_LINE_QUALITY_FIX_ENABLE);
-
-		/*
-		 * Wa_1405543622:icl
-		 * Formerly known as WaGAPZPriorityScheme
-		 */
-		wa_mcr_write_or(wal, GEN8_GARBCNTL,
-				GEN11_ARBITRATION_PRIO_ORDER_MASK);
-
-		/*
-		 * Wa_1604223664:icl
-		 * Formerly known as WaL3BankAddressHashing
-		 */
-		wa_mcr_write_clr_set(wal, GEN8_GARBCNTL,
-				     GEN11_HASH_CTRL_EXCL_MASK,
-				     GEN11_HASH_CTRL_EXCL_BIT0);
-		wa_write_clr_set(wal,
-				 GEN11_GLBLINVL,
-				 GEN11_BANK_HASH_ADDR_EXCL_MASK,
-				 GEN11_BANK_HASH_ADDR_EXCL_BIT0);
-
-		/*
-		 * Wa_1405733216:icl
-		 * Formerly known as WaDisableCleanEvicts
-		 */
-		wa_mcr_write_or(wal,
-				GEN8_L3SQCREG4,
-				GEN11_LQSC_CLEAN_EVICT_DISABLE);
-
-		/* Wa_1606682166:icl */
-		wa_mcr_write_or(wal, SARCHKMD, DISABLE_SAMPLER_PREFETCH);
-
-		/* Wa_1409178092:icl */
-		wa_mcr_write_clr_set(wal,
-				     GEN11_SCRATCH2,
-				     GEN11_COHERENT_PARTIAL_WRITE_MERGE_ENABLE,
-				     0);
-
-		/* WaEnable32PlaneMode:icl */
-		wa_masked_en(wal, GEN9_CSFE_CHICKEN1_RCS,
-			     GEN11_ENABLE_32_PLANE_MODE);
-
-		/*
-		 * Wa_1408767742:icl[a2..forever],ehl[all]
-		 * Wa_1605460711:icl[a0..c0]
-		 */
-		wa_write_or(wal,
-			    GEN7_FF_THREAD_MODE,
-			    GEN12_FF_TESSELATION_DOP_GATE_DISABLE);
-
-		/* Wa_22010271021 */
-		wa_masked_en(wal,
-			     GEN9_CS_DEBUG_MODE1,
-			     FF_DOP_CLOCK_GATE_DISABLE);
-	}
-
 	/*
 	 * Intel platforms that support fine-grained preemption (i.e., gen9 and
 	 * beyond) allow the kernel-mode driver to choose between two different
@@ -3028,251 +1939,9 @@ rcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 	 * Other workarounds may appear in the future that will also require
 	 * Option 2 behavior to allow proper userspace implementation.
 	 */
-	if (GRAPHICS_VER(i915) >= 9)
-		wa_masked_en(wal,
-			     GEN7_FF_SLICE_CS_CHICKEN1,
-			     GEN9_FFSC_PERCTX_PREEMPT_CTRL);
-
-	if (IS_SKYLAKE(i915) ||
-	    IS_KABYLAKE(i915) ||
-	    IS_COFFEELAKE(i915) ||
-	    IS_COMETLAKE(i915)) {
-		/* WaEnableGapsTsvCreditFix:skl,kbl,cfl */
-		wa_mcr_write_or(wal, GEN8_GARBCNTL,
-				GEN9_GAPS_TSV_CREDIT_DISABLE);
-	}
-
-	if (IS_BROXTON(i915)) {
-		/* WaDisablePooledEuLoadBalancingFix:bxt */
-		wa_masked_en(wal,
-			     FF_SLICE_CS_CHICKEN2,
-			     GEN9_POOLED_EU_LOAD_BALANCING_FIX_DISABLE);
-	}
-
-	if (GRAPHICS_VER(i915) == 9) {
-		/* WaContextSwitchWithConcurrentTLBInvalidate:skl,bxt,kbl,glk,cfl */
-		wa_masked_en(wal,
-			     GEN9_CSFE_CHICKEN1_RCS,
-			     GEN9_PREEMPT_GPGPU_SYNC_SWITCH_DISABLE);
-
-		/* WaEnableLbsSlaRetryTimerDecrement:skl,bxt,kbl,glk,cfl */
-		wa_mcr_write_or(wal,
-				BDW_SCRATCH1,
-				GEN9_LBS_SLA_RETRY_TIMER_DECREMENT_ENABLE);
-
-		/* WaProgramL3SqcReg1DefaultForPerf:bxt,glk */
-		if (IS_GEN9_LP(i915))
-			wa_mcr_write_clr_set(wal,
-					     GEN8_L3SQCREG1,
-					     L3_PRIO_CREDITS_MASK,
-					     L3_GENERAL_PRIO_CREDITS(62) |
-					     L3_HIGH_PRIO_CREDITS(2));
-
-		/* WaOCLCoherentLineFlush:skl,bxt,kbl,cfl */
-		wa_mcr_write_or(wal,
-				GEN8_L3SQCREG4,
-				GEN8_LQSC_FLUSH_COHERENT_LINES);
-
-		/* Disable atomics in L3 to prevent unrecoverable hangs */
-		wa_mcr_write_clr_set(wal, GEN9_SCRATCH_LNCF1,
-				     GEN9_LNCF_NONIA_COHERENT_ATOMICS_ENABLE, 0);
-		wa_mcr_write_clr_set(wal, GEN8_L3SQCREG4,
-				     GEN8_LQSQ_NONIA_COHERENT_ATOMICS_ENABLE, 0);
-		wa_mcr_write_clr_set(wal, GEN9_SCRATCH1,
-				     EVICTION_PERF_FIX_ENABLE, 0);
-	}
-
-	if (IS_HASWELL(i915)) {
-		/* WaSampleCChickenBitEnable:hsw */
-		wa_masked_en(wal,
-			     HSW_HALF_SLICE_CHICKEN3, HSW_SAMPLE_C_PERFORMANCE);
-
-		wa_masked_dis(wal,
-			      CACHE_MODE_0_GEN7,
-			      /* enable HiZ Raw Stall Optimization */
-			      HIZ_RAW_STALL_OPT_DISABLE);
-	}
-
-	if (IS_VALLEYVIEW(i915)) {
-		/* WaDisableEarlyCull:vlv */
-		wa_masked_en(wal,
-			     _3D_CHICKEN3,
-			     _3D_CHICKEN_SF_DISABLE_OBJEND_CULL);
-
-		/*
-		 * WaVSThreadDispatchOverride:ivb,vlv
-		 *
-		 * This actually overrides the dispatch
-		 * mode for all thread types.
-		 */
-		wa_write_clr_set(wal,
-				 GEN7_FF_THREAD_MODE,
-				 GEN7_FF_SCHED_MASK,
-				 GEN7_FF_TS_SCHED_HW |
-				 GEN7_FF_VS_SCHED_HW |
-				 GEN7_FF_DS_SCHED_HW);
-
-		/* WaPsdDispatchEnable:vlv */
-		/* WaDisablePSDDualDispatchEnable:vlv */
-		wa_masked_en(wal,
-			     GEN7_HALF_SLICE_CHICKEN1,
-			     GEN7_MAX_PS_THREAD_DEP |
-			     GEN7_PSD_SINGLE_PORT_DISPATCH_ENABLE);
-	}
-
-	if (IS_IVYBRIDGE(i915)) {
-		/* WaDisableEarlyCull:ivb */
-		wa_masked_en(wal,
-			     _3D_CHICKEN3,
-			     _3D_CHICKEN_SF_DISABLE_OBJEND_CULL);
-
-		if (0) { /* causes HiZ corruption on ivb:gt1 */
-			/* enable HiZ Raw Stall Optimization */
-			wa_masked_dis(wal,
-				      CACHE_MODE_0_GEN7,
-				      HIZ_RAW_STALL_OPT_DISABLE);
-		}
-
-		/*
-		 * WaVSThreadDispatchOverride:ivb,vlv
-		 *
-		 * This actually overrides the dispatch
-		 * mode for all thread types.
-		 */
-		wa_write_clr_set(wal,
-				 GEN7_FF_THREAD_MODE,
-				 GEN7_FF_SCHED_MASK,
-				 GEN7_FF_TS_SCHED_HW |
-				 GEN7_FF_VS_SCHED_HW |
-				 GEN7_FF_DS_SCHED_HW);
-
-		/* WaDisablePSDDualDispatchEnable:ivb */
-		if (IS_IVB_GT1(i915))
-			wa_masked_en(wal,
-				     GEN7_HALF_SLICE_CHICKEN1,
-				     GEN7_PSD_SINGLE_PORT_DISPATCH_ENABLE);
-	}
-
-	if (GRAPHICS_VER(i915) == 7) {
-		/* WaBCSVCSTlbInvalidationMode:ivb,vlv,hsw */
-		wa_masked_en(wal,
-			     RING_MODE_GEN7(RENDER_RING_BASE),
-			     GFX_TLB_INVALIDATE_EXPLICIT | GFX_REPLAY_MODE);
-
-		/* WaDisable_RenderCache_OperationalFlush:ivb,vlv,hsw */
-		wa_masked_dis(wal, CACHE_MODE_0_GEN7, RC_OP_FLUSH_ENABLE);
-
-		/*
-		 * BSpec says this must be set, even though
-		 * WaDisable4x2SubspanOptimization:ivb,hsw
-		 * WaDisable4x2SubspanOptimization isn't listed for VLV.
-		 */
-		wa_masked_en(wal,
-			     CACHE_MODE_1,
-			     PIXEL_SUBSPAN_COLLECT_OPT_DISABLE);
-
-		/*
-		 * BSpec recommends 8x4 when MSAA is used,
-		 * however in practice 16x4 seems fastest.
-		 *
-		 * Note that PS/WM thread counts depend on the WIZ hashing
-		 * disable bit, which we don't touch here, but it's good
-		 * to keep in mind (see 3DSTATE_PS and 3DSTATE_WM).
-		 */
-		wa_masked_field_set(wal,
-				    GEN7_GT_MODE,
-				    GEN6_WIZ_HASHING_MASK,
-				    GEN6_WIZ_HASHING_16x4);
-	}
-
-	if (IS_GRAPHICS_VER(i915, 6, 7))
-		/*
-		 * We need to disable the AsyncFlip performance optimisations in
-		 * order to use MI_WAIT_FOR_EVENT within the CS. It should
-		 * already be programmed to '1' on all products.
-		 *
-		 * WaDisableAsyncFlipPerfMode:snb,ivb,hsw,vlv
-		 */
-		wa_masked_en(wal,
-			     RING_MI_MODE(RENDER_RING_BASE),
-			     ASYNC_FLIP_PERF_DISABLE);
-
-	if (GRAPHICS_VER(i915) == 6) {
-		/*
-		 * Required for the hardware to program scanline values for
-		 * waiting
-		 * WaEnableFlushTlbInvalidationMode:snb
-		 */
-		wa_masked_en(wal,
-			     GFX_MODE,
-			     GFX_TLB_INVALIDATE_EXPLICIT);
-
-		/* WaDisableHiZPlanesWhenMSAAEnabled:snb */
-		wa_masked_en(wal,
-			     _3D_CHICKEN,
-			     _3D_CHICKEN_HIZ_PLANE_DISABLE_MSAA_4X_SNB);
-
-		wa_masked_en(wal,
-			     _3D_CHICKEN3,
-			     /* WaStripsFansDisableFastClipPerformanceFix:snb */
-			     _3D_CHICKEN3_SF_DISABLE_FASTCLIP_CULL |
-			     /*
-			      * Bspec says:
-			      * "This bit must be set if 3DSTATE_CLIP clip mode is set
-			      * to normal and 3DSTATE_SF number of SF output attributes
-			      * is more than 16."
-			      */
-			     _3D_CHICKEN3_SF_DISABLE_PIPELINED_ATTR_FETCH);
-
-		/*
-		 * BSpec recommends 8x4 when MSAA is used,
-		 * however in practice 16x4 seems fastest.
-		 *
-		 * Note that PS/WM thread counts depend on the WIZ hashing
-		 * disable bit, which we don't touch here, but it's good
-		 * to keep in mind (see 3DSTATE_PS and 3DSTATE_WM).
-		 */
-		wa_masked_field_set(wal,
-				    GEN6_GT_MODE,
-				    GEN6_WIZ_HASHING_MASK,
-				    GEN6_WIZ_HASHING_16x4);
-
-		/* WaDisable_RenderCache_OperationalFlush:snb */
-		wa_masked_dis(wal, CACHE_MODE_0, RC_OP_FLUSH_ENABLE);
-
-		/*
-		 * From the Sandybridge PRM, volume 1 part 3, page 24:
-		 * "If this bit is set, STCunit will have LRA as replacement
-		 *  policy. [...] This bit must be reset. LRA replacement
-		 *  policy is not supported."
-		 */
-		wa_masked_dis(wal,
-			      CACHE_MODE_0,
-			      CM0_STC_EVICT_DISABLE_LRA_SNB);
-	}
-
-	if (IS_GRAPHICS_VER(i915, 4, 6))
-		/* WaTimedSingleVertexDispatch:cl,bw,ctg,elk,ilk,snb */
-		wa_add(wal, RING_MI_MODE(RENDER_RING_BASE),
-		       0, _MASKED_BIT_ENABLE(VS_TIMER_DISPATCH),
-		       /* XXX bit doesn't stick on Broadwater */
-		       IS_I965G(i915) ? 0 : VS_TIMER_DISPATCH, true);
-
-	if (GRAPHICS_VER(i915) == 4)
-		/*
-		 * Disable CONSTANT_BUFFER before it is loaded from the context
-		 * image. For as it is loaded, it is executed and the stored
-		 * address may no longer be valid, leading to a GPU hang.
-		 *
-		 * This imposes the requirement that userspace reload their
-		 * CONSTANT_BUFFER on every batch, fortunately a requirement
-		 * they are already accustomed to from before contexts were
-		 * enabled.
-		 */
-		wa_add(wal, ECOSKPD(RENDER_RING_BASE),
-		       0, _MASKED_BIT_ENABLE(ECO_CONSTANT_BUFFER_SR_DISABLE),
-		       0 /* XXX bit doesn't stick on Broadwater */,
-		       true);
+	wa_masked_en(wal,
+		     GEN7_FF_SLICE_CS_CHICKEN1,
+		     GEN9_FFSC_PERCTX_PREEMPT_CTRL);
 }
 
 static void
@@ -3287,19 +1956,11 @@ xcs_engine_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			 1);
 	}
 
-	if (engine->class == COPY_ENGINE_CLASS &&
-	    i915->params.enable_hw_throttle_blt &&
-	    IS_XEHPSDV_GRAPHICS_STEP(i915, STEP_A0, STEP_B0))
-		wa_masked_field_set(wal, GAB_MODE,
-				    GAB_MODE_THROTTLE_RATE_MASK,
-				    GAB_MODE_THROTTLE_RATE);
-
-	if (IS_PVC_BD_STEP(i915, STEP_A0, STEP_B0))
-		if (engine->class == COPY_ENGINE_CLASS)
-			/* Wa_16010961369:pvc */
-			wa_masked_field_set(wal, ECOSKPD(engine->mmio_base),
-					    XEHP_BLITTER_SCHEDULING_MODE_MASK,
-					    XEHP_BLITTER_ROUND_ROBIN_MODE);
+	/* Wa_16018031267, Wa_16018063123, Wa_16010961369:pvc */
+	if (NEEDS_FASTCOLOR_BLT_WABB(engine))
+		wa_masked_field_set(wal, ECOSKPD(engine->mmio_base),
+				    XEHP_BLITTER_SCHEDULING_MODE_MASK,
+				    XEHP_BLITTER_ROUND_ROBIN_MODE);
 }
 
 static void
@@ -3429,22 +2090,6 @@ general_render_compute_wa_init(struct intel_engine_cs *engine, struct i915_wa_li
 		/* Wa_18028616096 */
 		wa_mcr_write_or(wal, LSC_CHICKEN_BIT_0_UDW, UGM_FRAGMENT_THRESHOLD_TO_3);
 	}
-	if (IS_XEHPSDV(i915)) {
-		/* Wa_1409954639 */
-		wa_mcr_masked_en(wal,
-				 GEN8_ROW_CHICKEN,
-				 SYSTOLIC_DOP_CLOCK_GATING_DIS);
-
-		/* Wa_1607196519 */
-		wa_mcr_masked_en(wal,
-				 GEN9_ROW_CHICKEN4,
-				 GEN12_DISABLE_GRF_CLEAR);
-
-		/* Wa_14010449647:xehpsdv */
-		wa_mcr_masked_en(wal, GEN8_HALF_SLICE_CHICKEN1,
-				 GEN7_PSD_SINGLE_PORT_DISPATCH_ENABLE);
-	}
-
 	/* Wa_14015227452:dg2,pvc */
 	if (IS_DG2(i915) || IS_PONTEVECCHIO(i915))
 		wa_mcr_masked_en(wal, GEN9_ROW_CHICKEN4, XEHP_DIS_BBL_SYSPIPE);
@@ -3660,9 +2305,6 @@ void intel_engine_deny_user_register_access(struct intel_engine_cs *engine,
 void intel_engine_apply_workarounds(struct intel_engine_cs *engine)
 {
 	wa_list_apply(engine->gt, &engine->wa_list);
-
-	if (IS_XEHPSDV(engine->i915))
-		xehpsdv_wa_1607720814(engine->uncore, &engine->wa_list);
 }
 
 static const struct i915_range mcr_ranges_gen8[] = {

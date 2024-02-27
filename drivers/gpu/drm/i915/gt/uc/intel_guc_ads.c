@@ -69,7 +69,10 @@ struct __guc_ads_blob {
 	struct guc_ads ads;
 	struct guc_policies policies;
 	struct guc_gt_system_info system_info;
-	struct guc_engine_usage engine_usage;
+	union {
+		struct guc_engine_usage v1;
+		struct guc_function_observation_data v2;
+	} engine_usage;
 	struct guc_um_init_params um_init_params;
 	/* From here on, location is dynamic! Refer to above diagram. */
 	struct guc_mmio_reg regset[0];
@@ -438,12 +441,10 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 	}
 
 	for (i = 0, wa = wal->list; i < wal->count; i++, wa++) {
-		/* Wa_1607720814 - dummy write must be last not sorted! */
-		if (IS_XEHPSDV(i915) &&
-		    i915_mmio_reg_offset(wa->reg) == 0xB0CC)
-			continue;
-
-		ret |= GUC_MMIO_REG_ADD(gt, regset, wa->reg, wa->masked_reg);
+		if (wa->is_mcr)
+			ret |= GUC_MCR_REG_ADD(gt, regset, wa->mcr_reg, wa->masked_reg);
+		else
+			ret |= GUC_MMIO_REG_ADD(gt, regset, wa->reg, wa->masked_reg);
 	}
 
 	/* Be extra paranoid and include all whitelist registers. */
@@ -467,42 +468,6 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL4, false);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL5, false);
 		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL6, false);
-	}
-
-	/*
-	 * Wa_1607720814:
-	 *
-	 * NB: The dummy write must be the last entry in the list. Specifically,
-	 * it has to be after all entries in the broken range which potentially
-	 * means it is out of order. So, to be safe, just add it manually as the
-	 * last entry.
-	 */
-	if (IS_XEHPSDV(i915)) {
-		bool found = false;
-
-		for (i = 0; i < regset->storage_used; i++) {
-			u32 offset = regset->storage[i].offset;
-			if ((offset >= 0xB000) && (offset <= 0xB01F)) {
-				found = true;
-				break;
-			}
-
-			if ((offset >= 0xB0A0) && (offset <= 0xB0FF)) {
-				found = true;
-				break;
-			}
-		}
-
-		if (found) {
-			struct guc_mmio_reg *slot;
-			struct guc_mmio_reg reg = {
-				.offset = 0xB0CC,
-				.flags = 0,
-			};
-
-			slot = __mmio_reg_add(regset, &reg);
-			ret |= IS_ERR(slot);
-		}
 	}
 
 	if (HAS_EU_STALL_SAMPLING(i915)) {
@@ -1102,18 +1067,62 @@ void intel_guc_ads_reset(struct intel_guc *guc)
 	guc_ads_private_data_reset(guc);
 }
 
-u32 intel_guc_engine_usage_offset(struct intel_guc *guc)
+u32 intel_guc_engine_usage_offset_global(struct intel_guc *guc)
 {
 	return intel_guc_ggtt_offset(guc, guc->ads_vma) +
 		offsetof(struct __guc_ads_blob, engine_usage);
 }
 
-struct iosys_map intel_guc_engine_usage_record_map(struct intel_engine_cs *engine)
+struct iosys_map intel_guc_engine_usage_record_map_v1(struct intel_engine_cs *engine)
 {
 	struct intel_guc *guc = &engine->gt->uc.guc;
 	u8 guc_class = engine_class_to_guc_class(engine->class);
 	size_t offset = offsetof(struct __guc_ads_blob,
-				 engine_usage.engines[guc_class][ilog2(engine->logical_mask)]);
+				 engine_usage.v1.engines[guc_class][ilog2(engine->logical_mask)]);
 
 	return IOSYS_MAP_INIT_OFFSET(&guc->ads_map, offset);
+}
+
+int intel_guc_engine_usage_record_map_v2(struct intel_guc *guc,
+					 struct intel_engine_cs *engine,
+					 u32 guc_vf,
+					 struct iosys_map *engine_map,
+					 struct iosys_map *global_map)
+{
+	size_t offset_global, offset_engine;
+	struct iosys_map *map;
+	u32 instance;
+	u8 guc_class;
+
+	if (engine) {
+		guc_class = engine_class_to_guc_class(engine->class);
+		instance = ilog2(engine->logical_mask);
+	}
+
+	if (guc_vf >= GUC_MAX_VF_COUNT) {
+		if (guc_vf != GUC_BUSYNESS_VF_GLOBAL) {
+			guc_err(guc, "Out of range VF in busyness query: 0x%X\n", guc_vf);
+			return -EINVAL;
+		}
+
+		map = &guc->busy.v2.device_map;
+		offset_global = 0;
+
+		if (engine)
+			offset_engine = offsetof(struct guc_engine_observation_data,
+						 engine_data[guc_class][instance]);
+	} else {
+		map = &guc->ads_map;
+		offset_global = offsetof(struct __guc_ads_blob,
+					 engine_usage.v2.function_data[guc_vf]);
+		if (engine)
+			offset_engine = offsetof(struct __guc_ads_blob,
+						 engine_usage.v2.function_data[guc_vf].engine_data[guc_class][instance]);
+	}
+
+	*global_map = IOSYS_MAP_INIT_OFFSET(map, offset_global);
+	if (engine)
+		*engine_map = IOSYS_MAP_INIT_OFFSET(map, offset_engine);
+
+	return 0;
 }

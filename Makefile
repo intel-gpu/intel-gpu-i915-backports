@@ -20,13 +20,30 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
-DEB_PKG_DISTRO_TARGETS := i915dkmsdeb-pkg bindeb-pkg
-RPM_PKG_DISTRO_TARGETS := i915dkmsrpm-pkg
+
+#
+# Packaging targets Available
+#
+DEB_PKG_DISTRO_TARGETS := dmadkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
+RPM_PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg
+
+#
+# PKG_DISTRO_TARGETS
+# DKMS Package Targets
 PKG_DISTRO_TARGETS := $(DEB_PKG_DISTRO_TARGETS) $(RPM_PKG_DISTRO_TARGETS)
 
-ARCH := x86_64
+#
+# BIN_PKG_TARGETS
+# Binary Package Targets
+BIN_PKG_TARGETS := binrpm-pkg i915bindeb-pkg
 
+ARCH := x86_64
 export KLIB KLIB_BUILD BACKPORT_DIR KMODDIR KMODPATH_ARG ARCH KBUILD_MODPOST_WARN PKG_DISTRO_TARGETS DEB_PKG_DISTRO_TARGETS RPM_PKG_DISTRO_TARGETS
+
+export MODULE_I915=i915
+ifeq ($(BUILD_CONFIG),i915_hwe)
+export MODULE_I915=i915_hwe
+endif
 
 ifeq ($(BUILD_CONFIG),pmt)
 export INTEL_PMT_FORCED=1
@@ -47,6 +64,7 @@ mrproper:
 	@rm -f .config
 	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
 	@rm -f backport-include/backport/autoconf.h
+	@git ls-files -z -d | xargs -0 git checkout --
 	@$(MAKE) -f Makefile.real mrproper
 
 .DEFAULT:
@@ -109,11 +127,11 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 		kvers="$$kvers $$(seq 0 99 | sed 's/^/6./')"				;\
 		print=0									;\
 		for v in $$kvers ; do							\
+			if [ "$$v" = "$$kver" ] ; then print=1 ; fi			;\
 			if [ "$$print" = "1" ] ; then					\
-				echo config KERNEL_$$(echo $$v | tr . _)	;\
+				echo config KERNEL_$$(echo $$v | tr . _)		;\
 				echo "    def_bool y"					;\
 			fi								;\
-			if [ "$$v" = "$$kver" ] ; then print=1 ; fi			;\
 		done > Kconfig.versions							;\
 		# RHEL as well, sadly we need to grep for it				;\
 		RHEL_MAJOR=$$(grep '^RHEL_MAJOR' $(KERNEL_MAKEFILE) | 			\
@@ -124,9 +142,53 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 			echo config BACKPORT_RHEL_KERNEL_$${RHEL_MAJOR}_$$v		;\
 			echo "    def_bool y"						;\
 		done >> Kconfig.versions						;\
+		i915_only_mode=0  							;\
+		if [ "$(BUILD_CONFIG)" = "nodrm" ] ; then 				\
+			i915_only_mode=1 						;\
+			echo -e "\nNote: nodrm build config set!, This mode will only build" ;\
+			echo "I915 module and child modules, base kernel's drm module will be " ;\
+			echo "utilized." 							;\
+		else										\
+			# Add default OS distro/LTS kernels's list to build i915_only		;\
+			# Syntax: OSV_MAJOR.MINOR 						;\
+			# OSV = RHEL/SLES/UBUNTU/... 						;\
+			# Ex: i915_only_kernel_list=(RHEL_8.6 SLES_15.3)			;\
+			#									;\
+			i915_only_kernel_list=() 						;\
+			for i in $${i915_only_kernel_list[@]} ; do 				\
+				OSV_NAME=$$(echo $$i | cut -f 1 -d '_' ) 			;\
+				OSV_MAJOR=$$(echo $$i | cut -f 2 -d '_' | cut -f 1 -d "." )	;\
+				OSV_MINOR=$$(echo $$i | cut -f 2 -d '_' | cut -f 2 -d "." )	;\
+				if [ "$$OSV_NAME" = "RHEL" ] && \
+					[ "$$OSV_MAJOR.$$OSV_MINOR" = "$$RHEL_MAJOR.$$RHEL_MINOR" ]; then \
+					i915_only_mode=1 					;\
+				fi 								;\
+				#TBD : add other OSV identifier or make it generic		;\
+			done			 						;\
+			if [ "$$i915_only_mode" != "1" ]; then 					\
+				# Check kernel version is > default value 				;\
+				i915_only_kver="5.14"							;\
+				i915_only_kver_maj=$$(echo $$i915_only_kver | cut -f 1 -d "." ) ;\
+				i915_only_kver_min=$$(echo $$i915_only_kver | cut -f 2 -d "." ) ;\
+				i915_only_code=$$(expr $$i915_only_kver_maj \* 256 + 0$$i915_only_kver_min \* 8) ;\
+				base_kver_maj=$$(echo $$kver | cut -f 1 -d "." ) ;\
+				base_kver_min=$$(echo $$kver | cut -f 2 -d "." ) ;\
+				base_kver_code=$$(expr $$base_kver_maj \* 256 + 0$$base_kver_min \* 8) ;\
+				if [ $$base_kver_code -ge $$i915_only_code  ]; then 		\
+					i915_only_mode=1						;\
+				fi 									;\
+			fi										;\
+		fi											;\
+		if [ "$$i915_only_mode" = "1" ]; then					\
+			echo config BUILD_I915_ONLY 					;\
+			echo "    def_bool y"						;\
+		fi >> Kconfig.versions							;\
 		echo " done."								;\
 	fi										;\
 	echo "$(CONFIG_MD5)" > .kernel_config_md5
+endif ### ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
+ifneq ("$(wildcard .config)","")
+	@$(MAKE) -f Makefile.real updateconfig
 endif
 	@$(MAKE) -f Makefile.real "$@"
 
@@ -142,44 +204,60 @@ defconfig-help:
 
 .PHONY: common-help
 common-help:
+	@echo "--------------------------------------------------------------------------------------"
 	@echo "Build Configurations:"
-	@echo "  KLIB   : path/to/headers"
-	@echo "  KLIB_BUILD     : path/to/headers/build "
+	@echo "  KLIB   : path/to/linux/kernel/headers"
+	@echo "  KLIB_BUILD     : path/to/linux/kernel/headers/build"
 	@echo "  BUILD_VERSION  : Pass build version to be added to package name"
 	@echo "  RELEASE_TYPE   : <opensource/prerelease/custom> Package release type created"
 	@echo " 			Example: make <Target> RELEASE_TYPE=test "
 	@echo " 			Package names would be intel-i915-dkms-test for DKMS or intel-i915-test for binary"
 	@echo " 			Note: If custom packages are created, tracking the conflicting package "
-	@echo " 			is difficult. Make sure no other package is already installed before "
-	@echo " 			you intalling current one."
+	@echo " 			is difficult. Make sure no other intel-i915* packages are already installed before "
+	@echo " 			you installing current one."
+	@echo "  BUILD_CONFIG   : Specify build config variant"
+	@echo " 			Ex: make <Target> BUILD_CONFIG=disabledisplay "
 	@echo "  OS_DISTRIBUTION: Distro targeted package"
 	@echo " 			You can set this value by passing supported kernel name"
 	@echo " 			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_SERVER"
 	@echo ""
+	@echo "--------------------------------------------------------------------------------------"
 
 .PHONY: dkms-pkg-help
 dkms-pkg-help: common-help
 	@echo "--------------------------------------------------------------------------------------"
 	@echo " DKMS Targets: "
-	@echo "   i915dkmsdeb-pkg  -  Build DKMS debian package"
-	@echo "   i915dkmsrpm-pkg  -  Build DKMS rpm package "
+	@echo " Debian Targets: "
+	@echo "  dmadkmsdeb-pkg  - Build DKMS debian package for dmabuf"
+	@echo "  i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)"
+	@echo "  dkmsdeb-pkg     - Build above two target dmadkmsdeb-pkg i915dkmsdeb-pkg"
 	@echo ""
-	@echo " Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP4 "
 	@echo " Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_SERVER "
 	@echo ""
 	@echo " Debian package name contains UBUNTU_22.04_SERVER Kernel version as default. "
-	@echo " Rpm package contains the SLES15_SP4 Kernel version as default"
 	@echo ""
-	@echo " ##### List of Debian supported osv kernel versions ##### "
+	@echo " ##### List of Debian supported OS distro versions ##### "
 	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-3 | grep "UBUNTU" | grep -v "SERVER_KERNEL"| tr '\n' '\t') "
-	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS | tr '\n' '\t')"
 	@echo ""
-	@echo " ##### List of RPM supported osv kernel versions ##### "
+	@echo " RPM Targets: "
+	@echo "  dkmsrpm-pkg     - Build single DKMS RPM package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)"
+	@echo "  dmadkmsrpm-pkg  - Build dkms RPM package for dmabuf"
+	@echo "  i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)"
+	@echo ""
+	@echo " Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP5 "
+	@echo ""
+	@echo " Rpm package contains the SLES15_SP5 Kernel version as default"
+	@echo ""
+	@echo " ##### List of RPM supported OS distro Versions ##### "
 	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep SLES | tr '\n' '\t') "
-	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA_5.15LTS | tr '\n' '\t') "
 	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep RHEL | tr '\n' '\t') "
 	@echo ""
-	@echo "For Specific OSV's, pass the supported kernel name to OS_DISTRIBUTION option "
+	@echo " ##### List of LTS kernel versions ##### "
+	@echo " $$(cat versions |& tail -n +4 | cut -d "_" -f 1-2 | grep VANILLA | tr '\n' '\t')"
+	@echo ""
+	@echo " For LTS kernels, either RPM or Debian package can be created"
+	@echo ""
+	@echo " For Specific OS distro/LTS kernels, pass the supported kernel name to OS_DISTRIBUTION option "
 	@echo ""
 	@echo "--------------------------------------------------------------------------------------"
 
@@ -187,8 +265,8 @@ dkms-pkg-help: common-help
 bin-pkg-help: common-help
 	@echo "--------------------------------------------------------------------------------------"
 	@echo " Binary Targets: "
-	@echo "   bindeb-pkg  -  Build binary debian package for respective kernel "
-	@echo "   binrpm-pkg  -  Build binary rpm package for respective kernel "
+	@echo "   i915bindeb-pkg - Build binary debian package for respective kernel "
+	@echo "   binrpm-pkg	 - Build binary rpm package for respective kernel "
 	@echo ""
 	@echo "   Command:  make <Build Configurations> <target> "
 	@echo " 	 Ex: make RELEASE_TYPE=prerelease binrpm-pkg "

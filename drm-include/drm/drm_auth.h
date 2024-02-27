@@ -101,7 +101,7 @@ struct drm_master {
 	struct idr leases;
 	struct idr lessee_idr;
 	/* private: */
-#if IS_ENABLED(CONFIG_DRM_LEGACY)
+#if IS_ENABLED(CPTCFG_DRM_LEGACY)
 	struct drm_lock_data lock;
 #endif
 };

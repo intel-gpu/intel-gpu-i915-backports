@@ -151,8 +151,6 @@ struct intel_uncore {
 	unsigned int flags;
 #define UNCORE_HAS_FORCEWAKE		BIT(0)
 #define UNCORE_HAS_FPGA_DBG_UNCLAIMED	BIT(1)
-#define UNCORE_HAS_DBG_UNCLAIMED	BIT(2)
-#define UNCORE_HAS_FIFO			BIT(3)
 
 	const struct intel_forcewake_range *fw_domains_table;
 	unsigned int fw_domains_table_entries;
@@ -167,8 +165,6 @@ struct intel_uncore {
 	struct notifier_block pmic_bus_access_nb;
 	const struct intel_uncore_fw_get *fw_get_funcs;
 	struct intel_uncore_funcs funcs;
-
-	unsigned int fifo_count;
 
 	enum forcewake_domains fw_domains;
 	enum forcewake_domains fw_domains_active;
@@ -209,18 +205,6 @@ static inline bool
 intel_uncore_has_fpga_dbg_unclaimed(const struct intel_uncore *uncore)
 {
 	return uncore->flags & UNCORE_HAS_FPGA_DBG_UNCLAIMED;
-}
-
-static inline bool
-intel_uncore_has_dbg_unclaimed(const struct intel_uncore *uncore)
-{
-	return uncore->flags & UNCORE_HAS_DBG_UNCLAIMED;
-}
-
-static inline bool
-intel_uncore_has_fifo(const struct intel_uncore *uncore)
-{
-	return uncore->flags & UNCORE_HAS_FIFO;
 }
 
 void intel_uncore_mmio_debug_init_early(struct drm_i915_private *i915);

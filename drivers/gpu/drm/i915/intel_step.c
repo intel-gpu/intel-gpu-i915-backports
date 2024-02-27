@@ -26,43 +26,6 @@
 #define COMMON_STEP(x)  .graphics_step = STEP_##x, .display_step = STEP_##x, .media_step = STEP_##x
 #define COMMON_GT_MEDIA_STEP(x)  .graphics_step = STEP_##x, .media_step = STEP_##x
 
-static const struct intel_step_info skl_revids[] = {
-	[0x6] = { COMMON_STEP(G0) },
-	[0x7] = { COMMON_STEP(H0) },
-	[0x9] = { COMMON_STEP(J0) },
-	[0xA] = { COMMON_STEP(I1) },
-};
-
-static const struct intel_step_info kbl_revids[] = {
-	[1] = { COMMON_GT_MEDIA_STEP(B0), .display_step = STEP_B0 },
-	[2] = { COMMON_GT_MEDIA_STEP(C0), .display_step = STEP_B0 },
-	[3] = { COMMON_GT_MEDIA_STEP(D0), .display_step = STEP_B0 },
-	[4] = { COMMON_GT_MEDIA_STEP(F0), .display_step = STEP_C0 },
-	[5] = { COMMON_GT_MEDIA_STEP(C0), .display_step = STEP_B1 },
-	[6] = { COMMON_GT_MEDIA_STEP(D1), .display_step = STEP_B1 },
-	[7] = { COMMON_GT_MEDIA_STEP(G0), .display_step = STEP_C0 },
-};
-
-static const struct intel_step_info bxt_revids[] = {
-	[0xA] = { COMMON_STEP(C0) },
-	[0xB] = { COMMON_STEP(C0) },
-	[0xC] = { COMMON_STEP(D0) },
-	[0xD] = { COMMON_STEP(E0) },
-};
-
-static const struct intel_step_info glk_revids[] = {
-	[3] = { COMMON_STEP(B0) },
-};
-
-static const struct intel_step_info icl_revids[] = {
-	[7] = { COMMON_STEP(D0) },
-};
-
-static const struct intel_step_info jsl_ehl_revids[] = {
-	[0] = { COMMON_STEP(A0) },
-	[1] = { COMMON_STEP(B0) },
-};
-
 static const struct intel_step_info tgl_uy_revids[] = {
 	[0] = { COMMON_GT_MEDIA_STEP(A0), .display_step = STEP_A0 },
 	[1] = { COMMON_GT_MEDIA_STEP(B0), .display_step = STEP_C0 },
@@ -102,13 +65,6 @@ static const struct intel_step_info adlp_revids[] = {
 	[0x8] = { COMMON_GT_MEDIA_STEP(C0), .display_step = STEP_C0 },
 	[0xC] = { COMMON_GT_MEDIA_STEP(C0), .display_step = STEP_D0 },
 	[0x10] = { COMMON_GT_MEDIA_STEP(C0), .display_step = STEP_E0 },
-};
-
-static const struct intel_step_info xehpsdv_revids[] = {
-	[0x0] = { COMMON_GT_MEDIA_STEP(A0) },
-	[0x1] = { COMMON_GT_MEDIA_STEP(A1) },
-	[0x4] = { COMMON_GT_MEDIA_STEP(B0) },
-	[0x8] = { COMMON_GT_MEDIA_STEP(C0) },
 };
 
 static const struct intel_step_info dg2_g10_revid_step_tbl[] = {
@@ -219,9 +175,6 @@ void intel_step_init(struct drm_i915_private *i915)
 	} else if (IS_DG2_G12(i915)) {
 		revids = dg2_g12_revid_step_tbl;
 		size = ARRAY_SIZE(dg2_g12_revid_step_tbl);
-	} else if (IS_XEHPSDV(i915)) {
-		revids = xehpsdv_revids;
-		size = ARRAY_SIZE(xehpsdv_revids);
 	} else if (IS_ADLP_N(i915)) {
 		revids = adlp_n_revids;
 		size = ARRAY_SIZE(adlp_n_revids);
@@ -246,24 +199,6 @@ void intel_step_init(struct drm_i915_private *i915)
 	} else if (IS_TIGERLAKE(i915)) {
 		revids = tgl_revids;
 		size = ARRAY_SIZE(tgl_revids);
-	} else if (IS_JSL_EHL(i915)) {
-		revids = jsl_ehl_revids;
-		size = ARRAY_SIZE(jsl_ehl_revids);
-	} else if (IS_ICELAKE(i915)) {
-		revids = icl_revids;
-		size = ARRAY_SIZE(icl_revids);
-	} else if (IS_GEMINILAKE(i915)) {
-		revids = glk_revids;
-		size = ARRAY_SIZE(glk_revids);
-	} else if (IS_BROXTON(i915)) {
-		revids = bxt_revids;
-		size = ARRAY_SIZE(bxt_revids);
-	} else if (IS_KABYLAKE(i915)) {
-		revids = kbl_revids;
-		size = ARRAY_SIZE(kbl_revids);
-	} else if (IS_SKYLAKE(i915)) {
-		revids = skl_revids;
-		size = ARRAY_SIZE(skl_revids);
 	}
 
 	/* Not using the stepping scheme for the platform yet. */

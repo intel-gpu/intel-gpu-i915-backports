@@ -4,7 +4,6 @@
  */
 
 #include "gt/intel_lrc_reg.h"
-#include "gen6_ppgtt.h"
 #include "i915_drv.h"
 #include "intel_context.h"
 #include "intel_engine_pm.h"
@@ -70,52 +69,6 @@ static int gen8_emit_vm_config(struct i915_request *rq,
 	return 0;
 }
 
-struct ppgtt_barrier {
-	struct dma_fence_cb base;
-	struct i915_address_space *old;
-};
-
-static void set_ppgtt_barrier(struct dma_fence *f, struct dma_fence_cb *base)
-{
-	struct ppgtt_barrier *cb = container_of(base, typeof(*cb), base);
-
-	gen6_ppgtt_unpin_all(i915_vm_to_ppgtt(cb->old));
-	i915_vm_put(cb->old);
-
-	kfree(cb);
-}
-
-static int pin_ppgtt_barrier(struct i915_request *rq,
-			     struct intel_context *ce,
-			     struct i915_address_space *vm)
-{
-       struct ppgtt_barrier *cb;
-       int err;
-
-       if (HAS_LOGICAL_RING_CONTEXTS(vm->i915))
-	       return 0;
-
-       cb = kmalloc(sizeof(*cb), GFP_KERNEL);
-       if (!cb)
-	       return -ENOMEM;
-
-       /* ppGTT is not part of the legacy context image */
-       err = gen6_ppgtt_pin(i915_vm_to_ppgtt(vm), NULL);
-       if (err) {
-	       kfree(cb);
-	       return err;
-       }
-
-       cb->base.func = set_ppgtt_barrier;
-       cb->old = i915_vm_get(ce->vm);
-
-       spin_lock_irq(&rq->sched.lock);
-       list_add_tail(&cb->base.node, &rq->fence.cb_list);
-       spin_unlock_irq(&rq->sched.lock);
-
-       return 0;
-}
-
 static int
 gen8_modify_vm(struct intel_context *ce, struct i915_address_space *vm)
 {
@@ -139,16 +92,11 @@ gen8_modify_vm(struct intel_context *ce, struct i915_address_space *vm)
 		goto out_unpin;
 	}
 
-	err = pin_ppgtt_barrier(rq, ce, vm);
-	if (err)
-		goto out_request;
-
 	/* Serialise with the remote context */
 	err = intel_context_prepare_remote_request(ce, rq);
-	if (err == 0 && HAS_LOGICAL_RING_CONTEXTS(vm->i915))
+	if (err == 0)
 		err = gen8_emit_vm_config(rq, ce, i915_vm_to_ppgtt(vm));
 
-out_request:
 	i915_request_add(rq);
 out_unpin:
 	intel_context_unpin(ce);

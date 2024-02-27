@@ -1445,8 +1445,7 @@ static int guc_send_invalidate_tlb(struct intel_guc *guc, u32 *action, u32 size)
  * queued in CT buffer.
  */
 #define OUTSTANDING_GUC_TIMEOUT_PERIOD  (HZ)
-	if (!must_wait_woken(&wait,
-			ADJUST_TIMEOUT(OUTSTANDING_GUC_TIMEOUT_PERIOD))) {
+	if (!must_wait_woken(&wait, OUTSTANDING_GUC_TIMEOUT_PERIOD)) {
 		/*
 		 * XXX: Failure of tlb invalidation is critical and would
 		 * warrant a gt reset.

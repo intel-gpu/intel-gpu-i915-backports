@@ -540,8 +540,7 @@ void gen5_gt_irq_reset(struct intel_gt *gt)
 	struct intel_uncore *uncore = gt->uncore;
 
 	GEN3_IRQ_RESET(uncore, GT);
-	if (GRAPHICS_VER(gt->i915) >= 6)
-		GEN3_IRQ_RESET(uncore, GEN6_PM);
+	GEN3_IRQ_RESET(uncore, GEN6_PM);
 }
 
 void gen5_gt_irq_postinstall(struct intel_gt *gt)
@@ -558,26 +557,21 @@ void gen5_gt_irq_postinstall(struct intel_gt *gt)
 	}
 
 	gt_irqs |= GT_RENDER_USER_INTERRUPT;
-	if (GRAPHICS_VER(gt->i915) == 5)
-		gt_irqs |= ILK_BSD_USER_INTERRUPT;
-	else
-		gt_irqs |= GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT;
+	gt_irqs |= GT_BLT_USER_INTERRUPT | GT_BSD_USER_INTERRUPT;
 
 	GEN3_IRQ_INIT(uncore, GT, gt->gt_imr, gt_irqs);
 
-	if (GRAPHICS_VER(gt->i915) >= 6) {
-		/*
-		 * RPS interrupts will get enabled/disabled on demand when RPS
-		 * itself is enabled/disabled.
-		 */
-		if (HAS_ENGINE(gt, VECS0)) {
-			pm_irqs |= PM_VEBOX_USER_INTERRUPT;
-			gt->pm_ier |= PM_VEBOX_USER_INTERRUPT;
-		}
-
-		gt->pm_imr = 0xffffffff;
-		GEN3_IRQ_INIT(uncore, GEN6_PM, gt->pm_imr, pm_irqs);
+	/*
+	 * RPS interrupts will get enabled/disabled on demand when RPS
+	 * itself is enabled/disabled.
+	 */
+	if (HAS_ENGINE(gt, VECS0)) {
+		pm_irqs |= PM_VEBOX_USER_INTERRUPT;
+		gt->pm_ier |= PM_VEBOX_USER_INTERRUPT;
 	}
+
+	gt->pm_imr = 0xffffffff;
+	GEN3_IRQ_INIT(uncore, GEN6_PM, gt->pm_imr, pm_irqs);
 }
 
 void intel_boost_fake_int_timer(struct intel_gt *gt, bool on_off)

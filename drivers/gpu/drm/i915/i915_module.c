@@ -37,7 +37,7 @@ static int i915_check_nomodeset(void)
 	if (i915_modparams.modeset == 0)
 		use_kms = false;
 
-#ifdef VGACON_TEXT_FORCE_NOT_PRESENT
+#ifdef BPM_VGACON_TEXT_FORCE_NOT_PRESENT
 	if (drm_firmware_drivers_only() && i915_modparams.modeset == -1)
 #else
 	if (vgacon_text_force() && i915_modparams.modeset == -1)
@@ -89,7 +89,6 @@ static int __init i915_init(void)
 {
 	int err, i;
 
-	DRM_INFO("I915 BACKPORTED INIT \n");
 	for (i = 0; i < ARRAY_SIZE(init_funcs); i++) {
 		err = init_funcs[i].init();
 		if (err < 0) {

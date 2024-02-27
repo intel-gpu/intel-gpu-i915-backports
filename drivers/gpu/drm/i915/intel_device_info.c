@@ -97,7 +97,6 @@ void intel_device_info_print_static(const struct intel_device_info *info,
 	drm_printf(p, "platform: %s\n", intel_platform_name(info->platform));
 	drm_printf(p, "ppgtt-size: %d\n", info->ppgtt_size);
 	drm_printf(p, "ppgtt-msb: %d\n", info->ppgtt_msb);
-	drm_printf(p, "ppgtt-type: %d\n", info->ppgtt_type);
 	drm_printf(p, "dma_mask_size: %u\n", info->dma_mask_size);
 
 #define PRINT_FLAG(name) drm_printf(p, "%s: %s\n", #name, str_yes_no(info->name))
@@ -307,76 +306,20 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 	if (IS_ADLS_DISPLAY_STEP(dev_priv, STEP_A0, STEP_A2))
 		for_each_pipe(dev_priv, pipe)
 			runtime->num_scalers[pipe] = 0;
-	else if (DISPLAY_VER(dev_priv) >= 11) {
+	else
 		for_each_pipe(dev_priv, pipe)
 			runtime->num_scalers[pipe] = 2;
-	} else if (DISPLAY_VER(dev_priv) >= 9) {
-		runtime->num_scalers[PIPE_A] = 2;
-		runtime->num_scalers[PIPE_B] = 2;
-		runtime->num_scalers[PIPE_C] = 1;
-	}
 
 	BUILD_BUG_ON(BITS_PER_TYPE(intel_engine_mask_t) < I915_NUM_ENGINES);
 
 	if (DISPLAY_VER(dev_priv) >= 13 || HAS_D12_PLANE_MINIMIZATION(dev_priv))
 		for_each_pipe(dev_priv, pipe)
 			runtime->num_sprites[pipe] = 4;
-	else if (DISPLAY_VER(dev_priv) >= 11)
+	else
 		for_each_pipe(dev_priv, pipe)
 			runtime->num_sprites[pipe] = 6;
-	else if (DISPLAY_VER(dev_priv) == 10)
-		for_each_pipe(dev_priv, pipe)
-			runtime->num_sprites[pipe] = 3;
-	else if (IS_BROXTON(dev_priv)) {
-		/*
-		 * Skylake and Broxton currently don't expose the topmost plane as its
-		 * use is exclusive with the legacy cursor and we only want to expose
-		 * one of those, not both. Until we can safely expose the topmost plane
-		 * as a DRM_PLANE_TYPE_CURSOR with all the features exposed/supported,
-		 * we don't expose the topmost plane at all to prevent ABI breakage
-		 * down the line.
-		 */
 
-		runtime->num_sprites[PIPE_A] = 2;
-		runtime->num_sprites[PIPE_B] = 2;
-		runtime->num_sprites[PIPE_C] = 1;
-	} else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) {
-		for_each_pipe(dev_priv, pipe)
-			runtime->num_sprites[pipe] = 2;
-	} else if (DISPLAY_VER(dev_priv) >= 5 || IS_G4X(dev_priv)) {
-		for_each_pipe(dev_priv, pipe)
-			runtime->num_sprites[pipe] = 1;
-	}
-
-	if (HAS_DISPLAY(dev_priv) && IS_GRAPHICS_VER(dev_priv, 7, 8) &&
-	    HAS_PCH_SPLIT(dev_priv)) {
-		u32 fuse_strap = intel_de_read(dev_priv, FUSE_STRAP);
-		u32 sfuse_strap = intel_de_read(dev_priv, SFUSE_STRAP);
-
-		/*
-		 * SFUSE_STRAP is supposed to have a bit signalling the display
-		 * is fused off. Unfortunately it seems that, at least in
-		 * certain cases, fused off display means that PCH display
-		 * reads don't land anywhere. In that case, we read 0s.
-		 *
-		 * On CPT/PPT, we can detect this case as SFUSE_STRAP_FUSE_LOCK
-		 * should be set when taking over after the firmware.
-		 */
-		if (fuse_strap & ILK_INTERNAL_DISPLAY_DISABLE ||
-		    sfuse_strap & SFUSE_STRAP_DISPLAY_DISABLED ||
-		    (HAS_PCH_CPT(dev_priv) &&
-		     !(sfuse_strap & SFUSE_STRAP_FUSE_LOCK))) {
-			drm_info(&dev_priv->drm,
-				 "Display fused off, disabling\n");
-			info->display.pipe_mask = 0;
-			info->display.cpu_transcoder_mask = 0;
-			info->display.fbc_mask = 0;
-		} else if (fuse_strap & IVB_PIPE_C_DISABLE) {
-			drm_info(&dev_priv->drm, "PipeC fused off\n");
-			info->display.pipe_mask &= ~BIT(PIPE_C);
-			info->display.cpu_transcoder_mask &= ~BIT(TRANSCODER_C);
-		}
-	} else if (HAS_DISPLAY(dev_priv) && DISPLAY_VER(dev_priv) >= 9) {
+	if (HAS_DISPLAY(dev_priv)) {
 		u32 dfsm = intel_de_read(dev_priv, SKL_DFSM);
 
 		if (dfsm & SKL_DFSM_PIPE_A_DISABLE) {
@@ -411,12 +354,6 @@ void intel_device_info_runtime_init(struct drm_i915_private *dev_priv)
 		if (IS_DISPLAY_VER(dev_priv, 10, 12) &&
 		    (dfsm & GLK_DFSM_DISPLAY_DSC_DISABLE))
 			info->display.has_dsc = 0;
-	}
-
-	if (GRAPHICS_VER(dev_priv) == 6 && i915_vtd_active(dev_priv)) {
-		drm_info(&dev_priv->drm,
-			 "Disabling ppGTT for VT-d support\n");
-		info->ppgtt_type = INTEL_PPGTT_NONE;
 	}
 
 	if (!IS_SRIOV_VF(dev_priv)) {

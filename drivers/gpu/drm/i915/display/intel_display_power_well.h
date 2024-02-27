@@ -147,11 +147,6 @@ const char *intel_power_well_name(struct i915_power_well *power_well);
 struct intel_power_domain_mask *intel_power_well_domains(struct i915_power_well *power_well);
 int intel_power_well_refcount(struct i915_power_well *power_well);
 
-void chv_phy_powergate_lanes(struct intel_encoder *encoder,
-			     bool override, unsigned int mask);
-bool chv_phy_powergate_ch(struct drm_i915_private *dev_priv, enum dpio_phy phy,
-			  enum dpio_channel ch, bool override);
-
 void gen9_enable_dc5(struct drm_i915_private *dev_priv);
 void skl_enable_dc6(struct drm_i915_private *dev_priv);
 void gen9_sanitize_dc_state(struct drm_i915_private *dev_priv);
@@ -161,15 +156,8 @@ void bxt_enable_dc9(struct drm_i915_private *dev_priv);
 void bxt_disable_dc9(struct drm_i915_private *dev_priv);
 
 extern const struct i915_power_well_ops i9xx_always_on_power_well_ops;
-extern const struct i915_power_well_ops chv_pipe_power_well_ops;
-extern const struct i915_power_well_ops chv_dpio_cmn_power_well_ops;
-extern const struct i915_power_well_ops i830_pipes_power_well_ops;
 extern const struct i915_power_well_ops hsw_power_well_ops;
 extern const struct i915_power_well_ops gen9_dc_off_power_well_ops;
-extern const struct i915_power_well_ops bxt_dpio_cmn_power_well_ops;
-extern const struct i915_power_well_ops vlv_display_power_well_ops;
-extern const struct i915_power_well_ops vlv_dpio_cmn_power_well_ops;
-extern const struct i915_power_well_ops vlv_dpio_power_well_ops;
 extern const struct i915_power_well_ops icl_aux_power_well_ops;
 extern const struct i915_power_well_ops icl_ddi_power_well_ops;
 extern const struct i915_power_well_ops tgl_tc_cold_off_ops;
