@@ -20,22 +20,27 @@ This repository contains following drivers.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
+## Branch
+[backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) will point to the currently supported version of Ubuntu®, SLES® 15 SP4 and Red Hat® onwards.
+
 ## Supported OS Distributions
 
-|   OSV |Branch         | Installation Instructions | Building | Testing|
-|---    |---    | --- | --- | --- |
-| Red Hat® Enterprise Linux® 9.3       | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
-| Red Hat® Enterprise Linux® 9.2       | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
-| Red Hat® Enterprise Linux® 9.0       | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
-| Red Hat® Enterprise Linux® 8.9       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md)| Yes | Yes |
-| Red Hat® Enterprise Linux® 8.8       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md)| Yes | Yes |
-| Red Hat® Enterprise Linux® 8.6       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_redhat.md)| Yes | Yes |
-| SUSE® Linux® Enterprise Server 15SP5 | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
-| SUSE® Linux® Enterprise Server 15SP4 | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
-| Ubuntu® 22.04 Desktop (6.2 generic)  | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
-| Ubuntu® 22.04 Server (5.15 generic)  | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
-| Vanilla Kernel (5.15 LTS) | [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
-| Vanilla Kernel (5.10 LTS)       | [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/main/docs/README_vanilla.md)| Yes | No |
+|   OSV | Installation Instructions | Building | Testing|
+|---    | --- | --- | --- |
+| Red Hat® Enterprise Linux® 9.3       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 9.2       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 9.0       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 8.9       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 8.8       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 8.6       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| SUSE® Linux® Enterprise Server 15SP5 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
+| SUSE® Linux® Enterprise Server 15SP4 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
+| Ubuntu® 22.04 Desktop (6.5 generic)  |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
+| Ubuntu® 22.04 Server (5.15 generic)  |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
+| Vanilla Kernel (5.15 LTS) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
+| Vanilla Kernel (5.10 LTS) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
+
+Note: [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/redhat/main) branch is deprecated, please use the [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) branch for Red Hat®.
 
 ## Product Releases:
 
