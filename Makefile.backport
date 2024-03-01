@@ -427,11 +427,11 @@ OSV_NAME := $(shell echo $(CUSTOM_KERN_3_VER) | tr '[:lower:]' '[:upper:]')
 endif
 
 else
-	$(error "Please provide valid BUILD_CONFIG value.")
+$(error "Please provide valid BUILD_CONFIG value.")
 endif
 
 else
-	$(info "OSV_NOT SUPPORTED")
+$(info "OSV_NOT SUPPORTED")
 endif
 
 ifneq ($(OSV_NAME),)
