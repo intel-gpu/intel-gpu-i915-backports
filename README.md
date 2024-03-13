@@ -2,21 +2,21 @@
 
 Contains the backported kernel module source code of intel GPUs on various OS distributions and LTS Kernels. You can create Dynamic Kernel Module Support (DKMS) as well as precompiled Out of Tree modules packages, which can be installed on supported OS distributions.
 
-We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out of tree i915 kernel module source codes.
+We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out-of-tree i915 kernel module source codes.
 
 This repo is a code snapshot of version of backports and does not contain individual git change history.
 
 ## Out of tree kernel drivers
-This repository contains following drivers.
+This repository contains the following drivers.
 1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
 2. Intel® Converged Security Engine(cse) - Converged Security Engine
 3. Intel® Platform Monitoring Technology(pmt/vsec) - Intel Platform Telemetry
 
 ## Dependencies
 
-  These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at https://github.com/intel-gpu
+  These drivers have dependency on Intel® GPU firmware and a few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. The source code of additional drivers should be available at <https://github.com/intel-gpu>
 
-- [Intel® GPU firmware] (https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
+- [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by intel GPUs.
 
 Each project is tagged consistently, so when pulling these repos, pull the same tag.
 
@@ -59,6 +59,6 @@ Two types of release streams are available:
 | 2328.48:update released 20231229 | backport |[I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)|
 | | redhat | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md)|
 
-Please select appropriate tag for a praticular branch based on the supported OS table [Supported OS Distributions](#supported-os-distributions)
+Please select the appropriate tag for a particular branch based on the supported OS table [Supported OS Distributions](#supported-os-distributions)
 
-Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html) for more details.
+Please refer to [Releases](https://dgpu-docs.intel.com/releases/index.html) for more details.
