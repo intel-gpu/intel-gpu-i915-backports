@@ -1633,6 +1633,36 @@ static void vf_post_migration_fixup_contexts(struct drm_i915_private *i915)
 	user_contexts_ring_restore(i915);
 }
 
+static void handle_outstanding_g2h_requests_directly(struct intel_guc *guc)
+{
+	int i;
+
+	for (i = 0; i < 4 && atomic_read(&guc->outstanding_submission_g2h); ++i) {
+		intel_guc_ct_event_handler(&guc->ct);
+		/*
+		 * The ct requests worker will run after the post-migration worker, but
+		 * at that point the messages would no longer be valid.
+		 * We need to process the guc requests before calling suspend, ie now.
+		 */
+		guc->ct.requests.worker.func(&guc->ct.requests.worker);
+	}
+}
+
+static void vf_post_migration_scrub_guc_ctb(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	/*
+	 * Handle any outstanding G2Hs which arrived before migration. Call the CT
+	 * handler function directly as interrupt from before migration is now gone.
+	 */
+	for_each_gt(gt, i915, id) {
+		handle_outstanding_g2h_requests_directly(&gt->uc.guc);
+		guc_submission_scrub_desc_for_outstanding_g2h(&gt->uc.guc);
+	}
+}
+
 static void heartbeats_disable(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
@@ -1704,6 +1734,7 @@ static void vf_post_migration_shutdown(struct drm_i915_private *i915)
 
 	heartbeats_disable(i915);
 	submissions_disable(i915);
+	vf_post_migration_scrub_guc_ctb(i915);
 	i915_gem_drain_freed_objects(i915);
 	for_each_gt(gt, i915, id)
 		intel_uc_suspend(&gt->uc);
@@ -1727,6 +1758,7 @@ static void vf_post_migration_reset_guc_state(struct drm_i915_private *i915)
 		for_each_gt(gt, i915, id)
 			__intel_gt_reset(gt, ALL_ENGINES);
 	}
+	drm_notice(&i915->drm, "VF migration recovery reset sent\n");
 }
 
 static bool vf_post_migration_is_scheduled(struct drm_i915_private *i915)
@@ -1887,4 +1919,36 @@ void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915)
 	started = queue_work(system_unbound_wq, &i915->sriov.vf.migration_worker);
 	dev_info(i915->drm.dev, "VF migration recovery %s\n", started ?
 		 "scheduled" : "already in progress");
+}
+
+int intel_sriov_vf_migrated_g2h(struct intel_guc *guc)
+{
+	struct intel_uncore *uncore = guc_to_gt(guc)->uncore;
+
+	if (!guc->submission_initialized) {
+		/*
+		 * If at driver init, ignore migration which happened
+		 * before the driver was loaded.
+		 */
+		vf_post_migration_reset_guc_state(uncore->i915);
+		return -EAGAIN;
+	}
+	i915_sriov_vf_start_migration_recovery(uncore->i915);
+	return -EREMOTEIO;
+}
+
+bool i915_sriov_vf_migration_check(struct drm_i915_private *i915, bool wait_end)
+{
+	bool is_blocked;
+
+	if (!IS_SRIOV_VF(i915))
+		return false;
+	is_blocked = i915_userspace_is_blocked(i915);
+	if (!is_blocked && intel_guc_vf_migrated(&to_gt(i915)->uc.guc)) {
+		i915_sriov_vf_start_migration_recovery(i915);
+		is_blocked = true;
+	}
+	if (wait_end && is_blocked)
+		i915_userspace_wait_unlock(i915);
+	return is_blocked;
 }

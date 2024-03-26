@@ -94,8 +94,6 @@
 #include "i915_debugger.h"
 #include "i915_addr_trans_svc.h"
 
-#define ALL_L3_SLICES(dev) (1 << NUM_L3_SLICES(dev)) - 1
-
 static struct kmem_cache *slab_luts;
 
 struct i915_lut_handle *i915_lut_handle_alloc(void)
@@ -849,11 +847,6 @@ static struct i915_gem_context *__create_context(struct intel_gt *gt)
 
 	INIT_RADIX_TREE(&ctx->handles_vma, GFP_KERNEL);
 	mutex_init(&ctx->lut_mutex);
-
-	/* NB: Mark all slices as needing a remap so that when the context first
-	 * loads it will restore whatever remap state already exists. If there
-	 * is no remap info, it will be a NOP. */
-	ctx->remap_slice = ALL_L3_SLICES(i915);
 
 	i915_gem_context_set_bannable(ctx);
 	i915_gem_context_set_recoverable(ctx);

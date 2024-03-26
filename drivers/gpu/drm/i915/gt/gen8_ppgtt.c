@@ -195,10 +195,9 @@ static u64 __gen8_ppgtt_clear(struct i915_address_space * const vm,
 			    start >> gen8_pd_shift(lvl + 1),
 			    (end - 1) >> gen8_pd_shift(lvl + 1),
 			    idx);
-			GEM_BUG_ON(!gen8_pd_contains(start, end, lvl));
-skip:
-			write_pte(&pd->pt, idx, scratch_encode);
+skip:			write_pte(&pd->pt, idx, scratch_encode);
 			start += (u64)GEN8_PDES << gen8_pd_shift(lvl);
+			start = min(start, end);
 			continue;
 		}
 
@@ -570,11 +569,11 @@ ps64_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 		if (pt_aligned(arg, SZ_64K)) {
 			int count = len / 16;
 
-			DBG("%s(%p):{ lvl:%d, start:%llx, last:%llx, idx:%d, len:%d, used:%d } 64K PTE, dma:%llx, max:%llx\n",
+			DBG("%s(%p):{ lvl:%d, start:%llx, last:%llx, idx:%d, len:%d, used:%d } 64K PTE x %d, dma:%llx, max:%llx\n",
 			    __func__, arg->vm, 0,
 			    arg->addr >> __gen8_pte_shift(0),
 			    (arg->end - 1) >> __gen8_pte_shift(0),
-			    idx, len, atomic_read(px_used(pt)),
+			    idx, len, atomic_read(px_used(pt)), count,
 			    arg->it.dma | arg->pte_encode, arg->it.max);
 
 			GEM_BUG_ON(!IS_ALIGNED(idx, 16));
@@ -586,11 +585,11 @@ ps64_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 			while (pte += SZ_4K, --count);
 		}
 		if (len) {
-			DBG("%s(%p):{ lvl:%d, start:%llx, last:%llx, idx:%d, len:%d, used:%d } 4K PTE, dma:%llx, max:%llx\n",
+			DBG("%s(%p):{ lvl:%d, start:%llx, last:%llx, idx:%d, len:%d, used:%d } 4K PTE x %d, dma:%llx, max:%llx\n",
 			    __func__, arg->vm, 0,
 			    arg->addr >> __gen8_pte_shift(0),
 			    (arg->end - 1) >> __gen8_pte_shift(0),
-			    idx, len, atomic_read(px_used(pt)),
+			    idx, len, atomic_read(px_used(pt)), len,
 			    arg->it.dma | arg->pte_encode, arg->it.max);
 
 			pte = pt_advance(arg, SZ_4K, len);
@@ -977,18 +976,7 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	}
 
 	ppgtt->vm.pd_shift = ilog2(SZ_4K * SZ_4K / sizeof(gen8_pte_t));
-
-	/*
-	 * From bdw, there is hw support for read-only pages in the PPGTT.
-	 *
-	 * From Gen11, there is HSDES#:1807136187 issue. Disable ro support.
-	 *
-	 * Recoverable page fault support can recover from this fault issue.
-	 * FIXME: revert the read_only support with Recoverable page fault
-	 * support and will enable back once the GuC CAT error type is in
-	 * place.
-	 */
-	ppgtt->vm.has_read_only = GRAPHICS_VER(gt->i915) < 11;
+	ppgtt->vm.has_read_only = true;
 
 	if (HAS_LMEM(gt->i915))
 		ppgtt->vm.alloc_pt_dma = alloc_pt_lmem;
@@ -1045,13 +1033,6 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	}
 	ppgtt->pd = pd;
 
-	/*
-	 * Device TLB invalidation for ATS page faulting due to
-	 * invalid ATS response received via IOMMU. This is done in
-	 * conjunction with IOMMU TLB call via mmu notifier.
-	 */
-	ppgtt->vm.invalidate_dev_tlb = intel_invalidate_devtlb_range;
-
 	/* Exclude the last page for wabb scratch */
 	ppgtt->vm.total -= SZ_64K;
 	if (!(i915_vm_scratch0_encode(&ppgtt->vm) & GEN8_PAGE_PRESENT)) {
@@ -1059,6 +1040,12 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 		if (err)
 			goto err_put;
 	}
+	/*
+	 * Device TLB invalidation for ATS page faulting due to
+	 * invalid ATS response received via IOMMU. This is done in
+	 * conjunction with IOMMU TLB call via mmu notifier.
+	 */
+	ppgtt->vm.invalidate_dev_tlb = intel_invalidate_devtlb_range;
 
 	return ppgtt;
 

@@ -103,157 +103,6 @@ struct drm_i915_private *kdev_minor_to_i915(struct device *kdev)
 	return to_i915(minor->dev);
 }
 
-static int l3_access_valid(struct drm_i915_private *i915, loff_t offset)
-{
-	if (!HAS_L3_DPF(i915))
-		return -EPERM;
-
-	if (!IS_ALIGNED(offset, sizeof(u32)))
-		return -EINVAL;
-
-	if (offset >= GEN7_L3LOG_SIZE)
-		return -ENXIO;
-
-	return 0;
-}
-
-static ssize_t
-i915_l3_read(struct file *filp, struct kobject *kobj,
-	     struct bin_attribute *attr, char *buf,
-	     loff_t offset, size_t count)
-{
-	struct device *kdev = kobj_to_dev(kobj);
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-	int slice = (int)(uintptr_t)attr->private;
-	int ret;
-
-	ret = l3_access_valid(i915, offset);
-	if (ret)
-		return ret;
-
-	count = round_down(count, sizeof(u32));
-	count = min_t(size_t, GEN7_L3LOG_SIZE - offset, count);
-	memset(buf, 0, count);
-
-	spin_lock_irq(&i915->gem.contexts.lock);
-	if (i915->l3_parity.remap_info[slice])
-		memcpy(buf,
-		       i915->l3_parity.remap_info[slice] + offset / sizeof(u32),
-		       count);
-	spin_unlock_irq(&i915->gem.contexts.lock);
-
-	return count;
-}
-
-static ssize_t
-i915_l3_write(struct file *filp, struct kobject *kobj,
-	      struct bin_attribute *attr, char *buf,
-	      loff_t offset, size_t count)
-{
-	struct device *kdev = kobj_to_dev(kobj);
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-	int slice = (int)(uintptr_t)attr->private;
-	u32 *remap_info, *freeme = NULL;
-	struct i915_gem_context *ctx;
-	int ret;
-
-	ret = l3_access_valid(i915, offset);
-	if (ret)
-		return ret;
-
-	if (count < sizeof(u32))
-		return -EINVAL;
-
-	remap_info = kzalloc(GEN7_L3LOG_SIZE, GFP_KERNEL);
-	if (!remap_info)
-		return -ENOMEM;
-
-	spin_lock_irq(&i915->gem.contexts.lock);
-
-	if (i915->l3_parity.remap_info[slice]) {
-		freeme = remap_info;
-		remap_info = i915->l3_parity.remap_info[slice];
-	} else {
-		i915->l3_parity.remap_info[slice] = remap_info;
-	}
-
-	count = round_down(count, sizeof(u32));
-	memcpy(remap_info + offset / sizeof(u32), buf, count);
-
-	/* NB: We defer the remapping until we switch to the context */
-	list_for_each_entry(ctx, &i915->gem.contexts.list, link)
-		ctx->remap_slice |= BIT(slice);
-
-	spin_unlock_irq(&i915->gem.contexts.lock);
-	kfree(freeme);
-
-	/*
-	 * TODO: Ideally we really want a GPU reset here to make sure errors
-	 * aren't propagated. Since I cannot find a stable way to reset the GPU
-	 * at this point it is left as a TODO.
-	*/
-
-	return count;
-}
-
-static ssize_t
-i915_sysfs_read(struct file *filp, struct kobject *kobj, struct bin_attribute
-	      *attr, char *buf, loff_t offset, size_t count)
-{
-	ssize_t value;
-	struct sysfs_bin_ext_attr *ea = container_of(attr, struct
-						     sysfs_bin_ext_attr, attr);
-	struct device *kdev = kobj_to_dev(kobj);
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(i915);
-
-	value = ea->i915_read(filp, kobj, attr, buf, offset, count);
-
-	pvc_wa_allow_rc6(i915);
-
-	return value;
-}
-
-static ssize_t
-i915_sysfs_write(struct file *filp, struct kobject *kobj, struct bin_attribute
-		 *attr, char *buf, loff_t offset, size_t count)
-{
-	ssize_t value;
-	struct  sysfs_bin_ext_attr *ea = container_of(attr, struct
-						      sysfs_bin_ext_attr, attr);
-	struct device *kdev = kobj_to_dev(kobj);
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(i915);
-
-	value = ea->i915_write(filp, kobj, attr, buf, offset, count);
-
-	pvc_wa_allow_rc6(i915);
-
-	return value;
-}
-
-#define I915_DPF_ERROR_ATTR_WR(_name, _mode, _read, _write, _size, _private,	\
-				_sysfs_read, _sysfs_write)			\
-        struct sysfs_bin_ext_attr dev_attr_##_name = {{				\
-                .attr = { .name = __stringify(_name), .mode = _mode },		\
-		.read   = _read,						\
-		.write  = _write,						\
-		.size   = _size,						\
-		.mmap   = NULL,							\
-		.private = (void *) _private					\
-		}, _sysfs_read, _sysfs_write }
-
-I915_DPF_ERROR_ATTR_WR(l3_parity, (S_IRUSR | S_IWUSR), i915_sysfs_read,
-		       i915_sysfs_write, GEN7_L3LOG_SIZE, 0, i915_l3_read,
-		       i915_l3_write);
-I915_DPF_ERROR_ATTR_WR(l3_parity_slice_1, (S_IRUSR | S_IWUSR), i915_sysfs_read,
-		       i915_sysfs_write, GEN7_L3LOG_SIZE, 1, i915_l3_read,
-		       i915_l3_write);
-
 static ssize_t
 lmem_total_bytes_show(struct device *kdev, struct device_attribute *attr, char *buf)
 {
@@ -477,6 +326,58 @@ static ssize_t error_state_write(struct file *file, struct kobject *kobj,
 
 	return count;
 }
+
+static ssize_t
+i915_sysfs_read(struct file *filp, struct kobject *kobj, struct bin_attribute
+	      *attr, char *buf, loff_t offset, size_t count)
+{
+	ssize_t value;
+	struct sysfs_bin_ext_attr *ea = container_of(attr, struct
+						     sysfs_bin_ext_attr, attr);
+	struct device *kdev = kobj_to_dev(kobj);
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+
+	/* Wa_16015476723 & Wa_16015666671 */
+	pvc_wa_disallow_rc6(i915);
+
+	value = ea->i915_read(filp, kobj, attr, buf, offset, count);
+
+	pvc_wa_allow_rc6(i915);
+
+	return value;
+}
+
+static ssize_t
+i915_sysfs_write(struct file *filp, struct kobject *kobj, struct bin_attribute
+		 *attr, char *buf, loff_t offset, size_t count)
+{
+	ssize_t value;
+	struct  sysfs_bin_ext_attr *ea = container_of(attr, struct
+						      sysfs_bin_ext_attr, attr);
+	struct device *kdev = kobj_to_dev(kobj);
+	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
+
+	/* Wa_16015476723 & Wa_16015666671 */
+	pvc_wa_disallow_rc6(i915);
+
+	value = ea->i915_write(filp, kobj, attr, buf, offset, count);
+
+	pvc_wa_allow_rc6(i915);
+
+	return value;
+}
+
+#define I915_DPF_ERROR_ATTR_WR(_name, _mode, _read, _write, _size, _private,	\
+				_sysfs_read, _sysfs_write)			\
+        struct sysfs_bin_ext_attr dev_attr_##_name = {{				\
+                .attr = { .name = __stringify(_name), .mode = _mode },		\
+		.read   = _read,						\
+		.write  = _write,						\
+		.size   = _size,						\
+		.mmap   = NULL,							\
+		.private = (void *) _private					\
+		}, _sysfs_read, _sysfs_write }
+
 
 I915_DPF_ERROR_ATTR_WR(error, (S_IRUSR | S_IWUSR), i915_sysfs_read,
 		       i915_sysfs_write, 0, 0, error_state_read,
@@ -990,21 +891,6 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	if (!dev_priv->clients.root)
 		drm_warn(&dev_priv->drm, "Per-client sysfs setup failed\n");
 
-	if (HAS_L3_DPF(dev_priv)) {
-		ret = device_create_bin_file(kdev, &dev_attr_l3_parity.attr);
-		if (ret)
-			drm_err(&dev_priv->drm,
-				"l3 parity sysfs setup failed\n");
-
-		if (NUM_L3_SLICES(dev_priv) > 1) {
-			ret = device_create_bin_file(kdev,
-						     &dev_attr_l3_parity_slice_1.attr);
-			if (ret)
-				drm_err(&dev_priv->drm,
-					"l3 parity slice 1 setup failed\n");
-		}
-	}
-
 	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_reset_all_gt.attr))
 		drm_warn(&dev_priv->drm,
 			 "failed to create sysfs reset interface\n");
@@ -1048,9 +934,6 @@ void i915_teardown_sysfs(struct drm_i915_private *dev_priv)
 	i915_teardown_error_capture(kdev);
 
 	i915_sriov_sysfs_teardown(dev_priv);
-
-	device_remove_bin_file(kdev,  &dev_attr_l3_parity_slice_1.attr);
-	device_remove_bin_file(kdev,  &dev_attr_l3_parity.attr);
 
 	if (dev_priv->clients.root)
 		kobject_put(dev_priv->clients.root);

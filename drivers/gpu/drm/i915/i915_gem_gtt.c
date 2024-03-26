@@ -27,6 +27,9 @@
 int i915_gem_gtt_prepare_pages(struct drm_i915_gem_object *obj,
 			       struct sg_table *pages)
 {
+	if (GEM_WARN_ON(!pages->nents))
+		return -EINVAL;
+
 	do {
 		if (dma_map_sg_attrs(obj->base.dev->dev,
 				     pages->sgl, pages->nents,
@@ -55,6 +58,9 @@ void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
 			       struct sg_table *pages)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+
+	if (unlikely(!pages->nents))
+		return;
 
 	dma_unmap_sg_attrs(i915->drm.dev, pages->sgl, pages->nents,
 			DMA_BIDIRECTIONAL,
@@ -275,28 +281,6 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 	return drm_mm_insert_node_in_range(&vm->mm, node,
 					   size, alignment, color,
 					   start, end, DRM_MM_INSERT_EVICT);
-}
-
-struct drm_mm_node *i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
-{
-	struct drm_mm_node *node;
-	u64 page_size, start, end;
-
-	lockdep_assert_held(&vm->mutex);
-
-	if (unlikely(!(addr < vm->total)))
-		return NULL;
-
-	page_size = BIT(__ffs(INTEL_INFO(vm->i915)->page_sizes));
-	start = round_down(addr, page_size);
-	end = start + page_size;
-
-	drm_mm_for_each_node_in_range(node, &vm->mm, start, end)
-		if (addr >= node->start && addr < node->start + node->size &&
-		    drm_mm_node_allocated(node))
-			return node;
-
-	return NULL;
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

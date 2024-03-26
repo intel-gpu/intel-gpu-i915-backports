@@ -41,8 +41,6 @@
 #define I915_MAX_SLICES	3
 #define I915_MAX_SUBSLICES 8
 
-#define I915_CMD_HASH_ORDER 9
-
 struct dma_fence;
 struct drm_i915_gem_object;
 struct drm_i915_reg_table;
@@ -555,7 +553,6 @@ struct intel_engine_cs {
 	struct intel_timeline *retire;
 	struct work_struct retire_work;
 
-#define I915_ENGINE_USING_CMD_PARSER BIT(0)
 #define I915_ENGINE_SUPPORTS_STATS   BIT(1)
 #define I915_ENGINE_HAS_SCHEDULER    BIT(2)
 #define I915_ENGINE_HAS_PREEMPTION   BIT(3)
@@ -563,7 +560,6 @@ struct intel_engine_cs {
 #define I915_ENGINE_HAS_TIMESLICES   BIT(5)
 #define I915_ENGINE_IS_VIRTUAL       BIT(6)
 #define I915_ENGINE_HAS_RELATIVE_MMIO BIT(7)
-#define I915_ENGINE_REQUIRES_CMD_PARSER BIT(8)
 #define I915_ENGINE_WANT_FORCED_PREEMPTION BIT(9)
 #define I915_ENGINE_HAS_RCS_REG_STATE  BIT(10)
 #define I915_ENGINE_HAS_EU_PRIORITY    BIT(11)
@@ -573,30 +569,6 @@ struct intel_engine_cs {
 #define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(15)
 #define I915_ENGINE_SUPPORTS_TICKS_STATS   BIT(16)
 	unsigned int flags;
-
-	/*
-	 * Table of commands the command parser needs to know about
-	 * for this engine.
-	 */
-	DECLARE_HASHTABLE(cmd_hash, I915_CMD_HASH_ORDER);
-
-	/*
-	 * Table of registers allowed in commands that read/write registers.
-	 */
-	const struct drm_i915_reg_table *reg_tables;
-	int reg_table_count;
-
-	/*
-	 * Returns the bitmask for the length field of the specified command.
-	 * Return 0 for an unrecognized/invalid command.
-	 *
-	 * If the command parser finds an entry for a command in the engine's
-	 * cmd_tables, it gets the command's length based on the table entry.
-	 * If not, it calls this function to determine the per-engine length
-	 * field encoding for the command (i.e. different opcode ranges use
-	 * certain bits to encode the command length in the header).
-	 */
-	u32 (*get_cmd_length_mask)(u32 cmd_header);
 
 	struct {
 		union {
@@ -632,18 +604,6 @@ struct intel_engine_cs {
 
 	struct i915_perf_group *oa_group;
 };
-
-static inline bool
-intel_engine_using_cmd_parser(const struct intel_engine_cs *engine)
-{
-	return engine->flags & I915_ENGINE_USING_CMD_PARSER;
-}
-
-static inline bool
-intel_engine_requires_cmd_parser(const struct intel_engine_cs *engine)
-{
-	return engine->flags & I915_ENGINE_REQUIRES_CMD_PARSER;
-}
 
 static inline bool
 intel_engine_supports_stats(const struct intel_engine_cs *engine)

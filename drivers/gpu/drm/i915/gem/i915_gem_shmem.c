@@ -824,7 +824,8 @@ error:
 #define i915_add_to_page_cache_locked add_to_page_cache_locked
 #endif
 
-int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_table *pages)
+static int
+shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 {
 	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct address_space *mapping = obj->base.filp->f_mapping;
@@ -954,12 +955,6 @@ empty:
 }
 
 static int
-shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
-{
-	return i915_gem_object_put_pages_shmem(obj, pages);
-}
-
-static int
 shmem_pwrite(struct drm_i915_gem_object *obj,
 	     const struct drm_i915_gem_pwrite *arg)
 {
@@ -1058,15 +1053,14 @@ shmem_pread(struct drm_i915_gem_object *obj,
 
 static void shmem_release(struct drm_i915_gem_object *obj)
 {
-	if (obj->flags & I915_BO_STRUCT_PAGE)
-		i915_gem_object_release_memory_region(obj);
-
+	i915_gem_object_release_memory_region(obj);
 	fput(obj->base.filp);
 }
 
 const struct drm_i915_gem_object_ops i915_gem_shmem_ops = {
 	.name = "i915_gem_object_shmem",
-	.flags = I915_GEM_OBJECT_IS_SHRINKABLE,
+	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE |
+		 I915_GEM_OBJECT_IS_SHRINKABLE,
 
 	.get_pages = shmem_get_pages,
 	.put_pages = shmem_put_pages,
@@ -1105,7 +1099,6 @@ static int shmem_object_init(struct intel_memory_region *mem,
 			     resource_size_t size,
 			     unsigned int flags)
 {
-	static struct lock_class_key lock_class;
 	struct drm_i915_private *i915 = mem->i915;
 	struct address_space *mapping;
 	unsigned int cache_level;
@@ -1128,8 +1121,7 @@ static int shmem_object_init(struct intel_memory_region *mem,
 	mapping_set_gfp_mask(mapping, mask);
 	GEM_BUG_ON(!(mapping_gfp_mask(mapping) & __GFP_RECLAIM));
 
-	i915_gem_object_init(obj, &i915_gem_shmem_ops, &lock_class,
-			     flags | I915_BO_STRUCT_PAGE);
+	i915_gem_object_init(obj, &i915_gem_shmem_ops, flags);
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
 

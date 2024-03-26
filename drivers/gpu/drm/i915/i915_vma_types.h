@@ -180,6 +180,10 @@ struct i915_vma_metadata {
 	struct i915_uuid_resource *uuid;
 };
 
+enum {
+	I915_MM_NODE_READONLY_BIT = DRM_MM_NODE_SCANNED_BIT + 1,
+};
+
 /**
  * DOC: Virtual Memory Address
  *
@@ -270,6 +274,9 @@ struct i915_vma {
 #define I915_VMA_RESIDENT_BIT	20
 #define I915_VMA_PURGED_BIT	21
 #define I915_VMA_HAS_LUT_BIT	22
+
+#define I915_VMA_PARTIAL_BIT	23
+#define I915_VMA_PARTIAL	((int)BIT(I915_VMA_PARTIAL_BIT))
 
 	struct i915_active active;
 

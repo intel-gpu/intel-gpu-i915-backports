@@ -425,6 +425,27 @@ static u32 ct_get_next_fence(struct intel_guc_ct *ct)
 	return ++ct->requests.last_fence;
 }
 
+bool intel_guc_ct_vf_migrated(struct intel_guc_ct *ct)
+{
+	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
+	struct guc_ct_buffer_desc *desc;
+	unsigned long flags;
+	bool ret;
+
+	if (!ct->enabled)
+		return false;
+
+	spin_lock_irqsave(&ctb->lock, flags);
+	desc = ctb->desc;
+	if (desc) {
+		ret = (desc->status & GUC_CTB_STATUS_MIGRATED) != 0;
+	} else {
+		ret = false;
+	}
+	spin_unlock_irqrestore(&ctb->lock, flags);
+	return ret;
+}
+
 static int ct_write(struct intel_guc_ct *ct,
 		    const u32 *action,
 		    u32 len /* in dwords */,

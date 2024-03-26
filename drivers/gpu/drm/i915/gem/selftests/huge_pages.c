@@ -181,7 +181,6 @@ static const struct drm_i915_gem_object_ops fake_ops_single = {
 static struct drm_i915_gem_object *
 fake_huge_pages_object(struct drm_i915_private *i915, u64 size, bool single)
 {
-	static struct lock_class_key lock_class;
 	struct drm_i915_gem_object *obj;
 
 	GEM_BUG_ON(!size);
@@ -200,9 +199,9 @@ fake_huge_pages_object(struct drm_i915_private *i915, u64 size, bool single)
 	drm_gem_private_object_init(&i915->drm, &obj->base, size);
 
 	if (single)
-		i915_gem_object_init(obj, &fake_ops_single, &lock_class, 0);
+		i915_gem_object_init(obj, &fake_ops_single, 0);
 	else
-		i915_gem_object_init(obj, &fake_ops, &lock_class, 0);
+		i915_gem_object_init(obj, &fake_ops, 0);
 
 	i915_gem_object_set_volatile(obj);
 

@@ -755,6 +755,8 @@ static int eb_reserve(struct i915_execbuffer *eb)
 			mutex_lock(&eb->context->vm->mutex);
 			err = i915_gem_evict_vm(eb->context->vm);
 			mutex_unlock(&eb->context->vm->mutex);
+			if (err == -ETIME && i915_sriov_vf_migration_check(eb->i915, false))
+				return -EAGAIN;
 			if (err)
 				return err;
 			break;
@@ -1117,10 +1119,14 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 			   eb_vma_misplaced(&eb->exec[i], vma, ev->flags));
 	}
 
-	if (!list_empty(&eb->unbound))
-		return eb_reserve(eb);
+	err = 0;
+	if (!list_empty(&eb->unbound)) {
+		err = i915_gem_object_lock(eb->context->vm->root_obj, &eb->ww);
+		if (err == 0)
+			err = eb_reserve(eb);
+	}
 
-	return 0;
+	return err;
 }
 
 static struct eb_vma *
@@ -2106,19 +2112,15 @@ out:
 static int eb_relocate_parse(struct i915_execbuffer *eb)
 {
 	int err;
-	bool throttle = true;
 
 retry:
-	err = eb_pin_engine(eb, throttle);
+	err = eb_pin_engine(eb, true);
 	if (err) {
 		if (err != -EDEADLK)
 			return err;
 
 		goto err;
 	}
-
-	/* only throttle once, even if we didn't need to throttle */
-	throttle = false;
 
 	err = eb_validate_vmas(eb);
 	if (err == -EAGAIN)
@@ -2320,6 +2322,8 @@ err_skip:
 
 		i915_request_set_error_once(eb->requests[j], err);
 	}
+	if (err == -EREMCHG)
+		err = -EAGAIN;
 	return err;
 }
 

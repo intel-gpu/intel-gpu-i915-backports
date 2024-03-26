@@ -26,6 +26,7 @@
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
+#include <drm/drm_print.h>
 
 #define I915_SPI_RPM_TIMEOUT 500
 
@@ -400,7 +401,9 @@ static int i915_spi_init(struct i915_spi *spi, struct device *device)
 
 	/* clean error register, previous errors are ignored */
 	spi_error(spi);
-
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+	DRM_INFO("I915 SPI BACKPORTED INIT \n");
+#endif
 	ret = i915_spi_is_valid(spi);
 	if (ret) {
 		dev_err(device, "The SPI is not valid %d\n", ret);
@@ -925,6 +928,7 @@ static int i915_spi_remove(struct platform_device *platdev)
 {
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	struct i915_spi *spi = dev_get_drvdata(&aux_dev->dev);
+
 	if (!spi)
 		return;
 #else
@@ -961,6 +965,11 @@ static const struct auxiliary_device_id i915_spi_id_table[] = {
 	{
 		.name = "i915.spi",
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".spi",
+	},
+#endif
 	{
 		/* sentinel */
 	}

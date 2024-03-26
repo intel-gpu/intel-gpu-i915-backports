@@ -1,4 +1,27 @@
 # ChangeLog
+## Release I915_24WW12.5_821.30_24.1.11_240117.14
+* i915: fix to prevent double-free of vma->pages/obj->mm.pages during migration
+* i915: update to retry guc during pagefault processing to avoid -EIO warnings under load
+* i915: update to recover from errors during pagefault by banning context and resetting gt
+* i915: update to load and use as default HuC fw v7.10.14 on flex
+* i915: update to not use nonblocking ct sends for secondary fault replies as impacted quicksilver benchmarks
+* i915: update timeslice back to 5ms for performance on lammps wl
+* i915: update to harden eviction blt loops limits
+* i915: update for opportunistic migration back to lmem after eviction
+* i915: add Wa_16018031267 and Wa_16018063123 for flex and max
+* i915: fix to improve responsiveness of memory eviction
+* i915: fix to avoid warning race during dma_fence error propagation
+* i915: fix to avoid deadlock during wait-for-bind before eviction
+* i915: fix to avoid cat error due to off by one memory address
+* i915: fix to correct packet length for send_fault_reply
+* i915: fix to correctly steer eustall register access
+* i915: fix to wa to correctly steer GuC writes after engine reset
+* i915: fix for gt wakeref handling
+* i915: fix for off by one in memory error handling
+* i915: Fix for issue seen during an L0 compliance test
+* i915: fix from static analysis in memory free path
+* i915: fix for potential race condition found through static analysis
+
 ## Release I915_24WW05.5_803.29_23.10.32_231129.32
 * i915: Add sriov force fixed CCS-1 mode for max
 * i915: Add support to dump multiple engines for offline debugging

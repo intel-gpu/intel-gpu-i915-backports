@@ -299,7 +299,7 @@ static int __vma_bind(struct dma_fence_work *work)
 	int err;
 
 	err = vma->ops->bind_vma(vw->vm, vma, vw->pat_index, vw->flags);
-	if (i915_userspace_is_blocked(vma->vm->i915))
+	if (i915_sriov_vf_migration_check(vma->vm->i915, false))
 		err = -EREMCHG;
 
 	return err;

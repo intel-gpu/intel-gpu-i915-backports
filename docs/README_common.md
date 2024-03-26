@@ -32,6 +32,7 @@ Build Configurations:
  Debian Targets:
   dkmsdeb-pkg    - Build single DKMS Debian package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)
   dmadkmsdeb-pkg - Build DKMS debian package for dmabuf
+  drmdkmsdeb-pkg - Build DKMS debian package for drm, i915 and dependent child drivers (mei and pmt/vsec)
   i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)
 
  Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_SERVER
@@ -45,6 +46,7 @@ Build Configurations:
   dkmsrpm-pkg     - Build single DKMS RPM package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)
   dmadkmsrpm-pkg  - Build dkms RPM package for dmabuf
   i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)
+  drmdkmsrpm-pkg -  Build dkms RPM package for drm, i915 and dependent child drivers (mei and pmt/vsec)
 
  Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP5
 

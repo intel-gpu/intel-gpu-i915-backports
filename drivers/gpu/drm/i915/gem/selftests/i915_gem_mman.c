@@ -279,7 +279,7 @@ static bool can_mmap(struct drm_i915_gem_object *obj, enum i915_mmap_type type)
 		return false;
 
 	if (!i915_gem_object_has_struct_page(obj) &&
-	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
+	    !i915_gem_object_has_iomem(obj))
 		return false;
 
 	return true;
@@ -428,7 +428,7 @@ static const char *repr_mmap_type(enum i915_mmap_type type)
 static bool can_access(const struct drm_i915_gem_object *obj)
 {
 	return i915_gem_object_has_struct_page(obj) ||
-	       i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM);
+	       i915_gem_object_has_iomem(obj);
 }
 
 static int __igt_mmap_access(struct drm_i915_private *i915,

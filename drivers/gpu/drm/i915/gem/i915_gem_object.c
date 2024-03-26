@@ -231,7 +231,7 @@ struct drm_i915_gem_object *i915_gem_object_alloc(void)
 
 	obj->shares_resv = i915_resv_alloc();
 	if (!obj->shares_resv) {
-		i915_gem_object_free(obj);
+		kmem_cache_free(slab_objects, obj);
 		return NULL;
 	}
 	obj->base.resv = &obj->shares_resv->base;
@@ -252,12 +252,14 @@ void i915_gem_object_free(struct drm_i915_gem_object *obj)
 	GEM_BUG_ON(obj->mm.region.mem);
 	GEM_BUG_ON(i915_gem_object_has_segments(obj));
 
+	i915_resv_put(obj->shares_resv);
+
 	return kmem_cache_free(slab_objects, obj);
 }
 
 void i915_gem_object_init(struct drm_i915_gem_object *obj,
 			  const struct drm_i915_gem_object_ops *ops,
-			  struct lock_class_key *key, unsigned flags)
+			  unsigned flags)
 {
 	spin_lock_init(&obj->vma.lock);
 	INIT_LIST_HEAD(&obj->vma.list);
@@ -374,23 +376,11 @@ bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
-					 enum intel_region_id dst_region_id,
+					 const struct intel_memory_region *mem,
 					 bool is_atomic_fault)
 {
-	if (!dst_region_id || !(obj->memory_mask & BIT(dst_region_id)))
+	if (obj->mm.region.mem == mem || !(obj->memory_mask & BIT(mem->id)))
 		return false;
-
-	if (obj->mm.region.mem->id == dst_region_id)
-		return false;
-
-	/* HW support cross-tile atomic access, so no need to
-	 * migrate when object is already in lmem.
-	 */
-	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
-		return true;
-
-	if (i915_gem_object_test_preferred_location(obj, dst_region_id))
-		return true;
 
 	/*
 	 * first touch policy:
@@ -399,7 +389,14 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 	if (!i915_gem_object_has_backing_store(obj))
 		return true;
 
-	return false;
+	/*
+	 * HW support cross-tile atomic access, so no need to
+	 * migrate when object is already in lmem.
+	 */
+	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
+		return true;
+
+	return i915_gem_object_test_preferred_location(obj, mem->id);
 }
 
 static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
@@ -857,7 +854,6 @@ static void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
 	GEM_BUG_ON(!list_empty(&obj->mm.link));
-	bitmap_free(obj->bit_17);
 
 	detach_vm(obj);
 
@@ -871,8 +867,6 @@ static void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 		kfree(obj->mm.placements);
 
 	kfree(obj->nodes);
-
-	i915_resv_put(obj->shares_resv);
 
 	/* But keep the pointer alive for RCU-protected lookups */
 	call_rcu(&obj->rcu, __i915_gem_free_object_rcu);
@@ -1140,6 +1134,9 @@ swap_shrinker(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor
 static void
 swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 {
+	GEM_BUG_ON(atomic_read(&obj->mm.pages_pin_count));
+	GEM_BUG_ON(atomic_read(&donor->mm.pages_pin_count));
+
 	__i915_active_fence_replace(&donor->mm.migrate, &obj->mm.migrate);
 
 	swap(obj->mm.pages, donor->mm.pages);
@@ -1190,6 +1187,9 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 
 	if (GEM_WARN_ON(obj->mm.madv != I915_MADV_WILLNEED))
 		return -EFAULT;
+
+	if (GEM_WARN_ON(i915_gem_object_has_pinned_pages(obj)))
+		return -EINVAL;
 
 	if (obj->swapto && obj->swapto->mm.madv == __I915_MADV_PURGED)
 		i915_gem_object_put(fetch_and_zero(&obj->swapto));

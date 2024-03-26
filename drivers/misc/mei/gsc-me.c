@@ -21,6 +21,10 @@
 
 #include "mei-trace.h"
 
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+#include <backport/bp_module_version.h>
+#endif
+
 #define MEI_GSC_RPM_TIMEOUT 500
 
 static inline bool mei_gsc_hw_is_unavailable(const struct device *dev)
@@ -362,6 +366,8 @@ static const struct mei_hw_ops mei_gsc_hw_ops_null = {
 #define MEI_GSC_RESET_END_TIMEOUT 700
 #define MEI_GSC_RESET_STEP 20
 
+#ifdef BPM_MEI_AUX_BUS_AVAILABLE
+
 static int mei_gsc_forcewake_get_and_wait(struct mei_device *dev, bool need_runtime_pm)
 {
 	struct mei_fw_status fw_status;
@@ -442,8 +448,6 @@ static void mei_gsc_forcewake_put(struct mei_device *dev, bool need_runtime_pm)
 
 	mutex_unlock(&dev->device_lock);
 }
-
-#ifdef BPM_MEI_AUX_BUS_AVAILABLE
 
 static int mei_gsc_probe(struct auxiliary_device *aux_dev,
 			 const struct auxiliary_device_id *aux_dev_id)
@@ -907,10 +911,22 @@ static const struct auxiliary_device_id mei_gsc_id_table[] = {
 		.driver_data = MEI_ME_GSC_CFG,
 
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".mei-gsc",
+		.driver_data = MEI_ME_GSC_CFG,
+	},
+#endif
 	{
 		.name = "i915.mei-gscfi",
 		.driver_data = MEI_ME_GSCFI_CFG,
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".mei-gscfi",
+		.driver_data = MEI_ME_GSCFI_CFG,
+	},
+#endif
 	{
 		/* sentinel */
 	}
@@ -974,6 +990,9 @@ module_exit(mei_gsc_exit);
 
 MODULE_AUTHOR("Intel Corporation");
 MODULE_LICENSE("GPL");
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+MODULE_VERSION(BACKPORT_MOD_VER);
+#endif
 
 #ifdef BPM_MEI_AUX_BUS_AVAILABLE
 MODULE_ALIAS("auxiliary:i915.mei-gsc");

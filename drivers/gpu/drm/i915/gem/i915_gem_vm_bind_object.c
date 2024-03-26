@@ -585,7 +585,8 @@ out_unlock:
 
 static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 				      struct drm_i915_gem_object *obj,
-				      u64 start, u64 offset, u64 size)
+				      u64 start, u64 offset, u64 size,
+				      unsigned long flags)
 {
 	struct i915_ggtt_view view;
 	struct i915_vma *vma;
@@ -603,6 +604,8 @@ static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 	vma->node.start = start;
 	vma->node.size = size;
 	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
+	if (flags & PRELIM_I915_GEM_VM_BIND_READONLY)
+		__set_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags);
 
 	vma = __i915_vma_get(vma);
 	GEM_BUG_ON(!vma);
@@ -705,7 +708,7 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 			 * VMA points to segment BO, allowing faults/migration
 			 * to be segment based ('chunk granular')
 			 */
-			vma = vm_create_vma(vm, vma_obj, start, offset, vma_size);
+			vma = vm_create_vma(vm, vma_obj, start, offset, vma_size, va->flags);
 			if (IS_ERR(vma)) {
 				err = PTR_ERR(vma);
 				break;
@@ -755,7 +758,7 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 		}
 	} else {
 		/* no segments, will create single VMA */
-		vma = vm_create_vma(vm, obj, va->start, va->offset, va->length);
+		vma = vm_create_vma(vm, obj, va->start, va->offset, va->length, va->flags);
 		if (IS_ERR(vma)) {
 			err = PTR_ERR(vma);
 		} else {
@@ -841,6 +844,9 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	LIST_HEAD(vma_head);
 	u64 pin_flags = 0;
 	int ret;
+
+	if (va->flags & PRELIM_I915_GEM_VM_BIND_READONLY && !vm->has_read_only)
+		return -ENODEV;
 
 	obj = i915_gem_object_lookup(file, va->handle);
 	if (!obj)

@@ -11,6 +11,7 @@
 #include "i915_driver.h"
 #include "i915_trace.h"
 
+#include "gen8_engine_cs.h"
 #include "gen8_ppgtt.h"
 #include "intel_context.h"
 #include "intel_engine_heartbeat.h"
@@ -163,26 +164,24 @@ static void print_recoverable_fault(struct recoverable_page_fault_info *info,
 }
 
 static int migrate_to_lmem(struct drm_i915_gem_object *obj,
-			   enum intel_region_id lmem,
+			   const struct intel_memory_region *mem,
 			   struct i915_gem_ww_ctx *ww)
 {
 	int ret;
 
-	GEM_BUG_ON(!(obj->memory_mask & BIT(lmem)));
-
-	if (obj->mm.region.mem->id == lmem)
+	if (obj->mm.region.mem == mem)
 		return 0;
 
+	/* unmap to avoid further update to the page[s] */
 	i915_gem_object_release_mmap(obj);
 	GEM_BUG_ON(obj->mm.mapping);
 	GEM_BUG_ON(obj->base.filp && mapping_mapped(obj->base.filp->f_mapping));
 
-	/* unmap to avoid further update to the page[s] */
 	ret = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
 	if (ret)
 		return ret;
 
-	return i915_gem_object_migrate(obj, lmem, true);
+	return i915_gem_object_migrate(obj, mem->id, true);
 }
 
 static inline bool access_is_atomic(struct recoverable_page_fault_info *info)
@@ -190,25 +189,26 @@ static inline bool access_is_atomic(struct recoverable_page_fault_info *info)
 	return (info->access_type == ACCESS_TYPE_ATOMIC);
 }
 
-static enum intel_region_id get_lmem_region_id(struct drm_i915_gem_object *obj, struct intel_gt *gt)
+static struct intel_memory_region *
+get_lmem(struct drm_i915_gem_object *obj, struct intel_gt *gt)
 {
 	int i;
 
 	if (obj->mm.preferred_region &&
 	    obj->mm.preferred_region->type == INTEL_MEMORY_LOCAL)
-		return obj->mm.preferred_region->id;
+		return obj->mm.preferred_region;
 
 	if (BIT(gt->lmem->id) & obj->memory_mask)
-		return gt->lmem->id;
+		return gt->lmem;
 
 	for (i = 0; i < obj->mm.n_placements; i++) {
 		struct intel_memory_region *mr = obj->mm.placements[i];
 
 		if (mr->type == INTEL_MEMORY_LOCAL)
-			return mr->id;
+			return mr;
 	}
 
-	return 0;
+	return NULL;
 }
 
 static int validate_fault(struct drm_i915_private *i915, struct i915_vma *vma,
@@ -221,19 +221,16 @@ static int validate_fault(struct drm_i915_private *i915, struct i915_vma *vma,
 		FAULT_ATOMIC_NOT_PRESENT = 0x2,
 		FAULT_WRITE_ACCESS_VIOLATION = 0x5,
 		FAULT_ATOMIC_ACCESS_VIOLATION = 0xa,
-	} err_code;
-	int err = 0;
+	} err_code = info->fault_type << 2 | info->access_type;
+	const char *err = NULL;
 
-	err_code = (info->fault_type << 2) | info->access_type;
-
-	switch (err_code & 0xF) {
+	switch (err_code & 0xf) {
 	case FAULT_READ_NOT_PRESENT:
 		break;
 	case FAULT_WRITE_NOT_PRESENT:
-		if (i915_gem_object_is_readonly(vma->obj)) {
-			drm_err(&i915->drm, "Write Access Violation: read only\n");
-			err = -EACCES;
-		}
+		if (test_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags) ||
+		    i915_gem_object_is_readonly(vma->obj))
+			err = "Write Access Violation: read only";
 		break;
 	case FAULT_ATOMIC_NOT_PRESENT:
 		/*
@@ -249,22 +246,24 @@ static int validate_fault(struct drm_i915_private *i915, struct i915_vma *vma,
 			break;
 		fallthrough;
 	case FAULT_ATOMIC_ACCESS_VIOLATION:
-		if (!(vma->obj->memory_mask & REGION_LMEM)) {
-			drm_err(&i915->drm, "Atomic Access Violation\n");
-			err = -EACCES;
-		}
+		if (!(vma->obj->memory_mask & REGION_LMEM))
+			err = "Atomic Access Violation";
 		break;
 	case FAULT_WRITE_ACCESS_VIOLATION:
-		drm_err(&i915->drm, "Write Access Violation\n");
-		err = -EACCES;
+		err = "Write Access Violation";
 		break;
 	default:
-		drm_err(&i915->drm, "Undefined Fault Type\n");
-		err = -EACCES;
+		err = "Undefined Fault Type";
 		break;
 	}
 
-	return err;
+	if (err) {
+		dev_notice(i915->drm.dev, "%s @ 0x%llx\n", err,
+			   intel_canonical_addr(INTEL_PPGTT_MSB(i915), info->page_addr));
+		return -EACCES;
+	}
+
+	return 0;
 }
 
 static struct i915_address_space *faulted_vm(struct intel_guc *guc, u32 asid)
@@ -310,7 +309,9 @@ pf_coredump(struct intel_engine_cs *engine, struct recoverable_page_fault_info *
 	if (!error)
 		return NULL;
 
-	error->fault.addr = info->page_addr | BIT(0);
+	error->fault.addr =
+		intel_canonical_addr(INTEL_PPGTT_MSB(engine->i915),
+				     info->page_addr | BIT(0));
 	error->fault.type = info->fault_type;
 	error->fault.level = info->fault_level;
 	error->fault.access = info->access_type;
@@ -416,7 +417,9 @@ pf_eu_debugger(struct intel_engine_cs *engine,
 	intel_gt_invalidate_l3_mmio(gt);
 
 	pf->engine = engine;
-	pf->fault.addr = info->page_addr;
+	pf->fault.addr =
+		intel_canonical_addr(INTEL_PPGTT_MSB(engine->i915),
+				     info->page_addr | BIT(0));
 	pf->fault.type = info->fault_type;
 	pf->fault.level = info->fault_level;
 	pf->fault.access = info->access_type;
@@ -544,7 +547,7 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 
 	for_i915_gem_ww(&ww, err, false) {
 		struct drm_i915_gem_object *obj = vma->obj;
-		enum intel_region_id lmem;
+		const struct intel_memory_region *mem;
 
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
@@ -552,15 +555,15 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 
 		obj->flags |= I915_BO_FAULT_CLEAR | I915_BO_SYNC_HINT;
 
-		lmem = get_lmem_region_id(obj, gt);
-		if (i915_gem_object_should_migrate_lmem(obj, lmem, access_is_atomic(info))) {
+		mem = get_lmem(obj, gt);
+		if (mem && i915_gem_object_should_migrate_lmem(obj, mem, access_is_atomic(info))) {
 			/*
 			 * Migration is best effort.
 			 * if we see -EDEADLK handle that with proper backoff. Otherwise
 			 * for scenarios like atomic operation, if migration fails,
 			 * gpu will fault again and we can retry.
 			 */
-			err = migrate_to_lmem(obj, lmem, &ww);
+			err = migrate_to_lmem(obj, mem, &ww);
 			if (err == -EDEADLK)
 				continue;
 		}
@@ -579,11 +582,13 @@ put_vma:
 	return fence ?: ERR_PTR(err);
 }
 
-static void get_fault_info(const u32 *payload, struct recoverable_page_fault_info *info)
+static void
+get_fault_info(struct intel_gt *gt,
+	       const u32 *payload,
+	       struct recoverable_page_fault_info *info)
 {
-	const struct intel_guc_pagefault_desc *desc;
-
-	desc = (const struct intel_guc_pagefault_desc *)payload;
+	const struct intel_guc_pagefault_desc *desc =
+		(const struct intel_guc_pagefault_desc *)payload;
 
 	info->fault_level = FIELD_GET(PAGE_FAULT_DESC_FAULT_LEVEL, desc->dw0);
 	info->engine_class = FIELD_GET(PAGE_FAULT_DESC_ENG_CLASS, desc->dw0);
@@ -595,10 +600,10 @@ static void get_fault_info(const u32 *payload, struct recoverable_page_fault_inf
 	info->vfid =  FIELD_GET(PAGE_FAULT_DESC_VFID, desc->dw2);
 	info->access_type = FIELD_GET(PAGE_FAULT_DESC_ACCESS_TYPE, desc->dw2);
 	info->fault_type = FIELD_GET(PAGE_FAULT_DESC_FAULT_TYPE, desc->dw2);
-	info->page_addr = (u64)(FIELD_GET(PAGE_FAULT_DESC_VIRTUAL_ADDR_HI,
-					  desc->dw3)) << PAGE_FAULT_DESC_VIRTUAL_ADDR_HI_SHIFT;
-	info->page_addr |= FIELD_GET(PAGE_FAULT_DESC_VIRTUAL_ADDR_LO,
-				     desc->dw2) << PAGE_FAULT_DESC_VIRTUAL_ADDR_LO_SHIFT;
+
+	info->page_addr =
+		intel_noncanonical_addr(INTEL_PPGTT_MSB(gt->i915),
+					make_u64(desc->dw3, desc->dw2 & PAGE_FAULT_DESC_VIRTUAL_ADDR_LO));
 }
 
 static int fault_work(struct dma_fence_work *work)
@@ -630,30 +635,39 @@ static int send_fault_reply(const struct fault_reply *f)
 		 FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
 			    f->info.pdata)),
 	};
-	unsigned int flags;
-
-	/*
-	 * Fire and forget secondary page fault replies, only
-	 * waiting for the completion response from the outermost
-	 * pagefaults. This lets us blast all the redundant
-	 * replies (each pagefault may generate a message/reply for
-	 * each EU thread), but still see the final result of
-	 * resolving the fault in HW.
-	 */
-	flags = 0;
-	if (test_bit(DMA_FENCE_WORK_IMM, &f->base.rq.fence.flags))
-		flags = MAKE_SEND_FLAGS(0);
+	int err;
 
 	do {
-		int ret;
+		err = intel_guc_send(f->guc, action, ARRAY_SIZE(action));
+		if (!err || err == -ENODEV) /* ENODEV == GT is being reset */
+			return 0;
+	} while (err == -EIO); /* EIO == ack from HW timeout (by GuC), try again */
 
-		ret = intel_guc_ct_send(&f->guc->ct, action, ARRAY_SIZE(action),
-					NULL, 0, flags);
-		if (!ret || !flags)
-			return ret;
+	return err;
+}
 
-		flags = 0;
-	} while (1);
+static void revoke_faulting_context(struct intel_engine_cs *engine)
+{
+	char msg[TASK_COMM_LEN + 32] = "Incomplete pagefault response";
+	struct i915_gem_context *ctx = NULL;
+	struct i915_request *rq;
+
+	rcu_read_lock();
+	rq = intel_engine_find_active_request(engine);
+	if (rq)
+		ctx = rcu_dereference(rq->context->gem_context);
+	if (ctx) {
+		int len = strlen(msg);
+
+		snprintf(msg + len, sizeof(msg) - len,
+			 " for %s (%s)",
+			 ctx->name, engine->name);
+		atomic_inc(&ctx->guilty_count);
+		intel_context_ban(rq->context, rq);
+	}
+	rcu_read_unlock();
+
+	intel_gt_reset(engine->gt, engine->mask, msg);
 }
 
 static void fault_complete(struct dma_fence_work *work)
@@ -689,7 +703,7 @@ static void fault_complete(struct dma_fence_work *work)
 	 * -attentions) that SIP turns on.
 	 */
 	if (GEM_WARN_ON(send_fault_reply(f)))
-		intel_gt_set_wedged(f->gt);
+		revoke_faulting_context(f->engine);
 
 	start = READ_ONCE(f->engine->pagefault_start);
 	if (atomic_dec_and_test(&f->engine->in_pagefault))
@@ -770,32 +784,31 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct fault_reply *reply;
 	struct dma_fence *fence;
-	bool imm = true;
 
 	if (unlikely(len != 4))
 		return -EPROTO;
 
 	reply = kzalloc(sizeof(*reply), GFP_KERNEL);
-	if (!reply)
+	if (unlikely(!reply))
 		return -ENOMEM;
 
 	dma_fence_work_init(&reply->base, &reply_ops, gt->i915->sched);
-	get_fault_info(payload, &reply->info);
+	get_fault_info(gt, payload, &reply->info);
 	reply->guc = guc;
 
 	reply->engine =
 		mark_engine_as_active(gt,
 				      reply->info.engine_class,
 				      reply->info.engine_instance);
-	if (!reply->engine)
+	if (unlikely(!reply->engine)) {
+		kfree(reply);
 		return -EINVAL;
+	}
 	GEM_BUG_ON(reply->engine->gt != gt);
 
 	local_inc(&gt->stats.pagefault_minor);
-	if (!atomic_fetch_inc(&reply->engine->in_pagefault)) {
+	if (!atomic_fetch_inc(&reply->engine->in_pagefault))
 		reply->engine->pagefault_start = ktime_get();
-		imm = false;
-	}
 
 	reply->gt = gt;
 	reply->wakeref = intel_gt_pm_get(gt);
@@ -829,11 +842,10 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 	} else if (fence) {
 		dma_fence_work_chain(&reply->base, fence);
 		dma_fence_put(fence);
-		imm = false;
 	}
 
 	i915_request_set_priority(&reply->base.rq, I915_PRIORITY_BARRIER);
-	dma_fence_work_commit_imm_if(&reply->base, imm && !reply->dump);
+	dma_fence_work_commit_imm_if(&reply->base, !reply->dump);
 
 	/* Serialise each pagefault with its reply? */
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_ASYNC_PAGEFAULTS))
@@ -916,15 +928,17 @@ static int acc_migrate_to_lmem(struct intel_gt *gt, struct i915_vma *vma)
 
 	for_i915_gem_ww(&ww, err, false) {
 		struct drm_i915_gem_object *obj = vma->obj;
-		enum intel_region_id lmem;
+		const struct intel_memory_region *mem;
 
 		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
 
-		lmem = get_lmem_region_id(obj, gt);
-		if (lmem)
-			err = migrate_to_lmem(obj, lmem, &ww);
+		mem = get_lmem(obj, gt);
+		if (!mem)
+			continue;
+
+		err = migrate_to_lmem(obj, mem, &ww);
 	}
 
 	i915_gem_vm_bind_unlock(vma->vm);

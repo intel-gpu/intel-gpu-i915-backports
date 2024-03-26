@@ -89,6 +89,9 @@ static int __init i915_init(void)
 {
 	int err, i;
 
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+	DRM_INFO("I915 BACKPORTED INIT \n");
+#endif
 	for (i = 0; i < ARRAY_SIZE(init_funcs); i++) {
 		err = init_funcs[i].init();
 		if (err < 0) {

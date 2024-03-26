@@ -194,7 +194,7 @@ void i915_debugger_pagefault_notify(struct i915_gpu_coredump *error)
 	bool debug_enabled = READ_ONCE(i915->debuggers.enable_eu_debug);
 
 	if (error->fault.addr)
-		dev_info(i915->drm.dev, "EU debugging %s, EUs %sinterrupted, dumping error state to /sys/class/drm/card%d/error\n",
+		dev_info_once(i915->drm.dev, "EU debugging %s, EUs %sinterrupted, dumping error state to /sys/class/drm/card%d/error\n",
 			 str_enabled_disabled(debug_enabled),
 			 debug_enabled ? "" : "not ",
 			 i915->drm.primary->index);

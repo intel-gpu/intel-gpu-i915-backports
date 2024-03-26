@@ -4,6 +4,7 @@
  */
 
 #include <linux/dma-fence-array.h>
+#include <linux/highmem.h>
 
 #include <uapi/drm/i915_drm.h>
 
@@ -851,6 +852,7 @@ swap_blt(struct intel_context *ce,
 	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
 	GEM_BUG_ON(!drm_mm_node_allocated(&ce->engine->gt->flat));
 	GEM_BUG_ON(!IS_ALIGNED(step, PAGE_SIZE));
+	GEM_BUG_ON(!step);
 
 	if (throttle) { /* fallback to CPU to avoid heavy contention */
 		err = intel_context_throttle(ce, 0);
@@ -902,6 +904,7 @@ swap_blt(struct intel_context *ce,
 			block = next;
 		} while (1);
 
+		GEM_BUG_ON(!remain);
 		sz = min(remain, sz);
 		remain -= sz;
 
@@ -977,6 +980,9 @@ swap_blt(struct intel_context *ce,
 			pd_offset += length >> PAGE_SHIFT << 3;
 			GEM_BUG_ON(pte_window > pte_end);
 		} while (sz);
+
+		if (!remain)
+			break;
 	}
 	GEM_BUG_ON(remain);
 
@@ -1002,6 +1008,8 @@ swap_blt(struct intel_context *ce,
 		do {
 			u64 lmem_window;
 			int length;
+
+			GEM_BUG_ON(list_is_head(&it_lmem.block->link, blocks));
 
 			if (submit_request(rq, out, total, counter, ccs_pkt(count))) {
 				struct i915_buddy_block *block = it_lmem.block;
@@ -1062,6 +1070,7 @@ lmem_pte:
 				lmem_window = pte_window + ccs_pte_offset;
 			}
 
+			GEM_BUG_ON(!remain);
 			length = min_t(u64, length, remain);
 			remain -= length;
 
@@ -1082,7 +1091,7 @@ lmem_pte:
 			pd_offset += length << 3;
 			pte_window += length << PAGE_SHIFT;
 			GEM_BUG_ON(pte_window > pte_end);
-		} while (!list_is_head(&it_lmem.block->link, blocks));
+		} while (remain);
 	}
 	emit_update_counters(rq, total, counter);
 skip:
@@ -2114,6 +2123,9 @@ static bool freed(const struct drm_i915_gem_object *obj)
 
 static bool need_swap(const struct drm_i915_gem_object *obj)
 {
+	if (list_empty(&obj->mm.blocks))
+		return false;
+
 	if (i915_gem_object_migrate_has_error(obj))
 		return false;
 
@@ -2184,6 +2196,7 @@ lmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 	dirty = true;
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_CLEAR_ON_FREE) &&
 	    mem->flags & clear &&
+	    !list_empty(&obj->mm.blocks) &&
 	    !(obj->mm.page_sizes & (mem->min_page_size - 1)) &&
 	    freed(obj)) {
 		struct intel_gt *gt = mem->gt;
@@ -2439,11 +2452,10 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 				resource_size_t size,
 				unsigned int flags)
 {
-	static struct lock_class_key lock_class;
 	struct drm_i915_private *i915 = mem->i915;
 
 	drm_gem_private_object_init(&i915->drm, &obj->base, size);
-	i915_gem_object_init(obj, &i915_gem_lmem_obj_ops, &lock_class, flags);
+	i915_gem_object_init(obj, &i915_gem_lmem_obj_ops, flags);
 
 	obj->read_domains = I915_GEM_DOMAIN_WC | I915_GEM_DOMAIN_GTT;
 
@@ -3050,6 +3062,7 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 		&gt->lmem->objects.list,
 		&gt->lmem->objects.migratable,
 		&gt->lmem->objects.purgeable,
+		&gt->lmem->objects.pt,
 		NULL
 	}, **phase = phases;
 	struct intel_memory_region_link bookmark = {};

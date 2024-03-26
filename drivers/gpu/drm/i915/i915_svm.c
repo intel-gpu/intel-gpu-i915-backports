@@ -3,20 +3,9 @@
  * Copyright © 2019 Intel Corporation
  */
 
-#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
-/* Enable redhat backport to support mmu notifer wrapper */
-#define RH_DRM_BACKPORT
-#include <linux/mmu_notifier.h>
-#endif
-
 #include <linux/mm_types.h>
 #include <linux/sched/mm.h>
 #include <linux/mm.h>
-
-#ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
-#include <linux/mmap_lock.h>
-#endif
-
 
 #include "i915_svm.h"
 #include "intel_memory_region.h"
@@ -64,11 +53,7 @@ static bool i915_svm_range_invalidate(struct mmu_interval_notifier *mni,
 	svm_unbind_addr(svm->vm, range->start, length);
 	mutex_unlock(&svm->mutex);
 
-#ifdef BPM_MMU_NOTIFIER_RANGE_VMA_MEMBER_NOT_PRESENT
-	if (range->event == MMU_NOTIFY_UNMAP && vma_to_sn(svm->mm->mmap))
-#else
 	if (range->event == MMU_NOTIFY_UNMAP && vma_to_sn(range->vma))
-#endif
 		queue_work(system_unbound_wq, &sn->unregister_notifier_work);
 
 	return true;

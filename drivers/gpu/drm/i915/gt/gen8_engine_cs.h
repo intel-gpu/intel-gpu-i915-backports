@@ -13,6 +13,7 @@
 #include "intel_gt_regs.h"
 #include "intel_gpu_commands.h"
 
+struct intel_context;
 struct intel_gt;
 struct i915_request;
 
@@ -133,5 +134,8 @@ gen8_emit_ggtt_write(u32 *cs, u32 value, u32 gtt_offset, u32 flags)
 				    gtt_offset | MI_FLUSH_DW_USE_GTT,
 				    flags | MI_FLUSH_DW_OP_STOREDW);
 }
+
+u32 *xehp_emit_fastcolor_blt_wa(const struct intel_context *ce, u32 *cs);
+u32 *pvc_emit_fastcolor_blt_wa(const struct intel_context *ce, u32 *cs);
 
 #endif /* __GEN8_ENGINE_CS_H__ */

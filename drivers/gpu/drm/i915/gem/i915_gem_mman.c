@@ -42,7 +42,7 @@ __assign_mmap_offset(struct drm_i915_gem_object *obj,
 
 	if (mmap_type != I915_MMAP_TYPE_GTT &&
 	    !i915_gem_object_has_struct_page(obj) &&
-	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
+	    !i915_gem_object_has_iomem(obj))
 		return -ENODEV;
 
 	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);

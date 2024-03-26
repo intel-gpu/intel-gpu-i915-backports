@@ -109,6 +109,45 @@ static void show_gpu_mem(struct drm_i915_private *i915, struct drm_printer *p)
 		intel_memory_region_print(mr, 0, p);
 }
 
+static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p)
+{
+	struct intel_engine_cs *engine;
+	enum intel_engine_id tmp;
+	char buf[240], *s = buf;
+	const char *prefix;
+
+	if (!IS_PONTEVECCHIO(gt->i915))
+		return;
+
+	s += snprintf(s, sizeof(buf) - (s - buf), "mode:%08x, ", gt->ccs.mode);
+
+	prefix =", ";
+	s += snprintf(s, sizeof(buf) - (s - buf), "config:%08x", gt->ccs.config);
+	if (gt->ccs.config) {
+		prefix = " [";
+		for_each_engine_masked(engine, gt, gt->ccs.config, tmp) {
+			s += snprintf(s, sizeof(buf) - (s - buf), "%s%s", prefix, engine->name);
+			prefix = ", ";
+		}
+		prefix = "], ";
+	}
+	s += snprintf(s, sizeof(buf) - (s - buf), "%s", prefix);
+
+	prefix ="";
+	s += snprintf(s, sizeof(buf) - (s - buf), "active:%08x", gt->ccs.active);
+	if (gt->ccs.active) {
+		prefix = " [";
+		for_each_engine_masked(engine, gt, gt->ccs.active, tmp) {
+			s += snprintf(s, sizeof(buf) - (s - buf), "%s%s", prefix, engine->name);
+			prefix = ", ";
+		}
+		prefix = "]";
+	}
+	s += snprintf(s, sizeof(buf) - (s - buf), "%s", prefix);
+
+	drm_printf(p, "multiCCS: { %s }\n", buf);
+}
+
 static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 {
 	struct intel_engine_cs *engine;
@@ -125,6 +164,7 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 		   READ_ONCE(gt->stats.irq.total),
 		   ewma_irq_time_read(&gt->stats.irq.avg),
 		   READ_ONCE(gt->stats.irq.max));
+	show_ccs_mode(gt, p);
 
 	if (gt->awake)
 		intel_wakeref_show(&gt->wakeref, p);

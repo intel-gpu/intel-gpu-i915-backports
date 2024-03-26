@@ -265,13 +265,6 @@ struct drm_i915_display_funcs {
 #define QUIRK_INCREASE_DDI_DISABLED_TIME (1<<7)
 #define QUIRK_NO_PPS_BACKLIGHT_POWER_HOOK (1<<8)
 
-#define MAX_L3_SLICES 2
-struct intel_l3_parity {
-	u32 *remap_info[MAX_L3_SLICES];
-	struct work_struct error_work;
-	int which_slice;
-};
-
 struct i915_gem_mm {
 	/*
 	 * Shortcut for the stolen region. This points to either
@@ -674,8 +667,6 @@ struct drm_i915_private {
 	} atomic_helper;
 
 	bool mchbar_need_disable;
-
-	struct intel_l3_parity l3_parity;
 
 	/*
 	 * HTI (aka HDPORT) state read during initial hw readout.  Most
@@ -1488,9 +1479,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_L3_CCS_READ(i915) (INTEL_INFO(i915)->has_l3_ccs_read)
 
 /* DPF == dynamic parity feature */
-#define HAS_L3_DPF(dev_priv) (INTEL_INFO(dev_priv)->has_l3_dpf)
-#define NUM_L3_SLICES(dev_priv) (IS_HSW_GT3(dev_priv) ? \
-				 2 : HAS_L3_DPF(dev_priv))
+#define HAS_L3_DPF(dev_priv) false
 
 #define GT_FREQUENCY_MULTIPLIER 50
 #define GEN9_FREQ_SCALER 3

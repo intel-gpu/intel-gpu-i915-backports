@@ -343,29 +343,41 @@ static u32 hwsp_offset(const struct i915_request *rq)
 	const struct intel_timeline *tl;
 
 	/* Before the request is executed, the timeline is fixed */
-	tl = rcu_dereference_protected(rq->timeline,
-				       !i915_request_signaled(rq));
-
-	/* See the comment in i915_request_active_seqno(). */
+	tl = rcu_dereference_protected(rq->timeline, true);
 	return page_mask_bits(tl->hwsp_offset) + offset_in_page(rq->hwsp_seqno);
 }
 
 int gen8_emit_init_breadcrumb(struct i915_request *rq)
 {
+	struct intel_timeline *tl = rcu_dereference_protected(rq->timeline, 1);
+	u32 offset = hwsp_offset(rq);
 	u32 *cs;
 
 	GEM_BUG_ON(i915_request_has_initial_breadcrumb(rq));
-	if (!intel_timeline_has_initial_breadcrumb(i915_request_timeline(rq)))
+	if (!intel_timeline_has_initial_breadcrumb(tl))
 		return 0;
 
 	cs = intel_ring_begin(rq, 6);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
-	*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-	*cs++ = hwsp_offset(rq);
-	*cs++ = 0;
-	*cs++ = i915_request_seqno(rq) - 1;
+	if (intel_timeline_is_relative(tl)) {
+		u32 cmd;
+
+		cmd = MI_STORE_DWORD_INDEX;
+		if (intel_timeline_in_context(tl))
+			cmd |= MI_USE_PPHWSP;
+
+		*cs++ = cmd;
+		*cs++ = offset_in_page(offset);
+		*cs++ = i915_request_seqno(rq) - 1;
+		*cs++ = MI_NOOP;
+	} else {
+		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+		*cs++ = offset;
+		*cs++ = 0;
+		*cs++ = i915_request_seqno(rq) - 1;
+	}
 
 	/*
 	 * Check if we have been preempted before we even get started.
@@ -449,7 +461,12 @@ int xehp_emit_bb_start(struct i915_request *rq,
 		       u64 offset, u32 len,
 		       const unsigned int flags)
 {
-	return __xehp_emit_bb_start(rq, offset, len, flags, MI_ARB_ENABLE);
+	u32 arb = MI_ARB_ENABLE;
+
+	if (unlikely(i915_request_has_nopreempt(rq)))
+		arb = MI_ARB_DISABLE;
+
+	return __xehp_emit_bb_start(rq, offset, len, flags, arb);
 }
 
 int gen8_emit_bb_start_noarb(struct i915_request *rq,
@@ -752,10 +769,87 @@ gen12_emit_fini_breadcrumb_tail(struct i915_request *rq, u32 *cs)
 	return gen8_emit_wa_tail(rq, cs);
 }
 
+u32 *xehp_emit_fastcolor_blt_wa(const struct intel_context *ce, u32 *cs)
+{
+	struct intel_gt *gt = ce->engine->gt;
+	u32 mocs = gt->mocs.uc_index << 1;
+
+	/*
+	 * Wa_16018031267 / Wa_16018063123 requires that SW forces the
+	 * main copy engine arbitration into round robin mode.  We
+	 * additionally need to submit the following WABB blt command
+	 * to produce 4 subblits with each subblit generating 0 byte
+	 * write requests as WABB:
+	 *
+	 * XY_FASTCOLOR_BLT
+	 *  BG0    -> 5100000E
+	 *  BG1    -> 0000003F (Dest pitch)
+	 *  BG2    -> 00000000 (X1, Y1) = (0, 0)
+	 *  BG3    -> 00040001 (X2, Y2) = (1, 4)
+	 *  BG4    -> scratch
+	 *  BG5    -> scratch
+	 *  BG6-12 -> 00000000
+	 *  BG13   -> 20004004 (Surf. Width = 2,Surf. Height = 5)
+	 *  BG14   -> 00000010 (Qpitch = 4)
+	 *  BG15   -> 00000000
+	 */
+	*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD | (16 - 2);
+	*cs++ = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs) | 0x3f;
+	*cs++ = 0;
+	*cs++ = 4 << 16 | 1;
+	*cs++ = lower_32_bits(ce->vm->total); /* top is reserved */
+	*cs++ = upper_32_bits(ce->vm->total);
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0;
+	*cs++ = 0x20004004;
+	*cs++ = 0x10;
+	*cs++ = 0;
+
+	return cs;
+}
+
+u32 *pvc_emit_fastcolor_blt_wa(const struct intel_context *ce, u32 *cs)
+{
+	struct intel_gt *gt = ce->engine->gt;
+	u32 mocs = gt->mocs.uc_index;
+
+	*cs++ = PVC_MEM_SET_CMD | MS_MATRIX | (7 - 2);
+
+	/* Emit a blt of length 36 * 4K to use all sublitters */
+	*cs++ = SZ_4K - 1;
+	*cs++ = 36 - 1;
+	*cs++ = 0; /* stride = 1, repeat with the same PTE pair */
+
+	*cs++ = lower_32_bits(ce->vm->total); /* top is reserved */
+	*cs++ = upper_32_bits(ce->vm->total);
+
+	*cs++ = FIELD_PREP(MS_MOCS_INDEX_MASK, mocs);
+
+	/* pad to match size of xehp_emit_fastcolor_blt_wa */
+	memset32(cs, MI_NOOP, 9);
+	return cs + 9;
+}
+
 u32 *gen12_emit_fini_breadcrumb_xcs(struct i915_request *rq, u32 *cs)
 {
-	/* XXX Stalling flush before seqno write; post-sync not */
-	cs = __gen8_emit_flush_dw(cs, 0, 0, 0);
+	const unsigned long bcs = rq->execution_mask & ((BIT(I915_MAX_BCS) - 1) << BCS0);
+
+	if (bcs) { /* Wa_16018031267, Wa_16018063123 */
+		if (bcs & ~BIT(BCS0))
+			cs = pvc_emit_fastcolor_blt_wa(rq->context, cs);
+		else
+			cs = xehp_emit_fastcolor_blt_wa(rq->context, cs);
+	}
+
+	cs = __gen8_emit_flush_dw(cs, 0, I915_GEM_HWS_SCRATCH * sizeof(u32),
+				  MI_INVALIDATE_TLB |
+				  MI_FLUSH_DW_OP_STOREDW |
+				  MI_FLUSH_DW_STORE_INDEX);
 	return gen12_emit_fini_breadcrumb_tail(rq, cs);
 }
 

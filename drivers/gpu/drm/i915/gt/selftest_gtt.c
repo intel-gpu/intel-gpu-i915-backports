@@ -13,150 +13,44 @@
 #include "intel_gpu_commands.h"
 #include "intel_context.h"
 #include "intel_gt.h"
-#include "intel_gt_clock_utils.h"
 #include "intel_ring.h"
-#include "intel_rps.h"
 
 #include "selftests/igt_flush_test.h"
 #include "selftests/i915_random.h"
 
-static u32 *emit_timestamp(struct i915_request *rq, u32 *cs, int gpr)
+static struct intel_engine_cs *
+random_engine_class(struct intel_gt *gt,
+		    unsigned int class,
+		    struct rnd_state *prng)
 {
-	u32 base = rq->engine->mmio_base;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	unsigned int count;
 
-	*cs++ = MI_LOAD_REGISTER_REG;
-	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP_UDW(base));
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(base, gpr));
-
-	*cs++ = MI_LOAD_REGISTER_REG;
-	*cs++ = i915_mmio_reg_offset(RING_TIMESTAMP(base));
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(base, gpr));
-
-	return cs;
-}
-
-static int emit_start_timestamp(struct i915_request *rq)
-{
-	u32 *cs;
-
-	cs = intel_ring_begin(rq, 6);
-	if (IS_ERR(cs))
-		return PTR_ERR(cs);
-
-	cs = emit_timestamp(rq, cs, 0);
-
-	intel_ring_advance(rq, cs);
-	return 0;
-}
-
-static u32 *emit_mem_fence(struct i915_request *rq, u32 *cs, u64 addr)
-{
-	return __gen8_emit_flush_dw(cs, 0, addr + 64, MI_FLUSH_DW_OP_STOREDW);
-}
-
-static int emit_write_elaspsed(struct i915_request *rq, u64 addr)
-{
-	u32 *cs;
-
-	cs = intel_ring_begin(rq, 20);
-	if (IS_ERR(cs))
-		return PTR_ERR(cs);
-
-	cs = emit_mem_fence(rq, cs, addr + 64);
-	cs = emit_timestamp(rq, cs, 1);
-
-	/* Compute elapsed time (end - start) */
-	*cs++ = MI_MATH(4);
-	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(1));
-	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(0));
-	*cs++ = MI_MATH_SUB;
-	*cs++ = MI_MATH_STORE(MI_MATH_REG(0), MI_MATH_REG_ACCU);
-
-	/* Increment cycle counters */
-	*cs++ = MI_STORE_REGISTER_MEM_GEN8;
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(rq->engine->mmio_base, 0));
-	*cs++ = lower_32_bits(addr);
-	*cs++ = upper_32_bits(addr);
-
-	*cs++ = MI_NOOP;
-
-	intel_ring_advance(rq, cs);
-	return 0;
-}
-
-static int emit_memset(struct i915_request *rq, struct i915_vma *vma)
-{
-	u64 offset = i915_vma_offset(vma);
-	u32 *cs;
-	int len;
-
-	if (HAS_LINK_COPY_ENGINES(rq->engine->i915))
-		len = 8;
-	else if (GRAPHICS_VER_FULL(rq->engine->i915) >= IP_VER(12, 50))
-		len = 16;
-	else
-		len = 12;
-
-	cs = intel_ring_begin(rq, len);
-	if (IS_ERR(cs))
-		return PTR_ERR(cs);
-
-	if (HAS_LINK_COPY_ENGINES(rq->engine->i915)) {
-		*cs++ = PVC_MEM_SET_CMD | MS_MATRIX | (7 - 2);
-		*cs++ = PAGE_SIZE - 1;
-		*cs++ = (vma->size >> 12) - 1;
-		*cs++ = PAGE_SIZE - 1;
-		*cs++ = lower_32_bits(offset);
-		*cs++ = upper_32_bits(offset);
-		*cs++ = 0;
-		*cs++ = MI_NOOP;
-	} else if (GRAPHICS_VER_FULL(rq->engine->i915) >= IP_VER(12, 50)) {
-		*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD |
-			XY_FAST_COLOR_BLT_DEPTH_32 |
-			(16 - 2);
-		*cs++ = PAGE_SIZE - 1;
-		*cs++ = 0;
-		*cs++ = vma->size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
-		*cs++ = lower_32_bits(offset);
-		*cs++ = upper_32_bits(offset);
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-	} else {
-		*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD |
-			XY_FAST_COLOR_BLT_DEPTH_32 |
-			(11 - 2);
-		*cs++ = PAGE_SIZE - 1;
-		*cs++ = 0;
-		*cs++ = vma->size >> PAGE_SHIFT << 16 | PAGE_SIZE / 4;
-		*cs++ = lower_32_bits(offset);
-		*cs++ = upper_32_bits(offset);
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
-		*cs++ = 0;
+	count = 0;
+	for_each_engine(engine, gt, id) {
+		if (engine->class != class)
+			continue;
+		count++;
 	}
+	if (!count)
+		return NULL;
 
-	intel_ring_advance(rq, cs);
-	return 0;
+	do {
+		count = i915_prandom_u32_max_state(count, prng);
+		engine = gt->engine_class[class][count];
+	} while (!engine);
+
+	return engine;
 }
 
 static int direct_op(struct intel_gt *gt, int (*op)(struct intel_context *ce, struct drm_i915_gem_object *obj))
 {
-	struct intel_engine_cs *engine;
 	struct drm_i915_gem_object *obj;
-	enum intel_engine_id id;
-	int err = 0;
+	I915_RND_STATE(prng);
+	int class;
 	void *va;
+	int err;
 
 	/*
 	 * We create a direct 1:1 mapping of device memory into the
@@ -181,9 +75,15 @@ static int direct_op(struct intel_gt *gt, int (*op)(struct intel_context *ce, st
 		goto out;
 	}
 
-	for_each_engine(engine, gt, id) {
-		struct intel_context *ce;
+	err = 0;
+	for (class = 0; class < MAX_ENGINE_CLASS; class++) {
+		struct intel_engine_cs *engine;
 		struct i915_gem_ww_ctx ww;
+		struct intel_context *ce;
+
+		engine = random_engine_class(gt, class, &prng);
+		if (!engine)
+			continue;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce))
@@ -807,14 +707,13 @@ mem_write_tearing(struct intel_gt *gt,
 				struct rnd_state *prng),
 		  unsigned int flags)
 {
-	struct intel_engine_cs *engine;
 	struct drm_i915_gem_object *A, *B;
 	struct i915_ppgtt *ppgtt;
 	struct i915_vma *va, *vb;
-	enum intel_engine_id id;
 	I915_RND_STATE(prng);
 	LIST_HEAD(discard);
 	void *vaddr;
+	int class;
 	int err;
 
 	if (GRAPHICS_VER(gt->i915) < 6) /* MI_CONDITIONAL_BB_END & bcs */
@@ -888,10 +787,15 @@ mem_write_tearing(struct intel_gt *gt,
 	ppgtt_set_pages(vb);
 
 	err = 0;
-	for_each_engine(engine, gt, id) {
+	for (class = 0; class < MAX_ENGINE_CLASS; class++) {
+		struct intel_engine_cs *engine;
 		struct i915_gem_ww_ctx ww;
 		struct intel_context *ce;
 		int bit;
+
+		engine = random_engine_class(gt, class, &prng);
+		if (!engine)
+			continue;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -966,130 +870,6 @@ static int write_tearing(void *arg)
 	return err;
 }
 
-static int __pat_speed(struct intel_context *ce,
-		       struct drm_i915_gem_object *obj)
-{
-	struct intel_gt *gt = ce->engine->gt;
-	struct i915_vma *vma;
-	intel_wakeref_t wf;
-	int cache_level;
-	u64 *cycles;
-	int err;
-
-	cycles = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
-	if (IS_ERR(cycles))
-		return PTR_ERR(cycles);
-
-	vma = i915_vma_instance(obj, ce->vm, 0);
-	if (IS_ERR(vma)) {
-		err = PTR_ERR(vma);
-		goto out_map;
-	}
-
-	err = i915_vma_pin(vma, 0, obj->base.size, PIN_USER);
-	if (err)
-		goto out_map;
-
-	wf = intel_gt_pm_get(gt);
-	intel_rps_boost(&gt->rps);
-
-	for (cache_level = 0; cache_level < I915_MAX_CACHE_LEVEL; cache_level++) {
-		struct i915_request *rq;
-		unsigned int pte_flags;
-		unsigned int fill_bw;
-		uint64_t elapsed;
-		int pat_index;
-
-		pte_flags = 0;
-		if (i915_gem_object_is_lmem(obj))
-			pte_flags |= PTE_LM;
-
-		pat_index = i915_gem_get_pat_index(gt->i915, cache_level);
-
-		ce->vm->insert_entries(ce->vm, vma, pat_index, pte_flags);
-
-		rq = i915_request_create(ce);
-		if (IS_ERR(rq)) {
-			err = PTR_ERR(rq);
-			break;
-		}
-
-		err = emit_start_timestamp(rq);
-		if (err == 0)
-			err = emit_memset(rq, vma);
-		if (err == 0)
-			err = emit_write_elaspsed(rq, i915_vma_offset(vma));
-
-		i915_request_get(rq);
-		i915_request_add(rq);
-		if (i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, 5 * HZ) < 0)
-			err = -ETIME;
-		i915_request_put(rq);
-		if (err)
-			break;
-
-		elapsed = intel_gt_clock_interval_to_ns(gt, READ_ONCE(*cycles));
-		if (!elapsed)
-			continue;
-
-		fill_bw = div_u64(mul_u64_u32_shr(obj->base.size, NSEC_PER_SEC, 20), elapsed);
-
-		dev_info(gt->i915->drm.dev,
-			 "GT%d: %s, cache-level:%d, pat-index:%d, size:%zx, time:%lldns, GPU fill:%dMiB/s\n",
-			 gt->info.id, obj->mm.region.mem->name,
-			 cache_level, pat_index,
-			 obj->base.size, elapsed, fill_bw);
-	}
-
-	intel_rps_cancel_boost(&gt->rps);
-	intel_gt_pm_put(gt, wf);
-
-	i915_vma_unpin(vma);
-out_map:
-	i915_gem_object_unpin_map(obj);
-	return err;
-}
-
-static int pat_speed(void *arg)
-{
-	struct intel_gt *gt = arg;
-	struct drm_i915_gem_object *obj;
-	struct intel_context *ce;
-	int err = 0;
-
-	if (GRAPHICS_VER(gt->i915) < 9)
-		return 0;
-
-	ce = NULL;
-	if (gt->engine_class[COPY_ENGINE_CLASS][0])
-		ce = gt->engine_class[COPY_ENGINE_CLASS][0]->kernel_context;
-	if (!ce)
-		return 0;
-
-	if (gt->lmem) {
-		obj = i915_gem_object_create_region(gt->lmem, SZ_1G, 0);
-		if (!IS_ERR(obj)) {
-			err = __pat_speed(ce, obj);
-			i915_gem_object_put(obj);
-			if (err)
-				goto out;
-		}
-	}
-
-	obj = i915_gem_object_create_internal(gt->i915, SZ_64M);
-	if (!IS_ERR(obj)) {
-		err = __pat_speed(ce, obj);
-		i915_gem_object_put(obj);
-		if (err)
-			goto out;
-	}
-
-out:
-	if (igt_flush_test(gt->i915))
-		err = -EIO;
-	return err;
-}
-
 int intel_gtt_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
@@ -1098,7 +878,6 @@ int intel_gtt_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(direct_mov),
 		SUBTEST(direct_inc),
 		SUBTEST(direct_dec),
-		SUBTEST(pat_speed),
 	};
 	struct intel_gt *gt;
 	unsigned int i;

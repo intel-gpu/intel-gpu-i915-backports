@@ -55,7 +55,6 @@ void i915_gem_object_free(struct drm_i915_gem_object *obj);
 
 void i915_gem_object_init(struct drm_i915_gem_object *obj,
 			  const struct drm_i915_gem_object_ops *ops,
-			  struct lock_class_key *key,
 			  unsigned alloc_flags);
 struct drm_i915_gem_object *
 i915_gem_object_create_shmem(struct drm_i915_private *i915,
@@ -69,9 +68,6 @@ extern const struct drm_i915_gem_object_ops i915_gem_shmem_ops;
 void __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
 				     struct sg_table *pages,
 				     bool needs_clflush);
-
-int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj,
-				    struct sg_table *pages);
 
 enum intel_region_id;
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
@@ -356,24 +352,6 @@ i915_gem_object_set_volatile(struct drm_i915_gem_object *obj)
 }
 
 static inline bool
-i915_gem_object_has_tiling_quirk(struct drm_i915_gem_object *obj)
-{
-	return test_bit(I915_TILING_QUIRK_BIT, &obj->flags);
-}
-
-static inline void
-i915_gem_object_set_tiling_quirk(struct drm_i915_gem_object *obj)
-{
-	set_bit(I915_TILING_QUIRK_BIT, &obj->flags);
-}
-
-static inline void
-i915_gem_object_clear_tiling_quirk(struct drm_i915_gem_object *obj)
-{
-	clear_bit(I915_TILING_QUIRK_BIT, &obj->flags);
-}
-
-static inline bool
 i915_gem_object_is_protected(const struct drm_i915_gem_object *obj)
 {
 	return obj->flags & I915_BO_PROTECTED;
@@ -389,7 +367,7 @@ i915_gem_object_type_has(const struct drm_i915_gem_object *obj,
 static inline bool
 i915_gem_object_has_struct_page(const struct drm_i915_gem_object *obj)
 {
-	return obj->flags & I915_BO_STRUCT_PAGE;
+	return i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_STRUCT_PAGE);
 }
 
 static inline bool
@@ -721,18 +699,14 @@ i915_gem_get_locking_ctx(const struct drm_i915_gem_object *obj)
 	return container_of(ctx, struct i915_gem_ww_ctx, ctx);
 }
 
-#ifdef CONFIG_MMU_NOTIFIER
 static inline bool
 i915_gem_object_is_userptr(struct drm_i915_gem_object *obj)
 {
 	return obj->userptr.notifier.mm;
 }
-#else
-static inline bool i915_gem_object_is_userptr(struct drm_i915_gem_object *obj) { return false; }
-#endif
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
-					 enum intel_region_id dst_region_id,
+					 const struct intel_memory_region *mem,
 					 bool is_atomic_fault);
 
 void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,

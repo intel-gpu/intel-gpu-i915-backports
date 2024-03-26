@@ -270,6 +270,7 @@ static void gsc_destroy_one(struct drm_i915_private *i915,
 		intf->adev = NULL;
 	}
 #endif
+
 	if (intf->irq >= 0)
 		irq_free_desc(intf->irq);
 	intf->irq = -1;
@@ -392,7 +393,6 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 	}
 
 add_device:
-
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	adev = kzalloc(sizeof(*adev), GFP_KERNEL);
 	if (!adev)
@@ -454,6 +454,7 @@ add_device:
 		goto fail;
 	}
 #endif
+
 	return;
 fail:
 	gsc_destroy_one(i915, gsc, intf->id);

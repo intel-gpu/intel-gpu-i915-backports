@@ -85,8 +85,10 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 {
 	u64 reserve_start;
 	u64 reserve_size = 0;
+#ifndef BPM_LOWMEM_FOR_DG1_NOT_SUPPORTED
 	u64 region_start;
 	u32 region_size;
+#endif
 	int ret;
 
 #ifndef BPM_LOWMEM_FOR_DG1_NOT_SUPPORTED
