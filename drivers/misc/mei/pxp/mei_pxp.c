@@ -162,7 +162,7 @@ static int mei_pxp_component_match(struct device *dev, int subcomponent,
 	if (!dev)
 		return 0;
 
-	if (!dev->driver || strcmp(dev->driver->name, "i915") ||
+	if (!dev->driver || strncmp(dev->driver->name, "i915", 4) ||
 	    subcomponent != I915_COMPONENT_PXP)
 		return 0;
 

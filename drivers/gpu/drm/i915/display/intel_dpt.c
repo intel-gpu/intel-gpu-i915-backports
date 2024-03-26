@@ -281,7 +281,7 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	vm->vma_ops.bind_vma    = dpt_bind_vma;
 	vm->vma_ops.unbind_vma  = dpt_unbind_vma;
 	vm->vma_ops.set_pages   = ggtt_set_pages;
-	vm->vma_ops.clear_pages = clear_pages;
+	vm->vma_ops.clear_pages = ggtt_clear_pages;
 
 	vm->pte_encode = vm->gt->ggtt->vm.pte_encode;
 

@@ -156,6 +156,9 @@ static bool engine_was_active(struct intel_engine_cs *engine)
 	if (i915_sched_engine_disabled(engine->sched_engine))
 		return true;
 
+	if (atomic_read(&engine->in_pagefault))
+		return true;
+
 	count = READ_ONCE(engine->stats.irq.count);
 	if (count == engine->heartbeat.interrupts)
 		return false;

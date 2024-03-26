@@ -12,7 +12,7 @@
 #ifndef _BACKPORT_LINUX_SWAP_H
 #define _BACKPORT_LINUX_SWAP_H
 #include_next<linux/swap.h>
-#ifdef BPM_LRU_CACHE_ADD_API_NOT_PRESENT
+#ifdef BPM_LRU_CACHE_ADD_WRAPPER_NOT_PRESENT
 void lru_cache_add(struct page *page);
 #endif
 #ifdef BPM_CHECK_MOVE_UNEVICTABLE_PAGES_NOT_PRESENT

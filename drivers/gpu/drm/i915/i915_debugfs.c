@@ -879,6 +879,8 @@ gt_idle(struct intel_gt *gt, u64 val)
 {
 	int ret;
 
+	i915_sriov_vf_migration_check(gt->i915, true);
+
 	if (val & (DROP_RETIRE | DROP_IDLE))
 		intel_gt_retire_requests(gt);
 
@@ -903,6 +905,8 @@ static void reset_active(struct intel_gt *gt)
 	unsigned long hb = 0, pt = 0;
 	enum intel_engine_id id;
 	long timeout;
+
+	i915_sriov_vf_migration_check(gt->i915, true);
 
 	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT);
 	if (intel_gt_retire_requests_timeout(gt, &timeout))
@@ -933,6 +937,8 @@ static int
 gt_drop_caches(struct intel_gt *gt, u64 val)
 {
 	int ret;
+
+	i915_sriov_vf_migration_check(gt->i915, true);
 
 	if (val & DROP_RETIRE)
 		intel_gt_retire_requests(gt);

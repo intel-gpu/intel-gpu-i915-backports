@@ -38,6 +38,7 @@ struct i915_lut_handle {
 
 struct drm_i915_gem_object_ops {
 	unsigned int flags;
+#define I915_GEM_OBJECT_HAS_STRUCT_PAGE	BIT(0)
 #define I915_GEM_OBJECT_HAS_IOMEM	BIT(1)
 #define I915_GEM_OBJECT_IS_SHRINKABLE	BIT(2)
 #define I915_GEM_OBJECT_IS_PROXY	BIT(3)
@@ -289,16 +290,14 @@ struct drm_i915_gem_object {
 			     I915_BO_ALLOC_CHUNK_64K | \
 			     I915_BO_ALLOC_CHUNK_2M | \
 			     I915_BO_ALLOC_CHUNK_1G)
-#define I915_BO_STRUCT_PAGE	BIT(8)
 #define I915_BO_READONLY	BIT(9)
 #define I915_BO_HAS_BACKING_STORE	BIT(10)
-#define I915_TILING_QUIRK_BIT	11 /* unknown swizzling; do not release! */
-#define I915_BO_PROTECTED	BIT(12)
-#define I915_BO_SKIP_CLEAR	BIT(13)
-#define I915_BO_CPU_CLEAR	BIT(14)
-#define I915_BO_FAULT_CLEAR	BIT(15)
-#define I915_BO_SYNC_HINT	BIT(16)
-#define I915_BO_FABRIC		BIT(17)
+#define I915_BO_PROTECTED	BIT(11)
+#define I915_BO_SKIP_CLEAR	BIT(12)
+#define I915_BO_CPU_CLEAR	BIT(13)
+#define I915_BO_FAULT_CLEAR	BIT(14)
+#define I915_BO_SYNC_HINT	BIT(15)
+#define I915_BO_FABRIC		BIT(16)
 
 	/*
 	 * Track whether the pages are coherent with the GPU if reading or
@@ -569,9 +568,6 @@ struct drm_i915_gem_object {
 	 */
 	u32 pxp_key_instance;
 
-	/** Record of address bit 17 of each page at last unbind. */
-	unsigned long *bit_17;
-
 	union {
 		struct i915_gem_userptr {
 			uintptr_t ptr;
@@ -584,8 +580,6 @@ struct drm_i915_gem_object {
 		struct drm_mm_node *stolen;
 
 		unsigned long scratch;
-
-		void *gvt_info;
 	};
 
 	struct drm_i915_gem_object *swapto;

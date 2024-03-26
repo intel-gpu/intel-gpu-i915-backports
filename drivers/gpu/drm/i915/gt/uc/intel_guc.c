@@ -916,9 +916,9 @@ busy_loop:
 		u32 error = FIELD_GET(GUC_HXG_FAILURE_MSG_0_ERROR, header);
 
 		if (error == INTEL_GUC_RESPONSE_VF_MIGRATED) {
-			guc_err(guc, "mmio request %#x: migrated!\n", request[0]);
-			i915_sriov_vf_start_migration_recovery(uncore->i915);
-			ret = -EREMOTEIO;
+			ret = intel_sriov_vf_migrated_g2h(guc);
+			if (ret == -EAGAIN)
+				goto retry;
 			goto out;
 		}
 

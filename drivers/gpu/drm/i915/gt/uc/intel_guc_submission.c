@@ -1094,7 +1094,7 @@ static void guc_signal_context_fence(struct intel_context *ce);
 static void guc_cancel_context_requests(struct intel_context *ce);
 static void guc_blocked_fence_complete(struct intel_context *ce);
 
-static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
+void guc_submission_scrub_desc_for_outstanding_g2h(struct intel_guc *guc)
 {
 	struct intel_context *ce;
 	unsigned long index, flags;
@@ -2136,7 +2136,7 @@ void intel_guc_submission_reset_prepare(struct intel_guc *guc)
 		} while (!list_empty(&guc->ct.requests.incoming));
 	}
 
-	scrub_guc_desc_for_outstanding_g2h(guc);
+	guc_submission_scrub_desc_for_outstanding_g2h(guc);
 }
 
 /*
@@ -4444,30 +4444,6 @@ static int guc_request_alloc(struct i915_request *rq)
 	int ret;
 
 	GEM_BUG_ON(!intel_context_is_pinned(rq->context));
-
-	/*
-	 * Flush enough space to reduce the likelihood of waiting after
-	 * we start building the request - in which case we will just
-	 * have to repeat work.
-	 */
-	if (!intel_context_is_barrier(ce)) {
-		rq->reserved_space += GUC_REQUEST_SIZE;
-
-		/*
-		 * Note that after this point, we have committed to using
-		 * this request as it is being used to both track the
-		 * state of engine initialisation and liveness of the
-		 * golden renderstate above. Think twice before you try
-		 * to cancel/unwind this request now.
-		 */
-
-		/* Unconditionally invalidate GPU caches and TLBs. */
-		ret = rq->engine->emit_flush(rq, EMIT_INVALIDATE);
-		if (ret)
-			return ret;
-
-		rq->reserved_space -= GUC_REQUEST_SIZE;
-	}
 
 	if (unlikely(!test_bit(CONTEXT_GUC_INIT, &ce->flags)))
 		guc_context_init(ce);

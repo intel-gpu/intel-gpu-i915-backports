@@ -188,12 +188,12 @@
 #define BPM_PRANDOM_U32_MAX_NOT_PRESENT
 #endif /*LINUX_VERSION_IS_GEQ(6,2,0)*/
 
-#if (LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
+#if LINUX_VERSION_IS_GEQ(6,2,0)
 /*
  * 6e1ca48d0669b
  * folio-compat: remove lru_cache_add()
  */
-#define BPM_LRU_CACHE_ADD_API_NOT_PRESENT
+#define BPM_LRU_CACHE_ADD_WRAPPER_NOT_PRESENT
 #endif /*LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) */
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
@@ -372,7 +372,7 @@
  */
 #define BPM_HDCP_HELPERS_NOT_IN_DISPLAY_DIRECTORY
 
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+#if (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 4dea97f8636d
  * lib/bitmap: change type of bitmap_weight to unsigned long
@@ -562,16 +562,6 @@
 #define BPM_MIGRATE_PFN_LOCKED_REMOVED
 #endif /* (LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,2) ... */
 
-#if (LINUX_VERSION_IS_GEQ(5,16,0) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
-/*
- * d6c6a76f80a1c
- * drm: Update MST First Link Slot Information Based on Encoding Format
- */
-#define DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-#endif /* (LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1) ... */
-
 #if LINUX_VERSION_IS_GEQ(5,16,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,0) || \
 	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0)
@@ -737,17 +727,6 @@
  */
 #define BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || UBUNTU_RELEASE_VERSION_IS_GEQ(20,04)) */
-
-#if !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,2,0) || \
-	LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
-/*
- *  * 89d8589cd72c6 Introduce and export __sg_alloc_table_from_pages
- *   */
-#define BPM_SG_ALLOC_TABLE_FROM_PAGES_RETURNS_SCATTERLIST
-#endif /* !(REDHAT_RELEASE_VERSION_IS_LEQ(8,4) || REDHAT_RELEASE_VERSION_IS_GEQ(8,6) ... */
 
 #if !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) || \
 	(REDHAT_RELEASE_VERSION_IS_EQL(8,6) && REDHAT_BACKPORT_MINOR_VERSION_IS_GEQ(372,70,1)) || \
@@ -1131,7 +1110,7 @@
 /*
  * 6058eaec816f mm: fold and remove lru_cache_add_anon() and lru_cache_add_file()
  */
-#define BPM_LRU_CACHE_ADD_NOT_PRESENT
+#define BPM_LRU_CACHE_ADD_EXPORT_NOT_PRESENT
 /*
  * 376a34efa4ee mm/gup: refactor and de-duplicate gup_fast() code
  */
@@ -1630,14 +1609,14 @@
  * Introduced in DII_5943
  * 00b5f7aad3d989: Post-migration driver recovery
  */
-#define DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
+#define BPM_DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
 
 /*
  * Add macro to disable luminance range info backlight changes
  * Introduced in DII_6152
  * 7706b76ec9090b Backport couple of fixes for dpcd controlled backlight
  */
-#define DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
+#define BPM_DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
 
 /*
  * Add macro to disable DGLUT 24bit support for MTL+ onwards
@@ -1771,10 +1750,6 @@
 #endif
 #ifdef CPTCFG_BUILD_I915
 #define BPM_DISABLE_DRM_DMABUF
-/*
- * f58a435311672 drm/dp, drm/i915: Add support for VESA backlights using PWM for brightness control
- */
-#define DRM_EDP_BACKLIGHT_NOT_PRESENT
 #define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
 #define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 #else

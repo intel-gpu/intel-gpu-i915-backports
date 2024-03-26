@@ -5,7 +5,7 @@
 
 #include_next <drm/drm_mm.h>
 
-#ifdef DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
+#ifdef BPM_DRM_MM_FOR_EACH_NODE_IN_RANGE_SAFE_NOT_PRESENT
 
 /*
  * drm_mm_for_each_node_in_range_safe - iterator to walk over a range of

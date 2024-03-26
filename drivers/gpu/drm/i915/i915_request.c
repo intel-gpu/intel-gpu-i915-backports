@@ -1159,40 +1159,10 @@ err_unlock:
 	return rq;
 }
 
-int
-i915_request_construct(struct i915_request *rq,
-		       struct intel_context *ce,
-		       unsigned long flags)
-{
-	struct intel_timeline *tl = ce->timeline;
-	int ret;
-
-	mutex_lock(&tl->mutex);
-
-	intel_context_enter(ce);
-	ret = __i915_request_initialize(rq, ce, flags);
-	intel_context_exit(ce); /* active reference transferred to request */
-	if (ret)
-		goto err_unlock;
-
-	rq->cookie = lockdep_pin_lock(&tl->mutex);
-	return 0;
-
-err_unlock:
-	mutex_unlock(&tl->mutex);
-	return ret;
-}
-
 struct i915_request *
 i915_request_create(struct intel_context *ce)
 {
 	return _i915_request_create(ce, GFP_KERNEL);
-}
-
-struct i915_request *
-i915_request_create_atomic(struct intel_context *ce)
-{
-	return _i915_request_create(ce, GFP_ATOMIC);
 }
 
 static int
@@ -2147,7 +2117,7 @@ static long __i915_request_wait(struct i915_request *rq,
 		__intel_engine_flush_submission(rq->engine, false);
 
 	if (rq->i915) {
-		init_waitqueue_entry(&block, wait.tsk);
+		init_waitqueue_entry(&block, current);
 		add_wait_queue(&rq->i915->userspace.queue, &block);
 	}
 
@@ -2162,7 +2132,7 @@ static long __i915_request_wait(struct i915_request *rq,
 			break;
 		}
 
-		if (rq->i915 && i915_userspace_is_blocked(rq->i915)) {
+		if (rq->i915 && i915_sriov_vf_migration_check(rq->i915, false)) {
 			timeout = -EAGAIN;
 			break;
 		}

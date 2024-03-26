@@ -28,6 +28,7 @@ void intel_guc_submission_print_info(struct intel_guc *guc,
 				     struct drm_printer *p);
 void intel_guc_submission_print_context_info(struct intel_guc *guc,
 					     struct drm_printer *p);
+void guc_submission_scrub_desc_for_outstanding_g2h(struct intel_guc *guc);
 void intel_guc_busyness_park(struct intel_gt *gt);
 void intel_guc_busyness_unpark(struct intel_gt *gt);
 u64 intel_guc_total_active_ticks(struct intel_gt *gt, unsigned int vf_id);

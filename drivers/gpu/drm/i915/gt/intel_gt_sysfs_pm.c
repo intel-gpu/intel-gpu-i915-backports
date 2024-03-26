@@ -340,13 +340,9 @@ static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
 }
 #endif /* CONFIG_PM */
 
-
 static ssize_t act_freq_mhz_show(struct device *dev,
 				 struct device_attribute *attr, char *buff)
 {
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	struct kobject *kobj = &dev->kobj;
-#endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 
 	/*
@@ -1183,14 +1179,14 @@ static u32 media_ratio_mode_to_factor(u32 mode)
 }
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_freq_factor_show(struct kobject *kobj,
-                               struct kobj_attribute *attr,
-                               char *buff)
+				struct kobj_attribute *attr,
+				char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_freq_factor_show(struct device *dev,
-	                              struct device_attribute *attr,
-				      char *buff)
+                                     struct device_attribute *attr,
+                                     char *buff)
 {
 #endif
 	u32 mode;

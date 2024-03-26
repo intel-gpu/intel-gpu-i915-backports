@@ -341,6 +341,15 @@ intel_context_get_active_request(struct intel_context *ce)
 	return __intel_context_find_active_request(ce, true);
 }
 
+struct i915_request *
+__intel_context_find_oldest_incomplete_request(struct intel_context *ce);
+
+static inline struct i915_request *
+intel_context_find_oldest_incomplete_request(struct intel_context *ce)
+{
+	return __intel_context_find_oldest_incomplete_request(ce);
+}
+
 static inline bool intel_context_is_barrier(const struct intel_context *ce)
 {
 	return test_bit(CONTEXT_BARRIER_BIT, &ce->flags);

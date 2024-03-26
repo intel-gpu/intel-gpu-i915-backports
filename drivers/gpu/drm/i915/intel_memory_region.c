@@ -602,9 +602,8 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 				      unsigned int flags,
 				      struct list_head *blocks)
 {
-	unsigned int min_order = 0;
+	unsigned int order, min_order, max_order;
 	unsigned long n_pages;
-	unsigned int order;
 	int err = 0;
 
 	GEM_BUG_ON(!IS_ALIGNED(size, mem->mm.chunk_size));
@@ -615,6 +614,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			     I915_ALLOC_CHUNK_1G)) &&
 		   (flags & I915_ALLOC_CHUNK_MIN_PAGE_SIZE));
 
+	min_order = 0;
 	if (flags & I915_ALLOC_CHUNK_1G)
 		min_order = ilog2(SZ_1G) - ilog2(mem->mm.chunk_size);
 	else if (flags & I915_ALLOC_CHUNK_2M)
@@ -637,6 +637,11 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 	n_pages = size >> ilog2(mem->mm.chunk_size);
 	order = __max_order(mem, n_pages);
 	GEM_BUG_ON(order < min_order);
+	max_order = UINT_MAX;
+
+	/* On the first pass, try to only reuse idle pages */
+	if (!READ_ONCE(mem->parking.done))
+		flags |= I915_BUDDY_ALLOC_NEVER_ACTIVE;
 
 	/* Reserve the memory we reclaim for ourselves! */
 	if (!available_chunks(mem, atomic64_add_return(size, &mem->evict)))
@@ -646,7 +651,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 		resource_size_t sz = mem->mm.chunk_size << order;
 		struct i915_buddy_block *block;
 
-		block = __i915_buddy_alloc(&mem->mm, order, flags);
+		block = __i915_buddy_alloc(&mem->mm, order, max_order, flags);
 		if (!IS_ERR(block)) {
 			GEM_BUG_ON(i915_buddy_block_order(block) != order);
 			GEM_BUG_ON(i915_buddy_block_is_free(block));
@@ -666,16 +671,24 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			continue;
 		}
 
-		if (wait_for_completion_interruptible(&mem->parking)) {
+		if (!READ_ONCE(mem->parking.done) &&
+		    wait_for_completion_interruptible(&mem->parking)) {
 			err = -EINTR;
 			break;
 		}
 
-		if (order && i915_buddy_defrag(&mem->mm, min_order, order))
+		if (order && i915_buddy_defrag(&mem->mm, min_order, order)) {
 			/* Merged a few blocks, try again */
+			max_order = UINT_MAX;
 			continue;
+		}
 
 		if (order-- == min_order) {
+			if (flags & I915_BUDDY_ALLOC_NEVER_ACTIVE) {
+				flags &= ~I915_BUDDY_ALLOC_NEVER_ACTIVE;
+				goto reset;
+			}
+
 evict:			sz = n_pages * mem->mm.chunk_size;
 			err = intel_memory_region_evict(mem, ww, sz, age, min_order);
 			if (err)
@@ -683,8 +696,9 @@ evict:			sz = n_pages * mem->mm.chunk_size;
 
 			/* Make these chunks available for defrag */
 			intel_memory_region_free_pages(mem, blocks, false);
-			n_pages = size >> ilog2(mem->mm.chunk_size);
+reset:			n_pages = size >> ilog2(mem->mm.chunk_size);
 			order = __max_order(mem, n_pages);
+			max_order = UINT_MAX;
 		}
 
 		if (signal_pending(current)) {

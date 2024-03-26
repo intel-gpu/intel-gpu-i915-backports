@@ -34,6 +34,7 @@ void i915_userspace_blocking_begin(struct drm_i915_private *i915);
 void i915_userspace_blocking_secure(struct drm_i915_private *i915);
 void i915_userspace_blocking_finish(struct drm_i915_private *i915);
 int i915_userspace_is_blocked(struct drm_i915_private *i915);
+int i915_userspace_wait_unlock(struct drm_i915_private *i915);
 
 void
 i915_print_iommu_status(struct drm_i915_private *i915, struct drm_printer *p);

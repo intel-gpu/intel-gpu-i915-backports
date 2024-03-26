@@ -616,89 +616,6 @@ int intel_get_crtc_scanline(struct intel_crtc *crtc)
 }
 #endif
 
-/**
- * ivb_parity_work - Workqueue called when a parity error interrupt
- * occurred.
- * @work: workqueue struct
- *
- * Doesn't actually do anything except notify userspace. As a consequence of
- * this event, userspace should try to remap the bad rows since statistically
- * it is likely the same row is more likely to go bad again.
- */
-static void ivb_parity_work(struct work_struct *work)
-{
-	struct drm_i915_private *dev_priv =
-		container_of(work, typeof(*dev_priv), l3_parity.error_work);
-	struct intel_gt *gt = to_gt(dev_priv);
-	u32 error_status, row, bank, subbank;
-	char *parity_event[6];
-	u32 misccpctl;
-	u8 slice = 0;
-
-	/* We must turn off DOP level clock gating to access the L3 registers.
-	 * In order to prevent a get/put style interface, acquire struct mutex
-	 * any time we access those registers.
-	 */
-	mutex_lock(&dev_priv->drm.struct_mutex);
-
-	/* If we've screwed up tracking, just let the interrupt fire again */
-	if (drm_WARN_ON(&dev_priv->drm, !dev_priv->l3_parity.which_slice))
-		goto out;
-
-	misccpctl = intel_uncore_read(&dev_priv->uncore, GEN7_MISCCPCTL);
-	intel_uncore_write(&dev_priv->uncore, GEN7_MISCCPCTL, misccpctl & ~GEN7_DOP_CLOCK_GATE_ENABLE);
-	intel_uncore_posting_read(&dev_priv->uncore, GEN7_MISCCPCTL);
-
-	while ((slice = ffs(dev_priv->l3_parity.which_slice)) != 0) {
-		i915_reg_t reg;
-
-		slice--;
-		if (drm_WARN_ON_ONCE(&dev_priv->drm,
-				     slice >= NUM_L3_SLICES(dev_priv)))
-			break;
-
-		dev_priv->l3_parity.which_slice &= ~(1<<slice);
-
-		reg = GEN7_L3CDERRST1(slice);
-
-		error_status = intel_uncore_read(&dev_priv->uncore, reg);
-		row = GEN7_PARITY_ERROR_ROW(error_status);
-		bank = GEN7_PARITY_ERROR_BANK(error_status);
-		subbank = GEN7_PARITY_ERROR_SUBBANK(error_status);
-
-		intel_uncore_write(&dev_priv->uncore, reg, GEN7_PARITY_ERROR_VALID | GEN7_L3CDERRST1_ENABLE);
-		intel_uncore_posting_read(&dev_priv->uncore, reg);
-
-		parity_event[0] = I915_L3_PARITY_UEVENT "=1";
-		parity_event[1] = kasprintf(GFP_KERNEL, "ROW=%d", row);
-		parity_event[2] = kasprintf(GFP_KERNEL, "BANK=%d", bank);
-		parity_event[3] = kasprintf(GFP_KERNEL, "SUBBANK=%d", subbank);
-		parity_event[4] = kasprintf(GFP_KERNEL, "SLICE=%d", slice);
-		parity_event[5] = NULL;
-
-		kobject_uevent_env(&dev_priv->drm.primary->kdev->kobj,
-				   KOBJ_CHANGE, parity_event);
-
-		DRM_DEBUG("Parity error: Slice = %d, Row = %d, Bank = %d, Sub bank = %d.\n",
-			  slice, row, bank, subbank);
-
-		kfree(parity_event[4]);
-		kfree(parity_event[3]);
-		kfree(parity_event[2]);
-		kfree(parity_event[1]);
-	}
-
-	intel_uncore_write(&dev_priv->uncore, GEN7_MISCCPCTL, misccpctl);
-
-out:
-	drm_WARN_ON(&dev_priv->drm, dev_priv->l3_parity.which_slice);
-	spin_lock_irq(gt->irq_lock);
-	gen5_gt_enable_irq(gt, GT_PARITY_ERROR(dev_priv));
-	spin_unlock_irq(gt->irq_lock);
-
-	mutex_unlock(&dev_priv->drm.struct_mutex);
-}
-
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static bool gen11_port_hotplug_long_detect(enum hpd_pin pin, u32 val)
 {
@@ -3549,11 +3466,6 @@ static void display_intel_irq_init(struct drm_i915_private *dev_priv) {}
 void intel_irq_init(struct drm_i915_private *dev_priv)
 {
 	struct intel_gt *gt = to_root_gt(dev_priv);
-	int i;
-
-	INIT_WORK(&dev_priv->l3_parity.error_work, ivb_parity_work);
-	for (i = 0; i < MAX_L3_SLICES; ++i)
-		dev_priv->l3_parity.remap_info[i] = NULL;
 
 	if (HAS_MEM_SPARING_SUPPORT(dev_priv))
 		INIT_WORK(&gt->gsc_hw_error_work, gen12_gsc_hw_error_work);
@@ -3580,10 +3492,6 @@ void intel_irq_init(struct drm_i915_private *dev_priv)
  */
 void intel_irq_fini(struct drm_i915_private *i915)
 {
-	int i;
-
-	for (i = 0; i < MAX_L3_SLICES; ++i)
-		kfree(i915->l3_parity.remap_info[i]);
 }
 
 static irq_handler_t intel_irq_handler(struct drm_i915_private *dev_priv)

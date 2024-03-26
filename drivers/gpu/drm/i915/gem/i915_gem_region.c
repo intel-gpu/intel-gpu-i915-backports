@@ -83,6 +83,8 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 		flags |= I915_ALLOC_CONTIGUOUS;
 	if (obj->flags & (I915_BO_ALLOC_USER | I915_BO_CPU_CLEAR))
 		flags |= I915_BUDDY_ALLOC_WANT_CLEAR;
+	if (!(obj->flags & I915_BO_SYNC_HINT))
+		flags |= I915_BUDDY_ALLOC_ALLOW_ACTIVE;
 	if (obj->swapto) {
 		flags &= ~I915_BUDDY_ALLOC_WANT_CLEAR;
 		flags |= I915_BUDDY_ALLOC_ALLOW_ACTIVE;

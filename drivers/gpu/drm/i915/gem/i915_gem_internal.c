@@ -152,7 +152,7 @@ static int i915_gem_object_put_pages_internal(struct drm_i915_gem_object *obj,
 
 static const struct drm_i915_gem_object_ops i915_gem_object_internal_ops = {
 	.name = "i915_gem_object_internal",
-	.flags = I915_GEM_OBJECT_IS_SHRINKABLE,
+	.flags = I915_GEM_OBJECT_IS_SHRINKABLE | I915_GEM_OBJECT_HAS_STRUCT_PAGE,
 	.get_pages = i915_gem_object_get_pages_internal,
 	.put_pages = i915_gem_object_put_pages_internal,
 };
@@ -176,7 +176,6 @@ struct drm_i915_gem_object *
 i915_gem_object_create_internal(struct drm_i915_private *i915,
 				phys_addr_t size)
 {
-	static struct lock_class_key lock_class;
 	struct drm_i915_gem_object *obj;
 	unsigned int cache_level;
 
@@ -191,8 +190,7 @@ i915_gem_object_create_internal(struct drm_i915_private *i915,
 		return ERR_PTR(-ENOMEM);
 
 	drm_gem_private_object_init(&i915->drm, &obj->base, size);
-	i915_gem_object_init(obj, &i915_gem_object_internal_ops, &lock_class,
-			     I915_BO_STRUCT_PAGE);
+	i915_gem_object_init(obj, &i915_gem_object_internal_ops, 0);
 
 	/*
 	 * Mark the object as volatile, such that the pages are marked as

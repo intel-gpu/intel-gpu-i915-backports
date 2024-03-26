@@ -16,6 +16,7 @@
 void i915_px_cache_init(struct i915_px_cache *c)
 {
 	spin_lock_init(&c->lock);
+	init_llist_head(&c->px);
 }
 
 struct drm_i915_gem_object *i915_vm_alloc_px(struct i915_address_space *vm)
@@ -238,11 +239,13 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 
 	/* Applicable to VLV, and gen8+ */
 	pte_flags = 0;
-	if (vma->vm->has_read_only && i915_gem_object_is_readonly(vma->obj))
+	if (test_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags))
+		pte_flags |= PTE_READ_ONLY;
+	if (vm->has_read_only && i915_gem_object_is_readonly(vma->obj))
 		pte_flags |= PTE_READ_ONLY;
 	if (i915_gem_object_is_lmem(vma->obj) ||
 	    i915_gem_object_has_fabric(vma->obj))
-		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
+		pte_flags |= vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM;
 
 	err = vm->insert_entries(vm, vma, pat_index, pte_flags);
 	if (err)
@@ -284,6 +287,14 @@ int ppgtt_set_pages(struct i915_vma *vma)
 	return 0;
 }
 
+void ppgtt_clear_pages(struct i915_vma *vma)
+{
+	GEM_BUG_ON(!vma->pages);
+
+	vma->pages = NULL;
+	vma->page_sizes = 0;
+}
+
 int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
@@ -314,7 +325,7 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	ppgtt->vm.vma_ops.bind_vma    = ppgtt_bind_vma;
 	ppgtt->vm.vma_ops.unbind_vma  = ppgtt_unbind_vma;
 	ppgtt->vm.vma_ops.set_pages   = ppgtt_set_pages;
-	ppgtt->vm.vma_ops.clear_pages = clear_pages;
+	ppgtt->vm.vma_ops.clear_pages = ppgtt_clear_pages;
 
 	return 0;
 }

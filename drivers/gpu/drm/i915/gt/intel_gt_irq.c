@@ -386,24 +386,6 @@ void gen5_gt_irq_handler(struct intel_gt *gt, u32 gt_iir)
 				    gt_iir);
 }
 
-static void gen7_parity_error_irq_handler(struct intel_gt *gt, u32 iir)
-{
-	if (!HAS_L3_DPF(gt->i915))
-		return;
-
-	spin_lock(gt->irq_lock);
-	gen5_gt_disable_irq(gt, GT_PARITY_ERROR(gt->i915));
-	spin_unlock(gt->irq_lock);
-
-	if (iir & GT_RENDER_L3_PARITY_ERROR_INTERRUPT_S1)
-		gt->i915->l3_parity.which_slice |= 1 << 1;
-
-	if (iir & GT_RENDER_L3_PARITY_ERROR_INTERRUPT)
-		gt->i915->l3_parity.which_slice |= 1 << 0;
-
-	schedule_work(&gt->i915->l3_parity.error_work);
-}
-
 void gen6_gt_irq_handler(struct intel_gt *gt, u32 gt_iir)
 {
 	if (gt_iir & GT_RENDER_USER_INTERRUPT)
@@ -422,9 +404,6 @@ void gen6_gt_irq_handler(struct intel_gt *gt, u32 gt_iir)
 		      GT_BSD_CS_ERROR_INTERRUPT |
 		      GT_CS_MASTER_ERROR_INTERRUPT))
 		gt_dbg(gt, "Command parser error, gt_iir 0x%08x\n", gt_iir);
-
-	if (gt_iir & GT_PARITY_ERROR(gt->i915))
-		gen7_parity_error_irq_handler(gt, gt_iir);
 }
 
 void gen8_gt_irq_handler(struct intel_gt *gt, u32 master_ctl)

@@ -103,7 +103,6 @@ void intel_spi_init(struct intel_spi *spi, struct drm_i915_private *dev_priv)
 	aux_dev->name = "spi";
 	aux_dev->id = (pci_domain_nr(pdev->bus) << 16) |
 		       PCI_DEVID(pdev->bus->number, pdev->devfn);
-
 	aux_dev->dev.parent = &pdev->dev;
 	aux_dev->dev.release = i915_spi_release_dev;
 
@@ -127,6 +126,7 @@ void intel_spi_init(struct intel_spi *spi, struct drm_i915_private *dev_priv)
 	if (ret)
 		dev_err(&pdev->dev, "creating i915-spi cell failed\n");
 #endif
+
 	spi->i915 = dev_priv;
 }
 

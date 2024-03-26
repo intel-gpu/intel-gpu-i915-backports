@@ -353,7 +353,12 @@ void i915_buddy_free_list(struct i915_buddy_mm *mm, struct list_head *objects)
 
 static bool buddy_is_free(struct i915_buddy_block *block)
 {
-	return i915_buddy_block_is_free(__get_buddy(block, block->parent));
+	struct i915_buddy_block *buddy = __get_buddy(block, block->parent);
+
+	if (!i915_buddy_block_is_free(buddy))
+		return false;
+
+	return !i915_buddy_block_is_active(block);
 }
 
 bool i915_buddy_defrag(struct i915_buddy_mm *mm,
@@ -448,25 +453,30 @@ __mark_used(const struct i915_buddy_mm *mm, struct i915_buddy_block *block)
  *   ...
  */
 struct i915_buddy_block *
-__i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int flags)
+__i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int max_order, unsigned int flags)
 {
 	struct i915_buddy_list *lists[2] = { mm->dirty_list, mm->clear_list };
 	struct i915_buddy_block *block;
-	unsigned int n;
+	unsigned int n, count;
 
-	if (flags & I915_BUDDY_ALLOC_WANT_CLEAR)
+	count = ARRAY_SIZE(lists);
+	if (flags & I915_BUDDY_ALLOC_WANT_CLEAR) {
 		swap(lists[0], lists[1]);
+		if (flags & I915_BUDDY_ALLOC_NEVER_ACTIVE)
+			count = 1;
+	}
 
 	/*
 	 * Scan for the first idle chunk larger enough for the request,
 	 * preferring to only return a cleared chunk to those requiring
 	 * zeroed memory (i.e. user allocations).
 	 */
-	for (n = 0; n < ARRAY_SIZE(lists); n++) {
+	max_order = min(mm->max_order + 1, max_order);
+	for (n = 0; n < count; n++) {
 		struct i915_buddy_block *active = NULL;
 		unsigned int i;
 
-		for (i = order; i <= mm->max_order; ++i) {
+		for (i = order; i < max_order; ++i) {
 			struct i915_buddy_list *bl = &lists[n][i];
 
 			if (list_empty(&bl->list))
@@ -486,7 +496,7 @@ __i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int fl
 					goto found;
 				}
 
-				if (!active) {
+				if (!(flags & I915_BUDDY_ALLOC_NEVER_ACTIVE) && !active) {
 					__clear_free(block);
 					active = block;
 				}

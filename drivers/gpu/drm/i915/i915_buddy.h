@@ -197,19 +197,21 @@ void i915_buddy_fini(struct i915_buddy_mm *mm);
 
 enum {
 	I915_BUDDY_ALLOC_CLEAR_BIT = 0,
-	I915_BUDDY_ALLOC_ACTIVE_BIT,
+	I915_BUDDY_ALLOC_PREFER_ACTIVE_BIT,
+	I915_BUDDY_ALLOC_NEVER_ACTIVE_BIT,
 	__I915_BUDDY_ALLOC_USER_BITS
 };
 
 struct i915_buddy_block *
-__i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int flags);
+__i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order, unsigned int max_order, unsigned int flags);
 #define I915_BUDDY_ALLOC_WANT_CLEAR BIT(I915_BUDDY_ALLOC_CLEAR_BIT)
-#define I915_BUDDY_ALLOC_ALLOW_ACTIVE BIT(I915_BUDDY_ALLOC_ACTIVE_BIT)
+#define I915_BUDDY_ALLOC_ALLOW_ACTIVE BIT(I915_BUDDY_ALLOC_PREFER_ACTIVE_BIT)
+#define I915_BUDDY_ALLOC_NEVER_ACTIVE BIT(I915_BUDDY_ALLOC_NEVER_ACTIVE_BIT)
 
 static inline struct i915_buddy_block *
 i915_buddy_alloc(struct i915_buddy_mm *mm, unsigned int order)
 {
-	return __i915_buddy_alloc(mm, order, 0);
+	return __i915_buddy_alloc(mm, order, UINT_MAX, 0);
 }
 
 int i915_buddy_alloc_range(struct i915_buddy_mm *mm,

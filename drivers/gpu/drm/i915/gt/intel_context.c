@@ -258,6 +258,17 @@ int __intel_context_do_pin_ww(struct intel_context *ce,
 			goto err_unlock;
 		}
 
+		/*
+		 * The pinning involved writing some GGTT addresses. If done during
+		 * migration, it may create a skewed context.
+		 */
+		if (unlikely(i915_sriov_vf_migration_check(ce->engine->i915, false))) {
+			ce->ops->unpin(ce);
+			intel_context_active_release(ce);
+			err = -EAGAIN;
+			goto err_unlock;
+		}
+
 		CE_TRACE(ce, "pin ring:{start:%08x, head:%04x, tail:%04x}\n",
 			 i915_ggtt_offset(ce->ring->vma),
 			 ce->ring->head, ce->ring->tail);
@@ -619,6 +630,30 @@ __intel_context_find_active_request(struct intel_context *ce,
 	return active;
 }
 
+struct i915_request *
+__intel_context_find_oldest_incomplete_request(struct intel_context *ce)
+{
+	struct i915_request *rq, *incomplete = NULL;
+
+	/*
+	 * We search the parent list to find oldest request which was not
+	 * completed. It does not matter if the request was started or not.
+	 * If the previous request moved past final seqno increment, it is
+	 * considered completed and newer one will be returned.
+	 */
+	rcu_read_lock();
+	list_for_each_entry_reverse(rq, &ce->timeline->requests, link) {
+		if (__i915_request_is_complete(rq))
+			break;
+
+		incomplete = rq;
+	}
+
+	rcu_read_unlock();
+
+	return incomplete;
+}
+
 void intel_context_bind_parent_child(struct intel_context *parent,
 				     struct intel_context *child)
 {
@@ -748,32 +783,15 @@ void intel_context_revert_ring_heads(struct intel_context *ce)
 	while (!mutex_trylock(&tl->mutex))
 		udelay(1);
 
-	list_for_each_entry_rcu(rq, &tl->requests, link) {
-		u32 head, size;
-
-		if (i915_request_completed(rq))
-			continue;
-
-		head = READ_ONCE(rq->ring->head);
-		size = rq->ring->size;
-
-		/*
-		 * We need to revert the ring head to the beginning of a request.
-		 * Sounds simple, but it's a ring - it might have wrapped, either
-		 * within a request, or between requests. Assuming that a single
-		 * request is always smaller that 1/8 of the ring, we can
-		 * revert the head with high accuracy.
-		 */
-		if (((rq->tail > rq->head) && ((head > rq->head) ||
-		     ((head < size/4) && (rq->head > 3*size/4)))) ||
-		    ((rq->tail < rq->head) && ((head > rq->head) ||
-		     (head < rq->tail) || (head < size/4)))) {
-
-			WRITE_ONCE(rq->ring->head, rq->head);
-		}
-	}
-	intel_ring_set_tail(ce->ring, ce->ring->head);
 	regs = ce->lrc_reg_state;
+	if (regs)
+		WRITE_ONCE(ce->ring->head, regs[CTX_RING_HEAD] & GENMASK(20, 2));
+
+	rq = intel_context_find_oldest_incomplete_request(ce);
+	if (rq)
+		WRITE_ONCE(rq->ring->head, rq->head);
+
+	intel_ring_set_tail(ce->ring, (ce->ring->head+7) & GENMASK(20, 3));
 	if (regs) {
 		regs[CTX_RING_HEAD] = ce->ring->head;
 		regs[CTX_RING_TAIL] = ce->ring->tail;

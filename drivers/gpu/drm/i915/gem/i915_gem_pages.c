@@ -159,7 +159,6 @@ int __i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
 	int err;
 
 	assert_object_held(obj);
-
 	assert_object_held_shared(obj);
 
 	if (unlikely(!i915_gem_object_has_pages(obj))) {
@@ -561,7 +560,7 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 	int err;
 
 	if (!i915_gem_object_has_struct_page(obj) &&
-	    !i915_gem_object_type_has(obj, I915_GEM_OBJECT_HAS_IOMEM))
+	    !i915_gem_object_has_iomem(obj))
 		return ERR_PTR(-ENXIO);
 
 	assert_object_held(obj);

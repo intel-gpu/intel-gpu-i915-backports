@@ -1264,6 +1264,7 @@ static int measure_breadcrumb_dw(struct intel_context *ce)
 	frame->rq.context = ce;
 	rcu_assign_pointer(frame->rq.timeline, ce->timeline);
 	frame->rq.hwsp_seqno = ce->timeline->hwsp_seqno;
+	frame->rq.execution_mask = engine->mask;
 
 	frame->ring.vaddr = frame->cs;
 	frame->ring.size = sizeof(frame->cs);

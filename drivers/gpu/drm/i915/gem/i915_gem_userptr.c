@@ -721,9 +721,6 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	unsigned int num_pages; /* limited by sg_alloc_table */
 	struct userptr_work *wrk;
 	struct sg_table *st;
-#ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_RETURNS_SCATTERLIST
-	struct scatterlist *sg;
-#endif
 	int err;
 
 	err = probe_range(obj->userptr.notifier.mm,
@@ -839,7 +836,8 @@ i915_gem_userptr_pread(struct drm_i915_gem_object *obj,
 
 static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
 	.name = "i915_gem_object_userptr",
-	.flags = I915_GEM_OBJECT_IS_SHRINKABLE |
+	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE |
+		 I915_GEM_OBJECT_IS_SHRINKABLE |
 		 I915_GEM_OBJECT_NO_MMAP,
 	.get_pages = i915_gem_userptr_get_pages,
 	.put_pages = i915_gem_userptr_put_pages,
@@ -889,7 +887,6 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 		       void *data,
 		       struct drm_file *file)
 {
-	static struct lock_class_key lock_class;
 	struct drm_i915_private *i915 = to_i915(dev);
 	struct drm_i915_gem_userptr *args = data;
 	struct drm_i915_gem_object *obj;
@@ -936,9 +933,7 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 		return -ENOMEM;
 
 	drm_gem_private_object_init(dev, &obj->base, args->user_size);
-	i915_gem_object_init(obj, &i915_gem_userptr_ops, &lock_class,
-			     I915_BO_STRUCT_PAGE |
-			     I915_BO_ALLOC_USER);
+	i915_gem_object_init(obj, &i915_gem_userptr_ops, I915_BO_ALLOC_USER);
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);

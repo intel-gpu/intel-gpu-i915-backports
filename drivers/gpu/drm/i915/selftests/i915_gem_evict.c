@@ -38,9 +38,6 @@
 static void quirk_add(struct drm_i915_gem_object *obj,
 		      struct list_head *objects)
 {
-	/* quirk is only for live tiled objects, use it to declare ownership */
-	GEM_BUG_ON(i915_gem_object_has_tiling_quirk(obj));
-	i915_gem_object_set_tiling_quirk(obj);
 	list_add(&obj->st_link, objects);
 }
 
@@ -81,24 +78,23 @@ static int populate_ggtt(struct i915_ggtt *ggtt, struct list_head *objects)
 	return 0;
 }
 
-static void unpin_ggtt(struct i915_ggtt *ggtt)
+static void unpin_ggtt(struct i915_ggtt *ggtt, struct list_head *list)
 {
+	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
 
-	list_for_each_entry(vma, &ggtt->vm.bound_list, vm_link)
-		if (i915_gem_object_has_tiling_quirk(vma->obj))
+	list_for_each_entry(obj, list, st_link) {
+		for_each_ggtt_vma(vma, obj)
 			i915_vma_unpin(vma);
+	}
 }
 
 static void cleanup_objects(struct i915_ggtt *ggtt, struct list_head *list)
 {
 	struct drm_i915_gem_object *obj, *on;
 
-	list_for_each_entry_safe(obj, on, list, st_link) {
-		GEM_BUG_ON(!i915_gem_object_has_tiling_quirk(obj));
-		i915_gem_object_set_tiling_quirk(obj);
+	list_for_each_entry_safe(obj, on, list, st_link)
 		i915_gem_object_put(obj);
-	}
 
 	i915_gem_drain_freed_objects(ggtt->vm.i915);
 }
@@ -129,7 +125,7 @@ static int igt_evict_something(void *arg)
 		goto cleanup;
 	}
 
-	unpin_ggtt(ggtt);
+	unpin_ggtt(ggtt, &objects);
 
 	/* Everything is unpinned, we should be able to evict something */
 	mutex_lock(&ggtt->vm.mutex);
@@ -213,7 +209,7 @@ static int igt_evict_for_vma(void *arg)
 		goto cleanup;
 	}
 
-	unpin_ggtt(ggtt);
+	unpin_ggtt(ggtt, &objects);
 
 	/* Everything is unpinned, we should be able to evict the node */
 	mutex_lock(&ggtt->vm.mutex);
@@ -253,7 +249,7 @@ static int igt_evict_vm(void *arg)
 		goto cleanup;
 	}
 
-	unpin_ggtt(ggtt);
+	unpin_ggtt(ggtt, &objects);
 
 	mutex_lock(&ggtt->vm.mutex);
 	err = i915_gem_evict_vm(&ggtt->vm);

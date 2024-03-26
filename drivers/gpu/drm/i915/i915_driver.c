@@ -732,7 +732,27 @@ static int i915_userspace_trylock(struct drm_i915_private *i915, int *srcu)
 	return 0;
 }
 
-static int i915_drm_userspace_trylock(struct drm_device *dev, int *srcu)
+int i915_userspace_wait_unlock(struct drm_i915_private *i915)
+{
+	might_sleep();
+
+	rcu_read_lock();
+	while (test_bit(I915_USERLAND_BLOCKED, &i915->userspace.flags)) {
+		rcu_read_unlock();
+
+		if (wait_event_interruptible(i915->userspace.queue,
+					     !test_bit(I915_USERLAND_BLOCKED,
+						       &i915->userspace.flags)))
+			return -EINTR;
+
+		rcu_read_lock();
+	}
+	rcu_read_unlock();
+
+	return 0;
+}
+
+int i915_drm_userspace_trylock(struct drm_device *dev, int *srcu)
 {
 	return i915_userspace_trylock(to_i915(dev), srcu);
 }
@@ -1369,7 +1389,6 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
  */
 static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 {
-
 	struct intel_gt *gt;
 	unsigned int i;
 
