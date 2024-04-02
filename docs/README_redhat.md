@@ -35,7 +35,7 @@ $ sudo dnf install dkms
 
 ## Dependencies
 
- These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
+ These drivers have a dependency on Intel® GPU firmware and a few more kernel mode drivers may be needed based on specific use cases, platforms, and distributions. The source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
@@ -43,7 +43,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 ## Package creation
 
-We have 2 kind of backport packages, depending on the target OS Kernel version
+We have 2 kinds of backport packages, depending on the target OS Kernel version
  - Build with i915 and drm. Ex: RHEL® 8.x
  - Build with i915 alone. Ex: RHEL® 9.x
 
@@ -71,7 +71,7 @@ Above command will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
 
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
-In case of any issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+In case of any issue with the latest kernel, please install the kernel version mentioned in the [version](../versions) file for the appropriate OS version.
 
 ```
 $ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
@@ -92,7 +92,7 @@ Example:
 ```
 
 ### Binary RPM
-Creation of binary rpm can be done using the below command. By default it will use the header of booted kernel, However, it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
+Creation of binary rpm can be done using the below command. By default it will use the header of the booted kernel, However, it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 ```
 $ make <Build Options> KLIB=<Header Path> KLIB_BUILD=<Header Path>/build binrpm-pkg
 
@@ -107,9 +107,9 @@ Above commands will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
 
 ### Build Options
 
-Build options provides list of different arguments which can be passed during package creation or build.
+Build options provide a list of different arguments which can be passed during package creation or build.
 
-Please refer to [README_common](README_common.md) for full list of Build options.
+Please refer to [README_common](README_common.md) for the full list of Build options.
 
 
 ## Installation and Verification
@@ -141,7 +141,7 @@ Reboot the device after uninstallation of all packages.
 $ sudo reboot
 ```
 ## Known limitation
-KVMGT is not supported on Server Gfx cards so we need to blacklist KVMGT, on later version due to KVMGT refactoring
+KVMGT is not supported on Server Gfx cards so we need to blacklist KVMGT, on a later version due to KVMGT refactoring
 we may have an unknown symbol warning during DKMS installation.
 
 Example:
