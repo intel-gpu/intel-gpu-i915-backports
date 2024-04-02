@@ -37,6 +37,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 | SUSE® Linux® Enterprise Server 15SP4 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
 | Ubuntu® 22.04 Desktop (6.5 generic)  |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
 | Ubuntu® 22.04 Server (5.15 generic)  |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
+| Vanilla Kernel (6.1 LTS)  | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
 | Vanilla Kernel (5.15 LTS) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
 | Vanilla Kernel (5.10 LTS) | [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_vanilla.md)| Yes | No |
 
@@ -51,13 +52,13 @@ Two types of release streams are available:
 2. Rolling Stable Releases:
    - Use Rolling Stable releases for early access to new features/new hardware. Rolling updates include a mix of feature changes and bug/security fixes. Risks of new bugs and regressions are higher for rolling stable than for production. Customers must install the next release for any updates, including bug fixes. Major and minor OS version support are locked.
 
+## Active LTS/Production releases:
 
-## Active Production release:
-
-| Release | Branch| Tag|
-|---    |---    |--- |
-| 2328.48:update released 20231229 | backport |[I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)|
-| | redhat | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md)|
+| Release | Type| Branch| Tag| Status|
+|---    |---    |---    |---    |---    |
+| 2350.29: initial released 20240131 | LTS | backport/RELEASE_2405_23.10 |[I915_24WW05.5_803.29_23.10.32_231129.32](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md)| Active|
+| 2328.48:update released 20231229 | Production | backport/RELEASE_2335_23.6 |[I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)| Obsolete |
+| | Production | redhat/RELEASE_2335_23.6 | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md)| Obsolete |
 
 Please select the appropriate tag for a particular branch based on the supported OS table [Supported OS Distributions](#supported-os-distributions)
 
