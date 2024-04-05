@@ -1,6 +1,11 @@
 # Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
 
-Contains the backported kernel module source code of intel GPUs on various OS distributions and LTS Kernels. You can create Dynamic Kernel Module Support (DKMS) as well as precompiled Out of Tree modules packages, which can be installed on supported OS distributions.
+This backport provides early access of discrete GFX functionalities which are not upstreamed yet. Currently we are supporting Intel® Arc™ A­-Series Graphics (Codename Alchemist) Intel® Data Center GPU Flex Series Intel® Data Center GPU Max Series
+
+For Alchemist discrete Graphics cards, support is provided without display. This repo can be used for the features like GPU debug functionality.
+For normal cases, please use upstream 6.2 or later kernel version.
+
+You can create Dynamic Kernel Module Support (DKMS) as well as pre-compiled out-of-tree modules packages, which can be installed on supported OS distributions.
 
 We are using [backport project](https://backports.wiki.kernel.org/index.php/Main_Page) to generate out-of-tree i915 kernel module source codes.
 
