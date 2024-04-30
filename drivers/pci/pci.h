@@ -403,10 +403,12 @@ static inline int pci_dev_set_disconnected(struct pci_dev *dev, void *unused)
 	return 0;
 }
 
+#ifndef BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
 static inline bool pci_dev_is_disconnected(const struct pci_dev *dev)
 {
 	return dev->error_state == pci_channel_io_perm_failure;
 }
+#endif
 
 /* pci_dev priv_flags */
 #define PCI_DEV_ADDED 0

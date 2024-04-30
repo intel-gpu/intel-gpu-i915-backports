@@ -589,12 +589,17 @@ err:
 static int shmem_work(struct dma_fence_work *base)
 {
 	struct shmem_work *wrk = container_of(base, typeof(*wrk), base);
+	int err;
 
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_NUMA_ALLOC) &&
 	    !wrk->obj->base.filp->f_inode->i_blocks)
-		return shmem_create(wrk);
+		err = shmem_create(wrk);
 	else
-		return shmem_swapin(wrk);
+		err = shmem_swapin(wrk);
+	if (err && test_bit(DMA_FENCE_WORK_IMM, &wrk->base.rq.fence.flags))
+		err = -ERESTARTSYS; /* retry from kworker */
+
+	return err;
 }
 
 static void shmem_work_release(struct dma_fence_work *base)

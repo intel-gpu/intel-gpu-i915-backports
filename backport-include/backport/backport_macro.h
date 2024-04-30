@@ -4,6 +4,16 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,8,2) || \
+        LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
+        LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0)
+/*
+ * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
+ */
+#define BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
+
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,5,0)
 /*
  * 6801be4f2653 slub: Replace cmpxchg_double

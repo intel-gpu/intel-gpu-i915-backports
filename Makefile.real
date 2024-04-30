@@ -37,6 +37,11 @@ updateconfig:
 ifeq ($(BUILD_CONFIG), disabledisplay)
 	sed -i 's/CPTCFG_DRM_I915_DISPLAY=y/CPTCFG_DRM_I915_DISPLAY=n/g' .config
 endif
+ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
+ifeq ($(shell expr $(CUSTOM_KERN_VER) \>= 6.4), 1)
+	sed -i 's/CPTCFG_DRM_I915_DISPLAY=y/CPTCFG_DRM_I915_DISPLAY=n/g' .config
+endif
+endif
 
 .PHONY: savedefconfig
 savedefconfig:
@@ -132,9 +137,15 @@ clean:
 mrproper:
 	@$(MAKE) -f Makefile.backport mrproper
 
+# RPM Targets
+
 .PHONY: dmadkmsrpm-pkg
 dmadkmsrpm-pkg:
 	@$(MAKE) -f Makefile.backport dmadkmsrpm-pkg
+
+.PHONY: drmdkmsrpm-pkg
+drmdkmsrpm-pkg:
+	@$(MAKE) -f Makefile.backport drmdkmsrpm-pkg
 
 .PHONY: i915dkmsrpm-pkg
 i915dkmsrpm-pkg:
@@ -148,9 +159,15 @@ dkmsrpm-pkg:
 binrpm-pkg:
 	@$(MAKE) -f Makefile.backport binrpm-pkg
 
+# Debian Targets
+
 .PHONY: dmadkmsdeb-pkg
 dmadkmsdeb-pkg:
 	@$(MAKE) -f Makefile.backport dmadkmsdeb-pkg
+
+.PHONY: drmdkmsdeb-pkg
+drmdkmsdeb-pkg:
+	@$(MAKE) -f Makefile.backport drmdkmsdeb-pkg
 
 .PHONY: i915dkmsdeb-pkg
 i915dkmsdeb-pkg:

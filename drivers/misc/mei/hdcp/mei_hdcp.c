@@ -661,7 +661,7 @@ static int mei_hdcp_component_match(struct device *dev, int subcomponent,
 {
 	struct device *base = data;
 
-	if (!dev->driver || strcmp(dev->driver->name, "i915") ||
+	if (!dev->driver || strncmp(dev->driver->name, "i915", 4) ||
 	    subcomponent != I915_COMPONENT_HDCP)
 		return 0;
 

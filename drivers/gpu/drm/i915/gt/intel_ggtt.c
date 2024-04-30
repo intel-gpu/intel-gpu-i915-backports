@@ -533,6 +533,18 @@ int ggtt_set_pages(struct i915_vma *vma)
 	return 0;
 }
 
+void ggtt_clear_pages(struct i915_vma *vma)
+{
+	GEM_BUG_ON(!vma->pages);
+
+	if (test_and_clear_bit(I915_VMA_PARTIAL_BIT, __i915_vma_flags(vma))) {
+		sg_free_table(vma->pages);
+		kfree(vma->pages);
+	}
+	vma->pages = NULL;
+	vma->page_sizes = 0;
+}
+
 static void gen6_gmch_remove(struct i915_address_space *vm)
 {
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
@@ -569,7 +581,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.vma_ops.bind_vma    = intel_ggtt_bind_vma;
 	ggtt->vm.vma_ops.unbind_vma  = intel_ggtt_unbind_vma;
 	ggtt->vm.vma_ops.set_pages   = ggtt_set_pages;
-	ggtt->vm.vma_ops.clear_pages = clear_pages;
+	ggtt->vm.vma_ops.clear_pages = ggtt_clear_pages;
 
 	if (GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
 		ggtt->vm.pte_encode = mtl_ggtt_pte_encode;
@@ -604,7 +616,7 @@ static int gen12vf_ggtt_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.vma_ops.bind_vma    = intel_ggtt_bind_vma;
 	ggtt->vm.vma_ops.unbind_vma  = intel_ggtt_unbind_vma;
 	ggtt->vm.vma_ops.set_pages   = ggtt_set_pages;
-	ggtt->vm.vma_ops.clear_pages = clear_pages;
+	ggtt->vm.vma_ops.clear_pages = ggtt_clear_pages;
 
 	ggtt->invalidate = gen12vf_ggtt_invalidate;
 
@@ -1179,6 +1191,7 @@ i915_get_ggtt_vma_pages(struct i915_vma *vma)
 	}
 
 	ret = 0;
+	set_bit(I915_VMA_PARTIAL_BIT, __i915_vma_flags(vma));
 	if (IS_ERR(vma->pages)) {
 		ret = PTR_ERR(vma->pages);
 		vma->pages = NULL;

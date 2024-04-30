@@ -277,28 +277,6 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 					   start, end, DRM_MM_INSERT_EVICT);
 }
 
-struct drm_mm_node *i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
-{
-	struct drm_mm_node *node;
-	u64 page_size, start, end;
-
-	lockdep_assert_held(&vm->mutex);
-
-	if (unlikely(!(addr < vm->total)))
-		return NULL;
-
-	page_size = BIT(__ffs(INTEL_INFO(vm->i915)->page_sizes));
-	start = round_down(addr, page_size);
-	end = start + page_size;
-
-	drm_mm_for_each_node_in_range(node, &vm->mm, start, end)
-		if (addr >= node->start && addr < node->start + node->size &&
-		    drm_mm_node_allocated(node))
-			return node;
-
-	return NULL;
-}
-
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftests/i915_gem_gtt.c"
 #endif

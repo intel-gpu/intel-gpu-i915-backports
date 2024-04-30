@@ -907,10 +907,22 @@ static const struct auxiliary_device_id mei_gsc_id_table[] = {
 		.driver_data = MEI_ME_GSC_CFG,
 
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".mei-gsc",
+		.driver_data = MEI_ME_GSC_CFG,
+	},
+#endif
 	{
 		.name = "i915.mei-gscfi",
 		.driver_data = MEI_ME_GSCFI_CFG,
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".mei-gscfi",
+		.driver_data = MEI_ME_GSCFI_CFG,
+	},
+#endif
 	{
 		/* sentinel */
 	}

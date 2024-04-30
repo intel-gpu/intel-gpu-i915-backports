@@ -807,7 +807,6 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	static struct lock_class_key lock_class;
 	struct dma_buf_attachment *attach;
 	struct drm_i915_gem_object *obj;
-	unsigned long memory_mask = 0;
 
 	/* is this one of own objects? */
 	if (dma_buf->ops == &i915_dmabuf_ops) {
@@ -821,8 +820,6 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 			 */
 			return &i915_gem_object_get(obj)->base;
 		}
-
-		memory_mask = obj->memory_mask;
 	}
 
 	if (i915_gem_object_size_2big(dma_buf->size))
@@ -836,7 +833,6 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class,
 			     I915_BO_ALLOC_USER);
 	obj->base.resv = dma_buf->resv;
-	obj->memory_mask = memory_mask;
 
 	/*
 	 * We use GTT as shorthand for a coherent domain, one that is

@@ -961,6 +961,11 @@ static const struct auxiliary_device_id i915_spi_id_table[] = {
 	{
 		.name = "i915.spi",
 	},
+#ifdef CPTCFG_MODULE_I915
+	{
+		.name = CPTCFG_MODULE_I915".spi",
+	},
+#endif
 	{
 		/* sentinel */
 	}
