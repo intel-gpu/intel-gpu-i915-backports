@@ -271,6 +271,9 @@ struct i915_vma {
 #define I915_VMA_PURGED_BIT	21
 #define I915_VMA_HAS_LUT_BIT	22
 
+#define I915_VMA_PARTIAL_BIT	23
+#define I915_VMA_PARTIAL	((int)BIT(I915_VMA_PARTIAL_BIT))
+
 	struct i915_active active;
 
 #define I915_VMA_PAGES_BIAS 24

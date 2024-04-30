@@ -374,23 +374,11 @@ bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
-					 enum intel_region_id dst_region_id,
+					 const struct intel_memory_region *mem,
 					 bool is_atomic_fault)
 {
-	if (!dst_region_id || !(obj->memory_mask & BIT(dst_region_id)))
+	if (obj->mm.region.mem == mem || !(obj->memory_mask & BIT(mem->id)))
 		return false;
-
-	if (obj->mm.region.mem->id == dst_region_id)
-		return false;
-
-	/* HW support cross-tile atomic access, so no need to
-	 * migrate when object is already in lmem.
-	 */
-	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
-		return true;
-
-	if (i915_gem_object_test_preferred_location(obj, dst_region_id))
-		return true;
 
 	/*
 	 * first touch policy:
@@ -399,7 +387,14 @@ bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
 	if (!i915_gem_object_has_backing_store(obj))
 		return true;
 
-	return false;
+	/*
+	 * HW support cross-tile atomic access, so no need to
+	 * migrate when object is already in lmem.
+	 */
+	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
+		return true;
+
+	return i915_gem_object_test_preferred_location(obj, mem->id);
 }
 
 static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
@@ -1140,6 +1135,9 @@ swap_shrinker(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor
 static void
 swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 {
+	GEM_BUG_ON(atomic_read(&obj->mm.pages_pin_count));
+	GEM_BUG_ON(atomic_read(&donor->mm.pages_pin_count));
+
 	__i915_active_fence_replace(&donor->mm.migrate, &obj->mm.migrate);
 
 	swap(obj->mm.pages, donor->mm.pages);
@@ -1190,6 +1188,9 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 
 	if (GEM_WARN_ON(obj->mm.madv != I915_MADV_WILLNEED))
 		return -EFAULT;
+
+	if (GEM_WARN_ON(i915_gem_object_has_pinned_pages(obj)))
+		return -EINVAL;
 
 	if (obj->swapto && obj->swapto->mm.madv == __I915_MADV_PURGED)
 		i915_gem_object_put(fetch_and_zero(&obj->swapto));
@@ -1250,7 +1251,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	trace_i915_gem_object_migrate(obj, donor->mm.region.mem);
 
 	i915_gem_object_unaccount(obj);
-	swap(obj->base.size, donor->base.size);
+	GEM_BUG_ON(donor->base.size != obj->base.size); /* no expansion allowed */
 	swap(obj->base.filp, donor->base.filp);
 	swap(obj->flags, donor->flags);
 	swap(obj->ops, donor->ops);

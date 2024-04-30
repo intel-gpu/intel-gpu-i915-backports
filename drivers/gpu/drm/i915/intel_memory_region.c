@@ -550,7 +550,8 @@ delete_bookmark:
 	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
 		return 0;
 
-	scan |= i915_px_cache_release(&mem->gt->px_cache);
+	if (mem->gt)
+		scan |= i915_px_cache_release(&mem->gt->px_cache);
 
 	/* XXX optimistic busy wait for transient pins */
 	if (scan && time_before(jiffies, end_time)) {

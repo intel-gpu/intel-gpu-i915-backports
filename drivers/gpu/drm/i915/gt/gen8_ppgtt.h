@@ -21,7 +21,8 @@ int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,
 			       struct drm_mm_node *node);
 int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 					struct drm_i915_gem_object *obj,
-					struct drm_mm_node *node);
+					struct drm_mm_node *node,
+					bool is_compact);
 void intel_flat_lmem_ppgtt_fini(struct i915_address_space *vm,
 				struct drm_mm_node *node);
 

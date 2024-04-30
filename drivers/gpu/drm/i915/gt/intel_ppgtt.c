@@ -245,16 +245,17 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= (vma->vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
 
 	err = vm->insert_entries(vm, vma, pat_index, pte_flags);
-	if (err)
+	if (unlikely(err))
 		return err;
 
+	set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
 	i915_write_barrier(vm->i915);
 	return 0;
 }
 
 void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 {
-	if (!i915_vma_is_bound(vma, PIN_RESIDENT))
+	if (!test_and_clear_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma)))
 		return;
 
 	vm->clear_range(vm, i915_vma_offset(vma), pte_size(vma));
@@ -282,6 +283,14 @@ int ppgtt_set_pages(struct i915_vma *vma)
 	vma->page_sizes = vma->obj->mm.page_sizes;
 
 	return 0;
+}
+
+void ppgtt_clear_pages(struct i915_vma *vma)
+{
+	GEM_BUG_ON(!vma->pages);
+
+	vma->pages = NULL;
+	vma->page_sizes = 0;
 }
 
 int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
@@ -314,7 +323,7 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	ppgtt->vm.vma_ops.bind_vma    = ppgtt_bind_vma;
 	ppgtt->vm.vma_ops.unbind_vma  = ppgtt_unbind_vma;
 	ppgtt->vm.vma_ops.set_pages   = ppgtt_set_pages;
-	ppgtt->vm.vma_ops.clear_pages = clear_pages;
+	ppgtt->vm.vma_ops.clear_pages = ppgtt_clear_pages;
 
 	return 0;
 }

@@ -1,4 +1,22 @@
 # ChangeLog
+## Release I915_24WW17.5_803.45_23.10.43_231129.43
+* i915: Update to load and use HuC fw v7.10.15 on flex
+* i915: Fix for rcs hang occasionally seen during memory migration with virtualization on flex
+* i915: Fix to use compact PT for flat-CCS updates on flex
+* i915: Fix to flush after posting PTE updates for blitter swap
+* i915: Update to disable preemption of kernel blitter contexts
+* i915: Fix for error unwind of ppGTT inserts after allocation failure
+* i915: Fix for thread safety during pt allocation
+* i915: Fix ring head update race condition after reset
+* i915: Fix use after free during object clear
+* i915: Update to add dummy blt w/a prior to flusing blitter copies
+* i915: Fix to Wa_16018031267 Wa_16018063123 implementations on max
+* i915: Fix for a null pointer deref on page fault of an imported object
+* i915: Fix to Wa_16018031267 Wa_16018063123 implementations on flex
+* i915: Update dmesg to show pagefault address in canonical format
+* i915: Fix to properly mark vma as read only when requested in VM_BIND
+* i915: Fix to prevent double-free of vma->pages/obj->mm.pages during migration
+
 ## Release I915_24WW05.5_803.29_23.10.32_231129.32
 * i915: Add sriov force fixed CCS-1 mode for max
 * i915: Add support to dump multiple engines for offline debugging

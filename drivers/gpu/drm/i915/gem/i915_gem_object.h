@@ -732,7 +732,7 @@ static inline bool i915_gem_object_is_userptr(struct drm_i915_gem_object *obj) {
 #endif
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
-					 enum intel_region_id dst_region_id,
+					 const struct intel_memory_region *mem,
 					 bool is_atomic_fault);
 
 void i915_gem_object_migrate_prepare(struct drm_i915_gem_object *obj,

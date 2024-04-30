@@ -260,18 +260,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	return 0;
 }
 
-void clear_pages(struct i915_vma *vma)
-{
-	GEM_BUG_ON(!vma->pages);
-
-	if (vma->pages != vma->obj->mm.pages) {
-		sg_free_table(vma->pages);
-		kfree(vma->pages);
-	}
-	vma->pages = NULL;
-	vma->page_sizes = 0;
-}
-
 dma_addr_t __px_dma(struct drm_i915_gem_object *p)
 {
 	GEM_BUG_ON(!i915_gem_object_has_pages(p));

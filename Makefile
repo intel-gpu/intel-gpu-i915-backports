@@ -20,12 +20,13 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
+export CUSTOM_KERN_VER := $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1 | tr -d '+')
 
 #
 # Packaging targets Available
 #
-DEB_PKG_DISTRO_TARGETS := dmadkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
-RPM_PKG_DISTRO_TARGETS := dmadkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg
+DEB_PKG_DISTRO_TARGETS := dmadkmsdeb-pkg drmdkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
+RPM_PKG_DISTRO_TARGETS := dmadkmsrpm-pkg drmdkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg
 
 #
 # PKG_DISTRO_TARGETS
@@ -228,9 +229,10 @@ dkms-pkg-help: common-help
 	@echo "--------------------------------------------------------------------------------------"
 	@echo " DKMS Targets: "
 	@echo " Debian Targets: "
-	@echo "  dmadkmsdeb-pkg  - Build DKMS debian package for dmabuf"
+	@echo "  dkmsdeb-pkg    - Build single DKMS Debian package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)"
+	@echo "  dmadkmsdeb-pkg - Build DKMS debian package for dmabuf"
+	@echo "  drmdkmsdeb-pkg - Build DKMS debian package for drm, i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo "  i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)"
-	@echo "  dkmsdeb-pkg     - Build above two target dmadkmsdeb-pkg i915dkmsdeb-pkg"
 	@echo ""
 	@echo " Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_SERVER "
 	@echo ""
@@ -243,6 +245,7 @@ dkms-pkg-help: common-help
 	@echo "  dkmsrpm-pkg     - Build single DKMS RPM package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo "  dmadkmsrpm-pkg  - Build dkms RPM package for dmabuf"
 	@echo "  i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)"
+	@echo "  drmdkmsrpm-pkg -  Build dkms RPM package for drm, i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo ""
 	@echo " Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP5 "
 	@echo ""

@@ -1771,95 +1771,22 @@ gen12_emit_indirect_ctx_xcs(const struct intel_context *ce, u32 *cs)
 	return cs;
 }
 
-static u32 *xehp_emit_fastcolor_blt_wabb(const struct intel_context *ce, u32 *cs)
-{
-	struct intel_gt *gt = ce->engine->gt;
-	u32 mocs = gt->mocs.uc_index << 1;
-
-	/*
-	 * Wa_16018031267 / Wa_16018063123 requires that SW forces the
-	 * main copy engine arbitration into round robin mode.  We
-	 * additionally need to submit the following WABB blt command
-	 * to produce 4 subblits with each subblit generating 0 byte
-	 * write requests as WABB:
-	 *
-	 * XY_FASTCOLOR_BLT
-	 *  BG0    -> 5100000E
-	 *  BG1    -> 0000003F (Dest pitch)
-	 *  BG2    -> 00000000 (X1, Y1) = (0, 0)
-	 *  BG3    -> 00040001 (X2, Y2) = (1, 4)
-	 *  BG4    -> scratch
-	 *  BG5    -> scratch
-	 *  BG6-12 -> 00000000
-	 *  BG13   -> 20004004 (Surf. Width = 2,Surf. Height = 5)
-	 *  BG14   -> 00000010 (Qpitch = 4)
-	 *  BG15   -> 00000000
-	 */
-	*cs++ = GEN9_XY_FAST_COLOR_BLT_CMD | (16 - 2);
-	*cs++ = FIELD_PREP(XY_FAST_COLOR_BLT_MOCS_MASK, mocs) | 0x3f;
-	*cs++ = 0;
-	*cs++ = 4 << 16 | 1;
-	*cs++ = lower_32_bits(ce->vm->total); /* top is reserved */
-	*cs++ = upper_32_bits(ce->vm->total);
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0;
-	*cs++ = 0x20004004;
-	*cs++ = 0x10;
-	*cs++ = 0;
-
-	return cs;
-}
-
-static u32 *pvc_emit_fastcolor_blt_wabb(const struct intel_context *ce, u32 *cs)
-{
-	enum { ID = 0, SHIFT, __NUM_GPR };
-
-	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRR_DEST_CS_MMIO;
-	*cs++ = i915_mmio_reg_offset(RING_ID(0));
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
-
-	*cs++ = MI_LOAD_REGISTER_IMM(3) | MI_LRI_DEST_CS_MMIO;
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, ID));
-	*cs++ = 0;
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, SHIFT));
-	*cs++ = 4;
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR_UDW(0, SHIFT));
-	*cs++ = 0;
-
-	*cs++ = MI_MATH(4);
-	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCA, MI_MATH_REG(ID));
-	*cs++ = MI_MATH_LOAD(MI_MATH_REG_SRCB, MI_MATH_REG(SHIFT));
-	*cs++ = MI_MATH_SHR;
-	*cs++ = MI_MATH_STORE(MI_MATH_REG(ID), MI_MATH_REG_ACCU);
-
-	*cs++ = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRR_DEST_CS_MMIO;
-	*cs++ = i915_mmio_reg_offset(GEN8_RING_CS_GPR(0, ID));
-	*cs++ = i915_mmio_reg_offset(MI_PREDICATE_RESULT_2(0));
-
-	*cs++ = MI_SET_PREDICATE | 2; /* skip if RESULT_2(engine id) != 0 */
-
-	cs = xehp_emit_fastcolor_blt_wabb(ce, cs);
-
-	*cs++ = MI_SET_PREDICATE | MI_SET_PREDICATE_DISABLE;
-
-	return emit_restore_gpr(ce, cs, __NUM_GPR);
-}
-
 static u32 *
 xehp_emit_per_ctx_bb(const struct intel_context *ce,
 		     const struct intel_engine_cs *engine,
 		     u32 *cs)
 {
+	unsigned long bcs;
+
+	bcs = ce->engine->mask & ((BIT(I915_MAX_BCS) - 1) << BCS0);
+	if (!bcs)
+		return cs;
+
 	/* Wa_16018031267, Wa_16018063123 */
-	if (ce->engine->mask == BIT(BCS0))
-		cs = xehp_emit_fastcolor_blt_wabb(ce, cs);
-	else if (ce->engine->mask & BIT(BCS0))
-		cs = pvc_emit_fastcolor_blt_wabb(ce, cs);
+	if (bcs & ~BIT(BCS0))
+		cs = pvc_emit_fastcolor_blt_wa(ce, cs);
+	else
+		cs = xehp_emit_fastcolor_blt_wa(ce, cs);
 
 	return cs;
 }

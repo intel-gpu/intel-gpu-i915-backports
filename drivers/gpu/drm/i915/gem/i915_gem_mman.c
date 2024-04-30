@@ -208,6 +208,23 @@ vm_fault_t i915_error_to_vmf_fault(int err)
 	}
 }
 
+static inline bool use_flat_ccs(const struct intel_gt *gt)
+{
+	/* If the device is wedged, [stale] indirect CCS is inaccessible */
+	return HAS_FLAT_CCS(gt->i915) && !intel_gt_is_wedged(gt);
+}
+
+static bool object_needs_flat_ccs(const struct drm_i915_gem_object *obj)
+{
+	if (!(obj->flags & I915_BO_ALLOC_USER))
+		return false;
+
+	if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
+		return false;
+
+	return use_flat_ccs(obj->mm.region.mem->gt);
+}
+
 static struct drm_i915_gem_object *
 create_swapto(struct drm_i915_gem_object *obj, bool write)
 {
@@ -231,8 +248,7 @@ create_swapto(struct drm_i915_gem_object *obj, bool write)
 	if (write && 2 * size < atomic64_read(&obj->mm.region.mem->avail))
 		return obj;
 
-	if (HAS_FLAT_CCS(to_i915(obj->base.dev)) &&
-	    !intel_gt_is_wedged(obj->mm.region.mem->gt))
+	if (object_needs_flat_ccs(obj))
 		size += size >> 8;
 
 	swp = i915_gem_object_create_shmem(to_i915(obj->base.dev), size);
@@ -242,6 +258,7 @@ create_swapto(struct drm_i915_gem_object *obj, bool write)
 	swp->flags |= I915_BO_CPU_CLEAR;
 	i915_gem_object_share_resv(obj, swp);
 
+	GEM_BUG_ON(swp->base.size < obj->base.size);
 	GEM_BUG_ON(obj->swapto);
 	obj->swapto = swp;
 
