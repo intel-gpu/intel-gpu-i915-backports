@@ -31,9 +31,6 @@ struct kref;
 #define LRC_PPHWSP_SCRATCH		0x34
 #define LRC_PPHWSP_SCRATCH_ADDR		(LRC_PPHWSP_SCRATCH * sizeof(u32))
 
-void lrc_init_wa_ctx(struct intel_engine_cs *engine);
-void lrc_fini_wa_ctx(struct intel_engine_cs *engine);
-
 int lrc_alloc(struct intel_context *ce,
 	      struct intel_engine_cs *engine);
 void lrc_reset(struct intel_context *ce);
@@ -65,6 +62,7 @@ void lrc_reset_regs(const struct intel_context *ce,
 u32 lrc_update_regs(const struct intel_context *ce,
 		    const struct intel_engine_cs *engine,
 		    u32 head);
+void lrc_update_regs_with_address(struct intel_context *ce);
 void lrc_update_offsets(struct intel_context *ce,
 			struct intel_engine_cs *engine);
 

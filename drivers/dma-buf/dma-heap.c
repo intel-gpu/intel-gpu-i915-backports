@@ -308,10 +308,16 @@ static char *dma_heap_devnode(struct device *dev, umode_t *mode)
 	return kasprintf(GFP_KERNEL, "dma_heap/%s", dev_name(dev));
 }
 
+#ifdef BPM_DMA_HEAP_INIT_AS_MODULE_INIT
 int __init dma_heap_init(void)
+#else
+static int dma_heap_init(void)
+#endif
 {
 	int ret;
+#ifdef BPM_DMA_HEAP_INIT_AS_MODULE_INIT
 	printk(KERN_INFO "DMAHEAP BACKPORTED INIT\n");
+#endif
 
 	ret = alloc_chrdev_region(&dma_heap_devt, 0, NUM_HEAP_MINORS, DEVNAME);
 	if (ret)
@@ -326,11 +332,13 @@ int __init dma_heap_init(void)
 
 	return 0;
 }
-//subsys_initcall(dma_heap_init);
-
+#ifdef BPM_DMA_HEAP_INIT_AS_MODULE_INIT
 void __exit dma_heap_deinit(void)
 {
 	class_destroy(dma_heap_class);
 	unregister_chrdev_region(dma_heap_devt, NUM_HEAP_MINORS);
 	printk(KERN_INFO "DMAHEAP BACKPORTED EXIT\n");
 }
+#else
+subsys_initcall(dma_heap_init);
+#endif

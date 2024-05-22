@@ -620,14 +620,14 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
 #ifdef BPM_DMA_RESV_ITER_BEGIN_PRESENT
 	dma_resv_iter_begin(&cursor, resv, dma_resv_usage_rw(write));
 	dma_resv_for_each_fence_unlocked(&cursor, f) {
-		 pending = i915_sw_fence_await_dma_fence(fence, f, timeout,
+		pending = i915_sw_fence_await_dma_fence(fence, f, timeout,
 				 gfp);
-		 if (pending < 0) {
-			 ret = pending;
-			 break;
-		 }
+		if (pending < 0) {
+			ret = pending;
+			break;
+		}
 
-		 ret |= pending;
+		ret |= pending;
 	}
 	dma_resv_iter_end(&cursor);
 #else

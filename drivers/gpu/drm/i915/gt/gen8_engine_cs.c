@@ -10,6 +10,8 @@
 #include "intel_lrc.h"
 #include "intel_ring.h"
 
+#define GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS 6
+
 int gen8_emit_flush_rcs(struct i915_request *rq, u32 mode)
 {
 	bool vf_flush_wa = false, dc_flush_wa = false;
@@ -357,7 +359,7 @@ int gen8_emit_init_breadcrumb(struct i915_request *rq)
 	if (!intel_timeline_has_initial_breadcrumb(tl))
 		return 0;
 
-	cs = intel_ring_begin(rq, 6);
+	cs = intel_ring_begin(rq, GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
@@ -405,6 +407,60 @@ int gen8_emit_init_breadcrumb(struct i915_request *rq)
 	rq->infix = intel_ring_offset(rq, cs);
 
 	__set_bit(I915_FENCE_FLAG_INITIAL_BREADCRUMB, &rq->fence.flags);
+
+	return 0;
+}
+
+/**
+ * Retrieve the ring position initial breadcrumb for given request.
+ * @rq: the request instance
+ *
+ * Return: Ring position of commands emited by emit_init_breadcrumb().
+ */
+u32 get_init_breadcrumb_pos(struct i915_request *rq)
+{
+	if (!rq->engine->emit_init_breadcrumb)
+		return rq->infix;
+
+	GEM_BUG_ON(rq->engine->emit_init_breadcrumb != gen8_emit_init_breadcrumb);
+
+	if (!intel_timeline_has_initial_breadcrumb(i915_request_timeline(rq)))
+		return rq->infix;
+
+	if (rq->infix - rq->head > GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32))
+		return rq->infix - GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32);
+
+	return rq->head;
+}
+
+static int xehp_get_params_for_emit_bb_start(struct i915_request *rq,
+				u64 *offset, u32 *len, u32 *flags)
+{
+	struct intel_ring *ring = rq->ring;
+	u32 *cs;
+
+	cs = ring->vaddr + rq->infix;
+	*flags = 0;
+	*len = 0;
+
+	if (rq->postfix - rq->infix < 9 * sizeof(u32))
+		return -ENOMSG;
+
+	if ((*cs & MI_INSTR(0x3F, 0)) != MI_ARB_ON_OFF)
+		return -EILSEQ;
+	cs++;
+
+	if (*cs != (MI_LOAD_REGISTER_MEM_GEN8  |
+		   MI_SRM_LRM_GLOBAL_GTT |
+		   MI_LRI_LRM_CS_MMIO))
+		return -EILSEQ;
+	cs += 4;
+
+	if ((*cs & MI_INSTR(0x3F, 3)) != MI_BATCH_BUFFER_START_GEN8)
+		return -EILSEQ;
+	*flags |= (*cs++ & BIT(8) ? 0 : I915_DISPATCH_SECURE);
+	*offset = *cs++;
+	*offset |= ((u64)*cs++) << 32;
 
 	return 0;
 }
@@ -505,6 +561,32 @@ int gen8_emit_bb_start_noarb(struct i915_request *rq,
 	return 0;
 }
 
+static int gen8_get_params_for_emit_bb_start(struct i915_request *rq,
+				u64 *offset, u32 *len, u32 *flags)
+{
+	struct intel_ring *ring = rq->ring;
+	u32 *cs;
+
+	cs = ring->vaddr + rq->infix;
+	*flags = 0;
+	*len = 0;
+
+	if (rq->postfix - rq->infix < 4 * sizeof(u32))
+		return -ENOMSG;
+
+	if ((*cs & MI_INSTR(0x3F, 3)) != (MI_ARB_ON_OFF | MI_ARB_ENABLE))
+		return -EILSEQ;
+	cs++;
+
+	if ((*cs & MI_INSTR(0x3F, 3)) != MI_BATCH_BUFFER_START_GEN8)
+		return -EILSEQ;
+	*flags |= (*cs++ & BIT(8) ? 0 : I915_DISPATCH_SECURE);
+	*offset = *cs++;
+	*offset |= ((u64)*cs++) << 32;
+
+	return 0;
+}
+
 int gen8_emit_bb_start(struct i915_request *rq,
 		       u64 offset, u32 len,
 		       const unsigned int flags)
@@ -539,6 +621,44 @@ static void assert_request_valid(struct i915_request *rq)
 
 	/* Can we unwind this request without appearing to go forwards? */
 	GEM_BUG_ON(intel_ring_direction(ring, rq->wa_tail, rq->head) <= 0);
+}
+
+static int get_params_for_emit_bb_start(struct i915_request *rq,
+				u64 *offset, u32 *len, u32 *flags)
+{
+	if (rq->engine->emit_bb_start == xehp_emit_bb_start)
+		return xehp_get_params_for_emit_bb_start(rq, offset, len, flags);
+	if (rq->engine->emit_bb_start == gen8_emit_bb_start)
+		return gen8_get_params_for_emit_bb_start(rq, offset, len, flags);
+
+	return -EOPNOTSUPP;
+}
+
+/**
+ * Refreshes commands on the ring associated to given bb_start request.
+ * @rq: the request instance
+ *
+ * If the old ring content was lost, it is not possible to refresh it as
+ * some parameters of the request were stored only there. But if the ring
+ * data is ok and we just want to re-emit after update to GGTT addresses,
+ * this should do it.
+ */
+int reemit_bb_start(struct i915_request *rq)
+{
+	u64 offset;
+	u32 emlen, emflags;
+	int err;
+
+	err = get_params_for_emit_bb_start(rq, &offset, &emlen, &emflags);
+	if (err)
+		return err;
+
+	if (rq->engine->emit_init_breadcrumb) {
+		__clear_bit(I915_FENCE_FLAG_INITIAL_BREADCRUMB, &rq->fence.flags);
+		rq->engine->emit_init_breadcrumb(rq);
+	}
+
+	return rq->engine->emit_bb_start(rq, offset, emlen, emflags);
 }
 
 /*
@@ -576,7 +696,7 @@ static u32 *emit_preempt_busywait(struct i915_request *rq, u32 *cs)
 
 static u32 *emit_user_fence_store(struct i915_request *rq, u32 *cs)
 {
-	if (rq->has_user_fence) {
+	if (test_bit(I915_FENCE_FLAG_UFENCE, &rq->fence.flags)) {
 		*cs++ = MI_STORE_QWORD_IMM_GEN8;
 		*cs++ = lower_32_bits(rq->user_fence.addr);
 		*cs++ = upper_32_bits(rq->user_fence.addr);

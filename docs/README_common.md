@@ -40,6 +40,7 @@ Build Configurations:
  Debian package name contains UBUNTU_22.04_SERVER Kernel version as default.
 
  ##### List of Debian supported OS distro versions #####
+ UBUNTU_24.04_DESKTOP	UBUNTU_24.04_SERVER
  UBUNTU_22.04_DESKTOP	UBUNTU_22.04_SERVER
 
  RPM Targets:

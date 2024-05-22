@@ -170,6 +170,7 @@ static int sync_info_debugfs_show(struct seq_file *s, void *unused)
 }
 
 DEFINE_SHOW_ATTRIBUTE(sync_info_debugfs);
+
 #ifdef BPM_DMA_BUF_MOVE_FOPS_TO_DENTRY_OPS
 __init int sync_debugfs_init(void)
 #else

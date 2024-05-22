@@ -10,6 +10,7 @@
 
 struct drm_i915_private;
 struct drm_i915_gem_object;
+struct i915_request;
 struct intel_gt;
 struct intel_memory_region;
 
@@ -54,5 +55,7 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem);
 void i915_gem_fini_lmem(struct intel_gt *gt);
 
 int i915_gem_lmemtest(struct intel_gt *gt, u64 *error);
+
+int reemit_update_counters(struct i915_request *rq, s64 ggtt_shift);
 
 #endif /* !__I915_GEM_LMEM_H */

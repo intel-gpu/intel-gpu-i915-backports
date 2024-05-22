@@ -34,7 +34,6 @@
 #include "i915_gem_lmem.h"
 #include "i915_gem_vm_bind.h"
 #include "i915_suspend_fence.h"
-#include "i915_svm.h"
 #include "i915_trace.h"
 #include "i915_user_extensions.h"
 
@@ -313,8 +312,9 @@ struct i915_execbuffer {
 
 	struct eb_fence *fences;
 	unsigned long num_fences;
+
+	struct i915_request_ufence user_fence;
 	bool has_user_fence;
-	struct prelim_drm_i915_gem_execbuffer_ext_user_fence user_fence;
 };
 
 static int eb_parse(struct i915_execbuffer *eb);
@@ -525,11 +525,6 @@ eb_validate_vma(struct i915_execbuffer *eb,
 
 	if (unlikely(entry->alignment &&
 		     !is_power_of_2_u64(entry->alignment)))
-		return -EINVAL;
-
-	/* Only allow user PINNED addresses for SVM enabled contexts */
-	if (unlikely(i915_vm_is_svm_enabled(eb->context->vm) &&
-		     !(entry->flags & EXEC_OBJECT_PINNED)))
 		return -EINVAL;
 
 	/*
@@ -3441,7 +3436,7 @@ eb_requests_create(struct i915_execbuffer *eb, struct dma_fence *in_fence,
 		 */
 		if (i == 0 && eb->has_user_fence) {
 			eb->requests[i]->user_fence = eb->user_fence;
-			eb->requests[i]->has_user_fence = true;
+			__set_bit(I915_FENCE_FLAG_UFENCE, &eb->requests[i]->fence.flags);
 		}
 
 		/*

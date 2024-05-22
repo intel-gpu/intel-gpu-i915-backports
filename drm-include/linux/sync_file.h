@@ -10,8 +10,8 @@
  *
  */
 
-#ifndef _BACKPORT_LINUX_SYNC_FILE_H
-#define _BACKPORT_LINUX_SYNC_FILE_H
+#ifndef _LINUX_SYNC_FILE_H
+#define _LINUX_SYNC_FILE_H
 
 #include <linux/types.h>
 #include <linux/ktime.h>

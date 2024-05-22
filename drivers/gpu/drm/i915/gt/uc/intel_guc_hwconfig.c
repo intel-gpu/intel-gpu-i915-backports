@@ -177,7 +177,7 @@ static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
 		return hwinfo_adlp;
 	}
 #endif
-	
+
 	return NULL;
 }
 

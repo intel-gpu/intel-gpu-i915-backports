@@ -326,7 +326,8 @@ int intel_gt_resume(struct intel_gt *gt)
 	 * Only the kernel contexts should remain pinned over suspend,
 	 * allowing us to fixup the user contexts on their first pin.
 	 */
-	gt_sanitize(gt, true);
+	if (!i915_sriov_vf_migration_check(gt->i915, false))
+		gt_sanitize(gt, true);
 
 	wakeref = intel_gt_pm_get(gt);
 

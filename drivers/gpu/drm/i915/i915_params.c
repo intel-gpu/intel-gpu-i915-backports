@@ -187,11 +187,6 @@ i915_param_named_unsafe(inject_probe_failure, int, 0400,
 	"Force an error after a number of failure check points (0:disabled (default), N:force failure at the Nth failure check point)");
 #endif
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
-i915_param_named_unsafe(ppgtt_size, uint, 0400,
-			"Force an ppgtt_size to be n bits wide (0:disabled (default))");
-#endif
-
 i915_param_named(enable_dpcd_backlight, int, 0400,
 	"Enable support for DPCD backlight control"
 	"(-1=use per-VBT LFP backlight type setting [default], 0=disabled, 1=enable, 2=force VESA interface, 3=force Intel interface)");
@@ -260,7 +255,8 @@ i915_param_named_unsafe(prelim_override_p2p_dist, uint, 0400,
 			"Flags to determine P2P behavior: "
 			"Use kernel configured behavior (default: 0), "
 			"Override distance check (1), "
-			"Fabric path only (2)");
+			"Fabric path only (2), "
+			"Enable the move-notify feature (4)");
 
 i915_param_named_unsafe(page_sz_mask, uint, 0600,
 			"mask to force the huge page sizes\n"
@@ -269,15 +265,15 @@ i915_param_named_unsafe(page_sz_mask, uint, 0600,
 i915_param_named_unsafe(debug_pages, uint, 0400,
 			"Extra pages allocated for debug (default=0, Bit 31 indicates LMEM)");
 
+i915_param_named_unsafe(survivability_mode, bool, 0400,
+			"Enable Survivability mode to ensure the bare minimal is in place for flashing an IFWI firmware image (default: false)");
+
 i915_param_named_unsafe(force_driver_flr, int, 0400,
 			"Set this to enforce doing or skipping a driver-FLR at MMIO init and fini"
 			"-1=driver decides[default], 0=skip driver flr, 1=trigger driver flr");
 
 i915_param_named_unsafe(disable_bo_chunking, bool, 0600,
 	"Disable buffer object chunking feature (default: false)");
-
-i915_param_named_unsafe(enable_full_ps64, bool, 0400,
-			"enable full PS64 support (PVC+) (default: true)");
 
 i915_param_named_unsafe(enable_resizeable_bar, bool, 0400,
 			"enable resizeable bar support (default: true)");
@@ -291,11 +287,6 @@ i915_param_named_unsafe(enable_resizeable_bar, bool, 0400,
  * SRIOV PF is required.
  */
 i915_param_named(enable_iaf, bool, 0400, "Enable IAF feature (default: true)");
-
-#if IS_ENABLED(CPTCFG_DRM_I915_ATS)
-i915_param_named_unsafe(address_translation_services, bool, 0400,
-			"Enable Address Translation Services (ATS) (default: false)");
-#endif
 
 i915_param_named_unsafe(max_tiles, uint, 0400,
 			"Max number of tiles to be initialized (default=4)");

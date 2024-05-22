@@ -15,7 +15,7 @@
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
 
-#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/platform_device.h>
 #include <spi/intel_spi.h>
 #else
@@ -26,7 +26,9 @@
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 #include <drm/drm_print.h>
+#endif
 
 #define I915_SPI_RPM_TIMEOUT 500
 
@@ -401,8 +403,9 @@ static int i915_spi_init(struct i915_spi *spi, struct device *device)
 
 	/* clean error register, previous errors are ignored */
 	spi_error(spi);
+
 #ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
-	DRM_INFO("I915 SPI BACKPORTED INIT \n");
+	DRM_INFO("I915 SPI BACKPORTED INIT\n");
 #endif
 	ret = i915_spi_is_valid(spi);
 	if (ret) {
@@ -703,9 +706,9 @@ static void i915_spi_put_device(struct mtd_info *mtd)
 	kref_put(&spi->refcnt, i915_spi_release);
 }
 
-#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
-			     unsigned int nparts)
+			      unsigned int nparts)
 #else
 static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 			     unsigned int nparts, bool writeable_override)
@@ -731,6 +734,7 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 	spi->mtd.writesize = SZ_1; /* 1 byte granularity */
 	spi->mtd.erasesize = SZ_4K; /* 4K bytes granularity */
 	spi->mtd.size = spi->size;
+
 #ifdef BPM_BP_MTD_MAGIC_NUMBER
 	spi->magic = BP_MTD_MAGIC_NUMBER;
 #endif
@@ -744,7 +748,7 @@ static int i915_spi_init_mtd(struct i915_spi *spi, struct device *device,
 		parts[n].name = spi->regions[i].name;
 		parts[n].offset  = spi->regions[i].offset;
 		parts[n].size = spi->regions[i].size;
-#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 		if (!spi->regions[i].is_writable)
 #else
 		if (!spi->regions[i].is_writable && !writeable_override)
@@ -933,6 +937,7 @@ static int i915_spi_remove(struct platform_device *platdev)
 		return;
 #else
 	struct i915_spi *spi = platform_get_drvdata(platdev);
+
 	if (!spi)
 		return 0;
 #endif

@@ -37,12 +37,12 @@ static void i915_spi_release_dev(struct device *dev)
 
 #if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 static const struct mfd_cell intel_spi_cell = {
-       .id = 2,
-       .name = "i915-spi",
-       .num_resources = ARRAY_SIZE(spi_resources),
-       .resources = spi_resources,
-       .platform_data = (void *)regions,
-       .pdata_size    = sizeof(regions),
+	.id = 2,
+	.name = "i915-spi",
+	.num_resources = ARRAY_SIZE(spi_resources),
+	.resources = spi_resources,
+	.platform_data = (void *)regions,
+	.pdata_size    = sizeof(regions),
 };
 #endif
 

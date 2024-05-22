@@ -589,12 +589,17 @@ err:
 static int shmem_work(struct dma_fence_work *base)
 {
 	struct shmem_work *wrk = container_of(base, typeof(*wrk), base);
+	int err;
 
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_NUMA_ALLOC) &&
 	    !wrk->obj->base.filp->f_inode->i_blocks)
-		return shmem_create(wrk);
+		err = shmem_create(wrk);
 	else
-		return shmem_swapin(wrk);
+		err = shmem_swapin(wrk);
+	if (err && test_bit(DMA_FENCE_WORK_IMM, &wrk->base.rq.fence.flags))
+		err = -ERESTARTSYS; /* retry from kworker */
+
+	return err;
 }
 
 static void shmem_work_release(struct dma_fence_work *base)
@@ -730,7 +735,9 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 	return true;
 }
 
-#ifndef BPM_DELETE_FROM_PAGE_CACHE_NOT_PRESENT
+#ifdef BPM_DELETE_FROM_PAGE_CACHE_NOT_PRESENT
+#define i915_delete_from_page_cache delete_from_page_cache
+#else
 /* inlined delete_from_page_cache() to aide porting to different kernels */
 static void i915_delete_from_page_cache(struct page *page)
 {
@@ -740,8 +747,16 @@ static void i915_delete_from_page_cache(struct page *page)
 	GEM_BUG_ON(!PageLocked(page));
 	xas_lock_irq(&xas);
 
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+	struct folio *old = page_folio(page);
+	__lruvec_stat_mod_folio(old, NR_FILE_PAGES, -1);
+	__lruvec_stat_mod_folio(old, NR_SHMEM, -1);
+}
+#else
 	__dec_lruvec_page_state(page, NR_FILE_PAGES);
 	__dec_lruvec_page_state(page, NR_SHMEM);
+#endif
 
 	xas_set_order(&xas, page->index, 0);
 	xas_store(&xas, NULL);
@@ -754,11 +769,11 @@ static void i915_delete_from_page_cache(struct page *page)
 	xas_unlock_irq(&xas);
 	put_page(page);
 }
-#else
-#define i915_delete_from_page_cache delete_from_page_cache
 #endif
 
-#ifndef BPM_ADD_PAGE_CACHE_LOCKED_NOT_PRESENT
+#ifdef BPM_ADD_PAGE_CACHE_LOCKED_NOT_PRESENT
+#define i915_add_to_page_cache_locked add_to_page_cache_locked
+#else
 /* inlined add_to_page_cache_locked() to aide porting to different kernels */
 static int i915_add_to_page_cache_locked(struct page *page,
 					 struct address_space *mapping,
@@ -803,7 +818,14 @@ static int i915_add_to_page_cache_locked(struct page *page,
 
 		mapping->nrpages++;
 
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+		struct folio *fobj = page_folio(page);
+		__lruvec_stat_mod_folio(fobj, NR_FILE_PAGES, 1);
+}
+#else
 		__inc_lruvec_page_state(page, NR_FILE_PAGES);
+#endif
 unlock:
 		xas_unlock_irq(&xas);
 	} while (xas_nomem(&xas, gfp));
@@ -820,8 +842,6 @@ error:
 	put_page(page);
 	return error;
 }
-#else
-#define i915_add_to_page_cache_locked add_to_page_cache_locked
 #endif
 
 static int
@@ -915,7 +935,14 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 					lru_cache_add(p);
 				}
 
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+				struct folio *fobj = page_folio(page);
+				__lruvec_stat_mod_folio(fobj, NR_FILE_PAGES, 1);
+}
+#else
 				inc_lruvec_page_state(p, NR_SHMEM);
+#endif
 				unlock_page(p);
 				idx++;
 

@@ -1,7 +1,7 @@
 # Redhat® Supported OS Kernel/Distribution
 
 This repository contains the following drivers.
-1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary*)
 2. Intel® Converged Security Engine(CSE) - Converged Security Engine
 3. Intel® Platform Monitoring Technology(PMT/VSEC) - Intel® Platform Telemetry
 
@@ -71,7 +71,7 @@ Above command will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
 
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
-In case of any issue with the latest kernel, please install the kernel version mentioned in the [version](../versions) file for the appropriate OS version.
+In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
 ```
 $ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
@@ -104,10 +104,15 @@ Example:
 ```
 Above commands will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
 
+## RHEL®8.x:
+
+### Prerequisite
+dmabuf backport will be added in package so we need to disable loading of base kernel dmabuf using kernel command line.
+"initcall_blacklist=sync_debugfs_init,dma_buf_init".
 
 ### Build Options
 
-Build options provide a list of different arguments which can be passed during package creation or build.
+Build options provides a list of different arguments which can be passed during package creation or build.
 
 Please refer to [README_common](README_common.md) for the full list of Build options.
 

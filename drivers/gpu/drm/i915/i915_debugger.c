@@ -11,7 +11,9 @@
 #include <linux/ptrace.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-fence.h>
+#ifdef BPM_SHMEM_FS_H_NOT_INCLUDED
 #include <linux/shmem_fs.h>
+#endif
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_mman.h"

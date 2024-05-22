@@ -24,7 +24,6 @@
 #include "intel_pagefault.h"
 #include "uc/intel_guc.h"
 #include "uc/intel_guc_fwif.h"
-#include "i915_svm.h"
 #include "i915_debugger.h"
 
 /**
@@ -427,6 +426,32 @@ pf_eu_debugger(struct intel_engine_cs *engine,
 	return pf;
 }
 
+static void
+track_invalid_userfault(struct intel_engine_cs *engine,
+			struct recoverable_page_fault_info *info)
+{
+	struct i915_gem_context *ctx = NULL;
+	struct i915_request *rq;
+
+	local_inc(&engine->gt->stats.pagefault_invalid);
+
+	rcu_read_lock();
+	rq = intel_engine_find_active_request(engine);
+	if (rq)
+		ctx = rcu_dereference(rq->context->gem_context);
+	if (ctx && !test_and_set_bit(0, (unsigned long *)&ctx->fault.addr)) {
+		ctx->fault.type = info->fault_type;
+		ctx->fault.level = info->fault_level;
+		ctx->fault.access = info->access_type;
+		smp_wmb();
+
+		WRITE_ONCE(ctx->fault.addr,
+			   intel_canonical_addr(INTEL_PPGTT_MSB(engine->i915),
+						info->page_addr | BIT(1) | BIT(0)));
+	}
+	rcu_read_unlock();
+}
+
 static bool has_debug_sip(struct intel_gt *gt)
 {
 	/*
@@ -462,25 +487,12 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 	if (!i915_vm_page_fault_enabled(vm))
 		return ERR_PTR(-ENOENT);
 
-	if (i915_vm_is_svm_enabled(vm))
-		return ERR_PTR(i915_svm_handle_gpu_fault(vm, gt, info));
-
 	vma = i915_find_vma(vm, info->page_addr);
-
 	trace_i915_mm_fault(vm, vma, info);
-
 	if (!vma) {
-		/* Driver specific implementation of handling PRS */
-		if (is_vm_pasid_active(vm)) {
-			err = i915_handle_ats_fault_request(vm, info);
-			if (err) {
-				drm_err(&vm->i915->drm,
-					"Handling OS request for device to handle faulting failed error: %d\n",
-					err);
-				return ERR_PTR(err);
-			}
-			return 0;
-		}
+		struct intel_engine_cs *engine = reply->engine;
+
+		track_invalid_userfault(engine, info);
 
 		/* Each EU thread may trigger its own pf to the same address! */
 		if (!vm->invalidate_tlb_scratch) {
@@ -498,10 +510,10 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 			 * a debugger attached to send the event, or if not
 			 * we complete and save the coredump for posterity.
 			 */
-			if (i915_debugger_active_on_engine(reply->engine))
-				reply->debugger = pf_eu_debugger(reply->engine, info, &reply->base.rq.fence);
+			if (i915_debugger_active_on_engine(engine))
+				reply->debugger = pf_eu_debugger(engine, info, &reply->base.rq.fence);
 			else
-				reply->dump = pf_coredump(reply->engine, info);
+				reply->dump = pf_coredump(engine, info);
 		}
 
 		if (vm->has_scratch || has_debug_sip(gt)) {
@@ -520,6 +532,8 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 			 * logic will be removed.
 			 */
 			vm->invalidate_tlb_scratch = true;
+			vm->fault_start = min(vm->fault_start, info->page_addr);
+			vm->fault_end = max(vm->fault_end, info->page_addr + SZ_4K);
 			return ERR_PTR(pvc_ppgtt_fault(vm,
 						       info->page_addr, SZ_4K,
 						       true));
@@ -529,8 +543,10 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 	}
 
 	err = validate_fault(gt->i915, vma, info);
-	if (err)
+	if (err) {
+		track_invalid_userfault(reply->engine, info);
 		goto put_vma;
+	}
 
 	if (unlikely(test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))) {
 		err = -EFAULT;

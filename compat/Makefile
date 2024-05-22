@@ -44,6 +44,7 @@ i915-compat-$(CPTCFG_KERNEL_5_15) += backport-5.15.o timer.o
 i915-compat-$(CPTCFG_BUILD_I915) += backport-nodrm.o
 i915-compat-y += backport-5.19.o
 i915-compat-y += slub.o slab.o ptrace.o vmscan.o swap.o dma-resv.o swiotlb.o hdmi.o power_runtime.o
+i915-compat-$(CPTCFG_PCIEAER) += aer.o
 
 
 get_release_version = $(strip $(shell expr $(1) \* 256 + 0$(2)))

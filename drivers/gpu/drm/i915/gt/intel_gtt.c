@@ -15,7 +15,6 @@
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_vm_bind.h" /* XXX */
 
-#include "i915_svm.h"
 #include "i915_trace.h"
 #include "i915_utils.h"
 #include "intel_gt.h"
@@ -108,7 +107,6 @@ void i915_address_space_fini(struct i915_address_space *vm)
 		GEM_WARN_ON(!xa_erase(&vm->i915->asid_resv.xa, vm->asid));
 
 	mutex_destroy(&vm->mutex);
-	mutex_destroy(&vm->svm_mutex);
 	i915_gem_object_put(vm->root_obj);
 	GEM_BUG_ON(!RB_EMPTY_ROOT(&vm->va.rb_root));
 	mutex_destroy(&vm->vm_bind_lock);
@@ -121,8 +119,6 @@ static void __i915_vm_release(struct work_struct *work)
 	struct i915_address_space *vm =
 		container_of(work, struct i915_address_space, rcu.work);
 
-	i915_destroy_pasid(vm);
-	i915_svm_unbind_mm(vm);
 	vm->cleanup(vm);
 	i915_address_space_fini(vm);
 
@@ -191,7 +187,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	 * attempt holding the lock is immediately reported by lockdep.
 	 */
 	mutex_init(&vm->mutex);
-	mutex_init(&vm->svm_mutex);
 	lockdep_set_subclass(&vm->mutex, subclass);
 	fs_reclaim_taints_mutex(&vm->mutex);
 
@@ -213,6 +208,9 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 		vm->min_alignment[INTEL_MEMORY_LOCAL] = I915_GTT_PAGE_SIZE_64K;
 		vm->min_alignment[INTEL_MEMORY_STOLEN] = I915_GTT_PAGE_SIZE_64K;
 	}
+
+	vm->fault_start = U64_MAX;
+	vm->fault_end = 0;
 
 	drm_mm_init(&vm->mm, 0, vm->total);
 
@@ -256,7 +254,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 		vm->asid = asid;
 	}
 
-	RCU_INIT_POINTER(vm->svm, NULL);
 	return 0;
 }
 
@@ -287,9 +284,7 @@ u64 i915_vm_scratch_encode(struct i915_address_space *vm, int lvl)
 	 * generating any faults at all. On such platforms, mapping to scratch
 	 * page is handled in the page fault handler itself.
 	 */
-	if (!vm->has_scratch ||
-	    is_vm_pasid_active(vm) ||
-	    i915_vm_page_fault_enabled(vm))
+	if (!vm->has_scratch || i915_vm_page_fault_enabled(vm))
 		return PTE_NULL_PAGE;
 
 	switch (lvl) {
@@ -422,53 +417,6 @@ void setup_private_pat(struct intel_gt *gt)
 		else
 			tgl_setup_private_ppat(uncore);
 	}
-}
-
-int svm_bind_addr_commit(struct i915_address_space *vm,
-			 u64 start, u64 size, u64 flags,
-			 struct sg_table *st, u32 sg_page_sizes)
-{
-	struct i915_vma *vma;
-	u32 pte_flags = 0;
-
-	/* use a vma wrapper */
-	vma = i915_vma_alloc();
-	if (!vma)
-		return -ENOMEM;
-
-	vma->page_sizes = sg_page_sizes;
-	vma->node.start = start;
-	vma->node.size = size;
-	__set_bit(DRM_MM_NODE_ALLOCATED_BIT, &vma->node.flags);
-	vma->size = size;
-	vma->pages = st;
-	vma->vm = vm;
-
-	/* Applicable to VLV, and gen8+ */
-	if (flags & I915_GTT_SVM_READONLY)
-		pte_flags |= PTE_READ_ONLY;
-	if (flags & I915_GTT_SVM_LMEM)
-		pte_flags |= (vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM);
-
-	vm->insert_entries(vm, vma,
-			   i915_gem_get_pat_index(vm->i915, I915_CACHE_NONE),
-			   pte_flags);
-	i915_vma_free(vma);
-	return 0;
-}
-
-int svm_bind_addr(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww,
-		  u64 start, u64 size, u64 flags,
-		  struct sg_table *st, u32 sg_page_sizes)
-{
-	return svm_bind_addr_commit(vm, start, size, flags, st, sg_page_sizes);
-}
-
-void svm_unbind_addr(struct i915_address_space *vm,
-		     u64 start, u64 size)
-{
-	vm->clear_range(vm, start, size);
-	vm->invalidate_dev_tlb(vm, start, size);
 }
 
 struct i915_vma *

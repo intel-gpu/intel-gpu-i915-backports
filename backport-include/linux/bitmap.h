@@ -40,4 +40,9 @@ static inline void bitmap_next_clear_region(unsigned long *bitmap,
 
 #endif
 
+#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
+#define bitmap_for_each_clear_region(bitmap, rs, re, start, end) \
+	for_each_clear_bitrange(rs, re, bitmap, end)
+#endif
+
 #endif /* __BACKPORT_BITMAP_H */

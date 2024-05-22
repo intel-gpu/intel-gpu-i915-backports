@@ -233,6 +233,25 @@ int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww)
 	return 0;
 }
 
+/**
+ * intel_timeline_rebase_hwsp - Recompute hwsp_offset cached within the pinned timeline.
+ * @tl: context timeline instance struct
+ */
+void intel_timeline_rebase_hwsp(struct intel_timeline *tl)
+{
+	if (!atomic_read(&tl->pin_count))
+		return; /* the offset will get updated while pinning */
+
+	GEM_BUG_ON(!tl->hwsp_map);
+	GEM_BUG_ON(!tl->hwsp_ggtt);
+
+	tl->hwsp_offset =
+		i915_ggtt_offset(tl->hwsp_ggtt) +
+		offset_in_page(tl->hwsp_offset);
+	GT_TRACE(tl->gt, "timeline:%llx using HWSP offset:%x\n",
+		 tl->fence_context, tl->hwsp_offset);
+}
+
 void intel_timeline_reset_seqno(const struct intel_timeline *tl)
 {
 	u32 *hwsp_seqno = (u32 *)tl->hwsp_seqno;

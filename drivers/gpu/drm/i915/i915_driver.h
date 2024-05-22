@@ -30,6 +30,9 @@ int i915_driver_suspend_switcheroo(struct drm_i915_private *i915, pm_message_t s
 bool i915_save_pci_state(struct pci_dev *pdev);
 void i915_load_pci_state(struct pci_dev *pdev);
 
+bool i915_survivability_mode_enabled(struct drm_i915_private *i915);
+void i915_survivability_mode_remove(struct drm_i915_private *i915);
+
 void i915_userspace_blocking_begin(struct drm_i915_private *i915);
 void i915_userspace_blocking_secure(struct drm_i915_private *i915);
 void i915_userspace_blocking_finish(struct drm_i915_private *i915);

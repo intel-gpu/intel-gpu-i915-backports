@@ -785,9 +785,9 @@ out:
  */
 #ifdef CONFIG_COMPAT
 static long mei_compat_ioctl(struct file *file,
-                       unsigned int cmd, unsigned long data)
+			      unsigned int cmd, unsigned long data)
 {
-       return mei_ioctl(file, cmd, (unsigned long)compat_ptr(data));
+	return mei_ioctl(file, cmd, (unsigned long)compat_ptr(data));
 }
 #endif
 #endif

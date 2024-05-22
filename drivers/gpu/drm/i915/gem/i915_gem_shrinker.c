@@ -271,8 +271,12 @@ unsigned long i915_gem_shrink_all(struct drm_i915_private *i915)
 static unsigned long
 i915_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 {
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	struct drm_i915_private *i915 = shrinker->private_data;
+#else
 	struct drm_i915_private *i915 =
 		container_of(shrinker, struct drm_i915_private, mm.shrinker);
+#endif
 	unsigned long num_objects;
 	unsigned long count;
 
@@ -289,8 +293,13 @@ i915_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 	if (num_objects) {
 		unsigned long avg = 2 * count / num_objects;
 
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	i915->mm.shrinker->batch =
+		max((i915->mm.shrinker->batch + avg) >> 1,
+#else
 		i915->mm.shrinker.batch =
 			max((i915->mm.shrinker.batch + avg) >> 1,
+#endif
 			    128ul /* default SHRINK_BATCH */);
 	}
 
@@ -415,8 +424,12 @@ static void stop_swapper(struct drm_i915_private *i915)
 static unsigned long
 i915_gem_shrinker_scan(struct shrinker *shrinker, struct shrink_control *sc)
 {
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	struct drm_i915_private *i915 = shrinker->private_data;
+#else
 	struct drm_i915_private *i915 =
 		container_of(shrinker, struct drm_i915_private, mm.shrinker);
+#endif
 	unsigned long freed;
 
 	sc->nr_scanned = 0;
@@ -513,11 +526,24 @@ i915_gem_shrinker_vmap(struct notifier_block *nb, unsigned long event, void *ptr
 
 void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 {
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	i915->mm.shrinker = shrinker_alloc(0, "drm-i915_gem");
+	if (!i915->mm.shrinker) {
+		drm_WARN_ON(&i915->drm, 1);
+	} else {
+		i915->mm.shrinker->scan_objects = i915_gem_shrinker_scan;
+		i915->mm.shrinker->count_objects = i915_gem_shrinker_count;
+		i915->mm.shrinker->batch = 4096;
+		i915->mm.shrinker->private_data = i915;
+		shrinker_register(i915->mm.shrinker);
+	}
+#else
 	i915->mm.shrinker.scan_objects = i915_gem_shrinker_scan;
 	i915->mm.shrinker.count_objects = i915_gem_shrinker_count;
 	i915->mm.shrinker.seeks = DEFAULT_SEEKS;
 	i915->mm.shrinker.batch = 4096;
 	drm_WARN_ON(&i915->drm, register_shrinker(&i915->mm.shrinker));
+#endif
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
 	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
@@ -537,7 +563,11 @@ void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
 	drm_WARN_ON(&i915->drm,
 		    unregister_oom_notifier(&i915->mm.oom_notifier));
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	shrinker_free(i915->mm.shrinker);
+#else
 	unregister_shrinker(&i915->mm.shrinker);
+#endif
 }
 
 /**

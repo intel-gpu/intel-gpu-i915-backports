@@ -570,7 +570,7 @@ static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 
 #ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	ret = intel_guc_allocate_and_map_vma(guc, SZ_4K, &vma, (void **)&blob);
-#else	
+#else
 	ret = intel_guc_allocate_and_map_vma(guc, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE,
 					     &vma, (void **)&blob);
 #endif
@@ -589,12 +589,11 @@ static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 
 #ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 		if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) &&
-		    memchr_inv(buf + ret, 0, SZ_4K - ret))
+		    memchr_inv(buf + ret, 0, SZ_4K - ret)) {
 #else
 		if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) &&
-		    memchr_inv(buf + ret, 0, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE - ret)) 
+		    memchr_inv(buf + ret, 0, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE - ret)) {
 #endif
-		{
 			pr_err("non-zero state found beyond offset %d!\n", ret);
 		}
 	}
@@ -624,7 +623,7 @@ failed:
  * Return: 0 on success or a negative error code on failure.
  */
 #ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf) 
+int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 #else
 int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
 #endif
@@ -633,7 +632,7 @@ int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf, size_t s
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT	
+#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	if (size < PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
 		return -EINVAL;
 #endif

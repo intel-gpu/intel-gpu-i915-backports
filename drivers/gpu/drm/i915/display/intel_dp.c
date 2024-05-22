@@ -3634,12 +3634,22 @@ static u8 intel_dp_autotest_edid(struct intel_dp *intel_dp)
 				    intel_dp->aux.i2c_defer_count);
 		intel_dp->compliance.test_data.edid = INTEL_DP_RESOLUTION_FAILSAFE;
 	} else {
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		/* FIXME: Get rid of drm_edid_raw() */
+		const struct edid *block = drm_edid_raw(intel_connector->detect_edid);
+#else
 		struct edid *block = intel_connector->detect_edid;
+#endif
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		 /* We have to write the checksum of the last block read */
+		block += block->extensions;
+#else
 		/* We have to write the checksum
 		 * of the last block read
 		 */
 		block += intel_connector->detect_edid->extensions;
+#endif
 
 		if (drm_dp_dpcd_writeb(&intel_dp->aux, DP_TEST_EDID_CHECKSUM,
 				       block->checksum) <= 0)
@@ -3875,7 +3885,7 @@ update_status:
 			    "Could not write test response to sink\n");
 }
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 static bool intel_dp_link_ok(struct intel_dp *intel_dp,
 			     u8 link_status[DP_LINK_STATUS_SIZE])
 {
@@ -3937,9 +3947,7 @@ static bool intel_dp_mst_link_status(struct intel_dp *intel_dp)
 		return false;
 	}
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
-	return intel_dp_link_ok(intel_dp, link_status);
-#else
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	if (!drm_dp_channel_eq_ok(link_status, intel_dp->lane_count)) {
 		drm_dbg_kms(&i915->drm,
 				"[ENCODER:%d:%s] channel EQ not ok, retraining\n",
@@ -3948,6 +3956,8 @@ static bool intel_dp_mst_link_status(struct intel_dp *intel_dp)
 	}
 
 	return true;
+#else
+	return intel_dp_link_ok(intel_dp, link_status);
 #endif
 }
 
@@ -4062,12 +4072,12 @@ intel_dp_needs_link_retrain(struct intel_dp *intel_dp)
 					intel_dp->lane_count))
 		return false;
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
-	/* Retrain if link not ok */
-	return !intel_dp_link_ok(intel_dp, link_status);
-#else
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	/* Retrain if Channel EQ or CR not ok */
 	return !drm_dp_channel_eq_ok(link_status, intel_dp->lane_count);
+#else
+	/* Retrain if link not ok */
+	return !intel_dp_link_ok(intel_dp, link_status);
 #endif
 
 }
@@ -4512,7 +4522,11 @@ bool intel_digital_port_connected(struct intel_encoder *encoder)
 	return is_connected;
 }
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+static const struct drm_edid *
+#else
 static struct edid *
+#endif
 intel_dp_get_edid(struct intel_dp *intel_dp)
 {
 	struct intel_connector *intel_connector = intel_dp->attached_connector;
@@ -4523,22 +4537,44 @@ intel_dp_get_edid(struct intel_dp *intel_dp)
 		if (IS_ERR(intel_connector->edid))
 			return NULL;
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		return drm_edid_dup(intel_connector->edid);
+#else
 		return drm_edid_duplicate(intel_connector->edid);
+#endif
 	} else
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		return drm_edid_read_ddc(&intel_connector->base,
+				&intel_dp->aux.ddc);
+#else
 		return drm_get_edid(&intel_connector->base,
 				    &intel_dp->aux.ddc);
+#endif
 }
 
 static void
 intel_dp_update_dfp(struct intel_dp *intel_dp,
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		    const struct drm_edid *drm_edid)
+#else
 		    const struct edid *edid)
+#endif
 {
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	const struct edid *edid;
+	/* FIXME: Get rid of drm_edid_raw() */
+	edid = drm_edid_raw(drm_edid);
+#endif
 	intel_dp->dfp.max_bpc =
 		drm_dp_downstream_max_bpc(intel_dp->dpcd,
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	                                  intel_dp->downstream_ports, drm_edid);
+#else
 					  intel_dp->downstream_ports, edid);
+#endif
 
 	intel_dp->dfp.max_dotclock =
 		drm_dp_downstream_max_dotclock(intel_dp->dpcd,
@@ -4547,11 +4583,19 @@ intel_dp_update_dfp(struct intel_dp *intel_dp,
 	intel_dp->dfp.min_tmds_clock =
 		drm_dp_downstream_min_tmds_clock(intel_dp->dpcd,
 						 intel_dp->downstream_ports,
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+						 drm_edid);
+#else
 						 edid);
+#endif
 	intel_dp->dfp.max_tmds_clock =
 		drm_dp_downstream_max_tmds_clock(intel_dp->dpcd,
 						 intel_dp->downstream_ports,
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+						 drm_edid);
+#else
 						 edid);
+#endif
 
 	intel_dp->dfp.pcon_max_frl_bw =
 		drm_dp_get_pcon_max_frl_bw(intel_dp->dpcd,
@@ -4616,21 +4660,42 @@ intel_dp_set_edid(struct intel_dp *intel_dp)
 {
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	const struct drm_edid *drm_edid;
+	const struct edid *edid;
+#else
 	struct edid *edid;
+#endif
 	bool vrr_capable;
 
 	intel_dp_unset_edid(intel_dp);
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	drm_edid = intel_dp_get_edid(intel_dp);
+	connector->detect_edid = drm_edid;
+
+	/* Below we depend on display info having been updated */
+	drm_edid_connector_update(&connector->base, drm_edid);
+#else
 	edid = intel_dp_get_edid(intel_dp);
 	connector->detect_edid = edid;
+#endif
 
 	vrr_capable = intel_vrr_is_capable(connector);
 	drm_dbg_kms(&i915->drm, "[CONNECTOR:%d:%s] VRR capable: %s\n",
 		    connector->base.base.id, connector->base.name, str_yes_no(vrr_capable));
 	drm_connector_set_vrr_capable_property(&connector->base, vrr_capable);
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	intel_dp_update_dfp(intel_dp, drm_edid);
+#else
 	intel_dp_update_dfp(intel_dp, edid);
+#endif
 	intel_dp_update_420(intel_dp);
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	/* FIXME: Get rid of drm_edid_raw() */
+	edid = drm_edid_raw(drm_edid);
+#endif
 	if (edid && edid->input & DRM_EDID_INPUT_DIGITAL) {
 		intel_dp->has_hdmi_sink = drm_detect_hdmi_monitor(edid);
 		intel_dp->has_audio = drm_detect_monitor_audio(edid);
@@ -4645,7 +4710,11 @@ intel_dp_unset_edid(struct intel_dp *intel_dp)
 	struct intel_connector *connector = intel_dp->attached_connector;
 
 	drm_dp_cec_unset_edid(&intel_dp->aux);
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	drm_edid_free(connector->detect_edid);
+#else
 	kfree(connector->detect_edid);
+#endif
 	connector->detect_edid = NULL;
 
 	intel_dp->has_hdmi_sink = false;
@@ -4808,12 +4877,21 @@ intel_dp_force(struct drm_connector *connector)
 static int intel_dp_get_modes(struct drm_connector *connector)
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	int num_modes;
+#else
 	struct edid *edid;
 	int num_modes = 0;
 
+#endif
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	/* drm_edid_connector_update() done in ->detect() or ->force() */
+	num_modes = drm_edid_connector_add_modes(connector);
+#else
 	edid = intel_connector->detect_edid;
 	if (edid)
 		num_modes = intel_connector_update_modes(connector, edid);
+#endif
 
 	/* Also add fixed mode, which may or may not be present in EDID */
 	if (intel_dp_is_edp(intel_attached_dp(intel_connector)))
@@ -4822,7 +4900,11 @@ static int intel_dp_get_modes(struct drm_connector *connector)
 	if (num_modes)
 		return num_modes;
 
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	if (!intel_connector->detect_edid) {
+#else
 	if (!edid) {
+#endif
 		struct intel_dp *intel_dp = intel_attached_dp(intel_connector);
 		struct drm_display_mode *mode;
 
@@ -5156,7 +5238,11 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	struct drm_display_mode *fixed_mode;
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
 	bool has_dpcd;
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	const struct drm_edid *drm_edid;
+#else
 	struct edid *edid;
+#endif
 
 	if (!intel_dp_is_edp(intel_dp))
 		return true;
@@ -5175,7 +5261,21 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	}
 
 	mutex_lock(&dev->mode_config.mutex);
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	drm_edid = drm_edid_read_ddc(connector, &intel_dp->aux.ddc);
+#else
 	edid = drm_get_edid(connector, &intel_dp->aux.ddc);
+#endif
+
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	if (drm_edid) {
+		if (drm_edid_connector_update(connector, drm_edid) ||
+		    !drm_edid_connector_add_modes(connector)) {
+			drm_edid_connector_update(connector, NULL);
+			drm_edid_free(drm_edid);
+			drm_edid = ERR_PTR(-EINVAL);
+		}
+#else
 	if (edid) {
 		if (drm_add_edid_modes(connector, edid)) {
 			drm_connector_update_edid_property(connector, edid);
@@ -5183,13 +5283,27 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 			kfree(edid);
 			edid = ERR_PTR(-EINVAL);
 		}
+#endif
 	} else {
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+		drm_edid = ERR_PTR(-ENOENT);
+#else
 		edid = ERR_PTR(-ENOENT);
+#endif
 	}
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+	intel_connector->edid = drm_edid;
+#else
 	intel_connector->edid = edid;
+#endif
 
-	intel_bios_init_panel(dev_priv, &intel_connector->panel,
-			      encoder->devdata, IS_ERR(edid) ? NULL : edid);
+#ifdef BPM_STRUCT_EDID_NOT_PRESENT
+        intel_bios_init_panel(dev_priv, &intel_connector->panel,
+                              encoder->devdata, IS_ERR_OR_NULL(drm_edid) ? NULL : drm_edid_raw(drm_edid));
+#else
+        intel_bios_init_panel(dev_priv, &intel_connector->panel,
+                              encoder->devdata, IS_ERR(edid) ? NULL : edid);
+#endif
 
 	intel_panel_add_edid_fixed_modes(intel_connector,
 					 intel_connector->panel.vbt.drrs_type != DRRS_TYPE_NONE,

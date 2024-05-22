@@ -1218,6 +1218,7 @@ static int engine_setup_common(struct intel_engine_cs *engine)
 #ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	engine->sched_engine->private_data = engine;
 #endif
+
 	intel_engine_init_execlists(engine);
 	intel_engine_init__pm(engine);
 	intel_engine_init_retire(engine);
@@ -1253,8 +1254,6 @@ static int measure_breadcrumb_dw(struct intel_context *ce)
 	struct intel_engine_cs *engine = ce->engine;
 	struct measure_breadcrumb *frame;
 	int dw;
-
-	GEM_BUG_ON(!engine->gt->scratch);
 
 	frame = kzalloc(sizeof(*frame), GFP_KERNEL);
 	if (!frame)

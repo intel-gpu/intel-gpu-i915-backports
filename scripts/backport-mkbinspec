@@ -80,7 +80,7 @@ fi
 
 if [ "$OS_DISTRO_NAME" != "SUSE" ]; then
 	SUSE=DEL
-elif [ "$OS_DISTRO_NAME" != "RHEL" ] || [ "$OS_DISTRO_NAME" != "CUSTOM_KERN_1" ]; then
+elif [ "$OS_DISTRO_NAME" != "RHEL" ]; then
 	RHEL=DEL
 fi
 

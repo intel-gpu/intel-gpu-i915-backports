@@ -11,8 +11,12 @@
 #include <linux/pagevec.h>
 #include <linux/swap.h>
 #include <linux/sched/mm.h>
-
-
+#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
+#include <linux/i915_gem_mmu_notifier.h>
+#ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
+#include <linux/interval_tree.h>
+#endif
+#endif
 #ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
 #include <linux/mmap_lock.h>
 #endif
@@ -25,33 +29,27 @@
 #include "i915_sw_fence_work.h"
 
 #ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-#include <linux/i915_gem_mmu_notifier.h>
-#endif
-
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
 #ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
-#include <linux/interval_tree.h>
-
 struct i915_mmu_notifier {
-        spinlock_t lock;
-        struct hlist_node node;
-        struct mmu_notifier mn;
-        struct rb_root_cached objects;
-        struct i915_mm_struct *mm;
+	spinlock_t lock;
+	struct hlist_node node;
+	struct mmu_notifier mn;
+	struct rb_root_cached objects;
+	struct i915_mm_struct *mm;
 };
 
 struct i915_mmu_object {
-        struct i915_mmu_notifier *mn;
-        struct drm_i915_gem_object *obj;
-        struct interval_tree_node it;
+	struct i915_mmu_notifier *mn;
+	struct drm_i915_gem_object *obj;
+	struct interval_tree_node it;
 };
 #else
 struct i915_mm_struct;
 
 struct i915_mmu_notifier {
-       struct hlist_node node;
-       struct mmu_notifier mn;
-       struct i915_mm_struct *mm;
+	struct hlist_node node;
+	struct mmu_notifier mn;
+	struct i915_mm_struct *mm;
 };
 #endif
 #endif
@@ -74,70 +72,69 @@ static bool i915_gem_userptr_invalidate(struct mmu_interval_notifier *mni,
 #ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
 static void
 userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
-                                  struct mm_struct *mm,
-                                  unsigned long start, unsigned long end)
+				  struct mm_struct *mm,
+				  unsigned long start, unsigned long end)
 {
-        struct i915_mmu_notifier *mn =
-                container_of(_mn, struct i915_mmu_notifier, mn);
-        struct interval_tree_node *it;
-        int ret = 0;
+	struct i915_mmu_notifier *mn =
+		container_of(_mn, struct i915_mmu_notifier, mn);
+	struct interval_tree_node *it;
+	int ret = 0;
 
-        if (RB_EMPTY_ROOT(&mn->objects.rb_root))
-                return;
+	if (RB_EMPTY_ROOT(&mn->objects.rb_root))
+		return;
 
-        /* interval ranges are inclusive, but invalidate range is exclusive */
-        end--;
+	/* interval ranges are inclusive, but invalidate range is exclusive */
+	end--;
 
-        spin_lock(&mn->lock);
-        it = interval_tree_iter_first(&mn->objects, start, end);
-        while (it) {
-                struct drm_i915_gem_object *obj;
+	spin_lock(&mn->lock);
+	it = interval_tree_iter_first(&mn->objects, start, end);
+	while (it) {
+		struct drm_i915_gem_object *obj;
 
-                /*
-                 * The mmu_object is released late when destroying the
-                 * GEM object so it is entirely possible to gain a
-                 * reference on an object in the process of being freed
-                 * since our serialisation is via the spinlock and not
-                 * the struct_mutex - and consequently use it after it
-                 * is freed and then double free it. To prevent that
-                 * use-after-free we only acquire a reference on the
-                 * object if it is not in the process of being destroyed.
-                 */
-                obj = container_of(it, struct i915_mmu_object, it)->obj;
-                if (!kref_get_unless_zero(&obj->base.refcount)) {
-                        it = interval_tree_iter_next(it, start, end);
-                        continue;
-                }
-                spin_unlock(&mn->lock);
+		/*
+		 * The mmu_object is released late when destroying the
+		 * GEM object so it is entirely possible to gain a
+		 * reference on an object in the process of being freed
+		 * since our serialisation is via the spinlock and not
+		 * the struct_mutex - and consequently use it after it
+		 * is freed and then double free it. To prevent that
+		 * use-after-free we only acquire a reference on the
+		 * object if it is not in the process of being destroyed.
+		 */
+		obj = container_of(it, struct i915_mmu_object, it)->obj;
+		if (!kref_get_unless_zero(&obj->base.refcount)) {
+			it = interval_tree_iter_next(it, start, end);
+			continue;
+		}
+		spin_unlock(&mn->lock);
 
-                ret = i915_gem_object_unbind(obj,NULL,
-                                             I915_GEM_OBJECT_UNBIND_ACTIVE |
-                                             I915_GEM_OBJECT_UNBIND_BARRIER);
-                if (ret == 0)
-                        ret = __i915_gem_object_put_pages(obj);
-                i915_gem_object_put(obj);
-                if (ret)
-                        return;
+		ret = i915_gem_object_unbind(obj, NULL,
+					     I915_GEM_OBJECT_UNBIND_ACTIVE |
+					     I915_GEM_OBJECT_UNBIND_BARRIER);
+		if (ret == 0)
+			ret = __i915_gem_object_put_pages(obj);
+		i915_gem_object_put(obj);
+		if (ret)
+			return;
 
-                spin_lock(&mn->lock);
+		spin_lock(&mn->lock);
 
-                /*
-                 * As we do not (yet) protect the mmu from concurrent insertion
-                 * over this range, there is no guarantee that this search will
-                 * terminate given a pathologic workload.
-                 */
-                it = interval_tree_iter_first(&mn->objects, start, end);
-        }
-        spin_unlock(&mn->lock);
+		/*
+		 * As we do not (yet) protect the mmu from concurrent insertion
+		 * over this range, there is no guarantee that this search will
+		 * terminate given a pathologic workload.
+		 */
+		it = interval_tree_iter_first(&mn->objects, start, end);
+	}
+	spin_unlock(&mn->lock);
 
-        return;
+	return;
 
 }
 
 static const struct mmu_notifier_ops i915_gem_userptr_notifier = {
-        .invalidate_range_start = userptr_mn_invalidate_range_start,
+	.invalidate_range_start = userptr_mn_invalidate_range_start,
 };
-
 #else
 static int
 userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
@@ -672,8 +669,8 @@ static const struct dma_fence_work_ops userptr_ops = {
 static int
 probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 {
-	struct vm_area_struct *vma;
 	const unsigned long end = addr + len;
+	struct vm_area_struct *vma;
 #ifdef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
 	VMA_ITERATOR(vmi, mm, addr);
 #else
@@ -701,7 +698,6 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 		}
 #endif
 
-
 		addr = vma->vm_end;
 	}
 
@@ -713,7 +709,6 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 #else
 	return ret;
 #endif
-
 }
 
 static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)

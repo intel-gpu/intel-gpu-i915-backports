@@ -699,12 +699,12 @@ intel_dp_prepare_link_train(struct intel_dp *intel_dp,
 
 #ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 static void intel_dp_link_training_clock_recovery_delay(struct intel_dp *intel_dp,
-                                                        enum drm_dp_phy dp_phy)
+							enum drm_dp_phy dp_phy)
 {
-        if (dp_phy == DP_PHY_DPRX)
-                drm_dp_link_train_clock_recovery_delay(&intel_dp->aux, intel_dp->dpcd);
-        else
-                drm_dp_lttpr_link_train_clock_recovery_delay();
+	if (dp_phy == DP_PHY_DPRX)
+		drm_dp_link_train_clock_recovery_delay(&intel_dp->aux, intel_dp->dpcd);
+	else
+		drm_dp_lttpr_link_train_clock_recovery_delay();
 }
 #endif
 
@@ -734,7 +734,7 @@ static bool intel_dp_adjust_request_changed(const struct intel_crtc_state *crtc_
 	return false;
 }
 
-#ifndef BPM_DRM_DP_128B132B_API_PRESENT
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 static void
 intel_dp_dump_link_status(struct intel_dp *intel_dp, enum drm_dp_phy dp_phy,
 			  const u8 link_status[DP_LINK_STATUS_SIZE])
@@ -812,6 +812,7 @@ intel_dp_link_training_clock_recovery(struct intel_dp *intel_dp,
 #else
 		usleep_range(delay_us, 2 * delay_us);
 #endif
+
 		if (drm_dp_dpcd_read_phy_link_status(&intel_dp->aux, dp_phy,
 						     link_status) < 0) {
 			drm_err(&i915->drm, "[ENCODER:%d:%s][%s] Failed to get link status\n",
@@ -931,15 +932,15 @@ static u32 intel_dp_training_pattern(struct intel_dp *intel_dp,
 #ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 static void
 intel_dp_link_training_channel_equalization_delay(struct intel_dp *intel_dp,
-                                                 enum drm_dp_phy dp_phy)
+						 enum drm_dp_phy dp_phy)
 {
-       if (dp_phy == DP_PHY_DPRX) {
-               drm_dp_link_train_channel_eq_delay(&intel_dp->aux, intel_dp->dpcd);
-       } else {
-               const u8 *phy_caps = intel_dp_lttpr_phy_caps(intel_dp, dp_phy);
+	if (dp_phy == DP_PHY_DPRX) {
+		drm_dp_link_train_channel_eq_delay(&intel_dp->aux, intel_dp->dpcd);
+	} else {
+		const u8 *phy_caps = intel_dp_lttpr_phy_caps(intel_dp, dp_phy);
 
-               drm_dp_lttpr_link_train_channel_eq_delay(&intel_dp->aux, phy_caps);
-       }
+	       drm_dp_lttpr_link_train_channel_eq_delay(&intel_dp->aux, phy_caps);
+	}
 }
 #endif
 
@@ -988,7 +989,7 @@ intel_dp_link_training_channel_equalization(struct intel_dp *intel_dp,
 	for (tries = 0; tries < 5; tries++) {
 #ifdef BPM_DP_LINK_TRAINING_CR_DELAY_PRESENT
 		intel_dp_link_training_channel_equalization_delay(intel_dp,
-                                                  dp_phy);
+						  dp_phy);
 #else
 		usleep_range(delay_us, 2 * delay_us);
 #endif
@@ -1052,7 +1053,7 @@ static bool intel_dp_disable_dpcd_training_pattern(struct intel_dp *intel_dp,
 	return drm_dp_dpcd_write(&intel_dp->aux, reg, &val, 1) == 1;
 }
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 static int
 intel_dp_128b132b_intra_hop(struct intel_dp *intel_dp,
 			    const struct intel_crtc_state *crtc_state)
@@ -1091,9 +1092,10 @@ void intel_dp_stop_link_train(struct intel_dp *intel_dp,
 			      const struct intel_crtc_state *crtc_state)
 {
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
+
 #endif
 	intel_dp->link_trained = true;
 
@@ -1101,7 +1103,7 @@ void intel_dp_stop_link_train(struct intel_dp *intel_dp,
 	intel_dp_program_link_training_pattern(intel_dp, crtc_state, DP_PHY_DPRX,
 					       DP_TRAINING_PATTERN_DISABLE);
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	if (intel_dp_is_uhbr(crtc_state) &&
 	    wait_for(intel_dp_128b132b_intra_hop(intel_dp, crtc_state) == 0, 500)) {
 		drm_dbg_kms(&i915->drm,
@@ -1172,7 +1174,7 @@ intel_dp_link_train_all_phys(struct intel_dp *intel_dp,
 	bool ret = true;
 	int i;
 
-#ifndef DRM_DP_128B132B_API_NOT_PRESENT
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	intel_dp_prepare_link_train(intel_dp, crtc_state);
 #endif
 
@@ -1195,7 +1197,7 @@ intel_dp_link_train_all_phys(struct intel_dp *intel_dp,
 	return ret;
 }
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 /*
  * 128b/132b DP LANEx_EQ_DONE Sequence (DP 2.0 E11 3.5.2.16.1)
  */
@@ -1479,7 +1481,7 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	bool passed;
 #endif
 	/*
@@ -1492,7 +1494,7 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 		/* Still continue with enabling the port and link training. */
 		lttpr_count = 0;
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
+#ifndef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	intel_dp_prepare_link_train(intel_dp, crtc_state);
 
 	if (intel_dp_is_uhbr(crtc_state))
@@ -1518,10 +1520,11 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 	 * For test cases which rely on the link training or processing of HPDs
 	 * ignore_long_hpd flag can unset from the testcase.
 	 */
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
-	if (!passed && i915->hotplug.ignore_long_hpd) {
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
+	if (!intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count) &&
+	    i915->hotplug.ignore_long_hpd) {
 #else
-	if (!intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count) && i915->hotplug.ignore_long_hpd) {
+	if (!passed && i915->hotplug.ignore_long_hpd) {
 #endif
 		drm_dbg_kms(&i915->drm,
 			    "[CONNECTOR:%d:%s][ENCODER:%d:%s] Ignore the link failure\n",
@@ -1530,10 +1533,10 @@ void intel_dp_start_link_train(struct intel_dp *intel_dp,
 		return;
 	}
 
-#ifdef BPM_DRM_DP_128B132B_API_PRESENT
-	if (!passed)
-#else
+#ifdef BPM_DRM_DP_128B132B_API_NOT_PRESENT
 	if (!intel_dp_link_train_all_phys(intel_dp, crtc_state, lttpr_count))
+#else
+	if (!passed)
 #endif
 		intel_dp_schedule_fallback_link_training(intel_dp, crtc_state);
 }

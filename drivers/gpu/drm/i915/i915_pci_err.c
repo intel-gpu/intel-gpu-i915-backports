@@ -29,9 +29,13 @@
 static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 						pci_channel_state_t state)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_private *i915;
 	struct intel_gt *gt;
 	int i;
+
+	i915 = pci_get_drvdata(pdev);
+	if (!i915) /* already removed / shutdown */
+		return PCI_ERS_RESULT_DISCONNECT;
 
 	dev_warn(&pdev->dev, "PCI error detected, state %d\n", state);
 
@@ -39,6 +43,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 * Record the fault on the device to skip waits-for-ack and other
 	 * low level HW access and unplug the device from userspace.
 	 */
+	i915_pci_error_set_in_recovery(i915);
 	i915_pci_error_set_fault(i915);
 	drm_warn(&i915->drm, "removing device access to userspace\n");
 	drm_dev_unplug(&i915->drm);
@@ -72,6 +77,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	return PCI_ERS_RESULT_NEED_RESET;
 }
 
+#ifdef BPM_FAKE_DEVM_DRM_RELEASE_ACTION
 static void fake_devm_drm_release_action(struct device *dev, void *res)
 {
 	struct devres_node {
@@ -115,6 +121,7 @@ static void fake_devm_drm_release_action(struct device *dev, void *res)
 	if (!WARN_ON(!dres))
 		devm_release_action(dev, dres->action, res);
 }
+#endif
 
 /**
  * i915_pci_slot_reset - Called after PCI slot is reset
@@ -139,6 +146,7 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	if (pci_enable_device(pdev)) {
 		dev_err(&pdev->dev,
 			"Cannot re-enable PCI device after reset.\n");
+		i915_pci_error_clear_in_recovery(i915);
 		return PCI_ERS_RESULT_DISCONNECT;
 	}
 	pci_set_master(pdev);
@@ -151,7 +159,11 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	 */
 	i915_pci_error_clear_fault(i915);
 	pdev->driver->remove(pdev);
+#ifdef BPM_FAKE_DEVM_DRM_RELEASE_ACTION
 	fake_devm_drm_release_action(&pdev->dev, &i915->drm);
+#else
+	devm_drm_release_action(&i915->drm);
+#endif
 	pci_disable_device(pdev);
 
 	if (!i915_driver_probe(pdev, ent)) {

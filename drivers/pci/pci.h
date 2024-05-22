@@ -57,7 +57,6 @@ void pci_free_cap_save_buffers(struct pci_dev *dev);
 int pci_add_cap_save_buffer(struct pci_dev *dev, char cap, unsigned int size);
 int pci_add_ext_cap_save_buffer(struct pci_dev *dev,
 				u16 cap, unsigned int size);
-
 #ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 struct pci_cap_saved_state *pci_find_saved_cap(struct pci_dev *dev, char cap);
 struct pci_cap_saved_state *pci_find_saved_ext_cap(struct pci_dev *dev,
@@ -403,10 +402,12 @@ static inline int pci_dev_set_disconnected(struct pci_dev *dev, void *unused)
 	return 0;
 }
 
+#ifndef BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
 static inline bool pci_dev_is_disconnected(const struct pci_dev *dev)
 {
 	return dev->error_state == pci_channel_io_perm_failure;
 }
+#endif
 
 /* pci_dev priv_flags */
 #define PCI_DEV_ADDED 0
@@ -616,7 +617,6 @@ static inline void pcie_aspm_powersave_config_link(struct pci_dev *pdev) { }
 void pcie_set_ecrc_checking(struct pci_dev *dev);
 void pcie_ecrc_get_policy(char *str);
 #else
-
 #ifndef BPM_PCI_INTERFACES_NOT_PRESENT
 static inline void pcie_set_ecrc_checking(struct pci_dev *dev) { }
 static inline void pcie_ecrc_get_policy(char *str) { }

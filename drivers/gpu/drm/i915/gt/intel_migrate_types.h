@@ -27,13 +27,14 @@ struct intel_migrate {
 	struct intel_migrate_window {
 		struct intel_context *context;
 
-		struct drm_mm_node node;
-		struct drm_i915_gem_object *obj;
+		struct intel_migrate_node {
+			struct drm_i915_gem_object *obj;
+			struct drm_mm_node node;
+			u64 pd_offset;
+		} ps64, pde64;
 
 		unsigned long clear_chunk;
 		unsigned long swap_chunk;
-
-		uint64_t pd_offset;
 	} swapin[2], swapout[4];
 	atomic_t next_swapin, next_swapout;
 };

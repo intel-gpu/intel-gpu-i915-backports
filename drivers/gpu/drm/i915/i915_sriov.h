@@ -34,6 +34,7 @@ int i915_sriov_pf_get_device_totalvfs(struct drm_i915_private *i915);
 int i915_sriov_pf_get_totalvfs(struct drm_i915_private *i915);
 int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int numvfs);
 int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915);
+int i915_sriov_pf_recovery(struct drm_i915_private *i915);
 int i915_sriov_pf_stop_vf(struct drm_i915_private *i915, unsigned int vfid);
 int i915_sriov_pf_pause_vf(struct drm_i915_private *i915, unsigned int vfid);
 int i915_sriov_pf_resume_vf(struct drm_i915_private *i915, unsigned int vfid);

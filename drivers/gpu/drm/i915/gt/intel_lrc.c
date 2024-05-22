@@ -1956,329 +1956,38 @@ u32 lrc_update_regs(const struct intel_context *ce,
 	return lrc_descriptor(ce) | CTX_DESC_FORCE_RESTORE;
 }
 
+void lrc_update_regs_with_address(struct intel_context *ce)
+{
+	struct intel_ring *ring = ce->ring;
+	u32 *regs = ce->lrc_reg_state;
+
+	regs[CTX_RING_START] = i915_ggtt_offset(ring->vma);
+
+	if (HAS_MEMORY_IRQ_STATUS(ce->engine->i915))
+		init_vf_irq_reg_state(regs, ce->engine);
+
+	init_wa_bb_regs(regs, ce->engine);
+
+	if (ce->wa_bb_page) {
+		u32 *(*fn)(const struct intel_context *ce, u32 *cs);
+
+		fn = gen12_emit_indirect_ctx_xcs;
+		if (ce->engine->class == RENDER_CLASS)
+			fn = gen12_emit_indirect_ctx_rcs;
+
+		/* Mutually exclusive wrt to global indirect bb */
+		GEM_BUG_ON(ce->engine->wa_ctx.indirect_ctx.size);
+		setup_indirect_ctx_bb(ce, ce->engine, fn);
+		setup_per_ctx_bb(ce, ce->engine, xehp_emit_per_ctx_bb);
+	}
+
+	ce->lrc.lrca = lrc_descriptor(ce) | CTX_DESC_FORCE_RESTORE;
+}
+
 void lrc_update_offsets(struct intel_context *ce,
 			struct intel_engine_cs *engine)
 {
 	set_offsets(ce->lrc_reg_state, reg_offsets(engine), engine, false);
-}
-
-/*
- * In this WA we need to set GEN8_L3SQCREG4[21:21] and reset it after
- * PIPE_CONTROL instruction. This is required for the flush to happen correctly
- * but there is a slight complication as this is applied in WA batch where the
- * values are only initialized once so we cannot take register value at the
- * beginning and reuse it further; hence we save its value to memory, upload a
- * constant value with bit21 set and then we restore it back with the saved value.
- * To simplify the WA, a constant value is formed by using the default value
- * of this register. This shouldn't be a problem because we are only modifying
- * it for a short period and this batch in non-premptible. We can ofcourse
- * use additional instructions that read the actual value of the register
- * at that time and set our bit of interest but it makes the WA complicated.
- *
- * This WA is also required for Gen9 so extracting as a function avoids
- * code duplication.
- */
-static u32 *
-gen8_emit_flush_coherentl3_wa(struct intel_engine_cs *engine, u32 *batch)
-{
-	/* NB no one else is allowed to scribble over scratch + 256! */
-	*batch++ = MI_STORE_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT;
-	*batch++ = i915_mmio_reg_offset(GEN8_L3SQCREG4);
-	*batch++ = intel_gt_scratch_offset(engine->gt,
-					   INTEL_GT_SCRATCH_FIELD_COHERENTL3_WA);
-	*batch++ = 0;
-
-	*batch++ = MI_LOAD_REGISTER_IMM(1);
-	*batch++ = i915_mmio_reg_offset(GEN8_L3SQCREG4);
-	*batch++ = 0x40400000 | GEN8_LQSC_FLUSH_COHERENT_LINES;
-
-	batch = gen8_emit_pipe_control(batch,
-				       PIPE_CONTROL_CS_STALL |
-				       PIPE_CONTROL_DC_FLUSH_ENABLE,
-				       0);
-
-	*batch++ = MI_LOAD_REGISTER_MEM_GEN8 | MI_SRM_LRM_GLOBAL_GTT;
-	*batch++ = i915_mmio_reg_offset(GEN8_L3SQCREG4);
-	*batch++ = intel_gt_scratch_offset(engine->gt,
-					   INTEL_GT_SCRATCH_FIELD_COHERENTL3_WA);
-	*batch++ = 0;
-
-	return batch;
-}
-
-/*
- * Typically we only have one indirect_ctx and per_ctx batch buffer which are
- * initialized at the beginning and shared across all contexts but this field
- * helps us to have multiple batches at different offsets and select them based
- * on a criteria. At the moment this batch always start at the beginning of the page
- * and at this point we don't have multiple wa_ctx batch buffers.
- *
- * The number of WA applied are not known at the beginning; we use this field
- * to return the no of DWORDS written.
- *
- * It is to be noted that this batch does not contain MI_BATCH_BUFFER_END
- * so it adds NOOPs as padding to make it cacheline aligned.
- * MI_BATCH_BUFFER_END will be added to perctx batch and both of them together
- * makes a complete batch buffer.
- */
-static u32 *gen8_init_indirectctx_bb(struct intel_engine_cs *engine, u32 *batch)
-{
-	/* WaDisableCtxRestoreArbitration:bdw,chv */
-	*batch++ = MI_ARB_ON_OFF | MI_ARB_DISABLE;
-
-	/* WaFlushCoherentL3CacheLinesAtContextSwitch:bdw */
-	if (IS_BROADWELL(engine->i915))
-		batch = gen8_emit_flush_coherentl3_wa(engine, batch);
-
-	/* WaClearSlmSpaceAtContextSwitch:bdw,chv */
-	/* Actual scratch location is at 128 bytes offset */
-	batch = gen8_emit_pipe_control(batch,
-				       PIPE_CONTROL_FLUSH_L3 |
-				       PIPE_CONTROL_STORE_DATA_INDEX |
-				       PIPE_CONTROL_CS_STALL |
-				       PIPE_CONTROL_QW_WRITE,
-				       LRC_PPHWSP_SCRATCH_ADDR);
-
-	*batch++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
-
-	/* Pad to end of cacheline */
-	while ((unsigned long)batch % CACHELINE_BYTES)
-		*batch++ = MI_NOOP;
-
-	/*
-	 * MI_BATCH_BUFFER_END is not required in Indirect ctx BB because
-	 * execution depends on the length specified in terms of cache lines
-	 * in the register CTX_RCS_INDIRECT_CTX
-	 */
-
-	return batch;
-}
-
-struct lri {
-	i915_reg_t reg;
-	u32 value;
-};
-
-static u32 *emit_lri(u32 *batch, const struct lri *lri, unsigned int count)
-{
-	GEM_BUG_ON(!count || count > 63);
-
-	*batch++ = MI_LOAD_REGISTER_IMM(count);
-	do {
-		*batch++ = i915_mmio_reg_offset(lri->reg);
-		*batch++ = lri->value;
-	} while (lri++, --count);
-	*batch++ = MI_NOOP;
-
-	return batch;
-}
-
-static u32 *gen9_init_indirectctx_bb(struct intel_engine_cs *engine, u32 *batch)
-{
-	static const struct lri lri[] = {
-		/* WaDisableGatherAtSetShaderCommonSlice:skl,bxt,kbl,glk */
-		{
-			COMMON_SLICE_CHICKEN2,
-			__MASKED_FIELD(GEN9_DISABLE_GATHER_AT_SET_SHADER_COMMON_SLICE,
-				       0),
-		},
-
-		/* BSpec: 11391 */
-		{
-			FF_SLICE_CHICKEN,
-			__MASKED_FIELD(FF_SLICE_CHICKEN_CL_PROVOKING_VERTEX_FIX,
-				       FF_SLICE_CHICKEN_CL_PROVOKING_VERTEX_FIX),
-		},
-
-		/* BSpec: 11299 */
-		{
-			_3D_CHICKEN3,
-			__MASKED_FIELD(_3D_CHICKEN_SF_PROVOKING_VERTEX_FIX,
-				       _3D_CHICKEN_SF_PROVOKING_VERTEX_FIX),
-		}
-	};
-
-	*batch++ = MI_ARB_ON_OFF | MI_ARB_DISABLE;
-
-	/* WaFlushCoherentL3CacheLinesAtContextSwitch:skl,bxt,glk */
-	batch = gen8_emit_flush_coherentl3_wa(engine, batch);
-
-	/* WaClearSlmSpaceAtContextSwitch:skl,bxt,kbl,glk,cfl */
-	batch = gen8_emit_pipe_control(batch,
-				       PIPE_CONTROL_FLUSH_L3 |
-				       PIPE_CONTROL_STORE_DATA_INDEX |
-				       PIPE_CONTROL_CS_STALL |
-				       PIPE_CONTROL_QW_WRITE,
-				       LRC_PPHWSP_SCRATCH_ADDR);
-
-	batch = emit_lri(batch, lri, ARRAY_SIZE(lri));
-
-	/* WaMediaPoolStateCmdInWABB:bxt,glk */
-	if (HAS_POOLED_EU(engine->i915)) {
-		/*
-		 * EU pool configuration is setup along with golden context
-		 * during context initialization. This value depends on
-		 * device type (2x6 or 3x6) and needs to be updated based
-		 * on which subslice is disabled especially for 2x6
-		 * devices, however it is safe to load default
-		 * configuration of 3x6 device instead of masking off
-		 * corresponding bits because HW ignores bits of a disabled
-		 * subslice and drops down to appropriate config. Please
-		 * see render_state_setup() in i915_gem_render_state.c for
-		 * possible configurations, to avoid duplication they are
-		 * not shown here again.
-		 */
-		*batch++ = GEN9_MEDIA_POOL_STATE;
-		*batch++ = GEN9_MEDIA_POOL_ENABLE;
-		*batch++ = 0x00777000;
-		*batch++ = 0;
-		*batch++ = 0;
-		*batch++ = 0;
-	}
-
-	*batch++ = MI_ARB_ON_OFF | MI_ARB_ENABLE;
-
-	/* Pad to end of cacheline */
-	while ((unsigned long)batch % CACHELINE_BYTES)
-		*batch++ = MI_NOOP;
-
-	return batch;
-}
-
-#define CTX_WA_BB_SIZE (PAGE_SIZE)
-
-static int lrc_create_wa_ctx(struct intel_engine_cs *engine)
-{
-	struct drm_i915_gem_object *obj;
-	struct i915_vma *vma;
-	int err;
-
-	obj = i915_gem_object_create_shmem(engine->i915, CTX_WA_BB_SIZE);
-	if (IS_ERR(obj))
-		return PTR_ERR(obj);
-
-	vma = i915_vma_instance(obj, &engine->gt->ggtt->vm, NULL);
-	if (IS_ERR(vma)) {
-		err = PTR_ERR(vma);
-		goto err;
-	}
-
-	engine->wa_ctx.vma = vma;
-	return 0;
-
-err:
-	i915_gem_object_put(obj);
-	return err;
-}
-
-void lrc_fini_wa_ctx(struct intel_engine_cs *engine)
-{
-	i915_vma_unpin_and_release(&engine->wa_ctx.vma, 0);
-}
-
-typedef u32 *(*wa_bb_func_t)(struct intel_engine_cs *engine, u32 *batch);
-
-void lrc_init_wa_ctx(struct intel_engine_cs *engine)
-{
-	struct i915_ctx_workarounds *wa_ctx = &engine->wa_ctx;
-	struct i915_wa_ctx_bb *wa_bb[] = {
-		&wa_ctx->indirect_ctx, &wa_ctx->per_ctx
-	};
-	wa_bb_func_t wa_bb_fn[ARRAY_SIZE(wa_bb)];
-	struct i915_gem_ww_ctx ww;
-	void *batch, *batch_ptr;
-	unsigned int i;
-	int err;
-
-	if (GRAPHICS_VER(engine->i915) >= 11 ||
-	    !(engine->flags & I915_ENGINE_HAS_RCS_REG_STATE))
-		return;
-
-	if (GRAPHICS_VER(engine->i915) == 9) {
-		wa_bb_fn[0] = gen9_init_indirectctx_bb;
-		wa_bb_fn[1] = NULL;
-	} else if (GRAPHICS_VER(engine->i915) == 8) {
-		wa_bb_fn[0] = gen8_init_indirectctx_bb;
-		wa_bb_fn[1] = NULL;
-	}
-
-	err = lrc_create_wa_ctx(engine);
-	if (err) {
-		/*
-		 * We continue even if we fail to initialize WA batch
-		 * because we only expect rare glitches but nothing
-		 * critical to prevent us from using GPU
-		 */
-		drm_err(&engine->i915->drm,
-			"Ignoring context switch w/a allocation error:%d\n",
-			err);
-		return;
-	}
-
-	if (!engine->wa_ctx.vma)
-		return;
-
-	i915_gem_ww_ctx_init(&ww, true);
-retry:
-	err = i915_gem_object_lock(wa_ctx->vma->obj, &ww);
-	if (!err)
-		err = i915_ggtt_pin_for_gt(wa_ctx->vma, &ww, 0, PIN_HIGH);
-	if (err)
-		goto err;
-
-	err = i915_vma_wait_for_bind(wa_ctx->vma);
-	if (err)
-		goto err_unpin;
-
-	batch = i915_gem_object_pin_map(wa_ctx->vma->obj, I915_MAP_WB);
-	if (IS_ERR(batch)) {
-		err = PTR_ERR(batch);
-		goto err_unpin;
-	}
-
-	/*
-	 * Emit the two workaround batch buffers, recording the offset from the
-	 * start of the workaround batch buffer object for each and their
-	 * respective sizes.
-	 */
-	batch_ptr = batch;
-	for (i = 0; i < ARRAY_SIZE(wa_bb_fn); i++) {
-		wa_bb[i]->offset = batch_ptr - batch;
-		if (GEM_DEBUG_WARN_ON(!IS_ALIGNED(wa_bb[i]->offset,
-						  CACHELINE_BYTES))) {
-			err = -EINVAL;
-			break;
-		}
-		if (wa_bb_fn[i])
-			batch_ptr = wa_bb_fn[i](engine, batch_ptr);
-		wa_bb[i]->size = batch_ptr - (batch + wa_bb[i]->offset);
-	}
-	GEM_BUG_ON(batch_ptr - batch > CTX_WA_BB_SIZE);
-
-	__i915_gem_object_flush_map(wa_ctx->vma->obj, 0, batch_ptr - batch);
-	__i915_gem_object_release_map(wa_ctx->vma->obj);
-
-	/* Verify that we can handle failure to setup the wa_ctx */
-	if (!err)
-		err = i915_inject_probe_error(engine->i915, -ENODEV);
-
-err_unpin:
-	if (err)
-		i915_vma_unpin(wa_ctx->vma);
-err:
-	if (err == -EDEADLK) {
-		err = i915_gem_ww_ctx_backoff(&ww);
-		if (!err)
-			goto retry;
-	}
-	i915_gem_ww_ctx_fini(&ww);
-
-	if (err) {
-		i915_vma_put(engine->wa_ctx.vma);
-
-		/* Clear all flags to prevent further use */
-		memset(wa_ctx, 0, sizeof(*wa_ctx));
-	}
 }
 
 static void st_runtime_underflow(struct intel_context_stats *stats, s32 dt)

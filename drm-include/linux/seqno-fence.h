@@ -9,8 +9,8 @@
  *   Maarten Lankhorst <maarten.lankhorst@canonical.com>
  */
 
-#ifndef __BACKPORT_LINUX_SEQNO_FENCE_H
-#define __BACKPORT_LINUX_SEQNO_FENCE_H
+#ifndef __LINUX_SEQNO_FENCE_H
+#define __LINUX_SEQNO_FENCE_H
 
 #include <linux/dma-fence.h>
 #include <linux/dma-buf.h>

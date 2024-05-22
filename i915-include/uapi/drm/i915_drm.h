@@ -24,8 +24,8 @@
  *
  */
 
-#ifndef _BACKPORT_UAPI_I915_DRM_H_
-#define _BACKPORT_UAPI_I915_DRM_H_
+#ifndef _UAPI_I915_DRM_H_
+#define _UAPI_I915_DRM_H_
 
 #ifdef BPM_HEADER_PATH_ALIGN
 #include_next <uapi/drm/drm.h>
@@ -3496,4 +3496,5 @@ struct drm_i915_gem_create_ext_protected_content {
 #if defined(__cplusplus)
 }
 #endif
-#endif /* _BACKPORT_UAPI_I915_DRM_H_ */
+
+#endif /* _UAPI_I915_DRM_H_ */

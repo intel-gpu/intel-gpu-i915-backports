@@ -13,9 +13,6 @@
 
 #include "i915_active.h"
 
-/* 512 bits (one per pages) supports 2MB blocks */
-#define I915_BUDDY_MAX_PAGES   512
-
 struct i915_buddy_block {
 #define I915_BUDDY_OFFSET	 	GENMASK_ULL(63, 12)
 #define I915_BUDDY_CLEAR_BIT		11
@@ -27,8 +24,6 @@ struct i915_buddy_block {
 	struct i915_buddy_block *left;
 	struct i915_buddy_block *right;
 	struct i915_buddy_block *parent;
-
-	void *private; /* owned by creator */
 
 	struct i915_active_fence active;
 
@@ -45,25 +40,7 @@ struct i915_buddy_block {
 			struct i915_buddy_list *list;
 		} node;
 		struct list_head link;
-
-		/*
-		 * XXX: consider moving this somewhere specific to the pd
-		 * stuff. In an ideal world we would like to keep i915_buddy as
-		 * non-i915 specific as possible and in this case the delayed
-		 * freeing is only required for our pd handling, which is only
-		 * one part of our overall i915_buddy use.
-		 */
-		struct llist_node freed;
 	};
-
-	unsigned long pfn_first;
-	/*
-	 * FIXME: There are other alternatives to bitmap. Like splitting the
-	 * block into contiguous 4K sized blocks. But it is part of bigger
-	 * issues involving partially invalidating large mapping, freeing the
-	 * blocks etc., revisit.
-	 */
-	unsigned long bitmap[BITS_TO_LONGS(I915_BUDDY_MAX_PAGES)];
 };
 
 /* Order-zero must be at least PAGE_SIZE */

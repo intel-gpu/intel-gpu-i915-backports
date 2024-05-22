@@ -1,7 +1,7 @@
 # Supported Vanilla LTS kernels
 
 This repository contains the following drivers.
-1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary)
+1. Intel® Graphics Driver Backports(i915) - The main graphics driver (includes a compatible DRM subsystem and dmabuf if necessary*)
 2. Intel® Converged Security Engine(CSE) - Converged Security Engine
 3. Intel® Platform Monitoring Technology(PMT/VSEC) - Intel® Platform Telemetry
 
@@ -9,12 +9,13 @@ Our current backport supports the following Vanilla LTS kernels.
 
 | OS Distribution | Kernel Version |
 |---|---|
+| Vanilla | 6.6 LTS  |
 | Vanilla | 6.1 LTS  |
 | Vanilla | 5.15 LTS |
 | Vanilla | 5.10 LTS |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](../versions) file to check value of VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
+  Please refer [Version](../versions) file to check value of VANILLA_6.6LTS_KERNEL_VERSION VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
 
 ## Prerequisite
 
@@ -54,7 +55,7 @@ $ sudo dnf install dkms
 
 ## Dependencies
 
- These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
+ These drivers have a dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platforms, and distributions. The source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
@@ -62,14 +63,15 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 ## Package creation
 
-We have 2 kind of backport packages, depending on the target OS Kernel version
- - Build with i915 and drm. Ex: RH9.x
- - Build with i915 alone. Ex: 8.x
+We have 2 kinds of backport packages, depending on the target OS Kernel version
+ - Build with i915 and drm. Ex: Vanilla 5.10 LTS
+ - Build with i915 alone. Ex: Vanilla 6.6 LTS
 
 Both Debian based and rpm based packages are supported.
 
 | OS Distribution | Kernel Version | DKMS Package Target (RPM/Debian) | Binary Package Target (RPM/Debian) |
 |---|---|---|---|
+| Vanilla | 6.6 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.1 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 5.15 LTS | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 5.10 LTS | dkmsrpm-pkg / dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
@@ -89,11 +91,11 @@ Above command will create Debian package in parent folder. **intel-i915-dkms_<**
 
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
-In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
 ### Binary package creation:
 Creation of binary rpm or debian can be done using the below command.
-By default it will use the header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
+By default it will use the header of the booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 
 ```
 $ make KLIB=<Header Path> KLIB_BUILD=<Header Path>/build/ <Binary Package Target>
@@ -106,10 +108,17 @@ Example:
 ```
 Above command will create Debian package in parent folder. **intel-i915-<**release version**>.<**kernel-version**>.deb**
 
+## Vanilla 5.10LTS:
+
+### Prerequisite
+
+dmabuf backport will be added in package so we need to disable loading of base kernel dmabuf using kernel command line.
+"initcall_blacklist=sync_debugfs_init,dma_buf_init".
+
 ### Build Options
-Build options provides list of different arguments which can be passed during package creation or build.
-i
-Please refer to [README_common](README_common.md) for full list of Build options.
+Build options provide a list of different arguments which can be passed during package creation or build.
+
+Please refer to [README_common](README_common.md) for the full list of Build options.
 
 ## Installation and Verification
 ```

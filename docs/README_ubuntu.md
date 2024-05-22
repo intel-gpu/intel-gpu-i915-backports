@@ -11,12 +11,14 @@ Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 Desktop | 6.5 generic |
+| Ubuntu® | 24.04 Desktop | 6.8 generic |
+| | 24.04 Server | 6.8 generic |
+| | 22.04 Desktop | 6.5 generic |
 | | 22.04 Server| 5.15 generic |
 
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](../versions) file to check value of UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu®. It will point to the kernel version which is being used during backporting.
+  Please refer [Version](../versions) file to check value of UBUNTU_24.04_DESKTOP_KERNEL_VERSION/UBUNTU_24.04_SERVER_KERNEL_VERSION/UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu®. It will point to the kernel version which is being used during backporting.
 
 ## Prerequisite
 We have dependencies on the following packages
@@ -39,7 +41,7 @@ $ sudo apt install dkms
 
 ## Dependencies
 
- These drivers have dependency on Intel® GPU firmware and few more kernel mode drivers may be needed based on specific use cases, platform, and distributions. Source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
+ These drivers have a dependency on Intel® GPU firmware and a few more kernel mode drivers may be needed based on specific use cases, platforms, and distributions. The source code of additional drivers should be available at [Intel GPU](https://github.com/intel-gpu)
 
 - [Intel® GPU firmware](https://github.com/intel-gpu/intel-gpu-firmware) - Firmware required by Intel® GPUs.
 
@@ -64,20 +66,20 @@ Above command will create Debian package in parent folder. **intel-i915-dkms_<**
 
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
-In case of an issue with the latest kernel, please install the kernel version mentioned in version file for appropriate OS version.
+In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
-  Ubuntu® 22.04 Desktop:
+  Ubuntu® 24.04 Desktop:
 ```
-$ sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
-linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
+$ sudo apt install linux-headers-<UBUNTU_24.04_DESKTOP_KERNEL_VERSION> \
+linux-image-unsigned-<UBUNTU_24.04_DESKTOP_KERNEL_VERSION>
 
 Example:
-       $ sudo apt install linux-headers-6.5.0-15-generic \
-       linux-image-unsigned-6.5.0-15-generic
+       $ sudo apt install linux-headers-6.8.0-11-generic \
+       linux-image-unsigned-6.8.0-11-generic
 ```
 
 ### Binary Package
-Creation of binary Debian can be done using the below command. By default it will use the header of booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
+Creation of binary Debian can be done using the below command. By default it will use the header of the booted kernel, However it can be pointed to other headers via optional KLIB and KLIB_BUILD arguments.
 ```
 $ make KLIB=<Header Path> KLIB_BUILD=<Header Path>/build i915bindeb-pkg
 
@@ -90,9 +92,9 @@ Example:
 Above command will create Debian package in parent folder.
 
 ### Build Options
-Build options provides list of different arguments which can be passed during package creation or build.
+Build options provides a list of different arguments which can be passed during package creation or build.
 
-Please refer to [README_common](README_common.md) for full list of Build options.
+Please refer to [README_common](README_common.md) for the full list of Build options.
 
 ## Installation and verification
 ```

@@ -3588,11 +3588,13 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 	 * special cases in our ordering checks.
 	 */
 	dev_priv->runtime_pm.irqs_enabled = true;
+
 #ifdef BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	dev_priv->irq_enabled = true;
 #else
 	dev_priv->drm.irq_enabled = true;
-#endif 
+#endif
+
 	intel_irq_reset(dev_priv);
 
 	ret = request_irq(irq, intel_irq_handler(dev_priv),
@@ -3602,7 +3604,7 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 		dev_priv->irq_enabled = false;
 #else
 		dev_priv->drm.irq_enabled = false;
-#endif 
+#endif
 		return ret;
 	}
 
@@ -3632,14 +3634,14 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
 	if (!dev_priv->irq_enabled)
 #else
 	if (!dev_priv->drm.irq_enabled)
-#endif 
+#endif
 		return;
 
 #ifdef BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	dev_priv->irq_enabled = false;
 #else
 	dev_priv->drm.irq_enabled = false;
-#endif 
+#endif
 
 	intel_irq_reset(dev_priv);
 

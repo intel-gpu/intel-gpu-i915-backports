@@ -137,9 +137,9 @@ int drm_irq_install(struct drm_device *dev, int irq)
 		dev->irq_enabled = false;
 		if (drm_core_check_feature(dev, DRIVER_LEGACY))
 #ifdef BPM_VGA_CLIENT_UNREGISTER_NOT_PRESENT
-		vga_client_register(to_pci_dev(dev->dev), NULL, NULL, NULL);
+			vga_client_register(to_pci_dev(dev->dev), NULL, NULL, NULL);
 #else
-		vga_client_unregister(to_pci_dev(dev->dev));
+			vga_client_unregister(to_pci_dev(dev->dev));
 #endif
 
 		free_irq(irq, dev);
@@ -204,9 +204,9 @@ int drm_irq_uninstall(struct drm_device *dev)
 
 	if (drm_core_check_feature(dev, DRIVER_LEGACY))
 #ifdef BPM_VGA_CLIENT_UNREGISTER_NOT_PRESENT
-	vga_client_register(to_pci_dev(dev->dev), NULL,NULL,NULL);
+		vga_client_register(to_pci_dev(dev->dev), NULL, NULL, NULL);
 #else
-	vga_client_unregister(to_pci_dev(dev->dev));
+		vga_client_unregister(to_pci_dev(dev->dev));
 #endif
 
 	if (dev->driver->irq_uninstall)

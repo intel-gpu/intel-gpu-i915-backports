@@ -61,8 +61,8 @@ BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT)
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP5 SLES15_SP4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS UBUNTU_22.04_DESKTOP
+RPM_DISTRIBUTIONS := RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP5 SLES15_SP4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP
 
 RELEASE_TYPE ?= opensource
 
@@ -173,6 +173,11 @@ CUSTOM_KERN_3_MINOR_XX_P = ""
 
 CUSTOM_KERN_3_MINOR_XX_Q = ""
 
+#
+#Photon specific
+#
+PHOTON_IDENTIFIER = ""
+
 #------------------------------------------------------------------------------
 # Start Variable Extraction
 #
@@ -230,6 +235,8 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS))) # Start - OSV Extractio
 UTS_RELEASE=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | tr -d '~+')
 
 BASE_KERN=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1)
+
+PHOTON_IDENTIFIER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | cut -d '-' -f2 | cut -d '.' -f2 | cut -c 1-2 | tr -d '~+')
 
 # KERN_VER_XYZ consist of release kernel major.minor.extended version.
 # Expected input:  #define UTS_RELEASE "5.17.15" OR #define UTS_RELEASE "5.14.21-150400.24.18-default"
@@ -394,6 +401,9 @@ OSV_NAME = VANILLA_5.15LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,1)), 1)
 OSV_NAME = VANILLA_6.1LTS
+OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,6)), 1)
+OSV_NAME = VANILLA_6.6LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_ID), )
 
@@ -861,14 +871,10 @@ TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBU
 KER_VER_BIN = $(subst -,.,$(BASE_KERNEL_NAME))
 BIN_PKG_VERSION:= $(DMA_I915_PKG_VERSION).$(KER_VER_BIN)
 
-RHEL_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d " " -f2 | cut -d "_" -f1)
 SLES_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
-ifeq ($(RHEL_OSV_NAME), RHEL)
-  OS_DISTRO_NAME := $(RHEL_OSV_NAME)
-else ifneq ($(CUSTOM_KERN_1_VER), "")
-  OS_DISTRO_NAME := $(CUSTOM_KERN_1_VER)
-else ifeq ($(SLES_OSV_NAME), SUSE)
-  OS_DISTRO_NAME := $(SLES_OSV_NAME)
+OS_DISTRO_NAME := RHEL
+ifeq ($(SLES_OSV_NAME), SUSE)
+OS_DISTRO_NAME := $(SLES_OSV_NAME)
 BIN_PKG_VERSION:=$(DMA_I915_PKG_VERSION)
 endif
 
@@ -877,8 +883,18 @@ binrpm-pkg:
 	$(CONFIG_SHELL) $(MKBINSPEC) -n $(BIN_PACKAGE_NAME) -v $(BIN_PKG_VERSION) -r $(DMA_I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) -o $(OS_DISTRO_NAME) -k $(KLIB_BUILD) -a $(UTS_RELEASE) $(CUSTOM_ARG) > $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME).spec
 	tar -cz $(RCS_TAR_IGNORE) -f $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
 		$(TAR_CONTENT) $(BIN_PACKAGE_NAME).spec;
+ifeq ($(PHOTON_IDENTIFIER), ph)
+	mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+	cp $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz ~/rpmbuild/SOURCES/
+	cp $(BIN_PACKAGE_NAME).spec ~/rpmbuild/SPECS/
+	+rpmbuild $(RPMOPTS) --target $(ARCH) --define='_smp_mflags %{nil}' \
+		--define='_sourcedir $(PWD)' -ba $(BIN_PACKAGE_NAME).spec
+	rm -rf ~/rpmbuild/
+else
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
 		--define='_smp_mflags %{nil}' --define='_sourcedir $(PWD)'
+endif
+
 
 
 #------------------------------------------------------------------------------
