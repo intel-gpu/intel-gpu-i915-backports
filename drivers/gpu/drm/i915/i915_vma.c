@@ -971,7 +971,7 @@ int i915_vma_bind(struct i915_vma *vma)
 		goto err_unlock;
 
 	err = __i915_vma_bind(vma,
-			      vma->obj->pat_index,
+			      i915_gem_object_pat_index(vma->obj),
 			      PIN_USER | PIN_RESIDENT,
 			      work);
 	if (err)
@@ -1101,7 +1101,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		}
 	}
 
-	err = __i915_vma_bind(vma, vma->obj->pat_index, flags, work);
+	err = __i915_vma_bind(vma, i915_gem_object_pat_index(vma->obj), flags, work);
 	if (err)
 		goto err_remove;
 

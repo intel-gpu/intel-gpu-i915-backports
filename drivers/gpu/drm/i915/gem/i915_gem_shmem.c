@@ -283,11 +283,11 @@ static unsigned long shmem_create_mode(const struct drm_i915_gem_object *obj)
 	    !(obj->flags & I915_BO_SKIP_CLEAR)) {
 		if (!want_init_on_alloc(0))
 			flags |= SHMEM_CLEAR;
-
-		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
-			flags |= SHMEM_CLFLUSH;
 	}
+
+	if (i915_gem_object_can_bypass_llc(obj) ||
+	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
+		flags |= SHMEM_CLFLUSH;
 
 	return flags;
 }
@@ -530,10 +530,10 @@ static int shmem_swapin(struct shmem_work *wrk)
 				    mapping, wrk->policy,
 				    n, num_pages, flags,
 				    &fence.error);
+		i915_sw_fence_set_error_once(&fence, err);
 	}
 
 	if (n) {
-		i915_sw_fence_set_error_once(&fence, err);
 		i915_sw_fence_wait(&fence);
 		err = fence.error;
 	}
@@ -542,6 +542,8 @@ static int shmem_swapin(struct shmem_work *wrk)
 	if (err)
 		goto err;
 
+	GEM_BUG_ON(file_inode(obj->base.filp)->i_blocks != obj->base.size / 512);
+	sg_mark_end(&sg[num_pages - n - 1]);
 	obj->mm.page_sizes =
 		i915_sg_compact(sgt, i915_gem_sg_segment_size(obj));
 
@@ -686,21 +688,6 @@ shmem_truncate(struct drm_i915_gem_object *obj)
 	shmem_truncate_range(file_inode(obj->base.filp), 0, (loff_t)-1);
 }
 
-void
-__i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
-				struct sg_table *pages,
-				bool needs_clflush)
-{
-	GEM_BUG_ON(obj->mm.madv == __I915_MADV_PURGED);
-
-	if (needs_clflush &&
-	    (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0 &&
-	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
-		drm_clflush_sg(pages);
-
-	__start_cpu_write(obj);
-}
-
 static void check_release_pagevec(struct pagevec *pvec)
 {
 	check_move_unevictable_pages(pvec);
@@ -838,6 +825,7 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 	struct sgt_iter sgt_iter;
 	struct pagevec pvec;
 	struct page *page;
+	bool clflush;
 
 	mapping_clear_unevictable(mapping);
 	if (!i915_gem_object_migrate_finish(obj))
@@ -846,15 +834,13 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 	if (!pages->nents)
 		goto empty;
 
+	clflush = false;
+	if (i915_gem_object_can_bypass_llc(obj) ||
+	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
+		clflush = true;
+
 	pagevec_init(&pvec);
 	if (inode->i_blocks) {
-		bool clflush;
-
-		clflush = false;
-		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
-			clflush = true;
-
 		for_each_sgt_page(page, sgt_iter, pages) {
 			GEM_BUG_ON(PagePrivate2(page));
 
@@ -886,6 +872,12 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 
 			for (i = 0; i < BIT(order); i++) {
 				struct page *p = nth_page(page, i);
+
+				if (clflush) {
+					void *ptr = kmap_atomic(page);
+					clflush_cache_range(ptr, PAGE_SIZE);
+					kunmap_atomic(ptr);
+				}
 
 				lock_page(p);
 
@@ -1159,6 +1151,8 @@ static int shmem_object_init(struct intel_memory_region *mem,
 		 */
 		cache_level = I915_CACHE_LLC;
 	else
+		cache_level = I915_CACHE_NONE;
+	if (i915_run_as_guest())
 		cache_level = I915_CACHE_NONE;
 
 	i915_gem_object_set_cache_coherency(obj, cache_level);

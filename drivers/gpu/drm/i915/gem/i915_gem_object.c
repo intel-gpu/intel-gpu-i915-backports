@@ -174,7 +174,7 @@ unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
 bool i915_gem_object_has_cache_level(const struct drm_i915_gem_object *obj,
 				     enum i915_cache_level lvl)
 {
-	return obj->pat_index == i915_gem_get_pat_index(obj_to_i915(obj), lvl);
+	return i915_gem_object_pat_index(obj) == i915_gem_get_pat_index(obj_to_i915(obj), lvl);
 }
 
 static struct i915_resv *i915_resv_alloc(void)
@@ -306,8 +306,9 @@ static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level)
 {
-	obj->pat_index =
-		i915_gem_get_pat_index(obj_to_i915(obj), cache_level);
+	obj->flags &= ~I915_BO_PAT_INDEX;
+	obj->flags |= FIELD_PREP(I915_BO_PAT_INDEX,
+				 i915_gem_get_pat_index(obj_to_i915(obj), cache_level));
 
 	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
 			I915_BO_CACHE_COHERENT_FOR_WRITE);
@@ -333,10 +334,11 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
-	if (obj->pat_index == pat_index)
+	if (i915_gem_object_pat_index(obj) == pat_index)
 		return;
 
-	obj->pat_index = pat_index;
+	obj->flags &= ~I915_BO_PAT_INDEX;
+	obj->flags |= FIELD_PREP(I915_BO_PAT_INDEX, pat_index);
 
 	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
 			I915_BO_CACHE_COHERENT_FOR_WRITE);
@@ -347,30 +349,6 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
 
 	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
-}
-
-bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
-{
-	/*
-	 * This is purely from a security perspective, so we simply don't care
-	 * about non-userspace objects being able to bypass the LLC.
-	 */
-	if (!(obj->flags & I915_BO_ALLOC_USER))
-		return false;
-
-	/*
-	 * EHL and JSL add the 'Bypass LLC' MOCS entry, which should make it
-	 * possible for userspace to bypass the GTT caching bits set by the
-	 * kernel, as per the given object cache_level. This is troublesome
-	 * since the heavy flush we apply when first gathering the pages is
-	 * skipped if the kernel thinks the object is coherent with the GPU. As
-	 * a result it might be possible to bypass the cache and read the
-	 * contents of the page directly, which could be stale data. If it's
-	 * just a case of userspace shooting themselves in the foot then so be
-	 * it, but since i915 takes the stance of always zeroing memory before
-	 * handing it to userspace, we need to prevent this.
-	 */
-	return IS_JSL_EHL(to_i915(obj->base.dev));
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,

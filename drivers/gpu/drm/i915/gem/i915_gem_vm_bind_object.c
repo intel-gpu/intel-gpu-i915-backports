@@ -252,7 +252,7 @@ static int vm_bind_set_pat(struct i915_user_extension __user *base,
 	 * By design, the UMD's are passing in the PAT indices which can
 	 * be directly used to set the corresponding bits in PTE.
 	 */
-	arg->obj->pat_index = ext.pat_index;
+	i915_gem_object_set_pat_index(arg->obj, ext.pat_index);
 
 	return 0;
 }
@@ -935,7 +935,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 	list_for_each_entry_safe(vma, vma_next, &vma_head, vm_bind_link) {
 		/* apply pat_index from parent */
-		vma->obj->pat_index = obj->pat_index;
+		i915_gem_object_set_pat_index(vma->obj, i915_gem_object_pat_index(obj));
 
 		ret = vma_bind_insert(vma, pin_flags);
 		if (ret) {

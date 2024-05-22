@@ -750,7 +750,7 @@ bool i915_ggtt_resume_vm(struct i915_address_space *vm)
 
 		GEM_BUG_ON(!was_bound);
 		vma->ops->bind_vma(vm, vma,
-				   obj ? obj->pat_index :
+				   obj ? i915_gem_object_pat_index(obj) :
 					 i915_gem_get_pat_index(vm->i915,
 							I915_CACHE_NONE),
 				   was_bound);
