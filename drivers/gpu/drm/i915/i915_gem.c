@@ -614,7 +614,7 @@ i915_gem_object_madvise(struct drm_i915_gem_object *obj,
 
 		if (obj->mm.madv == I915_MADV_WILLNEED)
 			list = &mem->objects.list;
-		else if (obj->memory_mask & BIT(REGION_SMEM))
+		else if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
 			list = &mem->objects.migratable;
 		else
 			list = &mem->objects.purgeable;

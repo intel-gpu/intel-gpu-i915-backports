@@ -610,7 +610,7 @@ emit_pte(struct i915_request *rq,
 		*cs++ = lower_32_bits(pd_offset + 8 * pkt);
 		*cs++ = upper_32_bits(pd_offset + 8 * pkt);
 		while (len--) {
-			u64 dma;
+			u64 dma = pte->dma + pte->curr;
 
 			GEM_BUG_ON(!pte->sgp);
 			GEM_BUG_ON(!pte->dma);
@@ -625,18 +625,17 @@ emit_pte(struct i915_request *rq,
 			 * the following 64K.
 			 */
 			if (IS_ALIGNED(va, SZ_64K)) {
-				if (IS_ALIGNED(pte->curr, SZ_64K) &&
+				if (IS_ALIGNED(dma, SZ_64K) &&
 				    pte->max - pte->curr >= SZ_64K &&
-				    count - pkt >= 16)
+				    len >= 15)
 					encode |= GEN12_PTE_PS64;
 				else
 					encode &= ~GEN12_PTE_PS64;
 			}
 			va += SZ_4K;
 
-			dma = encode | (pte->dma + pte->curr);
-			*cs++ = lower_32_bits(dma);
-			*cs++ = upper_32_bits(dma);
+			*cs++ = lower_32_bits(dma | encode);
+			*cs++ = upper_32_bits(dma | encode);
 
 			pte->curr += SZ_4K;
 			if (pte->curr < pte->max)
@@ -858,7 +857,7 @@ swap_blt(struct intel_context *ce,
 	const bool use_pvc_memcpy = HAS_LINK_COPY_ENGINES(ce->engine->i915);
 	const bool use_flat_ccs = !use_pvc_memcpy && object_needs_flat_ccs(lmem);
 	const struct intel_migrate_window *w = ce->private;
-	const u64 encode = ce->vm->pte_encode(0, smem->pat_index, 0);
+	const u64 encode = ce->vm->pte_encode(0, i915_gem_object_pat_index(smem), 0);
 	const int counter = INTEL_GT_SWAPIN_CYCLES + 2 * to_smem;
 	u64 pte_window, pte_end, pd_offset;
 	const u32 step = w->swap_chunk;
@@ -1149,7 +1148,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 
@@ -1775,7 +1773,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 
@@ -3582,7 +3579,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 

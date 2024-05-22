@@ -66,13 +66,6 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *i915,
 
 extern const struct drm_i915_gem_object_ops i915_gem_shmem_ops;
 
-void __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
-				     struct sg_table *pages,
-				     bool needs_clflush);
-
-int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj,
-				    struct sg_table *pages);
-
 enum intel_region_id;
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 				 struct i915_gem_ww_ctx *ww);
@@ -616,7 +609,11 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
 void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 				   unsigned int pat_index);
-bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj);
+static inline bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
+{
+	return false;
+}
+
 void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj);
 

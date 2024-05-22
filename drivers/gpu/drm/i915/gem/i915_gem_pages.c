@@ -84,7 +84,7 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 
 		if (obj->mm.madv != I915_MADV_WILLNEED)
 			list = &mem->objects.purgeable;
-		else if (obj->memory_mask & BIT(REGION_SMEM))
+		else if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
 			list = &mem->objects.migratable;
 		else
 			list = &mem->objects.list;

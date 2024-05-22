@@ -154,9 +154,10 @@ static const char *stringify_vma_type(const struct i915_vma *vma)
 static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = obj_to_i915(obj);
+	int idx = i915_gem_object_pat_index(obj);
 
 	if (IS_METEORLAKE(i915)) {
-		switch (obj->pat_index) {
+		switch (idx) {
 		case 0: return " WB";
 		case 1: return " WT";
 		case 2: return " UC";
@@ -165,7 +166,7 @@ static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 		default: return " not defined";
 		}
 	} else if (IS_PONTEVECCHIO(i915)) {
-		switch (obj->pat_index) {
+		switch (idx) {
 		case 0: return " UC";
 		case 1: return " WC";
 		case 2: return " WT";
@@ -176,25 +177,14 @@ static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 		case 7: return " WT (CLOS2)";
 		default: return " not defined";
 		}
-	} else if (GRAPHICS_VER(i915) >= 12) {
-		switch (obj->pat_index) {
+	} else {
+		switch (idx) {
 		case 0: return " WB";
 		case 1: return " WC";
 		case 2: return " WT";
 		case 3: return " UC";
 		default: return " not defined";
 		}
-	} else {
-		if (i915_gem_object_has_cache_level(obj, I915_CACHE_NONE))
-			return " uncached";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_LLC))
-			return HAS_LLC(i915) ? " LLC" : " snooped";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_L3_LLC))
-			return " L3+LLC";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_WT))
-			return " WT";
-		else
-			return " not defined";
 	}
 }
 

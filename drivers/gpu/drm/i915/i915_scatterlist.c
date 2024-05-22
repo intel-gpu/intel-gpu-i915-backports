@@ -78,10 +78,12 @@ unsigned long i915_sg_compact(struct sg_table *st, unsigned long max)
 		if (!sg->length)
 			continue;
 
+		GEM_BUG_ON(sg->offset);
 		if (page_to_pfn(sg_page(sg)) == pfn && cur->length < max) {
-			cur->length += PAGE_SIZE;
+			cur->length += sg->length;
 		} else {
 			if (cur) {
+				sg_dma_len(cur) = cur->length;
 				sizes |= cur->length;
 				cur = __sg_next(cur);
 			} else {
@@ -89,15 +91,15 @@ unsigned long i915_sg_compact(struct sg_table *st, unsigned long max)
 			}
 			sg_set_page(cur, sg_page(sg), sg->length, 0);
 			sg_dma_address(cur) = sg_dma_address(sg);
-			sg_dma_len(cur) = sg_dma_len(sg);
 			st->nents++;
 
 			pfn = page_to_pfn(sg_page(sg));
 		}
-		pfn++;
+		pfn += sg->length >> PAGE_SHIFT;
 	}
 	if (unlikely(!cur))
 		cur = memset(st->sgl, 0, sizeof(*cur));
+	sg_dma_len(cur) = cur->length;
 	sizes |= cur->length;
 	sg_mark_end(cur);
 

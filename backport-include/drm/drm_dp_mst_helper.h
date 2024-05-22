@@ -36,4 +36,9 @@
 #else
 #include_next <drm/drm_dp_mst_helper.h>
 #endif
+
+#ifdef BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
+#define drm_dp_calc_pbn_mode(clock, bpp, dsc) drm_dp_calc_pbn_mode(clock,bpp)
+#endif
+
 #endif /* _BACKPORT_DRM_DP_MST_HELPER_H_ */

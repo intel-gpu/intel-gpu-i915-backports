@@ -781,7 +781,7 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 	if (!i915_gem_object_migrate_finish(obj))
 		i915_gem_gtt_finish_pages(obj, pages);
 
-	__i915_gem_object_release_shmem(obj, pages, false);
+	__start_cpu_write(obj);
 
 	/*
 	 * We always mark objects as dirty when they are used by the GPU,

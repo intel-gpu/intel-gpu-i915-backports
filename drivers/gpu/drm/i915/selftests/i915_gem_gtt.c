@@ -132,7 +132,7 @@ fake_dma_object(struct drm_i915_private *i915, u64 size)
 
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
-	obj->pat_index = i915_gem_get_pat_index(i915, I915_CACHE_NONE);
+	i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
 	/* Preallocate the "backing storage" */
 	if (i915_gem_object_pin_pages_unlocked(obj))
@@ -1205,7 +1205,7 @@ static int igt_gtt_reserve(void *arg)
 		err = i915_gem_gtt_reserve(&ggtt->vm, &vma->node,
 					   obj->base.size,
 					   total,
-					   obj->pat_index,
+					   i915_gem_object_pat_index(obj),
 					   0);
 		mutex_unlock(&ggtt->vm.mutex);
 		if (err) {
@@ -1257,7 +1257,7 @@ static int igt_gtt_reserve(void *arg)
 		err = i915_gem_gtt_reserve(&ggtt->vm, &vma->node,
 					   obj->base.size,
 					   total,
-					   obj->pat_index,
+					   i915_gem_object_pat_index(obj),
 					   0);
 		mutex_unlock(&ggtt->vm.mutex);
 		if (err) {
@@ -1304,7 +1304,7 @@ static int igt_gtt_reserve(void *arg)
 		err = i915_gem_gtt_reserve(&ggtt->vm, &vma->node,
 					   obj->base.size,
 					   offset,
-					   obj->pat_index,
+					   i915_gem_object_pat_index(obj),
 					   0);
 		mutex_unlock(&ggtt->vm.mutex);
 		if (err) {
@@ -1419,7 +1419,8 @@ static int igt_gtt_insert(void *arg)
 
 		mutex_lock(&ggtt->vm.mutex);
 		err = i915_gem_gtt_insert(&ggtt->vm, &vma->node,
-					  obj->base.size, 0, obj->pat_index,
+					  obj->base.size, 0,
+					  i915_gem_object_pat_index(obj),
 					  0, ggtt->vm.total,
 					  0);
 		mutex_unlock(&ggtt->vm.mutex);
@@ -1479,7 +1480,8 @@ static int igt_gtt_insert(void *arg)
 
 		mutex_lock(&ggtt->vm.mutex);
 		err = i915_gem_gtt_insert(&ggtt->vm, &vma->node,
-					  obj->base.size, 0, obj->pat_index,
+					  obj->base.size, 0,
+					  i915_gem_object_pat_index(obj),
 					  0, ggtt->vm.total,
 					  0);
 		mutex_unlock(&ggtt->vm.mutex);
@@ -1528,7 +1530,8 @@ static int igt_gtt_insert(void *arg)
 
 		mutex_lock(&ggtt->vm.mutex);
 		err = i915_gem_gtt_insert(&ggtt->vm, &vma->node,
-					  obj->base.size, 0, obj->pat_index,
+					  obj->base.size, 0,
+					  i915_gem_object_pat_index(obj),
 					  0, ggtt->vm.total,
 					  0);
 		mutex_unlock(&ggtt->vm.mutex);

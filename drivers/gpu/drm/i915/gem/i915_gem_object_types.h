@@ -384,7 +384,7 @@ struct drm_i915_gem_object {
 	 * i915_cache_level into pat index, for more details check the macros
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
-	unsigned int pat_index:4;
+#define I915_BO_PAT_INDEX GENMASK(23, 20)
 
 	/**
 	 * @cache_dirty:
@@ -619,6 +619,11 @@ to_intel_bo(struct drm_gem_object *gem)
 	BUILD_BUG_ON(offsetof(struct drm_i915_gem_object, base));
 
 	return container_of(gem, struct drm_i915_gem_object, base);
+}
+
+static inline unsigned int i915_gem_object_pat_index(const struct drm_i915_gem_object *obj)
+{
+	return FIELD_GET(I915_BO_PAT_INDEX, obj->flags);
 }
 
 #endif

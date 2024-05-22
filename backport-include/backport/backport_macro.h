@@ -6,12 +6,21 @@
 
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
         LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
-        LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0)
+        LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
+        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59))
 /*
  * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
  */
 #define BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
 
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,6,0) || \
+	(LINUX_VERSION_IS_GEQ(6,5,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34)))
+/*
+ * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
+ */
+#define BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_GEQ(6,5,0)
@@ -657,7 +666,9 @@
 
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
+	LINUX_VERSION_IN_RANGE(5,10,211, 5,11,0) || \
+	LINUX_VERSION_IN_RANGE(5,4,270, 5,5,0))
 /*
  * d19c81378829e locking/lockdep: Provide lockdep_assert{,_once}() helpers
  */

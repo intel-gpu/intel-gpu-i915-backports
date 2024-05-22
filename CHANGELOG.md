@@ -1,4 +1,14 @@
 # ChangeLog
+## Release I915_24WW20.5_803.52_23.10.45_231129.45
+* Fixed calculation of the PTE size that makes it occasionally non-aligned to the 64K boundary
+* Fixed an issue with cache coherency
+* Fixed an issue where intel-dmabuf-peer-mem-dkm compilation failed in SLES15SP5
+* Fixed incorrect bit usage in eviction processing
+* Fixed incorrect pat settings after migration
+* Fixed page fault on blitter operations
+* Fixed an issue with disabling clflush bypass under vm
+* Fixed PS64 alignment on lmem<->smem copies
+
 ## Release I915_24WW17.5_803.45_23.10.43_231129.43
 * i915: Update to load and use HuC fw v7.10.15 on flex
 * i915: Fix for rcs hang occasionally seen during memory migration with virtualization on flex
