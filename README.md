@@ -61,7 +61,7 @@ Two types of release streams are available:
 
 | Release | Type| Branch| Tag| Status|
 |---    |---    |---    |---    |---    |
-| 2350.45: initial released 20240426 | LTS | backport/RELEASE_2405_23.10 |[I915_24WW17.5_803.45_23.10.43_231129.43](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md)| Active|
+| 2350.52: update release 20240521 | LTS | backport/RELEASE_2405_23.10 |[I915_24WW20.5_803.52_23.10.45_231129.45](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md)| Active|
 | 2328.48: update released 20231229 | Production | backport/RELEASE_2335_23.6 |[I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)| Obsolete |
 | | Production | redhat/RELEASE_2335_23.6 | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md)| Obsolete |
 
