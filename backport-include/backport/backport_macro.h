@@ -16,7 +16,8 @@
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
-	(LINUX_VERSION_IS_GEQ(6,5,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34)))
+	(LINUX_VERSION_IS_GEQ(6,5,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34) && \
+	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)))
 /*
  * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
  */
@@ -391,7 +392,7 @@
  */
 #define BPM_HDCP_HELPERS_NOT_IN_DISPLAY_DIRECTORY
 
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+#if (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
 /*
  * 4dea97f8636d
  * lib/bitmap: change type of bitmap_weight to unsigned long
@@ -663,6 +664,20 @@
  */
 #define BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 #endif /* (LINUX_VERSION_IS_GEQ(5,15,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1) ... */
+
+#if LINUX_VERSION_IS_LESS(5,15,41)
+
+#if (REDHAT_RELEASE_VERSION_IS_EQL(9,0) || \
+	REDHAT_RELEASE_VERSION_IS_EQL(8,6) || \
+	SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0) || \
+        !(LINUX_VERSION_IN_RANGE(5,10,116, 5,11,0) || \
+        LINUX_VERSION_IN_RANGE(5,4,196, 5,5,0)))
+/*
+ * 54f6834b283d9 SUNRPC: Ensure we flush any closed sockets before xs_xprt_free()
+ */
+#define BPM_ENABLE_FPUT_SYNC_USAGE
+#endif
+#endif
 
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \

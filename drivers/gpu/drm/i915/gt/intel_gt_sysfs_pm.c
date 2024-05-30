@@ -85,28 +85,6 @@ struct i915_ext_attr {
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store),  _show, _store}
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-/*Introduced kobj attributes to adopt to access sysnode under <dev>/gt/gt<i>/ */
-
-static ssize_t
-i915_sysfs_show_kobj(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf);
-
-static ssize_t
-i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr,
-		const char *buf, size_t count);
-typedef ssize_t (*show_kobj)(struct kobject *kobj, struct kobj_attribute *attr,
-		char *buf);
-typedef ssize_t (*store_kobj)(struct kobject *kobj, struct kobj_attribute *attr,
-		const char *buf, size_t count);
-
-struct i915_ext_attr_kobj {
-	struct kobj_attribute attr;
-	show_kobj i915_show_kobj;
-	store_kobj i915_store_kobj;
-};
-#endif
-
 static ssize_t
 i915_kobj_sysfs_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf);
@@ -887,20 +865,6 @@ static ssize_t throttle_reason_vr_tdc_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%u\n", tdc);
 }
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-#define INTEL_KOBJ_ATTR_RO(_name, _show) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show_kobj, NULL), _show, NULL}
-
-#define INTEL_KOBJ_ATTR_WO(_name, _store) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, 0200, NULL, i915_sysfs_store_kobj), NULL, _store}
-
-
-#define INTEL_KOBJ_ATTR_RW(_name, _mode, _show, _store) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, _mode, i915_sysfs_show_kobj, i915_sysfs_store_kobj), _show, _store}
-#endif
 /* dgfx sysfs files under directory <dev>/gt/gt<i>/ */
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static INTEL_KOBJ_ATTR_RO(rapl_PL1_freq_mhz, rapl_PL1_freq_mhz_show);
@@ -1392,13 +1356,16 @@ static const struct attribute *media_perf_power_attrs[] = {
 	NULL
 };
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t throttle_reason_thermal_swing_show(struct kobject *kobj,
+                                       struct kobj_attribute *attr,
+                                       char *buff)
+#else
 static ssize_t throttle_reason_thermal_swing_show(struct device *dev,
 						  struct device_attribute *attr,
 						  char *buff)
-{
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	struct kobject *kobj = &dev->kobj;
 #endif
+{
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	u32 en8 = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, PVC_CR_RMID_ENERGY_8);
@@ -1417,8 +1384,13 @@ static ssize_t throttle_reason_thermal_swing_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%u\n", thermal_swing);
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(throttle_reason_thermal_swing,
+                           throttle_reason_thermal_swing_show);
+#else
 static I915_DEVICE_ATTR_RO(throttle_reason_thermal_swing,
 			   throttle_reason_thermal_swing_show);
+#endif
 
 static const struct attribute *pvc_thermal_attrs[] = {
 	&dev_attr_throttle_reason_thermal_swing.attr.attr,
@@ -1576,44 +1548,6 @@ i915_sysfs_store(struct device *dev, struct device_attribute *attr, const char
 	return count;
 }
 
-
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-static ssize_t
-i915_sysfs_show_kobj(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	ssize_t value;
-	struct device *dev = kobj_to_dev(kobj);
-	struct i915_ext_attr_kobj *ea = container_of(attr, struct i915_ext_attr_kobj, attr);
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(gt->i915);
-
-	value = ea->i915_show_kobj(kobj, attr, buf);
-
-	pvc_wa_allow_rc6(gt->i915);
-
-	return value;
-}
-
-static ssize_t
-i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr, const char
-		 *buf, size_t count)
-{
-	struct device *dev = kobj_to_dev(kobj);
-	struct i915_ext_attr_kobj *ea = container_of(attr, struct i915_ext_attr_kobj, attr);
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(gt->i915);
-
-	count = ea->i915_store_kobj(kobj, attr, buf, count);
-
-	pvc_wa_allow_rc6(gt->i915);
-
-	return count;
-}
-#endif
 
 static ssize_t
 i915_kobj_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
