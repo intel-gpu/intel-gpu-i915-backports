@@ -1909,7 +1909,7 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 
 	intel_dmc_ucode_suspend(i915);
 
-	i915_gem_suspend(i915);
+	i915_gem_shutdown(i915);
 
 	/*
 	 * The only requirement is to reboot with display DC states disabled,

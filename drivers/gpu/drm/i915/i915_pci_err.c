@@ -29,9 +29,13 @@
 static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 						pci_channel_state_t state)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_private *i915;
 	struct intel_gt *gt;
 	int i;
+
+	i915 = pci_get_drvdata(pdev);
+	if (!i915) /* already removed / shutdown */
+		return PCI_ERS_RESULT_DISCONNECT;
 
 	dev_warn(&pdev->dev, "PCI error detected, state %d\n", state);
 

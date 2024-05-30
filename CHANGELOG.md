@@ -1,4 +1,12 @@
 # ChangeLog
+## Release I915_24WW22.3_803.58_23.10.49_231129.48
+* Fixed the kernel 6.5.0-35 compilation issue on Ubuntu 22.04
+* Introduced an update to quiesce the Graphics Technology (GT) traffic on shutdown
+* Fixed the Multiple Context Resource (MCR) check issue caused by an open Performance
+  Monitoring Unit (PMU) file descriptor during Function Level Reset (FLR)
+* Introduced an update to load and use the HuC firmware 7.10.16 on Flex
+* Fixed an issue with enabling attributes of kernel objects through the sysfs filesystem
+
 ## Release I915_24WW20.5_803.52_23.10.45_231129.45
 * Fixed calculation of the PTE size that makes it occasionally non-aligned to the 64K boundary
 * Fixed an issue with cache coherency
