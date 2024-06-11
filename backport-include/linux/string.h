@@ -45,4 +45,11 @@ static __always_inline size_t str_has_prefix(const char *str, const char *prefix
 }
 #endif
 
+/*
+ * d26270061ae6 string: Remove strlcpy()
+ */
+#ifndef strlcpy
+#define strlcpy strscpy
+#endif
+
 #endif /* __BACKPORT_LINUX_STRING_H */

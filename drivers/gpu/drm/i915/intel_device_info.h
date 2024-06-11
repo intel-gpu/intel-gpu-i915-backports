@@ -181,6 +181,7 @@ enum intel_platform {
 	func(has_semaphore_xehpsdv); \
 	func(has_slim_vdbox); \
 	func(has_snoop); \
+	func(has_survivability_mode); \
 	func(has_sriov); \
 	func(has_um_queues); \
 	func(tuning_thread_rr_after_dep); \

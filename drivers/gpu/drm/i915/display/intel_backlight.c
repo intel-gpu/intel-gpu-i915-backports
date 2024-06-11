@@ -18,7 +18,7 @@
 #include "intel_pci_config.h"
 #ifndef BPM_DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
 #include "intel_pps.h"
-#endif 
+#endif
 
 /**
  * scale - scale values from one range to another
@@ -818,7 +818,6 @@ void intel_backlight_init_funcs(struct intel_panel *panel)
 {
 	struct intel_connector *connector =
 		container_of(panel, struct intel_connector, panel);
-
 #ifndef BPM_DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 #endif

@@ -3,8 +3,8 @@
  * Copyright © 2021 Intel Corporation
  */
 
-#ifndef __BACKPORT_I915_DRM_PRELIM_H__
-#define __BACKPORT_I915_DRM_PRELIM_H__
+#ifndef __I915_DRM_PRELIM_H__
+#define __I915_DRM_PRELIM_H__
 
 #ifdef BPM_HEADER_PATH_ALIGN
 #include_next <uapi/drm/drm.h>
@@ -254,7 +254,7 @@ struct prelim_i915_user_extension {
 #define PRELIM_DRM_I915_GEM_VM_GETPARAM		DRM_I915_GEM_CONTEXT_GETPARAM
 #define PRELIM_DRM_I915_GEM_VM_SETPARAM		DRM_I915_GEM_CONTEXT_SETPARAM
 #define PRELIM_DRM_I915_GEM_OBJECT_SETPARAM	DRM_I915_GEM_CONTEXT_SETPARAM
-
+#define PRELIM_DRM_I915_GET_RESET_STATS		0x52
 
 #define PRELIM_DRM_IOCTL_I915_GEM_CREATE_EXT		DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_CREATE, struct prelim_drm_i915_gem_create_ext)
 #define PRELIM_DRM_IOCTL_I915_GEM_VM_BIND		DRM_IOWR(DRM_COMMAND_BASE + PRELIM_DRM_I915_GEM_VM_BIND, struct prelim_drm_i915_gem_vm_bind)
@@ -271,6 +271,7 @@ struct prelim_i915_user_extension {
 #define PRELIM_DRM_IOCTL_I915_GEM_VM_GETPARAM		DRM_IOWR(DRM_COMMAND_BASE + PRELIM_DRM_I915_GEM_VM_GETPARAM, struct prelim_drm_i915_gem_vm_param)
 #define PRELIM_DRM_IOCTL_I915_GEM_VM_SETPARAM		DRM_IOWR(DRM_COMMAND_BASE + PRELIM_DRM_I915_GEM_VM_SETPARAM, struct prelim_drm_i915_gem_vm_param)
 #define PRELIM_DRM_IOCTL_I915_GEM_OBJECT_SETPARAM	DRM_IOWR(DRM_COMMAND_BASE + PRELIM_DRM_I915_GEM_OBJECT_SETPARAM, struct prelim_drm_i915_gem_object_param)
+#define PRELIM_DRM_IOCTL_I915_GET_RESET_STATS		DRM_IOWR(DRM_COMMAND_BASE + PRELIM_DRM_I915_GET_RESET_STATS, struct prelim_drm_i915_reset_stats)
 
 /* End PRELIM ioctl's */
 
@@ -1701,4 +1702,31 @@ struct prelim_drm_i915_gem_vm_param {
 	__u64 value;
 };
 
-#endif /* __BACKPORT_I915_DRM_PRELIM_H__ */
+struct prelim_drm_i915_reset_stats {
+	__u32 ctx_id;
+	__u32 flags;
+
+	/* All resets since boot/module reload, for all contexts */
+	__u32 reset_count;
+
+	/* Number of batches lost when active in GPU, for this context */
+	__u32 batch_active;
+
+	/* Number of batches lost pending for execution, for this context */
+	__u32 batch_pending;
+
+	__u32 status;
+#define I915_RESET_STATS_BANNED (1 << 0)
+
+	struct {
+		/* Page-aligned virtual address of first reported invalid fault */
+		__u64 addr;
+		__u16 type;
+		__u16 level;
+		__u16 access;
+		__u16 flags;
+#define I915_RESET_STATS_FAULT_VALID (1 << 0)
+	} fault;
+};
+
+#endif /* __I915_DRM_PRELIM_H__ */

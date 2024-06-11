@@ -84,18 +84,12 @@ enum intel_memory_region_flags {
 struct intel_memory_region {
 	struct drm_i915_private *i915;
 
-	struct i915_devmem *devmem;
 	const struct intel_memory_region_ops *ops;
 
 	struct io_mapping iomap;
 	struct resource region;
 
 	struct i915_buddy_mm mm;
-
-	struct {
-		struct work_struct work;
-		struct llist_head blocks;
-	} pd_put;
 
 	struct kref kref;
 
@@ -155,14 +149,9 @@ int __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 					  unsigned long age,
 					  unsigned int flags,
 					  struct list_head *blocks);
-struct i915_buddy_block *
-__intel_memory_region_get_block_buddy(struct intel_memory_region *mem,
-				      resource_size_t size,
-				      unsigned int flags);
 void __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 					   struct list_head *blocks,
 					   bool dirty);
-void __intel_memory_region_put_block_buddy(struct i915_buddy_block *block);
 
 int intel_memory_region_evict(struct intel_memory_region *mem,
 			      struct i915_gem_ww_ctx *ww,
@@ -202,14 +191,5 @@ int intel_memory_region_reserve(struct intel_memory_region *mem,
 void intel_memory_region_print(struct intel_memory_region *mem,
 			       resource_size_t target,
 			       struct drm_printer *p);
-
-int intel_memory_regions_add_svm(struct drm_i915_private *i915);
-void intel_memory_regions_remove(struct drm_i915_private *i915);
-
-static inline void intel_memory_region_flush(struct intel_memory_region *mem)
-{
-	/* Flush any pending work to free blocks region */
-	flush_work(&mem->pd_put.work);
-}
 
 #endif

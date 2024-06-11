@@ -6,7 +6,6 @@
 #include "i915_drv.h"
 #include "i915_pci.h"
 #include "i915_reg.h"
-#include "i915_svm.h"
 #include "intel_memory_region.h"
 #include "intel_pci_config.h"
 #include "intel_region_lmem.h"
@@ -20,7 +19,6 @@
 static void
 region_lmem_release(struct intel_memory_region *mem)
 {
-	i915_svm_devmem_remove(mem);
 	io_mapping_fini(&mem->iomap);
 	intel_memory_region_release_buddy(mem);
 }
@@ -97,6 +95,7 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 		reserve_size = region_size;
 	}
 #endif
+
 	if (!reserve_size)
 		return 0;
 

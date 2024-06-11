@@ -341,15 +341,6 @@ intel_context_get_active_request(struct intel_context *ce)
 	return __intel_context_find_active_request(ce, true);
 }
 
-struct i915_request *
-__intel_context_find_oldest_incomplete_request(struct intel_context *ce);
-
-static inline struct i915_request *
-intel_context_find_oldest_incomplete_request(struct intel_context *ce)
-{
-	return __intel_context_find_oldest_incomplete_request(ce);
-}
-
 static inline bool intel_context_is_barrier(const struct intel_context *ce)
 {
 	return test_bit(CONTEXT_BARRIER_BIT, &ce->flags);
@@ -398,9 +389,24 @@ static inline bool intel_context_set_banned(struct intel_context *ce)
 	return test_and_set_bit(CONTEXT_BANNED, &ce->flags);
 }
 
+static inline bool intel_context_is_schedulable(const struct intel_context *ce)
+{
+	return !(intel_context_is_banned(ce) || intel_context_is_closed(ce));
+}
+
+static inline bool intel_context_set_coredump(struct intel_context *ce)
+{
+	return !test_and_set_bit(CONTEXT_COREDUMP, &ce->flags);
+}
+
+static inline void intel_context_clear_coredump(struct intel_context *ce)
+{
+	clear_bit(CONTEXT_COREDUMP, &ce->flags);
+}
+
 bool intel_context_ban(struct intel_context *ce, struct i915_request *rq);
 
-void intel_context_revert_ring_heads(struct intel_context *ce);
+void intel_context_update_ring_head_tail(struct intel_context *ce);
 
 /**
  * intel_context_suspend - suspend a context

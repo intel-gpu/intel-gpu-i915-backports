@@ -6,14 +6,13 @@
 #include <drm/drm_print.h>
 #include <drm/drm_atomic_helper.h>
 
-u8 dp_link_status(const u8 link_status[DP_LINK_STATUS_SIZE], int r)
+#ifdef BPM_DRM_DP_GET_ADJUST_NOT_PRESENT
+static u8 dp_link_status(const u8 link_status[DP_LINK_STATUS_SIZE], int r)
 {
 	return link_status[r - DP_LANE0_1_STATUS];
 }
-EXPORT_SYMBOL(dp_link_status);
 
 /* DP 2.0 128b/132b */
-#ifdef BPM_DRM_DP_GET_ADJUST_NOT_PRESENT
 u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 				   int lane)
 {

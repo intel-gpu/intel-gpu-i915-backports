@@ -1,0 +1,232 @@
+#!/bin/sh
+#
+# Creates a dkms.conf file
+
+PKG_NAME="intel-dmabuf-drm-i915-dkms"
+PKG_VER="1.0"
+REL_NAME="1"
+REL_TYPE=""
+BUILD_TYPE=""
+MAKE_DEFCONFIG="drm"
+PMT_VSEC_SELECTION="auto"
+RHEL_84_KV="4.18.0-305"
+
+helpFunction()
+{
+	echo ""
+	echo "Usage: $0 -n packagename -v packageversion -r releaseversion -p prerelease/opensource -s buildversion"
+	echo -e "\t-n packagename"
+	echo -e "\t-v packageversion"
+	echo -e "\t-r releaseversion"
+	echo -e "\t-p prerelease/opensource"
+	echo -e "\t-s buildversion"
+	echo -e "\t-t custom kernel id"
+	exit 1
+}
+
+while getopts "n:v:r:p:s:t:" opt
+do
+	case "$opt" in
+		n ) PKG_NAME="$OPTARG" ;;
+		v ) PKG_VER="$OPTARG" ;;
+		r ) REL_NAME="$OPTARG" ;;
+		p ) REL_TYPE="$OPTARG" ;;
+		s ) BUILD_TYPE="$OPTARG" ;;
+		t ) CUSTOM_KERN_ID="$OPTARG" ;;
+		? ) helpFunction ;;
+	esac
+done
+
+if [ "$BUILD_TYPE" = "pmt" ]; then
+	PMT_VSEC_SELECTION="pmt"
+fi
+
+if [ "$BUILD_TYPE" = "i915_hwe" ]; then
+        MODULE_NAME="i915_hwe"
+else
+        MODULE_NAME="i915"
+fi
+
+# Control below line by conditionally adding DEL at the beginning of line
+# those lines will be disabled by sed
+#
+sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
+	PACKAGE_NAME="$PKG_NAME"
+	PACKAGE_VERSION="$PKG_VER-$REL_NAME"
+	AUTOINSTALL="yes"
+
+	BUILT_MODULE_NAME[0]="i915-compat"
+	BUILT_MODULE_LOCATION[0]="compat"
+	DEST_MODULE_LOCATION[0]="/updates"
+
+	BUILT_MODULE_NAME[1]="$MODULE_NAME"
+	BUILT_MODULE_LOCATION[1]="drivers/gpu/drm/i915"
+	DEST_MODULE_LOCATION[1]="/updates"
+
+	BUILT_MODULE_NAME[2]="i915_spi"
+	BUILT_MODULE_LOCATION[2]="drivers/gpu/drm/i915"
+	DEST_MODULE_LOCATION[2]="/updates"
+
+	BUILT_MODULE_NAME[3]="iaf"
+	BUILT_MODULE_LOCATION[3]="drivers/gpu/drm/i915/fabric"
+	DEST_MODULE_LOCATION[3]="/updates"
+
+	BUILT_MODULE_NAME[4]="mei"
+	BUILT_MODULE_LOCATION[4]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[4]="/updates"
+
+	BUILT_MODULE_NAME[5]="mei-me"
+	BUILT_MODULE_LOCATION[5]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[5]="/updates"
+
+	BUILT_MODULE_NAME[6]="mei-gsc"
+	BUILT_MODULE_LOCATION[6]="drivers/misc/mei/"
+	DEST_MODULE_LOCATION[6]="/updates"
+
+	BUILT_MODULE_NAME[7]="mei_wdt"
+	BUILT_MODULE_LOCATION[7]="drivers/watchdog/"
+	DEST_MODULE_LOCATION[7]="/updates"
+
+	BUILT_MODULE_NAME[8]="mei_hdcp"
+	BUILT_MODULE_LOCATION[8]="drivers/misc/mei/hdcp/"
+	DEST_MODULE_LOCATION[8]="/updates"
+
+	BUILT_MODULE_NAME[9]="mei_pxp"
+	BUILT_MODULE_LOCATION[9]="drivers/misc/mei/pxp/"
+	DEST_MODULE_LOCATION[9]="/updates"
+
+	BUILT_MODULE_NAME[10]="mei_iaf"
+	BUILT_MODULE_LOCATION[10]="drivers/misc/mei/iaf/"
+	DEST_MODULE_LOCATION[10]="/updates"
+
+	# Determine if AUXBUS is available to choose correct PMT/VSEC driver.
+	is_auxbus_available()
+	{
+		if [ "\${kernelver}" = "" ]; then
+			echo "'kernelver' is not set." >&2
+			exit 1
+		fi
+		if [ ! -e "/lib/modules/\${kernelver}/build/.config" ]; then
+			echo "Kernel config not found for '\${kernelver}'" >&2
+			exit 1
+		fi
+		if grep -q 'CONFIG_AUXILIARY_BUS=y' /lib/modules/\${kernelver}/build/.config; then
+			echo "AUXILIARY_BUS is enabled for \${kernelver}." >&2
+			return 0
+		fi
+		return 1
+	}
+	
+	select_pmt_vsec() {
+		case "$PMT_VSEC_SELECTION" in
+			"pmt" ) echo pmt ;;
+			"auto" ) if is_auxbus_available ; then echo vsec; else echo pmt; fi ;;
+		esac
+	}
+	
+	if [ "\$(select_pmt_vsec)" = "vsec" ];
+	then
+		BUILT_MODULE_NAME[11]="intel_vsec"
+		BUILT_MODULE_LOCATION[11]="drivers/platform/x86/intel"
+		DEST_MODULE_LOCATION[11]="/updates"
+
+		BUILT_MODULE_NAME[12]="pmt_class"
+		BUILT_MODULE_LOCATION[12]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[12]="/updates"
+
+		BUILT_MODULE_NAME[13]="pmt_telemetry"
+		BUILT_MODULE_LOCATION[13]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[13]="/updates"
+
+		BUILT_MODULE_NAME[14]="pmt_crashlog"
+		BUILT_MODULE_LOCATION[14]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[14]="/updates"
+	else
+		BUILT_MODULE_NAME[11]="intel_pmt"
+		BUILT_MODULE_LOCATION[11]="drivers/mfd"
+		DEST_MODULE_LOCATION[11]="/updates"
+		
+		BUILT_MODULE_NAME[12]="intel_pmt_class"
+		BUILT_MODULE_LOCATION[12]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[12]="/updates"
+	
+		BUILT_MODULE_NAME[13]="intel_pmt_telemetry"
+		BUILT_MODULE_LOCATION[13]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[13]="/updates"
+	
+		BUILT_MODULE_NAME[14]="intel_pmt_crashlog"
+		BUILT_MODULE_LOCATION[14]="drivers/platform/x86/intel/pmt"
+		DEST_MODULE_LOCATION[14]="/updates"
+	fi
+
+	# Find out nodrm is needed or not
+	# Avoid installing drm modules for nodrm kernels
+	install_drm_modules() {
+		kv="5.14"
+		kv_maj="\$(echo \$kv | cut -d '.' -f 1)"
+		kv_min="\$(echo \$kv | cut -d '.' -f 2)"
+		kv_code="\$(expr \$kv_maj \* 256 + 0\$kv_min \* 8)"
+		base_kv_maj="\$(echo \$kernelver | cut -d '.' -f 1)"
+		base_kv_min="\$(echo \$kernelver | cut -d '.' -f 2)"
+		base_kv_code="\$(expr \$base_kv_maj \* 256 + 0\$base_kv_min \* 8)"
+		if [ \$base_kv_code -lt \$kv_code ]; then
+			echo true;
+		else
+			echo false;
+		fi
+	}
+	if [ "\$(install_drm_modules)" = "true" ];
+	then
+		BUILT_MODULE_NAME[15]="drm_kms_helper"
+		BUILT_MODULE_LOCATION[15]="drivers/gpu/drm/"
+		DEST_MODULE_LOCATION[15]="/updates"
+
+		BUILT_MODULE_NAME[16]="drm"
+		BUILT_MODULE_LOCATION[16]="drivers/gpu/drm/"
+		DEST_MODULE_LOCATION[16]="/updates"
+
+		BUILT_MODULE_NAME[17]="drm_panel_orientation_quirks"
+		BUILT_MODULE_LOCATION[17]="drivers/gpu/drm/"
+		DEST_MODULE_LOCATION[17]="/updates"
+
+		BUILT_MODULE_NAME[18]="vgem"
+		BUILT_MODULE_LOCATION[18]="drivers/gpu/drm/vgem"
+		DEST_MODULE_LOCATION[18]="/updates"
+
+		BUILT_MODULE_NAME[19]="dmabuf"
+		BUILT_MODULE_LOCATION[19]="drivers/dma-buf/"
+		DEST_MODULE_LOCATION[19]="/updates"
+
+	fi
+
+	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
+       	# DKMS could use all cores on multicore systems to build the kernel module.
+       	num_cpu_cores()
+       	{
+		if [ -x /usr/bin/nproc ]; then
+			np=`nproc`
+			if [ "\$np" -le "64" ]; then
+				echo "\$np"
+			else
+				echo "64"
+			fi
+		else
+			echo "1"
+		fi
+	}
+	
+	select_kernel_version()
+	{
+		echo "\$kernelver" | cut -d '.' -f 1-3
+		return \$?
+	}
+	
+	if [ -n "$CUSTOM_KERN_ID" ]; then
+	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID"
+	else
+	MAKE="export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE"
+	fi
+
+	CLEAN="export LEX=flex; export YACC=bison; 'make' mrproper"
+
+EOF

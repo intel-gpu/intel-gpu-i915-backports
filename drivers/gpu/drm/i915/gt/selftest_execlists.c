@@ -624,6 +624,7 @@ static int live_hold_reset(void *arg)
 		err = engine_lock_reset_tasklet(engine);
 		if (err)
 			goto out;
+
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 		engine->sched_engine->tasklet.func(engine->sched_engine->tasklet.data);
 #else

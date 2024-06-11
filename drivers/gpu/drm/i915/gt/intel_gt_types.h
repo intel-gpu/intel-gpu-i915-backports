@@ -323,6 +323,7 @@ struct intel_gt {
 		local64_t pagefault_stall;
 		local_t pagefault_major;
 		local_t pagefault_minor;
+		local_t pagefault_invalid;
 
 		struct intel_gt_stats_irq_time irq;
 
@@ -397,7 +398,6 @@ struct intel_gt {
 	struct intel_gt_buffer_pool buffer_pool;
 	struct i915_vma_clock vma_clock;
 
-	struct i915_vma *scratch;
 	struct { /* See enum intel_gt_counters */
 		struct i915_vma *vma;
 		const u64 *map;
@@ -495,17 +495,6 @@ struct intel_gt_definition {
 	u32 mapping_base;
 	u32 gsi_offset;
 	intel_engine_mask_t engine_mask;
-};
-
-enum intel_gt_scratch_field {
-	/* 8 bytes */
-	INTEL_GT_SCRATCH_FIELD_DEFAULT = 0,
-
-	/* 8 bytes */
-	INTEL_GT_SCRATCH_FIELD_RENDER_FLUSH = 128,
-
-	/* 8 bytes */
-	INTEL_GT_SCRATCH_FIELD_COHERENTL3_WA = 256,
 };
 
 #define SOC_HW_ERR_SHIFT	ilog2(SOC_HW_ERR_MAX_BITS)

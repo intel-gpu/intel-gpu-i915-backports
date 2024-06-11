@@ -9,8 +9,8 @@
  *	Christian König <christian.koenig@amd.com>
  */
 
-#ifndef __BACKPORT_LINUX_DMA_FENCE_ARRAY_H
-#define __BACKPORT_LINUX_DMA_FENCE_ARRAY_H
+#ifndef __LINUX_DMA_FENCE_ARRAY_H
+#define __LINUX_DMA_FENCE_ARRAY_H
 
 #include <linux/dma-fence.h>
 #include <linux/irq_work.h>

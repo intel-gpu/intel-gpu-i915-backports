@@ -226,6 +226,7 @@ struct intel_iov_vf_config {
 		u8 patch;
 	} guc_abi;
 	u64 ggtt_base;
+	s64 ggtt_shift;
 	u64 ggtt_size;
 	u64 lmem_size;
 	u16 num_ctxs;

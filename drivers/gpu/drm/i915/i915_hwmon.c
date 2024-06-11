@@ -327,58 +327,58 @@ static const struct attribute_group *hwm_groups[] = {
 
 #ifdef BPM_HWMON_CHANNEL_INFO_NOT_PRESENT
 static const u32 hwmon_in_config[] = {
-        HWMON_I_INPUT,
-        0
+	HWMON_I_INPUT,
+	0
 };
 static const struct hwmon_channel_info hwm_in = {
-        .type = hwmon_in,
-        .config = hwmon_in_config,
+	.type = hwmon_in,
+	.config = hwmon_in_config,
 };
 #ifdef POWER1_RATED_MAX_NOT_PRESENT
 static const u32 hwmon_power_config[] = {
-        HWMON_P_MAX | HWMON_P_CRIT,
-        0
+	HWMON_P_MAX | HWMON_P_CRIT,
+	0
 };
 static const struct hwmon_channel_info hwm_power = {
-        .type = hwmon_power,
-        .config = hwmon_power_config,
+	.type = hwmon_power,
+	.config = hwmon_power_config,
 };
 #else
 static const u32 hwmon_power_config[] = {
-        HWMON_P_MAX | HWMON_P_CRIT | HWMON_P_CRIT,
-        0
+	HWMON_P_MAX | HWMON_P_CRIT | HWMON_P_CRIT,
+	0
 };
 static const struct hwmon_channel_info hwm_power = {
-        .type = hwmon_power,
-        .config = hwmon_power_config,
+	.type = hwmon_power,
+	.config = hwmon_power_config,
 };
 #endif
 static const u32 hwmon_energy_config[] = {
-        HWMON_E_INPUT,
-        0
+	HWMON_E_INPUT,
+	0
 };
 static const struct hwmon_channel_info hwm_energy_test = {
-        .type = hwmon_energy,
-        .config = hwmon_energy_config,
+	.type = hwmon_energy,
+	.config = hwmon_energy_config,
 };
 static const u32 hwmon_curr_config[] = {
-        HWMON_C_CRIT,
-        0
+	HWMON_C_CRIT,
+	0
 };
 static const struct hwmon_channel_info hwm_curr = {
-        .type = hwmon_curr,
-        .config = hwmon_curr_config,
+	.type = hwmon_curr,
+	.config = hwmon_curr_config,
 };
 static const struct hwmon_channel_info *hwm_info[] = {
-        &hwm_in,
-        &hwm_power,
-        &hwm_energy_test,
-        &hwm_curr,
-        NULL
+	&hwm_in,
+	&hwm_power,
+	&hwm_energy_test,
+	&hwm_curr,
+	NULL
 };
 static const struct hwmon_channel_info *hwm_gt_info[] = {
-        &hwm_energy_test,
-        NULL
+	&hwm_energy_test,
+	NULL
 };
 #else
 static const struct hwmon_channel_info *hwm_info[] = {
@@ -398,6 +398,7 @@ static const struct hwmon_channel_info *hwm_gt_info[] = {
 	NULL
 };
 #endif
+
 /* I1 is exposed as power_crit or as curr_crit depending on bit 31 */
 static int hwm_pcode_read_i1(struct drm_i915_private *i915, u32 *uval)
 {

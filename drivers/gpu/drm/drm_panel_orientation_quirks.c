@@ -354,7 +354,6 @@ int drm_get_panel_orientation_quirk(int width, int height)
 
 	return DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
 }
-
 #ifndef BPM_DRM_GET_PANEL_ORIENTATION_QUIRK_DONT_EXPORT
 EXPORT_SYMBOL(drm_get_panel_orientation_quirk);
 #endif

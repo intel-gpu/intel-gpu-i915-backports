@@ -44,6 +44,12 @@ static void fence_work(struct work_struct *work)
 }
 
 static int
+promote_error(int err)
+{
+	return err == -ERESTARTSYS ? -EINTR : err;
+}
+
+static int
 fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 {
 	struct dma_fence_work *f = container_of(fence, typeof(*f), rq.submit);
@@ -51,7 +57,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 	switch (state) {
 	case FENCE_COMPLETE:
 		if (fence->error && !f->ops->no_error_propagation)
-			dma_fence_set_error(&f->rq.fence, fence->error);
+			dma_fence_set_error(&f->rq.fence, promote_error(fence->error));
 
 		dma_fence_get(&f->rq.fence);
 		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags))

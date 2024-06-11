@@ -119,6 +119,7 @@ static int intel_fbdev_pan_display(struct fb_var_screeninfo *var,
 
 	return ret;
 }
+
 #ifdef BPM_CONST_STRUCT_FB_OPS_NOT_PRESENT
 static struct fb_ops intelfb_ops = {
 #else

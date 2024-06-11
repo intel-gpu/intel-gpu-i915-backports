@@ -26,7 +26,6 @@ typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char 
 typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
 #endif
 
-
 struct i915_ext_attr {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	struct kobj_attribute attr;
@@ -42,7 +41,6 @@ i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 #else
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 #endif
-
 {
 	ssize_t value;
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -50,6 +48,7 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 #endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+
 	pvc_wa_disallow_rc6(gt->i915);
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -172,8 +171,8 @@ static ssize_t id_show(struct kobject *kobj,
 		char *buf)
 #else
 static ssize_t id_show(struct device *dev,
-                      struct device_attribute *attr,
-                      char *buf)
+		       struct device_attribute *attr,
+		       char *buf)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -186,45 +185,119 @@ static ssize_t id_show(struct device *dev,
 
 static I915_DEVICE_ATTR_RO(id, id_show);
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t pagefault_invalid_show(struct kobject *kobj,
+				      struct kobj_attribute *attr,
+				      char *buf)
+#else
+static ssize_t pagefault_invalid_show(struct device *dev,
+				      struct device_attribute *attr,
+				      char *buf)
+#endif
+{
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+        struct device *dev = kobj_to_dev(kobj);
+#endif
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+
+	return sysfs_emit(buf, "%lu\n", local_read(&gt->stats.pagefault_invalid));
+}
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(pagefault_invalid,pagefault_invalid_show);
+#else
+static DEVICE_ATTR_RO(pagefault_invalid);
+#endif
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t pagefault_major_show(struct kobject *kobj,
+					struct kobj_attribute *attr,
+					char *buf)
+#else
 static ssize_t pagefault_major_show(struct device *dev,
 			     struct device_attribute *attr,
 			     char *buf)
+#endif
 {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+        struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 
 	return sysfs_emit(buf, "%lu\n", local_read(&gt->stats.pagefault_major));
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(pagefault_major,pagefault_major_show);
+#else
 static DEVICE_ATTR_RO(pagefault_major);
+#endif
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t pagefault_minor_show(struct kobject *kobj,
+                                        struct kobj_attribute *attr,
+                                        char *buf)
+#else
 static ssize_t pagefault_minor_show(struct device *dev,
 				    struct device_attribute *attr,
 				    char *buf)
+#endif
 {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+        struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 
 	return sysfs_emit(buf, "%lu\n", local_read(&gt->stats.pagefault_minor));
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(pagefault_minor,pagefault_minor_show);
+#else
 static DEVICE_ATTR_RO(pagefault_minor);
+#endif
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t pagefault_stall_ns_show(struct kobject *kobj,
+                                        struct kobj_attribute *attr,
+                                        char *buf)
+#else
 static ssize_t pagefault_stall_ns_show(struct device *dev,
 				       struct device_attribute *attr,
 				       char *buf)
+#endif
 {
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+        struct device *dev = kobj_to_dev(kobj);
+#endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 
 	return sysfs_emit(buf, "%zu\n", local64_read(&gt->stats.pagefault_stall));
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(pagefault_stall_ns,pagefault_stall_ns_show);
+#else
 static DEVICE_ATTR_RO(pagefault_stall_ns);
+#endif
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static const struct attribute *pagefault_attrs[] = {
+        &dev_attr_pagefault_invalid.attr.attr,
+        &dev_attr_pagefault_major.attr.attr,
+        &dev_attr_pagefault_minor.attr.attr,
+        &dev_attr_pagefault_stall_ns.attr.attr,
+        NULL
+};
+#else
+static const struct attribute *pagefault_attrs[] = {
+	&dev_attr_pagefault_invalid.attr,
 	&dev_attr_pagefault_major.attr,
 	&dev_attr_pagefault_minor.attr,
 	&dev_attr_pagefault_stall_ns.attr,
 	NULL
 };
+#endif
 
 static void kobj_gt_release(struct kobject *kobj)
 {

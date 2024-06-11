@@ -7,6 +7,9 @@
 #include_next <drm/display/drm_hdmi_helper.h>
 #endif
 
+#ifdef BPM_DRM_ELD_H_PRESENT
+#include <drm/drm_eld.h>
+#endif
 #include_next <drm/drm_edid.h>
 
 #ifdef BPM_DRM_HDMI_AVI_INFOFRAME_COLORSPACE_NOT_PRESENT

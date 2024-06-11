@@ -783,7 +783,7 @@ static int unicast_route_pair(struct routing_uft *uft,
 }
 
 #if KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE
-#ifdef BPM_FIND_NTH_BIT_PRESENT
+#ifndef BPM_FIND_NTH_BIT_PRESENT
 static int find_nth_bit(unsigned long *mask, unsigned long len, unsigned long n)
 {
 	int bit = find_first_bit(mask, len);

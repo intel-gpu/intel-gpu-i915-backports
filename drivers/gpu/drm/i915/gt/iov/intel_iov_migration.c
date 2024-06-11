@@ -62,6 +62,7 @@ static s64 vf_get_post_migration_ggtt_shift(struct intel_iov *iov)
 
 	old_base = drm_mm_node_end(&iov->vf.ggtt_balloon[0]);
 	ggtt_shift = iov->vf.config.ggtt_base - (s64)old_base;
+	iov->vf.config.ggtt_shift = ggtt_shift;
 
 	IOV_DEBUG(iov, "GGTT base shifted from %#llx to %#llx\n",
 		  old_base, old_base + ggtt_shift);

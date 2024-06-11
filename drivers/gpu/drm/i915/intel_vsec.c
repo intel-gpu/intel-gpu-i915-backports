@@ -2,7 +2,7 @@
 /*
  * Copyright © 2022 Intel Corporation
  */
-#if IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/intel_vsec.h>
 
 #include "i915_drv.h"
@@ -97,8 +97,7 @@ void intel_vsec_init(struct drm_i915_private *i915)
 	 */
 	intel_vsec_register(pdev, &dg2_info);
 }
-
 #ifndef BPM_MODULE_IMPORT_NS_NOT_PRESENT
 MODULE_IMPORT_NS(INTEL_VSEC);
 #endif
-#endif /* IS_ENABLED (CONFIG_AUXILIARY_BUS) */
+#endif /* IS_ENABLED(CONFIG_AUXILIARY_BUS) */

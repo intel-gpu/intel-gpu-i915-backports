@@ -911,6 +911,7 @@ static bool multi_lrc_submit(struct i915_request *rq)
 	return test_bit(I915_FENCE_FLAG_SUBMIT_PARALLEL, &rq->fence.flags) ||
 		intel_context_is_banned(ce);
 }
+
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 static void nop_submission_tasklet(unsigned long data)
 #else
@@ -1061,9 +1062,10 @@ static void guc_submission_tasklet(struct tasklet_struct *t)
 #else
 	spin_lock_irqsave(&sched_engine->lock, flags);
 #endif
-	
+
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	while(guc_dequeue_one_context(guc));
+	while (guc_dequeue_one_context(guc))
+		;
 #else
 	while (guc_dequeue_one_context(sched_engine->private_data))
 		;
@@ -1889,7 +1891,7 @@ static int guc_init_engine_stats(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	intel_wakeref_t wakeref;
-	int ret;
+	int ret = 0;
 
 	if (busy_type_is_v1(guc)) {
 		if (!IS_SRIOV_VF(gt->i915)) {
@@ -2137,6 +2139,81 @@ void intel_guc_submission_reset_prepare(struct intel_guc *guc)
 	}
 
 	guc_submission_scrub_desc_for_outstanding_g2h(guc);
+}
+
+static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
+{
+	u32 rhead, remit, rspace;
+	s64 ggtt_shift;
+	int err;
+	/*
+	 * Pretend we have an empty, uninitialized request, being added at
+	 * end of the ring. This allows us to re-use the emit callbacks,
+	 * despite them being designed for exec only during request creation.
+	 */
+	rhead = rq->ring->head;
+	remit = rq->ring->emit;
+	rspace = rq->ring->space;
+	rq->ring->emit = get_init_breadcrumb_pos(rq);
+	rq->ring->head = rq->head;
+	intel_ring_update_space(rq->ring);
+	rq->reserved_space =
+		2 * rq->engine->emit_fini_breadcrumb_dw * sizeof(u32);
+
+	ggtt_shift = rq->engine->gt->iov.vf.config.ggtt_shift;
+
+	err = reemit_bb_start(rq);
+
+	/*
+	 * If bb_start re-emission failed, the request must contain non-user
+	 * submission. Internal kernel submissions, like clear_blt(), end with
+	 * counters update.
+	 */
+	if (err)
+		err = reemit_update_counters(rq, ggtt_shift);
+
+	if (err)
+		DRM_DEBUG_DRIVER("Request ring content not recognized, fence %llx:%lld, err=%pe\n",
+				 rq->fence.context, rq->fence.seqno, ERR_PTR(err));
+
+	rq->ring->head = rhead;
+	rq->ring->emit = remit;
+	rq->ring->space = rspace;
+	rq->reserved_space = 0;
+}
+
+static void guc_submission_noop_request_ring_content(struct i915_request *rq)
+{
+	int i;
+	u32 *cs;
+	cs = rq->ring->vaddr;
+	for (i = rq->head / sizeof(u32); i < rq->tail / sizeof(u32); i++) {
+		*cs = MI_NOOP;
+		cs++;
+	}
+}
+
+void guc_submission_refresh_ctx_rings_content(struct intel_context *ce)
+{
+	struct intel_timeline *tl;
+	struct i915_request *rq;
+
+	if (unlikely(!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)))
+		return;
+
+	tl = ce->timeline;
+
+	while (!mutex_trylock(&tl->mutex))
+		udelay(1);
+
+	list_for_each_entry_rcu(rq, &tl->requests, link) {
+		if (i915_request_completed(rq))
+			guc_submission_noop_request_ring_content(rq);
+		else
+			guc_submission_refresh_request_ring_content(rq);
+	}
+
+	mutex_unlock(&tl->mutex);
 }
 
 /*
@@ -3340,18 +3417,6 @@ static inline void update_um_queues_regs(struct intel_context *ce)
 	if (HAS_UM_QUEUES(ce->engine->i915)) {
 		ce->lrc_reg_state[PVC_CTX_ASID] = ce->vm->asid;
 
-		if (is_vm_pasid_active(ce->vm)) {
-			ce->lrc_reg_state[PVC_CTX_PASID] = ce->vm->pasid |
-				PASID_ENABLE_MASK;
-
-			DRM_DEBUG("Update the LRCA with CS_CTX_PASID:\n"
-				  "pasid = %d, pasid_enabled = %d\n"
-				  "ats_enabled = %d\n",
-				  ce->vm->pasid,
-				  is_vm_pasid_active(ce->vm),
-				  i915_ats_enabled(ce->engine->i915));
-		}
-
 		if (INTEL_INFO(ce->engine->i915)->has_access_counter && ctx) {
 			ce->lrc_reg_state[PVC_CTX_ACC_CTR_THOLD] =
 				(ctx->acc_notify << ACC_NOTIFY_S) |
@@ -4075,7 +4140,7 @@ static void __guc_context_destroy(struct intel_context *ce)
 		if (ve->base.breadcrumbs)
 			intel_breadcrumbs_put(ve->base.breadcrumbs);
 
-		kfree(ve);
+		kfree_rcu(ce, rcu);
 	} else {
 		intel_context_free(ce);
 	}
@@ -5059,7 +5124,6 @@ static void guc_release(struct intel_engine_cs *engine)
 	tasklet_kill(&engine->sched_engine->tasklet);
 
 	intel_engine_cleanup_common(engine);
-	lrc_fini_wa_ctx(engine);
 }
 
 static void virtual_guc_bump_serial(struct intel_engine_cs *engine)
@@ -5210,6 +5274,7 @@ static void guc_sched_engine_destroy(struct kref *kref)
 #else
 	struct intel_guc *guc = sched_engine->private_data;
 #endif
+
 	guc->sched_engine = NULL;
 	tasklet_kill(&sched_engine->tasklet); /* flush the callback */
 	kfree(sched_engine);
@@ -5245,9 +5310,8 @@ int intel_guc_submission_setup(struct intel_engine_cs *engine)
 		guc->sched_engine->tasklet.data = (uintptr_t) guc;
 #else
 		tasklet_setup(&guc->sched_engine->tasklet,
-				guc_submission_tasklet);
+			      guc_submission_tasklet);
 #endif
-
 	}
 	i915_sched_engine_put(engine->sched_engine);
 	engine->sched_engine = i915_sched_engine_get(guc->sched_engine);
@@ -5261,8 +5325,6 @@ int intel_guc_submission_setup(struct intel_engine_cs *engine)
 
 	if (IS_SRIOV_VF(engine->i915))
 		engine->resume = vf_guc_resume;
-
-	lrc_init_wa_ctx(engine);
 
 	/* Finally, take ownership and responsibility for cleanup! */
 	engine->release = guc_release;
@@ -5743,17 +5805,20 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 {
 	trace_intel_context_reset(ce);
 
-	guc_dbg(guc, "Got context reset notification: 0x%04X on %s, blocked = %s, banned = %s\n",
+	guc_dbg(guc, "Got context reset notification: 0x%04X on %s, blocked = %s, banned = %s, closed = %s\n",
 		ce->guc_id.id, ce->engine->name,
 		str_yes_no(context_blocked(ce)),
-		str_yes_no(intel_context_is_banned(ce)));
+		str_yes_no(intel_context_is_banned(ce)),
+		str_yes_no(intel_context_is_closed(ce)));
 
 	/*
 	 * XXX: Racey if request cancellation has occurred, see comment in
 	 * __guc_reset_context().
 	 */
 	if (likely(!intel_context_is_banned(ce) && !context_blocked(ce))) {
-		capture_error_state(guc, ce);
+		atomic_inc(&guc_to_gt(guc)->reset.engines_reset_count);
+		if (intel_context_set_coredump(ce))
+			capture_error_state(guc, ce);
 		guc_context_replay(ce);
 	}
 }

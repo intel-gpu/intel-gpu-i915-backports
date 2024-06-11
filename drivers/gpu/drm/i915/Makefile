@@ -20,8 +20,9 @@ subdir-ccflags-y += -Wno-missing-field-initializers
 subdir-ccflags-y += -Wno-sign-compare
 subdir-ccflags-y += $(call cc-disable-warning, unused-but-set-variable)
 subdir-ccflags-y += $(call cc-disable-warning, frame-address)
-subdir-ccflags-y += $(call cc-disable-warning, uninitialized)
+subdir-ccflags-y += -Wmissing-prototypes
 subdir-ccflags-$(CPTCFG_DRM_I915_WERROR) += -Werror
+subdir-ccflags-y += $(call cc-disable-warning, uninitialized)
 
 # Fine grained warnings disable
 CFLAGS_i915_pci.o = $(call cc-disable-warning, override-init)
@@ -188,14 +189,6 @@ i915-y += \
 	  i915_trace_points.o \
 	  i915_vma.o \
 	  intel_wopcm.o
-
-# SVM code
-i915-$(CPTCFG_DRM_I915_SVM) += i915_svm.o \
-			       i915_svm_devmem.o \
-			       i915_svm_copy.o
-
-# Address Translation Services (ATS) code
-i915-$(CPTCFG_DRM_I915_ATS) += i915_addr_trans_svc.o
 
 # general-purpose microcontroller (GuC) support
 i915-y += gt/uc/intel_uc.o \

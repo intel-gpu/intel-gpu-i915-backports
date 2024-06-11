@@ -78,7 +78,7 @@
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_rc6.h"
 
-#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include "gt/intel_gsc.h"
 #endif
 
@@ -104,7 +104,6 @@
 #include "i915_perf_stall_cntr.h"
 #include "i915_query.h"
 #include "i915_sriov.h"
-#include "i915_svm.h"
 #include "i915_sysfs.h"
 #include "i915_sysrq.h"
 #include "i915_utils.h"
@@ -117,7 +116,6 @@
 #include "intel_pm.h"
 #include "intel_vsec.h"
 #include "pvc_ras.h"
-#include "i915_addr_trans_svc.h"
 
 static const struct drm_driver i915_drm_driver;
 static const struct drm_driver i915_vf_drm_driver;
@@ -160,6 +158,26 @@ void i915_log_driver_error(struct drm_i915_private *i915,
 			    i915_driver_errors_to_str[error], &vaf);
 
 	va_end(args);
+}
+
+/**
+ * i915_survivability_mode_enabled - checks survivability mode
+ * @i915: device private
+ *
+ * Survivability Lite puts the driver in a state so that user
+ * has a chance to do a in-field fw update. It relys on Admin/User
+ * identifying the system is in a crippled state and the user then
+ * reloads the driver with module parameter set.
+ *
+ * This is currently supported only on ATS-M. This function returns
+ * true if survivability lite mode is supported and module parameter
+ * is set.
+ *
+ * Returns true if survivability lite is enabled, false otherwise
+ */
+bool i915_survivability_mode_enabled(struct drm_i915_private *i915)
+{
+	return HAS_SURVIVABILITY_MODE(i915) && i915->params.survivability_mode;
 }
 
 bool i915_save_pci_state(struct pci_dev *pdev)
@@ -752,7 +770,7 @@ int i915_userspace_wait_unlock(struct drm_i915_private *i915)
 	return 0;
 }
 
-int i915_drm_userspace_trylock(struct drm_device *dev, int *srcu)
+static int i915_drm_userspace_trylock(struct drm_device *dev, int *srcu)
 {
 	return i915_userspace_trylock(to_i915(dev), srcu);
 }
@@ -805,7 +823,6 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	mutex_init(&dev_priv->wm.wm_mutex);
 	mutex_init(&dev_priv->pps_mutex);
 	mutex_init(&dev_priv->hdcp_comp_mutex);
-	mutex_init(&dev_priv->svm_init_mutex);
 
 	i915_debugger_init(dev_priv);
 
@@ -973,7 +990,6 @@ static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 
 	cpu_latency_qos_remove_request(&dev_priv->sb_qos);
 	mutex_destroy(&dev_priv->sb_lock);
-	mutex_destroy(&dev_priv->svm_init_mutex);
 
 	i915_params_free(&dev_priv->params);
 }
@@ -1219,7 +1235,7 @@ static int i915_driver_hw_probe(struct drm_i915_private *dev_priv)
 	ret = i915_ggtt_probe_hw(dev_priv);
 	if (ret)
 		goto err_perf;
-	
+
 #ifdef BPM_API_ARG_DRM_DRIVER_REMOVED
 	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, "inteldrmfb");
 #else
@@ -1574,13 +1590,14 @@ static void i915_sanitize_force_driver_flr(struct drm_i915_private *i915)
 		i915->params.force_driver_flr = 1;
 }
 
-static void i915_virtualization_probe(struct drm_i915_private *i915)
+static int i915_virtualization_probe(struct drm_i915_private *i915)
 {
 	GEM_BUG_ON(i915->__mode);
 
 	i915->__mode = i915_sriov_probe(i915);
 
-	GEM_BUG_ON(!i915->__mode);
+	if (i915->__mode == I915_IOV_MODE_ERR)
+		return -EIO;
 
 	if (IS_SRIOV_VF(i915))
 		WRITE_ONCE(i915->drm.driver, &i915_vf_drm_driver);
@@ -1588,6 +1605,8 @@ static void i915_virtualization_probe(struct drm_i915_private *i915)
 	if (IS_IOV_ACTIVE(i915))
 		dev_info(i915->drm.dev, "Running in %s mode\n",
 			 i915_iov_mode_to_string(IOV_MODE(i915)));
+
+	return 0;
 }
 
 /**
@@ -1617,7 +1636,9 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_fini;
 
 	/* This must be called before any calls to IS/IOV_MODE() macros */
-	i915_virtualization_probe(i915);
+	ret = i915_virtualization_probe(i915);
+	if (ret)
+		goto out_fini;
 
 	/*
 	 * GRAPHICS_VER() and DISPLAY_VER() will return 0 before this is
@@ -1647,6 +1668,10 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	i915_sanitize_force_driver_flr(i915);
 
 	ret = intel_gt_probe_all(i915);
+
+	if (i915_survivability_mode_enabled(i915))
+		return 0;
+
 	if (ret < 0)
 		goto out_runtime_pm_put;
 
@@ -1699,9 +1724,6 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	i915_welcome_messages(i915);
 
 	i915->do_release = true;
-
-	/* Enable Address Translation Services */
-	i915_enable_ats(i915);
 
 	return 0;
 
@@ -1761,9 +1783,6 @@ void i915_driver_remove(struct drm_i915_private *i915)
 
 	i915_gem_suspend(i915);
 
-	/* Disable Address Translation Services */
-	i915_disable_ats(i915);
-
 	uninit_device_clos(i915);
 
 	intel_modeset_driver_remove(i915);
@@ -1782,6 +1801,25 @@ void i915_driver_remove(struct drm_i915_private *i915)
 	kfree(i915->pci_state);
 
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
+}
+
+/**
+ * i915_survivability_mode_remove - remove survivability mode
+ * @i915: device private
+ *
+ * clean up the allocations set up in survivability mode
+ */
+void i915_survivability_mode_remove(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct intel_gt *gt;
+	unsigned int i;
+
+	for_each_gt(gt, i915, i)
+		intel_gsc_fini(&gt->gsc);
+
+	i915_driver_late_release(i915);
+	pci_set_drvdata(pdev, NULL);
 }
 
 static void i915_driver_release(struct drm_device *dev)
@@ -1928,7 +1966,7 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 
 	intel_dmc_ucode_suspend(i915);
 
-	i915_gem_suspend(i915);
+	i915_gem_shutdown(i915);
 
 	/*
 	 * The only requirement is to reboot with display DC states disabled,
@@ -2812,13 +2850,7 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 static int i915_gem_vm_prefetch_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
-	struct drm_i915_private *i915 = to_i915(dev);
-	struct prelim_drm_i915_gem_vm_prefetch *args = data;
-
-	if (!args->vm_id)
-		return i915_svm_vm_prefetch(i915, args);
-	else
-		return i915_runtime_vm_prefetch(i915, args, file_priv->driver_priv);
+	return i915_runtime_vm_prefetch(to_i915(dev), data, file_priv->driver_priv);
 }
 
 static const struct drm_ioctl_desc i915_ioctls[] = {
@@ -2893,6 +2925,7 @@ static const struct drm_ioctl_desc i915_ioctls[] = {
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_CLOS_FREE, i915_gem_clos_free_ioctl, DRM_RENDER_ALLOW),
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_CACHE_RESERVE, i915_gem_cache_reserve_ioctl, DRM_RENDER_ALLOW),
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_VM_PREFETCH, i915_gem_vm_prefetch_ioctl, DRM_RENDER_ALLOW),
+	PRELIM_DRM_IOCTL_DEF_DRV(I915_GET_RESET_STATS, i915_gem_context_reset_stats_ioctl, DRM_RENDER_ALLOW),
 };
 
 /*

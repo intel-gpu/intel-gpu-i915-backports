@@ -91,12 +91,6 @@ static inline void intel_gt_chipset_flush(struct intel_gt *gt)
 	wmb(); /* flush any chipset caches */
 }
 
-static inline u32 intel_gt_scratch_offset(const struct intel_gt *gt,
-					  enum intel_gt_scratch_field field)
-{
-	return i915_ggtt_offset(gt->scratch) + field;
-}
-
 static inline bool intel_gt_has_unrecoverable_error(const struct intel_gt *gt)
 {
 	return test_bit(I915_WEDGED_ON_INIT, &gt->reset.flags) ||

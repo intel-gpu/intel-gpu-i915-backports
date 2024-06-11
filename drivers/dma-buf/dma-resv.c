@@ -253,6 +253,7 @@ void dma_resv_add_shared_fence(struct dma_resv *obj, struct dma_fence *fence)
 
 	fobj = dma_resv_shared_list(obj);
 	count = fobj->shared_count;
+
 #ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
 	preempt_disable();
 #endif
@@ -305,6 +306,7 @@ void dma_resv_add_excl_fence(struct dma_resv *obj, struct dma_fence *fence)
 
 	if (fence)
 		dma_fence_get(fence);
+
 #ifdef BPM_SEQCOUNT_WW_MUTEX_INIT_NOT_PRESESNT
 	preempt_disable();
 #endif

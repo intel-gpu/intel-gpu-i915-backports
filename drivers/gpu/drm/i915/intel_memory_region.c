@@ -13,7 +13,6 @@
 #include "i915_buddy.h"
 #include "intel_memory_region.h"
 #include "i915_drv.h"
-#include "i915_svm.h"
 
 static const struct {
 	u16 class;
@@ -190,31 +189,6 @@ __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 		return;
 
 	intel_memory_region_free_pages(mem, blocks, dirty);
-}
-
-static void __intel_memory_region_put_block_work(struct work_struct *work)
-{
-	struct intel_memory_region *mem =
-		container_of(work, struct intel_memory_region, pd_put.work);
-	struct llist_node *freed = llist_del_all(&mem->pd_put.blocks);
-	struct i915_buddy_block *block, *bn;
-	struct list_head blocks;
-
-	INIT_LIST_HEAD(&blocks);
-
-	llist_for_each_entry_safe(block, bn, freed, freed)
-		list_add(&block->link, &blocks);
-
-	__intel_memory_region_put_pages_buddy(mem, &blocks, true);
-}
-
-void
-__intel_memory_region_put_block_buddy(struct i915_buddy_block *block)
-{
-	struct intel_memory_region *mem = block->private;
-
-	if (llist_add(&block->freed, &mem->pd_put.blocks))
-		schedule_work(&mem->pd_put.work);
 }
 
 void intel_memory_region_print(struct intel_memory_region *mem,
@@ -657,7 +631,6 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			GEM_BUG_ON(i915_buddy_block_is_free(block));
 			atomic64_sub(sz, &mem->avail);
 			list_add_tail(&block->link, blocks);
-			block->private = mem;
 
 			n_pages -= BIT(order);
 			if (!n_pages) {
@@ -710,24 +683,6 @@ reset:			n_pages = size >> ilog2(mem->mm.chunk_size);
 	intel_memory_region_free_pages(mem, blocks, false);
 	atomic64_sub(size, &mem->evict);
 	return err;
-}
-
-struct i915_buddy_block *
-__intel_memory_region_get_block_buddy(struct intel_memory_region *mem,
-				      resource_size_t size,
-				      unsigned int flags)
-{
-	struct i915_buddy_block *block;
-	LIST_HEAD(blocks);
-	int ret;
-
-	ret = __intel_memory_region_get_pages_buddy(mem, NULL, size, jiffies, flags, &blocks);
-	if (ret)
-		return ERR_PTR(ret);
-
-	block = list_first_entry(&blocks, typeof(*block), link);
-	list_del_init(&block->link);
-	return block;
 }
 
 int intel_memory_region_init_buddy(struct intel_memory_region *mem,
@@ -815,8 +770,6 @@ intel_memory_region_create(struct intel_gt *gt,
 	mem->type = type;
 	mem->instance = instance;
 
-	INIT_WORK(&mem->pd_put.work, __intel_memory_region_put_block_work);
-
 	spin_lock_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
 	INIT_LIST_HEAD(&mem->objects.purgeable);
@@ -865,9 +818,6 @@ static void __intel_memory_region_destroy(struct kref *kref)
 {
 	struct intel_memory_region *mem =
 		container_of(kref, typeof(*mem), kref);
-
-	/* Flush any pending work to free blocks region */
-	flush_work(&mem->pd_put.work);
 
 	if (mem->ops->release)
 		mem->ops->release(mem);
@@ -991,34 +941,6 @@ void intel_memory_regions_driver_release(struct drm_i915_private *i915)
 		if (region)
 			intel_memory_region_put(region);
 	}
-}
-
-int intel_memory_regions_add_svm(struct drm_i915_private  *i915)
-{
-	struct intel_memory_region *mr;
-	enum intel_region_id id;
-	int ret = 0;
-
-	mutex_lock(&i915->svm_init_mutex);
-	for_each_memory_region(mr, i915, id) {
-		if (mr->type != INTEL_MEMORY_LOCAL || mr->devmem)
-			continue;
-
-		ret = i915_svm_devmem_add(mr);
-		if (ret)
-			break;
-	}
-	mutex_unlock(&i915->svm_init_mutex);
-	return ret;
-}
-
-void intel_memory_regions_remove(struct drm_i915_private *i915)
-{
-	struct intel_memory_region *mr;
-	enum intel_region_id id;
-
-	for_each_memory_region(mr, i915, id)
-		i915_svm_devmem_remove(mr);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

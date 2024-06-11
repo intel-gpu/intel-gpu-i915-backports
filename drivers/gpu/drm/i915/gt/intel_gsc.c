@@ -10,6 +10,7 @@
 #include <linux/platform_device.h>
 #include <linux/mfd/core.h>
 #endif
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "gem/i915_gem_region.h"
@@ -204,18 +205,18 @@ static const struct gsc_def gsc_def_dg2[] = {
 };
 #else
 static const struct mfd_cell intel_gsc_dg2_cell[] = {
-        {
-                .id = 0,
-                .name = "mei-gsc",
-                .num_resources = ARRAY_SIZE(gsc_dg2_resources),
-                .resources  = gsc_dg2_resources,
-        },
-        {
-                .id = 1,
-                .name = "mei-gscfi",
-                .num_resources = ARRAY_SIZE(gscfi_dg2_resources),
-                .resources  = gscfi_dg2_resources,
-        }
+	{
+		.id = 0,
+		.name = "mei-gsc",
+		.num_resources = ARRAY_SIZE(gsc_dg2_resources),
+		.resources  = gsc_dg2_resources,
+	},
+	{
+		.id = 1,
+		.name = "mei-gscfi",
+		.num_resources = ARRAY_SIZE(gscfi_dg2_resources),
+		.resources  = gscfi_dg2_resources,
+	}
 };
 #endif
 
@@ -233,18 +234,18 @@ static const struct gsc_def gsc_def_pvc[] = {
 };
 #else
 static const struct mfd_cell intel_gsc_pvc_cell[] = {
-        {
-                .id =  0,
-                .name = "mei-gsc",
-                .num_resources = ARRAY_SIZE(gsc_pvc_resources),
-                .resources  = gsc_pvc_resources,
-        },
-        {
-                .id = 1,
-                .name = "mei-gscfi",
-                .num_resources = ARRAY_SIZE(gscfi_pvc_resources),
-                .resources  = gscfi_pvc_resources,
-        }
+	{
+		.id =  0,
+		.name = "mei-gsc",
+		.num_resources = ARRAY_SIZE(gsc_pvc_resources),
+		.resources  = gsc_pvc_resources,
+	},
+	{
+		.id = 1,
+		.name = "mei-gscfi",
+		.num_resources = ARRAY_SIZE(gscfi_pvc_resources),
+		.resources  = gscfi_pvc_resources,
+	}
 };
 #endif
 
@@ -310,6 +311,9 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 
 	if (intf_id == 0 && !HAS_HECI_PXP(i915))
 		return;
+
+	if (i915_survivability_mode_enabled(i915))
+		use_polling = true;
 
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	if (IS_DG1(i915)) {
@@ -398,7 +402,7 @@ add_device:
 	if (!adev)
 		goto fail;
 
-	if (def->lmem_size) {
+	if (def->lmem_size && !i915_survivability_mode_enabled(i915)) {
 		drm_dbg(&i915->drm, "setting up GSC lmem\n");
 
 		if (gsc_ext_om_alloc(gsc, intf, def->lmem_size)) {

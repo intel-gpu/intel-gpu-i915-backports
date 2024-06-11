@@ -70,8 +70,8 @@ err_unpin:
 void intel_ring_reset(struct intel_ring *ring, u32 tail)
 {
 	tail = intel_ring_wrap(ring, tail);
+	WRITE_ONCE(ring->head, tail);
 	ring->tail = tail;
-	ring->head = tail;
 	ring->emit = tail;
 	intel_ring_update_space(ring);
 }

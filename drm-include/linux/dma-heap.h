@@ -65,6 +65,8 @@ const char *dma_heap_get_name(struct dma_heap *heap);
  */
 struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info);
 
+#ifdef BPM_DMA_HEAP_INIT_AS_MODULE_INIT
 int __init dma_heap_init(void);
 void __exit dma_heap_deinit(void);
+#endif
 #endif /* _DMA_HEAPS_H */

@@ -67,10 +67,16 @@ static int intel_dp_mst_compute_link_config(struct intel_encoder *encoder,
 	if (IS_ERR(mst_state))
 		return PTR_ERR(mst_state);
 #endif
-
 	crtc_state->lane_count = limits->max_lane_count;
 	crtc_state->port_clock = limits->max_rate;
 
+#ifdef BPM_MST_STATE_PBN_DIVE_PRESENT
+	if (!mst_state->pbn_div.full) {
+		mst_state->pbn_div = drm_dp_get_vc_payload_bw(&intel_dp->mst_mgr,
+							     limits->max_rate,
+							     limits->max_lane_count);
+	}
+#else
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	// TODO: Handle pbn_div changes by adding a new MST helper
 	if (!mst_state->pbn_div) {
@@ -79,8 +85,7 @@ static int intel_dp_mst_compute_link_config(struct intel_encoder *encoder,
 							      limits->max_lane_count);
 	}
 #endif
-
-
+#endif
 	for (bpp = limits->max_bpp; bpp >= limits->min_bpp; bpp -= 2 * 3) {
 		crtc_state->pipe_bpp = bpp;
 
@@ -201,8 +206,7 @@ static int intel_dp_dsc_mst_compute_link_config(struct intel_encoder *encoder,
 
 	return 0;
 }
-
-#ifdef BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
+#ifndef BPM_DRM_DP_MST_UPDATE_SLOTS_NOT_PRESENT
 static int intel_dp_mst_update_slots(struct intel_encoder *encoder,
 				     struct intel_crtc_state *crtc_state,
 				     struct drm_connector_state *conn_state)
@@ -307,11 +311,12 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 	if (ret)
 		return ret;
 
-#ifdef BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
+#ifndef BPM_DRM_DP_MST_UPDATE_SLOTS_NOT_PRESENT
 	ret = intel_dp_mst_update_slots(encoder, pipe_config, conn_state);
 	if (ret)
 		return ret;
 #endif
+
 	pipe_config->limited_color_range =
 		intel_dp_limited_color_range(pipe_config, conn_state);
 
@@ -509,11 +514,10 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 	struct drm_dp_mst_atomic_payload *payload =
 		drm_atomic_get_mst_payload_state(mst_state, connector->port);
 #else
-#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+#ifndef BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 	int start_slot = intel_dp_is_uhbr(old_crtc_state) ? 0 : 1;
 #endif
 #endif
-
 	int ret;
 
 	drm_dbg_kms(&i915->drm, "active links %d\n",
@@ -522,21 +526,24 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 	intel_hdcp_disable(intel_mst->connector);
 
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+	drm_dp_remove_payload_part1(&intel_dp->mst_mgr, mst_state, payload);
+#else
 	drm_dp_remove_payload(&intel_dp->mst_mgr, mst_state,
 			payload, payload);
+#endif
 #else
 	drm_dp_mst_reset_vcpi_slots(&intel_dp->mst_mgr, connector->port);
 
-#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
-#else
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
+#else
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
 #endif
 #endif
 	if (ret) {
 		drm_dbg_kms(&i915->drm, "failed to update payload %d\n", ret);
 	}
-
 
 	intel_audio_codec_disable(encoder, old_crtc_state, old_conn_state);
 }
@@ -551,6 +558,16 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 	struct intel_dp *intel_dp = &dig_port->dp;
 	struct intel_connector *connector =
 		to_intel_connector(old_conn_state->connector);
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+	struct drm_dp_mst_topology_state *old_mst_state =
+		drm_atomic_get_old_mst_topology_state(&state->base, &intel_dp->mst_mgr);
+	struct drm_dp_mst_topology_state *new_mst_state =
+		drm_atomic_get_new_mst_topology_state(&state->base, &intel_dp->mst_mgr);
+	const struct drm_dp_mst_atomic_payload *old_payload =
+		drm_atomic_get_mst_payload_state(old_mst_state, connector->port);
+	struct drm_dp_mst_atomic_payload *new_payload =
+		drm_atomic_get_mst_payload_state(new_mst_state, connector->port);
+#endif
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	bool last_mst_stream;
 
@@ -574,6 +591,10 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 		     TRANS_DDI_DP_VC_PAYLOAD_ALLOC, 0);
 
 	wait_for_act_sent(encoder, old_crtc_state);
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+	drm_dp_remove_payload_part2(&intel_dp->mst_mgr, new_mst_state,
+			old_payload, new_payload);
+#endif
 
 #ifndef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	drm_dp_mst_deallocate_vcpi(&intel_dp->mst_mgr, connector->port);
@@ -647,7 +668,7 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 	struct drm_dp_mst_topology_state *mst_state =
 		drm_atomic_get_new_mst_topology_state(&state->base, &intel_dp->mst_mgr);
 #else
-#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
+#ifndef BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 	int start_slot = intel_dp_is_uhbr(pipe_config) ? 0 : 1;
 #endif
 #endif
@@ -693,10 +714,10 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 		drm_err(&dev_priv->drm, "Failed to create MST payload for %s: %d\n",
 				connector->base.name, ret);
 #else
-#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
-#else
+#ifdef BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr);
+#else
+	ret = drm_dp_update_payload_part1(&intel_dp->mst_mgr, start_slot);
 #endif
 #endif
 
@@ -758,6 +779,7 @@ static void intel_mst_enable_dp(struct intel_atomic_state *state,
 #else
 	drm_dp_update_payload_part2(&intel_dp->mst_mgr);
 #endif
+
 	if (DISPLAY_VER(dev_priv) >= 14 && pipe_config->fec_enable)
 		intel_de_rmw(dev_priv, MTL_CHICKEN_TRANS(trans), 0,
 			     FECSTALL_DIS_DPTSTREAM_DPTTG);

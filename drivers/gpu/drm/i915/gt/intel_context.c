@@ -351,7 +351,7 @@ static void __intel_context_retire(struct i915_active *active)
 
 	set_bit(CONTEXT_VALID_BIT, &ce->flags);
 
-	atomic_dec(&ce->vm->active_contexts_gt[ce->engine->gt->info.id]);
+	atomic_dec(&ce->vm->active_contexts[ce->engine->gt->info.id]);
 
 	intel_context_post_unpin(ce);
 	intel_context_put(ce);
@@ -375,7 +375,7 @@ static int __intel_context_active(struct i915_active *active)
 		i915_vma_make_unshrinkable(ce->state);
 	}
 
-	atomic_inc(&ce->vm->active_contexts_gt[ce->engine->gt->info.id]);
+	atomic_inc(&ce->vm->active_contexts[ce->engine->gt->info.id]);
 	return 0;
 }
 
@@ -630,30 +630,6 @@ __intel_context_find_active_request(struct intel_context *ce,
 	return active;
 }
 
-struct i915_request *
-__intel_context_find_oldest_incomplete_request(struct intel_context *ce)
-{
-	struct i915_request *rq, *incomplete = NULL;
-
-	/*
-	 * We search the parent list to find oldest request which was not
-	 * completed. It does not matter if the request was started or not.
-	 * If the previous request moved past final seqno increment, it is
-	 * considered completed and newer one will be returned.
-	 */
-	rcu_read_lock();
-	list_for_each_entry_reverse(rq, &ce->timeline->requests, link) {
-		if (__i915_request_is_complete(rq))
-			break;
-
-		incomplete = rq;
-	}
-
-	rcu_read_unlock();
-
-	return incomplete;
-}
-
 void intel_context_bind_parent_child(struct intel_context *parent,
 				     struct intel_context *child)
 {
@@ -766,16 +742,22 @@ bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
 }
 
 /**
- * intel_context_revert_ring_heads - Set ring heads to the start of scheduled submissions.
+ * intel_context_update_ring_head_tail - Set ring head and tail to the context preemption point.
  * @ce: Intel Context instance struct
+ *
+ * After migration, contexts contain head positions which may be lower than the place where the
+ * execution really ended. Update the head pointer to where it was when it finished execution
+ * (either got preempted or stopped due to head reaching the tail).
+ * While at it, also update the tail so that is is as close to head as possible.
  */
-void intel_context_revert_ring_heads(struct intel_context *ce)
+void intel_context_update_ring_head_tail(struct intel_context *ce)
 {
 	struct intel_timeline *tl;
-	struct i915_request *rq;
 	u32 *regs;
 
 	if (unlikely(!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)))
+		return;
+	if (unlikely(!test_bit(CONTEXT_VALID_BIT, &ce->flags)))
 		return;
 
 	tl = ce->timeline;
@@ -787,13 +769,16 @@ void intel_context_revert_ring_heads(struct intel_context *ce)
 	if (regs)
 		WRITE_ONCE(ce->ring->head, regs[CTX_RING_HEAD] & GENMASK(20, 2));
 
-	rq = intel_context_find_oldest_incomplete_request(ce);
-	if (rq)
-		WRITE_ONCE(rq->ring->head, rq->head);
-
+	/*
+	 * Tail needs to be 8-byte aligned, we've got a BUG_ON to verify that. Setting it
+	 * like below makes it possible for the tail to aim at a middle of an instruction.
+	 * But if it does, then an unfinished request is linked to it. All unfinished
+	 * requests will be re-submitted, and that will increment the tail to a correct
+	 * value.
+	 */
 	intel_ring_set_tail(ce->ring, (ce->ring->head+7) & GENMASK(20, 3));
 	if (regs) {
-		regs[CTX_RING_HEAD] = ce->ring->head;
+		regs[CTX_RING_HEAD] = (regs[CTX_RING_HEAD] & GENMASK(31, 21)) | ce->ring->head;
 		regs[CTX_RING_TAIL] = ce->ring->tail;
 	}
 

@@ -4,6 +4,107 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,8,2) || \
+	LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
+	LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
+	(LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(111,121)) || \
+        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59))
+/*
+ * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
+ */
+#define BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,8,0)
+/*
+ * 8eb80946ab0c drm/edid: split out drm_eld.h from drm_edid.h
+ */
+#define BPM_DRM_ELD_H_PRESENT
+
+/*
+ * e435ca878821 mm: remove inc/dec lruvec page state functions
+ */
+#define BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_LESS(6,8,0)
+/*
+ * 19975f83412f mm/slab: move the rest of slub_def.h to mm/slab.h
+ */
+#define BPM_SLUB_DEF_IS_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,7,0)
+/*
+ *451921e7bbc7: drm: Replace drm_framebuffer plane size
+ *              functions with its equivalents
+ */
+#define BPM_DRM_FRAMEBUFFER_PLANE_HEIGHT_NOT_PRESENT
+
+/*
+ * 0ede61d8589c file: convert to SLAB_TYPESAFE_BY_RCU
+ */
+#define BPM_GET_FILE_RCU_ARG_CHANGED
+
+/*
+ * e2272bfb18ee: drm/dp: switch drm_dp_downstream_*() helpers to struct drm_edid
+ */
+#define BPM_STRUCT_EDID_NOT_PRESENT
+
+/*
+ * 07f9cfe2ef6c: drm/i915/dp_mst: Make sure pbn_div is up-to-date after sink reconnect
+ */
+#define BPM_MST_STATE_PBN_DIVE_PRESENT
+
+/*
+ * 5aa1dfcdf0a4: drm/mst: Refactor the flow for payload allocation/removement
+ */
+#define BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+
+/*
+ *f2383e01507e mm: shrinker: remove old APIs
+ */
+#define BPM_REGISTER_SHRINKER_NOT_PRESENT
+
+/*
+ *e965a7072767 drm: remove I2C_CLASS_DDC support
+ */
+#define BPM_I2C_CLASS_DDC_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,6,0)
+/*
+ * 46f12960aad2 drm/i915: Move abs_diff() to math.h
+ */
+#define BPM_ABS_DIFF_PRESENT
+/*
+ * 7ec4b34be423 PCI/AER: Unexport pci_enable_pcie_error_reporting()
+ */
+#define BPM_PCI_ENABLE_DISABLE_PCIE_ERROR_NOT_EXPORTED
+
+/*
+ * 6f2beb268a5 swiotlb: Update is_swiotlb_active to add a struct device argument
+ */
+#define BPM_IS_SWIOTLB_ACTIVE_PRESENT
+/*
+ * 8ac20a03da56 tty: sysrq: switch the rest of keys to u8
+ */
+#define BPM_SYSRQ_KEY_OP_HANDLER_INT_ARG_NOT_PRESENT
+/*
+ * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
+ */
+#define BPM_MODULE_IMPORT_NS_CXL_SUPPORT
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
+
+#if (LINUX_VERSION_IS_GEQ(6,6,0) || \
+	(LINUX_VERSION_IS_GEQ(6,5,0) && ((UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34) && \
+	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )))
+/*
+ * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
+ */
+#define BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,5,0)
 /*
  * 6801be4f2653 slub: Replace cmpxchg_double
@@ -227,15 +328,15 @@
 #define BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,1,0) */
 
-#if (LINUX_VERSION_IS_LESS(6,1,0) && \
-	!(REDHAT_RELEASE_VERSION_IS_GEQ(9,3)))
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || \
+	(REDHAT_RELEASE_VERSION_IS_GEQ(9,3)))
 /*
  * 3cea8d4753 lib: add find_nth{,_and,_andnot}_bit()
  */
 #define BPM_FIND_NTH_BIT_PRESENT
-#endif /* (LINUX_VERSION_IS_LESS(6,1,0)) && !(REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
+#endif /* (LINUX_VERSION_IS_GEQ(6,1,0)) || (REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
-#if (LINUX_VERSION_IS_GEQ(6,0,0) || \
+#if (LINUX_VERSION_IN_RANGE(6,0,0, 6,7,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * e33c267ab70d
@@ -348,11 +449,6 @@
 
 #if LINUX_VERSION_IS_GEQ(5,19,0)
 /*
- * 0192c25c03cd2f drm/dp: add 128b/132b link status helpers from DP 2.0 E11
- */
-#define BPM_DRM_DP_128B132B_API_PRESENT
-
-/*
  * 7bc80a5462c3 dma-buf: add enum dma_resv_usage v4
  */
 #define BPM_DMA_RESV_TEST_SIGNALED_BOOLEAN_ARG_NOT_PRESENT
@@ -367,6 +463,11 @@
 #endif /* LINUX_VERSION_IS_GEQ(5,19,0) */
 
 #if LINUX_VERSION_IS_LESS(5,19,0)
+/*
+ * 0192c25c03cd2f drm/dp: add 128b/132b link status helpers from DP 2.0 E11
+ */
+#define BPM_DRM_DP_128B132B_API_NOT_PRESENT
+
 /*
  * 6a99099 drm/display: Move HDCP helpers into display-helper module
  */
@@ -420,20 +521,20 @@
 #define BPM_PCI_DMA_COMPAT_H_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(5,18,0) */
 
-#if (LINUX_VERSION_IS_GEQ(5,17,2) || \
-	(LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
+#if (LINUX_VERSION_IS_LESS(5,17,2) && \
+	!((LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
 	LINUX_VERSION_IN_RANGE(5,15,33, 5,16,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) || \
 	(LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1035,38)) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || (REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) && !(IS_ENABLED(CPTCFG_BUILD_I915)))|| \
 	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
-	LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0))
+	LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0)))
 /*
  * 662b372a8a72695d drm/edid: Split deep color modes between RGB and YUV444
  *
  * Introduced in 5.17.2 and backported to LTS kernel 5.15.33 as well as
  * backported in Ubuntu oem 5.17.0-1004.4 and 5.14.0-1035.38.
  */
-#define BPM_EDID_HDMI_RGB444_DC_MODES_PRESENT
+#define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
 #endif  /* LINUX_VERSION_IS_GEQ(5,17,2) || (LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUN */
 
 
@@ -539,18 +640,6 @@
 #endif /* !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || REDHAT_RELEASE_VERSION_IS_GEQ(8,7) ... */
 #endif /* LINUX_VERSION_IS_LESS(5,17,0) */
 
-#if (LINUX_VERSION_IS_GEQ(5,16,0) || \
-		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
-		(REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) && !(IS_ENABLED(CPTCFG_BUILD_I915))) || \
-		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
-		CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
-		LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0) || \
-		LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
-/*
- * d6c6a76f80a1c drm: Update MST First Link Slot Information Based on Encoding Format
- */
-#define BPM_DRM_PAYLOAD_PART1_START_SLOT_PRESENT
-#endif
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
@@ -584,16 +673,13 @@
 #define BPM_DMA_RESV_ITER_UNLOCKED_PRESENT
 #endif	/* (LINUX_VERSION_IS_GEQ(5,16,0) || REDHAT_RELEASE_VERSION_IS_GEQ(8,7)) */
 
-#if LINUX_VERSION_IS_GEQ(5,16,0)
+#if LINUX_VERSION_IS_LESS(5,16,0)
 /* DP 2.0 E11 feature */
 /*
  * d6c6a76f80a1c9 drm: Update MST First Link Slot Information
  * Based on Encoding Format
  */
-#define BPM_DRM_DP_MST_UPDATE_SLOTS_PRESENT
-#endif /* LINUX_VERSION_IS_GEQ(5,16,0) */
-
-#if LINUX_VERSION_IS_LESS(5,16,0)
+#define BPM_DRM_DP_MST_UPDATE_SLOTS_NOT_PRESENT
 /*
  * c78b4a85721f3 drm/dp: add helper for extracting adjust 128b/132b TX FFE preset
  */
@@ -603,6 +689,18 @@
  * 103c7044be5b207 drm/i915/edp: use MSO pixel overlap from DisplayID data
  */
 #define BPM_MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+     (REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) && !(IS_ENABLED(CPTCFG_BUILD_I915))) || \
+      SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
+      CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
+      LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0) || \
+      LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
+/*
+ * d6c6a76f80a1c drm: Update MST First Link Slot Information Based on Encoding Format
+ */
+#define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
+#endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) ... */
 #endif /* LINUX_VERSION_IS_LESS(5,16,0) */
 
 #if LINUX_VERSION_IS_LESS(5,15,46)
@@ -637,7 +735,9 @@
 
 #if LINUX_VERSION_IS_LESS(5,15,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6) || \
-	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
+	LINUX_VERSION_IN_RANGE(5,10,211, 5,11,0) || \
+	LINUX_VERSION_IN_RANGE(5,4,270, 5,5,0))
 /*
  * d19c81378829e locking/lockdep: Provide lockdep_assert{,_once}() helpers
  */
@@ -759,17 +859,21 @@
 #endif
 #endif /* LINUX_VERSION_IS_LESS(5,14,19) */
 
+#if LINUX_VERSION_IS_GEQ(5,13,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(8,6)
+
+/*
+ * dma-buf/dmabuf: Don't export dma_fence symbols
+ */
+#define BPM_DMA_FENCE_PRIVATE_STUB_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_LESS(5,13,0)
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
 /*
  * eb2dafbba8b82 tasklets: Prevent tasklet_unlock_spin_wait() deadlock on RT
  */
 #define BPM_TASKLET_UNLOCK_SPIN_WAIT_NOT_PRESENT
-
-/*
- * dma-buf/dmabuf: Don't export dma_fence symbols
- */
-#define BPM_DMA_FENCE_PRIVATE_STUB_NOT_PRESENT
 
 /*
  * f21ffe9f6da6d swiotlb: Expose swiotlb_nr_tlb function to modules
@@ -802,6 +906,15 @@
 #define BPM_FORTIFY_STRING_H_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(5,12,0) || REDHAT_RELEASE_VERSION_IS_GEQ(8,9)) */
 
+#if (LINUX_VERSION_IS_GEQ(5,12,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
+
+/*
+ * dma-buf/dmabuf: Don't export dma_fence symbols
+ */
+#define BPM_DMA_FENCE_TIMESTAMP_PRESENT
+#endif
+
 #if (LINUX_VERSION_IS_LESS(5,12,0) && \
 	!(REDHAT_RELEASE_VERSION_IS_GEQ(8,5)))
 /*
@@ -809,11 +922,6 @@
  * 192f1bf7559e8 PCI: Add pci_rebar_bytes_to_size()
  */
 #define BPM_PCI_REBAR_SIZE_NOT_PRESENT
-
-/*
- * dma-buf/dmabuf: Don't export dma_fence symbols
- */
-#define BPM_DMA_FENCE_TIMESTAMP_NOT_PRESENT
 
 /*
  * 2d24dd5798d0 rbtree: Add generic add and find helpers
@@ -1723,6 +1831,24 @@
 #define BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 #define BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
 
+/* Reverts plane color and CSC features */
+#define BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+#define BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
+
+/* To control trace include path for backports */
+#define BPM_CHANGE_TRACE_INCLUDE_PATH
+
+/* To control shmem_fs.h header file inclusion */
+#define BPM_SHMEM_FS_H_NOT_INCLUDED
+
+/* Remove traces */
+#define BPM_REMOVE_TRACES
+
+#define BPM_FAKE_DEVM_DRM_RELEASE_ACTION
+
+/* To control dma-heap module */
+#define BPM_DMA_HEAP_INIT_AS_MODULE_INIT
+
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 /*
  * Switch MEI between <linux/mei_aux.h> and  <linux/platform_device.h>
@@ -1747,11 +1873,11 @@
  */
 #if LINUX_VERSION_IS_LESS(5,14,0) && IS_ENABLED(CPTCFG_BUILD_I915)
 #define BPM_API_ARG_DRM_DRIVER_REMOVED
+#define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
+#define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
 #endif
 #ifdef CPTCFG_BUILD_I915
 #define BPM_DISABLE_DRM_DMABUF
-#define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
-#define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
 #else
 /* Add backport Macro for all the symbols of dma-buf. */
 #define BPM_ADD_BACKPORT_MACRO_TO_DMA_BUF_SYMBOLS

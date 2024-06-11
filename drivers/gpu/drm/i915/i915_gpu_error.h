@@ -289,8 +289,6 @@ struct i915_gpu_coredump {
 	struct i915_params params;
 
 	struct scatterlist *sgl, *fit;
-
-	void *private;
 };
 
 struct i915_gpu_error {

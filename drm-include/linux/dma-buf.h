@@ -10,8 +10,8 @@
  * Daniel Vetter <daniel@ffwll.ch> for their support in creation and
  * refining of this idea.
  */
-#ifndef __BACKPORT_DMA_BUF_H__
-#define __BACKPORT_DMA_BUF_H__
+#ifndef __DMA_BUF_H__
+#define __DMA_BUF_H__
 
 #include <linux/iosys-map.h>
 #include <linux/file.h>
@@ -648,4 +648,4 @@ int __init dma_buf_init(void);
 void __exit dma_buf_deinit(void);
 #endif
 
-#endif /* __BACKPORT_DMA_BUF_H__  */
+#endif /* __DMA_BUF_H__ */

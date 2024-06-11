@@ -440,46 +440,6 @@ void intel_gt_driver_register(struct intel_gt *gt)
 	intel_iov_sysfs_setup(&gt->iov);
 }
 
-static int intel_gt_init_scratch(struct intel_gt *gt, unsigned int size)
-{
-	struct drm_i915_private *i915 = gt->i915;
-	struct drm_i915_gem_object *obj;
-	struct i915_vma *vma;
-	int ret;
-
-	obj = intel_gt_object_create_lmem(gt, size, I915_BO_ALLOC_VOLATILE);
-	if (IS_ERR(obj))
-		obj = i915_gem_object_create_internal(i915, size);
-	if (IS_ERR(obj)) {
-		gt_err(gt, "Failed to allocate scratch page\n");
-		return PTR_ERR(obj);
-	}
-
-	vma = i915_vma_instance(obj, &gt->ggtt->vm, NULL);
-	if (IS_ERR(vma)) {
-		ret = PTR_ERR(vma);
-		goto err_unref;
-	}
-
-	ret = i915_ggtt_pin_for_gt(vma, NULL, 0, PIN_HIGH);
-	if (ret)
-		goto err_unref;
-
-	ret = i915_vma_wait_for_bind(vma);
-	if (ret)
-		goto err_unpin;
-
-	gt->scratch = i915_vma_make_unshrinkable(vma);
-
-	return 0;
-
-err_unpin:
-	i915_vma_unpin(vma);
-err_unref:
-	i915_gem_object_put(obj);
-	return ret;
-}
-
 static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
 {
 	struct drm_i915_gem_object *obj;
@@ -534,11 +494,6 @@ err_unref:
 static void intel_gt_fini_counters(struct intel_gt *gt)
 {
 	i915_vma_unpin_and_release(&gt->counters.vma, I915_VMA_RELEASE_MAP);
-}
-
-static void intel_gt_fini_scratch(struct intel_gt *gt)
-{
-	i915_vma_unpin_and_release(&gt->scratch, 0);
 }
 
 static void intel_gt_init_debug_pages(struct intel_gt *gt)
@@ -972,14 +927,9 @@ int intel_gt_init(struct intel_gt *gt)
 	if (unlikely(err))
 		goto out_wq;
 
-	err = intel_gt_init_scratch(gt,
-				    GRAPHICS_VER(gt->i915) == 2 ? SZ_256K : SZ_4K);
-	if (err)
-		goto err_iov;
-
 	err = intel_gt_init_counters(gt, SZ_4K);
 	if (err && err != -ENODEV)
-		goto err_scratch;
+		goto err_iov;
 
 	intel_gt_init_debug_pages(gt);
 
@@ -1049,8 +999,6 @@ err_pm:
 	intel_gt_pm_fini(gt);
 	intel_gt_fini_debug_pages(gt);
 	intel_gt_fini_counters(gt);
-err_scratch:
-	intel_gt_fini_scratch(gt);
 err_iov:
 	intel_iov_fini(&gt->iov);
 out_wq:
@@ -1115,7 +1063,6 @@ void intel_gt_driver_release(struct intel_gt *gt)
 	intel_gt_pm_fini(gt);
 	intel_gt_fini_debug_pages(gt);
 	intel_gt_fini_counters(gt);
-	intel_gt_fini_scratch(gt);
 	intel_gt_fini_buffer_pool(gt);
 	intel_gt_fini_hwconfig(gt);
 	intel_iov_fini(&gt->iov);

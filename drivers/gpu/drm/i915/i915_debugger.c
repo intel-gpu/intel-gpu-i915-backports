@@ -11,7 +11,9 @@
 #include <linux/ptrace.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-fence.h>
+#ifdef BPM_SHMEM_FS_H_NOT_INCLUDED
 #include <linux/shmem_fs.h>
+#endif
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_mman.h"
@@ -4177,12 +4179,11 @@ compute_engines_reschedule_heartbeat(struct i915_debugger *debugger)
 }
 
 static int queue_engine_pagefault(struct i915_debugger *debugger,
-				  struct intel_engine_cs *engine,
-				  struct i915_drm_client *client,
-				  struct intel_context *ce,
 				  struct i915_debugger_pagefault *pagefault)
 {
 	struct i915_debug_event_pagefault *ep;
+	struct intel_engine_cs *engine = pagefault->engine;
+	struct i915_drm_client *client = pagefault->context->client;
 	struct i915_gem_context *ctx;
 	struct i915_debug_event *event;
 	unsigned int size;
@@ -4194,7 +4195,7 @@ static int queue_engine_pagefault(struct i915_debugger *debugger,
 		goto err;
 
 	rcu_read_lock();
-	ctx = rcu_dereference(ce->gem_context);
+	ctx = rcu_dereference(pagefault->context->gem_context);
 	if (ctx)
 		ctx = i915_gem_context_get_rcu(ctx);
 	rcu_read_unlock();
@@ -4226,7 +4227,7 @@ static int queue_engine_pagefault(struct i915_debugger *debugger,
 	ep->pagefault_address = pagefault->fault.addr;
 	ep->bitmask_size = intel_gt_eu_attention_bitmap_size(engine->gt) * 3;
 	ep->ctx_handle = ctx_handle;
-	ep->lrc_handle = ce->debugger_lrc_id;
+	ep->lrc_handle = pagefault->context->debugger_lrc_id;
 
 
 	/*
@@ -4256,28 +4257,24 @@ err:
 	return ret;
 }
 
+static void free_pagefault(struct i915_debugger_pagefault *pf)
+{
+	intel_context_put(pf->context);
+	i915_vm_put(pf->vm);
+	kfree(pf);
+}
+
 static int debugger_handle_pagefault_list(struct i915_debugger *debugger)
 {
-	struct i915_debugger_pagefault *pagefault, *pf_temp;
-	struct intel_engine_cs *engine;
-	struct i915_drm_client *client;
-	struct intel_context *ce;
+	struct i915_debugger_pagefault *pf, *pf_temp;
 	int ret = 0;
 
 	mutex_lock(&debugger->pf_lock);
-	list_for_each_entry_safe(pagefault, pf_temp, &debugger->pagefaults, list) {
-		engine = pagefault->engine;
-		ce = pagefault->ce;
-		client = ce->client;
+	list_for_each_entry_safe(pf, pf_temp, &debugger->pagefaults, list) {
+		ret = queue_engine_pagefault(debugger, pf);
+		list_del(&pf->list);
 
-		ret = queue_engine_pagefault(debugger, engine, client, ce, pagefault);
-		/*
-		 * decrease the reference count of intel_context obtained from
-		 * i915_debugger_add_pagefault_list()
-		 */
-		intel_context_put(ce);
-		list_del(&pagefault->list);
-		kfree(pagefault);
+		free_pagefault(pf);
 
 		if (ret) {
 			break;
@@ -4766,28 +4763,10 @@ static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 	return ret;
 }
 
-static int i915_debugger_queue_engine_page_fault(struct intel_engine_cs *engine,
-						 struct i915_debugger_pagefault *pagefault)
+static int i915_debugger_queue_page_fault(struct i915_debugger_pagefault *pf)
 {
 	struct i915_debugger *debugger;
-	struct i915_drm_client *client;
-	struct intel_context *ce;
 	int ret;
-
-	/* Anybody listening out for an event? */
-	if (list_empty_careful(&engine->i915->debuggers.list))
-		return -ENOTCONN;
-
-	/* Find the client seeking attention */
-	ce = engine_active_context_get(engine);
-	if (IS_ERR(ce))
-		return PTR_ERR(ce);
-
-	if (!ce->client) {
-		intel_context_put(ce);
-		return -ENOENT;
-	}
-	client = ce->client;
 
 	/*
 	 * There has been attention by pagefault, thus the engine on which the
@@ -4801,22 +4780,20 @@ static int i915_debugger_queue_engine_page_fault(struct intel_engine_cs *engine,
 	 * So the context that did raise the attention from pagefault, has to
 	 * be the correct one.
 	 */
-	debugger = __debugger_get(client, false);
+	debugger = __debugger_get(pf->context->client, false);
 	if (!debugger) {
 		ret = -ENOTCONN;
 	} else if (!completion_done(&debugger->discovery)) {
-		DD_INFO(debugger, "%s: discovery not yet done\n", engine->name);
+		DD_INFO(debugger, "%s: discovery not yet done\n", pf->engine->name);
 		ret = -EBUSY;
 	} else {
-		ret = queue_engine_pagefault(debugger, engine, client, ce, pagefault);
+		ret = queue_engine_pagefault(debugger, pf);
 	}
 
 	if (debugger) {
-		DD_INFO(debugger, "%s: i915_queue_engine_page_fault: %d\n", engine->name, ret);
+		DD_INFO(debugger, "%s: i915_queue_engine_page_fault: %d\n", pf->engine->name, ret);
 		i915_debugger_put(debugger);
 	}
-
-	intel_context_put(ce);
 
 	return ret;
 }
@@ -5849,94 +5826,40 @@ int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 	return ret;
 }
 
-int
-i915_debugger_add_pagefault_list(struct intel_engine_cs *engine,
-				 struct i915_debugger_pagefault *pagefault)
+static int
+i915_debugger_add_pagefault_list(struct i915_debugger_pagefault *pf)
 {
-	struct i915_drm_client *client;
 	struct i915_debugger *debugger;
-	struct intel_context *ce;
 
-	if (list_empty_careful(&engine->i915->debuggers.list))
+	debugger = __debugger_get(pf->context->client, false);
+	if (!debugger)
 		return -ENOTCONN;
 
-	ce = engine_active_context_get(engine);
-	if (IS_ERR(ce))
-		return PTR_ERR(ce);
-
-	if (!ce->client) {
-		intel_context_put(ce);
-		return -ENOENT;
-	}
-	client = ce->client;
-
-	debugger = __debugger_get(client, false);
-	if (!debugger) {
-		intel_context_put(ce);
-		return -ENOTCONN;
-	}
-
-	pagefault->ce = ce;
 	mutex_lock(&debugger->pf_lock);
-	list_add_tail(&pagefault->list, &debugger->pagefaults);
+	list_add_tail(&pf->list, &debugger->pagefaults);
 	mutex_unlock(&debugger->pf_lock);
 
 	i915_debugger_put(debugger);
-
 	return 0;
 }
 
-static void debugger_print_pagefault_msg(struct i915_debugger_pagefault *pagefault)
-{
-	struct intel_engine_cs *engine = pagefault->engine;
-	struct drm_i915_private *i915 = engine->i915;
-	char task_comm[TASK_COMM_LEN + 8];
-	struct i915_drm_client *client;
-	struct intel_context *ce;
-	struct i915_request *rq;
-
-	rcu_read_lock();
-	rq = intel_engine_find_active_request(engine);
-	ce = rq ? intel_context_get_rcu(rq->context) : NULL;
-	rcu_read_unlock();
-
-	if (!rq || !ce)
-		return;
-
-	if (!ce->client)
-		goto out_ctx;
-
-	client = ce->client;
-
-	rcu_read_lock();
-	snprintf(task_comm, sizeof(task_comm), "%s [%d]",
-		 i915_drm_client_name(client),
-		 pid_nr(i915_drm_client_pid(client)));
-	rcu_read_unlock();
-
-	dev_info(i915->drm.dev, "page fault @ 0x%016llx, %s in %s\n",
-		 pagefault->fault.addr, engine->name, task_comm);
-
-out_ctx:
-	intel_context_put(ce);
-}
-
-int i915_debugger_handle_engine_page_fault(struct intel_engine_cs *engine,
-					   struct i915_debugger_pagefault *pagefault)
+int i915_debugger_handle_page_fault(struct i915_debugger_pagefault *pf)
 {
 	int ret;
 
-	debugger_print_pagefault_msg(pagefault);
-	ret = i915_debugger_queue_engine_page_fault(engine, pagefault);
+	/* Anybody listening out for an event? */
+	if (list_empty_careful(&pf->engine->i915->debuggers.list))
+		return -ENOTCONN;
 
 	/* if debugger discovery is not completed, queue pagefault */
+	ret = i915_debugger_queue_page_fault(pf);
 	if (ret == -EBUSY) {
-		ret = i915_debugger_add_pagefault_list(engine, pagefault);
+		ret = i915_debugger_add_pagefault_list(pf);
 		if (!ret)
 			goto out;
 	}
-	kfree(pagefault);
 
+	free_pagefault(pf);
 out:
 	return ret;
 }
@@ -5972,19 +5895,6 @@ bool i915_debugger_active_on_context(struct intel_context *context)
 
 	active = i915_debugger_active_on_client(client);
 	i915_drm_client_put(client);
-
-	return active;
-}
-
-bool i915_debugger_active_on_engine(struct intel_engine_cs *engine)
-{
-	struct i915_request *rq;
-	bool active;
-
-	rcu_read_lock();
-	rq = intel_engine_find_active_request(engine);
-	active = rq ? i915_debugger_active_on_context(rq->context) : false;
-	rcu_read_unlock();
 
 	return active;
 }

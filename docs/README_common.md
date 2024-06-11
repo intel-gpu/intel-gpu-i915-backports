@@ -35,11 +35,12 @@ Build Configurations:
   drmdkmsdeb-pkg - Build DKMS debian package for drm, i915 and dependent child drivers (mei and pmt/vsec)
   i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)
 
- Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_22.04_SERVER
+ Example: make i915dkmsdeb-pkg OS_DISTRIBUTION=UBUNTU_24.04_SERVER
 
- Debian package name contains UBUNTU_22.04_SERVER Kernel version as default.
+ Debian package name contains UBUNTU_24.04_SERVER Kernel version as default.
 
  ##### List of Debian supported OS distro versions #####
+ UBUNTU_24.04_DESKTOP	UBUNTU_24.04_SERVER
  UBUNTU_22.04_DESKTOP	UBUNTU_22.04_SERVER
 
  RPM Targets:

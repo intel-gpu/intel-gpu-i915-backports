@@ -79,7 +79,7 @@ static bool mark_guilty(struct i915_request *rq)
 	bool banned;
 	int i;
 
-	if (intel_context_is_closed(rq->context))
+	if (!intel_context_is_schedulable(rq->context))
 		return true;
 
 	rcu_read_lock();

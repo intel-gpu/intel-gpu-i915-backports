@@ -36,8 +36,8 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef _BACKPORT_LINUX_RESERVATION_H
-#define _BACKPORT_LINUX_RESERVATION_H
+#ifndef _LINUX_RESERVATION_H
+#define _LINUX_RESERVATION_H
 
 #include <linux/ww_mutex.h>
 #include <linux/dma-fence.h>
@@ -94,7 +94,7 @@ struct dma_resv {
 #else
 	seqcount_ww_mutex_t seq;
 #endif
-	
+
 	struct dma_fence __rcu *fence_excl;
 	struct dma_resv_list __rcu *fence;
 };

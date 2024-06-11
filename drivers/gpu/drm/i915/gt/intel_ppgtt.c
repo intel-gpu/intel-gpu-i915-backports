@@ -207,7 +207,7 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	 */
 	for_each_gt(gt, vm->i915, id) {
 		WRITE_ONCE(obj->mm.tlb[id], 0);
-		if (!atomic_read(&vm->active_contexts_gt[id]))
+		if (!atomic_read(&vm->active_contexts[id]))
 			continue;
 
 		if (!intel_gt_invalidate_tlb_range(gt, vm,
@@ -248,16 +248,37 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM;
 
 	err = vm->insert_entries(vm, vma, pat_index, pte_flags);
-	if (err)
+	if (unlikely(err))
 		return err;
 
 	i915_write_barrier(vm->i915);
+	set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
+
+	if (vm->fault_end > vm->fault_start) { /* Was there a scratch page access? */
+		u64 start = vma->node.start;
+		u64 end = start + vma->node.size;
+
+		if (start < vm->fault_end && end > vm->fault_start) {
+			vma_invalidate_tlb(vma);
+
+			/* Try to heal the edges of the scratch */
+			if (start <= vm->fault_start)
+				vm->fault_start = end;
+			if (end >= vm->fault_end)
+				vm->fault_end = start;
+
+			/* Reset for tight bounds on the next invalid fault */
+			if (vm->fault_end <= vm->fault_start)
+				vm->fault_end = 0, vm->fault_start = U64_MAX;
+		}
+	}
+
 	return 0;
 }
 
 void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 {
-	if (!i915_vma_is_bound(vma, PIN_RESIDENT))
+	if (!test_and_clear_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma)))
 		return;
 
 	vm->clear_range(vm, i915_vma_offset(vma), pte_size(vma));
@@ -300,9 +321,6 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	struct drm_i915_private *i915 = gt->i915;
 	unsigned int ppgtt_size = INTEL_INFO(i915)->ppgtt_size;
 	int err;
-
-	if (i915->params.ppgtt_size && IS_PONTEVECCHIO(i915))
-		ppgtt_size = i915->params.ppgtt_size;
 
 	ppgtt->vm.gt = gt;
 	ppgtt->vm.i915 = i915;

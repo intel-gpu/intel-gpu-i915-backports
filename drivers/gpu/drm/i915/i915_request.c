@@ -104,8 +104,8 @@ static const char *i915_fence_get_driver_name(struct dma_fence *fence)
 {
 	struct i915_request *rq = to_request(fence);
 
-	if (unlikely(!rq->engine)) /* not yet attached to any device */
-		return DRIVER_NAME;
+	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags) || !rq->engine)
+		return "<" DRIVER_NAME ">";
 
 	return dev_name(rq->engine->i915->drm.dev);
 }
@@ -384,6 +384,22 @@ static void remove_from_engine(struct i915_request *rq)
 	__notify_execute_cb_imm(rq);
 }
 
+static bool advance_ring(struct intel_ring *ring, int head)
+{
+	int old = READ_ONCE(ring->head);
+
+	/*
+	 * Make sure the ring only moves forward,
+	 * as it may be concurrently updated by a reset.
+	 */
+	do {
+		if (intel_ring_direction(ring, head, old) <= 0)
+			return false;
+	} while (!try_cmpxchg(&ring->head, &old, head));
+
+	return true;
+}
+
 bool i915_request_retire(struct i915_request *rq)
 {
 	if (!__i915_request_is_complete(rq))
@@ -406,12 +422,9 @@ bool i915_request_retire(struct i915_request *rq)
 	 */
 	GEM_BUG_ON(!list_is_first(&rq->link,
 				  &i915_request_timeline(rq)->requests));
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
-		/* Poison before we release our space in the ring */
-		__i915_request_fill(rq, POISON_FREE);
 
-	rq->ring->head = rq->postfix;
-	intel_ring_update_space(rq->ring);
+	if (advance_ring(rq->ring, rq->postfix))
+		intel_ring_update_space(rq->ring);
 
 	if (!i915_request_signaled(rq)) {
 		spin_lock_irq(&rq->sched.lock);
@@ -960,7 +973,6 @@ __i915_request_initialize(struct i915_request *rq,
 	rq->engine = ce->engine;
 	rq->ring = ce->ring;
 	rq->execution_mask = ce->engine->mask;
-	rq->has_user_fence = false;
 
 	RCU_INIT_POINTER(rq->timeline, tl);
 

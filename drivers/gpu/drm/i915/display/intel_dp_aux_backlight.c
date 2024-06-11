@@ -296,6 +296,7 @@ intel_dp_aux_hdr_setup_backlight(struct intel_connector *connector, enum pipe pi
 			return ret;
 		}
 	}
+
 #ifdef BPM_DRM_LUMINANCE_RANGE_INFO_NOT_PRESENT
 	panel->backlight.max = 512;
 	panel->backlight.min = 0;

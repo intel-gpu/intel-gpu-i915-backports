@@ -705,15 +705,21 @@ static u32 glk_plane_color_ctl(const struct intel_crtc_state *crtc_state,
 	struct intel_plane *plane = to_intel_plane(plane_state->uapi.plane);
 	u32 plane_color_ctl = 0;
 
-	plane_color_ctl |= PLANE_COLOR_PLANE_GAMMA_DISABLE;
-
 #ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+	plane_color_ctl |= PLANE_COLOR_PLANE_GAMMA_DISABLE;
+#else
+	/* FIXME needs hw.gamma_lut */
+	if (!plane_state->uapi.gamma_lut)
+		plane_color_ctl |= PLANE_COLOR_PLANE_GAMMA_DISABLE;
+#endif
+
+#ifndef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	/* FIXME needs hw.degamma_lut */
 	if (plane_state->uapi.degamma_lut)
 		plane_color_ctl |= PLANE_COLOR_PRE_CSC_GAMMA_ENABLE;
 #endif
 
-#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
+#ifndef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 	/* FIXME needs hw.ctm */
 	if (plane_state->uapi.ctm)
 		plane_color_ctl |= PLANE_COLOR_PLANE_CSC_ENABLE;
@@ -932,7 +938,7 @@ icl_plane_update_noarm(struct intel_plane *plane,
 	if (plane_state->force_black)
 		icl_plane_csc_load_black(plane);
 
-#ifdef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
+#ifndef BPM_DRM_PLANE_ATTACH_CTM_PROPERTY_API_PRESENT
 	if (plane_state->uapi.color_mgmt_changed) {
 		intel_color_load_plane_luts(&plane_state->uapi);
 		intel_color_load_plane_csc_matrix(&plane_state->uapi);
@@ -1856,9 +1862,10 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 						 BIT(DRM_SCALING_FILTER_DEFAULT) |
 						 BIT(DRM_SCALING_FILTER_NEAREST_NEIGHBOR));
 
-#ifdef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
+#ifndef BPM_DRM_GAMMA_DEGAMMA_API_PRESENT
 	intel_color_plane_init(&plane->base);
 #endif
+
 	intel_plane_helper_add(plane);
 
 	return plane;
