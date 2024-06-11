@@ -817,6 +817,7 @@ struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
 	sg = kmalloc(sizeof(struct sg_table), GFP_KERNEL);
 	if (!sg)
 		return ERR_PTR(-ENOMEM);
+
 #ifdef BPM_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_NOT_PRESENT
 	err = sg_alloc_table_from_pages(sg, pages, nr_pages, 0,
 			nr_pages << PAGE_SHIFT, GFP_KERNEL);
@@ -830,8 +831,8 @@ struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
 	if (max_segment == 0)
 		max_segment = UINT_MAX;
 	err = sg_alloc_table_from_pages_segment(sg, pages, nr_pages, 0,
-			nr_pages << PAGE_SHIFT,
-			max_segment, GFP_KERNEL);
+						nr_pages << PAGE_SHIFT,
+						max_segment, GFP_KERNEL);
 	if (err) {
 		kfree(sg);
 		sg = ERR_PTR(err);

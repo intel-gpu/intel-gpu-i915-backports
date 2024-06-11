@@ -32,7 +32,7 @@
 
 #include <uapi/drm/i915_drm.h>
 
-#if !IS_ENABLED (CONFIG_AUXILIARY_BUS)
+#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/mfd/core.h>
 #endif
 
@@ -90,7 +90,6 @@
 #include "intel_runtime_pm.h"
 #include "intel_step.h"
 #include "intel_uncore.h"
-#include "i915_addr_trans_svc.h"
 
 struct dpll;
 struct drm_i915_clock_gating_funcs;
@@ -312,7 +311,11 @@ struct i915_gem_mm {
 
 	struct notifier_block oom_notifier;
 	struct notifier_block vmap_notifier;
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	struct shrinker *shrinker;
+#else
 	struct shrinker shrinker;
+#endif
 
 	/* shrinker accounting, also useful for userland debugging */
 	u64 shrink_memory;
@@ -498,9 +501,6 @@ struct drm_i915_private {
 	struct mutex gmbus_mutex;
 #endif
 
-	/* svm_init_mutex  protects concurrent svm devmem initialization for lmem regions */
-	struct mutex svm_init_mutex;
-
 	/**
 	 * Base address of where the gmbus and gpio blocks are located (either
 	 * on PCH or on SoC for platforms without PCH).
@@ -631,7 +631,6 @@ struct drm_i915_private {
 	DECLARE_HASHTABLE(mm_structs, 7);
 	spinlock_t mm_lock;
 #endif
-
 	struct i915_gem_mm mm;
 
 	/* Kernel Modesetting */
@@ -936,13 +935,8 @@ struct drm_i915_private {
 	} cache_resv;
 
 	bool device_faulted;
+	bool in_recovery;
 	struct pci_saved_state *pci_state;
-
-	/* Address translation service support */
-	struct i915_ats_priv *ats_priv;
-	unsigned long flags;
-	int pasid_counter;
-#define INTEL_FLAG_ATS_ENABLED		0
 };
 
 static inline struct drm_i915_private *to_i915(const struct drm_device *dev)
@@ -1431,9 +1425,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 	(INTEL_INFO(dev_priv)->oam_uses_vdbox0_channel)
 #define HAS_OAC(dev_priv) (INTEL_INFO(dev_priv)->has_oac)
 
-#define HAS_FULL_PS64(dev_priv) (INTEL_INFO(dev_priv)->has_full_ps64 && \
-	 (dev_priv)->params.enable_full_ps64)
-
 #define HAS_GMD_ID(i915)	INTEL_INFO(i915)->has_gmd_id
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
@@ -1520,6 +1511,8 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_MEM_SPARING_SUPPORT(dev_priv) \
 	(INTEL_INFO(dev_priv)->has_mem_sparing)
 
+#define HAS_SURVIVABILITY_MODE(i915) (INTEL_INFO(i915)->has_survivability_mode)
+
 #define HAS_ASID_TLB_INVALIDATION(i915) \
 	(INTEL_INFO(i915)->has_asid_tlb_invalidation)
 
@@ -1536,15 +1529,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 #define HAS_MEM_FENCE_SUPPORT(i915) ((i915)->params.enable_mem_fence && IS_PONTEVECCHIO((i915)))
 
 #define HAS_LMTT_LVL2(i915) (INTEL_INFO(i915)->has_lmtt_lvl2)
-
-static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
-{
-#ifdef CPTCFG_DRM_I915_SVM
-	return HAS_RECOVERABLE_PAGE_FAULT(dev_priv);
-#else
-	return false;
-#endif
-}
 
 static inline struct intel_gt *to_root_gt(struct drm_i915_private *i915)
 {
@@ -1765,6 +1749,24 @@ static inline bool
 i915_is_pci_faulted(const struct drm_i915_private *i915)
 {
 	return READ_ONCE(i915->device_faulted);
+}
+
+static inline void
+i915_pci_error_set_in_recovery(struct drm_i915_private *i915)
+{
+	WRITE_ONCE(i915->in_recovery, true);
+}
+
+static inline void
+i915_pci_error_clear_in_recovery(struct drm_i915_private *i915)
+{
+	WRITE_ONCE(i915->in_recovery, false);
+}
+
+static inline bool
+i915_is_pci_in_recovery(const struct drm_i915_private *i915)
+{
+	return READ_ONCE(i915->in_recovery);
 }
 
 static inline int __i915_first_online_cpu(const struct cpumask *mask)

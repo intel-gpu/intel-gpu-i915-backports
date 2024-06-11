@@ -1043,11 +1043,8 @@ static int pf_alloc_vf_ctxs_range(struct intel_iov *iov, unsigned int id, u16 nu
 		return -ENOMEM;
 
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
-#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#else
+
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif
 		u16 size_bits = re - rs;
 
 		/*
@@ -1232,11 +1229,7 @@ static u16 pf_get_ctxs_free(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		sum += re - rs;
@@ -1276,11 +1269,7 @@ static u16 pf_get_ctxs_max_quota(struct intel_iov *iov)
 	if (unlikely(!ctxs_bitmap))
 		return 0;
 
-#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange(rs, re, ctxs_bitmap, ctxs_bitmap_total_bits()) {
-#else
 	bitmap_for_each_clear_region(ctxs_bitmap, rs, re, 0, ctxs_bitmap_total_bits()) {
-#endif
 		IOV_DEBUG(iov, "ctxs hole %u-%u (%u)\n", decode_vf_ctxs_start(rs),
 			  decode_vf_ctxs_start(re) - 1, decode_vf_ctxs_count(re - rs));
 		reserved -= min3(reserved, (u16)(re - rs), max);
@@ -1589,11 +1578,7 @@ static u16 pf_get_max_dbs(struct intel_iov *iov)
 	if (unlikely(!dbs_bitmap))
 		return 0;
 
-#ifdef BPM_BITMAP_FOR_REGION_NOT_PRESENT
-	for_each_clear_bitrange(rs, re, dbs_bitmap, GUC_NUM_DOORBELLS) {
-#else
 	bitmap_for_each_clear_region(dbs_bitmap, rs, re, 0, GUC_NUM_DOORBELLS) {
-#endif
 		IOV_DEBUG(iov, "dbs hole %u-%u (%u)\n", rs, re, re - rs);
 		limit = max_t(u16, limit, re - rs);
 	}
@@ -2055,7 +2040,6 @@ static u64 pf_query_free_lmem(struct intel_iov *iov)
 	struct intel_gt *gt = iov_to_gt(iov);
 
 	/* Flush any pending work to get reliable results */
-	intel_memory_region_flush(gt->lmem);
 	intel_gt_flush_buffer_pool(gt);
 	i915_gem_drain_workqueue(gt->i915);
 

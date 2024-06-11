@@ -34,13 +34,15 @@ struct i915_ext_attr {
 };
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-static ssize_t gt_driver_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+static ssize_t gt_driver_error_show(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t gt_driver_error_show(struct device *dev,
-                                   struct device_attribute *attr,
-                                   char *buf)
+				    struct device_attribute *attr,
+				    char *buf)
 {
 #endif
 	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
@@ -53,7 +55,9 @@ static ssize_t gt_driver_error_show(struct device *dev,
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-static ssize_t sgunit_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+static ssize_t sgunit_error_show(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
@@ -69,7 +73,9 @@ static ssize_t sgunit_error_show(struct device *dev,
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-static ssize_t soc_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+static ssize_t soc_error_show(struct kobject *kobj,
+			      struct kobj_attribute *attr,
+			      char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else

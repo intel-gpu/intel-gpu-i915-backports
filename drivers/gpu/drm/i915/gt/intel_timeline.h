@@ -102,6 +102,7 @@ void intel_timeline_reset_seqno(const struct intel_timeline *tl);
 int intel_timeline_read_hwsp(struct i915_request *from,
 			     struct i915_request *until,
 			     u32 *hwsp_offset);
+void intel_timeline_rebase_hwsp(struct intel_timeline *tl);
 
 void intel_gt_init_timelines(struct intel_gt *gt);
 void intel_gt_fini_timelines(struct intel_gt *gt);

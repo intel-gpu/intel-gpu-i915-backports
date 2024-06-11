@@ -45,7 +45,6 @@
 #include "i915_gem_region.h"
 #include "i915_gem_vm_bind.h"
 #include "i915_memcpy.h"
-#include "i915_svm.h"
 #include "i915_trace.h"
 
 static struct kmem_cache *slab_objects;
@@ -1250,7 +1249,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	trace_i915_gem_object_migrate(obj, donor->mm.region.mem);
 
 	i915_gem_object_unaccount(obj);
-	swap(obj->base.size, donor->base.size);
+	GEM_BUG_ON(donor->base.size != obj->base.size); /* no expansion allowed */
 	swap(obj->base.filp, donor->base.filp);
 	swap(obj->flags, donor->flags);
 	swap(obj->ops, donor->ops);

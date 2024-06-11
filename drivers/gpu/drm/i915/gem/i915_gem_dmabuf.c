@@ -368,6 +368,7 @@ exit:
 
 #define I915_P2PDMA_OVERRIDE BIT(0)
 #define I915_FABRIC_ONLY BIT(1)
+#define I915_MOVE_NOTIFY_ENABLE BIT(2)
 
 static bool fabric_only(struct drm_i915_private *i915)
 {
@@ -844,8 +845,12 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	obj->write_domain = 0;
 
 	/* and attach the object */
-	attach = dma_buf_dynamic_attach(dma_buf, dev->dev,
-					&i915_dmabuf_attach_ops, obj);
+	if (to_i915(obj->base.dev)->params.prelim_override_p2p_dist & I915_MOVE_NOTIFY_ENABLE)
+		attach = dma_buf_dynamic_attach(dma_buf, dev->dev,
+						&i915_dmabuf_attach_ops, obj);
+	else
+		attach = dma_buf_dynamic_attach(dma_buf, dev->dev, NULL, obj);
+
 	if (IS_ERR(attach)) {
 		i915_gem_object_put(obj);
 		return ERR_CAST(attach);

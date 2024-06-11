@@ -403,6 +403,13 @@ static u32 get_reset_domain(u8 ver, enum intel_engine_id id)
 	return engine_reset_domains[id];
 }
 
+static void reset_work(struct work_struct *work)
+{
+	struct intel_engine_cs *engine = container_of(work, struct intel_engine_cs, reset.work);
+
+	intel_gt_reset(engine->gt, engine->mask, engine->reset.msg);
+}
+
 static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 			      u8 logical_instance)
 {
@@ -453,6 +460,8 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	engine->logical_mask = BIT(logical_instance);
 	engine->irq_offset = info->irq_offset;
 	__sprint_engine_name(engine);
+
+	INIT_WORK(&engine->reset.work, reset_work);
 
 	engine->ppgtt_size = INTEL_INFO(i915)->ppgtt_size;
 	if (IS_PONTEVECCHIO(i915) && engine->class == VIDEO_DECODE_CLASS)
@@ -1218,6 +1227,7 @@ static int engine_setup_common(struct intel_engine_cs *engine)
 #ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	engine->sched_engine->private_data = engine;
 #endif
+
 	intel_engine_init_execlists(engine);
 	intel_engine_init__pm(engine);
 	intel_engine_init_retire(engine);
@@ -1253,8 +1263,6 @@ static int measure_breadcrumb_dw(struct intel_context *ce)
 	struct intel_engine_cs *engine = ce->engine;
 	struct measure_breadcrumb *frame;
 	int dw;
-
-	GEM_BUG_ON(!engine->gt->scratch);
 
 	frame = kzalloc(sizeof(*frame), GFP_KERNEL);
 	if (!frame)

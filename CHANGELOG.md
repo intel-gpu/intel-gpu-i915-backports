@@ -1,4 +1,31 @@
 # ChangeLog
+## Release I915_24WW23.5_881.19_24.2.17_240301.20
+* i915: update to reduce pagefault reporting for closed context during process exit
+* i915: update to extend waits to capture for slower SIP resolves
+* i915: fix match faulting vm for request/context lookup
+* i915: fix to avoid invalid data during sysfs files show and restore callbacks
+* i915: fix to invalidate TLB after out of bounds userspace access serviced by a scratch page
+* i915: Update to load and use HuC fw v7.10.16 on Flex
+* i915: fix to disable move_notify by default as cause of reboot seen on max
+* i915: update to quiesce gt traffic on shutdown
+* i915: update to load and use HuC fw v7.10.15 on flex
+* i915: fix for rcs hang occasionally seen during memory migration with virtualization on flex
+* i915: fix to use compact PT for flat-CCS updates on flex
+* i915: fix to flush after posting PTE updates for blitter swap
+* i915: update to disable preemption of kernel blitter contexts
+* i915: fix for error unwind of ppGTT inserts after allocation failure
+* i915: fix for thread safety during pt allocation
+* i915: fix ring head update race condition after reset
+* i915: fix use after free during object clear
+* i915: update to add dummy blt w/a prior to flusing blitter copies
+* i915: Update to use GuC fw v70.22.0 on flex while remaining on v70.19.2 for max
+* i915: update to load and user GuC fw v70.20.2
+* i915: add survivability lite feature for fw updates on flex
+* i915: fix to Wa_16018031267 Wa_16018063123 implementations on max
+* i915: fix for a null pointer deref on page fault of an imported object
+* i915: update to allow pcie recovery flow in pf when sriov vf are enabled
+* i915: update vm unbind tlb update to be synchronous
+
 ## Release I915_24WW12.5_821.30_24.1.11_240117.14
 * i915: fix to prevent double-free of vma->pages/obj->mm.pages during migration
 * i915: update to retry guc during pagefault processing to avoid -EIO warnings under load

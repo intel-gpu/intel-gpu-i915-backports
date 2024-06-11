@@ -5,7 +5,7 @@
 #include <linux/slab_def.h>
 #endif
 
-#ifdef CONFIG_SLUB
+#if defined (CONFIG_SLUB) && defined (BPM_SLUB_DEF_IS_PRESENT)
 #include <linux/slub_def.h>
 #endif
 

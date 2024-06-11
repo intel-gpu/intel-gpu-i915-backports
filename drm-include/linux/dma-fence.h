@@ -10,8 +10,8 @@
  * Maarten Lankhorst <maarten.lankhorst@canonical.com>
  */
 
-#ifndef __BACKPORT_LINUX_DMA_FENCE_H
-#define __BACKPORT_LINUX_DMA_FENCE_H
+#ifndef __LINUX_DMA_FENCE_H
+#define __LINUX_DMA_FENCE_H
 
 #include <linux/err.h>
 #include <linux/wait.h>

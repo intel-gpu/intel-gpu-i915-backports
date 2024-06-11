@@ -353,6 +353,7 @@ int mock_engine_init(struct intel_engine_cs *engine)
 #ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	engine->sched_engine->private_data = engine;
 #endif
+
 	intel_engine_init_execlists(engine);
 	intel_engine_init__pm(engine);
 	intel_engine_init_retire(engine);

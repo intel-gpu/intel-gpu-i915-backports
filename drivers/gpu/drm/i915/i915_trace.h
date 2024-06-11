@@ -10,7 +10,9 @@
 #include <linux/string_helpers.h>
 #include <linux/types.h>
 #include <linux/tracepoint.h>
+#ifdef BPM_CHANGE_TRACE_INCLUDE_PATH
 #include <backport/backport_path.h>
+#endif
 
 #include <drm/drm_drv.h>
 
@@ -1063,6 +1065,10 @@ TRACE_EVENT(i915_vm_prefetch,
 /* This part must be outside protection */
 #undef TRACE_INCLUDE_PATH
 #undef TRACE_INCLUDE_FILE
+#ifdef BPM_CHANGE_TRACE_INCLUDE_PATH
 #define TRACE_INCLUDE_PATH BACKPORT_PATH/drivers/gpu/drm/i915
+#else
+#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/i915
+#endif
 #define TRACE_INCLUDE_FILE i915_trace
 #include <trace/define_trace.h>

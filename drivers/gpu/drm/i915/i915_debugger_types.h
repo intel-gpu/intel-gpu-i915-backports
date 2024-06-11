@@ -166,8 +166,9 @@ struct i915_debugger {
 
 struct i915_debugger_pagefault {
 	struct list_head list;
-	struct intel_context *ce;
+	struct i915_address_space *vm;
 	struct intel_engine_cs *engine;
+	struct intel_context *context;
 
 	struct {
 		u64 addr;

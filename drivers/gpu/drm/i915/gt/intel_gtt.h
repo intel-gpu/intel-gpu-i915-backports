@@ -251,7 +251,6 @@ struct i915_vma_ops {
 	void (*clear_pages)(struct i915_vma *vma);
 };
 
-struct i915_svm;
 struct pt_insert;
 
 struct i915_address_space {
@@ -282,6 +281,7 @@ struct i915_address_space {
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
 	u64 min_alignment[INTEL_REGION_UNKNOWN];
+	u64 fault_start, fault_end;
 
 	/*
 	 * Each active user context has its own address space (in full-ppgtt).
@@ -323,10 +323,6 @@ struct i915_address_space {
 	struct list_head priv_obj_list;
 	struct i915_active_fence user_fence;
 
-	/* SVM */
-	struct i915_svm *svm;
-	struct mutex svm_mutex; /* protects svm enabling */
-
 	unsigned long flags;
 #define I915_VM_HAS_PERSISTENT_BINDS 0
 
@@ -344,9 +340,6 @@ struct i915_address_space {
 
 	/* Is address space enabled for recoverable page faults? */
 	bool page_fault_enabled:1;
-
-	/* Address space requires scratch page invalidation  on bind */
-	bool invalidate_tlb_scratch:1;
 
 	unsigned int pt_compact;
 
@@ -390,9 +383,6 @@ struct i915_address_space {
 				   void *data),
 			void *data);
 
-	void (*invalidate_dev_tlb)(struct i915_address_space *vm,
-				   u64 start, u64 length);
-
 	struct i915_vma_ops vma_ops;
 
 	I915_SELFTEST_DECLARE(struct fault_attr fault_attr);
@@ -401,7 +391,7 @@ struct i915_address_space {
 	struct i915_active active;
 
 	/* Per tile active users of this VM */
-	atomic_t active_contexts_gt[I915_MAX_GT];
+	atomic_t active_contexts[I915_MAX_GT];
 
 	/* PASID for Address Translation Services */
 	struct iommu_sva *sva;
@@ -680,20 +670,5 @@ static inline struct sgt_dma {
 	max = addr + min_t(u64, (sg_dma_len(sg) - offset), vma->size);
 	return (struct sgt_dma) { sg, addr, max, vma->size };
 }
-
-/* SVM UAPI */
-#define I915_GTT_SVM_READONLY  BIT(0)
-#define I915_GTT_SVM_LMEM      BIT(1)
-
-int svm_bind_addr_prepare(struct i915_address_space *vm,
-			  struct i915_gem_ww_ctx *ww,
-			  u64 start, u64 size);
-int svm_bind_addr_commit(struct i915_address_space *vm,
-			 u64 start, u64 size, u64 flags,
-			 struct sg_table *st, u32 sg_page_sizes);
-int svm_bind_addr(struct i915_address_space *vm, struct i915_gem_ww_ctx *ctx,
-		  u64 start, u64 size, u64 flags,
-		  struct sg_table *st, u32 sg_page_sizes);
-void svm_unbind_addr(struct i915_address_space *vm, u64 start, u64 size);
 
 #endif

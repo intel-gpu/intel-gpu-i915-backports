@@ -344,6 +344,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 
 	if (obj->mm.madv != I915_MADV_WILLNEED)
 		i915_gem_object_truncate(obj);
+
 #ifndef BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
 	if (kref_read(&obj->base.refcount)) /* prune stale fences */
 		dma_resv_add_excl_fence(obj->base.resv, NULL);
@@ -352,7 +353,109 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 	return 0;
 }
 
-#ifndef BPM_VMAP_PFN_NOT_PRESENT
+#ifdef BPM_VMAP_PFN_NOT_PRESENT
+static inline pte_t iomap_pte(resource_size_t base,
+			      dma_addr_t offset,
+			      pgprot_t prot)
+{
+	return pte_mkspecial(pfn_pte((base + offset) >> PAGE_SHIFT, prot));
+}
+
+/* The 'mapping' part of i915_gem_object_pin_map() below */
+static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
+				      enum i915_map_type type)
+{
+	unsigned long n_pte = obj->base.size >> PAGE_SHIFT;
+	struct sg_table *sgt = obj->mm.pages;
+	pte_t *stack[32], **mem;
+	struct vm_struct *area;
+	pgprot_t pgprot;
+
+	if (!i915_gem_object_has_struct_page(obj) && type != I915_MAP_WC)
+		return ERR_PTR(-ENODEV);
+
+	if (GEM_WARN_ON(type == I915_MAP_WC &&
+			!static_cpu_has(X86_FEATURE_PAT)))
+		return ERR_PTR(-ENODEV);
+
+	/* A single page can always be kmapped */
+	if (n_pte == 1 && type == I915_MAP_WB) {
+		struct page *page = sg_page(sgt->sgl);
+
+		/*
+		 * On 32b, highmem using a finite set of indirect PTE (i.e.
+		 * vmap) to provide virtual mappings of the high pages.
+		 * As these are finite, map_new_virtual() must wait for some
+		 * other kmap() to finish when it runs out. If we map a large
+		 * number of objects, there is no method for it to tell us
+		 * to release the mappings, and we deadlock.
+		 *
+		 * However, if we make an explicit vmap of the page, that
+		 * uses a larger vmalloc arena, and also has the ability
+		 * to tell us to release unwanted mappings. Most importantly,
+		 * it will fail and propagate an error instead of waiting
+		 * forever.
+		 *
+		 * So if the page is beyond the 32b boundary, make an explicit
+		 * vmap.
+		 */
+		if (!PageHighMem(page))
+			return page_address(page);
+	}
+
+	mem = stack;
+	if (n_pte > ARRAY_SIZE(stack)) {
+		 /* Too big for stack -- allocate temporary array instead */
+		mem = kvmalloc_array(n_pte, sizeof(*mem), GFP_KERNEL);
+		if (!mem)
+			return NULL;
+	}
+
+	area = alloc_vm_area(obj->base.size, mem);
+	if (!area) {
+		if (mem != stack)
+			kvfree(mem);
+		return NULL;
+	}
+
+	switch (type) {
+	default:
+		MISSING_CASE(type);
+		fallthrough;    /* to use PAGE_KERNEL anyway */
+	case I915_MAP_WB:
+		pgprot = PAGE_KERNEL;
+		break;
+	case I915_MAP_WC:
+		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
+		break;
+	}
+
+	if (i915_gem_object_has_struct_page(obj)) {
+		struct sgt_iter iter;
+		struct page *page;
+		pte_t **ptes = mem;
+
+		for_each_sgt_page(page, iter, sgt)
+			**ptes++ = mk_pte(page, pgprot);
+	} else {
+		resource_size_t iomap;
+		struct sgt_iter iter;
+		pte_t **ptes = mem;
+		dma_addr_t addr;
+
+		iomap = obj->mm.region.mem->iomap.base;
+		iomap -= obj->mm.region.mem->region.start;
+		for_each_sgt_daddr(addr, iter, sgt)
+			**ptes++ = iomap_pte(iomap, addr, pgprot);
+
+	}
+
+	if (mem != stack)
+		kvfree(mem);
+
+	return area->addr;
+}
+#else
 /* The 'mapping' part of i915_gem_object_pin_map() below */
 static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 				      enum i915_map_type type)
@@ -447,107 +550,6 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 
 	return vaddr ?: ERR_PTR(-ENOMEM);
 }
-
-#else
-static inline pte_t iomap_pte(resource_size_t base,
-                              dma_addr_t offset,
-                              pgprot_t prot)
-{
-        return pte_mkspecial(pfn_pte((base + offset) >> PAGE_SHIFT, prot));
-}
-
-/* The 'mapping' part of i915_gem_object_pin_map() below */
-static void *i915_gem_object_map(struct drm_i915_gem_object *obj,
-				      enum i915_map_type type)
-{
-	unsigned long n_pte = obj->base.size >> PAGE_SHIFT;
-	struct sg_table *sgt = obj->mm.pages;
-	pte_t *stack[32], **mem;
-	struct vm_struct *area;
-	pgprot_t pgprot;
-
-	if (!i915_gem_object_has_struct_page(obj) && type != I915_MAP_WC)
-		return ERR_PTR(-ENODEV);
-
-	if (GEM_WARN_ON(type == I915_MAP_WC &&
-			!static_cpu_has(X86_FEATURE_PAT)))
-		return ERR_PTR(-ENODEV);
-
-	/* A single page can always be kmapped */
-	if (n_pte == 1 && type == I915_MAP_WB) {
-		struct page *page = sg_page(sgt->sgl);
-
-		/*
-		 * On 32b, highmem using a finite set of indirect PTE (i.e.
-		 * vmap) to provide virtual mappings of the high pages.
-		 * As these are finite, map_new_virtual() must wait for some
-		 * other kmap() to finish when it runs out. If we map a large
-		 * number of objects, there is no method for it to tell us
-		 * to release the mappings, and we deadlock.
-		 *
-		 * However, if we make an explicit vmap of the page, that
-		 * uses a larger vmalloc arena, and also has the ability
-		 * to tell us to release unwanted mappings. Most importantly,
-		 * it will fail and propagate an error instead of waiting
-		 * forever.
-		 *
-		 * So if the page is beyond the 32b boundary, make an explicit
-		 * vmap.
-		 */
-                if (!PageHighMem(page))
-                        return page_address(page);
-        }
-
-        mem = stack;
-        if (n_pte > ARRAY_SIZE(stack)) {
-                 /* Too big for stack -- allocate temporary array instead */
-                mem = kvmalloc_array(n_pte, sizeof(*mem), GFP_KERNEL);
-                if (!mem)
-                        return NULL;
-        }
-
-        area = alloc_vm_area(obj->base.size, mem);
-        if (!area) {
-                if (mem != stack)
-                        kvfree(mem);
-                return NULL;
-        }
-
-        switch (type) {
-        default:
-                MISSING_CASE(type);
-                fallthrough;    /* to use PAGE_KERNEL anyway */
-        case I915_MAP_WB:
-		pgprot = PAGE_KERNEL;
-		break;
-	case I915_MAP_WC:
-		pgprot = pgprot_writecombine(PAGE_KERNEL_IO);
-		break;
-	}
-
-	if (i915_gem_object_has_struct_page(obj)) {
-                struct sgt_iter iter;
-                struct page *page;
-                pte_t **ptes = mem;
-                for_each_sgt_page(page, iter, sgt)
-                        **ptes++ = mk_pte(page, pgprot);
-        } else {
-                resource_size_t iomap;
-                struct sgt_iter iter;
-                pte_t **ptes = mem;
-                dma_addr_t addr;
-                iomap = obj->mm.region.mem->iomap.base;
-                iomap -= obj->mm.region.mem->region.start;
-                for_each_sgt_daddr(addr, iter, sgt)
-                        **ptes++ = iomap_pte(iomap, addr, pgprot);
-
-	}
-
-	if (mem != stack)
-		kvfree(mem);
-
-	return area->addr;
-}
 #endif
 
 /* get, pin, and map the pages of the object into kernel space */
@@ -604,7 +606,13 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 	}
 
 	if (!ptr) {
-#ifndef BPM_VMAP_PFN_NOT_PRESENT
+#ifdef BPM_VMAP_PFN_NOT_PRESENT
+		ptr = i915_gem_object_map(obj, type);
+		if (!ptr) {
+			ptr = ERR_PTR(-ENOMEM);
+			goto err_unpin;
+		}
+#else
 		if (GEM_WARN_ON(type == I915_MAP_WC && !pat_enabled()))
 			ptr = ERR_PTR(-ENODEV);
 		else if (i915_gem_object_has_struct_page(obj))
@@ -613,12 +621,6 @@ void *i915_gem_object_pin_map(struct drm_i915_gem_object *obj,
 			ptr = i915_gem_object_map_pfn(obj, type);
 		if (IS_ERR(ptr))
 			goto err_unpin;
-#else
-		ptr = i915_gem_object_map(obj, type);
-		if (!ptr) {
-			ptr = ERR_PTR(-ENOMEM);
-			goto err_unpin;
-		}
 #endif
 
 		obj->mm.mapping = page_pack_bits(ptr, type);

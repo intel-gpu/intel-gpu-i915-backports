@@ -152,7 +152,7 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
 	dma_resv_iter_begin(&cursor, obj->base.resv, DMA_RESV_USAGE_READ);
 	dma_resv_for_each_fence_unlocked(&cursor, fence) {
 		if (dma_resv_iter_is_restarted(&cursor))
-			 args->busy = 0;
+			args->busy = 0;
 
 		if (dma_resv_iter_usage(&cursor) <= DMA_RESV_USAGE_WRITE)
 			/* Translate the write fences to the READ *and* WRITE engine */

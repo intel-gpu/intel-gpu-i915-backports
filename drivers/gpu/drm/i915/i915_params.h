@@ -78,7 +78,6 @@ struct drm_printer;
 	param(unsigned int, debug_eu, 0, 0400) \
 	param(unsigned int, debugger_timeout_ms, 3000, 0400) \
 	param(int, debugger_log_level, -1, 0600) \
-	param(unsigned int, ppgtt_size, 57, 0400) \
 	param(int, fastboot, -1, 0600) \
 	param(int, enable_dpcd_backlight, -1, 0600) \
 	param(unsigned int, lmem_size, 0, 0400) \
@@ -95,9 +94,7 @@ struct drm_printer;
 	param(bool, enable_busy_v2, false, 0400) \
 	param(bool, allow_non_persist_without_reset, false, 0400) \
 	param(bool, enable_fake_int_wa, true, 0400) \
-	param(bool, enable_full_ps64, true, 0400) \
 	param(bool, enable_iaf, true, 0400) \
-	param(bool, address_translation_services, false, IS_ENABLED(CPTCFG_DRM_I915_ATS) ? 0400 : 0) \
 	param(bool, enable_secure_batch, false, 0400) \
 	param(bool, enable_rc6, true, 0400) \
 	param(bool, enable_rps, true, 0400) \
@@ -106,6 +103,7 @@ struct drm_printer;
 	param(bool, enable_hangcheck, true, 0600) \
 	param(bool, error_capture, true, IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) ? 0600 : 0) \
 	param(bool, disable_display, IS_ENABLED(CPTCFG_DRM_I915_DISPLAY) ? false : true, 0400) \
+	param(bool, survivability_mode, false, 0400) \
 	param(int, force_driver_flr, -1, 0400) \
 	param(bool, disable_bo_chunking, false, 0600) \
 	param(bool, enable_force_miss_ftlb, true, 0600) \

@@ -10,7 +10,8 @@
  * enum i915_iov_mode - I/O Virtualization mode.
  */
 enum i915_iov_mode {
-	I915_IOV_MODE_NONE = 1,
+	I915_IOV_MODE_ERR = 1,
+	I915_IOV_MODE_NONE,
 	I915_IOV_MODE_SRIOV_PF,
 	I915_IOV_MODE_SRIOV_VF,
 };

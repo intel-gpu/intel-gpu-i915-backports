@@ -1,7 +1,7 @@
 #include <linux/mm.h>
 #include "slab.h"
 
-#ifdef CONFIG_SLUB
+#if defined (CONFIG_SLUB) && defined (BPM_SLUB_DEF_IS_PRESENT)
 #include <linux/slub_def.h>
 #endif
 

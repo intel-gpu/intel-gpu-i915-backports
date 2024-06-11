@@ -962,13 +962,9 @@ int i915_vma_bind(struct i915_vma *vma)
 		goto err_pages;
 	}
 
-	err = mutex_lock_interruptible(&vm->mutex);
-	if (err)
-		goto err_fence;
-
 	err = i915_active_acquire(&vma->active);
 	if (err)
-		goto err_unlock;
+		goto err_fence;
 
 	err = __i915_vma_bind(vma,
 			      vma->obj->pat_index,
@@ -982,8 +978,6 @@ int i915_vma_bind(struct i915_vma *vma)
 
 err_active:
 	i915_active_release(&vma->active);
-err_unlock:
-	mutex_unlock(&vm->mutex);
 err_fence:
 	dma_fence_work_commit_imm(&work->base);
 err_pages:

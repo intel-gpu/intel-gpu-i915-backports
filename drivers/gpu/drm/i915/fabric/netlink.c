@@ -1238,7 +1238,6 @@ static const struct nla_policy nl_iaf_policy_fabric_id_sd_index_nested_port[IAF_
 };
 #endif
 
-
 static int nl_device_enum_op(struct sk_buff *msg, struct genl_info *info)
 {
 	return nl_process_query(msg, info, nl_process_device_enum);
@@ -1518,7 +1517,7 @@ int nl_init(void)
 	int err;
 
 #ifdef BPM_GENL_OPS_POLICY_MEMBER_NOT_PRESENT
-        BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_policy) != _IAF_ATTR_COUNT);
+	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_policy) != _IAF_ATTR_COUNT);
 #endif
 	/* IAF_CMD_OP_UNSPEC is not included so-1 */
 	BUILD_BUG_ON(ARRAY_SIZE(nl_iaf_cmds) != _IAF_CMD_OP_COUNT - 1);

@@ -263,6 +263,17 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 	return 0;
 }
 
+void i915_gem_shutdown(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int i;
+
+	for_each_gt(gt, i915, i) {
+		intel_gt_suspend_prepare(gt);
+		intel_gt_suspend_late(gt);
+	}
+}
+
 int i915_gem_freeze(struct drm_i915_private *i915)
 {
 	/* Discard all purgeable objects, let userspace recover those as

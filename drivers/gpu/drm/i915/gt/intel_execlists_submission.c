@@ -3344,7 +3344,6 @@ static void execlists_release(struct intel_engine_cs *engine)
 	execlists_shutdown(engine);
 
 	intel_engine_cleanup_common(engine);
-	lrc_fini_wa_ctx(engine);
 }
 
 static ktime_t execlists_engine_busyness(struct intel_engine_cs *engine,
@@ -3483,7 +3482,7 @@ int intel_execlists_submission_setup(struct intel_engine_cs *engine)
 
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	tasklet_init(&engine->sched_engine->tasklet,
-                    execlists_submission_tasklet, (unsigned long)engine);
+		     execlists_submission_tasklet, (unsigned long)engine);
 #else
 	tasklet_setup(&engine->sched_engine->tasklet, execlists_submission_tasklet);
 #endif
@@ -3495,8 +3494,6 @@ int intel_execlists_submission_setup(struct intel_engine_cs *engine)
 
 	if (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE)
 		rcs_submission_override(engine);
-
-	lrc_init_wa_ctx(engine);
 
 	if (HAS_LOGICAL_RING_ELSQ(i915)) {
 		execlists->submit_reg = uncore->regs +
@@ -4038,10 +4035,10 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 		err = -ENOMEM;
 		goto err_put;
 	}
-
 #ifndef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	ve->base.sched_engine->private_data = &ve->base;
 #endif
+
 	ve->base.cops = &virtual_context_ops;
 	ve->base.request_alloc = execlists_request_alloc;
 
@@ -4057,6 +4054,7 @@ execlists_create_virtual(struct intel_engine_cs **siblings, unsigned int count,
 #else
 	tasklet_setup(&ve->base.sched_engine->tasklet, virtual_submission_tasklet);
 #endif
+
 	intel_context_init(&ve->context, &ve->base);
 
 	ve->base.breadcrumbs = intel_breadcrumbs_create(NULL);

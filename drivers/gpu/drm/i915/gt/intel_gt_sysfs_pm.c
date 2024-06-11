@@ -85,28 +85,6 @@ struct i915_ext_attr {
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, _mode, i915_sysfs_show, i915_sysfs_store),  _show, _store}
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-/*Introduced kobj attributes to adopt to access sysnode under <dev>/gt/gt<i>/ */
-
-static ssize_t
-i915_sysfs_show_kobj(struct kobject *kobj,
-		struct kobj_attribute *attr, char *buf);
-
-static ssize_t
-i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr,
-		const char *buf, size_t count);
-typedef ssize_t (*show_kobj)(struct kobject *kobj, struct kobj_attribute *attr,
-		char *buf);
-typedef ssize_t (*store_kobj)(struct kobject *kobj, struct kobj_attribute *attr,
-		const char *buf, size_t count);
-
-struct i915_ext_attr_kobj {
-	struct kobj_attribute attr;
-	show_kobj i915_show_kobj;
-	store_kobj i915_store_kobj;
-};
-#endif
-
 static ssize_t
 i915_kobj_sysfs_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf);
@@ -130,14 +108,13 @@ struct i915_kobj_ext_attr {
 #define U8_8_VAL_MASK           0xffff
 #define U8_8_SCALE_TO_VALUE     "0.00390625"
 
-
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static u32 _with_pm_intel_dev_read(struct kobject *kobj,
 				   struct kobj_attribute *attr,
 				   i915_reg_t rgadr)
 #else
 static u32 _with_pm_intel_dev_read(struct device *dev,
-                                  struct device_attribute *attr,
+				   struct device_attribute *attr,
 				   i915_reg_t rgadr)
 #endif
 {
@@ -263,7 +240,7 @@ static ssize_t gt_rc6_residency_ms_show(struct kobject *kobj, struct kobj_attrib
 
 #define INTEL_KOBJ_GT_ATTR(_name, __mode, __show, __store, i915_show_kobj, i915_store_kobj) \
 	static struct i915_ext_attr_kobj dev_attr_gt_##_name =    \
-	{__ATTR(_name, __mode, __show, __store), i915_show_kobj, i915_store_kobj};    \
+	{__ATTR(_name, __mode, __show, __store), i915_show_kobj, i915_store_kobj};	\
 
 #define INTEL_KOBJ_GT_ATTR_RO(_name)                               \
 	INTEL_KOBJ_GT_ATTR(_name, 0444, i915_sysfs_show_kobj, NULL,\
@@ -563,11 +540,11 @@ static ssize_t rps_min_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 }
 
 static ssize_t rps_min_freq_mhz_store(struct kobject *kobj, struct kobj_attribute *attr,
-                                       const char *buff, size_t count)
+				       const char *buff, size_t count)
 {
-       struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = kobj_to_dev(kobj);
 
-       return min_freq_mhz_store(dev, (struct device_attribute *)attr, buff, count);
+	return min_freq_mhz_store(dev, (struct device_attribute *)attr, buff, count);
 }
 
 static ssize_t rps_RP0_freq_mhz_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -596,6 +573,7 @@ static ssize_t rps_RPn_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 #endif
 
 /* sysfs dual-location files <dev>/gt_* and <dev>/gt/gt<i>/rps_* */
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 #define INTEL_GT_RPS_SYSFS_ATTR(_name, __mode, __show, __store, i915_show, i915_store) \
 	static struct i915_ext_attr dev_attr_gt_##_name =    \
@@ -607,6 +585,7 @@ static ssize_t rps_RPn_freq_mhz_show(struct kobject *kobj, struct kobj_attribute
 	static struct i915_ext_attr dev_attr_rps_##_name =   \
 		{__ATTR(rps_##_name, __mode, __show, __store), i915_show, i915_store}
 #endif
+
 /* Note: rps_ and gt_ share common show and store functions. */
 #define INTEL_GT_RPS_SYSFS_ATTR_RO(_name)				\
 		INTEL_GT_RPS_SYSFS_ATTR(_name, 0444, i915_sysfs_show, NULL,\
@@ -625,13 +604,12 @@ INTEL_GT_RPS_SYSFS_ATTR_RO(RP0_freq_mhz);
 INTEL_GT_RPS_SYSFS_ATTR_RO(RP1_freq_mhz);
 INTEL_GT_RPS_SYSFS_ATTR_RO(RPn_freq_mhz);
 
-
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 #define INTEL_RPS_SYSFS_ATTR(_name, __mode, __show, __store, i915_show_kobj, \
 		i915_store_kobj) \
 	static struct i915_ext_attr_kobj dev_attr_rps_##_name =    \
 	{__ATTR(rps_##_name, __mode, __show, __store), i915_show_kobj, \
-		i915_store_kobj};    \
+		i915_store_kobj};	\
 
 /* Note: rps_ and gt_ share common show and store functions. */
 #define INTEL_RPS_SYSFS_ATTR_RO(_name)                               \
@@ -673,12 +651,12 @@ static const struct attribute * const gen6_gt_attrs[]  = GEN6_ATTR(gt);
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t rapl_PL1_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				      struct kobj_attribute *attr,
+				      char *buff)
 #else
 static ssize_t rapl_PL1_freq_mhz_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
+				      struct device_attribute *attr,
+				      char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -692,12 +670,12 @@ static ssize_t rapl_PL1_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t punit_req_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				       struct kobj_attribute *attr,
+				       char *buff)
 #else
 static ssize_t punit_req_freq_mhz_show(struct device *dev,
-                                      struct device_attribute *attr,
-                                      char *buff)
+				       struct device_attribute *attr,
+				       char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -711,12 +689,12 @@ static ssize_t punit_req_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_status_show(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					char *buff)
+					   struct kobj_attribute *attr,
+					   char *buff)
 #else
 static ssize_t throttle_reason_status_show(struct device *dev,
-                                          struct device_attribute *attr,
-                                          char *buff)
+					   struct device_attribute *attr,
+					   char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -734,7 +712,7 @@ static ssize_t throttle_reason_pl1_show(struct kobject *kobj,
 					char *buff)
 #else
 static ssize_t throttle_reason_pl1_show(struct device *dev,
-                                       struct device_attribute *attr,
+					struct device_attribute *attr,
 					char *buff)
 #endif
 {
@@ -768,11 +746,11 @@ static ssize_t throttle_reason_pl2_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_pl4_show(struct kobject *kobj,
-                                       struct kobj_attribute *attr,
-                                        char *buff)
+				       struct kobj_attribute *attr,
+					char *buff)
 #else
 static ssize_t throttle_reason_pl4_show(struct device *dev,
-                                       struct device_attribute *attr,
+					struct device_attribute *attr,
 					char *buff)
 #endif
 {
@@ -784,7 +762,6 @@ static ssize_t throttle_reason_pl4_show(struct device *dev,
 
 	return scnprintf(buff, PAGE_SIZE, "%u\n", pl4);
 }
-
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_thermal_show(struct kobject *kobj,
@@ -807,12 +784,12 @@ static ssize_t throttle_reason_thermal_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_prochot_show(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					char *buff)
+					    struct kobj_attribute *attr,
+					    char *buff)
 #else
 static ssize_t throttle_reason_prochot_show(struct device *dev,
-                                           struct device_attribute *attr,
-                                           char *buff)
+					    struct device_attribute *attr,
+					    char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -826,12 +803,12 @@ static ssize_t throttle_reason_prochot_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_ratl_show(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					char *buff)
+					 struct kobj_attribute *attr,
+					 char *buff)
 #else
 static ssize_t throttle_reason_ratl_show(struct device *dev,
-                                        struct device_attribute *attr,
-                                        char *buff)
+					 struct device_attribute *attr,
+					 char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -845,13 +822,12 @@ static ssize_t throttle_reason_ratl_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_vr_thermalert_show(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					char *buff)
+						  struct kobj_attribute *attr,
+						  char *buff)
 #else
 static ssize_t throttle_reason_vr_thermalert_show(struct device *dev,
-                                                 struct device_attribute *attr,
-                                                 char *buff)
-
+						  struct device_attribute *attr,
+						  char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -866,12 +842,12 @@ static ssize_t throttle_reason_vr_thermalert_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t throttle_reason_vr_tdc_show(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					char *buff)
+					   struct kobj_attribute *attr,
+					   char *buff)
 #else
 static ssize_t throttle_reason_vr_tdc_show(struct device *dev,
-                                          struct device_attribute *attr,
-                                          char *buff)
+					   struct device_attribute *attr,
+					   char *buff)
 #endif
 {
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -883,20 +859,6 @@ static ssize_t throttle_reason_vr_tdc_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%u\n", tdc);
 }
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-#define INTEL_KOBJ_ATTR_RO(_name, _show) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show_kobj, NULL), _show, NULL}
-
-#define INTEL_KOBJ_ATTR_WO(_name, _store) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, 0200, NULL, i915_sysfs_store_kobj), NULL, _store}
-
-
-#define INTEL_KOBJ_ATTR_RW(_name, _mode, _show, _store) \
-	struct i915_ext_attr_kobj dev_attr_##_name = \
-	{ __ATTR(_name, _mode, i915_sysfs_show_kobj, i915_sysfs_store_kobj), _show, _store}
-#endif
 /* dgfx sysfs files under directory <dev>/gt/gt<i>/ */
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static INTEL_KOBJ_ATTR_RO(rapl_PL1_freq_mhz, rapl_PL1_freq_mhz_show);
@@ -911,8 +873,10 @@ static INTEL_KOBJ_ATTR_RO(throttle_reason_ratl, throttle_reason_ratl_show);
 static INTEL_KOBJ_ATTR_RO(throttle_reason_vr_thermalert, throttle_reason_vr_thermalert_show);
 static INTEL_KOBJ_ATTR_RO(throttle_reason_vr_tdc, throttle_reason_vr_tdc_show);
 #else
-/* gen12+ sysfs files under directory <dev>/gt/gt<i>/ */
 static I915_DEVICE_ATTR_RO(rapl_PL1_freq_mhz, rapl_PL1_freq_mhz_show);
+
+/* gen12+ sysfs files under directory <dev>/gt/gt<i>/ */
+
 static I915_DEVICE_ATTR_RO(punit_req_freq_mhz, punit_req_freq_mhz_show);
 static I915_DEVICE_ATTR_RO(throttle_reason_status, throttle_reason_status_show);
 static I915_DEVICE_ATTR_RO(throttle_reason_pl1, throttle_reason_pl1_show);
@@ -946,11 +910,11 @@ static const struct attribute *freq_attrs[] = {
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t mem_RP0_freq_mhz_show(struct kobject *kobj,
-				      struct kobj_attribute *attr,
-				      char *buff)
+				     struct kobj_attribute *attr,
+				     char *buff)
 #else
 static ssize_t mem_RP0_freq_mhz_show(struct device *dev,
-                                     struct device_attribute *attr,
+				      struct device_attribute *attr,
 				      char *buff)
 #endif
 {
@@ -975,11 +939,11 @@ static ssize_t mem_RP0_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t mem_RPn_freq_mhz_show(struct kobject *kobj,
-				       struct kobj_attribute *attr,
-				      char *buff)
+				     struct kobj_attribute *attr,
+				     char *buff)
 #else
 static ssize_t mem_RPn_freq_mhz_show(struct device *dev,
-                                     struct device_attribute *attr,
+				      struct device_attribute *attr,
 				      char *buff)
 #endif
 {
@@ -1020,30 +984,31 @@ static const struct attribute *mem_freq_attrs[] = {
  * PVC Performance control/query interface -
  * sysfs files under directory <dev>/gt/gt<i>/
  */
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t freq_factor_scale_show(struct kobject *kobj,
 				      struct kobj_attribute *attr,
-				       char *buff)
+				      char *buff)
 #else
 static ssize_t freq_factor_scale_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
-
+				      struct device_attribute *attr,
+				      char *buff)
 #endif
+
 {
 	return sysfs_emit(buff, "%s\n", U8_8_SCALE_TO_VALUE);
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_freq_factor_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				     struct kobj_attribute *attr,
+				     char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t base_freq_factor_show(struct device *dev,
-                                    struct device_attribute *attr,
-                                    char *buff)
+				     struct device_attribute *attr,
+				     char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1060,16 +1025,17 @@ static ssize_t base_freq_factor_show(struct device *dev,
 
 	return sysfs_emit(buff, "%u\n", val);
 }
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_freq_factor_store(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				const char *buff, size_t count)
+				      struct kobj_attribute *attr,
+				      const char *buff, size_t count)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t base_freq_factor_store(struct device *dev,
-                                     struct device_attribute *attr,
-                                     const char *buff, size_t count)
+				      struct device_attribute *attr,
+				      const char *buff, size_t count)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1094,14 +1060,14 @@ static ssize_t base_freq_factor_store(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_RP0_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				      struct kobj_attribute *attr,
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t base_RP0_freq_mhz_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
+				      struct device_attribute *attr,
+				      char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1122,14 +1088,14 @@ static ssize_t base_RP0_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_RPn_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				      struct kobj_attribute *attr,
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t base_RPn_freq_mhz_show(struct device *dev,
-                                    struct device_attribute *attr,
-                                    char *buff)
+				     struct device_attribute *attr,
+				     char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1150,14 +1116,14 @@ static ssize_t base_RPn_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_act_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				      struct kobj_attribute *attr,
+				      char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t base_act_freq_mhz_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
+				      struct device_attribute *attr,
+				      char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1177,23 +1143,23 @@ static u32 media_ratio_mode_to_factor(u32 mode)
 
 	return factor[mode];
 }
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_freq_factor_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				      struct kobj_attribute *attr,
+				      char *buff)
 {
-	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_freq_factor_show(struct device *dev,
-                                     struct device_attribute *attr,
-                                     char *buff)
+				      struct device_attribute *attr,
+				      char *buff)
 {
 #endif
 	u32 mode;
 
 	/* 0xA008:13 value 0 represents 1:2 and 1 represents 1:1 */
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-        mode = _with_pm_intel_dev_read(kobj, attr, GEN6_RPNSWREQ);
+	mode = _with_pm_intel_dev_read(kobj, attr, GEN6_RPNSWREQ);
 #else
 	mode = _with_pm_intel_dev_read(dev, attr, GEN6_RPNSWREQ);
 #endif
@@ -1206,14 +1172,14 @@ static ssize_t media_freq_factor_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_freq_factor_store(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				const char *buff, size_t count)
+				       struct kobj_attribute *attr,
+				       const char *buff, size_t count)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_freq_factor_store(struct device *dev,
-                                      struct device_attribute *attr,
-                                      const char *buff, size_t count)
+				       struct device_attribute *attr,
+				       const char *buff, size_t count)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1249,16 +1215,17 @@ static ssize_t media_freq_factor_store(struct device *dev,
 	}
 	return err ?: count;
 }
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_RP0_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				       struct kobj_attribute *attr,
+				       char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_RP0_freq_mhz_show(struct device *dev,
-                                      struct device_attribute *attr,
-                                      char *buff)
+				       struct device_attribute *attr,
+				       char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1280,14 +1247,14 @@ static ssize_t media_RP0_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_RPn_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				       struct kobj_attribute *attr,
+				       char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_RPn_freq_mhz_show(struct device *dev,
-                                      struct device_attribute *attr,
-                                      char *buff)
+				       struct device_attribute *attr,
+				       char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
@@ -1309,25 +1276,25 @@ static ssize_t media_RPn_freq_mhz_show(struct device *dev,
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t media_act_freq_mhz_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buff)
+				       struct kobj_attribute *attr,
+				       char *buff)
 {
 	struct device *dev = kobj_to_dev(kobj);
 #else
 static ssize_t media_act_freq_mhz_show(struct device *dev,
-                                      struct device_attribute *attr,
-                                      char *buff)
+				       struct device_attribute *attr,
+				       char *buff)
 {
 #endif
 	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
 	struct intel_rps *rps = &gt->rps;
 	i915_reg_t rgadr = PVC_MEDIA_PERF_STATUS;
-
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	u32 val = _with_pm_intel_dev_read(kobj, attr, rgadr);
 #else
 	u32 val = _with_pm_intel_dev_read(dev, attr, rgadr);
 #endif
+
 	/* Available from PVC B-step */
 	val = REG_FIELD_GET(PVC_MEDIA_PERF_MEDIA_RATIO, val);
 	val = intel_gpu_freq(rps, val);
@@ -1358,14 +1325,14 @@ static INTEL_KOBJ_ATTR_RO(media_act_freq_mhz, media_act_freq_mhz_show);
 #else
 static I915_DEVICE_ATTR_RW(base_freq_factor, 0644, base_freq_factor_show, base_freq_factor_store);
 static struct i915_ext_attr dev_attr_base_freq_factor_scale =
-       {__ATTR(base_freq_factor.scale, 0444, i915_sysfs_show, NULL), freq_factor_scale_show};
+	{__ATTR(base_freq_factor.scale, 0444, i915_sysfs_show, NULL), freq_factor_scale_show};
 static I915_DEVICE_ATTR_RO(base_RP0_freq_mhz, base_RP0_freq_mhz_show);
 static I915_DEVICE_ATTR_RO(base_RPn_freq_mhz, base_RPn_freq_mhz_show);
 static I915_DEVICE_ATTR_RO(base_act_freq_mhz, base_act_freq_mhz_show);
 
 static I915_DEVICE_ATTR_RW(media_freq_factor, 0644, media_freq_factor_show, media_freq_factor_store);
 static struct i915_ext_attr dev_attr_media_freq_factor_scale =
-       {__ATTR(media_freq_factor.scale, 0444, i915_sysfs_show, NULL), freq_factor_scale_show};
+	{__ATTR(media_freq_factor.scale, 0444, i915_sysfs_show, NULL), freq_factor_scale_show};
 static I915_DEVICE_ATTR_RO(media_RP0_freq_mhz, media_RP0_freq_mhz_show);
 static I915_DEVICE_ATTR_RO(media_RPn_freq_mhz, media_RPn_freq_mhz_show);
 static I915_DEVICE_ATTR_RO(media_act_freq_mhz, media_act_freq_mhz_show);
@@ -1388,13 +1355,16 @@ static const struct attribute *media_perf_power_attrs[] = {
 	NULL
 };
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t throttle_reason_thermal_swing_show(struct kobject *kobj,
+                                       struct kobj_attribute *attr,
+                                       char *buff)
+#else
 static ssize_t throttle_reason_thermal_swing_show(struct device *dev,
 						  struct device_attribute *attr,
 						  char *buff)
-{
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	struct kobject *kobj = &dev->kobj;
 #endif
+{
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	u32 en8 = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, PVC_CR_RMID_ENERGY_8);
@@ -1413,8 +1383,13 @@ static ssize_t throttle_reason_thermal_swing_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%u\n", thermal_swing);
 }
 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static INTEL_KOBJ_ATTR_RO(throttle_reason_thermal_swing,
+                           throttle_reason_thermal_swing_show);
+#else
 static I915_DEVICE_ATTR_RO(throttle_reason_thermal_swing,
 			   throttle_reason_thermal_swing_show);
+#endif
 
 static const struct attribute *pvc_thermal_attrs[] = {
 	&dev_attr_throttle_reason_thermal_swing.attr.attr,
@@ -1446,14 +1421,13 @@ static ssize_t sys_pwr_balance_store(struct device *dev,
 static ssize_t sys_pwr_balance_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
-
+	i915_reg_t rgadr = PVC_GT0_PACKAGE_SYS_PWR_BAL_FACTOR;
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-       struct kobject *kobj = &dev->kobj;
+	struct kobject *kobj = &dev->kobj;
 #endif
 
-       i915_reg_t rgadr = PVC_GT0_PACKAGE_SYS_PWR_BAL_FACTOR;
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-       u32 val = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, rgadr);
+	u32 val = _with_pm_intel_dev_read(kobj, (struct kobj_attribute *)attr, rgadr);
 #else
 	u32 val = _with_pm_intel_dev_read(dev, attr, rgadr);
 #endif
@@ -1571,45 +1545,6 @@ i915_sysfs_store(struct device *dev, struct device_attribute *attr, const char
 
 	return count;
 }
-
-
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-static ssize_t
-i915_sysfs_show_kobj(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	ssize_t value;
-	struct device *dev = kobj_to_dev(kobj);
-	struct i915_ext_attr_kobj *ea = container_of(attr, struct i915_ext_attr_kobj, attr);
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(gt->i915);
-
-	value = ea->i915_show_kobj(kobj, attr, buf);
-
-	pvc_wa_allow_rc6(gt->i915);
-
-	return value;
-}
-
-static ssize_t
-i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr, const char
-		 *buf, size_t count)
-{
-	struct device *dev = kobj_to_dev(kobj);
-	struct i915_ext_attr_kobj *ea = container_of(attr, struct i915_ext_attr_kobj, attr);
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(gt->i915);
-
-	count = ea->i915_store_kobj(kobj, attr, buf, count);
-
-	pvc_wa_allow_rc6(gt->i915);
-
-	return count;
-}
-#endif
 
 static ssize_t
 i915_kobj_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)

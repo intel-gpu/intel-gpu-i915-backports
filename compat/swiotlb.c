@@ -30,3 +30,13 @@ unsigned int swiotlb_max_segment(void)
 }
 EXPORT_SYMBOL_GPL(swiotlb_max_segment);
 #endif
+
+#ifdef BPM_IS_SWIOTLB_ACTIVE_PRESENT
+bool is_swiotlb_active(struct device *dev)
+{
+        struct io_tlb_mem *mem = dev->dma_io_tlb_mem;
+
+        return mem && mem->nslabs;
+}
+EXPORT_SYMBOL_GPL(is_swiotlb_active);
+#endif

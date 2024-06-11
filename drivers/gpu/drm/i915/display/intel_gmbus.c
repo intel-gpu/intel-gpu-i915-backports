@@ -814,7 +814,9 @@ int intel_gmbus_setup(struct drm_i915_private *dev_priv)
 		}
 
 		bus->adapter.owner = THIS_MODULE;
+#ifndef BPM_I2C_CLASS_DDC_PRESENT
 		bus->adapter.class = I2C_CLASS_DDC;
+#endif
 		snprintf(bus->adapter.name,
 			 sizeof(bus->adapter.name),
 			 "i915 gmbus %s", gmbus_pin->name);

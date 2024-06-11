@@ -168,7 +168,6 @@ struct i915_gem_context {
 #define UCONTEXT_SIP			5
 #define UCONTEXT_LR			6
 #define UCONTEXT_RUNALONE		7
-#define UCONTEXT_SVM_ENABLED		8
 
 	/**
 	 * @flags: small set of booleans
@@ -254,6 +253,13 @@ struct i915_gem_context {
 	} stale;
 
 	struct wait_queue_head user_fence_wq;
+
+	struct {
+		u64 addr;
+		u16 access;
+		u16 level;
+		u16 type;
+	} fault;
 };
 
 #endif /* __I915_GEM_CONTEXT_TYPES_H__ */

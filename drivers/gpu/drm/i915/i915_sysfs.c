@@ -48,7 +48,6 @@
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
 #include "i915_debugger.h"
-#include "i915_addr_trans_svc.h"
 
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
@@ -65,10 +64,10 @@ typedef ssize_t (*store)(struct device *dev, struct device_attribute *attr,
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t
 i915_sysfs_id_show(struct kobject *kobj,
-                struct kobj_attribute *attr, char *buf);
+		struct kobj_attribute *attr, char *buf);
 
 typedef ssize_t (*show_kobj)(struct kobject *kobj, struct kobj_attribute *attr,
-                char *buf);
+		char *buf);
 
 struct ext_attr_kobj {
 	struct kobj_attribute attr;
@@ -437,7 +436,7 @@ static I915_DEVICE_ATTR_RO(prelim_lmem_max_bw_Mbps, prelim_lmem_max_bw_Mbps_show
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t i915_driver_error_show(struct kobject *kobj,
-               struct kobj_attribute *attr, char *buf)
+	       struct kobj_attribute *attr, char *buf)
 #else
 static ssize_t i915_driver_error_show(struct device *dev,
 				    struct device_attribute *attr,
@@ -483,6 +482,7 @@ i915_sysfs_id_show(struct device *dev, struct device_attribute *attr, char *buf)
 
 	/* Wa_16015476723 & Wa_16015666671 */
 	pvc_wa_disallow_rc6(i915);
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 	value = ea->i915_show_kobj(kobj, attr, buf);
 #else
@@ -494,15 +494,15 @@ i915_sysfs_id_show(struct device *dev, struct device_attribute *attr, char *buf)
 	return value;
 }
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT 
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 #define I915_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct ext_attr_kobj dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_id_show, NULL), (_id), i915_driver_error_show}
-#else 
+#else
 #define I915_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_id_show, NULL), (_id), i915_driver_error_show}
-#endif  
+#endif
 
 static I915_DRIVER_SYSFS_ERROR_ATTR_RO(driver_object_migration, I915_DRIVER_ERROR_OBJECT_MIGRATION);
 
@@ -819,41 +819,6 @@ static const struct attribute *iaf_attrs[] = {
 	NULL
 };
 
-/* Provide Address Translation Services Status: enabled/disabled */
-static ssize_t
-addr_trans_services_status_show(struct device *kdev,
-				struct device_attribute *attr,
-				char *buf)
-{
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-
-	return sysfs_emit(buf, "%s\n",
-			  i915_ats_enabled(i915) ? "Enabled" : "Disabled");
-}
-
-static ssize_t
-global_pasid_counter_show(struct device *kdev,
-			  struct device_attribute *attr,
-			  char *buf)
-{
-	struct drm_i915_private *i915 = kdev_minor_to_i915(kdev);
-	u64 global_pasid_counter = 0;
-
-	global_pasid_counter = i915_global_pasid_counter(i915);
-	return sysfs_emit(buf, "%llu\n", global_pasid_counter);
-}
-
-static DEVICE_ATTR(addr_trans_services_status, S_IRUGO,
-		   addr_trans_services_status_show, NULL);
-static DEVICE_ATTR(global_pasid_counter, S_IRUGO,
-		   global_pasid_counter_show, NULL);
-
-static const struct attribute *mode_b_attrs[] = {
-	&dev_attr_addr_trans_services_status.attr,
-	&dev_attr_global_pasid_counter.attr,
-	NULL
-};
-
 void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 {
 	struct device *kdev = dev_priv->drm.primary->kdev;
@@ -915,12 +880,6 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	i915_setup_quiesce_gpu_sysfs(dev_priv);
 
 	intel_mem_health_report_sysfs(dev_priv);
-
-	if (i915_ats_enabled(dev_priv)) {
-		ret = sysfs_create_files(&kdev->kobj, mode_b_attrs);
-		if (ret)
-			DRM_ERROR("Failed to setup Address Translation Services sysfs\n");
-	}
 
 	i915_setup_enable_eu_debug_sysfs(dev_priv);
 }

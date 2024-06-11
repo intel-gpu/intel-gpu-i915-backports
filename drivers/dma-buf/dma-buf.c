@@ -113,10 +113,10 @@ static struct vfsmount *dma_buf_mnt;
 
 #ifdef BPM_INIT_FS_CONTEXT_NOT_PRESENT
 static struct dentry *dma_buf_fs_mount(struct file_system_type *fs_type,
-                                int flags, const char *name, void *data)
+					int flags, const char *name, void *data)
 {
-        return mount_pseudo(fs_type, "dmabuf:", NULL, &dma_buf_dentry_ops,
-                        DMA_BUF_MAGIC);
+	return mount_pseudo(fs_type, "dmabuf:", NULL, &dma_buf_dentry_ops,
+			    DMA_BUF_MAGIC);
 }
 #else
 static int dma_buf_fs_init_context(struct fs_context *fc)

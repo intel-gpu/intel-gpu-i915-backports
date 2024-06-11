@@ -178,6 +178,8 @@ enum {
 	 */
 	I915_FENCE_FLAG_LR,
 
+	I915_FENCE_FLAG_UFENCE,
+
 	__I915_FENCE_FLAG_LAST__
 };
 
@@ -257,11 +259,6 @@ struct i915_request {
 			struct dma_fence_cb cb;
 			ktime_t emitted;
 		} duration;
-		struct {
-			/* Keep track of requests allocated for flat ppgtt. */
-			struct list_head gt_link;
-			struct list_head vma_link;
-		} fpp;
 	};
 	struct llist_head execute_cb;
 	struct i915_sw_fence semaphore;
@@ -283,6 +280,11 @@ struct i915_request {
 	struct i915_sched_node sched;
 	struct i915_dependency dep;
 	intel_engine_mask_t execution_mask;
+
+	struct i915_request_ufence {
+		u64 addr;
+		u64 value;
+	} user_fence;
 
 	/*
 	 * A convenience pointer to the current breadcrumb value stored in
@@ -357,8 +359,6 @@ struct i915_request {
 		struct list_head link;
 		unsigned long delay;
 	} mock;)
-	bool has_user_fence;
-	struct prelim_drm_i915_gem_execbuffer_ext_user_fence user_fence;
 };
 
 #define I915_FENCE_GFP I915_GFP_ALLOW_FAIL
