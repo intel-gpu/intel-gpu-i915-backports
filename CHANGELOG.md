@@ -1,4 +1,7 @@
 # ChangeLog
+## Release I915_24WW24.5_803.63_23.10.49_231129.51
+* Fixed the kernel 6.5.0-41 compilation issue on Ubuntu 22.04
+
 ## Release I915_24WW22.3_803.58_23.10.49_231129.48
 * Fixed the kernel 6.5.0-35 compilation issue on Ubuntu 22.04
 * Introduced an update to quiesce the Graphics Technology (GT) traffic on shutdown
