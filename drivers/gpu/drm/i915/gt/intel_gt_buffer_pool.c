@@ -106,7 +106,7 @@ static void pool_retire(struct i915_active *ref)
 		i915_gem_object_unpin_pages(node->obj);
 
 		/* Return this object to the shrinker pool */
-		i915_gem_object_make_purgeable(node->obj);
+		i915_gem_object_make_shrinkable(node->obj);
 		node->pinned = false;
 	}
 

@@ -173,7 +173,7 @@ unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
 bool i915_gem_object_has_cache_level(const struct drm_i915_gem_object *obj,
 				     enum i915_cache_level lvl)
 {
-	return obj->pat_index == i915_gem_get_pat_index(obj_to_i915(obj), lvl);
+	return i915_gem_object_pat_index(obj) == i915_gem_get_pat_index(obj_to_i915(obj), lvl);
 }
 
 static struct i915_resv *i915_resv_alloc(void)
@@ -263,8 +263,6 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	spin_lock_init(&obj->vma.lock);
 	INIT_LIST_HEAD(&obj->vma.list);
 
-	INIT_LIST_HEAD(&obj->mm.link);
-
 	INIT_LIST_HEAD(&obj->lut_list);
 	spin_lock_init(&obj->lut_lock);
 
@@ -307,8 +305,9 @@ static bool i915_gem_object_use_llc(struct drm_i915_gem_object *obj)
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level)
 {
-	obj->pat_index =
-		i915_gem_get_pat_index(obj_to_i915(obj), cache_level);
+	obj->flags &= ~I915_BO_PAT_INDEX;
+	obj->flags |= FIELD_PREP(I915_BO_PAT_INDEX,
+				 i915_gem_get_pat_index(obj_to_i915(obj), cache_level));
 
 	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
 			I915_BO_CACHE_COHERENT_FOR_WRITE);
@@ -334,10 +333,11 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 
-	if (obj->pat_index == pat_index)
+	if (i915_gem_object_pat_index(obj) == pat_index)
 		return;
 
-	obj->pat_index = pat_index;
+	obj->flags &= ~I915_BO_PAT_INDEX;
+	obj->flags |= FIELD_PREP(I915_BO_PAT_INDEX, pat_index);
 
 	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
 			I915_BO_CACHE_COHERENT_FOR_WRITE);
@@ -348,30 +348,6 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
 
 	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
-}
-
-bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
-{
-	/*
-	 * This is purely from a security perspective, so we simply don't care
-	 * about non-userspace objects being able to bypass the LLC.
-	 */
-	if (!(obj->flags & I915_BO_ALLOC_USER))
-		return false;
-
-	/*
-	 * EHL and JSL add the 'Bypass LLC' MOCS entry, which should make it
-	 * possible for userspace to bypass the GTT caching bits set by the
-	 * kernel, as per the given object cache_level. This is troublesome
-	 * since the heavy flush we apply when first gathering the pages is
-	 * skipped if the kernel thinks the object is coherent with the GPU. As
-	 * a result it might be possible to bypass the cache and read the
-	 * contents of the page directly, which could be stale data. If it's
-	 * just a case of userspace shooting themselves in the foot then so be
-	 * it, but since i915 takes the stance of always zeroing memory before
-	 * handing it to userspace, we need to prevent this.
-	 */
-	return IS_JSL_EHL(to_i915(obj->base.dev));
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
@@ -852,7 +828,6 @@ static void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 		i915_gem_object_unlock(obj);
 
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-	GEM_BUG_ON(!list_empty(&obj->mm.link));
 
 	detach_vm(obj);
 
@@ -865,7 +840,8 @@ static void __i915_gem_free_object(struct drm_i915_gem_object *obj)
 	if (obj->mm.n_placements > 1)
 		kfree(obj->mm.placements);
 
-	kfree(obj->nodes);
+	if (obj->maxnode > BITS_PER_TYPE(obj->_nodes))
+		kfree(obj->_nodes);
 
 	/* But keep the pointer alive for RCU-protected lookups */
 	call_rcu(&obj->rcu, __i915_gem_free_object_rcu);
@@ -989,6 +965,7 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 {
 	struct drm_i915_gem_object *obj = to_intel_bo(gem_obj);
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct drm_i915_gem_object *swp;
 
 	GEM_BUG_ON(i915_gem_object_is_framebuffer(obj));
 
@@ -997,9 +974,10 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 	/*
 	 * If object had been swapped out, free the hidden object.
 	 */
-	if (obj->swapto) {
-		i915_gem_object_put(obj->swapto);
-		obj->swapto = NULL;
+	swp = fetch_and_zero(&obj->swapto);
+	if (swp) {
+		swp->mm.madv = I915_MADV_DONTNEED;
+		i915_gem_object_put(swp);
 	}
 
 	/*
@@ -1108,31 +1086,21 @@ swap_region(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 	if (a->id > b->id)
 		swap(a, b);
 
-	spin_lock(&a->objects.lock);
+	spin_lock_irq(&a->objects.lock);
 	spin_lock_nested(&b->objects.lock, SINGLE_DEPTH_NESTING);
 
 	lists_swap(&obj->mm.region.link, &donor->mm.region.link);
 	swap(obj->mm.region.mem, donor->mm.region.mem);
 
 	spin_unlock(&b->objects.lock);
-	spin_unlock(&a->objects.lock);
-}
-
-static void
-swap_shrinker(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	unsigned long flags;
-
-	spin_lock_irqsave(&i915->mm.obj_lock, flags);
-	lists_swap(&obj->mm.link, &donor->mm.link);
-	swap(obj->mm.shrink_pin, donor->mm.shrink_pin);
-	spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
+	spin_unlock_irq(&a->objects.lock);
 }
 
 static void
 swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 {
+	int i;
+
 	GEM_BUG_ON(atomic_read(&obj->mm.pages_pin_count));
 	GEM_BUG_ON(atomic_read(&donor->mm.pages_pin_count));
 
@@ -1144,6 +1112,9 @@ swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 
 	__i915_gem_object_reset_page_iter(obj, obj->mm.pages);
 	__i915_gem_object_reset_page_iter(donor, donor->mm.pages);
+
+	for (i = 0; i < ARRAY_SIZE(obj->mm.tlb); i++)
+		swap(obj->mm.tlb[i], donor->mm.tlb[i]);
 }
 
 void i915_gem_object_move_notify(struct drm_i915_gem_object *obj)
@@ -1187,7 +1158,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	if (GEM_WARN_ON(obj->mm.madv != I915_MADV_WILLNEED))
 		return -EFAULT;
 
-	if (GEM_WARN_ON(i915_gem_object_has_pinned_pages(obj)))
+	if (i915_gem_object_has_pinned_pages(obj))
 		return -EINVAL;
 
 	if (obj->swapto && obj->swapto->mm.madv == __I915_MADV_PURGED)
@@ -1256,7 +1227,6 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 
 	swap_blocks(obj, donor);
 	swap_region(obj, donor);
-	swap_shrinker(obj, donor);
 	swap_pages(obj, donor);
 	i915_gem_object_account(obj);
 
@@ -1426,6 +1396,7 @@ finish_src:
 	return ret;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 					 enum fb_op_origin origin)
 {
@@ -1516,6 +1487,7 @@ int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, 
 
 	return 0;
 }
+#endif
 
 /**
  * i915_gem_object_evictable - Whether object is likely evictable after unbind.
@@ -1539,16 +1511,16 @@ bool i915_gem_object_evictable(struct drm_i915_gem_object *obj)
 	if (!pin_count)
 		return true;
 
-	spin_lock(&obj->vma.lock);
-	list_for_each_entry(vma, &obj->vma.list, obj_link) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
 		if (i915_vma_is_pinned(vma)) {
-			spin_unlock(&obj->vma.lock);
-			return false;
+			pin_count = 0;
+			break;
 		}
 		if (atomic_read(&vma->pages_count))
 			pin_count--;
 	}
-	spin_unlock(&obj->vma.lock);
+	rcu_read_unlock();
 
 	return pin_count == 0;
 }

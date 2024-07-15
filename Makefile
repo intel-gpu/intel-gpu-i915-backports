@@ -20,12 +20,13 @@ KERNEL_CONFIG := $(KLIB_BUILD)/.config
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
 CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
+export CUSTOM_KERN_VER := $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1 | tr -d '+')
 
 #
 # Packaging targets Available
 #
-DEB_PKG_DISTRO_TARGETS := dmadkmsdeb-pkg drmdkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
-RPM_PKG_DISTRO_TARGETS := dmadkmsrpm-pkg drmdkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg
+DEB_PKG_DISTRO_TARGETS := dmabufdkmsdeb-pkg drmdkmsdeb-pkg i915dkmsdeb-pkg dkmsdeb-pkg
+RPM_PKG_DISTRO_TARGETS := dmabufdkmsrpm-pkg drmdkmsrpm-pkg i915dkmsrpm-pkg dkmsrpm-pkg
 
 #
 # PKG_DISTRO_TARGETS
@@ -229,7 +230,7 @@ dkms-pkg-help: common-help
 	@echo " DKMS Targets: "
 	@echo " Debian Targets: "
 	@echo "  dkmsdeb-pkg    - Build single DKMS Debian package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)"
-	@echo "  dmadkmsdeb-pkg - Build DKMS debian package for dmabuf"
+	@echo "  dmabufdkmsdeb-pkg - Build DKMS debian package for dmabuf"
 	@echo "  drmdkmsdeb-pkg - Build DKMS debian package for drm, i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo "  i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo ""
@@ -242,7 +243,7 @@ dkms-pkg-help: common-help
 	@echo ""
 	@echo " RPM Targets: "
 	@echo "  dkmsrpm-pkg     - Build single DKMS RPM package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)"
-	@echo "  dmadkmsrpm-pkg  - Build dkms RPM package for dmabuf"
+	@echo "  dmabufdkmsrpm-pkg  - Build dkms RPM package for dmabuf"
 	@echo "  i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo "  drmdkmsrpm-pkg -  Build dkms RPM package for drm, i915 and dependent child drivers (mei and pmt/vsec)"
 	@echo ""

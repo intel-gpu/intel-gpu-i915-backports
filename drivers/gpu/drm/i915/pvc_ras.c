@@ -18,6 +18,17 @@ struct ras_reg32_info {
 	const u32  default_value;
 };
 
+struct hbm_status {
+	u8 hbm_training_failed:1;
+	u8 diag_run:1;
+	u8 diag_incomplete:1;
+	u8 hbm_existing_fault:1;
+	u8 hbm_new_fault:1;
+	u8 hbm_repair_attempted:1;
+	u8 hbm_repair_exhausted:1;
+	u8 hbm_val_failure:1;
+};
+
 static const struct ras_reg64_info pvc_memory_cntrlr_reg64[] = {
 	{"INTERNAL_ERROR_2LMISCC",		_MMIO(0x286f70)},
 	{"INTERNAL_ERROR_SCHEDSPQ",		_MMIO(0x287d80)},
@@ -44,18 +55,18 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 	const struct ras_reg64_info *reg64_info;
 	const struct ras_reg32_info *reg32_info;
+	struct hbm_status hbm_info = {false};
 	u32 channel_num, hbm_num;
+	const char *name;
 	unsigned long errsrc;
 	u32 errbit, reg_id;
 	u64 reg64_value;
 	u32 reg32_value;
-	const char *name;
 	u32 hbm_chnl_id;
 	int ret, id;
 	u32 num_regs;
 
 	bool hbm_error = false;
-	bool is_fsp2_hbm_training_failure = false;
 
 	ret = 0;
 
@@ -63,50 +74,104 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 		return ret;
 
 	errsrc = __raw_uncore_read32(gt->uncore, GT0_TELEMETRY_MSGREGADDR);
+	if (errsrc)
+		drm_dbg(&i915->drm, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
+
+	for_each_set_bit(errbit, &errsrc, 32) {
+		name = NULL;
+
+		switch (errbit) {
+		case PCIE_DEKEL_FW_LOAD_FAILED:
+			name = "PCIe link downgraded to 1.0";
+			break;
+		case FSP2_HBM_TRAINING_FAILED:
+			name = "HBM training failed";
+			hbm_info.hbm_training_failed = true;
+			ret = -ENXIO;
+			break;
+		case FSP2_PUNIT_INIT_FAILED:
+			name = "punit init failed";
+			ret = -ENXIO;
+			break;
+		case FSP2_GT_INIT_FAILED:
+			name = "GT init failed";
+			ret = -ENXIO;
+			break;
+		case HBM_DIAGNOSTICS_RUN:
+			hbm_info.diag_run = true;
+			break;
+		case MRC_TEST_STATUS:
+			name = "memory wipe encountered failure";
+			ret = -ENXIO;
+			break;
+		case HBMIO_UC_STATUS:
+			name = "HBMIO uC Failure";
+			ret = -ENXIO;
+			break;
+		case ALL_HBMS_DISABLED_TILE0:
+			name = "Tile0 HBM Disabled";
+			break;
+		case ALL_HBMS_DISABLED_TILE1:
+			name = "Tile1 HBM Disabled";
+			break;
+		case FSP2_SUCCESSFUL:
+			/* not an error, signifies FSP went past stage2*/
+			break;
+		case HBM_DIAGNOSTICS_INCOMPLETE:
+			hbm_info.diag_incomplete = true;
+			break;
+		case HBM_IDENTIFIED_EXISTING_FAULT:
+			hbm_info.hbm_existing_fault = true;
+			break;
+		case HBM_IDENTIFIED_NEW_FAULT:
+			hbm_info.hbm_new_fault = true;
+			break;
+		case HBM_NEW_REPAIR_ATTEMPTED:
+			hbm_info.hbm_repair_attempted = true;
+			break;
+		case HBM_REPAIR_SPARE_EXHAUSTED:
+			hbm_info.hbm_repair_exhausted = true;
+			break;
+		case HBM_VAL_FAILURE:
+			hbm_info.hbm_val_failure = true;
+			break;
+		default:
+			name = "unknown failure";
+			break;
+		}
+		if (name)
+			drm_err(&i915->drm, "%s\n", name);
+	}
+
+	if (hbm_info.diag_run) {
+		if (hbm_info.diag_incomplete) {
+			drm_err(&i915->drm, "diagnostics is incomplete, HBM is un-reliable");
+		} else if (hbm_info.hbm_repair_attempted) {
+			if (hbm_info.hbm_val_failure || hbm_info.hbm_repair_exhausted) {
+				drm_err(&i915->drm, "unrepairable HBM fault present\n");
+				/* set hbm state to replace */
+				gt->mem_sparing.health_status = MEM_HEALTH_REPLACE;
+			} else if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault) {
+				drm_dbg(&i915->drm, "existing and new HBM faults present and repaired\n");
+			} else if (hbm_info.hbm_existing_fault) {
+				drm_dbg(&i915->drm, "repaired HBM fault present\n");
+			} else if (hbm_info.hbm_new_fault) {
+				drm_dbg(&i915->drm, "new HBM fault present and repaired\n");
+			}
+		} else {
+			if (hbm_info.hbm_existing_fault & hbm_info.hbm_new_fault)
+				drm_err(&i915->drm, "repaired and new HBM fault present, recommended to run diagnostics and repair\n");
+			else if (hbm_info.hbm_existing_fault)
+				drm_dbg(&i915->drm, "repaired HBM fault present\n");
+			else if (hbm_info.hbm_new_fault)
+				drm_err(&i915->drm, "new / unrepaired HBM fault present, recommended to run diagnostics and repair\n");
+			else
+				drm_dbg(&i915->drm, "Diagnostics completed no faults found\n");
+		}
+	}
 
 	if (!(errsrc & REG_BIT(FSP2_SUCCESSFUL))) {
-		drm_dbg(&i915->drm, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
-		for_each_set_bit(errbit, &errsrc, 32) {
-			switch (errbit) {
-			case RESETOUT_N_TIMED_OUT:
-				name = "resetout and timed out";
-				break;
-			case SOC_BOOT_IN_PROGRESS:
-				name = "soc boot in progress";
-				break;
-			case PECI_IP_NOT_RESPONDING:
-				name = "peci ip not responding";
-				break;
-			case CSC_FWSTS_REGISTERS_NOT_UPDATED:
-				name = "csc fwst registers not updated";
-				break;
-			case ALERT_N_TIMED_OUT:
-				name = "alert and timed out";
-				break;
-			case CSC_FW_LOAD_FAILED:
-				name = "csc fw load failed";
-				break;
-			case FSP2_HBM_TRAINING_FAILED:
-				name = "fsp2 hbm training failed";
-				is_fsp2_hbm_training_failure = true;
-				break;
-			case FSP2_PUNIT_INIT_FAILED:
-				name = "fsp2 punit init failed";
-				break;
-			case FSP2_GT_INIT_FAILED:
-				name = "fsp2 gt init failed";
-				break;
-			case SOC_INIT_FAILED:
-				name = "soc init failed";
-				break;
-			default:
-				name = "unknown failure";
-				break;
-			}
-			drm_err(&i915->drm, "%s reported by GT0_TELEMETRY_MSGREGADDR\n", name);
-		}
-
-		__i915_printk(i915, KERN_CRIT, "HW training failed; try a cold reboot.\n");
+		__i915_printk(i915, KERN_CRIT, "FSP stage 2 not completed!\n");
 		ret = -ENXIO;
 	}
 
@@ -127,7 +192,7 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 		drm_dbg(&i915->drm, "GT%d: FUSE3_HBM_STACK_STATUS=[0x%08lx]\n",
 			gt->info.id, hbm_mask);
 
-		if (is_fsp2_hbm_training_failure) {
+		if (hbm_info.hbm_training_failed) {
 			for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
 				u32 ctrl_reg = __raw_uncore_read32(gt->uncore,
 								   PVC_UC_BIOS_MAILBOX_CTL_REG(hbm_num));

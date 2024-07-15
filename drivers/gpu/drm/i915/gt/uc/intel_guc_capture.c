@@ -1345,7 +1345,7 @@ static void __guc_capture_process_output(struct intel_guc *guc)
 	buf.wr = write_offset;
 	buf.data = src_data;
 
-	if (!uc->reset_in_progress) {
+	if (!(uc->epoch & INTEL_UC_IN_RESET)) {
 		do {
 			ret = guc_capture_extract_reglists(guc, &buf);
 		} while (ret >= 0);

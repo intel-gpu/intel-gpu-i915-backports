@@ -1215,6 +1215,9 @@ int i915_gem_vm_create_ioctl(struct drm_device *dev, void *data,
 		vce.gt = to_gt(i915);
 	}
 
+	if (intel_gt_is_wedged(vce.gt))
+		return -EIO;
+
 	ppgtt = i915_ppgtt_create(vce.gt, args->flags);
 	if (IS_ERR(ppgtt))
 		return PTR_ERR(ppgtt);

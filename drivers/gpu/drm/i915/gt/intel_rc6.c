@@ -309,10 +309,12 @@ void intel_rc6_unpark(struct intel_rc6 *rc6)
 		return;
 
 	/* Restore HW timers for automatic RC6 entry while busy */
+	intel_uncore_forcewake_get(uncore, FORCEWAKE_GT);
 	set(uncore, GEN6_RC_CONTROL, rc6->ctl_enable);
 
 	if (rc6->pg_enable)
 		set(uncore, GEN9_PG_ENABLE, 0);
+	intel_uncore_forcewake_put(uncore, FORCEWAKE_GT);
 }
 
 void intel_rc6_park(struct intel_rc6 *rc6)
@@ -352,24 +354,7 @@ void intel_rc6_disable(struct intel_rc6 *rc6)
 
 void intel_rc6_fini(struct intel_rc6 *rc6)
 {
-	struct drm_i915_gem_object *pctx;
-	struct intel_uncore *uncore = rc6_to_uncore(rc6);
-
 	intel_rc6_disable(rc6);
-
-	if (rc6->dfd_restore_obj) {
-		intel_uncore_write(uncore, DFD_RESTORE_CFG_LSB, 0);
-		intel_uncore_write(uncore, DFD_RESTORE_CFG_MSB, 0);
-
-		i915_gem_object_unpin_map(rc6->dfd_restore_obj);
-		i915_gem_object_put(rc6->dfd_restore_obj);
-		rc6->dfd_restore_buf = NULL;
-		rc6->dfd_restore_obj = NULL;
-	}
-
-	pctx = fetch_and_zero(&rc6->pctx);
-	if (pctx)
-		i915_gem_object_put(pctx);
 
 	if (rc6->wakeref)
 		intel_rc6_rpm_put(rc6);

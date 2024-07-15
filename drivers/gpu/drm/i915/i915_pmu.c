@@ -4,6 +4,10 @@
  * Copyright © 2017-2018 Intel Corporation
  */
 
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+#include <linux/fdtable.h>
+#include <linux/fs.h>
+#endif
 #include <linux/pm_runtime.h>
 
 #include "gt/intel_engine.h"
@@ -31,6 +35,14 @@
 	 BIT(I915_SAMPLE_WAIT) | \
 	 BIT(I915_SAMPLE_SEMA) | \
 	 BIT(PRELIM_I915_SAMPLE_BUSY_TICKS))
+
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+struct i915_event {
+	struct perf_event *event;
+	struct list_head link;
+	struct task_struct *owner;
+};
+#endif
 
 static const unsigned long i915_hw_error_map[] = {
 	[PRELIM_I915_PMU_GT_ERROR_CORRECTABLE_L3_SNG] = INTEL_GT_HW_ERROR_COR_L3_SNG,
@@ -601,7 +613,7 @@ void i915_pmu_gt_parked(struct intel_gt *gt)
 {
 	struct i915_pmu *pmu = &gt->i915->pmu;
 
-	if (!pmu->base.event_init)
+	if (!pmu->base.event_init || pmu->closed)
 		return;
 
 	spin_lock_irq(&pmu->lock);
@@ -627,7 +639,7 @@ void i915_pmu_gt_unparked(struct intel_gt *gt)
 {
 	struct i915_pmu *pmu = &gt->i915->pmu;
 
-	if (!pmu->base.event_init)
+	if (!pmu->base.event_init || pmu->closed)
 		return;
 
 	spin_lock_irq(&pmu->lock);
@@ -804,12 +816,86 @@ static enum hrtimer_restart i915_sample(struct hrtimer *hrtimer)
 	return HRTIMER_RESTART;
 }
 
+static enum cpuhp_state cpuhp_slot = CPUHP_INVALID;
+
+static int i915_pmu_register_cpuhp_state(struct i915_pmu *pmu)
+{
+	if (cpuhp_slot == CPUHP_INVALID)
+		return -EINVAL;
+
+	return cpuhp_state_add_instance(cpuhp_slot, &pmu->cpuhp.node);
+}
+
+static void i915_pmu_unregister_cpuhp_state(struct i915_pmu *pmu)
+{
+	cpuhp_state_remove_instance(cpuhp_slot, &pmu->cpuhp.node);
+}
+
+static void free_event_attributes(struct i915_pmu *pmu)
+{
+	struct attribute **attr_iter = pmu->events_attr_group.attrs;
+
+	for (; *attr_iter; attr_iter++)
+		kfree((*attr_iter)->name);
+
+	kfree(pmu->events_attr_group.attrs);
+	kfree(pmu->i915_attr);
+	kfree(pmu->pmu_attr);
+
+	pmu->events_attr_group.attrs = NULL;
+	pmu->i915_attr = NULL;
+	pmu->pmu_attr = NULL;
+}
+
+static bool is_igp(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
+	/* IGP is 0000:00:02.0 */
+	return pci_domain_nr(pdev->bus) == 0 &&
+	       pdev->bus->number == 0 &&
+	       PCI_SLOT(pdev->devfn) == 2 &&
+	       PCI_FUNC(pdev->devfn) == 0;
+}
+
+static void pmu_teardown(struct i915_pmu *pmu)
+{
+	struct drm_i915_private *i915 = container_of(pmu, typeof(*i915), pmu);
+
+	i915_pmu_unregister_cpuhp_state(pmu);
+	perf_pmu_unregister(&pmu->base);
+	pmu->base.event_init = NULL;
+	kfree(pmu->base.attr_groups);
+	if (!is_igp(i915))
+		kfree(pmu->name);
+	free_event_attributes(pmu);
+}
+
 static void i915_pmu_event_destroy(struct perf_event *event)
 {
 	struct drm_i915_private *i915 =
 		container_of(event->pmu, typeof(*i915), pmu.base);
 
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+	struct i915_pmu *pmu = &i915->pmu;
+	struct i915_event *e;
+	unsigned long flags;
+#endif
+
 	drm_WARN_ON(&i915->drm, event->parent);
+
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+	spin_lock_irqsave(&pmu->lock, flags);
+	e = event->pmu_private;
+	if (drm_WARN_ON(&i915->drm, !e || !e->event))
+		goto done;
+
+	list_del(&e->link);
+	kfree(e);
+
+done:
+	spin_unlock_irqrestore(&pmu->lock, flags);
+#endif
 
 	drm_dev_put(&i915->drm);
 }
@@ -1116,8 +1202,24 @@ static int i915_pmu_event_init(struct perf_event *event)
 		return ret;
 
 	if (!event->parent) {
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+		struct i915_event *e = kzalloc(sizeof(*e), GFP_KERNEL);
+		unsigned long flags;
+
+		if (!e)
+			return -ENOMEM;
+
+		spin_lock_irqsave(&pmu->lock, flags);
+		e->event = event;
+		e->owner = current;
+		list_add(&e->link, &pmu->initialized_events);
+		event->pmu_private = e;
+#endif
 		drm_dev_get(&i915->drm);
 		event->destroy = i915_pmu_event_destroy;
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+		spin_unlock_irqrestore(&pmu->lock, flags);
+#endif
 	}
 
 	return 0;
@@ -1970,22 +2072,6 @@ err_alloc:
 	return NULL;
 }
 
-static void free_event_attributes(struct i915_pmu *pmu)
-{
-	struct attribute **attr_iter = pmu->events_attr_group.attrs;
-
-	for (; *attr_iter; attr_iter++)
-		kfree((*attr_iter)->name);
-
-	kfree(pmu->events_attr_group.attrs);
-	kfree(pmu->i915_attr);
-	kfree(pmu->pmu_attr);
-
-	pmu->events_attr_group.attrs = NULL;
-	pmu->i915_attr = NULL;
-	pmu->pmu_attr = NULL;
-}
-
 static int i915_pmu_cpu_online(unsigned int cpu, struct hlist_node *node)
 {
 	struct i915_pmu *pmu = hlist_entry_safe(node, typeof(*pmu), cpuhp.node);
@@ -2031,8 +2117,6 @@ static int i915_pmu_cpu_offline(unsigned int cpu, struct hlist_node *node)
 	return 0;
 }
 
-static enum cpuhp_state cpuhp_slot = CPUHP_INVALID;
-
 int i915_pmu_init(void)
 {
 	int ret;
@@ -2054,30 +2138,6 @@ void i915_pmu_exit(void)
 {
 	if (cpuhp_slot != CPUHP_INVALID)
 		cpuhp_remove_multi_state(cpuhp_slot);
-}
-
-static int i915_pmu_register_cpuhp_state(struct i915_pmu *pmu)
-{
-	if (cpuhp_slot == CPUHP_INVALID)
-		return -EINVAL;
-
-	return cpuhp_state_add_instance(cpuhp_slot, &pmu->cpuhp.node);
-}
-
-static void i915_pmu_unregister_cpuhp_state(struct i915_pmu *pmu)
-{
-	cpuhp_state_remove_instance(cpuhp_slot, &pmu->cpuhp.node);
-}
-
-static bool is_igp(struct drm_i915_private *i915)
-{
-	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
-
-	/* IGP is 0000:00:02.0 */
-	return pci_domain_nr(pdev->bus) == 0 &&
-	       pdev->bus->number == 0 &&
-	       PCI_SLOT(pdev->devfn) == 2 &&
-	       PCI_FUNC(pdev->devfn) == 0;
 }
 
 /*
@@ -2115,6 +2175,126 @@ static void i915_pmu_init_busy_free(struct drm_i915_private *i915)
 		intel_guc_init_busy_free(gt);
 	}
 }
+
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+/* Ref: fs/file.c */
+static unsigned int count_open_files(struct fdtable *fdt)
+{
+	unsigned int size = fdt->max_fds;
+	unsigned int i;
+
+	/* Find the last open fd */
+	for (i = size / BITS_PER_LONG; i > 0; ) {
+		if (fdt->open_fds[--i])
+			break;
+	}
+	i = (i + 1) * BITS_PER_LONG;
+	return i;
+}
+
+static inline void __clear_open_fd(unsigned int fd, struct fdtable *fdt)
+{
+	__clear_bit(fd, fdt->open_fds);
+	__clear_bit(fd / BITS_PER_LONG, fdt->full_fds_bits);
+}
+
+static void __put_unused_fd(struct files_struct *files, unsigned int fd)
+{
+	struct fdtable *fdt = files_fdtable(files);
+
+	__clear_open_fd(fd, fdt);
+	if (fd < files->next_fd)
+		files->next_fd = fd;
+}
+
+static void close_event_file(struct i915_pmu *pmu, struct task_struct *task,
+			     void *data)
+{
+	struct drm_i915_private *i915 = container_of(pmu, typeof(*i915), pmu);
+	unsigned int max_open_fds, fd;
+	struct files_struct *files;
+	struct fdtable *fdt;
+	struct file *file;
+	bool found = false;
+
+	files = task->files;
+	if (!files)
+		return;
+
+	spin_lock(&files->file_lock);
+	fdt = files_fdtable(files);
+	max_open_fds = count_open_files(fdt);
+	for (fd = 0; fd < max_open_fds; fd++) {
+		file = fdt->fd[fd];
+		if (!file || file->private_data != data)
+			continue;
+
+		found = true;
+		rcu_assign_pointer(fdt->fd[fd], NULL);
+		__put_unused_fd(files, fd);
+		break;
+	}
+	spin_unlock(&files->file_lock);
+
+	/*
+	 * the event file is closed synchronously, so once it returns, we know
+	 * for sure that the PMU is not holding any drm_dev references. At the
+	 * same time there is one last reference held by i915 which is released
+	 * on device detach (using devres mechanism), so we don't need to take
+	 * any additional drm references.
+	 */
+	if (found) {
+		/* Warn if task has forked children */
+		drm_WARN_ON(&i915->drm, file_count(file) > 1);
+		__fput_sync(file);
+	}
+}
+
+static void cleanup_events(struct i915_pmu *pmu)
+{
+	struct drm_i915_private *i915 = container_of(pmu, typeof(*i915), pmu);
+	int ret;
+
+	/*
+	 * __fput_sync is used to close the open event FDs and can be called
+	 * only from kthread, so schedule a work for it and wait for it.
+	 */
+	schedule_work(&pmu->work);
+	ret = wait_event_interruptible(pmu->cleanup_wq,
+				       list_empty(&pmu->initialized_events));
+
+	drm_WARN_ON(&i915->drm, ret);
+}
+
+static void i915_pmu_cleanup(struct work_struct *work)
+{
+	struct i915_pmu *pmu = container_of(work, typeof(*pmu), work);
+	struct drm_i915_private *i915 = container_of(pmu, typeof(*i915), pmu);
+	struct i915_event *e, *tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&pmu->lock, flags);
+	list_for_each_entry_safe(e, tmp, &pmu->initialized_events, link) {
+		struct task_struct *task = e->event->owner;
+
+		/* This is unexpected, so break with a warning */
+		if (drm_WARN_ON(&i915->drm, task != e->owner))
+			break;
+
+		spin_unlock_irqrestore(&pmu->lock, flags);
+
+		get_task_struct(task);
+		close_event_file(pmu, task, e->event);
+		put_task_struct(task);
+
+		spin_lock_irqsave(&pmu->lock, flags);
+	}
+	drm_WARN_ON(&i915->drm, !list_empty(&pmu->initialized_events));
+	spin_unlock_irqrestore(&pmu->lock, flags);
+
+	wake_up(&pmu->cleanup_wq);
+}
+#endif
 
 void i915_pmu_register(struct drm_i915_private *i915)
 {
@@ -2171,6 +2351,12 @@ void i915_pmu_register(struct drm_i915_private *i915)
 	pmu->base.read		= i915_pmu_event_read;
 	pmu->base.event_idx	= i915_pmu_event_event_idx;
 
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+	INIT_LIST_HEAD(&pmu->initialized_events);
+	INIT_WORK(&pmu->work, i915_pmu_cleanup);
+	init_waitqueue_head(&pmu->cleanup_wq);
+#endif
+
 	ret = perf_pmu_register(&pmu->base, pmu->name, -1);
 	if (ret)
 		goto err_groups;
@@ -2213,12 +2399,9 @@ void i915_pmu_unregister(struct drm_i915_private *i915)
 	if (!IS_SRIOV_VF(i915))
 		hrtimer_cancel(&pmu->timer);
 
-	i915_pmu_unregister_cpuhp_state(pmu);
-
-	perf_pmu_unregister(&pmu->base);
-	pmu->base.event_init = NULL;
-	kfree(pmu->base.attr_groups);
-	if (!is_igp(i915))
-		kfree(pmu->name);
-	free_event_attributes(pmu);
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+	if (!list_empty(&pmu->initialized_events))
+		cleanup_events(pmu);
+#endif
+	pmu_teardown(pmu);
 }

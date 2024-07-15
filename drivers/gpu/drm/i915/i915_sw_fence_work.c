@@ -27,14 +27,37 @@ static void fence_complete(struct dma_fence_work *f)
 	dma_fence_signal(&f->rq.fence);
 }
 
+static bool fatal_error(int err)
+{
+	switch (err) {
+	case 0:
+	case -EAGAIN:
+		return false;
+	default:
+		return true;
+	}
+}
+
 static void fence_work(struct work_struct *work)
 {
 	struct dma_fence_work *f = container_of(work, typeof(*f), work);
 
-	if (!f->rq.fence.error && f->ops->work) {
+	if (!fatal_error(f->rq.fence.error) && f->ops->work) {
 		int err;
 
+		f->rq.fence.error = 0;
+
 		err = f->ops->work(f);
+		if (err == -ERESTARTSYS) {
+			if (test_and_clear_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags)) {
+				queue_work_on(next_cpu(f), get_wq(f), &f->work);
+				return;
+			}
+
+			/* Residual error; promote into a more serious problem! */
+			err = -EINTR;
+		}
+
 		if (err)
 			dma_fence_set_error(&f->rq.fence, err);
 	}
@@ -60,7 +83,10 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 			dma_fence_set_error(&f->rq.fence, promote_error(fence->error));
 
 		dma_fence_get(&f->rq.fence);
-		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags))
+		if (signal_pending(current))
+			clear_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags);
+		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags) ||
+		    fatal_error(f->rq.fence.error))
 			fence_work(&f->work);
 		else
 			queue_work_on(next_cpu(f), get_wq(f), &f->work);

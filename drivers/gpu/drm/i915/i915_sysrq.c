@@ -160,19 +160,27 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 	enum intel_engine_id id;
 	intel_wakeref_t wakeref;
 
-	drm_printf(p, "GT%d awake? %s [%d], %llums\n",
+	drm_printf(p, "GT%d awake? %s [%d], %llums, mask: %x\n",
 		   gt->info.id,
-		   str_yes_no(gt->awake),
+		   str_yes_no(intel_gt_pm_is_awake(gt)),
 		   atomic_read(&gt->wakeref.count),
-		   ktime_to_ms(intel_gt_get_awake_time(gt)));
+		   ktime_to_ms(intel_gt_get_awake_time(gt)),
+		   atomic_read(&gt->user_engines));
 	drm_printf(p, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
 		   READ_ONCE(gt->stats.irq.count),
 		   READ_ONCE(gt->stats.irq.total),
 		   ewma_irq_time_read(&gt->stats.irq.avg),
 		   READ_ONCE(gt->stats.irq.max));
+	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915)) {
+		drm_printf(p, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, debugger: %s }\n",
+			   local_read(&gt->stats.pagefault_minor),
+			   local_read(&gt->stats.pagefault_major),
+			   local_read(&gt->stats.pagefault_invalid),
+			   str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)));
+	}
 	show_ccs_mode(gt, p);
 
-	if (gt->awake)
+	if (intel_gt_pm_is_awake(gt))
 		intel_wakeref_show(&gt->wakeref, p);
 
 	with_intel_gt_pm_if_awake(gt, wakeref)

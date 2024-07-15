@@ -32,6 +32,7 @@ EXPORT_SYMBOL(pagecache_write_end);
 
 #endif
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 #ifdef BPM_DP_READ_LTTPR_CAPS_DPCD_ARG_NOT_PRESENT
 
 /**
@@ -89,3 +90,4 @@ int drm_dp_read_lttpr_phy_caps(struct drm_dp_aux *aux,
 EXPORT_SYMBOL(drm_dp_read_lttpr_phy_caps);
 
 #endif
+#endif /* CPTCFG_DRM_I915_DISPLAY */

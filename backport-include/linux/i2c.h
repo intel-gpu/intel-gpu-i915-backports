@@ -4,6 +4,10 @@
 #include <linux/version.h>
 #include <linux/acpi.h>
 
+#ifdef BPM_KMAP_ATOMIC_NOT_PRESENT
+#include <linux/highmem.h>
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,18,0)
 /**
   * struct i2c_lock_operations - represent I2C locking operations

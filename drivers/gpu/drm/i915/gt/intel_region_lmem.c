@@ -319,6 +319,8 @@ create_region:
 
 	min_page_size = HAS_64K_PAGES(i915) ? I915_GTT_PAGE_SIZE_64K :
 						I915_GTT_PAGE_SIZE_4K;
+	if (IS_PONTEVECCHIO(i915) && i915->params.enable_4k_lmem)
+		min_page_size = SZ_4K;
 
 	/* Add the DPA (device physical address) offset */
 	lmem_base += i915->intel_iaf.dpa;
@@ -349,11 +351,13 @@ create_region:
 
 	/* Report actual physical memory and health status */
 	mem->actual_physical_mem = actual_mem;
-	if (to_gt(i915)->info.id == 0) {
-		if (is_degraded)
-			sparing->health_status = MEM_HEALTH_DEGRADED;
-		else
-			sparing->health_status = MEM_HEALTH_OKAY;
+	if (sparing->health_status != MEM_HEALTH_REPLACE) {
+		if (to_gt(i915)->info.id == 0) {
+			if (is_degraded)
+				sparing->health_status = MEM_HEALTH_DEGRADED;
+			else
+				sparing->health_status = MEM_HEALTH_OKAY;
+		}
 	}
 	mem->stolen = rsvd;
 

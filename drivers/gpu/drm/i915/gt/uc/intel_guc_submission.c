@@ -648,7 +648,7 @@ int intel_guc_wait_for_pending_msg(struct intel_guc *guc,
 			break;
 
 		if (signal_pending_state(state, current)) {
-			timeout = -EINTR;
+			timeout = -ERESTARTSYS;
 			break;
 		}
 
@@ -1589,7 +1589,8 @@ static int guc_busy_v2_alloc_device(struct intel_guc *guc)
 	void *busy_v2_ptr;
 	int ret;
 
-	ret = intel_guc_allocate_and_map_vma(guc, size, &guc->busy.v2.device_vma, &busy_v2_ptr);
+	ret = __intel_guc_allocate_and_map_vma(guc, size, true,
+					       &guc->busy.v2.device_vma, &busy_v2_ptr);
 	if (ret)
 		return ret;
 
@@ -2411,8 +2412,8 @@ static void __guc_reset_context(struct intel_context *ce, intel_engine_mask_t st
 			goto out_replay;
 		}
 
-		if (i915_request_started(rq))
-			guilty = stalled & ce->engine->mask;
+		if (__i915_request_has_started(rq))
+			guilty = stalled & rq->execution_mask;
 
 		GEM_BUG_ON(i915_active_is_idle(&ce->active));
 		head = intel_ring_wrap(ce->ring, rq->head);
@@ -2447,18 +2448,8 @@ static void clear_context_state(struct intel_guc *guc)
 	xa_destroy(&guc->context_lookup);
 }
 
-static void wake_up_tlb_invalidate(struct intel_guc_tlb_wait *wait)
-{
-	/* Barrier to ensure the store is observed by the woken thread */
-	smp_store_mb(wait->status, 0);
-	wake_up(&wait->wq);
-}
-
 void intel_guc_submission_reset(struct intel_guc *guc, intel_engine_mask_t stalled)
 {
-	struct intel_guc_tlb_wait *wait;
-	unsigned long i;
-
 	if (unlikely(!guc_submission_initialized(guc))) {
 		/* Reset called during driver load? GuC not yet initialised! */
 		return;
@@ -2466,15 +2457,6 @@ void intel_guc_submission_reset(struct intel_guc *guc, intel_engine_mask_t stall
 
 	guc_submission_unwind_all(guc, stalled);
 	clear_context_state(guc);
-
-	/*
-	 * The full GT reset will have cleared the TLB caches and flushed the
-	 * G2H message queue; we can release all the blocked waiters.
-	 */
-	xa_lock_irq(&guc->tlb_lookup);
-	xa_for_each(&guc->tlb_lookup, i, wait)
-		wake_up_tlb_invalidate(wait);
-	xa_unlock_irq(&guc->tlb_lookup);
 }
 
 static void guc_cancel_context_requests(struct intel_context *ce)
@@ -2641,41 +2623,6 @@ void intel_guc_submission_reset_finish(struct intel_guc *guc)
 static void destroyed_worker_func(struct work_struct *w);
 static int number_mlrc_guc_id(struct intel_guc *guc);
 
-static int init_tlb_lookup(struct intel_guc *guc)
-{
-	struct intel_guc_tlb_wait *wait;
-	int err;
-
-	xa_init_flags(&guc->tlb_lookup, XA_FLAGS_ALLOC);
-
-	wait = kzalloc(sizeof(*wait), GFP_KERNEL);
-	if (!wait)
-		return -ENOMEM;
-
-	init_waitqueue_head(&wait->wq);
-	err = xa_alloc_cyclic_irq(&guc->tlb_lookup, &guc->serial_slot, wait,
-				  xa_limit_32b, &guc->next_seqno, GFP_KERNEL);
-	if (err == -ENOMEM) {
-		kfree(wait);
-		return err;
-	}
-
-	return 0;
-}
-
-static void fini_tlb_lookup(struct intel_guc *guc)
-{
-	struct intel_guc_tlb_wait *wait;
-
-	wait = xa_load(&guc->tlb_lookup, guc->serial_slot);
-	if (wait) {
-		GEM_BUG_ON(wait->status);
-		kfree(wait);
-	}
-
-	xa_destroy(&guc->tlb_lookup);
-}
-
 /*
  * Set up the memory resources to be shared with the GuC (via the GGTT)
  * at firmware loading time.
@@ -2699,15 +2646,11 @@ int intel_guc_submission_init(struct intel_guc *guc)
 			return ret;
 	}
 
-	ret = init_tlb_lookup(guc);
-	if (ret)
-		goto destroy_pool;
-
 	guc->submission_state.guc_ids_bitmap =
 		bitmap_zalloc(number_mlrc_guc_id(guc), GFP_KERNEL);
 	if (!guc->submission_state.guc_ids_bitmap) {
 		ret = -ENOMEM;
-		goto destroy_tlb;
+		goto destroy_pool;
 	}
 
 	if (busy_type_is_v1(guc)) {
@@ -2727,8 +2670,6 @@ int intel_guc_submission_init(struct intel_guc *guc)
 
 destroy_bitmap:
 	bitmap_free(guc->submission_state.guc_ids_bitmap);
-destroy_tlb:
-	fini_tlb_lookup(guc);
 destroy_pool:
 	guc_lrc_desc_pool_destroy_v69(guc);
 	return ret;
@@ -2745,7 +2686,6 @@ void intel_guc_submission_fini(struct intel_guc *guc)
 	bitmap_free(guc->submission_state.guc_ids_bitmap);
 	if (!busy_type_is_v1(guc))
 		guc_busy_v2_free_device(guc);
-	fini_tlb_lookup(guc);
 	guc->submission_initialized = false;
 }
 
@@ -5564,30 +5504,6 @@ g2h_context_lookup(struct intel_guc *guc, u32 ctx_id)
 	}
 
 	return ce;
-}
-
-static void wait_wake_outstanding_tlb_g2h(struct intel_guc *guc, u32 seqno)
-{
-	struct intel_guc_tlb_wait *wait;
-	unsigned long flags;
-
-	xa_lock_irqsave(&guc->tlb_lookup, flags);
-	wait = xa_load(&guc->tlb_lookup, seqno);
-
-	/* We received a response after the waiting task did exit with a timeout */
-	if (unlikely(!wait))
-		drm_dbg(&guc_to_gt(guc)->i915->drm,
-			"Stale tlb invalidation response with seqno %d\n", seqno);
-
-	if (wait)
-		wake_up_tlb_invalidate(wait);
-
-	xa_unlock_irqrestore(&guc->tlb_lookup, flags);
-}
-
-void intel_guc_tlb_invalidation_done(struct intel_guc *guc, u32 seqno)
-{
-	wait_wake_outstanding_tlb_g2h(guc, seqno);
 }
 
 int intel_guc_deregister_done_process_msg(struct intel_guc *guc,

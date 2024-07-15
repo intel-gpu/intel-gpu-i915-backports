@@ -1250,7 +1250,7 @@ hardware_error_type_to_str(const enum hardware_error hw_err)
 }
 
 #define log_gt_hw_err(gt, fmt, ...) \
-	drm_err_ratelimited(&(gt)->i915->drm, HW_ERR "GT%d detected " fmt, \
+	dev_err_ratelimited((gt)->i915->drm.dev, HW_ERR "GT%d detected " fmt, \
 			    (gt)->info.id, ##__VA_ARGS__)
 
 static const char *
@@ -1805,6 +1805,12 @@ static void gen12_mem_health_work(struct work_struct *work)
 			   sparing_event);
 }
 
+static void print_repair(struct intel_gt *gt)
+{
+	dev_crit_once(gt->i915->drm.dev,
+		      "[Hardware Info]: Its advisable to run HBM test/repair cycle to repair any potential permanent fault in HBM.");
+}
+
 static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			     u32 reg_swf0, u32 reg_swf1)
 {
@@ -1814,6 +1820,7 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		u32 channel:5;
 		u32 pseudochannel:1;
 		u32 row:18;
+		u32 patrol_scrub:1;
 	};
 
 	struct swf1_bitfields {
@@ -1821,6 +1828,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		u32 bank:6;
 		u32 old_state:4;
 		u32 new_state:4;
+		u32 pseudochannel:1;
+		u32 stack_id:2;
+		u32 reserved:5;
 	};
 
 	bool report_state_change = false;
@@ -1833,18 +1843,21 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	bfswf0.channel = REG_FIELD_GET(CHANNEL_MASK, reg_swf0);
 	bfswf0.pseudochannel = REG_FIELD_GET(PSEUDOCHANNEL_MASK, reg_swf0);
 	bfswf0.row = REG_FIELD_GET(ROW_MASK, reg_swf0);
+	bfswf0.patrol_scrub = REG_FIELD_GET(PATROL_MASK, reg_swf0);
 	bfswf1.column = REG_FIELD_GET(COLUMN_MASK, reg_swf1);
 	bfswf1.bank = REG_FIELD_GET(BANK_MASK, reg_swf1);
 	bfswf1.old_state = REG_FIELD_GET(OLDSTATE_MASK, reg_swf1);
 	bfswf1.new_state = REG_FIELD_GET(NEWSTATE_MASK, reg_swf1);
+	bfswf1.stack_id = REG_FIELD_GET(STACKID_MASK, reg_swf1);
 
 	switch (cause) {
 	case BANK_CORRECTABLE_ERROR:
 		event = "Correctable Error Received on";
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: %s HBM Tile%u, Channel%u, Pseudo Channel %u, Bank%u, Row%u, Column%u\n",
-				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
-				    bfswf1.bank, bfswf0.row, bfswf1.column);
+				    "[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+				    bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event,
+				    bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
+				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
 
 		if (bfswf1.old_state != bfswf1.new_state)
 			report_state_change = true;
@@ -1853,38 +1866,36 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	case BANK_SPARNG_ERR_MITIGATION_DOWNGRADED:
 		event = "PCLS Applied";
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u, Column%u\n",
+				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
-				    bfswf1.bank, bfswf0.row, bfswf1.column);
+				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
 		switch (bfswf0.event_num) {
 		case UC_DEMAND_ACCESS:
 			event = "Uncorrectable Error on Demand Access received";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u\n",
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row);
+					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
+					    bfswf0.row, bfswf1.column);
 			break;
 		case PATROL_SCRUB_ERROR:
 			event = "Uncorrectable Error on Patrol Scrub";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u\n",
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row);
-
-			dev_crit(gt->i915->drm.dev,"[Hardware Info:] Its advisable to run HBM test/repair \
-					    Cycle to repair any potential permanent fault in HBM.");
+					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
+					    bfswf0.row, bfswf1.column);
+			print_repair(gt);
 			break;
 		case PCLS_EXCEEDED:
 			event = "Exceeded PCLS Threshold";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel);
-
-			dev_crit(gt->i915->drm.dev, "[Hardware Info:] Its advisable to run HBM test/repair \
-					    Cycle to repair any potential permanent fault in HBM.");
+					    bfswf0.pseudochannel, bfswf1.stack_id);
+			print_repair(gt);
 
 			if (bfswf1.old_state != bfswf1.new_state)
 				report_state_change = true;
@@ -1893,13 +1904,10 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		case PCLS_SAME_CACHELINE:
 			event = "Cannot Apply PCLS, PCLS Already Applied to This Line";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel);
-
-			dev_crit(gt->i915->drm.dev, "[Hardware Info:] Its advisable to run HBM test/repair \
-					    Cycle to repair any potential permanent fault in HBM.");
-
+					    bfswf0.pseudochannel, bfswf1.stack_id);
+			print_repair(gt);
 			break;
 		default:
 			event = "Unknown event for Error Cause:";
@@ -2064,9 +2072,9 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 					    "%s GSC NON_FATAL Error, GSC_HEC_UNCORR_ERR_STATUS:0x%08lx\n",
 					    name, err_status);
 
-			drm_err_ratelimited(&gt->i915->drm, "[Hardware Info:] \
-					    CSC services may have stopped running. \
-					    Recommend resetting PVC card to recover CSC services.");
+			drm_err_ratelimited(&gt->i915->drm,
+					    "[Hardware Info]; CSC services may have stopped running. "
+					    "Recommend resetting PVC card to recover CSC services.\n");
 		}
 		break;
 	case HARDWARE_ERROR_FATAL:
@@ -3607,6 +3615,7 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 #endif
 		return ret;
 	}
+	irq_set_affinity_hint(irq, dev_priv->sched->cpumask);
 
 	intel_irq_postinstall(dev_priv);
 
@@ -3645,6 +3654,7 @@ void intel_irq_uninstall(struct drm_i915_private *dev_priv)
 
 	intel_irq_reset(dev_priv);
 
+	irq_set_affinity_hint(irq, NULL);
 	free_irq(irq, dev_priv);
 
 	intel_hpd_cancel_work(dev_priv);

@@ -65,10 +65,6 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *i915,
 
 extern const struct drm_i915_gem_object_ops i915_gem_shmem_ops;
 
-void __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
-				     struct sg_table *pages,
-				     bool needs_clflush);
-
 enum intel_region_id;
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 				 struct i915_gem_ww_ctx *ww);
@@ -377,12 +373,6 @@ i915_gem_object_has_iomem(const struct drm_i915_gem_object *obj)
 }
 
 static inline bool
-i915_gem_object_is_shrinkable(const struct drm_i915_gem_object *obj)
-{
-	return i915_gem_object_type_has(obj, I915_GEM_OBJECT_IS_SHRINKABLE);
-}
-
-static inline bool
 i915_gem_object_is_proxy(const struct drm_i915_gem_object *obj)
 {
 	return i915_gem_object_type_has(obj, I915_GEM_OBJECT_IS_PROXY);
@@ -397,7 +387,17 @@ i915_gem_object_never_mmap(const struct drm_i915_gem_object *obj)
 static inline bool
 i915_gem_object_is_framebuffer(const struct drm_i915_gem_object *obj)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	return READ_ONCE(obj->frontbuffer);
+#else
+	return false;
+#endif
+}
+
+static inline bool
+i915_gem_object_is_purgeable(const struct drm_i915_gem_object *obj)
+{
+	return obj->mm.madv != I915_MADV_WILLNEED || i915_gem_object_is_volatile(obj);
 }
 
 struct scatterlist *
@@ -528,7 +528,6 @@ i915_gem_object_unpin_pages(struct drm_i915_gem_object *obj)
 }
 
 int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj);
-void i915_gem_object_truncate(struct drm_i915_gem_object *obj);
 
 /**
  * i915_gem_object_pin_map - return a contiguous mapping of the entire object
@@ -594,7 +593,11 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
 void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 				   unsigned int pat_index);
-bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj);
+static inline bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
+{
+	return false;
+}
+
 void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
 void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj);
 
@@ -614,7 +617,6 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 
 void i915_gem_object_make_unshrinkable(struct drm_i915_gem_object *obj);
 void i915_gem_object_make_shrinkable(struct drm_i915_gem_object *obj);
-void i915_gem_object_make_purgeable(struct drm_i915_gem_object *obj);
 int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 			     struct prelim_drm_i915_gem_vm_advise *args);
 
@@ -653,6 +655,7 @@ int i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
 
 bool i915_gem_object_is_active(struct drm_i915_gem_object *obj);
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 void __i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
 					 enum fb_op_origin origin);
 void __i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
@@ -675,6 +678,19 @@ i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
 }
 
 int i915_gem_object_read_from_page(struct drm_i915_gem_object *obj, u64 offset, void *dst, int size);
+#else
+static inline void
+i915_gem_object_flush_frontbuffer(struct drm_i915_gem_object *obj,
+				  enum fb_op_origin origin)
+{
+}
+
+static inline void
+i915_gem_object_invalidate_frontbuffer(struct drm_i915_gem_object *obj,
+				       enum fb_op_origin origin)
+{
+}
+#endif
 
 bool i915_gem_object_is_shmem(const struct drm_i915_gem_object *obj);
 

@@ -14,6 +14,7 @@
 #include "i915_scheduler_types.h"
 #include "i915_tasklet.h"
 
+struct drm_i915_private;
 struct drm_printer;
 
 #define priolist_for_each_request(it, plist) \
@@ -106,6 +107,8 @@ i915_sched_engine_disabled(struct i915_sched_engine *sched_engine)
 {
 	return sched_engine->disabled(sched_engine);
 }
+
+struct cpumask *cpumask_of_i915(struct drm_i915_private *i915);
 
 void i915_scheduler_module_exit(void);
 int i915_scheduler_module_init(void);

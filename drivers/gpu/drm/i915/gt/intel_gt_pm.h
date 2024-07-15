@@ -75,6 +75,9 @@ static inline void intel_gt_pm_put_async(struct intel_gt *gt, intel_wakeref_t ha
 #define with_intel_gt_pm(gt, wf) \
 	for (wf = intel_gt_pm_get(gt); wf; intel_gt_pm_put(gt, wf), wf = 0)
 
+#define with_intel_gt_pm_async(gt, wf) \
+	for (wf = intel_gt_pm_get(gt); wf; intel_gt_pm_put_async(gt, wf), wf = 0)
+
 #define with_intel_gt_pm_if_awake(gt, wf) \
 	for (wf = intel_gt_pm_get_if_awake(gt); wf; intel_gt_pm_put_async(gt, wf), wf = 0)
 
@@ -111,7 +114,7 @@ ktime_t intel_gt_get_awake_time(const struct intel_gt *gt);
 
 static inline bool is_mock_gt(const struct intel_gt *gt)
 {
-	return I915_SELFTEST_ONLY(gt->awake == -ENODEV);
+	return I915_SELFTEST_ONLY(gt->mock);
 }
 
 static inline
@@ -124,6 +127,11 @@ static inline
 int intel_gt_idle_engines_wait(struct intel_gt *gt)
 {
 	return intel_uc_idle_engines_wait(&gt->uc);
+}
+
+static inline void assert_gt_pm_held(const struct intel_gt *gt)
+{
+	GEM_BUG_ON(!intel_gt_pm_is_awake(gt));
 }
 
 #endif /* INTEL_GT_PM_H */

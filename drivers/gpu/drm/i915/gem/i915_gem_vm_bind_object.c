@@ -7,6 +7,7 @@
 #include <linux/sched/mm.h>
 
 #include "gt/gen8_engine_cs.h"
+#include "gt/intel_tlb.h"
 
 #include "i915_drv.h"
 #include "i915_gem_context.h"
@@ -20,7 +21,10 @@
 #endif
 
 struct user_fence {
-	struct mm_struct *mm;
+	union {
+		struct mm_struct *mm;
+		struct page *page;
+	};
 	void __user *ptr;
 	u64 val;
 };
@@ -47,7 +51,40 @@ struct vm_bind_user_fence {
 	struct wait_queue_head *wq;
 };
 
-static int ufence_work(struct dma_fence_work *work)
+static void ufence_kmap(struct dma_fence_work *work)
+{
+	struct vm_bind_user_fence *vb =
+		container_of(work, struct vm_bind_user_fence, base);
+	struct user_fence *ufence = &vb->user_fence;
+	void *va;
+
+	va = kmap_atomic(ufence->page);
+	memcpy(va + offset_in_page(ufence->ptr), &ufence->val, sizeof(ufence->val));
+	wake_up_all(vb->wq);
+	kunmap_atomic(va);
+}
+
+static void ufence_page_release(struct dma_fence_work *work)
+{
+	struct user_fence *ufence =
+		&container_of(work, struct vm_bind_user_fence, base)->user_fence;
+
+	put_page(ufence->page);
+}
+
+static const struct dma_fence_work_ops ufence_page_ops = {
+	.name = "ufence",
+	.complete = ufence_kmap,
+	.release = ufence_page_release,
+	.no_error_propagation = true,
+};
+
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
+#define kthread_use_mm(m) use_mm(m)
+#define kthread_unuse_mm(m) unuse_mm(m)
+#endif
+
+static int ufence_mm(struct dma_fence_work *work)
 {
 	struct vm_bind_user_fence *vb =
 		container_of(work, struct vm_bind_user_fence, base);
@@ -56,21 +93,12 @@ static int ufence_work(struct dma_fence_work *work)
 	int ret = -EFAULT;
 
 	if (mmget_not_zero(mm)) {
-#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
-		use_mm(mm);
-#else
 		kthread_use_mm(mm);
-#endif
 		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
-			wmb();
 			wake_up_all(vb->wq);
 			ret = 0;
 		}
-#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
-		unuse_mm(mm);
-#else
 		kthread_unuse_mm(mm);
-#endif
 		mmput(mm);
 	}
 
@@ -85,9 +113,9 @@ static void ufence_release(struct dma_fence_work *work)
 	mmdrop(ufence->mm);
 }
 
-static const struct dma_fence_work_ops ufence_ops = {
+static const struct dma_fence_work_ops ufence_mm_ops = {
 	.name = "ufence",
-	.work = ufence_work,
+	.work = ufence_mm,
 	.release = ufence_release,
 	.no_error_propagation = true,
 	.rcu_release = true,
@@ -111,8 +139,14 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 
 	if (arg->bind_fence.mm) {
 		vb->user_fence = arg->bind_fence;
-		mmgrab(vb->user_fence.mm);
-		ops = &ufence_ops;
+		if (get_user_pages_fast((unsigned long)vb->user_fence.ptr, 1,
+					FOLL_WRITE | FOLL_FORCE,
+					&vb->user_fence.page) == 1) {
+			ops = &ufence_page_ops;
+		} else {
+			mmgrab(vb->user_fence.mm);
+			ops = &ufence_mm_ops;
+		}
 	}
 	vb->wq = &vm->i915->user_fence_wq;
 	dma_fence_work_init(&vb->base, ops, vm->i915->sched);
@@ -123,7 +157,7 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 	prev = __i915_active_fence_fetch_set(&vm->user_fence,
 					     &vb->base.rq.fence);
 	if (prev) {
-		if (arg->bind_fence.mm)
+		if (arg->bind_fence.mm && !test_bit(DMA_FENCE_WORK_IMM, &prev->flags))
 			dma_fence_work_chain(&vb->base, prev);
 		else
 			i915_sw_fence_await_sw_fence(&vb->base.rq.submit,
@@ -252,7 +286,7 @@ static int vm_bind_set_pat(struct i915_user_extension __user *base,
 	 * By design, the UMD's are passing in the PAT indices which can
 	 * be directly used to set the corresponding bits in PTE.
 	 */
-	arg->obj->pat_index = ext.pat_index;
+	i915_gem_object_set_pat_index(arg->obj, ext.pat_index);
 
 	return 0;
 }
@@ -286,14 +320,12 @@ void i915_vma_metadata_free(struct i915_vma *vma)
 struct i915_vma *
 i915_gem_vm_bind_lookup_vma(struct i915_address_space *vm, u64 va)
 {
-	struct i915_vma *vma, *temp;
-
-	assert_vm_bind_held(vm);
+	struct i915_vma *vma;
 
 	vma = i915_vm_bind_it_iter_first(&vm->va, va, va);
-	/* Working around compiler error, remove later */
-	if (vma)
-		temp = i915_vm_bind_it_iter_next(vma, va + vma->size, -1);
+	if (!vma || va >= vma->node.start + vma->node.size)
+		return NULL;
+
 	return vma;
 }
 
@@ -397,7 +429,7 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 	prev = i915_active_set_exclusive(&vma->active, &w->base.rq.fence);
 	if (!IS_ERR_OR_NULL(prev)) {
 		dma_fence_work_chain(&w->base, prev);
-		WRITE_ONCE(prev->error, -EINTR);
+		WRITE_ONCE(prev->error, -ERESTARTSYS);
 		dma_fence_put(prev);
 	}
 
@@ -577,7 +609,7 @@ out_unlock:
 	i915_gem_vm_bind_unlock(vm);
 	list_for_each_entry_safe(uw, uwn, &unbind_head, unbind_link) {
 		i915_sw_fence_set_error_once(&uw->base.rq.submit, ret);
-		dma_fence_work_commit_imm(&uw->base);
+		dma_fence_work_commit_imm_if(&uw->base, va->length <= SZ_2M);
 	}
 
 	return ret;
@@ -941,7 +973,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 	list_for_each_entry_safe(vma, vma_next, &vma_head, vm_bind_link) {
 		/* apply pat_index from parent */
-		vma->obj->pat_index = obj->pat_index;
+		i915_gem_object_set_pat_index(vma->obj, i915_gem_object_pat_index(obj));
 
 		ret = vma_bind_insert(vma, pin_flags);
 		if (ret) {

@@ -3,11 +3,7 @@
  * Copyright © 2022 Intel Corporation
  */
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-#include "i915_sriov.h"
-#else
 #include <drm/i915_sriov.h>
-#endif
 
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
@@ -281,7 +277,6 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 {
 	struct device *dev = i915->drm.dev;
 	struct pci_dev *pdev = to_pci_dev(dev);
-	unsigned int numvfs = pci_num_vf(pdev);
 
 	if (!HAS_SRIOV(i915))
 		return I915_IOV_MODE_NONE;
@@ -291,6 +286,8 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 
 #ifdef CONFIG_PCI_IOV
 	if (dev_is_pf(dev)) {
+		unsigned int numvfs = pci_num_vf(pdev);
+
 		if (pf_verify_readiness(i915))
 			return I915_IOV_MODE_SRIOV_PF;
 
@@ -965,53 +962,56 @@ static int pf_gt_save_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
 {
 	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
 	struct intel_iov *iov = &gt->iov;
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
 	unsigned long timeout_ms = I915_VF_PAUSE_TIMEOUT_MS;
-	void **guc_state = &iov->pf.state.data[vfid].guc_state;
-	int err;
+	int ret, size;
 
 	GEM_BUG_ON(!vfid);
 	GEM_BUG_ON(vfid > pci_num_vf(pdev));
 
-	err = intel_iov_state_pause_vf(iov, vfid);
-	if (err) {
-		IOV_ERROR(iov, "Failed to pause VF%u: (%pe)", vfid, ERR_PTR(err));
-		return err;
+	ret = intel_iov_state_pause_vf(iov, vfid);
+	if (ret) {
+		IOV_ERROR(iov, "Failed to pause VF%u: (%pe)", vfid, ERR_PTR(ret));
+		return ret;
 	}
 
 	/* FIXME: How long we should wait? */
-	if (wait_for(iov->pf.state.data[vfid].paused, timeout_ms)) {
+	if (wait_for(data->paused, timeout_ms)) {
 		IOV_ERROR(iov, "VF%u pause didn't complete within %lu ms\n", vfid, timeout_ms);
 		return -ETIMEDOUT;
 	}
 
-	if (*guc_state)
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-		memset(*guc_state, 0, SZ_4K);
-#else
-		memset(*guc_state, 0, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
-	else
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-		*guc_state = kzalloc(SZ_4K, GFP_KERNEL);
-#else
-		*guc_state = kzalloc(PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE, GFP_KERNEL);
-#endif
+	ret = intel_iov_state_save_vf_size(iov, vfid);
+	if (unlikely(ret < 0)) {
+		IOV_ERROR(iov, "Failed to get size of VF%u GuC state: (%pe)", vfid, ERR_PTR(ret));
+		return ret;
+	}
+	size = ret;
 
-	if (!*guc_state) {
-		err = -ENOMEM;
+	if (data->guc_state.blob && size <= data->guc_state.size) {
+		memset(data->guc_state.blob, 0, data->guc_state.size);
+	} else {
+		void *prev_state;
+
+		prev_state = fetch_and_zero(&data->guc_state.blob);
+		kfree(prev_state);
+		data->guc_state.blob = kzalloc(size, GFP_KERNEL);
+		data->guc_state.size = size;
+	}
+
+	if (!data->guc_state.blob) {
+		ret = -ENOMEM;
 		goto error;
 	}
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	err = intel_iov_state_save_vf(iov, vfid, *guc_state);
-#else
-	err = intel_iov_state_save_vf(iov, vfid, *guc_state, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
+	ret = intel_iov_state_save_vf(iov, vfid, data->guc_state.blob, data->guc_state.size);
 error:
-	if (err)
-		IOV_ERROR(iov, "Failed to save VF%u GuC state: (%pe)", vfid, ERR_PTR(err));
+	if (unlikely(ret < 0)) {
+		IOV_ERROR(iov, "Failed to save VF%u GuC state: (%pe)", vfid, ERR_PTR(ret));
+		return ret;
+	}
 
-	return err;
+	return ret;
 }
 
 static void pf_save_vfs_guc_state(struct drm_i915_private *i915, unsigned int num_vfs)
@@ -1046,13 +1046,14 @@ static int pf_gt_restore_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
 {
 	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
 	struct intel_iov *iov = &gt->iov;
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
 	unsigned long timeout_ms = I915_VF_REPROVISION_TIMEOUT_MS;
 	int err;
 
 	GEM_BUG_ON(!vfid);
 	GEM_BUG_ON(vfid > pci_num_vf(pdev));
 
-	if (!iov->pf.state.data[vfid].guc_state)
+	if (!data->guc_state.blob)
 		return -EINVAL;
 
 	if (wait_for(iov->pf.provisioning.num_pushed >= vfid, timeout_ms)) {
@@ -1062,19 +1063,14 @@ static int pf_gt_restore_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
 		return -ETIMEDOUT;
 	}
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	err = intel_iov_state_restore_vf(iov, vfid, iov->pf.state.data[vfid].guc_state);
-#else
-	err = intel_iov_state_restore_vf(iov, vfid, iov->pf.state.data[vfid].guc_state,
-					 PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
+	err = intel_iov_state_restore_vf(iov, vfid, data->guc_state.blob, data->guc_state.size);
 	if (err < 0) {
 		IOV_ERROR(iov, "Failed to restore VF%u GuC state: (%pe)", vfid, ERR_PTR(err));
 		return err;
 	}
 
-	kfree(iov->pf.state.data[vfid].guc_state);
-	iov->pf.state.data[vfid].guc_state = NULL;
+	kfree(data->guc_state.blob);
+	data->guc_state.blob = NULL;
 
 	return 0;
 }
@@ -1285,9 +1281,7 @@ int i915_sriov_pause_vf(struct pci_dev *pdev, unsigned int vfid)
 
 	return i915_sriov_pf_pause_vf(i915, vfid);
 }
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 EXPORT_SYMBOL_NS_GPL(i915_sriov_pause_vf, I915);
-#endif
 
 /**
  * i915_sriov_resume_vf - Resume VF.
@@ -1308,9 +1302,7 @@ int i915_sriov_resume_vf(struct pci_dev *pdev, unsigned int vfid)
 
 	return i915_sriov_pf_resume_vf(i915, vfid);
 }
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 EXPORT_SYMBOL_NS_GPL(i915_sriov_resume_vf, I915);
-#endif
 
 /**
  * i915_sriov_wait_vf_flr_done - Wait for VF FLR completion.
@@ -1341,7 +1333,6 @@ int i915_sriov_wait_vf_flr_done(struct pci_dev *pdev, unsigned int vfid)
 
 	return 0;
 }
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 EXPORT_SYMBOL_NS_GPL(i915_sriov_wait_vf_flr_done, I915);
 
 static struct intel_gt *
@@ -1373,7 +1364,7 @@ sriov_to_gt(struct pci_dev *pdev, unsigned int tile, bool standalone)
  *
  * Return: Size in bytes.
  */
-size_t
+ssize_t
 i915_sriov_ggtt_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
 	struct intel_gt *gt;
@@ -1451,16 +1442,16 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_ggtt_load, I915);
  *
  * This function shall be called only on PF.
  *
- * Return: Size in bytes.
+ * Return: size in bytes on success or a negative error code on failure.
  */
-size_t
+ssize_t
 i915_sriov_lmem_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
 	struct intel_gt *gt;
 
 	gt = sriov_to_gt(pdev, tile, false);
 	if (!gt)
-		return 0;
+		return -ENODEV;
 
 	return intel_iov_provisioning_get_lmem(&gt->iov, vfid);
 }
@@ -1517,18 +1508,21 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_unmap, I915);
  *
  * This function shall be called only on PF.
  *
- * Return: Size in bytes.
+ * Return: size in bytes on success or a negative error code on failure.
  */
-size_t
+ssize_t
 i915_sriov_fw_state_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
 	struct intel_gt *gt;
+	int ret;
 
 	gt = sriov_to_gt(pdev, tile, true);
 	if (!gt)
-		return 0;
+		return -ENODEV;
 
-	return SZ_4K;
+	ret = intel_iov_state_save_vf_size(&gt->iov, vfid);
+
+	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_fw_state_size, I915);
 
@@ -1538,11 +1532,11 @@ EXPORT_SYMBOL_NS_GPL(i915_sriov_fw_state_size, I915);
  * @vfid: VF identifier
  * @tile: tile identifier
  * @buf: buffer to save GuC FW state
- * @size: size of buffer to save GuC FW state
+ * @size: size of buffer to save GuC FW state, in bytes
  *
  * This function shall be called only on PF.
  *
- * Return: Size of data written on success or a negative error code on failure.
+ * Return: Size of data written (in bytes) on success or a negative error code on failure.
  */
 ssize_t
 i915_sriov_fw_state_save(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
@@ -1556,10 +1550,8 @@ i915_sriov_fw_state_save(struct pci_dev *pdev, unsigned int vfid, unsigned int t
 		return -ENODEV;
 
 	ret = intel_iov_state_save_vf(&gt->iov, vfid, buf, size);
-	if (ret)
-		return ret;
 
-	return SZ_4K;
+	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_fw_state_save, I915);
 
@@ -1588,7 +1580,6 @@ i915_sriov_fw_state_load(struct pci_dev *pdev, unsigned int vfid, unsigned int t
 	return intel_iov_state_store_guc_migration_state(&gt->iov, vfid, buf, size);
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_fw_state_load, I915);
-#endif /* BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT */
 
 /**
  * i915_sriov_pf_clear_vf - Unprovision VF.

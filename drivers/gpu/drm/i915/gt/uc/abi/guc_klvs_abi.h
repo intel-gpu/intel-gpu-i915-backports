@@ -276,6 +276,15 @@ enum {
  *
  *      :0: (default)
  *      :1-65535: number of contexts (Gen12)
+ *
+ * _`KLV_ID_VF_SCHED_PRIORITY` : 0x8A0C
+ *      This config sets VF's scheduling priority.
+ *
+ *      :0: low - schedule VF only if it has active work (default)
+ *      :1: normal - schedule VF always, regardless of whether it has work or
+ *          not. Once scheduled, VF will run for its entire execution quantum.
+ *      :2: high - schedule VF in the next time-slice. Once scheduled, VF will
+ *          run until it finishes its work.
  */
 
 #define GUC_KLV_VF_CFG_GGTT_START_KEY		0x0001
@@ -325,5 +334,12 @@ enum {
 
 #define GUC_KLV_VF_CFG_BEGIN_CONTEXT_ID_KEY	0x8a0b
 #define GUC_KLV_VF_CFG_BEGIN_CONTEXT_ID_LEN	1u
+
+#define GUC_KLV_VF_CFG_SCHED_PRIORITY_KEY		0x8a0c
+#define GUC_KLV_VF_CFG_SCHED_PRIORITY_LEN		1u
+#define   GUC_KLV_VF_CFG_SCHED_PRIORITY_VALUE_LOW	0
+#define   GUC_KLV_VF_CFG_SCHED_PRIORITY_VALUE_NORMAL	1
+#define   GUC_KLV_VF_CFG_SCHED_PRIORITY_VALUE_HIGH	2
+#define   GUC_KLV_VF_CFG_SCHED_PRIORITY_NUM_VALUES	3
 
 #endif /* _ABI_GUC_KLVS_ABI_H */

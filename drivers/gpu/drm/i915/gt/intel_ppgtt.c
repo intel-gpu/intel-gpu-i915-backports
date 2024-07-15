@@ -41,9 +41,9 @@ static void px_release(struct drm_i915_gem_object *px)
 {
 	struct intel_memory_region *mem = px->mm.region.mem;
 
-	spin_lock(&mem->objects.lock);
-	list_move(&px->mm.region.link, &mem->objects.purgeable);
-	spin_unlock(&mem->objects.lock);
+	spin_lock_irq(&mem->objects.lock);
+	list_move(&px->mm.region.link, &mem->objects.list);
+	spin_unlock_irq(&mem->objects.lock);
 
 	i915_gem_object_put(px);
 }
@@ -206,15 +206,26 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	 * flushed the TLBs upon release, perform a full invalidation.
 	 */
 	for_each_gt(gt, vm->i915, id) {
-		WRITE_ONCE(obj->mm.tlb[id], 0);
-		if (!atomic_read(&vm->active_contexts[id]))
-			continue;
+		u32 seqno = 0;
 
-		if (!intel_gt_invalidate_tlb_range(gt, vm,
-						   i915_vma_offset(vma),
-						   pte_size(vma)))
-			WRITE_ONCE(obj->mm.tlb[id],
-				   intel_gt_next_invalidate_tlb_full(vm->gt));
+		if (atomic_read(&vm->active_contexts[id]))
+			seqno = intel_gt_invalidate_tlb_range(gt, vm,
+							      i915_vma_offset(vma),
+							      pte_size(vma));
+
+		WRITE_ONCE(obj->mm.tlb[id], seqno);
+	}
+}
+
+static void vm_sync_tlb(struct i915_address_space *vm, u32 *tlb)
+{
+	struct intel_gt *gt;
+	int id;
+
+	/* It's more expensive to track per-page syncpt than a global sync */
+	for_each_gt(gt, vm->i915, id) {
+		if (tlb[id])
+			intel_gt_invalidate_tlb_sync(gt, tlb[id]);
 	}
 }
 
@@ -223,6 +234,7 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		   unsigned int pat_index,
 		   u32 flags)
 {
+	u32 tlb[ARRAY_SIZE(vm->tlb)];
 	u32 pte_flags;
 	int err;
 
@@ -230,12 +242,14 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	if (!drm_mm_node_allocated(&vma->node))
 		return 0;
 
+	memcpy(tlb, vm->tlb, sizeof(tlb));
+
 	/*
 	 * Force the next access to this vma to trigger a pagefault.
 	 * This only installs a NULL PTE, and will *not* populate TLB.
 	 */
 	if (!(flags & PIN_RESIDENT))
-		return 0;
+		goto out;
 
 	/* Applicable to VLV, and gen8+ */
 	pte_flags = 0;
@@ -260,19 +274,12 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 
 		if (start < vm->fault_end && end > vm->fault_start) {
 			vma_invalidate_tlb(vma);
-
-			/* Try to heal the edges of the scratch */
-			if (start <= vm->fault_start)
-				vm->fault_start = end;
-			if (end >= vm->fault_end)
-				vm->fault_end = start;
-
-			/* Reset for tight bounds on the next invalid fault */
-			if (vm->fault_end <= vm->fault_start)
-				vm->fault_end = 0, vm->fault_start = U64_MAX;
+			i915_vm_heal_scratch(vm, start, end);
 		}
 	}
 
+out:	/* Before signalling, make sure all TLBs were cleared of old PTE */
+	vm_sync_tlb(vm, tlb);
 	return 0;
 }
 

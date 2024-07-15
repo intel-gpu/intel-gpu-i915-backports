@@ -92,10 +92,9 @@ static ssize_t relay_to_vf_write(struct file *file, const char __user *user,
 				 size_t count, loff_t *ppos)
 {
 	struct intel_iov *iov = &((struct intel_gt *)file->private_data)->iov;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
-	intel_wakeref_t wakeref;
 	u32 message[1 + RELAY_MAX_LEN];	/* target + message */
 	u32 reply[RELAY_MAX_LEN];
+	intel_wakeref_t wakeref;
 	int ret;
 
 	if (*ppos)
@@ -111,7 +110,7 @@ static ssize_t relay_to_vf_write(struct file *file, const char __user *user,
 	if (message[0] == PFID)
 		return -EINVAL;
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = intel_iov_relay_send_to_vf(&iov->relay, message[0],
 						 message + 1, ret - 1,
 						 reply, ARRAY_SIZE(reply));
@@ -128,7 +127,6 @@ static ssize_t relay_to_pf_write(struct file *file, const char __user *user,
 				 size_t count, loff_t *ppos)
 {
 	struct intel_iov *iov = &((struct intel_gt *)file->private_data)->iov;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	u32 message[RELAY_MAX_LEN];
 	u32 reply[RELAY_MAX_LEN];
@@ -144,7 +142,7 @@ static ssize_t relay_to_pf_write(struct file *file, const char __user *user,
 	if (ret < GUC_HXG_MSG_MIN_LEN)
 		return -EINVAL;
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = intel_iov_relay_send_to_pf(&iov->relay, message, ret,
 						 reply, ARRAY_SIZE(reply));
 	if (ret < 0)

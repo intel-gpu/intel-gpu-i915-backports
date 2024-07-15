@@ -48,6 +48,7 @@ IOV_THRESHOLDS(__to_intel_iov_threshold_enum)
  * @begin_db: start index of GuC doorbells.
  * @exec_quantum: execution-quantum in milliseconds.
  * @preempt_timeout: preemption timeout in microseconds.
+ * @sched_priority: scheduling priority.
  */
 struct intel_iov_config {
 	struct drm_mm_node ggtt_region;
@@ -58,6 +59,7 @@ struct intel_iov_config {
 	u16 begin_db;
 	u32 exec_quantum;
 	u32 preempt_timeout;
+	u8 sched_priority;
 	u32 thresholds[IOV_THRESHOLD_MAX];
 };
 
@@ -131,7 +133,10 @@ struct intel_iov_data {
 #define IOV_VF_FLR_FAILED		(BITS_PER_LONG - 1)
 	bool paused;
 	unsigned int adverse_events[IOV_THRESHOLD_MAX];
-	void *guc_state;
+	struct {
+		void *blob;
+		u32 size;
+	} guc_state;
 };
 
 /**

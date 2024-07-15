@@ -277,6 +277,8 @@ static void ppgtt_clear(struct i915_address_space *vm,
 
 static void gen8_ppgtt_clear(struct i915_address_space *vm, u64 start, u64 length)
 {
+	intel_wakeref_t wf;
+
 	DBG("%s(%p):{ start:%llx, length:%llx }\n",
 	    __func__, vm, start, length);
 
@@ -285,7 +287,8 @@ static void gen8_ppgtt_clear(struct i915_address_space *vm, u64 start, u64 lengt
 	GEM_BUG_ON(range_overflows(start, length, vm->total));
 	GEM_BUG_ON(length == 0);
 
-	ppgtt_clear(vm, start, start + length, 0);
+	with_intel_gt_pm_async(vm->gt, wf)
+		ppgtt_clear(vm, start, start + length, 0);
 }
 
 struct pt_insert {
@@ -525,11 +528,13 @@ static int ppgtt_insert(struct i915_address_space *vm,
 		.addr = i915_vma_offset(vma),
 		.end = i915_vma_offset(vma) + min(i915_vma_size(vma), vma->size),
 	};
+	intel_wakeref_t wf;
 
 	DBG("%s(%p):{ start:%llx, end:%llx }\n",
 	    __func__, vm, arg.addr, arg.end);
 
-	__ppgtt_insert(&arg);
+	with_intel_gt_pm_async(vm->gt, wf)
+		__ppgtt_insert(&arg);
 
 	vma->page_sizes = arg.page_sizes;
 	return arg.error;

@@ -191,6 +191,7 @@ struct i915_sched_engine {
 	 */
 	struct workqueue_struct *wq;
 	const struct cpumask *cpumask;
+	int num_cpus;
 	int cpu;
 
 	/**

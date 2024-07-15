@@ -71,8 +71,6 @@ static void show_heartbeat(const struct i915_request *rq,
 {
 	struct drm_printer p = drm_debug_printer("heartbeat");
 
-	intel_guc_print_info(&engine->gt->uc.guc, &p);
-
 	intel_engine_dump(engine, &p,
 			  "%s heartbeat {seqno:%llx:%lld, prio:%d} not ticking\n",
 			  engine->name,
@@ -81,6 +79,7 @@ static void show_heartbeat(const struct i915_request *rq,
 			  rq->sched.attr.priority);
 
 	intel_gt_show_timelines(engine->gt, &p, i915_request_show_with_schedule);
+	intel_guc_submission_print_info(&engine->gt->uc.guc, &p);
 }
 
 static void
@@ -200,13 +199,16 @@ static void heartbeat(struct work_struct *wrk)
 	if (intel_gt_is_wedged(engine->gt))
 		goto out;
 
-	ret = i915_debugger_handle_engine_attention(engine);
-	if (ret) {
-		intel_gt_handle_error(engine->gt, engine->mask,
-				      I915_ERROR_CAPTURE,
-				      "unable to handle EU attention on %s, error:%d",
-				      engine->name, ret);
-		goto out;
+	/* Skip attn scanning during the pf, as we will be capturing attn there */
+	if (!atomic_read(&engine->in_pagefault)) {
+		ret = i915_debugger_handle_engine_attention(engine);
+		if (ret) {
+			intel_gt_handle_error(engine->gt, engine->mask,
+					I915_ERROR_CAPTURE,
+					"unable to handle EU attention on %s, error:%d",
+					engine->name, ret);
+			goto out;
+		}
 	}
 
 	/* Hangcheck disabled so do not check for systole. */
@@ -510,7 +512,7 @@ int intel_engine_pulse(struct intel_engine_cs *engine)
 	if (!intel_engine_pm_get_if_awake(engine))
 		return 0;
 
-	err = -EINTR;
+	err = -ERESTARTSYS;
 	if (!mutex_lock_interruptible(&ce->timeline->mutex)) {
 		err = __intel_engine_pulse(engine);
 		mutex_unlock(&ce->timeline->mutex);
@@ -535,7 +537,7 @@ int intel_engine_flush_barriers(struct intel_engine_cs *engine)
 		return 0;
 
 	if (mutex_lock_interruptible(&ce->timeline->mutex)) {
-		err = -EINTR;
+		err = -ERESTARTSYS;
 		goto out_rpm;
 	}
 

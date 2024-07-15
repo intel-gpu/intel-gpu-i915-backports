@@ -29,9 +29,7 @@ int intel_iov_provisioning_auto(struct intel_iov *iov, unsigned int num_vfs);
 int intel_iov_provisioning_verify(struct intel_iov *iov, unsigned int num_vfs);
 int intel_iov_provisioning_push(struct intel_iov *iov, unsigned int num);
 
-#ifndef BPM_PCI_IOV_VF_ID_NOT_PRESENT
 u32 intel_iov_provisioning_get_tile_mask(struct intel_iov *iov, unsigned int vfid);
-#endif
 
 int intel_iov_provisioning_set_ggtt(struct intel_iov *iov, unsigned int id, u64 size);
 u64 intel_iov_provisioning_get_ggtt(struct intel_iov *iov, unsigned int id);
@@ -59,6 +57,10 @@ u32 intel_iov_provisioning_get_exec_quantum(struct intel_iov *iov, unsigned int 
 
 int intel_iov_provisioning_set_preempt_timeout(struct intel_iov *iov, unsigned int id, u32 preempt_timeout);
 u32 intel_iov_provisioning_get_preempt_timeout(struct intel_iov *iov, unsigned int id);
+
+int intel_iov_provisioning_set_sched_priority(struct intel_iov *iov, unsigned int id,
+					      u8 sched_priority);
+u8 intel_iov_provisioning_get_sched_priority(struct intel_iov *iov, unsigned int id);
 
 int intel_iov_provisioning_set_lmem(struct intel_iov *iov, unsigned int id, u64 size);
 u64 intel_iov_provisioning_get_lmem(struct intel_iov *iov, unsigned int id);

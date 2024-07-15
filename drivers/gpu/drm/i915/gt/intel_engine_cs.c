@@ -39,7 +39,6 @@
  */
 #define HSW_CXT_TOTAL_SIZE		(17 * PAGE_SIZE)
 
-#define DEFAULT_LR_CONTEXT_RENDER_SIZE	(22 * PAGE_SIZE)
 #define GEN8_LR_CONTEXT_RENDER_SIZE	(20 * PAGE_SIZE)
 #define GEN9_LR_CONTEXT_RENDER_SIZE	(22 * PAGE_SIZE)
 #define GEN11_LR_CONTEXT_RENDER_SIZE	(14 * PAGE_SIZE)
@@ -305,7 +304,7 @@ u32 intel_engine_context_size(struct intel_gt *gt, u8 class)
 	switch (class) {
 	case COMPUTE_CLASS:
 	case RENDER_CLASS:
-		return DEFAULT_LR_CONTEXT_RENDER_SIZE;
+		return GEN11_LR_CONTEXT_RENDER_SIZE;
 	default:
 		MISSING_CASE(class);
 		fallthrough;
@@ -720,7 +719,6 @@ void intel_engines_release(struct intel_gt *gt)
 	 * The GPU should be reset by this point, but assume the worst just
 	 * in case we aborted before completely initialising the engines.
 	 */
-	GEM_BUG_ON(intel_gt_pm_is_awake(gt));
 
 	/* Disable any further use of the engines */
 	for_each_engine(engine, gt, id) {
@@ -1845,27 +1843,6 @@ bool intel_engine_can_store_dword(struct intel_engine_cs *engine)
 	return true;
 }
 
-static struct intel_timeline *get_timeline(struct i915_request *rq)
-{
-	struct intel_timeline *tl;
-
-	/*
-	 * Even though we are holding the engine->sched_engine->lock here, there
-	 * is no control over the submission queue per-se and we are
-	 * inspecting the active state at a random point in time, with an
-	 * unknown queue. Play safe and make sure the timeline remains valid.
-	 * (Only being used for pretty printing, one extra kref shouldn't
-	 * cause a camel stampede!)
-	 */
-	rcu_read_lock();
-	tl = rcu_dereference(rq->timeline);
-	if (!kref_get_unless_zero(&tl->kref))
-		tl = NULL;
-	rcu_read_unlock();
-
-	return tl;
-}
-
 static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 {
 	const size_t rowsize = 8 * sizeof(u32);
@@ -2031,44 +2008,9 @@ static void print_properties(struct intel_engine_cs *engine,
 
 static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, const char *msg)
 {
-	struct intel_timeline *tl = get_timeline(rq);
-
+	intel_context_show(rq->context, m);
 	i915_request_show(m, rq, msg, 0);
-
-	drm_printf(m, "\t\tce->lrc.lrca: 0x%08x\n",
-		   rq->context->lrc.lrca);
-	drm_printf(m, "\t\tce->lrc.ccid: 0x%08x\n",
-		   rq->context->lrc.ccid);
-	if (has_null_page(rq->context->vm))
-		drm_printf(m, "\t\tvm->poison:   NULL PTE\n");
-	else
-		drm_printf(m, "\t\tvm->poison:   0x%08x\n",
-			   rq->context->vm->poison);
-	drm_printf(m, "\t\tring->start:  0x%08x\n",
-		   i915_ggtt_offset(rq->ring->vma));
-	drm_printf(m, "\t\tring->head:   0x%08x\n",
-		   rq->ring->head);
-	drm_printf(m, "\t\tring->tail:   0x%08x\n",
-		   rq->ring->tail);
-	drm_printf(m, "\t\tring->emit:   0x%08x\n",
-		   rq->ring->emit);
-	drm_printf(m, "\t\tring->space:  0x%08x\n",
-		   rq->ring->space);
-
-	if (tl) {
-		drm_printf(m, "\t\tring->hwsp:   0x%08x\n",
-			   tl->hwsp_offset);
-		intel_timeline_put(tl);
-	}
-
 	print_request_ring(m, rq);
-
-	if (rq->context->lrc_reg_state) {
-		drm_printf(m, "Logical Ring Context [0x%08x,0x%08llx):\n",
-			   i915_ggtt_offset(rq->context->state),
-			   i915_ggtt_offset(rq->context->state) + rq->context->state->node.size);
-		hexdump(m, rq->context->lrc_reg_state, PAGE_SIZE);
-	}
 }
 
 static void engine_dump_active_requests(struct intel_engine_cs *engine, struct drm_printer *m)
@@ -2130,6 +2072,10 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		   READ_ONCE(engine->stats.irq.total),
 		   ewma_irq_time_read(&engine->stats.irq.avg),
 		   READ_ONCE(engine->stats.irq.max));
+	if (HAS_RECOVERABLE_PAGE_FAULT(engine->i915)) {
+		drm_printf(m, "\tPagefault: { depth: %d }\n",
+			   atomic_read(&engine->in_pagefault));
+	}
 	drm_printf(m, "\tBarriers?: %s\n",
 		   str_yes_no(!list_empty(&engine->barrier_tasks)));
 	drm_printf(m, "\tLatency: %luus\n",

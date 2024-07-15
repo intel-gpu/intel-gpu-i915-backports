@@ -39,6 +39,8 @@ memory_error_to_str(const struct intel_mem_sparing_event *mem)
 		return "EC_PENDING";
 	case MEM_HEALTH_DEGRADED:
 		return "DEGRADED";
+	case MEM_HEALTH_REPLACE:
+		return "REPLACE";
 	case MEM_HEALTH_UNKNOWN:
 		return "MEMORY_HEALTH_UNKNOWN";
 	case MEM_HEALTH_OKAY:

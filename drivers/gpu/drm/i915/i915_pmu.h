@@ -160,6 +160,24 @@ struct i915_pmu {
 	 * @pmu_attr: Memory block holding device attributes.
 	 */
 	void *pmu_attr;
+
+#ifndef BPM_ENABLE_FPUT_SYNC_USAGE
+	/**
+	 * @initialized_events: List of initialized events
+	 */
+	struct list_head initialized_events;
+
+	/**
+	 * @work: work to cleanup pmu
+	 */
+	struct work_struct work;
+
+	/**
+	 * @cleanup_wq: wait queue to wait for the cleanup to complete
+	 */
+	wait_queue_head_t cleanup_wq;
+#endif
+
 };
 
 #ifdef CONFIG_PERF_EVENTS

@@ -8,28 +8,6 @@
 
 #include "huge_gem_object.h"
 #include "selftests/igt_flush_test.h"
-#include "selftests/mock_gem_device.h"
-
-static int igt_gem_object(void *arg)
-{
-	struct drm_i915_private *i915 = arg;
-	struct drm_i915_gem_object *obj;
-	int err;
-
-	/* Basic test to ensure we can create an object */
-
-	obj = i915_gem_object_create_shmem(i915, PAGE_SIZE);
-	if (IS_ERR(obj)) {
-		err = PTR_ERR(obj);
-		pr_err("i915_gem_object_create failed, err=%d\n", err);
-		goto out;
-	}
-
-	err = 0;
-	i915_gem_object_put(obj);
-out:
-	return err;
-}
 
 static int igt_gem_huge(void *arg)
 {
@@ -68,24 +46,6 @@ out_unpin:
 	i915_gem_object_unpin_pages(obj);
 out:
 	i915_gem_object_put(obj);
-	return err;
-}
-
-int i915_gem_object_mock_selftests(void)
-{
-	static const struct i915_subtest tests[] = {
-		SUBTEST(igt_gem_object),
-	};
-	struct drm_i915_private *i915;
-	int err;
-
-	i915 = mock_gem_device();
-	if (!i915)
-		return -ENOMEM;
-
-	err = i915_subtests(tests, i915);
-
-	mock_destroy_device(i915);
 	return err;
 }
 

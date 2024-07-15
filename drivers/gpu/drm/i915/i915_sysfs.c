@@ -572,7 +572,6 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 		struct intel_memory_region_link bookmark = {};
 		struct intel_memory_region_link *pos;
 		struct list_head *phases[] = {
-			&mem->objects.purgeable,
 			&mem->objects.migratable,
 			&mem->objects.list,
 			NULL,
@@ -581,7 +580,7 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 		if (mem->type != INTEL_MEMORY_LOCAL)
 			continue;
 
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
 		do list_for_each_entry(pos, *phase, link) {
 			struct drm_i915_gem_object *obj;
 
@@ -592,18 +591,18 @@ static ssize_t invalidate_lmem_mmaps_store(struct device *dev,
 			i915_gem_object_get(obj);
 
 			list_add(&bookmark.link, &pos->link);
-			spin_unlock(&mem->objects.lock);
+			spin_unlock_irq(&mem->objects.lock);
 
 			i915_gem_object_lock(obj, NULL);
 			i915_gem_object_release_mmap(obj);
 			i915_gem_object_unlock(obj);
 			i915_gem_object_put(obj);
 
-			spin_lock(&mem->objects.lock);
+			spin_lock_irq(&mem->objects.lock);
 			__list_del_entry(&bookmark.link);
 			pos = &bookmark;
 		} while (*++phase);
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 	}
 
 	return count;

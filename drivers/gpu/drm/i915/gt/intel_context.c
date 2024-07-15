@@ -55,7 +55,7 @@ int intel_context_alloc_state(struct intel_context *ce)
 	int err = 0;
 
 	if (mutex_lock_interruptible(&ce->pin_mutex))
-		return -EINTR;
+		return -ERESTARTSYS;
 
 	if (!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)) {
 		if (intel_context_is_banned(ce)) {
@@ -618,6 +618,9 @@ __intel_context_find_active_request(struct intel_context *ce,
 		if (__i915_request_is_complete(rq))
 			break;
 
+		if (!(rq->execution_mask & ce->engine->mask))
+			continue;
+
 		if (i915_request_is_active(rq))
 			active = rq;
 	}
@@ -739,6 +742,112 @@ bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
 	}
 
 	return ret;
+}
+
+static void hexdump(struct drm_printer *m, const void *buf, size_t len)
+{
+	const size_t rowsize = 8 * sizeof(u32);
+	const void *prev = NULL;
+	bool skip = false;
+	size_t pos;
+
+	for (pos = 0; pos < len; pos += rowsize) {
+		char line[128];
+
+		if (prev && !memcmp(prev, buf + pos, rowsize)) {
+			if (!skip) {
+				drm_printf(m, "*\n");
+				skip = true;
+			}
+			continue;
+		}
+
+		WARN_ON_ONCE(hex_dump_to_buffer(buf + pos, len - pos,
+						rowsize, sizeof(u32),
+						line, sizeof(line),
+						false) >= sizeof(line));
+		drm_printf(m, "[%04zx] %s\n", pos, line);
+
+		prev = buf + pos;
+		skip = false;
+	}
+}
+
+void intel_context_show(struct intel_context *ce, struct drm_printer *p)
+{
+	u32 *regs = ce->lrc_reg_state;
+	char buf[80] = "[i915]";
+	int i, len;
+
+	if (ce->client) {
+		rcu_read_lock();
+		sprintf(buf, "%s[%d]",
+			i915_drm_client_name(ce->client),
+			pid_nr(i915_drm_client_pid(ce->client)));
+		rcu_read_unlock();
+	}
+
+	drm_printf(p, "ce->name: %s\n", buf);
+	drm_printf(p, "ce->fence: %llx\n", ce->timeline->fence_context);
+	drm_printf(p, "ce->engine: %s\n", ce->engine->name);
+	drm_printf(p, "ce->pin_count: %d\n", atomic_read(&ce->pin_count));
+	drm_printf(p, "ce->active: %d\n", ce->active_count);
+	drm_printf(p, "ce->flags: 0x%08lx\n", ce->flags);
+	drm_printf(p, "ce->runtime: { total: %lld ns, avg: %lld ns }\n",
+		   intel_context_get_total_runtime_ns(ce),
+		   intel_context_get_avg_runtime_ns(ce));
+
+	drm_printf(p, "ce->lrc.lrca: 0x%08x\n", ce->lrc.lrca);
+	drm_printf(p, "ce->lrc.ccid: 0x%08x\n", ce->lrc.ccid);
+
+	drm_printf(p, "ce->policy.preempt_timeout_ms: %d\n", ce->schedule_policy.preempt_timeout_ms);
+	drm_printf(p, "ce->policy.timeslice_duration_ms: %d\n", ce->schedule_policy.timeslice_duration_ms);
+
+	drm_printf(p, "ce->guc.id: 0x%08x\n", ce->guc_id.id);
+	drm_printf(p, "ce->guc.ref: 0x%08x\n", atomic_read(&ce->guc_id.ref));
+	drm_printf(p, "ce->guc.state: 0x%08x\n", ce->guc_state.sched_state);
+
+	len = 0;
+	for (i = GUC_CLIENT_PRIORITY_KMD_HIGH; i < GUC_CLIENT_PRIORITY_NUM; ++i)
+		len += snprintf(buf + len, sizeof(buf) - len,
+				"%d, ", ce->guc_state.prio_count[i]);
+	buf[len - 2] = '\0';
+	drm_printf(p, "ce->guc.pririoty: %d [%s]\n", ce->guc_state.prio, buf);
+
+	if (has_null_page(ce->vm))
+		drm_printf(p, "vm->poison:   NULL PTE\n");
+	else
+		drm_printf(p, "vm->poison:   0x%08x\n",
+			   ce->vm->poison);
+
+	if (ce->ring) {
+		drm_printf(p, "ring->start:  0x%08x [%08x]\n",
+			   i915_ggtt_offset(ce->ring->vma), regs ? regs[CTX_RING_START] : -1);
+		drm_printf(p, "ring->head:   0x%08x [%08x]\n",
+			   ce->ring->head, regs ? regs[CTX_RING_HEAD] : -1);
+		drm_printf(p, "ring->tail:   0x%08x [%08x]\n",
+			   ce->ring->tail, regs ? regs[CTX_RING_TAIL] : -1);
+		drm_printf(p, "ring->emit:   0x%08x\n",
+			   ce->ring->emit);
+		drm_printf(p, "ring->space:  0x%08x\n",
+			   ce->ring->space);
+		drm_printf(p, "ring->hwsp:   0x%08x\n",
+			   ce->timeline->hwsp_offset);
+	}
+
+	if (ce->lrc_reg_state) {
+		void *va = ce->lrc_reg_state;
+
+		drm_printf(p, "ppHWSP [0x%08lx,0x%08x):\n",
+			   i915_ggtt_offset(ce->state) - PAGE_SIZE,
+			   i915_ggtt_offset(ce->state));
+		hexdump(p, va - PAGE_SIZE, PAGE_SIZE);
+
+		drm_printf(p, "Logical Ring Context [0x%08x,0x%08llx):\n",
+			   i915_ggtt_offset(ce->state),
+			   i915_ggtt_offset(ce->state) + ce->state->node.size);
+		hexdump(p, va, PAGE_SIZE);
+	}
 }
 
 /**

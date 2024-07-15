@@ -40,9 +40,8 @@ struct drm_i915_gem_object_ops {
 	unsigned int flags;
 #define I915_GEM_OBJECT_HAS_STRUCT_PAGE	BIT(0)
 #define I915_GEM_OBJECT_HAS_IOMEM	BIT(1)
-#define I915_GEM_OBJECT_IS_SHRINKABLE	BIT(2)
-#define I915_GEM_OBJECT_IS_PROXY	BIT(3)
-#define I915_GEM_OBJECT_NO_MMAP		BIT(4)
+#define I915_GEM_OBJECT_IS_PROXY	BIT(2)
+#define I915_GEM_OBJECT_NO_MMAP		BIT(3)
 
 	/* Interface between the GEM object and its backing storage.
 	 * get_pages() is called once prior to the use of the associated set
@@ -200,7 +199,7 @@ struct drm_i915_gem_object {
 	struct drm_gem_object base;
 	const struct drm_i915_gem_object_ops *ops;
 
-	unsigned long *nodes;
+	unsigned long *_nodes;
 	unsigned long mempol;
 	int maxnode;
 
@@ -383,7 +382,7 @@ struct drm_i915_gem_object {
 	 * i915_cache_level into pat index, for more details check the macros
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
-	unsigned int pat_index:4;
+#define I915_BO_PAT_INDEX GENMASK(23, 20)
 
 	/**
 	 * @cache_dirty:
@@ -462,7 +461,9 @@ struct drm_i915_gem_object {
 	 */
 	u16 write_domain;
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct intel_frontbuffer __rcu *frontbuffer;
+#endif
 
 	struct {
 		/*
@@ -470,29 +471,6 @@ struct drm_i915_gem_object {
 		 * instead go through the pin/unpin interfaces.
 		 */
 		atomic_t pages_pin_count;
-
-		/**
-		 * @shrink_pin: Prevents the pages from being made visible to
-		 * the shrinker, while the shrink_pin is non-zero. Most users
-		 * should pretty much never have to care about this, outside of
-		 * some special use cases.
-		 *
-		 * By default most objects will start out as visible to the
-		 * shrinker(if I915_GEM_OBJECT_IS_SHRINKABLE) as soon as the
-		 * backing pages are attached to the object, like in
-		 * __i915_gem_object_set_pages(). They will then be removed the
-		 * shrinker list once the pages are released.
-		 *
-		 * The @shrink_pin is incremented by calling
-		 * i915_gem_object_make_unshrinkable(), which will also remove
-		 * the object from the shrinker list, if the pin count was zero.
-		 *
-		 * Callers will then typically call
-		 * i915_gem_object_make_shrinkable() or
-		 * i915_gem_object_make_purgeable() to decrement the pin count,
-		 * and make the pages visible again.
-		 */
-		atomic_t shrink_pin;
 
 		struct intel_memory_region_link {
 			/**
@@ -528,12 +506,6 @@ struct drm_i915_gem_object {
 
 		struct i915_gem_object_page_iter get_page;
 		struct i915_gem_object_page_iter get_dma_page;
-
-		/**
-		 * Element within i915->mm.shrink_list or i915->mm.purge_list,
-		 * locked by i915->mm.obj_lock.
-		 */
-		struct list_head link;
 
 		/**
 		 * Advice: are the backing pages purgeable, atomics enabled?
@@ -613,6 +585,19 @@ to_intel_bo(struct drm_gem_object *gem)
 	BUILD_BUG_ON(offsetof(struct drm_i915_gem_object, base));
 
 	return container_of(gem, struct drm_i915_gem_object, base);
+}
+
+static inline const unsigned long *get_obj_nodes(const struct drm_i915_gem_object *obj)
+{
+	if (likely(obj->maxnode <= BITS_PER_TYPE(obj->_nodes)))
+		return (unsigned long *)&obj->_nodes;
+	else
+		return obj->_nodes;
+}
+
+static inline unsigned int i915_gem_object_pat_index(const struct drm_i915_gem_object *obj)
+{
+	return FIELD_GET(I915_BO_PAT_INDEX, obj->flags);
 }
 
 #endif

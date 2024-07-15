@@ -330,20 +330,10 @@ create_sched_engine(int class,
 
 	se->wq = wq;
 	se->cpumask = cpumask;
+	se->num_cpus = cpumask_weight(cpumask);
 	se->cpu = __i915_first_online_cpu(cpumask);
 
 	return se;
-}
-
-static const struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
-{
-	int nid;
-
-	nid = dev_to_node(i915->drm.dev);
-	if (nid == NUMA_NO_NODE)
-		return cpu_all_mask;
-
-	return cpumask_of_node(nid);
 }
 
 static int i915_workqueues_init(struct drm_i915_private *dev_priv)
@@ -358,12 +348,12 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	 * It is also used for periodic low-priority events, such as
 	 * idle-timers and recording error state.
 	 */
-	dev_priv->wq = alloc_workqueue("i915", WQ_UNBOUND, 0);
+	dev_priv->wq = alloc_workqueue("i915", WQ_UNBOUND | WQ_CPU_INTENSIVE, 0);
 	if (!dev_priv->wq)
 		goto out_err;
 
 	dev_priv->sched =
-		create_sched_engine(3, dev_priv->wq, cpu_all_mask);
+		create_sched_engine(3, dev_priv->wq, cpumask_of_i915(dev_priv));
 	if (!dev_priv->sched)
 		goto out_free_wq;
 
@@ -383,6 +373,12 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	if (!dev_priv->hotplug.dp_wq)
 		goto out_free_mm_sched;
 #endif
+
+	dev_info(dev_priv->drm.dev,
+		 "Using %d cores (%*pbl) for kthreads\n",
+		 dev_priv->sched->num_cpus,
+		 cpumask_pr_args(dev_priv->sched->cpumask));
+
 	return 0;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
@@ -837,6 +833,20 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	if (ret < 0)
 		goto err_rootgt;
 
+	ret = intel_root_gt_mmio_init_early(dev_priv);
+	if (ret)
+		goto err_rootgt;
+
+	/*
+	 * On PONTEVECCHIO during the early probe we need to dump
+	 * HBM registers if there are any errors found for both
+	 * the gts. Hence we need to setup the mmio for remote
+	 * gt.
+	 */
+	ret = pvc_intel_remote_gts_init_early(dev_priv);
+	if (ret)
+		goto err_rootgt;
+
 	i915_drm_clients_init(&dev_priv->clients, dev_priv);
 
 	i915_gem_init_early(dev_priv);
@@ -1161,21 +1171,26 @@ mask_err:
 
 static int i915_pcode_init(struct drm_i915_private *i915)
 {
-	struct intel_gt *gt;
-	int id, ret;
+	struct intel_gt *gt = to_root_gt(i915);
+	int ret;
 
-	for_each_gt(gt, i915, id) {
-		ret = intel_pcode_init(gt->uncore);
-		if (ret) {
-			drm_err(&gt->i915->drm, "gt%d: intel_pcode_init failed %d\n", id, ret);
-			return ret;
-		}
+	/*
+	 * Driver handshakes with pcode via mailbox command to know that SoC
+	 * initialization is complete before proceeding further. The handshake
+	 * is done only on the root gt of the root tile as it indicates
+	 * initialization is complete only after both tiles have completed
+	 * initialization.
+	 */
+	ret = intel_pcode_init(gt->uncore);
+	if (ret) {
+		drm_err(&gt->i915->drm, "intel_pcode_init failed %d\n", ret);
+		return ret;
 	}
 
 	return 0;
 }
 
-static int intel_pcode_probe(struct drm_i915_private *i915)
+static int i915_wait_for_lmem(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
 	int id, ret;
@@ -1188,17 +1203,14 @@ static int intel_pcode_probe(struct drm_i915_private *i915)
 	 */
 	for_each_gt(gt, i915, id) {
 		ret = intel_uncore_wait_for_lmem(gt->uncore);
-		if (ret)
-			return ret;
+		if (ret) {
+			drm_err(&gt->i915->drm, "gt %d lmem not initialized by firmware %d\n",
+				id, ret);
+			return -EPROBE_DEFER;
+		}
 	}
 
-	/*
-	 * Driver handshakes with pcode via mailbox command to know that SoC
-	 * initialization is complete before proceeding further
-	 */
-	ret = i915_pcode_init(i915);
-
-	return ret;
+	return 0;
 }
 
 /**
@@ -1469,6 +1481,7 @@ static void print_chickens(struct drm_i915_private *i915)
 #define C(x) { __stringify(DRM_I915_CHICKEN_##x), IS_ENABLED(CONFIG_DRM_I915_CHICKEN_##x) }
 		C(ASYNC_GET_PAGES),
 		C(ASYNC_PAGEFAULTS),
+		C(ASYNC_UNBIND),
 		C(CLEAR_ON_CREATE),
 		C(CLEAR_ON_FREE),
 		C(CLEAR_ON_IDLE),
@@ -1667,6 +1680,12 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	i915_sanitize_force_driver_flr(i915);
 
+	ret = i915_pcode_init(i915);
+	if (ret) {
+		pvc_ras_telemetry_probe(i915);
+		goto out_runtime_pm_put;
+	}
+
 	ret = intel_gt_probe_all(i915);
 
 	if (i915_survivability_mode_enabled(i915))
@@ -1679,7 +1698,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		goto out_runtime_pm_put;
 
-	ret = intel_pcode_probe(i915);
+	ret = i915_wait_for_lmem(i915);
 	if (ret)
 		goto out_runtime_pm_put;
 
@@ -2000,7 +2019,6 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 	for_each_memory_region(mem, i915, id) {
 		struct intel_memory_region_link *pos, *next;
 		struct list_head *phases[] = {
-			&mem->objects.purgeable,
 			&mem->objects.migratable,
 			&mem->objects.list,
 			NULL,
@@ -2009,7 +2027,7 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 		if (mem->type != INTEL_MEMORY_LOCAL || !mem->total)
 			continue;
 
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
 		do list_for_each_entry_safe(pos, next, *phase, link) {
 			struct drm_i915_gem_object *obj;
 			struct i915_gem_ww_ctx ww;
@@ -2030,7 +2048,7 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 				continue;
 
 			list_add(&bookmark.link, &pos->link);
-			spin_unlock(&mem->objects.lock);
+			spin_unlock_irq(&mem->objects.lock);
 
 			for_i915_gem_ww(&ww, err, true) {
 				err = i915_gem_object_lock(obj, &ww);
@@ -2049,11 +2067,11 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 
 			i915_gem_object_put(obj);
 
-			spin_lock(&mem->objects.lock);
+			spin_lock_irq(&mem->objects.lock);
 			list_safe_reset_next(&bookmark, next, link);
 			__list_del_entry(&bookmark.link);
 		} while (*++phase);
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 	}
 }
 

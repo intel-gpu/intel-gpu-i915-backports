@@ -112,17 +112,63 @@ static ssize_t preempt_timeout_us_iov_attr_store(struct intel_iov *iov,
 	return err ?: count;
 }
 
+static ssize_t sched_priority_iov_attr_show(struct intel_iov *iov,
+					    unsigned int id, char *buf)
+{
+	u8 value = intel_iov_provisioning_get_sched_priority(iov, id);
+
+	return sysfs_emit(buf, "%u\n", value);
+}
+
+static ssize_t sched_priority_iov_attr_store(struct intel_iov *iov,
+					     unsigned int id,
+					     const char *buf, size_t count)
+{
+	u8 value;
+	int err;
+
+	err = kstrtou8(buf, 0, &value);
+	if (err)
+		return err;
+
+	if (iov->pf.provisioning.policies.sched_if_idle) {
+		IOV_ERROR(iov, "Failed to set VF%u scheduling priority (strict scheduling policy is not default)\n", id);
+		return -EIO;
+	}
+
+	if (value >= GUC_KLV_VF_CFG_SCHED_PRIORITY_NUM_VALUES)
+		return -EINVAL;
+
+	err = intel_iov_provisioning_set_sched_priority(iov, id, value);
+	return err ?: count;
+}
+
 IOV_ATTR(exec_quantum_ms);
 IOV_ATTR(preempt_timeout_us);
+IOV_ATTR(sched_priority);
 
 static struct attribute *iov_attrs[] = {
 	&exec_quantum_ms_iov_attr.attr,
 	&preempt_timeout_us_iov_attr.attr,
+	&sched_priority_iov_attr.attr,
 	NULL
 };
 
+static umode_t iov_attr_is_visible(struct kobject *kobj,
+				   struct attribute *attr, int index)
+{
+	unsigned int id = kobj_to_id(kobj);
+
+	/* XXX: GuC doesn't allow to provision VFs with scheduling priority yet */
+	if (attr == &sched_priority_iov_attr.attr && id > 0)
+		return 0;
+
+	return attr->mode;
+}
+
 static const struct attribute_group iov_attr_group = {
 	.attrs = iov_attrs,
+	.is_visible = iov_attr_is_visible,
 };
 
 #ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
@@ -292,12 +338,21 @@ static ssize_t sched_if_idle_iov_attr_store(struct intel_iov *iov,
 					    unsigned int id,
 					    const char *buf, size_t count)
 {
+	unsigned int total_vfs = pf_get_totalvfs(iov);
+	unsigned int n;
 	bool value;
 	int err;
 
 	err = kstrtobool(buf, &value);
 	if (err)
 		return err;
+
+	for (n = 0; n <= total_vfs; n++) {
+		if (iov->pf.provisioning.configs[n].sched_priority) {
+			IOV_ERROR(iov, "Failed to set strict scheduling policy (scheduling priority of VF%u is not default)\n", n);
+			return -EIO;
+		}
+	}
 
 	err = intel_iov_provisioning_set_sched_if_idle(iov, value);
 	return err ?: count;
@@ -608,19 +663,11 @@ static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
 	unsigned int id = kobj_to_id(kobj);
 	int err;
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	if (off > 0 || count < SZ_4K)
-#else
 	if (off > 0)
-#endif
 		return -EINVAL;
 
 	pvc_wa_disallow_rc6(iov_to_i915(iov));
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	err = intel_iov_state_save_vf(iov, id, buf);
-#else
 	err = intel_iov_state_save_vf(iov, id, buf, count);
-#endif
 	pvc_wa_allow_rc6(iov_to_i915(iov));
 
 	if (unlikely(err))
@@ -637,19 +684,11 @@ static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
 	unsigned int id = kobj_to_id(kobj);
 	int err;
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	if (off > 0 || count < SZ_4K)
-#else
 	if (off > 0)
-#endif
 		return -EINVAL;
 
 	pvc_wa_disallow_rc6(iov_to_i915(iov));
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	err = intel_iov_state_restore_vf(iov, id, buf);
-#else
 	err = intel_iov_state_restore_vf(iov, id, buf, count);
-#endif
 	pvc_wa_allow_rc6(iov_to_i915(iov));
 
 	if (unlikely(err))

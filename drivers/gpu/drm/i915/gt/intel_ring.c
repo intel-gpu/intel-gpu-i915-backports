@@ -85,7 +85,7 @@ void intel_ring_unpin(struct intel_ring *ring)
 
 	i915_vma_unpin_iomap(vma);
 
-	i915_vma_make_purgeable(vma);
+	i915_vma_make_shrinkable(vma);
 	i915_vma_unpin(vma);
 }
 
@@ -221,6 +221,8 @@ u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
 	unsigned int need_wrap = 0;
 	unsigned int total_bytes;
 	u32 *cs;
+
+	assert_gt_pm_held(rq->engine->gt);
 
 	/* Packets must be qword aligned. */
 	GEM_BUG_ON(num_dwords & 1);

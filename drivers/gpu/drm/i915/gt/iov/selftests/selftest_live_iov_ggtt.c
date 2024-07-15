@@ -456,13 +456,15 @@ static int igt_pf_ggtt(void *arg)
 {
 	struct drm_i915_private *i915 = arg;
 	struct intel_gt *gt;
+	intel_wakeref_t wf;
 	unsigned int id;
 	int err;
 
 	GEM_BUG_ON(!IS_SRIOV_PF(i915));
 
 	for_each_gt(gt, i915, id) {
-		err = igt_pf_iov_ggtt(&gt->iov);
+		with_intel_gt_pm(gt, wf)
+			err = igt_pf_iov_ggtt(&gt->iov);
 		if (err < 0)
 			return err;
 	}

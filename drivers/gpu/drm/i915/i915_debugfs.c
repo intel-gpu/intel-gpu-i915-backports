@@ -51,6 +51,7 @@
 #include "gt/intel_ring.h"
 #include "gt/intel_rps.h"
 #include "gt/intel_sseu_debugfs.h"
+#include "gt/intel_tlb.h"
 
 #include "i915_debugfs.h"
 #include "i915_debugfs_params.h"
@@ -154,9 +155,10 @@ static const char *stringify_vma_type(const struct i915_vma *vma)
 static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 {
 	struct drm_i915_private *i915 = obj_to_i915(obj);
+	int idx = i915_gem_object_pat_index(obj);
 
 	if (IS_METEORLAKE(i915)) {
-		switch (obj->pat_index) {
+		switch (idx) {
 		case 0: return " WB";
 		case 1: return " WT";
 		case 2: return " UC";
@@ -165,7 +167,7 @@ static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 		default: return " not defined";
 		}
 	} else if (IS_PONTEVECCHIO(i915)) {
-		switch (obj->pat_index) {
+		switch (idx) {
 		case 0: return " UC";
 		case 1: return " WC";
 		case 2: return " WT";
@@ -176,25 +178,14 @@ static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
 		case 7: return " WT (CLOS2)";
 		default: return " not defined";
 		}
-	} else if (GRAPHICS_VER(i915) >= 12) {
-		switch (obj->pat_index) {
+	} else {
+		switch (idx) {
 		case 0: return " WB";
 		case 1: return " WC";
 		case 2: return " WT";
 		case 3: return " UC";
 		default: return " not defined";
 		}
-	} else {
-		if (i915_gem_object_has_cache_level(obj, I915_CACHE_NONE))
-			return " uncached";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_LLC))
-			return HAS_LLC(i915) ? " LLC" : " snooped";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_L3_LLC))
-			return " L3+LLC";
-		else if (i915_gem_object_has_cache_level(obj, I915_CACHE_WT))
-			return " WT";
-		else
-			return " not defined";
 	}
 }
 
@@ -215,8 +206,8 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 	if (obj->base.name)
 		seq_printf(m, " (name: %d)", obj->base.name);
 
-	spin_lock(&obj->vma.lock);
-	list_for_each_entry(vma, &obj->vma.list, obj_link) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
 		if (!drm_mm_node_allocated(&vma->node))
 			continue;
 
@@ -280,7 +271,7 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 
 		spin_lock(&obj->vma.lock);
 	}
-	spin_unlock(&obj->vma.lock);
+	rcu_read_unlock();
 
 	seq_printf(m, " (pinned x %d)", pin_count);
 	if (i915_gem_object_is_stolen(obj))
@@ -314,14 +305,11 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 	enum intel_region_id id;
 	struct intel_gt *gt;
 
-	seq_printf(m, "%u shrinkable [%u free] objects, %llu bytes\n",
-		   i915->mm.shrink_count,
-		   atomic_read(&i915->mm.free_count),
-		   i915->mm.shrink_memory);
 	for_each_memory_region(mr, i915, id)
 		intel_memory_region_print(mr, 0, &p);
 
 	for_each_gt(gt, i915, id) {
+		intel_wakeref_t wf;
 		u64 t;
 
 		t = local64_read(&gt->stats.migration_stall);
@@ -332,24 +320,26 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		if (!gt->counters.map)
 			continue;
 
-		show_xfer(m, gt, "clear-on-alloc",
-			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
-		show_xfer(m, gt, "clear-on-free",
-			  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES]);
-		show_xfer(m, gt, "clear-on-idle",
-			  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
-		show_xfer(m, gt, "swap-in",
-			  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
-			  gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
-		show_xfer(m, gt, "swap-out",
-			  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
-			  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
-		show_xfer(m, gt, "copy",
-			  gt->counters.map[INTEL_GT_COPY_BYTES],
-			  gt->counters.map[INTEL_GT_COPY_CYCLES]);
+		with_intel_gt_pm(gt, wf) {
+			show_xfer(m, gt, "clear-on-alloc",
+				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
+			show_xfer(m, gt, "clear-on-free",
+				  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES]);
+			show_xfer(m, gt, "clear-on-idle",
+				  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
+			show_xfer(m, gt, "swap-in",
+				  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
+				  gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
+			show_xfer(m, gt, "swap-out",
+				  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
+				  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+			show_xfer(m, gt, "copy",
+				  gt->counters.map[INTEL_GT_COPY_BYTES],
+				  gt->counters.map[INTEL_GT_COPY_CYCLES]);
+		}
 	}
 
 	return 0;
@@ -496,7 +486,7 @@ static int i915_rps_boost_info_show(struct seq_file *m, void *data)
 
 	seq_printf(m, "RPS enabled? %s\n", str_yes_no(intel_rps_is_enabled(rps)));
 	seq_printf(m, "RPS active? %s\n", str_yes_no(intel_rps_is_active(rps)));
-	seq_printf(m, "GPU busy? %s\n", str_yes_no(to_gt(dev_priv)->awake));
+	seq_printf(m, "GPU busy? %s\n", str_yes_no(intel_gt_pm_is_awake(to_gt(dev_priv))));
 	seq_printf(m, "Boosts outstanding? %d\n",
 		   atomic_read(&rps->num_waiters));
 	seq_printf(m, "Interactive? %d\n", READ_ONCE(rps->power.interactive));
@@ -587,7 +577,7 @@ static int i915_runtime_pm_status_show(struct seq_file *m, void *unused)
 		   str_enabled_disabled(!dev_priv->power_domains.init_wakeref));
 #endif
 
-	seq_printf(m, "GPU idle: %s\n", str_yes_no(!to_gt(dev_priv)->awake));
+	seq_printf(m, "GPU idle: %s\n", str_yes_no(!intel_gt_pm_is_awake(to_gt(dev_priv))));
 	seq_printf(m, "IRQs disabled: %s\n",
 		   str_yes_no(!intel_irqs_enabled(dev_priv)));
 	config_pm_dump(m);
@@ -618,7 +608,7 @@ static int i915_engine_info_show(struct seq_file *m, void *unused)
 	for_each_gt(gt, i915, id) {
 		seq_printf(m, "GT%d awake? %s [%d], %llums\n",
 			   gt->info.id,
-			   str_yes_no(gt->awake),
+			   str_yes_no(intel_gt_pm_is_awake(gt)),
 			   atomic_read(&gt->wakeref.count),
 			   ktime_to_ms(intel_gt_get_awake_time(gt)));
 		seq_printf(m, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",

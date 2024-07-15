@@ -227,7 +227,6 @@ static struct drm_i915_gem_object *
 create_swapto(struct drm_i915_gem_object *obj, bool write)
 {
 	struct drm_i915_gem_object *swp;
-	u64 size;
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_MMAP_SWAP_CREATE))
 		return obj;
@@ -239,26 +238,37 @@ create_swapto(struct drm_i915_gem_object *obj, bool write)
 	    obj->mm.madv == __I915_MADV_PURGED)
 		return obj;
 
-	i915_gem_flush_free_objects(to_i915(obj->base.dev));
+	swp = obj->swapto;
+	if (!swp) {
+		struct intel_memory_region *mem = obj->mm.region.mem;
+		u64 size;
 
-	/* Prefer to write directly to lmem unless we will evict */
-	size = obj->base.size;
-	if (write && 2 * size < atomic64_read(&obj->mm.region.mem->avail))
-		return obj;
+		i915_gem_flush_free_objects(mem->i915);
 
-	if (object_needs_flat_ccs(obj))
-		size += size >> 8;
+		/* Prefer to write directly to lmem unless we will evict */
+		size = obj->base.size;
+		if (write && 2 * size < atomic64_read(&mem->avail) && !atomic64_read(&mem->evict))
+			return obj;
 
-	swp = i915_gem_object_create_shmem(to_i915(obj->base.dev), size);
-	if (IS_ERR(swp))
-		return obj;
+		if (object_needs_flat_ccs(obj))
+			size += size >> 8;
 
-	swp->flags |= I915_BO_CPU_CLEAR;
-	i915_gem_object_share_resv(obj, swp);
+		swp = i915_gem_object_create_shmem(mem->i915, size);
+		if (IS_ERR(swp))
+			return obj;
 
-	GEM_BUG_ON(swp->base.size < obj->base.size);
-	GEM_BUG_ON(obj->swapto);
-	obj->swapto = swp;
+		swp->flags |= I915_BO_CPU_CLEAR;
+		i915_gem_object_share_resv(obj, swp);
+
+		GEM_BUG_ON(swp->base.size < obj->base.size);
+		GEM_BUG_ON(obj->swapto);
+		obj->swapto = swp;
+	}
+	swp->mm.madv = I915_MADV_WILLNEED;
+
+	if (obj->memory_mask & BIT(INTEL_REGION_SMEM) &&
+	    i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false) == 0)
+		swp = obj;
 
 	return swp;
 }

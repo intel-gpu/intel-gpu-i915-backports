@@ -191,10 +191,16 @@ i915_param_named(enable_dpcd_backlight, int, 0400,
 	"Enable support for DPCD backlight control"
 	"(-1=use per-VBT LFP backlight type setting [default], 0=disabled, 1=enable, 2=force VESA interface, 3=force Intel interface)");
 
+i915_param_named_unsafe(enable_4k_lmem, bool, 0400,
+	"Enable 4K page support in PVC local memory (otherwise only use 64K pages)");
+
 i915_param_named_unsafe(enable_rc6, bool, 0400,
 	"Enable power-saving render C-state 6. (default: true)");
 i915_param_named_unsafe(rc6_ignore_steppings, bool, 0400,
 	"Allow RC6 to be enabled on steppings where it would be disabled. (default: false)");
+
+i915_param_named_unsafe(pvc_fw_put_delay_ms, int, 0600,
+			"Forcewake put delay for Pontevecchio. (default: " __stringify(CPTCFG_DRM_I915_PVC_FORCEWAKE_DELAY_MS) ")");
 
 #if IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG)
 i915_param_named_unsafe(enable_softpg, int, 0400,

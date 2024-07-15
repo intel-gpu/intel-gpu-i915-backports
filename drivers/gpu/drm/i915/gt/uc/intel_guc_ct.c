@@ -14,6 +14,7 @@
 #include "intel_guc_print.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_pagefault.h"
+#include "gt/intel_tlb.h"
 #include "gt/iov/intel_iov_event.h"
 #include "gt/iov/intel_iov_relay.h"
 #include "gt/iov/intel_iov_service.h"
@@ -368,7 +369,6 @@ int intel_guc_ct_enable(struct intel_guc_ct *ct)
 		goto err_out;
 
 	ct->enabled = true;
-	ct->stall_time = KTIME_MAX;
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 	ct->dead_ct_reported = false;
 	ct->dead_ct_reason = CT_DEAD_ALIVE;
@@ -607,35 +607,6 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 	return err;
 }
 
-#define GUC_CTB_TIMEOUT_MS	1500
-static inline bool ct_deadlocked(struct intel_guc_ct *ct)
-{
-	long timeout = GUC_CTB_TIMEOUT_MS;
-	bool ret = ktime_ms_delta(ktime_get(), ct->stall_time) > timeout;
-
-	if (unlikely(ret)) {
-		struct guc_ct_buffer_desc *send = ct->ctbs.send.desc;
-		struct guc_ct_buffer_desc *recv = ct->ctbs.send.desc;
-
-		CT_ERROR(ct, "Communication stalled for %lld ms, desc status=%#x,%#x\n",
-			 ktime_ms_delta(ktime_get(), ct->stall_time),
-			 send->status, recv->status);
-		CT_ERROR(ct, "H2G Space: %u (Bytes)\n",
-			 atomic_read(&ct->ctbs.send.space) * 4);
-		CT_ERROR(ct, "Head: %u (Dwords)\n", ct->ctbs.send.desc->head);
-		CT_ERROR(ct, "Tail: %u (Dwords)\n", ct->ctbs.send.desc->tail);
-		CT_ERROR(ct, "G2H Space: %u (Bytes)\n",
-			 atomic_read(&ct->ctbs.recv.space) * 4);
-		CT_ERROR(ct, "Head: %u\n (Dwords)", ct->ctbs.recv.desc->head);
-		CT_ERROR(ct, "Tail: %u\n (Dwords)", ct->ctbs.recv.desc->tail);
-
-		CT_DEAD(ct, DEADLOCK);
-		ct->ctbs.send.broken = true;
-	}
-
-	return ret;
-}
-
 static inline bool g2h_has_room(struct intel_guc_ct *ct, u32 g2h_len_dw)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
@@ -696,20 +667,13 @@ static int has_room_nb(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw)
 	lockdep_assert_held(&ct->ctbs.send.lock);
 
 	if (unlikely(!h2g || !g2h)) {
-		if (ct->stall_time == KTIME_MAX)
-			ct->stall_time = ktime_get();
-
 		/* Be paranoid and kick G2H tasklet to free credits */
 		if (!g2h)
 			tasklet_hi_schedule(&ct->receive_tasklet);
 
-		if (unlikely(ct_deadlocked(ct)))
-			return -EPIPE;
-		else
-			return -EBUSY;
+		return -EBUSY;
 	}
 
-	ct->stall_time = KTIME_MAX;
 	return 0;
 }
 
@@ -777,7 +741,7 @@ resend:
 	request.response_buf = response_buf;
 
 	if (mutex_lock_interruptible(&ct->send_mutex))
-		return -EINTR;
+		return -ERESTARTSYS;
 
 	spin_lock_irq(&ctb->lock);
 	err = ___wait_event(ct->wq,
@@ -891,10 +855,8 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 	if (ret)
 		return ret;
 
-	if (unlikely(!ct->enabled)) {
-		WARN(!gt->uc.reset_in_progress, "Unexpected send: action=%#x\n", *action);
+	if (unlikely(!ct->enabled))
 		return -ENODEV;
-	}
 
 	if (unlikely(ct->ctbs.send.broken))
 		return -EPIPE;
@@ -1338,7 +1300,7 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 			return -EPROTO;
 		payload = &hxg[GUC_HXG_MSG_MIN_LEN];
 		if (action == INTEL_GUC_ACTION_TLB_INVALIDATION_DONE)
-			intel_guc_tlb_invalidation_done(ct_to_guc(ct),  payload[0]);
+			intel_tlb_invalidation_done(guc_to_gt(ct_to_guc(ct)), payload[0]);
 		else
 			intel_gt_pagefault_process_cat_error_msg(guc_to_gt(ct_to_guc(ct)), payload[0]);
 
@@ -1517,6 +1479,10 @@ void intel_guc_ct_print_info(struct intel_guc_ct *ct,
 		   ct->ctbs.recv.desc->head);
 	drm_printf(p, "Tail: %u\n",
 		   ct->ctbs.recv.desc->tail);
+	drm_printf(p, "Requests: { pending: %s, incoming: %s, work: %s }\n",
+		   str_yes_no(!list_empty(&ct->requests.pending)),
+		   str_yes_no(!list_empty(&ct->requests.incoming)),
+		   str_yes_no(work_busy(&ct->requests.worker)));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)

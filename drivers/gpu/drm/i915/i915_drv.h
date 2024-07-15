@@ -278,19 +278,6 @@ struct i915_gem_mm {
 	 * always the inner lock when overlapping with struct_mutex. */
 	struct mutex stolen_lock;
 
-	/* Protects bound_list/unbound_list and #drm_i915_gem_object.mm.link */
-	spinlock_t obj_lock;
-
-	/**
-	 * List of objects which are purgeable.
-	 */
-	struct list_head purge_list;
-
-	/**
-	 * List of objects which have allocated pages and are shrinkable.
-	 */
-	struct list_head shrink_list;
-
 	/**
 	 * List of objects which are pending destruction.
 	 */
@@ -316,10 +303,6 @@ struct i915_gem_mm {
 #else
 	struct shrinker shrinker;
 #endif
-
-	/* shrinker accounting, also useful for userland debugging */
-	u64 shrink_memory;
-	u32 shrink_count;
 
 	/* lmemovercommit limit in %, set through sysfs */
 	u8 user_acct_limit[2];
@@ -578,6 +561,18 @@ struct drm_i915_private {
 		struct mutex lock;
 		struct intel_global_obj obj;
 	} pmdemand;
+
+	struct {
+		/* ordered wq for modesets */
+		struct workqueue_struct *modeset_wq;
+		/* unbound hipri wq for page flips/plane updates */
+		struct workqueue_struct *flip_wq;
+		/* general deferred work */
+		struct workqueue_struct *wq;
+
+		/* Display functions */
+		const struct drm_i915_display_funcs *funcs;
+	} display;
 #endif
 
 	/**
@@ -590,11 +585,6 @@ struct drm_i915_private {
 	struct workqueue_struct *wq;
 	struct i915_sched_engine *sched;
 
-	/* ordered wq for modesets */
-	struct workqueue_struct *modeset_wq;
-	/* unbound hipri wq for page flips/plane updates */
-	struct workqueue_struct *flip_wq;
-
 	/* pm private clock gating functions */
 	const struct drm_i915_clock_gating_funcs *clock_gating_funcs;
 
@@ -606,9 +596,6 @@ struct drm_i915_private {
 
 	/* display pll funcs */
 	const struct intel_dpll_funcs *dpll_funcs;
-
-	/* Display functions */
-	const struct drm_i915_display_funcs *display;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	/* Display internal color functions */

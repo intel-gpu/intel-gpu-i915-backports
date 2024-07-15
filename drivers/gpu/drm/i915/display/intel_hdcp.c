@@ -999,7 +999,7 @@ static void intel_hdcp_update_value(struct intel_connector *connector,
 	hdcp->value = value;
 	if (update_property) {
 		drm_connector_get(&connector->base);
-		schedule_work(&hdcp->prop_work);
+		queue_work(to_i915(connector->base.dev)->display.wq, &hdcp->prop_work);
 	}
 }
 
@@ -2393,7 +2393,7 @@ void intel_hdcp_update_pipe(struct intel_atomic_state *state,
 		mutex_lock(&hdcp->mutex);
 		hdcp->value = DRM_MODE_CONTENT_PROTECTION_DESIRED;
 		drm_connector_get(&connector->base);
-		schedule_work(&hdcp->prop_work);
+		queue_work(to_i915(connector->base.dev)->display.wq, &hdcp->prop_work);
 		mutex_unlock(&hdcp->mutex);
 	}
 
@@ -2410,7 +2410,7 @@ void intel_hdcp_update_pipe(struct intel_atomic_state *state,
 		 */
 		if (!desired_and_not_enabled && !content_protection_type_changed) {
 			drm_connector_get(&connector->base);
-			schedule_work(&hdcp->prop_work);
+			queue_work(to_i915(connector->base.dev)->display.wq, &hdcp->prop_work);
 		}
 	}
 

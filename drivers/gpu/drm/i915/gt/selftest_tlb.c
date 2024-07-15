@@ -230,19 +230,44 @@ static struct drm_i915_gem_object *create_smem(struct intel_gt *gt)
 	return i915_gem_object_create_internal(gt->i915, SZ_4M);
 }
 
+static struct intel_engine_cs *
+random_engine_class(struct intel_gt *gt,
+		    unsigned int class,
+		    struct rnd_state *prng)
+{
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	unsigned int count;
+
+	count = 0;
+	for_each_engine(engine, gt, id) {
+		if (engine->class != class)
+			continue;
+		count++;
+	}
+	if (!count)
+		return NULL;
+
+	do {
+		count = i915_prandom_u32_max_state(count, prng);
+		engine = gt->engine_class[class][count];
+	} while (!engine);
+
+	return engine;
+}
+
 static int
 mem_tlbinv(struct intel_gt *gt,
 	   struct drm_i915_gem_object *(*create_fn)(struct intel_gt *),
 	   void (*tlbinv)(struct i915_address_space *vm, u64 addr, u64 length))
 {
-	struct intel_engine_cs *engine;
 	struct drm_i915_gem_object *A, *B;
 	struct i915_ppgtt *ppgtt;
 	struct i915_vma *va, *vb;
-	enum intel_engine_id id;
 	I915_RND_STATE(prng);
 	LIST_HEAD(discard);
 	void *vaddr;
+	int class;
 	int err;
 
 	if (GRAPHICS_VER(gt->i915) < 6) /* MI_CONDITIONAL_BB_END & bcs */
@@ -317,10 +342,15 @@ mem_tlbinv(struct intel_gt *gt,
 	ppgtt_set_pages(vb);
 
 	err = 0;
-	for_each_engine(engine, gt, id) {
+	for (class = 0; class < MAX_ENGINE_CLASS; class++) {
+		struct intel_engine_cs *engine;
 		struct i915_gem_ww_ctx ww;
 		struct intel_context *ce;
 		int bit;
+
+		engine = random_engine_class(gt, class, &prng);
+		if (!engine)
+			continue;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -349,10 +379,10 @@ mem_tlbinv(struct intel_gt *gt,
 
 				for (len = 2; len <= INTEL_INFO(gt->i915)->ppgtt_size; len *= 2) {
 					err = pte_tlbinv(ce, va, vb,
-							BIT_ULL(bit),
-							tlbinv,
-							BIT_ULL(len),
-							&prng);
+							 BIT_ULL(bit),
+							 tlbinv,
+							 BIT_ULL(len),
+							 &prng);
 					if (err)
 						goto err_unpin;
 				}
@@ -360,10 +390,10 @@ mem_tlbinv(struct intel_gt *gt,
 				if (len != INTEL_INFO(gt->i915)->ppgtt_size) {
 					len = INTEL_INFO(gt->i915)->ppgtt_size;
 					err = pte_tlbinv(ce, va, vb,
-							BIT_ULL(bit),
-							tlbinv,
-							BIT_ULL(len),
-							&prng);
+							 BIT_ULL(bit),
+							 tlbinv,
+							 BIT_ULL(len),
+							 &prng);
 					if (err)
 						goto err_unpin;
 				}
@@ -388,28 +418,6 @@ out_a:
 	i915_gem_object_put(A);
 	list_for_each_entry_safe(A, B, &discard, st_link)
 		i915_gem_object_put(A);
-	return err;
-}
-
-static void tlbinv_full(struct i915_address_space *vm, u64 addr, u64 length)
-{
-	intel_gt_invalidate_tlb_full(vm->gt, intel_gt_tlb_seqno(vm->gt) | 1);
-}
-
-static int invalidate_full(void *arg)
-{
-	struct intel_gt *gt = arg;
-	int err;
-
-	if (GRAPHICS_VER(gt->i915) < 8)
-		return 0; /* TLB invalidate not implemented */
-
-	err = mem_tlbinv(gt, create_smem, tlbinv_full);
-	if (err == 0)
-		err = mem_tlbinv(gt, create_lmem, tlbinv_full);
-	if (err == -ENODEV || err == -ENXIO)
-		err = 0;
-
 	return err;
 }
 
@@ -451,7 +459,6 @@ static int invalidate_range(void *arg)
 int intel_tlb_live_selftests(struct drm_i915_private *i915)
 {
 	static const struct i915_subtest tests[] = {
-		SUBTEST(invalidate_full),
 		SUBTEST(invalidate_range),
 	};
 	struct intel_gt *gt;

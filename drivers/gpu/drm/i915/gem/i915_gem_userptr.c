@@ -773,7 +773,7 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 	if (!i915_gem_object_migrate_finish(obj))
 		i915_gem_gtt_finish_pages(obj, pages);
 
-	__i915_gem_object_release_shmem(obj, pages, false);
+	__start_cpu_write(obj);
 
 	/*
 	 * We always mark objects as dirty when they are used by the GPU,
@@ -832,7 +832,6 @@ i915_gem_userptr_pread(struct drm_i915_gem_object *obj,
 static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
 	.name = "i915_gem_object_userptr",
 	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE |
-		 I915_GEM_OBJECT_IS_SHRINKABLE |
 		 I915_GEM_OBJECT_NO_MMAP,
 	.get_pages = i915_gem_userptr_get_pages,
 	.put_pages = i915_gem_userptr_put_pages,

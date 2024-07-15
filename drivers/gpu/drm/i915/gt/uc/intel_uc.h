@@ -37,7 +37,8 @@ struct intel_uc {
 	/* Snapshot of GuC log from last failed load */
 	struct drm_i915_gem_object *load_err_log;
 
-	bool reset_in_progress;
+	unsigned int epoch;
+#define INTEL_UC_IN_RESET BIT(0)
 	bool fw_table_invalid;
 };
 

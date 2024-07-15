@@ -1162,7 +1162,8 @@ static void intel_dp_schedule_fallback_link_training(struct intel_dp *intel_dp,
 	}
 
 	/* Schedule a Hotplug Uevent to userspace to start modeset */
-	schedule_work(&intel_connector->modeset_retry_work);
+	queue_work(to_i915(encoder->base.dev)->display.wq,
+		   &intel_connector->modeset_retry_work);
 }
 
 /* Perform the link training on all LTTPRs and the DPRX on a link. */

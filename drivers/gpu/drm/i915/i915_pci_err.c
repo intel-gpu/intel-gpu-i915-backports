@@ -45,8 +45,11 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 */
 	i915_pci_error_set_in_recovery(i915);
 	i915_pci_error_set_fault(i915);
+
 	drm_warn(&i915->drm, "removing device access to userspace\n");
 	drm_dev_unplug(&i915->drm);
+	for_each_gt(gt, i915, i)
+		intel_gt_set_wedged(gt);
 
 	/*
 	 * On the current generation HW we do not expect
@@ -69,10 +72,6 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	mfd_remove_devices(&pdev->dev);
 #endif
 
-	for_each_gt(gt, i915, i) {
-		intel_gt_set_wedged(gt);
-		intel_gt_retire_requests(gt);
-	}
 	pci_disable_device(pdev);
 	return PCI_ERS_RESULT_NEED_RESET;
 }

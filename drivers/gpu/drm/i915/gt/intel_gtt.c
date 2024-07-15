@@ -56,16 +56,7 @@ int map_pt_dma(struct i915_address_space *vm, struct drm_i915_gem_object *obj)
 	if (IS_ERR(vaddr))
 		return PTR_ERR(vaddr);
 
-	if (obj->mm.region.mem) {
-		struct intel_memory_region *mem = obj->mm.region.mem;
-
-		spin_lock(&mem->objects.lock);
-		list_move(&obj->mm.region.link, &mem->objects.pt);
-		spin_unlock(&mem->objects.lock);
-	} else {
-		i915_gem_object_make_unshrinkable(obj);
-	}
-
+	i915_gem_object_make_unshrinkable(obj);
 	return 0;
 }
 

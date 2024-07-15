@@ -34,7 +34,6 @@
 #include "intel_memory_region.h"
 #include "i915_debugger.h"
 
-#include "mock_request.h"
 #include "mock_gem_device.h"
 #include "mock_gtt.h"
 #include "mock_uncore.h"
@@ -190,12 +189,12 @@ struct drm_i915_private *mock_gem_device(void)
 		mkwrite_device_info(i915)->cachelevel_to_pat[i] = i;
 
 	intel_root_gt_init_early(i915);
+	to_gt(i915)->mock = true;
 
 	if (mock_uncore_init(&i915->uncore, i915))
 		goto err_drv;
 
 	atomic_inc(&to_gt(i915)->wakeref.count); /* disable; no hw support */
-	to_gt(i915)->awake = -ENODEV;
 	mock_gt_probe(i915);
 
 	mkwrite_device_info(i915)->memory_regions = REGION_SMEM;
@@ -214,7 +213,8 @@ struct drm_i915_private *mock_gem_device(void)
 	i915->sched = i915_sched_engine_create(3);
 	if (!i915->sched)
 		goto err_free_wq;
-	i915->sched->cpumask = cpu_online_mask;
+	i915->sched->cpumask = cpu_all_mask;
+	i915->sched->num_cpus = cpumask_weight(i915->sched->cpumask);
 	i915->sched->wq = i915->wq;
 	i915->mm.sched = i915->sched;
 	i915->mm.wq = i915->wq;

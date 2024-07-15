@@ -983,7 +983,7 @@ void intel_dmc_ucode_init(struct drm_i915_private *dev_priv)
 	}
 
 	drm_dbg_kms(&dev_priv->drm, "Loading %s\n", dmc->fw_path);
-	schedule_work(&dev_priv->dmc.work);
+	queue_work(dev_priv->display.wq, &dev_priv->dmc.work);
 }
 
 /**
