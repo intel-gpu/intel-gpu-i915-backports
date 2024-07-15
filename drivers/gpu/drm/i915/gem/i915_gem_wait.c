@@ -235,12 +235,56 @@ i915_gem_object_wait(struct drm_i915_gem_object *obj,
 	return timeout < 0 ? timeout : 0;
 }
 
+static bool fence_is_active(struct dma_fence *fence)
+{
+	if (!fence)
+		return false;
+
+	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
+		return false;
+
+	if (fence->ops->signaled && fence->ops->signaled(fence))
+		return false;
+
+	return true;
+}
+
 bool i915_gem_object_is_active(struct drm_i915_gem_object *obj)
 {
-	if (i915_gem_object_has_migrate(obj))
-		return true;
+	bool ret;
 
-	return !dma_resv_test_signaled(obj->base.resv, true);
+	rcu_read_lock();
+	ret = fence_is_active(rcu_dereference(obj->mm.migrate.fence));
+#ifdef BPM_DMA_RESV_EXCL_FENCE_NOT_PRESENT
+	if (!ret) {
+		struct dma_resv_list *list;
+		unsigned int i;
+
+		list = dma_resv_fences_list(obj->base.resv);
+		for (i = 0; list && i < list->num_fences; ++i) {
+			struct dma_fence *old;
+
+			dma_resv_list_entry(list, i, obj->base.resv, &old, NULL);
+			ret = fence_is_active(old);
+			if (ret)
+				break;
+		}
+	}
+#else
+	if (!ret)
+		ret = fence_is_active(dma_resv_excl_fence(obj->base.resv));
+	if (!ret) {
+		struct dma_resv_list *fobj = dma_resv_shared_list(obj->base.resv);
+		unsigned int i, shared_count;
+
+		shared_count = fobj ? fobj->shared_count : 0;
+		for (i = 0; !ret && i < shared_count; ++i)
+			ret = fence_is_active(fobj->shared[i]);
+	}
+#endif
+	rcu_read_unlock();
+
+	return ret;
 }
 
 static inline unsigned long nsecs_to_jiffies_timeout(const u64 n)

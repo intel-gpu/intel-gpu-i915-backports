@@ -49,6 +49,13 @@ int i915_reg_read_ioctl(struct drm_device *dev,
 	int remain;
 	int ret = 0;
 
+	/*
+	 * Report that we have no passthrough to PF at present so cannot access
+	 * the native registers.
+	 */
+	if (IS_SRIOV_VF(i915))
+		return -EOPNOTSUPP;
+
 	entry = reg_read_whitelist;
 	remain = ARRAY_SIZE(reg_read_whitelist);
 	while (remain) {

@@ -21,7 +21,6 @@
 #include "mock_context.h"
 
 #include "selftests/mock_drm.h"
-#include "selftests/mock_gem_device.h"
 #include "selftests/mock_region.h"
 #include "selftests/i915_random.h"
 
@@ -166,14 +165,12 @@ static int fake_put_huge_pages(struct drm_i915_gem_object *obj,
 
 static const struct drm_i915_gem_object_ops fake_ops = {
 	.name = "fake-gem",
-	.flags = I915_GEM_OBJECT_IS_SHRINKABLE,
 	.get_pages = fake_get_huge_pages,
 	.put_pages = fake_put_huge_pages,
 };
 
 static const struct drm_i915_gem_object_ops fake_ops_single = {
 	.name = "fake-gem",
-	.flags = I915_GEM_OBJECT_IS_SHRINKABLE,
 	.get_pages = fake_get_huge_pages_single,
 	.put_pages = fake_put_huge_pages,
 };
@@ -207,7 +204,7 @@ fake_huge_pages_object(struct drm_i915_private *i915, u64 size, bool single)
 
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
-	obj->pat_index = i915_gem_get_pat_index(i915, I915_CACHE_NONE);
+	i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
 	return obj;
 }

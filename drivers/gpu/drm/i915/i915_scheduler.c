@@ -5,6 +5,7 @@
  */
 
 #include <linux/mutex.h>
+#include <linux/tick.h>
 
 #include "i915_drv.h"
 #include "i915_request.h"
@@ -598,6 +599,9 @@ static void default_destroy(struct kref *kref)
 	rbtree_postorder_for_each_entry_safe(pos, n, &se->queue.rb_root, node)
 		i915_priolist_free(pos);
 
+	if (se->cpumask != cpu_all_mask)
+		kfree(se->cpumask);
+
 	kfree(se);
 }
 
@@ -631,6 +635,36 @@ i915_sched_engine_create(unsigned int subclass)
 	mark_lock_used_irq(&sched_engine->lock);
 
 	return sched_engine;
+}
+
+struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
+{
+	const struct cpumask *all;
+	struct cpumask *local;
+	int nid;
+
+	nid = dev_to_node(i915->drm.dev);
+	if (nid == NUMA_NO_NODE)
+		all = cpu_all_mask;
+	else
+		all = cpumask_of_node(nid);
+
+	local = kmalloc(sizeof(*local), GFP_KERNEL);
+	if (!local)
+		return NULL;
+
+	cpumask_copy(local, all);
+#if IS_ENABLED(CONFIG_NO_HZ_FULL) && !defined BPM_TICK_NOHZ_FULL_MASK_NOT_PRESENT
+	if (tick_nohz_full_enabled()) {
+		cpumask_andnot(local, local, tick_nohz_full_mask);
+		if (cpumask_empty(local)) /* no overlap with node? use any */
+			cpumask_andnot(local, cpu_all_mask, tick_nohz_full_mask);
+		if (cpumask_empty(local)) /* still nothing??? give up, use preferred */
+			cpumask_copy(local, all);
+	}
+#endif
+
+	return local;
 }
 
 void i915_scheduler_module_exit(void)

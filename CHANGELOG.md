@@ -1,4 +1,42 @@
 # ChangeLog
+## Release I915_24WW28.5_914.32_24.3.23_240419.26
+* i915: Updated the telemetry register and High Bandwidth Memory (HBM) error reporting.
+* i915: Improved formatting of logging certain hardware error messages.
+* i915: Fixed the Logical Ring Context (LRC) page size to match Graphics Microcontroller Unit (GUC) golden context
+        state size.
+* i915: Fixed concurrent unbinds preventing Virtual Memory Area (VMA) bind.
+* i915: Minimized page fault reporting for closed contexts during process exit.
+* i915: Introduced a fix to avoid invalid data during sysfs files show and restore callbacks.
+* i915: Introduced a modification that queues multiple page faults events.
+* i915: Fixed the way memory controller registers are checked because of an issue related to an open file descriptor for
+        the Performance Monitoring Unit (PMU) during a Function Level Reset (FLR) operation.
+* i915: Extended timeouts to capture slower SIP resolves.
+* i915: Fixed match faulting virtual machine for request and context lookup.
+* i915: Introduced a fix to avoid hang seen in page fault handling.
+* i915: Introduced a fix to avoid CPU cache impact when clearing system pages for potential improved performance.
+* i915: Introduced a fix to offload blitter clears for system memory for potential improved performance.
+* i915: Fixed potential memory leak in the process of swapping between different GPU objects.
+* i915: Introduced a fix to ensure CPUs are available for the i915 threads with mismatching nohz_full and numa
+        configs.
+* i915: Introduced a fix to avoid scheduling i915 work on nohz_full CPU cores.
+* i915: Introduced a fix to load and use Graphics Microcontroller Unit (GuC) firmware v70.25.0.
+* i915: Fixed incorrect bit usage in eviction processing.
+* i915: Introduced a fix to avoid Memory Mapped Input/Output (MMIO) operations before memory is initialized.
+* i915: Introduced a fix to ensure proper Page Attribute Table (PAT) settings after migration.
+* i915: Fixed page fault on blitter operations.
+* i915: Fixed race condition on local memory initialization.
+* i915: Fixed deadlock on blitter command stream 0 pagefault.
+* i915: Introduced a fix to load and use hardware control firmware v7.10.16 on Flex.
+* i915: Disabled clflush bypass under virtual machine environments.
+* i915: Fixed Page Size 64KB (PS64) alignment on local memory and shared memory (lmem<->smem) copies.
+* i915: Fixed a locking issue during Graphics Execution Manager (GEM) shrink.
+* i915: Disabled move_notify by default due to a reboot seen on Max.
+* i915: Improved eviction processing performance.
+* i915: Introduced a fix to quiesce GT traffic on shutdown.
+* i915: Introduced a fix to prevent power states (C-states) while processing page faults.
+* i915: Fixed returning an error from reg_read Input/Output Control (ioctl) inside VF.
+* i915: Invalidated Translation Lookaside Buffer (TLB) after out of bounds user space access serviced by a scratch page.
+
 ## Release I915_24WW23.5_881.19_24.2.17_240301.20
 * i915: update to reduce pagefault reporting for closed context during process exit
 * i915: update to extend waits to capture for slower SIP resolves

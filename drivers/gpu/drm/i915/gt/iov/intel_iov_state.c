@@ -9,6 +9,7 @@
 #include "intel_iov_utils.h"
 #include "gem/i915_gem_lmem.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/uc/abi/guc_actions_pf_abi.h"
 
 static void pf_state_worker_func(struct work_struct *w);
@@ -107,7 +108,6 @@ static int guc_action_vf_control_cmd(struct intel_guc *guc, u32 vfid, u32 cmd)
 
 static int pf_control_vf(struct intel_iov *iov, u32 vfid, u32 cmd)
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
@@ -115,7 +115,7 @@ static int pf_control_vf(struct intel_iov *iov, u32 vfid, u32 cmd)
 	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
 	GEM_BUG_ON(!vfid);
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		err = guc_action_vf_control_cmd(iov_to_guc(iov), vfid, cmd);
 
 	return err;
@@ -177,7 +177,7 @@ static void pf_clear_vf_lmem_obj(struct intel_iov *iov, u32 vfid)
 static void pf_reset_vf_guc_migration_state(struct intel_iov *iov, u32 vfid)
 {
 	struct intel_iov_data *data = &iov->pf.state.data[vfid];
-	void *guc_state = fetch_and_zero(&data->guc_state);
+	void *guc_state = fetch_and_zero(&data->guc_state.blob);
 
 	lockdep_assert_held(pf_provisioning_mutex(iov));
 
@@ -506,16 +506,16 @@ int intel_iov_state_resume_vf(struct intel_iov *iov, u32 vfid)
 
 	data->paused = false;
 
-	guc_state = fetch_and_zero(&data->guc_state);
+	guc_state = fetch_and_zero(&data->guc_state.blob);
 	if (guc_state) {
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-		ret = intel_iov_state_restore_vf(iov, vfid, guc_state);
-#else
+		u32 guc_state_size;
+
+		guc_state_size = fetch_and_zero(&data->guc_state.size);
+		GEM_BUG_ON(guc_state_size <= 0);
 		ret = intel_iov_state_restore_vf(iov, vfid, guc_state,
-						 PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
+						 guc_state_size);
 		kfree(guc_state);
-		return ret;
+		return ret >= 0 ? 0 : ret;
 	}
 
 	return ret;
@@ -535,7 +535,8 @@ int intel_iov_state_stop_vf(struct intel_iov *iov, u32 vfid)
 	return pf_control_vf(iov, vfid, GUC_PF_TRIGGER_VF_STOP);
 }
 
-static int guc_action_save_restore_vf(struct intel_guc *guc, u32 vfid, u32 opcode, u64 offset)
+static int guc_action_save_restore_vf(struct intel_guc *guc, u32 vfid, u32 opcode,
+				       u64 offset, u32 size)
 {
 	u32 request[PF2GUC_SAVE_RESTORE_VF_REQUEST_MSG_LEN] = {
 		FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_HOST) |
@@ -550,14 +551,19 @@ static int guc_action_save_restore_vf(struct intel_guc *guc, u32 vfid, u32 opcod
 
 	ret = intel_guc_send(guc, request, ARRAY_SIZE(request));
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	return ret > SZ_4K ? -EPROTO : ret;
-#else
-	return ret > PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE ? -EPROTO : ret;
-#endif
+	return (offset && ret > size) ? -EPROTO : ret;
 }
 
-static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
+static int pf_save_vf_size(struct intel_iov *iov, u32 vfid)
+{
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
+	GEM_BUG_ON(!vfid);
+
+	return PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE;
+}
+
+static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf, u32 size)
 {
 	struct intel_guc *guc = iov_to_guc(iov);
 	struct i915_vma *vma;
@@ -568,32 +574,19 @@ static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
 	GEM_BUG_ON(!vfid);
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	ret = intel_guc_allocate_and_map_vma(guc, SZ_4K, &vma, (void **)&blob);
-#else
-	ret = intel_guc_allocate_and_map_vma(guc, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE,
-					     &vma, (void **)&blob);
-#endif
+	ret = intel_guc_allocate_and_map_vma(guc, size, &vma, (void **)&blob);
 	if (unlikely(ret))
 		goto failed;
 
 	ret = guc_action_save_restore_vf(guc, vfid, GUC_PF_OPCODE_VF_SAVE,
-					 intel_guc_ggtt_offset(guc, vma));
+					 intel_guc_ggtt_offset(guc, vma),
+					 size);
 
 	if (likely(ret > 0)) {
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-		memcpy(buf, blob, SZ_4K);
-#else
-		memcpy(buf, blob, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
+		memcpy(buf, blob, size);
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 		if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) &&
-		    memchr_inv(buf + ret, 0, SZ_4K - ret)) {
-#else
-		if (IS_ENABLED(CPTCFG_DRM_I915_SELFTEST) &&
-		    memchr_inv(buf + ret, 0, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE - ret)) {
-#endif
+		    memchr_inv(buf + ret, 0, size - ret)) {
 			pr_err("non-zero state found beyond offset %d!\n", ret);
 		}
 	}
@@ -605,7 +598,7 @@ static int pf_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 
 	IOV_DEBUG(iov, "VF%u: state saved (%d bytes) %*ph ..\n",
 		  vfid, ret, min_t(int, 16, ret), buf);
-	return 0;
+	return size;
 
 failed:
 	IOV_ERROR(iov, "Failed to save VF%u state (%pe)\n", vfid, ERR_PTR(ret));
@@ -613,37 +606,51 @@ failed:
 }
 
 /*
- * intel_iov_state_save_vf - Save VF state.
+ * intel_iov_state_save_vf_size - Query VF save state size.
  * @iov: the IOV struct
  * @vfid: VF identifier
- * @buf: buffer to save VF state (must be at least 4K)
  *
  * This function is for PF only.
  *
- * Return: 0 on success or a negative error code on failure.
+ * Return: size in bytes on success or a negative error code on failure.
  */
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
-#else
-int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
-#endif
+int intel_iov_state_save_vf_size(struct intel_iov *iov, u32 vfid)
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
-	int err = -ENONET;
+	int ret = -ENONET;
 
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	if (size < PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
-		return -EINVAL;
-#endif
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
+		ret = pf_save_vf_size(iov, vfid);
 
-	with_intel_runtime_pm(rpm, wakeref)
-		err = pf_save_vf(iov, vfid, buf);
-
-	return err;
+	return ret;
 }
 
-static int pf_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf)
+/**
+ * intel_iov_state_save_vf - Save VF state.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ * @buf: buffer to save VF state
+ * @size: size of the buffer (in bytes)
+ *
+ * This function is for PF only.
+ *
+ * Return: saved state size (in bytes) on success or a negative error code on failure.
+ */
+int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
+{
+	intel_wakeref_t wakeref;
+	int ret = -ENONET;
+
+	if (size < PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
+		return -EINVAL;
+
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
+		ret = pf_save_vf(iov, vfid, buf, size);
+
+	return ret;
+}
+
+static int pf_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf, size_t size)
 {
 	struct intel_guc *guc = iov_to_guc(iov);
 	struct i915_vma *vma;
@@ -654,23 +661,16 @@ static int pf_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf)
 	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
 	GEM_BUG_ON(!vfid);
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	ret = intel_guc_allocate_and_map_vma(guc, SZ_4K, &vma, (void **)&blob);
-#else
-	ret = intel_guc_allocate_and_map_vma(guc, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE,
+	ret = intel_guc_allocate_and_map_vma(guc, size,
 					     &vma, (void **)&blob);
-#endif
 	if (unlikely(ret < 0))
 		goto failed;
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	memcpy(blob, buf, SZ_4K);
-#else
-	memcpy(blob, buf, PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE);
-#endif
+	memcpy(blob, buf, size);
 
 	ret = guc_action_save_restore_vf(guc, vfid, GUC_PF_OPCODE_VF_RESTORE,
-					 intel_guc_ggtt_offset(guc, vma));
+					 intel_guc_ggtt_offset(guc, vma),
+					 size);
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
 
@@ -679,7 +679,7 @@ static int pf_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf)
 
 	IOV_DEBUG(iov, "VF%u: state restored (%u bytes) %*ph\n",
 		  vfid, ret, min_t(int, 16, ret), buf);
-	return 0;
+	return size;
 
 failed:
 	IOV_ERROR(iov, "Failed to restore VF%u state (%pe) %*ph\n",
@@ -693,11 +693,7 @@ int intel_iov_state_store_guc_migration_state(struct intel_iov *iov, u32 vfid,
 	struct intel_iov_data *data = &iov->pf.state.data[vfid];
 	void *guc_state;
 
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-	if (size != SZ_4K)
-#else
 	if (size != PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
-#endif
 		return -EINVAL;
 
 	mutex_lock(pf_provisioning_mutex(iov));
@@ -709,7 +705,8 @@ int intel_iov_state_store_guc_migration_state(struct intel_iov *iov, u32 vfid,
 
 	memcpy(guc_state, buf, size);
 
-	data->guc_state = guc_state;
+	data->guc_state.blob = guc_state;
+	data->guc_state.size = size;
 	mutex_unlock(pf_provisioning_mutex(iov));
 
 	return 0;
@@ -719,24 +716,20 @@ int intel_iov_state_store_guc_migration_state(struct intel_iov *iov, u32 vfid,
  * intel_iov_state_restore_vf - Restore VF state.
  * @iov: the IOV struct
  * @vfid: VF identifier
- * @buf: buffer with VF state to restore (must be 4K)
+ * @buf: buffer with VF state to restore
+ * @size: size of the buffer (in bytes)
  *
  * This function is for PF only.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-#ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf)
-#else
 int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf, size_t size)
-#endif
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
-	with_intel_runtime_pm(rpm, wakeref)
-		err = pf_restore_vf(iov, vfid, buf);
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
+		err = pf_restore_vf(iov, vfid, buf, size);
 
 	if (err == 0)
 		iov->pf.state.data[vfid].paused = false;
@@ -744,7 +737,6 @@ int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf,
 	return err;
 }
 
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 /**
  * intel_iov_state_save_ggtt - Save VF GGTT.
  * @iov: the IOV struct
@@ -759,7 +751,6 @@ int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf,
 ssize_t intel_iov_state_save_ggtt(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
 {
 	struct drm_mm_node *node = &iov->pf.provisioning.configs[vfid].ggtt_region;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	intel_wakeref_t wakeref;
 	ssize_t ret;
@@ -773,7 +764,7 @@ ssize_t intel_iov_state_save_ggtt(struct intel_iov *iov, u32 vfid, void *buf, si
 		goto out;
 	}
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = i915_ggtt_save_ptes(ggtt, node, buf, size, I915_GGTT_SAVE_PTES_NO_VFID);
 
 out:
@@ -796,7 +787,6 @@ out:
 int intel_iov_state_restore_ggtt(struct intel_iov *iov, u32 vfid, const void *buf, size_t size)
 {
 	struct drm_mm_node *node = &iov->pf.provisioning.configs[vfid].ggtt_region;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	intel_wakeref_t wakeref;
 	int ret;
@@ -805,7 +795,7 @@ int intel_iov_state_restore_ggtt(struct intel_iov *iov, u32 vfid, const void *bu
 
 	mutex_lock(pf_provisioning_mutex(iov));
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = i915_ggtt_restore_ptes(ggtt, node, buf, size,
 					     FIELD_PREP(I915_GGTT_RESTORE_PTES_VFID_MASK, vfid) |
 					     I915_GGTT_RESTORE_PTES_NEW_VFID);
@@ -842,4 +832,3 @@ void intel_iov_state_unmap_lmem(struct intel_iov *iov, u32 vfid)
 
 	i915_gem_object_unpin_map(obj);
 }
-#endif

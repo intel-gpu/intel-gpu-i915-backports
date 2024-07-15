@@ -1919,18 +1919,15 @@ static vm_fault_t vm_mmap_fault(struct vm_fault *vmf)
 	struct i915_vma *vma;
 	unsigned long n;
 	vm_fault_t ret;
-	int err;
+	int err = 0;
 
-	err = i915_gem_vm_bind_lock_interruptible(vm);
-	if (err)
-		return i915_error_to_vmf_fault(err);
-
+	rcu_read_lock();
 	vma = i915_gem_vm_bind_lookup_vma(vm, vmf->pgoff << PAGE_SHIFT);
 	if (vma) {
 		n = vmf->pgoff - (vma->node.start >> PAGE_SHIFT);
-		obj = i915_gem_object_get(vma->obj);
+		obj = i915_gem_object_get_rcu(vma->obj);
 	}
-	i915_gem_vm_bind_unlock(vm);
+	rcu_read_unlock();
 	if (!obj)
 		return VM_FAULT_SIGBUS;
 
@@ -2490,20 +2487,6 @@ static int do_eu_control(struct i915_debugger * debugger,
 
 	gt = engine->gt;
 
-	mutex_lock(&gt->eu_debug.lock);
-	pf = i915_active_fence_get(&gt->eu_debug.fault);
-	while (pf) {
-		mutex_unlock(&gt->eu_debug.lock);
-		ret = dma_fence_wait(pf, true);
-		dma_fence_put(pf);
-
-		if (ret)
-			return ret;
-
-		mutex_lock(&gt->eu_debug.lock);
-		pf = i915_active_fence_get(&gt->eu_debug.fault);
-	}
-
 	hw_attn_size = intel_gt_eu_attention_bitmap_size(engine->gt);
 	attn_size = arg->bitmask_size;
 
@@ -2512,10 +2495,8 @@ static int do_eu_control(struct i915_debugger * debugger,
 
 	if (attn_size > 0) {
 		bits = kmalloc(attn_size, GFP_KERNEL);
-		if (!bits) {
-			ret = -ENOMEM;
-			goto out_unlock;
-		}
+		if (!bits)
+			return -ENOMEM;
 
 		if (copy_from_user(bits, bitmask_ptr, attn_size)) {
 			ret = -EFAULT;
@@ -2540,6 +2521,16 @@ static int do_eu_control(struct i915_debugger * debugger,
 		ret = -EIO;
 		goto out_free;
 	}
+
+	mutex_lock(&gt->eu_debug.lock);
+	pf = i915_active_fence_get(&gt->eu_debug.fault);
+	if (pf) {
+		ret = dma_fence_wait(pf, true);
+		dma_fence_put(pf);
+		if (ret)
+			goto out_unlock;
+	}
+	GEM_BUG_ON(i915_active_fence_isset(&gt->eu_debug.fault));
 
 	ret = 0;
 	write_lock(&debugger->eu_lock);
@@ -2567,6 +2558,8 @@ static int do_eu_control(struct i915_debugger * debugger,
 		seqno = debugger_get_seqno(debugger);
 
 	write_unlock(&debugger->eu_lock);
+out_unlock:
+	mutex_unlock(&gt->eu_debug.lock);
 
 	intel_engine_schedule_heartbeat(engine);
 	intel_engine_pm_put(engine);
@@ -2597,15 +2590,12 @@ static int do_eu_control(struct i915_debugger * debugger,
 		}
 	}
 
-	if (hw_attn_size != arg->bitmask_size)
-		if (put_user(hw_attn_size, &user_ptr->bitmask_size))
-			ret = -EFAULT;
+	if (hw_attn_size != arg->bitmask_size &&
+	    put_user(hw_attn_size, &user_ptr->bitmask_size))
+		ret = -EFAULT;
 
 out_free:
 	kfree(bits);
-out_unlock:
-	mutex_unlock(&gt->eu_debug.lock);
-
 	return ret;
 }
 

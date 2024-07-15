@@ -14,11 +14,6 @@
 struct drm_i915_private;
 struct drm_printer;
 
-#define GT_TRACE(gt, fmt, ...) do {					\
-	const struct intel_gt *gt__ __maybe_unused = (gt);		\
-	GEM_TRACE("%s " fmt, dev_name(gt__->i915->drm.dev),		\
-		  ##__VA_ARGS__);					\
-} while (0)
 
 /*
  * Check that the GT is a graphics GT and has an IP version within the
@@ -66,7 +61,9 @@ static inline struct intel_gt *gsc_to_gt(struct intel_gsc *gsc)
 }
 
 void intel_gt_common_init_early(struct intel_gt *gt);
+int intel_root_gt_mmio_init_early(struct drm_i915_private *i915);
 int intel_root_gt_init_early(struct drm_i915_private *i915);
+int pvc_intel_remote_gts_init_early(struct drm_i915_private *i915);
 int intel_gt_init_mmio(struct intel_gt *gt);
 int __must_check intel_gt_init_hw(struct intel_gt *gt);
 void intel_gt_init_ggtt(struct intel_gt *gt, struct i915_ggtt *ggtt);
@@ -170,9 +167,17 @@ static inline void pvc_wa_disallow_rc6(struct drm_i915_private *i915)
 	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_get);
 }
 
+static inline void pvc_wa_uncore_forcewake_put(struct intel_uncore *uncore,
+					       enum forcewake_domains fw_domains)
+{
+	u64 delay_ns = uncore->i915->params.pvc_fw_put_delay_ms * NSEC_PER_MSEC;
+
+	intel_uncore_forcewake_put_delayed(uncore, fw_domains, delay_ns);
+}
+
 static inline void pvc_wa_allow_rc6(struct drm_i915_private *i915)
 {
-	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_put);
+	_pvc_wa_disallow_rc6(i915, pvc_wa_uncore_forcewake_put);
 }
 
 void intel_gt_info_print(const struct intel_gt_info *info,

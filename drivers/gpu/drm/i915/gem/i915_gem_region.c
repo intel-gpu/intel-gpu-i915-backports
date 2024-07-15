@@ -10,16 +10,14 @@
 #include "i915_trace.h"
 #include "intel_memory_region.h"
 
+#define FORCE_CHUNKS (I915_ALLOC_CHUNK_1G | I915_ALLOC_CHUNK_2M | I915_ALLOC_CHUNK_64K | I915_ALLOC_CHUNK_4K)
+
 int
 i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
 				struct sg_table *pages,
 				bool dirty)
 {
 	struct intel_memory_region *mem = obj->mm.region.mem;
-
-	spin_lock(&mem->objects.lock);
-	list_del_init(&obj->mm.region.link);
-	spin_unlock(&mem->objects.lock);
 
 	__intel_memory_region_put_pages_buddy(mem, &obj->mm.blocks, dirty);
 	i915_drm_client_make_resident(obj, false);
@@ -83,8 +81,6 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 		flags |= I915_ALLOC_CONTIGUOUS;
 	if (obj->flags & (I915_BO_ALLOC_USER | I915_BO_CPU_CLEAR))
 		flags |= I915_BUDDY_ALLOC_WANT_CLEAR;
-	if (!(obj->flags & I915_BO_SYNC_HINT))
-		flags |= I915_BUDDY_ALLOC_ALLOW_ACTIVE;
 	if (obj->swapto) {
 		flags &= ~I915_BUDDY_ALLOC_WANT_CLEAR;
 		flags |= I915_BUDDY_ALLOC_ALLOW_ACTIVE;
@@ -115,7 +111,7 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
 		while (block_size) {
 			u64 len;
 
-			if (offset != prev_end || sg->length >= max_segment) {
+			if (flags & FORCE_CHUNKS || offset != prev_end || sg->length >= max_segment) {
 				if (st->nents) {
 					sg_dma_len(sg) = sg->length;
 					sg_page_sizes |= sg->length;
@@ -193,9 +189,9 @@ void i915_gem_object_release_memory_region(struct drm_i915_gem_object *obj)
 
 	/* Added to the region list before get_pages failed? */
 	if (!list_empty(&obj->mm.region.link)) {
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
 		list_del_init(&obj->mm.region.link);
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 	}
 
 	intel_memory_region_put(mem);

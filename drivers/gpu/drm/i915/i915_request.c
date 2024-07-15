@@ -1154,7 +1154,7 @@ _i915_request_create(struct intel_context *ce, gfp_t gfp)
 
 	if (gfpflags_allow_blocking(gfp) &&
 	    intel_context_throttle(ce, MAX_SCHEDULE_TIMEOUT))
-		return ERR_PTR(-EINTR);
+		return ERR_PTR(-ERESTARTSYS);
 
 	tl = intel_context_timeline_lock(ce);
 	if (IS_ERR(tl))
@@ -2343,7 +2343,6 @@ i915_request_free(struct i915_request *rq)
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/mock_request.c"
 #include "selftests/i915_request.c"
 #endif
 

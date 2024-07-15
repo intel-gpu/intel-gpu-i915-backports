@@ -657,7 +657,7 @@ static void asle_work(struct work_struct *work)
 void intel_opregion_asle_intr(struct drm_i915_private *dev_priv)
 {
 	if (dev_priv->opregion.asle)
-		schedule_work(&dev_priv->opregion.asle_work);
+		queue_work(dev_priv->display.wq, &dev_priv->opregion.asle_work);
 }
 
 #define ACPI_EV_DISPLAY_SWITCH (1<<0)

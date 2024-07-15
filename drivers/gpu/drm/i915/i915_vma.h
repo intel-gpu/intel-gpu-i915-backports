@@ -405,7 +405,7 @@ static inline void i915_vma_clear_scanout(struct i915_vma *vma)
 	list_for_each_entry(V, &(OBJ)->vma.list, obj_link)		\
 		for_each_until(!i915_vma_is_ggtt(V))
 
-struct i915_vma *i915_vma_alloc(void);
+struct i915_vma *i915_vma_alloc(gfp_t gfp);
 void i915_vma_free(struct i915_vma *vma);
 
 void i915_vma_clock_init_early(struct i915_vma_clock *clock);
@@ -414,7 +414,6 @@ void i915_vma_clock_fini(struct i915_vma_clock *clock);
 
 struct i915_vma *i915_vma_make_unshrinkable(struct i915_vma *vma);
 void i915_vma_make_shrinkable(struct i915_vma *vma);
-void i915_vma_make_purgeable(struct i915_vma *vma);
 
 int i915_vma_wait_for_bind(struct i915_vma *vma);
 

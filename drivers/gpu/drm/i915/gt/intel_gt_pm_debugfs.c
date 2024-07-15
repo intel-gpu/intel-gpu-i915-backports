@@ -382,7 +382,7 @@ static int rps_boost_show(struct seq_file *m, void *data)
 	seq_printf(m, "RPS active? %s\n",
 		   str_yes_no(intel_rps_is_active(rps)));
 	seq_printf(m, "GPU busy? %s, %llums\n",
-		   str_yes_no(gt->awake),
+		   str_yes_no(intel_gt_pm_is_awake(gt)),
 		   ktime_to_ms(intel_gt_get_awake_time(gt)));
 	seq_printf(m, "Boosts outstanding? %d\n",
 		   atomic_read(&rps->num_waiters));

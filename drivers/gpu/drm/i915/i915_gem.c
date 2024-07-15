@@ -71,7 +71,7 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
 	u64 pinned;
 
 	if (mutex_lock_interruptible(&ggtt->vm.mutex))
-		return -EINTR;
+		return -ERESTARTSYS;
 
 	pinned = ggtt->vm.reserved;
 	list_for_each_entry(vma, &ggtt->vm.bound_list, vm_link)
@@ -101,6 +101,7 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 			   unsigned long flags)
 {
 	struct intel_runtime_pm *rpm = &to_i915(obj->base.dev)->runtime_pm;
+	struct i915_vma *bookmark;
 	intel_wakeref_t wakeref = 0;
 	LIST_HEAD(still_in_list);
 	struct i915_vma *vma;
@@ -109,16 +110,17 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 	if (list_empty(&obj->vma.list))
 		return 0;
 
+	bookmark = i915_vma_alloc(GFP_ATOMIC);
+	if (!bookmark)
+		return -ENOMEM;
+
 try_again:
 	ret = 0;
 	spin_lock(&obj->vma.lock);
-	while (!ret && (vma = list_first_entry_or_null(&obj->vma.list,
-						       struct i915_vma,
-						       obj_link))) {
+	list_for_each_entry(vma, &obj->vma.list, obj_link) {
 		struct i915_address_space *vm = vma->vm;
 		struct drm_i915_gem_object *unlock = NULL;
 
-		list_move_tail(&vma->obj_link, &still_in_list);
 		if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
 			continue;
 
@@ -143,6 +145,7 @@ try_again:
 			break;
 
 		/* Prevent vma being freed by i915_vma_parked as we unbind */
+		list_add(&bookmark->obj_link, &vma->obj_link);
 		vma = __i915_vma_get(vma);
 		spin_unlock(&obj->vma.lock);
 		if (!vma)
@@ -194,8 +197,9 @@ put_vma:
 close_vm:
 		i915_vm_close(vm);
 		spin_lock(&obj->vma.lock);
+		__list_del_entry(&bookmark->obj_link);
+		vma = bookmark;
 	}
-	list_splice_init(&still_in_list, &obj->vma.list);
 	spin_unlock(&obj->vma.lock);
 
 	if (ret == -EAGAIN && flags & I915_GEM_OBJECT_UNBIND_BARRIER) {
@@ -206,6 +210,7 @@ close_vm:
 	if (wakeref)
 		intel_runtime_pm_put(rpm, wakeref);
 
+	i915_vma_free(bookmark);
 	return ret;
 }
 
@@ -581,48 +586,13 @@ static bool
 i915_gem_object_madvise(struct drm_i915_gem_object *obj,
 		        struct drm_i915_gem_madvise *args)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-
 	if (obj->mm.madv != __I915_MADV_PURGED)
 		obj->mm.madv = args->madv;
-
-	if (i915_gem_object_has_pages(obj)) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&i915->mm.obj_lock, flags);
-		if (!list_empty(&obj->mm.link)) {
-			struct list_head *list;
-
-			if (obj->mm.madv != I915_MADV_WILLNEED)
-				list = &i915->mm.purge_list;
-			else
-				list = &i915->mm.shrink_list;
-			list_move_tail(&obj->mm.link, list);
-
-		}
-		spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
-	}
 
 	/* if the object is no longer attached, discard its backing storage */
 	if (obj->mm.madv == I915_MADV_DONTNEED &&
 	    !i915_gem_object_has_pages(obj))
 		i915_gem_object_truncate(obj);
-
-	if (obj->mm.region.mem && i915_gem_object_has_pages(obj)) {
-		struct intel_memory_region *mem = obj->mm.region.mem;
-		struct list_head *list;
-
-		if (obj->mm.madv == I915_MADV_WILLNEED)
-			list = &mem->objects.list;
-		else if (obj->memory_mask & BIT(REGION_SMEM))
-			list = &mem->objects.migratable;
-		else
-			list = &mem->objects.purgeable;
-
-		spin_lock(&mem->objects.lock);
-		list_move_tail(&obj->mm.region.link, list);
-		spin_unlock(&mem->objects.lock);
-	}
 
 	return obj->mm.madv != __I915_MADV_PURGED;
 }
@@ -811,12 +781,7 @@ void i915_gem_driver_release(struct drm_i915_private *dev_priv)
 
 static void i915_gem_init__mm(struct drm_i915_private *i915)
 {
-	spin_lock_init(&i915->mm.obj_lock);
-
 	init_llist_head(&i915->mm.free_list);
-
-	INIT_LIST_HEAD(&i915->mm.purge_list);
-	INIT_LIST_HEAD(&i915->mm.shrink_list);
 
 	i915_gem_init__objects(i915);
 }
@@ -836,7 +801,6 @@ void i915_gem_cleanup_early(struct drm_i915_private *dev_priv)
 	i915_gem_drain_workqueue(dev_priv);
 	GEM_BUG_ON(!llist_empty(&dev_priv->mm.free_list));
 	GEM_BUG_ON(atomic_read(&dev_priv->mm.free_count));
-	GEM_BUG_ON(dev_priv->mm.shrink_count);
 }
 
 int i915_gem_open(struct drm_i915_private *i915, struct drm_file *file)

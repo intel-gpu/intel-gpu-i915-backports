@@ -92,3 +92,9 @@ config DRM_I915_CHICKEN_ASYNC_PAGEFAULTS
 	  the responses back to the GUC. When true, the pagefault responses
 	  (possibly in the 100s) will be sent as soon as they are ready,
 	  often faster than the guc is able to process each individual response.
+
+config DRM_I915_CHICKEN_ASYNC_UNBIND
+	bool "Asynchronous (non-blocking) VM_UNBIND ioctl"
+	default n
+	help
+	  Unbind and release the vma (VM_UNBIND ioctl) without blocking the caller.

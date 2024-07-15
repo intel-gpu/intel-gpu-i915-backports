@@ -81,7 +81,7 @@ static int guc_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig
 
 	GEM_BUG_ON(!hwconfig->size);
 
-	ret = intel_guc_allocate_and_map_vma(guc, hwconfig->size, &vma, &vaddr);
+	ret = __intel_guc_allocate_and_map_vma(guc, hwconfig->size, true, &vma, &vaddr);
 	if (ret)
 		return ret;
 
@@ -242,6 +242,9 @@ static int guc_hwconfig_init(struct intel_gt *gt)
 	int ret;
 
 	if (hwconfig->size)
+		return 0;
+
+	if (gt->info.id)
 		return 0;
 
 	if (!has_table(gt->i915) && !has_fake_table(gt->i915))

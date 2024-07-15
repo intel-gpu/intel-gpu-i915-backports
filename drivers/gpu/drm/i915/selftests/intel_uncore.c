@@ -163,8 +163,6 @@ static int live_forcewake_ops(void *arg)
 	unsigned int tmp;
 	int err = 0;
 
-	GEM_BUG_ON(gt->awake);
-
 	/*
 	 * Not quite as reliable across the gen as one would hope.
 	 *

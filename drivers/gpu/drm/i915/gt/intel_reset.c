@@ -26,6 +26,7 @@
 #include "intel_gt_requests.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pci_config.h"
+#include "intel_tlb.h"
 #include "intel_reset.h"
 
 #include "uc/intel_guc.h"
@@ -826,6 +827,9 @@ int __intel_gt_reset(struct intel_gt *gt, intel_engine_mask_t engine_mask)
 	int ret = -ETIMEDOUT;
 	int retry;
 
+	if (i915_is_pci_faulted(gt->i915))
+		return -EIO;
+
 	if (gt->i915->quiesce_gpu)
 		return 0;
 
@@ -931,6 +935,12 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 	local_bh_enable();
 
 	intel_uc_reset(&gt->uc, ALL_ENGINES);
+
+	/*
+	 * The full GT reset will have cleared the TLB caches and flushed the
+	 * G2H message queue; we can release all the blocked waiters.
+	 */
+	intel_tlb_invalidation_revoke(gt);
 
 	return 0;
 }
@@ -1054,6 +1064,9 @@ static bool __intel_gt_unset_wedged(struct intel_gt *gt)
 {
 	struct intel_gt_timelines *timelines = &gt->timelines;
 	struct intel_timeline *tl;
+
+	if (i915_is_pci_faulted(gt->i915))
+		return false;
 
 	if (!test_bit(I915_WEDGED, &gt->reset.flags))
 		return true;
@@ -1591,7 +1604,7 @@ static int _intel_gt_reset_lock(struct intel_gt *gt, int *srcu, bool retry)
 		if (wait_event_interruptible(gt->reset.queue,
 					     !test_bit(I915_RESET_BACKOFF,
 						       &gt->reset.flags)))
-			return -EINTR;
+			return -ERESTARTSYS;
 
 		rcu_read_lock();
 	}
@@ -1631,7 +1644,7 @@ int intel_gt_terminally_wedged(struct intel_gt *gt)
 	if (wait_event_interruptible(gt->reset.queue,
 				     !test_bit(I915_RESET_BACKOFF,
 					       &gt->reset.flags)))
-		return -EINTR;
+		return -ERESTARTSYS;
 
 	return intel_gt_is_wedged(gt) ? -EIO : 0;
 }

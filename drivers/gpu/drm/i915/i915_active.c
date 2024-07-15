@@ -588,7 +588,7 @@ int __i915_active_wait(struct i915_active *ref, int state)
 
 		if (___wait_var_event(ref, i915_active_is_idle(ref),
 				      state, 0, 0, schedule()))
-			return -EINTR;
+			return -ERESTARTSYS;
 	}
 
 	/*

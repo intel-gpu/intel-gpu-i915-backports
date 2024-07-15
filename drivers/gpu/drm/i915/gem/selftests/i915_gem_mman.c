@@ -128,7 +128,6 @@ static int igt_mmap_offset_exhaustion(void *arg)
 
 	/* Disable background reaper */
 	disable_retire_worker(i915);
-	GEM_BUG_ON(!to_gt(i915)->awake);
 	intel_gt_retire_requests(to_gt(i915));
 	i915_gem_drain_freed_objects(i915);
 

@@ -2605,7 +2605,7 @@ bool intel_crtc_get_pipe_config(struct intel_crtc_state *crtc_state)
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
 
-	if (!i915->display->get_pipe_config(crtc, crtc_state))
+	if (!i915->display.funcs->get_pipe_config(crtc, crtc_state))
 		return false;
 
 	crtc_state->hw.active = true;
@@ -5059,7 +5059,7 @@ static void intel_enable_crtc(struct intel_atomic_state *state,
 
 	intel_crtc_update_active_timings(new_crtc_state);
 
-	dev_priv->display->crtc_enable(state, crtc);
+	dev_priv->display.funcs->crtc_enable(state, crtc);
 
 	if (intel_crtc_is_bigjoiner_slave(new_crtc_state))
 		return;
@@ -5124,7 +5124,7 @@ static void intel_old_crtc_state_disables(struct intel_atomic_state *state,
 	 */
 	intel_crtc_disable_pipe_crc(crtc);
 
-	dev_priv->display->crtc_disable(state, crtc);
+	dev_priv->display.funcs->crtc_disable(state, crtc);
 	crtc->active = false;
 	intel_fbc_disable(crtc);
 	intel_disable_shared_dpll(old_crtc_state);
@@ -5505,7 +5505,7 @@ static void intel_atomic_commit_tail(struct intel_atomic_state *state)
 	}
 
 	/* Now enable the clocks, plane, pipe, and connectors that we set up. */
-	dev_priv->display->commit_modeset_enables(state);
+	dev_priv->display.funcs->commit_modeset_enables(state);
 
 	intel_encoders_update_complete(state);
 
@@ -5616,7 +5616,7 @@ intel_atomic_commit_ready(struct i915_sw_fence *fence,
 				&to_i915(state->base.dev)->atomic_helper;
 
 			if (llist_add(&state->freed, &helper->free_list))
-				schedule_work(&helper->free_work);
+				queue_work(to_i915(state->base.dev)->display.wq, &helper->free_work);
 			break;
 		}
 	}
@@ -5688,12 +5688,12 @@ static int intel_atomic_commit(struct drm_device *dev,
 
 	i915_sw_fence_commit(&state->commit_ready);
 	if (nonblock && state->modeset) {
-		queue_work(dev_priv->modeset_wq, &state->base.commit_work);
+		queue_work(dev_priv->display.modeset_wq, &state->base.commit_work);
 	} else if (nonblock) {
-		queue_work(dev_priv->flip_wq, &state->base.commit_work);
+		queue_work(dev_priv->display.flip_wq, &state->base.commit_work);
 	} else {
 		if (state->modeset)
-			flush_workqueue(dev_priv->modeset_wq);
+			flush_workqueue(dev_priv->display.modeset_wq);
 		intel_atomic_commit_tail(state);
 	}
 
@@ -5960,7 +5960,7 @@ void intel_init_display_hooks(struct drm_i915_private *dev_priv)
 
 	intel_dpll_init_clock_hook(dev_priv);
 
-	dev_priv->display = &skl_display_funcs;
+	dev_priv->display.funcs = &skl_display_funcs;
 }
 
 void intel_modeset_init_hw(struct drm_i915_private *i915)
@@ -6230,11 +6230,12 @@ int intel_modeset_init_noirq(struct drm_i915_private *i915)
 	if (!HAS_DISPLAY(i915))
 		return 0;
 
-	intel_dmc_ucode_init(i915);
+	i915->display.wq = alloc_ordered_workqueue("i915_display", 0);
+	i915->display.modeset_wq = alloc_ordered_workqueue("i915_modeset", 0);
+	i915->display.flip_wq = alloc_workqueue("i915_flip", WQ_HIGHPRI |
+						WQ_UNBOUND, WQ_UNBOUND_MAX_ACTIVE);
 
-	i915->modeset_wq = alloc_ordered_workqueue("i915_modeset", 0);
-	i915->flip_wq = alloc_workqueue("i915_flip", WQ_HIGHPRI |
-					WQ_UNBOUND, WQ_UNBOUND_MAX_ACTIVE);
+	intel_dmc_ucode_init(i915);
 
 	intel_mode_config_init(i915);
 
@@ -6435,11 +6436,13 @@ void intel_modeset_driver_remove(struct drm_i915_private *i915)
 	if (!HAS_DISPLAY(i915))
 		return;
 
-	flush_workqueue(i915->flip_wq);
-	flush_workqueue(i915->modeset_wq);
+	flush_workqueue(i915->display.flip_wq);
+	flush_workqueue(i915->display.modeset_wq);
 
 	flush_work(&i915->atomic_helper.free_work);
 	drm_WARN_ON(&i915->drm, !llist_empty(&i915->atomic_helper.free_list));
+
+	flush_workqueue(i915->display.wq);
 }
 
 /* part #2: call after irq uninstall */
@@ -6467,7 +6470,7 @@ void intel_modeset_driver_remove_noirq(struct drm_i915_private *i915)
 	intel_unregister_dsm_handler();
 
 	/* flush any delayed tasks or pending work */
-	flush_scheduled_work();
+	flush_workqueue(i915->display.wq);
 
 	intel_hdcp_component_fini(i915);
 
@@ -6475,8 +6478,9 @@ void intel_modeset_driver_remove_noirq(struct drm_i915_private *i915)
 
 	intel_gmbus_teardown(i915);
 
-	destroy_workqueue(i915->flip_wq);
-	destroy_workqueue(i915->modeset_wq);
+	destroy_workqueue(i915->display.flip_wq);
+	destroy_workqueue(i915->display.modeset_wq);
+	destroy_workqueue(i915->display.wq);
 
 	intel_fbc_cleanup(i915);
 }

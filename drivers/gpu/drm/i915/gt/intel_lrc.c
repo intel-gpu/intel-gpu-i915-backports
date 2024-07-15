@@ -1132,6 +1132,8 @@ check_redzone(struct intel_context *ce)
 
 	vaddr += engine->context_size;
 	last = (void *)vaddr + len;
+	if (*last == -1) /* read failure (pci fault) */
+		return;
 
 	now = ktime_get();
 	if (ktime_before(now, ktime_add(*last, REDZONE_INTERVAL)))
@@ -1274,9 +1276,8 @@ __lrc_alloc_state(struct intel_context *ce, struct intel_engine_cs *engine)
 		context_size += PARENT_SCRATCH_SIZE;
 	}
 
-	if (HAS_LMEM(engine->i915))
-		obj = intel_gt_object_create_lmem(engine->gt, context_size, 0);
-	else
+	obj = intel_gt_object_create_lmem(engine->gt, context_size, 0);
+	if (IS_ERR(obj))
 		obj = i915_gem_object_create_shmem(engine->i915, context_size);
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
@@ -1751,7 +1752,8 @@ static u32 *xehpc_emit_credits_wa(const struct intel_context *ce, u32 *cs)
 static u32 need_credits_wa(const struct intel_engine_cs *engine)
 {
 	return engine->class == COPY_ENGINE_CLASS &&
-		IS_PONTEVECCHIO(engine->i915);
+		IS_PONTEVECCHIO(engine->i915) &&
+		engine->i915->params.enable_256B;
 }
 
 static u32 *

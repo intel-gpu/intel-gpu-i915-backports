@@ -1083,7 +1083,7 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 		struct i915_vma *vma = ev->vma;
 
 		if (signal_pending(current))
-			return -EINTR;
+			return -ERESTARTSYS;
 
 		try_migrate_to_preferred(vma->obj);
 
@@ -2581,6 +2581,7 @@ static int eb_enter_context(struct i915_execbuffer *eb, struct intel_context *ce
 static int eb_enter(struct i915_execbuffer *eb)
 {
 	struct intel_context *ce = eb->context, *child;
+	struct intel_gt *gt = ce->engine->gt;
 	int i = 0;
 	int err;
 
@@ -2594,6 +2595,31 @@ static int eb_enter(struct i915_execbuffer *eb)
 	err = eb_enter_context(eb, ce);
 	if (err)
 		goto unwind;
+
+	/*
+	 * When starting a new context that has pagefaults enabled, synchronize
+	 * with the clear-idle context as it may be stealing bcs0 and as the new
+	 * context may also be using bcs0, the user context may preempt the blitter
+	 * context and cause a pagefault with a potential deadlock on the blitter
+	 * context (as it requires clear pages for a fresh user buffer).
+	 */
+	atomic_or(ce->engine->mask, &gt->user_engines);
+	if (i915_vm_page_fault_enabled(ce->vm) &&
+	    !i915_active_fence_isset(&ce->timeline->last_request)) {
+		struct intel_context *blt = gt->migrate.clear[CLEAR_IDLE];
+		struct dma_fence *f;
+
+		/* synchronize with concurrent clear-idle (bcs0) submission */
+		if (blt && ce->engine->mask & blt->engine->mask) {
+			mutex_lock_nested(&blt->timeline->mutex, SINGLE_DEPTH_NESTING);
+			f = i915_active_fence_get(&blt->timeline->last_request);
+			if (f) {
+				__i915_active_fence_set(&ce->timeline->last_request, f);
+				dma_fence_put(f);
+			}
+			mutex_unlock(&blt->timeline->mutex);
+		}
+	}
 
 	return 0;
 

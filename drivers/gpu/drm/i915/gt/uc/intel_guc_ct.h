@@ -97,9 +97,6 @@ struct intel_guc_ct {
 
 	I915_SELFTEST_DECLARE(int (*rcv_override)(struct intel_guc_ct *ct, const u32 *msg));
 
-	/** @stall_time: time of first time a CTB submission is stalled */
-	ktime_t stall_time;
-
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 	int dead_ct_reason;
 	bool dead_ct_reported;

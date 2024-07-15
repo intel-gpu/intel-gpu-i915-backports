@@ -11,7 +11,6 @@
 #include "intel_engine_pm.h"
 
 #include "mock_engine.h"
-#include "selftests/mock_request.h"
 
 static int mock_timeline_pin(struct intel_timeline *tl)
 {
@@ -50,7 +49,7 @@ static struct intel_ring *mock_ring(struct intel_engine_cs *engine)
 	ring->vaddr = (void *)(ring + 1);
 	atomic_set(&ring->pin_count, 1);
 
-	ring->vma = i915_vma_alloc();
+	ring->vma = i915_vma_alloc(GFP_KERNEL);
 	if (!ring->vma) {
 		kfree(ring);
 		return NULL;

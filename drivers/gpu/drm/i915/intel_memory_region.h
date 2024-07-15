@@ -124,7 +124,6 @@ struct intel_memory_region {
 		spinlock_t lock; /* Protects access to objects */
 		struct list_head list;
 		struct list_head migratable;
-		struct list_head purgeable;
 		struct list_head pt;
 	} objects;
 

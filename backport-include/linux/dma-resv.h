@@ -3,6 +3,43 @@
 
 #include_next <linux/dma-resv.h>
 
+#ifdef BPM_DMA_RESV_EXCL_FENCE_NOT_PRESENT
+#define DMA_RESV_LIST_MASK      0x3
+
+/* 
+ * Note: Below functions and structure are local to dma-resv.c file, 
+ * backporting it locally. Structural changes in dma-resv in newer 
+ * kernel may lead to issues, verify the structural changes if any 
+ * related issues arises.
+ */
+
+struct dma_resv_list {
+        struct rcu_head rcu;
+        u32 num_fences, max_fences;
+        struct dma_fence __rcu *table[];
+};
+
+/* Extract the fence and usage flags from an RCU protected entry in the list. */
+static inline void dma_resv_list_entry(struct dma_resv_list *list, unsigned int index,
+                struct dma_resv *resv, struct dma_fence **fence,
+                enum dma_resv_usage *usage)
+{
+    long tmp;
+
+    tmp = (long)rcu_dereference_check(list->table[index],
+                      resv ? dma_resv_held(resv) : true);
+    *fence = (struct dma_fence *)(tmp & ~DMA_RESV_LIST_MASK);
+    if (usage)
+        *usage = tmp & DMA_RESV_LIST_MASK;
+}
+
+/* Dereference the fences while ensuring RCU rules */
+static inline struct dma_resv_list *dma_resv_fences_list(struct dma_resv *obj)
+{
+    return rcu_dereference_check(obj->fences, dma_resv_held(obj));
+}
+#endif
+
 #ifdef BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
 #define dma_resv_reserve_shared dma_resv_reserve_fences
 #endif

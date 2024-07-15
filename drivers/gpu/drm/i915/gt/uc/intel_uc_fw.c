@@ -11,6 +11,7 @@
 #include <drm/drm_print.h>
 
 #include "gem/i915_gem_lmem.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_print.h"
 #include "intel_uc_fw.h"
 #include "intel_uc_fw_abi.h"
@@ -86,13 +87,13 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_maj, guc_mmp) \
 	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 6, 8)) \
-	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 19, 2)) \
-	fw_def(DG2,          0, guc_mmp(dg2,  70, 20, 2)) \
-	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 20, 2)) \
-	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 20, 2)) \
-	fw_def(DG1,          0, guc_mmp(dg1,  70, 20, 2)) \
-	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 20, 2)) \
-	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 20, 2))
+	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 25, 0)) \
+	fw_def(DG2,          0, guc_mmp(dg2,  70, 25, 0)) \
+	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 25, 0)) \
+	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 25, 0)) \
+	fw_def(DG1,          0, guc_mmp(dg1,  70, 25, 0)) \
+	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 25, 0)) \
+	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 25, 0))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_raw, huc_mmp, huc_gsc) \
 	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 7)) \
@@ -1110,6 +1111,7 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 	struct drm_i915_gem_object *obj = uc_fw->obj;
 	struct i915_ggtt *ggtt = __uc_fw_to_gt(uc_fw)->ggtt;
 	struct i915_vma *dummy = &uc_fw->dummy;
+	intel_wakeref_t wf;
 	u32 pte_flags = 0;
 
 	dummy->node.start = uc_fw_ggtt_offset(uc_fw);
@@ -1126,10 +1128,12 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
 
-	ggtt->vm.insert_entries(&ggtt->vm, dummy,
-				i915_gem_get_pat_index(ggtt->vm.i915,
-						       I915_CACHE_NONE),
-				pte_flags);
+	with_intel_gt_pm(__uc_fw_to_gt(uc_fw), wf) {
+		ggtt->vm.insert_entries(&ggtt->vm, dummy,
+					i915_gem_get_pat_index(ggtt->vm.i915,
+						       	       I915_CACHE_NONE),
+					pte_flags);
+	}
 }
 
 static void uc_fw_unbind_ggtt(struct intel_uc_fw *uc_fw)

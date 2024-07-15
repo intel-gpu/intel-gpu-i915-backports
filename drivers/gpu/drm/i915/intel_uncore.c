@@ -144,14 +144,14 @@ fw_domain_reset(const struct intel_uncore_forcewake_domain *d)
 }
 
 static inline void
-fw_domain_arm_timer(struct intel_uncore_forcewake_domain *d)
+fw_domain_arm_timer(struct intel_uncore_forcewake_domain *d, u64 delay_ns)
 {
 	GEM_BUG_ON(d->uncore->fw_domains_timer & d->mask);
 	d->uncore->fw_domains_timer |= d->mask;
 	d->wake_count++;
 	hrtimer_start_range_ns(&d->timer,
-			       NSEC_PER_MSEC,
-			       NSEC_PER_MSEC,
+			       delay_ns,
+			       delay_ns,
 			       HRTIMER_MODE_REL);
 }
 
@@ -669,7 +669,7 @@ void intel_uncore_forcewake_get__locked(struct intel_uncore *uncore,
 
 static void __intel_uncore_forcewake_put(struct intel_uncore *uncore,
 					 enum forcewake_domains fw_domains,
-					 bool delayed)
+					 u64 delay_ns)
 {
 	struct intel_uncore_forcewake_domain *domain;
 	unsigned int tmp;
@@ -684,9 +684,9 @@ static void __intel_uncore_forcewake_put(struct intel_uncore *uncore,
 			continue;
 		}
 
-		if (delayed &&
+		if (delay_ns &&
 		    !(domain->uncore->fw_domains_timer & domain->mask))
-			fw_domain_arm_timer(domain);
+			fw_domain_arm_timer(domain, delay_ns);
 		else
 			fw_domains_put(uncore, domain->mask);
 	}
@@ -714,7 +714,8 @@ void intel_uncore_forcewake_put(struct intel_uncore *uncore,
 }
 
 void intel_uncore_forcewake_put_delayed(struct intel_uncore *uncore,
-					enum forcewake_domains fw_domains)
+					enum forcewake_domains fw_domains,
+					u64 delay_ns)
 {
 	unsigned long irqflags;
 
@@ -722,7 +723,7 @@ void intel_uncore_forcewake_put_delayed(struct intel_uncore *uncore,
 		return;
 
 	spin_lock_irqsave(&uncore->lock, irqflags);
-	__intel_uncore_forcewake_put(uncore, fw_domains, true);
+	__intel_uncore_forcewake_put(uncore, fw_domains, delay_ns);
 	spin_unlock_irqrestore(&uncore->lock, irqflags);
 }
 
@@ -1779,7 +1780,7 @@ static noinline void ___force_wake_auto(struct intel_uncore *uncore,
 	GEM_BUG_ON(fw_domains & ~uncore->fw_domains);
 
 	for_each_fw_domain_masked(domain, fw_domains, uncore, tmp)
-		fw_domain_arm_timer(domain);
+		fw_domain_arm_timer(domain, NSEC_PER_MSEC);
 
 	fw_domains_get(uncore, fw_domains);
 }

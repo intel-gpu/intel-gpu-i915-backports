@@ -5,6 +5,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/mm.h>
 #include <linux/numa.h>
 #include <linux/pagevec.h>
 #include <linux/shmem_fs.h>
@@ -18,6 +19,7 @@
 #include "i915_drv.h"
 #include "i915_gem_object.h"
 #include "i915_gemfs.h"
+#include "i915_memcpy.h"
 #include "i915_scatterlist.h"
 #include "i915_sw_fence_work.h"
 #include "i915_trace.h"
@@ -28,7 +30,7 @@ struct ras_errors {
 		struct dev_ext_attribute attr;
 		unsigned long count;
 		char *name;
-	} errors[0];
+	} errors[];
 };
 
 struct shmem_work {
@@ -142,8 +144,10 @@ static int __shmem_chunk(struct scatterlist *sg,
 		if (flags) {
 			void *ptr = kmap_atomic(page);
 
-			if (flags & SHMEM_CLEAR)
-				memset(ptr, 0, sg->length);
+			if (flags & SHMEM_CLEAR) {
+				if (unlikely(!i915_memclear_nocache(ptr, sg->length)))
+					memset(ptr, 0, sg->length);
+			}
 			if (flags & SHMEM_CLFLUSH)
 				clflush_cache_range(ptr, sg->length);
 
@@ -212,7 +216,7 @@ static int preferred_node(const struct drm_i915_gem_object *obj)
 	} else if (!obj->maxnode) {
 		nid = dev_to_node(obj->base.dev->dev);
 	} else {
-		nid = find_first_bit(obj->nodes, obj->maxnode);
+		nid = find_first_bit(get_obj_nodes(obj), obj->maxnode);
 		if (nid == obj->maxnode)
 			nid = NUMA_NO_NODE;
 	}
@@ -240,16 +244,17 @@ alloc_pages_for_object(struct drm_i915_gem_object *obj,
 		       gfp_t gfp,
 		       int order)
 {
-	struct page *page;
+	struct page *page = NULL;
 
 	if (obj->mempol == I915_GEM_CREATE_MPOL_LOCAL)
 		return alloc_pages_node(numa_node_id(), gfp | __GFP_THISNODE, order);
 
 	if (obj->mempol && obj->maxnode) {
+		const unsigned long *nodes = get_obj_nodes(obj);
 		int max = READ_ONCE(*interleave);
 		int nid = max;
 
-		for_each_set_bit_from(nid, obj->nodes, obj->maxnode) {
+		for_each_set_bit_from(nid, nodes, obj->maxnode) {
 			page = alloc_pages_node(nid, gfp | __GFP_THISNODE, order);
 			if (page) {
 				if (obj->mempol == I915_GEM_CREATE_MPOL_INTERLEAVED)
@@ -258,7 +263,7 @@ alloc_pages_for_object(struct drm_i915_gem_object *obj,
 			}
 		}
 
-		for_each_set_bit(nid, obj->nodes, max) {
+		for_each_set_bit(nid, nodes, max) {
 			page = alloc_pages_node(nid, gfp | __GFP_THISNODE, order);
 			if (page) {
 				if (obj->mempol == I915_GEM_CREATE_MPOL_INTERLEAVED)
@@ -266,6 +271,9 @@ alloc_pages_for_object(struct drm_i915_gem_object *obj,
 				return page;
 			}
 		}
+
+		if (!(gfp & __GFP_DIRECT_RECLAIM))
+			return page; /* Try again with a smaller pagesize */
 	}
 
 	if (obj->mempol != I915_GEM_CREATE_MPOL_BIND)
@@ -274,7 +282,8 @@ alloc_pages_for_object(struct drm_i915_gem_object *obj,
 	return page;
 }
 
-static unsigned long shmem_create_mode(const struct drm_i915_gem_object *obj)
+static unsigned long
+shmem_create_mode(const struct drm_i915_gem_object *obj, bool movntda)
 {
 	unsigned long flags;
 
@@ -283,9 +292,11 @@ static unsigned long shmem_create_mode(const struct drm_i915_gem_object *obj)
 	    !(obj->flags & I915_BO_SKIP_CLEAR)) {
 		if (!want_init_on_alloc(0))
 			flags |= SHMEM_CLEAR;
+	}
 
-		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
+	if (i915_gem_object_can_bypass_llc(obj) ||
+	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE)) {
+		if (!(flags & SHMEM_CLEAR && movntda))
 			flags |= SHMEM_CLFLUSH;
 	}
 
@@ -297,7 +308,7 @@ static int shmem_create(struct shmem_work *wrk)
 	const unsigned int limit = boot_cpu_data.x86_cache_size << 9 ?: SZ_8M;
 	const uint32_t max_segment = i915_sg_segment_size();
 	struct drm_i915_gem_object *obj = wrk->obj;
-	unsigned long flags = shmem_create_mode(obj);
+	unsigned long flags = shmem_create_mode(obj, i915_memclear_nocache(NULL, 0));
 	u64 remain = obj->base.size, start;
 	struct sg_table *sgt = wrk->pages;
 	struct shmem_chunk *chunk = NULL;
@@ -351,7 +362,7 @@ static int shmem_create(struct shmem_work *wrk)
 
 		if (obj->maxnode &&
 		    (page_to_nid(page) >= obj->maxnode ||
-		     !test_bit(page_to_nid(page), obj->nodes)))
+		     !test_bit(page_to_nid(page), get_obj_nodes(obj))))
 			ras_error(obj);
 
 		SetPagePrivate2(page);
@@ -459,23 +470,18 @@ static int shmem_swapin(struct shmem_work *wrk)
 {
 	struct drm_i915_gem_object *obj = wrk->obj;
 	const unsigned int num_pages = obj->base.size >> PAGE_SHIFT;
+	const unsigned long flags = shmem_create_mode(obj, false);
 	struct address_space *mapping = obj->base.filp->f_mapping;
 	struct sg_table *sgt = wrk->pages;
 	struct shmem_chunk *chunk = NULL;
 	struct i915_sw_fence fence;
 	struct scatterlist *sg;
 	unsigned long spread;
-	unsigned long flags;
 	unsigned long n;
 	int err;
 
 	spread = div_u64(obj->base.size, cpumask_weight(to_i915(obj->base.dev)->mm.sched->cpumask) + 1);
 	spread = max_t(unsigned long, roundup_pow_of_two(spread), SZ_2M);
-
-	flags = 0;
-	if (i915_gem_object_can_bypass_llc(obj) ||
-	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
-		flags |= SHMEM_CLFLUSH;
 
 	err = 0;
 	i915_sw_fence_init_onstack(&fence);
@@ -530,10 +536,10 @@ static int shmem_swapin(struct shmem_work *wrk)
 				    mapping, wrk->policy,
 				    n, num_pages, flags,
 				    &fence.error);
+		i915_sw_fence_set_error_once(&fence, err);
 	}
 
 	if (n) {
-		i915_sw_fence_set_error_once(&fence, err);
 		i915_sw_fence_wait(&fence);
 		err = fence.error;
 	}
@@ -542,6 +548,8 @@ static int shmem_swapin(struct shmem_work *wrk)
 	if (err)
 		goto err;
 
+	GEM_BUG_ON(file_inode(obj->base.filp)->i_blocks != obj->base.size / 512);
+	sg_mark_end(&sg[num_pages - n - 1]);
 	obj->mm.page_sizes =
 		i915_sg_compact(sgt, i915_gem_sg_segment_size(obj));
 
@@ -677,28 +685,18 @@ err_free:
 static void
 shmem_truncate(struct drm_i915_gem_object *obj)
 {
+	struct inode *inode = file_inode(obj->base.filp);
+
+	if (!inode->i_blocks)
+		return;
+
 	/*
 	 * Our goal here is to return as much of the memory as
 	 * is possible back to the system as we are called from OOM.
 	 * To do this we must instruct the shmfs to drop all of its
 	 * backing pages, *now*.
 	 */
-	shmem_truncate_range(file_inode(obj->base.filp), 0, (loff_t)-1);
-}
-
-void
-__i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
-				struct sg_table *pages,
-				bool needs_clflush)
-{
-	GEM_BUG_ON(obj->mm.madv == __I915_MADV_PURGED);
-
-	if (needs_clflush &&
-	    (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0 &&
-	    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
-		drm_clflush_sg(pages);
-
-	__start_cpu_write(obj);
+	shmem_truncate_range(inode, 0, (loff_t)-1);
 }
 
 static void check_release_pagevec(struct pagevec *pvec)
@@ -725,8 +723,7 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 	if (kref_read(&obj->base.refcount) == 0)
 		return false;
 
-	if (i915_gem_object_is_volatile(obj) ||
-	    obj->mm.madv != I915_MADV_WILLNEED)
+	if (i915_gem_object_is_purgeable(obj))
 		return false;
 
 	if (obj->flags & I915_BO_ALLOC_USER && !i915_gem_object_inuse(obj))
@@ -850,6 +847,7 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct address_space *mapping = obj->base.filp->f_mapping;
 	struct inode *inode = obj->base.filp->f_inode;
+	bool clflush = shmem_create_mode(obj, false) & SHMEM_CLFLUSH;
 	bool do_swap = need_swap(obj);
 	struct sgt_iter sgt_iter;
 	struct pagevec pvec;
@@ -864,13 +862,6 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 
 	pagevec_init(&pvec);
 	if (inode->i_blocks) {
-		bool clflush;
-
-		clflush = false;
-		if (i915_gem_object_can_bypass_llc(obj) ||
-		    !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
-			clflush = true;
-
 		for_each_sgt_page(page, sgt_iter, pages) {
 			GEM_BUG_ON(PagePrivate2(page));
 
@@ -902,6 +893,12 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
 
 			for (i = 0; i < BIT(order); i++) {
 				struct page *p = nth_page(page, i);
+
+				if (clflush) {
+					void *ptr = kmap_atomic(page);
+					clflush_cache_range(ptr, PAGE_SIZE);
+					kunmap_atomic(ptr);
+				}
 
 				lock_page(p);
 
@@ -1086,8 +1083,7 @@ static void shmem_release(struct drm_i915_gem_object *obj)
 
 const struct drm_i915_gem_object_ops i915_gem_shmem_ops = {
 	.name = "i915_gem_object_shmem",
-	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE |
-		 I915_GEM_OBJECT_IS_SHRINKABLE,
+	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE,
 
 	.get_pages = shmem_get_pages,
 	.put_pages = shmem_put_pages,
@@ -1121,6 +1117,34 @@ static int __create_shmem(struct drm_i915_private *i915,
 	return 0;
 }
 
+/* See sum_zone_node_page_state() */
+static unsigned long sum_node_pages(int nid, enum zone_stat_item item)
+{
+	struct zone *zones = NODE_DATA(nid)->node_zones;
+	unsigned long count = 0;
+	int i;
+
+	for (i = 0; i < MAX_NR_ZONES; i++)
+		count += zone_page_state(zones + i, item);
+
+	return count;
+}
+
+static bool can_mpol_bind(struct drm_i915_gem_object *obj, resource_size_t sz)
+{
+	const unsigned long *nodes = get_obj_nodes(obj);
+	unsigned long nr_free;
+	unsigned long nid;
+
+	if (bitmap_weight(nodes, obj->maxnode) > 1)
+		return true;
+
+	nid = find_first_bit(nodes, obj->maxnode);
+	nr_free = sum_node_pages(nid, NR_FREE_PAGES);
+
+	return (sz >> PAGE_SHIFT) <= nr_free;
+}
+
 static int shmem_object_init(struct intel_memory_region *mem,
 			     struct drm_i915_gem_object *obj,
 			     resource_size_t size,
@@ -1131,6 +1155,15 @@ static int shmem_object_init(struct intel_memory_region *mem,
 	unsigned int cache_level;
 	gfp_t mask;
 	int ret;
+
+	/*
+	 * If the user requests to use only a specific domain, check there
+	 * is sufficient space up front. In return, we will try to keep
+	 * the object resident during memory pressure.
+	 */
+	if (obj->mempol == I915_GEM_CREATE_MPOL_BIND &&
+	    !can_mpol_bind(obj, size))
+		return -ENOMEM;
 
 	ret = __create_shmem(i915, &obj->base, size);
 	if (ret)
@@ -1173,6 +1206,8 @@ static int shmem_object_init(struct intel_memory_region *mem,
 		 */
 		cache_level = I915_CACHE_LLC;
 	else
+		cache_level = I915_CACHE_NONE;
+	if (i915_run_as_guest())
 		cache_level = I915_CACHE_NONE;
 
 	i915_gem_object_set_cache_coherency(obj, cache_level);

@@ -209,7 +209,7 @@ intel_hpd_irq_storm_switch_to_polling(struct drm_i915_private *dev_priv)
 	/* Enable polling and queue hotplug re-enabling. */
 	if (hpd_disabled) {
 		drm_kms_helper_poll_enable(dev);
-		mod_delayed_work(system_wq, &dev_priv->hotplug.reenable_work,
+		mod_delayed_work(dev_priv->display.wq, &dev_priv->hotplug.reenable_work,
 				 msecs_to_jiffies(HPD_STORM_REENABLE_DELAY));
 	}
 }
@@ -337,7 +337,7 @@ static void i915_digport_work_func(struct work_struct *work)
 		spin_lock_irq(&dev_priv->irq_lock);
 		dev_priv->hotplug.event_bits |= old_bits;
 		spin_unlock_irq(&dev_priv->irq_lock);
-		queue_delayed_work(system_wq, &dev_priv->hotplug.hotplug_work, 0);
+		queue_delayed_work(dev_priv->display.wq, &dev_priv->hotplug.hotplug_work, 0);
 	}
 }
 
@@ -445,7 +445,7 @@ static void i915_hotplug_work_func(struct work_struct *work)
 		dev_priv->hotplug.retry_bits |= retry;
 		spin_unlock_irq(&dev_priv->irq_lock);
 
-		mod_delayed_work(system_wq, &dev_priv->hotplug.hotplug_work,
+		mod_delayed_work(dev_priv->display.wq, &dev_priv->hotplug.hotplug_work,
 				 msecs_to_jiffies(HPD_RETRY_DELAY));
 	}
 }
@@ -576,7 +576,7 @@ void intel_hpd_irq_handler(struct drm_i915_private *dev_priv,
 	if (queue_dig)
 		queue_work(dev_priv->hotplug.dp_wq, &dev_priv->hotplug.dig_port_work);
 	if (queue_hp)
-		queue_delayed_work(system_wq, &dev_priv->hotplug.hotplug_work, 0);
+		queue_delayed_work(dev_priv->display.wq, &dev_priv->hotplug.hotplug_work, 0);
 }
 
 /**
@@ -687,7 +687,7 @@ void intel_hpd_poll_enable(struct drm_i915_private *dev_priv)
 	 * As well, there's no issue if we race here since we always reschedule
 	 * this worker anyway
 	 */
-	schedule_work(&dev_priv->hotplug.poll_init_work);
+	queue_work(dev_priv->display.wq, &dev_priv->hotplug.poll_init_work);
 }
 
 /**
@@ -715,7 +715,7 @@ void intel_hpd_poll_disable(struct drm_i915_private *dev_priv)
 		return;
 
 	WRITE_ONCE(dev_priv->hotplug.poll_enabled, false);
-	schedule_work(&dev_priv->hotplug.poll_init_work);
+	queue_work(dev_priv->display.wq, &dev_priv->hotplug.poll_init_work);
 }
 
 void intel_hpd_init_work(struct drm_i915_private *dev_priv)

@@ -191,6 +191,20 @@ __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 	intel_memory_region_free_pages(mem, blocks, dirty);
 }
 
+static int size_index(unsigned long sz)
+{
+	if (sz >> 30)
+		return 3;
+
+	if (sz >> 20)
+		return 2;
+
+	if (sz >> 16)
+		return 1;
+
+	return 0;
+}
+
 void intel_memory_region_print(struct intel_memory_region *mem,
 			       resource_size_t target,
 			       struct drm_printer *p)
@@ -199,7 +213,6 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 		const char *name;
 		struct list_head *list;
 	} objects[] = {
-		{ "purgeable", &mem->objects.purgeable },
 		{ "migratable", &mem->objects.migratable },
 		{ "evictable", &mem->objects.list },
 		{ "pagetables", &mem->objects.pt },
@@ -208,6 +221,8 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	int i;
 
 	drm_printf(p, "memory region: %s\n", mem->name);
+	drm_printf(p, "  chunk size: %pa\n", &mem->mm.chunk_size);
+	drm_printf(p, "  page size:  %pa\n", &mem->min_page_size);
 	drm_printf(p, "  parking: %s\n", str_yes_no(!completion_done(&mem->parking)));
 	drm_printf(p, "  clear-on-free: %s\n", str_enabled_disabled(test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)));
 	drm_printf(p, "  total:  %pa\n", &mem->total);
@@ -220,12 +235,16 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	for (o = objects; o->name; o++) {
 		resource_size_t active = 0, pinned = 0, avail = 0;
 		struct drm_i915_gem_object *obj;
+		unsigned long sizes[4] = {};
+		unsigned long bind[4] = {};
 		unsigned long bookmark = 0;
 		unsigned long empty = 0;
 		unsigned long count = 0;
 
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
 		list_for_each_entry(obj, o->list, mm.region.link) {
+			struct i915_vma *vma;
+
 			if (!obj->mm.region.mem) {
 				bookmark++;
 				continue;
@@ -242,15 +261,27 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 				pinned += obj->base.size;
 			else
 				avail += obj->base.size;
+
+			sizes[size_index(obj->mm.page_sizes)]++;
+
+			rcu_read_lock();
+			list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
+				if (i915_vma_is_bound(vma, I915_VMA_LOCAL_BIND))
+					bind[size_index(vma->page_sizes)]++;
+			}
+			rcu_read_unlock();
+
 			count++;
 		}
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 		if (!count)
 			continue;
 
 		drm_printf(p,
-			   "  %s: { bookmark:%lu, empty:%lu, count:%lu, active:%pa, pinned:%pa, avail:%pa }\n",
-			   o->name, bookmark, empty, count, &active, &pinned, &avail);
+			   "  %s: { bookmark:%lu, empty:%lu, count:%lu, active:%pa, pinned:%pa, avail:%p, sizes:[%lu, %lu, %lu, %lu], bind:[%lu, %lu, %lu, %lu] }\n",
+			   o->name, bookmark, empty, count, &active, &pinned, &avail,
+			   sizes[0], sizes[1], sizes[2], sizes[3],
+			   bind[0], bind[1], bind[2], bind[3]);
 	}
 
 	if (mem->mm.size) {
@@ -259,7 +290,7 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			const u64 sz = mem->mm.chunk_size << i;
 			struct i915_buddy_block *block;
 			struct i915_buddy_list *bl;
-			u64 clear, dirty;
+			u64 clear, dirty, active;
 			long count = 0;
 
 			dirty = 0;
@@ -275,13 +306,19 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			spin_unlock(&bl->lock);
 
 			clear = 0;
+			active = 0;
 			bl = &mem->mm.clear_list[i];
 			spin_lock(&bl->lock);
 			list_for_each_entry(block, &bl->list, link) {
 				if (!block->node.list)
 					continue;
 
-				clear += sz;
+				if (i915_buddy_block_is_active(block))
+					active += sz;
+				else if (i915_buddy_block_is_clear(block))
+					clear += sz;
+				else
+					dirty += sz;
 				count++;
 			}
 			spin_unlock(&bl->lock);
@@ -289,10 +326,21 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			if (!count)
 				continue;
 
-			drm_printf(p, "  - [%d]: { count:%lu, clear:%llu, dirty:%llu }\n",
-				   i, count, clear, dirty);
+			drm_printf(p, "  - [%d]: { count:%lu, active:%llu, clear:%llu, dirty:%llu }\n",
+				   i, count, active, clear, dirty);
 		}
 	}
+}
+
+static bool smem_allow_eviction(struct drm_i915_gem_object *obj)
+{
+	if (obj->memory_mask != REGION_SMEM)
+		return true;
+
+	if (obj->mempol != I915_GEM_CREATE_MPOL_BIND)
+		return true;
+
+	return bitmap_weight(get_obj_nodes(obj), obj->maxnode) > 1;
 }
 
 static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
@@ -302,7 +350,7 @@ static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
 		return true;
 
 	if (obj->memory_mask & REGION_SMEM)
-		return true;
+		return smem_allow_eviction(obj);
 
 	return i915_allows_overcommit(to_i915(obj->base.dev));
 }
@@ -314,7 +362,7 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 			      int chunk)
 {
 	const unsigned long end_time =
-		jiffies +  msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
+		jiffies + (ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 1);
 	struct list_head *phases[] = {
 		/*
 		 * Purgeable objects are deemed to be free by userspace
@@ -331,10 +379,8 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 		 * out and so impose their own execution barrier, similar
 		 * to waiting for work completion on the purgeable lists.
 		 */
-		&mem->objects.purgeable,
 		&mem->objects.migratable,
 		&mem->objects.list,
-		&mem->objects.purgeable,
 		NULL,
 	};
 	struct intel_memory_region_link bookmark = { .age = jiffies };
@@ -365,10 +411,14 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 next:
 	timeout = 0;
 	scan = false;
-	keepalive = ww && *phase == &mem->objects.list;
-	if (ww && phase > phases && !keepalive)
-		timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
-	spin_lock(&mem->objects.lock);
+	keepalive = true;
+
+	while (list_empty(*phase)) {
+		if (!*++phase)
+			goto out;
+	}
+
+	spin_lock_irq(&mem->objects.lock);
 	list_add_tail(&end.link, *phase);
 	list_for_each_entry(pos, *phase, link) {
 		struct drm_i915_gem_object *obj;
@@ -385,7 +435,7 @@ next:
 					list_move_tail(&end.link, *phase);
 					age = bookmark.age;
 				} else {
-					timeout = msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
+					timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
 					keepalive = false;
 				}
 			}
@@ -405,39 +455,56 @@ next:
 		if (ww && ww == i915_gem_get_locking_ctx(obj))
 			continue;
 
-		list_add(&bookmark.link, &pos->link);
+		if (!ww && dma_resv_is_locked(obj->base.resv))
+			continue;
+
+		list_replace(&pos->link, &bookmark.link);
 		if (keepalive) {
-			list_move_tail(&pos->link, *phase);
-
-			if (i915_gem_get_locking_ctx(obj))
+			if (!(obj->flags & I915_BO_ALLOC_USER)) {
+				list_add_tail(&pos->link, *phase);
 				goto delete_bookmark;
+			}
 
-			if (i915_gem_object_is_active(obj))
+			if (dma_resv_is_locked(obj->base.resv)) {
+				list_add_tail(&pos->link, *phase);
 				goto delete_bookmark;
+			}
 
-			if (!time_before(obj->mm.region.age, age))
-				goto delete_bookmark;
+			if (!i915_gem_object_is_purgeable(obj)) {
+				if (!time_before(obj->mm.region.age, age)) {
+					list_add(&pos->link, &end.link);
+					goto delete_bookmark;
+				}
 
-			/*
-			 * On the first pass, be picky with our evictions
-			 * and try to limit to only evicting just enough
-			 * to satisfy our request. Everything we evict
-			 * is likely to try and make space for itself,
-			 * perpetuating the problem and multiplying the
-			 * swap bandwidth required.
-			 */
-			if (obj->base.size > 2 * (target - found))
+				/*
+				 * On the first pass, be picky with our evictions
+				 * and try to limit to only evicting just enough
+				 * to satisfy our request. Everything we evict
+				 * is likely to try and make space for itself,
+				 * perpetuating the problem and multiplying the
+				 * swap bandwidth required.
+				 */
+				if (2 * obj->base.size < (target - found) ||
+				    obj->base.size > 2 * (target - found)) {
+					list_add(&pos->link, &end.link);
+					goto delete_bookmark;
+				}
+			}
+
+			if (i915_gem_object_is_active(obj)) {
+				list_add(&pos->link, &end.link);
 				goto delete_bookmark;
+			}
 		}
+		INIT_LIST_HEAD(&pos->link);
 
 		if (!i915_gem_object_get_rcu(obj)) {
-			list_del_init(&pos->link);
 			list_replace_init(&obj->mm.blocks, &blocks);
 			found += obj->base.size;
 			obj = NULL;
 		}
 
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 
 		if (!obj) {
 			__intel_memory_region_put_pages_buddy(mem,
@@ -453,20 +520,20 @@ next:
 						 timeout);
 		if (timeout < 0) {
 			timeout = 0;
-			goto put;
+			goto relock;
 		}
 
 		err = __i915_gem_object_lock_to_evict(obj, ww);
 		if (err)
-			goto put;
+			goto relock;
 
 		if (!i915_gem_object_has_pages(obj))
 			goto unlock;
 
-		scan = true;
 		if (i915_gem_object_is_active(obj))
 			goto unlock;
 
+		scan = true;
 		i915_gem_object_move_notify(obj);
 
 		err = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_KEEP_RESIDENT);
@@ -485,11 +552,15 @@ next:
 
 unlock:
 		i915_gem_object_unlock(obj);
-put:
-		i915_gem_object_put(obj);
 relock:
 		cond_resched();
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
+		if (obj) {
+			if (i915_gem_object_has_pages(obj) && list_empty(&pos->link))
+				list_add_tail(&pos->link, &bookmark.link);
+
+			i915_gem_object_put(obj);
+		}
 delete_bookmark:
 		__list_del_entry(&bookmark.link);
 		if (err == -EDEADLK)
@@ -502,7 +573,7 @@ delete_bookmark:
 		pos = &bookmark;
 	}
 	__list_del_entry(&end.link);
-	spin_unlock(&mem->objects.lock);
+	spin_unlock_irq(&mem->objects.lock);
 	if (err || found >= target)
 		return err;
 
@@ -510,6 +581,9 @@ delete_bookmark:
 	intel_gt_retire_requests(mem->gt);
 	if (*++phase)
 		goto next;
+
+out:
+	scan |= i915_px_cache_release(&mem->gt->px_cache);
 
 	/*
 	 * Keep retrying the allocation until there is nothing more to evict.
@@ -524,10 +598,8 @@ delete_bookmark:
 	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
 		return 0;
 
-	scan |= i915_px_cache_release(&mem->gt->px_cache);
-
 	/* XXX optimistic busy wait for transient pins */
-	if (scan && time_before(jiffies, end_time)) {
+	if (scan && !time_after(jiffies, end_time)) {
 		yield();
 		phase = phases;
 		goto next;
@@ -772,7 +844,6 @@ intel_memory_region_create(struct intel_gt *gt,
 
 	spin_lock_init(&mem->objects.lock);
 	INIT_LIST_HEAD(&mem->objects.list);
-	INIT_LIST_HEAD(&mem->objects.purgeable);
 	INIT_LIST_HEAD(&mem->objects.migratable);
 	INIT_LIST_HEAD(&mem->objects.pt);
 

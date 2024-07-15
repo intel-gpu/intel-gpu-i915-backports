@@ -663,10 +663,7 @@ enum intel_guc_recv_message {
 	INTEL_GUC_RECV_MSG_EXCEPTION = BIT(30),
 };
 
-#define INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc) \
-	((intel_guc_ct_enabled(&(guc)->ct)) && \
-	 (intel_guc_submission_is_used(guc)) && \
-	 (GRAPHICS_VER(guc_to_gt((guc))->i915) >= 12))
+#define INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc) true
 #define INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc) \
 	(INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc) && \
 	HAS_SELECTIVE_TLB_INVALIDATION(guc_to_gt(guc)->i915))

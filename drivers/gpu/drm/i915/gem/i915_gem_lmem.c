@@ -345,10 +345,15 @@ static struct intel_context *get_clear_free_context(const struct intel_gt *gt)
 {
 	struct intel_context *ce;
 
-	/* Poor man's load balancing; steal bcs0 if unused */
 	ce = __get_clear_free_context(gt);
-	if (ce && !intel_context_is_active(ce) && !(gt->ccs.active & BIT(BCS0)))
-		ce = get_clear_idle_context(gt);
+	if (ce && !intel_context_is_active(ce)) {
+		struct intel_context *idle;
+
+		/* Poor man's load balancing; steal bcs0 if unused */
+		idle = get_clear_idle_context(gt);
+		if (idle && !(atomic_read(&gt->user_engines) & idle->engine->mask))
+			return idle;
+	}
 
 	return ce;
 }
@@ -514,13 +519,14 @@ bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 }
 
 struct drm_i915_gem_object *
-i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
+i915_gem_object_create_lmem_from_data(struct intel_memory_region *mem,
 				      const void *data, size_t size)
 {
 	struct drm_i915_gem_object *obj;
+	intel_wakeref_t wf;
 	void *map;
 
-	obj = i915_gem_object_create_region(region,
+	obj = i915_gem_object_create_region(mem,
 					    round_up(size, PAGE_SIZE),
 					    I915_BO_ALLOC_CONTIGUOUS);
 	if (IS_ERR(obj))
@@ -532,7 +538,8 @@ i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
 		return map;
 	}
 
-	memcpy(map, data, size);
+	with_intel_gt_pm(mem->gt, wf)
+		memcpy(map, data, size);
 
 	i915_gem_object_flush_map(obj);
 	__i915_gem_object_release_map(obj);
@@ -702,7 +709,7 @@ emit_pte(struct i915_request *rq,
 		*cs++ = lower_32_bits(pd_offset + 8 * pkt);
 		*cs++ = upper_32_bits(pd_offset + 8 * pkt);
 		while (len--) {
-			u64 dma;
+			u64 dma = pte->dma + pte->curr;
 
 			GEM_BUG_ON(!pte->sgp);
 			GEM_BUG_ON(!pte->dma);
@@ -717,18 +724,17 @@ emit_pte(struct i915_request *rq,
 			 * the following 64K.
 			 */
 			if (IS_ALIGNED(va, SZ_64K)) {
-				if (IS_ALIGNED(pte->curr, SZ_64K) &&
+				if (IS_ALIGNED(dma, SZ_64K) &&
 				    pte->max - pte->curr >= SZ_64K &&
-				    count - pkt >= 16)
+				    len >= 15)
 					encode |= GEN12_PTE_PS64;
 				else
 					encode &= ~GEN12_PTE_PS64;
 			}
 			va += SZ_4K;
 
-			dma = encode | (pte->dma + pte->curr);
-			*cs++ = lower_32_bits(dma);
-			*cs++ = upper_32_bits(dma);
+			*cs++ = lower_32_bits(dma | encode);
+			*cs++ = upper_32_bits(dma | encode);
 
 			pte->curr += SZ_4K;
 			if (pte->curr < pte->max)
@@ -950,7 +956,7 @@ swap_blt(struct intel_context *ce,
 	const bool use_pvc_memcpy = HAS_LINK_COPY_ENGINES(ce->engine->i915);
 	const bool use_flat_ccs = !use_pvc_memcpy && object_needs_flat_ccs(lmem);
 	const struct intel_migrate_window *w = ce->private;
-	const u64 encode = ce->vm->pte_encode(0, smem->pat_index, 0);
+	const u64 encode = ce->vm->pte_encode(0, i915_gem_object_pat_index(smem), 0);
 	const int counter = INTEL_GT_SWAPIN_CYCLES + 2 * to_smem;
 	u64 pte_window, pte_end, pd_offset;
 	const u32 step = w->swap_chunk;
@@ -1248,7 +1254,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 
@@ -1477,6 +1482,8 @@ struct swap_work {
 	struct await_fences *proxy;
 	struct drm_i915_gem_object *lmem;
 	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
 };
 
 static int swap_work(struct dma_fence_work *base)
@@ -1529,7 +1536,9 @@ static void swap_release(struct dma_fence_work *base)
 
 	i915_gem_object_unpin_pages(smem);
 	i915_gem_object_put(smem);
+
 	i915_gem_object_put(wrk->lmem);
+	intel_gt_pm_put_async(wrk->gt, wrk->wakeref);
 }
 
 static const struct dma_fence_work_ops swap_ops = {
@@ -1552,6 +1561,9 @@ static int lmem_swapin(struct drm_i915_gem_object *lmem)
 	if (!sw)
 		return -ENOMEM;
 
+	sw->gt = lmem->mm.region.mem->gt;
+	sw->wakeref = intel_gt_pm_get(sw->gt);
+
 	sw->proxy = await_create(se, 1, 0);
 	if (!sw->proxy) {
 		err = -ENOMEM;
@@ -1561,6 +1573,9 @@ static int lmem_swapin(struct drm_i915_gem_object *lmem)
 	dma_fence_work_init(&sw->base, &swap_ops, se);
 	sw->lmem = i915_gem_object_get(lmem);
 	sw->smem = smem;
+
+	if (lmem->flags & I915_BO_SYNC_HINT)
+		smem->flags |= I915_BO_SYNC_HINT;
 
 	err = i915_gem_object_pin_pages(smem);
 	if (err)
@@ -1589,6 +1604,7 @@ err_unpin:
 err_put:
 	i915_gem_object_put(lmem);
 err:
+	intel_gt_pm_put(sw->gt, sw->wakeref);
 	kfree(sw->proxy);
 	kfree(sw);
 	ras_error(to_i915(lmem->base.dev), err);
@@ -1874,7 +1890,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 
@@ -1961,6 +1976,8 @@ use_cpu_clear(struct drm_i915_gem_object *obj, unsigned int flags)
 struct clear_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *lmem;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
 	struct await_chain cb[];
 };
 
@@ -1977,6 +1994,7 @@ static void clear_release(struct dma_fence_work *base)
 	struct clear_work *wrk = container_of(base, typeof(*wrk), base);
 
 	i915_gem_object_put(wrk->lmem);
+	intel_gt_pm_put_async(wrk->gt, wrk->wakeref);
 }
 
 static const struct dma_fence_work_ops clear_ops = {
@@ -2003,6 +2021,9 @@ static int async_clear(struct drm_i915_gem_object *obj)
 	dma_fence_work_init(&c->base, &clear_ops,
 			    to_i915(obj->base.dev)->mm.sched);
 	c->lmem = i915_gem_object_get(obj);
+
+	c->gt = obj->mm.region.mem->gt;
+	c->wakeref = intel_gt_pm_get(c->gt);
 
 	count = 0;
 	list_for_each_entry(block, &obj->mm.blocks, link) {
@@ -2140,15 +2161,23 @@ static int lmem_clear(struct drm_i915_gem_object *obj)
 		    /* Saturated? Use the CPU instead (safety valve) */
 		    intel_context_throttle(ce, 0))
 			flags |= I915_BO_CPU_CLEAR;
+
+		/* recycling dirty memory; proactively clear on release */
+		set_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
 	}
 
-	/* Avoid misspending PCI credits between the GT; must use BLT clears */
-	if (ce && gt->info.id > 0 && intel_gt_pm_is_awake(gt))
-		flags &= ~I915_BO_CPU_CLEAR;
+	/*
+	 * Wake the device for both CPU and/or GPU writes into lmem.
+	 *
+	 * Generally this path is called just prior to user execution, so
+	 * waking up the GT now should benefit the subsequent operation on the
+	 * memory.
+	 */
+	wf = intel_gt_pm_get(gt);
 
-	/* Clear is too small to benefit from waking up the GPU */
-	if (ce && obj->base.size < SZ_2M && !(wf = intel_gt_pm_get_if_awake(gt)))
-		flags |= I915_BO_CPU_CLEAR;
+	/* Avoid misspending PCI credits between the GT; must use BLT clears */
+	if (ce && gt->info.id > 0)
+		flags &= ~I915_BO_CPU_CLEAR;
 
 	if (use_cpu_clear(obj, flags))
 		err = async_clear(obj);
@@ -2157,11 +2186,7 @@ static int lmem_clear(struct drm_i915_gem_object *obj)
 	else
 		err = await_blt(obj, AWAIT_NO_ERROR);
 
-	if (wf)
-		intel_gt_pm_put(gt, wf);
-
-	/* recycling dirty memory; proactively clear on release */
-	set_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
+	intel_gt_pm_put(gt, wf);
 	return err;
 }
 
@@ -2273,10 +2298,7 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 	if (i915_gem_object_migrate_has_error(obj))
 		return false;
 
-	if (i915_gem_object_is_volatile(obj))
-		return false;
-
-	if (obj->mm.madv != I915_MADV_WILLNEED)
+	if (i915_gem_object_is_purgeable(obj))
 		return false;
 
 	return !freed(obj);
@@ -2553,12 +2575,25 @@ out_put:
 	return ret;
 }
 
+static void
+lmem_truncate(struct drm_i915_gem_object *obj)
+{
+	struct drm_i915_gem_object *swp;
+
+	swp = fetch_and_zero(&obj->swapto);
+	if (swp) {
+		swp->mm.madv = I915_MADV_DONTNEED;
+		i915_gem_object_put(swp);
+	}
+}
+
 const struct drm_i915_gem_object_ops i915_gem_lmem_obj_ops = {
 	.name = "i915_gem_object_lmem",
 	.flags = I915_GEM_OBJECT_HAS_IOMEM,
 
 	.get_pages = lmem_get_pages,
 	.put_pages = lmem_put_pages,
+	.truncate  = lmem_truncate,
 	.release = i915_gem_object_release_memory_region,
 
 	.pread = lmem_pread,
@@ -2887,14 +2922,6 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 		return;
 	}
 
-	/* Secondarly clear contexts are optional and can fallback to primary */
-	m->clear[CLEAR_IDLE]  = create_pinned(main_copy_engine(gt), w);
-	m->clear[CLEAR_FREE]  = create_pinned(rsvd_copy_engine(gt), w);
-	for (i = 1; i < ARRAY_SIZE(m->clear); i++) {
-		if (IS_ERR(m->clear[i]))
-			m->clear[i] = m->clear[0];
-	}
-
 	for (i = 0; i < ARRAY_SIZE(m->swapin); i++)
 		if (setup_pte_window(gt, &m->swapin[i]))
 			return;
@@ -3000,6 +3027,14 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 	for (i = 0; i < ARRAY_SIZE(m->swapout); i++) {
 		m->swapout[i].clear_chunk = w->clear_chunk;
 		m->swapout[i].swap_chunk =  w->swap_chunk;
+	}
+
+	/* Secondarly clear contexts are optional and can fallback to primary */
+	m->clear[CLEAR_IDLE] = create_pinned(main_copy_engine(gt), w);
+	m->clear[CLEAR_FREE] = create_pinned(rsvd_copy_engine(gt), w);
+	for (i = 1; i < ARRAY_SIZE(m->clear); i++) {
+		if (IS_ERR(m->clear[i]))
+			m->clear[i] = m->clear[0];
 	}
 
 	__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, false);
@@ -3235,7 +3270,6 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 	struct list_head *phases[] = {
 		&gt->lmem->objects.list,
 		&gt->lmem->objects.migratable,
-		&gt->lmem->objects.purgeable,
 		&gt->lmem->objects.pt,
 		NULL
 	}, **phase = phases;
@@ -3292,7 +3326,7 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 	if (err)
 		goto err_buddy;
 
-	spin_lock(&mr->objects.lock);
+	spin_lock_irq(&mr->objects.lock);
 	do list_for_each_entry(pos, *phase, link) {
 		struct drm_i915_gem_object *obj;
 		struct list_head *blocks;
@@ -3308,7 +3342,7 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 
 		list_add(&bookmark.link, &pos->link);
 		blocks = &obj->mm.blocks;
-		spin_unlock(&mr->objects.lock);
+		spin_unlock_irq(&mr->objects.lock);
 
 		list_for_each_entry(block, blocks, link) {
 			node = kzalloc(sizeof(*node), GFP_KERNEL);
@@ -3323,11 +3357,11 @@ int i915_gem_lmemtest(struct intel_gt *gt, u64 *error_bits)
 				goto err_buddy;
 		}
 
-		spin_lock(&mr->objects.lock);
+		spin_lock_irq(&mr->objects.lock);
 		__list_del_entry(&bookmark.link);
 		pos = &bookmark;
 	} while (*++phase);
-	spin_unlock(&mr->objects.lock);
+	spin_unlock_irq(&mr->objects.lock);
 
 	/* Stall execution on all other engines */
 	sema = memset32(hwsp(ce, semaphore), 0, 4);
@@ -3684,7 +3718,6 @@ exit:
 
 skip:
 	i915_request_set_error_once(rq, err);
-	__i915_request_skip(rq);
 	goto submit;
 }
 

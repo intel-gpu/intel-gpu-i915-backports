@@ -678,6 +678,7 @@ static int pf_guc_accepts_extended_update_config_hxg(void *arg)
 	config(TILE_MASK) \
 	config(EXEC_QUANTUM) \
 	config(PREEMPT_TIMEOUT) \
+	config(SCHED_PRIORITY) \
 	IOV_THRESHOLDS(config_threshold) \
 	/*end*/
 
@@ -765,6 +766,9 @@ static int pf_update_vf_klvs(struct intel_iov *iov, u32 vfid,
 			continue;
 		if (key == GUC_KLV_VF_CFG_TILE_MASK_KEY && !HAS_REMOTE_TILES(iov_to_i915(iov)))
 			continue;
+		if (key == GUC_KLV_VF_CFG_SCHED_PRIORITY_KEY &&
+		    !IS_ENABLED(CPTCFG_DRM_I915_SELFTEST_BROKEN))
+			continue;
 
 		switch (len) {
 		case 1:
@@ -800,6 +804,7 @@ static int pf_guc_accepts_config_zero(void *arg)
 		{ MAKE_GUC_KLV(VF_CFG_NUM_DOORBELLS), .value32 = 0 },
 		{ MAKE_GUC_KLV(VF_CFG_LMEM_SIZE), .value64 = 0 },
 		{ MAKE_GUC_KLV(VF_CFG_TILE_MASK), .value32 = 0 },
+		{ MAKE_GUC_KLV(VF_CFG_SCHED_PRIORITY), .value32 = 0 },
 #define make_threshold_klv(K, ...) \
 		{ MAKE_GUC_KLV(VF_CFG_THRESHOLD_##K), .value32 = 0 },
 		IOV_THRESHOLDS(make_threshold_klv)
@@ -922,6 +927,7 @@ static int pf_guc_accepts_config_updates(void *arg)
 		{ MAKE_GUC_KLV(VF_CFG_NUM_DOORBELLS), .value32 = 1 },
 		{ MAKE_GUC_KLV(VF_CFG_LMEM_SIZE), .value64 = SZ_2M },
 		{ MAKE_GUC_KLV(VF_CFG_TILE_MASK), .value32 = 1 },
+		{ MAKE_GUC_KLV(VF_CFG_SCHED_PRIORITY), .value32 = 1 },
 	};
 	struct klv update[] = {
 		{ MAKE_GUC_KLV(VF_CFG_GGTT_START), .value64 = GUC_GGTT_TOP - SZ_1M },
@@ -932,6 +938,7 @@ static int pf_guc_accepts_config_updates(void *arg)
 		{ MAKE_GUC_KLV(VF_CFG_NUM_DOORBELLS), .value32 = 2 },
 		{ MAKE_GUC_KLV(VF_CFG_LMEM_SIZE), .value64 = SZ_4M },
 		{ MAKE_GUC_KLV(VF_CFG_TILE_MASK), .value32 = 2 },
+		{ MAKE_GUC_KLV(VF_CFG_SCHED_PRIORITY), .value32 = 2 },
 	};
 	struct klv zero[] = {
 		{ MAKE_GUC_KLV(VF_CFG_GGTT_START), .value64 = 0 },
@@ -942,6 +949,7 @@ static int pf_guc_accepts_config_updates(void *arg)
 		{ MAKE_GUC_KLV(VF_CFG_NUM_DOORBELLS), .value32 = 0 },
 		{ MAKE_GUC_KLV(VF_CFG_LMEM_SIZE), .value64 = 0 },
 		{ MAKE_GUC_KLV(VF_CFG_TILE_MASK), .value32 = 0 },
+		{ MAKE_GUC_KLV(VF_CFG_SCHED_PRIORITY), .value32 = 0 },
 	};
 	struct {
 		const char *name;

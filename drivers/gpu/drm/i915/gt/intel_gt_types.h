@@ -175,6 +175,7 @@ struct intel_mem_sparing_event {
 		MEM_HEALTH_ALARM,
 		MEM_HEALTH_EC_PENDING,
 		MEM_HEALTH_DEGRADED,
+		MEM_HEALTH_REPLACE,
 		MEM_HEALTH_UNKNOWN
 	} health_status;
 };
@@ -211,20 +212,10 @@ struct intel_gt {
 	enum intel_engine_id rsvd_bcs;
 
 	struct {
-		/* Serialize global tlb invalidations */
-		struct mutex invalidate_lock;
-
-		/*
-		 * Batch TLB invalidations
-		 *
-		 * After unbinding the PTE, we need to ensure the TLB
-		 * are invalidated prior to releasing the physical pages.
-		 * But we only need one such invalidation for all unbinds,
-		 * so we track how many TLB invalidations have been
-		 * performed since unbind the PTE and only emit an extra
-		 * invalidate if no full barrier has been passed.
-		 */
-		seqcount_mutex_t seqno;
+		struct mutex mutex;
+		struct wait_queue_head wq;
+		u32 next_seqno;
+		u32 seqno;
 	} tlb;
 
 	struct i915_wa_list wa_list;
@@ -261,12 +252,6 @@ struct intel_gt {
 		bool int_enabled;
 	} fake_int;
 
-	struct intel_wakeref wakeref;
-	atomic_t user_wakeref;
-
-	ktime_t last_init_time;
-	struct intel_reset reset;
-
 	/**
 	 * Is the GPU currently considered idle, or busy executing
 	 * userspace requests? Whilst idle, we allow runtime power
@@ -274,7 +259,13 @@ struct intel_gt {
 	 * In order to reduce the effect on performance, there
 	 * is a slight delay before we do so.
 	 */
-	intel_wakeref_t awake;
+	struct intel_wakeref wakeref;
+	atomic_t user_wakeref;
+	atomic_t user_engines;
+
+	ktime_t last_init_time;
+	struct intel_reset reset;
+
 	bool suspend;
 
 	u32 clock_frequency;
@@ -487,6 +478,8 @@ struct intel_gt {
 	struct i915_perf_gt perf;
 
 	struct i915_eu_stall_cntr_gt eu_stall_cntr;
+
+	I915_SELFTEST_DECLARE(bool mock;)
 };
 
 struct intel_gt_definition {
@@ -510,5 +503,16 @@ struct intel_gt_definition {
 	 (REG_GROUP) << REG_GROUP_SHIFT | \
 	 (HW_ERR) << SOC_HW_ERR_SHIFT | \
 	 (ERRBIT))
+
+#define GT_TRACE(gt, fmt, ...) do {					\
+	const struct intel_gt *gt__ __maybe_unused = (gt);		\
+	GEM_TRACE("%s:gt%d " fmt, dev_name(gt__->i915->drm.dev), gt__->info.id, \
+		  ##__VA_ARGS__);					\
+} while (0)
+
+#define ENGINE_TRACE(e, fmt, ...) do {					\
+	const struct intel_engine_cs *e__ __maybe_unused = (e);		\
+	GT_TRACE(e__->gt, "%s: " fmt,	e__->name, ##__VA_ARGS__);	\
+} while (0)
 
 #endif /* __INTEL_GT_TYPES_H__ */

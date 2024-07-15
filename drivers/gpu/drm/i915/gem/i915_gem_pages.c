@@ -31,14 +31,7 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 				 struct sg_table *pages,
 				 unsigned int sg_page_sizes)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct intel_memory_region *mem;
-	bool shrinkable;
-
 	assert_object_held_shared(obj);
-
-	if (i915_gem_object_is_volatile(obj))
-		obj->mm.madv = I915_MADV_DONTNEED;
 
 	/* Make the pages coherent with the GPU (flushing any swapin). */
 	if (obj->cache_dirty) {
@@ -56,43 +49,7 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 	GEM_BUG_ON(!sg_page_sizes);
 	obj->mm.page_sizes = sg_page_sizes;
 
-	shrinkable = i915_gem_object_is_shrinkable(obj);
-
-	if (shrinkable) {
-		struct list_head *list;
-		unsigned long flags;
-
-		assert_object_held(obj);
-		spin_lock_irqsave(&i915->mm.obj_lock, flags);
-
-		i915->mm.shrink_count++;
-		i915->mm.shrink_memory += obj->base.size;
-
-		if (obj->mm.madv != I915_MADV_WILLNEED)
-			list = &i915->mm.purge_list;
-		else
-			list = &i915->mm.shrink_list;
-		list_add_tail(&obj->mm.link, list);
-
-		atomic_set(&obj->mm.shrink_pin, 0);
-		spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
-	}
-
-	mem = obj->mm.region.mem;
-	if (mem) {
-		struct list_head *list;
-
-		if (obj->mm.madv != I915_MADV_WILLNEED)
-			list = &mem->objects.purgeable;
-		else if (obj->memory_mask & BIT(REGION_SMEM))
-			list = &mem->objects.migratable;
-		else
-			list = &mem->objects.list;
-
-		spin_lock(&mem->objects.lock);
-		list_move_tail(&obj->mm.region.link, list);
-		spin_unlock(&mem->objects.lock);
-	}
+	i915_gem_object_make_shrinkable(obj);
 }
 
 static void add_to_evictions(struct drm_i915_gem_object *obj)
@@ -104,23 +61,23 @@ static void add_to_evictions(struct drm_i915_gem_object *obj)
 		return;
 
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-	spin_lock(&mem->objects.lock);
+	spin_lock_irq(&mem->objects.lock);
 	list_add_tail(&obj->mm.region.link, &mem->objects.list);
-	spin_unlock(&mem->objects.lock);
+	spin_unlock_irq(&mem->objects.lock);
 }
 
 static void remove_from_evictions(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mem;
+	struct intel_memory_region *mem = obj->mm.region.mem;
 
-	mem = obj->mm.region.mem;
-	if (!mem)
+	if (list_empty(&obj->mm.region.link))
 		return;
 
+	GEM_BUG_ON(!mem);
 	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-	spin_lock(&mem->objects.lock);
+	spin_lock_irq(&mem->objects.lock);
 	list_del_init(&obj->mm.region.link);
-	spin_unlock(&mem->objects.lock);
+	spin_unlock_irq(&mem->objects.lock);
 }
 
 int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj)
@@ -272,12 +229,50 @@ static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
 	struct intel_gt *gt;
 	int id;
 
+	if (!i915_gem_object_has_struct_page(obj))
+		return;
+
 	for_each_gt(gt, i915, id) {
 		if (!obj->mm.tlb[id])
 			continue;
 
-		intel_gt_invalidate_tlb_full(gt, obj->mm.tlb[id]);
+		intel_gt_invalidate_tlb_sync(gt, obj->mm.tlb[id]);
 		obj->mm.tlb[id] = 0;
+	}
+}
+
+void i915_gem_object_make_unshrinkable(struct drm_i915_gem_object *obj)
+{
+	struct intel_memory_region *mem;
+
+	mem = obj->mm.region.mem;
+	if (mem) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&mem->objects.lock, flags);
+		list_move(&obj->mm.region.link, &mem->objects.pt);
+		spin_unlock_irqrestore(&mem->objects.lock, flags);
+	}
+}
+
+void i915_gem_object_make_shrinkable(struct drm_i915_gem_object *obj)
+{
+	struct intel_memory_region *mem;
+
+	mem = obj->mm.region.mem;
+	if (mem) {
+		struct list_head *list;
+		unsigned long flags;
+
+		if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
+			list = &mem->objects.migratable;
+		else
+			list = &mem->objects.list;
+
+		obj->mm.region.age = jiffies;
+		spin_lock_irqsave(&mem->objects.lock, flags);
+		list_move_tail(&obj->mm.region.link, list);
+		spin_unlock_irqrestore(&mem->objects.lock, flags);
 	}
 }
 
@@ -292,17 +287,12 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 	if (IS_ERR_OR_NULL(pages))
 		return pages;
 
-	if (i915_gem_object_is_volatile(obj))
-		obj->mm.madv = I915_MADV_WILLNEED;
-
-	i915_gem_object_make_unshrinkable(obj);
-
 	if (!list_empty(&obj->mm.region.link)) {
 		struct intel_memory_region *mem = obj->mm.region.mem;
 
-		spin_lock(&mem->objects.lock);
+		spin_lock_irq(&mem->objects.lock);
 		list_del_init(&obj->mm.region.link);
-		spin_unlock(&mem->objects.lock);
+		spin_unlock_irq(&mem->objects.lock);
 	}
 
 	if (obj->mm.mapping) {

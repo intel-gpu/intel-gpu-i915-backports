@@ -36,6 +36,61 @@
 
 static DEFINE_STATIC_KEY_FALSE(has_movntdqa);
 
+static void __memclear_nt(void *dst, unsigned long len)
+{
+	kernel_fpu_begin();
+
+	asm("xorps   %%xmm0, %%xmm0\n" :::);
+
+	while (len >= 8) {
+		asm("movntps %%xmm0,    (%0)\n"
+		    "movntps %%xmm0,  16(%0)\n"
+		    "movntps %%xmm0,  32(%0)\n"
+		    "movntps %%xmm0,  48(%0)\n"
+		    "movntps %%xmm0,  64(%0)\n"
+		    "movntps %%xmm0,  80(%0)\n"
+		    "movntps %%xmm0,  96(%0)\n"
+		    "movntps %%xmm0, 112(%0)\n"
+		    :: "r" (dst) : "memory");
+		dst += 128;
+		len -= 8;
+	}
+	switch (len) {
+	case 7:
+		asm("movntps %%xmm0,  96(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 6:
+		asm("movntps %%xmm0,   80(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 5:
+		asm("movntps %%xmm0,   64(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 4:
+		asm("movntps %%xmm0,   48(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 3:
+		asm("movntps %%xmm0,   32(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 2:
+		asm("movntps %%xmm0,   16(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	case 1:
+		asm("movntps %%xmm0,   0(%0)\n"
+		    :: "r" (dst) : "memory");
+		fallthrough;
+	default:
+		break;
+	}
+
+	kernel_fpu_end();
+}
+
 static void __memcpy_ntdqa(void *dst, const void *src, unsigned long len)
 {
 	kernel_fpu_begin();
@@ -92,6 +147,20 @@ static void __memcpy_ntdqu(void *dst, const void *src, unsigned long len)
 	}
 
 	kernel_fpu_end();
+}
+
+bool i915_memclear_nocache(void *dst, unsigned long len)
+{
+	if (unlikely(((unsigned long)dst | len) & 15))
+		return false;
+
+	if (static_branch_likely(&has_movntdqa)) {
+		if (likely(len))
+			__memclear_nt(dst, len >> 4);
+		return true;
+	}
+
+	return false;
 }
 
 /**

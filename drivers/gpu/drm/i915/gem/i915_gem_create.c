@@ -182,6 +182,22 @@ static u64 get_object_segment_size(u64 obj_size, u64 requested_size)
 	return requested_size;
 }
 
+static bool set_obj_nodes(struct drm_i915_gem_object *obj, unsigned long *nodes, int max)
+{
+	if (likely(!max))
+		return false;
+
+	obj->maxnode = max;
+
+	if (max <= BITS_PER_TYPE(obj->_nodes)) {
+		obj->_nodes = (unsigned long *)*nodes;
+		return false;
+	} else {
+		obj->_nodes = nodes;
+		return true;
+	}
+}
+
 static int
 setup_object(struct drm_i915_gem_object *obj, u64 size, struct create_ext *ext)
 {
@@ -210,8 +226,8 @@ setup_object(struct drm_i915_gem_object *obj, u64 size, struct create_ext *ext)
 
 	if (ext) {
 		obj->mempol = ext->mempol;
-		obj->nodes = fetch_and_zero(&ext->nodes);
-		obj->maxnode = ext->maxnode;
+		if (set_obj_nodes(obj, ext->nodes, ext->maxnode))
+			ext->nodes = NULL;
 	}
 
 	alloc_flags = i915_modparams.force_alloc_contig & ALLOC_CONTIGUOUS_LMEM ?

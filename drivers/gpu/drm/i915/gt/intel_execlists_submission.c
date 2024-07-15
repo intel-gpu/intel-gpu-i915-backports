@@ -4173,6 +4173,9 @@ void intel_execlists_show_requests(struct intel_engine_cs *engine,
 		if (!(rq->execution_mask & engine->mask))
 			continue;
 
+		if (__i915_request_is_complete(rq))
+			continue;
+
 		if (count++ < max - 1)
 			show_request(m, rq, "\t\t", 0);
 		else

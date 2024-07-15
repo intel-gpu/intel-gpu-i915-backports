@@ -48,9 +48,9 @@
 
 static struct kmem_cache *slab_vmas;
 
-struct i915_vma *i915_vma_alloc(void)
+struct i915_vma *i915_vma_alloc(gfp_t gfp)
 {
-	return kmem_cache_zalloc(slab_vmas, GFP_KERNEL);
+	return kmem_cache_zalloc(slab_vmas, gfp | __GFP_NOWARN);
 }
 
 void i915_vma_free(struct i915_vma *vma)
@@ -109,7 +109,7 @@ vma_create(struct drm_i915_gem_object *obj,
 	struct i915_vma *vma;
 	struct rb_node *rb, **p;
 
-	vma = i915_vma_alloc();
+	vma = i915_vma_alloc(GFP_KERNEL);
 	if (vma == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -202,9 +202,9 @@ skip_rb_insert:
 		 * iterating over only the GGTT vma for an object, see
 		 * for_each_ggtt_vma()
 		 */
-		list_add(&vma->obj_link, &obj->vma.list);
+		list_add_rcu(&vma->obj_link, &obj->vma.list);
 	else
-		list_add_tail(&vma->obj_link, &obj->vma.list);
+		list_add_tail_rcu(&vma->obj_link, &obj->vma.list);
 
 	spin_unlock(&obj->vma.lock);
 
@@ -320,6 +320,18 @@ static void __vma_user_fence_signal(struct i915_vma *vma, int err)
 	i915_sw_fence_complete(f);
 }
 
+static bool fatal_error(int err)
+{
+	switch (err) {
+	case 0:
+	case -ERESTARTSYS:
+	case -EAGAIN:
+		return false;
+	default:
+		return true;
+	}
+}
+
 static void __vma_complete(struct dma_fence_work *work)
 {
 	struct i915_vma_work *vw = container_of(work, typeof(*vw), base);
@@ -329,9 +341,39 @@ static void __vma_complete(struct dma_fence_work *work)
 	if (!vma)
 		return;
 
-	if (work->rq.fence.error && work->rq.fence.error != -ERESTARTSYS) {
+	if (unlikely(fatal_error(work->rq.fence.error))) {
 		GEM_BUG_ON(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT,
 				    &work->rq.fence.flags));
+
+		if (vma->bind_fence && atomic_read(&vma->vm->open)) {
+			struct i915_drm_client *client;
+			char name[80] = "[i915]";
+
+			client = vma->vm->client;
+			if (client) {
+				rcu_read_lock();
+				snprintf(name, sizeof(name), "%s[%d]",
+					i915_drm_client_name(client),
+					pid_nr(i915_drm_client_pid(client)));
+				rcu_read_unlock();
+			}
+
+			/*
+			 * The presence of the userfence complicates error
+			 * handling; that is to say there is no means to
+			 * communicate the failure via the userfence and so
+			 * userspace is blissfully ignorant that the VM_BIND
+			 * failed. On PVC, this should result in a pagefault
+			 * and CAT error, but on ATS-M it will most likely be
+			 * ignored and result in data corruption or a GPU hang.
+			 */
+			dev_warn_ratelimited(vma->vm->i915->drm.dev,
+					     "Incomplete ppGTT binding [%llx + %llx] in %s, error: %d\n",
+					     i915_vma_offset(vma),
+					     i915_vma_size(vma),
+					     name, work->rq.fence.error);
+		}
+
 		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
 		if (vma->vm->scratch_range)
 			vma->vm->scratch_range(vma->vm, vma->node.start, vma->node.size);
@@ -366,6 +408,8 @@ static struct i915_vma_work *i915_vma_work(struct i915_address_space *vm)
 		return NULL;
 
 	dma_fence_work_init(&vw->base, &bind_ops, vm->gt->sched);
+	if (i915_is_ggtt(vm))
+		__set_bit(DMA_FENCE_WORK_IMM, &vw->base.rq.fence.flags);
 	vw->base.rq.fence.error = -ERESTARTSYS; /* disable the worker by default */
 	vw->vm = i915_vm_get(vm);
 
@@ -384,7 +428,7 @@ int i915_vma_wait_for_bind(struct i915_vma *vma)
 	if (IS_ERR(fence))
 		return PTR_ERR(fence);
 
-	err = dma_fence_wait(fence, true) ? -EINTR : fence->error;
+	err = dma_fence_wait(fence, true) ? -ERESTARTSYS : fence->error;
 	dma_fence_put(fence);
 
 	return err;
@@ -419,6 +463,9 @@ static int __i915_vma_bind(struct i915_vma *vma,
 		return -ENODEV;
 
 	if (GEM_DEBUG_WARN_ON(!flags))
+		return -EINVAL;
+
+	if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
 		return -EINVAL;
 
 	bind_flags = flags;
@@ -873,7 +920,7 @@ static int vma_get_pages(struct i915_vma *vma)
 
 	/* Allocations ahoy! */
 	if (mutex_lock_interruptible(&vma->pages_mutex)) {
-		err = -EINTR;
+		err = -ERESTARTSYS;
 		goto unpin;
 	}
 
@@ -967,7 +1014,7 @@ int i915_vma_bind(struct i915_vma *vma)
 		goto err_fence;
 
 	err = __i915_vma_bind(vma,
-			      vma->obj->pat_index,
+			      i915_gem_object_pat_index(vma->obj),
 			      PIN_USER | PIN_RESIDENT,
 			      work);
 	if (err)
@@ -1021,7 +1068,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	}
 
 	if (flags & PIN_GLOBAL)
-		wakeref = intel_runtime_pm_get(&vma->vm->i915->runtime_pm);
+		wakeref = intel_gt_pm_get(vma->vm->gt);
 
 	work = i915_vma_work(vma->vm);
 	if (!work) {
@@ -1059,9 +1106,12 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	}
 
 	if (unlikely(i915_vma_misplaced(vma, size, alignment, flags))) {
-		err = -EBUSY;
-		if (!(flags & (PIN_NONBLOCK | PIN_NOEVICT)))
+		if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
+			err = -EINVAL;
+		else if (!(flags & (PIN_NONBLOCK | PIN_NOEVICT)))
 			err = __i915_vma_unbind(vma);
+		else
+			err = -EBUSY;
 		if (err)
 			goto err_unlock;
 	}
@@ -1095,7 +1145,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		}
 	}
 
-	err = __i915_vma_bind(vma, vma->obj->pat_index, flags, work);
+	err = __i915_vma_bind(vma, i915_gem_object_pat_index(vma->obj), flags, work);
 	if (err)
 		goto err_remove;
 
@@ -1122,10 +1172,10 @@ err_active:
 err_unlock:
 	mutex_unlock(&vma->vm->mutex);
 err_fence:
-	dma_fence_work_commit_imm_if(&work->base, i915_vma_is_ggtt(vma) || atomic_read(&work->base.rq.submit.pending) <= 1);
+	dma_fence_work_commit_imm(&work->base);
 err_rpm:
 	if (wakeref)
-		intel_runtime_pm_put(&vma->vm->i915->runtime_pm, wakeref);
+		intel_gt_pm_put(vma->vm->gt, wakeref);
 	if (make_resident)
 		vma_put_pages(vma);
 
@@ -1273,7 +1323,7 @@ void i915_vma_unpublish(struct i915_vma *vma)
 	}
 
 	spin_lock(&obj->vma.lock);
-	list_del(&vma->obj_link);
+	list_del_rcu(&vma->obj_link);
 	if (!RB_EMPTY_NODE(&vma->obj_node))
 		rb_erase(&vma->obj_node, &obj->vma.tree);
 	spin_unlock(&obj->vma.lock);
@@ -1675,11 +1725,6 @@ void i915_vma_make_shrinkable(struct i915_vma *vma)
 	i915_gem_object_make_shrinkable(vma->obj);
 }
 
-void i915_vma_make_purgeable(struct i915_vma *vma)
-{
-	i915_gem_object_make_purgeable(vma->obj);
-}
-
 void i915_vma_module_exit(void)
 {
 	kmem_cache_destroy(slab_vmas);
@@ -1687,7 +1732,7 @@ void i915_vma_module_exit(void)
 
 int __init i915_vma_module_init(void)
 {
-	slab_vmas = KMEM_CACHE(i915_vma, SLAB_HWCACHE_ALIGN);
+	slab_vmas = KMEM_CACHE(i915_vma, SLAB_HWCACHE_ALIGN | SLAB_TYPESAFE_BY_RCU);
 	if (!slab_vmas)
 		return -ENOMEM;
 

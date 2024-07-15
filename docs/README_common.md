@@ -31,7 +31,7 @@ Build Configurations:
  DKMS Targets:
  Debian Targets:
   dkmsdeb-pkg    - Build single DKMS Debian package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)
-  dmadkmsdeb-pkg - Build DKMS debian package for dmabuf
+  dmabufdkmsdeb-pkg - Build DKMS debian package for dmabuf
   drmdkmsdeb-pkg - Build DKMS debian package for drm, i915 and dependent child drivers (mei and pmt/vsec)
   i915dkmsdeb-pkg - Build DKMS debian package i915 and dependent child drivers (mei and pmt/vsec)
 
@@ -45,7 +45,7 @@ Build Configurations:
 
  RPM Targets:
   dkmsrpm-pkg     - Build single DKMS RPM package for dmabuf, drm, i915 and dependent child drivers (mei and pmt/vsec)
-  dmadkmsrpm-pkg  - Build dkms RPM package for dmabuf
+  dmabufdkmsrpm-pkg  - Build dkms RPM package for dmabuf
   i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)
   drmdkmsrpm-pkg -  Build dkms RPM package for drm, i915 and dependent child drivers (mei and pmt/vsec)
 
@@ -55,7 +55,7 @@ Build Configurations:
 
  ##### List of RPM supported OS distro Versions #####
  SLES15_SP5	SLES15_SP4
- RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.9	RHEL_8.8	RHEL_8.6
+ RHEL_9.4	RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.10	RHEL_8.9	RHEL_8.8	RHEL_8.6
 
  ##### List of LTS kernel versions #####
  VANILLA_6.1LTS	VANILLA_5.15LTS	VANILLA_5.10LTS	VANILLA_5.4LTS

@@ -36,6 +36,9 @@ struct intel_runtime_pm;
 struct intel_wakeref;
 
 struct intel_wakeref_ops {
+	intel_wakeref_t (*pm_get)(void *rpm);
+	void (*pm_put)(void *rpm, intel_wakeref_t wf);
+
 	int (*get)(struct intel_wakeref *wf);
 	int (*put)(struct intel_wakeref *wf);
 };
@@ -46,8 +49,8 @@ struct intel_wakeref {
 
 	intel_wakeref_t wakeref;
 
-	struct intel_runtime_pm *rpm;
 	const struct intel_wakeref_ops *ops;
+	void *rpm;
 
 	struct delayed_work work;
 
@@ -56,21 +59,10 @@ struct intel_wakeref {
 #endif
 };
 
-struct intel_wakeref_lockclass {
-	struct lock_class_key mutex;
-	struct lock_class_key work;
-};
-
-void __intel_wakeref_init(struct intel_wakeref *wf,
-			  struct intel_runtime_pm *rpm,
-			  const struct intel_wakeref_ops *ops,
-			  struct intel_wakeref_lockclass *key,
-			  const char *name);
-#define intel_wakeref_init(wf, rpm, ops, name) do {				\
-	static struct intel_wakeref_lockclass __key;			\
-									\
-	__intel_wakeref_init((wf), (rpm), (ops), &__key, name);		\
-} while (0)
+void intel_wakeref_init(struct intel_wakeref *wf,
+			void *rpm,
+			const struct intel_wakeref_ops *ops,
+			const char *name);
 
 int __intel_wakeref_get_first(struct intel_wakeref *wf);
 void __intel_wakeref_put_last(struct intel_wakeref *wf, unsigned long flags);

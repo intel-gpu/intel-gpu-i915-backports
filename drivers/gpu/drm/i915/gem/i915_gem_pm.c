@@ -72,7 +72,6 @@ static int lmem_suspend(struct drm_i915_private *i915)
 	for_each_memory_region(mem, i915, id) {
 		struct drm_i915_gem_object *obj;
 		struct list_head *phases[] = {
-			&mem->objects.purgeable,
 			&mem->objects.migratable,
 			&mem->objects.list,
 			&mem->objects.pt,
@@ -117,7 +116,6 @@ static int lmem_resume(struct drm_i915_private *i915)
 	for_each_memory_region(mem, i915, id) {
 		struct drm_i915_gem_object *obj;
 		struct list_head *phases[] = {
-			&mem->objects.purgeable,
 			&mem->objects.migratable,
 			&mem->objects.list,
 			&mem->objects.pt,
@@ -185,8 +183,6 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
-	flush_workqueue(i915->wq);
-
 	i915_sriov_suspend_prepare(i915);
 
 	/*
@@ -202,20 +198,21 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 		intel_gt_suspend_prepare(gt);
 
 	suspend_ppgtt_mappings(i915);
+	flush_workqueue(i915->wq);
 
 	i915_gem_drain_freed_objects(i915);
 }
 
 int i915_gem_suspend_late(struct drm_i915_private *i915)
 {
-	struct drm_i915_gem_object *obj;
+	struct intel_memory_region *mem = i915->mm.regions[INTEL_REGION_SMEM];
 	struct list_head *phases[] = {
-		&i915->mm.shrink_list,
-		&i915->mm.purge_list,
-		NULL
+		&mem->objects.migratable,
+		&mem->objects.list,
+		NULL,
 	}, **phase;
+	struct drm_i915_gem_object *obj;
 	struct intel_gt *gt;
-	unsigned long flags;
 	unsigned int i;
 	bool flush = false;
 	int err;
@@ -248,15 +245,13 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 	if (err)
 		return err;
 
-	spin_lock_irqsave(&i915->mm.obj_lock, flags);
 	for (phase = phases; *phase; phase++) {
-		list_for_each_entry(obj, *phase, mm.link) {
+		list_for_each_entry(obj, *phase, mm.region.link) {
 			if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
 				flush |= (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0;
 			__start_cpu_write(obj); /* presume auto-hibernate */
 		}
 	}
-	spin_unlock_irqrestore(&i915->mm.obj_lock, flags);
 	if (flush)
 		wbinvd_on_all_cpus();
 
@@ -286,7 +281,6 @@ int i915_gem_freeze(struct drm_i915_private *i915)
 
 int i915_gem_freeze_late(struct drm_i915_private *i915)
 {
-	struct drm_i915_gem_object *obj;
 	intel_wakeref_t wakeref;
 
 	/*
@@ -309,9 +303,6 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 	i915_gem_drain_freed_objects(i915);
 
 	wbinvd_on_all_cpus();
-	list_for_each_entry(obj, &i915->mm.shrink_list, mm.link)
-		__start_cpu_write(obj);
-
 	return 0;
 }
 

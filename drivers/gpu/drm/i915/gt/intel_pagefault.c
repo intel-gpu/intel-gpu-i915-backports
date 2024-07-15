@@ -3,6 +3,8 @@
  * Copyright © 2022 Intel Corporation
  */
 
+#include <linux/pm_qos.h>
+
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_mman.h"
 #include "gem/i915_gem_vm_bind.h"
@@ -330,26 +332,40 @@ struct fault_reply {
 	struct i915_request *request;
 	struct intel_guc *guc;
 	struct intel_gt *gt;
+	struct pm_qos_request qos;
 	intel_wakeref_t wakeref;
+	unsigned int epoch;
 };
 
-static struct i915_debugger_pagefault *
-pf_eu_debugger(struct i915_address_space *vm,
-	       struct intel_engine_cs *engine,
-	       struct i915_request *rq,
-	       struct recoverable_page_fault_info *info,
-	       struct dma_fence *fence)
+static bool has_debug_sip(struct intel_gt *gt)
 {
+	/*
+	 * When debugging is enabled, we want to enter the SIP after resolving
+	 * the pagefault and read the attention bits from the SIP. In this case,
+	 * we must always use a scratch page for the invalid fault so that we
+	 * can enter the sip and not retrigger more faults.
+	 *
+	 * After capturing the attention bits, we can restore the faulting
+	 * vma (if required).
+	 *
+	 * XXX maybe intel_context_has_debug()?
+	 */
+	return intel_gt_mcr_read_any(gt, TD_CTL);
+}
+
+static struct i915_debugger_pagefault *
+pf_eu_debugger(struct i915_address_space *vm, struct fault_reply *reply)
+{
+	struct recoverable_page_fault_info *info = &reply->info;
 	struct i915_debugger_pagefault *pf;
-	struct intel_gt *gt = engine->gt;
-	u32 td_ctl;
+	struct intel_gt *gt = reply->gt;
+	struct dma_fence *prev;
 
 	/*
 	 * If there is no debug functionality (TD_CTL_GLOBAL_DEBUG_ENABLE, etc.),
 	 * don't proceed pagefault routine for eu debugger.
 	 */
-	td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
-	if (!td_ctl)
+	if (!has_debug_sip(gt))
 		return NULL;
 
 	pf = kzalloc(sizeof(*pf), GFP_KERNEL);
@@ -374,53 +390,22 @@ pf_eu_debugger(struct i915_address_space *vm,
 	 * at the end of the page fault handler, additional page faults are
 	 * allowed to occur.
 	 */
-	mutex_lock(&gt->eu_debug.lock);
-	if (i915_active_fence_isset(&gt->eu_debug.fault)) {
-		mutex_unlock(&gt->eu_debug.lock);
-		kfree(pf);
-		return NULL;
-	}
-	__i915_active_fence_set(&gt->eu_debug.fault, fence);
+	mutex_lock(&gt->eu_debug.lock); /* serialise with i915_debugger */
+	prev = __i915_active_fence_fetch_set(&gt->eu_debug.fault, &reply->base.rq.fence);
 	mutex_unlock(&gt->eu_debug.lock);
+	if (prev) {
+		dma_fence_work_chain(&reply->base, prev);
+		dma_fence_put(prev);
+	}
 
 	INIT_LIST_HEAD(&pf->list);
 
-	intel_eu_attentions_read(gt, &pf->attentions.before, 0);
-
-	/* Halt on next thread dispatch */
-	while (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT)) {
-		intel_gt_mcr_multicast_write(gt, TD_CTL,
-					     td_ctl | TD_CTL_FORCE_EXTERNAL_HALT);
-		/*
-		 * The sleep is needed because some interrupts are ignored
-		 * by the HW, hence we allow the HW some time to acknowledge
-		 * that.
-		 */
-		udelay(200);
-
-		td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
-	}
-
-	/* Halt regardless of thread dependencies */
-	while (!(td_ctl & TD_CTL_FORCE_EXCEPTION)) {
-		intel_gt_mcr_multicast_write(gt, TD_CTL,
-					     td_ctl | TD_CTL_FORCE_EXCEPTION);
-		udelay(200);
-
-		td_ctl = intel_gt_mcr_read_any(gt, TD_CTL);
-	}
-
-	intel_eu_attentions_read(gt, &pf->attentions.after,
-				 INTEL_GT_ATTENTION_TIMEOUT_MS);
-
-	intel_gt_invalidate_l3_mmio(gt);
-
 	/* Assume that the request may be retired before any delayed event processing */
 	pf->vm = i915_vm_get(vm);
-	pf->context = intel_context_get(rq->context);
-	pf->engine = engine;
+	pf->context = intel_context_get(reply->request->context);
+	pf->engine = reply->engine;
 	pf->fault.addr =
-		intel_canonical_addr(INTEL_PPGTT_MSB(engine->i915),
+		intel_canonical_addr(INTEL_PPGTT_MSB(vm->i915),
 				     info->page_addr | BIT(0));
 	pf->fault.type = info->fault_type;
 	pf->fault.level = info->fault_level;
@@ -453,22 +438,6 @@ track_invalid_userfault(struct fault_reply *reply)
 						reply->info.page_addr | BIT(1) | BIT(0)));
 	}
 	rcu_read_unlock();
-}
-
-static bool has_debug_sip(struct intel_gt *gt)
-{
-	/*
-	 * When debugging is enabled, we want to enter the SIP after resolving
-	 * the pagefault and read the attention bits from the SIP. In this case,
-	 * we must always use a scratch page for the invalid fault so that we
-	 * can enter the sip and not retrigger more faults.
-	 *
-	 * After capturing the attention bits, we can restore the faulting
-	 * vma (if required).
-	 *
-	 * XXX maybe intel_context_has_debug()?
-	 */
-	return intel_gt_mcr_read_any(gt, TD_CTL);
 }
 
 static struct i915_request *
@@ -559,9 +528,10 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 			 * a debugger attached to send the event, or if not
 			 * we complete and save the coredump for posterity.
 			 */
+			intel_engine_park_heartbeat(engine); /* restart after the fault */
 			if (i915_debugger_active_on_context(reply->request->context))
-				reply->debugger = pf_eu_debugger(vm, engine, reply->request, info, &reply->base.rq.fence);
-			else
+				reply->debugger = pf_eu_debugger(vm, reply);
+			if (!reply->debugger)
 				reply->dump = pf_coredump(engine, info);
 		}
 
@@ -700,6 +670,9 @@ static int send_fault_reply(const struct fault_reply *f)
 	};
 	int err;
 
+	if (f->epoch != f->gt->uc.epoch)
+		return 0;
+
 	do {
 		err = intel_guc_send(f->guc, action, ARRAY_SIZE(action));
 		if (!err || err == -ENODEV) /* ENODEV == GT is being reset */
@@ -741,16 +714,49 @@ static void fault_complete(struct dma_fence_work *work)
 	struct fault_reply *f = container_of(work, typeof(*f), base);
 	struct intel_engine_capture_vma *vma = NULL;
 	struct i915_page_compress *compress = NULL;
-	struct i915_gpu_coredump *dump = f->dump;
 	ktime_t start;
 
-	if (dump && f->request) {
-		struct intel_gt_coredump *gt = dump->gt;
+	if (f->dump) {
+		struct intel_gt_coredump *gt = f->dump->gt;
 
 		compress = i915_vma_capture_prepare(gt);
 		if (compress) {
 			vma = intel_engine_coredump_add_request(gt->engine, f->request, vma, GFP_KERNEL, compress);
 			vma = intel_gt_coredump_add_other_engines(gt, f->request, vma, GFP_KERNEL, compress);
+		}
+	}
+
+	if (f->debugger) {
+		struct i915_debugger_pagefault *pf = f->debugger;
+		u32 td_ctl;
+
+		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
+		if (td_ctl) {
+			intel_eu_attentions_read(f->gt, &pf->attentions.before, 0);
+
+			/* Halt on next thread dispatch */
+			while (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT)) {
+				intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl | TD_CTL_FORCE_EXTERNAL_HALT);
+				/*
+				 * The sleep is needed because some interrupts are ignored
+				 * by the HW, hence we allow the HW some time to acknowledge
+				 * that.
+				 */
+				udelay(200);
+
+				td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
+			}
+
+			/* Halt regardless of thread dependencies */
+			while (!(td_ctl & TD_CTL_FORCE_EXCEPTION)) {
+				intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl | TD_CTL_FORCE_EXCEPTION);
+				udelay(200);
+
+				td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
+			}
+
+			intel_eu_attentions_read(f->gt, &pf->attentions.after,
+						 INTEL_GT_ATTENTION_TIMEOUT_MS);
 		}
 	}
 
@@ -773,8 +779,8 @@ static void fault_complete(struct dma_fence_work *work)
 	if (atomic_dec_and_test(&f->engine->in_pagefault))
 		local64_add(ktime_get() - start, &f->gt->stats.pagefault_stall);
 
-	if (dump) {
-		struct intel_gt_coredump *gt = dump->gt;
+	if (f->dump) {
+		struct intel_gt_coredump *gt = f->dump->gt;
 		u32 td_ctl;
 
 		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
@@ -796,9 +802,11 @@ static void fault_complete(struct dma_fence_work *work)
 		if (compress)
 			i915_vma_capture_finish(gt, compress);
 
-		i915_error_state_store(dump);
-		i915_gpu_coredump_put(dump);
-	} else if (f->debugger) {
+		i915_error_state_store(f->dump);
+		i915_gpu_coredump_put(f->dump);
+	}
+
+	if (f->debugger) {
 		struct i915_debugger_pagefault *pf = f->debugger;
 		struct i915_address_space *vm = pf->vm;
 		u32 td_ctl;
@@ -819,15 +827,23 @@ static void fault_complete(struct dma_fence_work *work)
 		/* clear the PTE of pagefault address */
 		intel_context_clear_coredump(pf->context);
 		vm->clear_range(vm, f->info.page_addr, SZ_4K);
+		intel_gt_invalidate_tlb_range(vm->gt, vm, f->info.page_addr, SZ_4K);
+		i915_vm_heal_scratch(vm, f->info.page_addr, f->info.page_addr + SZ_4K);
 
 		/* clear Force_External and Force Exception on pagefault scenario */
 		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
 		intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl &
 					     ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION));
 
+		intel_gt_invalidate_l3_mmio(f->gt);
+
 		i915_debugger_handle_page_fault(pf);
+
+		/* Restore ATTN scanning */
+		intel_engine_schedule_heartbeat(f->engine);
 	}
 
+	cpu_latency_qos_remove_request(&f->qos);
 	intel_gt_pm_put(f->gt, f->wakeref);
 }
 
@@ -854,6 +870,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 
 	dma_fence_work_init(&reply->base, &reply_ops, gt->i915->sched);
 	get_fault_info(gt, payload, &reply->info);
+	reply->epoch = gt->uc.epoch & ~INTEL_UC_IN_RESET;
 	reply->guc = guc;
 
 	reply->engine =
@@ -872,6 +889,9 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 
 	reply->gt = gt;
 	reply->wakeref = intel_gt_pm_get(gt);
+
+	memset(&reply->qos, 0, sizeof(reply->qos));
+	cpu_latency_qos_add_request(&reply->qos, 0);
 
 	/*
 	 * Keep track of the background work to migrate the backing store and

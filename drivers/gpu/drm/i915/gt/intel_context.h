@@ -507,4 +507,6 @@ static inline u64 intel_context_clock(void)
 	return ktime_get_raw_fast_ns();
 }
 
+void intel_context_show(struct intel_context *ce, struct drm_printer *p);
+
 #endif /* __INTEL_CONTEXT_H__ */

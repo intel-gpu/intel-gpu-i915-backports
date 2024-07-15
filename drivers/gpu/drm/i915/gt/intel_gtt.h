@@ -266,6 +266,7 @@ struct i915_address_space {
 
 	u32 asid;
 	u32 poison; /* value used to fill the scratch page */
+	u32 tlb[I915_MAX_GT];
 
 	/*
 	 * Every address space belongs to a struct file, a single client -
@@ -578,7 +579,7 @@ int i915_ggtt_restore_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *nod
 struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt, u32 flags);
 
 void i915_ggtt_suspend_vm(struct i915_address_space *vm);
-bool i915_ggtt_resume_vm(struct i915_address_space *vm);
+void i915_ggtt_resume_vm(struct i915_address_space *vm);
 void i915_ggtt_suspend(struct i915_ggtt *gtt);
 void i915_ggtt_resume(struct i915_ggtt *ggtt);
 
@@ -669,6 +670,20 @@ static inline struct sgt_dma {
 	addr = sg_dma_address(sg) + offset;
 	max = addr + min_t(u64, (sg_dma_len(sg) - offset), vma->size);
 	return (struct sgt_dma) { sg, addr, max, vma->size };
+}
+
+static inline void
+i915_vm_heal_scratch(struct i915_address_space *vm, u64 start, u64 end)
+{
+	/* Try to heal the edges of the scratch */
+	if (start <= vm->fault_start)
+		vm->fault_start = start;
+	if (end >= vm->fault_end)
+		vm->fault_end = start;
+
+	/* Reset for tight bounds on the next invalid fault */
+	if (vm->fault_end <= vm->fault_start)
+		vm->fault_end = 0, vm->fault_start = U64_MAX;
 }
 
 #endif
