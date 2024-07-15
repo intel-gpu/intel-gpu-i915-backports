@@ -32,9 +32,11 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 |   OSV | Installation Instructions | Building | Testing|
 |---    | --- | --- | --- |
+| Red Hat® Enterprise Linux® 9.4       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.3       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.2       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.0       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 8.10       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 8.9       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 8.8       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 8.6       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
