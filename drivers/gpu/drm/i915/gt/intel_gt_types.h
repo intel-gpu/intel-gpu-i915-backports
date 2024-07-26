@@ -261,12 +261,6 @@ struct intel_gt {
 		bool int_enabled;
 	} fake_int;
 
-	struct intel_wakeref wakeref;
-	atomic_t user_wakeref;
-
-	ktime_t last_init_time;
-	struct intel_reset reset;
-
 	/**
 	 * Is the GPU currently considered idle, or busy executing
 	 * userspace requests? Whilst idle, we allow runtime power
@@ -274,7 +268,12 @@ struct intel_gt {
 	 * In order to reduce the effect on performance, there
 	 * is a slight delay before we do so.
 	 */
-	intel_wakeref_t awake;
+	struct intel_wakeref wakeref;
+	atomic_t user_wakeref;
+
+	ktime_t last_init_time;
+	struct intel_reset reset;
+
 	bool suspend;
 
 	u32 clock_frequency;
@@ -487,6 +486,8 @@ struct intel_gt {
 	struct i915_perf_gt perf;
 
 	struct i915_eu_stall_cntr_gt eu_stall_cntr;
+
+	I915_SELFTEST_DECLARE(bool mock;)
 };
 
 struct intel_gt_definition {

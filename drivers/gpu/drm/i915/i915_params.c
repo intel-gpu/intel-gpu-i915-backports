@@ -201,6 +201,9 @@ i915_param_named_unsafe(enable_rc6, bool, 0400,
 i915_param_named_unsafe(rc6_ignore_steppings, bool, 0400,
 	"Allow RC6 to be enabled on steppings where it would be disabled. (default: false)");
 
+i915_param_named_unsafe(pvc_fw_put_delay_ms, int, 0600,
+			"Forcewake put delay for Pontevecchio. (default: " __stringify(CPTCFG_DRM_I915_PVC_FORCEWAKE_DELAY_MS) ")");
+
 #if IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG)
 i915_param_named_unsafe(enable_softpg, int, 0400,
 	"Enable software controlled power-gating. (default: false)");

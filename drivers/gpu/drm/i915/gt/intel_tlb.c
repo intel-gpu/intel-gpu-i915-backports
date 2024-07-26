@@ -217,14 +217,14 @@ static void mmio_invalidate_full(struct intel_gt *gt)
 	 * b) it works around a bug in Icelake which cannot cope with too rapid
 	 * transitions.
 	 */
-	intel_uncore_forcewake_put_delayed(uncore, FORCEWAKE_ALL);
+	intel_uncore_forcewake_put_delayed(uncore, FORCEWAKE_ALL, NSEC_PER_MSEC);
 }
 
 void intel_gt_invalidate_tlb_full(struct intel_gt *gt, u32 seqno)
 {
 	intel_wakeref_t wakeref;
 
-	if (I915_SELFTEST_ONLY(gt->awake == -ENODEV))
+	if (I915_SELFTEST_ONLY(gt->mock))
 		return;
 
 	if (intel_gt_is_wedged(gt))

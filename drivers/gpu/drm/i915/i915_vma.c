@@ -1027,7 +1027,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	}
 
 	if (flags & PIN_GLOBAL)
-		wakeref = intel_runtime_pm_get(&vma->vm->i915->runtime_pm);
+		wakeref = intel_gt_pm_get(vma->vm->gt);
 
 	work = i915_vma_work(vma->vm);
 	if (!work) {
@@ -1131,7 +1131,7 @@ err_fence:
 	dma_fence_work_commit_imm_if(&work->base, i915_vma_is_ggtt(vma) || atomic_read(&work->base.rq.submit.pending) <= 1);
 err_rpm:
 	if (wakeref)
-		intel_runtime_pm_put(&vma->vm->i915->runtime_pm, wakeref);
+		intel_gt_pm_put(vma->vm->gt, wakeref);
 	if (make_resident)
 		vma_put_pages(vma);
 

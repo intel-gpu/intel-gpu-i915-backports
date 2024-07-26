@@ -197,6 +197,19 @@ u64 ggtt_addr_to_pte_offset(u64 ggtt_addr)
 	return (ggtt_addr / I915_GTT_PAGE_SIZE_4K) * sizeof(gen8_pte_t);
 }
 
+static gen8_pte_t __iomem *gsm_base(struct i915_ggtt *ggtt)
+{
+	/*
+	 * We need both the device to be awake and for PVC to be out of rc6;
+	 * GT pm ensures both. Alternatively we could use runtime pm plus
+	 * forcewake. However, as all users are generally talking to the GT
+	 * when updating the GGTT on that tile, we are, or soon will be,
+	 * holding the full GT pm.
+	 */
+	assert_gt_pm_held(ggtt->vm.gt);
+	return (gen8_pte_t __iomem *)ggtt->gsm;
+}
+
 static void gen8_ggtt_insert_page(struct i915_address_space *vm,
 				  dma_addr_t addr,
 				  u64 offset,
@@ -204,8 +217,7 @@ static void gen8_ggtt_insert_page(struct i915_address_space *vm,
 				  u32 flags)
 {
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
-	gen8_pte_t __iomem *pte =
-		(gen8_pte_t __iomem *)ggtt->gsm + offset / I915_GTT_PAGE_SIZE;
+	gen8_pte_t __iomem *pte = gsm_base(ggtt) + offset / I915_GTT_PAGE_SIZE;
 
 	gen8_set_pte(pte, ggtt->vm.pte_encode(addr, pat_index, flags));
 
@@ -217,10 +229,10 @@ static int gen8_ggtt_insert_entries(struct i915_address_space *vm,
 				    unsigned int pat_index,
 				    u32 flags)
 {
-	gen8_pte_t pte_encode;
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
 	gen8_pte_t __iomem *gte;
 	gen8_pte_t __iomem *end;
+	gen8_pte_t pte_encode;
 	struct sgt_iter iter;
 	dma_addr_t addr;
 
@@ -230,9 +242,7 @@ static int gen8_ggtt_insert_entries(struct i915_address_space *vm,
 	 * Note that we ignore PTE_READ_ONLY here. The caller must be careful
 	 * not to allow the user to override access to a read only page.
 	 */
-
-	gte = (gen8_pte_t __iomem *)ggtt->gsm;
-	gte += vma->node.start / I915_GTT_PAGE_SIZE;
+	gte = gsm_base(ggtt) + vma->node.start / I915_GTT_PAGE_SIZE;
 
 	end = gte + vma->guard / I915_GTT_PAGE_SIZE;
 	while (gte < end)
@@ -261,8 +271,7 @@ static void gen8_ggtt_clear_range(struct i915_address_space *vm,
 	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
 	unsigned long first_entry = start / I915_GTT_PAGE_SIZE;
 	unsigned long num_entries = length / I915_GTT_PAGE_SIZE;
-	gen8_pte_t __iomem *pte =
-		(gen8_pte_t __iomem *)ggtt->gsm + first_entry;
+	gen8_pte_t __iomem *pte = gsm_base(ggtt) + first_entry;
 	const gen8_pte_t scratch = i915_vm_ggtt_scratch0_encode(vm);
 
 	while (num_entries--)
@@ -724,17 +733,13 @@ err:
  *
  * Restore the memory mappings for all objects mapped to HW via the GGTT or a
  * DPT page table.
- *
- * Returns %true if restoring the mapping for any object that was in a write
- * domain before suspend.
  */
-bool i915_ggtt_resume_vm(struct i915_address_space *vm)
+void i915_ggtt_resume_vm(struct i915_address_space *vm)
 {
 	struct i915_vma *vma;
-	bool write_domain_objs = false;
 	int open;
 
-	drm_WARN_ON(&vm->i915->drm, !vm->is_ggtt && !vm->is_dpt);
+	GEM_BUG_ON(!vm->is_ggtt && !vm->is_dpt);
 
 	/* First fill our portion of the GTT with scratch pages */
 	vm->clear_range(vm, 0, vm->total);
@@ -742,7 +747,6 @@ bool i915_ggtt_resume_vm(struct i915_address_space *vm)
 	/* Skip rewriting PTE on VMA unbind. */
 	open = atomic_xchg(&vm->open, 0);
 
-	/* clflush objects bound into the GGTT and rebind them. */
 	list_for_each_entry(vma, &vm->bound_list, vm_link) {
 		struct drm_i915_gem_object *obj = vma->obj;
 		unsigned int was_bound =
@@ -751,34 +755,30 @@ bool i915_ggtt_resume_vm(struct i915_address_space *vm)
 		GEM_BUG_ON(!was_bound);
 		vma->ops->bind_vma(vm, vma,
 				   obj ? i915_gem_object_pat_index(obj) :
-					 i915_gem_get_pat_index(vm->i915,
-							I915_CACHE_NONE),
+				   i915_gem_get_pat_index(vm->i915,
+							  I915_CACHE_NONE),
 				   was_bound);
 		if (obj) { /* only used during resume => exclusive access */
-			write_domain_objs |= fetch_and_zero(&obj->write_domain);
+			fetch_and_zero(&obj->write_domain);
 			obj->read_domains |= I915_GEM_DOMAIN_GTT;
 		}
 	}
 
 	atomic_set(&vm->open, open);
-
-	return write_domain_objs;
 }
 
 void i915_ggtt_resume(struct i915_ggtt *ggtt)
 {
 	struct intel_gt *gt;
-	bool flush;
+	intel_wakeref_t wf;
 
 	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
 		intel_gt_check_and_clear_faults(gt);
 
-	flush = i915_ggtt_resume_vm(&ggtt->vm);
-
-	ggtt->invalidate(ggtt);
-
-	if (flush)
-		wbinvd_on_all_cpus();
+	with_intel_gt_pm(ggtt->vm.gt, wf) {
+		i915_ggtt_resume_vm(&ggtt->vm);
+		ggtt->invalidate(ggtt);
+	}
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
@@ -1289,7 +1289,7 @@ static gen8_pte_t prepare_vf_pte(struct i915_ggtt *ggtt, u16 vfid)
 void i915_ggtt_set_space_owner(struct i915_ggtt *ggtt, u16 vfid,
 			       const struct drm_mm_node *node)
 {
-	gen8_pte_t __iomem *gtt_entries = ggtt->gsm;
+	gen8_pte_t __iomem *gtt_entries = gsm_base(ggtt);
 	const gen8_pte_t pte = prepare_vf_pte(ggtt, vfid);
 	u64 base = node->start;
 	u64 size = node->size;
@@ -1343,7 +1343,7 @@ static void ggtt_pte_clear_vfid(void *buf, u64 size)
 int i915_ggtt_save_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *node, void *buf,
 			unsigned int size, unsigned int flags)
 {
-	gen8_pte_t __iomem *gtt_entries = ggtt->gsm;
+	gen8_pte_t __iomem *gtt_entries = gsm_base(ggtt);
 
 	if (!buf && !size)
 		return __ggtt_size_to_ptes_size(node->size);
@@ -1385,7 +1385,7 @@ int i915_ggtt_save_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *node, 
 int i915_ggtt_restore_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *node, const void *buf,
 			   unsigned int size, unsigned int flags)
 {
-	gen8_pte_t __iomem *gtt_entries = ggtt->gsm;
+	gen8_pte_t __iomem *gtt_entries = gsm_base(ggtt);
 	u32 vfid = FIELD_GET(I915_GGTT_RESTORE_PTES_VFID_MASK, flags);
 	gen8_pte_t pte;
 

@@ -49,22 +49,24 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 
 | OS Distribution | OS Version | DKMS Package Target | Binary Package Target|
 |---|---|---|---|
-| RHEL® | 9.3 | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.2 | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.0 | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.9 | dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.8 | dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.6 | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.4  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.3  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.2  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.0  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.10 | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.9  | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.8  | dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 8.6  | dkmsrpm-pkg | binrpm-pkg |
 
 ### Dynamic Kernel Module Support(DKMS)
 Creating i915 DKMS packages
 ```
 $ make <Build Options> <DKMS Package Target>
-Example: For RHEL9.3
+Example: For RHEL9.4
 	$ make i915dkmsrpm-pkg
 
 	Generated package name :
-		intel-i915-dkms-1.23.6.24.230425.29-1.x86_64.rpm
+		intel-i915-dkms-1.24.3.13.240419.12-1.x86_64.rpm
 ```
 
 Above command will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
@@ -74,21 +76,21 @@ Please note that DKMS installation will skip if the kernel headers are not insta
 In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64 \
-kernel-devel-<RHEL_9.3_KERNEL_VERSION>.el9_3.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64 \
+kernel-devel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-362.2.1.el9_3.x86_64 \
-     kernel-devel-5.14.0-362.2.1.el9_3.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-427.el9.x86_64 \
+     kernel-devel-5.14.0-427.el9.x86_64
 ```
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.9_KERNEL_VERSION>.el8_9.x86_64 \
-kernel-devel-<RHEL_8.9_KERNEL_VERSION>.el8_9.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_8.10_KERNEL_VERSION>.el8_10.x86_64 \
+kernel-devel-<RHEL_8.10_KERNEL_VERSION>.el8_10.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-4.18.0-513.1.1.el8_9.x86_64 \
-     kernel-devel-4.18.0-513.1.1.el8_9.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-4.18.0-544.el8_10.x86_64 \
+     kernel-devel-4.18.0-544.el8_10.x86_64
 ```
 
 ### Binary RPM

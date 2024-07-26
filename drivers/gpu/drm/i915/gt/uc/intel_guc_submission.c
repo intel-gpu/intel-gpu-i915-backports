@@ -1587,7 +1587,8 @@ static int guc_busy_v2_alloc_device(struct intel_guc *guc)
 	void *busy_v2_ptr;
 	int ret;
 
-	ret = intel_guc_allocate_and_map_vma(guc, size, &guc->busy.v2.device_vma, &busy_v2_ptr);
+	ret = __intel_guc_allocate_and_map_vma(guc, size, true,
+					       &guc->busy.v2.device_vma, &busy_v2_ptr);
 	if (ret)
 		return ret;
 

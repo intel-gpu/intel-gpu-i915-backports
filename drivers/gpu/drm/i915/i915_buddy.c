@@ -675,10 +675,6 @@ void i915_buddy_fini(struct i915_buddy_mm *mm)
 	kfree(mm->dirty_list);
 }
 
-#if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/i915_buddy.c"
-#endif
-
 void i915_buddy_module_exit(void)
 {
 	kmem_cache_destroy(slab_blocks);

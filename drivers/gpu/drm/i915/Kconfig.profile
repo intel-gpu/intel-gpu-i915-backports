@@ -137,3 +137,10 @@ config DRM_I915_DEBUGGER_KFIFO
 	int "Select kfifo event queue size for EU debugger"
 	default 256
 	range 2 512
+
+config DRM_I915_PVC_FORCEWAKE_DELAY_MS
+       int "Select time in milliseconds for delayed forcewake release for Pontevecchio"
+       default 1000 # milliseconds
+       help
+         Delay forcewake release by this time for any pending operations
+         to complete before RC6 entry.

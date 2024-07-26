@@ -39,7 +39,6 @@
  */
 #define HSW_CXT_TOTAL_SIZE		(17 * PAGE_SIZE)
 
-#define DEFAULT_LR_CONTEXT_RENDER_SIZE	(22 * PAGE_SIZE)
 #define GEN8_LR_CONTEXT_RENDER_SIZE	(20 * PAGE_SIZE)
 #define GEN9_LR_CONTEXT_RENDER_SIZE	(22 * PAGE_SIZE)
 #define GEN11_LR_CONTEXT_RENDER_SIZE	(14 * PAGE_SIZE)
@@ -305,7 +304,7 @@ u32 intel_engine_context_size(struct intel_gt *gt, u8 class)
 	switch (class) {
 	case COMPUTE_CLASS:
 	case RENDER_CLASS:
-		return DEFAULT_LR_CONTEXT_RENDER_SIZE;
+		return GEN11_LR_CONTEXT_RENDER_SIZE;
 	default:
 		MISSING_CASE(class);
 		fallthrough;

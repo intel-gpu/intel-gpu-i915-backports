@@ -7,6 +7,7 @@
 
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_mcr.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_regs.h"
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_lmem.h"
@@ -315,6 +316,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	u32 read_offset, write_offset;
 	struct per_dss_buf *dss_buf;
 	bool line_drop = false;
+	intel_wakeref_t wf;
 	int ret = 0;
 
 	/* Hardware increments the read and write pointers such that they can
@@ -324,6 +326,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	 * Read and write offsets are calculated from the pointers in order to
 	 * check if the write pointer has wrapped around the array.
 	 */
+	wf = intel_gt_pm_get(stream->tile_gt);
 	dss_buf = &stream->dss_buf[subslice];
 	mutex_lock(&dss_buf->lock);
 	dss_start_vaddr = dss_buf->vaddr;
@@ -351,8 +354,7 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
 				      read_offset, write_offset, *total_size);
 	if (write_ptr == read_ptr) {
-		mutex_unlock(&dss_buf->lock);
-		return 0;
+		goto out_unlock;
 	}
 
 	/* If write pointer offset is less than the read pointer offset,
@@ -367,10 +369,8 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 	if ((*total_size + size) > count)
 		size = count - *total_size;
 
-	if (size == 0) {
-		mutex_unlock(&dss_buf->lock);
-		return 0;
-	}
+	if (size == 0)
+		goto out_unlock;
 
 	if (line_drop)
 		flags = PRELIM_I915_EUSTALL_FLAG_OVERFLOW_DROP;
@@ -393,8 +393,8 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 						tmp_addr += CACHELINE_BYTES)
 			memcpy((tmp_addr + 48), &info, sizeof(info));
 		if (copy_to_user((buf + *total_size), read_vaddr, size)) {
-			mutex_unlock(&dss_buf->lock);
-			return -EFAULT;
+			ret = -EFAULT;
+			goto out_unlock;
 		}
 		*total_size += size;
 		read_ptr += size;
@@ -406,8 +406,8 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 						tmp_addr += CACHELINE_BYTES)
 			memcpy((tmp_addr + 48), &info, sizeof(info));
 		if (copy_to_user((buf + *total_size), read_vaddr, tmp_size)) {
-			mutex_unlock(&dss_buf->lock);
-			return -EFAULT;
+			ret = -EFAULT;
+			goto out_unlock;
 		}
 		*total_size += tmp_size;
 		read_ptr += tmp_size;
@@ -419,8 +419,8 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 					tmp_addr += CACHELINE_BYTES)
 				memcpy((tmp_addr + 48), &info, sizeof(info));
 			if (copy_to_user((buf + *total_size), dss_start_vaddr, size)) {
-				mutex_unlock(&dss_buf->lock);
-				return -EFAULT;
+				ret = -EFAULT;
+				goto out_unlock;
 			}
 			*total_size += size;
 			read_ptr += size;
@@ -441,7 +441,9 @@ __i915_eu_stall_buf_read(struct i915_eu_stall_cntr_stream *stream,
 		dss_buf->line_drop = false;
 	}
 	dss_buf->read = read_ptr;
+out_unlock:
 	mutex_unlock(&dss_buf->lock);
+	intel_gt_pm_put(stream->tile_gt, wf);
 	trace_i915_eu_stall_cntr_read(s, ss, read_ptr, write_ptr,
 				      read_offset, write_offset, *total_size);
 	return ret;

@@ -855,7 +855,7 @@ hwm_get_preregistration_info(struct drm_i915_private *i915)
 
 	if (IS_DG1(i915) || IS_DG2(i915)) {
 		hwmon->rg.pkg_power_sku_unit = PCU_PACKAGE_POWER_SKU_UNIT;
-		hwmon->rg.pkg_power_sku = PCU_PACKAGE_POWER_SKU;
+		hwmon->rg.pkg_power_sku = INVALID_MMIO_REG;
 		hwmon->rg.pkg_rapl_limit = PCU_PACKAGE_RAPL_LIMIT;
 		hwmon->rg.energy_status_all = PCU_PACKAGE_ENERGY_STATUS;
 		hwmon->rg.energy_status_tile = INVALID_MMIO_REG;

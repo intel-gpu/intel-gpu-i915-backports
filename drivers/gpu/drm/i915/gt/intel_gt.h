@@ -176,9 +176,17 @@ static inline void pvc_wa_disallow_rc6(struct drm_i915_private *i915)
 	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_get);
 }
 
+static inline void pvc_wa_uncore_forcewake_put(struct intel_uncore *uncore,
+					       enum forcewake_domains fw_domains)
+{
+	u64 delay_ns = uncore->i915->params.pvc_fw_put_delay_ms * NSEC_PER_MSEC;
+
+	intel_uncore_forcewake_put_delayed(uncore, fw_domains, delay_ns);
+}
+
 static inline void pvc_wa_allow_rc6(struct drm_i915_private *i915)
 {
-	_pvc_wa_disallow_rc6(i915, intel_uncore_forcewake_put);
+	_pvc_wa_disallow_rc6(i915, pvc_wa_uncore_forcewake_put);
 }
 
 void intel_gt_info_print(const struct intel_gt_info *info,

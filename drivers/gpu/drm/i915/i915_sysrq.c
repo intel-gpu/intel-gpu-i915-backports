@@ -117,7 +117,7 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 
 	drm_printf(p, "GT%d awake? %s [%d], %llums\n",
 		   gt->info.id,
-		   str_yes_no(gt->awake),
+		   str_yes_no(intel_gt_pm_is_awake(gt)),
 		   atomic_read(&gt->wakeref.count),
 		   ktime_to_ms(intel_gt_get_awake_time(gt)));
 	drm_printf(p, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
@@ -126,7 +126,7 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 		   ewma_irq_time_read(&gt->stats.irq.avg),
 		   READ_ONCE(gt->stats.irq.max));
 
-	if (gt->awake)
+	if (intel_gt_pm_is_awake(gt))
 		intel_wakeref_show(&gt->wakeref, p);
 
 	with_intel_gt_pm_if_awake(gt, wakeref)

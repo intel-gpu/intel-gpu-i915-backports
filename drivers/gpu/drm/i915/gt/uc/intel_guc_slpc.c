@@ -276,7 +276,7 @@ int intel_guc_slpc_init(struct intel_guc_slpc *slpc)
 
 	GEM_BUG_ON(slpc->vma);
 
-	err = intel_guc_allocate_and_map_vma(guc, size, &slpc->vma, (void **)&slpc->vaddr);
+	err = __intel_guc_allocate_and_map_vma(guc, size, true, &slpc->vma, (void **)&slpc->vaddr);
 	if (unlikely(err)) {
 		guc_probe_error(guc, "Failed to allocate SLPC struct: %pe\n", ERR_PTR(err));
 		return err;

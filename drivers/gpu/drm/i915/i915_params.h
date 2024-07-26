@@ -91,6 +91,7 @@ struct drm_printer;
 	param(unsigned int, guc_log_destination, 0, 0400) \
 	param(unsigned int, ring_mask, (unsigned int)~0, 0400) \
 	param(int, max_tiles, -1, 0400) \
+	param(unsigned int, pvc_fw_put_delay_ms, CPTCFG_DRM_I915_PVC_FORCEWAKE_DELAY_MS, 0600) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, enable_busy_v2, false, 0400) \
 	param(bool, allow_non_persist_without_reset, false, 0400) \

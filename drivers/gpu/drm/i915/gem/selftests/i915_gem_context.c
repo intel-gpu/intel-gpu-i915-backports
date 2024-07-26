@@ -23,7 +23,6 @@
 #include "selftests/igt_reset.h"
 #include "selftests/igt_spinner.h"
 #include "selftests/mock_drm.h"
-#include "selftests/mock_gem_device.h"
 
 #include "huge_gem_object.h"
 #include "igt_gem_utils.h"
@@ -1727,23 +1726,6 @@ out_file:
 	if (igt_live_test_end(&t))
 		err = -EIO;
 	fput(file);
-	return err;
-}
-
-int i915_gem_context_mock_selftests(void)
-{
-	static const struct i915_subtest tests[] = {
-	};
-	struct drm_i915_private *i915;
-	int err;
-
-	i915 = mock_gem_device();
-	if (!i915)
-		return -ENOMEM;
-
-	err = i915_subtests(tests, i915);
-
-	mock_destroy_device(i915);
 	return err;
 }
 

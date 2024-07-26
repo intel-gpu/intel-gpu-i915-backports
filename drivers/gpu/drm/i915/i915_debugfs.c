@@ -312,6 +312,7 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		intel_memory_region_print(mr, 0, &p);
 
 	for_each_gt(gt, i915, id) {
+		intel_wakeref_t wf;
 		u64 t;
 
 		t = local64_read(&gt->stats.migration_stall);
@@ -322,24 +323,26 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 		if (!gt->counters.map)
 			continue;
 
-		show_xfer(m, gt, "clear-on-alloc",
-			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
-		show_xfer(m, gt, "clear-on-free",
-			  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES]);
-		show_xfer(m, gt, "clear-on-idle",
-			  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
-			  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
-		show_xfer(m, gt, "swap-in",
-			  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
-			  gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
-		show_xfer(m, gt, "swap-out",
-			  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
-			  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
-		show_xfer(m, gt, "copy",
-			  gt->counters.map[INTEL_GT_COPY_BYTES],
-			  gt->counters.map[INTEL_GT_COPY_CYCLES]);
+		with_intel_gt_pm(gt, wf) {
+			show_xfer(m, gt, "clear-on-alloc",
+				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
+			show_xfer(m, gt, "clear-on-free",
+				  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES]);
+			show_xfer(m, gt, "clear-on-idle",
+				  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES]);
+			show_xfer(m, gt, "swap-in",
+				  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
+				  gt->counters.map[INTEL_GT_SWAPIN_CYCLES]);
+			show_xfer(m, gt, "swap-out",
+				  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
+				  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES]);
+			show_xfer(m, gt, "copy",
+				  gt->counters.map[INTEL_GT_COPY_BYTES],
+				  gt->counters.map[INTEL_GT_COPY_CYCLES]);
+		}
 	}
 
 	return 0;
@@ -486,7 +489,7 @@ static int i915_rps_boost_info_show(struct seq_file *m, void *data)
 
 	seq_printf(m, "RPS enabled? %s\n", str_yes_no(intel_rps_is_enabled(rps)));
 	seq_printf(m, "RPS active? %s\n", str_yes_no(intel_rps_is_active(rps)));
-	seq_printf(m, "GPU busy? %s\n", str_yes_no(to_gt(dev_priv)->awake));
+	seq_printf(m, "GPU busy? %s\n", str_yes_no(intel_gt_pm_is_awake(to_gt(dev_priv))));
 	seq_printf(m, "Boosts outstanding? %d\n",
 		   atomic_read(&rps->num_waiters));
 	seq_printf(m, "Interactive? %d\n", READ_ONCE(rps->power.interactive));
@@ -577,7 +580,7 @@ static int i915_runtime_pm_status_show(struct seq_file *m, void *unused)
 		   str_enabled_disabled(!dev_priv->power_domains.init_wakeref));
 #endif
 
-	seq_printf(m, "GPU idle: %s\n", str_yes_no(!to_gt(dev_priv)->awake));
+	seq_printf(m, "GPU idle: %s\n", str_yes_no(!intel_gt_pm_is_awake(to_gt(dev_priv))));
 	seq_printf(m, "IRQs disabled: %s\n",
 		   str_yes_no(!intel_irqs_enabled(dev_priv)));
 	config_pm_dump(m);
@@ -608,7 +611,7 @@ static int i915_engine_info_show(struct seq_file *m, void *unused)
 	for_each_gt(gt, i915, id) {
 		seq_printf(m, "GT%d awake? %s [%d], %llums\n",
 			   gt->info.id,
-			   str_yes_no(gt->awake),
+			   str_yes_no(intel_gt_pm_is_awake(gt)),
 			   atomic_read(&gt->wakeref.count),
 			   ktime_to_ms(intel_gt_get_awake_time(gt)));
 		seq_printf(m, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",

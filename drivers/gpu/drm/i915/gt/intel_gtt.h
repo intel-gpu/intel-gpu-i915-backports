@@ -588,7 +588,7 @@ int i915_ggtt_restore_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *nod
 struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt, u32 flags);
 
 void i915_ggtt_suspend_vm(struct i915_address_space *vm);
-bool i915_ggtt_resume_vm(struct i915_address_space *vm);
+void i915_ggtt_resume_vm(struct i915_address_space *vm);
 void i915_ggtt_suspend(struct i915_ggtt *gtt);
 void i915_ggtt_resume(struct i915_ggtt *ggtt);
 

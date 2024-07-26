@@ -549,7 +549,6 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 	int count = i915->params.debug_pages & ~BIT(31);
 	bool lmem = i915->params.debug_pages & BIT(31);
 	u32 size = count << PAGE_SHIFT;
-	void* vaddr;
 
 	if (!count)
 		return;
@@ -571,13 +570,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 		return;
 	}
 
-	vaddr = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WC);
-	if (!vaddr)
-		goto err_unref;
-
-	memset(vaddr, 0, size);
-
-	i915_gem_object_unpin_map(obj);
+	obj->flags |= I915_BO_CPU_CLEAR;
 
 	vma = i915_vma_instance(obj, &gt->ggtt->vm, NULL);
 	if (IS_ERR(vma))

@@ -21,7 +21,6 @@
 #include "mock_context.h"
 
 #include "selftests/mock_drm.h"
-#include "selftests/mock_gem_device.h"
 #include "selftests/mock_region.h"
 #include "selftests/i915_random.h"
 

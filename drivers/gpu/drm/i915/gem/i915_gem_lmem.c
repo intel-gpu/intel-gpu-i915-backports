@@ -422,13 +422,14 @@ bool i915_gem_object_is_lmem(const struct drm_i915_gem_object *obj)
 }
 
 struct drm_i915_gem_object *
-i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
+i915_gem_object_create_lmem_from_data(struct intel_memory_region *mem,
 				      const void *data, size_t size)
 {
 	struct drm_i915_gem_object *obj;
+	intel_wakeref_t wf;
 	void *map;
 
-	obj = i915_gem_object_create_region(region,
+	obj = i915_gem_object_create_region(mem,
 					    round_up(size, PAGE_SIZE),
 					    I915_BO_ALLOC_CONTIGUOUS);
 	if (IS_ERR(obj))
@@ -440,7 +441,8 @@ i915_gem_object_create_lmem_from_data(struct intel_memory_region *region,
 		return map;
 	}
 
-	memcpy(map, data, size);
+	with_intel_gt_pm(mem->gt, wf)
+		memcpy(map, data, size);
 
 	i915_gem_object_flush_map(obj);
 	__i915_gem_object_release_map(obj);
@@ -1376,6 +1378,8 @@ struct swap_work {
 	struct await_fences *proxy;
 	struct drm_i915_gem_object *lmem;
 	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
 };
 
 static int swap_work(struct dma_fence_work *base)
@@ -1428,7 +1432,9 @@ static void swap_release(struct dma_fence_work *base)
 
 	i915_gem_object_unpin_pages(smem);
 	i915_gem_object_put(smem);
+
 	i915_gem_object_put(wrk->lmem);
+	intel_gt_pm_put_async(wrk->gt, wrk->wakeref);
 }
 
 static const struct dma_fence_work_ops swap_ops = {
@@ -1450,6 +1456,9 @@ static int lmem_swapin(struct drm_i915_gem_object *lmem)
 	sw = kmalloc(sizeof(*sw), GFP_KERNEL);
 	if (!sw)
 		return -ENOMEM;
+
+	sw->gt = lmem->mm.region.mem->gt;
+	sw->wakeref = intel_gt_pm_get(sw->gt);
 
 	sw->proxy = await_create(se, 1, 0);
 	if (!sw->proxy) {
@@ -1488,6 +1497,7 @@ err_unpin:
 err_put:
 	i915_gem_object_put(lmem);
 err:
+	intel_gt_pm_put(sw->gt, sw->wakeref);
 	kfree(sw->proxy);
 	kfree(sw);
 	ras_error(to_i915(lmem->base.dev), err);
@@ -1859,6 +1869,8 @@ use_cpu_clear(struct drm_i915_gem_object *obj, unsigned int flags)
 struct clear_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *lmem;
+	struct intel_gt *gt;
+	intel_wakeref_t wakeref;
 	struct await_chain cb[];
 };
 
@@ -1875,6 +1887,7 @@ static void clear_release(struct dma_fence_work *base)
 	struct clear_work *wrk = container_of(base, typeof(*wrk), base);
 
 	i915_gem_object_put(wrk->lmem);
+	intel_gt_pm_put_async(wrk->gt, wrk->wakeref);
 }
 
 static const struct dma_fence_work_ops clear_ops = {
@@ -1901,6 +1914,9 @@ static int async_clear(struct drm_i915_gem_object *obj)
 	dma_fence_work_init(&c->base, &clear_ops,
 			    to_i915(obj->base.dev)->mm.sched);
 	c->lmem = i915_gem_object_get(obj);
+
+	c->gt = obj->mm.region.mem->gt;
+	c->wakeref = intel_gt_pm_get(c->gt);
 
 	count = 0;
 	list_for_each_entry(block, &obj->mm.blocks, link) {
@@ -2040,13 +2056,18 @@ static int lmem_clear(struct drm_i915_gem_object *obj)
 			flags |= I915_BO_CPU_CLEAR;
 	}
 
-	/* Avoid misspending PCI credits between the GT; must use BLT clears */
-	if (ce && gt->info.id > 0 && intel_gt_pm_is_awake(gt))
-		flags &= ~I915_BO_CPU_CLEAR;
+	/*
+	 * Wake the device for both CPU and/or GPU writes into lmem.
+	 *
+	 * Generally this path is called just prior to user execution, so
+	 * waking up the GT now should benefit the subsequent operation on the
+	 * memory.
+	 */
+	wf = intel_gt_pm_get(gt);
 
-	/* Clear is too small to benefit from waking up the GPU */
-	if (ce && obj->base.size < SZ_2M && !(wf = intel_gt_pm_get_if_awake(gt)))
-		flags |= I915_BO_CPU_CLEAR;
+	/* Avoid misspending PCI credits between the GT; must use BLT clears */
+	if (ce && gt->info.id > 0)
+		flags &= ~I915_BO_CPU_CLEAR;
 
 	if (use_cpu_clear(obj, flags))
 		err = async_clear(obj);
@@ -2055,8 +2076,7 @@ static int lmem_clear(struct drm_i915_gem_object *obj)
 	else
 		err = await_blt(obj, AWAIT_NO_ERROR);
 
-	if (wf)
-		intel_gt_pm_put(gt, wf);
+	intel_gt_pm_put(gt, wf);
 
 	/* recycling dirty memory; proactively clear on release */
 	set_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
