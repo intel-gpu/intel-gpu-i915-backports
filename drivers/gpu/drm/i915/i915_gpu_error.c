@@ -2853,7 +2853,7 @@ void intel_klog_error_capture(struct intel_gt *gt,
 		i915_reset_error_state(i915);
 	}
 
-	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
+	with_intel_gt_pm(gt, wakeref)
 		error = i915_gpu_coredump(gt, engine_mask, CORE_DUMP_FLAG_NONE);
 
 	if (IS_ERR(error)) {

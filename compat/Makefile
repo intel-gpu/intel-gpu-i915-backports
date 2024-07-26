@@ -45,7 +45,8 @@ ifeq ($(CPTCFG_DRM_I915_DISPLAY),y)
 i915-compat-$(CPTCFG_BUILD_I915) += backport-nodrm.o
 endif
 i915-compat-y += backport-5.19.o
-i915-compat-y += slub.o slab.o ptrace.o vmscan.o swap.o dma-resv.o swiotlb.o hdmi.o power_runtime.o
+i915-compat-y += slub.o slab.o ptrace.o vmscan.o swap.o dma-resv.o swiotlb.o hdmi.o power_runtime.o proc_fs.o
+i915-compat-$(CPTCFG_PCIEAER) += aer.o
 
 
 get_release_version = $(strip $(shell expr $(1) \* 256 + 0$(2)))

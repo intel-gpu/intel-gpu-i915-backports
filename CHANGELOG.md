@@ -1,4 +1,11 @@
 # ChangeLog
+## Release I915_24WW30.4_803.75_23.10.54_231129.55
+* Fixed an issue where the PCMark Benchmark was failing on VMWare ESXi.
+* Fixed an issue where a Memory-Mapped I/O-related error occurred on a SLES device after rebooting.
+* Added a workaround for High-Performance Linpack (HPL) residual failures with high number of data mismatches. 
+  This workaround promotes all Translation Lookaside Buffer (TLB) invalidations to operate on 
+  the entire STLB, regardless of engine activity.
+
 ## Release I915_24WW24.5_803.63_23.10.49_231129.51
 * Fixed the kernel 6.5.0-41 compilation issue on Ubuntu 22.04
 

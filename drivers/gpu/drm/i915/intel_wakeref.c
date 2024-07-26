@@ -11,7 +11,7 @@
 
 int __intel_wakeref_get_first(struct intel_wakeref *wf)
 {
-	intel_wakeref_t wakeref = intel_runtime_pm_get(wf->rpm);
+	intel_wakeref_t wakeref = (wf->ops->pm_get ?: (typeof(wf->ops->pm_get))intel_runtime_pm_get)(wf->rpm);
 	int err = 0;
 
 	/*
@@ -41,7 +41,7 @@ int __intel_wakeref_get_first(struct intel_wakeref *wf)
 unlock:
 	mutex_unlock(&wf->mutex);
 	if (unlikely(wakeref))
-		intel_runtime_pm_put(wf->rpm, wakeref);
+		(wf->ops->pm_put ?: (typeof(wf->ops->pm_put))intel_runtime_pm_put)(wf->rpm, wakeref);
 
 	return err;
 }
@@ -67,7 +67,7 @@ static void ____intel_wakeref_put_last(struct intel_wakeref *wf)
 unlock:
 	mutex_unlock(&wf->mutex);
 	if (wakeref)
-		intel_runtime_pm_put(wf->rpm, wakeref);
+		(wf->ops->pm_put ?: (typeof(wf->ops->pm_put))intel_runtime_pm_put)(wf->rpm, wakeref);
 }
 
 void __intel_wakeref_put_last(struct intel_wakeref *wf, unsigned long flags)
@@ -95,22 +95,21 @@ static void __intel_wakeref_put_work(struct work_struct *wrk)
 	____intel_wakeref_put_last(wf);
 }
 
-void __intel_wakeref_init(struct intel_wakeref *wf,
-			  struct intel_runtime_pm *rpm,
-			  const struct intel_wakeref_ops *ops,
-			  struct intel_wakeref_lockclass *key,
-			  const char *name)
+void intel_wakeref_init(struct intel_wakeref *wf,
+			void *rpm,
+			const struct intel_wakeref_ops *ops,
+			const char *name)
 {
 	wf->rpm = rpm;
 	wf->ops = ops;
 
-	__mutex_init(&wf->mutex, "wakeref.mutex", &key->mutex);
+	__mutex_init(&wf->mutex, "wakeref.mutex", (void*)ops->pm_get ?: (void*)&ops->get);
 	atomic_set(&wf->count, 0);
 	wf->wakeref = 0;
 
 	INIT_DELAYED_WORK(&wf->work, __intel_wakeref_put_work);
 	lockdep_init_map(&wf->work.work.lockdep_map,
-			 "wakeref.work", &key->work, 0);
+			 "wakeref.work", (void*)ops->pm_put ?: (void*)&ops->put, 0);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_WAKEREF)
 	ref_tracker_dir_init(&wf->debug, INTEL_REFTRACK_DEAD_COUNT, name);

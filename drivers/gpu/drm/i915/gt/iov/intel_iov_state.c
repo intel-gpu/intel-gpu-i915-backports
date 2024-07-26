@@ -9,6 +9,7 @@
 #include "intel_iov_utils.h"
 #include "gem/i915_gem_lmem.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/uc/abi/guc_actions_pf_abi.h"
 
 static void pf_state_worker_func(struct work_struct *w);
@@ -107,7 +108,6 @@ static int guc_action_vf_control_cmd(struct intel_guc *guc, u32 vfid, u32 cmd)
 
 static int pf_control_vf(struct intel_iov *iov, u32 vfid, u32 cmd)
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
@@ -115,7 +115,7 @@ static int pf_control_vf(struct intel_iov *iov, u32 vfid, u32 cmd)
 	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
 	GEM_BUG_ON(!vfid);
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		err = guc_action_vf_control_cmd(iov_to_guc(iov), vfid, cmd);
 
 	return err;
@@ -624,21 +624,20 @@ failed:
  * Return: 0 on success or a negative error code on failure.
  */
 #ifdef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
-int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf) 
+int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf)
 #else
 int intel_iov_state_save_vf(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
 #endif
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
-#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT	
+#ifndef BPM_VFIO_SR_IOV_VF_MIGRATION_NOT_PRESENT
 	if (size < PF2GUC_SAVE_RESTORE_VF_BUFF_SIZE)
 		return -EINVAL;
 #endif
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		err = pf_save_vf(iov, vfid, buf);
 
 	return err;
@@ -732,11 +731,10 @@ int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf)
 int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf, size_t size)
 #endif
 {
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	intel_wakeref_t wakeref;
 	int err = -ENONET;
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		err = pf_restore_vf(iov, vfid, buf);
 
 	if (err == 0)
@@ -760,7 +758,6 @@ int intel_iov_state_restore_vf(struct intel_iov *iov, u32 vfid, const void *buf,
 ssize_t intel_iov_state_save_ggtt(struct intel_iov *iov, u32 vfid, void *buf, size_t size)
 {
 	struct drm_mm_node *node = &iov->pf.provisioning.configs[vfid].ggtt_region;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	intel_wakeref_t wakeref;
 	ssize_t ret;
@@ -774,7 +771,7 @@ ssize_t intel_iov_state_save_ggtt(struct intel_iov *iov, u32 vfid, void *buf, si
 		goto out;
 	}
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = i915_ggtt_save_ptes(ggtt, node, buf, size, I915_GGTT_SAVE_PTES_NO_VFID);
 
 out:
@@ -797,7 +794,6 @@ out:
 int intel_iov_state_restore_ggtt(struct intel_iov *iov, u32 vfid, const void *buf, size_t size)
 {
 	struct drm_mm_node *node = &iov->pf.provisioning.configs[vfid].ggtt_region;
-	struct intel_runtime_pm *rpm = iov_to_gt(iov)->uncore->rpm;
 	struct i915_ggtt *ggtt = iov_to_gt(iov)->ggtt;
 	intel_wakeref_t wakeref;
 	int ret;
@@ -806,7 +802,7 @@ int intel_iov_state_restore_ggtt(struct intel_iov *iov, u32 vfid, const void *bu
 
 	mutex_lock(pf_provisioning_mutex(iov));
 
-	with_intel_runtime_pm(rpm, wakeref)
+	with_intel_gt_pm(iov_to_gt(iov), wakeref)
 		ret = i915_ggtt_restore_ptes(ggtt, node, buf, size,
 					     FIELD_PREP(I915_GGTT_RESTORE_PTES_VFID_MASK, vfid) |
 					     I915_GGTT_RESTORE_PTES_NEW_VFID);

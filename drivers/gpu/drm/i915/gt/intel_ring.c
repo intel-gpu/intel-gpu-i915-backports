@@ -222,6 +222,8 @@ u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
 	unsigned int total_bytes;
 	u32 *cs;
 
+	assert_gt_pm_held(rq->engine->gt);
+
 	/* Packets must be qword aligned. */
 	GEM_BUG_ON(num_dwords & 1);
 

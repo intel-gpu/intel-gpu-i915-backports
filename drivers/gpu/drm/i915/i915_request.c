@@ -2374,7 +2374,6 @@ i915_request_free(struct i915_request *rq)
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/mock_request.c"
 #include "selftests/i915_request.c"
 #endif
 

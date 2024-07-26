@@ -6,6 +6,10 @@
 #include <linux/sysfs.h>
 #include <backport/bp_module_version.h>
 
+#ifdef BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+#include "proc_fs.h"
+#endif
+
 MODULE_AUTHOR("Luis R. Rodriguez");
 MODULE_VERSION(BACKPORT_MOD_VER);
 MODULE_DESCRIPTION("Kernel backport module");
@@ -90,6 +94,10 @@ static int __init backport_init(void)
                 printk(KERN_ERR "DKMS sysfs create file failed\n");
                 return ret;
        }
+
+#ifdef BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+        check_pcie_port_param();
+#endif
 
         return 0;
 }

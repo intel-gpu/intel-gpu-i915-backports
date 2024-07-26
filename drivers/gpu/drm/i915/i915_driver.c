@@ -340,7 +340,7 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	 * It is also used for periodic low-priority events, such as
 	 * idle-timers and recording error state.
 	 */
-	dev_priv->wq = alloc_workqueue("i915", WQ_UNBOUND, 0);
+	dev_priv->wq = alloc_workqueue("i915", WQ_UNBOUND | WQ_CPU_INTENSIVE, 0);
 	if (!dev_priv->wq)
 		goto out_err;
 

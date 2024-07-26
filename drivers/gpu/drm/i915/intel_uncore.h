@@ -240,7 +240,8 @@ void intel_uncore_forcewake_get(struct intel_uncore *uncore,
 void intel_uncore_forcewake_put(struct intel_uncore *uncore,
 				enum forcewake_domains domains);
 void intel_uncore_forcewake_put_delayed(struct intel_uncore *uncore,
-					enum forcewake_domains domains);
+					enum forcewake_domains domains,
+					u64 delay);
 void intel_uncore_forcewake_flush(struct intel_uncore *uncore,
 				  enum forcewake_domains fw_domains);
 

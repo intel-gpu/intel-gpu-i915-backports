@@ -11,7 +11,6 @@
 #include "intel_engine_pm.h"
 
 #include "mock_engine.h"
-#include "selftests/mock_request.h"
 
 static int mock_timeline_pin(struct intel_timeline *tl)
 {

@@ -20,11 +20,6 @@ struct intel_rc6 {
 	u32 ctl_enable;
 	u32 pg_enable;
 
-	struct drm_i915_gem_object *pctx;
-
-	struct drm_i915_gem_object *dfd_restore_obj;
-	u32 *dfd_restore_buf;
-
 	bool supported : 1;
 	bool enabled : 1;
 	bool manual : 1;

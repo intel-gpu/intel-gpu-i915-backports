@@ -16,31 +16,42 @@
 
 #endif
 
+#if LINUX_VERSION_IS_GEQ(6,6,0)
+
+/*
+ * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
+ */
+#define BPM_MODULE_IMPORT_NS_CXL_SUPPORT
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
+
+#if (LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+
+/*
+ * 7ec4b34be423 PCI/AER: Unexport pci_enable_pcie_error_reporting()
+ */
+#define BPM_PCI_ENABLE_DISABLE_PCIE_ERROR_NOT_EXPORTED
+
+/*
+ * 6f2beb268a5 swiotlb: Update is_swiotlb_active to add a struct device argument
+ */
+#define BPM_IS_SWIOTLB_ACTIVE_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)*/
+
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,4) || \
 	(LINUX_VERSION_IS_GEQ(6,5,0) && ((UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34) && \
 	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )))
 /*
  * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
  */
 #define BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
-#endif
+#endif /* (LINUX_VERSION_IS_GEQ(6,6,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4)... */
 
 #if LINUX_VERSION_IS_GEQ(6,5,0)
 /*
  * 6801be4f2653 slub: Replace cmpxchg_double
  */
 #define BPM_FREELIST_ABA_T_NOT_PRESENT
-
-/*
- * 3d35ddfb0713 drm/display/dp_mst: drop has_audio from struct drm_dp_mst_port
- */
-#define BPM_PORT_HAS_AUDIO_MEMBER_NOT_PRESENT
-
-/*
- * c265f340eaa8
- * drm/connector: Allow drivers to pass list of supported colorspaces
- */
-#define BPM_SUPPORTED_COLORSPACES_ARG_NOT_PRESENT
 
 /*
  * e5a1fd997cc2 i915: simplify subdirectory registration with register_sysctl
@@ -59,6 +70,21 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(6,5,0) */
 
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+
+/*
+ * 3d35ddfb0713 drm/display/dp_mst: drop has_audio from struct drm_dp_mst_port
+ */
+#define BPM_PORT_HAS_AUDIO_MEMBER_NOT_PRESENT
+
+/*
+ * c265f340eaa8
+ * drm/connector: Allow drivers to pass list of supported colorspaces
+ */
+#define BPM_SUPPORTED_COLORSPACES_ARG_NOT_PRESENT
+
+#endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
+
 #if (LINUX_VERSION_IS_GEQ(6,4,5) || \
 	LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
 	(LINUX_VERSION_IN_RANGE(6,2,16, 6,3,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(36,37)) || \
@@ -71,11 +97,14 @@
 #endif /* (LINUX_VERSION_IS_GEQ(6,4,5) || LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) ... */
 
 #if LINUX_VERSION_IS_GEQ(6,4,0)
+
 /*
  * 1fb1ea0d9cb8 mei: Move uuid.h to the MEI namespace
  */
 #define BPM_UUID_H_NOT_PRESET
+#endif /* LINUX_VERSION_IS_GEQ(6,4,0) */
 
+#if ((LINUX_VERSION_IS_GEQ(6,4,0)) || (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)))
 /*
  * 6e30a66433af class: remove struct module owner out of struct class
  */
@@ -91,30 +120,26 @@
  */
 #define BPM_I2C_ADAPTER_ARG_NOT_PRESENT
 
-#endif /* LINUX_VERSION_IS_GEQ(6,4,0) */
+#endif /* LINUX_VERSION_IS_GEQ(6,4,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4) */
 
-#if (LINUX_VERSION_IS_GEQ(6,4,0) || LINUX_VERSION_IS_LESS(5,5,0))
+#if (LINUX_VERSION_IS_GEQ(6,4,0) || \
+	LINUX_VERSION_IS_LESS(5,5,0) || \
+	REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,4))
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
+
 /*
  * fa83433c92e3 iommu: Add I/O ASID allocator
  * 99b5726b4423 iommu: Remove ioasid infrastructure
  */
 #define BPM_IOASID_H_NOT_PRESENT
 #endif
-#endif
-#endif
+#endif /* LINUX_VERSION_IS_GEQ(6,4,0) || LINUX_VERSION_IS_LESS(5,5,0) ... */
 
 #if LINUX_VERSION_IS_GEQ(6,3,0)
 /*
  * f5b3c341a46e mei: Move uuid_le_cmp() to its only user
  */
 #define BPM_UUID_LE_CMP_NOT_PRESENT
-
-/*
- * 2a81ada32f0e driver core: make struct bus_type.uevent() take a const *
- */
-#define BPM_UEVENT_STRUCT_DEVICE_CONST_ARG_NOT_PRESENT
 
 /*
  * 1c71222e5f23
@@ -128,6 +153,15 @@
 #define BPM_GUID_INIT_NOT_EXPORTED
 
 #endif /*LINUX_VERSION_IS_GEQ(6,3,0) */
+
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+
+/*
+ * 2a81ada32f0e driver core: make struct bus_type.uevent() take a const *
+ */
+#define BPM_UEVENT_STRUCT_DEVICE_CONST_ARG_NOT_PRESENT
+
+#endif /* (LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,3,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
@@ -150,7 +184,7 @@
 
 #if (LINUX_VERSION_IS_GEQ(6,3,0) || \
 	LINUX_VERSION_IS_LESS(4,10,0) || \
-	REDHAT_RELEASE_VERSION_IS_EQL(8,9) || \
+	REDHAT_RELEASE_VERSION_IS_RANGE(8,9, 8,10) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 5e7b9a6ae8c3 swiotlb: remove swiotlb_max_segment
@@ -209,13 +243,15 @@
 #define BPM_PRANDOM_U32_MAX_NOT_PRESENT
 #endif /*LINUX_VERSION_IS_GEQ(6,2,0)*/
 
-#if (LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,4) || \
+	LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
 /*
  * 6e1ca48d0669b
  * folio-compat: remove lru_cache_add()
  */
 #define BPM_LRU_CACHE_ADD_API_NOT_PRESENT
-#endif /*LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) */
+#endif /*LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) ... */
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
@@ -445,7 +481,7 @@
 	(LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUNTU_RELEASE_VERSION_IS_GEQ(1004,4)) || \
 	LINUX_VERSION_IN_RANGE(5,15,33, 5,16,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) || \
 	(LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1035,38)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || (REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) && !(IS_ENABLED(CPTCFG_BUILD_I915)))|| \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || (REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,10) && !(IS_ENABLED(CPTCFG_BUILD_I915)))|| \
 	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
 	LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0))
 /*
@@ -551,7 +587,7 @@
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1)) */
 
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) || \
-	REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || \
+	REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,10) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,1))
 /*
  * 365481e42a8a driver core: auxiliary bus: Add driver data helpers
@@ -562,7 +598,7 @@
 
 #if (LINUX_VERSION_IS_GEQ(5,16,0) || \
 		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
-		(REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) && !(IS_ENABLED(CPTCFG_BUILD_I915))) || \
+		(REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,10) && !(IS_ENABLED(CPTCFG_BUILD_I915))) || \
 		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
 		CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
 		LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0) || \
@@ -634,12 +670,25 @@
  * 103c7044be5b207 drm/i915/edp: use MSO pixel overlap from DisplayID data
  */
 #define BPM_MSO_PIXEL_OVERLAP_DISPLAY_NOT_PRESENT
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+     (REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,10) && !(IS_ENABLED(CPTCFG_BUILD_I915))) || \
+      SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
+      CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
+      LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0) || \
+      LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
+/*
+ * d6c6a76f80a1c drm: Update MST First Link Slot Information Based on Encoding Format
+ */
+#define BPM_DRM_PAYLOAD_PART1_START_SLOT_NOT_PRESENT
+#endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) ... */
 #endif /* LINUX_VERSION_IS_LESS(5,16,0) */
 
 #if LINUX_VERSION_IS_LESS(5,15,46)
 #if !((SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && !(SUSE_LOCAL_VERSION_IS_LESS(24,11))) || \
         UBUNTU_RELEASE_VERSION_IS_GEQ(20,04) || \
-        REDHAT_RELEASE_VERSION_IS_EQL(8,9) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+        REDHAT_RELEASE_VERSION_IS_RANGE(8,9, 8,10) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * 0425473037db list: introduce list_is_head() helper and re-use it in list.h
  */
@@ -648,7 +697,7 @@
 #endif /* LINUX_VERSION_IS_LESS(5,15,46) */
 
 #if LINUX_VERSION_IS_LESS(5,15,8)
-#if !((REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,9) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1)) || \
+#if !((REDHAT_RELEASE_VERSION_IS_RANGE(8,7, 8,10) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1)) || \
 	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0) && SUSE_LOCAL_VERSION_IS_GEQ(24,41)))
 /*
  * e4779015fd5d timers: implement usleep_idle_range()
@@ -735,7 +784,7 @@
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2)) */
 
 
-#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1)|| REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,9) || \
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1)|| REDHAT_RELEASE_VERSION_IS_RANGE(8,2, 8,10) || \
        LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0) || \
        LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) || \
        CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
@@ -1684,7 +1733,7 @@
 #define BPM_DGLUT_24BIT_MTL_NOT_SUPPORTED
 
 #if ((LINUX_VERSION_IS_GEQ(5,14,0) || IS_ENABLED(CPTCFG_BUILD_I915)) && \
-	!(LINUX_VERSION_IS_GEQ(6,4,0)))
+	!((LINUX_VERSION_IS_GEQ(6,4,0)) || (REDHAT_RELEASE_VERSION_IS_GEQ(9,4))))
 /*
  * Introduced in DII_6885
  * 55aab652a8a5 Backport DSC YUV420 patches
@@ -1754,6 +1803,13 @@
 /*
  * REDHAT
  */
+
+#if (REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+/*
+ * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
+ */
+#define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+#endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
 #define BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
