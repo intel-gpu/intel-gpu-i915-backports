@@ -40,6 +40,7 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 | Red Hat® Enterprise Linux® 8.9       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 8.8       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 8.6       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| SUSE® Linux® Enterprise Server 15SP6 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
 | SUSE® Linux® Enterprise Server 15SP5 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
 | SUSE® Linux® Enterprise Server 15SP4 |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_sles.md)| Yes | Yes |
 | Ubuntu® 24.04 Desktop (6.8 generic)  |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_ubuntu.md)| Yes | Yes |
