@@ -11,6 +11,15 @@
 #include <linux/pagevec.h>
 #include <linux/kref.h>
 
+#ifdef BPM_UNPIN_USER_PAGES_DIRTY_LOCK_NOT_PRESENT
+void unpin_user_page_range_dirty_lock(struct page *page, unsigned long npages,
+						bool make_dirty);
+#endif
+
+#ifdef BPM_PTE_OFFSET_MAP_NOT_PRESENT
+#define pte_offset_map __pte_map
+#endif
+
 #ifdef BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT
 #define cancel_dirty_page(X) folio_cancel_dirty(page_folio(X))
 #endif
@@ -141,6 +150,7 @@ static inline bool want_init_on_alloc(gfp_t flags)
 #define unpin_user_pages_dirty_lock(X,Y,Z) put_user_pages_dirty_lock(X,Y,Z)
 #endif
 #define unpin_user_page(X) put_user_page(X)
+#define unpin_user_pages(X,Y) put_user_pages(X,Y)
 #endif
 
 #endif /* __BACKPORT_MM_H */

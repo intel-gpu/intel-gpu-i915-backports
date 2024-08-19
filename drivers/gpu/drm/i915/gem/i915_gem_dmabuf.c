@@ -296,10 +296,7 @@ retry:
 	if (!err)
 		err = i915_gem_object_pin_pages_sync(obj);
 	if (!err) {
-		if (i915_gem_object_is_lmem(obj))
-			err = i915_gem_object_set_to_wc_domain(obj, write);
-		else
-			err = i915_gem_object_set_to_cpu_domain(obj, write);
+		err = i915_gem_object_set_to_wc_domain(obj, write);
 		i915_gem_object_unpin_pages(obj);
 	}
 	if (err == -EDEADLK) {
@@ -323,7 +320,7 @@ retry:
 	if (!err)
 		err = i915_gem_object_pin_pages(obj);
 	if (!err) {
-		err = i915_gem_object_set_to_gtt_domain(obj, false);
+		err = i915_gem_object_set_to_wc_domain(obj, false);
 		i915_gem_object_unpin_pages(obj);
 	}
 	if (err == -EDEADLK) {
@@ -832,17 +829,6 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	drm_gem_private_object_init(dev, &obj->base, dma_buf->size);
 	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, I915_BO_ALLOC_USER);
 	obj->base.resv = dma_buf->resv;
-
-	/*
-	 * We use GTT as shorthand for a coherent domain, one that is
-	 * neither in the GPU cache nor in the CPU cache, where all
-	 * writes are immediately visible in memory. (That's not strictly
-	 * true, but it's close! There are internal buffers such as the
-	 * write-combined buffer or a delay through the chipset for GTT
-	 * writes that do require us to treat GTT as a separate cache domain.)
-	 */
-	obj->read_domains = I915_GEM_DOMAIN_GTT;
-	obj->write_domain = 0;
 
 	/* and attach the object */
 	if (to_i915(obj->base.dev)->params.prelim_override_p2p_dist & I915_MOVE_NOTIFY_ENABLE)

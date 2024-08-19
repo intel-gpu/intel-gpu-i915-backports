@@ -49,6 +49,39 @@ static int vf_reset_guc_state(struct intel_iov *iov)
 	return err;
 }
 
+static int guc_action_vf_notify_resfix_done(struct intel_guc *guc)
+{
+	u32 request[GUC_HXG_REQUEST_MSG_MIN_LEN] = {
+		FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_HOST) |
+		FIELD_PREP(GUC_HXG_MSG_0_TYPE, GUC_HXG_TYPE_REQUEST) |
+		FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION, GUC_ACTION_VF2GUC_NOTIFY_RESFIX_DONE),
+	};
+	int ret;
+
+	ret = intel_guc_send_mmio(guc, request, ARRAY_SIZE(request), NULL, 0);
+
+	return ret > 0 ? -EPROTO : ret;
+}
+
+/**
+ * intel_iov_notify_resfix_done - Notify GuC about resource fixups apply completed.
+ * @iov: the IOV struct instance
+ */
+int intel_iov_notify_resfix_done(struct intel_iov *iov)
+{
+	struct intel_guc *guc = iov_to_guc(iov);
+	int err;
+
+	GEM_BUG_ON(!intel_iov_is_vf(iov));
+
+	err = guc_action_vf_notify_resfix_done(guc);
+	if (unlikely(err))
+		IOV_PROBE_ERROR(iov, "Failed to notify GuC about resource fixup done (%pe)\n",
+				ERR_PTR(err));
+
+	return err;
+}
+
 static int guc_action_match_version(struct intel_guc *guc, u32 *branch,
 				    u32 *major, u32 *minor, u32 *patch)
 {
@@ -102,7 +135,7 @@ static int vf_handshake_with_guc(struct intel_iov *iov)
 		goto fail;
 
 	/* XXX we don't support interface version change */
-	if ((iov->vf.config.guc_abi.major || iov->vf.config.guc_abi.major) &&
+	if ((iov->vf.config.guc_abi.major || iov->vf.config.guc_abi.minor) &&
 	    (iov->vf.config.guc_abi.branch != branch ||
 	     iov->vf.config.guc_abi.major != major ||
 	     iov->vf.config.guc_abi.minor != minor)) {

@@ -215,9 +215,12 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	} objects[] = {
 		{ "migratable", &mem->objects.migratable },
 		{ "evictable", &mem->objects.list },
-		{ "pagetables", &mem->objects.pt },
+		{ "internal", &mem->objects.pt },
 		{}
 	}, *o;
+	resource_size_t x;
+	char bytes[16];
+	char buf[256];
 	int i;
 
 	drm_printf(p, "memory region: %s\n", mem->name);
@@ -225,21 +228,35 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	drm_printf(p, "  page size:  %pa\n", &mem->min_page_size);
 	drm_printf(p, "  parking: %s\n", str_yes_no(!completion_done(&mem->parking)));
 	drm_printf(p, "  clear-on-free: %s\n", str_enabled_disabled(test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)));
-	drm_printf(p, "  total:  %pa\n", &mem->total);
-	drm_printf(p, "  avail:  %llu\n", atomic64_read(&mem->avail));
-	if (atomic64_read(&mem->evict))
-		drm_printf(p, "  evict:  %llu\n", atomic64_read(&mem->evict));
-	if (target)
-		drm_printf(p, "  target: %pa\n", &target);
+
+	string_get_size(mem->total, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+	drm_printf(p, "  total:  %pa [%s]\n", &mem->total, bytes);
+
+	x = atomic64_read(&mem->avail);
+	string_get_size(x, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+	drm_printf(p, "  avail:  %pa [%s]\n", &x, bytes);
+
+	x = atomic64_read(&mem->evict);
+	if (x) {
+		string_get_size(x, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+		drm_printf(p, "  evict:  %pa [%s]\n", &x, bytes);
+	}
+
+	if (target) {
+		string_get_size(target, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+		drm_printf(p, "  target: %pa [%s]\n", &target, bytes);
+	}
 
 	for (o = objects; o->name; o++) {
-		resource_size_t active = 0, pinned = 0, avail = 0;
+		resource_size_t active = 0, dmabuf = 0, pinned = 0, avail = 0;
 		struct drm_i915_gem_object *obj;
 		unsigned long sizes[4] = {};
 		unsigned long bind[4] = {};
 		unsigned long bookmark = 0;
+		unsigned long locked = 0;
 		unsigned long empty = 0;
 		unsigned long count = 0;
+		int len;
 
 		spin_lock_irq(&mem->objects.lock);
 		list_for_each_entry(obj, o->list, mm.region.link) {
@@ -257,6 +274,10 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 
 			if (i915_gem_object_is_active(obj))
 				active += obj->base.size;
+			else if (dma_resv_is_locked(obj->base.resv))
+				locked += obj->base.size;
+			else if (obj->base.dma_buf && !obj->base.import_attach)
+				dmabuf += obj->base.size;
 			else if (i915_gem_object_has_pinned_pages(obj))
 				pinned += obj->base.size;
 			else
@@ -277,9 +298,35 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 		if (!count)
 			continue;
 
-		drm_printf(p,
-			   "  %s: { bookmark:%lu, empty:%lu, count:%lu, active:%pa, pinned:%pa, avail:%p, sizes:[%lu, %lu, %lu, %lu], bind:[%lu, %lu, %lu, %lu] }\n",
-			   o->name, bookmark, empty, count, &active, &pinned, &avail,
+		len = 0;
+		buf[0] = '\0';
+		if (bookmark)
+			len += snprintf(buf + len, sizeof(buf) - len, "bookmark:%lu, ", bookmark);
+		if (empty)
+			len += snprintf(buf + len, sizeof(buf) - len, "empty:%lu, ", empty);
+		if (active) {
+			string_get_size(active, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+			len += snprintf(buf + len, sizeof(buf) - len, "active:%s, ", bytes);
+		}
+		if (locked) {
+			string_get_size(locked, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+			len += snprintf(buf + len, sizeof(buf) - len, "locked:%s, ", bytes);
+		}
+		if (dmabuf) {
+			string_get_size(dmabuf, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+			len += snprintf(buf + len, sizeof(buf) - len, "dmabuf:%s, ", bytes);
+		}
+		if (pinned) {
+			string_get_size(pinned, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+			len += snprintf(buf + len, sizeof(buf) - len, "pinned:%s, ", bytes);
+		}
+		if (avail) {
+			string_get_size(avail, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+			len += snprintf(buf + len, sizeof(buf) - len, "avail:%s, ", bytes);
+		}
+
+		drm_printf(p, "  %s: { count:%lu, %ssizes:[%lu, %lu, %lu, %lu], bind:[%lu, %lu, %lu, %lu] }\n",
+			   o->name, count, buf,
 			   sizes[0], sizes[1], sizes[2], sizes[3],
 			   bind[0], bind[1], bind[2], bind[3]);
 	}
@@ -291,7 +338,9 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			struct i915_buddy_block *block;
 			struct i915_buddy_list *bl;
 			u64 clear, dirty, active;
+			bool defrag = false;
 			long count = 0;
+			int len;
 
 			dirty = 0;
 			bl = &mem->mm.dirty_list[i];
@@ -303,6 +352,7 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 				dirty += sz;
 				count++;
 			}
+			defrag |= bl->defrag;
 			spin_unlock(&bl->lock);
 
 			clear = 0;
@@ -321,15 +371,32 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 					dirty += sz;
 				count++;
 			}
+			defrag |= bl->defrag;
 			spin_unlock(&bl->lock);
 
 			if (!count)
 				continue;
 
-			drm_printf(p, "  - [%d]: { count:%lu, active:%llu, clear:%llu, dirty:%llu }\n",
-				   i, count, active, clear, dirty);
+			len = 0;
+			buf[0] = '\0';
+			if (active) {
+				string_get_size(active, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+				len += snprintf(buf + len, sizeof(buf) - len, "active:%s, ", bytes);
+			}
+			if (clear) {
+				string_get_size(clear, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+				len += snprintf(buf + len, sizeof(buf) - len, "clear:%s, ", bytes);
+			}
+			if (dirty) {
+				string_get_size(dirty, 1, STRING_UNITS_2, bytes, sizeof(bytes));
+				len += snprintf(buf + len, sizeof(buf) - len, "dirty:%s, ", bytes);
+			}
+			drm_printf(p, "  - [%d]: { count:%lu, %sdefrag?:%s }\n", i, count, buf, str_yes_no(defrag));
 		}
 	}
+
+	if (mem->ops->show)
+		mem->ops->show(mem, p);
 }
 
 static bool smem_allow_eviction(struct drm_i915_gem_object *obj)
@@ -362,7 +429,7 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 			      int chunk)
 {
 	const unsigned long end_time =
-		jiffies + (ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 1);
+		jiffies + (ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 5);
 	struct list_head *phases[] = {
 		/*
 		 * Purgeable objects are deemed to be free by userspace
@@ -605,7 +672,8 @@ out:
 		goto next;
 	}
 
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG)) {
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG) &&
+	    !test_and_set_bit(INTEL_MEMORY_EVICT_SHOW, &mem->flags)) {
 		struct drm_printer p = drm_info_printer(mem->gt->i915->drm.dev);
 
 		intel_memory_region_print(mem, target, &p);

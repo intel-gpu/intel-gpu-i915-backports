@@ -6,6 +6,8 @@
 #include <linux/string_helpers.h>
 #include <linux/suspend.h>
 
+#include "gem/i915_gem_shmem.h"
+
 #include "i915_drv.h"
 #include "i915_params.h"
 #include "intel_context.h"
@@ -117,7 +119,7 @@ static int __gt_unpark(struct intel_wakeref *wf)
 {
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
 
-	GT_TRACE(gt, "\n");
+	GT_TRACE(gt, "unparking\n");
 
 	/* Wa_14017210380: mtl */
 	mtl_mc6_wa_media_busy(gt);
@@ -130,6 +132,7 @@ static int __gt_unpark(struct intel_wakeref *wf)
 	intel_gt_unpark_requests(gt);
 	runtime_begin(gt);
 
+	GT_TRACE(gt, "unparked\n");
 	return 0;
 }
 
@@ -138,12 +141,16 @@ static int __gt_park(struct intel_wakeref *wf)
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
 	struct drm_i915_private *i915 = gt->i915;
 
-	GT_TRACE(gt, "\n");
+	GT_TRACE(gt, "clearing memory\n");
 	atomic_set(&gt->user_engines, 0); /* clear any meta bits */
 
 	if (gt->lmem && i915_gem_lmem_park(gt->lmem))
 		return -EBUSY;
 
+	if (i915->mm.regions[0]->gt == gt && i915_gem_shmem_park(i915->mm.regions[0]))
+		return -EBUSY;
+
+	GT_TRACE(gt, "parking\n");
 	runtime_end(gt);
 	intel_gt_park_requests(gt);
 
@@ -158,12 +165,15 @@ static int __gt_park(struct intel_wakeref *wf)
 	intel_gt_park_ccs_mode(gt, NULL);
 	i915_px_cache_release(&gt->px_cache);
 
+	clear_bit(INTEL_MEMORY_CLEAR_FREE, &i915->mm.regions[0]->flags);
+
 	/* Everything switched off, flush any residual interrupt just in case */
 	intel_synchronize_irq(i915);
 
 	/* Wa_14017210380: mtl */
 	mtl_mc6_wa_media_not_busy(gt);
 
+	GT_TRACE(gt, "parked\n");
 	return 0;
 }
 

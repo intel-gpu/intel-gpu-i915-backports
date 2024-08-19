@@ -11,9 +11,12 @@ struct i915_gem_ww_ctx {
 	struct ww_acquire_ctx ctx;
 	struct list_head obj_list;
 	struct drm_i915_gem_object *contended;
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+	u32 stack;
+#endif
 	bool intr:1;
 	bool loop:1;
-	bool contended_evict:1;
+	bool evict:1;
 };
 
 void i915_gem_ww_ctx_init(struct i915_gem_ww_ctx *ctx, bool intr);
@@ -24,6 +27,10 @@ void i915_gem_ww_unlock_single(struct drm_i915_gem_object *obj);
 int
 __i915_gem_object_lock_to_evict(struct drm_i915_gem_object *obj,
 				struct i915_gem_ww_ctx *ww);
+
+void i915_gem_ww_contended(struct i915_gem_ww_ctx *ww,
+			   struct drm_i915_gem_object *obj,
+			   bool evict);
 
 /* Internal functions used by the inlines! Don't use. */
 static inline int __i915_gem_ww_fini(struct i915_gem_ww_ctx *ww, int err)

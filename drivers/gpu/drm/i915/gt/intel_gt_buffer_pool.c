@@ -89,9 +89,9 @@ static void pool_free_work(struct work_struct *wrk)
 	struct intel_gt_buffer_pool *pool =
 		container_of(wrk, typeof(*pool), work.work);
 
-	if (pool_free_older_than(pool, HZ))
+	if (pool_free_older_than(pool, 10 * HZ))
 		schedule_delayed_work(&pool->work,
-				      round_jiffies_up_relative(HZ));
+				      round_jiffies_up_relative(20 * HZ));
 }
 
 static void pool_retire(struct i915_active *ref)
@@ -117,7 +117,7 @@ static void pool_retire(struct i915_active *ref)
 	spin_unlock_irqrestore(&pool->lock, flags);
 
 	schedule_delayed_work(&pool->work,
-			      round_jiffies_up_relative(HZ));
+			      round_jiffies_up_relative(20 * HZ));
 }
 
 void intel_gt_buffer_pool_mark_used(struct intel_gt_buffer_pool_node *node)
@@ -178,19 +178,13 @@ intel_gt_get_buffer_pool(struct intel_gt *gt, size_t size,
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(node, list, link) {
-		unsigned long age;
-
 		if (node->obj->base.size < size)
 			continue;
 
 		if (node->type != type)
 			continue;
 
-		age = READ_ONCE(node->age);
-		if (!age)
-			continue;
-
-		if (cmpxchg(&node->age, age, 0) == age) {
+		if (xchg(&node->age, 0)) {
 			spin_lock_irq(&pool->lock);
 			list_del_rcu(&node->link);
 			spin_unlock_irq(&pool->lock);

@@ -31,11 +31,11 @@ struct intel_migrate {
 			struct drm_i915_gem_object *obj;
 			struct drm_mm_node node;
 			u64 pd_offset;
-		} ps64, pde64;
+		} ps64, pde64, ps2M;
 
 		unsigned long clear_chunk;
 		unsigned long swap_chunk;
-	} swapin[2], swapout[4];
+	} swapin[2], swapout[4], smem;
 	atomic_t next_swapin, next_swapout;
 };
 

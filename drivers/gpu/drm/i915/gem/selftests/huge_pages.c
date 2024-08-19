@@ -202,8 +202,6 @@ fake_huge_pages_object(struct drm_i915_private *i915, u64 size, bool single)
 
 	i915_gem_object_set_volatile(obj);
 
-	obj->write_domain = I915_GEM_DOMAIN_CPU;
-	obj->read_domains = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
 	return obj;
@@ -391,9 +389,7 @@ static int gpu_write(struct intel_context *ce,
 {
 	int err;
 
-	i915_gem_object_lock(vma->obj, NULL);
-	err = i915_gem_object_set_to_gtt_domain(vma->obj, true);
-	i915_gem_object_unlock(vma->obj);
+	err = i915_gem_object_set_to_wc_domain(vma->obj, true);
 	if (err)
 		return err;
 

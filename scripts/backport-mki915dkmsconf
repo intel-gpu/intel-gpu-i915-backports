@@ -11,7 +11,8 @@ DEP_PKG_NAME=""
 I915_CONFIG="i915"
 PMT_VSEC_SELECTION="auto"
 SUSE_VERSION_FILE="\$kernel_source_dir/include/generated/uapi/linux/suse_version.h"
-RHEL_VERSION_FILE="\$kernel_source_dir/include/generated/uapi/linux/version.h"
+LINUX_VERSION_FILE="\$kernel_source_dir/include/generated/uapi/linux/version.h"
+
 helpFunction()
 {
 	echo ""
@@ -160,6 +161,70 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		DEST_MODULE_LOCATION[14]="/updates"
 	fi
 
+
+	find_linux_version_code()
+	{
+		linux_version_val=\$(expr \$1 \* 65536 + \$2 \* 256 + \$3)
+		echo \$linux_version_val
+	}
+
+	find_suse_product_code()
+	{
+		suse_product_val=\$(expr \$1 \* 16777216 + \$2 \* 65536 + \$3 \* 256 + \$4)
+		echo \$suse_product_val
+	}
+
+	find_suse_release_version()
+	{
+		suse_release_ver=\$(find_suse_product_code "1" "\$1" "\$2" "0")
+		echo \$suse_release_ver
+	}
+
+	find_rhel_release_version()
+	{
+		rhel_release_val=\$(expr \$1 \* 256 + \$2)
+		echo \$rhel_release_val
+	}
+
+	get_linux_version_code()
+	{
+		if [ -f $LINUX_VERSION_FILE ]; then
+			linux_version_code=\$(cat $LINUX_VERSION_FILE | grep LINUX_VERSION_CODE | sed 's/[^0-9]//g')
+			if [ -z \$linux_version_code ]; then
+				linux_version_code="0"
+			fi
+			echo \$linux_version_code
+		else
+			echo "0"
+		fi
+	}
+
+	get_suse_release_version()
+	{
+		if [ -f $SUSE_VERSION_FILE ]; then
+			suse_product_code=\$(cat $SUSE_VERSION_FILE | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g')
+			if [ -z \$suse_product_code ]; then
+				suse_product_code="0"
+			fi
+			echo \$suse_product_code
+		else
+			echo "0"
+		fi
+	}
+
+	get_rhel_release_version()
+	{
+		if [ -f $LINUX_VERSION_FILE ]; then
+			rhel_release_code=\$(cat $LINUX_VERSION_FILE | grep RHEL_RELEASE_CODE | sed 's/[^0-9]//g')
+			if [ -z \$rhel_release_code ]; then
+				rhel_release_code="0"
+			fi
+			echo \$rhel_release_code
+		else
+			echo "0"
+		fi
+	}
+
 	# Find out nodrm is needed or not
 	# Avoid installing drm modules for nodrm kernels
 	install_drm_modules() {
@@ -174,6 +239,20 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 			echo true;
 		else
 			echo false;
+		fi
+	}
+
+	install_vfio_modules() {
+		if [ "\$(get_linux_version_code)" -lt \$(find_linux_version_code 5 16 0) ]; then
+			if [ "\$(get_rhel_release_version)" -gt \$(find_rhel_release_version 9 1) ]; then
+				echo true;
+			elif [ "\$(get_suse_release_version)" -gt \$(find_suse_product_code 1 15 4 0) ]; then
+				echo true;
+			else
+				echo false;
+			fi
+		else
+			echo true;
 		fi
 	}
 
@@ -198,12 +277,18 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		DMA_BUF_SYMBOLS="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers';"
 	else
 		DMA_BUF_SYMBOLS=""
+
+		if [ "\$(install_vfio_modules)" = "true" ]; then
+			BUILT_MODULE_NAME[15]="i915-vfio-pci"
+			BUILT_MODULE_LOCATION[15]="drivers/vfio/pci/i915/"
+			DEST_MODULE_LOCATION[15]="/updates"
+		fi
 	fi
 
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
-       	# DKMS could use all cores on multicore systems to build the kernel module.
-       	num_cpu_cores()
-       	{
+	# DKMS could use all cores on multicore systems to build the kernel module.
+	num_cpu_cores()
+	{
 		if [ -x /usr/bin/nproc ]; then
 			np=`nproc`
 			if [ "\$np" -le "64" ]; then
@@ -214,41 +299,6 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		else
 			echo "1"
 		fi
-	}
-	
-	get_suse_release_version()
-	{
-		if [ -f "$SUSE_VERSION_FILE" ]; then
-			suse_product_code="\$(cat "$SUSE_VERSION_FILE" | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g')"
-			echo "\$suse_product_code"
-		fi
-	}
-
-	get_rhel_release_version()
-	{
-		if [ -f "$RHEL_VERSION_FILE" ]; then
-			rhel_release_code="\$(cat "$RHEL_VERSION_FILE" | grep RHEL_RELEASE_CODE | sed 's/[^0-9]//g')"
-			echo "\$rhel_release_code"
-		fi
-
-	}
-	
-	suse_product_code()
-	{
-		suse_product_val=\$((((\$1)<<24)+((\$2)<<16)+((\$3)<<8)+(\$4)))
-		echo "\$suse_product_val"
-	}
-
-	suse_release_version()
-	{
-		suse_release_ver="\$(suse_product_code "1" "\$1" "\$2" "0")"
-		echo "\$suse_release_ver"
-	}
-
-	rhel_release_version()
-	{
-		rhel_release_val=\$((((\$1)<<8)+(\$2)))
-		echo "\$rhel_release_val"
 	}
 
 	if [ -n "$CUSTOM_KERN_ID" ]; then

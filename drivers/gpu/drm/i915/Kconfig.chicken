@@ -98,3 +98,19 @@ config DRM_I915_CHICKEN_ASYNC_UNBIND
 	default n
 	help
 	  Unbind and release the vma (VM_UNBIND ioctl) without blocking the caller.
+
+config DRM_I915_CHICKEN_SMEM_BLT
+	bool "Offload preclearing of system memory"
+	default n
+
+config DRM_I915_CHICKEN_SMEM_FREE
+	bool "Offload preclearing upon freeing system memory"
+	default n
+
+config DRM_I915_CHICKEN_SMEM_DMA
+	bool "Offload preclearing of system memory using DMA engines"
+	default n
+
+config DRM_I915_CHICKEN_SMEM_IDLE
+	bool "Offload preclearing while idle"
+	default n

@@ -9,6 +9,7 @@
 #include "intel_gt_pm.h"
 #include "intel_tlb.h"
 #include "uc/intel_guc.h"
+#include "uc/intel_guc_ct.h"
 
 void intel_tlb_invalidation_revoke(struct intel_gt *gt)
 {
@@ -42,12 +43,82 @@ static bool tlb_seqno_passed(const struct intel_gt *gt, u32 seqno)
 	return i915_seqno_passed(READ_ONCE(gt->tlb.seqno), seqno);
 }
 
+static unsigned long local_clock_ns(unsigned int *cpu)
+{
+	unsigned long t;
+
+	/*
+	 * The local clock is only comparable on the local cpu. However,
+	 * we don't want to disable preemption for the entirety of the busy
+	 * spin but instead we use the preemption event as an indication
+	 * that we have overstayed our welcome and should relinquish the CPU,
+	 * to stop busywaiting and go to sleep.
+	 */
+	*cpu = get_cpu();
+	t = local_clock();
+	put_cpu();
+
+	return t;
+}
+
+static bool busy_wait_stop(unsigned long timeout_ns, unsigned int cpu)
+{
+	unsigned int this_cpu;
+
+	if (time_after(local_clock_ns(&this_cpu), timeout_ns))
+		return true;
+
+	/*
+	 * Check if we were preempted off the cpu, or if something else is
+	 * ready to run.  We don't immediately yield in that case, i.e. using
+	 * need_resched() instead of cond_resched(), as we want to set up our
+	 * interrupt prior to calling schedule()
+	 */
+	return this_cpu != cpu || need_resched();
+}
+
+static bool busy_wait(struct intel_gt *gt, u32 seqno, unsigned long timeout_ns)
+{
+	unsigned int cpu;
+
+	/*
+	 * Is this invalidation next in the queue?
+	 *
+	 * Don't waste cycles if we are not being served, we are better off
+	 * sleeping while we wait for service.
+	 */
+	if (!tlb_seqno_passed(gt, seqno - 1))
+		return false;
+
+	timeout_ns += local_clock_ns(&cpu);
+	do {
+		intel_guc_ct_receive(&gt->uc.guc.ct);
+		if (tlb_seqno_passed(gt, seqno))
+			return true;
+	} while (!busy_wait_stop(timeout_ns, cpu));
+
+	return false;
+}
+
 void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno)
 {
 	if (unlikely(!i915_seqno_passed(READ_ONCE(gt->tlb.next_seqno), seqno)))
 		return;
 
-	wait_event(gt->tlb.wq, tlb_seqno_passed(gt, seqno));
+	if (tlb_seqno_passed(gt, seqno))
+		return;
+
+	/*
+	 * Drain the recieve queue before sleeping in case the TLB invalidation
+	 * was already completed and so we can avoid the context switch and
+	 * wakeups. Normally the invalidations are very quick so we expect the
+	 * reply before we perfomed the deferred sync.
+	 */
+	if (busy_wait(gt, seqno, 20 * NSEC_PER_USEC))
+		return;
+
+	wait_event_cmd(gt->tlb.wq, tlb_seqno_passed(gt, seqno),
+		       intel_guc_ct_receive(&gt->uc.guc.ct), );
 }
 
 static u64 tlb_page_selective_size(u64 *addr, u64 length)

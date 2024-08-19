@@ -61,7 +61,7 @@ BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT)
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
+RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
 DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP UBUNTU_24.04_SERVER UBUNTU_24.04_DESKTOP
 
 RELEASE_TYPE ?= opensource
@@ -93,7 +93,7 @@ endif
 ifneq (,$(filter $(DEB_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= UBUNTU_24.04_SERVER
 else ifneq (,$(filter $(RPM_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	OS_DISTRIBUTION ?= SLES15_SP5
+	OS_DISTRIBUTION ?= SLES15_SP6
 endif
 
 ifneq (,$(filter $(filter-out $(MODULES_VARIANT), $(BUILD_CONFIG_VARIANT)), $(BUILD_CONFIG)))
@@ -274,6 +274,9 @@ SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep 
 # Filtered Output: 0
 SUSE_AUXRELEASE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
 
+SUSE_PRODUCT_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/suse_version.h | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g')
+export SUSE_PRODUCT_CODE
+
 OSV_VER = $(SUSE_VERSION)0$(SUSE_PATCHLEVEL)0$(SUSE_AUXRELEASE)
 
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f2)
@@ -292,6 +295,9 @@ else
 
 # In case of Ubuntu use CONFIG_VERSION_SIGNATURE data and verify tag "ubuntu"
 OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+
+LINUX_VERSION_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep LINUX_VERSION_CODE | sed 's/[^0-9]//g')
+export LINUX_VERSION_CODE
 
 ifeq ($(OSV_NAME), Ubuntu)
 
@@ -665,7 +671,11 @@ endif
 endif
 endif
 else ifeq ($(OSV_NAME), SUSE)
+ifneq ($(EXTENDED_VERSION_Y),)
 	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
+else
+	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X)"' >> versions
+endif
 else ifeq ($(OSV_NAME), RHEL)
 ifneq (,$(filter $(OSV_NAME)_$(OSV_VER), $(RPM_DISTRIBUTIONS)))
 ifneq ($(EXTENDED_VERSION_Y),)
@@ -778,7 +788,8 @@ export KBUILD_DRM_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers
 export KBUILD_ONLYVSECDIRS := drivers/platform/x86/intel
 export KBUILD_ONLYPMTDIRS := drivers/mfd
 export KBUILD_ONLYMEIDIRS := drivers/misc drivers/watchdog
-DRM_TAR_CONTENT := $(KBUILD_DRM_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
+export KBUILD_I915VFIOPCIDIRS := drivers/vfio/pci/i915
+DRM_TAR_CONTENT := $(KBUILD_DRM_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 DRM_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdrmdkmsspec
 DRM_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mkdrmdkmsconf
@@ -806,7 +817,7 @@ endif
 export KBUILD_ONLYVSECDIRS := drivers/platform/x86/intel
 export KBUILD_ONLYPMTDIRS := drivers/mfd
 export KBUILD_ONLYMEIDIRS := drivers/misc drivers/watchdog
-I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
+I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
 I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
@@ -833,7 +844,7 @@ endif
 # dkmsrpm-pkg
 # Creates Backports single package for dmabuf, drm and i915
 #------------------------------------------------------------------------------
-DMABUF_I915_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
+DMABUF_I915_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 DMABUF_I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufi915dkmsspec
 DMABUF_I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mkdmabufi915dkmsconf
@@ -873,7 +884,7 @@ BIN_PACKAGE_NAME := intel-dmabuf-drm-i915$(PKG_SUFFIX)
 else
 BIN_PACKAGE_NAME := intel-i915$(PKG_SUFFIX)
 endif
-TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
+TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
 	Kconfig* COPYING versions defconfigs backport-include kconf compat
 
 #Reads BASE_KERNEL_NAME and replace the '-' to '.'
@@ -891,7 +902,7 @@ endif
 binrpm-pkg:
 	$(CONFIG_SHELL) $(MKBINSPEC) -n $(BIN_PACKAGE_NAME) -v $(BIN_PKG_VERSION) -r $(DMABUF_I915_PKG_RELEASE) -p $(RELEASE_TYPE) -s $(BUILD_KERNEL_VARIANT) -o $(OS_DISTRO_NAME) -k $(KLIB_BUILD) -a $(UTS_RELEASE) $(CUSTOM_ARG) > $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME).spec
 	tar -cz $(RCS_TAR_IGNORE) -f $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
-		$(TAR_CONTENT) $(BIN_PACKAGE_NAME).spec;
+		$(TAR_CONTENT) $(KBUILD_I915VFIOPCIDIRS) $(BIN_PACKAGE_NAME).spec;
 ifeq ($(PHOTON_IDENTIFIER), ph)
 	mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 	cp $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz ~/rpmbuild/SOURCES/

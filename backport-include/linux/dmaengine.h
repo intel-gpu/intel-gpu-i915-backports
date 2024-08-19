@@ -1,0 +1,12 @@
+#ifndef __BACKPORT_DMAENGINE_H
+#define __BACKPORT_DMAENGINE_H
+
+#include_next <linux/dmaengine.h>
+
+#ifdef BPM_DMA_COMPLETION_NO_ORDER_NOT_PRESENT
+
+#define DMA_COMPLETION_NO_ORDER DMA_TX_TYPE_END
+
+#endif /* BPM_DMA_COMPLETION_NO_ORDER_NOT_PRESENT */
+
+#endif /* __BACKPORT_DMAENGINE_H */

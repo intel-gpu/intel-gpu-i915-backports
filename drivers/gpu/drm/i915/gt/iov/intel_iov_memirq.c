@@ -254,13 +254,20 @@ void intel_iov_memirq_postinstall(struct intel_iov *iov)
 static void __engine_mem_irq_handler(struct intel_engine_cs *engine, u8 *status)
 {
 	struct intel_gt __maybe_unused *gt = engine->gt;
+	u32 iir = 0;
 
 	MEMIRQ_DEBUG(gt, "STATUS %s %*ph\n", engine->name, 16, status);
 
 	if (READ_ONCE(status[ilog2(GT_RENDER_USER_INTERRUPT)]) == 0xFF) {
 		WRITE_ONCE(status[ilog2(GT_RENDER_USER_INTERRUPT)], 0x00);
-		intel_engine_cs_irq(engine, -1);
+		iir |= GT_RENDER_USER_INTERRUPT;
 	}
+	if (READ_ONCE(status[ilog2(GT_RENDER_PIPECTL_NOTIFY_INTERRUPT)]) == 0xFF) {
+		WRITE_ONCE(status[ilog2(GT_RENDER_PIPECTL_NOTIFY_INTERRUPT)], 0x00);
+		iir |= GT_RENDER_PIPECTL_NOTIFY_INTERRUPT;
+	}
+	if (iir)
+		intel_engine_cs_irq(engine, iir);
 }
 
 static void __guc_mem_irq_handler(struct intel_guc *guc, u8 *status)
@@ -269,6 +276,10 @@ static void __guc_mem_irq_handler(struct intel_guc *guc, u8 *status)
 
 	MEMIRQ_DEBUG(gt, "STATUS %s %*ph\n", "GUC", 16, status);
 
+	if (READ_ONCE(status[ilog2(GUC_INTR_SW_INT_0)]) == 0xFF) {
+		WRITE_ONCE(status[ilog2(GUC_INTR_SW_INT_0)], 0x00);
+		intel_sriov_vf_migrated_event_handler(guc);
+	}
 	if (READ_ONCE(status[ilog2(GUC_INTR_GUC2HOST)]) == 0xFF) {
 		WRITE_ONCE(status[ilog2(GUC_INTR_GUC2HOST)], 0x00);
 		intel_guc_to_host_event_handler(guc);

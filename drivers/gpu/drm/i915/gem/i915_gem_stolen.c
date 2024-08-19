@@ -360,7 +360,6 @@ static int __i915_gem_object_create_stolen(struct intel_memory_region *mem,
 	i915_gem_object_init(obj, &i915_gem_object_stolen_ops, flags);
 
 	obj->stolen = stolen;
-	obj->read_domains = I915_GEM_DOMAIN_CPU | I915_GEM_DOMAIN_GTT;
 	cache_level = HAS_LLC(mem->i915) ? I915_CACHE_LLC : I915_CACHE_NONE;
 	i915_gem_object_set_cache_coherency(obj, cache_level);
 

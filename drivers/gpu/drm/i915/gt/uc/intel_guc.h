@@ -326,12 +326,6 @@ static inline struct intel_guc *log_to_guc(struct intel_guc_log *log)
 }
 
 static
-inline int intel_guc_vf_migrated(struct intel_guc *guc)
-{
-	return intel_guc_ct_vf_migrated(&guc->ct);
-}
-
-static
 inline int intel_guc_send(struct intel_guc *guc, const u32 *action, u32 len)
 {
 	return intel_guc_ct_send(&guc->ct, action, len, NULL, 0, 0);

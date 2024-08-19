@@ -163,7 +163,7 @@ void free_px(struct i915_address_space *vm, struct i915_page_table *pt, int lvl)
 	if (pt->base)
 		i915_vm_free_px(vm, pt->base);
 
-	kfree(pt);
+	kfree_rcu(pt, rcu);
 }
 
 static struct i915_ppgtt *
@@ -217,24 +217,12 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	}
 }
 
-static void vm_sync_tlb(struct i915_address_space *vm, u32 *tlb)
-{
-	struct intel_gt *gt;
-	int id;
-
-	/* It's more expensive to track per-page syncpt than a global sync */
-	for_each_gt(gt, vm->i915, id) {
-		if (tlb[id])
-			intel_gt_invalidate_tlb_sync(gt, tlb[id]);
-	}
-}
-
 int ppgtt_bind_vma(struct i915_address_space *vm,
 		   struct i915_vma *vma,
+		   struct i915_gem_ww_ctx *ww,
 		   unsigned int pat_index,
 		   u32 flags)
 {
-	u32 tlb[ARRAY_SIZE(vm->tlb)];
 	u32 pte_flags;
 	int err;
 
@@ -242,14 +230,12 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	if (!drm_mm_node_allocated(&vma->node))
 		return 0;
 
-	memcpy(tlb, vm->tlb, sizeof(tlb));
-
 	/*
 	 * Force the next access to this vma to trigger a pagefault.
 	 * This only installs a NULL PTE, and will *not* populate TLB.
 	 */
 	if (!(flags & PIN_RESIDENT))
-		goto out;
+		return 0;
 
 	/* Applicable to VLV, and gen8+ */
 	pte_flags = 0;
@@ -261,7 +247,7 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	    i915_gem_object_has_fabric(vma->obj))
 		pte_flags |= vm->top == 4 ? PTE_LM | PTE_AE : PTE_LM;
 
-	err = vm->insert_entries(vm, vma, pat_index, pte_flags);
+	err = vm->insert_entries(vm, vma, ww, pat_index, pte_flags);
 	if (unlikely(err))
 		return err;
 
@@ -278,8 +264,6 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		}
 	}
 
-out:	/* Before signalling, make sure all TLBs were cleared of old PTE */
-	vm_sync_tlb(vm, tlb);
 	return 0;
 }
 

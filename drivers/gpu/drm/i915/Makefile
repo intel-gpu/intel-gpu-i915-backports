@@ -75,6 +75,7 @@ $(obj)/i915_driver.o: $(wildcard include/config/DRM_I915_CHICKEN_*)
 # core library code
 i915-y += \
 	dma_resv_utils.o \
+	dma_tx.o \
 	i915_memcpy.o \
 	i915_mm.o \
 	i915_sw_fence.o \
@@ -151,7 +152,6 @@ i915-y += $(gt-y)
 # GEM (Graphics Execution Management) code
 gem-y += \
 	gem/i915_gem_busy.o \
-	gem/i915_gem_clflush.o \
 	gem/i915_gem_context.o \
 	gem/i915_gem_create.o \
 	gem/i915_gem_dmabuf.o \

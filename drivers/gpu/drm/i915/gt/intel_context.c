@@ -861,7 +861,6 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p)
  */
 void intel_context_update_ring_head_tail(struct intel_context *ce)
 {
-	struct intel_timeline *tl;
 	u32 *regs;
 
 	if (unlikely(!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)))
@@ -869,10 +868,6 @@ void intel_context_update_ring_head_tail(struct intel_context *ce)
 	if (unlikely(!test_bit(CONTEXT_VALID_BIT, &ce->flags)))
 		return;
 
-	tl = ce->timeline;
-
-	while (!mutex_trylock(&tl->mutex))
-		udelay(1);
 
 	regs = ce->lrc_reg_state;
 	if (regs)
@@ -891,7 +886,6 @@ void intel_context_update_ring_head_tail(struct intel_context *ce)
 		regs[CTX_RING_TAIL] = ce->ring->tail;
 	}
 
-	mutex_unlock(&tl->mutex);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

@@ -10,6 +10,7 @@
 
 #include "gem/i915_gem_object.h"
 #include "gem/i915_gem_lmem.h"
+#include "i915_memcpy.h"
 #include "shmem_utils.h"
 
 struct file *shmem_create_from_data(const char *name, void *data, size_t len)
@@ -103,8 +104,8 @@ static int __shmem_rw(struct file *file, loff_t off,
 	for (pfn = off >> PAGE_SHIFT; len; pfn++) {
 		unsigned int this =
 			min_t(size_t, PAGE_SIZE - offset_in_page(off), len);
+		void *vaddr, *src, *dst;
 		struct page *page;
-		void *vaddr;
 
 		page = shmem_read_mapping_page_gfp(file->f_mapping, pfn,
 						   GFP_KERNEL);
@@ -112,19 +113,24 @@ static int __shmem_rw(struct file *file, loff_t off,
 			return PTR_ERR(page);
 
 		vaddr = kmap(page);
-		if (write) {
-			memcpy(vaddr + offset_in_page(off), ptr, this);
-			set_page_dirty(page);
-		} else {
-			memcpy(ptr, vaddr + offset_in_page(off), this);
-		}
-		mark_page_accessed(page);
-		kunmap(page);
-		put_page(page);
+		dst = ptr;
+		src = vaddr + offset_in_page(off);
 
 		len -= this;
 		ptr += this;
 		off = 0;
+
+		if (write) {
+			swap(dst, src);
+			set_page_dirty(page);
+			if (i915_memcpy_from_wc(dst, src, this))
+				this = 0;
+		}
+		memcpy(dst, src, this);
+		mark_page_accessed(page);
+
+		kunmap(page);
+		put_page(page);
 	}
 
 	return 0;

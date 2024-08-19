@@ -1828,9 +1828,6 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		u32 bank:6;
 		u32 old_state:4;
 		u32 new_state:4;
-		u32 pseudochannel:1;
-		u32 stack_id:2;
-		u32 reserved:5;
 	};
 
 	bool report_state_change = false;
@@ -1848,16 +1845,14 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	bfswf1.bank = REG_FIELD_GET(BANK_MASK, reg_swf1);
 	bfswf1.old_state = REG_FIELD_GET(OLDSTATE_MASK, reg_swf1);
 	bfswf1.new_state = REG_FIELD_GET(NEWSTATE_MASK, reg_swf1);
-	bfswf1.stack_id = REG_FIELD_GET(STACKID_MASK, reg_swf1);
 
 	switch (cause) {
 	case BANK_CORRECTABLE_ERROR:
 		event = "Correctable Error Received on";
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
-				    bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event,
-				    bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
-				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
+				    "[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Bank%u, Row%u, Column%u\n",
+				    bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event, bfswf0.tile, bfswf0.channel,
+				    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row, bfswf1.column);
 
 		if (bfswf1.old_state != bfswf1.new_state)
 			report_state_change = true;
@@ -1866,35 +1861,33 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	case BANK_SPARNG_ERR_MITIGATION_DOWNGRADED:
 		event = "PCLS Applied";
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u, Column%u\n",
 				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
-				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
+				    bfswf1.bank, bfswf0.row, bfswf1.column);
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
 		switch (bfswf0.event_num) {
 		case UC_DEMAND_ACCESS:
 			event = "Uncorrectable Error on Demand Access received";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
-					    bfswf0.row, bfswf1.column);
+					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row, bfswf1.column);
 			break;
 		case PATROL_SCRUB_ERROR:
 			event = "Uncorrectable Error on Patrol Scrub";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
-					    bfswf0.row, bfswf1.column);
+					    bfswf0.pseudochannel, bfswf1.bank, bfswf0.row, bfswf1.column);
 			print_repair(gt);
 			break;
 		case PCLS_EXCEEDED:
 			event = "Exceeded PCLS Threshold";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id);
+					    bfswf0.pseudochannel);
 			print_repair(gt);
 
 			if (bfswf1.old_state != bfswf1.new_state)
@@ -1904,9 +1897,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		case PCLS_SAME_CACHELINE:
 			event = "Cannot Apply PCLS, PCLS Already Applied to This Line";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
+					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id);
+					    bfswf0.pseudochannel);
 			print_repair(gt);
 			break;
 		default:

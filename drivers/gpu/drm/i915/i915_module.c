@@ -8,6 +8,8 @@
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_object.h"
+#include "gem/i915_gem_shmem.h"
+
 #include "i915_active.h"
 #include "i915_buddy.h"
 #include "i915_driver.h"
@@ -67,6 +69,8 @@ static const struct {
 	  .exit = i915_context_module_exit },
 	{ .init = i915_gem_context_module_init,
 	  .exit = i915_gem_context_module_exit },
+	{ .init = i915_gem_shmem_module_init,
+	  .exit = i915_gem_shmem_module_exit },
 	{ .init = i915_objects_module_init,
 	  .exit = i915_objects_module_exit },
 	{ .init = i915_request_module_init,

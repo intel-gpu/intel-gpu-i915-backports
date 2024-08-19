@@ -17,6 +17,7 @@
 #include "gt/intel_gt_requests.h"
 
 #include "dma_resv_utils.h"
+#include "i915_gem_shmem.h"
 #include "i915_trace.h"
 
 static bool swap_available(void)
@@ -93,6 +94,10 @@ i915_gem_shrink(struct drm_i915_private *i915,
 	unsigned long scanned = 0;
 
 	trace_i915_gem_shrink(i915, target, shrink);
+
+	count = i915_gem_reap_clear_smem(mem, 0, min(target, -2ul)); /* -1ul => wait */
+	if (count)
+		return count;
 
 	/*
 	 * Unbinding of objects will require HW access; Let us not wake the

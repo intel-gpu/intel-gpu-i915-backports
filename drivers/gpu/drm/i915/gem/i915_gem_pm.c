@@ -205,16 +205,8 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 
 int i915_gem_suspend_late(struct drm_i915_private *i915)
 {
-	struct intel_memory_region *mem = i915->mm.regions[INTEL_REGION_SMEM];
-	struct list_head *phases[] = {
-		&mem->objects.migratable,
-		&mem->objects.list,
-		NULL,
-	}, **phase;
-	struct drm_i915_gem_object *obj;
 	struct intel_gt *gt;
 	unsigned int i;
-	bool flush = false;
 	int err;
 
 	/*
@@ -245,16 +237,7 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 	if (err)
 		return err;
 
-	for (phase = phases; *phase; phase++) {
-		list_for_each_entry(obj, *phase, mm.region.link) {
-			if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
-				flush |= (obj->read_domains & I915_GEM_DOMAIN_CPU) == 0;
-			__start_cpu_write(obj); /* presume auto-hibernate */
-		}
-	}
-	if (flush)
-		wbinvd_on_all_cpus();
-
+	wbinvd_on_all_cpus();
 	return 0;
 }
 

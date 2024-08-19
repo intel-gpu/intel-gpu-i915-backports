@@ -1,4 +1,25 @@
 # ChangeLog
+## Release I915_24WW33.3_950.13_24.4.12_240603.18
+* i915: Introduced telemetry register updates and additional debugging information for High Bandwidth Memory (HBM)
+        diagnostics performed during system reset.
+* i915: Fixed an issue with High Performance Linpack (HPL) residual check failures on Intel® Data Center GPU Max 1100.
+* i915: Fixed synchronization issues for user space signaling of vm_bind on multi-GPU devices.
+* i915: Fixed an issue that caused pausing virtual machines when reading Execution Unit (EU) metrics on host by the
+        Level Zero Metrics API.
+* i915: Fixed an issue where a Graphics Microcontroller Unit (GuC) communication error occurred while using the
+        Graphics Debugger (GDB), causing Intel® Data Center GPU Max Series to become non-functional.
+* i915: Fixed an issue where rebooting a device caused an error in the GPU’s Memory-Mapped Input/Output (MMIO)
+        system mentioning that the forcewake register was not behaving as expected.
+* i915: Fixed an issue in the Intel® XPU System Management Interface where the GPU power limit was incorrectly set.
+        This fix deprecates the power1_rated_max hardware monitoring sysfs attribute on Intel® Data Center GPU Flex Series.
+* i915: Implemented changes to ensure the graphics technology remains active when tasks are being queued.
+* i915: Fixed the Logical Ring Context (LRC) page size to align with the Graphics Microcontroller Unit (GuC) context
+        state size.
+* i915: Fixed a Graphics Microcontroller Unit (GuC) context null error that occurred on Intel® Data Center GPU Max
+        Series after reset.
+* i915: Introduced a fix to block driver load when Memory Mapped Input/Output (MMIO) communication fails.
+* i915: Implemented a fix to prevent inherited error states from affecting the new blitter offload.
+
 ## Release I915_24WW28.5_914.32_24.3.23_240419.26
 * i915: Updated the telemetry register and High Bandwidth Memory (HBM) error reporting.
 * i915: Improved formatting of logging certain hardware error messages.

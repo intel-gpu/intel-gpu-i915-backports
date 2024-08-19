@@ -1832,13 +1832,7 @@ capture_engine(struct intel_engine_cs *engine,
 		return NULL;
 
 	rcu_read_lock();
-	ce = intel_engine_get_hung_context(engine);
-	if (ce) {
-		intel_engine_clear_hung_context(engine);
-		rq = intel_context_find_active_request(ce);
-	} else {
-		rq = intel_engine_find_active_request(engine);
-	}
+	rq = intel_engine_find_active_request(engine);
 	rq = rq && __i915_request_has_started(rq) ? i915_request_get_rcu(rq) : NULL;
 	rcu_read_unlock();
 
@@ -2410,7 +2404,6 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask, u32 dump
 		}
 
 		gt_record_engines(error->gt, engine_mask, compress, dump_flags);
-
 
 		i915_vma_capture_finish(error->gt, compress);
 

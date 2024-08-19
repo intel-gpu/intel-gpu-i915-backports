@@ -226,6 +226,7 @@ static void gen8_ggtt_insert_page(struct i915_address_space *vm,
 
 static int gen8_ggtt_insert_entries(struct i915_address_space *vm,
 				    struct i915_vma *vma,
+				    struct i915_gem_ww_ctx *ww,
 				    unsigned int pat_index,
 				    u32 flags)
 {
@@ -285,6 +286,7 @@ static void nop_clear_range(struct i915_address_space *vm,
 
 int intel_ggtt_bind_vma(struct i915_address_space *vm,
 			struct i915_vma *vma,
+			struct i915_gem_ww_ctx *ww,
 			unsigned int pat_index,
 			u32 flags)
 {
@@ -301,7 +303,7 @@ int intel_ggtt_bind_vma(struct i915_address_space *vm,
 	if (i915_gem_object_is_lmem(obj) || i915_gem_object_has_fabric(obj))
 		pte_flags |= PTE_LM;
 
-	vm->insert_entries(vm, vma, pat_index, pte_flags);
+	vm->insert_entries(vm, vma, ww, pat_index, pte_flags);
 	vma->page_sizes = I915_GTT_PAGE_SIZE;
 	return 0;
 }
@@ -753,15 +755,11 @@ void i915_ggtt_resume_vm(struct i915_address_space *vm)
 			atomic_read(&vma->flags) & I915_VMA_BIND_MASK;
 
 		GEM_BUG_ON(!was_bound);
-		vma->ops->bind_vma(vm, vma,
+		vma->ops->bind_vma(vm, vma, NULL,
 				   obj ? i915_gem_object_pat_index(obj) :
 				   i915_gem_get_pat_index(vm->i915,
 							  I915_CACHE_NONE),
 				   was_bound);
-		if (obj) { /* only used during resume => exclusive access */
-			fetch_and_zero(&obj->write_domain);
-			obj->read_domains |= I915_GEM_DOMAIN_GTT;
-		}
 	}
 
 	atomic_set(&vm->open, open);

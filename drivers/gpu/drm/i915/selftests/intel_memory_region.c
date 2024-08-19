@@ -514,9 +514,7 @@ static int __igt_lmem_write_cpu(struct intel_gt *gt, struct intel_gt *bcs_gt)
 	if (err)
 		goto out_unpin;
 
-	i915_gem_object_lock(obj, NULL);
 	err = i915_gem_object_set_to_wc_domain(obj, true);
-	i915_gem_object_unlock(obj);
 	if (err)
 		goto out_unpin;
 

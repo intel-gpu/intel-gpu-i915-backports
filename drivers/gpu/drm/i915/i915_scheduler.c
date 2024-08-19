@@ -553,10 +553,11 @@ void i915_sched_node_retire(struct i915_sched_node *node)
 		spin_lock_irqsave(&w->lock, flags);
 		list_del_rcu(&dep->signal_link);
 		spin_unlock_irqrestore(&w->lock, flags);
-		node_put(w);
 
 		if (dep->flags & I915_DEPENDENCY_ALLOC)
 			i915_dependency_free(dep);
+
+		node_put(w);
 	}
 }
 

@@ -578,40 +578,6 @@ unlock:
 		cpu_relax();
 }
 
-static void print_signals(struct intel_breadcrumbs *b, struct drm_printer *p)
-{
-	struct intel_context *ce;
-	struct i915_request *rq;
-
-	drm_printf(p, "Signals:\n");
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(ce, &b->signalers, signal_link) {
-		list_for_each_entry_rcu(rq, &ce->signals, signal_link)
-			drm_printf(p, "\t[%llx:%llx%s] @ %dms\n",
-				   rq->fence.context, rq->fence.seqno,
-				   __i915_request_is_complete(rq) ? "!" :
-				   __i915_request_has_started(rq) ? "*" :
-				   "",
-				   jiffies_to_msecs(jiffies - rq->emitted_jiffies));
-	}
-	rcu_read_unlock();
-}
-
-void intel_engine_print_breadcrumbs(struct intel_engine_cs *engine,
-				    struct drm_printer *p)
-{
-	struct intel_breadcrumbs *b;
-
-	b = engine->breadcrumbs;
-	if (!b)
-		return;
-
-	drm_printf(p, "IRQ: %s\n", str_enabled_disabled(b->irq_armed));
-	if (!list_empty(&b->signalers))
-		print_signals(b, p);
-}
-
 void intel_engine_signal_breadcrumbs(const struct intel_engine_cs *engine)
 {
 	struct intel_breadcrumbs *b;

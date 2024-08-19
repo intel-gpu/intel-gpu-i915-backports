@@ -295,12 +295,32 @@ struct i915_vma_work {
 static int __vma_bind(struct dma_fence_work *work)
 {
 	struct i915_vma_work *vw = container_of(work, typeof(*vw), base);
+	struct i915_gem_ww_ctx ctx, *ww = NULL;
 	struct i915_vma *vma = vw->vma;
 	int err;
 
-	err = vma->ops->bind_vma(vw->vm, vma, vw->pat_index, vw->flags);
+	if (!test_bit(DMA_FENCE_WORK_IMM, &work->rq.fence.flags)) {
+		/* Inside a separate worker; no nesting ww_acquire_ctx */
+		i915_gem_ww_ctx_init(&ctx, true);
+		ww = &ctx;
+	}
+
+rebind:
+	err = vma->ops->bind_vma(vw->vm, vma, ww, vw->pat_index, vw->flags);
+	if (err == -EDEADLK) {
+		GEM_BUG_ON(!ww);
+		err = i915_gem_ww_ctx_backoff(ww);
+		if (err == 0)
+			goto rebind;
+	}
+
 	if (i915_sriov_vf_migration_check(vma->vm->i915, false))
 		err = -EREMCHG;
+
+	if (ww)
+		i915_gem_ww_ctx_fini(ww);
+	else if (err)
+		err = -ERESTARTSYS; /* retry from a worker thread */
 
 	return err;
 }
@@ -367,11 +387,11 @@ static void __vma_complete(struct dma_fence_work *work)
 			 * and CAT error, but on ATS-M it will most likely be
 			 * ignored and result in data corruption or a GPU hang.
 			 */
-			dev_warn_ratelimited(vma->vm->i915->drm.dev,
-					     "Incomplete ppGTT binding [%llx + %llx] in %s, error: %d\n",
-					     i915_vma_offset(vma),
-					     i915_vma_size(vma),
-					     name, work->rq.fence.error);
+			dev_notice_ratelimited(vma->vm->i915->drm.dev,
+					       "Incomplete ppGTT binding [%llx + %llx] in %s, error: %d\n",
+					       i915_vma_offset(vma),
+					       i915_vma_size(vma),
+					       name, work->rq.fence.error);
 		}
 
 		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
@@ -1067,7 +1087,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		make_resident = true;
 	}
 
-	if (flags & PIN_GLOBAL)
+	if (i915_is_ggtt(vma->vm))
 		wakeref = intel_gt_pm_get(vma->vm->gt);
 
 	work = i915_vma_work(vma->vm);
@@ -1544,12 +1564,19 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 	int err;
 
 	assert_object_held(obj);
+	GEM_BUG_ON(i915_request_completed(rq));
 
 	if (!i915_vma_is_persistent(vma)) {
 		err = __i915_vma_move_to_active(vma, rq);
 		if (unlikely(err))
 			return err;
 
+		if (GEM_SHOW_DEBUG() && i915_request_signaled(rq))
+			dev_err(obj->base.dev->dev,
+				"move-to-active on already signaled rq %llx:%lld\n",
+				rq->fence.context, rq->fence.seqno);
+
+		GEM_BUG_ON(i915_request_signaled(rq));
 		GEM_BUG_ON(!i915_vma_is_active(vma));
 	}
 
@@ -1559,13 +1586,8 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 			return err;
 	}
 
-	obj->write_domain = 0;
-	if (flags & EXEC_OBJECT_WRITE) {
-		obj->write_domain = I915_GEM_DOMAIN_RENDER;
+	if (flags & EXEC_OBJECT_WRITE)
 		display_i915_vma_move_to_active(obj, rq);
-		obj->read_domains = 0;
-	}
-	obj->read_domains |= I915_GEM_GPU_DOMAINS;
 
 	return 0;
 }
@@ -1641,7 +1663,6 @@ int __i915_vma_unbind(struct i915_vma *vma)
 int i915_vma_unbind(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
-	intel_wakeref_t wakeref = 0;
 	int err;
 
 	/* Optimistic wait before taking the mutex */
@@ -1657,20 +1678,11 @@ int i915_vma_unbind(struct i915_vma *vma)
 		return -EAGAIN;
 	}
 
-	if (i915_vma_is_bound(vma, I915_VMA_GLOBAL_BIND))
-		/* XXX not always required: nop_clear_range */
-		wakeref = intel_runtime_pm_get(&vm->i915->runtime_pm);
-
-	err = mutex_lock_interruptible_nested(&vma->vm->mutex, !wakeref);
-	if (err)
-		goto out_rpm;
-
-	err = __i915_vma_unbind(vma);
+	err = mutex_lock_interruptible_nested(&vm->mutex, !i915_is_ggtt(vm));
+	if (err == 0)
+		err = __i915_vma_unbind(vma);
 	mutex_unlock(&vm->mutex);
 
-out_rpm:
-	if (wakeref)
-		intel_runtime_pm_put(&vm->i915->runtime_pm, wakeref);
 	return err;
 }
 

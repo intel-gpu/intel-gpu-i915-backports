@@ -7,6 +7,7 @@
 #include <linux/sched/mm.h>
 
 #include "gt/gen8_engine_cs.h"
+#include "gt/intel_gt.h"
 #include "gt/intel_tlb.h"
 
 #include "i915_drv.h"
@@ -25,8 +26,10 @@ struct user_fence {
 		struct mm_struct *mm;
 		struct page *page;
 	};
+	struct drm_i915_private *i915;
 	void __user *ptr;
 	u64 val;
+	u32 sync[I915_MAX_GT];
 };
 
 struct vm_bind_user_ext {
@@ -51,12 +54,26 @@ struct vm_bind_user_fence {
 	struct wait_queue_head *wq;
 };
 
+static void ufence_sync(struct user_fence *ufence)
+{
+	struct intel_gt *gt;
+	int id;
+
+	/* Before signalling, make sure all TLBs were cleared of old PTE */
+	for_each_gt(gt, ufence->i915, id) {
+		if (ufence->sync[id])
+			intel_gt_invalidate_tlb_sync(gt, ufence->sync[id]);
+	}
+}
+
 static void ufence_kmap(struct dma_fence_work *work)
 {
 	struct vm_bind_user_fence *vb =
 		container_of(work, struct vm_bind_user_fence, base);
 	struct user_fence *ufence = &vb->user_fence;
 	void *va;
+
+	ufence_sync(ufence);
 
 	va = kmap_atomic(ufence->page);
 	memcpy(va + offset_in_page(ufence->ptr), &ufence->val, sizeof(ufence->val));
@@ -93,6 +110,8 @@ static int ufence_mm(struct dma_fence_work *work)
 	int ret = -EFAULT;
 
 	if (mmget_not_zero(mm)) {
+		ufence_sync(ufence);
+
 		kthread_use_mm(mm);
 		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
 			wake_up_all(vb->wq);
@@ -147,6 +166,9 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 			mmgrab(vb->user_fence.mm);
 			ops = &ufence_mm_ops;
 		}
+
+		vb->user_fence.i915 = vm->i915;
+		memcpy(vb->user_fence.sync, vm->tlb, sizeof(vm->tlb));
 	}
 	vb->wq = &vm->i915->user_fence_wq;
 	dma_fence_work_init(&vb->base, ops, vm->i915->sched);

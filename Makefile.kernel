@@ -52,9 +52,28 @@ ifeq (y,$(filter y,$(CPTCFG_BUILD_DMABUF) $(CPTCFG_BUILD_ALL_MODULES)))
 obj-y += drivers/dma-buf/
 endif
 
+# Disable vfio for RHEL < RHEL9.2, SLES < SLES15SP5, and KV < 5.16
+
+# Get RHEL release version
+ifneq ($(RHEL_RELEASE_VERSION),)
+get_release_version = $(strip $(shell expr $(1) \* 256 + $(2)))
+disable_vfio_backport = $(strip $(shell expr $(RHEL_RELEASE_VERSION) \< $(call get_release_version,9,2)))
+else ifneq ($(SUSE_PRODUCT_CODE),)
+# Get sles product code
+get_sles_product_code = $(strip $(shell expr $(1) \* 16777216 + $(2) \* 65536 + $(3) \* 256 + $(4)))
+disable_vfio_backport = $(strip $(shell expr $(SUSE_PRODUCT_CODE) \< $(call get_sles_product_code,1,15,5,0)))
+# Get linux version code
+else ifneq ($(LINUX_VERSION_CODE),)
+get_linux_version_code = $(strip $(shell expr $(1) \* 65536 + $(2) \* 256 + $(3)))
+disable_vfio_backport = $(strip $(shell expr $(LINUX_VERSION_CODE) \< $(call get_linux_version_code,5,16,0)))
+endif
+
 ifeq (y,$(filter y,$(CPTCFG_BUILD_DRM) $(CPTCFG_BUILD_ALL_MODULES) $(CPTCFG_BUILD_I915)))
 ifeq ("$(CPTCFG_BUILD_I915)", "y")
 obj-$(CPTCFG_DRM_I915) += drivers/gpu/drm/i915/
+ifneq (1,$(disable_vfio_backport))
+obj-$(CPTCFG_I915_VFIO_PCI) += drivers/vfio/pci/i915/
+endif
 else
 obj-$(CPTCFG_DRM) += drivers/gpu/drm/
 endif

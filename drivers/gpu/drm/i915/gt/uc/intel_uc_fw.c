@@ -1129,9 +1129,9 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 		pte_flags |= PTE_LM;
 
 	with_intel_gt_pm(__uc_fw_to_gt(uc_fw), wf) {
-		ggtt->vm.insert_entries(&ggtt->vm, dummy,
+		ggtt->vm.insert_entries(&ggtt->vm, dummy, NULL,
 					i915_gem_get_pat_index(ggtt->vm.i915,
-						       	       I915_CACHE_NONE),
+							       I915_CACHE_NONE),
 					pte_flags);
 	}
 }

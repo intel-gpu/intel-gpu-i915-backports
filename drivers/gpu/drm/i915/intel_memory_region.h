@@ -69,6 +69,7 @@ struct intel_memory_region_ops {
 	unsigned int flags;
 
 	int (*init)(struct intel_memory_region *mem);
+	void (*show)(struct intel_memory_region *mem, struct drm_printer *p);
 	void (*release)(struct intel_memory_region *mem);
 
 	int (*init_object)(struct intel_memory_region *mem,
@@ -79,6 +80,7 @@ struct intel_memory_region_ops {
 
 enum intel_memory_region_flags {
 	INTEL_MEMORY_CLEAR_FREE = 0,
+	INTEL_MEMORY_EVICT_SHOW,
 };
 
 struct intel_memory_region {

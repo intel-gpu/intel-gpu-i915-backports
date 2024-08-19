@@ -881,7 +881,15 @@ static void __intel_gt_disable(struct intel_gt *gt)
 		intel_gt_suspend_late(gt);
 	}
 
-	GEM_BUG_ON(intel_gt_pm_is_awake(gt));
+	if (GEM_DEBUG_WARN_ON(intel_gt_pm_is_awake(gt))) {
+		struct drm_printer p;
+		char buf[80];
+
+		snprintf(buf, sizeof(buf), "GT%d", gt->info.id);
+		p = drm_err_printer(buf);
+
+		intel_wakeref_show(&gt->wakeref, &p);
+	}
 }
 
 int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)

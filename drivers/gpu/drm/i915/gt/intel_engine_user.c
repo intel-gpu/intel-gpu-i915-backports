@@ -220,7 +220,6 @@ void intel_engines_driver_register(struct drm_i915_private *i915)
 		struct intel_engine_cs *engine =
 			container_of((struct rb_node *)it, typeof(*engine),
 				     uabi_node);
-		char old[sizeof(engine->name)];
 
 		if (intel_gt_has_unrecoverable_error(engine->gt))
 			continue; /* ignore incomplete engines */
@@ -236,11 +235,9 @@ void intel_engines_driver_register(struct drm_i915_private *i915)
 		engine->uabi_instance = uabi_instances[engine->uabi_class]++;
 
 		/* Replace the internal name with the final user facing name */
-		memcpy(old, engine->name, sizeof(engine->name));
 		scnprintf(engine->name, sizeof(engine->name), "%s%u",
 			  intel_engine_class_repr(engine->class),
 			  engine->uabi_instance);
-		DRM_DEBUG_DRIVER("renamed %s to %s\n", old, engine->name);
 
 		rb_link_node(&engine->uabi_node, prev, p);
 		rb_insert_color(&engine->uabi_node, &i915->uabi_engines);

@@ -8,6 +8,7 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_print.h"
 #include "gt/intel_reset.h"
+#include "gt/intel_rps.h"
 #include "gt/iov/intel_iov_memirq.h"
 #include "gt/iov/intel_iov_query.h"
 #include "intel_gsc_fw.h"
@@ -16,7 +17,6 @@
 #include "intel_guc_ads.h"
 #include "intel_guc_print.h"
 #include "intel_guc_submission.h"
-#include "gt/intel_rps.h"
 #include "intel_uc.h"
 
 #include "i915_drv.h"
@@ -805,6 +805,9 @@ sanitize:
 void intel_uc_reset(struct intel_uc *uc, intel_engine_mask_t stalled)
 {
 	struct intel_guc *guc = &uc->guc;
+
+	if (intel_guc_ct_enabled(&guc->ct))
+		intel_guc_ct_reset(&guc->ct);
 
 	/* Firmware can not be running when this function is called  */
 	if (intel_uc_uses_guc_submission(uc))

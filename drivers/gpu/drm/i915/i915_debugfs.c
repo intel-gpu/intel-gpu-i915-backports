@@ -195,12 +195,10 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 	struct i915_vma *vma;
 	int pin_count = 0;
 
-	seq_printf(m, "%pK: %c %8zdKiB %02x %02x %s%s",
+	seq_printf(m, "%pK: %c %8zdKiB %s%s",
 		   &obj->base,
 		   get_pin_mapped_flag(obj),
 		   obj->base.size / 1024,
-		   obj->read_domains,
-		   obj->write_domain,
 		   i915_cache_level_str(obj),
 		   obj->mm.madv == I915_MADV_DONTNEED ? " purgeable" : "");
 	if (obj->base.name)
@@ -321,6 +319,9 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 			continue;
 
 		with_intel_gt_pm(gt, wf) {
+			show_xfer(m, gt, "clear-smem",
+				  gt->counters.map[INTEL_GT_CLEAR_SMEM_BYTES],
+				  gt->counters.map[INTEL_GT_CLEAR_SMEM_CYCLES]);
 			show_xfer(m, gt, "clear-on-alloc",
 				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
 				  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES]);
@@ -894,6 +895,7 @@ static void reset_active(struct intel_gt *gt)
 	struct intel_engine_cs *engine;
 	unsigned long hb = 0, pt = 0;
 	enum intel_engine_id id;
+	intel_wakeref_t wf;
 	long timeout;
 
 	i915_sriov_vf_migration_check(gt->i915, true);
@@ -901,6 +903,8 @@ static void reset_active(struct intel_gt *gt)
 	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT);
 	if (intel_gt_retire_requests_timeout(gt, &timeout))
 		return;
+
+	wf = intel_gt_pm_get(gt);
 
 	/*
 	 * Wait for the pulse to clear any stuck work along each engine
@@ -921,6 +925,8 @@ static void reset_active(struct intel_gt *gt)
 	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT + pt + hb);
 	if (!intel_gt_retire_requests_timeout(gt, &timeout))
 		intel_gt_set_wedged(gt);
+
+	intel_gt_pm_put(gt, wf);
 }
 
 static int
@@ -979,6 +985,9 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 	}
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+		unsigned int noreclaim_state;
+
+		noreclaim_state = memalloc_noreclaim_save();
 		fs_reclaim_acquire(GFP_KERNEL);
 
 		if (val & DROP_BOUND)
@@ -991,6 +1000,7 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 			i915_gem_shrink_all(i915);
 
 		fs_reclaim_release(GFP_KERNEL);
+		memalloc_noreclaim_restore(noreclaim_state);
 	}
 
 	if (val & DROP_RCU)

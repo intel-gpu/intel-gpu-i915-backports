@@ -26,19 +26,9 @@ int intel_iov_migration_reinit_guc(struct intel_iov *iov)
 	int err;
 	const char *where;
 
-	err = intel_iov_query_bootstrap(iov);
-	if (unlikely(err)) {
-		where = "bootstrap";
-		goto fail;
-	}
 	err = intel_iov_query_config(iov);
 	if (unlikely(err)) {
 		where = "query config";
-		goto fail;
-	}
-	err = intel_iov_query_runtime(iov, true);
-	if (unlikely(err)) {
-		where = "query runtime";
 		goto fail;
 	}
 

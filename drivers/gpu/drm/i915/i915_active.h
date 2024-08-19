@@ -191,11 +191,11 @@ i915_active_fence_is_signaled(struct i915_active_fence *active)
 	bool signaled = true;
 	struct dma_fence *f;
 
-	f = i915_active_fence_get(active);
-	if (f) {
+	rcu_read_lock();
+	f = rcu_dereference(active->fence);
+	if (!IS_ERR_OR_NULL(f))
 		signaled = dma_fence_is_signaled(f);
-		dma_fence_put(f);
-	}
+	rcu_read_unlock();
 
 	return signaled;
 }
@@ -282,6 +282,7 @@ static inline void __i915_active_acquire(struct i915_active *ref)
 {
 	GEM_BUG_ON(!atomic_read(&ref->count));
 	atomic_inc(&ref->count);
+	GEM_BUG_ON(!atomic_read(&ref->count));
 }
 
 static inline bool

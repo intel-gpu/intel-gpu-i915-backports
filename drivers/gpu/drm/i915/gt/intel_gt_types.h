@@ -51,6 +51,8 @@ enum intel_gt_counters { /* u64 indices into gt->counters */
 	INTEL_GT_CLEAR_FREE_BYTES,
 	INTEL_GT_CLEAR_IDLE_CYCLES,
 	INTEL_GT_CLEAR_IDLE_BYTES,
+	INTEL_GT_CLEAR_SMEM_CYCLES,
+	INTEL_GT_CLEAR_SMEM_BYTES,
 	INTEL_GT_SWAPIN_CYCLES,
 	INTEL_GT_SWAPIN_BYTES,
 	INTEL_GT_SWAPOUT_CYCLES,
@@ -470,6 +472,7 @@ struct intel_gt {
 	struct intel_rps_defaults rps_defaults;
 	struct kobject *sysfs_defaults;
 
+	struct work_struct wedge;
 	struct work_struct gsc_hw_error_work;
 
 	/* Memory sparing data structure for errors reporting on root tile */

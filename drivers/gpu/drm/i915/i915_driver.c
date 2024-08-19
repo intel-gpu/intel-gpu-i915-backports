@@ -1490,6 +1490,10 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(NUMA_ALLOC),
 		C(PARALLEL_SHMEMFS),
 		C(PARALLEL_USERPTR),
+		C(SMEM_BLT),
+		C(SMEM_DMA),
+		C(SMEM_FREE),
+		C(SMEM_IDLE),
 		C(SOFT_PG),
 		C(ULL_DMA_BOOST),
 #undef C

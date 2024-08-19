@@ -424,7 +424,7 @@ u32 get_init_breadcrumb_pos(struct i915_request *rq)
 
 	GEM_BUG_ON(rq->engine->emit_init_breadcrumb != gen8_emit_init_breadcrumb);
 
-	if (!intel_timeline_has_initial_breadcrumb(i915_request_timeline(rq)))
+	if (!intel_timeline_has_initial_breadcrumb(rcu_access_pointer(rq->timeline)))
 		return rq->infix;
 
 	if (rq->infix - rq->head > GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32))

@@ -49,9 +49,6 @@ intel_engine_signal_breadcrumbs_irq(struct intel_engine_cs *engine)
 
 void intel_engine_signal_breadcrumbs(const struct intel_engine_cs *engine);
 
-void intel_engine_print_breadcrumbs(struct intel_engine_cs *engine,
-				    struct drm_printer *p);
-
 bool i915_request_enable_breadcrumb(struct i915_request *request);
 void i915_request_cancel_breadcrumb(struct i915_request *request);
 

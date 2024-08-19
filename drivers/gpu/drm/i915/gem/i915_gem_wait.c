@@ -237,7 +237,7 @@ i915_gem_object_wait(struct drm_i915_gem_object *obj,
 
 static bool fence_is_active(struct dma_fence *fence)
 {
-	if (!fence)
+	if (IS_ERR_OR_NULL(fence))
 		return false;
 
 	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))

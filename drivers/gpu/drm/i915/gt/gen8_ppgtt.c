@@ -261,7 +261,7 @@ skip:			write_pte(&pd->pt, idx, scratch_encode);
 }
 
 static void ppgtt_clear(struct i915_address_space *vm,
-			u64 start, u64 end, u64 fail)
+			     u64 start, u64 end, u64 fail)
 {
 	DBG("%s(%p):{ start:%llx, end:%llx, fail:%llx }\n",
 	    __func__, vm, start, end, fail);
@@ -293,6 +293,7 @@ static void gen8_ppgtt_clear(struct i915_address_space *vm, u64 start, u64 lengt
 
 struct pt_insert {
 	struct i915_address_space *vm;
+	struct i915_gem_ww_ctx *ww;
 	unsigned int page_sizes;
 	gen8_pte_t pte_encode;
 	u64 addr, end, fail;
@@ -348,20 +349,19 @@ pt_alloc(struct pt_insert *arg, int lvl,
 	    (arg->end - 1) >> __gen8_pte_shift(lvl),
 	    used);
 
-	spin_lock(&pd->lock);
+	rcu_read_lock();
 	GEM_BUG_ON(!atomic_read(px_used(pd))); /* Must be pinned! */
 	pt = READ_ONCE(*pde);
 	if (!pt) {
-		spin_unlock(&pd->lock);
+replace:	rcu_read_unlock();
 
-replace:
 		pt = lvl ? &alloc_pd(arg->vm)->pt : alloc_pt(arg->vm, SZ_4K);
 		if (IS_ERR(pt)) {
 			arg->error = PTR_ERR(pt);
 			goto err;
 		}
 
-		arg->error = map_pt_dma(arg->vm, pt->base);
+		arg->error = map_pt_dma(arg->vm, arg->ww, pt->base);
 		if (arg->error) {
 			free_px(arg->vm, pt, lvl);
 			goto err;
@@ -372,18 +372,24 @@ replace:
 		pt->is_64k = true;
 
 		if (used < GEN8_PDES) {
-			void *old;
+			struct i915_page_table *old;
 
 			fill_px(pt, i915_vm_scratch_encode(arg->vm, lvl));
 
-			spin_lock(&pd->lock);
-			old = cmpxchg_local(pde, NULL, pt);
-			if (old) {
-				free_px(arg->vm, pt, lvl);
-				pt = old;
-				atomic_add(used, px_used(pt));
+			old = cmpxchg(pde, NULL, pt);
+			if (unlikely(old)) {
+				if (!atomic_add_unless(px_used(old), used, 0)) {
+					spin_lock(&pd->lock);
+					old = cmpxchg_local(pde, NULL, pt);
+					if (old)
+						atomic_add(used, px_used(old));
+					spin_unlock(&pd->lock);
+				}
+				if (old) {
+					free_px(arg->vm, pt, lvl);
+					pt = old;
+				}
 			}
-			spin_unlock(&pd->lock);
 		} else {
 			*pde = pt;
 		}
@@ -393,7 +399,6 @@ replace:
 
 			/* Wait for the prior owner to remove conflicting PD. */
 			if (unlikely(is_compact != pt->is_compact)) {
-				spin_unlock(&pd->lock);
 				while (READ_ONCE(*pde) == pt && is_compact != pt->is_compact) {
 					cpu_relax();
 					barrier();
@@ -405,8 +410,10 @@ replace:
 			}
 		}
 
-		atomic_add(used, px_used(pt));
-		spin_unlock(&pd->lock);
+		if (!atomic_add_unless(px_used(pt), used, 0))
+			goto replace;
+
+		rcu_read_unlock();
 	}
 
 	*encode = pde_encode(pt);
@@ -518,6 +525,7 @@ static void __ppgtt_insert(struct pt_insert *arg)
 
 static int ppgtt_insert(struct i915_address_space *vm,
 			struct i915_vma *vma,
+			struct i915_gem_ww_ctx *ww,
 			unsigned int pat_index,
 			u32 flags)
 {
@@ -527,6 +535,7 @@ static int ppgtt_insert(struct i915_address_space *vm,
 		.pte_encode = gen12_pte_encode(0, pat_index, flags),
 		.addr = i915_vma_offset(vma),
 		.end = i915_vma_offset(vma) + min(i915_vma_size(vma), vma->size),
+		.ww = ww,
 	};
 	intel_wakeref_t wf;
 
@@ -693,6 +702,17 @@ static inline bool can_share_scratch(struct i915_address_space const *vm)
 	return false;
 }
 
+static int ww_map_pt_dma(struct i915_address_space *vm, struct drm_i915_gem_object *px)
+{
+	struct i915_gem_ww_ctx ww;
+	int err;
+
+	for_i915_gem_ww(&ww, err, true)
+		err = map_pt_dma(vm, &ww, px);
+
+	return err;
+}
+
 static int gen8_init_scratch(struct i915_address_space *vm)
 {
 	int ret;
@@ -719,7 +739,7 @@ static int gen8_init_scratch(struct i915_address_space *vm)
 			goto free_scratch;
 		}
 
-		ret = map_pt_dma(vm, obj);
+		ret = ww_map_pt_dma(vm, obj);
 		if (ret) {
 			i915_gem_object_put(obj);
 			goto free_scratch;
@@ -766,7 +786,7 @@ gen8_alloc_top_pd(struct i915_address_space *vm)
 		goto err_pd;
 	}
 
-	err = map_pt_dma(vm, pd->pt.base);
+	err = ww_map_pt_dma(vm, pd->pt.base);
 	if (err)
 		goto err_pd;
 
@@ -851,7 +871,7 @@ int intel_flat_lmem_ppgtt_init(struct i915_address_space *vm,
 				goto err_out;
 			}
 
-			err = map_pt_dma(vm, pde->pt.base);
+			err = ww_map_pt_dma(vm, pde->pt.base);
 			if (err) {
 				free_pd(vm, pde);
 				goto err_out;
@@ -884,6 +904,7 @@ err_out:
 int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 					struct drm_i915_gem_object *obj,
 					struct drm_mm_node *node,
+					int leaf,
 					bool is_compact)
 {
 	struct i915_page_directory *pd = i915_vm_to_ppgtt(vm)->pd;
@@ -891,8 +912,7 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 	unsigned int idx, count;
 	struct scatterlist *sg;
 	u64 start, end;
-	int lvl;
-	int err;
+	int lvl, err;
 
 	if (!i915_gem_object_has_pinned_pages(obj))
 		return -EINVAL;
@@ -901,12 +921,14 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 	if (!sg_is_last(sg))
 		return -EINVAL;
 
-	node->size = (sg_dma_len(sg) >> 3) * (is_compact ? SZ_64K : SZ_4K);
-	if (GEM_WARN_ON(node->size < SZ_2M || node->size > SZ_1G))
+	node->size = mul_u32_u32(sg_dma_len(sg) >> 3,
+				 leaf ? SZ_2M : is_compact ? SZ_64K : SZ_4K);
+	node->size = min_t(u64, node->size, leaf ? 512ull * SZ_1G : SZ_1G);
+	if (GEM_WARN_ON(node->size < SZ_2M))
 		return -EINVAL;
 
 	err = drm_mm_insert_node_in_range(&vm->mm, node,
-					  node->size, node->size,
+					  node->size, roundup_pow_of_two(node->size),
 					  I915_COLOR_UNEVICTABLE,
 					  0, U64_MAX,
 					  DRM_MM_INSERT_LOW);
@@ -917,7 +939,7 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 	end = start + (node->size >> GEN8_PTE_SHIFT);
 
 	lvl = vm->top;
-	while (lvl >= 2) {
+	while (lvl >= leaf + 2) {
 		struct i915_page_directory *pde;
 
 		/* Check we don't cross into the next page directory */
@@ -932,7 +954,7 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 				goto err_out;
 			}
 
-			err = map_pt_dma(vm, pde->pt.base);
+			err = ww_map_pt_dma(vm, pde->pt.base);
 			if (err) {
 				free_pd(vm, pde);
 				goto err_out;

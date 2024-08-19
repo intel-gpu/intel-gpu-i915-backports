@@ -18,6 +18,7 @@
 #include "display/intel_frontbuffer.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
+#include "gt/intel_tlb.h"
 
 #include "i915_drv.h"
 #include "i915_gem_evict.h"
@@ -62,6 +63,7 @@ void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
 	if (unlikely(!pages->nents))
 		return;
 
+	intel_tlb_sync(i915, obj->mm.tlb);
 	dma_unmap_sg_attrs(i915->drm.dev, pages->sgl, pages->nents,
 			DMA_BIDIRECTIONAL,
 			DMA_ATTR_SKIP_CPU_SYNC);

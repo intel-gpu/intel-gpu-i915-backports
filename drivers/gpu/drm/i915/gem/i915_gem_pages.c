@@ -33,14 +33,6 @@ void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
 {
 	assert_object_held_shared(obj);
 
-	/* Make the pages coherent with the GPU (flushing any swapin). */
-	if (obj->cache_dirty) {
-		obj->write_domain = 0;
-		if (i915_gem_object_has_struct_page(obj))
-			drm_clflush_sg(pages);
-		obj->cache_dirty = false;
-	}
-
 	i915_gem_object_set_backing_store(obj);
 	obj->mm.pages = pages;
 	obj->mm.get_page.sg_pos = pages->sgl;
@@ -223,24 +215,6 @@ static void unmap_object(struct drm_i915_gem_object *obj, void *ptr)
 		vunmap(ptr);
 }
 
-static void flush_tlb_invalidate(struct drm_i915_gem_object *obj)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct intel_gt *gt;
-	int id;
-
-	if (!i915_gem_object_has_struct_page(obj))
-		return;
-
-	for_each_gt(gt, i915, id) {
-		if (!obj->mm.tlb[id])
-			continue;
-
-		intel_gt_invalidate_tlb_sync(gt, obj->mm.tlb[id]);
-		obj->mm.tlb[id] = 0;
-	}
-}
-
 void i915_gem_object_make_unshrinkable(struct drm_i915_gem_object *obj)
 {
 	struct intel_memory_region *mem;
@@ -302,8 +276,6 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 	__i915_gem_object_reset_page_iter(obj, NULL);
 
-	flush_tlb_invalidate(obj);
-
 	return pages;
 }
 
@@ -332,6 +304,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 		return err;
 	}
 
+	memset(obj->mm.tlb, 0, sizeof(obj->mm.tlb));
 	if (obj->mm.madv != I915_MADV_WILLNEED)
 		i915_gem_object_truncate(obj);
 
@@ -670,10 +643,6 @@ void __i915_gem_object_flush_map(struct drm_i915_gem_object *obj,
 		return;
 
 	drm_clflush_virt_range(ptr + offset, size);
-	if (size == obj->base.size) {
-		obj->write_domain &= ~I915_GEM_DOMAIN_CPU;
-		obj->cache_dirty = false;
-	}
 }
 
 void __i915_gem_object_release_map(struct drm_i915_gem_object *obj)

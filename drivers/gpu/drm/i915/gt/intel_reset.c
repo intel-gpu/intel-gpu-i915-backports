@@ -708,22 +708,10 @@ static int gen12_vf_reset(struct intel_gt *gt,
 	if (unlikely(err)) {
 		drm_dbg(&gt->i915->drm, "VF reset not completed (%pe)\n",
 			ERR_PTR(err));
-	} else if (FIELD_GET(GUC_HXG_MSG_0_TYPE, response) == GUC_HXG_TYPE_RESPONSE_SUCCESS) {
-		/* success - no need for action */
-	} else if (FIELD_GET(GUC_HXG_MSG_0_TYPE, response) == GUC_HXG_TYPE_RESPONSE_FAILURE) {
-		if (FIELD_GET(GUC_HXG_FAILURE_MSG_0_ERROR, response) ==
-		    INTEL_GUC_RESPONSE_VF_MIGRATED)
-			i915_sriov_vf_start_migration_recovery(gt->i915);
-			/*
-			 * We can ignore the fact that reset was not performed here, because the
-			 * post-migration recovery will start with another reset.
-			 */
-		else
-			drm_dbg(&gt->i915->drm, "VF reset returned failure, error=%#x (%#x)\n",
-				FIELD_GET(GUC_HXG_FAILURE_MSG_0_ERROR, response), response);
-	} else
+	} else if (FIELD_GET(GUC_HXG_MSG_0_TYPE, response) != GUC_HXG_TYPE_RESPONSE_SUCCESS) {
 		drm_dbg(&gt->i915->drm, "VF reset not completed (%#x)\n",
 			response);
+	}
 	return 0;
 }
 
@@ -981,6 +969,21 @@ static void nop_submit_request(struct i915_request *request)
 	}
 }
 
+static int do_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
+{
+	int err, i;
+
+	err = __intel_gt_reset(gt, ALL_ENGINES);
+	for (i = 0; err && i < RESET_MAX_RETRIES; i++) {
+		msleep(10 * (i + 1));
+		err = __intel_gt_reset(gt, ALL_ENGINES);
+	}
+	if (err)
+		return err;
+
+	return gt_reset(gt, stalled_mask);
+}
+
 static void __intel_gt_set_wedged(struct intel_gt *gt)
 {
 	struct intel_engine_cs *engine;
@@ -1000,7 +1003,7 @@ static void __intel_gt_set_wedged(struct intel_gt *gt)
 	awake = reset_prepare(gt);
 
 	/* Even if the GPU reset fails, it should still stop the engines */
-	__intel_gt_reset(gt, ALL_ENGINES);
+	do_reset(gt, 0);
 
 	for_each_engine(engine, gt, id)
 		engine->submit_request = nop_submit_request;
@@ -1024,6 +1027,15 @@ static void __intel_gt_set_wedged(struct intel_gt *gt)
 	reset_finish(gt, awake);
 
 	GT_TRACE(gt, "end\n");
+}
+
+static void set_wedged_work(struct work_struct *w)
+{
+	struct intel_gt *gt = container_of(w, struct intel_gt, wedge);
+	intel_wakeref_t wf;
+
+	with_intel_runtime_pm(gt->uncore->rpm, wf)
+		__intel_gt_set_wedged(gt);
 }
 
 void intel_gt_set_wedged(struct intel_gt *gt)
@@ -1151,21 +1163,6 @@ bool intel_gt_unset_wedged(struct intel_gt *gt)
 	mutex_unlock(&gt->reset.mutex);
 
 	return result;
-}
-
-static int do_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
-{
-	int err, i;
-
-	err = __intel_gt_reset(gt, ALL_ENGINES);
-	for (i = 0; err && i < RESET_MAX_RETRIES; i++) {
-		msleep(10 * (i + 1));
-		err = __intel_gt_reset(gt, ALL_ENGINES);
-	}
-	if (err)
-		return err;
-
-	return gt_reset(gt, stalled_mask);
 }
 
 static int resume(struct intel_gt *gt)
@@ -1679,6 +1676,7 @@ void intel_gt_init_reset(struct intel_gt *gt)
 	init_waitqueue_head(&gt->reset.queue);
 	mutex_init(&gt->reset.mutex);
 	init_srcu_struct(&gt->reset.backoff_srcu);
+	INIT_WORK(&gt->wedge, set_wedged_work);
 	INIT_WORK(&gt->reset.uevent_work, intel_gt_reset_failed_uevent_work);
 
 	/*
@@ -1708,7 +1706,7 @@ static void intel_wedge_me(struct work_struct *work)
 	intel_gt_log_driver_error(w->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 				  "%s timed out, cancelling all in-flight rendering.\n",
 				  w->name);
-	intel_gt_set_wedged(w->gt);
+	set_wedged_work(&w->gt->wedge);
 }
 
 void __intel_init_wedge(struct intel_wedge_me *w,
