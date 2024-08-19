@@ -192,7 +192,10 @@ struct intel_gt;
 	__for_each_daddr(__dp, __iter, I915_GTT_PAGE_SIZE)
 
 struct i915_page_table {
-	struct drm_i915_gem_object *base;
+	union {
+		struct drm_i915_gem_object *base;
+		struct rcu_head rcu;
+	};
 	atomic_t used;
 	bool is_compact:1;
 	bool is_64k:1;
@@ -238,6 +241,7 @@ struct i915_vma_ops {
 	/* Map an object into an address space with the given cache flags. */
 	int (*bind_vma)(struct i915_address_space *vm,
 			struct i915_vma *vma,
+			struct i915_gem_ww_ctx *ww,
 			unsigned int pat_index,
 			u32 flags);
 	/*
@@ -373,6 +377,7 @@ struct i915_address_space {
 			    u32 flags);
 	int (*insert_entries)(struct i915_address_space *vm,
 			      struct i915_vma *vma,
+			      struct i915_gem_ww_ctx *ww,
 			      unsigned int pat_index,
 			      u32 flags);
 	void (*cleanup)(struct i915_address_space *vm);
@@ -542,6 +547,7 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt);
 
 int intel_ggtt_bind_vma(struct i915_address_space *vm,
 			struct i915_vma *vma,
+			struct i915_gem_ww_ctx *ww,
 			unsigned int pat_index,
 			u32 flags);
 void intel_ggtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma);
@@ -611,12 +617,12 @@ i915_vm_alloc_px(struct i915_address_space *vm);
 void i915_vm_free_px(struct i915_address_space *vm,
 		     struct drm_i915_gem_object *obj);
 
-int map_pt_dma(struct i915_address_space *vm, struct drm_i915_gem_object *obj);
-
 void free_px(struct i915_address_space *vm,
 	     struct i915_page_table *pt, int lvl);
 #define free_pt(vm, px) free_px(vm, px, 0)
 #define free_pd(vm, px) free_px(vm, px_pt(px), 1)
+
+int map_pt_dma(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww, struct drm_i915_gem_object *obj);
 
 void gen8_set_pte(void __iomem *addr, gen8_pte_t pte);
 gen8_pte_t gen8_get_pte(void __iomem *addr);
@@ -630,6 +636,7 @@ void ppgtt_clear_pages(struct i915_vma *vma);
 
 int ppgtt_bind_vma(struct i915_address_space *vm,
 		   struct i915_vma *vma,
+		   struct i915_gem_ww_ctx *ww,
 		   unsigned int pat_index,
 		   u32 flags);
 void ppgtt_unbind_vma(struct i915_address_space *vm,

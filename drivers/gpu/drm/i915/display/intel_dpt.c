@@ -47,6 +47,7 @@ static void dpt_insert_page(struct i915_address_space *vm,
 
 static int dpt_insert_entries(struct i915_address_space *vm,
 			      struct i915_vma *vma,
+			      struct i915_gem_ww_ctx *ww,
 			      unsigned int pat_index,
 			      u32 flags)
 {
@@ -76,6 +77,7 @@ static void dpt_clear_range(struct i915_address_space *vm,
 
 static int dpt_bind_vma(struct i915_address_space *vm,
 			struct i915_vma *vma,
+			struct i915_gem_ww_ctx *ww,
 			unsigned int pat_index,
 			u32 flags)
 {
@@ -89,7 +91,7 @@ static int dpt_bind_vma(struct i915_address_space *vm,
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
 
-	vma->vm->insert_entries(vma->vm, vma, pat_index, pte_flags);
+	vma->vm->insert_entries(vma->vm, vma, ww, pat_index, pte_flags);
 	vma->page_sizes = I915_GTT_PAGE_SIZE;
 
 	/*

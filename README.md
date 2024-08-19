@@ -32,6 +32,7 @@ This repository contains following drivers.
 | Ubuntu® Server | 24.04 | 6.8 generic | [README](docs/README_ubuntu.md) |
 | Ubuntu® Desktop | 22.04 | 6.5 generic | [README](docs/README_ubuntu.md) |
 | Ubuntu® Server | 22.04 | 5.15 generic | [README](docs/README_ubuntu.md) |
+| SLES® | 15SP6 |  6.4.0.150600.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP5 |  5.14.21.150500.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP4 |  5.14.21.150400.xx |  [README](docs/README_sles.md) |
 | RHEL® | 9.4  |  5.14.0-427.xx |  [README](docs/README_redhat.md) |

@@ -27,7 +27,6 @@
 #include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
-#include "i915_gem_clflush.h"
 #include "i915_gem_context.h"
 #include "i915_gem_evict.h"
 #include "i915_gem_ioctls.h"
@@ -283,7 +282,6 @@ struct i915_execbuffer {
 		struct drm_i915_gem_object *obj;
 		unsigned long vaddr; /** Current kmap address */
 		unsigned long page; /** Currently mapped page index */
-		bool has_llc : 1;
 
 		struct i915_request *rq;
 		u32 *rq_cmd;
@@ -1196,8 +1194,6 @@ static void reloc_cache_init(struct reloc_cache *cache,
 	cache->obj = NULL;
 	cache->page = -1;
 	cache->vaddr = 0;
-	/* Must be a variable in the struct to allow GCC to unroll. */
-	cache->has_llc = HAS_LLC(i915);
 	reloc_cache_clear(cache);
 }
 
@@ -1385,14 +1381,9 @@ static void clflush_write32(u32 *addr, u32 value, unsigned int flushes)
 
 static int reloc_move_to_gpu(struct i915_request *rq, struct i915_vma *vma)
 {
-	struct drm_i915_gem_object *obj = vma->obj;
 	int err;
 
 	assert_vma_held(vma);
-
-	if (obj->cache_dirty && !(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))
-		i915_gem_clflush_object(obj, 0);
-	obj->write_domain = 0;
 
 	err = i915_request_await_object(rq, vma->obj, true);
 	if (err == 0)
@@ -1414,10 +1405,7 @@ static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
 	int err;
 
 	if (!pool) {
-		pool = intel_gt_get_buffer_pool(engine->gt, PAGE_SIZE,
-						cache->has_llc ?
-						I915_MAP_WB :
-						I915_MAP_WC);
+		pool = intel_gt_get_buffer_pool(engine->gt, PAGE_SIZE, I915_MAP_WB);
 		if (IS_ERR(pool))
 			return PTR_ERR(pool);
 	}
@@ -2201,25 +2189,10 @@ static int eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb)
 	return 0;
 }
 
-static struct i915_request *
-eb_find_first_request_added(struct i915_execbuffer *eb)
-{
-	int i;
-
-	for_each_batch_add_order(eb, i)
-		if (eb->requests[i])
-			return eb->requests[i];
-
-	GEM_BUG_ON("Request not found");
-
-	return NULL;
-}
-
 static int eb_move_to_gpu(struct i915_execbuffer *eb)
 {
-	const unsigned int count = eb->buffer_count;
-	unsigned int i = count;
-	int err = 0, j;
+	unsigned int i = eb->buffer_count;
+	int err, j;
 
 	err = eb_persistent_vmas_move_to_active(eb);
 	if (unlikely(err))
@@ -2229,82 +2202,44 @@ static int eb_move_to_gpu(struct i915_execbuffer *eb)
 		struct eb_vma *ev = &eb->vma[i];
 		struct i915_vma *vma = ev->vma;
 		unsigned int flags = ev->flags;
-		struct drm_i915_gem_object *obj = vma->obj;
 
-		if (!i915_vma_is_persistent(vma))
-			assert_vma_held(vma);
-
-		if ((flags & EXEC_OBJECT_CAPTURE) &&
-		    !i915_vma_is_persistent_capture(vma)) {
-			struct i915_capture_list *capture;
-
-			for_each_batch_create_order(eb, j) {
-				if (!eb->requests[j])
-					break;
-
-				capture = kmalloc(sizeof(*capture), GFP_KERNEL);
-				if (capture) {
-					capture->next =
-						eb->requests[j]->capture_list;
-					capture->vma = vma;
-					eb->requests[j]->capture_list = capture;
-				}
-			}
-		}
-
-		/*
-		 * If the GPU is not _reading_ through the CPU cache, we need
-		 * to make sure that any writes (both previous GPU writes from
-		 * before a change in snooping levels and normal CPU writes)
-		 * caught in that cache are flushed to main memory.
-		 *
-		 * We want to say
-		 *   obj->cache_dirty &&
-		 *   !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_READ)
-		 * but gcc's optimiser doesn't handle that as well and emits
-		 * two jumps instead of one. Maybe one day...
-		 *
-		 * FIXME: There is also sync flushing in set_pages(), which
-		 * serves a different purpose(some of the time at least).
-		 *
-		 * We should consider:
-		 *
-		 *   1. Rip out the async flush code.
-		 *
-		 *   2. Or make the sync flushing use the async clflush path
-		 *   using mandatory fences underneath. Currently the below
-		 *   async flush happens after we bind the object.
-		 */
-		if (unlikely(obj->cache_dirty &&
-			     !(obj->flags & I915_BO_CACHE_COHERENT_FOR_READ))) {
-			if (i915_gem_clflush_object(obj, 0))
-				flags &= ~EXEC_OBJECT_ASYNC;
-		}
-
-		/* We only need to await on the first request */
-		if (err == 0 && !(flags & EXEC_OBJECT_ASYNC)) {
-			err = i915_request_await_object
-				(eb_find_first_request_added(eb), obj,
-				 flags & EXEC_OBJECT_WRITE);
-		}
+		if (i915_vma_is_persistent_capture(vma))
+			flags &= ~EXEC_OBJECT_CAPTURE;
 
 		for_each_batch_add_order(eb, j) {
-			if (err)
-				break;
-			if (!eb->requests[j])
+			struct i915_request *rq;
+
+			rq = eb->requests[j];
+			if (!rq)
 				continue;
 
-			err = _i915_vma_move_to_active(vma, eb->requests[j],
-						       j ? NULL :
-						       eb->composite_fence ?
-						       eb->composite_fence :
-						       &eb->requests[j]->fence,
+			if (flags & EXEC_OBJECT_CAPTURE) {
+				struct i915_capture_list *capture;
+
+				capture = kmalloc(sizeof(*capture), GFP_KERNEL | __GFP_NOWARN);
+				if (capture) {
+					capture->vma = vma;
+					capture->next = rq->capture_list;
+					rq->capture_list = capture;
+				}
+			}
+
+			/* We only need to await on the first request */
+			if (!(flags & EXEC_OBJECT_ASYNC)) {
+				err = i915_request_await_object(rq, vma->obj, flags & EXEC_OBJECT_WRITE);
+				if (unlikely(err))
+					goto err_skip;
+
+				flags |= EXEC_OBJECT_ASYNC;
+			}
+
+			err = _i915_vma_move_to_active(vma, rq,
+						       j ? NULL : eb->composite_fence ?: &rq->fence,
 						       flags);
+			if (unlikely(err))
+				goto err_skip;
 		}
 	}
-
-	if (unlikely(err))
-		goto err_skip;
 
 	/* Unconditionally flush any chipset caches (for streaming writes). */
 	intel_gt_chipset_flush(eb->gt);
@@ -2390,7 +2325,7 @@ static int eb_request_submit(struct i915_execbuffer *eb,
 
 	/* Consider moving this to after request creation if needed. */
 	if (i915_gem_context_is_lr(eb->gem_context))
-		set_bit(I915_FENCE_FLAG_LR, &rq->fence.flags);
+		__set_bit(I915_FENCE_FLAG_LR, &rq->fence.flags);
 
 	if (intel_context_nopreempt(rq->context))
 		__set_bit(I915_FENCE_FLAG_NOPREEMPT, &rq->fence.flags);

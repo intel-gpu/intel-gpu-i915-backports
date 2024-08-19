@@ -36,7 +36,6 @@
 #include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
-#include "i915_gem_clflush.h"
 #include "i915_gem_context.h"
 #include "i915_gem_dmabuf.h"
 #include "i915_gem_lmem.h"
@@ -316,8 +315,6 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 			       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
 		obj->flags |= I915_BO_CACHE_COHERENT_FOR_READ;
-
-	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
 /**
@@ -346,8 +343,6 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 			       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
 		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
-
-	obj->cache_dirty = !(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
@@ -1017,7 +1012,6 @@ int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 		return -EBUSY;
 
 	GEM_BUG_ON(obj->mm.mapping);
-	GEM_BUG_ON(obj->base.filp && mapping_mapped(obj->base.filp->f_mapping));
 
 	err = i915_gem_object_wait(obj,
 				   I915_WAIT_INTERRUPTIBLE |
@@ -1127,17 +1121,6 @@ void i915_gem_object_move_notify(struct drm_i915_gem_object *obj)
 		dma_buf_move_notify(obj->base.dma_buf);
 }
 
-static bool shmem_used(const struct drm_i915_gem_object *obj)
-{
-	if (!obj->base.filp)
-		return false;
-
-	if (i915_gem_object_has_backing_store(obj))
-		return true;
-
-	return obj->base.filp->f_inode->i_blocks;
-}
-
 int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 			    enum intel_region_id id,
 			    bool nowait)
@@ -1198,12 +1181,13 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	i915_gem_object_release_mmap(obj);
 
 	/* Copy backing store if we have to */
-	if (obj->base.filp) {
-		GEM_BUG_ON(donor->base.filp);
+	if (obj->mm.region.mem->id == INTEL_REGION_SMEM) {
 		if (obj->swapto) {
 			i915_gem_object_put(obj->swapto);
 			obj->swapto = NULL;
 		}
+		if (i915_gem_object_has_backing_store(obj))
+			obj->swapto = i915_gem_object_get(donor);
 		madv = I915_MADV_WILLNEED;
 	} else if (i915_gem_object_has_pages(obj)) { /* lmem <-> lmem */
 		struct i915_request *rq;
@@ -1231,13 +1215,6 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	i915_gem_object_account(obj);
 
 	GEM_BUG_ON(obj->mm.region.mem->id != id);
-	GEM_BUG_ON(obj->swapto && id == INTEL_REGION_SMEM);
-
-	if (!obj->swapto && shmem_used(donor)) {
-		GEM_BUG_ON(donor->mm.region.mem->id != INTEL_REGION_SMEM);
-		obj->swapto = i915_gem_object_get(donor);
-	}
-
 out:
 	/* Need to set I915_MADV_DONTNEED so that shrinker can free it */
 	donor->mm.madv = madv; /* XXX set_madv() */
@@ -1313,36 +1290,17 @@ i915_gem_object_prepare_memcpy(struct drm_i915_gem_object *obj,
 		return ret;
 
 	if (i915_gem_object_is_lmem(obj)) {
-		ret = i915_gem_object_set_to_wc_domain(obj, write);
-		if (!ret) {
-			info->wakeref =
-				intel_runtime_pm_get(&i915->runtime_pm);
-			info->get_map = lmem_get_map;
-			info->put_map = lmem_put_map;
-		}
+		info->wakeref = intel_runtime_pm_get(&i915->runtime_pm);
+		info->get_map = lmem_get_map;
+		info->put_map = lmem_put_map;
 	} else {
-		if (write)
-			ret = i915_gem_object_prepare_write(obj,
-							    &info->clflush);
-		else
-			ret = i915_gem_object_prepare_read(obj,
-							   &info->clflush);
-
-		if (!ret) {
-			i915_gem_object_finish_access(obj);
-			info->get_map = smem_get_map;
-			info->put_map = smem_put_map;
-		}
+		info->get_map = smem_get_map;
+		info->put_map = smem_put_map;
 	}
 
-	if (!ret) {
-		info->obj = obj;
-		info->write = write;
-	} else {
-		i915_gem_object_unpin_pages(obj);
-	}
-
-	return ret;
+	info->obj = obj;
+	info->write = write;
+	return 0;
 }
 
 static void

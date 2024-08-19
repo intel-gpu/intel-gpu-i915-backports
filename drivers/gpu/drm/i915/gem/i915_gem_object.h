@@ -212,11 +212,8 @@ static inline int __i915_gem_object_lock(struct drm_i915_gem_object *obj,
 	if (ret == -EALREADY)
 		ret = 0;
 
-	if (ret == -EDEADLK) {
-		ww->contended_evict = false;
-		i915_gem_object_get(obj);
-		ww->contended = obj;
-	}
+	if (unlikely(ret == -EDEADLK))
+		i915_gem_ww_contended(ww, obj, false);
 
 	return ret;
 }
@@ -598,13 +595,8 @@ static inline bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_obje
 	return false;
 }
 
-void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
-void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj);
-
 int __must_check
 i915_gem_object_set_to_wc_domain(struct drm_i915_gem_object *obj, bool write);
-int __must_check
-i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write);
 int __must_check
 i915_gem_object_set_to_cpu_domain(struct drm_i915_gem_object *obj, bool write);
 struct i915_vma * __must_check
@@ -619,26 +611,6 @@ void i915_gem_object_make_unshrinkable(struct drm_i915_gem_object *obj);
 void i915_gem_object_make_shrinkable(struct drm_i915_gem_object *obj);
 int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 			     struct prelim_drm_i915_gem_vm_advise *args);
-
-static inline bool cpu_write_needs_clflush(struct drm_i915_gem_object *obj)
-{
-	if (obj->cache_dirty)
-		return false;
-
-	if (!(obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE))
-		return true;
-
-	/* Currently in use by HW (display engine)? Keep flushed. */
-	return i915_gem_object_is_framebuffer(obj);
-}
-
-static inline void __start_cpu_write(struct drm_i915_gem_object *obj)
-{
-	obj->read_domains = I915_GEM_DOMAIN_CPU;
-	obj->write_domain = I915_GEM_DOMAIN_CPU;
-	if (cpu_write_needs_clflush(obj))
-		obj->cache_dirty = true;
-}
 
 void i915_gem_fence_wait_priority(struct dma_fence *fence, int prio);
 

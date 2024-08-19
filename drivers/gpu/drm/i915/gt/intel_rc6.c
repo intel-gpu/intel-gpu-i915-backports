@@ -308,12 +308,17 @@ void intel_rc6_unpark(struct intel_rc6 *rc6)
 	if (!rc6->enabled)
 		return;
 
+	GT_TRACE(rc6_to_gt(rc6),
+		 "exiting rc6, setting CONTROL:%x\n",
+		 rc6->ctl_enable);
+
 	/* Restore HW timers for automatic RC6 entry while busy */
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_GT);
 	set(uncore, GEN6_RC_CONTROL, rc6->ctl_enable);
-
-	if (rc6->pg_enable)
+	if (rc6->pg_enable) {
+		GT_TRACE(rc6_to_gt(rc6), "clearing PG_ENABLE:%x\n", rc6->pg_enable);
 		set(uncore, GEN9_PG_ENABLE, 0);
+	}
 	intel_uncore_forcewake_put(uncore, FORCEWAKE_GT);
 }
 
@@ -325,9 +330,14 @@ void intel_rc6_park(struct intel_rc6 *rc6)
 	if (!rc6->enabled)
 		return;
 
-	if (rc6->pg_enable)
+	if (rc6->pg_enable) {
+		GT_TRACE(rc6_to_gt(rc6), "setting PG_ENABLE:%x\n", rc6->pg_enable);
 		set(uncore, GEN9_PG_ENABLE, rc6->pg_enable);
+	}
 
+	GT_TRACE(rc6_to_gt(rc6),
+		 "entering rc6, manually? %s\n",
+		 str_yes_no(rc6->manual));
 	if (!rc6->manual)
 		return;
 

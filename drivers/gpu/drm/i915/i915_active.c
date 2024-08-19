@@ -1220,9 +1220,11 @@ void i915_active_fence_fini(struct i915_active_fence *active)
 	if (likely(!f))
 		return;
 
-	spin_lock_irqsave(f->lock, flags);
-	GEM_WARN_ON(!dma_fence_is_signaled_locked(f));
-	spin_unlock_irqrestore(f->lock, flags);
+	GEM_WARN_ON(!dma_fence_is_signaled(f));
+	if (unlikely(i915_active_fence_isset(active))) {
+		spin_lock_irqsave(f->lock, flags);
+		spin_unlock_irqrestore(f->lock, flags);
+	}
 	dma_fence_put(f);
 
 	GEM_BUG_ON(i915_active_fence_isset(active));

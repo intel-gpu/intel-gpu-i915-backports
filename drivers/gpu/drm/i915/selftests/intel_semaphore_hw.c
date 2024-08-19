@@ -169,7 +169,7 @@ static int igt_semaphore_token(void *arg)
 	memset(vaddr, 0, PAGE_SIZE);
 	i915_gem_object_unpin_map(obj);
 
-	err = i915_gem_object_set_to_gtt_domain(obj, true);
+	err = i915_gem_object_set_to_wc_domain(obj, true);
 	if (err) {
 		i915_gem_object_unlock(obj);
 		goto out_obj;

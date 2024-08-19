@@ -57,8 +57,6 @@ intel_pin_fb_obj_dpt(struct drm_framebuffer *fb,
 
 	vma->display_alignment = max_t(u64, vma->display_alignment, alignment);
 
-	i915_gem_object_flush_if_display(obj);
-
 	i915_vma_get(vma);
 err:
 	atomic_dec(&dev_priv->gpu_error.pending_fb_pin);

@@ -454,7 +454,6 @@ static u32 guc_ctl_devid(struct intel_guc *guc)
 static void guc_init_params(struct intel_guc *guc)
 {
 	u32 *params = guc->params;
-	int i;
 
 	BUILD_BUG_ON(sizeof(guc->params) != GUC_CTL_MAX_DWORDS * sizeof(u32));
 
@@ -465,8 +464,7 @@ static void guc_init_params(struct intel_guc *guc)
 	params[GUC_CTL_WA] = guc_ctl_wa_flags(guc);
 	params[GUC_CTL_DEVID] = guc_ctl_devid(guc);
 
-	for (i = 0; i < GUC_CTL_MAX_DWORDS; i++)
-		guc_dbg(guc, "param[%2d] = %#x\n", i, params[i]);
+	guc_dbg(guc, "param[] = %*ph\n", (int)sizeof(guc->params), params);
 }
 
 static int guc_action_register_g2g_buffer(struct intel_guc *guc, u32 type, u32 dst,
@@ -917,7 +915,7 @@ busy_loop:
 		u32 error = FIELD_GET(GUC_HXG_FAILURE_MSG_0_ERROR, header);
 
 		if (error == INTEL_GUC_RESPONSE_VF_MIGRATED) {
-			ret = intel_sriov_vf_migrated_g2h(guc);
+			ret = intel_sriov_vf_migrated_event_handler(guc);
 			if (ret == -EAGAIN)
 				goto retry;
 			goto out;
@@ -1116,7 +1114,7 @@ int intel_guc_suspend(struct intel_guc *guc)
 		 * the error here won't be problematic.
 		 */
 		ret = intel_guc_send_mmio(guc, action, ARRAY_SIZE(action), NULL, 0);
-		if (ret && ret != -EREMOTEIO)
+		if (ret)
 			guc_err(guc, "suspend: RESET_CLIENT action failed with %pe\n",
 				ERR_PTR(ret));
 	}

@@ -176,7 +176,7 @@ pte_tlbinv(struct intel_context *ce,
 		/* Flip the PTE between A and B */
 		if (i915_gem_object_is_lmem(vb->obj))
 			pte_flags |= PTE_LM;
-		ce->vm->insert_entries(ce->vm, vb, pat_index, pte_flags);
+		ce->vm->insert_entries(ce->vm, vb, NULL, pat_index, pte_flags);
 
 		/* Flush the PTE update to concurrent HW */
 		tlbinv(ce->vm, addr & -length, length);

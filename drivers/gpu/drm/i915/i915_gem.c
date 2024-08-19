@@ -42,7 +42,6 @@
 #include "display/intel_display.h"
 #include "display/intel_frontbuffer.h"
 
-#include "gem/i915_gem_clflush.h"
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_ioctls.h"
 #include "gem/i915_gem_lmem.h"
@@ -199,6 +198,8 @@ close_vm:
 		spin_lock(&obj->vma.lock);
 		__list_del_entry(&bookmark->obj_link);
 		vma = bookmark;
+		if (ret)
+			break;
 	}
 	spin_unlock(&obj->vma.lock);
 
@@ -320,12 +321,6 @@ i915_gem_pread_ioctl(struct drm_device *dev, void *data,
 	}
 
 	trace_i915_gem_object_pread(obj, args->offset, args->size);
-	ret = -ENODEV;
-	if (obj->ops->pread)
-		ret = obj->ops->pread(obj, args);
-	if (ret != -ENODEV)
-		goto out;
-
 	ret = i915_gem_object_wait(obj,
 				   I915_WAIT_INTERRUPTIBLE,
 				   MAX_SCHEDULE_TIMEOUT);
@@ -470,13 +465,6 @@ i915_gem_pwrite_ioctl(struct drm_device *dev, void *data,
 	}
 
 	trace_i915_gem_object_pwrite(obj, args->offset, args->size);
-
-	ret = -ENODEV;
-	if (obj->ops->pwrite)
-		ret = obj->ops->pwrite(obj, args);
-	if (ret != -ENODEV)
-		goto err;
-
 	ret = i915_gem_object_wait(obj,
 				   I915_WAIT_INTERRUPTIBLE |
 				   I915_WAIT_ALL,
@@ -503,22 +491,6 @@ int
 i915_gem_sw_finish_ioctl(struct drm_device *dev, void *data,
 			 struct drm_file *file)
 {
-	struct drm_i915_gem_sw_finish *args = data;
-	struct drm_i915_gem_object *obj;
-
-	obj = i915_gem_object_lookup(file, args->handle);
-	if (!obj)
-		return -ENOENT;
-
-	/*
-	 * Proxy objects are barred from CPU access, so there is no
-	 * need to ban sw_finish as it is a nop.
-	 */
-
-	/* Pinned buffers may be scanout, so flush the cache */
-	i915_gem_object_flush_if_display(obj);
-	i915_gem_object_put(obj);
-
 	return 0;
 }
 

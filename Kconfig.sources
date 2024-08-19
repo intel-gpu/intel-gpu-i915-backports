@@ -15,3 +15,6 @@ source "$BACKPORT_DIR/drivers/platform/x86/intel/Kconfig"
 # MEI
 source "$BACKPORT_DIR/drivers/misc/mei/Kconfig"
 source "$BACKPORT_DIR/drivers/watchdog/Kconfig"
+
+#VFIO
+source "$BACKPORT_DIR/drivers/vfio/pci/i915/Kconfig"

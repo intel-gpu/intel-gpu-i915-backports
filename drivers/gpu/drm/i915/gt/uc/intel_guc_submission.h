@@ -28,7 +28,6 @@ void intel_guc_submission_print_info(struct intel_guc *guc,
 				     struct drm_printer *p);
 void intel_guc_submission_print_context_info(struct intel_guc *guc,
 					     struct drm_printer *p);
-void guc_submission_scrub_desc_for_outstanding_g2h(struct intel_guc *guc);
 void guc_submission_refresh_ctx_rings_content(struct intel_context *ce);
 void intel_guc_busyness_park(struct intel_gt *gt);
 void intel_guc_busyness_unpark(struct intel_gt *gt);

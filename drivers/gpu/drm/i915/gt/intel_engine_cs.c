@@ -2124,8 +2124,6 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	}
 
 	drm_printf(m, "Idle? %s\n", str_yes_no(intel_engine_is_idle(engine)));
-
-	intel_engine_print_breadcrumbs(engine, m);
 }
 
 /**

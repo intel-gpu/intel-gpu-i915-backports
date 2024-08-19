@@ -126,9 +126,6 @@ fake_dma_object(struct drm_i915_private *i915, u64 size)
 	i915_gem_object_init(obj, &fake_ops, 0);
 
 	i915_gem_object_set_volatile(obj);
-
-	obj->write_domain = I915_GEM_DOMAIN_CPU;
-	obj->read_domains = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_NONE);
 
 	/* Preallocate the "backing storage" */
@@ -234,7 +231,7 @@ static int lowlevel_hole(struct i915_address_space *vm,
 			mock_vma->node.start = addr;
 
 			with_intel_gt_pm(vm->gt, wakeref)
-				vm->insert_entries(vm, mock_vma,
+				vm->insert_entries(vm, mock_vma, NULL,
 						   i915_gem_get_pat_index(vm->i915, I915_CACHE_NONE),
 						   0);
 		}

@@ -69,7 +69,6 @@ struct intel_guc_ct {
 		struct intel_guc_ct_buffer recv;
 	} ctbs;
 
-	struct tasklet_struct receive_tasklet;
 	struct mutex send_mutex;
 
 	/** @wq: wait queue for g2h chanenl */
@@ -81,7 +80,7 @@ struct intel_guc_ct {
 		spinlock_t lock; /* protects pending requests list */
 		struct list_head pending; /* requests waiting for response */
 
-		struct list_head incoming; /* incoming requests */
+		struct llist_head incoming; /* incoming requests */
 		struct work_struct worker; /* handler for incoming requests */
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
@@ -108,6 +107,7 @@ void intel_guc_ct_init_early(struct intel_guc_ct *ct);
 int intel_guc_ct_init(struct intel_guc_ct *ct);
 void intel_guc_ct_fini(struct intel_guc_ct *ct);
 int intel_guc_ct_enable(struct intel_guc_ct *ct);
+void intel_guc_ct_reset(struct intel_guc_ct *ct);
 void intel_guc_ct_disable(struct intel_guc_ct *ct);
 
 static inline void intel_guc_ct_sanitize(struct intel_guc_ct *ct)
@@ -120,8 +120,6 @@ static inline bool intel_guc_ct_enabled(const struct intel_guc_ct *ct)
 	return ct->enabled;
 }
 
-bool intel_guc_ct_vf_migrated(struct intel_guc_ct *ct);
-
 #define INTEL_GUC_CT_SEND_NB		BIT(31)
 #define INTEL_GUC_CT_SEND_SELFTEST	BIT(30)
 #define INTEL_GUC_CT_SEND_G2H_DW_SHIFT	0
@@ -133,7 +131,10 @@ bool intel_guc_ct_vf_migrated(struct intel_guc_ct *ct);
 })
 int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 		      u32 *response_buf, u32 response_buf_size, u32 flags);
+void intel_guc_ct_receive(struct intel_guc_ct *ct);
 void intel_guc_ct_event_handler(struct intel_guc_ct *ct);
+
+int intel_guc_ct_update_addresses(struct intel_guc_ct *ct);
 
 void intel_guc_ct_print_info(struct intel_guc_ct *ct, struct drm_printer *p);
 

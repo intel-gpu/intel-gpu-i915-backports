@@ -51,6 +51,6 @@ int i915_sriov_resume(struct drm_i915_private *i915);
 /* VF only */
 bool i915_sriov_vf_migration_check(struct drm_i915_private *i915, bool wait_end);
 void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915);
-int intel_sriov_vf_migrated_g2h(struct intel_guc *guc);
+int intel_sriov_vf_migrated_event_handler(struct intel_guc *guc);
 
 #endif /* __I915_SRIOV_H__ */

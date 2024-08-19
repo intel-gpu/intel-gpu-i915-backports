@@ -4,11 +4,27 @@
  */
 
 #include <linux/dma-resv.h>
+#include <linux/stackdepot.h>
 
 #include "gem/i915_gem_object.h"
 
 #include "i915_gem_ww.h"
 #include "intel_memory_region.h"
+
+#define BUFSZ 4096
+
+void i915_gem_ww_contended(struct i915_gem_ww_ctx *ww, struct drm_i915_gem_object *obj, bool evict)
+{
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+	unsigned long entries[32];
+	unsigned int n;
+
+	n = stack_trace_save(entries, ARRAY_SIZE(entries), 1);
+	ww->stack = stack_depot_save(entries, n, GFP_NOWAIT | __GFP_NOWARN);
+#endif
+	ww->contended = i915_gem_object_get(obj);
+	ww->evict = evict;
+}
 
 void i915_gem_ww_ctx_init(struct i915_gem_ww_ctx *ww, bool intr)
 {
@@ -17,7 +33,6 @@ void i915_gem_ww_ctx_init(struct i915_gem_ww_ctx *ww, bool intr)
 
 	ww->intr = intr;
 	ww->contended = NULL;
-	ww->contended_evict = false;
 }
 
 static void i915_gem_ww_ctx_unlock_all(struct i915_gem_ww_ctx *ww, bool lru)
@@ -44,6 +59,14 @@ void i915_gem_ww_unlock_single(struct drm_i915_gem_object *obj)
 void i915_gem_ww_ctx_fini(struct i915_gem_ww_ctx *ww)
 {
 	i915_gem_ww_ctx_unlock_all(ww, true);
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
+	if (unlikely(ww->contended && ww->stack)) {
+		char buf[512];
+
+		stack_depot_snprint(ww->stack, buf, sizeof(buf), 0);
+		GEM_TRACE_ERR("ww.contended still held, 'locked' at %s\n", buf);
+	}
+#endif
 	GEM_BUG_ON(ww->contended);
 	ww_acquire_fini(&ww->ctx);
 }
@@ -72,7 +95,7 @@ int __must_check i915_gem_ww_ctx_backoff(struct i915_gem_ww_ctx *ww)
 	 * Unlocking the contended lock again, if it was locked for eviction.
 	 * We will most likely not need it in the retried transaction.
 	 */
-	if (ww->contended_evict) {
+	if (ww->evict) {
 		dma_resv_unlock(obj->base.resv);
 		i915_gem_object_put(obj);
 	} else {
@@ -94,10 +117,8 @@ __i915_gem_object_lock_to_evict(struct drm_i915_gem_object *obj,
 		err = dma_resv_lock_interruptible(obj->base.resv, &ww->ctx);
 	else
 		err = dma_resv_trylock(obj->base.resv) ? 0 : -EBUSY;
-	if (err == -EDEADLK) {
-		ww->contended_evict = true;
-		ww->contended = i915_gem_object_get(obj);
-	}
+	if (unlikely(err == -EDEADLK))
+		i915_gem_ww_contended(ww, obj, true);
 
 	return err;
 }

@@ -1120,6 +1120,12 @@ pvc_gt_workarounds_init(struct intel_gt *gt, struct i915_wa_list *wal)
 		/* Wa_14010847520:pvc */
 		wa_mcr_write_or(wal, GEN12_LTCDREG, SLPDIS);
 	}
+
+	/*
+	 * Wa:16023902795
+	 * Promote all TLB invalidations across all engines, regardless of activity.
+	 */
+	wa_mcr_write_or(wal, XEHP_GAMSTLB_CTRL, INVALIDATE_ENTIRE_STLB);
 }
 
 static void

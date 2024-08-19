@@ -488,8 +488,6 @@ static int cpu_fill(struct drm_i915_gem_object *obj, u32 value)
 	}
 
 	i915_gem_object_finish_access(obj);
-	obj->read_domains = I915_GEM_DOMAIN_GTT | I915_GEM_DOMAIN_CPU;
-	obj->write_domain = 0;
 out:
 	i915_gem_object_unlock(obj);
 	return err;
@@ -963,7 +961,7 @@ retry:
 	if (!err)
 		err = i915_gem_object_lock(rpcs, &ww);
 	if (!err)
-		err = i915_gem_object_set_to_gtt_domain(obj, false);
+		err = i915_gem_object_set_to_wc_domain(obj, false);
 	if (!err)
 		err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_USER);
 	if (err)

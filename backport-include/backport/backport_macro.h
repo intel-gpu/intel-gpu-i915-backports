@@ -8,7 +8,8 @@
 	LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
 	LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
 	(LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(111,121)) || \
-        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59))
+        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59)) || \
+	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
  */
@@ -34,7 +35,8 @@
 #define BPM_SLUB_DEF_IS_PRESENT
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,7,0)
+#if LINUX_VERSION_IS_GEQ(6,7,0) || \
+     (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  *451921e7bbc7: drm: Replace drm_framebuffer plane size
  *              functions with its equivalents
@@ -42,24 +44,26 @@
 #define BPM_DRM_FRAMEBUFFER_PLANE_HEIGHT_NOT_PRESENT
 
 /*
- * 0ede61d8589c file: convert to SLAB_TYPESAFE_BY_RCU
- */
-#define BPM_GET_FILE_RCU_ARG_CHANGED
-
-/*
  * e2272bfb18ee: drm/dp: switch drm_dp_downstream_*() helpers to struct drm_edid
  */
 #define BPM_STRUCT_EDID_NOT_PRESENT
 
 /*
- * 07f9cfe2ef6c: drm/i915/dp_mst: Make sure pbn_div is up-to-date after sink reconnect
- */
-#define BPM_MST_STATE_PBN_DIVE_PRESENT
-
-/*
  * 5aa1dfcdf0a4: drm/mst: Refactor the flow for payload allocation/removement
  */
 #define BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,7,0)
+/*
+ * 0ede61d8589c file: convert to SLAB_TYPESAFE_BY_RCU
+ */
+#define BPM_GET_FILE_RCU_ARG_CHANGED
+
+/*
+ * 07f9cfe2ef6c: drm/i915/dp_mst: Make sure pbn_div is up-to-date after sink reconnect
+ */
+#define BPM_MST_STATE_PBN_DIVE_PRESENT
 
 /*
  *f2383e01507e mm: shrinker: remove old APIs
@@ -72,7 +76,7 @@
 #define BPM_I2C_CLASS_DDC_PRESENT
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,6,0)
+#if LINUX_VERSION_IS_GEQ(6,6,0) || (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * 46f12960aad2 drm/i915: Move abs_diff() to math.h
  */
@@ -81,6 +85,9 @@
  * 8ac20a03da56 tty: sysrq: switch the rest of keys to u8
  */
 #define BPM_SYSRQ_KEY_OP_HANDLER_INT_ARG_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,6,0)
 /*
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
@@ -104,7 +111,8 @@
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,4) || \
 	(LINUX_VERSION_IS_GEQ(6,5,0) && ((UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34) && \
-	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )))
+	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )) || \
+	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0)))
 /*
  * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
  */
@@ -137,6 +145,15 @@
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
 
 /*
+ * 0d940a9b270b mm/pgtable: allow pte_offset_map[_lock]() to fail
+ */
+#define BPM_PTE_OFFSET_MAP_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
+
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) || \
+       (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
+
+/*
  * 3d35ddfb0713 drm/display/dp_mst: drop has_audio from struct drm_dp_mst_port
  */
 #define BPM_PORT_HAS_AUDIO_MEMBER_NOT_PRESENT
@@ -147,13 +164,14 @@
  */
 #define BPM_SUPPORTED_COLORSPACES_ARG_NOT_PRESENT
 
-#endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
+#endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) ... */
 
 #if (LINUX_VERSION_IS_GEQ(6,4,5) || \
 	LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
 	(LINUX_VERSION_IN_RANGE(6,2,16, 6,3,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(36,37)) || \
 	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,19)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * 104d79eb58aa drm/dp_mst: Clear MSG_RDY flag before sending new message
  */
@@ -278,6 +296,15 @@
 #endif /* (LINUX_VERSION_IS_GEQ(6,2,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,2,0) || \
+                (REDHAT_RELEASE_VERSION_IS_GEQ(9,2)))
+/*
+ * 4e016f969529f2aec
+ * vfio: Add an option to get migration data size
+ */
+#define BPM_MIGRATION_GET_DATA_SIZE_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(6,2,0) || (REDHAT_RELEASE_VERSION_IS_GEQ(9,2))) */
+
+#if (LINUX_VERSION_IS_GEQ(6,2,0) || \
                 (REDHAT_RELEASE_VERSION_IS_GEQ(8,9)))
 
 #if!(REDHAT_RELEASE_VERSION_IS_EQL(9,0))
@@ -322,11 +349,17 @@
  * drm/atomic-helper: Remove _HELPER_ infix from DRM_PLANE_HELPER_NO_SCALING
  */
 #define BPM_DRM_PLANE_HELPER_NO_SCALING_NOT_PRESENT
+
+/*
+ * 27aeb915595b vfio/hisi_acc: Use the new device life cycle helpers
+ */
+#define BPM_VFIO_PCI_CORE_UN_INIT_DEVICE_API_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,1,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
 	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,7)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * 4d07b0bc40
  * drm/display/dp_mst: Move all payload info into the atomic state
@@ -393,6 +426,21 @@
  */
 #define BPM_BACKLIGHT_H_NOT_INCLUDED_IN_DRM_CRTC_H
 #endif /* LINUX_VERSION_IS_GEQ(6,0,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,2) ... */
+
+#if (LINUX_VERSION_IS_GEQ(5,19,2) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,2))
+/*
+ * 6e97eba8ad87 vfio: Split migration ops from main device ops
+ */
+#define BPM_MIGRATION_STATE_MEMBER_NOT_PRESENT
+
+/*
+ * 512881eacfa72c2
+ * bus: platform,amba,fsl-mc,PCI: Add device DMA ownership management
+ */
+#define BPM_DRIVER_MANAGED_DMA_MEMBER_PRESENT
+#endif /*LINUX_VERSION_IS_GEQ(5,19,2)||SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) ...*/
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
@@ -875,6 +923,14 @@
  */
 #define BPM_PCI_FIND_HOST_BRIDGE_NOT_EXPORTED
 #endif /* !((LINUX_VERSION_IN_RANGE(5,14,0, 5,15,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(1011,0)) ... */
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+/*
+ * 7fa005caa35e vfio/pci: Introduce vfio_pci_core.ko
+ */
+#define BPM_VFIO_PCI_CORE_HEADER_NOT_PRESENT
+#endif
 #endif /* LINUX_VERSION_IS_LESS(5,15,0) */
 
 #if LINUX_VERSION_IS_LESS(5,14,19)
@@ -917,6 +973,11 @@
  * f21ffe9f6da6d swiotlb: Expose swiotlb_nr_tlb function to modules
  */
 #define BPM_SWIOTLB_NR_TBL_NO_ARG_PRESENT
+
+/*
+ * 458a4f788f86 mm/gup: add a range variant of unpin_user_pages_dirty_lock()
+ */
+#define BPM_UNPIN_USER_PAGES_DIRTY_LOCK_NOT_PRESENT
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6)) */
 
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
@@ -1017,6 +1078,11 @@
  */
 #define BPM_MIGHT_ALLOC_NOT_PRESENT
 
+/*
+ * 476c5818c37a llist: Add nonatomic __llist_add() and __llist_dell_all()
+ */
+#define BPM_LLIST_ADD_NOT_PRESENT
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
 /*
  * f0dbd2bd1c22c66 mm: slab: provide krealloc_array()
@@ -1064,6 +1130,11 @@
  */
 #define BPM_MOD_LRUVEC_PAGE_STATE_NOT_EXPORTED
 #endif /* (REDHAT_RELEASE_VERSION_IS_EQL(8,4)) */
+
+/*
+ * 2a4a06da8a4b mm/gup: Provide gup_get_pte() more generic
+ */
+#define BPM_PTEP_GET_LOCKLESS_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_LESS(5,11,0) */
 
 #if LINUX_VERSION_IS_LESS(5,10,0)
@@ -1225,6 +1296,13 @@
  */
 #define BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6))
+/*
+ * 7318d4cc14c8 sched: Provide sched_set_fifo()
+ */
+#define BPM_SCHED_SET_API_NOT_PRESENT
+#endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6)) */
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,2))
 /*
  * eedc4e5a142c
@@ -1260,6 +1338,13 @@
 /* 3022c6a1b4b7 driver-core: Introduce DEVICE_ATTR_ADMIN_{RO,RW} */
 #define BPM_DEVICE_ATTR_ADMIN_RX_NOT_PRESENT
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4) || SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) ... */
+
+#if LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0)
+/*
+ * 47ec7f09bc10 dmaengine: cookie bypass for out of order completion
+ */
+#define BPM_DMA_COMPLETION_NO_ORDER_NOT_PRESENT
+#endif
 #endif /* LINUX_VERSION_IS_LESS(5,9,0) */
 
 #if LINUX_VERSION_IS_LESS(5,8,0)

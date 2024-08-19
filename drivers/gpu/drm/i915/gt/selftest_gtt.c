@@ -640,7 +640,7 @@ pte_write_tearing(struct intel_context *ce,
 			/* Flip the PTE between A and B */
 			if (i915_gem_object_is_lmem(vv[0]->obj))
 				pte_flags |= PTE_LM;
-			ce->vm->insert_entries(ce->vm, vv[0], pat_index, pte_flags);
+			ce->vm->insert_entries(ce->vm, vv[0], NULL, pat_index, pte_flags);
 
 			/* Check if the semaphore read anywhere other than A|B */
 			if (i915_request_completed(rq)) {

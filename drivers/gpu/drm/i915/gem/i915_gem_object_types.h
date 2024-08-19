@@ -61,11 +61,6 @@ struct drm_i915_gem_object_ops {
 			 struct sg_table *pages);
 	void (*truncate)(struct drm_i915_gem_object *obj);
 
-	int (*pread)(struct drm_i915_gem_object *obj,
-		     const struct drm_i915_gem_pread *arg);
-	int (*pwrite)(struct drm_i915_gem_object *obj,
-		      const struct drm_i915_gem_pwrite *arg);
-
 	int (*dmabuf_export)(struct drm_i915_gem_object *obj);
 
 	void (*release)(struct drm_i915_gem_object *obj);
@@ -383,83 +378,6 @@ struct drm_i915_gem_object {
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
 #define I915_BO_PAT_INDEX GENMASK(23, 20)
-
-	/**
-	 * @cache_dirty:
-	 *
-	 * Track if we are we dirty with writes through the CPU cache for this
-	 * object. As a result reading directly from main memory might yield
-	 * stale data.
-	 *
-	 * This also ties into whether the kernel is tracking the object as
-	 * coherent with the GPU, as per @cache_coherent, as it determines if
-	 * flushing might be needed at various points.
-	 *
-	 * Another part of @cache_dirty is managing flushing when first
-	 * acquiring the pages for system memory, at this point the pages are
-	 * considered foreign, so the default assumption is that the cache is
-	 * dirty, for example the page zeroing done by the kernel might leave
-	 * writes though the CPU cache, or swapping-in, while the actual data in
-	 * main memory is potentially stale.  Note that this is a potential
-	 * security issue when dealing with userspace objects and zeroing. Now,
-	 * whether we actually need apply the big sledgehammer of flushing all
-	 * the pages on acquire depends on if @cache_coherent is marked as
-	 * I915_BO_CACHE_COHERENT_FOR_WRITE, i.e that the GPU will be coherent
-	 * for both reads and writes though the CPU cache.
-	 *
-	 * Note that on shared LLC platforms we still apply the heavy flush for
-	 * I915_CACHE_NONE objects, under the assumption that this is going to
-	 * be used for scanout.
-	 *
-	 * Update: On some hardware there is now also the 'Bypass LLC' MOCS
-	 * entry, which defeats our @cache_coherent tracking, since userspace
-	 * can freely bypass the CPU cache when touching the pages with the GPU,
-	 * where the kernel is completely unaware. On such platform we need
-	 * apply the sledgehammer-on-acquire regardless of the @cache_coherent.
-	 *
-	 * Special care is taken on non-LLC platforms, to prevent potential
-	 * information leak. The driver currently ensures:
-	 *
-	 *   1. All userspace objects, by default, have @cache_level set as
-	 *   I915_CACHE_NONE. The only exception is userptr objects, where we
-	 *   instead force I915_CACHE_LLC, but we also don't allow userspace to
-	 *   ever change the @cache_level for such objects. Another special case
-	 *   is dma-buf, which doesn't rely on @cache_dirty,  but there we
-	 *   always do a forced flush when acquiring the pages, if there is a
-	 *   chance that the pages can be read directly from main memory with
-	 *   the GPU.
-	 *
-	 *   2. All I915_CACHE_NONE objects have @cache_dirty initially true.
-	 *
-	 *   3. All swapped-out objects(i.e shmem) have @cache_dirty set to
-	 *   true.
-	 *
-	 *   4. The @cache_dirty is never freely reset before the initial
-	 *   flush, even if userspace adjusts the @cache_level through the
-	 *   i915_gem_set_caching_ioctl.
-	 *
-	 *   5. All @cache_dirty objects(including swapped-in) are initially
-	 *   flushed with a synchronous call to drm_clflush_sg in
-	 *   __i915_gem_object_set_pages. The @cache_dirty can be freely reset
-	 *   at this point. All further asynchronous clfushes are never security
-	 *   critical, i.e userspace is free to race against itself.
-	 */
-	unsigned int cache_dirty:1;
-
-	/**
-	 * @read_domains: Read memory domains.
-	 *
-	 * These monitor which caches contain read/write data related to the
-	 * object. When transitioning from one set of domains to another,
-	 * the driver is called to ensure that caches are suitably flushed and
-	 * invalidated.
-	 */
-	u16 read_domains;
-
-	/**
-	 * @write_domain: Corresponding unique write memory domain.
-	 */
-	u16 write_domain;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct intel_frontbuffer __rcu *frontbuffer;

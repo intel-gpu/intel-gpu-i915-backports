@@ -312,8 +312,8 @@ TRACE_EVENT(i915_request_queue,
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = rq->engine ? rq->engine->i915->drm.primary->index : 0;
-			   __entry->class = rq->engine ? rq->engine->uabi_class : 0;
+			   __entry->dev = rq->i915->drm.primary->index;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : I915_ENGINE_CLASS_INVALID;
 			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
@@ -340,9 +340,9 @@ DECLARE_EVENT_CLASS(i915_request,
 			     ),
 
 	    TP_fast_assign(
-			   __entry->dev = rq->engine->i915->drm.primary->index;
-			   __entry->class = rq->engine->uabi_class;
-			   __entry->instance = rq->engine->uabi_instance;
+			   __entry->dev = rq->i915->drm.primary->index;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : I915_ENGINE_CLASS_INVALID;
+			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->guc_id = rq->context->guc_id.id;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
@@ -391,9 +391,9 @@ TRACE_EVENT(i915_request_in,
 			    ),
 
 	    TP_fast_assign(
-			   __entry->dev = rq->engine->i915->drm.primary->index;
-			   __entry->class = rq->engine->uabi_class;
-			   __entry->instance = rq->engine->uabi_instance;
+			   __entry->dev = rq->i915->drm.primary->index;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : I915_ENGINE_CLASS_INVALID;
+			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
 			   __entry->prio = rq->sched.attr.priority;
@@ -420,9 +420,9 @@ TRACE_EVENT(i915_request_out,
 			    ),
 
 	    TP_fast_assign(
-			   __entry->dev = rq->engine->i915->drm.primary->index;
-			   __entry->class = rq->engine->uabi_class;
-			   __entry->instance = rq->engine->uabi_instance;
+			   __entry->dev = rq->i915->drm.primary->index;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : I915_ENGINE_CLASS_INVALID;
+			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
 			   __entry->completed = i915_request_completed(rq);
@@ -661,9 +661,9 @@ TRACE_EVENT(i915_request_wait_begin,
 	     * less desirable.
 	     */
 	    TP_fast_assign(
-			   __entry->dev = rq->engine->i915->drm.primary->index;
-			   __entry->class = rq->engine->uabi_class;
-			   __entry->instance = rq->engine->uabi_instance;
+			   __entry->dev = rq->i915->drm.primary->index;
+			   __entry->class = rq->engine ? rq->engine->uabi_class : I915_ENGINE_CLASS_INVALID;
+			   __entry->instance = rq->engine ? rq->engine->uabi_instance : 0;
 			   __entry->ctx = rq->fence.context;
 			   __entry->seqno = i915_request_seqno(rq);
 			   __entry->flags = flags;

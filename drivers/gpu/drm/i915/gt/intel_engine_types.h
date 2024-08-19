@@ -398,8 +398,6 @@ struct intel_engine_cs {
 	/* keep a request in reserve for a [pm] barrier under oom */
 	struct i915_request *request_pool;
 
-	struct intel_context *hung_ce;
-
 	spinlock_t barrier_lock;
 	struct list_head barrier_tasks;
 

@@ -34,6 +34,7 @@ static void mock_insert_page(struct i915_address_space *vm,
 
 static int mock_insert_entries(struct i915_address_space *vm,
 			       struct i915_vma *vma,
+			       struct i915_gem_ww_ctx *ww,
 			       unsigned int pat_index,
 			       u32 flags)
 {
@@ -42,6 +43,7 @@ static int mock_insert_entries(struct i915_address_space *vm,
 
 static int mock_bind_ppgtt(struct i915_address_space *vm,
 			   struct i915_vma *vma,
+			   struct i915_gem_ww_ctx *ww,
 			   unsigned int pat_index,
 			   u32 flags)
 {
@@ -100,6 +102,7 @@ struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 
 static int mock_bind_ggtt(struct i915_address_space *vm,
 			  struct i915_vma *vma,
+			  struct i915_gem_ww_ctx *ww,
 			  unsigned int pat_index,
 			  u32 flags)
 {

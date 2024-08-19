@@ -11,6 +11,7 @@ DEP_PKG_NAME=""
 I915_CONFIG="i915"
 PMT_VSEC_SELECTION="auto"
 RHEL_84_KV="4.18.0-305"
+LINUX_VERSION_FILE="\$kernel_source_dir/include/generated/uapi/linux/version.h"
 
 helpFunction()
 {
@@ -166,6 +167,26 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		DEST_MODULE_LOCATION[14]="/updates"
 	fi
 
+	find_linux_version_code()
+	{
+		linux_version_val=\$(expr \$1 \* 65536 + \$2 \* 256 + \$3)
+		echo \$linux_version_val
+	}
+
+	get_linux_version_code()
+	{
+		if [ -f "$LINUX_VERSION_FILE" ];
+		then
+			linux_version_code=\$(cat $LINUX_VERSION_FILE | grep LINUX_VERSION_CODE | sed 's/[^0-9]//g')
+			if [ -z \$linux_version_code ]; then
+				linux_version_code="0"
+			fi
+			echo \$linux_version_code
+		else
+			echo "0"
+		fi
+	}
+
 	# Find out nodrm is needed or not
 	# Avoid installing drm modules for nodrm kernels
 	install_drm_modules() {
@@ -182,6 +203,15 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 			echo false;
 		fi
 	}
+
+	install_vfio_modules() {
+		if [ "\$(get_linux_version_code)" -lt "\$(find_linux_version_code 5 16 0)" ]; then
+			echo false;
+		else
+			echo true;
+		fi
+	}
+
 	if [ "\$(install_drm_modules)" = "true" ];
 	then
 		BUILT_MODULE_NAME[15]="drm_kms_helper"
@@ -203,12 +233,19 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		DMA_BUF_SYMBOLS="export KBUILD_EXTRA_SYMBOLS='\$dkms_tree/$DEP_PKG_NAME/kernel-\$kernelver-x86_64/build/Module.symvers';"
 	else
 		DMA_BUF_SYMBOLS=""
+
+		if [ "\$(install_vfio_modules)" = "true" ];
+		then
+			BUILT_MODULE_NAME[15]="i915-vfio-pci"
+			BUILT_MODULE_LOCATION[15]="drivers/vfio/pci/i915/"
+			DEST_MODULE_LOCATION[15]="/updates"
+		fi
 	fi
 
 	# Find out how many CPU cores can be use if we pass appropriate -j option to make.
-       	# DKMS could use all cores on multicore systems to build the kernel module.
-       	num_cpu_cores()
-       	{
+	# DKMS could use all cores on multicore systems to build the kernel module.
+	num_cpu_cores()
+	{
 		if [ -x /usr/bin/nproc ]; then
 			np=`nproc`
 			if [ "\$np" -le "64" ]; then

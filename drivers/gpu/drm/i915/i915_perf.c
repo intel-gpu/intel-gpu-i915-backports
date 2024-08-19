@@ -3537,12 +3537,27 @@ static int i915_perf_release(struct inode *inode, struct file *file)
 	struct intel_gt *gt = stream->engine->gt;
 
 	/*
-	 * User could have multiple vmas from multiple mmaps. We want to zap
-	 * them all here. Note that a fresh fault cannot occur as the mmap holds
-	 * a reference to the stream via the vma->vm_file, so before user's
-	 * munmap, the stream cannot be destroyed.
+	 * unmap_mapping_range() was being called in i915_perf_release() to
+	 * account for any mmapped vmas that the user did not unmap, either
+	 * intentionally or by user task exiting before unmapping. Note that we
+	 * do not need to unmap the OA buffer when closing the perf fd. If user
+	 * did not unmap the buffer, then i915_perf_release will never get
+	 * called because mmap holds a reference to the vma->vm_file which is
+	 * the stream. If the user task exited, then kernel's do_exit() will
+	 * take care of unmapping the vmas and eventually calling close on this
+	 * FD.
+	 *
+	 * While unmap_mapping_range() is not needed, it's existence actually
+	 * caused other issues. The stream FD is backed up by a static
+	 * anon_inode_inode in the kernel that is shared by kernel and other
+	 * susbsystems. The only differentiating factor is the address space
+	 * used by each consumer of this inode. Each user of this inode would
+	 * just unmap specific range in it's own address space. What OA was
+	 * doing instead was zapping all the address spaces belonging to this
+	 * inode. This resulted in zapping PTEs for an unrelated consumer
+	 * altogether - the KVM, because KVM uses anon_inode_inode for a few
+	 * things. This was crashing the Guest VM when we ran an OA use case!!
 	 */
-	unmap_mapping_range(file->f_mapping, 0, -1, 1);
 
 	/*
 	 * Within this call, we know that the fd is being closed and we have no

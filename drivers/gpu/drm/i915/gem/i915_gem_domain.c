@@ -8,7 +8,6 @@
 #include "gt/intel_gt.h"
 
 #include "i915_drv.h"
-#include "i915_gem_clflush.h"
 #include "i915_gem_domain.h"
 #include "i915_gem_gtt.h"
 #include "i915_gem_ioctls.h"
@@ -19,188 +18,18 @@
 
 #define VTD_GUARD (168u * I915_GTT_PAGE_SIZE) /* 168 or tile-row PTE padding */
 
-static bool gpu_write_needs_clflush(struct drm_i915_gem_object *obj)
+static int set_to_domain(struct drm_i915_gem_object *obj, bool write)
 {
-	return !(i915_gem_object_has_cache_level(obj, I915_CACHE_NONE) ||
-		 i915_gem_object_has_cache_level(obj, I915_CACHE_WT));
+	return i915_gem_object_wait(obj,
+				    I915_WAIT_INTERRUPTIBLE |
+				    (write ? I915_WAIT_ALL : 0),
+				    MAX_SCHEDULE_TIMEOUT);
 }
 
-static void
-flush_write_domain(struct drm_i915_gem_object *obj, unsigned int flush_domains)
-{
-	assert_object_held(obj);
-
-	if (!(obj->write_domain & flush_domains))
-		return;
-
-	switch (obj->write_domain) {
-	case I915_GEM_DOMAIN_GTT:
-		i915_gem_object_flush_frontbuffer(obj, ORIGIN_CPU);
-		break;
-
-	case I915_GEM_DOMAIN_WC:
-		wmb();
-		break;
-
-	case I915_GEM_DOMAIN_CPU:
-		i915_gem_clflush_object(obj, I915_CLFLUSH_SYNC);
-		break;
-
-	case I915_GEM_DOMAIN_RENDER:
-		if (gpu_write_needs_clflush(obj))
-			obj->cache_dirty = true;
-		break;
-	}
-
-	obj->write_domain = 0;
-}
-
-static void __i915_gem_object_flush_for_display(struct drm_i915_gem_object *obj)
-{
-	/*
-	 * We manually flush the CPU domain so that we can override and
-	 * force the flush for the display, and perform it asyncrhonously.
-	 */
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_CPU);
-	if (obj->cache_dirty)
-		i915_gem_clflush_object(obj, I915_CLFLUSH_FORCE);
-	obj->write_domain = 0;
-}
-
-void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj)
-{
-	if (!i915_gem_object_is_framebuffer(obj))
-		return;
-
-	i915_gem_object_lock(obj, NULL);
-	__i915_gem_object_flush_for_display(obj);
-	i915_gem_object_unlock(obj);
-}
-
-void i915_gem_object_flush_if_display_locked(struct drm_i915_gem_object *obj)
-{
-	if (i915_gem_object_is_framebuffer(obj))
-		__i915_gem_object_flush_for_display(obj);
-}
-
-/*
- * Moves a single object to the WC read, and possibly write domain.
- * @obj: object to act on
- * @write: ask for write access or read only
- *
- * This function returns when the move is complete, including waiting on
- * flushes to occur.
- */
 int
 i915_gem_object_set_to_wc_domain(struct drm_i915_gem_object *obj, bool write)
 {
-	int ret;
-
-	assert_object_held(obj);
-
-	ret = i915_gem_object_wait(obj,
-				   I915_WAIT_INTERRUPTIBLE |
-				   (write ? I915_WAIT_ALL : 0),
-				   MAX_SCHEDULE_TIMEOUT);
-	if (ret)
-		return ret;
-
-	if (obj->write_domain == I915_GEM_DOMAIN_WC)
-		return 0;
-
-	/* Flush and acquire obj->pages so that we are coherent through
-	 * direct access in memory with previous cached writes through
-	 * shmemfs and that our cache domain tracking remains valid.
-	 * For example, if the obj->filp was moved to swap without us
-	 * being notified and releasing the pages, we would mistakenly
-	 * continue to assume that the obj remained out of the CPU cached
-	 * domain.
-	 */
-	ret = i915_gem_object_pin_pages(obj);
-	if (ret)
-		return ret;
-
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_WC);
-
-	/* Serialise direct access to this object with the barriers for
-	 * coherent writes from the GPU, by effectively invalidating the
-	 * WC domain upon first access.
-	 */
-	if ((obj->read_domains & I915_GEM_DOMAIN_WC) == 0)
-		mb();
-
-	/* It should now be out of any other write domains, and we can update
-	 * the domain values for our changes.
-	 */
-	GEM_BUG_ON((obj->write_domain & ~I915_GEM_DOMAIN_WC) != 0);
-	obj->read_domains |= I915_GEM_DOMAIN_WC;
-	if (write) {
-		obj->read_domains = I915_GEM_DOMAIN_WC;
-		obj->write_domain = I915_GEM_DOMAIN_WC;
-	}
-
-	i915_gem_object_unpin_pages(obj);
-	return 0;
-}
-
-/*
- * Moves a single object to the GTT read, and possibly write domain.
- * @obj: object to act on
- * @write: ask for write access or read only
- *
- * This function returns when the move is complete, including waiting on
- * flushes to occur.
- */
-int
-i915_gem_object_set_to_gtt_domain(struct drm_i915_gem_object *obj, bool write)
-{
-	int ret;
-
-	assert_object_held(obj);
-
-	ret = i915_gem_object_wait(obj,
-				   I915_WAIT_INTERRUPTIBLE |
-				   (write ? I915_WAIT_ALL : 0),
-				   MAX_SCHEDULE_TIMEOUT);
-	if (ret)
-		return ret;
-
-	if (obj->write_domain == I915_GEM_DOMAIN_GTT)
-		return 0;
-
-	/* Flush and acquire obj->pages so that we are coherent through
-	 * direct access in memory with previous cached writes through
-	 * shmemfs and that our cache domain tracking remains valid.
-	 * For example, if the obj->filp was moved to swap without us
-	 * being notified and releasing the pages, we would mistakenly
-	 * continue to assume that the obj remained out of the CPU cached
-	 * domain.
-	 */
-	ret = i915_gem_object_pin_pages(obj);
-	if (ret)
-		return ret;
-
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_GTT);
-
-	/* Serialise direct access to this object with the barriers for
-	 * coherent writes from the GPU, by effectively invalidating the
-	 * GTT domain upon first access.
-	 */
-	if ((obj->read_domains & I915_GEM_DOMAIN_GTT) == 0)
-		mb();
-
-	/* It should now be out of any other write domains, and we can update
-	 * the domain values for our changes.
-	 */
-	GEM_BUG_ON((obj->write_domain & ~I915_GEM_DOMAIN_GTT) != 0);
-	obj->read_domains |= I915_GEM_DOMAIN_GTT;
-	if (write) {
-		obj->read_domains = I915_GEM_DOMAIN_GTT;
-		obj->write_domain = I915_GEM_DOMAIN_GTT;
-	}
-
-	i915_gem_object_unpin_pages(obj);
-	return 0;
+	return set_to_domain(obj, write);
 }
 
 /*
@@ -238,7 +67,6 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
 
 	/* Always invalidate stale cachelines */
 	i915_gem_object_set_cache_coherency(obj, cache_level);
-	obj->cache_dirty = true;
 
 	/* The cache-level will be applied when each vma is rebound. */
 	return i915_gem_object_unbind(obj, NULL,
@@ -404,53 +232,13 @@ i915_gem_object_pin_to_display_plane(struct drm_i915_gem_object *obj,
 	vma->display_alignment = max_t(u64, vma->display_alignment, alignment);
 	i915_vma_mark_scanout(vma);
 
-	i915_gem_object_flush_if_display_locked(obj);
-
 	return vma;
 }
 
-/*
- * Moves a single object to the CPU read, and possibly write domain.
- * @obj: object to act on
- * @write: requesting write or read-only access
- *
- * This function returns when the move is complete, including waiting on
- * flushes to occur.
- */
 int
 i915_gem_object_set_to_cpu_domain(struct drm_i915_gem_object *obj, bool write)
 {
-	int ret;
-
-	assert_object_held(obj);
-
-	ret = i915_gem_object_wait(obj,
-				   I915_WAIT_INTERRUPTIBLE |
-				   (write ? I915_WAIT_ALL : 0),
-				   MAX_SCHEDULE_TIMEOUT);
-	if (ret)
-		return ret;
-
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_CPU);
-
-	/* Flush the CPU cache if it's still invalid. */
-	if ((obj->read_domains & I915_GEM_DOMAIN_CPU) == 0) {
-		i915_gem_clflush_object(obj, I915_CLFLUSH_SYNC);
-		obj->read_domains |= I915_GEM_DOMAIN_CPU;
-	}
-
-	/* It should now be out of any other write domains, and we can update
-	 * the domain values for our changes.
-	 */
-	GEM_BUG_ON(obj->write_domain & ~I915_GEM_DOMAIN_CPU);
-
-	/* If we're writing through the CPU, then the GPU read domains will
-	 * need to be invalidated at next use.
-	 */
-	if (write)
-		__start_cpu_write(obj);
-
-	return 0;
+	return set_to_domain(obj, write);
 }
 
 /*
@@ -536,28 +324,6 @@ i915_gem_set_domain_ioctl(struct drm_device *dev, void *data,
 		if (err)
 			continue;
 
-		/*
-		 * Already in the desired write domain? Nothing for us to do!
-		 *
-		 * We apply a little bit of cunning here to catch a broader set
-		 * of no-ops. If obj->write_domain is set, we must be in the
-		 * same obj->read_domains, and only that domain. Therefore, if
-		 * that obj->write_domain matches the request read_domains, we
-		 * are already in the same read/write domain and can skip the
-		 * operation, without having to further check the requested
-		 * write_domain.
-		 */
-		if (READ_ONCE(obj->write_domain) == read_domains)
-			goto out_unpin;
-
-		if (read_domains & I915_GEM_DOMAIN_WC)
-			err = i915_gem_object_set_to_wc_domain(obj, write_domain);
-		else if (read_domains & I915_GEM_DOMAIN_GTT)
-			err = i915_gem_object_set_to_gtt_domain(obj, write_domain);
-		else
-			err = i915_gem_object_set_to_cpu_domain(obj, write_domain);
-
-out_unpin:
 		i915_gem_object_unpin_pages(obj);
 	}
 
@@ -591,37 +357,7 @@ int i915_gem_object_prepare_read(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages_sync(obj);
-	if (ret)
-		return ret;
-
-	if (obj->flags & I915_BO_CACHE_COHERENT_FOR_READ ||
-	    !static_cpu_has(X86_FEATURE_CLFLUSH)) {
-		ret = i915_gem_object_set_to_cpu_domain(obj, false);
-		if (ret)
-			goto err_unpin;
-		else
-			goto out;
-	}
-
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_CPU);
-
-	/* If we're not in the cpu read domain, set ourself into the gtt
-	 * read domain and manually flush cachelines (if required). This
-	 * optimizes for the case when the gpu will dirty the data
-	 * anyway again before the next pread happens.
-	 */
-	if (!obj->cache_dirty &&
-	    !(obj->read_domains & I915_GEM_DOMAIN_CPU))
-		*needs_clflush = CLFLUSH_BEFORE;
-
-out:
-	/* return with the pages pinned */
-	return 0;
-
-err_unpin:
-	i915_gem_object_unpin_pages(obj);
-	return ret;
+	return i915_gem_object_pin_pages_sync(obj);
 }
 
 int i915_gem_object_prepare_write(struct drm_i915_gem_object *obj,
@@ -642,43 +378,5 @@ int i915_gem_object_prepare_write(struct drm_i915_gem_object *obj,
 	if (ret)
 		return ret;
 
-	ret = i915_gem_object_pin_pages_sync(obj);
-	if (ret)
-		return ret;
-
-	if (obj->flags & I915_BO_CACHE_COHERENT_FOR_WRITE ||
-	    !static_cpu_has(X86_FEATURE_CLFLUSH)) {
-		ret = i915_gem_object_set_to_cpu_domain(obj, true);
-		if (ret)
-			goto err_unpin;
-		else
-			goto out;
-	}
-
-	flush_write_domain(obj, ~I915_GEM_DOMAIN_CPU);
-
-	/* If we're not in the cpu write domain, set ourself into the
-	 * gtt write domain and manually flush cachelines (as required).
-	 * This optimizes for the case when the gpu will use the data
-	 * right away and we therefore have to clflush anyway.
-	 */
-	if (!obj->cache_dirty) {
-		*needs_clflush |= CLFLUSH_AFTER;
-
-		/*
-		 * Same trick applies to invalidate partially written
-		 * cachelines read before writing.
-		 */
-		if (!(obj->read_domains & I915_GEM_DOMAIN_CPU))
-			*needs_clflush |= CLFLUSH_BEFORE;
-	}
-
-out:
-	i915_gem_object_invalidate_frontbuffer(obj, ORIGIN_CPU);
-	/* return with the pages pinned */
-	return 0;
-
-err_unpin:
-	i915_gem_object_unpin_pages(obj);
-	return ret;
+	return i915_gem_object_pin_pages_sync(obj);
 }

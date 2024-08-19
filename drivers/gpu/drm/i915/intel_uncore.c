@@ -200,14 +200,16 @@ static inline void
 fw_domain_wait_ack_clear(const struct intel_uncore_forcewake_domain *d)
 {
 	if (wait_ack_clear(d, FORCEWAKE_KERNEL)) {
-		if (fw_ack(d) == ~0)
+		if (fw_ack(d) == ~0) {
 			intel_gt_log_driver_error(d->uncore->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 						  "%s: MMIO unreliable (forcewake register returns 0xFFFFFFFF)!\n",
 						  intel_uncore_forcewake_domain_to_str(d->id));
-		else
+			intel_gt_set_wedged_async(d->uncore->gt);
+		} else {
 			intel_gt_log_driver_error(d->uncore->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 						  "%s: timed out waiting for forcewake ack to clear.\n",
 						  intel_uncore_forcewake_domain_to_str(d->id));
+		}
 
 		add_taint_for_CI(d->uncore->i915, TAINT_WARN); /* CI now unreliable */
 	}

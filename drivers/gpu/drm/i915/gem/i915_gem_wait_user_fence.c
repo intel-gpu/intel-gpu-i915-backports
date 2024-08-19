@@ -53,6 +53,7 @@ static inline void dma_latency_cancel_boost(void) {}
 
 struct ufence_wake {
 	struct task_struct *tsk;
+	struct page *page;
 	void __user *ptr;
 	u64 value;
 	u64 mask;
@@ -76,12 +77,20 @@ static bool ufence_compare(const struct ufence_wake *wake)
 	GEM_BUG_ON(wake->width > sizeof(target));
 	GEM_BUG_ON(wake->tsk->mm != current->mm);
 
-	pagefault_disable();
-	remaining = __copy_from_user_inatomic_nocache(&target, wake->ptr, wake->width);
-	pagefault_enable();
-	if (unlikely(remaining)) {
-		__set_current_state(TASK_RUNNING);
-		return false;
+	if (wake->page) {
+		void *va;
+
+		va = kmap_atomic(wake->page);
+		memcpy(&target, va + offset_in_page(wake->ptr), wake->width);
+		kunmap_atomic(va);
+	} else {
+		pagefault_disable();
+		remaining = __copy_from_user_inatomic_nocache(&target, wake->ptr, wake->width);
+		pagefault_enable();
+		if (unlikely(remaining)) {
+			__set_current_state(TASK_RUNNING);
+			return false;
+		}
 	}
 
 	target &= wake->mask;
@@ -365,6 +374,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	wake.mask = arg->mask;
 	wake.op = arg->op;
 	wake.ptr = u64_to_user_ptr(arg->addr);
+	wake.page = NULL;
 
 	if (ufence_fault(&wake))
 		return -EFAULT;
@@ -382,6 +392,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 				   NULL, 0, &wake);
 	if (err)
 		goto out_ctx;
+
+	if (get_user_pages_fast(arg->addr & PAGE_MASK, 1, 0, &wake.page) <= 0)
+		wake.page = NULL;
 
 	timeout = to_wait_timeout(arg);
 	if (!timeout) {
@@ -483,6 +496,8 @@ out_wait:
 			err = -EAGAIN;
 	}
 out_ctx:
+	if (wake.page)
+		put_page(wake.page);
 	if (ctx)
 		i915_gem_context_put(ctx);
 	return err;

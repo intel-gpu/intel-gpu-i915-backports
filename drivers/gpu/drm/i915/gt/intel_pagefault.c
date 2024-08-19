@@ -179,7 +179,6 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	/* unmap to avoid further update to the page[s] */
 	i915_gem_object_release_mmap(obj);
 	GEM_BUG_ON(obj->mm.mapping);
-	GEM_BUG_ON(obj->base.filp && mapping_mapped(obj->base.filp->f_mapping));
 
 	ret = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
 	if (ret)
@@ -644,7 +643,7 @@ static int fault_work(struct dma_fence_work *work)
 	return 0;
 }
 
-static int send_fault_reply(const struct fault_reply *f)
+static int send_fault_reply(const struct fault_reply *f, bool imm)
 {
 	u32 action[] = {
 		INTEL_GUC_ACTION_PAGE_FAULT_RES_DESC,
@@ -668,15 +667,25 @@ static int send_fault_reply(const struct fault_reply *f)
 		 FIELD_PREP(PAGE_FAULT_REPLY_PDATA,
 			    f->info.pdata)),
 	};
+	unsigned int flags;
 	int err;
 
 	if (f->epoch != f->gt->uc.epoch)
 		return 0;
 
+	flags = 0;
+	if (imm)
+		flags = MAKE_SEND_FLAGS(0);
+
 	do {
-		err = intel_guc_send(f->guc, action, ARRAY_SIZE(action));
+		err = intel_guc_ct_send(&f->guc->ct, action, ARRAY_SIZE(action),
+					NULL, 0, flags);
 		if (!err || err == -ENODEV) /* ENODEV == GT is being reset */
 			return 0;
+		if (flags) {
+			err = -EIO;
+			flags = 0;
+		}
 	} while (err == -EIO); /* EIO == ack from HW timeout (by GuC), try again */
 
 	return err;
@@ -772,7 +781,7 @@ static void fault_complete(struct dma_fence_work *work)
 	 * first, then i915 can read properly the thread attentions (resolved
 	 * -attentions) that SIP turns on.
 	 */
-	if (GEM_WARN_ON(send_fault_reply(f)))
+	if (GEM_WARN_ON(send_fault_reply(f, test_bit(DMA_FENCE_WORK_IMM, &work->rq.fence.flags))))
 		revoke_faulting_context(f->engine, f->request);
 
 	start = READ_ONCE(f->engine->pagefault_start);

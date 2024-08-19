@@ -43,13 +43,15 @@ struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz)
 	return obj;
 }
 
-int map_pt_dma(struct i915_address_space *vm, struct drm_i915_gem_object *obj)
+int map_pt_dma(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww, struct drm_i915_gem_object *obj)
 {
 	enum i915_map_type type = i915_coherent_map_type(vm->i915, obj, true);
 	void *vaddr;
+	int err;
 
-	if (unlikely(!i915_gem_object_trylock(obj)))
-		return -EBUSY;
+	err = ww ? dma_resv_lock(obj->base.resv, &ww->ctx) : dma_resv_trylock(obj->base.resv) ? 0 : -EBUSY;
+	if (unlikely(err))
+		return err;
 
 	vaddr = i915_gem_object_pin_map(obj, type);
 	i915_gem_object_unlock(obj);
@@ -214,7 +216,7 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	INIT_LIST_HEAD(&vm->vm_bound_list);
 	mutex_init(&vm->vm_bind_lock);
 
-	vm->root_obj = i915_gem_object_create_internal(vm->i915, PAGE_SIZE);
+	vm->root_obj = i915_gem_object_create_private(vm->i915);
 	if (IS_ERR_OR_NULL(vm->root_obj))
 		return -ENOMEM;
 

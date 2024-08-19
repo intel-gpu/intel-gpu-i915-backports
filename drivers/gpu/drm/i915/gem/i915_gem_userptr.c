@@ -746,7 +746,6 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	wrk->pages = st;
 	wrk->policy = get_mempolicy(current);
 
-	obj->cache_dirty = false;
 	__i915_gem_object_set_pages(obj, st, PAGE_SIZE); /* placeholder */
 	atomic64_sub(obj->base.size, &obj->mm.region.mem->avail);
 
@@ -772,8 +771,6 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 
 	if (!i915_gem_object_migrate_finish(obj))
 		i915_gem_gtt_finish_pages(obj, pages);
-
-	__start_cpu_write(obj);
 
 	/*
 	 * We always mark objects as dirty when they are used by the GPU,
@@ -811,24 +808,6 @@ i915_gem_userptr_dmabuf_export(struct drm_i915_gem_object *obj)
 	return -EINVAL;
 }
 
-static int
-i915_gem_userptr_pwrite(struct drm_i915_gem_object *obj,
-			const struct drm_i915_gem_pwrite *args)
-{
-	drm_dbg(obj->base.dev, "pwrite to userptr no longer allowed\n");
-
-	return -EINVAL;
-}
-
-static int
-i915_gem_userptr_pread(struct drm_i915_gem_object *obj,
-		       const struct drm_i915_gem_pread *args)
-{
-	drm_dbg(obj->base.dev, "pread from userptr no longer allowed\n");
-
-	return -EINVAL;
-}
-
 static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
 	.name = "i915_gem_object_userptr",
 	.flags = I915_GEM_OBJECT_HAS_STRUCT_PAGE |
@@ -836,8 +815,6 @@ static const struct drm_i915_gem_object_ops i915_gem_userptr_ops = {
 	.get_pages = i915_gem_userptr_get_pages,
 	.put_pages = i915_gem_userptr_put_pages,
 	.dmabuf_export = i915_gem_userptr_dmabuf_export,
-	.pwrite = i915_gem_userptr_pwrite,
-	.pread = i915_gem_userptr_pread,
 	.release = i915_gem_userptr_release,
 };
 
@@ -928,8 +905,6 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 
 	drm_gem_private_object_init(dev, &obj->base, args->user_size);
 	i915_gem_object_init(obj, &i915_gem_userptr_ops, I915_BO_ALLOC_USER);
-	obj->read_domains = I915_GEM_DOMAIN_CPU;
-	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
 
 	obj->userptr.ptr = args->user_ptr;

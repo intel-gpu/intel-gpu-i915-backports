@@ -10,6 +10,7 @@ Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
+| SLES® | 15SP6 | 6.4.0.150600.xx |
 | SLES® | 15SP5 | 5.14.21.150500.xx |
 | SLES® | 15SP4 | 5.14.21.150400.xx |
 
@@ -61,12 +62,12 @@ Please note that DKMS installation will skip if the kernel headers are not insta
 In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
 ```
-$ sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP5_KERNEL_VERSION> \
-kernel-syms-<SLES15_SP5_KERNEL_VERSION>
+$ sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP6_KERNEL_VERSION> \
+kernel-syms-<SLES15_SP6_KERNEL_VERSION>
 
 Example:
-       $ sudo zypper ref -s && sudo zypper install -y kernel-default-5.14.21-150500.55.36 \
-       kernel-syms-5.14.21-150500.55.36
+       $ sudo zypper ref -s && sudo zypper install -y kernel-default-6.4.0_150600.21 \
+       kernel-syms-6.4.0_150600.21
 ```
 
 ### Binary RPM

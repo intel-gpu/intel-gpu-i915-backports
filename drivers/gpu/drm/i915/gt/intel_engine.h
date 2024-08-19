@@ -339,25 +339,6 @@ intel_engine_get_sibling(struct intel_engine_cs *engine, unsigned int sibling)
 	return engine->cops->get_sibling(engine, sibling);
 }
 
-static inline void
-intel_engine_set_hung_context(struct intel_engine_cs *engine,
-			      struct intel_context *ce)
-{
-	engine->hung_ce = ce;
-}
-
-static inline void
-intel_engine_clear_hung_context(struct intel_engine_cs *engine)
-{
-	intel_engine_set_hung_context(engine, NULL);
-}
-
-static inline struct intel_context *
-intel_engine_get_hung_context(struct intel_engine_cs *engine)
-{
-	return engine->hung_ce;
-}
-
 u64 intel_clamp_heartbeat_interval_ms(struct intel_engine_cs *engine, u64 value);
 u64 intel_clamp_max_busywait_duration_ns(struct intel_engine_cs *engine, u64 value);
 u64 intel_clamp_preempt_timeout_ms(struct intel_engine_cs *engine, u64 value);
