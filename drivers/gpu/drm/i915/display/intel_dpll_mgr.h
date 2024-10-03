@@ -158,12 +158,14 @@ enum intel_dpll_id {
 
 #include "intel_wakeref.h"
 
+#ifndef BPM_ABS_DIFF_PRESENT
 /*FIXME: Move this to a more appropriate place. */
 #define abs_diff(a, b) ({			\
 	typeof(a) __a = (a);			\
 	typeof(b) __b = (b);			\
 	(void) (&__a == &__b);			\
 	__a > __b ? (__a - __b) : (__b - __a); })
+#endif
 
 enum tc_port;
 struct drm_i915_private;

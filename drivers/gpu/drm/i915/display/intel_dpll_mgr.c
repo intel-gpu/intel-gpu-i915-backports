@@ -29,6 +29,9 @@
 #include "intel_dpll_mgr.h"
 #include "intel_tc.h"
 #include "intel_tc_phy_regs.h"
+#ifdef BPM_ABS_DIFF_PRESENT
+#include <linux/math.h>
+#endif
 
 /**
  * DOC: Display PLLs

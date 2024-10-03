@@ -541,8 +541,12 @@ static void i915_pci_remove(struct pci_dev *pdev)
 	if (!i915) /* driver load aborted, nothing to cleanup */
 		return;
 
-	if (IS_SRIOV_PF(i915))
-		i915_sriov_pf_disable_vfs(i915);
+	if (IS_SRIOV_PF(i915)) {
+		if (i915_is_pci_in_recovery(i915))
+			i915_sriov_pf_recovery(i915);
+		else
+			i915_sriov_pf_disable_vfs(i915);
+	}
 
 	i915_driver_remove(i915);
 	pci_set_drvdata(pdev, NULL);
@@ -612,6 +616,9 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 */
 	if (vga_switcheroo_client_probe_defer(pdev))
 		return -EPROBE_DEFER;
+
+	if (signal_pending(current))
+		return -EINTR;
 
 	err = i915_driver_probe(pdev, ent);
 	if (err)

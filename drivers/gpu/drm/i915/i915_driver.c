@@ -1555,13 +1555,14 @@ static void i915_sanitize_force_driver_flr(struct drm_i915_private *i915)
 		i915->params.force_driver_flr = 1;
 }
 
-static void i915_virtualization_probe(struct drm_i915_private *i915)
+static int i915_virtualization_probe(struct drm_i915_private *i915)
 {
 	GEM_BUG_ON(i915->__mode);
 
 	i915->__mode = i915_sriov_probe(i915);
 
-	GEM_BUG_ON(!i915->__mode);
+	if (i915->__mode == I915_IOV_MODE_ERR)
+		return -EIO;
 
 	if (IS_SRIOV_VF(i915))
 		WRITE_ONCE(i915->drm.driver, &i915_vf_drm_driver);
@@ -1569,6 +1570,8 @@ static void i915_virtualization_probe(struct drm_i915_private *i915)
 	if (IS_IOV_ACTIVE(i915))
 		dev_info(i915->drm.dev, "Running in %s mode\n",
 			 i915_iov_mode_to_string(IOV_MODE(i915)));
+
+	return 0;
 }
 
 /**
@@ -1598,7 +1601,9 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_fini;
 
 	/* This must be called before any calls to IS/IOV_MODE() macros */
-	i915_virtualization_probe(i915);
+	ret = i915_virtualization_probe(i915);
+	if (ret)
+		goto out_fini;
 
 	/*
 	 * GRAPHICS_VER() and DISPLAY_VER() will return 0 before this is
@@ -2874,6 +2879,7 @@ static const struct drm_ioctl_desc i915_ioctls[] = {
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_CLOS_FREE, i915_gem_clos_free_ioctl, DRM_RENDER_ALLOW),
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_CACHE_RESERVE, i915_gem_cache_reserve_ioctl, DRM_RENDER_ALLOW),
 	PRELIM_DRM_IOCTL_DEF_DRV(I915_GEM_VM_PREFETCH, i915_gem_vm_prefetch_ioctl, DRM_RENDER_ALLOW),
+	PRELIM_DRM_IOCTL_DEF_DRV(I915_GET_RESET_STATS, i915_gem_context_reset_stats_ioctl, DRM_RENDER_ALLOW),
 };
 
 /*

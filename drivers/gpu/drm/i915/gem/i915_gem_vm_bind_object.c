@@ -555,6 +555,7 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 	 * as each worker advances the vma->active timeline.
 	 */
 	for (vma = vma_head; vma; vma = vma->adjacent_next) {
+		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
 		if (!queue_unbind(vma, &unbind_head)) {
 			ret = -ENOMEM;
 			break;
@@ -563,7 +564,6 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 
 	i915_gem_object_lock(vm->root_obj, NULL);
 	for (vma = vma_head; vma; vma = vma_next) {
-		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
 		i915_active_release(&vma->active);
 		vma_next = vma->adjacent_next;
 		if (!ret) {

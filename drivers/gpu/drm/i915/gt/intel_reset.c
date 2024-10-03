@@ -79,7 +79,7 @@ static bool mark_guilty(struct i915_request *rq)
 	bool banned;
 	int i;
 
-	if (intel_context_is_closed(rq->context))
+	if (!intel_context_is_schedulable(rq->context))
 		return true;
 
 	rcu_read_lock();
@@ -1016,6 +1016,15 @@ static void __intel_gt_set_wedged(struct intel_gt *gt)
 	GT_TRACE(gt, "end\n");
 }
 
+static void set_wedged_work(struct work_struct *w)
+{
+	struct intel_gt *gt = container_of(w, struct intel_gt, wedge);
+	intel_wakeref_t wf;
+
+	with_intel_runtime_pm(gt->uncore->rpm, wf)
+		__intel_gt_set_wedged(gt);
+}
+
 void intel_gt_set_wedged(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
@@ -1666,6 +1675,7 @@ void intel_gt_init_reset(struct intel_gt *gt)
 	init_waitqueue_head(&gt->reset.queue);
 	mutex_init(&gt->reset.mutex);
 	init_srcu_struct(&gt->reset.backoff_srcu);
+	INIT_WORK(&gt->wedge, set_wedged_work);
 	INIT_WORK(&gt->reset.uevent_work, intel_gt_reset_failed_uevent_work);
 
 	/*
@@ -1695,7 +1705,7 @@ static void intel_wedge_me(struct work_struct *work)
 	intel_gt_log_driver_error(w->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 				  "%s timed out, cancelling all in-flight rendering.\n",
 				  w->name);
-	intel_gt_set_wedged(w->gt);
+	set_wedged_work(&w->gt->wedge);
 }
 
 void __intel_init_wedge(struct intel_wedge_me *w,

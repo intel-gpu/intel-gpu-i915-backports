@@ -197,13 +197,16 @@ static void heartbeat(struct work_struct *wrk)
 	if (intel_gt_is_wedged(engine->gt))
 		goto out;
 
-	ret = i915_debugger_handle_engine_attention(engine);
-	if (ret) {
-		intel_gt_handle_error(engine->gt, engine->mask,
-				      I915_ERROR_CAPTURE,
-				      "unable to handle EU attention on %s, error:%d",
-				      engine->name, ret);
-		goto out;
+	/* Skip attn scanning during the pf, as we will be capturing attn there */
+	if (!atomic_read(&engine->in_pagefault)) {
+		ret = i915_debugger_handle_engine_attention(engine);
+		if (ret) {
+			intel_gt_handle_error(engine->gt, engine->mask,
+					I915_ERROR_CAPTURE,
+					"unable to handle EU attention on %s, error:%d",
+					engine->name, ret);
+			goto out;
+		}
 	}
 
 	/* Hangcheck disabled so do not check for systole. */

@@ -257,6 +257,13 @@ struct i915_gem_context {
 	} stale;
 
 	struct wait_queue_head user_fence_wq;
+
+	struct {
+		u64 addr;
+		u16 access;
+		u16 level;
+		u16 type;
+	} fault;
 };
 
 #endif /* __I915_GEM_CONTEXT_TYPES_H__ */

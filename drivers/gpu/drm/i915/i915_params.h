@@ -98,7 +98,7 @@ struct drm_printer;
 	param(bool, enable_fake_int_wa, true, 0400) \
 	param(bool, enable_full_ps64, true, 0400) \
 	param(bool, enable_iaf, true, 0400) \
-	param(bool, address_translation_services, false, IS_ENABLED(CPTCFG_DRM_I915_ATS) ? 0400 : 0) \
+	param(bool, address_translation_services, false, IS_ENABLED(CONFIG_DRM_I915_ATS) ? 0400 : 0) \
 	param(bool, enable_secure_batch, false, 0400) \
 	param(bool, enable_rc6, true, 0400) \
 	param(bool, enable_rps, true, 0400) \

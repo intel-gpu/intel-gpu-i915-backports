@@ -870,10 +870,8 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 	if (ret)
 		return ret;
 
-	if (unlikely(!ct->enabled)) {
-		WARN(!gt->uc.reset_in_progress, "Unexpected send: action=%#x\n", *action);
+	if (unlikely(!ct->enabled))
 		return -ENODEV;
-	}
 
 	if (unlikely(ct->ctbs.send.broken))
 		return -EPIPE;
@@ -1235,14 +1233,8 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 		break;
 	}
 
-	if (unlikely(ret)) {
-		CT_ERROR(ct, "Failed to process request %04x (%pe)\n",
-			 action, ERR_PTR(ret));
-		return ret;
-	}
-
 	ct_free_msg(request);
-	return 0;
+	return ret;
 }
 
 static bool ct_process_incoming_requests(struct intel_guc_ct *ct, struct list_head *incoming)
@@ -1250,7 +1242,6 @@ static bool ct_process_incoming_requests(struct intel_guc_ct *ct, struct list_he
 	unsigned long flags;
 	struct ct_incoming_msg *request;
 	bool done;
-	int err;
 
 	spin_lock_irqsave(&ct->requests.lock, flags);
 	request = list_first_entry_or_null(incoming,
@@ -1263,14 +1254,7 @@ static bool ct_process_incoming_requests(struct intel_guc_ct *ct, struct list_he
 	if (!request)
 		return true;
 
-	err = ct_process_request(ct, request);
-	if (unlikely(err)) {
-		CT_ERROR(ct, "Failed to process CT message (%pe): head = 0x%x, tail = 0x%x, msg = %*ph\n",
-			 ERR_PTR(err), request->head, request->tail, 4 * request->size, request->msg);
-		CT_DEAD(ct, PROCESS_FAILED);
-		ct_free_msg(request);
-	}
-
+	ct_process_request(ct, request);
 	return done;
 }
 

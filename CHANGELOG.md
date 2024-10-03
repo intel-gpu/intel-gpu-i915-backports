@@ -1,4 +1,20 @@
 # ChangeLog
+## Release I915_24WW39.4_803.103_23.10.72_231129.76
+* Fixed an issue with invalid data handling in the sysfs file display and restore callbacks.
+* Fixed an issue that caused crashes and hangs when Unified Shared Memory (USM) page fault features were
+  enabled. The fix triggers a segmentation fault to help identify out-of-bounds memory accesses on the device side.
+* Fixed an issue causing a Global micro-Controller (GuC) communication error. The fix drops in-flight page fault
+  replies during the GuC reset process.
+* Fixed an issue where concurrent unbinds operations could block the binding of a Virtual Memory Area (VMA).
+* Fixed an issue where workloads and tools hung when one or more instances of Intel® Data Center GPU Max
+  Series in the LRZ nodes failed. The fix prevents driver loading when Memory-Mapped Input/Output (MMIO) is
+  detected as unreliable.
+* Added changes to enable PCIe recovery flow in the physical function when Single Root I/O Virtualization (SR-IOV)
+  virtual functions are enabled.
+* Updated the page fault address reported by the Kernel Mode Driver (KMD) in the dmesg log to the canonical
+  format used by load instructions. This allows users to directly match the page fault address with allocations
+  reported by the Level Zero API trace.
+
 ## Release I915_24WW30.4_803.75_23.10.54_231129.55
 * Fixed an issue where the PCMark Benchmark was failing on VMWare ESXi.
 * Fixed an issue where a Memory-Mapped I/O-related error occurred on a SLES device after rebooting.

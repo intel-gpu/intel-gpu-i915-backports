@@ -1417,7 +1417,7 @@ static void record_request(const struct i915_request *request,
 
 	erq->pid = 0;
 	rcu_read_lock();
-	if (!intel_context_is_closed(request->context)) {
+	if (intel_context_is_schedulable(request->context)) {
 		const struct i915_gem_context *ctx;
 
 		ctx = rcu_dereference(request->context->gem_context);
@@ -1596,7 +1596,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 	rcu_read_lock();
 
 	ctx = NULL;
-	if (!intel_context_is_banned(rq->context))
+	if (intel_context_is_schedulable(rq->context))
 		ctx = rcu_dereference(rq->context->gem_context);
 	if (ctx && (!ctx->client || !kref_get_unless_zero(&ctx->ref)))
 		ctx = NULL;

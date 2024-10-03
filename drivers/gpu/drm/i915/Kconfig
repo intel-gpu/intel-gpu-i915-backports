@@ -97,44 +97,6 @@ config DRM_I915_DEBUGGER
 	 With debugger support, i915 will provide interface for a debugger
 	 process to track, inspect and modify resources.
 
-config DRM_I915_SVM
-	bool "Enable Shared Virtual Memory support in i915"
-	depends on DRM_I915
-	depends on ARCH_ENABLE_MEMORY_HOTPLUG
-	depends on ARCH_ENABLE_MEMORY_HOTREMOVE
-	depends on MEMORY_HOTPLUG
-	depends on MEMORY_HOTREMOVE
-	depends on (ARCH_HAS_ZONE_DEVICE || ARCH_HAS_PTE_DEVMAP)
-	depends on SPARSEMEM_VMEMMAP
-	depends on ZONE_DEVICE
-	depends on DEVICE_PRIVATE
-	depends on MMU
-	depends on HMM_MIRROR
-	depends on MMU_NOTIFIER
-	default y if DRM_I915_DEBUG
-	help
-	  Choose this option if you want Shared Virtual Memory (SVM)
-	  support in i915. With SVM support, one can share the virtual
-	  address space between a process and the GPU. SVM is supported
-	  on both integrated and discrete Intel GPUs.
-
-config DRM_I915_ATS
-	bool "Enable Address Translation Services (ATS) support in i915"
-	depends on DRM_I915
-	depends on DRM_I915_SVM
-	depends on INTEL_IOMMU
-	depends on INTEL_IOMMU_SVM
-	depends on PCI_PRI
-	depends on PCI_PASID
-	depends on PCI_IOV
-	default y if DRM_I915_DEBUG
-	help
-	  Choose this option if you prefer to have Address Translation
-	  Services (ATS) support in i915. With ATS enabled, device would
-	  be able to request a system translation of a Virtual Address (VA)
-	  into either a Host Physical Address (HPA) or Guest Physical
-	  Address (GPA) for native and virtualized environments respectively.
-
 menu "drm/i915 Debugging"
 depends on DRM_I915
 depends on EXPERT

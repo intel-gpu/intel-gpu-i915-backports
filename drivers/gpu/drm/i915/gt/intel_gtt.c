@@ -214,6 +214,9 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 		vm->min_alignment[INTEL_MEMORY_STOLEN] = I915_GTT_PAGE_SIZE_64K;
 	}
 
+	vm->fault_start = U64_MAX;
+	vm->fault_end = 0;
+
 	drm_mm_init(&vm->mm, 0, vm->total);
 
 	vm->mm.head_node.color = I915_COLOR_UNEVICTABLE;

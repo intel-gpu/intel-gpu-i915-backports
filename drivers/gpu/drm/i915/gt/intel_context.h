@@ -389,6 +389,11 @@ static inline bool intel_context_set_banned(struct intel_context *ce)
 	return test_and_set_bit(CONTEXT_BANNED, &ce->flags);
 }
 
+static inline bool intel_context_is_schedulable(const struct intel_context *ce)
+{
+	return !(intel_context_is_banned(ce) || intel_context_is_closed(ce));
+}
+
 bool intel_context_ban(struct intel_context *ce, struct i915_request *rq);
 
 void intel_context_revert_ring_heads(struct intel_context *ce);

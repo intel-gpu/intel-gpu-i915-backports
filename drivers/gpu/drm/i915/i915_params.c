@@ -295,7 +295,7 @@ i915_param_named_unsafe(enable_resizeable_bar, bool, 0400,
  */
 i915_param_named(enable_iaf, bool, 0400, "Enable IAF feature (default: true)");
 
-#if IS_ENABLED(CPTCFG_DRM_I915_ATS)
+#if IS_ENABLED(CONFIG_DRM_I915_ATS)
 i915_param_named_unsafe(address_translation_services, bool, 0400,
 			"Enable Address Translation Services (ATS) (default: false)");
 #endif

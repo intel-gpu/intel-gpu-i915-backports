@@ -282,6 +282,7 @@ struct i915_address_space {
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
 	u64 min_alignment[INTEL_REGION_UNKNOWN];
+	u64 fault_start, fault_end;
 
 	/*
 	 * Each active user context has its own address space (in full-ppgtt).
@@ -401,7 +402,7 @@ struct i915_address_space {
 	struct i915_active active;
 
 	/* Per tile active users of this VM */
-	atomic_t active_contexts_gt[I915_MAX_GT];
+	atomic_t active_contexts[I915_MAX_GT];
 
 	/* PASID for Address Translation Services */
 	struct iommu_sva *sva;
@@ -695,5 +696,19 @@ int svm_bind_addr(struct i915_address_space *vm, struct i915_gem_ww_ctx *ctx,
 		  u64 start, u64 size, u64 flags,
 		  struct sg_table *st, u32 sg_page_sizes);
 void svm_unbind_addr(struct i915_address_space *vm, u64 start, u64 size);
+
+static inline void
+i915_vm_heal_scratch(struct i915_address_space *vm, u64 start, u64 end)
+{
+	/* Try to heal the edges of the scratch */
+	if (start <= vm->fault_start)
+		vm->fault_start = start;
+	if (end >= vm->fault_end)
+		vm->fault_end = start;
+
+	/* Reset for tight bounds on the next invalid fault */
+	if (vm->fault_end <= vm->fault_start)
+		vm->fault_end = 0, vm->fault_start = U64_MAX;
+}
 
 #endif

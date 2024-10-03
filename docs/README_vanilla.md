@@ -9,12 +9,13 @@ Our current backport supports the following Vanilla LTS kernels.
 
 | OS Distribution | Kernel Version |
 |---|---|
+| Vanilla | 6.6 LTS  |
 | Vanilla | 6.1 LTS  |
 | Vanilla | 5.15 LTS |
 | Vanilla | 5.10 LTS |
 
   The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](../versions) file to check value of VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
+  Please refer [Version](../versions) file to check value of VANILLA_6.6LTS_KERNEL_VERSION VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
 
 ## Prerequisite
 
@@ -70,6 +71,7 @@ Both Debian based and rpm based packages are supported.
 
 | OS Distribution | Kernel Version | DKMS Package Target (RPM/Debian) | Binary Package Target (RPM/Debian) |
 |---|---|---|---|
+| Vanilla | 6.6 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.1 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 5.15 LTS | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 5.10 LTS | dkmsrpm-pkg / dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
