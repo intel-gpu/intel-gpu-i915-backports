@@ -2406,9 +2406,6 @@ static void guc_cancel_context_requests(struct intel_context *ce)
 	struct intel_timeline *tl;
 	struct i915_request *rq;
 
-	/* We can only immediately mark EIO if we haven't used semaphores. */
-	GEM_BUG_ON(intel_engine_has_semaphores(ce->engine));
-
 	tl = ce->timeline;
 	if (!tl)
 		return;
@@ -5768,10 +5765,11 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 {
 	trace_intel_context_reset(ce);
 
-	guc_dbg(guc, "Got context reset notification: 0x%04X on %s, blocked = %s, banned = %s\n",
+	guc_dbg(guc, "Got context reset notification: 0x%04X on %s, blocked = %s, banned = %s, closed = %s\n",
 		ce->guc_id.id, ce->engine->name,
 		str_yes_no(context_blocked(ce)),
-		str_yes_no(intel_context_is_banned(ce)));
+		str_yes_no(intel_context_is_banned(ce)),
+		str_yes_no(intel_context_is_closed(ce)));
 
 	/*
 	 * XXX: Racey if request cancellation has occurred, see comment in

@@ -2739,11 +2739,11 @@ int i915_gem_context_reset_stats_ioctl(struct drm_device *dev,
 				       void *data, struct drm_file *file)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
-	struct drm_i915_reset_stats *args = data;
+	struct prelim_drm_i915_reset_stats *args = data;
 	struct i915_gem_context *ctx;
 	int ret;
 
-	if (args->flags || args->pad)
+	if (args->flags)
 		return -EINVAL;
 
 	ret = -ENOENT;
@@ -2766,6 +2766,19 @@ int i915_gem_context_reset_stats_ioctl(struct drm_device *dev,
 
 	args->batch_active = atomic_read(&ctx->guilty_count);
 	args->batch_pending = atomic_read(&ctx->active_count);
+
+	args->status = 0;
+	if (i915_gem_context_is_banned(ctx))
+		args->status |= I915_RESET_STATS_BANNED;
+
+	if (READ_ONCE(ctx->fault.addr) & BIT(1)) {
+		smp_rmb();
+		args->fault.addr = ctx->fault.addr & ~GENMASK_ULL(11, 0);
+		args->fault.access = ctx->fault.access;
+		args->fault.level = ctx->fault.level;
+		args->fault.type = ctx->fault.type;
+		args->fault.flags = I915_RESET_STATS_FAULT_VALID;
+	}
 
 	ret = 0;
 out:

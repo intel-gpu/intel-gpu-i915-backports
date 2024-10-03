@@ -206,7 +206,7 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	 */
 	for_each_gt(gt, vm->i915, id) {
 		WRITE_ONCE(obj->mm.tlb[id], 0);
-		if (!atomic_read(&vm->active_contexts_gt[id]))
+		if (!atomic_read(&vm->active_contexts[id]))
 			continue;
 
 		if (!intel_gt_invalidate_tlb_range(gt, vm,
@@ -248,8 +248,19 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	if (unlikely(err))
 		return err;
 
-	set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
 	i915_write_barrier(vm->i915);
+	set_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma));
+
+	if (vm->fault_end > vm->fault_start) { /* Was there a scratch page access? */
+		u64 start = vma->node.start;
+		u64 end = start + vma->node.size;
+
+		if (start < vm->fault_end && end > vm->fault_start) {
+			vma_invalidate_tlb(vma);
+			i915_vm_heal_scratch(vm, start, end);
+		}
+	}
+
 	return 0;
 }
 

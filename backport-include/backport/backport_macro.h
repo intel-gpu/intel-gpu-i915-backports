@@ -4,20 +4,101 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,9,6) || \
+	(LINUX_VERSION_IS_GEQ(6,8,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(43,43))
+
+/*
+ * 8e21de5f99b2 drm/mst: Fix NULL pointer dereference at drm_dp_add_payload_part2
+ */
+#define BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
         LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
         LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
         (LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(111,121)) || \
-        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59))
+        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59)) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
  */
 #define BPM_PCI_DEV_IS_DISCONNECTED_NOT_PRESENT
-
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,6,0)
+#if LINUX_VERSION_IS_GEQ(6,8,0)
+/*
+ * 8eb80946ab0c drm/edid: split out drm_eld.h from drm_edid.h
+ */
+#define BPM_DRM_ELD_H_PRESENT
 
+/*
+ * e435ca878821 mm: remove inc/dec lruvec page state functions
+ */
+#define BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_LESS(6,8,0)
+/*
+ * 19975f83412f mm/slab: move the rest of slub_def.h to mm/slab.h
+ */
+#define BPM_SLUB_DEF_IS_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,7,0) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
+
+/*
+ *451921e7bbc7: drm: Replace drm_framebuffer plane size
+ *              functions with its equivalents
+ */
+#define BPM_DRM_FRAMEBUFFER_PLANE_HEIGHT_NOT_PRESENT
+
+/*
+ * e2272bfb18ee: drm/dp: switch drm_dp_downstream_*() helpers to struct drm_edid
+ */
+#define BPM_STRUCT_EDID_NOT_PRESENT
+
+/*
+ * 5aa1dfcdf0a4: drm/mst: Refactor the flow for payload allocation/removement
+ */
+#define BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,7,0) || SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,7,0)
+/*
+ * 0ede61d8589c file: convert to SLAB_TYPESAFE_BY_RCU
+ */
+#define BPM_GET_FILE_RCU_ARG_CHANGED
+
+/*
+ * 07f9cfe2ef6c: drm/i915/dp_mst: Make sure pbn_div is up-to-date after sink reconnect
+ */
+#define BPM_MST_STATE_PBN_DIVE_PRESENT
+
+/*
+ *f2383e01507e mm: shrinker: remove old APIs
+ */
+#define BPM_REGISTER_SHRINKER_NOT_PRESENT
+
+/*
+ *e965a7072767 drm: remove I2C_CLASS_DDC support
+ */
+#define BPM_I2C_CLASS_DDC_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,6,0) || (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
+
+/*
+ * 46f12960aad2 drm/i915: Move abs_diff() to math.h
+ */
+#define BPM_ABS_DIFF_PRESENT
+/*
+ * 8ac20a03da56 tty: sysrq: switch the rest of keys to u8
+ */
+#define BPM_SYSRQ_KEY_OP_HANDLER_INT_ARG_NOT_PRESENT
+#endif /*  LINUX_VERSION_IS_GEQ(6,6,0) || (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,6,0)
 /*
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
@@ -40,7 +121,8 @@
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,4) || \
 	(LINUX_VERSION_IS_GEQ(6,5,0) && ((UBUNTU_BACKPORT_VERSION_IS_GEQ(34,34) && \
-	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )))
+	 UBUNTU_BACKPORT_VERSION_IS_LESS(35,35)) || UBUNTU_BACKPORT_VERSION_IS_GEQ(41,41) )) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0)))
 /*
  * 4e042f022255 drm/dp_mst: Fix fractional DSC bpp handling
  */
@@ -70,7 +152,8 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(6,5,0) */
 
-#if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) || \
+	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 
 /*
  * 3d35ddfb0713 drm/display/dp_mst: drop has_audio from struct drm_dp_mst_port
@@ -89,7 +172,8 @@
 	LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) || \
 	(LINUX_VERSION_IN_RANGE(6,2,16, 6,3,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(36,37)) || \
 	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,19)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * 104d79eb58aa drm/dp_mst: Clear MSG_RDY flag before sending new message
  */
@@ -125,7 +209,7 @@
 #if (LINUX_VERSION_IS_GEQ(6,4,0) || \
 	LINUX_VERSION_IS_LESS(5,5,0) || \
 	REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,4))
-#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0))
+#if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) && SUSE_RELEASE_VERSION_IS_LESS(1,15,6,0))
 
 /*
  * fa83433c92e3 iommu: Add I/O ASID allocator
@@ -264,7 +348,8 @@
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
 	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,7)) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
 /*
  * 4d07b0bc40
  * drm/display/dp_mst: Move all payload info into the atomic state
@@ -292,7 +377,7 @@
 #define BPM_FIND_NTH_BIT_PRESENT
 #endif /* (LINUX_VERSION_IS_LESS(6,1,0)) && !(REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
-#if (LINUX_VERSION_IS_GEQ(6,0,0) || \
+#if (LINUX_VERSION_IN_RANGE(6,0,0, 6,7,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * e33c267ab70d
@@ -1809,6 +1894,8 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+
+#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
 #endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)

@@ -233,6 +233,11 @@ int i915_live_selftests(struct pci_dev *pdev)
 	if (!i915_selftest.live)
 		return 0;
 
+	/* SKip subsequent device testing after the first failure */
+	if (i915_selftest.live < 0 &&
+	    (i915_selftest.live != -EPERM && i915_selftest.live != -ENOTTY))
+		return 0;
+
 	err = run_selftests(live, pdev_to_i915(pdev));
 	if (err) {
 		i915_selftest.live = err;

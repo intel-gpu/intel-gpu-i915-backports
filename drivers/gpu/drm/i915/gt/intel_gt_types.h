@@ -322,6 +322,7 @@ struct intel_gt {
 		local64_t pagefault_stall;
 		local_t pagefault_major;
 		local_t pagefault_minor;
+		local_t pagefault_invalid;
 
 		struct intel_gt_stats_irq_time irq;
 
@@ -478,6 +479,7 @@ struct intel_gt {
 	struct intel_rps_defaults rps_defaults;
 	struct kobject *sysfs_defaults;
 
+	struct work_struct wedge;
 	struct work_struct gsc_hw_error_work;
 
 	/* Memory sparing data structure for errors reporting on root tile */

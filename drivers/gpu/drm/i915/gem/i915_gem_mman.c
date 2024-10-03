@@ -886,9 +886,13 @@ static struct file *mmap_singleton(struct drm_i915_private *i915)
 	struct file *file;
 
 	rcu_read_lock();
+#ifdef BPM_GET_FILE_RCU_ARG_CHANGED
+        file = get_file_rcu(&i915->gem.mmap_singleton);
+#else
 	file = READ_ONCE(i915->gem.mmap_singleton);
 	if (file && !get_file_rcu(file))
 		file = NULL;
+#endif
 	rcu_read_unlock();
 	if (file)
 		return file;

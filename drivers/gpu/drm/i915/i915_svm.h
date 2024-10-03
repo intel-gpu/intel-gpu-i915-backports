@@ -11,7 +11,7 @@
 #include "i915_drv.h"
 #include "gt/intel_pagefault.h"
 
-#if defined(CPTCFG_DRM_I915_SVM)
+#if defined(CONFIG_DRM_I915_SVM)
 struct i915_devmem {
 	struct intel_memory_region *mem;
 	struct dev_pagemap pagemap;

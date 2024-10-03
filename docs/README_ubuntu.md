@@ -11,7 +11,7 @@ Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 22.04 Desktop | 6.5 generic |
+| Ubuntu® | 22.04 Desktop | 6.8 generic |
 | | 22.04 Server| 5.15 generic |
 
 
@@ -72,8 +72,8 @@ $ sudo apt install linux-headers-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION> \
 linux-image-unsigned-<UBUNTU_22.04_DESKTOP_KERNEL_VERSION>
 
 Example:
-       $ sudo apt install linux-headers-6.5.0-15-generic \
-       linux-image-unsigned-6.5.0-15-generic
+       $ sudo apt install linux-headers-6.8.0-11-generic \
+       linux-image-unsigned-6.8.0-11-generic
 ```
 
 ### Binary Package

@@ -43,6 +43,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 * Record the fault on the device to skip waits-for-ack and other
 	 * low level HW access and unplug the device from userspace.
 	 */
+	i915_pci_error_set_in_recovery(i915);
 	i915_pci_error_set_fault(i915);
 	drm_warn(&i915->drm, "removing device access to userspace\n");
 	drm_dev_unplug(&i915->drm);
@@ -143,6 +144,7 @@ static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 	if (pci_enable_device(pdev)) {
 		dev_err(&pdev->dev,
 			"Cannot re-enable PCI device after reset.\n");
+		i915_pci_error_clear_in_recovery(i915);
 		return PCI_ERS_RESULT_DISCONNECT;
 	}
 	pci_set_master(pdev);

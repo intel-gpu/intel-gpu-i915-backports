@@ -202,4 +202,9 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 			       const enum intel_gt_driver_errors error,
 			       const char *fmt, ...);
 
+static inline void intel_gt_set_wedged_async(struct intel_gt *gt)
+{
+	queue_work(system_highpri_wq, &gt->wedge);
+}
+
 #endif /* __INTEL_GT_H__ */

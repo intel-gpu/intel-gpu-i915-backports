@@ -48,12 +48,12 @@ Build Configurations:
   i915dkmsrpm-pkg - Build dkms RPM package for i915 and dependent child drivers (mei and pmt/vsec)
   drmdkmsrpm-pkg -  Build dkms RPM package for drm, i915 and dependent child drivers (mei and pmt/vsec)
 
- Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP5
+ Example: make i915dkmsrpm-pkg OS_DISTRIBUTION=SLES15_SP6
 
- Rpm package contains the SLES15_SP5 Kernel version as default
+ Rpm package contains the SLES15_SP6 Kernel version as default
 
  ##### List of RPM supported OS distro Versions #####
- SLES15_SP5	SLES15_SP4
+ SLES15_SP6     SLES15_SP5	SLES15_SP4
  RHEL_9.4	RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.10	RHEL_8.9	RHEL_8.8	RHEL_8.6
 
  ##### List of LTS kernel versions #####

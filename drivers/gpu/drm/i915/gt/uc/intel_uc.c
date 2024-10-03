@@ -785,7 +785,7 @@ void intel_uc_reset_prepare(struct intel_uc *uc)
 {
 	struct intel_guc *guc = &uc->guc;
 
-	uc->reset_in_progress = true;
+	uc->epoch++;
 
 	/* Nothing to do if GuC isn't supported */
 	if (!intel_uc_supports_guc(uc))
@@ -815,7 +815,7 @@ void intel_uc_reset_finish(struct intel_uc *uc)
 {
 	struct intel_guc *guc = &uc->guc;
 
-	uc->reset_in_progress = false;
+	uc->epoch++;
 
 	if (intel_uc_uses_guc_submission(uc))
 		intel_guc_submission_reset_finish(guc);

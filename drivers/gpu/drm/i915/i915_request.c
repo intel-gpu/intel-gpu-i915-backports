@@ -655,10 +655,11 @@ struct i915_request *i915_request_mark_eio(struct i915_request *rq)
 		return NULL;
 
 	/* As soon as the request is completed, it may be retired */
-	rq = i915_request_get(rq);
-
-	i915_request_set_error_once(rq, -EIO);
-	i915_request_mark_complete(rq);
+	rq = i915_request_get_rcu(rq);
+	if (rq) {
+		i915_request_set_error_once(rq, -EIO);
+		i915_request_mark_complete(rq);
+	}
 
 	return rq;
 }

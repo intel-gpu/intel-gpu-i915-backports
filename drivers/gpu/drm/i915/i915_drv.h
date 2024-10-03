@@ -319,7 +319,11 @@ struct i915_gem_mm {
 
 	struct notifier_block oom_notifier;
 	struct notifier_block vmap_notifier;
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+	struct shrinker *shrinker;
+#else
 	struct shrinker shrinker;
+#endif
 
 	/* shrinker accounting, also useful for userland debugging */
 	u64 shrink_memory;
@@ -945,6 +949,7 @@ struct drm_i915_private {
 	} cache_resv;
 
 	bool device_faulted;
+	bool in_recovery;
 	struct pci_saved_state *pci_state;
 
 	/* Address translation service support */
@@ -1550,7 +1555,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 static inline bool i915_has_svm(struct drm_i915_private *dev_priv)
 {
-#ifdef CPTCFG_DRM_I915_SVM
+#ifdef CONFIG_DRM_I915_SVM
 	return HAS_RECOVERABLE_PAGE_FAULT(dev_priv);
 #else
 	return false;
@@ -1776,6 +1781,24 @@ static inline bool
 i915_is_pci_faulted(const struct drm_i915_private *i915)
 {
 	return READ_ONCE(i915->device_faulted);
+}
+
+static inline void
+i915_pci_error_set_in_recovery(struct drm_i915_private *i915)
+{
+	WRITE_ONCE(i915->in_recovery, true);
+}
+
+static inline void
+i915_pci_error_clear_in_recovery(struct drm_i915_private *i915)
+{
+	WRITE_ONCE(i915->in_recovery, false);
+}
+
+static inline bool
+i915_is_pci_in_recovery(const struct drm_i915_private *i915)
+{
+	return READ_ONCE(i915->in_recovery);
 }
 
 static inline int __i915_first_online_cpu(const struct cpumask *mask)

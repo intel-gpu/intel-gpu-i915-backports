@@ -190,9 +190,15 @@ static unsigned int wanted_max_vfs(struct drm_i915_private *i915)
 
 static int pf_reduce_totalvfs(struct drm_i915_private *i915, int limit)
 {
+	struct device *dev = i915->drm.dev;
+	struct pci_dev *pdev = to_pci_dev(dev);
+	int totalvfs = pci_sriov_get_totalvfs(pdev);
 	int err;
 
-	err = pci_sriov_set_totalvfs(to_pci_dev(i915->drm.dev), limit);
+	if (totalvfs == limit)
+		return 0;
+
+	err = pci_sriov_set_totalvfs(pdev, limit);
 	drm_WARN(&i915->drm, err, "Failed to set number of VFs to %d (%pe)\n",
 		 limit, ERR_PTR(err));
 	return err;
@@ -211,12 +217,11 @@ static bool pf_has_valid_vf_bars(struct drm_i915_private *i915)
 	return true;
 }
 
-static bool pf_continue_as_native(struct drm_i915_private *i915, const char *why)
+static bool pf_not_ready(struct drm_i915_private *i915, const char *why)
 {
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-	drm_dbg(&i915->drm, "PF: %s, continuing as native\n", why);
+	drm_dbg(&i915->drm, "PF: %s\n", why);
 #endif
-	pf_reduce_totalvfs(i915, 0);
 	return false;
 }
 
@@ -226,18 +231,24 @@ static bool pf_verify_readiness(struct drm_i915_private *i915)
 	struct pci_dev *pdev = to_pci_dev(dev);
 	int totalvfs = pci_sriov_get_totalvfs(pdev);
 	int newlimit = min_t(u16, wanted_max_vfs(i915), totalvfs);
+	unsigned int numvfs = pci_num_vf(pdev);
 
 	GEM_BUG_ON(!dev_is_pf(dev));
 	GEM_WARN_ON(totalvfs > U16_MAX);
 
+	if (numvfs > newlimit) {
+		drm_err(&i915->drm, "PF: can't limit VFs (VFs already enabled)\n");
+		return false;
+	}
+
 	if (!newlimit)
-		return pf_continue_as_native(i915, "all VFs disabled");
+		return pf_not_ready(i915, "all VFs disabled");
 
 	if (!pf_has_valid_vf_bars(i915))
-		return pf_continue_as_native(i915, "VFs BAR not ready");
+		return pf_not_ready(i915, "VFs BAR not ready");
 
 	if (!works_with_iaf(i915))
-		return pf_continue_as_native(i915, "can't work with IAF");
+		return pf_not_ready(i915, "can't work with IAF");
 
 	pf_reduce_totalvfs(i915, newlimit);
 
@@ -269,6 +280,7 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 {
 	struct device *dev = i915->drm.dev;
 	struct pci_dev *pdev = to_pci_dev(dev);
+	unsigned int numvfs = pci_num_vf(pdev);
 
 	if (!HAS_SRIOV(i915))
 		return I915_IOV_MODE_NONE;
@@ -277,8 +289,19 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 		return I915_IOV_MODE_SRIOV_VF;
 
 #ifdef CONFIG_PCI_IOV
-	if (dev_is_pf(dev) && pf_verify_readiness(i915))
-		return I915_IOV_MODE_SRIOV_PF;
+	if (dev_is_pf(dev)) {
+		if (pf_verify_readiness(i915))
+			return I915_IOV_MODE_SRIOV_PF;
+
+		if (numvfs) {
+			drm_dbg(&i915->drm, "PF: can't continue with enabled VFs\n");
+			return I915_IOV_MODE_ERR;
+		}
+
+		drm_dbg(&i915->drm, "PF: continuing as native\n");
+		pf_reduce_totalvfs(i915, 0);
+		return I915_IOV_MODE_NONE;
+	}
 #endif
 
 	return I915_IOV_MODE_NONE;
@@ -374,6 +397,12 @@ static bool pf_checklist(struct drm_i915_private *i915)
 	return true;
 }
 
+static int pf_enable_vfs_prepare(struct drm_i915_private *i915, int num_vfs);
+static int pf_update_guc_clients(struct intel_iov *iov, unsigned int num_vfs);
+static void pf_disable_vfs_fini(struct drm_i915_private *i915);
+static void pf_wait_vfs_flr(struct intel_iov *iov, unsigned int num_vfs);
+static void pf_start_vfs_flr(struct intel_iov *iov, unsigned int num_vfs);
+
 /**
  * i915_sriov_pf_confirm - Confirm that PF is ready to enable VFs.
  * @i915: the i915 struct
@@ -381,17 +410,27 @@ static bool pf_checklist(struct drm_i915_private *i915)
  * This function shall be called by the PF when all necessary
  * initialization steps were successfully completed and PF is
  * ready to enable VFs.
+ *
+ * If VFs are already enabled, perform the necessary operations
+ * that allow to manage them.
  */
 void i915_sriov_pf_confirm(struct drm_i915_private *i915)
 {
 	struct device *dev = i915->drm.dev;
+	struct pci_dev *pdev = to_pci_dev(dev);
+	unsigned int numvfs = pci_num_vf(pdev);
 	int totalvfs = i915_sriov_pf_get_totalvfs(i915);
 	struct intel_gt *gt;
 	unsigned int id;
+	int err;
 
 	GEM_BUG_ON(!IS_SRIOV_PF(i915));
 
 	if (i915_sriov_pf_aborted(i915) || !pf_checklist(i915)) {
+		if (numvfs) {
+			dev_notice(dev, "PF driver initialization failed!\n");
+			goto fail;
+		}
 		dev_notice(dev, "No VFs could be associated with this PF!\n");
 		pf_reduce_totalvfs(i915, 0);
 		return;
@@ -400,12 +439,44 @@ void i915_sriov_pf_confirm(struct drm_i915_private *i915)
 	dev_info(dev, "%d VFs could be associated with this PF\n", totalvfs);
 	pf_set_status(i915, totalvfs);
 
+	if (numvfs) {
+		dev_notice(dev, "%u VFs already enabled\n", numvfs);
+
+		err = pf_enable_vfs_prepare(i915, numvfs);
+		if (err < 0)
+			goto fail_vfs_init;
+
+		for_each_gt(gt, i915, id) {
+			err = pf_update_guc_clients(&gt->iov, numvfs);
+			if (unlikely(err < 0))
+				goto fail_prepare;
+		}
+
+		i915_sriov_sysfs_update_links(i915, true);
+	}
+
 	/*
 	 * FIXME: Temporary solution to force VGT mode in GuC throughout
 	 * the life cycle of the PF.
 	 */
 	for_each_gt(gt, i915, id)
 		intel_iov_provisioning_force_vgt_mode(&gt->iov);
+
+	return;
+
+fail_prepare:
+	pf_disable_vfs_fini(i915);
+fail_vfs_init:
+	dev_notice(dev, "Failed to initialize enabled VFs\n");
+fail:
+	i915_sriov_sysfs_update_links(i915, false);
+	for_each_gt(gt, i915, id)
+		pf_start_vfs_flr(&gt->iov, numvfs);
+	for_each_gt(gt, i915, id)
+		pf_wait_vfs_flr(&gt->iov, numvfs);
+	for_each_gt(gt, i915, id)
+		pf_update_guc_clients(&gt->iov, 0);
+	dev_notice(dev, "VFs enabled before probe can't be managed!\n");
 }
 
 /*
@@ -612,6 +683,47 @@ static void pf_apply_vf_rebar(struct drm_i915_private *i915, unsigned int num_vf
 
 #endif
 
+static int pf_enable_vfs_prepare(struct drm_i915_private *i915, int num_vfs)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+	int err;
+
+	/* verify that all initialization was successfully completed */
+	err = i915_sriov_pf_status(i915);
+	if (err < 0)
+		return err;
+
+	/* ensure the debugger is disabled */
+	err = i915_debugger_disallow(i915);
+	if (err < 0)
+		return err;
+
+	/* hold the reference to runtime pm as long as VFs are enabled */
+	for_each_gt(gt, i915, id)
+		intel_gt_pm_get_untracked(gt);
+
+	/* Wa:16014207253 */
+	for_each_gt(gt, i915, id)
+		intel_boost_fake_int_timer(gt, true);
+
+	/* Wa:16015666671 & Wa:16015476723 */
+	pvc_wa_disallow_rc6(i915);
+
+	for_each_gt(gt, i915, id) {
+		/*
+		 * Update cached values of runtime registers shared with the VFs in case
+		 * HuC status register has been updated by the GSC after our initial probe.
+		 */
+		if (intel_uc_wants_huc(&gt->uc) && intel_huc_is_loaded_by_gsc(&gt->uc.huc)) {
+			intel_iov_service_update(&gt->iov);
+		}
+	}
+
+	pf_apply_vf_rebar(i915, num_vfs);
+	return 0;
+}
+
 /**
  * i915_sriov_pf_enable_vfs - Enable VFs.
  * @i915: the i915 struct
@@ -636,26 +748,9 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 	GEM_BUG_ON(num_vfs < 0);
 	drm_dbg(&i915->drm, "enabling %d VFs\n", num_vfs);
 
-	/* verify that all initialization was successfully completed */
-	err = i915_sriov_pf_status(i915);
+	err = pf_enable_vfs_prepare(i915, num_vfs);
 	if (err < 0)
 		goto fail;
-
-	/* ensure the debugger is disabled */
-	err = i915_debugger_disallow(i915);
-	if (err < 0)
-		goto fail;
-
-	/* hold the reference to runtime pm as long as VFs are enabled */
-	for_each_gt(gt, i915, id)
-		intel_gt_pm_get_untracked(gt);
-
-	/* Wa:16014207253 */
-	for_each_gt(gt, i915, id)
-		intel_boost_fake_int_timer(gt, true);
-
-	/* Wa:16015666671 & Wa:16015476723 */
-	pvc_wa_disallow_rc6(i915);
 
 	for_each_gt(gt, i915, id) {
 		err = intel_iov_provisioning_verify(&gt->iov, num_vfs);
@@ -666,24 +761,14 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 				err = 0; /* trust late provisioning */
 		}
 		if (unlikely(err))
-			goto fail_pm;
-
-		/*
-		 * Update cached values of runtime registers shared with the VFs in case
-		 * HuC status register has been updated by the GSC after our initial probe.
-		 */
-		if (intel_uc_wants_huc(&gt->uc) && intel_huc_is_loaded_by_gsc(&gt->uc.huc)) {
-			intel_iov_service_update(&gt->iov);
-		}
+			goto fail_prepare;
 	}
 
 	for_each_gt(gt, i915, id) {
 		err = pf_update_guc_clients(&gt->iov, num_vfs);
 		if (unlikely(err < 0))
-			goto fail_pm;
+			goto fail_prepare;
 	}
-
-	pf_apply_vf_rebar(i915, num_vfs);
 
 	err = pci_enable_sriov(pdev, num_vfs);
 	if (err < 0)
@@ -697,15 +782,10 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 fail_guc:
 	for_each_gt(gt, i915, id)
 		pf_update_guc_clients(&gt->iov, 0);
-fail_pm:
-	for_each_gt(gt, i915, id) {
-		intel_iov_provisioning_auto(&gt->iov, 0);
-		intel_boost_fake_int_timer(gt, false);
-	}
-	pvc_wa_allow_rc6(i915);
+fail_prepare:
 	for_each_gt(gt, i915, id)
-		intel_gt_pm_put_untracked(gt);
-	i915_debugger_allow(i915);
+		intel_iov_provisioning_auto(&gt->iov, 0);
+	pf_disable_vfs_fini(i915);
 fail:
 	drm_err(&i915->drm, "Failed to enable %u VFs (%pe)\n",
 		num_vfs, ERR_PTR(err));
@@ -738,6 +818,24 @@ static void pf_wait_vfs_flr(struct intel_iov *iov, unsigned int num_vfs)
 			timeout_ms /= 2;
 		}
 	}
+}
+
+static void pf_disable_vfs_fini(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	/* Wa:16015666671 & Wa:16015476723 */
+	pvc_wa_allow_rc6(i915);
+
+	/* Wa:16014207253 */
+	for_each_gt(gt, i915, id)
+		intel_boost_fake_int_timer(gt, false);
+
+	for_each_gt(gt, i915, id)
+		intel_gt_pm_put_untracked(gt);
+
+	i915_debugger_allow(i915);
 }
 
 /**
@@ -784,19 +882,24 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 		intel_iov_provisioning_auto(&gt->iov, 0);
 	}
 
-	/* Wa:16015666671 & Wa:16015476723 */
-	pvc_wa_allow_rc6(i915);
-
-	/* Wa:16014207253 */
-	for_each_gt(gt, i915, id)
-		intel_boost_fake_int_timer(gt, false);
-
-	for_each_gt(gt, i915, id)
-		intel_gt_pm_put_untracked(gt);
-
-	i915_debugger_allow(i915);
+	pf_disable_vfs_fini(i915);
 
 	dev_info(dev, "Disabled %u VFs\n", num_vfs);
+	return 0;
+}
+
+int i915_sriov_pf_recovery(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	drm_dbg(&i915->drm, "PF in recovery\n");
+
+	if (pci_num_vf(to_pci_dev(i915->drm.dev)) != 0) {
+		for_each_gt(gt, i915, id)
+			intel_gt_pm_put_untracked(gt);
+	}
+
 	return 0;
 }
 
@@ -807,6 +910,9 @@ static bool needs_save_restore(struct drm_i915_private *i915, unsigned int vfid)
 	bool ret;
 
 	if (!vfpdev)
+		return false;
+
+	if (i915_is_pci_in_recovery(i915))
 		return false;
 
 	/*

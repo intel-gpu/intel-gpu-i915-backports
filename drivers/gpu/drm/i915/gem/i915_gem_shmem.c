@@ -732,8 +732,16 @@ static void i915_delete_from_page_cache(struct page *page)
 	GEM_BUG_ON(!PageLocked(page));
 	xas_lock_irq(&xas);
 
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+        struct folio *old = page_folio(page);
+        __lruvec_stat_mod_folio(old, NR_FILE_PAGES, -1);
+        __lruvec_stat_mod_folio(old, NR_SHMEM, -1);
+}
+#else
 	__dec_lruvec_page_state(page, NR_FILE_PAGES);
 	__dec_lruvec_page_state(page, NR_SHMEM);
+#endif
 
 	xas_set_order(&xas, page->index, 0);
 	xas_store(&xas, NULL);
@@ -795,7 +803,14 @@ static int i915_add_to_page_cache_locked(struct page *page,
 
 		mapping->nrpages++;
 
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+                struct folio *fobj = page_folio(page);
+                __lruvec_stat_mod_folio(fobj, NR_FILE_PAGES, 1);
+}
+#else
 		__inc_lruvec_page_state(page, NR_FILE_PAGES);
+#endif
 unlock:
 		xas_unlock_irq(&xas);
 	} while (xas_nomem(&xas, gfp));
@@ -910,8 +925,14 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 					__SetPageSwapBacked(p);
 					lru_cache_add(p);
 				}
-
+#ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
+{
+                                struct folio *fobj = page_folio(page);
+                                __lruvec_stat_mod_folio(fobj, NR_FILE_PAGES, 1);
+}
+#else
 				inc_lruvec_page_state(p, NR_SHMEM);
+#endif
 				unlock_page(p);
 				idx++;
 

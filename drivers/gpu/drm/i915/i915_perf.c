@@ -2324,7 +2324,9 @@ static int gen8_modify_context(struct intel_context *ce,
 		return PTR_ERR(rq);
 
 	/* Serialise with the remote context */
-	err = intel_context_prepare_remote_request(ce, rq);
+	err = 0;
+	if (!intel_engine_has_preemption(ce->engine))
+		err = intel_context_prepare_remote_request(ce, rq);
 	if (err == 0)
 		err = gen8_store_flex(rq, ce, flex, count);
 
@@ -2357,6 +2359,7 @@ gen8_modify_self(struct intel_context *ce,
 		goto err_add_request;
 
 err_add_request:
+	i915_request_set_priority(rq, I915_PRIORITY_BARRIER);
 	i915_request_add(rq);
 	return err;
 }

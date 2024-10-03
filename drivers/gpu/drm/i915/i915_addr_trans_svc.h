@@ -16,7 +16,7 @@
 
 #include "gt/intel_gtt.h"
 
-#if  IS_ENABLED(CPTCFG_DRM_I915_ATS)
+#if  IS_ENABLED(CONFIG_DRM_I915_ATS)
 /* TODO: Private structure for ATS - need expansion */
 struct i915_ats_priv {
 	struct drm_i915_private *i915;
@@ -40,7 +40,7 @@ int i915_handle_ats_fault_request(struct i915_address_space *vm,
 void intel_invalidate_devtlb_range(struct i915_address_space *vm,
 				   u64 start, u64 size);
 
-#else /* CPTCFG_DRM_I915_ATS */
+#else /* CONFIG_DRM_I915_ATS */
 struct i915_ats_priv { };
 static inline void i915_enable_ats(struct drm_i915_private *i915) { }
 static inline void i915_disable_ats(struct drm_i915_private *i915) { }
@@ -59,5 +59,5 @@ i915_handle_ats_fault_request(struct i915_address_space *vm,
 { return -EOPNOTSUPP; }
 static inline void intel_invalidate_devtlb_range(struct i915_address_space *vm,
 						 u64 start, u64 size){ }
-#endif /* CPTCFG_DRM_I915_ATS */
+#endif /* CONFIG_DRM_I915_ATS */
 #endif /* __I915_ADDR_TRANS_SVC_H__ */

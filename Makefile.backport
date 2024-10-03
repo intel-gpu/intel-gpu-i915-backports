@@ -61,8 +61,8 @@ BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT)
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS UBUNTU_22.04_DESKTOP
+RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP
 
 RELEASE_TYPE ?= opensource
 
@@ -93,7 +93,7 @@ endif
 ifneq (,$(filter $(DEB_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	OS_DISTRIBUTION ?= UBUNTU_22.04_SERVER
 else ifneq (,$(filter $(RPM_PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	OS_DISTRIBUTION ?= SLES15_SP5
+	OS_DISTRIBUTION ?= SLES15_SP6
 endif
 
 ifneq (,$(filter $(filter-out $(MODULES_VARIANT), $(BUILD_CONFIG_VARIANT)), $(BUILD_CONFIG)))
@@ -267,6 +267,9 @@ SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep 
 # Filtered Output: 0
 SUSE_AUXRELEASE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
 
+SUSE_PRODUCT_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/suse_version.h | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g' | tail -1 )
+export SUSE_PRODUCT_CODE
+
 OSV_VER = $(SUSE_VERSION)0$(SUSE_PATCHLEVEL)0$(SUSE_AUXRELEASE)
 
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f2)
@@ -285,6 +288,9 @@ else
 
 # In case of Ubuntu use CONFIG_VERSION_SIGNATURE data and verify tag "ubuntu"
 OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+
+LINUX_VERSION_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep LINUX_VERSION_CODE | sed 's/[^0-9]//g')
+export LINUX_VERSION_CODE
 
 ifeq ($(OSV_NAME), Ubuntu)
 
@@ -394,6 +400,9 @@ OSV_NAME = VANILLA_5.15LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,1)), 1)
 OSV_NAME = VANILLA_6.1LTS
+OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,6)), 1)
+OSV_NAME = VANILLA_6.6LTS
 OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_ID), )
 
@@ -646,7 +655,11 @@ endif
 endif
 endif
 else ifeq ($(OSV_NAME), SUSE)
+ifneq ($(EXTENDED_VERSION_Y),)
 	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
+else
+	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X)"' >> versions
+endif
 else ifeq ($(OSV_NAME), RHEL)
 ifneq (,$(filter $(OSV_NAME)_$(OSV_VER), $(RPM_DISTRIBUTIONS)))
 ifneq ($(EXTENDED_VERSION_Y),)

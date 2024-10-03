@@ -71,6 +71,13 @@ static int intel_dp_mst_compute_link_config(struct intel_encoder *encoder,
 	crtc_state->lane_count = limits->max_lane_count;
 	crtc_state->port_clock = limits->max_rate;
 
+#ifdef BPM_MST_STATE_PBN_DIVE_PRESENT
+        if (!mst_state->pbn_div.full) {
+                mst_state->pbn_div = drm_dp_get_vc_payload_bw(&intel_dp->mst_mgr,
+                                                             limits->max_rate,
+                                                             limits->max_lane_count);
+        }
+#else
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 	// TODO: Handle pbn_div changes by adding a new MST helper
 	if (!mst_state->pbn_div) {
@@ -79,7 +86,7 @@ static int intel_dp_mst_compute_link_config(struct intel_encoder *encoder,
 							      limits->max_lane_count);
 	}
 #endif
-
+#endif
 
 	for (bpp = limits->max_bpp; bpp >= limits->min_bpp; bpp -= 2 * 3) {
 		crtc_state->pipe_bpp = bpp;
@@ -522,8 +529,12 @@ static void intel_mst_disable_dp(struct intel_atomic_state *state,
 	intel_hdcp_disable(intel_mst->connector);
 
 #ifdef BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+	drm_dp_remove_payload_part1(&intel_dp->mst_mgr, mst_state, payload);
+#else
 	drm_dp_remove_payload(&intel_dp->mst_mgr, mst_state,
 			payload, payload);
+#endif
 #else
 	drm_dp_mst_reset_vcpi_slots(&intel_dp->mst_mgr, connector->port);
 
@@ -551,6 +562,16 @@ static void intel_mst_post_disable_dp(struct intel_atomic_state *state,
 	struct intel_dp *intel_dp = &dig_port->dp;
 	struct intel_connector *connector =
 		to_intel_connector(old_conn_state->connector);
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_NOT_PRESENT
+        struct drm_dp_mst_topology_state *old_mst_state =
+                drm_atomic_get_old_mst_topology_state(&state->base, &intel_dp->mst_mgr);
+        struct drm_dp_mst_topology_state *new_mst_state =
+                drm_atomic_get_new_mst_topology_state(&state->base, &intel_dp->mst_mgr);
+        const struct drm_dp_mst_atomic_payload *old_payload =
+                drm_atomic_get_mst_payload_state(old_mst_state, connector->port);
+        struct drm_dp_mst_atomic_payload *new_payload =
+                drm_atomic_get_mst_payload_state(new_mst_state, connector->port);
+#endif
 	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	bool last_mst_stream;
 

@@ -421,6 +421,9 @@ static int __i915_vma_bind(struct i915_vma *vma,
 	if (GEM_DEBUG_WARN_ON(!flags))
 		return -EINVAL;
 
+	if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
+		return -EINVAL;
+
 	bind_flags = flags;
 	bind_flags &= I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND;
 
@@ -962,13 +965,9 @@ int i915_vma_bind(struct i915_vma *vma)
 		goto err_pages;
 	}
 
-	err = mutex_lock_interruptible(&vm->mutex);
-	if (err)
-		goto err_fence;
-
 	err = i915_active_acquire(&vma->active);
 	if (err)
-		goto err_unlock;
+		goto err_fence;
 
 	err = __i915_vma_bind(vma,
 			      i915_gem_object_pat_index(vma->obj),
@@ -982,8 +981,6 @@ int i915_vma_bind(struct i915_vma *vma)
 
 err_active:
 	i915_active_release(&vma->active);
-err_unlock:
-	mutex_unlock(&vm->mutex);
 err_fence:
 	dma_fence_work_commit_imm(&work->base);
 err_pages:
@@ -1065,9 +1062,12 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	}
 
 	if (unlikely(i915_vma_misplaced(vma, size, alignment, flags))) {
-		err = -EBUSY;
-		if (!(flags & (PIN_NONBLOCK | PIN_NOEVICT)))
+		if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
+			err = -EINVAL;
+		else if (!(flags & (PIN_NONBLOCK | PIN_NOEVICT)))
 			err = __i915_vma_unbind(vma);
+		else
+			err = -EBUSY;
 		if (err)
 			goto err_unlock;
 	}
