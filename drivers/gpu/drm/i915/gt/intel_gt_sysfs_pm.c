@@ -10,12 +10,13 @@
 
 #include "i915_drv.h"
 #include "intel_gt.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
+#include "intel_gt_sysfs.h"
+#include "intel_gt_sysfs_pm.h"
 #include "intel_pcode.h"
 #include "intel_rc6.h"
 #include "intel_rps.h"
-#include "intel_gt_sysfs.h"
-#include "intel_gt_sysfs_pm.h"
 
 /*
  * Scaling for multipliers (aka frequency factors).
@@ -304,12 +305,8 @@ static int __intel_gt_sysfs_create_group(struct kobject *kobj,
  */
 static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
 {
-	int ret;
-
-	ret = __intel_gt_sysfs_create_group(kobj, rc6_attr_group);
-	if (ret)
-		drm_err(&gt->i915->drm,
-			"failed to create gt%u RC6 sysfs files\n", gt->info.id);
+	if (__intel_gt_sysfs_create_group(kobj, rc6_attr_group))
+		gt_warn(gt, "failed to create RC6 sysfs files\n");
 }
 #else
 static void intel_sysfs_rc6_init(struct intel_gt *gt, struct kobject *kobj)
@@ -343,7 +340,7 @@ static ssize_t cur_freq_mhz_show(struct device *dev,
 	struct intel_rps *rps = &gt->rps;
 
 	return scnprintf(buff, PAGE_SIZE, "%d\n",
-				intel_rps_get_requested_frequency(rps));
+			 intel_rps_get_requested_frequency(rps));
 }
 
 static ssize_t boost_freq_mhz_show(struct device *dev,
@@ -354,7 +351,7 @@ static ssize_t boost_freq_mhz_show(struct device *dev,
 	struct intel_rps *rps = &gt->rps;
 
 	return scnprintf(buff, PAGE_SIZE, "%d\n",
-			intel_rps_get_boost_frequency(rps));
+			 intel_rps_get_boost_frequency(rps));
 }
 
 static ssize_t boost_freq_mhz_store(struct device *dev,
@@ -411,7 +408,7 @@ static ssize_t min_freq_mhz_show(struct device *dev,
 	struct intel_rps *rps = &gt->rps;
 
 	return scnprintf(buff, PAGE_SIZE, "%d\n",
-			intel_rps_get_min_frequency(rps));
+			 intel_rps_get_min_frequency(rps));
 }
 
 static ssize_t min_freq_mhz_store(struct device *dev,
@@ -1780,16 +1777,7 @@ static int intel_sysfs_rps_init(struct intel_gt *gt, struct kobject *kobj)
  */
 void intel_gt_sysfs_pm_init(struct intel_gt *gt, struct kobject *kobj)
 {
-	int ret;
-
 	intel_sysfs_rc6_init(gt, kobj);
-
-	if (GRAPHICS_VER(gt->i915) >= 6) {
-		ret = intel_sysfs_rps_init(gt, kobj);
-		if (ret) {
-			drm_err(&gt->i915->drm,
-				"failed to create gt%u RPS sysfs files",
-				gt->info.id);
-		}
-	}
+	if (intel_sysfs_rps_init(gt, kobj))
+		gt_warn(gt, "failed to create RPS sysfs files\n");
 }

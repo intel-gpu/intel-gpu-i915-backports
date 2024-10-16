@@ -46,7 +46,7 @@ static s32 scale_log_param(struct intel_guc_log *log, const struct guc_log_secti
 
 	/* Check for 32-bit overflow */
 	if (param >= SZ_4K) {
-		drm_err(&guc_to_gt(log_to_guc(log))->i915->drm, "Size too large for GuC %s log: %dMB!",
+		guc_err(log_to_guc(log), "Size too large for GuC %s log: %dMB!",
 			section->name, param);
 		return section->default_val;
 	}

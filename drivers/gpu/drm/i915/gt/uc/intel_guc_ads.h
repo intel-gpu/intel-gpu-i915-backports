@@ -18,7 +18,8 @@ void intel_guc_ads_destroy(struct intel_guc *guc);
 void intel_guc_ads_init_late(struct intel_guc *guc);
 void intel_guc_ads_reset(struct intel_guc *guc);
 void intel_guc_ads_print_policy_info(struct intel_guc *guc,
-				     struct drm_printer *p);
+				     struct drm_printer *p,
+				     int indent);
 struct iosys_map intel_guc_engine_usage_record_map_v1(struct intel_engine_cs *engine);
 int intel_guc_engine_usage_record_map_v2(struct intel_guc *guc,
 					 struct intel_engine_cs *engine,

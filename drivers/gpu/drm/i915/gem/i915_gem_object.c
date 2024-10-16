@@ -857,9 +857,13 @@ static void __i915_gem_free_objects(struct drm_i915_private *i915,
 
 void i915_gem_flush_free_objects(struct drm_i915_private *i915)
 {
-	struct llist_node *freed = llist_del_all(&i915->mm.free_list);
+	struct llist_node *freed;
 
-	if (unlikely(freed))
+	if (likely(llist_empty(&i915->mm.free_list)))
+		return;
+
+	freed = llist_del_all(&i915->mm.free_list);
+	if (freed)
 		__i915_gem_free_objects(i915, freed);
 }
 
@@ -946,11 +950,14 @@ void i915_gem_object_release_segments(struct drm_i915_gem_object *obj)
 
 	rbtree_postorder_for_each_entry_safe(sobj, snext, &obj->segments.rb_root,
 					     segment_node) {
+		if (__test_and_clear_bit(I915_BO_MMAP_BIT, &sobj->flags))
+			__set_bit(I915_BO_MMAP_BIT, &obj->flags);
+
 		/* clear pointer to placements (owned by parent BO) */
 		sobj->mm.placements = NULL;
 		sobj->mm.n_placements = 0;
+
 		sobj->parent = NULL;
-		/* release original reference from object_alloc */
 		i915_gem_object_put(sobj);
 	}
 	obj->segments = RB_ROOT_CACHED;
@@ -971,7 +978,10 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 	 */
 	swp = fetch_and_zero(&obj->swapto);
 	if (swp) {
+		if (__test_and_clear_bit(I915_BO_MMAP_BIT, &swp->flags))
+			__set_bit(I915_BO_MMAP_BIT, &obj->flags);
 		swp->mm.madv = I915_MADV_DONTNEED;
+		swp->parent = NULL;
 		i915_gem_object_put(swp);
 	}
 
@@ -1102,7 +1112,6 @@ swap_pages(struct drm_i915_gem_object *obj, struct drm_i915_gem_object *donor)
 
 	swap(obj->mm.pages, donor->mm.pages);
 	swap(obj->mm.mapping, donor->mm.mapping);
-	swap(obj->mm.page_sizes, donor->mm.page_sizes);
 
 	__i915_gem_object_reset_page_iter(obj, obj->mm.pages);
 	__i915_gem_object_reset_page_iter(donor, donor->mm.pages);
@@ -1645,8 +1654,5 @@ err:
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/huge_gem_object.c"
-#include "selftests/huge_pages.c"
-#include "selftests/i915_gem_object.c"
 #include "selftests/i915_gem_coherency.c"
 #endif

@@ -21,7 +21,16 @@ Build Configurations:
  			is difficult. Make sure no other intel-i915* packages are already installed before
  			you installing current one.
   BUILD_CONFIG   : Specify build config variant
- 			Ex: make <Target> BUILD_CONFIG=disabledisplay
+
+		To disable display, pass BUILD_CONFIG=disabledispaly
+			Ex: make <Target> BUILD_CONFIG=disabledisplay
+
+                ##### List of OSVs for which display has been disabled by default ######
+                        SLES15_SP6     SLES15_SP5      SLES15_SP4
+
+                If you want to force enable display, pass BUILD_CONFIG=enabledispaly
+                        Ex : make <Target> BUILD_CONFIG=enabledisplay
+
   OS_DISTRIBUTION: Distro targeted package
  			You can set this value by passing supported kernel name
  			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_SERVER
@@ -58,7 +67,7 @@ Build Configurations:
  RHEL_9.4	RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.10	RHEL_8.9	RHEL_8.8	RHEL_8.6
 
  ##### List of LTS kernel versions #####
- VANILLA_6.1LTS	VANILLA_5.15LTS	VANILLA_5.10LTS	VANILLA_5.4LTS
+ VANILLA_6.1LTS	VANILLA_5.15LTS	VANILLA_5.10LTS
  For LTS kernels, either RPM or Debian package can be created
 
  For Specific OS distro/LTS kernels, pass the supported kernel name to OS_DISTRIBUTION option

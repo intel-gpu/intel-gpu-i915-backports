@@ -23,6 +23,7 @@
 #include "intel_gt.h"
 #include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_print.h"
 #include "intel_gt_requests.h"
 #include "intel_lrc.h"
 #include "intel_lrc_reg.h"
@@ -721,11 +722,12 @@ void intel_engines_release(struct intel_gt *gt)
 	 */
 
 	/* Disable any further use of the engines */
+	memset(&gt->i915->uabi_engines, 0, sizeof(gt->i915->uabi_engines));
 	for_each_engine(engine, gt, id) {
 		if (!engine->kernel_context)
 			continue;
 
-		intel_wakeref_wait_for_idle(&engine->wakeref);
+		intel_engine_pm_wait_for_idle(engine);
 		GEM_BUG_ON(intel_engine_pm_is_awake(engine));
 
 		memset(&engine->reset, 0, sizeof(engine->reset));
@@ -1131,7 +1133,7 @@ static int pin_ggtt_status_page(struct intel_engine_cs *engine,
 				struct i915_gem_ww_ctx *ww,
 				struct i915_vma *vma)
 {
-	return i915_ggtt_pin_for_gt(vma, ww, 0, PIN_HIGH);
+	return i915_ggtt_pin_for_gt(vma, ww);
 }
 
 static int init_status_page(struct intel_engine_cs *engine)
@@ -1153,8 +1155,9 @@ static int init_status_page(struct intel_engine_cs *engine)
 	 */
 	obj = i915_gem_object_create_internal(engine->i915, PAGE_SIZE);
 	if (IS_ERR(obj)) {
-		drm_err(&engine->i915->drm,
-			"Failed to allocate status page\n");
+		gt_err(engine->gt,
+			"Failed to allocate %s status page\n",
+			engine->name);
 		return PTR_ERR(obj);
 	}
 
@@ -1266,6 +1269,7 @@ static int measure_breadcrumb_dw(struct intel_context *ce)
 	if (!frame)
 		return -ENOMEM;
 
+	frame->rq.i915 = engine->i915;
 	frame->rq.engine = engine;
 	frame->rq.context = ce;
 	rcu_assign_pointer(frame->rq.timeline, ce->timeline);
@@ -1843,7 +1847,7 @@ bool intel_engine_can_store_dword(struct intel_engine_cs *engine)
 	return true;
 }
 
-static void hexdump(struct drm_printer *m, const void *buf, size_t len)
+static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t len)
 {
 	const size_t rowsize = 8 * sizeof(u32);
 	const void *prev = NULL;
@@ -1855,7 +1859,7 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 
 		if (prev && !memcmp(prev, buf + pos, rowsize)) {
 			if (!skip) {
-				drm_printf(m, "*\n");
+				i_printf(m, indent, "*\n");
 				skip = true;
 			}
 			continue;
@@ -1865,7 +1869,7 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 						rowsize, sizeof(u32),
 						line, sizeof(line),
 						false) >= sizeof(line));
-		drm_printf(m, "[%04zx] %s\n", pos, line);
+		i_printf(m, indent, "[%04zx] %s\n", pos, line);
 
 		prev = buf + pos;
 		skip = false;
@@ -1873,7 +1877,8 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 }
 
 static void intel_engine_print_registers(struct intel_engine_cs *engine,
-					 struct drm_printer *m)
+					 struct drm_printer *m,
+					 int indent)
 {
 	struct drm_i915_private *dev_priv = engine->i915;
 	u64 addr;
@@ -1882,65 +1887,70 @@ static void intel_engine_print_registers(struct intel_engine_cs *engine,
 	if (IS_SRIOV_VF(dev_priv))
 		return;
 
-	if (HAS_EXECLISTS(dev_priv)) {
-		drm_printf(m, "\tEL_STAT_HI: 0x%08x\n",
-			   ENGINE_READ(engine, RING_EXECLIST_STATUS_HI));
-		drm_printf(m, "\tEL_STAT_LO: 0x%08x\n",
-			   ENGINE_READ(engine, RING_EXECLIST_STATUS_LO));
-	}
-	drm_printf(m, "\tRING_START: 0x%08x\n",
-		   ENGINE_READ(engine, RING_START));
-	drm_printf(m, "\tRING_HEAD:  0x%08x\n",
-		   ENGINE_READ(engine, RING_HEAD) & HEAD_ADDR);
-	drm_printf(m, "\tRING_TAIL:  0x%08x\n",
-		   ENGINE_READ(engine, RING_TAIL) & TAIL_ADDR);
-	drm_printf(m, "\tRING_CTL:   0x%08x%s\n",
-		   ENGINE_READ(engine, RING_CTL),
-		   ENGINE_READ(engine, RING_CTL) & (RING_WAIT | RING_WAIT_SEMAPHORE) ? " [waiting]" : "");
-	drm_printf(m, "\tRING_MODE:  0x%08x%s\n",
-		   ENGINE_READ(engine, RING_MI_MODE),
-		   ENGINE_READ(engine, RING_MI_MODE) & (MODE_IDLE) ? " [idle]" : "");
-	drm_printf(m, "\tRING_NOPID: 0x%08x\n",
-		   ENGINE_READ(engine, RING_NOPID));
+	i_printf(m, indent, "Registers: MMIO base: 0x%08x\n", engine->mmio_base);
+	indent += 2;
 
-	drm_printf(m, "\tRING_IMR:   0x%08x\n",
-		   ENGINE_READ(engine, RING_IMR));
-	drm_printf(m, "\tRING_ESR:   0x%08x\n",
-		   ENGINE_READ(engine, RING_ESR));
-	drm_printf(m, "\tRING_EMR:   0x%08x\n",
-		   ENGINE_READ(engine, RING_EMR));
-	drm_printf(m, "\tRING_EIR:   0x%08x\n",
-		   ENGINE_READ(engine, RING_EIR));
+	if (HAS_EXECLISTS(dev_priv)) {
+		i_printf(m, indent, "EL_STAT_HI: 0x%08x\n",
+			 ENGINE_READ(engine, RING_EXECLIST_STATUS_HI));
+		i_printf(m, indent, "EL_STAT_LO: 0x%08x\n",
+			 ENGINE_READ(engine, RING_EXECLIST_STATUS_LO));
+	}
+	i_printf(m, indent, "RING_START: 0x%08x\n",
+		 ENGINE_READ(engine, RING_START));
+	i_printf(m, indent, "RING_HEAD:  0x%08x\n",
+		 ENGINE_READ(engine, RING_HEAD) & HEAD_ADDR);
+	i_printf(m, indent, "RING_TAIL:  0x%08x\n",
+		 ENGINE_READ(engine, RING_TAIL) & TAIL_ADDR);
+	i_printf(m, indent, "RING_CTL:   0x%08x%s\n",
+		 ENGINE_READ(engine, RING_CTL),
+		 ENGINE_READ(engine, RING_CTL) & (RING_WAIT | RING_WAIT_SEMAPHORE) ? " [waiting]" : "");
+	i_printf(m, indent, "RING_MODE:  0x%08x%s\n",
+		 ENGINE_READ(engine, RING_MI_MODE),
+		 ENGINE_READ(engine, RING_MI_MODE) & (MODE_IDLE) ? " [idle]" : "");
+	i_printf(m, indent, "RING_NOPID: 0x%08x\n",
+		 ENGINE_READ(engine, RING_NOPID));
+
+	i_printf(m, indent, "RING_IMR:   0x%08x\n",
+		 ENGINE_READ(engine, RING_IMR));
+	i_printf(m, indent, "RING_ESR:   0x%08x\n",
+		 ENGINE_READ(engine, RING_ESR));
+	i_printf(m, indent, "RING_EMR:   0x%08x\n",
+		 ENGINE_READ(engine, RING_EMR));
+	i_printf(m, indent, "RING_EIR:   0x%08x\n",
+		 ENGINE_READ(engine, RING_EIR));
 
 	addr = intel_engine_get_active_head(engine);
-	drm_printf(m, "\tACTHD:  0x%08x_%08x\n",
-		   upper_32_bits(addr), lower_32_bits(addr));
+	i_printf(m, indent, "ACTHD:  0x%08x_%08x\n",
+		 upper_32_bits(addr), lower_32_bits(addr));
 	addr = intel_engine_get_last_batch_head(engine);
-	drm_printf(m, "\tBBADDR: 0x%08x_%08x\n",
-		   upper_32_bits(addr), lower_32_bits(addr));
+	i_printf(m, indent, "BBADDR: 0x%08x_%08x\n",
+		 upper_32_bits(addr), lower_32_bits(addr));
 	addr = ENGINE_READ64(engine, RING_DMA_FADD, RING_DMA_FADD_UDW);
-	drm_printf(m, "\tDMA_FADDR: 0x%08x_%08x\n",
-		   upper_32_bits(addr), lower_32_bits(addr));
-	drm_printf(m, "\tIPEIR: 0x%08x\n",
-		   ENGINE_READ(engine, RING_IPEIR));
-	drm_printf(m, "\tIPEHR: 0x%08x\n",
-		   ENGINE_READ(engine, RING_IPEHR));
+	i_printf(m, indent, "DMA_FADDR: 0x%08x_%08x\n",
+		 upper_32_bits(addr), lower_32_bits(addr));
+	i_printf(m, indent, "IPEIR: 0x%08x\n",
+		 ENGINE_READ(engine, RING_IPEIR));
+	i_printf(m, indent, "IPEHR: 0x%08x\n",
+		 ENGINE_READ(engine, RING_IPEHR));
 }
 
-static void print_request_ring(struct drm_printer *m, struct i915_request *rq)
+static void print_request_ring(struct drm_printer *m, int indent, struct i915_request *rq)
 {
+	const unsigned int limit = 1024;
+	unsigned int size;
 	void *ring;
-	int size;
 
-	drm_printf(m,
-		   "[head %04x, postfix %04x, tail %04x, batch 0x%08x_%08x]:\n",
-		   rq->head, rq->postfix, rq->tail,
-		   rq->batch ? upper_32_bits(rq->batch->node.start) : ~0u,
-		   rq->batch ? lower_32_bits(rq->batch->node.start) : ~0u);
+	i_printf(m, indent,
+		 "Ring: { head %04x, postfix %04x, tail %04x, batch 0x%08x_%08x }\n",
+		 rq->head, rq->postfix, rq->tail,
+		 rq->batch ? upper_32_bits(rq->batch->node.start) : ~0u,
+		 rq->batch ? lower_32_bits(rq->batch->node.start) : ~0u);
 
 	size = rq->tail - rq->head;
 	if (rq->tail < rq->head)
 		size += rq->ring->size;
+	size = min(size, limit);
 
 	ring = kmalloc(size, GFP_ATOMIC);
 	if (ring) {
@@ -1949,13 +1959,13 @@ static void print_request_ring(struct drm_printer *m, struct i915_request *rq)
 		unsigned int len = 0;
 
 		if (rq->tail < head) {
-			len = rq->ring->size - head;
+			len = min(rq->ring->size - head, limit);
 			memcpy(ring, vaddr + head, len);
 			head = 0;
 		}
 		memcpy(ring + len, vaddr + head, size - len);
 
-		hexdump(m, ring, size);
+		hexdump(m, indent + 2, ring, size);
 		kfree(ring);
 	}
 }
@@ -1977,7 +1987,8 @@ static unsigned long read_ul(void *p, size_t x)
 }
 
 static void print_properties(struct intel_engine_cs *engine,
-			     struct drm_printer *m)
+			     struct drm_printer *m,
+			     int indent)
 {
 	static const struct pmap {
 		size_t offset;
@@ -1998,26 +2009,45 @@ static void print_properties(struct intel_engine_cs *engine,
 	};
 	const struct pmap *p;
 
-	drm_printf(m, "\tProperties:\n");
+	i_printf(m, indent, "Properties:\n");
 	for (p = props; p->name; p++)
-		drm_printf(m, "\t\t%s: %lu [default %lu]\n",
-			   p->name,
-			   read_ul(&engine->props, p->offset),
-			   read_ul(&engine->defaults, p->offset));
+		i_printf(m, indent + 2, "%s: %lu [default %lu]\n",
+			 p->name,
+			 read_ul(&engine->props, p->offset),
+			 read_ul(&engine->defaults, p->offset));
 }
 
-static void engine_dump_request(struct i915_request *rq, struct drm_printer *m, const char *msg)
+static void engine_dump_request(struct intel_engine_cs *engine, struct i915_request *rq,
+				struct drm_printer *m, int indent)
 {
-	intel_context_show(rq->context, m);
-	i915_request_show(m, rq, msg, 0);
-	print_request_ring(m, rq);
+	u32 lrc;
+
+	i915_request_show(m, rq, "", indent);
+	if (!__i915_request_has_started(rq) || i915_request_signaled(rq))
+		return;
+
+	lrc = 0;
+	if (!IS_SRIOV_VF(engine->i915))
+		lrc = ENGINE_READ(engine, RING_CURRENT_LRCA);
+	if (lrc & CURRENT_LRCA_VALID &&
+	    (rq->context->lrc.lrca ^ lrc) & GENMASK(31, 12))
+		return;
+
+	indent += 2;
+	print_request_ring(m, indent, rq);
+	intel_context_show(rq->context, m, indent);
 }
 
-static void engine_dump_active_requests(struct intel_engine_cs *engine, struct drm_printer *m)
+static void
+engine_dump_active_requests(struct intel_engine_cs *engine,
+			    struct drm_printer *m,
+			    int indent)
 {
+	struct i915_request *rq, *last;
 	struct i915_sched_engine *se;
-	struct i915_request *rq;
+	const unsigned int max = 8;
 	unsigned long flags;
+	unsigned int count;
 
 	se = engine->sched_engine;
 	if (!se)
@@ -2033,97 +2063,103 @@ static void engine_dump_active_requests(struct intel_engine_cs *engine, struct d
 
 	spin_lock_irqsave(&se->lock, flags);
 
-	drm_printf(m, "\tRequests:\n");
+	count = 0;
+	last = NULL;
+	i_printf(m, indent, "Requests:\n");
 	list_for_each_entry(rq, &se->requests, sched.link) {
-		if (rq->execution_mask & engine->mask &&
-		    !__i915_request_is_complete(rq) &&
-		    i915_request_started(rq))
-			engine_dump_request(rq, m, "\t");
+		if (!(rq->execution_mask & engine->mask))
+			continue;
+
+		if (i915_request_signaled(rq))
+			continue;
+
+		if (__i915_request_is_complete(rq))
+			continue;
+
+		if (count++ < max - 1)
+			engine_dump_request(engine, rq, m, indent + 2);
+		else
+			last = rq;
+	}
+	if (last) {
+		if (count > max) {
+			i_printf(m, indent + 2,
+				   "... skipping %d executing requests... \n",
+				   count - max);
+		}
+		engine_dump_request(engine, last, m, indent + 2);
 	}
 
-	drm_printf(m, "\tOn hold?: %lu\n", list_count(&se->hold));
-
+	i_printf(m, indent, "On hold?: %lu\n", list_count(&se->hold));
 	spin_unlock_irqrestore(&se->lock, flags);
 }
 
 void intel_engine_dump(struct intel_engine_cs *engine,
 		       struct drm_printer *m,
-		       const char *header, ...)
+		       int indent)
 {
 	struct i915_gpu_error * const error = &engine->i915->gpu_error;
 	struct i915_request *rq;
-	intel_wakeref_t wakeref;
+	intel_wakeref_t wf;
 	ktime_t dummy;
 
-	if (header) {
-		va_list ap;
+	i_printf(m, indent, "%s:\n", engine->name);
+	indent += 2;
 
-		va_start(ap, header);
-		drm_vprintf(m, header, &ap);
-		va_end(ap);
-	}
-
-	if (intel_gt_is_wedged(engine->gt))
-		drm_printf(m, "*** WEDGED ***\n");
-
-	drm_printf(m, "\tAwake? %d\n", atomic_read(&engine->wakeref.count));
-	drm_printf(m, "\tInterrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
-		   READ_ONCE(engine->stats.irq.count),
-		   READ_ONCE(engine->stats.irq.total),
-		   ewma_irq_time_read(&engine->stats.irq.avg),
-		   READ_ONCE(engine->stats.irq.max));
+	i_printf(m, indent, "Awake? %d\n", atomic_read(&engine->wakeref.count));
+	i_printf(m, indent, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+		 READ_ONCE(engine->stats.irq.count),
+		 READ_ONCE(engine->stats.irq.total),
+		 ewma_irq_time_read(&engine->stats.irq.avg),
+		 READ_ONCE(engine->stats.irq.max));
 	if (HAS_RECOVERABLE_PAGE_FAULT(engine->i915)) {
-		drm_printf(m, "\tPagefault: { depth: %d }\n",
-			   atomic_read(&engine->in_pagefault));
+		i_printf(m, indent, "Pagefault: { depth: %d }\n",
+			 atomic_read(&engine->in_pagefault));
 	}
-	drm_printf(m, "\tBarriers?: %s\n",
-		   str_yes_no(!list_empty(&engine->barrier_tasks)));
-	drm_printf(m, "\tLatency: %luus\n",
-		   ewma__engine_latency_read(&engine->latency));
+	i_printf(m, indent, "Barriers?: %s\n",
+		 str_yes_no(!list_empty(&engine->barrier_tasks)));
+	i_printf(m, indent, "Latency: %luus\n",
+		 ewma__engine_latency_read(&engine->latency));
 	if (intel_engine_supports_stats(engine))
-		drm_printf(m, "\tRuntime: %llums\n",
-			   ktime_to_ms(intel_engine_get_busy_time(engine,
-								  &dummy)));
-	drm_printf(m, "\tForcewake: %x domains, %d active\n",
-		   engine->fw_domain, READ_ONCE(engine->fw_active));
+		i_printf(m, indent, "Runtime: %llums\n",
+			 ktime_to_ms(intel_engine_get_busy_time(engine,
+								&dummy)));
+	i_printf(m, indent, "Forcewake: %x domains, %d active\n",
+		 engine->fw_domain, READ_ONCE(engine->fw_active));
 
 	rcu_read_lock();
 	rq = READ_ONCE(engine->heartbeat.systole);
 	if (rq)
-		drm_printf(m, "\tHeartbeat: %d ms ago\n",
-			   jiffies_to_msecs(jiffies - rq->emitted_jiffies));
+		i_printf(m, indent, "Heartbeat: %d ms ago\n",
+			 jiffies_to_msecs(jiffies - rq->emitted_jiffies));
 	else if (work_pending(&engine->heartbeat.work.work))
-		drm_printf(m, "\tHeartbeat: pending @ %lu interrupts\n",
-			   engine->heartbeat.interrupts);
+		i_printf(m, indent, "Heartbeat: pending @ %lu interrupts\n",
+			 engine->heartbeat.interrupts);
 	else
-		drm_printf(m, "\tHeartbeat: idle\n");
+		i_printf(m, indent, "Heartbeat: idle\n");
 	rcu_read_unlock();
-	drm_printf(m, "\tReset count: %d (global %d)\n",
-		   i915_reset_engine_count(engine),
-		   i915_reset_count(error));
-	print_properties(engine, m);
+	i_printf(m, indent, "Reset count: %d (global %d)\n",
+		 i915_reset_engine_count(engine),
+		 i915_reset_count(error));
+	print_properties(engine, m, indent);
 
-	engine_dump_active_requests(engine, m);
-
-	drm_printf(m, "\tMMIO base:  0x%08x\n", engine->mmio_base);
-	wakeref = intel_runtime_pm_get_if_in_use(engine->uncore->rpm);
-	if (wakeref) {
-		intel_engine_print_registers(engine, m);
-		intel_runtime_pm_put(engine->uncore->rpm, wakeref);
-	} else {
-		drm_printf(m, "\tDevice is asleep; skipping register dump\n");
+	wf = intel_runtime_pm_get_if_in_use(engine->uncore->rpm);
+	if (wf) {
+		intel_engine_print_registers(engine, m, indent);
+		intel_runtime_pm_put(engine->uncore->rpm, wf);
 	}
 
-	intel_execlists_show_requests(engine, m, i915_request_show, 8);
+	engine_dump_active_requests(engine, m, indent);
 
-	if (engine->status_page.vma) {
-		drm_printf(m, "HWSP [0x%08x,0x%08llx):\n",
-				i915_ggtt_offset(engine->status_page.vma),
-				i915_ggtt_offset(engine->status_page.vma) + engine->status_page.vma->node.size);
-		hexdump(m, engine->status_page.addr, PAGE_SIZE);
+	if (engine->status_page.vma && (wf = intel_gt_pm_get_if_awake(engine->gt))) {
+		i_printf(m, indent, "HWSP [0x%08x,0x%08llx):\n",
+			 i915_ggtt_offset(engine->status_page.vma),
+			 i915_ggtt_offset(engine->status_page.vma) + engine->status_page.vma->node.size);
+		hexdump(m, indent + 2, engine->status_page.addr, PAGE_SIZE);
+		intel_gt_pm_put_async(engine->gt, wf);
 	}
 
-	drm_printf(m, "Idle? %s\n", str_yes_no(intel_engine_is_idle(engine)));
+	i_printf(m, indent, "Idle? %s\n", str_yes_no(intel_engine_is_idle(engine)));
 }
 
 /**

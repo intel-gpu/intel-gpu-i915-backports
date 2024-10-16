@@ -167,7 +167,6 @@ int intel_huc_wait_for_auth_complete(struct intel_huc *huc)
 	}
 
 	intel_uc_fw_change_status(&huc->fw, INTEL_UC_FIRMWARE_RUNNING);
-	huc_info(huc, "authenticated!\n");
 	return 0;
 }
 
@@ -285,24 +284,24 @@ void intel_huc_update_auth_status(struct intel_huc *huc)
  *
  * Pretty printer for HuC load status.
  */
-void intel_huc_load_status(struct intel_huc *huc, struct drm_printer *p)
+void intel_huc_load_status(struct intel_huc *huc, struct drm_printer *p, int indent)
 {
 	struct intel_gt *gt = huc_to_gt(huc);
 	intel_wakeref_t wakeref;
 
 	if (!intel_huc_is_supported(huc)) {
-		drm_printf(p, "HuC not supported\n");
+		i_printf(p, indent, "HuC: not supported\n");
 		return;
 	}
 
 	if (!intel_huc_is_wanted(huc)) {
-		drm_printf(p, "HuC disabled\n");
+		i_printf(p, indent, "HuC: disabled\n");
 		return;
 	}
 
-	intel_uc_fw_dump(&huc->fw, p);
+	intel_uc_fw_dump(&huc->fw, p, indent);
 
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		drm_printf(p, "HuC status: 0x%08x\n",
+		i_printf(p, indent + 2, "status: 0x%08x\n",
 			   intel_uncore_read(gt->uncore, huc->status.reg));
 }

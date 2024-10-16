@@ -203,7 +203,7 @@ struct i915_vma {
 	struct drm_i915_gem_object *obj;
 	struct dma_resv *resv; /** Alias of obj->resv */
 
-	struct sg_table *pages;
+	struct scatterlist *pages;
 	void __iomem *iomap;
 	void *private; /* owned by creator */
 
@@ -211,7 +211,6 @@ struct i915_vma {
 	struct i915_mmap_offset	*mmo;
 
 	u64 size;
-	u32 page_sizes;
 
 	u32 guard; /* padding allocated around vma->pages within the node */
 	u32 display_alignment;

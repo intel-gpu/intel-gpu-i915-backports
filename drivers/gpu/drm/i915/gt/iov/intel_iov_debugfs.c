@@ -6,6 +6,7 @@
 #include <drm/drm_print.h>
 
 #include "gt/intel_gt_debugfs.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_gt.h"
 #include "intel_iov.h"
 #include "intel_iov_utils.h"

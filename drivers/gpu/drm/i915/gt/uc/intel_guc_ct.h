@@ -112,7 +112,8 @@ void intel_guc_ct_disable(struct intel_guc_ct *ct);
 
 static inline void intel_guc_ct_sanitize(struct intel_guc_ct *ct)
 {
-	ct->enabled = false;
+	if (xchg(&ct->enabled, false))
+		wake_up_all(&ct->wq);
 }
 
 static inline bool intel_guc_ct_enabled(const struct intel_guc_ct *ct)
@@ -136,6 +137,6 @@ void intel_guc_ct_event_handler(struct intel_guc_ct *ct);
 
 int intel_guc_ct_update_addresses(struct intel_guc_ct *ct);
 
-void intel_guc_ct_print_info(struct intel_guc_ct *ct, struct drm_printer *p);
+void intel_guc_ct_print_info(struct intel_guc_ct *ct, struct drm_printer *p, int indent);
 
 #endif /* _INTEL_GUC_CT_H_ */

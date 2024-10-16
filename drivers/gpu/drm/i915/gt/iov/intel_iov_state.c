@@ -3,6 +3,8 @@
  * Copyright © 2022 Intel Corporation
  */
 
+#include "i915_sriov_telemetry.h"
+
 #include "intel_iov.h"
 #include "intel_iov_event.h"
 #include "intel_iov_state.h"
@@ -194,6 +196,9 @@ static int pf_process_vf_flr_finish(struct intel_iov *iov, u32 vfid)
 	if (HAS_LMEM(iov_to_i915(iov)))
 		pf_clear_vf_lmem_obj(iov, vfid);
 	mutex_unlock(pf_provisioning_mutex(iov));
+
+	if (iov_is_root(iov))
+		i915_sriov_telemetry_pf_reset(iov_to_i915(iov), vfid);
 
 skip:
 	return pf_trigger_vf_flr_finish(iov, vfid);

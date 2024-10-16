@@ -5824,6 +5824,7 @@ enum hardware_error {
 #define BANK_MASK				GENMASK(15, 10)
 #define OLDSTATE_MASK				GENMASK(19, 16)
 #define NEWSTATE_MASK				GENMASK(23, 20)
+#define STACKID_MASK                            GENMASK(26, 25)
 
 enum hbm_errors {
 	COR_DEMAND_ACCESS = 1,

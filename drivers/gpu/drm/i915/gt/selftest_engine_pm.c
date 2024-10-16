@@ -302,7 +302,7 @@ static int live_engine_busy_stats(void *arg)
 		if (!intel_engine_can_store_dword(engine))
 			continue;
 
-		if (intel_gt_pm_wait_for_idle(gt)) {
+		if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
 			err = -EBUSY;
 			break;
 		}
@@ -394,7 +394,7 @@ static int live_engine_pm(void *arg)
 	 * failures are reported directly, but if we mess up lockdep should
 	 * tell us.
 	 */
-	if (intel_gt_pm_wait_for_idle(gt)) {
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
 		gt_err(gt, "Unable to flush GT pm before test\n");
 		return -EBUSY;
 	}
@@ -439,7 +439,7 @@ static int live_engine_pm(void *arg)
 			}
 
 			/* gt wakeref is async (deferred to workqueue) */
-			if (intel_gt_pm_wait_for_idle(gt)) {
+			if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
 				gt_err(gt, "GT failed to idle\n");
 				return -EINVAL;
 			}

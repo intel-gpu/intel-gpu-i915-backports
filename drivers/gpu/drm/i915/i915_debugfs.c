@@ -106,178 +106,6 @@ static int sriov_info_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-static char get_pin_mapped_flag(struct drm_i915_gem_object *obj)
-{
-	return obj->mm.mapping ? 'M' : ' ';
-}
-
-static const char *
-stringify_page_sizes(unsigned int page_sizes, char *buf, size_t len)
-{
-	size_t x = 0;
-
-	switch (page_sizes) {
-	case 0:
-		return "";
-	case I915_GTT_PAGE_SIZE_4K:
-		return "4K";
-	case I915_GTT_PAGE_SIZE_64K:
-		return "64K";
-	case I915_GTT_PAGE_SIZE_2M:
-		return "2M";
-	default:
-		if (!buf)
-			return "M";
-
-		if (page_sizes & I915_GTT_PAGE_SIZE_2M)
-			x += snprintf(buf + x, len - x, "2M, ");
-		if (page_sizes & I915_GTT_PAGE_SIZE_64K)
-			x += snprintf(buf + x, len - x, "64K, ");
-		if (page_sizes & I915_GTT_PAGE_SIZE_4K)
-			x += snprintf(buf + x, len - x, "4K, ");
-		buf[x-2] = '\0';
-
-		return buf;
-	}
-}
-
-static const char *stringify_vma_type(const struct i915_vma *vma)
-{
-	if (i915_vma_is_ggtt(vma))
-		return "ggtt";
-
-	if (i915_vma_is_dpt(vma))
-		return "dpt";
-
-	return "ppgtt";
-}
-
-static const char *i915_cache_level_str(struct drm_i915_gem_object *obj)
-{
-	struct drm_i915_private *i915 = obj_to_i915(obj);
-	int idx = i915_gem_object_pat_index(obj);
-
-	if (IS_METEORLAKE(i915)) {
-		switch (idx) {
-		case 0: return " WB";
-		case 1: return " WT";
-		case 2: return " UC";
-		case 3: return " WB (1-Way Coh)";
-		case 4: return " WB (2-Way Coh)";
-		default: return " not defined";
-		}
-	} else if (IS_PONTEVECCHIO(i915)) {
-		switch (idx) {
-		case 0: return " UC";
-		case 1: return " WC";
-		case 2: return " WT";
-		case 3: return " WB";
-		case 4: return " WT (CLOS1)";
-		case 5: return " WB (CLOS1)";
-		case 6: return " WT (CLOS2)";
-		case 7: return " WT (CLOS2)";
-		default: return " not defined";
-		}
-	} else {
-		switch (idx) {
-		case 0: return " WB";
-		case 1: return " WC";
-		case 2: return " WT";
-		case 3: return " UC";
-		default: return " not defined";
-		}
-	}
-}
-
-void
-i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
-{
-	struct i915_vma *vma;
-	int pin_count = 0;
-
-	seq_printf(m, "%pK: %c %8zdKiB %s%s",
-		   &obj->base,
-		   get_pin_mapped_flag(obj),
-		   obj->base.size / 1024,
-		   i915_cache_level_str(obj),
-		   obj->mm.madv == I915_MADV_DONTNEED ? " purgeable" : "");
-	if (obj->base.name)
-		seq_printf(m, " (name: %d)", obj->base.name);
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
-		if (!drm_mm_node_allocated(&vma->node))
-			continue;
-
-		spin_unlock(&obj->vma.lock);
-
-		if (i915_vma_is_pinned(vma))
-			pin_count++;
-
-		seq_printf(m, " (%s/%u offset: %08llx, size: %08llx, pages: %s",
-			   stringify_vma_type(vma),
-			   vma->vm->gt->info.id,
-			   i915_vma_offset(vma),
-			   i915_vma_size(vma),
-			   stringify_page_sizes(vma->page_sizes, NULL, 0));
-		if (i915_vma_is_ggtt(vma) || i915_vma_is_dpt(vma)) {
-			switch (vma->ggtt_view.type) {
-			case I915_GGTT_VIEW_NORMAL:
-				seq_puts(m, ", normal");
-				break;
-
-			case I915_GGTT_VIEW_PARTIAL:
-				seq_printf(m, ", partial [%08llx+%x]",
-					   vma->ggtt_view.partial.offset << PAGE_SHIFT,
-					   vma->ggtt_view.partial.size << PAGE_SHIFT);
-				break;
-
-			case I915_GGTT_VIEW_ROTATED:
-				seq_printf(m, ", rotated [(%ux%u, src_stride=%u, dst_stride=%u, offset=%u), (%ux%u, src_stride=%u, dst_stride=%u, offset=%u)]",
-					   vma->ggtt_view.rotated.plane[0].width,
-					   vma->ggtt_view.rotated.plane[0].height,
-					   vma->ggtt_view.rotated.plane[0].src_stride,
-					   vma->ggtt_view.rotated.plane[0].dst_stride,
-					   vma->ggtt_view.rotated.plane[0].offset,
-					   vma->ggtt_view.rotated.plane[1].width,
-					   vma->ggtt_view.rotated.plane[1].height,
-					   vma->ggtt_view.rotated.plane[1].src_stride,
-					   vma->ggtt_view.rotated.plane[1].dst_stride,
-					   vma->ggtt_view.rotated.plane[1].offset);
-				break;
-
-			case I915_GGTT_VIEW_REMAPPED:
-				seq_printf(m, ", remapped [(%ux%u, src_stride=%u, dst_stride=%u, offset=%u), (%ux%u, src_stride=%u, dst_stride=%u, offset=%u)]",
-					   vma->ggtt_view.remapped.plane[0].width,
-					   vma->ggtt_view.remapped.plane[0].height,
-					   vma->ggtt_view.remapped.plane[0].src_stride,
-					   vma->ggtt_view.remapped.plane[0].dst_stride,
-					   vma->ggtt_view.remapped.plane[0].offset,
-					   vma->ggtt_view.remapped.plane[1].width,
-					   vma->ggtt_view.remapped.plane[1].height,
-					   vma->ggtt_view.remapped.plane[1].src_stride,
-					   vma->ggtt_view.remapped.plane[1].dst_stride,
-					   vma->ggtt_view.remapped.plane[1].offset);
-				break;
-
-			default:
-				MISSING_CASE(vma->ggtt_view.type);
-				break;
-			}
-		}
-		seq_puts(m, ")");
-
-		spin_lock(&obj->vma.lock);
-	}
-	rcu_read_unlock();
-
-	seq_printf(m, " (pinned x %d)", pin_count);
-	if (i915_gem_object_is_stolen(obj))
-		seq_printf(m, " (stolen: %08llx)", obj->stolen->start);
-	if (i915_gem_object_is_framebuffer(obj))
-		seq_printf(m, " (fb)");
-}
-
 static void show_xfer(struct seq_file *m,
 		      struct intel_gt *gt,
 		      const char *name,
@@ -304,7 +132,7 @@ static int i915_gem_object_info_show(struct seq_file *m, void *data)
 	struct intel_gt *gt;
 
 	for_each_memory_region(mr, i915, id)
-		intel_memory_region_print(mr, 0, &p);
+		intel_memory_region_print(mr, 0, &p, 0);
 
 	for_each_gt(gt, i915, id) {
 		intel_wakeref_t wf;
@@ -415,26 +243,6 @@ static int gpu_state_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int i915_gpu_info_open(struct inode *inode, struct file *file)
-{
-	struct drm_i915_private *i915 = inode->i_private;
-	struct i915_gpu_coredump *gpu;
-	intel_wakeref_t wakeref;
-
-	gpu = NULL;
-	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
-		gpu = i915_gpu_coredump(to_gt(i915), ALL_ENGINES, CORE_DUMP_FLAG_NONE);
-
-	if (IS_ERR(gpu))
-		return PTR_ERR(gpu);
-
-	file->private_data = gpu;
-	return 0;
-}
-
-DEFINE_I915_RAW_ATTRIBUTE(i915_gpu_info_fops, i915_gpu_info_open,
-			  gpu_state_release, gpu_state_read,
-			  NULL, default_llseek);
 static ssize_t
 i915_error_state_write(struct file *filp,
 		       const char __user *ubuf,
@@ -589,48 +397,17 @@ static int i915_runtime_pm_status_show(struct seq_file *m, void *unused)
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM)) {
 		struct drm_printer p = drm_seq_file_printer(m);
 
-		print_intel_runtime_pm_wakeref(&dev_priv->runtime_pm, &p);
+		print_intel_runtime_pm_wakeref(&dev_priv->runtime_pm, &p, 0);
 	}
 
 	return 0;
 }
 
-static int i915_engine_info_show(struct seq_file *m, void *unused)
+static int i915_gpu_info_show(struct seq_file *m, void *unused)
 {
-	struct drm_i915_private *i915 = m->private;
-	struct intel_engine_cs *engine;
-	intel_wakeref_t wakeref;
-	struct drm_printer p;
-	struct intel_gt *gt;
-	int id;
+	struct drm_printer p = drm_seq_file_printer(m);
 
-	wakeref = intel_runtime_pm_get(&i915->runtime_pm);
-
-	for_each_gt(gt, i915, id) {
-		seq_printf(m, "GT%d awake? %s [%d], %llums\n",
-			   gt->info.id,
-			   str_yes_no(intel_gt_pm_is_awake(gt)),
-			   atomic_read(&gt->wakeref.count),
-			   ktime_to_ms(intel_gt_get_awake_time(gt)));
-		seq_printf(m, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
-			   READ_ONCE(gt->stats.irq.count),
-			   READ_ONCE(gt->stats.irq.total),
-			   ewma_irq_time_read(&gt->stats.irq.avg),
-			   READ_ONCE(gt->stats.irq.max));
-		seq_printf(m, "CS timestamp frequency: %u Hz, %d ns\n",
-			   gt->clock_frequency,
-			   gt->clock_period_ns);
-	}
-
-	p = drm_seq_file_printer(m);
-	for_each_uabi_engine(engine, i915)
-		intel_engine_dump(engine, &p, "%s\n", engine->name);
-
-	for_each_gt(gt, i915, id)
-		intel_gt_show_timelines(gt, &p, i915_request_show_with_schedule);
-
-	intel_runtime_pm_put(&i915->runtime_pm, wakeref);
-
+	i915_show(m->private, &p, 0);
 	return 0;
 }
 
@@ -870,8 +647,6 @@ gt_idle(struct intel_gt *gt, u64 val)
 {
 	int ret;
 
-	i915_sriov_vf_migration_check(gt->i915, true);
-
 	if (val & (DROP_RETIRE | DROP_IDLE))
 		intel_gt_retire_requests(gt);
 
@@ -880,7 +655,7 @@ gt_idle(struct intel_gt *gt, u64 val)
 	 * We need a better mechanism to verify this on SR-IOV.
 	 */
 	if (val & DROP_IDLE && !has_sriov_wa(gt->i915)) {
-		ret = intel_gt_pm_wait_for_idle(gt);
+		ret = intel_gt_pm_wait_for_idle(gt, 30 * HZ);
 		if (ret)
 			return ret;
 
@@ -898,13 +673,13 @@ static void reset_active(struct intel_gt *gt)
 	intel_wakeref_t wf;
 	long timeout;
 
-	i915_sriov_vf_migration_check(gt->i915, true);
+	wf = intel_gt_pm_get_if_awake(gt);
+	if (!wf)
+		return;
 
 	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT);
 	if (intel_gt_retire_requests_timeout(gt, &timeout))
-		return;
-
-	wf = intel_gt_pm_get(gt);
+		goto out;
 
 	/*
 	 * Wait for the pulse to clear any stuck work along each engine
@@ -923,18 +698,21 @@ static void reset_active(struct intel_gt *gt)
 	}
 
 	timeout = msecs_to_jiffies(I915_IDLE_ENGINES_TIMEOUT + pt + hb);
-	if (!intel_gt_retire_requests_timeout(gt, &timeout))
+	if (intel_gt_wait_for_idle(gt, timeout) == -ETIME)
 		intel_gt_set_wedged(gt);
 
+out:
 	intel_gt_pm_put(gt, wf);
+
+	intel_gt_retire_requests(gt);
+	if (!has_sriov_wa(gt->i915) && intel_gt_pm_wait_for_idle(gt, 30 * HZ))
+		intel_gt_set_wedged(gt);
 }
 
 static int
 gt_drop_caches(struct intel_gt *gt, u64 val)
 {
 	int ret;
-
-	i915_sriov_vf_migration_check(gt->i915, true);
 
 	if (val & DROP_RETIRE)
 		intel_gt_retire_requests(gt);
@@ -956,33 +734,12 @@ gt_drop_caches(struct intel_gt *gt, u64 val)
 	return 0;
 }
 
-static int
-__i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
+static void shrink_smem(struct drm_i915_private *i915, u64 val)
 {
 	intel_wakeref_t wakeref;
-	struct intel_gt *gt;
-	unsigned int i;
-	int ret;
 
-	/* Reset all GT first before doing any waits/flushes */
-	if (val & DROP_RESET_ACTIVE) {
-		for_each_gt(gt, i915, i)
-			reset_active(gt);
-	}
-
-	/* Flush all the active requests across both GT ... */
-	for_each_gt(gt, i915, i) {
-		ret = gt_drop_caches(gt, val);
-		if (ret)
-			return ret;
-	}
-
-	/* ... before waiting for idle as there may be cross-gt wakerefs. */
-	for_each_gt(gt, i915, i) {
-		ret = gt_idle(gt, val);
-		if (ret)
-			return ret;
-	}
+	if (!(val & (DROP_BOUND | DROP_UNBOUND | DROP_SHRINK_ALL)))
+		return;
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
 		unsigned int noreclaim_state;
@@ -1001,6 +758,36 @@ __i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
 
 		fs_reclaim_release(GFP_KERNEL);
 		memalloc_noreclaim_restore(noreclaim_state);
+	}
+}
+
+static int
+__i915_drop_caches_set(struct drm_i915_private *i915, u64 val)
+{
+	struct intel_gt *gt;
+	unsigned int i;
+	int ret;
+
+	/* Reset all GT first before doing any waits/flushes */
+	if (val & DROP_RESET_ACTIVE) {
+		for_each_gt(gt, i915, i)
+			reset_active(gt);
+	}
+
+	/* Flush all the active requests across both GT ... */
+	for_each_gt(gt, i915, i) {
+		ret = gt_drop_caches(gt, val);
+		if (ret)
+			return ret;
+	}
+
+	shrink_smem(i915, val);
+
+	/* ... before waiting for idle as there may be cross-gt wakerefs. */
+	for_each_gt(gt, i915, i) {
+		ret = gt_idle(gt, val);
+		if (ret)
+			return ret;
 	}
 
 	if (val & DROP_RCU)
@@ -1165,7 +952,7 @@ DEFINE_I915_SHOW_ATTRIBUTE(i915_capabilities);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_gem_object_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_frequency_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_runtime_pm_status);
-DEFINE_I915_SHOW_ATTRIBUTE(i915_engine_info);
+DEFINE_I915_SHOW_ATTRIBUTE(i915_gpu_info);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_sseu_status);
 DEFINE_I915_SHOW_ATTRIBUTE(i915_rps_boost_info);
 DEFINE_I915_SHOW_ATTRIBUTE(sriov_info);
@@ -1179,7 +966,7 @@ static struct i915_debugfs_file i915_debugfs_list[] = {
 	{"i915_gem_objects", &i915_gem_object_info_fops, NULL},
 	{"i915_frequency_info", &i915_frequency_info_fops, NULL},
 	{"i915_runtime_pm_status", &i915_runtime_pm_status_fops, NULL},
-	{"i915_engine_info", &i915_engine_info_fops, NULL},
+	{"i915_gpu_info", &i915_gpu_info_fops, NULL},
 	{"i915_sseu_status", &i915_sseu_status_fops, NULL},
 	{"i915_rps_boost_info", &i915_rps_boost_info_fops, NULL},
 	{"i915_sriov_info", &sriov_info_fops, NULL},
@@ -1191,7 +978,7 @@ static struct i915_debugfs_file i915_debugfs_list[] = {
 static struct i915_debugfs_file i915_vf_debugfs_list[] = {
 	{"i915_capabilities", &i915_capabilities_fops, NULL},
 	{"i915_gem_objects", &i915_gem_object_info_fops, NULL},
-	{"i915_engine_info", &i915_engine_info_fops, NULL},
+	{"i915_gpu_info", &i915_gpu_info_fops, NULL},
 	{"i915_sriov_info", &sriov_info_fops, NULL},
 };
 
@@ -1201,7 +988,6 @@ static struct i915_debugfs_file i915_debugfs_files[] = {
 	{"i915_gem_drop_caches", &i915_drop_caches_fops},
 #if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
 	{"i915_error_state", &i915_error_state_fops},
-	{"i915_gpu_info", &i915_gpu_info_fops},
 #endif
 	{"lmemtest", &lmemtest_fops},
 };

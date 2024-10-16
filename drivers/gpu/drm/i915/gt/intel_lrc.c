@@ -17,6 +17,7 @@
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gt_regs.h"
+#include "intel_gt_print.h"
 #include "intel_lrc.h"
 #include "intel_lrc_reg.h"
 #include "intel_ring.h"
@@ -1081,8 +1082,9 @@ static bool lrc_check_regs(const struct intel_context *ce,
 	const struct intel_ring *ring = ce->ring;
 	u32 *regs = ce->lrc_reg_state;
 	bool valid = true;
-	int x;
+	int x, srcu;
 
+	gt_ggtt_address_read_lock(engine->gt, &srcu);
 	if (regs[CTX_RING_START] != i915_ggtt_offset(ring->vma)) {
 		pr_err("%s: context submitted with incorrect RING_START [%08x], expected %08x\n",
 		       engine->name,
@@ -1111,6 +1113,7 @@ static bool lrc_check_regs(const struct intel_context *ce,
 		valid = false;
 	}
 
+	gt_ggtt_address_read_unlock(engine->gt, srcu);
 	return valid;
 }
 
@@ -1148,18 +1151,18 @@ check_redzone(struct intel_context *ce)
 	    !__check_red_cl(vaddr + ALIGN_DOWN(lower_32_bits(now) % len, 64))) {
 		struct drm_printer p = drm_debug_printer(__func__);
 
-		drm_err_once(&engine->i915->drm,
-			     "%s context redzone overwritten @ %zu!\n",
-			     engine->name,
-			     memchr_inv(vaddr, CONTEXT_REDZONE, len) - vaddr);
+		gt_err_once(engine->gt,
+			    "%s context redzone overwritten @ %zu!\n",
+			    engine->name,
+			    memchr_inv(vaddr, CONTEXT_REDZONE, len) - vaddr);
 		hexdump(&p, vaddr, REDZONE_KTIME);
 		*last = KTIME_MAX; /* never check again */
 	}
 
 	if (!lrc_check_regs(ce, engine)) {
-		drm_err_once(&engine->i915->drm,
-			     "%s: Invalid lrc state found during submission\n",
-			     engine->name);
+		gt_err_once(engine->gt,
+			    "%s: Invalid lrc state found during submission\n",
+			    engine->name);
 		*last = KTIME_MAX;
 	}
 }
@@ -1408,6 +1411,7 @@ err_vma:
 void lrc_reset(struct intel_context *ce)
 {
 	void *vaddr;
+	int srcu;
 
 	GEM_BUG_ON(!intel_context_is_pinned(ce));
 
@@ -1418,6 +1422,7 @@ void lrc_reset(struct intel_context *ce)
 
 	/* Scrub away the garbage */
 	__clear_bit(CONTEXT_VALID_BIT, &ce->flags);
+	gt_ggtt_address_read_lock(ce->engine->gt, &srcu);
 	lrc_init_state(ce, ce->engine, vaddr);
 
 	/*
@@ -1429,6 +1434,7 @@ void lrc_reset(struct intel_context *ce)
 	intel_timeline_reset_seqno(ce->timeline);
 
 	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
+	gt_ggtt_address_read_unlock(ce->engine->gt, srcu);
 }
 
 int

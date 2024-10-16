@@ -99,15 +99,13 @@ static int i915_gem_framebuffer_info(struct seq_file *m, void *data)
 #ifdef CPTCFG_DRM_FBDEV_EMULATION
 	fbdev_fb = intel_fbdev_framebuffer(dev_priv->fbdev);
 	if (fbdev_fb) {
-		seq_printf(m, "fbcon size: %d x %d, depth %d, %d bpp, modifier 0x%llx, refcount %d, obj ",
+		seq_printf(m, "fbcon size: %d x %d, depth %d, %d bpp, modifier 0x%llx, refcount %d\n",
 			   fbdev_fb->base.width,
 			   fbdev_fb->base.height,
 			   fbdev_fb->base.format->depth,
 			   fbdev_fb->base.format->cpp[0] * 8,
 			   fbdev_fb->base.modifier,
 			   drm_framebuffer_read_refcount(&fbdev_fb->base));
-		i915_debugfs_describe_obj(m, intel_fb_obj(&fbdev_fb->base));
-		seq_putc(m, '\n');
 	}
 #endif
 
@@ -117,15 +115,13 @@ static int i915_gem_framebuffer_info(struct seq_file *m, void *data)
 		if (fb == fbdev_fb)
 			continue;
 
-		seq_printf(m, "user size: %d x %d, depth %d, %d bpp, modifier 0x%llx, refcount %d, obj ",
+		seq_printf(m, "user size: %d x %d, depth %d, %d bpp, modifier 0x%llx, refcount %d\n",
 			   fb->base.width,
 			   fb->base.height,
 			   fb->base.format->depth,
 			   fb->base.format->cpp[0] * 8,
 			   fb->base.modifier,
 			   drm_framebuffer_read_refcount(&fb->base));
-		i915_debugfs_describe_obj(m, intel_fb_obj(&fb->base));
-		seq_putc(m, '\n');
 	}
 	mutex_unlock(&dev->mode_config.fb_lock);
 

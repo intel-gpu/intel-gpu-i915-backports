@@ -24,6 +24,10 @@
 #define __BACKPORT_SCATTERLIST_H
 #include_next <linux/scatterlist.h>
 
+#ifdef BPM_SG_FREE_TABLE_ARG_NOT_PRESENT
+#define __sg_free_table(a,b,c,d,e) __sg_free_table(a,b,c,d)
+#endif
+
 #if LINUX_VERSION_IS_LESS(3,7,0)
 int sg_nents(struct scatterlist *sg);
 #endif

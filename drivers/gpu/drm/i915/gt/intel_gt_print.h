@@ -10,26 +10,34 @@
 #include "intel_gt_types.h"
 #include "i915_utils.h"
 
+#define __gt_dev__(_gt) ((_gt)->i915->drm.dev)
+
 #define gt_err(_gt, _fmt, ...) \
-	drm_err(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_err(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+
+#define gt_err_once(_gt, _fmt, ...) \
+	dev_err_once(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_warn(_gt, _fmt, ...) \
-	drm_warn(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_warn(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_notice(_gt, _fmt, ...) \
-	drm_notice(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_notice(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_info(_gt, _fmt, ...) \
-	drm_info(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_info(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+
+#define gt_info_once(_gt, _fmt, ...) \
+	dev_info_once(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_dbg(_gt, _fmt, ...) \
-	drm_dbg(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_dbg(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_err_ratelimited(_gt, _fmt, ...) \
-	drm_err_ratelimited(&(_gt)->i915->drm, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_err_ratelimited(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_notice_ratelimited(_gt, _fmt, ...) \
-	dev_notice_ratelimited((_gt)->i915->drm.dev, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	dev_notice_ratelimited(__gt_dev__(_gt), "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_probe_error(_gt, _fmt, ...) \
 	do { \
@@ -40,15 +48,15 @@
 	} while (0)
 
 #define gt_WARN(_gt, _condition, _fmt, ...) \
-	drm_WARN(&(_gt)->i915->drm, _condition, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	WARN(_condition, "%s %s: GT%u:" _fmt, dev_driver_string(__gt_dev__(_gt)), dev_name(__gt_dev__(_gt)), (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_WARN_ONCE(_gt, _condition, _fmt, ...) \
-	drm_WARN_ONCE(&(_gt)->i915->drm, _condition, "GT%u: " _fmt, (_gt)->info.id, ##__VA_ARGS__)
+	WARN_ONCE(_condition, "%s %s: GT%u:" _fmt, dev_driver_string(__gt_dev__(_gt)), dev_name(__gt_dev__(_gt)), (_gt)->info.id, ##__VA_ARGS__)
 
 #define gt_WARN_ON(_gt, _condition) \
-	gt_WARN(_gt, _condition, "%s", "gt_WARN_ON(" __stringify(_condition) ")")
+	gt_WARN(_gt, _condition, "%s", "WARN_ON(" __stringify(_condition) ")")
 
 #define gt_WARN_ON_ONCE(_gt, _condition) \
-	gt_WARN_ONCE(_gt, _condition, "%s", "gt_WARN_ONCE(" __stringify(_condition) ")")
+	gt_WARN_ONCE(_gt, _condition, "%s", "WARN_ON(" __stringify(_condition) ")")
 
 #endif /* __INTEL_GT_PRINT_H__ */

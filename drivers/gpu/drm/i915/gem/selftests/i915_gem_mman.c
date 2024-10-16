@@ -15,7 +15,6 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 
-#include "huge_gem_object.h"
 #include "i915_selftest.h"
 #include "selftests/i915_random.h"
 #include "selftests/igt_flush_test.h"
@@ -611,8 +610,7 @@ retry:
 
 			pr_err("%s(%s, %s): Failed to execute batch\n",
 			       __func__, engine->name, obj->mm.region.mem->name);
-			intel_engine_dump(engine, &p,
-					  "%s\n", engine->name);
+			intel_engine_dump(engine, &p, 0);
 
 			intel_gt_set_wedged(engine->gt);
 			err = -EIO;

@@ -131,7 +131,7 @@ static int __live_idle_pulse(struct intel_engine_cs *engine,
 		struct drm_printer m = drm_err_printer("pulse");
 
 		pr_err("%s: no heartbeat pulse?\n", engine->name);
-		intel_engine_dump(engine, &m, "%s", engine->name);
+		intel_engine_dump(engine, &m, 0);
 
 		err = -ETIME;
 		goto out;

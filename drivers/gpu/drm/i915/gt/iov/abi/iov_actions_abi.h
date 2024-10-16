@@ -118,4 +118,46 @@
 #define VF2PF_QUERY_RUNTIME_RESPONSE_DATAn_REG_OFFSETx	GUC_HXG_RESPONSE_MSG_n_DATAn
 #define VF2PF_QUERY_RUNTIME_RESPONSE_DATAn_REG_VALUEx	GUC_HXG_RESPONSE_MSG_n_DATAn
 
+/**
+ * DOC: VF2PF_TELEMETRY_REPORT
+ *
+ * This `IOV Message`_ is used by the VF driver to report it's telemetry data.
+ *
+ *  +---+-------+--------------------------------------------------------------+
+ *  |   | Bits  | Description                                                  |
+ *  +===+=======+==============================================================+
+ *  | 0 |    31 | ORIGIN = GUC_HXG_ORIGIN_HOST_                                |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 30:28 | TYPE = GUC_HXG_TYPE_EVENT_                                   |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   | 27:16 | DATA0 = **COUNT** - number of KLVs included in the report    |
+ *  |   +-------+--------------------------------------------------------------+
+ *  |   |  15:0 | ACTION = _`IOV_ACTION_VF2PF_TELEMETRY_REPORT` = 0x0201       |
+ *  +---+-------+--------------------------------------------------------------+
+ *  | 1 |  31:0 |                                                              |
+ *  +---+-------+                                                              |
+ *  |   |       | DATAn = **DATA** - set of `IOV Telemetry KLVs`_              |
+ *  +---+-------+                                                              |
+ *  | n |  31:0 |                                                              |
+ *  +---+-------+--------------------------------------------------------------+
+ */
+#define IOV_ACTION_VF2PF_TELEMETRY_REPORT		0x0201
+
+#define VF2PF_TELEMETRY_REPORT_EVENT_MSG_MIN_LEN	(GUC_HXG_EVENT_MSG_MIN_LEN + 2u)
+#define VF2PF_TELEMETRY_REPORT_EVENT_MSG_MAX_LEN	GUC2PF_RELAY_FROM_VF_EVENT_MSG_NUM_RELAY_DATA
+#define VF2PF_TELEMETRY_REPORT_EVENT_MSG_0_COUNT	GUC_HXG_EVENT_MSG_0_DATA0
+#define VF2PF_TELEMETRY_REPORT_EVENT_MSG_DATAn		GUC_HXG_EVENT_MSG_n_DATAn
+
+/**
+ * DOC: IOV Telemetry KLVs
+ *
+ * `IOV KLV`_ keys available for use with VF2PF_TELEMETRY_REPORT_.
+ *
+ * _`IOV_KLV_TELEMETRY_LMEM_ALLOC` : 0x1000
+ *      The 64-bit size (in bytes) of the device physical memory
+ *      that has been allocated by the driver.
+ */
+#define IOV_KLV_TELEMETRY_LMEM_ALLOC_KEY		0x1000u
+#define IOV_KLV_TELEMETRY_LMEM_ALLOC_LEN		2u
+
 #endif /* _ABI_IOV_ACTIONS_ABI_H_ */

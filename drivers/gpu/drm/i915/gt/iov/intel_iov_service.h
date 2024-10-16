@@ -19,6 +19,9 @@ void intel_iov_service_release(struct intel_iov *iov);
 int intel_iov_service_process_msg(struct intel_iov *iov, u32 origin,
 				  u32 relay_id, const u32 *msg, u32 len);
 
+int intel_iov_service_pf_process_event(struct intel_iov *iov, u32 origin,
+				       u32 relay_id, const u32 *msg, u32 len);
+
 int intel_iov_service_process_mmio_relay(struct intel_iov *iov, const u32 *msg,
 					 u32 len);
 

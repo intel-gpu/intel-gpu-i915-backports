@@ -88,9 +88,6 @@ static int lmem_suspend(struct drm_i915_private *i915)
 			if (!i915_gem_object_has_pinned_pages(obj))
 				continue;
 
-			if (obj->flags & I915_BO_ALLOC_VOLATILE)
-				continue;
-
 			/* Skip dead objects, let their pages rot */
 			if (!kref_get_unless_zero(&obj->base.refcount))
 				continue;
@@ -111,6 +108,7 @@ static int lmem_suspend(struct drm_i915_private *i915)
 static int lmem_resume(struct drm_i915_private *i915)
 {
 	struct intel_memory_region *mem;
+	int err = 0;
 	int id;
 
 	for_each_memory_region(mem, i915, id) {
@@ -127,8 +125,6 @@ static int lmem_resume(struct drm_i915_private *i915)
 
 		/* singlethreaded resume; list immutable */
 		do list_for_each_entry(obj, *phase, mm.region.link) {
-			int err;
-
 			if (!obj->swapto ||
 			    !i915_gem_object_has_pinned_pages(obj))
 				continue;
@@ -137,16 +133,14 @@ static int lmem_resume(struct drm_i915_private *i915)
 				continue;
 
 			i915_gem_object_lock(obj, NULL);
-			err = perma_pinned_swapin(obj);
+			err |= perma_pinned_swapin(obj);
 			i915_gem_object_unlock(obj);
 
 			i915_gem_object_put(obj);
-			if (err)
-				return err;
 		} while (*++phase);
 	}
 
-	return 0;
+	return err;
 }
 
 static void suspend_ppgtt_mappings(struct drm_i915_private *i915)

@@ -10,6 +10,22 @@
 #include "i915_sriov_sysfs_types.h"
 
 /**
+ * struct i915_sriov_telemetry_data - telemetry data of particular VF.
+ * @lmem_alloc_size: lmem size that has been allocated by VF.
+ */
+struct i915_sriov_telemetry_data {
+	u64 lmem_alloc_size;
+};
+
+/**
+ * struct i915_sriov_telemetry_pf - PF telemetry data.
+ * @data: pointer to array containing telemetry data of all VFs.
+ */
+struct i915_sriov_telemetry_pf {
+	struct i915_sriov_telemetry_data *data;
+};
+
+/**
  * struct i915_sriov_pf - i915 SR-IOV PF data.
  * @__status: Status of the PF. Don't access directly!
  * @device_vfs: Number of VFs supported by the device.
@@ -28,6 +44,24 @@ struct i915_sriov_pf {
 
 	/** @disable_auto_provisioning: flag to control VFs auto-provisioning */
 	bool disable_auto_provisioning;
+
+	/** @telemetry: PF telemetry data */
+	struct i915_sriov_telemetry_pf telemetry;
+};
+
+/**
+ * struct i915_sriov_telemetry_vf - VF telemetry data.
+ * @rate: telemetry rate.
+ * @worker: worker for sending telemetry data.
+ * @timer: timer for sending telemetry data periodically.
+ */
+struct i915_sriov_telemetry_vf {
+	u32 rate;
+	struct work_struct worker;
+	struct timer_list timer;
+	struct cached_data {
+		u64 lmem_total_size;
+	} cached;
 };
 
 /**
@@ -37,6 +71,10 @@ struct i915_sriov_vf {
 
 	/** @migration_worker: migration recovery worker */
 	struct work_struct migration_worker;
+	unsigned long migration_gt_flags;
+
+	/** @telemetry: VF telemetry data */
+	struct i915_sriov_telemetry_vf telemetry;
 };
 
 /**

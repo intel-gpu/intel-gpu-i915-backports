@@ -118,7 +118,6 @@
 #include "pvc_ras.h"
 
 static const struct drm_driver i915_drm_driver;
-static const struct drm_driver i915_vf_drm_driver;
 
 static void i915_release_bridge_dev(struct drm_device *dev,
 				    void *bridge)
@@ -317,25 +316,6 @@ intel_teardown_mchbar(struct drm_i915_private *dev_priv)
 		release_resource(&dev_priv->mch_res);
 }
 
-static struct i915_sched_engine *
-create_sched_engine(int class,
-		    struct workqueue_struct *wq,
-		    const struct cpumask *cpumask)
-{
-	struct i915_sched_engine *se;
-
-	se = i915_sched_engine_create(class);
-	if (!se)
-		return NULL;
-
-	se->wq = wq;
-	se->cpumask = cpumask;
-	se->num_cpus = cpumask_weight(cpumask);
-	se->cpu = __i915_first_online_cpu(cpumask);
-
-	return se;
-}
-
 static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 {
 	/*
@@ -353,18 +333,16 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 		goto out_err;
 
 	dev_priv->sched =
-		create_sched_engine(3, dev_priv->wq, cpumask_of_i915(dev_priv));
+		i915_sched_engine_create_cpu(3, dev_priv->wq, cpumask_of_i915(dev_priv));
 	if (!dev_priv->sched)
 		goto out_free_wq;
 
-	dev_priv->mm.wq = alloc_workqueue("i915-mm", WQ_UNBOUND | WQ_CPU_INTENSIVE, 0);
+	dev_priv->mm.wq = alloc_workqueue("i915-mm", WQ_HIGHPRI | WQ_CPU_INTENSIVE, 0);
 	if (!dev_priv->mm.wq)
 		goto out_free_sched;
 
 	dev_priv->mm.sched =
-		create_sched_engine(4,
-				    dev_priv->mm.wq,
-				    cpumask_of_i915(dev_priv));
+		i915_sched_engine_create_cpu(4, dev_priv->mm.wq, cpumask_of_i915(dev_priv));
 	if (!dev_priv->mm.sched)
 		goto out_free_mm_wq;
 
@@ -657,132 +635,6 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915)
 }
 
 /*
- * i915_userspace_lock_init - initialize the SRCU for user space blocking
- * @i915: i915 device instance struct
- */
-static void i915_userspace_lock_init(struct drm_i915_private *i915)
-{
-	init_waitqueue_head(&i915->userspace.queue);
-	init_srcu_struct(&i915->userspace.blocked_srcu);
-}
-
-/*
- * i915_userspace_lock_fini - finalize the SRCU for user space blocking
- * @i915: i915 device instance struct
- */
-static void i915_userspace_lock_fini(struct drm_i915_private *i915)
-{
-	cleanup_srcu_struct(&i915->userspace.blocked_srcu);
-}
-
-/**
- * i915_userspace_blocking_begin - start blocking the user space
- * @i915: i915 device instance struct
- */
-void i915_userspace_blocking_begin(struct drm_i915_private *i915)
-{
-	/*
-	 * We are just setting the bit, without the usual checks whether it is
-	 * already set. Such checks are unneccessary if the blocked code is
-	 * running in a worker and the caller function just schedules it.
-	 * But the worker must be aware of re-schedules and know when to skip
-	 * finishing the locking.
-	 */
-	set_bit(I915_USERLAND_BLOCKED, &i915->userspace.flags);
-	wake_up_all(&i915->userspace.queue);
-}
-
-/**
- * i915_userspace_blocking_secure - secure the user space blocking which started earlier
- * @i915: i915 device instance struct
- */
-void i915_userspace_blocking_secure(struct drm_i915_private *i915)
-{
-	/*
-	 * After switching our I915_USERLAND_BLOCKED bit, we should wait for all
-	 * related critical sections to finish. But we cannot do that just after
-	 * that switch, as the switching may (and often will) happen in atomic
-	 * context. This call should be done somewhere else, ie. later in a worker.
-	 */
-	synchronize_rcu_expedited();
-	synchronize_srcu(&i915->userspace.blocked_srcu);
-}
-
-/**
- * i915_userspace_blocking_finish - finish the user space blocking
- * @i915: i915 device instance struct
- */
-void i915_userspace_blocking_finish(struct drm_i915_private *i915)
-{
-	clear_bit_unlock(I915_USERLAND_BLOCKED, &i915->userspace.flags);
-	smp_mb__after_atomic();
-	wake_up_all(&i915->userspace.queue);
-}
-
-int i915_userspace_is_blocked(struct drm_i915_private *i915)
-{
-	return test_bit(I915_USERLAND_BLOCKED, &i915->userspace.flags);
-}
-
-static int i915_userspace_trylock(struct drm_i915_private *i915, int *srcu)
-{
-	might_lock(&i915->userspace.blocked_srcu);
-	might_sleep();
-
-	rcu_read_lock();
-	while (test_bit(I915_USERLAND_BLOCKED, &i915->userspace.flags)) {
-		rcu_read_unlock();
-
-		if (wait_event_interruptible(i915->userspace.queue,
-					     !test_bit(I915_USERLAND_BLOCKED,
-						       &i915->userspace.flags)))
-			return -EINTR;
-
-		rcu_read_lock();
-	}
-	*srcu = srcu_read_lock(&i915->userspace.blocked_srcu);
-	rcu_read_unlock();
-
-	return 0;
-}
-
-int i915_userspace_wait_unlock(struct drm_i915_private *i915)
-{
-	might_sleep();
-
-	rcu_read_lock();
-	while (test_bit(I915_USERLAND_BLOCKED, &i915->userspace.flags)) {
-		rcu_read_unlock();
-
-		if (wait_event_interruptible(i915->userspace.queue,
-					     !test_bit(I915_USERLAND_BLOCKED,
-						       &i915->userspace.flags)))
-			return -EINTR;
-
-		rcu_read_lock();
-	}
-	rcu_read_unlock();
-
-	return 0;
-}
-
-static int i915_drm_userspace_trylock(struct drm_device *dev, int *srcu)
-{
-	return i915_userspace_trylock(to_i915(dev), srcu);
-}
-
-static void i915_userspace_unlock(struct drm_i915_private *i915, int tag)
-__releases(&i915->userspace.blocked_srcu)
-{
-	srcu_read_unlock(&i915->userspace.blocked_srcu, tag);
-}
-
-static void i915_drm_userspace_unlock(struct drm_device *dev, int srcu)
-{
-	i915_userspace_unlock(to_i915(dev), srcu);
-}
-
-/*
  * i915_driver_early_probe - setup state not requiring device access
  * @dev_priv: device private
  * @ent: PCI device info entry matched
@@ -866,8 +718,6 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 
 	intel_detect_preproduction_hw(dev_priv);
 	init_waitqueue_head(&dev_priv->user_fence_wq);
-
-	i915_userspace_lock_init(dev_priv);
 
 	return 0;
 
@@ -989,7 +839,6 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
  */
 static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 {
-	i915_userspace_lock_fini(dev_priv);
 	intel_irq_fini(dev_priv);
 	intel_power_domains_cleanup(dev_priv);
 	i915_gem_cleanup_early(dev_priv);
@@ -1494,8 +1343,10 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(SMEM_DMA),
 		C(SMEM_FREE),
 		C(SMEM_IDLE),
+		C(SMEM_SPLIT),
 		C(SOFT_PG),
 		C(ULL_DMA_BOOST),
+		C(UPTR_IMM_2M),
 #undef C
 		{},
 	};
@@ -1615,9 +1466,6 @@ static int i915_virtualization_probe(struct drm_i915_private *i915)
 
 	if (i915->__mode == I915_IOV_MODE_ERR)
 		return -EIO;
-
-	if (IS_SRIOV_VF(i915))
-		WRITE_ONCE(i915->drm.driver, &i915_vf_drm_driver);
 
 	if (IS_IOV_ACTIVE(i915))
 		dev_info(i915->drm.dev, "Running in %s mode\n",
@@ -1742,6 +1590,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
 
+	i915_sriov_init_late(i915);
 	i915_virtualization_commit(i915);
 
 	i915_welcome_messages(i915);
@@ -1787,6 +1636,8 @@ out_fini:
 void i915_driver_remove(struct drm_i915_private *i915)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
+	i915_sriov_early_cleanup(i915);
 
 	disable_rpm_wakeref_asserts(&i915->runtime_pm);
 
@@ -1853,6 +1704,8 @@ static void i915_driver_release(struct drm_device *dev)
 	if (!dev_priv->do_release)
 		return;
 
+	i915_sriov_release(dev_priv);
+
 	disable_rpm_wakeref_asserts(rpm);
 
 	i915_gem_driver_release(dev_priv);
@@ -1905,8 +1758,6 @@ static void i915_driver_lastclose(struct drm_device *dev)
 	if (HAS_DISPLAY(i915))
 		vga_switcheroo_process_delayed_switch();
 }
-#else
-static void i915_driver_lastclose(struct drm_device *dev) { return; }
 #endif
 
 static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
@@ -1928,6 +1779,7 @@ static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 
 	/* Catch up with all the deferred frees from "this" client */
 	i915_gem_flush_free_objects(to_i915(dev));
+	flush_workqueue(to_i915(dev)->wq);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
@@ -2037,16 +1889,13 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 			struct i915_gem_ww_ctx ww;
 			int err;
 
-			if (!pos->mem)
+			if (GEM_WARN_ON(!pos->mem))
 				continue;
 
 			obj = container_of(pos, typeof(*obj), mm.region);
 
 			/* only segment BOs should be in mem->objects.list */
 			GEM_BUG_ON(i915_gem_object_has_segments(obj));
-
-			if (!i915_gem_object_has_pages(obj))
-				continue;
 
 			if (!kref_get_unless_zero(&obj->base.refcount))
 				continue;
@@ -2059,14 +1908,14 @@ static void intel_evict_lmem(struct drm_i915_private *i915)
 				if (err)
 					continue;
 
-				if (!i915_gem_object_has_pages(obj))
-					continue;
-
-				i915_gem_object_move_notify(obj);
-
-				err = i915_gem_object_unbind(obj, &ww, 0);
-				if (err == 0)
-					err = __i915_gem_object_put_pages(obj);
+				if (i915_gem_object_has_pages(obj)) {
+					i915_gem_object_move_notify(obj);
+					err = i915_gem_object_unbind(obj, &ww, 0);
+					if (err == 0)
+						err = __i915_gem_object_put_pages(obj);
+				}
+				if (err == 0 && obj->swapto && obj->memory_mask & BIT(INTEL_REGION_SMEM))
+					i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false);
 			}
 
 			i915_gem_object_put(obj);
@@ -2091,13 +1940,8 @@ static int i915_drm_prepare(struct drm_device *dev)
 	 * split out that work and pull it forward so that after point,
 	 * the GPU is not woken again.
 	 */
-	i915_gem_suspend(i915);
-
-	/*
-	 * FIXME: After parking  GPU, we are waking up the GPU by doing
-	 * intel_evict_lmem(), which needs to be avoid.
-	 */
 	intel_evict_lmem(i915);
+	i915_gem_suspend(i915);
 
 	return 0;
 }
@@ -2648,36 +2492,6 @@ static int intel_runtime_resume(struct device *kdev)
 	return 0;
 }
 
-static long i915_drm_ioctl_blocking(struct file *filp,
-				    unsigned int cmd, unsigned long arg)
-{
-	struct drm_file *file_priv = filp->private_data;
-	bool block_throughout;
-	int srcu, ret;
-
-	if (i915_drm_userspace_trylock(file_priv->minor->dev, &srcu))
-		return -EINTR;
-
-	block_throughout = (cmd != DRM_IOCTL_I915_GEM_WAIT) &&
-			  (cmd != PRELIM_DRM_IOCTL_I915_GEM_WAIT_USER_FENCE) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_WAIT) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_RESET) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT) &&
-			  (cmd != DRM_IOCTL_SYNCOBJ_TRANSFER);
-
-	if (!block_throughout)
-		i915_drm_userspace_unlock(file_priv->minor->dev, srcu);
-
-	ret = drm_ioctl(filp, cmd, arg);
-
-	if (block_throughout)
-		i915_drm_userspace_unlock(file_priv->minor->dev, srcu);
-
-	return ret;
-}
-
 const struct dev_pm_ops i915_pm_ops = {
 	/*
 	 * S0ix (via system suspend) and S3 event handlers [PMSG_SUSPEND,
@@ -2723,18 +2537,6 @@ static const struct file_operations i915_driver_fops = {
 	.open = drm_open,
 	.release = drm_release_noglobal,
 	.unlocked_ioctl = drm_ioctl,
-	.mmap = i915_gem_mmap,
-	.poll = drm_poll,
-	.read = drm_read,
-	.compat_ioctl = i915_ioc32_compat_ioctl,
-	.llseek = noop_llseek,
-};
-
-static const struct file_operations i915_vf_driver_fops = {
-	.owner = THIS_MODULE,
-	.open = drm_open,
-	.release = drm_release_noglobal,
-	.unlocked_ioctl = i915_drm_ioctl_blocking,
 	.mmap = i915_gem_mmap,
 	.poll = drm_poll,
 	.read = drm_read,
@@ -2978,7 +2780,9 @@ static const struct drm_driver i915_drm_driver = {
 	    DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
 	.release = i915_driver_release,
 	.open = i915_driver_open,
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	.lastclose = i915_driver_lastclose,
+#endif
 	.postclose = i915_driver_postclose,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
@@ -2999,36 +2803,3 @@ static const struct drm_driver i915_drm_driver = {
 	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
-static const struct drm_driver i915_vf_drm_driver = {
-	/* Don't use MTRRs here; the Xserver or userspace app should
-	 * deal with them for Intel hardware.
-	 */
-	.driver_features =
-	    DRIVER_GEM |
-	    DRIVER_RENDER |
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-	    DRIVER_MODESET | DRIVER_ATOMIC |
-#endif
-	    DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
-	.release = i915_driver_release,
-	.open = i915_driver_open,
-	.lastclose = i915_driver_lastclose,
-	.postclose = i915_driver_postclose,
-
-	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
-	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
-	.gem_prime_import = i915_gem_prime_import,
-
-	.dumb_create = i915_gem_dumb_create,
-	.dumb_map_offset = i915_gem_dumb_mmap_offset,
-
-	.ioctls = i915_ioctls,
-	.num_ioctls = ARRAY_SIZE(i915_ioctls),
-	.fops = &i915_vf_driver_fops,
-	.name = DRIVER_NAME,
-	.desc = DRIVER_DESC,
-	.date = DRIVER_DATE,
-	.major = DRIVER_MAJOR,
-	.minor = DRIVER_MINOR,
-	.patchlevel = DRIVER_PATCHLEVEL,
-};

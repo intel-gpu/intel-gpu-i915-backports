@@ -945,6 +945,11 @@ static void i915_debugger_disconnect__locked(struct i915_debugger *debugger,
 			       reason);
 	}
 
+	dev_info(debugger->i915->drm.dev,
+		 "Debugger disconnected from %s[%d]\n",
+		 debugger->target_task->comm,
+		 task_pid_nr(debugger->target_task));
+
 	wake_up_all(&debugger->write_done);
 	complete_all(&debugger->read_done);
 }
@@ -3686,7 +3691,7 @@ static void debugger_discover_vma(struct i915_debugger *debugger,
 	return;
 
 out_err:
-	if (err)
+	if (err && err != -ENOTCONN)
 		i915_debugger_disconnect_err(debugger);
 }
 
@@ -3908,6 +3913,15 @@ out:
 	return 0;
 }
 
+static u64 get_lrc_id(struct intel_context *ce)
+{
+	if (unlikely(!ce->debugger_lrc_id)) do {
+		get_random_bytes(&ce->debugger_lrc_id, sizeof(ce->debugger_lrc_id));
+	} while (!ce->debugger_lrc_id);
+
+	return ce->debugger_lrc_id;
+}
+
 static int
 debugger_alloc_ctx_param_eng_events(struct i915_debugger *debugger,
 				    u32 client_handle,
@@ -3998,7 +4012,7 @@ debugger_alloc_ctx_param_eng_events(struct i915_debugger *debugger,
 
 			engines->engine.engine_class = ci->engine_class;
 			engines->engine.engine_instance = ci->engine_instance;
-			engines->lrc_handle = gem_engines->engines[n]->debugger_lrc_id;
+			engines->lrc_handle = get_lrc_id(gem_engines->engines[n]);
 		} else {
 			ci->engine_class = I915_ENGINE_CLASS_INVALID;
 			ci->engine_instance = I915_ENGINE_CLASS_INVALID_NONE;
@@ -4217,8 +4231,7 @@ static int queue_engine_pagefault(struct i915_debugger *debugger,
 	ep->pagefault_address = pagefault->fault.addr;
 	ep->bitmask_size = intel_gt_eu_attention_bitmap_size(engine->gt) * 3;
 	ep->ctx_handle = ctx_handle;
-	ep->lrc_handle = pagefault->context->debugger_lrc_id;
-
+	ep->lrc_handle = get_lrc_id(pagefault->context);
 
 	/*
 	 * copy the order of attention bitmap: attentions.before,
@@ -4250,7 +4263,6 @@ err:
 static void free_pagefault(struct i915_debugger_pagefault *pf)
 {
 	intel_context_put(pf->context);
-	i915_vm_put(pf->vm);
 	kfree(pf);
 }
 
@@ -4452,7 +4464,6 @@ i915_debugger_open(struct drm_i915_private * const i915,
 	for_each_debugger(iter, &i915->debuggers.list) {
 		if (!is_debugger_closed(iter) &&
 		    same_thread_group(iter->target_task, debugger->target_task)) {
-			drm_info(&i915->drm, "pid %llu already debugged\n", param->pid);
 			ret = -EBUSY;
 			goto err_unlock;
 		}
@@ -4488,8 +4499,10 @@ i915_debugger_open(struct drm_i915_private * const i915,
 
 	compute_engines_reschedule_heartbeat(debugger);
 
-	DD_INFO(debugger, "connected session %llu, debug level = %d",
-		debugger->session, debugger->debug_lvl);
+	dev_info(i915->drm.dev,
+		 "Debugger %s[%d] connected to %s[%d]\n",
+		 current->comm, task_pid_nr(current),
+		 debugger->target_task->comm, task_pid_nr(debugger->target_task));
 
 	if (debugger->debug_lvl >= DD_DEBUG_LEVEL_VERBOSE)
 		printk(KERN_WARNING "i915_debugger: verbose debug level exposing raw addresses!\n");
@@ -4665,7 +4678,7 @@ static int queue_engine_attentions(struct i915_debugger *debugger,
 	ea->ci.engine_instance = engine->uabi_instance;
 	ea->bitmask_size = intel_gt_eu_attention_bitmap_size(engine->gt);
 	ea->ctx_handle = ctx_handle;
-	ea->lrc_handle = ce->debugger_lrc_id;
+	ea->lrc_handle = get_lrc_id(ce);
 
 	pf = i915_active_fence_get(&engine->gt->eu_debug.fault);
 	if (pf) {

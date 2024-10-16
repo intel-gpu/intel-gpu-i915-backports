@@ -638,6 +638,25 @@ i915_sched_engine_create(unsigned int subclass)
 	return sched_engine;
 }
 
+struct i915_sched_engine *
+i915_sched_engine_create_cpu(unsigned int subclass,
+			     struct workqueue_struct *wq,
+			     const struct cpumask *cpumask)
+{
+	struct i915_sched_engine *se;
+
+	se = i915_sched_engine_create(subclass);
+	if (!se)
+		return NULL;
+
+	se->wq = wq;
+	se->cpumask = cpumask;
+	se->num_cpus = cpumask_weight(cpumask);
+	se->cpu = __i915_first_online_cpu(cpumask);
+
+	return se;
+}
+
 struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
 {
 	const struct cpumask *all;
@@ -666,6 +685,26 @@ struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
 #endif
 
 	return local;
+}
+
+static int next_cpu(struct i915_sched_engine *se)
+{
+	int cpu;
+
+	/* Prefer using the local cpu if allowed */
+	cpu = raw_smp_processor_id();
+	if (cpumask_test_cpu(cpu, se->cpumask))
+		return cpu;
+
+	/* Otherwise pick the next cpu from the allowed set */
+	return __i915_next_online_cpu(se->cpumask, &se->cpu);
+}
+
+int i915_scheduler_queue_work_on(struct i915_sched_engine *se, int cpu, struct work_struct *work)
+{
+	if (cpu == WORK_CPU_UNBOUND)
+		cpu = next_cpu(se);
+	return queue_work_on(cpu, se->wq, work);
 }
 
 void i915_scheduler_module_exit(void)

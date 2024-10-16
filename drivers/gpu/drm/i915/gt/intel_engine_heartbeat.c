@@ -26,6 +26,9 @@ static bool next_heartbeat(struct intel_engine_cs *engine)
 {
 	long delay;
 
+	if (engine->gt->suspend || intel_gt_is_wedged(engine->gt))
+		return false;
+
 	delay = i915_debugger_attention_poll_interval(engine);
 	if (!delay)
 		delay = READ_ONCE(engine->props.heartbeat_interval_ms);
@@ -71,15 +74,15 @@ static void show_heartbeat(const struct i915_request *rq,
 {
 	struct drm_printer p = drm_debug_printer("heartbeat");
 
-	intel_engine_dump(engine, &p,
-			  "%s heartbeat {seqno:%llx:%lld, prio:%d} not ticking\n",
-			  engine->name,
-			  rq->fence.context,
-			  rq->fence.seqno,
-			  rq->sched.attr.priority);
+	drm_printf(&p, "%s heartbeat {seqno:%llx:%lld, prio:%d} not ticking\n",
+		   engine->name,
+		   rq->fence.context,
+		   rq->fence.seqno,
+		   rq->sched.attr.priority);
+	intel_engine_dump(engine, &p, 0);
 
-	intel_gt_show_timelines(engine->gt, &p, i915_request_show_with_schedule);
-	intel_guc_submission_print_info(&engine->gt->uc.guc, &p);
+	intel_gt_show_timelines(engine->gt, &p, 0, i915_request_show_with_schedule);
+	intel_guc_submission_print_info(&engine->gt->uc.guc, &p, 0);
 }
 
 static void
@@ -89,7 +92,8 @@ reset_engine(struct intel_engine_cs *engine, struct i915_request *rq)
 	    !atomic_read(&engine->i915->gpu_error.reset_count))
 		show_heartbeat(rq, engine);
 
-	if (xchg(&rq->fence.error, -ENXIO) == -ENXIO)
+	/* If the heartbeat failed to resume after reset, declare an emergency. */
+	if (xchg(&rq->fence.error, -ENODEV) == -ENODEV)
 		intel_gt_set_wedged(engine->gt);
 
 	intel_gt_handle_error(engine->gt, engine->mask,
@@ -196,17 +200,16 @@ static void heartbeat(struct work_struct *wrk)
 	if (!intel_engine_pm_get_if_awake(engine))
 		return;
 
-	if (intel_gt_is_wedged(engine->gt))
+	if (engine->gt->suspend || intel_gt_is_wedged(engine->gt))
 		goto out;
 
 	/* Skip attn scanning during the pf, as we will be capturing attn there */
 	if (!atomic_read(&engine->in_pagefault)) {
 		ret = i915_debugger_handle_engine_attention(engine);
 		if (ret) {
-			intel_gt_handle_error(engine->gt, engine->mask,
-					I915_ERROR_CAPTURE,
-					"unable to handle EU attention on %s, error:%d",
-					engine->name, ret);
+			intel_gt_handle_error(engine->gt, ALL_ENGINES, I915_ERROR_CAPTURE,
+					      "unable to handle EU attention on %s, error:%d",
+					      engine->name, ret);
 			goto out;
 		}
 	}

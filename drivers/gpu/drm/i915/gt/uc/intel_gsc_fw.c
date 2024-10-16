@@ -3,9 +3,10 @@
  * Copyright © 2021 Intel Corporation
  */
 
-#include "gt/intel_gt.h"
-#include "gt/intel_gpu_commands.h"
 #include "gt/intel_engine_pm.h"
+#include "gt/intel_gpu_commands.h"
+#include "gt/intel_gt.h"
+#include "gt/intel_gt_print.h"
 #include "gt/intel_ring.h"
 #include "intel_gsc_fw.h"
 
@@ -132,9 +133,9 @@ out_rq:
 	i915_request_put(rq);
 
 	if (err)
-		drm_err(&gsc_uc_to_gt(gsc)->i915->drm,
-			"request submission for GSC failed (%d)\n",
-			err);
+		gt_err(gsc_uc_to_gt(gsc),
+		       "request submission for GSC failed (%d)\n",
+		       err);
 
 	return err;
 }

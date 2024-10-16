@@ -7,8 +7,10 @@
 
 #include <uapi/drm/i915_drm.h>
 
-#include "gt/intel_gt_requests.h"
 #include "gem/i915_gem_object.h"
+#include "gt/intel_gt_clock_utils.h"
+#include "gt/intel_gt_pm.h"
+#include "gt/intel_gt_requests.h"
 
 #include "i915_buddy.h"
 #include "intel_memory_region.h"
@@ -205,9 +207,28 @@ static int size_index(unsigned long sz)
 	return 0;
 }
 
+static void show_xfer(struct intel_gt *gt,
+		      const char *name,
+		      u64 bytes,
+		      u64 time,
+		      struct drm_printer *p,
+		      int indent)
+{
+	time = intel_gt_clock_interval_to_ns(gt, time);
+	if (!time)
+		return;
+
+	i_printf(p, indent, "%-16s %llu MiB in %llums, %llu MiB/s\n",
+		 name,
+		 bytes >> 20,
+		 div_u64(time, NSEC_PER_MSEC),
+		 div64_u64(mul_u64_u32_shr(bytes, NSEC_PER_SEC, 20), time));
+}
+
 void intel_memory_region_print(struct intel_memory_region *mem,
 			       resource_size_t target,
-			       struct drm_printer *p)
+			       struct drm_printer *p,
+			       int indent)
 {
 	const struct {
 		const char *name;
@@ -223,35 +244,39 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	char buf[256];
 	int i;
 
-	drm_printf(p, "memory region: %s\n", mem->name);
-	drm_printf(p, "  chunk size: %pa\n", &mem->mm.chunk_size);
-	drm_printf(p, "  page size:  %pa\n", &mem->min_page_size);
-	drm_printf(p, "  parking: %s\n", str_yes_no(!completion_done(&mem->parking)));
-	drm_printf(p, "  clear-on-free: %s\n", str_enabled_disabled(test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)));
+	i_printf(p, indent, "memory region: %s\n", mem->name);
+	indent += 2;
 
+	if (mem->mm.chunk_size)
+		i_printf(p, indent, "chunk:  %pa\n", &mem->mm.chunk_size);
+	i_printf(p, indent, "page:   %pa\n", &mem->min_page_size);
 	string_get_size(mem->total, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-	drm_printf(p, "  total:  %pa [%s]\n", &mem->total, bytes);
+	i_printf(p, indent, "total:  %pa [%s]\n", &mem->total, bytes);
 
 	x = atomic64_read(&mem->avail);
 	string_get_size(x, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-	drm_printf(p, "  avail:  %pa [%s]\n", &x, bytes);
+	i_printf(p, indent, "avail:  %pa [%s]\n", &x, bytes);
 
 	x = atomic64_read(&mem->evict);
 	if (x) {
 		string_get_size(x, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-		drm_printf(p, "  evict:  %pa [%s]\n", &x, bytes);
+		i_printf(p, indent, "evict:  %pa [%s]\n", &x, bytes);
 	}
 
 	if (target) {
 		string_get_size(target, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-		drm_printf(p, "  target: %pa [%s]\n", &target, bytes);
+		i_printf(p, indent, "target: %pa [%s]\n", &target, bytes);
 	}
+
+	if (test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags))
+		i_printf(p, indent, "clear-on-free: %s\n", str_enabled_disabled(test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)));
+	if (!completion_done(&mem->parking))
+		i_printf(p, indent, "clear-on-idle: %s\n", str_yes_no(!completion_done(&mem->parking)));
 
 	for (o = objects; o->name; o++) {
 		resource_size_t active = 0, dmabuf = 0, pinned = 0, avail = 0;
 		struct drm_i915_gem_object *obj;
 		unsigned long sizes[4] = {};
-		unsigned long bind[4] = {};
 		unsigned long bookmark = 0;
 		unsigned long locked = 0;
 		unsigned long empty = 0;
@@ -260,8 +285,6 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 
 		spin_lock_irq(&mem->objects.lock);
 		list_for_each_entry(obj, o->list, mm.region.link) {
-			struct i915_vma *vma;
-
 			if (!obj->mm.region.mem) {
 				bookmark++;
 				continue;
@@ -283,15 +306,7 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			else
 				avail += obj->base.size;
 
-			sizes[size_index(obj->mm.page_sizes)]++;
-
-			rcu_read_lock();
-			list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
-				if (i915_vma_is_bound(vma, I915_VMA_LOCAL_BIND))
-					bind[size_index(vma->page_sizes)]++;
-			}
-			rcu_read_unlock();
-
+			sizes[size_index(sg_page_sizes(obj->mm.pages))]++;
 			count++;
 		}
 		spin_unlock_irq(&mem->objects.lock);
@@ -325,14 +340,47 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			len += snprintf(buf + len, sizeof(buf) - len, "avail:%s, ", bytes);
 		}
 
-		drm_printf(p, "  %s: { count:%lu, %ssizes:[%lu, %lu, %lu, %lu], bind:[%lu, %lu, %lu, %lu] }\n",
-			   o->name, count, buf,
-			   sizes[0], sizes[1], sizes[2], sizes[3],
-			   bind[0], bind[1], bind[2], bind[3]);
+		i_printf(p, indent, "%s: { count:%lu, %ssizes:[%lu, %lu, %lu, %lu] }\n",
+			 o->name, count, buf,
+			 sizes[0], sizes[1], sizes[2], sizes[3]);
 	}
 
 	if (mem->mm.size) {
-		drm_printf(p, "  free:\n");
+		struct intel_gt *gt = mem->gt;
+
+		if (gt->counters.map) {
+			intel_wakeref_t wf;
+
+			i_printf(p, indent, "offload:\n");
+			with_intel_gt_pm_if_awake(gt, wf) {
+				show_xfer(gt, "clear-on-alloc:",
+					  gt->counters.map[INTEL_GT_CLEAR_ALLOC_BYTES],
+					  gt->counters.map[INTEL_GT_CLEAR_ALLOC_CYCLES],
+					  p, indent + 2);
+				show_xfer(gt, "clear-on-free:",
+					  gt->counters.map[INTEL_GT_CLEAR_FREE_BYTES],
+					  gt->counters.map[INTEL_GT_CLEAR_FREE_CYCLES],
+					  p, indent + 2);
+				show_xfer(gt, "clear-on-idle:",
+					  gt->counters.map[INTEL_GT_CLEAR_IDLE_BYTES],
+					  gt->counters.map[INTEL_GT_CLEAR_IDLE_CYCLES],
+					  p, indent + 2);
+				show_xfer(gt, "swap-in:",
+					  gt->counters.map[INTEL_GT_SWAPIN_BYTES],
+					  gt->counters.map[INTEL_GT_SWAPIN_CYCLES],
+					  p, indent + 2);
+				show_xfer(gt, "swap-out:",
+					  gt->counters.map[INTEL_GT_SWAPOUT_BYTES],
+					  gt->counters.map[INTEL_GT_SWAPOUT_CYCLES],
+					  p, indent + 2);
+				show_xfer(gt, "copy:",
+					  gt->counters.map[INTEL_GT_COPY_BYTES],
+					  gt->counters.map[INTEL_GT_COPY_CYCLES],
+					  p, indent + 2);
+			}
+		}
+
+		i_printf(p, indent, "free:\n");
 		for (i = 0; i <= mem->mm.max_order; i++) {
 			const u64 sz = mem->mm.chunk_size << i;
 			struct i915_buddy_block *block;
@@ -381,22 +429,26 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			buf[0] = '\0';
 			if (active) {
 				string_get_size(active, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-				len += snprintf(buf + len, sizeof(buf) - len, "active:%s, ", bytes);
+				len += snprintf(buf + len, sizeof(buf) - len, "active: %s, ", bytes);
 			}
 			if (clear) {
 				string_get_size(clear, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-				len += snprintf(buf + len, sizeof(buf) - len, "clear:%s, ", bytes);
+				len += snprintf(buf + len, sizeof(buf) - len, "clear: %s, ", bytes);
 			}
 			if (dirty) {
 				string_get_size(dirty, 1, STRING_UNITS_2, bytes, sizeof(bytes));
-				len += snprintf(buf + len, sizeof(buf) - len, "dirty:%s, ", bytes);
+				len += snprintf(buf + len, sizeof(buf) - len, "dirty: %s, ", bytes);
 			}
-			drm_printf(p, "  - [%d]: { count:%lu, %sdefrag?:%s }\n", i, count, buf, str_yes_no(defrag));
+			if (defrag)
+				len += snprintf(buf + len, sizeof(buf) - len, "defrag, ");
+			if (len > 0)
+				buf[len - 2] = '\0';
+			i_printf(p, indent + 2, "- [%d]: { count:%lu, %s }\n", i, count, buf);
 		}
 	}
 
 	if (mem->ops->show)
-		mem->ops->show(mem, p);
+		mem->ops->show(mem, p, indent);
 }
 
 static bool smem_allow_eviction(struct drm_i915_gem_object *obj)
@@ -456,7 +508,6 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct list_head **phase = phases;
 	resource_size_t found = 0;
 	bool keepalive, scan;
-	LIST_HEAD(blocks);
 	long timeout;
 	int err = 0;
 
@@ -484,6 +535,8 @@ next:
 		if (!*++phase)
 			goto out;
 	}
+
+	i915_gem_flush_free_objects(mem->i915);
 
 	spin_lock_irq(&mem->objects.lock);
 	list_add_tail(&end.link, *phase);
@@ -525,6 +578,9 @@ next:
 		if (!ww && dma_resv_is_locked(obj->base.resv))
 			continue;
 
+		if (!i915_gem_object_get_rcu(obj))
+			continue;
+
 		list_replace(&pos->link, &bookmark.link);
 		if (keepalive) {
 			if (!(obj->flags & I915_BO_ALLOC_USER)) {
@@ -532,7 +588,7 @@ next:
 				goto delete_bookmark;
 			}
 
-			if (dma_resv_is_locked(obj->base.resv)) {
+			if (obj->eviction || dma_resv_is_locked(obj->base.resv)) {
 				list_add_tail(&pos->link, *phase);
 				goto delete_bookmark;
 			}
@@ -563,22 +619,10 @@ next:
 				goto delete_bookmark;
 			}
 		}
-		INIT_LIST_HEAD(&pos->link);
 
-		if (!i915_gem_object_get_rcu(obj)) {
-			list_replace_init(&obj->mm.blocks, &blocks);
-			found += obj->base.size;
-			obj = NULL;
-		}
-
+		obj->eviction++;
+		list_add_tail(&pos->link, &bookmark.link);
 		spin_unlock_irq(&mem->objects.lock);
-
-		if (!obj) {
-			__intel_memory_region_put_pages_buddy(mem,
-							      &blocks,
-							      true);
-			goto relock;
-		}
 
 		/* Flush activity prior to grabbing locks */
 		timeout = __i915_gem_object_wait(obj,
@@ -594,7 +638,8 @@ next:
 		if (err)
 			goto relock;
 
-		if (!i915_gem_object_has_pages(obj))
+		if (!i915_gem_object_has_pages(obj) ||
+		    obj->mm.region.mem != mem)
 			goto unlock;
 
 		if (i915_gem_object_is_active(obj))
@@ -622,13 +667,11 @@ unlock:
 relock:
 		cond_resched();
 		spin_lock_irq(&mem->objects.lock);
-		if (obj) {
-			if (i915_gem_object_has_pages(obj) && list_empty(&pos->link))
-				list_add_tail(&pos->link, &bookmark.link);
 
-			i915_gem_object_put(obj);
-		}
+		GEM_BUG_ON(!obj->eviction);
+		obj->eviction--;
 delete_bookmark:
+		i915_gem_object_put(obj);
 		__list_del_entry(&bookmark.link);
 		if (err == -EDEADLK)
 			break;
@@ -676,7 +719,7 @@ out:
 	    !test_and_set_bit(INTEL_MEMORY_EVICT_SHOW, &mem->flags)) {
 		struct drm_printer p = drm_info_printer(mem->gt->i915->drm.dev);
 
-		intel_memory_region_print(mem, target, &p);
+		intel_memory_region_print(mem, target, &p, 0);
 	}
 
 	return -ENXIO;

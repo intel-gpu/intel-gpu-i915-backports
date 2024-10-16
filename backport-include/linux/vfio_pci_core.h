@@ -21,6 +21,9 @@ static inline int vfio_pci_core_init_device(struct vfio_pci_core_device *vdev,
 		struct pci_dev *pdev,
 		const struct vfio_device_ops *vfio_pci_ops)
 {
+	vdev->vdev.dev= &pdev->dev;
+	vdev->vdev.ops= vfio_pci_ops;
+
 	return vfio_pci_core_init_dev(&vdev->vdev);
 }
 

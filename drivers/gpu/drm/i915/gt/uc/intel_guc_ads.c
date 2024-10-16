@@ -192,24 +192,26 @@ static void guc_policies_init(struct intel_guc *guc)
 }
 
 void intel_guc_ads_print_policy_info(struct intel_guc *guc,
-				     struct drm_printer *dp)
+				     struct drm_printer *p,
+				     int indent)
 {
 	if (unlikely(iosys_map_is_null(&guc->ads_map)))
 		return;
 
-	drm_printf(dp, "Global scheduling policies:\n");
-	drm_printf(dp, "  DPC promote time   = %u\n",
-		   ads_blob_read(guc, policies.dpc_promote_time));
-	drm_printf(dp, "  Max num work items = %u\n",
-		   ads_blob_read(guc, policies.max_num_work_items));
-	drm_printf(dp, "  Flags              = %u\n",
-		   ads_blob_read(guc, policies.global_flags));
+	i_printf(p, indent, "Global scheduling policies:\n");
+	indent += 2;
+
+	i_printf(p, indent, "DPC promote time:    %u\n",
+		 ads_blob_read(guc, policies.dpc_promote_time));
+	i_printf(p, indent, "Max num work items:  %u\n",
+		 ads_blob_read(guc, policies.max_num_work_items));
+	i_printf(p, indent, "Flags:               0x%x\n",
+		 ads_blob_read(guc, policies.global_flags));
 }
 
 static int guc_action_policies_update(struct intel_guc *guc, u32 policy_offset)
 {
-	u32 action[] = {
-		INTEL_GUC_ACTION_GLOBAL_SCHED_POLICY_CHANGE,
+	u32 action[] = { INTEL_GUC_ACTION_GLOBAL_SCHED_POLICY_CHANGE,
 		policy_offset
 	};
 
@@ -566,7 +568,7 @@ static void guc_um_init_params(struct intel_guc *guc)
 	GEM_BUG_ON(!(vma->obj->flags & I915_BO_ALLOC_CONTIGUOUS));
 
 	base_ggtt = intel_guc_ggtt_offset(guc, vma) + um_queue_offset;
-	base_dpa = sg_dma_address(vma->pages->sgl) + um_queue_offset;
+	base_dpa = sg_dma_address(vma->pages) + um_queue_offset;
 
 	for (i = 0; i < GUC_UM_HW_QUEUE_MAX; ++i) {
 		ads_blob_write(guc, um_init_params.queue_params[i].base_dpa,
@@ -666,8 +668,9 @@ static int guc_prep_golden_context(struct intel_guc *guc)
 		addr_ggtt += alloc_size;
 	}
 
-	drm_dbg(&gt->i915->drm, "total_size:%d, previous:%d\n",
-		total_size, guc->ads_golden_ctxt_size);
+	if (total_size != guc->ads_golden_ctxt_size)
+		gt_dbg(gt, "total_size:%d, previous:%d\n",
+		       total_size, guc->ads_golden_ctxt_size);
 
 	/* Make sure current size matches what we calculated previously */
 	if (guc->ads_golden_ctxt_size)

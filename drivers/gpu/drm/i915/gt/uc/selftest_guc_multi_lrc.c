@@ -3,12 +3,13 @@
  * Copyright �� 2019 Intel Corporation
  */
 
-#include "gt/intel_gt_print.h"
-#include "selftests/igt_spinner.h"
-#include "selftests/igt_reset.h"
-#include "selftests/intel_scheduler_helpers.h"
-#include "gt/intel_engine_heartbeat.h"
 #include "gem/selftests/mock_context.h"
+#include "gt/intel_engine_heartbeat.h"
+#include "gt/intel_gt_print.h"
+#include "selftests/igt_flush_test.h"
+#include "selftests/igt_reset.h"
+#include "selftests/igt_spinner.h"
+#include "selftests/intel_scheduler_helpers.h"
 
 static void logical_sort(struct intel_engine_cs **engines, int num_engines)
 {
@@ -48,17 +49,6 @@ multi_lrc_create_parent(struct intel_gt *gt, u8 class,
 	logical_sort(siblings, i);
 
 	return intel_engine_create_parallel(siblings, 1, i);
-}
-
-static void multi_lrc_context_unpin(struct intel_context *ce)
-{
-	struct intel_context *child;
-
-	GEM_BUG_ON(!intel_context_is_parent(ce));
-
-	for_each_child(ce, child)
-		intel_context_unpin(child);
-	intel_context_unpin(ce);
 }
 
 static void multi_lrc_context_put(struct intel_context *ce)
@@ -142,7 +132,6 @@ static int __intel_guc_multi_lrc_basic(struct intel_gt *gt, unsigned int class)
 	}
 
 out:
-	multi_lrc_context_unpin(parent);
 	multi_lrc_context_put(parent);
 	return ret;
 }
@@ -159,6 +148,10 @@ static int intel_guc_multi_lrc_basic(void *arg)
 			continue;
 
 		ret = __intel_guc_multi_lrc_basic(gt, class);
+		if (ret)
+			return ret;
+
+		ret = igt_flush_test(gt->i915);
 		if (ret)
 			return ret;
 	}

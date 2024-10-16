@@ -23,9 +23,6 @@ struct drm_printer;
 #define priolist_for_each_request_consume(it, n, plist) \
 	list_for_each_entry_safe(it, n, &(plist)->requests, sched.link)
 
-#define priolist_for_each_request_reverse(it, plist) \
-	list_for_each_entry_reverse(it, &(plist)->requests, sched.link)
-
 void i915_sched_node_init(struct i915_sched_node *node);
 void i915_sched_node_reinit(struct i915_sched_node *node);
 
@@ -56,6 +53,10 @@ static inline void i915_priolist_free(struct i915_priolist *p)
 
 struct i915_sched_engine *
 i915_sched_engine_create(unsigned int subclass);
+struct i915_sched_engine *
+i915_sched_engine_create_cpu(unsigned int subclass,
+			     struct workqueue_struct *wq,
+			     const struct cpumask *cpumask);
 
 static inline struct i915_sched_engine *
 i915_sched_engine_get(struct i915_sched_engine *sched_engine)
@@ -109,6 +110,7 @@ i915_sched_engine_disabled(struct i915_sched_engine *sched_engine)
 }
 
 struct cpumask *cpumask_of_i915(struct drm_i915_private *i915);
+int i915_scheduler_queue_work_on(struct i915_sched_engine *se, int cpu, struct work_struct *work);
 
 void i915_scheduler_module_exit(void);
 int i915_scheduler_module_init(void);

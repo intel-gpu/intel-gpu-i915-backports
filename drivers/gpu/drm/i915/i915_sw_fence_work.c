@@ -7,17 +7,6 @@
 #include "i915_drv.h"
 #include "i915_sw_fence_work.h"
 
-static int next_cpu(struct dma_fence_work *f)
-{
-	return __i915_next_online_cpu(f->rq.sched_engine->cpumask,
-				      &f->rq.sched_engine->cpu);
-}
-
-static struct workqueue_struct *get_wq(struct dma_fence_work *f)
-{
-	return f->rq.sched_engine->wq;
-}
-
 static void fence_complete(struct dma_fence_work *f)
 {
 	i915_request_mark_complete(&f->rq);
@@ -50,7 +39,7 @@ static void fence_work(struct work_struct *work)
 		err = f->ops->work(f);
 		if (err == -ERESTARTSYS) {
 			if (test_and_clear_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags)) {
-				queue_work_on(next_cpu(f), get_wq(f), &f->work);
+				i915_scheduler_queue_work_on(f->rq.sched_engine, f->cpu, &f->work);
 				return;
 			}
 
@@ -79,6 +68,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 
 	switch (state) {
 	case FENCE_COMPLETE:
+		set_bit(I915_FENCE_FLAG_ACTIVE, &f->rq.fence.flags);
 		if (fence->error && !f->ops->no_error_propagation)
 			dma_fence_set_error(&f->rq.fence, promote_error(fence->error));
 
@@ -89,7 +79,7 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 		    fatal_error(f->rq.fence.error))
 			fence_work(&f->work);
 		else
-			queue_work_on(next_cpu(f), get_wq(f), &f->work);
+			i915_scheduler_queue_work_on(f->rq.sched_engine, f->cpu, &f->work);
 		break;
 
 	case FENCE_FREE:
@@ -175,6 +165,7 @@ void __dma_fence_work_init(struct dma_fence_work *f,
 	BUILD_BUG_ON(DMA_FENCE_WORK_IMM >= BITS_PER_TYPE(f->rq.fence.flags));
 
 	f->ops = ops;
+	f->cpu = WORK_CPU_UNBOUND;
 
 	f->rq.i915 = NULL;
 	f->rq.engine = NULL;

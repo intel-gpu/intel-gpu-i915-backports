@@ -26,7 +26,8 @@
 struct drm_i915_gem_object *alloc_pt_lmem(struct i915_address_space *vm, int sz)
 {
 	return intel_gt_object_create_lmem(vm->gt, sz,
-					   I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE);
+					   I915_BO_ALLOC_IGNORE_MIN_PAGE_SIZE |
+					   I915_BO_ALLOC_VOLATILE);
 }
 
 struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz)
@@ -142,7 +143,7 @@ void i915_vm_close(struct i915_address_space *vm)
 {
 	GEM_BUG_ON(atomic_read(&vm->open) <= 0);
 	if (atomic_dec_and_test(&vm->open))
-		queue_work(system_unbound_wq, &vm->close_work);
+		intel_gt_queue_work(vm->gt, &vm->close_work);
 	else
 		i915_vm_put(vm);
 }
@@ -253,13 +254,13 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 dma_addr_t __px_dma(struct drm_i915_gem_object *p)
 {
 	GEM_BUG_ON(!i915_gem_object_has_pages(p));
-	return sg_dma_address(p->mm.pages->sgl);
+	return sg_dma_address(p->mm.pages);
 }
 
 struct page *__px_page(struct drm_i915_gem_object *p)
 {
 	GEM_BUG_ON(!i915_gem_object_has_pages(p));
-	return sg_page(p->mm.pages->sgl);
+	return sg_page(p->mm.pages);
 }
 
 void

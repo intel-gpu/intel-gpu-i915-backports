@@ -17,8 +17,10 @@
 #include "i915_pci.h"
 #include "i915_perf.h"
 #include "i915_request.h"
+#include "i915_scatterlist.h"
 #include "i915_scheduler.h"
 #include "i915_selftest.h"
+#include "i915_tbb.h"
 #include "i915_vma.h"
 
 #ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
@@ -75,8 +77,14 @@ static const struct {
 	  .exit = i915_objects_module_exit },
 	{ .init = i915_request_module_init,
 	  .exit = i915_request_module_exit },
+	{ .init = i915_scatterlist_module_init,
+	  .exit = i915_scatterlist_module_exit },
 	{ .init = i915_scheduler_module_init,
 	  .exit = i915_scheduler_module_exit },
+	{
+		.init = i915_tbb_init,
+		.exit = i915_tbb_exit,
+	},
 	{ .init = i915_vma_module_init,
 	  .exit = i915_vma_module_exit },
 	{ .init = i915_mock_selftests },
@@ -89,6 +97,8 @@ static const struct {
 };
 static int init_progress;
 
+DEFINE_STATIC_KEY_TRUE(__no_init_on_alloc);
+
 static int __init i915_init(void)
 {
 	int err, i;
@@ -96,6 +106,10 @@ static int __init i915_init(void)
 #ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 	DRM_INFO("I915 BACKPORTED INIT\n");
 #endif
+
+	if (want_init_on_alloc(0))
+		static_branch_disable(&__no_init_on_alloc);
+
 	for (i = 0; i < ARRAY_SIZE(init_funcs); i++) {
 		err = init_funcs[i].init();
 		if (err < 0) {

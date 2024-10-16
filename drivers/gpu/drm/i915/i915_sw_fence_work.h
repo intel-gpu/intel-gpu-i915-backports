@@ -35,6 +35,7 @@ struct dma_fence_work {
 		struct rcu_work rcu_work;
 	};
 	const struct dma_fence_work_ops *ops;
+	int cpu;
 };
 
 enum {

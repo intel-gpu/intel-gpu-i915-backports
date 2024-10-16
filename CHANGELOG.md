@@ -1,4 +1,31 @@
 # ChangeLog
+## Release I915_24WW42.2_996.26_24.5.15_240718.18
+* Fixed an issue where the time spent on PCIe data transferring between CPU and GPU was significantly longer than expected.
+
+* Fixed an issue where page fault was not reported properly to GNU Debugger (GDB) when many hardware threads were running.
+
+* Fixed an issue that prevented GPU metrics from being queried successfully.
+
+* Added changes to incrementally allocate SG tables to avoid over-allocating memory.
+
+* Fixed race between object free and eviction.
+
+* Fixed an issue that caused the i915 load module to fail and result in kernel taint.
+
+* Fixed an issue causing transient eviction failures.
+
+* Fixed an issue where GPU state did not show the correct backport information.
+
+* Fixed an issue causing inherited error state from the previous blitter offload.
+
+* Fixed an issue causing kernel warnings when processing lengthy G2H message queues.
+
+* Fixed an issue causing corruption of scatter lists on blit error handling.
+
+* Fixed an issue causing HPL residual check failures on Intel® Data Center GPU Max Series.
+
+* Removed disabled context from scheduling.
+
 ## Release I915_24WW33.3_950.13_24.4.12_240603.18
 * i915: Introduced telemetry register updates and additional debugging information for High Bandwidth Memory (HBM)
         diagnostics performed during system reset.

@@ -5,7 +5,7 @@ static void check_scatterlist(struct drm_i915_gem_object *obj)
 	struct scatterlist *sg;
 	u64 length = 0;
 
-	for (sg = obj->mm.pages->sgl; sg; sg = __sg_next(sg)) {
+	for (sg = obj->mm.pages; sg; sg = __sg_next(sg)) {
 		GEM_BUG_ON(!sg_page(sg));
 		length += sg->length;
 	}
@@ -121,7 +121,7 @@ static int igt_shmem_swap(void *arg)
 
 static int igt_shmem_dma(void *arg)
 {
-	const unsigned long sizes[] = { SZ_4K, SZ_64K, MAX_PAGE, 0 };
+	const unsigned long sizes[] = { SZ_4K, SZ_64K, DMA_MAX_CLEAR, 0 };
 	struct drm_i915_private *i915 = arg;
 	struct intel_memory_region *mem =i915->mm.regions[0];
 	struct i915_dma_engine *de;
@@ -133,12 +133,12 @@ static int igt_shmem_dma(void *arg)
 	if (!de)
 		return 0;
 
-	page = alloc_pages_node(dev_to_node(de->dma->device->dev), GFP_KERNEL, get_order(MAX_PAGE));
+	page = alloc_pages_node(dev_to_node(de->dma->device->dev), GFP_KERNEL, get_order(DMA_MAX_CLEAR));
 	if (!page)
 		return 0;
 
 	dma = dma_map_page_attrs(de->dma->device->dev,
-				 page, 0, MAX_PAGE,
+				 page, 0, DMA_MAX_CLEAR,
 				 DMA_FROM_DEVICE,
 				 DMA_ATTR_SKIP_CPU_SYNC |
 				 DMA_ATTR_NO_KERNEL_MAPPING |
@@ -189,7 +189,7 @@ static int igt_shmem_dma(void *arg)
 	}
 
 out:
-	__free_pages(page, get_order(MAX_PAGE));
+	__free_pages(page, get_order(DMA_MAX_CLEAR));
 	return 0;
 }
 

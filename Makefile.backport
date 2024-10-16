@@ -15,9 +15,11 @@
 # EXTENDED_VERSION_X/_Y/_X : Extracts Extended kernel version from specific osv provided
 # generated source file.
 # Ex: RHEL provides extended version info with include/generated/uapi/linux/version.h header
-# with RHEL_RELEASE macro.
-# Expected input: #define RHEL_RELEASE "372.32.1"
-# Filtered output: EXTENDED_VERSION_X:372 , EXTENDED_VERSION_Y:32, EXTENDED_VERSION_Z:1
+# with RHEL_RELEASE macro. For RHEL8.X, this macro is having incorrect version info hence
+# reading it from the include/generated/utsrelease.h header with UTS_RELEASE macro.
+# Expected input for RHEL9.x: #define RHEL_RELEASE "x.y.z"
+# Expected input for RHEL8.x: #define "4.18.0-x.y.z.el8_X.x86_64"
+# Filtered output: EXTENDED_VERSION_X:x , EXTENDED_VERSION_Y:y, EXTENDED_VERSION_Z:z
 EXTENDED_VERSION_X = 0
 EXTENDED_VERSION_Y = 0
 EXTENDED_VERSION_Z = 0
@@ -57,11 +59,11 @@ MODULES_VARIANT := pmt
 
 BUILD_CONFIG ?=
 
-BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT) disabledisplay i915_hwe
+BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT) disabledisplay enabledisplay i915_hwe
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS VANILLA_5.4LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
+RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
 DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP UBUNTU_24.04_SERVER UBUNTU_24.04_DESKTOP
 
 RELEASE_TYPE ?= opensource
@@ -206,7 +208,7 @@ PHOTON_IDENTIFIER = ""
 # BKPT_VER consist of backported release version.
 # Expected input: 'BACKPORTS_RELEASE_TAG="BKPT_6365_PRERELEASE_221021.0"' (TBD: Need to change as per final unification tag)
 # Filtered output: 221021.0
-BKPT_VER=$(shell cat versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 6 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
+BKPT_VER=$(shell cat $(BACKPORT_DIR)/versions | grep BACKPORTS_RELEASE_TAG | cut -d "_" -f 6 | cut -d "\"" -f 1 | cut -d "-" -f 1 2>/dev/null || echo 1)
 
 get_kernel_version = $(strip $(shell expr $(1).$(2)))
 
@@ -216,14 +218,14 @@ get_kernel_version = $(strip $(shell expr $(1).$(2)))
 #    For DII_KERNEL_TAG="PROD_I915_6469.0.7"  : DII_TAG will be 6469.0.7
 #    For DII_KERNEL_TAG="I915-23.4.0"         : DII_TAG will be 23.4.0
 #for DII_TAG_PREFIX output will be DII or PROD or I915-23.4.0.
-DII_TAG_PREFIX=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 1 2>/dev/null || echo 1)
+DII_TAG_PREFIX=$(shell cat $(BACKPORT_DIR)/versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 1 2>/dev/null || echo 1)
 
 ifeq ($(DII_TAG_PREFIX) , PROD)
-  DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
+  DII_TAG=$(shell cat $(BACKPORT_DIR)/versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 3 2>/dev/null || echo 1)
 else ifeq ($(DII_TAG_PREFIX) , DII)
-  DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
+  DII_TAG=$(shell cat $(BACKPORT_DIR)/versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "_" -f 2 2>/dev/null || echo 1)
 else
-  DII_TAG=$(shell cat versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
+  DII_TAG=$(shell cat $(BACKPORT_DIR)/versions | grep DII_KERNEL_TAG | cut -f 2 -d "\"" | cut -d "-" -f 2 2>/dev/null || echo 1)
 endif
 
 
@@ -274,7 +276,7 @@ SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep 
 # Filtered Output: 0
 SUSE_AUXRELEASE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
 
-SUSE_PRODUCT_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/suse_version.h | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g')
+SUSE_PRODUCT_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/suse_version.h | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g' | tail -1 )
 export SUSE_PRODUCT_CODE
 
 OSV_VER = $(SUSE_VERSION)0$(SUSE_PATCHLEVEL)0$(SUSE_AUXRELEASE)
@@ -283,7 +285,7 @@ EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | 
 
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f3)
 
-OSV_KV_SUPPORTED = $(shell cat versions | grep "SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION" | cut -d '"' -f 2)
 
 BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X)
 
@@ -315,6 +317,7 @@ KERN_TYPE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG
 # Get the osv version by comparing the kernel versions
 ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
 	OSV_VER = 24.04
+	OSV_VER1 = 22.04
 else
 ifeq ($(shell expr $(BASE_KERN) \>= 5.15), 1)
 	OSV_VER = 22.04
@@ -329,17 +332,15 @@ BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)
 
 ifeq ($(KERN_TYPE), oem)
 ifeq ($(shell expr $(BASE_KERN) \== 5.14), 1)
-OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_OEM_20.04_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_OEM_20.04_KERNEL_VERSION" | cut -d '"' -f 2)
 else
-OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 else
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
-OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
-OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifeq ($(shell expr $(BASE_KERN) \> 5.15), 1)
-OSV_KV_SUPPORTED = $(shell cat versions | grep "UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 endif
 
@@ -370,19 +371,26 @@ RHEL_RELEASE_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/ve
 export RHEL_RELEASE_VERSION
 
 OSV_VER = $(RHEL_MAJOR).$(RHEL_MINOR)
+ifeq ($(RHEL_MAJOR), 8)
+EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d 'e' -f1 | cut -d '.' -f1)
 
+EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d 'e' -f1 | cut -d '.' -f2)
+
+EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d 'e' -f1 | cut -d '.' -f3)
+else
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f1)
 
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f2)
 
 EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f3)
+endif
 
 # OSV_KV_SUPPORTED consist of rhel kernel version available in versions file.
 # Expected input: RHEL_8.6_KERNEL_VERSION="4.18.0-372.32.1"
 # Filtered output: 4.18.0-372.32.1
-OSV_KV_SUPPORTED = $(shell cat versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep RHEL_$(RHEL_MAJOR).$(RHEL_MINOR)_KERNEL_VERSION | cut -d "\"" -f 2 2>/dev/null || echo 1)
 
-BASE_KERNEL_NAME = $(KERN_VER_XYZ).$(EXTENDED_VERSION_X)
+BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)
 
 # BASE_KERNEL_NAME consist of kernel version
 # Output: 4.18.0-372.32.1
@@ -398,25 +406,22 @@ else ifeq ($(OSV_NAME),)
 #
 # Extract Vanilla/Mainline/CUSTOM Kernel Variables
 #
-ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,5,4)), 1)
-OSV_NAME = VANILLA_5.4LTS
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifeq ($(shell test $(BASE_KERN) = 5.10 && test "$(BUILD_CONFIG)" != CUSTOM_KERN_3 && echo 1), 1)
+ifeq ($(shell test $(BASE_KERN) = 5.10 && test "$(BUILD_CONFIG)" != CUSTOM_KERN_3 && echo 1), 1)
 ifeq ($(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep BUILD_SALT | cut -d '"' -f2 | cut -d . -f4 | cut -c 1-3), deb)
 OSV_NAME = DEBIAN_5.10
 else
 OSV_NAME = VANILLA_5.10LTS
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,5,15)), 1)
 OSV_NAME = VANILLA_5.15LTS
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,1)), 1)
 OSV_NAME = VANILLA_6.1LTS
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,6)), 1)
 OSV_NAME = VANILLA_6.6LTS
-OSV_KV_SUPPORTED = $(shell cat versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_ID), )
 
 CUSTOM_ARG = -t $(CUSTOM_KERN_ID)
@@ -470,9 +475,9 @@ OS_DISTRIBUTION := $(shell echo $(OS_DISTRIBUTION) | tr '[:lower:]' '[:upper:]')
 
 ifeq ($(BUILD_CONFIG), sp2)
 BUILD_CONFIG_DISTRO := $(shell echo $(BUILD_CONFIG_DISTRO) | tr '[:lower:]' '[:upper:]')
-BASE_KERNEL_NAME = $(shell cat versions | grep -w "SLES15_$(BUILD_CONFIG_DISTRO)_KERNEL_VERSION" | cut -d '"' -f 2)
+BASE_KERNEL_NAME = $(shell cat $(BACKPORT_DIR)/versions | grep -w "SLES15_$(BUILD_CONFIG_DISTRO)_KERNEL_VERSION" | cut -d '"' -f 2)
 else
-BASE_KERNEL_NAME = $(shell cat versions | grep -w "$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
+BASE_KERNEL_NAME = $(shell cat $(BACKPORT_DIR)/versions | grep -w "$(OS_DISTRIBUTION)_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 
 ifneq ($(CUSTOM_KERN_ID), )
@@ -515,7 +520,7 @@ ifeq ($(KERNELRELEASE),)
 #-----------------------------------------------------------------------------
 
 version_h := $(BACKPORT_DIR)/backport-include/linux/osv_version.h
-backport_path_h := backport-include/backport/backport_path.h
+backport_path_h := $(BACKPORT_DIR)/backport-include/backport/backport_path.h
 export version_h backport_path_h
 
 .PHONY: modules
@@ -627,8 +632,7 @@ define filechk_osv_custom_kernel_3.h
 endef
 
 # version_h
-# Creates Backports dmabuf dkms package
-# Rpm generated can be copied to client machine and install
+# Create OSV specific Macro variables
 #------------------------------------------------------------------------------
 $(version_h): $(BACKPORT_DIR)/Makefile FORCE
 ifeq ($(OSV_NAME), UBUNTU)
@@ -662,31 +666,16 @@ else
 ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
 	@echo 'UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 	@echo 'UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+	@echo 'UBUNTU_$(OSV_VER1)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 else ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 	@echo 'UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
-else ifeq ($(shell expr $(BASE_KERN) \> 5.15), 1)
-ifeq ($(shell expr $(BASE_KERN) \!= $(call  get_kernel_version,5,19)), 1)
-	@echo 'UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
-endif
 endif
 endif
 else ifeq ($(OSV_NAME), SUSE)
-ifneq ($(EXTENDED_VERSION_Y),)
-	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
-else
-	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(OSV_VER).$(EXTENDED_VERSION_X)"' >> versions
-endif
+	@echo 'SLES15_SP$(SUSE_PATCHLEVEL)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 else ifeq ($(OSV_NAME), RHEL)
 ifneq (,$(filter $(OSV_NAME)_$(OSV_VER), $(RPM_DISTRIBUTIONS)))
-ifneq ($(EXTENDED_VERSION_Y),)
-ifneq ($(EXTENDED_VERSION_Z),)
-	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y).$(EXTENDED_VERSION_Z)"' >> versions
-else
-	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X).$(EXTENDED_VERSION_Y)"' >> versions
-endif
-else
-	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)"' >> versions
-endif
+	@echo 'RHEL_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 endif
 else
 	@echo '$(OSV_NAME)_KERNEL_VERSION="$(KERN_VER_XYZ)"' >> versions
@@ -923,6 +912,9 @@ endif
 #
 #------------------------------------------------------------------------------
 
+#read default version from changelog.in and replace it with proper version info during package generation
+DEF_VER = $(shell cat $(BACKPORT_DIR)/debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d ')' -f 1)
+
 #------------------------------------------------------------------------------
 # Debian DKMS Package Targets
 #------------------------------------------------------------------------------
@@ -930,8 +922,6 @@ endif
 # dmabufdkmsdeb-pkg
 # Creates Backports dmabuf dkms debian package
 #------------------------------------------------------------------------------
-#read default version from changelog.in and replace it with proper version info during package generation
-DEF_VER = $(shell cat debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d ')' -f 1)
 DMABUFDKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebcontrol
 DMABUFDKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebrules
 DMABUFDKMSMK_INSTALL := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebinstall
@@ -967,9 +957,6 @@ dmabufdkmsdeb-pkg:
 # drmdkmsdeb-pkg
 # Creates Backports drm dkms debian package with drm and i915 modules.
 #------------------------------------------------------------------------------
-#read default version from changelog.in and replace it with proper version info during package generation
-DEF_VER = $(shell cat debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d ')' -f 1)
-
 DRMDKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdrmdebcontrol
 DRMDKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
 DRMDKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mkdrmdebdkms
@@ -1006,9 +993,6 @@ drmdkmsdeb-pkg:
 # i915dkmsdeb-pkg
 # Creates Backports i915 alone DKMS debian package
 #------------------------------------------------------------------------------
-#read default version from changelog.in and replace it with proper version info during package generation
-DEF_VER = $(shell cat debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d ')' -f 1)
-
 I915DKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
 I915DKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
 I915DKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mki915debdkms
@@ -1053,9 +1037,6 @@ endif
 # dkmsdeb-pkg
 # Creates single DKMS debian package with all modules.
 #------------------------------------------------------------------------------
-#read default version from changelog.in and replace it with proper version info during package generation
-DEF_VER = $(shell cat debian/changelog.in | head -1 | cut -d '(' -f 2 | cut -d ')' -f 1)
-
 DMABUF_I915_DKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdebcontrol
 DMABUF_I915_DKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdebrules
 DMABUF_I915_DKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mkdmabufi915debdkms
@@ -1159,17 +1140,17 @@ clean:
 .PHONY: mrproper
 mrproper:
 	@rm -f $(backport_path_h)
-	@rm -f debian/README.Debian
-	@rm -f debian/changelog
-	@rm -f debian/control
-	@rm -f debian/copyright
-	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.dkms.in
-	@rm -f debian/$(I915_PKG_NAME_BASENAME)*.install.in
-	@rm -f debian/$(DMABUF_PKG_NAME_BASENAME)*.dkms.in
-	@rm -f debian/$(DMABUF_PKG_NAME_BASENAME)*.install.in
-	@rm -rf debian/$(DMABUF_PKG_NAME_BASENAME)*
-	@rm -rf debian/$(I915_PKG_NAME_BASENAME)*
-	@rm -f debian/rules
+	@rm -f $(BACKPORT_DIR)/debian/README.Debian
+	@rm -f $(BACKPORT_DIR)/debian/changelog
+	@rm -f $(BACKPORT_DIR)/debian/control
+	@rm -f $(BACKPORT_DIR)/debian/copyright
+	@rm -f $(BACKPORT_DIR)/debian/$(I915_PKG_NAME_BASENAME)*.dkms.in
+	@rm -f $(BACKPORT_DIR)/debian/$(I915_PKG_NAME_BASENAME)*.install.in
+	@rm -f $(BACKPORT_DIR)/debian/$(DMABUF_PKG_NAME_BASENAME)*.dkms.in
+	@rm -f $(BACKPORT_DIR)/debian/$(DMABUF_PKG_NAME_BASENAME)*.install.in
+	@rm -rf $(BACKPORT_DIR)/debian/$(DMABUF_PKG_NAME_BASENAME)*
+	@rm -rf $(BACKPORT_DIR)/debian/$(I915_PKG_NAME_BASENAME)*
+	@rm -f $(BACKPORT_DIR)/debian/rules
 	@rm -f $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME)*.spec
 	@rm -f $(BACKPORT_DIR)/$(BIN_PACKAGE_NAME)*-src.tar.gz
 	@rm -f $(BACKPORT_DIR)/$(DMABUF_PKG_NAME_BASENAME)*.spec

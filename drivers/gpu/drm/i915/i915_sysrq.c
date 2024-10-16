@@ -9,6 +9,7 @@
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/sysrq.h>
+#include <linux/utsname.h>
 
 #include "gt/uc/intel_guc.h"
 
@@ -17,12 +18,17 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_timeline.h"
 
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_request.h"
 #include "i915_sysrq.h"
 #include "intel_memory_region.h"
 #include "intel_wakeref.h"
+
+#ifdef BPM_ADD_MODULE_VERSION_MACRO_IN_ALL_MOD
+#include <backport/bp_module_version.h>
+#endif
 
 static DEFINE_MUTEX(sysrq_mutex);
 static LIST_HEAD(sysrq_list);
@@ -106,16 +112,16 @@ static void unregister_sysrq(void (*fn)(void *data), void *data)
 	synchronize_rcu();
 }
 
-static void show_gpu_mem(struct drm_i915_private *i915, struct drm_printer *p)
+static void show_gpu_mem(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 {
 	struct intel_memory_region *mr;
 	enum intel_region_id id;
 
 	for_each_memory_region(mr, i915, id)
-		intel_memory_region_print(mr, 0, p);
+		intel_memory_region_print(mr, 0, p, indent);
 }
 
-static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p)
+static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p, int indent)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id tmp;
@@ -151,79 +157,145 @@ static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p)
 	}
 	s += snprintf(s, sizeof(buf) - (s - buf), "%s", prefix);
 
-	drm_printf(p, "multiCCS: { %s }\n", buf);
+	i_printf(p, indent ,"multiCCS: { %s }\n", buf);
 }
 
-static void show_gt(struct intel_gt *gt, struct drm_printer *p)
+static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 {
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
 	intel_wakeref_t wakeref;
+	u64 t;
 
-	drm_printf(p, "GT%d awake? %s [%d], %llums, mask: %x\n",
-		   gt->info.id,
-		   str_yes_no(intel_gt_pm_is_awake(gt)),
-		   atomic_read(&gt->wakeref.count),
-		   ktime_to_ms(intel_gt_get_awake_time(gt)),
-		   atomic_read(&gt->user_engines));
-	drm_printf(p, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
-		   READ_ONCE(gt->stats.irq.count),
-		   READ_ONCE(gt->stats.irq.total),
-		   ewma_irq_time_read(&gt->stats.irq.avg),
-		   READ_ONCE(gt->stats.irq.max));
-	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915)) {
-		drm_printf(p, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, debugger: %s }\n",
-			   local_read(&gt->stats.pagefault_minor),
-			   local_read(&gt->stats.pagefault_major),
-			   local_read(&gt->stats.pagefault_invalid),
-			   str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)));
+	if (!intel_gt_pm_is_awake(gt)) {
+		i_printf(p, indent, "GT%d: idle\n", gt->info.id);
+		return;
 	}
-	show_ccs_mode(gt, p);
 
+	i_printf(p, indent, "GT%d: awake: %s [%d], %llums, mask: %x\n",
+		 gt->info.id,
+		 str_yes_no(intel_gt_pm_is_awake(gt)),
+		 atomic_read(&gt->wakeref.count),
+		 ktime_to_ms(intel_gt_get_awake_time(gt)),
+		 atomic_read(&gt->user_engines));
+	indent += 2;
 	if (intel_gt_pm_is_awake(gt))
-		intel_wakeref_show(&gt->wakeref, p);
+		intel_wakeref_show(&gt->wakeref, p, indent);
+
+	i_printf(p, indent, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+		 READ_ONCE(gt->stats.irq.count),
+		 READ_ONCE(gt->stats.irq.total),
+		 ewma_irq_time_read(&gt->stats.irq.avg),
+		 READ_ONCE(gt->stats.irq.max));
+	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915)) {
+		i_printf(p, indent, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, debugger: %s }\n",
+			 local_read(&gt->stats.pagefault_minor),
+			 local_read(&gt->stats.pagefault_major),
+			 local_read(&gt->stats.pagefault_invalid),
+			 str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)));
+	}
+
+	t = local64_read(&gt->stats.migration_stall);
+	if (t >> 20)
+		i_printf(p, indent, "Migration: { stalls: %lldms } \n",
+			 div_u64(t, NSEC_PER_MSEC));
+
+	show_ccs_mode(gt, p, indent);
+	i_printf(p, indent, "EU: { config: %ux%ux%u, total: %u }\n",
+		 hweight8(gt->info.sseu.slice_mask),
+		 intel_sseu_subslice_total(&gt->info.sseu),
+		 gt->info.sseu.eu_per_subslice,
+		 gt->info.sseu.eu_total);
 
 	with_intel_gt_pm_if_awake(gt, wakeref)
-		intel_guc_print_info(&gt->uc.guc, p);
+		intel_guc_print_info(&gt->uc.guc, p, indent);
 
 	for_each_engine(engine, gt, id) {
 		if (intel_engine_is_idle(engine))
 			continue;
 
-		intel_engine_dump(engine, p, "%s\n", engine->name);
+		intel_engine_dump(engine, p, indent);
 	}
 
-	intel_gt_show_timelines(gt, p, i915_request_show_with_schedule);
+	intel_gt_show_timelines(gt, p, indent, i915_request_show_with_schedule);
 }
 
-static void show_gts(struct drm_i915_private *i915, struct drm_printer *p)
+static void show_gts(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 {
 	struct intel_gt *gt;
 	int i;
 
 	for_each_gt(gt, i915, i)
-		show_gt(gt, p);
+		show_gt(gt, p, indent);
 }
 
-static void show_rpm(struct drm_i915_private *i915, struct drm_printer *p)
+static void show_rpm(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 {
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-	drm_printf(p, "Runtime power status: %s\n",
-		   str_enabled_disabled(!i915->power_domains.init_wakeref));
+	i_printf(p, indent, "Runtime power status: %s\n",
+		 str_enabled_disabled(!i915->power_domains.init_wakeref));
 #endif
-	print_intel_runtime_pm_wakeref(&i915->runtime_pm, p);
-	drm_printf(p, "IRQs disabled: %s\n",
-		   str_yes_no(!intel_irqs_enabled(i915)));
+	print_intel_runtime_pm_wakeref(&i915->runtime_pm, p, indent);
+}
+
+static void __dev_printfn_info(struct drm_printer *p, struct va_format *vaf)
+{
+	dev_info(p->arg, "%pV", vaf);
+}
+
+static bool iommu_required(struct drm_i915_private *i915)
+{
+	const u64 dma_mask = -BIT(INTEL_INFO(i915)->dma_mask_size);
+	struct intel_memory_region *mr;
+	int id;
+
+	for_each_memory_region(mr, i915, id) {
+		if (!mr->io_size)
+			continue;
+
+		if ((mr->io_start + mr->io_size - 1) & dma_mask)
+			return true;
+	}
+
+	return false;
+}
+
+void i915_show(struct drm_i915_private *i915, struct drm_printer *p, int indent)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
+	i_printf(p, indent, "Platform: %s [%04x:%04x], %s [%s] %s\n",
+		 intel_platform_name(INTEL_INFO(i915)->platform),
+		 pdev->vendor, pdev->device,
+		 init_utsname()->release,
+#ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
+		 BACKPORT_MOD_VER,
+#else
+		 "DII",
+#endif
+		 init_utsname()->machine);
+
+	i_printf(p, indent, "IOMMU: { dma-width: %d, %s%s }\n",
+		 INTEL_INFO(i915)->dma_mask_size,
+		 str_enabled_disabled(i915_vtd_active(i915) > 0),
+		 iommu_required(i915) ? ", required" : "");
+	i_printf(p, indent, "IRQ: %d, %s\n",
+		 pdev->irq, str_enabled_disabled(intel_irqs_enabled(i915)));
+
+	show_rpm(i915, p, indent);
+	show_gts(i915, p, indent);
+	show_gpu_mem(i915, p, indent);
 }
 
 static void show_gpu(void *data)
 {
 	struct drm_i915_private *i915 = data;
-	struct drm_printer p = drm_info_printer(i915->drm.dev);
+	struct drm_printer p = {
+		.printfn = __dev_printfn_info,
+		.arg = i915->drm.dev,
+	};
 
-	show_rpm(i915, &p);
-	show_gts(i915, &p);
-	show_gpu_mem(i915, &p);
+	i915_show(i915, &p, 0);
 }
 
 int i915_register_sysrq(struct drm_i915_private *i915)

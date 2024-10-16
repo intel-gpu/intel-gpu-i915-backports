@@ -41,7 +41,7 @@ void i915_gemfs_init(struct drm_i915_private *i915)
 		return;
 
 	i915->mm.gemfs = gemfs;
-	drm_info(&i915->drm, "Using Transparent Hugepages\n");
+	dev_info(i915->drm.dev, "Using Transparent Hugepages\n");
 }
 
 void i915_gemfs_fini(struct drm_i915_private *i915)

@@ -7,15 +7,15 @@
 
 #include "gt/intel_tlb.h"
 #include "i915_sriov_sysfs.h"
+#include "i915_sriov_telemetry.h"
 #include "i915_debugger.h"
-#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_pci.h"
 #include "i915_utils.h"
 #include "intel_pci_config.h"
-#include "gem/i915_gem_pm.h"
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_pm.h"
 
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_gt.h"
@@ -312,6 +312,35 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 	return I915_IOV_MODE_NONE;
 }
 
+/**
+ * i915_sriov_init_late - Late SR-IOV initialization.
+ * @i915: the i915 struct
+ *
+ * Late initialization of the necessary i915 SR-IOV data.
+ */
+void i915_sriov_init_late(struct drm_i915_private *i915)
+{
+	if (IS_SRIOV_PF(i915))
+		i915_sriov_telemetry_pf_init(i915);
+
+	if (IS_SRIOV_VF(i915)) {
+		i915_sriov_telemetry_vf_init(i915);
+		i915_sriov_telemetry_vf_start(i915);
+	}
+}
+
+/**
+ * i915_sriov_release - Release SR-IOV data.
+ * @i915: the i915 struct
+ *
+ * Release i915 SR-IOV data.
+ */
+void i915_sriov_release(struct drm_i915_private *i915)
+{
+	if (IS_SRIOV_PF(i915))
+		i915_sriov_telemetry_pf_release(i915);
+}
+
 static void migration_worker_func(struct work_struct *w);
 
 static void vf_init_early(struct drm_i915_private *i915)
@@ -362,6 +391,18 @@ int i915_sriov_early_tweaks(struct drm_i915_private *i915)
 	}
 
 	return 0;
+}
+
+/**
+ * i915_sriov_early_cleanup - Perform early SR-IOV cleanup.
+ * @i915: the i915 struct
+ *
+ * Early cleanup of i915 SR-IOV resources configured during initialization.
+ */
+void i915_sriov_early_cleanup(struct drm_i915_private *i915)
+{
+	if (IS_SRIOV_VF(i915))
+		i915_sriov_telemetry_vf_fini(i915);
 }
 
 int i915_sriov_pf_get_device_totalvfs(struct drm_i915_private *i915)
@@ -1721,7 +1762,6 @@ static void intel_gt_default_contexts_ring_restore(struct intel_gt *gt)
 
 	list_for_each_entry(ce, &gt->pinned_contexts, pinned_contexts_link) {
 		guc_submission_refresh_ctx_rings_content(ce);
-		intel_context_update_ring_head_tail(ce);
 	}
 }
 
@@ -1750,7 +1790,6 @@ static void user_contexts_ring_restore(struct drm_i915_private *i915)
 
 		for_each_gem_engine(ce, rcu_dereference(ctx->engines), it) {
 			guc_submission_refresh_ctx_rings_content(ce);
-			intel_context_update_ring_head_tail(ce);
 		}
 
 		spin_lock_irq(&i915->gem.contexts.lock);
@@ -2024,7 +2063,7 @@ static void vf_post_migration_recovery(struct drm_i915_private *i915)
 
 	if (vf_post_migration_is_scheduled(i915))
 		goto defer;
-	i915_userspace_blocking_secure(i915);
+	i915_ggtt_address_write_lock(i915);
 	err = vf_post_migration_reinit_guc(i915);
 	if (unlikely(err))
 		goto fail;
@@ -2033,11 +2072,11 @@ static void vf_post_migration_recovery(struct drm_i915_private *i915)
 	vf_post_migration_fixup_contexts(i915);
 	vf_post_migration_fixup_ctb(i915);
 
-	if (!vf_post_migration_is_scheduled(i915))
+	if (!vf_post_migration_is_scheduled(i915)) {
 		vf_post_migration_notify_resfix_done(i915);
+		i915_ggtt_address_write_unlock(i915);
+	}
 	vf_post_migration_kickstart(i915);
-	if (!vf_post_migration_is_scheduled(i915))
-		i915_userspace_blocking_finish(i915);
 	i915_reset_backoff_leave(i915);
 	drm_notice(&i915->drm, "migration recovery completed\n");
 	return;
@@ -2053,7 +2092,7 @@ fail:
 	drm_err(&i915->drm, "migration recovery failed (%pe)\n", ERR_PTR(err));
 	intel_gt_set_wedged(to_gt(i915));
 	if (!vf_post_migration_is_scheduled(i915))
-		i915_userspace_blocking_finish(i915);
+		i915_ggtt_address_write_unlock(i915);
 	i915_reset_backoff_leave(i915);
 }
 
@@ -2077,36 +2116,57 @@ void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915)
 
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 
-	i915_userspace_blocking_begin(i915);
+	WRITE_ONCE(i915->sriov.vf.migration_gt_flags, 0);
+	smp_mb();
+
 	started = queue_work(system_unbound_wq, &i915->sriov.vf.migration_worker);
 	dev_info(i915->drm.dev, "VF migration recovery %s\n", started ?
 		 "scheduled" : "already in progress");
 }
 
+/**
+ * i915_sriov_current_is_vf_migration_recovery - returns if current worker is the
+ *   VF post-migration recovery worker
+ * @i915: the i915 struct instance
+ * Return: True if the current cpu context is the post-migration recovery worker
+ */
+bool i915_sriov_current_is_vf_migration_recovery(struct drm_i915_private *i915)
+{
+	return current_work() == &i915->sriov.vf.migration_worker;
+}
+
+static bool vf_ready_to_recovery_on_all_tiles(struct drm_i915_private *i915)
+{
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_gt(gt, i915, id) {
+		if (!test_bit(id, &i915->sriov.vf.migration_gt_flags))
+			return false;
+	}
+	return true;
+}
+
 int intel_sriov_vf_migrated_event_handler(struct intel_guc *guc)
 {
-	struct intel_uncore *uncore = guc_to_gt(guc)->uncore;
+	struct intel_gt *gt = guc_to_gt(guc);
+	struct drm_i915_private *i915 = gt->uncore->i915;
 
 	if (!guc->submission_initialized) {
 		/*
 		 * If at driver init, ignore migration which happened
 		 * before the driver was loaded.
 		 */
-		vf_post_migration_reset_guc_state(uncore->i915);
+		vf_post_migration_reset_guc_state(i915);
 		return -EAGAIN;
 	}
-	i915_sriov_vf_start_migration_recovery(uncore->i915);
+
+	set_bit(gt->info.id, &i915->sriov.vf.migration_gt_flags);
+	smp_mb__after_atomic();
+	dev_info(i915->drm.dev, "VF migration recovery ready on gt%d\n",
+		 gt->info.id);
+	if (vf_ready_to_recovery_on_all_tiles(i915))
+		i915_sriov_vf_start_migration_recovery(i915);
+
 	return -EREMOTEIO;
-}
-
-bool i915_sriov_vf_migration_check(struct drm_i915_private *i915, bool wait_end)
-{
-	bool is_blocked;
-
-	if (!IS_SRIOV_VF(i915))
-		return false;
-	is_blocked = i915_userspace_is_blocked(i915);
-	if (wait_end && is_blocked)
-		i915_userspace_wait_unlock(i915);
-	return is_blocked;
 }

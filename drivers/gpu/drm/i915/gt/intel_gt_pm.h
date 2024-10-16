@@ -61,6 +61,11 @@ static inline void intel_gt_pm_put_async_untracked(struct intel_gt *gt)
 	intel_wakeref_put_async(&gt->wakeref);
 }
 
+static inline void intel_gt_pm_put_delay_untracked(struct intel_gt *gt, unsigned long delay)
+{
+	intel_wakeref_put_delay(&gt->wakeref, delay);
+}
+
 static inline void intel_gt_pm_might_put(struct intel_gt *gt)
 {
 	intel_wakeref_might_put(&gt->wakeref);
@@ -72,30 +77,27 @@ static inline void intel_gt_pm_put_async(struct intel_gt *gt, intel_wakeref_t ha
 	intel_gt_pm_put_async_untracked(gt);
 }
 
+static inline void intel_gt_pm_put_delay(struct intel_gt *gt, intel_wakeref_t handle, unsigned long delay)
+{
+	intel_wakeref_untrack(&gt->wakeref, handle);
+	intel_gt_pm_put_delay_untracked(gt, delay);
+}
+
 #define with_intel_gt_pm(gt, wf) \
 	for (wf = intel_gt_pm_get(gt); wf; intel_gt_pm_put(gt, wf), wf = 0)
 
 #define with_intel_gt_pm_async(gt, wf) \
 	for (wf = intel_gt_pm_get(gt); wf; intel_gt_pm_put_async(gt, wf), wf = 0)
 
+#define with_intel_gt_pm_delay(gt, wf, delay) \
+	for (wf = intel_gt_pm_get(gt); wf; intel_gt_pm_put_delay(gt, wf, delay), wf = 0)
+
 #define with_intel_gt_pm_if_awake(gt, wf) \
 	for (wf = intel_gt_pm_get_if_awake(gt); wf; intel_gt_pm_put_async(gt, wf), wf = 0)
 
-static inline int intel_gt_pm_wait_for_idle(struct intel_gt *gt)
+static inline int intel_gt_pm_wait_for_idle(struct intel_gt *gt, long timeout)
 {
-	return intel_wakeref_wait_for_idle(&gt->wakeref);
-}
-
-static inline intel_wakeref_t
-intel_gt_pm_get_if_awake_l4(struct intel_gt *gt)
-{
-	return intel_gt_pm_get_if_awake(gt);
-}
-
-static inline void
-intel_gt_pm_put_async_l4(struct intel_gt *gt, intel_wakeref_t wakeref)
-{
-	intel_gt_pm_put_async(gt, wakeref);
+	return intel_wakeref_wait_for_idle(&gt->wakeref, timeout);
 }
 
 void intel_gt_pm_init_early(struct intel_gt *gt);
@@ -115,18 +117,6 @@ ktime_t intel_gt_get_awake_time(const struct intel_gt *gt);
 static inline bool is_mock_gt(const struct intel_gt *gt)
 {
 	return I915_SELFTEST_ONLY(gt->mock);
-}
-
-static inline
-int intel_gt_idle_engines_start(struct intel_gt *gt, bool enable)
-{
-	return intel_uc_idle_engines_start(&gt->uc, enable);
-}
-
-static inline
-int intel_gt_idle_engines_wait(struct intel_gt *gt)
-{
-	return intel_uc_idle_engines_wait(&gt->uc);
 }
 
 static inline void assert_gt_pm_held(const struct intel_gt *gt)

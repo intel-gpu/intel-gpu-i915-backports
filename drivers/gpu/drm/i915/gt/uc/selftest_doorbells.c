@@ -214,7 +214,7 @@ static void *create_doorbell(struct intel_guc *guc, struct live_doorbells *arg,
 		vaddr = arg->vaddr->doorbell;
 
 		GEM_BUG_ON(ptr_offset(arg->vaddr, doorbell));
-		gpa = sg_dma_address(arg->vma->pages->sgl);
+		gpa = sg_dma_address(arg->vma->pages);
 		gfx_addr = intel_guc_ggtt_offset(guc, arg->vma);
 	}
 

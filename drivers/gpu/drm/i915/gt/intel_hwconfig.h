@@ -7,10 +7,12 @@
 #define _INTEL_HWCONFIG_H_
 
 #include <linux/types.h>
+#include <linux/mutex.h>
 
 struct intel_gt;
 
 struct intel_hwconfig {
+	struct mutex mutex;
 	u32 size;
 	void *ptr;
 };

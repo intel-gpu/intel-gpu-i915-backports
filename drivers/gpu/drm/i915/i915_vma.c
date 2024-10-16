@@ -38,7 +38,6 @@
 #include "gt/intel_tlb.h"
 
 #include "i915_debugger.h"
-#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_gem_evict.h"
 #include "i915_sw_fence_work.h"
@@ -313,9 +312,6 @@ rebind:
 		if (err == 0)
 			goto rebind;
 	}
-
-	if (i915_sriov_vf_migration_check(vma->vm->i915, false))
-		err = -EREMCHG;
 
 	if (ww)
 		i915_gem_ww_ctx_fini(ww);
@@ -1247,27 +1243,24 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	} while (1);
 }
 
-int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
-			 u32 align, unsigned int flags)
+int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
 {
+	unsigned int flags;
 	int retry = 3;
 	int err;
-
-	GEM_BUG_ON(flags & (PIN_OFFSET_FIXED | PIN_OFFSET_GUARD));
-	GEM_BUG_ON(flags & PAGE_MASK);
 
 	/*
 	 * During execution we have to avoid certain address ranges,
 	 * as these are aliased into the GuC, and historically we
 	 * have seen problems with ring bufferss placed at offset 0.
 	 */
-	flags |= i915_ggtt_pin_bias(vma) | PIN_OFFSET_BIAS | PIN_GLOBAL;
+	flags = i915_ggtt_pin_bias(vma) | PIN_OFFSET_BIAS | PIN_GLOBAL;
 
 	do {
 		if (ww)
-			err = i915_vma_pin_ww(vma, ww, 0, align, flags);
+			err = i915_vma_pin_ww(vma, ww, 0, 0, flags);
 		else
-			err = i915_vma_pin(vma, 0, align, flags);
+			err = i915_vma_pin(vma, 0, 0, flags);
 		if (!err || err == -EDEADLK)
 			return err;
 

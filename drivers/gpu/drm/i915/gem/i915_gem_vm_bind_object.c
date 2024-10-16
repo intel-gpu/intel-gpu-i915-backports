@@ -62,7 +62,7 @@ static void ufence_sync(struct user_fence *ufence)
 	/* Before signalling, make sure all TLBs were cleared of old PTE */
 	for_each_gt(gt, ufence->i915, id) {
 		if (ufence->sync[id])
-			intel_gt_invalidate_tlb_sync(gt, ufence->sync[id]);
+			intel_gt_invalidate_tlb_sync(gt, ufence->sync[id], true);
 	}
 }
 
@@ -172,6 +172,7 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 	}
 	vb->wq = &vm->i915->user_fence_wq;
 	dma_fence_work_init(&vb->base, ops, vm->i915->sched);
+	vb->base.cpu = raw_smp_processor_id();
 
 	i915_sw_fence_await(&vb->base.rq.submit); /* signaled by vma_bind */
 
@@ -444,6 +445,7 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 		return NULL;
 
 	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->gt->sched);
+	w->base.cpu = raw_smp_processor_id();
 	w->vma = __i915_vma_get(vma);
 	INIT_LIST_HEAD(&w->unbind_link);
 	list_add_tail(&w->unbind_link, unbind_head);
@@ -587,9 +589,7 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 		if (test_bit(I915_VMA_HAS_LUT_BIT, __i915_vma_flags(vma)))
 			lut_remove(vma->obj, vm);
 
-		mutex_lock(&vm->mutex);
 		ret = i915_active_acquire(&vma->active);
-		mutex_unlock(&vm->mutex);
 	} else {
 		/*
 		 * For support of segmented BOs, we make EAGAIN checks for each
@@ -597,9 +597,7 @@ int i915_gem_vm_unbind_obj(struct i915_address_space *vm,
 		 * set of VMAs. This will do active_acquire() for each segment;
 		 * but on error, these are released before returning.
 		 */
-		mutex_lock(&vm->mutex);
 		ret = verify_adjacent_segments(vma, va->length);
-		mutex_unlock(&vm->mutex);
 	}
 	if (ret)
 		goto out_unlock;
@@ -631,7 +629,7 @@ out_unlock:
 	i915_gem_vm_bind_unlock(vm);
 	list_for_each_entry_safe(uw, uwn, &unbind_head, unbind_link) {
 		i915_sw_fence_set_error_once(&uw->base.rq.submit, ret);
-		dma_fence_work_commit_imm_if(&uw->base, va->length <= SZ_2M);
+		dma_fence_work_commit_imm_if(&uw->base, !dma_resv_is_locked(vm->root_obj->base.resv));
 	}
 
 	return ret;

@@ -756,6 +756,7 @@ static int live_error_interrupt(void *arg)
 					*cs++ = MI_NOOP;
 					*cs++ = MI_NOOP;
 				}
+				intel_ring_advance(rq, cs);
 
 				client[i] = i915_request_get(rq);
 				i915_request_add(rq);
@@ -1389,8 +1390,7 @@ static int live_timeslice_queue(void *arg)
 
 			pr_err("%s: Failed to timeslice into queue\n",
 			       engine->name);
-			intel_engine_dump(engine, &p,
-					  "%s\n", engine->name);
+			intel_engine_dump(engine, &p, 0);
 
 			memset(vaddr, 0xff, PAGE_SIZE);
 			err = -EIO;
@@ -1681,7 +1681,7 @@ static int live_busywait_preempt(void *arg)
 			pr_err("%s: Failed to preempt semaphore busywait!\n",
 			       engine->name);
 
-			intel_engine_dump(engine, &p, "%s\n", engine->name);
+			intel_engine_dump(engine, &p, 0);
 			GEM_TRACE_DUMP();
 
 			i915_request_put(lo);
@@ -2642,8 +2642,7 @@ static int live_chain_preempt(void *arg)
 
 				pr_err("Failed to preempt over chain of %d\n",
 				       count);
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 				i915_request_put(rq);
 				goto err_wedged;
 			}
@@ -2663,8 +2662,7 @@ static int live_chain_preempt(void *arg)
 
 				pr_err("Failed to flush low priority chain of %d requests\n",
 				       count);
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 
 				i915_request_put(rq);
 				goto err_wedged;
@@ -3020,8 +3018,7 @@ static int live_preempt_gang(void *arg)
 
 				pr_err("Failed to flush chain of %d requests, at %d\n",
 				       prio, rq_prio(rq));
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 
 				err = -ETIME;
 			}

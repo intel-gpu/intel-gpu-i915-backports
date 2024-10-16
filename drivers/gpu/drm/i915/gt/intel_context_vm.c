@@ -15,16 +15,19 @@ static int gen8_emit_vm_config(struct i915_request *rq,
 			       struct intel_context *ce,
 			       const struct i915_ppgtt *ppgtt)
 {
-	u64 offset = i915_ggtt_offset(ce->state) +
-		LRC_STATE_OFFSET + CTX_PDP0_LDW * 4;
+	u64 offset;
+	int srcu;
 
 	if (i915_vm_lvl(&ppgtt->vm) >= 4) {
 		const u64 addr = px_dma(ppgtt->pd);
 		u32 *cs;
 
-		cs = intel_ring_begin(rq, 8);
+		cs = intel_ring_begin_ggtt(rq, &srcu, 8);
 		if (IS_ERR(cs))
 			return PTR_ERR(cs);
+
+		offset = i915_ggtt_offset(ce->state) +
+			LRC_STATE_OFFSET + CTX_PDP0_LDW * 4;
 
 		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
 		*cs++ = lower_32_bits(offset);
@@ -38,14 +41,17 @@ static int gen8_emit_vm_config(struct i915_request *rq,
 		*cs++ = upper_32_bits(addr);
 		offset -= 8;
 
-		intel_ring_advance(rq, cs);
+		intel_ring_advance_ggtt(rq, srcu, cs);
 	} else {
 		u32 *cs;
 		int n;
 
-		cs = intel_ring_begin(rq, 32);
+		cs = intel_ring_begin_ggtt(rq, &srcu, 32);
 		if (IS_ERR(cs))
 			return PTR_ERR(cs);
+
+		offset = i915_ggtt_offset(ce->state) +
+			LRC_STATE_OFFSET + CTX_PDP0_LDW * 4;
 
 		for (n = 0; n < 4; n++) {
 			const u64 addr = i915_page_dir_dma_addr(ppgtt, n);
@@ -63,7 +69,7 @@ static int gen8_emit_vm_config(struct i915_request *rq,
 			offset -= 8;
 		}
 
-		intel_ring_advance(rq, cs);
+		intel_ring_advance_ggtt(rq, srcu, cs);
 	}
 
 	return 0;

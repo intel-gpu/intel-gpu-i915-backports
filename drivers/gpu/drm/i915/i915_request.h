@@ -178,6 +178,16 @@ enum {
 	 */
 	I915_FENCE_FLAG_LR,
 
+	/*
+	 * I915_FENCE_FLAG_GGTT_EMITTED - The request represented by this fence
+	 * has emitted at least one packet of commands to the ring which contained
+	 * GGTT address reference. This flag indicates that there may be GGTT
+	 * address references within the ring area associated to this request.
+	 * Only command packets which are used on SRIOV VF execution are obligated
+	 * to be mared with this flag.
+	 */
+	I915_FENCE_FLAG_GGTT_EMITTED,
+
 	I915_FENCE_FLAG_UFENCE,
 
 	__I915_FENCE_FLAG_LAST__
@@ -311,6 +321,9 @@ struct i915_request {
 
 	/** Position in the ring of the end of any workarounds after the tail */
 	u32 wa_tail;
+
+	/** Position in the ring of the end of last packet of emitted commands */
+	u32 advance;
 
 	/** Preallocate space in the ring for the emitting the request */
 	u32 reserved_space;
@@ -462,7 +475,7 @@ void i915_request_show(struct drm_printer *m,
 static inline bool i915_request_signaled(const struct i915_request *rq)
 {
 	/* The request may live longer than its HWSP, so check flags first! */
-	return test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags);
+	return rq->hwsp_seqno == (u32 *)&rq->fence.seqno;
 }
 
 static inline bool i915_request_is_active(const struct i915_request *rq)
@@ -577,6 +590,11 @@ static inline bool i915_request_started(const struct i915_request *rq)
 	return result;
 }
 
+static inline bool __i915_request_is_running(const struct i915_request *rq)
+{
+	return __i915_request_has_started(rq) && i915_request_is_active(rq);
+}
+
 /**
  * i915_request_is_running - check if the request may actually be executing
  * @rq: the request
@@ -593,7 +611,7 @@ static inline bool i915_request_is_running(const struct i915_request *rq)
 		return false;
 
 	rcu_read_lock();
-	result = __i915_request_has_started(rq) && i915_request_is_active(rq);
+	result = __i915_request_is_running(rq);
 	rcu_read_unlock();
 
 	return result;

@@ -233,10 +233,9 @@ void intel_engines_reset_default_submission(struct intel_gt *gt);
 
 bool intel_engine_can_store_dword(struct intel_engine_cs *engine);
 
-__printf(3, 4)
 void intel_engine_dump(struct intel_engine_cs *engine,
 		       struct drm_printer *m,
-		       const char *header, ...);
+		       int indent);
 
 ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine,
 				   ktime_t *now);

@@ -203,7 +203,6 @@ struct i915_page_table {
 
 struct i915_page_directory {
 	struct i915_page_table pt;
-	spinlock_t lock;
 	void **entry;
 };
 
@@ -427,6 +426,13 @@ struct i915_ggtt {
 
 	/** List of GTs mapping this GGTT */
 	struct list_head gt_list;
+
+	/* Sleepable RCU for blocking on address computations. */
+	struct srcu_struct blocked_srcu;
+	unsigned long flags;
+#define GGTT_ADDRESS_COMPUTE_BLOCKED	0
+	/** Waitqueue to signal when the blocking has completed. */
+	wait_queue_head_t queue;
 };
 
 struct i915_ppgtt {
@@ -528,13 +534,6 @@ void i915_vm_close(struct i915_address_space *vm);
 int i915_address_space_init(struct i915_address_space *vm, int subclass);
 void i915_address_space_fini(struct i915_address_space *vm);
 
-static inline struct i915_page_directory *
-i915_pd_entry(const struct i915_page_directory * const pdp,
-	      const unsigned short n)
-{
-	return pdp->entry[n];
-}
-
 static inline dma_addr_t
 i915_page_dir_dma_addr(const struct i915_ppgtt *ppgtt, const unsigned int n)
 {
@@ -557,11 +556,6 @@ int i915_init_ggtt(struct drm_i915_private *i915);
 void i915_ggtt_driver_release(struct drm_i915_private *i915);
 void i915_ggtt_driver_late_release(struct drm_i915_private *i915);
 
-void intel_partial_pages_for_sg_table(struct drm_i915_gem_object *obj,
-				      struct sg_table *st,
-				      unsigned long obj_offset,
-				      unsigned long page_count,
-				      struct scatterlist **sgl);
 int i915_ggtt_balloon(struct i915_ggtt *ggtt, u64 start, u64 end,
 		      struct drm_mm_node *node);
 void i915_ggtt_deballoon(struct i915_ggtt *ggtt, struct drm_mm_node *node);
@@ -629,6 +623,15 @@ gen8_pte_t gen8_get_pte(void __iomem *addr);
 
 u64 ggtt_addr_to_pte_offset(u64 ggtt_addr);
 
+void i915_ggtt_address_lock_init(struct i915_ggtt *ggtt);
+void i915_ggtt_address_lock_fini(struct i915_ggtt *ggtt);
+int gt_ggtt_address_read_lock_sync(struct intel_gt *gt, int *srcu);
+int gt_ggtt_address_read_lock_interruptible(struct intel_gt *gt, int *srcu);
+void gt_ggtt_address_read_lock(struct intel_gt *gt, int *srcu);
+void gt_ggtt_address_read_unlock(struct intel_gt *gt, int srcu);
+void i915_ggtt_address_write_lock(struct drm_i915_private *i915);
+void i915_ggtt_address_write_unlock(struct drm_i915_private *i915);
+
 int ggtt_set_pages(struct i915_vma *vma);
 void ggtt_clear_pages(struct i915_vma *vma);
 int ppgtt_set_pages(struct i915_vma *vma);
@@ -661,7 +664,7 @@ static inline struct sgt_dma {
 	dma_addr_t dma, max;
 	u64 rem;
 } sgt_dma(struct i915_vma *vma) {
-	struct scatterlist *sg = vma->pages->sgl;
+	struct scatterlist *sg = vma->pages;
 	u64 max, offset = 0;
 	dma_addr_t addr;
 

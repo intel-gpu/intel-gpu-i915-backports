@@ -829,7 +829,7 @@ void intel_guc_slpc_dec_waiters(struct intel_guc_slpc *slpc)
 	mutex_unlock(&slpc->lock);
 }
 
-int intel_guc_slpc_print_info(struct intel_guc_slpc *slpc, struct drm_printer *p)
+int intel_guc_slpc_print_info(struct intel_guc_slpc *slpc, struct drm_printer *p, int indent)
 {
 	struct drm_i915_private *i915 = slpc_to_i915(slpc);
 	struct slpc_shared_data *data = slpc->vaddr;
@@ -845,15 +845,15 @@ int intel_guc_slpc_print_info(struct intel_guc_slpc *slpc, struct drm_printer *p
 		if (!ret) {
 			slpc_tasks = &data->task_state_data;
 
-			drm_printf(p, "\tSLPC state: %s\n", slpc_get_state_string(slpc));
-			drm_printf(p, "\tGTPERF task active: %s\n",
-				   str_yes_no(slpc_tasks->status & SLPC_GTPERF_TASK_ENABLED));
-			drm_printf(p, "\tMax freq: %u MHz\n",
-				   slpc_decode_max_freq(slpc));
-			drm_printf(p, "\tMin freq: %u MHz\n",
-				   slpc_decode_min_freq(slpc));
-			drm_printf(p, "\twaitboosts: %u\n",
-				   slpc->num_boosts);
+			i_printf(p, indent, "SLPC state: %s\n", slpc_get_state_string(slpc));
+			i_printf(p, indent, "GTPERF task active: %s\n",
+				 str_yes_no(slpc_tasks->status & SLPC_GTPERF_TASK_ENABLED));
+			i_printf(p, indent, "Max freq: %u MHz\n",
+				 slpc_decode_max_freq(slpc));
+			i_printf(p, indent, "Min freq: %u MHz\n",
+				 slpc_decode_min_freq(slpc));
+			i_printf(p, indent, "waitboosts: %u\n",
+				 slpc->num_boosts);
 		}
 	}
 

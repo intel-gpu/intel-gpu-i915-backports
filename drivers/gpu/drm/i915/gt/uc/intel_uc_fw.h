@@ -289,6 +289,6 @@ void intel_uc_fw_fini(struct intel_uc_fw *uc_fw);
 void intel_uc_fw_resume(struct intel_uc_fw *uc_fw);
 size_t intel_uc_fw_copy_rsa(struct intel_uc_fw *uc_fw, void *dst, u32 max_len);
 int intel_uc_fw_mark_load_failed(struct intel_uc_fw *uc_fw, int err);
-void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p);
+void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p, int indent);
 
 #endif

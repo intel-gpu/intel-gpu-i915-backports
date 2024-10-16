@@ -11,10 +11,7 @@
 
 #include "gem/i915_gem_context.h"
 
-#include "gt/intel_gt_regs.h"
-
-#include "gt/uc/intel_gsc_fw.h"
-
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_gpu_error.h"
 #include "i915_irq.h"
@@ -23,12 +20,15 @@
 #include "intel_engine_regs.h"
 #include "intel_gt.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_print.h"
+#include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pci_config.h"
 #include "intel_tlb.h"
 #include "intel_reset.h"
 
+#include "uc/intel_gsc_fw.h"
 #include "uc/intel_guc.h"
 
 #define RESET_MAX_RETRIES 3
@@ -99,10 +99,6 @@ static bool mark_guilty(struct i915_request *rq)
 		goto out;
 	}
 
-	drm_notice(&ctx->i915->drm,
-		   "%s context reset due to GPU hang\n",
-		   ctx->name);
-
 	/* Record the timestamp for the last N hangs */
 	prev_hang = ctx->hang_timestamp[0];
 	for (i = 0; i < ARRAY_SIZE(ctx->hang_timestamp) - 1; i++)
@@ -118,6 +114,10 @@ static bool mark_guilty(struct i915_request *rq)
 			ctx->name, atomic_read(&ctx->guilty_count));
 		i915_gem_context_set_banned(ctx);
 	}
+
+	dev_notice(ctx->i915->drm.dev,
+		   "%s context %s due to GPU hang\n",
+		   ctx->name, banned ? "banned" : "reset");
 
 	client_mark_guilty(ctx, banned);
 
@@ -922,7 +922,7 @@ static int gt_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 		__intel_engine_reset(engine, stalled_mask & engine->mask);
 	local_bh_enable();
 
-	intel_uc_reset(&gt->uc, ALL_ENGINES);
+	intel_uc_reset(&gt->uc, stalled_mask);
 
 	/*
 	 * The full GT reset will have cleared the TLB caches and flushed the
@@ -1050,19 +1050,14 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	mutex_lock(&gt->reset.mutex);
 
 	if (GEM_SHOW_DEBUG() &&
+	    !is_mock_gt(gt) &&
 	    !i915_error_injected() &&
-	    !i915_is_pci_faulted(gt->i915)) {
-		struct drm_printer p = drm_debug_printer(__func__);
-		struct intel_engine_cs *engine;
-		enum intel_engine_id id;
+	    !i915_is_pci_faulted(gt->i915) &&
+	    intel_gt_pm_is_awake(gt)) {
+		struct drm_printer p = drm_debug_printer(dev_name(gt->i915->drm.dev));
 
-		drm_printf(&p, "called from %pS\n", (void *)_RET_IP_);
-		for_each_engine(engine, gt, id) {
-			if (intel_engine_is_idle(engine))
-				continue;
-
-			intel_engine_dump(engine, &p, "%s\n", engine->name);
-		}
+		drm_printf(&p, "%s called from %pS\n", __func__, (void *)_RET_IP_);
+		i915_show(gt->i915, &p, 0);
 	}
 
 	__intel_gt_set_wedged(gt);
@@ -1227,6 +1222,7 @@ void intel_gt_reset(struct intel_gt *gt,
 		    const char *reason)
 {
 	intel_engine_mask_t awake;
+	intel_wakeref_t wakeref;
 	int ret;
 
 	GT_TRACE(gt, "flags=%lx\n", gt->reset.flags);
@@ -1234,6 +1230,7 @@ void intel_gt_reset(struct intel_gt *gt,
 	might_sleep();
 	GEM_BUG_ON(!test_bit(I915_RESET_BACKOFF, &gt->reset.flags));
 
+	wakeref = intel_gt_pm_get(gt);
 	mutex_lock(&gt->reset.mutex);
 
 	/* Clear any previous failed attempts at recovery. Time to try again. */
@@ -1241,8 +1238,7 @@ void intel_gt_reset(struct intel_gt *gt,
 		goto unlock;
 
 	if (reason)
-		drm_notice(&gt->i915->drm,
-			   "Resetting chip for %s\n", reason);
+		gt_notice(gt, "Resetting chip for %s\n", reason);
 	atomic_inc(&gt->i915->gpu_error.reset_count);
 
 	awake = reset_prepare(gt);
@@ -1285,6 +1281,7 @@ finish:
 	reset_finish(gt, awake);
 unlock:
 	mutex_unlock(&gt->reset.mutex);
+	intel_gt_pm_put(gt, wakeref);
 	return;
 
 taint:
@@ -1329,8 +1326,7 @@ int __intel_engine_reset_bh(struct intel_engine_cs *engine, const char *msg)
 	reset_prepare_engine(engine);
 
 	if (msg)
-		drm_notice(&engine->i915->drm,
-			   "Resetting %s for %s\n", engine->name, msg);
+		gt_notice(engine->gt, "Resetting %s for %s\n", engine->name, msg);
 	atomic_inc(&engine->reset.count);
 	atomic_inc(&gt->reset.engines_reset_count);
 
@@ -1480,72 +1476,45 @@ void intel_gt_handle_error(struct intel_gt *gt,
 		intel_gt_clear_error_registers(gt, engine_mask);
 	}
 
-	if (intel_gt_is_wedged(gt) || engine_mask == gt->info.engine_mask) {
-		engine_mask = ALL_ENGINES; /* use the reset-all domain */
-		goto full_reset;
-	}
-
 	/*
 	 * Try engine reset when available. We fall back to full reset if
 	 * single reset fails.
 	 */
-	if (!intel_uc_uses_guc_submission(&gt->uc) &&
-	    intel_has_reset_engine(gt)) {
-		local_bh_disable();
-		for_each_engine_masked(engine, gt, engine_mask, tmp) {
-			BUILD_BUG_ON(I915_RESET_MODESET >= I915_RESET_ENGINE);
-			if (test_and_set_bit(I915_RESET_ENGINE + engine->id,
-					     &gt->reset.flags))
-				continue;
-
-			if (__intel_engine_reset_bh(engine, msg) == 0)
-				engine_mask &= ~engine->mask;
-
-			clear_and_wake_up_bit(I915_RESET_ENGINE + engine->id,
-					      &gt->reset.flags);
+	local_bh_disable();
+	for_each_engine_masked(engine, gt, engine_mask, tmp) {
+		BUILD_BUG_ON(I915_RESET_MODESET >= I915_RESET_ENGINE);
+		if (test_and_set_bit(I915_RESET_ENGINE + engine->id,
+				     &gt->reset.flags)) {
+			engine_mask &= ~engine->mask;
+			continue;
 		}
-		local_bh_enable();
-	}
 
+		if (!intel_uc_uses_guc_submission(&gt->uc) &&
+		    __intel_engine_reset_bh(engine, msg) == 0)
+			engine_mask &= ~engine->mask;
+
+		clear_and_wake_up_bit(I915_RESET_ENGINE + engine->id,
+				      &gt->reset.flags);
+	}
+	local_bh_enable();
 	if (!engine_mask)
 		goto out;
 
-full_reset:
-
-	/* Full reset needs the mutex, stop any other user trying to do so. */
-	if (test_and_set_bit(I915_RESET_BACKOFF, &gt->reset.flags)) {
+	while (test_and_set_bit(I915_RESET_BACKOFF, &gt->reset.flags))
 		wait_event(gt->reset.queue,
 			   !test_bit(I915_RESET_BACKOFF, &gt->reset.flags));
-		goto out; /* piggy-back on the other reset */
-	}
 
 	/* Make sure i915_reset_trylock() sees the I915_RESET_BACKOFF */
 	synchronize_rcu_expedited();
-
-	/*
-	 * Prevent any other reset-engine attempt. We don't do this for GuC
-	 * submission the GuC owns the per-engine reset, not the i915.
-	 */
-	if (!intel_uc_uses_guc_submission(&gt->uc)) {
-		for_each_engine(engine, gt, tmp) {
-			while (test_and_set_bit(I915_RESET_ENGINE + engine->id,
-						&gt->reset.flags))
-				wait_on_bit(&gt->reset.flags,
-					    I915_RESET_ENGINE + engine->id,
-					    TASK_UNINTERRUPTIBLE);
-		}
-	}
 
 	/* Flush everyone using a resource about to be clobbered */
 	synchronize_srcu_expedited(&gt->reset.backoff_srcu);
 
 	intel_gt_reset_global(gt, engine_mask, msg);
 
-	if (!intel_uc_uses_guc_submission(&gt->uc)) {
-		for_each_engine(engine, gt, tmp)
-			clear_bit_unlock(I915_RESET_ENGINE + engine->id,
-					 &gt->reset.flags);
-	}
+	for_each_engine_masked(engine, gt, engine_mask, tmp)
+		clear_bit_unlock(I915_RESET_ENGINE + engine->id,
+				 &gt->reset.flags);
 	clear_bit_unlock(I915_RESET_BACKOFF, &gt->reset.flags);
 	smp_mb__after_atomic();
 	wake_up_all(&gt->reset.queue);

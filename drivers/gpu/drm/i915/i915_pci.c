@@ -356,7 +356,8 @@ static const struct intel_device_info dg1_info = {
 		BIT(RCS0) | BIT(BCS0) | \
 		BIT(VECS0) | BIT(VECS1) | \
 		BIT(VCS0) | BIT(VCS2) | \
-		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3)
+		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3), \
+	.has_lmem_max_bandwidth = 1
 
 static const struct intel_device_info dg2_info = {
 	DG2_FEATURES,
@@ -376,7 +377,6 @@ static const struct intel_device_info ats_m_info = {
 #endif
 	.tuning_thread_rr_after_dep = 1,
 	.has_csc_uid = 1,
-	.has_lmem_max_bandwidth = 1,
 	.has_survivability_mode = 1,
 };
 
@@ -620,6 +620,9 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 */
 	if (vga_switcheroo_client_probe_defer(pdev))
 		return -EPROBE_DEFER;
+
+	if (signal_pending(current))
+		return -EINTR;
 
 	err = i915_driver_probe(pdev, ent);
 	if (err)

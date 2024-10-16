@@ -4,6 +4,7 @@
  */
 
 #include "gt/intel_context.h"
+#include "gt/intel_gt.h"
 
 #include "i915_suspend_fence.h"
 
@@ -43,7 +44,7 @@ static void suspend_fence_suspend(struct i915_suspend_fence *sfence,
 		 */
 		if (IS_ERR(block_completed)) {
 			GEM_BUG_ON(!atomic || PTR_ERR(block_completed) != -EBUSY);
-			queue_work(system_unbound_wq, &sfence->suspend_work);
+			intel_gt_queue_work(sfence->ce->engine->gt, &sfence->suspend_work);
 			return;
 		}
 

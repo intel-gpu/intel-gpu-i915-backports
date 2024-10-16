@@ -87,13 +87,13 @@ void intel_uc_fw_change_status(struct intel_uc_fw *uc_fw,
  */
 #define INTEL_GUC_FIRMWARE_DEFS(fw_def, guc_maj, guc_mmp) \
 	fw_def(METEORLAKE,   0, guc_mmp(mtl,  70, 6, 8)) \
-	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 25, 0)) \
-	fw_def(DG2,          0, guc_mmp(dg2,  70, 25, 0)) \
-	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 25, 0)) \
-	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 25, 0)) \
-	fw_def(DG1,          0, guc_mmp(dg1,  70, 25, 0)) \
-	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 25, 0)) \
-	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 25, 0))
+	fw_def(PONTEVECCHIO, 0, guc_mmp(pvc,  70, 26, 4)) \
+	fw_def(DG2,          0, guc_mmp(dg2,  70, 26, 4)) \
+	fw_def(ALDERLAKE_P,  0, guc_mmp(adlp, 70, 26, 4)) \
+	fw_def(ALDERLAKE_S,  0, guc_mmp(tgl,  70, 26, 4)) \
+	fw_def(DG1,          0, guc_mmp(dg1,  70, 26, 4)) \
+	fw_def(ROCKETLAKE,   0, guc_mmp(tgl,  70, 26, 4)) \
+	fw_def(TIGERLAKE,    0, guc_mmp(tgl,  70, 26, 4))
 
 #define INTEL_HUC_FIRMWARE_DEFS(fw_def, huc_raw, huc_mmp, huc_gsc) \
 	fw_def(METEORLAKE,   0, huc_gsc(mtl,  8, 3, 7)) \
@@ -1123,7 +1123,7 @@ static void uc_fw_bind_ggtt(struct intel_uc_fw *uc_fw)
 
 	/* uc_fw->obj cache domains were not controlled across suspend */
 	if (i915_gem_object_has_struct_page(obj))
-		drm_clflush_sg(dummy->pages);
+		drm_clflush_sg(&sg_table(dummy->pages));
 
 	if (i915_gem_object_is_lmem(obj))
 		pte_flags |= PTE_LM;
@@ -1301,12 +1301,12 @@ size_t intel_uc_fw_copy_rsa(struct intel_uc_fw *uc_fw, void *dst, u32 max_len)
  *
  * Pretty printer for uC firmware.
  */
-void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
+void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p, int indent)
 {
 	bool got_wanted;
 
-	drm_printf(p, "%s firmware: %s\n",
-		   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path);
+	i_printf(p, indent, "%s firmware: %s\n",
+		 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path);
 
 	/*
 	 * The pre-loaded status indicates that GuC is loaded by something else,
@@ -1316,11 +1316,13 @@ void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 	if (uc_fw->status == INTEL_UC_FIRMWARE_PRELOADED)
 		return;
 
+	indent += 2;
+
 	if (uc_fw->file_selected.path != uc_fw->file_wanted.path)
-		drm_printf(p, "%s firmware wanted: %s\n",
-			   intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_wanted.path);
-	drm_printf(p, "\tstatus: %s\n",
-		   intel_uc_fw_status_repr(uc_fw->status));
+		i_printf(p, indent, "%s firmware wanted: %s\n",
+			 intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_wanted.path);
+	i_printf(p, indent, "status: %s\n",
+		 intel_uc_fw_status_repr(uc_fw->status));
 
 	if (uc_fw->file_selected.ver.major < uc_fw->file_wanted.ver.major)
 		got_wanted = false;
@@ -1335,18 +1337,18 @@ void intel_uc_fw_dump(const struct intel_uc_fw *uc_fw, struct drm_printer *p)
 		got_wanted = true;
 
 	if (!got_wanted)
-		drm_printf(p, "\tversion: wanted %u.%u.%u, found %u.%u.%u\n",
-			   uc_fw->file_wanted.ver.major,
-			   uc_fw->file_wanted.ver.minor,
-			   uc_fw->file_wanted.ver.patch,
-			   uc_fw->file_selected.ver.major,
-			   uc_fw->file_selected.ver.minor,
-			   uc_fw->file_selected.ver.patch);
+		i_printf(p, indent, "version: wanted %u.%u.%u, found %u.%u.%u\n",
+			 uc_fw->file_wanted.ver.major,
+			 uc_fw->file_wanted.ver.minor,
+			 uc_fw->file_wanted.ver.patch,
+			 uc_fw->file_selected.ver.major,
+			 uc_fw->file_selected.ver.minor,
+			 uc_fw->file_selected.ver.patch);
 	else
-		drm_printf(p, "\tversion: found %u.%u.%u\n",
-			   uc_fw->file_selected.ver.major,
-			   uc_fw->file_selected.ver.minor,
-			   uc_fw->file_selected.ver.patch);
-	drm_printf(p, "\tuCode: %u bytes\n", uc_fw->ucode_size);
-	drm_printf(p, "\tRSA: %u bytes\n", uc_fw->rsa_size);
+		i_printf(p, indent, "version: found %u.%u.%u\n",
+			 uc_fw->file_selected.ver.major,
+			 uc_fw->file_selected.ver.minor,
+			 uc_fw->file_selected.ver.patch);
+	i_printf(p, indent, "uCode: %u bytes\n", uc_fw->ucode_size);
+	i_printf(p, indent, "RSA: %u bytes\n", uc_fw->rsa_size);
 }

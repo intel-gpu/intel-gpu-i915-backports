@@ -1112,8 +1112,7 @@ static int live_hwsp_relative(void *arg)
 				       engine->name, msg,
 				       rq->fence.context,
 				       rq->fence.seqno);
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 				i915_request_put(rq);
 				return -EIO;
 			}

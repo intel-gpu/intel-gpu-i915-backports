@@ -98,6 +98,7 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	intel_gt_init_buffer_pool(gt);
 
 	atomic_set(&gt->next_token, 0);
+	mutex_init(&gt->info.hwconfig.mutex);
 
 	intel_gt_init_ccs_mode(gt);
 	intel_gt_init_reset(gt);
@@ -491,7 +492,7 @@ static int intel_gt_init_counters(struct intel_gt *gt, unsigned int size)
 		if (err)
 			continue;
 
-		err = i915_ggtt_pin_for_gt(vma, &ww, 0, PIN_HIGH);
+		err = i915_ggtt_pin_for_gt(vma, &ww);
 		if (err)
 			continue;
 
@@ -538,7 +539,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 
 	if (lmem) {
 		if (!HAS_LMEM(i915)) {
-			drm_err(&i915->drm, "No LMEM, skipping debug pages\n");
+			gt_err(gt, "No LMEM, skipping debug pages\n");
 			return;
 		}
 
@@ -549,7 +550,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 		obj = i915_gem_object_create_shmem(i915, size);
 	}
 	if (IS_ERR(obj)) {
-		drm_err(&i915->drm, "Failed to allocate debug pages\n");
+		gt_err(gt, "Failed to allocate debug pages\n");
 		return;
 	}
 
@@ -559,7 +560,7 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 	if (IS_ERR(vma))
 		goto err_unref;
 
-	if (i915_ggtt_pin_for_gt(vma, NULL, 0, PIN_HIGH))
+	if (i915_ggtt_pin_for_gt(vma, NULL))
 		goto err_unref;
 
 	if (i915_vma_wait_for_bind(vma))
@@ -567,13 +568,11 @@ static void intel_gt_init_debug_pages(struct intel_gt *gt)
 
 	gt->dbg = i915_vma_make_unshrinkable(vma);
 
-	drm_dbg(&i915->drm,
-		"gt%u debug pages allocated in %s: ggtt=0x%08x, phys=0x%016llx, size=0x%zx\n",
-		gt->info.id,
-		obj->mm.region.mem->name,
-		i915_ggtt_offset(vma),
-		(u64)i915_gem_object_get_dma_address(obj, 0),
-		obj->base.size);
+	gt_dbg(gt, "debug pages allocated in %s: ggtt=0x%08x, phys=0x%016llx, size=0x%zx\n",
+	       obj->mm.region.mem->name,
+	       i915_ggtt_offset(vma),
+	       (u64)i915_gem_object_get_dma_address(obj, 0),
+	       obj->base.size);
 
 	return;
 
@@ -581,7 +580,6 @@ err_unpin:
 	i915_vma_unpin(vma);
 err_unref:
 	i915_gem_object_put(obj);
-	drm_err(&i915->drm, "Failed to init debug pages\n");
 	return;
 }
 
@@ -607,9 +605,8 @@ static struct i915_address_space *kernel_vm(struct intel_gt *gt)
 		gt->flat.size  = round_up(gt->lmem->region.end + 1, SZ_1G);
 		gt->flat.size -= gt->flat.start;
 		gt->flat.color = I915_COLOR_UNEVICTABLE;
-		drm_dbg(&gt->i915->drm,
-			"Using flat ppGTT [%llx + %llx]\n",
-			gt->flat.start, gt->flat.size);
+		gt_dbg(gt, "Using flat ppGTT [%llx + %llx]\n",
+		       gt->flat.start, gt->flat.size);
 
 		err = intel_flat_lmem_ppgtt_init(&ppgtt->vm, &gt->flat);
 		if (err) {
@@ -631,6 +628,8 @@ static void release_vm(struct intel_gt *gt)
 
 	intel_flat_lmem_ppgtt_fini(vm, &gt->flat);
 	i915_vm_put(vm);
+
+	i915_px_cache_fini(&gt->px_cache);
 }
 
 static struct i915_request *
@@ -796,7 +795,7 @@ retry:
 				drm_printf(&p,
 					   "wait for recording default context failed[%ld] on %s\n",
 					   timeout, rq->engine->name);
-				intel_engine_dump(rq->engine, &p, "%s\n", rq->engine->name);
+				intel_engine_dump(rq->engine, &p, 0);
 			}
 
 			err = timeout;
@@ -840,7 +839,7 @@ out:
 		intel_context_put(rq->context);
 		i915_request_put(rq);
 	}
-	if (err == -ETIME) {
+	if (err == -ETIME && !i915_error_injected()) {
 		timeout = MAX_SCHEDULE_TIMEOUT;
 		if (global_reset(gt))
 			goto retry;
@@ -873,13 +872,9 @@ static int __engines_verify_workarounds(struct intel_gt *gt)
 
 static void __intel_gt_disable(struct intel_gt *gt)
 {
+	intel_gt_suspend_prepare(gt);
 	intel_gt_set_wedged_on_fini(gt);
-	i915_px_cache_fini(&gt->px_cache);
-
-	if (!gt->i915->quiesce_gpu) {
-		intel_gt_suspend_prepare(gt);
-		intel_gt_suspend_late(gt);
-	}
+	intel_gt_suspend_late(gt);
 
 	if (GEM_DEBUG_WARN_ON(intel_gt_pm_is_awake(gt))) {
 		struct drm_printer p;
@@ -888,7 +883,7 @@ static void __intel_gt_disable(struct intel_gt *gt)
 		snprintf(buf, sizeof(buf), "GT%d", gt->info.id);
 		p = drm_err_printer(buf);
 
-		intel_wakeref_show(&gt->wakeref, &p);
+		intel_wakeref_show(&gt->wakeref, &p, 0);
 	}
 }
 
@@ -908,35 +903,16 @@ int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
 		cond_resched();
 	}
 
-	return intel_uc_wait_for_idle(&gt->uc, timeout);
-}
-
-static struct i915_sched_engine *
-create_sched_engine(int class,
-		    struct workqueue_struct *wq,
-		    const struct cpumask *cpumask)
-{
-	struct i915_sched_engine *se;
-
-	se = i915_sched_engine_create(class);
-	if (!se)
-		return NULL;
-
-	se->wq = wq;
-	se->cpumask = cpumask;
-	se->num_cpus = cpumask_weight(cpumask);
-	se->cpu = __i915_first_online_cpu(cpumask);
-
-	return se;
+	return 0;
 }
 
 static int init_wq(struct intel_gt *gt)
 {
-	gt->wq = alloc_workqueue("i915-gt%d", WQ_UNBOUND, 0, gt->info.id);
+	gt->wq = alloc_workqueue("i915-gt%d", WQ_HIGHPRI, 0, gt->info.id);
 	if (!gt->wq)
 		return -ENOMEM;
 
-	gt->sched = create_sched_engine(5, gt->wq, cpumask_of_i915(gt->i915));
+	gt->sched = i915_sched_engine_create_cpu(5, gt->wq, cpumask_of_i915(gt->i915));
 	if (!gt->sched)
 		goto out_free_wq;
 
@@ -946,6 +922,15 @@ out_free_wq:
 	destroy_workqueue(gt->wq);
 	gt->wq = NULL;
 	return -ENOMEM;
+}
+
+static void print_fw_ver(struct intel_gt *gt, struct intel_uc_fw *fw)
+{
+	gt_info(gt, "%s firmware %s version %u.%u.%u\n",
+		intel_uc_fw_type_repr(fw->type), fw->file_selected.path,
+		fw->file_selected.ver.major,
+		fw->file_selected.ver.minor,
+		fw->file_selected.ver.patch);
 }
 
 int intel_gt_init(struct intel_gt *gt)
@@ -1007,10 +992,6 @@ int intel_gt_init(struct intel_gt *gt)
 	if (err)
 		goto err_uc_init;
 
-	err = intel_gt_init_hwconfig(gt);
-	if (err)
-		gt_probe_error(gt, "Failed to retrieve hwconfig table: %pe\n", ERR_PTR(err));
-
 	err = intel_iov_init_late(&gt->iov);
 	if (err)
 		goto err_gt;
@@ -1036,6 +1017,12 @@ int intel_gt_init(struct intel_gt *gt)
 	 * long, but for now we're doing it as the last step of the init flow
 	 */
 	intel_uc_init_hw_late(&gt->uc);
+
+	if (intel_uc_uses_guc(&gt->uc))
+		print_fw_ver(gt, &gt->uc.guc.fw);
+
+	if (intel_uc_uses_huc(&gt->uc))
+		print_fw_ver(gt, &gt->uc.huc.fw);
 
 	goto out_fw;
 err_gt:
@@ -1157,11 +1144,11 @@ static int driver_flr(struct intel_gt *gt)
 		return 0;
 
 	if (intel_uncore_read(uncore, GU_CNTL_PROTECTED) & DRIVERINT_FLR_DIS) {
-		drm_info_once(&i915->drm, "BIOS Disabled Driver-FLR\n");
+		gt_info_once(gt, "BIOS Disabled Driver-FLR\n");
 		return 0;
 	}
 
-	drm_dbg(&i915->drm, "Triggering Driver-FLR\n");
+	gt_dbg(gt, "Triggering Driver-FLR\n");
 
 	/*
 	 * As the fastest safe-measure, always clear GU_DEBUG's DRIVERFLR_STATUS
@@ -1174,7 +1161,7 @@ static int driver_flr(struct intel_gt *gt)
 
 	ret = intel_wait_for_register_fw(uncore, GU_CNTL, DRIVERFLR, 0, 15);
 	if (ret) {
-		drm_err(&i915->drm, "Driver-FLR failed! %d\n", ret);
+		gt_err(gt, "Driver-FLR failed! %d\n", ret);
 		return ret;
 	}
 
@@ -1182,7 +1169,7 @@ static int driver_flr(struct intel_gt *gt)
 					 DRIVERFLR_STATUS, DRIVERFLR_STATUS,
 					 15);
 	if (ret) {
-		drm_err(&i915->drm, "wait for Driver-FLR completion failed! %d\n", ret);
+		gt_err(gt, "wait for Driver-FLR completion failed! %d\n", ret);
 		return ret;
 	}
 
@@ -1470,7 +1457,7 @@ int intel_gt_probe_all(struct drm_i915_private *i915)
 
 	num_gt = gt_count(i915);
 	num_enabled_gt = hweight_long(enabled_gt_mask);
-	drm_info(&i915->drm, "GT count: %u, enabled: %d\n", num_gt, num_enabled_gt);
+	drm_dbg(&i915->drm, "GT count: %u, enabled: %d\n", num_gt, num_enabled_gt);
 
 	i = 1;
 	for_each_set_bit_from(i, &enabled_gt_mask, I915_MAX_GT) {
@@ -1562,7 +1549,7 @@ int intel_gt_tiles_init(struct drm_i915_private *i915)
 void intel_gt_info_print(const struct intel_gt_info *info,
 			 struct drm_printer *p)
 {
-	drm_printf(p, "GT %u info:\n", info->id);
+	drm_printf(p, "GT%u info:\n", info->id);
 	drm_printf(p, "available engines: %x\n", info->engine_mask);
 
 	intel_sseu_dump(&info->sseu, p);

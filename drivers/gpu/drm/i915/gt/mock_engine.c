@@ -289,6 +289,11 @@ static void mock_engine_release(struct intel_engine_cs *engine)
 	intel_engine_fini_retire(engine);
 }
 
+static void mock_set_default_submission(struct intel_engine_cs *engine)
+{
+	engine->submit_request = mock_submit_request;
+}
+
 struct intel_engine_cs *mock_engine(struct drm_i915_private *i915,
 				    const char *name,
 				    int id)
@@ -318,6 +323,7 @@ struct intel_engine_cs *mock_engine(struct drm_i915_private *i915,
 	engine->base.emit_flush = mock_emit_flush;
 	engine->base.emit_fini_breadcrumb = mock_emit_breadcrumb;
 	engine->base.submit_request = mock_submit_request;
+	engine->base.set_default_submission = mock_set_default_submission;
 
 	engine->base.reset.prepare = mock_reset_prepare;
 	engine->base.reset.rewind = mock_reset_rewind;

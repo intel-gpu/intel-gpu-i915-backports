@@ -37,8 +37,17 @@
 #include_next <drm/drm_dp_mst_helper.h>
 #endif
 
+#ifdef BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
+#define drm_dp_add_payload_part2(x,y,z) drm_dp_add_payload_part2(x,z)
+#endif
+
 #ifdef BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
 #define drm_dp_calc_pbn_mode(clock, bpp, dsc) drm_dp_calc_pbn_mode(clock,bpp)
+#endif
+
+#ifdef BPM_DRM_DP_REMOVE_PAYLOAD_OLD_PAYLOAD_ARG_NOT_PRESENT
+#define drm_dp_remove_payload(mgr, mst_state, old_payload, new_payload) \
+	drm_dp_remove_payload(mgr, mst_state, new_payload)
 #endif
 
 #endif /* _BACKPORT_DRM_DP_MST_HELPER_H_ */

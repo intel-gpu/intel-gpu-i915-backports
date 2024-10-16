@@ -69,7 +69,7 @@ struct intel_memory_region_ops {
 	unsigned int flags;
 
 	int (*init)(struct intel_memory_region *mem);
-	void (*show)(struct intel_memory_region *mem, struct drm_printer *p);
+	void (*show)(struct intel_memory_region *mem, struct drm_printer *p, int indent);
 	void (*release)(struct intel_memory_region *mem);
 
 	int (*init_object)(struct intel_memory_region *mem,
@@ -191,6 +191,7 @@ int intel_memory_region_reserve(struct intel_memory_region *mem,
 
 void intel_memory_region_print(struct intel_memory_region *mem,
 			       resource_size_t target,
-			       struct drm_printer *p);
+			       struct drm_printer *p,
+			       int indent);
 
 #endif

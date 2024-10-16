@@ -3,18 +3,20 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include "gem/i915_gem_lmem.h"
+#include "gem/i915_gem_region.h"
+
 #include "i915_drv.h"
 #include "i915_pci.h"
 #include "i915_reg.h"
 #include "intel_memory_region.h"
 #include "intel_pci_config.h"
 #include "intel_region_lmem.h"
-#include "gem/i915_gem_lmem.h"
-#include "gem/i915_gem_region.h"
-#include "gt/intel_gt.h"
-#include "gt/intel_gt_mcr.h"
-#include "gt/intel_gt_regs.h"
-#include "gt/iov/intel_iov_utils.h"
+#include "intel_gt.h"
+#include "intel_gt_mcr.h"
+#include "intel_gt_print.h"
+#include "intel_gt_regs.h"
+#include "iov/intel_iov_utils.h"
 
 static void
 region_lmem_release(struct intel_memory_region *mem)
@@ -101,7 +103,7 @@ static int reserve_lowmem_region(struct intel_uncore *uncore,
 
 	ret = intel_memory_region_reserve(mem, reserve_start, reserve_size);
 	if (ret)
-		drm_err(&uncore->i915->drm, "LMEM: reserving low memory region failed\n");
+		gt_err(uncore->gt, "LMEM: reserving low memory region failed\n");
 
 	return ret;
 }
@@ -271,15 +273,14 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 
 		/* If the FLAT_CCS_BASE_ADDR register is not populated, flag an error */
 		if (tile_stolen == lmem_size)
-			drm_err(&i915->drm,
-				"CCS_BASE_ADDR register did not have expected value\n");
+			gt_err(gt, "CCS_BASE_ADDR register did not have expected value\n");
 		/*
 		 * If the actual flat ccs size is greater than the expected
 		 * value, then there is memory degradation
 		 */
 		if (actual_flat_ccs_size > expected_flat_ccs_size &&
-		    to_gt(i915)->info.id == 0) {
-			drm_err(&i915->drm, "CCS_BASE_ADDR register did not have expected value - and memory degradation might have occurred\n");
+		    gt->info.id == 0) {
+			gt_err(gt, "CCS_BASE_ADDR register did not have expected value - and memory degradation might have occurred\n");
 			is_degraded = true;
 		}
 
@@ -301,9 +302,9 @@ create_region:
 		if (i915->remote_tiles) {
 			return ERR_PTR(-EIO);
 		} else {
-			drm_warn(&i915->drm, "Cannot use the full memory %pa on the device as LMEM BAR size was found to be smaller\n", &lmem_size);
+			gt_warn(gt, "Cannot use the full memory %pa on the device as LMEM BAR size was found to be smaller\n", &lmem_size);
 			lmem_size = min(lmem_size, root_lmembar_size);
-			drm_warn(&i915->drm, "Continuing with reduced LMEM size: %pa\n", &lmem_size);
+			gt_warn(gt, "Continuing with reduced LMEM size: %pa\n", &lmem_size);
 		}
  	}
  
@@ -341,13 +342,10 @@ create_region:
 	if (err)
 		goto err_region_put;
 
-	drm_dbg(&i915->drm, "Local memory: %pR\n", &mem->region);
-	drm_dbg(&i915->drm, "Local memory IO start: %pa\n",
-		&mem->io_start);
-	drm_info(&i915->drm, "Local memory IO size: %pa\n",
-		 &mem->io_size);
-	drm_info(&i915->drm, "Local memory available: %pa\n",
-		 &lmem_size);
+	gt_dbg(gt, "Local memory { region: %pR, IO start: %px }\n",
+	       &mem->region, &mem->io_start);
+	gt_info(gt, "Local memory { size: %pa, available: %pa }\n",
+		&mem->io_size, &lmem_size);
 
 	/* Report actual physical memory and health status */
 	mem->actual_physical_mem = actual_mem;

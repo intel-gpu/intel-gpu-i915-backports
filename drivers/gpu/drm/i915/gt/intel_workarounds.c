@@ -498,6 +498,9 @@ static void dg2_ctx_workarounds_init(struct intel_engine_cs *engine,
 
 	/* Wa_18019271663:dg2 */
 	wa_mcr_masked_en(wal, XEHP_CACHE_MODE_1, MSAA_OPTIMIZATION_REDUC_DISABLE);
+
+	/* Wa_14019877138:dg2 */
+	wa_mcr_masked_en(wal, XEHP_PSS_CHICKEN, FD_END_COLLECT);
 }
 
 static void mtl_ctx_workarounds_init(struct intel_engine_cs *engine,
@@ -2384,6 +2387,7 @@ wa_list_srm(struct i915_request *rq,
 	unsigned int i, count = 0;
 	const struct i915_wa *wa;
 	u32 srm, *cs;
+	int srcu;
 
 	srm = MI_STORE_REGISTER_MEM | MI_SRM_LRM_GLOBAL_GTT;
 	if (GRAPHICS_VER(i915) >= 8)
@@ -2394,7 +2398,7 @@ wa_list_srm(struct i915_request *rq,
 			count++;
 	}
 
-	cs = intel_ring_begin(rq, 4 * count + 4);
+	cs = intel_ring_begin_ggtt(rq, &srcu, 4 * count + 4);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
@@ -2415,10 +2419,10 @@ wa_list_srm(struct i915_request *rq,
 	*cs++ = 0;
 	*cs++ = 1;
 
-	intel_ring_advance(rq, cs);
+	intel_ring_advance_ggtt(rq, srcu, cs);
 
 	if (GRAPHICS_VER(i915) >= 8) {
-		cs = intel_ring_begin(rq, 4);
+		cs = intel_ring_begin_ggtt(rq, &srcu, 4);
 		if (IS_ERR(cs))
 			return PTR_ERR(cs);
 
@@ -2429,7 +2433,7 @@ wa_list_srm(struct i915_request *rq,
 		*cs++ = 2;
 		*cs++ = i915_ggtt_offset(vma) + sizeof(u32) * i;
 		*cs++ = 0;
-		intel_ring_advance(rq, cs);
+		intel_ring_advance_ggtt(rq, srcu, cs);
 	}
 
 	return 0;

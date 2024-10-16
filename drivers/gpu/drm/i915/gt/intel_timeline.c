@@ -202,8 +202,13 @@ void __intel_timeline_pin(struct intel_timeline *tl)
 
 int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww)
 {
-	int err;
+	int err, srcu;
 
+	/*
+	 * if already pinned, only increment the count to allow recursive
+	 * pinning; if not pinned yet, do nothing - the count should be then
+	 * incremented at the end of the pinning procedure, not here
+	 */
 	if (atomic_add_unless(&tl->pin_count, 1, 0))
 		return 0;
 
@@ -213,9 +218,15 @@ int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww)
 			return err;
 	}
 
-	err = i915_ggtt_pin_for_gt(tl->hwsp_ggtt, ww, 0, PIN_HIGH);
+	err = i915_ggtt_pin_for_gt(tl->hwsp_ggtt, ww);
 	if (err)
 		return err;
+
+	err = gt_ggtt_address_read_lock_sync(tl->gt, &srcu);
+	if (unlikely(err)) {
+		__i915_vma_unpin(tl->hwsp_ggtt);
+		return err;
+	}
 
 	tl->hwsp_offset =
 		i915_ggtt_offset(tl->hwsp_ggtt) +
@@ -228,6 +239,7 @@ int intel_timeline_pin(struct intel_timeline *tl, struct i915_gem_ww_ctx *ww)
 		i915_active_release(&tl->active);
 		__i915_vma_unpin(tl->hwsp_ggtt);
 	}
+	gt_ggtt_address_read_unlock(tl->gt, srcu);
 
 	return 0;
 }
@@ -355,18 +367,25 @@ __intel_timeline_get_seqno(struct intel_timeline *tl,
 			   u32 *seqno)
 {
 	u32 next_ofs = offset_in_page(tl->hwsp_offset + TIMELINE_SEQNO_BYTES);
+	int err, srcu;
 
 	/* w/a: bit 5 needs to be zero for MI_FLUSH_DW address. */
 	if (TIMELINE_SEQNO_BYTES <= BIT(5) && (next_ofs & BIT(5)))
 		next_ofs = offset_in_page(next_ofs + BIT(5));
 
 	synchronize_rcu(); /* flush intel_timeline_unpin() */
+	err = gt_ggtt_address_read_lock_sync(tl->gt, &srcu);
+	if (unlikely(err))
+		return err;
 
 	tl->hwsp_offset = i915_ggtt_offset(tl->hwsp_ggtt) + next_ofs;
 	tl->hwsp_seqno = tl->hwsp_map + next_ofs;
 	intel_timeline_reset_seqno(tl);
 
 	*seqno = timeline_advance(tl);
+
+	gt_ggtt_address_read_unlock(tl->gt, srcu);
+
 	GEM_BUG_ON(i915_seqno_passed(*tl->hwsp_seqno, *seqno));
 	return 0;
 }
@@ -462,6 +481,7 @@ void intel_gt_fini_timelines(struct intel_gt *gt)
 
 void intel_gt_show_timelines(struct intel_gt *gt,
 			     struct drm_printer *m,
+			     int indent,
 			     void (*show_request)(struct drm_printer *m,
 						  const struct i915_request *rq,
 						  const char *prefix,
@@ -469,6 +489,7 @@ void intel_gt_show_timelines(struct intel_gt *gt,
 {
 	struct intel_gt_timelines *timelines = &gt->timelines;
 	struct intel_timeline *tl;
+	char buf[200];
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(tl, &timelines->active_list, link) {
@@ -476,6 +497,7 @@ void intel_gt_show_timelines(struct intel_gt *gt,
 		struct i915_request *rq;
 		struct dma_fence *fence;
 		const u32 *hwsp_seqno;
+		int len = 0;
 
 		count = 0;
 		ready = 0;
@@ -491,22 +513,28 @@ void intel_gt_show_timelines(struct intel_gt *gt,
 				inflight++;
 		}
 
-		drm_printf(m, "Timeline %llx: { ", tl->fence_context);
-		drm_printf(m, "count: %lu, ready: %lu, inflight: %lu",
-			   count, ready, inflight);
+		len += snprintf(buf + len, sizeof(buf) - len,
+				"count: %lu, ready: %lu, inflight: %lu",
+				count, ready, inflight);
+
 		hwsp_seqno = READ_ONCE(tl->hwsp_seqno);
 		if ((unsigned long)hwsp_seqno & PAGE_MASK)
-			drm_printf(m, ", seqno: { current: %d, last: %d }",
-				   *hwsp_seqno, tl->seqno);
+			len += snprintf(buf + len, sizeof(buf) - len,
+					", seqno: { current: %d, last: %d }",
+					*hwsp_seqno, tl->seqno);
+
 		fence = i915_active_fence_get(&tl->last_request);
 		if (fence) {
-			drm_printf(m, ", engine: %s",
-				   to_request(fence)->engine->name);
+			len += snprintf(buf + len, sizeof(buf) - len,
+					", engine: %s",
+					to_request(fence)->engine->name);
 			dma_fence_put(fence);
 		}
-		drm_printf(m, " }\n");
+		i_printf(m, indent, "Timeline %llx: { %s }\n", tl->fence_context, buf);
 
 		if (show_request) {
+			int skip;
+
 			if (!intel_timeline_get_if_active(tl))
 				continue;
 
@@ -517,8 +545,14 @@ void intel_gt_show_timelines(struct intel_gt *gt,
 
 			rcu_read_unlock();
 
-			list_for_each_entry(rq, &tl->requests, link)
-				show_request(m, rq, "", 2);
+			skip = -8;
+			list_for_each_entry(rq, &tl->requests, link) {
+				if (skip++ < 0 || list_is_last(&rq->link, &tl->requests)) {
+					if (skip > 1)
+						i_printf(m, indent + 2, "... skipped %d requests ...\n", skip);
+					show_request(m, rq, "", indent + 2);
+				}
+			}
 
 			rcu_read_lock();
 

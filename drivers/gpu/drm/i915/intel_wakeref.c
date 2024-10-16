@@ -76,7 +76,7 @@ void __intel_wakeref_put_last(struct intel_wakeref *wf, unsigned long flags)
 
 	/* Assume we are not in process context and so cannot sleep. */
 	if (flags & INTEL_WAKEREF_PUT_ASYNC || !mutex_trylock(&wf->mutex)) {
-		mod_delayed_work(system_wq, &wf->work,
+		mod_delayed_work(system_unbound_wq, &wf->work,
 				 FIELD_GET(INTEL_WAKEREF_PUT_DELAY, flags));
 		return;
 	}
@@ -116,21 +116,22 @@ void intel_wakeref_init(struct intel_wakeref *wf,
 #endif
 }
 
-int intel_wakeref_wait_for_idle(struct intel_wakeref *wf)
+int intel_wakeref_wait_for_idle(struct intel_wakeref *wf, long timeout)
 {
-	int err;
-
 	might_sleep();
 
 	/* Beware re-arming wakerefs; recheck after flushing the callback */
-	do {
-		err = wait_var_event_killable(&wf->wakeref,
-					      !intel_wakeref_is_active(wf));
-		if (err)
-			return err;
+	intel_wakeref_unlock_wait(wf);
+	while (intel_wakeref_is_active(wf)) {
+		if (!timeout)
+			return -ETIME;
 
+		timeout = ___wait_var_event(&wf->wakeref,
+					    ___wait_cond_timeout(!intel_wakeref_is_active(wf)),
+					    TASK_KILLABLE, 0, timeout,
+					    __ret = schedule_timeout(__ret));
 		intel_wakeref_unlock_wait(wf);
-	} while (intel_wakeref_is_active(wf));
+	}
 
 	return 0;
 }

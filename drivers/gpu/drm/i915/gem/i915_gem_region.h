@@ -13,13 +13,12 @@
 struct drm_i915_gem_object;
 struct intel_memory_region;
 struct kobject;
-struct sg_table;
+struct scatterlist;
 
-struct sg_table *
-i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj,
-				unsigned int *page_sizes);
+struct scatterlist *
+i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj);
 int i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
-				    struct sg_table *pages,
+				    struct scatterlist *pages,
 				    bool dirty);
 
 void i915_gem_object_init_memory_region(struct drm_i915_gem_object *obj,

@@ -12,9 +12,6 @@ Our current backport supports the following OS Distributions.
 | RHEL® | 9.x |
 | RHEL® | 8.x |
 
-The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-Please refer [version](../versions) file to get information on the kernel version being used during backporting.
-
 ## Prerequisite
 We have dependencies on the following packages
   - make
@@ -71,17 +68,19 @@ Example: For RHEL9.4
 
 Above command will create RPM packages at $HOME/rpmbuild/RPMS/x86_64/
 
+#### DKMS Kernel Headers Requirement
+The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation which can lead to installation issues.
+Please refer [version](../versions) file to get information on the kernel version being used during backporting.
+
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
-In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
-
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64 \
-kernel-devel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.4_KERNEL_VERSION>.el9_4.x86_64 \
+kernel-devel-<RHEL_9.4_KERNEL_VERSION>.el9_4.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-427.el9.x86_64 \
-     kernel-devel-5.14.0-427.el9.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-427.el9_4.x86_64 \
+     kernel-devel-5.14.0-427.el9_4.x86_64
 ```
 
 ```

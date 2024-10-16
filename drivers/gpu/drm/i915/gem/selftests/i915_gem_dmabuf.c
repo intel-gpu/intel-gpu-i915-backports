@@ -7,8 +7,6 @@
 #include "i915_drv.h"
 #include "i915_selftest.h"
 
-#include "mock_dmabuf.h"
-
 static struct drm_i915_gem_object *
 user_object_create(struct drm_i915_private *i915, size_t sz)
 {

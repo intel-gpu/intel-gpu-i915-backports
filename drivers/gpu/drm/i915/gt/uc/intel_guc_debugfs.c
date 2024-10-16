@@ -26,7 +26,7 @@ static int guc_info_show(struct seq_file *m, void *data)
 	if (!intel_guc_is_supported(guc))
 		return -ENODEV;
 
-	intel_guc_load_status(guc, &p);
+	intel_guc_load_status(guc, &p, 0);
 	drm_puts(&p, "\n");
 
 	if (!IS_SRIOV_VF(guc_to_gt(guc)->i915))
@@ -35,9 +35,9 @@ static int guc_info_show(struct seq_file *m, void *data)
 	if (!intel_guc_submission_is_used(guc))
 		return 0;
 
-	intel_guc_ct_print_info(&guc->ct, &p);
-	intel_guc_submission_print_info(guc, &p);
-	intel_guc_ads_print_policy_info(guc, &p);
+	intel_guc_ct_print_info(&guc->ct, &p, 0);
+	intel_guc_submission_print_info(guc, &p, 0);
+	intel_guc_ads_print_policy_info(guc, &p, 0);
 
 	return 0;
 }
@@ -52,7 +52,7 @@ static int guc_registered_contexts_show(struct seq_file *m, void *data)
 	if (!intel_guc_submission_is_used(guc))
 		return -ENODEV;
 
-	intel_guc_submission_print_context_info(guc, &p);
+	intel_guc_submission_print_context_info(guc, &p, 0);
 
 	return 0;
 }
@@ -68,7 +68,7 @@ static int guc_slpc_info_show(struct seq_file *m, void *unused)
 	if (!intel_guc_slpc_is_used(guc))
 		return -ENODEV;
 
-	return intel_guc_slpc_print_info(slpc, &p);
+	return intel_guc_slpc_print_info(slpc, &p, 0);
 }
 DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(guc_slpc_info);
 

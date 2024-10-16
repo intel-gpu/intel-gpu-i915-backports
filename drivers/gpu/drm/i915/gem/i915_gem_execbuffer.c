@@ -748,8 +748,6 @@ static int eb_reserve(struct i915_execbuffer *eb)
 			mutex_lock(&eb->context->vm->mutex);
 			err = i915_gem_evict_vm(eb->context->vm);
 			mutex_unlock(&eb->context->vm->mutex);
-			if (err == -ETIME && i915_sriov_vf_migration_check(eb->i915, false))
-				return -EAGAIN;
 			if (err)
 				return err;
 			break;
@@ -2252,8 +2250,6 @@ err_skip:
 
 		i915_request_set_error_once(eb->requests[j], err);
 	}
-	if (err == -EREMCHG)
-		err = -EAGAIN;
 	return err;
 }
 

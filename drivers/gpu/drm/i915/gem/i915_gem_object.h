@@ -98,9 +98,9 @@ void i915_gem_object_add_segment(struct drm_i915_gem_object *obj,
 void i915_gem_object_release_segments(struct drm_i915_gem_object *obj);
 
 void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj,
-				       struct sg_table *pages);
+				       struct scatterlist *pages);
 
-struct sg_table *
+struct scatterlist *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj);
 void i915_gem_object_truncate(struct drm_i915_gem_object *obj);
 
@@ -467,8 +467,7 @@ i915_gem_object_get_dma_address(struct drm_i915_gem_object *obj, pgoff_t n);
 unsigned int i915_gem_sg_segment_size(const struct drm_i915_gem_object *obj);
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
-				 struct sg_table *pages,
-				 unsigned int sg_page_sizes);
+				 struct scatterlist *pages);
 
 int ____i915_gem_object_get_pages(struct drm_i915_gem_object *obj);
 int __i915_gem_object_get_pages(struct drm_i915_gem_object *obj);
@@ -690,7 +689,7 @@ i915_gem_get_locking_ctx(const struct drm_i915_gem_object *obj)
 static inline bool
 i915_gem_object_is_userptr(struct drm_i915_gem_object *obj)
 {
-	return obj->userptr.notifier.mm;
+	return obj->userptr.mm;
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,

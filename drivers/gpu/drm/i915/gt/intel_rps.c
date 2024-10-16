@@ -14,6 +14,7 @@
 #include "intel_gt_clock_utils.h"
 #include "intel_gt_irq.h"
 #include "intel_gt_pm_irq.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
@@ -761,14 +762,12 @@ static void gen6_rps_init(struct intel_rps *rps)
 
 static bool rps_reset(struct intel_rps *rps)
 {
-	struct drm_i915_private *i915 = rps_to_i915(rps);
-
 	/* force a reset */
 	rps->power.mode = -1;
 	rps->last_freq = -1;
 
 	if (rps_set(rps, rps->min_freq, true)) {
-		drm_err(&i915->drm, "Failed to reset RPS to initial values\n");
+		gt_err(rps_to_gt(rps), "Failed to reset RPS to initial values\n");
 		return false;
 	}
 

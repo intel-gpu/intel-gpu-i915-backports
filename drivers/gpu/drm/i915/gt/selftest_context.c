@@ -285,10 +285,7 @@ out_engine:
 	if (intel_engine_pm_is_awake(engine)) {
 		struct drm_printer p = drm_debug_printer(__func__);
 
-		intel_engine_dump(engine, &p,
-				  "%s is still awake:%d after idle-barriers\n",
-				  engine->name,
-				  atomic_read(&engine->wakeref.count));
+		intel_engine_dump(engine, &p, 0);
 		GEM_TRACE_DUMP();
 
 		err = -EINVAL;

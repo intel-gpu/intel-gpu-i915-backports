@@ -262,6 +262,7 @@ create_swapto(struct drm_i915_gem_object *obj, bool write)
 
 		GEM_BUG_ON(swp->base.size < obj->base.size);
 		GEM_BUG_ON(obj->swapto);
+		swp->parent = obj;
 		obj->swapto = swp;
 	}
 	swp->mm.madv = I915_MADV_WILLNEED;
@@ -454,11 +455,22 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 			iomap -= pg->mm.region.mem->region.start;
 		}
 
+		/*
+		 * On first touch, just pull in the single page.
+		 * On second touch, pull in the whole segment.
+		 */
+		if (!test_bit(I915_BO_MMAP_BIT, &pg->flags)) {
+			obj_offset += (vmf->address - vm_start) >> PAGE_SHIFT;
+			vm_start = vmf->address;
+			vm_size = PAGE_SIZE;
+		}
+
 		/* PTEs are revoked in obj->ops->put_pages() */
 		err = remap_io_sg(area, vm_start, vm_size,
-				  pg->mm.pages->sgl, obj_offset,
+				  pg->mm.pages, obj_offset,
 				  iomap);
 
+		__set_bit(I915_BO_MMAP_BIT, &pg->flags);
 		i915_gem_object_unpin_pages(pg);
 	} while (err == -ENXIO || err == -ENOMEM);
 
@@ -566,13 +578,10 @@ void i915_gem_object_release_mmap(struct drm_i915_gem_object *obj)
 	unsigned long unmap_size = obj->base.size;
 	unsigned long vma_offset = 0;
 
-	if (i915_gem_object_is_segment(obj)) {
-		/*
-		 * Segmented BOs use single mmo in parent. If parent
-		 * is NULL, then just return (see comment above).
-		 */
-		if (!obj->parent)
-			return;
+	if (!__test_and_clear_bit(I915_BO_MMAP_BIT, &obj->flags))
+		return;
+
+	if (obj->parent) {
 		vma_offset = obj->segment_offset;
 		obj = obj->parent;
 	}

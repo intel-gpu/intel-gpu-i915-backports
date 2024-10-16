@@ -874,9 +874,11 @@ static int query_hwconfig_blob(struct drm_i915_private *i915,
 {
 	struct intel_gt *gt = to_gt(i915);
 	struct intel_hwconfig *hwconfig = &gt->info.hwconfig;
+	int err;
 
-	if (!hwconfig->size || !hwconfig->ptr)
-		return -ENODEV;
+	err = intel_gt_init_hwconfig(gt);
+	if (err)
+		return err;
 
 	if (query_item->length == 0)
 		return hwconfig->size;

@@ -83,7 +83,6 @@ struct i915_vma_coredump {
 
 	u64 gtt_offset;
 	u64 gtt_size;
-	u32 gtt_page_sizes;
 
 	struct i915_compressed_pages *cpages;
 	struct i915_vma_metadata_coredump *metadata;

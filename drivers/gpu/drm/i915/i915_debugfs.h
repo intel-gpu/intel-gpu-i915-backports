@@ -16,10 +16,8 @@ struct file;
 
 #ifdef CONFIG_DEBUG_FS
 void i915_debugfs_register(struct drm_i915_private *dev_priv);
-void i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj);
 #else
 static inline void i915_debugfs_register(struct drm_i915_private *dev_priv) {}
-static inline void i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj) {}
 #endif
 
 struct i915_debugfs_file {

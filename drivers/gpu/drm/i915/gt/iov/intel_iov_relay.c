@@ -558,7 +558,17 @@ static int relay_handle_request(struct intel_iov_relay *relay, u32 origin,
 static int relay_handle_event(struct intel_iov_relay *relay, u32 origin,
 			      u32 relay_id, const u32 *msg, u32 len)
 {
-	return -EOPNOTSUPP;
+	struct intel_iov *iov = relay_to_iov(relay);
+	struct drm_i915_private *i915 = relay_to_i915(relay);
+	struct intel_runtime_pm *rpm = &i915->runtime_pm;
+	intel_wakeref_t wakeref = intel_runtime_pm_get(rpm);
+	int err = -EOPNOTSUPP;
+
+	if (intel_iov_is_pf(iov))
+		err = intel_iov_service_pf_process_event(iov, origin, relay_id, msg, len);
+
+	intel_runtime_pm_put(rpm, wakeref);
+	return err;
 }
 
 static int relay_process_msg(struct intel_iov_relay *relay, u32 origin,

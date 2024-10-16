@@ -589,6 +589,7 @@ struct intel_engine_cs {
 		} irq;
 	} stats;
 
+	struct i915_request *pagefault_request;
 	ktime_t pagefault_start;
 	atomic_t in_pagefault;
 
