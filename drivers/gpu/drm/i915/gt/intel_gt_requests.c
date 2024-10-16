@@ -130,7 +130,7 @@ void intel_engine_add_retire(struct intel_engine_cs *engine,
 	GEM_BUG_ON(intel_engine_is_virtual(engine));
 
 	if (add_retire(engine, tl))
-		schedule_work(&engine->retire_work);
+		intel_gt_queue_work(engine->gt, &engine->retire_work);
 }
 
 void intel_engine_init_retire(struct intel_engine_cs *engine)

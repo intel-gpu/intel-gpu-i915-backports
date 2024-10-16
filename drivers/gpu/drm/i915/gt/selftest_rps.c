@@ -219,7 +219,10 @@ int live_rps_clock_interval(void *arg)
 	if (igt_spinner_init(&spin, gt))
 		return -ENOMEM;
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
@@ -344,9 +347,10 @@ int live_rps_clock_interval(void *arg)
 	intel_rps_enable(&gt->rps);
 	intel_gt_pm_put(gt, wakeref);
 
+out:
 	igt_spinner_fini(&spin);
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
 	if (err == -ENODEV) /* skipped, don't report a fail */
@@ -379,7 +383,10 @@ int live_rps_control(void *arg)
 	if (igt_spinner_init(&spin, gt))
 		return -ENOMEM;
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
@@ -475,9 +482,10 @@ int live_rps_control(void *arg)
 	}
 	intel_gt_pm_put(gt, wakeref);
 
+out:
 	igt_spinner_fini(&spin);
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
 	return err;
@@ -608,7 +616,10 @@ int live_rps_frequency_cs(void *arg)
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_add_request(&qos, CPU_LATENCY);
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
@@ -715,9 +726,10 @@ err_vma:
 			break;
 	}
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
+out:
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_remove_request(&qos);
 
@@ -749,7 +761,10 @@ int live_rps_frequency_srm(void *arg)
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_add_request(&qos, CPU_LATENCY);
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
@@ -855,9 +870,10 @@ err_vma:
 			break;
 	}
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
+out:
 	if (CPU_LATENCY >= 0)
 		cpu_latency_qos_remove_request(&qos);
 
@@ -1034,14 +1050,17 @@ int live_rps_interrupt(void *arg)
 	if (igt_spinner_init(&spin, gt))
 		return -ENOMEM;
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
 	for_each_engine(engine, gt, id) {
 		/* Keep the engine busy with a spinner; expect an UP! */
 		if (pm_events & GEN6_PM_RP_UP_THRESHOLD) {
-			intel_gt_pm_wait_for_idle(engine->gt);
+			intel_engine_pm_wait_for_idle(engine);
 			GEM_BUG_ON(intel_rps_is_active(rps));
 
 			st_engine_heartbeat_disable(engine);
@@ -1052,7 +1071,7 @@ int live_rps_interrupt(void *arg)
 			if (err)
 				goto out;
 
-			intel_gt_pm_wait_for_idle(engine->gt);
+			intel_engine_pm_wait_for_idle(engine);
 		}
 
 		/* Keep the engine awake but idle and check for DOWN */
@@ -1075,7 +1094,7 @@ out:
 
 	igt_spinner_fini(&spin);
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
 	return err;
@@ -1134,7 +1153,10 @@ int live_rps_power(void *arg)
 	if (igt_spinner_init(&spin, gt))
 		return -ENOMEM;
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+		err = -EIO;
+		goto out;
+	}
 	saved_work = rps->work.func;
 	rps->work.func = dummy_rps_work;
 
@@ -1205,9 +1227,10 @@ int live_rps_power(void *arg)
 		}
 	}
 
+out:
 	igt_spinner_fini(&spin);
 
-	intel_gt_pm_wait_for_idle(gt);
+	intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 	rps->work.func = saved_work;
 
 	return err;
@@ -1250,7 +1273,10 @@ int live_rps_dynamic(void *arg)
 		if (!intel_engine_can_store_dword(engine))
 			continue;
 
-		intel_gt_pm_wait_for_idle(gt);
+		err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+		if (err)
+			goto err;
+
 		GEM_BUG_ON(intel_rps_is_active(rps));
 		rps->cur_freq = rps->min_freq;
 

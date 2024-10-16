@@ -375,6 +375,8 @@ int gen8_emit_init_breadcrumb(struct i915_request *rq)
 		*cs++ = i915_request_seqno(rq) - 1;
 		*cs++ = MI_NOOP;
 	} else {
+		GEM_BUG_ON(IS_SRIOV_VF(rq->i915));
+
 		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
 		*cs++ = offset;
 		*cs++ = 0;
@@ -443,7 +445,7 @@ static int xehp_get_params_for_emit_bb_start(struct i915_request *rq,
 	*flags = 0;
 	*len = 0;
 
-	if (rq->postfix - rq->infix < 9 * sizeof(u32))
+	if (rq->advance - rq->infix < 9 * sizeof(u32))
 		return -ENOMSG;
 
 	if ((*cs & MI_INSTR(0x3F, 0)) != MI_ARB_ON_OFF)
@@ -471,14 +473,17 @@ static int __xehp_emit_bb_start(struct i915_request *rq,
 				u32 arb)
 {
 	struct intel_context *ce = rq->context;
-	u32 wa_offset = lrc_indirect_bb(ce);
+	u32 wa_offset;
+	int srcu;
 	u32 *cs;
 
 	GEM_BUG_ON(!ce->wa_bb_page);
 
-	cs = intel_ring_begin(rq, 12);
+	cs = intel_ring_begin_ggtt(rq, &srcu, 12);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
+
+	wa_offset = lrc_indirect_bb(ce);
 
 	*cs++ = MI_ARB_ON_OFF | arb;
 
@@ -501,7 +506,7 @@ static int __xehp_emit_bb_start(struct i915_request *rq,
 
 	*cs++ = MI_ARB_ON_OFF | MI_ARB_DISABLE;
 
-	intel_ring_advance(rq, cs);
+	intel_ring_advance_ggtt(rq, srcu, cs);
 
 	return 0;
 }
@@ -530,6 +535,8 @@ int gen8_emit_bb_start_noarb(struct i915_request *rq,
 			     const unsigned int flags)
 {
 	u32 *cs;
+
+	GEM_BUG_ON(IS_SRIOV_VF(rq->i915) && (flags & I915_DISPATCH_SECURE));
 
 	cs = intel_ring_begin(rq, 4);
 	if (IS_ERR(cs))
@@ -593,6 +600,8 @@ int gen8_emit_bb_start(struct i915_request *rq,
 {
 	u32 *cs;
 
+	GEM_BUG_ON(IS_SRIOV_VF(rq->i915) && (flags & I915_DISPATCH_SECURE));
+
 	if (unlikely(i915_request_has_nopreempt(rq)))
 		return gen8_emit_bb_start_noarb(rq, offset, len, flags);
 
@@ -646,8 +655,10 @@ static int get_params_for_emit_bb_start(struct i915_request *rq,
 int reemit_bb_start(struct i915_request *rq)
 {
 	u64 offset;
-	u32 emlen, emflags;
+	u32 emlen, emflags, advance;
 	int err;
+
+	advance = rq->advance;
 
 	err = get_params_for_emit_bb_start(rq, &offset, &emlen, &emflags);
 	if (err)
@@ -658,7 +669,11 @@ int reemit_bb_start(struct i915_request *rq)
 		rq->engine->emit_init_breadcrumb(rq);
 	}
 
-	return rq->engine->emit_bb_start(rq, offset, emlen, emflags);
+	err = rq->engine->emit_bb_start(rq, offset, emlen, emflags);
+
+	rq->advance = advance;
+
+	return err;
 }
 
 /*
@@ -738,6 +753,8 @@ static u32 *emit_breadcrumb(struct i915_request *rq, u32 *cs)
 		*cs++ = i915_request_seqno(rq);
 		*cs++ = MI_NOOP;
 	} else {
+		GEM_BUG_ON(IS_SRIOV_VF(rq->i915));
+
 		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | MI_POSTED;
 		*cs++ = offset;
 		*cs++ = 0;
@@ -818,6 +835,8 @@ u32 *gen11_emit_fini_breadcrumb_rcs(struct i915_request *rq, u32 *cs)
 
 static u32 *gen12_emit_preempt_busywait(struct i915_request *rq, u32 *cs)
 {
+	GEM_BUG_ON(IS_SRIOV_VF(rq->i915));
+
 	*cs++ = MI_ARB_CHECK; /* trigger IDLE->ACTIVE first */
 	*cs++ = MI_SEMAPHORE_WAIT_TOKEN |
 		MI_SEMAPHORE_GLOBAL_GTT |
@@ -842,8 +861,9 @@ static u32 ccs_semaphore_offset(struct i915_request *rq)
 /* Wa_14014475959:dg2 */
 static u32 *ccs_emit_wa_busywait(struct i915_request *rq, u32 *cs)
 {
-	int i;
+	int srcu;
 
+	intel_ring_fini_begin_ggtt(rq, &srcu);
 	*cs++ = MI_ATOMIC_INLINE | MI_ATOMIC_GLOBAL_GTT | MI_ATOMIC_CS_STALL |
 		MI_ATOMIC_MOVE;
 	*cs++ = ccs_semaphore_offset(rq);
@@ -854,8 +874,8 @@ static u32 *ccs_emit_wa_busywait(struct i915_request *rq, u32 *cs)
 	 * When MI_ATOMIC_INLINE_DATA set this command must be 11 DW + (1 NOP)
 	 * to align. 4 DWs above + 8 filler DWs here.
 	 */
-	for (i = 0; i < 8; ++i)
-		*cs++ = 0;
+	memset32(cs, 0, 8);
+	cs += 8;
 
 	*cs++ = MI_SEMAPHORE_WAIT |
 		MI_SEMAPHORE_GLOBAL_GTT |
@@ -864,6 +884,7 @@ static u32 *ccs_emit_wa_busywait(struct i915_request *rq, u32 *cs)
 	*cs++ = 0;
 	*cs++ = ccs_semaphore_offset(rq);
 	*cs++ = 0;
+	intel_ring_fini_advance_ggtt(rq, srcu, cs);
 
 	return cs;
 }

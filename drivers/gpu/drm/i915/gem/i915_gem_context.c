@@ -1115,6 +1115,9 @@ int i915_gem_context_open(struct drm_i915_private *i915,
 	/* 0 reserved for invalid/unassigned ppgtt */
 	xa_init_flags(&file_priv->vm_xa, XA_FLAGS_ALLOC1);
 
+	if (intel_gt_terminally_wedged(to_gt(i915)))
+		return 0;
+
 	ctx = i915_gem_context_create_for_gt(to_gt(i915), 0);
 	if (IS_ERR(ctx)) {
 		err = PTR_ERR(ctx);
@@ -1264,9 +1267,6 @@ int i915_gem_vm_destroy_ioctl(struct drm_device *dev, void *data,
 	flush_workqueue(vm->gt->wq);
 	i915_debugger_vm_destroy(vm->client, vm, false);
 	i915_vm_close(vm);
-
-	i915_gem_flush_free_objects(to_i915(dev));
-	flush_workqueue(to_i915(dev)->wq);
 	return 0;
 }
 
@@ -2441,9 +2441,6 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 
 	context_retire(ctx);
 	context_close(ctx);
-
-	i915_gem_flush_free_objects(to_i915(dev));
-	flush_workqueue(to_i915(dev)->wq);
 	return 0;
 }
 

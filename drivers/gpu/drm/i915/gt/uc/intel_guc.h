@@ -194,9 +194,6 @@ struct intel_guc {
 	/** @lrc_desc_pool_vaddr_v69: contents of the GuC LRC descriptor pool */
 	void *lrc_desc_pool_vaddr_v69;
 
-	spinlock_t sched_lock;
-	int sched_enable_ref;
-
 	struct {
 		struct drm_i915_gem_object *obj;
 		struct i915_vma *vma;
@@ -345,6 +342,17 @@ intel_guc_send_and_receive(struct intel_guc *guc, const u32 *action, u32 len,
 {
 	return intel_guc_ct_send(&guc->ct, action, len,
 				 response_buf, response_buf_size, 0);
+}
+
+static inline void intel_guc_send_wait(unsigned int *sleep_period_us,
+					   bool not_atomic)
+{
+	if (likely(not_atomic)) {
+		usleep_range(*sleep_period_us, 2 * *sleep_period_us);
+		*sleep_period_us = min(*sleep_period_us << 1, 1000u);
+	} else {
+		cpu_relax();
+	}
 }
 
 static inline int intel_guc_send_busy_loop(struct intel_guc *guc,
@@ -531,8 +539,6 @@ static inline void intel_guc_disable_msg(struct intel_guc *guc, u32 mask)
 	spin_unlock_irq(&guc->irq_lock);
 }
 
-int intel_guc_wait_for_idle(struct intel_guc *guc, long timeout);
-
 int intel_guc_deregister_done_process_msg(struct intel_guc *guc,
 					  const u32 *msg, u32 len);
 int intel_guc_sched_done_process_msg(struct intel_guc *guc,
@@ -561,8 +567,8 @@ void intel_guc_submission_cancel_requests(struct intel_guc *guc);
 int intel_guc_set_schedule_mode(struct intel_guc *guc,
 				enum intel_guc_scheduler_mode mode, u32 delay);
 
-void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p);
-void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p);
+void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p, int indent);
+void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p, int indent);
 
 void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 

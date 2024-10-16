@@ -43,6 +43,7 @@ This repository contains following drivers.
 | RHEL® | 8.9  |  4.18.0-513.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 8.8  |  4.18.0-477.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 8.6  |  4.18.0-372.xx |  [README](docs/README_redhat.md) |
+| Vanilla LTS* |  |  6.6.xx  | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  6.1.xx  | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  5.15.xx | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  5.10.xx | [README](docs/README_vanilla.md) |

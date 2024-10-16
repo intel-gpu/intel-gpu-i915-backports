@@ -560,7 +560,11 @@ int live_rc6_ctx_wa(void *arg)
 				goto out;
 			}
 
-			intel_gt_pm_wait_for_idle(gt);
+			if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+				intel_gt_set_wedged(gt);
+				err = -EIO;
+				goto out;
+			}
 			pr_debug("%s: CTX_INFO=%0x\n",
 				 engine->name, READ_ONCE(*res));
 

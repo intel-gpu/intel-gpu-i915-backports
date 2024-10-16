@@ -5,6 +5,7 @@
  */
 
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_requests.h"
 
 #include "i915_drv.h"
@@ -19,10 +20,14 @@ int igt_flush_test(struct drm_i915_private *i915)
 	int ret = 0;
 
 	for_each_gt(gt, i915, i) {
+		intel_wakeref_t wf;
+
 		if (intel_gt_is_wedged(gt))
 			ret = -EIO;
 
-		cond_resched();
+		wf = intel_gt_pm_get_if_awake(gt);
+		if (!wf)
+			continue;
 
 		if (intel_gt_wait_for_idle(gt, HZ * 3) == -ETIME) {
 			pr_err("%pS timed out, cancelling all further testing.\n",
@@ -37,6 +42,9 @@ int igt_flush_test(struct drm_i915_private *i915)
 			intel_gt_set_wedged(gt);
 			ret = -EIO;
 		}
+
+		intel_gt_pm_put_async(gt, wf);
+		cond_resched();
 	}
 
 	return ret;

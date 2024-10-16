@@ -122,7 +122,6 @@ i915_gem_evict_something(struct i915_address_space *vm,
 	struct list_head eviction_list;
 	struct i915_vma *vma, *next;
 	struct drm_mm_node *node;
-	enum drm_mm_insert_mode mode;
 	struct i915_vma *active;
 	struct intel_gt *gt;
 	int ret;
@@ -141,12 +140,9 @@ i915_gem_evict_something(struct i915_address_space *vm,
 	 *   1. Inactive objects (already retired, random order)
 	 *   2. Active objects (will stall on unbinding, oldest scanned first)
 	 */
-	mode = DRM_MM_INSERT_BEST;
-	if (flags & PIN_HIGH)
-		mode = DRM_MM_INSERT_HIGH;
 	drm_mm_scan_init_with_range(&scan, &vm->mm,
 				    min_size, alignment, color,
-				    start, end, mode);
+				    start, end, DRM_MM_INSERT_BEST);
 
 	if (i915_is_ggtt(vm)) {
 		struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);

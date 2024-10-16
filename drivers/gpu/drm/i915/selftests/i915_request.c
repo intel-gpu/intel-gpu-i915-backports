@@ -167,7 +167,7 @@ static int __cancel_inactive(struct intel_engine_cs *engine)
 		struct drm_printer p = drm_info_printer(engine->i915->drm.dev);
 
 		pr_err("%s: Failed to cancel inactive request\n", engine->name);
-		intel_engine_dump(engine, &p, "%s\n", engine->name);
+		intel_engine_dump(engine, &p, 0);
 		err = -ETIME;
 		goto out_rq;
 	}
@@ -218,7 +218,7 @@ static int __cancel_active(struct intel_engine_cs *engine)
 		struct drm_printer p = drm_info_printer(engine->i915->drm.dev);
 
 		pr_err("Failed to start spinner on %s\n", engine->name);
-		intel_engine_dump(engine, &p, "%s\n", engine->name);
+		intel_engine_dump(engine, &p, 0);
 		err = -ETIME;
 		goto out_rq;
 	}
@@ -228,7 +228,7 @@ static int __cancel_active(struct intel_engine_cs *engine)
 		struct drm_printer p = drm_info_printer(engine->i915->drm.dev);
 
 		pr_err("%s: Failed to cancel active request\n", engine->name);
-		intel_engine_dump(engine, &p, "%s\n", engine->name);
+		intel_engine_dump(engine, &p, 0);
 		err = -ETIME;
 		goto out_rq;
 	}
@@ -1202,6 +1202,14 @@ static u32 hwsp_offset(const struct intel_context *ce, u32 *dw)
 		offset_in_page(dw));
 }
 
+static int wait_for_idle(struct intel_engine_cs *engine)
+{
+	intel_gt_retire_requests(engine->gt);
+	return wait_var_event_timeout(&engine->wakeref.wakeref,
+				      !intel_wakeref_is_active(&engine->wakeref),
+				      HZ / 2);
+}
+
 static int measure_semaphore_response(struct intel_context *ce)
 {
 	u32 *sema = hwsp_scratch(ce);
@@ -1270,7 +1278,7 @@ static int measure_semaphore_response(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return 0;
 
 err:
 	intel_gt_set_wedged(ce->engine->gt);
@@ -1300,7 +1308,7 @@ static int measure_idle_dispatch(struct intel_context *ce)
 	for (i = 0; i < ARRAY_SIZE(elapsed); i++) {
 		struct i915_request *rq;
 
-		err = intel_gt_wait_for_idle(ce->engine->gt, HZ / 2);
+		err = wait_for_idle(ce->engine);
 		if (err)
 			return err;
 
@@ -1329,10 +1337,6 @@ static int measure_idle_dispatch(struct intel_context *ce)
 		preempt_enable();
 	}
 
-	err = intel_gt_wait_for_idle(ce->engine->gt, HZ / 2);
-	if (err)
-		goto err;
-
 	for (i = 0; i < ARRAY_SIZE(elapsed); i++)
 		elapsed[i] = sema[i] - elapsed[i];
 
@@ -1341,7 +1345,7 @@ static int measure_idle_dispatch(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
 err:
 	intel_gt_set_wedged(ce->engine->gt);
@@ -1418,7 +1422,7 @@ static int measure_busy_dispatch(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
 err:
 	intel_gt_set_wedged(ce->engine->gt);
@@ -1491,7 +1495,7 @@ static int measure_inter_request(struct intel_context *ce)
 		rq = i915_request_create(ce);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
-			goto err_submit;
+			goto err;
 		}
 
 		err = i915_sw_fence_await_sw_fence_gfp(&rq->submit,
@@ -1499,14 +1503,14 @@ static int measure_inter_request(struct intel_context *ce)
 						       GFP_KERNEL);
 		if (err < 0) {
 			i915_request_add(rq);
-			goto err_submit;
+			goto err;
 		}
 
 		cs = intel_ring_begin(rq, 4);
 		if (IS_ERR(cs)) {
 			i915_request_add(rq);
 			err = PTR_ERR(cs);
-			goto err_submit;
+			goto err;
 		}
 
 		cs = emit_timestamp_store(cs, ce, offset + i * sizeof(u32));
@@ -1519,9 +1523,6 @@ static int measure_inter_request(struct intel_context *ce)
 	heap_fence_put(submit);
 
 	semaphore_set(sema, 1);
-	err = intel_gt_wait_for_idle(ce->engine->gt, HZ / 2);
-	if (err)
-		goto err;
 
 	for (i = 1; i <= TF_COUNT; i++)
 		elapsed[i - 1] = sema[i + 1] - sema[i];
@@ -1531,13 +1532,12 @@ static int measure_inter_request(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
-err_submit:
+err:
 	i915_sw_fence_commit(submit);
 	heap_fence_put(submit);
 	semaphore_set(sema, 1);
-err:
 	intel_gt_set_wedged(ce->engine->gt);
 	return err;
 }
@@ -1580,7 +1580,7 @@ static int measure_context_switch(struct intel_context *ce)
 			rq = i915_request_create(arr[j]);
 			if (IS_ERR(rq)) {
 				err = PTR_ERR(rq);
-				goto err_fence;
+				goto err;
 			}
 
 			if (fence) {
@@ -1588,7 +1588,7 @@ static int measure_context_switch(struct intel_context *ce)
 								   &fence->fence);
 				if (err) {
 					i915_request_add(rq);
-					goto err_fence;
+					goto err;
 				}
 			}
 
@@ -1596,7 +1596,7 @@ static int measure_context_switch(struct intel_context *ce)
 			if (IS_ERR(cs)) {
 				i915_request_add(rq);
 				err = PTR_ERR(cs);
-				goto err_fence;
+				goto err;
 			}
 
 			cs = emit_timestamp_store(cs, ce, addr);
@@ -1614,9 +1614,6 @@ static int measure_context_switch(struct intel_context *ce)
 	intel_engine_flush_submission(ce->engine);
 
 	semaphore_set(sema, 1);
-	err = intel_gt_wait_for_idle(ce->engine->gt, HZ / 2);
-	if (err)
-		goto err;
 
 	for (i = 1; i <= TF_COUNT; i++)
 		elapsed[i - 1] = sema[2 * i + 2] - sema[2 * i + 1];
@@ -1626,12 +1623,11 @@ static int measure_context_switch(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
-err_fence:
+err:
 	i915_request_put(fence);
 	semaphore_set(sema, 1);
-err:
 	intel_gt_set_wedged(ce->engine->gt);
 	return err;
 }
@@ -1737,7 +1733,7 @@ static int measure_preemption(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
 err:
 	intel_gt_set_wedged(ce->engine->gt);
@@ -1817,10 +1813,6 @@ static int measure_completion(struct intel_context *ce)
 		preempt_enable();
 	}
 
-	err = intel_gt_wait_for_idle(ce->engine->gt, HZ / 2);
-	if (err)
-		goto err;
-
 	for (i = 0; i < ARRAY_SIZE(elapsed); i++) {
 		GEM_BUG_ON(sema[i + 1] == -1);
 		elapsed[i] = elapsed[i] - sema[i + 1];
@@ -1831,7 +1823,7 @@ static int measure_completion(struct intel_context *ce)
 		ce->engine->name, cycles >> TF_BIAS,
 		cycles_to_ns(ce->engine, cycles));
 
-	return intel_gt_wait_for_idle(ce->engine->gt, HZ);
+	return wait_for_idle(ce->engine);
 
 err:
 	intel_gt_set_wedged(ce->engine->gt);
@@ -1869,6 +1861,10 @@ static int perf_request_latency(void *arg)
 
 	for_each_uabi_engine(engine, i915) {
 		struct intel_context *ce;
+		intel_wakeref_t wf;
+
+		if (intel_gt_wait_for_idle(engine->gt, HZ))
+			break;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -1882,6 +1878,7 @@ static int perf_request_latency(void *arg)
 			goto out;
 		}
 
+		wf = intel_gt_pm_get(engine->gt);
 		st_engine_heartbeat_disable(engine);
 		rps_pin(engine->gt);
 
@@ -1902,11 +1899,12 @@ static int perf_request_latency(void *arg)
 
 		rps_unpin(engine->gt);
 		st_engine_heartbeat_enable(engine);
+		intel_gt_pm_put(engine->gt, wf);
 
 		intel_context_unpin(ce);
 		intel_context_put(ce);
 		if (err)
-			goto out;
+			break;
 	}
 
 out:
@@ -2058,6 +2056,7 @@ static int perf_series_engines(void *arg)
 			goto out;
 		}
 
+		intel_engine_pm_get(ce->engine);
 		ps->ce[idx++] = ce;
 	}
 	GEM_BUG_ON(idx != ps->nengines);
@@ -2132,6 +2131,8 @@ out:
 	for (idx = 0; idx < nengines; idx++) {
 		if (IS_ERR_OR_NULL(ps->ce[idx]))
 			break;
+
+		intel_engine_pm_put(ps->ce[idx]->engine);
 
 		intel_context_unpin(ps->ce[idx]);
 		intel_context_put(ps->ce[idx]);
@@ -2394,6 +2395,7 @@ static int perf_parallel_engines(void *arg)
 		for_each_uabi_engine(engine, i915) {
 			memset(&engines[idx].p, 0, sizeof(engines[idx].p));
 			engines[idx].p.engine = engine;
+			intel_engine_pm_get(engine);
 
 			engines[idx].tsk = kthread_run(*fn, &engines[idx].p,
 						       "igt:%s", engine->name);
@@ -2419,6 +2421,7 @@ static int perf_parallel_engines(void *arg)
 				err = status;
 
 			put_task_struct(engines[idx++].tsk);
+			intel_engine_pm_put(engine);
 		}
 
 		if (igt_live_test_end(&t))

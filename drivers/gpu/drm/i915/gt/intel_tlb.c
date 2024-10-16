@@ -100,13 +100,19 @@ static bool busy_wait(struct intel_gt *gt, u32 seqno, unsigned long timeout_ns)
 	return false;
 }
 
-void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno)
+void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic)
 {
 	if (unlikely(!i915_seqno_passed(READ_ONCE(gt->tlb.next_seqno), seqno)))
 		return;
 
 	if (tlb_seqno_passed(gt, seqno))
 		return;
+
+	while (atomic) {
+		intel_guc_ct_receive(&gt->uc.guc.ct);
+		if (tlb_seqno_passed(gt, seqno))
+			return;
+	}
 
 	/*
 	 * Drain the recieve queue before sleeping in case the TLB invalidation

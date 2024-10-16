@@ -52,6 +52,26 @@ else
 export INTEL_PMT_FORCED=0
 endif
 
+export DISABLE_DISPLAY=0
+SLES_OSV_VER := $(shell cat $(KERNEL_CONFIG) | grep "CONFIG_LOCALVERSION=" | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f1-1)
+ifneq (, $(SLES_OSV_VER))
+VERSION_CHECK = $(shell expr $(SLES_OSV_VER) \>= 150400)
+endif
+
+ifeq ($(BUILD_CONFIG),disabledisplay)
+        DISABLE_DISPLAY=1
+else ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
+ifeq ($(shell expr $(CUSTOM_KERN_VER) \>= 6.4), 1)
+        DISABLE_DISPLAY=1
+endif
+else ifeq ($(VERSION_CHECK), 1)
+        DISABLE_DISPLAY=1
+endif
+
+ifeq ($(BUILD_CONFIG), enabledisplay)
+	DISABLE_DISPLAY=0
+endif
+
 # disable built-in rules for this file
 .SUFFIXES:
 
@@ -65,7 +85,6 @@ mrproper:
 	@rm -f .config
 	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
 	@rm -f backport-include/backport/autoconf.h
-	@git ls-files -z -d | xargs -0 git checkout --
 	@$(MAKE) -f Makefile.real mrproper
 
 .DEFAULT:
@@ -217,7 +236,16 @@ common-help:
 	@echo " 			is difficult. Make sure no other intel-i915* packages are already installed before "
 	@echo " 			you installing current one."
 	@echo "  BUILD_CONFIG   : Specify build config variant"
-	@echo " 			Ex: make <Target> BUILD_CONFIG=disabledisplay "
+	@echo ""
+	@echo "		To disable display, pass BUILD_CONFIG=disabledispaly "
+	@echo " 		Ex: make <Target> BUILD_CONFIG=disabledisplay "
+	@echo ""
+	@echo "		##### List of OSVs for which display has been disabled by default ###### "
+	@echo "			SLES15_SP6     SLES15_SP5      SLES15_SP4 "
+	@echo ""
+	@echo "		If you want to force enable display, pass BUILD_CONFIG=enabledispaly "
+	@echo "			Ex : make <Target> BUILD_CONFIG=enabledisplay "
+	@echo ""
 	@echo "  OS_DISTRIBUTION: Distro targeted package"
 	@echo " 			You can set this value by passing supported kernel name"
 	@echo " 			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_SERVER"

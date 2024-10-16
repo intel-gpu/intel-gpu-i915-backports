@@ -69,6 +69,11 @@ static inline void intel_engine_pm_flush(struct intel_engine_cs *engine)
 	intel_wakeref_unlock_wait(&engine->wakeref);
 }
 
+static inline void intel_engine_pm_wait_for_idle(struct intel_engine_cs *engine)
+{
+	intel_wakeref_wait_for_idle(&engine->wakeref, MAX_SCHEDULE_TIMEOUT);
+}
+
 struct i915_request *
 intel_engine_create_kernel_request(struct intel_engine_cs *engine);
 

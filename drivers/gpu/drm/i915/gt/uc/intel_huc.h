@@ -58,6 +58,6 @@ static inline bool intel_huc_is_loaded_by_gsc(const struct intel_huc *huc)
 	return huc->fw.loaded_via_gsc;
 }
 
-void intel_huc_load_status(struct intel_huc *huc, struct drm_printer *p);
+void intel_huc_load_status(struct intel_huc *huc, struct drm_printer *p, int indent);
 
 #endif

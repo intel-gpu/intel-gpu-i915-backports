@@ -81,6 +81,7 @@ i915-y += \
 	i915_sw_fence.o \
 	i915_sw_fence_work.o \
 	i915_syncmap.o \
+	i915_tbb.o \
 	i915_user_extensions.o
 
 i915-$(CONFIG_COMPAT)   += i915_ioc32.o
@@ -222,6 +223,7 @@ i915-y += spi/intel_spi.o
 iov-y += \
 	i915_sriov.o \
 	i915_sriov_sysfs.o \
+	i915_sriov_telemetry.o \
 	gt/iov/intel_iov.o \
 	gt/iov/intel_iov_debugfs.o \
 	gt/iov/intel_iov_event.o \

@@ -1160,6 +1160,9 @@ __store_reg_to_mem(struct i915_request *rq, i915_reg_t reg, u32 ggtt_offset)
 {
 	u32 *cs;
 
+	/* GGTT address cannot be transferred unlocked on VF */
+	GEM_BUG_ON(IS_SRIOV_VF(rq->i915));
+
 	cs = intel_ring_begin(rq, 4);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
@@ -1753,7 +1756,7 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 	 * PreHSW required 512K alignment.
 	 * HSW and onwards, align to requested size of OA buffer.
 	 */
-	ret = i915_vma_pin(vma, 0, size, PIN_GLOBAL | PIN_HIGH);
+	ret = i915_vma_pin(vma, 0, size, PIN_GLOBAL);
 	if (ret) {
 		drm_err(&gt->i915->drm, "Failed to pin OA buffer %d\n", ret);
 		goto err_unref;
@@ -1873,7 +1876,7 @@ retry:
 		goto out_ww;
 	}
 
-	ret = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL | PIN_HIGH);
+	ret = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL);
 	if (ret)
 		goto out_ww;
 
@@ -2200,7 +2203,7 @@ retry:
 	if (err)
 		goto err;
 
-	err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL | PIN_HIGH);
+	err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL);
 	if (err)
 		goto err;
 
@@ -2324,7 +2327,9 @@ static int gen8_modify_context(struct intel_context *ce,
 		return PTR_ERR(rq);
 
 	/* Serialise with the remote context */
-	err = intel_context_prepare_remote_request(ce, rq);
+	err = 0;
+	if (!intel_engine_has_preemption(ce->engine))
+		err = intel_context_prepare_remote_request(ce, rq);
 	if (err == 0)
 		err = gen8_store_flex(rq, ce, flex, count);
 
@@ -2357,6 +2362,7 @@ gen8_modify_self(struct intel_context *ce,
 		goto err_add_request;
 
 err_add_request:
+	i915_request_set_priority(rq, I915_PRIORITY_BARRIER);
 	i915_request_add(rq);
 	return err;
 }
@@ -2895,7 +2901,7 @@ static int i915_perf_stream_enable_sync(struct i915_perf_stream *stream)
 
 	err = stream->perf->ops.enable_metric_set(stream, active);
 	if (err == 0)
-		__i915_active_wait(active, TASK_UNINTERRUPTIBLE);
+		err = __i915_active_wait(active, TASK_KILLABLE);
 
 	i915_active_put(active);
 	return err;
@@ -3582,7 +3588,7 @@ static vm_fault_t vm_fault_oa(struct vm_fault *vmf)
 
 	err = remap_io_sg(vma,
 			  vma->vm_start, vma->vm_end - vma->vm_start,
-			  stream->oa_buffer.vma->pages->sgl, 0, -1);
+			  stream->oa_buffer.vma->pages, 0, -1);
 
 	return i915_error_to_vmf_fault(err);
 }

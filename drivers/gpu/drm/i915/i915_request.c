@@ -426,7 +426,7 @@ bool i915_request_retire(struct i915_request *rq)
 	if (advance_ring(rq->ring, rq->postfix))
 		intel_ring_update_space(rq->ring);
 
-	if (!i915_request_signaled(rq)) {
+	if (!test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags)) {
 		spin_lock_irq(&rq->sched.lock);
 		dma_fence_signal_locked(&rq->fence);
 		spin_unlock_irq(&rq->sched.lock);
@@ -616,11 +616,14 @@ static bool fatal_error(int error)
 
 void __i915_request_skip(struct i915_request *rq)
 {
+	int srcu;
+
 	if (rq->infix == rq->postfix)
 		return;
 
 	RQ_TRACE(rq, "error: %d\n", rq->fence.error);
 
+	gt_ggtt_address_read_lock(rq->engine->gt, &srcu);
 	/*
 	 * As this request likely depends on state from the lost
 	 * context, clear out all the user operations leaving the
@@ -628,6 +631,8 @@ void __i915_request_skip(struct i915_request *rq)
 	 */
 	__i915_request_fill(rq, 0);
 	rq->infix = rq->postfix;
+	set_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags);
+	gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
 }
 
 bool i915_request_set_error_once(struct i915_request *rq, int error)
@@ -655,10 +660,11 @@ struct i915_request *i915_request_mark_eio(struct i915_request *rq)
 		return NULL;
 
 	/* As soon as the request is completed, it may be retired */
-	rq = i915_request_get(rq);
-
-	i915_request_set_error_once(rq, -EIO);
-	i915_request_mark_complete(rq);
+	rq = i915_request_get_rcu(rq);
+	if (rq) {
+		i915_request_set_error_once(rq, -EIO);
+		i915_request_mark_complete(rq);
+	}
 
 	return rq;
 }
@@ -951,6 +957,7 @@ static int wait_for_space(struct i915_request *rq)
 	ptr = intel_ring_begin(rq, 0);
 	if (IS_ERR(ptr))
 		return PTR_ERR(ptr);
+	intel_ring_advance(rq, ptr);
 
 	return 0;
 }
@@ -1271,6 +1278,7 @@ __emit_semaphore_wait(struct i915_request *to,
 	u32 *cs;
 
 	GEM_BUG_ON(i915_request_has_initial_breadcrumb(to));
+	GEM_BUG_ON(IS_SRIOV_VF(to->i915));
 
 	/* We need to pin the signaler's HWSP until we are finished reading. */
 	err = intel_timeline_read_hwsp(from, to, &hwsp_offset);
@@ -1907,6 +1915,8 @@ void __i915_request_commit(struct i915_request *rq)
 	cs = intel_ring_begin(rq, engine->emit_fini_breadcrumb_dw);
 	GEM_BUG_ON(IS_ERR(cs));
 	rq->postfix = intel_ring_offset(rq, cs);
+	/* postfix commands are not emitted yet, but the space is reserved */
+	intel_ring_advance(rq, cs + engine->emit_fini_breadcrumb_dw);
 
 	return __i915_request_add_to_timeline(rq);
 }
@@ -2025,7 +2035,11 @@ static bool __i915_spin_request(struct i915_request * const rq, int state)
 	 * takes to sleep on a request, on the order of a microsecond.
 	 */
 
-	timeout_ns = READ_ONCE(rq->engine->props.max_busywait_duration_ns);
+	if (rq->engine)
+		timeout_ns = READ_ONCE(rq->engine->props.max_busywait_duration_ns);
+	else
+		timeout_ns = CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT;
+
 	timeout_ns += local_clock_ns(&cpu);
 	do {
 		if (dma_fence_is_signaled(&rq->fence))
@@ -2061,7 +2075,6 @@ static long __i915_request_wait(struct i915_request *rq,
 {
 	const int state = flags & I915_WAIT_INTERRUPTIBLE ?
 		TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
-	struct wait_queue_entry block;
 	struct request_wait wait;
 
 	/*
@@ -2128,11 +2141,6 @@ static long __i915_request_wait(struct i915_request *rq,
 	if (i915_request_is_ready(rq))
 		__intel_engine_flush_submission(rq->engine, false);
 
-	if (rq->i915) {
-		init_waitqueue_entry(&block, current);
-		add_wait_queue(&rq->i915->userspace.queue, &block);
-	}
-
 	for (;;) {
 		set_current_state(state);
 
@@ -2141,11 +2149,6 @@ static long __i915_request_wait(struct i915_request *rq,
 
 		if (signal_pending_state(state, current)) {
 			timeout = -ERESTARTSYS;
-			break;
-		}
-
-		if (rq->i915 && i915_sriov_vf_migration_check(rq->i915, false)) {
-			timeout = -EAGAIN;
 			break;
 		}
 
@@ -2158,8 +2161,6 @@ static long __i915_request_wait(struct i915_request *rq,
 	}
 	__set_current_state(TASK_RUNNING);
 
-	if (rq->i915)
-		remove_wait_queue(&rq->i915->userspace.queue, &block);
 	if (READ_ONCE(wait.tsk))
 		dma_fence_remove_callback(&rq->fence, &wait.cb);
 	GEM_BUG_ON(!list_empty(&wait.cb.node));

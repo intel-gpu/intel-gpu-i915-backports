@@ -301,7 +301,7 @@ static void gt_sanitize(struct intel_gt *gt, bool force)
 			__intel_engine_reset(engine, false);
 	}
 
-	intel_uc_reset(&gt->uc, false);
+	intel_uc_reset(&gt->uc, ALL_ENGINES);
 	intel_gt_retire_requests(gt);
 	reset_pinned_contexts(gt);
 
@@ -350,8 +350,7 @@ int intel_gt_resume(struct intel_gt *gt)
 	 * Only the kernel contexts should remain pinned over suspend,
 	 * allowing us to fixup the user contexts on their first pin.
 	 */
-	if (!i915_sriov_vf_migration_check(gt->i915, false))
-		gt_sanitize(gt, true);
+	gt_sanitize(gt, true);
 
 	wakeref = intel_gt_pm_get(gt);
 
@@ -408,6 +407,20 @@ err_wedged:
 	goto out_fw;
 }
 
+static void flush_clear_on_idle(struct intel_gt *gt)
+{
+	struct intel_memory_region *mem;
+
+	/* Wait for the suspend flag to be visible in i915_gem_lmem_park() */
+	mutex_lock(&gt->wakeref.mutex);
+	mutex_unlock(&gt->wakeref.mutex);
+
+	/* Wait for any workers started before the flag became visible */
+	mem = gt->lmem;
+	if (mem)
+		wait_for_completion(&mem->parking);
+}
+
 static void wait_for_suspend(struct intel_gt *gt)
 {
 	intel_wakeref_t wf;
@@ -420,7 +433,7 @@ static void wait_for_suspend(struct intel_gt *gt)
 	if (gt->i915->quiesce_gpu)
 		return;
 
-	with_intel_gt_pm(gt, wf) {
+	with_intel_gt_pm_if_awake(gt, wf) {
 		/* Cancel outstanding work and leave the gpu quiet */
 		if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
 			intel_gt_set_wedged(gt);
@@ -434,7 +447,10 @@ void intel_gt_suspend_prepare(struct intel_gt *gt)
 {
 	user_forcewake(gt, true);
 
+	WRITE_ONCE(gt->suspend, true);
+	flush_clear_on_idle(gt);
 	wait_for_suspend(gt);
+
 	intel_gt_retire_requests(gt);
 	intel_tlb_invalidation_revoke(gt);
 
@@ -450,35 +466,14 @@ static suspend_state_t pm_suspend_target(void)
 #endif
 }
 
-static void flush_clear_on_idle(struct intel_gt *gt)
-{
-	struct intel_memory_region *mem;
-
-	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_CLEAR_ON_IDLE))
-		return;
-
-	mem = gt->lmem;
-	if (!mem)
-		return;
-
-	/* Wait for the suspend flag to be visible in i915_gem_lmem_park() */
-	mutex_lock(&gt->wakeref.mutex);
-	mutex_unlock(&gt->wakeref.mutex);
-
-	/* Wait for any workers started before the flag became visible */
-	wait_for_completion(&mem->parking);
-}
-
 void intel_gt_suspend_late(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
 
-	WRITE_ONCE(gt->suspend, true);
-	flush_clear_on_idle(gt);
-
 	/* We expect to be idle already; but also want to be independent */
 	wait_for_suspend(gt);
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT))
+		intel_gt_set_wedged(gt);
 
 	if (is_mock_gt(gt))
 		return;

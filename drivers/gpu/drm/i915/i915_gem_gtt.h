@@ -17,11 +17,6 @@
 struct drm_i915_gem_object;
 struct i915_address_space;
 
-int __must_check i915_gem_gtt_prepare_pages(struct drm_i915_gem_object *obj,
-					    struct sg_table *pages);
-void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
-			       struct sg_table *pages);
-
 int i915_gem_gtt_reserve(struct i915_address_space *vm,
 			 struct drm_mm_node *node,
 			 u64 size, u64 offset, unsigned long color,
@@ -46,14 +41,12 @@ i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
 
 /* Flags used by pin/bind&friends. */
 #define PIN_NOEVICT		BIT_ULL(0)
-#define PIN_NOSEARCH		BIT_ULL(1)
-#define PIN_NONBLOCK		BIT_ULL(2)
-#define PIN_ZONE_32		BIT_ULL(3)
-#define PIN_ZONE_48		BIT_ULL(4)
-#define PIN_HIGH		BIT_ULL(5)
-#define PIN_OFFSET_BIAS		BIT_ULL(6)
-#define PIN_OFFSET_FIXED	BIT_ULL(7)
-#define PIN_OFFSET_GUARD	BIT_ULL(8)
+#define PIN_NONBLOCK		BIT_ULL(1)
+#define PIN_ZONE_32		BIT_ULL(2)
+#define PIN_ZONE_48		BIT_ULL(3)
+#define PIN_OFFSET_BIAS		BIT_ULL(4)
+#define PIN_OFFSET_FIXED	BIT_ULL(5)
+#define PIN_OFFSET_GUARD	BIT_ULL(6)
 
 /*
  * Binding flags (common with i915_vma.flags).

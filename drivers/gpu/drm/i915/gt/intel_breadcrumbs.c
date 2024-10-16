@@ -136,9 +136,10 @@ check_signal_order(struct intel_context *ce, struct i915_request *rq)
 }
 
 static bool
-__dma_fence_signal(struct dma_fence *fence)
+__i915_request_signal(struct i915_request *rq)
 {
-	return !test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags);
+	i915_request_mark_complete(rq);
+	return !test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags);
 }
 
 static void
@@ -245,7 +246,7 @@ static void signal_irq_work(struct irq_work *work)
 				intel_context_put(ce);
 			}
 
-			if (__dma_fence_signal(&rq->fence))
+			if (__i915_request_signal(rq))
 				/* We own signal_node now, xfer to local list */
 				signal = slist_add(&rq->signal_node, signal);
 			else
@@ -259,8 +260,6 @@ static void signal_irq_work(struct irq_work *work)
 		struct i915_request *rq =
 			llist_entry(signal, typeof(*rq), signal_node);
 		struct list_head cb_list;
-
-		i915_request_mark_complete(rq);
 
 		if (rq->sched_engine->retire_inflight_request_prio)
 			rq->sched_engine->retire_inflight_request_prio(rq);
@@ -382,7 +381,7 @@ void intel_breadcrumbs_free(struct kref *kref)
 static void irq_signal_request(struct i915_request *rq,
 			       struct intel_breadcrumbs *b)
 {
-	if (!__dma_fence_signal(&rq->fence))
+	if (!__i915_request_signal(rq))
 		return;
 
 	i915_request_get(rq);

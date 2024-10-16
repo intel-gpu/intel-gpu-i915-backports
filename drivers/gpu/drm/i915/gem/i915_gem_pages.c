@@ -28,34 +28,19 @@ unsigned int i915_gem_sg_segment_size(const struct drm_i915_gem_object *obj)
 }
 
 void __i915_gem_object_set_pages(struct drm_i915_gem_object *obj,
-				 struct sg_table *pages,
-				 unsigned int sg_page_sizes)
+				 struct scatterlist *pages)
 {
 	assert_object_held_shared(obj);
 
 	i915_gem_object_set_backing_store(obj);
 	obj->mm.pages = pages;
-	obj->mm.get_page.sg_pos = pages->sgl;
-	obj->mm.get_dma_page.sg_pos = pages->sgl;
-
-	GEM_BUG_ON(!sg_page_sizes);
-	obj->mm.page_sizes = sg_page_sizes;
-
-	i915_gem_object_make_shrinkable(obj);
+	obj->mm.get_page.sg_pos = pages;
+	obj->mm.get_dma_page.sg_pos = pages;
 }
 
 static void add_to_evictions(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mem;
-
-	mem = obj->mm.region.mem;
-	if (!mem)
-		return;
-
-	GEM_BUG_ON(i915_gem_object_has_pages(obj));
-	spin_lock_irq(&mem->objects.lock);
-	list_add_tail(&obj->mm.region.link, &mem->objects.list);
-	spin_unlock_irq(&mem->objects.lock);
+	i915_gem_object_make_shrinkable(obj);
 }
 
 static void remove_from_evictions(struct drm_i915_gem_object *obj)
@@ -177,7 +162,7 @@ void i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 }
 
 void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj,
-				       struct sg_table *pages)
+				       struct scatterlist *pages)
 {
 	struct radix_tree_iter iter;
 	void __rcu **slot;
@@ -189,9 +174,9 @@ void __i915_gem_object_reset_page_iter(struct drm_i915_gem_object *obj,
 		radix_tree_delete(&obj->mm.get_dma_page.radix, iter.index);
 	rcu_read_unlock();
 
-	obj->mm.get_page.sg_pos = pages ? pages->sgl : NULL;
+	obj->mm.get_page.sg_pos = pages;
 	obj->mm.get_page.sg_idx = 0;
-	obj->mm.get_dma_page.sg_pos = pages ? pages->sgl : NULL;
+	obj->mm.get_dma_page.sg_pos = pages;
 	obj->mm.get_dma_page.sg_idx = 0;
 }
 
@@ -232,28 +217,28 @@ void i915_gem_object_make_unshrinkable(struct drm_i915_gem_object *obj)
 void i915_gem_object_make_shrinkable(struct drm_i915_gem_object *obj)
 {
 	struct intel_memory_region *mem;
+	struct list_head *list;
+	unsigned long flags;
 
 	mem = obj->mm.region.mem;
-	if (mem) {
-		struct list_head *list;
-		unsigned long flags;
+	if (!mem)
+		return;
 
-		if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
-			list = &mem->objects.migratable;
-		else
-			list = &mem->objects.list;
+	if (obj->memory_mask & BIT(INTEL_REGION_SMEM))
+		list = &mem->objects.migratable;
+	else
+		list = &mem->objects.list;
 
-		obj->mm.region.age = jiffies;
-		spin_lock_irqsave(&mem->objects.lock, flags);
-		list_move_tail(&obj->mm.region.link, list);
-		spin_unlock_irqrestore(&mem->objects.lock, flags);
-	}
+	obj->mm.region.age = jiffies;
+	spin_lock_irqsave(&mem->objects.lock, flags);
+	list_move_tail(&obj->mm.region.link, list);
+	spin_unlock_irqrestore(&mem->objects.lock, flags);
 }
 
-struct sg_table *
+struct scatterlist *
 __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *pages;
+	struct scatterlist *pages;
 
 	assert_object_held_shared(obj);
 
@@ -281,7 +266,7 @@ __i915_gem_object_unset_pages(struct drm_i915_gem_object *obj)
 
 int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *pages;
+	struct scatterlist *pages;
 	int err;
 
 	if (i915_gem_object_has_pinned_pages(obj))
@@ -300,7 +285,7 @@ int __i915_gem_object_put_pages(struct drm_i915_gem_object *obj)
 
 	err = obj->ops->put_pages(obj, pages);
 	if (err) {
-		__i915_gem_object_set_pages(obj, pages, obj->mm.page_sizes);
+		__i915_gem_object_set_pages(obj, pages);
 		return err;
 	}
 
@@ -451,9 +436,9 @@ static void *i915_gem_object_map_page(struct drm_i915_gem_object *obj,
 		 * So if the page is beyond the 32b boundary, make an explicit
 		 * vmap.
 		 */
-		if (sg_is_last(obj->mm.pages->sgl) &&
-		    !PageHighMem(sg_page(obj->mm.pages->sgl)))
-			return page_address(sg_page(obj->mm.pages->sgl));
+		if (sg_is_last(obj->mm.pages) &&
+		    !PageHighMem(sg_page(obj->mm.pages)))
+			return page_address(sg_page(obj->mm.pages));
 
 		pgprot = PAGE_KERNEL;
 		break;
@@ -494,7 +479,7 @@ static void *i915_gem_object_map_pfn(struct drm_i915_gem_object *obj,
 		return ERR_PTR(-ENODEV);
 
 	/* A single contiguous block of lmem? Reuse the io_mapping */
-	if (sg_is_last(obj->mm.pages->sgl))
+	if (sg_is_last(obj->mm.pages))
 		return (void __force *)i915_gem_object_lmem_io_map(obj, 0, obj->base.size);
 
 	if (n_pfn > ARRAY_SIZE(stack)) {
@@ -676,7 +661,7 @@ struct scatterlist *
 		assert_object_held(obj);
 
 	/* Skip the search and caching for the base address */
-	sg = obj->mm.pages->sgl;
+	sg = obj->mm.pages;
 	if (likely(n == 0 ||
 		   n <  (dma ? __sg_dma_page_count(sg) : __sg_page_count(sg)))) {
 		*offset = n;

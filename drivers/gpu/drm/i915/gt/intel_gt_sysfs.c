@@ -12,13 +12,13 @@
 #include "i915_drv.h"
 #include "i915_sysfs.h"
 #include "intel_gt.h"
-#include "intel_gt_types.h"
-#include "intel_rc6.h"
-
-#include "intel_sysfs_mem_health.h"
+#include "sysfs_gt_errors.h"
+#include "intel_gt_print.h"
 #include "intel_gt_sysfs.h"
 #include "intel_gt_sysfs_pm.h"
-#include "sysfs_gt_errors.h"
+#include "intel_gt_types.h"
+#include "intel_rc6.h"
+#include "intel_sysfs_mem_health.h"
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
@@ -124,7 +124,7 @@ void intel_gt_sysfs_register_mem(struct intel_gt *gt, struct kobject *parent)
 		return;
 
 	if (sysfs_create_files(parent, addr_range_attrs))
-		drm_err(&gt->i915->drm, "Setting up sysfs to read total physical memory per tile failed\n");
+		gt_warn(gt, "Setting up sysfs to read total physical memory per tile failed\n");
 }
 
 static struct kobject *gt_get_parent_obj(struct intel_gt *gt)
@@ -347,32 +347,27 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 		intel_gt_sysfs_pm_init(gt, gt_get_parent_obj(gt));
 
 	snprintf(name, sizeof(name), "gt%d", gt->info.id);
-
 	dir = intel_gt_create_kobj(gt, gt->i915->sysfs_gt, name);
 	if (!dir) {
-		drm_err(&gt->i915->drm,
-			"failed to initialize %s sysfs root\n", name);
+		gt_warn(gt, "failed to create sysfs: %s\n", "root");
 		return;
 	}
 
 	gt->sysfs_defaults = kobject_create_and_add(".defaults", dir);
 	if (!gt->sysfs_defaults) {
-		drm_err(&gt->i915->drm, "failed to create gt sysfs .defaults\n");
+		gt_warn(gt, "failed to create sysfs: %s\n", ".defaults");
 		return;
 	}
 
 	if (sysfs_create_file(dir, &dev_attr_id.attr.attr))
-		drm_err(&gt->i915->drm,
-			"failed to create sysfs %s info files\n", name);
+		gt_warn(gt, "failed to create sysfs: %s\n", "info");
 
 	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915) &&
 	    sysfs_create_files(dir, pagefault_attrs))
-		drm_err(&gt->i915->drm,
-			"failed to create sysfs %s pagefault attributes\n", name);
+		gt_warn(gt, "failed to create sysfs: %s\n", "pagefault attributes");
 
 	if (sysfs_create_file(dir, &dev_attr_prelim_reset.attr))
-		drm_warn(&gt->i915->drm,
-			 "failed to create sysfs %s reset files\n", name);
+		gt_warn(gt, "failed to create sysfs: %s\n", "reset");
 
 	intel_gt_sysfs_pm_init(gt, dir);
 	intel_gt_sysfs_register_errors(gt, dir);

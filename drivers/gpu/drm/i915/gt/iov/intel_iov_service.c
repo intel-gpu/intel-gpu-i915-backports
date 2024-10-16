@@ -18,6 +18,8 @@
 #include "gt/intel_gtt.h"
 #include "gt/intel_gt_pm.h"
 
+#include "i915_sriov_telemetry.h"
+
 #include "intel_iov_relay.h"
 #include "intel_iov_service.h"
 #include "intel_iov_types.h"
@@ -448,6 +450,58 @@ int intel_iov_service_process_msg(struct intel_iov *iov, u32 origin,
 		break;
 	case IOV_ACTION_VF2PF_PF_L4_WA_UPDATE_GGTT:
 		err = pf_handle_l4_wa(iov, origin, relay_id, msg, len);
+		break;
+	default:
+		break;
+	}
+
+	return err;
+}
+
+static int pf_handle_telemetry_data(struct intel_iov *iov, u32 origin, u32 relay_id,
+				    const u32 *msg, u32 len)
+{
+	struct drm_i915_private *i915 = iov_to_i915(iov);
+	u16 count;
+
+	if (unlikely(len < VF2PF_TELEMETRY_REPORT_EVENT_MSG_MIN_LEN))
+		return -EPROTO;
+
+	count = FIELD_GET(VF2PF_TELEMETRY_REPORT_EVENT_MSG_0_COUNT, msg[0]);
+
+	return i915_sriov_telemetry_pf_process_data(i915, origin, count,
+						    msg + GUC_HXG_EVENT_MSG_MIN_LEN,
+						    len - GUC_HXG_EVENT_MSG_MIN_LEN);
+}
+
+/**
+ * intel_iov_service_pf_process_event - Service event message from VF.
+ * @iov: the IOV struct
+ * @origin: origin VF number
+ * @relay_id: message ID
+ * @msg: event message
+ * @len: length of the message (in dwords)
+ *
+ * This function processes `IOV Message`_ from the VF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int intel_iov_service_pf_process_event(struct intel_iov *iov, u32 origin,
+				       u32 relay_id, const u32 *msg, u32 len)
+{
+	int err = -EOPNOTSUPP;
+	u32 action;
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(len < GUC_HXG_MSG_MIN_LEN);
+	GEM_BUG_ON(FIELD_GET(GUC_HXG_MSG_0_TYPE, msg[0]) != GUC_HXG_TYPE_EVENT);
+
+	action = FIELD_GET(GUC_HXG_EVENT_MSG_0_ACTION, msg[0]);
+	IOV_DEBUG(iov, "servicing action %#x from VF%u\n", action, origin);
+
+	switch (action) {
+	case IOV_ACTION_VF2PF_TELEMETRY_REPORT:
+		err = pf_handle_telemetry_data(iov, origin, relay_id, msg, len);
 		break;
 	default:
 		break;

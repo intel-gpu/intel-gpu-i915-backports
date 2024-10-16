@@ -18,7 +18,6 @@
 selftest(sanitycheck, i915_mock_sanitycheck) /* keep first (igt selfcheck) */
 selftest(shmem, shmem_utils_mock_selftests)
 selftest(fence, i915_sw_fence_mock_selftests)
-selftest(scatterlist, scatterlist_mock_selftests)
 selftest(syncmap, i915_syncmap_mock_selftests)
 selftest(tlb, intel_tlb_mock_selftests)
 selftest(ring, intel_ring_mock_selftests)

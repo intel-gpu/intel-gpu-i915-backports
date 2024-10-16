@@ -16,10 +16,6 @@ Our current backport supports the following OS Distribution.
 | | 22.04 Desktop | 6.5 generic |
 | | 22.04 Server| 5.15 generic |
 
-
-  The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [Version](../versions) file to check value of UBUNTU_24.04_DESKTOP_KERNEL_VERSION/UBUNTU_24.04_SERVER_KERNEL_VERSION/UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu®. It will point to the kernel version which is being used during backporting.
-
 ## Prerequisite
 We have dependencies on the following packages
   - dkms
@@ -64,9 +60,11 @@ Example:
 ```
 Above command will create Debian package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
 
-Please note that DKMS installation will skip if the kernel headers are not installed.
+#### DKMS Kernel Headers Requirement
+The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation which can lead to installation issues.
+Please refer [Version](../versions) file to check value of UBUNTU_24.04_DESKTOP_KERNEL_VERSION/UBUNTU_24.04_SERVER_KERNEL_VERSION/UBUNTU_22.04_DESKTOP_KERNEL_VERSION/UBUNTU_22.04_SERVER_KERNEL_VERSION for Ubuntu®. It will point to the kernel version which is being used during backporting.
 
-In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
+Please note that DKMS installation will skip if the kernel headers are not installed.
 
   Ubuntu® 24.04 Desktop:
 ```

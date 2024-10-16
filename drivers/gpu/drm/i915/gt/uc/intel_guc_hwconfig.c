@@ -53,7 +53,7 @@ static int __guc_action_get_hwconfig(struct intel_guc *guc,
 	return ret;
 }
 
-static int guc_hwconfig_discover_size(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+static int guc_hwconfig_discover_size(struct intel_guc *guc)
 {
 	int ret;
 
@@ -62,37 +62,29 @@ static int guc_hwconfig_discover_size(struct intel_guc *guc, struct intel_hwconf
 	 * size of the blob.
 	 */
 	ret = __guc_action_get_hwconfig(guc, 0, 0);
-	if (ret < 0)
-		return ret;
-
 	if (ret == 0)
 		return -EINVAL;
 
-	hwconfig->size = ret;
-	return 0;
+	return ret;
 }
 
-static int guc_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+static int guc_hwconfig_fill_buffer(struct intel_guc *guc, void *ptr, int size)
 {
 	struct i915_vma *vma;
 	u32 ggtt_offset;
 	void *vaddr;
 	int ret;
 
-	GEM_BUG_ON(!hwconfig->size);
-
-	ret = __intel_guc_allocate_and_map_vma(guc, hwconfig->size, true, &vma, &vaddr);
+	ret = __intel_guc_allocate_and_map_vma(guc, size, true, &vma, &vaddr);
 	if (ret)
 		return ret;
 
 	ggtt_offset = intel_guc_ggtt_offset(guc, vma);
-
-	ret = __guc_action_get_hwconfig(guc, ggtt_offset, hwconfig->size);
+	ret = __guc_action_get_hwconfig(guc, ggtt_offset, size);
 	if (ret >= 0)
-		memcpy(hwconfig->ptr, vaddr, hwconfig->size);
+		memcpy(ptr, vaddr, size);
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
-
 	return ret;
 }
 
@@ -159,15 +151,6 @@ static int intel_hwconf_override_klv(struct intel_hwconfig *hwconfig, u32 new_ke
 }
 */
 
-static int intel_hwconf_apply_overrides(struct intel_hwconfig *hwconfig)
-{
-	/*
-	 * Add table workarounds here with:
-	 *   intel_hwconf_override_klv(hwconfig, INTEL_HWCONFIG_XXX, len, data);
-	 */
-	return 0;
-}
-
 static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
 					  u32 *size)
 {
@@ -181,32 +164,29 @@ static const u32 *fake_hwconfig_get_table(struct drm_i915_private *i915,
 	return NULL;
 }
 
-static int fake_hwconfig_discover_size(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+static int fake_hwconfig_discover_size(struct intel_guc *guc)
 {
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	const u32 *table;
 	u32 table_size;
 
-	table = fake_hwconfig_get_table(i915, &table_size);
+	table = fake_hwconfig_get_table(guc_to_gt(guc)->i915, &table_size);
 	if (!table)
 		return -ENOENT;
 
-	hwconfig->size = table_size;
-	return 0;
+	return table_size;
 }
 
-static int fake_hwconfig_fill_buffer(struct intel_guc *guc, struct intel_hwconfig *hwconfig)
+static int fake_hwconfig_fill_buffer(struct intel_guc *guc, void *ptr, int size)
 {
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	const u32 *table;
 	u32 table_size;
 
-	table = fake_hwconfig_get_table(i915, &table_size);
+	table = fake_hwconfig_get_table(guc_to_gt(guc)->i915, &table_size);
 	if (!table)
 		return -ENOENT;
 
-	if (hwconfig->size >= table_size)
-		memcpy(hwconfig->ptr, table, table_size);
+	if (size >= table_size)
+		memcpy(ptr, table, table_size);
 
 	return table_size;
 }
@@ -238,46 +218,50 @@ static int guc_hwconfig_init(struct intel_gt *gt)
 {
 	struct intel_hwconfig *hwconfig = &gt->info.hwconfig;
 	struct intel_guc *guc = &gt->uc.guc;
-	bool fake_db = false;
-	int ret;
+	intel_wakeref_t wf;
+	int ret = 0;
 
-	if (hwconfig->size)
-		return 0;
-
-	if (gt->info.id)
+	if (READ_ONCE(hwconfig->size))
 		return 0;
 
 	if (!has_table(gt->i915) && !has_fake_table(gt->i915))
-		return 0;
+		return -ENODEV;
 
-	if (!has_table(gt->i915)) {
-		fake_db = true;
-		ret = fake_hwconfig_discover_size(guc, hwconfig);
-	} else {
-		ret = guc_hwconfig_discover_size(guc, hwconfig);
+	wf = intel_runtime_pm_get(gt->uncore->rpm);
+	mutex_lock(&hwconfig->mutex);
+	if (!hwconfig->size) {
+		bool fake_db = !has_table(gt->i915);
+		void *ptr;
+
+		if (fake_db)
+			ret = fake_hwconfig_discover_size(guc);
+		else
+			ret = guc_hwconfig_discover_size(guc);
+		if (unlikely(ret < 0))
+			goto unlock;
+
+		ptr = kmalloc(ret, GFP_KERNEL);
+		if (unlikely(!ptr)) {
+			ret = -ENOMEM;
+			goto unlock;
+		}
+
+		if (fake_db)
+			ret = fake_hwconfig_fill_buffer(guc, ptr, ret);
+		else
+			ret = guc_hwconfig_fill_buffer(guc, ptr, ret);
+		if (unlikely(ret < 0)) {
+			kfree(ptr);
+			goto unlock;
+		}
+
+		hwconfig->ptr = ptr;
+		hwconfig->size = ret;
+		ret = 0;
 	}
-	if (ret)
-		return ret;
-
-	hwconfig->ptr = kmalloc(hwconfig->size, GFP_KERNEL);
-	if (!hwconfig->ptr) {
-		hwconfig->size = 0;
-		return -ENOMEM;
-	}
-
-	if (fake_db)
-		ret = fake_hwconfig_fill_buffer(guc, hwconfig);
-	else
-		ret = guc_hwconfig_fill_buffer(guc, hwconfig);
-	if (ret < 0)
-		goto err;
-
-	ret = intel_hwconf_apply_overrides(hwconfig);
-	if (!ret)
-		return 0;
-
-err:
-	intel_gt_fini_hwconfig(gt);
+unlock:
+	mutex_unlock(&hwconfig->mutex);
+	intel_runtime_pm_put(gt->uncore->rpm, wf);
 	return ret;
 }
 
@@ -289,7 +273,7 @@ err:
 int intel_gt_init_hwconfig(struct intel_gt *gt)
 {
 	if (!intel_uc_uses_guc(&gt->uc))
-		return 0;
+		return -ENODEV;
 
 	return guc_hwconfig_init(gt);
 }
@@ -304,6 +288,8 @@ void intel_gt_fini_hwconfig(struct intel_gt *gt)
 	struct intel_hwconfig *hwconfig = &gt->info.hwconfig;
 
 	kfree(hwconfig->ptr);
-	hwconfig->size = 0;
 	hwconfig->ptr = NULL;
+	hwconfig->size = 0;
+
+	mutex_destroy(&hwconfig->mutex);
 }

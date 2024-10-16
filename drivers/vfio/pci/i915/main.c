@@ -335,6 +335,14 @@ static const struct vfio_device_ops i915_vfio_pci_ops = {
 	.migration_set_state = i915_vfio_pci_set_device_state,
 	.migration_get_state = i915_vfio_pci_get_device_state,
 #endif
+#ifdef BPM_BIND_UNBIND_ATTACH_IOMMU_CALLBACKS_NOT_PRESENT
+	.bind_iommufd = vfio_iommufd_physical_bind,
+	.unbind_iommufd = vfio_iommufd_physical_unbind,
+	.attach_ioas = vfio_iommufd_physical_attach_ioas,
+#endif
+#ifdef BPM_DETACH_IOMMU_CALLBACKS_NOT_PRESENT
+	.detach_ioas = vfio_iommufd_physical_detach_ioas,
+#endif
 };
 
 #ifdef BPM_MIGRATION_STATE_MEMBER_NOT_PRESENT
@@ -387,7 +395,12 @@ static int i915_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id 
 	if (strcmp(pdev->physfn->dev.driver->name, "i915"))
 		return -EINVAL;
 
+#ifdef BPM_VFIO_ALLOC_AND_PUT_DEVICE_NOT_PRESENT
+	i915_vdev = vfio_alloc_device(i915_vfio_pci_core_device, core_device.vdev,
+					&pdev->dev, &i915_vfio_pci_ops);
+#else
 	i915_vdev = devm_kzalloc(&pdev->dev, sizeof(*i915_vdev), GFP_KERNEL);
+#endif
 	if (!i915_vdev)
 		return -ENOMEM;
 	vfio_pci_core_init_device(&i915_vdev->core_device, pdev, &i915_vfio_pci_ops);
@@ -404,6 +417,9 @@ static int i915_vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id 
 	ret = vfio_pci_core_register_device(&i915_vdev->core_device);
 	if (ret) {
 		vfio_pci_core_uninit_device(&i915_vdev->core_device);
+#ifdef BPM_VFIO_ALLOC_AND_PUT_DEVICE_NOT_PRESENT
+		vfio_put_device(&i915_vdev->core_device.vdev);
+#endif
 		return ret;
 	}
 

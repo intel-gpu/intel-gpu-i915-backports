@@ -6,6 +6,7 @@
 #include <linux/types.h>
 
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_print.h"
 #include "intel_gsc_uc.h"
 #include "i915_drv.h"
 
@@ -52,13 +53,12 @@ int intel_gsc_uc_init(struct intel_gsc_uc *gsc)
 
 	gsc->local = vma;
 
-	ce = intel_engine_create_pinned_context(engine, engine->gt->vm, SZ_4K,
+	ce = intel_engine_create_pinned_context(engine, gt->vm, SZ_4K,
 						I915_GEM_HWS_GSC_ADDR,
 						&gsc_lock, "gsc_context");
 	if (IS_ERR(ce)) {
-		drm_err(&gt->i915->drm,
-			"failed to create GSC CS ctx for FW communication\n");
-		err =  PTR_ERR(ce);
+		gt_err(gt, "failed to create GSC CS ctx for FW communication\n");
+		err = PTR_ERR(ce);
 		goto out_vma;
 	}
 

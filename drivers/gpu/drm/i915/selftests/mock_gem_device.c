@@ -202,7 +202,6 @@ struct drm_i915_private *mock_gem_device(void)
 
 	spin_lock_init(&i915->gpu_error.lock);
 	init_waitqueue_head(&i915->user_fence_wq);
-	init_waitqueue_head(&i915->userspace.queue);
 
 	i915_gem_init__mm(i915);
 
@@ -210,12 +209,10 @@ struct drm_i915_private *mock_gem_device(void)
 	if (!i915->wq)
 		goto err_uncore;
 
-	i915->sched = i915_sched_engine_create(3);
+	i915->sched = i915_sched_engine_create_cpu(3, i915->wq, cpu_all_mask);
 	if (!i915->sched)
 		goto err_free_wq;
-	i915->sched->cpumask = cpu_all_mask;
-	i915->sched->num_cpus = cpumask_weight(i915->sched->cpumask);
-	i915->sched->wq = i915->wq;
+
 	i915->mm.sched = i915->sched;
 	i915->mm.wq = i915->wq;
 

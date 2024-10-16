@@ -59,7 +59,7 @@ static int register_dev(void *parent, void *handle, u32 fabric_id,
 	i915->intel_iaf.ops = ops;
 	mutex_unlock(&i915->intel_iaf.power_mutex);
 
-	drm_info(&i915->drm, "IAF: registered fabric: 0x%x\n", fabric_id);
+	drm_dbg(&i915->drm, "IAF: registered fabric: 0x%x\n", fabric_id);
 
 	return 0;
 }
@@ -70,8 +70,8 @@ static void unregister_dev(void *parent, const void *handle)
 
 	WARN(i915->intel_iaf.handle != handle, "IAF: invalid handle");
 
-	drm_info(&i915->drm, "IAF: unregistered fabric: 0x%x\n",
-		 i915->intel_iaf.fabric_id);
+	drm_dbg(&i915->drm, "IAF: unregistered fabric: 0x%x\n",
+		i915->intel_iaf.fabric_id);
 
 	mutex_lock(&i915->intel_iaf.power_mutex);
 	i915->intel_iaf.handle = NULL;
@@ -186,7 +186,7 @@ static struct resource *init_resource(struct drm_i915_private *i915,
 		res->start = gt->phys_addr + CD_BASE_OFFSET;
 		res->end = res->start + CD_BAR_SIZE - 1;
 		res->flags = IORESOURCE_MEM;
-		drm_info(&i915->drm, "IAF: mem_resource = %pR\n", res);
+		drm_dbg(&i915->drm, "IAF: mem_resource = %pR\n", res);
 		res++;
 
 		gt->iaf_irq = i915->intel_iaf.irq_base + i;
@@ -252,8 +252,8 @@ static int init_irq_desc(struct drm_i915_private *i915)
 		goto cleanup;
 	}
 
-	drm_info(&i915->drm, "IAF: IRQ base: %d  cnt: %d\n", irq_base,
-		 num_subdevs);
+	drm_dbg(&i915->drm, "IAF: IRQ base: %d  cnt: %d\n",
+		irq_base, num_subdevs);
 
 	i915->intel_iaf.irq_base = irq_base;
 
@@ -321,7 +321,7 @@ void intel_iaf_init_mmio(struct drm_i915_private *i915)
 		}
 	}
 
-	drm_info(&i915->drm, "IAF available\n");
+	dev_info(i915->drm.dev, "IAF available\n");
 	i915->intel_iaf.socket_id = REG_FIELD_GET(SOCKET_ID_MASK, iaf_info);
 	i915->intel_iaf.present = true;
 }
@@ -382,9 +382,9 @@ void intel_iaf_init(struct drm_i915_private *i915)
 		}
 		i915->intel_iaf.index = index;
 		i915->intel_iaf.dpa = (u64)index * MAX_DPA_SIZE * SZ_1G;
-		drm_info(&i915->drm, "IAF: [dpa 0x%llx-0x%llx]\n",
-			 i915->intel_iaf.dpa,
-			 ((u64)index + 1) * MAX_DPA_SIZE * SZ_1G - 1);
+		drm_dbg(&i915->drm, "IAF: [dpa 0x%llx-0x%llx]\n",
+			i915->intel_iaf.dpa,
+			((u64)index + 1) * MAX_DPA_SIZE * SZ_1G - 1);
 	}
 
 	/*

@@ -30,7 +30,7 @@ static inline u32 intel_tlb_next_seqno(struct intel_gt *gt)
 u32 intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 				  struct i915_address_space *vm,
 				  u64 start, u64 length);
-void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno);
+void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic);
 
 void intel_tlb_invalidation_done(struct intel_gt *gt, u32 seqno);
 void intel_tlb_invalidation_revoke(struct intel_gt *gt);

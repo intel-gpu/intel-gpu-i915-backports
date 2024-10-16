@@ -17,6 +17,7 @@
 #include <uapi/drm/i915_drm.h>
 
 #include "i915_active.h"
+#include "i915_scatterlist.h"
 #include "i915_selftest.h"
 
 #include "gt/intel_gt_defines.h"
@@ -58,7 +59,7 @@ struct drm_i915_gem_object_ops {
 	 */
 	int (*get_pages)(struct drm_i915_gem_object *obj);
 	int (*put_pages)(struct drm_i915_gem_object *obj,
-			 struct sg_table *pages);
+			 struct scatterlist *pages);
 	void (*truncate)(struct drm_i915_gem_object *obj);
 
 	int (*dmabuf_export)(struct drm_i915_gem_object *obj);
@@ -292,6 +293,8 @@ struct drm_i915_gem_object {
 #define I915_BO_FAULT_CLEAR	BIT(14)
 #define I915_BO_SYNC_HINT	BIT(15)
 #define I915_BO_FABRIC		BIT(16)
+#define I915_BO_MMAP_BIT	17
+#define I915_BO_FAST_GUP_BIT	18
 
 	/*
 	 * Track whether the pages are coherent with the GPU if reading or
@@ -360,8 +363,8 @@ struct drm_i915_gem_object {
 	 * When writing through the CPU cache, the GPU is still coherent. Note
 	 * that this also implies I915_BO_CACHE_COHERENT_FOR_READ.
 	 */
-#define I915_BO_CACHE_COHERENT_FOR_READ BIT(18)
-#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(19)
+#define I915_BO_CACHE_COHERENT_FOR_READ BIT(19)
+#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(20)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -377,7 +380,9 @@ struct drm_i915_gem_object {
 	 * i915_cache_level into pat index, for more details check the macros
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
-#define I915_BO_PAT_INDEX GENMASK(23, 20)
+#define I915_BO_PAT_INDEX GENMASK(24, 21)
+
+	unsigned long eviction;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct intel_frontbuffer __rcu *frontbuffer;
@@ -415,10 +420,8 @@ struct drm_i915_gem_object {
 
 		struct list_head blocks;
 
-		struct sg_table *pages;
+		struct scatterlist *pages;
 		void *mapping;
-
-		unsigned int page_sizes;
 
 		I915_SELFTEST_DECLARE(unsigned int page_mask);
 
@@ -461,14 +464,12 @@ struct drm_i915_gem_object {
 	union {
 		struct i915_gem_userptr {
 			uintptr_t ptr;
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-			struct i915_mm_struct *mm;
-#endif
-			struct mmu_interval_notifier notifier;
+			struct mm_struct *mm;
 		} userptr;
 
 		struct drm_mm_node *stolen;
 
+		struct sg_table *dmabuf_sgt;
 		unsigned long scratch;
 	};
 

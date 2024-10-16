@@ -246,7 +246,7 @@ static int guc_enable_communication(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct drm_i915_private *i915 = gt->i915;
-	int ret;
+	int srcu, ret;
 
 	GEM_BUG_ON(intel_guc_ct_enabled(&guc->ct));
 
@@ -254,7 +254,11 @@ static int guc_enable_communication(struct intel_guc *guc)
 	if (ret)
 		return ret;
 
+	ret = gt_ggtt_address_read_lock_sync(gt, &srcu);
+	if (unlikely(ret))
+		return ret;
 	ret = intel_guc_ct_enable(&guc->ct);
+	gt_ggtt_address_read_unlock(gt, srcu);
 	if (ret)
 		return ret;
 
@@ -483,15 +487,6 @@ static int __uc_check_hw(struct intel_uc *uc)
 	return 0;
 }
 
-static void print_fw_ver(struct intel_gt *gt, struct intel_uc_fw *fw)
-{
-	gt_info(gt, "%s firmware %s version %u.%u.%u\n",
-		intel_uc_fw_type_repr(fw->type), fw->file_selected.path,
-		fw->file_selected.ver.major,
-		fw->file_selected.ver.minor,
-		fw->file_selected.ver.patch);
-}
-
 static int __uc_init_hw(struct intel_uc *uc)
 {
 	struct intel_gt *gt = uc_to_gt(uc);
@@ -503,11 +498,6 @@ static int __uc_init_hw(struct intel_uc *uc)
 
 	GEM_BUG_ON(!intel_uc_supports_guc(uc));
 	GEM_BUG_ON(!intel_uc_wants_guc(uc));
-
-	print_fw_ver(gt, &guc->fw);
-
-	if (intel_uc_uses_huc(uc))
-		print_fw_ver(gt, &huc->fw);
 
 	if (!intel_uc_fw_is_loadable(&guc->fw)) {
 		ret = __uc_check_hw(uc) ||
@@ -595,9 +585,6 @@ static int __uc_init_hw(struct intel_uc *uc)
 	ret = intel_guc_g2g_register(guc);
 	if (ret)
 		guc_info(guc, "Failed to register GuC-to-GuC communication channel: %d\n", ret);
-
-	guc_info(guc, "submission %s\n", str_enabled_disabled(intel_uc_uses_guc_submission(uc)));
-	guc_info(guc, "SLPC %s\n", str_enabled_disabled(intel_uc_uses_guc_slpc(uc)));
 
 	return 0;
 
@@ -806,8 +793,7 @@ void intel_uc_reset(struct intel_uc *uc, intel_engine_mask_t stalled)
 {
 	struct intel_guc *guc = &uc->guc;
 
-	if (intel_guc_ct_enabled(&guc->ct))
-		intel_guc_ct_reset(&guc->ct);
+	intel_guc_ct_reset(&guc->ct);
 
 	/* Firmware can not be running when this function is called  */
 	if (intel_uc_uses_guc_submission(uc))
@@ -842,15 +828,7 @@ void intel_uc_runtime_suspend(struct intel_uc *uc)
 		return;
 	}
 
-	/*
-	 * Wait for any outstanding CTB before tearing down communication /w the
-	 * GuC.
-	 */
-#define OUTSTANDING_CTB_TIMEOUT_PERIOD	(HZ / 5)
-	intel_guc_wait_for_pending_msg(guc, &guc->outstanding_submission_g2h,
-				       false, OUTSTANDING_CTB_TIMEOUT_PERIOD);
-	GEM_WARN_ON(atomic_read(&guc->outstanding_submission_g2h));
-
+	GEM_BUG_ON(atomic_read(&guc->outstanding_submission_g2h));
 	guc_disable_communication(guc);
 }
 

@@ -10,6 +10,7 @@
 
 #include "gen8_engine_cs.h"
 #include "i915_gem_ww.h"
+#include "intel_engine_pm.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_context.h"
@@ -116,7 +117,7 @@ pte_tlbinv(struct intel_context *ce,
 
 	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x, invalidate:%llx+%llx\n",
 		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes,
+		addr, align, sg_page_sizes(va->pages),
 		addr & -length, length);
 
 	cs = i915_gem_object_pin_map_unlocked(batch, I915_MAP_WC);
@@ -163,7 +164,7 @@ pte_tlbinv(struct intel_context *ce,
 	if (wait_for(ENGINE_READ(ce->engine, RING_NOPID) == 0x12345, 100)) {
 		struct drm_printer p = drm_err_printer(__func__);
 
-		intel_engine_dump(ce->engine, &p, "Spinner failed to start on %s\n", ce->engine->name);
+		intel_engine_dump(ce->engine, &p, 0);
 		err = -EIO;
 	} else if (va == vb) {
 		if (i915_request_wait(rq, 0, HZ / 2) < 0) {
@@ -317,7 +318,7 @@ mem_tlbinv(struct intel_gt *gt,
 	}
 
 	GEM_BUG_ON(A->base.size != B->base.size);
-	if (!sg_is_last(A->mm.pages->sgl) || !sg_is_last(B->mm.pages->sgl))
+	if (!sg_is_last(A->mm.pages) || !sg_is_last(B->mm.pages))
 		pr_warn("Failed to allocate contiguous pages for size %zx\n",
 			A->base.size);
 
@@ -351,6 +352,8 @@ mem_tlbinv(struct intel_gt *gt,
 		engine = random_engine_class(gt, class, &prng);
 		if (!engine)
 			continue;
+
+		intel_engine_pm_wait_for_idle(engine);
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {

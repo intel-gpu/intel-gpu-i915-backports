@@ -99,7 +99,10 @@ static int live_slpc_clamp_min(void *arg)
 			}
 		}
 
-		intel_gt_pm_wait_for_idle(gt);
+		err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+		if (err)
+			goto out;
+
 		wakeref = intel_gt_pm_get(gt);
 		for_each_engine(engine, gt, id) {
 			struct i915_request *rq;
@@ -202,8 +205,9 @@ static int live_slpc_clamp_min(void *arg)
 			err = -EIO;
 
 		intel_gt_pm_put(gt, wakeref);
+out:
 		igt_spinner_fini(&spin);
-		intel_gt_pm_wait_for_idle(gt);
+		intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 
 		/* Don't continue with next tile if err is set */
 		if (err)
@@ -272,7 +276,10 @@ static int live_slpc_clamp_max(void *arg)
 			}
 		}
 
-		intel_gt_pm_wait_for_idle(gt);
+		err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+		if (err)
+			goto out;
+
 		wakeref = intel_gt_pm_get(gt);
 		for_each_engine(engine, gt, id) {
 			struct i915_request *rq;
@@ -379,8 +386,10 @@ static int live_slpc_clamp_max(void *arg)
 		slpc_set_min_freq(slpc, slpc_min_freq);
 
 		intel_gt_pm_put(gt, wakeref);
+
+out:
 		igt_spinner_fini(&spin);
-		intel_gt_pm_wait_for_idle(gt);
+		intel_gt_pm_wait_for_idle(gt, 2 * HZ);
 
 		/* Don't continue with next tile if err is set */
 		if (err)

@@ -525,4 +525,11 @@ void __mark_lock_used_irq(struct lockdep_map *lock);
 int from_user_to_u32array(const char __user *from, size_t count,
 			  u32 *array, unsigned int size);
 
+extern const char __indentation__[16];
+#define indent_fmt "%.*s"
+#define indent_arg(i) min_t(int, i, sizeof(__indentation__)), __indentation__
+
+#define i_printf(p, i, fmt, ...) \
+	drm_printf(p, indent_fmt fmt, indent_arg(i), ##__VA_ARGS__)
+
 #endif /* !__I915_UTILS_H */

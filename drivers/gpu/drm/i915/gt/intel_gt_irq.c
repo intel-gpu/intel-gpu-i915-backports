@@ -305,7 +305,7 @@ void gen11_gt_irq_postinstall(struct intel_gt *gt)
 	}
 
 	if (gt->fake_int.enabled)
-		drm_info(&gt->i915->drm, "Using fake interrupt w/a, gt = %d\n", gt->info.id);
+		gt_info(gt, "Using fake interrupt w/a\n");
 
 	dmask = irqs << 16 | irqs;
 	smask = irqs << 16;

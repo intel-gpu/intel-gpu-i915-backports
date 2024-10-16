@@ -20,7 +20,7 @@ static int engines_show(struct seq_file *m, void *data)
 
 	p = drm_seq_file_printer(m);
 	for_each_engine(engine, gt, id)
-		intel_engine_dump(engine, &p, "%s\n", engine->name);
+		intel_engine_dump(engine, &p, 0);
 
 	return 0;
 }

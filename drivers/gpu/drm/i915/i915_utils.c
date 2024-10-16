@@ -217,3 +217,5 @@ out_free:
 	kfree(buf);
 	return ret;
 }
+
+const char __indentation__[16] = "                ";

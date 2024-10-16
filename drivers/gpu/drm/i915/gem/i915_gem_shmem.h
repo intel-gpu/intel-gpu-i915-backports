@@ -23,11 +23,20 @@ struct clear_page {
 	struct list_head link;
 	struct i915_active_fence active;
 	struct i915_sw_dma_fence_cb cb;
-	struct i915_dependency dep;
-	struct i915_dma_engine *engine;
+
 	struct page *page;
+	struct shmem_dma {
+		struct kref kref;
+		struct device *dev;
+		dma_addr_t dma;
+		unsigned int size;
+		unsigned int dir;
+	} *map[2];
+	struct i915_dma_engine *engine;
+
 	dma_addr_t dma[2];
 	u32 tlb[I915_MAX_GT];
+	int nid;
 };
 
 static inline struct clear_page *to_clear_page(struct page *page)
@@ -36,6 +45,7 @@ static inline struct clear_page *to_clear_page(struct page *page)
 	return (struct clear_page *)page->private;
 }
 
+unsigned long i915_gem_clear_smem_count(struct intel_memory_region *mem, unsigned long *num_objects);
 unsigned long i915_gem_reap_clear_smem(struct intel_memory_region *mem, int order, unsigned long limit);
 bool i915_gem_shmem_park(struct intel_memory_region *mem);
 

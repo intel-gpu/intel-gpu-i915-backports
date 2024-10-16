@@ -11,21 +11,20 @@
 #include "mock_region.h"
 
 static int mock_region_put_pages(struct drm_i915_gem_object *obj,
-				 struct sg_table *pages)
+				 struct scatterlist *pages)
 {
 	return i915_gem_object_put_pages_buddy(obj, pages, true);
 }
 
 static int mock_region_get_pages(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *pages;
-	unsigned int sizes;
+	struct scatterlist *pages;
 
-	pages = i915_gem_object_get_pages_buddy(obj, &sizes);
+	pages = i915_gem_object_get_pages_buddy(obj);
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
 
-	__i915_gem_object_set_pages(obj, pages, sizes);
+	__i915_gem_object_set_pages(obj, pages);
 	return 0;
 }
 

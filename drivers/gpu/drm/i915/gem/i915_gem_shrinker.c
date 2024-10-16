@@ -198,7 +198,7 @@ i915_gem_shrink(struct drm_i915_private *i915,
 
 			list_replace(&pos->link, &bookmark.link);
 			if (keepalive) {
-				if (!(obj->flags & I915_BO_ALLOC_USER)) {
+				if (!(obj->flags & I915_BO_ALLOC_USER) || obj->eviction) {
 					list_add_tail(&pos->link, *phase);
 					goto delete_bookmark;
 				}
@@ -216,10 +216,14 @@ i915_gem_shrink(struct drm_i915_private *i915,
 					goto delete_bookmark;
 				}
 			}
-			INIT_LIST_HEAD(&pos->link);
 
-			if (!i915_gem_object_get_rcu(obj))
+			if (unlikely(!i915_gem_object_get_rcu(obj))) {
+				INIT_LIST_HEAD(&pos->link);
 				goto delete_bookmark;
+			}
+
+			list_add_tail(&pos->link, &bookmark.link);
+			obj->eviction++;
 
 			spin_unlock_irq(&mem->objects.lock);
 
@@ -238,7 +242,8 @@ i915_gem_shrink(struct drm_i915_private *i915,
 			if (!i915_gem_object_trylock(obj))
 				goto relock;
 
-			if (!i915_gem_object_has_pages(obj))
+			if (!i915_gem_object_has_pages(obj) ||
+			    obj->mm.region.mem != mem)
 				goto unlock;
 
 			i915_gem_object_move_notify(obj);
@@ -252,9 +257,9 @@ unlock:
 relock:
 			cond_resched();
 			spin_lock_irq(&mem->objects.lock);
-			if (i915_gem_object_has_pages(obj) && list_empty(&pos->link))
-				list_add_tail(&pos->link, &bookmark.link);
 
+			GEM_BUG_ON(!obj->eviction);
+			obj->eviction--;
 			i915_gem_object_put(obj);
 delete_bookmark:
 			__list_del_entry(&bookmark.link);
@@ -307,18 +312,19 @@ unsigned long i915_gem_shrink_all(struct drm_i915_private *i915)
 static unsigned long
 i915_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 {
-#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
-	struct drm_i915_private *i915 = shrinker->private_data;
-#else
 	struct drm_i915_private *i915 =
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+		shrinker->private_data;
+#else
 		container_of(shrinker, struct drm_i915_private, mm.shrinker);
 #endif
-	//struct intel_memory_region *mem = i915->mm.regions[INTEL_REGION_SMEM];
-	unsigned long num_objects;
+	struct intel_memory_region *mem = i915->mm.regions[INTEL_REGION_SMEM];
+	unsigned long num_objects = 0;
 	unsigned long count;
 
-	count = 1;
-	num_objects = 1;
+	count = i915_gem_clear_smem_count(mem, &num_objects);
+
+	/* XXX include madvise cache */
 
 	/*
 	 * Update our preferred vmscan batch size for the next pass.
@@ -330,13 +336,8 @@ i915_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 	if (num_objects) {
 		unsigned long avg = 2 * count / num_objects;
 
-#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
-	i915->mm.shrinker->batch =
-		max((i915->mm.shrinker->batch + avg) >> 1,
-#else
-		i915->mm.shrinker.batch =
-			max((i915->mm.shrinker.batch + avg) >> 1,
-#endif
+		shrinker->batch =
+			max((shrinker->batch + avg) >> 1,
 			    128ul /* default SHRINK_BATCH */);
 	}
 
@@ -542,24 +543,28 @@ i915_gem_shrinker_vmap(struct notifier_block *nb, unsigned long event, void *ptr
 
 void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 {
+	struct shrinker *shrinker;
+
 #ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
-	i915->mm.shrinker = shrinker_alloc(0, "drm-i915_gem");
-	if (!i915->mm.shrinker) {
-		drm_WARN_ON(&i915->drm, 1);
-	} else {
-		i915->mm.shrinker->scan_objects = i915_gem_shrinker_scan;
-		i915->mm.shrinker->count_objects = i915_gem_shrinker_count;
-		i915->mm.shrinker->batch = 4096;
-		i915->mm.shrinker->private_data = i915;
-		shrinker_register(i915->mm.shrinker);
-	}
+	shrinker = shrinker_alloc(0, "i915");
 #else
-	i915->mm.shrinker.scan_objects = i915_gem_shrinker_scan;
-	i915->mm.shrinker.count_objects = i915_gem_shrinker_count;
-	i915->mm.shrinker.seeks = DEFAULT_SEEKS;
-	i915->mm.shrinker.batch = 4096;
-	drm_WARN_ON(&i915->drm, register_shrinker(&i915->mm.shrinker));
+	shrinker = &i915->mm.shrinker;
 #endif
+	if (shrinker) {
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+		shrinker->private_data = i915;
+		i915->mm.shrinker = shrinker;
+#endif
+		shrinker->scan_objects = i915_gem_shrinker_scan;
+		shrinker->count_objects = i915_gem_shrinker_count;
+		shrinker->seeks = DEFAULT_SEEKS;
+		shrinker->batch = 4096;
+#ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
+                shrinker_register(shrinker);
+#else
+                register_shrinker(shrinker);
+#endif
+	}
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
 	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));

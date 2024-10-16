@@ -406,8 +406,6 @@ static inline void intel_context_clear_coredump(struct intel_context *ce)
 
 bool intel_context_ban(struct intel_context *ce, struct i915_request *rq);
 
-void intel_context_update_ring_head_tail(struct intel_context *ce);
-
 /**
  * intel_context_suspend - suspend a context
  * @ce: The context to suspend
@@ -507,6 +505,6 @@ static inline u64 intel_context_clock(void)
 	return ktime_get_raw_fast_ns();
 }
 
-void intel_context_show(struct intel_context *ce, struct drm_printer *p);
+void intel_context_show(struct intel_context *ce, struct drm_printer *p, int indent);
 
 #endif /* __INTEL_CONTEXT_H__ */

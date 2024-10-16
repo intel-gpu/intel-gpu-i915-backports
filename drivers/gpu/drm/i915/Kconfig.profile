@@ -144,3 +144,8 @@ config DRM_I915_PVC_FORCEWAKE_DELAY_MS
        help
          Delay forcewake release by this time for any pending operations
          to complete before RC6 entry.
+
+config DRM_I915_NOHZ_OFFLOAD
+	bool "Enable offloading of CPU intensive tasks to idle NOHZ_FULL cores"
+	depends on NO_HZ_FULL
+	default y

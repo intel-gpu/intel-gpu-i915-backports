@@ -673,9 +673,6 @@ void intel_gpu_error_print_vma(struct drm_i915_error_state_buf *m,
 		   upper_32_bits(vma->gtt_offset),
 		   lower_32_bits(vma->gtt_offset));
 
-	if (vma->gtt_page_sizes > I915_GTT_PAGE_SIZE_4K)
-		err_printf(m, "gtt_page_sizes = 0x%08x\n", vma->gtt_page_sizes);
-
 	i915_vma_metadata_coredump_print(m, vma->metadata);
 	if (vma->cpages)
 		compress_print_pages(m, vma->cpages);
@@ -728,8 +725,8 @@ static void err_print_uc(struct drm_i915_error_state_buf *m,
 {
 	struct drm_printer p = i915_error_printer(m);
 
-	intel_uc_fw_dump(&error_uc->guc_fw, &p);
-	intel_uc_fw_dump(&error_uc->huc_fw, &p);
+	intel_uc_fw_dump(&error_uc->guc_fw, &p, 0);
+	intel_uc_fw_dump(&error_uc->huc_fw, &p, 0);
 	err_printf(m, "GuC timestamp: 0x%08x\n", error_uc->guc.timestamp);
 	intel_gpu_error_print_vma(m, NULL, error_uc->guc.vma_log);
 	err_printf(m, "GuC CTB fence: %d\n", error_uc->guc.last_fence);
@@ -1212,7 +1209,7 @@ static struct i915_vma_coredump *
 i915_vma_coredump_create(const struct intel_gt *gt,
 			 const struct i915_vma *vma,
 			 const char *name,
-			 struct sg_table *pages,
+			 struct scatterlist *pages,
 			 struct i915_page_compress *compress)
 {
 	struct drm_i915_gem_object *obj = NULL;
@@ -1235,7 +1232,6 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 	dst->next = NULL;
 	dst->gtt_offset = vma->node.start;
 	dst->gtt_size = vma->node.size;
-	dst->gtt_page_sizes = vma->page_sizes;
 	dst->metadata = i915_vma_metadata_coredump_create(vma);
 
 	if (!compress)
@@ -1634,7 +1630,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 struct intel_engine_capture_vma {
 	struct intel_engine_capture_vma *next;
 	struct i915_vma *vma;
-	struct sg_table *pages;
+	struct scatterlist *pages;
 	char name[16];
 };
 
@@ -1772,7 +1768,7 @@ intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 	return vma;
 }
 
-static struct sg_table *__vma_pages(struct i915_vma *vma)
+static struct scatterlist *__vma_pages(struct i915_vma *vma)
 {
 	return vma ? vma->pages : NULL;
 }
@@ -1824,7 +1820,6 @@ capture_engine(struct intel_engine_cs *engine,
 {
 	struct intel_engine_capture_vma *capture;
 	struct intel_engine_coredump *ee;
-	struct intel_context *ce;
 	struct i915_request *rq;
 
 	ee = intel_engine_coredump_alloc(engine, I915_GFP_ALLOW_FAIL, dump_flags);
@@ -1841,15 +1836,16 @@ capture_engine(struct intel_engine_cs *engine,
 		capture = intel_engine_coredump_add_request(ee, rq, capture,
 							    ATOMIC_MAYFAIL,
 							    compress);
+
+		if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
+			intel_guc_capture_get_matching_node(engine->gt, ee, rq->context);
+
 		i915_request_put(rq);
 	}
 	if (!capture) {
 		kfree(ee);
 		return NULL;
 	}
-
-	if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
-		intel_guc_capture_get_matching_node(engine->gt, ee, ce);
 
 	intel_engine_coredump_add_vma(ee, capture, compress);
 
@@ -2138,6 +2134,9 @@ static const char *error_msg(struct i915_gpu_coredump *error)
 	struct intel_gt_coredump *gt;
 	int len;
 
+	if (error->simulated)
+		return NULL;
+
 	for (gt = error->gt; gt; gt = gt->next) {
 		struct intel_engine_coredump *cs;
 
@@ -2149,6 +2148,8 @@ static const char *error_msg(struct i915_gpu_coredump *error)
 			}
 		}
 	}
+	if (!first)
+		return NULL;
 
 	if (error->fault.addr) {
 		len = scnprintf(error->error_msg, sizeof(error->error_msg),
@@ -2160,7 +2161,7 @@ static const char *error_msg(struct i915_gpu_coredump *error)
 				GRAPHICS_VER(error->i915), hung_classes,
 				generate_ecode(first));
 	}
-	if (first && first->context.pid) {
+	if (first->context.pid) {
 		/* Just show the first executing process, more is confusing */
 		len += scnprintf(error->error_msg + len,
 				 sizeof(error->error_msg) - len,
@@ -2445,18 +2446,19 @@ void i915_error_state_store(struct i915_gpu_coredump *error)
 	struct drm_i915_private *i915;
 	static bool warned;
 
-	if (IS_ERR_OR_NULL(error) || error->simulated)
+	if (IS_ERR_OR_NULL(error) || !error_msg(error))
 		return;
 
 	i915 = error->i915;
-	dev_info(i915->drm.dev, "%s\n", error_msg(error));
-	i915_debugger_pagefault_notify(error);
 
 	i915_gpu_coredump_get(error);
 	if (cmpxchg(&i915->gpu_error.first_error, NULL, error)) {
 		i915_gpu_coredump_put(error);
 		return;
 	}
+
+	dev_info(i915->drm.dev, "%s\n", error->error_msg);
+	i915_debugger_pagefault_notify(error);
 
 	sysfs_notify(&i915->drm.primary->kdev->kobj, NULL, "error");
 

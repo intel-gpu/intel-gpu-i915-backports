@@ -473,7 +473,8 @@ static int igt_reset_nop_engine(void *arg)
 			continue;
 		}
 
-		intel_gt_pm_wait_for_idle(gt);
+		if (intel_gt_pm_wait_for_idle(gt, 2 * HZ))
+			return -EIO;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -504,10 +505,7 @@ static int igt_reset_nop_engine(void *arg)
 				if (IS_ERR(rq)) {
 					struct drm_printer p =
 						drm_info_printer(gt->i915->drm.dev);
-					intel_engine_dump(engine, &p,
-							  "%s(%s): failed to submit request\n",
-							  __func__,
-							  engine->name);
+					intel_engine_dump(engine, &p, 0);
 
 					GEM_TRACE("%s(%s): failed to submit request\n",
 						  __func__,
@@ -588,7 +586,8 @@ static int igt_reset_fail_engine(void *arg)
 		if (intel_engine_uses_guc(engine))
 			continue;
 
-		intel_gt_pm_wait_for_idle(gt);
+		if (intel_gt_pm_wait_for_idle(gt, 2 * HZ))
+			return -EIO;
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -624,10 +623,7 @@ static int igt_reset_fail_engine(void *arg)
 				if (IS_ERR(rq)) {
 					struct drm_printer p =
 						drm_info_printer(gt->i915->drm.dev);
-					intel_engine_dump(engine, &p,
-							  "%s(%s): failed to submit request\n",
-							  __func__,
-							  engine->name);
+					intel_engine_dump(engine, &p, 0);
 
 					GEM_TRACE("%s(%s): failed to submit request\n",
 						  __func__,
@@ -675,10 +671,7 @@ static int igt_reset_fail_engine(void *arg)
 					struct drm_printer p =
 						drm_info_printer(gt->i915->drm.dev);
 
-					intel_engine_dump(engine, &p,
-							  "%s(%s): failed to complete request\n",
-							  __func__,
-							  engine->name);
+					intel_engine_dump(engine, &p, 0);
 
 					GEM_TRACE("%s(%s): failed to complete request\n",
 						  __func__,
@@ -720,7 +713,8 @@ static int __igt_reset_engine(struct intel_gt *gt, bool active)
 	if (!intel_has_reset_engine(gt))
 		return 0;
 
-	intel_gt_pm_wait_for_idle(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ))
+		return -EIO;
 
 	if (active) {
 		err = hang_init(&h, gt);
@@ -785,8 +779,7 @@ static int __igt_reset_engine(struct intel_gt *gt, bool active)
 
 					pr_err("%s: Failed to start request %llx, at %x\n",
 					       __func__, rq->fence.seqno, hws_seqno(&h, rq));
-					intel_engine_dump(engine, &p,
-							  "%s\n", engine->name);
+					intel_engine_dump(engine, &p, 0);
 
 					i915_request_put(rq);
 					err = -EIO;
@@ -1030,7 +1023,10 @@ static int __igt_reset_engines(struct intel_gt *gt,
 		} else if (using_guc)
 			continue;
 
-		intel_gt_pm_wait_for_idle(gt);
+		if (intel_gt_pm_wait_for_idle(gt, 2 * HZ)) {
+			err = -EIO;
+			break;
+		}
 
 		if (!wait_for_idle(engine)) {
 			pr_err("i915_reset_engine(%s:%s): failed to idle before reset\n",
@@ -1100,8 +1096,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 
 					pr_err("%s: Failed to start request %llx, at %x\n",
 					       __func__, rq->fence.seqno, hws_seqno(&h, rq));
-					intel_engine_dump(engine, &p,
-							  "%s\n", engine->name);
+					intel_engine_dump(engine, &p, 0);
 
 					i915_request_put(rq);
 					err = -EIO;
@@ -1154,8 +1149,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 					       engine->name, test_name,
 					       rq->fence.context,
 					       rq->fence.seqno);
-					intel_engine_dump(engine, &p,
-							  "%s\n", engine->name);
+					intel_engine_dump(engine, &p, 0);
 					i915_request_put(rq);
 
 					GEM_TRACE_DUMP();
@@ -1177,8 +1171,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 				pr_err("i915_reset_engine(%s:%s):"
 				       " failed to idle after reset\n",
 				       engine->name, test_name);
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 
 				err = -EIO;
 				goto restore;
@@ -1357,7 +1350,7 @@ static int igt_reset_wait(void *arg)
 
 		pr_err("%s: Failed to start request %llx, at %x\n",
 		       __func__, rq->fence.seqno, hws_seqno(&h, rq));
-		intel_engine_dump(rq->engine, &p, "%s\n", rq->engine->name);
+		intel_engine_dump(rq->engine, &p, 0);
 
 		intel_gt_set_wedged(gt);
 
@@ -1496,7 +1489,7 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 
 		pr_err("%s: Failed to start request %llx, at %x\n",
 		       __func__, rq->fence.seqno, hws_seqno(&h, rq));
-		intel_engine_dump(rq->engine, &p, "%s\n", rq->engine->name);
+		intel_engine_dump(rq->engine, &p, 0);
 
 		intel_gt_set_wedged(gt);
 		goto out_reset;
@@ -1519,7 +1512,7 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 		struct drm_printer p = drm_info_printer(gt->i915->drm.dev);
 
 		pr_err("igt/evict_vma kthread did not wait\n");
-		intel_engine_dump(rq->engine, &p, "%s\n", rq->engine->name);
+		intel_engine_dump(rq->engine, &p, 0);
 
 		intel_gt_set_wedged(gt);
 		goto out_reset;
@@ -1610,7 +1603,9 @@ static int igt_reset_queue(void *arg)
 
 	igt_global_reset_lock(gt);
 
-	intel_gt_pm_wait_for_idle(gt);
+	err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+	if (err)
+		goto unlock;
 
 	err = hang_init(&h, gt);
 	if (err)
@@ -1691,8 +1686,7 @@ static int igt_reset_queue(void *arg)
 				pr_err("%s(%s): Failed to start request %llx, at %x\n",
 				       __func__, engine->name,
 				       prev->fence.seqno, hws_seqno(&h, prev));
-				intel_engine_dump(engine, &p,
-						  "%s\n", engine->name);
+				intel_engine_dump(engine, &p, 0);
 
 				i915_request_put(rq);
 				i915_request_put(prev);
@@ -1815,7 +1809,7 @@ static int igt_handle_error(void *arg)
 
 		pr_err("%s: Failed to start request %llx, at %x\n",
 		       __func__, rq->fence.seqno, hws_seqno(&h, rq));
-		intel_engine_dump(rq->engine, &p, "%s\n", rq->engine->name);
+		intel_engine_dump(rq->engine, &p, 0);
 
 		intel_gt_set_wedged(gt);
 

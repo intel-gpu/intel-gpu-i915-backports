@@ -13,7 +13,7 @@ static int nop_get_pages(struct drm_i915_gem_object *obj)
 	return -EACCES;
 }
 
-static int nop_put_pages(struct drm_i915_gem_object *obj, struct sg_table *pages)
+static int nop_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 {
 	return 0;
 }

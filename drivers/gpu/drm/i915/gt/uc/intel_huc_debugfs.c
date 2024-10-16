@@ -19,7 +19,7 @@ static int huc_info_show(struct seq_file *m, void *data)
 	if (!intel_huc_is_supported(huc))
 		return -ENODEV;
 
-	intel_huc_load_status(huc, &p);
+	intel_huc_load_status(huc, &p, 0);
 
 	return 0;
 }

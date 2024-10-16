@@ -4,6 +4,15 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,9,6) || \
+	(LINUX_VERSION_IS_GEQ(6,8,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(43,43))
+
+/*
+ * 8e21de5f99b2 drm/mst: Fix NULL pointer dereference at drm_dp_add_payload_part2
+ */
+#define BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
 	LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
 	LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
@@ -106,6 +115,11 @@
  */
 #define BPM_IS_SWIOTLB_ACTIVE_PRESENT
 
+/*
+ * 9048c7341c
+ * vfio-iommufd: Add detach_ioas support for physical VFIO devices
+ */
+#define BPM_DETACH_IOMMU_CALLBACKS_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)*/
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
@@ -246,6 +260,15 @@
 #endif /* (LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,3,0) || \
+		LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0))
+
+/*
+ * edad1bb1fbf7 mm/gup: remove pin_user_pages_fast_only()
+ */
+#define BPM_PIN_USER_PAGES_FAST_ONLY_NOT_PRESENT
+#endif
+
+#if (LINUX_VERSION_IS_GEQ(6,3,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
  * a3185f91d057 drm/ttm: merge ttm_bo_api.h and ttm_bo_driver.h v2
@@ -293,6 +316,12 @@
  * drm/fb_helper: Rename field fbdev to info in struct drm_fb_helper
  */
 #define BPM_STRUCT_DRM_FB_HELPER_FBDEV_NOT_PRESENT
+
+/*
+ * a4d1f91db5
+ * vfio-iommufd: Support iommufd for physical VFIO devices
+ */
+#define BPM_BIND_UNBIND_ATTACH_IOMMU_CALLBACKS_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,2,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,2,0) || \
@@ -342,6 +371,15 @@
 #define BPM_LRU_CACHE_ADD_WRAPPER_NOT_PRESENT
 #endif /*LINUX_VERSION_IS_GEQ(6,2,0) || LINUX_VERSION_IN_RANGE(5,4,0, 5,5,0) ... */
 
+#if (LINUX_VERSION_IN_RANGE(6,2,0, 6,2,5) || \
+		LINUX_VERSION_IN_RANGE(6,1,0, 6,1,24))
+/*
+ * e761cc20946a
+ * drm/display/dp_mst: Handle old/new payload states in drm_dp_remove_payload()
+ */
+#define BPM_DRM_DP_REMOVE_PAYLOAD_OLD_PAYLOAD_ARG_NOT_PRESENT
+#endif
+
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
 /*
@@ -354,6 +392,11 @@
  * 27aeb915595b vfio/hisi_acc: Use the new device life cycle helpers
  */
 #define BPM_VFIO_PCI_CORE_UN_INIT_DEVICE_API_NOT_PRESENT
+
+/*
+ * cb9ff3f3b84 vfio: Add helpers for unifying vfio_device life cycle
+ */
+#define BPM_VFIO_ALLOC_AND_PUT_DEVICE_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,1,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,1,0) || \
@@ -386,6 +429,16 @@
  */
 #define BPM_FIND_NTH_BIT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,1,0)) || (REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
+
+#if LINUX_VERSION_IS_LESS(6,1,0)
+#if (REDHAT_RELEASE_VERSION_IS_GEQ(8,10) && \
+        REDHAT_BACKPORT_MINOR_VERSION_IS_GEQ(553,22,1))
+/*
+ * 479747caa5bf media: cec: add support for Absolute Volume Control
+ */
+#define BPM_CEC_MSG_SET_AUDIO_VOLUME_LEVEL_NOT_PRESENT
+#endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(8,10) && REDHAT_BACKPORT_MINOR_...)*/
+#endif /* LINUX_VERSION_IS_LESS(6,1,0) */
 
 #if (LINUX_VERSION_IN_RANGE(6,0,0, 6,7,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
@@ -931,6 +984,16 @@
  */
 #define BPM_VFIO_PCI_CORE_HEADER_NOT_PRESENT
 #endif
+
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || REDHAT_RELEASE_VERSION_IS_LEQ(8,10) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0))
+
+/*
+ * 3e302dbc6774 lib/scatterlist: Fix wrong update of orig_nents
+ */
+#define BPM_SG_FREE_TABLE_ARG_NOT_PRESENT
+#endif
+
 #endif /* LINUX_VERSION_IS_LESS(5,15,0) */
 
 #if LINUX_VERSION_IS_LESS(5,14,19)
@@ -1817,10 +1880,13 @@
 #endif /* LINUX_VERSION_IS_LESS(4,20,0) */
 
 #if LINUX_VERSION_IS_LESS(4,19,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,10) && \
+	REDHAT_BACKPORT_MINOR_VERSION_IS_GEQ(553,22,1))
 /*
  * 14d32b2 Defined jiffies_delta_to_msecs() function
  */
 #define BPM_JIFFIES_DELTA_TO_MSECS_NOT_PRESENT
+#endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,10) && REDHAT_BACKPORT_MINOR_...)*/
 #endif /* LINUX_VERSION_IS_LESS(4,19,0) */
 
 #if LINUX_VERSION_IN_RANGE(3,17,0, 5,3,0)
@@ -1950,6 +2016,8 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+
+#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
 #endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)

@@ -9,6 +9,7 @@
 #include "gem/i915_gem_region.h"
 
 #include "i915_drv.h"
+#include "i915_sriov.h"
 #include "i915_vma.h"
 #include "intel_context.h"
 #include "intel_engine.h"
@@ -42,7 +43,7 @@ int intel_ring_pin(struct intel_ring *ring, struct i915_gem_ww_ctx *ww)
 	if (atomic_fetch_inc(&ring->pin_count))
 		return 0;
 
-	ret = i915_ggtt_pin_for_gt(vma, ww, 0, PIN_HIGH);
+	ret = i915_ggtt_pin_for_gt(vma, ww);
 	if (unlikely(ret))
 		goto err_unpin;
 
@@ -213,7 +214,9 @@ wait_for_space(struct intel_ring *ring,
 	return 0;
 }
 
-u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
+#define RING_PACKET_HAS_GGTT	BIT(0)
+
+static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int num_dwords, u32 flags)
 {
 	struct intel_ring *ring = rq->ring;
 	const unsigned int remain_usable = ring->effective_size - ring->emit;
@@ -283,6 +286,15 @@ u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
 		ring->emit = 0;
 	}
 
+	if (flags & RING_PACKET_HAS_GGTT &&
+			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
+		int ret;
+
+		ret = gt_ggtt_address_read_lock_interruptible(rq->engine->gt, srcu);
+		if (unlikely(ret))
+			return ERR_PTR(ret);
+	}
+
 	GEM_BUG_ON(ring->emit > ring->size - bytes);
 	GEM_BUG_ON(ring->space < bytes);
 	cs = ring->vaddr + ring->emit;
@@ -292,6 +304,83 @@ u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
 	ring->space -= bytes;
 
 	return cs;
+}
+
+static void ring_packet_advance(struct i915_request *rq, int srcu, u32 *cs, u32 flags)
+{
+	/*
+	 * Compare current state against what was provided to the preceding
+	 * intel_ring_begin() by checking whether the number of dwords
+	 * emitted matches the space reserved for the command packet (i.e.
+	 * the value passed to intel_ring_begin()).
+	 */
+	GEM_BUG_ON((rq->ring->vaddr + rq->ring->emit) != cs);
+	GEM_BUG_ON(!IS_ALIGNED(rq->ring->emit, 8)); /* RING_TAIL qword align */
+
+	rq->advance = intel_ring_offset(rq, cs);
+	if (flags & RING_PACKET_HAS_GGTT &&
+			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
+		set_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags);
+		gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
+	}
+}
+
+static void ring_fini_packet_begin(struct i915_request *rq, int *srcu, u32 flags)
+{
+	if (flags & RING_PACKET_HAS_GGTT &&
+			!i915_sriov_current_is_vf_migration_recovery(rq->i915))
+		gt_ggtt_address_read_lock(rq->engine->gt, srcu);
+}
+
+static void ring_fini_packet_advance(struct i915_request *rq, int srcu, u32 *cs, u32 flags)
+{
+	rq->tail = intel_ring_offset(rq, cs);
+	if (flags & RING_PACKET_HAS_GGTT &&
+			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
+		set_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags);
+		gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
+	}
+}
+
+/**
+ * intel_ring_begin - prepare for ring command packet emission
+ * @rq: request which starts the command packet
+ * @num_dwords: length of the packet
+ * Return: pointer to ring position where the packet starts
+ */
+u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
+{
+	return ring_packet_begin(rq, NULL, num_dwords, 0);
+}
+
+/**
+ * intel_ring_advance - mark the end of ring command packet emission
+ * @rq: request which ends the command packet
+ * @cs: ring position of the end of the command packet
+ */
+void intel_ring_advance(struct i915_request *rq, u32 *cs)
+{
+	ring_packet_advance(rq, 0, cs, 0);
+}
+
+u32 *intel_ring_begin_ggtt(struct i915_request *rq, int *srcu, unsigned int num_dwords)
+{
+	return ring_packet_begin(rq, srcu, num_dwords, RING_PACKET_HAS_GGTT);
+}
+
+void intel_ring_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs)
+{
+	ring_packet_advance(rq, srcu, cs, RING_PACKET_HAS_GGTT);
+}
+
+void intel_ring_fini_begin_ggtt(struct i915_request *rq, int *srcu)
+{
+	ring_fini_packet_begin(rq, srcu, RING_PACKET_HAS_GGTT);
+}
+
+void intel_ring_fini_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs)
+{
+	ring_fini_packet_advance(rq, srcu, cs, RING_PACKET_HAS_GGTT);
 }
 
 /* Align the ring tail to a cacheline boundary */

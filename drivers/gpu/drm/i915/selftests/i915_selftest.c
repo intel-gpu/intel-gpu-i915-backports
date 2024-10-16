@@ -24,6 +24,8 @@
 #include <linux/random.h>
 
 #include "gt/intel_gt_pm.h"
+#include "gt/intel_gt_requests.h"
+
 #include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_selftest.h"
@@ -233,6 +235,11 @@ int i915_live_selftests(struct pci_dev *pdev)
 	if (!i915_selftest.live)
 		return 0;
 
+	/* SKip subsequent device testing after the first failure */
+	if (i915_selftest.live < 0 &&
+	    (i915_selftest.live != -EPERM && i915_selftest.live != -ENOTTY))
+		return 0;
+
 	err = run_selftests(live, pdev_to_i915(pdev));
 	if (err) {
 		i915_selftest.live = err;
@@ -350,7 +357,7 @@ int __i915_live_setup(void *data)
 	struct drm_i915_private *i915 = data;
 
 	/* The selftests expect an idle system */
-	if (intel_gt_pm_wait_for_idle(to_gt(i915)))
+	if (intel_gt_pm_wait_for_idle(to_gt(i915), 5 * HZ))
 		return -EIO;
 
 	return intel_gt_terminally_wedged(to_gt(i915));
@@ -373,7 +380,8 @@ int __intel_gt_live_setup(void *data)
 	struct intel_gt *gt = data;
 
 	/* The selftests expect an idle system */
-	if (intel_gt_pm_wait_for_idle(gt))
+	intel_gt_retire_requests(gt);
+	if (intel_gt_pm_wait_for_idle(gt, 5 * HZ))
 		return -EIO;
 
 	return intel_gt_terminally_wedged(gt);
@@ -384,6 +392,9 @@ int __intel_gt_live_teardown(int err, void *data)
 	struct intel_gt *gt = data;
 
 	if (igt_flush_test(gt->i915))
+		err = -EIO;
+
+	if (intel_gt_pm_wait_for_idle(gt, 5 * HZ))
 		err = -EIO;
 
 	i915_gem_drain_freed_objects(gt->i915);

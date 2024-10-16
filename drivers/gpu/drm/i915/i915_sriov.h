@@ -22,7 +22,10 @@ struct drm_printer;
 #define IS_SRIOV(i915) (IS_SRIOV_PF(i915) || IS_SRIOV_VF(i915))
 
 enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915);
+void i915_sriov_init_late(struct drm_i915_private *i915);
+void i915_sriov_release(struct drm_i915_private *i915);
 int i915_sriov_early_tweaks(struct drm_i915_private *i915);
+void i915_sriov_early_cleanup(struct drm_i915_private *i915);
 void i915_sriov_print_info(struct drm_i915_private *i915, struct drm_printer *p);
 
 /* PF only */
@@ -49,8 +52,8 @@ int i915_sriov_resume_early(struct drm_i915_private *i915);
 int i915_sriov_resume(struct drm_i915_private *i915);
 
 /* VF only */
-bool i915_sriov_vf_migration_check(struct drm_i915_private *i915, bool wait_end);
 void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915);
 int intel_sriov_vf_migrated_event_handler(struct intel_guc *guc);
+bool i915_sriov_current_is_vf_migration_recovery(struct drm_i915_private *i915);
 
 #endif /* __I915_SRIOV_H__ */

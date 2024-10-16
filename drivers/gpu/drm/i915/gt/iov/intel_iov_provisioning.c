@@ -715,7 +715,7 @@ release:
 	err = i915_gem_gtt_insert(&ggtt->vm, node, size, alignment,
 		I915_COLOR_UNEVICTABLE,
 		ggtt->pin_bias, GUC_GGTT_TOP,
-		PIN_HIGH);
+		0);
 	mutex_unlock(&ggtt->vm.mutex);
 	if (unlikely(err))
 		goto finish;
@@ -2135,9 +2135,8 @@ static u64 pf_query_free_lmem(struct intel_iov *iov)
 {
 	struct intel_gt *gt = iov_to_gt(iov);
 
-	/* Flush any pending work to get reliable results */
-	intel_gt_flush_buffer_pool(gt);
-	i915_gem_drain_workqueue(gt->i915);
+	/* Flush any pending frees to get reliable results */
+	i915_gem_drain_freed_objects(gt->i915);
 
 	return atomic64_read(&gt->lmem->avail);
 }
@@ -3241,7 +3240,7 @@ static int pf_reprovision_ggtt(struct intel_iov *iov, unsigned int id)
 	err = i915_gem_gtt_insert(&ggtt->vm, &new_node, node_size, alignment,
 		I915_COLOR_UNEVICTABLE,
 		0, ggtt->vm.total,
-		PIN_HIGH);
+		0);
 	mutex_unlock(&ggtt->vm.mutex);
 	if (err)
 		goto out;

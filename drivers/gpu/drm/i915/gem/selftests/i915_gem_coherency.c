@@ -12,6 +12,8 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
 
+#include "gem/i915_gem_internal.h"
+
 #include "i915_selftest.h"
 #include "selftests/i915_random.h"
 

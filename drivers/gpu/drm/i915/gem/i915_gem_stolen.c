@@ -265,12 +265,11 @@ static int i915_gem_init_stolen(struct intel_memory_region *mem)
 	return 0;
 }
 
-static struct sg_table *
+static struct scatterlist *
 i915_pages_create_for_stolen(struct drm_device *dev,
 			     resource_size_t offset, resource_size_t size)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
-	struct sg_table *st;
 	struct scatterlist *sg;
 
 	GEM_BUG_ON(range_overflows(offset, size, resource_size(&i915->dsm)));
@@ -280,45 +279,37 @@ i915_pages_create_for_stolen(struct drm_device *dev,
 	 * dma mapping in a single scatterlist.
 	 */
 
-	st = kmalloc(sizeof(*st), GFP_KERNEL);
-	if (st == NULL)
+	sg = sg_table_inline_create(GFP_KERNEL);
+	if (sg == NULL)
 		return ERR_PTR(-ENOMEM);
 
-	if (sg_alloc_table(st, 1, GFP_KERNEL)) {
-		kfree(st);
-		return ERR_PTR(-ENOMEM);
-	}
-
-	sg = st->sgl;
-	sg->offset = 0;
 	sg->length = size;
-
 	sg_dma_address(sg) = (dma_addr_t)i915->dsm.start + offset;
 	sg_dma_len(sg) = size;
+	sg_mark_end(sg);
+	sg_count(sg) = 1;
 
-	return st;
+	return sg;
 }
 
 static int i915_gem_object_get_pages_stolen(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *pages =
+	struct scatterlist *pages =
 		i915_pages_create_for_stolen(obj->base.dev,
 					     obj->stolen->start,
 					     obj->stolen->size);
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
 
-	__i915_gem_object_set_pages(obj, pages, obj->stolen->size);
+	__i915_gem_object_set_pages(obj, pages);
 	return 0;
 }
 
 static int i915_gem_object_put_pages_stolen(struct drm_i915_gem_object *obj,
-					     struct sg_table *pages)
+					    struct scatterlist *pages)
 {
 	/* Should only be called from i915_gem_object_release_stolen() */
-
-	sg_free_table(pages);
-	kfree(pages);
+	sg_table_inline_free(pages);
 	return 0;
 }
 

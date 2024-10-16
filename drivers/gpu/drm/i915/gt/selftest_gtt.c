@@ -9,6 +9,7 @@
 
 #include "gen8_engine_cs.h"
 #include "i915_gem_ww.h"
+#include "intel_engine_pm.h"
 #include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_context.h"
@@ -614,20 +615,13 @@ pte_write_tearing(struct intel_context *ce,
 
 	pr_info("%s(%s): Sampling %llx, with alignment %llx, using PTE size %x\n",
 		ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-		addr, align, va->page_sizes);
-	if (va->page_sizes != align && va->page_sizes > va->size) {
-		dma_addr_t dma = i915_gem_object_get_dma_address(va->obj, 0);
-
-		pr_warn("%s(%s): Failed to insert a suitably large PTE for dma addr:%pa\n",
-			ce->engine->name, va->obj->mm.region.mem->name ?: "smem",
-			&dma);
-	}
+		addr, align, sg_page_sizes(va->pages));
 
 	/* Short sleep to sanitycheck the batch is spinning before we begin */
 	if (wait_for(ENGINE_READ(ce->engine, RING_NOPID) == 0x12345, 100)) {
 		struct drm_printer p = drm_err_printer(__func__);
 
-		intel_engine_dump(ce->engine, &p, "Spinner failed to start on %s\n", ce->engine->name);
+		intel_engine_dump(ce->engine, &p, 0);
 		GEM_TRACE_DUMP();
 		err = -EIO;
 	} else if (!i915_request_completed(rq)) {
@@ -756,7 +750,7 @@ mem_write_tearing(struct intel_gt *gt,
 
 	GEM_BUG_ON(!is_power_of_2(A->base.size));
 	GEM_BUG_ON(A->base.size != B->base.size);
-	if (!sg_is_last(A->mm.pages->sgl) || !sg_is_last(B->mm.pages->sgl))
+	if (!sg_is_last(A->mm.pages) || !sg_is_last(B->mm.pages))
 		pr_warn("Failed to allocate contiguous pages for size %zx\n",
 			A->base.size);
 
@@ -796,6 +790,8 @@ mem_write_tearing(struct intel_gt *gt,
 		engine = random_engine_class(gt, class, &prng);
 		if (!engine)
 			continue;
+
+		intel_engine_pm_wait_for_idle(engine);
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
@@ -841,7 +837,8 @@ out_a:
 static int write_tearing(void *arg)
 {
 	struct intel_gt *gt = arg;
-	int err;
+	intel_wakeref_t wf;
+	int err = 0;
 
 	/*
 	 * Our goal is to try and detect if the HW sees partial PTE updates
@@ -861,11 +858,13 @@ static int write_tearing(void *arg)
 	 * the HW formed a different physical address than A or B.
 	 */
 
-	err = mem_write_tearing(gt, create_smem, pte_write_tearing, 0);
-	if (err == 0)
-		err = mem_write_tearing(gt, create_lmem, pte_write_tearing, 0);
-	if (err == -ENODEV || err == -ENXIO)
-		err = 0;
+	with_intel_gt_pm(gt, wf) {
+		err = mem_write_tearing(gt, create_smem, pte_write_tearing, 0);
+		if (err == 0)
+			err = mem_write_tearing(gt, create_lmem, pte_write_tearing, 0);
+		if (err == -ENODEV || err == -ENXIO)
+			err = 0;
+	}
 
 	return err;
 }

@@ -109,6 +109,7 @@ void intel_gt_fini_timelines(struct intel_gt *gt);
 
 void intel_gt_show_timelines(struct intel_gt *gt,
 			     struct drm_printer *m,
+			     int indent,
 			     void (*show_request)(struct drm_printer *m,
 						  const struct i915_request *rq,
 						  const char *prefix,

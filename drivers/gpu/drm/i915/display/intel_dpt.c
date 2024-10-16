@@ -92,7 +92,6 @@ static int dpt_bind_vma(struct i915_address_space *vm,
 		pte_flags |= PTE_LM;
 
 	vma->vm->insert_entries(vma->vm, vma, ww, pat_index, pte_flags);
-	vma->page_sizes = I915_GTT_PAGE_SIZE;
 
 	/*
 	 * Without aliasing PPGTT there's no difference between

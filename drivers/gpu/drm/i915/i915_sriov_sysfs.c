@@ -7,6 +7,7 @@
 #include "i915_pci.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_sriov_sysfs_types.h"
+#include "i915_sriov_telemetry.h"
 #include "i915_sysfs.h"
 #include "gt/intel_gt.h"
 
@@ -132,6 +133,16 @@ static ssize_t control_sriov_ext_attr_store(struct drm_i915_private *i915,
 I915_SRIOV_EXT_ATTR_RO(id);
 I915_SRIOV_EXT_ATTR_WO(control);
 
+static ssize_t lmem_alloc_size_sriov_ext_attr_show(struct drm_i915_private *i915,
+						   unsigned int id, char *buf)
+{
+	u64 lmem_alloc_size = i915_sriov_telemetry_pf_get_lmem_alloc_size(i915, id);
+
+	return sysfs_emit(buf, "%llu\n", lmem_alloc_size);
+}
+
+I915_SRIOV_EXT_ATTR_RO(lmem_alloc_size);
+
 static struct attribute *sriov_ext_attrs[] = {
 	NULL
 };
@@ -181,6 +192,16 @@ static umode_t vf_ext_attr_is_visible(struct kobject *kobj,
 static const struct attribute_group vf_ext_attr_group = {
 	.attrs = vf_ext_attrs,
 	.is_visible = vf_ext_attr_is_visible,
+};
+
+static struct attribute *vf_telemetry_ext_attrs[] = {
+	&lmem_alloc_size_sriov_ext_attr.attr,
+	NULL
+};
+
+static const struct attribute_group vf_telemetry_ext_attr_group = {
+	.name = "telemetry",
+	.attrs = vf_telemetry_ext_attrs,
 };
 
 #ifndef BPM_DEFAULT_GROUPS_NOT_PRESENT
@@ -406,6 +427,12 @@ static int pf_setup_tree(struct drm_i915_private *i915)
 		if (unlikely(err))
 			goto failed_kobj_n;
 
+		if (i915_sriov_telemetry_is_enabled(i915) && n) {
+			err = sysfs_create_group(&kobj->base, &vf_telemetry_ext_attr_group);
+			if (unlikely(err))
+				goto failed_kobj_n;
+		}
+
 		kobjs[n] = kobj;
 	}
 
@@ -416,8 +443,11 @@ static int pf_setup_tree(struct drm_i915_private *i915)
 failed_kobj_n:
 	if (kobj)
 		kobject_put(&kobj->base);
-	while (n--)
+	while (n--) {
+		if (i915_sriov_telemetry_is_enabled(i915) && n)
+			sysfs_remove_group(&kobjs[n]->base, &vf_telemetry_ext_attr_group);
 		kobject_put(&kobjs[n]->base);
+	}
 	kfree(kobjs);
 failed:
 	return pf_setup_failed(i915, err, "tree");
@@ -433,8 +463,11 @@ static void pf_teardown_tree(struct drm_i915_private *i915)
 	if (!kobjs)
 		return;
 
-	for (n = 0; n < count; n++)
+	for (n = 0; n < count; n++) {
+		if (i915_sriov_telemetry_is_enabled(i915) && n)
+			sysfs_remove_group(&kobjs[n]->base, &vf_telemetry_ext_attr_group);
 		kobject_put(&kobjs[n]->base);
+	}
 
 	kfree(kobjs);
 }

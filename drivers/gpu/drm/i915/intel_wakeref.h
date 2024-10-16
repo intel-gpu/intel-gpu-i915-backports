@@ -21,6 +21,8 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 
+#include "i915_utils.h"
+
 typedef unsigned long intel_wakeref_t;
 
 #define INTEL_REFTRACK_DEAD_COUNT 16
@@ -266,6 +268,7 @@ __intel_wakeref_resume_park(struct intel_wakeref *wf)
 /**
  * intel_wakeref_wait_for_idle: Wait until the wakeref is idle
  * @wf: the wakeref
+ * @timeout: the timeout in jiffies
  *
  * Wait for the earlier asynchronous release of the wakeref. Note
  * this will wait for any third party as well, so make sure you only wait
@@ -274,7 +277,7 @@ __intel_wakeref_resume_park(struct intel_wakeref *wf)
  *
  * Return: 0 on success, error code if killed.
  */
-int intel_wakeref_wait_for_idle(struct intel_wakeref *wf);
+int intel_wakeref_wait_for_idle(struct intel_wakeref *wf, long timeout);
 
 #define INTEL_WAKEREF_DEF ((intel_wakeref_t)(-1))
 
@@ -299,7 +302,8 @@ static inline void intel_ref_tracker_free(struct ref_tracker_dir *dir,
 
 static inline void
 intel_wakeref_tracker_show(struct ref_tracker_dir *dir,
-			   struct drm_printer *p)
+			   struct drm_printer *p,
+			   int indent)
 {
 	const size_t buf_size = PAGE_SIZE;
 	char *buf, *sb, *se;
@@ -312,16 +316,14 @@ intel_wakeref_tracker_show(struct ref_tracker_dir *dir,
 	count = ref_tracker_dir_snprint(dir, buf, buf_size);
 	if (!count)
 		goto free;
+
 	/* printk does not like big buffers, so we split it */
-	for (sb = buf; *sb; sb = se + 1) {
+	for (sb = buf; *sb != '\0' && *sb != '\n'; sb = se + 1) {
 		se = strchrnul(sb, '\n');
-		drm_printf(p, "%.*s", (int)(se - sb + 1), sb);
+		i_printf(p, indent, "%.*s", (int)(se - sb + 1), sb);
 		if (!*se)
 			break;
 	}
-	if (count >= buf_size)
-		drm_printf(p, "dropped %zd extra bytes of leak report.\n",
-			   count + 1 - buf_size);
 free:
 	kfree(buf);
 }
@@ -340,9 +342,10 @@ static inline void intel_wakeref_untrack(struct intel_wakeref *wf,
 }
 
 static inline void intel_wakeref_show(struct intel_wakeref *wf,
-				      struct drm_printer *p)
+				      struct drm_printer *p,
+				      int indent)
 {
-	intel_wakeref_tracker_show(&wf->debug, p);
+	intel_wakeref_tracker_show(&wf->debug, p, indent);
 }
 
 #else
@@ -358,7 +361,8 @@ static inline void intel_wakeref_untrack(struct intel_wakeref *wf,
 }
 
 static inline void intel_wakeref_show(struct intel_wakeref *wf,
-				      struct drm_printer *p)
+				      struct drm_printer *p,
+				      int indent)
 {
 }
 

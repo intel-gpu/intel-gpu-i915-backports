@@ -3,23 +3,16 @@
  * Copyright © 2012-2023 Intel Corporation
  */
 
-#ifdef BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER_1
-#define RH_DRM_BACKPORT
-#endif
-
+#include <linux/hugetlb.h>
+#include <linux/mm.h>
 #include <linux/mmu_context.h>
-#include <linux/pagevec.h>
 #include <linux/swap.h>
 #include <linux/sched/mm.h>
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-#include <linux/i915_gem_mmu_notifier.h>
-#ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
-#include <linux/interval_tree.h>
-#endif
-#endif
 #ifdef BPM_MMAP_WRITE_LOCK_NOT_PRESENT
 #include <linux/mmap_lock.h>
 #endif
+
+#include "gt/intel_gt.h"
 
 #include "i915_drv.h"
 #include "i915_gem_ioctls.h"
@@ -27,418 +20,41 @@
 #include "i915_gem_region.h"
 #include "i915_scatterlist.h"
 #include "i915_sw_fence_work.h"
+#include "i915_tbb.h"
 
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-#ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
-struct i915_mmu_notifier {
-	spinlock_t lock;
-	struct hlist_node node;
-	struct mmu_notifier mn;
-	struct rb_root_cached objects;
-	struct i915_mm_struct *mm;
-};
-
-struct i915_mmu_object {
-	struct i915_mmu_notifier *mn;
-	struct drm_i915_gem_object *obj;
-	struct interval_tree_node it;
-};
-#else
-struct i915_mm_struct;
-
-struct i915_mmu_notifier {
-	struct hlist_node node;
-	struct mmu_notifier mn;
-	struct i915_mm_struct *mm;
-};
-#endif
-#endif
-
-#ifndef MAX_STACK_ALLOC
-#define MAX_STACK_ALLOC 512
-#endif
-
-#if IS_ENABLED(CONFIG_MMU_NOTIFIER)
-static bool i915_gem_userptr_invalidate(struct mmu_interval_notifier *mni,
-					const struct mmu_notifier_range *range,
-					unsigned long cur_seq)
-{
-	if (range->event == MMU_NOTIFY_UNMAP)
-		mmu_interval_set_seq(mni, cur_seq);
-	return true;
-}
-
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-#ifdef BPM_I915_MMU_OBJECT_NOT_PRESENT
-static void
-userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
-				  struct mm_struct *mm,
-				  unsigned long start, unsigned long end)
-{
-	struct i915_mmu_notifier *mn =
-		container_of(_mn, struct i915_mmu_notifier, mn);
-	struct interval_tree_node *it;
-	int ret = 0;
-
-	if (RB_EMPTY_ROOT(&mn->objects.rb_root))
-		return;
-
-	/* interval ranges are inclusive, but invalidate range is exclusive */
-	end--;
-
-	spin_lock(&mn->lock);
-	it = interval_tree_iter_first(&mn->objects, start, end);
-	while (it) {
-		struct drm_i915_gem_object *obj;
-
-		/*
-		 * The mmu_object is released late when destroying the
-		 * GEM object so it is entirely possible to gain a
-		 * reference on an object in the process of being freed
-		 * since our serialisation is via the spinlock and not
-		 * the struct_mutex - and consequently use it after it
-		 * is freed and then double free it. To prevent that
-		 * use-after-free we only acquire a reference on the
-		 * object if it is not in the process of being destroyed.
-		 */
-		obj = container_of(it, struct i915_mmu_object, it)->obj;
-		if (!kref_get_unless_zero(&obj->base.refcount)) {
-			it = interval_tree_iter_next(it, start, end);
-			continue;
-		}
-		spin_unlock(&mn->lock);
-
-		ret = i915_gem_object_unbind(obj, NULL,
-					     I915_GEM_OBJECT_UNBIND_ACTIVE |
-					     I915_GEM_OBJECT_UNBIND_BARRIER);
-		if (ret == 0)
-			ret = __i915_gem_object_put_pages(obj);
-		i915_gem_object_put(obj);
-		if (ret)
-			return;
-
-		spin_lock(&mn->lock);
-
-		/*
-		 * As we do not (yet) protect the mmu from concurrent insertion
-		 * over this range, there is no guarantee that this search will
-		 * terminate given a pathologic workload.
-		 */
-		it = interval_tree_iter_first(&mn->objects, start, end);
-	}
-	spin_unlock(&mn->lock);
-
-	return;
-
-}
-
-static const struct mmu_notifier_ops i915_gem_userptr_notifier = {
-	.invalidate_range_start = userptr_mn_invalidate_range_start,
-};
-#else
-static int
-userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
-		const struct mmu_notifier_range *range)
-{
-	struct i915_mmu_notifier *mn =
-		container_of(_mn, struct i915_mmu_notifier, mn);
-	struct mmu_notifier_subscriptions *subscriptions =
-		mn->mm->notifier_subscriptions;
-	int ret = 0;
-
-	if (subscriptions->has_itree)
-		ret = mn_itree_invalidate(subscriptions, range);
-
-	return ret;
-}
-
-static void
-userptr_mn_invalidate_range_end(struct mmu_notifier *_mn,
-		const struct mmu_notifier_range *range)
-{
-	struct i915_mmu_notifier *mn =
-		container_of(_mn, struct i915_mmu_notifier, mn);
-	struct mmu_notifier_subscriptions *subscriptions =
-		mn->mm->notifier_subscriptions;
-
-	mn_itree_invalidate_end(subscriptions);
-}
-
-static void userptr_mn_release(struct mmu_notifier *_mn, struct mm_struct *mm)
-{
-	struct i915_mmu_notifier *mn =
-		container_of(_mn, struct i915_mmu_notifier, mn);
-	struct mmu_notifier_subscriptions *subscriptions =
-		mn->mm->notifier_subscriptions;
-
-	mn_itree_release(subscriptions, mn->mm);
-}
-
-static const struct mmu_notifier_ops i915_gem_userptr_notifier = {
-	.invalidate_range_start = userptr_mn_invalidate_range_start,
-	.invalidate_range_end = userptr_mn_invalidate_range_end,
-	.release = userptr_mn_release,
-};
-#endif
-#endif
-
-static const struct mmu_interval_notifier_ops i915_gem_userptr_notifier_ops = {
-	.invalidate = i915_gem_userptr_invalidate,
-};
-
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-static struct i915_mmu_notifier *
-i915_mmu_notifier_create(struct i915_mm_struct *mm)
-{
-	struct i915_mmu_notifier *mn;
-
-	mn = kmalloc(sizeof(*mn), GFP_KERNEL);
-	if (mn == NULL)
-		return ERR_PTR(-ENOMEM);
-
-	mn->mn.ops = &i915_gem_userptr_notifier;
-	mn->mm = mm;
-
-	return mn;
-}
-
-static struct i915_mmu_notifier *
-i915_mmu_notifier_find(struct i915_mm_struct *mm)
-{
-	struct i915_mmu_notifier *mn, *old;
-	int err;
-
-	mn = READ_ONCE(mm->mn);
-	if (likely(mn))
-		return mn;
-
-	mn = i915_mmu_notifier_create(mm);
-	if (IS_ERR(mn))
-		return mn;
-
-	err = mmu_notifier_register(&mn->mn, mm->mm);
-	if (err) {
-		kfree(mn);
-		return ERR_PTR(err);
-	}
-
-	old = cmpxchg(&mm->mn, NULL, mn);
-	if (old) {
-		mmu_notifier_unregister(&mn->mn, mm->mm);
-		kfree(mn);
-		mn = old;
-	}
-
-	return mn;
-}
-
-static int
-__i915_gem_userptr_init__mmu_notifier(struct drm_i915_gem_object *obj)
-{
-	struct i915_mmu_notifier *mn;
-	int ret;
-
-	if (WARN_ON(obj->userptr.mm == NULL))
-		return -EINVAL;
-
-	ret = mmu_notifier_subscriptions_init(obj->userptr.mm);
-	if (ret)
-		return ret;
-
-	mn = i915_mmu_notifier_find(obj->userptr.mm);
-	if (IS_ERR(mn))
-		return PTR_ERR(mn);
-
-	return 0;
-}
-
-static int
-i915_gem_userptr_init__mmu_notifier(struct drm_i915_gem_object *obj)
-{
-	int ret;
-
-	ret = __i915_gem_userptr_init__mmu_notifier(obj);
-	if (ret)
-		return ret;
-
-	return mmu_interval_notifier_insert(&obj->userptr.notifier, obj->userptr.mm,
-					    obj->userptr.ptr, obj->base.size,
-					    &i915_gem_userptr_notifier_ops);
-}
-#else
-static int
-i915_gem_userptr_init__mmu_notifier(struct drm_i915_gem_object *obj)
-{
-	return mmu_interval_notifier_insert(&obj->userptr.notifier, current->mm,
-					    obj->userptr.ptr, obj->base.size,
-					    &i915_gem_userptr_notifier_ops);
-}
-#endif
-
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-static struct i915_mm_struct *
-__i915_mm_struct_find(struct drm_i915_private *i915, struct mm_struct *real)
-{
-	struct i915_mm_struct *it, *mm = NULL;
-
-	rcu_read_lock();
-	hash_for_each_possible_rcu(i915->mm_structs,
-			it, node,
-			(unsigned long)real)
-		if (it->mm == real && kref_get_unless_zero(&it->kref)) {
-			mm = it;
-			break;
-		}
-	rcu_read_unlock();
-
-	return mm;
-}
-
-static int
-i915_gem_userptr_init__mm_struct(struct drm_i915_gem_object *obj)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-	struct i915_mm_struct *mm, *new;
-	int ret = 0;
-
-	/* During release of the GEM object we hold the struct_mutex. This
-	 * precludes us from calling mmput() at that time as that may be
-	 * the last reference and so call exit_mmap(). exit_mmap() will
-	 * attempt to reap the vma, and if we were holding a GTT mmap
-	 * would then call drm_gem_vm_close() and attempt to reacquire
-	 * the struct mutex. So in order to avoid that recursion, we have
-	 * to defer releasing the mm reference until after we drop the
-	 * struct_mutex, i.e. we need to schedule a worker to do the clean
-	 * up.
-	 */
-
-	mm = __i915_mm_struct_find(i915, current->mm);
-	if (mm)
-		goto out;
-
-	new = kzalloc(sizeof(*mm), GFP_KERNEL);
-	if (!new)
-		return -ENOMEM;
-
-	kref_init(&new->kref);
-	new->i915 = to_i915(obj->base.dev);
-	new->mm = current->mm;
-
-	spin_lock(&i915->mm_lock);
-	mm = __i915_mm_struct_find(i915, current->mm);
-	if (!mm) {
-		hash_add_rcu(i915->mm_structs,
-				&new->node,
-				(unsigned long)new->mm);
-		mmgrab(current->mm);
-		mm = new;
-	}
-	spin_unlock(&i915->mm_lock);
-	if (mm != new) {
-		kfree(new);
-	}
-
-out:
-	obj->userptr.mm = mm;
-	return ret;
-}
-
-static void
-i915_mmu_notifier_free(struct i915_mmu_notifier *mn,
-			struct mm_struct *mm)
-{
-	if (mn == NULL)
-		return;
-
-	mmu_notifier_unregister(&mn->mn, mm);
-	kfree(mn);
-}
-
-static void
-__i915_mm_struct_free__worker(struct work_struct *work)
-{
-	struct i915_mm_struct *mm = container_of(work, typeof(*mm), work.work);
-
-	i915_mmu_notifier_free(mm->mn, mm->mm);
-	mmu_notifier_subscriptions_destroy(mm);
-	mmdrop(mm->mm);
-	kfree(mm);
-}
-
-static void
-__i915_mm_struct_free(struct kref *kref)
-{
-	struct i915_mm_struct *mm = container_of(kref, typeof(*mm), kref);
-
-	spin_lock(&mm->i915->mm_lock);
-	hash_del_rcu(&mm->node);
-	spin_unlock(&mm->i915->mm_lock);
-
-	INIT_RCU_WORK(&mm->work, __i915_mm_struct_free__worker);
-	queue_rcu_work(system_wq, &mm->work);
-}
-
-static void
-i915_gem_userptr_release__mm_struct(struct drm_i915_gem_object *obj)
-{
-	if (obj->userptr.mm == NULL)
-		return;
-
-	kref_put(&obj->userptr.mm->kref, __i915_mm_struct_free);
-	obj->userptr.mm = NULL;
-}
+#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
+#define kthread_use_mm use_mm
+#define kthread_unuse_mm unuse_mm
 #endif
 
 static void
-i915_gem_userptr_release(struct drm_i915_gem_object *obj)
+i915_gem_userptr_init__mm(struct drm_i915_gem_object *obj)
 {
-	i915_gem_object_release_memory_region(obj);
-	if (!obj->userptr.notifier.mm)
-		return;
-
-	mmu_interval_notifier_remove(&obj->userptr.notifier);
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-	i915_gem_userptr_release__mm_struct(obj);
-#endif
-	obj->userptr.notifier.mm = NULL;
-}
-#else
-static int
-i915_gem_userptr_init__mmu_notifier(struct drm_i915_gem_object *obj)
-{
-	obj->userptr.notifier.mm = current->mm;
+	obj->userptr.mm = current->mm;
 	mmgrab(current->mm);
-	return 0;
 }
 
 static void
 i915_gem_userptr_release(struct drm_i915_gem_object *obj)
 {
 	i915_gem_object_release_memory_region(obj);
-	if (!obj->userptr.notifier.mm)
-		return;
-
-	mmdrop(obj->userptr.notifier.mm);
+	mmdrop(obj->userptr.mm);
 }
-
-#define mmu_interval_read_begin(n) 0
-#define mmu_interval_read_retry(n, seq) false
-#endif
-
 
 struct userptr_work {
 	struct dma_fence_work base;
 	struct drm_i915_gem_object *obj;
 	struct mempolicy *policy;
-	struct sg_table *pages;
+	struct scatterlist *pages;
 };
 
 struct userptr_chunk {
-	struct work_struct work;
-	struct mmu_interval_notifier *notifier;
+	struct i915_tbb tbb;
+	struct mm_struct *mm;
 	struct mempolicy *policy;
 	struct i915_sw_fence *fence;
-	unsigned long addr, count;
+	unsigned long addr;
+	unsigned int count;
 };
 
 #if IS_ENABLED(CONFIG_NUMA)
@@ -449,216 +65,509 @@ struct userptr_chunk {
 #define get_mempolicy(tsk) NULL
 #endif
 
-static int __userptr_chunk(struct mmu_interval_notifier *notifier,
-			   struct mempolicy *mempolicy,
-			   struct scatterlist *sg,
+struct follow_page_context {
+	unsigned int page_size;
+};
+
+#if IS_ENABLED(CONFIG_ARCH_HAS_PTE_SPECIAL)
+
+static struct page *follow_page_pte(unsigned long address,
+				    pmd_t *pmd,
+				    unsigned int flags,
+				    struct follow_page_context *ctx)
+{
+	struct page *page = NULL;
+	unsigned long pfn;
+	pte_t *ptep, pte;
+
+	if (pmd_bad(*pmd))
+		return NULL;
+
+	ptep = pte_offset_map(pmd, address);
+restart:
+	pte = ptep_get_lockless(ptep);
+	if (!pte_present(pte))
+		goto out;
+
+	if (unlikely(pte_special(pte)))
+		goto out;
+	if (unlikely(pte_devmap(pte)))
+		goto out;
+
+	if (flags & FOLL_WRITE && !pte_write(pte))
+		goto out;
+
+	pfn = pte_pfn(pte);
+	if (is_zero_pfn(pfn))
+		page = pte_page(pte);
+	else
+		page = pfn_to_page(pfn);
+	if (!try_get_page(page)) {
+		page = NULL;
+		goto out;
+	}
+
+	if (unlikely(pte_val(pte) != pte_val(*ptep))) {
+		put_page(page);
+		page = NULL;
+		goto restart;
+	}
+
+	ctx->page_size = SZ_4K;
+out:
+	pte_unmap(ptep);
+	return page;
+}
+
+static struct page *follow_page_pmd(pmd_t orig, pmd_t *pmd, unsigned long flags,
+				    struct follow_page_context *ctx)
+{
+	struct page *page;
+
+	if (flags & FOLL_WRITE && !pmd_write(orig))
+		return NULL;
+
+	page = pmd_page(orig);
+	if (!try_get_page(page))
+		return NULL;
+
+	if (unlikely(pmd_val(orig) != pmd_val(*pmd))) {
+		put_page(page);
+		return NULL;
+	}
+
+	ctx->page_size = SZ_2M;
+	return page;
+}
+
+static struct page *follow_pmd_mask(unsigned long address,
+				    pud_t *pudp,
+				    unsigned int flags,
+				    struct follow_page_context *ctx)
+{
+	pmd_t *pmd = pmd_offset(pudp, address);
+	pmd_t val = READ_ONCE(*pmd);
+
+	if (pmd_none(val) || unlikely(!pmd_present(val)))
+		return NULL;
+	if (unlikely(is_hugepd(__hugepd(pmd_val(val)))))
+		return NULL;
+	if (unlikely(pmd_devmap(val)))
+		return NULL;
+
+	if (!pmd_trans_huge(val))
+		return follow_page_pte(address, pmd, flags, ctx);
+	else
+		return follow_page_pmd(val, pmd, flags, ctx);
+}
+
+static struct page *follow_pud_mask(unsigned long address,
+				    p4d_t *p4dp,
+				    unsigned int flags,
+				    struct follow_page_context *ctx)
+{
+	pud_t *pud = pud_offset(p4dp, address);
+
+	if (pud_none(*pud) || unlikely(pud_bad(*pud)))
+		return NULL;
+	if (is_hugepd(__hugepd(pud_val(*pud))))
+		return NULL;
+	if (unlikely(pud_devmap(*pud)))
+		return NULL;
+
+	return follow_pmd_mask(address, pud, flags, ctx);
+}
+
+static struct page *follow_p4d_mask(unsigned long address,
+				    pgd_t *pgdp,
+				    unsigned int flags,
+				    struct follow_page_context *ctx)
+{
+	p4d_t *p4d = p4d_offset(pgdp, address);
+
+	if (p4d_none(*p4d) || unlikely(p4d_bad(*p4d)))
+		return NULL;
+	if (is_hugepd(__hugepd(p4d_val(*p4d))))
+		return NULL;
+
+	return follow_pud_mask(address, p4d, flags, ctx);
+}
+
+static struct page *follow_page_mask(struct mm_struct *mm,
+				     unsigned long address,
+				     unsigned int flags,
+				     struct follow_page_context *ctx)
+{
+	pgd_t *pgd = pgd_offset(mm, address);
+
+	if (pgd_none(*pgd) || unlikely(pgd_bad(*pgd)))
+		return NULL;
+	if (pgd_huge(*pgd) || unlikely(is_hugepd(__hugepd(pgd_val(*pgd)))))
+		return NULL;
+
+	return follow_p4d_mask(address, pgd, flags, ctx);
+}
+
+#else
+static struct page *follow_page_mask(struct mm_struct *mm,
+				     unsigned long address,
+				     unsigned int flags,
+				     struct follow_page_context *ctx)
+{
+	return NULL;
+}
+#endif
+
+static int __userptr_chunk(struct scatterlist *sg,
 			   unsigned long start,
 			   unsigned long max,
-			   unsigned long flags)
+			   unsigned long flags,
+			   int ret)
 {
-	struct page *pages[MAX_STACK_ALLOC / sizeof(struct page *)];
 	unsigned long count = 0;
-	int err;
-
-	/*
-	 * Currently when we break out of multi-threaded mode (FOLL_FAST_ONLY)
-	 * we completely replay in single-threaded mode, clearing any
-	 * in-progress chunking.
-	 *
-	 * A possible optimization here would be to keep the chunking that has
-	 * already happened to this point and only replay the pages which
-	 * haven't yet been pinned. For now, take the brute force approach.
-	 */
-
-#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
-	use_mm(notifier->mm);
-#else
-	kthread_use_mm(notifier->mm);
-#endif
-	set_mempolicy(current, mempolicy);
 
 	do {
 		unsigned long addr = start + (count << PAGE_SHIFT);
-		int n = min_t(int, max - count, ARRAY_SIZE(pages));
+		struct page **pages = (struct page **)sg;
+		unsigned int n, i;
 
-		err = pin_user_pages_fast(addr, n, flags, pages);
-		if (err < 0)
-			goto out;
+		GEM_BUG_ON(count >= max);
 
-		for (n = 0; n < err; n++) {
-			GEM_BUG_ON(!sg || !pages[n]);
-			sg_set_page(sg, pages[n], PAGE_SIZE, 0);
-			sg = __sg_next(sg);
+		i = max - count;
+		if (i > SG_MAX_SINGLE_ALLOC)
+			i = I915_MAX_CHAIN_ALLOC;
+
+		n = ret ?: pin_user_pages_fast(addr, i, flags, pages);
+		if (unlikely(n != i)) {
+			if (n < i)
+				unpin_user_pages(pages, n);
+			memset(sg, 0, i * sizeof(*sg));
+			ret = -EFAULT;
+		} else while (n--) {
+			sg[n].page_link = (unsigned long)pages[n];
+			sg[n].length = PAGE_SIZE;
+			sg[n].offset = 0;
 		}
-		count += n;
-	} while (count < max);
 
-	err = 0;
-out:
-	set_mempolicy(current, NULL);
-#ifdef BPM_KTHREAD_USE_MM_NOT_PRESENT
-	unuse_mm(notifier->mm);
-#else
-	kthread_unuse_mm(notifier->mm);
-#endif
-	return err;
+		count += i;
+		GEM_BUG_ON(count > max);
+		if (count == max)
+			break;
+
+		sg = sg_chain_ptr(sg + I915_MAX_CHAIN_ALLOC);
+	} while (1);
+
+	return ret;
 }
 
-static void userptr_chunk(struct work_struct *wrk)
+static void userptr_local_chunk(struct i915_tbb *tbb)
 {
-	struct userptr_chunk *chunk = container_of(wrk, typeof(*chunk), work);
-	struct mmu_interval_notifier *notifier = chunk->notifier;
-	struct mempolicy *policy = chunk->policy;
+	struct userptr_chunk *chunk = container_of(tbb, typeof(*chunk), tbb);
 	struct i915_sw_fence *fence = chunk->fence;
-	unsigned long count = chunk->count;
-	unsigned long addr = chunk->addr;
 	int err;
 
-	err = __userptr_chunk(notifier, policy,
-			      memset(chunk, 0, sizeof(*chunk)),
-			      addr & PAGE_MASK, count,
-			      addr & ~PAGE_MASK);
+	err = __userptr_chunk((struct scatterlist *)chunk,
+			      chunk->addr & PAGE_MASK,
+			      chunk->count,
+			      chunk->addr & ~PAGE_MASK,
+			      READ_ONCE(fence->error));
 	i915_sw_fence_set_error_once(fence, err);
+
 	i915_sw_fence_complete(fence);
 }
 
-static void
-userptr_queue(struct userptr_chunk *chunk, struct drm_i915_private *i915)
+static void userptr_remote_chunk(struct i915_tbb *tbb)
 {
-	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
-		queue_work_on(i915_next_online_cpu(i915),
-			      system_unbound_wq,
-			      &chunk->work);
-	else
-		userptr_chunk(&chunk->work);
+	struct userptr_chunk *chunk = container_of(tbb, typeof(*chunk), tbb);
+	struct mm_struct *mm = chunk->mm;
+
+	kthread_use_mm(mm);
+	set_mempolicy(current, chunk->policy);
+
+	userptr_local_chunk(tbb);
+
+	set_mempolicy(current, NULL);
+	kthread_unuse_mm(mm);
 }
 
-static void unpin_sg(struct sg_table *sgt)
+static void
+userptr_queue(struct userptr_chunk *chunk, struct i915_tbb_node *tbb, struct list_head *tasks)
 {
-	struct scatterlist *sg;
+	chunk->tbb.fn = userptr_remote_chunk;
 
-	for (sg = sgt->sgl; sg; sg = __sg_next(sg)) {
-		unsigned long pfn;
+	i915_tbb_lock(tbb);
+	list_add_tail(&chunk->tbb.local, tasks);
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
+		i915_tbb_add_task_locked(tbb, &chunk->tbb);
+	else
+		INIT_LIST_HEAD(&chunk->tbb.link);
+	i915_tbb_unlock(tbb);
+}
+
+static void unpin_sg(struct scatterlist *sg, struct device *dev)
+{
+	for (; sg; sg = __sg_next(sg)) {
 		struct page *page;
 
 		page = sg_page(sg);
-		if (!page)
+		if (unlikely(!page))
 			continue;
 
-		for (pfn = 0; pfn < sg->length >> PAGE_SHIFT; pfn++)
-			unpin_user_page(nth_page(page, pfn));
+		if (dev && sg_dma_len(sg))
+			dma_unmap_page_attrs(dev, sg_dma_address(sg), sg_dma_len(sg),
+					     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
 
-		sg_set_page(sg, NULL, 0, 0);
+		unpin_user_page_range_dirty_lock(page, sg->length >> PAGE_SHIFT, false);
 	}
 }
 
 static int userptr_work(struct dma_fence_work *base)
 {
+	/* Spread the pagefaulting across the cores (~4MiB per core) */
+	const unsigned int spread = max_t(unsigned int, SG_MAX_SINGLE_ALLOC, SZ_8M >> PAGE_SHIFT);
 	struct userptr_work *wrk = container_of(base, typeof(*wrk), base);
 	struct drm_i915_gem_object *obj = wrk->obj;
-	struct sg_table *sgt = wrk->pages;
-	struct userptr_chunk *chunk;
+	/* user memory is likely closer to this processor than the device */
+	struct i915_tbb_node *tbb = i915_tbb_node(numa_node_id());
+	const unsigned int num_pages = obj->base.size >> PAGE_SHIFT;
+	struct scatterlist *sgt = wrk->pages;
+	struct scatterlist *sg = sgt, *tail;
+	struct userptr_chunk *chunk = NULL;
 	struct i915_sw_fence fence;
-	unsigned long seq, addr, n;
-	unsigned long spread;
-	struct scatterlist *sg;
-        int err;
+	struct device *dma = NULL;
+	unsigned long addr;
+	LIST_HEAD(tasks);
+	unsigned int n;
+	int cpu;
 
-	addr = obj->userptr.ptr;
+	BUILD_BUG_ON(sizeof(*chunk) > SG_NUM_INLINE * sizeof(*sg));
+
+	addr = obj->userptr.ptr | FOLL_FORCE;
 	if (!i915_gem_object_is_readonly(obj))
-		addr |= FOLL_WRITE | FOLL_FORCE;
+		addr |= FOLL_WRITE;
 	BUILD_BUG_ON((FOLL_WRITE | FOLL_FORCE) & PAGE_MASK);
 
-	if (!mmget_not_zero(obj->userptr.notifier.mm))
+	if (!mmget_not_zero(obj->userptr.mm))
 		return -EFAULT;
 
-	/* Spread the pagefaulting across the cores (~4MiB per core) */
-	spread = div_u64(obj->base.size, cpumask_weight(to_i915(obj->base.dev)->mm.sched->cpumask) + 1);
-	spread = max_t(unsigned long, roundup_pow_of_two(spread), SZ_4M);
+	cpu = i915_tbb_suspend_local();
+	kthread_use_mm(obj->userptr.mm);
+	set_mempolicy(current, wrk->policy);
 
-restart:
-	err = 0;
-	chunk = NULL;
 	i915_sw_fence_init_onstack(&fence);
-	seq = mmu_interval_read_begin(&obj->userptr.notifier);
-	for (n = 0, sg = sgt->sgl; n + SG_MAX_SINGLE_ALLOC < sgt->orig_nents;) {
-		if (chunk == NULL) {
-			chunk = memset(sg, 0, sizeof(*chunk));
 
-			i915_sw_fence_await(&fence);
-			chunk->fence = &fence;
-			chunk->addr = addr + (n << PAGE_SHIFT);
-			chunk->count = -n;
-			chunk->notifier = &obj->userptr.notifier;
-			chunk->policy = wrk->policy;
-			INIT_WORK(&chunk->work, userptr_chunk);
-		}
+	n = num_pages;
+	if (n > sg_capacity(sgt))
+		n = sg_capacity(sgt) - 1;
+	fence.error =
+		__userptr_chunk(sg, addr & PAGE_MASK, n, addr & ~PAGE_MASK, 0);
 
-		sg += I915_MAX_CHAIN_ALLOC;
-		GEM_BUG_ON(!sg_is_chain(sg));
-		sg = sg_chain_ptr(sg);
+	tail = sg + n - 1;
+	while (!READ_ONCE(fence.error) && n < num_pages) {
+		struct scatterlist *chain;
+		unsigned int x;
 
 		/* PMD-split locks (2M), try to minimise lock contention */
-		n += I915_MAX_CHAIN_ALLOC;
-		if (((addr + (n << PAGE_SHIFT) - 1) ^ chunk->addr) & spread) {
+		x = min_t(unsigned int, num_pages - n, SG_MAX_SINGLE_ALLOC);
+		chain = sg_pool_alloc(x, I915_GFP_ALLOW_FAIL);
+		if (unlikely(!chain)) {
+			i915_sw_fence_set_error_once(&fence, -ENOMEM);
+			break;
+		}
+
+		__sg_chain(sg + min_t(unsigned int, n, I915_MAX_CHAIN_ALLOC), chain);
+		sg = chain;
+
+		if (chunk && n + chunk->count > spread) {
 			chunk->count += n;
-			userptr_queue(chunk, to_i915(obj->base.dev));
+			userptr_queue(chunk, tbb, &tasks);
+			cond_resched();
 			chunk = NULL;
 		}
 
-		if (READ_ONCE(fence.error))
-			break;
+		if (chunk == NULL) {
+			chunk = (struct userptr_chunk *)sg;
+			chunk->fence = &fence;
+			chunk->addr = addr + ((unsigned long)n << PAGE_SHIFT);
+			chunk->count = -n;
+			chunk->mm = obj->userptr.mm;
+			chunk->policy = wrk->policy;
+			i915_sw_fence_await(&fence);
+		}
+
+		n += x;
+		n -= n < num_pages;
+		tail = chain + x - 1;
 	}
 	i915_sw_fence_commit(&fence);
+	n += n < num_pages; /* clear final entry (absent chain) on error */
+	GEM_BUG_ON(n > num_pages);
 
-	/* Leaving the last chunk for ourselves */
-	if (READ_ONCE(fence.error)) {
-		/* Do nothing more if already in error */
-		if (chunk) {
-			memset(chunk, 0, sizeof(*chunk));
-			i915_sw_fence_complete(&fence);
-		}
-	} else if (chunk) {
-		chunk->count += sgt->orig_nents;
-		userptr_chunk(&chunk->work);
-	} else {
-		err = __userptr_chunk(&obj->userptr.notifier, wrk->policy, sg,
-				      (addr & PAGE_MASK) + (n << PAGE_SHIFT),
-				      sgt->orig_nents - n,
-				      addr & ~PAGE_MASK);
-	}
-
-	if (n) {
-		i915_sw_fence_set_error_once(&fence, err);
+	/* Leaving the missing chunk for ourselves */
+	if (chunk) {
+		chunk->count += n;
+		userptr_queue(chunk, tbb, &tasks);
+		i915_tbb_run_local(tbb, &tasks, userptr_local_chunk);
 		i915_sw_fence_wait(&fence);
-		err = fence.error;
 	}
+	GEM_BUG_ON(!list_empty(&tasks));
 
-	if (err == 0 && mmu_interval_read_retry(&obj->userptr.notifier, seq))
-		err = -EAGAIN;
 	i915_sw_fence_fini(&fence);
-	if (err)
+	__sg_set_capacity(sgt, n); /* maybe cleared upon error */
+	sg_mark_end(tail);
+
+	if (unlikely(fence.error))
 		goto err;
 
-	obj->mm.page_sizes =
-		i915_sg_compact(sgt, i915_gem_sg_segment_size(obj));
-
+	GEM_BUG_ON(sg_capacity(sgt) != num_pages);
+	GEM_BUG_ON(__sg_total_length(sgt, false) != obj->base.size);
 	if (i915_gem_object_can_bypass_llc(obj))
-		drm_clflush_sg(sgt);
+		drm_clflush_sg(&sg_table(sgt));
 
-	err = i915_gem_gtt_prepare_pages(obj, sgt);
-	if (err) {
-err:		unpin_sg(sgt);
-
-		if (err == -EAGAIN)
-			goto restart;
-
-		sg_mark_end(sgt->sgl);
-		sgt->nents = 0;
+	dma = obj->base.dev->dev;
+	fence.error = i915_sg_map(sgt, i915_gem_sg_segment_size(obj), dma);
+	if (unlikely(fence.error)) {
+err:		unpin_sg(sgt, dma);
+		i915_sg_free_excess(sgt);
+	}
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM) && !fence.error) {
+		GEM_BUG_ON(__sg_total_length(sgt, false) != obj->base.size);
+		GEM_BUG_ON(__sg_total_length(sgt, true) != obj->base.size);
 	}
 
-	mmput(obj->userptr.notifier.mm);
-	return err;
+	set_mempolicy(current, NULL);
+	kthread_unuse_mm(obj->userptr.mm);
+	i915_tbb_resume_local(cpu);
+	mmput(obj->userptr.mm);
+	return fence.error;
+}
+
+static void put_page_range(struct page *page, int length, int step)
+{
+	int x;
+
+	for (x = 0 ; x < length; x += step)
+		put_page(page + (x >> PAGE_SHIFT));
+}
+
+static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
+{
+	struct scatterlist *sg = sgt, *chain = sgt + SG_NUM_INLINE - 1;
+	struct device *dev = obj->base.dev->dev;
+	struct mm_struct *mm = obj->userptr.mm;
+	unsigned long addr = obj->userptr.ptr;
+	unsigned long end = addr + obj->base.size;
+	struct follow_page_context ctx = {};
+	unsigned long phys = -1, flags;
+
+	sg_init_inline(sgt);
+	sgt->length = 0;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_UPTR_IMM_2M))
+		return -ERESTARTSYS;
+
+	flags = FOLL_FORCE;
+	if (!i915_gem_object_is_readonly(obj))
+		flags |= FOLL_WRITE;
+
+	do {
+		unsigned long p_phys;
+		unsigned long len;
+		struct page *page;
+
+		page = follow_page_mask(mm, addr, flags, &ctx);
+		if (!page)
+			break;
+
+		len = addr & (ctx.page_size - 1);
+		page += len >> PAGE_SHIFT;
+
+		len = min_t(unsigned long, ctx.page_size - len, end - addr);
+		sg_page_sizes(sgt) |= len;
+
+		/* Hopefully we can combine together 64K pages */
+		p_phys = page_to_phys(page);
+		if (phys != p_phys || p_phys & (sg->offset - 1) || sg->length >= SZ_2G) {
+			if (sg->length) {
+				GEM_BUG_ON(!sg_page(sg));
+				sg_dma_address(sg) =
+					dma_map_page_attrs(dev, sg_page(sg), 0, sg->length,
+							   DMA_BIDIRECTIONAL,
+							   DMA_ATTR_SKIP_CPU_SYNC |
+							   DMA_ATTR_WEAK_ORDERING |
+							   DMA_ATTR_NO_KERNEL_MAPPING |
+							   DMA_ATTR_NO_WARN);
+				if (dma_mapping_error(dev, sg_dma_address(sg)))
+					break;
+				sg_dma_len(sg) = sg->length;
+
+				if (sg == chain) {
+					unsigned int x;
+
+					x = min_t(unsigned int,
+						  ((end - addr - len) >> PAGE_SHIFT) + 2,
+						  SG_MAX_SINGLE_ALLOC);
+					chain = sg_pool_alloc(x, GFP_NOWAIT | __GFP_NOWARN);
+					if (unlikely(!chain))
+						break;
+
+					__sg_chain(sg, memcpy(chain, sg, sizeof(*sg)));
+					GEM_BUG_ON(sg_chain_ptr(sg) != chain);
+
+					sg = chain;
+					chain += x - 1;
+					sg_capacity(sgt) += x - 1;
+				}
+				GEM_BUG_ON(sg_is_last(sg));
+				GEM_BUG_ON(sg_is_chain(sg));
+				sg++;
+			}
+
+			sg->page_link = (unsigned long)page;
+			sg->offset = ctx.page_size;
+			sg->length = 0;
+			sg_dma_len(sg) = 0;
+			sg_count(sgt)++;
+			GEM_BUG_ON(sg_count(sgt) > sg_capacity(sgt));
+
+			phys = p_phys;
+		}
+		sg->length += len;
+		phys += len;
+		addr += len;
+		if (addr == end) {
+			sg_dma_address(sg) =
+				dma_map_page_attrs(dev, sg_page(sg), 0, sg->length,
+						   DMA_BIDIRECTIONAL,
+						   DMA_ATTR_SKIP_CPU_SYNC |
+						   DMA_ATTR_WEAK_ORDERING |
+						   DMA_ATTR_NO_KERNEL_MAPPING |
+						   DMA_ATTR_NO_WARN);
+			if (dma_mapping_error(dev, sg_dma_address(sg)))
+				break;
+
+			sg_dma_len(sg) = sg->length;
+			sg_mark_end(sg);
+			GEM_BUG_ON(__sg_total_length(sgt, false) != obj->base.size);
+			GEM_BUG_ON(__sg_total_length(sgt, true) != obj->base.size);
+			__set_bit(I915_BO_FAST_GUP_BIT, &obj->flags);
+			return 0;
+		}
+	} while(1);
+
+	if (unlikely(sg_count(sgt))) {
+		sg_mark_end(sg);
+		for (sg = sgt; sg; sg = __sg_next(sg)) {
+			if (sg_dma_len(sg))
+				dma_unmap_page_attrs(dev, sg_dma_address(sg), sg_dma_len(sg),
+						     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
+
+			put_page_range(sg_page(sg), sg->length, sg->offset);
+		}
+		i915_sg_free_excess(sgt);
+	}
+
+	return -ERESTARTSYS; /* retry from kworker */
 }
 
 static const struct dma_fence_work_ops userptr_ops = {
@@ -666,74 +575,64 @@ static const struct dma_fence_work_ops userptr_ops = {
 	.work = userptr_work,
 };
 
+#ifndef BPM_VM_FLAGS_IS_READ_ONLY_FLAG
+#define vm_flags_set(vma, flags) (vma)->vm_flags |= (flags)
+#endif
+
 static int
 probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 {
+#ifndef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
+#define VMA_ITERATOR(it_, mm_, va_) unsigned long it_ = (va_)
+#define for_each_vma_range(it_, vma_, end_) \
+	for (vma_ = find_vma(mm, it_); vma_; vma_ = (vma_)->vm_next)
+#endif
 	const unsigned long end = addr + len;
 	struct vm_area_struct *vma;
-#ifdef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
 	VMA_ITERATOR(vmi, mm, addr);
-#else
 	int ret = -EFAULT;
-#endif
 
-	if (!mmap_read_trylock(mm))
-		return 0;
-
-#ifdef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
+	mmap_read_lock(mm);
 	for_each_vma_range(vmi, vma, end) {
-#else
-	for (vma = find_vma(mm, addr); vma; vma = vma->vm_next) {
-#endif
 		if (vma->vm_start > addr)
 			break;
 
 		if (vma->vm_flags & (VM_IO | VM_PFNMAP))
 			break;
 
-#ifndef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
+		if (no_init_on_alloc &&
+		    round_down(min(vma->vm_end, end), SZ_1M) > round_up(addr, SZ_1M))
+			vm_flags_set(vma, VM_HUGEPAGE | VM_MIXEDMAP);
+
 		if (vma->vm_end >= end) {
 			ret = 0;
 			break;
 		}
-#endif
 
 		addr = vma->vm_end;
 	}
-
 	mmap_read_unlock(mm);
-#ifdef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
-	if (vma || addr < end)
-		return -EFAULT;
-	return 0;
-#else
+
 	return ret;
-#endif
 }
 
 static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
-	unsigned int num_pages; /* limited by sg_alloc_table */
 	struct userptr_work *wrk;
-	struct sg_table *st;
+	struct scatterlist *sg;
+	unsigned int num_pages; /* limited by sg_alloc_table */
 	int err;
-
-	err = probe_range(obj->userptr.notifier.mm,
-			  obj->userptr.ptr,
-			  obj->base.size);
-	if (err)
-		return err;
 
 	if (!safe_conversion(&num_pages, obj->base.size >> PAGE_SHIFT))
 		return -E2BIG;
 
-	st = kmalloc(sizeof(*st), GFP_KERNEL);
-	if (!st)
+	sg = __sg_table_inline_create(I915_GFP_ALLOW_FAIL);
+	if (unlikely(!sg))
 		return -ENOMEM;
 
-	err = sg_alloc_table(st, num_pages, I915_GFP_ALLOW_FAIL);
-	if (err)
-		goto err_free;
+	atomic64_sub(obj->base.size, &obj->mm.region.mem->avail);
+	if (!userptr_imm(obj, sg))
+		goto out;
 
 	wrk = kmalloc(sizeof(*wrk), GFP_KERNEL);
 	if (!wrk) {
@@ -743,34 +642,36 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	dma_fence_work_init(&wrk->base, &userptr_ops,
 			    to_i915(obj->base.dev)->mm.sched);
 	wrk->obj = obj;
-	wrk->pages = st;
+	wrk->pages = sg;
 	wrk->policy = get_mempolicy(current);
-
-	__i915_gem_object_set_pages(obj, st, PAGE_SIZE); /* placeholder */
-	atomic64_sub(obj->base.size, &obj->mm.region.mem->avail);
+	if (wrk->policy)
+		wrk->base.cpu = raw_smp_processor_id();
 
 	i915_gem_object_migrate_prepare(obj, &wrk->base.rq.fence);
 	dma_fence_work_commit(&wrk->base);
+	set_tsk_need_resched(current);
+out:
+	__i915_gem_object_set_pages(obj, sg);
 	return 0;
 
 err_sg:
-	sg_free_table(st);
-err_free:
-	kfree(st);
+	atomic64_add(obj->base.size, &obj->mm.region.mem->avail);
+	sg_table_inline_free(sg);
 	return err;
 }
 
 static int
 i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
-			   struct sg_table *pages)
+			   struct scatterlist *pages)
 {
-	struct sgt_iter sgt_iter;
-	struct pagevec pvec;
-	struct page *page;
-	bool dirty;
+	struct scatterlist *sg;
+	bool dirty, gup;
 
-	if (!i915_gem_object_migrate_finish(obj))
-		i915_gem_gtt_finish_pages(obj, pages);
+	i915_gem_object_migrate_finish(obj);
+	if (!sg_count(pages))
+		goto out;
+
+	intel_tlb_sync(to_i915(obj->base.dev), obj->mm.tlb);
 
 	/*
 	 * We always mark objects as dirty when they are used by the GPU,
@@ -779,24 +680,32 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 	 */
 	dirty = !i915_gem_object_is_readonly(obj);
 
-	pagevec_init(&pvec);
-	for_each_sgt_page(page, sgt_iter, pages) {
-		if (!pagevec_add(&pvec, page)) {
-			unpin_user_pages_dirty_lock(pvec.pages,
-						    pagevec_count(&pvec),
-						    dirty);
-			pagevec_reinit(&pvec);
+	gup = __test_and_clear_bit(I915_BO_FAST_GUP_BIT, &obj->flags);
+	for (sg = pages; sg; sg = __sg_next(sg)) {
+		struct page *page;
+
+		page = sg_page(sg);
+		if (unlikely(!page))
+			break;
+
+		GEM_BUG_ON(!sg->length);
+
+		if (sg_dma_len(sg))
+			dma_unmap_page_attrs(obj->base.dev->dev, sg_dma_address(sg), sg_dma_len(sg),
+					     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
+
+		if (gup) {
+			if (dirty && !PageDirty(page))
+				set_page_dirty_lock(page);
+			put_page_range(page, sg->length, sg->offset);
+		} else {
+			unpin_user_page_range_dirty_lock(page, sg->length >> PAGE_SHIFT, dirty);
 		}
 	}
-	if (pagevec_count(&pvec))
-		unpin_user_pages_dirty_lock(pvec.pages,
-					    pagevec_count(&pvec),
-					    dirty);
 
+out:
 	atomic64_add(obj->base.size, &obj->mm.region.mem->avail);
-
-	sg_free_table(pages);
-	kfree(pages);
+	sg_table_inline_free(pages);
 	return 0;
 }
 
@@ -897,7 +806,9 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 			return -ENODEV;
 	}
 
-	i915_gem_flush_free_objects(i915);
+	ret = probe_range(current->mm, args->user_ptr, args->user_size);
+	if (unlikely(ret))
+		return ret;
 
 	obj = i915_gem_object_alloc();
 	if (obj == NULL)
@@ -911,24 +822,12 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 	if (args->flags & I915_USERPTR_READ_ONLY)
 		i915_gem_object_set_readonly(obj);
 
+	i915_gem_userptr_init__mm(obj);
 	i915_gem_object_init_memory_region(obj,
 					   i915->mm.regions[INTEL_REGION_SMEM]);
 
-	/* And keep a pointer to the current->mm for resolving the user pages
-	 * at binding. This means that we need to hook into the mmu_notifier
-	 * in order to detect if the mmu is destroyed.
-	 */
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-	ret = i915_gem_userptr_init__mm_struct(obj);
-	if (ret == 0)
-		ret = i915_gem_userptr_init__mmu_notifier(obj);
-#else
-	ret = i915_gem_userptr_init__mmu_notifier(obj);
-#endif
-	if (ret == 0)
-		ret = drm_gem_handle_create(file, &obj->base, &handle);
-
 	/* drop reference from allocate - handle holds it now */
+	ret = drm_gem_handle_create(file, &obj->base, &handle);
 	i915_gem_object_put(obj);
 	if (ret)
 		return ret;

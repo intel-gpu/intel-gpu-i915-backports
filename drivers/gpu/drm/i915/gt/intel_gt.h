@@ -130,7 +130,7 @@ static inline void intel_tlb_sync(struct drm_i915_private *i915, const u32 *tlb)
 
 	for_each_gt(gt, i915, id) {
 		if (tlb[id])
-			intel_gt_invalidate_tlb_sync(gt, tlb[id]);
+			intel_gt_invalidate_tlb_sync(gt, tlb[id], false);
 	}
 }
 
@@ -203,6 +203,11 @@ __printf(3, 4)
 void intel_gt_log_driver_error(struct intel_gt *gt,
 			       const enum intel_gt_driver_errors error,
 			       const char *fmt, ...);
+
+static inline void intel_gt_queue_work(struct intel_gt *gt, struct work_struct *work)
+{
+	i915_scheduler_queue_work_on(gt->sched, WORK_CPU_UNBOUND, work);
+}
 
 static inline void intel_gt_set_wedged_async(struct intel_gt *gt)
 {

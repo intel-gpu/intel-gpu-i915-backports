@@ -4,11 +4,11 @@
  */
 
 #include "i915_drv.h"
+#include "intel_gt.h"
+#include "intel_gt_print.h"
+#include "intel_gt_requests.h"
 #include "intel_gt_sysfs.h"
 #include "sysfs_gt_errors.h"
-
-#include "gt/intel_gt.h"
-#include "gt/intel_gt_requests.h"
 
 static ssize_t
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -442,28 +442,25 @@ void intel_gt_sysfs_register_errors(struct intel_gt *gt, struct kobject *parent)
 		goto err;
 
 	if (!IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, gt_error_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error sysfs\n", gt->info.id);
+		gt_warn(gt, "Failed to create sysfs: %s\n", "gt_error");
 
 	if (HAS_GT_ERROR_VECTORS(gt->i915) && sysfs_create_files(dir, gt_error_vctr_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error_vector sysfs\n",
-			 gt->info.id);
+		gt_warn(gt, "Failed to create sysfs: %s\n", "gt_error_vector");
 
 	/* Report GSC errors on root gt only */
 	if ((HAS_MEM_SPARING_SUPPORT(gt->i915) && gt->info.id == 0) &&
 	    sysfs_create_files(dir, gsc_error_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u gsc_error sysfs\n", gt->info.id);
+		gt_warn(gt, "Failed to create sysfs: %s\n", "gsc_error");
 
 	if (IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, pvc_gt_error_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u gt_error sysfs\n", gt->info.id);
+		gt_warn(gt, "Failed to create sysfs: %s\n", "gt_error");
 
 	if (IS_PONTEVECCHIO(gt->i915) && sysfs_create_files(dir, pvc_soc_error_attrs))
-		drm_warn(&gt->i915->drm, "Failed to create gt%u soc_error sysfs\n", gt->info.id);
+		gt_warn(gt, "Failed to create sysfs: %s\n", "soc_error");
 
 	return;
 
 err:
-	drm_err(&gt->i915->drm,
-		"Failed to create gt%u error_counter directory\n",
-		gt->info.id);
+	gt_warn(gt, "Failed to create sysfs: %s\n", "error_counter");
 	kobject_put(dir);
 }

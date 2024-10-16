@@ -498,8 +498,7 @@ static int ct_write(struct intel_guc_ct *ct,
 
 	/* update local copies */
 	ctb->tail = tail;
-	GEM_BUG_ON(atomic_read(&ctb->space) < len + GUC_CTB_HDR_LEN);
-	atomic_sub(len + GUC_CTB_HDR_LEN, &ctb->space);
+	atomic_set(&ctb->space, CIRC_SPACE(tail, READ_ONCE(desc->head), size));
 
 	/* Wa_22016122933: Theoretically write combining buffer flush is
 	 * needed here to make the tail update visible to GuC right away,
@@ -588,39 +587,21 @@ static inline bool h2g_has_room(struct intel_guc_ct *ct, u32 len_dw)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	struct guc_ct_buffer_desc *desc = ctb->desc;
-	u32 head;
 	u32 space;
 
 	if (atomic_read(&ctb->space) >= len_dw)
 		return true;
 
-	head = READ_ONCE(desc->head);
-	if (unlikely(head > ctb->size)) {
-		CT_ERROR(ct, "Invalid head offset %u >= %u)\n",
-			 head, ctb->size);
-		desc->status |= GUC_CTB_STATUS_OVERFLOW;
-		ctb->broken = true;
-		CT_DEAD(ct, H2G_HAS_ROOM);
-		return false;
-	}
-
-	space = CIRC_SPACE(ctb->tail, head, ctb->size);
-	atomic_set(&ctb->space, space);
-
+	space = CIRC_SPACE(ctb->tail, READ_ONCE(desc->head), ctb->size);
 	return space >= len_dw;
 }
 
-static int has_room_nb(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw)
+static bool has_room_nb(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw)
 {
 	bool h2g = h2g_has_room(ct, h2g_dw);
 	bool g2h = g2h_has_room(ct, g2h_dw);
 
-	lockdep_assert_held(&ct->ctbs.send.lock);
-
-	if (unlikely(!h2g || !g2h))
-		return -EBUSY;
-
-	return 0;
+	return h2g && g2h;
 }
 
 #define G2H_LEN_DW(f) ({ \
@@ -635,15 +616,17 @@ static int ct_send_nb(struct intel_guc_ct *ct,
 		      u32 flags)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
-	unsigned long spin_flags;
 	u32 g2h_len_dw = G2H_LEN_DW(flags);
+	unsigned long spin_flags;
 	u32 fence;
-	int ret;
+	int ret = -EBUSY;
+
+	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
+		return ret;
 
 	spin_lock_irqsave(&ctb->lock, spin_flags);
 
-	ret = has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw);
-	if (unlikely(ret))
+	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
 		goto out;
 
 	fence = ct_get_next_fence(ct);
@@ -656,9 +639,8 @@ out:
 	spin_unlock_irqrestore(&ctb->lock, spin_flags);
 	intel_guc_notify(ct_to_guc(ct));
 
-	if (ret)
-		/* Drain the interrupt workqueue to prevent overfilling send/recv ct */
-		intel_guc_ct_receive(ct);
+	/* Drain the interrupt workqueue to prevent overfilling send/recv ct */
+	intel_guc_ct_receive(ct);
 
 	return ret;
 }
@@ -680,9 +662,6 @@ static int ct_send(struct intel_guc_ct *ct,
 	GEM_BUG_ON(!response_buf && response_buf_size);
 	might_sleep();
 
-resend:
-	send_again = false;
-
 	request.status = 0;
 	request.response_len = response_buf_size;
 	request.response_buf = response_buf;
@@ -690,19 +669,20 @@ resend:
 	if (mutex_lock_interruptible(&ct->send_mutex))
 		return -ERESTARTSYS;
 
-	spin_lock_irq(&ctb->lock);
+resend:
+	send_again = false;
 	err = ___wait_event(ct->wq,
-			    h2g_has_room(ct, len + GUC_CTB_HDR_LEN) &&
-			    g2h_has_room(ct, GUC_CTB_HXG_MSG_MAX_LEN),
+			    has_room_nb(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN),
 			    TASK_INTERRUPTIBLE, true, 0,
-			    spin_unlock_irq(&ctb->lock);
 			    intel_guc_ct_receive(ct);
-			    schedule();
-			    spin_lock_irq(&ctb->lock));
-	if (unlikely(err)) {
+			    schedule());
+	if (unlikely(err))
+		goto unlock;
+
+	spin_lock_irq(&ctb->lock);
+	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN)) {
 		spin_unlock_irq(&ctb->lock);
-		mutex_unlock(&ct->send_mutex);
-		return err;
+		goto resend;
 	}
 
 	request.fence = ct_get_next_fence(ct);
@@ -762,8 +742,6 @@ resend:
 	}
 
 unlink:
-	mutex_unlock(&ct->send_mutex);
-
 	spin_lock_irq(&ct->requests.lock);
 	list_del(&request.link);
 	spin_unlock_irq(&ct->requests.lock);
@@ -771,6 +749,8 @@ unlink:
 	if (unlikely(send_again))
 		goto resend;
 
+unlock:
+	mutex_unlock(&ct->send_mutex);
 	return err;
 }
 
@@ -1146,6 +1126,7 @@ static noinline void ct_incoming_request_worker_func(struct work_struct *w)
 			CT_DEAD(ct, PROCESS_FAILED);
 		}
 		ct_free_msg(request);
+		cond_resched();
 	}
 }
 
@@ -1215,7 +1196,7 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 	}
 
 	if (llist_add(&request->link, &ct->requests.incoming))
-		queue_work(system_unbound_wq, &ct->requests.worker);
+		intel_gt_queue_work(guc_to_gt(ct_to_guc(ct)), &ct->requests.worker);
 
 	return 0;
 }
@@ -1323,6 +1304,9 @@ out:
 
 void intel_guc_ct_reset(struct intel_guc_ct *ct)
 {
+	if (!ct->ctbs.recv.desc)
+		return;
+
 	/* Flush the CT interrupt handlers */
 	intel_synchronize_hardirq(guc_to_gt(ct_to_guc(ct))->i915);
 
@@ -1332,7 +1316,9 @@ void intel_guc_ct_reset(struct intel_guc_ct *ct)
 	/* And wait for any other threads to finish processing messages */
 	synchronize_rcu_expedited();
 
+	/* Finish processing the messages */
 	cancel_work_sync(&ct->requests.worker);
+	ct_incoming_request_worker_func(&ct->requests.worker);
 }
 
 /*
@@ -1495,29 +1481,34 @@ corrupted:
 }
 
 void intel_guc_ct_print_info(struct intel_guc_ct *ct,
-			     struct drm_printer *p)
+			     struct drm_printer *p,
+			     int indent)
 {
-	drm_printf(p, "CT %s\n", str_enabled_disabled(ct->enabled));
+	i_printf(p, indent, "CT: %s\n", str_enabled_disabled(ct->enabled));
 
 	if (!ct->enabled)
 		return;
 
-	drm_printf(p, "H2G Space: %u\n",
-		   atomic_read(&ct->ctbs.send.space) * 4);
-	drm_printf(p, "Head: %u\n",
-		   ct->ctbs.send.desc->head);
-	drm_printf(p, "Tail: %u\n",
-		   ct->ctbs.send.desc->tail);
-	drm_printf(p, "G2H Space: %u\n",
-		   atomic_read(&ct->ctbs.recv.space) * 4);
-	drm_printf(p, "Head: %u\n",
-		   ct->ctbs.recv.desc->head);
-	drm_printf(p, "Tail: %u\n",
-		   ct->ctbs.recv.desc->tail);
-	drm_printf(p, "Requests: { pending: %s, incoming: %s, work: %s }\n",
-		   str_yes_no(!list_empty(&ct->requests.pending)),
-		   str_yes_no(!llist_empty(&ct->requests.incoming)),
-		   str_yes_no(work_busy(&ct->requests.worker)));
+	indent += 2;
+
+	i_printf(p, indent, "H2G: { Head: %u, Tail: %u, Space: %u [%u] }\n",
+		 ct->ctbs.send.desc->head,
+		 ct->ctbs.send.desc->tail,
+		 atomic_read(&ct->ctbs.send.space) * 4,
+		 CIRC_SPACE(ct->ctbs.send.desc->tail,
+			    ct->ctbs.send.desc->head,
+			    ct->ctbs.send.size) * 4);
+	i_printf(p, indent, "G2H: { Head: %u, Tail: %u, Space: %u [%u] }\n",
+		 ct->ctbs.recv.desc->head,
+		 ct->ctbs.recv.desc->tail,
+		 atomic_read(&ct->ctbs.recv.space) * 4,
+		 CIRC_SPACE(ct->ctbs.recv.desc->tail,
+			    ct->ctbs.recv.desc->head,
+			    ct->ctbs.recv.size) * 4);
+	i_printf(p, indent, "Requests: { pending: %s, incoming: %s, work: %s }\n",
+		 str_yes_no(!list_empty(&ct->requests.pending)),
+		 str_yes_no(!llist_empty(&ct->requests.incoming)),
+		 str_yes_no(work_busy(&ct->requests.worker)));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)

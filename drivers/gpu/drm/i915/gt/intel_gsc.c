@@ -16,6 +16,7 @@
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gsc.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_print.h"
 
 #define GSC_BAR_LENGTH  0x00000FFC
 
@@ -92,22 +93,22 @@ gsc_ext_om_alloc(struct intel_gsc *gsc, struct intel_gsc_intf *intf, size_t size
 					  I915_BO_ALLOC_CONTIGUOUS |
 					  I915_BO_CPU_CLEAR);
 	if (IS_ERR(obj)) {
-		drm_err(&gt->i915->drm, "Failed to allocate gsc memory\n");
-		return PTR_ERR(obj);
+		err = PTR_ERR(obj);
+		goto err;
 	}
 
 	err = i915_gem_object_pin_pages_unlocked(obj);
-	if (err) {
-		drm_err(&gt->i915->drm, "Failed to pin pages for gsc memory\n");
-		goto out_put;
-	}
+	if (err)
+		goto err_put;
 
 	intf->gem_obj = obj;
 
 	return 0;
 
-out_put:
+err_put:
 	i915_gem_object_put(obj);
+err:
+	gt_err(gt, "Failed to allocate gsc memory\n");
 	return err;
 }
 

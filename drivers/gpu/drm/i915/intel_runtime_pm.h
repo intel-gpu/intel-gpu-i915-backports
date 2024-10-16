@@ -197,10 +197,12 @@ void intel_runtime_pm_put_raw(struct intel_runtime_pm *rpm, intel_wakeref_t wref
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM)
 void print_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm,
-				    struct drm_printer *p);
+				    struct drm_printer *p,
+				    int indent);
 #else
 static inline void print_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm,
-						  struct drm_printer *p)
+						  struct drm_printer *p,
+						  int indent)
 {
 }
 #endif

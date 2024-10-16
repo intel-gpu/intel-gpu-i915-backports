@@ -98,13 +98,13 @@ static int check_get_pages(struct drm_i915_gem_object *obj)
 	return 0;
 }
 
-static struct sg_table *
-i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
-			  enum dma_data_direction map_dir)
+static struct scatterlist *
+__i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
+			    enum dma_data_direction map_dir)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
 	struct scatterlist *dst, *end = NULL;
-	struct sg_table *sgt;
+	struct scatterlist *sgt;
 	unsigned int nents;
 	int ret;
 
@@ -118,7 +118,7 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 	 * NOTE: For LMEM objects the dma entries contain the device specific
 	 * address information.  This will get overwritten by dma-buf-map
 	 */
-	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	sgt = sg_table_inline_create(GFP_KERNEL);
 	if (!sgt) {
 		ret = -ENOMEM;
 		goto err;
@@ -129,22 +129,21 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 
 		nents = 0;
 		for_each_object_segment(sobj, obj)
-			nents += sobj->mm.pages->orig_nents;
+			nents += sg_count(sobj->mm.pages);
 
 		obj = i915_gem_object_first_segment(obj);
 	} else {
-		nents = obj->mm.pages->orig_nents;
+		nents = sg_count(obj->mm.pages);
 		if (obj->pair)
-			nents += obj->pair->mm.pages->orig_nents;
+			nents += sg_count(obj->pair->mm.pages);
 	}
 
-	if (sg_alloc_table(sgt, nents, I915_GFP_ALLOW_FAIL)) {
+	if (sg_table_inline_alloc(sgt, nents, I915_GFP_ALLOW_FAIL)) {
 		ret = -ENOMEM;
 		goto err_free;
 	}
 
-	sgt->nents = 0;
-	dst = sgt->sgl;
+	dst = sgt;
 	do {
 		struct intel_memory_region *mem = obj->mm.region.mem;
 		struct scatterlist *src;
@@ -158,8 +157,11 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 		if (ret)
 			goto err_unmap;
 
-		for (src = obj->mm.pages->sgl; src; src = __sg_next(src)) {
+		for (src = obj->mm.pages; src; src = __sg_next(src)) {
 			dma_addr_t addr, len;
+
+			if (!sg_dma_len(src))
+				break;
 
 			GEM_BUG_ON(!dst);
 			sg_set_page(dst, sg_page(src), src->length, 0);
@@ -191,7 +193,7 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 
 			end = dst;
 			dst = __sg_next(dst);
-			sgt->nents++;
+			sg_count(sgt)++;
 		}
 
 		/* advance to next segment object, or to the object's pair */
@@ -201,6 +203,10 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 		else
 			obj = obj->pair;
 	} while (obj);
+	if (unlikely(!end)) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
 	sg_mark_end(end);
 
 	return sgt;
@@ -208,15 +214,33 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 err_unmap:
 	if (end) {
 		sg_mark_end(end);
-		unmap_sg(attach->dev,
-			 sgt->sgl, map_dir,
-			 DMA_ATTR_SKIP_CPU_SYNC);
+		unmap_sg(attach->dev, sgt, map_dir, DMA_ATTR_SKIP_CPU_SYNC);
 	}
-	sg_free_table(sgt);
 err_free:
-	kfree(sgt);
+	sg_table_inline_free(sgt);
 err:
 	return ERR_PTR(ret);
+}
+
+static struct sg_table *
+i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
+			  enum dma_data_direction map_dir)
+{
+	struct scatterlist *sg;
+	struct sg_table *sgt;
+
+	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt)
+		return NULL;
+
+	sg = __i915_gem_copy_map_dma_buf(attach, map_dir);
+	if (!sg) {
+		kfree(sgt);
+		return NULL;
+	}
+
+	*sgt = sg_table(sg);
+	return sgt;
 }
 
 static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
@@ -224,7 +248,7 @@ static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
 				   enum dma_data_direction dir)
 {
 	unmap_sg(attach->dev, sgt->sgl, dir, DMA_ATTR_SKIP_CPU_SYNC);
-	sg_free_table(sgt);
+	sg_table_inline_free(sgt->sgl);
 	kfree(sgt);
 }
 
@@ -690,7 +714,7 @@ static int update_fabric(struct dma_buf *dma_buf,
  *
  * Returns sgt or -errno on error, -EIO indicates no fabric connectivity.
  */
-static struct sg_table *map_fabric_connectivity(struct drm_i915_gem_object *obj)
+static struct scatterlist *map_fabric_connectivity(struct drm_i915_gem_object *obj)
 {
 	struct dma_buf_attachment *attach = obj->base.import_attach;
 	struct drm_i915_gem_object *import;
@@ -706,7 +730,7 @@ static struct sg_table *map_fabric_connectivity(struct drm_i915_gem_object *obj)
 		return ERR_PTR(-EIO);
 	}
 
-	return i915_gem_copy_map_dma_buf(attach, DMA_NONE);
+	return __i915_gem_copy_map_dma_buf(attach, DMA_NONE);
 }
 
 /**
@@ -719,29 +743,32 @@ static struct sg_table *map_fabric_connectivity(struct drm_i915_gem_object *obj)
  */
 static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *sgt;
-	unsigned int sg_page_sizes;
+	struct scatterlist *sg;
 
 	assert_object_held(obj);
 
 	/* See if there is a fabric, and set things up. */
-	sgt = map_fabric_connectivity(obj);
+	sg = map_fabric_connectivity(obj);
+	if (PTR_ERR(sg) == -EIO) {
+		struct sg_table *tbl;
 
-	if (IS_ERR(sgt) && PTR_ERR(sgt) == -EIO)
-		sgt = dma_buf_map_attachment(obj->base.import_attach,
+		tbl = dma_buf_map_attachment(obj->base.import_attach,
 					     DMA_BIDIRECTIONAL);
-	if (IS_ERR(sgt))
-		return PTR_ERR(sgt);
+		if (IS_ERR(tbl))
+			return PTR_ERR(tbl);
 
-	sg_page_sizes = i915_sg_dma_sizes(sgt->sgl);
+		obj->dmabuf_sgt = tbl;
+		sg = tbl->sgl;
+	}
+	if (IS_ERR(sg))
+		return PTR_ERR(sg);
 
-	__i915_gem_object_set_pages(obj, sgt, sg_page_sizes);
-
+	__i915_gem_object_set_pages(obj, sg);
 	return 0;
 }
 
 static int i915_gem_object_put_pages_dmabuf(struct drm_i915_gem_object *obj,
-					     struct sg_table *pages)
+					    struct scatterlist *pages)
 {
 	if (i915_gem_object_has_fabric(obj)) {
 		struct drm_i915_gem_object *export;
@@ -751,13 +778,12 @@ static int i915_gem_object_put_pages_dmabuf(struct drm_i915_gem_object *obj,
 		intel_iaf_mapping_put(to_i915(obj->base.dev));
 
 		i915_gem_object_clear_fabric(obj);
-		sg_free_table(pages);
-		kfree(pages);
+		sg_table_inline_free(pages);
 		return 0;
 	}
 
-	dma_buf_unmap_attachment(obj->base.import_attach, pages,
-				 DMA_BIDIRECTIONAL);
+	dma_buf_unmap_attachment(obj->base.import_attach,
+				 obj->dmabuf_sgt, DMA_BIDIRECTIONAL);
 	return 0;
 }
 
@@ -849,6 +875,5 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/mock_dmabuf.c"
 #include "selftests/i915_gem_dmabuf.c"
 #endif

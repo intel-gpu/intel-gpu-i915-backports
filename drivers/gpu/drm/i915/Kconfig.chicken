@@ -114,3 +114,11 @@ config DRM_I915_CHICKEN_SMEM_DMA
 config DRM_I915_CHICKEN_SMEM_IDLE
 	bool "Offload preclearing while idle"
 	default n
+
+config DRM_I915_CHICKEN_SMEM_SPLIT
+	bool "Allow splitting of higher order pages from the precleared system memory cache"
+	default y
+
+config DRM_I915_CHICKEN_UPTR_IMM_2M
+	bool "Enable immediate retrieval of 2MiB hugepages from inside userptr"
+	default n

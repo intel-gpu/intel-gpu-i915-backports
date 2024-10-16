@@ -272,8 +272,8 @@ static int live_ccs_active(void *arg)
 
 	intel_gt_pm_put(gt, wf);
 
-	intel_gt_pm_wait_for_idle(gt);
-	if (gt->ccs.config) {
+	err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+	if (err == 0 && gt->ccs.config) {
 		pr_err("Failed to reset CCS config on idling, config:%x\n",
 		       gt->ccs.config);
 		err = -EINVAL;
@@ -444,7 +444,9 @@ static int live_ccs_sim_reset(void *arg)
 
 	with_intel_gt_pm(gt, wf)
 		expected = apply_ccs_mode(gt, engine->mask);
-	intel_gt_pm_wait_for_idle(gt);
+	err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
+	if (err)
+		return err;
 	GEM_BUG_ON(gt->ccs.config | gt->ccs.active); /* no cheating! */
 
 	intel_engine_pm_get(engine);

@@ -301,8 +301,7 @@ retry:
 
 int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		  u32 align, unsigned int flags);
-int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
-			 u32 align, unsigned int flags);
+int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww);
 
 static inline int i915_vma_pin_count(const struct i915_vma *vma)
 {
@@ -372,7 +371,7 @@ void i915_vma_unpin_iomap(struct i915_vma *vma);
 static inline struct page *i915_vma_first_page(struct i915_vma *vma)
 {
 	GEM_BUG_ON(!vma->pages);
-	return sg_page(vma->pages->sgl);
+	return sg_page(vma->pages);
 }
 
 static inline bool i915_vma_is_scanout(const struct i915_vma *vma)

@@ -78,8 +78,6 @@ static int __guc_rc_control(struct intel_guc *guc, bool enable)
 		return ret;
 	}
 
-	guc_info(guc, "RC %s\n", str_enabled_disabled(enable));
-
 	return 0;
 }
 

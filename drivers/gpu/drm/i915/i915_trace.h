@@ -943,13 +943,11 @@ TRACE_EVENT(i915_mm_fault,
 				   __entry->obj_size = vma->obj->base.size;
 				   strcpy(__entry->region, vma->obj->mm.region.mem->name);
 				   __entry->vma_size = i915_vma_size(vma);
-				   __entry->pg_sz_mask = vma->page_sizes;
 				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   } else {
 				   __entry->obj = NULL;
 				   __entry->obj_size = 0;
 				   __entry->vma_size = 0;
-				   __entry->pg_sz_mask = 0;
 				   __entry->is_bound = false;
 				   strcpy(__entry->region, "none");
 			   }
@@ -963,12 +961,12 @@ TRACE_EVENT(i915_mm_fault,
 			   __entry->pdata = info->pdata;
 			   ),
 
-	    TP_printk("dev %d vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx pgsz %x, %s[%d] %d: %s (0x%x)",
+	    TP_printk("dev %d vm %p [asid %d]: GPU %s fault on %s obj %p [size %lld] address %llx%s size 0x%llx, %s[%d] %d: %s (0x%x)",
 		      __entry->dev, __entry->vm, __entry->asid,
 		      intel_access_type2str(__entry->access_type),
 		      __entry->region,
 		      __entry->obj, __entry->obj_size, __entry->addr,
-		      __entry->is_bound ? " bound" : "", __entry->vma_size, __entry->pg_sz_mask,
+		      __entry->is_bound ? " bound" : "", __entry->vma_size,
 		      intel_engine_class_repr(__entry->engine_class),
 		      __entry->engine_instance, __entry->fault_level,
 		      intel_pagefault_type2str(__entry->fault_type), __entry->pdata)

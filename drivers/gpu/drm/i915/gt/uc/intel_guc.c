@@ -295,7 +295,7 @@ static u32 guc_ctl_debug_flags(struct intel_guc *guc)
 	u32 guc_log_destination = i915->params.guc_log_destination;
 
 	if (guc_log_destination > GUC_LOG_DESTINATION_MEM_AND_NPK) {
-		drm_err(&i915->drm, "Invalid GuC log destination. Defaulting to memory.\n");
+		guc_err(guc, "Invalid GuC log destination. Defaulting to memory.\n");
 		guc_log_destination = GUC_LOG_DESTINATION_MEM;
 	}
 
@@ -998,7 +998,7 @@ int intel_guc_crash_process_msg(struct intel_guc *guc, u32 action)
 		guc_err(guc, "Unknown crash notification\n");
 
 	guc_dump_crash_registers(guc);
-	queue_work(system_unbound_wq, &guc->dead_guc_worker);
+	intel_gt_queue_work(guc_to_gt(guc), &guc->dead_guc_worker);
 
 	return 0;
 }
@@ -1021,7 +1021,7 @@ int intel_guc_to_host_process_recv_msg(struct intel_guc *guc,
 
 	if (msg & (INTEL_GUC_RECV_MSG_CRASH_DUMP_POSTED | INTEL_GUC_RECV_MSG_EXCEPTION)) {
 		guc_dump_crash_registers(guc);
-		queue_work(system_unbound_wq, &guc->dead_guc_worker);
+		intel_gt_queue_work(guc_to_gt(guc), &guc->dead_guc_worker);
 	}
 
 	return 0;
@@ -1381,7 +1381,7 @@ static u32 __guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	 */
 	u32 action[] = {
 		INTEL_GUC_ACTION_TLB_INVALIDATION,
-		intel_tlb_next_seqno(guc_to_gt(guc)),
+		0,
 		INTEL_GUC_TLB_INVAL_PAGE_SELECTIVE << INTEL_GUC_TLB_INVAL_TYPE_SHIFT |
 		mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
 		INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
@@ -1396,10 +1396,16 @@ static u32 __guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	GEM_BUG_ON(!IS_ALIGNED(start, length));
 	GEM_BUG_ON(range_overflows(start, length, vm_total));
 
-	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)) == 0)
-		return action[1];
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
+		return 0;
 
-	return 0;
+	action[1] = intel_tlb_next_seqno(guc_to_gt(guc));
+	action[2] &= ~INTEL_GUC_TLB_INVAL_FLUSH_CACHE;
+
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
+		return 0;
+
+	return action[1];
 }
 
 /*
@@ -1462,60 +1468,62 @@ int intel_guc_invalidate_tlb_all(struct intel_guc *guc)
  *
  * Pretty printer for GuC load status.
  */
-void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p)
+void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p, int indent)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct intel_uncore *uncore = gt->uncore;
 	intel_wakeref_t wakeref;
 
 	if (!intel_guc_is_supported(guc)) {
-		drm_printf(p, "GuC not supported\n");
+		i_printf(p, indent, "GuC: not supported\n");
 		return;
 	}
 
 	if (!intel_guc_is_wanted(guc)) {
-		drm_printf(p, "GuC disabled\n");
+		i_printf(p, indent, "GuC: disabled\n");
 		return;
 	}
 
-	intel_uc_fw_dump(&guc->fw, p);
+	intel_uc_fw_dump(&guc->fw, p, indent);
+	indent += 2;
 
-	if (IS_SRIOV_VF(guc_to_gt(guc)->i915))
+	if (IS_SRIOV_VF(gt->i915))
 		return;
 
-	with_intel_runtime_pm(uncore->rpm, wakeref) {
-		u32 status = intel_uncore_read(uncore, GUC_STATUS);
-		u32 i;
+	with_intel_runtime_pm_if_active(uncore->rpm, wakeref) {
+		char buf[160];
+		int len;
+		int i;
 
-		drm_printf(p, "GuC status 0x%08x:\n", status);
-		drm_printf(p, "\tBootrom status = 0x%x\n",
-			   (status & GS_BOOTROM_MASK) >> GS_BOOTROM_SHIFT);
-		drm_printf(p, "\tuKernel status = 0x%x\n",
-			   (status & GS_UKERNEL_MASK) >> GS_UKERNEL_SHIFT);
-		drm_printf(p, "\tMIA Core status = 0x%x\n",
-			   (status & GS_MIA_MASK) >> GS_MIA_SHIFT);
-		drm_puts(p, "Scratch registers:\n");
-		for (i = 0; i < 16; i++) {
-			drm_printf(p, "\t%2d: \t0x%x\n",
-				   i, intel_uncore_read(uncore, SOFT_SCRATCH(i)));
-		}
+		len = intel_uncore_read(uncore, GUC_STATUS);
+		i_printf(p, indent, "Status 0x%08x: { bootrom: 0x%x, kernel: 0x%x, MIA core: 0x%x}\n",
+			 len,
+			 (len & GS_BOOTROM_MASK) >> GS_BOOTROM_SHIFT,
+			 (len & GS_UKERNEL_MASK) >> GS_UKERNEL_SHIFT,
+			 (len & GS_MIA_MASK) >> GS_MIA_SHIFT);
+
+		len = 0;
+		for (i = 0; i < 16; i++)
+			len += snprintf(buf + len, sizeof(buf) - len, "%08x ", intel_uncore_read(uncore, SOFT_SCRATCH(i)));
+		buf[len - 1] = '\0';
+		i_printf(p, indent, "Scratch: [%s]\n", buf);
 	}
 }
 
-void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p)
+void intel_guc_print_info(struct intel_guc *guc, struct drm_printer *p, int indent)
 {
-	intel_guc_load_status(guc, p);
+	intel_guc_load_status(guc, p, indent);
+	indent += 2;
 
 	if (intel_guc_submission_is_used(guc)) {
-		drm_printf(p, "GuC Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
-			   READ_ONCE(guc->stats.irq.count),
-			   READ_ONCE(guc->stats.irq.total),
-			   ewma_irq_time_read(&guc->stats.irq.avg),
-			   READ_ONCE(guc->stats.irq.max));
-		intel_guc_ct_print_info(&guc->ct, p);
-		intel_guc_submission_print_info(guc, p);
-		intel_guc_ads_print_policy_info(guc, p);
-		intel_guc_submission_print_context_info(guc, p);
+		i_printf(p, indent, "Interrupts: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+			 READ_ONCE(guc->stats.irq.count),
+			 READ_ONCE(guc->stats.irq.total),
+			 ewma_irq_time_read(&guc->stats.irq.avg),
+			 READ_ONCE(guc->stats.irq.max));
+		intel_guc_ct_print_info(&guc->ct, p, indent);
+		intel_guc_submission_print_info(guc, p, indent);
+		intel_guc_ads_print_policy_info(guc, p, indent);
 	}
 }
 

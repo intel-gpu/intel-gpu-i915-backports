@@ -128,7 +128,6 @@ struct i915_page_directory *__alloc_pd(int count)
 		return NULL;
 	}
 
-	spin_lock_init(&pd->lock);
 	return pd;
 }
 
@@ -292,19 +291,14 @@ u64 i915_vm_estimate_pt_size(struct i915_address_space *vm, u64 size)
 int ppgtt_set_pages(struct i915_vma *vma)
 {
 	GEM_BUG_ON(vma->pages);
-
 	vma->pages = vma->obj->mm.pages;
-	vma->page_sizes = vma->obj->mm.page_sizes;
-
 	return 0;
 }
 
 void ppgtt_clear_pages(struct i915_vma *vma)
 {
 	GEM_BUG_ON(!vma->pages);
-
 	vma->pages = NULL;
-	vma->page_sizes = 0;
 }
 
 int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)

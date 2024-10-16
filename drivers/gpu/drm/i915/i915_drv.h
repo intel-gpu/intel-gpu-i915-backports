@@ -326,7 +326,7 @@ struct i915_gem_mm {
 	struct i915_sched_engine *sched;
 };
 
-#define I915_IDLE_ENGINES_TIMEOUT (500) /* in ms */
+#define I915_IDLE_ENGINES_TIMEOUT (2500) /* in ms */
 
 unsigned long i915_fence_context_timeout(const struct drm_i915_private *i915,
 					 u64 context);
@@ -418,15 +418,6 @@ struct drm_i915_private {
 
 	/* FIXME: Device release actions should all be moved to drmm_ */
 	bool do_release;
-
-	/* Flag for blocking all userspace actions. */
-	struct {
-		struct srcu_struct blocked_srcu;
-		unsigned long flags;
-#define I915_USERLAND_BLOCKED	0
-		/** Waitqueue to signal when the blocking has completed. */
-		wait_queue_head_t queue;
-	} userspace;
 
 	/* i915 device parameters */
 	struct i915_params params;
@@ -1550,6 +1541,9 @@ struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt,
 
 static inline void i915_gem_drain_freed_objects(struct drm_i915_private *i915)
 {
+	if (!atomic_read(&i915->mm.free_count))
+		return;
+
 	/*
 	 * A single pass should suffice to release all the freed objects (along
 	 * most call paths) , but be a little more paranoid in that freeing
@@ -1557,10 +1551,9 @@ static inline void i915_gem_drain_freed_objects(struct drm_i915_private *i915)
 	 * callbacks could have added new objects into the freed list, and
 	 * armed the work again.
 	 */
-	while (atomic_read(&i915->mm.free_count)) {
-		flush_work(&i915->mm.free_work);
+	rcu_barrier();
+	while (flush_work(&i915->mm.free_work))
 		rcu_barrier();
-	}
 }
 
 static inline void i915_gem_drain_workqueue(struct drm_i915_private *i915)
@@ -1578,8 +1571,8 @@ static inline void i915_gem_drain_workqueue(struct drm_i915_private *i915)
 	 */
 	int pass = 3;
 	do {
-		flush_workqueue(i915->wq);
 		rcu_barrier();
+		flush_workqueue(i915->wq);
 		i915_gem_drain_freed_objects(i915);
 	} while (--pass);
 	drain_workqueue(i915->wq);
@@ -1795,5 +1788,8 @@ static inline int i915_next_online_cpu(struct drm_i915_private *i915)
 	return __i915_next_online_cpu(i915->mm.sched->cpumask,
 				      &i915->mm.sched->cpu);
 }
+
+DECLARE_STATIC_KEY_TRUE(__no_init_on_alloc);
+#define no_init_on_alloc static_branch_likely(&__no_init_on_alloc)
 
 #endif

@@ -557,8 +557,8 @@ static inline bool ctx_id_mapped(struct intel_guc *guc, u32 id)
 	return __get_context(guc, id);
 }
 
-static inline void set_ctx_id_mapping(struct intel_guc *guc, u32 id,
-				      struct intel_context *ce)
+static inline struct intel_context *
+set_ctx_id_mapping(struct intel_guc *guc, u32 id, struct intel_context *ce)
 {
 	unsigned long flags;
 
@@ -567,8 +567,10 @@ static inline void set_ctx_id_mapping(struct intel_guc *guc, u32 id,
 	 * lower level functions directly.
 	 */
 	xa_lock_irqsave(&guc->context_lookup, flags);
-	__xa_store(&guc->context_lookup, id, ce, GFP_ATOMIC);
+	ce = __xa_store(&guc->context_lookup, id, ce, GFP_ATOMIC);
 	xa_unlock_irqrestore(&guc->context_lookup, flags);
+
+	return ce;
 }
 
 static inline void clr_ctx_id_mapping(struct intel_guc *guc, u32 id)
@@ -591,16 +593,21 @@ static inline void clr_ctx_id_mapping(struct intel_guc *guc, u32 id)
 
 static void incr_outstanding_submission_g2h(struct intel_guc *guc)
 {
-	atomic_inc(&guc->outstanding_submission_g2h);
+	if (atomic_fetch_inc(&guc->outstanding_submission_g2h))
+		return;
+
+	__intel_gt_pm_get(guc_to_gt(guc));
 	intel_boost_fake_int_timer(guc_to_gt(guc), true);
 }
 
-static void decr_outstanding_submission_g2h(struct intel_guc *guc, bool wake)
+static void decr_outstanding_submission_g2h(struct intel_guc *guc)
 {
-	if (atomic_dec_and_test(&guc->outstanding_submission_g2h) && wake)
-		wake_up_all(&guc->ct.wq);
+	if (!atomic_dec_and_test(&guc->outstanding_submission_g2h))
+		return;
 
+	wake_up_all(&guc->ct.wq);
 	intel_boost_fake_int_timer(guc_to_gt(guc), false);
+	intel_gt_pm_put_async_untracked(guc_to_gt(guc));
 }
 
 static int guc_submission_send_busy_loop(struct intel_guc *guc,
@@ -622,59 +629,6 @@ static int guc_submission_send_busy_loop(struct intel_guc *guc,
 	return intel_guc_send_busy_loop(guc, action, len, g2h_len_dw, loop);
 }
 
-int intel_guc_wait_for_pending_msg(struct intel_guc *guc,
-				   atomic_t *wait_var,
-				   bool interruptible,
-				   long timeout)
-{
-	const int state = interruptible ?
-		TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
-	DEFINE_WAIT(wait);
-
-	might_sleep();
-	GEM_BUG_ON(timeout < 0);
-
-	if (!atomic_read(wait_var))
-		return 0;
-
-	if (!timeout)
-		return -ETIME;
-
-	intel_boost_fake_int_timer(guc_to_gt(guc), true);
-	for (;;) {
-		prepare_to_wait(&guc->ct.wq, &wait, state);
-
-		if (!atomic_read(wait_var))
-			break;
-
-		if (signal_pending_state(state, current)) {
-			timeout = -ERESTARTSYS;
-			break;
-		}
-
-		if (!timeout) {
-			timeout = -ETIME;
-			break;
-		}
-
-		timeout = io_schedule_timeout(timeout);
-	}
-	finish_wait(&guc->ct.wq, &wait);
-	intel_boost_fake_int_timer(guc_to_gt(guc), false);
-
-	return (timeout < 0) ? timeout : 0;
-}
-
-int intel_guc_wait_for_idle(struct intel_guc *guc, long timeout)
-{
-	if (!intel_uc_uses_guc_submission(&guc_to_gt(guc)->uc))
-		return 0;
-
-	return intel_guc_wait_for_pending_msg(guc,
-					      &guc->outstanding_submission_g2h,
-					      true, timeout);
-}
-
 static int guc_context_policy_init_v70(struct intel_context *ce, bool loop);
 static int try_context_registration(struct intel_context *ce, bool loop);
 
@@ -688,16 +642,6 @@ static int __guc_add_request(struct intel_guc *guc, struct i915_request *rq)
 	bool enabled;
 
 	lockdep_assert_held(&rq->sched_engine->lock);
-
-	/*
-	 * Corner case where requests were sitting in the priority list or a
-	 * request resubmitted after the context was banned.
-	 */
-	if (unlikely(intel_context_is_banned(ce))) {
-		i915_request_put(i915_request_mark_eio(rq));
-		intel_engine_signal_breadcrumbs(ce->engine);
-		return 0;
-	}
 
 	GEM_BUG_ON(!atomic_read(&ce->guc_id.ref));
 	GEM_BUG_ON(context_guc_id_invalid(ce));
@@ -715,29 +659,30 @@ static int __guc_add_request(struct intel_guc *guc, struct i915_request *rq)
 	 * gets enabled in the unblock. For multi-lrc we still submit the
 	 * context to move the LRC tails.
 	 */
-	if (unlikely(context_blocked(ce) && !intel_context_is_parent(ce)))
-		goto out;
+	if (unlikely(context_blocked(ce) && !intel_context_is_parent(ce))) {
+		spin_unlock(&ce->guc_state.lock);
+		return err;
+	}
 
 	enabled = context_enabled(ce) || context_blocked(ce) || context_pending_enable(ce);
-
 	if (!enabled) {
 		action[len++] = INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET;
 		action[len++] = ce->guc_id.id;
 		action[len++] = GUC_CONTEXT_ENABLE;
-		set_context_pending_enable(ce);
 		intel_context_get(ce);
+		set_context_enabled(ce);
+		set_context_pending_enable(ce);
+		incr_outstanding_submission_g2h(guc);
 		g2h_len_dw = G2H_LEN_DW_SCHED_CONTEXT_MODE_SET;
 	} else {
 		action[len++] = INTEL_GUC_ACTION_SCHED_CONTEXT;
 		action[len++] = ce->guc_id.id;
 	}
+	spin_unlock(&ce->guc_state.lock);
 
 	err = intel_guc_send_nb(guc, action, len, g2h_len_dw);
 	if (!enabled && !err) {
 		trace_intel_context_sched_enable(ce);
-		incr_outstanding_submission_g2h(guc);
-		set_context_enabled(ce);
-
 		/*
 		 * Without multi-lrc KMD does the submission step (moving the
 		 * lrc tail) so enabling scheduling is sufficient to submit the
@@ -750,14 +695,16 @@ static int __guc_add_request(struct intel_guc *guc, struct i915_request *rq)
 			err = intel_guc_send_nb(guc, action, len - 1, 0);
 		}
 	} else if (!enabled) {
+		decr_outstanding_submission_g2h(guc);
+		spin_lock(&ce->guc_state.lock);
 		clr_context_pending_enable(ce);
+		clr_context_enabled(ce);
+		spin_unlock(&ce->guc_state.lock);
 		intel_context_put(ce);
 	}
 	if (likely(!err))
 		trace_i915_request_guc_submit(rq);
 
-out:
-	spin_unlock(&ce->guc_state.lock);
 	return err;
 }
 
@@ -778,8 +725,9 @@ static inline void guc_set_lrc_tail(struct i915_request *rq)
 	/* Ensure writes to ring are pushed before tail pointer is updated */
 	i915_write_barrier(rq->engine->i915);
 
-	rq->context->lrc_reg_state[CTX_RING_TAIL] =
-		intel_ring_set_tail(rq->ring, rq->tail);
+	WRITE_ONCE(rq->context->lrc_reg_state[CTX_RING_TAIL],
+		   intel_ring_set_tail(rq->ring, rq->tail));
+	wmb();
 }
 
 static inline int rq_prio(const struct i915_request *rq)
@@ -881,16 +829,12 @@ static int __guc_wq_item_append(struct i915_request *rq)
 static int guc_wq_item_append(struct intel_guc *guc,
 			      struct i915_request *rq)
 {
-	struct intel_context *ce = request_to_scheduling_context(rq);
-	int ret = 0;
+	int ret;
 
-	if (likely(!intel_context_is_banned(ce))) {
-		ret = __guc_wq_item_append(rq);
-
-		if (unlikely(ret == -EBUSY)) {
-			guc->stalled_request = rq;
-			guc->submission_stall_reason = STALL_MOVE_LRC_TAIL;
-		}
+	ret = __guc_wq_item_append(rq);
+	if (unlikely(ret == -EBUSY)) {
+		guc->stalled_request = rq;
+		guc->submission_stall_reason = STALL_MOVE_LRC_TAIL;
 	}
 
 	return ret;
@@ -956,7 +900,12 @@ static int guc_dequeue_one_context(struct intel_guc *guc)
 			if (last && !can_merge_rq(rq, last))
 				goto register_context;
 
-			__i915_request_submit(rq);
+			if (unlikely(intel_context_is_banned(rq->context)))
+				i915_request_put(i915_request_mark_eio(rq));
+
+			if (!__i915_request_submit(rq))
+				continue;
+
 			add_to_context(rq);
 			last = rq;
 
@@ -984,8 +933,7 @@ register_context:
 	if (submit) {
 		struct intel_context *ce = request_to_scheduling_context(last);
 
-		if (unlikely(!ctx_id_mapped(guc, ce->guc_id.id) &&
-			     !intel_context_is_banned(ce))) {
+		if (unlikely(!ctx_id_mapped(guc, ce->guc_id.id))) {
 			ret = try_context_registration(ce, false);
 			if (unlikely(ret == -EPIPE)) {
 				goto deadlk;
@@ -1138,7 +1086,7 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
 		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
 		if (pending_enable || destroyed || deregister) {
-			decr_outstanding_submission_g2h(guc, false);
+			decr_outstanding_submission_g2h(guc);
 			if (deregister)
 				guc_signal_context_fence(ce);
 			if (destroyed) {
@@ -1153,12 +1101,10 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
 		/* Not mutualy exclusive with above if statement. */
 		if (pending_disable) {
 			guc_signal_context_fence(ce);
-			if (banned) {
+			if (banned)
 				guc_cancel_context_requests(ce);
-				intel_engine_signal_breadcrumbs(ce->engine);
-			}
 			intel_context_sched_disable_unpin(ce);
-			decr_outstanding_submission_g2h(guc, false);
+			decr_outstanding_submission_g2h(guc);
 
 			spin_lock_irqsave(&ce->guc_state.lock, flags);
 			guc_blocked_fence_complete(ce);
@@ -1244,7 +1190,7 @@ __busy_v1_extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_sta
 	    (gt_stamp_last - new_start) <= BUSY_V1_POLL_TIME_CLKS && gt_stamp_hi)
 		gt_stamp_hi--;
 
-	*prev_start = ((u64)gt_stamp_hi << 32) | new_start;
+	*prev_start = make_u64(gt_stamp_hi, new_start);
 }
 
 /*
@@ -1337,7 +1283,7 @@ static void busy_v1_guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 	if (gt_stamp_lo < lower_32_bits(guc->busy.v1.gt_stamp))
 		gt_stamp_hi++;
 
-	guc->busy.v1.gt_stamp = ((u64)gt_stamp_hi << 32) | gt_stamp_lo;
+	guc->busy.v1.gt_stamp = make_u64(gt_stamp_hi, gt_stamp_lo);
 }
 
 static u64 __busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine, ktime_t *now_out)
@@ -1436,12 +1382,12 @@ static u64 busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
 
 static void busy_v1_guc_enable_worker(struct intel_guc *guc)
 {
-	mod_delayed_work(system_highpri_wq, &guc->busy.v1.work, guc->busy.v1.ping_delay);
+	queue_delayed_work(system_highpri_wq, &guc->busy.v1.work, guc->busy.v1.ping_delay);
 }
 
 static void busy_v1_guc_cancel_worker(struct intel_guc *guc)
 {
-	cancel_delayed_work_sync(&guc->busy.v1.work);
+	cancel_delayed_work(&guc->busy.v1.work);
 }
 
 static void __busy_v1_reset_guc_busyness_stats(struct intel_guc *guc)
@@ -1491,33 +1437,7 @@ static void busy_v1_guc_timestamp_ping(struct work_struct *wrk)
 	intel_wakeref_t wakeref;
 	int srcu, ret;
 
-	/*
-	 * Ideally the busyness worker should take a gt pm wakeref because the
-	 * worker only needs to be active while gt is awake. However, the
-	 * gt_park path cancels the worker synchronously and this complicates
-	 * the flow if the worker is also running at the same time. The cancel
-	 * waits for the worker and when the worker releases the wakeref, that
-	 * would call gt_park and would lead to a deadlock.
-	 *
-	 * The resolution is to take the global pm wakeref if runtime pm is
-	 * already active. If not, we don't need to update the busyness stats as
-	 * the stats would already be updated when the gt was parked.
-	 *
-	 * Note:
-	 * - We do not requeue the worker if we cannot take a reference to runtime
-	 *   pm since intel_guc_busyness_unpark would requeue the worker in the
-	 *   resume path.
-	 *
-	 * - If the gt was parked longer than time taken for GT timestamp to roll
-	 *   over, we ignore those rollovers since we don't care about tracking
-	 *   the exact GT time. We only care about roll overs when the gt is
-	 *   active and running workloads.
-	 *
-	 * - There is a window of time between gt_park and runtime suspend,
-	 *   where the worker may run. This is acceptable since the worker will
-	 *   not find any new data to update busyness.
-	 */
-	wakeref = intel_runtime_pm_get_if_active(&gt->i915->runtime_pm);
+	wakeref = intel_gt_pm_get_if_awake(gt);
 	if (!wakeref)
 		return;
 
@@ -1538,7 +1458,7 @@ static void busy_v1_guc_timestamp_ping(struct work_struct *wrk)
 	busy_v1_guc_enable_worker(guc);
 
 err_trylock:
-	intel_runtime_pm_put(&gt->i915->runtime_pm, wakeref);
+	intel_gt_pm_put(gt, wakeref);
 }
 
 static int busy_v1_guc_action_enable_usage_stats(struct intel_guc *guc)
@@ -1727,12 +1647,11 @@ static u64 busy_v1_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned 
 		return 0;
 	}
 
-	spin_lock_irqsave(&guc->busy.v1.lock, flags);
-	if ((wakeref = intel_gt_pm_get_if_awake(gt))) {
+	with_intel_gt_pm_if_awake(gt, wakeref) {
+		spin_lock_irqsave(&guc->busy.v1.lock, flags);
 		busy_v1_guc_update_pm_timestamp(guc, NULL);
-		intel_gt_pm_put_async(gt, wakeref);
+		spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 	}
-	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 
 	return guc->busy.v1.gt_stamp;
 }
@@ -1864,16 +1783,45 @@ void intel_guc_init_busy_free(struct intel_gt *gt)
 	gt->stats.busy_free_park = NULL;
 }
 
-static int busy_v2_guc_action_enable_usage_stats_device(struct intel_guc *guc)
+static inline int __prepare_busy_v2_guc_action_enable_usage_stats_device(struct intel_guc *guc, u32 *action)
 {
 	u32 offset = guc_engine_usage_offset_v2_device(guc);
-	u32 action[] = {
-		INTEL_GUC_ACTION_SET_DEVICE_ENGINE_UTILIZATION_V2,
-		offset,
-		0,
-	};
+	int len = 0;
 
-	return intel_guc_send(guc, action, ARRAY_SIZE(action));
+	action[len++] = INTEL_GUC_ACTION_SET_DEVICE_ENGINE_UTILIZATION_V2;
+	action[len++] = offset;
+	action[len++] = 0;
+
+	return len;
+}
+
+static int busy_v2_guc_action_enable_usage_stats_device(struct intel_guc *guc)
+{
+	bool not_atomic = !in_atomic() && !rcu_preempt_depth() && !irqs_disabled();
+	unsigned int sleep_period_us = 1;
+	int srcu, len, err;
+	u32 action[3];
+
+	/* No sleeping with spin locks, just busy loop */
+	might_sleep_if(not_atomic);
+
+retry:
+	err = gt_ggtt_address_read_lock_interruptible(guc_to_gt(guc), &srcu);
+	if (unlikely(err))
+		return err;
+
+	len = __prepare_busy_v2_guc_action_enable_usage_stats_device(guc, action);
+
+	GEM_BUG_ON(len > ARRAY_SIZE(action));
+
+	err = intel_guc_send_nb(guc, action, len, 0);
+	gt_ggtt_address_read_unlock(guc_to_gt(guc), srcu);
+	if (unlikely(err == -EBUSY)) {
+		intel_guc_send_wait(&sleep_period_us, not_atomic);
+		goto retry;
+	}
+
+	return err;
 }
 
 static int busy_v2_guc_action_enable_usage_stats_function(struct intel_guc *guc)
@@ -1896,16 +1844,15 @@ static int guc_init_engine_stats(struct intel_guc *guc)
 
 	if (busy_type_is_v1(guc)) {
 		if (!IS_SRIOV_VF(gt->i915)) {
-			with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref)
+			with_intel_gt_pm(gt, wakeref)
 				ret = busy_v1_guc_action_enable_usage_stats(guc);
 
 			if (ret == 0)
 				busy_v1_guc_enable_worker(guc);
 		}
 	} else {
-		with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref) {
+		with_intel_gt_pm(gt, wakeref) {
 			ret = busy_v2_guc_action_enable_usage_stats_device(guc);
-
 			if (ret == 0 && !IS_SRIOV_VF(gt->i915))
 				ret = busy_v2_guc_action_enable_usage_stats_function(guc);
 		}
@@ -1936,11 +1883,6 @@ void intel_guc_busyness_park(struct intel_gt *gt)
 	if (!busy_type_is_v1(guc))
 		return;
 
-	/*
-	 * There is a race with suspend flow where the worker runs after suspend
-	 * and causes an unclaimed register access warning. Cancel the worker
-	 * synchronously here.
-	 */
 	busy_v1_guc_cancel_worker(guc);
 
 	/*
@@ -1959,7 +1901,6 @@ void intel_guc_busyness_park(struct intel_gt *gt)
 void intel_guc_busyness_unpark(struct intel_gt *gt)
 {
 	struct intel_guc *guc = &gt->uc.guc;
-	unsigned long flags;
 
 	if (IS_SRIOV_VF(gt->i915))
 		return;
@@ -1970,9 +1911,6 @@ void intel_guc_busyness_unpark(struct intel_gt *gt)
 	if (!busy_type_is_v1(guc))
 		return;
 
-	spin_lock_irqsave(&guc->busy.v1.lock, flags);
-	busy_v1_guc_update_pm_timestamp(guc, NULL);
-	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
 	busy_v1_guc_enable_worker(guc);
 }
 
@@ -2011,25 +1949,19 @@ __enable_submission_tasklet(struct i915_sched_engine * const sched_engine)
 static void enable_submission(struct intel_guc *guc)
 {
 	struct i915_sched_engine * const sched_engine = guc->sched_engine;
-	unsigned long flags;
 
-	spin_lock_irqsave(&guc->sched_engine->lock, flags);
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	sched_engine->tasklet.func = guc_submission_tasklet;
 #else
 	sched_engine->tasklet.callback = guc_submission_tasklet;
 #endif
-	wmb();	/* Make sure callback visible */
-	if (__enable_submission_tasklet(sched_engine)) {
+	smp_wmb();	/* Make sure callback visible */
+
+	if (__enable_submission_tasklet(sched_engine))
 		GEM_BUG_ON(!guc->ct.enabled);
 
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-		sched_engine->tasklet.func = guc_submission_tasklet;
-#endif
-		/* And kick in case we missed a new request submission. */
-		tasklet_hi_schedule(&sched_engine->tasklet);
-	}
-	spin_unlock_irqrestore(&guc->sched_engine->lock, flags);
+	/* And kick in case we missed a new request submission. */
+	tasklet_hi_schedule(&sched_engine->tasklet);
 }
 
 static void guc_flush_submissions(struct intel_guc *guc)
@@ -2075,13 +2007,19 @@ __i915_sched_rewind_requests(struct i915_sched_engine *se,
 
 		__i915_request_unsubmit(rq);
 
-		if (rq->execution_mask & stalled &&
-		    __i915_request_has_started(rq)) {
+		if (__i915_request_has_started(rq)) {
 			struct intel_context *ce = rq->context;
+			u32 head = rq->infix;
+			int srcu;
 
-			__i915_request_reset(rq, true);
-			lrc_init_regs(ce, rq->engine, true);
-			lrc_update_regs(ce, rq->engine, intel_ring_wrap(ce->ring, rq->postfix));
+			__i915_request_reset(rq, rq->execution_mask & stalled);
+			gt_ggtt_address_read_lock(rq->engine->gt, &srcu);
+			if (rq->execution_mask & stalled) {
+				lrc_init_regs(ce, rq->engine, true);
+				head = rq->postfix;
+			}
+			ce->lrc.lrca = lrc_update_regs(ce, rq->engine, intel_ring_wrap(ce->ring, head));
+			gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
 		}
 
 		GEM_BUG_ON(rq_prio(rq) == I915_PRIORITY_INVALID);
@@ -2121,8 +2059,11 @@ void intel_guc_submission_reset_prepare(struct intel_guc *guc)
 static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
 {
 	u32 rhead, remit, rspace;
-	s64 ggtt_shift;
 	int err;
+
+	if (!test_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags))
+		return;
+
 	/*
 	 * Pretend we have an empty, uninitialized request, being added at
 	 * end of the ring. This allows us to re-use the emit callbacks,
@@ -2137,17 +2078,7 @@ static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
 	rq->reserved_space =
 		2 * rq->engine->emit_fini_breadcrumb_dw * sizeof(u32);
 
-	ggtt_shift = rq->engine->gt->iov.vf.config.ggtt_shift;
-
 	err = reemit_bb_start(rq);
-
-	/*
-	 * If bb_start re-emission failed, the request must contain non-user
-	 * submission. Internal kernel submissions, like clear_blt(), end with
-	 * counters update.
-	 */
-	if (err)
-		err = reemit_update_counters(rq, ggtt_shift);
 
 	if (err)
 		DRM_DEBUG_DRIVER("Request ring content not recognized, fence %llx:%lld, err=%pe\n",
@@ -2157,6 +2088,9 @@ static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
 	rq->ring->emit = remit;
 	rq->ring->space = rspace;
 	rq->reserved_space = 0;
+
+	if (test_bit(I915_FENCE_FLAG_ACTIVE, &rq->fence.flags))
+		rq->engine->emit_fini_breadcrumb(rq, rq->ring->vaddr + rq->postfix);
 }
 
 static void guc_submission_noop_request_ring_content(struct i915_request *rq)
@@ -2216,7 +2150,6 @@ void intel_guc_submission_pause(struct intel_guc *guc)
 	struct i915_sched_engine * const sched_engine = guc->sched_engine;
 
 	tasklet_disable_nosync(&sched_engine->tasklet);
-	guc_submission_unwind_all(guc, 0);
 }
 
 /*
@@ -2261,12 +2194,14 @@ __context_to_physical_engine(struct intel_context *ce)
 static void guc_reset_state(struct intel_context *ce, u32 head, bool scrub)
 {
 	struct intel_engine_cs *engine = __context_to_physical_engine(ce);
+	int srcu;
 
 	if (intel_context_is_banned(ce))
 		return;
 
 	GEM_BUG_ON(!intel_context_is_pinned(ce));
 
+	gt_ggtt_address_read_lock(ce->engine->gt, &srcu);
 	/*
 	 * We want a simple context + ring to execute the breadcrumb update.
 	 * We cannot rely on the context being intact across the GPU hang,
@@ -2279,7 +2214,8 @@ static void guc_reset_state(struct intel_context *ce, u32 head, bool scrub)
 		lrc_init_regs(ce, engine, true);
 
 	/* Rerun the request; its payload has been neutered (if guilty). */
-	lrc_update_regs(ce, engine, head);
+	ce->lrc.lrca = lrc_update_regs(ce, engine, head);
+	gt_ggtt_address_read_unlock(ce->engine->gt, srcu);
 }
 
 static void guc_engine_reset_prepare(struct intel_engine_cs *engine)
@@ -2410,7 +2346,7 @@ static void clear_context_state(struct intel_guc *guc)
 {
 	scrub_guc_desc_for_outstanding_g2h(guc);
 	while (atomic_read(&guc->outstanding_submission_g2h) > 0)
-		decr_outstanding_submission_g2h(guc, false);
+		decr_outstanding_submission_g2h(guc);
 	wake_up_all(&guc->ct.wq);
 
 	/* GuC is blown away, drop all references to contexts */
@@ -2424,32 +2360,40 @@ void intel_guc_submission_reset(struct intel_guc *guc, intel_engine_mask_t stall
 		return;
 	}
 
-	guc_submission_unwind_all(guc, stalled);
 	clear_context_state(guc);
+	guc_submission_unwind_all(guc, stalled);
 }
 
 static void guc_cancel_context_requests(struct intel_context *ce)
 {
-	struct intel_timeline *tl;
+	struct intel_guc *guc = ce_to_guc(ce);
+	struct i915_sched_engine *se = ce->engine->sched_engine;
 	struct i915_request *rq;
+	unsigned long flags;
+	bool retire = false;
 
-	/* We can only immediately mark EIO if we haven't used semaphores. */
-	GEM_BUG_ON(intel_engine_has_semaphores(ce->engine));
+	spin_lock_irqsave(&se->lock, flags);
+	list_for_each_entry(rq, &se->requests, sched.link) {
+		if (rq->context != ce)
+			continue;
 
-	tl = ce->timeline;
-	if (!tl)
-		return;
-
-	rcu_read_lock();
-	list_for_each_entry(rq, &tl->requests, link) {
-		if (!i915_request_is_active(rq))
+		if (rq->sched.semaphores &&
+		    !i915_sw_fence_signaled(&rq->semaphore))
 			break;
 
-		i915_request_put(i915_request_mark_eio(rq));
-	}
-	rcu_read_unlock();
+		if (rq == guc->stalled_request)
+			guc->stalled_request = NULL;
 
-	intel_engine_signal_breadcrumbs(ce->engine);
+		if (i915_request_mark_eio(rq)) {
+			i915_request_put(rq);
+			retire = true;
+		}
+	}
+	spin_unlock_irqrestore(&se->lock, flags);
+
+	if (retire)
+		intel_engine_add_retire(__context_to_physical_engine(ce),
+					ce->timeline);
 }
 
 static void
@@ -2511,34 +2455,8 @@ void intel_guc_submission_cancel_requests(struct intel_guc *guc)
 	clear_context_state(guc);
 }
 
-static inline bool guc_scheduling_enabled(struct intel_guc *guc)
-{
-	return guc->sched_enable_ref > 0;
-}
-
-static void __guc_engine_sched_modify(struct intel_guc *guc,
-				      u8 class,
-				      bool enable)
-{
-	u32 action[] = {
-		INTEL_GUC_ACTION_SCHED_ENGINE_MODE_SET,
-		class,
-		0,
-		enable ? 1 : 0,
-	};
-
-	guc_submission_send_busy_loop(guc, action, ARRAY_SIZE(action),
-			   G2H_LEN_DW_SCHED_ENGINE_MODE_SET, true);
-}
-
 void intel_guc_submission_reset_finish(struct intel_guc *guc)
 {
-	struct intel_runtime_pm *runtime_pm =
-		&guc_to_gt(guc)->i915->runtime_pm;
-	intel_wakeref_t wakeref;
-	unsigned long flags;
-	u8 class;
-
 	/* Reset called during driver load */
 	if (unlikely(!guc_submission_initialized(guc)))
 		return;
@@ -2554,23 +2472,9 @@ void intel_guc_submission_reset_finish(struct intel_guc *guc)
 #else
 		guc->sched_engine->tasklet.callback = nop_submission_tasklet;
 #endif
-		wmb(); /* Make sure callback visible */
+		smp_wmb(); /* Make sure callback visible */
 		__enable_submission_tasklet(guc->sched_engine);
 		return;
-	}
-
-	with_intel_runtime_pm(runtime_pm, wakeref) {
-		spin_lock_irqsave(&guc->sched_lock, flags);
-		if (!guc_scheduling_enabled(guc)) {
-			for (class = 0; class <= GUC_LAST_ENGINE_CLASS;
-			     ++class) {
-				if (!CCS_MASK(guc_to_gt(guc)) &&
-				    class == GUC_COMPUTE_CLASS)
-					continue;
-				__guc_engine_sched_modify(guc, class, false);
-			}
-		}
-		spin_unlock_irqrestore(&guc->sched_lock, flags);
 	}
 
 	intel_guc_global_policies_update(guc);
@@ -2889,9 +2793,6 @@ static int assign_guc_id(struct intel_guc *guc, struct intel_context *ce)
 			child->guc_id.id = ce->guc_id.id + i++;
 	}
 
-	spin_lock_init(&guc->sched_lock);
-	guc->sched_enable_ref = 1;
-
 	return 0;
 }
 
@@ -2989,33 +2890,36 @@ static int __guc_action_register_multi_lrc_v69(struct intel_guc *guc,
 	return guc_submission_send_busy_loop(guc, action, len, 0, loop);
 }
 
-static int __guc_action_register_multi_lrc_v70(struct intel_guc *guc,
-					       struct intel_context *ce,
-					       struct guc_ctxt_registration_info *info,
-					       bool loop)
+static void prepare_context_registration_info_v69(struct intel_context *ce);
+static void prepare_context_registration_info_v70(struct intel_context *ce,
+						  struct guc_ctxt_registration_info *info);
+
+static int __prepare_context_registration_action_multi_lrc_v70(struct intel_context *ce, u32 *action)
 {
+	struct guc_ctxt_registration_info info;
 	struct intel_context *child;
-	u32 action[13 + (MAX_ENGINE_INSTANCE * 2)];
 	int len = 0;
 	u32 next_id;
 
 	GEM_BUG_ON(ce->parallel.number_children > MAX_ENGINE_INSTANCE);
 
-	action[len++] = INTEL_GUC_ACTION_REGISTER_CONTEXT_MULTI_LRC;
-	action[len++] = info->flags;
-	action[len++] = info->context_idx;
-	action[len++] = info->engine_class;
-	action[len++] = info->engine_submit_mask;
-	action[len++] = info->wq_desc_lo;
-	action[len++] = info->wq_desc_hi;
-	action[len++] = info->wq_base_lo;
-	action[len++] = info->wq_base_hi;
-	action[len++] = info->wq_size;
-	action[len++] = ce->parallel.number_children + 1;
-	action[len++] = info->hwlrca_lo;
-	action[len++] = info->hwlrca_hi;
+	prepare_context_registration_info_v70(ce, &info);
 
-	next_id = info->context_idx + 1;
+	action[len++] = INTEL_GUC_ACTION_REGISTER_CONTEXT_MULTI_LRC;
+	action[len++] = info.flags;
+	action[len++] = info.context_idx;
+	action[len++] = info.engine_class;
+	action[len++] = info.engine_submit_mask;
+	action[len++] = info.wq_desc_lo;
+	action[len++] = info.wq_desc_hi;
+	action[len++] = info.wq_base_lo;
+	action[len++] = info.wq_base_hi;
+	action[len++] = info.wq_size;
+	action[len++] = ce->parallel.number_children + 1;
+	action[len++] = info.hwlrca_lo;
+	action[len++] = info.hwlrca_hi;
+
+	next_id = info.context_idx + 1;
 	for_each_child(ce, child) {
 		GEM_BUG_ON(next_id++ != child->guc_id.id);
 
@@ -3027,9 +2931,7 @@ static int __guc_action_register_multi_lrc_v70(struct intel_guc *guc,
 		action[len++] = upper_32_bits(child->lrc.lrca);
 	}
 
-	GEM_BUG_ON(len > ARRAY_SIZE(action));
-
-	return guc_submission_send_busy_loop(guc, action, len, 0, loop);
+	return len;
 }
 
 static int __guc_action_register_context_v69(struct intel_guc *guc,
@@ -3047,32 +2949,31 @@ static int __guc_action_register_context_v69(struct intel_guc *guc,
 					     0, loop);
 }
 
-static int __guc_action_register_context_v70(struct intel_guc *guc,
-					     struct guc_ctxt_registration_info *info,
-					     bool loop)
+
+static int __prepare_context_registration_action_single_v70(struct intel_context *ce, u32 *action)
 {
-	u32 action[] = {
-		INTEL_GUC_ACTION_REGISTER_CONTEXT,
-		info->flags,
-		info->context_idx,
-		info->engine_class,
-		info->engine_submit_mask,
-		info->wq_desc_lo,
-		info->wq_desc_hi,
-		info->wq_base_lo,
-		info->wq_base_hi,
-		info->wq_size,
-		info->hwlrca_lo,
-		info->hwlrca_hi,
-	};
+	struct guc_ctxt_registration_info info;
+	int len = 0;
 
-	return guc_submission_send_busy_loop(guc, action, ARRAY_SIZE(action),
-					     0, loop);
+	GEM_BUG_ON(ce->parallel.number_children > MAX_ENGINE_INSTANCE);
+
+	prepare_context_registration_info_v70(ce, &info);
+
+	action[len++] = INTEL_GUC_ACTION_REGISTER_CONTEXT;
+	action[len++] = info.flags;
+	action[len++] = info.context_idx;
+	action[len++] = info.engine_class;
+	action[len++] = info.engine_submit_mask;
+	action[len++] = info.wq_desc_lo;
+	action[len++] = info.wq_desc_hi;
+	action[len++] = info.wq_base_lo;
+	action[len++] = info.wq_base_hi;
+	action[len++] = info.wq_size;
+	action[len++] = info.hwlrca_lo;
+	action[len++] = info.hwlrca_hi;
+
+	return len;
 }
-
-static void prepare_context_registration_info_v69(struct intel_context *ce);
-static void prepare_context_registration_info_v70(struct intel_context *ce,
-						  struct guc_ctxt_registration_info *info);
 
 static int
 register_context_v69(struct intel_guc *guc, struct intel_context *ce, bool loop)
@@ -3093,14 +2994,34 @@ register_context_v69(struct intel_guc *guc, struct intel_context *ce, bool loop)
 static int
 register_context_v70(struct intel_guc *guc, struct intel_context *ce, bool loop)
 {
-	struct guc_ctxt_registration_info info;
+	u32 action[13 + (MAX_ENGINE_INSTANCE * 2)];
+	bool not_atomic = !in_atomic() && !rcu_preempt_depth() && !irqs_disabled();
+	unsigned int sleep_period_us = 1;
+	int srcu, len, err;
 
-	prepare_context_registration_info_v70(ce, &info);
+	/* No sleeping with spin locks, just busy loop */
+	might_sleep_if(loop && not_atomic);
+
+retry:
+	err = gt_ggtt_address_read_lock_interruptible(guc_to_gt(guc), &srcu);
+	if (unlikely(err))
+		return err;
 
 	if (intel_context_is_parent(ce))
-		return __guc_action_register_multi_lrc_v70(guc, ce, &info, loop);
+		len = __prepare_context_registration_action_multi_lrc_v70(ce, action);
 	else
-		return __guc_action_register_context_v70(guc, &info, loop);
+		len = __prepare_context_registration_action_single_v70(ce, action);
+
+	GEM_BUG_ON(len > ARRAY_SIZE(action));
+
+	err = intel_guc_send_nb(guc, action, len, 0);
+	gt_ggtt_address_read_unlock(guc_to_gt(guc), srcu);
+	if (unlikely(err == -EBUSY && loop)) {
+		intel_guc_send_wait(&sleep_period_us, not_atomic);
+		goto retry;
+	}
+
+	return err;
 }
 
 static int register_context(struct intel_context *ce, bool loop)
@@ -3452,20 +3373,16 @@ static void prepare_context_registration_info_v70(struct intel_context *ce,
 
 static int try_context_registration(struct intel_context *ce, bool loop)
 {
-	struct intel_engine_cs *engine = ce->engine;
-	struct intel_runtime_pm *runtime_pm = engine->uncore->rpm;
-	struct intel_guc *guc = &engine->gt->uc.guc;
-	intel_wakeref_t wakeref;
+	struct intel_guc *guc = ce_to_guc(ce);
 	u32 ctx_id = ce->guc_id.id;
-	bool context_registered;
-	int ret = 0;
+	struct intel_context *old;
+	int ret;
 
 	GEM_BUG_ON(!sched_state_is_init(ce));
 
-	context_registered = ctx_id_mapped(guc, ctx_id);
-
-	clr_ctx_id_mapping(guc, ctx_id);
-	set_ctx_id_mapping(guc, ctx_id, ce);
+	old = set_ctx_id_mapping(guc, ctx_id, ce);
+	if (IS_ERR(old))
+		return PTR_ERR(old);
 
 	/*
 	 * The context_lookup xarray is used to determine if the hardware
@@ -3475,9 +3392,9 @@ static int try_context_registration(struct intel_context *ce, bool loop)
 	 * either case the context needs to be deregistered with the GuC before
 	 * registering this context.
 	 */
-	if (context_registered) {
-		bool disabled;
+	if (old) {
 		unsigned long flags;
+		bool disabled;
 
 		trace_intel_context_steal_guc_id(ce);
 		GEM_BUG_ON(!loop);
@@ -3499,19 +3416,20 @@ static int try_context_registration(struct intel_context *ce, bool loop)
 		 * If stealing the guc_id, this ce has the same guc_id as the
 		 * context whose guc_id was stolen.
 		 */
-		with_intel_runtime_pm(runtime_pm, wakeref)
-			ret = deregister_context(ce, ce->guc_id.id);
-		if (unlikely(ret == -ENODEV))
-			ret = 0;	/* Will get registered later */
+		ret = deregister_context(ce, ctx_id);
 	} else {
-		with_intel_runtime_pm(runtime_pm, wakeref)
-			ret = register_context(ce, loop);
-		if (unlikely(ret == -EBUSY)) {
-			clr_ctx_id_mapping(guc, ctx_id);
-		} else if (unlikely(ret == -ENODEV)) {
-			clr_ctx_id_mapping(guc, ctx_id);
-			ret = 0;	/* Will get registered later */
+		ret = register_context(ce, loop);
+	}
+	if (ret) {
+		set_ctx_id_mapping(guc, ctx_id, old);
+
+		if (context_wait_for_deregister_to_register(ce)) {
+			clr_context_wait_for_deregister_to_register(ce);
+			intel_context_put(ce);
 		}
+
+		if (unlikely(ret == -ENODEV))
+			ret = 0; /* Will get registered later */
 	}
 
 	return ret;
@@ -3529,6 +3447,11 @@ static int __guc_context_pin(struct intel_context *ce,
 			     struct intel_engine_cs *engine,
 			     void *vaddr)
 {
+	int ret, srcu;
+
+	ret = gt_ggtt_address_read_lock_sync(engine->gt, &srcu);
+	if (unlikely(ret))
+		return ret;
 	if (i915_ggtt_offset(ce->state) !=
 	    (ce->lrc.lrca & CTX_GTT_ADDRESS_MASK))
 		set_bit(CONTEXT_LRCA_DIRTY, &ce->flags);
@@ -3538,7 +3461,10 @@ static int __guc_context_pin(struct intel_context *ce,
 	 * explaination of why.
 	 */
 
-	return lrc_pin(ce, engine, vaddr);
+	ret = lrc_pin(ce, engine, vaddr);
+
+	gt_ggtt_address_read_unlock(engine->gt, srcu);
+	return ret;
 }
 
 static int guc_context_pre_pin(struct intel_context *ce,
@@ -3635,6 +3561,7 @@ static void guc_blocked_fence_reinit(struct intel_context *ce)
 static u16 prep_context_pending_disable(struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->guc_state.lock);
+	GEM_BUG_ON(context_guc_id_invalid(ce));
 
 	set_context_pending_disable(ce);
 	clr_context_enabled(ce);
@@ -3648,7 +3575,6 @@ static struct i915_sw_fence *guc_context_block(struct intel_context *ce)
 {
 	struct intel_guc *guc = ce_to_guc(ce);
 	unsigned long flags;
-	struct intel_runtime_pm *runtime_pm = ce->engine->uncore->rpm;
 	intel_wakeref_t wakeref;
 	u16 guc_id;
 	bool enabled;
@@ -3677,7 +3603,7 @@ static struct i915_sw_fence *guc_context_block(struct intel_context *ce)
 
 	spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
-	with_intel_runtime_pm(runtime_pm, wakeref)
+	with_intel_gt_pm(guc_to_gt(guc), wakeref)
 		__guc_context_sched_disable(guc, ce, guc_id);
 
 	return &ce->guc_state.blocked;
@@ -3704,7 +3630,6 @@ static void guc_context_unblock(struct intel_context *ce)
 {
 	struct intel_guc *guc = ce_to_guc(ce);
 	unsigned long flags;
-	struct intel_runtime_pm *runtime_pm = ce->engine->uncore->rpm;
 	intel_wakeref_t wakeref;
 	bool enable;
 
@@ -3728,7 +3653,7 @@ static void guc_context_unblock(struct intel_context *ce)
 	spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
 	if (enable) {
-		with_intel_runtime_pm(runtime_pm, wakeref)
+		with_intel_gt_pm(guc_to_gt(guc), wakeref)
 			__guc_context_sched_enable(guc, ce);
 	}
 }
@@ -3786,58 +3711,43 @@ static void __guc_context_set_preemption_timeout(struct intel_guc *guc,
 static void guc_context_ban(struct intel_context *ce, struct i915_request *rq)
 {
 	struct intel_guc *guc = ce_to_guc(ce);
-	struct intel_runtime_pm *runtime_pm =
-		&ce->engine->gt->i915->runtime_pm;
-	intel_wakeref_t wakeref;
+	u16 guc_id = GUC_INVALID_CONTEXT_ID;
 	unsigned long flags;
+	intel_wakeref_t wf;
+
+	if (!ce->timeline)
+		return;
+
+	if (GEM_WARN_ON(intel_context_is_barrier(ce)))
+		return;
 
 	GEM_BUG_ON(intel_context_is_child(ce));
-
-	spin_lock_irqsave(&ce->guc_state.lock, flags);
-	set_context_banned(ce);
-
-	if (submission_disabled(guc) ||
-	    (!context_enabled(ce) && !context_pending_disable(ce))) {
-		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
-
-		guc_cancel_context_requests(ce);
-		intel_engine_signal_breadcrumbs(ce->engine);
-	} else if (!context_pending_disable(ce)) {
-		u16 guc_id;
-
-		/*
-		 * We add +2 here as the schedule disable complete CTB handler
-		 * calls intel_context_sched_disable_unpin (-2 to pin_count).
-		 */
-		atomic_add(2, &ce->pin_count);
-
-		guc_id = prep_context_pending_disable(ce);
-		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
-
-		/*
-		 * In addition to disabling scheduling, set the preemption
-		 * timeout to the minimum value (1 us) so the banned context
-		 * gets kicked off the HW ASAP.
-		 */
-		with_intel_runtime_pm(runtime_pm, wakeref) {
-			__guc_context_set_preemption_timeout(guc, guc_id, 1);
-			__guc_context_sched_disable(guc, ce, guc_id);
+	if (!submission_disabled(guc)) {
+		with_intel_gt_pm_if_awake(guc_to_gt(guc), wf) {
+			spin_lock_irqsave(&ce->guc_state.lock, flags);
+			set_context_banned(ce);
+			if (context_enabled(ce) && intel_context_is_active(ce)) {
+				atomic_add(2, &ce->pin_count);
+				guc_id = prep_context_pending_disable(ce);
+			}
+			spin_unlock_irqrestore(&ce->guc_state.lock, flags);
+			if (guc_id != GUC_INVALID_CONTEXT_ID) {
+				__guc_context_set_preemption_timeout(guc, guc_id, 1);
+				__guc_context_sched_disable(guc, ce, guc_id);
+			}
 		}
-	} else {
-		if (!context_guc_id_invalid(ce))
-			with_intel_runtime_pm(runtime_pm, wakeref)
-				__guc_context_set_preemption_timeout(guc,
-								     ce->guc_id.id,
-								     1);
-		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 	}
+
+	if (rq && !i915_request_is_active(rq))
+		return;
+
+	guc_cancel_context_requests(ce);
 }
 
 static void do_sched_disable(struct intel_guc *guc, struct intel_context *ce,
 			     unsigned long flags)
 	__releases(ce->guc_state.lock)
 {
-	struct intel_runtime_pm *runtime_pm = &ce->engine->gt->i915->runtime_pm;
 	intel_wakeref_t wakeref;
 	u16 guc_id;
 
@@ -3846,7 +3756,7 @@ static void do_sched_disable(struct intel_guc *guc, struct intel_context *ce,
 
 	spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
-	with_intel_runtime_pm(runtime_pm, wakeref)
+	with_intel_gt_pm_async(guc_to_gt(guc), wakeref)
 		__guc_context_sched_disable(guc, ce, guc_id);
 }
 
@@ -3856,7 +3766,9 @@ static bool bypass_sched_disable(struct intel_guc *guc,
 	lockdep_assert_held(&ce->guc_state.lock);
 	GEM_BUG_ON(intel_context_is_child(ce));
 
-	if (submission_disabled(guc) || context_guc_id_invalid(ce) ||
+	if (!intel_gt_pm_is_awake(guc_to_gt(guc)) ||
+	    submission_disabled(guc) ||
+	    context_guc_id_invalid(ce) ||
 	    !ctx_id_mapped(guc, ce->guc_id.id)) {
 		clr_context_enabled(ce);
 		return true;
@@ -3951,42 +3863,6 @@ static void guc_context_resume(struct intel_context *ce)
 	GEM_BUG_ON(!i915_sw_fence_done(&ce->guc_state.blocked));
 
 	guc_context_unblock(ce);
-}
-
-int intel_guc_modify_scheduling(struct intel_guc *guc, bool enable)
-{
-	struct intel_gt *gt = guc_to_gt(guc);
-	struct intel_runtime_pm *runtime_pm = &gt->i915->runtime_pm;
-	intel_wakeref_t wakeref;
-	unsigned long flags;
-	bool enabled;
-	u8 class;
-	int ret = 0;
-
-	/* Check if GuC submission is enabled and GuC is up and running */
-	if (unlikely(!guc_submission_initialized(guc) || !intel_guc_is_ready(guc)))
-		return ret;
-
-	with_intel_runtime_pm(runtime_pm, wakeref) {
-		spin_lock_irqsave(&guc->sched_lock, flags);
-		enabled = guc_scheduling_enabled(guc);
-		if (enable)
-			guc->sched_enable_ref++;
-		else
-			guc->sched_enable_ref--;
-		if (!submission_disabled(guc) &&
-		    enabled != guc_scheduling_enabled(guc)) {
-			for (class = 0; class <= GUC_LAST_ENGINE_CLASS;
-			     ++class) {
-				if (!CCS_MASK(gt) && class == GUC_COMPUTE_CLASS)
-					continue;
-				__guc_engine_sched_modify(guc, class, enable);
-			}
-		}
-		spin_unlock_irqrestore(&guc->sched_lock, flags);
-	}
-
-	return ret;
 }
 
 static inline void guc_lrc_desc_unpin(struct intel_context *ce)
@@ -4133,7 +4009,7 @@ static void guc_context_destroy(struct kref *kref)
 	 * take the GT PM for the first time which isn't allowed from an atomic
 	 * context.
 	 */
-	queue_work(system_unbound_wq, &guc->submission_state.destroyed_worker);
+	intel_gt_queue_work(guc_to_gt(guc), &guc->submission_state.destroyed_worker);
 }
 
 static int guc_context_alloc(struct intel_context *ce)
@@ -5294,7 +5170,6 @@ static int __guc_action_set_scheduling_policies(struct intel_guc *guc,
 static int guc_init_global_schedule_policy(struct intel_guc *guc)
 {
 	struct scheduling_policy policy;
-	struct intel_gt *gt = guc_to_gt(guc);
 	intel_wakeref_t wakeref;
 	int ret;
 
@@ -5303,7 +5178,7 @@ static int guc_init_global_schedule_policy(struct intel_guc *guc)
 
 	__guc_scheduling_policy_start_klv(&policy);
 
-	with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref) {
+	with_intel_gt_pm(guc_to_gt(guc), wakeref) {
 		u32 yield[] = {
 			GLOBAL_SCHEDULE_POLICY_RC_YIELD_DURATION,
 			GLOBAL_SCHEDULE_POLICY_RC_YIELD_RATIO,
@@ -5491,16 +5366,11 @@ int intel_guc_deregister_done_process_msg(struct intel_guc *guc,
 #endif
 
 	if (context_wait_for_deregister_to_register(ce)) {
-		struct intel_runtime_pm *runtime_pm =
-			&ce->engine->gt->i915->runtime_pm;
-		intel_wakeref_t wakeref;
-
 		/*
 		 * Previous owner of this guc_id has been deregistered, now safe
 		 * register this context.
 		 */
-		with_intel_runtime_pm(runtime_pm, wakeref)
-			register_context(ce, true);
+		register_context(ce, true);
 		guc_signal_context_fence(ce);
 		intel_context_put(ce);
 	} else if (context_destroyed(ce)) {
@@ -5510,7 +5380,7 @@ int intel_guc_deregister_done_process_msg(struct intel_guc *guc,
 		__guc_context_destroy(ce);
 	}
 
-	decr_outstanding_submission_g2h(guc, true);
+	decr_outstanding_submission_g2h(guc);
 
 	return 0;
 }
@@ -5524,7 +5394,7 @@ int intel_guc_engine_sched_done_process_msg(struct intel_guc *guc,
 		return -EPROTO;
 	}
 
-	decr_outstanding_submission_g2h(guc, true);
+	decr_outstanding_submission_g2h(guc);
 
 	return 0;
 }
@@ -5610,17 +5480,15 @@ int intel_guc_sched_done_process_msg(struct intel_guc *guc,
 		guc_blocked_fence_complete(ce);
 		spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
-		if (banned) {
+		if (banned)
 			guc_cancel_context_requests(ce);
-			intel_engine_signal_breadcrumbs(ce->engine);
-		}
 	} else {
 		guc_err(guc, "Unexpected context state done: sched_state 0x%x, ctx_id %u, state %u\n",
 			ce->guc_state.sched_state, ctx_id, state);
 		return -EPROTO;
 	}
 
-	decr_outstanding_submission_g2h(guc, true);
+	decr_outstanding_submission_g2h(guc);
 	intel_context_put(ce);
 
 	return 0;
@@ -5809,12 +5677,12 @@ int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 	 * This is an unexpected failure of a hardware feature. So, log a real
 	 * error message not just the informational that comes with the reset.
 	 */
-	gdrst = intel_uncore_read_fw(engine->gt->uncore, GEN6_GDRST);
+	gdrst = intel_uncore_read_fw(engine->uncore, GEN6_GDRST);
 	guc_err(guc, "Engine reset request failed on %d:%d (%s) because 0x%X, GDRST = 0x%08X\n",
 		guc_class, instance, engine->name, reason, gdrst);
 
 	if (gdrst) {
-		int err = __intel_wait_for_register_fw(engine->gt->uncore, GEN6_GDRST, ~0U, 0, 500, 0, NULL);
+		int err = __intel_wait_for_register_fw(engine->uncore, GEN6_GDRST, ~0U, 0, 500, 0, NULL);
 		if (err)
 			guc_err(guc, "i915 wait for GDRST also failed: %d [on %d:%d (%s)]\n",
 				err, guc_class, instance, engine->name);
@@ -5831,7 +5699,8 @@ int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 }
 
 void intel_guc_submission_print_info(struct intel_guc *guc,
-				     struct drm_printer *p)
+				     struct drm_printer *p,
+				     int indent)
 {
 	struct i915_sched_engine *sched_engine = guc->sched_engine;
 	struct rb_node *rb;
@@ -5840,65 +5709,33 @@ void intel_guc_submission_print_info(struct intel_guc *guc,
 	if (!sched_engine)
 		return;
 
-	drm_printf(p, "GuC Submission API Version: %d.%d.%d\n",
-		   guc->submission_version.major, guc->submission_version.minor,
-		   guc->submission_version.patch);
-	drm_printf(p, "GuC Number Outstanding Submission G2H: %u\n",
-		   atomic_read(&guc->outstanding_submission_g2h));
-	drm_printf(p, "GuC tasklet count: %u\n",
-		   atomic_read(&sched_engine->tasklet.count));
+	i_printf(p, indent, "Submission API Version: %d.%d.%d\n",
+		 guc->submission_version.major, guc->submission_version.minor,
+		 guc->submission_version.patch);
+	i_printf(p, indent, "Outstanding G2H: %u\n",
+		 atomic_read(&guc->outstanding_submission_g2h));
 
-	spin_lock_irqsave(&sched_engine->lock, flags);
-	drm_printf(p, "Requests in GuC submit tasklet:\n");
-	for (rb = rb_first_cached(&sched_engine->queue); rb; rb = rb_next(rb)) {
-		struct i915_priolist *pl = to_priolist(rb);
-		struct i915_request *rq;
+	if (!RB_EMPTY_ROOT(&sched_engine->queue.rb_root)) {
+		spin_lock_irqsave(&sched_engine->lock, flags);
+		i_printf(p, indent, "Tasklet:\n");
+		for (rb = rb_first_cached(&sched_engine->queue); rb; rb = rb_next(rb)) {
+			struct i915_request *rq;
+			int skip = 0;
 
-		priolist_for_each_request(rq, pl)
-			drm_printf(p, "guc_id=%u, seqno=%llu\n",
-				   rq->context->guc_id.id,
-				   rq->fence.seqno);
+			priolist_for_each_request(rq, to_priolist(rb)) {
+				if (skip++ < 8)
+					i915_request_show(p, rq, "", indent + 2);
+			}
+			if (skip > 8)
+				i_printf(p, indent, "... skipped %d requests\n", skip - 8);
+		}
+		spin_unlock_irqrestore(&sched_engine->lock, flags);
 	}
-	spin_unlock_irqrestore(&sched_engine->lock, flags);
-	drm_printf(p, "\n");
-}
-
-static inline void guc_log_context(struct drm_printer *p,
-				   struct intel_context *ce)
-{
-	char buf[80];
-	int i, len;
-
-	drm_printf(p, "GuC lrc descriptor %u:\n", ce->guc_id.id);
-	if (ce->timeline)
-		drm_printf(p, "  Fence context: %llx",
-			   ce->timeline->fence_context);
-	drm_printf(p, "  HW Context Desc: 0x%08x\n", ce->lrc.lrca);
-	if (ce->lrc_reg_state) {
-		drm_printf(p, "  LRC Head: Internal %u, Memory %u\n",
-			   ce->ring->head,
-			   ce->lrc_reg_state[CTX_RING_HEAD]);
-		drm_printf(p, "  LRC Tail: Internal %u, Memory %u\n",
-			   ce->ring->tail,
-			   ce->lrc_reg_state[CTX_RING_TAIL]);
-	}
-	drm_printf(p, "  Context Pin Count: %u\n",
-		   atomic_read(&ce->pin_count));
-	drm_printf(p, "  GuC ID Ref Count: %u\n",
-		   atomic_read(&ce->guc_id.ref));
-	drm_printf(p, "  Schedule State: 0x%x\n",
-		   ce->guc_state.sched_state);
-
-	len = 0;
-	for (i = GUC_CLIENT_PRIORITY_KMD_HIGH; i < GUC_CLIENT_PRIORITY_NUM; ++i)
-		len += snprintf(buf + len, sizeof(buf) - len,
-				"%d, ", ce->guc_state.prio_count[i]);
-	buf[len - 2] = '\0';
-	drm_printf(p, "  Priority: %d [%s]\n", ce->guc_state.prio, buf);
 }
 
 void intel_guc_submission_print_context_info(struct intel_guc *guc,
-					     struct drm_printer *p)
+					     struct drm_printer *p,
+					     int indent)
 {
 	struct intel_context *ce;
 	unsigned long index;
@@ -5907,36 +5744,36 @@ void intel_guc_submission_print_context_info(struct intel_guc *guc,
 	xa_for_each(&guc->context_lookup, index, ce) {
 		GEM_BUG_ON(intel_context_is_child(ce));
 
-		guc_log_context(p, ce);
+		intel_context_show(ce, p, indent);
 
 		if (intel_context_is_parent(ce)) {
 			struct intel_context *child;
+			int i;
 
-			drm_printf(p, "\t\tNumber children: %u\n",
-				   ce->parallel.number_children);
+			i_printf(p, indent + 2, "Number children: %u\n",
+				 ce->parallel.number_children);
 
 			if (ce->parallel.guc.wq_status) {
-				drm_printf(p, "\t\tWQI Head: %u\n",
-					   READ_ONCE(*ce->parallel.guc.wq_head));
-				drm_printf(p, "\t\tWQI Tail: %u\n",
-					   READ_ONCE(*ce->parallel.guc.wq_tail));
-				drm_printf(p, "\t\tWQI Status: %u\n",
-					   READ_ONCE(*ce->parallel.guc.wq_status));
+				i_printf(p, indent + 2, "WQI: { Head: %x, Tail: %x, Status: %x }\n",
+					 READ_ONCE(*ce->parallel.guc.wq_head),
+					 READ_ONCE(*ce->parallel.guc.wq_tail),
+					 READ_ONCE(*ce->parallel.guc.wq_status));
 			}
 
 			if (ce->engine->emit_bb_start ==
 			    emit_bb_start_parent_no_preempt_mid_batch) {
-				u8 i;
-
-				drm_printf(p, "\t\tChildren Go: %u\n",
-					   get_children_go_value(ce));
+				i_printf(p, indent + 2, "Children Go: %u\n",
+					 get_children_go_value(ce));
 				for (i = 0; i < ce->parallel.number_children; ++i)
-					drm_printf(p, "\t\tChildren Join: %u\n",
-						   get_children_join_value(ce, i));
+					i_printf(p, indent + 2, "Children Join: %u\n",
+						 get_children_join_value(ce, i));
 			}
 
-			for_each_child(ce, child)
-				guc_log_context(p, child);
+			i = 0;
+			for_each_child(ce, child) {
+				i_printf(p, indent + 2, "- child %d:\n", i++);
+				intel_context_show(child, p, indent + 4);
+			}
 		}
 	}
 	rcu_read_unlock();
@@ -5970,12 +5807,13 @@ static int emit_bb_start_parent_no_preempt_mid_batch(struct i915_request *rq,
 						     const unsigned int flags)
 {
 	struct intel_context *ce = rq->context;
+	int srcu;
 	u32 *cs;
 	u8 i;
 
 	GEM_BUG_ON(!intel_context_is_parent(ce));
 
-	cs = intel_ring_begin(rq, 10 + 4 * ce->parallel.number_children);
+	cs = intel_ring_begin_ggtt(rq, &srcu, 10 + 4 * ce->parallel.number_children);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
@@ -6007,7 +5845,7 @@ static int emit_bb_start_parent_no_preempt_mid_batch(struct i915_request *rq,
 	*cs++ = upper_32_bits(offset);
 	*cs++ = MI_NOOP;
 
-	intel_ring_advance(rq, cs);
+	intel_ring_advance_ggtt(rq, srcu, cs);
 
 	return 0;
 }
@@ -6018,11 +5856,12 @@ static int emit_bb_start_child_no_preempt_mid_batch(struct i915_request *rq,
 {
 	struct intel_context *ce = rq->context;
 	struct intel_context *parent = intel_context_to_parent(ce);
+	int srcu;
 	u32 *cs;
 
 	GEM_BUG_ON(!intel_context_is_child(ce));
 
-	cs = intel_ring_begin(rq, 12);
+	cs = intel_ring_begin_ggtt(rq, &srcu, 12);
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
@@ -6051,7 +5890,7 @@ static int emit_bb_start_child_no_preempt_mid_batch(struct i915_request *rq,
 	*cs++ = lower_32_bits(offset);
 	*cs++ = upper_32_bits(offset);
 
-	intel_ring_advance(rq, cs);
+	intel_ring_advance_ggtt(rq, srcu, cs);
 
 	return 0;
 }
@@ -6113,8 +5952,11 @@ emit_fini_breadcrumb_parent_no_preempt_mid_batch(struct i915_request *rq,
 	struct intel_context *ce = rq->context;
 	__maybe_unused u32 *before_fini_breadcrumb_user_interrupt_cs;
 	__maybe_unused u32 *start_fini_breadcrumb_cs = cs;
+	int srcu;
 
 	GEM_BUG_ON(!intel_context_is_parent(ce));
+
+	intel_ring_fini_begin_ggtt(rq, &srcu);
 
 	if (unlikely(skip_handshake(rq))) {
 		/*
@@ -6145,7 +5987,7 @@ emit_fini_breadcrumb_parent_no_preempt_mid_batch(struct i915_request *rq,
 	GEM_BUG_ON(start_fini_breadcrumb_cs +
 		   ce->engine->emit_fini_breadcrumb_dw != cs);
 
-	rq->tail = intel_ring_offset(rq, cs);
+	intel_ring_fini_advance_ggtt(rq, srcu, cs);
 
 	return cs;
 }
@@ -6189,8 +6031,11 @@ emit_fini_breadcrumb_child_no_preempt_mid_batch(struct i915_request *rq,
 	struct intel_context *ce = rq->context;
 	__maybe_unused u32 *before_fini_breadcrumb_user_interrupt_cs;
 	__maybe_unused u32 *start_fini_breadcrumb_cs = cs;
+	int srcu;
 
 	GEM_BUG_ON(!intel_context_is_child(ce));
+
+	intel_ring_fini_begin_ggtt(rq, &srcu);
 
 	if (unlikely(skip_handshake(rq))) {
 		/*
@@ -6221,7 +6066,7 @@ emit_fini_breadcrumb_child_no_preempt_mid_batch(struct i915_request *rq,
 	GEM_BUG_ON(start_fini_breadcrumb_cs +
 		   ce->engine->emit_fini_breadcrumb_dw != cs);
 
-	rq->tail = intel_ring_offset(rq, cs);
+	intel_ring_fini_advance_ggtt(rq, srcu, cs);
 
 	return cs;
 }
@@ -6337,7 +6182,6 @@ bool intel_guc_virtual_engine_has_heartbeat(const struct intel_engine_cs *ve)
 
 void intel_guc_context_set_preemption_timeout(struct intel_context *ce)
 {
-	struct intel_runtime_pm *runtime_pm = &ce->engine->gt->i915->runtime_pm;
 	u32 preempt_timeout_ms = ce->schedule_policy.preempt_timeout_ms;
 	struct intel_guc *guc = ce_to_guc(ce);
 	intel_wakeref_t wakeref;
@@ -6345,7 +6189,7 @@ void intel_guc_context_set_preemption_timeout(struct intel_context *ce)
 	if (!__context_is_available(guc, ce))
 		return;
 
-	with_intel_runtime_pm(runtime_pm, wakeref)
+	with_intel_gt_pm(guc_to_gt(guc), wakeref)
 		__guc_context_set_preemption_timeout(guc, ce->guc_id.id,
 						     preempt_timeout_ms * 1000);
 }

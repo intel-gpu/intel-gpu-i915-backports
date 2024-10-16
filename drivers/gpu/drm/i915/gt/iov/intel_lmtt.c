@@ -254,7 +254,7 @@ static resource_size_t __lmtt_size(struct intel_lmtt *lmtt, unsigned int vf)
 
 static int
 __lmtt_insert_entries(struct intel_lmtt *lmtt, unsigned int vf,
-		      u64 start, struct sg_table *sg)
+		      u64 start, struct scatterlist *sg)
 {
 	struct intel_lmtt_pt *pt, *_pt = NULL;
 	struct sgt_iter iter;
@@ -304,14 +304,11 @@ lmtt_insert_entries(struct intel_lmtt *lmtt, unsigned int vf, u64 start)
 	 */
 	for_each_gt(_gt, gt->i915, id) {
 		struct drm_i915_gem_object *obj = _gt->iov.pf.provisioning.configs[vf].lmem_obj;
-		struct sg_table *sg;
 
 		if (!obj)
 			continue;
 
-		sg = obj->mm.pages;
-
-		err = __lmtt_insert_entries(lmtt, vf, start, sg);
+		err = __lmtt_insert_entries(lmtt, vf, start, obj->mm.pages);
 		if (err)
 			return err;
 

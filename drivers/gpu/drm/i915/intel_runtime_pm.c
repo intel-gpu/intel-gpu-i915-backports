@@ -95,9 +95,10 @@ __intel_wakeref_dec_and_check_tracking(struct intel_runtime_pm *rpm)
 }
 
 void print_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm,
-				    struct drm_printer *p)
+				    struct drm_printer *p,
+				    int indent)
 {
-	intel_wakeref_tracker_show(&rpm->debug, p);
+	intel_wakeref_tracker_show(&rpm->debug, p, indent);
 }
 
 #else

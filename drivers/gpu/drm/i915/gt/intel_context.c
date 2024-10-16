@@ -105,7 +105,7 @@ static int __context_pin_state(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
 {
 	int err;
 
-	err = i915_ggtt_pin_for_gt(vma, ww, 0, PIN_HIGH);
+	err = i915_ggtt_pin_for_gt(vma, ww);
 	if (err)
 		return err;
 
@@ -258,17 +258,6 @@ int __intel_context_do_pin_ww(struct intel_context *ce,
 			goto err_unlock;
 		}
 
-		/*
-		 * The pinning involved writing some GGTT addresses. If done during
-		 * migration, it may create a skewed context.
-		 */
-		if (unlikely(i915_sriov_vf_migration_check(ce->engine->i915, false))) {
-			ce->ops->unpin(ce);
-			intel_context_active_release(ce);
-			err = -EAGAIN;
-			goto err_unlock;
-		}
-
 		CE_TRACE(ce, "pin ring:{start:%08x, head:%04x, tail:%04x}\n",
 			 i915_ggtt_offset(ce->ring->vma),
 			 ce->ring->head, ce->ring->tail);
@@ -322,6 +311,7 @@ retry:
 
 void __intel_context_do_unpin(struct intel_context *ce, int sub)
 {
+	GEM_BUG_ON(atomic_read(&ce->pin_count) < sub);
 	if (!atomic_sub_and_test(sub, &ce->pin_count))
 		return;
 
@@ -451,7 +441,6 @@ intel_context_init(struct intel_context *ce, struct intel_engine_cs *engine)
 	ce->sseu = engine->sseu;
 	ce->ring = NULL;
 	ce->ring_size = SZ_4K;
-	get_random_bytes(&ce->debugger_lrc_id, sizeof(ce->debugger_lrc_id));
 
 	ewma_runtime_init(&ce->stats.runtime.avg);
 
@@ -528,8 +517,16 @@ void intel_context_enter_engine(struct intel_context *ce)
 
 void intel_context_exit_engine(struct intel_context *ce)
 {
+	unsigned long flags;
+
 	intel_timeline_exit(ce->timeline);
-	intel_engine_pm_put_delay(ce->engine, 2); /* short keepalive */
+
+	flags = 0;
+	if (!test_bit(CONTEXT_BARRIER_BIT, &ce->flags)) /* short keepalive */
+		flags = INTEL_WAKEREF_PUT_ASYNC |
+			FIELD_PREP(INTEL_WAKEREF_PUT_DELAY, 2);
+
+	__intel_wakeref_put(&ce->engine->wakeref, flags);
 }
 
 int intel_context_prepare_remote_request(struct intel_context *ce,
@@ -744,7 +741,7 @@ bool intel_context_ban(struct intel_context *ce, struct i915_request *rq)
 	return ret;
 }
 
-static void hexdump(struct drm_printer *m, const void *buf, size_t len)
+static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t len)
 {
 	const size_t rowsize = 8 * sizeof(u32);
 	const void *prev = NULL;
@@ -756,7 +753,7 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 
 		if (prev && !memcmp(prev, buf + pos, rowsize)) {
 			if (!skip) {
-				drm_printf(m, "*\n");
+				i_printf(m, indent, "*\n");
 				skip = true;
 			}
 			continue;
@@ -766,126 +763,104 @@ static void hexdump(struct drm_printer *m, const void *buf, size_t len)
 						rowsize, sizeof(u32),
 						line, sizeof(line),
 						false) >= sizeof(line));
-		drm_printf(m, "[%04zx] %s\n", pos, line);
+		i_printf(m, indent, "[%04zx] %s\n", pos, line);
 
 		prev = buf + pos;
 		skip = false;
 	}
 }
 
-void intel_context_show(struct intel_context *ce, struct drm_printer *p)
+void intel_context_show(struct intel_context *ce, struct drm_printer *p, int indent)
 {
+	bool running = ce->timeline && i915_active_fence_isset(&ce->timeline->last_request);
 	u32 *regs = ce->lrc_reg_state;
 	char buf[80] = "[i915]";
 	int i, len;
 
 	if (ce->client) {
 		rcu_read_lock();
-		sprintf(buf, "%s[%d]",
+		sprintf(buf, READ_ONCE(ce->client->closed) ? "%s<%d>" : "%s[%d]",
 			i915_drm_client_name(ce->client),
 			pid_nr(i915_drm_client_pid(ce->client)));
 		rcu_read_unlock();
 	}
 
-	drm_printf(p, "ce->name: %s\n", buf);
-	drm_printf(p, "ce->fence: %llx\n", ce->timeline->fence_context);
-	drm_printf(p, "ce->engine: %s\n", ce->engine->name);
-	drm_printf(p, "ce->pin_count: %d\n", atomic_read(&ce->pin_count));
-	drm_printf(p, "ce->active: %d\n", ce->active_count);
-	drm_printf(p, "ce->flags: 0x%08lx\n", ce->flags);
-	drm_printf(p, "ce->runtime: { total: %lld ns, avg: %lld ns }\n",
-		   intel_context_get_total_runtime_ns(ce),
-		   intel_context_get_avg_runtime_ns(ce));
-
-	drm_printf(p, "ce->lrc.lrca: 0x%08x\n", ce->lrc.lrca);
-	drm_printf(p, "ce->lrc.ccid: 0x%08x\n", ce->lrc.ccid);
-
-	drm_printf(p, "ce->policy.preempt_timeout_ms: %d\n", ce->schedule_policy.preempt_timeout_ms);
-	drm_printf(p, "ce->policy.timeslice_duration_ms: %d\n", ce->schedule_policy.timeslice_duration_ms);
-
-	drm_printf(p, "ce->guc.id: 0x%08x\n", ce->guc_id.id);
-	drm_printf(p, "ce->guc.ref: 0x%08x\n", atomic_read(&ce->guc_id.ref));
-	drm_printf(p, "ce->guc.state: 0x%08x\n", ce->guc_state.sched_state);
+	i_printf(p, indent, "ce->name: %s\n", buf);
+	if (ce->timeline)
+		i_printf(p, indent, "ce->fence: %llx\n", ce->timeline->fence_context);
+	i_printf(p, indent, "ce->engine: %s\n", ce->engine->name);
 
 	len = 0;
-	for (i = GUC_CLIENT_PRIORITY_KMD_HIGH; i < GUC_CLIENT_PRIORITY_NUM; ++i)
-		len += snprintf(buf + len, sizeof(buf) - len,
-				"%d, ", ce->guc_state.prio_count[i]);
-	buf[len - 2] = '\0';
-	drm_printf(p, "ce->guc.pririoty: %d [%s]\n", ce->guc_state.prio, buf);
+	buf[0] = '\0';
+	if (intel_context_is_banned(ce))
+		len += snprintf(buf + len, sizeof(buf) - len, "banned, ");
+	if (intel_context_is_closed(ce))
+		len += snprintf(buf + len, sizeof(buf) - len, "closed, ");
+	if (intel_context_debug(ce))
+		len += snprintf(buf + len, sizeof(buf) - len, "debug, ");
+	if (len)
+		buf[len - 2] = '\0';
+	i_printf(p, indent, "ce->flags: 0x%08lx [%s]\n", ce->flags, buf);
+	i_printf(p, indent, "ce->pins: { pinned:%d, active:%d, running:%s }\n",
+		 atomic_read(&ce->pin_count), ce->active_count, str_yes_no(running));
+	i_printf(p, indent, "ce->runtime: { total: %lld ns, avg: %lld ns }\n",
+		 intel_context_get_total_runtime_ns(ce),
+		 intel_context_get_avg_runtime_ns(ce));
+
+	i_printf(p, indent, "ce->lrc.lrca: 0x%08x\n", ce->lrc.lrca);
+	i_printf(p, indent, "ce->lrc.ccid: 0x%08x\n", ce->lrc.ccid);
+
+	i_printf(p, indent, "ce->policy.preempt_timeout_ms: %d\n", ce->schedule_policy.preempt_timeout_ms);
+	i_printf(p, indent, "ce->policy.timeslice_duration_ms: %d\n", ce->schedule_policy.timeslice_duration_ms);
+
+	i_printf(p, indent, "ce->guc.id: 0x%08x\n", ce->guc_id.id);
+	i_printf(p, indent, "ce->guc.ref: 0x%08x\n", atomic_read(&ce->guc_id.ref));
+	i_printf(p, indent, "ce->guc.state: 0x%08x\n", ce->guc_state.sched_state);
+
+	if (running) {
+		len = 0;
+		buf[0] = '\0';
+		for (i = GUC_CLIENT_PRIORITY_KMD_HIGH; i < GUC_CLIENT_PRIORITY_NUM; ++i)
+			len += snprintf(buf + len, sizeof(buf) - len,
+					"%d, ", ce->guc_state.prio_count[i]);
+		buf[len - 2] = '\0';
+		i_printf(p, indent, "ce->guc.priority: %d [%s]\n", ce->guc_state.prio, buf);
+	}
 
 	if (has_null_page(ce->vm))
-		drm_printf(p, "vm->poison:   NULL PTE\n");
+		i_printf(p, indent, "vm->poison:   NULL PTE\n");
 	else
-		drm_printf(p, "vm->poison:   0x%08x\n",
-			   ce->vm->poison);
+		i_printf(p, indent, "vm->poison:   0x%08x\n",
+			 ce->vm->poison);
 
-	if (ce->ring) {
-		drm_printf(p, "ring->start:  0x%08x [%08x]\n",
-			   i915_ggtt_offset(ce->ring->vma), regs ? regs[CTX_RING_START] : -1);
-		drm_printf(p, "ring->head:   0x%08x [%08x]\n",
-			   ce->ring->head, regs ? regs[CTX_RING_HEAD] : -1);
-		drm_printf(p, "ring->tail:   0x%08x [%08x]\n",
-			   ce->ring->tail, regs ? regs[CTX_RING_TAIL] : -1);
-		drm_printf(p, "ring->emit:   0x%08x\n",
-			   ce->ring->emit);
-		drm_printf(p, "ring->space:  0x%08x\n",
-			   ce->ring->space);
-		drm_printf(p, "ring->hwsp:   0x%08x\n",
-			   ce->timeline->hwsp_offset);
+	if (ce->ring && running) {
+		i_printf(p, indent, "ring->start:  0x%08x [%08x]\n",
+			 i915_ggtt_offset(ce->ring->vma), regs ? regs[CTX_RING_START] : -1);
+		i_printf(p, indent, "ring->head:   0x%08x [%08x]\n",
+			 ce->ring->head, regs ? regs[CTX_RING_HEAD] : -1);
+		i_printf(p, indent, "ring->tail:   0x%08x [%08x]\n",
+			 ce->ring->tail, regs ? regs[CTX_RING_TAIL] : -1);
+		i_printf(p, indent, "ring->emit:   0x%08x\n",
+			 ce->ring->emit);
+		i_printf(p, indent, "ring->space:  0x%08x\n",
+			 ce->ring->space);
+		i_printf(p, indent, "ring->hwsp:   0x%08x\n",
+			 ce->timeline->hwsp_offset);
 	}
 
-	if (ce->lrc_reg_state) {
+	if (ce->lrc_reg_state && running) {
 		void *va = ce->lrc_reg_state;
 
-		drm_printf(p, "ppHWSP [0x%08lx,0x%08x):\n",
-			   i915_ggtt_offset(ce->state) - PAGE_SIZE,
-			   i915_ggtt_offset(ce->state));
-		hexdump(p, va - PAGE_SIZE, PAGE_SIZE);
+		i_printf(p, indent, "ppHWSP [0x%08lx,0x%08x):\n",
+			 i915_ggtt_offset(ce->state) - PAGE_SIZE,
+			 i915_ggtt_offset(ce->state));
+		hexdump(p, indent + 2, va - PAGE_SIZE, PAGE_SIZE);
 
-		drm_printf(p, "Logical Ring Context [0x%08x,0x%08llx):\n",
-			   i915_ggtt_offset(ce->state),
-			   i915_ggtt_offset(ce->state) + ce->state->node.size);
-		hexdump(p, va, PAGE_SIZE);
+		i_printf(p, indent, "Logical Ring Context [0x%08x,0x%08llx):\n",
+			 i915_ggtt_offset(ce->state),
+			 i915_ggtt_offset(ce->state) + ce->state->node.size);
+		hexdump(p, indent + 2, va, PAGE_SIZE);
 	}
-}
-
-/**
- * intel_context_update_ring_head_tail - Set ring head and tail to the context preemption point.
- * @ce: Intel Context instance struct
- *
- * After migration, contexts contain head positions which may be lower than the place where the
- * execution really ended. Update the head pointer to where it was when it finished execution
- * (either got preempted or stopped due to head reaching the tail).
- * While at it, also update the tail so that is is as close to head as possible.
- */
-void intel_context_update_ring_head_tail(struct intel_context *ce)
-{
-	u32 *regs;
-
-	if (unlikely(!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)))
-		return;
-	if (unlikely(!test_bit(CONTEXT_VALID_BIT, &ce->flags)))
-		return;
-
-
-	regs = ce->lrc_reg_state;
-	if (regs)
-		WRITE_ONCE(ce->ring->head, regs[CTX_RING_HEAD] & GENMASK(20, 2));
-
-	/*
-	 * Tail needs to be 8-byte aligned, we've got a BUG_ON to verify that. Setting it
-	 * like below makes it possible for the tail to aim at a middle of an instruction.
-	 * But if it does, then an unfinished request is linked to it. All unfinished
-	 * requests will be re-submitted, and that will increment the tail to a correct
-	 * value.
-	 */
-	intel_ring_set_tail(ce->ring, (ce->ring->head+7) & GENMASK(20, 3));
-	if (regs) {
-		regs[CTX_RING_HEAD] = (regs[CTX_RING_HEAD] & GENMASK(31, 21)) | ce->ring->head;
-		regs[CTX_RING_TAIL] = ce->ring->tail;
-	}
-
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

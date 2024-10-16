@@ -320,8 +320,6 @@ static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
 	do {
 		if (ufence_compare(wake))
 			return true;
-
-		usleep_range_state(0, 1, TASK_INTERRUPTIBLE);
 	} while (!busy_wait_stop(wake->tsk, timeout_ns, cpu));
 
 	return false;

@@ -14,9 +14,6 @@ Our current backport supports the following OS Distribution.
 | SLES® | 15SP5 | 5.14.21.150500.xx |
 | SLES® | 15SP4 | 5.14.21.150400.xx |
 
-  The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation.
-  Please refer [versions](../versions) file to get information on the kernel version being used during backporting.
-
 ## Prerequisite
 We have dependencies on the following packages
   - make
@@ -57,9 +54,11 @@ Example:
 ```
 Above command will create rpm packages at $HOME/rpmbuild/RPMS/x86_64/
 
-Please note that DKMS installation will skip if the kernel headers are not installed.
+#### DKMS Kernel Headers Requirement
+The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation which can lead to installation issues.
+Please refer [versions](../versions) file to get information on the kernel version being used during backporting.
 
-In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
+Please note that DKMS installation will skip if the kernel headers are not installed.
 
 ```
 $ sudo zypper ref -s && sudo zypper install -y kernel-default-<SLES15_SP6_KERNEL_VERSION> \
