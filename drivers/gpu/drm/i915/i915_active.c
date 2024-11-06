@@ -13,7 +13,6 @@
 
 #include "i915_drv.h"
 #include "i915_active.h"
-#include "i915_suspend_fence.h"
 
 /*
  * Active refs memory management
@@ -541,7 +540,6 @@ static void enable_signaling(struct i915_active_fence *active, bool boost)
 	if (!fence)
 		return;
 
-	i915_fence_check_lr_lockdep(fence);
 	dma_fence_enable_sw_signaling(fence);
 	if (boost && dma_fence_is_i915(fence))
 		i915_request_set_priority(to_request(fence), I915_PRIORITY_MAX);
@@ -1189,21 +1187,6 @@ int i915_active_fence_set(struct i915_active_fence *active,
 	}
 
 	return err;
-}
-
-int i915_active_add_suspend_fence(struct i915_active *ref,
-				  struct intel_context *ce,
-				  struct i915_request *rq)
-{
-	struct dma_fence *fence;
-
-	if (!ce || !(ce->sfence || rq))
-		return -EINVAL;
-
-	fence = ce->sfence ? &ce->sfence->base.rq.fence : &rq->fence;
-
-	lockdep_assert_held(&ce->timeline->mutex);
-	return i915_active_ref(ref, ce->timeline->fence_context, fence);
 }
 
 void i915_active_noop(struct dma_fence *fence, struct dma_fence_cb *cb)

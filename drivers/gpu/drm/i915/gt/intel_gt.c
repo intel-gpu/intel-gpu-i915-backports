@@ -3,6 +3,8 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <linux/percpu.h>
+
 #include <drm/drm_managed.h>
 #include <drm/intel-gtt.h>
 #include <drm/drm_managed.h>
@@ -86,7 +88,6 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	gt->suspend = true;
 
 	spin_lock_init(gt->irq_lock);
-	i915_px_cache_init(&gt->px_cache);
 
 	INIT_LIST_HEAD(&gt->pinned_contexts);
 
@@ -626,10 +627,12 @@ static void release_vm(struct intel_gt *gt)
 	if (!vm)
 		return;
 
+	GEM_BUG_ON(kref_read(&vm->ref) != 1);
 	intel_flat_lmem_ppgtt_fini(vm, &gt->flat);
 	i915_vm_put(vm);
 
-	i915_px_cache_fini(&gt->px_cache);
+	rcu_barrier();
+	flush_workqueue(gt->wq);
 }
 
 static struct i915_request *
@@ -912,7 +915,7 @@ static int init_wq(struct intel_gt *gt)
 	if (!gt->wq)
 		return -ENOMEM;
 
-	gt->sched = i915_sched_engine_create_cpu(5, gt->wq, cpumask_of_i915(gt->i915));
+	gt->sched = i915_sched_engine_create_cpu(5, gt->wq, cpumask_of_i915(gt->i915), cpu_all_mask);
 	if (!gt->sched)
 		goto out_free_wq;
 
@@ -926,6 +929,9 @@ out_free_wq:
 
 static void print_fw_ver(struct intel_gt *gt, struct intel_uc_fw *fw)
 {
+	if (!intel_uc_fw_is_running(fw))
+		return;
+
 	gt_info(gt, "%s firmware %s version %u.%u.%u\n",
 		intel_uc_fw_type_repr(fw->type), fw->file_selected.path,
 		fw->file_selected.ver.major,
@@ -944,10 +950,8 @@ int intel_gt_init(struct intel_gt *gt)
 		return err;
 
 	err = init_wq(gt);
-	if (err)
+	if (unlikely(err))
 		return err;
-
-	intel_gt_init_workarounds(gt);
 
 	/*
 	 * This is just a security blanket to placate dragons.
@@ -959,9 +963,15 @@ int intel_gt_init(struct intel_gt *gt)
 	wakeref = intel_gt_pm_get(gt);
 	intel_uncore_forcewake_get(gt->uncore, FORCEWAKE_ALL);
 
+	err = i915_px_cache_init(gt);
+	if (unlikely(err))
+		goto err_wq;
+
+	intel_gt_init_workarounds(gt);
+
 	err = intel_iov_init(&gt->iov);
 	if (unlikely(err))
-		goto out_wq;
+		goto err_px;
 
 	err = intel_gt_init_counters(gt, SZ_4K);
 	if (err && err != -ENODEV)
@@ -1039,8 +1049,12 @@ err_pm:
 	intel_gt_fini_counters(gt);
 err_iov:
 	intel_iov_fini(&gt->iov);
-out_wq:
+err_px:
+	i915_px_cache_fini(gt);
+err_wq:
 	if (gt->wq) {
+		flush_workqueue(gt->wq);
+		rcu_barrier();
 		i915_sched_engine_put(gt->sched);
 		destroy_workqueue(gt->wq);
 		gt->wq = NULL;
@@ -1115,6 +1129,7 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 
 	/* We need to wait for inflight RCU frees to release their grip */
 	rcu_barrier();
+	i915_gem_drain_freed_objects(i915);
 
 	for_each_gt(gt, i915, id) {
 		intel_iov_release(&gt->iov);
@@ -1127,11 +1142,18 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 		intel_engines_free(gt);
 
 		if (gt->wq) {
+			rcu_barrier();
+			flush_workqueue(gt->wq);
+			rcu_barrier();
 			i915_sched_engine_put(gt->sched);
 			destroy_workqueue(gt->wq);
 			gt->wq = NULL;
 		}
+
+		i915_px_cache_fini(gt);
 	}
+
+	i915_gem_drain_freed_objects(i915);
 }
 
 static int driver_flr(struct intel_gt *gt)

@@ -39,7 +39,7 @@ static int make_obj_busy(struct drm_i915_gem_object *obj)
 retry:
 		err = i915_gem_object_lock(obj, &ww);
 		if (!err)
-			err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_USER);
+			err = i915_vma_pin_ww(vma, 0, 0, PIN_USER);
 		if (err)
 			goto err;
 
@@ -586,7 +586,7 @@ static int __igt_mmap_gpu(struct drm_i915_private *i915,
 retry:
 		err = i915_gem_object_lock(obj, &ww);
 		if (!err)
-			err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_USER);
+			err = i915_vma_pin_ww(vma, 0, 0, PIN_USER);
 		if (err)
 			goto out_ww;
 

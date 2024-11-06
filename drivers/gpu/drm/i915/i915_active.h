@@ -249,10 +249,6 @@ i915_active_add_request(struct i915_active *ref, struct i915_request *rq)
 	return i915_active_ref(ref, rq->fence.context, &rq->fence);
 }
 
-int i915_active_add_suspend_fence(struct i915_active *ref,
-				  struct intel_context *ce,
-				  struct i915_request *rq);
-
 struct dma_fence *
 i915_active_set_exclusive(struct i915_active *ref, struct dma_fence *f);
 

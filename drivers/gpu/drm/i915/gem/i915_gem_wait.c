@@ -64,6 +64,8 @@ i915_gem_object_wait_reservation(struct dma_resv *resv,
 	struct dma_fence *excl;
 	bool prune_fences = false;
 
+	GEM_BUG_ON(timeout < 0);
+
 	if (flags & I915_WAIT_ALL) {
 		struct dma_fence **shared;
 		unsigned int count, i;

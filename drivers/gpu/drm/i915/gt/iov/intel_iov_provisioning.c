@@ -2928,13 +2928,17 @@ fail:
  */
 void intel_iov_provisioning_fini(struct intel_iov *iov)
 {
+	intel_wakeref_t wakeref;
+
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 
 	pf_fini_reprovisioning_worker(iov);
 
-	mutex_lock(pf_provisioning_mutex(iov));
-	pf_unprovision_all(iov);
-	mutex_unlock(pf_provisioning_mutex(iov));
+	with_intel_gt_pm(iov_to_gt(iov), wakeref) {
+		mutex_lock(pf_provisioning_mutex(iov));
+		pf_unprovision_all(iov);
+		mutex_unlock(pf_provisioning_mutex(iov));
+	}
 }
 
 /**

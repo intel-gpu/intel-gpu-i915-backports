@@ -174,16 +174,16 @@ static int legacy_ring_idx(const struct legacy_ring *ring)
 		u8 base, max;
 	} map[] = {
 		[RENDER_CLASS] = { RCS0, 1 },
-		[COPY_ENGINE_CLASS] = { BCS0, I915_MAX_BCS },
+		[COPY_ENGINE_CLASS] = { BCS0, 1 },
 		[VIDEO_DECODE_CLASS] = { VCS0, I915_MAX_VCS },
 		[VIDEO_ENHANCEMENT_CLASS] = { VECS0, I915_MAX_VECS },
-		[COMPUTE_CLASS] = { CCS0, I915_MAX_CCS },
+		[COMPUTE_CLASS] = { CCS0, 0 },
 	};
 
 	if (GEM_DEBUG_WARN_ON(ring->class >= ARRAY_SIZE(map)))
 		return INVALID_ENGINE;
 
-	if (GEM_DEBUG_WARN_ON(ring->instance >= map[ring->class].max))
+	if (ring->instance >= map[ring->class].max)
 		return INVALID_ENGINE;
 
 	return map[ring->class].base + ring->instance;
@@ -300,8 +300,7 @@ void intel_engines_driver_register(struct drm_i915_private *i915)
 			}
 		}
 
-		if (drm_WARN(&i915->drm, errors,
-			     "Invalid UABI engine mapping found"))
+		if (errors)
 			i915->uabi_engines = RB_ROOT;
 	}
 

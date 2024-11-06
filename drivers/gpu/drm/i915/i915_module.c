@@ -9,6 +9,7 @@
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_object.h"
 #include "gem/i915_gem_shmem.h"
+#include "gt/intel_gtt.h"
 
 #include "i915_active.h"
 #include "i915_buddy.h"
@@ -87,6 +88,8 @@ static const struct {
 	},
 	{ .init = i915_vma_module_init,
 	  .exit = i915_vma_module_exit },
+	{ .init = intel_ppgtt_module_init,
+	  .exit = intel_ppgtt_module_exit },
 	{ .init = i915_mock_selftests },
 	{ .init = i915_pmu_init,
 	  .exit = i915_pmu_exit },

@@ -784,7 +784,6 @@ guc_capture_log_remove_dw(struct intel_guc *guc, struct __guc_capture_bufstate *
 {
 	int tries = 2;
 	int avail = 0;
-	u32 *src_data;
 
 	if (!guc_capture_buf_cnt(buf))
 		return 0;
@@ -792,8 +791,7 @@ guc_capture_log_remove_dw(struct intel_guc *guc, struct __guc_capture_bufstate *
 	while (tries--) {
 		avail = guc_capture_buf_cnt_to_end(buf);
 		if (avail >= sizeof(u32)) {
-			src_data = (u32 *)(buf->data + buf->rd);
-			*dw = *src_data;
+			memcpy(dw, buf->data + buf->rd, 4);
 			buf->rd += 4;
 			return 4;
 		}
@@ -809,12 +807,14 @@ static bool
 guc_capture_data_extracted(struct __guc_capture_bufstate *b,
 			   int size, void *dest)
 {
-	if (guc_capture_buf_cnt_to_end(b) >= size) {
-		memcpy(dest, (b->data + b->rd), size);
-		b->rd += size;
-		return true;
-	}
-	return false;
+	if (guc_capture_buf_cnt_to_end(b) < size)
+		return false;
+
+	if (!i915_memcpy_from_wc(dest, b->data + b->rd, size))
+		i915_unaligned_memcpy_from_wc(dest, b->data + b->rd, size);
+
+	b->rd += size;
+	return true;
 }
 
 static int
@@ -827,7 +827,7 @@ guc_capture_log_get_group_hdr(struct intel_guc *guc, struct __guc_capture_bufsta
 	if (fullsize > guc_capture_buf_cnt(buf))
 		return -1;
 
-	if (guc_capture_data_extracted(buf, fullsize, (void *)ghdr))
+	if (guc_capture_data_extracted(buf, fullsize, ghdr))
 		return 0;
 
 	read += guc_capture_log_remove_dw(guc, buf, &ghdr->owner);
@@ -848,7 +848,7 @@ guc_capture_log_get_data_hdr(struct intel_guc *guc, struct __guc_capture_bufstat
 	if (fullsize > guc_capture_buf_cnt(buf))
 		return -1;
 
-	if (guc_capture_data_extracted(buf, fullsize, (void *)hdr))
+	if (guc_capture_data_extracted(buf, fullsize, hdr))
 		return 0;
 
 	read += guc_capture_log_remove_dw(guc, buf, &hdr->owner);
@@ -872,7 +872,7 @@ guc_capture_log_get_register(struct intel_guc *guc, struct __guc_capture_bufstat
 	if (fullsize > guc_capture_buf_cnt(buf))
 		return -1;
 
-	if (guc_capture_data_extracted(buf, fullsize, (void *)reg))
+	if (guc_capture_data_extracted(buf, fullsize, reg))
 		return 0;
 
 	read += guc_capture_log_remove_dw(guc, buf, &reg->offset);
@@ -1296,63 +1296,46 @@ static int __guc_capture_flushlog_complete(struct intel_guc *guc)
 
 static void __guc_capture_process_output(struct intel_guc *guc)
 {
-	unsigned int buffer_size, read_offset, write_offset, full_count;
+	const unsigned int buffer_size = intel_guc_get_log_buffer_size(&guc->log, GUC_CAPTURE_LOG_BUFFER);
+	struct guc_log_buffer_state *log_buf_state =
+		guc->log.buf_addr + sizeof(struct guc_log_buffer_state) * GUC_CAPTURE_LOG_BUFFER;
+	struct guc_log_buffer_state log_buf_state_local = *log_buf_state;
 	struct intel_uc *uc = container_of(guc, typeof(*uc), guc);
-	struct guc_log_buffer_state log_buf_state_local;
-	struct guc_log_buffer_state *log_buf_state;
-	struct __guc_capture_bufstate buf;
-	void *src_data = NULL;
-	bool new_overflow;
-	int ret;
-
-	log_buf_state = guc->log.buf_addr +
-			(sizeof(struct guc_log_buffer_state) * GUC_CAPTURE_LOG_BUFFER);
-	src_data = guc->log.buf_addr +
-		   intel_guc_get_log_buffer_offset(&guc->log, GUC_CAPTURE_LOG_BUFFER);
-
-	/*
-	 * Make a copy of the state structure, inside GuC log buffer
-	 * (which is uncached mapped), on the stack to avoid reading
-	 * from it multiple times.
-	 */
-	memcpy(&log_buf_state_local, log_buf_state, sizeof(struct guc_log_buffer_state));
-	buffer_size = intel_guc_get_log_buffer_size(&guc->log, GUC_CAPTURE_LOG_BUFFER);
-	read_offset = log_buf_state_local.read_ptr;
-	write_offset = log_buf_state_local.sampled_write_ptr;
-	full_count = log_buf_state_local.buffer_full_cnt;
 
 	/* Bookkeeping stuff */
 	guc->log.stats[GUC_CAPTURE_LOG_BUFFER].flush += log_buf_state_local.flush_to_file;
-	new_overflow = intel_guc_check_log_buf_overflow(&guc->log, GUC_CAPTURE_LOG_BUFFER,
-							full_count);
 
 	/* Now copy the actual logs. */
-	if (unlikely(new_overflow)) {
+	if (unlikely(intel_guc_check_log_buf_overflow(&guc->log, GUC_CAPTURE_LOG_BUFFER,
+						      log_buf_state_local.buffer_full_cnt))) {
 		/* copy the whole buffer in case of overflow */
-		read_offset = 0;
-		write_offset = buffer_size;
-	} else if (unlikely((read_offset > buffer_size) ||
-			(write_offset > buffer_size))) {
-		guc_err(guc, "Register capture buffer in invalid state: read = 0x%X, size = 0x%X!\n",
-			read_offset, buffer_size);
+		log_buf_state_local.read_ptr = 0;
+		log_buf_state_local.sampled_write_ptr = buffer_size;
+	} else if (unlikely(log_buf_state_local.read_ptr >= buffer_size ||
+			    log_buf_state_local.sampled_write_ptr > buffer_size)) {
+		guc_err(guc, "Register capture buffer in invalid state: read = 0x%X, write = 0x%X, size = 0x%X!\n",
+			log_buf_state_local.read_ptr,
+			log_buf_state_local.sampled_write_ptr,
+			buffer_size);
 		/* copy whole buffer as offsets are unreliable */
-		read_offset = 0;
-		write_offset = buffer_size;
+		log_buf_state_local.read_ptr = 0;
+		log_buf_state_local.sampled_write_ptr = buffer_size;
 	}
 
-	buf.size = buffer_size;
-	buf.rd = read_offset;
-	buf.wr = write_offset;
-	buf.data = src_data;
-
 	if (!(uc->epoch & INTEL_UC_IN_RESET)) {
-		do {
-			ret = guc_capture_extract_reglists(guc, &buf);
-		} while (ret >= 0);
+		struct __guc_capture_bufstate buf = {
+			.size = buffer_size,
+			.rd = log_buf_state_local.read_ptr,
+			.wr = log_buf_state_local.sampled_write_ptr,
+			.data = guc->log.buf_addr + intel_guc_get_log_buffer_offset(&guc->log, GUC_CAPTURE_LOG_BUFFER),
+		};
+
+		while (guc_capture_extract_reglists(guc, &buf) >= 0)
+			;
 	}
 
 	/* Update the state of log buffer err-cap state */
-	log_buf_state->read_ptr = write_offset;
+	log_buf_state->read_ptr = log_buf_state_local.sampled_write_ptr;
 	log_buf_state->flush_to_file = 0;
 	__guc_capture_flushlog_complete(guc);
 }

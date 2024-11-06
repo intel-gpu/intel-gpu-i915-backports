@@ -16,6 +16,3 @@
  * Tests are executed in order by igt/i915_selftest
  */
 selftest(sanitycheck, i915_wip_sanitycheck) /* keep first (igt selfcheck) */
-selftest(lmem, i915_gem_lmem_wip_selftests)
-selftest(live_scheduler, i915_scheduler_live_selftests)
-selftest(perf_scheduler, i915_scheduler_perf_selftests)

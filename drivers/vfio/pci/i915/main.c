@@ -117,7 +117,6 @@ void i915_vfio_pci_reset(struct i915_vfio_pci_core_device *i915_vdev)
 		i915_vfio_pci_disable_file(i915_vdev->fd);
 
 	i915_vdev->mig_state = VFIO_DEVICE_STATE_RUNNING;
-	i915_vfio_unmap_resources(i915_vdev);
 }
 
 static const char *i915_vfio_dev_state_str(u32 state)
@@ -205,24 +204,13 @@ i915_vfio_set_state(struct i915_vfio_pci_core_device *i915_vdev, u32 new)
 		struct i915_vfio_pci_migration_file *migf;
 		int ret;
 
-		ret = i915_vfio_map_resources(i915_vdev);
-		if (ret) {
-			dev_dbg(i915_vdev_to_dev(i915_vdev),
-				"Failed to transition state: %s->%s err=%d\n",
-				i915_vfio_dev_state_str(cur), i915_vfio_dev_state_str(new), ret);
-			return ERR_PTR(ret);
-		}
-
 		migf = i915_vfio_pci_alloc_file(i915_vdev, I915_VFIO_FILE_SAVE);
-		if (IS_ERR(migf)) {
-			i915_vfio_unmap_resources(i915_vdev);
+		if (IS_ERR(migf))
 			return ERR_CAST(migf);
-		}
 
-		ret = i915_vfio_pci_produce_save_data(migf);
+		ret = i915_vfio_save_data_prepare(migf);
 		if (ret) {
 			fput(migf->filp);
-			i915_vfio_unmap_resources(i915_vdev);
 			return ERR_PTR(ret);
 		}
 
@@ -232,24 +220,16 @@ i915_vfio_set_state(struct i915_vfio_pci_core_device *i915_vdev, u32 new)
 	if ((cur == VFIO_DEVICE_STATE_STOP_COPY && new == VFIO_DEVICE_STATE_STOP)) {
 		if (i915_vdev->fd)
 			i915_vfio_pci_disable_file(i915_vdev->fd);
-		i915_vfio_unmap_resources(i915_vdev);
 
 		return NULL;
 	}
 
 	if (cur == VFIO_DEVICE_STATE_STOP && new == VFIO_DEVICE_STATE_RESUMING) {
 		struct i915_vfio_pci_migration_file *migf;
-		int ret;
-
-		ret = i915_vfio_map_resources(i915_vdev);
-		if (ret)
-			return ERR_PTR(ret);
 
 		migf = i915_vfio_pci_alloc_file(i915_vdev, I915_VFIO_FILE_RESUME);
-		if (IS_ERR(migf)) {
-			i915_vfio_unmap_resources(i915_vdev);
+		if (IS_ERR(migf))
 			return ERR_CAST(migf);
-		}
 
 		return migf->filp;
 	}
@@ -257,7 +237,6 @@ i915_vfio_set_state(struct i915_vfio_pci_core_device *i915_vdev, u32 new)
 	if (cur == VFIO_DEVICE_STATE_RESUMING && new == VFIO_DEVICE_STATE_STOP) {
 		if (i915_vdev->fd)
 			i915_vfio_pci_disable_file(i915_vdev->fd);
-		i915_vfio_unmap_resources(i915_vdev);
 
 		return NULL;
 	}
@@ -366,8 +345,11 @@ static const struct i915_vfio_pci_migration_pf_ops pf_ops = {
 	.fw.save = i915_sriov_fw_state_save,
 	.fw.load = i915_sriov_fw_state_load,
 	.lmem.size = i915_sriov_lmem_size,
-	.lmem.map = i915_sriov_lmem_map,
-	.lmem.unmap = i915_sriov_lmem_unmap,
+	.lmem.save = i915_sriov_lmem_save,
+	.lmem.load = i915_sriov_lmem_load,
+	.ccs.size = i915_sriov_ccs_size,
+	.ccs.save = i915_sriov_ccs_save,
+	.ccs.load = i915_sriov_ccs_load,
 };
 
 static void unregister_i915_vdev(void *data)

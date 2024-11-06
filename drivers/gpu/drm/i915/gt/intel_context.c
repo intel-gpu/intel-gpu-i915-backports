@@ -773,7 +773,7 @@ static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t l
 void intel_context_show(struct intel_context *ce, struct drm_printer *p, int indent)
 {
 	bool running = ce->timeline && i915_active_fence_isset(&ce->timeline->last_request);
-	u32 *regs = ce->lrc_reg_state;
+	u32 *regs = running ? ce->lrc_reg_state : NULL;
 	char buf[80] = "[i915]";
 	int i, len;
 
@@ -833,9 +833,11 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 		i_printf(p, indent, "vm->poison:   0x%08x\n",
 			 ce->vm->poison);
 
-	if (ce->ring && running) {
+	if (ce->ring) {
 		i_printf(p, indent, "ring->start:  0x%08x [%08x]\n",
 			 i915_ggtt_offset(ce->ring->vma), regs ? regs[CTX_RING_START] : -1);
+		i_printf(p, indent, "ring->size:   0x%08x [%08x]\n",
+			 ce->ring->size, regs ? regs[CTX_RING_CTL] : -1);
 		i_printf(p, indent, "ring->head:   0x%08x [%08x]\n",
 			 ce->ring->head, regs ? regs[CTX_RING_HEAD] : -1);
 		i_printf(p, indent, "ring->tail:   0x%08x [%08x]\n",
@@ -848,18 +850,16 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 			 ce->timeline->hwsp_offset);
 	}
 
-	if (ce->lrc_reg_state && running) {
-		void *va = ce->lrc_reg_state;
-
+	if (regs) {
 		i_printf(p, indent, "ppHWSP [0x%08lx,0x%08x):\n",
 			 i915_ggtt_offset(ce->state) - PAGE_SIZE,
 			 i915_ggtt_offset(ce->state));
-		hexdump(p, indent + 2, va - PAGE_SIZE, PAGE_SIZE);
+		hexdump(p, indent + 2, (void *)regs - PAGE_SIZE, PAGE_SIZE);
 
 		i_printf(p, indent, "Logical Ring Context [0x%08x,0x%08llx):\n",
 			 i915_ggtt_offset(ce->state),
 			 i915_ggtt_offset(ce->state) + ce->state->node.size);
-		hexdump(p, indent + 2, va, PAGE_SIZE);
+		hexdump(p, indent + 2, regs, PAGE_SIZE);
 	}
 }
 

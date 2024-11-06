@@ -37,6 +37,7 @@ struct vm_bind_user_ext {
 	struct i915_address_space *vm;
 	struct list_head metadata_list;
 	struct drm_i915_gem_object *obj;
+	int pat_index;
 };
 
 #define START(x) ((x)->node.start)
@@ -217,23 +218,29 @@ static int __vm_bind_fence(struct vm_bind_user_ext *arg, u64 addr, u64 val)
 static int vm_bind_sync_fence(struct i915_user_extension __user *base,
                               void *data)
 {
-	struct prelim_drm_i915_vm_bind_ext_sync_fence ext;
+	struct prelim_drm_i915_vm_bind_ext_sync_fence __user *ext =
+		container_of(base, typeof(*ext), base);
+	u64 addr;
+	u64 val;
 
-	if (copy_from_user(&ext, base, sizeof(ext)))
+	if (get_user(addr, &ext->addr) || get_user(val, &ext->val))
 		return -EFAULT;
 
-	return __vm_bind_fence(data, ext.addr, ext.val);
+	return __vm_bind_fence(data, addr, val);
 }
 
 static int vm_bind_user_fence(struct i915_user_extension __user *base,
                               void *data)
 {
-	struct prelim_drm_i915_vm_bind_ext_user_fence ext;
+	struct prelim_drm_i915_vm_bind_ext_user_fence __user *ext =
+		container_of(base, typeof(*ext), base);
+	u64 addr;
+	u64 val;
 
-	if (copy_from_user(&ext, base, sizeof(ext)))
+	if (get_user(addr, &ext->addr) || get_user(val, &ext->val))
 		return -EFAULT;
 
-	return __vm_bind_fence(data, ext.addr, ext.val);
+	return __vm_bind_fence(data, addr, val);
 }
 
 static int vm_bind_ext_uuid(struct i915_user_extension __user *base,
@@ -277,40 +284,30 @@ static int vm_bind_ext_uuid(struct i915_user_extension __user *base,
 static int vm_bind_set_pat(struct i915_user_extension __user *base,
 			   void *data)
 {
-	struct prelim_drm_i915_vm_bind_ext_set_pat ext;
+	struct prelim_drm_i915_vm_bind_ext_set_pat __user *ext =
+		container_of(base, typeof(*ext), base);
 	struct vm_bind_user_ext *arg = data;
 	struct drm_i915_private *i915 = arg->vm->i915;
-	__u64 max_pat_index;
-
-	if (copy_from_user(&ext, base, sizeof(ext)))
-		return -EFAULT;
+	u64 max_pat_index;
+	u64 pat_index;
 
 	if (IS_METEORLAKE(i915))
 		max_pat_index = MTL_MAX_PAT_INDEX;
 	else if (IS_PONTEVECCHIO(i915))
 		max_pat_index = PVC_MAX_PAT_INDEX;
-	else if (GRAPHICS_VER(i915) >= 12)
-		max_pat_index = TGL_MAX_PAT_INDEX;
 	else
-		/* For legacy platforms pat_index is a value of
-		 * enum i915_cache_level
-		 */
-		max_pat_index = I915_CACHE_WT;
+		max_pat_index = TGL_MAX_PAT_INDEX;
 
-	if (ext.pat_index > max_pat_index)
+	if (get_user(pat_index, &ext->pat_index))
+		return -EFAULT;
+	if (pat_index > max_pat_index)
 		return -EINVAL;
-
-	/*
-	 * FIXME: Object should be locked here. And if the ioctl fails,
-	 * we probably should revert the change made here.
-	 */
 
 	/*
 	 * By design, the UMD's are passing in the PAT indices which can
 	 * be directly used to set the corresponding bits in PTE.
 	 */
-	i915_gem_object_set_pat_index(arg->obj, ext.pat_index);
-
+	arg->pat_index = pat_index;
 	return 0;
 }
 
@@ -840,7 +837,7 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 			if (ret)
 				continue;
 
-			ret = i915_vma_pin_ww(vma, &ww, 0, 0,
+			ret = i915_vma_pin_ww(vma, 0, 0,
 					      vma->node.start | pin_flags);
 			if (ret)
 				continue;
@@ -918,6 +915,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	}
 
 	ext.obj = obj;
+	ext.pat_index = i915_gem_object_pat_index(obj);
 	ret = i915_user_extensions(u64_to_user_ptr(va->extensions),
 				   vm_bind_extensions,
 				   ARRAY_SIZE(vm_bind_extensions),
@@ -993,7 +991,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 	list_for_each_entry_safe(vma, vma_next, &vma_head, vm_bind_link) {
 		/* apply pat_index from parent */
-		i915_gem_object_set_pat_index(vma->obj, i915_gem_object_pat_index(obj));
+		vma->pat_index = ext.pat_index;
 
 		ret = vma_bind_insert(vma, pin_flags);
 		if (ret) {

@@ -2841,16 +2841,9 @@ void intel_klog_error_capture(struct intel_gt *gt,
 		return;
 	}
 
-	error = READ_ONCE(i915->gpu_error.first_error);
-	if (error) {
-		drm_err(&i915->drm, "[Capture/%d.%d] Clearing existing error capture first...\n",
-			l_count, line++);
-		i915_reset_error_state(i915);
-	}
-
+	error = ERR_PTR(-EINVAL);
 	with_intel_gt_pm(gt, wakeref)
 		error = i915_gpu_coredump(gt, engine_mask, CORE_DUMP_FLAG_NONE);
-
 	if (IS_ERR(error)) {
 		drm_err(&i915->drm, "[Capture/%d.%d] Failed to capture error capture: %ld!\n",
 			l_count, line++, PTR_ERR(error));
@@ -2947,6 +2940,7 @@ void intel_klog_error_capture(struct intel_gt *gt,
 	}
 
 	kvfree(buf);
+	i915_gpu_coredump_put(error);
 
 	drm_info(&i915->drm, "[Capture/%d.%d] Dumped %zd bytes\n", l_count, line++, pos_err);
 }

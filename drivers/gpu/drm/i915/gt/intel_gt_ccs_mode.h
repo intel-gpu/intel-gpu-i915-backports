@@ -9,11 +9,13 @@
 #include "intel_engine_types.h"
 
 struct dentry;
+struct intel_engine_cs;
 struct intel_gt;
 
 void intel_gt_apply_ccs_mode(struct intel_gt *gt);
 int intel_gt_configure_ccs_mode(struct intel_gt *gt,
-				intel_engine_mask_t config);
+				intel_engine_mask_t config,
+				const struct intel_engine_cs *engien);
 
 void intel_gt_init_ccs_mode(struct intel_gt *gt);
 void intel_gt_park_ccs_mode(struct intel_gt *gt,

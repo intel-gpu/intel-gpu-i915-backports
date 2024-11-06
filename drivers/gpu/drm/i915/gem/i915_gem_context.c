@@ -670,7 +670,7 @@ static void context_close(struct i915_gem_context *ctx)
 	if (vm) {
 		if (client)
 			i915_debugger_vm_destroy(client, vm, false);
-		i915_vm_close(vm);
+		i915_vm_close_imm(vm);
 	}
 
 	/*
@@ -1258,15 +1258,12 @@ int i915_gem_vm_destroy_ioctl(struct drm_device *dev, void *data,
 	if (args->extensions)
 		return -EINVAL;
 
-	i915_debugger_wait_on_discovery(file_priv->client);
-
 	vm = xa_erase(&file_priv->vm_xa, args->vm_id);
 	if (!vm)
 		return -ENOENT;
 
-	flush_workqueue(vm->gt->wq);
 	i915_debugger_vm_destroy(vm->client, vm, false);
-	i915_vm_close(vm);
+	i915_vm_close_imm(vm);
 	return 0;
 }
 
@@ -2432,8 +2429,6 @@ int i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data,
 
 	if (!args->ctx_id)
 		return -ENOENT;
-
-	i915_debugger_wait_on_discovery(file_priv->client);
 
 	ctx = xa_erase(&file_priv->context_xa, args->ctx_id);
 	if (!ctx)

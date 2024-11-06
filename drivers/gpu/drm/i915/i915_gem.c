@@ -538,7 +538,7 @@ new_vma:
 	}
 
 	if (ww)
-		ret = i915_vma_pin_ww(vma, ww, size, alignment, flags | PIN_GLOBAL);
+		ret = i915_vma_pin_ww(vma, size, alignment, flags | PIN_GLOBAL);
 	else
 		ret = i915_vma_pin(vma, size, alignment, flags | PIN_GLOBAL);
 

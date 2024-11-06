@@ -99,6 +99,13 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 			name = "GT init failed";
 			ret = -ENXIO;
 			break;
+		case MDFI_BAD_EYE_MARGIN_AFTER_TRAINING:
+			name = "Zero MDFI eye margin detected";
+			ret = -ENXIO;
+			break;
+		case MDFI_BAD_DLL_CODES_AFTER_TRAINING:
+			gt_warn(gt, "Low MDFI eye margin detected\n");
+			break;
 		case HBM_DIAGNOSTICS_RUN:
 			hbm_info.diag_run = true;
 			break;

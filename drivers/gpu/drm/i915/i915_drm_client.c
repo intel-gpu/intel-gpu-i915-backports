@@ -45,7 +45,7 @@ static noinline void save_stack(struct i915_drm_client_bo *cb)
 static void show_stacks(struct drm_i915_gem_object *obj)
 {
 	struct i915_drm_client_bo *cb, *n;
-	char buf[1024];
+	char buf[512];
 
 	pr_err("obj:%px, handle_count:%d, resident:%s\n",
 	       obj, obj->base.handle_count, str_yes_no(obj->client.resident));
@@ -581,6 +581,13 @@ static void __rcu_i915_drm_client_free(struct work_struct *wrk)
 	kfree(client);
 }
 
+static void pvc_wa_work(struct work_struct *wrk)
+{
+	struct i915_drm_client *client = container_of(wrk, typeof(*client), pvc_wa);
+
+	pvc_wa_disallow_rc6(client->clients->i915);
+}
+
 struct i915_drm_client *
 i915_drm_client_add(struct i915_drm_clients *clients,
 		    struct task_struct *task,
@@ -604,8 +611,11 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	client->file = file;
 
 	client->clients = clients;
-	INIT_RCU_WORK(&client->rcu, __rcu_i915_drm_client_free);
-	pvc_wa_disallow_rc6(i915);
+
+	if (pvc_needs_rc6_wa(i915)) {
+		INIT_WORK(&client->pvc_wa, pvc_wa_work);
+		queue_work(i915->wq, &client->pvc_wa);
+	}
 
 	name = get_name(client, task);
 	if (!name) {
@@ -662,7 +672,11 @@ void i915_drm_client_close(struct i915_drm_client *client)
 {
 	GEM_BUG_ON(READ_ONCE(client->closed));
 	WRITE_ONCE(client->closed, true);
-	pvc_wa_allow_rc6(client->clients->i915);
+
+	if (client->pvc_wa.func && !cancel_work_sync(&client->pvc_wa))
+		pvc_wa_allow_rc6(client->clients->i915);
+
+	INIT_RCU_WORK(&client->rcu, __rcu_i915_drm_client_free);
 }
 
 void i915_drm_client_cleanup(struct i915_drm_client *client)

@@ -17,12 +17,12 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 {
 	struct i915_request *rq;
 	struct intel_engine_cs *engine = ce->engine;
-	struct i915_suspend_fence *sfence;
-	signed long timeout;
 	struct i915_address_space *vm = ce->vm;
-	int err = 0;
-	struct dma_fence *fence;
+	struct i915_suspend_fence *sfence;
 	unsigned long delay = HZ / 2;
+	struct dma_fence *fence;
+	signed long timeout;
+	int err = 0;
 
 	pr_info("Running suspend test on engine %s.\n", engine->name);
 	sfence = kzalloc(sizeof(*sfence), GFP_KERNEL);
@@ -38,11 +38,10 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	set_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags);
 	set_bit(I915_FENCE_FLAG_LR, &rq->fence.flags);
 	init_and_set_context_suspend_fence(ce, sfence);
-	sfence = NULL;
 	i915_request_get(rq);
 
-	dma_fence_enable_sw_signaling(&ce->sfence->base.rq.fence);
-	fence = dma_fence_get(&ce->sfence->base.rq.fence);
+	fence = dma_fence_get(ce->sfence);
+	dma_fence_enable_sw_signaling(fence);
 	i915_request_add(rq);
 
 	timeout = dma_fence_wait_timeout(fence, true, delay);
@@ -72,10 +71,10 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	i915_vm_lock_objects(vm, NULL);
 
 	fs_reclaim_acquire(GFP_KERNEL);
-	timeout = dma_fence_wait_timeout(&ce->sfence->base.rq.fence, true, delay);
+	timeout = dma_fence_wait_timeout(ce->sfence, true, delay);
 	fs_reclaim_release(GFP_KERNEL);
 	if (timeout <= 0) {
-		pr_err("%s: Suspend running request timeout.\n", engine->name);
+		pr_err("%s: Suspend running request timeout:%ld.\n", engine->name, timeout);
 		i915_gem_object_unlock(vm->root_obj);
 		err = timeout ?: -ETIME;
 		goto out;
@@ -89,10 +88,10 @@ static int suspend_request(struct intel_gt *gt, struct intel_context *ce,
 	igt_spinner_end(spin);
 
 	/* Check that the suspended request did not complete */
-	msleep(200);
-	if (i915_request_completed(rq)) {
-		pr_err("%s: suspended request completed!\n",
-		       engine->name);
+	timeout = i915_request_wait(rq, 0, HZ);
+	if (timeout != -ETIME) {
+		pr_err("%s: suspended request completed, after %dms!\n",
+		       engine->name, jiffies_to_msecs(HZ - timeout));
 		i915_gem_object_unlock(vm->root_obj);
 		err = -EIO;
 		goto out;

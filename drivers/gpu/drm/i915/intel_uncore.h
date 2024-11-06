@@ -168,8 +168,10 @@ struct intel_uncore {
 
 	enum forcewake_domains fw_domains;
 	enum forcewake_domains fw_domains_active;
+	enum forcewake_domains fw_domains_awake;
 	enum forcewake_domains fw_domains_timer;
 	enum forcewake_domains fw_domains_saved; /* user domains saved for S3 */
+	struct hrtimer fw_timer;
 
 	struct intel_uncore_forcewake_domain {
 		struct intel_uncore *uncore;
@@ -177,7 +179,6 @@ struct intel_uncore {
 		enum forcewake_domains mask;
 		unsigned int wake_count;
 		bool active;
-		struct hrtimer timer;
 		u32 __iomem *reg_set;
 		u32 __iomem *reg_ack;
 	} *fw_domain[FW_DOMAIN_ID_COUNT];

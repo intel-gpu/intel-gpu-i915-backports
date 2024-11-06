@@ -123,4 +123,8 @@ drm_dp_dsc_sink_supports_format(const u8 dsc_dpcd[DP_DSC_RECEIVER_CAP_SIZE], u8 
 }
 #endif /* BPM_DRM_DP_DSC_SINK_SUPPORTS_FORMAT_NOT_PRESENT */
 
+#ifdef BPM_DRM_DP_VSC_SDP_LOG_PRESENT
+#define drm_dp_vsc_sdp_log(a,b,c) drm_dp_vsc_sdp_log(NULL,c)
+#endif /* BPM_DRM_DP_VSC_SDP_LOG_PRESENT */
+
 #endif /* _BACKPORT_DRM_DP_HELPER_H_ */

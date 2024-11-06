@@ -163,7 +163,6 @@ static int __gt_park(struct intel_wakeref *wf)
 	intel_rc6_park(&gt->rc6);
 
 	intel_gt_park_ccs_mode(gt, NULL);
-	i915_px_cache_release(&gt->px_cache);
 
 	clear_bit(INTEL_MEMORY_CLEAR_FREE, &i915->mm.regions[0]->flags);
 

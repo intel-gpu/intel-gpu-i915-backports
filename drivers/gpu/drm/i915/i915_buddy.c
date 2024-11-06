@@ -390,7 +390,9 @@ bool i915_buddy_defrag(struct i915_buddy_mm *mm,
 			if (!fetch_and_zero(&list->defrag) && i >= min_order)
 				continue;
 
-			spin_lock(&list->lock);
+			if (!spin_trylock(&list->lock))
+				continue;
+
 			list_for_each_entry(block, &list->list, node.link) {
 				if (unlikely(!block->node.list))
 					continue;
@@ -411,6 +413,7 @@ bool i915_buddy_defrag(struct i915_buddy_mm *mm,
 
 				merged |= __i915_buddy_free(mm, block, i < min_order) >= max_order;
 
+				cond_resched();
 				spin_lock(&list->lock);
 				if (unlikely(list_empty(&bookmark.link)))
 					break; /* iteration was interrupted */

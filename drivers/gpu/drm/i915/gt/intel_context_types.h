@@ -208,7 +208,7 @@ struct intel_context {
 	struct list_head pinned_contexts_link;
 
 	u8 wa_bb_page; /* if set, page num reserved for context workarounds */
-	struct i915_suspend_fence *sfence;
+	struct dma_fence *sfence;
 
 	struct {
 		/** @lock: protects everything in guc_state */

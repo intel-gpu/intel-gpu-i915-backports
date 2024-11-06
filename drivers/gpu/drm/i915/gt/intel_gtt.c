@@ -46,39 +46,24 @@ struct drm_i915_gem_object *alloc_pt_dma(struct i915_address_space *vm, int sz)
 
 int map_pt_dma(struct i915_address_space *vm, struct i915_gem_ww_ctx *ww, struct drm_i915_gem_object *obj)
 {
-	enum i915_map_type type = i915_coherent_map_type(vm->i915, obj, true);
+	enum i915_map_type type;
 	void *vaddr;
 	int err;
+
+	if (px_vaddr(obj))
+		return 0;
 
 	err = ww ? dma_resv_lock(obj->base.resv, &ww->ctx) : dma_resv_trylock(obj->base.resv) ? 0 : -EBUSY;
 	if (unlikely(err))
 		return err;
 
+	type = i915_coherent_map_type(vm->i915, obj, true);
 	vaddr = i915_gem_object_pin_map(obj, type);
-	i915_gem_object_unlock(obj);
-	if (IS_ERR(vaddr))
-		return PTR_ERR(vaddr);
 
 	i915_gem_object_make_unshrinkable(obj);
-	return 0;
-}
 
-static void __i915_vm_close(struct i915_address_space *vm)
-{
-	struct drm_i915_gem_object *obj;
-	struct i915_vma *vma, *vn;
-
-	spin_lock(&vm->priv_obj_lock);
-	list_for_each_entry(obj, &vm->priv_obj_list, priv_obj_link)
-		obj->vm = ERR_PTR(-EACCES);
-	spin_unlock(&vm->priv_obj_lock);
-
-	i915_gem_vm_unbind_all(vm);
-
-	mutex_lock(&vm->mutex);
-	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link)
-		i915_vma_unpublish(vma);
-	mutex_unlock(&vm->mutex);
+	i915_gem_object_unlock(obj);
+	return PTR_ERR_OR_ZERO(vaddr);
 }
 
 int i915_vm_lock_objects(const struct i915_address_space *vm,
@@ -127,25 +112,43 @@ void i915_vm_release(struct kref *kref)
 	GEM_BUG_ON(i915_is_ggtt(vm));
 	trace_i915_ppgtt_release(vm);
 
-	queue_rcu_work(vm->i915->wq, &vm->rcu);
+	queue_rcu_work(vm->gt->wq, &vm->rcu);
 }
 
 static void i915_vm_close_work(struct work_struct *wrk)
 {
 	struct i915_address_space *vm =
 		container_of(wrk, typeof(*vm), close_work);
+	struct drm_i915_gem_object *obj;
+	struct i915_vma *vma, *vn;
 
-	__i915_vm_close(vm);
+	spin_lock(&vm->priv_obj_lock);
+	list_for_each_entry(obj, &vm->priv_obj_list, priv_obj_link)
+		obj->vm = ERR_PTR(-EACCES);
+	spin_unlock(&vm->priv_obj_lock);
+
+	i915_gem_vm_unbind_all(vm);
+
+	mutex_lock(&vm->mutex);
+	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link)
+		i915_vma_unpublish(vma);
+	mutex_unlock(&vm->mutex);
+
 	i915_vm_put(vm);
 }
 
-void i915_vm_close(struct i915_address_space *vm)
+void __i915_vm_close(struct i915_address_space *vm, bool imm)
 {
 	GEM_BUG_ON(atomic_read(&vm->open) <= 0);
-	if (atomic_dec_and_test(&vm->open))
-		intel_gt_queue_work(vm->gt, &vm->close_work);
-	else
+	if (!atomic_dec_and_test(&vm->open)) {
 		i915_vm_put(vm);
+		return;
+	}
+
+	if (imm)
+		i915_vm_close_work(&vm->close_work);
+	else
+		intel_gt_queue_work(vm->gt, &vm->close_work);
 }
 
 static inline struct i915_address_space *active_to_vm(struct i915_active *ref)
@@ -249,24 +252,6 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	}
 
 	return 0;
-}
-
-dma_addr_t __px_dma(struct drm_i915_gem_object *p)
-{
-	GEM_BUG_ON(!i915_gem_object_has_pages(p));
-	return sg_dma_address(p->mm.pages);
-}
-
-struct page *__px_page(struct drm_i915_gem_object *p)
-{
-	GEM_BUG_ON(!i915_gem_object_has_pages(p));
-	return sg_page(p->mm.pages);
-}
-
-void
-fill_page_dma(struct drm_i915_gem_object *p, const u64 val, unsigned int count)
-{
-	memset64(__px_vaddr(p), val, count);
 }
 
 u64 i915_vm_scratch_encode(struct i915_address_space *vm, int lvl)

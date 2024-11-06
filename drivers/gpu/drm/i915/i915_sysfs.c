@@ -385,7 +385,7 @@ I915_DPF_ERROR_ATTR_WR(error, (S_IRUSR | S_IWUSR), i915_sysfs_read,
 static void i915_setup_error_capture(struct device *kdev)
 {
 	if (sysfs_create_bin_file(&kdev->kobj, &dev_attr_error.attr))
-		DRM_ERROR("error_state sysfs setup failed\n");
+		dev_warn(kdev, "error_state sysfs setup failed\n");
 }
 
 static void i915_teardown_error_capture(struct device *kdev)
@@ -683,7 +683,7 @@ static void i915_setup_quiesce_gpu_sysfs(struct drm_i915_private *i915)
 	struct device *kdev = i915->drm.primary->kdev;
 
 	if (sysfs_create_files(&kdev->kobj, setup_quiesce_gpu_attrs))
-		dev_err(kdev, "Failed to add sysfs files to setup quiesce GPU\n");
+		dev_warn(kdev, "Failed to add sysfs files to setup quiesce GPU\n");
 }
 
 static ssize_t prelim_reset_all_gt_store(struct device *dev,
@@ -824,49 +824,51 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	int ret;
 
 	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr.attr))
-		dev_err(kdev, "Failed adding prelim_uapi_version to sysfs\n");
+		dev_warn(kdev, "Failed adding prelim_uapi_version to sysfs\n");
 
 	if (INTEL_INFO(dev_priv)->has_csc_uid) {
 		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_csc_unique_id.attr);
 		if (ret)
-			drm_warn(&dev_priv->drm, "UID sysfs setup failed\n");
+			dev_warn(dev_priv->drm.dev, "UID sysfs setup failed\n");
 	}
 
 	if (HAS_LMEM_MAX_BW(dev_priv)) {
 		ret = sysfs_create_file(&kdev->kobj, &dev_attr_prelim_lmem_max_bw_Mbps.attr.attr);
 		if (ret)
-			drm_warn(&dev_priv->drm, "Failed to create maximum memory bandwidth sysfs file\n");
+			dev_warn(dev_priv->drm.dev, "Failed to create maximum memory bandwidth sysfs file\n");
 	}
 
 	if (HAS_LMEM(dev_priv)) {
 		ret = sysfs_create_files(&kdev->kobj, lmem_attrs);
 		if (ret)
-			DRM_ERROR("Local memory sysfs setup failed\n");
+			dev_warn(dev_priv->drm.dev, "Local memory sysfs setup failed\n");
 	}
 
 	if (HAS_IAF(dev_priv)) {
 		ret = sysfs_create_files(&kdev->kobj, iaf_attrs);
 		if (ret)
-			drm_warn(&dev_priv->drm, "PVC socket sysfs setup failed\n");
+			dev_warn(dev_priv->drm.dev, "PVC socket sysfs setup failed\n");
 	}
 
 	dev_priv->clients.root =
 		kobject_create_and_add("clients", &kdev->kobj);
 	if (!dev_priv->clients.root)
-		drm_warn(&dev_priv->drm, "Per-client sysfs setup failed\n");
+		dev_warn(dev_priv->drm.dev,
+			 "Per-client sysfs setup failed\n");
 
 	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_reset_all_gt.attr))
-		drm_warn(&dev_priv->drm,
+		dev_warn(dev_priv->drm.dev,
 			 "failed to create sysfs reset interface\n");
 
 	dev_priv->sysfs_gt = i915_setup_gt_sysfs(&kdev->kobj);
 	if (!dev_priv->sysfs_gt)
-		drm_err(&dev_priv->drm,
+		dev_warn(dev_priv->drm.dev,
 			"failed to register GT sysfs directory\n");
 
 	ret = sysfs_create_files(&kdev->kobj, alloc_limit_attrs);
 	if (ret)
-		drm_warn(&dev_priv->drm, "failed to create prelim_lmem/shared_alloc_limit sysfs entries\n");
+		dev_warn(dev_priv->drm.dev,
+			 "failed to create prelim_lmem/shared_alloc_limit sysfs entries\n");
 
 	i915_sriov_sysfs_setup(dev_priv);
 

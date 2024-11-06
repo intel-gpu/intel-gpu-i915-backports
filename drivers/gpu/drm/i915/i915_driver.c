@@ -189,9 +189,8 @@ bool i915_save_pci_state(struct pci_dev *pdev)
 	kfree(i915->pci_state);
 
 	i915->pci_state = pci_store_saved_state(pdev);
-
 	if (!i915->pci_state) {
-		drm_err(&i915->drm, "Failed to store PCI saved state\n");
+		dev_warn(i915->drm.dev, "Failed to store PCI saved state\n");
 		return false;
 	}
 
@@ -207,11 +206,10 @@ void i915_load_pci_state(struct pci_dev *pdev)
 		return;
 
 	ret = pci_load_saved_state(pdev, i915->pci_state);
-	if (!ret) {
+	if (!ret)
 		pci_restore_state(pdev);
-	} else {
-		drm_warn(&i915->drm, "Failed to load PCI state, err:%d\n", ret);
-	}
+	else
+		dev_warn(i915->drm.dev, "Failed to load PCI state, err:%d\n", ret);
 }
 
 static int i915_get_bridge_dev(struct drm_i915_private *dev_priv)
@@ -333,7 +331,9 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 		goto out_err;
 
 	dev_priv->sched =
-		i915_sched_engine_create_cpu(3, dev_priv->wq, cpumask_of_i915(dev_priv));
+		i915_sched_engine_create_cpu(3, dev_priv->wq,
+					     cpumask_of_i915(dev_priv),
+					     cpu_all_mask);
 	if (!dev_priv->sched)
 		goto out_free_wq;
 
@@ -342,7 +342,9 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 		goto out_free_sched;
 
 	dev_priv->mm.sched =
-		i915_sched_engine_create_cpu(4, dev_priv->mm.wq, cpumask_of_i915(dev_priv));
+		i915_sched_engine_create_cpu(4, dev_priv->mm.wq,
+					     cpumask_of_i915(dev_priv),
+					     allmask_of_i915(dev_priv));
 	if (!dev_priv->mm.sched)
 		goto out_free_mm_wq;
 
@@ -596,7 +598,7 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915)
 		return;
 
 	if (!i915_pci_resource_valid(pdev, GEN12_LMEM_BAR)) {
-		drm_warn(&i915->drm, "Can't resize LMEM BAR - BAR not valid\n");
+		dev_warn(i915->drm.dev, "Can't resize LMEM BAR - BAR not valid\n");
 		return;
 	}
 
@@ -795,7 +797,7 @@ static int i915_driver_check_broken_features(struct drm_i915_private *dev_priv)
 		pci_read_config_word(pdev, pdev->ats_cap + PCI_ATS_CTRL, &val);
 
 		if (val & PCI_ATS_CTRL_ENABLE) {
-			drm_warn(&dev_priv->drm,
+			dev_warn(dev_priv->drm.dev,
 				 "\n"
 				 "\\*******************************************************\\\n"
 				 "\\* Address translation service (ATS) is set as         *\\\n"
@@ -845,12 +847,15 @@ static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 	i915_debugger_fini(dev_priv);
 	intel_gt_driver_late_release_all(dev_priv);
 	i915_drm_clients_fini(&dev_priv->clients);
+
+	i915_gem_flush_free_objects(dev_priv);
 	i915_workqueues_cleanup(dev_priv);
 
 	cpu_latency_qos_remove_request(&dev_priv->sb_qos);
 	mutex_destroy(&dev_priv->sb_lock);
 
 	i915_params_free(&dev_priv->params);
+	kfree(dev_priv->pci_state);
 }
 
 /* Wa:16014207253 */
@@ -1339,6 +1344,7 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(NUMA_ALLOC),
 		C(PARALLEL_SHMEMFS),
 		C(PARALLEL_USERPTR),
+		C(PX_CACHE),
 		C(SMEM_BLT),
 		C(SMEM_DMA),
 		C(SMEM_FREE),
@@ -1671,8 +1677,6 @@ void i915_driver_remove(struct drm_i915_private *i915)
 	intel_modeset_driver_remove_nogem(i915);
 
 	i915_driver_hw_remove(i915);
-
-	kfree(i915->pci_state);
 
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
 }
@@ -2052,8 +2056,7 @@ int i915_driver_suspend_switcheroo(struct drm_i915_private *i915,
 {
 	int error;
 
-	if (drm_WARN_ON_ONCE(&i915->drm, state.event != PM_EVENT_SUSPEND &&
-			     state.event != PM_EVENT_FREEZE))
+	if (state.event != PM_EVENT_SUSPEND && state.event != PM_EVENT_FREEZE)
 		return -EINVAL;
 
 	if (i915->drm.switch_power_state == DRM_SWITCH_POWER_OFF)
@@ -2375,7 +2378,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	struct intel_gt *gt;
 	int i;
 
-	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
+	if (GEM_WARN_ON(!HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
 	drm_dbg(&dev_priv->drm, "Suspending device\n");
@@ -2449,12 +2452,10 @@ static int intel_runtime_resume(struct device *kdev)
 	struct intel_gt *gt;
 	int i;
 
-	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
+	if (GEM_WARN_ON(!HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
 	drm_dbg(&dev_priv->drm, "Resuming device\n");
-
-	drm_WARN_ON_ONCE(&dev_priv->drm, atomic_read(&rpm->wakeref_count));
 	disable_rpm_wakeref_asserts(rpm);
 
 	intel_opregion_notify_adapter(dev_priv, PCI_D0);

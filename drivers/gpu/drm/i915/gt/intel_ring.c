@@ -18,6 +18,8 @@
 #include "intel_ring.h"
 #include "intel_timeline.h"
 
+#define INVALID_SRCU -1
+
 unsigned int intel_ring_update_space(struct intel_ring *ring)
 {
 	unsigned int space;
@@ -97,10 +99,9 @@ static struct i915_vma *create_ring_vma(struct i915_ggtt *ggtt, int size)
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
 
-	obj = intel_gt_object_create_lmem(ggtt->vm.gt, size,
-					  I915_BO_ALLOC_VOLATILE);
+	obj = i915_gem_object_create_internal(i915, size);
 	if (IS_ERR(obj))
-		obj = i915_gem_object_create_internal(i915, size);
+		obj = intel_gt_object_create_lmem(ggtt->vm.gt, size, I915_BO_ALLOC_VOLATILE);
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
@@ -138,15 +139,6 @@ intel_engine_create_ring(struct intel_engine_cs *engine, int size)
 	kref_init(&ring->ref);
 	ring->size = size;
 	ring->wrap = BITS_PER_TYPE(ring->size) - ilog2(size);
-
-	/*
-	 * Workaround an erratum on the i830 which causes a hang if
-	 * the TAIL pointer points to within the last 2 cachelines
-	 * of the buffer.
-	 */
-	ring->effective_size = size;
-	if (IS_I830(i915) || IS_I845G(i915))
-		ring->effective_size -= 2 * CACHELINE_BYTES;
 
 	intel_ring_update_space(ring);
 
@@ -214,12 +206,15 @@ wait_for_space(struct intel_ring *ring,
 	return 0;
 }
 
-#define RING_PACKET_HAS_GGTT	BIT(0)
+static bool need_ggtt_srcu(struct drm_i915_private *i915)
+{
+	return IS_SRIOV_VF(i915) && !i915_sriov_current_is_vf_migration_recovery(i915);
+}
 
-static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int num_dwords, u32 flags)
+static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int num_dwords)
 {
 	struct intel_ring *ring = rq->ring;
-	const unsigned int remain_usable = ring->effective_size - ring->emit;
+	const unsigned int remain = ring->size - ring->emit;
 	const unsigned int bytes = num_dwords * sizeof(u32);
 	unsigned int need_wrap = 0;
 	unsigned int total_bytes;
@@ -231,12 +226,12 @@ static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int n
 	GEM_BUG_ON(num_dwords & 1);
 
 	total_bytes = bytes + rq->reserved_space;
-	GEM_BUG_ON(total_bytes > ring->effective_size);
+	GEM_BUG_ON(total_bytes > ring->size);
 
-	if (unlikely(total_bytes > remain_usable)) {
+	if (unlikely(total_bytes > remain)) {
 		const int remain_actual = ring->size - ring->emit;
 
-		if (bytes > remain_usable) {
+		if (bytes > remain) {
 			/*
 			 * Not enough space for the basic request. So need to
 			 * flush out the remainder and then wait for
@@ -274,6 +269,17 @@ static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int n
 			return ERR_PTR(ret);
 	}
 
+	if (unlikely(srcu)) {
+		*srcu = INVALID_SRCU;
+		if (unlikely(need_ggtt_srcu(rq->i915))) {
+			int ret;
+
+			ret = gt_ggtt_address_read_lock_interruptible(rq->engine->gt, srcu);
+			if (unlikely(ret))
+				return ERR_PTR(ret);
+		}
+	}
+
 	if (unlikely(need_wrap)) {
 		need_wrap &= ~1;
 		GEM_BUG_ON(need_wrap > ring->space);
@@ -284,15 +290,6 @@ static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int n
 		memset64(ring->vaddr + ring->emit, 0, need_wrap / sizeof(u64));
 		ring->space -= need_wrap;
 		ring->emit = 0;
-	}
-
-	if (flags & RING_PACKET_HAS_GGTT &&
-			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
-		int ret;
-
-		ret = gt_ggtt_address_read_lock_interruptible(rq->engine->gt, srcu);
-		if (unlikely(ret))
-			return ERR_PTR(ret);
 	}
 
 	GEM_BUG_ON(ring->emit > ring->size - bytes);
@@ -306,7 +303,7 @@ static u32 *ring_packet_begin(struct i915_request *rq, int *srcu, unsigned int n
 	return cs;
 }
 
-static void ring_packet_advance(struct i915_request *rq, int srcu, u32 *cs, u32 flags)
+static void ring_packet_advance(struct i915_request *rq, int srcu, u32 *cs)
 {
 	/*
 	 * Compare current state against what was provided to the preceding
@@ -318,25 +315,26 @@ static void ring_packet_advance(struct i915_request *rq, int srcu, u32 *cs, u32 
 	GEM_BUG_ON(!IS_ALIGNED(rq->ring->emit, 8)); /* RING_TAIL qword align */
 
 	rq->advance = intel_ring_offset(rq, cs);
-	if (flags & RING_PACKET_HAS_GGTT &&
-			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
+	if (srcu != INVALID_SRCU) {
 		set_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags);
 		gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
 	}
 }
 
-static void ring_fini_packet_begin(struct i915_request *rq, int *srcu, u32 flags)
+static void ring_fini_packet_begin(struct i915_request *rq, int *srcu)
 {
-	if (flags & RING_PACKET_HAS_GGTT &&
-			!i915_sriov_current_is_vf_migration_recovery(rq->i915))
+	if (!srcu)
+		return;
+
+	*srcu = INVALID_SRCU;
+	if (unlikely(need_ggtt_srcu(rq->i915)))
 		gt_ggtt_address_read_lock(rq->engine->gt, srcu);
 }
 
-static void ring_fini_packet_advance(struct i915_request *rq, int srcu, u32 *cs, u32 flags)
+static void ring_fini_packet_advance(struct i915_request *rq, int srcu, u32 *cs)
 {
 	rq->tail = intel_ring_offset(rq, cs);
-	if (flags & RING_PACKET_HAS_GGTT &&
-			!i915_sriov_current_is_vf_migration_recovery(rq->i915)) {
+	if (srcu != INVALID_SRCU) {
 		set_bit(I915_FENCE_FLAG_GGTT_EMITTED, &rq->fence.flags);
 		gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
 	}
@@ -350,7 +348,7 @@ static void ring_fini_packet_advance(struct i915_request *rq, int srcu, u32 *cs,
  */
 u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
 {
-	return ring_packet_begin(rq, NULL, num_dwords, 0);
+	return ring_packet_begin(rq, NULL, num_dwords);
 }
 
 /**
@@ -360,51 +358,27 @@ u32 *intel_ring_begin(struct i915_request *rq, unsigned int num_dwords)
  */
 void intel_ring_advance(struct i915_request *rq, u32 *cs)
 {
-	ring_packet_advance(rq, 0, cs, 0);
+	ring_packet_advance(rq, INVALID_SRCU, cs);
 }
 
 u32 *intel_ring_begin_ggtt(struct i915_request *rq, int *srcu, unsigned int num_dwords)
 {
-	return ring_packet_begin(rq, srcu, num_dwords, RING_PACKET_HAS_GGTT);
+	return ring_packet_begin(rq, srcu, num_dwords);
 }
 
 void intel_ring_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs)
 {
-	ring_packet_advance(rq, srcu, cs, RING_PACKET_HAS_GGTT);
+	ring_packet_advance(rq, srcu, cs);
 }
 
 void intel_ring_fini_begin_ggtt(struct i915_request *rq, int *srcu)
 {
-	ring_fini_packet_begin(rq, srcu, RING_PACKET_HAS_GGTT);
+	ring_fini_packet_begin(rq, srcu);
 }
 
 void intel_ring_fini_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs)
 {
-	ring_fini_packet_advance(rq, srcu, cs, RING_PACKET_HAS_GGTT);
-}
-
-/* Align the ring tail to a cacheline boundary */
-int intel_ring_cacheline_align(struct i915_request *rq)
-{
-	int num_dwords;
-	void *cs;
-
-	num_dwords = (rq->ring->emit & (CACHELINE_BYTES - 1)) / sizeof(u32);
-	if (num_dwords == 0)
-		return 0;
-
-	num_dwords = CACHELINE_DWORDS - num_dwords;
-	GEM_BUG_ON(num_dwords & 1);
-
-	cs = intel_ring_begin(rq, num_dwords);
-	if (IS_ERR(cs))
-		return PTR_ERR(cs);
-
-	memset64(cs, (u64)MI_NOOP << 32 | MI_NOOP, num_dwords / 2);
-	intel_ring_advance(rq, cs + num_dwords);
-
-	GEM_BUG_ON(rq->ring->emit & (CACHELINE_BYTES - 1));
-	return 0;
+	ring_fini_packet_advance(rq, srcu, cs);
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

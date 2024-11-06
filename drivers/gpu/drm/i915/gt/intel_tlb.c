@@ -196,6 +196,12 @@ void intel_gt_fini_tlb(struct intel_gt *gt)
 	mutex_destroy(&gt->tlb.mutex);
 }
 
+void intel_gt_show_tlb(struct intel_gt *gt, struct drm_printer *p, int indent)
+{
+	i_printf(p, indent, "TLB invalidation: { completed: %u, next: %u }\n",
+		 READ_ONCE(gt->tlb.seqno), READ_ONCE(gt->tlb.next_seqno));
+}
+
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 #include "selftest_tlb.c"
 #endif

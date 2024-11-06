@@ -212,19 +212,18 @@ static void tbb_cleanup(unsigned int cpu, bool online)
 
 static void __tbb_wait_queue(struct i915_tbb_thread *t, struct i915_tbb_node *node)
 {
-       /* Hand-rolled prepare_to_wait to prioritise exclusive wakeups */
-       i915_tbb_lock(node);
-       if (list_empty(&t->wait.entry)) {
-	       struct list_head *head;
+	/* Hand-rolled prepare_to_wait to prioritise exclusive wakeups */
+	i915_tbb_lock(node);
+	if (list_empty(&t->wait.entry)) {
+		struct list_head *head;
 
-	       head = &node->wq.head;
-	       if (!(t->wait.flags & WQ_FLAG_EXCLUSIVE))
-		       head = head->prev;
-	       list_add(&t->wait.entry, head);
-       }
-       i915_tbb_unlock(node);
+		head = &node->wq.head;
+		if (!(t->wait.flags & WQ_FLAG_EXCLUSIVE))
+			head = head->prev;
+		list_add(&t->wait.entry, head);
+	}
+	i915_tbb_unlock(node);
 }
-
 
 static int tbb_should_run(unsigned int cpu)
 {
@@ -271,25 +270,24 @@ static void tbb_dispatch(unsigned int cpu)
 
 int i915_tbb_suspend_local(void)
 {
-       int cpu = raw_smp_processor_id();
-       struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+	int cpu = raw_smp_processor_id();
+	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 
-       if (!list_empty_careful(&t->wait.entry)) {
-               i915_tbb_lock(t->node);
-               list_del_init(&t->wait.entry);
-               i915_tbb_unlock(t->node);
-       }
+	if (!list_empty_careful(&t->wait.entry)) {
+		i915_tbb_lock(t->node);
+		list_del_init(&t->wait.entry);
+		i915_tbb_unlock(t->node);
+	}
 
-       return cpu;
+	return cpu;
 }
 
 void i915_tbb_resume_local(int cpu)
 {
-       struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 
-       __tbb_wait_queue(t, t->node);
+	__tbb_wait_queue(t, t->node);
 }
-
 
 static struct smp_hotplug_thread threads = {
 	.store = (struct task_struct **)&i915_tbb_thread.wait.private,

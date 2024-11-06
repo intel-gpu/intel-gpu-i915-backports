@@ -319,7 +319,6 @@ static inline bool
 i915_gem_object_test_preferred_location(const struct drm_i915_gem_object *obj,
 					enum intel_region_id region_id)
 {
-
 	if (!obj->mm.preferred_region)
 		return false;
 

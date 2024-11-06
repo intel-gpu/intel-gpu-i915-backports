@@ -603,6 +603,9 @@ static void default_destroy(struct kref *kref)
 	if (se->cpumask != cpu_all_mask)
 		kfree(se->cpumask);
 
+	if (se->allmask != cpu_all_mask)
+		kfree(se->allmask);
+
 	kfree(se);
 }
 
@@ -641,7 +644,8 @@ i915_sched_engine_create(unsigned int subclass)
 struct i915_sched_engine *
 i915_sched_engine_create_cpu(unsigned int subclass,
 			     struct workqueue_struct *wq,
-			     const struct cpumask *cpumask)
+			     const struct cpumask *cpumask,
+			     const struct cpumask *allmask)
 {
 	struct i915_sched_engine *se;
 
@@ -651,6 +655,7 @@ i915_sched_engine_create_cpu(unsigned int subclass,
 
 	se->wq = wq;
 	se->cpumask = cpumask;
+	se->allmask = allmask;
 	se->num_cpus = cpumask_weight(cpumask);
 	se->cpu = __i915_first_online_cpu(cpumask);
 
@@ -687,13 +692,33 @@ struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
 	return local;
 }
 
+struct cpumask *allmask_of_i915(struct drm_i915_private *i915)
+{
+	const struct cpumask *all;
+	struct cpumask *local;
+	int nid;
+
+	nid = dev_to_node(i915->drm.dev);
+	if (nid == NUMA_NO_NODE)
+		all = cpu_all_mask;
+	else
+		all = cpumask_of_node(nid);
+
+	local = kmalloc(sizeof(*local), GFP_KERNEL);
+	if (!local)
+		return NULL;
+
+	cpumask_copy(local, all);
+	return local;
+}
+
 static int next_cpu(struct i915_sched_engine *se)
 {
 	int cpu;
 
 	/* Prefer using the local cpu if allowed */
 	cpu = raw_smp_processor_id();
-	if (cpumask_test_cpu(cpu, se->cpumask))
+	if (cpumask_test_cpu(cpu, se->allmask))
 		return cpu;
 
 	/* Otherwise pick the next cpu from the allowed set */
@@ -729,7 +754,3 @@ err_priorities:
 	kmem_cache_destroy(slab_priorities);
 	return -ENOMEM;
 }
-
-#if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftests/i915_scheduler.c"
-#endif

@@ -163,9 +163,7 @@ int i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj)
 unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
 				    enum i915_cache_level level)
 {
-	if (drm_WARN_ON(&i915->drm, level >= I915_MAX_CACHE_LEVEL))
-		return 0;
-
+	GEM_BUG_ON(level >= I915_MAX_CACHE_LEVEL);
 	return INTEL_INFO(i915)->cachelevel_to_pat[level];
 }
 
@@ -343,6 +341,8 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 			       I915_BO_CACHE_COHERENT_FOR_WRITE);
 	else if (i915_gem_object_use_llc(obj))
 		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
+
+	GEM_BUG_ON(i915_gem_object_pat_index(obj) != pat_index);
 }
 
 bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
@@ -1201,7 +1201,10 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 	} else if (i915_gem_object_has_pages(obj)) { /* lmem <-> lmem */
 		struct i915_request *rq;
 
-		rq = i915_gem_object_copy_lmem(obj, donor, true, nowait);
+		rq = i915_gem_object_copy_lmem(obj, 0,
+					       donor, 0,
+					       obj->base.size,
+					       true, nowait);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
 			goto out;

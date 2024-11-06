@@ -7,10 +7,11 @@
 
 #include "intel_engine_regs.h"
 #include "intel_gt_clock_utils.h"
+#include "intel_gt_pm.h"
 
 #include "selftest_llc.h"
 #include "selftest_rc6.h"
-#include "selftest_rps.h"
+#include "selftests/igt_spinner.h"
 
 static int cmp_u64(const void *A, const void *B)
 {
@@ -187,16 +188,8 @@ int intel_gt_pm_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(live_rc6_manual),
 		SUBTEST(live_render_pg),
 		SUBTEST(live_media_pg),
-		SUBTEST(live_rps_clock_interval),
-		SUBTEST(live_rps_control),
-		SUBTEST(live_rps_frequency_cs),
-		SUBTEST(live_rps_frequency_srm),
-		SUBTEST(live_rps_power),
-		SUBTEST(live_rps_interrupt),
-		SUBTEST(live_rps_dynamic),
 		SUBTEST(live_gt_resume),
 	};
-
 	struct intel_gt *gt;
 	unsigned int i;
 

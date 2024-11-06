@@ -207,13 +207,13 @@ bool i915_memcpy_from_wc(void *dst, const void *src, unsigned long len)
  */
 void i915_unaligned_memcpy_from_wc(void *dst, const void *src, unsigned long len)
 {
-	unsigned long addr;
+	unsigned long cnt;
 
 	CI_BUG_ON(!i915_has_memcpy_from_wc());
 
-	addr = (unsigned long)src;
-	if (!IS_ALIGNED(addr, 16)) {
-		unsigned long x = min(ALIGN(addr, 16) - addr, len);
+	cnt = (unsigned long)src;
+	if (!IS_ALIGNED(cnt, 16)) {
+		unsigned long x = min(ALIGN(cnt, 16) - cnt, len);
 
 		memcpy(dst, src, x);
 
@@ -222,8 +222,17 @@ void i915_unaligned_memcpy_from_wc(void *dst, const void *src, unsigned long len
 		src += x;
 	}
 
-	if (likely(len))
-		__memcpy_ntdqu(dst, src, DIV_ROUND_UP(len, 16));
+	if (len < 16) {
+		memcpy(dst, src, len);
+		return;
+	}
+
+	cnt = len / 16;
+	__memcpy_ntdqu(dst, src, cnt);
+
+	cnt *= 16;
+	if (cnt != len)
+		memcpy(dst + cnt , src + cnt, len - cnt);
 }
 
 void i915_memcpy_init_early(struct drm_i915_private *dev_priv)

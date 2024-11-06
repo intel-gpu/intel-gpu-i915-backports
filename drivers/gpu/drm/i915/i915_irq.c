@@ -1270,16 +1270,26 @@ soc_err_index_to_str(unsigned long index)
 		return "PCIe PSF Unexpected Completion";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PSF_2):
 		return "PCIe PSF Unsupported Request";
-	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI):
-		return "ANR MDFI";
-	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIAER):
-		return "Local IEH internal: Malformed PCIe AER";
-	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIERR):
-		return "Local IEH internal: Malformed PCIe ERR";
-	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_UR):
-		return "Local IEH internal: UR conditions in IEH";
-	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_SERR_SRCS):
-		return "Local IEH internal: From SERR Sources";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_IOSF_PCIAER):
+		return "Local IEH internal FATAL ERROR: Malformed IOSF PCIe AER";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_IOSF_PCIERR):
+		return "Local IEH internal FATAL ERROR: Malformed IOSF PCIe ERR";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_UR_RESPONSE):
+		return "Local IEH internal FATAL ERROR: IEH UR RESPONSE";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_SERR_SPI):
+		return "Local IEH internal FATAL ERROR: From SERR SPI controller";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_PUNIT_MCA):
+		return "Malformed MCA error packet (HBM/Punit)";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIAER):
+		return "Local IEH internal FATAL error: Malformed PCIe AER";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIERR):
+		return "Local IEH internal FATAL error: Malformed PCIe ERR";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_UR):
+		return "Local IEH internal FATAL error: UR conditions in IEH";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_SERR_SRCS):
+		return "Local IEH internal FATAL error: From SERR Sources";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_MCA):
+		return "Malformed MCA error packet (HBM)";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST):
 		return "Base Die MDFI T2T";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH):
@@ -1350,12 +1360,16 @@ soc_err_index_to_str(unsigned long index)
 		return "HBM SS3: Channel6";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS3_7):
 		return "HBM SS3: Channel7";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI):
+		return "ANR MDFI";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, SOC_PSF_CSC_0):
 		return "Invalid CSC PSF Command Parity";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, SOC_PSF_CSC_1):
 		return "Invalid CSC PSF Unexpected Completion";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, SOC_PSF_CSC_2):
 		return "Invalid CSC PSF Unsupported Request";
+	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_PSF_2):
+		return "Invalid";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_CD0_MDFI):
 		return "ANR MDFI";
 	case SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_EAST):
@@ -1542,11 +1556,18 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 				 * and fatal categories and these are per IEH
 				 * on platform. XEHPSDV and PVC have two IEHs
 				 */
+				if ((gt->info.id == 1) &&
+				    (errbit == PVC_SOC_PCIAER ||
+				     errbit == PVC_SOC_SERR_SRCS)) {
+					intel_gt_log_driver_error(gt,
+								  INTEL_GT_DRIVER_ERROR_INTERRUPT,
+								  "Undefined SOC %s error\n",
+								  hardware_error_type_to_str(hw_err));
+					continue;
+				}
 				index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, hw_err, errbit);
 				update_soc_hw_error_cnt(gt, index);
-				if (IS_PONTEVECCHIO(gt->i915))
-					intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
-								  "Invalid SOC %s error\n", hardware_error_type_to_str(hw_err));
+				log_soc_hw_error(gt, index, hw_err);
 			}
 			raw_reg_write(regs, SOC_LOCAL_ERR_STAT_SLAVE_REG(slave_base, hw_err),
 				      lcl_errstat);
@@ -1557,6 +1578,15 @@ gen12_soc_hw_error_handler(struct intel_gt *gt,
 			if (errbit == SOC_IEH1_LOCAL_ERR_STATUS)
 				continue;
 
+			if ((gt->info.id == 1) &&
+			    (errbit == PVC_SOC_IOSF_PCIAER ||
+			     errbit == PVC_SOC_SERR_SPI)) {
+				intel_gt_log_driver_error(gt,
+							  INTEL_GT_DRIVER_ERROR_INTERRUPT,
+							  "Undefined SOC %s error\n",
+							  hardware_error_type_to_str(hw_err));
+				continue;
+			}
 			index = SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, hw_err, errbit);
 			update_soc_hw_error_cnt(gt, index);
 			log_soc_hw_error(gt, index, hw_err);

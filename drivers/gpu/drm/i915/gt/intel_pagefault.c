@@ -177,10 +177,6 @@ static int migrate_to_lmem(struct drm_i915_gem_object *obj,
 	if (obj->mm.region.mem == mem)
 		return 0;
 
-	/* unmap to avoid further update to the page[s] */
-	i915_gem_object_release_mmap(obj);
-	GEM_BUG_ON(obj->mm.mapping);
-
 	ret = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
 	if (ret)
 		return ret;

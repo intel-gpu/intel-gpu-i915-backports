@@ -466,7 +466,7 @@ retry:
 	intel_engine_flush_submission(engine);
 	expected[RING_TAIL_IDX] = ce->ring->tail;
 
-	if (i915_request_wait(rq, 0, HZ / 5) < 0) {
+	if (i915_request_wait(rq, 0, HZ) < 0) {
 		err = -ETIME;
 		goto err_rq;
 	}
@@ -670,7 +670,7 @@ static int __live_lrc_gpr(struct intel_engine_cs *engine,
 		wmb();
 	}
 
-	if (i915_request_wait(rq, 0, HZ / 5) < 0) {
+	if (i915_request_wait(rq, 0, HZ) < 0) {
 		err = -ETIME;
 		goto err_rq;
 	}
@@ -1544,7 +1544,7 @@ __lrc_isolation(struct intel_engine_cs *engine, u32 poison, bool relative)
 		goto err_ref1;
 	}
 
-	if (i915_request_wait(rq, 0, HZ / 2) < 0) {
+	if (i915_request_wait(rq, 0, 2 * HZ) < 0) {
 		pr_err("%s(%s): wait for reference results timed out\n",
 		       __func__, engine->name);
 		i915_request_put(rq);
@@ -1583,7 +1583,7 @@ __lrc_isolation(struct intel_engine_cs *engine, u32 poison, bool relative)
 		usleep_range(100, 500);
 
 	err = poison_registers(B, engine, poison, relative, &sema);
-	if (err == 0 && i915_request_wait(rq, 0, HZ / 2) < 0) {
+	if (err == 0 && i915_request_wait(rq, 0, 5 * HZ) < 0) {
 		pr_err("%s(%s): wait for results timed out\n",
 		       __func__, engine->name);
 		err = -ETIME;
@@ -1736,7 +1736,7 @@ static int __lrc_cross(struct intel_engine_cs *a,
 		goto err_ref1;
 	}
 
-	if (i915_request_wait(rq, 0, HZ / 2) < 0) {
+	if (i915_request_wait(rq, 0, 2 * HZ) < 0) {
 		i915_request_put(rq);
 		err = -ETIME;
 		goto err_ref1;
@@ -1768,7 +1768,7 @@ static int __lrc_cross(struct intel_engine_cs *a,
 		goto err_result1;
 	}
 
-	if (i915_request_wait(rq, 0, HZ / 2) < 0) {
+	if (i915_request_wait(rq, 0, 5 * HZ) < 0) {
 		i915_request_put(rq);
 		err = -ETIME;
 		goto err_result1;
@@ -1859,7 +1859,7 @@ static int indirect_ctx_submit_req(struct intel_context *ce)
 	i915_request_get(rq);
 	i915_request_add(rq);
 
-	if (i915_request_wait(rq, 0, HZ / 5) < 0)
+	if (i915_request_wait(rq, 0, HZ) < 0)
 		err = -ETIME;
 
 	i915_request_put(rq);
@@ -2085,7 +2085,7 @@ static int __lrc_garbage(struct intel_engine_cs *engine, struct rnd_state *prng)
 		goto err_ce;
 	}
 
-	if (i915_request_wait(hang, 0, HZ / 2) < 0) {
+	if (i915_request_wait(hang, 0, 2 * HZ) < 0) {
 		pr_err("%s: corrupted context did not recover\n",
 		       engine->name);
 		i915_request_put(hang);
@@ -2173,7 +2173,7 @@ static int __live_pphwsp_runtime(struct intel_engine_cs *engine)
 		i915_request_put(rq);
 	} while (1);
 
-	err = i915_request_wait(rq, 0, HZ / 5);
+	err = i915_request_wait(rq, 0, HZ);
 	if (err < 0) {
 		pr_err("%s: request not completed!\n", engine->name);
 		goto err_wait;

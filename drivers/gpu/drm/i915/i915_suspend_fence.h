@@ -61,4 +61,5 @@ i915_suspend_fence_init(struct i915_suspend_fence *sfence,
 			const struct i915_suspend_fence_ops *ops);
 
 void i915_suspend_fence_retire_dma_fence(struct dma_fence *fence);
+
 #endif

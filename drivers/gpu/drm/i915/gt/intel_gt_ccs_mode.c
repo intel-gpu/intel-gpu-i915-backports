@@ -158,7 +158,9 @@ static bool needs_ccs_mode(struct intel_gt *gt)
 	return true;
 }
 
-int intel_gt_configure_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
+int intel_gt_configure_ccs_mode(struct intel_gt *gt,
+				intel_engine_mask_t config,
+				const struct intel_engine_cs *engine)
 {
 	int err = 0;
 
@@ -189,7 +191,7 @@ int intel_gt_configure_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
 	if (likely((READ_ONCE(gt->ccs.active) & config) == config))
 		return 0;
 
-	if (!needs_ccs_mode(gt))
+	if ((engine->mask & config) == 0 || !needs_ccs_mode(gt))
 		return 0;
 
 	intel_gt_retire_requests(gt); /* clear ccs_active if possible */
@@ -210,6 +212,9 @@ int intel_gt_configure_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
 
 void intel_gt_park_ccs_mode(struct intel_gt *gt, struct intel_engine_cs *engine)
 {
+	if (!gt->ccs.active)
+		return;
+
 	mutex_lock(&gt->ccs.mutex);
 
 	/*

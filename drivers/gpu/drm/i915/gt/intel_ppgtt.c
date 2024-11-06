@@ -9,103 +9,143 @@
 
 #include "i915_trace.h"
 #include "intel_gt.h"
+#include "intel_gt_requests.h"
 #include "intel_gtt.h"
 #include "intel_tlb.h"
 #include "gen8_ppgtt.h"
 
-void i915_px_cache_init(struct i915_px_cache *c)
-{
-	spin_lock_init(&c->lock);
-	init_llist_head(&c->px);
-}
+static struct kmem_cache *slab_pt;
+static struct kmem_cache *slab_pd;
 
 struct drm_i915_gem_object *i915_vm_alloc_px(struct i915_address_space *vm)
 {
-	struct i915_px_cache *c = &vm->gt->px_cache;
-	struct drm_i915_gem_object *px = NULL;
+	struct llist_node *first = NULL;
 
-	if (!llist_empty(&c->px)) {
-		struct llist_node *first;
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE) &&
+	    likely(vm->gt->px_cache)) {
+		struct llist_head *c;
 
-		spin_lock(&c->lock);
-		first = llist_del_first(&c->px);
-		spin_unlock(&c->lock);
+		preempt_disable();
+		c = this_cpu_ptr(vm->gt->px_cache);
+		first = c->first;
 		if (first)
-			px = container_of(first, struct drm_i915_gem_object, freed);
+			c->first = first->next;
+		preempt_enable();
 	}
 
-	return px ?: vm->alloc_pt_dma(vm, SZ_4K);
+	return first ? container_of(first, struct drm_i915_gem_object, freed) : vm->alloc_pt_dma(vm, SZ_4K);
 }
 
-static void px_release(struct drm_i915_gem_object *px)
+static void i915_vm_free_px(struct i915_address_space *vm,
+			    struct drm_i915_gem_object *px)
 {
-	struct intel_memory_region *mem = px->mm.region.mem;
-
-	spin_lock_irq(&mem->objects.lock);
-	list_move(&px->mm.region.link, &mem->objects.list);
-	spin_unlock_irq(&mem->objects.lock);
-
-	i915_gem_object_put(px);
-}
-
-void i915_vm_free_px(struct i915_address_space *vm,
-		     struct drm_i915_gem_object *px)
-{
-	struct i915_px_cache *c = &vm->gt->px_cache;
-	bool closed = true;
-
-	rcu_read_lock();
-	if (!c->closed) { /* serialise with i915_px_cache_fini() */
-		llist_add(&px->freed, &c->px);
-		closed = false;
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE) &&
+	    likely(vm->gt->px_cache && px_vaddr(px))) {
+		preempt_disable();
+		__llist_add(&px->freed, this_cpu_ptr(vm->gt->px_cache));
+		preempt_enable();
+	} else {
+		i915_gem_object_put(px);
 	}
-	rcu_read_unlock();
-
-	if (closed)
-		px_release(px);
 }
 
-bool i915_px_cache_release(struct i915_px_cache *c)
+static void __i915_px_cache_release(struct llist_head *c)
 {
 	struct drm_i915_gem_object *pt, *pn;
-	struct llist_node *list;
 
-	if (llist_empty(&c->px))
-		return false;
-
-	spin_lock(&c->lock);
-	list = llist_del_all(&c->px);
-	spin_unlock(&c->lock);
-
-	llist_for_each_entry_safe(pt, pn, list, freed)
-		px_release(pt);
-
-	return true;
+	llist_for_each_entry_safe(pt, pn, __llist_del_all(c), freed)
+		i915_gem_object_put(pt);
 }
 
-bool i915_px_cache_fini(struct i915_px_cache *c)
+struct px_cache_cpu {
+	struct intel_gt *gt;
+	bool result;
+};
+
+static void i915_px_cache_release_cpu(void *arg)
 {
-	/*
-	 * Make sure that once we shutdown the cache, all concurrent and future
-	 * teardown of pagetables are immediately freed and not leaked via the
-	 * cache.
-	 */
-	c->closed = true;
-	synchronize_rcu();
-	return i915_px_cache_release(c);
+	struct px_cache_cpu *data = arg;
+	struct llist_head *c;
+
+	preempt_disable();
+	c = this_cpu_ptr(data->gt->px_cache);
+	if (!llist_empty(c)) {
+		__i915_px_cache_release(c);
+		data->result = true;
+	}
+	preempt_enable();
+}
+
+int i915_px_cache_init(struct intel_gt *gt)
+{
+	int cpu;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE))
+		return 0;
+
+	gt->px_cache = alloc_percpu(*gt->px_cache);
+	if (unlikely(!gt->px_cache))
+		return -ENOMEM;
+
+	for_each_possible_cpu(cpu)
+		init_llist_head(per_cpu_ptr(gt->px_cache, cpu));
+
+	return 0;
+}
+
+static bool has_px_cache(int cpu, void *arg)
+{
+	struct px_cache_cpu *data = arg;
+
+	return !llist_empty(per_cpu_ptr(data->gt->px_cache, cpu));
+}
+
+bool i915_px_cache_release(struct intel_gt *gt)
+{
+	struct px_cache_cpu data = { .gt = gt };
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE))
+		return false;
+
+	if (unlikely(!gt->px_cache))
+		return false;
+
+	on_each_cpu_cond(has_px_cache, i915_px_cache_release_cpu, &data, true);
+
+	return data.result;
+}
+
+void i915_px_cache_fini(struct intel_gt *gt)
+{
+	struct llist_head __percpu *px;
+	int cpu;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE))
+		return;
+
+	px = fetch_and_zero(&gt->px_cache);
+	if (unlikely(!px))
+		return;
+
+	rcu_barrier();
+	for_each_possible_cpu(cpu)
+		__i915_px_cache_release(per_cpu_ptr(px, cpu));
+	rcu_barrier();
+
+	free_percpu(px);
 }
 
 struct i915_page_table *alloc_pt(struct i915_address_space *vm, int sz)
 {
 	struct i915_page_table *pt;
 
-	pt = kmalloc(sizeof(*pt), I915_GFP_ALLOW_FAIL);
+	pt = kmem_cache_alloc(slab_pt, I915_GFP_ALLOW_FAIL);
 	if (unlikely(!pt))
 		return ERR_PTR(-ENOMEM);
 
 	pt->base = i915_vm_alloc_px(vm);
 	if (IS_ERR(pt->base)) {
-		kfree(pt);
+		kmem_cache_free(slab_pt, pt);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -118,16 +158,18 @@ struct i915_page_directory *__alloc_pd(int count)
 {
 	struct i915_page_directory *pd;
 
-	pd = kzalloc(sizeof(*pd), I915_GFP_ALLOW_FAIL);
+	pd = kmem_cache_alloc(slab_pd, I915_GFP_ALLOW_FAIL);
 	if (unlikely(!pd))
 		return NULL;
 
 	pd->entry = kcalloc(count, sizeof(*pd->entry), I915_GFP_ALLOW_FAIL);
 	if (unlikely(!pd->entry)) {
-		kfree(pd);
+		kmem_cache_free(slab_pd, pd);
 		return NULL;
 	}
 
+	pd->pt.is_compact = false;
+	atomic_set(&pd->pt.used, 0);
 	return pd;
 }
 
@@ -142,7 +184,7 @@ struct i915_page_directory *alloc_pd(struct i915_address_space *vm)
 	pd->pt.base = i915_vm_alloc_px(vm);
 	if (IS_ERR(pd->pt.base)) {
 		kfree(pd->entry);
-		kfree(pd);
+		kmem_cache_free(slab_pd, pd);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -153,16 +195,16 @@ void free_px(struct i915_address_space *vm, struct i915_page_table *pt, int lvl)
 {
 	BUILD_BUG_ON(offsetof(struct i915_page_directory, pt));
 
+	if (pt->base)
+		i915_vm_free_px(vm, pt->base);
+
 	if (lvl) {
 		struct i915_page_directory *pd =
 			container_of(pt, typeof(*pd), pt);
 		kfree(pd->entry);
 	}
 
-	if (pt->base)
-		i915_vm_free_px(vm, pt->base);
-
-	kfree_rcu(pt, rcu);
+	kmem_cache_free(lvl ? slab_pd : slab_pt, pt);
 }
 
 static struct i915_ppgtt *
@@ -272,8 +314,6 @@ void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 		return;
 
 	vm->clear_range(vm, i915_vma_offset(vma), pte_size(vma));
-
-	i915_write_barrier(vm->i915);
 	vma_invalidate_tlb(vma);
 }
 
@@ -309,7 +349,6 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 
 	ppgtt->vm.gt = gt;
 	ppgtt->vm.i915 = i915;
-	ppgtt->vm.dma = i915->drm.dev;
 	ppgtt->vm.total = BIT_ULL(ppgtt_size);
 
 	if (ppgtt_size > 48)
@@ -331,4 +370,27 @@ int ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt)
 	ppgtt->vm.vma_ops.clear_pages = ppgtt_clear_pages;
 
 	return 0;
+}
+
+void intel_ppgtt_module_exit(void)
+{
+	kmem_cache_destroy(slab_pt);
+	kmem_cache_destroy(slab_pd);
+}
+
+int __init intel_ppgtt_module_init(void)
+{
+	slab_pt = KMEM_CACHE(i915_page_table, SLAB_TYPESAFE_BY_RCU);
+	if (!slab_pt)
+		goto err;
+
+	slab_pd = KMEM_CACHE(i915_page_directory, SLAB_TYPESAFE_BY_RCU);
+	if (!slab_pd)
+		goto err_pt;
+
+	return 0;
+err_pt:
+	kmem_cache_destroy(slab_pt);
+err:
+	return -ENOMEM;
 }

@@ -4402,7 +4402,7 @@ i915_debugger_open(struct drm_i915_private * const i915,
 		return -EINVAL;
 
 	if (!check_tdctl_for_breakpoints(i915)) {
-		drm_warn(&i915->drm,
+		dev_warn(i915->drm.dev,
 			 "Breakpoints not enabled for i915 debugger\n");
 		return -EPERM;
 	}
@@ -5543,6 +5543,8 @@ static int debugger_vm_vma_destroy(struct i915_debugger *debugger,
 {
 	struct i915_vma *vma, *vn;
 	int err = 0;
+
+	flush_workqueue(vm->gt->wq);
 
 	mutex_lock(&vm->mutex);
 	/*

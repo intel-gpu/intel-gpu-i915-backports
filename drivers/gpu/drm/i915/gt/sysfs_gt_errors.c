@@ -264,6 +264,16 @@ static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_cd0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_cd0_mdfi, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_CD0_MDFI));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_EAST));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_MDFI_SOUTH));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_iosf_pciaer, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_IOSF_PCIAER));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_iosf_pcieer, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_IOSF_PCIERR));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_ur_response, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_UR_RESPONSE));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_serr_spi, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_SERR_SPI));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_punit_mca, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_PUNIT_MCA));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_pciaer, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIAER));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_pcierr, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_PCIERR));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_ur, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_UR));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_serr_srcs, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_SERR_SRCS));
+static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_mca, SOC_ERR_INDEX(INTEL_GT_SOC_IEH1, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_MCA));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_0, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_0));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_1, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_1));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_fatal_hbm_ss1_2, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_GLOBAL, HARDWARE_ERROR_FATAL, PVC_SOC_HBM_SS1_2));
@@ -392,6 +402,16 @@ static const struct attribute *pvc_soc_error_attrs[] = {
 	&dev_attr_pvc_soc_fatal_cd0_mdfi.attr.attr,
 	&dev_attr_pvc_soc_fatal_mdfi_east.attr.attr,
 	&dev_attr_pvc_soc_fatal_mdfi_south.attr.attr,
+	&dev_attr_pvc_soc_fatal_iosf_pciaer.attr.attr,
+	&dev_attr_pvc_soc_fatal_iosf_pcieer.attr.attr,
+	&dev_attr_pvc_soc_fatal_ur_response.attr.attr,
+	&dev_attr_pvc_soc_fatal_serr_spi.attr.attr,
+	&dev_attr_pvc_soc_fatal_hbm_punit_mca.attr.attr,
+	&dev_attr_pvc_soc_fatal_pciaer.attr.attr,
+	&dev_attr_pvc_soc_fatal_pcierr.attr.attr,
+	&dev_attr_pvc_soc_fatal_ur.attr.attr,
+	&dev_attr_pvc_soc_fatal_serr_srcs.attr.attr,
+	&dev_attr_pvc_soc_fatal_hbm_mca.attr.attr,
 	&dev_attr_soc_fatal_punit.attr.attr,
 	&dev_attr_soc_fatal_hbm_ss0_0.attr.attr,
 	&dev_attr_soc_fatal_hbm_ss0_1.attr.attr,

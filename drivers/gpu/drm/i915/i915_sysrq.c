@@ -17,6 +17,7 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_timeline.h"
+#include "gt/intel_tlb.h"
 
 #include "i915_driver.h"
 #include "i915_drv.h"
@@ -117,8 +118,13 @@ static void show_gpu_mem(struct drm_i915_private *i915, struct drm_printer *p, i
 	struct intel_memory_region *mr;
 	enum intel_region_id id;
 
-	for_each_memory_region(mr, i915, id)
-		intel_memory_region_print(mr, 0, p, indent);
+	i_printf(p, indent, "Memory:\n");
+	indent += 2;
+
+	for_each_memory_region(mr, i915, id) {
+		i_printf(p, indent, "- region:\n");
+		intel_memory_region_print(mr, 0, p, indent + 2);
+	}
 }
 
 static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p, int indent)
@@ -194,6 +200,7 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 			 local_read(&gt->stats.pagefault_invalid),
 			 str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)));
 	}
+	intel_gt_show_tlb(gt, p, indent);
 
 	t = local64_read(&gt->stats.migration_stall);
 	if (t >> 20)
@@ -260,13 +267,28 @@ static bool iommu_required(struct drm_i915_private *i915)
 	return false;
 }
 
+static void pci_show(struct pci_dev *pdev, struct drm_printer *p, int indent)
+{
+	extern const char *pci_speed_string(enum pci_bus_speed speed);
+	enum pci_bus_speed speed;
+	enum pcie_link_width width;
+	u32 bw;
+
+	bw = pcie_bandwidth_available(pdev, NULL, &speed, &width) >> 3;
+	i_printf(p, indent, "PCIe: { speed: %s, width: %d, bandwidth: %d MiB/s }\n",
+		 pci_speed_string(speed), width, bw);
+}
+
 void i915_show(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	const struct intel_runtime_info *r = RUNTIME_INFO(i915);
 
-	i_printf(p, indent, "Platform: %s [%04x:%04x], %s [%s] %s\n",
+	i_printf(p, indent, "---\n");
+	i_printf(p, indent, "Device: %s\n", dev_name(i915->drm.dev));
+	i_printf(p, indent, "Platform: %s [%04x:%04x r%d], %s [%s] %s\n",
 		 intel_platform_name(INTEL_INFO(i915)->platform),
-		 pdev->vendor, pdev->device,
+		 pdev->vendor, pdev->device, pdev->revision,
 		 init_utsname()->release,
 #ifdef BPM_ADD_DEBUG_PRINTS_BKPT_MOD
 		 BACKPORT_MOD_VER,
@@ -275,12 +297,46 @@ void i915_show(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 #endif
 		 init_utsname()->machine);
 
+	if (r->graphics.ver) {
+		if (r->graphics.rel)
+			i_printf(p, indent + 2, "graphics version: %u.%02u\n",
+				 r->graphics.ver, r->graphics.rel);
+		else
+			i_printf(p, indent + 2, "graphics version: %u\n",
+				 r->graphics.ver);
+	}
+
+	if (r->media.ver) {
+		if (r->media.rel)
+			i_printf(p, indent + 2, "media version: %u.%02u\n",
+				 r->media.ver, r->media.rel);
+		else
+			i_printf(p, indent + 2, "media version: %u\n",
+				 r->media.ver);
+	}
+
+	if (r->display.ver) {
+		if (r->display.rel)
+			i_printf(p, indent + 2, "display version: %u.%02u\n",
+				 r->display.ver, r->display.rel);
+		else
+			i_printf(p, indent + 2, "display version: %u\n",
+				 r->display.ver);
+	}
+
+	pci_show(pdev, p, indent);
+	if (dev_to_node(i915->drm.dev) != NUMA_NO_NODE)
+		i_printf(p, indent, "NUMA: { node: %d }\n", dev_to_node(i915->drm.dev));
+	i_printf(p, indent, "CPU: (%*pbl)\n", cpumask_pr_args(i915->sched->cpumask));
 	i_printf(p, indent, "IOMMU: { dma-width: %d, %s%s }\n",
 		 INTEL_INFO(i915)->dma_mask_size,
 		 str_enabled_disabled(i915_vtd_active(i915) > 0),
 		 iommu_required(i915) ? ", required" : "");
 	i_printf(p, indent, "IRQ: %d, %s\n",
 		 pdev->irq, str_enabled_disabled(intel_irqs_enabled(i915)));
+	if (IS_IOV_ACTIVE(i915))
+		i_printf(p, indent, "Virtualisation: %s\n",
+			 i915_iov_mode_to_string(IOV_MODE(i915)));
 
 	show_rpm(i915, p, indent);
 	show_gts(i915, p, indent);

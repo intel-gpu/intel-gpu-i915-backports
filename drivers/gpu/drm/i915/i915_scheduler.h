@@ -56,7 +56,8 @@ i915_sched_engine_create(unsigned int subclass);
 struct i915_sched_engine *
 i915_sched_engine_create_cpu(unsigned int subclass,
 			     struct workqueue_struct *wq,
-			     const struct cpumask *cpumask);
+			     const struct cpumask *cpumask,
+			     const struct cpumask *allmask);
 
 static inline struct i915_sched_engine *
 i915_sched_engine_get(struct i915_sched_engine *sched_engine)
@@ -110,6 +111,7 @@ i915_sched_engine_disabled(struct i915_sched_engine *sched_engine)
 }
 
 struct cpumask *cpumask_of_i915(struct drm_i915_private *i915);
+struct cpumask *allmask_of_i915(struct drm_i915_private *i915);
 int i915_scheduler_queue_work_on(struct i915_sched_engine *se, int cpu, struct work_struct *work);
 
 void i915_scheduler_module_exit(void);

@@ -95,8 +95,10 @@ i915_gem_shrink(struct drm_i915_private *i915,
 
 	trace_i915_gem_shrink(i915, target, shrink);
 
-	count = i915_gem_reap_clear_smem(mem, 0, min(target, -2ul)); /* -1ul => wait */
-	if (count)
+	count = 0;
+	if (mem->ops->shrink_cache)
+		count = mem->ops->shrink_cache(mem, 0, min(target, -2ul)); /* -1ul => wait */
+	if (count >= target)
 		return count;
 
 	/*
@@ -322,7 +324,9 @@ i915_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 	unsigned long num_objects = 0;
 	unsigned long count;
 
-	count = i915_gem_clear_smem_count(mem, &num_objects);
+	count = 0;
+	if (mem->ops->count_cache)
+		count += mem->ops->count_cache(mem, &num_objects);
 
 	/* XXX include madvise cache */
 
@@ -567,11 +571,10 @@ void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 	}
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
-	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
+	register_oom_notifier(&i915->mm.oom_notifier);
 
 	i915->mm.vmap_notifier.notifier_call = i915_gem_shrinker_vmap;
-	drm_WARN_ON(&i915->drm,
-		    register_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	register_vmap_purge_notifier(&i915->mm.vmap_notifier);
 
 	start_swapper(i915);
 }
@@ -580,10 +583,8 @@ void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 {
 	stop_swapper(i915);
 
-	drm_WARN_ON(&i915->drm,
-		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
-	drm_WARN_ON(&i915->drm,
-		    unregister_oom_notifier(&i915->mm.oom_notifier));
+	unregister_vmap_purge_notifier(&i915->mm.vmap_notifier);
+	unregister_oom_notifier(&i915->mm.oom_notifier);
 #ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
 	shrinker_free(i915->mm.shrinker);
 #else

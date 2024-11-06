@@ -3,7 +3,11 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#include "gt/intel_gpu_commands.h"
+#include "gt/selftest_engine_heartbeat.h"
 #include "gt/uc/intel_guc_print.h"
+#include "selftests/igt_flush_test.h"
+#include "selftests/igt_spinner.h"
 
 #define NUM_STEPS 5
 #define H2G_DELAY 50000

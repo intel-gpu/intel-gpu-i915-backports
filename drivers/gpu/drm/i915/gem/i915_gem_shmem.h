@@ -45,8 +45,6 @@ static inline struct clear_page *to_clear_page(struct page *page)
 	return (struct clear_page *)page->private;
 }
 
-unsigned long i915_gem_clear_smem_count(struct intel_memory_region *mem, unsigned long *num_objects);
-unsigned long i915_gem_reap_clear_smem(struct intel_memory_region *mem, int order, unsigned long limit);
 bool i915_gem_shmem_park(struct intel_memory_region *mem);
 
 void i915_gem_shmem_module_exit(void);

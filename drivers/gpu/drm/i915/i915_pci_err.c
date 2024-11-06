@@ -37,7 +37,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	if (!i915) /* already removed / shutdown */
 		return PCI_ERS_RESULT_DISCONNECT;
 
-	dev_warn(&pdev->dev, "PCI error detected, state %d\n", state);
+	dev_err(&pdev->dev, "PCI error detected, state %d\n", state);
 
 	/*
 	 * Record the fault on the device to skip waits-for-ack and other
@@ -46,7 +46,7 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	i915_pci_error_set_in_recovery(i915);
 	i915_pci_error_set_fault(i915);
 
-	drm_warn(&i915->drm, "removing device access to userspace\n");
+	dev_warn(i915->drm.dev, "removing device access to userspace\n");
 	drm_dev_unplug(&i915->drm);
 	for_each_gt(gt, i915, i)
 		intel_gt_set_wedged(gt);

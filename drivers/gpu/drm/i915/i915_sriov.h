@@ -51,6 +51,9 @@ int i915_sriov_suspend_late(struct drm_i915_private *i915);
 int i915_sriov_resume_early(struct drm_i915_private *i915);
 int i915_sriov_resume(struct drm_i915_private *i915);
 
+struct drm_i915_gem_object *
+i915_sriov_smem_get_obj(struct drm_i915_private *i915, const void *vaddr);
+
 /* VF only */
 void i915_sriov_vf_start_migration_recovery(struct drm_i915_private *i915);
 int intel_sriov_vf_migrated_event_handler(struct intel_guc *guc);

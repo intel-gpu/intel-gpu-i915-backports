@@ -293,8 +293,9 @@ struct drm_i915_gem_object {
 #define I915_BO_FAULT_CLEAR	BIT(14)
 #define I915_BO_SYNC_HINT	BIT(15)
 #define I915_BO_FABRIC		BIT(16)
-#define I915_BO_MMAP_BIT	17
-#define I915_BO_FAST_GUP_BIT	18
+#define I915_BO_EVICT_BIT	17
+#define I915_BO_MMAP_BIT	18
+#define I915_BO_FAST_GUP_BIT	19
 
 	/*
 	 * Track whether the pages are coherent with the GPU if reading or
@@ -363,8 +364,8 @@ struct drm_i915_gem_object {
 	 * When writing through the CPU cache, the GPU is still coherent. Note
 	 * that this also implies I915_BO_CACHE_COHERENT_FOR_READ.
 	 */
-#define I915_BO_CACHE_COHERENT_FOR_READ BIT(19)
-#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(20)
+#define I915_BO_CACHE_COHERENT_FOR_READ BIT(20)
+#define I915_BO_CACHE_COHERENT_FOR_WRITE BIT(21)
 
 	/**
 	 * @pat_index: The desired PAT index.
@@ -380,7 +381,7 @@ struct drm_i915_gem_object {
 	 * i915_cache_level into pat index, for more details check the macros
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
-#define I915_BO_PAT_INDEX GENMASK(24, 21)
+#define I915_BO_PAT_INDEX GENMASK(25, 22)
 
 	unsigned long eviction;
 

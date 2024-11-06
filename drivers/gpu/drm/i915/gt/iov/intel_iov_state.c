@@ -10,6 +10,7 @@
 #include "intel_iov_state.h"
 #include "intel_iov_utils.h"
 #include "gem/i915_gem_lmem.h"
+#include "gt/intel_context.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/uc/abi/guc_actions_pf_abi.h"
@@ -221,6 +222,7 @@ static bool pf_process_vf(struct intel_iov *iov, u32 vfid)
 			clear_bit(IOV_VF_FLR_IN_PROGRESS, state);
 			return false;
 		}
+		clear_bit(IOV_VF_PAUSE_IN_PROGRESS, state);
 		return true;
 	}
 
@@ -345,8 +347,10 @@ static void pf_handle_vf_flr_done(struct intel_iov *iov, u32 vfid)
 static void pf_handle_vf_pause_done(struct intel_iov *iov, u32 vfid)
 {
 	struct device *dev = iov_to_dev(iov);
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
 
-	iov->pf.state.data[vfid].paused = true;
+	data->paused = true;
+	clear_bit(IOV_VF_PAUSE_IN_PROGRESS, &data->state);
 	dev_info(dev, "VF%u %s\n", vfid, "paused");
 }
 
@@ -466,6 +470,26 @@ bool intel_iov_state_no_flr(struct intel_iov *iov, u32 vfid)
 }
 
 /**
+ * intel_iov_state_no_pause - Test if VF pause is not pending nor active.
+ * @iov: the IOV struct instance
+ * @vfid: VF identifier
+ *
+ * This function is for PF only.
+ *
+ * Return: true if VF pause is not pending nor active.
+ */
+bool intel_iov_state_no_pause(struct intel_iov *iov, u32 vfid)
+{
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+
+	GEM_BUG_ON(!intel_iov_is_pf(iov));
+	GEM_BUG_ON(vfid > pf_get_totalvfs(iov));
+	GEM_BUG_ON(!vfid);
+
+	return !test_bit(IOV_VF_PAUSE_IN_PROGRESS, &data->state) && !data->paused;
+}
+
+/**
  * intel_iov_state_pause_vf - Pause VF.
  * @iov: the IOV struct
  * @vfid: VF identifier
@@ -476,7 +500,71 @@ bool intel_iov_state_no_flr(struct intel_iov *iov, u32 vfid)
  */
 int intel_iov_state_pause_vf(struct intel_iov *iov, u32 vfid)
 {
-	return pf_control_vf(iov, vfid, GUC_PF_TRIGGER_VF_PAUSE);
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+	int err;
+
+
+	if (!intel_iov_state_no_flr(iov, vfid) || !intel_iov_state_no_pause(iov, vfid)) {
+		IOV_ERROR(iov, "VF%u cannot be paused in current state\n", vfid);
+		return -EBUSY;
+	}
+
+	if (test_and_set_bit(IOV_VF_PAUSE_IN_PROGRESS, &data->state)) {
+		IOV_ERROR(iov, "VF%u pause is already in progress\n", vfid);
+		return -EBUSY;
+	}
+
+	err = pf_control_vf(iov, vfid, GUC_PF_TRIGGER_VF_PAUSE);
+
+	if (unlikely(err < 0)) {
+		clear_bit(IOV_VF_PAUSE_IN_PROGRESS, &data->state);
+		IOV_ERROR(iov, "Failed to trigger VF%u pause (%pe)\n", vfid, ERR_PTR(err));
+		return err;
+	}
+
+	return 0;
+}
+
+#define I915_VF_PAUSE_TIMEOUT_MS 500
+
+/**
+ * intel_iov_state_pause_vf_sync - Pause VF on one GuC, wait until the state settles.
+ * @iov: the IOV struct instance linked to target GuC
+ * @vfid: VF identifier
+ * @inferred: marks if the pause was not requested by user, but by the kernel
+ *
+ * The function issues a pause command only if the VF is not already paused or
+ * in process of pausing. Then it waits for the confirmation of pause completion.
+ * This function is for PF only.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int intel_iov_state_pause_vf_sync(struct intel_iov *iov, u32 vfid, bool inferred)
+{
+	struct intel_iov_data *data = &iov->pf.state.data[vfid];
+	unsigned long timeout_ms = I915_VF_PAUSE_TIMEOUT_MS;
+	int ret;
+
+	if (intel_iov_state_no_pause(iov, vfid)) {
+		ret = intel_iov_state_pause_vf(iov, vfid);
+		if (ret) {
+			IOV_ERROR(iov, "Failed to pause VF%u: (%pe)", vfid, ERR_PTR(ret));
+			return ret;
+		}
+		if (inferred)
+			set_bit(IOV_VF_PAUSE_BY_SUSPEND, &data->state);
+	}
+
+	if (!inferred)
+		clear_bit(IOV_VF_PAUSE_BY_SUSPEND, &data->state);
+
+	/* FIXME: How long we should wait? */
+	if (wait_for(data->paused, timeout_ms)) {
+		IOV_ERROR(iov, "VF%u pause didn't complete within %lu ms\n", vfid, timeout_ms);
+		return -ETIMEDOUT;
+	}
+
+	return 0;
 }
 
 /**
@@ -817,4 +905,259 @@ void intel_iov_state_unmap_lmem(struct intel_iov *iov, u32 vfid)
 	GEM_BUG_ON(!intel_iov_is_pf(iov));
 
 	i915_gem_object_unpin_map(obj);
+}
+
+static int
+save_restore_lmem_chunk(struct intel_iov *iov, u32 vfid, struct drm_i915_gem_object *smem,
+			u64 offset, size_t size, bool save)
+{
+	struct drm_i915_gem_object *lmem;
+	struct i915_request *rq;
+	int err;
+
+	lmem = iov->pf.provisioning.configs[vfid].lmem_obj;
+	if (!lmem)
+		return -ENXIO;
+
+	if (!i915_gem_object_trylock(lmem))
+		return -EBUSY;
+	if (!i915_gem_object_trylock(smem)) {
+		err = -EBUSY;
+		goto err_lmem_obj_unlock;
+	}
+
+	rq = i915_gem_object_copy_lmem(lmem, offset, smem, 0, size, save, false);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto err_smem_obj_unlock;
+	}
+
+	if (i915_request_wait(rq, 0, HZ) < 0)
+		err = -ETIME;
+	else
+		err = rq->fence.error;
+	i915_request_put(rq);
+
+err_smem_obj_unlock:
+	i915_gem_object_unlock(smem);
+err_lmem_obj_unlock:
+	i915_gem_object_unlock(lmem);
+
+	return err < 0 ? err : 0;
+}
+
+/**
+ * intel_iov_state_save_lmem_chunk - Save VF LMEM chunk.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ * @smem: SMEM object to save VF LMEM chunk
+ * @offset: offset of VF LMEM chunk
+ * @size: size of chunk to save
+ *
+ * This function is for PF only.
+ *
+ * Return: Size of data written on success or a negative error code on failure.
+ */
+ssize_t intel_iov_state_save_lmem_chunk(struct intel_iov *iov, u32 vfid,
+					struct drm_i915_gem_object *smem, u64 offset, size_t size)
+{
+	int ret;
+
+	ret = save_restore_lmem_chunk(iov, vfid, smem, offset, size, true);
+	if (ret < 0)
+		return ret;
+
+	return size;
+}
+
+/**
+ * intel_iov_state_restore_lmem_chunk - Restore VF LMEM chunk.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ * @smem: SMEM object with VF LMEM to restore
+ * @offset: offset of VF LMEM chunk
+ * @size: size of chunk to restore
+ *
+ * This function is for PF only.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int intel_iov_state_restore_lmem_chunk(struct intel_iov *iov, u32 vfid,
+				       struct drm_i915_gem_object *smem, u64 offset, size_t size)
+{
+	int ret;
+
+	ret = save_restore_lmem_chunk(iov, vfid, smem, offset, size, false);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+#define COMPRESSION_RATIO 256
+
+static int
+copy_ccs_chunk(struct drm_i915_gem_object *smem, u64 smem_offset,
+	       struct drm_i915_gem_object *lmem, u64 lmem_offset,
+	       u32 size, bool save)
+{
+	struct i915_vma *smem_vma, *lmem_vma;
+	struct intel_context *ce;
+	struct i915_request *rq;
+	int err;
+
+	if (size > SZ_64M)
+		return -EINVAL;
+
+	if (lmem_offset + size > lmem->base.size)
+		return -EINVAL;
+
+	if (smem->base.size < size / COMPRESSION_RATIO)
+		return -EINVAL;
+
+	ce = intel_context_create(lmem->mm.region.mem->gt->engine[BCS0]);
+	if (IS_ERR(ce))
+		return PTR_ERR(ce);
+
+	smem_vma = i915_vma_instance(smem, ce->vm, NULL);
+	if (IS_ERR(smem_vma)) {
+		err = PTR_ERR(smem_vma);
+		goto err_context_put;
+	}
+
+	err = i915_vma_pin(smem_vma, 0, 0, PIN_USER | PIN_ZONE_48);
+	if (err)
+		goto err_context_put;
+
+	lmem_vma = i915_vma_instance(lmem, ce->vm, NULL);
+	if (IS_ERR(lmem_vma)) {
+		err = PTR_ERR(lmem_vma);
+		goto err_smem_vma_unpin;
+	}
+
+	err = i915_vma_pin(lmem_vma, 0, 0, PIN_USER | PIN_ZONE_48);
+	if (err)
+		goto err_smem_vma_unpin;
+
+	rq = intel_context_create_request(ce);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto err_lmem_vma_unpin;
+	}
+
+	err = i915_gem_ccs_emit_swap(rq, i915_vma_offset(lmem_vma) + lmem_offset,
+					 i915_vma_offset(smem_vma) + smem_offset,
+					 size, save);
+	if (err)
+		goto err_rq_put;
+
+	i915_request_get(rq);
+	i915_request_add(rq);
+
+	if (i915_request_wait(rq, 0, HZ) < 0)
+		err = -ETIME;
+	else
+		err = rq->fence.error;
+
+err_rq_put:
+	i915_request_put(rq);
+err_lmem_vma_unpin:
+	i915_vma_unpin(lmem_vma);
+err_smem_vma_unpin:
+	i915_vma_unpin(smem_vma);
+err_context_put:
+	intel_context_put(ce);
+
+	return err < 0 ? err : 0;
+}
+
+static int copy_ccs(struct drm_i915_gem_object *smem, u64 smem_offset,
+		    struct drm_i915_gem_object *lmem, u64 lmem_offset,
+		    u64 size, bool save)
+{
+	u64 chunk_size, chunk_offset = 0;
+	int ret;
+
+	if (lmem_offset + size > lmem->base.size)
+		return -EINVAL;
+
+	if (smem_offset + (size / COMPRESSION_RATIO) > smem->base.size)
+		return -EINVAL;
+
+	while (chunk_offset < size) {
+		chunk_size = min_t(u64, size - chunk_offset, SZ_64M);
+
+		ret = copy_ccs_chunk(smem, smem_offset + (chunk_offset / COMPRESSION_RATIO),
+				     lmem, lmem_offset + chunk_offset, chunk_size, save);
+		if (ret)
+			break;
+
+		chunk_offset += chunk_size;
+	}
+
+	return ret;
+}
+
+/**
+ * intel_iov_state_save_ccs - Save VF CCS data.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ * @smem: SMEM object to save VF CCS data
+ * @offset: offset of VF LMEM chunk
+ * @size: size of VF LMEM chunk
+ *
+ * It saves CCS data corresponding to VF's LMEM chunk described with @offset
+ * and @size. For each 64KB of LMEM it copies 256B of CCS data.
+ *
+ * This function is for PF only.
+ *
+ * Return: Size of data written on success or a negative error code on failure.
+ */
+ssize_t intel_iov_state_save_ccs(struct intel_iov *iov, u32 vfid,
+				 struct drm_i915_gem_object *smem, u64 offset, size_t size)
+{
+	struct drm_i915_gem_object *lmem;
+	int ret;
+
+	lmem = iov->pf.provisioning.configs[vfid].lmem_obj;
+	if (!lmem)
+		return -ENXIO;
+
+	ret = copy_ccs(smem, 0, lmem, offset, size, true);
+	if (ret < 0)
+		return ret;
+
+	return size / COMPRESSION_RATIO;
+}
+
+/**
+ * intel_iov_state_restore_ccs - Restore VF CCS data.
+ * @iov: the IOV struct
+ * @vfid: VF identifier
+ * @smem: SMEM object with VF CCS data to restore
+ * @offset: offset of VF LMEM chunk
+ * @size: size of VF LMEM chunk
+ *
+ * It restores CCS data corresponding to VF's LMEM chunk described with @offset
+ * and @size. For each 64KB of LMEM it copies 256B of CCS data.
+ *
+ * This function is for PF only.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int intel_iov_state_restore_ccs(struct intel_iov *iov, u32 vfid,
+				struct drm_i915_gem_object *smem, u64 offset, size_t size)
+{
+	struct drm_i915_gem_object *lmem;
+	int ret;
+
+	lmem = iov->pf.provisioning.configs[vfid].lmem_obj;
+	if (!lmem)
+		return -ENXIO;
+
+	ret = copy_ccs(smem, 0, lmem, offset, size, false);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }

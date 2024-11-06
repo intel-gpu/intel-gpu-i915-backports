@@ -430,7 +430,10 @@ static struct intel_memory_region *get_preferred_region(struct drm_i915_gem_obje
 
 static void try_migrate_to_preferred(struct drm_i915_gem_object *obj)
 {
-	struct intel_memory_region *mem = get_preferred_region(obj);
+	struct intel_memory_region *mem;
+
+	if (likely(!test_bit(I915_BO_EVICT_BIT, &obj->flags)))
+		return;
 
 	/*
 	 * Opportunitiscally move an object back to its user's preferred
@@ -438,6 +441,7 @@ static void try_migrate_to_preferred(struct drm_i915_gem_object *obj)
 	 * passed the eviction pressure.
 	 */
 
+	mem = get_preferred_region(obj);
 	if (likely(!mem || obj->mm.region.mem == mem))
 		return;
 
@@ -447,7 +451,8 @@ static void try_migrate_to_preferred(struct drm_i915_gem_object *obj)
 	if (i915_gem_object_is_active(obj))
 		return;
 
-	i915_gem_object_migrate(obj, mem->id, false);
+	if (i915_gem_object_migrate(obj, mem->id, false) == 0)
+		__clear_bit(I915_BO_EVICT_BIT, &obj->flags);
 }
 
 static inline int
@@ -469,7 +474,7 @@ eb_pin_vma(struct i915_execbuffer *eb,
 		pin_flags |= PIN_GLOBAL;
 
 	/* Attempt to reuse the current location if available */
-	err = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
+	err = i915_vma_pin_ww(vma, 0, 0, pin_flags);
 	if (unlikely(err)) {
 		if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 			return err;
@@ -478,7 +483,7 @@ eb_pin_vma(struct i915_execbuffer *eb,
 			return err;
 
 		/* Failing that pick any _free_ space if suitable */
-		err = i915_vma_pin_ww(vma, &eb->ww,
+		err = i915_vma_pin_ww(vma,
 				      entry->pad_to_size,
 				      entry->alignment,
 				      eb_pin_flags(entry, ev->flags) |
@@ -568,7 +573,7 @@ static int __eb_persistent_vmas_move_to_active(struct i915_execbuffer *eb,
 			return err;
 	}
 
-	return i915_vm_move_to_active(vm, rq->context, rq);
+	return 0;
 }
 
 static inline bool
@@ -664,7 +669,7 @@ static int eb_reserve_vma(struct i915_execbuffer *eb,
 			return err;
 	}
 
-	err = i915_vma_pin_ww(vma, &eb->ww,
+	err = i915_vma_pin_ww(vma,
 			      entry->pad_to_size, entry->alignment,
 			      eb_pin_flags(entry, ev->flags) | pin_flags);
 	if (err)
@@ -987,13 +992,6 @@ static int eb_lock_persistent_vmas(struct i915_execbuffer *eb)
 	struct i915_vma *vma, *vn;
 	int err;
 
-	if (!test_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags))
-		return 0;
-
-	err = i915_vm_lock_objects(vm, &eb->ww);
-	if (err)
-		return err;
-
 	if (!atomic_read(&vm->open))
 		return -ENOENT;
 
@@ -1018,10 +1016,6 @@ static int eb_lock_vmas(struct i915_execbuffer *eb)
 	unsigned int i;
 	int err;
 
-	err = eb_lock_persistent_vmas(eb);
-	if (err)
-		return err;
-
 	for (i = 0; i < eb->buffer_count; i++) {
 		struct i915_vma *vma = eb->vma[i].vma;
 
@@ -1039,15 +1033,16 @@ static int eb_validate_persistent_vmas(struct i915_execbuffer *eb)
 	struct i915_vma *vma;
 	int err;
 
-	if (!(eb->args->flags & __EXEC_LOCK_PERSISTENT))
-		return 0;
+	err = eb_lock_persistent_vmas(eb);
+	if (err)
+		return err;
 
 	list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
 		u64 pin_flags = vma->node.start | PIN_OFFSET_FIXED | PIN_USER;
 
 		try_migrate_to_preferred(vma->obj);
 
-		err = i915_vma_pin_ww(vma, &eb->ww, 0, 0, pin_flags);
+		err = i915_vma_pin_ww(vma, 0, 0, pin_flags);
 		if (err)
 			return err;
 
@@ -1059,19 +1054,26 @@ static int eb_validate_persistent_vmas(struct i915_execbuffer *eb)
 
 static int eb_validate_vmas(struct i915_execbuffer *eb)
 {
+	struct i915_address_space *vm = eb->context->vm;
 	unsigned int i;
 	int err;
 
 	INIT_LIST_HEAD(&eb->unbound);
+
+	err = i915_vm_lock_objects(vm, &eb->ww);
+	if (err)
+		return err;
 
 	err = eb_lock_vmas(eb);
 	if (err)
 		return err;
 
 	/* Ensure all persistent vmas are bound */
-	err = eb_validate_persistent_vmas(eb);
-	if (err)
-		return err;
+	if (test_bit(I915_VM_HAS_PERSISTENT_BINDS, &vm->flags)) {
+		err = eb_validate_persistent_vmas(eb);
+		if (err)
+			return err;
+	}
 
 	for (i = 0; i < eb->buffer_count; i++) {
 		struct drm_i915_gem_exec_object2 *entry = &eb->exec[i];
@@ -1111,11 +1113,8 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 	}
 
 	err = 0;
-	if (!list_empty(&eb->unbound)) {
-		err = i915_gem_object_lock(eb->context->vm->root_obj, &eb->ww);
-		if (err == 0)
-			err = eb_reserve(eb);
-	}
+	if (!list_empty(&eb->unbound))
+		err = eb_reserve(eb);
 
 	return err;
 }
@@ -1428,7 +1427,7 @@ static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
 		goto err_unmap;
 	}
 
-	err = i915_vma_pin_ww(batch, &eb->ww, 0, 0, PIN_USER | PIN_ZONE_48 | PIN_NONBLOCK);
+	err = i915_vma_pin_ww(batch, 0, 0, PIN_USER | PIN_ZONE_48 | PIN_NONBLOCK);
 	if (err)
 		goto err_unmap;
 
@@ -2408,16 +2407,8 @@ static const enum intel_engine_id user_ring_map[] = {
 	[I915_EXEC_VEBOX]	= VECS0
 };
 
-/* Make CCS0 as default engine when RCS is deprecated */
+/* Make BCS0 as default engine when RCS is deprecated */
 static const enum intel_engine_id user_ring_map_wo_rcs[] = {
-	[I915_EXEC_DEFAULT]	= CCS0,
-	[I915_EXEC_RENDER]	= INVALID_ENGINE,
-	[I915_EXEC_BLT]		= BCS0,
-	[I915_EXEC_BSD]		= VCS0,
-	[I915_EXEC_VEBOX]	= VECS0
-};
-
-static const enum intel_engine_id user_ring_map_wo_rcs_ccs[] = {
 	[I915_EXEC_DEFAULT]	= BCS0,
 	[I915_EXEC_RENDER]	= INVALID_ENGINE,
 	[I915_EXEC_BLT]		= BCS0,
@@ -2509,23 +2500,9 @@ static int eb_enter_context(struct i915_execbuffer *eb, struct intel_context *ce
 	return 0;
 }
 
-static int eb_enter(struct i915_execbuffer *eb)
+static void mark_used_engine(struct intel_context *ce)
 {
-	struct intel_context *ce = eb->context, *child;
 	struct intel_gt *gt = ce->engine->gt;
-	int i = 0;
-	int err;
-
-	for_each_child(ce, child) {
-		err = eb_enter_context(eb, child);
-		if (err)
-			goto unwind;
-		++i;
-	}
-
-	err = eb_enter_context(eb, ce);
-	if (err)
-		goto unwind;
 
 	/*
 	 * When starting a new context that has pagefaults enabled, synchronize
@@ -2551,6 +2528,27 @@ static int eb_enter(struct i915_execbuffer *eb)
 			mutex_unlock(&blt->timeline->mutex);
 		}
 	}
+}
+
+static int eb_enter(struct i915_execbuffer *eb)
+{
+	struct intel_context *ce = eb->context, *child;
+	int i = 0;
+	int err;
+
+	for_each_child(ce, child) {
+		err = eb_enter_context(eb, child);
+		if (err)
+			goto unwind;
+		++i;
+	}
+
+	err = eb_enter_context(eb, ce);
+	if (err)
+		goto unwind;
+
+	if (is_power_of_2(ce->engine->mask))
+		mark_used_engine(ce);
 
 	return 0;
 
@@ -2657,8 +2655,6 @@ eb_select_legacy_ring(struct i915_execbuffer *eb)
 		}
 
 		idx =  _VCS(bsd_idx);
-	} else if (!CCS_MASK(to_gt(i915)) && !RCS_MASK(to_gt(i915))) {
-		idx = user_ring_map_wo_rcs_ccs[user_ring_id];
 	} else if (!RCS_MASK(to_gt(i915))) {
 		idx = user_ring_map_wo_rcs[user_ring_id];
 	} else {
@@ -3054,19 +3050,18 @@ static void signal_fence_array(const struct i915_execbuffer *eb,
 static int
 parse_user_fence(struct i915_user_extension __user *ext, void *data)
 {
+	struct prelim_drm_i915_gem_execbuffer_ext_user_fence __user *user_fence =
+		container_of(ext, typeof(*user_fence), base);
 	struct i915_execbuffer *eb = data;
-	struct prelim_drm_i915_gem_execbuffer_ext_user_fence user_fence;
 
-	if (copy_from_user(&user_fence, ext, sizeof(user_fence)))
+	if (get_user(eb->user_fence.addr, &user_fence->addr) |
+	    get_user(eb->user_fence.value, &user_fence->value))
 		return -EFAULT;
 
-	if (!IS_ALIGNED(user_fence.addr, 8))
+	if (!IS_ALIGNED(eb->user_fence.addr, 8))
 		return -EINVAL;
 
-	eb->user_fence.addr = user_fence.addr;
-	eb->user_fence.value = user_fence.value;
 	eb->has_user_fence = true;
-
 	return 0;
 }
 
@@ -3426,11 +3421,11 @@ eb_requests_create(struct i915_execbuffer *eb, struct dma_fence *in_fence,
 	return out_fence;
 }
 
-static void
+static int
 init_and_set_context_suspend_fence(struct intel_context *ce,
 				   struct i915_suspend_fence *sfence)
 {
-	intel_context_suspend_fence_set
+	return intel_context_suspend_fence_set
 		(ce, i915_suspend_fence_init(sfence, ce, &execbuf_suspend_ops));
 }
 
@@ -3591,7 +3586,8 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	 * and must not block.
 	 */
 	err = intel_gt_configure_ccs_mode(eb.context->engine->gt,
-					  eb.gem_context->engine_mask);
+					  eb.gem_context->engine_mask,
+					  eb.context->engine);
 	if (err)
 		goto err_vma;
 
@@ -3610,7 +3606,10 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 
 	/* For long running context set suspend fence if not already set */
 	if (sfence && !eb.context->sfence) {
-		init_and_set_context_suspend_fence(eb.context, sfence);
+		err = init_and_set_context_suspend_fence(eb.context, sfence);
+		if (unlikely(err))
+			goto err_request;
+
 		sfence = NULL;
 	}
 
@@ -3792,7 +3791,7 @@ static int persistent_vmas_move_to_active_sync(struct i915_execbuffer *eb)
 		list_move_tail(&vma->vm_bind_link, &vm->vm_bound_list);
 	}
 
-	return i915_vm_move_to_active(vm, eb->context, NULL);
+	return 0;
 }
 
 static int revalidate_transaction(struct i915_execbuffer *eb)
@@ -3800,10 +3799,9 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	struct intel_context *ce = eb->context;
 	struct i915_suspend_fence *sfence;
 	struct intel_timeline *tl;
-	struct dma_fence *fence;
 	int err;
 
-	err = eb_lock_persistent_vmas(eb);
+	err = i915_vm_lock_objects(ce->vm, &eb->ww);
 	if (err)
 		return err;
 
@@ -3828,18 +3826,19 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	}
 
 	/* If context is retired, abort */
-	if (!ce->active_count || !ce->sfence) {
-		kfree(sfence);
+	if (!ce->sfence)
 		goto err_unlock;
-	}
 
 	/* If signaled, replace the suspend fence under the timeline lock */
-	if (dma_fence_is_signaled(&ce->sfence->base.rq.fence)) {
-		fence = i915_suspend_fence_init(sfence, ce,
-						&execbuf_suspend_ops);
-		intel_context_suspend_fence_replace(eb->context, fence);
-	} else {
-		kfree(sfence);
+	if (dma_fence_is_signaled(ce->sfence)) {
+		struct dma_fence *fence;
+
+		fence = i915_suspend_fence_init(sfence, ce, &execbuf_suspend_ops);
+		err = intel_context_suspend_fence_replace(eb->context, fence);
+		if (err)
+			goto err_unlock;
+
+		sfence = NULL;
 	}
 
 	/*
@@ -3855,17 +3854,15 @@ static int revalidate_transaction(struct i915_execbuffer *eb)
 	 * resuming the request.
 	 */
 	err = persistent_vmas_move_to_active_sync(eb);
-	if (err)
-		goto err_resume;
-
-err_resume:
 	if (err == -EAGAIN || err == -EINTR || err == -ERESTARTSYS) {
 		/* Triggers a rerun once we've unlocked the vm_bind lock. */
-		dma_fence_enable_sw_signaling(&ce->sfence->base.rq.fence);
+		dma_fence_enable_sw_signaling(ce->sfence);
 		err = 0;
 	}
+
 err_unlock:
 	intel_context_timeline_unlock(tl);
+	kfree(sfence);
 	return err;
 }
 

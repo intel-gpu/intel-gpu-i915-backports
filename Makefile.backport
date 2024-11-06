@@ -924,7 +924,6 @@ DEF_VER = $(shell cat $(BACKPORT_DIR)/debian/changelog.in | head -1 | cut -d '('
 #------------------------------------------------------------------------------
 DMABUFDKMSMK_CONTROL := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebcontrol
 DMABUFDKMSMK_RULES := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebrules
-DMABUFDKMSMK_INSTALL := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebinstall
 DMABUFDKMSMK_DKMS := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebdkms
 DMABUFDKMSMK_README := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebreadme
 DMABUFDKMSMK_COPYRIGHT := $(BACKPORT_DIR)/scripts/backport-mkdmabufdebcopyright
