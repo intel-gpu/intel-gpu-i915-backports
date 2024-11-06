@@ -652,33 +652,18 @@ static u32 __get_default_log_level(struct intel_guc_log *log)
 int intel_guc_log_create(struct intel_guc_log *log)
 {
 	struct intel_guc *guc = log_to_guc(log);
-	struct i915_vma *vma;
-	void *vaddr;
-	u32 guc_log_size;
 	int ret;
 
 	GEM_BUG_ON(log->vma);
 
-	guc_log_size = intel_guc_log_size(log);
-
-	vma = intel_guc_allocate_vma(guc, guc_log_size);
-	if (IS_ERR(vma)) {
-		ret = PTR_ERR(vma);
-		goto err;
-	}
-
-	log->vma = vma;
 	/*
 	 * Create a WC (Uncached for read) vmalloc mapping up front immediate access to
 	 * data from memory during  critical events such as error capture
 	 */
-	vaddr = i915_gem_object_pin_map_unlocked(log->vma->obj, I915_MAP_WC);
-	if (IS_ERR(vaddr)) {
-		ret = PTR_ERR(vaddr);
-		i915_vma_unpin_and_release(&log->vma, 0);
+	ret = intel_guc_allocate_and_map_vma(guc, intel_guc_log_size(log),
+					     &log->vma, &log->buf_addr);
+	if (ret)
 		goto err;
-	}
-	log->buf_addr = vaddr;
 
 	log->level = __get_default_log_level(log);
 	guc_dbg(guc, "guc_log_level=%d (%s, verbose:%s, verbosity:%d)\n",

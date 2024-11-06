@@ -378,6 +378,7 @@ static const struct intel_device_info ats_m_info = {
 	.tuning_thread_rr_after_dep = 1,
 	.has_csc_uid = 1,
 	.has_survivability_mode = 1,
+	.has_runtime_pm = 0,
 };
 
 #define XE_HPC_FEATURES \
@@ -644,6 +645,11 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (i915_inject_probe_failure(pci_get_drvdata(pdev))) {
 		err = -ENODEV;
+		goto err_remove;
+	}
+
+	if (i915_error_injected() && !i915_modparams.inject_probe_failure) {
+		err = -EAGAIN; /* error injected "successfully"; try again */
 		goto err_remove;
 	}
 

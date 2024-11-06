@@ -14,7 +14,6 @@ static struct intel_ring *mock_ring(unsigned long sz)
 	kref_init(&ring->ref);
 	ring->size = sz;
 	ring->wrap = BITS_PER_TYPE(ring->size) - ilog2(sz);
-	ring->effective_size = sz;
 	ring->vaddr = (void *)(ring + 1);
 	atomic_set(&ring->pin_count, 1);
 

@@ -1226,9 +1226,7 @@ void intel_gt_reset(struct intel_gt *gt,
 	int ret;
 
 	GT_TRACE(gt, "flags=%lx\n", gt->reset.flags);
-
 	might_sleep();
-	GEM_BUG_ON(!test_bit(I915_RESET_BACKOFF, &gt->reset.flags));
 
 	wakeref = intel_gt_pm_get(gt);
 	mutex_lock(&gt->reset.mutex);

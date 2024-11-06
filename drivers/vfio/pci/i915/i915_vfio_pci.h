@@ -33,8 +33,11 @@ struct i915_vfio_pci_migration_data {
 	struct i915_vfio_pci_migration_header hdr;
 	bool hdr_processed;
 	struct list_head link;
-	void *buf;
 	loff_t pos;
+	struct {
+		void *vaddr;
+		size_t size;
+	} buf;
 };
 
 /**
@@ -49,11 +52,6 @@ struct i915_vfio_pci_migration_file {
 	struct i915_vfio_pci_core_device *i915_vdev;
 	unsigned long (*copy_from)(void *to, const void __user *from, unsigned long n);
 	unsigned long (*copy_to)(void __user *to, const void *from, unsigned long n);
-};
-
-struct i915_vfio_pci_mappable_resource {
-	void *vaddr;
-	ssize_t size;
 };
 
 /**
@@ -74,15 +72,15 @@ struct i915_vfio_pci_core_device {
 	struct pci_dev *pf;
 	const struct i915_vfio_pci_migration_pf_ops *pf_ops;
 
-	struct i915_vfio_pci_mappable_resource lmem[I915_VFIO_MAX_TILE];
-
 	struct i915_vfio_pci_migration_file *fd;
 };
 
-struct i915_vfio_pci_mappable_resource_ops {
+struct i915_vfio_pci_chunkable_resource_ops {
 	ssize_t (*size)(struct pci_dev *pf, unsigned int vfid, unsigned int tile);
-	void * (*map)(struct pci_dev *pf, unsigned int vfid, unsigned int tile);
-	void (*unmap)(struct pci_dev *pf, unsigned int vfid, unsigned int tile);
+	ssize_t (*save)(struct pci_dev *pf, unsigned int vfid, unsigned int tile,
+			void *buf, u64 offset, size_t size);
+	int (*load)(struct pci_dev *pf, unsigned int vfid, unsigned int tile,
+		    const void *buf, u64 offset, size_t size);
 };
 
 struct i915_vfio_pci_resource_ops {
@@ -98,20 +96,16 @@ struct i915_vfio_pci_migration_pf_ops {
 	int (*resume)(struct pci_dev *pf, unsigned int vfid);
 	int (*wait_flr_done)(struct pci_dev *pf, unsigned int vfid);
 	struct i915_vfio_pci_resource_ops ggtt, fw;
-	struct i915_vfio_pci_mappable_resource_ops lmem;
+	struct i915_vfio_pci_chunkable_resource_ops lmem, ccs;
 };
 
 #define i915_vdev_to_dev(i915_vdev) (&(i915_vdev)->core_device.pdev->dev)
 #define i915_vdev_to_pdev(i915_vdev) ((i915_vdev)->core_device.pdev)
-
-int i915_vfio_map_resources(struct i915_vfio_pci_core_device *i915_vdev);
-void i915_vfio_unmap_resources(struct i915_vfio_pci_core_device *i915_vdev);
 
 void i915_vfio_pci_reset(struct i915_vfio_pci_core_device *i915_vdev);
 ssize_t i915_vfio_data_read(struct i915_vfio_pci_migration_file *migf, char __user *buf,
 			    size_t len);
 ssize_t i915_vfio_data_write(struct i915_vfio_pci_migration_file *migf, const char __user *buf,
 			     size_t len);
+int i915_vfio_save_data_prepare(struct i915_vfio_pci_migration_file *migf);
 void i915_vfio_save_data_release(struct i915_vfio_pci_migration_file *migf);
-
-int i915_vfio_pci_produce_save_data(struct i915_vfio_pci_migration_file *migf);

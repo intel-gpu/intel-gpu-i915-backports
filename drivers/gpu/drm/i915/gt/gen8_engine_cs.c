@@ -429,8 +429,10 @@ u32 get_init_breadcrumb_pos(struct i915_request *rq)
 	if (!intel_timeline_has_initial_breadcrumb(rcu_access_pointer(rq->timeline)))
 		return rq->infix;
 
-	if (rq->infix - rq->head > GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32))
-		return rq->infix - GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32);
+	if (__intel_ring_count(rq->head, rq->infix, rq->ring->size) >
+			GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32))
+		return intel_ring_wrap(rq->ring, rq->infix -
+				       GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS * sizeof(u32));
 
 	return rq->head;
 }
@@ -445,7 +447,7 @@ static int xehp_get_params_for_emit_bb_start(struct i915_request *rq,
 	*flags = 0;
 	*len = 0;
 
-	if (rq->advance - rq->infix < 9 * sizeof(u32))
+	if (__intel_ring_count(rq->infix, rq->advance, ring->size) < 9 * sizeof(u32))
 		return -ENOMSG;
 
 	if ((*cs & MI_INSTR(0x3F, 0)) != MI_ARB_ON_OFF)
@@ -632,6 +634,64 @@ static void assert_request_valid(struct i915_request *rq)
 	GEM_BUG_ON(intel_ring_direction(ring, rq->wa_tail, rq->head) <= 0);
 }
 
+/**
+ * Fill an area of a ring with NOOP instructions.
+ * @ring: the ring struct instance
+ * @start: start position on the ring, qword-aligned
+ * @end: end position on the ring, qword-aligned (the content at this position
+ *    will not get NOOPed)
+ */
+void ring_range_emit_noop(struct intel_ring *ring, u32 start, u32 end)
+{
+	int i, num_dwords;
+	u32 *cs;
+	void *vaddr = ring->vaddr;
+
+	cs = vaddr + start;
+	num_dwords = __intel_ring_count(start, end, ring->size) / sizeof(u32);
+	GEM_BUG_ON(num_dwords & 1);
+	GEM_BUG_ON(num_dwords < 0);
+
+	for (i = num_dwords/2 + 1; i > 0; i--) {
+		*cs++ = MI_NOOP;
+		*cs++ = MI_NOOP;
+		cs = vaddr + intel_ring_wrap(ring, ptrdiff(cs, vaddr));
+	}
+}
+
+/**
+ * Refreshes commands on the ring associated to init_breadcrumb command packet.
+ * @rq: the request instance
+ */
+int reemit_init_breadcrumb(struct i915_request *rq)
+{
+	u32 advance;
+	u32 dwlen;
+
+	if (!test_bit(I915_FENCE_FLAG_INITIAL_BREADCRUMB, &rq->fence.flags))
+		return -ENOMSG;
+
+	if (rq->engine->emit_init_breadcrumb == gen8_emit_init_breadcrumb)
+		dwlen = GEN8_EMIT_INIT_BREADCRUMB_NUM_DWORDS;
+	else
+		dwlen = 0;
+
+	/* ring emit position is expected to be already correctly set for reemit */
+	if (__intel_ring_count(rq->ring->emit, rq->advance, rq->ring->size) < dwlen * sizeof(u32))
+		return -EPROTO;
+
+	advance = rq->advance;
+
+	if (rq->engine->emit_init_breadcrumb) {
+		__clear_bit(I915_FENCE_FLAG_INITIAL_BREADCRUMB, &rq->fence.flags);
+		rq->engine->emit_init_breadcrumb(rq);
+	}
+
+	rq->advance = advance;
+
+	return 0;
+}
+
 static int get_params_for_emit_bb_start(struct i915_request *rq,
 				u64 *offset, u32 *len, u32 *flags)
 {
@@ -644,7 +704,7 @@ static int get_params_for_emit_bb_start(struct i915_request *rq,
 }
 
 /**
- * Refreshes commands on the ring associated to given bb_start request.
+ * Refreshes commands on the ring associated to bb_start command packet.
  * @rq: the request instance
  *
  * If the old ring content was lost, it is not possible to refresh it as
@@ -663,11 +723,6 @@ int reemit_bb_start(struct i915_request *rq)
 	err = get_params_for_emit_bb_start(rq, &offset, &emlen, &emflags);
 	if (err)
 		return err;
-
-	if (rq->engine->emit_init_breadcrumb) {
-		__clear_bit(I915_FENCE_FLAG_INITIAL_BREADCRUMB, &rq->fence.flags);
-		rq->engine->emit_init_breadcrumb(rq);
-	}
 
 	err = rq->engine->emit_bb_start(rq, offset, emlen, emflags);
 
@@ -759,6 +814,14 @@ static u32 *emit_breadcrumb(struct i915_request *rq, u32 *cs)
 		*cs++ = offset;
 		*cs++ = 0;
 		*cs++ = i915_request_seqno(rq);
+	}
+
+	/* poison self: detect re-execution */
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM) && rq->postfix != rq->infix) {
+		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+		*cs++ = i915_ggtt_offset(rq->ring->vma) + rq->infix;
+		*cs++ = 0;
+		*cs++ = -1;
 	}
 
 	return cs;

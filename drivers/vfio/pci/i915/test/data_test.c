@@ -20,7 +20,7 @@ struct i915_vfio_pci_data_test {
 	struct i915_vfio_pci_core_device *i915_vdev;
 };
 
-size_t
+ssize_t
 i915_vfio_test_res_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
 {
 	struct i915_vfio_pci_data_test *priv = pci_get_drvdata(pdev);
@@ -49,10 +49,34 @@ i915_vfio_test_res_load(struct pci_dev *pdev, unsigned int vfid, unsigned int ti
 	return 0;
 }
 
+ssize_t i915_vfio_test_res_save_chunk(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
+				      void *buf, u64 offset, size_t size)
+{
+	struct i915_vfio_pci_data_test *priv = pci_get_drvdata(pdev);
+
+	memcpy(buf, (u8 *)priv->resource.vaddr + offset, size);
+
+	return size;
+}
+
+int
+i915_vfio_test_res_load_chunk(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
+			      const void *buf, u64 offset, size_t size)
+{
+	struct i915_vfio_pci_data_test *priv = pci_get_drvdata(pdev);
+
+	memcpy((u8 *)priv->resource.vaddr + offset, buf, size);
+
+	return 0;
+}
+
 static const struct i915_vfio_pci_migration_pf_ops pf_test_ops = {
 	.ggtt.size = i915_vfio_test_res_size,
 	.ggtt.save = i915_vfio_test_res_save,
 	.ggtt.load = i915_vfio_test_res_load,
+	.lmem.size = i915_vfio_test_res_size,
+	.lmem.save = i915_vfio_test_res_save_chunk,
+	.lmem.load = i915_vfio_test_res_load_chunk,
 };
 
 #define I915_VFIO_TEST_RES_SIZE SZ_4K
@@ -81,9 +105,6 @@ static int i915_vfio_pci_data_test_init(struct kunit *test)
 	priv->i915_vdev = i915_vdev;
 	priv->resource.vaddr = resource;
 	priv->resource.size = resource_size;
-
-	i915_vdev->lmem[0].vaddr = resource;
-	i915_vdev->lmem[0].size = resource_size;
 
 	i915_vdev->pf_ops = &pf_test_ops;
 
@@ -128,7 +149,7 @@ static void test_produce_consume_desc(struct kunit *test)
 	void *buf;
 
 	KUNIT_ASSERT_TRUE(test, list_empty(&i915_vdev->fd->save_data));
-	ret = i915_vfio_produce_desc(i915_vdev->fd);
+	ret = i915_vfio_produce_prepare_desc(i915_vdev->fd);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_ASSERT_FALSE(test, list_empty(&i915_vdev->fd->save_data));
 
@@ -148,23 +169,24 @@ static void test_produce_consume_desc(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ret, data_len);
 }
 
-static void test_produce_mappable(struct kunit *test)
+static void test_produce_chunkable(struct kunit *test)
 {
 	struct i915_vfio_pci_data_test *priv = test->priv;
 	struct i915_vfio_pci_core_device *i915_vdev = priv->i915_vdev;
 	struct i915_vfio_pci_migration_data *data;
 	size_t data_len, data_chunk;
+	unsigned int tile = 0;
 	ssize_t ret;
 	void *buf;
+	u32 pos;
 
-	ret = i915_vfio_produce_lmem(i915_vdev->fd, 0);
+	ret = i915_vfio_produce_prepare_lmem(i915_vdev->fd, tile);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_ASSERT_FALSE(test, list_empty(&i915_vdev->fd->save_data));
 
 	data = list_first_entry_or_null(&i915_vdev->fd->save_data, typeof(*data), link);
 	KUNIT_ASSERT_PTR_NE(test, data, NULL);
 	KUNIT_EXPECT_EQ(test, data->hdr.size, priv->resource.size);
-	KUNIT_EXPECT_PTR_EQ(test, data->buf, priv->resource.vaddr);
 
 	data_len = data->hdr.size + sizeof(data->hdr);
 	data_chunk = sizeof(data->hdr) + 16;
@@ -176,12 +198,19 @@ static void test_produce_mappable(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, data->hdr_processed);
 	ret = i915_vfio_data_read(i915_vdev->fd, buf, data_chunk);
 	KUNIT_EXPECT_EQ(test, ret, data_chunk);
+	pos = ret;
 	KUNIT_EXPECT_TRUE(test, data->hdr_processed);
 
 	KUNIT_EXPECT_EQ(test, memcmp(buf, &data->hdr, sizeof(data->hdr)), 0);
 
-	ret = i915_vfio_data_read(i915_vdev->fd, buf + ret, data_len - data_chunk);
-	KUNIT_EXPECT_EQ(test, ret, data_len - data_chunk);
+	do {
+		ret = i915_vfio_data_read(i915_vdev->fd, buf + pos, data_chunk);
+		KUNIT_ASSERT_GT(test, ret, 0);
+		pos += ret;
+	} while (pos < data_len);
+
+	KUNIT_ASSERT_EQ(test, pos, data_len);
+
 	KUNIT_ASSERT_TRUE(test, list_empty(&i915_vdev->fd->save_data));
 
 	KUNIT_EXPECT_EQ(test,
@@ -189,7 +218,7 @@ static void test_produce_mappable(struct kunit *test)
 			0);
 }
 
-static void test_consume_mappable(struct kunit *test)
+static void test_consume_chunkable(struct kunit *test)
 {
 	struct i915_vfio_pci_data_test *priv = test->priv;
 	struct i915_vfio_pci_core_device *i915_vdev = priv->i915_vdev;
@@ -201,9 +230,10 @@ static void test_consume_mappable(struct kunit *test)
 		.size = priv->resource.size,
 		.flags = 0,
 	};
-	void *buf;
 	size_t data_len, data_chunk;
 	ssize_t ret;
+	void *buf;
+	u32 pos;
 
 	data_len = hdr.size + sizeof(hdr);
 	data_chunk = sizeof(hdr) + 16;
@@ -216,12 +246,18 @@ static void test_consume_mappable(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, data->hdr_processed);
 	ret = i915_vfio_data_write(i915_vdev->fd, buf, data_chunk);
 	KUNIT_ASSERT_EQ(test, ret, data_chunk);
+	pos = ret;
 	KUNIT_EXPECT_TRUE(test, data->hdr_processed);
 
 	KUNIT_EXPECT_EQ(test, memcmp(&hdr, &data->hdr, sizeof(hdr)), 0);
 
-	ret = i915_vfio_data_write(i915_vdev->fd, buf + ret, data_len - data_chunk);
-	KUNIT_ASSERT_EQ(test, ret, data_len - data_chunk);
+	do {
+		ret = i915_vfio_data_write(i915_vdev->fd, buf + pos, data_chunk);
+		KUNIT_ASSERT_GT(test, ret, 0);
+		pos += ret;
+	} while (pos < data_len);
+
+	KUNIT_ASSERT_EQ(test, pos, data_len);
 
 	KUNIT_EXPECT_EQ(test,
 			memcmp(buf + sizeof(hdr), priv->resource.vaddr, priv->resource.size),
@@ -234,11 +270,12 @@ static void test_produce_res(struct kunit *test)
 	struct i915_vfio_pci_core_device *i915_vdev = priv->i915_vdev;
 	struct i915_vfio_pci_migration_data *data;
 	struct i915_vfio_pci_migration_header hdr;
+	unsigned int tile = 0;
 	size_t data_len;
 	ssize_t ret;
 	void *buf;
 
-	ret = i915_vfio_produce_ggtt(i915_vdev->fd, 0);
+	ret = i915_vfio_produce_prepare_ggtt(i915_vdev->fd, tile);
 	KUNIT_ASSERT_EQ(test, ret, 0);
 	KUNIT_ASSERT_FALSE(test, list_empty(&i915_vdev->fd->save_data));
 
@@ -314,7 +351,8 @@ static void test_invalid_device_desc(struct kunit *test)
 	const struct invalid_device_desc_test *param = test->param_value;
 	struct i915_vfio_pci_data_test *priv = test->priv;
 	struct i915_vfio_pci_core_device *i915_vdev = priv->i915_vdev;
-	struct i915_vfio_pci_migration_header *hdr = &i915_vdev->fd->resume_data.hdr;
+	struct i915_vfio_pci_migration_data *data = &i915_vdev->fd->resume_data;
+	struct i915_vfio_pci_migration_header *hdr = &data->hdr;
 	void *buf;
 	int ret;
 
@@ -324,10 +362,13 @@ static void test_invalid_device_desc(struct kunit *test)
 	hdr->size = sizeof(param->desc);
 	hdr->flags = 0;
 
-	buf = kunit_kzalloc(test, sizeof(*hdr) + sizeof(param->desc), GFP_KERNEL);
+	buf = kunit_kzalloc(test, sizeof(param->desc), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, buf);
 
-	ret = i915_vfio_consume_data(i915_vdev->fd, buf, sizeof(param->desc));
+	data->buf.vaddr = buf;
+	memcpy(buf, &param->desc, sizeof(param->desc));
+
+	ret = i915_vfio_consume_data(i915_vdev->fd, data);
 	KUNIT_EXPECT_EQ(test, ret, param->expected_err);
 }
 
@@ -337,26 +378,38 @@ static const struct invalid_device_desc_test invalid_device_desc_tests[] = {
 		.expected_err = -EINVAL,
 		.desc = {
 			.magic = 0xbad,
+			.version = BITSTREAM_VERSION,
+			.vendor = 0x1234,
+			.device = 0x4321,
 		},
 	},
 	{
 		.name = "bad version",
 		.expected_err = -EINVAL,
 		.desc = {
+			.magic = BITSTREAM_MAGIC,
 			.version = 0xbad,
+			.vendor = 0x1234,
+			.device = 0x4321
 		},
 	},
 	{
 		.name = "bad vendor",
 		.expected_err = -EINVAL,
 		.desc = {
+			.magic = BITSTREAM_MAGIC,
+			.version = BITSTREAM_VERSION,
 			.vendor = 0xbad,
+			.device = 0x4321,
 		},
 	},
 	{
 		.name = "bad device",
 		.expected_err = -EINVAL,
 		.desc = {
+			.magic = BITSTREAM_MAGIC,
+			.version = BITSTREAM_VERSION,
+			.vendor = 0x1234,
 			.device = 0xbad,
 		},
 	},
@@ -372,10 +425,10 @@ KUNIT_ARRAY_PARAM(invalid_device_desc, invalid_device_desc_tests, invalid_device
 
 static struct kunit_case i915_vfio_pci_data_tests[] = {
 	KUNIT_CASE(test_produce_consume_desc),
-	KUNIT_CASE(test_produce_mappable),
-	KUNIT_CASE(test_consume_mappable),
 	KUNIT_CASE(test_produce_res),
 	KUNIT_CASE(test_consume_res),
+	KUNIT_CASE(test_produce_chunkable),
+	KUNIT_CASE(test_consume_chunkable),
 	KUNIT_CASE_PARAM(test_invalid_device_desc, invalid_device_desc_gen_params),
 	{},
 };

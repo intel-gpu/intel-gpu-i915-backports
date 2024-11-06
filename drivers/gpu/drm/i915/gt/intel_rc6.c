@@ -59,16 +59,20 @@ static void set(struct intel_uncore *uncore, i915_reg_t reg, u32 val)
 	intel_uncore_write_fw(uncore, reg, val);
 }
 
-static bool enable_softpg(struct intel_gt *gt)
+static int enable_softpg(struct intel_gt *gt)
 {
 	int p = gt->i915->params.enable_softpg;
 
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG))
+		return 0;
+
 	if (p > 0)
-		return true;
+		return 2;
 	else if (p < 0)
-		return IS_PONTEVECCHIO(gt->i915);
+		return (IS_PONTEVECCHIO(gt->i915) &&
+			!IS_PVC_BD_STEP(gt->i915, STEP_A0, STEP_B0));
 	else
-		return false;
+		return 0;
 }
 
 static void gen11_rc6_enable(struct intel_rc6 *rc6)
@@ -159,7 +163,7 @@ static void gen11_rc6_enable(struct intel_rc6 *rc6)
 	}
 
 	/* Manually switch powergating off/on around GPU client activity */
-	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SOFT_PG) && enable_softpg(gt)) {
+	if (enable_softpg(gt) > 0) {
 		rc6->pg_enable = pg_enable;
 		return;
 	}
@@ -259,8 +263,11 @@ void intel_rc6_init(struct intel_rc6 *rc6)
 	__intel_rc6_disable(rc6);
 
 	err = 0;
-	if (!rc6_supported(rc6))
+	if (!rc6_supported(rc6)) {
+		if (enable_softpg(rc6_to_gt(rc6)) > 1) /* only for modparam */
+			rc6->pg_enable = GEN9_RENDER_PG_ENABLE;
 		err = -ECANCELED;
+	}
 
 	rc6->supported = err == 0;
 }
@@ -305,16 +312,15 @@ void intel_rc6_unpark(struct intel_rc6 *rc6)
 {
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
 
-	if (!rc6->enabled)
+	if (!(rc6->ctl_enable | rc6->pg_enable))
 		return;
-
-	GT_TRACE(rc6_to_gt(rc6),
-		 "exiting rc6, setting CONTROL:%x\n",
-		 rc6->ctl_enable);
 
 	/* Restore HW timers for automatic RC6 entry while busy */
 	intel_uncore_forcewake_get(uncore, FORCEWAKE_GT);
-	set(uncore, GEN6_RC_CONTROL, rc6->ctl_enable);
+	if (rc6->ctl_enable) {
+		GT_TRACE(rc6_to_gt(rc6), "enabling RC_CONTROL:%x\n", rc6->ctl_enable);
+		set(uncore, GEN6_RC_CONTROL, rc6->ctl_enable);
+	}
 	if (rc6->pg_enable) {
 		GT_TRACE(rc6_to_gt(rc6), "clearing PG_ENABLE:%x\n", rc6->pg_enable);
 		set(uncore, GEN9_PG_ENABLE, 0);
@@ -327,19 +333,17 @@ void intel_rc6_park(struct intel_rc6 *rc6)
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
 	unsigned int target;
 
-	if (!rc6->enabled)
-		return;
-
 	if (rc6->pg_enable) {
-		GT_TRACE(rc6_to_gt(rc6), "setting PG_ENABLE:%x\n", rc6->pg_enable);
+		GT_TRACE(rc6_to_gt(rc6), "enabling PG_ENABLE:%x\n", rc6->pg_enable);
 		set(uncore, GEN9_PG_ENABLE, rc6->pg_enable);
 	}
 
-	GT_TRACE(rc6_to_gt(rc6),
-		 "entering rc6, manually? %s\n",
-		 str_yes_no(rc6->manual));
 	if (!rc6->manual)
 		return;
+
+	GT_TRACE(rc6_to_gt(rc6),
+		 "entering rc6, manually, RC_CONTROL:%x\n",
+		 GEN6_RC_CTL_RC6_ENABLE);
 
 	/* Turn off the HW timers and go directly to rc6 */
 	set(uncore, GEN6_RC_CONTROL, GEN6_RC_CTL_RC6_ENABLE);
@@ -372,7 +376,6 @@ void intel_rc6_fini(struct intel_rc6 *rc6)
 
 u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 {
-	struct drm_i915_private *i915 = rc6_to_i915(rc6);
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
 	u64 time_hw, prev_hw, overflow_hw;
 	unsigned int fw_domains;
@@ -395,7 +398,7 @@ u64 intel_rc6_residency_ns(struct intel_rc6 *rc6, const i915_reg_t reg)
 	       MTL_MEDIA_MC6 : GEN6_GT_GFX_RC6_LOCKED;
 	i = (i915_mmio_reg_offset(reg) -
 	     i915_mmio_reg_offset(base)) / sizeof(u32);
-	if (drm_WARN_ON_ONCE(&i915->drm, i >= ARRAY_SIZE(rc6->cur_residency)))
+	if (GEM_WARN_ON(i >= ARRAY_SIZE(rc6->cur_residency)))
 		return 0;
 
 	fw_domains = intel_uncore_forcewake_for_reg(uncore, reg, FW_REG_READ);

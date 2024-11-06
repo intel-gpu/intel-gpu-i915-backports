@@ -58,7 +58,7 @@ struct userptr_chunk {
 };
 
 #if IS_ENABLED(CONFIG_NUMA)
-#define set_mempolicy(tsk, pol) (tsk)->mempolicy = (pol)
+#define set_mempolicy(tsk, pol) smp_store_mb((tsk)->mempolicy, pol)
 #define get_mempolicy(tsk) ((tsk)->mempolicy)
 #else
 #define set_mempolicy(tsk, pol)
@@ -281,6 +281,8 @@ static void userptr_remote_chunk(struct i915_tbb *tbb)
 	struct userptr_chunk *chunk = container_of(tbb, typeof(*chunk), tbb);
 	struct mm_struct *mm = chunk->mm;
 
+	GEM_BUG_ON(get_mempolicy(current));
+
 	kthread_use_mm(mm);
 	set_mempolicy(current, chunk->policy);
 
@@ -349,6 +351,8 @@ static int userptr_work(struct dma_fence_work *base)
 
 	if (!mmget_not_zero(obj->userptr.mm))
 		return -EFAULT;
+
+	GEM_BUG_ON(get_mempolicy(current));
 
 	cpu = i915_tbb_suspend_local();
 	kthread_use_mm(obj->userptr.mm);
@@ -602,7 +606,7 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 
 		if (no_init_on_alloc &&
 		    round_down(min(vma->vm_end, end), SZ_1M) > round_up(addr, SZ_1M))
-			vm_flags_set(vma, VM_HUGEPAGE | VM_MIXEDMAP);
+			vm_flags_set(vma, VM_HUGEPAGE);
 
 		if (vma->vm_end >= end) {
 			ret = 0;
@@ -644,8 +648,7 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 	wrk->obj = obj;
 	wrk->pages = sg;
 	wrk->policy = get_mempolicy(current);
-	if (wrk->policy)
-		wrk->base.cpu = raw_smp_processor_id();
+	wrk->base.cpu = raw_smp_processor_id();
 
 	i915_gem_object_migrate_prepare(obj, &wrk->base.rq.fence);
 	dma_fence_work_commit(&wrk->base);

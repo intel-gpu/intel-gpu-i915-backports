@@ -374,11 +374,7 @@ struct intel_gt {
 	struct i915_address_space *vm;
 	struct drm_mm_node flat; /* 1:1 mapping of lmem reserved in vm */
 
-	struct i915_px_cache {
-		struct llist_head px;
-		spinlock_t lock;
-		bool closed:1;
-	} px_cache;
+	struct llist_head __percpu *px_cache;
 
 	/*
 	 * A pool of objects to use as shadow copies of client batch buffers

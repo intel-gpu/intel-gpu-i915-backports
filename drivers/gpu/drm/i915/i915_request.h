@@ -752,10 +752,4 @@ i915_request_active_engine(struct i915_request *rq,
 void i915_request_module_exit(void);
 int i915_request_module_init(void);
 
-#ifdef CONFIG_LOCKDEP
-void i915_fence_check_lr_lockdep(struct dma_fence *fence);
-#else
-static inline void i915_fence_check_lr_lockdep(struct dma_fence *fence) { }
-#endif
-
 #endif /* I915_REQUEST_H */

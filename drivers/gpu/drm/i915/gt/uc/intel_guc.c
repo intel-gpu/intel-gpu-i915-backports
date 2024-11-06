@@ -1196,6 +1196,9 @@ static struct i915_vma *guc_vma_from_obj(struct intel_guc *guc,
 		return vma;
 	}
 
+	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &gt->uc.guc.flags))
+		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+
 	return i915_vma_make_unshrinkable(vma);
 }
 
@@ -1408,6 +1411,26 @@ static u32 __guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	return action[1];
 }
 
+static u32 __guc_invalidate_tlb_all(struct intel_guc *guc,
+				    enum intel_guc_tlb_inval_mode mode)
+{
+	u32 action[] = {
+		INTEL_GUC_ACTION_TLB_INVALIDATION_ALL,
+#if 0
+		intel_tlb_next_seqno(guc_to_gt(guc)),
+#else
+		0,
+#endif
+		mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
+		INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
+	};
+
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)) == 0)
+		return action[1];
+
+	return 0;
+}
+
 /*
  * Selective TLB Invalidation for Address Range:
  * TLB's in the Address Range is Invalidated across all engines.
@@ -1419,10 +1442,11 @@ u32 intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	struct intel_gt *gt = guc_to_gt(guc);
 	u32 seqno;
 
-	GEM_BUG_ON(!INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc));
-
 	mutex_lock(&gt->tlb.mutex);
-	seqno = __guc_invalidate_tlb_page_selective(guc, mode, start, length, asid);
+	if (INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
+		seqno = __guc_invalidate_tlb_page_selective(guc, mode, start, length, asid);
+	else
+		seqno = __guc_invalidate_tlb_all(guc, mode);
 	mutex_unlock(&gt->tlb.mutex);
 
 	return seqno;

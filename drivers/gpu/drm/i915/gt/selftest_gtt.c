@@ -792,9 +792,11 @@ mem_write_tearing(struct intel_gt *gt,
 			continue;
 
 		intel_engine_pm_wait_for_idle(engine);
+		intel_engine_pm_get(engine);
 
 		ce = intel_context_create(engine);
 		if (IS_ERR(ce)) {
+			intel_engine_pm_put(engine);
 			err = PTR_ERR(ce);
 			break;
 		}
@@ -816,6 +818,7 @@ mem_write_tearing(struct intel_gt *gt,
 		}
 
 		intel_context_put(ce);
+		intel_engine_pm_put(engine);
 		if (err)
 			break;
 	}

@@ -1805,6 +1805,5 @@ u32 intel_rps_read_throttle_reason_vr_tdc(struct intel_rps *rps)
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-#include "selftest_rps.c"
 #include "selftest_slpc.c"
 #endif

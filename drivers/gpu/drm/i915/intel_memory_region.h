@@ -69,6 +69,8 @@ struct intel_memory_region_ops {
 	unsigned int flags;
 
 	int (*init)(struct intel_memory_region *mem);
+	unsigned long (*count_cache)(struct intel_memory_region *mem, unsigned long *num_objects);
+	unsigned long (*shrink_cache)(struct intel_memory_region *mem, int order, unsigned long target);
 	void (*show)(struct intel_memory_region *mem, struct drm_printer *p, int indent);
 	void (*release)(struct intel_memory_region *mem);
 

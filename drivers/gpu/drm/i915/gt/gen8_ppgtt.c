@@ -125,31 +125,78 @@ static unsigned int gen8_pd_top_count(const struct i915_address_space *vm)
 	return (vm->total + (1ull << shift) - 1) >> shift;
 }
 
+struct freelist {
+	struct llist_head head;
+	struct llist_node *tail;
+};
+
+static inline void
+free_px_f(struct i915_address_space *vm, struct i915_page_table *pt, int lvl, struct freelist *f)
+{
+	if (__llist_add(&pt->base->freed, &f->head))
+		f->tail = &pt->base->freed;
+
+	pt->base = NULL;
+	free_px(vm, pt, lvl);
+}
+
+static inline void free_px_ll(struct i915_address_space *vm, struct freelist *f)
+{
+	if (llist_empty(&f->head))
+		return;
+
+	GEM_BUG_ON(!f->tail);
+
+	if (likely(vm->gt->px_cache)) {
+		preempt_disable();
+		__llist_add_batch(f->head.first, f->tail, this_cpu_ptr(vm->gt->px_cache));
+		preempt_enable();
+	} else {
+		struct drm_i915_gem_object *pt, *pn;
+
+		llist_for_each_entry_safe(pt, pn, __llist_del_all(&f->head), freed)
+			i915_gem_object_put(pt);
+	}
+}
+
+static inline void init_px_ll(struct freelist *f)
+{
+	init_llist_head(&f->head);
+}
+
 static void __gen8_ppgtt_cleanup(struct i915_address_space *vm,
 				 struct i915_page_directory *pd,
-				 int count, int lvl)
+				 int count, int lvl,
+				 struct freelist *f)
 {
 	if (lvl) {
 		void **pde = pd->entry;
 
 		do {
-			if (!*pde)
+			void *pt = *pde++;
+
+			if (!pt)
 				continue;
 
-			__gen8_ppgtt_cleanup(vm, *pde, GEN8_PDES, lvl - 1);
-		} while (pde++, --count);
+			__gen8_ppgtt_cleanup(vm, pt, GEN8_PDES, lvl - 1, f);
+		} while (--count);
 	}
 
-	free_px(vm, &pd->pt, lvl);
+	free_px_f(vm, &pd->pt, lvl, f);
 }
 
 static void gen8_ppgtt_cleanup(struct i915_address_space *vm)
 {
 	struct i915_ppgtt *ppgtt = i915_vm_to_ppgtt(vm);
 
-	if (ppgtt->pd)
+	if (ppgtt->pd) {
+		struct freelist f;
+
+		init_px_ll(&f);
 		__gen8_ppgtt_cleanup(vm, ppgtt->pd,
-				     gen8_pd_top_count(vm), vm->top);
+				     gen8_pd_top_count(vm), vm->top, &f);
+		free_px_ll(vm, &f);
+	}
 
 	i915_vm_free_scratch(vm);
 }
@@ -157,7 +204,7 @@ static void gen8_ppgtt_cleanup(struct i915_address_space *vm)
 static u64 __ppgtt_clear(struct i915_address_space * const vm,
 			 struct i915_page_directory * const pd,
 			 u64 start, const u64 end, const u64 fail,
-			 int lvl)
+			 int lvl, struct freelist *f)
 {
 	u64 scratch_encode = i915_vm_scratch_encode(vm, lvl);
 	unsigned int idx, len;
@@ -198,7 +245,7 @@ skip:			write_pte(&pd->pt, idx, scratch_encode);
 			    (end - 1) >> gen8_pd_shift(lvl + 1),
 			    idx);
 			WRITE_ONCE(pd->entry[idx], NULL);
-			__gen8_ppgtt_cleanup(vm, as_pd(pt), GEN8_PDES, lvl);
+			__gen8_ppgtt_cleanup(vm, as_pd(pt), GEN8_PDES, lvl, f);
 			goto skip;
 		}
 
@@ -212,7 +259,7 @@ skip:			write_pte(&pd->pt, idx, scratch_encode);
 		    atomic_read(px_used(pt)) < used ? "!***" :"");
 		GEM_BUG_ON(atomic_read(px_used(pt)) < used);
 		if (lvl) {
-			start = __ppgtt_clear(vm, as_pd(pt), start, end, fail, lvl);
+			start = __ppgtt_clear(vm, as_pd(pt), start, end, fail, lvl, f);
 		} else {
 			unsigned int pte = gen8_pd_index(start, 0);
 			unsigned int count = used;
@@ -244,7 +291,7 @@ skip:			write_pte(&pd->pt, idx, scratch_encode);
 			write_pte(&pd->pt, idx, scratch_encode);
 			smp_wmb(); /* order the PTE update with pt_alloc() */
 			WRITE_ONCE(pd->entry[idx], NULL);
-			free_px(vm, pt, lvl);
+			free_px_f(vm, pt, lvl, f);
 		}
 	} while (idx++, --len);
 
@@ -254,6 +301,8 @@ skip:			write_pte(&pd->pt, idx, scratch_encode);
 static void ppgtt_clear(struct i915_address_space *vm,
 			     u64 start, u64 end, u64 fail)
 {
+	struct freelist f;
+
 	DBG("%s(%p):{ start:%llx, end:%llx, fail:%llx }\n",
 	    __func__, vm, start, end, fail);
 
@@ -263,7 +312,9 @@ static void ppgtt_clear(struct i915_address_space *vm,
 	end >>= GEN8_PTE_SHIFT;
 	fail >>= GEN8_PTE_SHIFT;
 
-	__ppgtt_clear(vm, i915_vm_to_ppgtt(vm)->pd, start, end, fail, vm->top);
+	init_px_ll(&f);
+	__ppgtt_clear(vm, i915_vm_to_ppgtt(vm)->pd, start, end, fail, vm->top, &f);
+	free_px_ll(vm, &f);
 }
 
 static void gen8_ppgtt_clear(struct i915_address_space *vm, u64 start, u64 length)
@@ -567,7 +618,7 @@ gen8_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 		GEM_BUG_ON(!len);
 		pte = pt_advance(arg, SZ_4K, len);
 		do
-			WRITE_ONCE(vaddr[idx++], pte);
+			vaddr[idx++] = pte;
 		while (pte += SZ_4K, --len);
 	} while (idx < GEN8_PDES && arg->it.sg);
 
@@ -609,11 +660,25 @@ ps64_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 			    arg->it.dma | arg->pte_encode, arg->it.max);
 
 			pte = pt_advance(arg, SZ_64K, count) | GEN12_PTE_PS64;
-			count *= 16;
-			len -= count;
-			do
-				WRITE_ONCE(*vaddr++, pte);
-			while (pte += SZ_4K, --count);
+			len -= 16 * count;
+			do {
+				*vaddr++ = pte +  0 * SZ_4K;
+				*vaddr++ = pte +  1 * SZ_4K;
+				*vaddr++ = pte +  2 * SZ_4K;
+				*vaddr++ = pte +  3 * SZ_4K;
+				*vaddr++ = pte +  4 * SZ_4K;
+				*vaddr++ = pte +  5 * SZ_4K;
+				*vaddr++ = pte +  6 * SZ_4K;
+				*vaddr++ = pte +  7 * SZ_4K;
+				*vaddr++ = pte +  8 * SZ_4K;
+				*vaddr++ = pte +  9 * SZ_4K;
+				*vaddr++ = pte + 10 * SZ_4K;
+				*vaddr++ = pte + 11 * SZ_4K;
+				*vaddr++ = pte + 12 * SZ_4K;
+				*vaddr++ = pte + 13 * SZ_4K;
+				*vaddr++ = pte + 14 * SZ_4K;
+				*vaddr++ = pte + 15 * SZ_4K;
+			} while (pte += SZ_64K, --count);
 		}
 		if (len) {
 			DBG("%s(%p):{ lvl:%d, start:%llx, last:%llx, len:%d, used:%d } 4K PTE x %d, dma:%llx, max:%llx\n",
@@ -625,7 +690,7 @@ ps64_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 
 			pte = pt_advance(arg, SZ_4K, len);
 			do
-				WRITE_ONCE(*vaddr++, pte);
+				*vaddr++ = pte;
 			while (pte += SZ_4K, --len);
 		}
 	} while (offset_in_page(vaddr) && arg->it.sg);
@@ -658,7 +723,7 @@ dg2_pt_insert(struct pt_insert *arg, struct i915_page_table *pt)
 		GEM_BUG_ON(!len);
 		pte = pt_advance(arg, SZ_64K, len);
 		do
-			WRITE_ONCE(vaddr[idx++], pte);
+			vaddr[idx++] = pte;
 		while (pte += SZ_64K, --len);
 	} while (idx < GEN8_PDES / 16 && arg->it.sg);
 

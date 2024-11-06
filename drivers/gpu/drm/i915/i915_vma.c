@@ -117,6 +117,7 @@ vma_create(struct drm_i915_gem_object *obj,
 	vma->vm = i915_vm_get(vm);
 	vma->ops = &vm->vma_ops;
 	vma->obj = obj;
+	vma->pat_index = i915_gem_object_pat_index(obj);
 	vma->resv = obj->base.resv;
 	vma->size = obj->base.size;
 	vma->display_alignment = I915_GTT_MIN_ALIGNMENT;
@@ -285,9 +286,7 @@ i915_vma_instance(struct drm_i915_gem_object *obj,
 
 struct i915_vma_work {
 	struct dma_fence_work base;
-	struct i915_address_space *vm;
 	struct i915_vma *vma;
-	unsigned int pat_index;
 	unsigned int flags;
 };
 
@@ -305,7 +304,7 @@ static int __vma_bind(struct dma_fence_work *work)
 	}
 
 rebind:
-	err = vma->ops->bind_vma(vw->vm, vma, ww, vw->pat_index, vw->flags);
+	err = vma->ops->bind_vma(vma->vm, vma, ww, vma->pat_index, vw->flags);
 	if (err == -EDEADLK) {
 		GEM_BUG_ON(!ww);
 		err = i915_gem_ww_ctx_backoff(ww);
@@ -358,14 +357,16 @@ static void __vma_complete(struct dma_fence_work *work)
 		return;
 
 	if (unlikely(fatal_error(work->rq.fence.error))) {
+		struct i915_address_space *vm = vma->vm;
+
 		GEM_BUG_ON(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT,
 				    &work->rq.fence.flags));
 
-		if (vma->bind_fence && atomic_read(&vma->vm->open)) {
+		if (vma->bind_fence && atomic_read(&vm->open)) {
 			struct i915_drm_client *client;
 			char name[80] = "[i915]";
 
-			client = vma->vm->client;
+			client = vm->client;
 			if (client) {
 				rcu_read_lock();
 				snprintf(name, sizeof(name), "%s[%d]",
@@ -383,7 +384,7 @@ static void __vma_complete(struct dma_fence_work *work)
 			 * and CAT error, but on ATS-M it will most likely be
 			 * ignored and result in data corruption or a GPU hang.
 			 */
-			dev_notice_ratelimited(vma->vm->i915->drm.dev,
+			dev_notice_ratelimited(vm->i915->drm.dev,
 					       "Incomplete ppGTT binding [%llx + %llx] in %s, error: %d\n",
 					       i915_vma_offset(vma),
 					       i915_vma_size(vma),
@@ -391,8 +392,8 @@ static void __vma_complete(struct dma_fence_work *work)
 		}
 
 		set_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma));
-		if (vma->vm->scratch_range)
-			vma->vm->scratch_range(vma->vm, vma->node.start, vma->node.size);
+		if (vm->scratch_range)
+			vm->scratch_range(vm, vma->node.start, vma->node.size);
 		atomic_and(~I915_VMA_BIND_MASK, &vma->flags);
 	}
 
@@ -401,25 +402,18 @@ static void __vma_complete(struct dma_fence_work *work)
 	i915_active_release(&vma->active);
 }
 
-static void __vma_release(struct dma_fence_work *work)
-{
-	struct i915_vma_work *vw = container_of(work, typeof(*vw), base);
-
-	i915_vm_put(vw->vm);
-}
-
 static const struct dma_fence_work_ops bind_ops = {
 	.name = "bind",
 	.work = __vma_bind,
 	.complete = __vma_complete,
-	.release = __vma_release,
 };
 
-static struct i915_vma_work *i915_vma_work(struct i915_address_space *vm)
+static struct i915_vma_work *i915_vma_work(struct i915_vma *vma)
 {
+	struct i915_address_space *vm = vma->vm;
 	struct i915_vma_work *vw;
 
-	vw = kzalloc(sizeof(*vw), GFP_KERNEL);
+	vw = kmalloc(sizeof(*vw), GFP_KERNEL);
 	if (!vw)
 		return NULL;
 
@@ -427,7 +421,7 @@ static struct i915_vma_work *i915_vma_work(struct i915_address_space *vm)
 	if (i915_is_ggtt(vm))
 		__set_bit(DMA_FENCE_WORK_IMM, &vw->base.rq.fence.flags);
 	vw->base.rq.fence.error = -ERESTARTSYS; /* disable the worker by default */
-	vw->vm = i915_vm_get(vm);
+	vw->vma = NULL;
 
 	return vw;
 }
@@ -462,7 +456,6 @@ int i915_vma_wait_for_bind(struct i915_vma *vma)
  * Note that DMA addresses are also the only part of the SG table we care about.
  */
 static int __i915_vma_bind(struct i915_vma *vma,
-			   unsigned int pat_index,
 			   u32 flags,
 			   struct i915_vma_work *work)
 {
@@ -496,7 +489,6 @@ static int __i915_vma_bind(struct i915_vma *vma,
 
 	trace_i915_vma_bind(vma, bind_flags);
 	work->vma = vma;
-	work->pat_index = pat_index;
 	work->flags = bind_flags;
 	__i915_active_acquire(&vma->active);
 
@@ -1009,7 +1001,6 @@ static void vma_unbind_pages(struct i915_vma *vma)
  */
 int i915_vma_bind(struct i915_vma *vma)
 {
-	struct i915_address_space *vm = vma->vm;
 	struct i915_vma_work *work;
 	int err;
 
@@ -1019,7 +1010,7 @@ int i915_vma_bind(struct i915_vma *vma)
 		return err;
 	GEM_BUG_ON(!vma->pages);
 
-	work = i915_vma_work(vm);
+	work = i915_vma_work(vma);
 	if (!work) {
 		err = -ENOMEM;
 		goto err_pages;
@@ -1029,10 +1020,7 @@ int i915_vma_bind(struct i915_vma *vma)
 	if (err)
 		goto err_fence;
 
-	err = __i915_vma_bind(vma,
-			      i915_gem_object_pat_index(vma->obj),
-			      PIN_USER | PIN_RESIDENT,
-			      work);
+	err = __i915_vma_bind(vma, PIN_USER | PIN_RESIDENT, work);
 	if (err)
 		goto err_active;
 
@@ -1042,14 +1030,13 @@ int i915_vma_bind(struct i915_vma *vma)
 err_active:
 	i915_active_release(&vma->active);
 err_fence:
-	dma_fence_work_commit_imm(&work->base);
+	dma_fence_work_commit(&work->base);
 err_pages:
 	vma_put_pages(vma);
 	return err;
 }
 
-int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
-		    u64 size, u64 alignment, u64 flags)
+int i915_vma_pin_ww(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 {
 	struct i915_vma_work *work;
 	intel_wakeref_t wakeref = 0;
@@ -1086,7 +1073,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 	if (i915_is_ggtt(vma->vm))
 		wakeref = intel_gt_pm_get(vma->vm->gt);
 
-	work = i915_vma_work(vma->vm);
+	work = i915_vma_work(vma);
 	if (!work) {
 		err = -ENOMEM;
 		goto err_rpm;
@@ -1161,7 +1148,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		}
 	}
 
-	err = __i915_vma_bind(vma, i915_gem_object_pat_index(vma->obj), flags, work);
+	err = __i915_vma_bind(vma, flags, work);
 	if (err)
 		goto err_remove;
 
@@ -1222,7 +1209,7 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 
 	do {
 		if (ww)
-			err = i915_vma_pin_ww(vma, ww, 0, align, flags | PIN_GLOBAL);
+			err = i915_vma_pin_ww(vma, 0, align, flags | PIN_GLOBAL);
 		else
 			err = i915_vma_pin(vma, 0, align, flags | PIN_GLOBAL);
 		if (err != -ENOSPC) {
@@ -1258,7 +1245,7 @@ int i915_ggtt_pin_for_gt(struct i915_vma *vma, struct i915_gem_ww_ctx *ww)
 
 	do {
 		if (ww)
-			err = i915_vma_pin_ww(vma, ww, 0, 0, flags);
+			err = i915_vma_pin_ww(vma, 0, 0, flags);
 		else
 			err = i915_vma_pin(vma, 0, 0, flags);
 		if (!err || err == -EDEADLK)
@@ -1416,26 +1403,27 @@ static void i915_vma_clock(struct work_struct *w)
 	 * https://en.wikipedia.org/wiki/Page_replacement_algorithm#Clock
 	 */
 
-	down_write(&clock->sem);
-	spin_lock_irq(&clock->lock);
-	while ((vma = list_first_entry_or_null(&clock->age[1],
-					       typeof(*vma),
-					       closed_link))) {
-		struct i915_address_space *vm = vma->vm;
-
-		list_del_init(&vma->closed_link);
-		spin_unlock_irq(&clock->lock);
-
-		mutex_lock(&vm->mutex);
-		i915_vma_unpublish(vma);
-		mutex_unlock(&vm->mutex);
-
-		__i915_vma_put(vma);
+	if (down_write_trylock(&clock->sem)) {
 		spin_lock_irq(&clock->lock);
+		while ((vma = list_first_entry_or_null(&clock->age[1],
+						typeof(*vma),
+						closed_link))) {
+			struct i915_address_space *vm = vma->vm;
+
+			list_del_init(&vma->closed_link);
+			spin_unlock_irq(&clock->lock);
+
+			mutex_lock(&vm->mutex);
+			i915_vma_unpublish(vma);
+			mutex_unlock(&vm->mutex);
+
+			__i915_vma_put(vma);
+			spin_lock_irq(&clock->lock);
+		}
+		list_replace_init(&clock->age[0], &clock->age[1]);
+		spin_unlock_irq(&clock->lock);
+		up_write(&clock->sem);
 	}
-	list_replace_init(&clock->age[0], &clock->age[1]);
-	spin_unlock_irq(&clock->lock);
-	up_write(&clock->sem);
 
 	if (!list_empty(&clock->age[1]))
 		queue_delayed_work(gt->i915->wq, &clock->work,

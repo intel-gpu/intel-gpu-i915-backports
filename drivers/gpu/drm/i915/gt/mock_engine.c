@@ -45,7 +45,6 @@ static struct intel_ring *mock_ring(struct intel_engine_cs *engine)
 
 	kref_init(&ring->ref);
 	ring->size = sz;
-	ring->effective_size = sz;
 	ring->vaddr = (void *)(ring + 1);
 	atomic_set(&ring->pin_count, 1);
 

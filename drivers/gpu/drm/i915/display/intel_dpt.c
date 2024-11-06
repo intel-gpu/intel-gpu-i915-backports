@@ -264,7 +264,6 @@ intel_dpt_create(struct intel_framebuffer *fb)
 
 	vm->gt = to_gt(i915);
 	vm->i915 = i915;
-	vm->dma = i915->drm.dev;
 	vm->total = (size / sizeof(gen8_pte_t)) * I915_GTT_PAGE_SIZE;
 	vm->is_dpt = true;
 

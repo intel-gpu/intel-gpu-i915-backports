@@ -491,7 +491,7 @@ static int ct_write(struct intel_guc_ct *ct,
 	 * make sure H2G buffer update and LRC tail update (if this triggering a
 	 * submission) are visible before updating the descriptor tail
 	 */
-	i915_write_barrier(guc_to_gt(ct_to_guc(ct))->i915);
+	wmb();
 
 	/* now update descriptor */
 	WRITE_ONCE(desc->tail, tail);
@@ -1023,7 +1023,7 @@ static int ct_handle_response(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 	return 0;
 }
 
-static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *request)
+static void ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *request)
 {
 	struct intel_guc *guc = ct_to_guc(ct);
 	struct intel_gt *gt = guc_to_gt(guc);
@@ -1094,7 +1094,6 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 		break;
 	case INTEL_GUC_ACTION_NOTIFY_FLUSH_LOG_BUFFER_TO_FILE:
 		intel_guc_log_handle_flush_event(&guc->log);
-		ret = 0;
 		break;
 	case INTEL_GUC_ACTION_NOTIFY_CRASH_DUMP_POSTED:
 	case INTEL_GUC_ACTION_NOTIFY_EXCEPTION:
@@ -1104,11 +1103,8 @@ static int ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *r
 		ret = intel_access_counter_req_process_msg(guc, payload, len);
 		break;
 	default:
-		ret = -EOPNOTSUPP;
 		break;
 	}
-
-	return 0;
 }
 
 static noinline void ct_incoming_request_worker_func(struct work_struct *w)
@@ -1116,15 +1112,9 @@ static noinline void ct_incoming_request_worker_func(struct work_struct *w)
 	struct intel_guc_ct *ct =
 		container_of(w, struct intel_guc_ct, requests.worker);
 	struct ct_incoming_msg *request, *n;
-	int err;
 
 	llist_for_each_entry_safe(request, n, llist_reverse_order(llist_del_all(&ct->requests.incoming)), link) {
-		err = ct_process_request(ct, request);
-		if (unlikely(err)) {
-			CT_ERROR(ct, "Failed to process CT message (%pe): msg = %*ph\n",
-				 ERR_PTR(err), 4 * request->size, request->msg);
-			CT_DEAD(ct, PROCESS_FAILED);
-		}
+		ct_process_request(ct, request);
 		ct_free_msg(request);
 		cond_resched();
 	}

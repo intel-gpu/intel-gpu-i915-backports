@@ -256,11 +256,6 @@ static int igt_lmem_clear(void *arg)
 	return __igt_lmem_clear(arg, false);
 }
 
-static int igt_lmem_speed(void *arg)
-{
-	return __igt_lmem_clear(arg, true);
-}
-
 static int swap_blt_sync(struct intel_context *ce,
 			 struct i915_buddy_mm *mm,
 			 struct list_head *blocks,
@@ -423,15 +418,6 @@ int i915_gem_lmem_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(igt_lmem_touch),
 		SUBTEST(igt_lmem_clear),
 		SUBTEST(igt_lmem_swap),
-	};
-
-	return i915_live_subtests(tests, i915);
-}
-
-int i915_gem_lmem_wip_selftests(struct drm_i915_private *i915)
-{
-	static const struct i915_subtest tests[] = {
-		SUBTEST(igt_lmem_speed),
 	};
 
 	return i915_live_subtests(tests, i915);

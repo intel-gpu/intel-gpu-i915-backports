@@ -1,4 +1,15 @@
 # ChangeLog
+## Release I915_24WW44.4_1032.21_24.6.12_240823.13
+* Disabled per-CPU page table allocations, enforcing allocation on each operation as a baseline.
+* Fixed an issue where HPL failed on Intel® Data Center GPU Max Series.
+* Added additional rcu_barrier on cache release to ensure the objects are freed before completing the module unload.
+* Fixed a Multi Die Fabric Interconnect (MDFI) training issue that occurred during reboot.
+* Improved error reporting on Intel® Data Center GPU Max Series.
+* Fixed an off-by-one error that left the last entry uninitialized after a get_user_pages failure.
+* Improved error handling for clearing shared memory pages.
+* Introduced support for SR-IOV (Single Root I/O Virtualization) save and restore virtual functions.
+* Enabled render power gate when RC6 is disabled on Intel® Data Center GPU Max Series.
+
 ## Release I915_24WW42.2_996.26_24.5.15_240718.18
 * Fixed an issue where the time spent on PCIe data transferring between CPU and GPU was significantly longer than expected.
 

@@ -47,6 +47,9 @@ struct i915_sriov_pf {
 
 	/** @telemetry: PF telemetry data */
 	struct i915_sriov_telemetry_pf telemetry;
+
+	/** @smem_buffers: list of allocated SMEM buffers */
+	struct list_head smem_buffers;
 };
 
 /**

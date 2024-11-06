@@ -186,13 +186,10 @@ static int live_forcewake_ops(void *arg)
 
 	wakeref = intel_runtime_pm_get(uncore->rpm);
 
-	for_each_fw_domain(domain, uncore, tmp) {
+	for_each_fw_domain(domain, uncore, tmp)
 		smp_store_mb(domain->active, false);
-		if (!hrtimer_cancel(&domain->timer))
-			continue;
-
-		intel_uncore_fw_release_timer(&domain->timer);
-	}
+	if (hrtimer_cancel(&uncore->fw_timer))
+		intel_uncore_fw_release_timer(&uncore->fw_timer);
 
 	for_each_engine(engine, gt, id) {
 		i915_reg_t mmio = _MMIO(engine->mmio_base + r->offset);
@@ -223,11 +220,12 @@ static int live_forcewake_ops(void *arg)
 		intel_uncore_forcewake_put(uncore, fw_domains);
 
 		/* Flush the forcewake release (delayed onto a timer) */
-		for_each_fw_domain_masked(domain, fw_domains, uncore, tmp) {
+		for_each_fw_domain(domain, uncore, tmp)
 			smp_store_mb(domain->active, false);
-			if (hrtimer_cancel(&domain->timer))
-				intel_uncore_fw_release_timer(&domain->timer);
+		if (hrtimer_cancel(&uncore->fw_timer))
+			intel_uncore_fw_release_timer(&uncore->fw_timer);
 
+		for_each_fw_domain_masked(domain, fw_domains, uncore, tmp) {
 			preempt_disable();
 			err = wait_ack_clear(domain, FORCEWAKE_KERNEL);
 			preempt_enable();

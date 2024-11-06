@@ -38,4 +38,6 @@ void intel_tlb_invalidation_revoke(struct intel_gt *gt);
 void intel_gt_init_tlb(struct intel_gt *gt);
 void intel_gt_fini_tlb(struct intel_gt *gt);
 
+void intel_gt_show_tlb(struct intel_gt *gt, struct drm_printer *p, int indent);
+
 #endif /* INTEL_TLB_H */

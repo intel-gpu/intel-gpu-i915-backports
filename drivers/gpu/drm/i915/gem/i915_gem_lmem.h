@@ -45,10 +45,14 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 
 int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj);
 struct i915_request *
-i915_gem_object_copy_lmem(struct drm_i915_gem_object *lmem,
-			  struct drm_i915_gem_object *other,
-			  bool to_other,
-			  bool nowait);
+i915_gem_object_copy_lmem(struct drm_i915_gem_object *lmem, u64 lmem_offset,
+			  struct drm_i915_gem_object *other, u64 other_offset,
+			  u64 length, bool to_other, bool nowait);
+
+int
+i915_gem_ccs_emit_swap(struct i915_request *rq,
+		       u64 lmem_offset, u64 smem_offset, u32 size,
+		       bool to_smem);
 
 struct intel_context *
 i915_gem_get_active_smem_context(struct intel_gt *gt);
@@ -58,9 +62,7 @@ i915_gem_get_free_smem_context(struct intel_gt *gt);
 int
 i915_gem_clear_smem(struct intel_context *ce,
 		    struct scatterlist *sg,
-		    unsigned int flags,
 		    struct i915_request **out);
-#define SPLIT_CLEARS BIT(0)
 
 void i915_gem_init_lmem(struct intel_gt *gt);
 bool i915_gem_lmem_park(struct intel_memory_region *mem);

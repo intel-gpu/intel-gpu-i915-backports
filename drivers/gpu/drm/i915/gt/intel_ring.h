@@ -21,7 +21,6 @@ u32 *intel_ring_begin_ggtt(struct i915_request *rq, int *srcu, unsigned int num_
 void intel_ring_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs);
 void intel_ring_fini_begin_ggtt(struct i915_request *rq, int *srcu);
 void intel_ring_fini_advance_ggtt(struct i915_request *rq, int srcu, u32 *cs);
-int intel_ring_cacheline_align(struct i915_request *rq);
 
 unsigned int intel_ring_update_space(struct intel_ring *ring);
 
@@ -116,6 +115,13 @@ intel_ring_set_tail(struct intel_ring *ring, unsigned int tail)
 	assert_ring_tail_valid(ring, tail);
 	ring->tail = tail;
 	return tail;
+}
+
+static inline unsigned int
+__intel_ring_count(unsigned int head, unsigned int tail, unsigned int size)
+{
+	GEM_BUG_ON(!is_power_of_2(size));
+	return (tail - head) & (size - 1);
 }
 
 static inline unsigned int

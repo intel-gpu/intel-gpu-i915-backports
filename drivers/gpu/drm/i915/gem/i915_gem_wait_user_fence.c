@@ -78,10 +78,16 @@ static bool ufence_compare(const struct ufence_wake *wake)
 	GEM_BUG_ON(wake->tsk->mm != current->mm);
 
 	if (wake->page) {
-		void *va;
+		void *va, *ptr;
 
 		va = kmap_atomic(wake->page);
-		memcpy(&target, va + offset_in_page(wake->ptr), wake->width);
+		ptr = va + offset_in_page(wake->ptr);
+		switch (wake->width) {
+		case 1: target = *(u8 *)ptr; break;
+		case 2: target = *(u16*)ptr; break;
+		case 4: target = *(u32*)ptr; break;
+		case 8: target = *(u64*)ptr; break;
+		}
 		kunmap_atomic(va);
 	} else {
 		pagefault_disable();

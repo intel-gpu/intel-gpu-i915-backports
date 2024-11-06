@@ -1081,11 +1081,22 @@ static bool lrc_check_regs(const struct intel_context *ce,
 {
 	const struct intel_ring *ring = ce->ring;
 	u32 *regs = ce->lrc_reg_state;
+	u32 regs_ring_start, vma_ring_start;
 	bool valid = true;
-	int x, srcu;
+	int x;
 
-	gt_ggtt_address_read_lock(engine->gt, &srcu);
-	if (regs[CTX_RING_START] != i915_ggtt_offset(ring->vma)) {
+	regs_ring_start = regs[CTX_RING_START];
+	vma_ring_start = i915_ggtt_offset(ring->vma);
+	/*
+	 * The RING_START check is less strict on VFs, due to expected
+	 * inconsistency if unpin happens during post-migration recovery.
+	 * Only offsets within pages are guaranteed to always match.
+	 */
+	if (IS_SRIOV_VF(engine->i915)) {
+		regs_ring_start = offset_in_page(regs_ring_start);
+		vma_ring_start = offset_in_page(vma_ring_start);
+	}
+	if (regs_ring_start != vma_ring_start) {
 		pr_err("%s: context submitted with incorrect RING_START [%08x], expected %08x\n",
 		       engine->name,
 		       regs[CTX_RING_START],
@@ -1113,7 +1124,6 @@ static bool lrc_check_regs(const struct intel_context *ce,
 		valid = false;
 	}
 
-	gt_ggtt_address_read_unlock(engine->gt, srcu);
 	return valid;
 }
 

@@ -790,7 +790,7 @@ bool gen11_vdbox_has_sfc(struct intel_gt *gt,
 	 */
 	if ((gt->info.sfc_mask & BIT(physical_vdbox / 2)) == 0)
 		return false;
-	else if (drm_WARN_ON(&i915->drm, HAS_SLIM_VDBOX(i915)))
+	else if (HAS_SLIM_VDBOX(i915))
 		 /* Should already be caught by the SFC fuse check */
 		return false;
 	else if (MEDIA_VER(i915) >= 12)
@@ -1045,11 +1045,6 @@ int intel_engines_init_mmio(struct intel_gt *gt)
 	u8 logical_ids[MAX_ENGINE_INSTANCE + 1];
 	int err;
 
-	if (engine_mask == 0)
-		DRM_WARN("%s: no engines enabled\n", __func__);
-	drm_WARN_ON(&i915->drm, engine_mask &
-		    GENMASK(BITS_PER_TYPE(mask) - 1, I915_NUM_ENGINES));
-
 	if (i915_inject_probe_failure(i915))
 		return -ENODEV;
 
@@ -1077,7 +1072,7 @@ int intel_engines_init_mmio(struct intel_gt *gt)
 	 * are added to the driver by a warning and disabling the forgotten
 	 * engines.
 	 */
-	if (drm_WARN_ON(&i915->drm, mask != engine_mask))
+	if (GEM_WARN_ON(mask != engine_mask))
 		gt->info.engine_mask = mask;
 
 	gt->info.num_engines = hweight32(mask);
@@ -1280,7 +1275,6 @@ static int measure_breadcrumb_dw(struct intel_context *ce)
 	frame->ring.size = sizeof(frame->cs);
 	frame->ring.wrap =
 		BITS_PER_TYPE(frame->ring.size) - ilog2(frame->ring.size);
-	frame->ring.effective_size = frame->ring.size;
 	intel_ring_update_space(&frame->ring);
 	frame->rq.ring = &frame->ring;
 

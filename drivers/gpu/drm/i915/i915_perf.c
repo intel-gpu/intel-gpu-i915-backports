@@ -1762,6 +1762,9 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 		goto err_unref;
 	}
 
+	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &gt->uc.guc.flags))
+		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+
 	stream->oa_buffer.vma = vma;
 	stream->oa_buffer.size_exponent = size_exponent;
 
@@ -1876,7 +1879,7 @@ retry:
 		goto out_ww;
 	}
 
-	ret = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL);
+	ret = i915_vma_pin_ww(vma, 0, 0, PIN_GLOBAL);
 	if (ret)
 		goto out_ww;
 
@@ -2203,7 +2206,7 @@ retry:
 	if (err)
 		goto err;
 
-	err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_GLOBAL);
+	err = i915_vma_pin_ww(vma, 0, 0, PIN_GLOBAL);
 	if (err)
 		goto err;
 
@@ -2367,42 +2370,6 @@ err_add_request:
 	return err;
 }
 
-static int gen8_configure_context(struct i915_perf_stream *stream,
-				  struct i915_gem_context *ctx,
-				  struct flex *flex, unsigned int count)
-{
-	struct i915_gem_engines_iter it;
-	struct i915_gem_engines *e;
-	struct intel_context *ce;
-	int err = 0;
-
-	e = i915_gem_context_engines_get(ctx, NULL);
-	if (!e)
-		return 0;
-
-	for_each_gem_engine(ce, e, it) {
-		GEM_BUG_ON(ce == ce->engine->kernel_context);
-
-		if (!engine_supports_oa(ce->engine->i915, ce->engine) ||
-		    ce->engine->class != stream->engine->class)
-			continue;
-
-		/* Otherwise OA settings will be set upon first use */
-		if (!intel_context_pin_if_active(ce))
-			continue;
-
-		flex->value = intel_sseu_make_rpcs(ce->engine->gt, &ce->sseu);
-		err = gen8_modify_context(ce, flex, count);
-
-		intel_context_unpin(ce);
-		if (err)
-			break;
-	}
-	i915_gem_context_engines_put(e);
-
-	return err;
-}
-
 static u32 gen12_ring_context_control(struct i915_perf_stream *stream,
 				      struct i915_active *active)
 {
@@ -2538,125 +2505,6 @@ static int gen12_configure_oa_context(struct i915_perf_stream *stream,
 	}
 }
 
-/*
- * Manages updating the per-context aspects of the OA stream
- * configuration across all contexts.
- *
- * The awkward consideration here is that OACTXCONTROL controls the
- * exponent for periodic sampling which is primarily used for system
- * wide profiling where we'd like a consistent sampling period even in
- * the face of context switches.
- *
- * Our approach of updating the register state context (as opposed to
- * say using a workaround batch buffer) ensures that the hardware
- * won't automatically reload an out-of-date timer exponent even
- * transiently before a WA BB could be parsed.
- *
- * This function needs to:
- * - Ensure the currently running context's per-context OA state is
- *   updated
- * - Ensure that all existing contexts will have the correct per-context
- *   OA state if they are scheduled for use.
- * - Ensure any new contexts will be initialized with the correct
- *   per-context OA state.
- *
- * Note: it's only the RCS/Render context that has any OA state.
- * Note: the first flex register passed must always be R_PWR_CLK_STATE
- */
-static int
-oa_configure_all_contexts(struct i915_perf_stream *stream,
-			  struct flex *regs,
-			  size_t num_regs,
-			  struct i915_active *active)
-{
-	struct drm_i915_private *i915 = stream->perf->i915;
-	struct intel_gt *gt = stream->engine->gt;
-	struct intel_engine_cs *engine;
-	struct i915_gem_context *ctx;
-	int err;
-
-	lockdep_assert_held(&gt->perf.lock);
-
-	/*
-	 * The OA register config is setup through the context image. This image
-	 * might be written to by the GPU on context switch (in particular on
-	 * lite-restore). This means we can't safely update a context's image,
-	 * if this context is scheduled/submitted to run on the GPU.
-	 *
-	 * We could emit the OA register config through the batch buffer but
-	 * this might leave small interval of time where the OA unit is
-	 * configured at an invalid sampling period.
-	 *
-	 * Note that since we emit all requests from a single ring, there
-	 * is still an implicit global barrier here that may cause a high
-	 * priority context to wait for an otherwise independent low priority
-	 * context. Contexts idle at the time of reconfiguration are not
-	 * trapped behind the barrier.
-	 */
-	rcu_read_lock();
-	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
-		if (!kref_get_unless_zero(&ctx->ref))
-			continue;
-
-		rcu_read_unlock();
-
-		if (!i915_gem_context_is_closed(ctx)) {
-			err = gen8_configure_context(stream, ctx, regs, num_regs);
-			if (err) {
-				i915_gem_context_put(ctx);
-				return err;
-			}
-		}
-
-		rcu_read_lock();
-		i915_gem_context_put(ctx);
-	}
-	rcu_read_unlock();
-
-	/*
-	 * After updating all other contexts, we need to modify ourselves.
-	 * If we don't modify the kernel_context, we do not get events while
-	 * idle.
-	 */
-	for_each_uabi_engine(engine, i915) {
-		struct intel_context *ce = engine->kernel_context;
-
-		if (!engine_supports_oa(ce->engine->i915, ce->engine) ||
-		    ce->engine->class != stream->engine->class)
-			continue;
-
-		regs[0].value = intel_sseu_make_rpcs(engine->gt, &ce->sseu);
-
-		err = gen8_modify_self(ce, regs, num_regs, active);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
-
-static int
-gen12_configure_all_contexts(struct i915_perf_stream *stream,
-			     const struct i915_oa_config *oa_config,
-			     struct i915_active *active)
-{
-	struct intel_engine_cs *engine = stream->engine;
-	struct i915_perf *perf = stream->perf;
-	struct flex regs[] = {
-		{
-			GEN8_R_PWR_CLK_STATE(engine->mmio_base),
-			perf->ctx_pwr_clk_state_offset[engine->uabi_class],
-		},
-	};
-
-	if (engine->class != COMPUTE_CLASS && engine->class != RENDER_CLASS)
-		return 0;
-
-	return oa_configure_all_contexts(stream,
-					 regs, ARRAY_SIZE(regs),
-					 active);
-}
-
 static u32 oag_configure_mmio_trigger(const struct i915_perf_stream *stream)
 {
 	if (!HAS_OA_MMIO_TRIGGER(stream->perf->i915))
@@ -2687,7 +2535,6 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 {
 	struct drm_i915_private *i915 = stream->perf->i915;
 	struct intel_uncore *uncore = stream->uncore;
-	struct i915_oa_config *oa_config = stream->oa_config;
 	bool periodic = stream->periodic;
 	u32 period_exponent = stream->period_exponent;
 	u32 sqcnt1;
@@ -2739,15 +2586,6 @@ gen12_enable_metric_set(struct i915_perf_stream *stream,
 	intel_uncore_rmw(uncore, GEN12_SQCNT1, 0, sqcnt1);
 
 	/*
-	 * Update all contexts prior writing the mux configurations as we need
-	 * to make sure all slices/subslices are ON before writing to NOA
-	 * registers.
-	 */
-	ret = gen12_configure_all_contexts(stream, oa_config, active);
-	if (ret)
-		return ret;
-
-	/*
 	 * For Gen12, performance counters are context
 	 * saved/restored. Only enable it for the context that
 	 * requested this.
@@ -2779,9 +2617,6 @@ static void gen12_disable_metric_set(struct i915_perf_stream *stream)
 		intel_uncore_write(uncore, GEN7_ROW_CHICKEN2,
 				   _MASKED_BIT_DISABLE(GEN12_DISABLE_DOP_GATING));
 	}
-
-	/* Reset all contexts' slices/subslices configurations. */
-	gen12_configure_all_contexts(stream, NULL, NULL);
 
 	/* disable the context save/restore or OAR counters */
 	if (stream->ctx)

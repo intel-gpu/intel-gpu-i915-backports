@@ -80,6 +80,9 @@ static int live_nop_switch(void *arg)
 		unsigned long end_time, prime;
 		ktime_t times[2] = {};
 
+		if (engine->legacy_idx == INVALID_ENGINE)
+			continue;
+
 		times[0] = ktime_get_raw();
 		for (n = 0; n < nctx; n++) {
 			struct i915_request *this;
@@ -473,11 +476,11 @@ retry:
 	if (!err)
 		err = i915_gem_object_set_to_wc_domain(obj, false);
 	if (!err)
-		err = i915_vma_pin_ww(vma, &ww, 0, 0, PIN_USER);
+		err = i915_vma_pin_ww(vma, 0, 0, PIN_USER);
 	if (err)
 		goto err_ww;
 
-	err = i915_vma_pin_ww(batch, &ww, 0, 0, PIN_USER | PIN_ZONE_48);
+	err = i915_vma_pin_ww(batch, 0, 0, PIN_USER | PIN_ZONE_48);
 	if (err)
 		goto err_vma;
 
@@ -1182,6 +1185,9 @@ static int igt_vm_isolation(void *arg)
 		unsigned long start, end;
 		IGT_TIMEOUT(end_time);
 		unsigned long this = 0;
+
+		if (engine->legacy_idx == INVALID_ENGINE)
+			continue;
 
 		if (!intel_engine_can_store_dword(engine))
 			continue;

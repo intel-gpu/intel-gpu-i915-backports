@@ -13,6 +13,34 @@
 #define BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
 #endif
 
+
+#if LINUX_VERSION_IS_GEQ(6,9,0)
+/*
+ * d50892a9554c drm/i915: switch from drm_debug_printer() to device specific drm_dbg_printer()
+ */
+#define BPM_DRM_DEBUG_PRINTER_NOT_PRESENT
+
+/*
+ * 5e0c04c8c40b drm/print: make drm_err_printer() device specific by using drm_err()
+ */
+#define BPM_DRM_ERR_PRINTER_SECOND_ARG_PRESENT
+
+/*
+ * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
+ */
+#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
+
+/*
+ * 0a5a46a6a61b PCI/AER: Generalize TLP Header Log reading
+ */
+#define BPM_STRUCT_PCI_TLP_LOG_PRESENT
+
+/*
+ * 2e61504fd1c3 drm/dp: switch drm_dp_vsc_sdp_log() to struct drm_printer
+ */
+#define BPM_DRM_DP_VSC_SDP_LOG_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
 	LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
 	LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \

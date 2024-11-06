@@ -12,7 +12,9 @@
 #include <drm/drm_mm.h>
 
 #include "gt/intel_gtt.h"
+
 #include "i915_scatterlist.h"
+#include "i915_suspend_fence.h"
 
 struct drm_i915_gem_object;
 struct i915_address_space;
@@ -85,16 +87,6 @@ i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
 #define PIN_USER		BIT_ULL(11) /* I915_VMA_LOCAL_BIND */
 
 #define PIN_OFFSET_MASK		I915_GTT_PAGE_MASK
-
-static inline int i915_vm_move_to_active(struct i915_address_space *vm,
-					 struct intel_context *ce,
-					 struct i915_request *rq)
-{
-	if (i915_vm_page_fault_enabled(vm))
-		return 0;
-
-	return i915_active_add_suspend_fence(&vm->active, ce, rq);
-}
 
 static inline int i915_vm_sync(struct i915_address_space *vm)
 {

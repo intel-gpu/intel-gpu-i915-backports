@@ -217,7 +217,7 @@ int i915_mock_selftests(void)
 	err = run_selftests(mock, NULL);
 	if (err) {
 		i915_selftest.mock = err;
-		return 1;
+		return err;
 	}
 
 	if (i915_selftest.mock < 0) {

@@ -38,8 +38,6 @@
 #define DBG(...)
 #endif
 
-#define NALLOC 3 /* 1 normal, 1 for concurrent threads, 1 for preallocation */
-
 #define I915_GTT_PAGE_SIZE_4K	BIT_ULL(12)
 #define I915_GTT_PAGE_SIZE_64K	BIT_ULL(16)
 #define I915_GTT_PAGE_SIZE_2M	BIT_ULL(21)
@@ -51,11 +49,6 @@
 #define I915_GTT_PAGE_MASK -I915_GTT_PAGE_SIZE
 
 #define I915_GTT_MIN_ALIGNMENT I915_GTT_PAGE_SIZE
-
-#define I915_FENCE_REG_NONE -1
-#define I915_MAX_NUM_FENCES 32
-/* 32 fences + sign bit for FENCE_REG_NONE */
-#define I915_MAX_NUM_FENCE_BITS 6
 
 typedef u32 gen6_pte_t;
 typedef u64 gen8_pte_t;
@@ -180,22 +173,18 @@ enum i915_cache_level;
 struct drm_i915_gem_object;
 struct i915_drm_client;
 struct i915_fence_reg;
-struct i915_px_cache;
 struct i915_vma;
 struct intel_gt;
 
 #define for_each_sgt_daddr(__dp, __iter, __sgt) \
 	__for_each_sgt_daddr(__dp, __iter, __sgt, I915_GTT_PAGE_SIZE)
 
-/* Same as for_each_sgt_daddr but iterator is pre-initialized */
-#define for_each_daddr(__dp, __iter) \
-	__for_each_daddr(__dp, __iter, I915_GTT_PAGE_SIZE)
+/* iterate through those GTs which contain a unique GGTT reference */
+#define for_each_ggtt(gt__, i915__, __id__) \
+	for_each_gt(gt__, i915__, __id__) for_each_if((gt__)->type != GT_MEDIA)
 
 struct i915_page_table {
-	union {
-		struct drm_i915_gem_object *base;
-		struct rcu_head rcu;
-	};
+	struct drm_i915_gem_object *base;
 	atomic_t used;
 	bool is_compact:1;
 	bool is_64k:1;
@@ -219,16 +208,23 @@ struct i915_page_directory {
 	__px_choose_expr(px, struct i915_page_directory *, __x->pt.base, \
 	(void)0)))
 
-struct page *__px_page(struct drm_i915_gem_object *p);
-dma_addr_t __px_dma(struct drm_i915_gem_object *p);
 #define px_dma(px) (__px_dma(px_base(px)))
+static inline dma_addr_t __px_dma(struct drm_i915_gem_object *p)
+{
+	return sg_dma_address(p->mm.pages);
+}
 
+#define px_vaddr(px) (__px_vaddr(px_base(px)))
 static inline void *__px_vaddr(struct drm_i915_gem_object *p)
 {
-	GEM_BUG_ON(!p->mm.mapping);
 	return page_mask_bits(p->mm.mapping);
 }
-#define px_vaddr(px) (__px_vaddr(px_base(px)))
+
+static inline void
+fill_page_dma(struct drm_i915_gem_object *p, const u64 val, unsigned int count)
+{
+	memset64(__px_vaddr(p), val, count);
+}
 
 #define px_pt(px) \
 	__px_choose_expr(px, struct i915_page_table *, __x, \
@@ -263,13 +259,6 @@ struct i915_address_space {
 	struct drm_mm mm;
 	struct intel_gt *gt;
 	struct drm_i915_private *i915;
-	struct device *dma;
-
-	struct inode *inode;
-
-	u32 asid;
-	u32 poison; /* value used to fill the scratch page */
-	u32 tlb[I915_MAX_GT];
 
 	/*
 	 * Every address space belongs to a struct file, a single client -
@@ -281,6 +270,12 @@ struct i915_address_space {
 	 * resource tracking, and to assign blame.
 	 */
 	struct i915_drm_client *client;
+
+	struct inode *inode;
+
+	u32 asid;
+	u32 poison; /* value used to fill the scratch page */
+	u32 tlb[I915_MAX_GT];
 
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
@@ -381,13 +376,6 @@ struct i915_address_space {
 			      u32 flags);
 	void (*cleanup)(struct i915_address_space *vm);
 
-	void (*foreach)(struct i915_address_space *vm,
-			u64 start, u64 length,
-			void (*fn)(struct i915_address_space *vm,
-				   struct i915_page_table *pt,
-				   void *data),
-			void *data);
-
 	struct i915_vma_ops vma_ops;
 
 	I915_SELFTEST_DECLARE(struct fault_attr fault_attr);
@@ -397,12 +385,6 @@ struct i915_address_space {
 
 	/* Per tile active users of this VM */
 	atomic_t active_contexts[I915_MAX_GT];
-
-	/* PASID for Address Translation Services */
-	struct iommu_sva *sva;
-	u32 pasid;
-	/* Indicates if address space has a valid PASID bounded to IOMMU */
-	bool has_pasid:1;
 };
 
 /*
@@ -529,7 +511,15 @@ i915_vm_tryopen(struct i915_address_space *vm)
 	return false;
 }
 
-void i915_vm_close(struct i915_address_space *vm);
+void __i915_vm_close(struct i915_address_space *vm, bool imm);
+static inline void i915_vm_close(struct i915_address_space *vm)
+{
+	return __i915_vm_close(vm, false);
+}
+static inline void i915_vm_close_imm(struct i915_address_space *vm)
+{
+	return __i915_vm_close(vm, true);
+}
 
 int i915_address_space_init(struct i915_address_space *vm, int subclass);
 void i915_address_space_fini(struct i915_address_space *vm);
@@ -608,9 +598,6 @@ struct i915_page_directory *__alloc_pd(int npde);
 struct drm_i915_gem_object *
 i915_vm_alloc_px(struct i915_address_space *vm);
 
-void i915_vm_free_px(struct i915_address_space *vm,
-		     struct drm_i915_gem_object *obj);
-
 void free_px(struct i915_address_space *vm,
 	     struct i915_page_table *pt, int lvl);
 #define free_pt(vm, px) free_px(vm, px, 0)
@@ -649,9 +636,9 @@ void setup_private_pat(struct intel_gt *gt);
 
 u64 i915_vm_estimate_pt_size(struct i915_address_space *vm, u64 size);
 
-void i915_px_cache_init(struct i915_px_cache *c);
-bool i915_px_cache_release(struct i915_px_cache *c);
-bool i915_px_cache_fini(struct i915_px_cache *c);
+int i915_px_cache_init(struct intel_gt *gt);
+bool i915_px_cache_release(struct intel_gt *gt);
+void i915_px_cache_fini(struct intel_gt *gt);
 
 struct i915_vma *
 __vm_create_scratch_for_read(struct i915_address_space *vm, unsigned long size);
@@ -695,5 +682,8 @@ i915_vm_heal_scratch(struct i915_address_space *vm, u64 start, u64 end)
 	if (vm->fault_end <= vm->fault_start)
 		vm->fault_end = 0, vm->fault_start = U64_MAX;
 }
+
+int __init intel_ppgtt_module_init(void);
+void intel_ppgtt_module_exit(void);
 
 #endif

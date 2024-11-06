@@ -48,8 +48,6 @@ void i915_ggtt_suspend_vm(struct i915_address_space *vm)
 	struct i915_vma *vma, *vn;
 	int open;
 
-	drm_WARN_ON(&vm->i915->drm, !vm->is_ggtt && !vm->is_dpt);
-
 	mutex_lock(&vm->mutex);
 
 	/* Skip rewriting PTE on VMA unbind. */
@@ -80,7 +78,6 @@ void i915_ggtt_suspend(struct i915_ggtt *ggtt)
 	struct intel_gt *gt;
 
 	i915_ggtt_suspend_vm(&ggtt->vm);
-	ggtt->invalidate(ggtt);
 
 	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
 		intel_gt_check_and_clear_faults(gt);
@@ -93,46 +90,22 @@ static void gen8_ggtt_invalidate(struct i915_ggtt *ggtt)
 
 static void guc_ggtt_ct_invalidate(struct i915_ggtt *ggtt)
 {
-	struct intel_gt *gt = ggtt->vm.gt;
-	struct intel_uncore *uncore = gt->uncore;
-	struct intel_guc *guc = &gt->uc.guc;
-	int err = -ENODEV;
+	struct intel_guc *guc = &ggtt->vm.gt->uc.guc;
 
-	if (guc->ct.enabled)
-		err = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
-
-	if (err) {
-		intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC1,
-				PVC_GUC_TLB_INV_DESC1_INVALIDATE);
-		intel_uncore_write_fw(uncore, PVC_GUC_TLB_INV_DESC0,
-				PVC_GUC_TLB_INV_DESC0_VALID);
-	}
+	__set_bit(GUC_INVALIDATE_TLB, &guc->flags);
 }
 
 static void guc_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
-	struct drm_i915_private *i915 = ggtt->vm.i915;
-
 	gen8_ggtt_invalidate(ggtt);
-
-	if (HAS_ASID_TLB_INVALIDATION(i915)) {
-		guc_ggtt_ct_invalidate(ggtt);
-	} else if (GRAPHICS_VER(i915) >= 12) {
-		struct intel_gt *gt;
-
-		list_for_each_entry(gt, &ggtt->gt_list, ggtt_link)
-			intel_uncore_write_fw(gt->uncore,
-					      GEN12_GUC_TLB_INV_CR,
-					      GEN12_GUC_TLB_INV_CR_INVALIDATE);
-	} else {
-		intel_uncore_write_fw(ggtt->vm.gt->uncore,
-				      GEN8_GTCR, GEN8_GTCR_INVALIDATE);
-	}
+	guc_ggtt_ct_invalidate(ggtt);
 }
 
 static void gen12vf_ggtt_invalidate(struct i915_ggtt *ggtt)
 {
 	struct intel_gt *gt;
+
+	gen8_ggtt_invalidate(ggtt);
 
 	list_for_each_entry(gt, &ggtt->gt_list, ggtt_link) {
 		struct intel_guc *guc = &gt->uc.guc;
@@ -140,6 +113,7 @@ static void gen12vf_ggtt_invalidate(struct i915_ggtt *ggtt)
 
 		if (!guc->ct.enabled)
 			continue;
+
 		with_intel_runtime_pm(gt->uncore->rpm, wakeref)
 			intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
 	}
@@ -361,7 +335,6 @@ static void ggtt_address_write_lock(struct i915_ggtt *ggtt)
 	 * finishing the locking.
 	 */
 	set_bit(GGTT_ADDRESS_COMPUTE_BLOCKED, &ggtt->flags);
-	wake_up_all(&ggtt->queue);
 	/*
 	 * After switching our GGTT_ADDRESS_COMPUTE_BLOCKED bit, we should wait for
 	 * all related critical sections to finish. First make sure any read-side
@@ -385,7 +358,11 @@ static void ggtt_address_write_unlock(struct i915_ggtt *ggtt)
  */
 void i915_ggtt_address_write_lock(struct drm_i915_private *i915)
 {
-	ggtt_address_write_lock(to_gt(i915)->ggtt);
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_ggtt(gt, i915, id)
+		ggtt_address_write_lock(gt->ggtt);
 }
 
 static int ggtt_address_read_lock_sync(struct i915_ggtt *ggtt, int *srcu)
@@ -471,7 +448,11 @@ void gt_ggtt_address_read_unlock(struct intel_gt *gt, int srcu)
  */
 void i915_ggtt_address_write_unlock(struct drm_i915_private *i915)
 {
-	ggtt_address_write_unlock(to_gt(i915)->ggtt);
+	struct intel_gt *gt;
+	unsigned int id;
+
+	for_each_ggtt(gt, i915, id)
+		ggtt_address_write_unlock(gt->ggtt);
 }
 
 static int init_ggtt(struct i915_ggtt *ggtt)
@@ -544,10 +525,9 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 		 * Media GT shares primary GT's GGTT which is already
 		 * initialized
 		 */
-		if (gt->type == GT_MEDIA) {
-			drm_WARN_ON(&i915->drm, gt->ggtt != to_gt(i915)->ggtt);
+		if (gt->type == GT_MEDIA)
 			continue;
-		}
+
 		ret = init_ggtt(gt->ggtt);
 		if (ret)
 			goto err;
@@ -715,10 +695,7 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.insert_entries = gen8_ggtt_insert_entries;
 	ggtt->vm.insert_page = gen8_ggtt_insert_page;
 
-	if (intel_uc_wants_guc(&ggtt->vm.gt->uc))
-		ggtt->invalidate = guc_ggtt_invalidate;
-	else
-		ggtt->invalidate = gen8_ggtt_invalidate;
+	ggtt->invalidate = guc_ggtt_invalidate;
 
 	ggtt->vm.vma_ops.bind_vma    = intel_ggtt_bind_vma;
 	ggtt->vm.vma_ops.unbind_vma  = intel_ggtt_unbind_vma;
@@ -774,7 +751,6 @@ static int ggtt_probe_hw(struct i915_ggtt *ggtt, struct intel_gt *gt)
 	ggtt->vm.is_ggtt = true;
 	ggtt->vm.gt = gt;
 	ggtt->vm.i915 = i915;
-	ggtt->vm.dma = i915->drm.dev;
 
 	if (IS_SRIOV_VF(i915))
 		ret = gen12vf_ggtt_probe(ggtt);
@@ -906,7 +882,7 @@ void i915_ggtt_resume(struct i915_ggtt *ggtt)
 
 	with_intel_gt_pm(ggtt->vm.gt, wf) {
 		i915_ggtt_resume_vm(&ggtt->vm);
-		ggtt->invalidate(ggtt);
+		gen12vf_ggtt_invalidate(ggtt);
 	}
 }
 
@@ -1402,7 +1378,7 @@ void i915_ggtt_set_space_owner(struct i915_ggtt *ggtt, u16 vfid,
 		size -= PAGE_SIZE;
 	}
 
-	ggtt->invalidate(ggtt);
+	gen12vf_ggtt_invalidate(ggtt);
 }
 
 static inline unsigned int __ggtt_size_to_ptes_size(u64 ggtt_size)
@@ -1502,7 +1478,7 @@ int i915_ggtt_restore_ptes(struct i915_ggtt *ggtt, const struct drm_mm_node *nod
 		size -= sizeof(gen8_pte_t);
 	}
 
-	ggtt->invalidate(ggtt);
+	gen12vf_ggtt_invalidate(ggtt);
 
 	return 0;
 }

@@ -15,6 +15,7 @@
 #include "i915_utils.h"
 #include "intel_pci_config.h"
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_pm.h"
 
 #include "gt/intel_engine_heartbeat.h"
@@ -320,8 +321,10 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
  */
 void i915_sriov_init_late(struct drm_i915_private *i915)
 {
-	if (IS_SRIOV_PF(i915))
+	if (IS_SRIOV_PF(i915)) {
+		INIT_LIST_HEAD(&i915->sriov.pf.smem_buffers);
 		i915_sriov_telemetry_pf_init(i915);
+	}
 
 	if (IS_SRIOV_VF(i915)) {
 		i915_sriov_telemetry_vf_init(i915);
@@ -1003,31 +1006,56 @@ static void pf_restore_vfs_pci_state(struct drm_i915_private *i915, unsigned int
 	}
 }
 
-#define I915_VF_PAUSE_TIMEOUT_MS 500
 #define I915_VF_REPROVISION_TIMEOUT_MS 1000
+
+static int pf_gt_save_vf_running(struct intel_gt *gt, unsigned int vfid)
+{
+	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
+	struct intel_iov *iov = &gt->iov;
+
+	GEM_BUG_ON(!vfid);
+	GEM_BUG_ON(vfid > pci_num_vf(pdev));
+
+	return intel_iov_state_pause_vf_sync(iov, vfid, true);
+}
+
+static void pf_save_vfs_running(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	unsigned int saved = 0;
+	struct intel_gt *gt;
+	unsigned int gt_id;
+	unsigned int vfid;
+
+	for (vfid = 1; vfid <= num_vfs; vfid++) {
+		if (!needs_save_restore(i915, vfid)) {
+			drm_dbg(&i915->drm, "Save of VF%u running state has been skipped\n", vfid);
+			continue;
+		}
+
+		for_each_gt(gt, i915, gt_id) {
+			int err = pf_gt_save_vf_running(gt, vfid);
+
+			if (err < 0)
+				goto skip_vf;
+		}
+		saved++;
+		continue;
+skip_vf:
+		break;
+	}
+
+	drm_dbg(&i915->drm, "%u of %u VFs running state successfully saved", saved, num_vfs);
+}
 
 static int pf_gt_save_vf_guc_state(struct intel_gt *gt, unsigned int vfid)
 {
 	struct pci_dev *pdev = to_pci_dev(gt->i915->drm.dev);
 	struct intel_iov *iov = &gt->iov;
 	struct intel_iov_data *data = &iov->pf.state.data[vfid];
-	unsigned long timeout_ms = I915_VF_PAUSE_TIMEOUT_MS;
 	int ret, size;
 
 	GEM_BUG_ON(!vfid);
 	GEM_BUG_ON(vfid > pci_num_vf(pdev));
-
-	ret = intel_iov_state_pause_vf(iov, vfid);
-	if (ret) {
-		IOV_ERROR(iov, "Failed to pause VF%u: (%pe)", vfid, ERR_PTR(ret));
-		return ret;
-	}
-
-	/* FIXME: How long we should wait? */
-	if (wait_for(data->paused, timeout_ms)) {
-		IOV_ERROR(iov, "VF%u pause didn't complete within %lu ms\n", vfid, timeout_ms);
-		return -ETIMEDOUT;
-	}
 
 	ret = intel_iov_state_save_vf_size(iov, vfid);
 	if (unlikely(ret < 0)) {
@@ -1173,6 +1201,38 @@ static void pf_restore_vfs_irqs(struct drm_i915_private *i915, unsigned int num_
 	}
 }
 
+static int pf_gt_restore_vf_running(struct intel_gt *gt, unsigned int vfid)
+{
+	struct intel_iov *iov = &gt->iov;
+
+	if (!test_and_clear_bit(IOV_VF_PAUSE_BY_SUSPEND, &iov->pf.state.data[vfid].state))
+		return 0;
+
+	return intel_iov_state_resume_vf(iov, vfid);
+}
+
+static void pf_restore_vfs_running(struct drm_i915_private *i915, unsigned int num_vfs)
+{
+	unsigned int running = 0;
+	struct intel_gt *gt;
+	unsigned int gt_id;
+	unsigned int vfid;
+
+	for (vfid = 1; vfid <= num_vfs; vfid++) {
+		for_each_gt(gt, i915, gt_id) {
+			int err = pf_gt_restore_vf_running(gt, vfid);
+
+			if (err < 0)
+				goto skip_vf;
+		}
+		running++;
+skip_vf:
+		continue;
+	}
+
+	drm_dbg(&i915->drm, "%u of %u VFs restored to proper running state", running, num_vfs);
+}
+
 static void pf_suspend_active_vfs(struct drm_i915_private *i915)
 {
 	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
@@ -1183,6 +1243,7 @@ static void pf_suspend_active_vfs(struct drm_i915_private *i915)
 	if (num_vfs == 0)
 		return;
 
+	pf_save_vfs_running(i915, num_vfs);
 	pf_save_vfs_guc_state(i915, num_vfs);
 }
 
@@ -1199,6 +1260,7 @@ static void pf_resume_active_vfs(struct drm_i915_private *i915)
 	pf_restore_vfs_pci_state(i915, num_vfs);
 	pf_restore_vfs_guc_state(i915, num_vfs);
 	pf_restore_vfs_irqs(i915, num_vfs);
+	pf_restore_vfs_running(i915, num_vfs);
 }
 
 /**
@@ -1482,6 +1544,114 @@ i915_sriov_ggtt_load(struct pci_dev *pdev, unsigned int vfid, unsigned int tile,
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_ggtt_load, I915);
 
+struct smem_buf {
+	struct list_head link;
+	struct drm_i915_gem_object *obj;
+	void *vaddr;
+};
+
+/**
+ * i915_sriov_smem_alloc - Allocate buffer in SMEM.
+ * @pdev: PF pci device
+ * @size: buffer size
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: address of allocated buffer or a negative error code on failure.
+ */
+void *i915_sriov_smem_alloc(struct pci_dev *pdev, size_t size)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct i915_sriov_pf *pf = &i915->sriov.pf;
+	struct drm_i915_gem_object *smem;
+	struct smem_buf *buf;
+	void *vaddr;
+
+	buf = kzalloc(sizeof(*smem), GFP_KERNEL);
+	if (!buf)
+		return ERR_PTR(-ENOMEM);
+
+	smem = i915_gem_object_create_internal(i915, size);
+	if (IS_ERR(smem)) {
+		kfree(buf);
+		return smem;
+	}
+
+	vaddr = i915_gem_object_pin_map_unlocked(smem, i915_coherent_map_type(i915, smem, true));
+	if (IS_ERR(vaddr)) {
+		i915_gem_object_put(smem);
+		kfree(buf);
+		return vaddr;
+	}
+
+	buf->obj = smem;
+	buf->vaddr = vaddr;
+
+	list_add(&buf->link, &pf->smem_buffers);
+
+	return vaddr;
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_smem_alloc, I915);
+
+static struct smem_buf *
+i915_sriov_smem_get_buf(struct drm_i915_private *i915, const void *vaddr)
+{
+	struct i915_sriov_pf *pf = &i915->sriov.pf;
+	struct smem_buf *buf;
+
+	list_for_each_entry(buf, &pf->smem_buffers, link) {
+		if (buf->vaddr == vaddr)
+			return buf;
+	}
+
+	return NULL;
+}
+
+/**
+ * i915_sriov_smem_free - Free previously allocated memory.
+ * @pdev: PF pci device
+ * @vaddr: pointer returned by i915_sriov_smem_alloc()
+ *
+ * This function shall be called only on PF.
+ *
+ * If @vaddr does not match any allocated object, no operation is performed.
+ */
+void i915_sriov_smem_free(struct pci_dev *pdev, const void *vaddr)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct smem_buf *buf;
+
+	buf = i915_sriov_smem_get_buf(i915, vaddr);
+	if (!buf)
+		return;
+
+	i915_gem_object_put(buf->obj);
+	list_del(&buf->link);
+	kfree(buf);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_smem_free, I915);
+
+/**
+ * i915_sriov_smem_get_obj - Get SMEM GEM object.
+ * @i915: the i915 struct
+ * @vaddr: pointer returned by i915_sriov_smem_alloc()
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: pointer to i915 GEM object associated with @vaddr or NULL if there's no such object.
+ */
+struct drm_i915_gem_object *
+i915_sriov_smem_get_obj(struct drm_i915_private *i915, const void *vaddr)
+{
+	struct smem_buf *buf;
+
+	buf = i915_sriov_smem_get_buf(i915, vaddr);
+	if (!buf)
+		return NULL;
+
+	return buf->obj;
+}
+
 /**
  * i915_sriov_lmem_size - Get size needed to store VF Local Memory.
  * @pdev: PF pci device
@@ -1547,6 +1717,172 @@ i915_sriov_lmem_unmap(struct pci_dev *pdev, unsigned int vfid, unsigned int tile
 	return intel_iov_state_unmap_lmem(&gt->iov, vfid);
 }
 EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_unmap, I915);
+
+/**
+ * i915_sriov_lmem_save - Save VF LMEM chunk.
+ * @pdev: PF pci device
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer to save VF LMEM, created with i915_sriov_smem_alloc()
+ * @offset: offset of VF LMEM chunk
+ * @size: size of chunk to save, in bytes
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size of data written (in bytes) on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_lmem_save(struct pci_dev *pdev, unsigned int vfid, unsigned int tile, void *buf,
+		     u64 offset, size_t size)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+
+	gt = sriov_to_gt(pdev, tile, true);
+	if (!gt)
+		return -ENODEV;
+
+	smem = i915_sriov_smem_get_obj(i915, buf);
+	if (!smem)
+		return -EINVAL;
+
+	return intel_iov_state_save_lmem_chunk(&gt->iov, vfid, smem, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_save, I915);
+
+/**
+ * i915_sriov_lmem_load - Load VF LMEM chunk.
+ * @pdev: PF pci device
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer with VF LMEM to load, created with i915_sriov_smem_alloc()
+ * @offset: offset of VF LMEM chunk
+ * @size: size of chunk to load, in bytes
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int
+i915_sriov_lmem_load(struct pci_dev *pdev, unsigned int vfid, unsigned int tile, const void *buf,
+		     u64 offset, size_t size)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+
+	gt = sriov_to_gt(pdev, tile, true);
+	if (!gt)
+		return -ENODEV;
+
+	smem = i915_sriov_smem_get_obj(i915, buf);
+	if (!smem)
+		return -EINVAL;
+
+	return intel_iov_state_restore_lmem_chunk(&gt->iov, vfid, smem, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_lmem_load, I915);
+
+#define COMPRESSION_RATIO 256
+
+/**
+ * i915_sriov_ccs_size - Get size needed to store VF CCS data.
+ * @pdev: PF pci device
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: size in bytes on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_ccs_size(struct pci_dev *pdev, unsigned int vfid, unsigned int tile)
+{
+	struct intel_gt *gt;
+
+	gt = sriov_to_gt(pdev, tile, false);
+	if (!gt)
+		return -ENODEV;
+
+	if (!HAS_FLAT_CCS(gt->i915))
+		return 0;
+
+	return intel_iov_provisioning_get_lmem(&gt->iov, vfid) / COMPRESSION_RATIO;
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_ccs_size, I915);
+
+/**
+ * i915_sriov_ccs_save - Save VF CCS data.
+ * @pdev: PF pci device
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer to save VF CCS data, created with i915_sriov_smem_alloc()
+ * @offset: offset of VF LMEM chunk
+ * @size: size of VF LMEM chunk
+ *
+ * It saves CCS data corresponding to VF's LMEM chunk described with @offset
+ * and @size. For each 64KB of LMEM it copies 256B of CCS data.
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: Size of data written (in bytes) on success or a negative error code on failure.
+ */
+ssize_t
+i915_sriov_ccs_save(struct pci_dev *pdev, unsigned int vfid, unsigned int tile, void *buf,
+		    u64 offset, size_t size)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+
+	gt = sriov_to_gt(pdev, tile, true);
+	if (!gt)
+		return -ENODEV;
+
+	smem = i915_sriov_smem_get_obj(i915, buf);
+	if (!smem)
+		return -EINVAL;
+
+	return intel_iov_state_save_ccs(&gt->iov, vfid, smem, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_ccs_save, I915);
+
+/**
+ * i915_sriov_ccs_load - Load VF CCS data.
+ * @pdev: PF pci device
+ * @vfid: VF identifier
+ * @tile: tile identifier
+ * @buf: buffer with VF CCS data to load, created with i915_sriov_smem_alloc()
+ * @offset: offset of VF LMEM chunk
+ * @size: size of VF LMEM chunk
+ *
+ * It restores CCS data corresponding to VF's LMEM chunk described with @offset
+ * and @size. For each 64KB of LMEM it copies 256B of CCS data.
+ *
+ * This function shall be called only on PF.
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int
+i915_sriov_ccs_load(struct pci_dev *pdev, unsigned int vfid, unsigned int tile, const void *buf,
+		     u64 offset, size_t size)
+{
+	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
+	struct drm_i915_gem_object *smem;
+	struct intel_gt *gt;
+
+	gt = sriov_to_gt(pdev, tile, true);
+	if (!gt)
+		return -ENODEV;
+
+	smem = i915_sriov_smem_get_obj(i915, buf);
+	if (!smem)
+		return -EINVAL;
+
+	return intel_iov_state_restore_ccs(&gt->iov, vfid, smem, offset, size);
+}
+EXPORT_SYMBOL_NS_GPL(i915_sriov_ccs_load, I915);
 
 static bool guc_supports_save_restore_v2(struct intel_guc *guc)
 {

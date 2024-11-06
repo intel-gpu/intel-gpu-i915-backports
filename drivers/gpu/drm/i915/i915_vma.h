@@ -275,8 +275,7 @@ static inline void i915_vma_unlock(struct i915_vma *vma)
 }
 
 int __must_check
-i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
-		u64 size, u64 alignment, u64 flags);
+i915_vma_pin_ww(struct i915_vma *vma, u64 size, u64 alignment, u64 flags);
 
 static inline int __must_check
 i915_vma_pin(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
@@ -288,7 +287,7 @@ i915_vma_pin(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 retry:
 	err = i915_gem_object_lock(vma->obj, &ww);
 	if (!err)
-		err = i915_vma_pin_ww(vma, &ww, size, alignment, flags);
+		err = i915_vma_pin_ww(vma, size, alignment, flags);
 	if (err == -EDEADLK) {
 		err = i915_gem_ww_ctx_backoff(&ww);
 		if (!err)

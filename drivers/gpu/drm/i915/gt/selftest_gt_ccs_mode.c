@@ -67,6 +67,7 @@ static u32 apply_ccs_mode(struct intel_gt *gt, u32 config)
 
        mutex_lock(&gt->ccs.mutex);
        __intel_gt_apply_ccs_mode(gt, config);
+       gt->ccs.active = config;
        ccs_mode = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
        pr_info("GT%d (config:%08x): CCS_MODE:%x\n",
                gt->info.id, config, ccs_mode);
@@ -233,7 +234,7 @@ static int live_ccs_active(void *arg)
 		pr_info("Trying to enable ALL_CCS for %s\n", engine->name);
 		intel_engine_pm_get(engine);
 		gt->ccs.active = ALL_CCS(gt) & ~engine->mask;
-		ret = intel_gt_configure_ccs_mode(gt, ALL_CCS(gt));
+		ret = intel_gt_configure_ccs_mode(gt, ALL_CCS(gt), engine);
 		intel_engine_pm_put(engine);
 
 		if (ret != -EBUSY) {
@@ -256,24 +257,31 @@ static int live_ccs_active(void *arg)
 	intel_gt_park_ccs_mode(gt, NULL);
 
 	if (err == 0) {
-		err = intel_gt_configure_ccs_mode(gt, ALL_CCS(gt));
-		if (err) {
-			pr_err("Failed to configure CCS mode while idle, active:%x, err:%d\n",
-			       gt->ccs.active, err);
-			err = -EINVAL;
-		}
+		for_each_engine(engine, gt, id) {
+			if (engine->class != COMPUTE_CLASS)
+				continue;
 
-		if (gt->ccs.config != ALL_CCS(gt)) {
-			pr_err("Failed to configure CCS mode while idle, config:%x\n",
-			       gt->ccs.config);
-			err = -EINVAL;
+			err = intel_gt_configure_ccs_mode(gt, ALL_CCS(gt), engine);
+			if (err) {
+				pr_err("Failed to configure CCS mode while idle, active:%x, err:%d\n",
+				       gt->ccs.active, err);
+				err = -EINVAL;
+			}
+
+			if (gt->ccs.config != ALL_CCS(gt)) {
+				pr_err("Failed to configure CCS mode while idle, config:%x\n",
+				       gt->ccs.config);
+				err = -EINVAL;
+			}
+
+			break;
 		}
 	}
 
 	intel_gt_pm_put(gt, wf);
 
-	err = intel_gt_pm_wait_for_idle(gt, 2 * HZ);
-	if (err == 0 && gt->ccs.config) {
+	if (intel_gt_pm_wait_for_idle(gt, 2 * HZ) == 0 &&
+	    err == 0 && gt->ccs.config) {
 		pr_err("Failed to reset CCS config on idling, config:%x\n",
 		       gt->ccs.config);
 		err = -EINVAL;
@@ -314,7 +322,7 @@ static int live_ccs_reactive(void *arg)
 		/* ccs does not become active until we configure the mode */
 		GEM_BUG_ON(gt->ccs.active);
 
-		err = intel_gt_configure_ccs_mode(gt, engine->mask);
+		err = intel_gt_configure_ccs_mode(gt, engine->mask, engine);
 		if (err) {
 			pr_err("%s: Reported busy on trying to sub-select active CCS mode, err:%d\n",
 			       engine->name, err);
@@ -359,15 +367,18 @@ static int live_ccs_gt_reset(struct intel_gt *gt, bool active)
 	for_each_engine_masked(engine, gt, config, tmp)
 		intel_engine_pm_get(engine);
 
-	err = intel_gt_configure_ccs_mode(gt, config);
-	if (err) {
-		pr_err("Failed to setup config:%08x, ccs.config:%08x, ccs.active:%08x\n",
-		       config, gt->ccs.config, gt->ccs.active);
-		err = -EINVAL;
-		goto out;
+	for_each_engine_masked(engine, gt, config, tmp) {
+		err = intel_gt_configure_ccs_mode(gt, config, engine);
+		if (err) {
+			pr_err("Failed to setup config:%08x, ccs.config:%08x, ccs.active:%08x\n",
+			       config, gt->ccs.config, gt->ccs.active);
+			err = -EINVAL;
+			goto out;
+		}
+		GEM_BUG_ON(gt->ccs.config != config);
+		GEM_BUG_ON(gt->ccs.active != config);
+		break;
 	}
-	GEM_BUG_ON(gt->ccs.config != config);
-	GEM_BUG_ON(gt->ccs.active != config);
 
 	/* We want a non-trivial configuration */
 	before = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
@@ -395,10 +406,13 @@ static int live_ccs_gt_reset(struct intel_gt *gt, bool active)
 	}
 
 	/* A new submission after the reset should always restore CCS_MODE */
-	if (intel_gt_configure_ccs_mode(gt, config)) {
-		pr_err("Failed to reapply config:%08x after reset, ccs.config:%08x, ccs.active:%08x\n",
-		       config, gt->ccs.config, gt->ccs.active);
-		err = -EINVAL;
+	for_each_engine_masked(engine, gt, config, tmp) {
+		if (intel_gt_configure_ccs_mode(gt, config, engine)) {
+			pr_err("Failed to reapply config:%08x after reset, ccs.config:%08x, ccs.active:%08x\n",
+			       config, gt->ccs.config, gt->ccs.active);
+			err = -EINVAL;
+		}
+		break;
 	}
 
 	after = intel_uncore_read(gt->uncore, XEHP_CCS_MODE);
@@ -450,7 +464,7 @@ static int live_ccs_sim_reset(void *arg)
 	GEM_BUG_ON(gt->ccs.config | gt->ccs.active); /* no cheating! */
 
 	intel_engine_pm_get(engine);
-	err = intel_gt_configure_ccs_mode(gt, engine->mask);
+	err = intel_gt_configure_ccs_mode(gt, engine->mask, engine);
 	if (err)
 		goto out;
 
@@ -479,7 +493,7 @@ static int live_ccs_sim_reset(void *arg)
 	 * We do not attempt to change config, so the configure will
 	 * attempt to reuse the existing CCS_MODE.
 	 */
-	err = intel_gt_configure_ccs_mode(gt, engine->mask);
+	err = intel_gt_configure_ccs_mode(gt, engine->mask, engine);
 	GEM_BUG_ON(err);
 	if (!(gt->ccs.active & engine->mask)) {
 		pr_err("GT%d(%s) ccs.active:%08x not set after configuring for an identical config:%08x\n",

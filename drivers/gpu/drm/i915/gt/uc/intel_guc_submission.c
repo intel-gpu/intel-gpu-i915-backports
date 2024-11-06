@@ -616,6 +616,8 @@ static int guc_submission_send_busy_loop(struct intel_guc *guc,
 					 u32 g2h_len_dw,
 					 bool loop)
 {
+	int ret;
+
 	/*
 	 * We always loop when a send requires a reply (i.e. g2h_len_dw > 0),
 	 * so we don't handle the case where we don't get a reply because we
@@ -626,7 +628,11 @@ static int guc_submission_send_busy_loop(struct intel_guc *guc,
 	if (g2h_len_dw)
 		incr_outstanding_submission_g2h(guc);
 
-	return intel_guc_send_busy_loop(guc, action, len, g2h_len_dw, loop);
+	ret = intel_guc_send_busy_loop(guc, action, len, g2h_len_dw, loop);
+	if (unlikely(ret && g2h_len_dw))
+		decr_outstanding_submission_g2h(guc);
+
+	return ret;
 }
 
 static int guc_context_policy_init_v70(struct intel_context *ce, bool loop);
@@ -722,12 +728,9 @@ static int guc_add_request(struct intel_guc *guc, struct i915_request *rq)
 
 static inline void guc_set_lrc_tail(struct i915_request *rq)
 {
-	/* Ensure writes to ring are pushed before tail pointer is updated */
-	i915_write_barrier(rq->engine->i915);
-
+	wmb(); /* Ensure writes to ring are pushed before tail pointer is updated */
 	WRITE_ONCE(rq->context->lrc_reg_state[CTX_RING_TAIL],
 		   intel_ring_set_tail(rq->ring, rq->tail));
-	wmb();
 }
 
 static inline int rq_prio(const struct i915_request *rq)
@@ -857,10 +860,14 @@ static bool multi_lrc_submit(struct i915_request *rq)
 }
 
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-static void nop_submission_tasklet(unsigned long data)
+#define set_tasklet_fn(t, fn) (t)->func = (fn)
+typedef unsigned long tasklet_data_t;
 #else
-static void nop_submission_tasklet(struct tasklet_struct *t)
+#define set_tasklet_fn(t, fn) (t)->callback = (fn)
+typedef struct tasklet_struct *tasklet_data_t;
 #endif
+
+static void nop_submission_tasklet(tasklet_data_t t)
 {
 }
 
@@ -978,11 +985,7 @@ add_request:
 	return submit;
 
 deadlk:
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	sched_engine->tasklet.func = nop_submission_tasklet;
-#else
-	sched_engine->tasklet.callback = nop_submission_tasklet;
-#endif
+	set_tasklet_fn(&sched_engine->tasklet, nop_submission_tasklet);
 	tasklet_disable_nosync(&sched_engine->tasklet);
 	return false;
 
@@ -991,42 +994,25 @@ schedule_tasklet:
 	return false;
 }
 
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-static void guc_submission_tasklet(unsigned long data)
-#else
-static void guc_submission_tasklet(struct tasklet_struct *t)
-#endif
+static void guc_submission_tasklet(tasklet_data_t t)
 {
 #ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	struct intel_guc *guc = (struct intel_guc *)data;
+	struct intel_guc *guc = (struct intel_guc *)t;
+	struct i915_sched_engine *sched_engine = guc->sched_engine;
 #else
 	struct i915_sched_engine *sched_engine =
 		from_tasklet(sched_engine, t, tasklet);
+	struct intel_guc *guc = sched_engine->private_data;
 #endif
 	unsigned long flags;
 
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	spin_lock_irqsave(&guc->sched_engine->lock, flags);
-#else
 	spin_lock_irqsave(&sched_engine->lock, flags);
-#endif
 
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
 	while (guc_dequeue_one_context(guc))
 		;
-#else
-	while (guc_dequeue_one_context(sched_engine->private_data))
-		;
-#endif
-
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	i915_sched_engine_reset_on_empty(guc->sched_engine);
-	spin_unlock_irqrestore(&guc->sched_engine->lock, flags);
-#else
 	i915_sched_engine_reset_on_empty(sched_engine);
 
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
-#endif
 }
 
 static void cs_irq_handler(struct intel_engine_cs *engine, u16 iir)
@@ -1122,9 +1108,6 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
 
 static bool busy_type_is_v1(struct intel_guc *guc)
 {
-	/* Must not call this before the submit version is determined! */
-	GEM_BUG_ON(guc->submission_version.major == 0);
-
 	if (!guc_to_gt(guc)->i915->params.enable_busy_v2)
 		return true;
 
@@ -1233,7 +1216,7 @@ static void busy_v1_guc_update_engine_gt_clks(struct intel_engine_cs *engine)
 	struct intel_guc *guc = &engine->gt->uc.guc;
 	u32 last_switch, ctx_id, total;
 
-	lockdep_assert_held(&guc->busy.v1.lock);
+	lockdep_assert_held(&guc->busy.lock);
 
 	__busy_v1_get_engine_usage_record(engine, &last_switch, &ctx_id, &total);
 
@@ -1271,7 +1254,7 @@ static void busy_v1_guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 	u32 gt_stamp_lo, gt_stamp_hi;
 	u64 gpm_ts;
 
-	lockdep_assert_held(&guc->busy.v1.lock);
+	lockdep_assert_held(&guc->busy.lock);
 
 	gt_stamp_hi = upper_32_bits(guc->busy.v1.gt_stamp);
 	gpm_ts = intel_uncore_read64_2x32(gt->uncore, MISC_STATUS0,
@@ -1299,7 +1282,7 @@ static u64 __busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine, k
 	intel_wakeref_t wakeref;
 	ktime_t now;
 
-	spin_lock_irqsave(&guc->busy.v1.lock, flags);
+	spin_lock_irqsave(&guc->busy.lock, flags);
 
 	/*
 	 * If a reset happened, we risk reading partially updated engine
@@ -1344,7 +1327,7 @@ static u64 __busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine, k
 		total += clk;
 	}
 
-	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.lock, flags);
 
 	if (now_out)
 		*now_out = now;
@@ -1382,12 +1365,12 @@ static u64 busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
 
 static void busy_v1_guc_enable_worker(struct intel_guc *guc)
 {
-	queue_delayed_work(system_highpri_wq, &guc->busy.v1.work, guc->busy.v1.ping_delay);
+	queue_delayed_work(system_highpri_wq, &guc->busy.work, guc->busy.v1.ping_delay);
 }
 
 static void busy_v1_guc_cancel_worker(struct intel_guc *guc)
 {
-	cancel_delayed_work(&guc->busy.v1.work);
+	cancel_delayed_work(&guc->busy.work);
 }
 
 static void __busy_v1_reset_guc_busyness_stats(struct intel_guc *guc)
@@ -1399,7 +1382,7 @@ static void __busy_v1_reset_guc_busyness_stats(struct intel_guc *guc)
 
 	busy_v1_guc_cancel_worker(guc);
 
-	spin_lock_irqsave(&guc->busy.v1.lock, flags);
+	spin_lock_irqsave(&guc->busy.lock, flags);
 
 	busy_v1_guc_update_pm_timestamp(guc, NULL);
 	for_each_engine(engine, gt, id) {
@@ -1407,7 +1390,7 @@ static void __busy_v1_reset_guc_busyness_stats(struct intel_guc *guc)
 		engine->stats.guc_v1.prev_total = 0;
 	}
 
-	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.lock, flags);
 }
 
 static void __busy_v1_update_guc_busyness_stats(struct intel_guc *guc)
@@ -1419,19 +1402,18 @@ static void __busy_v1_update_guc_busyness_stats(struct intel_guc *guc)
 
 	guc->busy.v1.last_stat_jiffies = jiffies;
 
-	spin_lock_irqsave(&guc->busy.v1.lock, flags);
+	spin_lock_irqsave(&guc->busy.lock, flags);
 
 	busy_v1_guc_update_pm_timestamp(guc, NULL);
 	for_each_engine(engine, gt, id)
 		busy_v1_guc_update_engine_gt_clks(engine);
 
-	spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+	spin_unlock_irqrestore(&guc->busy.lock, flags);
 }
 
 static void busy_v1_guc_timestamp_ping(struct work_struct *wrk)
 {
-	struct intel_guc *guc = container_of(wrk, typeof(*guc),
-					     busy.v1.work.work);
+	struct intel_guc *guc = container_of(wrk, typeof(*guc), busy.work.work);
 	struct intel_uc *uc = container_of(guc, typeof(*uc), guc);
 	struct intel_gt *gt = guc_to_gt(guc);
 	intel_wakeref_t wakeref;
@@ -1648,9 +1630,9 @@ static u64 busy_v1_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned 
 	}
 
 	with_intel_gt_pm_if_awake(gt, wakeref) {
-		spin_lock_irqsave(&guc->busy.v1.lock, flags);
+		spin_lock_irqsave(&guc->busy.lock, flags);
 		busy_v1_guc_update_pm_timestamp(guc, NULL);
-		spin_unlock_irqrestore(&guc->busy.v1.lock, flags);
+		spin_unlock_irqrestore(&guc->busy.lock, flags);
 	}
 
 	return guc->busy.v1.gt_stamp;
@@ -1866,8 +1848,7 @@ static int guc_init_engine_stats(struct intel_guc *guc)
 
 static void guc_fini_engine_stats(struct intel_guc *guc)
 {
-	if (busy_type_is_v1(guc))
-		busy_v1_guc_cancel_worker(guc);
+	busy_v1_guc_cancel_worker(guc);
 }
 
 void intel_guc_busyness_park(struct intel_gt *gt)
@@ -1931,11 +1912,8 @@ static void disable_submission(struct intel_guc *guc)
 	if (__tasklet_is_enabled(&sched_engine->tasklet)) {
 		GEM_BUG_ON(!guc->ct.enabled);
 		__tasklet_disable_sync_once(&sched_engine->tasklet);
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-		sched_engine->tasklet.func = nop_submission_tasklet;
-#else
-		sched_engine->tasklet.callback = nop_submission_tasklet;
-#endif
+		set_tasklet_fn(&sched_engine->tasklet, nop_submission_tasklet);
+
 	}
 }
 
@@ -1950,11 +1928,7 @@ static void enable_submission(struct intel_guc *guc)
 {
 	struct i915_sched_engine * const sched_engine = guc->sched_engine;
 
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-	sched_engine->tasklet.func = guc_submission_tasklet;
-#else
-	sched_engine->tasklet.callback = guc_submission_tasklet;
-#endif
+	set_tasklet_fn(&sched_engine->tasklet, guc_submission_tasklet);
 	smp_wmb();	/* Make sure callback visible */
 
 	if (__enable_submission_tasklet(sched_engine))
@@ -2078,10 +2052,14 @@ static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
 	rq->reserved_space =
 		2 * rq->engine->emit_fini_breadcrumb_dw * sizeof(u32);
 
-	err = reemit_bb_start(rq);
-
+	err = reemit_init_breadcrumb(rq);
 	if (err)
-		DRM_DEBUG_DRIVER("Request ring content not recognized, fence %llx:%lld, err=%pe\n",
+		DRM_DEBUG_DRIVER("Request prefix ring content not recognized, fence %llx:%lld, err=%pe\n",
+				 rq->fence.context, rq->fence.seqno, ERR_PTR(err));
+
+	err = reemit_bb_start(rq);
+	if (err)
+		DRM_DEBUG_DRIVER("Request infix ring content not recognized, fence %llx:%lld, err=%pe\n",
 				 rq->fence.context, rq->fence.seqno, ERR_PTR(err));
 
 	rq->ring->head = rhead;
@@ -2095,13 +2073,7 @@ static void guc_submission_refresh_request_ring_content(struct i915_request *rq)
 
 static void guc_submission_noop_request_ring_content(struct i915_request *rq)
 {
-	int i;
-	u32 *cs;
-	cs = rq->ring->vaddr;
-	for (i = rq->head / sizeof(u32); i < rq->tail / sizeof(u32); i++) {
-		*cs = MI_NOOP;
-		cs++;
-	}
+	ring_range_emit_noop(rq->ring, rq->head, rq->tail);
 }
 
 void guc_submission_refresh_ctx_rings_content(struct intel_context *ce)
@@ -2467,11 +2439,7 @@ void intel_guc_submission_reset_finish(struct intel_guc *guc)
 	 * pending scheduled run.
 	 */
 	if (intel_gt_is_wedged(guc_to_gt(guc)) || !intel_guc_is_fw_running(guc)) {
-#ifdef BPM_TASKLET_STRUCT_CALLBACK_NOT_PRESENT
-		guc->sched_engine->tasklet.func = nop_submission_tasklet;
-#else
-		guc->sched_engine->tasklet.callback = nop_submission_tasklet;
-#endif
+		set_tasklet_fn(&guc->sched_engine->tasklet, nop_submission_tasklet);
 		smp_wmb(); /* Make sure callback visible */
 		__enable_submission_tasklet(guc->sched_engine);
 		return;
@@ -2498,12 +2466,6 @@ int intel_guc_submission_init(struct intel_guc *guc)
 
 	if (guc->submission_initialized)
 		return 0;
-
-	/* Can't do this initialisation in init_early as the submission version is not yet known */
-	if (busy_type_is_v1(guc)) {
-		spin_lock_init(&guc->busy.v1.lock);
-		INIT_DELAYED_WORK(&guc->busy.v1.work, busy_v1_guc_timestamp_ping);
-	}
 
 	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 0, 0)) {
 		ret = guc_lrc_desc_pool_create_v69(guc);
@@ -3225,26 +3187,26 @@ static u32 map_guc_prio_to_lrc_desc_prio(u8 prio)
 
 static inline void update_um_queues_regs(struct intel_context *ce)
 {
-	struct i915_gem_context *ctx;
+	u32 asid;
 
-	rcu_read_lock();
-	ctx = rcu_dereference(ce->gem_context);
-	rcu_read_unlock();
+	if (!HAS_UM_QUEUES(ce->engine->i915))
+		return;
 
-	if (HAS_UM_QUEUES(ce->engine->i915)) {
-		ce->lrc_reg_state[PVC_CTX_ASID] = ce->vm->asid;
+	asid = ce->vm->asid;
+	if (rcu_access_pointer(ce->gem_context)) {
+		struct i915_gem_context *ctx;
 
-		if (INTEL_INFO(ce->engine->i915)->has_access_counter && ctx) {
+		rcu_read_lock();
+		ctx = rcu_dereference(ce->gem_context);
+		if (ctx->acc_trigger) {
 			ce->lrc_reg_state[PVC_CTX_ACC_CTR_THOLD] =
-				(ctx->acc_notify << ACC_NOTIFY_S) |
+				ctx->acc_notify << ACC_NOTIFY_S |
 				ctx->acc_trigger;
-			ce->lrc_reg_state[PVC_CTX_ASID] |=
-				(ctx->acc_granularity << ACC_GRANULARITY_S);
-			DRM_DEBUG("set acc thold = 0x%x asid | granularity = 0x%x\n",
-				ce->lrc_reg_state[PVC_CTX_ACC_CTR_THOLD],
-				ce->lrc_reg_state[PVC_CTX_ASID]);
+			asid |= ctx->acc_granularity << ACC_GRANULARITY_S;
 		}
+		rcu_read_unlock();
 	}
+	ce->lrc_reg_state[PVC_CTX_ASID] = asid;
 }
 
 static void prepare_context_registration_info_v69(struct intel_context *ce)
@@ -3379,6 +3341,12 @@ static int try_context_registration(struct intel_context *ce, bool loop)
 	int ret;
 
 	GEM_BUG_ON(!sched_state_is_init(ce));
+
+	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &guc->flags)) {
+		ret = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+		if (unlikely(ret))
+			return ret;
+	}
 
 	old = set_ctx_id_mapping(guc, ctx_id, ce);
 	if (IS_ERR(old))
@@ -4831,6 +4799,7 @@ static void guc_set_default_submission(struct intel_engine_cs *engine)
 static inline int guc_kernel_context_pin(struct intel_guc *guc,
 					 struct intel_context *ce)
 {
+	intel_wakeref_t wf;
 	int ret;
 
 	/*
@@ -4850,9 +4819,11 @@ static inline int guc_kernel_context_pin(struct intel_guc *guc,
 	if (!test_bit(CONTEXT_GUC_INIT, &ce->flags))
 		guc_context_init(ce);
 
-	ret = try_context_registration(ce, true);
-	if (ret)
-		unpin_guc_id(guc, ce);
+	with_intel_gt_pm_async(guc_to_gt(guc), wf) {
+		ret = try_context_registration(ce, true);
+		if (ret)
+			unpin_guc_id(guc, ce);
+	}
 
 	return ret;
 }
@@ -5311,6 +5282,9 @@ void intel_guc_submission_init_early(struct intel_guc *guc)
 		NUM_SCHED_DISABLE_GUCIDS_DEFAULT_THRESHOLD(guc);
 	guc->submission_supported = __guc_submission_supported(guc);
 	guc->submission_selected = __guc_submission_selected(guc);
+
+	spin_lock_init(&guc->busy.lock);
+	INIT_DELAYED_WORK(&guc->busy.work, busy_v1_guc_timestamp_ping);
 }
 
 static inline struct intel_context *
@@ -5390,7 +5364,7 @@ int intel_guc_engine_sched_done_process_msg(struct intel_guc *guc,
 					    u32 len)
 {
 	if (unlikely(len < 2)) {
-		drm_dbg(&guc_to_gt(guc)->i915->drm, "Invalid length %u\n", len);
+		guc_dbg(guc, "Invalid length %u\n", len);
 		return -EPROTO;
 	}
 
@@ -5715,8 +5689,10 @@ void intel_guc_submission_print_info(struct intel_guc *guc,
 	i_printf(p, indent, "Outstanding G2H: %u\n",
 		 atomic_read(&guc->outstanding_submission_g2h));
 
-	if (!RB_EMPTY_ROOT(&sched_engine->queue.rb_root)) {
+	if (guc->stalled_request || !RB_EMPTY_ROOT(&sched_engine->queue.rb_root)) {
 		spin_lock_irqsave(&sched_engine->lock, flags);
+		if (guc->stalled_request)
+			i915_request_show(p, guc->stalled_request, "Stalled: ", indent);
 		i_printf(p, indent, "Tasklet:\n");
 		for (rb = rb_first_cached(&sched_engine->queue); rb; rb = rb_next(rb)) {
 			struct i915_request *rq;

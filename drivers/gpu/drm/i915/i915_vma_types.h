@@ -283,6 +283,7 @@ struct i915_vma {
 #define I915_VMA_PAGES_ACTIVE (BIT(24) | 1)
 	atomic_t pages_count; /* number of active binds to the pages */
 	struct mutex pages_mutex; /* protect acquire/release of backing pages */
+	int pat_index;
 
 	/**
 	 * Support different GGTT views into the same object.

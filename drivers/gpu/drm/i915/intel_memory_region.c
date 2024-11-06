@@ -244,8 +244,8 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	char buf[256];
 	int i;
 
-	i_printf(p, indent, "memory region: %s\n", mem->name);
-	indent += 2;
+	i_printf(p, indent, "name: %s\n", mem->name);
+	i_printf(p, indent, "uAPI: { class: %d, instance: %d }\n", mem->type, mem->instance);
 
 	if (mem->mm.chunk_size)
 		i_printf(p, indent, "chunk:  %pa\n", &mem->mm.chunk_size);
@@ -508,8 +508,15 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct list_head **phase = phases;
 	resource_size_t found = 0;
 	bool keepalive, scan;
+	long max_timeout = 0;
 	long timeout;
 	int err = 0;
+
+	if (mem->ops->shrink_cache) {
+		found = mem->ops->shrink_cache(mem, 0, target);
+		if (found >= target)
+			return found;
+	}
 
 	/*
 	 * Eviction uses a per-object mutex to reclaim pages, so how do
@@ -555,7 +562,7 @@ next:
 					list_move_tail(&end.link, *phase);
 					age = bookmark.age;
 				} else {
-					timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
+					timeout = max_timeout;
 					keepalive = false;
 				}
 			}
@@ -653,8 +660,10 @@ next:
 			err = __i915_gem_object_put_pages(obj);
 		if (err == 0) {
 			/* After eviction, try to keep using it from its new backing store */
-			if (obj->swapto && obj->memory_mask & BIT(INTEL_REGION_SMEM))
-				i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false);
+			if (obj->swapto && obj->memory_mask & BIT(INTEL_REGION_SMEM)) {
+				if (i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false) == 0)
+					__set_bit(I915_BO_EVICT_BIT, &obj->flags);
+			}
 
 			/* conservative estimate of reclaimed pages */
 			GEM_TRACE("%s:{ target:%pa, found:%pa, evicting:%zu, remaining timeout:%ld }\n",
@@ -693,8 +702,6 @@ delete_bookmark:
 		goto next;
 
 out:
-	scan |= i915_px_cache_release(&mem->gt->px_cache);
-
 	/*
 	 * Keep retrying the allocation until there is nothing more to evict.
 	 *
@@ -708,14 +715,18 @@ out:
 	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
 		return 0;
 
+	scan |= i915_px_cache_release(mem->gt);
+
 	/* XXX optimistic busy wait for transient pins */
 	if (scan && !time_after(jiffies, end_time)) {
-		yield();
+		max_timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
 		phase = phases;
+		yield();
 		goto next;
 	}
 
 	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG) &&
+	    target != (resource_size_t)-1 &&
 	    !test_and_set_bit(INTEL_MEMORY_EVICT_SHOW, &mem->flags)) {
 		struct drm_printer p = drm_info_printer(mem->gt->i915->drm.dev);
 
@@ -1063,8 +1074,8 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 		}
 
 		if (IS_ERR(mem)) {
-			drm_err(&i915->drm,
-				"Failed to setup global region %d type=%d (%pe)\n", i, type, mem);
+			dev_warn(i915->drm.dev,
+				 "Failed to setup global region %d type=%d (%pe)\n", i, type, mem);
 			continue;
 		}
 
@@ -1077,7 +1088,7 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 
 	err = 0;
 	if (!intel_memory_region_by_type(i915, INTEL_MEMORY_SYSTEM)) {
-		drm_err(&i915->drm,
+		dev_err(i915->drm.dev,
 			"Failed to setup system memory, unable to continue\n");
 		intel_memory_regions_driver_release(i915);
 		err = -ENODEV;

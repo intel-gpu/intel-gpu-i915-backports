@@ -15,6 +15,7 @@
 
 struct intel_context;
 struct intel_gt;
+struct intel_ring;
 struct i915_request;
 
 int gen8_emit_flush_rcs(struct i915_request *rq, u32 mode);
@@ -24,8 +25,11 @@ int gen12_emit_flush_rcs(struct i915_request *rq, u32 mode);
 int gen8_emit_flush_xcs(struct i915_request *rq, u32 mode);
 int gen12_emit_flush_xcs(struct i915_request *rq, u32 mode);
 
+void ring_range_emit_noop(struct intel_ring *ring, u32 start, u32 end);
+
 int gen8_emit_init_breadcrumb(struct i915_request *rq);
 u32 get_init_breadcrumb_pos(struct i915_request *rq);
+int reemit_init_breadcrumb(struct i915_request *rq);
 
 int gen8_emit_bb_start_noarb(struct i915_request *rq,
 			     u64 offset, u32 len,
