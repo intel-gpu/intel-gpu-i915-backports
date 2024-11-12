@@ -1,4 +1,7 @@
 # ChangeLog
+## Release I915_24WW45.3_803.105_23.10.72_231129.77
+* Resolved a compilation issue encountered during kernel updates on RHEL 8.10.
+
 ## Release I915_24WW39.4_803.103_23.10.72_231129.76
 * Fixed an issue with invalid data handling in the sysfs file display and restore callbacks.
 * Fixed an issue that caused crashes and hangs when Unified Shared Memory (USM) page fault features were
