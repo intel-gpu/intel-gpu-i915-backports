@@ -1520,7 +1520,13 @@ int intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	GEM_BUG_ON(!IS_ALIGNED(start, length));
 	GEM_BUG_ON(range_overflows(start, length, vm_total));
 
-	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
+		return -ETIME;
+
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
+		return -ETIME;
+
+	return 0;
 }
 
 /*

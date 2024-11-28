@@ -303,8 +303,7 @@ void intel_engines_driver_register(struct drm_i915_private *i915)
 			}
 		}
 
-		if (drm_WARN(&i915->drm, errors,
-			     "Invalid UABI engine mapping found"))
+		if (errors)
 			i915->uabi_engines = RB_ROOT;
 	}
 

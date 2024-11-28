@@ -981,10 +981,12 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 static void barrier_open(struct vm_area_struct *vma)
 {
 	drm_dev_get(vma->vm_private_data);
+	intel_runtime_pm_get(&to_i915(vma->vm_private_data)->runtime_pm);
 }
 
 static void barrier_close(struct vm_area_struct *vma)
 {
+	intel_runtime_pm_put_unchecked(&to_i915(vma->vm_private_data)->runtime_pm);
 	drm_dev_put(vma->vm_private_data);
 }
 
@@ -1029,6 +1031,7 @@ static int i915_pci_barrier_mmap(struct file *filp,
 	vma->vm_ops = &vm_ops_barrier;
 	vma->vm_private_data = dev;
 	drm_dev_get(vma->vm_private_data);
+	intel_runtime_pm_get(&to_i915(dev)->runtime_pm);
 	return 0;
 }
 

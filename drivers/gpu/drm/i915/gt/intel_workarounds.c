@@ -1686,7 +1686,7 @@ engine_fake_wa_init(struct intel_engine_cs *engine, struct i915_wa_list *wal)
 			 * setting to use here; we can assume the MOCS init
 			 * just forgot to initialize wb_index.
 			 */
-			drm_WARN_ON(&engine->i915->drm, mocs_r == 0);
+			GEM_BUG_ON(mocs_r == 0);
 		}
 
 		wa_masked_field_set(wal,
