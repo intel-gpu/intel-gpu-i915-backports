@@ -1,4 +1,12 @@
 # ChangeLog
+## Release I915_24WW49.3_803.125_23.10.83_231129.89
+* Fixed an issue causing failures when querying GPU metrics on Intel Arc Series GPUs.
+* Corrected the ordering of Translation Lookaside Buffer (TLB) flush and invalidate operations.
+* Resolved issues with the tracking of concurrent evictions and the unintended eviction of objects
+  that had already been migrated from the target memory region.
+* Resolved an assertion failure by updating the eviction logic to modify only the tail of the eviction list.
+* Fixed an issue causing node crashes when profiling an application with VTune.
+
 ## Release I915_24WW45.3_803.105_23.10.72_231129.77
 * Resolved a compilation issue encountered during kernel updates on RHEL 8.10.
 

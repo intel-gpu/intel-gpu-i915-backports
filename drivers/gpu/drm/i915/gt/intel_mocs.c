@@ -668,8 +668,6 @@ static unsigned int get_mocs_settings(const struct drm_i915_private *i915,
 		table->n_entries = GEN9_NUM_MOCS_ENTRIES;
 		table->table = broxton_mocs_table;
 	} else {
-		drm_WARN_ONCE(&i915->drm, GRAPHICS_VER(i915) >= 9,
-			      "Platform that should have a MOCS table does not.\n");
 		return 0;
 	}
 	table->is_dynamic = 0;
@@ -736,8 +734,8 @@ static void __init_mocs_table(struct intel_uncore *uncore,
 	unsigned int i;
 	u32 mocs;
 
-	drm_WARN_ONCE(&uncore->i915->drm, !table->unused_entries_index,
-		      "Unused entries index should have been defined\n");
+	GEM_BUG_ON(!table->unused_entries_index);
+
 	for_each_mocs(mocs, table, i)
 		intel_uncore_write_fw(uncore, _MMIO(addr + i * 4), mocs);
 }

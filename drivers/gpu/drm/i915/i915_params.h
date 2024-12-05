@@ -107,6 +107,7 @@ struct drm_printer;
 	param(bool, enable_hangcheck, true, 0600) \
 	param(bool, error_capture, true, IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) ? 0600 : 0) \
 	param(bool, disable_display, IS_ENABLED(CPTCFG_DRM_I915_DISPLAY) ? false : true, 0400) \
+	param(bool, survivability_mode, false, 0400) \
 	param(int, force_driver_flr, -1, 0400) \
 	param(bool, disable_bo_chunking, false, 0600) \
 	param(bool, enable_force_miss_ftlb, true, 0600) \

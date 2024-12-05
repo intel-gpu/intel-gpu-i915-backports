@@ -272,6 +272,9 @@ i915_param_named_unsafe(page_sz_mask, uint, 0600,
 i915_param_named_unsafe(debug_pages, uint, 0400,
 			"Extra pages allocated for debug (default=0, Bit 31 indicates LMEM)");
 
+i915_param_named_unsafe(survivability_mode, bool, 0400,
+			"Enable Survivability mode to ensure the bare minimal is in place for flashing an IFWI firmware image (default: false)");
+
 i915_param_named_unsafe(force_driver_flr, int, 0400,
 			"Set this to enforce doing or skipping a driver-FLR at MMIO init and fini"
 			"-1=driver decides[default], 0=skip driver flr, 1=trigger driver flr");

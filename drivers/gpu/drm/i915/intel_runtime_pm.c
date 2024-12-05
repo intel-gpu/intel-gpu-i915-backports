@@ -33,6 +33,16 @@
 #include "i915_drv.h"
 #include "i915_trace.h"
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_WAKEREF)
+#define INTEL_RUNTIME_PM_WARN(rpm, expr, fmt, arg...) ({\
+	struct device *dev__ = container_of(rpm, struct drm_i915_private, runtime_pm)->drm.dev; \
+	WARN(expr, "%s %s: " fmt, dev_driver_string(dev__), dev_name(dev__), ## arg); \
+})
+#else
+#define INTEL_RUNTIME_PM_WARN(rpm, expr, ...) \
+	BUILD_BUG_ON_INVALID(expr)
+#endif
+
 /**
  * DOC: runtime pm
  *
@@ -50,11 +60,16 @@
  * present for a given platform.
  */
 
+static struct device *to_kdev(struct intel_runtime_pm *rpm)
+{
+	return container_of(rpm, struct drm_i915_private, runtime_pm)->drm.dev;
+}
+
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM)
 
 static void init_intel_runtime_pm_wakeref(struct intel_runtime_pm *rpm)
 {
-	ref_tracker_dir_init(&rpm->debug, INTEL_REFTRACK_DEAD_COUNT, dev_name(rpm->kdev));
+	ref_tracker_dir_init(&rpm->debug, INTEL_REFTRACK_DEAD_COUNT, dev_name(to_kdev(rpm)));
 }
 
 static intel_wakeref_t
@@ -158,16 +173,13 @@ intel_runtime_pm_release(struct intel_runtime_pm *rpm, int wakelock)
 static intel_wakeref_t __intel_runtime_pm_get(struct intel_runtime_pm *rpm,
 					      bool wakelock)
 {
-	struct drm_i915_private *i915 =
-		container_of(rpm, struct drm_i915_private, runtime_pm);
-	int ret;
+	if (!rpm->available)
+		return -1;
 
-	ret = pm_runtime_get_sync(rpm->kdev);
-	drm_WARN_ONCE(&i915->drm, ret < 0,
-		      "pm_runtime_get_sync() failed: %d\n", ret);
+	if (pm_runtime_get_sync(to_kdev(rpm)) < 0)
+		return 0;
 
 	intel_runtime_pm_acquire(rpm, wakelock);
-
 	return track_intel_runtime_pm_wakeref(rpm);
 }
 
@@ -235,19 +247,19 @@ intel_wakeref_t intel_runtime_pm_get(struct intel_runtime_pm *rpm)
 static intel_wakeref_t __intel_runtime_pm_get_if_active(struct intel_runtime_pm *rpm,
 							bool ignore_usecount)
 {
-	if (IS_ENABLED(CONFIG_PM)) {
-		/*
-		 * In cases runtime PM is disabled by the RPM core and we get
-		 * an -EINVAL return value we are not supposed to call this
-		 * function, since the power state is undefined. This applies
-		 * atm to the late/early system suspend/resume handlers.
-		 */
-		if (pm_runtime_get_if_active(rpm->kdev, ignore_usecount) <= 0)
-			return 0;
-	}
+	if (!rpm->available)
+		return -1;
+
+	/*
+	 * In cases runtime PM is disabled by the RPM core and we get
+	 * an -EINVAL return value we are not supposed to call this
+	 * function, since the power state is undefined. This applies
+	 * atm to the late/early system suspend/resume handlers.
+	 */
+	if (pm_runtime_get_if_active(to_kdev(rpm), ignore_usecount) <= 0)
+		return 0;
 
 	intel_runtime_pm_acquire(rpm, true);
-
 	return track_intel_runtime_pm_wakeref(rpm);
 }
 
@@ -282,11 +294,13 @@ intel_wakeref_t intel_runtime_pm_get_if_active(struct intel_runtime_pm *rpm)
  */
 intel_wakeref_t intel_runtime_pm_get_noresume(struct intel_runtime_pm *rpm)
 {
+	if (!rpm->available)
+		return -1;
+
 	assert_rpm_wakelock_held(rpm);
-	pm_runtime_get_noresume(rpm->kdev);
+	pm_runtime_get_noresume(to_kdev(rpm));
 
 	intel_runtime_pm_acquire(rpm, true);
-
 	return track_intel_runtime_pm_wakeref(rpm);
 }
 
@@ -294,10 +308,12 @@ static void __intel_runtime_pm_put(struct intel_runtime_pm *rpm,
 				   intel_wakeref_t wref,
 				   bool wakelock)
 {
-	struct device *kdev = rpm->kdev;
+	struct device *kdev = to_kdev(rpm);
+
+	if (!rpm->available)
+		return;
 
 	untrack_intel_runtime_pm_wakeref(rpm, wref);
-
 	intel_runtime_pm_release(rpm, wakelock);
 
 	pm_runtime_mark_last_busy(kdev);
@@ -364,9 +380,7 @@ void intel_runtime_pm_put(struct intel_runtime_pm *rpm, intel_wakeref_t wref)
  */
 void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 {
-	struct drm_i915_private *i915 =
-		container_of(rpm, struct drm_i915_private, runtime_pm);
-	struct device *kdev = rpm->kdev;
+	struct device *kdev = to_kdev(rpm);
 
 	/*
 	 * Disable the system suspend direct complete optimization, which can
@@ -388,64 +402,43 @@ void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 	 * platforms without RPM support.
 	 */
 	if (!rpm->available) {
-		int ret;
-
 		pm_runtime_dont_use_autosuspend(kdev);
-		ret = pm_runtime_get_sync(kdev);
-		drm_WARN(&i915->drm, ret < 0,
-			 "pm_runtime_get_sync() failed: %d\n", ret);
+		pm_runtime_forbid(kdev);
 	} else {
 		pm_runtime_use_autosuspend(kdev);
-	}
-
-	/*
-	 *  FIXME: Temp hammer to keep autosupend disable on lmem supported platforms.
-	 *  As per PCIe specs 5.3.1.4.1, all iomem read write request over a PCIe
-	 *  function will be unsupported in case PCIe endpoint function is in D3.
-	 *  Let's keep i915 autosuspend control 'on' till we fix all known issue
-	 *  with lmem access in D3.
-	 */
-	if (!IS_DGFX(i915))
 		pm_runtime_allow(kdev);
 
-	/* Enable by default only for client platforms for now */
-	if (IS_PONTEVECCHIO(i915))
-		pm_runtime_forbid(kdev);
-
-	/*
-	 * The core calls the driver load handler with an RPM reference held.
-	 * We drop that here and will reacquire it during unloading in
-	 * intel_power_domains_fini().
-	 */
-	pm_runtime_put_autosuspend(kdev);
+		/*
+		 * The core calls the driver load handler with an RPM reference held.
+		 * We drop that here and will reacquire it during unloading in
+		 * intel_power_domains_fini().
+		 */
+		pm_runtime_put_autosuspend(kdev);
+	}
 }
 
 void intel_runtime_pm_disable(struct intel_runtime_pm *rpm)
 {
-	struct drm_i915_private *i915 =
-		container_of(rpm, struct drm_i915_private, runtime_pm);
-	struct device *kdev = rpm->kdev;
-
-	/* Transfer rpm ownership back to core */
-	drm_WARN(&i915->drm, pm_runtime_get_sync(kdev) < 0,
-		 "Failed to pass rpm ownership back to core\n");
-
-	pm_runtime_dont_use_autosuspend(kdev);
+	struct device *kdev = to_kdev(rpm);
 
 	if (!rpm->available)
-		pm_runtime_put(kdev);
+		return;
+
+	/* Transfer rpm ownership back to core */
+	INTEL_RUNTIME_PM_WARN(rpm, pm_runtime_get_sync(kdev) < 0,
+			      "Failed to pass rpm ownership back to core\n");
+
+	pm_runtime_dont_use_autosuspend(kdev);
 }
 
 void intel_runtime_pm_driver_release(struct intel_runtime_pm *rpm)
 {
-	struct drm_i915_private *i915 =
-		container_of(rpm, struct drm_i915_private, runtime_pm);
 	int count = atomic_read(&rpm->wakeref_count);
 
-	drm_WARN(&i915->drm, count,
-		 "i915 raw-wakerefs=%d wakelocks=%d on cleanup\n",
-		 intel_rpm_raw_wakeref_count(count),
-		 intel_rpm_wakelock_count(count));
+	INTEL_RUNTIME_PM_WARN(rpm, count,
+			      "i915 raw-wakerefs=%d wakelocks=%d on cleanup\n",
+			      intel_rpm_raw_wakeref_count(count),
+			      intel_rpm_wakelock_count(count));
 
 	untrack_all_intel_runtime_pm_wakerefs(rpm);
 }
@@ -454,11 +447,19 @@ void intel_runtime_pm_init_early(struct intel_runtime_pm *rpm)
 {
 	struct drm_i915_private *i915 =
 		container_of(rpm, struct drm_i915_private, runtime_pm);
-	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
-	struct device *kdev = &pdev->dev;
 
-	rpm->kdev = kdev;
-	rpm->available = HAS_RUNTIME_PM(i915);
+	/* Enable by default only for client platforms for now */
+	rpm->available = IS_ENABLED(CONFIG_PM) && HAS_RUNTIME_PM(i915);
+
+	/*
+	 *  FIXME: Temp hammer to keep autosupend disable on lmem supported platforms.
+	 *  As per PCIe specs 5.3.1.4.1, all iomem read write request over a PCIe
+	 *  function will be unsupported in case PCIe endpoint function is in D3.
+	 *  Let's keep i915 autosuspend control 'on' till we fix all known issue
+	 *  with lmem access in D3.
+	 */
+	if (IS_DGFX(i915))
+		rpm->available = false;
 
 	init_intel_runtime_pm_wakeref(rpm);
 }

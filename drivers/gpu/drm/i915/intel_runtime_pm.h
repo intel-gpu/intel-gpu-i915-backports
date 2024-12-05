@@ -47,10 +47,9 @@ enum i915_drm_suspend_mode {
  */
 struct intel_runtime_pm {
 	atomic_t wakeref_count;
-	struct device *kdev; /* points to i915->drm.dev */
-	bool available;
-	bool suspended;
-	bool irqs_enabled;
+	bool available : 1;
+	bool suspended : 1;
+	bool irqs_enabled : 1;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM)
 	/*
@@ -82,6 +81,8 @@ intel_rpm_wakelock_count(int wakeref_count)
 	return wakeref_count >> INTEL_RPM_WAKELOCK_SHIFT;
 }
 
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_WAKEREF)
+
 static inline void
 assert_rpm_device_not_suspended(struct intel_runtime_pm *rpm)
 {
@@ -92,6 +93,9 @@ assert_rpm_device_not_suspended(struct intel_runtime_pm *rpm)
 static inline void
 __assert_rpm_raw_wakeref_held(struct intel_runtime_pm *rpm, int wakeref_count)
 {
+	if (!rpm->available)
+		return;
+
 	assert_rpm_device_not_suspended(rpm);
 	WARN_ONCE(!intel_rpm_raw_wakeref_count(wakeref_count),
 		  "RPM raw-wakeref not held\n");
@@ -100,6 +104,9 @@ __assert_rpm_raw_wakeref_held(struct intel_runtime_pm *rpm, int wakeref_count)
 static inline void
 __assert_rpm_wakelock_held(struct intel_runtime_pm *rpm, int wakeref_count)
 {
+	if (!rpm->available)
+		return;
+
 	__assert_rpm_raw_wakeref_held(rpm, wakeref_count);
 	WARN_ONCE(!intel_rpm_wakelock_count(wakeref_count),
 		  "RPM wakelock ref not held during HW access\n");
@@ -116,6 +123,14 @@ assert_rpm_wakelock_held(struct intel_runtime_pm *rpm)
 {
 	__assert_rpm_wakelock_held(rpm, atomic_read(&rpm->wakeref_count));
 }
+
+#else
+
+static inline void assert_rpm_device_not_suspended(struct intel_runtime_pm *rpm) {}
+static inline void assert_rpm_raw_wakeref_held(struct intel_runtime_pm *rpm) {}
+static inline void assert_rpm_wakelock_held(struct intel_runtime_pm *rpm) {}
+
+#endif
 
 /**
  * disable_rpm_wakeref_asserts - disable the RPM assert checks

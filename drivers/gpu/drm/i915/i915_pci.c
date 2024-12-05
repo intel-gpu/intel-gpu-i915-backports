@@ -356,7 +356,8 @@ static const struct intel_device_info dg1_info = {
 		BIT(RCS0) | BIT(BCS0) | \
 		BIT(VECS0) | BIT(VECS1) | \
 		BIT(VCS0) | BIT(VCS2) | \
-		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3)
+		BIT(CCS0) | BIT(CCS1) | BIT(CCS2) | BIT(CCS3), \
+	.has_lmem_max_bandwidth = 1
 
 static const struct intel_device_info dg2_info = {
 	DG2_FEATURES,
@@ -376,7 +377,8 @@ static const struct intel_device_info ats_m_info = {
 #endif
 	.tuning_thread_rr_after_dep = 1,
 	.has_csc_uid = 1,
-	.has_lmem_max_bandwidth = 1,
+	.has_survivability_mode = 1,
+	.has_runtime_pm = 0,
 };
 
 #define XE_HPC_FEATURES \
@@ -541,6 +543,9 @@ static void i915_pci_remove(struct pci_dev *pdev)
 	if (!i915) /* driver load aborted, nothing to cleanup */
 		return;
 
+	if (i915_survivability_mode_enabled(i915))
+		return i915_survivability_mode_remove(i915);
+
 	if (IS_SRIOV_PF(i915)) {
 		if (i915_is_pci_in_recovery(i915))
 			i915_sriov_pf_recovery(i915);
@@ -591,6 +596,8 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct intel_device_info *intel_info =
 		(struct intel_device_info *) ent->driver_data;
 	struct drm_i915_private *i915;
+	struct intel_gt *gt;
+	unsigned int i;
 	intel_wakeref_t wakeref;
 	int err;
 
@@ -627,6 +634,14 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
 
 	i915 = pdev_to_i915(pdev);
+
+	if (i915_survivability_mode_enabled(i915)) {
+		for_each_gt(gt, i915, i)
+			intel_gsc_init(&gt->gsc, i915);
+		drm_info(&i915->drm, "In Survivability Mode\n");
+		return 0;
+	}
+
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		i915_driver_register(i915);
 
