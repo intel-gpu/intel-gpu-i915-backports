@@ -491,7 +491,7 @@ fpga_check_for_unclaimed_mmio(struct intel_uncore *uncore)
 	 * to recognize when MMIO accesses are just busted.
 	 */
 	if (unlikely(dbg == ~0))
-		drm_err(&uncore->i915->drm,
+		dev_err(uncore->i915->drm.dev,
 			"Lost access to MMIO BAR; all registers now read back as 0xFFFFFFFF!\n");
 
 	__raw_uncore_write32(uncore, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
@@ -773,6 +773,9 @@ void intel_uncore_forcewake_put__locked(struct intel_uncore *uncore,
 
 void assert_forcewakes_inactive(struct intel_uncore *uncore)
 {
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO))
+		return;
+
 	if (!uncore->fw_get_funcs)
 		return;
 
@@ -787,7 +790,7 @@ void assert_forcewakes_active(struct intel_uncore *uncore,
 	struct intel_uncore_forcewake_domain *domain;
 	unsigned int tmp;
 
-	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_RUNTIME_PM))
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO))
 		return;
 
 	if (!uncore->fw_get_funcs)
@@ -881,14 +884,7 @@ find_fw_domain(struct intel_uncore *uncore, u32 offset)
 	 * can't determine it statically. We use FORCEWAKE_ALL and
 	 * translate it here to the list of available domains.
 	 */
-	if (entry->domains == FORCEWAKE_ALL)
-		return uncore->fw_domains;
-
-	drm_WARN(&uncore->i915->drm, entry->domains & ~uncore->fw_domains,
-		 "Uninitialized forcewake domain(s) 0x%x accessed at 0x%x\n",
-		 entry->domains & ~uncore->fw_domains, offset);
-
-	return entry->domains;
+	return entry->domains == FORCEWAKE_ALL ? uncore->fw_domains : entry->domains;
 }
 
 /*
@@ -1084,7 +1080,7 @@ static int mmio_range_cmp(u32 key, const struct i915_range *range)
 
 static bool is_shadowed(struct intel_uncore *uncore, u32 offset)
 {
-	if (drm_WARN_ON(&uncore->i915->drm, !uncore->shadowed_reg_table))
+	if (!uncore->shadowed_reg_table)
 		return false;
 
 	if (IS_GSI_REG(offset))
@@ -1698,6 +1694,9 @@ unclaimed_reg_debug(struct intel_uncore *uncore,
 		    const bool read,
 		    const bool before)
 {
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO))
+		return;
+
 	if (likely(!uncore->i915->params.mmio_debug) || !uncore->debug)
 		return;
 
@@ -1994,6 +1993,8 @@ static int __fw_domain_init(struct intel_uncore *uncore,
 
 	GEM_BUG_ON(domain_id >= FW_DOMAIN_ID_COUNT);
 	GEM_BUG_ON(uncore->fw_domain[domain_id]);
+	GEM_BUG_ON(!i915_mmio_reg_valid(reg_set));
+	GEM_BUG_ON(!i915_mmio_reg_valid(reg_ack));
 
 	if (i915_inject_probe_failure(uncore->i915))
 		return -ENOMEM;
@@ -2001,9 +2002,6 @@ static int __fw_domain_init(struct intel_uncore *uncore,
 	d = kzalloc(sizeof(*d), GFP_KERNEL);
 	if (!d)
 		return -ENOMEM;
-
-	drm_WARN_ON(&uncore->i915->drm, !i915_mmio_reg_valid(reg_set));
-	drm_WARN_ON(&uncore->i915->drm, !i915_mmio_reg_valid(reg_ack));
 
 	d->uncore = uncore;
 	d->wake_count = 0;
@@ -2131,7 +2129,6 @@ static int intel_uncore_fw_domains_init(struct intel_uncore *uncore)
 #undef fw_domain_init
 
 	/* All future platforms are expected to require complex power gating */
-	drm_WARN_ON(&i915->drm, !ret && uncore->fw_domains == 0);
 
 	if (ret)
 		intel_uncore_fw_domains_fini(uncore);
@@ -2212,7 +2209,7 @@ int intel_uncore_setup_mmio(struct intel_uncore *uncore, phys_addr_t phys_addr)
 
 	uncore->regs = ioremap(phys_addr, mmio_size);
 	if (uncore->regs == NULL) {
-		drm_err(&i915->drm, "failed to map registers\n");
+		dev_err(i915->drm.dev, "failed to map registers\n");
 		return -EIO;
 	}
 
@@ -2309,7 +2306,7 @@ static int sanity_check_mmio_access(struct intel_uncore *uncore)
 {
 	struct drm_i915_private *i915 = uncore->i915;
 
-	if (IS_SRIOV_VF(uncore->i915))
+	if (IS_SRIOV_VF(i915))
 		return 0;
 
 	if (GRAPHICS_VER(i915) < 8)
@@ -2331,7 +2328,7 @@ static int sanity_check_mmio_access(struct intel_uncore *uncore)
 	 */
 #define COND (__raw_uncore_read32(uncore, FORCEWAKE_MT) != ~0)
 	if (wait_for(COND, 2000) == -ETIMEDOUT) {
-		drm_err(&i915->drm, "Device is non-operational; MMIO access returns 0xFFFFFFFF!\n");
+		dev_err(i915->drm.dev, "Device is non-operational; MMIO access returns 0xFFFFFFFF!\n");
 		return -EIO;
 	}
 
@@ -2602,6 +2599,9 @@ bool intel_uncore_unclaimed_mmio(struct intel_uncore *uncore)
 {
 	bool ret;
 
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO))
+		return false;
+
 	if (!uncore->debug)
 		return false;
 
@@ -2617,7 +2617,10 @@ intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore)
 {
 	bool ret = false;
 
-	if (drm_WARN_ON(&uncore->i915->drm, !uncore->debug))
+	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_MMIO))
+		return false;
+
+	if (!uncore->debug)
 		return false;
 
 	spin_lock_irq(&uncore->debug->lock);
@@ -2663,8 +2666,6 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 {
 	enum forcewake_domains fw_domains = 0;
 
-	drm_WARN_ON(&uncore->i915->drm, !op);
-
 	if (!intel_uncore_has_forcewake(uncore))
 		return 0;
 
@@ -2673,8 +2674,6 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 
 	if (op & FW_REG_WRITE)
 		fw_domains |= uncore->funcs.write_fw_domains(uncore, reg);
-
-	drm_WARN_ON(&uncore->i915->drm, fw_domains & ~uncore->fw_domains);
 
 	return fw_domains;
 }

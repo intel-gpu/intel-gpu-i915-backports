@@ -370,6 +370,7 @@ static int shmem_create(struct shmem_work *wrk)
 			chunk->fence = &fence;
 			chunk->idx = n;
 			chunk->flags = flags;
+			chunk->policy = NULL;
 			INIT_WORK(&chunk->work, shmem_chunk);
 
 			start = remain;

@@ -162,6 +162,26 @@ void i915_log_driver_error(struct drm_i915_private *i915,
 	va_end(args);
 }
 
+/**
+ * i915_survivability_mode_enabled - checks survivability mode
+ * @i915: device private
+ *
+ * Survivability Lite puts the driver in a state so that user
+ * has a chance to do a in-field fw update. It relys on Admin/User
+ * identifying the system is in a crippled state and the user then
+ * reloads the driver with module parameter set.
+ *
+ * This is currently supported only on ATS-M. This function returns
+ * true if survivability lite mode is supported and module parameter
+ * is set.
+ *
+ * Returns true if survivability lite is enabled, false otherwise
+ */
+bool i915_survivability_mode_enabled(struct drm_i915_private *i915)
+{
+	return HAS_SURVIVABILITY_MODE(i915) && i915->params.survivability_mode;
+}
+
 bool i915_save_pci_state(struct pci_dev *pdev)
 {
 	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
@@ -1633,6 +1653,10 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	i915_sanitize_force_driver_flr(i915);
 
 	ret = intel_gt_probe_all(i915);
+
+	if (i915_survivability_mode_enabled(i915))
+		return 0;
+
 	if (ret < 0)
 		goto out_runtime_pm_put;
 
@@ -1768,6 +1792,25 @@ void i915_driver_remove(struct drm_i915_private *i915)
 	kfree(i915->pci_state);
 
 	enable_rpm_wakeref_asserts(&i915->runtime_pm);
+}
+
+/**
+ * i915_survivability_mode_remove - remove survivability mode
+ * @i915: device private
+ *
+ * clean up the allocations set up in survivability mode
+ */
+void i915_survivability_mode_remove(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct intel_gt *gt;
+	unsigned int i;
+
+	for_each_gt(gt, i915, i)
+		intel_gsc_fini(&gt->gsc);
+
+	i915_driver_late_release(i915);
+	pci_set_drvdata(pdev, NULL);
 }
 
 static void i915_driver_release(struct drm_device *dev)
@@ -2134,8 +2177,7 @@ int i915_driver_suspend_switcheroo(struct drm_i915_private *i915,
 {
 	int error;
 
-	if (drm_WARN_ON_ONCE(&i915->drm, state.event != PM_EVENT_SUSPEND &&
-			     state.event != PM_EVENT_FREEZE))
+	if (state.event != PM_EVENT_SUSPEND && state.event != PM_EVENT_FREEZE)
 		return -EINVAL;
 
 	if (i915->drm.switch_power_state == DRM_SWITCH_POWER_OFF)
@@ -2457,7 +2499,7 @@ static int intel_runtime_suspend(struct device *kdev)
 	struct intel_gt *gt;
 	int i;
 
-	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
+	if (GEM_WARN_ON(!HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
 	drm_dbg(&dev_priv->drm, "Suspending device\n");
@@ -2531,12 +2573,10 @@ static int intel_runtime_resume(struct device *kdev)
 	struct intel_gt *gt;
 	int i;
 
-	if (drm_WARN_ON_ONCE(&dev_priv->drm, !HAS_RUNTIME_PM(dev_priv)))
+	if (GEM_WARN_ON(!HAS_RUNTIME_PM(dev_priv)))
 		return -ENODEV;
 
 	drm_dbg(&dev_priv->drm, "Resuming device\n");
-
-	drm_WARN_ON_ONCE(&dev_priv->drm, atomic_read(&rpm->wakeref_count));
 	disable_rpm_wakeref_asserts(rpm);
 
 	intel_opregion_notify_adapter(dev_priv, PCI_D0);

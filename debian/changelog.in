@@ -1,3 +1,9 @@
+pkg-name (1.23.10.83.231129.89.6.8.0-50) UNRELEASED; urgency=low
+
+  New driver source to I915_23.10 against 6.8-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Mon, 02 Dec 2024 09:40:11 +0000
+
 pkg-name (1.23.10.72.231129.77.6.8.0-44) UNRELEASED; urgency=low
 
   New driver source to I915_23.10 against 6.8-generic

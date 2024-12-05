@@ -165,9 +165,7 @@ int i915_gem_object_migrate_finish(struct drm_i915_gem_object *obj)
 unsigned int i915_gem_get_pat_index(struct drm_i915_private *i915,
 				    enum i915_cache_level level)
 {
-	if (drm_WARN_ON(&i915->drm, level >= I915_MAX_CACHE_LEVEL))
-		return 0;
-
+	GEM_BUG_ON(level >= I915_MAX_CACHE_LEVEL);
 	return INTEL_INFO(i915)->cachelevel_to_pat[level];
 }
 

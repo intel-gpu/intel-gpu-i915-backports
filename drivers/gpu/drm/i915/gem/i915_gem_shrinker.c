@@ -546,11 +546,10 @@ void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 #endif
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
-	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
+	register_oom_notifier(&i915->mm.oom_notifier);
 
 	i915->mm.vmap_notifier.notifier_call = i915_gem_shrinker_vmap;
-	drm_WARN_ON(&i915->drm,
-		    register_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	register_vmap_purge_notifier(&i915->mm.vmap_notifier);
 
 	start_swapper(i915);
 }
@@ -559,12 +558,10 @@ void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 {
 	stop_swapper(i915);
 
-	drm_WARN_ON(&i915->drm,
-		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
-	drm_WARN_ON(&i915->drm,
-		    unregister_oom_notifier(&i915->mm.oom_notifier));
+	unregister_vmap_purge_notifier(&i915->mm.vmap_notifier);
+	unregister_oom_notifier(&i915->mm.oom_notifier);
 #ifdef BPM_REGISTER_SHRINKER_NOT_PRESENT
-        shrinker_free(i915->mm.shrinker);
+	shrinker_free(i915->mm.shrinker);
 #else
 	unregister_shrinker(&i915->mm.shrinker);
 #endif

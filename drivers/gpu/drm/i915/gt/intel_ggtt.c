@@ -49,8 +49,6 @@ void i915_ggtt_suspend_vm(struct i915_address_space *vm)
 	struct i915_vma *vma, *vn;
 	int open;
 
-	drm_WARN_ON(&vm->i915->drm, !vm->is_ggtt && !vm->is_dpt);
-
 	mutex_lock(&vm->mutex);
 
 	/* Skip rewriting PTE on VMA unbind. */
@@ -399,10 +397,9 @@ int i915_init_ggtt(struct drm_i915_private *i915)
 		 * Media GT shares primary GT's GGTT which is already
 		 * initialized
 		 */
-		if (gt->type == GT_MEDIA) {
-			drm_WARN_ON(&i915->drm, gt->ggtt != to_gt(i915)->ggtt);
+		if (gt->type == GT_MEDIA)
 			continue;
-		}
+
 		ret = init_ggtt(gt->ggtt);
 		if (ret)
 			goto err;

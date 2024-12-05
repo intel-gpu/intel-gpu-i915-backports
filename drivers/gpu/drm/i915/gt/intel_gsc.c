@@ -10,6 +10,7 @@
 #include <linux/platform_device.h>
 #include <linux/mfd/core.h>
 #endif
+#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "gem/i915_gem_region.h"
@@ -310,6 +311,9 @@ static void gsc_init_one(struct drm_i915_private *i915, struct intel_gsc *gsc,
 	if (intf_id == 0 && !HAS_HECI_PXP(i915))
 		return;
 
+	if (i915_survivability_mode_enabled(i915))
+		use_polling = true;
+
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 	if (IS_DG1(i915)) {
 		def = &gsc_def_dg1[intf_id];
@@ -398,7 +402,7 @@ add_device:
 	if (!adev)
 		goto fail;
 
-	if (def->lmem_size) {
+	if (def->lmem_size && !i915_survivability_mode_enabled(i915)) {
 		drm_dbg(&i915->drm, "setting up GSC lmem\n");
 
 		if (gsc_ext_om_alloc(gsc, intf, def->lmem_size)) {

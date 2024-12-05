@@ -51,7 +51,7 @@ struct drm_i915_private;
 		__GEM_BUG(condition); \
 		} \
 	} while(0)
-#define GEM_WARN_ON(expr) WARN_ON(expr)
+#define GEM_WARN_ON(expr) WARN_ON_ONCE(expr)
 
 #define GEM_DEBUG_WARN_ON(expr) GEM_WARN_ON(expr)
 
