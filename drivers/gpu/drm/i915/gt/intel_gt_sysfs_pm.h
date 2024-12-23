@@ -74,6 +74,14 @@ i915_sysfs_store_kobj(struct kobject *kobj, struct kobj_attribute *attr, const c
 #define INTEL_KOBJ_ATTR_RW(_name, _mode, _show, _store) \
         struct i915_ext_attr_kobj dev_attr_##_name = \
         { __ATTR(_name, _mode, i915_sysfs_show_kobj, i915_sysfs_store_kobj), _show, _store}
+
+
+#define KOBJ_ATTR_RW(_name) \
+	struct kobj_attribute dev_attr_##_name = __ATTR_RW(_name)
+#define KOBJ_ATTR_RO(_name) \
+	struct kobj_attribute dev_attr_##_name = __ATTR_RO(_name)
+#define KOBJ_ATTR_WO(_name) \
+	struct kobj_attribute dev_attr_##_name = __ATTR_WO(_name)
 #endif
 
 #endif /* SYSFS_RC6_H */

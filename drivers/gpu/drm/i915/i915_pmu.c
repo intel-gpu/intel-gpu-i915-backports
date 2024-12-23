@@ -34,7 +34,8 @@
 	(BIT(I915_SAMPLE_BUSY) | \
 	 BIT(I915_SAMPLE_WAIT) | \
 	 BIT(I915_SAMPLE_SEMA) | \
-	 BIT(PRELIM_I915_SAMPLE_BUSY_TICKS))
+	 BIT(PRELIM_I915_SAMPLE_BUSY_TICKS) |\
+	 BIT(PRELIM_I915_SAMPLE_TOTAL_TICKS))
 
 #ifndef BPM_ENABLE_FPUT_SYNC_USAGE
 struct i915_event {
@@ -334,10 +335,10 @@ static bool pmu_needs_timer(struct i915_pmu *pmu, bool gpu_active)
 	 * Also there is software busyness tracking available we do not
 	 * need the timer for I915_SAMPLE_BUSY counter.
 	 */
-	else if ((i915->caps.scheduler & I915_SCHEDULER_CAP_ENGINE_BUSY_STATS) ||
-		 (i915->caps.scheduler & PRELIM_I915_SCHEDULER_CAP_ENGINE_BUSY_TICKS_STATS)) {
+	else if (i915->caps.scheduler & I915_SCHEDULER_CAP_ENGINE_BUSY_STATS) {
 		enable &= ~BIT(I915_SAMPLE_BUSY);
 		enable &= ~BIT(PRELIM_I915_SAMPLE_BUSY_TICKS);
+		enable &= ~BIT(PRELIM_I915_SAMPLE_TOTAL_TICKS);
 	}
 
 	/*
@@ -686,8 +687,7 @@ static void engine_sample(struct intel_engine_cs *engine, unsigned int period_ns
 		add_sample(&pmu->sample[I915_SAMPLE_SEMA], period_ns);
 
 	/* No need to sample when busy stats are supported. */
-	if (intel_engine_supports_stats(engine) ||
-	    intel_engine_supports_tick_stats(engine))
+	if (intel_engine_supports_stats(engine))
 		return;
 
 	/*
@@ -919,7 +919,11 @@ engine_event_status(struct intel_engine_cs *engine,
 			return -ENODEV;
 		break;
 	case PRELIM_I915_SAMPLE_BUSY_TICKS:
-		if (!intel_engine_supports_tick_stats(engine))
+		if (!engine->busyness_ticks)
+			return -ENODEV;
+		break;
+	case PRELIM_I915_SAMPLE_TOTAL_TICKS:
+		if (!engine->total_active_ticks)
 			return -ENODEV;
 		break;
 	case I915_SAMPLE_WAIT:
@@ -1256,11 +1260,12 @@ static u64 __i915_pmu_event_read(struct perf_event *event)
 			   intel_engine_supports_stats(engine)) {
 			ktime_t unused;
 
-			val = ktime_to_ns(intel_engine_get_busy_time(engine,
+			val = ktime_to_ns(intel_engine_get_busy_time(engine, vf_id,
 								     &unused));
-		} else if (sample == PRELIM_I915_SAMPLE_BUSY_TICKS &&
-			   intel_engine_supports_tick_stats(engine)) {
+		} else if (sample == PRELIM_I915_SAMPLE_BUSY_TICKS) {
 			val = intel_engine_get_busy_ticks(engine, vf_id);
+		} else if (sample == PRELIM_I915_SAMPLE_TOTAL_TICKS) {
+			val = intel_engine_total_active_ticks(engine, vf_id);
 		} else {
 			val = engine->pmu.sample[sample].cur;
 		}
@@ -1865,6 +1870,7 @@ create_event_attributes(struct i915_pmu *pmu)
 		__engine_event(I915_SAMPLE_SEMA, "sema"),
 		__engine_event(I915_SAMPLE_WAIT, "wait"),
 		__engine_event(PRELIM_I915_SAMPLE_BUSY_TICKS, "busy-ticks"),
+		__engine_event(PRELIM_I915_SAMPLE_TOTAL_TICKS, "total-active-ticks"),
 	};
 	unsigned int count = 0;
 	struct perf_pmu_events_attr *pmu_attr = NULL, *pmu_iter;
@@ -2058,7 +2064,8 @@ create_event_attributes(struct i915_pmu *pmu)
 								engine->uabi_instance,
 								engine_events[i].sample));
 
-			if (engine_events[i].sample == PRELIM_I915_SAMPLE_BUSY_TICKS)
+			if (engine_events[i].sample == PRELIM_I915_SAMPLE_BUSY_TICKS ||
+			    engine_events[i].sample == PRELIM_I915_SAMPLE_TOTAL_TICKS)
 				continue;
 
 			str = kasprintf(GFP_KERNEL, "%s-%s.unit",
@@ -2163,14 +2170,15 @@ void i915_pmu_exit(void)
  *                  ------        --------        --------
  * v1 busyness      hw regs       ENODEV          hw_regs
  * v2 busyness      GuC iface     GuC iface       GuC iface
+ * v3 busyness      hw regs       ENODEV          hw_regs
  *
- * With v1 busyness, intel_guc_init_busy_free should just return without
+ * v1/v3 busyness: intel_guc_init_busy_free should just return without
  * altering the vfuncs. This takes care of native and PF implementations
- * in v1 mode. If we are in a VF, the vfuncs never get initialized. This
+ * in v1/v3 mode. If we are in a VF, the vfuncs never get initialized. This
  * causes config_status to return ENODEV since the vfuncs are NULL and
  * this takes care of VF implementation in v1.
  *
- * With v2 busyness, intel_guc_init_busy_free would just override both the
+ * v2 busyness: intel_guc_init_busy_free would just override both the
  * vfuncs to GuC versions. Note that v2 version implements both the ns and
  * tick versions of the busy free counters. There are 2 separate vfuncs to
  * take care of the different units.

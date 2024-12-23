@@ -98,7 +98,7 @@ i915_active_fence_set(struct i915_active_fence *active,
 		      struct i915_request *rq);
 
 static inline struct dma_fence *
-__i915_active_fence_get(struct dma_fence __rcu **fencep)
+__i915_active_fence_get(struct dma_fence __rcu * const *fencep)
 {
 	/* See dma_fence_get_rcu_safe */
 	do {
@@ -139,7 +139,7 @@ i915_active_fence_has_error(const struct i915_active_fence *active)
  * The reference should be freed with dma_fence_put().
  */
 static inline struct dma_fence *
-i915_active_fence_get_or_error(struct i915_active_fence *active)
+i915_active_fence_get_or_error(const struct i915_active_fence *active)
 {
 	struct dma_fence *fence;
 

@@ -654,7 +654,7 @@ int i915_gem_init(struct drm_i915_private *dev_priv)
 	intel_init_clock_gating(dev_priv);
 
 	if (HAS_UM_QUEUES(dev_priv))
-		xa_init_flags(&dev_priv->asid_resv.xa, XA_FLAGS_ALLOC);
+		xa_init_flags(&dev_priv->asid_resv.xa, XA_FLAGS_ALLOC1);
 
 	for_each_gt(gt, dev_priv, i) {
 		intel_wakeref_t wf;

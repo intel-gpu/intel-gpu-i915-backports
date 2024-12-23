@@ -244,9 +244,8 @@ static int live_engine_timestamps(void *arg)
 
 static int __spin_until_busier(struct intel_engine_cs *engine, ktime_t busyness)
 {
-	ktime_t start, unused, dt;
-	/* FIXME: v2 busyness is currently very coarse sampling */
-	u32 limit_ms = (intel_guc_busyness_type(engine->gt) == 2) ? 150 : 10;
+	ktime_t start, dt;
+	u32 limit_ms = 150;
 
 	if (!intel_engine_uses_guc(engine))
 		return 0;
@@ -257,12 +256,9 @@ static int __spin_until_busier(struct intel_engine_cs *engine, ktime_t busyness)
 	 * However, the wait accesses an MMIO register and the uncore call to read
 	 * it takes up to 3ms in the worst case. So poll for a change in busyness
 	 * but with a timeout of 10ms.
-	 *
-	 * FIXME: v2 busyness is currently very coarse sampling, so bump the timeout
-	 * to allow a 100ms sample update period when v2 is enabled.
 	 */
 	start = ktime_get();
-	while (intel_engine_get_busy_time(engine, &unused) == busyness) {
+	while (intel_engine_get_busy_ticks(engine, 0) == busyness) {
 		dt = ktime_to_ms(ktime_get() - start);
 		if (dt > limit_ms) {
 			gt_err(engine->gt, "active wait timed out %lldms\n", dt);
@@ -292,9 +288,9 @@ static int live_engine_busy_stats(void *arg)
 	GEM_BUG_ON(intel_gt_pm_is_awake(gt));
 	for_each_engine(engine, gt, id) {
 		struct i915_request *rq;
-		ktime_t busyness, dummy;
-		ktime_t de, dt;
-		ktime_t t[2];
+		u64 busy_ticks, total_ticks;
+		u64 busyness;
+		ktime_t dt;
 
 		if (!intel_engine_supports_stats(engine))
 			continue;
@@ -311,15 +307,19 @@ static int live_engine_busy_stats(void *arg)
 
 		ENGINE_TRACE(engine, "measuring idle time\n");
 		preempt_disable();
-		de = intel_engine_get_busy_time(engine, &t[0]);
+		busy_ticks = intel_engine_get_busy_ticks(engine, 0);
+		total_ticks = intel_engine_total_active_ticks(engine, 0);
+		dt = ktime_get();
 		udelay(100);
-		de = ktime_sub(intel_engine_get_busy_time(engine, &t[1]), de);
+		dt = ktime_to_ms(ktime_get() - dt);
+		busy_ticks = intel_engine_get_busy_ticks(engine, 0) - busy_ticks;
+		total_ticks = intel_engine_total_active_ticks(engine, 0) - total_ticks;
 		preempt_enable();
-		dt = ktime_sub(t[1], t[0]);
-		if (de < 0 || de > 10) {
-			gt_err(gt, "%s: reported %lldns [%d%%] busyness while sleeping [for %lldns]\n",
+
+		if (busy_ticks < 0 || busy_ticks > 10) {
+			gt_err(gt, "%s: reported  [%d%%] busyness while sleeping [for %lldns]\n",
 			       engine->name,
-			       de, (int)div64_u64(100 * de, dt), dt);
+			       (int)div64_u64(100 * busy_ticks, total_ticks), dt);
 			GEM_TRACE_DUMP();
 			err = -EINVAL;
 			goto end;
@@ -335,7 +335,7 @@ static int live_engine_busy_stats(void *arg)
 		}
 		i915_request_add(rq);
 
-		busyness = intel_engine_get_busy_time(engine, &dummy);
+		busyness = intel_engine_get_busy_ticks(engine, 0);
 		if (!igt_wait_for_spinner(&spin, rq)) {
 			intel_gt_set_wedged(engine->gt);
 			err = -ETIME;
@@ -350,19 +350,19 @@ static int live_engine_busy_stats(void *arg)
 
 		ENGINE_TRACE(engine, "measuring busy time\n");
 		preempt_disable();
-		de = intel_engine_get_busy_time(engine, &t[0]);
-		/* FIXME: v2 busyness is currently very coarse sampling */
-		if (intel_guc_busyness_type(gt) == 2)
-			mdelay(2000);
-		else
-			mdelay(10);
-		de = ktime_sub(intel_engine_get_busy_time(engine, &t[1]), de);
+		busy_ticks =  intel_engine_get_busy_ticks(engine, 0);
+		total_ticks = intel_engine_total_active_ticks(engine, 0);
+		dt = ktime_get();
+		mdelay(2000);
+		dt = ktime_to_ms(ktime_get() - dt);
+		busy_ticks = intel_engine_get_busy_ticks(engine, 0) - busy_ticks;
+		total_ticks = intel_engine_total_active_ticks(engine, 0) - total_ticks;
 		preempt_enable();
-		dt = ktime_sub(t[1], t[0]);
-		if (100 * de < 95 * dt || 95 * de > 100 * dt) {
-			gt_err(gt, "%s: reported %lldns [%d%%] busyness while spinning [for %lldns]\n",
+
+		if (100 * busy_ticks < 95 * total_ticks || 95 * busy_ticks > 100 * total_ticks) {
+			gt_err(gt, "%s: reported [%d%%] busyness while spinning [for %lldns]\n",
 			       engine->name,
-			       de, (int)div64_u64(100 * de, dt), dt);
+			       (int)div64_u64(100 * busy_ticks, total_ticks), dt);
 			GEM_TRACE_DUMP();
 			err = -EINVAL;
 			goto end;

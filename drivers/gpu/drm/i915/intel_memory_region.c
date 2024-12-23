@@ -176,6 +176,7 @@ intel_memory_region_free_pages(struct intel_memory_region *mem,
 		if (dirty && __i915_buddy_block_is_clear(block))
 			i915_buddy_block_set_clear(block, false);
 		i915_buddy_mark_free(&mem->mm, block);
+		cond_resched();
 	}
 	INIT_LIST_HEAD(blocks);
 
@@ -348,7 +349,7 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 	if (mem->mm.size) {
 		struct intel_gt *gt = mem->gt;
 
-		if (gt->counters.map) {
+		if (gt->counters.map && *gt->counters.map != -1) {
 			intel_wakeref_t wf;
 
 			i_printf(p, indent, "offload:\n");

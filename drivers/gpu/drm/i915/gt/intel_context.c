@@ -773,7 +773,7 @@ static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t l
 void intel_context_show(struct intel_context *ce, struct drm_printer *p, int indent)
 {
 	bool running = ce->timeline && i915_active_fence_isset(&ce->timeline->last_request);
-	u32 *regs = running ? ce->lrc_reg_state : NULL;
+	u32 *regs = running && *ce->lrc_reg_state != -1 ? ce->lrc_reg_state : NULL;
 	char buf[80] = "[i915]";
 	int i, len;
 
@@ -827,6 +827,16 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 		i_printf(p, indent, "ce->guc.priority: %d [%s]\n", ce->guc_state.prio, buf);
 	}
 
+	i_printf(p, indent, "vm->asid:     0x%x\n", ce->vm->asid);
+	len = 0;
+	buf[0] = '\0';
+	if (i915_vm_page_fault_enabled(ce->vm))
+		len += snprintf(buf + len, sizeof(buf) - len, "pagefaults, ");
+	if (ce->vm->has_scratch)
+		len += snprintf(buf + len, sizeof(buf) - len, "scratch, ");
+	if (len)
+		buf[len - 2] = '\0';
+	i_printf(p, indent, "vm->flags:    0x%08lx [%s]\n", ce->vm->flags, buf);
 	if (has_null_page(ce->vm))
 		i_printf(p, indent, "vm->poison:   NULL PTE\n");
 	else

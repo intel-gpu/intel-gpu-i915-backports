@@ -232,8 +232,11 @@ static inline struct pci_dev *pcie_find_root_port(struct pci_dev *dev)
 #define PCI_IRQ_LEGACY		(1 << 0) /* Allow legacy interrupts */
 #define PCI_IRQ_MSI		(1 << 1) /* Allow MSI interrupts */
 #define PCI_IRQ_MSIX		(1 << 2) /* Allow MSI-X interrupts */
+
+#ifndef BPM_PCI_IRQ_ALL_TYPES_REDEFINED
 #define PCI_IRQ_ALL_TYPES \
 	(PCI_IRQ_LEGACY | PCI_IRQ_MSI | PCI_IRQ_MSIX)
+#endif
 #endif
 
 #if defined(CONFIG_PCI)

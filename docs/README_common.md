@@ -22,12 +22,7 @@ Build Configurations:
  			you installing current one.
   BUILD_CONFIG   : Specify build config variant
 
-		To disable display, pass BUILD_CONFIG=disabledispaly
-			Ex: make <Target> BUILD_CONFIG=disabledisplay
-
-                ##### List of OSVs for which display has been disabled by default ######
-                        SLES15_SP6     SLES15_SP5      SLES15_SP4
-
+		Display support has been disabled by default for all OSVs except Ubuntu OSVs
                 If you want to force enable display, pass BUILD_CONFIG=enabledispaly
                         Ex : make <Target> BUILD_CONFIG=enabledisplay
 

@@ -48,6 +48,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	PACKAGE_NAME=$PKG_NAME
 	PACKAGE_VERSION=$PKG_VER-$REL_NAME
 	AUTOINSTALL="yes"
+	NO_WEAK_MODULES="yes"
 
 	BUILT_MODULE_NAME[0]="dmabuf"
 	BUILT_MODULE_LOCATION[0]="drivers/dma-buf/"

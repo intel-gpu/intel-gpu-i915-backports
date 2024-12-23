@@ -816,14 +816,6 @@ static u32 *emit_breadcrumb(struct i915_request *rq, u32 *cs)
 		*cs++ = i915_request_seqno(rq);
 	}
 
-	/* poison self: detect re-execution */
-	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM) && rq->postfix != rq->infix) {
-		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
-		*cs++ = i915_ggtt_offset(rq->ring->vma) + rq->infix;
-		*cs++ = 0;
-		*cs++ = -1;
-	}
-
 	return cs;
 }
 

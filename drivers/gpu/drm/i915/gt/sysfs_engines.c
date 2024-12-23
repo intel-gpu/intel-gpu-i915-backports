@@ -466,7 +466,7 @@ runtime_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	ktime_t dummy;
 
 	return sprintf(buf, "%llu\n",
-		       ktime_to_ms(intel_engine_get_busy_time(engine, &dummy)));
+		       ktime_to_ms(intel_engine_get_busy_time(engine, 0, &dummy)));
 }
 
 static struct i915_ext_attr runtime_attr = {

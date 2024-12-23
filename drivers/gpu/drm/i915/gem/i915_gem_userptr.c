@@ -4,6 +4,7 @@
  */
 
 #include <linux/hugetlb.h>
+#include <linux/iommu.h>
 #include <linux/mm.h>
 #include <linux/mmu_context.h>
 #include <linux/swap.h>
@@ -69,6 +70,21 @@ struct follow_page_context {
 	unsigned int page_size;
 };
 
+static struct page *__try_get_compound_page(struct page *page)
+{
+	struct page *head = compound_head(page);
+
+	if (unlikely(!page_cache_get_speculative(head)))
+		return NULL;
+
+	if (unlikely(compound_head(page) != head)) {
+		put_page(head);
+		return NULL;
+	}
+
+	return page;
+}
+
 #if IS_ENABLED(CONFIG_ARCH_HAS_PTE_SPECIAL)
 
 static struct page *follow_page_pte(unsigned long address,
@@ -77,14 +93,15 @@ static struct page *follow_page_pte(unsigned long address,
 				    struct follow_page_context *ctx)
 {
 	struct page *page = NULL;
-	unsigned long pfn;
 	pte_t *ptep, pte;
 
 	if (pmd_bad(*pmd))
 		return NULL;
 
 	ptep = pte_offset_map(pmd, address);
-restart:
+	if (unlikely(!ptep))
+		return NULL;
+
 	pte = ptep_get_lockless(ptep);
 	if (!pte_present(pte))
 		goto out;
@@ -97,20 +114,16 @@ restart:
 	if (flags & FOLL_WRITE && !pte_write(pte))
 		goto out;
 
-	pfn = pte_pfn(pte);
-	if (is_zero_pfn(pfn))
-		page = pte_page(pte);
-	else
-		page = pfn_to_page(pfn);
-	if (!try_get_page(page)) {
-		page = NULL;
+	page = __try_get_compound_page(pte_page(pte));
+	if (unlikely(!page)) {
+		page = ERR_PTR(-EAGAIN);
 		goto out;
 	}
 
 	if (unlikely(pte_val(pte) != pte_val(*ptep))) {
 		put_page(page);
-		page = NULL;
-		goto restart;
+		page = ERR_PTR(-EAGAIN);
+		goto out;
 	}
 
 	ctx->page_size = SZ_4K;
@@ -127,13 +140,13 @@ static struct page *follow_page_pmd(pmd_t orig, pmd_t *pmd, unsigned long flags,
 	if (flags & FOLL_WRITE && !pmd_write(orig))
 		return NULL;
 
-	page = pmd_page(orig);
-	if (!try_get_page(page))
-		return NULL;
+	page = __try_get_compound_page(pmd_page(orig));
+	if (unlikely(!page))
+		return ERR_PTR(-EAGAIN);
 
 	if (unlikely(pmd_val(orig) != pmd_val(*pmd))) {
 		put_page(page);
-		return NULL;
+		return ERR_PTR(-EAGAIN);
 	}
 
 	ctx->page_size = SZ_2M;
@@ -315,10 +328,6 @@ static void unpin_sg(struct scatterlist *sg, struct device *dev)
 		if (unlikely(!page))
 			continue;
 
-		if (dev && sg_dma_len(sg))
-			dma_unmap_page_attrs(dev, sg_dma_address(sg), sg_dma_len(sg),
-					     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
-
 		unpin_user_page_range_dirty_lock(page, sg->length >> PAGE_SHIFT, false);
 	}
 }
@@ -429,7 +438,7 @@ static int userptr_work(struct dma_fence_work *base)
 		drm_clflush_sg(&sg_table(sgt));
 
 	dma = obj->base.dev->dev;
-	fence.error = i915_sg_map(sgt, i915_gem_sg_segment_size(obj), dma);
+	fence.error = i915_sg_map(sgt, obj->base.size, i915_gem_sg_segment_size(obj), dma);
 	if (unlikely(fence.error)) {
 err:		unpin_sg(sgt, dma);
 		i915_sg_free_excess(sgt);
@@ -446,23 +455,30 @@ err:		unpin_sg(sgt, dma);
 	return fence.error;
 }
 
-static void put_page_range(struct page *page, int length, int step)
+static void put_page_range(struct page *page, long length, long step)
 {
-	int x;
+	long x;
+
+	x = page_to_phys(page) & (step - 1);
+	page -= x >> PAGE_SHIFT;
+	length += x;
 
 	for (x = 0 ; x < length; x += step)
-		put_page(page + (x >> PAGE_SHIFT));
+		put_page(nth_page(page, x >> PAGE_SHIFT));
 }
 
 static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 {
 	struct scatterlist *sg = sgt, *chain = sgt + SG_NUM_INLINE - 1;
 	struct device *dev = obj->base.dev->dev;
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	struct mm_struct *mm = obj->userptr.mm;
 	unsigned long addr = obj->userptr.ptr;
 	unsigned long end = addr + obj->base.size;
 	struct follow_page_context ctx = {};
+	struct scatterlist *map = NULL;
 	unsigned long phys = -1, flags;
+	unsigned long iova, mapped;
 
 	sg_init_inline(sgt);
 	sgt->length = 0;
@@ -479,9 +495,26 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 		unsigned long len;
 		struct page *page;
 
-		page = follow_page_mask(mm, addr, flags, &ctx);
+		rcu_read_lock();
+		do
+			page = follow_page_mask(mm, addr, flags, &ctx);
+		while (unlikely(page == ERR_PTR(-EAGAIN)));
+		rcu_read_unlock();
 		if (!page)
 			break;
+
+		if (!map && domain) {
+			iova = __i915_iommu_alloc(obj->base.size, i915_dma_limit(dev), domain);
+			if (IS_ERR_VALUE(iova)) {
+				put_page(page);
+				return iova;
+			}
+
+			map = sgt;
+			sg_dma_address(map) = iova;
+			sg_dma_len(map) = 0;
+			mapped = 0;
+		}
 
 		len = addr & (ctx.page_size - 1);
 		page += len >> PAGE_SHIFT;
@@ -491,19 +524,27 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 
 		/* Hopefully we can combine together 64K pages */
 		p_phys = page_to_phys(page);
-		if (phys != p_phys || p_phys & (sg->offset - 1) || sg->length >= SZ_2G) {
+		if (phys != p_phys || ctx.page_size != sg->offset || sg->length >= SZ_2G) {
 			if (sg->length) {
 				GEM_BUG_ON(!sg_page(sg));
-				sg_dma_address(sg) =
-					dma_map_page_attrs(dev, sg_page(sg), 0, sg->length,
-							   DMA_BIDIRECTIONAL,
-							   DMA_ATTR_SKIP_CPU_SYNC |
-							   DMA_ATTR_WEAK_ORDERING |
-							   DMA_ATTR_NO_KERNEL_MAPPING |
-							   DMA_ATTR_NO_WARN);
-				if (dma_mapping_error(dev, sg_dma_address(sg)))
-					break;
-				sg_dma_len(sg) = sg->length;
+				if (!domain) {
+					sg_dma_address(sg) = __sg_phys(sg);
+					sg_dma_len(sg) = sg->length;
+				} else {
+					if (sg_dma_len(map) > UINT_MAX - sg->length) {
+						map = __sg_next(map);
+						sg_dma_address(map) = iova + mapped;
+						sg_dma_len(map) = 0;
+					}
+
+					if (__i915_iommu_map(domain, iova + mapped,
+							     __sg_phys(sg), sg->length,
+							     IOMMU_READ | IOMMU_WRITE, GFP_KERNEL,
+							     &mapped))
+						break;
+
+					sg_dma_len(map) += sg->length;
+				}
 
 				if (sg == chain) {
 					unsigned int x;
@@ -530,7 +571,6 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 			sg->page_link = (unsigned long)page;
 			sg->offset = ctx.page_size;
 			sg->length = 0;
-			sg_dma_len(sg) = 0;
 			sg_count(sgt)++;
 			GEM_BUG_ON(sg_count(sgt) > sg_capacity(sgt));
 
@@ -540,18 +580,32 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 		phys += len;
 		addr += len;
 		if (addr == end) {
-			sg_dma_address(sg) =
-				dma_map_page_attrs(dev, sg_page(sg), 0, sg->length,
-						   DMA_BIDIRECTIONAL,
-						   DMA_ATTR_SKIP_CPU_SYNC |
-						   DMA_ATTR_WEAK_ORDERING |
-						   DMA_ATTR_NO_KERNEL_MAPPING |
-						   DMA_ATTR_NO_WARN);
-			if (dma_mapping_error(dev, sg_dma_address(sg)))
-				break;
+			if (!domain) {
+				sg_dma_address(sg) = __sg_phys(sg);
+				sg_dma_len(sg) = sg->length;
+			} else {
+				if (sg_dma_len(map) > UINT_MAX - sg->length) {
+					map = __sg_next(map);
+					sg_dma_address(map) = iova + mapped;
+					sg_dma_len(map) = 0;
+				}
 
-			sg_dma_len(sg) = sg->length;
+				if (__i915_iommu_map(domain, iova + mapped,
+						     __sg_phys(sg), sg->length,
+						     IOMMU_READ | IOMMU_WRITE, GFP_KERNEL,
+						     &mapped))
+					break;
+
+				GEM_BUG_ON(mapped != obj->base.size);
+				sg_dma_len(map) += sg->length;
+				if (map != sg)
+					sg_dma_len(__sg_next(map)) = 0; /* iommu terminator */
+			}
 			sg_mark_end(sg);
+
+			if (domain && domain->ops->iotlb_sync_map)
+				domain->ops->iotlb_sync_map(domain, iova, mapped);
+
 			GEM_BUG_ON(__sg_total_length(sgt, false) != obj->base.size);
 			GEM_BUG_ON(__sg_total_length(sgt, true) != obj->base.size);
 			__set_bit(I915_BO_FAST_GUP_BIT, &obj->flags);
@@ -561,14 +615,15 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 
 	if (unlikely(sg_count(sgt))) {
 		sg_mark_end(sg);
-		for (sg = sgt; sg; sg = __sg_next(sg)) {
-			if (sg_dma_len(sg))
-				dma_unmap_page_attrs(dev, sg_dma_address(sg), sg_dma_len(sg),
-						     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
 
+		if (map)
+			__i915_iommu_free(iova, obj->base.size, mapped, domain);
+
+		for (sg = sgt; sg; sg = __sg_next(sg))
 			put_page_range(sg_page(sg), sg->length, sg->offset);
-		}
+
 		i915_sg_free_excess(sgt);
+		sg_dma_len(sgt) = 0;
 	}
 
 	return -ERESTARTSYS; /* retry from kworker */
@@ -667,6 +722,7 @@ static int
 i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 			   struct scatterlist *pages)
 {
+	struct iommu_domain *domain;
 	struct scatterlist *sg;
 	bool dirty, gup;
 
@@ -683,6 +739,10 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 	 */
 	dirty = !i915_gem_object_is_readonly(obj);
 
+	domain = iommu_get_domain_for_dev(obj->base.dev->dev);
+	if (domain && sg_dma_len(pages))
+		__i915_iommu_free(sg_dma_address(pages), obj->base.size, obj->base.size, domain);
+
 	gup = __test_and_clear_bit(I915_BO_FAST_GUP_BIT, &obj->flags);
 	for (sg = pages; sg; sg = __sg_next(sg)) {
 		struct page *page;
@@ -692,10 +752,6 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 			break;
 
 		GEM_BUG_ON(!sg->length);
-
-		if (sg_dma_len(sg))
-			dma_unmap_page_attrs(obj->base.dev->dev, sg_dma_address(sg), sg_dma_len(sg),
-					     DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
 
 		if (gup) {
 			if (dirty && !PageDirty(page))

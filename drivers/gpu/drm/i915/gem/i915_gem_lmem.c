@@ -1112,7 +1112,7 @@ swap_blt(struct intel_context *ce,
 				err = emit_pte(rq, &it_smem,
 					       w4K.pd_offset, w4K.pte_window,
 					       encode, length >> shift,
-					       true, &count);
+					       w2M.pte_end, &count);
 				GEM_BUG_ON(count << shift > length);
 				length = count << shift;
 
@@ -1986,10 +1986,10 @@ small_sync_clear(const struct drm_i915_gem_object *obj,
 
 	if (!(flags & I915_BO_SYNC_HINT) && intel_context_is_active(ce))
 		/* Assume warm exec latency ~20us and WC bw of ~5-20GiB/s: 256KiB */
-		return obj->base.size <= max_t(size_t, SZ_256K, chunk_sz >> 8);
+		return obj->base.size <= max_t(size_t, SZ_512K, chunk_sz >> 8);
 	else
 		/* Assume cold exec + sync latency ~400us and WC bw of ~5-20GiB/s: 2MiB */
-		return obj->base.size < min_t(size_t, SZ_2M, chunk_sz >> 4);
+		return obj->base.size < min_t(size_t, SZ_4M, chunk_sz >> 4);
 }
 
 static inline bool
@@ -2414,7 +2414,7 @@ start_timestamp:
 			err = emit_pte(rq, &it_smem,
 				       w4K.pd_offset, w4K.pte_window,
 				       encode, step >> shift,
-				       true, &count);
+				       w2M.pte_end, &count);
 			GEM_BUG_ON(count << shift > step);
 			length = count << shift;
 

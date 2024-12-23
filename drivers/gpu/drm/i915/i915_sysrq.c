@@ -20,6 +20,7 @@
 #include "gt/intel_tlb.h"
 
 #include "i915_driver.h"
+#include "i915_drm_client.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "i915_request.h"
@@ -178,6 +179,11 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 		return;
 	}
 
+	if (intel_uncore_read(gt->uncore, SOFTWARE_FLAGS_SPR33) == -1) {
+		i_printf(p, indent, "GT%d: dead\n", gt->info.id);
+		return;
+	}
+
 	i_printf(p, indent, "GT%d: awake: %s [%d], %llums, mask: %x\n",
 		 gt->info.id,
 		 str_yes_no(intel_gt_pm_is_awake(gt)),
@@ -274,6 +280,10 @@ static void pci_show(struct pci_dev *pdev, struct drm_printer *p, int indent)
 	enum pcie_link_width width;
 	u32 bw;
 
+	pci_read_config_dword(pdev, PCI_COMMAND, &bw);
+	if (bw == -1)
+		return;
+
 	bw = pcie_bandwidth_available(pdev, NULL, &speed, &width) >> 3;
 	i_printf(p, indent, "PCIe: { speed: %s, width: %d, bandwidth: %d MiB/s }\n",
 		 pci_speed_string(speed), width, bw);
@@ -341,6 +351,7 @@ void i915_show(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 	show_rpm(i915, p, indent);
 	show_gts(i915, p, indent);
 	show_gpu_mem(i915, p, indent);
+	i915_drm_clients_show(&i915->clients, p, indent);
 }
 
 static void show_gpu(void *data)

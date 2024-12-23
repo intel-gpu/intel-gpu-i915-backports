@@ -218,6 +218,7 @@ struct intel_gt {
 		struct wait_queue_head wq;
 		u32 next_seqno;
 		u32 seqno;
+		struct intel_gt_stats_irq_time irq;
 	} tlb;
 
 	struct i915_wa_list wa_list;

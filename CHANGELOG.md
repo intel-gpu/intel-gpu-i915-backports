@@ -1,4 +1,27 @@
 # ChangeLog
+## Release I915_24WW52.1_1057.13_24.7.9_241015.10
+* Implemented GPU error capture during the splitting of cleared backing stores.
+* Initiated earlier shrinking of all system memory objects to mark pages as dirty and preserve their contents
+  across hibernation.
+* Resolved an issue where the Guided Matrix Multiplication Race Condition Sample hang instead of crashing due
+  to driver errors.
+* Prevented eviction of overlapping VM_BINDs to comply with ppGTT rules.
+* Fixed HBM diagnostics logging on Intel Data Center GPU Max Series.
+* Started tracking the duration of user stalls during TLB invalidation.
+* Optimized the userptr task placement for improved task-local performance in LAMMPS benchmarks.
+* Adjusted the starting point of put_page_range to align with the compound_head, ensuring correct iteration across
+  adjacent compound pages.
+* Fixed a performance issue in addr_range and id sysfs calls by optimizing kobject attribute handling on RHEL8.x
+  systems.
+* Improved handling of engine reset failures to prevent deadlocks during GT resets and G2H notifications.
+* Started storing the current UID for core dumps and display active clients in sysrq-G.
+* Started including the page fault address for CAT errors.
+* Restored RPM ownership to core to fix device runtime-pm drop in PSB builds.
+* Fixed issues causing performance drops.
+* Improved error resilience for iommu mappings.
+* Ensured ENABLE_PG is cleared on unbind/unload to prevent reset failures in power-saving mode.
+* Fixed an issue involving the uninitialized use of the domain variable.
+
 ## Release I915_24WW44.4_1032.21_24.6.12_240823.13
 * Disabled per-CPU page table allocations, enforcing allocation on each operation as a baseline.
 * Fixed an issue where HPL failed on Intel® Data Center GPU Max Series.

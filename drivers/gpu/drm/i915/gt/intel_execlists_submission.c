@@ -3346,6 +3346,7 @@ static void execlists_release(struct intel_engine_cs *engine)
 }
 
 static ktime_t execlists_engine_busyness(struct intel_engine_cs *engine,
+					 unsigned int vf_id,
 					 ktime_t *now)
 {
 	struct intel_engine_execlists_stats *stats = &engine->stats.execlists;

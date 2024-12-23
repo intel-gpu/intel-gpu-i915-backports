@@ -270,13 +270,35 @@ stack_pop(struct i915_request *rq,
 static void ipi_priority(struct i915_request *rq, int prio)
 {
 	int old = READ_ONCE(rq->sched.ipi_priority);
+	struct i915_dependency *p;
 
-	do {
-		if (prio <= old)
+	/* Update priority in place if no PI required */
+	for_each_signaler(p, rq) {
+		struct i915_request *s =
+			container_of(p->signaler, typeof(*s), sched);
+
+		if (rq_prio(s) >= prio)
+			continue;
+
+		if (i915_request_signaled(s))
+			continue;
+
+		do {
+			if (prio <= old)
+				return;
+		} while (!try_cmpxchg(&rq->sched.ipi_priority, &old, prio));
+
+		__ipi_add(rq);
+		return;
+	}
+
+	while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio))
+		if (old >= prio)
 			return;
-	} while (!try_cmpxchg(&rq->sched.ipi_priority, &old, prio));
 
-	__ipi_add(rq);
+	if (i915_request_is_ready(rq) &&
+	    rq->sched_engine->bump_inflight_request_prio)
+		rq->sched_engine->bump_inflight_request_prio(rq, prio);
 }
 
 static void __i915_request_set_priority(struct i915_request *rq, int prio)

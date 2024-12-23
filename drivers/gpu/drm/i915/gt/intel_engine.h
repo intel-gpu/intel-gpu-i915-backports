@@ -238,8 +238,11 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		       int indent);
 
 ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine,
+				   unsigned int vf_id,
 				   ktime_t *now);
+
 u64 intel_engine_get_busy_ticks(struct intel_engine_cs *engine, unsigned int vf_id);
+u64 intel_engine_total_active_ticks(struct intel_engine_cs *engine, unsigned int vf_id);
 
 struct i915_request *
 intel_engine_find_active_request(struct intel_engine_cs *engine);

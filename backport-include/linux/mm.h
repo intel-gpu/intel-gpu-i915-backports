@@ -17,7 +17,70 @@ void unpin_user_page_range_dirty_lock(struct page *page, unsigned long npages,
 #endif
 
 #ifdef BPM_PTE_OFFSET_MAP_NOT_PRESENT
-#define pte_offset_map __pte_map
+
+#ifdef BPM_BAD_UNLOCK_PTE_OFFSET_MAP
+#if defined(CONFIG_GUP_GET_PXX_LOW_HIGH) && \
+        (defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RCU))
+
+static unsigned long pmdp_get_lockless_start(void)
+{
+	unsigned long irqflags;
+
+	local_irq_save(irqflags);
+	return irqflags;
+}
+static void pmdp_get_lockless_end(unsigned long irqflags)
+{
+	local_irq_restore(irqflags);
+}
+#else
+static unsigned long pmdp_get_lockless_start(void) { return 0; }
+static void pmdp_get_lockless_end(unsigned long irqflags) { }
+#endif
+#endif
+
+static inline void i915bkpt_pmd_clear_bad(pmd_t *pmd)
+{
+	pmd_ERROR(*pmd);
+	pmd_clear(pmd);
+}
+
+#undef pte_offset_map
+#define pte_offset_map LINUX_I915_BACKPORT(pte_offset_map)
+
+static inline pte_t *pte_offset_map(pmd_t *pmd, unsigned long addr)
+{
+	pmd_t pmdval;
+	pmd_t *pmdvalp = NULL;
+
+#ifdef BPM_BAD_UNLOCK_PTE_OFFSET_MAP
+	unsigned long irqflags;
+
+	rcu_read_lock();
+	irqflags = pmdp_get_lockless_start();
+#endif
+	pmdval = pmdp_get_lockless(pmd);
+#ifdef BPM_BAD_UNLOCK_PTE_OFFSET_MAP
+	pmdp_get_lockless_end(irqflags);
+#endif
+
+	if (pmdvalp)
+		*pmdvalp = pmdval;
+	if (unlikely(pmd_none(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_trans_huge(pmdval) || pmd_devmap(pmdval)))
+		goto nomap;
+	if (unlikely(pmd_bad(pmdval))) {
+		i915bkpt_pmd_clear_bad(pmd);
+		goto nomap;
+	}
+	return __pte_map(&pmdval, addr);
+nomap:
+#ifdef BPM_BAD_UNLOCK_PTE_OFFSET_MAP
+	rcu_read_unlock();
+#endif
+	return NULL;
+}
 #endif
 
 #ifdef BPM_CANCEL_DIRTY_PAGE_NOT_PRESENT

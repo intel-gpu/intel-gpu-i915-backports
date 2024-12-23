@@ -41,6 +41,7 @@ struct i915_drm_client_name {
 	struct rcu_head rcu;
 	struct i915_drm_client *client;
 	struct pid *pid;
+	uid_t uid;
 	char name[];
 };
 
@@ -160,6 +161,13 @@ i915_drm_client_pid(const struct i915_drm_client *client)
 	return __i915_drm_client_name(client)->pid;
 }
 
+static inline uid_t
+i915_drm_client_uid(const struct i915_drm_client *client)
+{
+	return __i915_drm_client_name(client)->uid;
+}
+
+void i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, int indent);
 void i915_drm_clients_fini(struct i915_drm_clients *clients);
 
 #endif /* !__I915_DRM_CLIENT_H__ */

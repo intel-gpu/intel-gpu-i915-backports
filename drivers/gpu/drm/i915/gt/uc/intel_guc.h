@@ -35,6 +35,70 @@ enum {
 };
 
 /**
+ * struct activity_engine - Engine specific activity data
+ *
+ * This contains the engine specific activity data and snapshot of
+ * the data from GuC
+ */
+struct activity_engine {
+	/** @last_cpu_ts: cpu timestamp in nsec of previous sample */
+	u64 last_cpu_ts;
+
+	/** @metadata: snapshot of engine activity metadata */
+	struct guc_engine_activity_metadata metadata;
+
+	/** @counter: snapshot of engine activity counter */
+	struct guc_engine_activity counter;
+
+	/** @running: true if engine is running some work */
+	bool running;
+
+	/** @total: total engine activity */
+	u64 total;
+
+	/** @active: current activity */
+	u64 active;
+
+	/** @quanta: total quanta used on HW */
+	u64 quanta;
+
+	/** @quanta_ns: total quanta_ns used on HW */
+	u64 quanta_ns;
+
+	/**
+	 * @quanta_remainder_ns: remainder when the CPU time is scaled as per the
+	 * quanta_ratio. This remainder is used in subsequent quanta
+	 * calculations.
+	 */
+	u64 quanta_remainder_ns;
+};
+
+/**
+ * struct activity_group - Busyness data for all engines
+ */
+struct activity_group {
+	/** @engine: engine specific activity data */
+	struct activity_engine engine[GUC_MAX_ENGINE_CLASSES][GUC_MAX_INSTANCES_PER_CLASS];
+};
+
+/**
+ * struct activity_buffer - Activity buffers
+ *
+ * This contains pointers to buffers containing the metadata and activity data
+ */
+struct activity_buffer {
+	/** @activity_vma: object allocated to hold the activity data */
+	struct i915_vma *activity_vma;
+	/** @activity_map: access object for @activity_vma */
+	struct iosys_map activity_map;
+
+	/** @metadata_vma: object allocated to hold busyness metadata */
+	struct i915_vma *metadata_vma;
+	/** @metadata_map: access object for @metadata_vma */
+	struct iosys_map metadata_map;
+};
+
+/**
  * struct intel_guc - Top level structure of GuC.
  *
  * It handles firmware loading and manages client pool. intel_guc owns an
@@ -144,6 +208,16 @@ struct intel_guc {
 		 */
 		struct work_struct destroyed_worker;
 		/**
+		 * @submission_state.reset_fail_worker: worker to trigger
+		 * a GT reset after an engine reset fails
+		 */
+		struct work_struct reset_fail_worker;
+		/**
+		 * @submission_state.reset_fail_mask: mask of engines that
+		 * failed to reset
+		 */
+		intel_engine_mask_t reset_fail_mask;
+		/**
 		 * @sched_disable_delay_ms: schedule disable delay, in ms, for
 		 * contexts
 		 */
@@ -235,10 +309,14 @@ struct intel_guc {
 	struct mutex send_mutex;
 
 	/**
+	 * @gpm_timestamp_shift: Right shift value for the gpm timestamp
+	 */
+	u32 gpm_timestamp_shift;
+
+	/**
 	 * @busy: Data used by the different versions of engine busyness implementations.
 	 */
 	struct {
-
 		/**
 		 * @lock: Lock protecting the below fields and the engine stats.
 		 */
@@ -250,48 +328,60 @@ struct intel_guc {
 		 */
 		struct delayed_work work;
 
-		union {
+		/**
+		 * @v1: Data used by v1 engine busyness implementation. Mostly a copy
+		 * of the GT timestamp extended to 64 bits and the worker for maintaining it.
+		 */
+		struct {
 			/**
-			 * @v1: Data used by v1 engine busyness implementation. Mostly a copy
-			 * of the GT timestamp extended to 64 bits and the worker for maintaining it.
+			 * @gt_stamp: 64 bit extended value of the GT timestamp.
 			 */
-			struct {
-				/**
-				 * @gt_stamp: 64 bit extended value of the GT timestamp.
-				 */
-				u64 gt_stamp;
-
-				/**
-				 * @ping_delay: Period for polling the GT timestamp for
-				 * overflow.
-				 */
-				unsigned long ping_delay;
-
-				/**
-				 * @shift: Right shift value for the gpm timestamp
-				 */
-				u32 shift;
-
-				/**
-				 * @last_stat_jiffies: jiffies at last actual stats collection time
-				 * We use this timestamp to ensure we don't oversample the
-				 * stats because runtime power management events can trigger
-				 * stats collection at much higher rates than required.
-				 */
-				unsigned long last_stat_jiffies;
-			} v1;
+			u64 gt_stamp;
 
 			/**
-			 * @v2: Data used by v2 engine busyness implementation - a memory object
-			 * that is filled in by the GuC and read by the driver.
+			 * @ping_delay: Period for polling the GT timestamp for
+			 * overflow.
 			 */
-			struct {
-				/** @device_vma: object allocated to hold the device level busyness data */
-				struct i915_vma *device_vma;
-				/** @device_map: access object for @device_vma */
-				struct iosys_map device_map;
-			} v2;
-		};
+			unsigned long ping_delay;
+
+			/**
+			 * @last_stat_jiffies: jiffies at last actual stats collection time
+			 * We use this timestamp to ensure we don't oversample the
+			 * stats because runtime power management events can trigger
+			 * stats collection at much higher rates than required.
+			 */
+			unsigned long last_stat_jiffies;
+		} v1;
+
+		/**
+		 * @v2: Data used by v2 engine busyness implementation - a memory object
+		 * that is filled in by the GuC and read by the driver.
+		 */
+		struct {
+			/** @device_vma: object allocated to hold the device level busyness data */
+			struct i915_vma *device_vma;
+			/** @device_map: access object for @device_vma */
+			struct iosys_map device_map;
+		} v2;
+
+		/**
+		 * @v3: Data used by v3 engine busyness implementation
+		 */
+		struct {
+			/**
+			 * @ag: array with entries to hold the busyness data
+			 * of global, PF and VF's
+			 */
+			struct activity_group *ag;
+			/** @num_ags: number of activity groups */
+			u32 num_ags;
+			/** @device: activity buffer object for global busyness */
+			struct activity_buffer device;
+			/** @function: activity buffer object for per-function activity */
+			struct activity_buffer function;
+			/* @num_functions: number of functions */
+			u32 num_functions;
+		} v3;
 	} busy;
 
 	/**
@@ -583,8 +673,7 @@ void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p);
 int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc);
 
 void intel_guc_init_fake_interrupts(struct intel_guc *guc);
-
-/* FIXME: External entities should not need to know */
-int intel_guc_busyness_type(struct intel_gt *gt);
-
+int intel_guc_enable_activity_stats_functions(struct intel_guc *guc, int num_vfs);
+int intel_guc_disable_activity_stats_functions(struct intel_guc *guc);
+int intel_guc_reset_activity_stats_functions(struct intel_guc *guc);
 #endif

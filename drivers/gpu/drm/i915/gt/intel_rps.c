@@ -81,7 +81,7 @@ static void rps_timer(struct timer_list *t)
 		s64 busy;
 		int i;
 
-		dt = intel_engine_get_busy_time(engine, &timestamp);
+		dt = intel_engine_get_busy_time(engine, 0, &timestamp);
 		last = engine->stats.rps;
 		engine->stats.rps = dt;
 

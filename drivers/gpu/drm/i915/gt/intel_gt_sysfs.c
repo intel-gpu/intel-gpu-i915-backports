@@ -20,52 +20,6 @@
 #include "intel_rc6.h"
 #include "intel_sysfs_mem_health.h"
 
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
-#else
-typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
-#endif
-
-struct i915_ext_attr {
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	struct kobj_attribute attr;
-#else
-	struct device_attribute attr;
-#endif
-	show i915_show;
-};
-
-static ssize_t
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-#else
-i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
-#endif
-{
-	ssize_t value;
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	struct device *dev = kobj_to_dev(kobj);
-#endif
-	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
-	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
-
-	pvc_wa_disallow_rc6(gt->i915);
-
-#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
-	value = ea->i915_show(kobj, attr, buf);
-#else
-	value = ea->i915_show(dev, attr, buf);
-#endif
-
-	pvc_wa_allow_rc6(gt->i915);
-
-	return value;
-}
-
-#define I915_DEVICE_ATTR_RO(_name, _show) \
-	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), _show}
-
 struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 					    const char *name)
 {
@@ -110,11 +64,15 @@ addr_range_show(struct device *kdev, struct device_attribute *attr, char *buf)
 	return sysfs_emit(buf, "%pa\n", &gt->lmem->actual_physical_mem);
 }
 
-static I915_DEVICE_ATTR_RO(addr_range, addr_range_show);
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static KOBJ_ATTR_RO(addr_range);
+#else
+static DEVICE_ATTR_RO(addr_range);
+#endif
 
 static const struct attribute *addr_range_attrs[] = {
 	/* TODO: Report any other HBM Sparing sysfs per gt? */
-	&dev_attr_addr_range.attr.attr,
+	&dev_attr_addr_range.attr,
 	NULL
 };
 
@@ -183,7 +141,11 @@ static ssize_t id_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", gt->info.id);
 }
 
-static I915_DEVICE_ATTR_RO(id, id_show);
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static KOBJ_ATTR_RO(id);
+#else
+static DEVICE_ATTR_RO(id);
+#endif
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t pagefault_invalid_show(struct kobject *kobj,
@@ -359,7 +321,7 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 		return;
 	}
 
-	if (sysfs_create_file(dir, &dev_attr_id.attr.attr))
+	if (sysfs_create_file(dir, &dev_attr_id.attr))
 		gt_warn(gt, "failed to create sysfs: %s\n", "info");
 
 	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915) &&

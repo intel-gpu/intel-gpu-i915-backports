@@ -69,6 +69,7 @@ void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_i
 	char name[TASK_COMM_LEN + 32];
 	struct i915_gem_context *ctx;
 	struct intel_context *ce;
+	char buf[80] = "";
 
 	rcu_read_lock();
 	ctx = NULL;
@@ -78,6 +79,9 @@ void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_i
 	if (ctx) {
 		snprintf(name, sizeof(name),
 			 "%s (%s)", ctx->name, ce->engine->name);
+		if (test_bit(1, (unsigned long *)&ctx->fault.addr))
+			snprintf(buf, sizeof(buf), ", following user pagefault @ 0x%llx", ctx->fault.addr & ~3);
+
 		atomic_inc(&ctx->guilty_count);
 		intel_context_ban(ce, NULL);
 	}
@@ -87,8 +91,8 @@ void intel_gt_pagefault_process_cat_error_msg(struct intel_gt *gt, u32 guc_ctx_i
 
 	trace_intel_gt_cat_error(gt, name);
 	dev_notice(gt->i915->drm.dev,
-		   "Catastrophic memory error in context %s\n",
-		   name);
+		   "Catastrophic memory error in context %s%s\n",
+		   name, buf);
 }
 
 static u64 fault_va(u32 fault_data1, u32 fault_data0)

@@ -1129,3 +1129,42 @@ int intel_guc_engine_usage_record_map_v2(struct intel_guc *guc,
 
 	return 0;
 }
+
+struct iosys_map intel_guc_engine_activity_map(struct intel_guc *guc,
+					       struct intel_engine_cs *engine,
+					       u32 idx)
+{
+	u8 guc_class = engine_class_to_guc_class(engine->class);
+	u32 instance = ilog2(engine->logical_mask);
+	struct activity_buffer *ab;
+	size_t offset;
+
+	if (idx) {
+		ab = &guc->busy.v3.function;
+		offset = sizeof(struct guc_engine_activity_data) * (idx - 1);
+	} else {
+		ab = &guc->busy.v3.device;
+		offset = 0;
+	}
+
+	offset += offsetof(struct guc_engine_activity_data,
+			   engine_activity[guc_class][instance]);
+
+	return IOSYS_MAP_INIT_OFFSET(&ab->activity_map, offset);
+}
+
+struct iosys_map intel_guc_engine_metadata_map(struct intel_guc *guc, u32 idx)
+{
+	struct activity_buffer *ab;
+	size_t offset;
+
+	if (idx) {
+		ab = &guc->busy.v3.function;
+		offset = sizeof(struct guc_engine_activity_metadata) * (idx - 1);
+	} else {
+		ab = &guc->busy.v3.device;
+		offset = 0;
+	}
+
+	return IOSYS_MAP_INIT_OFFSET(&ab->metadata_map, offset);
+}

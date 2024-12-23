@@ -421,13 +421,15 @@ void intel_runtime_pm_enable(struct intel_runtime_pm *rpm)
 void intel_runtime_pm_disable(struct intel_runtime_pm *rpm)
 {
 	struct device *kdev = to_kdev(rpm);
+	int ret;
 
 	if (!rpm->available)
 		return;
 
 	/* Transfer rpm ownership back to core */
-	INTEL_RUNTIME_PM_WARN(rpm, pm_runtime_get_sync(kdev) < 0,
-			      "Failed to pass rpm ownership back to core\n");
+	ret = pm_runtime_get_sync(kdev);
+	INTEL_RUNTIME_PM_WARN(rpm, ret < 0,
+			      "Failed to pass rpm ownership back to core, error %d\n", ret);
 
 	pm_runtime_dont_use_autosuspend(kdev);
 }

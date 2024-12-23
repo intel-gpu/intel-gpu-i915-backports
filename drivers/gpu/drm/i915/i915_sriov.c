@@ -826,6 +826,15 @@ int i915_sriov_pf_enable_vfs(struct drm_i915_private *i915, int num_vfs)
 	i915_sriov_sysfs_update_links(i915, true);
 
 	dev_info(dev, "Enabled %u VFs\n", num_vfs);
+
+	for_each_gt(gt, i915, id) {
+		err = intel_guc_enable_activity_stats_functions(&gt->uc.guc, num_vfs);
+		if (err)
+			drm_warn(&i915->drm,
+				 "Failed to enable activity function stats for %d\n",
+				 id);
+	}
+
 	return num_vfs;
 
 fail_guc:
@@ -916,6 +925,9 @@ int i915_sriov_pf_disable_vfs(struct drm_i915_private *i915)
 
 	if (!num_vfs)
 		return 0;
+
+	for_each_gt(gt, i915, id)
+		intel_guc_disable_activity_stats_functions(&gt->uc.guc);
 
 	i915_sriov_sysfs_update_links(i915, false);
 

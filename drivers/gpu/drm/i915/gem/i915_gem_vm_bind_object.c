@@ -925,6 +925,11 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 	va->start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
 					    va->start);
+	if (range_overflows_t(u64, va->start, va->length, vm->total)) {
+		ret = -EINVAL;
+		goto put_obj;
+	}
+
 	ret = wait_on_unbind(vm, va->start, va->start + va->length);
 	if (ret)
 		goto put_obj;

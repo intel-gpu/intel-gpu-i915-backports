@@ -1108,13 +1108,145 @@ static void scrub_guc_desc_for_outstanding_g2h(struct intel_guc *guc)
 
 static bool busy_type_is_v1(struct intel_guc *guc)
 {
-	if (!guc_to_gt(guc)->i915->params.enable_busy_v2)
-		return true;
-
-	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 3, 1))
+	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 14, 1))
 		return true;
 
 	return false;
+}
+
+static bool busy_type_is_v2(struct intel_guc *guc)
+{
+	/* Must not call this before the submit version is determined! */
+	GEM_BUG_ON(guc->submission_version.major == 0);
+
+	/*
+	 * GuC Busyness v2 is deprecated. Adding this function to allow
+	 * separation of v1 and v2. This enables adding support for V3
+	 * logic easier.
+	 */
+	return false;
+}
+
+static bool busy_type_is_v3(struct intel_guc *guc)
+{
+	/* Must not call this before the submit version is determined! */
+	GEM_BUG_ON(guc->submission_version.major == 0);
+
+	if (IS_SRIOV_VF(guc_to_gt(guc)->i915))
+		return false;
+
+	if (GUC_SUBMIT_VER(guc) >= MAKE_GUC_VER(1, 14, 1))
+		return true;
+
+	return false;
+}
+
+static int guc_busy_v3_alloc_activity_groups(struct intel_guc *guc)
+{
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+	/*
+	 * Two additional activity groups are allocated one for global
+	 * engine busyness and one for PF when SRIOV is enabled
+	 */
+	u32 num_ags = IS_SRIOV_PF(i915) ?
+		      i915_sriov_pf_get_totalvfs(i915) + 2 :
+		      1;
+
+	guc->busy.v3.ag = kmalloc_array(num_ags, sizeof(struct activity_group),
+					GFP_KERNEL);
+	if (!guc->busy.v3.ag)
+		return -ENOMEM;
+
+	memset(guc->busy.v3.ag, 0, num_ags * sizeof(struct activity_group));
+	guc->busy.v3.num_ags = num_ags;
+
+	return 0;
+}
+
+static int guc_busy_v3_alloc_activity_data(struct intel_guc *guc,
+					   struct activity_buffer *ab,
+					   unsigned int count)
+{
+	size_t size = sizeof(struct guc_engine_activity_data) * count;
+	void *ptr;
+	int ret;
+
+	ret = __intel_guc_allocate_and_map_vma(guc, size, false,
+					       &ab->activity_vma, &ptr);
+	if (ret)
+		return ret;
+
+	if (i915_gem_object_is_lmem(ab->activity_vma->obj))
+		iosys_map_set_vaddr_iomem(&ab->activity_map, (void __iomem *)ptr);
+	else
+		iosys_map_set_vaddr(&ab->activity_map, ptr);
+
+	return 0;
+}
+
+static void guc_busy_v3_free_activity_data(struct intel_guc *guc,
+					   struct activity_buffer *ab)
+{
+	if (!ab->activity_vma)
+		return;
+
+	i915_vma_unpin_and_release(&ab->activity_vma, I915_VMA_RELEASE_MAP);
+	iosys_map_clear(&ab->activity_map);
+
+	ab->activity_vma = NULL;
+}
+
+static int guc_busy_v3_alloc_metadata(struct intel_guc *guc,
+				      struct activity_buffer *ab,
+				      unsigned int count)
+{
+	size_t size = sizeof(struct guc_engine_activity_metadata) * count;
+	void *ptr;
+	int ret;
+
+	ret = __intel_guc_allocate_and_map_vma(guc, size, true,
+					       &ab->metadata_vma, &ptr);
+	if (ret)
+		return ret;
+
+	iosys_map_set_vaddr(&ab->metadata_map, ptr);
+
+	return 0;
+}
+
+static void guc_busy_v3_free_metadata(struct intel_guc *guc,
+				      struct activity_buffer *ab)
+{
+	if (!ab->metadata_vma)
+		return;
+
+	i915_vma_unpin_and_release(&ab->metadata_vma, I915_VMA_RELEASE_MAP);
+	iosys_map_clear(&ab->metadata_map);
+
+	ab->metadata_vma = NULL;
+}
+
+static void guc_busy_v3_free_function_array(struct intel_guc *guc)
+{
+	guc_busy_v3_free_activity_data(guc, &guc->busy.v3.function);
+	guc_busy_v3_free_metadata(guc, &guc->busy.v3.function);
+}
+
+static int guc_busy_v3_alloc_function_array(struct intel_guc *guc)
+{
+	int ret;
+
+	ret = guc_busy_v3_alloc_activity_data(guc, &guc->busy.v3.function,
+					      guc->busy.v3.num_functions);
+	if (ret)
+		return ret;
+
+	ret = guc_busy_v3_alloc_metadata(guc, &guc->busy.v3.function,
+					 guc->busy.v3.num_functions);
+	if (ret)
+		guc_busy_v3_free_activity_data(guc, &guc->busy.v3.function);
+
+	return ret;
 }
 
 /*
@@ -1234,7 +1366,7 @@ static void busy_v1_guc_update_engine_gt_clks(struct intel_engine_cs *engine)
 	}
 }
 
-static u32 busy_v1_gpm_timestamp_shift(struct intel_gt *gt)
+static u32 gpm_timestamp_shift(struct intel_gt *gt)
 {
 	intel_wakeref_t wakeref;
 	u32 reg, shift;
@@ -1258,7 +1390,7 @@ static void busy_v1_guc_update_pm_timestamp(struct intel_guc *guc, ktime_t *now)
 
 	gt_stamp_hi = upper_32_bits(guc->busy.v1.gt_stamp);
 	gpm_ts = intel_uncore_read64_2x32(gt->uncore, MISC_STATUS0,
-					  MISC_STATUS1) >> guc->busy.v1.shift;
+					  MISC_STATUS1) >> guc->gpm_timestamp_shift;
 	gt_stamp_lo = lower_32_bits(gpm_ts);
 	if (now)
 		*now = ktime_get();
@@ -1340,12 +1472,12 @@ static u64 __busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine, k
  * gt clocks. The *now parameter is retained to return the cpu time at which the
  * busyness was sampled.
  */
-static ktime_t busy_v1_guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
+static ktime_t busy_v1_guc_engine_busyness(struct intel_engine_cs *engine,
+					   unsigned int vf_id,
+					   ktime_t *now)
 {
 	u64 ticks = __busy_v1_guc_engine_busyness_ticks(engine, now);
-	u64 ns = intel_gt_clock_interval_to_ns(engine->gt, ticks);
-
-	return ns_to_ktime(ns);
+	return intel_gt_clock_interval_to_ns(engine->gt, ticks);
 }
 
 static u64 busy_v1_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
@@ -1563,25 +1695,125 @@ done:
 		*_ticks_gt = ticks_gt;
 }
 
-static ktime_t busy_v2_guc_engine_busyness(struct intel_engine_cs *engine, ktime_t *now)
+static struct activity_engine *to_activity_engine(struct intel_engine_cs *engine, u32 idx)
+{
+	struct intel_guc *guc = &engine->gt->uc.guc;
+	struct activity_group *ag = &guc->busy.v3.ag[idx];
+	u8 guc_class = engine_class_to_guc_class(engine->class);
+	u32 instance = ilog2(engine->logical_mask);
+
+	return &ag->engine[guc_class][instance];
+}
+
+static u64 cpu_ns_to_guc_tsc_tick(ktime_t ns, u32 freq)
+{
+	return mul_u64_u32_div(ns, freq, NSEC_PER_SEC);
+}
+
+static u64 __busy_v3_get_engine_activity(struct intel_guc *guc,
+					 struct intel_engine_cs *engine, u32 idx)
+{
+	struct activity_engine *ae = to_activity_engine(engine, idx);
+	struct guc_engine_activity *cached_counter = &ae->counter;
+	struct guc_engine_activity_metadata *cached_meta = &ae->metadata;
+	struct iosys_map rec_map_activity, rec_map_metadata;
+	struct intel_gt *gt = engine->gt;
+	u32 global_change_num, last_update_tick;
+	u16 change_num, quanta_ratio;
+	u64 numerator, active_ticks, gpm_ts;
+	ktime_t now, cpu_delta;
+
+	rec_map_activity = intel_guc_engine_activity_map(guc, engine, idx);
+	rec_map_metadata = intel_guc_engine_metadata_map(guc, idx);
+
+#define record_read_activity(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_activity, field_)
+#define record_read_metadata(map_, field_) \
+	iosys_map_rd_field(map_, 0, struct guc_engine_activity_metadata, field_)
+
+	global_change_num = record_read_metadata(&rec_map_metadata,
+						 global_change_num);
+
+	/* GuC has not initialized activity data yet, return 0 */
+	if (!global_change_num)
+		goto update;
+
+	if (!cached_meta->guc_tsc_frequency_hz) {
+		cached_meta->guc_tsc_frequency_hz = record_read_metadata(&rec_map_metadata,
+									 guc_tsc_frequency_hz);
+		cached_meta->lag_latency_usec = record_read_metadata(&rec_map_metadata,
+								     lag_latency_usec);
+	}
+
+	if (global_change_num == cached_meta->global_change_num)
+		goto update;
+	else
+		cached_meta->global_change_num = global_change_num;
+
+	change_num = record_read_activity(&rec_map_activity, change_num);
+	if (!change_num)
+		goto update;
+
+	if (change_num == cached_counter->change_num)
+		goto update;
+
+	/* read the engine stats */
+	quanta_ratio = record_read_activity(&rec_map_activity, quanta_ratio);
+	last_update_tick = record_read_activity(&rec_map_activity, last_update_tick);
+	active_ticks = record_read_activity(&rec_map_activity, active_ticks);
+
+	/* activity calculations */
+	ae->running = !!last_update_tick;
+	ae->total += active_ticks - cached_counter->active_ticks;
+	ae->active = 0;
+
+	/* cache the counter */
+	cached_counter->change_num = change_num;
+	cached_counter->quanta_ratio = quanta_ratio;
+	cached_counter->last_update_tick = last_update_tick;
+	cached_counter->active_ticks = active_ticks;
+
+#undef record_read_activity
+#undef record_read_metadata
+
+update:
+	if (ae->running) {
+		gpm_ts = intel_uncore_read64_2x32(gt->uncore, MISC_STATUS0,
+						  MISC_STATUS1) >>
+						  guc->gpm_timestamp_shift;
+		ae->active = lower_32_bits(gpm_ts) - cached_counter->last_update_tick;
+	}
+
+	/* quanta calculations */
+	now = ktime_get();
+	cpu_delta = now - ae->last_cpu_ts;
+	ae->last_cpu_ts = now;
+	numerator = (ae->quanta_remainder_ns + cpu_delta) * cached_counter->quanta_ratio;
+	ae->quanta_ns += numerator / 0x8000;
+	ae->quanta_remainder_ns = numerator % 0x8000;
+	ae->quanta = cpu_ns_to_guc_tsc_tick(ae->quanta_ns, cached_meta->guc_tsc_frequency_hz);
+
+	return ae->total + ae->active;
+}
+
+static ktime_t busy_v2_guc_engine_busyness(struct intel_engine_cs *engine,
+					   unsigned int vf_id,
+					   ktime_t *now)
 {
 	struct intel_gt *gt = engine->gt;
 	struct intel_guc *guc = &gt->uc.guc;
-	u64 ticks_engine;
-	u64 total;
+	u64 ticks;
 
-	/* Completely fake time stamp :( */
-	if (now) {
-		guc_dbg(guc, "Warning, deprecated interface. Kernel time stamp is not accurate.\n");
+	if (now)
 		*now = ktime_get();
-	}
 
 	__busy_v2_get_engine_usage_record(guc, engine, GUC_BUSYNESS_VF_GLOBAL,
-					  &ticks_engine, NULL, NULL);
+					  &ticks, NULL, NULL);
 
-	total = intel_gt_clock_interval_to_ns(gt, ticks_engine);
+	if (now)
+		*now += (ktime_get() - *now) >> 1;
 
-	return ns_to_ktime(total);
+	return intel_gt_clock_interval_to_ns(gt, ticks);
 }
 
 static u32 pmu_vfid_to_guc_vfid(unsigned int vf_id)
@@ -1614,11 +1846,59 @@ static u64 busy_v2_guc_engine_busyness_ticks(struct intel_engine_cs *engine,
 	return ticks_engine;
 }
 
-static u64 busy_v1_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned int vf_id)
+static bool busy_v3_vf_id_valid(struct drm_i915_private *i915, unsigned int vf_id)
 {
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
+	if (!IS_SRIOV(i915)) {
+		if (vf_id)
+			return false;
+	} else if (vf_id >= (2 + pci_num_vf(pdev))) {
+		return false;
+	}
+
+	return true;
+}
+
+static u64 busy_v3_guc_engine_activity_ticks(struct intel_engine_cs *engine,
+					     unsigned int vf_id)
+{
+	struct intel_guc *guc = &engine->gt->uc.guc;
+	struct drm_i915_private *i915 = engine->gt->i915;
+
+	if (!busy_v3_vf_id_valid(i915, vf_id))
+		return 0;
+
+	return __busy_v3_get_engine_activity(guc, engine, vf_id);
+}
+
+static ktime_t busy_v3_guc_engine_busyness(struct intel_engine_cs *engine,
+					   unsigned int vf_id,
+					   ktime_t *now)
+{
+	u64 ticks;
+
+	if (now)
+		*now = ktime_get();
+
+	ticks = busy_v3_guc_engine_activity_ticks(engine, vf_id);
+
+	if (now)
+		*now += (ktime_get() - *now) >> 1;
+
+	return intel_gt_clock_interval_to_ns(engine->gt, ticks);
+}
+
+static u64 busy_v1_intel_guc_total_active_ticks(struct intel_engine_cs *engine,
+						unsigned int vf_id)
+{
+	struct intel_guc *guc = &engine->gt->uc.guc;
 	struct intel_gt *gt = guc_to_gt(guc);
 	intel_wakeref_t wakeref;
 	unsigned long flags;
+
+	if (!guc_submission_initialized(guc))
+		return 0;
 
 	if (vf_id > 1) {
 		/*
@@ -1638,10 +1918,15 @@ static u64 busy_v1_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned 
 	return guc->busy.v1.gt_stamp;
 }
 
-static u64 busy_v2_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned int vf_id)
+static u64 busy_v2_intel_guc_total_active_ticks(struct intel_engine_cs *engine,
+						unsigned int vf_id)
 {
+	struct intel_guc *guc = &engine->gt->uc.guc;
 	u64 ticks_function, ticks_gt;
 	u32 guc_vf;
+
+	if (!guc_submission_initialized(guc))
+		return 0;
 
 	guc_vf = pmu_vfid_to_guc_vfid(vf_id);
 	if (guc_vf == GUC_MAX_VF_COUNT)
@@ -1655,17 +1940,32 @@ static u64 busy_v2_intel_guc_total_active_ticks(struct intel_guc *guc, unsigned 
 	return ticks_gt;
 }
 
+static u64 busy_v3_intel_guc_total_active_ticks(struct intel_engine_cs *engine,
+						unsigned int vf_id)
+{
+	struct activity_engine *ae = to_activity_engine(engine, vf_id);
+
+	busy_v3_guc_engine_activity_ticks(engine, vf_id);
+
+	return ae->quanta;
+}
+
+/*
+ * Provide total active ticks counter for backwards compatibility with busy v1.
+ * This is just the gt timestamp and will only work on native/PF. For VF, this
+ * will be 0. Note that this counter does not specifically rely on GuC, so we
+ * just use the v1 helper.
+ */
 u64 intel_guc_total_active_ticks(struct intel_gt *gt, unsigned int vf_id)
 {
-	struct intel_guc *guc = &gt->uc.guc;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
 
-	if (!guc_submission_initialized(guc))
-		return 0;
+	/* Get any engine that belongs to this gt */
+	for_each_engine(engine, gt, id)
+		break;
 
-	if (busy_type_is_v1(guc))
-		return busy_v1_intel_guc_total_active_ticks(guc, vf_id);
-	else
-		return busy_v2_intel_guc_total_active_ticks(guc, vf_id);
+	return busy_v1_intel_guc_total_active_ticks(engine, vf_id);
 }
 
 static u64 __busy_v2_busy_free_ticks(struct intel_gt *gt, unsigned int vf_id, u32 counter)
@@ -1676,7 +1976,7 @@ static u64 __busy_v2_busy_free_ticks(struct intel_gt *gt, unsigned int vf_id, u3
 	int i = 0, ret;
 	u32 guc_vf;
 
-	if (!guc_submission_initialized(guc) || busy_type_is_v1(guc))
+	if (!guc_submission_initialized(guc))
 		return 0;
 
 	guc_vf = pmu_vfid_to_guc_vfid(vf_id);
@@ -1751,18 +2051,29 @@ void intel_guc_init_busy_free(struct intel_gt *gt)
 		return;
 
 	/* v1 is implemented at i915_pmu level */
-	if (busy_type_is_v1(guc))
+	if (busy_type_is_v1(guc)) {
 		return;
+	} else if (busy_type_is_v2(guc)) {
+		gt->stats.busy_free = busy_v2_busy_free_ns;
+		gt->stats.busy_free_ticks = busy_v2_busy_free_ticks;
 
-	gt->stats.busy_free = busy_v2_busy_free_ns;
-	gt->stats.busy_free_ticks = busy_v2_busy_free_ticks;
-
-	/*
-	 * In busyness v2, a periodic timer updates the group busy counters, so
-	 * we don't need to save the last value of the counter on gt park.
-	 * Instead a query will fetch the latest value from the GuC interface.
-	 */
-	gt->stats.busy_free_park = NULL;
+		/*
+		 * In busyness v2, a periodic timer updates the group busy counters, so
+		 * we don't need to save the last value of the counter on gt park.
+		 * Instead a query will fetch the latest value from the GuC interface.
+		 */
+		gt->stats.busy_free_park = NULL;
+	} else if (busy_type_is_v3(guc)) {
+		/*
+		 * v3 does away with the support for busy free counters. User is
+		 * supposed to use the single engine busyness to create groups
+		 * and accumulate busy free data for a group.
+		 *
+		 * non-GuC related support (reading HW registers directly) is
+		 * retained to avoid breaking existing uApi. This means that
+		 * whatever worked on PF and Native will continue to work.
+		 */
+	}
 }
 
 static inline int __prepare_busy_v2_guc_action_enable_usage_stats_device(struct intel_guc *guc, u32 *action)
@@ -1806,6 +2117,89 @@ retry:
 	return err;
 }
 
+static void busy_v3_set_activity_engine_cpu_ts(struct intel_guc *guc, u32 idx)
+{
+	struct activity_group *ag = &guc->busy.v3.ag[idx];
+	int i, j;
+
+	for (i = 0; i < GUC_MAX_ENGINE_CLASSES; i++)
+		for (j = 0; j < GUC_MAX_INSTANCES_PER_CLASS; j++)
+			ag->engine[i][j].last_cpu_ts = ktime_get();
+}
+
+static int
+__prepare_busy_v3_guc_action_set_device_engine_activity(struct intel_guc *guc,
+							u32 *action,
+							bool enable)
+{
+	struct activity_buffer *ab = &guc->busy.v3.device;
+	u32 activity_offset, metadata_offset;
+	int len = 0;
+
+	if (enable) {
+		activity_offset = intel_guc_ggtt_offset(guc, ab->activity_vma);
+		metadata_offset = intel_guc_ggtt_offset(guc, ab->metadata_vma);
+	} else {
+		activity_offset = 0;
+		metadata_offset = 0;
+	}
+
+	action[len++] = INTEL_GUC_ACTION_SET_DEVICE_ENGINE_ACTIVITY_BUFFER;
+	action[len++] = metadata_offset;
+	action[len++] = 0;
+	action[len++] = activity_offset;
+	action[len++] = 0;
+
+	return len;
+}
+
+static inline int
+__prepare_busy_v3_guc_action_set_function_engine_activity(struct intel_guc *guc,
+							  u32 *action,
+							  bool enable)
+{
+	struct activity_buffer *ab = &guc->busy.v3.function;
+	u32 activity_offset, metadata_offset, num_functions;
+	int len = 0;
+
+	if (enable) {
+		activity_offset = intel_guc_ggtt_offset(guc, ab->activity_vma);
+		metadata_offset = intel_guc_ggtt_offset(guc, ab->metadata_vma);
+		num_functions = guc->busy.v3.num_functions;
+	} else {
+		activity_offset = 0;
+		metadata_offset = 0;
+		num_functions = 0;
+	}
+
+	action[len++] = INTEL_GUC_ACTION_SET_FUNCTION_ENGINE_ACTIVITY_BUFFER;
+	action[len++] = num_functions;
+	action[len++] = metadata_offset;
+	action[len++] = 0;
+	action[len++] = activity_offset;
+	action[len++] = 0;
+
+	return len;
+}
+
+static int busy_v3_guc_action_set_engine_activity(struct intel_guc *guc,
+						  bool is_device, bool enable)
+{
+	u32 action[6];
+	int len;
+
+	if (is_device)
+		len = __prepare_busy_v3_guc_action_set_device_engine_activity(guc,
+									      action, enable);
+	else
+		len = __prepare_busy_v3_guc_action_set_function_engine_activity(guc,
+										action, enable);
+
+	GEM_BUG_ON(len > ARRAY_SIZE(action));
+
+	return intel_guc_send(guc, action, ARRAY_SIZE(action));
+}
+
 static int busy_v2_guc_action_enable_usage_stats_function(struct intel_guc *guc)
 {
 	u32 offset = intel_guc_engine_usage_offset_global(guc);
@@ -1816,6 +2210,94 @@ static int busy_v2_guc_action_enable_usage_stats_function(struct intel_guc *guc)
 	};
 
 	return intel_guc_send(guc, action, ARRAY_SIZE(action));
+}
+
+/**
+ * intel_guc_enable_activity_stats_functions - Enable function activity stats
+ * @guc: intel_guc struct
+ * @num_vfs: num of vfs
+ *
+ * Enable v3 engine activity stats for pf and vfs
+ *
+ * Return: 0 on success, negative error code otherwise
+ */
+int intel_guc_enable_activity_stats_functions(struct intel_guc *guc, int num_vfs)
+{
+	int ret, i;
+
+	if (!busy_type_is_v3(guc))
+		return 0;
+
+	guc->busy.v3.num_functions = num_vfs + 1;
+
+	ret = guc_busy_v3_alloc_function_array(guc);
+	if (ret)
+		return ret;
+
+	ret = busy_v3_guc_action_set_engine_activity(guc, false, true);
+	if (ret) {
+		guc_busy_v3_free_function_array(guc);
+		guc->busy.v3.num_functions = 0;
+		return ret;
+	}
+
+	for (i = 0; i < guc->busy.v3.num_functions; i++)
+		busy_v3_set_activity_engine_cpu_ts(guc, i + 1);
+
+	return ret;
+}
+
+/**
+ * intel_guc_disable_activity_stats_functions - disable function activity stats
+ * @guc: intel_guc struct
+ *
+ * Disable v3 engine activity stats for pf and vfs
+ *
+ * Return: 0 on success, negative error code otherwise
+ */
+int intel_guc_disable_activity_stats_functions(struct intel_guc *guc)
+{
+	int ret;
+
+	if (!busy_type_is_v3(guc))
+		return 0;
+
+	ret = busy_v3_guc_action_set_engine_activity(guc, false, false);
+
+	guc_busy_v3_free_function_array(guc);
+
+	guc->busy.v3.num_functions = 0;
+
+	return ret;
+}
+
+/**
+ * intel_guc_reset_activity_stats_functions - reset activity stats
+ * @guc: intel_guc struct
+ *
+ * reset engine activity stats for pf and vfs
+ *
+ * Return: 0 on success, negative error code otherwise
+ */
+int intel_guc_reset_activity_stats_functions(struct intel_guc *guc)
+{
+	int ret = 0;
+
+	if (!busy_type_is_v3(guc))
+		return 0;
+
+	if (!guc->busy.v3.num_functions)
+		return 0;
+
+	ret = busy_v3_guc_action_set_engine_activity(guc, false, false);
+	if (ret)
+		return ret;
+
+	ret = busy_v3_guc_action_set_engine_activity(guc, false, true);
+	if (ret)
+		return  busy_v3_guc_action_set_engine_activity(guc, false, false);
+
+	return ret;
 }
 
 static int guc_init_engine_stats(struct intel_guc *guc)
@@ -1832,16 +2314,30 @@ static int guc_init_engine_stats(struct intel_guc *guc)
 			if (ret == 0)
 				busy_v1_guc_enable_worker(guc);
 		}
-	} else {
+
+		if (ret)
+			guc_probe_error(guc, "Failed to enable v1 usage stats: %pe\n",
+					ERR_PTR(ret));
+
+	} else if (busy_type_is_v2(guc)) {
 		with_intel_gt_pm(gt, wakeref) {
 			ret = busy_v2_guc_action_enable_usage_stats_device(guc);
 			if (ret == 0 && !IS_SRIOV_VF(gt->i915))
 				ret = busy_v2_guc_action_enable_usage_stats_function(guc);
 		}
-	}
+		if (ret)
+			guc_probe_error(guc, "Failed to enable v2 usage stats: %pe\n",
+					ERR_PTR(ret));
+	} else if (busy_type_is_v3(guc)) {
+		with_intel_gt_pm(gt, wakeref)
+			ret = busy_v3_guc_action_set_engine_activity(guc, true, true);
 
-	if (ret)
-		guc_probe_error(guc, "Failed to enable usage stats: %pe\n", ERR_PTR(ret));
+		if (ret)
+			guc_probe_error(guc, "Failed to enable v3 usage stats: %pe\n",
+					ERR_PTR(ret));
+		else
+			busy_v3_set_activity_engine_cpu_ts(guc, 0);
+	}
 
 	return ret;
 }
@@ -1861,22 +2357,21 @@ void intel_guc_busyness_park(struct intel_gt *gt)
 	if (!guc_submission_initialized(guc))
 		return;
 
-	if (!busy_type_is_v1(guc))
-		return;
+	if (busy_type_is_v1(guc)) {
+		busy_v1_guc_cancel_worker(guc);
 
-	busy_v1_guc_cancel_worker(guc);
+		/*
+		 * Before parking, we should sample engine busyness stats if we need to.
+		 * We can skip it if we are less than half a ping from the last time we
+		 * sampled the busyness stats.
+		 */
+		if (guc->busy.v1.last_stat_jiffies &&
+		    !time_after(jiffies, guc->busy.v1.last_stat_jiffies +
+				(guc->busy.v1.ping_delay / 2)))
+			return;
 
-	/*
-	 * Before parking, we should sample engine busyness stats if we need to.
-	 * We can skip it if we are less than half a ping from the last time we
-	 * sampled the busyness stats.
-	 */
-	if (guc->busy.v1.last_stat_jiffies &&
-	    !time_after(jiffies, guc->busy.v1.last_stat_jiffies +
-			(guc->busy.v1.ping_delay / 2)))
-		return;
-
-	__busy_v1_update_guc_busyness_stats(guc);
+		__busy_v1_update_guc_busyness_stats(guc);
+	}
 }
 
 void intel_guc_busyness_unpark(struct intel_gt *gt)
@@ -1889,10 +2384,9 @@ void intel_guc_busyness_unpark(struct intel_gt *gt)
 	if (!guc_submission_initialized(guc))
 		return;
 
-	if (!busy_type_is_v1(guc))
-		return;
-
-	busy_v1_guc_enable_worker(guc);
+	if (busy_type_is_v1(guc)) {
+		busy_v1_guc_enable_worker(guc);
+	}
 }
 
 static inline bool
@@ -1945,20 +2439,6 @@ static void guc_flush_submissions(struct intel_guc *guc)
 
 	spin_lock_irqsave(&sched_engine->lock, flags);
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
-}
-
-/* FIXME: External entities should not need to know */
-int intel_guc_busyness_type(struct intel_gt *gt)
-{
-	struct intel_guc *guc = &gt->uc.guc;
-
-	if (!guc_submission_initialized(guc))
-		return 0;
-
-	if (busy_type_is_v1(guc))
-		return 1;
-
-	return 2;
 }
 
 static void guc_flush_destroyed_contexts(struct intel_guc *guc);
@@ -2462,6 +2942,7 @@ static int number_mlrc_guc_id(struct intel_guc *guc);
  */
 int intel_guc_submission_init(struct intel_guc *guc)
 {
+	struct intel_gt *gt = guc_to_gt(guc);
 	int ret;
 
 	if (guc->submission_initialized)
@@ -2480,21 +2961,34 @@ int intel_guc_submission_init(struct intel_guc *guc)
 		goto destroy_pool;
 	}
 
+	guc->gpm_timestamp_shift = gpm_timestamp_shift(gt);
 	if (busy_type_is_v1(guc)) {
-		struct intel_gt *gt = guc_to_gt(guc);
-
 		guc->busy.v1.ping_delay = (BUSY_V1_POLL_TIME_CLKS / gt->clock_frequency + 1) * HZ;
-		guc->busy.v1.shift = busy_v1_gpm_timestamp_shift(gt);
-	} else {
+	} else if (busy_type_is_v2(guc)) {
 		ret = guc_busy_v2_alloc_device(guc);
 		if (ret)
 			goto destroy_bitmap;
+	} else if (busy_type_is_v3(guc)) {
+		ret = guc_busy_v3_alloc_activity_groups(guc);
+		if (ret)
+			goto destroy_bitmap;
+
+		ret = guc_busy_v3_alloc_activity_data(guc, &guc->busy.v3.device, 1);
+		if (ret)
+			goto destroy_activity_groups;
+
+		ret = guc_busy_v3_alloc_metadata(guc, &guc->busy.v3.device, 1);
+		if (ret)
+			goto destroy_activity_data;
 	}
 
 	guc->submission_initialized = true;
 
 	return 0;
-
+destroy_activity_data:
+	guc_busy_v3_free_activity_data(guc, &guc->busy.v3.device);
+destroy_activity_groups:
+	kfree(guc->busy.v3.ag);
 destroy_bitmap:
 	bitmap_free(guc->submission_state.guc_ids_bitmap);
 destroy_pool:
@@ -2511,8 +3005,13 @@ void intel_guc_submission_fini(struct intel_guc *guc)
 	guc_lrc_desc_pool_destroy_v69(guc);
 	i915_sched_engine_put(fetch_and_zero(&guc->sched_engine));
 	bitmap_free(guc->submission_state.guc_ids_bitmap);
-	if (!busy_type_is_v1(guc))
+	if (busy_type_is_v2(guc)) {
 		guc_busy_v2_free_device(guc);
+	} else if (busy_type_is_v3(guc)) {
+		guc_busy_v3_free_activity_data(guc, &guc->busy.v3.device);
+		guc_busy_v3_free_metadata(guc, &guc->busy.v3.device);
+		kfree(guc->busy.v3.ag);
+	}
 	guc->submission_initialized = false;
 }
 
@@ -3189,10 +3688,10 @@ static inline void update_um_queues_regs(struct intel_context *ce)
 {
 	u32 asid;
 
-	if (!HAS_UM_QUEUES(ce->engine->i915))
+	asid = ce->vm->asid;
+	if (!asid)
 		return;
 
-	asid = ce->vm->asid;
 	if (rcu_access_pointer(ce->gem_context)) {
 		struct i915_gem_context *ctx;
 
@@ -4942,10 +5441,16 @@ static void guc_default_vfuncs(struct intel_engine_cs *engine)
 		if (!IS_SRIOV_VF(engine->i915)) {
 			engine->busyness = busy_v1_guc_engine_busyness;
 			engine->busyness_ticks = busy_v1_guc_engine_busyness_ticks;
+			engine->total_active_ticks = busy_v1_intel_guc_total_active_ticks;
 		}
-	} else {
+	} else if (busy_type_is_v2(&engine->gt->uc.guc)) {
 		engine->busyness = busy_v2_guc_engine_busyness;
 		engine->busyness_ticks = busy_v2_guc_engine_busyness_ticks;
+		engine->total_active_ticks = busy_v2_intel_guc_total_active_ticks;
+	} else if (busy_type_is_v3(&engine->gt->uc.guc)) {
+		engine->busyness = busy_v3_guc_engine_busyness;
+		engine->busyness_ticks = busy_v3_guc_engine_activity_ticks;
+		engine->total_active_ticks = busy_v3_intel_guc_total_active_ticks;
 	}
 
 	/* Wa:16014207253 */
@@ -4953,12 +5458,6 @@ static void guc_default_vfuncs(struct intel_engine_cs *engine)
 		engine->irq_enable = guc_fake_irq_enable;
 		engine->irq_disable = guc_fake_irq_disable;
 	}
-
-	if (engine->busyness)
-		engine->flags |= I915_ENGINE_SUPPORTS_STATS;
-
-	if (engine->busyness_ticks)
-		engine->flags |= I915_ENGINE_SUPPORTS_TICKS_STATS;
 
 	engine->flags |= I915_ENGINE_HAS_SCHEDULER;
 	engine->flags |= I915_ENGINE_HAS_PREEMPTION;
@@ -5250,6 +5749,8 @@ int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc)
 	return guc->submission_state.num_guc_ids - number_mlrc_guc_id(guc);
 }
 
+static void reset_fail_worker_func(struct work_struct *w);
+
 /*
  * This default value of 33 milisecs (+1 milisec round up) ensures 30fps or higher
  * workloads are able to enjoy the latency reduction when delaying the schedule-disable
@@ -5275,6 +5776,8 @@ void intel_guc_submission_init_early(struct intel_guc *guc)
 	INIT_LIST_HEAD(&guc->submission_state.destroyed_contexts);
 	INIT_WORK(&guc->submission_state.destroyed_worker,
 		  destroyed_worker_func);
+	INIT_WORK(&guc->submission_state.reset_fail_worker,
+		  reset_fail_worker_func);
 
 	guc->submission_state.sched_disable_delay_ms = SCHED_DISABLE_DELAY_MS;
 	guc->submission_state.num_guc_ids = GUC_MAX_CONTEXT_ID;
@@ -5625,10 +6128,44 @@ intel_guc_lookup_engine(struct intel_guc *guc, u8 guc_class, u8 instance)
 	return gt->engine_class[engine_class][instance];
 }
 
+static void reset_fail_worker_func(struct work_struct *w)
+{
+	struct intel_guc *guc = container_of(w, struct intel_guc,
+					submission_state.reset_fail_worker);
+	struct intel_gt *gt = guc_to_gt(guc);
+	intel_engine_mask_t reset_fail_mask;
+	unsigned long flags;
+
+	spin_lock_irqsave(&guc->submission_state.lock, flags);
+	reset_fail_mask = guc->submission_state.reset_fail_mask;
+	guc->submission_state.reset_fail_mask = 0;
+	spin_unlock_irqrestore(&guc->submission_state.lock, flags);
+
+	if (likely(reset_fail_mask)) {
+		struct intel_engine_cs *engine;
+		enum intel_engine_id id;
+
+		/*
+		 * GuC is toast at this point - it dead loops after sending the failed
+		 * reset notification. So need to manually determine the guilty context.
+		 * Note that it should be reliable to do this here because the GuC is
+		 * toast and will not be scheduling behind the KMD's back.
+		 */
+		for_each_engine_masked(engine, gt, reset_fail_mask, id)
+			intel_engine_reset_failed_uevent(engine);
+
+		intel_gt_handle_error(gt, reset_fail_mask,
+				      I915_ERROR_CAPTURE,
+				      "GuC failed to reset engine mask=0x%x",
+				      reset_fail_mask);
+	}
+}
+
 int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 					 const u32 *msg, u32 len)
 {
 	struct intel_engine_cs *engine;
+	unsigned long flags;
 	u8 guc_class, instance;
 	u32 reason, gdrst;
 
@@ -5662,12 +6199,15 @@ int intel_guc_engine_failure_process_msg(struct intel_guc *guc,
 				err, guc_class, instance, engine->name);
 	}
 
-	intel_engine_reset_failed_uevent(engine);
+	spin_lock_irqsave(&guc->submission_state.lock, flags);
+	guc->submission_state.reset_fail_mask |= engine->mask;
+	spin_unlock_irqrestore(&guc->submission_state.lock, flags);
 
-	intel_gt_handle_error(engine->gt, engine->mask,
-			      I915_ERROR_CAPTURE,
-			      "GuC failed to reset %s (reason=0x%08x)",
-			      engine->name, reason);
+	/*
+	 * A GT reset flushes this worker queue (G2H handler) so we must use
+	 * another worker to trigger a GT reset.
+	 */
+	queue_work(system_unbound_wq, &guc->submission_state.reset_fail_worker);
 
 	return 0;
 }

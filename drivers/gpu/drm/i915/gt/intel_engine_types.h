@@ -536,12 +536,18 @@ struct intel_engine_cs {
 	 * Get engine busyness and the time at which the busyness was sampled.
 	 */
 	ktime_t		(*busyness)(struct intel_engine_cs *engine,
+				    unsigned int vf_id,
 				    ktime_t *now);
 
 	/*
 	 * Get engine busyness ticks
 	 */
 	u64		(*busyness_ticks)(struct intel_engine_cs *engine, unsigned int vf_id);
+
+	/*
+	 * Get total active ticks
+	 */
+	u64		(*total_active_ticks)(struct intel_engine_cs *engine, unsigned int vf_id);
 
 	struct intel_engine_execlists execlists;
 
@@ -567,7 +573,6 @@ struct intel_engine_cs {
 #define I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT BIT(13)
 #define I915_ENGINE_HAS_EU_ATTENTION   BIT(14)
 #define I915_ENGINE_HAS_RUN_ALONE_MODE BIT(15)
-#define I915_ENGINE_SUPPORTS_TICKS_STATS   BIT(16)
 	unsigned int flags;
 
 	struct {
@@ -610,12 +615,6 @@ static inline bool
 intel_engine_supports_stats(const struct intel_engine_cs *engine)
 {
 	return engine->flags & I915_ENGINE_SUPPORTS_STATS;
-}
-
-static inline bool
-intel_engine_supports_tick_stats(const struct intel_engine_cs *engine)
-{
-	return engine->flags & I915_ENGINE_SUPPORTS_TICKS_STATS;
 }
 
 static inline bool

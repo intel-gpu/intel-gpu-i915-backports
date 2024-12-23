@@ -20,6 +20,7 @@ subdir-ccflags-y += -Wno-missing-field-initializers
 subdir-ccflags-y += -Wno-sign-compare
 subdir-ccflags-y += $(call cc-disable-warning, unused-but-set-variable)
 subdir-ccflags-y += $(call cc-disable-warning, frame-address)
+subdir-ccflags-y += $(call cc-disable-warning, unused-function)
 subdir-ccflags-y += -Wmissing-prototypes
 subdir-ccflags-$(CPTCFG_DRM_I915_WERROR) += -Werror
 subdir-ccflags-y += $(call cc-disable-warning, uninitialized)

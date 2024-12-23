@@ -77,7 +77,7 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 	errsrc = __raw_uncore_read32(gt->uncore, GT0_TELEMETRY_MSGREGADDR);
 	if (errsrc)
-		gt_dbg(gt, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
+		gt_notice(gt, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
 
 	for_each_set_bit(errbit, &errsrc, 32) {
 		name = NULL;
@@ -154,28 +154,31 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 	if (hbm_info.diag_run) {
 		if (hbm_info.diag_incomplete) {
-			gt_err(gt, "diagnostics is incomplete, HBM is un-reliable");
+			gt_err(gt, "diagnostics is incomplete, HBM may be un-reliable");
 		} else if (hbm_info.hbm_repair_attempted) {
 			if (hbm_info.hbm_val_failure || hbm_info.hbm_repair_exhausted) {
 				gt_err(gt, "unrepairable HBM fault present\n");
 				/* set hbm state to replace */
 				gt->mem_sparing.health_status = MEM_HEALTH_REPLACE;
-			} else if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault) {
-				gt_dbg(gt, "existing and new HBM faults present and repaired\n");
-			} else if (hbm_info.hbm_existing_fault) {
-				gt_dbg(gt, "repaired HBM fault present\n");
-			} else if (hbm_info.hbm_new_fault) {
-				gt_dbg(gt, "new HBM fault present and repaired\n");
+				if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault)
+					gt_err(gt, "existing and new HBM faults present\n");
+				else if (hbm_info.hbm_existing_fault)
+					gt_err(gt, "existing HBM fault present\n");
+				else if (hbm_info.hbm_new_fault)
+					gt_err(gt, "new HBM fault present\n");
+			} else {
+				if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault)
+					gt_notice(gt, "existing and new HBM faults present and repaired\n");
+				else if (hbm_info.hbm_existing_fault)
+					gt_notice(gt, "repaired HBM fault present\n");
+				else if (hbm_info.hbm_new_fault)
+					gt_notice(gt, "new HBM fault present and repaired\n");
 			}
 		} else {
-			if (hbm_info.hbm_existing_fault & hbm_info.hbm_new_fault)
-				gt_err(gt, "repaired and new HBM fault present, recommended to run diagnostics and repair\n");
-			else if (hbm_info.hbm_existing_fault)
-				gt_dbg(gt, "repaired HBM fault present\n");
-			else if (hbm_info.hbm_new_fault)
+			if (hbm_info.hbm_new_fault)
 				gt_err(gt, "new / unrepaired HBM fault present, recommended to run diagnostics and repair\n");
 			else
-				gt_dbg(gt, "Diagnostics completed no faults found\n");
+				gt_notice(gt, "Diagnostics completed no faults found\n");
 		}
 	}
 
@@ -198,7 +201,7 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 		unsigned long hbm_mask = __raw_uncore_read32(gt->uncore, FUSE3_HBM_STACK_STATUS);
 
-		gt_dbg(gt, "FUSE3_HBM_STACK_STATUS=[0x%08lx]\n", hbm_mask);
+		gt_notice(gt, "FUSE3_HBM_STACK_STATUS=[0x%08lx]\n", hbm_mask);
 
 		if (hbm_info.hbm_training_failed) {
 			for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
@@ -206,17 +209,15 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 								   PVC_UC_BIOS_MAILBOX_CTL_REG(hbm_num));
 				u32 hbm_training_status = FIELD_GET(HBM_TRAINING_INFO, ctrl_reg);
 
-				gt_info(gt, "uc_bios_mailbox_ctrl_creg[%d] = 0x%08x\n",
-					 hbm_num, ctrl_reg);
+				gt_notice(gt, "uc_bios_mailbox_ctrl_creg[%d] = 0x%08x\n", hbm_num, ctrl_reg);
 
 				if (hbm_training_status == HBM_TRAINING_FAILED) {
 					u32 data0_reg = __raw_uncore_read32(gt->uncore,
 									    PVC_UC_BIOS_MAILBOX_DATA0_REG_HBM(hbm_num));
 					u32 data1_reg = __raw_uncore_read32(gt->uncore,
 									    PVC_UC_BIOS_MAILBOX_DATA1_REG_HBM(hbm_num));
-					gt_err(gt,
-					       "Reported HBM training error on HBM%d."
-					       " uc_bios_mailbox_data0_creg = 0x%08x, uc_bios_mailbox_data1_creg = 0x%08x\n",
+					gt_err(gt, "Reported HBM training error on HBM%d."
+					       "uc_bios_mailbox_data0_creg = 0x%08x, uc_bios_mailbox_data1_creg = 0x%08x\n",
 					       hbm_num, data0_reg, data1_reg);
 				}
 			}
@@ -235,9 +236,9 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 					if (reg64_value != DEFAULT_VALUE_RAS_REG64) {
 						gt_err(gt, "Register %s read value=[0x%016llx], expected value=[0x%016x]. Reported error on HBM%d:CHANNEL%d\n",
-						       reg64_info->reg_name,
-						       reg64_value, DEFAULT_VALUE_RAS_REG64,
-						       hbm_num, channel_num);
+						       reg64_info->reg_name, reg64_value,
+						       DEFAULT_VALUE_RAS_REG64, hbm_num,
+						       channel_num);
 
 						hbm_error = true;
 						ret = -ENXIO;
@@ -252,8 +253,9 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 					if (reg32_value != reg32_info->default_value) {
 						gt_err(gt, "Register %s read value=[0x%08x], expected value=[0x%08x]. Reported error on HBM%d:CHANNEL%d\n",
-						       reg32_info->reg_name, reg32_value, reg32_info->default_value,
-						       hbm_num, channel_num);
+						       reg32_info->reg_name, reg32_value,
+						       reg32_info->default_value, hbm_num,
+						       channel_num);
 
 						hbm_error = true;
 						ret = -ENXIO;

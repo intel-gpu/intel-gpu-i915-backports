@@ -4,6 +4,55 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,11,0)
+/*
+ * 1bb01bdab03f drm: move i915_component.h under include/drm/intel
+ * 05255ccbf172 drm: move intel-gtt.h under include/drm/intel
+ * a1ed6865df70 drm: move intel_lpe_audio.h under include/drm/intel
+ */
+#define BPM_DRM_INTEL_HEADERS_NOT_PRESENT
+
+/*
+ * 8268614b408b mm: remove CONFIG_ARCH_HAS_HUGEPD
+ */
+#define BPM_IS_HUGEPD_NOT_PRESENT
+
+/*
+ * 06668257a355 mm: remove page_mapping()
+ */
+#define BPM_PAGE_MAPPING_NOT_PRESENT
+
+/*
+ * d69d80484598
+ * driver core: have match() callback in struct bus_type take a const *
+ */
+#define BPM_MEI_CL_DEVICE_MATCH_CONST_ARG_NOT_PRESENT
+
+/*
+ * acc154691fc7 sysctl: Warn on an empty procname element
+ */
+#define BPM_EMPTY_OA_CTL_TABLE_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,11,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,10,0)
+/*
+ * 4fe0d154880b PCI: Use positive flags in pci_alloc_irq_vectors()
+ */
+#define BPM_PCI_IRQ_ALL_TYPES_REDEFINED
+
+/* 
+ * 33d5ae6cacf4 drm/print: drop include debugfs.h and include where needed
+ */
+#define BPM_DEBUGFS_CREATE_APIS_NOT_PRESENT
+
+/*
+ * 2c92ca849fcc tracing/treewide: Remove second parameter of __assign_str()
+ */
+#define BPM_ASSIGN_STR_SECOND_ARG_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,9,6) || \
 	(LINUX_VERSION_IS_GEQ(6,8,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(43,43))
 
@@ -26,11 +75,6 @@
 #define BPM_DRM_ERR_PRINTER_SECOND_ARG_PRESENT
 
 /*
- * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
- */
-#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
-
-/*
  * 0a5a46a6a61b PCI/AER: Generalize TLP Header Log reading
  */
 #define BPM_STRUCT_PCI_TLP_LOG_PRESENT
@@ -40,6 +84,14 @@
  */
 #define BPM_DRM_DP_VSC_SDP_LOG_PRESENT
 #endif
+
+#if (LINUX_VERSION_IS_GEQ(6,9,0) || \
+	(LINUX_VERSION_IS_GEQ(6,8,12) && (UBUNTU_BACKPORT_VERSION_IS_GEQ(50,51))))
+/*
+ * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
+ */
+#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(6,9,0)||(LINUX_VERSION_IS_GEQ(6,8,12) && ... */
 
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
 	LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
@@ -129,6 +181,11 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_MODULE_IMPORT_NS_CXL_SUPPORT
+
+/*
+ * a349d72fd9ef mm/pgtable: add rcu_read_lock() and rcu_read_unlock()
+ */
+#define BPM_BAD_UNLOCK_PTE_OFFSET_MAP
 #endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
@@ -644,6 +701,15 @@
  */
 #define BPM_DRM_HDMI_AVI_INFOFRAME_COLORSPACE_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(5,18,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,1) ... */
+
+#if (LINUX_VERSION_IS_GEQ(5,18,0) || \
+		REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0))
+/*
+ * 40fcc7fc2c38 mm: Remove page_cache_add_speculative() and page_cache_get_speculative()
+ */
+#define BPM_PAGE_CACHE_GET_SPECULATIVE_NOT_PRESENT
+#endif
 
 #if (LINUX_VERSION_IS_GEQ(5,18,0) || \
 	SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) || \
@@ -2047,6 +2113,10 @@
 
 #define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
 #endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
+
+#if REDHAT_RELEASE_VERSION_IS_LEQ(8,6)
+#define BPM_ALLOC_IOVA_FAST_EXPORT_NOT_PRESENT
+#endif
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
 #define BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER
