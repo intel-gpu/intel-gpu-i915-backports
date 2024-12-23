@@ -33,26 +33,11 @@ static void uc_expand_default_options(struct intel_uc *uc)
 	if (i915->params.enable_guc != -1)
 		return;
 
-	/* Don't enable GuC/HuC on pre-Gen12 */
-	if (GRAPHICS_VER(i915) < 12) {
-		i915->params.enable_guc = 0;
-		return;
-	}
-
-	/* Don't enable GuC/HuC on older Gen12 platforms */
-	if (IS_TIGERLAKE(i915) || IS_ROCKETLAKE(i915)) {
-		i915->params.enable_guc = 0;
-		return;
-	}
-
-	/* Intermediate platforms are HuC authentication only */
-	if (IS_ALDERLAKE_S(i915) && !IS_ADLS_RPLS(i915)) {
-		i915->params.enable_guc = ENABLE_GUC_LOAD_HUC;
-		return;
-	}
-
 	/* Default: enable HuC authentication and GuC submission */
 	i915->params.enable_guc = ENABLE_GUC_LOAD_HUC | ENABLE_GUC_SUBMISSION;
+
+	if (IS_TIGERLAKE(i915) || IS_ROCKETLAKE(i915))
+		i915->params.enable_guc &= ~ENABLE_GUC_LOAD_HUC;
 
 	/*
 	 * FIXME: MTL IFWI still has issues with FLR, so we can't reload the
@@ -798,6 +783,24 @@ void intel_uc_reset(struct intel_uc *uc, intel_engine_mask_t stalled)
 	/* Firmware can not be running when this function is called  */
 	if (intel_uc_uses_guc_submission(uc))
 		intel_guc_submission_reset(guc, stalled);
+}
+
+/**
+ * intel_uc_reset_activity_stats - Reset function activity stats
+ * @uc: the intel_uc structure
+ *
+ * reset engine activity stats
+ */
+void intel_uc_reset_activity_stats(struct intel_uc *uc)
+{
+	struct intel_guc *guc = &uc->guc;
+	int ret;
+
+	if (intel_uc_uses_guc_submission(uc) && IS_SRIOV(guc_to_gt(guc)->i915)) {
+		ret = intel_guc_reset_activity_stats_functions(guc);
+		if (ret)
+			guc_dbg(guc, "Failed to reset function activity stats, %pe", ERR_PTR(ret));
+	}
 }
 
 void intel_uc_reset_finish(struct intel_uc *uc)

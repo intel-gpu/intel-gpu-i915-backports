@@ -235,6 +235,9 @@ static void __intel_rc6_disable(struct intel_rc6 *rc6)
 	struct intel_uncore *uncore = rc6_to_uncore(rc6);
 	struct intel_gt *gt = rc6_to_gt(rc6);
 
+	if (!rc6_exists(rc6))
+		return;
+
 	if (i915->quiesce_gpu)
 		return;
 
@@ -279,8 +282,7 @@ void intel_rc6_sanitize(struct intel_rc6 *rc6)
 		rc6->enabled = false;
 	}
 
-	if (rc6->supported)
-		__intel_rc6_disable(rc6);
+	__intel_rc6_disable(rc6);
 }
 
 void intel_rc6_enable(struct intel_rc6 *rc6)
@@ -354,13 +356,12 @@ void intel_rc6_park(struct intel_rc6 *rc6)
 
 void intel_rc6_disable(struct intel_rc6 *rc6)
 {
+	__intel_rc6_disable(rc6);
 	if (!rc6->enabled)
 		return;
 
 	intel_rc6_rpm_get(rc6);
 	rc6->enabled = false;
-
-	__intel_rc6_disable(rc6);
 
 	/* Reset our culmulative residency tracking over suspend */
 	memset(rc6->prev_hw_residency, 0, sizeof(rc6->prev_hw_residency));

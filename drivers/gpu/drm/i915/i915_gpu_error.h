@@ -149,6 +149,7 @@ struct intel_engine_coredump {
 		u64 total_runtime;
 		u64 avg_runtime;
 
+		uid_t uid;
 		pid_t pid;
 		int active;
 		int guilty;

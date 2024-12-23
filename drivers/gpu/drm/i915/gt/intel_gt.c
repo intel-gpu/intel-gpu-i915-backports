@@ -627,12 +627,12 @@ static void release_vm(struct intel_gt *gt)
 	if (!vm)
 		return;
 
-	GEM_BUG_ON(kref_read(&vm->ref) != 1);
 	intel_flat_lmem_ppgtt_fini(vm, &gt->flat);
 	i915_vm_put(vm);
 
 	rcu_barrier();
 	flush_workqueue(gt->wq);
+	rcu_barrier();
 }
 
 static struct i915_request *

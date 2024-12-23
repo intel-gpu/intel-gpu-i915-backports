@@ -107,11 +107,9 @@ static void set_scheduler_caps(struct drm_i915_private *i915)
 		u8 sched;
 	} map[] = {
 #define MAP(x, y) { ilog2(I915_ENGINE_##x), ilog2(I915_SCHEDULER_CAP_##y) }
-#define PRELIM_MAP(x, y) { ilog2(I915_ENGINE_##x), ilog2(PRELIM_I915_SCHEDULER_CAP_##y) }
 		MAP(HAS_PREEMPTION, PREEMPTION),
 		MAP(HAS_SEMAPHORES, SEMAPHORES),
 		MAP(SUPPORTS_STATS, ENGINE_BUSY_STATS),
-		PRELIM_MAP(SUPPORTS_TICKS_STATS, ENGINE_BUSY_TICKS_STATS),
 #undef MAP
 	};
 	struct intel_engine_cs *engine;

@@ -508,8 +508,12 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	 * reset due to not pre-empting in a timely manner. So, bump the
 	 * pre-emption timeout value to be much higher for compute engines.
 	 */
-	if (GRAPHICS_VER(i915) == 12 && (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE))
+	if (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE)
 		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE;
+	if (engine->flags & I915_ENGINE_HAS_RCS_REG_STATE && !CCS_MASK(gt)) {
+		engine->props.heartbeat_interval_ms = 0; /* no heartbeats */
+		engine->props.preempt_timeout_ms = 0; /* no engine resets */
+	}
 
 	/*
 	 * With their many BCS engines (and CCS engines), PVC systems can overload
@@ -518,8 +522,7 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	 * copy. So need to bump the pre-emption timeout to compensate and not
 	 * kill such copies off prematurely.
 	 */
-	if (GRAPHICS_VER(i915) == 12 && engine->class == COPY_ENGINE_CLASS &&
-	    (hweight32(BCS_MASK(gt)) >= 2))
+	if (engine->class == COPY_ENGINE_CLASS && hweight32(BCS_MASK(gt)) > 1)
 		engine->props.preempt_timeout_ms = CPTCFG_DRM_I915_PREEMPT_TIMEOUT_COMPUTE_COPY;
 
 	if (!RCS_MASK(gt) || engine->class == COMPUTE_CLASS) { /* non-interactive, compute-only */
@@ -2116,8 +2119,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		 ewma__engine_latency_read(&engine->latency));
 	if (intel_engine_supports_stats(engine))
 		i_printf(m, indent, "Runtime: %llums\n",
-			 ktime_to_ms(intel_engine_get_busy_time(engine,
-								&dummy)));
+			 ktime_to_ms(intel_engine_get_busy_time(engine, 0, &dummy)));
 	i_printf(m, indent, "Forcewake: %x domains, %d active\n",
 		 engine->fw_domain, READ_ONCE(engine->fw_active));
 
@@ -2163,12 +2165,14 @@ void intel_engine_dump(struct intel_engine_cs *engine,
  *
  * Returns accumulated time @engine was busy since engine stats were enabled.
  */
-ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine, ktime_t *now)
+ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine,
+				   unsigned int vf_id,
+				   ktime_t *now)
 {
 	if (!engine->busyness || !intel_engine_supports_stats(engine))
 		return 0;
 
-	return engine->busyness(engine, now);
+	return engine->busyness(engine, vf_id, now);
 }
 
 /**
@@ -2181,11 +2185,25 @@ ktime_t intel_engine_get_busy_time(struct intel_engine_cs *engine, ktime_t *now)
  */
 u64 intel_engine_get_busy_ticks(struct intel_engine_cs *engine, unsigned int vf_id)
 {
-	if (!engine->busyness_ticks ||
-	    !(engine->flags & I915_ENGINE_SUPPORTS_TICKS_STATS))
+	if (!engine->busyness_ticks)
 		return 0;
 
 	return engine->busyness_ticks(engine, vf_id);
+}
+
+/**
+ * intel_engine_total_active_ticks() - Total execution quanta for the engine
+ * @engine: engine to report on
+ * @vf_id: function to report on
+ *
+ * Returns accumulated ticks of quanta allocated for the engine.
+ */
+u64 intel_engine_total_active_ticks(struct intel_engine_cs *engine, unsigned int vf_id)
+{
+	if (!engine->total_active_ticks)
+		return 0;
+
+	return engine->total_active_ticks(engine, vf_id);
 }
 
 struct intel_context *

@@ -4639,7 +4639,9 @@ static struct ctl_table oa_table[] = {
 	 .extra1 = SYSCTL_ZERO,
 	 .extra2 = &oa_sample_rate_hard_limit,
 	 },
+#ifndef BPM_EMPTY_OA_CTL_TABLE_PRESENT
 	{}
+#endif
 };
 
 #ifndef BPM_REGISTER_SYSCTL_TABLE_NOT_PRESENT

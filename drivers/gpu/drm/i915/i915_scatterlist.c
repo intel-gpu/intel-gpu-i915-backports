@@ -5,6 +5,8 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/iommu.h>
+#include <linux/iova.h>
 #include <linux/kmemleak.h>
 #include <linux/mempool.h>
 #include <linux/slab.h>
@@ -215,13 +217,145 @@ void i915_sg_trim(struct scatterlist *sgt)
 	GEM_BUG_ON(sg_count(sgt) != i915_sg_count(sgt));
 }
 
-int i915_sg_map(struct scatterlist *sgt, unsigned long max, struct device *dev)
+static size_t __i915_iommu_pgsize(const struct iommu_domain *domain,
+				  unsigned long iova, phys_addr_t paddr, size_t size,
+				  size_t *count)
 {
-	struct scatterlist *sg, *cur = NULL;
+	unsigned int pgsize_idx, pgsize_idx_next;
+	unsigned long addr_merge = paddr | iova;
+	size_t offset, pgsize, pgsize_next;
+	unsigned long pgsizes;
+
+	/* Page sizes supported by the hardware and small enough for @size */
+	pgsizes = domain->pgsize_bitmap & GENMASK(__fls(size), 0);
+
+	/* Constrain the page sizes further based on the maximum alignment */
+	if (likely(addr_merge))
+		pgsizes &= GENMASK(__ffs(addr_merge), 0);
+
+	/* Make sure we have at least one suitable page size */
+	GEM_BUG_ON(!pgsizes);
+
+	/* Pick the biggest page size remaining */
+	pgsize_idx = __fls(pgsizes);
+	pgsize = BIT(pgsize_idx);
+	if (!count)
+		return pgsize;
+
+	/* Find the next biggest support page size, if it exists */
+	pgsizes = domain->pgsize_bitmap & ~GENMASK(pgsize_idx, 0);
+	if (!pgsizes)
+		goto out_set_count;
+
+	pgsize_idx_next = __ffs(pgsizes);
+	pgsize_next = BIT(pgsize_idx_next);
+
+	/*
+	 * There's no point trying a bigger page size unless the virtual
+	 * and physical addresses are similarly offset within the larger page.
+	 */
+	if ((iova ^ paddr) & (pgsize_next - 1))
+		goto out_set_count;
+
+	/* Calculate the offset to the next page size alignment boundary */
+	offset = pgsize_next - (addr_merge & (pgsize_next - 1));
+
+	/*
+	 * If size is big enough to accommodate the larger page, reduce
+	 * the number of smaller pages.
+	 */
+	if (offset + pgsize_next <= size)
+		size = offset;
+
+out_set_count:
+	*count = size >> pgsize_idx;
+	return pgsize;
+}
+
+int __i915_iommu_map(struct iommu_domain *domain,
+		     unsigned long iova, phys_addr_t paddr, size_t size,
+		     int prot, gfp_t gfp, size_t *mapped)
+{
+	int ret;
+
+	GEM_BUG_ON(!(domain->type & __IOMMU_DOMAIN_PAGING));
+	GEM_BUG_ON(!IS_ALIGNED(iova | paddr | size, 1 << __ffs(domain->pgsize_bitmap)));
+
+	while (size) {
+		size_t pgsz, count, sz;
+
+		pgsz = __i915_iommu_pgsize(domain, iova, paddr, size, &count);
+		ret = domain->ops->map_pages(domain, iova, paddr, pgsz, count, prot, gfp, &sz);
+		if (ret)
+			return ret;
+
+		iova += sz;
+		paddr += sz;
+		*mapped += sz;
+
+		size -= sz;
+	}
+
+	return 0;
+}
+
+static inline struct iova_domain *i915_iovad(struct iommu_domain *domain)
+{
+	struct {
+		enum {
+			IOVA_COOKIE,
+		} type;
+		struct iova_domain iovad;
+	} *cookie = (void *)domain->iova_cookie;
+
+	return &cookie->iovad;
+}
+
+void __i915_iommu_free(unsigned long iova, unsigned long total, unsigned long mapped, struct iommu_domain *domain)
+{
+	struct iova_domain *iovad = i915_iovad(domain);
+	int shift = iova_shift(iovad);
+
+	iommu_unmap(domain, iova, mapped);
+	free_iova_fast(iovad, iova >> shift, total >> shift);
+}
+
+unsigned long __i915_iommu_alloc(unsigned long total, u64 dma_limit, struct iommu_domain *domain)
+{
+	struct iova_domain *iovad = i915_iovad(domain);
+	int shift = iova_shift(iovad);
+	unsigned long iova;
+
+	if (domain->geometry.force_aperture)
+		dma_limit = min_t(u64, dma_limit, domain->geometry.aperture_end);
+
+	iova = alloc_iova_fast(iovad, total >> shift, dma_limit >> shift, true);
+	if (!iova)
+		return -ENOMEM;
+
+	return iova << shift;
+}
+
+int i915_sg_map(struct scatterlist *sgt, unsigned long total, unsigned long max, struct device *dev)
+{
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	struct scatterlist *sg, *cur = NULL, *map;
+	unsigned long iova, mapped;
 	unsigned long end = -1;
 	int err = 0;
 
 	GEM_BUG_ON(!IS_ALIGNED(max, PAGE_SIZE));
+
+	if (domain) {
+		iova = __i915_iommu_alloc(total, i915_dma_limit(dev), domain);
+		if (IS_ERR_VALUE(iova))
+			return iova;
+
+		map = sgt;
+		sg_dma_address(map) = iova;
+		sg_dma_len(map) = 0;
+		mapped = 0;
+	}
 
 	sg_count(sgt) = 0;
 	sg_page_sizes(sgt) = 0;
@@ -238,18 +372,24 @@ int i915_sg_map(struct scatterlist *sgt, unsigned long max, struct device *dev)
 			cur->length += len;
 		} else {
 			if (cur) {
-				if (!err) {
-					sg_dma_address(cur) =
-						dma_map_page_attrs(dev, sg_page(cur), 0, cur->length,
-								   DMA_BIDIRECTIONAL,
-								   DMA_ATTR_SKIP_CPU_SYNC |
-								   DMA_ATTR_WEAK_ORDERING |
-								   DMA_ATTR_NO_KERNEL_MAPPING |
-								   DMA_ATTR_NO_WARN);
-					err = dma_mapping_error(dev, sg_dma_address(cur));
+				if (!domain) {
+					sg_dma_address(cur) = __sg_phys(cur);
+					sg_dma_len(cur) = cur->length;
+				} else if (!err)  {
+					if (sg_dma_len(map) > UINT_MAX - cur->length) {
+						map = __sg_next(map);
+						sg_dma_address(map) = iova + mapped;
+						sg_dma_len(map) = 0;
+					}
+
+					err = __i915_iommu_map(domain, iova + mapped,
+							       __sg_phys(cur), cur->length,
+							       IOMMU_READ | IOMMU_WRITE, GFP_KERNEL,
+							       &mapped);
+					GEM_BUG_ON(mapped > total);
+					sg_dma_len(map) += cur->length;
 				}
 
-				sg_dma_len(cur) = err ? 0 : cur->length;
 				sg_page_sizes(sgt) |= cur->length;
 				cur = __sg_next(cur);
 			} else {
@@ -264,20 +404,38 @@ int i915_sg_map(struct scatterlist *sgt, unsigned long max, struct device *dev)
 	}
 	GEM_BUG_ON(!cur);
 
-	if (!err) {
-		sg_dma_address(cur) =
-			dma_map_page_attrs(dev, sg_page(cur), 0, cur->length,
-					   DMA_BIDIRECTIONAL,
-					   DMA_ATTR_SKIP_CPU_SYNC |
-					   DMA_ATTR_WEAK_ORDERING |
-					   DMA_ATTR_NO_KERNEL_MAPPING |
-					   DMA_ATTR_NO_WARN);
-		err = dma_mapping_error(dev, sg_dma_address(cur));
+	if (!domain) {
+		sg_dma_address(cur) = __sg_phys(cur);
+		sg_dma_len(cur) = cur->length;
+	} else if (!err) {
+		if (sg_dma_len(map) > UINT_MAX - cur->length) {
+			map = __sg_next(map);
+			sg_dma_address(map) = iova + mapped;
+			sg_dma_len(map) = 0;
+		}
+
+		err = __i915_iommu_map(domain, iova + mapped,
+				       __sg_phys(cur), cur->length,
+				       IOMMU_READ | IOMMU_WRITE, GFP_KERNEL,
+				       &mapped);
+		GEM_BUG_ON(mapped > total);
+		sg_dma_len(map) += cur->length;
+		if (map != cur)
+			sg_dma_len(__sg_next(map)) = 0; /* iommu terminator */
 	}
 
-	sg_dma_len(cur) = err ? 0 : cur->length;
 	sg_page_sizes(sgt) |= cur->length;
 	sg_mark_end(cur);
+
+	if (domain) {
+		if (!err) {
+			if (domain->ops->iotlb_sync_map)
+				domain->ops->iotlb_sync_map(domain, iova, mapped);
+		} else {
+			__i915_iommu_free(iova, total, mapped, domain);
+			sg_dma_len(sgt) = 0;
+		}
+	}
 
 	i915_sg_trim(sgt);
 	return err;

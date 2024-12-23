@@ -1275,6 +1275,8 @@ void intel_gt_reset(struct intel_gt *gt,
 	if (ret)
 		goto taint;
 
+	intel_uc_reset_activity_stats(&gt->uc);
+
 finish:
 	reset_finish(gt, awake);
 unlock:

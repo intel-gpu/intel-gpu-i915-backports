@@ -529,6 +529,7 @@ static struct i915_drm_client_name *get_name(struct i915_drm_client *client,
 	init_rcu_head(&name->rcu);
 	name->client = client;
 	name->pid = get_task_pid(task, PIDTYPE_PID);
+	name->uid = from_kuid_munged(current_user_ns(), task_uid(task));
 	memcpy(name->name, task->comm, len + 1);
 
 	return name;
@@ -702,6 +703,25 @@ i915_drm_client_update(struct i915_drm_client *client,
 
 	call_rcu(&name->rcu, free_name);
 	return 0;
+}
+
+void
+i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, int indent)
+{
+	struct i915_drm_client *client;
+	long id;
+
+	i_printf(p, indent, "Clients:\n");
+	indent += 2;
+
+	rcu_read_lock();
+	xa_for_each(&clients->xarray, id, client) {
+		i_printf(p, indent, "- client: { comm: \"%s\", pid: %d, uid: %d }\n",
+			 i915_drm_client_name(client),
+			 pid_nr(i915_drm_client_pid(client)),
+			 i915_drm_client_uid(client));
+	}
+	rcu_read_unlock();
 }
 
 void i915_drm_clients_fini(struct i915_drm_clients *clients)

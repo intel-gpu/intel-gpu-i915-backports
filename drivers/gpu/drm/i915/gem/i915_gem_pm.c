@@ -248,18 +248,20 @@ void i915_gem_shutdown(struct drm_i915_private *i915)
 
 int i915_gem_freeze(struct drm_i915_private *i915)
 {
-	/* Discard all purgeable objects, let userspace recover those as
+	intel_wakeref_t wakeref;
+
+	/*
+	 * Discard all purgeable objects, let userspace recover those as
 	 * required after resuming.
 	 */
-	i915_gem_shrink_all(i915);
+	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
+		i915_gem_shrink(i915, -1UL, NULL, ~0);
 
 	return 0;
 }
 
 int i915_gem_freeze_late(struct drm_i915_private *i915)
 {
-	intel_wakeref_t wakeref;
-
 	/*
 	 * Called just before we write the hibernation image.
 	 *
@@ -275,8 +277,7 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 	 * the objects as well, see i915_gem_freeze()
 	 */
 
-	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
-		i915_gem_shrink(i915, -1UL, NULL, ~0);
+	i915_gem_shrink_all(i915);
 	i915_gem_drain_freed_objects(i915);
 
 	wbinvd_on_all_cpus();

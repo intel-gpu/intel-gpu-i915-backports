@@ -55,6 +55,7 @@ void intel_uc_suspend(struct intel_uc *uc);
 void intel_uc_runtime_suspend(struct intel_uc *uc);
 int intel_uc_resume(struct intel_uc *uc);
 int intel_uc_runtime_resume(struct intel_uc *uc);
+void intel_uc_reset_activity_stats(struct intel_uc *uc);
 
 /*
  * We need to know as early as possible if we're going to use GuC or not to

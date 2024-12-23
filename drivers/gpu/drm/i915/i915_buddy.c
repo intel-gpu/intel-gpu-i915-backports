@@ -225,6 +225,14 @@ out_free_dirty:
 	return -ENOMEM;
 }
 
+static void set_fence_or_error(struct i915_active_fence *ref, struct dma_fence *f)
+{
+	if (IS_ERR(f))
+		RCU_INIT_POINTER(ref->fence, f);
+	else if (__i915_active_fence_set(ref, f) && f->error)
+		RCU_INIT_POINTER(ref->fence, ERR_PTR(f->error));
+}
+
 static struct i915_buddy_block *
 split_block(struct i915_buddy_mm *mm, struct i915_buddy_block *block)
 {
@@ -246,11 +254,12 @@ split_block(struct i915_buddy_mm *mm, struct i915_buddy_block *block)
 		return ERR_PTR(-ENOMEM);
 	}
 
-	f = i915_active_fence_get(&block->active);
+	f = i915_active_fence_get_or_error(&block->active);
 	if (f) {
-		__i915_active_fence_set(&block->left->active, f);
-		__i915_active_fence_set(&block->right->active, f);
-		dma_fence_put(f);
+		set_fence_or_error(&block->left->active, f);
+		set_fence_or_error(&block->right->active, f);
+		if (!IS_ERR(f))
+			dma_fence_put(f);
 	}
 
 	i915_buddy_mark_free(mm, block->right);

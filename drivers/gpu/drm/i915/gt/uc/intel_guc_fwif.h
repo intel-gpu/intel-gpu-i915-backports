@@ -549,6 +549,25 @@ struct guc_function_observation_data {
 	struct guc_engine_observation_data function_data[GUC_MAX_VF_COUNT];
 } __packed;
 
+/* Engine usage stats - v3 */
+struct guc_engine_activity {
+	u16 change_num;
+	u16 quanta_ratio;
+	u32 last_update_tick;
+	u64 active_ticks;
+} __packed;
+
+struct guc_engine_activity_data {
+	struct guc_engine_activity engine_activity[GUC_MAX_ENGINE_CLASSES][GUC_MAX_INSTANCES_PER_CLASS];
+} __packed;
+
+struct guc_engine_activity_metadata {
+	u32 guc_tsc_frequency_hz;
+	u32 lag_latency_usec;
+	u32 global_change_num;
+	u32 reserved;
+} __packed;
+
 /* GuC logging structures */
 
 enum guc_log_buffer_type {

@@ -61,5 +61,18 @@ static inline pte_t ptep_get_lockless(pte_t *ptep)
 #endif /* CONFIG_GUP_GET_PTE_LOW_HIGH */
 
 #endif /* BPM_PTEP_GET_LOCKLESS_NOT_PRESENT */
+
+#ifdef BPM_IS_HUGEPD_NOT_PRESENT
+#ifndef CONFIG_ARCH_HAS_HUGEPD
+typedef struct { unsigned long pd; } hugepd_t;
+#define is_hugepd(hugepd) (0)
+#define __hugepd(x) ((hugepd_t) { (x) })
+#endif
+
+#ifndef pgd_huge
+#define pgd_huge(x)    0
+#endif
+#endif /* BPM_IS_HUGEPD_NOT_PRESENT */
+
 #endif /* _BACKPORT_LINUX_HUGETLB_H */
 

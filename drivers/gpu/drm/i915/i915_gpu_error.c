@@ -543,8 +543,8 @@ static void error_print_context(struct drm_i915_error_state_buf *m,
 				const char *header,
 				const struct i915_gem_context_coredump *ctx)
 {
-	err_printf(m, "%s%s[%d] prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
-		   header, ctx->comm, ctx->pid, ctx->sched_attr.priority,
+	err_printf(m, "%s%s[%d], uid %d, prio %d, guilty %d active %d sip %s, runtime total %lluns, avg %lluns\n",
+		   header, ctx->comm, ctx->pid, ctx->uid, ctx->sched_attr.priority,
 		   ctx->guilty, ctx->active, ctx->sip_installed ? "true" : "false",
 		   ctx->total_runtime, ctx->avg_runtime);
 
@@ -1603,6 +1603,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 
 	strcpy(e->comm, i915_drm_client_name(ctx->client));
 	e->pid = pid_nr(i915_drm_client_pid(ctx->client));
+	e->uid = i915_drm_client_uid(ctx->client);
 
 	rcu_read_unlock();
 

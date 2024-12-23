@@ -7,11 +7,14 @@
 #ifndef I915_SCATTERLIST_H
 #define I915_SCATTERLIST_H
 
+#include <linux/dma-mapping.h>
 #include <linux/pfn.h>
 #include <linux/scatterlist.h>
 #include <linux/swiotlb.h>
 
 #include "i915_gem.h"
+
+struct iommu_domain;
 
 #define I915_MAX_CHAIN_ALLOC (SG_MAX_SINGLE_ALLOC - 1)
 
@@ -185,7 +188,7 @@ static inline unsigned int i915_sg_segment_size(void)
 struct scatterlist *sg_pool_alloc(unsigned int nents, gfp_t gfp_mask);
 void i915_sg_free_excess(struct scatterlist *sg);
 void i915_sg_trim(struct scatterlist *sg);
-int i915_sg_map(struct scatterlist *sg, unsigned long max, struct device *dev);
+int i915_sg_map(struct scatterlist *sgt, unsigned long total, unsigned long max, struct device *dev);
 
 struct scatterlist *__sg_table_inline_create(gfp_t gfp);
 struct scatterlist *sg_table_inline_create(gfp_t gfp);
@@ -199,10 +202,31 @@ static inline u64 __sg_total_length(struct scatterlist *sg, bool dma)
 {
 	u64 total = 0;
 
-	for (; sg; sg = __sg_next(sg))
+	for (; sg; sg = __sg_next(sg)) {
+		if (dma && !sg_dma_len(sg))
+			break;
+
 		total += dma ? sg_dma_len(sg) : sg->length;
+	}
 
 	return total;
+}
+
+static inline unsigned long __sg_phys(struct scatterlist *sg)
+{
+	return page_to_phys(sg_page(sg));
+}
+
+unsigned long __i915_iommu_alloc(unsigned long total, u64 dma_limit, struct iommu_domain *domain);
+void __i915_iommu_free(unsigned long iova, unsigned long total, unsigned long mapped, struct iommu_domain *domain);
+
+int __i915_iommu_map(struct iommu_domain *domain,
+		     unsigned long iova, phys_addr_t paddr, size_t size,
+		     int prot, gfp_t gfp, size_t *mapped);
+
+static inline u64 i915_dma_limit(struct device *dev)
+{
+	return min_not_zero(dma_get_mask(dev), dev->bus_dma_limit);
 }
 
 #endif

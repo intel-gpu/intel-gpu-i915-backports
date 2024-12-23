@@ -2079,8 +2079,7 @@ static int perf_series_engines(void *arg)
 			st_engine_heartbeat_disable(p->engine);
 
 			if (intel_engine_supports_stats(p->engine))
-				p->busy = intel_engine_get_busy_time(p->engine,
-								     &p->time) + 1;
+				p->busy = intel_engine_get_busy_time(p->engine, 0, &p->time) + 1;
 			else
 				p->time = ktime_get();
 			p->runtime = -intel_context_get_total_runtime_ns(ce);
@@ -2097,8 +2096,7 @@ static int perf_series_engines(void *arg)
 			u64 busy, dt, now;
 
 			if (p->busy)
-				p->busy = ktime_sub(intel_engine_get_busy_time(p->engine,
-									       &now),
+				p->busy = ktime_sub(intel_engine_get_busy_time(p->engine, 0, &now),
 						    p->busy - 1);
 			else
 				now = ktime_get();
@@ -2166,7 +2164,7 @@ static int p_sync0(void *arg)
 
 	st_engine_heartbeat_disable(engine);
 	if (intel_engine_supports_stats(engine)) {
-		p->busy = intel_engine_get_busy_time(engine, &p->time);
+		p->busy = intel_engine_get_busy_time(engine, 0, &p->time);
 		busy = true;
 	} else {
 		p->time = ktime_get();
@@ -2199,7 +2197,7 @@ static int p_sync0(void *arg)
 	if (busy) {
 		ktime_t now;
 
-		p->busy = ktime_sub(intel_engine_get_busy_time(engine, &now),
+		p->busy = ktime_sub(intel_engine_get_busy_time(engine, 0, &now),
 				    p->busy);
 		p->time = ktime_sub(now, p->time);
 	} else {
@@ -2239,7 +2237,7 @@ static int p_sync1(void *arg)
 
 	st_engine_heartbeat_disable(engine);
 	if (intel_engine_supports_stats(engine)) {
-		p->busy = intel_engine_get_busy_time(engine, &p->time);
+		p->busy = intel_engine_get_busy_time(engine, 0, &p->time);
 		busy = true;
 	} else {
 		p->time = ktime_get();
@@ -2274,7 +2272,7 @@ static int p_sync1(void *arg)
 	if (busy) {
 		ktime_t now;
 
-		p->busy = ktime_sub(intel_engine_get_busy_time(engine, &now),
+		p->busy = ktime_sub(intel_engine_get_busy_time(engine, 0, &now),
 				    p->busy);
 		p->time = ktime_sub(now, p->time);
 	} else {
@@ -2313,7 +2311,7 @@ static int p_many(void *arg)
 
 	st_engine_heartbeat_disable(engine);
 	if (intel_engine_supports_stats(engine)) {
-		p->busy = intel_engine_get_busy_time(engine, &p->time);
+		p->busy = intel_engine_get_busy_time(engine, 0, &p->time);
 		busy = true;
 	} else {
 		p->time = ktime_get();
@@ -2337,7 +2335,7 @@ static int p_many(void *arg)
 	if (busy) {
 		ktime_t now;
 
-		p->busy = ktime_sub(intel_engine_get_busy_time(engine, &now),
+		p->busy = ktime_sub(intel_engine_get_busy_time(engine, 0, &now),
 				    p->busy);
 		p->time = ktime_sub(now, p->time);
 	} else {

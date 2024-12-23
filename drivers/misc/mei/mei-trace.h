@@ -26,7 +26,11 @@ TRACE_EVENT(mei_reg_read,
 		__field(u32, val)
 	),
 	TP_fast_assign(
+#ifdef BPM_ASSIGN_STR_SECOND_ARG_PRESENT
+		__assign_str(dev);
+#else
 		__assign_str(dev, dev_name(dev));
+#endif
 		__entry->reg  = reg;
 		__entry->offs = offs;
 		__entry->val = val;
@@ -45,7 +49,11 @@ TRACE_EVENT(mei_reg_write,
 		__field(u32, val)
 	),
 	TP_fast_assign(
+#ifdef BPM_ASSIGN_STR_SECOND_ARG_PRESENT
+		__assign_str(dev);
+#else
 		__assign_str(dev, dev_name(dev));
+#endif
 		__entry->reg = reg;
 		__entry->offs = offs;
 		__entry->val = val;
@@ -64,7 +72,11 @@ TRACE_EVENT(mei_pci_cfg_read,
 		__field(u32, val)
 	),
 	TP_fast_assign(
+#ifdef BPM_ASSIGN_STR_SECOND_ARG_PRESENT
+		__assign_str(dev);
+#else
 		__assign_str(dev, dev_name(dev));
+#endif
 		__entry->reg  = reg;
 		__entry->offs = offs;
 		__entry->val = val;

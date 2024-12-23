@@ -3,6 +3,10 @@
 
 #include_next <drm/drm_print.h>
 
+#ifdef BPM_DEBUGFS_CREATE_APIS_NOT_PRESENT
+#include <linux/debugfs.h>
+#endif
+
 #ifdef BPM_DRM_DEBUG_PRINTER_NOT_PRESENT
 static inline struct drm_printer drm_debug_printer(const char *prefix)
 {

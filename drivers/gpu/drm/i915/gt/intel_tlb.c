@@ -6,6 +6,7 @@
 #include "i915_drv.h"
 #include "i915_trace.h"
 #include "intel_gt.h"
+#include "intel_gt_irq.h"
 #include "intel_gt_pm.h"
 #include "intel_tlb.h"
 #include "uc/intel_guc.h"
@@ -31,8 +32,10 @@ static bool tlb_advance(u32 *slot, u32 seqno)
 
 void intel_tlb_invalidation_done(struct intel_gt *gt, u32 seqno)
 {
-	if (seqno && tlb_advance(&gt->tlb.seqno, seqno))
+	if (seqno && tlb_advance(&gt->tlb.seqno, seqno)) {
+		GT_TRACE(gt, "seqno:%x\n", seqno);
 		wake_up_all(&gt->tlb.wq);
+	}
 }
 
 static bool tlb_seqno_passed(const struct intel_gt *gt, u32 seqno)
@@ -102,16 +105,21 @@ static bool busy_wait(struct intel_gt *gt, u32 seqno, unsigned long timeout_ns)
 
 void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic)
 {
+	ktime_t t0;
+
 	if (unlikely(!i915_seqno_passed(READ_ONCE(gt->tlb.next_seqno), seqno)))
 		return;
 
 	if (tlb_seqno_passed(gt, seqno))
 		return;
 
+	GT_TRACE(gt, "seqno:%x\n", seqno);
+	t0 = ktime_get();
+
 	while (atomic) {
 		intel_guc_ct_receive(&gt->uc.guc.ct);
 		if (tlb_seqno_passed(gt, seqno))
-			return;
+			goto out;
 	}
 
 	/*
@@ -121,10 +129,13 @@ void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic)
 	 * reply before we perfomed the deferred sync.
 	 */
 	if (busy_wait(gt, seqno, 20 * NSEC_PER_USEC))
-		return;
+		goto out;
 
 	wait_event_cmd(gt->tlb.wq, tlb_seqno_passed(gt, seqno),
 		       intel_guc_ct_receive(&gt->uc.guc.ct), );
+
+out:
+	__intel_gt_stats_irq_time(&gt->tlb.irq, ktime_get() - t0);
 }
 
 static u64 tlb_page_selective_size(u64 *addr, u64 length)
@@ -170,6 +181,9 @@ u32 intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 
 	/* Align start and length */
 	length = tlb_page_selective_size(&start, length);
+	GT_TRACE(gt,
+		 "vm->asid:%x, aligned start:%llx, length:%llx, next seqno:%x\n",
+		 vm->asid, start, length, gt->tlb.next_seqno);
 
 	with_intel_gt_pm_if_awake(gt, wakeref) {
 		seqno = intel_guc_invalidate_tlb_page_selective(&gt->uc.guc,
@@ -200,6 +214,11 @@ void intel_gt_show_tlb(struct intel_gt *gt, struct drm_printer *p, int indent)
 {
 	i_printf(p, indent, "TLB invalidation: { completed: %u, next: %u }\n",
 		 READ_ONCE(gt->tlb.seqno), READ_ONCE(gt->tlb.next_seqno));
+	i_printf(p, indent, "TLB waits: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+		 READ_ONCE(gt->tlb.irq.count),
+		 READ_ONCE(gt->tlb.irq.total),
+		 ewma_irq_time_read(&gt->tlb.irq.avg),
+		 READ_ONCE(gt->tlb.irq.max));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

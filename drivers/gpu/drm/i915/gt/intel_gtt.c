@@ -82,8 +82,8 @@ void i915_address_space_fini(struct i915_address_space *vm)
 
 	drm_mm_takedown(&vm->mm);
 
-	if (!i915_is_ggtt(vm) && HAS_UM_QUEUES(vm->i915))
-		GEM_WARN_ON(!xa_erase(&vm->i915->asid_resv.xa, vm->asid));
+	if (vm->asid)
+		xa_erase(&vm->i915->asid_resv.xa, vm->asid);
 
 	mutex_destroy(&vm->mutex);
 	i915_gem_object_put(vm->root_obj);

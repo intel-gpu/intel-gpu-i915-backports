@@ -22,4 +22,8 @@ static inline int page_ref_sub_and_test(struct page *page, int nr)
 }
 #endif
 
+#ifdef BPM_PAGE_CACHE_GET_SPECULATIVE_NOT_PRESENT
+#define page_cache_get_speculative(page) folio_try_get(page_folio(page))
+#endif
+
 #endif /* __BP_PAGE_REF_H */

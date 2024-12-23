@@ -52,24 +52,19 @@ else
 export INTEL_PMT_FORCED=0
 endif
 
-export DISABLE_DISPLAY=0
-SLES_OSV_VER := $(shell cat $(KERNEL_CONFIG) | grep "CONFIG_LOCALVERSION=" | cut -d '"' -f2 | cut -d '-' -f2 | cut -d '.' -f1-1)
-ifneq (, $(SLES_OSV_VER))
-VERSION_CHECK = $(shell expr $(SLES_OSV_VER) \>= 150400)
-endif
+#
+# Display support has been disabled by default for all OSVs except Ubuntu OSVs
+# In case if you need Display support, pass BUILD_CONFIG=enabledisplay
+#
+export DISABLE_DISPLAY=1
 
-ifeq ($(BUILD_CONFIG),disabledisplay)
-        DISABLE_DISPLAY=1
-else ifeq ($(BUILD_CONFIG), CUSTOM_KERN_1)
-ifeq ($(shell expr $(CUSTOM_KERN_VER) \>= 6.4), 1)
-        DISABLE_DISPLAY=1
-endif
-else ifeq ($(VERSION_CHECK), 1)
-        DISABLE_DISPLAY=1
+OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+ifeq ($(OSV_NAME), Ubuntu)
+DISABLE_DISPLAY=0
 endif
 
 ifeq ($(BUILD_CONFIG), enabledisplay)
-	DISABLE_DISPLAY=0
+DISABLE_DISPLAY=0
 endif
 
 # disable built-in rules for this file
@@ -237,12 +232,7 @@ common-help:
 	@echo " 			you installing current one."
 	@echo "  BUILD_CONFIG   : Specify build config variant"
 	@echo ""
-	@echo "		To disable display, pass BUILD_CONFIG=disabledispaly "
-	@echo " 		Ex: make <Target> BUILD_CONFIG=disabledisplay "
-	@echo ""
-	@echo "		##### List of OSVs for which display has been disabled by default ###### "
-	@echo "			SLES15_SP6     SLES15_SP5      SLES15_SP4 "
-	@echo ""
+	@echo "		Display support has been disabled by default for all OSVs except Ubuntu OSVs"
 	@echo "		If you want to force enable display, pass BUILD_CONFIG=enabledispaly "
 	@echo "			Ex : make <Target> BUILD_CONFIG=enabledisplay "
 	@echo ""

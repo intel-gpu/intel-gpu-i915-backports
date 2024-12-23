@@ -28,4 +28,9 @@ int intel_guc_engine_usage_record_map_v2(struct intel_guc *guc,
 					 struct iosys_map *global_map);
 u32 intel_guc_engine_usage_offset_global(struct intel_guc *guc);
 
+struct iosys_map intel_guc_engine_activity_map(struct intel_guc *guc,
+					       struct intel_engine_cs *engine, u32 idx);
+struct iosys_map intel_guc_engine_metadata_map(struct intel_guc *guc,
+					       u32 idx);
+
 #endif

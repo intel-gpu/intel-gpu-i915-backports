@@ -26,7 +26,7 @@ struct i915_debug_event {
 	u32 flags;
 	u64 seqno;
 	u64 size;
-	u8 data[0];
+	u8 data[];
 } __packed;
 
 struct i915_debug_event_client {
@@ -63,7 +63,7 @@ struct i915_debug_event_vm_bind {
 	u64 va_length;
 	u32 num_uuids;
 	u32 flags;
-	u64 uuids[0];
+	u64 uuids[];
 } __packed;
 
 struct i915_debug_event_context_param {
@@ -83,7 +83,7 @@ struct i915_debug_event_engines {
 	u64 client_handle;
 	u64 ctx_handle;
 	u64 num_engines;
-	struct i915_debug_engine_info engines[0];
+	struct i915_debug_engine_info engines[];
 } __packed;
 
 struct i915_debug_event_eu_attention {
@@ -96,7 +96,7 @@ struct i915_debug_event_eu_attention {
 	struct i915_engine_class_instance ci;
 
 	u32 bitmask_size;
-	u8  bitmask[0];
+	u8  bitmask[];
 } __packed;
 
 struct i915_debug_event_pagefault {
@@ -111,7 +111,7 @@ struct i915_debug_event_pagefault {
 	u64 pagefault_address;
 
 	u32 bitmask_size;
-	u8  bitmask[0];
+	u8  bitmask[];
 } __packed;
 
 struct i915_debug_vm_open {

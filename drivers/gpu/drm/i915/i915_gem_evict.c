@@ -73,6 +73,9 @@ mark_free(struct drm_mm_scan *scan,
 	if (i915_vma_is_pinned(vma))
 		return false;
 
+	if (i915_vma_is_persistent(vma))
+		return false;
+
 	list_add(&vma->evict_link, unwind);
 	return drm_mm_scan_add_block(scan, &vma->node);
 }
@@ -342,7 +345,7 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
 			}
 		}
 
-		if (i915_vma_is_pinned(vma)) {
+		if (i915_vma_is_pinned(vma) || i915_vma_is_persistent(vma)) {
 			ret = -ENOSPC;
 			break;
 		}

@@ -404,7 +404,7 @@ static ssize_t prelim_uapi_version_show(struct device *dev,
 	return sysfs_emit(buf, "%d.%d\n", PRELIM_UAPI_MAJOR, PRELIM_UAPI_MINOR);
 }
 
-static I915_DEVICE_ATTR_RO(prelim_uapi_version, prelim_uapi_version_show);
+static DEVICE_ATTR_RO(prelim_uapi_version);
 
 static ssize_t
 prelim_csc_unique_id_show(struct device *kdev, struct device_attribute *attr, char *buf)
@@ -811,10 +811,10 @@ static ssize_t iaf_socket_id_show(struct device *dev,
 	return sysfs_emit(buf, "0x%x\n", i915->intel_iaf.socket_id);
 }
 
-static I915_DEVICE_ATTR_RO(iaf_socket_id, iaf_socket_id_show);
+static DEVICE_ATTR_RO(iaf_socket_id);
 
 static const struct attribute *iaf_attrs[] = {
-	&dev_attr_iaf_socket_id.attr.attr,
+	&dev_attr_iaf_socket_id.attr,
 	NULL
 };
 
@@ -823,7 +823,7 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	struct device *kdev = dev_priv->drm.primary->kdev;
 	int ret;
 
-	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr.attr))
+	if (sysfs_create_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr))
 		dev_warn(kdev, "Failed adding prelim_uapi_version to sysfs\n");
 
 	if (INTEL_INFO(dev_priv)->has_csc_uid) {
@@ -889,7 +889,7 @@ void i915_teardown_sysfs(struct drm_i915_private *dev_priv)
 {
 	struct device *kdev = dev_priv->drm.primary->kdev;
 
-	sysfs_remove_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr.attr);
+	sysfs_remove_file(&kdev->kobj, &dev_attr_prelim_uapi_version.attr);
 
 	i915_teardown_error_capture(kdev);
 
