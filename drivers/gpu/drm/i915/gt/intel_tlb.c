@@ -34,7 +34,8 @@ void intel_tlb_invalidation_done(struct intel_gt *gt, u32 seqno)
 {
 	if (seqno && tlb_advance(&gt->tlb.seqno, seqno)) {
 		GT_TRACE(gt, "seqno:%x\n", seqno);
-		wake_up_all(&gt->tlb.wq);
+		if (waitqueue_active(&gt->tlb.wq))
+			wake_up_all(&gt->tlb.wq);
 	}
 }
 
@@ -120,6 +121,7 @@ void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic)
 		intel_guc_ct_receive(&gt->uc.guc.ct);
 		if (tlb_seqno_passed(gt, seqno))
 			goto out;
+		cpu_relax();
 	}
 
 	/*
@@ -128,11 +130,16 @@ void intel_gt_invalidate_tlb_sync(struct intel_gt *gt, u32 seqno, bool atomic)
 	 * wakeups. Normally the invalidations are very quick so we expect the
 	 * reply before we perfomed the deferred sync.
 	 */
-	if (busy_wait(gt, seqno, 20 * NSEC_PER_USEC))
+	if (busy_wait(gt, seqno - 1, 20 * NSEC_PER_USEC))
 		goto out;
 
-	wait_event_cmd(gt->tlb.wq, tlb_seqno_passed(gt, seqno),
+	wait_event_cmd(gt->tlb.wq, tlb_seqno_passed(gt, seqno - 1),
 		       intel_guc_ct_receive(&gt->uc.guc.ct), );
+
+	while (!tlb_seqno_passed(gt, seqno)) {
+		intel_guc_ct_receive(&gt->uc.guc.ct);
+		cond_resched();
+	}
 
 out:
 	__intel_gt_stats_irq_time(&gt->tlb.irq, ktime_get() - t0);
@@ -212,13 +219,17 @@ void intel_gt_fini_tlb(struct intel_gt *gt)
 
 void intel_gt_show_tlb(struct intel_gt *gt, struct drm_printer *p, int indent)
 {
+	if (!READ_ONCE(gt->tlb.next_seqno))
+		return;
+
 	i_printf(p, indent, "TLB invalidation: { completed: %u, next: %u }\n",
 		 READ_ONCE(gt->tlb.seqno), READ_ONCE(gt->tlb.next_seqno));
-	i_printf(p, indent, "TLB waits: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
-		 READ_ONCE(gt->tlb.irq.count),
-		 READ_ONCE(gt->tlb.irq.total),
-		 ewma_irq_time_read(&gt->tlb.irq.avg),
-		 READ_ONCE(gt->tlb.irq.max));
+	if (READ_ONCE(gt->tlb.irq.count))
+		i_printf(p, indent, "TLB waits: { count: %lu, total: %lluns, avg: %luns, max: %luns }\n",
+			 READ_ONCE(gt->tlb.irq.count),
+			 READ_ONCE(gt->tlb.irq.total),
+			 ewma_irq_time_read(&gt->tlb.irq.avg),
+			 READ_ONCE(gt->tlb.irq.max));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)

@@ -1753,6 +1753,7 @@ static int i915_driver_open(struct drm_device *dev, struct drm_file *file)
  * up any GEM state.
  */
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 static void i915_driver_lastclose(struct drm_device *dev)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
@@ -1762,6 +1763,7 @@ static void i915_driver_lastclose(struct drm_device *dev)
 	if (HAS_DISPLAY(i915))
 		vga_switcheroo_process_delayed_switch();
 }
+#endif
 #endif
 
 static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
@@ -2543,6 +2545,9 @@ static const struct file_operations i915_driver_fops = {
 	.read = drm_read,
 	.compat_ioctl = i915_ioc32_compat_ioctl,
 	.llseek = noop_llseek,
+#ifdef BPM_FOP_FLAGS_UNINITIALIZATION_WARNING
+	.fop_flags = FOP_UNSIGNED_OFFSET,
+#endif
 };
 
 static int
@@ -2782,7 +2787,9 @@ static const struct drm_driver i915_drm_driver = {
 	.release = i915_driver_release,
 	.open = i915_driver_open,
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 	.lastclose = i915_driver_lastclose,
+#endif
 #endif
 	.postclose = i915_driver_postclose,
 

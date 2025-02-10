@@ -101,19 +101,20 @@ static void add_signaling_context(struct intel_breadcrumbs *b,
 	spin_unlock(&b->signalers_lock);
 }
 
-static bool remove_signaling_context(struct intel_breadcrumbs *b,
-				     struct intel_context *ce)
+static struct intel_timeline *
+remove_signaling_context(struct intel_breadcrumbs *b,
+			 struct intel_context *ce)
 {
 	lockdep_assert_held(&ce->signal_lock);
 
 	if (!list_empty(&ce->signals))
-		return false;
+		return NULL;
 
 	spin_lock(&b->signalers_lock);
 	list_del_rcu(&ce->signal_link);
 	spin_unlock(&b->signalers_lock);
 
-	return true;
+	return ce->timeline;
 }
 
 __maybe_unused static bool
@@ -222,7 +223,7 @@ static void signal_irq_work(struct irq_work *work)
 		struct i915_request *rq;
 
 		list_for_each_entry_rcu(rq, &ce->signals, signal_link) {
-			bool release;
+			struct intel_timeline *release;
 
 			if (!__i915_request_is_complete(rq))
 				break;
@@ -241,8 +242,8 @@ static void signal_irq_work(struct irq_work *work)
 			release = remove_signaling_context(b, ce);
 			spin_unlock(&ce->signal_lock);
 			if (release) {
-				if (intel_timeline_is_last(ce->timeline, rq))
-					add_retire(b, ce->timeline);
+				if (intel_timeline_is_last(release, rq))
+					add_retire(b, release);
 				intel_context_put(ce);
 			}
 

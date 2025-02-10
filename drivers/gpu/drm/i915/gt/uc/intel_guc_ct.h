@@ -69,8 +69,6 @@ struct intel_guc_ct {
 		struct intel_guc_ct_buffer recv;
 	} ctbs;
 
-	struct mutex send_mutex;
-
 	/** @wq: wait queue for g2h chanenl */
 	wait_queue_head_t wq;
 

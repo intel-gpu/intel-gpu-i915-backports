@@ -78,7 +78,8 @@ static void ufence_kmap(struct dma_fence_work *work)
 
 	va = kmap_atomic(ufence->page);
 	memcpy(va + offset_in_page(ufence->ptr), &ufence->val, sizeof(ufence->val));
-	wake_up_all(vb->wq);
+	if (waitqueue_active(vb->wq))
+		wake_up_all(vb->wq);
 	kunmap_atomic(va);
 }
 
@@ -115,7 +116,8 @@ static int ufence_mm(struct dma_fence_work *work)
 
 		kthread_use_mm(mm);
 		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
-			wake_up_all(vb->wq);
+			if (waitqueue_active(vb->wq))
+				wake_up_all(vb->wq);
 			ret = 0;
 		}
 		kthread_unuse_mm(mm);

@@ -130,7 +130,7 @@ static inline void intel_tlb_sync(struct drm_i915_private *i915, const u32 *tlb)
 
 	for_each_gt(gt, i915, id) {
 		if (tlb[id])
-			intel_gt_invalidate_tlb_sync(gt, tlb[id], false);
+			intel_gt_invalidate_tlb_sync(gt, tlb[id] - 1, false);
 	}
 }
 

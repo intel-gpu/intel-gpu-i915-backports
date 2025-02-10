@@ -607,7 +607,7 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 			return ERR_PTR(scratch_fault(reply->vm, info));
 		}
 
-		return ERR_PTR(-EFAULT);
+		return ERR_PTR(-EINVAL);
 	}
 
 	err = validate_fault(gt->i915, vma, info);
@@ -617,7 +617,7 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 	}
 
 	if (unlikely(test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))) {
-		err = -EFAULT;
+		err = -EINVAL;
 		goto put_vma;
 	}
 
@@ -637,7 +637,9 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 		if (err)
 			continue;
 
-		obj->flags |= I915_BO_FAULT_CLEAR | I915_BO_SYNC_HINT;
+		obj->flags |= I915_BO_SYNC_HINT;
+		if (reply->engine->mask & BIT(BCS0))
+			obj->flags |= I915_BO_FAULT_CLEAR;
 
 		mem = get_lmem(obj, gt);
 		if (mem && i915_gem_object_should_migrate_lmem(obj, mem, access_is_atomic(info))) {
@@ -961,7 +963,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 				      reply->info.engine_class,
 				      reply->info.engine_instance);
 	if (unlikely(!reply->engine)) {
-		err = -EINVAL;
+		err = -EIO;
 		goto err_vm;
 	}
 	GEM_BUG_ON(reply->engine->gt != gt);

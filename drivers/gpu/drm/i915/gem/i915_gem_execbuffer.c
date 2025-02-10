@@ -2511,9 +2511,10 @@ static void mark_used_engine(struct intel_context *ce)
 	 * context and cause a pagefault with a potential deadlock on the blitter
 	 * context (as it requires clear pages for a fresh user buffer).
 	 */
-	atomic_or(ce->engine->mask, &gt->user_engines);
-	if (i915_vm_page_fault_enabled(ce->vm) &&
-	    !i915_active_fence_isset(&ce->timeline->last_request)) {
+	if (is_power_of_2(ce->engine->mask & ~VIRTUAL_ENGINES))
+		atomic_or(ce->engine->mask, &gt->user_engines);
+
+	if (i915_vm_page_fault_enabled(ce->vm)) {
 		struct intel_context *blt = gt->migrate.clear[CLEAR_IDLE];
 		struct dma_fence *f;
 
@@ -2547,7 +2548,7 @@ static int eb_enter(struct i915_execbuffer *eb)
 	if (err)
 		goto unwind;
 
-	if (is_power_of_2(ce->engine->mask))
+	if (!i915_active_fence_isset(&ce->timeline->last_request))
 		mark_used_engine(ce);
 
 	return 0;

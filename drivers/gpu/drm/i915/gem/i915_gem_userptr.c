@@ -471,7 +471,7 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 {
 	struct scatterlist *sg = sgt, *chain = sgt + SG_NUM_INLINE - 1;
 	struct device *dev = obj->base.dev->dev;
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	struct iommu_domain *domain = get_iommu_domain(dev);
 	struct mm_struct *mm = obj->userptr.mm;
 	unsigned long addr = obj->userptr.ptr;
 	unsigned long end = addr + obj->base.size;
@@ -604,7 +604,11 @@ static int userptr_imm(struct drm_i915_gem_object *obj, struct scatterlist *sgt)
 			sg_mark_end(sg);
 
 			if (domain && domain->ops->iotlb_sync_map)
+#ifdef BPM_IOTLB_SYNC_MAP_ARGS_IOVA_SIZE_NOT_PRESENT
+				domain->ops->iotlb_sync_map(domain);
+#else
 				domain->ops->iotlb_sync_map(domain, iova, mapped);
+#endif
 
 			GEM_BUG_ON(__sg_total_length(sgt, false) != obj->base.size);
 			GEM_BUG_ON(__sg_total_length(sgt, true) != obj->base.size);
@@ -739,7 +743,7 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 	 */
 	dirty = !i915_gem_object_is_readonly(obj);
 
-	domain = iommu_get_domain_for_dev(obj->base.dev->dev);
+	domain = get_iommu_domain(obj->base.dev->dev);
 	if (domain && sg_dma_len(pages))
 		__i915_iommu_free(sg_dma_address(pages), obj->base.size, obj->base.size, domain);
 

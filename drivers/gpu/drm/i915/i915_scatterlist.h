@@ -8,6 +8,7 @@
 #define I915_SCATTERLIST_H
 
 #include <linux/dma-mapping.h>
+#include <linux/iommu.h>
 #include <linux/pfn.h>
 #include <linux/scatterlist.h>
 #include <linux/swiotlb.h>
@@ -227,6 +228,13 @@ int __i915_iommu_map(struct iommu_domain *domain,
 static inline u64 i915_dma_limit(struct device *dev)
 {
 	return min_not_zero(dma_get_mask(dev), dev->bus_dma_limit);
+}
+
+static inline struct iommu_domain *get_iommu_domain(struct device *dev)
+{
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+
+	return domain && domain->iova_cookie ? domain : NULL;
 }
 
 #endif

@@ -187,9 +187,39 @@ static u64 div_u64_roundup(u64 nom, u32 den)
 	return div_u64(nom + den - 1, den);
 }
 
+static inline u64 __mul_u64_u32_div(u64 a, u32 mul, u32 divisor)
+{
+	union {
+		u64 ll;
+		struct {
+#ifdef __BIG_ENDIAN
+			u32 high, low;
+#else
+			u32 low, high;
+#endif
+		} l;
+	} u, rl, rh;
+
+	u.ll = a;
+	rl.ll = mul_u32_u32(u.l.low, mul);
+	rh.ll = mul_u32_u32(u.l.high, mul) + rl.l.high;
+
+	/* Bits 32-63 of the result will be in rh.l.low. */
+	rl.l.high = do_div(rh.ll, divisor);
+
+	/* Bits 0-31 of the result will be in rl.l.low.	*/
+	do_div(rl.ll, divisor);
+
+	rl.l.high = rh.l.low;
+	return rl.ll;
+}
+
 u64 intel_gt_clock_interval_to_ns(const struct intel_gt *gt, u64 count)
 {
-	return div_u64_roundup(count * NSEC_PER_SEC, gt->clock_frequency);
+	if (!gt->clock_frequency)
+		return 0;
+
+	return __mul_u64_u32_div(count, NSEC_PER_SEC, gt->clock_frequency);
 }
 
 u64 intel_gt_pm_interval_to_ns(const struct intel_gt *gt, u64 count)

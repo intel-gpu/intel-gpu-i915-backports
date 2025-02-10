@@ -59,6 +59,7 @@ enum intel_gt_counters { /* u64 indices into gt->counters */
 	INTEL_GT_SWAPOUT_BYTES,
 	INTEL_GT_COPY_CYCLES,
 	INTEL_GT_COPY_BYTES,
+	__INTEL_GT_LAST_COUNTER__,
 };
 
 /* Count of GT Correctable and FATAL HW ERRORS */

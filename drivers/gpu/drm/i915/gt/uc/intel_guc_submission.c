@@ -1006,6 +1006,8 @@ static void guc_submission_tasklet(tasklet_data_t t)
 #endif
 	unsigned long flags;
 
+	/* Drain the interrupt workqueue to prevent overfilling send/recv ct */
+	intel_guc_ct_receive(&guc->ct);
 	spin_lock_irqsave(&sched_engine->lock, flags);
 
 	while (guc_dequeue_one_context(guc))
@@ -1013,6 +1015,7 @@ static void guc_submission_tasklet(tasklet_data_t t)
 	i915_sched_engine_reset_on_empty(sched_engine);
 
 	spin_unlock_irqrestore(&sched_engine->lock, flags);
+	intel_guc_ct_receive(&guc->ct);
 }
 
 static void cs_irq_handler(struct intel_engine_cs *engine, u16 iir)
