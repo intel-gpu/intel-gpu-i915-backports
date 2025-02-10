@@ -285,7 +285,12 @@ int __i915_iommu_map(struct iommu_domain *domain,
 		size_t pgsz, count, sz;
 
 		pgsz = __i915_iommu_pgsize(domain, iova, paddr, size, &count);
+#ifdef BPM_IOMMU_OPS_MAP_PAGES_NOT_PRESENT
+		sz = count << __ffs(pgsz);
+		ret = domain->ops->map(domain, iova, paddr, sz, prot, gfp);
+#else
 		ret = domain->ops->map_pages(domain, iova, paddr, pgsz, count, prot, gfp, &sz);
+#endif
 		if (ret)
 			return ret;
 
@@ -338,7 +343,7 @@ unsigned long __i915_iommu_alloc(unsigned long total, u64 dma_limit, struct iomm
 
 int i915_sg_map(struct scatterlist *sgt, unsigned long total, unsigned long max, struct device *dev)
 {
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	struct iommu_domain *domain = get_iommu_domain(dev);
 	struct scatterlist *sg, *cur = NULL, *map;
 	unsigned long iova, mapped;
 	unsigned long end = -1;
@@ -430,7 +435,11 @@ int i915_sg_map(struct scatterlist *sgt, unsigned long total, unsigned long max,
 	if (domain) {
 		if (!err) {
 			if (domain->ops->iotlb_sync_map)
+#ifdef BPM_IOTLB_SYNC_MAP_ARGS_IOVA_SIZE_NOT_PRESENT
+				domain->ops->iotlb_sync_map(domain);
+#else
 				domain->ops->iotlb_sync_map(domain, iova, mapped);
+#endif
 		} else {
 			__i915_iommu_free(iova, total, mapped, domain);
 			sg_dma_len(sgt) = 0;

@@ -500,6 +500,79 @@ static void intel_fbdev_suspend_worker(struct work_struct *work)
 				true);
 }
 
+#ifdef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+/*
+ * Fbdev client and struct drm_client_funcs
+ */
+
+static void intel_fbdev_client_unregister(struct drm_client_dev *client)
+{
+	struct drm_fb_helper *fb_helper = drm_fb_helper_from_client(client);
+	struct drm_device *dev = fb_helper->dev;
+	struct pci_dev *pdev = to_pci_dev(dev->dev);
+
+	if (fb_helper->info) {
+		vga_switcheroo_client_fb_set(pdev, NULL);
+		drm_fb_helper_unregister_info(fb_helper);
+	} else {
+		drm_fb_helper_unprepare(fb_helper);
+		drm_client_release(&fb_helper->client);
+		kfree(fb_helper);
+	}
+}
+
+static int intel_fbdev_client_restore(struct drm_client_dev *client)
+{
+	struct drm_i915_private *dev_priv = to_i915(client->dev);
+	int ret;
+
+	ret = intel_fbdev_restore_mode(dev_priv);
+	if (ret)
+		return ret;
+
+	vga_switcheroo_process_delayed_switch();
+
+	return 0;
+}
+
+static int intel_fbdev_client_hotplug(struct drm_client_dev *client)
+{
+	struct drm_fb_helper *fb_helper = drm_fb_helper_from_client(client);
+	struct drm_device *dev = client->dev;
+	struct pci_dev *pdev = to_pci_dev(dev->dev);
+	int ret;
+
+	if (dev->fb_helper)
+		return __intel_fbdev_output_poll_changed(dev);
+
+	ret = drm_fb_helper_init(dev, fb_helper);
+	if (ret)
+		goto err_drm_err;
+
+	ret = drm_fb_helper_initial_config(fb_helper);
+	if (ret)
+		goto err_drm_fb_helper_fini;
+
+	vga_switcheroo_client_fb_set(pdev, fb_helper->info);
+
+	return 0;
+
+err_drm_fb_helper_fini:
+	drm_fb_helper_fini(fb_helper);
+err_drm_err:
+	drm_err(dev, "Failed to setup i915 fbdev emulation (ret=%d)\n", ret);
+	return ret;
+}
+
+static const struct drm_client_funcs intel_fbdev_client_funcs = {
+	.owner          = THIS_MODULE,
+	.unregister     = intel_fbdev_client_unregister,
+	.restore        = intel_fbdev_client_restore,
+	.hotplug        = intel_fbdev_client_hotplug,
+};
+
+#endif
+
 int intel_fbdev_init(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
@@ -528,6 +601,15 @@ int intel_fbdev_init(struct drm_device *dev)
 		ifbdev->preferred_bpp = 32;
 #endif
 
+#ifdef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+	ret = drm_client_init(dev, &ifbdev->helper.client, "intel-fbdev",
+				&intel_fbdev_client_funcs);
+	if (ret) {
+		drm_err(dev, "Failed to register client: %d\n", ret);
+		goto err_drm_fb_helper_unprepare;
+	}
+#endif
+
 	ret = drm_fb_helper_init(dev, &ifbdev->helper);
 	if (ret) {
 		kfree(ifbdev);
@@ -538,6 +620,13 @@ int intel_fbdev_init(struct drm_device *dev)
 	INIT_WORK(&dev_priv->fbdev_suspend_work, intel_fbdev_suspend_worker);
 
 	return 0;
+
+#ifdef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+err_drm_fb_helper_unprepare:
+	drm_fb_helper_unprepare(&ifbdev->helper);
+	mutex_destroy(&ifbdev->hpd_lock);
+	kfree(ifbdev);
+#endif
 }
 
 static void intel_fbdev_initial_config(void *data, async_cookie_t cookie)
@@ -678,13 +767,13 @@ void intel_fbdev_set_suspend(struct drm_device *dev, int state, bool synchronous
 	intel_fbdev_hpd_set_suspend(dev_priv, state);
 }
 
-void intel_fbdev_output_poll_changed(struct drm_device *dev)
+static int __intel_fbdev_output_poll_changed(struct drm_device *dev)
 {
 	struct intel_fbdev *ifbdev = to_i915(dev)->fbdev;
 	bool send_hpd;
 
 	if (!ifbdev)
-		return;
+		return -EINVAL;
 
 	intel_fbdev_sync(ifbdev);
 
@@ -695,21 +784,36 @@ void intel_fbdev_output_poll_changed(struct drm_device *dev)
 
 	if (send_hpd && (ifbdev->vma || ifbdev->helper.deferred_setup))
 		drm_fb_helper_hotplug_event(&ifbdev->helper);
+
+	return 0;
 }
 
-void intel_fbdev_restore_mode(struct drm_device *dev)
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+void intel_fbdev_output_poll_changed(struct drm_device *dev)
+{
+        __intel_fbdev_output_poll_changed(dev);
+}
+#endif
+
+int intel_fbdev_restore_mode(struct drm_device *dev)
 {
 	struct intel_fbdev *ifbdev = to_i915(dev)->fbdev;
+	int ret;
 
 	if (!ifbdev)
-		return;
+		return -EINVAL;
 
 	intel_fbdev_sync(ifbdev);
 	if (!ifbdev->vma)
-		return;
+		return -ENOMEM;
 
-	if (drm_fb_helper_restore_fbdev_mode_unlocked(&ifbdev->helper) == 0)
-		intel_fbdev_invalidate(ifbdev);
+	ret = drm_fb_helper_restore_fbdev_mode_unlocked(&ifbdev->helper);
+	if (ret)
+		return ret;
+
+	intel_fbdev_invalidate(ifbdev);
+
+	return 0;
 }
 
 struct intel_framebuffer *intel_fbdev_framebuffer(struct intel_fbdev *fbdev)

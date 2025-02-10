@@ -1,4 +1,22 @@
 # ChangeLog
+## Release I915_25WW06.5_1077.18_24.8.5_241129.8
+* Resolved the thundering herd problem in ct_receive by waking only the specific receiving process through
+  ct_request. This prevents waking unrelated processes and avoids inefficient iteration, especially during
+  concurrent page faults.
+* Resolved issues related to map_pages() and iotlb_sync_map() functions.
+* Implemented changes to ensure that all blocking send operations are awakened and canceled if completion
+  tracking (CT) fences are disabled during an ongoing send operation.
+* Fixed an issue causing node hangs when applications were profiled using VTune. The issue was addressed by
+  initializing chunk->policy for shmem allocations.
+* Changed the intel_fbdev_restore_mode return type from void to int to meet the fbdev client registration API
+  requirement introduced in kernel 6.12.
+* Fixed a node reboot issue that occurred due to a general protection fault. The issue was addressed by
+  protecting the acquisition of ce->timeline in signal_irq_work.
+* Deferred ct_receive from the ct_send_nb path to prevent deadlock caused by calling handlers under spinlocks.
+  The patch removes ct_receive from the non-blocking send path to reduce latency, allowing the caller to handle
+  scheduling of ct_receive for backlog clearing.
+* Enabled backport support for 6.12 kernel.
+
 ## Release I915_24WW52.1_1057.13_24.7.9_241015.10
 * Implemented GPU error capture during the splitting of cleared backing stores.
 * Initiated earlier shrinking of all system memory objects to mark pages as dirty and preserve their contents

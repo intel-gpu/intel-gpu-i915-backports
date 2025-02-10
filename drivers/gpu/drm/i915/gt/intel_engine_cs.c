@@ -1873,16 +1873,16 @@ static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t l
 	}
 }
 
-static void intel_engine_print_registers(struct intel_engine_cs *engine,
-					 struct drm_printer *m,
-					 int indent)
+static u32 intel_engine_print_registers(struct intel_engine_cs *engine,
+					struct drm_printer *m,
+					int indent)
 {
 	struct drm_i915_private *dev_priv = engine->i915;
 	u64 addr;
 
 	/* VF can't access these registers */
 	if (IS_SRIOV_VF(dev_priv))
-		return;
+		return 0;
 
 	i_printf(m, indent, "Registers: MMIO base: 0x%08x\n", engine->mmio_base);
 	indent += 2;
@@ -1917,6 +1917,8 @@ static void intel_engine_print_registers(struct intel_engine_cs *engine,
 	i_printf(m, indent, "RING_EIR:   0x%08x\n",
 		 ENGINE_READ(engine, RING_EIR));
 
+	i_printf(m, indent, "LRC:   0x%08x\n",
+		 ENGINE_READ(engine, RING_CURRENT_LRCA));
 	addr = intel_engine_get_active_head(engine);
 	i_printf(m, indent, "ACTHD:  0x%08x_%08x\n",
 		 upper_32_bits(addr), lower_32_bits(addr));
@@ -1930,6 +1932,8 @@ static void intel_engine_print_registers(struct intel_engine_cs *engine,
 		 ENGINE_READ(engine, RING_IPEIR));
 	i_printf(m, indent, "IPEHR: 0x%08x\n",
 		 ENGINE_READ(engine, RING_IPEHR));
+
+	return ENGINE_READ(engine, RING_CURRENT_LRCA);
 }
 
 static void print_request_ring(struct drm_printer *m, int indent, struct i915_request *rq)
@@ -2014,20 +2018,14 @@ static void print_properties(struct intel_engine_cs *engine,
 			 read_ul(&engine->defaults, p->offset));
 }
 
-static void engine_dump_request(struct intel_engine_cs *engine, struct i915_request *rq,
+static void engine_dump_request(struct intel_engine_cs *engine, struct i915_request *rq, u32 lrc,
 				struct drm_printer *m, int indent)
 {
-	u32 lrc;
-
 	i915_request_show(m, rq, "", indent);
-	if (!__i915_request_has_started(rq) || i915_request_signaled(rq))
+	if ((rq->context->lrc.lrca ^ lrc) & GENMASK(31, 12))
 		return;
 
-	lrc = 0;
-	if (!IS_SRIOV_VF(engine->i915))
-		lrc = ENGINE_READ(engine, RING_CURRENT_LRCA);
-	if (lrc & CURRENT_LRCA_VALID &&
-	    (rq->context->lrc.lrca ^ lrc) & GENMASK(31, 12))
+	if (!__i915_request_has_started(rq) || i915_request_signaled(rq))
 		return;
 
 	indent += 2;
@@ -2037,6 +2035,7 @@ static void engine_dump_request(struct intel_engine_cs *engine, struct i915_requ
 
 static void
 engine_dump_active_requests(struct intel_engine_cs *engine,
+			    u32 lrc,
 			    struct drm_printer *m,
 			    int indent)
 {
@@ -2074,7 +2073,7 @@ engine_dump_active_requests(struct intel_engine_cs *engine,
 			continue;
 
 		if (count++ < max - 1)
-			engine_dump_request(engine, rq, m, indent + 2);
+			engine_dump_request(engine, rq, lrc, m, indent + 2);
 		else
 			last = rq;
 	}
@@ -2084,7 +2083,7 @@ engine_dump_active_requests(struct intel_engine_cs *engine,
 				   "... skipping %d executing requests... \n",
 				   count - max);
 		}
-		engine_dump_request(engine, last, m, indent + 2);
+		engine_dump_request(engine, last, lrc, m, indent + 2);
 	}
 
 	i_printf(m, indent, "On hold?: %lu\n", list_count(&se->hold));
@@ -2099,6 +2098,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	struct i915_request *rq;
 	intel_wakeref_t wf;
 	ktime_t dummy;
+	u32 lrc = 0;
 
 	i_printf(m, indent, "%s:\n", engine->name);
 	indent += 2;
@@ -2141,11 +2141,11 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 
 	wf = intel_runtime_pm_get_if_in_use(engine->uncore->rpm);
 	if (wf) {
-		intel_engine_print_registers(engine, m, indent);
+		lrc = intel_engine_print_registers(engine, m, indent);
 		intel_runtime_pm_put(engine->uncore->rpm, wf);
 	}
 
-	engine_dump_active_requests(engine, m, indent);
+	engine_dump_active_requests(engine, lrc, m, indent);
 
 	if (engine->status_page.vma && (wf = intel_gt_pm_get_if_awake(engine->gt))) {
 		i_printf(m, indent, "HWSP [0x%08x,0x%08llx):\n",

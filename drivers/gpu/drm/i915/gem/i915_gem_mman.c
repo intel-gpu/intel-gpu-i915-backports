@@ -472,7 +472,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 
 		__set_bit(I915_BO_MMAP_BIT, &pg->flags);
 		i915_gem_object_unpin_pages(pg);
-	} while (err == -ENXIO || err == -ENOMEM);
+	} while ((err == -ENXIO || err == -ENOMEM) && (cond_resched(), 1));
 
 	ret = i915_error_to_vmf_fault(err);
 out:

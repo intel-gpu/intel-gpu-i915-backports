@@ -35,6 +35,7 @@ This repository contains following drivers.
 | SLES® | 15SP6 |  6.4.0.150600.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP5 |  5.14.21.150500.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP4 |  5.14.21.150400.xx |  [README](docs/README_sles.md) |
+| RHEL® | 9.5  |  5.14.0-503.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.4  |  5.14.0-427.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.3  |  5.14.0-362.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.2  |  5.14.0-284.xx |  [README](docs/README_redhat.md) |

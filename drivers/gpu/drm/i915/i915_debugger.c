@@ -1084,11 +1084,14 @@ debugger_resource_find(struct i915_debugger *debugger,
 static struct i915_debugger *
 __debugger_get(const struct i915_drm_client * const client, bool wait)
 {
+	struct drm_i915_private *i915 = client->clients->i915;
 	const struct i915_drm_client_name *name;
 	struct i915_debugger *debugger, *iter;
 	struct task_struct *client_task = NULL;
-	struct drm_i915_private *i915;
 	unsigned long flags;
+
+	if (list_empty(&i915->debuggers.list))
+		return NULL;
 
 	rcu_read_lock();
 	name = __i915_drm_client_name(client);
@@ -1096,7 +1099,6 @@ __debugger_get(const struct i915_drm_client * const client, bool wait)
 		client_task = get_pid_task(name->pid, PIDTYPE_PID);
 	rcu_read_unlock();
 
-	i915 = client->clients->i915;
 	debugger = NULL;
 
 	spin_lock_irqsave(&i915->debuggers.lock, flags);

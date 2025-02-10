@@ -4,6 +4,41 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,12,0)
+/*
+ * cb787f4ac0c2 [tree-wide] finally take no_llseek out
+ */
+#define BPM_NO_LLSEEK_NOT_PRESENT
+
+/*
+ * 1da86618bdce fs: Convert aops->write_begin to take a folio
+ * a225800f322a fs: Convert aops->write_end to take a folio
+ */
+#define BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+
+/*
+ * 0b7582803649 mm: remove PageSwapBacked
+ */
+#define BPM_SET_PAGE_SWAP_BACKED_NOT_PRESENT
+
+/*
+ * 5f60d5f6bbc1 move asm/unaligned.h to linux/unaligned.h
+ */
+#define BPM_ASM_UNALIGNED_HEADER_NOT_PRESENT
+
+/*
+ * b5757a5be2fa drm: Remove struct drm_driver.lastclose
+ * 446d0f4849b1 drm: Remove struct drm_mode_config_funcs.output_poll_changed
+ */
+#define BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+
+/*
+ * 210a03c9d51a fs: claw back a few FMODE_* bits
+ */
+#define BPM_FOP_FLAGS_UNINITIALIZATION_WARNING
+
+#endif /* LINUX_VERSION_IS_GEQ(6,12,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,11,0)
 /*
  * 1bb01bdab03f drm: move i915_component.h under include/drm/intel
@@ -62,8 +97,7 @@
 #define BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
 #endif
 
-
-#if LINUX_VERSION_IS_GEQ(6,9,0)
+#if LINUX_VERSION_IS_GEQ(6,9,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * d50892a9554c drm/i915: switch from drm_debug_printer() to device specific drm_dbg_printer()
  */
@@ -78,6 +112,13 @@
  * 0a5a46a6a61b PCI/AER: Generalize TLP Header Log reading
  */
 #define BPM_STRUCT_PCI_TLP_LOG_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,9,0)
+/*
+ * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
+ */
+#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
 
 /*
  * 2e61504fd1c3 drm/dp: switch drm_dp_vsc_sdp_log() to struct drm_printer
@@ -98,7 +139,8 @@
 	LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
 	(LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(111,121)) || \
         (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59)) || \
-	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
+	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0)) || \
+	 REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
  */
@@ -218,12 +260,18 @@
 #define BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,6,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4)... */
 
-#if LINUX_VERSION_IS_GEQ(6,5,0)
+#if LINUX_VERSION_IS_LESS(6,5,0)
+#if (!(REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || \
+			SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)))
 /*
- * 6801be4f2653 slub: Replace cmpxchg_double
+ * 227c6c832303c lib/ref_tracker: add printing to memory buffer
  */
-#define BPM_FREELIST_ABA_T_NOT_PRESENT
+#define BPM_REF_TRACKER_DRI_SNPRINT_PRESENT
+#endif /*  (!(REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || /
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)))*/
+#endif /* LINUX_VERSION_IS_LESS(6,5,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,5,0)
 /*
  * e5a1fd997cc2 i915: simplify subdirectory registration with register_sysctl
  */
@@ -248,6 +296,15 @@
  */
 #define BPM_PTE_OFFSET_MAP_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
+
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(23,33)))
+
+/*
+ * 6801be4f2653 slub: Replace cmpxchg_double
+ */
+#define BPM_FREELIST_ABA_T_NOT_PRESENT
+#endif /*LINUX_VERSION_IS_GEQ(6,5,0) || SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)*/
 
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) || \
        (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
@@ -321,7 +378,9 @@
  * f5b3c341a46e mei: Move uuid_le_cmp() to its only user
  */
 #define BPM_UUID_LE_CMP_NOT_PRESENT
+#endif
 
+#if LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * 1c71222e5f23
  * mm: replace vma->vm_flags direct modifications with modifier calls
@@ -333,7 +392,7 @@
  */
 #define BPM_GUID_INIT_NOT_EXPORTED
 
-#endif /*LINUX_VERSION_IS_GEQ(6,3,0) */
+#endif /*LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5) */
 
 #if (LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
 
@@ -495,7 +554,7 @@
 #define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,1,0) || (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) ... */
 
-#if (LINUX_VERSION_IS_GEQ(6,1,0))
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5))
 /*
  * de492c83cae prandom: remove unused functions
  */
@@ -582,10 +641,12 @@
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+#if LINUX_VERSION_IS_LESS(6,12,0)
 /*
  * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
  */
 #define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
+#endif /*LINUX_VERSION_IS_LESS(6,12,0) */
 
 /*
  * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio
@@ -656,7 +717,9 @@
 #define BPM_FLUSH_WQ_WITH_WARN_WRAPPER_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(5,19,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,2) */
 
-#if LINUX_VERSION_IS_GEQ(5,19,0)
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
+	SUSE_RELEASE_VERSION_IS_EQL(1,15,5,0))
 /*
  * 7bc80a5462c3 dma-buf: add enum dma_resv_usage v4
  */
@@ -772,6 +835,10 @@
 #define BPM_IOSYS_MAP_FEW_MORE_HELPER_APIS
 #endif
 #endif
+
+#if (LINUX_VERSION_IS_GEQ(5,17,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(5,17,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if (LINUX_VERSION_IN_RANGE(5,17,0, 5,19,0) || \
 	REDHAT_RELEASE_VERSION_IS_EQL(9,1))
@@ -1049,6 +1116,12 @@
  *6f2beb268a5d swiotlb: Update is_swiotlb_active to add a struct device argument
  */
 #define BPM_IS_SWIOTLB_ACTIVE_ARG_DEV_NOT_PRESENT
+
+/*
+ * 910c4406ccc9 iommu: Add a map_pages() op for IOMMU drivers
+ */
+#define BPM_IOMMU_OPS_MAP_PAGES_NOT_PRESENT
+
 #endif /* !(REDHAT_RELEASE_VERSION_IS_GEQ(8,6)) */
 #endif /* !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,4,0)) */
 
@@ -1211,6 +1284,11 @@
  *
  */
 #define BPM_CONST_STRUCT_RCHAN_CALLBACKS_NOT_PRESENT
+
+/*
+ * 2ebbd25873ce iommu: Add iova and size as parameters in iotlb_sync_map
+ */
+#define BPM_IOTLB_SYNC_MAP_ARGS_IOVA_SIZE_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_LESS(5,12,0) && !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5)) */
 
 #if LINUX_VERSION_IS_LESS(5,11,0)
@@ -2110,11 +2188,10 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+#endif
 
-#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
-#endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
-
-#if REDHAT_RELEASE_VERSION_IS_LEQ(8,6)
+#if REDHAT_RELEASE_VERSION_IS_LEQ(8,6) || \
+	REDHAT_RELEASE_VERSION_IS_EQL(9,0)
 #define BPM_ALLOC_IOVA_FAST_EXPORT_NOT_PRESENT
 #endif
 

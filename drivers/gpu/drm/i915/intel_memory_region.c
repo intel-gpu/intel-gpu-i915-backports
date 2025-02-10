@@ -809,7 +809,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 	max_order = UINT_MAX;
 
 	/* On the first pass, try to only reuse idle pages */
-	if (!READ_ONCE(mem->parking.done))
+	if (flags & I915_BO_FAULT_CLEAR || !READ_ONCE(mem->parking.done))
 		flags |= I915_BUDDY_ALLOC_NEVER_ACTIVE;
 
 	/* Reserve the memory we reclaim for ourselves! */

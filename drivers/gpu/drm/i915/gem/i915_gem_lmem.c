@@ -159,7 +159,7 @@ static u32 *emit_mem_fence(struct i915_request *rq, u32 *cs)
 	if (HAS_FLAT_CCS(rq->engine->i915))
 		flags |= MI_FLUSH_DW_CCS;
 
-	return __gen8_emit_flush_dw(cs, 0, I915_GEM_HWS_SCRATCH * sizeof(u32), flags);
+	return __gen8_emit_flush_dw(cs, 0, LRC_PPHWSP_SCRATCH_ADDR, flags);
 }
 
 static u32 *emit_dummy_blt_wa(const struct i915_request *rq, u32 *cs)
@@ -291,6 +291,22 @@ static struct intel_context *get_swapout_context(struct intel_gt *gt)
 	int idx = atomic_fetch_inc(&gt->migrate.next_swapout) % ARRAY_SIZE(gt->migrate.swapout);
 
 	return __get_context(gt, gt->migrate.swapout[idx].context);
+}
+
+static struct i915_request *
+error_request(struct i915_request *rq, int err)
+{
+	struct intel_timeline *tl = rq->context->timeline;
+
+	lockdep_assert_held(&tl->mutex);
+	lockdep_unpin_lock(&tl->mutex, rq->cookie);
+
+	i915_request_set_error_once(rq, err);
+
+	__i915_request_commit(rq);
+	__i915_request_queue(rq, I915_PRIORITY_BARRIER);
+
+	return ERR_PTR(err);
 }
 
 static struct i915_request *
@@ -512,10 +528,7 @@ static int emit_tlb_invalidate(struct i915_request *rq)
 	if (IS_ERR(cs))
 		return PTR_ERR(cs);
 
-	cs = __emit_flush(cs,
-			  MI_INVALIDATE_TLB |
-			  MI_FLUSH_DW_STORE_INDEX |
-			  MI_FLUSH_DW_OP_STOREDW);
+	cs = __emit_flush(cs, MI_FLUSH_DW_STORE_INDEX | MI_FLUSH_DW_OP_STOREDW | MI_INVALIDATE_TLB);
 	intel_ring_advance(rq, cs);
 
 	return 0;
@@ -615,6 +628,8 @@ emit_pte(struct i915_request *rq,
 	GEM_BUG_ON(!pte->sgp);
 	GEM_BUG_ON(!pte->dma);
 	GEM_BUG_ON(pte->curr >= pte->max);
+	GEM_BUG_ON(!IS_ALIGNED(va, SZ_4K));
+	GEM_BUG_ON(encode & GEN12_PTE_PS64);
 
 	*out = 0;
 	for (pkt = 0; pkt < count; pkt += PTE_BATCH) {
@@ -647,8 +662,7 @@ emit_pte(struct i915_request *rq,
 			 */
 			if (IS_ALIGNED(va, SZ_64K)) {
 				if (IS_ALIGNED(dma, SZ_64K) &&
-				    pte->max - pte->curr >= SZ_64K &&
-				    len >= 15)
+				    pte->max - pte->curr >= SZ_64K)
 					encode |= GEN12_PTE_PS64;
 				else
 					encode &= ~GEN12_PTE_PS64;
@@ -677,7 +691,7 @@ emit_pte(struct i915_request *rq,
 			post = MI_POSTED;
 
 		GEM_BUG_ON(!hdr);
-		*head = MI_STORE_DATA_IMM | REG_BIT(21) | post | (2 * hdr + 1);
+		*head = MI_STORE_DATA_IMM | REG_BIT(21) | post | hdr << 1 | 1;
 		*out += hdr;
 
 		*cs++ = MI_NOOP;
@@ -746,7 +760,7 @@ emit_pte_2M(struct i915_request *rq,
 			post = MI_POSTED;
 
 		GEM_BUG_ON(!hdr);
-		*head = MI_STORE_DATA_IMM | REG_BIT(21) | post | (2 * hdr + 1);
+		*head = MI_STORE_DATA_IMM | REG_BIT(21) | post | hdr << 1 | 1;
 		*out += hdr;
 
 		*cs++ = MI_NOOP;
@@ -926,12 +940,12 @@ i915_gem_ccs_emit_swap(struct i915_request *rq,
 
 static unsigned int pte_pkt(u32 len)
 {
-	return 2 * len + 3 * DIV_ROUND_UP(len, PTE_BATCH);
+	return 2 * len + 4 * DIV_ROUND_UP(len, PTE_BATCH);
 }
 
 static unsigned int swap_pkt(u32 len)
 {
-	unsigned int pkt = SZ_4K;
+	unsigned int pkt = SZ_1K;
 
 	pkt += pte_pkt(len >> PAGE_SHIFT);
 
@@ -940,7 +954,7 @@ static unsigned int swap_pkt(u32 len)
 
 static unsigned int ccs_pkt(u32 len)
 {
-	unsigned int pkt = SZ_4K;
+	unsigned int pkt = SZ_1K;
 
 	pkt += pte_pkt(len / SZ_64K);
 	pkt += pte_pkt(ALIGN(len / SZ_4K, 256) >> 8);
@@ -2288,6 +2302,31 @@ i915_gem_get_free_smem_context(struct intel_gt *gt)
 	return __get_context(gt, gt->migrate.smem.context);
 }
 
+static struct i915_request *clear_request(struct intel_context *ce)
+{
+	struct i915_request *rq;
+	int err;
+
+	rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
+	if (IS_ERR(rq))
+		return rq;
+
+	err = rq->engine->emit_init_breadcrumb(rq);
+	if (err)
+		return error_request(rq, err);
+
+	err = emit_start_timestamp(rq);
+	if (err)
+		return error_request(rq, err);
+
+	return rq;
+}
+
+static struct i915_active_fence *to_clear_fence(struct scatterlist *sg)
+{
+	return &to_clear_page(sg_page(sg))->active;
+}
+
 int
 i915_gem_clear_smem(struct intel_context *ce,
 		    struct scatterlist *sg,
@@ -2298,155 +2337,85 @@ i915_gem_clear_smem(struct intel_context *ce,
 	const struct intel_migrate_window *w = ce->private;
 	const int counter = INTEL_GT_CLEAR_SMEM_CYCLES;
 	const u32 step = w->swap_chunk;
-	const int pkt = swap_pkt(step);
-	struct pte_window w4K, w2M;
-	struct i915_request *rq;
 	struct sgt_iter it_smem;
-	u64 total;
+	bool incomplete;
 	int err;
 
 	GEM_BUG_ON(ce->ring->size < SZ_256K);
 	GEM_BUG_ON(ce->vm != ce->engine->gt->vm);
 	GEM_BUG_ON(!IS_ALIGNED(step, PAGE_SIZE));
-	GEM_BUG_ON(step < SZ_2M);
+	GEM_BUG_ON(step < SZ_2M || step > SZ_2G);
 	GEM_BUG_ON(!sg);
 
 	it_smem = __sgt_iter(sg, true);
 	GEM_BUG_ON(!it_smem.dma);
+	GEM_BUG_ON(it_smem.sgp != sg);
 
 	mutex_lock(&ce->timeline->mutex);
 	intel_context_enter(ce);
 
-	rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
-	if (IS_ERR(rq)) {
-		err = PTR_ERR(rq);
-		goto exit;
-	}
-
-	err = rq->engine->emit_init_breadcrumb(rq);
-	if (err)
-		goto submit;
-
-	err = emit_start_timestamp(rq);
-	if (err)
-		goto submit;
-
-	total = 0;
-	reset_window(&w4K, &w->ps64);
-	reset_window(&w2M, &w->ps2M);
-
+	incomplete = false;
 	do {
-		int count, shift, len;
+		struct i915_request *rq;
+		int count, shift;
 		u64 window;
 		u32 length;
 
-		if (submit_request(rq, out, total, counter, pkt)) {
-			while (sg != it_smem.sgp) {
-				__i915_active_fence_set(&to_clear_page(sg_page(sg))->active, &rq->fence);
-				sg = __sg_next(sg);
-			}
-
-			rq = i915_request_create_locked(ce, I915_GFP_ALLOW_FAIL);
-			if (IS_ERR(rq)) {
-				__i915_active_fence_set(&to_clear_page(sg_page(sg))->active, &(*out)->fence);
-				err = PTR_ERR(rq);
-				goto exit;
-			}
-
-			err = rq->engine->emit_init_breadcrumb(rq);
-			if (err)
-				goto submit;
-
-			goto start_timestamp;
+		rq = clear_request(ce);
+		if (IS_ERR(rq)) {
+			err = PTR_ERR(rq);
+			break;
 		}
 
-		if (total >= step && /* inject arbitration point */
-		    emit_update_counters(rq, total, counter) == 0) {
-start_timestamp:
-			err = emit_start_timestamp(rq);
-			if (err)
-				goto submit;
-
-			total = 0;
-			reset_window(&w4K, &w->ps64);
-			reset_window(&w2M, &w->ps2M);
-		}
-
-		if (w2M.pte_end &&
+		if (w->ps2M.node.size &&
 		    IS_ALIGNED(it_smem.dma + it_smem.curr, SZ_2M) &&
 		    it_smem.max - it_smem.curr >= SZ_2M) {
-			if (window_full(&w2M, step)) {
-				err = emit_tlb_invalidate(rq);
-				if (err)
-					goto submit;
-
-				reset_window(&w4K, &w->ps64);
-				reset_window(&w2M, &w->ps2M);
-			}
-
 			shift = ilog2(SZ_2M);
-			window = w2M.pte_window;
+			window = w->ps2M.node.start;
 
-			err = emit_pte_2M(rq, &it_smem, w2M.pd_offset,
+			err = emit_pte_2M(rq, &it_smem, w->ps2M.pd_offset,
 					  encode | GEN8_PDE_PS_2M,
 					  step >> shift,
 					  &count);
-			GEM_BUG_ON(count << shift > step);
-			length = count << shift;
-
-			len = round_up(length, SZ_32M);
-			w2M.pte_window += len;
-			w2M.pd_offset += len >> shift << 3;
-			GEM_BUG_ON(w2M.pte_window > w2M.pte_end);
 		} else {
-			if (window_full(&w4K, step)) {
-				err = emit_tlb_invalidate(rq);
-				if (err)
-					goto submit;
-
-				reset_window(&w4K, &w->ps64);
-				reset_window(&w2M, &w->ps2M);
-			}
-
 			shift = ilog2(SZ_4K);
-			window = w4K.pte_window;
+			window = w->ps64.node.start;
 
 			err = emit_pte(rq, &it_smem,
-				       w4K.pd_offset, w4K.pte_window,
+				       w->ps64.pd_offset, window,
 				       encode, step >> shift,
-				       w2M.pte_end, &count);
-			GEM_BUG_ON(count << shift > step);
-			length = count << shift;
-
-			len = round_up(length, SZ_64K);
-			w4K.pte_window += len;
-			w4K.pd_offset += len >> shift << 3;
-			GEM_BUG_ON(w4K.pte_window > w4K.pte_end);
+				       w->ps2M.node.size, &count);
 		}
-		if (err)
-			goto submit;
+		if (err) {
+			error_request(rq, err);
+			break;
+		}
 
+		length = count << shift;
 		if (use_pvc_memset)
 			err = pvc_emit_clear(rq, window, length, shift);
 		else
 			err = xy_emit_clear(rq, window, length, shift);
-		if (err)
-			goto submit;
-
-		total += length;
-	} while (it_smem.sgp);
-
-	emit_update_counters(rq, total, counter);
-submit:
-	do {
-		__i915_active_fence_set(&to_clear_page(sg_page(sg))->active, &rq->fence);
-		if (sg == it_smem.sgp)
+		if (err) {
+			error_request(rq, err);
 			break;
-	} while ((sg = __sg_next(sg)));
-	if (err)
-		i915_request_set_error_once(rq, err);
-	*out = chain_request(rq, *out);
-exit:
+		}
+
+		do {
+			__i915_active_fence_set(to_clear_fence(sg), &rq->fence);
+			if (sg == it_smem.sgp)
+				break;
+		} while ((sg = __sg_next(sg)));
+
+		emit_update_counters(rq, length, counter);
+		*out = chain_request(rq, *out);
+
+		incomplete = it_smem.curr;
+	} while (it_smem.sgp && (cond_resched(), 1));
+
+	if (unlikely(incomplete))
+		i915_request_set_error_once(*out, err);
+
 	intel_context_exit(ce);
 	mutex_unlock(&ce->timeline->mutex);
 
@@ -3063,7 +3032,7 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 			chunk_size =
 				div_u64(mul_u32_u32(quantum_ns, SZ_16M), cycles);
 			chunk_size = max_t(u64, chunk_size, SZ_2M);
-			chunk_size = roundup_pow_of_two(chunk_size);
+			chunk_size = roundup_pow_of_two(chunk_size + 1);
 			w->swap_chunk = min_t(u64, chunk_size, w->ps64.node.size);
 			drm_dbg(&gt->i915->drm,
 				"GT%d: %s %s swap chunk size:%luKiB\n",
@@ -3092,6 +3061,7 @@ void i915_gem_init_lmem(struct intel_gt *gt)
 	}
 
 	__intel_memory_region_put_pages_buddy(gt->lmem, &blocks, false);
+	memset((void * __force)gt->counters.map, 0, __INTEL_GT_LAST_COUNTER__ * sizeof(*gt->counters.map));
 err_wf:
 	intel_rps_cancel_boost(&gt->rps);
 	intel_gt_pm_put(gt, wf);

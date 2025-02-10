@@ -43,10 +43,12 @@ static inline int ref_tracker_free(struct ref_tracker_dir *dir,
 }
 #endif /* BPM_NO_TRACKER_MEMBER_NOT_PRESENT */
 
+#ifdef BPM_REF_TRACKER_DRI_SNPRINT_PRESENT
 static inline int ref_tracker_dir_snprint(struct ref_tracker_dir *dir,
                                           char *buf, size_t size)
 {
         return 0;
 }
+#endif /* BPM_REF_TRACKER_DRI_SNPRINT_PRESENT */
 
 #endif /* _BACKPORT_LINUX_REF_TRACKER_H */
