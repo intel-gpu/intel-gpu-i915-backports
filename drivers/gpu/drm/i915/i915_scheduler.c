@@ -267,7 +267,7 @@ stack_pop(struct i915_request *rq,
 	return rq;
 }
 
-static void ipi_priority(struct i915_request *rq, int prio)
+static void __ipi_priority(struct i915_request *rq, int prio)
 {
 	int old = READ_ONCE(rq->sched.ipi_priority);
 	struct i915_dependency *p;
@@ -295,6 +295,40 @@ static void ipi_priority(struct i915_request *rq, int prio)
 	while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio))
 		if (old >= prio)
 			return;
+
+	if (i915_request_is_ready(rq) &&
+	    rq->sched_engine->bump_inflight_request_prio)
+		rq->sched_engine->bump_inflight_request_prio(rq, prio);
+}
+
+static void ipi_priority(struct i915_request *rq, int prio, int lvl)
+{
+	struct i915_dependency *p;
+	int old = rq_prio(rq);
+
+	for_each_signaler(p, rq) {
+		struct i915_request *s =
+			container_of(p->signaler, typeof(*s), sched);
+
+		if (rq_prio(s) >= prio)
+			continue;
+
+		if (i915_request_signaled(s))
+			continue;
+
+		if (lvl < 5) {
+			ipi_priority(s, prio, lvl + 1);
+			continue;
+		}
+
+		return __ipi_priority(rq, prio);
+	}
+
+	/* Update priority in place if no PI required */
+	while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio)) {
+		if (old >= prio)
+			return;
+	}
 
 	if (i915_request_is_ready(rq) &&
 	    rq->sched_engine->bump_inflight_request_prio)
@@ -342,7 +376,7 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 				continue;
 
 			if (s->sched_engine != se) {
-				ipi_priority(s, prio);
+				ipi_priority(s, prio, 0);
 				continue;
 			}
 
@@ -351,11 +385,8 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 			pos = &rq->sched.signalers_list;
 		}
 
-		/* Must be called before changing the priority */
-		if (se->bump_inflight_request_prio)
-			se->bump_inflight_request_prio(rq, prio);
-
-		RQ_TRACE(rq, "set-priority:%d\n", prio);
+		if (rq->engine)
+			RQ_TRACE(rq, "set-priority:%d\n", prio);
 		WRITE_ONCE(rq->sched.attr.priority, prio);
 
 		/*
@@ -368,6 +399,9 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 		 */
 		if (!i915_request_is_ready(rq))
 			continue;
+
+		if (se->bump_inflight_request_prio)
+			se->bump_inflight_request_prio(rq, prio);
 
 		GEM_BUG_ON(rq->sched_engine != se);
 		if (i915_request_in_priority_queue(rq))
@@ -388,6 +422,9 @@ void i915_request_set_priority(struct i915_request *rq, int prio)
 	int old = rq_prio(rq);
 
 	if (prio <= old)
+		return;
+
+	if (!(rq->sched.flags & I915_SCHED_HAS_PHYSICAL_CHAIN))
 		return;
 
 	rcu_read_lock();
@@ -494,11 +531,13 @@ bool __i915_sched_node_add_dependency(struct i915_sched_node *node,
 				      unsigned long flags)
 {
 	int prio = I915_PRIORITY_INVALID;
-	unsigned long irqflags;
 	bool ret = false;
 
+	if (!(signal->flags & I915_SCHED_HAS_PHYSICAL_CHAIN))
+		return false;
+
 	/* The signal->lock is always the outer lock in this double-lock. */
-	spin_lock_irqsave(&signal->lock, irqflags);
+	spin_lock_irq(&signal->lock);
 
 	if (!node_signaled(signal)) {
 		dep->signaler = signal;
@@ -519,7 +558,7 @@ bool __i915_sched_node_add_dependency(struct i915_sched_node *node,
 		ret = true;
 	}
 
-	spin_unlock_irqrestore(&signal->lock, irqflags);
+	spin_unlock_irq(&signal->lock);
 
 	if (prio != I915_PRIORITY_INVALID)
 		i915_request_set_priority(__node_to_request(signal), prio);
@@ -532,6 +571,9 @@ int i915_sched_node_add_dependency(struct i915_sched_node *node,
 				   unsigned long flags)
 {
 	struct i915_dependency *dep;
+
+	if (!(signal->flags & I915_SCHED_HAS_PHYSICAL_CHAIN))
+		return 0;
 
 	dep = i915_dependency_alloc();
 	if (!dep)
@@ -547,8 +589,9 @@ int i915_sched_node_add_dependency(struct i915_sched_node *node,
 void i915_sched_node_retire(struct i915_sched_node *node)
 {
 	struct i915_dependency *dep, *tmp;
-	unsigned long flags;
-	LIST_HEAD(waiters);
+
+	if (list_empty(&node->waiters_list))
+		return;
 
 	/*
 	 * Everyone we depended upon (the fences we wait to be signaled)
@@ -560,27 +603,21 @@ void i915_sched_node_retire(struct i915_sched_node *node)
 	 */
 
 	/* Remove ourselves from everyone who depends upon us */
-	spin_lock_irqsave(&node->lock, flags);
-	if (!list_empty(&node->waiters_list)) {
-		list_replace_rcu(&node->waiters_list, &waiters);
-		INIT_LIST_HEAD_RCU(&node->waiters_list);
-	}
-	spin_unlock_irqrestore(&node->lock, flags);
-
-	list_for_each_entry_safe(dep, tmp, &waiters, wait_link) {
+	list_for_each_entry_safe(dep, tmp, &node->waiters_list, wait_link) {
 		struct i915_sched_node *w = dep->waiter;
 
 		GEM_BUG_ON(dep->signaler != node);
 
-		spin_lock_irqsave(&w->lock, flags);
+		spin_lock_irq(&w->lock);
 		list_del_rcu(&dep->signal_link);
-		spin_unlock_irqrestore(&w->lock, flags);
+		spin_unlock_irq(&w->lock);
 
 		if (dep->flags & I915_DEPENDENCY_ALLOC)
 			i915_dependency_free(dep);
 
 		node_put(w);
 	}
+	INIT_LIST_HEAD_RCU(&node->waiters_list);
 }
 
 void i915_request_show_with_schedule(struct drm_printer *m,
@@ -622,12 +659,6 @@ static void default_destroy(struct kref *kref)
 	rbtree_postorder_for_each_entry_safe(pos, n, &se->queue.rb_root, node)
 		i915_priolist_free(pos);
 
-	if (se->cpumask != cpu_all_mask)
-		kfree(se->cpumask);
-
-	if (se->allmask != cpu_all_mask)
-		kfree(se->allmask);
-
 	kfree(se);
 }
 
@@ -661,97 +692,6 @@ i915_sched_engine_create(unsigned int subclass)
 	mark_lock_used_irq(&sched_engine->lock);
 
 	return sched_engine;
-}
-
-struct i915_sched_engine *
-i915_sched_engine_create_cpu(unsigned int subclass,
-			     struct workqueue_struct *wq,
-			     const struct cpumask *cpumask,
-			     const struct cpumask *allmask)
-{
-	struct i915_sched_engine *se;
-
-	se = i915_sched_engine_create(subclass);
-	if (!se)
-		return NULL;
-
-	se->wq = wq;
-	se->cpumask = cpumask;
-	se->allmask = allmask;
-	se->num_cpus = cpumask_weight(cpumask);
-	se->cpu = __i915_first_online_cpu(cpumask);
-
-	return se;
-}
-
-struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
-{
-	const struct cpumask *all;
-	struct cpumask *local;
-	int nid;
-
-	nid = dev_to_node(i915->drm.dev);
-	if (nid == NUMA_NO_NODE)
-		all = cpu_all_mask;
-	else
-		all = cpumask_of_node(nid);
-
-	local = kmalloc(sizeof(*local), GFP_KERNEL);
-	if (!local)
-		return NULL;
-
-	cpumask_copy(local, all);
-#if IS_ENABLED(CONFIG_NO_HZ_FULL) && !defined BPM_TICK_NOHZ_FULL_MASK_NOT_PRESENT
-	if (tick_nohz_full_enabled()) {
-		cpumask_andnot(local, local, tick_nohz_full_mask);
-		if (cpumask_empty(local)) /* no overlap with node? use any */
-			cpumask_andnot(local, cpu_all_mask, tick_nohz_full_mask);
-		if (cpumask_empty(local)) /* still nothing??? give up, use preferred */
-			cpumask_copy(local, all);
-	}
-#endif
-
-	return local;
-}
-
-struct cpumask *allmask_of_i915(struct drm_i915_private *i915)
-{
-	const struct cpumask *all;
-	struct cpumask *local;
-	int nid;
-
-	nid = dev_to_node(i915->drm.dev);
-	if (nid == NUMA_NO_NODE)
-		all = cpu_all_mask;
-	else
-		all = cpumask_of_node(nid);
-
-	local = kmalloc(sizeof(*local), GFP_KERNEL);
-	if (!local)
-		return NULL;
-
-	cpumask_copy(local, all);
-	return local;
-}
-
-static int next_cpu(struct i915_sched_engine *se)
-{
-	int cpu;
-
-	/* Prefer using the local cpu if allowed */
-	cpu = raw_smp_processor_id();
-	if (cpumask_test_cpu(cpu, se->allmask))
-		return cpu;
-
-	/* Otherwise pick the next cpu from the allowed set */
-	return __i915_next_online_cpu(se->cpumask, &se->cpu);
-}
-
-int i915_scheduler_queue_work_on(struct i915_sched_engine *se, int cpu, struct work_struct *work)
-{
-	if (cpu == WORK_CPU_UNBOUND)
-		cpu = next_cpu(se);
-	return queue_work_on(cpu, se->wq, work);
 }
 
 void i915_scheduler_module_exit(void)

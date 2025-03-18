@@ -847,6 +847,9 @@ static int query_memregion_info(struct drm_i915_private *i915,
 			return -EINVAL;
 	}
 
+	i915_gem_flush_free_objects(i915);
+	flush_workqueue(i915->wq);
+
 	for_each_memory_region(mr, i915, id) {
 		if (mr->private)
 			continue;

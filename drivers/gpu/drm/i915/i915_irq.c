@@ -1884,6 +1884,11 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	switch (cause) {
 	case BANK_CORRECTABLE_ERROR:
 		event = "Correctable Error Received on";
+
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				    cause);
+
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
 				    "[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 				    bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event,
@@ -1896,6 +1901,11 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		break;
 	case BANK_SPARNG_ERR_MITIGATION_DOWNGRADED:
 		event = "PCLS Applied";
+
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				    cause);
+
 		drm_err_ratelimited(&gt->i915->drm, HW_ERR
 				    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 				    event, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
@@ -1906,6 +1916,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		case UC_DEMAND_ACCESS:
 			event = "Uncorrectable Error on Demand Access received";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+					    cause);
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
 					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
 					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
@@ -1913,6 +1926,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			break;
 		case PATROL_SCRUB_ERROR:
 			event = "Uncorrectable Error on Patrol Scrub";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+					    cause);
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
 					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
@@ -1922,6 +1938,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			break;
 		case PCLS_EXCEEDED:
 			event = "Exceeded PCLS Threshold";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+					    cause);
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
 					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
@@ -1935,6 +1954,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		case PCLS_SAME_CACHELINE:
 			event = "Cannot Apply PCLS, PCLS Already Applied to This Line";
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+					    cause);
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
 					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
 					    event, bfswf0.tile, bfswf0.channel,
 					    bfswf0.pseudochannel, bfswf1.stack_id);
@@ -1942,12 +1964,18 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			break;
 		default:
 			event = "Unknown event for Error Cause:";
+			drm_err_ratelimited(&gt->i915->drm, HW_ERR
+					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+					    cause);
 			drm_err_ratelimited(&gt->i915->drm, HW_ERR "%s 0x%x\n",
 					    event, cause);
 			break;
 		}
 		break;
 	case BANK_SPARNG_ENA_PCLS_UNCORRECTABLE:
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				    cause);
 		dev_crit(gt->i915->drm.dev, HW_ERR
 				    "[HBM ERROR]: Unrepairable fault has been detected, replace the PVC Card\n");
 		break;
@@ -1998,12 +2026,6 @@ gen12_gsc_hw_error_handler(struct intel_gt *gt,
 				gt->mem_sparing.cause |=
 					raw_reg_read(regs,
 						     GSC_HEC_CORR_FW_ERR_DW0(base));
-
-				drm_err_ratelimited(&gt->i915->drm, HW_ERR
-						    "GSC %s FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-						    (gt->mem_sparing.cause == BANK_CORRECTABLE_ERROR) ?
-						    "CORRECTABLE" : "UNCORRECTABLE",
-						     gt->mem_sparing.cause);
 
 				if (unlikely(!gt->mem_sparing.cause))
 					goto re_enable_interrupt;
@@ -3646,7 +3668,9 @@ int intel_irq_install(struct drm_i915_private *dev_priv)
 #endif
 		return ret;
 	}
-	irq_set_affinity_hint(irq, dev_priv->sched->cpumask);
+
+	if (dev_priv->irq_affinity)
+		irq_set_affinity_hint(irq, dev_priv->irq_affinity);
 
 	intel_irq_postinstall(dev_priv);
 

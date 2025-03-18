@@ -32,13 +32,19 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 static inline struct drm_mm_node *
 i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
 {
-	struct drm_mm_node *node;
+	unsigned int seq;
 
-	node =  __drm_mm_interval_first(&vm->mm, addr, addr);
-	if (node->start > addr)
-		return NULL;
+	do {
+		struct drm_mm_node *node;
 
-	return node;
+		seq = read_seqcount_begin(&vm->seqlock);
+		node =  __drm_mm_interval_first(&vm->mm, addr, addr);
+		if (node->start <= addr && addr - node->start < node->size)
+			return node;
+
+	} while (read_seqcount_retry(&vm->seqlock, seq));
+
+	return NULL;
 }
 
 /* Flags used by pin/bind&friends. */
@@ -82,6 +88,7 @@ i915_gem_gtt_lookup(struct i915_address_space *vm, u64 addr)
  * PIN_RESIDENT. The vma is completely bound (the PTE point to the user's
  * backing store) once both PIN_RESIDENT | PIN_USER are set.
  */
+#define PIN_READ_ONLY		BIT_ULL(9)
 #define PIN_GLOBAL		BIT_ULL(10) /* I915_VMA_GLOBAL_BIND */
 #define PIN_RESIDENT		BIT_ULL(10) /* mutually exclusive with GGTT */
 #define PIN_USER		BIT_ULL(11) /* I915_VMA_LOCAL_BIND */

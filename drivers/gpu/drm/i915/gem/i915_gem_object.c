@@ -345,30 +345,6 @@ void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
 	GEM_BUG_ON(i915_gem_object_pat_index(obj) != pat_index);
 }
 
-bool i915_gem_object_should_migrate_lmem(struct drm_i915_gem_object *obj,
-					 const struct intel_memory_region *mem,
-					 bool is_atomic_fault)
-{
-	if (obj->mm.region.mem == mem || !(obj->memory_mask & BIT(mem->id)))
-		return false;
-
-	/*
-	 * first touch policy:
-	 * Migration to reassign the BO's placment to the faulting GT's memory region.
-	 */
-	if (!i915_gem_object_has_backing_store(obj))
-		return true;
-
-	/*
-	 * HW support cross-tile atomic access, so no need to
-	 * migrate when object is already in lmem.
-	 */
-	if (is_atomic_fault && !i915_gem_object_is_lmem(obj))
-		return true;
-
-	return i915_gem_object_test_preferred_location(obj, mem->id);
-}
-
 static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 				      struct i915_gem_ww_ctx *ww,
 				      struct prelim_drm_i915_gem_vm_advise *args)
@@ -446,6 +422,9 @@ static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 			break;
 		}
 
+		if (obj->mm.preferred_region == region)
+			break;
+
 		/* verify region is contained in object's placement list */
 		mask = obj->memory_mask;
 		if (!(mask & BIT(region->id))) {
@@ -454,6 +433,8 @@ static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 		}
 
 		obj->mm.preferred_region = region;
+		if (region != obj->mm.region.mem)
+			err = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_ACTIVE);
 		break;
 	default:
 		err = -EINVAL;
@@ -1011,8 +992,6 @@ static void i915_gem_free_object(struct drm_gem_object *gem_obj)
 int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 				 struct i915_gem_ww_ctx *ww)
 {
-	int err;
-
 	assert_object_held(obj);
 
 	if (obj->mm.madv != I915_MADV_WILLNEED)
@@ -1022,13 +1001,6 @@ int i915_gem_object_prepare_move(struct drm_i915_gem_object *obj,
 		return -EBUSY;
 
 	GEM_BUG_ON(obj->mm.mapping);
-
-	err = i915_gem_object_wait(obj,
-				   I915_WAIT_INTERRUPTIBLE |
-				   I915_WAIT_ALL,
-				   MAX_SCHEDULE_TIMEOUT);
-	if (err)
-		return err;
 
 	return i915_gem_object_unbind(obj, ww,
 				      I915_GEM_OBJECT_UNBIND_ACTIVE);
@@ -1142,6 +1114,7 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 
 	/* Parent of segment BOs has no backing store to migrate */
 	GEM_BUG_ON(i915_gem_object_has_segments(obj));
+	GEM_BUG_ON(!obj->mm.region.mem);
 
 	GEM_BUG_ON(id >= INTEL_REGION_UNKNOWN);
 	if (obj->mm.region.mem->id == id)
@@ -1204,7 +1177,10 @@ int i915_gem_object_migrate(struct drm_i915_gem_object *obj,
 		rq = i915_gem_object_copy_lmem(obj, 0,
 					       donor, 0,
 					       obj->base.size,
-					       true, nowait);
+					       I915_GEM_OBJECT_COPY_LMEM_UNCOMPRESSED |
+					       I915_GEM_OBJECT_COPY_LMEM_TOOTHER |
+					       I915_GEM_OBJECT_COPY_LMEM_SKIP_CLEARS |
+					       (nowait ? I915_GEM_OBJECT_COPY_LMEM_NOWAIT : 0));
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);
 			goto out;
@@ -1541,26 +1517,56 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 	return ret;
 }
 
-/*
- * i915_gem_object_migrate_to_smem - Migrate to SMEM
- * @obj: valid i915 gem object
- * @check_placement: If true, verify placement
- *
- * Allow caller to require the placement check.
- *
- */
 int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
-				    struct i915_gem_ww_ctx *ww,
-				    bool check_placement)
+				    struct i915_gem_ww_ctx *ww)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	int err;
 
-	if (check_placement && !(obj->memory_mask & REGION_SMEM))
-		return -EINVAL;
+	if (obj->mm.region.mem->id == INTEL_REGION_SMEM)
+		return 0;
 
-	return i915_gem_object_migrate_region(obj, ww,
-					      &i915->mm.regions[INTEL_REGION_SMEM],
-					      1);
+	err = i915_gem_object_migrate_region(obj, ww,
+					     &i915->mm.regions[INTEL_REGION_SMEM],
+					     1);
+	if (unlikely(err))
+		return err;
+
+	/* Pre-emptively rebind (readonly) with the new backing store */
+	if (!list_empty(&obj->vma.list) && obj->memory_mask & BIT(INTEL_REGION_SMEM)) {
+		struct i915_vma *vma;
+
+		spin_lock(&obj->vma.lock);
+		list_for_each_entry(vma, &obj->vma.list, obj_link) {
+			unsigned int flags;
+
+			if (!i915_vma_is_persistent(vma))
+				continue;
+
+			if (!drm_mm_node_allocated(&vma->node))
+				continue;
+
+			if (!i915_vm_page_fault_enabled(vma->vm))
+				continue;
+
+			if (!__i915_vma_get(vma))
+				continue;
+
+			spin_unlock(&obj->vma.lock);
+
+			flags = PIN_USER | PIN_RESIDENT;
+			if (i915_gem_object_not_preferred_location(obj))
+				flags |= PIN_READ_ONLY;
+
+			i915_vma_bind(vma, flags, false);
+
+			spin_lock(&obj->vma.lock);
+			__i915_vma_put(vma);
+		}
+		spin_unlock(&obj->vma.lock);
+	}
+
+	return 0;
 }
 
 static int

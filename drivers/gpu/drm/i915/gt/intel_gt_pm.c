@@ -141,14 +141,17 @@ static int __gt_park(struct intel_wakeref *wf)
 	struct intel_gt *gt = container_of(wf, typeof(*gt), wakeref);
 	struct drm_i915_private *i915 = gt->i915;
 
-	GT_TRACE(gt, "clearing memory\n");
 	atomic_set(&gt->user_engines, 0); /* clear any meta bits */
 
-	if (gt->lmem && i915_gem_lmem_park(gt->lmem))
+	if (gt->lmem && i915_gem_lmem_park(gt->lmem)) {
+		GT_TRACE(gt, "clearing local memory\n");
 		return -EBUSY;
+	}
 
-	if (i915->mm.regions[0]->gt == gt && i915_gem_shmem_park(i915->mm.regions[0]))
+	if (i915->mm.regions[0]->gt == gt && i915_gem_shmem_park(i915->mm.regions[0])) {
+		GT_TRACE(gt, "clearing system memory\n");
 		return -EBUSY;
+	}
 
 	GT_TRACE(gt, "parking\n");
 	runtime_end(gt);

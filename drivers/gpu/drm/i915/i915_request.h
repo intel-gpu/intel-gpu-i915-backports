@@ -457,8 +457,6 @@ void i915_request_submit(struct i915_request *request);
 void __i915_request_unsubmit(struct i915_request *request);
 void i915_request_unsubmit(struct i915_request *request);
 
-void i915_request_cancel(struct i915_request *rq, int error);
-
 long i915_request_wait(struct i915_request *rq,
 		       unsigned int flags,
 		       long timeout)
@@ -475,7 +473,7 @@ void i915_request_show(struct drm_printer *m,
 static inline bool i915_request_signaled(const struct i915_request *rq)
 {
 	/* The request may live longer than its HWSP, so check flags first! */
-	return rq->hwsp_seqno == (u32 *)&rq->fence.seqno;
+	return READ_ONCE(rq->hwsp_seqno) == (u32 *)&rq->fence.seqno;
 }
 
 static inline bool i915_request_is_active(const struct i915_request *rq)

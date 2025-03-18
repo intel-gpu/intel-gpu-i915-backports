@@ -329,7 +329,7 @@ int i915_drm_client_add_bo(struct i915_drm_client *client,
 void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
 				   bool resident)
 {
-	const struct i915_drm_client_bo *cb, *n;
+	const struct i915_drm_client_bo *cb;
 	int64_t sz;
 
 	sz = obj->base.size;
@@ -339,7 +339,9 @@ void i915_drm_client_make_resident(struct drm_i915_gem_object *obj,
 	spin_lock(&obj->client.lock);
 	if (obj->client.resident != resident) {
 		obj->client.resident = resident;
-		rbtree_postorder_for_each_entry_safe(cb, n, &obj->client.rb, node) {
+		for (cb = rb_entry(rb_first(&obj->client.rb), typeof(*cb), node);
+		     cb;
+		     cb = rb_entry(rb_next(&cb->node), typeof(*cb), node)) {
 			if (cb->shared)
 				atomic64_add(sz, &cb->client->resident_imported_devm_bytes);
 			else
@@ -545,8 +547,7 @@ static void free_name(struct rcu_head *rcu)
 }
 
 static int
-__i915_drm_client_register(struct i915_drm_client *client,
-			   struct task_struct *task)
+__i915_drm_client_register(struct i915_drm_client *client)
 {
 	struct i915_drm_clients *clients = client->clients;
 
@@ -582,11 +583,20 @@ static void __rcu_i915_drm_client_free(struct work_struct *wrk)
 	kfree(client);
 }
 
-static void pvc_wa_work(struct work_struct *wrk)
+static void register_client(struct work_struct *wrk)
 {
-	struct i915_drm_client *client = container_of(wrk, typeof(*client), pvc_wa);
+	struct i915_drm_client *client = container_of(wrk, typeof(*client), wrk);
+	struct drm_i915_private *i915 = client->clients->i915;
 
-	pvc_wa_disallow_rc6(client->clients->i915);
+	pvc_wa_disallow_rc6(i915);
+
+	if (__i915_drm_client_register(client)) {
+		rcu_read_lock();
+		dev_warn(i915->drm.dev,
+			 "Failed to register client '%s' with sysfs\n",
+			 i915_drm_client_name(client));
+		rcu_read_unlock();
+	}
 }
 
 struct i915_drm_client *
@@ -607,16 +617,12 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	mutex_init(&client->update_lock);
 	spin_lock_init(&client->ctx_lock);
 	INIT_LIST_HEAD(&client->ctx_list);
+	INIT_WORK(&client->wrk, register_client);
 	xa_init_flags(&client->uuids_xa, XA_FLAGS_ALLOC);
 
 	client->file = file;
 
 	client->clients = clients;
-
-	if (pvc_needs_rc6_wa(i915)) {
-		INIT_WORK(&client->pvc_wa, pvc_wa_work);
-		queue_work(i915->wq, &client->pvc_wa);
-	}
 
 	name = get_name(client, task);
 	if (!name) {
@@ -638,11 +644,8 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 	 * reference to the client; thus we can no longer immediately
 	 * free the client, but must drop the reference instead.
 	 */
-	ret = __i915_drm_client_register(client, task);
-	if (ret)
-		goto err_reg;
 
-	GEM_WARN_ON(task != current);
+	queue_work(i915->wq, &client->wrk);
 
 	i915_debugger_client_create(client);
 	i915_uuid_init(client);
@@ -653,11 +656,6 @@ err_xa:
 	call_rcu(&name->rcu, free_name);
 err_id:
 	kfree(client);
-	return ERR_PTR(ret);
-
-err_reg:
-	i915_drm_client_close(client);
-	i915_drm_client_put(client);
 	return ERR_PTR(ret);
 }
 
@@ -674,7 +672,7 @@ void i915_drm_client_close(struct i915_drm_client *client)
 	GEM_BUG_ON(READ_ONCE(client->closed));
 	WRITE_ONCE(client->closed, true);
 
-	if (client->pvc_wa.func && !cancel_work_sync(&client->pvc_wa))
+	if (!cancel_work_sync(&client->wrk))
 		pvc_wa_allow_rc6(client->clients->i915);
 
 	INIT_RCU_WORK(&client->rcu, __rcu_i915_drm_client_free);
@@ -711,13 +709,21 @@ i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, i
 	struct i915_drm_client *client;
 	long id;
 
+	if (xa_empty(&clients->xarray)) {
+		i_printf(p, indent, "Clients: idle\n");
+		return;
+	}
+
 	i_printf(p, indent, "Clients:\n");
 	indent += 2;
 
 	rcu_read_lock();
 	xa_for_each(&clients->xarray, id, client) {
-		i_printf(p, indent, "- client: { comm: \"%s\", pid: %d, uid: %d }\n",
+		struct task_struct *tsk = pid_task(i915_drm_client_pid(client), PIDTYPE_PID);
+
+		i_printf(p, indent, "- client: { task: \"%s\", state: %c, pid: %d, uid: %d }\n",
 			 i915_drm_client_name(client),
+			 tsk ? task_state_to_char(tsk) : 'Z',
 			 pid_nr(i915_drm_client_pid(client)),
 			 i915_drm_client_uid(client));
 	}
@@ -726,13 +732,19 @@ i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, i
 
 void i915_drm_clients_fini(struct i915_drm_clients *clients)
 {
-	do {
-		flush_workqueue(clients->i915->wq);
-		if (xa_empty(&clients->xarray))
-			break;
-		rcu_barrier();
-	} while (1);
+	if (!clients->i915)
+		return;
+
+	if (clients->i915->wq) {
+		do {
+			flush_workqueue(clients->i915->wq);
+			if (xa_empty(&clients->xarray))
+				break;
+			rcu_barrier();
+		} while (1);
+	}
 
 	GEM_BUG_ON(!xa_empty(&clients->xarray));
 	xa_destroy(&clients->xarray);
+	clients->i915 = NULL;
 }

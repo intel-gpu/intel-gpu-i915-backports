@@ -946,7 +946,7 @@ static void __assign_ppgtt(struct i915_gem_context *ctx,
 	vm = __set_ppgtt(ctx, vm);
 	if (vm) {
 		i915_debugger_vm_destroy(ctx->client, vm, false);
-		i915_vm_close(vm);
+		i915_vm_close_imm(vm);
 	}
 }
 
@@ -1406,7 +1406,7 @@ unlock:
 			i915_debugger_vm_destroy(file_priv->client, old, false);
 			i915_debugger_context_param_vm(file_priv->client, ctx, vm);
 		}
-		i915_vm_close(old);
+		i915_vm_close_imm(old);
 	}
 out:
 	i915_vm_put(vm);

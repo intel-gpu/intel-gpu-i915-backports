@@ -101,19 +101,19 @@ config DRM_I915_CHICKEN_ASYNC_UNBIND
 
 config DRM_I915_CHICKEN_SMEM_BLT
 	bool "Offload preclearing of system memory"
-	default n
+	default y
 
 config DRM_I915_CHICKEN_SMEM_FREE
 	bool "Offload preclearing upon freeing system memory"
-	default n
+	default y
 
 config DRM_I915_CHICKEN_SMEM_DMA
 	bool "Offload preclearing of system memory using DMA engines"
-	default n
+	default y
 
 config DRM_I915_CHICKEN_SMEM_IDLE
 	bool "Offload preclearing while idle"
-	default n
+	default y
 
 config DRM_I915_CHICKEN_SMEM_SPLIT
 	bool "Allow splitting of higher order pages from the precleared system memory cache"
@@ -125,4 +125,20 @@ config DRM_I915_CHICKEN_PX_CACHE
 
 config DRM_I915_CHICKEN_UPTR_IMM_2M
 	bool "Enable immediate retrieval of 2MiB hugepages from inside userptr"
+	default y
+
+config DRM_I915_CHICKEN_IRQ_QOS
+	bool "Disable C-states while waiting for expected interrupts from HW"
+	default y
+
+config DRM_I915_CHICKEN_PREBIND
+	bool "Prebind objects to local memory during VM_BIND ioctl"
+	default y
+
+config DRM_I915_CHICKEN_PREFAULT
+	bool "Prefault neighbouring pages around a user pagefault"
+	default y
+
+config DRM_I915_CHICKEN_HUGEFAULT
+	bool "Allow population of pmd with 2MiB huge pages for user mmaps"
 	default y

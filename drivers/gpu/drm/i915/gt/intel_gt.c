@@ -911,20 +911,11 @@ int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
 
 static int init_wq(struct intel_gt *gt)
 {
-	gt->wq = alloc_workqueue("i915-gt%d", WQ_HIGHPRI, 0, gt->info.id);
+	gt->wq = alloc_workqueue("i915-gt%d", WQ_UNBOUND, 0, gt->info.id);
 	if (!gt->wq)
 		return -ENOMEM;
 
-	gt->sched = i915_sched_engine_create_cpu(5, gt->wq, cpumask_of_i915(gt->i915), cpu_all_mask);
-	if (!gt->sched)
-		goto out_free_wq;
-
 	return 0;
-
-out_free_wq:
-	destroy_workqueue(gt->wq);
-	gt->wq = NULL;
-	return -ENOMEM;
 }
 
 static void print_fw_ver(struct intel_gt *gt, struct intel_uc_fw *fw)
@@ -937,6 +928,18 @@ static void print_fw_ver(struct intel_gt *gt, struct intel_uc_fw *fw)
 		fw->file_selected.ver.major,
 		fw->file_selected.ver.minor,
 		fw->file_selected.ver.patch);
+}
+
+static bool fatal_hw_error(int err)
+{
+	switch (err) {
+	case -ENODEV:
+	case -ENXIO:
+	case -EIO:
+		return true;
+	default:
+		return false;
+	}
 }
 
 int intel_gt_init(struct intel_gt *gt)
@@ -1055,13 +1058,14 @@ err_wq:
 	if (gt->wq) {
 		flush_workqueue(gt->wq);
 		rcu_barrier();
-		i915_sched_engine_put(gt->sched);
 		destroy_workqueue(gt->wq);
 		gt->wq = NULL;
 	}
+
+	intel_gt_set_wedged_on_init(gt);
+	if (fatal_hw_error(err)) /* if the device is beyond recovery, inform CI */
+		add_taint_for_CI(gt->i915, TAINT_WARN);
 out_fw:
-	if (err)
-		intel_gt_set_wedged_on_init(gt);
 	intel_uncore_forcewake_put(gt->uncore, FORCEWAKE_ALL);
 	intel_gt_pm_put(gt, wakeref);
 	return err;
@@ -1145,7 +1149,6 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 			rcu_barrier();
 			flush_workqueue(gt->wq);
 			rcu_barrier();
-			i915_sched_engine_put(gt->sched);
 			destroy_workqueue(gt->wq);
 			gt->wq = NULL;
 		}
@@ -1303,11 +1306,13 @@ static unsigned int gt_count(struct drm_i915_private *i915)
 	 * MMIO vfuncs are not setup yet
 	 */
 	mtcfg = __raw_uncore_read32(&i915->uncore, XEHPSDV_MTCFG_ADDR);
-	num_gt = REG_FIELD_GET(TILE_COUNT, mtcfg) + 1;
+	if (mtcfg == -1)
+		return 0;
 
 	/*
 	 * On XE_LPM+ platforms media engines are designed into separate tile
 	 */
+	num_gt = REG_FIELD_GET(TILE_COUNT, mtcfg) + 1;
 	if (MEDIA_VER(i915) >= 13)
 		num_gt++;
 
@@ -1340,7 +1345,7 @@ int intel_count_l3_banks(struct drm_i915_private *i915,
 	return count;
 }
 
-static unsigned int gt_mask(struct drm_i915_private *i915)
+static unsigned int gt_mask(struct drm_i915_private *i915, int num_gt)
 {
 	unsigned long mask;
 
@@ -1349,7 +1354,7 @@ static unsigned int gt_mask(struct drm_i915_private *i915)
 	else if (IS_SRIOV_VF(i915) && HAS_REMOTE_TILES(i915))
 		mask = to_root_gt(i915)->iov.vf.config.tile_mask;
 	else
-		mask = GENMASK(gt_count(i915) - 1, 0);
+		mask = GENMASK(num_gt - 1, 0);
 
 	if (i915_modparams.max_tiles > 0) {
 		unsigned int count, limit;
@@ -1395,9 +1400,13 @@ int pvc_intel_remote_gts_init_early(struct drm_i915_private *i915)
 	if (!IS_PONTEVECCHIO(i915) || IS_SRIOV_VF(i915))
 		return ret;
 
+	enabled_gt_mask = gt_count(i915);
+	if (!enabled_gt_mask)
+		return -ENODEV;
+
 	mmio_bar = GRAPHICS_VER(i915) == 2 ? GEN2_GTTMMADR_BAR : GTTMMADR_BAR;
 	phys_addr = pci_resource_start(pdev, mmio_bar);
-	enabled_gt_mask = gt_mask(i915);
+	enabled_gt_mask = gt_mask(i915, enabled_gt_mask);
 	i915->gt[0] = gt;
 
 	i = 1;
@@ -1473,11 +1482,14 @@ int intel_gt_probe_all(struct drm_i915_private *i915)
 	if (ret)
 		return ret;
 
-	enabled_gt_mask = gt_mask(i915);
+	num_gt = gt_count(i915);
+	if (!num_gt)
+		return -ENODEV;
+
+	enabled_gt_mask = gt_mask(i915, num_gt);
 	if (enabled_gt_mask & BIT(0))
 		i915->gt[0] = gt;
 
-	num_gt = gt_count(i915);
 	num_enabled_gt = hweight_long(enabled_gt_mask);
 	drm_dbg(&i915->drm, "GT count: %u, enabled: %d\n", num_gt, num_enabled_gt);
 

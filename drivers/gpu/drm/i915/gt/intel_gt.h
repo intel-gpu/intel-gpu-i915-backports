@@ -206,7 +206,7 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 
 static inline void intel_gt_queue_work(struct intel_gt *gt, struct work_struct *work)
 {
-	i915_scheduler_queue_work_on(gt->sched, WORK_CPU_UNBOUND, work);
+	queue_work(gt->wq, work);
 }
 
 static inline void intel_gt_set_wedged_async(struct intel_gt *gt)

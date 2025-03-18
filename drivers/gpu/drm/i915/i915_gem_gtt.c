@@ -67,7 +67,9 @@ int i915_gem_gtt_reserve(struct i915_address_space *vm,
 	node->start = offset;
 	node->color = color;
 
+	raw_write_seqcount_begin(&vm->seqlock);
 	err = drm_mm_reserve_node(&vm->mm, node);
+	raw_write_seqcount_end(&vm->seqlock);
 	if (err != -ENOSPC)
 		return err;
 
@@ -75,8 +77,11 @@ int i915_gem_gtt_reserve(struct i915_address_space *vm,
 		return -ENOSPC;
 
 	err = i915_gem_evict_for_node(vm, node, flags);
-	if (err == 0)
+	if (err == 0) {
+		raw_write_seqcount_begin(&vm->seqlock);
 		err = drm_mm_reserve_node(&vm->mm, node);
+		raw_write_seqcount_end(&vm->seqlock);
+	}
 
 	return err;
 }
@@ -176,9 +181,11 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 	if (alignment <= I915_GTT_MIN_ALIGNMENT)
 		alignment = 0;
 
+	raw_write_seqcount_begin(&vm->seqlock);
 	err = drm_mm_insert_node_in_range(&vm->mm, node,
 					  size, alignment, color,
 					  start, end, DRM_MM_INSERT_BEST);
+	raw_write_seqcount_end(&vm->seqlock);
 	if (err != -ENOSPC)
 		return err;
 
@@ -220,7 +227,11 @@ int i915_gem_gtt_insert(struct i915_address_space *vm,
 	if (err)
 		return err;
 
-	return drm_mm_insert_node_in_range(&vm->mm, node,
-					   size, alignment, color,
-					   start, end, DRM_MM_INSERT_EVICT);
+	raw_write_seqcount_begin(&vm->seqlock);
+	err = drm_mm_insert_node_in_range(&vm->mm, node,
+					  size, alignment, color,
+					  start, end, DRM_MM_INSERT_EVICT);
+	raw_write_seqcount_end(&vm->seqlock);
+
+	return err;
 }

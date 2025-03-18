@@ -16,20 +16,34 @@
 #include "intel_gt_pm.h"
 #include "intel_gt_requests.h"
 
-static bool irq_enable(struct intel_breadcrumbs *b)
+static bool __irq_enable(struct intel_breadcrumbs *b)
 {
 	return intel_engine_irq_enable(b->irq_engine);
 }
 
-static void irq_disable(struct intel_breadcrumbs *b)
+static void __irq_disable(struct intel_breadcrumbs *b)
 {
 	intel_engine_irq_disable(b->irq_engine);
+}
+
+static bool irq_enable(struct intel_breadcrumbs *b)
+{
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_IRQ_QOS))
+		cpu_latency_qos_add_request(&b->qos, 0);
+	return b->irq_enable(b);
+}
+
+static void irq_disable(struct intel_breadcrumbs *b)
+{
+	b->irq_disable(b);
+	if (b->qos.qos)
+		cpu_latency_qos_remove_request(&b->qos);
 }
 
 static void __intel_breadcrumbs_enable_irq(struct intel_breadcrumbs *b)
 {
 	/* Requests may have completed before we could enable the interrupt. */
-	if (!b->irq_enabled++ && b->irq_enable(b))
+	if (!b->irq_enabled++ && irq_enable(b))
 		irq_work_queue(&b->irq_work);
 	GEM_BUG_ON(!b->irq_enabled); /* no overflow! */
 }
@@ -38,7 +52,7 @@ static void __intel_breadcrumbs_disable_irq(struct intel_breadcrumbs *b)
 {
 	GEM_BUG_ON(!b->irq_enabled); /* no underflow! */
 	if (!--b->irq_enabled)
-		b->irq_disable(b);
+		irq_disable(b);
 }
 
 static void __intel_breadcrumbs_arm_irq(struct intel_breadcrumbs *b)
@@ -305,8 +319,8 @@ intel_breadcrumbs_create(struct intel_engine_cs *irq_engine)
 	init_waitqueue_head(&b->wq);
 
 	b->irq_engine = irq_engine;
-	b->irq_enable = irq_enable;
-	b->irq_disable = irq_disable;
+	b->irq_enable = __irq_enable;
+	b->irq_disable = __irq_disable;
 
 	return b;
 }

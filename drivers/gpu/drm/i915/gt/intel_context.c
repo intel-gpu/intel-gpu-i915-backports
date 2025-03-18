@@ -816,6 +816,7 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 	i_printf(p, indent, "ce->guc.id: 0x%08x\n", ce->guc_id.id);
 	i_printf(p, indent, "ce->guc.ref: 0x%08x\n", atomic_read(&ce->guc_id.ref));
 	i_printf(p, indent, "ce->guc.state: 0x%08x\n", ce->guc_state.sched_state);
+	i_printf(p, indent, "ce->guc.fences: %s\n", str_yes_no(!list_empty(&ce->guc_state.fences)));
 
 	if (running) {
 		len = 0;

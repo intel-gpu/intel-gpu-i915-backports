@@ -11,6 +11,13 @@
 #include <linux/pagevec.h>
 #include <linux/kref.h>
 
+#ifdef BPM_PAGETABLE_PMD_PAGE_CTOR_NOT_PRESENT
+static inline bool pgtable_pmd_page_ctor(struct page *page)
+{
+       return pagetable_pmd_ctor(page_ptdesc(page));
+}
+#endif
+
 #ifdef BPM_UNPIN_USER_PAGES_DIRTY_LOCK_NOT_PRESENT
 void unpin_user_page_range_dirty_lock(struct page *page, unsigned long npages,
 						bool make_dirty);
@@ -214,6 +221,30 @@ static inline bool want_init_on_alloc(gfp_t flags)
 #endif
 #define unpin_user_page(X) put_user_page(X)
 #define unpin_user_pages(X,Y) put_user_pages(X,Y)
+#endif
+
+#ifndef BPM_GET_UNMAPPED_AREA_NOT_PRESENT
+#define mm_get_unmapped_area(_mm, _file, _addr, _len, _pgoff, _flags) \
+	(_mm)->get_unmapped_area((_file), (_addr), (_len), (_pgoff), (_flags))
+#endif
+
+#ifndef VM_SHADOW_STACK
+
+#ifdef CONFIG_X86_USER_SHADOW_STACK
+/*
+ * VM_SHADOW_STACK should not be set with VM_SHARED because of lack of
+ * support core mm.
+ *
+ * These VMAs will get a single end guard page. This helps userspace protect
+ * itself from attacks. A single page is enough for current shadow stack archs
+ * (x86). See the comments near alloc_shstk() in arch/x86/kernel/shstk.c
+ * for more details on the guard size.
+ */
+# define VM_SHADOW_STACK	VM_HIGH_ARCH_5
+#else
+# define VM_SHADOW_STACK	VM_NONE
+#endif
+
 #endif
 
 #endif /* __BACKPORT_MM_H */

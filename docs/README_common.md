@@ -22,9 +22,12 @@ Build Configurations:
  			you installing current one.
   BUILD_CONFIG   : Specify build config variant
 
-		Display support has been disabled by default for all OSVs except Ubuntu OSVs
+		Display support has been disabled by default for all OSVs except Ubuntu OSVs.
                 If you want to force enable display, pass BUILD_CONFIG=enabledispaly
                         Ex : make <Target> BUILD_CONFIG=enabledisplay
+		The display is not present for the Data Center GPU's so this option should not be enable
+		enabledisplay should only be enabled for DG2 if needed, but please note that we are not
+		verifying display so it may be broken.
 
   OS_DISTRIBUTION: Distro targeted package
  			You can set this value by passing supported kernel name

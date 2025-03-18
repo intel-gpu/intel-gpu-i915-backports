@@ -564,7 +564,7 @@ void intel_engine_schedule_heartbeat(struct intel_engine_cs *engine)
 {
 	if (intel_engine_pm_get_if_awake(engine)) {
 		mod_delayed_work(system_highpri_wq, &engine->heartbeat.work, 0);
-		intel_engine_pm_put(engine);
+		intel_engine_pm_put_async(engine);
 	}
 }
 

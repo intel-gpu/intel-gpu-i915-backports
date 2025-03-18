@@ -209,12 +209,9 @@ struct drm_i915_private *mock_gem_device(void)
 	if (!i915->wq)
 		goto err_uncore;
 
-	i915->sched = i915_sched_engine_create_cpu(3, i915->wq, cpu_all_mask, cpu_all_mask);
+	i915->sched = i915_sched_engine_create_cpu(3);
 	if (!i915->sched)
 		goto err_free_wq;
-
-	i915->mm.sched = i915->sched;
-	i915->mm.wq = i915->wq;
 
 	mock_init_contexts(i915);
 

@@ -149,7 +149,9 @@ static const struct dma_fence_work_ops ufence_nops = {
 };
 
 static struct i915_sw_fence *
-ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
+ufence_create(struct i915_address_space *vm,
+	      const struct vm_bind_user_ext *arg,
+	      const struct prelim_drm_i915_gem_vm_bind *va)
 {
 	const struct dma_fence_work_ops *ops = &ufence_nops;
 	struct vm_bind_user_fence *vb;
@@ -160,6 +162,9 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 		return NULL;
 
 	if (arg->bind_fence.mm) {
+		struct intel_gt *gt;
+		int id;
+
 		vb->user_fence = arg->bind_fence;
 		if (get_user_pages_fast((unsigned long)vb->user_fence.ptr, 1,
 					FOLL_WRITE | FOLL_FORCE,
@@ -171,7 +176,9 @@ ufence_create(struct i915_address_space *vm, struct vm_bind_user_ext *arg)
 		}
 
 		vb->user_fence.i915 = vm->i915;
-		memcpy(vb->user_fence.sync, vm->tlb, sizeof(vm->tlb));
+
+		for_each_gt(gt, vm->i915, id)
+			vb->user_fence.sync[id] = ppgtt_tlb_range(vm, gt, va->start, va->length);
 	}
 	vb->wq = &vm->i915->user_fence_wq;
 	dma_fence_work_init(&vb->base, ops, vm->i915->sched);
@@ -355,6 +362,9 @@ static void i915_gem_vm_bind_unpublish(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
 
+	if (likely(atomic_read(&vm->open)))
+		vma->ops->unbind_vma(vm, vma);
+
 	mutex_lock_nested(&vm->mutex, SINGLE_DEPTH_NESTING);
 	i915_vma_unpublish(vma);
 	mutex_unlock(&vm->mutex);
@@ -443,7 +453,7 @@ static struct dma_fence_work *queue_unbind(struct i915_vma *vma,
 	if (!w)
 		return NULL;
 
-	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->gt->sched);
+	dma_fence_work_init(&w->base, &unbind_ops, vma->vm->i915->sched);
 	w->base.cpu = raw_smp_processor_id();
 	w->vma = __i915_vma_get(vma);
 	INIT_LIST_HEAD(&w->unbind_link);
@@ -628,7 +638,9 @@ out_unlock:
 	i915_gem_vm_bind_unlock(vm);
 	list_for_each_entry_safe(uw, uwn, &unbind_head, unbind_link) {
 		i915_sw_fence_set_error_once(&uw->base.rq.submit, ret);
-		dma_fence_work_commit_imm_if(&uw->base, !dma_resv_is_locked(vm->root_obj->base.resv));
+		dma_fence_work_commit_imm_if(&uw->base,
+					     list_is_last(&uw->unbind_link, &unbind_head) &&
+					     !dma_resv_is_locked(vm->root_obj->base.resv));
 	}
 
 	return ret;
@@ -821,11 +833,67 @@ static int vm_bind_get_vmas(struct i915_address_space *vm,
 	return err;
 }
 
+static struct intel_memory_region *
+get_lmem(struct drm_i915_gem_object *obj, struct intel_gt *gt)
+{
+	struct intel_memory_region *mem;
+	int i;
+
+	if (!gt->lmem)
+		return NULL;
+
+	mem = obj->mm.region.mem;
+	if (!mem || mem->type == INTEL_MEMORY_LOCAL)
+		return NULL;
+
+	mem = obj->mm.preferred_region;
+	if (mem) {
+		if (mem == obj->mm.region.mem)
+			return NULL;
+
+		if (mem->type == INTEL_MEMORY_LOCAL)
+			return mem;
+	}
+
+	mem = gt->lmem;
+	if (obj->memory_mask & BIT(mem->id) &&
+	    atomic64_read(&mem->avail) > 2 * obj->base.size)
+		return mem;
+
+	for (i = 0; i < obj->mm.n_placements; i++) {
+		mem = obj->mm.placements[i];
+		if (mem->type == INTEL_MEMORY_LOCAL &&
+		    atomic64_read(&mem->avail) > 2 * obj->base.size)
+			return mem;
+	}
+
+	return NULL;
+}
+
+static int migrate_to_lmem(struct drm_i915_gem_object *obj,
+			   const struct intel_memory_region *mem,
+			   struct i915_gem_ww_ctx *ww)
+{
+	int err;
+
+	if (!mem || obj->mm.region.mem == mem)
+		return 0;
+
+	err = i915_gem_object_unbind(obj, ww, 0);
+	if (err)
+		return err;
+
+	return i915_gem_object_migrate(obj, mem->id, true);
+}
+
 static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 {
 	struct i915_address_space *vm = vma->vm;
 	struct i915_gem_ww_ctx ww;
 	int ret = 0;
+
+	if (pin_flags & PIN_RESIDENT)
+		__set_bit(I915_VMA_RESIDENT_BIT, __i915_vma_flags(vma));
 
 	for_i915_gem_ww(&ww, ret, true) {
 		if (pin_flags) {
@@ -839,8 +907,20 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 			if (ret)
 				continue;
 
-			ret = i915_vma_pin_ww(vma, 0, 0,
-					      vma->node.start | pin_flags);
+			if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PREBIND)) {
+				ret = migrate_to_lmem(vma->obj, get_lmem(vma->obj, vm->gt), &ww);
+				if (ret == -EDEADLK)
+					continue;
+
+				if (i915_vm_page_fault_enabled(vm) &&
+				    i915_gem_object_not_preferred_location(vma->obj))
+					pin_flags |= PIN_READ_ONLY;
+
+				if (!i915_gem_object_is_segment(vma->obj))
+					pin_flags |= PIN_RESIDENT;
+			}
+
+			ret = i915_vma_pin_ww(vma, 0, 0, vma->node.start | pin_flags);
 			if (ret)
 				continue;
 
@@ -862,9 +942,6 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 					dma_fence_put(f);
 				}
 			}
-
-			if (pin_flags & PIN_RESIDENT)
-				set_bit(I915_VMA_RESIDENT_BIT, __i915_vma_flags(vma));
 
 			__i915_vma_unpin(vma);
 		}
@@ -957,7 +1034,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		if (va->flags & PRELIM_I915_GEM_VM_BIND_MAKE_RESIDENT)
 			pin_flags |= PIN_RESIDENT;
 
-		bind_fence = ufence_create(vm, &ext);
+		bind_fence = ufence_create(vm, &ext, va);
 		if (!bind_fence) {
 			ret = -ENOMEM;
 			goto unlock_vm;

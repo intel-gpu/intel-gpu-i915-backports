@@ -11,9 +11,9 @@ Our current backport supports the following OS Distribution.
 
 | OS Distribution | OS Version | Kernel Version  |
 |---  |---  |---  |
-| Ubuntu® | 24.04 Desktop | 6.8 generic |
+| Ubuntu® | 24.04 Desktop | 6.11 generic |
 | | 24.04 Server | 6.8 generic |
-| | 22.04 Desktop | 6.5 generic |
+| | 22.04 Desktop | 6.8 generic |
 | | 22.04 Server| 5.15 generic |
 
 ## Prerequisite

@@ -44,15 +44,16 @@ int __i915_gem_lmem_object_init(struct intel_memory_region *mem,
 				unsigned int flags);
 
 int i915_gem_object_clear_lmem(struct drm_i915_gem_object *obj);
+
+#define I915_GEM_OBJECT_COPY_LMEM_UNCOMPRESSED	BIT(0)
+#define I915_GEM_OBJECT_COPY_LMEM_COMPRESSED	BIT(1)
+#define I915_GEM_OBJECT_COPY_LMEM_NOWAIT	BIT(2)
+#define I915_GEM_OBJECT_COPY_LMEM_TOOTHER	BIT(3)
+#define I915_GEM_OBJECT_COPY_LMEM_SKIP_CLEARS	BIT(4)
 struct i915_request *
 i915_gem_object_copy_lmem(struct drm_i915_gem_object *lmem, u64 lmem_offset,
 			  struct drm_i915_gem_object *other, u64 other_offset,
-			  u64 length, bool to_other, bool nowait);
-
-int
-i915_gem_ccs_emit_swap(struct i915_request *rq,
-		       u64 lmem_offset, u64 smem_offset, u32 size,
-		       bool to_smem);
+			  u64 length, unsigned long flags);
 
 struct intel_context *
 i915_gem_get_active_smem_context(struct intel_gt *gt);

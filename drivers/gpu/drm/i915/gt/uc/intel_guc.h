@@ -570,6 +570,7 @@ u32 intel_guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 int intel_guc_invalidate_tlb_guc(struct intel_guc *guc,
 				 enum intel_guc_tlb_inval_mode mode);
 int intel_guc_invalidate_tlb_all(struct intel_guc *guc);
+u32 intel_guc_invalidate_tlb_flush(struct intel_guc *guc, u32 asid);
 
 static inline bool intel_guc_is_supported(const struct intel_guc *guc)
 {

@@ -33,6 +33,7 @@
 #if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/mfd/core.h>
 #endif
+#include <linux/mman.h>
 #include <linux/module.h>
 #include <linux/oom.h>
 #include <linux/pci.h>
@@ -41,6 +42,7 @@
 #include <linux/pnp.h>
 #include <linux/slab.h>
 #include <linux/string_helpers.h>
+#include <linux/tick.h>
 #include <linux/vga_switcheroo.h>
 #include <linux/vt.h>
 
@@ -103,6 +105,7 @@
 #include "i915_perf.h"
 #include "i915_perf_stall_cntr.h"
 #include "i915_query.h"
+#include "i915_reg.h"
 #include "i915_sriov.h"
 #include "i915_sysfs.h"
 #include "i915_sysrq.h"
@@ -314,8 +317,45 @@ intel_teardown_mchbar(struct drm_i915_private *dev_priv)
 		release_resource(&dev_priv->mch_res);
 }
 
+static struct cpumask *cpumask_of_i915(struct drm_i915_private *i915)
+{
+	const struct cpumask *all;
+	struct cpumask *local;
+	int nid;
+
+	nid = dev_to_node(i915->drm.dev);
+	if (nid == NUMA_NO_NODE)
+		all = cpu_all_mask;
+	else
+		all = cpumask_of_node(nid);
+
+	local = kmalloc(sizeof(*local), GFP_KERNEL);
+	if (!local)
+		return NULL;
+
+	cpumask_copy(local, all);
+#if IS_ENABLED(CONFIG_NO_HZ_FULL) && !defined BPM_TICK_NOHZ_FULL_MASK_NOT_PRESENT
+	if (tick_nohz_full_enabled()) {
+		cpumask_andnot(local, local, tick_nohz_full_mask);
+		if (cpumask_empty(local)) /* no overlap with node? use any */
+			cpumask_andnot(local, cpu_all_mask, tick_nohz_full_mask);
+		if (cpumask_empty(local)) /* still nothing??? give up, use preferred */
+			cpumask_copy(local, all);
+	}
+#endif
+
+	return local;
+}
+
 static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 {
+	dev_priv->irq_affinity = cpumask_of_i915(dev_priv);
+	if (dev_priv->irq_affinity)
+		dev_info(dev_priv->drm.dev,
+			 "Using %d cores (%*pbl) for kthreads\n",
+			 bitmap_weight(cpumask_bits(dev_priv->irq_affinity), nr_cpu_ids),
+			 cpumask_pr_args(dev_priv->irq_affinity));
+
 	/*
 	 * The i915 workqueue is primarily used for batched retirement of
 	 * requests (and thus managing bo) once the task has been completed
@@ -330,48 +370,26 @@ static int i915_workqueues_init(struct drm_i915_private *dev_priv)
 	if (!dev_priv->wq)
 		goto out_err;
 
-	dev_priv->sched =
-		i915_sched_engine_create_cpu(3, dev_priv->wq,
-					     cpumask_of_i915(dev_priv),
-					     cpu_all_mask);
+	dev_priv->sched = i915_sched_engine_create_cpu(3);
 	if (!dev_priv->sched)
 		goto out_free_wq;
-
-	dev_priv->mm.wq = alloc_workqueue("i915-mm", WQ_HIGHPRI | WQ_CPU_INTENSIVE, 0);
-	if (!dev_priv->mm.wq)
-		goto out_free_sched;
-
-	dev_priv->mm.sched =
-		i915_sched_engine_create_cpu(4, dev_priv->mm.wq,
-					     cpumask_of_i915(dev_priv),
-					     allmask_of_i915(dev_priv));
-	if (!dev_priv->mm.sched)
-		goto out_free_mm_wq;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	dev_priv->hotplug.dp_wq = alloc_ordered_workqueue("i915-dp", 0);
 	if (!dev_priv->hotplug.dp_wq)
-		goto out_free_mm_sched;
+		goto out_free_sched;
 #endif
-
-	dev_info(dev_priv->drm.dev,
-		 "Using %d cores (%*pbl) for kthreads\n",
-		 dev_priv->sched->num_cpus,
-		 cpumask_pr_args(dev_priv->sched->cpumask));
 
 	return 0;
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
-out_free_mm_sched:
-	i915_sched_engine_put(dev_priv->mm.sched);
-#endif
-out_free_mm_wq:
-	destroy_workqueue(dev_priv->mm.wq);
 out_free_sched:
 	i915_sched_engine_put(dev_priv->sched);
+#endif
 out_free_wq:
 	destroy_workqueue(dev_priv->wq);
 out_err:
+	kfree(dev_priv->irq_affinity);
 	drm_err(&dev_priv->drm, "Failed to allocate workqueues.\n");
 	return -ENOMEM;
 }
@@ -381,11 +399,10 @@ static void i915_workqueues_cleanup(struct drm_i915_private *dev_priv)
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	destroy_workqueue(dev_priv->hotplug.dp_wq);
 #endif
-	i915_sched_engine_put(dev_priv->mm.sched);
-	destroy_workqueue(dev_priv->mm.wq);
 
 	i915_sched_engine_put(dev_priv->sched);
 	destroy_workqueue(dev_priv->wq);
+	kfree(dev_priv->irq_affinity);
 }
 
 /*
@@ -1023,6 +1040,14 @@ mask_err:
 	return ret;
 }
 
+/* Wa_14022698537:ats-m */
+static void i915_enable_g8(struct drm_i915_private *i915)
+{
+	if (IS_DG2(i915))
+		snb_pcode_write_p(&i915->uncore, PCODE_POWER_SETUP,
+				  POWER_SETUP_SUBCOMMAND_G8_ENABLE, 0, 0);
+}
+
 static int i915_pcode_init(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt = to_root_gt(i915);
@@ -1041,6 +1066,7 @@ static int i915_pcode_init(struct drm_i915_private *i915)
 		return ret;
 	}
 
+	i915_enable_g8(i915);
 	return 0;
 }
 
@@ -1339,11 +1365,15 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(CLEAR_ON_CREATE),
 		C(CLEAR_ON_FREE),
 		C(CLEAR_ON_IDLE),
+		C(HUGEFAULT),
+		C(IRQ_QOS),
 		C(MMAP_SWAP),
 		C(MMAP_SWAP_CREATE),
 		C(NUMA_ALLOC),
 		C(PARALLEL_SHMEMFS),
 		C(PARALLEL_USERPTR),
+		C(PREBIND),
+		C(PREFAULT),
 		C(PX_CACHE),
 		C(SMEM_BLT),
 		C(SMEM_DMA),
@@ -2535,11 +2565,34 @@ const struct dev_pm_ops i915_pm_ops = {
 	.runtime_resume = intel_runtime_resume,
 };
 
+#ifndef BPM_GET_UNMAPPED_AREA_NOT_PRESENT
+#define mm_get_unmapped_area(_mm, _file, _addr, _len, _pgoff, _flags) \
+	(_mm)->get_unmapped_area((_file), (_addr), (_len), (_pgoff), (_flags))
+#endif
+
+static unsigned long
+i915_get_unmapped_area(struct file *file, unsigned long addr,
+		      unsigned long len, unsigned long pgoff,
+		      unsigned long flags)
+{
+	unsigned long align = HPAGE_PMD_SIZE;
+
+	if (flags & MAP_FIXED || len < align || add_overflows(len, align))
+		align = 1;
+
+	addr = mm_get_unmapped_area(current->mm, file, addr, len + align - 1, pgoff, flags);
+	if (!IS_ERR_VALUE(addr))
+		addr = round_up(addr, align);
+
+	return addr;
+}
+
 static const struct file_operations i915_driver_fops = {
 	.owner = THIS_MODULE,
 	.open = drm_open,
 	.release = drm_release_noglobal,
 	.unlocked_ioctl = drm_ioctl,
+	.get_unmapped_area = i915_get_unmapped_area,
 	.mmap = i915_gem_mmap,
 	.poll = drm_poll,
 	.read = drm_read,
@@ -2619,22 +2672,23 @@ static int i915_gem_vm_advise_ioctl(struct drm_device *dev, void *data,
 }
 
 static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
-			struct prelim_drm_i915_gem_vm_prefetch *args,
-			struct drm_i915_file_private *file_priv)
+				    struct prelim_drm_i915_gem_vm_prefetch *args,
+				    struct drm_i915_file_private *file_priv)
 {
 	struct intel_memory_region *mem;
 	struct i915_address_space *vm;
 	struct drm_mm_node *node;
-	struct i915_vma *vma;
-	u16 class, instance;
 	u64 start, end;
-	int err = 0;
+	int err;
 
-	class = args->region >> 16;
-	instance = args->region & 0xffff;
-	mem = intel_memory_region_lookup(i915, class, instance);
-	if (!mem)
+	mem = intel_memory_region_lookup(i915,
+					 args->region >> 16,
+					 args->region & 0xffff);
+	if (unlikely(!mem))
 		return -EINVAL;
+
+	if (unlikely(intel_gt_is_wedged(mem->gt)))
+		return -EIO;
 
 	vm = i915_address_space_lookup(file_priv, args->vm_id);
 	if (unlikely(!vm))
@@ -2642,37 +2696,50 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 
 	start = intel_noncanonical_addr(INTEL_PPGTT_MSB(vm->i915),
 					args->start);
-	if (range_overflows(start, args->length, vm->total))
-		return -EINVAL;
+	if (unlikely(range_overflows(start, args->length, vm->total))) {
+		err = -EINVAL;
+		goto out;
+	}
 
-	end = start + args->length;
+	end = start + args->length - 1;
 	trace_i915_vm_prefetch(mem, args->vm_id, start, args->length);
 
-	mutex_lock(&vm->mutex);
-	node = __drm_mm_interval_first(&vm->mm, start, end-1);
+	err = mutex_lock_interruptible(&vm->mutex);
+	if (unlikely(err))
+		goto out;
+
+	node = __drm_mm_interval_first(&vm->mm, start, end);
 	while (node->start < end) {
-		GEM_BUG_ON(!drm_mm_node_allocated(node));
-		start = node->start + node->size;
+		struct i915_vma *vma;
 
 		vma = container_of(node, typeof(*vma), node);
+		node = list_next_entry(node, node_list);
+		if (!i915_vma_is_persistent(vma))
+			continue;
+
 		vma = __i915_vma_get(vma);
 		if (!vma)
 			continue;
-		vma = i915_vma_get(vma);
+
 		/**
 		 * Prefetch is best effort. Even if we fail to prefetch one vma, we will
 		 * proceed with other vmas.
 		 */
 		mutex_unlock(&vm->mutex);
 		i915_vma_prefetch(vma, mem);
-		mutex_lock(&vm->mutex);
-		i915_vma_put(vma);
-		__i915_vma_put(vma);
+		if (vma->node.start + vma->node.size > end) {
+			__i915_vma_put(vma);
+			goto out;
+		}
 
-		node = __drm_mm_interval_first(&vm->mm, start, end-1);
+		mutex_lock(&vm->mutex);
+		if (unlikely(vma->node.node_list.next != &node->node_list))
+			node = __drm_mm_interval_first(&vm->mm, vma->node.start + vma->node.size, end);
+		__i915_vma_put(vma);
 	}
 	mutex_unlock(&vm->mutex);
 
+out:
 	i915_vm_put(vm);
 	return err;
 }

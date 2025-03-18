@@ -1365,6 +1365,8 @@ static int engine_init_common(struct intel_engine_cs *engine)
 	struct intel_context *ce;
 	int ret;
 
+	INIT_ACTIVE_FENCE(&engine->last_pagefault);
+
 	engine->set_default_submission(engine);
 
 	/*

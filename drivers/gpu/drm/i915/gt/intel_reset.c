@@ -1622,9 +1622,6 @@ void intel_gt_set_wedged_on_init(struct intel_gt *gt)
 	intel_gt_set_wedged(gt);
 	i915_disable_error_state(gt->i915, -ENODEV);
 	set_bit(I915_WEDGED_ON_INIT, &gt->reset.flags);
-
-	/* Wedged on init is non-recoverable */
-	add_taint_for_CI(gt->i915, TAINT_WARN);
 }
 
 void intel_gt_set_wedged_on_fini(struct intel_gt *gt)

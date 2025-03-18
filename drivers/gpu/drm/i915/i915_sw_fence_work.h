@@ -13,6 +13,7 @@
 
 #include "i915_request.h"
 #include "i915_sw_fence.h"
+#include "i915_tbb.h"
 
 struct dma_fence_work;
 
@@ -31,7 +32,7 @@ struct dma_fence_work {
 	struct i915_request rq;
 
 	union {
-		struct work_struct work;
+		struct i915_tbb tbb;
 		struct rcu_work rcu_work;
 	};
 	const struct dma_fence_work_ops *ops;

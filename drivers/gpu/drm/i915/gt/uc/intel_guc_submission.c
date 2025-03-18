@@ -1018,13 +1018,119 @@ static void guc_submission_tasklet(tasklet_data_t t)
 	intel_guc_ct_receive(&guc->ct);
 }
 
+static struct intel_context *find_error_context(struct intel_engine_cs *engine)
+{
+	struct i915_sched_engine *se = engine->sched_engine;
+	struct intel_context *ce = NULL;
+	struct i915_request *rq;
+	unsigned long flags;
+	u32 lrc;
+
+	lrc = 0;
+	if (!IS_SRIOV_VF(engine->i915))
+		lrc = ENGINE_READ(engine, RING_CURRENT_LRCA);
+
+	spin_lock_irqsave(&se->lock, flags);
+	list_for_each_entry(rq, &se->requests, sched.link) {
+		if (!(rq->execution_mask & engine->mask))
+			continue;
+
+		if (lrc & CURRENT_LRCA_VALID &&
+		    (rq->context->lrc.lrca ^ lrc) & GENMASK(31, 12))
+			continue;
+
+		if (__i915_request_is_complete(rq))
+			continue;
+
+		if (__i915_request_has_started(rq)) {
+			ce = rq->context;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&se->lock, flags);
+
+	return ce;
+}
+
 static void cs_irq_handler(struct intel_engine_cs *engine, u16 iir)
 {
 	if (iir & GT_RENDER_USER_INTERRUPT)
 		intel_engine_signal_breadcrumbs_irq(engine);
 
-	if (iir & GT_RENDER_PIPECTL_NOTIFY_INTERRUPT)
+	if (iir & GT_RENDER_PIPECTL_NOTIFY_INTERRUPT && waitqueue_active(&engine->breadcrumbs->wq))
 		wake_up_all(&engine->breadcrumbs->wq);
+
+	if (unlikely(iir & GT_CS_MASTER_ERROR_INTERRUPT)) {
+		char name[TASK_COMM_LEN + 64];
+		struct i915_gem_context *ctx;
+		struct intel_context *ce;
+		char buf[80] = "";
+
+		ctx = NULL;
+		rcu_read_lock();
+		ce = find_error_context(engine);
+		if (ce && intel_context_is_schedulable(ce))
+			ctx = rcu_dereference(ce->gem_context);
+		if (ctx && i915_gem_context_is_bannable(ctx)) {
+			snprintf(name, sizeof(name),
+				 "%s (%s)", ctx->name, ce->engine->name);
+
+			atomic_inc(&ctx->guilty_count);
+			intel_context_ban(ce, NULL);
+
+			trace_intel_gt_cat_error(engine->gt, name);
+			dev_notice(engine->i915->drm.dev,
+				   "Instruction error in context %s%s\n",
+				   name, buf);
+		}
+		rcu_read_unlock();
+
+		intel_engine_schedule_heartbeat(engine);
+	}
+}
+
+static void enable_error_interrupt(struct intel_engine_cs *engine)
+{
+	u32 status;
+
+	/* Flush ongoing GT interrupts before touching interrupt state */
+	intel_synchronize_hardirq(engine->i915);
+
+	ENGINE_WRITE(engine, RING_EMR, ~0u);
+	ENGINE_WRITE(engine, RING_EIR, ~0u); /* clear all existing errors */
+
+	status = ENGINE_READ(engine, RING_ESR);
+	if (unlikely(status)) {
+		intel_gt_log_driver_error(engine->gt, INTEL_GT_DRIVER_ERROR_ENGINE_OTHER,
+					  "engine '%s' resumed still in error: %08x\n",
+					  engine->name, status);
+	}
+
+	/*
+	 * On current gen8+, we have 2 signals to play with
+	 *
+	 * - I915_ERROR_INSTUCTION (bit 0)
+	 *
+	 *    Generate an error if the command parser encounters an invalid
+	 *    instruction
+	 *
+	 *    This is a fatal error.
+	 *
+	 * - CP_PRIV (bit 2)
+	 *
+	 *    Generate an error on privilege violation (where the CP replaces
+	 *    the instruction with a no-op). This also fires for writes into
+	 *    read-only scratch pages.
+	 *
+	 *    This is a non-fatal error, parsing continues.
+	 *
+	 * * there are a few others defined for odd HW that we do not use
+	 *
+	 * Since CP_PRIV fires for cases where we have chosen to ignore the
+	 * error (as the HW is validating and suppressing the mistakes), we
+	 * only unmask the instruction error bit.
+	 */
+	ENGINE_WRITE(engine, RING_EMR, ~I915_ERROR_INSTRUCTION);
 }
 
 static void __guc_context_destroy(struct intel_context *ce);
@@ -3845,7 +3951,7 @@ static int try_context_registration(struct intel_context *ce, bool loop)
 	GEM_BUG_ON(!sched_state_is_init(ce));
 
 	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &guc->flags)) {
-		ret = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+		ret = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_LITE);
 		if (unlikely(ret))
 			return ret;
 	}
@@ -4093,7 +4199,8 @@ static bool context_cant_unblock(struct intel_context *ce)
 	return (ce->guc_state.sched_state & SCHED_STATE_NO_UNBLOCK) ||
 		context_guc_id_invalid(ce) ||
 		!ctx_id_mapped(ce_to_guc(ce), ce->guc_id.id) ||
-		!intel_context_is_pinned(ce);
+		!intel_context_is_pinned(ce) ||
+		context_blocked(ce);
 }
 
 static void guc_context_unblock(struct intel_context *ce)
@@ -4108,6 +4215,8 @@ static void guc_context_unblock(struct intel_context *ce)
 
 	spin_lock_irqsave(&ce->guc_state.lock, flags);
 
+	decr_context_blocked(ce);
+
 	if (unlikely(submission_disabled(guc) ||
 		     context_cant_unblock(ce))) {
 		enable = false;
@@ -4118,42 +4227,11 @@ static void guc_context_unblock(struct intel_context *ce)
 		intel_context_get(ce);
 	}
 
-	decr_context_blocked(ce);
-
 	spin_unlock_irqrestore(&ce->guc_state.lock, flags);
 
 	if (enable) {
 		with_intel_gt_pm(guc_to_gt(guc), wakeref)
 			__guc_context_sched_enable(guc, ce);
-	}
-}
-
-static void guc_context_cancel_request(struct intel_context *ce,
-				       struct i915_request *rq)
-{
-	struct intel_context *block_context =
-		request_to_scheduling_context(rq);
-
-	if (i915_sw_fence_signaled(&rq->submit)) {
-		struct i915_sw_fence *fence;
-
-		intel_context_get(ce);
-		fence = guc_context_block(block_context);
-		i915_sw_fence_wait(fence);
-		if (!i915_request_completed(rq)) {
-			__i915_request_skip(rq);
-			guc_reset_state(ce, intel_ring_wrap(ce->ring, rq->head),
-					true);
-		}
-
-		/*
-		 * XXX: Racey if context is reset, see comment in
-		 * __guc_reset_context().
-		 */
-		flush_work(&ce_to_guc(ce)->ct.requests.worker);
-
-		guc_context_unblock(block_context);
-		intel_context_put(ce);
 	}
 }
 
@@ -4658,8 +4736,6 @@ static const struct intel_context_ops guc_context_ops = {
 
 	.ban = guc_context_ban,
 
-	.cancel_request = guc_context_cancel_request,
-
 	.suspend = guc_context_suspend,
 	.resume = guc_context_resume,
 
@@ -4685,22 +4761,20 @@ static void submit_work_cb(struct irq_work *wrk)
 
 static void __guc_signal_context_fence(struct intel_context *ce)
 {
-	struct i915_request *rq, *rn;
+	struct i915_request *rq;
 
 	lockdep_assert_held(&ce->guc_state.lock);
 
-	if (!list_empty(&ce->guc_state.fences))
-		trace_intel_context_fence_release(ce);
+	if (list_empty(&ce->guc_state.fences))
+		return;
 
 	/*
 	 * Use an IRQ to ensure locking order of sched_engine->lock ->
 	 * ce->guc_state.lock is preserved.
 	 */
-	list_for_each_entry_safe(rq, rn, &ce->guc_state.fences,
-				 guc_fence_link) {
-		list_del(&rq->guc_fence_link);
+	trace_intel_context_fence_release(ce);
+	list_for_each_entry(rq, &ce->guc_state.fences, guc_fence_link)
 		irq_work_queue(&rq->submit_work);
-	}
 
 	INIT_LIST_HEAD(&ce->guc_state.fences);
 }
@@ -4925,8 +4999,6 @@ static const struct intel_context_ops virtual_guc_context_ops = {
 
 	.ban = guc_context_ban,
 
-	.cancel_request = guc_context_cancel_request,
-
 	.suspend = guc_context_suspend,
 	.resume = guc_context_resume,
 
@@ -5021,8 +5093,6 @@ static const struct intel_context_ops virtual_parent_context_ops = {
 
 	.ban = guc_context_ban,
 
-	.cancel_request = guc_context_cancel_request,
-
 	.suspend = guc_context_suspend,
 	.resume = guc_context_resume,
 
@@ -5044,8 +5114,6 @@ static const struct intel_context_ops virtual_child_context_ops = {
 	.pin = guc_child_context_pin,
 	.unpin = guc_child_context_unpin,
 	.post_unpin = guc_child_context_post_unpin,
-
-	.cancel_request = guc_context_cancel_request,
 
 	.suspend = guc_context_suspend,
 	.resume = guc_context_resume,
@@ -5270,6 +5338,7 @@ static int guc_resume(struct intel_engine_cs *engine)
 	intel_breadcrumbs_reset(engine->breadcrumbs);
 
 	setup_hwsp(engine);
+	enable_error_interrupt(engine);
 	start_engine(engine);
 
 	if (engine->flags & I915_ENGINE_FIRST_RENDER_COMPUTE)
@@ -6071,14 +6140,11 @@ int intel_guc_context_reset_process_msg(struct intel_guc *guc,
 					const u32 *msg, u32 len)
 {
 	struct intel_context *ce;
-	int ctx_id;
 
 	if (unlikely(len != 1)) {
 		guc_err(guc, "Invalid length %u", len);
 		return -EPROTO;
 	}
-
-	ctx_id = msg[0];
 
 	/*
 	 * The context lookup uses the xarray but lookups only require an RCU lock
@@ -6087,7 +6153,7 @@ int intel_guc_context_reset_process_msg(struct intel_guc *guc,
 	 * asynchronously until the reset is done.
 	 */
 	rcu_read_lock();
-	ce = g2h_context_lookup(guc, ctx_id);
+	ce = __get_context(guc, msg[0]);
 	if (ce)
 		ce = intel_context_get_rcu(ce);
 	rcu_read_unlock();
@@ -6263,6 +6329,7 @@ void intel_guc_submission_print_context_info(struct intel_guc *guc,
 	xa_for_each(&guc->context_lookup, index, ce) {
 		GEM_BUG_ON(intel_context_is_child(ce));
 
+		i_printf(p, indent, "---\n");
 		intel_context_show(ce, p, indent);
 
 		if (intel_context_is_parent(ce)) {

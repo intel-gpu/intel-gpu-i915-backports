@@ -729,7 +729,6 @@ static void err_print_uc(struct drm_i915_error_state_buf *m,
 	intel_uc_fw_dump(&error_uc->huc_fw, &p, 0);
 	err_printf(m, "GuC timestamp: 0x%08x\n", error_uc->guc.timestamp);
 	intel_gpu_error_print_vma(m, NULL, error_uc->guc.vma_log);
-	err_printf(m, "GuC CTB fence: %d\n", error_uc->guc.last_fence);
 	err_print_guc_ctb(m, "Send", error_uc->guc.ctb + 0);
 	err_print_guc_ctb(m, "Recv", error_uc->guc.ctb + 1);
 	intel_gpu_error_print_vma(m, NULL, error_uc->guc.vma_ctb);
@@ -794,6 +793,18 @@ static void err_print_gt_info(struct drm_i915_error_state_buf *m,
 
 	intel_gt_info_print(&gt->info, &p);
 	intel_sseu_print_topology(gt->_gt->i915, &gt->info.sseu, &p);
+
+	if (gt->_gt->info.hwconfig.size) {
+		u32 *blob = gt->_gt->info.hwconfig.ptr;
+		char out[ASCII85_BUFSZ];
+		int len, i;
+
+		err_puts(m, "HWconfig: ~");
+		len = ascii85_encode_len(gt->_gt->info.hwconfig.size) / 4;
+		for (i = 0; i < len; i++)
+			err_puts(m, ascii85_encode(blob[i], out));
+		err_puts(m, "\n");
+	}
 }
 
 static void err_print_gt_display(struct drm_i915_error_state_buf *m,
@@ -1946,7 +1957,6 @@ gt_record_uc(struct intel_gt_coredump *gt,
 					 "GuC CT buffer",
 					 __vma_pages(uc->guc.ct.vma),
 					 compress);
-	error_uc->guc.last_fence = uc->guc.ct.requests.last_fence;
 	gt_record_guc_ctb(error_uc->guc.ctb + 0, &uc->guc.ct.ctbs.send,
 			  uc->guc.ct.ctbs.send.desc, (struct intel_guc *)&uc->guc);
 	gt_record_guc_ctb(error_uc->guc.ctb + 1, &uc->guc.ct.ctbs.recv,

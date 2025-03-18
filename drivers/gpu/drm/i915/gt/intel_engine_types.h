@@ -486,7 +486,7 @@ struct intel_engine_cs {
 		atomic_t count;
 
 		struct work_struct work;
-		char msg[TASK_COMM_LEN + 32];
+		char msg[TASK_COMM_LEN + 48];
 	} reset;
 
 	void		(*park)(struct intel_engine_cs *engine);
@@ -594,9 +594,11 @@ struct intel_engine_cs {
 		} irq;
 	} stats;
 
+	struct i915_active_fence last_pagefault;
 	struct i915_request *pagefault_request;
 	ktime_t pagefault_start;
 	atomic_t in_pagefault;
+	atomic_t fault_incomplete;
 
 	struct {
 		unsigned long heartbeat_interval_ms;

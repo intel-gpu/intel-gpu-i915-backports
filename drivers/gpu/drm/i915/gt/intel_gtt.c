@@ -169,6 +169,7 @@ static void __i915_vm_retire(struct i915_active *ref)
 int i915_address_space_init(struct i915_address_space *vm, int subclass)
 {
 	u64 min_alignment;
+	int i;
 
 	GEM_BUG_ON(!vm->total);
 
@@ -186,6 +187,7 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	mutex_init(&vm->mutex);
 	lockdep_set_subclass(&vm->mutex, subclass);
 	fs_reclaim_taints_mutex(&vm->mutex);
+	seqcount_init(&vm->seqlock); /* seqcount_mutex_init(&vm->seqlock, &vm->mutex); */
 
 	vm->inode = alloc_anon_inode(vm->i915->drm.anon_inode->i_sb);
 	if (IS_ERR(vm->inode))
@@ -197,6 +199,9 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	    intel_ggtt_needs_same_mem_type_within_cl_wa(vm->i915)) {
 		min_alignment = I915_GTT_PAGE_SIZE_64K;
 	}
+
+	for (i = 0; i < ARRAY_SIZE(vm->tlb); i++)
+		spin_lock_init(&vm->tlb[i].lock);
 
 	memset64(vm->min_alignment, min_alignment,
 		 ARRAY_SIZE(vm->min_alignment));

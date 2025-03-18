@@ -9,6 +9,7 @@
 #include <linux/irq_work.h>
 #include <linux/kref.h>
 #include <linux/list.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
@@ -48,6 +49,8 @@ struct intel_breadcrumbs {
 
 	unsigned int irq_enabled;
 	intel_wakeref_t irq_armed;
+
+	struct pm_qos_request qos;
 
 	/* Not all breadcrumbs are attached to physical HW */
 	intel_engine_mask_t	engine_mask;

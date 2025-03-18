@@ -287,16 +287,15 @@ void gen11_gt_irq_postinstall(struct intel_gt *gt)
 {
 	struct intel_uncore *uncore = gt->uncore;
 	u32 irqs = GT_RENDER_USER_INTERRUPT |
-		   GT_RENDER_PIPECTL_NOTIFY_INTERRUPT;
+		   GT_RENDER_PIPECTL_NOTIFY_INTERRUPT |
+		   GT_CS_MASTER_ERROR_INTERRUPT;
 	u32 guc_mask = intel_uc_wants_guc(&gt->uc) ? GUC_INTR_GUC2HOST : 0;
 	u32 gsc_mask = 0;
 	u32 dmask;
 	u32 smask;
 
 	if (!intel_uc_wants_guc_submission(&gt->uc))
-		irqs |= GT_CS_MASTER_ERROR_INTERRUPT |
-			GT_CONTEXT_SWITCH_INTERRUPT |
-			GT_WAIT_SEMAPHORE_INTERRUPT;
+		irqs |= GT_CONTEXT_SWITCH_INTERRUPT | GT_WAIT_SEMAPHORE_INTERRUPT;
 
 	/* Wa:16014207253 */
 	if (gt->fake_int.enabled) {
