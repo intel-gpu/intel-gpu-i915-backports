@@ -106,6 +106,9 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 	struct i915_vma *vma;
 	int ret;
 
+	if (!i915_gem_object_has_backing_store(obj))
+		return 0;
+
 	if (list_empty(&obj->vma.list))
 		return 0;
 
@@ -165,7 +168,7 @@ try_again:
 		if (!wakeref && i915_vma_is_ggtt(vma))
 			wakeref = intel_runtime_pm_get(rpm);
 
-		if (i915_vma_is_persistent(vma)) {
+		if (!i915_vm_page_fault_enabled(vm) && i915_vma_is_persistent(vma)) {
 			ret = __i915_gem_object_lock_to_evict(vm->root_obj, ww);
 			switch (ret) {
 			case 0:

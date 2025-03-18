@@ -275,7 +275,13 @@ struct i915_address_space {
 
 	u32 asid;
 	u32 poison; /* value used to fill the scratch page */
-	u32 tlb[I915_MAX_GT];
+
+	struct i915_vm_tlb {
+		spinlock_t lock;
+		struct rb_root_cached range;
+		u32 last;
+		bool has_error:1;
+	} tlb[I915_MAX_GT];
 
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
@@ -293,6 +299,7 @@ struct i915_address_space {
 	struct work_struct close_work;
 
 	struct mutex mutex; /* protects vma and our lists */
+	seqcount_t seqlock;
 
 #define VM_CLASS_GGTT 0
 #define VM_CLASS_PPGTT 1
@@ -631,6 +638,9 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		   u32 flags);
 void ppgtt_unbind_vma(struct i915_address_space *vm,
 		      struct i915_vma *vma);
+
+u32 ppgtt_tlb_range(struct i915_address_space *vm, struct intel_gt *gt, u64 start, u64 end);
+void ppgtt_tlb_cleanup(struct i915_address_space *vm);
 
 void setup_private_pat(struct intel_gt *gt);
 

@@ -5,8 +5,9 @@
 
 #include <linux/circ_buf.h>
 #include <linux/ktime.h>
-#include <linux/time64.h>
+#include <linux/pm_qos.h>
 #include <linux/string_helpers.h>
+#include <linux/time64.h>
 #include <linux/timekeeping.h>
 
 #include "i915_drv.h"
@@ -92,9 +93,9 @@ static inline struct intel_guc *ct_to_guc(struct intel_guc_ct *ct)
 #define CTB_DESC_SIZE		ALIGN(sizeof(struct guc_ct_buffer_desc), SZ_2K)
 #define CTB_H2G_BUFFER_SIZE	(SZ_4K)
 #define PVC_CTB_H2G_BUFFER_SIZE	(SZ_32K) /* concurrent pagefault replies */
+#define CTB_G2H_RESERVED	(SZ_16K)
 
 struct ct_request {
-	struct list_head link;
 	struct task_struct *tsk;
 	u32 fence;
 	u32 status;
@@ -106,6 +107,7 @@ struct ct_incoming_msg {
 	struct llist_node link;
 	u32 msg[];
 };
+static int ct_handle_msg(struct intel_guc_ct *ct, u32 *msg);
 
 static inline int __ct_msg_size(u32 hdr)
 {
@@ -121,7 +123,7 @@ enum { CTB_SEND = 0, CTB_RECV = 1 };
 
 enum { CTB_OWNER_HOST = 0 };
 
-static noinline  void ct_incoming_request_worker_func(struct work_struct *w);
+static void ct_incoming_request(struct i915_tbb *self);
 
 /**
  * intel_guc_ct_init_early - Initialize CT state without requiring device access
@@ -131,14 +133,13 @@ void intel_guc_ct_init_early(struct intel_guc_ct *ct)
 {
 	spin_lock_init(&ct->ctbs.send.lock);
 	spin_lock_init(&ct->ctbs.recv.lock);
-	spin_lock_init(&ct->requests.lock);
-	INIT_LIST_HEAD(&ct->requests.pending);
-	init_llist_head(&ct->requests.incoming);
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
 	INIT_WORK(&ct->dead_ct_worker, ct_dead_ct_worker_func);
 #endif
-	INIT_WORK(&ct->requests.worker, ct_incoming_request_worker_func);
 	init_waitqueue_head(&ct->wq);
+
+	init_llist_head(&ct->requests.incoming);
+	i915_tbb_init_task(&ct->requests.tbb, ct_incoming_request);
 }
 
 static void guc_ct_buffer_desc_init(struct guc_ct_buffer_desc *desc)
@@ -149,6 +150,8 @@ static void guc_ct_buffer_desc_init(struct guc_ct_buffer_desc *desc)
 static void guc_ct_buffer_reset(struct intel_guc_ct_buffer *ctb)
 {
 	u32 space;
+
+	GEM_BUG_ON(!is_power_of_2(ctb->size));
 
 	ctb->broken = false;
 	ctb->tail = 0;
@@ -264,7 +267,10 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 	h2g_bufsz = CTB_H2G_BUFFER_SIZE;
 	if (HAS_RECOVERABLE_PAGE_FAULT(guc_to_gt(guc)->i915))
 		h2g_bufsz = max_t(u32, h2g_bufsz, PVC_CTB_H2G_BUFFER_SIZE);
+
 	g2h_bufsz = 4 * h2g_bufsz; /* expect each h2g to generate a reply */
+	g2h_bufsz += CTB_G2H_RESERVED;
+	g2h_bufsz = roundup_pow_of_two(g2h_bufsz);
 
 	blob_size = 2 * CTB_DESC_SIZE + h2g_bufsz + g2h_bufsz;
 	err = __intel_guc_allocate_and_map_vma(guc, blob_size, true, &ct->vma, &blob);
@@ -291,7 +297,7 @@ int intel_guc_ct_init(struct intel_guc_ct *ct)
 	desc = blob + CTB_DESC_SIZE;
 	cmds = blob + 2 * CTB_DESC_SIZE + h2g_bufsz;
 	cmds_size = g2h_bufsz;
-	resv_space = cmds_size / 4;
+	resv_space = CTB_G2H_RESERVED;
 	CT_DEBUG(ct, "%s desc %#tx cmds %#tx size %u/%u\n", "recv",
 		 ptrdiff(desc, blob), ptrdiff(cmds, blob), cmds_size,
 		 resv_space);
@@ -386,6 +392,7 @@ err_out:
 void intel_guc_ct_disable(struct intel_guc_ct *ct)
 {
 	struct intel_guc *guc = ct_to_guc(ct);
+	int fence;
 
 	GEM_BUG_ON(!ct->enabled);
 
@@ -394,42 +401,28 @@ void intel_guc_ct_disable(struct intel_guc_ct *ct)
 	if (intel_guc_is_fw_running(guc))
 		ct_control_enable(ct, false);
 
-	if (!list_empty(&ct->requests.pending)) {
+	for (fence = 0; fence < ARRAY_SIZE(ct->requests.fences); fence++) {
 		struct ct_request *rq;
-		unsigned long flags;
 
-		spin_lock_irqsave(&ct->requests.lock, flags);
-		list_for_each_entry(rq, &ct->requests.pending, link)
+		rq = READ_ONCE(ct->requests.fences[fence]);
+		if (rq)
 			wake_up_process(rq->tsk);
-		spin_unlock_irqrestore(&ct->requests.lock, flags);
 	}
 
 	if (waitqueue_active(&ct->wq))
 		wake_up_all(&ct->wq);
 }
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-static void ct_track_lost_and_found(struct intel_guc_ct *ct, u32 fence, u32 action)
+static void ct_get_next_fence(struct intel_guc_ct *ct, struct ct_request *rq)
 {
-	unsigned int lost = fence % ARRAY_SIZE(ct->requests.lost_and_found);
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
-	unsigned long entries[SZ_32];
-	unsigned int n;
+	u8 fence = hash_ptr(rq, 8);
 
-	n = stack_trace_save(entries, ARRAY_SIZE(entries), 1);
+	while (cmpxchg(&ct->requests.fences[fence], NULL, rq)) {
+		cpu_relax();
+		fence += 17;
+	}
 
-	/* May be called under spinlock, so avoid sleeping */
-	ct->requests.lost_and_found[lost].stack = stack_depot_save(entries, n, GFP_NOWAIT);
-#endif
-	ct->requests.lost_and_found[lost].fence = fence;
-	ct->requests.lost_and_found[lost].action = action;
-}
-#endif
-
-static u32 ct_get_next_fence(struct intel_guc_ct *ct)
-{
-	/* For now it's trivial */
-	return ++ct->requests.last_fence;
+	rq->fence = fence;
 }
 
 static int ct_write(struct intel_guc_ct *ct,
@@ -476,10 +469,6 @@ static int ct_write(struct intel_guc_ct *ct,
 		 FIELD_PREP(GUC_CTB_MSG_0_NUM_DWORDS, len) |
 		 FIELD_PREP(GUC_CTB_MSG_0_FENCE, fence);
 
-/* Disable fast request temporarily as it is exposing a bug */
-#undef GUC_HXG_TYPE_FAST_REQUEST
-#define GUC_HXG_TYPE_FAST_REQUEST	GUC_HXG_TYPE_EVENT
-
 	type = (flags & INTEL_GUC_CT_SEND_NB) ? GUC_HXG_TYPE_FAST_REQUEST :
 		GUC_HXG_TYPE_REQUEST;
 	hxg = FIELD_PREP(GUC_HXG_MSG_0_TYPE, type) |
@@ -499,12 +488,7 @@ static int ct_write(struct intel_guc_ct *ct,
 		cmds[tail] = action[i];
 		tail = (tail + 1) % size;
 	}
-	GEM_BUG_ON(tail > size);
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-	ct_track_lost_and_found(ct, fence,
-				FIELD_GET(GUC_HXG_EVENT_MSG_0_ACTION, action[0]));
-#endif
+	GEM_BUG_ON(tail >= size);
 
 	/*
 	 * make sure H2G buffer update and LRC tail update (if this triggering a
@@ -537,6 +521,45 @@ corrupted:
 	return -EPIPE;
 }
 
+static unsigned long local_clock_ns(unsigned int *cpu)
+{
+	unsigned long t;
+
+	/*
+	 * The local clock is only comparable on the local cpu. However,
+	 * we don't want to disable preemption for the entirety of the busy
+	 * spin but instead we use the preemption event as an indication
+	 * that we have overstayed our welcome and should relinquish the CPU,
+	 * to stop busywaiting and go to sleep.
+	 */
+	*cpu = get_cpu();
+	t = local_clock();
+	put_cpu();
+
+	return t;
+}
+
+static bool
+busy_wait_stop(struct task_struct *tsk, unsigned long timeout_ns, unsigned int cpu)
+{
+	unsigned int this_cpu;
+
+	/* Interrupted by the user already? */
+	if (signal_pending(tsk))
+		return true;
+
+	if (time_after(local_clock_ns(&this_cpu), timeout_ns))
+		return true;
+
+	/*
+	 * Check if we were preempted off the cpu, or if something else is
+	 * ready to run.  We don't immediately yield in that case, i.e. using
+	 * need_resched() instead of cond_resched(), as we want to set up our
+	 * interrupt prior to calling schedule()
+	 */
+	return this_cpu != cpu || need_resched();
+}
+
 /*
  * wait_for_ct_request_update - Wait for CT request state update.
  * @ct:		pointer to CT
@@ -554,11 +577,26 @@ corrupted:
  */
 static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request *req)
 {
-	long timeout = 10 * HZ;
+	struct pm_qos_request qos = {};
+	unsigned int cpu;
+	long timeout;
 	int err = 0;
+
+	timeout = local_clock_ns(&cpu) + 100000;
+	do {
+		intel_guc_ct_receive(ct);
+		if (FIELD_GET(GUC_HXG_MSG_0_ORIGIN, READ_ONCE(req->status)) == GUC_HXG_ORIGIN_GUC)
+			return 0;
+		cpu_relax();
+	} while (!busy_wait_stop(current, timeout, cpu));
 
 	intel_boost_fake_int_timer(guc_to_gt(ct_to_guc(ct)), true);
 
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_IRQ_QOS))
+		cpu_latency_qos_add_request(&qos, 0);
+
+	timeout = 10 * HZ;
+	req->tsk = current;
 	for (;;) {
 		set_current_state(TASK_INTERRUPTIBLE);
 
@@ -572,7 +610,7 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 			break;
 		}
 
-		if (signal_pending(current)) {
+		if (signal_pending(req->tsk)) {
 			err = -ERESTARTSYS;
 			break;
 		}
@@ -583,9 +621,15 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 			break;
 		}
 
+		local_irq_enable();
 		timeout = io_schedule_timeout(timeout);
+		local_irq_disable();
 	}
 	__set_current_state(TASK_RUNNING);
+	WRITE_ONCE(req->tsk, NULL);
+
+	if (qos.qos)
+		cpu_latency_qos_remove_request(&qos);
 
 	intel_boost_fake_int_timer(guc_to_gt(ct_to_guc(ct)), false);
 	return err;
@@ -626,6 +670,7 @@ static inline bool h2g_has_room(struct intel_guc_ct *ct, u32 len_dw)
 	if (atomic_read(&ctb->space) >= len_dw)
 		return true;
 
+	GEM_BUG_ON(ctb->resv_space);
 	space = CIRC_SPACE(ctb->tail, READ_ONCE(desc->head), ctb->size);
 	return space >= len_dw;
 }
@@ -652,7 +697,6 @@ static int ct_send_nb(struct intel_guc_ct *ct,
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	u32 g2h_len_dw = G2H_LEN_DW(flags);
 	unsigned long spin_flags;
-	u32 fence;
 	int ret = -EBUSY;
 
 	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
@@ -663,8 +707,7 @@ static int ct_send_nb(struct intel_guc_ct *ct,
 	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
 		goto out;
 
-	fence = ct_get_next_fence(ct);
-	ret = ct_write(ct, action, len, fence, flags);
+	ret = ct_write(ct, action, len, 0, flags);
 	if (unlikely(ret))
 		goto out;
 
@@ -676,6 +719,24 @@ out:
 	return ret;
 }
 
+static bool has_room(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw, long timeout_ns)
+{
+	unsigned int cpu;
+
+	if (has_room_nb(ct, h2g_dw, g2h_dw))
+		return true;
+
+	timeout_ns += local_clock_ns(&cpu);
+	do {
+		intel_guc_ct_receive(ct);
+		if (has_room_nb(ct, h2g_dw, g2h_dw))
+			return true;
+		cpu_relax();
+	} while (!busy_wait_stop(current, timeout_ns, cpu));
+
+	return false;
+}
+
 static int ct_send(struct intel_guc_ct *ct,
 		   const u32 *action,
 		   u32 len,
@@ -684,7 +745,6 @@ static int ct_send(struct intel_guc_ct *ct,
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	struct ct_request request;
-	bool send_again;
 	int err;
 
 	GEM_BUG_ON(!ct->enabled);
@@ -693,62 +753,47 @@ static int ct_send(struct intel_guc_ct *ct,
 	GEM_BUG_ON(!response_buf && response_buf_size);
 	might_sleep();
 
+	request.tsk = NULL;
 	request.status = 0;
 	request.response_len = response_buf_size;
 	request.response_buf = response_buf;
-	request.tsk = current;
 
+	local_irq_disable();
+	ct_get_next_fence(ct, &request);
 resend:
-	send_again = false;
-	err = ___wait_event(ct->wq,
-			    has_room_nb(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN),
-			    TASK_INTERRUPTIBLE, true, 0,
-			    intel_guc_ct_receive(ct);
-			    schedule());
-	if (unlikely(err))
-		return err;
+	if (!has_room(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN, 20000)) {
+		err = ___wait_event(ct->wq,
+				    has_room_nb(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN),
+				    TASK_INTERRUPTIBLE, true, 0,
+				    intel_guc_ct_receive(ct);
+				    local_irq_enable();
+				    schedule();
+				    local_irq_disable());
+		if (unlikely(err))
+			goto erase;
+	}
 
-	spin_lock_irq(&ctb->lock);
+	spin_lock(&ctb->lock);
 	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, GUC_CTB_HXG_MSG_MAX_LEN)) {
-		spin_unlock_irq(&ctb->lock);
+		spin_unlock(&ctb->lock);
 		goto resend;
 	}
 
-	request.fence = ct_get_next_fence(ct);
-
-	spin_lock(&ct->requests.lock);
-	list_add_tail(&request.link, &ct->requests.pending);
-	spin_unlock(&ct->requests.lock);
-
-	err = ct_write(ct, action, len, request.fence, 0);
 	g2h_reserve_space(ct, GUC_CTB_HXG_MSG_MAX_LEN);
-
-	spin_unlock_irq(&ctb->lock);
-
+	err = ct_write(ct, action, len, request.fence, 0);
+	spin_unlock(&ctb->lock);
+	if (err == 0) {
+		intel_guc_notify(ct_to_guc(ct));
+		err = wait_for_ct_request_update(ct, &request);
+	}
+	g2h_release_space(ct, GUC_CTB_HXG_MSG_MAX_LEN);
 	if (unlikely(err))
 		goto unlink;
-
-	intel_guc_notify(ct_to_guc(ct));
-	err = wait_for_ct_request_update(ct, &request);
-
-	if (unlikely(err)) {
-		if (err == -ENODEV)
-			/* wait_for_ct_request_update returns -ENODEV on reset/suspend in progress.
-			 * In this case, output is debug rather than error info
-			 */
-			CT_DEBUG(ct, "Request %#x (fence %u) cancelled as CTB is disabled\n",
-				 action[0], request.fence);
-		else
-			CT_ERROR(ct, "No response for request %#x (fence %u)\n",
-				 action[0], request.fence);
-		goto unlink;
-	}
 
 	if (FIELD_GET(GUC_HXG_MSG_0_TYPE, request.status) == GUC_HXG_TYPE_NO_RESPONSE_RETRY) {
 		CT_DEBUG(ct, "retrying request %#x (%u)\n", *action,
 			 FIELD_GET(GUC_HXG_RETRY_MSG_0_REASON, request.status));
-		send_again = true;
-		goto unlink;
+		goto resend;
 	}
 
 	if (FIELD_GET(GUC_HXG_MSG_0_TYPE, request.status) != GUC_HXG_TYPE_RESPONSE_SUCCESS) {
@@ -772,17 +817,12 @@ resend:
 
 unlink:
 	/* kick the next waiter on clearing our response from the CT buffer */
-	g2h_release_space(ct, GUC_CTB_HXG_MSG_MAX_LEN);
 	if (waitqueue_active(&ct->wq))
 		wake_up(&ct->wq);
 
-	spin_lock_irq(&ct->requests.lock);
-	list_del(&request.link);
-	spin_unlock_irq(&ct->requests.lock);
-
-	if (unlikely(send_again))
-		goto resend;
-
+erase:
+	WRITE_ONCE(ct->requests.fences[request.fence], NULL);
+	local_irq_enable();
 	return err;
 }
 
@@ -829,19 +869,20 @@ static void ct_free_msg(struct ct_incoming_msg *msg)
 	kfree(msg);
 }
 
-static void ct_read(struct intel_guc_ct *ct, struct llist_head *msg)
+static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_head *mq)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
 	struct guc_ct_buffer_desc *desc = ctb->desc;
-	struct ct_incoming_msg *m;
+	struct ct_incoming_msg *mq_tail = NULL;
 	u32 head = ctb->head;
 	u32 tail = READ_ONCE(desc->tail);
 	u32 size = ctb->size;
 	u32 *cmds = ctb->cmds;
+	u32 stack[64];
 	s32 available;
 
 	if (tail == head)
-		return;
+		return NULL;
 
 	if (unlikely(desc->status)) {
 		u32 status = desc->status;
@@ -885,39 +926,61 @@ static void ct_read(struct intel_guc_ct *ct, struct llist_head *msg)
 	GEM_BUG_ON(available < 0);
 
 	do {
-		u32 header = cmds[head];
+		struct ct_incoming_msg *m = NULL;
+		u32 *msg = cmds + head;
 		unsigned int len;
-		unsigned int i;
-
-		head = (head + 1) % size;
 
 		/* message len with header */
-		len = __ct_msg_size(header);
+		len = __ct_msg_size(cmds[head]);
 		if (unlikely(len > (u32)available)) {
-			CT_ERROR(ct, "Incomplete message %*ph %*ph %*ph\n",
-				 4, &header,
-				 4 * (head + available - 1 > size ?
-				      size - head : available - 1), &cmds[head],
-				 4 * (head + available - 1 > size ?
-				      available - 1 - size + head : 0), &cmds[0]);
 			desc->status |= GUC_CTB_STATUS_UNDERFLOW;
 			goto corrupted;
 		}
 
-		m = ct_alloc_msg(len);
-		if (!m) {
-			CT_ERROR(ct, "No memory for message %*ph\n", 4, &header);
-			head = (head - 1) % size;
-			break;
+		if (unlikely(len > size - head)) {
+			unsigned int i;
+
+			msg = stack;
+			if (len > ARRAY_SIZE(stack)) {
+				m = ct_alloc_msg(len);
+				if (!m)
+					goto error;
+
+				msg = m->msg;
+			}
+
+			i = size - head;
+			memcpy(msg, cmds + head, i * sizeof(u32));
+			memcpy(msg + i, cmds, (len - i) * sizeof(u32));
 		}
 
-		__llist_add(&m->link, msg);
-		m->msg[0] = header;
-		for (i = 1; i < len; i++) {
-			m->msg[i] = cmds[head];
-			head = (head + 1) % size;
+		switch (ct_handle_msg(ct, msg)) {
+		case 0:
+			break;
+
+		case -EBUSY:
+			if (!m) {
+				m = ct_alloc_msg(len);
+				if (!m)
+					goto error;
+
+				memcpy(m->msg, msg, len * sizeof(u32));
+			}
+
+			if (__llist_add(&m->link, mq))
+				mq_tail = m;
+			m = NULL;
+			break;
+
+		default:
+			ct_free_msg(m);
+			goto error;
 		}
-		CT_DEBUG(ct, "received %*ph\n", 4 * len, m->msg);
+
+		if (unlikely(m))
+			ct_free_msg(m);
+
+		head = (head + len) % size;
 		available -= len;
 	} while (available);
 
@@ -926,108 +989,56 @@ static void ct_read(struct intel_guc_ct *ct, struct llist_head *msg)
 
 	/* now update descriptor */
 	WRITE_ONCE(desc->head, head);
-	return;
+	return mq_tail;
+
+error:
+	CT_ERROR(ct, "Failed to process CT message\n");
+	goto dead;
 
 corrupted:
 	CT_ERROR(ct, "Corrupted descriptor head=%u tail=%u status=%#x\n",
 		 desc->head, desc->tail, desc->status);
+dead:
 	WRITE_ONCE(ctb->head, desc->tail);
 	ctb->broken = true;
 	CT_DEAD(ct, READ);
+	return mq_tail;
 }
 
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-static bool ct_check_lost_and_found(struct intel_guc_ct *ct, u32 fence)
+static int ct_handle_response(struct intel_guc_ct *ct, u32 *msg)
 {
-	unsigned int n;
-	char *buf = NULL;
-	bool found = false;
+	const u32 *hxg = &msg[GUC_CTB_MSG_MIN_LEN];
+	struct ct_request *rq;
+	u32 fence;
 
-	lockdep_assert_held(&ct->requests.lock);
-
-	for (n = 0; n < ARRAY_SIZE(ct->requests.lost_and_found); n++) {
-		if (ct->requests.lost_and_found[n].fence != fence)
-			continue;
-		found = true;
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
-		buf = kmalloc(SZ_4K, GFP_NOWAIT);
-		if (buf && stack_depot_snprint(ct->requests.lost_and_found[n].stack,
-					       buf, SZ_4K, 0)) {
-			CT_ERROR(ct, "Fence %u was used by action %#04x sent at\n%s",
-				 fence, ct->requests.lost_and_found[n].action, buf);
-			break;
-		}
-#endif
-		CT_ERROR(ct, "Fence %u was used by action %#04x\n",
-			 fence, ct->requests.lost_and_found[n].action);
-		break;
-	}
-	kfree(buf);
-	return found;
-}
-#else
-static bool ct_check_lost_and_found(struct intel_guc_ct *ct, u32 fence)
-{
-	return false;
-}
-#endif
-
-static int ct_handle_response(struct intel_guc_ct *ct, struct ct_incoming_msg *response)
-{
-	u32 len = FIELD_GET(GUC_CTB_MSG_0_NUM_DWORDS, response->msg[0]);
-	u32 fence = FIELD_GET(GUC_CTB_MSG_0_FENCE, response->msg[0]);
-	const u32 *hxg = &response->msg[GUC_CTB_MSG_MIN_LEN];
-	const u32 *data = &hxg[GUC_HXG_MSG_MIN_LEN];
-	u32 datalen = len - GUC_HXG_MSG_MIN_LEN;
-	struct ct_request *req;
-	unsigned long flags;
-	int err = 0;
-
-	GEM_BUG_ON(len < GUC_HXG_MSG_MIN_LEN);
 	GEM_BUG_ON(FIELD_GET(GUC_HXG_MSG_0_ORIGIN, hxg[0]) != GUC_HXG_ORIGIN_GUC);
 	GEM_BUG_ON(FIELD_GET(GUC_HXG_MSG_0_TYPE, hxg[0]) != GUC_HXG_TYPE_RESPONSE_SUCCESS &&
 		   FIELD_GET(GUC_HXG_MSG_0_TYPE, hxg[0]) != GUC_HXG_TYPE_NO_RESPONSE_RETRY &&
 		   FIELD_GET(GUC_HXG_MSG_0_TYPE, hxg[0]) != GUC_HXG_TYPE_RESPONSE_FAILURE);
 
-	CT_DEBUG(ct, "response fence %u status %#x\n", fence, hxg[0]);
+	rq = NULL;
+	fence = FIELD_GET(GUC_CTB_MSG_0_FENCE, msg[0]);
+	if (fence < ARRAY_SIZE(ct->requests.fences))
+		rq = READ_ONCE(ct->requests.fences[fence]);
+	if (rq) {
+		u32 len = FIELD_GET(GUC_CTB_MSG_0_NUM_DWORDS, msg[0]) - GUC_HXG_MSG_MIN_LEN;
+		struct task_struct *tsk;
 
-	spin_lock_irqsave(&ct->requests.lock, flags);
-	list_for_each_entry(req, &ct->requests.pending, link) {
-		if (unlikely(fence != req->fence)) {
-			CT_DEBUG(ct, "request %u awaits response\n",
-				 req->fence);
-			continue;
+		if (unlikely(len > rq->response_len)) {
+			CT_DEBUG(ct, "Response %u too long (datalen %u > %u)\n",
+				 rq->fence, len, rq->response_len);
+			len = rq->response_len;
 		}
-		if (unlikely(datalen > req->response_len)) {
-			CT_ERROR(ct, "Response %u too long (datalen %u > %u)\n",
-				 req->fence, datalen, req->response_len);
-			datalen = min(datalen, req->response_len);
-			err = -EMSGSIZE;
-		}
-		if (datalen)
-			memcpy(req->response_buf, data, 4 * datalen);
-		req->response_len = datalen;
-		WRITE_ONCE(req->status, hxg[0]);
-		wake_up_process(req->tsk);
-		break;
+		if (len)
+			memcpy(rq->response_buf, &hxg[GUC_HXG_MSG_MIN_LEN], 4 * len);
+		rq->response_len = len;
+		WRITE_ONCE(rq->status, hxg[0]);
+
+		tsk = READ_ONCE(rq->tsk);
+		if (tsk)
+			wake_up_process(tsk);
 	}
-	if (list_is_head(&req->link, &ct->requests.pending)) {
-		CT_ERROR(ct, "Unsolicited response message: len %u, data %#x (fence %u, last %u)\n",
-			 len, hxg[0], fence, ct->requests.last_fence);
-		if (!ct_check_lost_and_found(ct, fence)) {
-			list_for_each_entry(req, &ct->requests.pending, link)
-				CT_ERROR(ct, "request %u awaits response\n",
-					 req->fence);
-		}
-		err = -ENOKEY;
-	}
-	spin_unlock_irqrestore(&ct->requests.lock, flags);
 
-	if (unlikely(err))
-		return err;
-
-	ct_free_msg(response);
 	return 0;
 }
 
@@ -1115,16 +1126,23 @@ static void ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *
 	}
 }
 
-static noinline void ct_incoming_request_worker_func(struct work_struct *w)
+static void ct_incoming_request(struct i915_tbb *self)
 {
-	struct intel_guc_ct *ct =
-		container_of(w, struct intel_guc_ct, requests.worker);
-	struct ct_incoming_msg *request, *n;
+	struct intel_guc_ct *ct = container_of(self, typeof(*ct), requests.tbb);
+	struct llist_node *ll;
 
-	llist_for_each_entry_safe(request, n, llist_reverse_order(llist_del_all(&ct->requests.incoming)), link) {
-		ct_process_request(ct, request);
-		ct_free_msg(request);
-		cond_resched();
+	while ((ll = llist_del_all(&ct->requests.incoming))) {
+		struct ct_incoming_msg *rq, *n;
+
+		llist_for_each_entry_safe(rq, n, llist_reverse_order(ll), link) {
+			ct_process_request(ct, rq);
+			ct_free_msg(rq);
+		}
+
+		if (!llist_empty(&ct->requests.incoming))
+			cond_resched();
+
+		intel_guc_ct_receive(ct);
 	}
 }
 
@@ -1140,9 +1158,9 @@ static int guc_action_cat_error(struct intel_guc *guc, const u32 *msg, u32 len)
 	return 0;
 }
 
-static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *request)
+static int ct_handle_event(struct intel_guc_ct *ct, u32 *msg)
 {
-	const u32 *hxg = &request->msg[GUC_CTB_MSG_MIN_LEN];
+	const u32 *hxg = &msg[GUC_CTB_MSG_MIN_LEN];
 	u32 action = FIELD_GET(GUC_HXG_EVENT_MSG_0_ACTION, hxg[0]);
 	int (*fn)(struct intel_guc *guc, const u32 *msg, u32 len) = NULL;
 
@@ -1158,21 +1176,19 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 	case INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_DONE:
 	case INTEL_GUC_ACTION_DEREGISTER_CONTEXT_DONE:
 	case INTEL_GUC_ACTION_TLB_INVALIDATION_DONE:
-		g2h_release_space(ct, ct_msg_size(request));
+		g2h_release_space(ct, __ct_msg_size(*msg));
 		break;
 	}
 	switch (action) {
 	case INTEL_GUC_ACTION_SCHED_ENGINE_MODE_DONE:
 		fn = intel_guc_engine_sched_done_process_msg;
 		break;
-#if 0
 	case INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_DONE:
 		fn = intel_guc_sched_done_process_msg;
 		break;
 	case INTEL_GUC_ACTION_DEREGISTER_CONTEXT_DONE:
 		fn = intel_guc_deregister_done_process_msg;
 		break;
-#endif
 	case INTEL_GUC_ACTION_TLB_INVALIDATION_DONE:
 		fn = guc_action_tlb_invalidation_done;
 		break;
@@ -1183,78 +1199,51 @@ static int ct_handle_event(struct intel_guc_ct *ct, struct ct_incoming_msg *requ
 	if (fn) { /* Handle tlb invalidation response in interrupt context */
 		u32 hxg_len, len;
 
-		hxg_len = ct_msg_size(request) - GUC_CTB_MSG_MIN_LEN;
+		hxg_len = __ct_msg_size(*msg) - GUC_CTB_MSG_MIN_LEN;
 		len = hxg_len - GUC_HXG_MSG_MIN_LEN;
 		if (unlikely(len < 1))
 			return -EPROTO;
 
-		fn(ct_to_guc(ct), &hxg[GUC_HXG_MSG_MIN_LEN], len);
-		ct_free_msg(request);
-		return 0;
+		return fn(ct_to_guc(ct), &hxg[GUC_HXG_MSG_MIN_LEN], len);
 	}
 
-	if (llist_add(&request->link, &ct->requests.incoming))
-		intel_gt_queue_work(guc_to_gt(ct_to_guc(ct)), &ct->requests.worker);
-
-	return 0;
+	return -EBUSY;
 }
 
-static int ct_handle_hxg(struct intel_guc_ct *ct, struct ct_incoming_msg *msg)
+static int ct_handle_hxg(struct intel_guc_ct *ct, u32 *msg)
 {
-	u32 *hxg = &msg->msg[GUC_CTB_MSG_MIN_LEN];
-	u32 origin, type;
-	int err;
+	u32 hxg = msg[GUC_CTB_MSG_MIN_LEN];
 
-	origin = FIELD_GET(GUC_HXG_MSG_0_ORIGIN, hxg[0]);
-	if (unlikely(origin != GUC_HXG_ORIGIN_GUC)) {
-		err = -EPROTO;
-		goto failed;
-	}
+	if (unlikely(FIELD_GET(GUC_HXG_MSG_0_ORIGIN, hxg) != GUC_HXG_ORIGIN_GUC))
+		return -EPROTO;
 
-	type = FIELD_GET(GUC_HXG_MSG_0_TYPE, hxg[0]);
-	switch (type) {
+	switch (FIELD_GET(GUC_HXG_MSG_0_TYPE, hxg)) {
 	case GUC_HXG_TYPE_EVENT:
-		err = ct_handle_event(ct, msg);
-		break;
+		return ct_handle_event(ct, msg);
+
 	case GUC_HXG_TYPE_RESPONSE_SUCCESS:
 	case GUC_HXG_TYPE_RESPONSE_FAILURE:
 	case GUC_HXG_TYPE_NO_RESPONSE_RETRY:
-		err = ct_handle_response(ct, msg);
-		break;
-	default:
-		err = -EOPNOTSUPP;
-	}
+		return ct_handle_response(ct, msg);
 
-	if (unlikely(err)) {
-failed:
-		CT_ERROR(ct, "Failed to handle HXG message (%pe) %*ph\n",
-			 ERR_PTR(err), 4 * GUC_HXG_MSG_MIN_LEN, hxg);
+	default:
+		return -EOPNOTSUPP;
 	}
-	return err;
 }
 
-static void ct_handle_msg(struct intel_guc_ct *ct, struct ct_incoming_msg *msg)
+static int ct_handle_msg(struct intel_guc_ct *ct, u32 *msg)
 {
-	u32 format = FIELD_GET(GUC_CTB_MSG_0_FORMAT, msg->msg[0]);
-	int err;
+	u32 format = FIELD_GET(GUC_CTB_MSG_0_FORMAT, msg[0]);
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
-	if (unlikely(ct->rcv_override && ct->rcv_override(ct, msg->msg) != -ENOTSUPP)) {
-		ct_free_msg(msg);
-		return;
-	}
+	if (unlikely(ct->rcv_override && ct->rcv_override(ct, msg) != -ENOTSUPP))
+		return -EINVAL;
 #endif
 
 	if (format == GUC_CTB_FORMAT_HXG)
-		err = ct_handle_hxg(ct, msg);
-	else
-		err = -EOPNOTSUPP;
+		return ct_handle_hxg(ct, msg);
 
-	if (unlikely(err)) {
-		CT_ERROR(ct, "Failed to process CT message (%pe) %*ph\n",
-			 ERR_PTR(err), 4 * ct_msg_size(msg), msg->msg);
-		ct_free_msg(msg);
-	}
+	return -EOPNOTSUPP;
 }
 
 /*
@@ -1264,7 +1253,7 @@ static void ct_handle_msg(struct intel_guc_ct *ct, struct ct_incoming_msg *msg)
 void intel_guc_ct_receive(struct intel_guc_ct *ct)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
-	struct ct_incoming_msg *msg, *n;
+	struct ct_incoming_msg *tail;
 	LLIST_HEAD(mq);
 
 	if (READ_ONCE(ctb->head) == READ_ONCE(ctb->desc->tail))
@@ -1275,19 +1264,17 @@ void intel_guc_ct_receive(struct intel_guc_ct *ct)
 	if (!spin_trylock(&ctb->lock))
 		goto out;
 
-	ct_read(ct, &mq);
+	tail = ct_read(ct, &mq);
 	spin_unlock(&ctb->lock);
-	if (llist_empty(&mq))
-		goto out;
+
+	if (tail && llist_add_batch(mq.first, &tail->link, &ct->requests.incoming))
+		i915_tbb_add_task(&ct->requests.tbb);
 
 	/*
 	 * Lazily make the HEAD update visible to the GuC, we do not need to
 	 * force it until there is a new send which has its own explicit
 	 * barriers.
 	 */
-
-	llist_for_each_entry_safe(msg, n, llist_reverse_order(mq.first), link)
-		ct_handle_msg(ct, msg);
 
 out:
 	rcu_read_unlock();
@@ -1308,8 +1295,8 @@ void intel_guc_ct_reset(struct intel_guc_ct *ct)
 	synchronize_rcu_expedited();
 
 	/* Finish processing the messages */
-	cancel_work_sync(&ct->requests.worker);
-	ct_incoming_request_worker_func(&ct->requests.worker);
+	i915_tbb_cancel_task(&ct->requests.tbb);
+	ct_incoming_request(&ct->requests.tbb);
 }
 
 /*
@@ -1318,22 +1305,17 @@ void intel_guc_ct_reset(struct intel_guc_ct *ct)
  */
 void intel_guc_ct_event_handler(struct intel_guc_ct *ct)
 {
-	if (unlikely(!ct->enabled)) {
-		/*
-		 * We are unable to mask memory based interrupt from GuC,
-		 * so there is a chance that an GuC CT event for VF will come
-		 * just as CT will be already disabled. As we are not able to
-		 * handle such an event properly, we should abandon it.
-		 * In this case, calling WARN is not recommended.
-		 */
-		WARN(!HAS_MEMORY_IRQ_STATUS(guc_to_gt(ct_to_guc(ct))->i915),
-		     "Unexpected GuC event received while CT disabled!\n");
+	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
+
+	if (READ_ONCE(ctb->head) == READ_ONCE(ctb->desc->tail))
+		return;
+
+	if (waitqueue_active(&ct->wq)) {
+		wake_up(&ct->wq);
 		return;
 	}
 
 	intel_guc_ct_receive(ct);
-	if (waitqueue_active(&ct->wq))
-		wake_up(&ct->wq);
 }
 
 /*
@@ -1497,10 +1479,9 @@ void intel_guc_ct_print_info(struct intel_guc_ct *ct,
 		 CIRC_SPACE(ct->ctbs.recv.desc->tail,
 			    ct->ctbs.recv.desc->head,
 			    ct->ctbs.recv.size) * 4);
-	i_printf(p, indent, "Requests: { pending: %s, incoming: %s, work: %s }\n",
-		 str_yes_no(!list_empty(&ct->requests.pending)),
+	i_printf(p, indent, "Requests: { incoming: %s, work: %s }\n",
 		 str_yes_no(!llist_empty(&ct->requests.incoming)),
-		 str_yes_no(work_busy(&ct->requests.worker)));
+		 str_yes_no(!list_empty(&ct->requests.tbb.link)));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)

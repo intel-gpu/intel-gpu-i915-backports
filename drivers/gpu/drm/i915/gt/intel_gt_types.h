@@ -206,7 +206,6 @@ struct intel_gt {
 	struct i915_ggtt *ggtt;
 
 	struct workqueue_struct *wq;
-	struct i915_sched_engine *sched;
 
 	struct intel_uc uc;
 	struct intel_gsc gsc;
@@ -319,6 +318,8 @@ struct intel_gt {
 		local_t pagefault_major;
 		local_t pagefault_minor;
 		local_t pagefault_invalid;
+		local_t pagefault_reply;
+		local_t pagefault_retry;
 
 		struct intel_gt_stats_irq_time irq;
 

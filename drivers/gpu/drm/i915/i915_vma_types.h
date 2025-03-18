@@ -246,17 +246,19 @@ struct i915_vma {
 	 * exclusive cachelines of a single page, so a maximum of 64 possible
 	 * users.
 	 */
-#define I915_VMA_PIN_MASK 0x3ff
-#define I915_VMA_OVERFLOW 0x200
+#define I915_VMA_PIN_MASK 0x1ff
+#define I915_VMA_OVERFLOW 0x100
 
 	/** Flags and address space this VMA is bound to */
+#define I915_VMA_READ_ONLY_BIND_BIT 9
 #define I915_VMA_GLOBAL_BIND_BIT 10
 #define I915_VMA_LOCAL_BIND_BIT  11
 
+#define I915_VMA_READ_ONLY_BIND	((int)BIT(I915_VMA_READ_ONLY_BIND_BIT))
 #define I915_VMA_GLOBAL_BIND	((int)BIT(I915_VMA_GLOBAL_BIND_BIT))
 #define I915_VMA_LOCAL_BIND	((int)BIT(I915_VMA_LOCAL_BIND_BIT))
 
-#define I915_VMA_BIND_MASK (I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND)
+#define I915_VMA_BIND_MASK (I915_VMA_READ_ONLY_BIND | I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND)
 
 #define I915_VMA_ALLOC_BIT	12
 

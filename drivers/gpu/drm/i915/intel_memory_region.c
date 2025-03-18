@@ -507,8 +507,8 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct intel_memory_region_link end = { .age = age };
 	struct intel_memory_region_link *pos;
 	struct list_head **phase = phases;
+	bool keepalive, active = false;
 	resource_size_t found = 0;
-	bool keepalive, scan;
 	long max_timeout = 0;
 	long timeout;
 	int err = 0;
@@ -536,15 +536,12 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	 */
 next:
 	timeout = 0;
-	scan = false;
 	keepalive = true;
 
 	while (list_empty(*phase)) {
 		if (!*++phase)
 			goto out;
 	}
-
-	i915_gem_flush_free_objects(mem->i915);
 
 	spin_lock_irq(&mem->objects.lock);
 	list_add_tail(&end.link, *phase);
@@ -583,8 +580,10 @@ next:
 		if (ww && ww == i915_gem_get_locking_ctx(obj))
 			continue;
 
-		if (!ww && dma_resv_is_locked(obj->base.resv))
+		if (!ww && (obj->eviction || dma_resv_is_locked(obj->base.resv))) {
+			active = true;
 			continue;
+		}
 
 		if (!i915_gem_object_get_rcu(obj))
 			continue;
@@ -601,7 +600,7 @@ next:
 				goto delete_bookmark;
 			}
 
-			if (!i915_gem_object_is_purgeable(obj)) {
+			if (!i915_gem_object_is_purgeable(obj) && !(obj->memory_mask & REGION_SMEM)) {
 				if (!time_before(obj->mm.region.age, age)) {
 					list_add(&pos->link, &end.link);
 					goto delete_bookmark;
@@ -638,22 +637,26 @@ next:
 						 I915_WAIT_ALL,
 						 timeout);
 		if (timeout < 0) {
+			active = true;
 			timeout = 0;
 			goto relock;
 		}
 
 		err = __i915_gem_object_lock_to_evict(obj, ww);
-		if (err)
+		if (err) {
+			active = true;
 			goto relock;
+		}
 
 		if (!i915_gem_object_has_pages(obj) ||
 		    obj->mm.region.mem != mem)
 			goto unlock;
 
-		if (i915_gem_object_is_active(obj))
+		if (i915_gem_object_is_active(obj)) {
+			active = true;
 			goto unlock;
+		}
 
-		scan = true;
 		i915_gem_object_move_notify(obj);
 
 		err = i915_gem_object_unbind(obj, ww, I915_GEM_OBJECT_UNBIND_KEEP_RESIDENT);
@@ -697,8 +700,6 @@ delete_bookmark:
 	if (err || found >= target)
 		return err;
 
-	/* And try to release all stale kernel objects */
-	intel_gt_retire_requests(mem->gt);
 	if (*++phase)
 		goto next;
 
@@ -713,15 +714,21 @@ out:
 	 * no forward progress, do we conclude that it is better to report
 	 * failure.
 	 */
-	if (found || i915_buddy_defrag(&mem->mm, chunk, chunk))
+	if (found)
 		return 0;
 
-	scan |= i915_px_cache_release(mem->gt);
+	/* And try to release all stale kernel objects */
+	intel_gt_retire_requests(mem->gt);
+	i915_px_cache_release(mem->gt);
+	i915_gem_flush_free_objects(mem->i915);
+	if (i915_buddy_defrag(&mem->mm, chunk, chunk))
+		return 0;
 
 	/* XXX optimistic busy wait for transient pins */
-	if (scan && !time_after(jiffies, end_time)) {
+	if (active && !time_after(jiffies, end_time)) {
 		max_timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
 		phase = phases;
+		active = false;
 		yield();
 		goto next;
 	}

@@ -27,9 +27,9 @@ static bool fatal_error(int err)
 	}
 }
 
-static void fence_work(struct work_struct *work)
+static void fence_work(struct i915_tbb *self)
 {
-	struct dma_fence_work *f = container_of(work, typeof(*f), work);
+	struct dma_fence_work *f = container_of(self, typeof(*f), tbb);
 
 	if (!fatal_error(f->rq.fence.error) && f->ops->work) {
 		int err;
@@ -39,7 +39,7 @@ static void fence_work(struct work_struct *work)
 		err = f->ops->work(f);
 		if (err == -ERESTARTSYS) {
 			if (test_and_clear_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags)) {
-				i915_scheduler_queue_work_on(f->rq.sched_engine, f->cpu, &f->work);
+				i915_tbb_add_task_on(self, f->cpu);
 				return;
 			}
 
@@ -72,14 +72,16 @@ fence_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 		if (fence->error && !f->ops->no_error_propagation)
 			dma_fence_set_error(&f->rq.fence, promote_error(fence->error));
 
-		dma_fence_get(&f->rq.fence);
+		if (fatal_error(f->rq.fence.error))
+			set_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags);
 		if (signal_pending(current))
 			clear_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags);
-		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags) ||
-		    fatal_error(f->rq.fence.error))
-			fence_work(&f->work);
+
+		dma_fence_get(&f->rq.fence);
+		if (test_bit(DMA_FENCE_WORK_IMM, &f->rq.fence.flags))
+			fence_work(&f->tbb);
 		else
-			i915_scheduler_queue_work_on(f->rq.sched_engine, f->cpu, &f->work);
+			i915_tbb_add_task_on(&f->tbb, f->cpu);
 		break;
 
 	case FENCE_FREE:
@@ -183,7 +185,7 @@ void __dma_fence_work_init(struct dma_fence_work *f,
 		f->rq.fence.flags |= BIT(DMA_FENCE_WORK_IMM);
 
 	i915_sw_fence_init(&f->rq.submit, fence_notify);
-	INIT_WORK(&f->work, fence_work);
+	i915_tbb_init_task(&f->tbb, fence_work);
 }
 
 void dma_fence_work_chain(struct dma_fence_work *f, struct dma_fence *signal)

@@ -31,18 +31,18 @@ inline u64 gen8_pde_encode(const dma_addr_t addr, const enum i915_cache_level le
 	return pde;
 }
 
-static u64 pde_encode(const struct i915_page_table *pt)
+static u64 pde_encode(const struct i915_page_table *pt, const enum i915_cache_level level)
 {
 	u64 encode;
 
-	encode = gen8_pde_encode(px_dma(pt), I915_CACHE_LLC);
+	encode = gen8_pde_encode(px_dma(pt), level);
 	if (pt->is_compact)
 		encode |= GEN12_PDE_64K;
 
 	return encode;
 }
 
-static u64 gen12_pte_encode(dma_addr_t addr, unsigned int pat_index, u32 flags)
+static inline u64 gen12_pte_encode(dma_addr_t addr, unsigned int pat_index, u32 flags)
 {
 	gen8_pte_t pte = addr | GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
 
@@ -199,6 +199,7 @@ static void gen8_ppgtt_cleanup(struct i915_address_space *vm)
 	}
 
 	i915_vm_free_scratch(vm);
+	ppgtt_tlb_cleanup(vm);
 }
 
 static u64 __ppgtt_clear(struct i915_address_space * const vm,
@@ -464,7 +465,7 @@ replace:	rcu_read_unlock();
 		rcu_read_unlock();
 	}
 
-	*encode = pde_encode(pt);
+	*encode = pde_encode(pt, I915_CACHE_LLC);
 	return pt;
 
 err:
@@ -831,7 +832,7 @@ set_pd_entry(struct i915_page_directory * const pd,
 {
 	atomic_inc(px_used(pd));
 	pd->entry[idx] = pt;
-	write_pte(&pd->pt, idx, pde_encode(pt));
+	write_pte(&pd->pt, idx, pde_encode(pt, I915_CACHE_NONE));
 }
 
 static struct i915_page_directory *
@@ -1038,7 +1039,7 @@ int intel_flat_lmem_ppgtt_insert_window(struct i915_address_space *vm,
 		lvl--;
 	}
 
-	encode = gen8_pde_encode(sg_dma_address(sg), I915_CACHE_LLC);
+	encode = gen8_pde_encode(sg_dma_address(sg), I915_CACHE_NONE);
 	if (is_compact)
 		encode |= GEN12_PDE_64K;
 	vaddr = px_vaddr(pd);

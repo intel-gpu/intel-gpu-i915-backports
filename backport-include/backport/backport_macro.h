@@ -86,6 +86,11 @@
  */
 #define BPM_ASSIGN_STR_SECOND_ARG_PRESENT
 
+/*
+ * 529ce23a764f mm: switch mm->get_unmapped_area() to a flag
+ */
+#define BPM_GET_UNMAPPED_AREA_NOT_PRESENT
+
 #endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
 
 #if LINUX_VERSION_IS_GEQ(6,9,6) || \
@@ -228,7 +233,21 @@
  * a349d72fd9ef mm/pgtable: add rcu_read_lock() and rcu_read_unlock()
  */
 #define BPM_BAD_UNLOCK_PTE_OFFSET_MAP
+
+/*
+ * 9a4bbd8d975e mm: remove pgtable_{pmd, pte}_page_{ctor, dtor}() wrappers
+ */
+#define BPM_PAGETABLE_PMD_PAGE_CTOR_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
+
+#if (LINUX_VERSION_IS_GEQ(6,6,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || \
+	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)))
+/*
+ * bb3aadf7d446 x86/mm: Start actually marking _PAGE_SAVED_DIRTY
+ */
+#define BPM_PMD_PTE_MKWRITE_VMA_ARG_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)...*/
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
 
@@ -295,6 +314,11 @@
  * 0d940a9b270b mm/pgtable: allow pte_offset_map[_lock]() to fail
  */
 #define BPM_PTE_OFFSET_MAP_NOT_PRESENT
+
+/*
+ * 0d940a9b270b mm/pgtable: allow pte_offset_map[_lock]() to fail
+ */
+#define BPM_PTE_OFFSET_MAP_LOCK_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
 
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || \
@@ -1895,6 +1919,12 @@
 #endif /* LINUX_VERSION_IS_LESS(5,4,0) */
 
 #if LINUX_VERSION_IS_LESS(5,3,0)
+
+/*
+ * 5fba4af4456b asm-generic, x86: introduce generic pte_{alloc,free}_one[_kernel]
+ */
+#define BPM_PTE_ALLOC_ONE_NOT_PRESENT
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,5))
 /*
  * d2a8ebbf8192b kernel.h: split out container_of() and typeof_member() macros

@@ -4810,7 +4810,7 @@ void i915_debugger_client_create(struct i915_drm_client *client)
 	u64 seqno;
 	int err = 0;
 
-	debugger = i915_debugger_get(client);
+	debugger = __debugger_get(client, false);
 	if (!debugger)
 		return;
 

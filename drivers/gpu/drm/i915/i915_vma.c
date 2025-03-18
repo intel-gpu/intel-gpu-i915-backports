@@ -417,7 +417,7 @@ static struct i915_vma_work *i915_vma_work(struct i915_vma *vma)
 	if (!vw)
 		return NULL;
 
-	dma_fence_work_init(&vw->base, &bind_ops, vm->gt->sched);
+	dma_fence_work_init(&vw->base, &bind_ops, vm->i915->sched);
 	if (i915_is_ggtt(vm))
 		__set_bit(DMA_FENCE_WORK_IMM, &vw->base.rq.fence.flags);
 	vw->base.rq.fence.error = -ERESTARTSYS; /* disable the worker by default */
@@ -461,7 +461,6 @@ static int __i915_vma_bind(struct i915_vma *vma,
 {
 	struct dma_fence *prev;
 	u32 bind_flags;
-	u32 vma_flags;
 
 	GEM_BUG_ON(!drm_mm_node_allocated(&vma->node));
 	GEM_BUG_ON(vma->size > i915_vma_size(vma));
@@ -477,13 +476,7 @@ static int __i915_vma_bind(struct i915_vma *vma,
 	if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
 		return -EINVAL;
 
-	bind_flags = flags;
-	bind_flags &= I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND;
-
-	vma_flags = atomic_read(&vma->flags);
-	vma_flags &= I915_VMA_GLOBAL_BIND | I915_VMA_LOCAL_BIND;
-
-	bind_flags &= ~vma_flags;
+	bind_flags = flags & ~atomic_read(&vma->flags) & I915_VMA_BIND_MASK;
 	if (bind_flags == 0)
 		return 0;
 
@@ -999,7 +992,7 @@ static void vma_unbind_pages(struct i915_vma *vma)
  * @vma: vma to bind
  * @ww: ww context for object lock
  */
-int i915_vma_bind(struct i915_vma *vma)
+int i915_vma_bind(struct i915_vma *vma, unsigned int flags, bool imm)
 {
 	struct i915_vma_work *work;
 	int err;
@@ -1020,7 +1013,7 @@ int i915_vma_bind(struct i915_vma *vma)
 	if (err)
 		goto err_fence;
 
-	err = __i915_vma_bind(vma, PIN_USER | PIN_RESIDENT, work);
+	err = __i915_vma_bind(vma, flags, work);
 	if (err)
 		goto err_active;
 
@@ -1030,7 +1023,7 @@ int i915_vma_bind(struct i915_vma *vma)
 err_active:
 	i915_active_release(&vma->active);
 err_fence:
-	dma_fence_work_commit(&work->base);
+	dma_fence_work_commit_imm_if(&work->base, imm);
 err_pages:
 	vma_put_pages(vma);
 	return err;
@@ -1168,7 +1161,9 @@ int i915_vma_pin_ww(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 err_remove:
 	if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK)) {
 		i915_vma_detach(vma);
+		raw_write_seqcount_begin(&vma->vm->seqlock);
 		drm_mm_remove_node(&vma->node);
+		raw_write_seqcount_end(&vma->vm->seqlock);
 	}
 err_active:
 	i915_active_release(&vma->active);
@@ -1319,7 +1314,9 @@ void i915_vma_unpublish(struct i915_vma *vma)
 		atomic_and(~I915_VMA_PIN_MASK, &vma->flags);
 		__i915_vma_evict(vma);
 
+		raw_write_seqcount_begin(&vma->vm->seqlock);
 		drm_mm_remove_node(&vma->node);
+		raw_write_seqcount_end(&vma->vm->seqlock);
 	}
 
 	spin_lock(&obj->vma.lock);
@@ -1589,7 +1586,8 @@ void __i915_vma_evict(struct i915_vma *vma)
 		trace_i915_vma_unbind(vma);
 		vma->ops->unbind_vma(vm, vma);
 
-		if (!list_empty(&vma->vm_bind_link)) {
+		if (!i915_vm_page_fault_enabled(vm) &&
+		    !list_empty(&vma->vm_bind_link)) {
 			GEM_BUG_ON(!i915_vma_is_persistent(vma));
 			assert_object_held(vm->root_obj);
 			list_move_tail(&vma->vm_bind_link, &vm->vm_bind_list);
@@ -1635,8 +1633,11 @@ int __i915_vma_unbind(struct i915_vma *vma)
 
 	if (!i915_vm_page_fault_enabled(vm) ||
 	    i915_vma_is_purged(vma) ||
-	    !i915_vma_is_persistent(vma))
+	    !i915_vma_is_persistent(vma)) {
+		raw_write_seqcount_begin(&vm->seqlock);
 		drm_mm_remove_node(&vma->node);
+		raw_write_seqcount_end(&vm->seqlock);
+	}
 
 	return 0;
 }
@@ -1677,13 +1678,20 @@ int i915_vma_unbind(struct i915_vma *vma)
  */
 int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem)
 {
+	struct drm_i915_gem_object *obj = vma->obj;
 	struct i915_gem_ww_ctx ww;
 	int err;
 
-	if (!i915_gem_object_can_migrate(vma->obj, mem->id))
+	if (!i915_gem_object_has_backing_store(obj))
+		return 0;
+
+	if (obj->mm.region.mem == mem && i915_vma_is_bound(vma, PIN_RESIDENT))
+		return 0;
+
+	if (!i915_gem_object_can_migrate(obj, mem->id))
 		return -EINVAL;
 
-	if (i915_gem_object_is_userptr(vma->obj))
+	if (i915_gem_object_is_userptr(obj))
 		return -EINVAL;
 
 	for_i915_gem_ww(&ww, err, true) {
@@ -1691,17 +1699,17 @@ int i915_vma_prefetch(struct i915_vma *vma, struct intel_memory_region *mem)
 		if (err)
 			continue;
 
-		err = i915_gem_object_lock(vma->obj, &ww);
+		err = i915_gem_object_lock(obj, &ww);
 		if (err)
 			continue;
 
-		if (vma->obj->mm.region.mem->id != mem->id)
-			err = i915_gem_object_migrate_region(vma->obj, &ww, &mem, 1);
+		if (obj->mm.region.mem != mem)
+			err = i915_gem_object_migrate_region(obj, &ww, &mem, 1);
 		if (err)
 			continue;
 
 		if (!i915_vma_is_bound(vma, PIN_RESIDENT))
-			err = i915_vma_bind(vma);
+			err = i915_vma_bind(vma, PIN_USER | PIN_RESIDENT, false);
 	}
 
 	return err;

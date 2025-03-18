@@ -3,6 +3,8 @@
  * Copyright © 2020 Intel Corporation
  */
 
+#include <linux/interval_tree_generic.h>
+#include <linux/rcupdate.h>
 #include <linux/slab.h>
 
 #include "gem/i915_gem_lmem.h"
@@ -130,6 +132,7 @@ void i915_px_cache_fini(struct intel_gt *gt)
 	rcu_barrier();
 	for_each_possible_cpu(cpu)
 		__i915_px_cache_release(per_cpu_ptr(px, cpu));
+	i915_gem_flush_free_objects(gt->i915);
 	rcu_barrier();
 
 	free_percpu(px);
@@ -228,7 +231,62 @@ struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt, u32 flags)
 
 static u64 pte_size(const struct i915_vma *vma)
 {
-	return min(vma->size, i915_vma_size(vma));
+	return min(vma->size, __i915_vma_size(vma));
+}
+
+struct tlb_range {
+	struct rb_node rb;
+	union {
+		struct rcu_head rcu;
+		struct tlb_range *erase;
+	};
+	u64 __subtree_last;
+	u64 start, end;
+	u32 seqno;
+};
+
+#define START(r) ((r)->start)
+#define END(r) ((r)->end)
+
+INTERVAL_TREE_DEFINE(struct tlb_range, rb,
+		     u64, __subtree_last,
+		     START, END, static inline, tlb_range)
+
+#define to_tlb_range(n) rb_entry(READ_ONCE(n), struct tlb_range, rb)
+#define next_tlb_range(r) rb_entry(rb_next(&(r)->rb), struct tlb_range, rb)
+
+static inline struct tlb_range *
+tlb_range_first(struct rb_root_cached *root, u64 start, u64 last)
+{
+	struct tlb_range *node;
+
+	node = to_tlb_range(root->rb_leftmost);
+	if (!node || node->start > last)
+		return NULL;
+
+	node = to_tlb_range(root->rb_root.rb_node);
+	if (!node || node->__subtree_last < start)
+		return NULL;
+
+	do {
+		struct tlb_range *left = to_tlb_range(node->rb.rb_left);
+
+		if (left && start <= left->__subtree_last) {
+			node = left;
+			continue;
+		}
+
+		if (node->start <= last) {
+			if (start <= node->end)
+				return node;
+
+			node = to_tlb_range(node->rb.rb_right);
+			if (node && start <= node->__subtree_last)
+				continue;
+		}
+
+		return NULL;
+	} while (1);
 }
 
 static void vma_invalidate_tlb(struct i915_vma *vma)
@@ -249,13 +307,64 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 	for_each_gt(gt, vm->i915, id) {
 		u32 seqno = 0;
 
-		if (atomic_read(&vm->active_contexts[id]))
+		if (atomic_read(&vm->active_contexts[id])) {
 			seqno = intel_gt_invalidate_tlb_range(gt, vm,
-							      i915_vma_offset(vma),
+							      __i915_vma_offset(vma),
 							      pte_size(vma));
+			if (seqno) {
+				struct i915_vm_tlb *tlb = &vm->tlb[id];
+				struct tlb_range *r;
+
+				intel_tlb_advance(&tlb->last, seqno);
+
+				r = NULL;
+				if (likely(!tlb->has_error))
+					r = kmalloc(sizeof(*r), GFP_NOWAIT | __GFP_NOWARN);
+				if (r) {
+					r->start = __i915_vma_offset(vma);
+					r->end = r->start + pte_size(vma) - 1;
+					r->seqno = seqno;
+
+					spin_lock(&tlb->lock);
+					tlb_range_insert(r, &tlb->range);
+					spin_unlock(&tlb->lock);
+				} else {
+					tlb->has_error = true;
+				}
+			}
+		}
 
 		WRITE_ONCE(obj->mm.tlb[id], seqno);
 	}
+}
+
+static bool tlb_range_prune(struct rb_root_cached *root, u64 start, u64 end)
+{
+	struct tlb_range *erase = NULL;
+	struct tlb_range *r;
+
+	end += start - 1;
+
+	for (r = tlb_range_first(root, start, end); r && r->start < end; r = next_tlb_range(r)) {
+		if (r->end <= end)
+			r->end = start;
+		if (r->start >= start)
+			r->start = end;
+		if (r->start >= r->end) {
+			r->erase = erase;
+			erase = r;
+		}
+	}
+
+	while (erase) {
+		r = erase;
+		erase = r->erase;
+
+		tlb_range_remove(r, root);
+		kfree_rcu(r, rcu);
+	}
+
+	return RB_EMPTY_ROOT(&root->rb_root);
 }
 
 int ppgtt_bind_vma(struct i915_address_space *vm,
@@ -264,12 +373,37 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 		   unsigned int pat_index,
 		   u32 flags)
 {
+	struct intel_gt *gt;
 	u32 pte_flags;
 	int err;
+	int id;
 
 	/* Paper over race with vm_unbind */
 	if (!drm_mm_node_allocated(&vma->node))
 		return 0;
+
+	for_each_gt(gt, vm->i915, id) {
+		struct i915_vm_tlb *tlb = &vm->tlb[id];
+		struct rb_root root = RB_ROOT;
+		struct tlb_range *r, *n;
+
+		if (RB_EMPTY_ROOT(&tlb->range.rb_root))
+			continue;
+
+		spin_lock(&tlb->lock);
+		if (i915_seqno_passed(READ_ONCE(gt->tlb.seqno), tlb->last)) {
+			root = tlb->range.rb_root;
+			tlb->range = RB_ROOT_CACHED;
+			tlb->has_error = false;
+		} else {
+			if (tlb_range_prune(&tlb->range, vma->node.start, vma->node.size))
+				tlb->has_error = false;
+		}
+		spin_unlock(&tlb->lock);
+
+		rbtree_postorder_for_each_entry_safe(r, n, &root, rb)
+			kfree_rcu(r, rcu);
+	}
 
 	/*
 	 * Force the next access to this vma to trigger a pagefault.
@@ -280,9 +414,11 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 
 	/* Applicable to VLV, and gen8+ */
 	pte_flags = 0;
+	if (flags & PIN_READ_ONLY)
+		pte_flags |= PTE_READ_ONLY;
 	if (test_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags))
 		pte_flags |= PTE_READ_ONLY;
-	if (vm->has_read_only && i915_gem_object_is_readonly(vma->obj))
+	if (i915_gem_object_is_readonly(vma->obj))
 		pte_flags |= PTE_READ_ONLY;
 	if (i915_gem_object_is_lmem(vma->obj) ||
 	    i915_gem_object_has_fabric(vma->obj))
@@ -308,12 +444,56 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	return 0;
 }
 
+u32 ppgtt_tlb_range(struct i915_address_space *vm, struct intel_gt *gt, u64 start, u64 end)
+{
+	struct i915_vm_tlb *tlb = &vm->tlb[gt->info.id];
+	const u32 last = READ_ONCE(tlb->last);
+	u32 seqno = 0;
+
+	if (RB_EMPTY_ROOT(&tlb->range.rb_root))
+		return 0;
+
+	if (!tlb->has_error) {
+		struct tlb_range *r;
+
+		end += start - 1;
+
+		rcu_read_lock();
+		r = tlb_range_first(&tlb->range, start, end);
+		if (!r) {
+			rcu_read_unlock();
+			return 0;
+		}
+
+		seqno = last - r->seqno;
+		while ((r = next_tlb_range(r)) && r->start < end)
+			seqno = min(seqno, last - r->seqno);
+		rcu_read_unlock();
+	}
+
+	if (unlikely(!seqno))
+		intel_tlb_advance(&tlb->last, intel_guc_invalidate_tlb_flush(&gt->uc.guc, vm->asid));
+
+	return last - seqno;
+}
+
+void ppgtt_tlb_cleanup(struct i915_address_space *vm)
+{
+	struct tlb_range *r, *n;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(vm->tlb); i++) {
+		rbtree_postorder_for_each_entry_safe(r, n, &vm->tlb[i].range.rb_root, rb)
+			kfree(r);
+	}
+}
+
 void ppgtt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 {
 	if (!test_and_clear_bit(I915_VMA_ALLOC_BIT, __i915_vma_flags(vma)))
 		return;
 
-	vm->clear_range(vm, i915_vma_offset(vma), pte_size(vma));
+	vm->clear_range(vm, __i915_vma_offset(vma), pte_size(vma));
 	vma_invalidate_tlb(vma);
 }
 

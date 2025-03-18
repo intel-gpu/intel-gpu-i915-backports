@@ -63,8 +63,8 @@ BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT)
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.5 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS
-DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP UBUNTU_24.04_SERVER UBUNTU_24.04_DESKTOP
+RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.5 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS VANILLA_6.12LTS
+DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP UBUNTU_24.04_SERVER UBUNTU_24.04_DESKTOP VANILLA_6.12LTS
 
 RELEASE_TYPE ?= opensource
 
@@ -315,13 +315,13 @@ KERN_VER_XYZ := $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CO
 KERN_TYPE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d "-" -f3 | cut -d ' ' -f1 | tr -d "\"")
 
 # Get the osv version by comparing the kernel versions
-ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
-	OSV_VER = 24.04
-	OSV_VER1 = 22.04
-else
-ifeq ($(shell expr $(BASE_KERN) \>= 5.15), 1)
-	OSV_VER = 22.04
-endif
+ifeq ($(shell expr $(BASE_KERN) \== 6.11), 1)
+OSV_VER = 24.04
+else ifeq ($(shell expr $(BASE_KERN) \== 6.8), 1)
+OSV_VER = 24.04
+OSV_VER1 = 22.04
+else ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
+OSV_VER = 22.04
 endif
 
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$1}' 2> /dev/null)
@@ -339,7 +339,9 @@ endif
 else
 ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
+else ifeq ($(shell expr $(BASE_KERN) \== 6.8), 1)
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== 6.11), 1)
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION" | cut -d '"' -f 2)
 endif
 endif
@@ -421,6 +423,9 @@ OSV_NAME = VANILLA_6.1LTS
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,6)), 1)
 OSV_NAME = VANILLA_6.6LTS
+OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
+else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,12)), 1)
+OSV_NAME = VANILLA_6.12LTS
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifneq ($(CUSTOM_KERN_ID), )
 
@@ -663,8 +668,9 @@ else
 	@echo 'UBUNTU_OEM_$(OSV_VER)_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 endif
 else
-ifeq ($(shell expr $(BASE_KERN) \>= 6.8), 1)
+ifeq ($(shell expr $(BASE_KERN) \== 6.11), 1)
 	@echo 'UBUNTU_$(OSV_VER)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
+else ifeq ($(shell expr $(BASE_KERN) \== 6.8), 1)
 	@echo 'UBUNTU_$(OSV_VER)_SERVER_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 	@echo 'UBUNTU_$(OSV_VER1)_DESKTOP_KERNEL_VERSION="$(BASE_KERNEL_NAME)"' >> versions
 else ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)

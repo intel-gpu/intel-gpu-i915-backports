@@ -378,6 +378,9 @@ eb_vma_misplaced(const struct drm_i915_gem_exec_object2 *entry,
 	const u64 start = i915_vma_offset(vma);
 	const u64 size = i915_vma_size(vma);
 
+	if (i915_vma_is_persistent(vma))
+		return false;
+
 	if (size < entry->pad_to_size)
 		return true;
 
@@ -400,7 +403,7 @@ eb_vma_misplaced(const struct drm_i915_gem_exec_object2 *entry,
 static u64 eb_pin_flags(const struct drm_i915_gem_exec_object2 *entry,
 			unsigned int exec_flags)
 {
-	u64 pin_flags = 0;
+	u64 pin_flags = PIN_RESIDENT;
 
 	if (exec_flags & EXEC_OBJECT_NEEDS_GTT)
 		pin_flags |= PIN_GLOBAL;
@@ -469,7 +472,7 @@ eb_pin_vma(struct i915_execbuffer *eb,
 	else
 		pin_flags = entry->offset & PIN_OFFSET_MASK;
 
-	pin_flags |= PIN_USER | PIN_NOEVICT | PIN_OFFSET_FIXED;
+	pin_flags |= PIN_RESIDENT | PIN_USER | PIN_NOEVICT | PIN_OFFSET_FIXED;
 	if (unlikely(ev->flags & EXEC_OBJECT_NEEDS_GTT))
 		pin_flags |= PIN_GLOBAL;
 
@@ -1096,16 +1099,18 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 			if (err == -EDEADLK || err == -EINTR || err == -ERESTARTSYS)
 				return err;
 
-			eb_unreserve_vma(ev);
+			if (!i915_vma_is_persistent(vma)) {
+				eb_unreserve_vma(ev);
 
-			list_add_tail(&ev->bind_link, &eb->unbound);
-			if (drm_mm_node_allocated(&vma->node)) {
-				err = i915_vma_unbind(vma);
-				if (err)
-					return err;
+				list_add_tail(&ev->bind_link, &eb->unbound);
+				if (drm_mm_node_allocated(&vma->node)) {
+					err = i915_vma_unbind(vma);
+					if (err)
+						return err;
+				}
+
+				GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
 			}
-
-			GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
 		}
 
 		GEM_BUG_ON(drm_mm_node_allocated(&vma->node) &&

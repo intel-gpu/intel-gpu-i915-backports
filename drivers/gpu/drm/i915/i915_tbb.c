@@ -23,7 +23,12 @@
 #include <linux/topology.h>
 #include <linux/wait.h>
 
+#include <drm/drm_print.h>
+
+#include "i915_driver.h"
+#include "i915_sysrq.h"
 #include "i915_tbb.h"
+#include "i915_utils.h"
 
 static DEFINE_SPINLOCK(nodes_lock);
 static struct rb_root nodes;
@@ -56,41 +61,28 @@ struct i915_tbb_node *i915_tbb_node(int nid)
 	return to_node(rb_find(as_ptr(nid), &nodes, node_key)) ?: &no_node;
 }
 
-void i915_tbb_add_task_locked(struct i915_tbb_node *node, struct i915_tbb *task)
-{
-	lockdep_assert_held(i915_tbb_get_lock(node));
-
-	list_add_tail(&task->link, &node->tasks);
-	if (list_is_first(&task->link, &node->tasks))
-		wake_up_locked(&node->wq);
-}
-
 void i915_tbb_run_local(struct i915_tbb_node *node, struct list_head *local, void (*fn)(struct i915_tbb *task))
 {
-	if (list_empty(local))
-		return;
-
-	i915_tbb_lock(node);
-	do {
+	while (!list_empty(local)) {
 		struct i915_tbb *task;
 
+		i915_tbb_lock_irq(node);
 		task = list_first_entry_or_null(local, typeof(*task), local);
-		if (!task)
-			break;
-
-		list_del(&task->link);
-		list_del(&task->local);
-		i915_tbb_unlock(node);
+		if (task) {
+			list_del_init(&task->link);
+			list_del(&task->local);
+		}
+		i915_tbb_unlock_irq(node);
+		if (unlikely(!task))
+			return;
 
 		fn(task);
-
-		i915_tbb_lock(node);
-	} while (1);
-	i915_tbb_unlock(node);
+	}
 }
 
 struct i915_tbb_thread {
 	struct wait_queue_entry wait;
+	struct list_head local;
 	struct i915_tbb_node *node;
 	int cpu;
 };
@@ -134,6 +126,96 @@ static int tbb_wakefn(wait_queue_entry_t *wait, unsigned mode, int sync, void *k
 	return autoremove_wake_function(wait, mode, sync, key);
 }
 
+static void __printfn_info(struct drm_printer *p, struct va_format *vaf)
+{
+	pr_info(DRIVER_NAME ": %pV", vaf);
+}
+
+static void sysrq_show(void *data)
+{
+	struct i915_tbb_node *node = data;
+	struct drm_printer p = {
+		.printfn = __printfn_info,
+	};
+	int indent = 0;
+	unsigned long *cpus;
+
+	i_printf(&p, indent, "---\n");
+	i_printf(&p, indent, "Threads:\n");
+	indent += 2;
+
+	i_printf(&p, indent, "NUMA node: %d\n", node->nid);
+
+	cpus = bitmap_zalloc(2 * ALIGN(NR_CPUS, BITS_PER_LONG), GFP_ATOMIC);
+	if (cpus) {
+		int num_secondary = 0, num_primary = 0;
+		int cpu;
+
+		for_each_online_cpu(cpu) {
+			struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+
+			if (!t || t->node != node)
+				continue;
+
+			if (t->wait.flags & WQ_FLAG_EXCLUSIVE) {
+				__set_bit(cpu, cpus);
+				num_primary++;
+			} else {
+				__set_bit(ALIGN(NR_CPUS , BITS_PER_LONG) + cpu, cpus);
+				num_secondary++;
+			}
+		}
+
+		if (num_primary | num_secondary) {
+			i_printf(&p, indent, "CPUs:\n");
+			indent += 2;
+
+			i_printf(&p, indent, "Primary: %d (%*pbl)\n",
+				 num_primary, NR_CPUS, cpus);
+			if (num_secondary) {
+				i_printf(&p, indent, "Secondary: %d (%*pbl)\n",
+					 num_secondary, NR_CPUS, cpus + DIV_ROUND_UP(NR_CPUS, BITS_PER_LONG));
+			}
+
+			indent -= 2;
+		}
+
+		bitmap_free(cpus);
+	}
+
+	if (!list_empty(&node->tasks)) {
+		struct i915_tbb *task;
+		unsigned int flags;
+		void *last = NULL;
+		int count = 0;
+
+		i_printf(&p, indent, "Tasks:\n");
+		indent += 2;
+
+		flags = i915_tbb_lock(node);
+		list_for_each_entry(task, &node->tasks, link) {
+			if (task->fn != last) {
+				if (count > 1)
+					i_printf(&p, indent, "- %ps x %d\n", last, count);
+				else if (count > 0)
+					i_printf(&p, indent, "- %ps\n", last);
+
+				last = task->fn;
+				count = 0;
+			}
+			count++;
+		}
+		i915_tbb_unlock(node, flags);
+
+		if (count > 1)
+			i_printf(&p, indent, "- %ps x %d\n", last, count);
+		else if (count > 0)
+			i_printf(&p, indent, "- %ps\n", last);
+
+		indent -= 2;
+	}
+}
+
 static void tbb_create(unsigned int cpu)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
@@ -147,6 +229,7 @@ static void tbb_create(unsigned int cpu)
 	t->wait.private = tsk;
 	if (!tick_nohz_full_cpu(cpu))
 		t->wait.flags |= WQ_FLAG_EXCLUSIVE;
+	INIT_LIST_HEAD(&t->local);
 
 	new = kmalloc_node(sizeof(*node), GFP_KERNEL, nid);
 	if (!new)
@@ -166,6 +249,9 @@ static void tbb_create(unsigned int cpu)
 		new = NULL;
 	}
 	spin_unlock(&nodes_lock);
+
+	if (!new)
+		i915_sysrq_register(sysrq_show, node);
 
 	t->node = node;
 	kfree(new);
@@ -213,7 +299,7 @@ static void tbb_cleanup(unsigned int cpu, bool online)
 static void __tbb_wait_queue(struct i915_tbb_thread *t, struct i915_tbb_node *node)
 {
 	/* Hand-rolled prepare_to_wait to prioritise exclusive wakeups */
-	i915_tbb_lock(node);
+	i915_tbb_lock_irq(node);
 	if (list_empty(&t->wait.entry)) {
 		struct list_head *head;
 
@@ -222,7 +308,12 @@ static void __tbb_wait_queue(struct i915_tbb_thread *t, struct i915_tbb_node *no
 			head = head->prev;
 		list_add(&t->wait.entry, head);
 	}
-	i915_tbb_unlock(node);
+	i915_tbb_unlock_irq(node);
+}
+
+static bool tbb_ready(struct i915_tbb_thread *t, struct i915_tbb_node *node)
+{
+	return !list_empty(&node->tasks);
 }
 
 static int tbb_should_run(unsigned int cpu)
@@ -233,34 +324,38 @@ static int tbb_should_run(unsigned int cpu)
 	if (unlikely(!node))
 		return 0;
 
-	if (!list_empty(&node->tasks))
+	if (tbb_ready(t, node))
 		return 1;
 
 	set_current_state(TASK_IDLE);
 	__tbb_wait_queue(t, node);
 
-	return !list_empty(&node->tasks);
+	return tbb_ready(t, node);
 }
 
 static void tbb_dispatch(unsigned int cpu)
 {
-	struct i915_tbb_node *node = i915_tbb_node(cpu_to_node(cpu));
-
-	if (list_empty(&node->tasks))
-		return;
+	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+	struct i915_tbb_node *node = t->node;
 
 	do {
 		struct i915_tbb *task;
 
-		i915_tbb_lock(node);
-		task = list_first_entry_or_null(&node->tasks, struct i915_tbb, link);
+		if (!tbb_ready(t, node))
+			return;
+
+		i915_tbb_lock_irq(node);
+		task = list_first_entry_or_null(&t->local, struct i915_tbb, local);
+		if (!task)
+			task = list_first_entry_or_null(&node->tasks, struct i915_tbb, link);
 		if (task) {
 			list_del(&task->local);
-			list_del(&task->link);
+			list_del_init(&task->link);
 			if (!list_empty(&node->tasks))
 				wake_up_locked(&node->wq);
+			task->tsk = current;
 		}
-		i915_tbb_unlock(node);
+		i915_tbb_unlock_irq(node);
 		if (!task)
 			return;
 
@@ -273,11 +368,12 @@ int i915_tbb_suspend_local(void)
 	int cpu = raw_smp_processor_id();
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 
-	if (!list_empty_careful(&t->wait.entry)) {
-		i915_tbb_lock(t->node);
+	i915_tbb_lock_irq(t->node);
+	if (!list_empty(&t->wait.entry))
 		list_del_init(&t->wait.entry);
-		i915_tbb_unlock(t->node);
-	}
+	else
+		wake_up_locked(&t->node->wq);
+	i915_tbb_unlock_irq(t->node);
 
 	return cpu;
 }
@@ -285,8 +381,16 @@ int i915_tbb_suspend_local(void)
 void i915_tbb_resume_local(int cpu)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+	struct i915_tbb_node *node = t->node;
 
-	__tbb_wait_queue(t, t->node);
+	if (!list_empty(&t->local)) {
+		wake_up_process(t->wait.private);
+		return;
+	}
+
+	__tbb_wait_queue(t, node);
+	if (!list_empty(&node->tasks))
+		wake_up(&node->wq);
 }
 
 static struct smp_hotplug_thread threads = {
@@ -311,7 +415,11 @@ int i915_tbb_init(void)
 
 void i915_tbb_exit(void)
 {
+	struct i915_tbb_node *node, *n;
 	int cpu;
+
+	rbtree_postorder_for_each_entry_safe(node, n, &nodes, rb)
+		i915_sysrq_unregister(sysrq_show, node);
 
 	for_each_online_cpu(cpu) {
 		struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
@@ -320,6 +428,75 @@ void i915_tbb_exit(void)
 	}
 
 	smpboot_unregister_percpu_thread(&threads);
+}
+
+void i915_tbb_add_task_locked(struct i915_tbb_node *node, struct i915_tbb *task)
+{
+	lockdep_assert_held(i915_tbb_get_lock(node));
+
+	task->node = node;
+	list_add_tail(&task->link, &node->tasks);
+	if (list_is_first(&task->link, &node->tasks))
+		wake_up_locked(&node->wq);
+}
+
+static void __i915_tbb_add_task(struct i915_tbb *task, struct i915_tbb_thread *t)
+{
+	struct i915_tbb_node *node = t->node;
+
+	task->node = node;
+	list_add_tail(&task->link, &node->tasks);
+	list_add_tail(&task->local, &t->local);
+
+	if (!list_empty(&t->wait.entry)) {
+		list_del_init(&t->wait.entry);
+		wake_up_process(t->wait.private);
+		return;
+	}
+
+	if (!list_is_first(&task->local, &t->local))
+		wake_up_locked(&node->wq);
+}
+
+void i915_tbb_add_task_on(struct i915_tbb *task, int cpu)
+{
+	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu == WORK_CPU_UNBOUND ? raw_smp_processor_id() : cpu);
+	struct i915_tbb_node *node = t->node;
+	unsigned long flags;
+
+	flags = i915_tbb_lock(node);
+	if (list_empty(&task->link))
+		__i915_tbb_add_task(task, t);
+	else
+		wake_up_locked(&node->wq);
+	i915_tbb_unlock(node, flags);
+}
+
+bool i915_tbb_cancel_task(struct i915_tbb *task)
+{
+	struct i915_tbb_node *node;
+	struct task_struct *tsk = NULL;
+	unsigned long flags;
+
+	node = task->node;
+	if (!node)
+		return false;
+
+	flags = i915_tbb_lock(node);
+	if (!list_empty(&task->link)) {
+		list_del(&task->local);
+		list_del_init(&task->link);
+	} else {
+		tsk = task->tsk;
+	}
+	i915_tbb_unlock(node, flags);
+
+	if (tsk) {
+		kthread_park(tsk);
+		kthread_unpark(tsk);
+	}
+
+	return !tsk;
 }
 
 #if IS_ENABLED(CONFIG_NO_HZ_FULL)

@@ -77,7 +77,8 @@ struct i915_sched_node {
 	} dfs; /* guarded by engine->active.lock */
 	struct i915_sched_attr attr;
 	unsigned long flags;
-#define I915_SCHED_HAS_EXTERNAL_CHAIN	BIT(0)
+#define I915_SCHED_HAS_PHYSICAL_CHAIN	BIT(0)
+#define I915_SCHED_HAS_EXTERNAL_CHAIN	BIT(1)
 	unsigned long semaphores;
 
 	/* handle being scheduled for PI from outside of our active.lock */
@@ -180,20 +181,6 @@ struct i915_sched_engine {
 	 * @private_data: private data of the submission backend
 	 */
 	void *private_data;
-
-	/*
-	 * Keep track of an unordered wq for each engine, and restrict it a
-	 * subset of CPUs. For example, when used on a NUMA system we want to
-	 * keep our work close to the device, on the same cores attached to
-	 * the same pci domain as the device. Both the cpu, system memory and
-	 * device will all be within the same NUMA node, limiting the amount
-	 * of slower cross-node traffic.
-	 */
-	struct workqueue_struct *wq;
-	const struct cpumask *cpumask;
-	const struct cpumask *allmask;
-	int num_cpus;
-	int cpu;
 
 	/**
 	 * @destroy: destroy schedule engine / cleanup in backend

@@ -234,7 +234,7 @@ i915_vma_compare(struct i915_vma *vma,
 	return memcmp(&vma->ggtt_view.partial, &view->partial, view->type);
 }
 
-int i915_vma_bind(struct i915_vma *vma);
+int i915_vma_bind(struct i915_vma *vma, unsigned int flags, bool imm);
 
 bool i915_gem_valid_gtt_space(struct i915_vma *vma, unsigned long color);
 bool i915_vma_misplaced(const struct i915_vma *vma,
@@ -459,16 +459,13 @@ i915_find_vma(struct i915_address_space *vm, u64 addr)
 	struct drm_mm_node *node;
 	struct i915_vma *vma = NULL;
 
-	mutex_lock(&vm->mutex);
+	rcu_read_lock();
 	node = i915_gem_gtt_lookup(vm, addr);
 	if (likely(node)) {
 		vma = container_of(node, struct i915_vma, node);
-		if (__i915_vma_get(vma) && !i915_vma_tryget(vma)) {
-			__i915_vma_put(vma);
-			vma = NULL;
-		}
+		vma = __i915_vma_get(vma);
 	}
-	mutex_unlock(&vm->mutex);
+	rcu_read_unlock();
 
 	return vma;
 }

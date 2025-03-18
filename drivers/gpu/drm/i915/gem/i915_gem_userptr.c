@@ -310,13 +310,13 @@ userptr_queue(struct userptr_chunk *chunk, struct i915_tbb_node *tbb, struct lis
 {
 	chunk->tbb.fn = userptr_remote_chunk;
 
-	i915_tbb_lock(tbb);
+	i915_tbb_lock_irq(tbb);
 	list_add_tail(&chunk->tbb.local, tasks);
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
 		i915_tbb_add_task_locked(tbb, &chunk->tbb);
 	else
 		INIT_LIST_HEAD(&chunk->tbb.link);
-	i915_tbb_unlock(tbb);
+	i915_tbb_unlock_irq(tbb);
 }
 
 static void unpin_sg(struct scatterlist *sg, struct device *dev)
@@ -703,7 +703,7 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 		goto err_sg;
 	}
 	dma_fence_work_init(&wrk->base, &userptr_ops,
-			    to_i915(obj->base.dev)->mm.sched);
+			    to_i915(obj->base.dev)->sched);
 	wrk->obj = obj;
 	wrk->pages = sg;
 	wrk->policy = get_mempolicy(current);
@@ -764,6 +764,8 @@ i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj,
 		} else {
 			unpin_user_page_range_dirty_lock(page, sg->length >> PAGE_SHIFT, dirty);
 		}
+
+		cond_resched();
 	}
 
 out:
@@ -884,6 +886,7 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 	obj->userptr.ptr = args->user_ptr;
 	if (args->flags & I915_USERPTR_READ_ONLY)
 		i915_gem_object_set_readonly(obj);
+	i915_gem_object_set_backing_store(obj);
 
 	i915_gem_userptr_init__mm(obj);
 	i915_gem_object_init_memory_region(obj,

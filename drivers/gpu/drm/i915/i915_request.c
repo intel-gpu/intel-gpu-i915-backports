@@ -381,14 +381,12 @@ bool i915_request_retire(struct i915_request *rq)
 	GEM_BUG_ON(!list_is_first(&rq->link,
 				  &i915_request_timeline(rq)->requests));
 
+	spin_lock_irq(&rq->sched.lock);
+	dma_fence_signal_locked(&rq->fence);
+	spin_unlock_irq(&rq->sched.lock);
+
 	if (advance_ring(rq->ring, rq->postfix))
 		intel_ring_update_space(rq->ring);
-
-	if (!test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags)) {
-		spin_lock_irq(&rq->sched.lock);
-		dma_fence_signal_locked(&rq->fence);
-		spin_unlock_irq(&rq->sched.lock);
-	}
 
 	if (test_and_set_bit(I915_FENCE_FLAG_BOOST, &rq->fence.flags))
 		intel_rps_cancel_boost(&rq->engine->gt->rps);
@@ -784,16 +782,6 @@ void i915_request_unsubmit(struct i915_request *request)
 	spin_unlock_irqrestore(&engine->sched_engine->lock, flags);
 }
 
-void i915_request_cancel(struct i915_request *rq, int error)
-{
-	if (!i915_request_set_error_once(rq, error))
-		return;
-
-	set_bit(I915_FENCE_FLAG_SENTINEL, &rq->fence.flags);
-
-	intel_context_cancel_request(rq->context, rq);
-}
-
 static int
 submit_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 {
@@ -967,6 +955,7 @@ __i915_request_initialize(struct i915_request *rq,
 	i915_sw_fence_reinit(&i915_request_get(rq)->semaphore);
 
 	i915_sched_node_reinit(&rq->sched);
+	rq->sched.flags |= I915_SCHED_HAS_PHYSICAL_CHAIN;
 
 	/* No zalloc, everything must be cleared after use */
 	rq->batch = NULL;
@@ -1479,7 +1468,7 @@ static inline struct intel_context *request_to_parent(struct i915_request *rq)
 static bool is_same_parallel_context(struct i915_request *to,
 				     struct i915_request *from)
 {
-	if (!is_parallel_rq(to) || !from->context)
+	if (!to->context || !is_parallel_rq(to) || !from->context)
 		return false;
 
 	return request_to_parent(to) == request_to_parent(from);
@@ -1512,7 +1501,7 @@ i915_request_await_execution(struct i915_request *rq,
 			continue;
 		}
 
-		if (fence->context == rq->fence.context)
+		if (rq->fence.context && fence->context == rq->fence.context)
 			continue;
 
 		/*
@@ -1561,7 +1550,7 @@ i915_request_await_request(struct i915_request *to, struct i915_request *from)
 	int ret;
 
 	GEM_BUG_ON(to == from);
-	GEM_BUG_ON(to->timeline == from->timeline);
+	GEM_BUG_ON(to->timeline && to->timeline == from->timeline);
 
 	if (i915_request_signaled(from)) {
 		i915_sw_fence_set_error_once(&to->submit, from->fence.error);
@@ -1576,7 +1565,7 @@ i915_request_await_request(struct i915_request *to, struct i915_request *from)
 			return ret;
 	}
 
-	if (!intel_engine_uses_guc(to->engine) &&
+	if (to->engine && !intel_engine_uses_guc(to->engine) &&
 	    is_power_of_2(to->execution_mask | READ_ONCE(from->execution_mask)))
 		ret = await_request_submit(to, from);
 	else
@@ -1625,7 +1614,7 @@ i915_request_await_dma_fence(struct i915_request *rq, struct dma_fence *fence)
 		 * with their dependencies, by i915_request_add() which ensures
 		 * that requests are submitted in-order through each ring.
 		 */
-		if (fence->context == rq->fence.context)
+		if (rq->fence.context && fence->context == rq->fence.context)
 			continue;
 
 		/* Squash repeated waits to the same timelines */
@@ -1832,6 +1821,8 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 	 * alternatively we use completion fence if gem context has a single
 	 * timeline and this is the first submission of an execbuf IOCTL.
 	 */
+	GEM_BUG_ON(!rq->context);
+	GEM_BUG_ON(!rq->fence.context);
 	if (likely(!is_parallel_rq(rq)))
 		__i915_request_ensure_ordering(rq, timeline);
 	else

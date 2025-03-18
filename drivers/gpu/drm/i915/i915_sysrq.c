@@ -54,7 +54,7 @@ static void sysrq_handle_showgpu(sysrq_key key)
 	struct sysrq_cb *cb;
 
 	rcu_read_lock();
-	list_for_each_entry(cb, &sysrq_list, link)
+	list_for_each_entry_rcu(cb, &sysrq_list, link)
 		cb->fn(cb->data);
 	rcu_read_unlock();
 }
@@ -184,6 +184,11 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 		return;
 	}
 
+	if (intel_gt_is_wedged(gt)) {
+		i_printf(p, indent, "GT%d: wedged\n", gt->info.id);
+		return;
+	}
+
 	i_printf(p, indent, "GT%d: awake: %s [%d], %llums, mask: %x\n",
 		 gt->info.id,
 		 str_yes_no(intel_gt_pm_is_awake(gt)),
@@ -200,10 +205,12 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 		 ewma_irq_time_read(&gt->stats.irq.avg),
 		 READ_ONCE(gt->stats.irq.max));
 	if (local_read(&gt->stats.pagefault_minor)) {
-		i_printf(p, indent, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, debugger: %s, stall: %llums }\n",
+		i_printf(p, indent, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, reply: %lu, retry: %lu, debugger: %s, stall: %llums }\n",
 			 local_read(&gt->stats.pagefault_minor),
 			 local_read(&gt->stats.pagefault_major),
 			 local_read(&gt->stats.pagefault_invalid),
+			 local_read(&gt->stats.pagefault_reply),
+			 local_read(&gt->stats.pagefault_retry),
 			 str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)),
 			 ktime_to_ms(local64_read(&gt->stats.pagefault_stall)));
 	}
@@ -338,7 +345,8 @@ void i915_show(struct drm_i915_private *i915, struct drm_printer *p, int indent)
 	pci_show(pdev, p, indent);
 	if (dev_to_node(i915->drm.dev) != NUMA_NO_NODE)
 		i_printf(p, indent, "NUMA: { node: %d }\n", dev_to_node(i915->drm.dev));
-	i_printf(p, indent, "CPU: (%*pbl)\n", cpumask_pr_args(i915->sched->cpumask));
+	if (i915->irq_affinity)
+		i_printf(p, indent, "CPU: (%*pbl)\n", cpumask_pr_args(i915->irq_affinity));
 	i_printf(p, indent, "IOMMU: { dma-width: %d, %s%s }\n",
 		 INTEL_INFO(i915)->dma_mask_size,
 		 str_enabled_disabled(i915_vtd_active(i915) > 0),
@@ -374,4 +382,14 @@ int i915_register_sysrq(struct drm_i915_private *i915)
 void i915_unregister_sysrq(struct drm_i915_private *i915)
 {
 	unregister_sysrq(show_gpu, i915);
+}
+
+int i915_sysrq_register(void (*show)(void *data), void *data)
+{
+	return register_sysrq(show, data);
+}
+
+void i915_sysrq_unregister(void (*show)(void *data), void *data)
+{
+	unregister_sysrq(show, data);
 }

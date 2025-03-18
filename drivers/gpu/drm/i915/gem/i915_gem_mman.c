@@ -267,10 +267,6 @@ create_swapto(struct drm_i915_gem_object *obj, bool write)
 	}
 	swp->mm.madv = I915_MADV_WILLNEED;
 
-	if (obj->memory_mask & BIT(INTEL_REGION_SMEM) &&
-	    i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false) == 0)
-		swp = obj;
-
 	return swp;
 }
 
@@ -283,7 +279,12 @@ use_swapto(struct drm_i915_gem_object *obj, bool write)
 		return obj;
 
 	if (!swp || swp->mm.madv != I915_MADV_WILLNEED)
-		return create_swapto(obj, write);
+		swp = create_swapto(obj, write);
+
+	if (swp != obj &&
+	    obj->memory_mask & BIT(INTEL_REGION_SMEM) &&
+	    i915_gem_object_migrate(obj, INTEL_REGION_SMEM, false) == 0)
+		swp = obj;
 
 	GEM_BUG_ON(swp->base.resv != obj->base.resv);
 	return swp;
@@ -291,8 +292,12 @@ use_swapto(struct drm_i915_gem_object *obj, bool write)
 
 static bool
 should_migrate_smem(const struct drm_i915_gem_object *obj,
+		    const struct i915_mmap_offset *mmo,
 		    bool write, bool *required)
 {
+	if (mmo->mmap_type != I915_MMAP_TYPE_WB)
+		return false;
+
 	if (obj->mm.region.mem->id == INTEL_REGION_SMEM)
 		return false;
 
@@ -308,42 +313,43 @@ should_migrate_smem(const struct drm_i915_gem_object *obj,
 	if (*required)
 		return true;
 
-	return i915_gem_object_test_preferred_location(obj, INTEL_REGION_SMEM);
-}
+	if (i915_gem_object_is_segment(obj) && obj->base.size <= SZ_2M)
+		return true;
 
-static bool
-can_migrate_lmem(const struct drm_i915_gem_object *obj, bool write)
-{
-	if (!write || !(obj->memory_mask & REGION_LMEM))
-		return false;
-
-	if (i915_gem_object_has_backing_store(obj))
-		return false;
-
-	/* XXX On initial upload, consider atomic system access? */
-	return !i915_gem_object_test_preferred_location(obj, INTEL_REGION_SMEM);
+	return test_bit(I915_BO_MMAP_BIT, &obj->flags);
 }
 
 static bool
 __try_migrate_lmem(struct drm_i915_gem_object *obj,
 		   struct intel_memory_region *mr)
 {
-	if (2 * obj->base.size < atomic64_read(&mr->avail))
+	if (2 * obj->base.size > atomic64_read(&mr->avail))
 		return false;
 
 	return i915_gem_object_migrate(obj, mr->id, false) == 0;
 }
 
-static bool try_migrate_lmem(struct drm_i915_gem_object *obj, bool write)
+static bool try_migrate_lmem(struct drm_i915_gem_object *obj,
+			     const struct i915_mmap_offset *mmo,
+			     bool write)
 {
 	struct intel_memory_region *mr;
 	int i;
 
-	if (!can_migrate_lmem(obj, write))
+	if (mmo->mmap_type == I915_MMAP_OFFSET_WB)
+		return false;
+
+	if (!(obj->memory_mask & REGION_LMEM))
+		return false;
+
+	if (obj->mm.region.mem->type == INTEL_MEMORY_LOCAL)
+		return true;
+
+	if (i915_gem_object_has_backing_store(obj))
 		return false;
 
 	mr = obj->mm.preferred_region;
-	if (mr && __try_migrate_lmem(obj, mr))
+	if (mr && mr->id && __try_migrate_lmem(obj, mr))
 		return true;
 
 	for (i = 0; i < obj->mm.n_placements; i++) {
@@ -418,8 +424,8 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		pg = use_swapto(obj, write);
 
 		/* Implicitly migrate BO to SMEM if criteria met */
-		if (!try_migrate_lmem(pg, write) &&
-		    should_migrate_smem(pg, write, &required)) {
+		if (!try_migrate_lmem(pg, mmo, write) &&
+		    should_migrate_smem(pg, mmo, write, &required)) {
 			/*
 			 * If pinned pages, migrate will fail with
 			 * -EBUSY. A retry of fault/migration will
@@ -429,7 +435,7 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 			 */
 			err = -EFAULT;
 			if (!i915_gem_object_has_pinned_pages(pg))
-				err = i915_gem_object_migrate_to_smem(pg, &ww, false);
+				err = i915_gem_object_migrate_to_smem(pg, &ww);
 			if (err && required)
 				/*
 				 * Atomic hint requires migration, but we
@@ -456,21 +462,27 @@ static vm_fault_t vm_fault_cpu(struct vm_fault *vmf)
 		}
 
 		/*
-		 * On first touch, just pull in the single page.
+		 * On first touch, just pull in the "single" page.
 		 * On second touch, pull in the whole segment.
 		 */
-		if (!test_bit(I915_BO_MMAP_BIT, &pg->flags)) {
-			obj_offset += (vmf->address - vm_start) >> PAGE_SHIFT;
-			vm_start = vmf->address;
-			vm_size = PAGE_SIZE;
+		if (!__test_and_set_bit(I915_BO_MMAP_BIT, &pg->flags) && vm_size > SZ_2M) {
+			unsigned long adj_start, adj_end;
+
+			/* Align to pmd (huge page) boundaries */
+			adj_end = min(vm_start + vm_size, round_up(vmf->address + 1, SZ_2M));
+			adj_start = max(vm_start, round_down(vmf->address, SZ_2M));
+
+			obj_offset += (adj_start - vm_start) >> PAGE_SHIFT;
+
+			vm_start = adj_start;
+			vm_size = adj_end - adj_start;
 		}
 
 		/* PTEs are revoked in obj->ops->put_pages() */
 		err = remap_io_sg(area, vm_start, vm_size,
 				  pg->mm.pages, obj_offset,
-				  iomap);
+				  iomap, write);
 
-		__set_bit(I915_BO_MMAP_BIT, &pg->flags);
 		i915_gem_object_unpin_pages(pg);
 	} while ((err == -ENXIO || err == -ENOMEM) && (cond_resched(), 1));
 

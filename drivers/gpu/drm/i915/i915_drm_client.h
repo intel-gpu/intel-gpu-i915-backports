@@ -50,7 +50,7 @@ struct i915_drm_client {
 
 	union {
 		struct rcu_work rcu;
-		struct work_struct pvc_wa;
+		struct work_struct wrk;
 	};
 
 	struct mutex update_lock; /* Serializes name and pid updates. */

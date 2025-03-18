@@ -115,7 +115,7 @@ static void gen12vf_ggtt_invalidate(struct i915_ggtt *ggtt)
 			continue;
 
 		with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-			intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+			intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_LITE);
 	}
 }
 

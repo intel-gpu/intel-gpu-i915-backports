@@ -1,4 +1,34 @@
 # ChangeLog
+## Release I915_25WW12.2_1099.12_25.1.15_250113.14
+* Introduced page fault handling improvements.
+* Fixed an issue causing the CSC hardware errors.
+* Removed unnecessary lockdep debugging checks from Global Graphics Translation Table (GGTT) updates.
+* Fixed timeout issues by preserving Translation Lookaside Buffer (TLB) seqno when splitting clear pages.
+* Fixed issues causing compilation errors on kernel 6.6 and later.
+* Fixed an issue where prefetch was attempted on empty objects.
+* Fixed an issue where pid_task() could fail if the target process had already exited.
+* Implemented a workaround for Address Translation Services for Memory (ATS-M) and introduced support for
+  G8 power state to reduce idle power consumption.
+* Modified the logic to avoid calling pm_qos_request a second time on an existing request during breadcrumb reset.
+* Disabled C-states for breadcrumb interrupts to reduce Direct Memory Access (DMA) latency.
+* Cleaned up incomplete shmemfs obj->base.filp on failed swapout.
+* Hardcoded memory health status in sysfs to prevent breakage.
+* Implemented flushing of freed objects before reporting available memory to stabilize the reported memory
+  levels.
+* Modified implementation to retry eviction only when it is blocked by active or locked objects, aiming to reduce
+  response time.
+* Optimized Virtual Memory Area (VMA) prefetch by short-circuiting redundant operations.
+* Corrected Compressed Color Surface (CCS) copies for Single Root I/O Virtualization (SR-IOV) save and restore.
+* Restricted shmem flags to a valid set for swapin to resolve a page fault issue.
+* Modified the implementation to repeat the Translation Lookaside Buffer (TLB) flush invalidation request,
+  resolving the issue with the failing Hardware Performance Library (HPL).
+* Removed early unlocked unbind from object free to avoid race conditions between lockless unbinding and
+  eviction of non-persistent VMAs.
+* Introduced changes to protect i915_drm_client_fini from early shutdown.
+* Started supporting compilation with CONFIG_PAGE_TABLE_ISOLATION to fix a compilation issue on RHEL.
+* Optimized the unbind step in the GT IFR flow by skipping context runtime updates when the device is quiesced.
+  This change reduces the execution time.
+
 ## Release I915_25WW06.5_1077.18_24.8.5_241129.8
 * Resolved the thundering herd problem in ct_receive by waking only the specific receiving process through
   ct_request. This prevents waking unrelated processes and avoids inefficient iteration, especially during

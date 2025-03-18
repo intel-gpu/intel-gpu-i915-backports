@@ -859,7 +859,11 @@ retry:
 	for (i = 0; i < len; i++)
 		intel_uncore_write(uncore, guc_send_reg(guc, i), request[i]);
 
-	intel_uncore_posting_read(uncore, guc_send_reg(guc, i - 1));
+	/* post and check that the mmiobar is functional */
+	if (intel_uncore_read(uncore, guc_send_reg(guc, i - 1)) == -1) {
+		ret = -EIO;
+		goto out;
+	}
 
 	intel_guc_notify(guc);
 
@@ -1197,7 +1201,7 @@ static struct i915_vma *guc_vma_from_obj(struct intel_guc *guc,
 	}
 
 	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &gt->uc.guc.flags))
-		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_LITE);
 
 	return i915_vma_make_unshrinkable(vma);
 }
@@ -1384,7 +1388,7 @@ static u32 __guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	 */
 	u32 action[] = {
 		INTEL_GUC_ACTION_TLB_INVALIDATION,
-		0,
+		intel_tlb_next_seqno(guc_to_gt(guc)),
 		INTEL_GUC_TLB_INVAL_PAGE_SELECTIVE << INTEL_GUC_TLB_INVAL_TYPE_SHIFT |
 		mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
 		INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
@@ -1399,16 +1403,10 @@ static u32 __guc_invalidate_tlb_page_selective(struct intel_guc *guc,
 	GEM_BUG_ON(!IS_ALIGNED(start, length));
 	GEM_BUG_ON(range_overflows(start, length, vm_total));
 
-	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
-		return 0;
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)) == 0)
+		return action[1];
 
-	action[1] = intel_tlb_next_seqno(guc_to_gt(guc));
-	action[2] &= ~INTEL_GUC_TLB_INVAL_FLUSH_CACHE;
-
-	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
-		return 0;
-
-	return action[1];
+	return 0;
 }
 
 static u32 __guc_invalidate_tlb_all(struct intel_guc *guc,
@@ -1462,8 +1460,7 @@ int intel_guc_invalidate_tlb_guc(struct intel_guc *guc,
 		INTEL_GUC_ACTION_TLB_INVALIDATION,
 		0,
 		INTEL_GUC_TLB_INVAL_GUC << INTEL_GUC_TLB_INVAL_TYPE_SHIFT |
-		mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT |
-		INTEL_GUC_TLB_INVAL_FLUSH_CACHE,
+		mode << INTEL_GUC_TLB_INVAL_MODE_SHIFT,
 	};
 
 	GEM_BUG_ON(!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc));
@@ -1483,6 +1480,40 @@ int intel_guc_invalidate_tlb_all(struct intel_guc *guc)
 	GEM_BUG_ON(!INTEL_GUC_SUPPORTS_TLB_INVALIDATION(guc));
 
 	return guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action));
+}
+
+static u32 __intel_guc_invalidate_tlb_flush(struct intel_guc *guc, u32 asid)
+{
+	u32 action[] = {
+		INTEL_GUC_ACTION_TLB_INVALIDATION,
+		intel_tlb_next_seqno(guc_to_gt(guc)),
+		INTEL_GUC_TLB_INVAL_PAGE_SELECTIVE << INTEL_GUC_TLB_INVAL_TYPE_SHIFT |
+		INTEL_GUC_TLB_INVAL_MODE_LITE << INTEL_GUC_TLB_INVAL_MODE_SHIFT,
+		asid,
+		0,
+		0,
+		0,
+	};
+
+	if (guc_send_invalidate_tlb(guc, action, ARRAY_SIZE(action)))
+		return action[1];
+
+	return 0;
+}
+
+u32 intel_guc_invalidate_tlb_flush(struct intel_guc *guc, u32 asid)
+{
+	struct intel_gt *gt = guc_to_gt(guc);
+	u32 seqno;
+
+	mutex_lock(&gt->tlb.mutex);
+	if (INTEL_GUC_SUPPORTS_TLB_INVALIDATION_SELECTIVE(guc))
+		seqno = __intel_guc_invalidate_tlb_flush(guc, asid);
+	else
+		seqno = 0;
+	mutex_unlock(&gt->tlb.mutex);
+
+	return seqno;
 }
 
 /**

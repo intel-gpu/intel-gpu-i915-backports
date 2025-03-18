@@ -18,21 +18,9 @@ void intel_tlb_invalidation_revoke(struct intel_gt *gt)
 	wake_up_all(&gt->tlb.wq);
 }
 
-static bool tlb_advance(u32 *slot, u32 seqno)
-{
-	u32 old = READ_ONCE(*slot);
-
-	do {
-		if (i915_seqno_passed(old, seqno))
-			return false;
-	} while (!try_cmpxchg(slot, &old, seqno));
-
-	return true;
-}
-
 void intel_tlb_invalidation_done(struct intel_gt *gt, u32 seqno)
 {
-	if (seqno && tlb_advance(&gt->tlb.seqno, seqno)) {
+	if (seqno && intel_tlb_advance(&gt->tlb.seqno, seqno)) {
 		GT_TRACE(gt, "seqno:%x\n", seqno);
 		if (waitqueue_active(&gt->tlb.wq))
 			wake_up_all(&gt->tlb.wq);
@@ -197,8 +185,6 @@ u32 intel_gt_invalidate_tlb_range(struct intel_gt *gt,
 								INTEL_GUC_TLB_INVAL_MODE_HEAVY,
 								start, length,
 								vm->asid);
-		if (likely(seqno))
-			tlb_advance(&vm->tlb[gt->info.id], seqno);
 	}
 
 	return seqno;

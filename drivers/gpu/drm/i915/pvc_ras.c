@@ -99,6 +99,10 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 			name = "GT init failed";
 			ret = -ENXIO;
 			break;
+		case HBM_REPLACE:
+			name = "HBM state transitioned to REPLACE";
+			ret = -ENXIO;
+			break;
 		case MDFI_BAD_EYE_MARGIN_AFTER_TRAINING:
 			name = "Zero MDFI eye margin detected";
 			ret = -ENXIO;

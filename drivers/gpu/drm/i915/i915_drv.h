@@ -321,9 +321,6 @@ struct i915_gem_mm {
 		 */
 		atomic_long_t target;
 	} swapper;
-
-	struct workqueue_struct *wq;
-	struct i915_sched_engine *sched;
 };
 
 #define I915_IDLE_ENGINES_TIMEOUT (2500) /* in ms */
@@ -812,6 +809,7 @@ struct drm_i915_private {
 #ifdef BPM_DRM_DEVICE_IRQ_ENABLED_INSIDE_LEGACY_ADDED
 	bool irq_enabled;
 #endif
+	struct cpumask *irq_affinity;
 
 	union {
 		/* perform PHY state sanity checks? */
@@ -1776,12 +1774,6 @@ static inline int __i915_next_online_cpu(const struct cpumask *mask, int *next)
 	 */
 	WRITE_ONCE(*next, cpumask_next_and(cpu, mask, cpu_online_mask));
 	return cpu;
-}
-
-static inline int i915_next_online_cpu(struct drm_i915_private *i915)
-{
-	return __i915_next_online_cpu(i915->mm.sched->cpumask,
-				      &i915->mm.sched->cpu);
 }
 
 DECLARE_STATIC_KEY_TRUE(__no_init_on_alloc);

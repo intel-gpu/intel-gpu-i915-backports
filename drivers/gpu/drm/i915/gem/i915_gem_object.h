@@ -81,8 +81,7 @@ int i915_gem_object_migrate_region(struct drm_i915_gem_object *obj,
 				   struct intel_memory_region *const *regions,
 				   int size);
 int i915_gem_object_migrate_to_smem(struct drm_i915_gem_object *obj,
-				    struct i915_gem_ww_ctx *ww,
-				    bool check_placement);
+				    struct i915_gem_ww_ctx *ww);
 
 bool i915_gem_object_evictable(struct drm_i915_gem_object *obj);
 
@@ -298,7 +297,7 @@ i915_gem_object_set_readonly(struct drm_i915_gem_object *obj)
 static inline bool
 i915_gem_object_is_readonly(const struct drm_i915_gem_object *obj)
 {
-	return obj->flags & I915_BO_READONLY;
+	return READ_ONCE(obj->flags) & I915_BO_READONLY;
 }
 
 static inline bool
@@ -323,6 +322,15 @@ i915_gem_object_test_preferred_location(const struct drm_i915_gem_object *obj,
 		return false;
 
 	return obj->mm.preferred_region->id == region_id;
+}
+
+static inline bool
+i915_gem_object_not_preferred_location(const struct drm_i915_gem_object *obj)
+{
+	if (!obj->mm.preferred_region)
+		return false;
+
+	return obj->mm.preferred_region != obj->mm.region.mem;
 }
 
 static inline bool

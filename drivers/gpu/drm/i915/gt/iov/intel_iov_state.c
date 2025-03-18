@@ -926,7 +926,10 @@ save_restore_lmem_chunk(struct intel_iov *iov, u32 vfid, struct drm_i915_gem_obj
 		goto err_lmem_obj_unlock;
 	}
 
-	rq = i915_gem_object_copy_lmem(lmem, offset, smem, 0, size, save, false);
+	rq = i915_gem_object_copy_lmem(lmem, offset, smem, 0, size,
+				       (save ? I915_GEM_OBJECT_COPY_LMEM_TOOTHER : 0) |
+				       I915_GEM_OBJECT_COPY_LMEM_SKIP_CLEARS |
+				       I915_GEM_OBJECT_COPY_LMEM_UNCOMPRESSED);
 	if (IS_ERR(rq)) {
 		err = PTR_ERR(rq);
 		goto err_smem_obj_unlock;
@@ -996,87 +999,12 @@ int intel_iov_state_restore_lmem_chunk(struct intel_iov *iov, u32 vfid,
 
 #define COMPRESSION_RATIO 256
 
-static int
-copy_ccs_chunk(struct drm_i915_gem_object *smem, u64 smem_offset,
-	       struct drm_i915_gem_object *lmem, u64 lmem_offset,
-	       u32 size, bool save)
-{
-	struct i915_vma *smem_vma, *lmem_vma;
-	struct intel_context *ce;
-	struct i915_request *rq;
-	int err;
-
-	if (size > SZ_64M)
-		return -EINVAL;
-
-	if (lmem_offset + size > lmem->base.size)
-		return -EINVAL;
-
-	if (smem->base.size < size / COMPRESSION_RATIO)
-		return -EINVAL;
-
-	ce = intel_context_create(lmem->mm.region.mem->gt->engine[BCS0]);
-	if (IS_ERR(ce))
-		return PTR_ERR(ce);
-
-	smem_vma = i915_vma_instance(smem, ce->vm, NULL);
-	if (IS_ERR(smem_vma)) {
-		err = PTR_ERR(smem_vma);
-		goto err_context_put;
-	}
-
-	err = i915_vma_pin(smem_vma, 0, 0, PIN_USER | PIN_ZONE_48);
-	if (err)
-		goto err_context_put;
-
-	lmem_vma = i915_vma_instance(lmem, ce->vm, NULL);
-	if (IS_ERR(lmem_vma)) {
-		err = PTR_ERR(lmem_vma);
-		goto err_smem_vma_unpin;
-	}
-
-	err = i915_vma_pin(lmem_vma, 0, 0, PIN_USER | PIN_ZONE_48);
-	if (err)
-		goto err_smem_vma_unpin;
-
-	rq = intel_context_create_request(ce);
-	if (IS_ERR(rq)) {
-		err = PTR_ERR(rq);
-		goto err_lmem_vma_unpin;
-	}
-
-	err = i915_gem_ccs_emit_swap(rq, i915_vma_offset(lmem_vma) + lmem_offset,
-					 i915_vma_offset(smem_vma) + smem_offset,
-					 size, save);
-	if (err)
-		goto err_rq_put;
-
-	i915_request_get(rq);
-	i915_request_add(rq);
-
-	if (i915_request_wait(rq, 0, HZ) < 0)
-		err = -ETIME;
-	else
-		err = rq->fence.error;
-
-err_rq_put:
-	i915_request_put(rq);
-err_lmem_vma_unpin:
-	i915_vma_unpin(lmem_vma);
-err_smem_vma_unpin:
-	i915_vma_unpin(smem_vma);
-err_context_put:
-	intel_context_put(ce);
-
-	return err < 0 ? err : 0;
-}
-
 static int copy_ccs(struct drm_i915_gem_object *smem, u64 smem_offset,
 		    struct drm_i915_gem_object *lmem, u64 lmem_offset,
 		    u64 size, bool save)
 {
-	u64 chunk_size, chunk_offset = 0;
-	int ret;
+	struct i915_request *rq;
+	int err;
 
 	if (lmem_offset + size > lmem->base.size)
 		return -EINVAL;
@@ -1084,18 +1012,34 @@ static int copy_ccs(struct drm_i915_gem_object *smem, u64 smem_offset,
 	if (smem_offset + (size / COMPRESSION_RATIO) > smem->base.size)
 		return -EINVAL;
 
-	while (chunk_offset < size) {
-		chunk_size = min_t(u64, size - chunk_offset, SZ_64M);
-
-		ret = copy_ccs_chunk(smem, smem_offset + (chunk_offset / COMPRESSION_RATIO),
-				     lmem, lmem_offset + chunk_offset, chunk_size, save);
-		if (ret)
-			break;
-
-		chunk_offset += chunk_size;
+	if (!i915_gem_object_trylock(lmem))
+		return -EBUSY;
+	if (!i915_gem_object_trylock(smem)) {
+		err = -EBUSY;
+		goto err_lmem_obj_unlock;
 	}
 
-	return ret;
+	rq = i915_gem_object_copy_lmem(lmem, lmem_offset, smem, smem_offset, size,
+				       (save ? I915_GEM_OBJECT_COPY_LMEM_TOOTHER : 0) |
+				       I915_GEM_OBJECT_COPY_LMEM_SKIP_CLEARS |
+				       I915_GEM_OBJECT_COPY_LMEM_COMPRESSED);
+	if (IS_ERR(rq)) {
+		err = PTR_ERR(rq);
+		goto err_smem_obj_unlock;
+	}
+
+	if (i915_request_wait(rq, 0, HZ) < 0)
+		err = -ETIME;
+	else
+		err = rq->fence.error;
+
+	i915_request_put(rq);
+err_smem_obj_unlock:
+	i915_gem_object_unlock(smem);
+err_lmem_obj_unlock:
+	i915_gem_object_unlock(lmem);
+
+	return err;
 }
 
 /**

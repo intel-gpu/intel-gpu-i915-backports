@@ -1763,7 +1763,7 @@ static int alloc_oa_buffer(struct i915_perf_stream *stream, int size_exponent)
 	}
 
 	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &gt->uc.guc.flags))
-		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_HEAVY);
+		intel_guc_invalidate_tlb_guc(&gt->uc.guc, INTEL_GUC_TLB_INVAL_MODE_LITE);
 
 	stream->oa_buffer.vma = vma;
 	stream->oa_buffer.size_exponent = size_exponent;
@@ -3423,7 +3423,7 @@ static vm_fault_t vm_fault_oa(struct vm_fault *vmf)
 
 	err = remap_io_sg(vma,
 			  vma->vm_start, vma->vm_end - vma->vm_start,
-			  stream->oa_buffer.vma->pages, 0, -1);
+			  stream->oa_buffer.vma->pages, 0, -1, false);
 
 	return i915_error_to_vmf_fault(err);
 }

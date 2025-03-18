@@ -13,6 +13,7 @@
 #include <linux/ktime.h>
 #include <linux/wait.h>
 
+#include "i915_tbb.h"
 #include "intel_guc_fwif.h"
 
 struct i915_vma;
@@ -73,23 +74,9 @@ struct intel_guc_ct {
 	wait_queue_head_t wq;
 
 	struct {
-		u16 last_fence; /* last fence used to send request */
-
-		spinlock_t lock; /* protects pending requests list */
-		struct list_head pending; /* requests waiting for response */
-
-		struct llist_head incoming; /* incoming requests */
-		struct work_struct worker; /* handler for incoming requests */
-
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
-		struct {
-			u16 fence;
-			u16 action;
-#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GUC)
-			depot_stack_handle_t stack;
-#endif
-		} lost_and_found[SZ_16];
-#endif
+		struct i915_tbb tbb;
+		struct llist_head incoming;
+		void *fences[256];
 	} requests;
 
 	I915_SELFTEST_DECLARE(int (*rcv_override)(struct intel_guc_ct *ct, const u32 *msg));

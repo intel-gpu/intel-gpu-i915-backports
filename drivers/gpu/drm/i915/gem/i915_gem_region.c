@@ -29,8 +29,7 @@ i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
 struct scatterlist *
 i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 {
-	const u64 max_segment = i915_gem_sg_segment_size(obj);
-	struct i915_gem_ww_ctx *ww = i915_gem_get_locking_ctx(obj);
+	const u64 max_segment = rounddown_pow_of_two(UINT_MAX);
 	struct intel_memory_region *mem = obj->mm.region.mem;
 	struct list_head *blocks = &obj->mm.blocks;
 	resource_size_t size = obj->base.size;
@@ -81,7 +80,8 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 	if (obj->flags & I915_BO_SYNC_HINT)
 		flags &= ~I915_BUDDY_ALLOC_ALLOW_ACTIVE;
 
-	ret = __intel_memory_region_get_pages_buddy(mem, ww,
+	ret = __intel_memory_region_get_pages_buddy(mem,
+						    i915_gem_get_locking_ctx(obj),
 						    size, obj->mm.region.age, flags,
 						    blocks);
 	if (ret)

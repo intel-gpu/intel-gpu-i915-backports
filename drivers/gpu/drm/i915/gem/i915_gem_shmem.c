@@ -94,6 +94,10 @@ static inline struct shmem_private {
 	atomic_t clear_count;
 	bool shrink;
 
+	struct {
+		local64_t dma_bytes;
+	} stats;
+
 	struct ras_errors {
 		unsigned int max;
 		struct ras_error {
@@ -103,6 +107,11 @@ static inline struct shmem_private {
 		} errors[];
 	} *errors;
 } *to_shmem_private(const struct intel_memory_region *mem) { return mem->region_private; }
+
+static void stats_add_dma(struct intel_memory_region *mem, u32 len)
+{
+	local64_add(len, &to_shmem_private(mem)->stats.dma_bytes);
+}
 
 struct i915_dma_engine {
 	struct rb_node node;
@@ -535,13 +544,13 @@ shmem_queue(struct shmem_chunk *chunk,
 {
 	chunk->tbb.fn = shmem_chunk;
 
-	i915_tbb_lock(tbb);
+	i915_tbb_lock_irq(tbb);
 	list_add_tail(&chunk->tbb.local, tasks);
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_SHMEMFS))
 		i915_tbb_add_task_locked(tbb, &chunk->tbb);
 	else
 		INIT_LIST_HEAD(&chunk->tbb.link);
-	i915_tbb_unlock(tbb);
+	i915_tbb_unlock_irq(tbb);
 }
 
 static int preferred_node(const struct drm_i915_gem_object *obj)
@@ -657,11 +666,11 @@ static int __fence_started(struct i915_active_fence *ref)
 	f = rcu_dereference(ref->fence);
 	if (IS_ERR_OR_NULL(f))
 		ret = 1;
-	else if (!dma_fence_is_i915(f) ||
+	else if (dma_fence_is_i915(f) &&
 		 __i915_request_is_running(to_request(f)))
 		ret = 0;
 	else
-		ret = -1;
+		ret = dma_fence_is_signaled(f) ? 1 : -1;
 	rcu_read_unlock();
 
 	return ret;
@@ -800,6 +809,11 @@ static void keep_sg(struct intel_memory_region *mem,
 		if (!page)
 			break;
 
+		if (!PagePrivate(page)) {
+			__free_pages(page, get_order(sg->length));
+			continue;
+		}
+
 		if (sg->length != length) {
 			if (lock)
 				spin_unlock(lock);
@@ -830,7 +844,7 @@ static void keep_sg(struct intel_memory_region *mem,
 	atomic_add(count, &mp->clear_count);
 }
 
-static void release_clear_page(struct intel_memory_region *mem, struct page *page, int order, u32 *tlb)
+static void release_clear_page(struct intel_memory_region *mem, struct page *page, int order)
 {
 	struct clear_page *cp = to_clear_page(page);
 
@@ -841,7 +855,7 @@ static void release_clear_page(struct intel_memory_region *mem, struct page *pag
 
 	i915_active_fence_fini(&cp->active);
 
-	intel_tlb_sync(mem->i915, tlb ?: cp->tlb);
+	intel_tlb_sync(mem->i915, cp->tlb);
 	shmem_dma_put(cp->map[0]);
 	if (cp->map[1])
 		shmem_dma_put(cp->map[1]);
@@ -895,7 +909,7 @@ static unsigned long shrink_shmem_cache(struct intel_memory_region *mem, int ord
 				atomic_long_sub(BIT(order), &mp->clear_pages);
 				mod_node_page_state(page_pgdat(page), NR_KERNEL_MISC_RECLAIMABLE, -BIT(order));
 
-				release_clear_page(mem, page, order, NULL);
+				release_clear_page(mem, page, order);
 				__free_pages(page, order);
 				cond_resched();
 
@@ -942,7 +956,7 @@ static void split_clear_page(struct intel_memory_region *mem,
 		/* XXX loses debug info like page_owner */
 		init_page_count(p);
 
-		split = kmem_cache_alloc(slab_clear, GFP_KERNEL);
+		split = kmem_cache_alloc(slab_clear, GFP_KERNEL | __GFP_NOWARN);
 		if (!split) {
 			__free_pages(p, i);
 			continue;
@@ -967,6 +981,7 @@ static void split_clear_page(struct intel_memory_region *mem,
 			split->map[1] = shmem_dma_get(cp->map[1]);
 		}
 		split->engine = cp->engine;
+		memcpy(split->tlb, cp->tlb, sizeof(cp->tlb));
 
 		p->private = (unsigned long)split;
 		GEM_BUG_ON(PagePrivate(p));
@@ -1098,13 +1113,14 @@ restart:	/* Nothing readily available in the cache? Allocate some fresh pages */
 			ras_error(obj);
 
 		if (!PagePrivate(page)) {
-			cp = kmem_cache_alloc(slab_clear, GFP_KERNEL);
+			cp = kmem_cache_alloc(slab_clear, GFP_KERNEL | __GFP_NOWARN);
 			if (!cp) {
 				i915_sw_fence_set_error_once(&fence, -ENOMEM);
 				sg->page_link = 0;
 				break;
 			}
 
+			memset(cp->tlb, 0, sizeof(cp->tlb));
 			cp->map[0] = shmem_dma_map(obj->base.dev->dev,
 						   page, order, DMA_BIDIRECTIONAL);
 			if (!cp->map[0]) {
@@ -1165,6 +1181,7 @@ page:
 					if (cp->dma[1] && !cp->engine->zero_dma) {
 						f = dma_clear(cp->engine, cp->dma[1], sg->length);
 						if (f) {
+							stats_add_dma(mem, sg->length);
 							set_fence_or_error(&cp->active, f);
 							fence_chain(&wrk->error->base.rq, f, &cp->cb);
 							dma_fence_put(f);
@@ -1314,7 +1331,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 		n = sg_capacity(sgt) - 1;
 	fence.error = __shmem_chunk(sg, obj->mm.region.mem,
 				    mapping, wrk->policy,
-				    0, n, wrk->flags,
+				    0, n, wrk->flags & SHMEM_CLFLUSH,
 				    &fence.error);
 
 	while (!READ_ONCE(fence.error) && n < num_pages) {
@@ -1348,7 +1365,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 			chunk->mapping = mapping;
 			chunk->policy = wrk->policy;
 			chunk->idx = n;
-			chunk->flags = wrk->flags;
+			chunk->flags = wrk->flags & SHMEM_CLFLUSH;
 			i915_sw_fence_await(&fence);
 		}
 
@@ -1519,8 +1536,7 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 		err = -ENOMEM;
 		goto err_sg;
 	}
-	dma_fence_work_init(&wrk->base, &shmem_ops,
-			    to_i915(obj->base.dev)->mm.sched);
+	dma_fence_work_init(&wrk->base, &shmem_ops, to_i915(obj->base.dev)->sched);
 	wrk->obj = i915_gem_object_get(obj);
 	wrk->pages = sg;
 	wrk->flags = shmem_create_mode(obj, i915_memclear_nocache(NULL, 0));
@@ -1529,7 +1545,7 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 		wrk->base.cpu = raw_smp_processor_id();
 
 	if (!obj->base.filp) {
-		wrk->error = error_create(to_i915(obj->base.dev)->mm.sched, wrk);
+		wrk->error = error_create(to_i915(obj->base.dev)->sched, wrk);
 		if (!wrk->error) {
 			kfree(wrk);
 			err = -ENOMEM;
@@ -1580,6 +1596,7 @@ static void check_release_pagevec(struct pagevec *pvec)
 
 static void page_release(struct page *page, struct pagevec *pvec)
 {
+	mark_page_accessed(page);
 	if (!pagevec_add(pvec, page))
 		check_release_pagevec(pvec);
 }
@@ -1777,13 +1794,12 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 				kunmap_atomic(ptr);
 			}
 
-			if (do_swap) {
+			if (do_swap)
 				set_page_dirty(page);
-				mark_page_accessed(page);
-			} else {
+			else
 				cancel_dirty_page(page);
-			}
 
+			GEM_BUG_ON(PagePrivate(page));
 			for (i = 0; i < sg->length >> PAGE_SHIFT; i++)
 				page_release(nth_page(page, i), &pvec);
 		}
@@ -1802,6 +1818,8 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 		GEM_BUG_ON(!inode);
 		mapping = obj->base.filp->f_mapping;
 
+		intel_tlb_sync(to_i915(obj->base.dev), obj->mm.tlb);
+
 		for (sg = pages; sg; sg = __sg_next(sg)) {
 			int order = get_order(sg->length);
 			struct page *page = sg_page(sg);
@@ -1814,7 +1832,7 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 			}
 
 			if (PagePrivate(page)) {
-				release_clear_page(mem, page, order, obj->mm.tlb);
+				release_clear_page(mem, page, order);
 				if (order)
 					split_page(page, order);
 			}
@@ -1827,7 +1845,6 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 
 				SetPageUptodate(p);
 				set_page_dirty(p);
-				mark_page_accessed(p);
 
 				if (i915_add_to_page_cache_locked(p, mapping, idx, I915_GFP_ALLOW_FAIL)) {
 					unlock_page(p);
@@ -1841,12 +1858,14 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 						p = find_lock_page(mapping, idx);
 						GEM_BUG_ON(!p);
 
-						cancel_dirty_page(page);
+						cancel_dirty_page(p);
 						i915_delete_from_page_cache(p);
 						unlock_page(p);
 					}
 
 					GEM_BUG_ON(mapping->nrpages);
+					fput(fetch_and_zero(&obj->base.filp));
+					obj->flags &= ~I915_BO_ALLOC_USER;
 					return -ENOMEM;
 				}
 
@@ -1860,10 +1879,7 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 				}
 
 #ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
-{
-				struct folio *fobj = page_folio(page);
-				__lruvec_stat_mod_folio(fobj, NR_FILE_PAGES, 1);
-}
+				__lruvec_stat_mod_folio(page_folio(p), NR_FILE_PAGES, 1);
 #else
 				inc_lruvec_page_state(p, NR_SHMEM);
 #endif
@@ -1879,11 +1895,15 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 	} else if (mem->gt->suspend || current->flags & PF_MEMALLOC) { /* inside the shrinker, reclaim immediately */
 		struct scatterlist *sg;
 
+		intel_tlb_sync(to_i915(obj->base.dev), obj->mm.tlb);
+
 		for (sg = pages; sg; sg = __sg_next(sg)) {
 			int order = get_order(sg->length);
 			struct page *page = sg_page(sg);
 
-			release_clear_page(mem, page, order, obj->mm.tlb);
+			if (PagePrivate(page))
+				release_clear_page(mem, page, order);
+
 			__free_pages(page, order);
 		}
 	} else { /* device-local host pages, keep for future use */
@@ -1904,6 +1924,7 @@ shmem_put_pages(struct drm_i915_gem_object *obj, struct scatterlist *pages)
 				if (!f)
 					break;
 
+				stats_add_dma(mem, sg->length);
 				set_fence_or_error(&cp->active, f);
 				dma_fence_put(f);
 			}
@@ -2176,11 +2197,12 @@ get_dirty_page(struct intel_memory_region *mem, int *order, unsigned long *total
 			atomic_dec(&mp->clear_count);
 			atomic_long_sub(BIT(*order), &mp->clear_pages);
 			mod_node_page_state(page_pgdat(page), NR_KERNEL_MISC_RECLAIMABLE, -BIT(*order));
+			*total += BIT(*order);
 			return page;
 		}
 	}
 
-	if (atomic_long_read(&mp->clear_pages) + *total > mp->low_clear_pages)
+	if (atomic_long_read(&mp->clear_pages) + *total >= mp->low_clear_pages)
 		return NULL;
 
 	nr_free = sum_node_pages(nid, NR_FREE_PAGES);
@@ -2203,12 +2225,13 @@ get_dirty_page(struct intel_memory_region *mem, int *order, unsigned long *total
 	if (!page)
 		return NULL;
 
-	cp = kmem_cache_alloc(slab_clear, GFP_KERNEL);
+	cp = kmem_cache_alloc(slab_clear, I915_GFP_ALLOW_FAIL);
 	if (!cp) {
 		__free_pages(page, *order);
 		return NULL;
 	}
 
+	memset(cp->tlb, 0, sizeof(cp->tlb));
 	__i915_active_fence_init(&cp->active,
 				 no_init_on_alloc ? ERR_PTR(-ENODEV) : NULL,
 				 NULL);
@@ -2237,6 +2260,7 @@ get_dirty_page(struct intel_memory_region *mem, int *order, unsigned long *total
 
 			f = dma_clear(cp->engine, cp->dma[1], BIT(*order + PAGE_SHIFT));
 			if (f) {
+				stats_add_dma(mem, BIT(*order + PAGE_SHIFT));
 				set_fence_or_error(&cp->active, f);
 				dma_fence_put(f);
 			}
@@ -2282,13 +2306,16 @@ free_dirty_pages(struct intel_memory_region *mem)
 			if (!page)
 				continue;
 
+			if (i915_active_fence_isset(&cp->active))
+				continue;
+
 			list_replace(&cp->link, &bookmark.link);
 			spin_unlock(&pages->lock);
 
 			atomic_dec(&mp->clear_count);
 			remain = atomic_long_sub_return(BIT(order), &mp->clear_pages);
 			mod_node_page_state(page_pgdat(page), NR_KERNEL_MISC_RECLAIMABLE, -BIT(order));
-			release_clear_page(mem, page, order, NULL);
+			release_clear_page(mem, page, order);
 			__free_pages(page, order);
 			cond_resched();
 
@@ -2335,7 +2362,7 @@ bool i915_gem_shmem_park(struct intel_memory_region *mem)
 	w = ce->private;
 	sgt = __sg_table_inline_create(GFP_NOWAIT | __GFP_NOWARN);
 	if (unlikely(!sgt)) {
-		release_clear_page(mem, page, order, NULL);
+		release_clear_page(mem, page, order);
 		__free_pages(page, order);
 		goto out;
 	}
@@ -2491,10 +2518,14 @@ static void show_shmem(struct intel_memory_region *mem, struct drm_printer *p, i
 
 	de = lookup_dma_engine(mem_cpu(mem));
 	if (de) {
-		i_printf(p, indent, "using: %s (%s) [%s]\n",
+		string_get_size(local64_read(&mp->stats.dma_bytes),
+				1, STRING_UNITS_2, bytes, sizeof(bytes));
+
+		i_printf(p, indent, "using: %s (%s) [%s], cleared %s\n",
 			  dma_chan_name(de->dma),
 			  de->zero_dma ? "memcpy" : "memset",
-			  dev_name(de->dma->device->dev));
+			  dev_name(de->dma->device->dev),
+			  bytes);
 	}
 
 	count = atomic_long_read(&mp->clear_pages);

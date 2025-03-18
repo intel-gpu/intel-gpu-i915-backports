@@ -50,9 +50,6 @@ struct intel_context_ops {
 	void (*unpin)(struct intel_context *ce);
 	void (*post_unpin)(struct intel_context *ce);
 
-	void (*cancel_request)(struct intel_context *ce,
-			       struct i915_request *rq);
-
 	struct i915_sw_fence *(*suspend)(struct intel_context *ce,
 					 bool atomic);
 	void (*resume)(struct intel_context *ce);

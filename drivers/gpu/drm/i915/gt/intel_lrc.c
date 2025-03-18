@@ -1037,14 +1037,7 @@ set_redzone(void *vaddr, const struct intel_engine_cs *engine)
 
 static bool __check_red_cl(const void *vaddr)
 {
-	char stack[80];
-	char *s = stack;
-
-	s = PTR_ALIGN(s, 16);
-	if (!i915_memcpy_from_wc(s, vaddr, 64))
-		memcpy(s, vaddr, 64);
-
-	return memchr_inv(s, CONTEXT_REDZONE, 64) == NULL;
+	return memchr_inv(vaddr, CONTEXT_REDZONE, 64) == NULL;
 }
 
 static void hexdump(struct drm_printer *m, const void *buf, size_t len)
@@ -1136,6 +1129,9 @@ check_redzone(struct intel_context *ce)
 	ktime_t now, *last;
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
+		return;
+
+	if (ce->vm->i915->quiesce_gpu)
 		return;
 
 	if (i915_is_pci_faulted(engine->i915))
@@ -2033,6 +2029,12 @@ void lrc_update_runtime(struct intel_context *ce)
 	struct intel_context_stats *stats = &ce->stats;
 	u32 old;
 	s32 dt;
+
+	if (ce->vm->i915->quiesce_gpu)
+		return;
+
+	if (i915_is_pci_faulted(ce->vm->i915))
+		return;
 
 	old = stats->runtime.last;
 	stats->runtime.last = lrc_get_runtime(ce);
