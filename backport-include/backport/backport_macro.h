@@ -21,12 +21,37 @@
 #define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,9,0)||(LINUX_VERSION_IS_GEQ(6,8,12) && ... */
 
+#if LINUX_VERSION_IS_GEQ(6,9,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
+/*
+ * d50892a9554c drm/i915: switch from drm_debug_printer() to device specific drm_dbg_printer()
+ */
+#define BPM_DRM_DEBUG_PRINTER_NOT_PRESENT
+
+/*
+ * 5e0c04c8c40b drm/print: make drm_err_printer() device specific by using drm_err()
+ */
+#define BPM_DRM_ERR_PRINTER_SECOND_ARG_PRESENT
+
+/*
+ * 0a5a46a6a61b PCI/AER: Generalize TLP Header Log reading
+ */
+#define BPM_STRUCT_PCI_TLP_LOG_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,9,0)
+/*
+ * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
+ */
+#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,8,2) || \
         LINUX_VERSION_IN_RANGE(6,6,23, 6,7,0) || LINUX_VERSION_IN_RANGE(6,1,83, 6,2,0) || \
         LINUX_VERSION_IN_RANGE(5,15,153, 5,16,0) || LINUX_VERSION_IN_RANGE(5,10,214, 5,11,0) || \
         (LINUX_VERSION_IN_RANGE(5,15,0, 5,16,0) && UBUNTU_RELEASE_VERSION_IS_GEQ(111,121)) || \
         (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) && SUSE_LOCAL_VERSION_IS_GEQ(55,59)) || \
-	(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
+	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0)) || \
+	 REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * e33ee8d5e6fc PCI: Make pci_dev_is_disconnected() helper public for other drivers
  */
@@ -137,12 +162,18 @@
 #define BPM_DRM_DP_CALC_PBN_MODE_ARG_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,6,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4)... */
 
-#if LINUX_VERSION_IS_GEQ(6,5,0)
+#if LINUX_VERSION_IS_LESS(6,5,0)
+#if (!(REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || \
+			SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)))
 /*
- * 6801be4f2653 slub: Replace cmpxchg_double
+ * 227c6c832303c lib/ref_tracker: add printing to memory buffer
  */
-#define BPM_FREELIST_ABA_T_NOT_PRESENT
+#define BPM_REF_TRACKER_DRI_SNPRINT_PRESENT
+#endif /*  (!(REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || /
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)))*/
+#endif /* LINUX_VERSION_IS_LESS(6,5,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,5,0)
 /*
  * e5a1fd997cc2 i915: simplify subdirectory registration with register_sysctl
  */
@@ -159,6 +190,15 @@
 #define BPM_CHECK_MOVE_UNEVICTABLE_PAGES_NOT_PRESENT
 
 #endif /* LINUX_VERSION_IS_GEQ(6,5,0) */
+
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || \
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(23,33)))
+
+/*
+ * 6801be4f2653 slub: Replace cmpxchg_double
+ */
+#define BPM_FREELIST_ABA_T_NOT_PRESENT
+#endif /*LINUX_VERSION_IS_GEQ(6,5,0) || SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0)*/
 
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) || \
 	 (SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(1,0))
@@ -216,7 +256,7 @@
 
 #if (LINUX_VERSION_IS_GEQ(6,4,0) || \
 	LINUX_VERSION_IS_LESS(5,5,0) || \
-	REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,4))
+	(REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,4) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)))
 #if !(SUSE_RELEASE_VERSION_IS_GEQ(1,15,3,0) && SUSE_RELEASE_VERSION_IS_LESS(1,15,6,0))
 
 /*
@@ -232,7 +272,9 @@
  * f5b3c341a46e mei: Move uuid_le_cmp() to its only user
  */
 #define BPM_UUID_LE_CMP_NOT_PRESENT
+#endif
 
+#if LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * 1c71222e5f23
  * mm: replace vma->vm_flags direct modifications with modifier calls
@@ -244,7 +286,7 @@
  */
 #define BPM_GUID_INIT_NOT_EXPORTED
 
-#endif /*LINUX_VERSION_IS_GEQ(6,3,0) */
+#endif /*LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5) */
 
 #if (LINUX_VERSION_IS_GEQ(6,3,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
 
@@ -365,7 +407,7 @@
 #define BPM_DRM_DP_MST_PORT_VCPI_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,1,0) || (SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0) ... */
 
-#if (LINUX_VERSION_IS_GEQ(6,1,0))
+#if (LINUX_VERSION_IS_GEQ(6,1,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5))
 /*
  * de492c83cae prandom: remove unused functions
  */
@@ -506,7 +548,7 @@
 #define BPM_FLUSH_WQ_WITH_WARN_WRAPPER_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(5,19,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,2) */
 
-#if LINUX_VERSION_IS_GEQ(5,19,0)
+#if LINUX_VERSION_IS_GEQ(5,19,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
 /*
  * 0192c25c03cd2f drm/dp: add 128b/132b link status helpers from DP 2.0 E11
  */
@@ -613,6 +655,10 @@
 #define BPM_IOSYS_MAP_FEW_MORE_HELPER_APIS
 #endif
 #endif
+
+#if (LINUX_VERSION_IS_GEQ(5,17,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
+#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(5,17,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
 
 #if (LINUX_VERSION_IN_RANGE(5,17,0, 5,19,0) || \
 	REDHAT_RELEASE_VERSION_IS_EQL(9,1))
@@ -1915,9 +1961,7 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
-
-#define BPM_NO_TRACKER_MEMBER_NOT_PRESENT
-#endif /* (REDHAT_RELEASE_VERSION_IS_GEQ(9,4)) */
+#endif
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)
 #define BPM_RH_DRM_BACKPORT_MMU_NOTIFIER_WRAPPER

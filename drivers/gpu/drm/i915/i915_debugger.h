@@ -68,14 +68,10 @@ void i915_debugger_context_param_engines(struct i915_gem_context *ctx);
 
 int i915_debugger_handle_engine_attention(struct intel_engine_cs *engine);
 
-int i915_debugger_handle_engine_page_fault(struct intel_engine_cs *engine,
-					   struct i915_debugger_pagefault *pagefault);
-int i915_debugger_add_pagefault_list(struct intel_engine_cs *engine,
-				     struct i915_debugger_pagefault *pagefault);
+int i915_debugger_handle_page_fault(struct i915_debugger_pagefault *pagefault);
 
 bool i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine);
 bool i915_debugger_active_on_context(struct intel_context *context);
-bool i915_debugger_active_on_engine(struct intel_engine_cs *engine);
 
 bool i915_debugger_context_guc_debugged(struct intel_context *context);
 
@@ -143,15 +139,7 @@ i915_debugger_handle_engine_attention(struct intel_engine_cs *engine)
 }
 
 static inline int
-i915_debugger_handle_engine_page_fault(struct intel_engine_cs *engine,
-				       struct i915_debugger_pagefault *pagefault)
-{
-	return 0;
-}
-
-static inline int
-i915_debugger_add_pagefault_list(struct intel_engine_cs *engine,
-				 struct i915_debugger_pagefault *pagefault)
+i915_debugger_handle_page_fault(struct i915_debugger_pagefault *pagefault)
 {
 	return 0;
 }
@@ -163,11 +151,6 @@ i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine)
 }
 
 static inline bool i915_debugger_active_on_context(struct intel_context *context)
-{
-	return false;
-}
-
-static inline bool i915_debugger_active_on_engine(struct intel_engine_cs *engine)
 {
 	return false;
 }

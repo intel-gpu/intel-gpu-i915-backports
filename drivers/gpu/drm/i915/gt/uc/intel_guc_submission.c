@@ -5776,7 +5776,9 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 	 * __guc_reset_context().
 	 */
 	if (likely(!intel_context_is_banned(ce) && !context_blocked(ce))) {
-		capture_error_state(guc, ce);
+		atomic_inc(&guc_to_gt(guc)->reset.engines_reset_count);
+		if (intel_context_set_coredump(ce))
+			capture_error_state(guc, ce);
 		guc_context_replay(ce);
 	}
 }

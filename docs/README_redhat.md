@@ -49,6 +49,7 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 
 | OS Distribution | OS Version | DKMS Package Target | Binary Package Target|
 |---|---|---|---|
+| RHEL® | 9.5  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.4  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.3  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.2  | i915dkmsrpm-pkg | binrpm-pkg |
@@ -62,7 +63,7 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 Creating i915 DKMS packages
 ```
 $ make <Build Options> <DKMS Package Target>
-Example: For RHEL9.4
+Example: For RHEL9.5
 	$ make i915dkmsrpm-pkg
 
 	Generated package name :
@@ -76,12 +77,12 @@ Please note that DKMS installation will skip if the kernel headers are not insta
 In case of any issue with the latest kernel, please install the kernel version mentioned in [version](../versions) file for the appropriate OS version.
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64 \
-kernel-devel-<RHEL_9.4_KERNEL_VERSION>.el9.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.5_KERNEL_VERSION>.el9_5.x86_64 \
+kernel-devel-<RHEL_9.5_KERNEL_VERSION>.el9_5.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-427.el9.x86_64 \
-     kernel-devel-5.14.0-427.el9.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-503.11.1.el9_5.x86_64 \
+     kernel-devel-5.14.0-503.11.1.el9_5.x86_64
 ```
 
 ```

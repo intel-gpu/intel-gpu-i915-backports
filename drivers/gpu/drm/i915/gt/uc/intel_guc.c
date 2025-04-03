@@ -3,6 +3,7 @@
  * Copyright © 2014-2019 Intel Corporation
  */
 
+#include "abi/guc_actions_abi.h"
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_region.h"
 #include "gt/intel_gt.h"
@@ -692,6 +693,109 @@ void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p)
 		   gt->clock_frequency, gt->clock_period_ns);
 }
 
+static int guc_opt_in_features_init(struct intel_guc *guc)
+{
+	void *blob;
+	int ret;
+
+	ret = intel_guc_allocate_and_map_vma(guc, PAGE_SIZE, &guc->opt_in_vma, &blob);
+	if (ret)
+		return ret;
+
+	if (i915_gem_object_is_lmem(guc->opt_in_vma->obj))
+		iosys_map_set_vaddr_iomem(&guc->opt_in_map, (void __iomem *)blob);
+	else
+		iosys_map_set_vaddr(&guc->opt_in_map, blob);
+
+	return 0;
+}
+
+static void guc_opt_in_features_fini(struct intel_guc *guc)
+{
+	i915_vma_unpin_and_release(&guc->opt_in_vma, I915_VMA_RELEASE_MAP);
+	iosys_map_clear(&guc->opt_in_map);
+}
+
+static void guc_opt_in_klv_enable_simple(struct iosys_map *map, u32 *offset, u32 *remain, u32 klv_id)
+{
+	u32 size;
+	u32 klv_entry[] = {
+		/* 16:16 key/length */
+		FIELD_PREP(GUC_KLV_0_KEY, klv_id) |
+		FIELD_PREP(GUC_KLV_0_LEN, 0),
+		/* 0 dwords data */
+	};
+
+	size = sizeof(klv_entry);
+	GEM_BUG_ON(*remain < size);
+
+	iosys_map_memcpy_to(map, *offset, klv_entry, size);
+	*offset += size;
+	*remain -= size;
+}
+
+static int guc_action_opt_in_feature(struct intel_guc *guc, u64 addr, u32 num_dwords)
+{
+	u32 request[] = {
+		INTEL_GUC_ACTION_HOST2GUC_OPT_IN_FEATURE_KLV,
+		lower_32_bits(addr),
+		upper_32_bits(addr),
+		num_dwords,
+	};
+
+	return intel_guc_send(guc, request, ARRAY_SIZE(request));
+}
+
+static bool has_dynamic_ics_opt_in(struct intel_guc *guc)
+{
+	struct intel_gt *gt = guc_to_gt(guc);
+
+	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 18, 4))
+		return false;
+
+	return IS_PONTEVECCHIO(gt->i915);
+}
+
+/*
+ * intel_guc_opt_in_features_enable() - Enable opt-in features
+ * @guc: pointer to intel_guc
+ *
+ * Opt-in Features are enabled by setting up a shared data structure of KLVs
+ * and sending structure to the GuC enable. Shared memory is allocated in
+ * guc_opt_in_features_init. Here we send the enable action if any payload
+ * exists.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int intel_guc_opt_in_features_enable(struct intel_guc *guc)
+{
+	u32 offset;
+	u32 remain;
+	int ret;
+
+	GEM_BUG_ON(!guc->opt_in_vma);
+
+	offset = 0;
+	remain = guc->opt_in_vma->size;
+
+	if (has_dynamic_ics_opt_in(guc))
+		guc_opt_in_klv_enable_simple(&guc->opt_in_map, &offset, &remain,
+					     GUC_KLV_OPT_IN_FEATURE_DYNAMIC_INHIBIT_CONTEXT_SWITCH_KEY);
+
+	/* Only send action if any payload is available. */
+	if (offset == 0)
+		return 0;
+
+	ret = guc_action_opt_in_feature(guc, intel_guc_ggtt_offset(guc, guc->opt_in_vma), offset / sizeof(u32));
+	if (ret < 0) {
+		guc_err(guc, "Failed to enable opt-in feature KLVs: %d\n", ret);
+		ret = -EPROTO;
+	} else if (ret > 0)
+		ret = 0;
+
+	return ret;
+}
+
 static int __guc_init(struct intel_guc *guc)
 {
 	int ret;
@@ -718,6 +822,10 @@ static int __guc_init(struct intel_guc *guc)
 	if (ret)
 		goto err_ads;
 
+	ret = guc_opt_in_features_init(guc);
+	if (ret)
+		goto err_ct;
+
 	if (intel_guc_submission_is_used(guc)) {
 		/*
 		 * This is stuff we need to have available at fw load time
@@ -725,7 +833,7 @@ static int __guc_init(struct intel_guc *guc)
 		 */
 		ret = intel_guc_submission_init(guc);
 		if (ret)
-			goto err_ct;
+			goto err_features;
 	}
 
 	if (intel_guc_slpc_is_used(guc)) {
@@ -750,6 +858,8 @@ err_slpc:
 		intel_guc_slpc_fini(&guc->slpc);
 err_submission:
 	intel_guc_submission_fini(guc);
+err_features:
+	guc_opt_in_features_fini(guc);
 err_ct:
 	intel_guc_ct_fini(&guc->ct);
 err_ads:
@@ -778,6 +888,8 @@ static void __guc_fini(struct intel_guc *guc)
 	if (intel_guc_submission_is_used(guc))
 		intel_guc_submission_fini(guc);
 
+	guc_opt_in_features_fini(guc);
+
 	intel_guc_ct_fini(&guc->ct);
 
 	intel_guc_ads_destroy(guc);
@@ -797,10 +909,14 @@ static int __vf_guc_init(struct intel_guc *guc)
 	if (err)
 		return err;
 
+	err = guc_opt_in_features_init(guc);
+	if (err)
+		goto err_ct;
+
 	/* GuC submission is mandatory for VFs */
 	err = intel_guc_submission_init(guc);
 	if (err)
-		goto err_ct;
+		goto err_features;
 
 	/*
 	 * Disable slpc controls for VF. This cannot be done in
@@ -815,6 +931,8 @@ static int __vf_guc_init(struct intel_guc *guc)
 
 	return 0;
 
+err_features:
+	guc_opt_in_features_fini(guc);
 err_ct:
 	intel_guc_ct_fini(&guc->ct);
 	return err;
@@ -827,6 +945,7 @@ static void __vf_guc_fini(struct intel_guc *guc)
 	GEM_BUG_ON(!IS_SRIOV_VF(gt->i915));
 
 	intel_guc_submission_fini(guc);
+	guc_opt_in_features_fini(guc);
 	intel_guc_ct_fini(&guc->ct);
 }
 

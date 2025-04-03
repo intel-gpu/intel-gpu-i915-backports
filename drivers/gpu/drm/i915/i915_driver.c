@@ -103,6 +103,7 @@
 #include "i915_perf.h"
 #include "i915_perf_stall_cntr.h"
 #include "i915_query.h"
+#include "i915_reg.h"
 #include "i915_sriov.h"
 #include "i915_svm.h"
 #include "i915_sysfs.h"
@@ -1143,6 +1144,14 @@ mask_err:
 	return ret;
 }
 
+/* Wa_14022698537:ats-m */
+static void i915_enable_g8(struct drm_i915_private *i915)
+{
+	if (IS_DG2(i915))
+		snb_pcode_write_p(&i915->uncore, PCODE_POWER_SETUP,
+				  POWER_SETUP_SUBCOMMAND_G8_ENABLE, 0, 0);
+}
+
 static int i915_pcode_init(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt;
@@ -1156,6 +1165,7 @@ static int i915_pcode_init(struct drm_i915_private *i915)
 		}
 	}
 
+	i915_enable_g8(i915);
 	return 0;
 }
 

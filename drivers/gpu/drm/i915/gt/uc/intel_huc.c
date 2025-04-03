@@ -63,7 +63,6 @@ static bool vcs_supported(struct intel_gt *gt)
 
 void intel_huc_init_early(struct intel_huc *huc)
 {
-	struct drm_i915_private *i915 = huc_to_gt(huc)->i915;
 	struct intel_gt *gt = huc_to_gt(huc);
 
 	intel_uc_fw_init_early(&huc->fw, INTEL_UC_FW_TYPE_HUC);
@@ -77,15 +76,9 @@ void intel_huc_init_early(struct intel_huc *huc)
 		return;
 	}
 
-	if (GRAPHICS_VER(i915) >= 11) {
-		huc->status.reg = GEN11_HUC_KERNEL_LOAD_INFO;
-		huc->status.mask = HUC_LOAD_SUCCESSFUL;
-		huc->status.value = HUC_LOAD_SUCCESSFUL;
-	} else {
-		huc->status.reg = HUC_STATUS2;
-		huc->status.mask = HUC_FW_VERIFIED;
-		huc->status.value = HUC_FW_VERIFIED;
-	}
+	huc->status.reg = GEN11_HUC_KERNEL_LOAD_INFO;
+	huc->status.mask = HUC_LOAD_SUCCESSFUL;
+	huc->status.value = HUC_LOAD_SUCCESSFUL;
 }
 
 #define HUC_LOAD_MODE_STRING(x) (x ? "GSC" : "legacy")
@@ -150,17 +143,20 @@ void intel_huc_fini(struct intel_huc *huc)
 	intel_uc_fw_fini(&huc->fw);
 }
 
+static int wait_for_authentication(struct intel_huc *huc)
+{
+	return __intel_wait_for_register(huc_to_gt(huc)->uncore,
+					 huc->status.reg,
+					 huc->status.mask,
+					 huc->status.value,
+					 2, 50, NULL);
+}
+
 int intel_huc_wait_for_auth_complete(struct intel_huc *huc)
 {
-	struct intel_gt *gt = huc_to_gt(huc);
 	int ret;
 
-	ret = __intel_wait_for_register(gt->uncore,
-					huc->status.reg,
-					huc->status.mask,
-					huc->status.value,
-					2, 50, NULL);
-
+	ret = wait_for_authentication(huc);
 	if (ret) {
 		huc_probe_error(huc, "firmware not verified %pe\n", ERR_PTR(ret));
 		return ret;
@@ -227,12 +223,17 @@ static bool huc_is_authenticated(struct intel_huc *huc)
 {
 	struct intel_gt *gt = huc_to_gt(huc);
 	intel_wakeref_t wakeref;
-	u32 status = 0;
+	bool result = false;
 
+	/* HuC should always be authenticated following a successful load. */
+	if (IS_SRIOV_VF(gt->i915))
+		return true;
+
+	/* Be paranoid and check again. */
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
-		status = intel_uncore_read(gt->uncore, huc->status.reg);
+		result = wait_for_authentication(huc) == 0;
 
-	return (status & huc->status.mask) == huc->status.value;
+	return result;
 }
 
 /**

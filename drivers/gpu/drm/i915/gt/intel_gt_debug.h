@@ -10,7 +10,7 @@
 
 #include "intel_gt_types.h"
 
-#define INTEL_GT_ATTENTION_TIMEOUT_MS 100
+#define INTEL_GT_ATTENTION_TIMEOUT_MS 250
 
 int intel_gt_eu_threads_needing_attention(struct intel_gt *gt);
 int intel_gt_wait_eu_thread_attention(struct intel_gt *gt,

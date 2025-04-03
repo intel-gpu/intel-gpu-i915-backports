@@ -402,6 +402,13 @@ static u32 get_reset_domain(u8 ver, enum intel_engine_id id)
 	return engine_reset_domains[id];
 }
 
+static void reset_work(struct work_struct *work)
+{
+	struct intel_engine_cs *engine = container_of(work, struct intel_engine_cs, reset.work);
+
+	intel_gt_reset(engine->gt, engine->mask, engine->reset.msg);
+}
+
 static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 			      u8 logical_instance)
 {
@@ -452,6 +459,8 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	engine->logical_mask = BIT(logical_instance);
 	engine->irq_offset = info->irq_offset;
 	__sprint_engine_name(engine);
+
+	INIT_WORK(&engine->reset.work, reset_work);
 
 	engine->ppgtt_size = INTEL_INFO(i915)->ppgtt_size;
 	if (IS_PONTEVECCHIO(i915) && engine->class == VIDEO_DECODE_CLASS)
@@ -2116,6 +2125,10 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 		   READ_ONCE(engine->stats.irq.total),
 		   ewma_irq_time_read(&engine->stats.irq.avg),
 		   READ_ONCE(engine->stats.irq.max));
+	if (HAS_RECOVERABLE_PAGE_FAULT(engine->i915)) {
+		drm_printf(m, "\tPagefault: { depth: %d }\n",
+			   atomic_read(&engine->in_pagefault));
+	}
 	drm_printf(m, "\tBarriers?: %s\n",
 		   str_yes_no(!list_empty(&engine->barrier_tasks)));
 	drm_printf(m, "\tLatency: %luus\n",

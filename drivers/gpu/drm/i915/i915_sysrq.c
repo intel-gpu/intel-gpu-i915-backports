@@ -131,6 +131,13 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p)
 		   READ_ONCE(gt->stats.irq.total),
 		   ewma_irq_time_read(&gt->stats.irq.avg),
 		   READ_ONCE(gt->stats.irq.max));
+	if (HAS_RECOVERABLE_PAGE_FAULT(gt->i915)) {
+		drm_printf(p, "Pagefaults: { minor: %lu, major: %lu, invalid: %lu, debugger: %s }\n",
+			   local_read(&gt->stats.pagefault_minor),
+			   local_read(&gt->stats.pagefault_major),
+			   local_read(&gt->stats.pagefault_invalid),
+			   str_yes_no(i915_active_fence_isset(&gt->eu_debug.fault)));
+	}
 
 	if (intel_gt_pm_is_awake(gt))
 		intel_wakeref_show(&gt->wakeref, p);

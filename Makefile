@@ -52,6 +52,21 @@ else
 export INTEL_PMT_FORCED=0
 endif
 
+#
+# Display support has been disabled by default for all OSVs except Ubuntu OSVs
+# In case if you need Display support, pass BUILD_CONFIG=enabledisplay
+#
+export DISABLE_DISPLAY=1
+
+OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+ifeq ($(OSV_NAME), Ubuntu)
+DISABLE_DISPLAY=0
+endif
+
+ifeq ($(BUILD_CONFIG), enabledisplay)
+DISABLE_DISPLAY=0
+endif
+
 # disable built-in rules for this file
 .SUFFIXES:
 
@@ -217,7 +232,11 @@ common-help:
 	@echo " 			is difficult. Make sure no other intel-i915* packages are already installed before "
 	@echo " 			you installing current one."
 	@echo "  BUILD_CONFIG   : Specify build config variant"
-	@echo " 			Ex: make <Target> BUILD_CONFIG=disabledisplay "
+	@echo ""
+	@echo "		Display support has been disabled by default for all OSVs except Ubuntu OSVs"
+	@echo "		If you want to force enable display, pass BUILD_CONFIG=enabledispaly "
+	@echo "			Ex : make <Target> BUILD_CONFIG=enabledisplay "
+	@echo ""
 	@echo "  OS_DISTRIBUTION: Distro targeted package"
 	@echo " 			You can set this value by passing supported kernel name"
 	@echo " 			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_SERVER"

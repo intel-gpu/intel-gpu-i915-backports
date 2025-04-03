@@ -189,10 +189,17 @@ struct intel_guc {
 	struct guc_mmio_reg *ads_regset;
 	/** @ads_golden_ctxt_size: size of the golden contexts in the ADS */
 	u32 ads_golden_ctxt_size;
+	/** @ads_waklv_size: size of workaround KLVs */
+	u32 ads_waklv_size;
 	/** @ads_capture_size: size of register lists in the ADS used for error capture */
 	u32 ads_capture_size;
 	/** @ads_engine_usage_size: size of engine usage in the ADS */
 	u32 ads_engine_usage_size;
+
+	/** @opt_in_vma: object allocated to hold the GuC opt-in feature KVLs */
+	struct i915_vma *opt_in_vma;
+	/** @opt_in_map: contents of the GuC opt-in feature KVLs */
+	struct iosys_map opt_in_map;
 
 	/** @lrc_desc_pool_v69: object allocated to hold the GuC LRC descriptor pool */
 	struct i915_vma *lrc_desc_pool_v69;
@@ -324,6 +331,7 @@ struct intel_guc {
 #define MAKE_GUC_VER(maj, min, pat)	(((maj) << 16) | ((min) << 8) | (pat))
 #define MAKE_GUC_VER_STRUCT(ver)	MAKE_GUC_VER((ver).major, (ver).minor, (ver).patch)
 #define GUC_SUBMIT_VER(guc)		MAKE_GUC_VER_STRUCT((guc)->submission_version)
+#define GUC_FIRMWARE_VER(guc)		MAKE_GUC_VER_STRUCT((guc)->fw.file_selected.ver)
 
 struct intel_guc_tlb_wait {
 	struct wait_queue_head wq;
@@ -590,4 +598,9 @@ void intel_guc_init_fake_interrupts(struct intel_guc *guc);
 /* FIXME: External entities should not need to know */
 int intel_guc_busyness_type(struct intel_gt *gt);
 
+int intel_guc_enable_activity_stats_functions(struct intel_guc *guc, int num_vfs);
+int intel_guc_disable_activity_stats_functions(struct intel_guc *guc);
+int intel_guc_reset_activity_stats_functions(struct intel_guc *guc);
+
+int intel_guc_opt_in_features_enable(struct intel_guc *guc);
 #endif

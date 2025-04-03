@@ -21,7 +21,11 @@ Build Configurations:
  			is difficult. Make sure no other intel-i915* packages are already installed before
  			you installing current one.
   BUILD_CONFIG   : Specify build config variant
- 			Ex: make <Target> BUILD_CONFIG=disabledisplay
+
+		Display support has been disabled by default for all OSVs except Ubuntu OSVs
+                If you want to force enable display, pass BUILD_CONFIG=enabledispaly
+                        Ex : make <Target> BUILD_CONFIG=enabledisplay
+
   OS_DISTRIBUTION: Distro targeted package
  			You can set this value by passing supported kernel name
  			Ex: make <Target> OS_DISTRIBUTION=UBUNTU_22.04_SERVER
@@ -54,7 +58,7 @@ Build Configurations:
 
  ##### List of RPM supported OS distro Versions #####
  SLES15_SP6     SLES15_SP5	SLES15_SP4
- RHEL_9.4	RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.10	RHEL_8.9	RHEL_8.8	RHEL_8.6
+ RHEL_9.5	RHEL_9.4	RHEL_9.3	RHEL_9.2	RHEL_9.0	RHEL_8.10	RHEL_8.9	RHEL_8.8	RHEL_8.6
 
  ##### List of LTS kernel versions #####
  VANILLA_6.1LTS	VANILLA_5.15LTS	VANILLA_5.10LTS
