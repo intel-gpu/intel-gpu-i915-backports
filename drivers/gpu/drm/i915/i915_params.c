@@ -263,7 +263,8 @@ i915_param_named_unsafe(prelim_override_p2p_dist, uint, 0400,
 			"Flags to determine P2P behavior: "
 			"Use kernel configured behavior (default: 0), "
 			"Override distance check (1), "
-			"Fabric path only (2)");
+			"Fabric path only (2), "
+			"Enable the move-notify feature (4)");
 
 i915_param_named_unsafe(page_sz_mask, uint, 0600,
 			"mask to force the huge page sizes\n"

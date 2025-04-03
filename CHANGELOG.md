@@ -1,4 +1,12 @@
 # ChangeLog
+## Release I915_25WW14.3_803.145_23.10.90_231129.99
+* Updated the Graphics Micro Controller (GuC) to version 70.40.1.
+* Fixed an issue causing a memory error.
+* Introduced page fault handling improvements.
+* Implemented a workaround to address an encoder issue causing errors. The workaround adds support for the
+  G8 power state in ATS-M to reduce idle power consumption.
+* Skipped the HuC microcontroller authentication register check and marked HuC as available if preloaded.
+
 ## Release I915_24WW49.3_803.125_23.10.83_231129.89
 * Fixed an issue causing failures when querying GPU metrics on Intel Arc Series GPUs.
 * Corrected the ordering of Translation Lookaside Buffer (TLB) flush and invalidate operations.

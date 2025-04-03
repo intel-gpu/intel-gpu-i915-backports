@@ -394,6 +394,16 @@ static inline bool intel_context_is_schedulable(const struct intel_context *ce)
 	return !(intel_context_is_banned(ce) || intel_context_is_closed(ce));
 }
 
+static inline bool intel_context_set_coredump(struct intel_context *ce)
+{
+	return !test_and_set_bit(CONTEXT_COREDUMP, &ce->flags);
+}
+
+static inline void intel_context_clear_coredump(struct intel_context *ce)
+{
+	clear_bit(CONTEXT_COREDUMP, &ce->flags);
+}
+
 bool intel_context_ban(struct intel_context *ce, struct i915_request *rq);
 
 void intel_context_revert_ring_heads(struct intel_context *ce);

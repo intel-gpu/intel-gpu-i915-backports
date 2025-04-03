@@ -346,9 +346,6 @@ struct i915_address_space {
 	/* Is address space enabled for recoverable page faults? */
 	bool page_fault_enabled:1;
 
-	/* Address space requires scratch page invalidation  on bind */
-	bool invalidate_tlb_scratch:1;
-
 	unsigned int pt_compact;
 
 	u8 top;

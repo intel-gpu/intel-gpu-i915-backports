@@ -139,6 +139,7 @@ struct intel_context {
 #define CONTEXT_PERMA_PIN		11
 #define CONTEXT_DEBUG			12
 #define CONTEXT_RUNALONE		13
+#define CONTEXT_COREDUMP		14
 
 	u32 *lrc_reg_state;
 	union {

@@ -2980,10 +2980,12 @@ void intel_eu_attentions_read(struct intel_gt *gt,
 
 		now = ktime_get_raw();
 
-		if (a->ts == 0)
+		if (a->ts == 0) {
 			a->ts = now;
-		else if (attn && attn != prev)
+		} else if (attn && attn != prev) {
 			a->ts = now;
+			end = ktime_add_ms(now, settle_time_ms);
+		}
 
 		prev = attn;
 

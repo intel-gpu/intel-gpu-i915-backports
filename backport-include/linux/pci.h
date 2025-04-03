@@ -272,4 +272,8 @@ static inline int pci_rebar_bytes_to_size(u64 bytes)
 }
 #endif /* BPM_PCI_REBAR_SIZE_NOT_PRESENT */
 
+#ifdef BPM_STRUCT_PCI_TLP_LOG_PRESENT
+#define aer_header_log_regs pcie_tlp_log
+#endif /* STRUCT_PCI_TLP_LOG_PRESENT */
+
 #endif /* _BACKPORT_LINUX_PCI_H */
