@@ -1936,6 +1936,8 @@ clear_blt(struct intel_context *ce,
 			sz -= length;
 			offset += length;
 		} while (sz);
+
+		cond_resched();
 	}
 	emit_update_counters(rq, total, counter);
 submit:

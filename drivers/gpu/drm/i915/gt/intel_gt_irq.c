@@ -170,13 +170,16 @@ gen11_gt_bank_handler(struct intel_gt *gt, const unsigned int bank)
 	lockdep_assert_held(gt->irq_lock);
 
 	intr_dw = raw_reg_read(regs, GEN11_GT_INTR_DW(bank));
+	if (intr_dw == GENMASK(31, 0))
+		return;
 
 	for_each_set_bit(bit, &intr_dw, 32) {
 		u64 t0 = local_clock();
 		u32 ident;
 
 		ident = gen11_gt_engine_identity(gt, bank, bit);
-		gen11_gt_identity_handler(gt, ident, t0);
+		if (ident != -1u)
+			gen11_gt_identity_handler(gt, ident, t0);
 	}
 
 	/* Clear must be after shared has been served for engine */

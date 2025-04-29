@@ -496,6 +496,8 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 		CPTCFG_DRM_I915_STOP_TIMEOUT;
 	engine->props.timeslice_duration_ms =
 		CPTCFG_DRM_I915_TIMESLICE_DURATION;
+	engine->props.watchdog_interval_ms =
+		CPTCFG_DRM_I915_WATCHDOG_INTERVAL;
 
 	/* FIXME: Balancer IGT test starts to fail below 5ms timeslice */
 	if (intel_guc_submission_is_wanted(&gt->uc.guc) &&
@@ -553,6 +555,7 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	CLAMP_PROP(preempt_timeout_ms);
 	CLAMP_PROP(stop_timeout_ms);
 	CLAMP_PROP(timeslice_duration_ms);
+	CLAMP_PROP(watchdog_interval_ms);
 
 #undef CLAMP_PROP
 
@@ -579,17 +582,18 @@ static int intel_engine_setup(struct intel_gt *gt, enum intel_engine_id id,
 	return 0;
 }
 
+static u64 clamp_timeout(u64 value)
+{
+	return min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT) - 1);
+}
+
 u64 intel_clamp_heartbeat_interval_ms(struct intel_engine_cs *engine, u64 value)
 {
-	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
-
-	return value;
+	return clamp_timeout(value);
 }
 
 u64 intel_clamp_max_busywait_duration_ns(struct intel_engine_cs *engine, u64 value)
 {
-	value = min(value, jiffies_to_nsecs(2));
-
 	return value;
 }
 
@@ -602,16 +606,12 @@ u64 intel_clamp_preempt_timeout_ms(struct intel_engine_cs *engine, u64 value)
 	if (intel_guc_submission_is_wanted(&engine->gt->uc.guc))
 		value = min_t(u64, value, guc_policy_max_preempt_timeout_ms());
 
-	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
-
-	return value;
+	return clamp_timeout(value);
 }
 
 u64 intel_clamp_stop_timeout_ms(struct intel_engine_cs *engine, u64 value)
 {
-	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
-
-	return value;
+	return clamp_timeout(value);
 }
 
 u64 intel_clamp_timeslice_duration_ms(struct intel_engine_cs *engine, u64 value)
@@ -623,9 +623,12 @@ u64 intel_clamp_timeslice_duration_ms(struct intel_engine_cs *engine, u64 value)
 	if (intel_guc_submission_is_wanted(&engine->gt->uc.guc))
 		value = min_t(u64, value, guc_policy_max_exec_quantum_ms());
 
-	value = min_t(u64, value, jiffies_to_msecs(MAX_SCHEDULE_TIMEOUT));
+	return clamp_timeout(value);
+}
 
-	return value;
+u64 intel_clamp_watchdog_interval_ms(struct intel_engine_cs *engine, u64 value)
+{
+	return clamp_timeout(value);
 }
 
 static void __setup_bcs_capabilities(struct intel_engine_cs *engine)
@@ -1489,6 +1492,9 @@ int intel_engine_resume(struct intel_engine_cs *engine)
 {
 	intel_engine_apply_workarounds(engine);
 	intel_engine_apply_whitelist(engine);
+
+	engine->heartbeat.interrupts = 0;
+	engine->heartbeat.lrca = 0;
 
 	return engine->resume(engine);
 }

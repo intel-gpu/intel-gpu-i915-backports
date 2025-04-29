@@ -180,6 +180,12 @@ struct intel_context {
 		atomic_t preempt_disable_count;
 	} schedule_policy;
 
+	struct {
+		ktime_t time;
+		unsigned long interrupts;
+		u32 timestamp;
+	} watchdog;
+
 	unsigned int active_count; /* protected by timeline->mutex */
 
 	atomic_t pin_count;

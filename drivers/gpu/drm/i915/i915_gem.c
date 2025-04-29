@@ -168,6 +168,9 @@ try_again:
 		if (!wakeref && i915_vma_is_ggtt(vma))
 			wakeref = intel_runtime_pm_get(rpm);
 
+		if (flags & I915_GEM_OBJECT_UNBIND_ACTIVE)
+			i915_vma_sync(vma);
+
 		if (!i915_vm_page_fault_enabled(vm) && i915_vma_is_persistent(vma)) {
 			ret = __i915_gem_object_lock_to_evict(vm->root_obj, ww);
 			switch (ret) {

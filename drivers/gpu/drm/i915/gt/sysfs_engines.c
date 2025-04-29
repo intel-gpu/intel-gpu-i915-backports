@@ -459,6 +459,50 @@ static struct i915_ext_attr heartbeat_interval_def = {
 	__ATTR(heartbeat_interval_ms, 0444, i915_sysfs_show, NULL),
 	heartbeat_default, NULL};
 
+#if CPTCFG_DRM_I915_WATCHDOG_INTERVAL
+static ssize_t
+watchdog_store(struct kobject *kobj, struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	struct intel_engine_cs *engine = kobj_to_engine(kobj);
+	unsigned long long delay, clamped;
+	int err;
+
+	err = kstrtoull(buf, 0, &delay);
+	if (err)
+		return err;
+
+	clamped = intel_clamp_watchdog_interval_ms(engine, delay);
+	if (delay != clamped)
+		return -EINVAL;
+
+	engine->props.watchdog_interval_ms = delay;
+	return count;
+}
+
+static ssize_t
+watchdog_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct intel_engine_cs *engine = kobj_to_engine(kobj);
+
+	return sprintf(buf, "%lu\n", engine->props.watchdog_interval_ms);
+}
+
+static struct kobj_attribute watchdog_interval_attr =
+	__ATTR(watchdog_interval_ms, 0644, watchdog_show, watchdog_store);
+
+static ssize_t
+watchdog_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct intel_engine_cs *engine = kobj_to_engine(kobj);
+
+	return sprintf(buf, "%lu\n", engine->defaults.watchdog_interval_ms);
+}
+
+static struct kobj_attribute watchdog_interval_def =
+	__ATTR(watchdog_interval_ms, 0444, watchdog_default, NULL);
+#endif
+
 static ssize_t
 runtime_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -570,6 +614,12 @@ static void add_defaults(struct kobj_engine *parent)
 	if (intel_engine_has_preempt_reset(ke->engine) &&
 	    sysfs_create_file(&ke->base, &preempt_timeout_def.attr.attr))
 		return;
+
+#if CPTCFG_DRM_I915_WATCHDOG_INTERVAL
+	if (!IS_SRIOV_VF(ke->engine->i915) &&
+	    sysfs_create_file(&ke->base, &watchdog_interval_def.attr))
+		return;
+#endif
 }
 
 void intel_engines_add_sysfs(struct drm_i915_private *i915)
@@ -618,6 +668,12 @@ void intel_engines_add_sysfs(struct drm_i915_private *i915)
 		if (intel_engine_supports_stats(engine) &&
 		    sysfs_create_file(kobj, &runtime_attr.attr.attr))
 			goto err_engine;
+
+#if CPTCFG_DRM_I915_WATCHDOG_INTERVAL
+		if (!IS_SRIOV_VF(engine->i915) &&
+		    sysfs_create_file(kobj, &watchdog_interval_attr.attr))
+			goto err_engine;
+#endif
 
 		add_defaults(container_of(kobj, struct kobj_engine, base));
 

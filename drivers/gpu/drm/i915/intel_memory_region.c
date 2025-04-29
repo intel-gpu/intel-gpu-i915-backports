@@ -286,12 +286,15 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 
 		spin_lock_irq(&mem->objects.lock);
 		list_for_each_entry(obj, o->list, mm.region.link) {
+			struct scatterlist *pages;
+
 			if (!obj->mm.region.mem) {
 				bookmark++;
 				continue;
 			}
 
-			if (!i915_gem_object_has_pages(obj)) {
+			pages = READ_ONCE(obj->mm.pages);
+			if (!pages) {
 				empty++;
 				continue;
 			}
@@ -307,7 +310,7 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 			else
 				avail += obj->base.size;
 
-			sizes[size_index(sg_page_sizes(obj->mm.pages))]++;
+			sizes[size_index(sg_page_sizes(pages))]++;
 			count++;
 		}
 		spin_unlock_irq(&mem->objects.lock);
@@ -876,6 +879,7 @@ reset:			n_pages = size >> ilog2(mem->mm.chunk_size);
 			max_order = UINT_MAX;
 		}
 
+		cond_resched();
 		if (signal_pending(current)) {
 			err = -EINTR;
 			break;

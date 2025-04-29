@@ -427,6 +427,7 @@ int i915_gem_evict_vm(struct i915_address_space *vm)
 				ret = __i915_vma_unbind(vma);
 			if (ret != -ERESTARTSYS) /* "Get me out of here!" */
 				ret = 0;
+			cond_resched();
 		}
 	} while (ret == 0);
 

@@ -192,7 +192,6 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 		intel_gt_suspend_prepare(gt);
 
 	suspend_ppgtt_mappings(i915);
-	flush_workqueue(i915->wq);
 
 	i915_gem_drain_freed_objects(i915);
 }

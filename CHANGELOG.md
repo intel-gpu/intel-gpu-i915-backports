@@ -1,4 +1,9 @@
 # ChangeLog
+## Release I915_25WW18.2_1099.17_25.1.17_250113.16
+* Updated the Graphics Micro Controller (GuC) to version 70.44.1.
+* Resolved a hang detection issue on Intel Data Center GPU Max Series by re-enabling GPU hang checks.
+  Hang detection now only logs a warning message without terminating the application.
+
 ## Release I915_25WW12.2_1099.12_25.1.15_250113.14
 * Introduced page fault handling improvements.
 * Fixed an issue causing the CSC hardware errors.

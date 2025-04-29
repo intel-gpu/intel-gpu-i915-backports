@@ -346,6 +346,7 @@ u64 intel_clamp_max_busywait_duration_ns(struct intel_engine_cs *engine, u64 val
 u64 intel_clamp_preempt_timeout_ms(struct intel_engine_cs *engine, u64 value);
 u64 intel_clamp_stop_timeout_ms(struct intel_engine_cs *engine, u64 value);
 u64 intel_clamp_timeslice_duration_ms(struct intel_engine_cs *engine, u64 value);
+u64 intel_clamp_watchdog_interval_ms(struct intel_engine_cs *engine, u64 value);
 
 void
 intel_engine_reset_failed_uevent(struct intel_engine_cs *engine);
