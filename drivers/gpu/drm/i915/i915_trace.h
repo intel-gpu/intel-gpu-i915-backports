@@ -1058,6 +1058,24 @@ TRACE_EVENT(i915_vm_prefetch,
 		      __entry->region,
 		      __entry->vm_id)
 );
+
+TRACE_EVENT(i915_engine_watchdog,
+	    TP_PROTO(struct intel_engine_cs *engine, struct intel_context *ce),
+	    TP_ARGS(engine, ce),
+
+	    TP_STRUCT__entry(
+			     __field(struct intel_engine_cs *, engine)
+			     __field(struct intel_context *, ce)
+			     ),
+
+	    TP_fast_assign(
+			   __entry->engine = engine;
+			   __entry->ce = ce;
+			   ),
+
+	    TP_printk("engine=%s, ce=%s", __entry->engine->name, __entry->ce->gem_context->name)
+);
+
 #endif /* _I915_TRACE_H_ */
 
 /* This part must be outside protection */

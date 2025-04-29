@@ -407,9 +407,11 @@ struct intel_engine_cs {
 
 	struct {
 		struct delayed_work work;
+		struct delayed_work watchdog;
 		struct i915_request *systole;
 		unsigned long interrupts;
 		unsigned long blocked;
+		u32 lrca;
 	} heartbeat;
 
 	unsigned long serial;
@@ -606,6 +608,7 @@ struct intel_engine_cs {
 		unsigned long preempt_timeout_ms;
 		unsigned long stop_timeout_ms;
 		unsigned long timeslice_duration_ms;
+		unsigned long watchdog_interval_ms;
 	} props, defaults;
 
 	I915_SELFTEST_DECLARE(struct fault_attr reset_timeout);

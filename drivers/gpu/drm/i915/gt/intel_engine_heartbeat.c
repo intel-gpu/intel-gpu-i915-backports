@@ -11,8 +11,10 @@
 #include "intel_context.h"
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
+#include "intel_engine_regs.h"
 #include "intel_engine.h"
 #include "intel_gt.h"
+#include "intel_lrc_reg.h"
 #include "intel_reset.h"
 
 /*
@@ -21,6 +23,30 @@
  * is stuck, and we fail to preempt it, we declare the engine hung and
  * issue a reset -- in the hope that restores progress.
  */
+
+static bool next_watchdog(struct intel_engine_cs *engine)
+{
+	long delay;
+
+	if (IS_SRIOV_VF(engine->i915))
+		return false;
+
+	if (engine->gt->suspend || intel_gt_is_wedged(engine->gt))
+		return false;
+
+	delay = READ_ONCE(engine->props.watchdog_interval_ms);
+	if (!delay)
+		return false;
+
+	delay = msecs_to_jiffies_timeout(delay);
+	if (delay >= HZ)
+		delay = round_jiffies_up_relative(delay);
+	if (!delay)
+		return false;
+
+	mod_delayed_work(system_highpri_wq, &engine->heartbeat.watchdog, delay);
+	return true;
+}
 
 static bool next_heartbeat(struct intel_engine_cs *engine)
 {
@@ -38,8 +64,10 @@ static bool next_heartbeat(struct intel_engine_cs *engine)
 	delay = msecs_to_jiffies_timeout(delay);
 	if (delay >= HZ)
 		delay = round_jiffies_up_relative(delay);
-	mod_delayed_work(system_highpri_wq, &engine->heartbeat.work, delay + 1);
+	if (!delay)
+		return false;
 
+	mod_delayed_work(system_highpri_wq, &engine->heartbeat.work, delay);
 	return true;
 }
 
@@ -335,11 +363,68 @@ out:
 	intel_engine_pm_put_async(engine);
 }
 
-void intel_engine_unpark_heartbeat(struct intel_engine_cs *engine)
+static void __watchdog(struct intel_engine_cs *engine)
 {
-	if (!CPTCFG_DRM_I915_HEARTBEAT_INTERVAL)
+	struct i915_sched_engine *se = engine->sched_engine;
+	u32 lrca = ENGINE_READ(engine, RING_CURRENT_LRCA);
+	struct i915_request *rq;
+
+	if (!(lrca & CURRENT_LRCA_VALID))
 		return;
 
+	spin_lock_irq(&se->lock);
+	list_for_each_entry(rq, &se->requests, sched.link) {
+		struct intel_context *ce = rq->context;
+		struct i915_gem_context *ctx;
+
+		if ((ce->lrc.lrca ^ lrca) & GENMASK(31, 12))
+			continue;
+
+		ctx = rcu_dereference_protected(ce->gem_context, true);
+		if (ctx) {
+			unsigned long interrupts = READ_ONCE(engine->stats.irq.count);
+			u32 timestamp = READ_ONCE(ce->lrc_reg_state[CTX_TIMESTAMP]);
+
+			if (ce->watchdog.interrupts == interrupts &&
+			    ce->watchdog.timestamp == timestamp &&
+			    engine->heartbeat.lrca == lrca) {
+				dev_notice(engine->i915->drm.dev,
+					   "active context %s stalled on engine %s for %lldms\n",
+					   ctx->name, engine->name,
+					   ktime_ms_delta(ktime_get(), ce->watchdog.time));
+				trace_i915_engine_watchdog(engine, ce);
+			} else {
+				ce->watchdog.time = ktime_get();
+				ce->watchdog.timestamp = timestamp;
+				ce->watchdog.interrupts = interrupts;
+			}
+		}
+
+		break;
+	}
+	spin_unlock_irq(&se->lock);
+
+	engine->heartbeat.lrca = lrca;
+}
+
+static void watchdog(struct work_struct *wrk)
+{
+	struct intel_engine_cs *engine = container_of(wrk, typeof(*engine), heartbeat.watchdog.work);
+
+	if (!intel_engine_pm_get_if_awake(engine))
+		return;
+
+	if (next_watchdog(engine))
+		__watchdog(engine);
+	else
+		engine->heartbeat.lrca = 0;
+
+	intel_engine_pm_put_async(engine);
+}
+
+void intel_engine_unpark_heartbeat(struct intel_engine_cs *engine)
+{
+	next_watchdog(engine);
 	next_heartbeat(engine);
 }
 
@@ -347,9 +432,11 @@ void intel_engine_park_heartbeat(struct intel_engine_cs *engine)
 {
 	if (cancel_delayed_work(&engine->heartbeat.work))
 		i915_request_put(fetch_and_zero(&engine->heartbeat.systole));
+	cancel_delayed_work(&engine->heartbeat.watchdog);
 
 	/* Wait until the engine is inactive again before sending a pulse */
 	engine->heartbeat.interrupts = 0;
+	engine->heartbeat.lrca = 0;
 }
 
 void intel_gt_unpark_heartbeats(struct intel_gt *gt)
@@ -374,6 +461,7 @@ void intel_gt_park_heartbeats(struct intel_gt *gt)
 void intel_engine_init_heartbeat(struct intel_engine_cs *engine)
 {
 	INIT_DELAYED_WORK(&engine->heartbeat.work, heartbeat);
+	INIT_DELAYED_WORK(&engine->heartbeat.watchdog, watchdog);
 }
 
 static void intel_gt_pm_get_all_engines(struct intel_gt *gt)

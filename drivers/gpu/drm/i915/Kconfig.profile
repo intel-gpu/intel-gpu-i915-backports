@@ -149,3 +149,21 @@ config DRM_I915_NOHZ_OFFLOAD
 	bool "Enable offloading of CPU intensive tasks to idle NOHZ_FULL cores"
 	depends on NO_HZ_FULL
 	default y
+
+config DRM_I915_WATCHDOG_INTERVAL
+	int "Interval between watchdog inspections (ms)"
+	default 60000 # milliseconds
+	help
+
+	  The driver periodically checks to see if the current context
+	  appears to be making forward progress, by looking for context
+	  switches and user interrupts. If the same context is still active
+	  without any interrupts being generated since the last inspection,
+	  a warning message is generated, but no further action is taken.
+
+	    i915 0000:18:00.0: active context sysfs_watchdog_[76337] stalled on engine ccs2 for 23551ms
+
+	  This is adjustable via
+	  /sys/class/drm/card?/engine/*/watchdog_interval_ms
+
+	  May be 0 to disable the watchdog.

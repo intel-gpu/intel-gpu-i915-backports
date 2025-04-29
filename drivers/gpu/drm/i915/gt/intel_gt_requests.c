@@ -20,9 +20,11 @@ static void retire_requests(const struct intel_timeline *tl)
 {
 	struct i915_request *rq, *rn;
 
-	list_for_each_entry_safe(rq, rn, &tl->requests, link)
+	list_for_each_entry_safe(rq, rn, &tl->requests, link) {
 		if (!i915_request_retire(rq))
 			return;
+		cond_resched();
+	}
 }
 
 static bool timeline_retire(struct intel_timeline *tl)

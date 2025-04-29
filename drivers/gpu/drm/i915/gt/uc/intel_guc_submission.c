@@ -6123,6 +6123,7 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 		str_yes_no(context_blocked(ce)),
 		str_yes_no(intel_context_is_banned(ce)),
 		str_yes_no(intel_context_is_closed(ce)));
+	ce->engine->heartbeat.lrca = 0;
 
 	/*
 	 * XXX: Racey if request cancellation has occurred, see comment in
