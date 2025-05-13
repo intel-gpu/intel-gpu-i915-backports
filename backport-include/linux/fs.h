@@ -89,4 +89,8 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
                                 struct page *page, void *fsdata);
 #endif
 
+#ifdef BPM_NO_LLSEEK_NOT_PRESENT
+#define no_llseek NULL
+#endif
+
 #endif	/* _COMPAT_LINUX_FS_H */

@@ -5928,7 +5928,9 @@ intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
 static const struct drm_mode_config_funcs intel_mode_funcs = {
 	.fb_create = intel_user_framebuffer_create,
 	.get_format_info = intel_fb_get_format_info,
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 	.output_poll_changed = intel_fbdev_output_poll_changed,
+#endif
 	.mode_valid = intel_mode_valid,
 	.atomic_check = intel_atomic_check,
 	.atomic_commit = intel_atomic_commit,

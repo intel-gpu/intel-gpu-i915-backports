@@ -1,6 +1,11 @@
 #ifndef __BACKPORT_I915_COMPONENT_H
 #define __BACKPORT_I915_COMPONENT_H
+
+#ifdef BPM_DRM_INTEL_HEADERS_NOT_PRESENT
+#include_next <drm/intel/i915_component.h>
+#else
 #include_next <drm/i915_component.h>
+#endif
 
 #ifdef BPM_DISABLE_DRM_DMABUF
 #define i915_component_type LINUX_I915_BACKPORT(i915_component_type)

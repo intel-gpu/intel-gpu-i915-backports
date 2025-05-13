@@ -1,4 +1,7 @@
 # ChangeLog
+## Release I915_25WW19.2_803.150_23.10.92_231129.101
+* Updated the Graphics Micro Controller (GuC) to version 70.44.1.
+
 ## Release I915_25WW14.3_803.145_23.10.90_231129.99
 * Updated the Graphics Micro Controller (GuC) to version 70.40.1.
 * Fixed an issue causing a memory error.

@@ -1873,6 +1873,7 @@ static int i915_driver_open(struct drm_device *dev, struct drm_file *file)
  * and DMA structures, since the kernel won't be using them, and clea
  * up any GEM state.
  */
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 static void i915_driver_lastclose(struct drm_device *dev)
 {
@@ -1885,6 +1886,7 @@ static void i915_driver_lastclose(struct drm_device *dev)
 }
 #else
 static void i915_driver_lastclose(struct drm_device *dev) { return; }
+#endif
 #endif
 
 static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
@@ -2704,6 +2706,9 @@ static const struct file_operations i915_driver_fops = {
 	.read = drm_read,
 	.compat_ioctl = i915_ioc32_compat_ioctl,
 	.llseek = noop_llseek,
+#ifdef BPM_FOP_FLAGS_UNINITIALIZATION_WARNING
+	.fop_flags = FOP_UNSIGNED_OFFSET,
+#endif
 };
 
 static const struct file_operations i915_vf_driver_fops = {
@@ -2960,7 +2965,9 @@ static const struct drm_driver i915_drm_driver = {
 	    DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
 	.release = i915_driver_release,
 	.open = i915_driver_open,
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 	.lastclose = i915_driver_lastclose,
+#endif
 	.postclose = i915_driver_postclose,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
@@ -2994,7 +3001,9 @@ static const struct drm_driver i915_vf_drm_driver = {
 	    DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
 	.release = i915_driver_release,
 	.open = i915_driver_open,
+#ifndef BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
 	.lastclose = i915_driver_lastclose,
+#endif
 	.postclose = i915_driver_postclose,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,

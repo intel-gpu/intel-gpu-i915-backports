@@ -4,6 +4,90 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,12,0)
+/*
+ * cb787f4ac0c2 [tree-wide] finally take no_llseek out
+ */
+#define BPM_NO_LLSEEK_NOT_PRESENT
+
+/*
+ * 1da86618bdce fs: Convert aops->write_begin to take a folio
+ * a225800f322a fs: Convert aops->write_end to take a folio
+ */
+#define BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+
+/*
+ * 0b7582803649 mm: remove PageSwapBacked
+ */
+#define BPM_SET_PAGE_SWAP_BACKED_NOT_PRESENT
+
+/*
+ * 5f60d5f6bbc1 move asm/unaligned.h to linux/unaligned.h
+ */
+#define BPM_ASM_UNALIGNED_HEADER_NOT_PRESENT
+
+/*
+ * b5757a5be2fa drm: Remove struct drm_driver.lastclose
+ * 446d0f4849b1 drm: Remove struct drm_mode_config_funcs.output_poll_changed
+ */
+#define BPM_LASTCLOSE_AND_OUTPUT_POLL_CHANGED_MEMBERS_NOT_PRESENT
+
+/*
+ * 210a03c9d51a fs: claw back a few FMODE_* bits
+ */
+#define BPM_FOP_FLAGS_UNINITIALIZATION_WARNING
+
+#endif /* LINUX_VERSION_IS_GEQ(6,12,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,11,0)
+/*
+ * 1bb01bdab03f drm: move i915_component.h under include/drm/intel
+ * 05255ccbf172 drm: move intel-gtt.h under include/drm/intel
+ * a1ed6865df70 drm: move intel_lpe_audio.h under include/drm/intel
+ */
+#define BPM_DRM_INTEL_HEADERS_NOT_PRESENT
+
+/*
+ * 8268614b408b mm: remove CONFIG_ARCH_HAS_HUGEPD
+ */
+#define BPM_IS_HUGEPD_NOT_PRESENT
+
+/*
+ * 06668257a355 mm: remove page_mapping()
+ */
+#define BPM_PAGE_MAPPING_NOT_PRESENT
+
+/*
+ * d69d80484598
+ * driver core: have match() callback in struct bus_type take a const *
+ */
+#define BPM_MEI_CL_DEVICE_MATCH_CONST_ARG_NOT_PRESENT
+
+/*
+ * acc154691fc7 sysctl: Warn on an empty procname element
+ */
+#define BPM_EMPTY_OA_CTL_TABLE_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,11,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,10,0)
+/*
+ * 4fe0d154880b PCI: Use positive flags in pci_alloc_irq_vectors()
+ */
+#define BPM_PCI_IRQ_ALL_TYPES_REDEFINED
+
+/* 
+ * 33d5ae6cacf4 drm/print: drop include debugfs.h and include where needed
+ */
+#define BPM_DEBUGFS_CREATE_APIS_NOT_PRESENT
+
+/*
+ * 2c92ca849fcc tracing/treewide: Remove second parameter of __assign_str()
+ */
+#define BPM_ASSIGN_STR_SECOND_ARG_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,9,6) || \
 	(LINUX_VERSION_IS_GEQ(6,8,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(43,43))
 
@@ -36,6 +120,11 @@
  * 0a5a46a6a61b PCI/AER: Generalize TLP Header Log reading
  */
 #define BPM_STRUCT_PCI_TLP_LOG_PRESENT
+
+/*
+ * 2e61504fd1c3 drm/dp: switch drm_dp_vsc_sdp_log() to struct drm_printer
+ */
+#define BPM_DRM_DP_VSC_SDP_LOG_PRESENT
 #endif
 
 #if LINUX_VERSION_IS_GEQ(6,9,0)
@@ -136,6 +225,11 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_MODULE_IMPORT_NS_CXL_SUPPORT
+
+/*
+ * a349d72fd9ef mm/pgtable: add rcu_read_lock() and rcu_read_unlock()
+ */
+#define BPM_BAD_UNLOCK_PTE_OFFSET_MAP
 #endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
@@ -479,10 +573,12 @@
 
 #if (LINUX_VERSION_IS_GEQ(5,19,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+#if LINUX_VERSION_IS_LESS(6,12,0)
 /*
  * 84a1041c60ff fs: Remove pagecache_write_begin() and pagecache_write_end()
  */
 #define BPM_PAGECACHE_WRITE_BEGIN_AND_END_NOT_PRESENT
+#endif /*LINUX_VERSION_IS_LESS(6,12,0) */
 
 /*
  * 68189fef88c7 fs: Change try_to_free_buffers() to take a folio

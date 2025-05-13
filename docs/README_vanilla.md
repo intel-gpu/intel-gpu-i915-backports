@@ -9,6 +9,7 @@ Our current backport supports the following Vanilla LTS kernels.
 
 | OS Distribution | Kernel Version |
 |---|---|
+| Vanilla | 6.12 LTS  |
 | Vanilla | 6.6 LTS  |
 | Vanilla | 6.1 LTS  |
 | Vanilla | 5.15 LTS |
@@ -71,6 +72,7 @@ Both Debian based and rpm based packages are supported.
 
 | OS Distribution | Kernel Version | DKMS Package Target (RPM/Debian) | Binary Package Target (RPM/Debian) |
 |---|---|---|---|
+| Vanilla | 6.12 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.6 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.1 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 5.15 LTS | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
@@ -88,6 +90,10 @@ Example:
 		intel-i915-dkms_1.23.6.24.230425.29+i1-1_all.deb
 ```
 Above command will create Debian package in parent folder. **intel-i915-dkms_<**release version**>.<**kernel-version**>.deb**
+
+#### DKMS Kernel Headers Requirement
+The kernel header used at the time of backporting may not be compatible with the latest version at the time of installation which can lead to installation issues.
+Please refer [Version](../versions) file to check value of VANILLA_6.12LTS_KERNEL_VERSION VANILLA_6.6LTS_KERNEL_VERSION VANILLA_6.1LTS_KERNEL_VERSION or VANILLA_5.15LTS_KERNEL_VERSION or VANILLA_5.10LTS_KERNEL_VERSION for Vanilla. It will point to the kernel version which is being used during backporting.
 
 Please note that DKMS installation will skip if the kernel headers are not installed.
 

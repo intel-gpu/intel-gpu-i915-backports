@@ -22,6 +22,7 @@
  *
  */
 
+#include <linux/cpufeature.h>
 #include <linux/kernel.h>
 #include <asm/fpu/api.h>
 #include <linux/iosys-map.h>
