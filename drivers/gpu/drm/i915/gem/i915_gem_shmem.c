@@ -923,8 +923,12 @@ int i915_gem_object_put_pages_shmem(struct drm_i915_gem_object *obj, struct sg_t
 				}
 
 				if (!PageLRU(p)) {
-					__SetPageSwapBacked(p);
-					lru_cache_add(p);
+#ifdef BPM_SET_PAGE_SWAP_BACKED_NOT_PRESENT
+					 __folio_set_swapbacked(page_folio(p));
+#else
+					 __SetPageSwapBacked(p);
+#endif
+					 lru_cache_add(p);
 				}
 #ifdef BPM_INC_DEC_LRUVEC_PAGE_STATE_PRESENT
 {
@@ -984,7 +988,13 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 {
 	struct address_space *mapping = obj->base.filp->f_mapping;
 	char __user *user_data = u64_to_user_ptr(arg->data_ptr);
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+	u64 remain;
+	loff_t pos;
+	const struct address_space_operations *aops = mapping->a_ops;
+#else
 	u64 remain, offset;
+#endif
 	unsigned int pg;
 
 	/* Caller already validated user args */
@@ -1014,12 +1024,21 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 	 */
 
 	remain = arg->size;
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+	pos = arg->offset;
+	pg = offset_in_page(pos);
+#else
 	offset = arg->offset;
 	pg = offset_in_page(offset);
+#endif
 
 	do {
 		unsigned int len, unwritten;
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+		struct folio *folio;
+#else
 		struct page *page;
+#endif
 		void *data, *vaddr;
 		int err;
 		char c;
@@ -1036,24 +1055,41 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 		err = __get_user(c, user_data + len - 1);
 		if (err)
 			return err;
-
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+		err = aops->write_begin(obj->base.filp, mapping, pos, len,
+				        &folio, &data);
+		if (err < 0)
+			return err;
+#else
 		err = pagecache_write_begin(obj->base.filp, mapping,
 					    offset, len, 0,
 					    &page, &data);
 		if (err < 0)
 			return err;
+#endif
 
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+		vaddr = kmap_local_folio(folio, offset_in_folio(folio, pos));
+		unwritten = __copy_from_user_inatomic(vaddr, user_data, len);
+#else
 		vaddr = kmap_atomic(page);
 		unwritten = __copy_from_user_inatomic(vaddr + pg,
 						      user_data,
 						      len);
+#endif
 		kunmap_atomic(vaddr);
-
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+		err = aops->write_end(obj->base.filp, mapping, pos, len,
+				      len - unwritten, folio, data);
+		if (err < 0)
+			return err;
+#else
 		err = pagecache_write_end(obj->base.filp, mapping,
 					  offset, len, len - unwritten,
 					  page, data);
 		if (err < 0)
 			return err;
+#endif
 
 		/* We don't handle -EFAULT, leave it to the caller to check */
 		if (unwritten)
@@ -1061,7 +1097,11 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 
 		remain -= len;
 		user_data += len;
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+		pos += len;
+#else
 		offset += len;
+#endif
 		pg = 0;
 	} while (remain);
 
@@ -1199,7 +1239,7 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *dev_priv,
 {
 	struct drm_i915_gem_object *obj;
 	struct file *file;
-	resource_size_t offset;
+	loff_t pos = 0;
 	int err;
 
 	obj = i915_gem_object_create_shmem(dev_priv, round_up(size, PAGE_SIZE));
@@ -1209,31 +1249,51 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *dev_priv,
 	GEM_BUG_ON(obj->write_domain != I915_GEM_DOMAIN_CPU);
 
 	file = obj->base.filp;
-	offset = 0;
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+        const struct address_space_operations *aops = file->f_mapping->a_ops;
+        if (aops == NULL) {
+                err = EFAULT;
+                goto fail;
+        }
+#endif
 	do {
 		unsigned int len = min_t(typeof(size), size, PAGE_SIZE);
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+                struct folio *folio;
+                void *fsdata;
+
+                err = aops->write_begin(file, file->f_mapping, pos, len,
+                                        &folio, &fsdata);
+#else
 		struct page *page;
 		void *pgdata, *vaddr;
 
 		err = pagecache_write_begin(file, file->f_mapping,
-					    offset, len, 0,
+					    pos, len, 0,
 					    &page, &pgdata);
+#endif
 		if (err < 0)
 			goto fail;
+#ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
+                memcpy_to_folio(folio, offset_in_folio(folio, pos), data, len);
 
+                err = aops->write_end(file, file->f_mapping, pos, len, len,
+                                        folio, fsdata);
+#else
 		vaddr = kmap(page);
 		memcpy(vaddr, data, len);
 		kunmap(page);
 
 		err = pagecache_write_end(file, file->f_mapping,
-					  offset, len, len,
+					  pos, len, len,
 					  page, pgdata);
+#endif
 		if (err < 0)
 			goto fail;
 
 		size -= len;
 		data += len;
-		offset += len;
+		pos += len;
 	} while (size);
 
 	return obj;

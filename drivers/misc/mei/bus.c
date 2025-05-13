@@ -978,7 +978,11 @@ struct mei_cl_device_id *mei_cl_device_find(const struct mei_cl_device *cldev,
  *
  * Return:  1 if matching device was found 0 otherwise
  */
+#ifdef BPM_MEI_CL_DEVICE_MATCH_CONST_ARG_NOT_PRESENT
+static int mei_cl_device_match(struct device *dev, const struct device_driver *drv)
+#else
 static int mei_cl_device_match(struct device *dev, struct device_driver *drv)
+#endif
 {
 	const struct mei_cl_device *cldev = to_mei_cl_device(dev);
 	const struct mei_cl_driver *cldrv = to_mei_cl_driver(drv);
