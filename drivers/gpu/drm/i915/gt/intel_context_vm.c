@@ -78,10 +78,13 @@ static int gen8_emit_vm_config(struct i915_request *rq,
 static int
 gen8_modify_vm(struct intel_context *ce, struct i915_address_space *vm)
 {
+	struct intel_engine_cs *engine;
 	struct i915_request *rq;
-	int err;
+	int err = 0;
 
 	lockdep_assert_held(&ce->pin_mutex);
+	if (!test_bit(CONTEXT_ALLOC_BIT, &ce->flags))
+		return 0;
 
 	/*
 	 * If the context is not idle, we have to submit an ordered request to
@@ -92,7 +95,24 @@ gen8_modify_vm(struct intel_context *ce, struct i915_address_space *vm)
 	if (!intel_context_pin_if_active(ce))
 		return 0;
 
-	rq = intel_engine_create_kernel_request(ce->engine);
+	if (!intel_context_is_active(ce)) {
+		struct intel_context *child;
+
+		ce->lrc.lrca = lrc_update_regs(ce, ce->engine, vm, ce->ring->tail);
+		for_each_child(ce, child) {
+			child->lrc.lrca = lrc_update_regs(child, child->engine, vm, child->ring->tail);
+			i915_vm_put(child->vm);
+			child->vm = i915_vm_get(vm);
+		}
+
+		goto out_unpin;
+	}
+
+	engine = ce->engine;
+	if (intel_engine_is_virtual(engine))
+		engine = intel_engine_get_sibling(engine, 0);
+
+	rq = intel_engine_create_kernel_request(engine);
 	if (IS_ERR(rq)) {
 		err = PTR_ERR(rq);
 		goto out_unpin;

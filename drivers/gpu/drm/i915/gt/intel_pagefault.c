@@ -1064,11 +1064,15 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 				    u32 len)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
+	u32 epoch = READ_ONCE(gt->uc.epoch);
 	struct fault_reply *reply;
 	int err;
 
 	if (unlikely(len != 4))
 		return -EPROTO;
+
+	if (epoch & INTEL_UC_IN_RESET)
+		return -EIO;
 
 	reply = kzalloc(sizeof(*reply), GFP_KERNEL);
 	if (unlikely(!reply))
@@ -1076,7 +1080,7 @@ int intel_pagefault_req_process_msg(struct intel_guc *guc,
 
 	dma_fence_work_init(&reply->base, &reply_ops, gt->i915->sched);
 	get_fault_info(gt, payload, &reply->info);
-	reply->epoch = gt->uc.epoch & ~INTEL_UC_IN_RESET;
+	reply->epoch = epoch & ~INTEL_UC_IN_RESET;
 	reply->guc = guc;
 
 	reply->gt = gt;

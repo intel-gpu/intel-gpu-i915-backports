@@ -543,6 +543,8 @@ static void i915_pci_remove(struct pci_dev *pdev)
 	if (!i915) /* driver load aborted, nothing to cleanup */
 		return;
 
+	i915->flags |= I915_PCI_REMOVE;
+
 	if (i915_survivability_mode_enabled(i915))
 		return i915_survivability_mode_remove(i915);
 
@@ -600,8 +602,10 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	int err;
 
 	/* If we've already injected a fault into an earlier device, bail */
-	if (i915_error_injected() && !i915_modparams.inject_probe_failure)
-		return -ENODEV;
+	if (i915_error_injected() && !i915_modparams.inject_probe_failure) {
+		err = -ENODEV;
+		goto err_probe;
+	}
 
 	/*
 	 * Don't bind to non-zero function, unless it is a virtual function.
@@ -609,11 +613,15 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * This causes us confusion instead, especially on the systems where
 	 * both functions have the same PCI-ID!
 	 */
-	if (PCI_FUNC(pdev->devfn) && !pdev->is_virtfn)
-		return -ENODEV;
+	if (PCI_FUNC(pdev->devfn) && !pdev->is_virtfn) {
+		err = -ENODEV;
+		goto err_probe;
+	}
 
-	if (!intel_mmio_bar_valid(pdev, intel_info))
-		return -ENXIO;
+	if (!intel_mmio_bar_valid(pdev, intel_info)) {
+		err = -ENXIO;
+		goto err_probe;
+	}
 
 	/*
 	 * apple-gmux is needed on dual GPU MacBook Pro
@@ -622,12 +630,14 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (vga_switcheroo_client_probe_defer(pdev))
 		return -EPROBE_DEFER;
 
-	if (signal_pending(current))
-		return -EINTR;
+	if (signal_pending(current)) {
+		err = -EINTR;
+		goto err_probe;
+	}
 
 	err = i915_driver_probe(pdev, ent);
 	if (err)
-		return err;
+		goto err_probe;
 
 	pvc_wa_disallow_rc6(pdev_to_i915(pdev));
 
@@ -675,6 +685,10 @@ err_remove:
 	pvc_wa_allow_rc6(i915);
 	i915_pci_remove(pdev);
 	return err > 0 ? -ENOTTY : err;
+
+err_probe:
+	pci_set_drvdata(pdev, NULL);
+	return err;
 }
 
 static void i915_pci_shutdown(struct pci_dev *pdev)
@@ -691,7 +705,8 @@ static void i915_pci_shutdown(struct pci_dev *pdev)
 	 * may leave the driver in an inconsistent state. Make sure we no longer
 	 * access the device again.
 	 */
-	i915->do_release = IS_SRIOV_VF(i915);
+	if (IS_SRIOV_VF(i915))
+		i915->flags |= I915_RELEASE;
 	pci_set_drvdata(pdev, NULL);
 }
 

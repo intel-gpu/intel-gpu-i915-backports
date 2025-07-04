@@ -203,7 +203,7 @@ wait_ack_set(const struct intel_uncore_forcewake_domain *d,
 static inline void
 fw_domain_wait_ack_clear(const struct intel_uncore_forcewake_domain *d)
 {
-	if (wait_ack_clear(d, FORCEWAKE_KERNEL)) {
+	if (wait_ack_clear(d, FORCEWAKE_KERNEL) && !i915_is_pci_faulted(d->uncore->i915)) {
 		if (fw_ack(d) == ~0) {
 			intel_gt_log_driver_error(d->uncore->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 						  "%s: MMIO unreliable (forcewake register returns 0xFFFFFFFF)!\n",
@@ -243,7 +243,7 @@ fw_domain_wait_ack_with_fallback(const struct intel_uncore_forcewake_domain *d,
 	unsigned int pass;
 	bool ack_detected;
 
-	if (d->uncore->i915->quiesce_gpu || i915_is_pci_faulted(d->uncore->i915))
+	if (d->uncore->i915->quiesce_gpu)
 		return 0;
 
 	/*
@@ -262,7 +262,8 @@ fw_domain_wait_ack_with_fallback(const struct intel_uncore_forcewake_domain *d,
 
 	pass = 1;
 	do {
-		wait_ack_clear(d, FORCEWAKE_KERNEL_FALLBACK);
+		if (wait_ack_clear(d, FORCEWAKE_KERNEL_FALLBACK) && i915_is_pci_faulted(d->uncore->i915))
+			return 0;
 
 		fw_set(d, FORCEWAKE_KERNEL_FALLBACK);
 		/* Give gt some time to relax before the polling frenzy */
@@ -274,11 +275,11 @@ fw_domain_wait_ack_with_fallback(const struct intel_uncore_forcewake_domain *d,
 		fw_clear(d, FORCEWAKE_KERNEL_FALLBACK);
 	} while (!ack_detected && pass++ < 10);
 
-	DRM_DEBUG_DRIVER("%s had to use fallback to %s ack, 0x%x (passes %u)\n",
-			 intel_uncore_forcewake_domain_to_str(d->id),
-			 type == ACK_SET ? "set" : "clear",
-			 fw_ack(d),
-			 pass);
+	GT_TRACE(d->uncore->gt, "%s had to use fallback to %s ack, 0x%x (passes %u)\n",
+		 intel_uncore_forcewake_domain_to_str(d->id),
+		 type == ACK_SET ? "set" : "clear",
+		 fw_ack(d),
+		 pass);
 
 	return ack_detected ? 0 : -ETIMEDOUT;
 }
@@ -302,7 +303,7 @@ fw_domain_get(const struct intel_uncore_forcewake_domain *d)
 static inline void
 fw_domain_wait_ack_set(const struct intel_uncore_forcewake_domain *d)
 {
-	if (wait_ack_set(d, FORCEWAKE_KERNEL)) {
+	if (wait_ack_set(d, FORCEWAKE_KERNEL) && !i915_is_pci_faulted(d->uncore->i915)) {
 		intel_gt_log_driver_error(d->uncore->gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
 					  "%s: timed out waiting for forcewake ack request.\n",
 					  intel_uncore_forcewake_domain_to_str(d->id));
@@ -647,8 +648,7 @@ static void __intel_uncore_forcewake_put(struct intel_uncore *uncore,
 	struct intel_uncore_forcewake_domain *domain;
 	unsigned int tmp;
 
-	fw_domains &= uncore->fw_domains;
-	GEM_BUG_ON(fw_domains & ~uncore->fw_domains_awake);
+	fw_domains &= uncore->fw_domains_awake;
 
 	for_each_fw_domain_masked(domain, fw_domains, uncore, tmp) {
 		domain->active = true;
@@ -2160,6 +2160,36 @@ static void uncore_unmap_mmio(struct drm_device *drm, void *regs)
 	iounmap(regs);
 }
 
+static int sanity_check_mmio_access(struct intel_uncore *uncore)
+{
+	struct drm_i915_private *i915 = uncore->i915;
+
+	if (IS_SRIOV_VF(i915))
+		return 0;
+
+	/*
+	 * Sanitycheck that MMIO access to the device is working properly.  If
+	 * the CPU is unable to communcate with a PCI device, BAR reads will
+	 * return 0xFFFFFFFF.  Let's make sure the device isn't in this state
+	 * before we start trying to access registers.
+	 *
+	 * We use the primary GT's forcewake register as our guinea pig since
+	 * it's been around since HSW and it's a masked register so the upper
+	 * 16 bits can never read back as 1's if device access is operating
+	 * properly.
+	 *
+	 * If MMIO isn't working, we'll wait up to 2 seconds to see if it
+	 * recovers, then give up.
+	 */
+#define COND (__raw_uncore_read32(uncore, FORCEWAKE_MT) != ~0)
+	if (wait_for(COND, 2000) == -ETIMEDOUT) {
+		dev_err(i915->drm.dev, "Device is non-operational; MMIO access returns 0xFFFFFFFF!\n");
+		return -EIO;
+	}
+
+	return 0;
+}
+
 int intel_uncore_setup_mmio(struct intel_uncore *uncore, phys_addr_t phys_addr)
 {
 	struct drm_i915_private *i915 = uncore->i915;
@@ -2183,6 +2213,11 @@ int intel_uncore_setup_mmio(struct intel_uncore *uncore, phys_addr_t phys_addr)
 	uncore->regs = ioremap(phys_addr, mmio_size);
 	if (uncore->regs == NULL) {
 		dev_err(i915->drm.dev, "failed to map registers\n");
+		return -EIO;
+	}
+
+	if (sanity_check_mmio_access(uncore))  {
+		iounmap(uncore->regs);
 		return -EIO;
 	}
 
@@ -2271,39 +2306,6 @@ static int uncore_forcewake_init(struct intel_uncore *uncore)
 
 	uncore->pmic_bus_access_nb.notifier_call = i915_pmic_bus_access_notifier;
 	iosf_mbi_register_pmic_bus_access_notifier(&uncore->pmic_bus_access_nb);
-
-	return 0;
-}
-
-static int sanity_check_mmio_access(struct intel_uncore *uncore)
-{
-	struct drm_i915_private *i915 = uncore->i915;
-
-	if (IS_SRIOV_VF(i915))
-		return 0;
-
-	if (GRAPHICS_VER(i915) < 8)
-		return 0;
-
-	/*
-	 * Sanitycheck that MMIO access to the device is working properly.  If
-	 * the CPU is unable to communcate with a PCI device, BAR reads will
-	 * return 0xFFFFFFFF.  Let's make sure the device isn't in this state
-	 * before we start trying to access registers.
-	 *
-	 * We use the primary GT's forcewake register as our guinea pig since
-	 * it's been around since HSW and it's a masked register so the upper
-	 * 16 bits can never read back as 1's if device access is operating
-	 * properly.
-	 *
-	 * If MMIO isn't working, we'll wait up to 2 seconds to see if it
-	 * recovers, then give up.
-	 */
-#define COND (__raw_uncore_read32(uncore, FORCEWAKE_MT) != ~0)
-	if (wait_for(COND, 2000) == -ETIMEDOUT) {
-		dev_err(i915->drm.dev, "Device is non-operational; MMIO access returns 0xFFFFFFFF!\n");
-		return -EIO;
-	}
 
 	return 0;
 }

@@ -158,9 +158,8 @@ i915_gem_context_uses_protected_content(const struct i915_gem_context *ctx)
 /* i915_gem_context.c */
 void i915_gem_init__contexts(struct drm_i915_private *i915);
 
-int i915_gem_context_open(struct drm_i915_private *i915,
-			  struct drm_file *file);
-void i915_gem_context_close(struct drm_file *file);
+void i915_gem_context_open(struct drm_i915_file_private *fpriv);
+void i915_gem_context_close(struct drm_i915_file_private *fpriv);
 
 void i915_gem_context_release(struct kref *ctx_ref);
 

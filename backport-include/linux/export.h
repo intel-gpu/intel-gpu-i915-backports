@@ -20,4 +20,9 @@
 #endif
 #endif /* LINUX_VERSION_IS_GEQ(3,2,0) */
 
+#ifdef BPM_MODULE_IMPORT_TO_STRING_LITERAL_PRESENT
+#undef EXPORT_SYMBOL_NS_GPL
+#define EXPORT_SYMBOL_NS_GPL(sym, ns) __EXPORT_SYMBOL(sym, "GPL", __stringify(ns))
+#endif
+
 #endif	/* _COMPAT_LINUX_EXPORT_H */

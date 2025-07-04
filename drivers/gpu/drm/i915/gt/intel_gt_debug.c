@@ -211,6 +211,11 @@ int intel_gt_invalidate_l3_mmio(struct intel_gt *gt)
 	intel_uncore_forcewake_get__locked(uncore, fw);
 
 	cpctl_org = intel_uncore_read_fw(uncore, GEN7_MISCCPCTL);
+	if (cpctl_org == -1) {
+		ret = -EIO;
+		goto unlock;
+	}
+
 	if (cpctl_org & mask)
 		intel_uncore_write_fw(uncore, GEN7_MISCCPCTL, cpctl_org & ~mask);
 
@@ -249,6 +254,7 @@ out:
 	if (cpctl_org != cpctl)
 		intel_uncore_write_fw(uncore, GEN7_MISCCPCTL, cpctl_org);
 
+unlock:
 	intel_uncore_forcewake_put__locked(uncore, fw);
 	spin_unlock_irq(&uncore->lock);
 

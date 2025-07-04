@@ -226,9 +226,9 @@ int snb_pcode_read_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u32
 	u32 mbox;
 	int err;
 
-	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
+	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd) |
+		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1) |
+		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
 
 	with_intel_runtime_pm(uncore->rpm, wakeref)
 		err = snb_pcode_read(uncore, mbox, val, NULL);
@@ -242,9 +242,9 @@ int snb_pcode_write_p(struct intel_uncore *uncore, u32 mbcmd, u32 p1, u32 p2, u3
 	u32 mbox;
 	int err;
 
-	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1)
-		| REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
+	mbox = REG_FIELD_PREP(GEN6_PCODE_MB_COMMAND, mbcmd) |
+		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM1, p1) |
+		REG_FIELD_PREP(GEN6_PCODE_MB_PARAM2, p2);
 
 	with_intel_runtime_pm(uncore->rpm, wakeref)
 		err = snb_pcode_write(uncore, mbox, val);

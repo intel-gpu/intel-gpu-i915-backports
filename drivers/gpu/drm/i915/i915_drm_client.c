@@ -77,7 +77,7 @@ void i915_drm_clients_init(struct i915_drm_clients *clients,
 }
 
 static ssize_t
-show_client_name(struct device *kdev, struct device_attribute *attr, char *buf)
+show_client_name(struct kobject *kdev, struct kobj_attribute *attr, char *buf)
 {
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.name);
@@ -93,7 +93,7 @@ show_client_name(struct device *kdev, struct device_attribute *attr, char *buf)
 }
 
 static ssize_t
-show_client_pid(struct device *kdev, struct device_attribute *attr, char *buf)
+show_client_pid(struct kobject *kdev, struct kobj_attribute *attr, char *buf)
 {
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.pid);
@@ -125,7 +125,7 @@ static u64 busy_add(struct i915_gem_context *ctx, unsigned int class)
 }
 
 static ssize_t
-show_busy(struct device *kdev, struct device_attribute *attr, char *buf)
+show_busy(struct kobject *kdev, struct kobj_attribute *attr, char *buf)
 {
 	struct i915_engine_busy_attribute *i915_attr =
 		container_of(attr, typeof(*i915_attr), attr);
@@ -148,9 +148,9 @@ show_busy(struct device *kdev, struct device_attribute *attr, char *buf)
  * Memory only are accounted. Their sizes are aggregated and presented via
  * this sysfs entry
  */
-static ssize_t show_client_created_devm_bytes(struct device *kdev,
-					      struct device_attribute *attr,
-					      char *buf)
+static ssize_t show_client_created_devm_bytes(struct kobject *kdev,
+						struct kobj_attribute *attr,
+						char *buf)
 {
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.created_devm_bytes);
@@ -159,9 +159,9 @@ static ssize_t show_client_created_devm_bytes(struct device *kdev,
 			  atomic64_read(&client->created_devm_bytes));
 }
 
-static ssize_t show_client_resident_created_devm_bytes(struct device *kdev,
-						       struct device_attribute *attr,
-						       char *buf)
+static ssize_t show_client_resident_created_devm_bytes(struct kobject *kdev,
+							struct kobj_attribute *attr,
+							char *buf)
 {
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.resident_created_devm_bytes);
@@ -175,9 +175,9 @@ static ssize_t show_client_resident_created_devm_bytes(struct device *kdev,
  * placement in Local  Memory only are accounted. Their sizes are aggregated
  * and presented via this sysfs entry
  */
-static ssize_t show_client_imported_devm_bytes(struct device *kdev,
-					       struct device_attribute *attr,
-					       char *buf)
+static ssize_t show_client_imported_devm_bytes(struct kobject *kdev,
+						struct kobj_attribute *attr,
+						char *buf)
 {
 	struct i915_drm_client *client =
 		container_of(attr, typeof(*client), attr.imported_devm_bytes);
@@ -186,8 +186,8 @@ static ssize_t show_client_imported_devm_bytes(struct device *kdev,
 			  atomic64_read(&client->imported_devm_bytes));
 }
 
-static ssize_t show_client_resident_imported_devm_bytes(struct device *kdev,
-							struct device_attribute *attr,
+static ssize_t show_client_resident_imported_devm_bytes(struct kobject *kdev,
+							struct kobj_attribute *attr,
 							char *buf)
 {
 	struct i915_drm_client *client =
@@ -218,7 +218,7 @@ static int __client_register_sysfs_busy(struct i915_drm_client *client)
 	for (i = 0; i < ARRAY_SIZE(uabi_class_names); i++) {
 		struct i915_engine_busy_attribute *i915_attr =
 			&client->attr.busy[i];
-		struct device_attribute *attr = &i915_attr->attr;
+		struct kobj_attribute *attr = &i915_attr->attr;
 
 		if (!intel_engine_lookup_user(clients->i915, i, 0))
 			continue;
@@ -397,9 +397,9 @@ __client_register_sysfs_memory_stats(struct i915_drm_client *client)
 {
 	const struct {
 		const char *name;
-		struct device_attribute *attr;
-		ssize_t (*show)(struct device *dev,
-				struct device_attribute *attr,
+		struct kobj_attribute *attr;
+		ssize_t (*show)(struct kobject *dev,
+				struct kobj_attribute *attr,
 				char *buf);
 	} files[] = {
 		{
@@ -433,7 +433,7 @@ __client_register_sysfs_memory_stats(struct i915_drm_client *client)
 		return -ENOMEM;
 
 	for (i = 0; i < ARRAY_SIZE(files); i++) {
-		struct device_attribute *attr = files[i].attr;
+		struct kobj_attribute *attr = files[i].attr;
 
 		sysfs_attr_init(&attr->attr);
 
@@ -463,9 +463,9 @@ static int __client_register_sysfs(struct i915_drm_client *client)
 {
 	const struct {
 		const char *name;
-		struct device_attribute *attr;
-		ssize_t (*show)(struct device *dev,
-				struct device_attribute *attr,
+		struct kobj_attribute *attr;
+		ssize_t (*show)(struct kobject *dev,
+				struct kobj_attribute *attr,
 				char *buf);
 	} files[] = {
 		{ "name", &client->attr.name, show_client_name },
@@ -484,7 +484,7 @@ static int __client_register_sysfs(struct i915_drm_client *client)
 		return -ENOMEM;
 
 	for (i = 0; i < ARRAY_SIZE(files); i++) {
-		struct device_attribute *attr = files[i].attr;
+		struct kobj_attribute *attr = files[i].attr;
 
 		sysfs_attr_init(&attr->attr);
 
@@ -721,11 +721,12 @@ i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, i
 	xa_for_each(&clients->xarray, id, client) {
 		struct task_struct *tsk = pid_task(i915_drm_client_pid(client), PIDTYPE_PID);
 
-		i_printf(p, indent, "- client: { task: \"%s\", state: %c, pid: %d, uid: %d }\n",
+		i_printf(p, indent, "- client: { task: \"%s\", state: %c, pid: %d, uid: %d, ref: %d }\n",
 			 i915_drm_client_name(client),
 			 tsk ? task_state_to_char(tsk) : 'Z',
 			 pid_nr(i915_drm_client_pid(client)),
-			 i915_drm_client_uid(client));
+			 i915_drm_client_uid(client),
+			 kref_read(&client->kref));
 	}
 	rcu_read_unlock();
 }

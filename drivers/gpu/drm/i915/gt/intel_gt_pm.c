@@ -213,9 +213,19 @@ static const struct intel_wakeref_ops root_ops = {
 	.put = __gt_park,
 };
 
+static inline intel_wakeref_t gt_pm_get(void *rpm)
+{
+	return intel_gt_pm_get(rpm);
+}
+
+static inline void gt_pm_put(void *rpm, intel_wakeref_t wakeref)
+{
+	return intel_gt_pm_put(rpm, wakeref);
+}
+
 static const struct intel_wakeref_ops wf_ops = {
-	.pm_get = (typeof(wf_ops.pm_get))intel_gt_pm_get,
-	.pm_put = (typeof(wf_ops.pm_put))intel_gt_pm_put,
+	.pm_get = gt_pm_get,
+	.pm_put = gt_pm_put,
 
 	.get = __gt_unpark,
 	.put = __gt_park,
@@ -432,16 +442,17 @@ static void wait_for_suspend(struct intel_gt *gt)
 		flush_workqueue(gt->wq);
 	rcu_barrier();
 
-	if (gt->i915->quiesce_gpu)
-		return;
-
 	with_intel_gt_pm_if_awake(gt, wf) {
 		/* Cancel outstanding work and leave the gpu quiet */
-		if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
+		if (gt->i915->flags & I915_PCI_REMOVE) {
 			intel_gt_set_wedged(gt);
+		} else {
+			if (intel_gt_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT) == -ETIME)
+				intel_gt_set_wedged(gt);
 
-		/* Make the GPU available again for swapout */
-		intel_gt_unset_wedged(gt);
+			/* Make the GPU available again for swapout */
+			intel_gt_unset_wedged(gt);
+		}
 	}
 }
 

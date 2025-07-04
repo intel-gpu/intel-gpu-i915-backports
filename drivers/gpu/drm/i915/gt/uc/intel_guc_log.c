@@ -798,6 +798,9 @@ void intel_guc_log_relay_flush(struct intel_guc_log *log)
 	if (!log->relay.started)
 		return;
 
+	if (i915_is_pci_faulted(guc_to_gt(guc)->i915))
+		return;
+
 	/*
 	 * Before initiating the forceful flush, wait for any pending/ongoing
 	 * flush to complete otherwise forceful flush may not actually happen.

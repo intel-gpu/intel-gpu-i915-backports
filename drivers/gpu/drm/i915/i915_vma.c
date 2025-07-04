@@ -402,10 +402,19 @@ static void __vma_complete(struct dma_fence_work *work)
 	i915_active_release(&vma->active);
 }
 
+static void __vma_release(struct dma_fence_work *work)
+{
+	struct i915_vma_work *vw = container_of(work, typeof(*vw), base);
+
+	if (vw->vma)
+		__i915_vma_put(vw->vma);
+}
+
 static const struct dma_fence_work_ops bind_ops = {
 	.name = "bind",
 	.work = __vma_bind,
 	.complete = __vma_complete,
+	.release = __vma_release,
 };
 
 static struct i915_vma_work *i915_vma_work(struct i915_vma *vma)
@@ -481,7 +490,7 @@ static int __i915_vma_bind(struct i915_vma *vma,
 		return 0;
 
 	trace_i915_vma_bind(vma, bind_flags);
-	work->vma = vma;
+	work->vma = __i915_vma_get(vma);
 	work->flags = bind_flags;
 	__i915_active_acquire(&vma->active);
 
@@ -1218,10 +1227,7 @@ int i915_ggtt_pin(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 
 		/* Unlike i915_vma_pin, we don't take no for an answer! */
 		flush_idle_contexts(i915_vm_to_ggtt(vm));
-		if (mutex_lock_interruptible(&vm->mutex) == 0) {
-			i915_gem_evict_vm(vm);
-			mutex_unlock(&vm->mutex);
-		}
+		i915_gem_evict_vm(vm);
 	} while (1);
 }
 
@@ -1334,7 +1340,6 @@ void i915_vma_release(struct kref *ref)
 
 	GEM_BUG_ON(i915_vma_is_active(vma));
 	GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
-	GEM_BUG_ON(i915_active_fence_isset(&vma->active.excl));
 	GEM_BUG_ON(!list_empty(&vma->vm_bind_link));
 
 	if (unlikely(vma->bind_fence)) {
@@ -1576,10 +1581,10 @@ void __i915_vma_evict(struct i915_vma *vma)
 
 	GEM_BUG_ON(i915_vma_is_pinned(vma));
 
-	i915_debugger_vma_evict(vm->client, vma);
 	if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
 		goto remove;
 
+	i915_debugger_vma_evict(vm->client, vma);
 	__i915_vma_iounmap(vma);
 
 	if (likely(atomic_read(&vm->open))) {

@@ -3380,13 +3380,34 @@ static void gen11_irq_postinstall(struct drm_i915_private *dev_priv)
 	intel_uncore_posting_read(&dev_priv->uncore, GEN11_GFX_MSTR_IRQ);
 }
 
+static const char *
+mdfi_error_type_to_str(const enum mdfi_num_instances inst)
+{
+	switch (inst) {
+	case MDFI_ERR_STS_T2T:
+		return "MDFI_ERR_STS_T2T";
+	case MDFI_ERR_STS_BD_T2C:
+		return "MDFI_ERR_STS_BD_T2C";
+	case MDFI_ERR_STS_ANR_T2C:
+		return "MDFI_ERR_STS_ANR_T2C";
+	case MDFI_ECC_STS_T2T:
+		return "MDFI_ECC_STS_T2T";
+	case MDFI_ECC_STS_BD_T2C:
+		return "MDFI_ECC_STS_BD_T2C";
+	case MDFI_ECC_STS_ANR_T2C:
+		return "MDFI_ECC_STS_ANR_T2C";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static void clear_all_soc_errors(struct intel_gt *gt)
 {
 	void __iomem * const regs = gt->uncore->regs;
 	enum hardware_error hw_err;
 	u32 base = SOC_PVC_BASE;
 	u32 slave_base = SOC_PVC_SLAVE_BASE;
-	unsigned int i;
+	unsigned int i, sts;
 
 
 	hw_err = HARDWARE_ERROR_CORRECTABLE;
@@ -3409,6 +3430,25 @@ static void clear_all_soc_errors(struct intel_gt *gt)
 	for (i = 0; i < INTEL_GT_SOC_NUM_IEH; i++)
 		raw_reg_write(regs, SOC_GSYSEVTCTL_REG(base, slave_base, i),
 			      (HARDWARE_ERROR_MAX << 1) + 1);
+
+	for (i = 0; i < MDFI_NUM_INSTANCES / 2; i++) {
+		if ((sts = raw_reg_read(regs, MDFI_ERR_STS(i)))
+			!= MDFI_ERR_STS_DEFAULT_VALUE)
+			gt_info(gt, "found non-default value in %s: 0x%08x, clearing it\n",
+				mdfi_error_type_to_str(i), sts);
+		if ((sts = raw_reg_read(regs, MDFI_ECC_STS(i)))
+			!= MDFI_ECC_STS_DEFAULT_VALUE)
+			gt_info(gt, "found non-default value in %s: 0x%08x, clearing it\n",
+				mdfi_error_type_to_str(i + MDFI_ECC_STS_T2T), sts);
+
+		/* clear the lock bit */
+		raw_reg_write(regs, MDFI_ERR_STS(i), 0);
+		raw_reg_write(regs, MDFI_ECC_STS(i), REG_GENMASK(18, 0));
+		raw_reg_write(regs, MDFI_ERR_STS(i), REG_GENMASK(13, 0));
+		/* set lock bit */
+		raw_reg_write(regs, MDFI_ERR_STS(i), REG_BIT(31));
+	}
+
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)

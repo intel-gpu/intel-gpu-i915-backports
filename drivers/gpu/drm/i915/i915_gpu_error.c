@@ -904,6 +904,7 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 	err_printf(m, "Kernel: %s %s\n",
 		   init_utsname()->release,
 		   init_utsname()->machine);
+	err_printf(m, "Device: %s\n", dev_name(m->i915->drm.dev));
 	err_printf(m, "Driver: %s\n", DRIVER_DATE);
 	ts = ktime_to_timespec64(error->time);
 	err_printf(m, "Time: %lld s %ld us\n",

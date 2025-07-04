@@ -4,6 +4,26 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,13,0)
+/*
+ * 94a20fb9af16 sysfs: treewide: constify attribute callback of bin_attribute::mmap()
+ */
+#define BPM_STRUCT_BIN_ATTRIBUTE_CONST_IS_PRESENT
+/*
+ * cdd30ebb1b9f module: Convert symbol namespace to string literal
+ */
+#define BPM_MODULE_IMPORT_TO_STRING_LITERAL_PRESENT
+/*
+ * e4c80710d97c drm/i915: Use video aperture helpers
+ */
+#define BPM_DRM_APERTURE_IS_NOT_PRESENT
+/*
+ *90ee6ed776c0 fs: port files to file_ref
+ */
+#define BPM_ATOMIC_LONG_INT_NOT_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,13,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,12,0)
 /*
  * cb787f4ac0c2 [tree-wide] finally take no_llseek out
@@ -39,14 +59,17 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(6,12,0) */
 
-#if LINUX_VERSION_IS_GEQ(6,11,0)
+#if LINUX_VERSION_IS_GEQ(6,11,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
  * 1bb01bdab03f drm: move i915_component.h under include/drm/intel
  * 05255ccbf172 drm: move intel-gtt.h under include/drm/intel
  * a1ed6865df70 drm: move intel_lpe_audio.h under include/drm/intel
  */
 #define BPM_DRM_INTEL_HEADERS_NOT_PRESENT
+#endif
 
+#if LINUX_VERSION_IS_GEQ(6,11,0)
 /*
  * 8268614b408b mm: remove CONFIG_ARCH_HAS_HUGEPD
  */
@@ -72,16 +95,6 @@
 
 #if LINUX_VERSION_IS_GEQ(6,10,0)
 /*
- * 4fe0d154880b PCI: Use positive flags in pci_alloc_irq_vectors()
- */
-#define BPM_PCI_IRQ_ALL_TYPES_REDEFINED
-
-/* 
- * 33d5ae6cacf4 drm/print: drop include debugfs.h and include where needed
- */
-#define BPM_DEBUGFS_CREATE_APIS_NOT_PRESENT
-
-/*
  * 2c92ca849fcc tracing/treewide: Remove second parameter of __assign_str()
  */
 #define BPM_ASSIGN_STR_SECOND_ARG_PRESENT
@@ -92,6 +105,19 @@
 #define BPM_GET_UNMAPPED_AREA_NOT_PRESENT
 
 #endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,10,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
+/*
+ * 33d5ae6cacf4 drm/print: drop include debugfs.h and include where needed
+ */
+#define BPM_DEBUGFS_CREATE_APIS_NOT_PRESENT
+
+/*
+ * 4fe0d154880b PCI: Use positive flags in pci_alloc_irq_vectors()
+ */
+#define BPM_PCI_IRQ_ALL_TYPES_REDEFINED
+#endif /* LINUX_VERSION_IS_GEQ(6,10,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,6) */
 
 #if LINUX_VERSION_IS_GEQ(6,9,6) || \
 	(LINUX_VERSION_IS_GEQ(6,8,0) && UBUNTU_BACKPORT_VERSION_IS_GEQ(43,43))
@@ -119,7 +145,8 @@
 #define BPM_STRUCT_PCI_TLP_LOG_PRESENT
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,9,0)
+#if LINUX_VERSION_IS_GEQ(6,9,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
  * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
  */
@@ -165,10 +192,12 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(6,8,0)
+#if !(REDHAT_RELEASE_VERSION_IS_GEQ(9,6))
 /*
  * 19975f83412f mm/slab: move the rest of slub_def.h to mm/slab.h
  */
 #define BPM_SLUB_DEF_IS_PRESENT
+#endif
 #endif
 
 #if LINUX_VERSION_IS_GEQ(6,7,0) || \
@@ -228,7 +257,10 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_MODULE_IMPORT_NS_CXL_SUPPORT
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,6,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
  * a349d72fd9ef mm/pgtable: add rcu_read_lock() and rcu_read_unlock()
  */
@@ -238,7 +270,7 @@
  * 9a4bbd8d975e mm: remove pgtable_{pmd, pte}_page_{ctor, dtor}() wrappers
  */
 #define BPM_PAGETABLE_PMD_PAGE_CTOR_NOT_PRESENT
-#endif /* LINUX_VERSION_IS_GEQ(6,6,0) */
+#endif /* LINUX_VERSION_IS_GEQ(6,6,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,6) */
 
 #if (LINUX_VERSION_IS_GEQ(6,6,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || \
@@ -295,7 +327,9 @@
  * e5a1fd997cc2 i915: simplify subdirectory registration with register_sysctl
  */
 #define BPM_REGISTER_SYSCTL_TABLE_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,5,0) */
 
+#if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,6))
 /*
  * 1e0877d58b1e mm: remove struct pagevec
  */
@@ -305,8 +339,7 @@
  * e0b72c14d8dc mm: remove check_move_unevictable_pages()
  */
 #define BPM_CHECK_MOVE_UNEVICTABLE_PAGES_NOT_PRESENT
-
-#endif /* LINUX_VERSION_IS_GEQ(6,5,0) */
+#endif /* LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,6) */
 
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,4))
 
@@ -358,7 +391,8 @@
 #define BPM_DRM_DP_MST_HPD_IRQ_IS_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,4,5) || LINUX_VERSION_IN_RANGE(6,1,42, 6,2,0) ... */
 
-#if LINUX_VERSION_IS_GEQ(6,4,0)
+#if LINUX_VERSION_IS_GEQ(6,4,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
  * 1fb1ea0d9cb8 mei: Move uuid.h to the MEI namespace
  */
@@ -397,7 +431,8 @@
 #endif
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,3,0)
+#if LINUX_VERSION_IS_GEQ(6,3,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
  * f5b3c341a46e mei: Move uuid_le_cmp() to its only user
  */
@@ -609,13 +644,13 @@
 #endif /* LINUX_VERSION_IS_LESS(6,1,0) */
 
 #if (LINUX_VERSION_IN_RANGE(6,0,0, 6,7,0) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,3))
+	REDHAT_RELEASE_VERSION_IS_RANGE(9,3, 9,10))
 /*
  * e33c267ab70d
  * mm: shrinkers: provide shrinkers with names
  */
 #define BPM_REGISTER_SHRINKER_SECOND_ARG_NOT_PRESENT
-#endif /* (LINUX_VERSION_IS_GEQ(6,0,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,3)) */
+#endif /* (LINUX_VERSION_IN_RANGE(6,0,0, 6,7,0) || REDHAT_RELEASE_VERSION_IS_RANGE(9,3, 9,10)) */
 
 #if (LINUX_VERSION_IS_GEQ(6,0,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,2) || \
@@ -1206,6 +1241,23 @@
 #define BPM_CC_PLATFORM_H_NOT_PRESENT
 #endif
 #endif /* LINUX_VERSION_IS_LESS(5,14,19) */
+
+#if LINUX_VERSION_IS_LESS(5,14,0)
+#if !(REDHAT_RELEASE_VERSION_IS_LESS(9,0) || \
+	CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+/*
+ * b03fbd4ff24c sched: Introduce task_is_running()
+ */
+#define BPM_TASK_IS_RUNNING_API_IS_NOT_PRESENT
+#endif
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,14,0)
+/*
+ * 1eb5dde674f5 cpufreq: CPPC: Add support for frequency invariance
+ */
+#define BPM_SCHED_SETATTR_NOCHECK_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_LESS(5,14,0) */
 
 #if LINUX_VERSION_IS_GEQ(5,13,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(8,6)
@@ -2154,7 +2206,8 @@
 #define BPM_HEADER_PATH_ALIGN
 
 #if (REDHAT_RELEASE_VERSION_IS_LESS(9,0) || \
-	CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656))
+	CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \
+	CUSTOM_KERN_4_RELEASE_VERSION_IS_GEQ(2, 5))
 /* TBD : Need to check further need of ATTR Macro */
 #define BPM_DEVICE_ATTR_NOT_PRESENT
 #endif /* (REDHAT_RELEASE_VERSION_IS_LESS(9,0) || CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656)) */

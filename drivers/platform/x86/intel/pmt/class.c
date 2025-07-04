@@ -100,7 +100,11 @@ intel_pmt_read(struct file *filp, struct kobject *kobj,
 
 static int
 intel_pmt_mmap(struct file *filp, struct kobject *kobj,
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_CONST_IS_PRESENT
+		const struct bin_attribute *attr, struct vm_area_struct *vma)
+#else
 		struct bin_attribute *attr, struct vm_area_struct *vma)
+#endif
 {
 	struct intel_pmt_entry *entry = container_of(attr,
 						     struct intel_pmt_entry,

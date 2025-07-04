@@ -22,6 +22,8 @@ void intel_gt_park_ccs_mode(struct intel_gt *gt,
 			    struct intel_engine_cs *engine);
 void intel_gt_debugfs_register_ccs_mode(struct intel_gt *gt,
 					struct dentry *root);
+void intel_gt_sysfs_register_ccs(struct intel_gt *gt,
+				 struct kobject *parent);
 void intel_gt_fini_ccs_mode(struct intel_gt *gt);
 
 #endif /* INTEL_CCS_MODE_H */

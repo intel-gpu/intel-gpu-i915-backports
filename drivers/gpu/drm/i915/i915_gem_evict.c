@@ -391,9 +391,8 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
  */
 int i915_gem_evict_vm(struct i915_address_space *vm)
 {
-	int ret = 0;
+	int ret;
 
-	lockdep_assert_held(&vm->mutex);
 	trace_i915_gem_evict_vm(vm);
 
 	/* Switch back to the default context in order to unpin
@@ -410,17 +409,23 @@ int i915_gem_evict_vm(struct i915_address_space *vm)
 		struct i915_vma *vma, *vn;
 		LIST_HEAD(eviction_list);
 
+		if (mutex_lock_interruptible(&vm->mutex))
+			return -ERESTARTSYS;
+
 		list_for_each_entry(vma, &vm->bound_list, vm_link) {
 			if (i915_vma_is_pinned(vma))
+				continue;
+			if (i915_vma_is_active(vma))
 				continue;
 
 			__i915_vma_pin(vma);
 			list_add(&vma->evict_link, &eviction_list);
 		}
-		if (list_empty(&eviction_list))
+		if (list_empty(&eviction_list)) {
+			mutex_unlock(&vm->mutex);
 			break;
+		}
 
-		ret = 0;
 		list_for_each_entry_safe(vma, vn, &eviction_list, evict_link) {
 			__i915_vma_unpin(vma);
 			if (ret == 0)
@@ -429,6 +434,7 @@ int i915_gem_evict_vm(struct i915_address_space *vm)
 				ret = 0;
 			cond_resched();
 		}
+		mutex_unlock(&vm->mutex);
 	} while (ret == 0);
 
 	return ret;

@@ -135,7 +135,7 @@ static void show_ccs_mode(struct intel_gt *gt, struct drm_printer *p, int indent
 	char buf[240], *s = buf;
 	const char *prefix;
 
-	if (!IS_PONTEVECCHIO(gt->i915))
+	if (!gt->ccs.fixed)
 		return;
 
 	s += snprintf(s, sizeof(buf) - (s - buf), "mode:%08x, ", gt->ccs.mode);

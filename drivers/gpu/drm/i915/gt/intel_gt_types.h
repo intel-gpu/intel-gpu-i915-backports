@@ -332,6 +332,8 @@ struct intel_gt {
 	struct intel_engine_cs *engine_class[MAX_ENGINE_CLASS + 1]
 					    [MAX_ENGINE_INSTANCE + 1];
 
+	intel_engine_mask_t uabi_engines;
+
 	/*
 	 * Track fixed mapping between CCS engines and compute slices.
 	 *
@@ -365,6 +367,9 @@ struct intel_gt {
 		intel_engine_mask_t active; /* Active CCS engines */
 		intel_engine_mask_t config; /* CCS context -> C-slice */
 		u32 mode; /* CCS_MODE shadow */
+		int width;
+		bool fixed:1;
+		bool dynamic:1;
 	} ccs;
 
 	enum intel_submission_method submission_method;

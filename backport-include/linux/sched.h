@@ -14,4 +14,11 @@ extern void sched_set_fifo_low(struct task_struct *p);
 extern void sched_set_normal(struct task_struct *p, int nice);
 #endif
 
+#ifdef BPM_TASK_IS_RUNNING_API_IS_NOT_PRESENT
+static inline bool task_is_running(struct task_struct *task)
+{
+	return (READ_ONCE(task->state) == TASK_RUNNING);
+}
+#endif
+
 #endif /* _BACKPORT_LINUX_SCHED_H */

@@ -482,8 +482,7 @@ void intel_context_fini(struct intel_context *ce)
 		intel_timeline_put(ce->timeline);
 	i915_vm_put(ce->vm);
 
-	if (ce->client)
-		i915_drm_client_put(ce->client);
+	i915_drm_client_put(ce->client);
 
 	/* Need to put the creation ref for the children */
 	if (intel_context_is_parent(ce))
@@ -770,6 +769,26 @@ static void hexdump(struct drm_printer *m, int indent, const void *buf, size_t l
 	}
 }
 
+static bool intel_context_is_stalled(const struct intel_context *ce)
+{
+	struct intel_engine_cs *engine;
+	intel_engine_mask_t tmp;
+	bool result = false;
+
+	if (!atomic_read(&ce->pin_count))
+		return false;
+
+	for_each_engine_masked(engine, ce->engine->gt, ce->engine->mask, tmp) {
+		if (((ce->lrc.lrca ^ engine->heartbeat.lrca) & GENMASK(31, 12)) == 0) {
+			result = (ce->watchdog.interrupts == READ_ONCE(engine->stats.irq.count) &&
+				  ce->watchdog.timestamp == READ_ONCE(ce->lrc_reg_state[CTX_TIMESTAMP]));
+			break;
+		}
+	}
+
+	return result;
+}
+
 void intel_context_show(struct intel_context *ce, struct drm_printer *p, int indent)
 {
 	bool running = ce->timeline && i915_active_fence_isset(&ce->timeline->last_request);
@@ -806,6 +825,10 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 	i_printf(p, indent, "ce->runtime: { total: %lld ns, avg: %lld ns }\n",
 		 intel_context_get_total_runtime_ns(ce),
 		 intel_context_get_avg_runtime_ns(ce));
+
+	if (intel_context_is_stalled(ce))
+		i_printf(p, indent, "ce->stalled: %lld ms\n",
+			 ktime_ms_delta(ktime_get(), ce->watchdog.time));
 
 	i_printf(p, indent, "ce->lrc.lrca: 0x%08x\n", ce->lrc.lrca);
 	i_printf(p, indent, "ce->lrc.ccid: 0x%08x\n", ce->lrc.ccid);

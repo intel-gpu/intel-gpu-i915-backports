@@ -9,6 +9,7 @@ Our current backport supports the following OS Distributions.
 
 | OS Distribution | OS Version |
 |---|---|
+| RHEL® | 10.x |
 | RHEL® | 9.x |
 | RHEL® | 8.x |
 
@@ -42,10 +43,12 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 We have 2 kinds of backport packages, depending on the target OS Kernel version
  - Build with i915 and drm. Ex: RHEL® 8.x
- - Build with i915 alone. Ex: RHEL® 9.x
+ - Build with i915 alone. Ex: RHEL® 9.x and RHEL® 10.x
 
 | OS Distribution | OS Version | DKMS Package Target | Binary Package Target|
 |---|---|---|---|
+| RHEL® | 10.0  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.6  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.5  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.4  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.3  | i915dkmsrpm-pkg | binrpm-pkg |
@@ -60,7 +63,7 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 Creating i915 DKMS packages
 ```
 $ make <Build Options> <DKMS Package Target>
-Example: For RHEL9.5
+Example: For RHEL9.6 and RHEL10.0
 	$ make i915dkmsrpm-pkg
 
 	Generated package name :
@@ -76,12 +79,21 @@ Please refer [version](../versions) file to get information on the kernel versio
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.5_KERNEL_VERSION>.el9_4.x86_64 \
-kernel-devel-<RHEL_9.5_KERNEL_VERSION>.el9_4.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_10.0_KERNEL_VERSION>.el10_0.x86_64 \
+kernel-devel-<RHEL_10.0_KERNEL_VERSION>.el10_0.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-503.11.1.el9_5.x86_64 \
-     kernel-devel-5.14.0-503.11.1.el9_5.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-6.12.0-55.7.1.el10_0.x86_64.rpm \
+     kernel-devel-6.12.0-55.7.1.el10_0.x86_64.rpm
+```
+
+```
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.6_KERNEL_VERSION>.el9_6.x86_64 \
+kernel-devel-<RHEL_9.6_KERNEL_VERSION>.el9_6.x86_64
+
+Example:
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-570.12.1.el9_6.x86_64 \
+     kernel-devel-5.14.0-570.12.1.el9_6.x86_64
 ```
 
 ```

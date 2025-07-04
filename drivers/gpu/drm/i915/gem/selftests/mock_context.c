@@ -86,11 +86,13 @@ live_gt_context(struct intel_gt *gt, struct file *file)
 	int err;
 	u32 id;
 
-	ctx = i915_gem_context_create_for_gt(gt, 0);
+	ctx = default_context(gt);
 	if (IS_ERR(ctx))
 		return ctx;
 
 	i915_gem_context_set_no_error_capture(ctx);
+
+	gem_context_setup(ctx, to_drm_file(file)->driver_priv);
 
 	err = gem_context_register(ctx, to_drm_file(file)->driver_priv, &id);
 	if (err < 0)
@@ -151,7 +153,7 @@ kernel_context(struct drm_i915_private *i915)
 {
 	struct i915_gem_context *ctx;
 
-	ctx = i915_gem_context_create_for_gt(to_gt(i915), 0);
+	ctx = default_context(to_gt(i915));
 	if (IS_ERR(ctx))
 		return ctx;
 

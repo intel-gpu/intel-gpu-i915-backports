@@ -130,6 +130,7 @@ $RHEL	%global _build_id_links none
 	%build
 	export LEX=flex
 $RHEL	export YACC=bison
+$RHEL   export CFLAGS=-fPIE
 	np=`nproc`
 	npc=\$(( \$np > 64 ? 64 : \$np ))
 $ST_HDR	make BUILD_CONFIG=$BUILD_TYPE KLIB=%{kernel_module_directory}/%{_krel} olddefconfig

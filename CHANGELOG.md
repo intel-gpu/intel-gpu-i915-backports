@@ -1,4 +1,54 @@
 # ChangeLog
+## Release I915_25WW27.3_1146.10_25.2.13_250224.19
+* Fixed an issue where the sched_setattr_nocheck API was not exported in kernel versions earlier than 5.14.
+* Switched to locked variant of wake_up_interruptible for safer thread wake-ups.
+* Reduced spurious wake-ups for single-task shmem/userptr jobs.
+* Started propagating wake-up from suspended threads to avoid delayed task execution.
+* Replaced function type casting with typed function stubs.
+* Added a reference around vm_bind to maintain the Virtual Memory Area’s (VMA) validity.
+* Started clearing the Multi Die Fabric Interconnect (MDFI) boot time errors, as they are expected during the
+  initialization of MDFI fabric and may be confused with runtime errors.
+* Started using the kobject attribute instead of the device attribute for num_cslices and ccs_mode sysfs entries on
+  RHEL 8.X.
+* Started handling additional PCI AER corner cases to be able to reset devices without locking up the machine.
+* Reordered hardware waits and GPU reset logic during PCI faults to avoid blocking on unresponsive hardware
+  while recovering from a hardware failure.
+* Fixed an issue where a mutex could be held indefinitely when attempting to remove an idle Virtual Memory
+  Area (VMA) from the VM.
+* Prevented memory allocations during page faults triggered by GPU reset.
+* Updated GTT_MMAP_VERSION to align with corresponding changes in user space.
+* Allowed data to be discarded on forced unbinds, avoiding swaps to inaccessible system memory.
+* Set the lmem_offset to 0 after use so that the next local memory block does not carry the same offset leading to
+  lost data during Single Root I/O Virtualization (SR-IOV) migrations.
+* Fixed incorrect annotations.
+* Fixed error unwinding in i915_virtualization_probe.
+* Added periodic checks for forward progress by monitoring context switches and user interrupts. If the same
+  context remains active without interrupts since the last check, a warning is  generated with no further action.
+* Prevented default context creation when wedged.
+* Cleaned up faulting initialization.
+* Prevented DPC NPD after initialization failure by early iaf setup and driver-device decoupling on probe failure.
+* Started protecting per-CPU px_cache from interrupts.
+* Started sending a TLB invalidation request after each Virtual Memory Area (VMA) binding for GuC use, instead
+  of deferring until before enabling GuC, to prevent Single Root I/O Virtualization (SR-IOV) failures.
+* Started periodic check for mmio failures.
+* Started handling CT fault injection during early initialization by ensuring CT descriptor objects are not
+  dereferenced before assignment, preventing failures on early faults.
+* Started checking for context creation failure during execbuf.
+* Added support for deferred context attachment to existing clients.
+* Removed the residual calls to the empty i915_oa_init_reg_state to completely excise an old use-after-free.
+* Skipped the HuC authentication register check as it is no longer needed.
+* Prevented soft lockup during defragmentation on eviction.
+* Prevented a potential compute hang on Alchemist GPUs.
+* Updated CT desc->head after consuming a receive chunk to prevent buffer overflow and slow GuC messaging.
+* Added device PCI IDs to GPU dumps.
+* Updated ce->vm on parallel child contexts.
+* Corrected the CSC hardware errors.
+* Added the eudbg event for deferred default context allocation.
+* Removed lockdep assertions around Global Graphics Translation Table (GGTT) updates to prevent conflicts.
+* Preserved Translation Lookaside Buffer (TLB) seqno when splitting clear pages into multiple smaller pages if
+  there is an outstanding TLB invalidation for those pages.
+* Deferred the default context allocation until first use, reducing overhead when a device opens.
+
 ## Release I915_25WW18.2_1099.17_25.1.17_250113.16
 * Updated the Graphics Micro Controller (GuC) to version 70.44.1.
 * Resolved a hang detection issue on Intel Data Center GPU Max Series by re-enabling GPU hang checks.

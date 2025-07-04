@@ -192,6 +192,7 @@ struct drm_i915_file_private {
 		struct rcu_head rcu;
 	};
 
+	struct i915_gem_context *ctx0;
 	struct xarray context_xa;
 	struct xarray vm_xa;
 
@@ -413,8 +414,9 @@ struct intel_audio_private {
 struct drm_i915_private {
 	struct drm_device drm;
 
-	/* FIXME: Device release actions should all be moved to drmm_ */
-	bool do_release;
+	unsigned long flags;
+#define I915_RELEASE BIT(0)
+#define I915_PCI_REMOVE BIT(1)
 
 	/* i915 device parameters */
 	struct i915_params params;
@@ -958,12 +960,14 @@ static inline struct drm_i915_private *pdev_to_i915(struct pci_dev *pdev)
 #define for_each_uabi_engine(engine__, i915__) \
 	for ((engine__) = rb_to_uabi_engine(rb_first(&(i915__)->uabi_engines));\
 	     (engine__); \
-	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node)))
+	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node))) \
+		for_each_if((engine__)->gt->uabi_engines & (engine__)->mask)
 
 #define for_each_uabi_class_engine(engine__, class__, i915__) \
 	for ((engine__) = intel_engine_lookup_user((i915__), (class__), 0); \
 	     (engine__) && (engine__)->uabi_class == (class__); \
-	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node)))
+	     (engine__) = rb_to_uabi_engine(rb_next(&(engine__)->uabi_node))) \
+		for_each_if((engine__)->gt->uabi_engines & (engine__)->mask)
 
 #define I915_GTT_OFFSET_NONE ((u32)-1)
 
@@ -1619,10 +1623,15 @@ __i915_gem_context_lookup_rcu(struct drm_i915_file_private *file_priv, u32 id)
 	return xa_load(&file_priv->context_xa, id);
 }
 
+struct i915_gem_context *i915_gem_context0_get(struct drm_i915_file_private *fpriv);
+
 static inline struct i915_gem_context *
 i915_gem_context_lookup(struct drm_i915_file_private *file_priv, u32 id)
 {
 	struct i915_gem_context *ctx;
+
+	if (id == 0)
+		return i915_gem_context0_get(file_priv);
 
 	rcu_read_lock();
 	ctx = __i915_gem_context_lookup_rcu(file_priv, id);

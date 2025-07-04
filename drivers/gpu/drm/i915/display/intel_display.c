@@ -5773,9 +5773,6 @@ static void intel_setup_outputs(struct drm_i915_private *dev_priv)
 {
 	struct intel_encoder *encoder;
 
-	if (!HAS_DISPLAY(dev_priv))
-		return;
-
 	if (IS_METEORLAKE(dev_priv)) {
 		intel_ddi_init(dev_priv, PORT_A);
 		intel_ddi_init(dev_priv, PORT_B);
@@ -6286,6 +6283,8 @@ int intel_modeset_init_nogem(struct drm_i915_private *i915)
 	if (!HAS_DISPLAY(i915))
 		return 0;
 
+	dev->driver_features |= DRIVER_MODESET;
+
 	intel_init_pm(i915);
 
 	intel_pps_setup(i915);
@@ -6300,6 +6299,7 @@ int intel_modeset_init_nogem(struct drm_i915_private *i915)
 		ret = intel_crtc_init(i915, pipe);
 		if (ret) {
 			intel_mode_config_cleanup(i915);
+			dev->driver_features &= ~DRIVER_MODESET;
 			return ret;
 		}
 	}

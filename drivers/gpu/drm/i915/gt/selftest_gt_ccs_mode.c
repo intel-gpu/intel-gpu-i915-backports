@@ -221,6 +221,9 @@ static int live_ccs_active(void *arg)
 
 	/* If any CCS engine is active then we cannot change mode */
 
+	if (is_power_of_2(ALL_CCS(gt)))
+		return 0;
+
 	wf = intel_gt_pm_get(gt);
 
 	gt->ccs.config = 0;
@@ -658,7 +661,7 @@ int intel_gt_ccs_mode_live_selftests(struct drm_i915_private *i915)
 		if (!CCS_MASK(gt))
 			continue;
 
-		if (!needs_ccs_mode(gt))
+		if (!gt->ccs.fixed)
 			continue;
 
 		err =  intel_gt_live_subtests(tests, gt);

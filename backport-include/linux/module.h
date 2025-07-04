@@ -68,4 +68,9 @@ extern void dependency_symbol(void);
 #define param_check_bool(name, p) __param_check(name, p, bool)
 #endif
 
+#ifdef BPM_MODULE_IMPORT_TO_STRING_LITERAL_PRESENT
+#undef MODULE_IMPORT_NS
+#define MODULE_IMPORT_NS(ns) MODULE_INFO(import_ns, __stringify(ns))
+#endif
+
 #endif /* __BACKPORT_LINUX_MODULE_H */

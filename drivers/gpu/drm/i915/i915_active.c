@@ -472,6 +472,9 @@ bool i915_active_acquire_if_busy(struct i915_active *ref)
 
 static void __i915_active_activate(struct i915_active *ref)
 {
+	if (atomic_inc_not_zero(&ref->count))
+		return;
+
 	spin_lock_irq(&ref->tree_lock); /* __active_retire() */
 	if (!atomic_fetch_inc(&ref->count))
 		debug_active_activate(ref);
@@ -734,6 +737,8 @@ int i915_sw_fence_await_active(struct i915_sw_fence *fence,
 
 void i915_active_fini(struct i915_active *ref)
 {
+	i915_active_fence_fini(&ref->excl);
+
 	debug_active_fini(ref);
 	GEM_BUG_ON(atomic_read(&ref->count));
 	GEM_BUG_ON(work_pending(&ref->work));

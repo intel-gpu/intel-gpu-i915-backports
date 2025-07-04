@@ -415,7 +415,7 @@ doorbell_cleanup(struct intel_guc *guc, u32 ctx_id, u16 db_id, void *doorbell)
 }
 
 
-static int test_doorbell(struct intel_guc *guc, struct live_doorbells *arg,\
+static int test_doorbell(struct intel_guc *guc, struct live_doorbells *arg,
 			 u32 ctx_id, u16 db_id)
 {
 	void *doorbell;
@@ -455,7 +455,7 @@ static int live_doorbells_loop(void *arg)
 	uint i;
 	int ret = 0;
 
-	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
+	wakeref = intel_gt_pm_get(gt);
 
 	num_doorbells = get_num_doorbells(gt);
 	if (num_doorbells > GUC_NUM_HW_DOORBELLS) {
@@ -487,7 +487,7 @@ static int live_doorbells_loop(void *arg)
 	pr_info("Successfully tested %u doorbells\n", i);
 
 out:
-	intel_runtime_pm_put(gt->uncore->rpm, wakeref);
+	intel_gt_pm_put(gt, wakeref);
 	return ret;
 }
 

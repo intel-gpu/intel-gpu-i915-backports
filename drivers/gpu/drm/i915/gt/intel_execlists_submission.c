@@ -456,7 +456,7 @@ static void reset_active(struct i915_request *rq,
 	lrc_init_regs(ce, engine, true);
 
 	/* We've switched away, so this should be a no-op, but intent matters */
-	ce->lrc.lrca = lrc_update_regs(ce, engine, head);
+	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->vm, head);
 }
 
 static bool bad_request(const struct i915_request *rq)
@@ -3053,7 +3053,7 @@ out_replay:
 	ENGINE_TRACE(engine, "replay {head:%04x, tail:%04x}\n",
 		     head, ce->ring->tail);
 	lrc_reset_regs(ce, engine);
-	ce->lrc.lrca = lrc_update_regs(ce, engine, head);
+	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->vm, head);
 }
 
 static void execlists_reset_csb(struct intel_engine_cs *engine, bool stalled)

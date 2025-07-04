@@ -38,8 +38,7 @@ struct file *shmem_create_from_object(struct drm_i915_gem_object *obj)
 	void *ptr;
 
 	if (file && file->f_mapping->nrpages) {
-		atomic_long_inc(&file->f_count);
-		return file;
+		return get_file(file);
 	}
 
 	if (obj->mm.mapping)
