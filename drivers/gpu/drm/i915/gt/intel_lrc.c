@@ -1439,7 +1439,7 @@ void lrc_reset(struct intel_context *ce)
 	 */
 	intel_timeline_reset_seqno(ce->timeline);
 
-	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->ring->tail);
+	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->vm, ce->ring->tail);
 	gt_ggtt_address_read_unlock(ce->engine->gt, srcu);
 }
 
@@ -1471,7 +1471,7 @@ lrc_pin(struct intel_context *ce,
 	if (!__test_and_set_bit(CONTEXT_INIT_BIT, &ce->flags))
 		lrc_init_state(ce, engine, vaddr);
 
-	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->ring->tail);
+	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->vm, ce->ring->tail);
 	return 0;
 }
 
@@ -1931,6 +1931,7 @@ static void set_ppgtt_regs(u32 *regs, const struct i915_ppgtt *ppgtt)
 
 u32 lrc_update_regs(const struct intel_context *ce,
 		    const struct intel_engine_cs *engine,
+		    struct i915_address_space *vm,
 		    u32 head)
 {
 	struct intel_ring *ring = ce->ring;
@@ -1944,14 +1945,12 @@ u32 lrc_update_regs(const struct intel_context *ce,
 	regs[CTX_RING_TAIL] = ring->tail;
 	regs[CTX_RING_CTL] = RING_CTL_SIZE(ring->size) | RING_VALID;
 
-	set_ppgtt_regs(regs, i915_vm_to_ppgtt(ce->vm));
+	set_ppgtt_regs(regs, i915_vm_to_ppgtt(vm));
 
 	/* RPCS */
 	if (engine->class == RENDER_CLASS) {
 		regs[CTX_R_PWR_CLK_STATE] =
 			intel_sseu_make_rpcs(engine->gt, &ce->sseu);
-
-		i915_oa_init_reg_state(ce, engine);
 	}
 
 	if (ce->wa_bb_page) {

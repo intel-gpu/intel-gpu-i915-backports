@@ -146,6 +146,9 @@ err:
  * 4 - Support multiple fault handlers per object depending on object's
  *     backing storage (a.k.a. MMAP_OFFSET).
  *
+ * 5 - Support multiple partial mmaps(mmap part of BO + unmap a offset, multiple
+ *     times with different size and offset).
+ *
  * Restrictions:
  *
  *  * snoopable objects cannot be accessed via the GTT. It can cause machine
@@ -173,7 +176,7 @@ err:
  */
 int i915_gem_mmap_gtt_version(void)
 {
-	return 4;
+	return 5;
 }
 
 vm_fault_t i915_error_to_vmf_fault(int err)

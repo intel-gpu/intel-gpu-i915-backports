@@ -35,4 +35,9 @@
 #define drm_fb_helper_alloc_fbi drm_fb_helper_alloc_info
 #define drm_fb_helper_unregister_fbi drm_fb_helper_unregister_info
 #endif
+
+#ifdef BPM_DRM_APERTURE_IS_NOT_PRESENT
+#define drm_aperture_remove_conflicting_pci_framebuffers(a,b) aperture_remove_conflicting_pci_devices(a,(b->name))
+#endif
+
 #endif /* BACKPORT_DRM_FB_HELPER_H */

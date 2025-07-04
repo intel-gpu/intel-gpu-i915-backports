@@ -86,6 +86,7 @@ void intel_gt_log_driver_error(struct intel_gt *gt,
 void intel_gt_common_init_early(struct intel_gt *gt)
 {
 	gt->suspend = true;
+	gt->wq = gt->i915->wq;
 
 	spin_lock_init(gt->irq_lock);
 
@@ -878,16 +879,6 @@ static void __intel_gt_disable(struct intel_gt *gt)
 	intel_gt_suspend_prepare(gt);
 	intel_gt_set_wedged_on_fini(gt);
 	intel_gt_suspend_late(gt);
-
-	if (GEM_DEBUG_WARN_ON(intel_gt_pm_is_awake(gt))) {
-		struct drm_printer p;
-		char buf[80];
-
-		snprintf(buf, sizeof(buf), "GT%d", gt->info.id);
-		p = drm_err_printer(buf);
-
-		intel_wakeref_show(&gt->wakeref, &p, 0);
-	}
 }
 
 int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
@@ -911,10 +902,13 @@ int intel_gt_wait_for_idle(struct intel_gt *gt, long timeout)
 
 static int init_wq(struct intel_gt *gt)
 {
-	gt->wq = alloc_workqueue("i915-gt%d", WQ_UNBOUND, 0, gt->info.id);
-	if (!gt->wq)
+	struct workqueue_struct *wq;
+
+	wq = alloc_workqueue("i915-gt%d", WQ_UNBOUND, 0, gt->info.id);
+	if (!wq)
 		return -ENOMEM;
 
+	gt->wq = wq;
 	return 0;
 }
 
@@ -1055,11 +1049,11 @@ err_iov:
 err_px:
 	i915_px_cache_fini(gt);
 err_wq:
-	if (gt->wq) {
+	if (gt->wq != gt->i915->wq) {
 		flush_workqueue(gt->wq);
 		rcu_barrier();
 		destroy_workqueue(gt->wq);
-		gt->wq = NULL;
+		gt->wq = gt->i915->wq;
 	}
 
 	intel_gt_set_wedged_on_init(gt);
@@ -1078,6 +1072,16 @@ void intel_gt_driver_remove(struct intel_gt *gt)
 	intel_iov_fini_hw(&gt->iov);
 
 	__intel_gt_disable(gt);
+
+	if (GEM_DEBUG_WARN_ON(intel_gt_pm_is_awake(gt))) {
+		struct drm_printer p;
+		char buf[80];
+
+		snprintf(buf, sizeof(buf), "GT%d", gt->info.id);
+		p = drm_err_printer(buf);
+
+		intel_wakeref_show(&gt->wakeref, &p, 0);
+	}
 
 	intel_uc_driver_remove(&gt->uc);
 
@@ -1145,12 +1149,12 @@ void intel_gt_driver_late_release_all(struct drm_i915_private *i915)
 		intel_gt_fini_tlb(gt);
 		intel_engines_free(gt);
 
-		if (gt->wq) {
+		if (gt->wq != i915->wq) {
 			rcu_barrier();
 			flush_workqueue(gt->wq);
 			rcu_barrier();
 			destroy_workqueue(gt->wq);
-			gt->wq = NULL;
+			gt->wq = i915->wq;
 		}
 
 		i915_px_cache_fini(gt);

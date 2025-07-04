@@ -425,23 +425,17 @@ static void ct_get_next_fence(struct intel_guc_ct *ct, struct ct_request *rq)
 	rq->fence = fence;
 }
 
-static int ct_write(struct intel_guc_ct *ct,
-		    const u32 *action,
-		    u32 len /* in dwords */,
-		    u32 fence, u32 flags)
+static int ct_write(struct intel_guc_ct *ct, const u32 *action, u32 header, u32 type)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	struct guc_ct_buffer_desc *desc = ctb->desc;
 	u32 tail = ctb->tail;
 	u32 size = ctb->size;
-	u32 header;
-	u32 hxg;
-	u32 type;
 	u32 *cmds = ctb->cmds;
 	unsigned int i;
 
 	if (unlikely(desc->status))
-		goto corrupted;
+		return -EPIPE;
 
 	GEM_BUG_ON(tail > size);
 
@@ -465,28 +459,22 @@ static int ct_write(struct intel_guc_ct *ct,
 	 * dw1: HXG header (including action code)
 	 * dw2+: action data
 	 */
-	header = FIELD_PREP(GUC_CTB_MSG_0_FORMAT, GUC_CTB_FORMAT_HXG) |
-		 FIELD_PREP(GUC_CTB_MSG_0_NUM_DWORDS, len) |
-		 FIELD_PREP(GUC_CTB_MSG_0_FENCE, fence);
-
-	type = (flags & INTEL_GUC_CT_SEND_NB) ? GUC_HXG_TYPE_FAST_REQUEST :
-		GUC_HXG_TYPE_REQUEST;
-	hxg = FIELD_PREP(GUC_HXG_MSG_0_TYPE, type) |
-		FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION |
+	type |= FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION |
 			   GUC_HXG_REQUEST_MSG_0_DATA0, action[0]);
 
 	CT_DEBUG(ct, "writing (tail %u) %*ph %*ph %*ph\n",
-		 tail, 4, &header, 4, &hxg, 4 * (len - 1), &action[1]);
+		 tail, 4, &header, 4, &type, 4 * (len - 1), &action[1]);
 
 	cmds[tail] = header;
-	tail = (tail + 1) % size;
+	tail = (tail + 1) & (size - 1);
 
-	cmds[tail] = hxg;
-	tail = (tail + 1) % size;
+	cmds[tail] = type;
+	tail = (tail + 1) & (size - 1);
 
-	for (i = 1; i < len; i++) {
+	header = FIELD_GET(GUC_CTB_MSG_0_NUM_DWORDS, header);
+	for (i = 1; i < header; i++) {
 		cmds[tail] = action[i];
-		tail = (tail + 1) % size;
+		tail = (tail + 1) & (size - 1);
 	}
 	GEM_BUG_ON(tail >= size);
 
@@ -513,12 +501,14 @@ static int ct_write(struct intel_guc_ct *ct,
 
 	return 0;
 
+#ifdef CPTCFG_DRM_I915_DEBUG_GUC
 corrupted:
 	CT_ERROR(ct, "Corrupted descriptor head=%u tail=%u status=%#x\n",
 		 desc->head, desc->tail, desc->status);
 	CT_DEAD(ct, WRITE);
 	ctb->broken = true;
 	return -EPIPE;
+#endif
 }
 
 static unsigned long local_clock_ns(unsigned int *cpu)
@@ -635,7 +625,7 @@ static int wait_for_ct_request_update(struct intel_guc_ct *ct, struct ct_request
 	return err;
 }
 
-static inline bool g2h_has_room(struct intel_guc_ct *ct, u32 g2h_len_dw)
+static inline bool g2h_has_room(struct intel_guc_ct *ct, int g2h_len_dw)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
 
@@ -646,7 +636,7 @@ static inline bool g2h_has_room(struct intel_guc_ct *ct, u32 g2h_len_dw)
 	return !g2h_len_dw || atomic_read(&ctb->space) >= g2h_len_dw;
 }
 
-static inline void g2h_reserve_space(struct intel_guc_ct *ct, u32 g2h_len_dw)
+static inline void g2h_reserve_space(struct intel_guc_ct *ct, int g2h_len_dw)
 {
 	lockdep_assert_held(&ct->ctbs.send.lock);
 
@@ -656,31 +646,26 @@ static inline void g2h_reserve_space(struct intel_guc_ct *ct, u32 g2h_len_dw)
 		atomic_sub(g2h_len_dw, &ct->ctbs.recv.space);
 }
 
-static inline void g2h_release_space(struct intel_guc_ct *ct, u32 g2h_len_dw)
+static inline void g2h_release_space(struct intel_guc_ct *ct, int g2h_len_dw)
 {
 	atomic_add(g2h_len_dw, &ct->ctbs.recv.space);
 }
 
-static inline bool h2g_has_room(struct intel_guc_ct *ct, u32 len_dw)
+static inline bool h2g_has_room(struct intel_guc_ct *ct, int len_dw)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	struct guc_ct_buffer_desc *desc = ctb->desc;
-	u32 space;
 
 	if (atomic_read(&ctb->space) >= len_dw)
 		return true;
 
 	GEM_BUG_ON(ctb->resv_space);
-	space = CIRC_SPACE(ctb->tail, READ_ONCE(desc->head), ctb->size);
-	return space >= len_dw;
+	return CIRC_SPACE(ctb->tail, READ_ONCE(desc->head), ctb->size) >= len_dw;
 }
 
-static bool has_room_nb(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw)
+static bool has_room_nb(struct intel_guc_ct *ct, int h2g_dw, int g2h_dw)
 {
-	bool h2g = h2g_has_room(ct, h2g_dw);
-	bool g2h = g2h_has_room(ct, g2h_dw);
-
-	return h2g && g2h;
+	return h2g_has_room(ct, h2g_dw) && g2h_has_room(ct, g2h_dw);
 }
 
 #define G2H_LEN_DW(f) ({ \
@@ -695,31 +680,35 @@ static int ct_send_nb(struct intel_guc_ct *ct,
 		      u32 flags)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
-	u32 g2h_len_dw = G2H_LEN_DW(flags);
+	int g2h_len_dw = G2H_LEN_DW(flags);
 	unsigned long spin_flags;
 	int ret = -EBUSY;
 
-	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
+	if (unlikely(!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw)))
 		return ret;
 
 	spin_lock_irqsave(&ctb->lock, spin_flags);
 
-	if (!has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw))
-		goto out;
+	if (has_room_nb(ct, len + GUC_CTB_HDR_LEN, g2h_len_dw)) {
+		g2h_reserve_space(ct, g2h_len_dw);
+		ret = ct_write(ct, action,
+			       FIELD_PREP(GUC_CTB_MSG_0_FORMAT, GUC_CTB_FORMAT_HXG) |
+			       FIELD_PREP(GUC_CTB_MSG_0_NUM_DWORDS, len),
+			       FIELD_PREP(GUC_HXG_MSG_0_TYPE, GUC_HXG_TYPE_FAST_REQUEST));
+		if (unlikely(ret))
+			g2h_release_space(ct, g2h_len_dw);
+	}
 
-	ret = ct_write(ct, action, len, 0, flags);
-	if (unlikely(ret))
-		goto out;
-
-	g2h_reserve_space(ct, g2h_len_dw);
-out:
 	spin_unlock_irqrestore(&ctb->lock, spin_flags);
 	intel_guc_notify(ct_to_guc(ct));
+
+	if (waitqueue_active(&ct->wq))
+		wake_up(&ct->wq);
 
 	return ret;
 }
 
-static bool has_room(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw, long timeout_ns)
+static bool has_room(struct intel_guc_ct *ct, int h2g_dw, int g2h_dw, long timeout_ns)
 {
 	unsigned int cpu;
 
@@ -780,7 +769,11 @@ resend:
 	}
 
 	g2h_reserve_space(ct, GUC_CTB_HXG_MSG_MAX_LEN);
-	err = ct_write(ct, action, len, request.fence, 0);
+	err = ct_write(ct, action,
+		       FIELD_PREP(GUC_CTB_MSG_0_FORMAT, GUC_CTB_FORMAT_HXG) |
+		       FIELD_PREP(GUC_CTB_MSG_0_NUM_DWORDS, len) |
+		       FIELD_PREP(GUC_CTB_MSG_0_FENCE, request.fence),
+		       FIELD_PREP(GUC_HXG_MSG_0_TYPE, GUC_HXG_TYPE_REQUEST));
 	spin_unlock(&ctb->lock);
 	if (err == 0) {
 		intel_guc_notify(ct_to_guc(ct));
@@ -840,10 +833,6 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 	if (ret)
 		return ret;
 
-	ret = i915_inject_probe_error(gt->i915, -EBUSY);
-	if (ret)
-		return ret;
-
 	if (unlikely(!ct->enabled))
 		return -ENODEV;
 
@@ -857,6 +846,43 @@ int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 }
 ALLOW_ERROR_INJECTION(intel_guc_ct_send, ERRNO);
 
+int intel_guc_ct_send_busy_loop(struct intel_guc_ct *ct,
+				const u32 *action,
+				u32 len,
+				u32 g2h_len_dw,
+				bool loop)
+{
+	bool not_atomic = !in_atomic() && !rcu_preempt_depth() && !irqs_disabled();
+	int err;
+
+	/*
+	 * FIXME: Have caller pass in if we are in an atomic context to avoid
+	 * using in_atomic(). It is likely safe here as we check for irqs
+	 * disabled which basically all the spin locks in the i915 do but
+	 * regardless this should be cleaned up.
+	 */
+
+	/* No sleeping with spin locks, just busy loop */
+	might_sleep_if(loop && not_atomic);
+
+retry:
+	err = intel_guc_ct_send(ct, action, len, NULL, 0, MAKE_SEND_FLAGS(g2h_len_dw));
+	if (unlikely(err == -EBUSY && loop)) {
+		if (likely(not_atomic)) {
+			wait_event(ct->wq,
+				   (intel_guc_ct_receive(ct),
+				    has_room_nb(ct,
+						len + GUC_CTB_HDR_LEN,
+						g2h_len_dw ? g2h_len_dw + GUC_CTB_HXG_MSG_MIN_LEN : 0) ||
+				    unlikely(!READ_ONCE(ct->enabled))));
+		}
+		cpu_relax();
+		goto retry;
+	}
+
+	return err;
+}
+
 static struct ct_incoming_msg *ct_alloc_msg(u32 num_dwords)
 {
 	struct ct_incoming_msg *msg;
@@ -869,20 +895,21 @@ static void ct_free_msg(struct ct_incoming_msg *msg)
 	kfree(msg);
 }
 
-static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_head *mq)
+static struct ct_incoming_msg *
+ct_read(struct intel_guc_ct *ct, struct llist_head *mq, struct ct_incoming_msg *mq_tail)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
 	struct guc_ct_buffer_desc *desc = ctb->desc;
-	struct ct_incoming_msg *mq_tail = NULL;
 	u32 head = ctb->head;
 	u32 tail = READ_ONCE(desc->tail);
 	u32 size = ctb->size;
 	u32 *cmds = ctb->cmds;
 	u32 stack[64];
-	s32 available;
 
 	if (tail == head)
 		return NULL;
+
+	WRITE_ONCE(ctb->head, tail);
 
 	if (unlikely(desc->status)) {
 		u32 status = desc->status;
@@ -901,7 +928,7 @@ static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_hea
 			goto corrupted;
 	}
 
-	GEM_BUG_ON(head > size);
+	GEM_BUG_ON(head >= size);
 
 #ifdef CPTCFG_DRM_I915_DEBUG_GUC
 	if (unlikely(head != READ_ONCE(desc->head))) {
@@ -918,13 +945,6 @@ static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_hea
 		goto corrupted;
 	}
 
-	/* beware of buffer wrap case */
-	available = tail - head;
-	if (unlikely(available < 0))
-		available += size;
-	CT_DEBUG(ct, "available %d (%u:%u:%u)\n", available, head, tail, size);
-	GEM_BUG_ON(available < 0);
-
 	do {
 		struct ct_incoming_msg *m = NULL;
 		u32 *msg = cmds + head;
@@ -932,7 +952,7 @@ static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_hea
 
 		/* message len with header */
 		len = __ct_msg_size(cmds[head]);
-		if (unlikely(len > (u32)available)) {
+		if (unlikely(len > CIRC_CNT(tail, head, size))) {
 			desc->status |= GUC_CTB_STATUS_UNDERFLOW;
 			goto corrupted;
 		}
@@ -980,16 +1000,16 @@ static struct ct_incoming_msg *ct_read(struct intel_guc_ct *ct, struct llist_hea
 		if (unlikely(m))
 			ct_free_msg(m);
 
-		head = (head + len) % size;
-		available -= len;
-	} while (available);
+		head = (head + len) & (size - 1);
+		if (head == tail) {
+			WRITE_ONCE(desc->head, head);
+			tail = READ_ONCE(desc->tail);
+			if (head == tail)
+				return mq_tail;
 
-	/* update local copies */
-	WRITE_ONCE(ctb->head, head);
-
-	/* now update descriptor */
-	WRITE_ONCE(desc->head, head);
-	return mq_tail;
+			WRITE_ONCE(ctb->head, tail);
+		}
+	} while (1);
 
 error:
 	CT_ERROR(ct, "Failed to process CT message\n");
@@ -999,9 +1019,8 @@ corrupted:
 	CT_ERROR(ct, "Corrupted descriptor head=%u tail=%u status=%#x\n",
 		 desc->head, desc->tail, desc->status);
 dead:
-	WRITE_ONCE(ctb->head, desc->tail);
-	ctb->broken = true;
 	CT_DEAD(ct, READ);
+	ctb->broken = true;
 	return mq_tail;
 }
 
@@ -1237,7 +1256,7 @@ static int ct_handle_msg(struct intel_guc_ct *ct, u32 *msg)
 
 #if IS_ENABLED(CPTCFG_DRM_I915_SELFTEST)
 	if (unlikely(ct->rcv_override && ct->rcv_override(ct, msg) != -ENOTSUPP))
-		return -EINVAL;
+		return 0;
 #endif
 
 	if (format == GUC_CTB_FORMAT_HXG)
@@ -1253,7 +1272,7 @@ static int ct_handle_msg(struct intel_guc_ct *ct, u32 *msg)
 void intel_guc_ct_receive(struct intel_guc_ct *ct)
 {
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
-	struct ct_incoming_msg *tail;
+	struct ct_incoming_msg *tail = NULL;
 	LLIST_HEAD(mq);
 
 	if (READ_ONCE(ctb->head) == READ_ONCE(ctb->desc->tail))
@@ -1261,11 +1280,13 @@ void intel_guc_ct_receive(struct intel_guc_ct *ct)
 
 	rcu_read_lock(); /* lightweight serialisation with full GT resets */
 
-	if (!spin_trylock(&ctb->lock))
-		goto out;
+	do {
+		if (!spin_trylock(&ctb->lock))
+			break;
 
-	tail = ct_read(ct, &mq);
-	spin_unlock(&ctb->lock);
+		tail = ct_read(ct, &mq, tail);
+		spin_unlock(&ctb->lock);
+	} while (READ_ONCE(ctb->head) != READ_ONCE(ctb->desc->tail));
 
 	if (tail && llist_add_batch(mq.first, &tail->link, &ct->requests.incoming))
 		i915_tbb_add_task(&ct->requests.tbb);
@@ -1276,7 +1297,6 @@ void intel_guc_ct_receive(struct intel_guc_ct *ct)
 	 * barriers.
 	 */
 
-out:
 	rcu_read_unlock();
 }
 
@@ -1305,17 +1325,10 @@ void intel_guc_ct_reset(struct intel_guc_ct *ct)
  */
 void intel_guc_ct_event_handler(struct intel_guc_ct *ct)
 {
-	struct intel_guc_ct_buffer *ctb = &ct->ctbs.recv;
-
-	if (READ_ONCE(ctb->head) == READ_ONCE(ctb->desc->tail))
-		return;
-
-	if (waitqueue_active(&ct->wq)) {
-		wake_up(&ct->wq);
-		return;
-	}
-
 	intel_guc_ct_receive(ct);
+
+	if (waitqueue_active(&ct->wq))
+		wake_up(&ct->wq);
 }
 
 /*
@@ -1479,9 +1492,10 @@ void intel_guc_ct_print_info(struct intel_guc_ct *ct,
 		 CIRC_SPACE(ct->ctbs.recv.desc->tail,
 			    ct->ctbs.recv.desc->head,
 			    ct->ctbs.recv.size) * 4);
-	i_printf(p, indent, "Requests: { incoming: %s, work: %s }\n",
+	i_printf(p, indent, "Requests: { incoming: %s, work: %s, wait: %s }\n",
 		 str_yes_no(!llist_empty(&ct->requests.incoming)),
-		 str_yes_no(!list_empty(&ct->requests.tbb.link)));
+		 str_yes_no(!list_empty(&ct->requests.tbb.link)),
+		 str_yes_no(!waitqueue_active(&ct->wq)));
 }
 
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)

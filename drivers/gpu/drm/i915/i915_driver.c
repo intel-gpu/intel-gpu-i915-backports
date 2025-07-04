@@ -691,10 +691,17 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	mutex_init(&dev_priv->pps_mutex);
 	mutex_init(&dev_priv->hdcp_comp_mutex);
 
+	init_waitqueue_head(&dev_priv->user_fence_wq);
+
 	i915_debugger_init(dev_priv);
 
 	i915_memcpy_init_early(dev_priv);
 	intel_runtime_pm_init_early(&dev_priv->runtime_pm);
+
+	intel_iaf_init_early(dev_priv);
+
+	i915_drm_clients_init(&dev_priv->clients, dev_priv);
+	i915_gem_init_early(dev_priv);
 
 	ret = i915_workqueues_init(dev_priv);
 	if (ret < 0)
@@ -718,32 +725,25 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv,
 	if (ret)
 		goto err_rootgt;
 
-	i915_drm_clients_init(&dev_priv->clients, dev_priv);
-
-	i915_gem_init_early(dev_priv);
-
 	/* This must be called before any calls to HAS_PCH_* */
 	intel_detect_pch(dev_priv);
 
 	intel_pm_setup(dev_priv);
 	ret = intel_power_domains_init(dev_priv);
 	if (ret < 0)
-		goto err_gem;
+		goto err_gt;
 	intel_irq_init(dev_priv);
 	intel_init_display_hooks(dev_priv);
 	intel_init_clock_gating_hooks(dev_priv);
 
-	intel_iaf_init_early(dev_priv);
-
 	intel_detect_preproduction_hw(dev_priv);
-	init_waitqueue_head(&dev_priv->user_fence_wq);
 
 	return 0;
 
-err_gem:
-	i915_gem_cleanup_early(dev_priv);
+err_gt:
 	intel_gt_driver_late_release_all(dev_priv);
 err_rootgt:
+	i915_gem_cleanup_early(dev_priv);
 	i915_drm_clients_fini(&dev_priv->clients);
 	i915_workqueues_cleanup(dev_priv);
 	return ret;
@@ -1532,6 +1532,8 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (IS_ERR(i915))
 		return PTR_ERR(i915);
 
+	i915->drm.driver_features &= ~DRIVER_MODESET;
+
 	ret = pci_enable_device(pdev);
 	if (ret)
 		goto out_fini;
@@ -1539,7 +1541,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/* This must be called before any calls to IS/IOV_MODE() macros */
 	ret = i915_virtualization_probe(i915);
 	if (ret)
-		goto out_fini;
+		goto out_pci_disable;
 
 	/*
 	 * GRAPHICS_VER() and DISPLAY_VER() will return 0 before this is
@@ -1631,8 +1633,7 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	i915_welcome_messages(i915);
 
-	i915->do_release = true;
-
+	i915->flags |= I915_RELEASE;
 	return 0;
 
 out_cleanup_gem:
@@ -1735,7 +1736,7 @@ static void i915_driver_release(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct intel_runtime_pm *rpm = &dev_priv->runtime_pm;
 
-	if (!dev_priv->do_release)
+	if (!(dev_priv->flags & I915_RELEASE))
 		return;
 
 	i915_sriov_release(dev_priv);
@@ -1807,7 +1808,7 @@ static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 	i915_debugger_wait_on_discovery(file_priv->client);
 	i915_drm_client_close(file_priv->client);
 
-	i915_gem_context_close(file);
+	i915_gem_context_close(file_priv);
 	i915_drm_client_cleanup(file_priv->client);
 
 	uninit_client_clos(file_priv);
@@ -2578,9 +2579,11 @@ i915_get_unmapped_area(struct file *file, unsigned long addr,
 	unsigned long align = HPAGE_PMD_SIZE;
 
 	if (flags & MAP_FIXED || len < align || add_overflows(len, align))
+		align = SZ_64K;
+	if (flags & MAP_FIXED || len < align || add_overflows(len, align))
 		align = 1;
 
-	addr = mm_get_unmapped_area(current->mm, file, addr, len + align - 1, pgoff, flags);
+	addr = mm_get_unmapped_area(current->mm, NULL, addr, round_down(len + align - 1, PAGE_SIZE), pgoff, flags);
 	if (!IS_ERR_VALUE(addr))
 		addr = round_up(addr, align);
 

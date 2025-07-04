@@ -12,13 +12,14 @@
 #include "i915_drv.h"
 #include "i915_sysfs.h"
 #include "intel_gt.h"
-#include "sysfs_gt_errors.h"
+#include "intel_gt_ccs_mode.h"
 #include "intel_gt_print.h"
 #include "intel_gt_sysfs.h"
 #include "intel_gt_sysfs_pm.h"
 #include "intel_gt_types.h"
 #include "intel_rc6.h"
 #include "intel_sysfs_mem_health.h"
+#include "sysfs_gt_errors.h"
 
 struct intel_gt *intel_gt_sysfs_get_drvdata(struct device *dev,
 					    const char *name)
@@ -332,6 +333,7 @@ void intel_gt_sysfs_register(struct intel_gt *gt)
 		gt_warn(gt, "failed to create sysfs: %s\n", "reset");
 
 	intel_gt_sysfs_pm_init(gt, dir);
+	intel_gt_sysfs_register_ccs(gt, dir);
 	intel_gt_sysfs_register_errors(gt, dir);
 	intel_gt_sysfs_register_mem(gt, dir);
 }

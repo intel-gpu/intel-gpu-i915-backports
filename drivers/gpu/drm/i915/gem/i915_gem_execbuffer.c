@@ -753,9 +753,7 @@ static int eb_reserve(struct i915_execbuffer *eb)
 
 		case 1:
 			/* Too fragmented, unbind everything and retry */
-			mutex_lock(&eb->context->vm->mutex);
 			err = i915_gem_evict_vm(eb->context->vm);
-			mutex_unlock(&eb->context->vm->mutex);
 			if (err)
 				return err;
 			break;
@@ -773,8 +771,8 @@ static int eb_select_context(struct i915_execbuffer *eb)
 	struct i915_gem_context *ctx;
 
 	ctx = i915_gem_context_lookup(eb->file->driver_priv, eb->args->rsvd1);
-	if (unlikely(!ctx))
-		return -ENOENT;
+	if (IS_ERR_OR_NULL(ctx))
+		return ctx ? PTR_ERR(ctx) : -ENOENT;
 
 	eb->gem_context = ctx;
 	if (rcu_access_pointer(ctx->vm))
@@ -2505,9 +2503,14 @@ static int eb_enter_context(struct i915_execbuffer *eb, struct intel_context *ce
 	return 0;
 }
 
-static void mark_used_engine(struct intel_context *ce)
+static int mark_used_engine(struct intel_context *ce)
 {
 	struct intel_gt *gt = ce->engine->gt;
+
+	GEM_BUG_ON(!intel_gt_pm_is_awake(gt));
+
+	if (ce->engine->mask & ~(gt->uabi_engines | VIRTUAL_ENGINES))
+		return -ENOENT; /* engine removed from userspace */
 
 	/*
 	 * When starting a new context that has pagefaults enabled, synchronize
@@ -2534,6 +2537,8 @@ static void mark_used_engine(struct intel_context *ce)
 			mutex_unlock(&blt->timeline->mutex);
 		}
 	}
+
+	return 0;
 }
 
 static int eb_enter(struct i915_execbuffer *eb)
@@ -2553,11 +2558,16 @@ static int eb_enter(struct i915_execbuffer *eb)
 	if (err)
 		goto unwind;
 
-	if (!i915_active_fence_isset(&ce->timeline->last_request))
-		mark_used_engine(ce);
+	if (!i915_active_fence_isset(&ce->timeline->last_request)) {
+		err = mark_used_engine(ce);
+		if (err)
+			goto exit;
+	}
 
 	return 0;
 
+exit:
+	eb_exit_context(ce);
 unwind:
 	for_each_child(ce, child) {
 		if (i-- == 0)

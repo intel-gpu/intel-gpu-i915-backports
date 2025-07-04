@@ -670,6 +670,8 @@ static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 	if (flags & PRELIM_I915_GEM_VM_BIND_READONLY)
 		__set_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags);
 
+	i915_active_init(&vma->active, NULL, NULL, 0);
+
 	vma = __i915_vma_get(vma);
 	GEM_BUG_ON(!vma);
 	return vma;
@@ -907,7 +909,8 @@ static int vma_bind_insert(struct i915_vma *vma, u64 pin_flags)
 			if (ret)
 				continue;
 
-			if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PREBIND)) {
+			if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PREBIND) &&
+			    i915_gem_object_has_backing_store(vma->obj)) {
 				ret = migrate_to_lmem(vma->obj, get_lmem(vma->obj, vm->gt), &ww);
 				if (ret == -EDEADLK)
 					continue;

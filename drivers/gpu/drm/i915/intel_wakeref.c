@@ -9,9 +9,30 @@
 #include "intel_runtime_pm.h"
 #include "intel_wakeref.h"
 
+static inline intel_wakeref_t rpm_get(void *rpm)
+{
+	return intel_runtime_pm_get(rpm);
+}
+
+static inline void rpm_put(void *rpm, intel_wakeref_t wakeref)
+{
+	return intel_runtime_pm_put(rpm, wakeref);
+}
+
+static inline intel_wakeref_t pm_get(const struct intel_wakeref *wf)
+{
+	return (wf->ops->pm_get ?: rpm_get)(wf->rpm);
+}
+
+static inline void pm_put(const struct intel_wakeref *wf, intel_wakeref_t wakeref)
+{
+	if (wakeref)
+		(wf->ops->pm_put ?: rpm_put)(wf->rpm, wakeref);
+}
+
 int __intel_wakeref_get_first(struct intel_wakeref *wf)
 {
-	intel_wakeref_t wakeref = (wf->ops->pm_get ?: (typeof(wf->ops->pm_get))intel_runtime_pm_get)(wf->rpm);
+	intel_wakeref_t wakeref = pm_get(wf);
 	int err = 0;
 
 	/*
@@ -40,8 +61,7 @@ int __intel_wakeref_get_first(struct intel_wakeref *wf)
 
 unlock:
 	mutex_unlock(&wf->mutex);
-	if (unlikely(wakeref))
-		(wf->ops->pm_put ?: (typeof(wf->ops->pm_put))intel_runtime_pm_put)(wf->rpm, wakeref);
+	pm_put(wf, wakeref);
 
 	return err;
 }
@@ -66,8 +86,7 @@ static void ____intel_wakeref_put_last(struct intel_wakeref *wf)
 
 unlock:
 	mutex_unlock(&wf->mutex);
-	if (wakeref)
-		(wf->ops->pm_put ?: (typeof(wf->ops->pm_put))intel_runtime_pm_put)(wf->rpm, wakeref);
+	pm_put(wf, wakeref);
 }
 
 void __intel_wakeref_put_last(struct intel_wakeref *wf, unsigned long flags)

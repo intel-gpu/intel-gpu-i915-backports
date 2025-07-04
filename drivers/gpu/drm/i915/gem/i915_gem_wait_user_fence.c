@@ -388,8 +388,8 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_SOFT)) {
 		ctx = i915_gem_context_lookup(file->driver_priv, arg->ctx_id);
-		if (!ctx)
-			return -ENOENT;
+		if (IS_ERR_OR_NULL(ctx))
+			return ctx ? PTR_ERR(ctx) : -ENOENT;
 	}
 
 	err = i915_user_extensions(u64_to_user_ptr(arg->extensions),

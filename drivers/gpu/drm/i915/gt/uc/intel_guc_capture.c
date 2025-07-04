@@ -1586,7 +1586,7 @@ void intel_guc_capture_get_matching_node(struct intel_gt *gt,
 
 void intel_guc_capture_process(struct intel_guc *guc)
 {
-	if (guc->capture)
+	if (guc->capture && !i915_is_pci_faulted(guc_to_gt(guc)->i915))
 		__guc_capture_process_output(guc);
 }
 

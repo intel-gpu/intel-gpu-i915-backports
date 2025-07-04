@@ -620,11 +620,14 @@ static int gen8_reset_engines(struct intel_gt *gt,
 			      intel_engine_mask_t engine_mask,
 			      unsigned int retry)
 {
-	struct intel_engine_cs *engine;
 	const bool reset_non_ready = retry >= 1;
+	struct intel_engine_cs *engine;
 	intel_engine_mask_t tmp;
 	unsigned long flags;
 	int ret;
+
+	if (intel_uncore_read_fw(gt->uncore, GEN6_GDRST) == -1)
+		return -EIO;
 
 	spin_lock_irqsave(&gt->uncore->lock, flags);
 
@@ -971,15 +974,17 @@ static void nop_submit_request(struct i915_request *request)
 
 static int do_reset(struct intel_gt *gt, intel_engine_mask_t stalled_mask)
 {
-	int err, i;
+	if (!i915_is_pci_faulted(gt->i915)) {
+		int err, i;
 
-	err = __intel_gt_reset(gt, ALL_ENGINES);
-	for (i = 0; err && i < RESET_MAX_RETRIES; i++) {
-		msleep(10 * (i + 1));
 		err = __intel_gt_reset(gt, ALL_ENGINES);
+		for (i = 0; err && i < RESET_MAX_RETRIES; i++) {
+			msleep(10 * (i + 1));
+			err = __intel_gt_reset(gt, ALL_ENGINES);
+		}
+		if (err)
+			return err;
 	}
-	if (err)
-		return err;
 
 	return gt_reset(gt, stalled_mask);
 }
@@ -1001,6 +1006,7 @@ static void __intel_gt_set_wedged(struct intel_gt *gt)
 	 * for which we haven't set the fence error to EIO yet).
 	 */
 	awake = reset_prepare(gt);
+	intel_gt_park_requests(gt);
 
 	/* Even if the GPU reset fails, it should still stop the engines */
 	do_reset(gt, 0);
@@ -1045,10 +1051,6 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	if (test_bit(I915_WEDGED, &gt->reset.flags))
 		return;
 
-	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
-	intel_gt_retire_requests(gt);
-	mutex_lock(&gt->reset.mutex);
-
 	if (GEM_SHOW_DEBUG() &&
 	    !is_mock_gt(gt) &&
 	    !i915_error_injected() &&
@@ -1056,9 +1058,14 @@ void intel_gt_set_wedged(struct intel_gt *gt)
 	    intel_gt_pm_is_awake(gt)) {
 		struct drm_printer p = drm_debug_printer(dev_name(gt->i915->drm.dev));
 
+		intel_gt_retire_requests(gt);
+
 		drm_printf(&p, "%s called from %pS\n", __func__, (void *)_RET_IP_);
 		i915_show(gt->i915, &p, 0);
 	}
+
+	wakeref = intel_runtime_pm_get(gt->uncore->rpm);
+	mutex_lock(&gt->reset.mutex);
 
 	__intel_gt_set_wedged(gt);
 
@@ -1140,6 +1147,7 @@ static bool __intel_gt_unset_wedged(struct intel_gt *gt)
 	 * context and do not require stop_machine().
 	 */
 	intel_engines_reset_default_submission(gt);
+	intel_gt_unpark_requests(gt);
 
 	GT_TRACE(gt, "end\n");
 

@@ -1628,11 +1628,8 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	/*
 	 * Unset exclusive_stream first, it will be checked while disabling
 	 * the metric set on gen8+.
-	 *
-	 * See i915_oa_init_reg_state() and lrc_configure_all_contexts()
 	 */
 	WRITE_ONCE(g->exclusive_stream, NULL);
-	synchronize_rcu(); /* Serialise with i915_oa_init_reg_state */
 	perf->ops.disable_metric_set(stream);
 
 	free_oa_buffer(stream);
@@ -3003,11 +3000,6 @@ err_noa_wait_alloc:
 	return ret;
 }
 
-void i915_oa_init_reg_state(const struct intel_context *ce,
-			    const struct intel_engine_cs *engine)
-{
-}
-
 /**
  * i915_perf_read - handles read() FOP for i915 perf stream FDs
  * @file: An i915 perf stream file
@@ -3608,11 +3600,11 @@ i915_perf_open_ioctl_locked(struct i915_perf *perf,
 		struct drm_i915_file_private *file_priv = file->driver_priv;
 
 		specific_ctx = i915_gem_context_lookup(file_priv, ctx_handle);
-		if (!specific_ctx) {
+		if (IS_ERR_OR_NULL(specific_ctx)) {
 			drm_dbg(&perf->i915->drm,
 				"Failed to look up context with ID %u for opening perf stream\n",
 				ctx_handle);
-			ret = -ENOENT;
+			ret = specific_ctx ? PTR_ERR(specific_ctx) : -ENOENT;
 			goto err;
 		}
 	}

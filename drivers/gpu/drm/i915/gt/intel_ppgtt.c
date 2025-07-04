@@ -25,14 +25,17 @@ struct drm_i915_gem_object *i915_vm_alloc_px(struct i915_address_space *vm)
 
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE) &&
 	    likely(vm->gt->px_cache)) {
-		struct llist_head *c;
+		struct llist_head __percpu *px_cache = vm->gt->px_cache;
+		struct llist_node *old;
 
-		preempt_disable();
-		c = this_cpu_ptr(vm->gt->px_cache);
-		first = c->first;
-		if (first)
-			c->first = first->next;
-		preempt_enable();
+		first = this_cpu_read(px_cache->first);
+		do {
+			if (first == NULL)
+				break;
+
+			old = first;
+			first = this_cpu_cmpxchg(px_cache->first, old, old->next);
+		} while (unlikely(first != old));
 	}
 
 	return first ? container_of(first, struct drm_i915_gem_object, freed) : vm->alloc_pt_dma(vm, SZ_4K);
@@ -43,9 +46,14 @@ static void i915_vm_free_px(struct i915_address_space *vm,
 {
 	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PX_CACHE) &&
 	    likely(vm->gt->px_cache && px_vaddr(px))) {
-		preempt_disable();
-		__llist_add(&px->freed, this_cpu_ptr(vm->gt->px_cache));
-		preempt_enable();
+		struct llist_head __percpu *px_cache = vm->gt->px_cache;
+		struct llist_node *first;
+
+		first = this_cpu_read(px_cache->first);
+		do {
+			px->freed.next = first;
+			first = this_cpu_cmpxchg(px_cache->first, first, &px->freed);
+		} while (unlikely(px->freed.next != first));
 	} else {
 		i915_gem_object_put(px);
 	}
@@ -69,13 +77,11 @@ static void i915_px_cache_release_cpu(void *arg)
 	struct px_cache_cpu *data = arg;
 	struct llist_head *c;
 
-	preempt_disable();
 	c = this_cpu_ptr(data->gt->px_cache);
 	if (!llist_empty(c)) {
 		__i915_px_cache_release(c);
 		data->result = true;
 	}
-	preempt_enable();
 }
 
 int i915_px_cache_init(struct intel_gt *gt)

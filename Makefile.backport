@@ -59,11 +59,11 @@ MODULES_VARIANT := pmt
 
 BUILD_CONFIG ?=
 
-BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 sp2 nodrm $(MODULES_VARIANT) disabledisplay enabledisplay i915_hwe
+BUILD_CONFIG_VARIANT := CUSTOM_KERN_1 CUSTOM_KERN_3 CUSTOM_KERN_4 sp2 nodrm $(MODULES_VARIANT) disabledisplay enabledisplay i915_hwe
 
 BUILD_CONFIG_DISTRO = ""
 
-RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_9.5 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS VANILLA_6.12LTS
+RPM_DISTRIBUTIONS := RHEL_8.10 RHEL_8.9 RHEL_8.8 RHEL_8.7 RHEL_8.6 RHEL_8.5 RHEL_8.4 CUSTOM_KERN_4 CUSTOM_KERN_3 CUSTOM_KERN_1 VANILLA_5.10LTS SLES15_SP6 SLES15_SP5 SLES15_SP4 RHEL_10.0 RHEL_9.6 RHEL_9.5 RHEL_9.4 RHEL_9.3 RHEL_9.2 RHEL_9.0 VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS VANILLA_6.12LTS
 DEB_DISTRIBUTIONS := UBUNTU_OEM_22.04 UBUNTU_OEM_20.04 UBUNTU_22.04_SERVER VANILLA_5.15LTS VANILLA_6.1LTS VANILLA_6.6LTS UBUNTU_22.04_DESKTOP UBUNTU_24.04_SERVER UBUNTU_24.04_DESKTOP VANILLA_6.12LTS
 
 RELEASE_TYPE ?= opensource
@@ -176,8 +176,14 @@ CUSTOM_KERN_3_MINOR_XX_P = ""
 CUSTOM_KERN_3_MINOR_XX_Q = ""
 
 #
-#Photon specific
+# Custom kernel 4 specific
 #
+CUSTOM_KERN_4_NAME = ""
+CUSTOM_KERN_4_VER = ""
+CUSTOM_KERN_4_MAJOR = ""
+CUSTOM_KERN_4_MINOR = ""
+
+
 PHOTON_IDENTIFIER = ""
 
 #------------------------------------------------------------------------------
@@ -238,8 +244,6 @@ UTS_RELEASE=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS
 
 BASE_KERN=$(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1)
 
-PHOTON_IDENTIFIER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | cut -d '-' -f2 | cut -d '.' -f2 | cut -c 1-2 | tr -d '~+')
-
 # KERN_VER_XYZ consist of release kernel major.minor.extended version.
 # Expected input:  #define UTS_RELEASE "5.17.15" OR #define UTS_RELEASE "5.14.21-150400.24.18-default"
 # Filtered output: 5.17.15 OR 5.14.21
@@ -252,7 +256,7 @@ KERN_VER_XY=$(shell echo $(KERN_VER_XYZ) | cut -d '.' -f-2)
 
 # Check if autoconf provides OSV information.
 # For SLES verify if CONFIG_SUSE_KERNEL is defined
-OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
+OSV_NAME = $(shell cat $(KERNEL_AUTOCONF) | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
 
 ifeq ($(OSV_NAME),SUSE)  # Check for SUSE
 
@@ -264,17 +268,17 @@ ifeq ($(OSV_NAME),SUSE)  # Check for SUSE
 # SUSE_VERSION consist of SUSE release version
 # Expected input: #define CONFIG_SUSE_VERSION 15
 # Filtered Output: 15
-SUSE_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_VERSION | cut -d " " -f3)
+SUSE_VERSION = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_SUSE_VERSION | cut -d " " -f3)
 
 # SUSE_PATCHLEVEL consist of SUSE release patchlevel
 # Expected input: #define CONFIG_SUSE_PATCHLEVEL 4
 # Filtered Output: 4
-SUSE_PATCHLEVEL = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_PATCHLEVEL | cut -d " " -f3)
+SUSE_PATCHLEVEL = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_SUSE_PATCHLEVEL | cut -d " " -f3)
 
 # SUSE_AUXRELEASE consist of SUSE auxrelease
 # Expected input: #define CONFIG_SUSE_AUXRELEASE 0
 # Filtered Output: 0
-SUSE_AUXRELEASE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
+SUSE_AUXRELEASE = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_SUSE_AUXRELEASE | cut -d " " -f3)
 
 SUSE_PRODUCT_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/suse_version.h | grep SUSE_PRODUCT_CODE | sed 's/[^0-9]//g' | tail -1 )
 export SUSE_PRODUCT_CODE
@@ -296,7 +300,7 @@ endif
 else
 
 # In case of Ubuntu use CONFIG_VERSION_SIGNATURE data and verify tag "ubuntu"
-OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+OSV_NAME = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
 
 LINUX_VERSION_CODE = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep LINUX_VERSION_CODE | sed 's/[^0-9]//g')
 export LINUX_VERSION_CODE
@@ -310,9 +314,9 @@ ifeq ($(OSV_NAME), Ubuntu)
 OSV_NAME := $(shell echo $(OSV_NAME) | tr '[:lower:]' '[:upper:]')
 
 # Get the ubuntu version information from the autoconf.h
-KERN_VER_XYZ := $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f2 | cut -d ' ' -f2 | cut -d '-' -f1)
+KERN_VER_XYZ := $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d '"' -f2 | cut -d ' ' -f2 | cut -d '-' -f1)
 
-KERN_TYPE = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d "-" -f3 | cut -d ' ' -f1 | tr -d "\"")
+KERN_TYPE = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d "-" -f3 | cut -d ' ' -f1 | tr -d "\"")
 
 # Get the osv version by comparing the kernel versions
 ifeq ($(shell expr $(BASE_KERN) \== 6.11), 1)
@@ -324,9 +328,9 @@ else ifeq ($(shell expr $(BASE_KERN) \== 5.15), 1)
 OSV_VER = 22.04
 endif
 
-EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$1}' 2> /dev/null)
+EXTENDED_VERSION_X = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$1}' 2> /dev/null)
 
-EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$2}' 2> /dev/null)
+EXTENDED_VERSION_Y = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d '-' -f 2 | awk -F '[.~+]' '{print $$2}' 2> /dev/null)
 
 BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)
 
@@ -379,12 +383,14 @@ EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | 
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d 'e' -f1 | cut -d '.' -f2)
 
 EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | cut -d '"' -f2 | cut -d '-' -f2 | cut -d 'e' -f1 | cut -d '.' -f3)
+RHEL_KERNEL_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep UTS_RELEASE | grep -o '".*"' | tr -d '"' | sed 's/\.el.*//')
 else
 EXTENDED_VERSION_X = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -f1)
 
 EXTENDED_VERSION_Y = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f2)
 
 EXTENDED_VERSION_Z = $(shell cat $(KLIB_BUILD)/include/generated/uapi/linux/version.h | grep "RHEL_RELEASE " | cut -d '"' -f2 | cut -d "." -s -f3)
+RHEL_KERNEL_VERSION = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_BUILD_SALT | grep -o '".*"' | tr -d '"' | sed 's/\.el.*//')
 endif
 
 # OSV_KV_SUPPORTED consist of rhel kernel version available in versions file.
@@ -396,12 +402,8 @@ BASE_KERNEL_NAME = $(KERN_VER_XYZ)-$(EXTENDED_VERSION_X)
 
 # BASE_KERNEL_NAME consist of kernel version
 # Output: 4.18.0-372.32.1
-ifneq ($(EXTENDED_VERSION_Y),)
-BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Y)
-endif
-
-ifneq ($(EXTENDED_VERSION_Z),)
-BASE_KERNEL_NAME := $(BASE_KERNEL_NAME).$(EXTENDED_VERSION_Z)
+ifneq ($(RHEL_KERNEL_VERSION),)
+BASE_KERNEL_NAME := $(RHEL_KERNEL_VERSION)
 endif
 
 else ifeq ($(OSV_NAME),)
@@ -409,7 +411,7 @@ else ifeq ($(OSV_NAME),)
 # Extract Vanilla/Mainline/CUSTOM Kernel Variables
 #
 ifeq ($(shell test $(BASE_KERN) = 5.10 && test "$(BUILD_CONFIG)" != CUSTOM_KERN_3 && echo 1), 1)
-ifeq ($(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep BUILD_SALT | cut -d '"' -f2 | cut -d . -f4 | cut -c 1-3), deb)
+ifeq ($(shell cat $(KERNEL_AUTOCONF) | grep BUILD_SALT | cut -d '"' -f2 | cut -d . -f4 | cut -c 1-3), deb)
 OSV_NAME = DEBIAN_5.10
 else
 OSV_NAME = VANILLA_5.10LTS
@@ -418,7 +420,7 @@ endif
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,5,15)), 1)
 OSV_NAME = VANILLA_5.15LTS
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
-else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,1)), 1)
+else ifeq ($(shell test $(BASE_KERN) = 6.1 && test "$(BUILD_CONFIG)" != CUSTOM_KERN_4 && echo 1), 1)
 OSV_NAME = VANILLA_6.1LTS
 OSV_KV_SUPPORTED = $(shell cat $(BACKPORT_DIR)/versions | grep "$(OSV_NAME)_KERNEL_VERSION" | cut -d '"' -f 2)
 else ifeq ($(shell expr $(BASE_KERN) \== $(call  get_kernel_version,6,6)), 1)
@@ -458,6 +460,16 @@ OS_DISTRIBUTION = $(CUSTOM_KERN_3_VER)
 OSV_NAME := $(shell echo $(CUSTOM_KERN_3_VER) | tr '[:lower:]' '[:upper:]')
 endif
 
+else ifeq ($(BUILD_CONFIG), CUSTOM_KERN_4)
+
+CUSTOM_KERN_4_NAME = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep $(CUSTOM_KERN_ID) | cut -d '_' -f3 | cut -c 1-3 2>/dev/null || echo 1)
+PHOTON_IDENTIFIER = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | cut -d '-' -f2 | cut -d '.' -f2 | cut -c 1-2 | tr -d '~+')
+CUSTOM_KERN_4_VER = $(BUILD_CONFIG)
+CUSTOM_KERN_4_MAJOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | cut -d '-' -f2 | cut -d '.' -f1 | tr -d '~+')
+CUSTOM_KERN_4_MINOR = $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d "\"" -f 2 | cut -d '-' -f2 | cut -d '.' -f2 | cut -c 3 | tr -d '~+')
+
+OS_DISTRIBUTION = $(CUSTOM_KERN_4_VER)
+OSV_NAME := $(shell echo $(CUSTOM_KERN_4_VER) | tr '[:lower:]' '[:upper:]')
 else
 $(error "Please provide valid BUILD_CONFIG value.")
 endif
@@ -636,6 +648,14 @@ define filechk_osv_custom_kernel_3.h
 	$(shell expr $(CUSTOM_KERN_3_MAJOR) \* 65536 + 0$(CUSTOM_KERN_3_MINOR_XX_P) \* 256 + 0$(CUSTOM_KERN_3_MINOR_YY_Q))'
 endef
 
+define filechk_osv_custom_kernel_4.h
+        echo '#define CUSTOM_KERN_4_MAJOR $(PHOTON_MAJOR)'; \
+        echo '#define CUSTOM_KERN_4_MINOR $(PHOTON_MINOR)'; \
+        echo '#define CUSTOM_KERN_4_RELEASE_VERSION(a,b) (((a) << 16) + ((b) << 8))'; \
+        echo '#define CUSTOM_KERN_4_RELEASE_CODE \
+        $(shell expr $(CUSTOM_KERN_4_MAJOR) \* 65536 + 0$(CUSTOM_KERN_4_MINOR) \* 256)'
+endef
+
 # version_h
 # Create OSV specific Macro variables
 #------------------------------------------------------------------------------
@@ -650,6 +670,8 @@ else ifeq ($(CUSTOM_KERN_1_VER), CUSTOM_KERN_1)
 	$(call filechk,osv_custom_kernel_1.h)
 else ifeq ($(CUSTOM_KERN_3_VER), CUSTOM_KERN_3)
 	$(call filechk,osv_custom_kernel_3.h)
+else ifeq ($(CUSTOM_KERN_4_VER), CUSTOM_KERN_4)
+	$(call filechk,osv_custom_kernel_4.h)
 else
 	$(call filechk,osv_version_generic.h)
 endif
@@ -758,7 +780,7 @@ ifneq ($(BUILD_CONFIG), nodrm)
 export KBUILD_ONLYDMABUFDIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drm-include i915-include scripts)
 endif
 
-DMABUF_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) Makefile* local-symbols MAINTAINERS \
+DMABUF_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
                Kconfig.sources Kconfig Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 DMABUF_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsspec
 DMABUF_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mkdmabufdkmsconf
@@ -784,7 +806,7 @@ export KBUILD_ONLYVSECDIRS := drivers/platform/x86/intel
 export KBUILD_ONLYPMTDIRS := drivers/mfd
 export KBUILD_ONLYMEIDIRS := drivers/misc drivers/watchdog
 export KBUILD_I915VFIOPCIDIRS := drivers/vfio/pci/i915
-DRM_TAR_CONTENT := $(KBUILD_DRM_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
+DRM_TAR_CONTENT := $(KBUILD_DRM_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 DRM_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdrmdkmsspec
 DRM_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mkdrmdkmsconf
@@ -812,7 +834,7 @@ endif
 export KBUILD_ONLYVSECDIRS := drivers/platform/x86/intel
 export KBUILD_ONLYPMTDIRS := drivers/mfd
 export KBUILD_ONLYMEIDIRS := drivers/misc drivers/watchdog
-I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
+I915_TAR_CONTENT := $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mki915dkmsspec
 I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mki915dkmsconf
@@ -839,7 +861,7 @@ endif
 # dkmsrpm-pkg
 # Creates Backports single package for dmabuf, drm and i915
 #------------------------------------------------------------------------------
-DMABUF_I915_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
+DMABUF_I915_TAR_CONTENT := $(KBUILD_ONLYDMABUFDIRS) $(KBUILD_ONLYI915DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
                Kconfig Kconfig.sources Kconfig.package.hacks COPYING versions defconfigs backport-include kconf compat
 DMABUF_I915_DKMS_RPM_MKSPEC := $(BACKPORT_DIR)/scripts/backport-mkdmabufi915dkmsspec
 DMABUF_I915_DKMS_RPM_MKCONF := $(BACKPORT_DIR)/scripts/backport-mkdmabufi915dkmsconf
@@ -879,14 +901,14 @@ BIN_PACKAGE_NAME := intel-dmabuf-drm-i915$(PKG_SUFFIX)
 else
 BIN_PACKAGE_NAME := intel-i915$(PKG_SUFFIX)
 endif
-TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols MAINTAINERS \
+TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) $(KBUILD_I915VFIOPCIDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
 	Kconfig* COPYING versions defconfigs backport-include kconf compat
 
 #Reads BASE_KERNEL_NAME and replace the '-' to '.'
 KER_VER_BIN = $(subst -,.,$(BASE_KERNEL_NAME))
 BIN_PKG_VERSION:= $(DMABUF_I915_PKG_VERSION).$(KER_VER_BIN)
 
-SLES_OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
+SLES_OSV_NAME = $(shell cat $(KERNEL_AUTOCONF) | grep "CONFIG_SUSE_KERNEL " | cut -d " " -f 2 | cut -d "_" -f 2)
 OS_DISTRO_NAME := RHEL
 ifeq ($(SLES_OSV_NAME), SUSE)
 OS_DISTRO_NAME := $(SLES_OSV_NAME)
@@ -904,7 +926,6 @@ ifeq ($(PHOTON_IDENTIFIER), ph)
 	cp $(BIN_PACKAGE_NAME).spec ~/rpmbuild/SPECS/
 	+rpmbuild $(RPMOPTS) --target $(ARCH) --define='_smp_mflags %{nil}' \
 		--define='_sourcedir $(PWD)' -ba $(BIN_PACKAGE_NAME).spec
-	rm -rf ~/rpmbuild/
 else
 	+rpmbuild $(RPMOPTS) --target $(ARCH) -ta $(BIN_PACKAGE_NAME)-$(BIN_PKG_VERSION)-src.tar.gz \
 		--define='_smp_mflags %{nil}' --define='_sourcedir $(PWD)'
@@ -1085,7 +1106,7 @@ ifneq ($(BUILD_CONFIG), nodrm)
 export KBUILD_DIRS := $(sort $(filter-out arch/%,$(vmlinux-alldirs)) drivers/dma-buf drivers/gpu drivers/platform drivers/pci drivers/iommu drm-include i915-include scripts)
 endif
 
-TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols MAINTAINERS \
+TAR_CONTENT := $(KBUILD_DIRS) $(KBUILD_ONLYVSECDIRS) $(KBUILD_ONLYPMTDIRS) $(KBUILD_ONLYMEIDIRS) Makefile* local-symbols local-symbols-autoconf MAINTAINERS \
 	Kconfig* COPYING versions defconfigs backport-include kconf compat
 
 I915_BIN_PKG_NAME_BASENAME=intel-i915

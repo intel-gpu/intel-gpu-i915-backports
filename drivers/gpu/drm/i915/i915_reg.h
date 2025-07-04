@@ -6048,6 +6048,35 @@ enum gt_vctr_registers {
 #define MDFI_SEVERITY(x)		((x) == HARDWARE_ERROR_FATAL ? \
 						MDFI_SEVERITY_FATAL : \
 						MDFI_SEVERITY_NONFATAL)
+
+enum mdfi_num_instances {
+	MDFI_ERR_STS_T2T = 0,
+	MDFI_ERR_STS_BD_T2C,
+	MDFI_ERR_STS_ANR_T2C,
+	MDFI_ECC_STS_T2T,
+	MDFI_ECC_STS_BD_T2C,
+	MDFI_ECC_STS_ANR_T2C,
+	MDFI_NUM_INSTANCES,
+};
+
+#define _MDFI_ERR_STS_T2T		0x2d1010
+#define _MDFI_ERR_STS_BD_T2C		0x2d2010
+#define _MDFI_ERR_STS_ANR_T2C		0x2d3010
+#define MDFI_ERR_STS_DEFAULT_VALUE	0x80000000
+
+#define MDFI_ERR_STS(x)			_MMIO(_PICK_EVEN((x),\
+					       _MDFI_ERR_STS_T2T,\
+					       _MDFI_ERR_STS_BD_T2C))
+
+#define _MDFI_ECC_STS_T2T		0x2d101c
+#define _MDFI_ECC_STS_BD_T2C		0x2d201c
+#define _MDFI_ECC_STS_ANR_T2C		0x2d301c
+#define MDFI_ECC_STS_DEFAULT_VALUE	0x0
+
+#define MDFI_ECC_STS(x)			_MMIO(_PICK_EVEN((x),\
+					       _MDFI_ECC_STS_T2T,\
+					       _MDFI_ECC_STS_BD_T2C))
+
 /* VF_CAPABILITY_REGISTER */
 #define GEN12_VF_CAP_REG		_MMIO(0x1901f8)
 #define   GEN12_VF			REG_BIT(0)

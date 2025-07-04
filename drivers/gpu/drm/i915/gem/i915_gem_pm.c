@@ -66,6 +66,9 @@ static int lmem_suspend(struct drm_i915_private *i915)
 	struct intel_memory_region *mem;
 	int id;
 
+	if (i915->flags & I915_PCI_REMOVE)
+		return 0;
+
 	if (i915->quiesce_gpu)
 		return 0;
 
@@ -147,6 +150,9 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 {
 	struct i915_gem_context *ctx;
 
+	if (i915->flags & I915_PCI_REMOVE)
+		return;
+
 	rcu_read_lock();
 	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
 		struct i915_address_space *vm;
@@ -157,10 +163,7 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 
 		vm = i915_gem_context_get_eb_vm(ctx);
 		if (vm) {
-			mutex_lock(&vm->mutex);
 			GEM_WARN_ON(i915_gem_evict_vm(vm));
-			mutex_unlock(&vm->mutex);
-
 			i915_vm_put(vm);
 		}
 

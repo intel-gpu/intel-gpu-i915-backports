@@ -61,6 +61,7 @@ void lrc_reset_regs(const struct intel_context *ce,
 
 u32 lrc_update_regs(const struct intel_context *ce,
 		    const struct intel_engine_cs *engine,
+		    struct i915_address_space *vm,
 		    u32 head);
 void lrc_update_regs_with_address(struct intel_context *ce);
 void lrc_update_offsets(struct intel_context *ce,

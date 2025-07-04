@@ -148,9 +148,14 @@ static inline void free_px_ll(struct i915_address_space *vm, struct freelist *f)
 	GEM_BUG_ON(!f->tail);
 
 	if (likely(vm->gt->px_cache)) {
-		preempt_disable();
-		__llist_add_batch(f->head.first, f->tail, this_cpu_ptr(vm->gt->px_cache));
-		preempt_enable();
+		struct llist_head __percpu *px_cache = vm->gt->px_cache;
+		struct llist_node *first;
+
+		first = this_cpu_read(px_cache->first);
+		do {
+			f->tail->next = first;
+			first = this_cpu_cmpxchg(px_cache->first, first, f->head.first);
+		} while (unlikely(first != f->tail->next));
 	} else {
 		struct drm_i915_gem_object *pt, *pn;
 

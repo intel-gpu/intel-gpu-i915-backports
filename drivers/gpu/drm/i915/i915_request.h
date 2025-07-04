@@ -724,25 +724,6 @@ static inline bool i915_request_use_scheduler(const struct i915_request *rq)
 	return !rq->engine || intel_engine_has_scheduler(rq->engine);
 }
 
-static inline struct i915_drm_client *
-i915_request_get_active_client_rcu(const struct i915_request *rq)
-{
-	const struct intel_context *ce = READ_ONCE(rq->context);
-	struct i915_drm_client *client = NULL;
-
-	if (__i915_request_is_complete(rq))
-		return NULL;
-
-	client = i915_drm_client_get_rcu(ce->client);
-
-	if (client && READ_ONCE(rq->context) != ce) {
-		i915_drm_client_put(client);
-		client = NULL;
-	}
-
-	return client;
-}
-
 bool
 i915_request_active_engine(struct i915_request *rq,
 			   struct intel_engine_cs **active);

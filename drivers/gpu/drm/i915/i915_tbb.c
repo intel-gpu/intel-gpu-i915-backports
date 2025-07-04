@@ -17,11 +17,16 @@
 #include <linux/rbtree.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
+#include <linux/sched/stat.h>
 #include <linux/slab.h>
 #include <linux/smpboot.h>
 #include <linux/tick.h>
 #include <linux/topology.h>
 #include <linux/wait.h>
+
+#include <asm/local.h>
+
+#include <uapi/linux/sched/types.h>
 
 #include <drm/drm_print.h>
 
@@ -55,8 +60,8 @@ static int node_cmp(struct rb_node *node, const struct rb_node *tree)
 
 struct i915_tbb_node *i915_tbb_node(int nid)
 {
-	if (nid == NUMA_NO_NODE)
-		nid = 0;
+	if (nid <= 0)
+		return &no_node;
 
 	return to_node(rb_find(as_ptr(nid), &nodes, node_key)) ?: &no_node;
 }
@@ -84,9 +89,21 @@ struct i915_tbb_thread {
 	struct wait_queue_entry wait;
 	struct list_head local;
 	struct i915_tbb_node *node;
+	unsigned long flags;
+#define I915_TBB_SUSPEND 0
 	int cpu;
 };
 static DEFINE_PER_CPU(struct i915_tbb_thread, i915_tbb_thread);
+
+static bool p_thread(const struct i915_tbb_thread *t)
+{
+	return t->wait.flags & WQ_FLAG_EXCLUSIVE;
+}
+
+static bool thread_is_running(const struct i915_tbb_thread *t)
+{
+	return task_is_running((struct task_struct *)t->wait.private);
+}
 
 struct destroy_work {
 	struct work_struct base;
@@ -116,14 +133,26 @@ static void stop_kthread(struct task_struct *tsk)
 	schedule_work(&wrk->base);
 }
 
+static bool tbb_ready(const struct i915_tbb_node *node)
+{
+	return !list_empty(&node->tasks);
+}
+
 static int tbb_wakefn(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
 {
 	struct i915_tbb_thread *tbb = container_of(wait, typeof(*tbb), wait);
 
+	if (test_bit(I915_TBB_SUSPEND, &tbb->flags))
+		return 0;
+
 	if (unlikely(tbb->cpu == raw_smp_processor_id()))
 		return 0;
 
-	return autoremove_wake_function(wait, mode, sync, key);
+	if (!default_wake_function(wait, mode, sync, key))
+		return 0;
+
+	local_inc(&tbb->node->stats.wakeups);
+	return 1;
 }
 
 static void __printfn_info(struct drm_printer *p, struct va_format *vaf)
@@ -146,23 +175,36 @@ static void sysrq_show(void *data)
 
 	i_printf(&p, indent, "NUMA node: %d\n", node->nid);
 
-	cpus = bitmap_zalloc(2 * ALIGN(NR_CPUS, BITS_PER_LONG), GFP_ATOMIC);
+	cpus = bitmap_zalloc(4 * ALIGN(NR_CPUS, BITS_PER_LONG), GFP_ATOMIC);
 	if (cpus) {
-		int num_secondary = 0, num_primary = 0;
+		int num_primary = 0;
+		int num_secondary = 0;
+		int num_running = 0;
+		int num_suspend = 0;
 		int cpu;
 
 		for_each_online_cpu(cpu) {
 			struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 
-			if (!t || t->node != node)
+			if (!t || t->node != node || !t->wait.private)
 				continue;
 
-			if (t->wait.flags & WQ_FLAG_EXCLUSIVE) {
+			if (p_thread(t)) {
 				__set_bit(cpu, cpus);
 				num_primary++;
 			} else {
 				__set_bit(ALIGN(NR_CPUS , BITS_PER_LONG) + cpu, cpus);
 				num_secondary++;
+			}
+
+			if (thread_is_running(t)) {
+				__set_bit(2 * ALIGN(NR_CPUS , BITS_PER_LONG) + cpu, cpus);
+				num_running++;
+			}
+
+			if (test_bit(I915_TBB_SUSPEND, &t->flags)) {
+				__set_bit(3 * ALIGN(NR_CPUS , BITS_PER_LONG) + cpu, cpus);
+				num_suspend++;
 			}
 		}
 
@@ -175,6 +217,14 @@ static void sysrq_show(void *data)
 			if (num_secondary) {
 				i_printf(&p, indent, "Secondary: %d (%*pbl)\n",
 					 num_secondary, NR_CPUS, cpus + DIV_ROUND_UP(NR_CPUS, BITS_PER_LONG));
+			}
+			if (num_running) {
+				i_printf(&p, indent, "Running: %d (%*pbl)\n",
+					 num_running, NR_CPUS, cpus + 2 * DIV_ROUND_UP(NR_CPUS, BITS_PER_LONG));
+			}
+			if (num_suspend) {
+				i_printf(&p, indent, "Suspended: %d (%*pbl)\n",
+					 num_suspend, NR_CPUS, cpus + 3 * DIV_ROUND_UP(NR_CPUS, BITS_PER_LONG));
 			}
 
 			indent -= 2;
@@ -214,59 +264,158 @@ static void sysrq_show(void *data)
 
 		indent -= 2;
 	}
+
+	if (local_read(&node->stats.tasks)) {
+		i_printf(&p, indent, "Execution:\n");
+		indent += 2;
+
+		i_printf(&p, indent, "Tasks: %ld\n", local_read(&node->stats.tasks));
+		i_printf(&p, indent, "Local: %ld\n", local_read(&node->stats.local));
+		if (local_read(&node->stats.secondary)) {
+			i_printf(&p, indent, "Primary: %ld\n", local_read(&node->stats.primary));
+			i_printf(&p, indent, "Secondary: %ld\n", local_read(&node->stats.secondary));
+		}
+		i_printf(&p, indent, "Wakeups: %ld\n", local_read(&node->stats.wakeups));
+
+		indent -= 2;
+	}
 }
 
 static void tbb_create(unsigned int cpu)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 	struct task_struct *tsk = t->wait.private;
-	struct i915_tbb_node *node, *new;
+	struct i915_tbb_node *node;
 	int nid = cpu_to_node(cpu);
 
 	t->cpu = cpu;
+	t->node = &no_node;
 	init_wait(&t->wait);
 	t->wait.func = tbb_wakefn;
 	t->wait.private = tsk;
 	if (!tick_nohz_full_cpu(cpu))
 		t->wait.flags |= WQ_FLAG_EXCLUSIVE;
 	INIT_LIST_HEAD(&t->local);
-
-	new = kmalloc_node(sizeof(*node), GFP_KERNEL, nid);
-	if (!new)
+	if (nid <= 0)
 		return;
 
-	init_waitqueue_head(&new->wq);
-	INIT_LIST_HEAD(&new->tasks);
-	kref_init(&new->ref);
-	new->nid = nid;
-
 	spin_lock(&nodes_lock);
-	node = to_node(rb_find_add(&new->rb, &nodes, node_cmp));
-	if (node) {
+	node = to_node(rb_find(as_ptr(nid), &nodes, node_key));
+	if (node)
 		kref_get(&node->ref);
-	} else {
-		node = new;
-		new = NULL;
-	}
 	spin_unlock(&nodes_lock);
+	if (!node) {
+		struct i915_tbb_node *new;
 
-	if (!new)
-		i915_sysrq_register(sysrq_show, node);
+		new = kzalloc_node(sizeof(*node), GFP_KERNEL, nid);
+		if (!new)
+			return;
+
+		init_waitqueue_head(&new->wq);
+		INIT_LIST_HEAD(&new->tasks);
+		kref_init(&new->ref);
+		new->nid = nid;
+
+		spin_lock(&nodes_lock);
+		node = to_node(rb_find_add(&new->rb, &nodes, node_cmp));
+		if (node) {
+			kref_get(&node->ref);
+		} else {
+			node = new;
+			new = NULL;
+		}
+		spin_unlock(&nodes_lock);
+
+		if (!new)
+			i915_sysrq_register(sysrq_show, node);
+
+		kfree(new);
+	}
 
 	t->node = node;
-	kfree(new);
+}
+
+static void __tbb_wait_queue(struct i915_tbb_thread *t, struct i915_tbb_node *node)
+{
+	/*
+	 * Hand-rolled prepare_to_wait to prioritise exclusive wakeups.
+	 *
+	 * Core priority is: local ioctl core, OS cores, idle NOHZ
+	 * (application) cores.
+	 *
+	 * As the OS cores are exclusive waiter placed at the head of the
+	 * waitqueue, they will consume any wake_up() first, and only if the
+	 * work exceeds the capacity of the OS cores will we then spill over to
+	 * NOHZ cores.
+	 */
+	i915_tbb_lock_irq(node);
+	if (list_empty(&t->wait.entry)) {
+		struct list_head *head;
+
+		/*
+		 * XXX Adding an element to the end of the waitqueue may break
+		 * wake_up() which uses a bookmarking system to cond_resched()
+		 * every 64 elements. We typically may have 104 cores /
+		 * elements on each node's waitqueue, and so hit the bookmark
+		 * break. When the tbb_should_run() wakes up, it will call
+		 * __tbb_wait_queue() and insert the element at the end of the
+		 * waitqueue after the bookmark, thus forcing the wake_up() to
+		 * hit the breakpoint once more, causing the wake_up() never to
+		 * finish iterating the waitqueue.
+		 *
+		 * Note that wake_up_locked() doesn't use the bookmark break
+		 * and so is not susceptible to the same infinite wake_up().
+		 */
+		head = &node->wq.head;
+		if (!p_thread(t))
+			head = head->prev;
+		list_add(&t->wait.entry, head);
+	}
+	i915_tbb_unlock_irq(node);
+}
+
+static void sched_set_idle(struct task_struct *p)
+{
+#ifdef BPM_SCHED_SETATTR_NOCHECK_NOT_PRESENT
+	sched_set_normal(p, MAX_NICE);
+#else
+	struct sched_attr attr = {
+		.sched_policy = SCHED_IDLE,
+		.sched_nice = MAX_NICE,
+	};
+
+	if (sched_setattr_nocheck(p, &attr)) {
+		attr.sched_policy = SCHED_NORMAL;
+		sched_setattr_nocheck(p, &attr);
+	}
+#endif
 }
 
 static void tbb_setup(unsigned int cpu)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 
-	if (t->wait.flags & WQ_FLAG_EXCLUSIVE)
+	__tbb_wait_queue(t, t->node);
+
+	/*
+	 * Force our tasks to run as soon as possible on OS cores, but for
+	 * nohz_full (tickless) cores we set the tbb task's priority to be the
+	 * minimum such that if there are any other proceses running on that
+	 * core they will take priority and prevent TBB from executing on that
+	 * cpu.
+	 *
+	 * OS cores are exclusive waiters at the head of the waitqueue, they
+	 * will consume any wake up if they are idle.  NOHZ cores are
+	 * not-exclusive waiters, all will be woken if there is more work than
+	 * can be absorbed by the OS cores, however due to the priority only
+	 * idle cores will be woken and take work.
+	 */
+	if (p_thread(t))
 		sched_set_fifo_low(t->wait.private);
 	else if (!use_nohz)
 		stop_kthread(t->wait.private);
 	else
-		sched_set_normal(t->wait.private, 20);
+		sched_set_idle(t->wait.private);
 }
 
 static void tbb_release(struct kref *ref)
@@ -280,40 +429,29 @@ static void tbb_release(struct kref *ref)
 static void tbb_cleanup(unsigned int cpu, bool online)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
-	struct i915_tbb_node *node;
+	struct i915_tbb_node *node = t->node;
 
-	node = t->node;
-	if (node) {
-		finish_wait(&node->wq, &t->wait);
+	finish_wait(&node->wq, &t->wait);
+	set_bit(I915_TBB_SUSPEND, &t->flags);
+	t->wait.private = NULL;
 
+	if (node != &no_node) {
 		spin_lock(&nodes_lock);
 		kref_put(&node->ref, tbb_release);
 		spin_unlock(&nodes_lock);
 
-		t->node = NULL;
+		t->node = &no_node;
 	}
-
-	t->wait.private = NULL;
 }
 
-static void __tbb_wait_queue(struct i915_tbb_thread *t, struct i915_tbb_node *node)
+static bool tbb_should_wake_up(struct i915_tbb_node *node, struct i915_tbb_thread *t)
 {
-	/* Hand-rolled prepare_to_wait to prioritise exclusive wakeups */
-	i915_tbb_lock_irq(node);
-	if (list_empty(&t->wait.entry)) {
-		struct list_head *head;
-
-		head = &node->wq.head;
-		if (!(t->wait.flags & WQ_FLAG_EXCLUSIVE))
-			head = head->prev;
-		list_add(&t->wait.entry, head);
-	}
-	i915_tbb_unlock_irq(node);
+	return tbb_ready(node) && p_thread(t);
 }
 
-static bool tbb_ready(struct i915_tbb_thread *t, struct i915_tbb_node *node)
+static bool idle_app_cpu(struct i915_tbb_thread *t)
 {
-	return !list_empty(&node->tasks);
+	return p_thread(t) || single_task_running();
 }
 
 static int tbb_should_run(unsigned int cpu)
@@ -321,16 +459,28 @@ static int tbb_should_run(unsigned int cpu)
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 	struct i915_tbb_node *node = t->node;
 
-	if (unlikely(!node))
+	set_current_state(TASK_IDLE); /* don't contribute to system load */
+	if (!tbb_ready(node))
 		return 0;
 
-	if (tbb_ready(t, node))
-		return 1;
+	if (test_bit(I915_TBB_SUSPEND, &t->flags) || need_resched()) {
+		if (p_thread(t)) {
+			/* Ask another thread to take over from our exclusive wakeup */
+			wake_up(&node->wq);
 
-	set_current_state(TASK_IDLE);
-	__tbb_wait_queue(t, node);
+			/* try again after schedule() */
+			if (!test_bit(I915_TBB_SUSPEND, &t->flags))
+				__set_current_state(TASK_RUNNING);
+		}
 
-	return tbb_ready(t, node);
+		return 0;
+	}
+
+	/* Only run remote tasks on nohz_full cores if completely idle */
+	if (list_empty(&t->local) && !idle_app_cpu(t))
+		return 0;
+
+	return 1;
 }
 
 static void tbb_dispatch(unsigned int cpu)
@@ -341,24 +491,30 @@ static void tbb_dispatch(unsigned int cpu)
 	do {
 		struct i915_tbb *task;
 
-		if (!tbb_ready(t, node))
+		if (test_bit(I915_TBB_SUSPEND, &t->flags) || !tbb_ready(node))
 			return;
 
 		i915_tbb_lock_irq(node);
-		task = list_first_entry_or_null(&t->local, struct i915_tbb, local);
-		if (!task)
-			task = list_first_entry_or_null(&node->tasks, struct i915_tbb, link);
-		if (task) {
-			list_del(&task->local);
-			list_del_init(&task->link);
-			if (!list_empty(&node->tasks))
-				wake_up_locked(&node->wq);
-			task->tsk = current;
-		}
-		i915_tbb_unlock_irq(node);
-		if (!task)
+		if (!list_empty(&t->local)) {
+			local_inc(&node->stats.local);
+			task = list_first_entry(&t->local, struct i915_tbb, local);
+		} else if (!list_empty(&node->tasks) && idle_app_cpu(t)) {
+			local_inc(p_thread(t) ? &node->stats.primary : &node->stats.secondary);
+			task = list_first_entry(&node->tasks, struct i915_tbb, link);
+		} else {
+			i915_tbb_unlock_irq(node);
 			return;
+		}
 
+		task->tsk = current;
+		list_del(&task->local);
+		list_del_init(&task->link);
+		if (tbb_should_wake_up(node, t) && !list_is_singular(&node->tasks))
+			wake_up_locked(&node->wq);
+
+		i915_tbb_unlock_irq(node);
+
+		local_inc(&node->stats.tasks);
 		task->fn(task);
 	} while (!need_resched());
 }
@@ -367,15 +523,31 @@ int i915_tbb_suspend_local(void)
 {
 	int cpu = raw_smp_processor_id();
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
+	struct i915_tbb_node *node = t->node;
 
-	i915_tbb_lock_irq(t->node);
-	if (!list_empty(&t->wait.entry))
-		list_del_init(&t->wait.entry);
-	else
-		wake_up_locked(&t->node->wq);
-	i915_tbb_unlock_irq(t->node);
+	if (unlikely(!t->wait.private))
+		return cpu;
+
+	/*
+	 * If we were an exclusive primary thread and had work assigned to us,
+	 * we need to transfer that work onto the next thread.
+	 */
+	set_bit(I915_TBB_SUSPEND, &t->flags);
+	if (thread_is_running(t) && tbb_should_wake_up(node, t))
+		wake_up(&node->wq);
 
 	return cpu;
+}
+
+static bool wake_up_thread(struct i915_tbb_thread *t)
+{
+	if (!wake_up_process(t->wait.private))
+		return false;
+
+	if (t->cpu == task_cpu(current))
+		set_tsk_need_resched(current);
+
+	return true;
 }
 
 void i915_tbb_resume_local(int cpu)
@@ -383,14 +555,13 @@ void i915_tbb_resume_local(int cpu)
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
 	struct i915_tbb_node *node = t->node;
 
-	if (!list_empty(&t->local)) {
-		wake_up_process(t->wait.private);
+	if (unlikely(!t->wait.private))
 		return;
-	}
 
-	__tbb_wait_queue(t, node);
-	if (!list_empty(&node->tasks))
-		wake_up(&node->wq);
+	/* On returning to the pool, see if there is work we should be doing */
+	clear_bit(I915_TBB_SUSPEND, &t->flags);
+	if (!list_empty(&t->local) || tbb_should_wake_up(node, t))
+		wake_up_thread(t);
 }
 
 static struct smp_hotplug_thread threads = {
@@ -407,7 +578,7 @@ int i915_tbb_init(void)
 {
 	init_waitqueue_head(&no_node.wq);
 	INIT_LIST_HEAD(&no_node.tasks);
-	no_node.nid = NUMA_NO_NODE;
+	i915_sysrq_register(sysrq_show, &no_node);
 
 	smpboot_register_percpu_thread(&threads);
 	return 0;
@@ -420,6 +591,7 @@ void i915_tbb_exit(void)
 
 	rbtree_postorder_for_each_entry_safe(node, n, &nodes, rb)
 		i915_sysrq_unregister(sysrq_show, node);
+	i915_sysrq_unregister(sysrq_show, &no_node);
 
 	for_each_online_cpu(cpu) {
 		struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, cpu);
@@ -448,13 +620,7 @@ static void __i915_tbb_add_task(struct i915_tbb *task, struct i915_tbb_thread *t
 	list_add_tail(&task->link, &node->tasks);
 	list_add_tail(&task->local, &t->local);
 
-	if (!list_empty(&t->wait.entry)) {
-		list_del_init(&t->wait.entry);
-		wake_up_process(t->wait.private);
-		return;
-	}
-
-	if (!list_is_first(&task->local, &t->local))
+	if (test_bit(I915_TBB_SUSPEND, &t->flags) || !wake_up_thread(t))
 		wake_up_locked(&node->wq);
 }
 

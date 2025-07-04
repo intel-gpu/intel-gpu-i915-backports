@@ -258,19 +258,19 @@ static int __engine_park(struct intel_wakeref *wf)
 	return 0;
 }
 
-static intel_wakeref_t __engine_pm_get(void *rpm)
+static inline intel_wakeref_t gt_pm_get(void *rpm)
 {
 	return intel_gt_pm_get(rpm);
 }
 
-static void __engine_pm_put(void *rpm, intel_wakeref_t wf)
+static inline void gt_pm_put(void *rpm, intel_wakeref_t wakeref)
 {
-	intel_gt_pm_put_async(rpm, wf);
+	return intel_gt_pm_put_async(rpm, wakeref);
 }
 
 static const struct intel_wakeref_ops wf_ops = {
-	.pm_get = __engine_pm_get,
-	.pm_put = __engine_pm_put,
+	.pm_get = gt_pm_get,
+	.pm_put = gt_pm_put,
 
 	.get = __engine_unpark,
 	.put = __engine_park,

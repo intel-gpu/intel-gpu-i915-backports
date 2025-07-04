@@ -134,24 +134,6 @@ static u32 pci_peek_mmio_read32(struct pci_dev *pdev, i915_reg_t reg)
 	return value;
 }
 
-static bool gen12_pci_capability_is_vf(struct pci_dev *pdev)
-{
-	u32 value = pci_peek_mmio_read32(pdev, GEN12_VF_CAP_REG);
-
-	/*
-	 * Bugs in PCI programming (or failing hardware) can occasionally cause
-	 * lost access to the MMIO BAR.  When this happens, register reads will
-	 * come back with 0xFFFFFFFF for every register, including VF_CAP, and
-	 * then we may wrongly claim that we are running on the VF device.
-	 * Since VF_CAP has only one bit valid, make sure no other bits are set.
-	 */
-	if (WARN(value & ~GEN12_VF, "MMIO BAR malfunction, %#x returned %#x\n",
-		 i915_mmio_reg_offset(GEN12_VF_CAP_REG), value))
-		return false;
-
-	return value & GEN12_VF;
-}
-
 #ifdef CONFIG_PCI_IOV
 
 static bool works_with_iaf(struct drm_i915_private *i915)
@@ -285,11 +267,27 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 {
 	struct device *dev = i915->drm.dev;
 	struct pci_dev *pdev = to_pci_dev(dev);
+	u32 value;
 
 	if (!HAS_SRIOV(i915))
 		return I915_IOV_MODE_NONE;
 
-	if (gen12_pci_capability_is_vf(pdev))
+	/*
+	 * Bugs in PCI programming (or failing hardware) can occasionally cause
+	 * lost access to the MMIO BAR.  When this happens, register reads will
+	 * come back with 0xFFFFFFFF for every register, including VF_CAP, and
+	 * then we may wrongly claim that we are running on the VF device.
+	 * Since VF_CAP has only one bit valid, make sure no other bits are set.
+	 */
+	value = pci_peek_mmio_read32(pdev, GEN12_VF_CAP_REG);
+	if (value & ~GEN12_VF) {
+		dev_err(&pdev->dev,
+			"MMIO BAR malfunction, %#x returned %#x\n",
+			i915_mmio_reg_offset(GEN12_VF_CAP_REG), value);
+		return I915_IOV_MODE_ERR;
+	}
+
+	if (value & GEN12_VF)
 		return I915_IOV_MODE_SRIOV_VF;
 
 #ifdef CONFIG_PCI_IOV
@@ -304,9 +302,7 @@ enum i915_iov_mode i915_sriov_probe(struct drm_i915_private *i915)
 			return I915_IOV_MODE_ERR;
 		}
 
-		drm_dbg(&i915->drm, "PF: continuing as native\n");
 		pf_reduce_totalvfs(i915, 0);
-		return I915_IOV_MODE_NONE;
 	}
 #endif
 

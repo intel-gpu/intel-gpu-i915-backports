@@ -117,6 +117,8 @@ static inline bool intel_guc_ct_enabled(const struct intel_guc_ct *ct)
 })
 int intel_guc_ct_send(struct intel_guc_ct *ct, const u32 *action, u32 len,
 		      u32 *response_buf, u32 response_buf_size, u32 flags);
+int intel_guc_ct_send_busy_loop(struct intel_guc_ct *ct, const u32 *action, u32 len,
+				u32 g2h_len_dw, bool loop);
 void intel_guc_ct_receive(struct intel_guc_ct *ct);
 void intel_guc_ct_event_handler(struct intel_guc_ct *ct);
 

@@ -564,15 +564,16 @@ static inline u64 debugger_get_seqno(struct i915_debugger *debugger)
 
 struct debugger_fence {
 	struct dma_fence_work base;
-	int vma_count;
+	struct i915_vma *vma;
+	atomic_t count;
 };
 
 static void handle_vm_bind_ack(struct i915_debug_ack *ack)
 {
 	struct debugger_fence *f = ack->fence;
 
-	while (f->vma_count--)
-		i915_sw_fence_complete(&f->base.rq.submit);
+	i915_sw_fence_complete(&f->base.rq.submit);
+	__i915_vma_put(f->vma);
 }
 
 static void
@@ -680,12 +681,9 @@ static void debugger_resource_free(struct i915_debugger *debugger,
 	}
 
 	switch (res->type) {
-	case I915_DEBUGGER_RES_CLIENT: {
-		struct i915_drm_client *client = res->ptr;
-
-		i915_drm_client_put(client);
+	case I915_DEBUGGER_RES_CLIENT:
+		i915_drm_client_put(res->ptr);
 		break;
-	}
 	case I915_DEBUGGER_RES_UUID:
 		i915_uuid_put(res->ptr);
 		break;
@@ -832,8 +830,11 @@ vma_prepare_ack(struct debugger_fence *f, struct i915_vma *vma)
 		dma_fence_put(prev);
 	}
 
+	if (atomic_fetch_inc(&f->count))
+		return;
+
 	i915_sw_fence_await(&f->base.rq.submit);
-	f->vma_count++;
+	f->vma = __i915_vma_get(vma);
 }
 
 static inline int ack_lookup_cmp(const void *key, const struct rb_node *node)
@@ -1646,7 +1647,7 @@ static void gen12_flush_l3(struct drm_i915_private *i915)
 	for_each_gt(gt, i915, id) {
 		with_intel_gt_pm_if_awake(gt, wakeref) {
 			ret = intel_gt_invalidate_l3_mmio(gt);
-			if (ret)
+			if (ret && ret != -EIO)
 				drm_notice_once(&gt->i915->drm,
 						"debugger: gt%d l3 invalidation fail: %s(%d). "
 						"Surfaces need to be declared uncached to avoid coherency issues!\n",
@@ -5894,6 +5895,9 @@ bool i915_debugger_active_on_context(struct intel_context *context)
 	struct i915_drm_client *client;
 	bool active;
 
+	if (!context->client)
+		return false;
+
 	rcu_read_lock();
 	client = i915_drm_client_get_rcu(context->client);
 	rcu_read_unlock();
@@ -6000,6 +6004,9 @@ int i915_debugger_disallow(struct drm_i915_private *i915)
 
 void i915_debugger_gpu_flush_engines(struct intel_gt *gt, u32 mask)
 {
+	if (i915_is_pci_faulted(gt->i915))
+		return;
+
 	gpu_flush_engines(gt->i915, mask);
 	gpu_invalidate_l3(gt->i915);
 }

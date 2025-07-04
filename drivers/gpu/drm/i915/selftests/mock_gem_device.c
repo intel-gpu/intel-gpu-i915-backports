@@ -59,7 +59,7 @@ static void mock_device_release(struct drm_device *dev)
 {
 	struct drm_i915_private *i915 = to_i915(dev);
 
-	if (!i915->do_release)
+	if (!(i915->flags & I915_RELEASE))
 		goto out;
 
 	i915_debugger_fini(i915);
@@ -208,6 +208,7 @@ struct drm_i915_private *mock_gem_device(void)
 	i915->wq = alloc_workqueue("%s", WQ_UNBOUND, 0, "mock");
 	if (!i915->wq)
 		goto err_uncore;
+	to_gt(i915)->wq = i915->wq;
 
 	i915->sched = i915_sched_engine_create_cpu(3);
 	if (!i915->sched)
@@ -237,7 +238,7 @@ struct drm_i915_private *mock_gem_device(void)
 	__clear_bit(I915_WEDGED, &to_gt(i915)->reset.flags);
 	intel_engines_driver_register(i915);
 
-	i915->do_release = true;
+	i915->flags |= I915_RELEASE;
 	ida_init(&i915->selftest.mock_region_instances);
 
 	i915_debugger_init(i915);

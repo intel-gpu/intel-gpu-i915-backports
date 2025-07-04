@@ -13,6 +13,7 @@
 #include "intel_execlists_submission.h"
 #include "intel_gt.h"
 #include "intel_gt_pm.h"
+#include "intel_gt_print.h"
 #include "intel_gt_requests.h"
 #include "intel_timeline.h"
 
@@ -165,9 +166,6 @@ bool intel_gt_retire_requests_timeout(struct intel_gt *gt, long *remain)
 	struct intel_timeline *tl;
 	bool idle = true;
 
-	if (gt->i915->quiesce_gpu)
-		return true;
-
 	if (remain)
 		flush_submission(gt); /* kick the ksoftirqd tasklets */
 
@@ -211,8 +209,16 @@ static void retire_work_handler(struct work_struct *work)
 		container_of(work, typeof(*gt), requests.retire_work.work);
 
 	schedule_delayed_work(&gt->requests.retire_work,
-			      round_jiffies_up_relative(HZ));
+			      round_jiffies_up_relative(2 * HZ));
 	intel_gt_retire_requests(gt);
+
+	if (!list_empty(&gt->timelines.active_list) &&
+	    intel_uncore_read(gt->uncore, SOFTWARE_FLAGS_SPR33) == -1 &&
+	    !i915_is_pci_faulted(gt->i915)) {
+		gt_err(gt, "mmio health check failed, aborting\n");
+		intel_gt_set_wedged(gt);
+		add_taint_for_CI(gt->i915, TAINT_WARN);
+	}
 }
 
 void intel_gt_init_requests(struct intel_gt *gt)

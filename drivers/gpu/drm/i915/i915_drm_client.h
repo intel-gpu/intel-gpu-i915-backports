@@ -32,7 +32,7 @@ struct i915_drm_clients {
 };
 
 struct i915_engine_busy_attribute {
-	struct device_attribute attr;
+	struct kobj_attribute attr;
 	struct i915_drm_client *client;
 	unsigned int engine_class;
 };
@@ -70,12 +70,12 @@ struct i915_drm_client {
 	struct kobject *busy_root;
 	struct kobject *devm_stats_root;
 	struct {
-		struct device_attribute pid;
-		struct device_attribute name;
-		struct device_attribute created_devm_bytes;
-		struct device_attribute resident_created_devm_bytes;
-		struct device_attribute imported_devm_bytes;
-		struct device_attribute resident_imported_devm_bytes;
+		struct kobj_attribute pid;
+		struct kobj_attribute name;
+		struct kobj_attribute created_devm_bytes;
+		struct kobj_attribute resident_created_devm_bytes;
+		struct kobj_attribute imported_devm_bytes;
+		struct kobj_attribute resident_imported_devm_bytes;
 		struct i915_engine_busy_attribute busy[MAX_ENGINE_CLASS + 1];
 	} attr;
 
@@ -121,7 +121,8 @@ void __i915_drm_client_free(struct kref *kref);
 
 static inline void i915_drm_client_put(struct i915_drm_client *client)
 {
-	kref_put(&client->kref, __i915_drm_client_free);
+	if (client)
+		kref_put(&client->kref, __i915_drm_client_free);
 }
 
 void i915_drm_client_close(struct i915_drm_client *client);

@@ -74,8 +74,7 @@ int i915_vm_lock_objects(const struct i915_address_space *vm,
 
 void i915_address_space_fini(struct i915_address_space *vm)
 {
-	if (vm->client)
-		i915_drm_client_put(vm->client);
+	i915_drm_client_put(vm->client);
 
 	i915_active_fini(&vm->active);
 	i915_active_fence_fini(&vm->user_fence);

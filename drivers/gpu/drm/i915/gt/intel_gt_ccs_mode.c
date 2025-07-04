@@ -7,32 +7,61 @@
 #include "intel_gt_ccs_mode.h"
 #include "intel_gt_debugfs.h"
 #include "intel_gt_mcr.h"
+#include "intel_gt_pm.h"
+#include "intel_gt_print.h"
 #include "intel_gt_regs.h"
 #include "intel_gt_requests.h"
+#include "intel_gt_sysfs.h"
+#include "intel_gt_sysfs_pm.h"
 
 #define PVC_NUM_CSLICES_PER_TILE 4
 
 #define ALL_CCS(gt) (CCS_MASK(gt) << CCS0)
 #define ONE_CCS(gt) FIRST_ENGINE_MASK((gt), CCS)
 
+static bool needs_fixed_ccs_mode(struct intel_gt *gt)
+{
+	if (!(IS_PONTEVECCHIO(gt->i915) || IS_DG2(gt->i915)))
+		return false;
+
+	/*
+	 * Only the PF knows the entire system state and can deduce the
+	 * appropriate engine:slice mapping. However, the PF doesn't know
+	 * the user's requested configuration and so cannot allocate
+	 * precise mappings ahead of time. Instead we opt to apply a static
+	 * mapping between single CCS engine and all compute slices -- we never
+	 * need to reconfigure.
+	 */
+	if (IS_SRIOV(gt->i915))
+		return false;
+
+	return true;
+}
+
 void intel_gt_init_ccs_mode(struct intel_gt *gt)
 {
 	mutex_init(&gt->ccs.mutex);
+	gt->ccs.fixed = needs_fixed_ccs_mode(gt);
+	gt->ccs.dynamic = gt->ccs.fixed;
 }
 
 __maybe_unused static bool assert_compute_idle(struct intel_gt *gt)
 {
+	i915_mcr_reg_t instdone;
 	int subslice;
 	int slice;
 	int iter;
+
+	instdone = XEHPC_ROW_INSTDONE;
+	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 60))
+		instdone = GEN8_ROW_INSTDONE;
 
 	/*
 	 * Check IC done on all DSS. IC done indicates EU is
 	 * done executing WL.
 	 */
 	for_each_ss_steering(iter, gt, slice, subslice) {
-		if ((intel_gt_mcr_read(gt, XEHPC_ROW_INSTDONE,
-				       slice, subslice) & XEHPC_IC_DONE) == 0)
+		if ((intel_gt_mcr_read(gt, instdone, slice, subslice) & XEHPC_IC_DONE) == 0)
 			return false;
 	}
 
@@ -48,7 +77,7 @@ static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t c
 	int width, cslice;
 
 	lockdep_assert_held(&gt->ccs.mutex);
-	GEM_BUG_ON(GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 60));
+	GEM_BUG_ON(GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50));
 	GEM_BUG_ON(!config);
 
 	/* Ignore uneven numbers of slices/engines: bad config */
@@ -87,8 +116,10 @@ static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t c
 	for (width = num_slices / num_engines, cslice = 0; width--;) {
 		for_each_engine_masked(engine, gt, config, tmp) {
 			/* If a slice is fused off, leave disabled */
-			while ((CCS_MASK(gt) & BIT(cslice)) == 0)
+			while ((CCS_MASK(gt) & BIT(cslice)) == 0) {
+				mode |= XEHP_CCS_MODE_CSLICE(cslice, 0xf);
 				cslice++;
+			}
 
 			mode &= ~XEHP_CCS_MODE_CSLICE(cslice, XEHP_CCS_MODE_CSLICE_MASK);
 			mode |= XEHP_CCS_MODE_CSLICE(cslice, engine->instance);
@@ -129,7 +160,7 @@ void intel_gt_apply_ccs_mode(struct intel_gt *gt)
 	 * SRIOV PF will always use ccs-1 mode from init/reset onwards
 	 * as we have asked GUC to restore CCS_MODE for engine resets
 	 */
-	if (IS_SRIOV_PF(gt->i915) && IS_PONTEVECCHIO(gt->i915))
+	if (IS_SRIOV_PF(gt->i915))
 		config = ONE_CCS(gt);
 
 	gt->ccs.mode = -1;
@@ -137,25 +168,6 @@ void intel_gt_apply_ccs_mode(struct intel_gt *gt)
 		__intel_gt_apply_ccs_mode(gt, config);
 
 	mutex_unlock(&gt->ccs.mutex);
-}
-
-static bool needs_ccs_mode(struct intel_gt *gt)
-{
-	if (!IS_PONTEVECCHIO(gt->i915))
-		return false;
-
-	/*
-	 * Only the PF knows the entire system state and can deduce the
-	 * appropriate engine:slice mapping. However, the PF doesn't know
-	 * the user's requested configuration and so cannot allocate
-	 * precise mappings ahead of time. Instead we opt to apply a static
-	 * mapping between single CCS engine and all compute slices -- we never
-	 * need to reconfigure.
-	 */
-	if (IS_SRIOV(gt->i915))
-		return false;
-
-	return true;
 }
 
 int intel_gt_configure_ccs_mode(struct intel_gt *gt,
@@ -191,10 +203,11 @@ int intel_gt_configure_ccs_mode(struct intel_gt *gt,
 	if (likely((READ_ONCE(gt->ccs.active) & config) == config))
 		return 0;
 
-	if ((engine->mask & config) == 0 || !needs_ccs_mode(gt))
+	if ((engine->mask & config) == 0 || !gt->ccs.dynamic)
 		return 0;
 
-	intel_gt_retire_requests(gt); /* clear ccs_active if possible */
+	if (gt->ccs.active) /* clear ccs_active if possible */
+		intel_gt_retire_requests(gt);
 
 	mutex_lock(&gt->ccs.mutex);
 	if (config & ~gt->ccs.config) {
@@ -259,7 +272,7 @@ void intel_gt_park_ccs_mode(struct intel_gt *gt, struct intel_engine_cs *engine)
 	mutex_unlock(&gt->ccs.mutex);
 }
 
-static int ccs_mode_show(struct seq_file *m, void *data)
+static int ccs_debug_show(struct seq_file *m, void *data)
 {
 	struct intel_gt *gt = m->private;
 	intel_engine_mask_t config, active, tmp;
@@ -285,6 +298,8 @@ static int ccs_mode_show(struct seq_file *m, void *data)
 		seq_printf(m, "strategy: fixed\n");
 	else
 		seq_printf(m, "strategy: dynamic\n");
+
+	seq_printf(m, "user: %s\n", str_yes_no(!gt->ccs.dynamic));
 
 	prefix = "";
 	seq_printf(m, "config: %08x [", config);
@@ -336,15 +351,140 @@ static int ccs_mode_show(struct seq_file *m, void *data)
 
 	return 0;
 }
-DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(ccs_mode);
+DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(ccs_debug);
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t num_cslices_show(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				char *buf)
+#else
+static ssize_t num_cslices_show(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+#endif
+{
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	struct intel_gt *gt = kobj_to_gt(kobj);
+#else
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+#endif
+
+	return sysfs_emit(buf, "%u\n", hweight32(CCS_MASK(gt)));
+}
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static KOBJ_ATTR_RO(num_cslices);
+#else
+static DEVICE_ATTR_RO(num_cslices);
+#endif
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t ccs_mode_show(struct kobject *kobj,
+			     struct kobj_attribute *attr,
+			     char *buf)
+#else
+static ssize_t ccs_mode_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+#endif
+{
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	struct intel_gt *gt = kobj_to_gt(kobj);
+#else
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+#endif
+	return sysfs_emit(buf, "%u\n", gt->ccs.width);
+}
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t ccs_mode_store(struct kobject *kobj,
+			      struct kobj_attribute *attr,
+			      const char *buf,
+			      size_t count)
+#else
+static ssize_t ccs_mode_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf,
+			      size_t count)
+#endif
+{
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	struct intel_gt *gt = kobj_to_gt(kobj);
+#else
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+#endif
+	int num_cslices = hweight32(CCS_MASK(gt));
+	ssize_t ret;
+	u32 val = 0;
+
+	if (kstrtou32(buf, 0, &val))
+		/* fallback to interpreting the input as binary */
+		memcpy(&val, buf, min(count, sizeof(val)));
+
+	if (val == gt->ccs.width)
+		return count;
+
+	if (val > num_cslices || (val && num_cslices % val))
+		return -EINVAL;
+
+	if (intel_gt_wait_for_idle(gt, 5 * HZ))
+		return -EBUSY;
+
+	if (intel_gt_pm_wait_for_idle(gt, HZ))
+		return -EBUSY;
+
+	ret = -EBUSY;
+	mutex_lock(&gt->wakeref.mutex);
+	if (!intel_gt_pm_is_awake(gt)) {
+		mutex_lock(&gt->ccs.mutex);
+		GEM_BUG_ON(gt->ccs.active);
+		gt->ccs.dynamic = !val;
+		gt->ccs.width = val;
+		if (val) {
+			val = GENMASK(val - 1, 0) << CCS0;
+			gt->uabi_engines &= ~ALL_CCS(gt);
+			gt->uabi_engines |= val;
+			__intel_gt_apply_ccs_mode(gt, val);
+		} else {
+			gt->uabi_engines |= ALL_CCS(gt);
+			gt->ccs.config = 0;
+		}
+		mutex_unlock(&gt->ccs.mutex);
+
+		ret = count;
+	}
+	mutex_unlock(&gt->wakeref.mutex);
+
+	return ret;
+}
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static KOBJ_ATTR_RW(ccs_mode);
+#else
+static DEVICE_ATTR_RW(ccs_mode);
+#endif
+
+void intel_gt_sysfs_register_ccs(struct intel_gt *gt, struct kobject *parent)
+{
+	if (sysfs_create_file(parent, &dev_attr_num_cslices.attr))
+		goto err;
+
+	if (!gt->ccs.fixed)
+		return;
+
+	if (sysfs_create_file(parent, &dev_attr_ccs_mode.attr))
+		goto err;
+
+	return;
+err:
+	gt_warn(gt, "Failed to create sysfs entries for fixed ccs_mode\n");
+}
 
 void intel_gt_debugfs_register_ccs_mode(struct intel_gt *gt, struct dentry *root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
-		{ "ccs_mode", &ccs_mode_fops, NULL },
+		{ "ccs_mode", &ccs_debug_fops, NULL },
 	};
 
-	if (needs_ccs_mode(gt))
+	if (gt->ccs.fixed)
 		intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);
 }
 

@@ -2490,6 +2490,9 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 	if (i915_gem_object_is_purgeable(obj))
 		return false;
 
+	if (to_i915(obj->base.dev)->flags & I915_PCI_REMOVE)
+		return false;
+
 	return !freed(obj);
 }
 
@@ -3657,10 +3660,14 @@ copy_blt(struct intel_context *ce,
 
 				offset += __lmem_offset;
 				sz -= __lmem_offset;
+				__lmem_offset = 0;
 			}
 
+			sz = min(sz, length);
+			length -= sz;
+
 			do {
-				u32 len = min_t(u64, min(sz, length), step);
+				u32 len = min_t(u64, sz, step);
 				int dummy;
 
 				GEM_BUG_ON(len < PAGE_SIZE);
@@ -3725,10 +3732,6 @@ copy_blt(struct intel_context *ce,
 					total = 0;
 				}
 
-				length -= len;
-				if (!length)
-					goto done;
-
 				offset += len;
 				sz -= len;
 
@@ -3736,9 +3739,11 @@ copy_blt(struct intel_context *ce,
 				w4K.pte_window += len;
 				w4K.pd_offset += len >> PAGE_SHIFT << 3;
 			} while (sz);
+
+			if (!length)
+				break;
 		}
 	}
-done:
 
 	if (!use_pvc_memcpy && flags & I915_GEM_OBJECT_COPY_LMEM_COMPRESSED) {
 		struct lmem_iter it_lmem = __lmem_iter(mm, &lmem->mm.blocks);
@@ -3753,6 +3758,7 @@ done:
 				goto skip;
 		}
 		it_lmem.curr = lmem_offset;
+		lmem_offset = 0;
 
 		reset_window(&w_ccs, &w->pde64);
 

@@ -30,7 +30,7 @@ intel_engine_lookup_user(struct drm_i915_private *i915, u8 class, u8 instance)
 		else if (instance < it->uabi_instance)
 			p = p->rb_left;
 		else
-			return it;
+			return it->gt->uabi_engines & it->mask ? it : NULL;
 	}
 
 	return NULL;
@@ -240,12 +240,13 @@ void intel_engines_driver_register(struct drm_i915_private *i915)
 		rb_link_node(&engine->uabi_node, prev, p);
 		rb_insert_color(&engine->uabi_node, &i915->uabi_engines);
 
+		/* Fix up the mapping to match default execbuf::user_map[] */
+		add_legacy_ring(&ring[engine->gt->info.id], engine);
+		engine->gt->uabi_engines |= engine->mask;
+
 		GEM_BUG_ON(intel_engine_lookup_user(i915,
 						    engine->uabi_class,
 						    engine->uabi_instance) != engine);
-
-		/* Fix up the mapping to match default execbuf::user_map[] */
-		add_legacy_ring(&ring[engine->gt->info.id], engine);
 
 		prev = &engine->uabi_node;
 		p = &prev->rb_right;

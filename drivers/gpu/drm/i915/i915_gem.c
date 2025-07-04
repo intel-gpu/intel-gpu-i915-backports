@@ -805,15 +805,10 @@ int i915_gem_open(struct drm_i915_private *i915, struct drm_file *file)
 	file_priv->bsd_engine = -1;
 	file_priv->hang_timestamp = jiffies;
 
-	ret = i915_gem_context_open(i915, file);
-	if (ret)
-		goto err_context;
-
+	i915_gem_context_open(file_priv);
 	init_client_clos(file_priv);
 	return 0;
 
-err_context:
-	i915_drm_client_close(client);
 err_client:
 	kfree(file_priv);
 err_alloc:

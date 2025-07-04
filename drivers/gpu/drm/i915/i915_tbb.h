@@ -12,11 +12,20 @@
 #include <linux/topology.h>
 #include <linux/wait.h>
 
+#include <asm/local.h>
+
 struct i915_tbb_node {
 	struct rb_node rb;
 	struct list_head tasks;
 	wait_queue_head_t wq;
 	struct kref ref;
+	struct {
+		local_t tasks;
+		local_t local;
+		local_t primary;
+		local_t secondary;
+		local_t wakeups;
+	} stats;
 	int nid;
 };
 

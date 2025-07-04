@@ -16,9 +16,9 @@ KLIB := /lib/modules/$(shell uname -r)/
 KMODPATH_ARG :=
 endif
 KLIB_BUILD ?= $(KLIB)/build/
-KERNEL_CONFIG := $(KLIB_BUILD)/.config
+export KERNEL_AUTOCONF := $(KLIB_BUILD)/include/generated/autoconf.h
 KERNEL_MAKEFILE := $(KLIB_BUILD)/Makefile
-CONFIG_MD5 := $(shell md5sum $(KERNEL_CONFIG) 2>/dev/null | sed 's/\s.*//')
+AUTOCONF_MD5 := $(shell md5sum $(KERNEL_AUTOCONF) 2>/dev/null | sed 's/\s.*//')
 KBUILD_MODPOST_WARN := 1
 export CUSTOM_KERN_VER := $(shell cat $(KLIB_BUILD)/include/generated/utsrelease.h | grep "UTS_RELEASE" | cut -d '"' -f2 | cut -d '.' -f1-2 | cut -d '-' -f1 | tr -d '+')
 
@@ -58,7 +58,7 @@ endif
 #
 export DISABLE_DISPLAY=1
 
-OSV_NAME = $(shell cat $(KLIB_BUILD)/include/generated/autoconf.h | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
+OSV_NAME = $(shell cat $(KERNEL_AUTOCONF) | grep CONFIG_VERSION_SIGNATURE | cut -d ' ' -f 3 | cut -d "\"" -f 2)
 ifeq ($(OSV_NAME), Ubuntu)
 DISABLE_DISPLAY=0
 endif
@@ -78,7 +78,7 @@ default:
 mrproper:
 	@test -f .config && $(MAKE) clean || true
 	@rm -f .config
-	@rm -f .kernel_config_md5 Kconfig.versions Kconfig.kernel
+	@rm -f .kernel_autoconf_md5 Kconfig.versions Kconfig.kernel
 	@rm -f backport-include/backport/autoconf.h
 	@$(MAKE) -f Makefile.real mrproper
 
@@ -96,10 +96,10 @@ mrproper:
 	echo "\\--"									;\
 	false)
 ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
-	@set -e ; test -f $(KERNEL_CONFIG) || (						\
+	@set -e ; test -f $(KERNEL_AUTOCONF) || (					\
 	echo "/--------------"								;\
 	echo "| Your kernel headers are incomplete/not installed."			;\
-	echo "| Please install kernel headers, including a .config"			;\
+	echo "| Please install kernel headers, including a autoconf"			;\
 	echo "| file or use the KLIB/KLIB_BUILD make variables to"			;\
 	echo "| set the kernel to build against, e.g."					;\
 	echo "|   make KLIB=/lib/modules/3.1.7/"					;\
@@ -107,27 +107,26 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 	echo "| (that isn't currently running.)"					;\
 	echo "\\--"									;\
 	false)
-	@set -e ; if [ "$$(cat .kernel_config_md5 2>/dev/null)" != "$(CONFIG_MD5)" ]	;\
+	@set -e ; if [ "$$(cat .kernel_autoconf_md5 2>/dev/null)" != "$(AUTOCONF_MD5)" ];\
 	then 										\
 		echo -n "Generating local configuration database from kernel ..."	;\
-		grep -v -f local-symbols $(KERNEL_CONFIG) | grep = | (			\
+		grep -v -f local-symbols-autoconf $(KERNEL_AUTOCONF) | grep CONFIG | (	\
 			while read l ; do						\
-				if [ "$${l:0:7}" != "CONFIG_" ] ; then			\
-					continue					;\
-				fi							;\
-				l=$${l:7}						;\
-				n=$${l%%=*}						;\
-				v=$${l#*=}						;\
-				if [ "$$v" = "m" ] ; then				\
+				l=$${l:15}						;\
+				n=$${l%% *}						;\
+				v=$${l#* }						;\
+				if [[ "$$n" == *"_MODULE" ]] ; then			\
+					n=$${n%%_MODULE}				;\
 					echo config $$n					;\
 					echo '    tristate' 				;\
-				elif [ "$$v" = "y" ] ; then				\
+					echo "    default m"				;\
+				elif [ "$$v" == 1 ] ; then				\
 					echo config $$n					;\
 					echo '    bool'					;\
+					echo "    default y"				;\
 				else							\
 					continue					;\
 				fi							;\
-				echo "    default $$v"					;\
 				echo ""							;\
 			done								\
 		) > Kconfig.kernel							;\
@@ -200,7 +199,7 @@ ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 		fi >> Kconfig.versions							;\
 		echo " done."								;\
 	fi										;\
-	echo "$(CONFIG_MD5)" > .kernel_config_md5
+	echo "$(AUTOCONF_MD5)" > .kernel_autoconf_md5
 endif ### ifeq (,$(filter $(PKG_DISTRO_TARGETS), $(MAKECMDGOALS)))
 ifneq ("$(wildcard .config)","")
 	@$(MAKE) -f Makefile.real updateconfig

@@ -1113,12 +1113,12 @@ static void cleanup_status_page(struct intel_engine_cs *engine)
 {
 	struct i915_vma *vma;
 
-	/* Prevent writes into HWSP after returning the page to the system */
-	intel_engine_set_hwsp_writemask(engine, ~0u);
-
 	vma = fetch_and_zero(&engine->status_page.vma);
 	if (!vma)
 		return;
+
+	/* Prevent writes into HWSP after returning the page to the system */
+	intel_engine_set_hwsp_writemask(engine, ~0u);
 
 	if (!HWS_NEEDS_PHYSICAL(engine->i915))
 		i915_vma_unpin(vma);
@@ -1472,8 +1472,7 @@ void intel_engine_cleanup_common(struct intel_engine_cs *engine)
 	if (engine->default_state)
 		fput(engine->default_state);
 
-	if (!engine->i915->quiesce_gpu)
-		intel_engine_quiesce(engine);
+	intel_engine_quiesce(engine);
 
 	GEM_BUG_ON(!list_empty(&engine->barrier_tasks));
 

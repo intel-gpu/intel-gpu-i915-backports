@@ -163,8 +163,6 @@ static struct page *follow_pmd_mask(unsigned long address,
 
 	if (pmd_none(val) || unlikely(!pmd_present(val)))
 		return NULL;
-	if (unlikely(is_hugepd(__hugepd(pmd_val(val)))))
-		return NULL;
 	if (unlikely(pmd_devmap(val)))
 		return NULL;
 
@@ -174,21 +172,49 @@ static struct page *follow_pmd_mask(unsigned long address,
 		return follow_page_pmd(val, pmd, flags, ctx);
 }
 
+static struct page *follow_page_pud(pud_t orig, pud_t *pmd, unsigned long flags,
+				    struct follow_page_context *ctx)
+{
+	struct page *page;
+
+	if (flags & FOLL_WRITE && !pud_write(orig))
+		return NULL;
+
+	page = __try_get_compound_page(pud_page(orig));
+	if (unlikely(!page))
+		return ERR_PTR(-EAGAIN);
+
+	if (unlikely(pud_val(orig) != pud_val(*pmd))) {
+		put_page(page);
+		return ERR_PTR(-EAGAIN);
+	}
+
+	ctx->page_size = SZ_1G;
+	return page;
+}
+
+static bool __pud_huge(pud_t pud)
+{
+	return pud_val(pud) & _PAGE_PSE;
+}
+
 static struct page *follow_pud_mask(unsigned long address,
 				    p4d_t *p4dp,
 				    unsigned int flags,
 				    struct follow_page_context *ctx)
 {
 	pud_t *pud = pud_offset(p4dp, address);
+	pud_t val = READ_ONCE(*pud);
 
-	if (pud_none(*pud) || unlikely(pud_bad(*pud)))
+	if (pud_none(val) || unlikely(pud_bad(val)))
 		return NULL;
-	if (is_hugepd(__hugepd(pud_val(*pud))))
-		return NULL;
-	if (unlikely(pud_devmap(*pud)))
+	if (unlikely(pud_devmap(val)))
 		return NULL;
 
-	return follow_pmd_mask(address, pud, flags, ctx);
+	if (!__pud_huge(val))
+		return follow_pmd_mask(address, pud, flags, ctx);
+	else
+		return follow_page_pud(val, pud, flags, ctx);
 }
 
 static struct page *follow_p4d_mask(unsigned long address,
@@ -306,13 +332,13 @@ static void userptr_remote_chunk(struct i915_tbb *tbb)
 }
 
 static void
-userptr_queue(struct userptr_chunk *chunk, struct i915_tbb_node *tbb, struct list_head *tasks)
+userptr_queue(struct userptr_chunk *chunk, struct i915_tbb_node *tbb, struct list_head *tasks, bool local)
 {
 	chunk->tbb.fn = userptr_remote_chunk;
 
 	i915_tbb_lock_irq(tbb);
 	list_add_tail(&chunk->tbb.local, tasks);
-	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR))
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_USERPTR) && !local)
 		i915_tbb_add_task_locked(tbb, &chunk->tbb);
 	else
 		INIT_LIST_HEAD(&chunk->tbb.link);
@@ -393,7 +419,7 @@ static int userptr_work(struct dma_fence_work *base)
 
 		if (chunk && n + chunk->count > spread) {
 			chunk->count += n;
-			userptr_queue(chunk, tbb, &tasks);
+			userptr_queue(chunk, tbb, &tasks, false);
 			cond_resched();
 			chunk = NULL;
 		}
@@ -419,7 +445,7 @@ static int userptr_work(struct dma_fence_work *base)
 	/* Leaving the missing chunk for ourselves */
 	if (chunk) {
 		chunk->count += n;
-		userptr_queue(chunk, tbb, &tasks);
+		userptr_queue(chunk, tbb, &tasks, true);
 		i915_tbb_run_local(tbb, &tasks, userptr_local_chunk);
 		i915_sw_fence_wait(&fence);
 	}
@@ -711,7 +737,6 @@ static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 
 	i915_gem_object_migrate_prepare(obj, &wrk->base.rq.fence);
 	dma_fence_work_commit(&wrk->base);
-	set_tsk_need_resched(current);
 out:
 	__i915_gem_object_set_pages(obj, sg);
 	return 0;

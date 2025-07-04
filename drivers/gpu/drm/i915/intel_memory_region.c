@@ -783,6 +783,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 {
 	unsigned int order, min_order, max_order;
 	unsigned long n_pages;
+	bool defrag = true;
 	int err = 0;
 
 	GEM_BUG_ON(!IS_ALIGNED(size, mem->mm.chunk_size));
@@ -855,9 +856,11 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 			break;
 		}
 
-		if (order && i915_buddy_defrag(&mem->mm, min_order, order)) {
+		if (fetch_and_zero(&defrag) &&
+		    i915_buddy_defrag(&mem->mm, min_order, order)) {
 			/* Merged a few blocks, try again */
 			max_order = UINT_MAX;
+			cond_resched();
 			continue;
 		}
 
@@ -877,6 +880,7 @@ evict:			sz = n_pages * mem->mm.chunk_size;
 reset:			n_pages = size >> ilog2(mem->mm.chunk_size);
 			order = __max_order(mem, n_pages);
 			max_order = UINT_MAX;
+			defrag = true;
 		}
 
 		cond_resched();

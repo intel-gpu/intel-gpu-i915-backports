@@ -14,23 +14,6 @@
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
 
-static ssize_t
-i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
-
-static ssize_t
-i915_sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char
-		 *buf, size_t count);
-
-typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
-typedef ssize_t (*store)(struct kobject *kobj, struct kobj_attribute *attr,
-			 const char *buf, size_t count);
-
-struct i915_ext_attr {
-	struct kobj_attribute attr;
-	show i915_show;
-	store i915_store;
-};
-
 struct kobj_engine {
 	struct kobject base;
 	struct intel_engine_cs *engine;
@@ -47,8 +30,8 @@ name_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%s\n", kobj_to_engine(kobj)->name);
 }
 
-static struct i915_ext_attr name_attr =	{
-	__ATTR(name, 0444, i915_sysfs_show, NULL), name_show, NULL};
+static struct kobj_attribute name_attr =
+	__ATTR(name, 0444, name_show, NULL);
 
 static ssize_t
 class_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -56,17 +39,22 @@ class_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%d\n", kobj_to_engine(kobj)->uabi_class);
 }
 
-static struct i915_ext_attr class_attr = {
-	__ATTR(class, 0444, i915_sysfs_show, NULL), class_show, NULL};
+static struct kobj_attribute class_attr =
+	__ATTR(class, 0444, class_show, NULL);
 
 static ssize_t
 inst_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", kobj_to_engine(kobj)->uabi_instance);
+	struct intel_engine_cs *engine = kobj_to_engine(kobj);
+
+	if (engine->gt->uabi_engines & engine->mask)
+		return sprintf(buf, "%d\n", engine->uabi_instance);
+
+	return -EINVAL;
 }
 
-static struct i915_ext_attr inst_attr =	{
-	__ATTR(instance, 0444, i915_sysfs_show, NULL), inst_show, NULL};
+static struct kobj_attribute inst_attr =
+	__ATTR(instance, 0444, inst_show, NULL);
 
 static ssize_t
 mmio_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -74,8 +62,8 @@ mmio_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "0x%x\n", kobj_to_engine(kobj)->mmio_base);
 }
 
-static struct i915_ext_attr mmio_attr =	{
-	__ATTR(mmio_base, 0444, i915_sysfs_show, NULL), mmio_show, NULL};
+static struct kobj_attribute mmio_attr =
+	__ATTR(mmio_base, 0444, mmio_show, NULL);
 
 static const char * const vcs_caps[] = {
 	[ilog2(I915_VIDEO_CLASS_CAPABILITY_HEVC)] = "hevc",
@@ -160,8 +148,8 @@ caps_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return __caps_show(engine, engine->uabi_capabilities, buf, true);
 }
 
-static struct i915_ext_attr caps_attr =	{
-	__ATTR(capabilities, 0444, i915_sysfs_show, NULL), caps_show, NULL};
+static struct kobj_attribute caps_attr =
+	__ATTR(capabilities, 0444, caps_show, NULL);
 
 static ssize_t
 all_caps_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -169,9 +157,8 @@ all_caps_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return __caps_show(kobj_to_engine(kobj), -1, buf, false);
 }
 
-static struct i915_ext_attr all_caps_attr = {
-	__ATTR(known_capabilities, 0444, i915_sysfs_show, NULL), all_caps_show, NULL};
-
+static struct kobj_attribute all_caps_attr =
+	__ATTR(known_capabilities, 0444, all_caps_show, NULL);
 
 static ssize_t
 max_spin_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -219,9 +206,8 @@ max_spin_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->props.max_busywait_duration_ns);
 }
 
-static struct i915_ext_attr max_spin_attr = {
-	__ATTR(max_busywait_duration_ns, 0644, i915_sysfs_show,
-	       i915_sysfs_store), max_spin_show, max_spin_store};
+static struct kobj_attribute max_spin_attr =
+	__ATTR(max_busywait_duration_ns, 0644, max_spin_show, max_spin_store);
 
 static ssize_t
 max_spin_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -231,9 +217,8 @@ max_spin_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->defaults.max_busywait_duration_ns);
 }
 
-static struct i915_ext_attr max_spin_def = {
-	__ATTR(max_busywait_duration_ns, 0444, i915_sysfs_show, NULL),
-	max_spin_default, NULL};
+static struct kobj_attribute max_spin_def =
+	__ATTR(max_busywait_duration_ns, 0444, max_spin_default, NULL);
 
 static ssize_t
 timeslice_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -275,9 +260,8 @@ timeslice_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->props.timeslice_duration_ms);
 }
 
-static struct i915_ext_attr timeslice_duration_attr = {
-	__ATTR(timeslice_duration_ms, 0644,i915_sysfs_show, i915_sysfs_store),
-	timeslice_show, timeslice_store};
+static struct kobj_attribute timeslice_duration_attr =
+	__ATTR(timeslice_duration_ms, 0644, timeslice_show, timeslice_store);
 
 static ssize_t
 timeslice_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -287,9 +271,8 @@ timeslice_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->defaults.timeslice_duration_ms);
 }
 
-static struct i915_ext_attr timeslice_duration_def = {
-	__ATTR(timeslice_duration_ms, 0444, i915_sysfs_show, NULL),
-	timeslice_default, NULL};
+static struct kobj_attribute timeslice_duration_def =
+	__ATTR(timeslice_duration_ms, 0444, timeslice_default, NULL);
 
 static ssize_t
 stop_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -328,9 +311,8 @@ stop_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->props.stop_timeout_ms);
 }
 
-static struct i915_ext_attr stop_timeout_attr = {
-	__ATTR(stop_timeout_ms, 0644, i915_sysfs_show, i915_sysfs_store),
-	stop_show, stop_store};
+static struct kobj_attribute stop_timeout_attr =
+	__ATTR(stop_timeout_ms, 0644, stop_show, stop_store);
 
 static ssize_t
 stop_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -340,8 +322,8 @@ stop_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->defaults.stop_timeout_ms);
 }
 
-static struct i915_ext_attr stop_timeout_def = {
-	__ATTR(stop_timeout_ms, 0444, i915_sysfs_show, NULL), stop_default, NULL};
+static struct kobj_attribute stop_timeout_def =
+	__ATTR(stop_timeout_ms, 0444, stop_default, NULL);
 
 static ssize_t
 preempt_timeout_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -385,9 +367,8 @@ preempt_timeout_show(struct kobject *kobj, struct kobj_attribute *attr,
 	return sprintf(buf, "%lu\n", engine->props.preempt_timeout_ms);
 }
 
-static struct i915_ext_attr preempt_timeout_attr = {
-	__ATTR(preempt_timeout_ms, 0644, i915_sysfs_show, i915_sysfs_store),
-	preempt_timeout_show, preempt_timeout_store};
+static struct kobj_attribute preempt_timeout_attr =
+	__ATTR(preempt_timeout_ms, 0644, preempt_timeout_show, preempt_timeout_store);
 
 static ssize_t
 preempt_timeout_default(struct kobject *kobj, struct kobj_attribute *attr,
@@ -398,9 +379,8 @@ preempt_timeout_default(struct kobject *kobj, struct kobj_attribute *attr,
 	return sprintf(buf, "%lu\n", engine->defaults.preempt_timeout_ms);
 }
 
-static struct i915_ext_attr preempt_timeout_def = {
-	__ATTR(preempt_timeout_ms, 0444, i915_sysfs_show, NULL),
-	preempt_timeout_default, NULL};
+static struct kobj_attribute preempt_timeout_def =
+	__ATTR(preempt_timeout_ms, 0444, preempt_timeout_default, NULL);
 
 static ssize_t
 heartbeat_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -443,9 +423,8 @@ heartbeat_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->props.heartbeat_interval_ms);
 }
 
-static struct i915_ext_attr heartbeat_interval_attr = {
-	__ATTR(heartbeat_interval_ms, 0644, i915_sysfs_show, i915_sysfs_store),
-	heartbeat_show, heartbeat_store};
+static struct kobj_attribute heartbeat_interval_attr =
+	__ATTR(heartbeat_interval_ms, 0644, heartbeat_show, heartbeat_store);
 
 static ssize_t
 heartbeat_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -455,9 +434,8 @@ heartbeat_default(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	return sprintf(buf, "%lu\n", engine->defaults.heartbeat_interval_ms);
 }
 
-static struct i915_ext_attr heartbeat_interval_def = {
-	__ATTR(heartbeat_interval_ms, 0444, i915_sysfs_show, NULL),
-	heartbeat_default, NULL};
+static struct kobj_attribute heartbeat_interval_def =
+	__ATTR(heartbeat_interval_ms, 0444, heartbeat_default, NULL);
 
 #if CPTCFG_DRM_I915_WATCHDOG_INTERVAL
 static ssize_t
@@ -513,8 +491,8 @@ runtime_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 		       ktime_to_ms(intel_engine_get_busy_time(engine, 0, &dummy)));
 }
 
-static struct i915_ext_attr runtime_attr = {
-	__ATTR(runtime_ms, 0444, i915_sysfs_show, NULL), runtime_show, NULL};
+static struct kobj_attribute runtime_attr =
+	__ATTR(runtime_ms, 0444, runtime_show, NULL);
 
 static void kobj_engine_release(struct kobject *kobj)
 {
@@ -547,46 +525,13 @@ kobj_engine(struct kobject *dir, struct intel_engine_cs *engine)
 	return &ke->base;
 }
 
-static ssize_t
-i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	ssize_t value;
-	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
-	struct intel_engine_cs *engine = kobj_to_engine(kobj);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(engine->i915);
-
-	value = ea->i915_show(kobj, attr, buf);
-
-	pvc_wa_allow_rc6(engine->i915);
-
-	return value;
-}
-
-static ssize_t
-i915_sysfs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
-{
-	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
-	struct intel_engine_cs *engine = kobj_to_engine(kobj);
-
-	/* Wa_16015476723 & Wa_16015666671 */
-	pvc_wa_disallow_rc6(engine->i915);
-
-	count = ea->i915_store(kobj, attr, buf, count);
-
-	pvc_wa_allow_rc6(engine->i915);
-
-	return count;
-}
-
 static void add_defaults(struct kobj_engine *parent)
 {
 	static const struct attribute *files[] = {
-		&max_spin_def.attr.attr,
-		&stop_timeout_def.attr.attr,
+		&max_spin_def.attr,
+		&stop_timeout_def.attr,
 #if CPTCFG_DRM_I915_HEARTBEAT_INTERVAL
-		&heartbeat_interval_def.attr.attr,
+		&heartbeat_interval_def.attr,
 #endif
 		NULL
 	};
@@ -608,11 +553,11 @@ static void add_defaults(struct kobj_engine *parent)
 		return;
 
 	if (intel_engine_has_timeslices(ke->engine) &&
-	    sysfs_create_file(&ke->base, &timeslice_duration_def.attr.attr))
+	    sysfs_create_file(&ke->base, &timeslice_duration_def.attr))
 		return;
 
 	if (intel_engine_has_preempt_reset(ke->engine) &&
-	    sysfs_create_file(&ke->base, &preempt_timeout_def.attr.attr))
+	    sysfs_create_file(&ke->base, &preempt_timeout_def.attr))
 		return;
 
 #if CPTCFG_DRM_I915_WATCHDOG_INTERVAL
@@ -625,16 +570,16 @@ static void add_defaults(struct kobj_engine *parent)
 void intel_engines_add_sysfs(struct drm_i915_private *i915)
 {
 	static const struct attribute *files[] = {
-		&name_attr.attr.attr,
-		&class_attr.attr.attr,
-		&inst_attr.attr.attr,
-		&mmio_attr.attr.attr,
-		&caps_attr.attr.attr,
-		&all_caps_attr.attr.attr,
-		&max_spin_attr.attr.attr,
-		&stop_timeout_attr.attr.attr,
+		&name_attr.attr,
+		&class_attr.attr,
+		&inst_attr.attr,
+		&mmio_attr.attr,
+		&caps_attr.attr,
+		&all_caps_attr.attr,
+		&max_spin_attr.attr,
+		&stop_timeout_attr.attr,
 #if CPTCFG_DRM_I915_HEARTBEAT_INTERVAL
-		&heartbeat_interval_attr.attr.attr,
+		&heartbeat_interval_attr.attr,
 #endif
 		NULL
 	};
@@ -658,15 +603,15 @@ void intel_engines_add_sysfs(struct drm_i915_private *i915)
 			goto err_object;
 
 		if (intel_engine_has_timeslices(engine) &&
-		    sysfs_create_file(kobj, &timeslice_duration_attr.attr.attr))
+		    sysfs_create_file(kobj, &timeslice_duration_attr.attr))
 			goto err_engine;
 
 		if (intel_engine_has_preempt_reset(engine) &&
-		    sysfs_create_file(kobj, &preempt_timeout_attr.attr.attr))
+		    sysfs_create_file(kobj, &preempt_timeout_attr.attr))
 			goto err_engine;
 
 		if (intel_engine_supports_stats(engine) &&
-		    sysfs_create_file(kobj, &runtime_attr.attr.attr))
+		    sysfs_create_file(kobj, &runtime_attr.attr))
 			goto err_engine;
 
 #if CPTCFG_DRM_I915_WATCHDOG_INTERVAL

@@ -2581,7 +2581,7 @@ __i915_sched_rewind_requests(struct i915_sched_engine *se,
 				lrc_init_regs(ce, rq->engine, true);
 				head = rq->postfix;
 			}
-			ce->lrc.lrca = lrc_update_regs(ce, rq->engine, intel_ring_wrap(ce->ring, head));
+			ce->lrc.lrca = lrc_update_regs(ce, rq->engine, ce->vm, intel_ring_wrap(ce->ring, head));
 			gt_ggtt_address_read_unlock(rq->engine->gt, srcu);
 		}
 
@@ -2775,7 +2775,7 @@ static void guc_reset_state(struct intel_context *ce, u32 head, bool scrub)
 		lrc_init_regs(ce, engine, true);
 
 	/* Rerun the request; its payload has been neutered (if guilty). */
-	ce->lrc.lrca = lrc_update_regs(ce, engine, head);
+	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->vm, head);
 	gt_ggtt_address_read_unlock(ce->engine->gt, srcu);
 }
 
@@ -5801,19 +5801,12 @@ void intel_guc_submission_disable(struct intel_guc *guc)
 
 static bool __guc_submission_supported(struct intel_guc *guc)
 {
-	/* GuC submission is unavailable for pre-Gen11 */
-	return intel_guc_is_supported(guc) &&
-	       GRAPHICS_VER(guc_to_gt(guc)->i915) >= 11;
+	return true;
 }
 
 static bool __guc_submission_selected(struct intel_guc *guc)
 {
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
-
-	if (!intel_guc_submission_is_supported(guc))
-		return false;
-
-	return i915->params.enable_guc & ENABLE_GUC_SUBMISSION;
+	return true;
 }
 
 int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc)

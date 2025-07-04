@@ -198,7 +198,7 @@ void i915_sg_trim(struct scatterlist *sgt)
 
 		max_ents = SG_MAX_SINGLE_ALLOC;
 		sg = chain;
-	} while (!end);
+	} while (!end && (cond_resched(), 1));
 	GEM_BUG_ON(end > capacity);
 
 	while (n + SG_MAX_SINGLE_ALLOC < capacity) {

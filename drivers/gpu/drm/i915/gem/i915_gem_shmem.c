@@ -12,6 +12,7 @@
 #include <linux/pagevec.h>
 #include <linux/shmem_fs.h>
 #include <linux/swap.h>
+#include <linux/kobject.h>
 
 #include <asm-generic/getorder.h>
 
@@ -82,6 +83,16 @@ static void shmem_dma_put(struct shmem_dma *map)
 	kref_put(&map->kref, shmem_dma_release);
 }
 
+typedef ssize_t (*show_kobj)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+typedef ssize_t (*store_kobj)(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
+
+struct i915_ext_attr_kobj_var {
+	struct kobj_attribute attr;
+	show_kobj i915_show_kobj;
+	store_kobj i915_store_kobj;
+	void *var;
+};
+
 static inline struct shmem_private {
 	struct clear_pages {
 		spinlock_t lock;
@@ -101,7 +112,7 @@ static inline struct shmem_private {
 	struct ras_errors {
 		unsigned int max;
 		struct ras_error {
-			struct dev_ext_attribute attr;
+			struct i915_ext_attr_kobj_var attr;
 			unsigned long count;
 			char *name;
 		} errors[];
@@ -540,13 +551,14 @@ static void shmem_chunk(struct i915_tbb *tbb)
 static void
 shmem_queue(struct shmem_chunk *chunk,
 	    struct i915_tbb_node *tbb,
-	    struct list_head *tasks)
+	    struct list_head *tasks,
+	    bool local)
 {
 	chunk->tbb.fn = shmem_chunk;
 
 	i915_tbb_lock_irq(tbb);
 	list_add_tail(&chunk->tbb.local, tasks);
-	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_SHMEMFS))
+	if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_SHMEMFS) && !local)
 		i915_tbb_add_task_locked(tbb, &chunk->tbb);
 	else
 		INIT_LIST_HEAD(&chunk->tbb.link);
@@ -892,7 +904,7 @@ static unsigned long shrink_shmem_cache(struct intel_memory_region *mem, int ord
 				if (!page)
 					continue;
 
-				if (target != -1 && i915_active_fence_isset(&cp->active))
+				if (target != -1ul && i915_active_fence_isset(&cp->active))
 					break;
 
 				list_replace(&cp->link, &bookmark.link);
@@ -1201,7 +1213,7 @@ page:
 
 				if (chunk) {
 					chunk->end = n;
-					shmem_queue(chunk, tbb, &tasks);
+					shmem_queue(chunk, tbb, &tasks, remain <= sg->length);
 					chunk = NULL;
 				}
 
@@ -1265,7 +1277,7 @@ page:
 	if (chunk) {
 		chunk->end = n;
 		GEM_BUG_ON(need_blt);
-		shmem_queue(chunk, tbb, &tasks);
+		shmem_queue(chunk, tbb, &tasks, true);
 	}
 
 	if (!READ_ONCE(fence.error) && need_blt) {
@@ -1352,7 +1364,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 
 		if (chunk && n - chunk->idx > spread) {
 			chunk->end = n;
-			shmem_queue(chunk, tbb, &tasks);
+			shmem_queue(chunk, tbb, &tasks, false);
 			cond_resched();
 			chunk = NULL;
 		}
@@ -1379,7 +1391,7 @@ static int shmem_swapin(struct shmem_work *wrk)
 	/* Leaving the last chunk for ourselves */
 	if (chunk) {
 		chunk->end = n;
-		shmem_queue(chunk, tbb, &tasks);
+		shmem_queue(chunk, tbb, &tasks, true);
 		i915_tbb_run_local(tbb, &tasks, shmem_chunk);
 		i915_sw_fence_wait(&fence);
 	}
@@ -1615,6 +1627,9 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 		return false;
 
 	if (obj->flags & I915_BO_ALLOC_USER && !i915_gem_object_inuse(obj))
+		return false;
+
+	if (to_i915(obj->base.dev)->flags & I915_PCI_REMOVE)
 		return false;
 
 	return true;
@@ -2647,6 +2662,16 @@ bool i915_gem_object_is_shmem(const struct drm_i915_gem_object *obj)
 	return obj->ops == &i915_gem_shmem_ops;
 }
 
+
+#define to_i915_ext_attr(x) container_of(x, struct i915_ext_attr_kobj_var, attr)
+
+static ssize_t kobj_device_show_ulong(struct kobject *kobj, struct kobj_attribute *attr,
+					char *buff)
+{
+	struct i915_ext_attr_kobj_var *ea = to_i915_ext_attr(attr);
+	return sysfs_emit(buff, "%lx\n", *(unsigned long *)(ea->var));
+}
+
 bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
 				   struct kobject *kobj)
 {
@@ -2673,7 +2698,7 @@ bool i915_gem_shmem_register_sysfs(struct drm_i915_private *i915,
 			break;
 
 		e->attr.attr.attr.mode = 0444;
-		e->attr.attr.show = device_show_ulong;
+		e->attr.attr.show = kobj_device_show_ulong;
 		e->attr.var = &e->count;
 
 		if (sysfs_create_file(kobj, &e->attr.attr.attr))

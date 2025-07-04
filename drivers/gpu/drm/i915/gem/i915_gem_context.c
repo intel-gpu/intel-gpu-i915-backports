@@ -80,6 +80,7 @@
 #include "gt/intel_engine_user.h"
 #include "gt/intel_gpu_commands.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_requests.h"
 #include "gt/intel_ring.h"
 
 #include "pxp/intel_pxp.h"
@@ -413,8 +414,7 @@ void i915_gem_context_release(struct kref *ref)
 	if (ctx->pxp_wakeref)
 		intel_runtime_pm_put(&ctx->i915->runtime_pm, ctx->pxp_wakeref);
 
-	if (ctx->client)
-		i915_drm_client_put(ctx->client);
+	i915_drm_client_put(ctx->client);
 
 	mutex_destroy(&ctx->engines_mutex);
 	mutex_destroy(&ctx->lut_mutex);
@@ -633,8 +633,10 @@ static void context_close(struct i915_gem_context *ctx)
 
 	/* Flush any concurrent set_engines() */
 	mutex_lock(&ctx->engines_mutex);
-	unpin_engines(__context_engines_static(ctx));
-	engines_idle_release(ctx, rcu_replace_pointer(ctx->engines, NULL, 1));
+	if (rcu_access_pointer(ctx->engines)) {
+		unpin_engines(__context_engines_static(ctx));
+		engines_idle_release(ctx, rcu_replace_pointer(ctx->engines, NULL, 1));
+	}
 	i915_gem_context_set_closed(ctx);
 	mutex_unlock(&ctx->engines_mutex);
 
@@ -810,8 +812,6 @@ static struct i915_gem_context *__create_context(struct intel_gt *gt)
 {
 	struct drm_i915_private *i915 = gt->i915;
 	struct i915_gem_context *ctx;
-	struct i915_gem_engines *e;
-	int err;
 	int i;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
@@ -834,13 +834,6 @@ static struct i915_gem_context *__create_context(struct intel_gt *gt)
 	init_waitqueue_head(&ctx->user_fence_wq);
 
 	mutex_init(&ctx->engines_mutex);
-	e = default_engines(ctx);
-	if (IS_ERR(e)) {
-		err = PTR_ERR(e);
-		goto err_free;
-	}
-	ctx->engine_mask = engine_mask(e);
-	RCU_INIT_POINTER(ctx->engines, e);
 
 	INIT_RADIX_TREE(&ctx->handles_vma, GFP_KERNEL);
 	mutex_init(&ctx->lut_mutex);
@@ -855,10 +848,6 @@ static struct i915_gem_context *__create_context(struct intel_gt *gt)
 	ctx->semaphore_token = __contexts_get_next_token(gt);
 
 	return ctx;
-
-err_free:
-	kfree(ctx);
-	return ERR_PTR(err);
 }
 
 void i915_gem_context_engines_put(struct i915_gem_engines *e)
@@ -905,19 +894,32 @@ context_apply_all(struct i915_gem_context *ctx,
 	struct intel_context *ce;
 
 	e = i915_gem_context_engines_get(ctx, NULL);
-	for_each_gem_engine(ce, e, it)
-		fn(ce, data);
-	i915_gem_context_engines_put(e);
+	if (e) {
+		for_each_gem_engine(ce, e, it)
+			fn(ce, data);
+		i915_gem_context_engines_put(e);
+	}
 }
 
 static void __apply_ppgtt(struct intel_context *ce, void *vm)
 {
+	if (ce->vm == vm)
+		return;
+
+	if (!ce->vm) {
+		ce->vm = i915_vm_get(vm);
+		return;
+	}
+
 	intel_context_reconfigure_vm(ce, vm);
 }
 
 static void __apply_client(struct intel_context *ce, void *client)
 {
-	ce->client = i915_drm_client_get(client);
+	if (ce->client == client)
+		return;
+
+	i915_drm_client_put(xchg(&ce->client, i915_drm_client_get(client)));
 }
 
 static struct i915_address_space *
@@ -928,8 +930,7 @@ __set_ppgtt(struct i915_gem_context *ctx, struct i915_address_space *vm)
 	if (!i915_vm_tryopen(vm))
 		return NULL;
 
-	old = rcu_replace_pointer(ctx->vm, vm,
-				  lockdep_is_held(&ctx->mutex));
+	old = rcu_replace_pointer(ctx->vm, vm, true);
 	GEM_BUG_ON(old && i915_vm_lvl(vm) != i915_vm_lvl(old));
 
 	return old;
@@ -955,7 +956,6 @@ i915_gem_context_create_for_gt(struct intel_gt *gt, unsigned int flags)
 {
 	struct drm_i915_private *i915 = gt->i915;
 	struct i915_gem_context *ctx;
-	struct i915_ppgtt *ppgtt;
 	int ret;
 
 	if (flags & I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE &&
@@ -970,21 +970,6 @@ i915_gem_context_create_for_gt(struct intel_gt *gt, unsigned int flags)
 	ctx = __create_context(gt);
 	if (IS_ERR(ctx))
 		return ctx;
-
-	ppgtt = i915_ppgtt_create(gt, 0);
-	if (IS_ERR(ppgtt)) {
-		drm_dbg(&i915->drm, "PPGTT setup failed (%ld)\n",
-			PTR_ERR(ppgtt));
-		context_close(ctx);
-		return ERR_CAST(ppgtt);
-	}
-
-	mutex_lock(&ctx->mutex);
-	__assign_ppgtt(ctx, &ppgtt->vm);
-	mutex_unlock(&ctx->mutex);
-
-	/* Release reference taken during i915_ppgtt_create */
-	i915_vm_close(&ppgtt->vm);
 
 	if (flags & I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE) {
 		ret = drm_syncobj_create(&ctx->syncobj,
@@ -1037,23 +1022,17 @@ static void __apply_debugger(struct intel_context *context, void *client)
 		intel_context_disable_preemption_timeout(context);
 }
 
-static int gem_context_register(struct i915_gem_context *ctx,
-				struct drm_i915_file_private *fpriv,
-				u32 *id)
+static void gem_context_setup(struct i915_gem_context *ctx,
+				struct drm_i915_file_private *fpriv)
 {
 	struct drm_i915_private *i915 = ctx->i915;
 	struct i915_drm_client *client;
-	struct i915_address_space *vm;
-	int ret;
 
 	ctx->file_priv = fpriv;
-	client = i915_drm_client_get(fpriv->client);
 
-	mutex_lock(&ctx->mutex);
-	vm = i915_gem_context_vm(ctx);
-	if (vm && !vm->client)
-		WRITE_ONCE(vm->client, i915_drm_client_get(client)); /* XXX */
-	mutex_unlock(&ctx->mutex);
+	client = i915_drm_client_get(fpriv->client);
+	if (ctx->vm && !ctx->vm->client)
+		WRITE_ONCE(ctx->vm->client, i915_drm_client_get(client)); /* XXX */
 
 	rcu_read_lock();
 	snprintf(ctx->name, sizeof(ctx->name), "%s[%d]",
@@ -1079,82 +1058,109 @@ static int gem_context_register(struct i915_gem_context *ctx,
 	spin_lock_irq(&i915->gem.contexts.lock);
 	list_add_tail_rcu(&ctx->link, &i915->gem.contexts.list);
 	spin_unlock_irq(&i915->gem.contexts.lock);
+}
+
+static int gem_context_register(struct i915_gem_context *ctx,
+				struct drm_i915_file_private *fpriv,
+				u32 *id)
+{
+	int ret;
 
 	/* And finally expose ourselves to userspace via the idr */
 	i915_gem_context_get(ctx);
 	ret = xa_alloc(&fpriv->context_xa, id, ctx, xa_limit_32b, GFP_KERNEL);
 	if (!ret)
 		i915_debugger_context_create(ctx);
-
 	i915_gem_context_put(ctx);
-	if (!ret)
-		return 0;
 
-	spin_lock(&client->ctx_lock);
-	list_del_rcu(&ctx->client_link);
-	spin_unlock(&client->ctx_lock);
-
-	spin_lock_irq(&i915->gem.contexts.lock);
-	list_del_rcu(&ctx->link);
-	spin_unlock_irq(&i915->gem.contexts.lock);
-
-	i915_drm_client_put(client);
 	return ret;
 }
 
-int i915_gem_context_open(struct drm_i915_private *i915,
-			  struct drm_file *file)
+static struct i915_gem_context *default_context(struct intel_gt *gt)
 {
-	struct drm_i915_file_private *file_priv = file->driver_priv;
 	struct i915_gem_context *ctx;
-	int err;
-	u32 id;
+	struct i915_gem_engines *e;
+	struct i915_ppgtt *ppgtt;
 
-	xa_init_flags(&file_priv->context_xa, XA_FLAGS_ALLOC);
+	ctx = i915_gem_context_create_for_gt(gt, 0);
+	if (IS_ERR(ctx))
+		return ctx;
 
-	/* 0 reserved for invalid/unassigned ppgtt */
-	xa_init_flags(&file_priv->vm_xa, XA_FLAGS_ALLOC1);
-
-	if (intel_gt_terminally_wedged(to_gt(i915)))
-		return 0;
-
-	ctx = i915_gem_context_create_for_gt(to_gt(i915), 0);
-	if (IS_ERR(ctx)) {
-		err = PTR_ERR(ctx);
-		goto err;
+	e = default_engines(ctx);
+	if (IS_ERR(e)) {
+		context_close(ctx);
+		return ERR_CAST(e);
 	}
+	ctx->engine_mask = engine_mask(e);
+	RCU_INIT_POINTER(ctx->engines, e);
 
-	err = gem_context_register(ctx, file_priv, &id);
-	if (err < 0)
-		goto err_ctx;
+	ppgtt = i915_ppgtt_create(gt, 0);
+	if (IS_ERR(ppgtt)) {
+		context_close(ctx);
+		return ERR_CAST(ppgtt);
+	}
+	__assign_ppgtt(ctx, &ppgtt->vm);
+	i915_vm_close(&ppgtt->vm);
 
-	GEM_BUG_ON(id);
-	return 0;
-
-err_ctx:
-	context_close(ctx);
-err:
-	xa_destroy(&file_priv->vm_xa);
-	xa_destroy(&file_priv->context_xa);
-	return err;
+	return ctx;
 }
 
-void i915_gem_context_close(struct drm_file *file)
+
+struct i915_gem_context *i915_gem_context0_get(struct drm_i915_file_private *fpriv)
 {
-	struct drm_i915_file_private *file_priv = file->driver_priv;
+	struct intel_gt *gt = to_gt(fpriv->dev_priv);
+	struct i915_gem_context *ctx, *old;
+
+	ctx = READ_ONCE(fpriv->ctx0);
+	if (ctx)
+		goto out;
+
+	if (intel_gt_is_wedged(gt))
+		return ERR_PTR(-EIO);
+
+	ctx = default_context(gt);
+	if (IS_ERR(ctx))
+		return ctx;
+
+	gem_context_setup(ctx, fpriv);
+
+	old = cmpxchg(&fpriv->ctx0, NULL, ctx);
+	if (unlikely(old)) {
+		context_close(ctx);
+		ctx = old;
+	}
+
+	if (ctx != old)
+		i915_debugger_context_create(ctx);
+
+out:
+	return i915_gem_context_get(ctx);
+}
+
+void i915_gem_context_open(struct drm_i915_file_private *fpriv)
+{
+	/* 0 reserved for invalid/unassigned ppgtt */
+	xa_init_flags(&fpriv->vm_xa, XA_FLAGS_ALLOC1);
+	xa_init_flags(&fpriv->context_xa, XA_FLAGS_ALLOC1);
+}
+
+void i915_gem_context_close(struct drm_i915_file_private *fpriv)
+{
 	struct i915_address_space *vm;
 	struct i915_gem_context *ctx;
 	unsigned long idx;
 
-	xa_for_each(&file_priv->context_xa, idx, ctx)
+	xa_for_each(&fpriv->context_xa, idx, ctx)
 		context_close(ctx);
-	xa_destroy(&file_priv->context_xa);
+	xa_destroy(&fpriv->context_xa);
+	if (fpriv->ctx0)
+		context_close(fpriv->ctx0);
 
-	xa_for_each(&file_priv->vm_xa, idx, vm) {
-		i915_debugger_vm_destroy(file_priv->client, vm, true);
+	xa_for_each(&fpriv->vm_xa, idx, vm) {
+		i915_debugger_vm_destroy(fpriv->client, vm, true);
 		i915_vm_close(vm);
 	}
-	xa_destroy(&file_priv->vm_xa);
+	xa_destroy(&fpriv->vm_xa);
 }
 
 struct vm_create_ext {
@@ -1354,9 +1360,6 @@ static int set_ppgtt(struct drm_i915_file_private *file_priv,
 	if (args->size)
 		return -EINVAL;
 
-	if (!rcu_access_pointer(ctx->vm))
-		return -ENODEV;
-
 	if (upper_32_bits(args->value))
 		return -ENOENT;
 
@@ -1383,10 +1386,6 @@ static int set_ppgtt(struct drm_i915_file_private *file_priv,
 	}
 
 	old = __set_ppgtt(ctx, vm);
-	if (!old) {
-		err = -ENOENT;
-		goto unlock;
-	}
 
 	/* Teardown the existing obj:vma cache, it will have to be rebuilt. */
 	lut_close(ctx);
@@ -1402,11 +1401,12 @@ unlock:
 	mutex_unlock(&ctx->mutex);
 
 	if (!err) {
-		if (!is_ctx_create) {
+		if (old) {
 			i915_debugger_vm_destroy(file_priv->client, old, false);
-			i915_debugger_context_param_vm(file_priv->client, ctx, vm);
+			i915_vm_close_imm(old);
 		}
-		i915_vm_close_imm(old);
+		if (!is_ctx_create)
+			i915_debugger_context_param_vm(file_priv->client, ctx, vm);
 	}
 out:
 	i915_vm_put(vm);
@@ -1653,6 +1653,9 @@ static int perma_pin_contexts(struct intel_context *ce)
 	int i = 0, j = 0, ret;
 
 	GEM_BUG_ON(!intel_context_is_parent(ce));
+
+	/* try to unpin any stale contexts */
+	intel_gt_retire_requests(ce->engine->gt);
 
 	ret = intel_context_pin(ce);
 	if (unlikely(ret))
@@ -1952,7 +1955,8 @@ replace:
 	mutex_unlock(&ctx->engines_mutex);
 
 	/* Keep track of old engine sets for kill_context() */
-	engines_idle_release(ctx, set.engines);
+	if (set.engines)
+		engines_idle_release(ctx, set.engines);
 
 	i915_debugger_context_param_engines(ctx);
 	return 0;
@@ -2334,6 +2338,17 @@ static bool client_is_banned(struct drm_i915_file_private *file_priv)
 	return atomic_read(&file_priv->ban_score) >= I915_CLIENT_SCORE_BANNED;
 }
 
+static struct intel_gt *default_gt(struct i915_gem_context *ctx)
+{
+	struct i915_gem_engines_iter it;
+	struct intel_context *ce;
+
+	for_each_gem_engine(ce, rcu_access_pointer(ctx->engines), it)
+		return ce->engine->gt;
+
+	return to_gt(ctx->i915);
+}
+
 int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file)
 {
@@ -2377,6 +2392,33 @@ int i915_gem_context_create_ioctl(struct drm_device *dev, void *data,
 		if (ret)
 			goto err_ctx;
 	}
+
+	if (!rcu_access_pointer(ext_data.ctx->engines)) {
+		struct i915_gem_engines *e;
+
+		e = default_engines(ext_data.ctx);
+		if (IS_ERR(e)) {
+			ret = PTR_ERR(e);
+			goto err_ctx;
+		}
+		ext_data.ctx->engine_mask = engine_mask(e);
+		RCU_INIT_POINTER(ext_data.ctx->engines, e);
+	}
+
+	if (!rcu_access_pointer(ext_data.ctx->vm)) {
+		struct i915_ppgtt *ppgtt;
+
+		ppgtt = i915_ppgtt_create(default_gt(ext_data.ctx), 0);
+		if (IS_ERR(ppgtt)) {
+			ret = PTR_ERR(ppgtt);
+			goto err_ctx;
+		}
+
+		__assign_ppgtt(ext_data.ctx, &ppgtt->vm);
+		i915_vm_close(&ppgtt->vm);
+	}
+
+	gem_context_setup(ext_data.ctx, ext_data.fpriv);
 
 	ret = gem_context_register(ext_data.ctx, ext_data.fpriv, &id);
 	if (ret < 0)
@@ -2526,8 +2568,8 @@ int i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data,
 	int ret = 0;
 
 	ctx = i915_gem_context_lookup(file_priv, args->ctx_id);
-	if (!ctx)
-		return -ENOENT;
+	if (IS_ERR_OR_NULL(ctx))
+		return ctx ? PTR_ERR(ctx) : -ENOENT;
 
 	switch (args->param) {
 	case I915_CONTEXT_PARAM_GTT_SIZE:
@@ -2625,8 +2667,8 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 	int ret;
 
 	ctx = i915_gem_context_lookup(file_priv, args->ctx_id);
-	if (!ctx)
-		return -ENOENT;
+	if (IS_ERR_OR_NULL(ctx))
+		return ctx ? PTR_ERR(ctx) : -ENOENT;
 
 	i915_debugger_wait_on_discovery(ctx->client);
 	ret = ctx_setparam(file_priv, ctx, args, false);
