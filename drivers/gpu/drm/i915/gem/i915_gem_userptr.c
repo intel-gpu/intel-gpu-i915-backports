@@ -293,7 +293,9 @@ static int __userptr_chunk(struct scatterlist *sg,
 		if (count == max)
 			break;
 
+		cond_resched();
 		sg = sg_chain_ptr(sg + I915_MAX_CHAIN_ALLOC);
+		GEM_BUG_ON(!sg);
 	} while (1);
 
 	return ret;

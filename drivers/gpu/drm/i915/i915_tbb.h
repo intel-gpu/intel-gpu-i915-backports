@@ -24,6 +24,7 @@ struct i915_tbb_node {
 		local_t local;
 		local_t primary;
 		local_t secondary;
+		local_t yields;
 		local_t wakeups;
 	} stats;
 	int nid;
@@ -100,6 +101,8 @@ bool i915_tbb_cancel_task(struct i915_tbb *task);
 
 int i915_tbb_suspend_local(void);
 void i915_tbb_resume_local(int cpu);
+
+long i915_tbb_schedule(long timeout);
 
 int i915_tbb_init(void);
 void i915_tbb_exit(void);

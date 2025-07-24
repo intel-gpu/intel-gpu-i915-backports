@@ -508,6 +508,7 @@ skip:
 		if (++idx == end)
 			break;
 
+		cond_resched();
 		sg = __sg_next(sg);
 		GEM_BUG_ON(!sg);
 	} while (1);

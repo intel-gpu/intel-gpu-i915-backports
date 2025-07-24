@@ -275,6 +275,7 @@ static void sysrq_show(void *data)
 			i_printf(&p, indent, "Primary: %ld\n", local_read(&node->stats.primary));
 			i_printf(&p, indent, "Secondary: %ld\n", local_read(&node->stats.secondary));
 		}
+		i_printf(&p, indent, "Yields: %ld\n", local_read(&node->stats.yields));
 		i_printf(&p, indent, "Wakeups: %ld\n", local_read(&node->stats.wakeups));
 
 		indent -= 2;
@@ -464,7 +465,7 @@ static int tbb_should_run(unsigned int cpu)
 		return 0;
 
 	if (test_bit(I915_TBB_SUSPEND, &t->flags) || need_resched()) {
-		if (p_thread(t)) {
+		if (p_thread(t) || !list_empty(&t->local)) {
 			/* Ask another thread to take over from our exclusive wakeup */
 			wake_up(&node->wq);
 
@@ -541,12 +542,18 @@ int i915_tbb_suspend_local(void)
 
 static bool wake_up_thread(struct i915_tbb_thread *t)
 {
+	if (t->wait.private == current) {
+		__set_current_state(TASK_RUNNING);
+		return true;
+	}
+
 	if (!wake_up_process(t->wait.private))
 		return false;
 
 	if (t->cpu == task_cpu(current))
 		set_tsk_need_resched(current);
 
+	local_inc(&t->node->stats.yields);
 	return true;
 }
 
@@ -562,6 +569,16 @@ void i915_tbb_resume_local(int cpu)
 	clear_bit(I915_TBB_SUSPEND, &t->flags);
 	if (!list_empty(&t->local) || tbb_should_wake_up(node, t))
 		wake_up_thread(t);
+}
+
+long i915_tbb_schedule(long timeout)
+{
+	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, raw_smp_processor_id());
+
+	if (!test_bit(I915_TBB_SUSPEND, &t->flags) && tbb_ready(t->node))
+		wake_up_thread(t);
+
+	return io_schedule_timeout(timeout);
 }
 
 static struct smp_hotplug_thread threads = {
@@ -653,7 +670,7 @@ bool i915_tbb_cancel_task(struct i915_tbb *task)
 		list_del(&task->local);
 		list_del_init(&task->link);
 	} else {
-		tsk = task->tsk;
+		tsk = fetch_and_zero(&task->tsk);
 	}
 	i915_tbb_unlock(node, flags);
 

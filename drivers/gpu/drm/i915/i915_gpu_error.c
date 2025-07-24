@@ -1132,15 +1132,14 @@ static void cleanup_uc(struct intel_uc_coredump *uc)
 static void
 i915_uuid_resource_coredump_free(struct i915_uuid_resource_coredump *uuid_dump)
 {
-	u64 page;
-	struct i915_compressed_pages *cpages;
-	struct i915_uuid_resource_coredump *next;
-
 	while (uuid_dump) {
+		struct i915_uuid_resource_coredump *next = uuid_dump->next;
+
 		if (uuid_dump->string_class) {
 			kfree(uuid_dump->str);
 		} else {
-			cpages = uuid_dump->cpages;
+			struct i915_compressed_pages *cpages = uuid_dump->cpages;
+			u64 page;
 
 			for (page = 0;
 			     cpages && page < cpages->page_count;
@@ -1150,7 +1149,7 @@ i915_uuid_resource_coredump_free(struct i915_uuid_resource_coredump *uuid_dump)
 						  cpages->pages[page]);
 			kfree(cpages);
 		}
-		next = uuid_dump->next;
+
 		kfree(uuid_dump);
 		uuid_dump = next;
 	}
@@ -1580,17 +1579,21 @@ static struct i915_uuid_resource_coredump *
 i915_uuid_resource_coredump_create(struct i915_drm_client *client,
 				   struct i915_page_compress *compress)
 {
+	struct i915_uuid_resource_coredump *head = NULL;
 	struct i915_uuid_resource *uuid;
-	struct i915_uuid_resource_coredump *dump, *head = NULL;
 	unsigned long idx;
 
 	xa_for_each(&client->uuids_xa, idx, uuid) {
+		struct i915_uuid_resource_coredump *dump;
+
 		dump = capture_uuid(&client->uuids_xa, idx, compress);
 		if (!dump)
 			break;
+
 		dump->next = head;
 		head = dump;
 	}
+
 	return head;
 }
 
@@ -1633,8 +1636,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 		i915_gem_context_is_closed(ctx);
 
 	e->sip_installed = i915_gem_context_has_sip(ctx);
-
-	e->uuid_dump = i915_uuid_resource_coredump_create(ctx->client, compress);
+	e->uuid_dump = simulated ? NULL : i915_uuid_resource_coredump_create(ctx->client, compress);
 
 	i915_gem_context_put(ctx);
 	return simulated;
