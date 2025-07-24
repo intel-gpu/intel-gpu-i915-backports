@@ -2109,7 +2109,7 @@ static long __i915_request_wait(struct i915_request *rq,
 			break;
 		}
 
-		timeout = io_schedule_timeout(timeout);
+		timeout = i915_tbb_schedule(timeout);
 	}
 	__set_current_state(TASK_RUNNING);
 

@@ -1,4 +1,10 @@
 # ChangeLog
+## Release I915_25WW30.4_1146.12_25.2.16_250224.22
+* Improved GPU error reporting by including UUID resources for better diagnostics.
+* Enhanced responsiveness during memory management tasks.
+* Refined tbb thread handling to improve scheduling efficiency, avoid redundant parking during cancellations,
+  and ensure proper wake-up behavior.
+
 ## Release I915_25WW27.3_1146.10_25.2.13_250224.19
 * Fixed an issue where the sched_setattr_nocheck API was not exported in kernel versions earlier than 5.14.
 * Switched to locked variant of wake_up_interruptible for safer thread wake-ups.

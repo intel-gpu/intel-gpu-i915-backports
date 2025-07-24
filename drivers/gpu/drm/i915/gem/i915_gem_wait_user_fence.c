@@ -467,7 +467,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 			break;
 		}
 
-		timeout = io_schedule_timeout(timeout);
+		timeout = i915_tbb_schedule(timeout);
 
 		if (ufence_fault(&wake)) {
 			err = -EFAULT;
