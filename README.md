@@ -32,6 +32,8 @@ Each project is tagged consistently, so when pulling these repos, pull the same 
 
 |   OSV | Installation Instructions | Building | Testing|
 |---    | --- | --- | --- |
+| Red Hat® Enterprise Linux® 10.0       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
+| Red Hat® Enterprise Linux® 9.6       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.5       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.4       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
 | Red Hat® Enterprise Linux® 9.3       |  [Readme](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/docs/README_redhat.md)| Yes | Yes |
@@ -69,7 +71,7 @@ Two types of release streams are available:
 
 | Type | Status | Version | Release-date | Branch | Tag |
 |---    |---    |---   |---    |---    |---    |
-| **LTS update release** | **Active** | **2350.145** | **2025-04-02** | **backport/RELEASE_2405_23.10** | [I915_25WW14.3_803.145_23.10.90_231129.99](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md) |
+| **LTS update release** | **Active** | **2350.150** | **2025-05-06** | **backport/RELEASE_2405_23.10** | [I915_25WW19.2_803.150_23.10.92_231129.101](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md) |
 | Production update release | Not supported | 2328.48 | 2023-12-19 | backport/RELEASE_2335_23.6 | [I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)|
 | Production update release | Not supported | 2328.48 | 2023-12-19 | redhat/RELEASE_2335_23.6 | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md) |
 
