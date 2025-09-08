@@ -64,7 +64,7 @@ static int __intel_uc_reset_hw(struct intel_uc *uc)
 
 	ret = intel_reset_guc(gt);
 	if (ret)
-		gt_err(gt, "Failed to reset GuC, ret = %d\n", ret);
+		gt_dbg(gt, "Failed to reset GuC, ret = %d\n", ret);
 
 	return 0;
 }

@@ -50,11 +50,15 @@
 #include "gt/intel_gt_regs.h"
 #include "gt/intel_rps.h"
 #include "gt/iov/intel_iov_memirq.h"
+#include "gt/intel_gt_requests.h"
 
 #include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_irq.h"
 #include "intel_pm.h"
+#include "intel_iaf.h"
+#include "i915_pci.h"
+#include "pvc_fatal_error_dump.h"
 
 /**
  * DOC: interrupt handling
@@ -1250,6 +1254,10 @@ hardware_error_type_to_str(const enum hardware_error hw_err)
 	}
 }
 
+#define log_gt_hw_dbg(gt, fmt, ...) \
+       __DRM_DEFINE_DBG_RATELIMITED(DRIVER, &(gt)->i915->drm, HW_ERR "GT%d detected " fmt, \
+				    (gt)->info.id, ##__VA_ARGS__)
+
 #define log_gt_hw_err(gt, fmt, ...) \
 	dev_err_ratelimited((gt)->i915->drm.dev, HW_ERR "GT%d detected " fmt, \
 			    (gt)->info.id, ##__VA_ARGS__)
@@ -1712,6 +1720,23 @@ static void gen12_gt_fatal_hw_error_stats_update(struct intel_gt *gt,
 	}
 }
 
+static inline u32 dg1_master_intr_disable(void __iomem * const regs)
+{
+	u32 val;
+
+	/* First disable interrupts */
+	raw_reg_write(regs, DG1_MSTR_TILE_INTR, 0);
+
+	/* Get the indication levels and ack the master unit */
+	val = raw_reg_read(regs, DG1_MSTR_TILE_INTR);
+	if (unlikely(!val))
+		return 0;
+
+	raw_reg_write(regs, DG1_MSTR_TILE_INTR, val);
+
+	return val;
+}
+
 static void
 gen12_gt_correctable_hw_error_stats_update(struct intel_gt *gt,
 					   unsigned long errstat)
@@ -1842,6 +1867,136 @@ static void print_repair(struct intel_gt *gt)
 		      "[Hardware Info]: Its advisable to run HBM test/repair cycle to repair any potential permanent fault in HBM.");
 }
 
+struct hbm_error {
+	u32 stack;
+	u32 channel;
+	u32 psch;
+	u32 bank;
+	u32 row;
+	u32 col;
+	u32 stack_id;
+};
+
+static bool valid_hbm_err_info(struct intel_gt *gt, struct hbm_error *err)
+{
+	if (err->bank <= FIELD_MAX(HBM_ERR_INFO_MAX_BANK_MASK) &&
+	    err->col <= FIELD_MAX(HBM_ERR_INFO_MAX_COL_MASK) &&
+	    err->row <= FIELD_MAX(HBM_ERR_INFO_MAX_ROW_MASK))
+		return true;
+
+	drm_err_ratelimited(&gt->i915->drm, HW_ERR
+			    "HBM error info larger than bitmap: GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d\n",
+			    gt->info.id, err->stack, err->channel, err->psch,
+			    err->bank, err->col, err->row);
+	return false;
+}
+
+static unsigned long init_hbm_err_info(struct intel_gt *gt, struct hbm_error *err)
+{
+	return FIELD_PREP(HBM_ERR_INFO_MAX_COL_MASK, err->col) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_COL_MASK, err->col) |
+	       FIELD_PREP(HBM_ERR_INFO_MAX_ROW_MASK, err->row) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_ROW_MASK, err->row) |
+	       FIELD_PREP(HBM_ERR_INFO_MAX_BANK_MASK, err->bank) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_BANK_MASK, err->bank) |
+	       FIELD_PREP(HBM_ERR_INFO_SEGMENT_ID_MASK, err->stack_id) |
+	       FIELD_PREP(HBM_ERR_INFO_NBANKS_MASK,
+			  hweight16(gt->errors.hbm_err_banks)) |
+	       FIELD_PREP(HBM_ERR_INFO_NCOLS_MASK,
+			  hweight16(gt->errors.hbm_err_columns));
+}
+
+static unsigned long hbm_err_info(struct intel_gt *gt, unsigned long old,
+				  struct hbm_error *err)
+{
+	unsigned long new = 0, max, min;
+
+	gt->errors.hbm_err_columns |= BIT(err->col);
+	gt->errors.hbm_err_banks |= BIT(err->bank);
+
+	if (!old)
+		return init_hbm_err_info(gt, err);
+
+	max = max_t(unsigned long, err->bank,
+		    FIELD_GET(HBM_ERR_INFO_MAX_BANK_MASK, old));
+	min = min_t(unsigned long, err->bank,
+		    FIELD_GET(HBM_ERR_INFO_MIN_BANK_MASK, old));
+	new |= FIELD_PREP(HBM_ERR_INFO_MAX_BANK_MASK, max) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_BANK_MASK, min);
+
+	max = max_t(unsigned long, err->col,
+		    FIELD_GET(HBM_ERR_INFO_MAX_COL_MASK, old));
+	min = min_t(unsigned long, err->col,
+		    FIELD_GET(HBM_ERR_INFO_MIN_COL_MASK, old));
+	new |= FIELD_PREP(HBM_ERR_INFO_MAX_COL_MASK, max) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_COL_MASK, min);
+
+	max = max_t(unsigned long, err->row,
+		    FIELD_GET(HBM_ERR_INFO_MAX_ROW_MASK, old));
+	min = min_t(unsigned long, err->row,
+		    FIELD_GET(HBM_ERR_INFO_MIN_ROW_MASK, old));
+	new |= FIELD_PREP(HBM_ERR_INFO_MAX_ROW_MASK, max) |
+	       FIELD_PREP(HBM_ERR_INFO_MIN_ROW_MASK, min);
+
+	new |= FIELD_PREP(HBM_ERR_INFO_NBANKS_MASK,
+			  hweight16(gt->errors.hbm_err_banks)) |
+	       FIELD_PREP(HBM_ERR_INFO_NCOLS_MASK,
+			  hweight16(gt->errors.hbm_err_columns));
+
+	new |= FIELD_PREP(HBM_ERR_INFO_SEGMENT_ID_MASK, err->stack_id);
+
+	return new;
+}
+
+static void update_hbm_error(struct intel_gt *gt, struct hbm_error *err,
+			     unsigned long idx_count, unsigned long idx_info)
+{
+	void *entry_count, *entry_info;
+	unsigned long flags;
+
+	if (!valid_hbm_err_info(gt, err))
+		return;
+
+	entry_count = xa_load(&gt->errors.hbm, idx_count);
+	entry_count = xa_mk_value(xa_to_value(entry_count) + 1);
+
+	entry_info = xa_load(&gt->errors.hbm, idx_info);
+	entry_info = xa_mk_value(hbm_err_info(gt, xa_to_value(entry_info), err));
+
+	xa_lock_irqsave(&gt->errors.hbm, flags);
+	if (xa_is_err(__xa_store(&gt->errors.hbm, idx_count, entry_count, GFP_ATOMIC)))
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "HBM error count on GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
+				    gt->info.id, err->stack, err->channel,
+				    err->psch, err->bank, err->col, err->row, err->stack_id);
+	if (xa_is_err(__xa_store(&gt->errors.hbm, idx_info, entry_info, GFP_ATOMIC)))
+		drm_err_ratelimited(&gt->i915->drm, HW_ERR
+				    "HBM error info on GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
+				    gt->info.id, err->stack, err->channel,
+				    err->psch, err->bank, err->col, err->row, err->stack_id);
+	xa_unlock_irqrestore(&gt->errors.hbm, flags);
+}
+
+static void update_hbm_correctable_error(struct intel_gt *gt, struct hbm_error *err)
+{
+	unsigned long idx_count, idx_info;
+
+	idx_count = HBM_CORR_ERR_COUNT_INDEX(err->stack, err->channel, err->psch);
+	idx_info = HBM_CORR_ERR_INFO_INDEX(err->stack, err->channel, err->psch);
+
+	update_hbm_error(gt, err, idx_count, idx_info);
+}
+
+static void update_hbm_uncorrectable_error(struct intel_gt *gt, struct hbm_error *err)
+{
+	unsigned long idx_count, idx_info;
+
+	idx_count = HBM_UNCORR_ERR_COUNT_INDEX(err->stack, err->channel, err->psch);
+	idx_info = HBM_UNCORR_ERR_INFO_INDEX(err->stack, err->channel, err->psch);
+
+	update_hbm_error(gt, err, idx_count, idx_info);
+}
+
 static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			     u32 reg_swf0, u32 reg_swf1)
 {
@@ -1864,9 +2019,11 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		u32 reserved:5;
 	};
 
+	struct drm_i915_private *i915 = gt->i915;
 	bool report_state_change = false;
 	struct swf0_bitfields bfswf0;
 	struct swf1_bitfields bfswf1;
+	struct hbm_error err = {0};
 	const char *event;
 
 	bfswf0.event_num = REG_FIELD_GET(EVENT_MASK, reg_swf0);
@@ -1881,19 +2038,40 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 	bfswf1.new_state = REG_FIELD_GET(NEWSTATE_MASK, reg_swf1);
 	bfswf1.stack_id = REG_FIELD_GET(STACKID_MASK, reg_swf1);
 
+	if (!i915->gt[bfswf0.tile]) {
+		drm_dbg(&i915->drm, HW_ERR
+			"HBM: Invalid tile - Cause 0x%x, HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+			cause, bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
+			bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
+		return;
+	}
+
+	/* interrupt is always triggered on gt0. tile points to real gt */
+	gt = i915->gt[bfswf0.tile];
+
+	err.stack = REG_FIELD_GET(CHANNEL_HBM_MASK, (u32) bfswf0.channel);
+	err.channel = REG_FIELD_GET(CHANNEL_NUMBER_MASK, (u32) bfswf0.channel);
+	err.psch = bfswf0.pseudochannel;
+	err.bank = bfswf1.bank;
+	err.col = bfswf1.column;
+	err.row = bfswf0.row;
+	err.stack_id = bfswf1.stack_id;
+
 	switch (cause) {
 	case BANK_CORRECTABLE_ERROR:
+		update_hbm_correctable_error(gt, &err);
+
 		event = "Correctable Error Received on";
 
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+		drm_dbg(&gt->i915->drm, HW_ERR
+			"GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
 				    cause);
 
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
-				    bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event,
-				    bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
-				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
+		drm_dbg(&gt->i915->drm, HW_ERR
+			"[HBM ERROR]: %s %s HBM Tile%u, Channel%u, Pseudo Channel %u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+			bfswf0.patrol_scrub ? "Patrol Scrub" : "Demand Access", event,
+			bfswf0.tile, bfswf0.channel, bfswf0.pseudochannel,
+			bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
 
 		if (bfswf1.old_state != bfswf1.new_state)
 			report_state_change = true;
@@ -1912,39 +2090,41 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 				    bfswf1.stack_id, bfswf1.bank, bfswf0.row, bfswf1.column);
 		break;
 	case BANK_SPARNG_DIS_PCLS_EXCEEDED:
+		update_hbm_uncorrectable_error(gt, &err);
+
 		switch (bfswf0.event_num) {
 		case UC_DEMAND_ACCESS:
 			event = "Uncorrectable Error on Demand Access received";
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-					    cause);
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
-					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
-					    bfswf0.row, bfswf1.column);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				cause);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+				event, bfswf0.tile, bfswf0.channel,
+				bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
+				bfswf0.row, bfswf1.column);
 			break;
 		case PATROL_SCRUB_ERROR:
 			event = "Uncorrectable Error on Patrol Scrub";
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-					    cause);
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
-					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
-					    bfswf0.row, bfswf1.column);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				cause);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"[HBM ERROR]: %s of HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u, Bank%u, Row%u, Column%u\n",
+				event, bfswf0.tile, bfswf0.channel,
+				bfswf0.pseudochannel, bfswf1.stack_id, bfswf1.bank,
+				bfswf0.row, bfswf1.column);
 			print_repair(gt);
 			break;
 		case PCLS_EXCEEDED:
 			event = "Exceeded PCLS Threshold";
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-					    cause);
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
-					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				cause);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
+				event, bfswf0.tile, bfswf0.channel,
+				bfswf0.pseudochannel, bfswf1.stack_id);
 			print_repair(gt);
 
 			if (bfswf1.old_state != bfswf1.new_state)
@@ -1953,31 +2133,32 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 			break;
 		case PCLS_SAME_CACHELINE:
 			event = "Cannot Apply PCLS, PCLS Already Applied to This Line";
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
 					    cause);
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
-					    event, bfswf0.tile, bfswf0.channel,
-					    bfswf0.pseudochannel, bfswf1.stack_id);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"[HBM ERROR]: %s on HBM Tile%u, Channel%u, Pseudo Channel%u, Stack ID%u\n",
+				event, bfswf0.tile, bfswf0.channel,
+				bfswf0.pseudochannel, bfswf1.stack_id);
 			print_repair(gt);
 			break;
 		default:
 			event = "Unknown event for Error Cause:";
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR
-					    "GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-					    cause);
-			drm_err_ratelimited(&gt->i915->drm, HW_ERR "%s 0x%x\n",
-					    event, cause);
+			drm_dbg(&gt->i915->drm, HW_ERR
+				"GSC CORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+				cause);
+			drm_dbg(&gt->i915->drm, HW_ERR "%s 0x%x\n",
+				event, cause);
 			break;
 		}
 		break;
 	case BANK_SPARNG_ENA_PCLS_UNCORRECTABLE:
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
-				    cause);
+		drm_dbg(&gt->i915->drm, HW_ERR
+			"GSC UNCORRECTABLE FW Error, GSC_HEC_CORR_FW_ERR_DW0::0x%08x\n",
+			cause);
+
 		dev_crit(gt->i915->drm.dev, HW_ERR
-				    "[HBM ERROR]: Unrepairable fault has been detected, replace the PVC Card\n");
+			 "[HBM ERROR]: Unrepairable fault has been detected, replace the PVC Card\n");
 		break;
 	default:
 		event = "Unknown Error Cause";
@@ -1986,9 +2167,9 @@ static void log_hbm_err_info(struct intel_gt *gt, u32 cause,
 		break;
 	}
 	if (report_state_change)
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "[HBM ERROR]: Old_State%u to New_State%u for HBM TILE%u\n",
-				    bfswf1.old_state, bfswf1.new_state, bfswf0.tile);
+		drm_dbg(&gt->i915->drm, HW_ERR
+			"[HBM ERROR]: Old_State%u to New_State%u for HBM TILE%u\n",
+			bfswf1.old_state, bfswf1.new_state, bfswf0.tile);
 }
 
 static void
@@ -2399,27 +2580,112 @@ static void log_errors(struct intel_gt *gt, const enum hardware_error hw_err,
 					  "%s %s error\n", err_msg, hw_err_str);
 }
 
+static struct pci_dev *get_usp_dev(struct pci_dev *dev)
+{
+	int i;
+
+	/*
+	 * PVC GFX device(SGUNIT) heirarchy is:
+	 *
+	 * RP--->USP-------->VSP0-->SGUNIT
+	 *
+	 * so iterate twice to reach the USP.
+	 *
+	 */
+	for (i = 0; i < 2 ; i++)
+		dev = pci_upstream_bridge(dev);
+
+	return dev;
+}
+
+static void
+gen12_fatal_error_reg_dump(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct pci_dev *usp = get_usp_dev(pdev);
+	struct intel_gt *gt;
+	int i;
+
+	for_each_gt(gt, i915, i) {
+		/* Dump mmio */
+		pvc_fatal_error_dump_soc_regs(gt);
+		pvc_fatal_error_dump_punit_regs(gt);
+		pvc_fatal_error_dump_mdfi_regs(gt);
+		pvc_fatal_error_dump_heci_regs(gt);
+		pvc_fatal_error_dump_sgunit_regs(gt);
+		pvc_fatal_error_dump_thermal_regs(gt);
+		pvc_fatal_error_dump_pci(gt, usp);
+		pvc_fatal_error_dump_hbm_regs(gt);
+		pvc_fatal_error_dump_slice_regs(gt);
+		pvc_fatal_error_dump_gt_bc_counter(gt);
+	}
+}
+
+static bool error_is_hbm(struct intel_gt *gt,
+			 const enum hardware_error hw_err,
+			 unsigned long errsrc)
+{
+	void __iomem * const regs = gt->uncore->regs;
+	u32 base = PVC_GSC_HECI1_BASE;
+	unsigned long status;
+	u32 cause;
+
+	if (gt->info.id != 0 ||
+	    hw_err != HARDWARE_ERROR_CORRECTABLE ||
+	    !test_bit(DEV_ERR_STAT_GSC_ERROR, &errsrc))
+		return false;
+
+	status = raw_reg_read(regs, GSC_HEC_CORR_UNCORR_ERR_STATUS(base, hw_err));
+	cause = raw_reg_read(regs, GSC_HEC_CORR_FW_ERR_DW0(base));
+
+	return test_bit(GSC_COR_FW_REPORTED_ERR, &status) &&
+	       (cause == 0x1001 || cause == 0x1002 || cause == 0x1003);
+}
+
+#define MAX_ERROR_MSG 128
 static void
 gen12_hw_error_source_handler(struct intel_gt *gt,
-			      const enum hardware_error hw_err)
+			      const enum hardware_error hw_err,
+			      bool previous_boot,
+			      const char *fmt, ...)
 {
 	void __iomem * const regs = gt->uncore->regs;
 	const char *hw_err_str = hardware_error_type_to_str(hw_err);
+	char error_msg[MAX_ERROR_MSG];
 	unsigned long errsrc;
 	unsigned long flags;
+	va_list args;
 	u32 errbit;
 
 	spin_lock_irqsave(gt->irq_lock, flags);
 	errsrc = raw_reg_read(regs, DEV_ERR_STAT_REG(hw_err));
 
+	va_start(args, fmt);
+	vscnprintf(error_msg, sizeof(error_msg), fmt, args);
+	va_end(args);
+
 	if (unlikely(!errsrc)) {
+		if (IS_PONTEVECCHIO(gt->i915))
+			log_gt_hw_err(gt, "%s", error_msg);
+
 		intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_INTERRUPT,
 					  "DEV_ERR_STAT_REG_%s blank!\n", hw_err_str);
 		goto out_unlock;
 	}
 
-	if (IS_PONTEVECCHIO(gt->i915))
-		log_gt_hw_err(gt, "DEV_ERR_STAT_REG_%s:0x%08lx\n", hw_err_str, errsrc);
+	if (IS_PONTEVECCHIO(gt->i915)) {
+		if (!error_is_hbm(gt, hw_err, errsrc)) {
+			log_gt_hw_err(gt, "%s", error_msg);
+			log_gt_hw_err(gt, "DEV_ERR_STAT_REG_%s:0x%08lx\n", hw_err_str, errsrc);
+		} else {
+			log_gt_hw_dbg(gt, "%s", error_msg);
+			log_gt_hw_dbg(gt, "DEV_ERR_STAT_REG_%s:0x%08lx\n", hw_err_str, errsrc);
+		}
+		/* Dump MMIO/pci registers before they get cleared */
+		if (hw_err == HARDWARE_ERROR_FATAL && !previous_boot &&
+		    gt->i915->params.enable_fatal_error_recovery)
+			gen12_fatal_error_reg_dump(gt->i915);
+	}
 
 	for_each_set_bit(errbit, &errsrc, DEV_ERR_STAT_MAX_BITS) {
 		bool is_valid = false;
@@ -2506,6 +2772,9 @@ gen12_hw_error_source_handler(struct intel_gt *gt,
 
 	raw_reg_write(regs, DEV_ERR_STAT_REG(hw_err), errsrc);
 
+	if (hw_err == HARDWARE_ERROR_FATAL && !previous_boot)
+		i915_pci_error_notify(gt->i915);
+
 out_unlock:
 	spin_unlock_irqrestore(gt->irq_lock, flags);
 }
@@ -2537,16 +2806,16 @@ static void gen12_iaf_irq_handler(struct intel_gt *gt, const u32 master_ctl)
  *	   the class of error being serviced.
  */
 static void
-gen12_hw_error_irq_handler(struct intel_gt *gt, const u32 master_ctl)
+gen12_hw_error_irq_handler(struct intel_gt *gt, const u32 master_ctl, bool previous_boot)
 {
 	enum hardware_error hw_err;
 
 	for (hw_err = 0; hw_err < HARDWARE_ERROR_MAX; hw_err++) {
 		if (master_ctl & GEN12_ERROR_IRQ(hw_err)) {
-			if (IS_PONTEVECCHIO(gt->i915))
-				log_gt_hw_err(gt, "%s error GFX_MSTR_INTR:0x%08x\n",
-					      hardware_error_type_to_str(hw_err), master_ctl);
-			gen12_hw_error_source_handler(gt, hw_err);
+			gen12_hw_error_source_handler(gt, hw_err, previous_boot,
+						      "%s error GFX_MSTR_INTR:0x%08x\n",
+						      hardware_error_type_to_str(hw_err),
+						      master_ctl);
 		}
 	}
 }
@@ -2658,23 +2927,6 @@ static irqreturn_t gen11_irq_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
-static inline u32 dg1_master_intr_disable(void __iomem * const regs)
-{
-	u32 val;
-
-	/* First disable interrupts */
-	raw_reg_write(regs, DG1_MSTR_TILE_INTR, 0);
-
-	/* Get the indication levels and ack the master unit */
-	val = raw_reg_read(regs, DG1_MSTR_TILE_INTR);
-	if (unlikely(!val))
-		return 0;
-
-	raw_reg_write(regs, DG1_MSTR_TILE_INTR, val);
-
-	return val;
-}
-
 static inline void dg1_master_intr_enable(void __iomem * const regs)
 {
 	raw_reg_write(regs, DG1_MSTR_TILE_INTR, DG1_MSTR_IRQ);
@@ -2728,7 +2980,7 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 
 		gen11_gt_irq_handler(gt, master_ctl);
 		gen12_iaf_irq_handler(gt, master_ctl);
-		gen12_hw_error_irq_handler(gt, master_ctl);
+		gen12_hw_error_irq_handler(gt, master_ctl, false);
 
 		/*
 		 * We'll probably only get display interrupts on tile 0, but
@@ -3471,9 +3723,15 @@ static void dg1_irq_postinstall(struct drm_i915_private *dev_priv)
 		/*
 		 * All Soc error correctable, non fatal and fatal are reported
 		 * to IEH registers only. To be safe we are clearing these errors as well.
+		 *
+		 * Route all Fatal errors via MSI
 		 */
-		if (IS_PONTEVECCHIO(gt->i915))
+		if (IS_PONTEVECCHIO(gt->i915)) {
 			clear_all_soc_errors(gt);
+			if (dev_priv->params.enable_fatal_error_recovery)
+				intel_uncore_rmw(gt->uncore, DEV_ERR_ROUTING_CTRL, 0,
+						 DEV_FATAL_ERR_ROUTING);
+		}
 
 		gen11_gt_irq_postinstall(gt);
 
@@ -3650,15 +3908,14 @@ static void process_hw_errors(struct drm_i915_private *dev_priv)
 		void __iomem *const regs = gt->uncore->regs;
 
 		if (dev_pcieerr_status & DEV_PCIEERR_IS_FATAL(i)) {
-			if (IS_PONTEVECCHIO(gt->i915))
-				log_gt_hw_err(gt, "DEV_PCIEERR_STATUS_FATAL:0x%08x\n",
-					      dev_pcieerr_status);
-			gen12_hw_error_source_handler(gt, HARDWARE_ERROR_FATAL);
+			gen12_hw_error_source_handler(gt, HARDWARE_ERROR_FATAL, true,
+						      "DEV_PCIEERR_STATUS_FATAL:0x%08x\n",
+						      dev_pcieerr_status);
 		}
 
 		master_ctl = raw_reg_read(regs, GEN11_GFX_MSTR_IRQ);
 		raw_reg_write(regs, GEN11_GFX_MSTR_IRQ, master_ctl);
-		gen12_hw_error_irq_handler(gt, master_ctl);
+		gen12_hw_error_irq_handler(gt, master_ctl, true);
 	}
 	if (dev_pcieerr_status)
 		raw_reg_write(t0_regs, DEV_PCIEERR_STATUS, dev_pcieerr_status);

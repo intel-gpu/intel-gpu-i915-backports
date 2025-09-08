@@ -386,6 +386,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 	if (ufence_compare(&wake))
 		return 0;
 
+	if (i915_is_pci_faulted(to_i915(dev)))
+		return -ENODEV;
+
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_SOFT)) {
 		ctx = i915_gem_context_lookup(file->driver_priv, arg->ctx_id);
 		if (IS_ERR_OR_NULL(ctx))
@@ -446,6 +449,11 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 
 		if (ufence_compare(&wake))
 			break;
+
+		if (i915_is_pci_faulted(to_i915(dev))) {
+			err = -ENODEV;
+			break;
+		}
 
 		if (ctx && i915_gem_context_is_banned(ctx)) {
 			err = -EIO;

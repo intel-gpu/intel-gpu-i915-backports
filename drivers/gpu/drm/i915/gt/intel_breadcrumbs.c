@@ -153,7 +153,6 @@ check_signal_order(struct intel_context *ce, struct i915_request *rq)
 static bool
 __i915_request_signal(struct i915_request *rq)
 {
-	i915_request_mark_complete(rq);
 	return !test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags);
 }
 
@@ -246,12 +245,15 @@ static void signal_irq_work(struct irq_work *work)
 						&rq->fence.flags))
 				break;
 
+			i915_request_mark_complete(rq);
+
 			/*
 			 * Queue for execution after dropping the signaling
 			 * spinlock as the callback chain may end up adding
 			 * more signalers to the same context or engine.
 			 */
 			spin_lock(&ce->signal_lock);
+			GEM_BUG_ON(rq->context != ce);
 			list_del_rcu(&rq->signal_link);
 			release = remove_signaling_context(b, ce);
 			spin_unlock(&ce->signal_lock);
@@ -261,31 +263,29 @@ static void signal_irq_work(struct irq_work *work)
 				intel_context_put(ce);
 			}
 
-			if (__i915_request_signal(rq))
-				/* We own signal_node now, xfer to local list */
-				signal = slist_add(&rq->signal_node, signal);
-			else
-				i915_request_put(rq);
+			/* We own signal_node now, xfer to local list */
+			signal = slist_add(&rq->signal_node, signal);
 		}
 	}
 	atomic_dec(&b->signaler_active);
 	rcu_read_unlock();
 
-	llist_for_each_safe(signal, sn, signal) {
-		struct i915_request *rq =
-			llist_entry(signal, typeof(*rq), signal_node);
-		struct list_head cb_list;
+	if (signal) {
+		llist_for_each_safe(signal, sn, llist_reverse_order(signal)) {
+			struct i915_request *rq =
+				llist_entry(signal, typeof(*rq), signal_node);
+			struct list_head cb_list;
 
-		if (rq->sched_engine->retire_inflight_request_prio)
-			rq->sched_engine->retire_inflight_request_prio(rq);
+			if (__i915_request_signal(rq)) {
+				spin_lock(&rq->sched.lock);
+				list_replace(&rq->fence.cb_list, &cb_list);
+				__dma_fence_signal__timestamp(&rq->fence, timestamp);
+				__dma_fence_signal__notify(&rq->fence, &cb_list);
+				spin_unlock(&rq->sched.lock);
+			}
 
-		spin_lock(&rq->sched.lock);
-		list_replace(&rq->fence.cb_list, &cb_list);
-		__dma_fence_signal__timestamp(&rq->fence, timestamp);
-		__dma_fence_signal__notify(&rq->fence, &cb_list);
-		spin_unlock(&rq->sched.lock);
-
-		i915_request_put(rq);
+			i915_request_put(rq);
+		}
 	}
 
 	wake_up_all(&b->wq);
@@ -396,10 +396,8 @@ void intel_breadcrumbs_free(struct kref *kref)
 static void irq_signal_request(struct i915_request *rq,
 			       struct intel_breadcrumbs *b)
 {
-	if (!__i915_request_signal(rq))
-		return;
-
 	i915_request_get(rq);
+	i915_request_mark_complete(rq);
 	if (llist_add(&rq->signal_node, &b->signaled_requests))
 		irq_work_queue(&b->irq_work);
 }
@@ -453,9 +451,9 @@ static void insert_breadcrumb(struct i915_request *rq)
 	}
 
 	i915_request_get(rq);
+	set_bit(I915_FENCE_FLAG_SIGNAL, &rq->fence.flags);
 	list_add_rcu(&rq->signal_link, pos);
 	GEM_BUG_ON(!check_signal_order(ce, rq));
-	set_bit(I915_FENCE_FLAG_SIGNAL, &rq->fence.flags);
 
 	/*
 	 * Defer enabling the interrupt to after HW submission and recheck

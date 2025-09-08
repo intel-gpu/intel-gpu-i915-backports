@@ -905,7 +905,9 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 		   init_utsname()->release,
 		   init_utsname()->machine);
 	err_printf(m, "Device: %s\n", dev_name(m->i915->drm.dev));
+#ifndef BPM_DRIVER_DATE_NOT_PRESENT
 	err_printf(m, "Driver: %s\n", DRIVER_DATE);
+#endif
 	ts = ktime_to_timespec64(error->time);
 	err_printf(m, "Time: %lld s %ld us\n",
 		   (s64)ts.tv_sec, ts.tv_nsec / NSEC_PER_USEC);

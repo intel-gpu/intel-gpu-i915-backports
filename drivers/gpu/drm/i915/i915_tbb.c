@@ -82,6 +82,7 @@ void i915_tbb_run_local(struct i915_tbb_node *node, struct list_head *local, voi
 			return;
 
 		fn(task);
+		cond_resched();
 	}
 }
 

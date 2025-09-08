@@ -2138,7 +2138,7 @@ void intel_engine_dump(struct intel_engine_cs *engine,
 	else if (work_pending(&engine->heartbeat.work.work))
 		i_printf(m, indent, "Heartbeat: pending @ %lu interrupts\n",
 			 engine->heartbeat.interrupts);
-	else
+	else if (engine->props.heartbeat_interval_ms)
 		i_printf(m, indent, "Heartbeat: idle\n");
 	rcu_read_unlock();
 	i_printf(m, indent, "Reset count: %d (global %d)\n",

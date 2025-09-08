@@ -932,21 +932,22 @@ __i915_request_initialize(struct i915_request *rq,
 
 	RCU_INIT_POINTER(rq->timeline, tl);
 
-	kref_init(&rq->fence.refcount);
-	rq->fence.flags = flags;
-	rq->fence.error = 0;
-	INIT_LIST_HEAD(&rq->fence.cb_list);
-
 	ret = intel_timeline_get_seqno(tl, rq, &seqno);
 	if (ret)
 		goto err_free;
 
+	GEM_BUG_ON(!tl->hwsp_seqno);
 	rq->fence.context = tl->fence_context;
 	rq->fence.seqno = seqno;
 	rq->hwsp_seqno = tl->hwsp_seqno;
 	GEM_BUG_ON(__i915_request_is_complete(rq));
 
 	rq->rcustate = get_state_synchronize_rcu(); /* acts as smp_mb() */
+
+	kref_init(&rq->fence.refcount);
+	rq->fence.flags = flags;
+	rq->fence.error = 0;
+	INIT_LIST_HEAD(&rq->fence.cb_list);
 
 	rq->guc_prio = GUC_PRIO_INIT;
 

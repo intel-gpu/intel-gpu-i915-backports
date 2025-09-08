@@ -459,7 +459,7 @@ static bool __cancel_engine(struct intel_context *ce, struct intel_engine_cs *en
 	 * kill the banned context, we fallback to doing a local reset
 	 * instead.
 	 */
-	return intel_engine_pulse(engine) == 0;
+	return intel_engine_pulse_with_check(engine, "context revocation") == 0;
 }
 
 static struct intel_engine_cs *active_engine(struct intel_context *ce)
@@ -515,8 +515,8 @@ static void kill_engines(struct i915_gem_engines *engines, bool ban)
 	for_each_gem_engine(ce, engines, it) {
 		struct intel_engine_cs *engine;
 
-		if (ban && intel_context_ban(ce, NULL))
-			continue;
+		if (ban)
+			intel_context_ban(ce, NULL);
 
 		/*
 		 * Check the current active state of this context; if we
@@ -577,12 +577,19 @@ static void engines_idle_release(struct i915_gem_context *ctx,
 	engines->ctx = i915_gem_context_get(ctx);
 
 	for_each_gem_engine(ce, engines, it) {
+		struct dma_fence *fence;
 		int err;
 
 		/* serialises with execbuf */
 		intel_context_close(ce);
 		if (!intel_context_pin_if_active(ce))
 			continue;
+
+		fence = i915_active_fence_get(&ce->timeline->last_request);
+		if (fence) {
+			dma_fence_enable_sw_signaling(fence);
+			dma_fence_put(fence);
+		}
 
 		/* Wait until context is finally scheduled out and retired */
 		err = i915_sw_fence_await_active(&engines->fence,

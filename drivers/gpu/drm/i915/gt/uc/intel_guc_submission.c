@@ -5816,6 +5816,11 @@ int intel_guc_sched_disable_gucid_threshold_max(struct intel_guc *guc)
 
 static void reset_fail_worker_func(struct work_struct *w);
 
+static void guc_capture_worker_func(struct work_struct *wrk)
+{
+	intel_guc_capture_process(container_of(wrk, struct intel_guc, submission_state.capture_worker));
+}
+
 /*
  * This default value of 33 milisecs (+1 milisec round up) ensures 30fps or higher
  * workloads are able to enjoy the latency reduction when delaying the schedule-disable
@@ -5843,6 +5848,8 @@ void intel_guc_submission_init_early(struct intel_guc *guc)
 		  destroyed_worker_func);
 	INIT_WORK(&guc->submission_state.reset_fail_worker,
 		  reset_fail_worker_func);
+	INIT_WORK(&guc->submission_state.capture_worker,
+		  guc_capture_worker_func);
 
 	guc->submission_state.sched_disable_delay_ms = SCHED_DISABLE_DELAY_MS;
 	guc->submission_state.num_guc_ids = GUC_MAX_CONTEXT_ID;
@@ -6056,6 +6063,8 @@ static void capture_error_state(struct intel_guc *guc,
 	if (!rcu_access_pointer(rq->context->gem_context))
 		goto out;
 
+	flush_work(&guc->submission_state.capture_worker);
+
 	error = i915_gpu_coredump_alloc(gt->i915, GFP_KERNEL);
 	if (!error)
 		goto out;
@@ -6140,6 +6149,9 @@ int intel_guc_context_reset_process_msg(struct intel_guc *guc,
 		return -EPROTO;
 	}
 
+	if (container_of(guc, struct intel_uc, guc)->epoch & 1)
+		return 0;
+
 	/*
 	 * The context lookup uses the xarray but lookups only require an RCU lock
 	 * not the full spinlock. So take the lock explicitly and keep it until the
@@ -6171,11 +6183,12 @@ int intel_guc_error_capture_process_msg(struct intel_guc *guc,
 	}
 
 	status = msg[0] & INTEL_GUC_STATE_CAPTURE_EVENT_STATUS_MASK;
-	if (status == INTEL_GUC_STATE_CAPTURE_EVENT_STATUS_NOSPACE)
+	if (status == INTEL_GUC_STATE_CAPTURE_EVENT_STATUS_NOSPACE) {
 		guc_warn(guc, "No space for error capture");
+		return 0;
+	}
 
-	intel_guc_capture_process(guc);
-
+	intel_gt_queue_work(guc_to_gt(guc), &guc->submission_state.capture_worker);
 	return 0;
 }
 

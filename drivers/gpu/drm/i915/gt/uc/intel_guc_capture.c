@@ -1291,7 +1291,6 @@ static int __guc_capture_flushlog_complete(struct intel_guc *guc)
 	};
 
 	return intel_guc_send_nb(guc, action, ARRAY_SIZE(action), 0);
-
 }
 
 static void __guc_capture_process_output(struct intel_guc *guc)
@@ -1511,7 +1510,10 @@ void intel_guc_capture_free_node(struct intel_engine_coredump *ee)
 	if (!ee || !ee->guc_capture_node)
 		return;
 
+	mutex_lock(&ee->guc_capture->mutex);
 	guc_capture_add_node_to_cachelist(ee->guc_capture, ee->guc_capture_node);
+	mutex_unlock(&ee->guc_capture->mutex);
+
 	ee->guc_capture = NULL;
 	ee->guc_capture_node = NULL;
 }
@@ -1586,8 +1588,11 @@ void intel_guc_capture_get_matching_node(struct intel_gt *gt,
 
 void intel_guc_capture_process(struct intel_guc *guc)
 {
-	if (guc->capture && !i915_is_pci_faulted(guc_to_gt(guc)->i915))
+	if (guc->capture && !i915_is_pci_faulted(guc_to_gt(guc)->i915)) {
+		mutex_lock(&guc->capture->mutex);
 		__guc_capture_process_output(guc);
+		mutex_unlock(&guc->capture->mutex);
+	}
 }
 
 static void
@@ -1620,6 +1625,7 @@ void intel_guc_capture_destroy(struct intel_guc *guc)
 	guc_capture_free_extlists(guc->capture->extlists);
 	kfree(guc->capture->extlists);
 
+	mutex_destroy(&guc->capture->mutex);
 	kfree(guc->capture);
 	guc->capture = NULL;
 }
@@ -1629,6 +1635,8 @@ int intel_guc_capture_init(struct intel_guc *guc)
 	guc->capture = kzalloc(sizeof(*guc->capture), GFP_KERNEL);
 	if (!guc->capture)
 		return -ENOMEM;
+
+	mutex_init(&guc->capture->mutex);
 
 	guc->capture->reglists = guc_capture_get_device_reglist(guc);
 

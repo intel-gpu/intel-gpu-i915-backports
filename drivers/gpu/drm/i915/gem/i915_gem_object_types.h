@@ -382,6 +382,7 @@ struct drm_i915_gem_object {
 	 * defined i915/i915_pci.c, e.g. PVC_CACHELEVEL.
 	 */
 #define I915_BO_PAT_INDEX GENMASK(25, 22)
+#define I915_BO_RESIDENT_HINT BIT(26)
 
 	unsigned long eviction;
 

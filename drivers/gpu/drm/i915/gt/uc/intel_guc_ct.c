@@ -358,18 +358,18 @@ int intel_guc_ct_enable(struct intel_guc_ct *ct)
 	size = ct->ctbs.recv.size * 4;
 	err = ct_register_buffer(ct, false, desc, cmds, size);
 	if (unlikely(err))
-		goto err_out;
+		return err;
 
 	desc = base + ptrdiff(ct->ctbs.send.desc, blob);
 	cmds = base + ptrdiff(ct->ctbs.send.cmds, blob);
 	size = ct->ctbs.send.size * 4;
 	err = ct_register_buffer(ct, true, desc, cmds, size);
 	if (unlikely(err))
-		goto err_out;
+		return err;
 
 	err = ct_control_enable(ct, true);
 	if (unlikely(err))
-		goto err_out;
+		return err;
 
 	ct->enabled = true;
 #if IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM)
@@ -378,11 +378,6 @@ int intel_guc_ct_enable(struct intel_guc_ct *ct)
 #endif
 
 	return 0;
-
-err_out:
-	CT_PROBE_ERROR(ct, "Failed to enable CTB (%pe)\n", ERR_PTR(err));
-	CT_DEAD(ct, SETUP);
-	return err;
 }
 
 /**
@@ -1462,8 +1457,8 @@ int intel_guc_ct_update_addresses(struct intel_guc_ct *ct)
 corrupted:
 	CT_ERROR(ct, "Corrupted descriptor head=%u tail=%u status=%#x\n",
 		 head, tail, desc->status);
-	ctb->broken = true;
 	CT_DEAD(ct, READ);
+	ctb->broken = true;
 	return -EPIPE;
 }
 

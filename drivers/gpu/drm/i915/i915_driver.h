@@ -15,7 +15,9 @@ struct drm_printer;
 
 #define DRIVER_NAME		CPTCFG_MODULE_I915
 #define DRIVER_DESC		"Intel Graphics"
+#ifndef BPM_DRIVER_DATE_NOT_PRESENT
 #define DRIVER_DATE		"20201103"
+#endif
 #define DRIVER_TIMESTAMP	1604406085
 
 extern const struct dev_pm_ops i915_pm_ops;

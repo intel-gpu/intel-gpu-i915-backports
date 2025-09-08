@@ -25,7 +25,12 @@ void intel_gt_unpark_heartbeats(struct intel_gt *gt);
 void intel_gt_heartbeats_disable(struct intel_gt *gt);
 void intel_gt_heartbeats_restore(struct intel_gt *gt, bool unpark);
 
-int intel_engine_pulse(struct intel_engine_cs *engine);
+int intel_engine_pulse_with_check(struct intel_engine_cs *engine, const char *check);
+static inline int intel_engine_pulse(struct intel_engine_cs *engine)
+{
+	return intel_engine_pulse_with_check(engine, NULL);
+}
+
 int intel_engine_flush_barriers(struct intel_engine_cs *engine);
 
 void intel_engine_schedule_heartbeat(struct intel_engine_cs *engine);

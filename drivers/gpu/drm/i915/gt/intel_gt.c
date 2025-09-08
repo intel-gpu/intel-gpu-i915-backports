@@ -96,6 +96,7 @@ void intel_gt_common_init_early(struct intel_gt *gt)
 	INIT_ACTIVE_FENCE(&gt->eu_debug.fault);
 
 	xa_init(&gt->errors.soc);
+	xa_init(&gt->errors.hbm);
 
 	intel_gt_init_buffer_pool(gt);
 
@@ -1108,12 +1109,14 @@ void intel_gt_driver_unregister(struct intel_gt *gt)
 	 * resources.
 	 */
 	intel_gt_set_wedged_on_fini(gt);
+	flush_work(&gt->wedge);
 
 	/* Scrub all HW state upon release */
 	with_intel_runtime_pm(gt->uncore->rpm, wakeref)
 		__intel_gt_reset(gt, ALL_ENGINES);
 
 	xa_destroy(&gt->errors.soc);
+	xa_destroy(&gt->errors.hbm);
 }
 
 void intel_gt_driver_release(struct intel_gt *gt)

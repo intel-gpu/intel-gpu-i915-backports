@@ -62,6 +62,7 @@ i915-y += i915_driver.o \
 	  intel_uncore.o \
 	  intel_vsec.o \
 	  intel_wakeref.o \
+	  pvc_fatal_error_dump.o \
 	  pvc_ras.o \
 	  $(null)
 

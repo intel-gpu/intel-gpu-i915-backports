@@ -234,7 +234,7 @@ i915_gem_copy_map_dma_buf(struct dma_buf_attachment *attach,
 		return NULL;
 
 	sg = __i915_gem_copy_map_dma_buf(attach, map_dir);
-	if (!sg) {
+	if (IS_ERR(sg)) {
 		kfree(sgt);
 		return NULL;
 	}

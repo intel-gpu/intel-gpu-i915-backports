@@ -66,6 +66,8 @@ __i915_active_fence_init(struct i915_active_fence *active,
 {
 	RCU_INIT_POINTER(active->fence, fence);
 	active->cb.func = fn ?: i915_active_noop;
+	if (IS_ENABLED(CPTCFG_DRM_I915_DEBUG_GEM))
+		INIT_LIST_HEAD(&active->cb.node);
 }
 
 #define INIT_ACTIVE_FENCE(A) \

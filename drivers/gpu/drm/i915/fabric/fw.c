@@ -1507,7 +1507,11 @@ end:
 	return err;
 }
 
+#ifdef BPM_DEVICE_FIND_CHILD_CONST_ARG_PRESENT
+static int spi_driver_match_fn(struct device *dev, const void *data)
+#else
 static int spi_driver_match_fn(struct device *dev, void *data)
+#endif
 {
 	return strcmp(dev_driver_string(dev), I915_SPI_DRIVER_NAME_AUX) == 0 ||
 		strcmp(dev_driver_string(dev), I915_SPI_DRIVER_NAME_MFD) == 0;

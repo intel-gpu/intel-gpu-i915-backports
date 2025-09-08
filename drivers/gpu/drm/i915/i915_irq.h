@@ -8,6 +8,7 @@
 
 #include <linux/ktime.h>
 #include <linux/types.h>
+#include <linux/pci.h>
 
 #include "i915_reg.h"
 

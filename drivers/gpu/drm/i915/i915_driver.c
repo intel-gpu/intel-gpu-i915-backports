@@ -1289,6 +1289,8 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	intel_vsec_init(dev_priv);
 #endif
 	pvc_wa_allow_rc6(dev_priv);
+
+	i915_pci_error_register(dev_priv);
 }
 
 /**
@@ -1299,6 +1301,8 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 {
 	struct intel_gt *gt;
 	unsigned int i;
+
+	i915_pci_error_unregister(dev_priv);
 
 	intel_unregister_dsm_handler();
 
@@ -2875,7 +2879,9 @@ static const struct drm_driver i915_drm_driver = {
 	.fops = &i915_driver_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
+#ifndef BPM_DRIVER_DATE_NOT_PRESENT
 	.date = DRIVER_DATE,
+#endif
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,

@@ -168,6 +168,8 @@ struct __guc_capture_ads_cache {
  * Internal context of the intel_guc_capture module.
  */
 struct intel_guc_state_capture {
+	struct mutex mutex;
+
 	/**
 	 * @reglists: static table of register lists used for error-capture state.
 	 */

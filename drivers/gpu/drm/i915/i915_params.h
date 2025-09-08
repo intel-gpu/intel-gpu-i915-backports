@@ -35,6 +35,9 @@ struct drm_printer;
 #define ENABLE_GUC_DO_NOT_LOAD_GUC	BIT(7)
 #define ENABLE_GUC_MASK			GENMASK(1, 0)
 
+/* To be used with enable_fatal_error_recovery param */
+#define MSI_NO_SBR			(2)
+
 /*
  * Invoke param, a function-like macro, for each i915 param, with arguments:
  *
@@ -91,6 +94,8 @@ struct drm_printer;
 	param(unsigned int, ring_mask, (unsigned int)~0, 0400) \
 	param(int, max_tiles, -1, 0400) \
 	param(unsigned int, pvc_fw_put_delay_ms, CPTCFG_DRM_I915_PVC_FORCEWAKE_DELAY_MS, 0600) \
+	param(int, force_driver_flr, -1, 0400) \
+	param(int, enable_fatal_error_recovery, 0, 0400) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, enable_busy_v2, false, 0400) \
 	param(bool, allow_non_persist_without_reset, false, 0400) \
@@ -107,7 +112,6 @@ struct drm_printer;
 	param(bool, disable_display, IS_ENABLED(CPTCFG_DRM_I915_DISPLAY) ? false : true, 0400) \
 	param(bool, survivability_mode, false, 0400) \
 	param(bool, enable_sriov_telemetry, false, 0400) \
-	param(int, force_driver_flr, -1, 0400) \
 	param(bool, disable_bo_chunking, false, 0600) \
 	param(bool, enable_force_miss_ftlb, true, 0600) \
 	param(bool, engine_mocs_uncacheable, false, 0600) \
@@ -116,7 +120,7 @@ struct drm_printer;
 	param(bool, enable_pcode_handshake, true, 0400) \
 	param(bool, enable_256B, true, 0400) \
 	param(bool, enable_gt_reset, true, 0400) \
-	param(bool, enable_spi, true, 0400)
+	param(bool, enable_spi, true, 0400) \
 
 #define MEMBER(T, member, ...) T member;
 struct i915_params {

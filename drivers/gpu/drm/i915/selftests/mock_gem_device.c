@@ -66,11 +66,11 @@ static void mock_device_release(struct drm_device *dev)
 
 	mock_device_flush(i915);
 	intel_gt_driver_remove(to_gt(i915));
+	mock_fini_ggtt(to_gt(i915)->ggtt);
 
 	i915_gem_drain_workqueue(i915);
 	i915_gem_drain_freed_objects(i915);
 
-	mock_fini_ggtt(to_gt(i915)->ggtt);
 	i915_sched_engine_put(i915->sched);
 
 	intel_gt_driver_late_release_all(i915);

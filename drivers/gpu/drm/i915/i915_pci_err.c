@@ -2,7 +2,9 @@
 /*
  * Copyright © 2021 Intel Corporation
  */
+
 #include <linux/pci.h>
+#include <linux/workqueue.h>
 
 #if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
 #include <linux/mfd/core.h>
@@ -13,8 +15,10 @@
 
 #include "i915_drv.h"
 #include "i915_driver.h"
-#include "intel_iaf.h"
 #include "i915_pci.h"
+#include "intel_iaf.h"
+
+static int hw_error_count;
 
 /**
  * i915_pci_error_detected - Called when a PCI error is detected.
@@ -44,12 +48,15 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	 * low level HW access and unplug the device from userspace.
 	 */
 	i915_pci_error_set_in_recovery(i915);
-	i915_pci_error_set_fault(i915);
+	if (i915_pci_error_set_fault(i915))
+		return PCI_ERS_RESULT_DISCONNECT;
 
 	dev_warn(i915->drm.dev, "removing device access to userspace\n");
-	drm_dev_unplug(&i915->drm);
+	add_taint_for_CI(i915, TAINT_DIE);
 	for_each_gt(gt, i915, i)
-		intel_gt_set_wedged(gt);
+		intel_gt_set_wedged_async(gt);
+
+	wake_up_all(&i915->user_fence_wq);
 
 	/*
 	 * On the current generation HW we do not expect
@@ -68,59 +75,17 @@ static pci_ers_result_t i915_pci_error_detected(struct pci_dev *pdev,
 	i915_pci_set_offline(pdev);
 	intel_iaf_pcie_error_notify(i915);
 
-#if !IS_ENABLED(CONFIG_AUXILIARY_BUS)
-	mfd_remove_devices(&pdev->dev);
-#endif
-
 	pci_disable_device(pdev);
 	return PCI_ERS_RESULT_NEED_RESET;
 }
 
-#ifdef BPM_FAKE_DEVM_DRM_RELEASE_ACTION
-static void fake_devm_drm_release_action(struct device *dev, void *res)
+static bool check_enable_pci(struct pci_dev *pdev)
 {
-	struct devres_node {
-		struct list_head		entry;
-		dr_release_t			release;
-#ifdef CONFIG_DEBUG_DEVRES
-		const char			*name;
-		size_t				size;
-#endif
-	} *node, *tmp;
+	u16 pmcsr;
 
-	struct devres {
-		struct devres_node		node;
-		/*
-		 * Some archs want to perform DMA into kmalloc caches
-		 * and need a guaranteed alignment larger than
-		 * the alignment of a 64-bit integer.
-		 * Thus we use ARCH_KMALLOC_MINALIGN here and get exactly the same
-		 * buffer alignment as if it was allocated by plain kmalloc().
-		 */
-		u8 __aligned(ARCH_KMALLOC_MINALIGN) data[];
-	} *dr;
-
-	struct action_devres {
-		void *data;
-		void (*action)(void *);
-	} *dres = NULL;
-	unsigned long flags;
-
-	spin_lock_irqsave(&dev->devres_lock, flags);
-	list_for_each_entry_safe_reverse(node, tmp, &dev->devres_head, entry) {
-		dr = container_of(node, struct devres, node);
-		dres = (struct action_devres *)dr->data;
-
-		if (dres->data == res)
-			break;
-		dres = NULL;
-	}
-	spin_unlock_irqrestore(&dev->devres_lock, flags);
-
-	if (!WARN_ON(!dres))
-		devm_release_action(dev, dres->action, res);
+	pci_read_config_word(pdev, pdev->pm_cap + PCI_PM_CTRL, &pmcsr);
+	return pmcsr != (u16)-1;
 }
-#endif
 
 /**
  * i915_pci_slot_reset - Called after PCI slot is reset
@@ -135,35 +100,20 @@ static void fake_devm_drm_release_action(struct device *dev, void *res)
  */
 static pci_ers_result_t i915_pci_slot_reset(struct pci_dev *pdev)
 {
-	struct drm_i915_private *i915 = pci_get_drvdata(pdev);
 	const struct pci_device_id *ent = pci_match_id(pdev->driver->id_table, pdev);
-
-	/* Arbitrary wait time for HW to come out of reset */
-	dev_info(&pdev->dev,
-		 "PCI slot has been reset, waiting 5s to re-enable\n");
-	msleep(5000);
-	if (pci_enable_device(pdev)) {
-		dev_err(&pdev->dev,
-			"Cannot re-enable PCI device after reset.\n");
-		i915_pci_error_clear_in_recovery(i915);
-		return PCI_ERS_RESULT_DISCONNECT;
-	}
-	pci_set_master(pdev);
-	i915_load_pci_state(pdev);
 
 	/*
 	 * We want to completely clean the driver and even destroy
 	 * the i915 private data and reinitialize afresh similar to
 	 * probe
 	 */
-	i915_pci_error_clear_fault(i915);
-	pdev->driver->remove(pdev);
-#ifdef BPM_FAKE_DEVM_DRM_RELEASE_ACTION
-	fake_devm_drm_release_action(&pdev->dev, &i915->drm);
-#else
-	devm_drm_release_action(&i915->drm);
-#endif
-	pci_disable_device(pdev);
+	device_release_driver(&pdev->dev);
+
+	/* Arbitrary wait time for HW to come out of reset */
+	dev_info(&pdev->dev,
+		 "PCI slot has been reset, waiting upto 60s to re-enable\n");
+	if (wait_for(check_enable_pci(pdev), 60000))
+		return PCI_ERS_RESULT_DISCONNECT;
 
 	if (!i915_driver_probe(pdev, ent)) {
 		if (i915_save_pci_state(pdev))
@@ -199,3 +149,186 @@ const struct pci_error_handlers i915_pci_err_handlers = {
 	.slot_reset = i915_pci_slot_reset,
 	.resume = i915_pci_err_resume,
 };
+
+static struct pci_dev *get_usp_dev(struct pci_dev *dev)
+{
+	int i;
+
+	/*
+	 * PVC GFX device(SGUNIT) heirarchy is:
+	 *
+	 * RP--->USP-------->VSP0-->SGUNIT
+	 *
+	 * so iterate twice to reach the USP.
+	 *
+	 */
+	for (i = 0; i < 2 ; i++)
+		dev = pci_upstream_bridge(dev);
+
+	return dev;
+}
+
+static inline u32 dg1_master_intr_disable(void __iomem * const regs)
+{
+	u32 val;
+
+	/* First disable interrupts */
+	raw_reg_write(regs, DG1_MSTR_TILE_INTR, 0);
+
+	/* Get the indication levels and ack the master unit */
+	val = raw_reg_read(regs, DG1_MSTR_TILE_INTR);
+	if (unlikely(!val))
+		return 0;
+
+	raw_reg_write(regs, DG1_MSTR_TILE_INTR, val);
+
+	return val;
+}
+
+#define PCI_HOTPLUG_MASK \
+	(PCI_EXP_SLTCTL_ABPE |	PCI_EXP_SLTCTL_HPIE | PCI_EXP_SLTCTL_CCIE | PCI_EXP_SLTCTL_DLLSCE)
+
+static void disable_hotplug_interrupts(struct pci_dev *pdev)
+{
+	u16 slot_ctrl;
+
+	if (!pdev->is_hotplug_bridge)
+		return;
+
+	pci_read_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTCTL, &slot_ctrl);
+	pci_write_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTCTL, slot_ctrl & ~PCI_HOTPLUG_MASK);
+}
+
+static void enable_hotplug_interrupts(struct pci_dev *pdev)
+{
+	u16 slot_ctrl;
+	u16 slot_stat;
+
+	if (!pdev->is_hotplug_bridge)
+		return;
+
+	pci_read_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTCTL, &slot_ctrl);
+	pci_read_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTSTA, &slot_stat);
+
+	pci_write_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTSTA,
+			      slot_stat | PCI_EXP_SLTSTA_DLLSC | PCI_EXP_SLTSTA_CC);
+	pci_write_config_word(pdev, pdev->pcie_cap + PCI_EXP_SLTCTL,
+			      slot_ctrl | PCI_HOTPLUG_MASK);
+}
+
+static void error_notify_cb(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+	struct pci_dev *rdev = pcie_find_root_port(pdev);
+	struct pci_dev *usp = get_usp_dev(pdev);
+	bool no_sbr = i915->params.enable_fatal_error_recovery == MSI_NO_SBR;
+
+	/*
+	 * Record the fault on the device to skip waits-for-ack and other
+	 * low level HW access and unplug the device from userspace.
+	 */
+	i915_pci_error_detected(pdev, pci_channel_io_normal);
+	device_release_driver(&pdev->dev);
+
+	if (no_sbr)
+		return;
+
+	pci_lock_rescan_remove();
+
+	pci_stop_and_remove_bus_device(usp);
+	msleep(500);
+
+	disable_hotplug_interrupts(rdev);
+
+	pci_bridge_secondary_bus_reset(rdev);
+	msleep(500);
+
+	enable_hotplug_interrupts(rdev);
+	pci_unlock_rescan_remove();
+}
+
+static LIST_HEAD(error_notifier);
+static DEFINE_MUTEX(error_mutex);
+static void error_fn(struct work_struct *wrk)
+{
+	struct drm_i915_private *i915;
+	struct list_head bookmark;
+	struct pci_bus *bus = NULL;
+
+	pr_notice(DRIVER_NAME " Disabling all devices\n");
+	hw_error_count++;
+
+	mutex_lock(&error_mutex);
+	list_for_each_entry(i915, &error_notifier, error_notify) {
+		list_add(&bookmark, &i915->error_notify);
+		mutex_unlock(&error_mutex);
+
+		error_notify_cb(i915);
+
+		mutex_lock(&error_mutex);
+		i915 = container_of(&bookmark, typeof(*i915), error_notify);
+		__list_del_entry(&bookmark);
+	}
+	mutex_unlock(&error_mutex);
+
+	pr_info(DRIVER_NAME " Rescanning PCI bus\n");
+	pci_lock_rescan_remove();
+	while ((bus = pci_find_next_bus(bus)) != NULL)
+		pci_rescan_bus(bus);
+	pci_unlock_rescan_remove();
+}
+
+static DECLARE_DELAYED_WORK(error_work, error_fn);
+
+void i915_pci_error_notify(struct drm_i915_private *i915)
+{
+	struct pci_dev *pdev = to_pci_dev(i915->drm.dev);
+
+	if (i915_pci_error_detected(pdev, pci_channel_io_normal) == PCI_ERS_RESULT_DISCONNECT)
+		return;
+
+	queue_delayed_work(system_unbound_wq, &error_work,
+			   round_jiffies_up_relative(msecs_to_jiffies(CPTCFG_DRM_I915_PCI_RECOVERY_DELAY_MS)));
+}
+
+void i915_pci_error_register(struct drm_i915_private *i915)
+{
+	mutex_lock(&error_mutex);
+	list_add(&i915->error_notify, &error_notifier);
+	mutex_unlock(&error_mutex);
+}
+
+void i915_pci_error_unregister(struct drm_i915_private *i915)
+{
+	mutex_lock(&error_mutex);
+	list_del(&i915->error_notify);
+	mutex_unlock(&error_mutex);
+}
+
+void i915_pci_error_exit(void)
+{
+	flush_delayed_work(&error_work);
+}
+
+#if IS_ENABLED(CPTCFG_DRM_I915_DEBUG)
+static int hw_error_inject_set(const char *val, const struct kernel_param *kp)
+{
+	mod_delayed_work(system_unbound_wq, &error_work, 0);
+	return 0;
+}
+
+static int hw_error_inject_get(char *val, const struct kernel_param *kp)
+{
+	strcpy(val, "0");
+	return 0;
+}
+
+static const struct kernel_param_ops ops = {
+	.set = hw_error_inject_set,
+	.get = hw_error_inject_get,
+};
+module_param_cb_unsafe(hw_error_inject, &ops, NULL, 0600);
+MODULE_PARM_DESC(hw_error_inject, "Simulate a fatal HW error forcing device recovery");
+#endif
+
+module_param_named(hw_error_count, hw_error_count, int, 0400);

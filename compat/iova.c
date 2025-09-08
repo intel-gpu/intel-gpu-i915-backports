@@ -20,7 +20,7 @@
 #include <linux/iova.h>
 
 #ifdef BPM_ALLOC_IOVA_FAST_EXPORT_NOT_PRESENT
-static inline void free_cpu_cached_iovas(unsigned int cpu,
+void free_cpu_cached_iovas(unsigned int cpu,
                                          struct iova_domain *iovad)
 {
 }
@@ -59,7 +59,9 @@ retry:
         return new_iova->pfn_lo;
 }
 EXPORT_SYMBOL_GPL(alloc_iova_fast);
+#endif
 
+#ifdef BPM_FREE_IOVA_FAST_EXPORT_NOT_PRESENT
 /**
  * free_iova_fast - free iova pfn range into rcache
  * @iovad: - iova domain in question.
