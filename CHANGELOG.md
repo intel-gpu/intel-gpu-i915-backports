@@ -1,4 +1,35 @@
 # ChangeLog
+## Release I915_25WW36.5_1146.31_25.2.25_250224.31
+* Introduced an experimental recovery mechanism for handling fatal GPU errors, designed to restore
+  functionality without requiring a full system reboot or GPU reset. This helps reduce downtime and improves
+  system reliability. This feature is disabled by default and can be enabled using the enable_fatal_error_recovery
+  flag: a value of 1 routes fatal errors as Message Signaled Interrupts (MSI) and attempts a Secondary Bus Reset
+  (SBR), while a value of 2 routes errors as MSI without attempting an SBR.
+* Enabled the dynamic ICS via the opt-in KLV feature.
+* Updated the Graphics Micro Controller (GuC) to version 70.44.1.
+* Extended 2M userptr support to 1G.
+* Enabled backport support for kernel version 6.13.
+* Added support for the HBM_REPLACE bit to signal High Bandwidth Memory (HBM) health status and its transition
+  to the REPLACE state. This enhancement enables the driver to detect the bit and prevent loading when the state
+  changes to REPLACE, while also reporting the issue and prompting HBM replacement.
+* Enabled group busyness counters in a VF.
+* Supported dumping multiple engines for offline debugging.
+* Supported 4K pages in lmem swapper.
+* Enhanced HBM training failure reporting.
+* Added extra debug info for GuC CT errors.
+* Added PCI ID for new PVC vector-only SKU.
+* Added write barriers between flat-ppgtt init and usage.
+* Showed multiCCS status in sysrq-G.
+* Showed pagefault address in canonical format.
+* Added jiffies for missing age parameter.
+* Tuned active defrag and idle buddy allocation.
+* Supported marking VM_BIND vmas as read-only.
+* Updated DG2 HuC to version 7.10.14.
+* Added the survivability lite feature for firmware updates on Flex.
+* Enhanced the offline installer for RHEL by including pre-built kernel modules for the Intel i915 graphics driver.
+  These modules simplify installation and management of the driver. For further details, see the documentation
+  provided with the offline installer. To access this documentation, run the offline installer with the -s parameter.
+
 ## Release I915_25WW30.4_1146.12_25.2.16_250224.22
 * Improved GPU error reporting by including UUID resources for better diagnostics.
 * Enhanced responsiveness during memory management tasks.

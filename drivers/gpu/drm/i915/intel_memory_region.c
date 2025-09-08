@@ -194,6 +194,46 @@ __intel_memory_region_put_pages_buddy(struct intel_memory_region *mem,
 	intel_memory_region_free_pages(mem, blocks, dirty);
 }
 
+static bool smem_allow_eviction(struct drm_i915_gem_object *obj)
+{
+	if (obj->memory_mask != REGION_SMEM)
+		return true;
+
+	if (obj->mempol != I915_GEM_CREATE_MPOL_BIND)
+		return true;
+
+	return bitmap_weight(get_obj_nodes(obj), obj->maxnode) > 1;
+}
+
+static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
+{
+	/* Only evict user lmem only objects if overcommit is enabled */
+	if (!(obj->flags & I915_BO_ALLOC_USER))
+		return true;
+
+	if (obj->flags & I915_BO_RESIDENT_HINT) {
+		struct i915_vma *vma;
+		bool resident;
+
+		resident = false;
+		rcu_read_lock();
+		list_for_each_entry_rcu(vma, &obj->vma.list, obj_link) {
+			if (test_bit(I915_VMA_RESIDENT_BIT, __i915_vma_flags(vma))) {
+				resident = true;
+				break;
+			}
+		}
+		rcu_read_unlock();
+		if (resident)
+			return false;
+	}
+
+	if (obj->memory_mask & REGION_SMEM)
+		return smem_allow_eviction(obj);
+
+	return i915_allows_overcommit(to_i915(obj->base.dev));
+}
+
 static int size_index(unsigned long sz)
 {
 	if (sz >> 30)
@@ -299,7 +339,9 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 				continue;
 			}
 
-			if (i915_gem_object_is_active(obj))
+			if (!i915_gem_object_allows_eviction(obj))
+				pinned += obj->base.size;
+			else if (i915_gem_object_is_active(obj))
 				active += obj->base.size;
 			else if (dma_resv_is_locked(obj->base.resv))
 				locked += obj->base.size;
@@ -455,37 +497,13 @@ void intel_memory_region_print(struct intel_memory_region *mem,
 		mem->ops->show(mem, p, indent);
 }
 
-static bool smem_allow_eviction(struct drm_i915_gem_object *obj)
-{
-	if (obj->memory_mask != REGION_SMEM)
-		return true;
-
-	if (obj->mempol != I915_GEM_CREATE_MPOL_BIND)
-		return true;
-
-	return bitmap_weight(get_obj_nodes(obj), obj->maxnode) > 1;
-}
-
-static bool i915_gem_object_allows_eviction(struct drm_i915_gem_object *obj)
-{
-	/* Only evict user lmem only objects if overcommit is enabled */
-	if (!(obj->flags & I915_BO_ALLOC_USER))
-		return true;
-
-	if (obj->memory_mask & REGION_SMEM)
-		return smem_allow_eviction(obj);
-
-	return i915_allows_overcommit(to_i915(obj->base.dev));
-}
-
 int intel_memory_region_evict(struct intel_memory_region *mem,
-			      struct i915_gem_ww_ctx *ww,
+			      struct i915_gem_ww_ctx *__ww,
 			      resource_size_t target,
 			      unsigned long age,
 			      int chunk)
 {
-	const unsigned long end_time =
-		jiffies + (ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 5);
+	const unsigned long end_time = jiffies + msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT);
 	struct list_head *phases[] = {
 		/*
 		 * Purgeable objects are deemed to be free by userspace
@@ -510,10 +528,17 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	struct intel_memory_region_link end = { .age = age };
 	struct intel_memory_region_link *pos;
 	struct list_head **phase = phases;
-	bool keepalive, active = false;
+	struct i915_gem_ww_ctx *ww = NULL;
+	enum {
+		KEEPALIVE_NONE = 0,
+		KEEPALIVE_YOUNG,
+		KEEPALIVE_LOCKED,
+		KEEPALIVE_ACTIVE,
+		KEEPALIVE_INTERNAL,
+	} keepalive;
 	resource_size_t found = 0;
-	long max_timeout = 0;
-	long timeout;
+	bool active = true;
+	long timeout = 0;
 	int err = 0;
 
 	if (mem->ops->shrink_cache) {
@@ -538,8 +563,7 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 	 * a fair ordering across all current evictions and future allocations.
 	 */
 next:
-	timeout = 0;
-	keepalive = true;
+	keepalive = KEEPALIVE_INTERNAL;
 
 	while (list_empty(*phase)) {
 		if (!*++phase)
@@ -557,15 +581,10 @@ next:
 		}
 
 		if (unlikely(!pos->mem)) { /* skip over other bookmarks */
-			if (pos == &end) {
-				if (time_before(age, bookmark.age)) {
-					pos = list_prev_entry(pos, link);
-					list_move_tail(&end.link, *phase);
-					age = bookmark.age;
-				} else {
-					timeout = max_timeout;
-					keepalive = false;
-				}
+			if (pos == &end && --keepalive) {
+				pos = list_prev_entry(pos, link);
+				list_move_tail(&end.link, *phase);
+				age = bookmark.age;
 			}
 			continue;
 		}
@@ -577,10 +596,7 @@ next:
 		if (i915_gem_object_is_framebuffer(obj))
 			continue;
 
-		if (!i915_gem_object_allows_eviction(obj))
-			continue;
-
-		if (ww && ww == i915_gem_get_locking_ctx(obj))
+		if (__ww && __ww == i915_gem_get_locking_ctx(obj))
 			continue;
 
 		if (!ww && (obj->eviction || dma_resv_is_locked(obj->base.resv))) {
@@ -588,21 +604,38 @@ next:
 			continue;
 		}
 
+		if (!i915_gem_object_allows_eviction(obj)) {
+			active |= obj->flags & I915_BO_ALLOC_USER;
+			continue;
+		}
+
 		if (!i915_gem_object_get_rcu(obj))
 			continue;
 
 		list_replace(&pos->link, &bookmark.link);
-		if (keepalive) {
+		switch (keepalive) {
+		case KEEPALIVE_INTERNAL:
 			if (!(obj->flags & I915_BO_ALLOC_USER)) {
 				list_add_tail(&pos->link, *phase);
 				goto delete_bookmark;
 			}
+			fallthrough;
 
+		case KEEPALIVE_ACTIVE:
+			if (i915_gem_object_is_active(obj)) {
+				list_add(&pos->link, &end.link);
+				goto delete_bookmark;
+			}
+			fallthrough;
+
+		case KEEPALIVE_LOCKED:
 			if (obj->eviction || dma_resv_is_locked(obj->base.resv)) {
 				list_add_tail(&pos->link, *phase);
 				goto delete_bookmark;
 			}
+			fallthrough;
 
+		case KEEPALIVE_YOUNG:
 			if (!i915_gem_object_is_purgeable(obj) && !(obj->memory_mask & REGION_SMEM)) {
 				if (!time_before(obj->mm.region.age, age)) {
 					list_add(&pos->link, &end.link);
@@ -623,11 +656,10 @@ next:
 					goto delete_bookmark;
 				}
 			}
+			fallthrough;
 
-			if (i915_gem_object_is_active(obj)) {
-				list_add(&pos->link, &end.link);
-				goto delete_bookmark;
-			}
+		case KEEPALIVE_NONE:
+			break;
 		}
 
 		obj->eviction++;
@@ -729,9 +761,10 @@ out:
 
 	/* XXX optimistic busy wait for transient pins */
 	if (active && !time_after(jiffies, end_time)) {
-		max_timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
+		timeout = ww ? msecs_to_jiffies(CPTCFG_DRM_I915_FENCE_TIMEOUT) : 0;
 		phase = phases;
 		active = false;
+		ww = __ww;
 		yield();
 		goto next;
 	}

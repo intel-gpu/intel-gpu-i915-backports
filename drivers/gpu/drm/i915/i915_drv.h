@@ -912,9 +912,10 @@ struct drm_i915_private {
 	        u8 ways[NUM_CLOS];
 	} cache_resv;
 
+	struct pci_saved_state *pci_state;
+	struct list_head error_notify;
 	bool device_faulted;
 	bool in_recovery;
-	struct pci_saved_state *pci_state;
 };
 
 static inline struct drm_i915_private *to_i915(const struct drm_device *dev)
@@ -1715,10 +1716,10 @@ static inline bool i915_allows_overcommit(const struct drm_i915_private *i915)
 	return !i915->mm.user_acct_limit[INTEL_MEMORY_OVERCOMMIT_LMEM];
 }
 
-static inline void
+static inline bool
 i915_pci_error_set_fault(struct drm_i915_private *i915)
 {
-	WRITE_ONCE(i915->device_faulted, true);
+	return xchg(&i915->device_faulted, true);
 }
 
 static inline void

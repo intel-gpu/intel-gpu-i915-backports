@@ -345,6 +345,7 @@ static u32 hwsp_offset(const struct i915_request *rq)
 	const struct intel_timeline *tl;
 
 	/* Before the request is executed, the timeline is fixed */
+	GEM_BUG_ON(i915_request_signaled(rq));
 	tl = rcu_dereference_protected(rq->timeline, true);
 	return page_mask_bits(tl->hwsp_offset) + offset_in_page(rq->hwsp_seqno);
 }

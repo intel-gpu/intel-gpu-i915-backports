@@ -315,6 +315,9 @@ i915_param_named_unsafe(enable_gt_reset, bool, 0400,
 i915_param_named_unsafe(enable_spi, bool, 0400,
 			"Set this false to prevent i915.spi driver load");
 
+i915_param_named_unsafe(enable_fatal_error_recovery, int, 0400,
+			"Enable fatal error recovery: 0 = MCE and reboot [default], 1 = Route fatal error as MSI and attempt SBR, 2 = Route fatal error as MSI but do not attempt SBR");
+
 static __always_inline void _print_param(struct drm_printer *p,
 					 const char *name,
 					 const char *type,

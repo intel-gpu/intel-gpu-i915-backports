@@ -50,4 +50,8 @@
 	drm_dp_remove_payload(mgr, mst_state, new_payload)
 #endif
 
+#ifdef BPM_DRM_DP_GET_VC_PAYLOAD_BW_ARG_NOT_PRESENT
+#define drm_dp_get_vc_payload_bw(a,b,c) drm_dp_get_vc_payload_bw(b,c)
+#endif
+
 #endif /* _BACKPORT_DRM_DP_MST_HELPER_H_ */

@@ -212,6 +212,7 @@ struct intel_guc {
 		 * a GT reset after an engine reset fails
 		 */
 		struct work_struct reset_fail_worker;
+		struct work_struct capture_worker;
 		/**
 		 * @submission_state.reset_fail_mask: mask of engines that
 		 * failed to reset

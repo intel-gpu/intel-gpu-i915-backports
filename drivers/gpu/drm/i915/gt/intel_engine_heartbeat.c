@@ -503,7 +503,65 @@ void intel_gt_heartbeats_restore(struct intel_gt *gt, bool unpark)
 		intel_gt_unpark_heartbeats(gt);
 }
 
-static int __intel_engine_pulse(struct intel_engine_cs *engine)
+struct pulse_check {
+	struct delayed_work base;
+	struct dma_fence_cb cb;
+	struct i915_request *rq;
+	const char *reason;
+	unsigned long interrupts;
+	unsigned long epoch;
+};
+
+static unsigned long interrupt_count(const struct intel_engine_cs *engine)
+{
+	return READ_ONCE(engine->stats.irq.count) + READ_ONCE(engine->gt->uc.guc.stats.irq.count);
+}
+
+static void pulse_free(struct pulse_check *pc)
+{
+	i915_request_put(pc->rq);
+
+	GEM_BUG_ON(!list_empty(&pc->cb.node));
+	kfree(pc);
+}
+
+static void pulse_check(struct work_struct *wrk)
+{
+	struct pulse_check *pc = container_of(wrk, typeof(*pc), base.work);
+	unsigned long count;
+
+	if (dma_fence_is_signaled(&pc->rq->fence))
+		goto done;
+
+	if (pc->epoch != pc->rq->engine->gt->uc.epoch)
+		goto done;
+
+	count = interrupt_count(pc->rq->engine);
+	if (count != pc->interrupts) {
+		pc->interrupts = count;
+		mod_delayed_work(pc->rq->engine->gt->wq, &pc->base, round_jiffies_up_relative(1));
+		return;
+	}
+
+	intel_gt_handle_error(pc->rq->engine->gt, pc->rq->execution_mask, 0, pc->reason);
+
+done:
+	spin_lock_irq(&pc->rq->sched.lock);
+	list_del_init(&pc->cb.node);
+	spin_unlock_irq(&pc->rq->sched.lock);
+
+	pulse_free(pc);
+}
+
+static void pulse_cb(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+	struct pulse_check *pc = container_of(cb, typeof(*pc), cb);
+
+	if (cancel_delayed_work(&pc->base))
+		pulse_free(pc);
+}
+
+static int __intel_engine_pulse(struct intel_engine_cs *engine, const char *check)
 {
 	struct intel_context *ce = engine->kernel_context;
 	int prio = I915_PRIORITY_BARRIER;
@@ -536,6 +594,28 @@ static int __intel_engine_pulse(struct intel_engine_cs *engine)
 	rq = heartbeat_create(ce, GFP_NOWAIT | __GFP_NOWARN);
 	if (IS_ERR(rq))
 		return PTR_ERR(rq);
+
+	/*
+	 * If the pulse doesn't complete quickly, declare the engine stuck.
+	 *
+	 * As the pulse is used to kick contexts from the gpu on closure, if
+	 * that context is stuck on the gpu and cannot be removed by an engine
+	 * reset, we need a full blown GT reset to recover.
+	 */
+	if (check && !engine->props.heartbeat_interval_ms) {
+		struct pulse_check *pc;
+
+		pc = kmalloc(sizeof(*pc), GFP_KERNEL);
+		if (pc) {
+			pc->rq = i915_request_get(rq);
+			pc->reason = check;
+			pc->epoch = engine->gt->uc.epoch & ~1;
+			pc->interrupts = interrupt_count(engine);
+			INIT_DELAYED_WORK(&pc->base, pulse_check);
+			dma_fence_add_callback(&rq->fence, &pc->cb, pulse_cb);
+			queue_delayed_work(engine->gt->wq, &pc->base, round_jiffies_up_relative(2 * HZ - 1));
+		}
+	}
 
 	__set_bit(I915_FENCE_FLAG_SENTINEL, &rq->fence.flags);
 
@@ -579,7 +659,7 @@ int intel_engine_set_heartbeat(struct intel_engine_cs *engine,
 
 		/* recheck current execution */
 		if (intel_engine_has_preemption(engine)) {
-			err = __intel_engine_pulse(engine);
+			err = __intel_engine_pulse(engine, delay ? NULL : "heartbeat termination");
 			if (err)
 				set_heartbeat(engine, saved);
 		}
@@ -592,7 +672,7 @@ out_rpm:
 	return err;
 }
 
-int intel_engine_pulse(struct intel_engine_cs *engine)
+int intel_engine_pulse_with_check(struct intel_engine_cs *engine, const char *check)
 {
 	struct intel_context *ce = engine->kernel_context;
 	int err;
@@ -605,7 +685,7 @@ int intel_engine_pulse(struct intel_engine_cs *engine)
 
 	err = -ERESTARTSYS;
 	if (!mutex_lock_interruptible(&ce->timeline->mutex)) {
-		err = __intel_engine_pulse(engine);
+		err = __intel_engine_pulse(engine, check);
 		mutex_unlock(&ce->timeline->mutex);
 	}
 

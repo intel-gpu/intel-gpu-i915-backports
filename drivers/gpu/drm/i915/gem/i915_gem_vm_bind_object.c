@@ -1042,6 +1042,7 @@ int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 			ret = -ENOMEM;
 			goto unlock_vm;
 		}
+	 obj->flags |= I915_BO_RESIDENT_HINT;
 	} else {
 		/* bind during next execbuf, user fence here is invalid */
 		if (ext.bind_fence.mm) {

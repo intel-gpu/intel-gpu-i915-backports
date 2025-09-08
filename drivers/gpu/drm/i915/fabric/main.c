@@ -228,6 +228,8 @@ static void fdev_wait_on_release(struct fdev *dev)
 {
 	fdev_put(dev);
 
+	if (dev->dev_disabled)
+		return;
 	wait_for_completion_killable_timeout(&dev->fdev_released,
 					     RELEASE_TIMEOUT);
 }
@@ -427,7 +429,7 @@ static void mappings_ref_wait(struct fdev *dev)
 	dev->mappings_ref.remove_in_progress = true;
 	dev->mappings_ref.count--;
 
-	if (dev->mappings_ref.count == 0) {
+	if (dev->mappings_ref.count == 0 || dev->dev_disabled) {
 		mutex_unlock(&dev->mappings_ref.lock);
 		return;
 	}
@@ -695,7 +697,8 @@ static int iaf_remove(struct platform_device *pdev)
 	 * traffic.  note that during driver unload, both the routing engine
 	 * and event manager will be stopped, and this will not wait
 	 */
-	routing_dev_unroute(dev);
+	if (!dev->dev_disabled)
+		routing_dev_unroute(dev);
 
 	for (i = 0; i < pd->sd_cnt; i++)
 		remove_subdevice(&dev->sd[i]);

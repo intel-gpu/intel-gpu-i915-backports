@@ -167,3 +167,14 @@ config DRM_I915_WATCHDOG_INTERVAL
 	  /sys/class/drm/card?/engine/*/watchdog_interval_ms
 
 	  May be 0 to disable the watchdog.
+
+config DRM_I915_PCI_RECOVERY_DELAY_MS
+	int "Delay before initiating a global device recovery (ms)"
+	default 10000 # milliseconds
+	help
+	  The driver may respond to a fatal device error by attempting a
+	  secondary bus reset of the affected device(s). Since this must reset
+	  the PCI bus, all device on the bus will be affected and so we must initiate
+	  a global recovery mechanism. This setting imposes a small delay before
+	  starting that reset procedure so that all failing devices may be discovered
+	  before the first reset, and to rate-limit repetitious recoveries.

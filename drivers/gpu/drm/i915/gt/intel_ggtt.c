@@ -558,7 +558,7 @@ static void ggtt_cleanup_hw(struct i915_ggtt *ggtt)
 	mutex_lock(&ggtt->vm.mutex);
 
 	list_for_each_entry_safe(vma, vn, &ggtt->vm.bound_list, vm_link)
-		WARN_ON_ONCE(__i915_vma_unbind(vma));
+		GEM_WARN_ON(__i915_vma_unbind(vma));
 
 	ggtt_release_guc_top(ggtt);
 	intel_iov_fini_ggtt(&ggtt->vm.gt->iov);

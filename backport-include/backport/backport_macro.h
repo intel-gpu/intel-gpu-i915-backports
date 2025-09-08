@@ -4,6 +4,32 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(6,14,0)
+
+/*
+ * cb2e1c2136f drm: remove driver date from struct drm_driver and all drivers
+ */
+#define BPM_DRIVER_DATE_NOT_PRESENT
+
+/*
+ * d670c8e5302 mm: remove PageTransTail()
+ */
+#define BPM_PAGE_TRANSTAIL_NOT_PRESENT
+
+/*
+ * 79cb1fad39f drm/mst: remove mgr parameter and debug
+ * logging from drm_dp_get_vc_payload_bw()
+ */
+#define BPM_DRM_DP_GET_VC_PAYLOAD_BW_ARG_NOT_PRESENT
+
+/*
+ * f1e8bf56320a driver core: Constify API device_find_child()
+ * and adapt for various usages
+ */
+#define BPM_DEVICE_FIND_CHILD_CONST_ARG_PRESENT
+
+#endif /* LINUX_VERSION_IS_GEQ(6,14,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,13,0)
 /*
  * 94a20fb9af16 sysfs: treewide: constify attribute callback of bin_attribute::mmap()
@@ -60,7 +86,8 @@
 #endif /* LINUX_VERSION_IS_GEQ(6,12,0) */
 
 #if LINUX_VERSION_IS_GEQ(6,11,0) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,7,0)
 /*
  * 1bb01bdab03f drm: move i915_component.h under include/drm/intel
  * 05255ccbf172 drm: move intel-gtt.h under include/drm/intel
@@ -107,7 +134,8 @@
 #endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
 
 #if LINUX_VERSION_IS_GEQ(6,10,0) || \
-	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,7,0)
 /*
  * 33d5ae6cacf4 drm/print: drop include debugfs.h and include where needed
  */
@@ -128,7 +156,9 @@
 #define BPM_DRM_DP_ADD_PAYLOAD_PART2_ARG_NOT_PRESENT
 #endif
 
-#if LINUX_VERSION_IS_GEQ(6,9,0) || REDHAT_RELEASE_VERSION_IS_GEQ(9,5)
+#if LINUX_VERSION_IS_GEQ(6,9,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,5) || \
+		SUSE_RELEASE_VERSION_IS_GEQ(1,15,7,0)
 /*
  * d50892a9554c drm/i915: switch from drm_debug_printer() to device specific drm_dbg_printer()
  */
@@ -355,7 +385,8 @@
 #endif /* (LINUX_VERSION_IS_GEQ(6,5,0)||REDHAT_RELEASE_VERSION_IS_GEQ(9,4))*/
 
 #if (LINUX_VERSION_IS_GEQ(6,5,0) || \
-		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(23,33)))
+		(SUSE_RELEASE_VERSION_IS_GEQ(1,15,6,0) && SUSE_LOCAL_VERSION_IS_GEQ(23,33)) || \
+			SUSE_RELEASE_VERSION_IS_GEQ(1,15,7,0))
 
 /*
  * 6801be4f2653 slub: Replace cmpxchg_double
@@ -1221,6 +1252,16 @@
 #endif
 
 #endif /* LINUX_VERSION_IS_LESS(5,15,0) */
+
+#if LINUX_VERSION_IS_LESS(5,15,0)
+#if LINUX_VERSION_IN_RANGE(5,11,0, 5,14,0) || \
+	SUSE_RELEASE_VERSION_IS_LESS(1,15,4,0) || \
+	REDHAT_RELEASE_VERSION_IS_LEQ(8,6) || \
+	REDHAT_RELEASE_VERSION_IS_EQL(9,0)
+
+#define BPM_ALLOC_IOVA_FAST_EXPORT_NOT_PRESENT
+#endif
+#endif
 
 #if LINUX_VERSION_IS_LESS(5,14,19)
 #if !(LINUX_VERSION_IN_RANGE(5,10,68, 5,11,0) || \
@@ -2275,7 +2316,7 @@
 
 #if REDHAT_RELEASE_VERSION_IS_LEQ(8,6) || \
 	REDHAT_RELEASE_VERSION_IS_EQL(9,0)
-#define BPM_ALLOC_IOVA_FAST_EXPORT_NOT_PRESENT
+#define BPM_FREE_IOVA_FAST_EXPORT_NOT_PRESENT
 #endif
 
 #if REDHAT_RELEASE_VERSION_IS_RANGE(8,4, 9,0)

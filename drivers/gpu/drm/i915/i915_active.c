@@ -163,15 +163,17 @@ __active_retire(struct i915_active *ref)
 	spin_unlock_irqrestore(&ref->tree_lock, flags);
 
 	/* After the final retire, the entire struct may be freed */
-	if (ref->retire)
+	if (ref->retire) {
+		i915_active_fence_fini(&ref->excl);
 		ref->retire(ref);
+	}
 
 	/* ... except if you wait on it, you must manage your own references! */
 	wake_up_var(ref);
 
 	/* Finally free the discarded timeline tree  */
 	rbtree_postorder_for_each_entry_safe(it, n, &root, node) {
-		GEM_BUG_ON(i915_active_fence_isset(&it->base));
+		i915_active_fence_fini(&it->base);
 		kmem_cache_free(slab_cache, it);
 	}
 }
@@ -1206,7 +1208,7 @@ void i915_active_fence_fini(struct i915_active_fence *active)
 
 	f = i915_active_fence_get(active);
 	if (likely(!f))
-		return;
+		goto out;
 
 	GEM_WARN_ON(!dma_fence_is_signaled(f));
 	if (unlikely(i915_active_fence_isset(active))) {
@@ -1216,6 +1218,8 @@ void i915_active_fence_fini(struct i915_active_fence *active)
 	dma_fence_put(f);
 
 	GEM_BUG_ON(i915_active_fence_isset(active));
+out:
+	GEM_BUG_ON(!list_empty(&active->cb.node));
 }
 
 struct auto_active {

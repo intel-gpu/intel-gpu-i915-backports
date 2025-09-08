@@ -43,7 +43,7 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 
 	if (!safe_conversion(&num_pages, /* worst case number of sg required */
 			     round_up(size, mem->min_page_size) >>
-			     ilog2(mem->min_page_size)))
+			     ilog2(mem->mm.chunk_size)))
 		 return ERR_PTR(-E2BIG);
 
 	if (size > mem->total)
@@ -112,6 +112,7 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 					if (sg == chain) {
 						unsigned int x;
 
+						GEM_BUG_ON(sg_capacity(sgt) >= num_pages);
 						x = min_t(unsigned int,
 							  num_pages - sg_capacity(sgt) + 1,
 							  SG_MAX_SINGLE_ALLOC);
@@ -132,11 +133,13 @@ i915_gem_object_get_pages_buddy(struct drm_i915_gem_object *obj)
 					sg++;
 				}
 
+				GEM_BUG_ON(sg > chain);
 				sg->page_link = 0;
 				sg->offset = 0;
 				sg->length = 0;
 				sg_dma_address(sg) = offset;
 				sg_count(sgt)++;
+				GEM_BUG_ON(sg_count(sgt) > sg_capacity(sgt));
 			}
 
 			len = min(block_size, max_segment - sg->length);

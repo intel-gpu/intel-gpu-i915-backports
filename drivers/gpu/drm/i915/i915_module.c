@@ -97,6 +97,9 @@ static const struct {
 	  .exit = i915_pci_unregister_driver },
 	{ .init = i915_perf_sysctl_register,
 	  .exit = i915_perf_sysctl_unregister },
+	{
+		.exit = i915_pci_error_exit,
+	},
 };
 static int init_progress;
 
@@ -114,6 +117,9 @@ static int __init i915_init(void)
 		static_branch_disable(&__no_init_on_alloc);
 
 	for (i = 0; i < ARRAY_SIZE(init_funcs); i++) {
+		if (!init_funcs[i].init)
+			continue;
+
 		err = init_funcs[i].init();
 		if (err < 0) {
 			while (i--) {

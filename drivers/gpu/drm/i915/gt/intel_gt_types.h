@@ -429,8 +429,11 @@ struct intel_gt {
 		unsigned long hw[INTEL_GT_HW_ERROR_COUNT];
 		unsigned long gsc_hw[INTEL_GSC_HW_ERROR_COUNT];
 		struct xarray soc;
+		struct xarray hbm;
 		unsigned long sgunit[HARDWARE_ERROR_MAX];
 		unsigned long driver[INTEL_GT_DRIVER_ERROR_COUNT];
+		u16 hbm_err_banks;
+		u16 hbm_err_columns;
 	} errors;
 
 	struct intel_gt_info {
@@ -510,6 +513,48 @@ struct intel_gt_definition {
 	 (REG_GROUP) << REG_GROUP_SHIFT | \
 	 (HW_ERR) << SOC_HW_ERR_SHIFT | \
 	 (ERRBIT))
+
+/* HBM error index */
+#define HBM_PSCH_MASK		GENMASK(0, 0)
+#define HBM_CHANNEL_MASK	GENMASK(3, 1)
+#define HBM_STACK_MASK		GENMASK(5, 4)
+
+#define HBM_ERR_INDEX(_stack, _channel, _psch) \
+	(((_stack << __bf_shf(HBM_STACK_MASK)) & (HBM_STACK_MASK)) | \
+	 ((_channel << __bf_shf(HBM_CHANNEL_MASK)) & (HBM_CHANNEL_MASK)) | \
+	 ((_psch << __bf_shf(HBM_PSCH_MASK)) & (HBM_PSCH_MASK)))
+
+#define PVC_HBM_CORRECTABLE_ERR_COUNT_OFFSET	0
+#define PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET	64
+#define PVC_HBM_UNCORRECTABLE_ERR_COUNT_OFFSET	128
+#define PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET	192
+
+#define HBM_CORR_ERR_COUNT_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_CORRECTABLE_ERR_COUNT_OFFSET)
+
+#define HBM_CORR_ERR_INFO_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET)
+
+#define HBM_UNCORR_ERR_COUNT_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_UNCORRECTABLE_ERR_COUNT_OFFSET)
+
+#define HBM_UNCORR_ERR_INFO_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET)
+
+/* HBM err info */
+#define HBM_ERR_INFO_NCOLS_MASK		GENMASK(3, 0)
+#define HBM_ERR_INFO_NBANKS_MASK	GENMASK(7, 4)
+#define HBM_ERR_INFO_MAX_COL_MASK	GENMASK(11, 8)
+#define HBM_ERR_INFO_MIN_COL_MASK	GENMASK(15, 12)
+#define HBM_ERR_INFO_MAX_ROW_MASK	GENMASK(30, 16)
+#define HBM_ERR_INFO_MIN_ROW_MASK	GENMASK(45, 31)
+#define HBM_ERR_INFO_MAX_BANK_MASK	GENMASK(49, 46)
+#define HBM_ERR_INFO_MIN_BANK_MASK	GENMASK(53, 50)
+#define HBM_ERR_INFO_SEGMENT_ID_MASK	GENMASK(55, 54)
 
 #define GT_TRACE(gt, fmt, ...) do {					\
 	const struct intel_gt *gt__ __maybe_unused = (gt);		\

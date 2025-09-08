@@ -5770,6 +5770,10 @@ enum hardware_error {
 #define DEV_PCIEERR_STATUS		_MMIO(0x100180)
 #define DEV_PCIEERR_TILE_STATUS_MASK	REG_GENMASK(2, 0)
 #define DEV_PCIEERR_TILE_STATUS(x)	(DEV_PCIEERR_TILE_STATUS_MASK << (x * 4))
+#define DEV_ERR_ROUTING_CTRL		_MMIO(0x100170)
+#define DEV_FATAL_ERR_ROUTING		REG_BIT(2)
+#define DEV_NON_FATAL_ERR_ROUTING	REG_BIT(1)
+#define DEV_CORR_ERR_ROUTING		REG_BIT(0)
 #define DEV_PCIEERR_IS_FATAL(x)		(REG_BIT(2) << (x * 4))
 #define _DEV_ERR_STAT_FATAL		0x100174
 #define _DEV_ERR_STAT_NONFATAL		0x100178
@@ -5788,8 +5792,11 @@ enum hardware_error {
 #define  DEV_ERR_STAT_GT_ERROR		(0)
 
 /* GSC Memory Error Registers */
-#define _GSC_HEC_CORR_ERR_STATUS		0x128
 #define _GSC_HEC_UNCORR_ERR_STATUS		0x118
+#define _GSC_HEC_UNCORR_ERR_MASK		0x11c
+#define _GSC_HEC_UNCORE_ERR_SEVERITY		0x120
+#define _GSC_HEC_CORR_ERR_STATUS		0x128
+#define _GSC_HEC_CORE_ERR_MASK			0x12c
 #define GSC_HEC_CORR_UNCORR_ERR_STATUS(base, x)	_MMIO(_PICK_EVEN((x), \
 							(base) + _GSC_HEC_CORR_ERR_STATUS, \
 							(base) + _GSC_HEC_UNCORR_ERR_STATUS))
@@ -5818,6 +5825,8 @@ enum hardware_error {
 #define EVENT_MASK				GENMASK(4, 0)
 #define TILE_MASK				GENMASK(5, 5)
 #define CHANNEL_MASK				GENMASK(10, 6)
+#define  CHANNEL_NUMBER_MASK			GENMASK(2, 0)
+#define  CHANNEL_HBM_MASK			GENMASK(4, 3)
 #define PSEUDOCHANNEL_MASK			GENMASK(11, 11)
 #define ROW_MASK				GENMASK(29, 12)
 #define PATROL_MASK				GENMASK(30, 30)
@@ -5860,6 +5869,12 @@ enum gt_vctr_registers {
 #define _ERR_STAT_GT_COR_VCTR_1		0x1002a4
 #define _ERR_STAT_GT_COR_VCTR_2		0x1002a8
 #define _ERR_STAT_GT_COR_VCTR_3		0x1002ac
+#define _ERR_STAT_GT_COR_VCTR_4		0x1002b0
+#define _ERR_STAT_GT_COR_VCTR_5		0x1002b4
+#define _ERR_STAT_GT_COR_VCTR_6		0x1002b8
+#define _ERR_STAT_GT_COR_VCTR_7		0x1002bc
+#define ERR_STAT_GT_COR_VCTR_NUM_REGS	8
+
 #define ERR_STAT_GT_COR_VCTR_REG(x)	_MMIO(_PICK_EVEN((x), \
 						_ERR_STAT_GT_COR_VCTR_0, \
 						_ERR_STAT_GT_COR_VCTR_1))
@@ -5957,8 +5972,19 @@ enum gt_vctr_registers {
 							base + _SOC_GSYSEVTCTL, \
 							slave_base + _SOC_GSYSEVTCTL))
 #define _SOC_GCOERRSTS		0x000200
+#define _SOC_GCOFERRSTS		0x000204
+#define _SOC_GCONERRSTS		0x000208
 #define _SOC_GNFERRSTS		0x000210
+#define _SOC_GNFFERRSTS		0x000214
+#define _SOC_GNFNERRSTS		0x000218
 #define _SOC_GFAERRSTS		0x000220
+#define _SOC_GFAFERRSTS		0x000224
+#define _SOC_GFANERRSTS		0x000228
+#define _SOC_LFERRUNCSTS	0x000284
+#define _SOC_LNERRUNCSTS	0x000288
+#define _SOC_LFERRCORSTS	0x000298
+#define _SOC_LNERRCORSTS	0x00029C
+
 #define SOC_GLOBAL_ERR_STAT_SLAVE_REG(base, x)	_MMIO(_PICK_EVEN((x), \
 							base + _SOC_GCOERRSTS, \
 							base + _SOC_GNFERRSTS))
@@ -8683,4 +8709,5 @@ enum skl_power_gate {
 /* PASID valid, ATS enabled bits */
 #define PASID_ENABLE_MASK				REG_GENMASK(31, 30)
 
+#define PVC_SRIOV_CTRL_CONFIG		0x328
 #endif /* _I915_REG_H_ */

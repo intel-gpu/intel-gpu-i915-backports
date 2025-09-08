@@ -91,6 +91,24 @@ static ssize_t soc_error_show(struct device *dev,
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t hbm_error_show(struct kobject *kobj,
+			      struct kobj_attribute *attr,
+			      char *buf)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t hbm_error_show(struct device *dev,
+			      struct device_attribute *attr,
+			      char *buf)
+{
+#endif
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+
+	return sysfs_emit(buf, "%lu\n", xa_to_value(xa_load(&gt->errors.hbm, ea->id)));
+}
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t gt_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct device *dev = kobj_to_dev(kobj);
@@ -190,6 +208,10 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct i915_ext_attr dev_attr_pvc_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), soc_error_show}
 
+#define PVC_HBM_SYSFS_ERROR_ATTR_RO(_name,  _id) \
+	struct i915_ext_attr dev_attr_pvc_##_name = \
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), hbm_error_show}
+
 #define GT_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_error_show}
@@ -205,6 +227,22 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 #define I915_DEVICE_ATTR_RO(_name, _id) \
 	struct i915_ext_attr dev_attr_##_name = \
 	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), _name##_show}
+
+#define PVC_HBM_SYSFS_CORR_ERROR_COUNT_ATTR_RO(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_correctable_stack##s##_channel##c##_psch##p, \
+				    HBM_CORR_ERR_COUNT_INDEX(s, c, p))
+
+#define PVC_HBM_SYSFS_CORR_ERROR_INFO_ATTR_RO(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_correctable_stack##s##_channel##c##_psch##p##_info, \
+				    HBM_CORR_ERR_INFO_INDEX(s, c, p))
+
+#define PVC_HBM_SYSFS_UNCORR_ERROR_COUNT_ATTR_RO(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_uncorrectable_stack##s##_channel##c##_psch##p, \
+				    HBM_UNCORR_ERR_COUNT_INDEX(s, c, p))
+
+#define PVC_HBM_SYSFS_UNCORR_ERROR_INFO_ATTR_RO(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_uncorrectable_stack##s##_channel##c##_psch##p##_info, \
+				    HBM_UNCORR_ERR_INFO_INDEX(s, c, p))
 
 static GSC_SYSFS_ERROR_ATTR_RO(gsc_correctable_sram_ecc, INTEL_GSC_HW_ERROR_COR_SRAM_ECC);
 static GSC_SYSFS_ERROR_ATTR_RO(gsc_nonfatal_mia_shutdown, INTEL_GSC_HW_ERROR_UNCOR_MIA_SHUTDOWN);
@@ -302,6 +340,37 @@ static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_cd0_mdfi, SOC_ERR_INDEX(INTEL_GT
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_mdfi_east, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_EAST));
 static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_mdfi_south, SOC_ERR_INDEX(INTEL_GT_SOC_IEH0, INTEL_SOC_REG_LOCAL, HARDWARE_ERROR_NONFATAL, PVC_SOC_MDFI_SOUTH));
 
+/* 2 sysfs entries per pseudo channel - count and info */
+#define PVC_HBM_STACK_CHANNEL_PSCH_SYSFS_ATTRS(__s, __c, __p, type) \
+	static PVC_HBM_SYSFS_##type##_ERROR_COUNT_ATTR_RO(__s, __c, __p); \
+	static PVC_HBM_SYSFS_##type##_ERROR_INFO_ATTR_RO(__s, __c, __p);
+
+/* 2 pseudo channels per channel */
+#define PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, __c, type) \
+	PVC_HBM_STACK_CHANNEL_PSCH_SYSFS_ATTRS(__s, __c, 0, type) \
+	PVC_HBM_STACK_CHANNEL_PSCH_SYSFS_ATTRS(__s, __c, 1, type)
+
+/* 8 channels per stack */
+#define PVC_HBM_STACK_SYSFS_ATTRS(__s, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 0, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 1, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 2, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 3, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 4, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 5, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 6, type) \
+	PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, 7, type)
+
+/* 4 stacks per tile/gt */
+#define PVC_HBM_SYSFS_GT_ATTRS(type) \
+	PVC_HBM_STACK_SYSFS_ATTRS(0, type) \
+	PVC_HBM_STACK_SYSFS_ATTRS(1, type) \
+	PVC_HBM_STACK_SYSFS_ATTRS(2, type) \
+	PVC_HBM_STACK_SYSFS_ATTRS(3, type)
+
+PVC_HBM_SYSFS_GT_ATTRS(CORR)
+PVC_HBM_SYSFS_GT_ATTRS(UNCORR)
+
 static I915_DEVICE_ATTR_RO(engine_reset, 0);
 static I915_DEVICE_ATTR_RO(eu_attention, 0);
 
@@ -389,6 +458,30 @@ static const struct attribute *pvc_gt_error_attrs[] = {
 	NULL
 };
 
+#define DEV_ATTR_PVC_HBM_STACK_CHANNEL_PSCH(s, c, p, type) \
+	&dev_attr_pvc_hbm_##type##ectable_stack##s##_channel##c##_psch##p.attr.attr, \
+	&dev_attr_pvc_hbm_##type##ectable_stack##s##_channel##c##_psch##p##_info.attr.attr,
+
+#define DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, c, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL_PSCH(s, c, 0, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL_PSCH(s, c, 1, type)
+
+#define DEV_ATTR_PVC_HBM_STACK(s, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 0, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 1, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 2, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 3, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 4, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 5, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 6, type) \
+	DEV_ATTR_PVC_HBM_STACK_CHANNEL(s, 7, type)
+
+#define DEV_ATTR_PVC_HBM_GT(type) \
+	DEV_ATTR_PVC_HBM_STACK(0, type) \
+	DEV_ATTR_PVC_HBM_STACK(1, type) \
+	DEV_ATTR_PVC_HBM_STACK(2, type) \
+	DEV_ATTR_PVC_HBM_STACK(3, type)
+
 static const struct attribute *pvc_soc_error_attrs[] = {
 	&dev_attr_soc_fatal_psf_csc_0.attr.attr,
 	&dev_attr_soc_fatal_psf_csc_1.attr.attr,
@@ -448,6 +541,8 @@ static const struct attribute *pvc_soc_error_attrs[] = {
 	&dev_attr_pvc_soc_nonfatal_cd0_mdfi.attr.attr,
 	&dev_attr_pvc_soc_nonfatal_mdfi_east.attr.attr,
 	&dev_attr_pvc_soc_nonfatal_mdfi_south.attr.attr,
+	DEV_ATTR_PVC_HBM_GT(corr)
+	DEV_ATTR_PVC_HBM_GT(uncorr)
 	NULL
 };
 void intel_gt_sysfs_register_errors(struct intel_gt *gt, struct kobject *parent)

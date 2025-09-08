@@ -31,7 +31,7 @@
 #include "uc/intel_gsc_fw.h"
 #include "uc/intel_guc.h"
 
-#define RESET_MAX_RETRIES 3
+#define RESET_MAX_RETRIES 12
 
 /* XXX How to handle concurrent GGTT updates using tiling registers? */
 #define RESET_UNDER_STOP_MACHINE 0
@@ -598,13 +598,11 @@ static int gen8_engine_reset_prepare(struct intel_engine_cs *engine)
 	}
 
 	intel_uncore_write_fw(uncore, reg, _MASKED_BIT_ENABLE(request));
-	ret = __intel_wait_for_register_fw(uncore, reg, mask, ack,
-					   700, 0, NULL);
+	ret = __intel_wait_for_register_fw(uncore, reg, mask, ack, 700, 0, NULL);
 	if (ret)
-		intel_gt_log_driver_error(engine->gt, INTEL_GT_DRIVER_ERROR_ENGINE_OTHER,
-					  "%s reset request timed out: {request: %08x, RESET_CTL: %08x}\n",
-					  engine->name, request,
-					  intel_uncore_read_fw(uncore, reg));
+		ENGINE_TRACE(engine,
+			     "reset request timed out: {request: %08x, RESET_CTL: %08x}\n",
+			     request, intel_uncore_read_fw(uncore, reg));
 
 	return ret;
 }
@@ -1229,6 +1227,7 @@ void intel_gt_reset(struct intel_gt *gt,
 		    intel_engine_mask_t stalled_mask,
 		    const char *reason)
 {
+	unsigned int epoch = READ_ONCE(gt->uc.epoch) & ~1;
 	intel_engine_mask_t awake;
 	intel_wakeref_t wakeref;
 	int ret;
@@ -1238,6 +1237,8 @@ void intel_gt_reset(struct intel_gt *gt,
 
 	wakeref = intel_gt_pm_get(gt);
 	mutex_lock(&gt->reset.mutex);
+	if (gt->uc.epoch != epoch)
+		goto unlock;
 
 	/* Clear any previous failed attempts at recovery. Time to try again. */
 	if (!__intel_gt_unset_wedged(gt))
@@ -1250,11 +1251,7 @@ void intel_gt_reset(struct intel_gt *gt,
 	awake = reset_prepare(gt);
 
 	if (!intel_has_gpu_reset(gt)) {
-		if (gt->i915->params.reset)
-			intel_gt_log_driver_error(gt, INTEL_GT_DRIVER_ERROR_GT_OTHER,
-						  "GPU reset not supported\n");
-		else
-			drm_dbg(&gt->i915->drm, "GPU reset disabled\n");
+		drm_dbg(&gt->i915->drm, "GPU reset disabled\n");
 		goto error;
 	}
 
