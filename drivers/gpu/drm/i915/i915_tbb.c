@@ -572,13 +572,29 @@ void i915_tbb_resume_local(int cpu)
 		wake_up_thread(t);
 }
 
-long i915_tbb_schedule(long timeout)
+static bool __i915_tbb_wake(void)
 {
 	struct i915_tbb_thread *t = per_cpu_ptr(&i915_tbb_thread, raw_smp_processor_id());
 
-	if (!test_bit(I915_TBB_SUSPEND, &t->flags) && tbb_ready(t->node))
+	if (!test_bit(I915_TBB_SUSPEND, &t->flags) && tbb_ready(t->node)) {
 		wake_up_thread(t);
+		return true;
+	}
 
+	return false;
+}
+
+bool i915_tbb_allow_spin(void)
+{
+	if (__i915_tbb_wake())
+		return false;
+
+	return !need_resched() && single_task_running();
+}
+
+long i915_tbb_schedule(long timeout)
+{
+	__i915_tbb_wake();
 	return io_schedule_timeout(timeout);
 }
 

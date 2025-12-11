@@ -2912,6 +2912,7 @@ static void clear_context_state(struct intel_guc *guc)
 
 	/* GuC is blown away, drop all references to contexts */
 	xa_destroy(&guc->context_lookup);
+	guc->flags = 0;
 }
 
 void intel_guc_submission_reset(struct intel_guc *guc, intel_engine_mask_t stalled)
@@ -3950,12 +3951,6 @@ static int try_context_registration(struct intel_context *ce, bool loop)
 
 	GEM_BUG_ON(!sched_state_is_init(ce));
 
-	if (__test_and_clear_bit(GUC_INVALIDATE_TLB, &guc->flags)) {
-		ret = intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_LITE);
-		if (unlikely(ret))
-			return ret;
-	}
-
 	old = set_ctx_id_mapping(guc, ctx_id, ce);
 	if (IS_ERR(old))
 		return PTR_ERR(old);
@@ -4023,7 +4018,13 @@ static int __guc_context_pin(struct intel_context *ce,
 			     struct intel_engine_cs *engine,
 			     void *vaddr)
 {
+	struct intel_guc *guc = ce_to_guc(ce);
 	int ret, srcu;
+
+	if (test_bit(GUC_INVALIDATE_TLB, &guc->flags) && !intel_gt_is_wedged(guc_to_gt(guc))) {
+		if (intel_guc_invalidate_tlb_guc(guc, INTEL_GUC_TLB_INVAL_MODE_LITE) == 0)
+			__clear_bit(GUC_INVALIDATE_TLB, &guc->flags);
+	}
 
 	ret = gt_ggtt_address_read_lock_sync(engine->gt, &srcu);
 	if (unlikely(ret))

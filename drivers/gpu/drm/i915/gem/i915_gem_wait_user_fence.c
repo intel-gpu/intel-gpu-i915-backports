@@ -6,6 +6,8 @@
 #include <linux/pm_qos.h>
 #include <linux/wait.h>
 
+#include <asm/cacheflush.h>
+
 #include <drm/drm_file.h>
 #include <drm/drm_utils.h>
 
@@ -82,6 +84,7 @@ static bool ufence_compare(const struct ufence_wake *wake)
 
 		va = kmap_atomic(wake->page);
 		ptr = va + offset_in_page(wake->ptr);
+		clflush_cache_range(ptr, wake->width);
 		switch (wake->width) {
 		case 1: target = *(u8 *)ptr; break;
 		case 2: target = *(u16*)ptr; break;
@@ -288,13 +291,9 @@ static unsigned long local_clock_ns(unsigned int *cpu)
 }
 
 static bool
-busy_wait_stop(struct task_struct *tsk, unsigned long timeout_ns, unsigned int cpu)
+busy_wait_stop(unsigned long timeout_ns, unsigned int cpu)
 {
 	unsigned int this_cpu;
-
-	/* Interrupted by the user already? */
-	if (signal_pending(tsk))
-		return true;
 
 	if (time_after(local_clock_ns(&this_cpu), timeout_ns))
 		return true;
@@ -305,12 +304,15 @@ busy_wait_stop(struct task_struct *tsk, unsigned long timeout_ns, unsigned int c
 	 * need_resched() instead of cond_resched(), as we want to set up our
 	 * interrupt prior to calling schedule()
 	 */
-	return this_cpu != cpu || need_resched();
+	return this_cpu != cpu;
 }
 
 static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
 {
 	unsigned int cpu;
+
+	if (!i915_tbb_allow_spin())
+		return false;
 
 	/*
 	 * Busywait for the fence completion until the end of the user's
@@ -326,7 +328,16 @@ static bool busy_wait(const struct ufence_wake *wake, unsigned long timeout_ns)
 	do {
 		if (ufence_compare(wake))
 			return true;
-	} while (!busy_wait_stop(wake->tsk, timeout_ns, cpu));
+
+		/* Interrupted by the user already? */
+		if (signal_pending(wake->tsk))
+			break;
+
+		if (busy_wait_stop(timeout_ns, cpu))
+			break;
+
+		cpu_relax();
+	} while (i915_tbb_allow_spin());
 
 	return false;
 }
@@ -408,7 +419,10 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		err = -ETIME;
 		goto out_ctx;
 	}
+
 	start = ktime_get();
+	if (busy_wait(&wake, jiffies_to_nsecs(1)))
+		goto out_time;
 
 	/*
 	 * In order to avoid interrupt latency (and the wakeup from sleep
@@ -438,7 +452,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		if (err)
 			goto out_wait;
 
-		if (busy_wait(&wake, jiffies_to_nsecs(min(2ul, timeout))))
+		if (busy_wait(&wake, jiffies_to_nsecs(min(5ul, timeout))))
 			goto out_wait;
 
 		dma_latency_boost();
@@ -475,6 +489,9 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 			break;
 		}
 
+		if (busy_wait(&wake, jiffies_to_nsecs(1)))
+			break;
+
 		timeout = i915_tbb_schedule(timeout);
 
 		if (ufence_fault(&wake)) {
@@ -488,6 +505,7 @@ int i915_gem_wait_user_fence_ioctl(struct drm_device *dev,
 		dma_latency_cancel_boost();
 out_wait:
 	remove_waits(&g_wait);
+out_time:
 	if (!(arg->flags & PRELIM_I915_UFENCE_WAIT_ABSTIME) && arg->timeout > 0) {
 		arg->timeout -= ktime_to_ns(ktime_sub(ktime_get(), start));
 		if (arg->timeout < 0)

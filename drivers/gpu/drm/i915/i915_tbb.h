@@ -102,6 +102,7 @@ bool i915_tbb_cancel_task(struct i915_tbb *task);
 int i915_tbb_suspend_local(void);
 void i915_tbb_resume_local(int cpu);
 
+bool i915_tbb_allow_spin(void);
 long i915_tbb_schedule(long timeout);
 
 int i915_tbb_init(void);
