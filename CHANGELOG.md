@@ -1,4 +1,7 @@
 # ChangeLog
+## Release I915_25WW50.4_1146.40_25.2.29_250224.35
+* Resolved an issue causing Intel Data Center GPU Max Series to hang under certain conditions.
+
 ## Release I915_25WW36.5_1146.31_25.2.25_250224.31
 * Introduced an experimental recovery mechanism for handling fatal GPU errors, designed to restore
   functionality without requiring a full system reboot or GPU reset. This helps reduce downtime and improves

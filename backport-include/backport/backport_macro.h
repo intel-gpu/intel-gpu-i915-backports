@@ -178,17 +178,14 @@
 #if LINUX_VERSION_IS_GEQ(6,9,0) || \
 	REDHAT_RELEASE_VERSION_IS_GEQ(9,6)
 /*
- * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
- */
-#define BPM_PM_RUNTIME_GET_IF_ACTIVE_ARG2_NOT_PRESENT
-
-/*
  * 2e61504fd1c3 drm/dp: switch drm_dp_vsc_sdp_log() to struct drm_printer
  */
 #define BPM_DRM_DP_VSC_SDP_LOG_PRESENT
 #endif
 
 #if (LINUX_VERSION_IS_GEQ(6,9,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,6) || \
+	LINUX_VERSION_IN_RANGE(6,6,103, 6,7,0) || \
 	(LINUX_VERSION_IS_GEQ(6,8,12) && (UBUNTU_BACKPORT_VERSION_IS_GEQ(50,51))))
 /*
  * c0ef3df8dbae PM: runtime: Simplify pm_runtime_get_if_active() usage
@@ -1370,7 +1367,8 @@
 
 #if LINUX_VERSION_IS_LESS(5,12,11)
 
-#if REDHAT_RELEASE_VERSION_IS_RANGE(8,6, 8,10)
+#if REDHAT_RELEASE_VERSION_IS_RANGE(8,6, 8,10) || \
+	LINUX_VERSION_IN_RANGE(5,10,0, 5,11,0)
 /*
  * f268c3737ecae tick/nohz: Only check for RCU deferred wakeup on user/guest entry when needed
  */

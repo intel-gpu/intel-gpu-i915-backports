@@ -1993,6 +1993,9 @@ static bool __i915_spin_request(struct i915_request * const rq, int state)
 	else
 		timeout_ns = CPTCFG_DRM_I915_MAX_REQUEST_BUSYWAIT;
 
+	if (!i915_tbb_allow_spin())
+		return false;
+
 	timeout_ns += local_clock_ns(&cpu);
 	do {
 		if (dma_fence_is_signaled(&rq->fence))
@@ -2005,7 +2008,7 @@ static bool __i915_spin_request(struct i915_request * const rq, int state)
 			break;
 
 		cpu_relax();
-	} while (!need_resched());
+	} while (i915_tbb_allow_spin());
 
 	return false;
 }
