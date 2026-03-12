@@ -2054,8 +2054,13 @@ static int intel_uncore_fw_domains_init(struct intel_uncore *uncore)
 
 	GEM_BUG_ON(!intel_uncore_has_forcewake(uncore));
 
+#ifdef BPM_HRTIMER_INIT_NOT_PRESENT
+	hrtimer_setup(&uncore->fw_timer, intel_uncore_fw_release_timer,
+			CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+#else
 	hrtimer_init(&uncore->fw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	uncore->fw_timer.function = intel_uncore_fw_release_timer;
+#endif
 
 #define fw_domain_init(uncore__, id__, set__, ack__) \
 	(ret ?: (ret = __fw_domain_init((uncore__), (id__), (set__), (ack__))))

@@ -1651,10 +1651,16 @@ static void i915_oa_stream_destroy(struct i915_perf_stream *stream)
 	free_oa_configs(stream);
 	free_noa_wait(stream);
 
+#ifdef BPM_RATELIMIT_MISSED_FIELD_IS_ATOMIC
+	int m =  ratelimit_state_get_miss(&perf->spurious_report_rs);
+	if (m)
+		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting\n", m);
+#else
 	if (perf->spurious_report_rs.missed) {
 		DRM_NOTE("%d spurious OA report notices suppressed due to ratelimiting\n",
 			 perf->spurious_report_rs.missed);
 	}
+#endif
 }
 
 static void gen12_init_oa_buffer(struct i915_perf_stream *stream)
@@ -2965,9 +2971,15 @@ static int i915_oa_stream_init(struct i915_perf_stream *stream,
 		"opening stream oa config uuid=%s\n",
 		  stream->oa_config->uuid);
 
+#ifdef BPM_HRTIMER_INIT_NOT_PRESENT
+	 hrtimer_setup(&stream->poll_check_timer,
+			 oa_poll_check_timer_cb, CLOCK_MONOTONIC,
+			 HRTIMER_MODE_REL);
+#else
 	hrtimer_init(&stream->poll_check_timer,
 		     CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stream->poll_check_timer.function = oa_poll_check_timer_cb;
+#endif
 	init_waitqueue_head(&stream->poll_wq);
 	spin_lock_init(&stream->oa_buffer.ptr_lock);
 	mutex_init(&stream->lock);

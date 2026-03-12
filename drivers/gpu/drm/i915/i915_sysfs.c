@@ -41,13 +41,14 @@
 #include "gt/intel_gt_sysfs.h"
 #include "gt/sysfs_engines.h"
 
+#include "i915_debugger.h"
 #include "i915_drv.h"
 #include "i915_sriov_sysfs.h"
 #include "i915_sysfs.h"
 #include "intel_pcode.h"
 #include "intel_pm.h"
 #include "intel_sysfs_mem_health.h"
-#include "i915_debugger.h"
+#include "pvc_ras.h"
 
 static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
@@ -90,10 +91,17 @@ struct i915_ext_attr {
 
 struct sysfs_bin_ext_attr {
 	struct bin_attribute attr;
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+        ssize_t (*i915_read)(struct file *, struct kobject *, const struct
+                             bin_attribute *, char *, loff_t, size_t);
+        ssize_t (*i915_write)(struct file *, struct kobject *, const struct
+                              bin_attribute *, char *, loff_t, size_t);
+#else
 	ssize_t (*i915_read)(struct file *, struct kobject *, struct
 			     bin_attribute *, char *, loff_t, size_t);
 	ssize_t (*i915_write)(struct file *, struct kobject *, struct
 			      bin_attribute *, char *, loff_t, size_t);
+#endif
 };
 
 struct drm_i915_private *kdev_minor_to_i915(struct device *kdev)
@@ -286,9 +294,15 @@ static const struct attribute *alloc_limit_attrs[] = {
 
 #if IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR)
 
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+static ssize_t error_state_read(struct file *filp, struct kobject *kobj,
+                                const struct bin_attribute *attr, char *buf,
+                                loff_t off, size_t count)
+#else
 static ssize_t error_state_read(struct file *filp, struct kobject *kobj,
 				struct bin_attribute *attr, char *buf,
 				loff_t off, size_t count)
+#endif
 {
 
 	struct device *kdev = kobj_to_dev(kobj);
@@ -313,9 +327,15 @@ static ssize_t error_state_read(struct file *filp, struct kobject *kobj,
 	return ret;
 }
 
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+static ssize_t error_state_write(struct file *file, struct kobject *kobj,
+                                 const struct bin_attribute *attr, char *buf,
+                                 loff_t off, size_t count)
+#else
 static ssize_t error_state_write(struct file *file, struct kobject *kobj,
 				 struct bin_attribute *attr, char *buf,
 				 loff_t off, size_t count)
+#endif
 {
 	struct device *kdev = kobj_to_dev(kobj);
 	struct drm_i915_private *dev_priv = kdev_minor_to_i915(kdev);
@@ -327,8 +347,13 @@ static ssize_t error_state_write(struct file *file, struct kobject *kobj,
 }
 
 static ssize_t
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+i915_sysfs_read(struct file *filp, struct kobject *kobj, const struct bin_attribute
+		*attr, char *buf, loff_t offset, size_t count)
+#else
 i915_sysfs_read(struct file *filp, struct kobject *kobj, struct bin_attribute
 	      *attr, char *buf, loff_t offset, size_t count)
+#endif
 {
 	ssize_t value;
 	struct sysfs_bin_ext_attr *ea = container_of(attr, struct
@@ -347,8 +372,13 @@ i915_sysfs_read(struct file *filp, struct kobject *kobj, struct bin_attribute
 }
 
 static ssize_t
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+i915_sysfs_write(struct file *filp, struct kobject *kobj, const struct bin_attribute
+		*attr, char *buf, loff_t offset, size_t count)
+#else
 i915_sysfs_write(struct file *filp, struct kobject *kobj, struct bin_attribute
 		 *attr, char *buf, loff_t offset, size_t count)
+#endif
 {
 	ssize_t value;
 	struct  sysfs_bin_ext_attr *ea = container_of(attr, struct
@@ -883,6 +913,8 @@ void i915_setup_sysfs(struct drm_i915_private *dev_priv)
 	intel_mem_health_report_sysfs(dev_priv);
 
 	i915_setup_enable_eu_debug_sysfs(dev_priv);
+
+	pvc_ras_register_sysfs(dev_priv);
 }
 
 void i915_teardown_sysfs(struct drm_i915_private *dev_priv)

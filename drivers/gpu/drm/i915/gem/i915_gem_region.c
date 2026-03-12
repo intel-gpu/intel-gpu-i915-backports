@@ -3,6 +3,8 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include "gt/intel_gt_pm.h"
+
 #include "i915_drv.h"
 #include "i915_drm_client.h"
 #include "i915_gem_mman.h"
@@ -21,6 +23,8 @@ i915_gem_object_put_pages_buddy(struct drm_i915_gem_object *obj,
 
 	__intel_memory_region_put_pages_buddy(mem, &obj->mm.blocks, dirty);
 	i915_drm_client_make_resident(obj, false);
+
+	intel_memory_region_queue_work(mem);
 
 	sg_table_inline_free(pages);
 	return 0;

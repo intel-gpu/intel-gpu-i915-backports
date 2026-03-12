@@ -914,9 +914,15 @@ bool intel_dp_need_bigjoiner(struct intel_dp *intel_dp,
 	return clock > i915->max_dotclk_freq || hdisplay > 5120;
 }
 
+#ifdef BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+static enum drm_mode_status
+intel_dp_mode_valid(struct drm_connector *_connector,
+                    const struct drm_display_mode *mode)
+#else
 static enum drm_mode_status
 intel_dp_mode_valid(struct drm_connector *_connector,
 		    struct drm_display_mode *mode)
+#endif
 {
 	struct intel_connector *connector = to_intel_connector(_connector);
 	struct intel_dp *intel_dp = intel_attached_dp(connector);

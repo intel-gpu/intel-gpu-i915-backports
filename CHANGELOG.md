@@ -1,4 +1,33 @@
 # ChangeLog
+## Release I915_26WW11.2_1146.59_25.2.43_250224.50
+* Introduced a fast GPU recovery mechanism for Open Accelerator Module (OAM) that restores GPU functionality
+  after fatal errors without requiring a full system reboot or GPU reset, significantly reducing downtime.
+  To enable this feature:
+  1. Remove pci=noaer from the kernel command line.
+  2. Add pcie_ports=native and i915.enable_fatal_error_recovery=1 to the kernel command line.
+  3. After rebooting, verify the configuration by running cat /proc/cmdline to confirm the kernel parameters
+     and cat /sys/kernel/debug/dri/*/i915_params/enable_fatal_error_recovery to ensure it returns 1.
+* Added backport support for kernel version 6.15 and 6.17.
+* Fixed VM_BIND wakeup to use full memory barrier preventing missed wakeups caused by local read reordering.
+* Fixed error state compression to always provide output buffer when flushing stream.
+* Fixed scatterlist marker restoration to prevent reading past end of list.
+* Added the local KOBJ_ATTR_RO() definition to enable compilation on DKMS targets.
+* Converted MFDI eye margin sysfs to use DEV_ATTR for better DKMS kernel integration.
+* Fixed ifdef mismatch for remap_sg() to ensure struct members are defined when used.
+* Fixed PMU events decoupling on device release to prevent use after free.
+* Fixed vma_set_flags() to hold required semaphore.
+* Added sysfs entries to track MDFI eye margin errors (mdfi_eye_margin_error and mdfi_eye_margin_status).
+* Fixed IAF error scanning to skip uninitialized subdevices.
+* Added monitoring for IAF bridge and viral error status registers with logging to dmesg and uevent.
+* Fixed VM_BIND object lifetime to prevent use after free during asynchronous operations.
+* Added verification that GuC successfully copied hwconfig data.
+* Added hwconfig storage initialization to prevent exposing stale kernel data to userspace.
+* Added backport support for kernel version 6.16.
+* Fixed BLT operations on Alchemist GPUs to use full 64KiB pages.
+* Added timer to clean dirty cache after device idles.
+* Fixed potential deadlock by removing object flushing from GT parking.
+* Added px-cache shrinking on GT parking to prevent local memory exhaustion and fragmentation.
+
 ## Release I915_25WW50.4_1146.40_25.2.29_250224.35
 * Resolved an issue causing Intel Data Center GPU Max Series to hang under certain conditions.
 

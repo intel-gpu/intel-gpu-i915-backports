@@ -79,10 +79,14 @@ static int guc_hwconfig_fill_buffer(struct intel_guc *guc, void *ptr, int size)
 	if (ret)
 		return ret;
 
+	memset(vaddr, POISON_INUSE, size);
 	ggtt_offset = intel_guc_ggtt_offset(guc, vma);
-	ret = __guc_action_get_hwconfig(guc, ggtt_offset, size);
-	if (ret >= 0)
-		memcpy(ptr, vaddr, size);
+	ret = min(__guc_action_get_hwconfig(guc, ggtt_offset, size), size);
+	if (ret > 0) {
+		memcpy(ptr, vaddr, ret);
+		if (!memchr_inv(ptr, POISON_INUSE, ret))
+			ret = -ENXIO;
+	}
 
 	i915_vma_unpin_and_release(&vma, I915_VMA_RELEASE_MAP);
 	return ret;

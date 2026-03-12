@@ -240,6 +240,18 @@
 				sd_index(_p->sd), _p->lpn, ##__VA_ARGS__); \
 		} while (0)
 
+/*
+ * The list of bridge error status registers to periodically monitor.  This needs
+ * to line up with the list found in error.c.
+ */
+enum {
+	ERR_STS_BRG_0,
+	ERR_STS_BRG_1,
+	ERR_STS_BRG_2,
+	ERR_STS_BRG_3,
+	ERR_STS_COUNT
+};
+
 /**
  * struct mbdb_op_fw_version_rsp - currently loaded firmware information
  * @mbox_version: this version will be 0
@@ -580,6 +592,9 @@ struct fport {
 	/* atomic with no need for additional barrier constraints */
 	DECLARE_BITMAP(controls, NUM_PORT_CONTROLS);
 	atomic_t routed;
+
+	/* cached error status register value */
+	u64 err_sts[ERR_STS_COUNT];
 };
 
 /**
@@ -922,6 +937,9 @@ struct fsubdev {
 
 	/* protections are documented in &struct statedump */
 	struct state_dump statedump;
+
+	/* cached viral register value */
+	u64 viral_err_sts;
 };
 
 /* to iterate over all fabric ports on a subdevice by logical port number */

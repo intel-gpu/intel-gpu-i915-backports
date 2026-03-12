@@ -306,6 +306,10 @@ int __i915_iommu_map(struct iommu_domain *domain,
 
 static inline struct iova_domain *i915_iovad(struct iommu_domain *domain)
 {
+#ifdef BPM_DOMAIN_IOVA_COOKIE_NOT_PRESENT
+	if (IS_ENABLED(CONFIG_IOMMU_DMA))
+		return (struct iova_domain *)domain->iova_cookie;
+#else
 	struct {
 		enum {
 			IOVA_COOKIE,
@@ -314,6 +318,7 @@ static inline struct iova_domain *i915_iovad(struct iommu_domain *domain)
 	} *cookie = (void *)domain->iova_cookie;
 
 	return &cookie->iovad;
+#endif
 }
 
 void __i915_iommu_free(unsigned long iova, unsigned long total, unsigned long mapped, struct iommu_domain *domain)

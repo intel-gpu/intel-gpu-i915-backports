@@ -4,12 +4,124 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
-#if LINUX_VERSION_IS_GEQ(6,14,0)
+#if LINUX_VERSION_IS_GEQ(6,17,0)
+/*
+ * 8a6a984c2e0e mm: remove redundant pXd_devmap calls
+ */
+#define BPM_PXD_DEVMAP_NOT_PRESENT
+/*
+ * d438d2734170 mm: remove devmap related functions and page table bits
+ */
+#define BPM_PMD_MKDEVMAP_NOT_PRESENT
+/*
+ * 21aa65bf82a7 mm: remove callers of pfn_t functionality
+ */
+#define BPM_PFN_T_NOT_PRESENT
 
+/*
+ * e9d8e2bf2320
+ * fs: change write_begin/write_end interface to take struct kiocb *
+ */
+#define BPM_WRITE_BEGIN_STRUCT_FILE_MEMBER_NOT_PRESENT
+
+/*
+ * 2489e958129f relayfs: abolish prev_padding
+ */
+#define BPM_SUBBUF_START_PREV_PADDING_ARG_NOT_PRESENT
+
+/*
+ * 1174bf15bd60 drm/connector: move HDR sink metadata to display info
+ */
+#define BPM_HDR_SINK_METADATA_NOT_PRESENT
+
+/*
+ * 81112eaac559 drm: Pass the format info to .fb_create()
+ */
+#define BPM_DRM_FORMAT_INFO_ARG_NOT_PRESENT
+
+/*
+ * 0389e4256eb2 drm: Pass pixel_format+modifier to .get_format_info()
+ */
+#define BPM_PIXEL_FORMAT_MODIFIER_ARGS_NOT_PRESENT
+
+/*
+ * 81fd01414f25 drm/dp: Add argument for max luminance in drm_edp_backlight_init
+ * c802a6b81b70 drm/dp: Add argument in drm_edp_backlight_init
+ */
+#define BPM_MAX_NEED_LUMINANCE_ARGS_NOT_PRESENT
+
+/*
+ * adcc3bfa8806 sched: Adapt sched tracepoints for RV task model
+ */
+#define BPM_TRACE_SET_NEED_RESCHED_NOT_PRESENT
+
+/*
+ * 21aa65bf82a7 mm: remove callers of pfn_t functionality
+ */
+#define BPM_PFN_T_HEADER_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,17,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,16,0)
+/*
+ * e86e43907f94 timers: Rename init_timer_key() as timer_init_key()
+ */
+#define BPM_SETUP_TIMER_NOT_PRESENT
+/*
+ * d82d3bf41152 mm: pass mm down to pagetable_{pte,pmd}_ctor
+ */
+#define BPM_PAGETABLE_CTOR_STRUCT_MM_INIT_MM_ARG_NOT_PRESENT
+/*
+ * 97d06802d10a
+ * sysfs: constify bin_attribute argument of bin_attribute::read/write()
+ */
+#define BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+/*
+ * acc53a0b4c15 mm: rename page->index to page->__folio_index
+ */
+#define BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
+/*
+ * 78bf44de47b3 ratelimit: Convert the ->missed field to atomic_t
+ */
+#define BPM_RATELIMIT_MISSED_FIELD_IS_ATOMIC
+/*
+ * 6aa63a4ec947 iommu: Sort out domain user data
+ */
+#define BPM_DOMAIN_IOVA_COOKIE_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,16,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,15,0)
+/*
+ * 8fa7292fee5 treewide: Switch/rename to timer_delete[_sync]()
+ */
+#define BPM_DEL_TIMER_NOT_PRESENT
+
+/*
+ * 82ad584eed8 drm/i915/pmu: Switch to use hrtimer_setup()
+ */
+#define BPM_HRTIMER_INIT_NOT_PRESENT
+/*
+ * 26d6fd81916e drm/connector: make mode_valid take a const struct drm_display_mode
+ */
+#define BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,15,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,15,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,1)
+/*
+ * 4fab2d7628dd objtool: Fix init_module() handling
+ */
+#define BPM_OBJTOOL_COPY_ATTRIBUTE_NEEDED
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,14,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,7)
 /*
  * cb2e1c2136f drm: remove driver date from struct drm_driver and all drivers
  */
 #define BPM_DRIVER_DATE_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,14,0)
 
 /*
  * d670c8e5302 mm: remove PageTransTail()
@@ -22,6 +134,10 @@
  */
 #define BPM_DRM_DP_GET_VC_PAYLOAD_BW_ARG_NOT_PRESENT
 
+#endif /* LINUX_VERSION_IS_GEQ(6,14,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,14,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,1)
 /*
  * f1e8bf56320a driver core: Constify API device_find_child()
  * and adapt for various usages
@@ -30,19 +146,34 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(6,14,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,13,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,7)
+/*
+ * e4c80710d97c drm/i915: Use video aperture helpers
+ */
+#define BPM_DRM_APERTURE_IS_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,13,0)
 /*
- * 94a20fb9af16 sysfs: treewide: constify attribute callback of bin_attribute::mmap()
+ * cb2e1c2136f drm: remove driver date from struct drm_driver and all drivers
  */
-#define BPM_STRUCT_BIN_ATTRIBUTE_CONST_IS_PRESENT
+#define BPM_DRIVER_DATE_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,13,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,1)
 /*
  * cdd30ebb1b9f module: Convert symbol namespace to string literal
  */
 #define BPM_MODULE_IMPORT_TO_STRING_LITERAL_PRESENT
 /*
- * e4c80710d97c drm/i915: Use video aperture helpers
+ * 94a20fb9af16 sysfs: treewide: constify attribute callback of bin_attribute::mmap()
  */
-#define BPM_DRM_APERTURE_IS_NOT_PRESENT
+#define BPM_STRUCT_BIN_ATTRIBUTE_CONST_IS_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,13,0)
 /*
  *90ee6ed776c0 fs: port files to file_ref
  */
@@ -120,16 +251,19 @@
 
 #endif /* LINUX_VERSION_IS_GEQ(6,11,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,10,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,7)
+/*
+ * 529ce23a764f mm: switch mm->get_unmapped_area() to a flag
+ */
+#define BPM_GET_UNMAPPED_AREA_NOT_PRESENT
+#endif
+
 #if LINUX_VERSION_IS_GEQ(6,10,0)
 /*
  * 2c92ca849fcc tracing/treewide: Remove second parameter of __assign_str()
  */
 #define BPM_ASSIGN_STR_SECOND_ARG_PRESENT
-
-/*
- * 529ce23a764f mm: switch mm->get_unmapped_area() to a flag
- */
-#define BPM_GET_UNMAPPED_AREA_NOT_PRESENT
 
 #endif /* LINUX_VERSION_IS_GEQ(6,10,0) */
 
@@ -580,13 +714,16 @@
 #define BPM_DMA_HEAP_AND_DRM_DEVNODE_CONST_ARG_NOT_PRESENT
 #endif /* (LINUX_VERSION_IS_GEQ(6,2,0) || (REDHAT_RELEASE_VERSION_IS_GEQ(8,9))) */
 
-#if (LINUX_VERSION_IS_GEQ(6,2,0))
+#if LINUX_VERSION_IS_GEQ(6,2,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,7)
 /*
  * 4b21d25bf519c9
  *  overflow: Introduce overflows_type() and castable_to_type()
  */
 #define BPM_OVERFLOWS_TYPE_AVAILABLE
+#endif
 
+#if (LINUX_VERSION_IS_GEQ(6,2,0))
 /*
  * 3c202d14a9d73
  * prandom: remove prandom_u32_max()
@@ -904,7 +1041,6 @@
  */
 #define BPM_EDID_HDMI_RGB444_DC_MODES_NOT_PRESENT
 #endif  /* LINUX_VERSION_IS_GEQ(5,17,2) || (LINUX_VERSION_IN_RANGE(5,17,0, 5,17,2) && UBUN */
-
 
 #if (LINUX_VERSION_IS_LESS(5,18,0) && \
 	!(REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
@@ -1965,6 +2101,11 @@
  */
 #define BPM_EXPORT_SYM_NS_GPL_NOT_PRESENT
 
+/*
+ * 7239a40ca8bf vfs: Export flush_delayed_fput for use by knfsd
+ */
+#define BPM_FLUSH_DELAYED_FPUT_NOT_PRESENT
+
 #if !(REDHAT_RELEASE_VERSION_IS_GEQ(8,4))
 /*
  * 7ce2e76a0420 PCI: Move ASPM declarations to linux/pci.h
@@ -2310,6 +2451,13 @@
  * 49f776724e64 PCI/AER: Export pcie_aer_is_native()
  */
 #define BPM_PCIE_AER_IS_NATIVE_API_NOT_PRESENT
+#endif
+
+#if (REDHAT_RELEASE_VERSION_IS_GEQ(10,0))
+/*
+ * ed5685dd7cb7 Changes representative of linux-6.12.0-55.11.1.el10_0.tar.xz
+ */
+#define BPM_PAGEVEC_RH_KABI_RESERVE_NOT_PRESENT
 #endif
 
 #if REDHAT_RELEASE_VERSION_IS_LEQ(8,6) || \

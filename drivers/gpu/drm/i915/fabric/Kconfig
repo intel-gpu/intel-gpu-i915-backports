@@ -6,7 +6,7 @@ config DRM_I915_INTEL_FABRIC
 	depends on BUILD_ALL_MODULES || BUILD_DRM || BUILD_I915
 	depends on 64BIT
 	depends on NET
-	depends on LIBCRC32C
+	depends on LIBCRC32C || CRC32
 	default m
 	help
 	  This kernel driver provides support for the Intel glueless

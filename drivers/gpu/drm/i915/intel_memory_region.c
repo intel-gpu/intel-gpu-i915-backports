@@ -890,6 +890,7 @@ __intel_memory_region_get_pages_buddy(struct intel_memory_region *mem,
 		}
 
 		if (fetch_and_zero(&defrag) &&
+		    (i915_px_cache_release(mem->gt), true) &&
 		    i915_buddy_defrag(&mem->mm, min_order, order)) {
 			/* Merged a few blocks, try again */
 			max_order = UINT_MAX;
@@ -983,6 +984,16 @@ static int intel_memory_region_memtest(struct intel_memory_region *mem,
 	return err;
 }
 
+static void shrink_work(struct work_struct *wrk)
+{
+	struct intel_memory_region *mem = container_of(wrk, typeof(*mem), work.work);
+
+	if (mem->gt->suspend)
+		return;
+
+	intel_gt_pm_put(mem->gt, intel_gt_pm_get(mem->gt));
+}
+
 struct intel_memory_region *
 intel_memory_region_create(struct intel_gt *gt,
 			   resource_size_t start,
@@ -1023,6 +1034,8 @@ intel_memory_region_create(struct intel_gt *gt,
 	init_completion(&mem->parking);
 	complete_all(&mem->parking);
 
+	INIT_DELAYED_WORK(&mem->work, shrink_work);
+
 	spin_lock_init(&mem->acct_lock);
 
 	if (ops->init) {
@@ -1056,10 +1069,18 @@ void intel_memory_region_set_name(struct intel_memory_region *mem,
 	va_end(ap);
 }
 
+void intel_memory_region_queue_work(struct intel_memory_region *mem)
+{
+	if (!intel_gt_pm_is_awake(mem->gt) && !mem->gt->suspend)
+		mod_delayed_work(mem->gt->wq, &mem->work, round_jiffies_relative(2 * HZ - 1));
+}
+
 static void __intel_memory_region_destroy(struct kref *kref)
 {
 	struct intel_memory_region *mem =
 		container_of(kref, typeof(*mem), kref);
+
+	cancel_delayed_work_sync(&mem->work);
 
 	if (mem->ops->release)
 		mem->ops->release(mem);

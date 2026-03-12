@@ -175,12 +175,16 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 
 void i915_gem_suspend(struct drm_i915_private *i915)
 {
+	struct intel_memory_region *mem;
 	struct intel_gt *gt;
 	unsigned int i;
 
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
 	i915_sriov_suspend_prepare(i915);
+
+	for_each_memory_region(mem, i915, i)
+		cancel_delayed_work(&mem->work);
 
 	/*
 	 * We have to flush all the executing contexts to main memory so
@@ -239,8 +243,12 @@ int i915_gem_suspend_late(struct drm_i915_private *i915)
 
 void i915_gem_shutdown(struct drm_i915_private *i915)
 {
+	struct intel_memory_region *mem;
 	struct intel_gt *gt;
 	unsigned int i;
+
+	for_each_memory_region(mem, i915, i)
+		cancel_delayed_work(&mem->work);
 
 	for_each_gt(gt, i915, i) {
 		intel_gt_suspend_prepare(gt);

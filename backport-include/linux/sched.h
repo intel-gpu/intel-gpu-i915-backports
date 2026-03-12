@@ -21,4 +21,13 @@ static inline bool task_is_running(struct task_struct *task)
 }
 #endif
 
+#ifdef BPM_TRACE_SET_NEED_RESCHED_NOT_PRESENT
+#define set_tsk_need_resched LINUX_I915_BACKPORT(set_tsk_need_resched)
+
+static inline void set_tsk_need_resched(struct task_struct *tsk)
+{
+	set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);
+}
+#endif
+
 #endif /* _BACKPORT_LINUX_SCHED_H */

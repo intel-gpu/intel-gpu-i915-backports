@@ -431,6 +431,8 @@ static void flush_clear_on_idle(struct intel_gt *gt)
 	mem = gt->lmem;
 	if (mem)
 		wait_for_completion(&mem->parking);
+
+	flush_workqueue(gt->wq);
 }
 
 static void wait_for_suspend(struct intel_gt *gt)

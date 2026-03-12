@@ -891,11 +891,19 @@ static int intel_dp_mst_get_modes(struct drm_connector *connector)
 	return intel_dp_mst_get_ddc_modes(connector);
 }
 
+#ifdef BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+static int
+intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
+                            const struct drm_display_mode *mode,
+                            struct drm_modeset_acquire_ctx *ctx,
+                            enum drm_mode_status *status)
+#else
 static int
 intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 			    struct drm_display_mode *mode,
 			    struct drm_modeset_acquire_ctx *ctx,
 			    enum drm_mode_status *status)
+#endif
 {
 	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_connector *intel_connector = to_intel_connector(connector);

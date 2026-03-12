@@ -332,7 +332,11 @@ static bool skl_needs_memory_bw_wa(struct drm_i915_private *dev_priv)
 static bool
 intel_has_sagv(struct drm_i915_private *dev_priv)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	return !IS_LP(dev_priv) && dev_priv->sagv_status != I915_SAGV_NOT_CONTROLLED;
+#else
+	return false;
+#endif
 }
 
 static u32
@@ -362,6 +366,7 @@ intel_sagv_block_time(struct drm_i915_private *dev_priv)
 
 static void intel_sagv_init(struct drm_i915_private *i915)
 {
+#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	if (!intel_has_sagv(i915))
 		i915->sagv_status = I915_SAGV_NOT_CONTROLLED;
 
@@ -380,6 +385,7 @@ static void intel_sagv_init(struct drm_i915_private *i915)
 
 	if (!intel_has_sagv(i915))
 		i915->sagv_block_time_us = 0;
+#endif
 }
 
 /*

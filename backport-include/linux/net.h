@@ -102,11 +102,4 @@ bool __net_get_random_once(void *buf, int nbytes, bool *done,
 	__sock_create(net, family, type, proto, res, 1)
 #endif
 
-#ifndef SOCKWQ_ASYNC_NOSPACE
-#define SOCKWQ_ASYNC_NOSPACE   SOCK_ASYNC_NOSPACE
-#endif
-#ifndef SOCKWQ_ASYNC_WAITDATA
-#define SOCKWQ_ASYNC_WAITDATA   SOCK_ASYNC_WAITDATA
-#endif
-
 #endif /* __BACKPORT_LINUX_NET_H */

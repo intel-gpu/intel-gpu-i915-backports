@@ -115,6 +115,13 @@ intel_dp_aux_supports_hdr_backlight(struct intel_connector *connector)
 	struct intel_panel *panel = &connector->panel;
 	int ret;
 	u8 tcon_cap[4];
+	unsigned char metadata_type;
+
+#ifdef BPM_HDR_SINK_METADATA_NOT_PRESENT
+	metadata_type = connector->base.display_info.hdr_sink_metadata.hdmi_type1.metadata_type;
+#else
+	metadata_type = connector->base.hdr_sink_metadata.hdmi_type1.metadata_type;
+#endif
 
 	intel_dp_wait_source_oui(intel_dp);
 
@@ -144,8 +151,7 @@ intel_dp_aux_supports_hdr_backlight(struct intel_connector *connector)
 	 * ranges for such panels.
 	 */
 	if (i915->params.enable_dpcd_backlight != INTEL_DP_AUX_BACKLIGHT_FORCE_INTEL &&
-	    !(connector->base.hdr_sink_metadata.hdmi_type1.metadata_type &
-	      BIT(HDMI_STATIC_METADATA_TYPE1))) {
+	    !(metadata_type & BIT(HDMI_STATIC_METADATA_TYPE1))) {
 		drm_info(&i915->drm,
 			 "Panel is missing HDR static metadata. Possible support for Intel HDR backlight interface is not used. If your backlight controls don't work try booting with i915.enable_dpcd_backlight=%d. needs this, please file a _new_ bug report on drm/i915, see " FDO_BUG_URL " for details.\n",
 			 INTEL_DP_AUX_BACKLIGHT_FORCE_INTEL);
@@ -383,13 +389,23 @@ static int intel_dp_aux_vesa_setup_backlight(struct intel_connector *connector, 
 	struct intel_dp *intel_dp = intel_attached_dp(connector);
 	struct intel_panel *panel = &connector->panel;
 	struct drm_i915_private *i915 = dp_to_i915(intel_dp);
-	u16 current_level;
 	u8 current_mode;
 	int ret;
 
+#ifdef BPM_MAX_NEED_LUMINANCE_ARGS_NOT_PRESENT
+	u32 current_level;
+	struct drm_luminance_range_info *luminance_range =
+		&connector->base.display_info.luminance_range;
+	ret = drm_edp_backlight_init(&intel_dp->aux, &panel->backlight.edp.vesa.info,
+				     luminance_range->max_luminance,
+				     panel->vbt.backlight.pwm_freq_hz, intel_dp->edp_dpcd,
+				     &current_level, &current_mode, false);
+#else
+	u16 current_level;
 	ret = drm_edp_backlight_init(&intel_dp->aux, &panel->backlight.edp.vesa.info,
 				     panel->vbt.backlight.pwm_freq_hz, intel_dp->edp_dpcd,
 				     &current_level, &current_mode);
+#endif
 	if (ret < 0)
 		return ret;
 

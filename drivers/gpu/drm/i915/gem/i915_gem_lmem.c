@@ -2712,7 +2712,7 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	struct i915_buddy_list *bl;
 	struct intel_context *ce;
 	struct list_head dirty;
-	int i, min_order;
+	int i, min_order, merge;
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_CLEAR_ON_IDLE))
 		return false;
@@ -2721,17 +2721,23 @@ bool i915_gem_lmem_park(struct intel_memory_region *mem)
 	if (!ce || !ce->private)
 		return false;
 
-	i915_buddy_defrag(&mem->mm, 0, UINT_MAX);
+	i915_px_cache_release(mem->gt);
+
+	merge = 0;
+	min_order = ilog2(mem->min_page_size) - ilog2(mem->mm.chunk_size); /* smallest BLT */
+	if (!test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags))
+		merge = min_order;
+	i915_buddy_defrag(&mem->mm, merge, UINT_MAX);
 
 	/* Gradually clear (upto half each pass) local memory */
-	min_order = ilog2(mem->min_page_size) - ilog2(mem->mm.chunk_size);
 	for (i = mem->mm.max_order; i >= min_order; i--) {
 		bl = &mem->mm.dirty_list[i];
 		if (buddy_list_remove(bl, &dirty))
 			break;
 	}
 	if (i < min_order) {
-		clear_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
+		if (!test_and_clear_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags))
+			cancel_delayed_work(&mem->work);
 		return false;
 	}
 

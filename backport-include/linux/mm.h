@@ -12,10 +12,32 @@
 #include <linux/kref.h>
 
 #ifdef BPM_PAGETABLE_PMD_PAGE_CTOR_NOT_PRESENT
+#ifdef BPM_PAGETABLE_CTOR_STRUCT_MM_INIT_MM_ARG_NOT_PRESENT
+static inline bool pgtable_pmd_page_ctor(struct page *page)
+{
+        struct ptdesc *ptdesc = page_ptdesc(page);
+        if (!pmd_ptlock_init(ptdesc))
+                return false;
+        ptdesc_pmd_pts_init(ptdesc);
+        __pagetable_ctor(ptdesc);
+        return true;
+}
+#undef pagetable_pte_ctor
+#define pagetable_pte_ctor LINUX_I915_BACKPORT(pagetable_pte_ctor)
+static inline bool pagetable_pte_ctor(struct mm_struct *mm,
+                                      struct ptdesc *ptdesc)
+{
+        if (!ptlock_init(ptdesc))
+                return false;
+        __pagetable_ctor(ptdesc);
+        return true;
+}
+#else
 static inline bool pgtable_pmd_page_ctor(struct page *page)
 {
        return pagetable_pmd_ctor(page_ptdesc(page));
 }
+#endif
 #endif
 
 #ifdef BPM_UNPIN_USER_PAGES_DIRTY_LOCK_NOT_PRESENT

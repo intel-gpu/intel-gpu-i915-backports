@@ -45,7 +45,9 @@ u8 drm_dp_get_adjust_tx_ffe_preset(const u8 link_status[DP_LINK_STATUS_SIZE],
 #define DP_EDP_PWMGEN_BIT_COUNT                         0x724
 #define DP_EDP_BACKLIGHT_FREQ_SET                       0x728
 #define DP_EDP_BACKLIGHT_MODE_SET_REGISTER              0x721
+#ifndef EDP_DISPLAY_CTL_CAP_SIZE
 #define EDP_DISPLAY_CTL_CAP_SIZE                        3
+#endif
 #define DP_EDP_BACKLIGHT_FREQ_BASE_KHZ                  27000
 #define DP_EDP_DISPLAY_CONTROL_REGISTER                 0x720
 #define DP_EDP_BACKLIGHT_BRIGHTNESS_MSB                 0x722
