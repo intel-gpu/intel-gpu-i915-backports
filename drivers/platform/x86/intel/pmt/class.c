@@ -68,7 +68,11 @@ pmt_memcpy64_fromio(void *to, const u64 __iomem *from, size_t count)
  */
 static ssize_t
 intel_pmt_read(struct file *filp, struct kobject *kobj,
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+	       const struct bin_attribute *attr, char *buf, loff_t off,
+#else
 	       struct bin_attribute *attr, char *buf, loff_t off,
+#endif
 	       size_t count)
 {
 	struct intel_pmt_entry *entry = container_of(attr,

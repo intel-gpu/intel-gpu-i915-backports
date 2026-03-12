@@ -690,8 +690,14 @@ static int i915_eu_stall_stream_init(struct i915_eu_stall_cntr_stream *stream,
 	stream->buf_check_wq = alloc_ordered_workqueue("i915_eustall_cntr", 0);
 	if (!stream->buf_check_wq)
 		return -ENOMEM;
+
+#ifdef BPM_HRTIMER_INIT_NOT_PRESENT
+	hrtimer_setup(&stream->poll_check_timer, eu_stall_poll_check_timer_cb,
+			CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+#else
 	hrtimer_init(&stream->poll_check_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stream->poll_check_timer.function = eu_stall_poll_check_timer_cb;
+#endif
 	stream->event_report_count = props->event_report_count;
 	stream->per_dss_buf_size = props->eu_stall_buf_sz;
 	stream->poll_period = props->poll_period;

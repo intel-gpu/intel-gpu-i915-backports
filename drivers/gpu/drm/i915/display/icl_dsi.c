@@ -1432,8 +1432,13 @@ static void gen11_dsi_post_disable(struct intel_atomic_state *state,
 	skl_scaler_disable(old_crtc_state);
 }
 
+#ifdef BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+static enum drm_mode_status gen11_dsi_mode_valid(struct drm_connector *connector,
+                                                 const struct drm_display_mode *mode)
+#else
 static enum drm_mode_status gen11_dsi_mode_valid(struct drm_connector *connector,
 						 struct drm_display_mode *mode)
+#endif
 {
 	/* FIXME: DSC? */
 	return intel_dsi_mode_valid(connector, mode);

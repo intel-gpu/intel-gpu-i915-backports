@@ -40,8 +40,13 @@ u64 *intel_fb_plane_get_modifiers(struct drm_i915_private *i915,
 				  u8 plane_caps);
 bool intel_fb_plane_supports_modifier(struct intel_plane *plane, u64 modifier);
 
+#ifdef BPM_PIXEL_FORMAT_MODIFIER_ARGS_NOT_PRESENT
+const struct drm_format_info *
+intel_fb_get_format_info(u32 pixel_format, u64 modifier);
+#else
 const struct drm_format_info *
 intel_fb_get_format_info(const struct drm_mode_fb_cmd2 *cmd);
+#endif
 
 bool
 intel_format_info_is_yuv_semiplanar(const struct drm_format_info *info,
@@ -86,10 +91,19 @@ int intel_plane_compute_gtt(struct intel_plane_state *plane_state);
 int intel_framebuffer_init(struct intel_framebuffer *ifb,
 			   struct drm_i915_gem_object *obj,
 			   struct drm_mode_fb_cmd2 *mode_cmd);
+
+#ifdef BPM_DRM_FORMAT_INFO_ARG_NOT_PRESENT
+struct drm_framebuffer *
+intel_user_framebuffer_create(struct drm_device *dev,
+                              struct drm_file *filp,
+                              const struct drm_format_info *info,
+                              const struct drm_mode_fb_cmd2 *user_mode_cmd);
+#else
 struct drm_framebuffer *
 intel_user_framebuffer_create(struct drm_device *dev,
 			      struct drm_file *filp,
 			      const struct drm_mode_fb_cmd2 *user_mode_cmd);
+#endif
 
 bool intel_fb_uses_dpt(const struct drm_framebuffer *fb);
 

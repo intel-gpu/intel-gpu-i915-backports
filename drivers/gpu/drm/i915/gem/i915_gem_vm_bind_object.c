@@ -67,6 +67,13 @@ static void ufence_sync(struct user_fence *ufence)
 	}
 }
 
+static void ufence_wake(wait_queue_head_t *wq)
+{
+	mb();
+	if (waitqueue_active(wq))
+		wake_up_all(wq);
+}
+
 static void ufence_kmap(struct dma_fence_work *work)
 {
 	struct vm_bind_user_fence *vb =
@@ -78,8 +85,7 @@ static void ufence_kmap(struct dma_fence_work *work)
 
 	va = kmap_atomic(ufence->page);
 	memcpy(va + offset_in_page(ufence->ptr), &ufence->val, sizeof(ufence->val));
-	if (waitqueue_active(vb->wq))
-		wake_up_all(vb->wq);
+	ufence_wake(vb->wq);
 	kunmap_atomic(va);
 }
 
@@ -116,8 +122,7 @@ static int ufence_mm(struct dma_fence_work *work)
 
 		kthread_use_mm(mm);
 		if (copy_to_user(ufence->ptr, &ufence->val, sizeof(ufence->val)) == 0) {
-			if (waitqueue_active(vb->wq))
-				wake_up_all(vb->wq);
+			ufence_wake(vb->wq);
 			ret = 0;
 		}
 		kthread_unuse_mm(mm);
@@ -669,8 +674,6 @@ static struct i915_vma *vm_create_vma(struct i915_address_space *vm,
 	__set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
 	if (flags & PRELIM_I915_GEM_VM_BIND_READONLY)
 		__set_bit(I915_MM_NODE_READONLY_BIT, &vma->node.flags);
-
-	i915_active_init(&vma->active, NULL, NULL, 0);
 
 	vma = __i915_vma_get(vma);
 	GEM_BUG_ON(!vma);

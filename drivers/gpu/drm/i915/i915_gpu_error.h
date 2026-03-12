@@ -63,6 +63,7 @@ struct i915_uuid_resource_coredump {
 	char uuid[36];
 	/* UUID of the class this is instance of. 0 means base */
 	char class[36];
+	unsigned long size;
 
 	bool string_class;
 	union {

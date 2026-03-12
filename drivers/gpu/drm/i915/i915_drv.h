@@ -604,10 +604,6 @@ struct drm_i915_private {
 	struct drm_atomic_state *modeset_restore_state;
 	struct drm_modeset_acquire_ctx reset_ctx;
 
-#ifdef BPM_MMU_INTERVAL_NOTIFIER_NOTIFIER_NOT_PRESENT
-	DECLARE_HASHTABLE(mm_structs, 7);
-	spinlock_t mm_lock;
-#endif
 	struct i915_gem_mm mm;
 
 	/* Kernel Modesetting */
@@ -635,12 +631,12 @@ struct drm_i915_private {
 	struct list_head global_obj_list;
 
 	struct i915_frontbuffer_tracking fb_tracking;
-#endif
 
 	struct intel_atomic_helper {
 		struct llist_head free_list;
 		struct work_struct free_work;
 	} atomic_helper;
+#endif
 
 	bool mchbar_need_disable;
 
@@ -652,11 +648,11 @@ struct drm_i915_private {
 	 */
 	u32 hti_state;
 
+	struct i915_gpu_error gpu_error;
+	u32 suspend_count;
+
 #if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	struct i915_power_domains power_domains;
-#endif
-
-	struct i915_gpu_error gpu_error;
 
 	/* list of fbdev register on this device */
 	struct intel_fbdev *fbdev;
@@ -672,12 +668,7 @@ struct drm_i915_private {
 	 * checker somewhat working in the presence hardware
 	 * crappiness (can't read out DPLL_MD for pipes B & C).
 	 */
-#if IS_ENABLED(CPTCFG_DRM_I915_DISPLAY)
 	u32 chv_dpll_md[I915_MAX_PIPES];
-#endif
-	u32 bxt_phy_grc;
-
-	u32 suspend_count;
 
 	enum {
 		I915_SAGV_UNKNOWN = 0,
@@ -688,6 +679,7 @@ struct drm_i915_private {
 
 	u32 sagv_block_time_us;
 
+#endif
 	struct {
 		/*
 		 * Raw watermark latency values:
@@ -802,6 +794,11 @@ struct drm_i915_private {
 		u32 next_id;
 #define I915_MAX_ASID BIT(20)
 	} asid_resv;
+
+	struct {
+		u32 status;
+		int error;
+	} eye_margin;
 
 	u8 pch_ssc_use;
 
@@ -1539,9 +1536,6 @@ struct intel_memory_region *i915_gem_shmem_setup(struct intel_gt *gt,
 
 static inline void i915_gem_drain_freed_objects(struct drm_i915_private *i915)
 {
-	if (!atomic_read(&i915->mm.free_count))
-		return;
-
 	/*
 	 * A single pass should suffice to release all the freed objects (along
 	 * most call paths) , but be a little more paranoid in that freeing
@@ -1549,9 +1543,15 @@ static inline void i915_gem_drain_freed_objects(struct drm_i915_private *i915)
 	 * callbacks could have added new objects into the freed list, and
 	 * armed the work again.
 	 */
-	rcu_barrier();
-	while (flush_work(&i915->mm.free_work))
+	do {
 		rcu_barrier();
+		if (!atomic_read(&i915->mm.free_count))
+			break;
+
+		i915_gem_flush_free_objects(i915);
+	} while (flush_work(&i915->mm.free_work));
+
+	rcu_barrier();
 }
 
 static inline void i915_gem_drain_workqueue(struct drm_i915_private *i915)

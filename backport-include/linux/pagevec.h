@@ -33,9 +33,16 @@
 #ifdef BPM_PAGEVEC_NOT_PRESENT
 
 struct pagevec {
-        unsigned char nr;
-        bool percpu_pvec_drained;
-        struct page *pages[PAGEVEC_SIZE];
+	unsigned char nr;
+#ifdef BPM_PAGEVEC_RH_KABI_RESERVE_NOT_PRESENT
+	unsigned char i;
+#endif
+	bool percpu_pvec_drained;
+#ifdef BPM_PAGEVEC_RH_KABI_RESERVE_NOT_PRESENT
+	RH_KABI_RESERVE(1)
+	RH_KABI_RESERVE(2)
+#endif
+	struct page *pages[PAGEVEC_SIZE];
 };
 
 void __pagevec_release(struct pagevec *pvec);

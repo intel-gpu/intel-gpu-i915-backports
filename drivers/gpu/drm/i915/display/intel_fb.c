@@ -276,15 +276,28 @@ lookup_format_info(const struct drm_format_info formats[],
  * Returns the format information for @cmd->pixel_format specific to @cmd->modifier[0],
  * or %NULL if the modifier doesn't override the format.
  */
+#ifdef BPM_PIXEL_FORMAT_MODIFIER_ARGS_NOT_PRESENT
+const struct drm_format_info *
+intel_fb_get_format_info(u32 pixel_format, u64 modifier)
+#else
 const struct drm_format_info *
 intel_fb_get_format_info(const struct drm_mode_fb_cmd2 *cmd)
+#endif
 {
+#ifdef BPM_PIXEL_FORMAT_MODIFIER_ARGS_NOT_PRESENT
+	const struct intel_modifier_desc *md = lookup_modifier_or_null(modifier);
+#else
 	const struct intel_modifier_desc *md = lookup_modifier_or_null(cmd->modifier[0]);
+#endif
 
 	if (!md || !md->formats)
 		return NULL;
 
+#ifdef BPM_PIXEL_FORMAT_MODIFIER_ARGS_NOT_PRESENT
+	return lookup_format_info(md->formats, md->format_count, pixel_format);
+#else
 	return lookup_format_info(md->formats, md->format_count, cmd->pixel_format);
+#endif
 }
 
 static bool plane_caps_contain_any(u8 caps, u8 mask)
@@ -1837,7 +1850,11 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 		goto err;
 	}
 
+#ifdef BPM_DRM_FORMAT_INFO_ARG_NOT_PRESENT
+	drm_helper_mode_fill_fb_struct(&dev_priv->drm, fb, fb->format, mode_cmd);
+#else
 	drm_helper_mode_fill_fb_struct(&dev_priv->drm, fb, mode_cmd);
+#endif
 
 	for (i = 0; i < fb->format->num_planes; i++) {
 		u32 stride_alignment;
@@ -1900,10 +1917,18 @@ err:
 	return ret;
 }
 
+#ifdef BPM_DRM_FORMAT_INFO_ARG_NOT_PRESENT
+struct drm_framebuffer *
+intel_user_framebuffer_create(struct drm_device *dev,
+                              struct drm_file *filp,
+                              const struct drm_format_info *info,
+                              const struct drm_mode_fb_cmd2 *user_mode_cmd)
+#else
 struct drm_framebuffer *
 intel_user_framebuffer_create(struct drm_device *dev,
 			      struct drm_file *filp,
 			      const struct drm_mode_fb_cmd2 *user_mode_cmd)
+#endif
 {
 	struct drm_framebuffer *fb;
 	struct drm_i915_gem_object *obj;

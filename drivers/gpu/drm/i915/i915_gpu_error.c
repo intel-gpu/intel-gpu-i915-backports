@@ -338,13 +338,16 @@ static int compress_flush(struct i915_page_compress *c,
 	struct z_stream_s *zstream = &c->zstream;
 
 	do {
-		switch (zlib_deflate(zstream, Z_FINISH)) {
-		case Z_OK: /* more space requested */
+		if (zstream->avail_out == 0) {
 			zstream->next_out = compress_next_page(c, dst);
 			if (IS_ERR(zstream->next_out))
 				return PTR_ERR(zstream->next_out);
 
 			zstream->avail_out = PAGE_SIZE;
+		}
+
+		switch (zlib_deflate(zstream, Z_FINISH)) {
+		case Z_OK: /* more space requested */
 			break;
 
 		case Z_STREAM_END:
@@ -353,6 +356,8 @@ static int compress_flush(struct i915_page_compress *c,
 		default: /* any error */
 			return -EIO;
 		}
+
+		cond_resched();
 	} while (1);
 
 end:
@@ -529,9 +534,10 @@ static void i915_uuid_resources_dump(const struct i915_gem_context_coredump *ctx
 					  uuid_dump->class,
 					  uuid_dump->str);
 		} else {
-			i915_error_printf(m, "    UUID: %.36s, Class: %.36s\n",
+			i915_error_printf(m, "    UUID: %.36s, Class: %.36s, size: %ld\n",
 					  uuid_dump->uuid,
-					  uuid_dump->class);
+					  uuid_dump->class,
+					  uuid_dump->size);
 			if (uuid_dump->cpages)
 				compress_print_pages(m, uuid_dump->cpages);
 		}
@@ -1558,6 +1564,7 @@ capture_uuid(struct xarray *uuids,
 		return NULL;
 	}
 	memcpy(dump->uuid, uuid->uuid, sizeof(dump->uuid));
+	dump->size = uuid->size;
 
 	if (uuid->handle > PRELIM_I915_UUID_CLASS_MAX_RESERVED ||
 	    uuid->uuid_class == PRELIM_I915_UUID_CLASS_STRING) {

@@ -18,6 +18,7 @@
 #include <linux/rwsem.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 #include <linux/xarray.h>
 #include <generated/utsrelease.h>
 
@@ -26,6 +27,7 @@
 #include "csr.h"
 #include "debugfs.h"
 #include "dev_diag.h"
+#include "error.h"
 #include "fw.h"
 #include "iaf_drv.h"
 #include "mbdb.h"
@@ -62,6 +64,8 @@ LIST_HEAD(routable_list);
 static enum iaf_startup_mode param_startup_mode = STARTUP_MODE_DEFAULT;
 
 struct workqueue_struct *iaf_unbound_wq;
+static struct delayed_work err_sts_work;
+#define IAF_ERR_STS_MONITOR_INTERVAL_MS 500
 
 static const char *startup_mode_name(enum iaf_startup_mode m)
 {
@@ -994,6 +998,76 @@ bool is_fport_registered(struct fport *port)
 	return false;
 }
 
+static void report_err_sts(struct fsubdev *sd, u64 old, u64 new, u8 lpn, const char *reg_name)
+{
+	char fabric_id[32];
+	char sd_idx[32];
+	char sd_lpn[32];
+	char err_reg[32];
+	char reg_val[32];
+	char *envp[] = { fabric_id, sd_idx, sd_lpn, err_reg, reg_val, NULL };
+
+	if (lpn < PORT_COUNT) {
+                sd_err(sd, "lpn: %u: %s register changed %#018llx vs %#018llx", lpn, reg_name, old,
+                       new);
+                snprintf(sd_lpn, sizeof(sd_lpn), "BRIDGE_PORT=%u", lpn);
+        } else {
+                sd_err(sd, "%s register changed %#018llx vs %#018llx", reg_name, old, new);
+                snprintf(sd_lpn, sizeof(sd_lpn), "BRIDGE_PORT=N/A");
+        }
+
+	snprintf(fabric_id, sizeof(fabric_id), "FABRIC_ID=%#x", sd->fdev->fabric_id);
+	snprintf(sd_idx, sizeof(sd_idx), "SD_INDEX=%u", sd_index(sd));
+	snprintf(err_reg, sizeof(err_reg), "REGISTER=%s", reg_name);
+	snprintf(reg_val, sizeof(reg_val), "VALUE=%#018llx", new);
+
+	kobject_uevent_env(&sd->fdev->pdev->dev.kobj, KOBJ_CHANGE, envp);
+}
+
+static int err_sts_cb(struct fdev *dev, void *data)
+{
+	struct fsubdev *sd;
+	struct fport *port;
+	u64 port_reg[ERR_STS_COUNT];
+	u64 viral;
+	size_t i, j;
+	u8 lpn;
+
+	for (i = 0; i < dev->pd->sd_cnt; ++i) {
+		sd = &dev->sd[i];
+		if (unlikely(!sd->csr_base))
+			continue;
+
+		viral = err_sts_read_viral(sd);
+		if (viral != sd->viral_err_sts) {
+			report_err_sts(sd, sd->viral_err_sts, viral, PORT_COUNT,
+				       "VIRAL_ERR_STS");
+			sd->viral_err_sts = viral;
+		}
+
+		for_each_bridge_port(port, lpn, sd) {
+			err_sts_read_bridge_port_regs(sd, port, port_reg);
+
+			for (j = 0; j < ARRAY_SIZE(port_reg); j++) {
+				if (port->err_sts[j] == port_reg[j])
+					continue;
+
+				report_err_sts(sd, port->err_sts[j], port_reg[j], lpn,
+					       err_sts_str(j));
+				port->err_sts[j] = port_reg[j];
+			}
+		}
+	}
+
+	return 0;
+}
+
+static void monitor_err_sts_work(struct work_struct *work)
+{
+	fdev_process_each(err_sts_cb, NULL);
+	schedule_delayed_work(&err_sts_work, msecs_to_jiffies(IAF_ERR_STS_MONITOR_INTERVAL_MS));
+}
+
 static void __exit iaf_unload_module(void)
 {
 	pr_notice("Unloading %s\n", MODULEDETAILS);
@@ -1003,6 +1077,7 @@ static void __exit iaf_unload_module(void)
 
 	fw_abort();
 
+	cancel_delayed_work_sync(&err_sts_work);
 	flush_workqueue(iaf_unbound_wq);
 
 	/* notify routing event manager to minimize delays since we are shutting down */
@@ -1069,6 +1144,12 @@ static int __init iaf_load_module(void)
 	if (err)
 		pr_err("Cannot register with platform bus\n");
 #endif
+	/*
+	 * work item to monitor error status registers.
+	 * NOTE: all probed devices are monitored
+	 */
+	INIT_DELAYED_WORK(&err_sts_work, monitor_err_sts_work);
+	schedule_delayed_work(&err_sts_work, msecs_to_jiffies(IAF_ERR_STS_MONITOR_INTERVAL_MS));
 
 exit:
 	if (err) {

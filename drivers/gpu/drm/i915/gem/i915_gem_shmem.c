@@ -853,8 +853,9 @@ static void keep_sg(struct intel_memory_region *mem,
 		return;
 
 	spin_unlock(lock);
-	atomic_long_add(total, &mp->clear_pages);
 	atomic_add(count, &mp->clear_count);
+	if (atomic_long_add_return(total, &mp->clear_pages) > mp->high_clear_pages)
+		intel_memory_region_queue_work(mem);
 }
 
 static void release_clear_page(struct intel_memory_region *mem, struct page *page, int order)
@@ -1087,6 +1088,8 @@ restart:	/* Nothing readily available in the cache? Allocate some fresh pages */
 			page = alloc_pages_for_object(obj, &mem->interleave, gfp, order);
 			if (page)
 				break;
+
+			cond_resched();
 
 			if (shrink_shmem_cache(mem, order + 1, roundup_pow_of_two(remain) >> PAGE_SHIFT)) {
 				min_order = DMA_MAX_ORDER;
@@ -1391,10 +1394,17 @@ static int shmem_swapin(struct shmem_work *wrk)
 
 	/* Leaving the last chunk for ourselves */
 	if (chunk) {
+		struct scatterlist *sg = chunk->sg;
+		int end = n - chunk->idx - 1;
+
 		chunk->end = n;
 		shmem_queue(chunk, tbb, &tasks, true);
 		i915_tbb_run_local(tbb, &tasks, shmem_chunk);
 		i915_sw_fence_wait(&fence);
+
+		/* restore the end marker overwritten by *chunk */
+		if (end < SG_MAX_SINGLE_ALLOC)
+			sg_mark_end(sg + end);
 	}
 	GEM_BUG_ON(!list_empty(&tasks));
 
@@ -1643,7 +1653,11 @@ static bool need_swap(const struct drm_i915_gem_object *obj)
 static void i915_delete_from_page_cache(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
+#ifdef BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
+	XA_STATE(xas, &mapping->i_pages, page->__folio_index);
+#else
 	XA_STATE(xas, &mapping->i_pages, page->index);
+#endif
 
 	GEM_BUG_ON(!PageLocked(page));
 	xas_lock_irq(&xas);
@@ -1659,7 +1673,11 @@ static void i915_delete_from_page_cache(struct page *page)
 	__dec_lruvec_page_state(page, NR_SHMEM);
 #endif
 
+#ifdef BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
+	xas_set_order(&xas, page->__folio_index, 0);
+#else
 	xas_set_order(&xas, page->index, 0);
+#endif
 	xas_store(&xas, NULL);
 	xas_init_marks(&xas);
 
@@ -1686,7 +1704,11 @@ static int i915_add_to_page_cache_locked(struct page *page,
 
 	get_page(page);
 	page->mapping = mapping;
+#ifdef BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
+	page->__folio_index = offset;
+#else
 	page->index = offset;
+#endif
 
 	do {
 		unsigned int order = xa_get_order(xas.xa, xas.xa_index);
@@ -2128,14 +2150,24 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *dev_priv,
 	}
 #endif
 
+#ifdef BPM_WRITE_BEGIN_STRUCT_FILE_MEMBER_NOT_PRESENT
+        struct kiocb kiocb;
+        init_sync_kiocb(&kiocb, file);
+#endif
+
 	do {
 		unsigned int len = min_t(typeof(size), size, PAGE_SIZE);
 #ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
 		struct folio *folio;
 		void *fsdata;
 
+#ifdef BPM_WRITE_BEGIN_STRUCT_FILE_MEMBER_NOT_PRESENT
+                err = aops->write_begin(&kiocb, file->f_mapping, pos, len,
+                                        &folio, &fsdata);
+#else
 		err = aops->write_begin(file, file->f_mapping, pos, len,
 					&folio, &fsdata);
+#endif
 #else
 		struct page *page;
 		void *pgdata, *vaddr;
@@ -2150,8 +2182,13 @@ i915_gem_object_create_shmem_from_data(struct drm_i915_private *dev_priv,
 #ifdef BPM_WRITE_BEGIN_STRUCT_PAGE_MEMBER_NOT_PRESENT
 		memcpy_to_folio(folio, offset_in_folio(folio, pos), data, len);
 
+#ifdef BPM_WRITE_BEGIN_STRUCT_FILE_MEMBER_NOT_PRESENT
+                err = aops->write_end(&kiocb, file->f_mapping, pos, len, len,
+                                        folio, fsdata);
+#else
 		err = aops->write_end(file, file->f_mapping, pos, len, len,
 					folio, fsdata);
+#endif
 #else
 		vaddr = kmap(page);
 		memcpy(vaddr, data, len);
@@ -2292,11 +2329,11 @@ get_dirty_page(struct intel_memory_region *mem, int *order, unsigned long *total
 }
 
 static void
-free_dirty_pages(struct intel_memory_region *mem)
+free_dirty_pages(struct intel_memory_region *mem, bool full)
 {
 	struct clear_page bookmark = {};
+	unsigned long remain, limit;
 	struct shmem_private *mp;
-	unsigned long remain;
 	int order;
 
 	mp = to_shmem_private(mem);
@@ -2304,8 +2341,9 @@ free_dirty_pages(struct intel_memory_region *mem)
 		return;
 
 	remain = atomic_long_read(&mp->clear_pages);
+	limit = full ? mp->low_clear_pages : mp->high_clear_pages;
 	for (order = 0;
-	     remain > mp->high_clear_pages - BIT(order) &&
+	     remain > limit - BIT(order) &&
 	     order < ARRAY_SIZE(mp->clear);
 	     order++) {
 		struct clear_pages *pages = &mp->clear[order];
@@ -2314,7 +2352,9 @@ free_dirty_pages(struct intel_memory_region *mem)
 		if (list_empty(&pages->dirty))
 			continue;
 
-		spin_lock(&pages->lock);
+		if (!spin_trylock(&pages->lock))
+			break;
+
 		list_for_each_entry_reverse(cp, &pages->dirty, link) {
 			struct page *page;
 
@@ -2339,9 +2379,10 @@ free_dirty_pages(struct intel_memory_region *mem)
 			__list_del_entry(&bookmark.link);
 			cp = &bookmark;
 
-			if (remain <= mp->high_clear_pages)
+			if (remain <= limit)
 				break;
 		}
+
 		spin_unlock(&pages->lock);
 	}
 }
@@ -2356,7 +2397,7 @@ bool i915_gem_shmem_park(struct intel_memory_region *mem)
 	struct page *page;
 	int order;
 
-	free_dirty_pages(mem); /* throwaway excess */
+	free_dirty_pages(mem, !test_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags)); /* throwaway excess */
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SMEM_IDLE))
 		return false;
@@ -2367,7 +2408,8 @@ bool i915_gem_shmem_park(struct intel_memory_region *mem)
 
 	page = get_dirty_page(mem, &order, &total);
 	if (!page) {
-		clear_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags);
+		if (!test_and_clear_bit(INTEL_MEMORY_CLEAR_FREE, &mem->flags))
+			cancel_delayed_work(&mem->work);
 		return false;
 	}
 

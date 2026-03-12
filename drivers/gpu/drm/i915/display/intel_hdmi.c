@@ -1335,9 +1335,15 @@ intel_hdmi_mode_clock_valid(struct drm_connector *connector, int clock,
 	return status;
 }
 
+#ifdef BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+static enum drm_mode_status
+intel_hdmi_mode_valid(struct drm_connector *connector,
+                      const struct drm_display_mode *mode)
+#else
 static enum drm_mode_status
 intel_hdmi_mode_valid(struct drm_connector *connector,
 		      struct drm_display_mode *mode)
+#endif
 {
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
 	struct drm_i915_private *dev_priv = intel_hdmi_to_i915(hdmi);

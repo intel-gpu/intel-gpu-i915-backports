@@ -131,6 +131,7 @@ struct intel_memory_region {
 		struct list_head pt;
 	} objects;
 
+	struct delayed_work work;
 	struct completion parking;
 
 	bool private; /* not for userspace */
@@ -161,6 +162,7 @@ int intel_memory_region_evict(struct intel_memory_region *mem,
 			      resource_size_t target,
 			      unsigned long age,
 			      int chunk);
+void intel_memory_region_queue_work(struct intel_memory_region *mem);
 
 struct intel_memory_region *
 intel_memory_region_create(struct intel_gt *gt,

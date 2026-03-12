@@ -925,10 +925,14 @@ static void init_fake_interrupts(struct intel_gt *gt)
 			gt->fake_int.delay_slow = gt->fake_int.delay_fast;
 
 		gt->fake_int.enabled = 1;
+#ifdef BPM_HRTIMER_INIT_NOT_PRESENT
+		hrtimer_setup(&gt->fake_int.timer, fake_int_timer_callback,
+				CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+#else
 		hrtimer_init(&gt->fake_int.timer, CLOCK_MONOTONIC,
 			     HRTIMER_MODE_REL);
 		gt->fake_int.timer.function = fake_int_timer_callback;
-
+#endif
 		intel_guc_init_fake_interrupts(&gt->uc.guc);
 	}
 }
@@ -1265,7 +1269,6 @@ void i915_driver_register(struct drm_i915_private *dev_priv)
 	i915_debugfs_register(dev_priv);
 	i915_setup_sysfs(dev_priv);
 	i915_register_sysrq(dev_priv);
-
 
 	intel_spi_init(&dev_priv->spi, dev_priv);
 

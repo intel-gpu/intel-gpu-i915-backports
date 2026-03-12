@@ -28,7 +28,7 @@ This repository contains following drivers.
 
 | OS Distribution | OS Version | Kernel Version  | Installation Instructions |
 |---  |---  |---  |--- |
-| Ubuntu® Desktop | 24.04 | 6.14 generic | [README](docs/README_ubuntu.md) |
+| Ubuntu® Desktop | 24.04 | 6.17 generic | [README](docs/README_ubuntu.md) |
 | Ubuntu® Server | 24.04 | 6.8 generic | [README](docs/README_ubuntu.md) |
 | Ubuntu® Desktop | 22.04 | 6.8 generic | [README](docs/README_ubuntu.md) |
 | Ubuntu® Server | 22.04 | 5.15 generic | [README](docs/README_ubuntu.md) |
@@ -36,7 +36,9 @@ This repository contains following drivers.
 | SLES® | 15SP6 |  6.4.0.150600.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP5 |  5.14.21.150500.xx |  [README](docs/README_sles.md) |
 | SLES® | 15SP4 |  5.14.21.150400.xx |  [README](docs/README_sles.md) |
+| RHEL® | 10.1  |  6.12.0-124.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 10.0  |  6.12.0-55.xx |  [README](docs/README_redhat.md) |
+| RHEL® | 9.7  |  5.14.0-611.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.6  |  5.14.0-570.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.5  |  5.14.0-503.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.4  |  5.14.0-427.xx |  [README](docs/README_redhat.md) |

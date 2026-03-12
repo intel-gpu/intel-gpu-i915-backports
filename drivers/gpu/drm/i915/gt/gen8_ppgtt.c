@@ -147,7 +147,7 @@ static inline void free_px_ll(struct i915_address_space *vm, struct freelist *f)
 
 	GEM_BUG_ON(!f->tail);
 
-	if (likely(vm->gt->px_cache)) {
+	if (likely(vm->gt->px_cache && intel_gt_pm_is_awake(vm->gt))) {
 		struct llist_head __percpu *px_cache = vm->gt->px_cache;
 		struct llist_node *first;
 

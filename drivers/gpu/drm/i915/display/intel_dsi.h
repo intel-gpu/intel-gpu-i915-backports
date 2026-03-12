@@ -169,8 +169,13 @@ int intel_dsi_tlpx_ns(const struct intel_dsi *intel_dsi);
 enum drm_panel_orientation
 intel_dsi_get_panel_orientation(struct intel_connector *connector);
 int intel_dsi_get_modes(struct drm_connector *connector);
+#ifdef BPM_MODE_VALID_DRM_DISPLAY_MODE_ARG_PRESENT
+enum drm_mode_status intel_dsi_mode_valid(struct drm_connector *connector,
+                                          const struct drm_display_mode *mode);
+#else
 enum drm_mode_status intel_dsi_mode_valid(struct drm_connector *connector,
 					  struct drm_display_mode *mode);
+#endif
 struct intel_dsi_host *intel_dsi_host_init(struct intel_dsi *intel_dsi,
 					   const struct mipi_dsi_host_ops *funcs,
 					   enum port port);

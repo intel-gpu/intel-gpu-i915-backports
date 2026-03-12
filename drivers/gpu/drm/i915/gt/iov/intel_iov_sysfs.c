@@ -655,9 +655,15 @@ static struct attribute *vf_threshold_attrs[] = {
 	NULL
 };
 
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
+				   const struct bin_attribute *bin_attr, char *buf,
+				   loff_t off, size_t count)
+#else
 static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
 				   struct bin_attribute *bin_attr, char *buf,
 				   loff_t off, size_t count)
+#endif
 {
 	struct intel_iov *iov = kobj_to_iov(kobj);
 	unsigned int id = kobj_to_id(kobj);
@@ -676,9 +682,15 @@ static ssize_t bin_attr_state_read(struct file *filp, struct kobject *kobj,
 	return SZ_4K;
 }
 
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
+				    const struct bin_attribute *bin_attr, char *buf,
+				    loff_t off, size_t count)
+#else
 static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
 				    struct bin_attribute *bin_attr, char *buf,
 				    loff_t off, size_t count)
+#endif
 {
 	struct intel_iov *iov = kobj_to_iov(kobj);
 	unsigned int id = kobj_to_id(kobj);
@@ -699,7 +711,11 @@ static ssize_t bin_attr_state_write(struct file *filp, struct kobject *kobj,
 
 static BIN_ATTR(state, 0600, bin_attr_state_read, bin_attr_state_write, SZ_4K);
 
+#ifdef BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
+static const struct bin_attribute *vf_bin_attrs[] = {
+#else
 static struct bin_attribute *vf_bin_attrs[] = {
+#endif
 	&bin_attr_state,
 	NULL
 };

@@ -3,6 +3,11 @@
 
 #include_next <linux/timer.h>
 
+#ifdef BPM_DEL_TIMER_NOT_PRESENT
+#define del_timer timer_delete
+#define del_timer_sync timer_delete_sync
+#endif
+
 #ifndef setup_deferrable_timer
 /*
  * The TIMER_DEFERRABLE flag has not been around since 3.0 so
@@ -39,6 +44,7 @@ static inline void setup_deferrable_timer_key(struct timer_list *timer,
 #define TIMER_DATA_TYPE          unsigned long
 #define TIMER_FUNC_TYPE          void (*)(TIMER_DATA_TYPE)
 
+#ifndef BPM_SETUP_TIMER_NOT_PRESENT
 static inline void timer_setup(struct timer_list *timer,
 			       void (*callback) (struct timer_list *),
 			       unsigned int flags)
@@ -55,6 +61,7 @@ static inline void timer_setup(struct timer_list *timer,
 			    (TIMER_DATA_TYPE) timer);
 #endif
 }
+#endif
 
 #define from_timer(var, callback_timer, timer_fieldname) \
 	container_of(callback_timer, typeof(*var), timer_fieldname)

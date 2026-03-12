@@ -675,10 +675,12 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 {
 #ifndef BPM_STRUCT_VM_AREA_STRUCT_VM_NEXT_NOT_PRESENT
 #define VMA_ITERATOR(it_, mm_, va_) unsigned long it_ = (va_)
+#define vma_iter_init(it_, mm_, va_) *(it_) = (va_)
 #define for_each_vma_range(it_, vma_, end_) \
 	for (vma_ = find_vma(mm, it_); vma_; vma_ = (vma_)->vm_next)
 #endif
 	const unsigned long end = addr + len;
+	unsigned long hugepages[] = { -1, 0 };
 	struct vm_area_struct *vma;
 	VMA_ITERATOR(vmi, mm, addr);
 	int ret = -EFAULT;
@@ -691,9 +693,12 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 		if (vma->vm_flags & (VM_IO | VM_PFNMAP))
 			break;
 
-		if (no_init_on_alloc &&
-		    round_down(min(vma->vm_end, end), SZ_1M) > round_up(addr, SZ_1M))
-			vm_flags_set(vma, VM_HUGEPAGE);
+		if (!(vma->vm_flags & VM_HUGEPAGE) &&
+		    vma_is_anonymous(vma) &&
+		    round_down(vma->vm_end, SZ_1M) > round_up(vma->vm_start, SZ_1M)) {
+			hugepages[0] = min(hugepages[0], vma->vm_start);
+			hugepages[1] = max(hugepages[1], vma->vm_end);
+		}
 
 		if (vma->vm_end >= end) {
 			ret = 0;
@@ -703,6 +708,21 @@ probe_range(struct mm_struct *mm, unsigned long addr, unsigned long len)
 		addr = vma->vm_end;
 	}
 	mmap_read_unlock(mm);
+
+	/* Encourage anon vma to allocate 2M pages */
+	if (ret == 0 && hugepages[1] > hugepages[0] && no_init_on_alloc) {
+		vma_iter_init(&vmi, mm, hugepages[0]);
+
+		mmap_write_lock(mm);
+		for_each_vma_range(vmi, vma, hugepages[1]) {
+			if (vma_is_anonymous(vma))
+				vm_flags_set(vma, VM_HUGEPAGE);
+
+			if (vma->vm_end >= hugepages[1])
+				break;
+		}
+		mmap_write_unlock(mm);
+	}
 
 	return ret;
 }

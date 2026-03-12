@@ -249,10 +249,17 @@ static int guc_action_control_log(struct intel_guc *guc, bool enable,
  * Sub buffer switch callback. Called whenever relay has to switch to a new
  * sub buffer, relay stays on the same sub buffer if 0 is returned.
  */
+
+#ifdef BPM_SUBBUF_START_PREV_PADDING_ARG_NOT_PRESENT
+static int subbuf_start_callback(struct rchan_buf *buf,
+                                 void *subbuf,
+                                 void *prev_subbuf)
+#else
 static int subbuf_start_callback(struct rchan_buf *buf,
 				 void *subbuf,
 				 void *prev_subbuf,
 				 size_t prev_padding)
+#endif
 {
 	/*
 	 * Use no-overwrite mode by default, where relay will stop accepting

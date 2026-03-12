@@ -4,6 +4,8 @@
  *
  */
 
+#include <linux/io.h>
+
 #include "error.h"
 #include "ops.h"
 
@@ -165,6 +167,24 @@ struct fabric_port_status_rsp {
 	DECLARE_MBDB_OP_PORT_STATUS_GET_RSP(rsp, ARRAY_SIZE(s_fabric_regs));
 };
 
+static const struct mbdb_op_csr_range s_bridge_err_sts[] = {
+	{O_BRG_0_ERR_STS, 1},
+	{O_BRG_1_ERR_STS, 1},
+	{O_BRG_2_ERR_STS, 1},
+	{O_BRG_3_ERR_STS, 1},
+};
+
+static const struct error_reg s_bridge_err_sts_regs[] = {
+	MK_REG_W1C(O_BRG_0_ERR_STS, O_BRG_0_ERR_CLR, GENMASK_ULL(63, 0)),
+	MK_REG_W1C(O_BRG_1_ERR_STS, O_BRG_1_ERR_CLR, GENMASK_ULL(63, 0)),
+	MK_REG_W1C(O_BRG_2_ERR_STS, O_BRG_2_ERR_CLR, GENMASK_ULL(63, 0)),
+	MK_REG_W1C(O_BRG_3_ERR_STS, O_BRG_3_ERR_CLR, GENMASK_ULL(63, 0)),
+};
+
+struct bridge_port_err_sts_rsp {
+	DECLARE_MBDB_OP_PORT_STATUS_GET_RSP(rsp, ARRAY_SIZE(s_bridge_err_sts_regs));
+};
+
 static const struct mbdb_op_csr_range s_bridge_query_ranges[] = {
 	{O_BRG_CTX_ERR_STS,                  1},
 	{O_BRG_CTX_ERR_FIRST_HOST,           2},
@@ -175,6 +195,8 @@ static const struct mbdb_op_csr_range s_bridge_query_ranges[] = {
 	{O_BRG_1_ERR_FIRST_HOST,             2},
 	{O_BRG_2_ERR_STS,                    1},
 	{O_BRG_2_ERR_FIRST_HOST,             2},
+	{O_BRG_3_ERR_STS,                    1},
+	{O_BRG_3_ERR_FIRST_HOST,             2},
 	{O_TPM_ERR_STS,                      1},
 	{O_TPM_ERR_FIRST_HOST,              14},
 	{O_TPM_ERR_STORG_SBE_ERR_CNT_0,     16},
@@ -331,6 +353,11 @@ static const struct error_reg s_bridge_regs[] = {
 		   GENMASK_ULL(63, 0)),
 	MK_REG_W0C(O_BRG_2_ERR_FIRST_HOST),
 	MK_REG_W0C(O_BRG_2_ERR_FIRST_INFO),
+	MK_REG_W1C(O_BRG_3_ERR_STS,
+		   O_BRG_3_ERR_CLR,
+		   GENMASK_ULL(63, 0)),
+	MK_REG_W0C(O_BRG_3_ERR_FIRST_HOST),
+	MK_REG_W0C(O_BRG_3_ERR_FIRST_INFO),
 	MK_REG_W1C(O_TPM_ERR_STS,
 		   O_TPM_ERR_CLR,
 		   GENMASK_ULL(47, 0)),
@@ -429,6 +456,11 @@ struct bridge_port_status_rsp {
 	DECLARE_MBDB_OP_PORT_STATUS_GET_RSP(rsp, ARRAY_SIZE(s_bridge_regs));
 };
 
+struct err_sts_reg_info {
+	u64 offset;
+	const char *str;
+};
+
 /* clear helper macros */
 #undef MK_REG_W0C
 #undef MK_REG_W1C
@@ -477,6 +509,20 @@ static int read_bridge_errors(struct fport *port, struct mbdb_op_port_status_get
 
 	err = ops_port_status_get(port->sd, port->lpn, ARRAY_SIZE(s_bridge_query_ranges),
 				  s_bridge_query_ranges, rsp);
+	if (err) {
+		fport_err(port, "failed to get port status: %d\n", err);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int read_bridge_err_sts(struct fport *port, struct mbdb_op_port_status_get_rsp *rsp)
+{
+	int err;
+
+	err = ops_port_status_get(port->sd, port->lpn, ARRAY_SIZE(s_bridge_err_sts),
+				  s_bridge_err_sts, rsp);
 	if (err) {
 		fport_err(port, "failed to get port status: %d\n", err);
 		return -EIO;
@@ -908,8 +954,6 @@ static void report_bridge_error(struct fport *port, u32 csr, u64 error)
 	case O_BRG_0_ERR_FIRST_HOST:
 	case O_BRG_1_ERR_STS:
 	case O_BRG_1_ERR_FIRST_HOST:
-	case O_BRG_2_ERR_STS:
-	case O_BRG_2_ERR_FIRST_HOST:
 		REPORT_FLAG(63, "brg_tpm_egrq_ctxs_cmp_overflow");
 		REPORT_FLAG(62, "brg_tpm_egrq_rddata_overflow");
 		REPORT_FLAG(61, "brg_tpm_egrq_cmp_overflow");
@@ -974,6 +1018,92 @@ static void report_bridge_error(struct fport *port, u32 csr, u64 error)
 		REPORT_FLAG(2,  "ctxd_rsparb_cmp_sbe");
 		REPORT_FLAG(1,  "ctxd_rsparb_rr_sbe");
 		REPORT_FLAG(0,  "addr2fid_sbe");
+		break;
+	case O_BRG_2_ERR_STS:
+	case O_BRG_2_ERR_FIRST_HOST:
+		REPORT_FLAG(48, "brg_tpm_ingrQ_rddata_underflow");
+		REPORT_FLAG(47, "brg_tpm_ingrQ_nhdata2nd_underflow");
+		REPORT_FLAG(46, "brg_tpm_ingrQ_hdata2nd_underflow");
+		REPORT_FLAG(45, "brg_tpm_ingrQ_nhdata_underflow");
+		REPORT_FLAG(44, "brg_tpm_ingrQ_hdata_underflow");
+		REPORT_FLAG(43, "brg_tpm_ingrQ_nhcmd_underflow");
+		REPORT_FLAG(42, "brg_tpm_ingrQ_hcmd_underflow");
+		REPORT_FLAG(41, "brg_tpm_ingrQ_cmp_underflow");
+		REPORT_FLAG(40, "brg_tpm_ingrQ_nh2nddatafil_und)erflow");
+		REPORT_FLAG(39, "brg_tpm_ingrQ_h2nddatafil_underflow");
+		REPORT_FLAG(38, "brg_tpm_ingrQ_nhdatafil_underflow");
+		REPORT_FLAG(37, "brg_tpm_ingrQ_hdatafil_underflow");
+		REPORT_FLAG(36, "brg_tpm_ingrQ_nhfil_underflow");
+		REPORT_FLAG(35, "brg_tpm_ingrQ_hfil_underflow");
+		REPORT_FLAG(34, "brg_tpm_egrQ_ctxS_rddata_to_underflow");
+		REPORT_FLAG(33, "brg_tpm_egrQ_ctxS_to_cmp_underflow");
+		REPORT_FLAG(32, "brg_tpm_egrQ_ctxS_rddata_underflow");
+		REPORT_FLAG(25, "brg_src_addr_range_check_fail");
+		REPORT_FLAG(24, "brg_fid_lookup_failed");
+		REPORT_FLAG(23, "brg_rx_data_packet_poison_bit_set_fabric");
+		REPORT_FLAG(22, "brg_tx_data_packet_poison_bit_set_fabric");
+		REPORT_FLAG(21, "brg_tx_data_packet_poison_bit_set_lnep");
+		REPORT_FLAG(20, "brg_lnep_packet_rx_parity_error");
+		REPORT_FLAG(19, "brg_lnep_response_rx_parity_error");
+		REPORT_FLAG(18, "brg_lnep_data_rx_poison_set");
+		REPORT_FLAG(17, "brg_lnep_command_parity_error");
+		REPORT_FLAG(16, "brg_tpm_ingrQ_rddata_overflow");
+		REPORT_FLAG(15, "brg_tpm_ingrQ_nhdata2nd_overflow");
+		REPORT_FLAG(14, "brg_tpm_ingrQ_hdata2nd_overflow");
+		REPORT_FLAG(13, "brg_tpm_ingrQ_nhdata_overflow");
+		REPORT_FLAG(12, "brg_tpm_ingrQ_hdata_overflow");
+		REPORT_FLAG(11, "brg_tpm_ingrQ_nhcmd_overflow");
+		REPORT_FLAG(10, "brg_tpm_ingrQ_hcmd_overflow");
+		REPORT_FLAG(9,  "brg_tpm_ingrQ_cmp_overflow");
+		REPORT_FLAG(8,  "brg_tpm_ingrQ_nh2nddatafil_overflow");
+		REPORT_FLAG(7,  "brg_tpm_ingrQ_h2nddatafil_overflow");
+		REPORT_FLAG(6,  "brg_tpm_ingrQ_nhdatafil_overflow");
+		REPORT_FLAG(5,  "brg_tpm_ingrQ_hdatafil_overflow");
+		REPORT_FLAG(4,  "brg_tpm_ingrQ_nhfil_overflow");
+		REPORT_FLAG(3,  "brg_tpm_ingrQ_hfil_overflow");
+		REPORT_FLAG(2,  "brg_tpm_egrQ_ctxS_rddata_to_overflow");
+		REPORT_FLAG(1,  "brg_tpm_egrQ_ctxS_to_cmp_overflow");
+		REPORT_FLAG(0,  "brg_tpm_egrQ_ctxS_rddata_overflow");
+		break;
+	case O_BRG_3_ERR_STS:
+	case O_BRG_3_ERR_FIRST_HOST:
+		REPORT_FLAG(36, "tpm_brg_16B_parity_err");
+		REPORT_FLAG(35, "tpm_brg_96B_parity_err");
+		REPORT_FLAG(33, "tpm_brg_16B_mbe[1]");
+		REPORT_FLAG(34, "tpm_brg_24B_parity_err");
+		REPORT_FLAG(32, "tpm_brg_16B_mbe[0]");
+		REPORT_FLAG(31, "tpm_brg_96B_mbe[11]");
+		REPORT_FLAG(30, "tpm_brg_96B_mbe[10]");
+		REPORT_FLAG(29, "tpm_brg_96B_mbe[9]");
+		REPORT_FLAG(28, "tpm_brg_96B_mbe[8]");
+		REPORT_FLAG(27, "tpm_brg_96B_mbe[7]");
+		REPORT_FLAG(26, "tpm_brg_96B_mbe[6]");
+		REPORT_FLAG(25, "tpm_brg_96B_mbe[5]");
+		REPORT_FLAG(24, "tpm_brg_96B_mbe[4]");
+		REPORT_FLAG(23, "tpm_brg_96B_mbe[3]");
+		REPORT_FLAG(22, "tpm_brg_96B_mbe[2]");
+		REPORT_FLAG(21, "tpm_brg_96B_mbe[1]");
+		REPORT_FLAG(20, "tpm_brg_96B_mbe[0]");
+		REPORT_FLAG(19, "tpm_brg_24B_mbe[2]");
+		REPORT_FLAG(18, "tpm_brg_24B_mbe[1]");
+		REPORT_FLAG(17, "tpm_brg_24B_mbe[0]");
+		REPORT_FLAG(16, "tpm_brg_16B_sbe[1]");
+		REPORT_FLAG(15, "tpm_brg_16B_sbe[0]");
+		REPORT_FLAG(14, "tpm_brg_96B_sbe[11]");
+		REPORT_FLAG(13, "tpm_brg_96B_sbe[10]");
+		REPORT_FLAG(12, "tpm_brg_96B_sbe[9]");
+		REPORT_FLAG(11, "tpm_brg_96B_sbe[8]");
+		REPORT_FLAG(10, "tpm_brg_96B_sbe[7]");
+		REPORT_FLAG(9,  "tpm_brg_96B_sbe[6]");
+		REPORT_FLAG(8,  "tpm_brg_96B_sbe[5]");
+		REPORT_FLAG(7,  "tpm_brg_96B_sbe[4]");
+		REPORT_FLAG(6,  "tpm_brg_96B_sbe[3]");
+		REPORT_FLAG(5,  "tpm_brg_96B_sbe[2]");
+		REPORT_FLAG(4,  "tpm_brg_96B_sbe[1]");
+		REPORT_FLAG(3,  "tpm_brg_96B_sbe[0]");
+		REPORT_FLAG(2,  "tpm_brg_24B_sbe[2]");
+		REPORT_FLAG(1,  "tpm_brg_24B_sbe[1]");
+		REPORT_FLAG(0,  "tpm_brg_24B_sbe[0]");
 		break;
 	case O_TPM_ERR_STS:
 	case O_TPM_ERR_FIRST_HOST:
@@ -1482,9 +1612,85 @@ end:
 	kfree(rsp);
 }
 
+static const struct err_sts_reg_info err_sts_reg_info[] = {
+	[ERR_STS_BRG_0] = {
+		.offset = O_BRG_0_ERR_STS,
+		.str = "BRG_0_ERR_STS",
+	},
+	[ERR_STS_BRG_1] = {
+		.offset = O_BRG_1_ERR_STS,
+		.str = "BRG_1_ERR_STS",
+	},
+	[ERR_STS_BRG_2] = {
+		.offset = O_BRG_2_ERR_STS,
+		.str = "BRG_2_ERR_STS",
+	},
+	[ERR_STS_BRG_3] = {
+		.offset = O_BRG_3_ERR_STS,
+		.str = "BRG_3_ERR_STS",
+	},
+};
+static_assert(ARRAY_SIZE(err_sts_reg_info) == ERR_STS_COUNT);
+
+const char *err_sts_str(size_t index)
+{
+	if (index < ERR_STS_COUNT)
+		return err_sts_reg_info[index].str;
+
+	return "UNKNOWN_REGISTER";
+}
+
+u64 err_sts_read_viral(struct fsubdev *sd)
+{
+	return readq(sd->csr_base + CSR_VIRAL_TRIGGER_STS);
+}
+
+static void update_bridge_err_sts(const u64 *errors, size_t len, u64 port_regs[])
+{
+	size_t i;
+
+	for (i = 0; i < len; i++)
+		port_regs[i] = errors[i];
+}
+
+void err_sts_read_bridge_port_regs(struct fsubdev *sd, struct fport *port, u64 regs[])
+{
+	struct bridge_port_err_sts_rsp *rsp;
+	int err;
+
+	rsp = kmalloc(sizeof(*rsp), GFP_KERNEL);
+	if (!rsp)
+		return;
+
+	err = read_bridge_err_sts(port, &rsp->rsp);
+	if (err) {
+		sd_warn(sd, "unable to read bridge status errors: %d\n", err);
+		goto end;
+	}
+
+	update_bridge_err_sts(rsp->regs, ARRAY_SIZE(s_bridge_err_sts_regs), regs);
+
+end:
+	kfree(rsp);
+}
+
+/* prime the *err_sts information so any changes can be reported */
+static void read_err_sts_regs(struct fsubdev *sd)
+{
+	struct fport *port;
+        u8 lpn;
+
+	sd->viral_err_sts = err_sts_read_viral(sd);
+
+	for_each_bridge_port(port, lpn, sd) {
+		err_sts_read_bridge_port_regs(sd, port, port->err_sts);
+	}
+}
+
 void reset_errors(struct fsubdev *sd)
 {
 	reset_fabric_errors(sd);
 	reset_bridge_errors(sd);
-}
 
+	read_err_sts_regs(sd);
+}

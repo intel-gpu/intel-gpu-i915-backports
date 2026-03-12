@@ -3,11 +3,17 @@
  * Copyright © 2023 Intel Corporation
  */
 
+#include "i915_drv.h"
+#include "i915_sysfs.h"
+#include "pvc_ras.h"
+
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_print.h"
 
-#include "i915_drv.h"
-#include "pvc_ras.h"
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+#define KOBJ_ATTR_RO(_name) \
+	struct kobj_attribute dev_attr_##_name = __ATTR_RO(_name)
+#endif
 
 struct ras_reg64_info {
 	const char * const reg_name;
@@ -51,38 +57,34 @@ static const struct ras_reg32_info pvc_memory_cntrlr_reg32[] = {
 	{"CPGC_ERR_TEST_ERR_STAT in Pchnl1",	_MMIO(0x0028a6cc),		0x1000000},
 };
 
+static void record_eye_margin(struct intel_gt *gt, const char *msg, int val)
+{
+	gt->i915->eye_margin.error |= val;
+	gt->i915->eye_margin.status = __raw_uncore_read32(gt->uncore, SWF_ILK(2));
+	gt_warn(gt, "%s MDFI eye margin detected, status %08x\n", msg, gt->i915->eye_margin.status);
+}
+
 int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 {
 	struct intel_gt *gt = to_gt(i915);
 
-	const struct ras_reg64_info *reg64_info;
-	const struct ras_reg32_info *reg32_info;
-	struct hbm_status hbm_info = {false};
-	u32 channel_num, hbm_num;
-	const char *name;
-	unsigned long errsrc;
-	u32 errbit, reg_id;
-	u64 reg64_value;
-	u32 reg32_value;
-	u32 hbm_chnl_id;
-	int ret, id;
-	u32 num_regs;
-
+	struct hbm_status hbm_info = {};
 	bool hbm_error = false;
-
-	ret = 0;
+	unsigned long errsrc;
+	int ret = 0, id, bit;
 
 	if (!IS_PONTEVECCHIO(i915) || IS_SRIOV_VF(i915))
-		return ret;
+		return 0;
 
 	errsrc = __raw_uncore_read32(gt->uncore, GT0_TELEMETRY_MSGREGADDR);
-	if (errsrc)
-		gt_notice(gt, "Read value of GT0_TELEMETRY_MSGREGADDR=[0x%08lx]\n", errsrc);
+	if (!errsrc)
+		return 0;
 
-	for_each_set_bit(errbit, &errsrc, 32) {
-		name = NULL;
+	gt_dbg(gt, "GT0_TELEMETRY_MSGREGADDR = 0x%08lx\n", errsrc);
+	for_each_set_bit(bit, &errsrc, 32) {
+		const char *name = NULL;
 
-		switch (errbit) {
+		switch (bit) {
 		case PCIE_DEKEL_FW_LOAD_FAILED:
 			name = "PCIe link downgraded to 1.0";
 			break;
@@ -104,11 +106,10 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 			ret = -ENXIO;
 			break;
 		case MDFI_BAD_EYE_MARGIN_AFTER_TRAINING:
-			name = "Zero MDFI eye margin detected";
-			ret = -ENXIO;
+			record_eye_margin(gt, "Zero", 1);
 			break;
 		case MDFI_BAD_DLL_CODES_AFTER_TRAINING:
-			gt_warn(gt, "Low MDFI eye margin detected\n");
+			record_eye_margin(gt, "Low", 2);
 			break;
 		case HBM_DIAGNOSTICS_RUN:
 			hbm_info.diag_run = true;
@@ -158,31 +159,30 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 	if (hbm_info.diag_run) {
 		if (hbm_info.diag_incomplete) {
-			gt_err(gt, "diagnostics is incomplete, HBM may be un-reliable");
+			gt_err(gt, "diagnostics is incomplete, HBM may be un-reliable\n");
 		} else if (hbm_info.hbm_repair_attempted) {
+				const char *msg;
+
+				if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault)
+					msg = "existing and new HBM faults present";
+				else if (hbm_info.hbm_existing_fault)
+					msg = "existing HBM fault present";
+				else if (hbm_info.hbm_new_fault)
+					msg = "new HBM fault present";
+				else
+					msg = "no new or existing faults";
+
 			if (hbm_info.hbm_val_failure || hbm_info.hbm_repair_exhausted) {
-				gt_err(gt, "unrepairable HBM fault present\n");
-				/* set hbm state to replace */
 				gt->mem_sparing.health_status = MEM_HEALTH_REPLACE;
-				if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault)
-					gt_err(gt, "existing and new HBM faults present\n");
-				else if (hbm_info.hbm_existing_fault)
-					gt_err(gt, "existing HBM fault present\n");
-				else if (hbm_info.hbm_new_fault)
-					gt_err(gt, "new HBM fault present\n");
+				gt_err(gt, "unrepairable HBM: %s\n", msg);
 			} else {
-				if (hbm_info.hbm_existing_fault && hbm_info.hbm_new_fault)
-					gt_notice(gt, "existing and new HBM faults present and repaired\n");
-				else if (hbm_info.hbm_existing_fault)
-					gt_notice(gt, "repaired HBM fault present\n");
-				else if (hbm_info.hbm_new_fault)
-					gt_notice(gt, "new HBM fault present and repaired\n");
+				gt_notice(gt, "repaired HBM: %s\n", msg);
 			}
 		} else {
 			if (hbm_info.hbm_new_fault)
 				gt_err(gt, "new / unrepaired HBM fault present, recommended to run diagnostics and repair\n");
 			else
-				gt_notice(gt, "Diagnostics completed no faults found\n");
+				gt_info(gt, "Diagnostics completed no faults found\n");
 		}
 	}
 
@@ -192,7 +192,8 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 	}
 
 	for_each_gt(gt, i915, id) {
-		/* Memory controller register checks for
+		/*
+		 * Memory controller register checks for
 		 * status of HBM0 to HBM3 and channel0 to channel7
 		 * Same set of memory controller registers are used
 		 * for different HBM channels and write value
@@ -205,44 +206,44 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 
 		unsigned long hbm_mask = __raw_uncore_read32(gt->uncore, FUSE3_HBM_STACK_STATUS);
 
-		gt_notice(gt, "FUSE3_HBM_STACK_STATUS=[0x%08lx]\n", hbm_mask);
+		gt_dbg(gt, "FUSE3_HBM_STACK_STATUS = 0x%08lx\n", hbm_mask);
 
 		if (hbm_info.hbm_training_failed) {
-			for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
-				u32 ctrl_reg = __raw_uncore_read32(gt->uncore,
-								   PVC_UC_BIOS_MAILBOX_CTL_REG(hbm_num));
+			for_each_set_bit(bit, &hbm_mask, HBM_STACK_MAX) {
+				u32 ctrl_reg = __raw_uncore_read32(gt->uncore, PVC_UC_BIOS_MAILBOX_CTL_REG(bit));
 				u32 hbm_training_status = FIELD_GET(HBM_TRAINING_INFO, ctrl_reg);
 
-				gt_notice(gt, "uc_bios_mailbox_ctrl_creg[%d] = 0x%08x\n", hbm_num, ctrl_reg);
+				gt_dbg(gt, "uc_bios_mailbox_ctrl_creg[%d] = 0x%08x\n", bit, ctrl_reg);
 
 				if (hbm_training_status == HBM_TRAINING_FAILED) {
-					u32 data0_reg = __raw_uncore_read32(gt->uncore,
-									    PVC_UC_BIOS_MAILBOX_DATA0_REG_HBM(hbm_num));
-					u32 data1_reg = __raw_uncore_read32(gt->uncore,
-									    PVC_UC_BIOS_MAILBOX_DATA1_REG_HBM(hbm_num));
 					gt_err(gt, "Reported HBM training error on HBM%d."
 					       "uc_bios_mailbox_data0_creg = 0x%08x, uc_bios_mailbox_data1_creg = 0x%08x\n",
-					       hbm_num, data0_reg, data1_reg);
+					       bit,
+					       __raw_uncore_read32(gt->uncore, PVC_UC_BIOS_MAILBOX_DATA0_REG_HBM(bit)),
+					       __raw_uncore_read32(gt->uncore, PVC_UC_BIOS_MAILBOX_DATA1_REG_HBM(bit)));
 				}
 			}
 		}
 
-		for_each_set_bit(hbm_num, &hbm_mask, HBM_STACK_MAX) {
-			for (channel_num = 0; channel_num < CHANNEL_MAX; channel_num++) {
-				hbm_chnl_id = (CHANNEL_MAX * hbm_num) + channel_num;
+		for_each_set_bit(bit, &hbm_mask, HBM_STACK_MAX) {
+			u32 channel;
+
+			for (channel = 0; channel < CHANNEL_MAX; channel++) {
+				u32 hbm_chnl_id = (CHANNEL_MAX * bit) + channel;
+				int num_regs, n;
+
 				__raw_uncore_write32(gt->uncore, MMIO_INDX_REG, hbm_chnl_id);
+
 				num_regs = ARRAY_SIZE(pvc_memory_cntrlr_reg64);
+				for (n = 0; n < num_regs; n++) {
+					const struct ras_reg64_info *r = &pvc_memory_cntrlr_reg64[n];
+					u64 val;
 
-				for (reg_id = 0; reg_id < num_regs; reg_id++) {
-					reg64_info = &pvc_memory_cntrlr_reg64[reg_id];
-					reg64_value = __raw_uncore_read64(gt->uncore,
-									  reg64_info->offset);
-
-					if (reg64_value != DEFAULT_VALUE_RAS_REG64) {
+					val = __raw_uncore_read64(gt->uncore, r->offset);
+					if (val != DEFAULT_VALUE_RAS_REG64) {
 						gt_err(gt, "Register %s read value=[0x%016llx], expected value=[0x%016x]. Reported error on HBM%d:CHANNEL%d\n",
-						       reg64_info->reg_name, reg64_value,
-						       DEFAULT_VALUE_RAS_REG64, hbm_num,
-						       channel_num);
+						       r->reg_name, val, DEFAULT_VALUE_RAS_REG64,
+						       bit, channel);
 
 						hbm_error = true;
 						ret = -ENXIO;
@@ -250,16 +251,16 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 				}
 
 				num_regs = ARRAY_SIZE(pvc_memory_cntrlr_reg32);
-				for (reg_id = 0; reg_id < num_regs; reg_id++) {
-					reg32_info = &pvc_memory_cntrlr_reg32[reg_id];
-					reg32_value = __raw_uncore_read32(gt->uncore,
-									  reg32_info->offset);
+				for (n = 0; n < num_regs; n++) {
+					const struct ras_reg32_info *r = &pvc_memory_cntrlr_reg32[n];
+					u32 val;
 
-					if (reg32_value != reg32_info->default_value) {
+					val = __raw_uncore_read32(gt->uncore, r->offset);
+					if (val != r->default_value) {
 						gt_err(gt, "Register %s read value=[0x%08x], expected value=[0x%08x]. Reported error on HBM%d:CHANNEL%d\n",
-						       reg32_info->reg_name, reg32_value,
-						       reg32_info->default_value, hbm_num,
-						       channel_num);
+						       r->reg_name, val,
+						       r->default_value, bit,
+						       channel);
 
 						hbm_error = true;
 						ret = -ENXIO;
@@ -273,4 +274,88 @@ int pvc_ras_telemetry_probe(struct drm_i915_private *i915)
 			      "HBM is in an unreliable state; try a cold reboot.\n");
 
 	return ret;
+}
+
+static ssize_t
+__mfdi_eye_margin_error_show(struct device *dev, char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+
+	/*
+	 * mfdi_eye_margin_error:
+	 * 0 - no errors
+	 * 1 - zero eye margin
+	 * 2 - low eye margin
+	 * 3 - both low and zero eye margins
+	 */
+	return sysfs_emit(buf, "%d\n", i915->eye_margin.error);
+}
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t
+mfdi_eye_margin_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return __mfdi_eye_margin_error_show(kobj_to_dev(kobj), buf);
+}
+static KOBJ_ATTR_RO(mfdi_eye_margin_error);
+#else
+static ssize_t
+mfdi_eye_margin_error_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return __mfdi_eye_margin_error_show(dev, buf);
+}
+static DEVICE_ATTR_RO(mfdi_eye_margin_error);
+#endif
+
+static ssize_t
+__mfdi_eye_margin_status_show(struct device *dev, char *buf)
+{
+	struct drm_i915_private *i915 = kdev_minor_to_i915(dev);
+
+	/*
+	 * mfdi_eye_margin_status:
+	 * union {
+	 *	struct {
+	 *		uint32_t eye_val    : 8; //  Hold the worst low eye margin encountered
+	 *		uint32_t eye_source : 8; //  The source of the value, T2C = 0, T2T = 1, ANR = 2
+	 *		uint32_t counter    : 8; //  How many low eye margin discovered
+	 *		uint32_t eye_side   : 1; //  0 = left side, 1 = right side
+	 *		uint32_t tile       : 1; //  Which Tile reported the worst value
+	 *		uint32_t reserved   : 5;
+	 *		uint32_t valid      : 1; // Indicate if the content of the register is valid
+	 *	};
+	 *	uint32_t val;
+	 * };
+	 */
+	return sysfs_emit(buf, "%x\n", i915->eye_margin.status);
+}
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t
+mfdi_eye_margin_status_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return __mfdi_eye_margin_status_show(kobj_to_dev(kobj), buf);
+}
+static KOBJ_ATTR_RO(mfdi_eye_margin_status);
+#else
+static ssize_t
+mfdi_eye_margin_status_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return __mfdi_eye_margin_status_show(dev, buf);
+}
+static DEVICE_ATTR_RO(mfdi_eye_margin_status);
+#endif
+
+void pvc_ras_register_sysfs(struct drm_i915_private *i915)
+{
+	static const struct attribute *files[] = {
+		&dev_attr_mfdi_eye_margin_error.attr,
+		&dev_attr_mfdi_eye_margin_status.attr,
+		NULL
+	};
+	struct device *kdev = i915->drm.primary->kdev;
+
+	if (!IS_PONTEVECCHIO(i915) || IS_SRIOV_VF(i915))
+		return;
+
+	if (sysfs_create_files(&kdev->kobj, files))
+		dev_warn(i915->drm.dev, "Failed to install MDFI sysfs entries\n");
 }

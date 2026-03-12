@@ -38,6 +38,7 @@
 #define CP_DEV_EFUSE_VERSION_VARIANT_MASK	GENMASK_ULL(23, 16)
 #define CP_DEV_EFUSE_VERSION_VARIANT_NORMAL	0
 #define CP_DEV_EFUSE_VERSION_VARIANT_EXPORT	1
+#define CSR_VIRAL_TRIGGER_STS		(CP_ADDR_TOP_BASE + 0xa0)
 
 #define CSR_ROPTION				0x80000008
 #define ROPTION_FORCE_FEC_HEAVY_ON		BIT(0)
@@ -412,6 +413,10 @@ static inline u32 get_raw_port_base(u8 ppn)
 #define O_BRG_2_ERR_CLR                       0x036308
 #define O_BRG_2_ERR_FIRST_HOST                0x036320
 #define O_BRG_2_ERR_FIRST_INFO                0x036328
+#define O_BRG_3_ERR_STS                       0x036400
+#define O_BRG_3_ERR_CLR                       0x036408
+#define O_BRG_3_ERR_FIRST_HOST                0x036420
+#define O_BRG_3_ERR_FIRST_INFO                0x036428
 #define O_TPM_ERR_STS                         0x100300
 #define O_TPM_ERR_CLR                         0x100308
 #define O_TPM_ERR_FIRST_HOST                  0x100320
