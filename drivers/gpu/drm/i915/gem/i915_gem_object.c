@@ -315,36 +315,6 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 		obj->flags |= I915_BO_CACHE_COHERENT_FOR_READ;
 }
 
-/**
- * i915_gem_object_set_pat_index - set PAT index to be used in PTE encode
- * @obj: #drm_i915_gem_object
- * @pat_index: PAT index
- *
- * This is a clone of i915_gem_object_set_cache_coherency taking pat index
- * instead of cache_level as its second argument.
- */
-void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
-				   unsigned int pat_index)
-{
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
-
-	if (i915_gem_object_pat_index(obj) == pat_index)
-		return;
-
-	obj->flags &= ~I915_BO_PAT_INDEX;
-	obj->flags |= FIELD_PREP(I915_BO_PAT_INDEX, pat_index);
-
-	obj->flags &= ~(I915_BO_CACHE_COHERENT_FOR_READ |
-			I915_BO_CACHE_COHERENT_FOR_WRITE);
-	if (pat_index != i915_gem_get_pat_index(i915, I915_CACHE_NONE))
-		obj->flags |= (I915_BO_CACHE_COHERENT_FOR_READ |
-			       I915_BO_CACHE_COHERENT_FOR_WRITE);
-	else if (i915_gem_object_use_llc(obj))
-		obj->flags = I915_BO_CACHE_COHERENT_FOR_READ;
-
-	GEM_BUG_ON(i915_gem_object_pat_index(obj) != pat_index);
-}
-
 static int __i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 				      struct i915_gem_ww_ctx *ww,
 				      struct prelim_drm_i915_gem_vm_advise *args)
@@ -671,8 +641,8 @@ static void i915_gem_close_object(struct drm_gem_object *gem, struct drm_file *f
 			i915_vma_close(vma);
 		}
 		mutex_unlock(&ctx->lut_mutex);
+		i915_gem_context_put(ctx);
 
-		i915_gem_context_put(lut->ctx);
 		i915_lut_handle_free(lut);
 		i915_gem_object_put(obj);
 	}
@@ -750,12 +720,14 @@ static void __i915_gem_object_free_vma(struct drm_i915_gem_object *obj)
 	while ((vma = list_first_entry_or_null(&obj->vma.list,
 					       struct i915_vma,
 					       obj_link))) {
+		struct i915_address_space *vm = vma->vm;
+
 		__i915_vma_get(vma);
 		spin_unlock(&obj->vma.lock);
 
-		mutex_lock(&vma->vm->mutex);
+		mutex_lock(&vm->mutex);
 		i915_vma_unpublish(vma);
-		mutex_unlock(&vma->vm->mutex);
+		mutex_unlock(&vm->mutex);
 
 		__i915_vma_put(vma);
 		spin_lock(&obj->vma.lock);

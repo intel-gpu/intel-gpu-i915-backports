@@ -4,6 +4,45 @@
 #include <linux/kconfig.h>
 #include <backport/autoconf.h>
 
+#if LINUX_VERSION_IS_GEQ(7,0,1) || \
+	LINUX_VERSION_IN_RANGE(6,19,14, 7,0,0) || \
+	LINUX_VERSION_IN_RANGE(6,18,24, 6,19,0) || \
+	LINUX_VERSION_IN_RANGE(6,12,83, 6,13,0)
+/*
+ * 599201085d9d x86: rename and clean up __copy_from_user_inatomic_nocache()
+ */
+#define BPM_COPY_FROM_USER_INATOMIC_NOCACHE_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,18,7)
+/*
+ * b3039c526f3e mm: introduce deferred freeing for kernel page tables
+ */
+#define BPM_PAGETABLE_FREE_KERNEL_NOT_EXPORTED
+#endif /* LINUX_VERSION_IS_GEQ(6,18,7)*/
+
+#if LINUX_VERSION_IS_GEQ(6,18,0)
+/*
+ * 84efbefa26df mm: remove nth_page()
+ */
+#define BPM_NTH_PAGE_NOT_PRESENT
+
+/*
+ * 53fbef56e07d mm: introduce memdesc_flags_t
+ */
+#define BPM_SET_BIT_ULONG_PTR_NOT_PRESENT
+
+/*
+ * c8a09fc9664f ida: remove the ida_simple_xxx() API
+ */
+#define BPM_IDA_SIMPLE_GET_NOT_PRESENT
+
+/*
+ * 34ac58ded89d drm/i915: Drop unused struct_mutex from drm_i915_private
+ */
+#define BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,18,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,17,0)
 /*
  * 8a6a984c2e0e mm: remove redundant pXd_devmap calls

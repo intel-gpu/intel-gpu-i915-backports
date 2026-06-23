@@ -42,6 +42,15 @@ enum {
 struct intel_guc_log {
 	u32 level;
 
+#ifdef BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
+	/*
+	 * Protects concurrent access and modification of intel_guc_log->level.
+	 *
+	 * This lock replaces the legacy struct_mutex usage in
+	 * intel_guc_log system.
+	 */
+	struct mutex guc_lock;
+#endif
 	/* Allocation settings */
 	struct {
 		s32 bytes;	/* Size in bytes */

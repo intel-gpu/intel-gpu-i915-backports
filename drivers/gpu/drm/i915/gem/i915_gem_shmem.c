@@ -999,7 +999,11 @@ static void split_clear_page(struct intel_memory_region *mem,
 
 		p->private = (unsigned long)split;
 		GEM_BUG_ON(PagePrivate(p));
+#ifdef BPM_SET_BIT_ULONG_PTR_NOT_PRESENT
+		__set_bit(PG_private, &p->flags.f);
+#else
 		__set_bit(PG_private, &p->flags); /* XXX workaround ICE on gcc-7.5 */
+#endif
 
 		add_clear_page(mem, split, i);
 	}
@@ -1132,6 +1136,7 @@ restart:	/* Nothing readily available in the cache? Allocate some fresh pages */
 			cp = kmem_cache_alloc(slab_clear, GFP_KERNEL | __GFP_NOWARN);
 			if (!cp) {
 				i915_sw_fence_set_error_once(&fence, -ENOMEM);
+				__free_pages(page, order);
 				sg->page_link = 0;
 				break;
 			}
@@ -1142,6 +1147,7 @@ restart:	/* Nothing readily available in the cache? Allocate some fresh pages */
 			if (!cp->map[0]) {
 				i915_sw_fence_set_error_once(&fence, -ENOMEM);
 				kmem_cache_free(slab_clear, cp);
+				__free_pages(page, order);
 				sg->page_link = 0;
 				break;
 			}

@@ -609,6 +609,11 @@ next:
 			continue;
 		}
 
+		if (!i915_gem_object_allows_eviction(obj)) {
+			active |= obj->flags & I915_BO_ALLOC_USER;
+			continue;
+		}
+
 		if (!i915_gem_object_get_rcu(obj))
 			continue;
 
@@ -1143,6 +1148,9 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 			continue;
 		}
 
+		if (!mem)
+			continue;
+
 		if (IS_ERR(mem)) {
 			dev_warn(i915->drm.dev,
 				 "Failed to setup global region %d type=%d (%pe)\n", i, type, mem);
@@ -1195,7 +1203,7 @@ void intel_memory_regions_driver_release(struct drm_i915_private *i915)
 	int i;
 
 	/* flush pending work that might use the memory regions */
-	flush_workqueue(i915->wq);
+	i915_gem_drain_workqueue(i915);
 
 	for (i = 0; i < ARRAY_SIZE(i915->mm.regions); i++) {
 		struct intel_memory_region *region =

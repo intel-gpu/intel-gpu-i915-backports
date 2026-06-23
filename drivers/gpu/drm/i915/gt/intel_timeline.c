@@ -514,8 +514,8 @@ void intel_gt_show_timelines(struct intel_gt *gt,
 		}
 
 		len += snprintf(buf + len, sizeof(buf) - len,
-				"count: %lu, ready: %lu, inflight: %lu",
-				count, ready, inflight);
+				"active: %d, count: %lu, ready: %lu, inflight: %lu",
+				atomic_read(&tl->active_count), count, ready, inflight);
 
 		hwsp_seqno = READ_ONCE(tl->hwsp_seqno);
 		if ((unsigned long)hwsp_seqno & PAGE_MASK)

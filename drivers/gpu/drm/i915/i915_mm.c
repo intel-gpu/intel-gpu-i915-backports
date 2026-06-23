@@ -30,6 +30,12 @@
 #include "i915_drv.h"
 #include "i915_mm.h"
 
+#ifdef CONFIG_HIGHPTE
+#define __GFP_PGTABLE_USER_HIGH __GFP_HIGHMEM
+#else
+#define __GFP_PGTABLE_USER_HIGH 0
+#endif
+
 #define EXPECTED_FLAGS (VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP)
 
 struct remap_pfn {
@@ -192,21 +198,23 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	if (unlikely(pmd_none(*pmd))) {
 		pgtable_t new;
 
-		new = __pte_alloc_one(mm, GFP_PGTABLE_USER);
+		new = __pte_alloc_one(mm, GFP_PGTABLE_USER | __GFP_PGTABLE_USER_HIGH);
 		if (!new)
 			return -ENOMEM;
 
 		smp_wmb(); /* Could be smp_wmb__xxx(before|after)_spin_lock */
+		mm_inc_nr_ptes(mm);
 
 		ptl = pmd_lock(mm, pmd);
 		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
-			mm_inc_nr_ptes(mm);
 			pmd_populate(mm, pmd, new);
 			new = NULL;
 		}
 		spin_unlock(ptl);
-		if (new)
+		if (unlikely(new)) {
+			mm_dec_nr_ptes(mm);
 			pte_free(mm, new);
+		}
 	}
 	mapped_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 
@@ -249,14 +257,18 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
 		}
 		pmd = (pmd_t *)page_address(page);
 		smp_wmb(); /* See comment in __pte_alloc */
+		mm_inc_nr_pmds(mm);
 
 		ptl = pud_lock(mm, pud);
-		if (!pud_present(*pud)) {
-			mm_inc_nr_pmds(mm);
+		if (likely(pud_none(*pud))) {
 			pud_populate(mm, pud, pmd);
-		} else  /* Another has populated it */
-			pmd_free(mm, pmd);
+			pmd = NULL;
+		}
 		spin_unlock(ptl);
+		if (unlikely(pmd)) { /* Another has populated it */
+			mm_dec_nr_pmds(mm);
+			pmd_free(mm, pmd);
+		}
 	}
         pmd = pmd_offset(pud, addr);
 
@@ -266,11 +278,11 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
 		if (!pmd_none(*pmd) && pmd_bad(*pmd))
 			WRITE_ONCE(*pmd, __pmd(0));
 
-		if (IS_ALIGNED(addr | next, SZ_2M) && !pmd_fn(mm, pmd, addr, data))
+		if (pmd_leaf(*pmd))
 			continue;
 
-		if (GEM_WARN_ON(pmd_leaf(*pmd)))
-			return -EINVAL;
+		if (pmd_none(*pmd) && IS_ALIGNED(addr | next, SZ_2M) && !pmd_fn(mm, pmd, addr, data))
+			continue;
 
 		err = apply_to_pte_range(mm, pmd, addr, next, pte_fn, data);
 		if (err)
@@ -291,20 +303,24 @@ static int apply_to_pud_range(struct mm_struct *mm, p4d_t *p4d,
 	int err = 0;
 
 	if (unlikely(p4d_none(*p4d))) {
-		pud = (pud_t *)get_zeroed_page(GFP_PGTABLE_USER);
+		pud = (pud_t *)__get_free_page(GFP_PGTABLE_USER);
 		if (!pud)
 			return -ENOMEM;
 
 		smp_wmb(); /* See comment in __pte_alloc */
+		mm_inc_nr_puds(mm);
 
 		spin_lock(&mm->page_table_lock);
-		if (!p4d_present(*p4d)) {
-			mm_inc_nr_puds(mm);
+		if (likely(p4d_none(*p4d))) {
 			paravirt_alloc_pud(mm, __pa(pud) >> PAGE_SHIFT);
 			WRITE_ONCE(*p4d, __p4d(_PAGE_TABLE | __pa(pud)));
-		} else  /* Another has populated it */
-			pud_free(mm, pud);
+			pud = NULL;
+		}
 		spin_unlock(&mm->page_table_lock);
+		if (unlikely(pud)) {  /* Another has populated it */
+			mm_dec_nr_puds(mm);
+			pud_free(mm, pud);
+		}
 	}
         pud = pud_offset(p4d, addr);
 
@@ -334,19 +350,21 @@ static int apply_to_p4d_range(struct mm_struct *mm, pgd_t *pgd,
 	int err = 0;
 
 	if (unlikely(pgd_none(*pgd))) {
-		p4d =  (p4d_t *)get_zeroed_page(GFP_PGTABLE_USER);
+		p4d = (p4d_t *)__get_free_page(GFP_PGTABLE_USER);
 		if (!p4d)
 			return -ENOMEM;
 
 		smp_wmb(); /* See comment in __pte_alloc */
 
 		spin_lock(&mm->page_table_lock);
-		if (!pgd_present(*pgd)) { /* Another has populated it */
+		if (likely(pgd_none(*pgd))) {
 			paravirt_alloc_p4d(mm, __pa(p4d) >> PAGE_SHIFT);
 			WRITE_ONCE(*pgd, __pgd(_PAGE_TABLE | __pa(p4d)));
-		} else
-			p4d_free(mm, p4d);
+			p4d = NULL;
+		}
 		spin_unlock(&mm->page_table_lock);
+		if (unlikely(p4d)) /* Another has populated it */
+			p4d_free(mm, p4d);
 	}
         p4d = p4d_offset(pgd, addr);
 

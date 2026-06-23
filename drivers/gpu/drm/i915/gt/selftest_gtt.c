@@ -827,7 +827,7 @@ mem_write_tearing(struct intel_gt *gt,
 		err = -EIO;
 
 out_vm:
-	i915_vm_put(&ppgtt->vm);
+	i915_vm_close(&ppgtt->vm);
 out_b:
 	i915_gem_object_put(B);
 out_a:

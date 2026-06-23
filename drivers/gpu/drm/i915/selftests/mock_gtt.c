@@ -55,10 +55,6 @@ static void mock_unbind_ppgtt(struct i915_address_space *vm,
 {
 }
 
-static void mock_cleanup(struct i915_address_space *vm)
-{
-}
-
 static void mock_clear_range(struct i915_address_space *vm,
 			     u64 start, u64 length)
 {
@@ -72,6 +68,8 @@ struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 	ppgtt = kzalloc(sizeof(*ppgtt), GFP_KERNEL);
 	if (!ppgtt)
 		return NULL;
+
+	INIT_RCU_WORK(&ppgtt->vm.rcu, __i915_vm_release);
 
 	ppgtt->vm.gt = to_gt(i915);
 	ppgtt->vm.i915 = i915;
@@ -89,7 +87,6 @@ struct i915_ppgtt *mock_ppgtt(struct drm_i915_private *i915, const char *name)
 	ppgtt->vm.clear_range = mock_clear_range;
 	ppgtt->vm.insert_page = mock_insert_page;
 	ppgtt->vm.insert_entries = mock_insert_entries;
-	ppgtt->vm.cleanup = mock_cleanup;
 
 	ppgtt->vm.vma_ops.bind_vma    = mock_bind_ppgtt;
 	ppgtt->vm.vma_ops.unbind_vma  = mock_unbind_ppgtt;
@@ -117,13 +114,13 @@ void mock_init_ggtt(struct intel_gt *gt)
 {
 	struct i915_ggtt *ggtt = gt->ggtt;
 
-	i915_ggtt_address_lock_init(ggtt);
-
 	ggtt->vm.gt = gt;
 	ggtt->vm.i915 = gt->i915;
+	ggtt->vm.total = 4096 * PAGE_SIZE;
 	ggtt->vm.is_ggtt = true;
 
-	ggtt->vm.total = 4096 * PAGE_SIZE;
+	i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
+	i915_ggtt_address_lock_init(ggtt);
 
 	ggtt->vm.alloc_pt_dma = alloc_pt_dma;
 	ggtt->vm.alloc_scratch_dma = alloc_pt_dma;
@@ -131,7 +128,6 @@ void mock_init_ggtt(struct intel_gt *gt)
 	ggtt->vm.clear_range = mock_clear_range;
 	ggtt->vm.insert_page = mock_insert_page;
 	ggtt->vm.insert_entries = mock_insert_entries;
-	ggtt->vm.cleanup = mock_cleanup;
 
 	ggtt->vm.vma_ops.bind_vma    = mock_bind_ggtt;
 	ggtt->vm.vma_ops.unbind_vma  = mock_unbind_ggtt;
@@ -139,11 +135,10 @@ void mock_init_ggtt(struct intel_gt *gt)
 	ggtt->vm.vma_ops.clear_pages = ggtt_clear_pages;
 
 	INIT_LIST_HEAD(&ggtt->gt_list);
-	i915_address_space_init(&ggtt->vm, VM_CLASS_GGTT);
 }
 
 void mock_fini_ggtt(struct i915_ggtt *ggtt)
 {
-	i915_address_space_fini(&ggtt->vm);
 	i915_ggtt_address_lock_fini(ggtt);
+	i915_vm_close(&ggtt->vm);
 }

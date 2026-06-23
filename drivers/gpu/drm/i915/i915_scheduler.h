@@ -37,8 +37,6 @@ int i915_sched_node_add_dependency(struct i915_sched_node *node,
 
 void i915_sched_node_retire(struct i915_sched_node *node);
 
-void i915_sched_init_ipi(struct i915_sched_ipi *ipi);
-
 void i915_request_set_priority(struct i915_request *request, int prio);
 
 struct list_head *

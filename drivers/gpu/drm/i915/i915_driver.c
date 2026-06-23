@@ -2583,7 +2583,7 @@ i915_get_unmapped_area(struct file *file, unsigned long addr,
 		      unsigned long len, unsigned long pgoff,
 		      unsigned long flags)
 {
-	unsigned long align = HPAGE_PMD_SIZE;
+	unsigned long align = PMD_SIZE;
 
 	if (flags & MAP_FIXED || len < align || add_overflows(len, align))
 		align = SZ_64K;

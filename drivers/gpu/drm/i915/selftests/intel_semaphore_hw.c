@@ -85,9 +85,8 @@ static int __igt_semaphore_token_init_ctx(struct intel_context *ce, u32 token)
 		return ret;
 
 	regs = ce->lrc_reg_state;
-	regs[CTX_CONTEXT_CONTROL] =
-		regs[CTX_CONTEXT_CONTROL] &
-		_MASKED_BIT_DISABLE(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH);
+	regs[CTX_CONTEXT_CONTROL] &= ~_MASKED_BIT_ENABLE(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH);
+	regs[CTX_CONTEXT_CONTROL] |= ~_MASKED_BIT_DISABLE(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH);
 	if (HAS_SEMAPHORE_XEHPSDV(ce->engine->i915))
 		regs[GEN12_CTX_SEMAPHORE_TOKEN] =
 			XEHPSDV_ENGINE_SEMAPHORE_TOKEN_CTX_VALUE(token);
@@ -102,7 +101,8 @@ static int __igt_semaphore_token_init_ctx(struct intel_context *ce, u32 token)
 
 static struct i915_request *
 __igt_semaphore_token_alloc_rq(struct drm_i915_private *i915,
-			       struct intel_engine_cs *engine, u32 token)
+			       struct intel_engine_cs *engine,
+			       u32 token)
 {
 	struct intel_context *ce;
 	struct i915_request *rq;
@@ -114,15 +114,13 @@ __igt_semaphore_token_alloc_rq(struct drm_i915_private *i915,
 		goto out;
 	}
 
-	err = __igt_semaphore_token_init_ctx(ce, token);
-	if (err)
-		goto out_ce;
-
 	rq = intel_context_create_request(ce);
 	if (IS_ERR(rq)) {
 		err = PTR_ERR(rq);
 		goto out_ce;
 	}
+
+	err = __igt_semaphore_token_init_ctx(ce, token);
 
 out_ce:
 	intel_context_put(ce);
@@ -197,28 +195,20 @@ static int igt_semaphore_token(void *arg)
 				err = PTR_ERR(rq);
 				goto out_vma;
 			}
-			i915_request_get(rq);
-			waiters[w++] = rq;
+			waiters[w++] = i915_request_get(rq);
 
-			if (rq->engine->emit_init_breadcrumb) {
+			err = 0;
+			if (rq->engine->emit_init_breadcrumb)
 				err = rq->engine->emit_init_breadcrumb(rq);
-				if (err) {
-					i915_request_add(rq);
-					goto out_waiters;
-				}
-			}
-
-			err = __igt_emit_wait_token(rq, vma,
-				semaphore_offset * sizeof(u32),
-				IGT_SEM_TOKEN_VALUE, token_signal);
-
+			if (err == 0)
+				err = __igt_emit_wait_token(rq, vma,
+							    semaphore_offset * sizeof(u32),
+							    IGT_SEM_TOKEN_VALUE, token_signal);
 			i915_request_add(rq);
-
 			if (err)
 				goto out_waiters;
 
-			wait_for(i915_request_is_running(rq), IGT_WAITER_RUNNING_TIMEOUT);
-			if (!i915_request_is_running(rq)) {
+			if (wait_for(i915_request_is_running(rq), IGT_WAITER_RUNNING_TIMEOUT)) {
 				drm_err(&i915->drm, "Request failed to start\n");
 				err = -EIO;
 				goto out_waiters;
@@ -248,8 +238,7 @@ static int igt_semaphore_token(void *arg)
 		if (err)
 			goto out_signaler;
 
-		if (i915_request_wait(signaler, 0, IGT_SIGNAL_DONE_TIMEOUT) <
-		    0) {
+		if (i915_request_wait(signaler, 0, IGT_SIGNAL_DONE_TIMEOUT) < 0) {
 			drm_err(&i915->drm, "Wait for signaller %s timed out! \n",
 				engine_signal->name);
 			err = -EIO;
@@ -257,8 +246,7 @@ static int igt_semaphore_token(void *arg)
 		}
 
 		for (i = 0; i < w; i++) {
-			if (i915_request_wait(waiters[i], 0,
-					      IGT_WAIT_DONE_TIMEOUT) < 0) {
+			if (i915_request_wait(waiters[i], 0, IGT_WAIT_DONE_TIMEOUT) < 0) {
 				drm_err(&i915->drm, "Wait for waiter %s signalled by %s timed out!\n",
 					waiters[i]->engine->name,
 					signaler->engine->name);

@@ -618,6 +618,7 @@ struct i915_debugger_resource {
 	u32 type;
 
 	struct rhash_head rh_head;
+	struct rcu_head rcu;
 
 	union {
 		struct {
@@ -676,7 +677,7 @@ static void debugger_resource_free(struct i915_debugger *debugger,
 {
 	/* Currently for VM-BIND it's allowed to have ptr == NULL */
 	if (res->type != I915_DEBUGGER_RES_VM_BIND && !res->ptr) {
-		kfree(res);
+		kfree_rcu(res, rcu);
 		return;
 	}
 
@@ -710,7 +711,7 @@ static void debugger_resource_free(struct i915_debugger *debugger,
 		DD_WARN(debugger, "Unknown resource type %u\n", res->type);
 	}
 
-	kfree(res);
+	kfree_rcu(res, rcu);
 }
 
 static void _i915_debugger_res_free(struct i915_debugger *debugger)
@@ -741,6 +742,13 @@ static void __rcu_i915_debugger_free(struct work_struct *wrk)
 	kfree(debugger);
 }
 
+static void free_pagefault(struct i915_debugger_pagefault *pf)
+{
+	intel_context_put(pf->context);
+	i915_vm_put(pf->vm);
+	kfree(pf);
+}
+
 static void _i915_debugger_free(struct kref *ref)
 {
 	struct i915_debugger *debugger = container_of(ref, typeof(*debugger), ref);
@@ -750,7 +758,7 @@ static void _i915_debugger_free(struct kref *ref)
 
 	/* Since it's the last reference no race here */
 	list_for_each_entry_safe(pagefault, pf_temp, &debugger->pagefaults, list)
-		kfree(pagefault);
+		free_pagefault(pagefault);
 
 	i915_debugger_restore_ctx_schedule_params(debugger);
 
@@ -1141,7 +1149,7 @@ __debugger_get(const struct i915_drm_client * const client, bool wait)
 static struct i915_debugger *
 i915_debugger_get(const struct i915_drm_client * const client)
 {
-	return __debugger_get(client, true);
+	return client ? __debugger_get(client, true) : NULL;
 }
 
 static int _i915_debugger_queue_event(struct i915_debugger * const debugger,
@@ -2121,23 +2129,6 @@ static struct intel_context *engine_active_context_get(struct intel_engine_cs *e
 	return ce;
 }
 
-static bool client_has_vm(struct i915_drm_client *client,
-			  struct i915_address_space *vm)
-{
-	struct drm_i915_file_private *file = READ_ONCE(client->file);
-	struct i915_address_space *__vm;
-	unsigned long idx;
-
-	if (READ_ONCE(client->closed))
-		return false;
-
-	xa_for_each(&file->vm_xa, idx, __vm)
-		if (__vm == vm)
-			return true;
-
-	return false;
-}
-
 static struct i915_debugger_resource *
 debugger_alloc_resource(void *data, u32 type, gfp_t gfp)
 {
@@ -2173,12 +2164,10 @@ __get_vm_from_handle(struct i915_debugger *debugger,
 	if (IS_ERR(client))
 		return ERR_CAST(client);
 
-	rcu_read_lock();
-	if (client_has_vm(client, vm))
+	if (vm->client == client)
 		vm = i915_vm_tryget(vm);
 	else
 		vm = NULL;
-	rcu_read_unlock();
 
 	return vm ?: ERR_PTR(-ENOENT);
 }
@@ -2264,8 +2253,8 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 				    unsigned int bitmask_size)
 {
 	struct intel_gt *gt = engine->gt;
-	struct i915_drm_client *client;
 	struct intel_context *active_ctx;
+	struct i915_drm_client *client;
 	u32 context_lrca, lrca;
 	u64 client_id;
 	u32 td_ctl;
@@ -2278,14 +2267,12 @@ static int eu_control_interrupt_all(struct i915_debugger *debugger,
 	if (IS_ERR(active_ctx))
 		return PTR_ERR(active_ctx);
 
-	if (!active_ctx->client) {
+	if (!active_ctx->vm->client) {
 		intel_context_put(active_ctx);
 		return -ENOENT;
 	}
 
-	client = i915_drm_client_get(active_ctx->client);
-	client_id = client->id;
-	i915_drm_client_put(client);
+	client_id = active_ctx->vm->client->id;
 	context_lrca = active_ctx->lrc.lrca & GENMASK(31, 12);
 	intel_context_put(active_ctx);
 
@@ -4190,7 +4177,7 @@ static int queue_engine_pagefault(struct i915_debugger *debugger,
 {
 	struct i915_debug_event_pagefault *ep;
 	struct intel_engine_cs *engine = pagefault->engine;
-	struct i915_drm_client *client = pagefault->context->client;
+	struct i915_drm_client *client = pagefault->vm->client;
 	struct i915_gem_context *ctx;
 	struct i915_debug_event *event;
 	unsigned int size;
@@ -4261,12 +4248,6 @@ err_ctx:
 	i915_gem_context_put(ctx);
 err:
 	return ret;
-}
-
-static void free_pagefault(struct i915_debugger_pagefault *pf)
-{
-	intel_context_put(pf->context);
-	kfree(pf);
 }
 
 static int debugger_handle_pagefault_list(struct i915_debugger *debugger)
@@ -4717,7 +4698,6 @@ err:
 static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 {
 	struct i915_debugger *debugger;
-	struct i915_drm_client *client;
 	struct intel_context *ce;
 	int ret;
 
@@ -4730,12 +4710,11 @@ static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 	if (IS_ERR(ce))
 		return PTR_ERR(ce);
 
-	if (!ce->client) {
+	if (!ce->vm->client) {
 		intel_context_put(ce);
 		return -ENOENT;
 	}
 
-	client = i915_drm_client_get(ce->client);
 	/*
 	 * There has been attention, thus the engine on which the
 	 * request resides can't proceed with said context as the
@@ -4748,14 +4727,14 @@ static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 	 * So the context that did raise the attention, has to
 	 * be the correct one.
 	 */
-	debugger = i915_debugger_get(client);
+	debugger = i915_debugger_get(ce->vm->client);
 	if (!debugger) {
 		ret = -ENOTCONN;
 	} else if (!completion_done(&debugger->discovery)) {
 		DD_INFO(debugger, "%s: discovery not yet done\n", engine->name);
 		ret = -EBUSY;
 	} else {
-		ret = queue_engine_attentions(debugger, engine, client, ce);
+		ret = queue_engine_attentions(debugger, engine, ce->vm->client, ce);
 	}
 
 	if (debugger) {
@@ -4763,7 +4742,6 @@ static int i915_debugger_queue_engine_attention(struct intel_engine_cs *engine)
 		i915_debugger_put(debugger);
 	}
 
-	i915_drm_client_put(client);
 	intel_context_put(ce);
 
 	return ret;
@@ -4786,7 +4764,7 @@ static int i915_debugger_queue_page_fault(struct i915_debugger_pagefault *pf)
 	 * So the context that did raise the attention from pagefault, has to
 	 * be the correct one.
 	 */
-	debugger = __debugger_get(pf->context->client, false);
+	debugger = __debugger_get(pf->vm->client, false);
 	if (!debugger) {
 		ret = -ENOTCONN;
 	} else if (!completion_done(&debugger->discovery)) {
@@ -5335,7 +5313,7 @@ void i915_debugger_vma_insert(struct i915_drm_client *client,
 	 * debugger_discover_vma tries to take. Will cause
 	 * a deadlock.
 	 */
-	debugger = __debugger_get(client, false);
+	debugger = client ? __debugger_get(client, false) : NULL;
 	if (!debugger)
 		return;
 
@@ -5422,7 +5400,7 @@ void i915_debugger_vma_evict(struct i915_drm_client *client,
 		return;
 
 	/* Cannot use lock, cannot wait for discovery. */
-	debugger = __debugger_get(client, false);
+	debugger = client ? __debugger_get(client, false) : NULL;
 	if (!debugger)
 		return;
 
@@ -5532,94 +5510,23 @@ void i915_debugger_vm_create(struct i915_drm_client *client,
 
 	i915_debugger_put(debugger);
 	return;
+
 out:
 	if (err != -EEXIST && err != -ENOTCONN)
 		i915_debugger_disconnect_err(debugger);
 	i915_debugger_put(debugger);
-
 }
 
-static int debugger_vm_vma_destroy(struct i915_debugger *debugger,
-				   struct i915_address_space *vm,
-				   u32 client_handle,
-				   u32 vm_handle)
+void i915_debugger_vm_destroy(struct i915_address_space *vm)
 {
-	struct i915_vma *vma, *vn;
-	int err = 0;
-
-	flush_workqueue(vm->gt->wq);
-
-	mutex_lock(&vm->mutex);
-	/*
-	 * Cannot take i915_gem_vm_bind_lock(vm) for list traversing
-	 * due to lock dep. Need to proceed without it.
-	 * It is called on i915_vm_close_work().
-	 */
-
-	list_for_each_entry_safe(vma, vn, &vm->vm_bind_list, vm_bind_link) {
-		if (!drm_mm_node_allocated(&vma->node))
-			continue;
-
-		if (i915_active_acquire(&vma->active))
-			continue;
-
-		err = debugger_vma_evict__locked(debugger, client_handle, vm_handle, vma);
-		i915_active_release(&vma->active);
-		if (err == -ENOENT)
-			err = 0; /* could be deferred vm-bind */
-		if (err) {
-			DD_WARN_ON_CONNECTED(debugger, err,
-					     "Failed to evict from bind. Err %d", err);
-			goto out;
-		}
-	}
-
-	list_for_each_entry_safe(vma, vn, &vm->vm_bound_list, vm_bind_link) {
-		if (!drm_mm_node_allocated(&vma->node))
-			continue;
-
-		if (i915_active_acquire(&vma->active))
-			continue;
-
-		err = debugger_vma_evict__locked(debugger, client_handle, vm_handle, vma);
-		i915_active_release(&vma->active);
-		if (err == -ENOENT)
-			err = 0;
-		if (err) {
-			DD_WARN_ON_CONNECTED(debugger, err,
-					     "Failed to evict from bind. Err %d", err);
-			break;
-		}
-	}
-
-out:
-	mutex_unlock(&vm->mutex);
-	return err;
-}
-void i915_debugger_vm_destroy(struct i915_drm_client *client,
-			      struct i915_address_space *vm,
-			      bool force)
-{
+	struct i915_drm_client *client = vm->client;
 	struct i915_debugger_resource *res;
 	struct i915_debugger *debugger;
 	u32 client_handle, handle;
 	u64 seqno;
 	int err = 0;
 
-	if (!client)
-		return;
-
-	if (GEM_WARN_ON(!vm))
-		return;
-
-	/*
-	 * Allow to skip this check for last pass
-	 * in i915_gem_context_close()
-	 */
-	if (!force && atomic_read(&vm->open) > 1)
-		return;
-
-	debugger = i915_debugger_get(client);
+	debugger = client ? __debugger_get(client, false) : NULL;
 	if (!debugger)
 		return;
 
@@ -5644,11 +5551,6 @@ void i915_debugger_vm_destroy(struct i915_drm_client *client,
 	}
 
 	handle = res->handle;
-
-	/* Report all VM -> VMAs as destroyed first */
-	err = debugger_vm_vma_destroy(debugger, vm, client_handle, handle);
-	if (err)
-		goto out;
 
 	err = debugger_resource_del(debugger, vm, I915_DEBUGGER_RES_VM, &seqno);
 	if (err) {
@@ -5839,7 +5741,7 @@ i915_debugger_add_pagefault_list(struct i915_debugger_pagefault *pf)
 {
 	struct i915_debugger *debugger;
 
-	debugger = __debugger_get(pf->context->client, false);
+	debugger = __debugger_get(pf->vm->client, false);
 	if (!debugger)
 		return -ENOTCONN;
 
@@ -5892,22 +5794,10 @@ bool i915_debugger_prevents_hangcheck(struct intel_engine_cs *engine)
 
 bool i915_debugger_active_on_context(struct intel_context *context)
 {
-	struct i915_drm_client *client;
-	bool active;
-
-	if (!context->client)
+	if (!context->vm->client)
 		return false;
 
-	rcu_read_lock();
-	client = i915_drm_client_get_rcu(context->client);
-	rcu_read_unlock();
-	if (!client)
-		return false;
-
-	active = i915_debugger_active_on_client(client);
-	i915_drm_client_put(client);
-
-	return active;
+	return i915_debugger_active_on_client(context->vm->client);
 }
 
 bool i915_debugger_context_guc_debugged(struct intel_context *context)

@@ -6086,7 +6086,7 @@ static void capture_error_state(struct intel_guc *guc,
 			continue;
 
 		capture = intel_engine_coredump_add_request(ee, rq, capture, GFP_KERNEL, compress);
-		intel_engine_coredump_add_vma(ee, capture, compress);
+		intel_engine_coredump_add_vma(capture, compress);
 
 		ee->hung = is_power_of_2(rq->execution_mask);
 		if (intel_guc_capture_is_matching_engine(gt, ce, e)) {
@@ -6126,6 +6126,7 @@ static void guc_handle_context_reset(struct intel_guc *guc,
 		str_yes_no(context_blocked(ce)),
 		str_yes_no(intel_context_is_banned(ce)),
 		str_yes_no(intel_context_is_closed(ce)));
+	atomic_inc(&ce->engine->reset.count);
 	ce->engine->heartbeat.lrca = 0;
 
 	/*

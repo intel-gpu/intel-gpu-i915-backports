@@ -613,7 +613,7 @@ static struct i915_address_space *kernel_vm(struct intel_gt *gt)
 
 		err = intel_flat_lmem_ppgtt_init(&ppgtt->vm, &gt->flat);
 		if (err) {
-			i915_vm_put(&ppgtt->vm);
+			i915_vm_close(&ppgtt->vm);
 			return ERR_PTR(err);
 		}
 	}
@@ -630,7 +630,7 @@ static void release_vm(struct intel_gt *gt)
 		return;
 
 	intel_flat_lmem_ppgtt_fini(vm, &gt->flat);
-	i915_vm_put(vm);
+	i915_vm_close(vm);
 
 	rcu_barrier();
 	flush_workqueue(gt->wq);

@@ -232,7 +232,7 @@ static void heartbeat(struct work_struct *wrk)
 		goto out;
 
 	/* Skip attn scanning during the pf, as we will be capturing attn there */
-	if (!atomic_read(&engine->in_pagefault)) {
+	if (!atomic_read(&engine->gt->in_pagefault)) {
 		ret = i915_debugger_handle_engine_attention(engine);
 		if (ret) {
 			intel_gt_handle_error(engine->gt, ALL_ENGINES, I915_ERROR_CAPTURE,

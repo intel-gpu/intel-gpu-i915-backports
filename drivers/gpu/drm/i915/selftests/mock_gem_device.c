@@ -216,14 +216,14 @@ struct drm_i915_private *mock_gem_device(void)
 
 	mock_init_contexts(i915);
 
-	ggtt = drmm_kzalloc(&i915->drm, sizeof(*ggtt), GFP_KERNEL);
+	ggtt = kzalloc(sizeof(*ggtt), GFP_KERNEL);
 	if (!ggtt)
 		goto err_unlock;
 
 	to_gt(i915)->ggtt = ggtt;
 
 	mock_init_ggtt(to_gt(i915));
-	to_gt(i915)->vm = i915_vm_get(&to_gt(i915)->ggtt->vm);
+	to_gt(i915)->vm = &to_gt(i915)->ggtt->vm;
 
 	mkwrite_device_info(i915)->platform_engine_mask = BIT(0);
 	to_gt(i915)->info.engine_mask = BIT(0);

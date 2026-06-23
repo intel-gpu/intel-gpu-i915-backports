@@ -545,6 +545,14 @@ err:
 	return ret;
 }
 
+static void gen6_gmch_remove(struct i915_address_space *vm)
+{
+	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
+
+	iounmap(ggtt->gsm);
+	i915_vm_free_scratch(vm);
+}
+
 static void ggtt_cleanup_hw(struct i915_ggtt *ggtt)
 {
 	struct i915_vma *vma, *vn;
@@ -563,9 +571,9 @@ static void ggtt_cleanup_hw(struct i915_ggtt *ggtt)
 	ggtt_release_guc_top(ggtt);
 	intel_iov_fini_ggtt(&ggtt->vm.gt->iov);
 
-	ggtt->vm.cleanup(&ggtt->vm);
-
 	mutex_unlock(&ggtt->vm.mutex);
+
+	gen6_gmch_remove(&ggtt->vm);
 	i915_address_space_fini(&ggtt->vm);
 }
 
@@ -667,12 +675,13 @@ void ggtt_clear_pages(struct i915_vma *vma)
 	vma->pages = NULL;
 }
 
-static void gen6_gmch_remove(struct i915_address_space *vm)
+static void __i915_vm_release(struct work_struct *work)
 {
-	struct i915_ggtt *ggtt = i915_vm_to_ggtt(vm);
+	struct i915_address_space *vm =
+		container_of(work, struct i915_address_space, rcu.work);
 
-	iounmap(ggtt->gsm);
-	i915_vm_free_scratch(vm);
+	i915_address_space_fini(vm);
+	kfree(vm);
 }
 
 static int gen8_gmch_probe(struct i915_ggtt *ggtt)
@@ -689,7 +698,6 @@ static int gen8_gmch_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.alloc_scratch_dma = alloc_pt_dma;
 
 	ggtt->vm.total = (size / sizeof(gen8_pte_t)) * I915_GTT_PAGE_SIZE;
-	ggtt->vm.cleanup = gen6_gmch_remove;
 	ggtt->vm.clear_range = nop_clear_range;
 	ggtt->vm.scratch_range = gen8_ggtt_clear_range;
 	ggtt->vm.insert_entries = gen8_ggtt_insert_entries;
@@ -717,6 +725,8 @@ static int gen12vf_ggtt_probe(struct i915_ggtt *ggtt)
 	GEM_BUG_ON(!IS_SRIOV_VF(i915));
 	GEM_BUG_ON(GRAPHICS_VER(i915) < 12);
 
+	INIT_RCU_WORK(&ggtt->vm.rcu, __i915_vm_release);
+
 	ggtt->vm.alloc_pt_dma = alloc_pt_dma;
 	ggtt->vm.alloc_scratch_dma = alloc_pt_dma;
 
@@ -730,7 +740,6 @@ static int gen12vf_ggtt_probe(struct i915_ggtt *ggtt)
 	ggtt->vm.clear_range = nop_clear_range;
 	ggtt->vm.insert_page = gen8_ggtt_insert_page;
 	ggtt->vm.insert_entries = gen8_ggtt_insert_entries;
-	ggtt->vm.cleanup = gen6_gmch_remove;
 
 	ggtt->vm.vma_ops.bind_vma    = intel_ggtt_bind_vma;
 	ggtt->vm.vma_ops.unbind_vma  = intel_ggtt_unbind_vma;

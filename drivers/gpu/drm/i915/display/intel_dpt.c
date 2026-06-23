@@ -107,11 +107,15 @@ static void dpt_unbind_vma(struct i915_address_space *vm, struct i915_vma *vma)
 	vm->clear_range(vm, i915_vma_offset(vma), vma->size);
 }
 
-static void dpt_cleanup(struct i915_address_space *vm)
+static void __dpt_release(struct work_struct *work)
 {
+	struct i915_address_space *vm =
+		container_of(work, struct i915_address_space, rcu.work);
 	struct i915_dpt *dpt = i915_vm_to_dpt(vm);
 
 	i915_gem_object_put(dpt->obj);
+	i915_address_space_fini(vm);
+	kfree(vm);
 }
 
 struct i915_vma *intel_dpt_pin(struct i915_address_space *vm)
@@ -276,7 +280,6 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	vm->insert_page = dpt_insert_page;
 	vm->clear_range = dpt_clear_range;
 	vm->insert_entries = dpt_insert_entries;
-	vm->cleanup = dpt_cleanup;
 
 	vm->vma_ops.bind_vma    = dpt_bind_vma;
 	vm->vma_ops.unbind_vma  = dpt_unbind_vma;
@@ -286,13 +289,12 @@ intel_dpt_create(struct intel_framebuffer *fb)
 	vm->pte_encode = vm->gt->ggtt->vm.pte_encode;
 
 	dpt->obj = dpt_obj;
+	INIT_RCU_WORK(&vm->rcu, __dpt_release);
 
 	return &dpt->vm;
 }
 
 void intel_dpt_destroy(struct i915_address_space *vm)
 {
-	struct i915_dpt *dpt = i915_vm_to_dpt(vm);
-
-	i915_vm_close(&dpt->vm);
+	i915_vm_close(vm);
 }

@@ -24,7 +24,7 @@ static struct kmem_cache *slab_priorities;
 	struct i915_request * const rq__ = (rq); \
 	struct i915_sched_engine *se__ = READ_ONCE(rq__->sched_engine); \
 	spin_lock_irqsave(&se__->lock, (flags)); \
-	while (se__ != READ_ONCE((rq__)->sched_engine)) { \
+	while (unlikely(se__ != READ_ONCE((rq__)->sched_engine))) { \
 		spin_unlock(&se__->lock); \
 		se__ = READ_ONCE(rq__->sched_engine); \
 		spin_lock(&se__->lock); \
@@ -37,96 +37,18 @@ static inline int rq_prio(const struct i915_request *rq)
 	return READ_ONCE(rq->sched.attr.priority);
 }
 
-static int ipi_get_prio(struct i915_request *rq)
+static inline bool rq_set_prio(struct i915_request *rq, int prio)
 {
-	if (READ_ONCE(rq->sched.ipi_priority) == I915_PRIORITY_INVALID)
-		return I915_PRIORITY_INVALID;
+	int old = rq_prio(rq);
 
-	return xchg(&rq->sched.ipi_priority, I915_PRIORITY_INVALID);
-}
-
-static void ipi_schedule(struct work_struct *wrk)
-{
-	struct i915_sched_ipi *ipi = container_of(wrk, typeof(*ipi), work);
-	struct i915_request *rq = xchg(&ipi->list, NULL);
-
-	/* Apply the updates across engines */
+	GEM_BUG_ON(!rq->sched.dfs.prev);
 
 	do {
-		struct i915_request *rn = xchg(&rq->sched.ipi_link, NULL);
-		int prio;
+		if (unlikely(old >= prio))
+			return false;
+	} while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio));
 
-		prio = ipi_get_prio(rq);
-
-		/*
-		 * For cross-engine scheduling to work we rely on one of two
-		 * things:
-		 *
-		 * a) The requests are using dma-fence fences and so will not
-		 * be scheduled until the previous engine is completed, and so
-		 * we cannot cross back onto the original engine and end up
-		 * queuing an earlier request after the first (due to the
-		 * interrupted DFS).
-		 *
-		 * b) The requests are using semaphores and so may already be
-		 * in flight, in which case if we cross back onto the same
-		 * engine, we will already have put the interrupted DFS into
-		 * the priolist, and the continuation will now be queued
-		 * afterwards [out-of-order]. However, since we are using
-		 * semaphores in this case, we also perform yield on semaphore
-		 * waits and so will reorder the requests back into the correct
-		 * sequence. This occurrence (of promoting a request chain that
-		 * crosses the engines using semaphores back unto itself)
-		 * should be unlikely enough that it probably does not
-		 * matter...
-		 */
-		local_bh_disable();
-		i915_request_set_priority(rq, prio);
-		local_bh_enable();
-
-		i915_request_put(rq);
-		rq = ptr_mask_bits(rn, 1);
-	} while (rq);
-}
-
-void i915_sched_init_ipi(struct i915_sched_ipi *ipi)
-{
-	INIT_WORK(&ipi->work, ipi_schedule);
-	ipi->list = NULL;
-}
-
-static void __ipi_add(struct i915_request *rq)
-{
-#define STUB ((struct i915_request *)1)
-	struct i915_sched_engine *se = rq->sched_engine;
-	struct i915_request *first;
-
-	/* Queue the priority update on a different engine */
-
-	if (!i915_request_get_rcu(rq))
-		return;
-
-	/*
-	 * We only want to add the request once into the ipi.list (or else
-	 * the chain will be broken). The worker must be guaranteed to run
-	 * at least once for every call to ipi_add, but it is allowed to
-	 * coalesce multiple ipi_add into a single pass using the final
-	 * property value.
-	 */
-	if (i915_request_signaled(rq) ||
-	    cmpxchg(&rq->sched.ipi_link, NULL, STUB)) { /* already queued */
-		i915_request_put(rq);
-		return;
-	}
-
-	/* Carefully insert ourselves into the head of the llist */
-	first = READ_ONCE(se->ipi.list);
-	do {
-		rq->sched.ipi_link = ptr_pack_bits(first, 1, 1);
-	} while (!try_cmpxchg(&se->ipi.list, &first, rq));
-
-	if (!first)
-		queue_work(system_unbound_wq, &se->ipi.work);
+	return true;
 }
 
 static struct i915_sched_node *node_get(struct i915_sched_node *node)
@@ -252,8 +174,9 @@ stack_push(struct i915_request *rq,
 	   struct i915_request *prev,
 	   struct list_head *pos)
 {
-	prev->sched.dfs.pos = pos;
-	rq->sched.dfs.prev = prev;
+	while (cmpxchg(&rq->sched.dfs.prev, NULL, prev))
+		cpu_relax();
+	WRITE_ONCE(rq->sched.dfs.pos, pos);
 	return rq;
 }
 
@@ -261,87 +184,19 @@ static struct i915_request *
 stack_pop(struct i915_request *rq,
 	  struct list_head **pos)
 {
-	rq = rq->sched.dfs.prev;
-	if (rq)
-		*pos = rq->sched.dfs.pos;
-	return rq;
+	*pos = READ_ONCE(rq->sched.dfs.pos);
+	return xchg(&rq->sched.dfs.prev, NULL);
 }
 
-static void __ipi_priority(struct i915_request *rq, int prio)
+static bool
+stack_prio(const struct i915_request *rq, int prio)
 {
-	int old = READ_ONCE(rq->sched.ipi_priority);
-	struct i915_dependency *p;
-
-	/* Update priority in place if no PI required */
-	for_each_signaler(p, rq) {
-		struct i915_request *s =
-			container_of(p->signaler, typeof(*s), sched);
-
-		if (rq_prio(s) >= prio)
-			continue;
-
-		if (i915_request_signaled(s))
-			continue;
-
-		do {
-			if (prio <= old)
-				return;
-		} while (!try_cmpxchg(&rq->sched.ipi_priority, &old, prio));
-
-		__ipi_add(rq);
-		return;
-	}
-
-	while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio))
-		if (old >= prio)
-			return;
-
-	if (i915_request_is_ready(rq) &&
-	    rq->sched_engine->bump_inflight_request_prio)
-		rq->sched_engine->bump_inflight_request_prio(rq, prio);
-}
-
-static void ipi_priority(struct i915_request *rq, int prio, int lvl)
-{
-	struct i915_dependency *p;
-	int old = rq_prio(rq);
-
-	for_each_signaler(p, rq) {
-		struct i915_request *s =
-			container_of(p->signaler, typeof(*s), sched);
-
-		if (rq_prio(s) >= prio)
-			continue;
-
-		if (i915_request_signaled(s))
-			continue;
-
-		if (lvl < 5) {
-			ipi_priority(s, prio, lvl + 1);
-			continue;
-		}
-
-		return __ipi_priority(rq, prio);
-	}
-
-	/* Update priority in place if no PI required */
-	while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio)) {
-		if (old >= prio)
-			return;
-	}
-
-	if (i915_request_is_ready(rq) &&
-	    rq->sched_engine->bump_inflight_request_prio)
-		rq->sched_engine->bump_inflight_request_prio(rq, prio);
+	return rq_prio(rq) >= prio && READ_ONCE(rq->sched.dfs.prev) == NULL;
 }
 
 static void __i915_request_set_priority(struct i915_request *rq, int prio)
 {
-	struct i915_sched_engine *se = rq->sched_engine;
 	struct list_head *pos = &rq->sched.signalers_list;
-	struct list_head *plist;
-
-	plist = i915_sched_lookup_priolist(se, prio);
 
 	/*
 	 * Recursively bump all dependent priorities to match the new request.
@@ -361,33 +216,41 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 	 * end result is a topological list of requests in reverse order, the
 	 * last element in the list is the request we must execute first.
 	 */
-	rq->sched.dfs.prev = NULL;
+	stack_push(rq, ERR_PTR(-1), NULL);
 	do {
+		struct i915_sched_engine *se;
+		unsigned long flags;
+
 		list_for_each_continue(pos, &rq->sched.signalers_list) {
 			struct i915_dependency *p =
 				list_entry_rcu(pos, typeof(*p), signal_link);
 			struct i915_request *s =
 				container_of(p->signaler, typeof(*s), sched);
 
-			if (rq_prio(s) >= prio)
+			if (!(s->sched.flags & I915_SCHED_HAS_PHYSICAL_CHAIN))
 				continue;
 
 			if (i915_request_signaled(s))
 				continue;
 
-			if (s->sched_engine != se) {
-				ipi_priority(s, prio, 0);
+			if (stack_prio(s, prio))
 				continue;
-			}
 
 			/* Remember our position along this branch */
 			rq = stack_push(s, rq, pos);
 			pos = &rq->sched.signalers_list;
 		}
 
-		if (rq->engine)
-			RQ_TRACE(rq, "set-priority:%d\n", prio);
-		WRITE_ONCE(rq->sched.attr.priority, prio);
+		/* depth-first update to priority */
+		if (unlikely(!rq_set_prio(rq, prio)))
+			continue;
+
+		if (!rq->engine || !i915_sw_fence_signaled(&rq->submit))
+			continue;
+
+		se = se_lock_irqsave(rq, flags);
+		RQ_TRACE(rq, "set-priority:%d\n", prio);
+		GEM_BUG_ON(rq_prio(rq) != prio);
 
 		/*
 		 * Once the request is ready, it will be placed into the
@@ -398,84 +261,35 @@ static void __i915_request_set_priority(struct i915_request *rq, int prio)
 		 * See engine->submit_request()
 		 */
 		if (!i915_request_is_ready(rq))
-			continue;
+			goto unlock;
 
 		if (se->bump_inflight_request_prio)
 			se->bump_inflight_request_prio(rq, prio);
 
-		GEM_BUG_ON(rq->sched_engine != se);
-		if (i915_request_in_priority_queue(rq))
-			list_move_tail(&rq->sched.link, plist);
+		if (!i915_request_in_priority_queue(rq))
+			goto unlock;
 
 		/* Defer (tasklet) submission until after all updates. */
+		list_move_tail(&rq->sched.link, i915_sched_lookup_priolist(se, prio));
 		if (se->kick_backend)
 			se->kick_backend(rq, prio);
-	} while ((rq = stack_pop(rq, &pos)));
-}
 
-#define all_signalers_checked(p, rq) \
-	list_entry_is_head(p, &(rq)->sched.signalers_list, signal_link)
+unlock:
+		spin_unlock_irqrestore(&se->lock, flags);
+	} while ((rq = stack_pop(rq, &pos)) != ERR_PTR(-1));
+}
 
 void i915_request_set_priority(struct i915_request *rq, int prio)
 {
-	struct i915_dependency *p;
-	int old = rq_prio(rq);
-
-	if (prio <= old)
+	if (prio <= rq_prio(rq))
 		return;
 
 	if (!(rq->sched.flags & I915_SCHED_HAS_PHYSICAL_CHAIN))
 		return;
 
 	rcu_read_lock();
-
-	/*
-	 * If we are setting the priority before being submitted, see if we
-	 * can quickly adjust our own priority in-situ and avoid taking
-	 * the contended engine->active.lock. If we need priority inheritance,
-	 * take the slow route.
-	 */
-	for_each_signaler(p, rq) {
-		struct i915_request *s =
-			container_of(p->signaler, typeof(*s), sched);
-
-		if (rq_prio(s) >= prio)
-			continue;
-
-		if (i915_request_signaled(s))
-			continue;
-
-		break;
-	}
-
-	/* Update priority in place if no PI required */
-	if (all_signalers_checked(p, rq)) {
-		while (!try_cmpxchg(&rq->sched.attr.priority, &old, prio)) {
-			if (old >= prio)
-				goto out;
-		}
-
-		if (i915_request_is_ready(rq) &&
-		    rq->sched_engine->bump_inflight_request_prio)
-			rq->sched_engine->bump_inflight_request_prio(rq, prio);
-	} else {
-		struct i915_sched_engine *se;
-		unsigned long flags;
-
-		se = se_lock_irqsave(rq, flags);
-		if (prio <= rq_prio(rq))
-			goto unlock;
-
-		if (i915_request_signaled(rq))
-			goto unlock;
-
-		__i915_request_set_priority(rq, prio);
-		GEM_BUG_ON(rq_prio(rq) != prio);
-
-unlock:
-		spin_unlock_irqrestore(&se->lock, flags);
-	}
-out:
+	__i915_request_set_priority(rq, prio);
+	GEM_BUG_ON(rq_prio(rq) < prio);
 	rcu_read_unlock();
 }
 
@@ -487,7 +301,7 @@ void i915_sched_node_init(struct i915_sched_node *node)
 	INIT_LIST_HEAD(&node->waiters_list);
 	INIT_LIST_HEAD(&node->link);
 
-	node->ipi_link = NULL;
+	node->dfs.prev = NULL;
 
 	i915_sched_node_reinit(node);
 }
@@ -497,9 +311,6 @@ void i915_sched_node_reinit(struct i915_sched_node *node)
 	node->attr.priority = I915_PRIORITY_INVALID;
 	node->semaphores = 0;
 	node->flags = 0;
-
-	GEM_BUG_ON(node->ipi_link);
-	node->ipi_priority = I915_PRIORITY_INVALID;
 
 	GEM_BUG_ON(!list_empty(&node->signalers_list));
 	GEM_BUG_ON(!list_empty(&node->waiters_list));
@@ -677,7 +488,6 @@ i915_sched_engine_create(unsigned int subclass)
 		return NULL;
 
 	kref_init(&sched_engine->ref);
-	i915_sched_init_ipi(&sched_engine->ipi);
 
 	sched_engine->queue = RB_ROOT_CACHED;
 	sched_engine->queue_priority_hint = INT_MIN;

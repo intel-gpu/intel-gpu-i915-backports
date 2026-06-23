@@ -326,8 +326,9 @@ void __i915_iommu_free(unsigned long iova, unsigned long total, unsigned long ma
 	struct iova_domain *iovad = i915_iovad(domain);
 	int shift = iova_shift(iovad);
 
-	iommu_unmap(domain, iova, mapped);
-	free_iova_fast(iovad, iova >> shift, total >> shift);
+	if (mapped)
+		iommu_unmap(domain, iova, mapped);
+	free_iova_fast(iovad, iova >> shift, iova_align(iovad, total) >> shift);
 }
 
 unsigned long __i915_iommu_alloc(unsigned long total, u64 dma_limit, struct iommu_domain *domain)

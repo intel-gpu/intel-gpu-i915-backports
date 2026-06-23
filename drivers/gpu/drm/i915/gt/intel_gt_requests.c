@@ -210,6 +210,7 @@ static void retire_work_handler(struct work_struct *work)
 
 	schedule_delayed_work(&gt->requests.retire_work,
 			      round_jiffies_up_relative(2 * HZ));
+	intel_guc_ct_receive(&gt->uc.guc.ct);
 	intel_gt_retire_requests(gt);
 
 	if (!list_empty(&gt->timelines.active_list) &&

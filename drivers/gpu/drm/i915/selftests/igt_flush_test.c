@@ -30,14 +30,8 @@ int igt_flush_test(struct drm_i915_private *i915)
 			continue;
 
 		if (intel_gt_wait_for_idle(gt, HZ * 3) == -ETIME) {
-			pr_err("%pS timed out, cancelling all further testing.\n",
-			       __builtin_return_address(0));
-
-			GEM_TRACE("%pS timed out.\n",
-				  __builtin_return_address(0));
+			GEM_TRACE_ERR("%pS timed out.\n", __builtin_return_address(0));
 			GEM_TRACE_DUMP();
-
-			intel_klog_error_capture(gt, ALL_ENGINES);
 
 			intel_gt_set_wedged(gt);
 			ret = -EIO;

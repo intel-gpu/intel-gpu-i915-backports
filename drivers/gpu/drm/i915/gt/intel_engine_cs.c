@@ -2233,6 +2233,7 @@ intel_engine_find_active_request(struct intel_engine_cs *engine)
 	struct i915_request *request, *active = NULL;
 	struct i915_sched_engine *se;
 	unsigned long flags;
+	u32 lrc;
 
 	/*
 	 * We are called by the error capture, reset and to dump engine
@@ -2267,12 +2268,20 @@ intel_engine_find_active_request(struct intel_engine_cs *engine)
 	if (!se)
 		return active;
 
+	lrc = 0;
+	if (!IS_SRIOV_VF(engine->i915))
+		lrc = ENGINE_READ(engine, RING_CURRENT_LRCA);
+
 	spin_lock_irqsave(&se->lock, flags);
 	list_for_each_entry(request, &se->requests, sched.link) {
 		if (!(request->execution_mask & engine->mask))
 			continue;
 
 		if (__i915_request_is_complete(request))
+			continue;
+
+		if (lrc & CURRENT_LRCA_VALID &&
+		    (request->context->lrc.lrca ^ lrc) & GENMASK(31, 12))
 			continue;
 
 		if (__i915_request_has_started(request)) {

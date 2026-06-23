@@ -6,6 +6,7 @@
 
 #include <linux/console.h>
 
+#include "gt/gen8_ppgtt.h"
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_object.h"
 #include "gem/i915_gem_shmem.h"
@@ -64,6 +65,10 @@ static const struct {
    void (*exit)(void);
 } init_funcs[] = {
 	{ .init = i915_check_nomodeset },
+	{
+		.init = gen8_ppgtt_module_init,
+		.exit = gen8_ppgtt_module_exit
+	},
 	{ .init = i915_active_module_init,
 	  .exit = i915_active_module_exit },
 	{ .init = i915_buddy_module_init,
@@ -88,8 +93,10 @@ static const struct {
 	},
 	{ .init = i915_vma_module_init,
 	  .exit = i915_vma_module_exit },
-	{ .init = intel_ppgtt_module_init,
-	  .exit = intel_ppgtt_module_exit },
+	{
+		.init = intel_ppgtt_module_init,
+		.exit = intel_ppgtt_module_exit
+	},
 	{ .init = i915_mock_selftests },
 	{ .init = i915_pmu_init,
 	  .exit = i915_pmu_exit },

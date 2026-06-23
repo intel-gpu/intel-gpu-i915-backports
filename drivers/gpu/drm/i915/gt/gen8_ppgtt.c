@@ -19,6 +19,8 @@
 #include "intel_lrc.h"
 #include "i915_drv.h"
 
+static struct kmem_cache *slab_vm;
+
 inline u64 gen8_pde_encode(const dma_addr_t addr, const enum i915_cache_level level)
 {
 	u64 pde = addr | GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
@@ -1073,6 +1075,16 @@ void intel_flat_lmem_ppgtt_fini(struct i915_address_space *vm,
 	drm_mm_remove_node(node);
 }
 
+static void __gen8_ppgtt_release(struct work_struct *work)
+{
+	struct i915_address_space *vm =
+		container_of(work, struct i915_address_space, rcu.work);
+
+	gen8_ppgtt_cleanup(vm);
+	i915_address_space_fini(vm);
+	kmem_cache_free(slab_vm, vm);
+}
+
 /*
  * GEN8 legacy ppgtt programming is accomplished through a max 4 PDP registers
  * with a net effect resembling a 2-level page table in normal x86 terms. Each
@@ -1086,15 +1098,16 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	struct i915_ppgtt *ppgtt;
 	int err;
 
-	ppgtt = kzalloc(sizeof(*ppgtt), GFP_KERNEL);
+	ppgtt = kmem_cache_zalloc(slab_vm, GFP_KERNEL);
 	if (!ppgtt)
 		return ERR_PTR(-ENOMEM);
 
 	err = ppgtt_init(ppgtt, gt);
 	if (err) {
-		kfree(ppgtt);
+		kmem_cache_free(slab_vm, ppgtt);
 		return ERR_PTR(err);
 	}
+	INIT_RCU_WORK(&ppgtt->vm.rcu, __gen8_ppgtt_release);
 
 	ppgtt->vm.pd_shift = ilog2(SZ_4K * SZ_4K / sizeof(gen8_pte_t));
 	ppgtt->vm.has_read_only = true;
@@ -1136,7 +1149,6 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 		ppgtt->vm.pt_insert = gen8_pt_insert;
 	}
 	ppgtt->vm.clear_range = gen8_ppgtt_clear;
-	ppgtt->vm.cleanup = gen8_ppgtt_cleanup;
 
 	if (flags & PRELIM_I915_VM_CREATE_FLAGS_DISABLE_SCRATCH)
 		ppgtt->vm.has_scratch = false;
@@ -1165,6 +1177,22 @@ struct i915_ppgtt *gen8_ppgtt_create(struct intel_gt *gt, u32 flags)
 	return ppgtt;
 
 err_put:
-	i915_vm_put(&ppgtt->vm);
+	i915_vm_close(&ppgtt->vm);
 	return ERR_PTR(err);
+}
+
+void gen8_ppgtt_module_exit(void)
+{
+	kmem_cache_destroy(slab_vm);
+}
+
+int __init gen8_ppgtt_module_init(void)
+{
+	slab_vm = KMEM_CACHE(i915_ppgtt, 0);
+	if (!slab_vm)
+		goto err;
+
+	return 0;
+err:
+	return -ENOMEM;
 }

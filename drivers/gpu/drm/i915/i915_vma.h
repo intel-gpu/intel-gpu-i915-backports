@@ -75,11 +75,6 @@ static inline bool i915_vma_is_dpt(const struct i915_vma *vma)
 
 void i915_vma_flush_writes(struct i915_vma *vma);
 
-static inline bool i915_vma_is_closed(const struct i915_vma *vma)
-{
-	return !list_empty(&vma->closed_link);
-}
-
 static inline u64 __i915_vma_size(const struct i915_vma *vma)
 {
 	return vma->node.size - 2 * vma->guard;

@@ -206,8 +206,7 @@ out:
 out_obj:
 	i915_gem_object_put(obj);
 out_vm:
-	i915_vm_put(&ppgtt->vm);
-
+	i915_vm_close(&ppgtt->vm);
 	return err;
 }
 
@@ -350,8 +349,7 @@ out:
 out_obj:
 	i915_gem_object_put(obj);
 out_vm:
-	i915_vm_put(&ppgtt->vm);
-
+	i915_vm_close(&ppgtt->vm);
 	return err;
 }
 
@@ -509,7 +507,7 @@ static int xy_fast_color(void *arg)
 out_obj:
 	i915_gem_object_put(obj);
 out_vm:
-	i915_vm_put(&ppgtt->vm);
+	i915_vm_close(&ppgtt->vm);
 	return err;
 }
 

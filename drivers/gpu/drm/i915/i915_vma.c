@@ -217,8 +217,8 @@ skip_rb_insert:
 err_unlock:
 	spin_unlock(&obj->vma.lock);
 err_vma:
-	i915_vm_put(vm);
 	i915_vma_free(vma);
+	i915_vm_put(vm);
 	return pos;
 }
 
@@ -266,8 +266,6 @@ i915_vma_instance(struct drm_i915_gem_object *obj,
 		  const struct i915_ggtt_view *view)
 {
 	struct i915_vma *vma = NULL;
-
-	GEM_BUG_ON(!atomic_read(&vm->open));
 
 	if (i915_is_ggtt(vm) || !view ||
 	    view->type != I915_GGTT_VIEW_PARTIAL) {
@@ -603,26 +601,29 @@ void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags)
 bool i915_vma_misplaced(const struct i915_vma *vma,
 			u64 size, u64 alignment, u64 flags)
 {
-	u64 act_size = __i915_vma_size(vma);
-	u64 act_offset = __i915_vma_offset(vma);
-
 	if (!drm_mm_node_allocated(&vma->node))
+		return false;
+
+	if (i915_vma_is_persistent(vma))
 		return false;
 
 	if (test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
 		return true;
 
-	if (act_size < size)
+	if (__i915_vma_size(vma) < size)
 		return true;
 
 	GEM_BUG_ON(alignment && !is_power_of_2(alignment));
-	if (alignment && !IS_ALIGNED(act_offset, alignment))
+	if (alignment &&
+	    !IS_ALIGNED(__i915_vma_offset(vma), alignment))
 		return true;
 
-	if (flags & PIN_OFFSET_BIAS && act_offset < (flags & PIN_OFFSET_MASK))
+	if (flags & PIN_OFFSET_BIAS &&
+	    __i915_vma_offset(vma)<  (flags & PIN_OFFSET_MASK))
 		return true;
 
-	if (flags & PIN_OFFSET_FIXED && act_offset != (flags & PIN_OFFSET_MASK))
+	if (flags & PIN_OFFSET_FIXED &&
+	    __i915_vma_offset(vma) != (flags & PIN_OFFSET_MASK))
 		return true;
 
 	if (flags & PIN_OFFSET_GUARD && vma->guard < (flags & PIN_OFFSET_MASK))
@@ -1105,7 +1106,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, u64 size, u64 alignment, u64 flags)
 
 	/* No more allocations allowed now we hold vm->mutex */
 
-	if (unlikely(i915_vma_is_closed(vma))) {
+	if (unlikely(i915_vma_is_purged(vma) || !atomic_read(&vma->vm->open))) {
 		err = -ENOENT;
 		goto err_unlock;
 	}
@@ -1262,7 +1263,16 @@ void i915_vma_close(struct i915_vma *vma)
 {
 	struct i915_address_space *vm = vma->vm;
 	struct i915_vma_clock *clock = &vm->gt->vma_clock;
+	struct drm_i915_gem_object *obj = vma->obj;
 	unsigned long flags;
+
+	if (i915_vma_is_purged(vma) || !atomic_read(&vm->open) || !i915_gem_object_inuse(obj)) {
+		if (atomic_dec_and_test(&vma->open_count)) {
+			__i915_vma_put(vma);
+			i915_gem_object_put(obj);
+		}
+		return;
+	}
 
 	/*
 	 * We defer actually closing, unbinding and destroying the VMA until
@@ -1277,30 +1287,18 @@ void i915_vma_close(struct i915_vma *vma)
 	 * of wasted work for the steady state.
 	 */
 	GEM_BUG_ON(!atomic_read(&vma->open_count));
-	if (atomic_dec_and_lock_irqsave(&vma->open_count,
-					&clock->lock,
-					flags)) {
-		struct drm_i915_gem_object *obj = vma->obj;
-		bool inuse =
-			!i915_vma_is_persistent(vma) &&
-			i915_gem_object_inuse(obj) &&
-			!i915_is_ggtt_or_dpt(vm);
-		bool first = false;
+	if (atomic_dec_and_lock_irqsave(&vma->open_count, &clock->lock, flags)) {
+		GEM_BUG_ON(!list_empty(&vma->closed_link));
+		GEM_BUG_ON(i915_is_ggtt_or_dpt(vm));
+		GEM_BUG_ON(i915_vma_is_persistent(vma));
 
-		if (inuse) {
-			first = list_empty(&clock->age[0]);
-			list_add(&vma->closed_link, &clock->age[0]);
-			__i915_vma_get(vma);
-		}
-		spin_unlock_irqrestore(&clock->lock, flags);
-		__i915_vma_put(vma);
-
-		i915_vm_close(vm);
-		i915_gem_object_put(obj);
-
-		if (first)
+		atomic_inc(&vma->open_count);
+		list_add_tail(&vma->closed_link, &clock->age[0]);
+		if (list_is_first(&vma->closed_link, &clock->age[0]))
 			queue_delayed_work(vm->i915->wq, &clock->work,
-					   round_jiffies_up_relative(HZ));
+					   round_jiffies_up_relative(2 * HZ));
+
+		spin_unlock_irqrestore(&clock->lock, flags);
 	}
 }
 
@@ -1341,45 +1339,34 @@ void i915_vma_release(struct kref *ref)
 	GEM_BUG_ON(i915_vma_is_active(vma));
 	GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
 	GEM_BUG_ON(!list_empty(&vma->vm_bind_link));
+	GEM_BUG_ON(!list_empty(&vma->closed_link));
 
 	if (unlikely(vma->bind_fence)) {
 		i915_sw_fence_set_error_once(vma->bind_fence, -EINVAL);
 		i915_sw_fence_complete(vma->bind_fence);
 	}
-
+	i915_active_fini(&vma->active);
 	i915_vm_put(vma->vm);
 
-	i915_active_fini(&vma->active);
 	i915_vma_metadata_free(vma);
 	i915_vma_free(vma);
 }
 
 struct i915_vma *i915_vma_open(struct i915_vma *vma)
 {
-	if (!atomic_add_unless(&vma->open_count, 1, 0)) {
-		struct i915_vma_clock *clock = &vma->vm->gt->vma_clock;
-		unsigned long flags;
+	if (atomic_add_unless(&vma->open_count, 1, 0))
+		return vma;
 
-		spin_lock_irqsave(&clock->lock, flags);
-		if (!atomic_add_unless(&vma->open_count, 1, 0)) {
-			if (!i915_vma_tryget(vma)) {
-				vma = NULL;
-			} else if (!i915_vm_tryopen(vma->vm)) {
-				i915_vma_put(vma);
-				vma = NULL;
-			} else {
-				__i915_vma_get(vma);
-				if (!list_empty(&vma->closed_link)) {
-					list_del_init(&vma->closed_link);
-					__i915_vma_put(vma);
-				}
-				atomic_set_release(&vma->open_count, 1);
-			}
-		}
-		spin_unlock_irqrestore(&clock->lock, flags);
+	if (!i915_vma_tryget(vma))
+		return NULL;
+
+	if (atomic_fetch_inc(&vma->open_count)) {
+		i915_vma_put(vma);
+		return vma;
 	}
 
-	return vma;
+	GEM_BUG_ON(i915_vma_is_purged(vma));
+	return __i915_vma_get(vma);
 }
 
 static void i915_vma_clock(struct work_struct *w)
@@ -1407,19 +1394,27 @@ static void i915_vma_clock(struct work_struct *w)
 
 	if (down_write_trylock(&clock->sem)) {
 		spin_lock_irq(&clock->lock);
-		while ((vma = list_first_entry_or_null(&clock->age[1],
-						typeof(*vma),
-						closed_link))) {
+		while ((vma = list_first_entry_or_null(&clock->age[1], typeof(*vma), closed_link))) {
 			struct i915_address_space *vm = vma->vm;
 
 			list_del_init(&vma->closed_link);
+
+			GEM_BUG_ON(!atomic_read(&vma->open_count));
+			if (!atomic_dec_and_test(&vma->open_count))
+				continue;
+
 			spin_unlock_irq(&clock->lock);
 
-			mutex_lock(&vm->mutex);
-			i915_vma_unpublish(vma);
-			mutex_unlock(&vm->mutex);
+			if (!i915_vma_is_purged(vma)) {
+				mutex_lock(&vm->mutex);
+				i915_vma_unpublish(vma);
+				mutex_unlock(&vm->mutex);
+			}
 
+			i915_vma_put(vma);
 			__i915_vma_put(vma);
+
+			cond_resched();
 			spin_lock_irq(&clock->lock);
 		}
 		list_replace_init(&clock->age[0], &clock->age[1]);
@@ -1427,9 +1422,8 @@ static void i915_vma_clock(struct work_struct *w)
 		up_write(&clock->sem);
 	}
 
-	if (!list_empty(&clock->age[1]))
-		queue_delayed_work(gt->i915->wq, &clock->work,
-				   round_jiffies_up_relative(HZ));
+	if (!list_empty(&clock->age[1]) || !list_empty(&clock->age[0]))
+		queue_delayed_work(gt->i915->wq, &clock->work, round_jiffies_up_relative(HZ));
 }
 
 void i915_vma_clock_init_early(struct i915_vma_clock *clock)

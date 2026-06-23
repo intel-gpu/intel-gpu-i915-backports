@@ -880,7 +880,6 @@ static int write_to_scratch(struct i915_gem_context *ctx,
 {
 	struct drm_i915_private *i915 = ctx->i915;
 	struct drm_i915_gem_object *obj;
-	struct i915_address_space *vm;
 	struct i915_request *rq;
 	struct i915_vma *vma;
 	u32 *cmd;
@@ -912,8 +911,7 @@ static int write_to_scratch(struct i915_gem_context *ctx,
 
 	intel_gt_chipset_flush(engine->gt);
 
-	vm = i915_gem_context_get_eb_vm(ctx);
-	vma = i915_vma_instance(obj, vm, NULL);
+	vma = i915_vma_instance(obj, ctx_vm(ctx), NULL);
 	if (IS_ERR(vma)) {
 		err = PTR_ERR(vma);
 		goto out_vm;
@@ -961,7 +959,6 @@ skip_request:
 err_unpin:
 	i915_vma_unpin(vma);
 out_vm:
-	i915_vm_put(vm);
 out:
 	i915_gem_object_put(obj);
 	return err;
@@ -974,7 +971,6 @@ static int read_from_scratch(struct i915_gem_context *ctx,
 	const u32 GPR0 = engine->mmio_base + 0x600;
 	struct drm_i915_private *i915 = ctx->i915;
 	struct drm_i915_gem_object *obj;
-	struct i915_address_space *vm;
 	const u32 result = 0x100;
 	struct i915_request *rq;
 	struct i915_vma *vma;
@@ -992,8 +988,7 @@ static int read_from_scratch(struct i915_gem_context *ctx,
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
-	vm = i915_gem_context_get_eb_vm(ctx);
-	vma = i915_vma_instance(obj, vm, NULL);
+	vma = i915_vma_instance(obj, ctx_vm(ctx), NULL);
 	if (IS_ERR(vma)) {
 		err = PTR_ERR(vma);
 		goto out_vm;
@@ -1081,7 +1076,6 @@ skip_request:
 err_unpin:
 	i915_vma_unpin(vma);
 out_vm:
-	i915_vm_put(vm);
 out:
 	i915_gem_object_put(obj);
 	return err;

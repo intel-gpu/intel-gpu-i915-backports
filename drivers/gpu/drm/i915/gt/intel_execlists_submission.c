@@ -2191,8 +2191,7 @@ static void execlists_capture_work(struct work_struct *work)
 		vma = intel_engine_coredump_add_request(gt->engine, cap->rq, NULL,
 							gfp, compress);
 		if (vma)
-			intel_engine_coredump_add_vma(gt->engine,
-						      vma, compress);
+			intel_engine_coredump_add_vma(vma, compress);
 		i915_vma_capture_finish(gt, compress);
 	}
 

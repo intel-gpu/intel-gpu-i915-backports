@@ -50,11 +50,7 @@ mock_context(struct drm_i915_private *i915,
 		if (!ppgtt)
 			goto err_put;
 
-		mutex_lock(&ctx->mutex);
-		__set_ppgtt(ctx, &ppgtt->vm);
-		mutex_unlock(&ctx->mutex);
-
-		i915_vm_put(&ppgtt->vm);
+		__assign_ppgtt(ctx, &ppgtt->vm);
 	}
 
 	return ctx;
