@@ -381,7 +381,6 @@ struct i915_address_space {
 			      struct i915_gem_ww_ctx *ww,
 			      unsigned int pat_index,
 			      u32 flags);
-	void (*cleanup)(struct i915_address_space *vm);
 
 	struct i915_vma_ops vma_ops;
 
@@ -504,29 +503,21 @@ static inline void i915_vm_put(struct i915_address_space *vm)
 static inline struct i915_address_space *
 i915_vm_open(struct i915_address_space *vm)
 {
-	GEM_BUG_ON(!atomic_read(&vm->open));
-	atomic_inc(&vm->open);
-	return i915_vm_get(vm);
+	return atomic_inc_not_zero(&vm->open) ? vm : NULL;
 }
 
-static inline bool
-i915_vm_tryopen(struct i915_address_space *vm)
-{
-	if (atomic_add_unless(&vm->open, 1, 0))
-		return i915_vm_get(vm);
-
-	return false;
-}
-
-void __i915_vm_close(struct i915_address_space *vm, bool imm);
+void __i915_vm_close(struct i915_address_space *vm);
 static inline void i915_vm_close(struct i915_address_space *vm)
 {
-	return __i915_vm_close(vm, false);
+	if (unlikely(!vm))
+		return;
+
+	GEM_BUG_ON(atomic_read(&vm->open) <= 0);
+	if (unlikely(atomic_dec_and_test(&vm->open)))
+		__i915_vm_close(vm);
 }
-static inline void i915_vm_close_imm(struct i915_address_space *vm)
-{
-	return __i915_vm_close(vm, true);
-}
+
+void i915_vm_close_atomic(struct i915_address_space *vm);
 
 int i915_address_space_init(struct i915_address_space *vm, int subclass);
 void i915_address_space_fini(struct i915_address_space *vm);

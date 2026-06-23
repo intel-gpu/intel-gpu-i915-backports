@@ -38,3 +38,13 @@ again:
 }
 EXPORT_SYMBOL(__pte_offset_map_lock);
 #endif
+
+#ifdef BPM_PAGETABLE_FREE_KERNEL_NOT_EXPORTED
+#ifdef CONFIG_ASYNC_KERNEL_PGTABLE_FREE
+void pagetable_free_kernel(struct ptdesc *pt)
+{
+	__pagetable_free(pt);
+}
+EXPORT_SYMBOL(pagetable_free_kernel);
+#endif
+#endif

@@ -16,12 +16,6 @@
 
 struct i915_request;
 
-/* Inter-engine scheduling delegation */
-struct i915_sched_ipi {
-	struct i915_request *list;
-	struct work_struct work;
-};
-
 struct i915_sched_attr {
 	/**
 	 * @priority: execution and service priority
@@ -80,10 +74,6 @@ struct i915_sched_node {
 #define I915_SCHED_HAS_PHYSICAL_CHAIN	BIT(0)
 #define I915_SCHED_HAS_EXTERNAL_CHAIN	BIT(1)
 	unsigned long semaphores;
-
-	/* handle being scheduled for PI from outside of our active.lock */
-	struct i915_request *ipi_link;
-	int ipi_priority;
 };
 
 struct i915_dependency {
@@ -174,8 +164,6 @@ struct i915_sched_engine {
 	 * @no_priolist: priority lists disabled
 	 */
 	bool no_priolist;
-
-	struct i915_sched_ipi ipi;
 
 	/**
 	 * @private_data: private data of the submission backend

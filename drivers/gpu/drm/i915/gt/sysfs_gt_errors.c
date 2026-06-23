@@ -8,19 +8,31 @@
 #include "intel_gt_print.h"
 #include "intel_gt_requests.h"
 #include "intel_gt_sysfs.h"
+#include "intel_gt_types.h"
 #include "sysfs_gt_errors.h"
 
-static ssize_t
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t
 i915_sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static ssize_t
+i915_sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,
+		 const char *buf, size_t count);
 #else
+static ssize_t
 i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t
+i915_sysfs_store(struct device *dev, struct device_attribute *attr,
+		 const char *buf, size_t count);
 #endif
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 typedef ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+typedef ssize_t (*store)(struct kobject *kobj, struct kobj_attribute *attr,
+		const char *buf, size_t count);
 #else
 typedef ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
+typedef ssize_t (*store)(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t count);
 #endif
 
 struct i915_ext_attr {
@@ -31,6 +43,7 @@ struct i915_ext_attr {
 #endif
 	unsigned long id;
 	show i915_show;
+	store i915_store;
 };
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -106,6 +119,50 @@ static ssize_t hbm_error_show(struct device *dev,
 	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
 
 	return sysfs_emit(buf, "%lu\n", xa_to_value(xa_load(&gt->errors.hbm, ea->id)));
+}
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t hbm_error_store(struct kobject *kobj,
+			       struct kobj_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t hbm_error_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+#endif
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+	struct intel_gt *gt = kobj_to_gt(&dev->kobj);
+	unsigned long flags;
+	void *ret;
+	u64 val;
+	int err;
+
+	err = kstrtou64(buf, 0, &val);
+	if (err)
+		return err;
+
+	xa_lock_irqsave(&gt->errors.hbm, flags);
+	ret = __xa_store(&gt->errors.hbm, ea->id, xa_mk_value(val), GFP_ATOMIC);
+	if (xa_is_err(ret)) {
+		err = -EINVAL;
+		goto done;
+	}
+
+	if (PVC_HBM_IDX_IS_INFO(ea->id)) {
+		ret = __xa_store(&gt->errors.hbm, ea->id + PVC_HBM_NUM_ERRORS, xa_mk_value(0), GFP_ATOMIC);
+		if (xa_is_err(ret)) {
+			err = -EINVAL;
+			goto done;
+		}
+	}
+
+done:
+	xa_unlock_irqrestore(&gt->errors.hbm, flags);
+
+	return err ? : count;
 }
 
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
@@ -196,52 +253,71 @@ i915_sysfs_show(struct device *dev, struct device_attribute *attr, char *buf)
 	return value;
 }
 
+static ssize_t
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+i915_sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,
+		 const char *buf, size_t count)
+{
+#else
+i915_sysfs_store(struct device *dev, struct device_attribute *attr, const char
+		 *buf, size_t count)
+{
+#endif
+	struct i915_ext_attr *ea = container_of(attr, struct i915_ext_attr, attr);
+
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+	return ea->i915_store(kobj, attr, buf, count);
+#else
+	return ea->i915_store(dev, attr, buf, count);
+#endif
+}
+
 #define SGUNIT_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), sgunit_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), sgunit_error_show, NULL }
 
 #define SOC_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), soc_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), soc_error_show, NULL }
 
 #define PVC_SOC_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_pvc_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), soc_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), soc_error_show, NULL }
 
-#define PVC_HBM_SYSFS_ERROR_ATTR_RO(_name,  _id) \
+#define PVC_HBM_SYSFS_ERROR_ATTR_RW(_name,  _id) \
 	struct i915_ext_attr dev_attr_pvc_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), hbm_error_show}
+	{ __ATTR(_name, 0644, i915_sysfs_show, i915_sysfs_store), (_id), hbm_error_show, hbm_error_store }
 
 #define GT_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_error_show, NULL }
 
 #define GSC_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gsc_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gsc_error_show, NULL }
 
 #define GT_DRIVER_SYSFS_ERROR_ATTR_RO(_name,  _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_driver_error_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), gt_driver_error_show, NULL }
 
 #define I915_DEVICE_ATTR_RO(_name, _id) \
 	struct i915_ext_attr dev_attr_##_name = \
-	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), _name##_show}
+	{ __ATTR(_name, 0444, i915_sysfs_show, NULL), (_id), _name##_show, NULL }
 
-#define PVC_HBM_SYSFS_CORR_ERROR_COUNT_ATTR_RO(s, c, p) \
-	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_correctable_stack##s##_channel##c##_psch##p, \
+#define PVC_HBM_SYSFS_CORR_ERROR_COUNT_ATTR_RW(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RW(hbm_correctable_stack##s##_channel##c##_psch##p, \
 				    HBM_CORR_ERR_COUNT_INDEX(s, c, p))
 
-#define PVC_HBM_SYSFS_CORR_ERROR_INFO_ATTR_RO(s, c, p) \
-	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_correctable_stack##s##_channel##c##_psch##p##_info, \
+#define PVC_HBM_SYSFS_CORR_ERROR_INFO_ATTR_RW(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RW(hbm_correctable_stack##s##_channel##c##_psch##p##_info, \
 				    HBM_CORR_ERR_INFO_INDEX(s, c, p))
 
-#define PVC_HBM_SYSFS_UNCORR_ERROR_COUNT_ATTR_RO(s, c, p) \
-	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_uncorrectable_stack##s##_channel##c##_psch##p, \
+#define PVC_HBM_SYSFS_UNCORR_ERROR_COUNT_ATTR_RW(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RW(hbm_uncorrectable_stack##s##_channel##c##_psch##p, \
 				    HBM_UNCORR_ERR_COUNT_INDEX(s, c, p))
 
-#define PVC_HBM_SYSFS_UNCORR_ERROR_INFO_ATTR_RO(s, c, p) \
-	PVC_HBM_SYSFS_ERROR_ATTR_RO(hbm_uncorrectable_stack##s##_channel##c##_psch##p##_info, \
+#define PVC_HBM_SYSFS_UNCORR_ERROR_INFO_ATTR_RW(s, c, p) \
+	PVC_HBM_SYSFS_ERROR_ATTR_RW(hbm_uncorrectable_stack##s##_channel##c##_psch##p##_info, \
 				    HBM_UNCORR_ERR_INFO_INDEX(s, c, p))
 
 static GSC_SYSFS_ERROR_ATTR_RO(gsc_correctable_sram_ecc, INTEL_GSC_HW_ERROR_COR_SRAM_ECC);
@@ -342,8 +418,8 @@ static PVC_SOC_SYSFS_ERROR_ATTR_RO(soc_nonfatal_mdfi_south, SOC_ERR_INDEX(INTEL_
 
 /* 2 sysfs entries per pseudo channel - count and info */
 #define PVC_HBM_STACK_CHANNEL_PSCH_SYSFS_ATTRS(__s, __c, __p, type) \
-	static PVC_HBM_SYSFS_##type##_ERROR_COUNT_ATTR_RO(__s, __c, __p); \
-	static PVC_HBM_SYSFS_##type##_ERROR_INFO_ATTR_RO(__s, __c, __p);
+	static PVC_HBM_SYSFS_##type##_ERROR_COUNT_ATTR_RW(__s, __c, __p); \
+	static PVC_HBM_SYSFS_##type##_ERROR_INFO_ATTR_RW(__s, __c, __p);
 
 /* 2 pseudo channels per channel */
 #define PVC_HBM_STACK_CHANNEL_SYSFS_ATTRS(__s, __c, type) \

@@ -116,7 +116,6 @@ int i915_gem_object_unbind(struct drm_i915_gem_object *obj,
 	if (!bookmark)
 		return -ENOMEM;
 
-try_again:
 	ret = 0;
 	spin_lock(&obj->vma.lock);
 	list_for_each_entry(vma, &obj->vma.list, obj_link) {
@@ -143,8 +142,6 @@ try_again:
 		}
 
 		ret = -EAGAIN;
-		if (!i915_vm_tryopen(vm))
-			break;
 
 		/* Prevent vma being freed by i915_vma_parked as we unbind */
 		list_add(&bookmark->obj_link, &vma->obj_link);
@@ -185,9 +182,10 @@ try_again:
 			default:
 				goto put_vma;
 			}
+
+			ret = -EAGAIN;
 		}
 
-		ret = -EAGAIN;
 		if (mutex_trylock(&vm->mutex)) {
 			if (flags & I915_GEM_OBJECT_UNBIND_ACTIVE ||
 			    !i915_vma_is_active(vma))
@@ -200,7 +198,6 @@ try_again:
 put_vma:
 		__i915_vma_put(vma);
 close_vm:
-		i915_vm_close(vm);
 		spin_lock(&obj->vma.lock);
 		__list_del_entry(&bookmark->obj_link);
 		vma = bookmark;
@@ -208,11 +205,6 @@ close_vm:
 			break;
 	}
 	spin_unlock(&obj->vma.lock);
-
-	if (ret == -EAGAIN && flags & I915_GEM_OBJECT_UNBIND_BARRIER) {
-		rcu_barrier(); /* flush the i915_vm_release() */
-		goto try_again;
-	}
 
 	if (wakeref)
 		intel_runtime_pm_put(rpm, wakeref);

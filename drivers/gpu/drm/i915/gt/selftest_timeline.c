@@ -443,7 +443,6 @@ static int setup_watcher(struct hwsp_watcher *w, struct intel_gt *gt,
 		return PTR_ERR(obj);
 
 	/* keep the same cache settings as timeline */
-	i915_gem_object_set_pat_index(obj, i915_gem_object_pat_index(tl->hwsp_ggtt->obj));
 	w->map = i915_gem_object_pin_map_unlocked(obj,
 			page_unmask_bits(tl->hwsp_ggtt->obj->mm.mapping));
 	if (IS_ERR(w->map)) {
@@ -456,6 +455,7 @@ static int setup_watcher(struct hwsp_watcher *w, struct intel_gt *gt,
 		i915_gem_object_put(obj);
 		return PTR_ERR(vma);
 	}
+	vma->pat_index = tl->hwsp_ggtt->pat_index;
 
 	w->vma = vma;
 	w->addr = i915_ggtt_offset(vma);

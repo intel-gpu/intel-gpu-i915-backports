@@ -322,10 +322,6 @@ static inline u32 i915_reset_count(struct i915_gpu_error *error)
 
 static inline int i915_reset_engine_count(const struct intel_engine_cs *engine)
 {
-	/* the present guc interface doesn't support per engine reset counts */
-	if (intel_engine_uses_guc(engine))
-		return -1;
-
 	return atomic_read(&engine->reset.count);
 }
 
@@ -376,8 +372,7 @@ intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  gfp_t gfp,
 				  struct i915_page_compress *compress);
 
-void intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
-				   struct intel_engine_capture_vma *capture,
+void intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture,
 				   struct i915_page_compress *compress);
 
 struct intel_engine_capture_vma *
@@ -435,9 +430,9 @@ static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
 	kref_put(&uuid_res->ref, __i915_uuid_free);
 }
 
-void intel_eu_attentions_read(struct intel_gt *gt,
-			      struct intel_eu_attentions *a,
-			      const unsigned int settle_time_ms);
+int intel_eu_attentions_read(struct intel_gt *gt,
+			     struct intel_eu_attentions *a,
+			     const unsigned int settle_time_ms);
 
 #else
 

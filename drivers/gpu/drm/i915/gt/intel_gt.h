@@ -211,7 +211,8 @@ static inline void intel_gt_queue_work(struct intel_gt *gt, struct work_struct *
 
 static inline void intel_gt_set_wedged_async(struct intel_gt *gt)
 {
-	queue_work(system_highpri_wq, &gt->wedge);
+	if (!test_bit(I915_WEDGED, &gt->reset.flags))
+		queue_work(system_highpri_wq, &gt->wedge);
 }
 
 #endif /* __INTEL_GT_H__ */

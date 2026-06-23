@@ -630,7 +630,7 @@ bool __i915_request_submit(struct i915_request *request)
 	struct intel_engine_cs *engine = request->engine;
 	bool result = false;
 
-	RQ_TRACE(request, "\n");
+	RQ_TRACE(request, "prio:%d\n", request->sched.attr.priority);
 
 	GEM_BUG_ON(!irqs_disabled());
 	lockdep_assert_held(&engine->sched_engine->lock);
@@ -739,7 +739,7 @@ void __i915_request_unsubmit(struct i915_request *request)
 	 * Only unwind in reverse order, required so that the per-context list
 	 * is kept in seqno/ring order.
 	 */
-	RQ_TRACE(request, "\n");
+	RQ_TRACE(request, "prio:%d\n", request->sched.attr.priority);
 
 	GEM_BUG_ON(!irqs_disabled());
 	lockdep_assert_held(&engine->sched_engine->lock);
@@ -1458,21 +1458,18 @@ i915_request_await_external(struct i915_request *rq, struct dma_fence *fence)
 
 static inline bool is_parallel_rq(struct i915_request *rq)
 {
-	return intel_context_is_parallel(rq->context);
+	return rq->context && intel_context_is_parallel(rq->context);
 }
 
 static inline struct intel_context *request_to_parent(struct i915_request *rq)
 {
-	return intel_context_to_parent(rq->context);
+	return rq->context ? intel_context_to_parent(rq->context) : NULL;
 }
 
 static bool is_same_parallel_context(struct i915_request *to,
 				     struct i915_request *from)
 {
-	if (!to->context || !is_parallel_rq(to) || !from->context)
-		return false;
-
-	return request_to_parent(to) == request_to_parent(from);
+	return is_parallel_rq(to) && request_to_parent(to) == request_to_parent(from);
 }
 
 int
@@ -1893,10 +1890,9 @@ void __i915_request_queue(struct i915_request *rq, int prio)
 	 * decide whether to preempt the entire chain so that it is ready to
 	 * run at the earliest possible convenience.
 	 */
+	local_bh_disable();
 	i915_request_set_priority(rq, prio);
 	GEM_BUG_ON(rq->sched.attr.priority == I915_PRIORITY_INVALID);
-
-	local_bh_disable();
 	__i915_request_queue_bh(rq);
 	local_bh_enable(); /* kick tasklets */
 }

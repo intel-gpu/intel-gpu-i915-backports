@@ -299,13 +299,13 @@ create_region:
 	 * not be sufficient to map all the tiles.
 	 */
 	if (GEM_WARN_ON(lmem_size > root_lmembar_size || lmem_base > root_lmembar_size)) {
-		if (i915->remote_tiles) {
+		if (i915->remote_tiles)
 			return ERR_PTR(-EIO);
-		} else {
-			gt_warn(gt, "Cannot use the full memory %pa on the device as LMEM BAR size was found to be smaller\n", &lmem_size);
-			lmem_size = min(lmem_size, root_lmembar_size);
-			gt_warn(gt, "Continuing with reduced LMEM size: %pa\n", &lmem_size);
-		}
+
+		gt_warn(gt, "Cannot use the full memory %pa on the device as LMEM BAR size was found to be smaller\n", &lmem_size);
+		lmem_size = min(lmem_size, root_lmembar_size);
+		gt_warn(gt, "Continuing with reduced LMEM size: %pa\n", &lmem_size);
+		actual_mem = lmem_size;
  	}
  
 	if (i915->params.lmem_size > 0) {

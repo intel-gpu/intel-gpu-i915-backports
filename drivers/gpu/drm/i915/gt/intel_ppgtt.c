@@ -388,6 +388,9 @@ int ppgtt_bind_vma(struct i915_address_space *vm,
 	if (!drm_mm_node_allocated(&vma->node))
 		return 0;
 
+	if (!atomic_read(&vm->open))
+		return -ENOENT;
+
 	for_each_gt(gt, vm->i915, id) {
 		struct i915_vm_tlb *tlb = &vm->tlb[id];
 		struct rb_root root = RB_ROOT;
@@ -489,8 +492,12 @@ void ppgtt_tlb_cleanup(struct i915_address_space *vm)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(vm->tlb); i++) {
-		rbtree_postorder_for_each_entry_safe(r, n, &vm->tlb[i].range.rb_root, rb)
+		struct i915_vm_tlb *tlb = &vm->tlb[i];
+
+		tlb->last = 0;
+		rbtree_postorder_for_each_entry_safe(r, n, &tlb->range.rb_root, rb)
 			kfree(r);
+		tlb->range = RB_ROOT_CACHED;
 	}
 }
 

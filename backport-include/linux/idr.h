@@ -73,4 +73,11 @@ static inline void *backport_idr_remove(struct idr *idr, int id)
 
 void *idr_remove_ext(struct idr *idr, int id);
 
+#ifdef BPM_IDA_SIMPLE_GET_NOT_PRESENT
+#define ida_simple_get(ida, start, end, gfp)	\
+			ida_alloc_range(ida, start, (end) - 1, gfp)
+
+#define ida_simple_remove(ida, id) ida_free(ida, id)
+#endif
+
 #endif /* __BACKPORT_IDR_H */

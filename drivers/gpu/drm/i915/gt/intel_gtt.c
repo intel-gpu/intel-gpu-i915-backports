@@ -15,6 +15,7 @@
 #include "gem/i915_gem_region.h"
 #include "gem/i915_gem_vm_bind.h" /* XXX */
 
+#include "i915_debugger.h"
 #include "i915_trace.h"
 #include "i915_utils.h"
 #include "intel_gt.h"
@@ -74,15 +75,16 @@ int i915_vm_lock_objects(const struct i915_address_space *vm,
 
 void i915_address_space_fini(struct i915_address_space *vm)
 {
-	i915_drm_client_put(vm->client);
+	GEM_BUG_ON(atomic_read(&vm->open));
+	GEM_BUG_ON(vm->client);
 
 	i915_active_fini(&vm->active);
 	i915_active_fence_fini(&vm->user_fence);
 
-	drm_mm_takedown(&vm->mm);
-
 	if (vm->asid)
 		xa_erase(&vm->i915->asid_resv.xa, vm->asid);
+
+	drm_mm_takedown(&vm->mm);
 
 	mutex_destroy(&vm->mutex);
 	i915_gem_object_put(vm->root_obj);
@@ -97,9 +99,7 @@ static void __i915_vm_release(struct work_struct *work)
 	struct i915_address_space *vm =
 		container_of(work, struct i915_address_space, rcu.work);
 
-	vm->cleanup(vm);
 	i915_address_space_fini(vm);
-
 	kfree(vm);
 }
 
@@ -108,16 +108,13 @@ void i915_vm_release(struct kref *kref)
 	struct i915_address_space *vm =
 		container_of(kref, struct i915_address_space, ref);
 
-	GEM_BUG_ON(i915_is_ggtt(vm));
 	trace_i915_ppgtt_release(vm);
 
 	queue_rcu_work(vm->gt->wq, &vm->rcu);
 }
 
-static void i915_vm_close_work(struct work_struct *wrk)
+void __i915_vm_close(struct i915_address_space *vm)
 {
-	struct i915_address_space *vm =
-		container_of(wrk, typeof(*vm), close_work);
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma, *vn;
 
@@ -130,24 +127,31 @@ static void i915_vm_close_work(struct work_struct *wrk)
 
 	mutex_lock(&vm->mutex);
 	list_for_each_entry_safe(vma, vn, &vm->bound_list, vm_link)
-		i915_vma_unpublish(vma);
+		if (!i915_vma_is_persistent(vma))
+			i915_vma_unpublish(vma);
 	mutex_unlock(&vm->mutex);
+
+	i915_debugger_vm_destroy(vm);
+	i915_drm_client_put(fetch_and_zero(&vm->client));
 
 	i915_vm_put(vm);
 }
 
-void __i915_vm_close(struct i915_address_space *vm, bool imm)
+static void __i915_vm_close_work(struct work_struct *wrk)
+{
+	struct i915_address_space *vm =
+		container_of(wrk, typeof(*vm), close_work);
+
+	__i915_vm_close(vm);
+}
+
+void i915_vm_close_atomic(struct i915_address_space *vm)
 {
 	GEM_BUG_ON(atomic_read(&vm->open) <= 0);
-	if (!atomic_dec_and_test(&vm->open)) {
-		i915_vm_put(vm);
+	if (!atomic_dec_and_test(&vm->open))
 		return;
-	}
 
-	if (imm)
-		i915_vm_close_work(&vm->close_work);
-	else
-		intel_gt_queue_work(vm->gt, &vm->close_work);
+	intel_gt_queue_work(vm->gt, &vm->close_work);
 }
 
 static inline struct i915_address_space *active_to_vm(struct i915_active *ref)
@@ -157,12 +161,13 @@ static inline struct i915_address_space *active_to_vm(struct i915_active *ref)
 
 static int __i915_vm_active(struct i915_active *ref)
 {
-	return i915_vm_tryopen(active_to_vm(ref)) ? 0 : -ENOENT;
+	i915_vm_get(active_to_vm(ref));
+	return 0;
 }
 
 static void __i915_vm_retire(struct i915_active *ref)
 {
-	i915_vm_close(active_to_vm(ref));
+	i915_vm_put(active_to_vm(ref));
 }
 
 int i915_address_space_init(struct i915_address_space *vm, int subclass)
@@ -173,10 +178,8 @@ int i915_address_space_init(struct i915_address_space *vm, int subclass)
 	GEM_BUG_ON(!vm->total);
 
 	kref_init(&vm->ref);
-
-	INIT_RCU_WORK(&vm->rcu, __i915_vm_release);
 	atomic_set(&vm->open, 1);
-	INIT_WORK(&vm->close_work, i915_vm_close_work);
+	INIT_WORK(&vm->close_work, __i915_vm_close_work);
 
 	/*
 	 * The vm->mutex must be reclaim safe (for use in the shrinker).

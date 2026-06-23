@@ -149,10 +149,18 @@ static bool fence_enable_signaling(struct dma_fence *fence)
 	return true;
 }
 
+static signed long fence_wait(struct dma_fence *fence, bool interruptible, signed long timeout)
+{
+	struct dma_fence_work *f = container_of(fence, typeof(*f), rq.fence);
+
+	return i915_request_wait(&f->rq, interruptible, timeout) ?: 0;
+}
+
 const struct dma_fence_ops i915_cpu_fence_ops = {
 	.get_driver_name = get_driver_name,
 	.get_timeline_name = get_timeline_name,
 	.enable_signaling = fence_enable_signaling,
+	.wait = fence_wait,
 	.release = fence_release,
 };
 

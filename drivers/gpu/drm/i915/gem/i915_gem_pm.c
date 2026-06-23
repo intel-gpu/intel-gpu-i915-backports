@@ -155,17 +155,11 @@ static void suspend_ppgtt_mappings(struct drm_i915_private *i915)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ctx, &i915->gem.contexts.list, link) {
-		struct i915_address_space *vm;
-
-		if (!kref_get_unless_zero(&ctx->ref))
+		if (!ctx->vm || !kref_get_unless_zero(&ctx->ref))
 			continue;
 		rcu_read_unlock();
 
-		vm = i915_gem_context_get_eb_vm(ctx);
-		if (vm) {
-			GEM_WARN_ON(i915_gem_evict_vm(vm));
-			i915_vm_put(vm);
-		}
+		GEM_WARN_ON(i915_gem_evict_vm(ctx->vm));
 
 		rcu_read_lock();
 		i915_gem_context_put(ctx);

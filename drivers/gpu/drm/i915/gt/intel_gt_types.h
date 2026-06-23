@@ -296,6 +296,7 @@ struct intel_gt {
 
 	u32 pm_guc_events;
 
+	atomic_t in_pagefault;
 	struct {
 		/**
 		 * @total: Total time this engine was busy.
@@ -432,8 +433,6 @@ struct intel_gt {
 		struct xarray hbm;
 		unsigned long sgunit[HARDWARE_ERROR_MAX];
 		unsigned long driver[INTEL_GT_DRIVER_ERROR_COUNT];
-		u16 hbm_err_banks;
-		u16 hbm_err_columns;
 	} errors;
 
 	struct intel_gt_info {
@@ -524,10 +523,28 @@ struct intel_gt_definition {
 	 ((_channel << __bf_shf(HBM_CHANNEL_MASK)) & (HBM_CHANNEL_MASK)) | \
 	 ((_psch << __bf_shf(HBM_PSCH_MASK)) & (HBM_PSCH_MASK)))
 
-#define PVC_HBM_CORRECTABLE_ERR_COUNT_OFFSET	0
-#define PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET	64
-#define PVC_HBM_UNCORRECTABLE_ERR_COUNT_OFFSET	128
-#define PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET	192
+/*
+ * xarray layout
+ *
+ * When admin clears info attributes in sysfs, we also clear the misc xarray
+ * entries. It's done with an expectation that the misc follows the info. Hence,
+ * do not reorder the below sequence.
+ */
+#define PVC_HBM_NUM_ERRORS 64
+
+#define PVC_HBM_CORRECTABLE_ERR_COUNT_OFFSET	(0 * PVC_HBM_NUM_ERRORS)
+#define PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET	(1 * PVC_HBM_NUM_ERRORS)
+#define PVC_HBM_CORRECTABLE_ERR_MISC_OFFSET	(2 * PVC_HBM_NUM_ERRORS)
+
+#define PVC_HBM_UNCORRECTABLE_ERR_COUNT_OFFSET	(3 * PVC_HBM_NUM_ERRORS)
+#define PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET	(4 * PVC_HBM_NUM_ERRORS)
+#define PVC_HBM_UNCORRECTABLE_ERR_MISC_OFFSET	(5 * PVC_HBM_NUM_ERRORS)
+
+#define PVC_HBM_IDX_IS_INFO(_id_) \
+	(((_id_) >= PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET && \
+	  (_id_) < PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET + PVC_HBM_NUM_ERRORS) || \
+	 ((_id_) >= PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET && \
+	  (_id_) < PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET + PVC_HBM_NUM_ERRORS))
 
 #define HBM_CORR_ERR_COUNT_INDEX(_stack, _channel, _psch) \
 	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
@@ -537,6 +554,10 @@ struct intel_gt_definition {
 	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
 	 PVC_HBM_CORRECTABLE_ERR_INFO_OFFSET)
 
+#define HBM_CORR_ERR_MISC_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_CORRECTABLE_ERR_MISC_OFFSET)
+
 #define HBM_UNCORR_ERR_COUNT_INDEX(_stack, _channel, _psch) \
 	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
 	 PVC_HBM_UNCORRECTABLE_ERR_COUNT_OFFSET)
@@ -545,16 +566,24 @@ struct intel_gt_definition {
 	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
 	 PVC_HBM_UNCORRECTABLE_ERR_INFO_OFFSET)
 
+#define HBM_UNCORR_ERR_MISC_INDEX(_stack, _channel, _psch) \
+	(HBM_ERR_INDEX(_stack, _channel, _psch) + \
+	 PVC_HBM_UNCORRECTABLE_ERR_MISC_OFFSET)
+
 /* HBM err info */
-#define HBM_ERR_INFO_NCOLS_MASK		GENMASK(3, 0)
-#define HBM_ERR_INFO_NBANKS_MASK	GENMASK(7, 4)
-#define HBM_ERR_INFO_MAX_COL_MASK	GENMASK(11, 8)
-#define HBM_ERR_INFO_MIN_COL_MASK	GENMASK(15, 12)
-#define HBM_ERR_INFO_MAX_ROW_MASK	GENMASK(30, 16)
-#define HBM_ERR_INFO_MIN_ROW_MASK	GENMASK(45, 31)
-#define HBM_ERR_INFO_MAX_BANK_MASK	GENMASK(49, 46)
-#define HBM_ERR_INFO_MIN_BANK_MASK	GENMASK(53, 50)
-#define HBM_ERR_INFO_SEGMENT_ID_MASK	GENMASK(55, 54)
+#define HBM_ERR_INFO_NCOLS_MASK		GENMASK(4, 0)
+#define HBM_ERR_INFO_NBANKS_MASK	GENMASK(10, 6)
+#define HBM_ERR_INFO_MAX_COL_MASK	GENMASK(15, 12)
+#define HBM_ERR_INFO_MIN_COL_MASK	GENMASK(19, 16)
+#define HBM_ERR_INFO_MAX_ROW_MASK	GENMASK(34, 20)
+#define HBM_ERR_INFO_MIN_ROW_MASK	GENMASK(50, 36)
+#define HBM_ERR_INFO_MAX_BANK_MASK	GENMASK(55, 52)
+#define HBM_ERR_INFO_MIN_BANK_MASK	GENMASK(59, 56)
+#define HBM_ERR_INFO_SEGMENT_ID_MASK	GENMASK(61, 60)
+
+/* HBM err misc */
+#define HBM_ERR_MISC_NBANKS_MASK	GENMASK(15, 0)
+#define HBM_ERR_MISC_NCOLS_MASK		GENMASK(31, 16)
 
 #define GT_TRACE(gt, fmt, ...) do {					\
 	const struct intel_gt *gt__ __maybe_unused = (gt);		\

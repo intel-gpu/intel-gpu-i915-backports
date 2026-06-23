@@ -557,17 +557,16 @@ __i915_drm_client_register(struct i915_drm_client *client)
 	return __client_register_sysfs(client);
 }
 
+static void set_name(struct i915_drm_client *client, struct i915_drm_client_name *name)
+{
+	name = xchg((struct i915_drm_client_name ** __force)&client->name, name);
+	call_rcu(&name->rcu, free_name);
+}
+
 static void __i915_drm_client_unregister(struct i915_drm_client *client)
 {
-	struct i915_drm_client_name *name;
-
 	__client_unregister_sysfs(client);
-
-	mutex_lock(&client->update_lock);
-	name = rcu_replace_pointer(client->name, NULL, true);
-	mutex_unlock(&client->update_lock);
-
-	call_rcu(&name->rcu, free_name);
+	set_name(client, NULL);
 }
 
 static void __rcu_i915_drm_client_free(struct work_struct *wrk)
@@ -614,14 +613,12 @@ i915_drm_client_add(struct i915_drm_clients *clients,
 		return ERR_PTR(-ENOMEM);
 
 	kref_init(&client->kref);
-	mutex_init(&client->update_lock);
 	spin_lock_init(&client->ctx_lock);
 	INIT_LIST_HEAD(&client->ctx_list);
 	INIT_WORK(&client->wrk, register_client);
 	xa_init_flags(&client->uuids_xa, XA_FLAGS_ALLOC);
 
 	client->file = file;
-
 	client->clients = clients;
 
 	name = get_name(client, task);
@@ -690,17 +687,26 @@ i915_drm_client_update(struct i915_drm_client *client,
 {
 	struct i915_drm_client_name *name;
 
+	if (rcu_dereference_protected(client->name, true)->pid == task_pid(task))
+		return 0;
+
 	name = get_name(client, task);
 	if (!name)
 		return -ENOMEM;
 
-	mutex_lock(&client->update_lock);
-	if (name->pid != rcu_dereference_protected(client->name, true)->pid)
-		name = rcu_replace_pointer(client->name, name, true);
-	mutex_unlock(&client->update_lock);
-
-	call_rcu(&name->rcu, free_name);
+	set_name(client, name);
 	return 0;
+}
+
+static int __list_count(struct list_head *list)
+{
+	struct list_head *node;
+	int count = 0;
+
+	list_for_each(node, list)
+		count++;
+
+	return count;
 }
 
 void
@@ -721,12 +727,17 @@ i915_drm_clients_show(struct i915_drm_clients *clients, struct drm_printer *p, i
 	xa_for_each(&clients->xarray, id, client) {
 		struct task_struct *tsk = pid_task(i915_drm_client_pid(client), PIDTYPE_PID);
 
-		i_printf(p, indent, "- client: { task: \"%s\", state: %c, pid: %d, uid: %d, ref: %d }\n",
+		i_printf(p, indent,
+			 "- client: { task: \"%s\", state: %c, pid: %d, uid: %d, ref: %d, contexts: %d, closed: %s, local: { created: %lld, resident: %lld }}\n",
 			 i915_drm_client_name(client),
 			 tsk ? task_state_to_char(tsk) : 'Z',
 			 pid_nr(i915_drm_client_pid(client)),
 			 i915_drm_client_uid(client),
-			 kref_read(&client->kref));
+			 kref_read(&client->kref),
+			 __list_count(&client->ctx_list),
+			 str_yes_no(client->closed),
+			 atomic64_read(&client->created_devm_bytes),
+			 atomic64_read(&client->resident_created_devm_bytes));
 	}
 	rcu_read_unlock();
 }

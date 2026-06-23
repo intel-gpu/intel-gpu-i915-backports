@@ -1416,21 +1416,27 @@ err_vma:
 
 void lrc_reset(struct intel_context *ce)
 {
+	struct intel_ring *ring = ce->ring;
+	struct intel_engine_cs *engine = ce->engine;
 	void *vaddr;
 	int srcu;
 
-	GEM_BUG_ON(!intel_context_is_pinned(ce));
-
-	intel_ring_reset(ce->ring, 0);
+	WRITE_ONCE(ring->head, intel_ring_wrap(ring, ring->tail));
+	intel_ring_update_space(ring);
 
 	vaddr = ce->lrc_reg_state;
-	vaddr -= LRC_STATE_OFFSET;
+	if (!vaddr)
+		goto out_seqno;
 
 	/* Scrub away the garbage */
 	__clear_bit(CONTEXT_VALID_BIT, &ce->flags);
-	gt_ggtt_address_read_lock(ce->engine->gt, &srcu);
-	lrc_init_state(ce, ce->engine, vaddr);
+	gt_ggtt_address_read_lock(engine->gt, &srcu);
+	__lrc_init_regs(vaddr, ce, engine, true);
 
+	ce->lrc.lrca = lrc_update_regs(ce, engine, ce->vm, ring->tail);
+	gt_ggtt_address_read_unlock(engine->gt, srcu);
+
+out_seqno:
 	/*
 	 * The HWSP is volatile, and may have been lost while inactive,
 	 * e.g. across suspend/resume. Be paranoid, and ensure that
@@ -1438,9 +1444,6 @@ void lrc_reset(struct intel_context *ce)
 	 * the next request as already complete.
 	 */
 	intel_timeline_reset_seqno(ce->timeline);
-
-	ce->lrc.lrca = lrc_update_regs(ce, ce->engine, ce->vm, ce->ring->tail);
-	gt_ggtt_address_read_unlock(ce->engine->gt, srcu);
 }
 
 int

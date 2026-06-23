@@ -594,8 +594,6 @@ i915_gem_object_finish_access(struct drm_i915_gem_object *obj)
 
 void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
-void i915_gem_object_set_pat_index(struct drm_i915_gem_object *obj,
-				   unsigned int pat_index);
 static inline bool i915_gem_object_can_bypass_llc(const struct drm_i915_gem_object *obj)
 {
 	return false;

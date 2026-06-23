@@ -30,4 +30,7 @@ void intel_flat_lmem_ppgtt_fini(struct i915_address_space *vm,
 int pvc_ppgtt_fault(struct i915_address_space *vm,
 		    u64 start, u64 length, bool valid);
 
+int gen8_ppgtt_module_init(void);
+void gen8_ppgtt_module_exit(void);
+
 #endif

@@ -1,4 +1,36 @@
 # ChangeLog
+
+## Release I915_26WW25.4_1146.78_25.2.57_250224.65
+* Removed fast retirement of RPS boosting requests to fix a performance regression caused by unintentionally setting dma-latency to 0,
+  which forced all CPU cores to busy-spin on idle and diverted power and thermal budget from application workloads.
+* Rescheduled TD_ATT scanning until after pagefault handling clears the in-pagefault state to avoid leaving attention bits
+  uncleared and contexts unterminated.
+* Fixed a CONFIG_TRANSPARENT_HUGEPAGE issue by using PMD_SIZE instead of a THP.
+* Incremented the EU_ATTN PMU counter for attentions raised during pagefault handling.
+* Deferred global GT resets for ATT events while any engine is inside pagefault handling.
+* Restored the null context guard for fences that do not have hardware contexts.
+* Removed the unused dev variable from i915_sysfs_store.
+* Fixed sysfs GT error attribute callback signatures to avoid store callback mismatches.
+* Updated RAS HBM error information handling by expanding field sizes, improving field layout readability, and
+  allowing administrators to clear the sysfs attributes.
+* Reduced metadata size by stopping page-boundary padding.
+* Tracked the originating engine for each VMA in multi-process captures so captured data is associated with the correct engine.
+* Canceled pending vm_bind work during closure to avoid indefinite stalls when debugging blocks the operation.
+* Started releasing the vm->client reference immediately after its final use for the debugger destroy event.
+* Prevented new VMAs from being inserted into a closed ppGTT.
+* Fixed a deadlock race between VM_UNBIND and eviction by reordering the locking.
+* Started keeping the VM open while performing VM_BIND to avoid binds racing with VM destruction.
+* Started waiting for asynchronous vm_bind completion before forcing VM closure.
+* Added an early check for unevictable resident objects to avoid waiting on objects that cannot be evicted.
+* Prevented execution from reviving a VM that is already closing.
+* Moved VM reference ownership to vm->open so open VMs retain the required reference.
+* Propagated context construction parameters to the backend so settings such as context isolation are preserved.
+* Reworked global reprioritization to process dependent requests in topological order and avoid submission-order inversions.
+* Fixed the execbuf unwind path to avoid leaking clients and freeing active contexts on transient errors.
+* Fixed CPU page-table leaks caused by replacing split PMDs with huge PTE leaves.
+* Filtered coredump active requests by using CURRENT_LRCA so pagefault captures identify the correct active context.
+* Added backport support for kernel version 6.18.
+
 ## Release I915_26WW11.2_1146.59_25.2.43_250224.50
 * Introduced a fast GPU recovery mechanism for Open Accelerator Module (OAM) that restores GPU functionality
   after fatal errors without requiring a full system reboot or GPU reset, significantly reducing downtime.

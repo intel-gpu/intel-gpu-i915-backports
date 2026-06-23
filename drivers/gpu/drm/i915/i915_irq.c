@@ -1875,6 +1875,8 @@ struct hbm_error {
 	u32 row;
 	u32 col;
 	u32 stack_id;
+	u16 nbanks;
+	u16 ncols;
 };
 
 static bool valid_hbm_err_info(struct intel_gt *gt, struct hbm_error *err)
@@ -1901,18 +1903,15 @@ static unsigned long init_hbm_err_info(struct intel_gt *gt, struct hbm_error *er
 	       FIELD_PREP(HBM_ERR_INFO_MIN_BANK_MASK, err->bank) |
 	       FIELD_PREP(HBM_ERR_INFO_SEGMENT_ID_MASK, err->stack_id) |
 	       FIELD_PREP(HBM_ERR_INFO_NBANKS_MASK,
-			  hweight16(gt->errors.hbm_err_banks)) |
+			  hweight16(err->nbanks)) |
 	       FIELD_PREP(HBM_ERR_INFO_NCOLS_MASK,
-			  hweight16(gt->errors.hbm_err_columns));
+			  hweight16(err->ncols));
 }
 
 static unsigned long hbm_err_info(struct intel_gt *gt, unsigned long old,
 				  struct hbm_error *err)
 {
 	unsigned long new = 0, max, min;
-
-	gt->errors.hbm_err_columns |= BIT(err->col);
-	gt->errors.hbm_err_banks |= BIT(err->bank);
 
 	if (!old)
 		return init_hbm_err_info(gt, err);
@@ -1939,9 +1938,9 @@ static unsigned long hbm_err_info(struct intel_gt *gt, unsigned long old,
 	       FIELD_PREP(HBM_ERR_INFO_MIN_ROW_MASK, min);
 
 	new |= FIELD_PREP(HBM_ERR_INFO_NBANKS_MASK,
-			  hweight16(gt->errors.hbm_err_banks)) |
+			  hweight16(err->nbanks)) |
 	       FIELD_PREP(HBM_ERR_INFO_NCOLS_MASK,
-			  hweight16(gt->errors.hbm_err_columns));
+			  hweight16(err->ncols));
 
 	new |= FIELD_PREP(HBM_ERR_INFO_SEGMENT_ID_MASK, err->stack_id);
 
@@ -1949,10 +1948,11 @@ static unsigned long hbm_err_info(struct intel_gt *gt, unsigned long old,
 }
 
 static void update_hbm_error(struct intel_gt *gt, struct hbm_error *err,
-			     unsigned long idx_count, unsigned long idx_info)
+			     unsigned long idx_count, unsigned long idx_info,
+			     unsigned long idx_misc)
 {
-	void *entry_count, *entry_info;
-	unsigned long flags;
+	void *entry_count, *entry_info, *entry_misc;
+	unsigned long flags, val_misc;
 
 	if (!valid_hbm_err_info(gt, err))
 		return;
@@ -1960,41 +1960,61 @@ static void update_hbm_error(struct intel_gt *gt, struct hbm_error *err,
 	entry_count = xa_load(&gt->errors.hbm, idx_count);
 	entry_count = xa_mk_value(xa_to_value(entry_count) + 1);
 
+	entry_misc = xa_load(&gt->errors.hbm, idx_misc);
+	val_misc = xa_to_value(entry_misc);
+
+	err->nbanks = FIELD_GET(HBM_ERR_MISC_NBANKS_MASK, val_misc) |
+		      BIT(err->bank);
+	err->ncols = FIELD_GET(HBM_ERR_MISC_NCOLS_MASK, val_misc) |
+		     BIT(err->col);
+
+	val_misc = FIELD_PREP(HBM_ERR_MISC_NBANKS_MASK, err->nbanks) |
+		   FIELD_PREP(HBM_ERR_MISC_NCOLS_MASK, err->ncols);
+
+	entry_misc = xa_mk_value(val_misc);
+
 	entry_info = xa_load(&gt->errors.hbm, idx_info);
 	entry_info = xa_mk_value(hbm_err_info(gt, xa_to_value(entry_info), err));
 
 	xa_lock_irqsave(&gt->errors.hbm, flags);
 	if (xa_is_err(__xa_store(&gt->errors.hbm, idx_count, entry_count, GFP_ATOMIC)))
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "HBM error count on GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
-				    gt->info.id, err->stack, err->channel,
-				    err->psch, err->bank, err->col, err->row, err->stack_id);
+		gt_err_ratelimited(gt, HW_ERR
+				   "HBM error count, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
+				   err->stack, err->channel,
+				   err->psch, err->bank, err->col, err->row, err->stack_id);
+	if (xa_is_err(__xa_store(&gt->errors.hbm, idx_misc, entry_misc, GFP_ATOMIC)))
+		gt_err_ratelimited(gt, HW_ERR
+				   "HBM error misc stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
+				   err->stack, err->channel,
+				   err->psch, err->bank, err->col, err->row, err->stack_id);
 	if (xa_is_err(__xa_store(&gt->errors.hbm, idx_info, entry_info, GFP_ATOMIC)))
-		drm_err_ratelimited(&gt->i915->drm, HW_ERR
-				    "HBM error info on GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
-				    gt->info.id, err->stack, err->channel,
-				    err->psch, err->bank, err->col, err->row, err->stack_id);
+		gt_err_ratelimited(gt, HW_ERR
+				   "HBM error info on GT %d, stack %d, channel %d, psch %d, bank %d, col %d, row %d stack_id %d lost\n",
+				   gt->info.id, err->stack, err->channel,
+				   err->psch, err->bank, err->col, err->row, err->stack_id);
 	xa_unlock_irqrestore(&gt->errors.hbm, flags);
 }
 
 static void update_hbm_correctable_error(struct intel_gt *gt, struct hbm_error *err)
 {
-	unsigned long idx_count, idx_info;
+	unsigned long idx_count, idx_info, idx_misc;
 
 	idx_count = HBM_CORR_ERR_COUNT_INDEX(err->stack, err->channel, err->psch);
 	idx_info = HBM_CORR_ERR_INFO_INDEX(err->stack, err->channel, err->psch);
+	idx_misc = HBM_CORR_ERR_MISC_INDEX(err->stack, err->channel, err->psch);
 
-	update_hbm_error(gt, err, idx_count, idx_info);
+	update_hbm_error(gt, err, idx_count, idx_info, idx_misc);
 }
 
 static void update_hbm_uncorrectable_error(struct intel_gt *gt, struct hbm_error *err)
 {
-	unsigned long idx_count, idx_info;
+	unsigned long idx_count, idx_info, idx_misc;
 
 	idx_count = HBM_UNCORR_ERR_COUNT_INDEX(err->stack, err->channel, err->psch);
 	idx_info = HBM_UNCORR_ERR_INFO_INDEX(err->stack, err->channel, err->psch);
+	idx_misc = HBM_UNCORR_ERR_MISC_INDEX(err->stack, err->channel, err->psch);
 
-	update_hbm_error(gt, err, idx_count, idx_info);
+	update_hbm_error(gt, err, idx_count, idx_info, idx_misc);
 }
 
 static void log_hbm_err_info(struct intel_gt *gt, u32 cause,

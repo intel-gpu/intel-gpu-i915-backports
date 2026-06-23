@@ -1565,8 +1565,8 @@ static int igt_reset_evict_ppgtt(void *arg)
 
 	err = __igt_reset_evict_vma(gt, &ppgtt->vm,
 				    evict_vma, EXEC_OBJECT_WRITE);
-	i915_vm_put(&ppgtt->vm);
 
+	i915_vm_close(&ppgtt->vm);
 	return err;
 }
 

@@ -53,8 +53,6 @@ struct i915_drm_client {
 		struct work_struct wrk;
 	};
 
-	struct mutex update_lock; /* Serializes name and pid updates. */
-
 	struct drm_i915_file_private *file;
 
 	unsigned int id;

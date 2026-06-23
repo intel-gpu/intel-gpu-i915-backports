@@ -102,7 +102,6 @@ struct intel_context {
 
 	struct i915_address_space *vm;
 	struct i915_gem_context __rcu *gem_context;
-	struct i915_drm_client *client;
 
 	/*
 	 * @signal_lock protects the list of requests that need signaling,

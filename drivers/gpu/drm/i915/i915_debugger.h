@@ -46,9 +46,7 @@ void i915_debugger_uuid_destroy(struct i915_drm_client *client,
 
 void i915_debugger_vm_create(struct i915_drm_client *client,
 			     struct i915_address_space *vm);
-void i915_debugger_vm_destroy(struct i915_drm_client *client,
-			      struct i915_address_space *vm,
-			      bool force);
+void i915_debugger_vm_destroy(struct i915_address_space *vm);
 
 void i915_debugger_vma_insert(struct i915_drm_client *client,
 			      struct i915_vma *vma);
@@ -111,9 +109,7 @@ static inline void i915_debugger_uuid_destroy(struct i915_drm_client *client,
 
 static inline void i915_debugger_vm_create(struct i915_drm_client *client,
 					   struct i915_address_space *vm) { }
-static inline void i915_debugger_vm_destroy(struct i915_drm_client *client,
-					    struct i915_address_space *vm,
-					    bool force) { }
+static inline void i915_debugger_vm_destroy(struct i915_address_space *vm) {}
 
 static inline void i915_debugger_vma_insert(struct i915_drm_client *client,
 					    struct i915_vma *vma) { }

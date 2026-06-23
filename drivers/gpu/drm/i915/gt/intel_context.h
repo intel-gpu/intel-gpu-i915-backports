@@ -102,6 +102,25 @@ void intel_context_bind_parent_child(struct intel_context *parent,
 	list_for_each_entry_safe(ce, cn, &(parent)->parallel.child_list,\
 				 parallel.child_link)
 
+static inline struct intel_context *intel_context_get(struct intel_context *ce)
+{
+	kref_get(&ce->ref);
+	return ce;
+}
+
+static inline struct intel_context *intel_context_get_rcu(struct intel_context *ce)
+{
+	if (kref_get_unless_zero(&ce->ref))
+		return ce;
+	else
+		return NULL;
+}
+
+static inline void intel_context_put(struct intel_context *ce)
+{
+	kref_put(&ce->ref, ce->ops->destroy);
+}
+
 /**
  * intel_context_lock_pinned - Stablises the 'pinned' status of the HW context
  * @ce - the context
@@ -273,25 +292,6 @@ intel_context_suspend_fence_replace(struct intel_context *ce,
 
 	dma_fence_put(prev);
 	return 0;
-}
-
-static inline struct intel_context *intel_context_get(struct intel_context *ce)
-{
-	kref_get(&ce->ref);
-	return ce;
-}
-
-static inline struct intel_context *intel_context_get_rcu(struct intel_context *ce)
-{
-	if (kref_get_unless_zero(&ce->ref))
-		return ce;
-	else
-		return NULL;
-}
-
-static inline void intel_context_put(struct intel_context *ce)
-{
-	kref_put(&ce->ref, ce->ops->destroy);
 }
 
 static inline struct intel_timeline *__must_check

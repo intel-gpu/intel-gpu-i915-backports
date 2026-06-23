@@ -23,6 +23,7 @@
 #include "gt/intel_gt_ccs_mode.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
+#include "gt/intel_rps.h"
 
 #include "pxp/intel_pxp.h"
 
@@ -788,6 +789,7 @@ static int __eb_add_lut(struct i915_execbuffer *eb,
 	struct i915_lut_handle *lut;
 	int err;
 
+	set_bit(I915_VMA_HAS_LUT_BIT, __i915_vma_flags(vma));
 	vma = i915_vma_open(vma);
 	if (!vma) /* closed after lookup, recreate */
 		return -EEXIST;
@@ -809,7 +811,7 @@ static int __eb_add_lut(struct i915_execbuffer *eb,
 
 		if (unlikely(vm && vma->vm != vm))
 			err = -EAGAIN; /* user racing with ctx set-vm */
-		else if (likely(!i915_gem_context_is_closed(ctx)))
+		else if (likely(!i915_gem_context_is_closed(ctx) && atomic_read(&vm->open)))
 			err = radix_tree_insert(&ctx->handles_vma, handle, vma);
 		else
 			err = -ENOENT;
@@ -830,7 +832,6 @@ static int __eb_add_lut(struct i915_execbuffer *eb,
 	if (unlikely(err))
 		goto err_lut;
 
-	set_bit(I915_VMA_HAS_LUT_BIT, __i915_vma_flags(vma));
 	return 0;
 
 err_lut:
@@ -2762,11 +2763,6 @@ eb_select_engine(struct i915_execbuffer *eb)
 	if (err)
 		goto err;
 
-	if (!i915_vm_tryopen(ce->vm)) {
-		err = -ENOENT;
-		goto err;
-	}
-
 	eb->context = ce;
 	eb->gt = ce->engine->gt;
 
@@ -2789,7 +2785,6 @@ eb_put_engine(struct i915_execbuffer *eb)
 {
 	struct intel_context *child;
 
-	i915_vm_close(eb->context->vm);
 	for_each_child(eb->context, child)
 		intel_context_put(child);
 	intel_context_put(eb->context);
@@ -3109,6 +3104,8 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 	int prio = I915_PRIORITY_NORMAL;
 
 	lockdep_assert_held(&tl->mutex);
+	if (!i915_active_fence_isset(&tl->last_request))
+		intel_rps_boost_for_request(rq);
 
 	trace_i915_request_add(rq);
 

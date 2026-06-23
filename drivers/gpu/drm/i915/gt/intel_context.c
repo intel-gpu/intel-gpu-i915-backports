@@ -342,6 +342,7 @@ static void __intel_context_retire(struct i915_active *active)
 	set_bit(CONTEXT_VALID_BIT, &ce->flags);
 
 	atomic_dec(&ce->vm->active_contexts[ce->engine->gt->info.id]);
+	i915_vm_close_atomic(ce->vm);
 
 	intel_context_post_unpin(ce);
 	intel_context_put(ce);
@@ -350,6 +351,11 @@ static void __intel_context_retire(struct i915_active *active)
 static int __intel_context_active(struct i915_active *active)
 {
 	struct intel_context *ce = container_of(active, typeof(*ce), active);
+
+	CE_TRACE(ce, "active\n");
+
+	if (!i915_vm_open(ce->vm))
+		return -ENOENT;
 
 	intel_context_get(ce);
 
@@ -481,8 +487,6 @@ void intel_context_fini(struct intel_context *ce)
 	if (ce->timeline)
 		intel_timeline_put(ce->timeline);
 	i915_vm_put(ce->vm);
-
-	i915_drm_client_put(ce->client);
 
 	/* Need to put the creation ref for the children */
 	if (intel_context_is_parent(ce))
@@ -793,16 +797,17 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 {
 	bool running = ce->timeline && i915_active_fence_isset(&ce->timeline->last_request);
 	u32 *regs = running && *ce->lrc_reg_state != -1 ? ce->lrc_reg_state : NULL;
+	struct i915_drm_client *client;
 	char buf[80] = "[i915]";
 	int i, len;
 
-	if (ce->client) {
-		rcu_read_lock();
-		sprintf(buf, READ_ONCE(ce->client->closed) ? "%s<%d>" : "%s[%d]",
-			i915_drm_client_name(ce->client),
-			pid_nr(i915_drm_client_pid(ce->client)));
-		rcu_read_unlock();
-	}
+	rcu_read_lock();
+	client = READ_ONCE(ce->vm->client);
+	if (client)
+		sprintf(buf, READ_ONCE(client->closed) ? "%s<%d>" : "%s[%d]",
+			i915_drm_client_name(client),
+			pid_nr(i915_drm_client_pid(client)));
+	rcu_read_unlock();
 
 	i_printf(p, indent, "ce->name: %s\n", buf);
 	if (ce->timeline)
@@ -820,8 +825,8 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 	if (len)
 		buf[len - 2] = '\0';
 	i_printf(p, indent, "ce->flags: 0x%08lx [%s]\n", ce->flags, buf);
-	i_printf(p, indent, "ce->pins: { pinned:%d, active:%d, running:%s }\n",
-		 atomic_read(&ce->pin_count), ce->active_count, str_yes_no(running));
+	i_printf(p, indent, "ce->pins: { ref:%d, pinned:%d, active:%d, running:%s }\n",
+		 kref_read(&ce->ref), atomic_read(&ce->pin_count), ce->active_count, str_yes_no(running));
 	i_printf(p, indent, "ce->runtime: { total: %lld ns, avg: %lld ns }\n",
 		 intel_context_get_total_runtime_ns(ce),
 		 intel_context_get_avg_runtime_ns(ce));
@@ -851,6 +856,8 @@ void intel_context_show(struct intel_context *ce, struct drm_printer *p, int ind
 		i_printf(p, indent, "ce->guc.priority: %d [%s]\n", ce->guc_state.prio, buf);
 	}
 
+	i_printf(p, indent, "vm->ref:      %d\n", kref_read(&ce->vm->ref));
+	i_printf(p, indent, "vm->open:     %d\n", atomic_read(&ce->vm->open));
 	i_printf(p, indent, "vm->asid:     0x%x\n", ce->vm->asid);
 	len = 0;
 	buf[0] = '\0';

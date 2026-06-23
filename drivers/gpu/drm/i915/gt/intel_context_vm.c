@@ -8,6 +8,7 @@
 #include "intel_context.h"
 #include "intel_engine_pm.h"
 #include "intel_gpu_commands.h"
+#include "intel_gt_requests.h"
 #include "intel_lrc.h"
 #include "intel_ring.h"
 
@@ -138,6 +139,8 @@ intel_context_reconfigure_vm(struct intel_context *ce,
 	GEM_BUG_ON(!ce->vm);
 	GEM_BUG_ON(i915_is_ggtt(vm));
 
+	intel_gt_retire_requests(vm->gt);
+
 	err = intel_context_lock_pinned(ce);
 	if (err)
 		return err;
@@ -145,8 +148,15 @@ intel_context_reconfigure_vm(struct intel_context *ce,
 	if (ce->vm != vm) {
 		err = gen8_modify_vm(ce, vm);
 		if (!err) {
+			bool active = !i915_active_is_idle(&ce->active);
+
+			if (active)
+				i915_vm_close(ce->vm);
 			i915_vm_put(ce->vm);
+
 			ce->vm = i915_vm_get(vm);
+			if (active)
+				i915_vm_open(ce->vm);
 		}
 	}
 

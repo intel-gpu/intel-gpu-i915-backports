@@ -29,6 +29,7 @@
 
 #include <linux/ascii85.h>
 #include <linux/highmem.h>
+#include <linux/kmemleak.h>
 #include <linux/nmi.h>
 #include <linux/pagevec.h>
 #include <linux/scatterlist.h>
@@ -66,6 +67,7 @@
 static void __sg_set_buf(struct scatterlist *sg,
 			 void *addr, unsigned int len, loff_t it)
 {
+	kmemleak_ignore(addr); /* link is encoded by struct page, hidden from kmemleak */
 	sg->page_link = (unsigned long)virt_to_page(addr);
 	sg->offset = offset_in_page(addr);
 	sg->length = len;
@@ -300,15 +302,16 @@ static void *compress_next_page(struct i915_page_compress *c,
 
 static int compress_page(struct i915_page_compress *c,
 			 void *src,
+			 unsigned long len,
 			 struct i915_compressed_pages *dst,
 			 bool wc)
 {
 	struct z_stream_s *zstream = &c->zstream;
 
 	zstream->next_in = src;
-	if (wc && c->tmp && i915_memcpy_from_wc(c->tmp, src, PAGE_SIZE))
+	if (wc && c->tmp && i915_memcpy_from_wc(c->tmp, src, len))
 		zstream->next_in = c->tmp;
-	zstream->avail_in = PAGE_SIZE;
+	zstream->avail_in = len;
 
 	do {
 		if (zstream->avail_out == 0) {
@@ -402,19 +405,28 @@ static bool compress_start(struct i915_page_compress *c)
 
 static int compress_page(struct i915_page_compress *c,
 			 void *src,
+			 unsigned long len,
 			 struct i915_compressed_pages *dst,
 			 bool wc)
 {
-	void *ptr;
+	while (len) {
+		unsigned long this = min(len, PAGE_SIZE);
+		void *ptr;
 
-	ptr = pool_alloc(&c->pool, I915_GFP_ALLOW_FAIL);
-	if (!ptr)
-		return -ENOMEM;
+		ptr = pool_alloc(&c->pool, I915_GFP_ALLOW_FAIL);
+		if (!ptr)
+			return -ENOMEM;
 
-	if (!(wc && i915_memcpy_from_wc(ptr, src, PAGE_SIZE)))
-		memcpy(ptr, src, PAGE_SIZE);
-	dst->pages[dst->page_count++] = ptr;
-	cond_resched();
+		if (!(wc && i915_memcpy_from_wc(ptr, src, this)))
+			memcpy(ptr, src, this);
+
+		len -= this;
+		src += this;
+
+		dst->pages[dst->page_count++] = ptr;
+		dst->unused = PAGE_SIZE - this;
+		cond_resched();
+	}
 
 	return 0;
 }
@@ -1317,8 +1329,8 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 					      dma - mem->region.start,
 					      PAGE_SIZE);
 			ret = compress_page(compress,
-					    (void __force *)s, dst->cpages,
-					    true);
+					    (void __force *)s, PAGE_SIZE,
+					    dst->cpages, true);
 			io_mapping_unmap(s);
 			if (ret || (vma->size <= ((n - offset) * PAGE_SIZE)))
 				break;
@@ -1335,7 +1347,7 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 			drm_clflush_pages(&page, 1);
 
 			s = kmap(page);
-			ret = compress_page(compress, s, dst->cpages, false);
+			ret = compress_page(compress, s, PAGE_SIZE, dst->cpages, false);
 			kunmap(page);
 
 			drm_clflush_pages(&page, 1);
@@ -1458,18 +1470,15 @@ static struct i915_compressed_pages *
 i915_compress_data(void *ptr, u64 size, struct i915_page_compress *compress)
 {
 	struct i915_compressed_pages *cpages;
-	unsigned long page_buffer;
-	u64 num_pages_user, num_cpages;
-	u64 offset, to_copy;
+	u64 num_cpages;
 	long ret;
 
 	if (!size || !compress_start(compress))
 		return NULL;
 
-	num_pages_user = DIV_ROUND_UP(size, PAGE_SIZE);
-
 	/* worstcase zlib growth */
-	num_cpages = DIV_ROUND_UP(10 * num_pages_user, 8);
+	num_cpages = DIV_ROUND_UP(size, PAGE_SIZE);
+	num_cpages = DIV_ROUND_UP(10 * num_cpages, 8);
 
 	cpages = kmalloc(sizeof(*cpages) + num_cpages * sizeof(u32 *),
 			 I915_GFP_ALLOW_FAIL);
@@ -1480,36 +1489,7 @@ i915_compress_data(void *ptr, u64 size, struct i915_page_compress *compress)
 	cpages->page_count = 0;
 	cpages->unused = 0;
 
-	offset = 0;
-
-	page_buffer = __get_free_page(GFP_KERNEL);
-	if (!page_buffer) {
-		kfree(cpages);
-		return NULL;
-	}
-
-	while (size) {
-		if (size < PAGE_SIZE) {
-			to_copy = size;
-			memset((void *)page_buffer + to_copy,
-			       0,
-			       PAGE_SIZE - to_copy);
-		} else {
-			to_copy = PAGE_SIZE;
-		}
-
-		size -= to_copy;
-
-		memcpy((void *)page_buffer, ptr + offset, to_copy);
-
-		offset += to_copy;
-		ret = compress_page(compress, (void *)page_buffer,
-				    cpages, false);
-		if (ret)
-			break;
-	}
-	free_page(page_buffer);
-
+	ret = compress_page(compress, ptr, size, cpages, false);
 	if (ret || compress_flush(compress, cpages)) {
 		while (cpages->page_count--)
 			pool_free(&compress->pool,
@@ -1653,6 +1633,7 @@ static bool record_context(struct i915_gem_context_coredump *e,
 
 struct intel_engine_capture_vma {
 	struct intel_engine_capture_vma *next;
+	struct intel_engine_coredump *ee;
 	struct i915_vma *vma;
 	struct scatterlist *pages;
 	char name[16];
@@ -1660,6 +1641,7 @@ struct intel_engine_capture_vma {
 
 static struct intel_engine_capture_vma *
 capture_vma(struct intel_engine_capture_vma *next,
+	    struct intel_engine_coredump *ee,
 	    struct i915_vma *vma,
 	    const char *name,
 	    gfp_t gfp)
@@ -1690,6 +1672,7 @@ capture_vma(struct intel_engine_capture_vma *next,
 
 	strcpy(c->name, name);
 	c->vma = vma; /* reference held while active */
+	c->ee = ee;
 
 	c->next = next;
 	return c;
@@ -1703,34 +1686,36 @@ err_free:
 
 static struct intel_engine_capture_vma *
 capture_user_vm(struct intel_engine_capture_vma *capture,
+		struct intel_engine_coredump *ee,
 		struct i915_address_space *vm, gfp_t gfp)
 {
 	struct i915_vma *vma;
 
-	spin_lock(&vm->vm_capture_lock);
-	list_for_each_entry(vma, &vm->vm_capture_list, vm_capture_link)
-		capture = capture_vma(capture, vma, "user", gfp);
-	spin_unlock(&vm->vm_capture_lock);
+	rcu_read_lock();
+	list_for_each_entry_rcu(vma, &vm->vm_capture_list, vm_capture_link)
+		capture = capture_vma(capture, ee, vma, "user", gfp);
+	rcu_read_unlock();
 
 	return capture;
 }
 
 static struct intel_engine_capture_vma *
 capture_user(struct intel_engine_capture_vma *capture,
+	     struct intel_engine_coredump *ee,
 	     const struct i915_request *rq,
 	     gfp_t gfp)
 {
 	struct i915_capture_list *c;
 
 	for (c = rq->capture_list; c; c = c->next)
-		capture = capture_vma(capture, c->vma, "user", gfp);
+		capture = capture_vma(capture, ee, c->vma, "user", gfp);
 
 	/*
 	 * include persistent VMAs
 	 * XXX overrides gfp due to execlists_capture_work caller
 	 */
 	gfp = GFP_NOWAIT | __GFP_NOWARN;
-	capture = capture_user_vm(capture, rq->context->vm, gfp);
+	capture = capture_user_vm(capture, ee, rq->context->vm, gfp);
 
 	return capture;
 }
@@ -1779,10 +1764,13 @@ intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 	 * as the simplest method to avoid being overwritten
 	 * by userspace.
 	 */
-	vma = capture_vma(vma, rq->batch, "batch", gfp);
-	vma = capture_user(vma, rq, gfp);
-	vma = capture_vma(vma, rq->ring->vma, "ring", gfp);
-	vma = capture_vma(vma, rq->context->state, "HW context", gfp);
+	vma = capture_vma(vma, ee, rq->batch, "batch", gfp);
+	vma = capture_user(vma, ee, rq, gfp);
+	vma = capture_vma(vma, ee, rq->ring->vma, "ring", gfp);
+	vma = capture_vma(vma, ee, rq->context->state, "HW context", gfp);
+
+	vma = capture_vma(vma, ee, ee->engine->status_page.vma, "HW Status", gfp);
+	vma = capture_vma(vma, ee, ee->engine->wa_ctx.vma, "WA context", gfp);
 
 	ee->rq_head = rq->head;
 	ee->rq_post = rq->postfix;
@@ -1798,18 +1786,15 @@ static struct scatterlist *__vma_pages(struct i915_vma *vma)
 }
 
 void
-intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
-			      struct intel_engine_capture_vma *capture,
+intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture,
 			      struct i915_page_compress *compress)
 {
-	const struct intel_engine_cs *engine = ee->engine;
-
 	while (capture) {
 		struct intel_engine_capture_vma *this = capture;
 		struct i915_vma *vma = this->vma;
 
-		add_vma(ee,
-			i915_vma_coredump_create(engine->gt,
+		add_vma(capture->ee,
+			i915_vma_coredump_create(capture->ee->engine->gt,
 						 vma, this->name,
 						 capture->pages,
 						 compress));
@@ -1821,20 +1806,6 @@ intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
 		capture = this->next;
 		kfree(this);
 	}
-
-	add_vma(ee,
-		i915_vma_coredump_create(engine->gt,
-					 engine->status_page.vma,
-					 "HW Status",
-					 __vma_pages(engine->status_page.vma),
-					 compress));
-
-	add_vma(ee,
-		i915_vma_coredump_create(engine->gt,
-					 engine->wa_ctx.vma,
-					 "WA context",
-					 __vma_pages(engine->wa_ctx.vma),
-					 compress));
 }
 
 static struct intel_engine_coredump *
@@ -1871,7 +1842,7 @@ capture_engine(struct intel_engine_cs *engine,
 		return NULL;
 	}
 
-	intel_engine_coredump_add_vma(ee, capture, compress);
+	intel_engine_coredump_add_vma(capture, compress);
 
 	return ee;
 }
@@ -2969,9 +2940,9 @@ void intel_klog_error_capture(struct intel_gt *gt,
 }
 #endif
 
-void intel_eu_attentions_read(struct intel_gt *gt,
-			      struct intel_eu_attentions *a,
-			      const unsigned int settle_time_ms)
+int intel_eu_attentions_read(struct intel_gt *gt,
+			     struct intel_eu_attentions *a,
+			     const unsigned int settle_time_ms)
 {
 	unsigned int prev = 0;
 	ktime_t end, now;
@@ -3010,4 +2981,6 @@ void intel_eu_attentions_read(struct intel_gt *gt,
 		 * timeout value regardless.
 		 */
 	} while (ktime_before(now, end));
+
+	return prev;
 }

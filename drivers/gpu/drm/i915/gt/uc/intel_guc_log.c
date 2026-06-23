@@ -558,6 +558,9 @@ static void guc_log_relay_unmap(struct intel_guc_log *log)
 void intel_guc_log_init_early(struct intel_guc_log *log)
 {
 	mutex_init(&log->relay.lock);
+#ifdef BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
+	mutex_init(&log->guc_lock);
+#endif
 	INIT_WORK(&log->relay.flush_work, copy_debug_logs_work);
 	log->relay.started = false;
 }
@@ -708,7 +711,11 @@ int intel_guc_log_set_level(struct intel_guc_log *log, u32 level)
 	if (level < GUC_LOG_LEVEL_DISABLED || level > GUC_LOG_LEVEL_MAX)
 		return -EINVAL;
 
+#ifdef BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
+	mutex_lock(&log->guc_lock);
+#else
 	mutex_lock(&dev_priv->drm.struct_mutex);
+#endif
 
 	if (log->level == level)
 		goto out_unlock;
@@ -726,7 +733,11 @@ int intel_guc_log_set_level(struct intel_guc_log *log, u32 level)
 	log->level = level;
 
 out_unlock:
+#ifdef BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
+	mutex_unlock(&log->guc_lock);
+#else
 	mutex_unlock(&dev_priv->drm.struct_mutex);
+#endif
 
 	return ret;
 }

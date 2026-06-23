@@ -354,6 +354,8 @@ static unsigned long run_swapper(struct drm_i915_private *i915,
 {
 	unsigned long found = 0;
 
+	i915_gem_flush_free_objects(i915);
+
 	found += i915_gem_shrink(i915, target, nr_scanned,
 				 I915_SHRINK_BOUND |
 				 I915_SHRINK_UNBOUND |
@@ -501,6 +503,8 @@ i915_gem_shrinker_oom(struct notifier_block *nb, unsigned long event, void *ptr)
 	unsigned long freed_pages;
 	intel_wakeref_t wakeref;
 
+	i915_gem_flush_free_objects(i915);
+
 	freed_pages = 0;
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		freed_pages += i915_gem_shrink(i915, -1UL, NULL,
@@ -520,6 +524,8 @@ i915_gem_shrinker_vmap(struct notifier_block *nb, unsigned long event, void *ptr
 	struct i915_vma *vma, *next;
 	unsigned long freed_pages = 0;
 	intel_wakeref_t wakeref;
+
+	i915_gem_flush_free_objects(i915);
 
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
 		freed_pages += i915_gem_shrink(i915, -1UL, NULL,

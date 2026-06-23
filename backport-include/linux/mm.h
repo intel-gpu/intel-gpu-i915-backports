@@ -269,4 +269,12 @@ static inline bool want_init_on_alloc(gfp_t flags)
 
 #endif
 
+#ifdef BPM_NTH_PAGE_NOT_PRESENT
+/* nth_page() was removed in kernel 6.18, provide compatibility wrapper */
+static inline struct page *nth_page(struct page *page, unsigned int n)
+{
+	return page + n;
+}
+#endif
+
 #endif /* __BACKPORT_MM_H */
