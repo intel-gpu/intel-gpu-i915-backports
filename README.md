@@ -1,3 +1,5 @@
+# **NOTE: redhat/main branch is DEPRECATED and is no longer maintained. PLEASE SWITCH TO [backport/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/backport/main) branch. **
+
 # Intel® Graphics Driver Backports for Linux® OS (intel-gpu-i915-backports)
 
 Contains the backported kernel module source code of intel GPUs on various OS distributions and LTS Kernels. You can create Dynamic Kernel Module Support (DKMS) as well as precompiled Out of Tree modules packages, which can be installed on supported OS distributions.
