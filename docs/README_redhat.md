@@ -51,15 +51,8 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 | RHEL® | 10.0  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.7  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.6  | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.5  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.4  | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.3  | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.2  | i915dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 9.0  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 8.10 | dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.9  | dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.8  | dkmsrpm-pkg | binrpm-pkg |
-| RHEL® | 8.6  | dkmsrpm-pkg | binrpm-pkg |
 
 ### Dynamic Kernel Module Support(DKMS)
 Creating i915 DKMS packages

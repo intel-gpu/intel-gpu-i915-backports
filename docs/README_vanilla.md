@@ -9,6 +9,7 @@ Our current backport supports the following Vanilla LTS kernels.
 
 | OS Distribution | Kernel Version |
 |---|---|
+| Vanilla | 6.18 LTS  |
 | Vanilla | 6.12 LTS  |
 | Vanilla | 6.6 LTS  |
 | Vanilla | 6.1 LTS  |
@@ -69,6 +70,7 @@ Both Debian based and rpm based packages are supported.
 
 | OS Distribution | Kernel Version | DKMS Package Target (RPM/Debian) | Binary Package Target (RPM/Debian) |
 |---|---|---|---|
+| Vanilla | 6.18 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.12 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.6 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |
 | Vanilla | 6.1 LTS  | i915dkmsrpm-pkg / i915dkmsdeb-pkg | binrpm-pkg / i915bindeb-pkg |

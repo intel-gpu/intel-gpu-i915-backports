@@ -40,15 +40,9 @@ This repository contains following drivers.
 | RHEL® | 10.0  |  6.12.0-55.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.7  |  5.14.0-611.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.6  |  5.14.0-570.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 9.5  |  5.14.0-503.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 9.4  |  5.14.0-427.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 9.3  |  5.14.0-362.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 9.2  |  5.14.0-284.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 9.0  |  5.14.0-70.xx |  [README](docs/README_redhat.md) |
 | RHEL® | 8.10 |  4.18.0-544.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 8.9  |  4.18.0-513.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 8.8  |  4.18.0-477.xx |  [README](docs/README_redhat.md) |
-| RHEL® | 8.6  |  4.18.0-372.xx |  [README](docs/README_redhat.md) |
+| Vanilla LTS* |  |  6.18.xx  | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  6.12.xx  | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  6.6.xx  | [README](docs/README_vanilla.md) |
 | Vanilla LTS* |  |  6.1.xx  | [README](docs/README_vanilla.md) |
@@ -58,4 +52,4 @@ This repository contains following drivers.
 Note: * - Kernel builds are verified but not tested.
 
 ## Product Releases:
-Please refer [Releases](https://dgpu-docs.intel.com/releases/index.html)
+Please refer [Releases](https://dgpu-docs.intel.com/overview/release-notes/lts-drivers-and-packages.html)
