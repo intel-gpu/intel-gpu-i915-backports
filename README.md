@@ -59,20 +59,22 @@ Note: [redhat/main](https://github.com/intel-gpu/intel-gpu-i915-backports/tree/r
 ## Product Releases:
 
 Two types of release streams are available:
-
-1. Production/LTS release:
-   - We recommend the LTS stream for most use cases due to its stability. Features, hardware support, and compatibility with major operating systems introduced at the start of an active release will remain consistent throughout its lifetime. During this period, we will provide updates to address critical bugs and security issues. Intel offers a single active production release. Update releases provide enhancements and fixes to this initial release and are not separate versions. New updates can only be applied to the most recent previous update. The following table lists recent production and LTS release.
-2. Rolling Stable Releases:
+1. Rolling Stable Releases:
    - Use rolling stable releases for early access to new features and hardware support. Rolling updates include a mix of feature enhancements, as well as bug and security fixes. The risk of new bugs and regressions is higher with rolling stable releases compared to production and LTS releases. We recommend installing the latest release for any updates, including bug fixes. Support for major and minor operating system versions is locked at the time the rolling update is published. We recommend moving to the latest release as soon as it becomes available. Intel does not provide updates for previous rolling stable releases. These releases are listed here solely for changelog information. Only the most recent active rolling stable release is recommended for use.
+2. Production/LTS release:
+   - We recommend the LTS stream for most use cases due to its stability. Features, hardware support, and compatibility with major operating systems introduced at the start of an active release will remain consistent throughout its lifetime. During this period, we will provide updates to address critical bugs and security issues. Intel offers a single active production release. Update releases provide enhancements and fixes to this initial release and are not separate versions. New updates can only be applied to the most recent previous update. The following table lists recent production and LTS release.
+
+Note: All Rolling Stable Releases are on hold and only Production/LTS Releases are posted. Recommended to use latest Active update for use.
 
 ## Active LTS/Production releases:
 
 | Type | Status | Version | Release-date | Branch | Tag |
 |---    |---    |---   |---    |---    |---    |
-| **LTS update release** | **Active** | **2350.145** | **2025-04-02** | **backport/RELEASE_2405_23.10** | [I915_25WW14.3_803.145_23.10.90_231129.99](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md) |
+| **LTS update release** | **Active** | **2523.59** | **2026-03-10** | backport/main | [I915_26WW11.2_1146.59_25.2.43_250224.50](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/main/README.md) |
+| LTS update release | Not supported | 2350.145 | 2025-04-02 | backport/RELEASE_2405_23.10 | [I915_25WW14.3_803.145_23.10.90_231129.99](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2405_23.10/README.md) |
 | Production update release | Not supported | 2328.48 | 2023-12-19 | backport/RELEASE_2335_23.6 | [I915_23WW51.5_682.48_23.6.42_230425.56](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/backport/RELEASE_2335_23.6/README.md)|
 | Production update release | Not supported | 2328.48 | 2023-12-19 | redhat/RELEASE_2335_23.6 | [RHEL89_23WW51.5_682.48_23.6.42_230425.55](https://github.com/intel-gpu/intel-gpu-i915-backports/blob/redhat/RELEASE_2335_23.6/README.md) |
 
 Please select the appropriate tag for a particular branch based on the supported OS table [Supported OS Distributions](#supported-os-distributions)
 
-Please refer to [Releases](https://dgpu-docs.intel.com/releases/index.html) for more details.
+Please refer to [Releases](https://dgpu-docs.intel.com/overview/release-notes/lts-drivers-and-packages.html) for more details.
