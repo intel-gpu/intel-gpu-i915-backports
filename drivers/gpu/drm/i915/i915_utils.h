@@ -73,6 +73,9 @@ static inline void add_taint_for_CI(struct drm_i915_private *i915, unsigned int 
 
 #define i915_inject_probe_failure(i915) i915_inject_probe_error((i915), -ENODEV)
 
+#define i915_probe_warn(i915, fmt, ...)				   \
+	__i915_printk(i915, i915_error_injected() ? KERN_DEBUG : KERN_WARNING, \
+		      fmt, ##__VA_ARGS__)
 #define i915_probe_error(i915, fmt, ...)				   \
 	__i915_printk(i915, i915_error_injected() ? KERN_DEBUG : KERN_ERR, \
 		      fmt, ##__VA_ARGS__)

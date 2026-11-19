@@ -178,6 +178,7 @@ struct i915_debugger_pagefault {
 	} fault;
 
 	struct {
+		u32 td_ctl;
 		struct intel_eu_attentions before;
 		struct intel_eu_attentions after;
 		struct intel_eu_attentions resolved;

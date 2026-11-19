@@ -2183,17 +2183,13 @@ static void execlists_capture_work(struct work_struct *work)
 	const gfp_t gfp = I915_GFP_ALLOW_FAIL;
 	struct intel_engine_cs *engine = cap->rq->engine;
 	struct intel_gt_coredump *gt = cap->error->gt;
-	struct intel_engine_capture_vma *vma;
-	struct i915_page_compress *compress = i915_vma_capture_prepare(gt);
+	struct intel_engine_capture_vma vma;
 
-	if (compress) {
-		/* Compress all the objects attached to the request, slow! */
-		vma = intel_engine_coredump_add_request(gt->engine, cap->rq, NULL,
-							gfp, compress);
-		if (vma)
-			intel_engine_coredump_add_vma(vma, compress);
-		i915_vma_capture_finish(gt, compress);
-	}
+	intel_engine_capture_vma_init(&vma);
+
+	/* Compress all the objects attached to the request, slow! */
+	intel_engine_coredump_add_request(gt->engine, cap->rq, &vma, gfp);
+	intel_engine_coredump_add_vma(&vma);
 
 	gt->simulated = gt->engine->simulated;
 	cap->error->simulated = gt->simulated;

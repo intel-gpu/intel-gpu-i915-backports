@@ -272,6 +272,9 @@ static struct i915_address_space *faulted_vm(struct intel_gt *gt, u32 asid)
 {
 	struct i915_address_space *vm;
 
+	if (gt->suspend)
+		return NULL;
+
 	/* The active context [asid] is protected while servicing a fault */
 	rcu_read_lock();
 	vm = __faulted_vm(gt, asid);
@@ -315,6 +318,9 @@ pf_coredump(struct intel_engine_cs *engine, struct recoverable_page_fault_info *
 {
 	struct i915_gpu_coredump *error;
 
+	if (READ_ONCE(engine->i915->gpu_error.first_error))
+		return NULL;
+
 	error = i915_gpu_coredump_create_for_engine(engine, GFP_KERNEL);
 	if (!error)
 		return NULL;
@@ -325,6 +331,9 @@ pf_coredump(struct intel_engine_cs *engine, struct recoverable_page_fault_info *
 	error->fault.type = info->fault_type;
 	error->fault.level = info->fault_level;
 	error->fault.access = info->access_type;
+
+	error->fault.dispatched = intel_gt_eu_threads_dispatched(engine->gt);
+	error->fault.faulted = intel_gt_eu_threads_faulted(engine->gt);
 
 	return error;
 }
@@ -342,6 +351,8 @@ struct fault_reply {
 	intel_wakeref_t wakeref;
 	unsigned int epoch;
 	unsigned int reply;
+
+	bool install_scratch : 1;
 };
 
 static bool has_debug_sip(struct intel_gt *gt)
@@ -580,6 +591,9 @@ static int rebind_vma(struct i915_vma *vma, struct intel_guc *guc, struct fault_
 	struct intel_memory_region *mem;
 	int err;
 
+	if (unlikely(test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma))))
+		return -EINVAL;
+
 	mem = obj->mm.region.mem;
 	if (access_is_write(info) && obj->mm.preferred_region)
 		mem = obj->mm.preferred_region;
@@ -641,16 +655,21 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 		vma = i915_find_vma(reply->vm, info->page_addr);
 		trace_i915_mm_fault(reply->vm, vma, info);
 	}
-	if (unlikely(vma && test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma))))
+	if (unlikely(vma && test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))) {
+		__i915_vma_put(vma);
 		vma = NULL; /* unbind in progress */
+	}
 	if (!vma) {
 		struct intel_engine_cs *engine = reply->engine;
+		bool debug;
 
 		reply->reply = PAGE_FAULT_REPLY_ACCESS;
-		if (atomic_fetch_inc(&reply->engine->fault_incomplete) < 1024)
+		if (atomic_fetch_inc(&reply->engine->fault_incomplete[info->access_type]) < 1024)
 			return;
 
+		debug = has_debug_sip(gt);
 		track_invalid_userfault(reply);
+		reply->install_scratch = reply->vm->has_scratch && !debug;
 
 		/* Each EU thread may trigger its own pf to the same address! */
 		if (intel_context_set_coredump(reply->request->context)) {
@@ -673,30 +692,14 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 				reply->debugger = pf_eu_debugger(reply->vm, reply);
 			if (!reply->debugger)
 				reply->dump = pf_coredump(engine, info);
+
+			reply->install_scratch |= debug;
 		}
 
-		if (has_debug_sip(reply->gt))
+		if (reply->install_scratch || debug)
 			return; /* jump to fault_complete() (and queue) */
 
-		err = -EINVAL;
-		if (reply->vm->has_scratch) {
-			/*
-			 * Map the out-of-bound access to scratch page.
-			 *
-			 * Out-of-bound virtual address range is not tracked,
-			 * so whenever we bind a new vma we do not know if it
-			 * is replacing a scratch mapping, and so we must always
-			 * flush the TLB of the vma's address range so that the
-			 * next access will not load scratch.
-			 *
-			 * This is an exceptional path to ease userspace development.
-			 * Once user space fixes all the out-of-bound access, this
-			 * logic will be removed.
-			 */
-			err = scratch_fault(reply->vm, info);
-		}
-
-		i915_sw_fence_set_error_once(&reply->base.rq.submit, err);
+		i915_sw_fence_set_error_once(&reply->base.rq.submit, -EINVAL);
 		return;
 	}
 
@@ -784,7 +787,7 @@ handle_i915_mm_fault(struct intel_guc *guc, struct fault_reply *reply)
 		dma_fence_put(fence);
 	}
 
-	atomic_set(&reply->engine->fault_incomplete, 0);
+	memset(reply->engine->fault_incomplete, 0, sizeof(reply->engine->fault_incomplete));
 
 out_vma:
 	__i915_vma_put(vma);
@@ -855,6 +858,7 @@ static int send_fault_reply(const struct fault_reply *f, int reply, unsigned int
 			break;
 
 		local_inc(&f->gt->stats.pagefault_retry);
+		intel_guc_ct_receive(&f->gt->uc.guc.ct);
 	} while (1); /* EIO == ack from HW timeout (by GuC), try again */
 
 	if (!err || err == -ENODEV) /* ENODEV == GT is being reset */
@@ -888,14 +892,14 @@ static void revoke_faulting_context(struct intel_engine_cs *engine, struct i915_
 	rcu_read_unlock();
 
 	memcpy(engine->reset.msg, msg, sizeof(msg));
-	schedule_work(&engine->reset.work);
+	if (intel_engine_pulse_with_check(engine, engine->reset.msg))
+		schedule_work(&engine->reset.work);
 }
 
 static int fault_work(struct dma_fence_work *work)
 {
 	struct fault_reply *f = container_of(work, typeof(*f), base);
-	struct intel_engine_capture_vma *vma = NULL;
-	struct i915_page_compress *compress = NULL;
+	struct intel_engine_capture_vma vma;
 	int err = work->rq.submit.error;
 	int cpu = -1;
 
@@ -904,17 +908,23 @@ static int fault_work(struct dma_fence_work *work)
 		cpu = i915_tbb_suspend_local();
 	}
 
+	intel_engine_capture_vma_init(&vma);
+
 	if (f->dump) {
 		struct intel_gt_coredump *gt = f->dump->gt;
+		bool success = false;
 
-		compress = i915_vma_capture_prepare(gt);
-		if (compress) {
-			vma = intel_engine_coredump_add_request(gt->engine, f->request, vma, GFP_KERNEL, compress);
-			vma = intel_gt_coredump_add_other_engines(gt, f->request, vma, GFP_KERNEL, compress);
+		if (intel_engine_coredump_add_request(gt->engine, f->request, &vma, GFP_KERNEL)) {
+			if (has_debug_sip(f->gt))
+				intel_gt_coredump_add_other_engines(gt, f->request, &vma, GFP_KERNEL);
+
+			success = intel_engine_capture_vma_exists(&vma);
 		}
-
-		if (has_debug_sip(f->gt))
-			scratch_fault(f->vm, &f->info);
+		if (!success) {
+			i915_gpu_coredump_put(f->dump);
+			f->dump = NULL;
+			err = -EINVAL;
+		}
 	}
 
 	if (f->debugger) {
@@ -923,6 +933,7 @@ static int fault_work(struct dma_fence_work *work)
 
 		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
 		if (td_ctl) {
+			pf->attentions.td_ctl = td_ctl;
 			intel_eu_attentions_read(f->gt, &pf->attentions.before, 0);
 
 			/* Halt on next thread dispatch */
@@ -948,19 +959,34 @@ static int fault_work(struct dma_fence_work *work)
 
 			intel_eu_attentions_read(f->gt, &pf->attentions.after,
 						 INTEL_GT_ATTENTION_TIMEOUT_MS);
-
-			scratch_fault(f->vm, &f->info);
 		}
 	}
 
 	if (f->request && !intel_context_is_schedulable(f->request->context))
 		err = -ENOENT;
 
+	if (err == 0 && f->install_scratch)
+		/*
+		 * Map the out-of-bound access to scratch page.
+		 *
+		 * Out-of-bound virtual address range is not tracked,
+		 * so whenever we bind a new vma we do not know if it
+		 * is replacing a scratch mapping, and so we must always
+		 * flush the TLB of the vma's address range so that the
+		 * next access will not load scratch.
+		 *
+		 * This is an exceptional path to ease userspace development.
+		 * Once user space fixes all the out-of-bound access, this
+		 * logic will be removed.
+		 */
+		err = scratch_fault(f->vm, &f->info);
+
 	if (err) {
 		print_recoverable_fault(f->gt, &f->info,
 					"Fault response: Unsuccessful",
 					work->rq.fence.error);
 		f->info.fault_unsuccessful = true;
+		memset(f->engine->fault_incomplete, 0, sizeof(f->engine->fault_incomplete));
 	}
 
 	if (cpu != -1) {
@@ -969,8 +995,10 @@ static int fault_work(struct dma_fence_work *work)
 		 * first, then i915 can read properly the thread attentions (resolved
 		 * -attentions) that SIP turns on.
 		 */
-		while (atomic_read(&f->engine->in_pagefault) > 1)
+		while (atomic_read(&f->engine->in_pagefault) > 1) {
+			i915_tbb_suspend_local();
 			cpu_relax();
+		}
 
 		WRITE_ONCE(f->engine->pagefault_request, NULL);
 		if (GEM_WARN_ON(send_fault_reply(f, PAGE_FAULT_REPLY_ENGINE, MAKE_SEND_FLAGS(0))))
@@ -994,22 +1022,20 @@ static int fault_work(struct dma_fence_work *work)
 
 	if (f->dump) {
 		struct intel_gt_coredump *gt = f->dump->gt;
-		u32 td_ctl;
 
-		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
-		if (td_ctl) {
+		if (gt->attentions.td_ctl) {
 			if (intel_eu_attentions_read(f->gt, &gt->attentions.resolved, INTEL_GT_ATTENTION_TIMEOUT_MS))
 				atomic_inc(&f->gt->reset.eu_attention_count);
 
-			repair_fault(f->vm, &f->info);
-
 			/* No more exceptions, stop raising new ATTN */
-			td_ctl &= ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION);
-			intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl);
+			intel_gt_mcr_multicast_write(f->gt, TD_CTL, gt->attentions.td_ctl);
 		}
 
-		intel_engine_coredump_add_vma(vma, compress);
-		i915_vma_capture_finish(gt, compress);
+		atomic_set(&f->engine->fault_incomplete[f->info.access_type], 0);
+		if (!f->vm->has_scratch)
+			revoke_faulting_context(f->engine, f->request);
+
+		intel_engine_coredump_add_vma(&vma);
 
 		i915_error_state_store(f->dump);
 		i915_gpu_coredump_put(f->dump);
@@ -1017,7 +1043,6 @@ static int fault_work(struct dma_fence_work *work)
 
 	if (f->debugger) {
 		struct i915_debugger_pagefault *pf = f->debugger;
-		u32 td_ctl;
 
 		intel_eu_attentions_read(f->gt,
 					 &pf->attentions.resolved,
@@ -1034,12 +1059,11 @@ static int fault_work(struct dma_fence_work *work)
 
 		/* clear the PTE of pagefault address */
 		intel_context_clear_coredump(pf->context);
+		atomic_set(&f->engine->fault_incomplete[f->info.access_type], 0);
 		repair_fault(f->vm, &f->info);
 
 		/* clear Force_External and Force Exception on pagefault scenario */
-		td_ctl = intel_gt_mcr_read_any(f->gt, TD_CTL);
-		intel_gt_mcr_multicast_write(f->gt, TD_CTL, td_ctl &
-					     ~(TD_CTL_FORCE_EXTERNAL_HALT | TD_CTL_FORCE_EXCEPTION));
+		intel_gt_mcr_multicast_write(f->gt, TD_CTL, pf->attentions.td_ctl);
 
 		intel_gt_invalidate_l3_mmio(f->gt);
 
@@ -1053,7 +1077,6 @@ static int fault_work(struct dma_fence_work *work)
 		i915_request_put(f->request);
 	i915_vm_put(f->vm);
 
-	intel_guc_ct_receive(&f->gt->uc.guc.ct);
 	intel_gt_pm_put_async(f->gt, f->wakeref);
 
 	if (cpu != -1)

@@ -41,7 +41,8 @@ static inline struct dma_resv_list *dma_resv_fences_list(struct dma_resv *obj)
 #endif
 
 #ifdef BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
-#define dma_resv_reserve_shared dma_resv_reserve_fences
+int backport_dma_resv_reserve_shared(struct dma_resv *obj, unsigned int num_fences);
+#define dma_resv_reserve_shared backport_dma_resv_reserve_shared
 #endif
 
 #ifdef BPM_DMA_RESV_TEST_SIGNALED_BOOLEAN_ARG_NOT_PRESENT

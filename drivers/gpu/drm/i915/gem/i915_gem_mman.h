@@ -31,7 +31,8 @@ void i915_gem_object_release_mmap(struct drm_i915_gem_object *obj);
 vm_fault_t i915_error_to_vmf_fault(int err);
 
 struct i915_mmap_offset *
-i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
+i915_gem_mmap_offset_attach(struct drm_device *dev,
+			    struct drm_i915_gem_object *obj,
 			    enum i915_mmap_type mmap_type,
 			    struct drm_file *file);
 int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,

@@ -96,6 +96,8 @@ struct drm_printer;
 	param(unsigned int, pvc_fw_put_delay_ms, CPTCFG_DRM_I915_PVC_FORCEWAKE_DELAY_MS, 0600) \
 	param(int, force_driver_flr, -1, 0400) \
 	param(int, enable_fatal_error_recovery, 0, 0400) \
+	param(unsigned int, wr_cr_update_freq, 0, 0400) \
+	param(unsigned int, wr_cr_bubble_duration, 0, 0400) \
 	/* leave bools at the end to not create holes */ \
 	param(bool, enable_busy_v2, false, 0400) \
 	param(bool, allow_non_persist_without_reset, false, 0400) \

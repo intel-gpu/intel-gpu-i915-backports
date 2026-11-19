@@ -340,7 +340,11 @@ static void vma_invalidate_tlb(struct i915_vma *vma)
 			}
 		}
 
-		WRITE_ONCE(obj->mm.tlb[id], seqno);
+		if (i915_gem_object_is_local(obj, &vm->i915->drm)) {
+			WRITE_ONCE(obj->mm.tlb[id], seqno);
+		} else if (seqno) { /* immediate sync across devices, avoid aliased GT tracking */
+			intel_gt_invalidate_tlb_sync(gt, seqno, true);
+		}
 	}
 }
 

@@ -372,6 +372,9 @@ static void __watchdog(struct intel_engine_cs *engine)
 	if (!(lrca & CURRENT_LRCA_VALID))
 		return;
 
+	if (atomic_read(&engine->in_pagefault))
+		return;
+
 	spin_lock_irq(&se->lock);
 	list_for_each_entry(rq, &se->requests, sched.link) {
 		struct intel_context *ce = rq->context;

@@ -1,5 +1,18 @@
 # ChangeLog
 
+## Release I915_26WW47.2_1146.104_25.2.68_250224.78
+* Adjusted TBB scaleout wakeups to use a fanout factor of two, reducing reliance on oversubscribed secondary processors while limiting unnecessary wakeups.
+* Reduced the severity of harmless intermediate messages about missing support for optional pcode write-credit configuration, warning only when a required configuration adjustment fails.
+* Fixed a null pointer dereference in the eye_margin_show() and eye_error_show() sysfs callbacks by handling kobject hierarchy differences between older and newer kernels.
+* Added small fixes for rare crashes and API glitches.
+* Improved task scheduling to reduce latency and resolve CPU soft lockups.
+* Improved GPU reset recovery and handling of concurrent page faults.
+* Added direct DMA-BUF sharing for atomic memory access across devices with compatible physical addressing.
+* Improved out-of-memory handling during metadata capture and DMA-engine lookup to prevent system crashes.
+* Improved GPU error capture for large and shared buffers.
+* Improved GPU suspend reliability and reduced device-removal delays.
+* Added configurable write-credit settings for Intel® Data Center GPU Max Series.
+
 ## Release I915_26WW25.4_1146.78_25.2.57_250224.65
 * Removed fast retirement of RPS boosting requests to fix a performance regression caused by unintentionally setting dma-latency to 0,
   which forced all CPU cores to busy-spin on idle and diverted power and thermal budget from application workloads.

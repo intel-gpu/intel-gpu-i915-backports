@@ -139,6 +139,11 @@ int i915_gem_set_caching_ioctl(struct drm_device *dev, void *data,
 	if (!obj)
 		return -ENOENT;
 
+	if (i915_gem_object_is_remote(obj, dev)) {
+		ret = -EACCES;
+		goto out;
+	}
+
 	/*
 	 * The caching mode of proxy object is handled by its generator, and
 	 * not allowed to be changed by userspace.

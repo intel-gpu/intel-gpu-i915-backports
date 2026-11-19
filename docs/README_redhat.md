@@ -47,8 +47,10 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 
 | OS Distribution | OS Version | DKMS Package Target | Binary Package Target|
 |---|---|---|---|
+| RHEL® | 10.2  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 10.1  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 10.0  | i915dkmsrpm-pkg | binrpm-pkg |
+| RHEL® | 9.8  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.7  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.6  | i915dkmsrpm-pkg | binrpm-pkg |
 | RHEL® | 9.5  | i915dkmsrpm-pkg | binrpm-pkg |
@@ -65,7 +67,7 @@ We have 2 kinds of backport packages, depending on the target OS Kernel version
 Creating i915 DKMS packages
 ```
 $ make <Build Options> <DKMS Package Target>
-Example: For RHEL9.7, RHEL10.0 and RHEL10.1
+Example: For RHEL9.8, RHEL10.0, RHEL10.1 RHEL10.2
 	$ make i915dkmsrpm-pkg
 
 	Generated package name :
@@ -81,21 +83,21 @@ Please refer [version](../versions) file to get information on the kernel versio
 Please note that DKMS installation will skip if the kernel headers are not installed.
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_10.1_KERNEL_VERSION>.el10_1.x86_64 \
-kernel-devel-<RHEL_10.1_KERNEL_VERSION>.el10_1.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_10.2_KERNEL_VERSION>.el10_2.x86_64 \
+kernel-devel-<RHEL_10.2_KERNEL_VERSION>.el10_2.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-6.12.0-124.7.1.el10_1.x86_64.rpm \
-     kernel-devel-6.12.0-124.7.1.el10_1.x86_64.rpm
+     $ sudo dnf check-update; sudo dnf install -y kernel-6.12.0-211.7.3.el10_2.x86_64.rpm \
+     kernel-devel-6.12.0-211.7.3.el10_2.x86_64.rpm
 ```
 
 ```
-$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.7_KERNEL_VERSION>.el9_7.x86_64 \
-kernel-devel-<RHEL_9.7_KERNEL_VERSION>.el9_7.x86_64
+$ sudo dnf check-update; sudo dnf install -y kernel-<RHEL_9.8_KERNEL_VERSION>.el9_8.x86_64 \
+kernel-devel-<RHEL_9.8_KERNEL_VERSION>.el9_8.x86_64
 
 Example:
-     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-611.5.1.el9_7.x86_64 \
-     kernel-devel-5.14.0-611.5.1.el9_7.x86_64
+     $ sudo dnf check-update; sudo dnf install -y kernel-5.14.0-687.5.3.el9_8.x86_64 \
+     kernel-devel-5.14.0-687.5.3.el9_8.x86_64
 ```
 
 ```

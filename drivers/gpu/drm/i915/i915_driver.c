@@ -868,6 +868,8 @@ static void i915_driver_late_release(struct drm_i915_private *dev_priv)
 	i915_gem_flush_free_objects(dev_priv);
 	i915_workqueues_cleanup(dev_priv);
 
+	intel_iaf_fini(dev_priv);
+
 	cpu_latency_qos_remove_request(&dev_priv->sb_qos);
 	mutex_destroy(&dev_priv->sb_lock);
 
@@ -1372,11 +1374,13 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(CLEAR_ON_CREATE),
 		C(CLEAR_ON_FREE),
 		C(CLEAR_ON_IDLE),
+		C(DIRECT_DMABUF),
 		C(HUGEFAULT),
 		C(IRQ_QOS),
 		C(MMAP_SWAP),
 		C(MMAP_SWAP_CREATE),
 		C(NUMA_ALLOC),
+		C(PARALLEL_CAPTURE),
 		C(PARALLEL_SHMEMFS),
 		C(PARALLEL_USERPTR),
 		C(PREBIND),
@@ -1388,6 +1392,7 @@ static void print_chickens(struct drm_i915_private *i915)
 		C(SMEM_IDLE),
 		C(SMEM_SPLIT),
 		C(SOFT_PG),
+		C(TBB_RENICE),
 		C(ULL_DMA_BOOST),
 		C(UPTR_IMM_2M),
 #undef C
@@ -2668,16 +2673,20 @@ static int i915_gem_vm_advise_ioctl(struct drm_device *dev, void *data,
 	int ret;
 
 	/* XXX page granularity and system allocator support not available */
-	if (!args->handle)
-		return -ENOTSUPP;
 
 	obj = i915_gem_object_lookup(file, args->handle);
 	if (!obj)
 		return -ENOENT;
 
-	ret = i915_gem_object_set_hint(obj, args);
-	i915_gem_object_put(obj);
+	if (i915_gem_object_is_remote(obj, dev)) {
+		ret = -EACCES;
+		goto out;
+	}
 
+	ret = i915_gem_object_set_hint(obj, args);
+
+out:
+	i915_gem_object_put(obj);
 	return ret;
 }
 
@@ -2708,6 +2717,11 @@ static int i915_runtime_vm_prefetch(struct drm_i915_private *i915,
 					args->start);
 	if (unlikely(range_overflows(start, args->length, vm->total))) {
 		err = -EINVAL;
+		goto out;
+	}
+
+	if (unlikely(!args->length)) {
+		err = 0;
 		goto out;
 	}
 

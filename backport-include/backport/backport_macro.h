@@ -14,6 +14,29 @@
 #define BPM_COPY_FROM_USER_INATOMIC_NOCACHE_NOT_PRESENT
 #endif
 
+#if LINUX_VERSION_IS_GEQ(6,19,0) ||				\
+	LINUX_VERSION_IN_RANGE(5,10,261, 5,11,0) ||		\
+	LINUX_VERSION_IN_RANGE(5,15,212, 5,16,0) ||		\
+	LINUX_VERSION_IN_RANGE(6,1,178, 6,2,0) ||		\
+	LINUX_VERSION_IN_RANGE(6,6,145, 6,7,0) ||		\
+	LINUX_VERSION_IN_RANGE(6,12,97, 6,13,0) ||		\
+	LINUX_VERSION_IN_RANGE(6,18,40, 6,19,0) ||              \
+	(LINUX_VERSION_IN_RANGE(6,8,0, 6,9,0) &&                \
+	 UBUNTU_BACKPORT_VERSION_IS_GEQ(147,0))
+
+/*
+ * 5528fd38f230 PCI: Fix Resizable BAR restore order
+ */
+#define BPM_PCI_RESIZE_RESOURCE_BAR_NOT_PRESENT
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,19,0)
+/*
+ * 3c0c81de525d prandom: remove next_pseudo_random32
+ */
+#define BPM_NEXT_PSEUDO_RANDOM32_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,19,0) */
+
 #if LINUX_VERSION_IS_GEQ(6,18,7)
 /*
  * b3039c526f3e mm: introduce deferred freeing for kernel page tables
@@ -36,12 +59,24 @@
  * c8a09fc9664f ida: remove the ida_simple_xxx() API
  */
 #define BPM_IDA_SIMPLE_GET_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,18,0) */
 
+#if LINUX_VERSION_IS_GEQ(6,18,0) || \
+	REDHAT_RELEASE_VERSION_IS_RANGE(9,8, 9,255) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(10,2)
 /*
  * 34ac58ded89d drm/i915: Drop unused struct_mutex from drm_i915_private
  */
 #define BPM_DRM_STRUCT_MUTEX_NOT_PRESENT
-#endif /* LINUX_VERSION_IS_GEQ(6,18,0) */
+#endif /* LINUX_VERSION_IS_GEQ(6,18,0) || ...*/
+
+#if LINUX_VERSION_IS_GEQ(6,17,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(10,2)
+/*
+ * 2489e958129f relayfs: abolish prev_padding
+ */
+#define BPM_SUBBUF_START_PREV_PADDING_ARG_NOT_PRESENT
+#endif
 
 #if LINUX_VERSION_IS_GEQ(6,17,0)
 /*
@@ -62,11 +97,6 @@
  * fs: change write_begin/write_end interface to take struct kiocb *
  */
 #define BPM_WRITE_BEGIN_STRUCT_FILE_MEMBER_NOT_PRESENT
-
-/*
- * 2489e958129f relayfs: abolish prev_padding
- */
-#define BPM_SUBBUF_START_PREV_PADDING_ARG_NOT_PRESENT
 
 /*
  * 1174bf15bd60 drm/connector: move HDR sink metadata to display info
@@ -100,33 +130,50 @@
 #define BPM_PFN_T_HEADER_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,17,0) */
 
-#if LINUX_VERSION_IS_GEQ(6,16,0)
+#if LINUX_VERSION_IS_GEQ(6,16,0) || \
+        REDHAT_RELEASE_VERSION_IS_RANGE(9,8, 9,255) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,2)
 /*
  * e86e43907f94 timers: Rename init_timer_key() as timer_init_key()
  */
 #define BPM_SETUP_TIMER_NOT_PRESENT
-/*
- * d82d3bf41152 mm: pass mm down to pagetable_{pte,pmd}_ctor
- */
-#define BPM_PAGETABLE_CTOR_STRUCT_MM_INIT_MM_ARG_NOT_PRESENT
+#endif /* LINUX_VERSION_IS_GEQ(6,16,0) ... */
+
+#if LINUX_VERSION_IS_GEQ(6,16,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(10,2)
 /*
  * 97d06802d10a
  * sysfs: constify bin_attribute argument of bin_attribute::read/write()
  */
 #define BPM_STRUCT_BIN_ATTRIBUTE_READ_CONST_IS_PRESENT
 /*
- * acc53a0b4c15 mm: rename page->index to page->__folio_index
- */
-#define BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
-/*
  * 78bf44de47b3 ratelimit: Convert the ->missed field to atomic_t
  */
 #define BPM_RATELIMIT_MISSED_FIELD_IS_ATOMIC
+#endif
+
+#if LINUX_VERSION_IS_GEQ(6,16,0)
+/*
+ * d82d3bf41152 mm: pass mm down to pagetable_{pte,pmd}_ctor
+ */
+#define BPM_PAGETABLE_CTOR_STRUCT_MM_INIT_MM_ARG_NOT_PRESENT
+/*
+ * acc53a0b4c15 mm: rename page->index to page->__folio_index
+ */
+#define BPM_STRUCT_PAGE_INDEX_MEMBER_NOT_PRESENT
 /*
  * 6aa63a4ec947 iommu: Sort out domain user data
  */
 #define BPM_DOMAIN_IOVA_COOKIE_NOT_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(6,16,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,15,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,2)
+/*
+ * 82ad584eed8 drm/i915/pmu: Switch to use hrtimer_setup()
+ */
+#define BPM_HRTIMER_INIT_NOT_PRESENT
+#endif
 
 #if LINUX_VERSION_IS_GEQ(6,15,0)
 /*
@@ -134,10 +181,6 @@
  */
 #define BPM_DEL_TIMER_NOT_PRESENT
 
-/*
- * 82ad584eed8 drm/i915/pmu: Switch to use hrtimer_setup()
- */
-#define BPM_HRTIMER_INIT_NOT_PRESENT
 /*
  * 26d6fd81916e drm/connector: make mode_valid take a const struct drm_display_mode
  */
@@ -176,7 +219,8 @@
 #endif /* LINUX_VERSION_IS_GEQ(6,14,0) */
 
 #if LINUX_VERSION_IS_GEQ(6,14,0) || \
-        REDHAT_RELEASE_VERSION_IS_GEQ(10,1)
+        REDHAT_RELEASE_VERSION_IS_GEQ(10,1) || \
+        REDHAT_RELEASE_VERSION_IS_RANGE(9,8, 9,255)
 /*
  * f1e8bf56320a driver core: Constify API device_find_child()
  * and adapt for various usages
@@ -278,17 +322,20 @@
 #define BPM_PAGE_MAPPING_NOT_PRESENT
 
 /*
- * d69d80484598
- * driver core: have match() callback in struct bus_type take a const *
- */
-#define BPM_MEI_CL_DEVICE_MATCH_CONST_ARG_NOT_PRESENT
-
-/*
  * acc154691fc7 sysctl: Warn on an empty procname element
  */
 #define BPM_EMPTY_OA_CTL_TABLE_PRESENT
 
 #endif /* LINUX_VERSION_IS_GEQ(6,11,0) */
+
+#if LINUX_VERSION_IS_GEQ(6,11,0) || \
+	REDHAT_RELEASE_VERSION_IS_GEQ(9,8)
+/*
+ * d69d80484598
+ * driver core: have match() callback in struct bus_type take a const *
+ */
+#define BPM_MEI_CL_DEVICE_MATCH_CONST_ARG_NOT_PRESENT
+#endif
 
 #if LINUX_VERSION_IS_GEQ(6,10,0) || \
         REDHAT_RELEASE_VERSION_IS_GEQ(9,7)
@@ -952,11 +999,6 @@
 #define BPM_DMA_RESV_ADD_EXCL_FENCE_NOT_PRESENT
 
 /*
- * c8d4c18bfbc4 dma-buf/drivers: make reserving a shared slot mandatory v4
- */
-#define BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
-
-/*
  * 644edf52b630 drm/display: Move SCDC helpers into display-helper library
  */
 #define BPM_DISPLAY_DRM_SCDC_HELPER_PRESENT
@@ -996,6 +1038,17 @@
  */
 #define BPM_DRM_DP_HELPER_DIR_DP_PRESENT
 #endif /* LINUX_VERSION_IS_GEQ(5,19,0) */
+
+#if (LINUX_VERSION_IS_GEQ(5,19,0) || \
+        LINUX_VERSION_IN_RANGE(5,15,217, 5,16,0) || \
+        REDHAT_RELEASE_VERSION_IS_GEQ(9,1) || \
+        SUSE_RELEASE_VERSION_IS_GEQ(1,15,5,0))
+/*
+ * bd85161b74a2 dma-buf/drivers: make reserving a shared slot mandatory v4
+ *
+ */
+#define BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
+#endif /* (LINUX_VERSION_IS_GEQ(5,19,0) || LINUX_VERSION_IN_RANGE(5,15,217, 5,16,0) ... */
 
 #if LINUX_VERSION_IS_LESS(5,19,0)
 /*
@@ -1466,6 +1519,15 @@
 #endif
 
 #if LINUX_VERSION_IS_LESS(5,14,0)
+#if !(REDHAT_RELEASE_VERSION_IS_LESS(9,0))
+/*
+ * 2f064a59a11f sched: Change task_struct::state
+ */
+#define BPM_TASK_STRUCT_STATE_MEMBER_NOT_PRESENT
+#endif
+#endif
+
+#if LINUX_VERSION_IS_LESS(5,14,0)
 /*
  * 1eb5dde674f5 cpufreq: CPPC: Add support for frequency invariance
  */
@@ -1602,6 +1664,11 @@
  * around unbinding" and deps
  */
 #define BPM_MIGHT_ALLOC_NOT_PRESENT
+
+/*
+ * 15115830c887 preempt: Cleanup the macro maze a bit
+ */
+#define BPM_IN_HARDIRQ_NOT_PRESENT
 
 /*
  * 476c5818c37a llist: Add nonatomic __llist_add() and __llist_dell_all()
@@ -2423,6 +2490,14 @@
 
 /* Align Header path between i915-include and drm-include */
 #define BPM_HEADER_PATH_ALIGN
+
+#if REDHAT_RELEASE_VERSION_IS_LESS(9,0)
+/*
+ * Introduced in DII_7778
+ * b2cadf85f1f7 Add sysfs entries to track MDFI eye margin errors
+ */
+#define BPM_KOBJ_PARENT_FOR_DEVICE
+#endif
 
 #if (REDHAT_RELEASE_VERSION_IS_LESS(9,0) || \
 	CUSTOM_KERN_1_RELEASE_VERSION_IS_GEQ(8,6656) || \

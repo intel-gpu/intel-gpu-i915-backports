@@ -1140,24 +1140,55 @@ static void ct_process_request(struct intel_guc_ct *ct, struct ct_incoming_msg *
 	}
 }
 
+static inline struct llist_node *llist_mark_head(struct llist_head *head)
+{
+	return xchg(&head->first, ERR_PTR(-1));
+}
+
+static struct llist_node *llist_reverse_mark(struct llist_node *head)
+{
+	struct llist_node *new_head = NULL;
+
+	while (!IS_ERR_OR_NULL(head)) {
+		struct llist_node *tmp = head;
+
+		head = head->next;
+		tmp->next = new_head;
+		new_head = tmp;
+	}
+
+	return new_head;
+}
+
+static inline bool llist_mark_done(struct llist_head *head)
+{
+	struct llist_node *old = ERR_PTR(-1);
+
+	return try_cmpxchg(&head->first, &old, NULL);
+}
+
 static void ct_incoming_request(struct i915_tbb *self)
 {
 	struct intel_guc_ct *ct = container_of(self, typeof(*ct), requests.tbb);
-	struct llist_node *ll;
 
-	while ((ll = llist_del_all(&ct->requests.incoming))) {
+	do {
 		struct ct_incoming_msg *rq, *n;
+		struct llist_node *ll;
 
-		llist_for_each_entry_safe(rq, n, llist_reverse_order(ll), link) {
+		ll = llist_mark_head(&ct->requests.incoming);
+		if (IS_ERR(ll)) /* another thread is running */
+			return;
+
+		llist_for_each_entry_safe(rq, n, llist_reverse_mark(ll), link) {
 			ct_process_request(ct, rq);
 			ct_free_msg(rq);
 		}
 
-		if (!llist_empty(&ct->requests.incoming))
-			cond_resched();
-
+		cond_resched();
 		intel_guc_ct_receive(ct);
-	}
+	} while (!llist_mark_done(&ct->requests.incoming));
+
+	wake_up_var(&ct->requests.incoming); /* kick reset */
 }
 
 static int guc_action_tlb_invalidation_done(struct intel_guc *guc, const u32 *msg, u32 len)
@@ -1310,8 +1341,8 @@ void intel_guc_ct_reset(struct intel_guc_ct *ct)
 	synchronize_rcu_expedited();
 
 	/* Finish processing the messages */
-	i915_tbb_cancel_task(&ct->requests.tbb);
 	ct_incoming_request(&ct->requests.tbb);
+	wait_var_event(&ct->requests.incoming, llist_empty(&ct->requests.incoming));
 }
 
 /*

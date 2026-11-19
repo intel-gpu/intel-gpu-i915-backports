@@ -148,26 +148,22 @@ struct attn_read_iter {
 static int read_eu_attentions_ss_fw(struct intel_gt *gt, void *data,
 				    unsigned int group, unsigned int instance, bool present)
 {
-	struct attn_read_iter * const iter = data;
+	struct attn_read_iter * const it = data;
 	unsigned int row;
 
 	for (row = 0; row < TD_EU_ATTENTION_MAX_ROWS; row++) {
 		u32 val;
 
-		if (iter->i >= iter->size)
-			return 0;
-
-		if (GEM_WARN_ON((iter->i + sizeof(val)) >
-				(intel_gt_eu_attention_bitmap_size(gt))))
-			return -EIO;
+		if (it->i + sizeof(val) > it->size)
+			return 1;
 
 		if (present)
 			val = intel_gt_mcr_read_fw(gt, TD_ATT(row), group, instance);
 		else
 			val = 0;
 
-		memcpy(&iter->bits[iter->i], &val, sizeof(val));
-		iter->i += sizeof(val);
+		memcpy(&it->bits[it->i], &val, sizeof(val));
+		it->i += sizeof(val);
 	}
 
 	return 0;
@@ -177,19 +173,49 @@ int intel_gt_eu_attention_bitmap(struct intel_gt *gt,
 				 u8 *bits,
 				 unsigned int bitmap_size)
 {
-	struct attn_read_iter iter = {
+	struct attn_read_iter it = {
 		.gt = gt,
 		.i = 0,
-		.size = bitmap_size,
+		.size = min_t(unsigned int, bitmap_size, intel_gt_eu_attention_bitmap_size(gt)),
 		.bits = bits
 	};
 
-	intel_gt_for_each_compute_slice_subslice(gt,
-						 read_eu_attentions_ss_fw,
-						 &iter);
+	intel_gt_for_each_compute_slice_subslice(gt, read_eu_attentions_ss_fw, &it);
+	return bitmap_weight((unsigned long *)bits, it.size * BITS_PER_BYTE);
+}
 
+static int read_eu_status_ss_fw(struct intel_gt *gt, void *data,
+                               unsigned int group, unsigned int instance, bool present)
+{
+	struct attn_read_iter * const it = data;
+	u64 threads = 0;
+
+	if (it->i + sizeof(threads) > it->size)
+		return 1;
+
+	if (present) {
+		threads = intel_gt_mcr_read_fw(gt, TLD_THR_STATUS1, group, instance);
+		threads <<= 32;
+		threads |= intel_gt_mcr_read_fw(gt, TLD_THR_STATUS0, group, instance);
+	}
+
+	memcpy(&it->bits[it->i], &threads, sizeof(threads));
+	it->i += sizeof(threads);
 	return 0;
 }
+
+int intel_gt_eu_status_bitmap(struct intel_gt *gt, u8 *bits, unsigned int size)
+{
+       struct attn_read_iter it = {
+               .gt = gt,
+               .size = min_t(unsigned int, size, intel_gt_eu_attention_bitmap_size(gt)),
+               .bits = bits
+       };
+
+       intel_gt_for_each_compute_slice_subslice(gt, read_eu_status_ss_fw, &it);
+       return bitmap_weight((unsigned long *)bits, it.size * BITS_PER_BYTE);
+}
+
 
 int intel_gt_invalidate_l3_mmio(struct intel_gt *gt)
 {
@@ -273,4 +299,65 @@ int intel_gt_eu_threads_needing_attention(struct intel_gt* gt)
 	return intel_gt_for_each_compute_slice_subslice(gt,
 							read_first_attention_ss_fw,
 							NULL);
+}
+
+static int row_instdone_fw(struct intel_gt *gt, void *data,
+			   unsigned int group, unsigned int instance, bool present)
+{
+	i915_mcr_reg_t instdone;
+
+	instdone = XEHPC_ROW_INSTDONE;
+	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 60))
+		instdone = GEN8_ROW_INSTDONE;
+
+	if (present && (intel_gt_mcr_read_fw(gt, instdone, group, instance) & XEHPC_IC_DONE) == 0)
+		return 1;
+
+	return 0;
+}
+
+bool intel_gt_eu_idle(struct intel_gt *gt)
+{
+	/* Check IC done on all DSS. IC done indicates EU is done executing WL. */
+	return !intel_gt_for_each_compute_slice_subslice(gt, row_instdone_fw, NULL);
+}
+
+static int threads_dispatched_fw(struct intel_gt *gt, void *data,
+				 unsigned int group, unsigned int instance, bool present)
+{
+	int *count = data;
+
+	if (present)
+		*count += intel_gt_mcr_read_fw(gt, TDL_THR_DISP_COUNT, group, instance);
+
+	return 0;
+}
+
+int intel_gt_eu_threads_dispatched(struct intel_gt *gt)
+{
+	int count = 0;
+
+	intel_gt_for_each_compute_slice_subslice(gt, threads_dispatched_fw, &count);
+
+	return count;
+}
+
+static int threads_faulted_fw(struct intel_gt *gt, void *data,
+			      unsigned int group, unsigned int instance, bool present)
+{
+	int *count = data;
+
+	if (present)
+		*count += intel_gt_mcr_read_fw(gt, TDL_THR_PF_COUNT, group, instance) & 63;
+
+	return 0;
+}
+
+int intel_gt_eu_threads_faulted(struct intel_gt *gt)
+{
+	int count = 0;
+
+	intel_gt_for_each_compute_slice_subslice(gt, threads_faulted_fw, &count);
+
+	return count;
 }

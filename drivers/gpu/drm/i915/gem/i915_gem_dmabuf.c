@@ -289,7 +289,7 @@ static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf,
 		return -EINVAL;
 
 	i915_gem_object_get(obj);
-	mmo = i915_gem_mmap_offset_attach(obj, I915_MMAP_TYPE_WC, NULL);
+	mmo = i915_gem_mmap_offset_attach(obj->base.dev, obj, I915_MMAP_TYPE_WC, NULL);
 	if (IS_ERR(mmo)) {
 		err = PTR_ERR(mmo);
 		goto out;
@@ -574,8 +574,7 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 {
 	struct drm_i915_gem_object *obj = to_intel_bo(gem_obj);
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
-	struct i915_gem_ww_ctx ww;
-	struct dma_buf *dmabuf = NULL;
+	struct dma_buf *dmabuf;
 	int err;
 
 	if (obj->vm) {
@@ -584,54 +583,21 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 		return ERR_PTR(-EINVAL);
 	}
 
-	/*
-	 * Hold the object lock so the EPERM check below is not circumvented
-	 * by concurrent prime_export and vm_madvise usage.
-	 */
-	for_i915_gem_ww(&ww, err, true) {
-		err = i915_gem_object_lock(obj, &ww);
+	if (obj->ops->dmabuf_export) {
+		err = obj->ops->dmabuf_export(obj);
 		if (err)
-			continue;
-
-		/*
-		 * We don't allow exporting BOs if LMEM + SMEM placement and
-		 * the ATOMIC_SYSTEM hint is set. The complexity of supporting
-		 * migration with multi-device atomics has not been solved.
-		 */
-		if (i915_gem_object_allows_atomic_system(obj) &&
-		    obj->memory_mask & REGION_LMEM &&
-		    obj->memory_mask & REGION_SMEM) {
-			err = -EPERM;
-			continue;
-		}
-
-		exp_info.ops = &i915_dmabuf_ops;
-		exp_info.size = gem_obj->size;
-		if (obj->pair)
-			exp_info.size += obj->pair->base.size;
-		exp_info.flags = flags;
-		exp_info.priv = gem_obj;
-		exp_info.resv = obj->base.resv;
-
-		if (obj->ops->dmabuf_export) {
-			err = obj->ops->dmabuf_export(obj);
-			if (err)
-				continue;
-		}
-
-		dmabuf = drm_gem_dmabuf_export(gem_obj->dev, &exp_info);
-		/*
-		 * gem_obj->dma_buf is set in the caller upon return, but we
-		 * set here with the object lock held, so that the check for
-		 * gem_object_is_exported() in __i915_gem_object_set_hint()
-		 * correctly sees if BO is exported or not.
-		 */
-		if (!IS_ERR(dmabuf))
-			gem_obj->dma_buf = dmabuf;
+			return ERR_PTR(err);
 	}
 
-	if (err)
-		dmabuf =  ERR_PTR(err);
+	exp_info.ops = &i915_dmabuf_ops;
+	exp_info.size = gem_obj->size;
+	if (obj->pair)
+		exp_info.size += obj->pair->base.size;
+	exp_info.flags = flags;
+	exp_info.priv = gem_obj;
+	exp_info.resv = obj->base.resv;
+
+	dmabuf = drm_gem_dmabuf_export(gem_obj->dev, &exp_info);
 	/* not possible, placed here so static checker doesn't complain */
 	GEM_BUG_ON(!dmabuf);
 
@@ -825,24 +791,98 @@ static const struct dma_buf_attach_ops i915_dmabuf_attach_ops = {
 	.move_notify = i915_dmabuf_move_notify,
 };
 
+static bool __has_iaf(struct drm_i915_private *src, u32 dst)
+{
+	struct query_info *qi;
+	int i;
+
+	qi = src->intel_iaf.ops->connectivity_query(src->intel_iaf.handle, dst);
+	if (IS_ERR(qi))
+		return false;
+
+	for (i = qi->src_cnt * qi->dst_cnt; i--;)
+		if (!qi->sd2sd[i].bandwidth)
+			break;
+
+	kfree(qi);
+	return i < 0;
+}
+
+static bool has_iaf(struct drm_i915_gem_object *obj, struct drm_device *dev)
+{
+	struct drm_i915_private *src = to_i915(obj->base.dev);
+	u32 dst = to_i915(dev)->intel_iaf.fabric_id;
+	void *result;
+
+	if (src->intel_iaf.index == -ENODEV)
+		return false;
+
+	result = xa_load(&src->intel_iaf.connected, dst);
+	if (!result) {
+		result = xa_mk_value(0);
+		if (__has_iaf(src, dst))
+			result = dev;
+		xa_store(&src->intel_iaf.connected, dst, result, GFP_KERNEL);
+	}
+
+	return !xa_is_value(result);
+}
+
+static bool share_iommu(struct drm_i915_gem_object *obj, struct drm_device *dev)
+{
+	return get_iommu_domain(obj->base.dev->dev) == get_iommu_domain(dev->dev);
+}
+
+static bool has_direct_access(struct drm_i915_gem_object *obj, struct drm_device *dev)
+{
+	if (I915_SELFTEST_ONLY(force_different_devices))
+		return false;
+
+	if (dev == obj->base.dev)
+		return true;
+
+	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_DIRECT_DMABUF))
+		return false;
+
+	if (obj->memory_mask & REGION_LMEM && !has_iaf(obj, dev))
+		return false;
+
+	if (obj->memory_mask & REGION_SMEM && !share_iommu(obj, dev))
+		return false;
+
+	return true;
+}
+
 struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 					     struct dma_buf *dma_buf)
 {
+	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
+	const struct dma_buf_attach_ops *ops = NULL;
 	struct dma_buf_attachment *attach;
-	struct drm_i915_gem_object *obj;
 
-	/* is this one of own objects? */
 	if (dma_buf->ops == &i915_dmabuf_ops) {
-		obj = dma_buf_to_obj(dma_buf);
-		/* is it from our device? */
-		if (obj->base.dev == dev &&
-		    !I915_SELFTEST_ONLY(force_different_devices)) {
-			/*
-			 * Importing dmabuf exported from out own gem increases
-			 * refcount on gem itself instead of f_count of dmabuf.
-			 */
+		if (has_direct_access(obj, dev)) {
+			if (obj->base.dev != dev){
+				mutex_unlock(&dev->object_name_lock);
+				mutex_lock(&obj->base.dev->object_name_lock);
+			}
 			return &i915_gem_object_get(obj)->base;
 		}
+
+		/*
+		 * We don't allow exporting BOs if LMEM + SMEM placement and
+		 * the ATOMIC_SYSTEM hint is set. The complexity of supporting
+		 * migration with multi-device atomics has not been solved.
+		 */
+		if (i915_gem_object_allows_atomic_system(obj) &&
+		    obj->memory_mask & REGION_LMEM &&
+		    obj->memory_mask & REGION_SMEM)
+			return ERR_PTR(-EACCES);
+
+		if (i915_gem_object_allows_atomic_device(obj) &&
+		    obj->memory_mask & REGION_LMEM &&
+		    !has_iaf(obj, dev))
+			return ERR_PTR(-EACCES);
 	}
 
 	if (i915_gem_object_size_2big(dma_buf->size))
@@ -857,12 +897,10 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	obj->base.resv = dma_buf->resv;
 
 	/* and attach the object */
-	if (to_i915(obj->base.dev)->params.prelim_override_p2p_dist & I915_MOVE_NOTIFY_ENABLE)
-		attach = dma_buf_dynamic_attach(dma_buf, dev->dev,
-						&i915_dmabuf_attach_ops, obj);
-	else
-		attach = dma_buf_dynamic_attach(dma_buf, dev->dev, NULL, obj);
+	if (to_i915(dev)->params.prelim_override_p2p_dist & I915_MOVE_NOTIFY_ENABLE)
+		ops = &i915_dmabuf_attach_ops;
 
+	attach = dma_buf_dynamic_attach(dma_buf, dev->dev, ops, obj);
 	if (IS_ERR(attach)) {
 		i915_gem_object_put(obj);
 		return ERR_CAST(attach);

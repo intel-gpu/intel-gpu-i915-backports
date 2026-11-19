@@ -28,6 +28,11 @@ static int switch_to_context(struct i915_gem_context *ctx)
 	for_each_gem_engine(ce, i915_gem_context_lock_engines(ctx), it) {
 		struct i915_request *rq;
 
+		if (intel_gt_is_wedged(ce->engine->gt)) {
+			err = -EIO;
+			break;
+		}
+
 		rq = intel_context_create_request(ce);
 		if (IS_ERR(rq)) {
 			err = PTR_ERR(rq);

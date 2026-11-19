@@ -27,7 +27,11 @@
 
 struct drm_i915_private;
 struct i915_page_compress;
+struct i915_sw_fence;
+struct i915_vma;
 struct intel_engine_capture_vma;
+struct intel_engine_coredump;
+struct scatterlist;
 
 struct i915_compressed_pages {
 	int num_pages;
@@ -281,6 +285,9 @@ struct i915_gpu_coredump {
 		int type;
 		int level;
 		int access;
+
+		int dispatched;
+		int faulted;
 	} fault;
 
 	struct intel_device_info device_info;
@@ -365,28 +372,39 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_
 struct i915_gpu_coredump *
 i915_gpu_coredump_create_for_engine(struct intel_engine_cs *engine, gfp_t gfp);
 
-struct intel_engine_capture_vma *
-intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
-				  struct i915_request *rq,
-				  struct intel_engine_capture_vma *vma,
-				  gfp_t gfp,
-				  struct i915_page_compress *compress);
+struct intel_engine_capture_vma {
+	u32 prng;
+	int level;
+	struct __intel_engine_capture_vma {
+		struct intel_engine_coredump *ee;
+		struct i915_vma *vma;
+		struct scatterlist *pages;
+		char name[16];
+		union {
+			struct __intel_engine_capture_vma *next[11];
+			struct {
+				struct i915_tbb tbb;
+				struct i915_sw_fence *fence;
+			};
+		};
+	} sentinel;
+};
 
-void intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture,
-				   struct i915_page_compress *compress);
+void intel_engine_capture_vma_init(struct intel_engine_capture_vma *vma);
+bool intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
+				       struct i915_request *rq,
+				       struct intel_engine_capture_vma *vma,
+				       gfp_t gfp);
+void intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture);
+void intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
+					 struct i915_request *rq,
+					 struct intel_engine_capture_vma *capture,
+					 gfp_t gfp);
 
-struct intel_engine_capture_vma *
-intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
-				    struct i915_request *rq,
-				    struct intel_engine_capture_vma *capture,
-				    gfp_t gfp,
-				    struct i915_page_compress *compress);
-
-struct i915_page_compress *
-i915_vma_capture_prepare(struct intel_gt_coredump *gt);
-
-void i915_vma_capture_finish(struct intel_gt_coredump *gt,
-			     struct i915_page_compress *compress);
+static inline bool intel_engine_capture_vma_exists(const struct intel_engine_capture_vma *capture)
+{
+	return capture->level >= 0;
+}
 
 void i915_error_state_store(struct i915_gpu_coredump *error);
 
@@ -436,6 +454,8 @@ int intel_eu_attentions_read(struct intel_gt *gt,
 
 #else
 
+struct intel_engine_capture_vma {};
+
 __printf(2, 3)
 static inline void
 i915_error_printf(struct drm_i915_error_state_buf *e, const char *f, ...)
@@ -471,43 +491,32 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_
 	return NULL;
 }
 
-static inline struct intel_engine_capture_vma *
+static inline void intel_engine_capture_vma_init(struct intel_engine_capture_vma *vma) {}
+
+static inline bool
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  struct i915_request *rq,
 				  struct intel_engine_capture_vma *capture,
-				  gfp_t gfp,
-				  struct i915_page_compress *compress)
+				  gfp_t gfp)
 {
-	return capture;
+	return false;
 }
 
 static inline void
-intel_engine_coredump_add_vma(struct intel_engine_coredump *ee,
-			      struct intel_engine_capture_vma *capture,
-			      struct i915_page_compress *compress)
+intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture)
 {
 }
 
-static inline struct intel_engine_capture_vma *
+static inline void
 intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
 				    struct i915_request *rq,
 				    struct intel_engine_capture_vma *capture,
-				    gfp_t gfp,
-				    struct i915_page_compress *compress)
-{
-	return capture;
-}
+				    gfp_t gfp) {}
+static inline void intel_gt_coredump_record_attentions(struct intel_gt_coredump *gc) {}
 
-static inline struct i915_page_compress *
-i915_vma_capture_prepare(struct intel_gt_coredump *gt)
+static inline bool intel_engine_capture_vma_exists(const struct intel_engine_capture_vma *capture)
 {
-	return NULL;
-}
-
-static inline void
-i915_vma_capture_finish(struct intel_gt_coredump *gt,
-			struct i915_page_compress *compress)
-{
+	return false;
 }
 
 static inline void
@@ -565,11 +574,12 @@ static inline void i915_uuid_put(struct i915_uuid_resource *uuid_res)
 {
 }
 
-static inline void
+static inline int
 intel_eu_attentions_read(struct intel_gt *gt,
 			 struct intel_eu_attentions *a,
 			 const unsigned int settle_time_ms)
 {
+	return 0;
 }
 
 #endif /* IS_ENABLED(CPTCFG_DRM_I915_CAPTURE_ERROR) */

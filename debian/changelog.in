@@ -1,3 +1,9 @@
+pkg-name (1.25.2.68.250224.78.6.8.0-147) UNRELEASED; urgency=low
+
+  New driver source to I915_25.2 against 6.8-generic
+
+ -- Intel Linux Graphics Team <linux-graphics@intel.com>  Tue, 03 Nov 2026 19:31:42 +0000
+
 pkg-name (1.25.2.57.250224.65.6.8.0-130) UNRELEASED; urgency=low
 
   New driver source to I915_25.2 against 6.8-generic

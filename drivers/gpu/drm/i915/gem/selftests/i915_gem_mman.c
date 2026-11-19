@@ -83,7 +83,7 @@ static bool assert_mmap_offset(struct drm_i915_private *i915,
 	if (IS_ERR(obj))
 		return expected && expected == PTR_ERR(obj);
 
-	mmo = i915_gem_mmap_offset_attach(obj, I915_MMAP_TYPE_GTT, NULL);
+	mmo = i915_gem_mmap_offset_attach(&i915->drm, obj, I915_MMAP_TYPE_GTT, NULL);
 
 	i915_gem_object_put(obj);
 
@@ -187,7 +187,7 @@ static int igt_mmap_offset_exhaustion(void *arg)
 		goto out;
 	}
 
-	err = __assign_mmap_offset(obj, I915_MMAP_TYPE_GTT, &offset, NULL);
+	err = __assign_mmap_offset(&i915->drm, obj, I915_MMAP_TYPE_GTT, &offset, NULL);
 	if (err) {
 		pr_err("Unable to insert object into reclaimed hole\n");
 		goto err_obj;
@@ -318,7 +318,7 @@ static int __igt_mmap(struct drm_i915_private *i915,
 	if (err)
 		return err;
 
-	err = __assign_mmap_offset(obj, type, &offset, NULL);
+	err = __assign_mmap_offset(&i915->drm, obj, type, &offset, NULL);
 	if (err)
 		return err;
 
@@ -446,7 +446,7 @@ static int __igt_mmap_access(struct drm_i915_private *i915,
 	if (!can_mmap(obj, type) || !can_access(obj))
 		return 0;
 
-	err = __assign_mmap_offset(obj, type, &offset, NULL);
+	err = __assign_mmap_offset(&i915->drm, obj, type, &offset, NULL);
 	if (err)
 		return err;
 
@@ -555,7 +555,7 @@ static int __igt_mmap_gpu(struct drm_i915_private *i915,
 	if (err)
 		return err;
 
-	err = __assign_mmap_offset(obj, type, &offset, NULL);
+	err = __assign_mmap_offset(&i915->drm, obj, type, &offset, NULL);
 	if (err)
 		return err;
 
@@ -729,7 +729,7 @@ static int __igt_mmap_revoke(struct drm_i915_private *i915,
 	if (!can_mmap(obj, type))
 		return 0;
 
-	err = __assign_mmap_offset(obj, type, &offset, NULL);
+	err = __assign_mmap_offset(&i915->drm, obj, type, &offset, NULL);
 	if (err)
 		return err;
 

@@ -15,7 +15,10 @@
 
 #include "gt/intel_engine.h"
 #include "gt/intel_gt.h"
+#include "gt/intel_gt_debug.h"
+#include "gt/intel_gt_mcr.h"
 #include "gt/intel_gt_pm.h"
+#include "gt/intel_gt_regs.h"
 #include "gt/intel_timeline.h"
 #include "gt/intel_tlb.h"
 
@@ -227,6 +230,10 @@ static void show_gt(struct intel_gt *gt, struct drm_printer *p, int indent)
 		 intel_sseu_subslice_total(&gt->info.sseu),
 		 gt->info.sseu.eu_per_subslice,
 		 gt->info.sseu.eu_total);
+	i_printf(p, indent, "TDL: { control: %x, EU threads: %u, EU faulted: %u }\n",
+		 intel_gt_mcr_read_any(gt, TD_CTL),
+		 intel_gt_eu_threads_dispatched(gt),
+		 intel_gt_eu_threads_faulted(gt));
 
 	with_intel_gt_pm_if_awake(gt, wakeref)
 		intel_guc_print_info(&gt->uc.guc, p, indent);

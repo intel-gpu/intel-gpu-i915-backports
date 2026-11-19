@@ -521,6 +521,8 @@ void intel_gt_suspend_late(struct intel_gt *gt)
 	}
 
 	gt_sanitize(gt, false); /* Be paranoid, remove all residual GPU state */
+	if (intel_gt_pm_wait_for_idle(gt, I915_GEM_IDLE_TIMEOUT))
+		gt_err(gt, "Failed to idle on suspend\n");
 
 	GT_TRACE(gt, "\n");
 }

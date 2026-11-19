@@ -253,9 +253,9 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 	}
 
 	if [ -n "$CUSTOM_KERN_ID" ]; then
-	MAKE="\$DMA_BUF_SYMBOLS export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID"
+	MAKE="\$DMA_BUF_SYMBOLS export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE CUSTOM_KERN_ID=$CUSTOM_KERN_ID; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/build/"
 	else
-	MAKE="\$DMA_BUF_SYMBOLS export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE"
+	MAKE="\$DMA_BUF_SYMBOLS export LEX=flex; export YACC=bison; cp defconfigs/$MAKE_DEFCONFIG .config; 'make' -j\$(num_cpu_cores) BUILD_CONFIG=$BUILD_TYPE KLIB=/lib/modules/\$kernelver olddefconfig; 'make' -j\$(num_cpu_cores) KLIB=/lib/modules/\$kernelver BUILD_CONFIG=$BUILD_TYPE; mkdir -p \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/build/;  cp Module.symvers \$dkms_tree/$PKG_NAME/$PKG_VER/\$kernelver/build/"
 	fi
 
 	CLEAN="export LEX=flex; export YACC=bison; 'make' mrproper"

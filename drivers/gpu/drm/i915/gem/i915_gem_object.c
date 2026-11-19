@@ -478,13 +478,6 @@ int i915_gem_object_set_hint(struct drm_i915_gem_object *obj,
 	struct i915_gem_ww_ctx ww;
 	int err = 0;
 
-	/*
-	 * Don't allow hints for imported objects (backing store decisions
-	 * owned by the export side).
-	 */
-	if (obj->base.import_attach)
-		return -EPERM;
-
 	/* Object chunk-granular hints specified with args->[start,length] */
 	if (args->start || args->length) {
 		unsigned long num_segments;
@@ -692,8 +685,7 @@ void __i915_gem_object_free_mmaps(struct drm_i915_gem_object *obj)
 						     &obj->mmo.offsets,
 						     offset) {
 			vma_offset_revoke_all(&mmo->vma_node);
-			drm_vma_offset_remove(obj->base.dev->vma_offset_manager,
-					      &mmo->vma_node);
+			drm_vma_offset_remove(mmo->dev->vma_offset_manager, &mmo->vma_node);
 			kfree(mmo);
 		}
 		obj->mmo.offsets = RB_ROOT;
@@ -1612,6 +1604,11 @@ int i915_gem_object_setparam_ioctl(struct drm_device *dev, void *data,
 	obj = i915_gem_object_lookup(file, args->handle);
 	if (!obj)
 		return -ENOENT;
+
+	if (i915_gem_object_is_remote(obj, dev)) {
+		ret = -EACCES;
+		goto err;
+	}
 
 	switch (lower_32_bits(args->param)) {
 	case PRELIM_I915_PARAM_MEMORY_REGIONS:

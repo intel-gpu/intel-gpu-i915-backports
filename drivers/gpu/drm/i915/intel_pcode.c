@@ -203,9 +203,63 @@ static int pcode_init_wait(struct intel_uncore *uncore, int timeout_ms)
 				 timeout_ms);
 }
 
+struct pcode_param_info {
+	const char *name;
+	unsigned int *param;
+	u32 write_cmd;
+	u32 read_cmd;
+	u32 param2;
+	u32 max;
+	u32 def;
+};
+
+/*
+ * set_and_verify_pcode_param - Write and verify a pcode mailbox parameter
+ * @uncore: pointer to intel_uncore
+ * @info: pointer to parameter metadata
+ *
+ * Checks the parameter value, skips the write if out of range, programs the
+ * value to pcode, reads back, and logs the result.
+ * Returns 0 on success or error code.
+ */
+static int set_and_verify_pcode_param(struct intel_uncore *uncore,
+				      const struct pcode_param_info *info)
+{
+	u32 val;
+	int err;
+
+	if (*info->param > info->max) {
+		dev_notice(uncore->i915->drm.dev,
+			   "Invalid value for %s (%u). Valid range: 0-%u. Default: %u. Skipping write.\n",
+			   info->name, *info->param, info->max, info->def);
+		return 0;
+	}
+
+	err = snb_pcode_write_p(uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+				info->write_cmd, info->param2, *info->param);
+	if (err)
+		return err;
+
+	err = snb_pcode_read_p(uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+			       info->read_cmd, info->param2, &val);
+	if (err)
+		return err;
+
+	if (val != *info->param)
+		dev_warn(uncore->i915->drm.dev,
+			 "Mismatch for %s: wrote %u, read back %u\n",
+			 info->name, *info->param, val);
+	else if (val != info->def)
+		dev_info(uncore->i915->drm.dev,
+			 "%s is set to %u\n", info->name, val);
+
+	return 0;
+}
+
 int intel_pcode_init(struct intel_uncore *uncore)
 {
 	int err = 0;
+	int i;
 
 	if (!IS_DGFX(uncore->i915) || IS_SRIOV_VF(uncore->i915) ||
 	    !uncore->i915->params.enable_pcode_handshake)
@@ -215,6 +269,41 @@ int intel_pcode_init(struct intel_uncore *uncore)
 		drm_notice(&uncore->i915->drm,
 			   "Waiting for HW initialisation...\n");
 		err = pcode_init_wait(uncore, 3 * 60 * 1000 /* 3 minutes! */);
+	}
+
+	if (err)
+		return err;
+
+	/*
+	 * Wa_14022085890: PVC mailbox programming for write credit update
+	 * frequency (X) and bubble duration (Y).
+	 */
+	if (IS_PONTEVECCHIO(uncore->i915)) {
+		struct pcode_param_info pvc_params[] = {
+			{
+			  "wr_cr_update_freq",
+			  &uncore->i915->params.wr_cr_update_freq,
+			  PCODE_WR_CR_UPDATE_FREQ, PCODE_RD_CR_UPDATE_FREQ,
+			  PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2,
+			  PCODE_WR_CR_UPDATE_FREQ_MAX, 0
+			},
+			{
+			  "wr_cr_bubble_duration",
+			  &uncore->i915->params.wr_cr_bubble_duration,
+			  PCODE_WR_CR_BUBBLE_DURATION, PCODE_RD_CR_BUBBLE_DURATION,
+			  PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2,
+			  PCODE_WR_CR_BUBBLE_DURATION_MAX, 0
+			}
+		};
+
+		for (i = 0; i < ARRAY_SIZE(pvc_params); ++i) {
+			int param_err = set_and_verify_pcode_param(uncore, &pvc_params[i]);
+
+			if (param_err)
+				dev_warn(uncore->i915->drm.dev,
+					 "failed to program %s (%d), continuing\n",
+					 pvc_params[i].name, param_err);
+		}
 	}
 
 	return err;

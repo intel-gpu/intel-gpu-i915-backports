@@ -14,7 +14,6 @@
 
 #include "gem/i915_gem_lmem.h"
 
-#include "iov/abi/iov_actions_prelim_abi.h"
 #include "iov/intel_iov.h"
 #include "iov/intel_iov_relay.h"
 #include "iov/intel_iov_utils.h"

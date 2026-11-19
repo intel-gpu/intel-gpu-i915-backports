@@ -129,7 +129,7 @@ static int igt_shmem_dma(void *arg)
 	struct page *page;
 	dma_addr_t dma;
 
-	de = get_dma_engine(mem_cpu(mem));
+	de = get_dma_engine(mem_node(mem));
 	if (!de)
 		return 0;
 

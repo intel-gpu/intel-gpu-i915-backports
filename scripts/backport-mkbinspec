@@ -68,6 +68,13 @@ if [ $BASE_KV_CODE -ge $NODRM_KV_CODE ] || [ "$BUILD_TYPE" = "nodrm" ]; then
 	NODRM=DEL
 fi
 
+# In-kernel module decompression (CONFIG_MODULE_DECOMPRESS=y, e.g. RHEL 10)
+# only accepts a CRC32 xz check; compress to match when enabled.
+XZ_OPTS=
+if grep -Eqs "(^CONFIG_MODULE_DECOMPRESS=y|define[ \t]+CONFIG_MODULE_DECOMPRESS[ \t]+1)" "$KLIB_BUILD/.config" "$KLIB_BUILD/include/generated/autoconf.h"; then
+	XZ_OPTS="--check=crc32"
+fi
+
 if [ "$KLIB_BUILD_BASE" = "build" ]; then
 	KREL=$KLIB_BUILD_DIR_BASE
 	ST_HDR=
@@ -144,7 +151,7 @@ $LC_HDR	make -j\$npc KLIB=$KLIB_BUILD KLIB_BUILD=$KLIB_BUILD BUILD_CONFIG=$BUILD
 	fi
 	mkdir -p %{buildroot}%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name}
 	find . -name "*.ko" -exec strip -g {} \;
-	find . -name "*.ko" -exec xz -z {} \;
+	find . -name "*.ko" -exec xz -z $XZ_OPTS {} \;
 	find . -name "*.ko.xz" -exec install -m 0500 {} %{buildroot}%{kernel_module_directory}/%{_krel}/%{kernel_module_package_moddir}/%{name} \;
 
 $RHEL	%files

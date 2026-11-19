@@ -294,7 +294,11 @@ __mfdi_eye_margin_error_show(struct device *dev, char *buf)
 static ssize_t
 mfdi_eye_margin_error_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
+#ifdef BPM_KOBJ_PARENT_FOR_DEVICE
+	return __mfdi_eye_margin_error_show(kobj_to_dev(kobj->parent), buf);
+#else
 	return __mfdi_eye_margin_error_show(kobj_to_dev(kobj), buf);
+#endif
 }
 static KOBJ_ATTR_RO(mfdi_eye_margin_error);
 #else
@@ -332,7 +336,11 @@ __mfdi_eye_margin_status_show(struct device *dev, char *buf)
 static ssize_t
 mfdi_eye_margin_status_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
+#ifdef BPM_KOBJ_PARENT_FOR_DEVICE
+	return __mfdi_eye_margin_status_show(kobj_to_dev(kobj->parent), buf);
+#else
 	return __mfdi_eye_margin_status_show(kobj_to_dev(kobj), buf);
+#endif
 }
 static KOBJ_ATTR_RO(mfdi_eye_margin_status);
 #else

@@ -588,6 +588,11 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 	if (!obj)
 		return -ENOENT;
 
+	if (i915_gem_object_is_remote(obj, dev)) {
+		err = -EACCES;
+		goto out;
+	}
+
 	for_i915_gem_ww(&ww, err, true) {
 		if (!i915_gem_object_has_segments(obj)) {
 			err = i915_gem_object_lock(obj, &ww);
@@ -619,6 +624,7 @@ i915_gem_madvise_ioctl(struct drm_device *dev, void *data,
 		}
 	}
 
+out:
 	i915_gem_object_put(obj);
 	return err;
 }

@@ -650,18 +650,16 @@ static int ext_mempolicy(struct i915_user_extension __user *base, void *_data)
 	case I915_GEM_CREATE_MPOL_BIND:
 		if (!ext.nodemask_max)
 			return -EINVAL;
+		if (ext.nodemask_max > MAX_NUMNODES)
+			return -EINVAL;
 		break;
 	}
 
 	if (ext.nodemask_max) {
 		unsigned long *nodes;
-		int len;
 
-		len = min_t(int,
-			    BITS_TO_LONGS(ext.nodemask_max) * sizeof(long),
-			    MAX_NUMNODES);
-
-		nodes = memdup_user(u64_to_user_ptr(ext.nodemask_ptr), len);
+		nodes = memdup_user(u64_to_user_ptr(ext.nodemask_ptr),
+				    BITS_TO_LONGS(ext.nodemask_max) * sizeof(long));
 		if (IS_ERR(nodes))
 			return PTR_ERR(nodes);
 
