@@ -129,7 +129,8 @@ struct i915_dma_engine {
 	struct dma_chan *dma;
 	struct page *zero;
 	dma_addr_t zero_dma;
-	int cpu;
+	unsigned long expire;
+	int nid;
 };
 
 static struct rb_root i915_dma_engines;
@@ -139,21 +140,6 @@ static void set_fence_or_error(struct i915_active_fence *ref, struct dma_fence *
 {
 	if (__i915_active_fence_set(ref, f) && f->error)
 		RCU_INIT_POINTER(ref->fence, ERR_PTR(f->error));
-}
-
-static int __local_cpu(int nid)
-{
-	return nid == NUMA_NO_NODE ? 0 : cpumask_first(cpumask_of_node(nid));
-}
-
-static int local_cpu(struct device *dev)
-{
-	return __local_cpu(dev_to_node(dev));
-}
-
-static int mem_cpu(struct intel_memory_region *mem)
-{
-	return local_cpu(mem->i915->drm.dev);
 }
 
 static int __local_node(int nid)
@@ -173,10 +159,10 @@ static int mem_node(struct intel_memory_region *mem)
 
 static bool channel_filter(struct dma_chan *chan, void *param)
 {
-	return local_cpu(chan->device->dev) == (long)param;
+	return local_node(chan->device->dev) == (long)param;
 }
 
-static struct dma_chan *get_dma_channel(long cpu)
+static struct dma_chan *get_dma_channel(long nid)
 {
 	dma_cap_mask_t dma_mask;
 	struct dma_chan *chan;
@@ -184,22 +170,22 @@ static struct dma_chan *get_dma_channel(long cpu)
 	dma_cap_zero(dma_mask);
 	dma_cap_set(DMA_INTERRUPT, dma_mask);
 	dma_cap_set(DMA_MEMSET, dma_mask);
-	chan = dma_request_channel(dma_mask, channel_filter, (void *)cpu);
+	chan = dma_request_channel(dma_mask, channel_filter, (void *)nid);
 	if (!IS_ERR_OR_NULL(chan))
 		return chan;
 
 	dma_cap_clear(DMA_MEMSET, dma_mask);
 	dma_cap_set(DMA_MEMCPY, dma_mask);
-	chan = dma_request_channel(dma_mask, channel_filter, (void *)cpu);
+	chan = dma_request_channel(dma_mask, channel_filter, (void *)nid);
 	if (!IS_ERR_OR_NULL(chan))
 		return chan;
 
 	return NULL;
 }
 
-static int __i915_dma_engine_cmp(int cpu, const struct rb_node *node)
+static int __i915_dma_engine_cmp(int nid, const struct rb_node *node)
 {
-	return cpu - rb_entry(node, struct i915_dma_engine, node)->cpu;
+	return nid - rb_entry(node, struct i915_dma_engine, node)->nid;
 }
 
 static int i915_dma_engine_cmp(const void *key, const struct rb_node *node)
@@ -209,45 +195,60 @@ static int i915_dma_engine_cmp(const void *key, const struct rb_node *node)
 
 static int i915_dma_engine_add(struct rb_node *key, const struct rb_node *node)
 {
-	return __i915_dma_engine_cmp(rb_entry(key, struct i915_dma_engine, node)->cpu, node);
+	return __i915_dma_engine_cmp(rb_entry(key, struct i915_dma_engine, node)->nid, node);
 }
 
-static struct i915_dma_engine *lookup_dma_engine(long cpu)
+static struct i915_dma_engine *lookup_dma_engine(long nid)
 {
-	return rb_entry(rb_find((void *)cpu, &i915_dma_engines, i915_dma_engine_cmp), struct i915_dma_engine, node);
+	return rb_entry(rb_find((void *)nid, &i915_dma_engines, i915_dma_engine_cmp), struct i915_dma_engine, node);
 }
 
-static struct i915_dma_engine *get_dma_engine(long cpu)
+static unsigned long negative_lookup_expiry(void)
 {
-	struct i915_dma_engine *new, *old;
+	return jiffies + 120 * HZ;
+}
+
+static struct i915_dma_engine *get_dma_engine(long nid)
+{
+	struct i915_dma_engine *new;
 	struct dma_chan *chan;
 
 	if (!IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_SMEM_DMA))
 		return NULL;
 
 	do {
-		old = lookup_dma_engine(cpu);
-		if (likely(old))
-			return old;
+		struct i915_dma_engine *old;
 
-		chan = get_dma_channel(cpu);
-		if (!chan && cpu) {
-			cpu = 0;
-			continue;
+		/* recheck for a new dma channel every 2 minutes for late module load */
+		new = lookup_dma_engine(nid);
+		if (likely(new)) {
+			if (new->dma)
+				return new;
+
+			if (!time_after(jiffies, new->expire))
+				return NULL;
 		}
-		if (!chan)
-			goto err;
 
-		new = kzalloc(sizeof(*new), GFP_KERNEL);
-		if (!new)
+		chan = get_dma_channel(nid);
+		if (!chan && new) {
+			new->expire = negative_lookup_expiry();
 			goto err_chan;
+		}
 
-		new->cpu = local_cpu(chan->device->dev);
-		new->dma = chan;
+		if (!new) {
+			new = kzalloc(sizeof(*new), I915_GFP_ALLOW_FAIL);
+			if (!new)
+				goto err_chan;
 
-		if (!dma_has_cap(DMA_MEMSET, chan->device->cap_mask)) {
+			RB_CLEAR_NODE(&new->node);
+			new->expire = negative_lookup_expiry();
+			new->nid = nid;
+		}
+
+		if (chan && !dma_has_cap(DMA_MEMSET, chan->device->cap_mask)) {
 			new->zero = alloc_pages_node(dev_to_node(chan->device->dev),
-						     GFP_KERNEL | __GFP_THISNODE | __GFP_ZERO,
+						     GFP_KERNEL | __GFP_THISNODE | __GFP_ZERO |
+						     __GFP_RETRY_MAYFAIL | __GFP_NOWARN,
 						     get_order(DMA_MAX_CLEAR));
 			if (!new->zero)
 				goto err_engine;
@@ -260,13 +261,18 @@ static struct i915_dma_engine *get_dma_engine(long cpu)
 		}
 
 		spin_lock(&i915_dma_lock);
+
+		if (new->dma)
+			dma_release_channel(new->dma);
+		new->dma = chan;
+
 		old = rb_entry(rb_find_add(&new->node, &i915_dma_engines, i915_dma_engine_add), typeof(*old), node);
+
 		spin_unlock(&i915_dma_lock);
-		if (old)
+		if (old && old != new)
 			goto err_dma;
 
-		if (new->cpu == cpu)
-			return new;
+		return new->dma ? new : NULL;
 	} while (1);
 
 err_dma:
@@ -279,15 +285,19 @@ err_page:
 	if (new->zero)
 		__free_pages(new->zero, get_order(DMA_MAX_CLEAR));
 err_engine:
-	kfree(new);
+	if (RB_EMPTY_NODE(&new->node))
+		kfree(new);
 err_chan:
-	dma_release_channel(chan);
-err:
-	return lookup_dma_engine(cpu);
+	if (chan)
+		dma_release_channel(chan);
+
+	new = lookup_dma_engine(nid);
+	return new && new->dma ? new : NULL;
 }
 
 static struct dma_fence *dma_clear(struct i915_dma_engine *de, dma_addr_t addr, int length)
 {
+	GEM_BUG_ON(!de->dma);
 	if (de->zero_dma)
 		return dma_async_tx_memcpy(de->dma, de->zero_dma, addr, length);
 	else
@@ -1026,7 +1036,7 @@ static int shmem_create(struct shmem_work *wrk)
 	struct drm_i915_gem_object *obj = wrk->obj;
 	struct i915_tbb_node *tbb = i915_tbb_node(dev_to_node(obj->base.dev->dev));
 	struct intel_memory_region *mem = obj->mm.region.mem;
-	struct i915_dma_engine *de = get_dma_engine(mem_cpu(mem));
+	struct i915_dma_engine *de = get_dma_engine(mem_node(mem));
 	struct scatterlist *sgt = wrk->pages, *need_blt = NULL;
 	u64 remain = obj->base.size, dirty = limit;
 	unsigned long flags = wrk->flags;
@@ -1160,7 +1170,7 @@ restart:	/* Nothing readily available in the cache? Allocate some fresh pages */
 			cp->dma[0] = cp->map[0]->dma;
 
 			if (de && nid != last_node) {
-				de = get_dma_engine(__local_cpu(nid));
+				de = get_dma_engine(nid);
 				last_node = nid;
 			}
 
@@ -2309,7 +2319,7 @@ get_dirty_page(struct intel_memory_region *mem, int *order, unsigned long *total
 	cp->map[1] = NULL;
 	cp->engine = NULL;
 	if (*order <= get_order(DMA_MAX_CLEAR)) {
-		cp->engine = get_dma_engine(__local_cpu(cp->nid));
+		cp->engine = get_dma_engine(cp->nid);
 		if (cp->engine)
 			cp->map[1] = shmem_dma_map(cp->engine->dma->device->dev, page, *order, DMA_FROM_DEVICE);
 		if (cp->map[1])
@@ -2527,7 +2537,7 @@ static int init_shmem(struct intel_memory_region *mem)
 	if (!IS_SRIOV_VF(mem->i915)) {
 		struct i915_dma_engine *dma;
 
-		dma = get_dma_engine(mem_cpu(mem));
+		dma = get_dma_engine(mem_node(mem));
 		if (dma)
 			dev_info(mem->i915->drm.dev,
 				 "Using dma engine '%s' for clearing system pages\n",
@@ -2580,8 +2590,8 @@ static void show_shmem(struct intel_memory_region *mem, struct drm_printer *p, i
 	i_printf(p, indent, "clear:\n");
 	indent += 2;
 
-	de = lookup_dma_engine(mem_cpu(mem));
-	if (de) {
+	de = lookup_dma_engine(mem_node(mem));
+	if (de && de->dma) {
 		string_get_size(local64_read(&mp->stats.dma_bytes),
 				1, STRING_UNITS_2, bytes, sizeof(bytes));
 
@@ -2774,7 +2784,8 @@ static void cleanup_dma_engines(void)
 					     DMA_ATTR_SKIP_CPU_SYNC);
 		if (de->zero)
 			__free_pages(de->zero, get_order(DMA_MAX_CLEAR));
-		dma_release_channel(de->dma);
+		if (de->dma)
+			dma_release_channel(de->dma);
 		kfree(de);
 	}
 }

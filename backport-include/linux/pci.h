@@ -275,6 +275,19 @@ static inline int pci_rebar_bytes_to_size(u64 bytes)
 }
 #endif /* BPM_PCI_REBAR_SIZE_NOT_PRESENT */
 
+#ifdef BPM_PCI_RESIZE_RESOURCE_BAR_NOT_PRESENT
+/*
+ * pci_resize_resource() signature changed to add exclude_bars parameter
+ * in kernel 6.19.
+ */
+#define bpkt_pci_resize_resource_call(_dev, _i, _size, _exclude_bars) \
+        pci_resize_resource((_dev), (_i), (_size), (_exclude_bars))
+
+#undef pci_resize_resource
+#define pci_resize_resource(_dev, _i, _size) \
+        bpkt_pci_resize_resource_call((_dev), (_i), (_size), 0)
+#endif /* BPM_PCI_RESIZE_RESOURCE_BAR_NOT_PRESENT */
+
 #ifdef BPM_STRUCT_PCI_TLP_LOG_PRESENT
 #define aer_header_log_regs pcie_tlp_log
 #endif /* STRUCT_PCI_TLP_LOG_PRESENT */

@@ -4752,6 +4752,9 @@ static int i915_debugger_queue_page_fault(struct i915_debugger_pagefault *pf)
 	struct i915_debugger *debugger;
 	int ret;
 
+	if (!pf->vm->client)
+		return -ENOENT;
+
 	/*
 	 * There has been attention by pagefault, thus the engine on which the
 	 * request resides can't proceed with said context as the

@@ -6048,7 +6048,6 @@ static void capture_error_state(struct intel_guc *guc,
 				struct intel_context *ce)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct i915_page_compress *compress;
 	struct i915_gpu_coredump *error;
 	struct intel_engine_cs *e;
 	struct i915_request *rq;
@@ -6074,10 +6073,8 @@ static void capture_error_state(struct intel_guc *guc,
 	if (!error->gt)
 		goto put_coredump;
 
-	compress = i915_vma_capture_prepare(error->gt);
-
 	for_each_engine_masked(e, gt, rq->execution_mask, tmp) {
-		struct intel_engine_capture_vma *capture = NULL;
+		struct intel_engine_capture_vma capture;
 		struct intel_engine_coredump *ee;
 
 		/* Capture all register state on any engine this request may have run on */
@@ -6085,8 +6082,9 @@ static void capture_error_state(struct intel_guc *guc,
 		if (!ee)
 			continue;
 
-		capture = intel_engine_coredump_add_request(ee, rq, capture, GFP_KERNEL, compress);
-		intel_engine_coredump_add_vma(capture, compress);
+		intel_engine_capture_vma_init(&capture);
+		intel_engine_coredump_add_request(ee, rq, &capture, GFP_KERNEL);
+		intel_engine_coredump_add_vma(&capture);
 
 		ee->hung = is_power_of_2(rq->execution_mask);
 		if (intel_guc_capture_is_matching_engine(gt, ce, e)) {
@@ -6097,9 +6095,6 @@ static void capture_error_state(struct intel_guc *guc,
 		ee->next = error->gt->engine;
 		error->gt->engine = ee;
 	}
-
-	if (compress)
-		i915_vma_capture_finish(error->gt, compress);
 
 	i915_error_state_store(error);
 put_coredump:

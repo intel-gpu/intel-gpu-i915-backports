@@ -27,7 +27,10 @@
  *
  */
 
+#include <asm/cpufeatures.h> /* missing dependency in asm/page_64.h pulled in from dma-buf.h */
+
 #include <linux/ascii85.h>
+#include <linux/dma-buf.h>
 #include <linux/highmem.h>
 #include <linux/kmemleak.h>
 #include <linux/nmi.h>
@@ -966,6 +969,8 @@ static void __err_print_to_sgl(struct drm_i915_error_state_buf *m,
 		err_printf(m, "Fault type: %d\n", error->fault.type);
 		err_printf(m, "Fault level: %d\n", error->fault.level);
 		err_printf(m, "Fault access: %d\n", error->fault.access);
+		err_printf(m, "EU Threads dispatched: %d\n", error->fault.dispatched);
+		err_printf(m, "EU Threads faulted: %d\n", error->fault.faulted);
 	}
 
 	if (error->gt) {
@@ -1121,7 +1126,7 @@ static void i915_vma_coredump_free(struct i915_vma_coredump *vma)
 		if (cpages) {
 			for (page = 0; page < cpages->page_count; page++)
 				free_page((unsigned long)cpages->pages[page]);
-			kfree(cpages);
+			kvfree(cpages);
 		}
 
 		if (vma->metadata)
@@ -1167,7 +1172,7 @@ i915_uuid_resource_coredump_free(struct i915_uuid_resource_coredump *uuid_dump)
 				if (cpages->pages[page])
 					free_page((unsigned long)
 						  cpages->pages[page]);
-			kfree(cpages);
+			kvfree(cpages);
 		}
 
 		kfree(uuid_dump);
@@ -1237,8 +1242,7 @@ i915_vma_metadata_coredump_create(const struct i915_vma *vma)
 }
 
 static struct i915_vma_coredump *
-i915_vma_coredump_create(const struct intel_gt *gt,
-			 const struct i915_vma *vma,
+i915_vma_coredump_create(const struct i915_vma *vma,
 			 const char *name,
 			 struct scatterlist *pages,
 			 struct i915_page_compress *compress)
@@ -1252,7 +1256,10 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 
 	might_sleep();
 
-	if (!vma)
+	if (!vma || test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
+		return NULL;
+
+	if (vma->vm->gt->suspend)
 		return NULL;
 
 	dst = kzalloc(sizeof(*dst), I915_GFP_ALLOW_FAIL);
@@ -1296,8 +1303,8 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 	num_pages = vma->size >> PAGE_SHIFT;
 	num_pages = DIV_ROUND_UP(10 * num_pages, 8); /* worstcase zlib growth */
 
-	dst->cpages = kmalloc(sizeof(*dst->cpages) + num_pages * sizeof(u32 *),
-			      I915_GFP_ALLOW_FAIL);
+	dst->cpages = kvmalloc(struct_size(dst->cpages, pages, num_pages),
+			       I915_GFP_ALLOW_FAIL);
 	if (!dst->cpages)
 		goto out;
 
@@ -1306,7 +1313,7 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 	dst->cpages->unused = 0;
 
 	if (!compress_start(compress)) {
-		kfree(dst->cpages);
+		kvfree(dst->cpages);
 		dst->cpages = NULL;
 		goto out;
 	}
@@ -1335,6 +1342,26 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 			if (ret || (vma->size <= ((n - offset) * PAGE_SIZE)))
 				break;
 		}
+	} else if (vma->obj->base.import_attach) {
+		struct dma_buf * const b =
+			vma->obj->base.import_attach->dmabuf;
+		struct iosys_map map;
+
+		ret = dma_buf_vmap(b, &map);
+		if (!ret) {
+			void *src = (void __force *)map.vaddr_iomem + offset * PAGE_SIZE;
+			void *end = src + vma->size;
+
+			while (src < end) {
+				ret = compress_page(compress, src, PAGE_SIZE, dst->cpages, true);
+				if (ret)
+					break;
+
+				src += PAGE_SIZE;
+			}
+
+			dma_buf_vunmap(b, &map);
+		}
 	} else {
 		struct page *page;
 
@@ -1361,7 +1388,7 @@ i915_vma_coredump_create(const struct intel_gt *gt,
 		while (dst->cpages->page_count--)
 			pool_free(&compress->pool,
 				  dst->cpages->pages[dst->cpages->page_count]);
-		kfree(dst->cpages);
+		kvfree(dst->cpages);
 		dst->cpages = NULL;
 	}
 	compress_finish(compress);
@@ -1480,8 +1507,8 @@ i915_compress_data(void *ptr, u64 size, struct i915_page_compress *compress)
 	num_cpages = DIV_ROUND_UP(size, PAGE_SIZE);
 	num_cpages = DIV_ROUND_UP(10 * num_cpages, 8);
 
-	cpages = kmalloc(sizeof(*cpages) + num_cpages * sizeof(u32 *),
-			 I915_GFP_ALLOW_FAIL);
+	cpages = kvmalloc(struct_size(cpages, pages, num_cpages),
+			  I915_GFP_ALLOW_FAIL);
 	if (!cpages)
 		return NULL;
 
@@ -1494,7 +1521,7 @@ i915_compress_data(void *ptr, u64 size, struct i915_page_compress *compress)
 		while (cpages->page_count--)
 			pool_free(&compress->pool,
 				  cpages->pages[cpages->page_count]);
-		kfree(cpages);
+		kvfree(cpages);
 		cpages = NULL;
 	}
 
@@ -1504,17 +1531,10 @@ i915_compress_data(void *ptr, u64 size, struct i915_page_compress *compress)
 static char *
 i915_uuid_capture_string(struct i915_uuid_resource *uuid_res)
 {
-	char *s;
-
 	if (uuid_res->uuid_class != PRELIM_I915_UUID_CLASS_STRING)
 		return NULL;
 
-	s = kzalloc(uuid_res->size + 1, GFP_KERNEL);
-	if (!s)
-		return NULL;
-
-	strncpy(s, (const char *)uuid_res->ptr, uuid_res->size);
-	return s;
+	return kmemdup_nul(uuid_res->ptr, uuid_res->size, I915_GFP_ALLOW_FAIL);
 }
 
 static struct i915_uuid_resource_coredump *
@@ -1537,7 +1557,7 @@ capture_uuid(struct xarray *uuids,
 	i915_uuid_get(uuid_base);
 	xa_unlock(uuids);
 
-	dump = kzalloc(sizeof(*dump), GFP_KERNEL);
+	dump = kzalloc(sizeof(*dump), I915_GFP_ALLOW_FAIL);
 	if (!dump) {
 		i915_uuid_put(uuid);
 		i915_uuid_put(uuid_base);
@@ -1565,17 +1585,20 @@ capture_uuid(struct xarray *uuids,
 }
 
 static struct i915_uuid_resource_coredump *
-i915_uuid_resource_coredump_create(struct i915_drm_client *client,
-				   struct i915_page_compress *compress)
+i915_uuid_resource_coredump_create(struct i915_drm_client *client)
 {
 	struct i915_uuid_resource_coredump *head = NULL;
 	struct i915_uuid_resource *uuid;
+	struct i915_page_compress compress;
 	unsigned long idx;
+
+	if (!compress_init(&compress))
+		return head;
 
 	xa_for_each(&client->uuids_xa, idx, uuid) {
 		struct i915_uuid_resource_coredump *dump;
 
-		dump = capture_uuid(&client->uuids_xa, idx, compress);
+		dump = capture_uuid(&client->uuids_xa, idx, &compress);
 		if (!dump)
 			break;
 
@@ -1583,20 +1606,23 @@ i915_uuid_resource_coredump_create(struct i915_drm_client *client,
 		head = dump;
 	}
 
+	compress_fini(&compress);
 	return head;
 }
 
 static bool record_context(struct i915_gem_context_coredump *e,
-			   const struct i915_request *rq,
-			   struct i915_page_compress *compress)
+			   const struct i915_request *rq)
 {
 	struct i915_gem_context *ctx;
 	bool simulated;
 
+	if (rq->engine->gt->suspend)
+		return true;
+
 	rcu_read_lock();
 
 	ctx = NULL;
-	if (intel_context_is_schedulable(rq->context))
+	if (!i915_request_completed(rq) && intel_context_is_schedulable(rq->context))
 		ctx = rcu_dereference(rq->context->gem_context);
 	if (ctx && (!ctx->client || !kref_get_unless_zero(&ctx->ref)))
 		ctx = NULL;
@@ -1625,40 +1651,57 @@ static bool record_context(struct i915_gem_context_coredump *e,
 		i915_gem_context_is_closed(ctx);
 
 	e->sip_installed = i915_gem_context_has_sip(ctx);
-	e->uuid_dump = simulated ? NULL : i915_uuid_resource_coredump_create(ctx->client, compress);
+	e->uuid_dump = simulated ? NULL : i915_uuid_resource_coredump_create(ctx->client);
 
 	i915_gem_context_put(ctx);
 	return simulated;
 }
 
-struct intel_engine_capture_vma {
-	struct intel_engine_capture_vma *next;
-	struct intel_engine_coredump *ee;
-	struct i915_vma *vma;
-	struct scatterlist *pages;
-	char name[16];
-};
+void intel_engine_capture_vma_init(struct intel_engine_capture_vma *root)
+{
+	memset_p((void **)root->sentinel.next, &root->sentinel, ARRAY_SIZE(root->sentinel.next));
+	root->prng = get_random_u32();
+	root->sentinel.vma = NULL;
+	root->level = -1;
+}
 
-static struct intel_engine_capture_vma *
-capture_vma(struct intel_engine_capture_vma *next,
+static int random_level(u32 *prng)
+{
+	*prng = next_pseudo_random32(*prng);
+	return __ffs(*prng) / 2;
+}
+
+static bool
+capture_vma(struct intel_engine_capture_vma *root,
 	    struct intel_engine_coredump *ee,
 	    struct i915_vma *vma,
 	    const char *name,
 	    gfp_t gfp)
 {
-	struct intel_engine_capture_vma *c;
+	struct __intel_engine_capture_vma *update[ARRAY_SIZE(root->sentinel.next)];
+	struct __intel_engine_capture_vma *c;
+	int lvl;
 
-	if (!vma)
-		return next;
+	if (!vma || test_bit(I915_VMA_ERROR_BIT, __i915_vma_flags(vma)))
+		return true;
 
 	/* Filter out any duplicates */
-	for (c = next; c; c = c->next)
+	c = &root->sentinel;
+	lvl = root->level;
+	while (lvl >= 0) {
+		struct __intel_engine_capture_vma  *tmp;
+
+		while (tmp = c->next[lvl], tmp->vma >= vma)
+			c = tmp;
 		if (c->vma == vma)
-			return next;
+			return true;
+
+		update[lvl--] = c;
+	}
 
 	c = kzalloc(sizeof(*c), gfp);
 	if (!c)
-		return next;
+		return false;
 
 	if (!__i915_vma_get(vma))
 		goto err_free;
@@ -1674,32 +1717,55 @@ capture_vma(struct intel_engine_capture_vma *next,
 	c->vma = vma; /* reference held while active */
 	c->ee = ee;
 
-	c->next = next;
-	return c;
+	lvl = random_level(&root->prng);
+	if (lvl > root->level) {
+		if (root->level < (int)ARRAY_SIZE(root->sentinel.next) - 1) {
+			lvl = ++root->level;
+			update[lvl] = &root->sentinel;
+		} else {
+			lvl = ARRAY_SIZE(root->sentinel.next) - 1;
+		}
+	}
+
+	do {
+		struct __intel_engine_capture_vma *tmp = update[lvl];
+
+		c->next[lvl] = tmp->next[lvl];
+		tmp->next[lvl] = c;
+	} while (--lvl >= 0);
+
+	return true;
 
 err_vma:
 	__i915_vma_put(vma);
 err_free:
 	kfree(c);
-	return next;
+	return false;
 }
 
-static struct intel_engine_capture_vma *
+static void
 capture_user_vm(struct intel_engine_capture_vma *capture,
 		struct intel_engine_coredump *ee,
-		struct i915_address_space *vm, gfp_t gfp)
+		const struct i915_request *rq,
+		gfp_t gfp)
 {
-	struct i915_vma *vma;
-
 	rcu_read_lock();
-	list_for_each_entry_rcu(vma, &vm->vm_capture_list, vm_capture_link)
-		capture = capture_vma(capture, ee, vma, "user", gfp);
-	rcu_read_unlock();
+	if (!i915_request_signaled(rq)) {
+		struct i915_address_space *vm = rq->context->vm;
 
-	return capture;
+		if (atomic_inc_not_zero(&vm->open)) {
+			struct i915_vma *vma;
+
+			list_for_each_entry_rcu(vma, &vm->vm_capture_list, vm_capture_link)
+				capture_vma(capture, ee, vma, "user", gfp);
+
+			i915_vm_close(vm);
+		}
+	}
+	rcu_read_unlock();
 }
 
-static struct intel_engine_capture_vma *
+static void
 capture_user(struct intel_engine_capture_vma *capture,
 	     struct intel_engine_coredump *ee,
 	     const struct i915_request *rq,
@@ -1708,25 +1774,27 @@ capture_user(struct intel_engine_capture_vma *capture,
 	struct i915_capture_list *c;
 
 	for (c = rq->capture_list; c; c = c->next)
-		capture = capture_vma(capture, ee, c->vma, "user", gfp);
+		capture_vma(capture, ee, c->vma, "user", gfp);
 
 	/*
 	 * include persistent VMAs
 	 * XXX overrides gfp due to execlists_capture_work caller
 	 */
-	gfp = GFP_NOWAIT | __GFP_NOWARN;
-	capture = capture_user_vm(capture, ee, rq->context->vm, gfp);
-
-	return capture;
+	capture_user_vm(capture, ee, rq, GFP_NOWAIT | __GFP_NOWARN);
 }
 
 static void add_vma(struct intel_engine_coredump *ee,
 		    struct i915_vma_coredump *vma)
 {
-	if (vma) {
-		vma->next = ee->vma;
-		ee->vma = vma;
-	}
+	struct i915_vma_coredump *old;
+
+	if (!vma)
+		return;
+
+	old = READ_ONCE(ee->vma);
+	do
+		vma->next = old;
+	while (unlikely(!try_cmpxchg(&ee->vma, &old, vma)));
 }
 
 struct intel_engine_coredump *
@@ -1748,36 +1816,42 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_
 	return ee;
 }
 
-struct intel_engine_capture_vma *
+bool
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  struct i915_request *rq,
 				  struct intel_engine_capture_vma *vma,
-				  gfp_t gfp,
-				  struct i915_page_compress *compress)
+				  gfp_t gfp)
 {
-	ee->simulated |= record_context(&ee->context, rq, compress);
+	bool result = false;
+
+	set_bit(I915_FENCE_FLAG_INCAPTURE, &rq->fence.flags);
+
+	ee->simulated |= record_context(&ee->context, rq);
 	if (ee->simulated)
-		return NULL;
+		goto out;
 
 	/*
 	 * We need to copy these to an anonymous buffer
 	 * as the simplest method to avoid being overwritten
 	 * by userspace.
 	 */
-	vma = capture_vma(vma, ee, rq->batch, "batch", gfp);
-	vma = capture_user(vma, ee, rq, gfp);
-	vma = capture_vma(vma, ee, rq->ring->vma, "ring", gfp);
-	vma = capture_vma(vma, ee, rq->context->state, "HW context", gfp);
+	capture_vma(vma, ee, rq->batch, "batch", gfp);
+	capture_user(vma, ee, rq, gfp);
+	capture_vma(vma, ee, rq->ring->vma, "ring", gfp);
+	capture_vma(vma, ee, rq->context->state, "HW context", gfp);
 
-	vma = capture_vma(vma, ee, ee->engine->status_page.vma, "HW Status", gfp);
-	vma = capture_vma(vma, ee, ee->engine->wa_ctx.vma, "WA context", gfp);
+	capture_vma(vma, ee, ee->engine->status_page.vma, "HW Status", gfp);
+	capture_vma(vma, ee, ee->engine->wa_ctx.vma, "WA context", gfp);
 
 	ee->rq_head = rq->head;
 	ee->rq_post = rq->postfix;
 	ee->rq_tail = rq->tail;
 	ee->vm_poison = rq->context->vm->poison;
 
-	return vma;
+	result = true;
+out:
+	clear_bit_unlock(I915_FENCE_FLAG_INCAPTURE, &rq->fence.flags);
+	return result;
 }
 
 static struct scatterlist *__vma_pages(struct i915_vma *vma)
@@ -1785,35 +1859,83 @@ static struct scatterlist *__vma_pages(struct i915_vma *vma)
 	return vma ? vma->pages : NULL;
 }
 
-void
-intel_engine_coredump_add_vma(struct intel_engine_capture_vma *capture,
-			      struct i915_page_compress *compress)
+static void coredump_add_vma(struct i915_tbb *tbb)
 {
-	while (capture) {
-		struct intel_engine_capture_vma *this = capture;
-		struct i915_vma *vma = this->vma;
+	struct __intel_engine_capture_vma *this = container_of(tbb, typeof(*this), tbb);
+	struct i915_vma *vma = this->vma;
+	struct i915_page_compress compress;
 
-		add_vma(capture->ee,
-			i915_vma_coredump_create(capture->ee->engine->gt,
-						 vma, this->name,
-						 capture->pages,
-						 compress));
-		if (capture->pages)
-			i915_vma_active_release(vma);
-		i915_gem_object_put(vma->obj);
-		__i915_vma_put(vma);
+	if (!compress_init(&compress))
+		return;
 
-		capture = this->next;
-		kfree(this);
+	add_vma(this->ee,
+		i915_vma_coredump_create(vma, this->name,
+					 this->pages,
+					 &compress));
+	i915_sw_fence_complete(this->fence);
+
+	if (this->pages)
+		i915_vma_active_release(vma);
+	i915_gem_object_put(vma->obj);
+	__i915_vma_put(vma);
+
+	kfree(this);
+	compress_fini(&compress);
+}
+
+void
+intel_engine_coredump_add_vma(struct intel_engine_capture_vma *root)
+{
+	struct __intel_engine_capture_vma *capture = root->sentinel.next[0];
+	struct i915_tbb_node *tbb = i915_tbb_node(numa_node_id());
+	struct intel_gt *flushed = NULL;
+	struct i915_sw_fence fence;
+	LIST_HEAD(tasks);
+	int cpu;
+
+	cpu = i915_tbb_suspend_local();
+
+	i915_sw_fence_init_onstack(&fence);
+	while (capture != &root->sentinel) {
+		struct __intel_engine_capture_vma *this = capture;
+		struct intel_gt *gt = this->ee->engine->gt;
+
+		capture = this->next[0];
+
+		if (gt != flushed) {
+			i915_debugger_gpu_flush_engines(gt, GEN12_RCU_ASYNC_FLUSH_AND_INVALIDATE_ALL);
+			flushed = gt;
+		}
+
+		this->tbb.fn = coredump_add_vma;
+		this->fence = &fence;
+		i915_sw_fence_await(&fence);
+
+		i915_tbb_lock_irq(tbb);
+		list_add_tail(&this->tbb.local, &tasks);
+		if (IS_ENABLED(CPTCFG_DRM_I915_CHICKEN_PARALLEL_CAPTURE) &&
+		    capture != &root->sentinel)
+			i915_tbb_add_task_locked(tbb, &this->tbb);
+		else
+			INIT_LIST_HEAD(&this->tbb.link);
+		i915_tbb_unlock_irq(tbb);
+
+		cond_resched();
 	}
+	i915_sw_fence_commit(&fence);
+
+	i915_tbb_run_local(tbb, &tasks, coredump_add_vma);
+
+	i915_sw_fence_wait(&fence);
+	i915_sw_fence_fini(&fence);
+
+	i915_tbb_resume_local(cpu);
 }
 
 static struct intel_engine_coredump *
-capture_engine(struct intel_engine_cs *engine,
-	       struct i915_page_compress *compress,
-	       u32 dump_flags)
+capture_engine(struct intel_engine_cs *engine, u32 dump_flags)
 {
-	struct intel_engine_capture_vma *capture;
+	struct intel_engine_capture_vma capture;
 	struct intel_engine_coredump *ee;
 	struct i915_request *rq;
 
@@ -1825,24 +1947,19 @@ capture_engine(struct intel_engine_cs *engine,
 	rq = intel_engine_find_active_request(engine);
 	rq = rq && __i915_request_has_started(rq) ? i915_request_get_rcu(rq) : NULL;
 	rcu_read_unlock();
-
-	capture = NULL;
-	if (rq) {
-		capture = intel_engine_coredump_add_request(ee, rq, capture,
-							    ATOMIC_MAYFAIL,
-							    compress);
-
-		if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
-			intel_guc_capture_get_matching_node(engine->gt, ee, rq->context);
-
-		i915_request_put(rq);
-	}
-	if (!capture) {
+	if (!rq) {
 		kfree(ee);
 		return NULL;
 	}
 
-	intel_engine_coredump_add_vma(capture, compress);
+	intel_engine_capture_vma_init(&capture);
+	intel_engine_coredump_add_request(ee, rq, &capture, ATOMIC_MAYFAIL);
+	intel_engine_coredump_add_vma(&capture);
+
+	if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
+		intel_guc_capture_get_matching_node(engine->gt, ee, rq->context);
+
+	i915_request_put(rq);
 
 	return ee;
 }
@@ -1850,7 +1967,6 @@ capture_engine(struct intel_engine_cs *engine,
 static void
 gt_record_engines(struct intel_gt_coredump *gt,
 		  intel_engine_mask_t engine_mask,
-		  struct i915_page_compress *compress,
 		  u32 dump_flags)
 {
 	struct intel_engine_cs *engine;
@@ -1862,10 +1978,7 @@ gt_record_engines(struct intel_gt_coredump *gt,
 		if (!intel_engine_pm_is_awake(engine))
 			continue;
 
-		/* Refill our page pool before entering atomic section */
-		pool_refill(&compress->pool, I915_GFP_ALLOW_FAIL);
-
-		ee = capture_engine(engine, compress, dump_flags);
+		ee = capture_engine(engine, dump_flags);
 		if (!ee)
 			continue;
 
@@ -1902,15 +2015,20 @@ static void gt_record_guc_ctb(struct intel_ctb_coredump *saved,
 }
 
 static struct intel_uc_coredump *
-gt_record_uc(struct intel_gt_coredump *gt,
-	     struct i915_page_compress *compress)
+gt_record_uc(struct intel_gt_coredump *gt)
 {
 	const struct intel_uc *uc = &gt->_gt->uc;
 	struct intel_uc_coredump *error_uc;
+	struct i915_page_compress compress;
+
+	if (!compress_init(&compress))
+		return NULL;
 
 	error_uc = kzalloc(sizeof(*error_uc), I915_GFP_ALLOW_FAIL);
-	if (!error_uc)
+	if (!error_uc) {
+		compress_fini(&compress);
 		return NULL;
+	}
 
 	memcpy(&error_uc->guc_fw, &uc->guc.fw, sizeof(uc->guc.fw));
 	memcpy(&error_uc->huc_fw, &uc->huc.fw, sizeof(uc->huc.fw));
@@ -1928,23 +2046,22 @@ gt_record_uc(struct intel_gt_coredump *gt,
 	if (!IS_SRIOV_VF(gt->_gt->i915)) {
 		error_uc->guc.timestamp = intel_uncore_read(gt->_gt->uncore, GUCPMTIMESTAMP);
 		error_uc->guc.vma_log =
-			i915_vma_coredump_create(gt->_gt,
-						 uc->guc.log.vma,
+			i915_vma_coredump_create(uc->guc.log.vma,
 						 "GuC log buffer",
 						 __vma_pages(uc->guc.log.vma),
-						 compress);
+						 &compress);
 	}
 	error_uc->guc.vma_ctb =
-		i915_vma_coredump_create(gt->_gt,
-					 uc->guc.ct.vma,
+		i915_vma_coredump_create(uc->guc.ct.vma,
 					 "GuC CT buffer",
 					 __vma_pages(uc->guc.ct.vma),
-					 compress);
+					 &compress);
 	gt_record_guc_ctb(error_uc->guc.ctb + 0, &uc->guc.ct.ctbs.send,
 			  uc->guc.ct.ctbs.send.desc, (struct intel_guc *)&uc->guc);
 	gt_record_guc_ctb(error_uc->guc.ctb + 1, &uc->guc.ct.ctbs.recv,
 			  uc->guc.ct.ctbs.send.desc, (struct intel_guc *)&uc->guc);
 
+	compress_fini(&compress);
 	return error_uc;
 }
 
@@ -2221,6 +2338,9 @@ intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp, u32 dump_flags)
 {
 	struct intel_gt_coredump *gc;
 
+	if (gt->suspend)
+		return NULL;
+
 	gc = kzalloc(sizeof(*gc), gfp);
 	if (!gc)
 		return NULL;
@@ -2255,33 +2375,6 @@ intel_gt_coredump_alloc(struct intel_gt *gt, gfp_t gfp, u32 dump_flags)
 	return gc;
 }
 
-struct i915_page_compress *
-i915_vma_capture_prepare(struct intel_gt_coredump *gt)
-{
-	struct i915_page_compress *compress;
-
-	compress = kmalloc(sizeof(*compress), I915_GFP_ALLOW_FAIL);
-	if (!compress)
-		return NULL;
-
-	if (!compress_init(compress)) {
-		kfree(compress);
-		return NULL;
-	}
-
-	return compress;
-}
-
-void i915_vma_capture_finish(struct intel_gt_coredump *gt,
-			     struct i915_page_compress *compress)
-{
-	if (!compress)
-		return;
-
-	compress_fini(compress);
-	kfree(compress);
-}
-
 static struct i915_gem_engines *
 get_engines(struct i915_request *rq)
 {
@@ -2297,12 +2390,11 @@ get_engines(struct i915_request *rq)
 	return e;
 }
 
-struct intel_engine_capture_vma *
+void
 intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
 				    struct i915_request *rq,
 				    struct intel_engine_capture_vma *capture,
-				    gfp_t gfp,
-				    struct i915_page_compress *compress)
+				    gfp_t gfp)
 {
 	struct i915_gem_engines_iter it;
 	struct i915_gem_engines *e;
@@ -2312,11 +2404,11 @@ intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
 	/* We use FEH to suspend execution of the engines across the capture */
 	td_ctl = intel_gt_mcr_read_any((struct intel_gt *)gt->_gt, TD_CTL);
 	if (!(td_ctl & TD_CTL_FORCE_EXTERNAL_HALT))
-		return capture;
+		return;
 
 	e = get_engines(rq);
 	if (!e)
-		return capture;
+		return;
 
 	for_each_gem_engine(ce, e, it) {
 		struct intel_engine_coredump *ee;
@@ -2347,19 +2439,17 @@ intel_gt_coredump_add_other_engines(struct intel_gt_coredump *gt,
 
 		/* XXX Though we have the rq, its pointers may not be frozen... */
 		if (other) {
-			capture = intel_engine_coredump_add_request(ee, other, capture,
-								    gfp, compress);
+			if (intel_engine_coredump_add_request(ee, other, capture, gfp)) {
+				ee->next = gt->engine;
+				gt->engine = ee;
+			} else {
+				kfree(ee);
+			}
 			i915_request_put(other);
-
-			ee->next = gt->engine;
-			gt->engine = ee;
 		} else {
 			kfree(ee);
 		}
 	}
-	i915_gem_context_engines_put(e);
-
-	return capture;
 }
 
 struct i915_gpu_coredump *
@@ -2379,17 +2469,8 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask, u32 dump
 
 	error->gt = intel_gt_coredump_alloc(gt, I915_GFP_ALLOW_FAIL, dump_flags);
 	if (error->gt) {
-		struct i915_page_compress *compress;
-
-		compress = i915_vma_capture_prepare(error->gt);
-		if (!compress) {
-			kfree(error->gt);
-			kfree(error);
-			return ERR_PTR(-ENOMEM);
-		}
-
 		if (INTEL_INFO(i915)->has_gt_uc) {
-			error->gt->uc = gt_record_uc(error->gt, compress);
+			error->gt->uc = gt_record_uc(error->gt);
 			if (error->gt->uc) {
 				if (dump_flags & CORE_DUMP_FLAG_IS_GUC_CAPTURE)
 					error->gt->uc->guc.is_guc_capture = true;
@@ -2398,9 +2479,7 @@ i915_gpu_coredump(struct intel_gt *gt, intel_engine_mask_t engine_mask, u32 dump
 			}
 		}
 
-		gt_record_engines(error->gt, engine_mask, compress, dump_flags);
-
-		i915_vma_capture_finish(error->gt, compress);
+		gt_record_engines(error->gt, engine_mask, dump_flags);
 
 		error->simulated |= error->gt->simulated;
 	}
@@ -2541,7 +2620,7 @@ __i915_uuid_copy_from_user(struct prelim_drm_i915_uuid_control *uuid_arg,
 	if (!access_ok(u64_to_user_ptr(uuid_arg->ptr), uuid_arg->size))
 		return -EFAULT;
 
-	uuid_res->ptr = kvmalloc(uuid_arg->size, GFP_KERNEL);
+	uuid_res->ptr = kvmalloc(uuid_arg->size, I915_GFP_ALLOW_FAIL);
 	if (!uuid_res->ptr)
 		return -ENOMEM;
 
@@ -2589,7 +2668,7 @@ int i915_uuid_register_ioctl(struct drm_device *dev, void *data,
 			return -EINVAL;
 	}
 
-	uuid_res = kzalloc(sizeof(*uuid_res), GFP_KERNEL);
+	uuid_res = kzalloc(sizeof(*uuid_res), I915_GFP_ALLOW_FAIL);
 	if (!uuid_res)
 		return -ENOMEM;
 
@@ -2634,7 +2713,8 @@ int i915_uuid_register_ioctl(struct drm_device *dev, void *data,
 	i915_debugger_uuid_create(client, uuid_res);
 	return 0;
 
- err_unlock:
+err_unlock:
+	kvfree(uuid_res->ptr);
 	xa_unlock(&client->uuids_xa);
 err:
 	kfree(uuid_res);
@@ -2752,7 +2832,7 @@ static void __uuid_init_classes(struct i915_drm_client *client)
 		if (!uuid_is_valid((const char *)u->uuid))
 			goto err;
 
-		uuid_res = kzalloc(sizeof(*uuid_res), GFP_KERNEL);
+		uuid_res = kzalloc(sizeof(*uuid_res), I915_GFP_ALLOW_FAIL);
 		if (!uuid_res)
 			goto err;
 
@@ -2765,8 +2845,7 @@ static void __uuid_init_classes(struct i915_drm_client *client)
 		uuid_res->handle = u->handle;
 		kref_init(&uuid_res->ref);
 		atomic_set(&uuid_res->bind_count, 0);
-		if (xa_insert(&client->uuids_xa, uuid_res->handle,
-			      uuid_res, GFP_KERNEL)) {
+		if (xa_insert(&client->uuids_xa, uuid_res->handle, uuid_res, I915_GFP_ALLOW_FAIL)) {
 			kfree(uuid_res);
 			goto err;
 		}
@@ -2944,43 +3023,43 @@ int intel_eu_attentions_read(struct intel_gt *gt,
 			     struct intel_eu_attentions *a,
 			     const unsigned int settle_time_ms)
 {
+	unsigned int attn, max;
 	unsigned int prev = 0;
-	ktime_t end, now;
+	ktime_t end, now, idle;
 
 	now = ktime_get_raw();
-	end = ktime_add_ms(now, settle_time_ms);
+	end = ktime_add_ms(now, 10 * settle_time_ms);
 
-	a->ts = 0;
-	a->size = min_t(int,
-			intel_gt_eu_attention_bitmap_size(gt),
-			sizeof(a->att));
+	a->ts = now;
+	a->size = min_t(int, intel_gt_eu_attention_bitmap_size(gt), sizeof(a->att));
 
+	if (!intel_gt_eu_threads_dispatched(gt)) {
+		memset(a->att, 0, a->size);
+		return 0;
+	}
+
+	idle = 0;
+	max = intel_gt_eu_status_bitmap(gt, a->att, a->size);
+	prev = intel_gt_eu_attention_bitmap(gt, a->att, a->size);
 	do {
-		unsigned int attn;
-
-		intel_gt_eu_attention_bitmap(gt, a->att, a->size);
-		attn = intel_eu_attentions_count(a);
+		attn = intel_gt_eu_attention_bitmap(gt, a->att, a->size);
 
 		now = ktime_get_raw();
+		if (!idle && intel_gt_eu_idle(gt))
+			end = idle = ktime_add_ms(now, settle_time_ms);
 
-		if (a->ts == 0) {
-			a->ts = now;
-		} else if (attn && attn != prev) {
+		if (attn > prev) {
+			prev = attn;
 			a->ts = now;
 			end = ktime_add_ms(now, settle_time_ms);
 		}
-
-		prev = attn;
-
-		if (settle_time_ms)
-			udelay(5);
 
 		/*
 		 * XXX We are gathering data for production SIP to find
 		 * the upper limit of settle time. For now, we wait full
 		 * timeout value regardless.
 		 */
-	} while (ktime_before(now, end));
+	} while (attn < max && ktime_before(now, end) && (udelay(5), 1));
 
-	return prev;
+	return attn;
 }

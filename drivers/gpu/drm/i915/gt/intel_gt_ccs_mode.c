@@ -5,6 +5,7 @@
 
 #include "intel_gt.h"
 #include "intel_gt_ccs_mode.h"
+#include "intel_gt_debug.h"
 #include "intel_gt_debugfs.h"
 #include "intel_gt_mcr.h"
 #include "intel_gt_pm.h"
@@ -43,29 +44,6 @@ void intel_gt_init_ccs_mode(struct intel_gt *gt)
 	mutex_init(&gt->ccs.mutex);
 	gt->ccs.fixed = needs_fixed_ccs_mode(gt);
 	gt->ccs.dynamic = gt->ccs.fixed;
-}
-
-__maybe_unused static bool assert_compute_idle(struct intel_gt *gt)
-{
-	i915_mcr_reg_t instdone;
-	int subslice;
-	int slice;
-	int iter;
-
-	instdone = XEHPC_ROW_INSTDONE;
-	if (GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 60))
-		instdone = GEN8_ROW_INSTDONE;
-
-	/*
-	 * Check IC done on all DSS. IC done indicates EU is
-	 * done executing WL.
-	 */
-	for_each_ss_steering(iter, gt, slice, subslice) {
-		if ((intel_gt_mcr_read(gt, instdone, slice, subslice) & XEHPC_IC_DONE) == 0)
-			return false;
-	}
-
-	return true;
 }
 
 static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t config)
@@ -133,7 +111,7 @@ static void __intel_gt_apply_ccs_mode(struct intel_gt *gt, intel_engine_mask_t c
 			 "CCS_MODE=%x for config:%08x, num_engines:%d, num_slices:%d\n",
 			 mode, config, num_engines, num_slices);
 
-		GEM_BUG_ON(!assert_compute_idle(gt));
+		GEM_BUG_ON(!intel_gt_eu_idle(gt));
 		intel_uncore_write(gt->uncore, XEHP_CCS_MODE, mode);
 		gt->ccs.mode = mode;
 	}

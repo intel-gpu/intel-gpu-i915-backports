@@ -864,8 +864,7 @@ int intel_uc_fw_fetch(struct intel_uc_fw *uc_fw)
 				   uc_fw->file_selected.ver.major,
 				   uc_fw->file_selected.ver.minor,
 				   uc_fw->file_selected.ver.patch);
-			gt_info(gt, "Consider updating your linux-firmware pkg or downloading from %s\n",
-				INTEL_UC_FIRMWARE_URL);
+			gt_info_once(gt, "Consider updating your linux-firmware pkg or downloading from %s\n", INTEL_UC_FIRMWARE_URL);
 		}
 	}
 
@@ -891,11 +890,17 @@ fail:
 				  INTEL_UC_FIRMWARE_MISSING :
 				  INTEL_UC_FIRMWARE_ERROR);
 
-	gt_probe_error(gt, "%s firmware %s: fetch failed %pe\n",
+	if (*uc_fw->file_selected.path && strcmp(uc_fw->file_selected.path, "/dev/null")) {
+		gt_probe_error(gt, "%s firmware %s: fetch failed %pe\n",
+			       intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path, ERR_PTR(err));
+		gt_info_once(gt, "%s firmware(s) can be downloaded from %s\n",
+			     intel_uc_fw_type_repr(uc_fw->type), INTEL_UC_FIRMWARE_URL);
+	} else {
+		gt_dbg(gt, "%s firmware %s: fetch failed %pe\n",
 		       intel_uc_fw_type_repr(uc_fw->type), uc_fw->file_selected.path, ERR_PTR(err));
-	gt_info(gt, "%s firmware(s) can be downloaded from %s\n",
-		intel_uc_fw_type_repr(uc_fw->type), INTEL_UC_FIRMWARE_URL);
+	}
 
+	gt->uc.fw_table_invalid = true;
 	release_firmware(fw);		/* OK even if fw is NULL */
 	return err;
 }

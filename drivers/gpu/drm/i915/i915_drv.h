@@ -882,6 +882,7 @@ struct drm_i915_private {
 #if IS_ENABLED(CONFIG_AUXILIARY_BUS)
 		struct iaf_pdata *pd;
 #endif
+		struct xarray connected;
 		u64 dpa;
 		int irq_base;
 		int index;

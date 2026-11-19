@@ -941,7 +941,7 @@ TRACE_EVENT(i915_mm_fault,
 			   if (vma) {
 				   __entry->obj = vma->obj;
 				   __entry->obj_size = vma->obj->base.size;
-				   strcpy(__entry->region, vma->obj->mm.region.mem->name);
+				   strcpy(__entry->region, vma->obj->mm.region.mem ? vma->obj->mm.region.mem->name : "dmabuf");
 				   __entry->vma_size = i915_vma_size(vma);
 				   __entry->is_bound = i915_vma_is_bound(vma, PIN_USER);
 			   } else {

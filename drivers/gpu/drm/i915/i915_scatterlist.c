@@ -355,6 +355,7 @@ int i915_sg_map(struct scatterlist *sgt, unsigned long total, unsigned long max,
 	unsigned long end = -1;
 	int err = 0;
 
+	BUILD_BUG_ON(!IS_ENABLED(CONFIG_NEED_SG_DMA_LENGTH));
 	GEM_BUG_ON(!IS_ALIGNED(max, PAGE_SIZE));
 
 	if (domain) {

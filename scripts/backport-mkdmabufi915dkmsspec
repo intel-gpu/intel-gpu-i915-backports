@@ -130,6 +130,7 @@ sed -e '/^DEL/d' -e 's/^\t*//' <<EOF
 		if [[ \$i = *^* ]] ;then continue; fi
 		K=\$(echo \$i | cut -d '/' -f 7);
 		/usr/sbin/dkms uninstall -m %{module} -v %{version} -k \$K --rpm_safe_upgrade
+		rm -rf \$i/build
 		echo -e "Creating initramfs for :\$K"
 		if [ -e /boot/vmlinuz-\$K ] && [ -e /sbin/depmod ] && [ -x %{_bindir}/dracut ]; then
 			/sbin/depmod -a "\$K"

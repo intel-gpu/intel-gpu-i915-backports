@@ -1055,6 +1055,152 @@ static ssize_t base_freq_factor_store(struct device *dev,
 	return count;
 }
 
+/*
+ * Sysfs show for Write Credit Update Frequency (X).
+ * Controls the pcode parameter via mailbox.
+ * Valid range: 0–260, default: 0.
+ * Wa_14022085890 for PVC.
+ */
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t base_wr_cr_update_freq_show(struct kobject *kobj,
+					   struct kobj_attribute *attr,
+					   char *buff)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t base_wr_cr_update_freq_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buff)
+{
+#endif
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	u32 val;
+	int err;
+
+	err = snb_pcode_read_p(gt->uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+			       PCODE_RD_CR_UPDATE_FREQ,
+			       PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2, &val);
+	if (err)
+		return err;
+
+	return sysfs_emit(buff, "%u\n", val);
+}
+
+/*
+ * Sysfs store for Write Credit Update Frequency (X).
+ * Controls the pcode parameter via mailbox.
+ * Valid range: 0–260, default: 0.
+ * Wa_14022085890 for PVC.
+ */
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t base_wr_cr_update_freq_store(struct kobject *kobj,
+					    struct kobj_attribute *attr,
+					    const char *buff, size_t count)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t base_wr_cr_update_freq_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buff, size_t count)
+{
+#endif
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	u32 val;
+	int err;
+
+	err = kstrtou32(buff, 0, &val);
+	if (err)
+		return err;
+
+	if (val > PCODE_WR_CR_UPDATE_FREQ_MAX) {
+		drm_dbg(&gt->i915->drm,
+			"Invalid value. Valid range: 0-%u. Default: 0\n",
+			PCODE_WR_CR_UPDATE_FREQ_MAX);
+		return -EINVAL;
+	}
+
+	err = snb_pcode_write_p(gt->uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+				PCODE_WR_CR_UPDATE_FREQ,
+				PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2, val);
+	if (err)
+		return err;
+
+	return count;
+}
+
+/*
+ * Sysfs show for Write Credit Bubble Duration (Y).
+ * Controls the pcode parameter via mailbox.
+ * Valid range: 0–1000, default: 0.
+ * Wa_14022085890 for PVC.
+ */
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t base_wr_cr_bubble_duration_show(struct kobject *kobj,
+					       struct kobj_attribute *attr,
+					       char *buff)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t base_wr_cr_bubble_duration_show(struct device *dev,
+					       struct device_attribute *attr,
+					       char *buff)
+{
+#endif
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	u32 val;
+	int err;
+
+	err = snb_pcode_read_p(gt->uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+			       PCODE_RD_CR_BUBBLE_DURATION,
+			       PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2, &val);
+	if (err)
+		return err;
+
+	return sysfs_emit(buff, "%u\n", val);
+}
+
+/*
+ * Sysfs store for Write Credit Bubble Duration (Y).
+ * Controls the pcode parameter via mailbox.
+ * Valid range: 0–1000, default: 0.
+ * Wa_14022085890 for PVC.
+ */
+#ifdef BPM_DEVICE_ATTR_NOT_PRESENT
+static ssize_t base_wr_cr_bubble_duration_store(struct kobject *kobj,
+						struct kobj_attribute *attr,
+						const char *buff, size_t count)
+{
+	struct device *dev = kobj_to_dev(kobj);
+#else
+static ssize_t base_wr_cr_bubble_duration_store(struct device *dev,
+						struct device_attribute *attr,
+						const char *buff, size_t count)
+{
+#endif
+	struct intel_gt *gt = intel_gt_sysfs_get_drvdata(dev, attr->attr.name);
+	u32 val;
+	int err;
+
+	err = kstrtou32(buff, 0, &val);
+	if (err)
+		return err;
+
+	if (val > PCODE_WR_CR_BUBBLE_DURATION_MAX) {
+		drm_dbg(&gt->i915->drm,
+			"Invalid value. Valid range: 0-%u. Default: 0\n",
+			PCODE_WR_CR_BUBBLE_DURATION_MAX);
+		return -EINVAL;
+	}
+
+	err = snb_pcode_write_p(gt->uncore, PCODE_MBOX_WARM_IDLE_ALGORITHM,
+				PCODE_WR_CR_BUBBLE_DURATION,
+				PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2, val);
+	if (err)
+		return err;
+
+	return count;
+}
+
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static ssize_t base_RP0_freq_mhz_show(struct kobject *kobj,
 				      struct kobj_attribute *attr,
@@ -1302,6 +1448,10 @@ static ssize_t media_act_freq_mhz_show(struct device *dev,
 #ifdef BPM_DEVICE_ATTR_NOT_PRESENT
 static INTEL_KOBJ_ATTR_RW(base_freq_factor, 0644, base_freq_factor_show,
 		base_freq_factor_store);
+static INTEL_KOBJ_ATTR_RW(base_wr_cr_update_freq, 0644,
+			base_wr_cr_update_freq_show, base_wr_cr_update_freq_store);
+static INTEL_KOBJ_ATTR_RW(base_wr_cr_bubble_duration, 0644,
+			base_wr_cr_bubble_duration_show, base_wr_cr_bubble_duration_store);
 static struct i915_ext_attr_kobj dev_attr_base_freq_factor_scale = {
 	__ATTR(base_freq_factor.scale, 0444, i915_sysfs_show_kobj, NULL),
 	freq_factor_scale_show, NULL
@@ -1321,6 +1471,11 @@ static INTEL_KOBJ_ATTR_RO(media_RPn_freq_mhz, media_RPn_freq_mhz_show);
 static INTEL_KOBJ_ATTR_RO(media_act_freq_mhz, media_act_freq_mhz_show);
 #else
 static I915_DEVICE_ATTR_RW(base_freq_factor, 0644, base_freq_factor_show, base_freq_factor_store);
+static I915_DEVICE_ATTR_RW(base_wr_cr_update_freq, 0644,
+			   base_wr_cr_update_freq_show, base_wr_cr_update_freq_store);
+static I915_DEVICE_ATTR_RW(base_wr_cr_bubble_duration, 0644,
+			   base_wr_cr_bubble_duration_show, base_wr_cr_bubble_duration_store);
+
 static struct i915_ext_attr dev_attr_base_freq_factor_scale =
 	{__ATTR(base_freq_factor.scale, 0444, i915_sysfs_show, NULL), freq_factor_scale_show};
 static I915_DEVICE_ATTR_RO(base_RP0_freq_mhz, base_RP0_freq_mhz_show);
@@ -1341,6 +1496,8 @@ static const struct attribute *pvc_perf_power_attrs[] = {
 	&dev_attr_base_RP0_freq_mhz.attr.attr,
 	&dev_attr_base_RPn_freq_mhz.attr.attr,
 	&dev_attr_base_act_freq_mhz.attr.attr,
+	&dev_attr_base_wr_cr_update_freq.attr.attr,
+	&dev_attr_base_wr_cr_bubble_duration.attr.attr,
 	NULL
 };
 

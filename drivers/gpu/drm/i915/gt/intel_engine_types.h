@@ -600,7 +600,7 @@ struct intel_engine_cs {
 	struct i915_request *pagefault_request;
 	ktime_t pagefault_start;
 	atomic_t in_pagefault;
-	atomic_t fault_incomplete;
+	atomic_t fault_incomplete[4];
 
 	struct {
 		unsigned long heartbeat_interval_ms;

@@ -759,4 +759,17 @@ i915_gem_object_mem_idle(const struct drm_i915_gem_object *obj)
 void i915_gem_object_share_resv(struct drm_i915_gem_object *parent,
 				struct drm_i915_gem_object *child);
 
+
+static inline bool
+i915_gem_object_is_local(const struct drm_i915_gem_object *obj, struct drm_device *dev)
+{
+	return obj->base.dev == dev;
+}
+
+static inline bool
+i915_gem_object_is_remote(const struct drm_i915_gem_object *obj, struct drm_device *dev)
+{
+	return obj->base.import_attach || !i915_gem_object_is_local(obj, dev);
+}
+
 #endif

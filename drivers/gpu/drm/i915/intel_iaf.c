@@ -278,6 +278,7 @@ void intel_iaf_init_early(struct drm_i915_private *i915)
 	i915->intel_iaf.ops = &default_ops;
 	i915->intel_iaf.index = -ENODEV;
 	mutex_init(&i915->intel_iaf.power_mutex);
+	xa_init(&i915->intel_iaf.connected);
 }
 
 static bool iaf_power_enabled(struct drm_i915_private *i915)
@@ -580,4 +581,9 @@ int intel_iaf_mapping_put(struct drm_i915_private *i915)
 {
 	return i915->intel_iaf.ops->parent_event(i915->intel_iaf.handle,
 						 IAF_PARENT_MAPPING_PUT);
+}
+
+void intel_iaf_fini(struct drm_i915_private *i915)
+{
+	xa_destroy(&i915->intel_iaf.connected);
 }

@@ -287,6 +287,12 @@ i915_param_named_unsafe(disable_bo_chunking, bool, 0600,
 i915_param_named_unsafe(enable_resizeable_bar, bool, 0400,
 			"enable resizeable bar support (default: true)");
 
+i915_param_named_unsafe(wr_cr_update_freq, uint, 0400,
+	"Limit write credit update frequency for PVC (0 = [default]; N = allow up to 260)");
+
+i915_param_named_unsafe(wr_cr_bubble_duration, uint, 0400,
+	"Limit write credit bubble duration for PVC (0 = [default]; N = allow up to 1000)");
+
 /*
  * This module parameter is needed because SRIOV PF and IAF are mutually
  * exclusive (see HSDES #14014623804).  Until this is fixed, the driver

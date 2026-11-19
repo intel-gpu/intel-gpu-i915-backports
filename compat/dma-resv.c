@@ -44,3 +44,14 @@ bool backport_dma_resv_test_signaled(struct dma_resv *obj, bool test_all)
 EXPORT_SYMBOL(dma_resv_test_signaled);
 
 #endif
+
+#ifdef BPM_DMA_RESV_RESERVE_SHARED_NOT_PRESENT
+#undef dma_resv_reserve_shared
+int backport_dma_resv_reserve_shared(struct dma_resv *obj, unsigned int num_fences)
+{
+        return dma_resv_reserve_fences(obj, num_fences);
+}
+#define dma_resv_reserve_shared backport_dma_resv_reserve_shared
+EXPORT_SYMBOL(dma_resv_reserve_shared);
+
+#endif

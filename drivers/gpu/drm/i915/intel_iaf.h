@@ -39,5 +39,6 @@ void intel_iaf_remove(struct drm_i915_private *i915);
 int intel_iaf_pcie_error_notify(struct drm_i915_private *i915);
 int intel_iaf_mapping_get(struct drm_i915_private *i915);
 int intel_iaf_mapping_put(struct drm_i915_private *i915);
+void intel_iaf_fini(struct drm_i915_private *i915);
 
 #endif

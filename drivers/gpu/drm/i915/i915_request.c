@@ -363,6 +363,9 @@ bool i915_request_retire(struct i915_request *rq)
 	if (!__i915_request_is_complete(rq))
 		return false;
 
+	if (GEM_WARN_ON(test_bit(I915_FENCE_FLAG_INCAPTURE, &rq->fence.flags)))
+		return false;
+
 	RQ_TRACE(rq, "\n");
 
 	GEM_BUG_ON(!i915_sw_fence_signaled(&rq->submit));

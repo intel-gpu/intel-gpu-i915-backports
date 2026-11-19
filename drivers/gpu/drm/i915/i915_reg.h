@@ -7163,6 +7163,24 @@ enum mdfi_num_instances {
 #define     PCODE_MBOX_CD_STATUS_DATA_REENABLE_IN_PROGRESS 0x1
 #define     PCODE_MBOX_CD_STATUS_DATA_SHUTDOWN 0x2
 #define     PCODE_MBOX_CD_STATUS_DATA_ONLINE 0x3
+
+/* Wa_14022085890: pvc */
+#define	PCODE_MBOX_WARM_IDLE_ALGORITHM		0x61
+/* Write credit update frequency param1 */
+#define	PCODE_WR_CR_UPDATE_FREQ			0xc
+/* Write credit bubble duration param1 */
+#define	PCODE_WR_CR_BUBBLE_DURATION		0xd
+/* Read credit update frequency param1 */
+#define	PCODE_RD_CR_UPDATE_FREQ			0xe
+/* Read credit bubble duration param1 */
+#define	PCODE_RD_CR_BUBBLE_DURATION		0xf
+/* warm idle algorithm param2  */
+#define	PCODE_MBOX_WARM_IDLE_ALGORITHM_PARAM2	0x0
+/* Max valid value for write credit update frequency (X) */
+#define	PCODE_WR_CR_UPDATE_FREQ_MAX		260
+/* Max valid value for write credit bubble duration (Y) */
+#define	PCODE_WR_CR_BUBBLE_DURATION_MAX		1000
+
 /* Wa_14017210380: mtl */
 #define   PCODE_MBOX_GT_STATE		0x50	/* MTL */
 /* sub-commands (param1) */

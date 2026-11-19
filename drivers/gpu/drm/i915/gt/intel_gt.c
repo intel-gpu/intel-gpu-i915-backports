@@ -223,7 +223,6 @@ int intel_gt_init_mmio(struct intel_gt *gt)
 
 int intel_gt_init_hw(struct intel_gt *gt)
 {
-	struct drm_i915_private *i915 = gt->i915;
 	struct intel_uncore *uncore = gt->uncore;
 	int ret;
 
@@ -250,14 +249,16 @@ int intel_gt_init_hw(struct intel_gt *gt)
 	/* We can't enable contexts until all firmware is loaded */
 	ret = intel_uc_init_hw(&gt->uc);
 	if (ret) {
-		gt_probe_error(gt, "Enabling uc failed (%d)\n", ret);
+		/* We want to keep KMS alive */
+		if (ret != -ENOENT)
+			gt_probe_error(gt, "Enabling uc failed (%pe)\n", ERR_PTR(ret));
+		ret = -EIO;
 		goto out;
 	}
 
 	ret = intel_iov_init_hw(&gt->iov);
 	if (unlikely(ret)) {
-		i915_probe_error(i915, "Enabling IOV failed (%pe)\n",
-				 ERR_PTR(ret));
+		gt_probe_error(gt, "Enabling IOV failed (%pe)\n", ERR_PTR(ret));
 		goto out;
 	}
 
@@ -1561,7 +1562,7 @@ int intel_gt_probe_all(struct drm_i915_private *i915)
 	return 0;
 
 err:
-	i915_probe_error(i915, "Failed to initialize %s! (%d)\n", gtdef->name, ret);
+	i915_probe_warn(i915, "Failed to initialize %s! (%d)\n", gtdef->name, ret);
 	memset(i915->gt, 0, sizeof(i915->gt));
 	return ret;
 }

@@ -595,9 +595,7 @@ err_out:
 	}
 
 	gt_probe_error(gt, "GuC initialization failed %pe\n", ERR_PTR(ret));
-
-	/* We want to keep KMS alive */
-	return -EIO;
+	return ret;
 }
 
 static void __uc_fini_hw(struct intel_uc *uc)
@@ -812,6 +810,9 @@ void intel_uc_reset_finish(struct intel_uc *uc)
 
 	if (intel_uc_uses_guc_submission(uc))
 		intel_guc_submission_reset_finish(guc);
+
+	if (guc->ct.ctbs.recv.desc)
+		intel_guc_ct_receive(&guc->ct);
 }
 
 void intel_uc_cancel_requests(struct intel_uc *uc)

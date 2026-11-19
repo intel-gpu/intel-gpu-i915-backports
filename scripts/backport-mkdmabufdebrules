@@ -108,6 +108,7 @@ $DKMS	override_dh_dkms: debian/$PKG_NAME.dkms
 $DKMS		dh_dkms -V \$(BACKPORT_PACKAGE_VERSION)
 $DKMS		sed '1d' debian/package.postinst.in >> debian/$PKG_NAME.postinst.debhelper
 $DKMS		sed '1d' debian/package.postrm.in >> debian/$PKG_NAME.prerm.debhelper
+$DKMS		sed -i '/depmod -a/a\\    rm -rf "/var/lib/dkms/\$\$DPKG_MAINTSCRIPT_PACKAGE"/*/*/build' debian/$PKG_NAME.prerm.debhelper
 
 $DKMS	\$(GENERATED_PKG_FILES) : \$(GENERATED_PKG_FILES:=.in) debian/rules
 $DKMS		sed -e 's,@BACKPORT_PACKAGE_NAME@,\$(BACKPORT_PACKAGE_NAME),g' \\

@@ -29,7 +29,8 @@
 #include "i915_vma.h"
 
 static int
-__assign_mmap_offset(struct drm_i915_gem_object *obj,
+__assign_mmap_offset(struct drm_device *dev,
+		     struct drm_i915_gem_object *obj,
 		     enum i915_mmap_type mmap_type,
 		     u64 *offset, struct drm_file *file)
 {
@@ -43,7 +44,7 @@ __assign_mmap_offset(struct drm_i915_gem_object *obj,
 	    !i915_gem_object_has_iomem(obj))
 		return -ENODEV;
 
-	mmo = i915_gem_mmap_offset_attach(obj, mmap_type, file);
+	mmo = i915_gem_mmap_offset_attach(dev, obj, mmap_type, file);
 	if (IS_ERR(mmo))
 		return PTR_ERR(mmo);
 
@@ -100,7 +101,7 @@ i915_gem_mmap_ioctl(struct drm_device *dev, void *data,
 	if (args->flags & I915_MMAP_WC)
 		mmap_type = I915_MMAP_TYPE_WC;
 
-	addr = __assign_mmap_offset(obj, mmap_type, &offset, file);
+	addr = __assign_mmap_offset(dev, obj, mmap_type, &offset, file);
 	if (addr)
 		goto err;
 
@@ -609,7 +610,7 @@ void i915_gem_object_release_mmap(struct drm_i915_gem_object *obj)
 
 		spin_unlock(&obj->mmo.lock);
 		drm_vma_node_unmap_range(&mmo->vma_node,
-					 obj->base.dev->anon_inode->i_mapping,
+					 mmo->dev->anon_inode->i_mapping,
 					 vma_offset, unmap_size);
 		spin_lock(&obj->mmo.lock);
 	}
@@ -617,7 +618,8 @@ void i915_gem_object_release_mmap(struct drm_i915_gem_object *obj)
 }
 
 static struct i915_mmap_offset *
-lookup_mmo(struct drm_i915_gem_object *obj,
+lookup_mmo(struct drm_device *dev,
+	   struct drm_i915_gem_object *obj,
 	   enum i915_mmap_type mmap_type)
 {
 	struct rb_node *rb;
@@ -628,12 +630,16 @@ lookup_mmo(struct drm_i915_gem_object *obj,
 		struct i915_mmap_offset *mmo =
 			rb_entry(rb, typeof(*mmo), offset);
 
-		if (mmo->mmap_type == mmap_type) {
+		if (mmo->mmap_type == mmap_type && mmo->dev == dev) {
 			spin_unlock(&obj->mmo.lock);
 			return mmo;
 		}
 
 		if (mmo->mmap_type < mmap_type)
+			rb = rb->rb_right;
+		else if (mmo->mmap_type > mmap_type)
+			rb = rb->rb_left;
+		else if (mmo->dev < dev)
 			rb = rb->rb_right;
 		else
 			rb = rb->rb_left;
@@ -657,15 +663,18 @@ insert_mmo(struct drm_i915_gem_object *obj, struct i915_mmap_offset *mmo)
 		rb = *p;
 		pos = rb_entry(rb, typeof(*pos), offset);
 
-		if (pos->mmap_type == mmo->mmap_type) {
+		if (pos->mmap_type == mmo->mmap_type && pos->dev == mmo->dev) {
 			spin_unlock(&obj->mmo.lock);
-			drm_vma_offset_remove(obj->base.dev->vma_offset_manager,
-					      &mmo->vma_node);
+			drm_vma_offset_remove(mmo->dev->vma_offset_manager, &mmo->vma_node);
 			kfree(mmo);
 			return pos;
 		}
 
 		if (pos->mmap_type < mmo->mmap_type)
+			p = &rb->rb_right;
+		else if (pos->mmap_type > mmo->mmap_type)
+			p = &rb->rb_left;
+		else if (pos->dev < mmo->dev)
 			p = &rb->rb_right;
 		else
 			p = &rb->rb_left;
@@ -719,17 +728,17 @@ unlock:
 }
 
 struct i915_mmap_offset *
-i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
+i915_gem_mmap_offset_attach(struct drm_device *dev,
+			    struct drm_i915_gem_object *obj,
 			    enum i915_mmap_type mmap_type,
 			    struct drm_file *file)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct i915_mmap_offset *mmo;
 	struct intel_gt *gt;
 	int err;
 	int i;
 
-	mmo = lookup_mmo(obj, mmap_type);
+	mmo = lookup_mmo(dev, obj, mmap_type);
 	if (mmo)
 		goto out;
 
@@ -737,28 +746,29 @@ i915_gem_mmap_offset_attach(struct drm_i915_gem_object *obj,
 	if (!mmo)
 		return ERR_PTR(-ENOMEM);
 
+	mmo->dev = dev;
 	mmo->obj = obj;
 	mmo->mmap_type = mmap_type;
 	drm_vma_node_reset(&mmo->vma_node);
 
-	err = drm_vma_offset_add(obj->base.dev->vma_offset_manager,
+	err = drm_vma_offset_add(dev->vma_offset_manager,
 				 &mmo->vma_node, obj->base.size / PAGE_SIZE);
 	if (likely(!err))
 		goto insert;
 
 	/* Attempt to reap some mmap space from dead objects */
-	for_each_gt(gt, i915, i)
+	for_each_gt(gt, to_i915(dev), i)
 		intel_gt_retire_requests(gt);
-	i915_gem_drain_freed_objects(i915);
+	i915_gem_drain_freed_objects(to_i915(dev));
 
-	err = drm_vma_offset_add(obj->base.dev->vma_offset_manager,
+	err = drm_vma_offset_add(dev->vma_offset_manager,
 				 &mmo->vma_node, obj->base.size / PAGE_SIZE);
 	if (err)
 		goto err;
 
 insert:
 	mmo = insert_mmo(obj, mmo);
-	GEM_BUG_ON(lookup_mmo(obj, mmap_type) != mmo);
+	GEM_BUG_ON(lookup_mmo(dev, obj, mmap_type) != mmo);
 out:
 	if (file) {
 		err = vma_node_allow_once(&mmo->vma_node, file);
@@ -775,6 +785,7 @@ err:
 
 static int
 __assign_mmap_offset_handle(struct drm_file *file,
+			    struct drm_device *dev,
 			    u32 handle,
 			    enum i915_mmap_type mmap_type,
 			    u64 *offset)
@@ -786,7 +797,7 @@ __assign_mmap_offset_handle(struct drm_file *file,
 	if (!obj)
 		return -ENOENT;
 
-	err = __assign_mmap_offset(obj, mmap_type, offset, file);
+	err = __assign_mmap_offset(dev, obj, mmap_type, offset, file);
 	i915_gem_object_put(obj);
 	return err;
 }
@@ -800,7 +811,7 @@ i915_gem_dumb_mmap_offset(struct drm_file *file,
 	if (!pat_enabled())
 		return -ENODEV;
 
-	return __assign_mmap_offset_handle(file, handle, I915_MMAP_TYPE_WC, offset);
+	return __assign_mmap_offset_handle(file, dev, handle, I915_MMAP_TYPE_WC, offset);
 }
 
 /**
@@ -864,18 +875,16 @@ i915_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
-	return __assign_mmap_offset_handle(file, args->handle, type, &args->offset);
+	return __assign_mmap_offset_handle(file, dev, args->handle, type, &args->offset);
 }
 
 static void vm_open(struct vm_area_struct *vma)
 {
 	struct i915_mmap_offset *mmo = vma->vm_private_data;
 	struct drm_i915_gem_object *obj = mmo->obj;
-	struct drm_i915_private *i915;
 
 	GEM_BUG_ON(!obj);
-	i915 = to_i915(obj->base.dev);
-	pvc_wa_disallow_rc6(i915);
+	pvc_wa_disallow_rc6(to_i915(obj->base.dev));
 	i915_gem_object_get(obj);
 }
 
@@ -883,11 +892,9 @@ static void vm_close(struct vm_area_struct *vma)
 {
 	struct i915_mmap_offset *mmo = vma->vm_private_data;
 	struct drm_i915_gem_object *obj = mmo->obj;
-	struct drm_i915_private *i915;
 
 	GEM_BUG_ON(!obj);
-	i915 = to_i915(obj->base.dev);
-	pvc_wa_allow_rc6(i915);
+	pvc_wa_allow_rc6(to_i915(obj->base.dev));
 	i915_gem_object_put(obj);
 }
 
@@ -946,7 +953,6 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 			     struct i915_mmap_offset *mmo,
 			     struct vm_area_struct *vma)
 {
-	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct file *anon;
 
 	if (i915_gem_object_is_readonly(obj)) {
@@ -960,11 +966,11 @@ int i915_gem_update_vma_info(struct drm_i915_gem_object *obj,
 #endif
 	}
 
-	anon = mmap_singleton(to_i915(obj->base.dev));
+	anon = mmap_singleton(to_i915(mmo->dev));
 	if (IS_ERR(anon))
 		return PTR_ERR(anon);
 
-	pvc_wa_disallow_rc6(i915);
+	pvc_wa_disallow_rc6(to_i915(obj->base.dev));
 #ifdef BPM_VM_FLAGS_IS_READ_ONLY_FLAG
 	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
 #else

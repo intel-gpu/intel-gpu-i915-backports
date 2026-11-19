@@ -18,6 +18,7 @@ Our current backport supports the following OS Distribution.
 
 ## Prerequisite
 We have dependencies on the following packages
+  - dkms
   - make
   - debhelper
   - devscripts
@@ -27,9 +28,9 @@ We have dependencies on the following packages
   - mawk
 
 ```
-$ sudo apt install make debhelper devscripts build-essential flex bison mawk
+$ sudo apt install dkms make debhelper devscripts build-essential flex bison mawk
 ```
-For i915 DKMS packages, we need to install `dkms` package too.
+For DKMS modules, we need to install `dkms` package too.
 ```
 $ sudo apt install dkms
 ```
